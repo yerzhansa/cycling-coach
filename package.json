@@ -1,0 +1,39 @@
+{
+  "name": "cycling-coach",
+  "version": "0.0.1",
+  "description": "AI cycling coaching agent — BYOK + intervals.icu + Telegram",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx --env-file=.env src/index.ts",
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "oxlint src/ tests/",
+    "fmt": "oxfmt src/ tests/",
+    "fmt:check": "oxfmt --check src/ tests/",
+    "check": "tsc --noEmit && oxlint src/ tests/"
+  },
+  "dependencies": {
+    "ai": "^6.0.158",
+    "@ai-sdk/anthropic": "^3.0.69",
+    "@ai-sdk/openai": "^3.0.52",
+    "@ai-sdk/google": "^3.0.63",
+    "intervals-icu-api": "^0.1.1",
+    "grammy": "^1.42.0",
+    "zod": "^4.3.6",
+    "yaml": "^2.8.3"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.2",
+    "tsx": "^4.21.0",
+    "vitest": "^4.1.4",
+    "@types/node": "^25.6.0",
+    "oxlint": "^1.60.0",
+    "oxfmt": "^0.45.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
