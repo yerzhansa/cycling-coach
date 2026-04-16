@@ -33,8 +33,8 @@ export interface Config {
 // CONFIG LOADING
 // ============================================================================
 
-const CONFIG_DIR = join(homedir(), ".cycling-coach");
-const CONFIG_FILE = join(CONFIG_DIR, "config.yaml");
+export const CONFIG_DIR = join(homedir(), ".cycling-coach");
+export const CONFIG_FILE = join(CONFIG_DIR, "config.yaml");
 
 function loadYamlConfig(): Record<string, unknown> {
   if (!existsSync(CONFIG_FILE)) return {};

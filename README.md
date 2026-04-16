@@ -40,66 +40,17 @@ AI-powered cycling coach you can chat with on Telegram or in the terminal. Conne
 5. **An LLM puts it together** — Claude, GPT, or Gemini interprets everything and responds like a knowledgeable coach
 6. **Workouts land on your calendar** — structured intervals pushed to intervals.icu, which syncs to Garmin, Wahoo, Hammerhead, COROS, Suunto, and Zwift
 
-## Setup
+## Quick start
 
-### 1. Install Node.js and clone the project
-
-This project runs on **Node.js**, a free runtime that lets you run JavaScript applications on your computer. **npm** (Node Package Manager) comes bundled with Node.js and is used to install the project's dependencies.
-
-1. **Download and install Node.js** from [nodejs.org](https://nodejs.org/) — pick the **LTS** (Long Term Support) version. The installer works on Mac, Windows, and Linux.
-2. Verify the install by opening a terminal (Terminal on Mac, Command Prompt or PowerShell on Windows) and running:
-   ```bash
-   node --version
-   npm --version
-   ```
-   Both should print a version number (e.g. `v22.x.x` and `10.x.x`).
-3. Clone this repository and install dependencies:
-   ```bash
-   git clone git@github.com:yerzhansa/cycling-coach.git
-   cd cycling-coach
-   npm install
-   ```
-   `npm install` downloads all the libraries the project needs — this only takes a minute.
-
-### 2. Configure API keys
-
-Copy the example env file and fill in your keys:
+Requires [Node.js](https://nodejs.org/) 20+ (comes with npm).
 
 ```bash
-cp .env.example .env
+npm install -g cycling-coach
+cycling-coach setup
+cycling-coach
 ```
 
-```bash
-# .env
-
-# Pick one LLM provider
-ANTHROPIC_API_KEY=sk-ant-...
-# OPENAI_API_KEY=sk-...
-# GOOGLE_GENERATIVE_AI_API_KEY=...
-
-LLM_PROVIDER=anthropic           # anthropic | openai | google
-LLM_MODEL=claude-opus-4-6   # optional, defaults per provider
-
-# intervals.icu (optional — agent works without it, just no real data)
-INTERVALS_API_KEY=your-key        # Settings > Developer in intervals.icu
-INTERVALS_ATHLETE_ID=0            # "0" = authenticated athlete
-
-# Telegram (optional — omit for CLI mode)
-TELEGRAM_BOT_TOKEN=123456:ABC...  # from @BotFather
-```
-
-**Where to get keys:**
-- **LLM**: [Anthropic Console](https://console.anthropic.com/), [OpenAI Platform](https://platform.openai.com/), or [Google AI Studio](https://aistudio.google.com/)
-- **intervals.icu**: Go to [intervals.icu/settings](https://intervals.icu/settings) > Developer Settings > copy your API Key and Athlete ID (shown right next to each other)
-- **Telegram**: Message [@BotFather](https://t.me/BotFather) on Telegram, `/newbot`, follow prompts
-
-### 3. Run
-
-**CLI mode** (no Telegram token set):
-
-```bash
-npm run dev
-```
+The setup wizard asks for your LLM API key and optionally connects [intervals.icu](https://intervals.icu) and Telegram. After setup, `cycling-coach` starts in CLI mode — or Telegram mode if you provided a bot token.
 
 ```
 Cycling Coach (CLI mode). Type your message:
@@ -109,13 +60,25 @@ Cycling Coach (CLI mode). Type your message:
 > /quit
 ```
 
-**Telegram mode** (with `TELEGRAM_BOT_TOKEN` set):
+**Where to get API keys:**
+- **LLM**: [Anthropic Console](https://console.anthropic.com/), [OpenAI Platform](https://platform.openai.com/), or [Google AI Studio](https://aistudio.google.com/)
+- **intervals.icu**: [intervals.icu/settings](https://intervals.icu/settings) > Developer Settings
+- **Telegram**: Message [@BotFather](https://t.me/BotFather) > `/newbot`
+
+### From source (development)
 
 ```bash
+git clone git@github.com:yerzhansa/cycling-coach.git
+cd cycling-coach
+
+npm install
+npm run build
+
+# Dev loop (auto-reload, reads .env)
 npm run dev
 ```
 
-The bot starts polling. Open your bot in Telegram and send `/start`.
+Note: `npm run dev` runs TypeScript directly (via tsx). `npm run build` produces `dist/` for running via Node / the published npm package.
 
 ## Telegram commands
 
