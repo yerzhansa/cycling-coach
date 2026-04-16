@@ -42,24 +42,23 @@ AI-powered cycling coach you can chat with on Telegram or in the terminal. Conne
 
 ## Setup
 
-### 1. Install Node.js and clone the project
+### 1. Install
 
-This project runs on **Node.js**, a free runtime that lets you run JavaScript applications on your computer. **npm** (Node Package Manager) comes bundled with Node.js and is used to install the project's dependencies.
+**From npm** (recommended):
 
-1. **Download and install Node.js** from [nodejs.org](https://nodejs.org/) — pick the **LTS** (Long Term Support) version. The installer works on Mac, Windows, and Linux.
-2. Verify the install by opening a terminal (Terminal on Mac, Command Prompt or PowerShell on Windows) and running:
-   ```bash
-   node --version
-   npm --version
-   ```
-   Both should print a version number (e.g. `v22.x.x` and `10.x.x`).
-3. Clone this repository and install dependencies:
-   ```bash
-   git clone git@github.com:yerzhansa/cycling-coach.git
-   cd cycling-coach
-   npm install
-   ```
-   `npm install` downloads all the libraries the project needs — this only takes a minute.
+```bash
+npm install -g cycling-coach
+```
+
+**From source:**
+
+```bash
+git clone git@github.com:yerzhansa/cycling-coach.git
+cd cycling-coach
+npm install
+```
+
+Both require **Node.js 20+** — download from [nodejs.org](https://nodejs.org/) (LTS version).
 
 ### 2. Configure API keys
 
@@ -98,7 +97,8 @@ TELEGRAM_BOT_TOKEN=123456:ABC...  # from @BotFather
 **CLI mode** (no Telegram token set):
 
 ```bash
-npm run dev
+cycling-coach          # if installed from npm
+npm run dev            # if running from source
 ```
 
 ```
@@ -112,7 +112,8 @@ Cycling Coach (CLI mode). Type your message:
 **Telegram mode** (with `TELEGRAM_BOT_TOKEN` set):
 
 ```bash
-npm run dev
+cycling-coach          # if installed from npm
+npm run dev            # if running from source
 ```
 
 The bot starts polling. Open your bot in Telegram and send `/start`.
