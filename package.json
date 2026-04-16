@@ -19,7 +19,8 @@
     "lint": "oxlint src/ tests/",
     "fmt": "oxfmt src/ tests/",
     "fmt:check": "oxfmt --check src/ tests/",
-    "check": "tsc --noEmit && oxlint src/ tests/"
+    "check": "tsc --noEmit && oxlint src/ tests/",
+    "release": "./scripts/release.sh"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.69",
