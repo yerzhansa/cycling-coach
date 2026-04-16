@@ -1,5 +1,6 @@
 import {
   readFileSync,
+  writeFileSync,
   appendFileSync,
   renameSync,
   existsSync,
@@ -7,9 +8,10 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type { ModelMessage } from "ai";
+import { messageText } from "./token-utils.js";
 
 interface JsonlLine {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string;
   ts: string;
 }
@@ -26,10 +28,6 @@ export class ChatStore {
     return join(this.sessionsDir, `${chatId}.jsonl`);
   }
 
-  getHistory(chatId: string): ModelMessage[] {
-    return this.load(chatId).messages;
-  }
-
   load(chatId: string): { messages: ModelMessage[]; lastMessageTime: string | null } {
     const path = this.filePath(chatId);
     if (!existsSync(path)) return { messages: [], lastMessageTime: null };
@@ -37,14 +35,20 @@ export class ChatStore {
     const raw = readFileSync(path, "utf-8").trim();
     if (!raw) return { messages: [], lastMessageTime: null };
 
-    const lines = raw.split("\n");
-    const messages = lines.map((line) => {
-      const parsed: JsonlLine = JSON.parse(line);
-      return { role: parsed.role, content: parsed.content } as ModelMessage;
-    });
+    const parsed = raw.split("\n").map((line) => JSON.parse(line) as JsonlLine);
+    const messages = parsed.map(
+      (p) => ({ role: p.role, content: p.content }) as ModelMessage,
+    );
 
-    const lastParsed: JsonlLine = JSON.parse(lines[lines.length - 1]);
-    return { messages, lastMessageTime: lastParsed.ts };
+    let lastMessageTime: string | null = null;
+    for (let i = parsed.length - 1; i >= 0; i--) {
+      if (parsed[i].role !== "system") {
+        lastMessageTime = parsed[i].ts;
+        break;
+      }
+    }
+
+    return { messages, lastMessageTime };
   }
 
   appendMessage(chatId: string, role: "user" | "assistant", content: string): void {
@@ -53,16 +57,22 @@ export class ChatStore {
     appendFileSync(path, JSON.stringify(line) + "\n", "utf-8");
   }
 
-  getLastMessageTime(chatId: string): string | null {
+  overwriteHistory(chatId: string, messages: ModelMessage[]): void {
     const path = this.filePath(chatId);
-    if (!existsSync(path)) return null;
-
-    const raw = readFileSync(path, "utf-8").trim();
-    if (!raw) return null;
-
-    const lines = raw.split("\n");
-    const last: JsonlLine = JSON.parse(lines[lines.length - 1]);
-    return last.ts;
+    const tmpPath = `${path}.tmp`;
+    const now = new Date().toISOString();
+    const content = messages
+      .map((m) => {
+        const line: JsonlLine = {
+          role: m.role as JsonlLine["role"],
+          content: messageText(m),
+          ts: now,
+        };
+        return JSON.stringify(line);
+      })
+      .join("\n") + "\n";
+    writeFileSync(tmpPath, content, "utf-8");
+    renameSync(tmpPath, path);
   }
 
   archiveAndReset(chatId: string): void {

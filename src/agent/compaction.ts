@@ -1,12 +1,31 @@
 import { generateText } from "ai";
 import type { LanguageModel, ModelMessage } from "ai";
-import { estimateTokens, estimateMessagesTokens } from "./token-utils.js";
+import {
+  estimateTokens,
+  estimateMessagesTokens,
+  messageText,
+  SAFETY_MARGIN,
+  MIN_PROMPT_BUDGET_TOKENS,
+  SUMMARIZATION_OVERHEAD_TOKENS,
+} from "./token-utils.js";
+import { makeSummaryMessage } from "./history-limit.js";
 
 // ============================================================================
 // CONSTANTS
 // ============================================================================
 
-export const COMPACTION_CHUNKS = 2;
+const MAX_SUMMARY_CHARS = 4_000;
+const SUMMARY_TRUNCATED_MARKER = "\n\n[Summary truncated]";
+const MAX_SUMMARY_TOKENS = 2048;
+const BASE_CHUNK_RATIO = 0.4;
+const MIN_CHUNK_RATIO = 0.15;
+
+const REQUIRED_SUMMARY_SECTIONS = [
+  "## Athlete Profile",
+  "## Training Status",
+  "## Discussion Context",
+  "## Pending Questions",
+] as const;
 
 // ============================================================================
 // PROMPTS
@@ -26,57 +45,184 @@ dates, distances, durations).
 PRIORITIZE recent context over older history.
 The coach needs to know what was being discussed, not just what topics were covered.`;
 
-const SUMMARIZE_PROMPT = `Summarize the following conversation concisely.
+const SUMMARIZE_PROMPT = `Summarize the following conversation concisely — aim for 300-500 words total.
+Use bullet points, not paragraphs. Omit generic advice that can be re-derived.
+
+Use these exact section headings:
+## Athlete Profile
+## Training Status
+## Discussion Context
+## Pending Questions
 
 ${MUST_PRESERVE}`;
 
-const MERGE_PROMPT = `Merge these partial summaries into a single cohesive summary.
+const DROPPED_MESSAGES_PROMPT = `Incorporate these older conversation messages into the existing summary.
+
+Produce a compact, factual summary — aim for 300-500 words total.
+Use bullet points, not paragraphs. Omit generic advice that can be re-derived.
+
+Use these exact section headings:
+## Athlete Profile
+## Training Status
+## Discussion Context
+## Pending Questions
 
 ${MUST_PRESERVE}`;
 
 // ============================================================================
-// CHUNK SPLITTING
+// HELPERS
 // ============================================================================
 
-export function splitMessagesByTokenShare(
+function formatTranscript(messages: ModelMessage[]): string {
+  return messages.map((m) => `${m.role}: ${messageText(m)}`).join("\n");
+}
+
+function capSummary(summary: string): string {
+  if (summary.length <= MAX_SUMMARY_CHARS) return summary;
+  return summary.slice(0, MAX_SUMMARY_CHARS) + SUMMARY_TRUNCATED_MARKER;
+}
+
+export function computeAdaptiveChunkRatio(
   messages: ModelMessage[],
-  parts: number,
-): ModelMessage[][] {
-  if (messages.length === 0) return [];
-  if (parts <= 1) return [messages];
+  contextWindowTokens: number,
+): number {
+  if (messages.length === 0) return BASE_CHUNK_RATIO;
 
   const totalTokens = estimateMessagesTokens(messages);
-  const targetPerChunk = totalTokens / parts;
+  const avgTokens = totalTokens / messages.length;
+  const safeAvgTokens = avgTokens * SAFETY_MARGIN;
+  const avgRatio = safeAvgTokens / contextWindowTokens;
 
+  if (avgRatio > 0.1) {
+    const reduction = Math.min(avgRatio * 2, BASE_CHUNK_RATIO - MIN_CHUNK_RATIO);
+    return Math.max(MIN_CHUNK_RATIO, BASE_CHUNK_RATIO - reduction);
+  }
+
+  return BASE_CHUNK_RATIO;
+}
+
+export function chunkMessagesByMaxTokens(
+  messages: ModelMessage[],
+  maxTokens: number,
+): ModelMessage[][] {
+  if (messages.length === 0) return [];
+
+  const safeMax = Math.floor(maxTokens / SAFETY_MARGIN);
   const chunks: ModelMessage[][] = [];
   let current: ModelMessage[] = [];
   let currentTokens = 0;
 
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    const msgTokens = estimateTokens(typeof msg.content === "string" ? msg.content : "");
+  for (const msg of messages) {
+    const msgTokens = estimateTokens(messageText(msg));
 
-    current.push(msg);
-    currentTokens += msgTokens;
-
-    // Check if we should split — but never split in the middle of a user/assistant pair
-    const isAtTurnBoundary =
-      msg.role === "assistant" || i === messages.length - 1;
-    const hasEnoughTokens = currentTokens >= targetPerChunk;
-    const hasMoreChunksNeeded = chunks.length < parts - 1;
-
-    if (isAtTurnBoundary && hasEnoughTokens && hasMoreChunksNeeded) {
+    if (currentTokens + msgTokens > safeMax && current.length > 0) {
       chunks.push(current);
       current = [];
       currentTokens = 0;
     }
+
+    current.push(msg);
+    currentTokens += msgTokens;
   }
 
-  if (current.length > 0) {
-    chunks.push(current);
-  }
-
+  if (current.length > 0) chunks.push(current);
   return chunks;
+}
+
+const DEFAULT_CONTEXT_WINDOW = 200_000;
+
+function computeAdaptiveChunks(
+  messages: ModelMessage[],
+  contextWindowTokens?: number,
+): ModelMessage[][] {
+  if (messages.length === 0) return [];
+  const ctxWindow = contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW;
+  const adaptiveRatio = computeAdaptiveChunkRatio(messages, ctxWindow);
+  const maxChunkTokens = Math.max(
+    MIN_PROMPT_BUDGET_TOKENS,
+    Math.floor(ctxWindow * adaptiveRatio) - SUMMARIZATION_OVERHEAD_TOKENS,
+  );
+  return chunkMessagesByMaxTokens(messages, maxChunkTokens);
+}
+
+// ============================================================================
+// QUALITY AUDIT
+// ============================================================================
+
+export function auditSummaryQuality(summary: string): { ok: boolean; missing: string[] } {
+  const lower = summary.toLowerCase();
+  const missing = REQUIRED_SUMMARY_SECTIONS.filter(
+    (section) => !lower.includes(section.toLowerCase()),
+  );
+  return missing.length === 0 ? { ok: true, missing: [] } : { ok: false, missing };
+}
+
+// ============================================================================
+// DROPPED MESSAGE SUMMARIZATION
+// ============================================================================
+
+export async function summarizeDroppedMessages(params: {
+  dropped: ModelMessage[];
+  model: LanguageModel;
+  previousSummary?: string;
+  maxRetries?: number;
+  contextWindowTokens?: number;
+}): Promise<string> {
+  const { dropped, model, previousSummary, maxRetries = 1, contextWindowTokens } = params;
+
+  if (dropped.length === 0) return previousSummary ?? "";
+
+  const chunks = computeAdaptiveChunks(dropped, contextWindowTokens);
+  // Fallback: if adaptive chunking returns empty (shouldn't happen), use single chunk
+  if (chunks.length === 0) chunks.push(dropped);
+
+  let summary: string | undefined;
+
+  for (const chunk of chunks) {
+    const transcript = formatTranscript(chunk);
+    const prompt = [
+      DROPPED_MESSAGES_PROMPT,
+      (summary ?? previousSummary) ? `\nExisting summary of earlier context:\n${summary ?? previousSummary}` : "",
+      `\nMessages to incorporate:\n${transcript}`,
+    ].join("\n");
+
+    try {
+      const { text } = await generateText({
+        model,
+        prompt,
+        maxOutputTokens: MAX_SUMMARY_TOKENS,
+        maxRetries: 0,
+      });
+      summary = text;
+    } catch (err) {
+      console.warn("Dropped message summarization LLM call failed, using fallback", err);
+    }
+  }
+
+  if (summary === undefined) return capSummary(previousSummary ?? "");
+
+  // Quality guard with retry
+  const audit = auditSummaryQuality(summary);
+  if (audit.ok) return capSummary(summary);
+
+  let best: string = summary;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const { text } = await generateText({
+        model,
+        prompt: `Restructure the following summary to include ALL required section headings: ${audit.missing.join(", ")}.\n\n${best}\n\n${MUST_PRESERVE}`,
+        maxOutputTokens: MAX_SUMMARY_TOKENS,
+        maxRetries: 0,
+      });
+      const retryAudit = auditSummaryQuality(text);
+      if (retryAudit.ok) return capSummary(text);
+      best = text;
+    } catch (err) {
+      console.warn("Dropped message summarization retry failed", err);
+    }
+  }
+
+  return capSummary(best);
 }
 
 // ============================================================================
@@ -87,10 +233,11 @@ export async function summarizeInStages(params: {
   messages: ModelMessage[];
   model: LanguageModel;
   recentToKeep?: number;
+  previousSummary?: string;
+  contextWindowTokens?: number;
 }): Promise<ModelMessage[]> {
-  const { messages, model, recentToKeep = 4 } = params;
+  const { messages, model, recentToKeep = 4, previousSummary, contextWindowTokens } = params;
 
-  // Determine how many recent messages to preserve (keep recent turns intact)
   const keepCount = Math.min(recentToKeep, messages.length);
   const toSummarize = messages.slice(0, messages.length - keepCount);
   const recent = messages.slice(messages.length - keepCount);
@@ -99,42 +246,25 @@ export async function summarizeInStages(params: {
     return messages;
   }
 
-  // Split into chunks
-  const chunks = splitMessagesByTokenShare(toSummarize, COMPACTION_CHUNKS);
+  const chunks = computeAdaptiveChunks(toSummarize, contextWindowTokens);
 
-  // Summarize each chunk
-  const summaries: string[] = [];
+  // Thread previousSummary through chunk loop
+  let summary = previousSummary;
   for (const chunk of chunks) {
-    const transcript = chunk
-      .map((m) => `${m.role}: ${typeof m.content === "string" ? m.content : ""}`)
-      .join("\n");
+    const transcript = formatTranscript(chunk);
+
+    const contextPrefix = summary
+      ? `\nExisting summary of earlier context:\n${summary}\n\n`
+      : "";
 
     const { text } = await generateText({
       model,
-      prompt: `${SUMMARIZE_PROMPT}\n\n${transcript}`,
+      prompt: `${SUMMARIZE_PROMPT}${contextPrefix}\n\n${transcript}`,
+      maxOutputTokens: MAX_SUMMARY_TOKENS,
+      maxRetries: 0,
     });
-    summaries.push(text);
+    summary = capSummary(text);
   }
 
-  // Merge if multiple summaries
-  let finalSummary: string;
-  if (summaries.length === 1) {
-    finalSummary = summaries[0];
-  } else {
-    const numbered = summaries
-      .map((s, i) => `Summary ${i + 1}:\n${s}`)
-      .join("\n\n");
-
-    const { text } = await generateText({
-      model,
-      prompt: `${MERGE_PROMPT}\n\n${numbered}`,
-    });
-    finalSummary = text;
-  }
-
-  // Return summary as system message + recent messages
-  return [
-    { role: "system" as const, content: `[Previous conversation summary]\n${finalSummary}` },
-    ...recent,
-  ];
+  return [makeSummaryMessage(summary!), ...recent];
 }
