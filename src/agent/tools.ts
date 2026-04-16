@@ -23,6 +23,18 @@ import type { IntervalsClient } from "intervals-icu-api";
 const daysEnum = z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
 
 // ============================================================================
+// SHARED TOOL FACTORIES
+// ============================================================================
+
+export function createMemoryReadTool(memory: Memory) {
+  return tool({
+    description: "Read long-term athlete memory, today's notes, and current plan state",
+    inputSchema: zodSchema(z.object({})),
+    execute: async () => memory.getContext() || "No athlete data stored yet.",
+  });
+}
+
+// ============================================================================
 // TOOL BUILDER
 // ============================================================================
 
@@ -139,11 +151,7 @@ export function createTools(memory: Memory, intervals: IntervalsClient | null) {
 
     // ── Memory tools ─────────────────────────────────────────────────────
 
-    memory_read: tool({
-      description: "Read long-term athlete memory, today's notes, and current plan state",
-      inputSchema: zodSchema(z.object({})),
-      execute: async () => memory.getContext() || "No athlete data stored yet.",
-    }),
+    memory_read: createMemoryReadTool(memory),
 
     memory_write: tool({
       description: "Write to long-term memory (athlete facts, goals, preferences) or daily notes",

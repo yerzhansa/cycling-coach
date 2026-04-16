@@ -63,6 +63,11 @@ export class Memory {
 
   // ── Full context for system prompt ─────────────────────────────────────
 
+  reload(): void {
+    // No-op — Memory reads from disk on every access.
+    // Explicit sync point for post-compaction and future caching.
+  }
+
   getContext(): string {
     const parts: string[] = [];
 

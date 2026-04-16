@@ -47,7 +47,7 @@ async function main() {
       }
 
       try {
-        const response = await agent.chat(input);
+        const response = await agent.chat("cli", input);
         console.log("\n" + response + "\n");
       } catch (err) {
         console.error("Error:", err);

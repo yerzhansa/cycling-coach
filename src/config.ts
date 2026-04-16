@@ -20,6 +20,13 @@ export interface Config {
   telegram: {
     botToken: string;
   };
+  session: {
+    historyLimit: number;
+    idleMinutes: number;
+    dailyResetHour: number;
+    channels: Record<string, { historyLimit?: number }>;
+  };
+  contextWindowTokens: number;
   dataDir: string;
 }
 
@@ -36,8 +43,48 @@ function loadYamlConfig(): Record<string, unknown> {
   return (parseYaml(raw) as Record<string, unknown>) ?? {};
 }
 
+// ============================================================================
+// CONTEXT WINDOW RESOLUTION
+// ============================================================================
+
+const CONTEXT_WINDOWS: Record<string, number> = {
+  "claude-sonnet-4-5-20241022": 200_000,
+  "gpt-4o": 128_000,
+  "gemini-2.0-flash": 1_000_000,
+};
+
+function resolveContextWindowTokens(model: string): number {
+  const envTokens = parseInt(process.env.CONTEXT_WINDOW_TOKENS ?? "", 10);
+  if (envTokens > 0) return envTokens;
+
+  const known = CONTEXT_WINDOWS[model];
+  if (known) return known;
+
+  return 200_000;
+}
+
+// ============================================================================
+// HISTORY LIMIT RESOLUTION
+// ============================================================================
+
+export function getHistoryLimit(config: Config, chatId: string): number {
+  const channel = chatId.split(":")[0];
+  return config.session.channels[channel]?.historyLimit ?? config.session.historyLimit;
+}
+
+// ============================================================================
+// CONFIG LOADING
+// ============================================================================
+
 function env(key: string): string | undefined {
   return process.env[key];
+}
+
+function envInt(key: string): number | undefined {
+  const v = process.env[key];
+  if (v === undefined) return undefined;
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 export function loadConfig(): Config {
@@ -45,6 +92,7 @@ export function loadConfig(): Config {
   const llmYaml = (yaml.llm as Record<string, string>) ?? {};
   const intervalsYaml = (yaml.intervals as Record<string, string>) ?? {};
   const telegramYaml = (yaml.telegram as Record<string, string>) ?? {};
+  const sessionYaml = (yaml.session as Record<string, unknown>) ?? {};
 
   const provider = (env("LLM_PROVIDER") ??
     llmYaml.provider ??
@@ -56,16 +104,26 @@ export function loadConfig(): Config {
     google: env("GOOGLE_GENERATIVE_AI_API_KEY") ?? llmYaml.api_key ?? "",
   };
 
-  const modelMap: Record<string, string> = {
-    anthropic: "claude-opus-4-6",
+  const defaultModelMap: Record<string, string> = {
+    anthropic: "claude-sonnet-4-5-20241022",
     openai: "gpt-4o",
     google: "gemini-2.0-flash",
   };
 
+  const model = env("LLM_MODEL") ?? llmYaml.model ?? defaultModelMap[provider];
+
+  const channelsYaml = (sessionYaml.channels as Record<string, Record<string, unknown>>) ?? {};
+  const channels: Record<string, { historyLimit?: number }> = {};
+  for (const [name, ch] of Object.entries(channelsYaml)) {
+    channels[name] = {
+      historyLimit: typeof ch.historyLimit === "number" ? ch.historyLimit : undefined,
+    };
+  }
+
   return {
     llm: {
       provider,
-      model: env("LLM_MODEL") ?? llmYaml.model ?? modelMap[provider],
+      model,
       apiKey: apiKeyMap[provider],
     },
     intervals: {
@@ -75,6 +133,13 @@ export function loadConfig(): Config {
     telegram: {
       botToken: env("TELEGRAM_BOT_TOKEN") ?? telegramYaml.bot_token ?? "",
     },
+    session: {
+      historyLimit: envInt("SESSION_HISTORY_LIMIT") ?? (sessionYaml.historyLimit as number) ?? 20,
+      idleMinutes: envInt("SESSION_IDLE_MINUTES") ?? (sessionYaml.idleMinutes as number) ?? 0,
+      dailyResetHour: envInt("SESSION_DAILY_RESET_HOUR") ?? (sessionYaml.dailyResetHour as number) ?? 4,
+      channels,
+    },
+    contextWindowTokens: resolveContextWindowTokens(model),
     dataDir: (yaml.data_dir as string) ?? CONFIG_DIR,
   };
 }
