@@ -7,4 +7,5 @@ docs/
 .idea/
 scripts/
 .claude
+CLAUDE.local.md
 .tests/

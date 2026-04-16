@@ -5,15 +5,15 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import type { LanguageModel, ModelMessage } from "ai";
 import { IntervalsClient } from "intervals-icu-api";
 import type { Config } from "../config.js";
-import { getHistoryLimit } from "../config.js";
 import { Memory } from "./memory.js";
 import { ChatStore } from "./chat-store.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import { createTools } from "./tools.js";
 import { withSessionLock } from "./session-lock.js";
-import { limitHistoryTurns } from "./history-limit.js";
+import { splitHistoryByBudget, makeSummaryMessage } from "./history-limit.js";
 import {
   shouldCompact,
+  computeHistoryTokenBudget,
   isContextOverflowError,
   isTimeoutError,
   isRateLimitError,
@@ -21,7 +21,7 @@ import {
   estimateMessagesTokens,
   TIMEOUT_COMPACTION_THRESHOLD,
 } from "./token-utils.js";
-import { summarizeInStages } from "./compaction.js";
+import { summarizeInStages, summarizeDroppedMessages } from "./compaction.js";
 import { runMemoryFlush } from "./memory-flush.js";
 import { evaluateSessionFreshness } from "./session-freshness.js";
 
@@ -87,10 +87,43 @@ export class CyclingCoachAgent {
 
       this.systemPrompt = buildSystemPrompt(this.memory);
 
-      const limited = limitHistoryTurns(history, getHistoryLimit(this.config, chatId));
+      const budget = computeHistoryTokenBudget({
+        contextWindowTokens: this.config.contextWindowTokens,
+        systemPrompt: this.systemPrompt,
+        budgetRatio: this.config.session.historyTokenBudgetRatio,
+      });
+      const { kept, dropped, previousSummary } = splitHistoryByBudget({
+        messages: history,
+        tokenBudget: budget,
+      });
+
+      let summaryMsg: ModelMessage | undefined;
+      if (dropped.length > 0) {
+        try {
+          const summary = await summarizeDroppedMessages({
+            dropped,
+            model: this.model,
+            previousSummary,
+            contextWindowTokens: this.config.contextWindowTokens,
+          });
+          summaryMsg = makeSummaryMessage(summary);
+          this.chatStore.overwriteHistory(chatId, [summaryMsg, ...kept]);
+        } catch (err) {
+          console.warn("Dropped message summarization failed, continuing without summary", err);
+          if (previousSummary) {
+            summaryMsg = makeSummaryMessage(previousSummary);
+          }
+        }
+      } else if (previousSummary) {
+        summaryMsg = makeSummaryMessage(previousSummary);
+      }
 
       // Build messages array with new user message
-      let messages: ModelMessage[] = [...limited, { role: "user", content: userMessage }];
+      let messages: ModelMessage[] = [
+        ...(summaryMsg ? [summaryMsg] : []),
+        ...kept,
+        { role: "user", content: userMessage },
+      ];
 
       let overflowAttempts = 0;
       let timeoutAttempts = 0;
@@ -100,7 +133,7 @@ export class CyclingCoachAgent {
         // Preemptive: compact before sending if over budget
         if (shouldCompact({ messages, systemPrompt: this.systemPrompt, contextWindowTokens: this.config.contextWindowTokens })) {
           await runMemoryFlush({ model: this.model, messages, memory: this.memory });
-          messages = await summarizeInStages({ messages, model: this.model });
+          messages = await summarizeInStages({ messages, model: this.model, contextWindowTokens: this.config.contextWindowTokens });
           this.memory.reload();
         }
 
@@ -124,7 +157,7 @@ export class CyclingCoachAgent {
           if (isContextOverflowError(err) && overflowAttempts < MAX_OVERFLOW_ATTEMPTS) {
             overflowAttempts++;
             await runMemoryFlush({ model: this.model, messages, memory: this.memory });
-            messages = await summarizeInStages({ messages, model: this.model });
+            messages = await summarizeInStages({ messages, model: this.model, contextWindowTokens: this.config.contextWindowTokens });
             this.memory.reload();
             continue;
           }
@@ -133,7 +166,7 @@ export class CyclingCoachAgent {
             const ratio = estimateMessagesTokens(messages) / this.config.contextWindowTokens;
             if (ratio > TIMEOUT_COMPACTION_THRESHOLD) {
               timeoutAttempts++;
-              messages = await summarizeInStages({ messages, model: this.model });
+              messages = await summarizeInStages({ messages, model: this.model, contextWindowTokens: this.config.contextWindowTokens });
               this.memory.reload();
               continue;
             }
@@ -159,8 +192,8 @@ export class CyclingCoachAgent {
   }
 
   async resetSession(chatId: string): Promise<void> {
-    // Memory flush before ANY reset — fixes OpenClaw bug #50891
-    const history = this.chatStore.getHistory(chatId);
+    // Flush before reset to avoid losing un-persisted context
+    const { messages: history } = this.chatStore.load(chatId);
     if (history.length > 0) {
       await runMemoryFlush({ model: this.model, messages: history, memory: this.memory });
     }

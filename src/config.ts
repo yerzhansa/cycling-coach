@@ -21,10 +21,9 @@ export interface Config {
     botToken: string;
   };
   session: {
-    historyLimit: number;
+    historyTokenBudgetRatio: number;
     idleMinutes: number;
     dailyResetHour: number;
-    channels: Record<string, { historyLimit?: number }>;
   };
   contextWindowTokens: number;
   dataDir: string;
@@ -48,6 +47,7 @@ function loadYamlConfig(): Record<string, unknown> {
 // ============================================================================
 
 const CONTEXT_WINDOWS: Record<string, number> = {
+  "claude-haiku-4-5-20251001": 200_000,
   "claude-sonnet-4-5-20241022": 200_000,
   "gpt-4o": 128_000,
   "gemini-2.0-flash": 1_000_000,
@@ -64,15 +64,6 @@ function resolveContextWindowTokens(model: string): number {
 }
 
 // ============================================================================
-// HISTORY LIMIT RESOLUTION
-// ============================================================================
-
-export function getHistoryLimit(config: Config, chatId: string): number {
-  const channel = chatId.split(":")[0];
-  return config.session.channels[channel]?.historyLimit ?? config.session.historyLimit;
-}
-
-// ============================================================================
 // CONFIG LOADING
 // ============================================================================
 
@@ -84,6 +75,13 @@ function envInt(key: string): number | undefined {
   const v = process.env[key];
   if (v === undefined) return undefined;
   const n = parseInt(v, 10);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function envFloat(key: string): number | undefined {
+  const v = process.env[key];
+  if (v === undefined) return undefined;
+  const n = parseFloat(v);
   return Number.isFinite(n) ? n : undefined;
 }
 
@@ -112,14 +110,6 @@ export function loadConfig(): Config {
 
   const model = env("LLM_MODEL") ?? llmYaml.model ?? defaultModelMap[provider];
 
-  const channelsYaml = (sessionYaml.channels as Record<string, Record<string, unknown>>) ?? {};
-  const channels: Record<string, { historyLimit?: number }> = {};
-  for (const [name, ch] of Object.entries(channelsYaml)) {
-    channels[name] = {
-      historyLimit: typeof ch.historyLimit === "number" ? ch.historyLimit : undefined,
-    };
-  }
-
   return {
     llm: {
       provider,
@@ -134,10 +124,9 @@ export function loadConfig(): Config {
       botToken: env("TELEGRAM_BOT_TOKEN") ?? telegramYaml.bot_token ?? "",
     },
     session: {
-      historyLimit: envInt("SESSION_HISTORY_LIMIT") ?? (sessionYaml.historyLimit as number) ?? 20,
+      historyTokenBudgetRatio: envFloat("HISTORY_TOKEN_BUDGET_RATIO") ?? (sessionYaml.historyTokenBudgetRatio as number) ?? 0.3,
       idleMinutes: envInt("SESSION_IDLE_MINUTES") ?? (sessionYaml.idleMinutes as number) ?? 0,
       dailyResetHour: envInt("SESSION_DAILY_RESET_HOUR") ?? (sessionYaml.dailyResetHour as number) ?? 4,
-      channels,
     },
     contextWindowTokens: resolveContextWindowTokens(model),
     dataDir: (yaml.data_dir as string) ?? CONFIG_DIR,
