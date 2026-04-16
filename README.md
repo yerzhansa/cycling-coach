@@ -97,7 +97,7 @@ TELEGRAM_BOT_TOKEN=123456:ABC...  # from @BotFather
 **CLI mode** (no Telegram token set):
 
 ```bash
-cycling-coach          # if installed from npm
+npx cycling-coach      # if installed from npm
 npm run dev            # if running from source
 ```
 
@@ -112,7 +112,7 @@ Cycling Coach (CLI mode). Type your message:
 **Telegram mode** (with `TELEGRAM_BOT_TOKEN` set):
 
 ```bash
-cycling-coach          # if installed from npm
+npx cycling-coach      # if installed from npm
 npm run dev            # if running from source
 ```
 
