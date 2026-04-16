@@ -154,18 +154,27 @@ export function createTools(memory: Memory, intervals: IntervalsClient | null) {
     memory_read: createMemoryReadTool(memory),
 
     memory_write: tool({
-      description: "Write to long-term memory (athlete facts, goals, preferences) or daily notes",
+      description:
+        "Write to long-term memory (replaces section content) or daily notes. " +
+        "Use sections to organize athlete data: profile (FTP, weight, age, experience), " +
+        "schedule (training days, availability), goals (target events, FTP targets), " +
+        "equipment (bikes, trainer, power meter), health (injuries, HR, sleep), " +
+        "preferences (indoor/outdoor, coaching style), notes (anything else).",
       inputSchema: zodSchema(
         z.object({
           type: z
             .enum(["memory", "daily"])
             .describe("'memory' for long-term facts, 'daily' for today's notes"),
+          section: z
+            .enum(["profile", "schedule", "goals", "equipment", "health", "preferences", "notes"])
+            .optional()
+            .describe("Memory section to write to (required when type='memory'). Replaces the section content."),
           content: z.string().describe("The information to save"),
         }),
       ),
-      execute: async (input: { type: "memory" | "daily"; content: string }) => {
+      execute: async (input: { type: "memory" | "daily"; section?: string; content: string }) => {
         if (input.type === "memory") {
-          memory.appendMemory(input.content);
+          memory.writeSection(input.section ?? "notes", input.content);
         } else {
           memory.appendDailyNote(input.content);
         }

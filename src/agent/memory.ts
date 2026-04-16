@@ -24,6 +24,31 @@ export class Memory {
     return readFileSync(path, "utf-8");
   }
 
+  writeSection(section: string, content: string): void {
+    const path = join(this.memoryDir, "MEMORY.md");
+    const existing = this.readMemory();
+    const marker = `## ${section}`;
+    const newBlock = `${marker}\n${content}\n`;
+
+    if (!existing) {
+      writeFileSync(path, newBlock, "utf-8");
+      return;
+    }
+
+    // Split by section headers, find and replace the matching one
+    const parts = existing.split(/(?=^## )/m);
+    const idx = parts.findIndex((p) => p.startsWith(marker + "\n"));
+
+    if (idx >= 0) {
+      parts[idx] = newBlock;
+      writeFileSync(path, parts.join(""), "utf-8");
+    } else {
+      // No matching section → append at end (preserves legacy content)
+      writeFileSync(path, existing.trimEnd() + "\n\n" + newBlock, "utf-8");
+    }
+  }
+
+  /** @deprecated Use writeSection instead */
   appendMemory(entry: string): void {
     const path = join(this.memoryDir, "MEMORY.md");
     const existing = this.readMemory();
