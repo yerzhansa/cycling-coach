@@ -48,6 +48,21 @@ Runtime: Node.js 22+ (recommended) or Node.js 20+.
 npm install -g cycling-coach
 ```
 
+### From source (development)
+
+```bash
+git clone git@github.com:yerzhansa/cycling-coach.git
+cd cycling-coach
+
+npm install
+npm run build
+
+# Dev loop (auto-reload, reads .env)
+npm run dev
+```
+
+Note: `npm run dev` runs TypeScript directly (via tsx). `npm run build` produces `dist/` for running via Node / the published npm package.
+
 ### 2. Configure API keys
 
 Copy the example env file and fill in your keys:
