@@ -110,6 +110,7 @@ export class CyclingCoachAgent {
             system: this.systemPrompt,
             messages,
             tools: this.tools,
+            maxRetries: 0,
             stopWhen: stepCountIs(10),
           });
 
@@ -150,13 +151,7 @@ export class CyclingCoachAgent {
             await sleep(backoff);
             continue;
           }
-          // Rate limit retries exhausted → compact before throwing so next message has smaller context
-          if (isRateLimitError(err)) {
-            await runMemoryFlush({ model: this.model, messages, memory: this.memory });
-            messages = await summarizeInStages({ messages, model: this.model });
-            this.chatStore.overwriteHistory(chatId, messages);
-            throw err;
-          }
+          // Rate limit retries exhausted → throw to caller (skip compaction — API is rate limited)
           throw err;
         }
       }

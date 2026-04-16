@@ -1,6 +1,14 @@
 import { Bot } from "grammy";
 import type { CyclingCoachAgent } from "../agent/core.js";
-import { isRateLimitError } from "../agent/token-utils.js";
+import { isRateLimitError, extractRetryAfterMs } from "../agent/token-utils.js";
+
+function formatRateLimitWait(err: unknown): string {
+  const ms = extractRetryAfterMs(err);
+  if (!ms) return "about a minute";
+  const secs = Math.ceil(ms / 1000);
+  if (secs < 60) return `~${secs} seconds`;
+  return `~${Math.ceil(secs / 60)} minute${Math.ceil(secs / 60) > 1 ? "s" : ""}`;
+}
 
 // ============================================================================
 // TELEGRAM BOT
@@ -39,7 +47,7 @@ export function createTelegramBot(token: string, agent: CyclingCoachAgent): Bot 
     } catch (err) {
       console.error("Error in /plan:", err);
       if (isRateLimitError(err)) {
-        await ctx.reply("Rate limited — please try this command again in a minute.");
+        await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
       } else {
         await ctx.reply("Sorry, something went wrong generating your plan. Please try again.");
       }
@@ -55,7 +63,7 @@ export function createTelegramBot(token: string, agent: CyclingCoachAgent): Bot 
     } catch (err) {
       console.error("Error in /workout:", err);
       if (isRateLimitError(err)) {
-        await ctx.reply("Rate limited — please try this command again in a minute.");
+        await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
       } else {
         await ctx.reply("Sorry, something went wrong. Please try again.");
       }
@@ -71,7 +79,7 @@ export function createTelegramBot(token: string, agent: CyclingCoachAgent): Bot 
     } catch (err) {
       console.error("Error in /status:", err);
       if (isRateLimitError(err)) {
-        await ctx.reply("Rate limited — please try this command again in a minute.");
+        await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
       } else {
         await ctx.reply("Sorry, something went wrong. Please try again.");
       }
@@ -87,7 +95,7 @@ export function createTelegramBot(token: string, agent: CyclingCoachAgent): Bot 
     } catch (err) {
       console.error("Error in /sync:", err);
       if (isRateLimitError(err)) {
-        await ctx.reply("Rate limited — please try this command again in a minute.");
+        await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
       } else {
         await ctx.reply("Sorry, something went wrong. Please try again.");
       }
@@ -104,8 +112,9 @@ export function createTelegramBot(token: string, agent: CyclingCoachAgent): Bot 
     } catch (err) {
       console.error("Error in chat:", err);
       if (isRateLimitError(err)) {
+        const wait = formatRateLimitWait(err);
         await ctx.reply(
-          `Your message was not processed (rate limited). Please resend:\n\n"${ctx.message.text.slice(0, 200)}"`,
+          `Your message was not processed (rate limited). Please wait ${wait} and resend:\n\n"${ctx.message.text.slice(0, 200)}"`,
         );
       } else {
         await ctx.reply("Sorry, something went wrong. Please try again.");
