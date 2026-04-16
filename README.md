@@ -44,6 +44,8 @@ AI-powered cycling coach you can chat with on Telegram or in the terminal. Conne
 
 Requires [Node.js](https://nodejs.org/) 20+ (comes with npm).
 
+Open **Terminal** (Mac/Linux) or **PowerShell** (Windows) and run:
+
 ```bash
 npm install -g cycling-coach
 cycling-coach setup
