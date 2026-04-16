@@ -59,11 +59,24 @@ export async function runSetup(): Promise<void> {
   handleCancel(apiKey);
 
   // Model
-  const model = await select({
+  const modelOptions = [
+    ...(MODELS[provider] ?? []),
+    { value: "__custom__", label: "Other (type model name)" },
+  ];
+  let model = await select({
     message: "Model",
-    options: MODELS[provider] ?? [],
+    options: modelOptions,
   });
   handleCancel(model);
+
+  if (model === "__custom__") {
+    const custom = await text({
+      message: "Model name",
+      validate: (v) => (!v ? "Model name is required" : undefined),
+    });
+    handleCancel(custom);
+    model = custom;
+  }
 
   // intervals.icu (optional)
   const intervalsKey = await text({
