@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { resolve, join } from "node:path";
 
@@ -47,5 +47,24 @@ export function getKnownTelegramChatIds(dataDir: string): string[] {
       .map((f) => f.replace("telegram:", "").replace(".jsonl", ""));
   } catch {
     return [];
+  }
+}
+
+const NOTIFIED_VERSION_FILE = "last-notified-version";
+
+export function getLastNotifiedVersion(dataDir: string): string | null {
+  try {
+    return readFileSync(join(dataDir, NOTIFIED_VERSION_FILE), "utf-8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+export function setLastNotifiedVersion(dataDir: string, version: string): void {
+  try {
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, NOTIFIED_VERSION_FILE), version);
+  } catch {
+    // Non-critical — don't crash the bot
   }
 }
