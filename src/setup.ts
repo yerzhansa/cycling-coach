@@ -44,11 +44,14 @@ async function askProvider(
 
 export async function runSetup(): Promise<void> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  let done = false;
 
   // Handle Ctrl+C
   rl.on("close", () => {
-    console.log("\n  Setup cancelled.");
-    process.exit(0);
+    if (!done) {
+      console.log("\n  Setup cancelled.");
+      process.exit(0);
+    }
   });
 
   try {
@@ -66,6 +69,7 @@ export async function runSetup(): Promise<void> {
 
     const telegramToken = await ask(rl, "  Telegram bot token (optional, Enter to skip): ");
 
+    done = true;
     rl.close();
 
     // Check existing config
