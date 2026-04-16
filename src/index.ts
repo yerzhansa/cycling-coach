@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { loadConfig } from "./config.js";
 import { CyclingCoachAgent } from "./agent/core.js";
 import { createTelegramBot } from "./channels/telegram.js";
