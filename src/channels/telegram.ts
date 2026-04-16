@@ -32,7 +32,7 @@ export function createTelegramBot(token: string, agent: CyclingCoachAgent): Bot 
         "Commands:\n" +
         "/plan — Generate a training plan\n" +
         "/workout — Get today's workout\n" +
-        "/status — Check current form (CTL/ATL/TSB)\n" +
+        "/status — Check current fitness, fatigue, and form\n" +
         "/sync — Push plan to intervals.icu calendar\n\n" +
         "Or just chat with me about your training!",
     );

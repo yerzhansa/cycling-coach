@@ -226,7 +226,7 @@ function createIntervalsTools(client: IntervalsClient) {
 
     intervals_fetch_activities: tool({
       description:
-        "Fetch recent activities from intervals.icu. Returns rides with TSS, IF, duration, distance.",
+        "Fetch recent activities from intervals.icu. Returns rides with load, intensity, duration, distance.",
       inputSchema: zodSchema(
         z.object({
           oldest: z.string().describe("Oldest date (YYYY-MM-DD)"),
@@ -245,7 +245,7 @@ function createIntervalsTools(client: IntervalsClient) {
 
     intervals_fetch_wellness: tool({
       description:
-        "Fetch wellness data from intervals.icu (CTL, ATL, weight, HRV, resting HR, sleep). TSB = CTL - ATL.",
+        "Fetch wellness data from intervals.icu (fitness, fatigue, weight, HRV, resting HR, sleep). Form = fitness - fatigue.",
       inputSchema: zodSchema(
         z.object({
           oldest: z.string().describe("Start date (YYYY-MM-DD)"),
@@ -269,7 +269,7 @@ function createIntervalsTools(client: IntervalsClient) {
           date: z.string().describe("Workout date (YYYY-MM-DD)"),
           name: z.string().describe("Workout name"),
           movingTime: z.number().int().describe("Duration in seconds"),
-          trainingLoad: z.number().optional().describe("Planned TSS"),
+          trainingLoad: z.number().optional().describe("Planned load"),
           description: z.string().optional().describe("Workout details"),
         }),
       ),

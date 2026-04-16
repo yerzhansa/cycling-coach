@@ -1,15 +1,44 @@
 # Cycling Coach
 
-AI-powered cycling coach you can chat with on Telegram or in the terminal. Connect your [intervals.icu](https://intervals.icu) account to pull real training data — the coach analyzes your fitness, builds periodized plans, and pushes structured workouts straight to your calendar (auto-syncs to Garmin/Wahoo).
+AI-powered cycling coach you can chat with on Telegram or in the terminal. Connect your [intervals.icu](https://intervals.icu) account to pull real training data — the coach analyzes your fitness, builds periodized plans, and pushes structured workouts straight to your calendar (auto-syncs to Garmin, Wahoo, Hammerhead, COROS, Suunto, and Zwift).
 
 ## How it works
 
-1. **You send a message** — via Telegram or the command line ("Build me a 12-week gran fondo plan", "What should I ride today?", "My knee hurts")
+```
+┌─────────────────────────────────────────────────────────┐
+│  You                                                    │
+│  Telegram / CLI                                         │
+└────────────────────────┬────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────┐
+│  Cycling Coach Agent                                    │
+│                                                         │
+│  ┌──────────────┐  ┌─────────────┐  ┌───────────────┐  │
+│  │ Coaching      │  │ Cycling     │  │ Memory        │  │
+│  │ persona &     │  │ logic       │  │ goals, notes, │  │
+│  │ domain skills │  │ zones, plans│  │ preferences   │  │
+│  └──────────────┘  └─────────────┘  └───────────────┘  │
+│                                                         │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │ intervals.icu API                                │   │
+│  │ fitness · fatigue · form · rides · push workouts │   │
+│  └──────────────────────────────────────────────────┘   │
+└────────────────────────┬────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────┐
+│  LLM  (Claude / GPT / Gemini)                           │
+│  Interprets data + coaching knowledge → response        │
+└─────────────────────────────────────────────────────────┘
+```
+
+1. **You send a message** — via Telegram or the command line ("Build me a 12-week gran fondo plan", "What should I ride today?")
 2. **The coach reads your history** — goals, past conversations, injury notes, and preferences stored locally on your machine
-3. **It pulls your real data** — current fitness (CTL), fatigue (ATL), form (TSB), recent rides, FTP, and zones from intervals.icu
+3. **It pulls your real data** — current fitness, fatigue, form, recent rides, FTP, and zones from intervals.icu
 4. **It runs cycling logic** — zone calculations, periodization models, feasibility checks, workout structure — all deterministic, no guessing
 5. **An LLM puts it together** — Claude, GPT, or Gemini interprets everything and responds like a knowledgeable coach
-6. **Workouts land on your calendar** — structured intervals pushed to intervals.icu, which syncs to your Garmin or Wahoo head unit
+6. **Workouts land on your calendar** — structured intervals pushed to intervals.icu, which syncs to Garmin, Wahoo, Hammerhead, COROS, Suunto, and Zwift
 
 ## Setup
 
@@ -94,8 +123,8 @@ The bot starts polling. Open your bot in Telegram and send `/start`.
 |---------|-------------|
 | `/start` | Welcome message + available commands |
 | `/plan` | Fetches your intervals.icu data, builds a periodized plan, asks to push to calendar |
-| `/workout` | Checks your current form (CTL/ATL/TSB), suggests today's workout with structured intervals |
-| `/status` | Shows fitness (CTL), fatigue (ATL), form (TSB), and coaching notes |
+| `/workout` | Checks your current fitness, fatigue, and form — suggests today's workout with structured intervals |
+| `/status` | Shows fitness, fatigue, form, and coaching notes |
 | `/sync` | Pushes next 1-2 weeks of planned workouts to intervals.icu calendar |
 
 Free-form chat works too — ask anything about training, report an injury, request plan adjustments.
@@ -112,9 +141,9 @@ Free-form chat works too — ask anything about training, report an injury, requ
 ### intervals.icu integration
 
 - Fetch athlete profile (FTP, weight, max HR, zones)
-- Fetch recent activities (TSS, IF, duration)
-- Fetch wellness data (CTL, ATL → TSB, HRV, resting HR, sleep)
-- Push workouts to calendar → auto-syncs to Garmin/Wahoo
+- Fetch recent activities (load, intensity, duration)
+- Fetch wellness data (fitness, fatigue, form, HRV, resting HR, sleep)
+- Push workouts to calendar → auto-syncs to Garmin, Wahoo, Hammerhead, COROS, Suunto, and Zwift
 
 ### Memory
 
