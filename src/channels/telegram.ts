@@ -1,7 +1,7 @@
 import { Bot } from "grammy";
 import type { CyclingCoachAgent } from "../agent/core.js";
 import { isRateLimitError, extractRetryAfterMs } from "../agent/token-utils.js";
-import { checkForUpdate, selfUpdate, getKnownTelegramChatIds } from "../updater.js";
+import { checkForUpdate, selfUpdate, getKnownTelegramChatIds, getCurrentVersion } from "../updater.js";
 
 function formatRateLimitWait(err: unknown): string {
   const ms = extractRetryAfterMs(err);
@@ -35,6 +35,7 @@ export function createTelegramBot(token: string, agent: CyclingCoachAgent): Bot 
         "/workout — Get today's workout\n" +
         "/status — Check current fitness, fatigue, and form\n" +
         "/sync — Push plan to intervals.icu calendar\n" +
+        "/version — Show current version\n" +
         "/update — Check for and install updates\n\n" +
         "Or just chat with me about your training!",
     );
@@ -102,6 +103,10 @@ export function createTelegramBot(token: string, agent: CyclingCoachAgent): Bot 
         await ctx.reply("Sorry, something went wrong. Please try again.");
       }
     }
+  });
+
+  bot.command("version", async (ctx) => {
+    await ctx.reply(`Cycling Coach v${getCurrentVersion()}`);
   });
 
   bot.command("update", async (ctx) => {

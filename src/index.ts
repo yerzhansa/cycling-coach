@@ -12,6 +12,7 @@ const USAGE = `Usage: cycling-coach [command]
 
 Commands:
   setup    Interactive wizard to create ~/.cycling-coach/config.yaml
+  version  Show current version
   (none)   Start the coaching agent (Telegram or CLI mode)
 
 Options:
@@ -43,6 +44,12 @@ async function main() {
     return;
   }
 
+  if (command === "version") {
+    const { getCurrentVersion } = await import("./updater.js");
+    console.log(`cycling-coach v${getCurrentVersion()}`);
+    return;
+  }
+
   if (command) {
     console.error(`Unknown command: ${command}\n`);
     console.log(USAGE);
@@ -64,7 +71,7 @@ async function main() {
   if (config.telegram.botToken) {
     // Telegram mode
     const bot = createTelegramBot(config.telegram.botToken, agent);
-    console.log("Starting Telegram bot...");
+    console.log("Cycling Coach is running. Waiting for messages...");
     bot.start();
     notifyUpdate(bot, config.dataDir).catch(() => {});
   } else {
