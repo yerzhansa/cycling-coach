@@ -27,6 +27,7 @@
     "@ai-sdk/anthropic": "^3.0.69",
     "@ai-sdk/google": "^3.0.63",
     "@ai-sdk/openai": "^3.0.52",
+    "@clack/prompts": "^1.2.0",
     "ai": "^6.0.158",
     "grammy": "^1.42.0",
     "intervals-icu-api": "^0.1.2",
