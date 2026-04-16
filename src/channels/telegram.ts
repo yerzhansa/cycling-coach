@@ -124,7 +124,7 @@ export function createTelegramBot(token: string, agent: CyclingCoachAgent): Bot 
         await ctx.reply(`You're on the latest version (${info.current}).`);
         return;
       }
-      await ctx.reply(`Updating ${info.current} → ${info.latest}...\nThe bot will restart after installation.`);
+      await ctx.reply(`Updating ${info.current} → ${info.latest}...\nThe bot will stop after installation. Run \`cycling-coach\` to start it again.`);
       selfUpdate();
     } catch (err) {
       console.error("Error in /update:", err);
