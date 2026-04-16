@@ -8,7 +8,9 @@
     "cycling-coach": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "SOUL.md",
+    "skills"
   ],
   "scripts": {
     "dev": "tsx --env-file=.env src/index.ts",
