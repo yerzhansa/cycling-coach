@@ -22,4 +22,11 @@ export type { SampleWorkout, WorkoutType } from "./templates.js";
 
 export { buildPlanSkeleton } from "./plan-builder.js";
 
+export {
+  serializeIntervalsWorkout,
+  intervalsWorkoutInputSchema,
+  InvalidWorkoutError,
+} from "./intervals-serializer.js";
+export type { IntervalsWorkoutInput } from "./intervals-serializer.js";
+
 export * from "./schemas.js";

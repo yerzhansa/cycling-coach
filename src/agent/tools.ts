@@ -5,6 +5,9 @@ import {
   buildPlanSkeleton,
   assessGoalFeasibility,
   getSampleWeek,
+  serializeIntervalsWorkout,
+  intervalsWorkoutInputSchema,
+  InvalidWorkoutError,
 } from "../cycling/index.js";
 import type {
   AthleteProfile,
@@ -12,6 +15,7 @@ import type {
   VolumeTier,
   DayOfWeek,
   RaceType,
+  IntervalsWorkoutInput,
 } from "../cycling/index.js";
 import type { Memory } from "./memory.js";
 import type { IntervalsClient } from "intervals-icu-api";
@@ -263,31 +267,37 @@ function createIntervalsTools(client: IntervalsClient) {
     }),
 
     intervals_create_workout: tool({
-      description: "Create a workout on the intervals.icu calendar. Auto-syncs to Garmin/Wahoo.",
+      description:
+        "Create a structured workout on the intervals.icu calendar. Auto-syncs to Garmin/Wahoo. " +
+        "Supply the workout as structured steps — the tool serializes them into the intervals.icu " +
+        "native description syntax so the power chart renders. Put athlete-facing coaching narrative " +
+        "(feel, notes, hydration) in your chat reply, not in this tool.",
       inputSchema: zodSchema(
         z.object({
           date: z.string().describe("Workout date (YYYY-MM-DD)"),
-          name: z.string().describe("Workout name"),
-          movingTime: z.number().int().describe("Duration in seconds"),
-          trainingLoad: z.number().optional().describe("Planned load"),
-          description: z.string().optional().describe("Workout details"),
+          workout: intervalsWorkoutInputSchema.describe(
+            "Structured workout: name + ordered steps. Top-level steps can be simple (warmup/steady/interval/ramp/recovery/rest/cooldown/freeride) or a set {type:'set', repeat, interval, recovery}. Durations use seconds or minutes only. Power targets: {kind:'percent_ftp'|'watts'|'zone', value} or {kind, low, high} for ranges. Ramps require low+high.",
+          ),
         }),
       ),
-      execute: async (input: {
-        date: string;
-        name: string;
-        movingTime: number;
-        trainingLoad?: number;
-        description?: string;
-      }) => {
+      execute: async (input: { date: string; workout: IntervalsWorkoutInput }) => {
+        let serialized: ReturnType<typeof serializeIntervalsWorkout>;
+        try {
+          serialized = serializeIntervalsWorkout(input.workout);
+        } catch (err) {
+          if (err instanceof InvalidWorkoutError) {
+            return { error: "invalid_workout", details: err.message };
+          }
+          throw err;
+        }
         const result = await client.events.create({
           start_date_local: `${input.date}T00:00:00`,
           category: "WORKOUT",
-          name: input.name,
+          name: input.workout.name,
           type: "Ride",
-          moving_time: input.movingTime,
-          icu_training_load: input.trainingLoad,
-          description: input.description,
+          moving_time: serialized.movingTime,
+          icu_training_load: serialized.trainingLoad,
+          description: serialized.description,
         });
         if (!result.ok) return { error: result.error.kind };
         return { created: true, event: result.value };
