@@ -71,15 +71,97 @@ Peak power at standard durations reveals athlete strengths:
 
 ## Calendar / Events
 
-### Pushing Workouts
-When creating events on the intervals.icu calendar:
-- `start_date_local`: ISO date string for the workout day
-- `category`: "WORKOUT" for planned sessions
-- `type`: "Ride" for cycling workouts
-- `name`: Descriptive name (e.g., "Sweet Spot 2x20")
-- `moving_time`: Duration in seconds
-- `icu_training_load`: Planned load
-- `description`: Workout details, interval structure, coaching notes
+### Pushing Workouts — use `intervals_create_workout`
+
+The tool takes a **structured** workout (not prose). It serializes the steps into the intervals.icu
+native format so the power chart renders on the calendar and the workout syncs to head units.
+
+Input shape:
+- `date`: "YYYY-MM-DD"
+- `workout.name`: short title shown on the calendar card
+- `workout.steps`: ordered array of steps
+
+Each top-level step is either a **simple step** or a **set** (repeating group).
+
+**Simple step**:
+```json
+{
+  "type": "warmup" | "steady" | "interval" | "ramp" | "recovery" | "rest" | "cooldown" | "freeride",
+  "duration": { "value": <number>, "unit": "seconds" | "minutes" },
+  "power": { "kind": "percent_ftp" | "watts" | "zone",
+             "value": <number>,        // single target
+             "low": <number>, "high": <number>  // range (required for ramps) },
+  "cadence": { "target": 90 }  // or { "low": 85, "high": 95 }
+}
+```
+
+**Set step**:
+```json
+{
+  "type": "set",
+  "repeat": 3,
+  "interval": { <simple step> },
+  "recovery": { <simple step> }
+}
+```
+
+Rules:
+- Power is optional only for `freeride` and `rest`. All other step types should have a power target.
+- Ramps **require** `power.low` and `power.high` (the ramp bounds).
+- For zone targets, `value` / `low` / `high` are integers 1–7 (cycling power zones). `Z2` defaults
+  to the power zone for Ride workouts.
+- Ramps are most reliably expressed as `percent_ftp` ranges (e.g. `low: 55, high: 75`). Zone-based
+  ramps may not render — prefer `percent_ftp` for warmup ramps.
+- Durations are time-only: `seconds` or `minutes`. Distance-based workouts are not supported here.
+- `moving_time` and `icu_training_load` are computed from the steps — do not pass them.
+
+### Example: Z2 endurance 90min
+
+```json
+{
+  "date": "2026-04-17",
+  "workout": {
+    "name": "Z2 Endurance 90min",
+    "steps": [
+      { "type": "warmup",   "duration": { "value": 10, "unit": "minutes" }, "power": { "kind": "percent_ftp", "low": 50, "high": 65 }, "cadence": { "low": 85, "high": 95 } },
+      { "type": "steady",   "duration": { "value": 70, "unit": "minutes" }, "power": { "kind": "percent_ftp", "low": 56, "high": 75 }, "cadence": { "low": 85, "high": 95 } },
+      { "type": "cooldown", "duration": { "value": 10, "unit": "minutes" }, "power": { "kind": "percent_ftp", "value": 50 }, "cadence": { "low": 85, "high": 95 } }
+    ]
+  }
+}
+```
+
+### Example: Sweet Spot 3×15
+
+```json
+{
+  "date": "2026-04-18",
+  "workout": {
+    "name": "Sweet Spot 3x15",
+    "steps": [
+      { "type": "warmup",   "duration": { "value": 15, "unit": "minutes" }, "power": { "kind": "percent_ftp", "low": 50, "high": 65 } },
+      {
+        "type": "set", "repeat": 3,
+        "interval": { "type": "interval", "duration": { "value": 15, "unit": "minutes" }, "power": { "kind": "percent_ftp", "low": 88, "high": 94 }, "cadence": { "low": 85, "high": 95 } },
+        "recovery": { "type": "recovery", "duration": { "value":  4, "unit": "minutes" }, "power": { "kind": "percent_ftp", "value": 50 } }
+      },
+      { "type": "cooldown", "duration": { "value": 10, "unit": "minutes" }, "power": { "kind": "percent_ftp", "value": 50 } }
+    ]
+  }
+}
+```
+
+### Athlete-facing narrative goes in chat, not the workout
+
+The calendar description is steps-only. Write the "why", the feel cues, hydration notes, and any
+coaching color in your **chat reply** to the athlete — never inside the tool call. The athlete
+reads coaching in chat; the head unit reads steps from intervals.icu.
+
+### On validation errors
+
+If the tool returns `{ error: "invalid_workout", details: <msg> }`, the structured input failed
+validation (e.g. ramp missing low/high, zone outside 1–7, power range inverted). Read the message,
+fix the offending step, and retry.
 
 ### Auto-Sync
 Workouts pushed to intervals.icu calendar automatically sync to:

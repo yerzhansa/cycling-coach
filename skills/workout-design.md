@@ -69,3 +69,65 @@ Every workout follows: Warmup → Main Set → Cooldown
 - Outdoor: Better for long rides, group rides, race simulation
 - Prescribe indoor for: weekday intervals, time-crunched sessions
 - Prescribe outdoor for: weekend long rides, endurance rides
+
+## Mapping to `intervals_create_workout`
+
+When pushing a workout to the calendar, pass the structured shape (never prose — see
+`intervals-icu.md`). Step types map to what's actually happening:
+
+| Step                          | Use                                                      |
+| ----------------------------- | -------------------------------------------------------- |
+| `warmup`                      | Pre-set progressive build-up                             |
+| `ramp`                        | Transition with `low`+`high` power bounds                |
+| `steady`                      | Single block at one intensity (e.g. Z2 endurance)        |
+| `interval`                    | Work effort inside a set (sweet spot, threshold, VO2max) |
+| `recovery`                    | Easy spin between intervals inside a set                 |
+| `rest`                        | Off-bike-style complete rest (rare in cycling)           |
+| `cooldown`                    | Post-set easy spin                                       |
+| `freeride`                    | No power target (Zwift freeride / outdoor easy)          |
+| `set { repeat, interval, recovery }` | Group repeated intervals (e.g. 3×15 sweet spot)  |
+
+### Sweet Spot 3×15 → tool input
+
+```json
+{
+  "name": "Sweet Spot 3x15",
+  "steps": [
+    { "type": "warmup",   "duration": { "value": 15, "unit": "minutes" }, "power": { "kind": "percent_ftp", "low": 50, "high": 65 } },
+    { "type": "set", "repeat": 3,
+      "interval": { "type": "interval", "duration": { "value": 15, "unit": "minutes" }, "power": { "kind": "percent_ftp", "low": 88, "high": 94 }, "cadence": { "low": 85, "high": 95 } },
+      "recovery": { "type": "recovery", "duration": { "value":  4, "unit": "minutes" }, "power": { "kind": "percent_ftp", "value": 50 } } },
+    { "type": "cooldown", "duration": { "value": 10, "unit": "minutes" }, "power": { "kind": "percent_ftp", "value": 50 } }
+  ]
+}
+```
+
+### Z2 Endurance 90min → tool input
+
+```json
+{
+  "name": "Z2 Endurance 90min",
+  "steps": [
+    { "type": "warmup",   "duration": { "value": 10, "unit": "minutes" }, "power": { "kind": "percent_ftp", "low": 50, "high": 65 }, "cadence": { "low": 85, "high": 95 } },
+    { "type": "steady",   "duration": { "value": 70, "unit": "minutes" }, "power": { "kind": "percent_ftp", "low": 56, "high": 75 }, "cadence": { "low": 85, "high": 95 } },
+    { "type": "cooldown", "duration": { "value": 10, "unit": "minutes" }, "power": { "kind": "percent_ftp", "value": 50 } }
+  ]
+}
+```
+
+### VO2max 5×4 → tool input
+
+```json
+{
+  "name": "VO2max 5x4",
+  "steps": [
+    { "type": "warmup",   "duration": { "value": 15, "unit": "minutes" }, "power": { "kind": "percent_ftp", "low": 50, "high": 70 } },
+    { "type": "set", "repeat": 5,
+      "interval": { "type": "interval", "duration": { "value": 4, "unit": "minutes" }, "power": { "kind": "percent_ftp", "low": 106, "high": 120 }, "cadence": { "low": 95, "high": 105 } },
+      "recovery": { "type": "recovery", "duration": { "value": 4, "unit": "minutes" }, "power": { "kind": "percent_ftp", "value": 50 } } },
+    { "type": "cooldown", "duration": { "value": 10, "unit": "minutes" }, "power": { "kind": "percent_ftp", "value": 50 } }
+  ]
+}
+```
+
+Narrative (feel, hydration, coaching cues) goes in your chat reply — not inside the tool call.
