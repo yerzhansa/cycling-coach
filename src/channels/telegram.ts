@@ -1,6 +1,7 @@
 import { Bot } from "grammy";
 import type { CyclingCoachAgent } from "../agent/core.js";
 import { isRateLimitError, extractRetryAfterMs } from "../agent/token-utils.js";
+import { checkForUpdate, selfUpdate, getKnownTelegramChatIds } from "../updater.js";
 
 function formatRateLimitWait(err: unknown): string {
   const ms = extractRetryAfterMs(err);
@@ -33,7 +34,8 @@ export function createTelegramBot(token: string, agent: CyclingCoachAgent): Bot 
         "/plan — Generate a training plan\n" +
         "/workout — Get today's workout\n" +
         "/status — Check current fitness, fatigue, and form\n" +
-        "/sync — Push plan to intervals.icu calendar\n\n" +
+        "/sync — Push plan to intervals.icu calendar\n" +
+        "/update — Check for and install updates\n\n" +
         "Or just chat with me about your training!",
     );
   });
@@ -99,6 +101,26 @@ export function createTelegramBot(token: string, agent: CyclingCoachAgent): Bot 
       } else {
         await ctx.reply("Sorry, something went wrong. Please try again.");
       }
+    }
+  });
+
+  bot.command("update", async (ctx) => {
+    await ctx.reply("Checking for updates...");
+    try {
+      const info = await checkForUpdate();
+      if (!info) {
+        await ctx.reply("Could not check for updates. Try again later.");
+        return;
+      }
+      if (!info.updateAvailable) {
+        await ctx.reply(`You're on the latest version (${info.current}).`);
+        return;
+      }
+      await ctx.reply(`Updating ${info.current} → ${info.latest}...\nThe bot will restart after installation.`);
+      selfUpdate();
+    } catch (err) {
+      console.error("Error in /update:", err);
+      await ctx.reply("Update failed. Please run `npm install -g cycling-coach@latest` manually.");
     }
   });
 
@@ -198,5 +220,29 @@ async function sendLongMessage(
 
   for (const chunk of chunks) {
     await ctx.reply(chunk, { parse_mode: "HTML" });
+  }
+}
+
+// ============================================================================
+// STARTUP UPDATE NOTIFICATION
+// ============================================================================
+
+export async function notifyUpdate(bot: Bot, dataDir: string): Promise<void> {
+  try {
+    const info = await checkForUpdate();
+    if (!info?.updateAvailable) return;
+
+    const chatIds = getKnownTelegramChatIds(dataDir);
+    const message = `Update available: ${info.current} → ${info.latest}\nSend /update to install.`;
+
+    for (const chatId of chatIds) {
+      try {
+        await bot.api.sendMessage(chatId, message);
+      } catch {
+        // Chat may no longer exist or bot was removed
+      }
+    }
+  } catch {
+    // Non-critical — don't crash the bot
   }
 }

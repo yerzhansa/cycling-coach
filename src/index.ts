@@ -2,7 +2,7 @@
 import { parseArgs } from "node:util";
 import { loadConfig } from "./config.js";
 import { CyclingCoachAgent } from "./agent/core.js";
-import { createTelegramBot } from "./channels/telegram.js";
+import { createTelegramBot, notifyUpdate } from "./channels/telegram.js";
 
 // ============================================================================
 // CLI ROUTING
@@ -66,6 +66,7 @@ async function main() {
     const bot = createTelegramBot(config.telegram.botToken, agent);
     console.log("Starting Telegram bot...");
     bot.start();
+    notifyUpdate(bot, config.dataDir).catch(() => {});
   } else {
     // CLI mode — read from stdin
     console.log("Cycling Coach (CLI mode). Type your message:");
