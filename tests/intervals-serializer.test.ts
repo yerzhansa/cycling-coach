@@ -301,7 +301,7 @@ describe("serializeIntervalsWorkout — trainingLoad", () => {
       ],
     };
 
-    const { trainingLoad } = serializeIntervalsWorkout(input, { ftpWatts: 200 });
+    const { trainingLoad } = serializeIntervalsWorkout(input, 200);
     // intensity = 200/200 = 1.0, load = 100
     expect(trainingLoad).toBe(100);
   });

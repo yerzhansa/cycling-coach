@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { ZONE_INTENSITY_MIDPOINTS } from "./zones.js";
+import { enduranceStepTypeSchema, cadenceTargetSchema } from "./schemas.js";
 
 export class InvalidWorkoutError extends Error {
   constructor(message: string) {
@@ -6,21 +8,6 @@ export class InvalidWorkoutError extends Error {
     this.name = "InvalidWorkoutError";
   }
 }
-
-// ============================================================================
-// SCHEMA
-// ============================================================================
-
-const stepTypeSchema = z.enum([
-  "warmup",
-  "steady",
-  "interval",
-  "ramp",
-  "recovery",
-  "rest",
-  "cooldown",
-  "freeride",
-]);
 
 const powerKindSchema = z.enum(["watts", "percent_ftp", "zone"]);
 
@@ -36,17 +23,11 @@ const durationSchema = z.object({
   unit: z.enum(["seconds", "minutes"]),
 });
 
-const cadenceSchema = z.object({
-  target: z.number().int().positive().max(200).optional(),
-  low: z.number().int().positive().max(200).optional(),
-  high: z.number().int().positive().max(200).optional(),
-});
-
 const simpleStepSchema = z.object({
-  type: stepTypeSchema,
+  type: enduranceStepTypeSchema,
   duration: durationSchema,
   power: powerTargetSchema.optional(),
-  cadence: cadenceSchema.optional(),
+  cadence: cadenceTargetSchema.optional(),
   label: z.string().max(120).optional(),
 });
 
@@ -67,36 +48,21 @@ export type IntervalsWorkoutInput = z.infer<typeof intervalsWorkoutInputSchema>;
 type SimpleStep = z.infer<typeof simpleStepSchema>;
 type SetStep = z.infer<typeof setStepSchema>;
 type PowerTarget = z.infer<typeof powerTargetSchema>;
-type CadenceTarget = z.infer<typeof cadenceSchema>;
+type CadenceTarget = z.infer<typeof cadenceTargetSchema>;
 type AnyStep = SimpleStep | SetStep;
 type DurationInput = z.infer<typeof durationSchema>;
-
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-// Intensity midpoints per zone (fraction of FTP). Used for load estimation.
-const ZONE_INTENSITY: Record<number, number> = {
-  1: 0.45,
-  2: 0.65,
-  3: 0.83,
-  4: 0.91,
-  5: 1.0,
-  6: 1.13,
-  7: 1.3,
-};
 
 const MAX_WATTS = 1500;
 const MAX_PERCENT_FTP = 200;
 const MAX_ZONE = 7;
 const MIN_ZONE = 1;
 
-// ============================================================================
-// SERIALIZATION
-// ============================================================================
-
 function toSeconds(d: DurationInput): number {
   return d.unit === "seconds" ? d.value : d.value * 60;
+}
+
+function mid(a: number | undefined, b: number | undefined): number | undefined {
+  return a !== undefined && b !== undefined ? (a + b) / 2 : undefined;
 }
 
 function formatDuration(d: DurationInput): string {
@@ -113,24 +79,28 @@ function assertZone(n: number, path: string): void {
   }
 }
 
+function validatePowerBounds(p: PowerTarget, path: string): void {
+  const check = (v: number | undefined, name: string): void => {
+    if (v === undefined) return;
+    if (p.kind === "watts" && v > MAX_WATTS) {
+      throw new InvalidWorkoutError(`${path}.power.${name}: ${v}w exceeds sanity bound ${MAX_WATTS}w`);
+    }
+    if (p.kind === "percent_ftp" && v > MAX_PERCENT_FTP) {
+      throw new InvalidWorkoutError(`${path}.power.${name}: ${v}% exceeds sanity bound ${MAX_PERCENT_FTP}%`);
+    }
+  };
+  check(p.value, "value");
+  check(p.low, "low");
+  check(p.high, "high");
+}
+
 function formatPower(p: PowerTarget, isRamp: boolean, path: string): string {
   const hasRange = p.low !== undefined && p.high !== undefined;
   const hasValue = p.value !== undefined;
+  const prefix = isRamp ? "ramp " : "";
 
-  if (isRamp) {
-    if (!hasRange) {
-      throw new InvalidWorkoutError(`${path}: ramp requires power.low and power.high`);
-    }
-    if (p.low! > p.high!) {
-      throw new InvalidWorkoutError(`${path}: power.low (${p.low}) > power.high (${p.high})`);
-    }
-    if (p.kind === "zone") {
-      assertZone(p.low!, `${path}.power.low`);
-      assertZone(p.high!, `${path}.power.high`);
-      return `ramp Z${p.low}-Z${p.high}`;
-    }
-    if (p.kind === "percent_ftp") return `ramp ${p.low}-${p.high}%`;
-    return `ramp ${p.low}-${p.high}w`;
+  if (isRamp && !hasRange) {
+    throw new InvalidWorkoutError(`${path}: ramp requires power.low and power.high`);
   }
 
   if (hasRange) {
@@ -140,10 +110,10 @@ function formatPower(p: PowerTarget, isRamp: boolean, path: string): string {
     if (p.kind === "zone") {
       assertZone(p.low!, `${path}.power.low`);
       assertZone(p.high!, `${path}.power.high`);
-      return `Z${p.low}-Z${p.high}`;
+      return `${prefix}Z${p.low}-Z${p.high}`;
     }
-    if (p.kind === "percent_ftp") return `${p.low}-${p.high}%`;
-    return `${p.low}-${p.high}w`;
+    if (p.kind === "percent_ftp") return `${prefix}${p.low}-${p.high}%`;
+    return `${prefix}${p.low}-${p.high}w`;
   }
 
   if (hasValue) {
@@ -159,26 +129,30 @@ function formatPower(p: PowerTarget, isRamp: boolean, path: string): string {
 }
 
 function formatCadence(c: CadenceTarget, path: string): string {
-  if (c.low !== undefined && c.high !== undefined) {
-    if (c.low > c.high) {
+  const hasTarget = c.target !== undefined;
+  const hasLow = c.low !== undefined;
+  const hasHigh = c.high !== undefined;
+
+  if (hasLow !== hasHigh) {
+    throw new InvalidWorkoutError(`${path}: cadence range requires both 'low' and 'high'`);
+  }
+  if (hasLow && hasHigh) {
+    if (c.low! > c.high!) {
       throw new InvalidWorkoutError(`${path}: cadence.low (${c.low}) > cadence.high (${c.high})`);
     }
     return `${c.low}-${c.high}rpm`;
   }
-  if (c.target !== undefined) return `${c.target}rpm`;
-  return "";
+  if (hasTarget) return `${c.target}rpm`;
+  throw new InvalidWorkoutError(`${path}: cadence requires 'target' or 'low'+'high'`);
 }
 
 function formatStepLine(step: SimpleStep, path: string): string {
   const parts: string[] = [formatDuration(step.duration)];
   if (step.power) {
     parts.push(formatPower(step.power, step.type === "ramp", path));
-  } else if (step.type === "ramp") {
-    throw new InvalidWorkoutError(`${path}: ramp step requires a power target`);
   }
   if (step.cadence) {
-    const cad = formatCadence(step.cadence, path);
-    if (cad) parts.push(cad);
+    parts.push(formatCadence(step.cadence, path));
   }
   const body = parts.join(" ");
   return step.label ? `- ${body} ${step.label}` : `- ${body}`;
@@ -190,70 +164,44 @@ function sectionLabelFor(type: SimpleStep["type"] | "set"): string {
   return "Main set";
 }
 
-function validatePowerBounds(p: PowerTarget, path: string): void {
-  const check = (v: number | undefined, name: string) => {
-    if (v === undefined) return;
-    if (p.kind === "watts" && v > MAX_WATTS) {
-      throw new InvalidWorkoutError(`${path}.power.${name}: ${v}w exceeds sanity bound ${MAX_WATTS}w`);
-    }
-    if (p.kind === "percent_ftp" && v > MAX_PERCENT_FTP) {
-      throw new InvalidWorkoutError(`${path}.power.${name}: ${v}% exceeds sanity bound ${MAX_PERCENT_FTP}%`);
-    }
-  };
-  check(p.value, "value");
-  check(p.low, "low");
-  check(p.high, "high");
-}
-
-function validateSimpleStep(step: SimpleStep, path: string): void {
-  if (step.duration.value <= 0) {
-    throw new InvalidWorkoutError(`${path}: duration must be positive`);
+function preValidate(step: AnyStep, path: string): void {
+  if (step.type === "set") {
+    preValidate(step.interval, `${path}.interval`);
+    preValidate(step.recovery, `${path}.recovery`);
+    return;
   }
   if (step.type === "ramp" && !step.power) {
     throw new InvalidWorkoutError(`${path}: ramp step requires a power target`);
   }
-  if (step.power) {
-    const p = step.power;
-    const hasValue = p.value !== undefined;
-    const hasRange = p.low !== undefined && p.high !== undefined;
-    if (!hasValue && !hasRange) {
-      throw new InvalidWorkoutError(`${path}: power requires 'value' or 'low'+'high'`);
-    }
-    if (step.type === "ramp" && !hasRange) {
-      throw new InvalidWorkoutError(`${path}: ramp requires power.low and power.high`);
-    }
-    validatePowerBounds(p, path);
-  }
+  if (step.power) validatePowerBounds(step.power, path);
 }
 
-function validateStep(step: AnyStep, path: string): void {
-  if (step.type === "set") {
-    validateSimpleStep(step.interval, `${path}.interval`);
-    validateSimpleStep(step.recovery, `${path}.recovery`);
-    return;
-  }
-  validateSimpleStep(step, path);
+function walkSimpleSteps(
+  steps: AnyStep[],
+  visit: (step: SimpleStep, multiplier: number) => void,
+): void {
+  const go = (step: AnyStep, multiplier: number): void => {
+    if (step.type === "set") {
+      go(step.interval, multiplier * step.repeat);
+      go(step.recovery, multiplier * step.repeat);
+      return;
+    }
+    visit(step, multiplier);
+  };
+  for (const s of steps) go(s, 1);
 }
-
-// ============================================================================
-// LOAD ESTIMATION
-// ============================================================================
 
 function intensityFor(step: SimpleStep, ftpWatts: number | undefined): number | undefined {
-  if (!step.power) return 0; // freeride/rest: counts zero load
+  if (!step.power) return 0;
   const p = step.power;
-  const mid = (a?: number, b?: number): number | undefined =>
-    a !== undefined && b !== undefined ? (a + b) / 2 : undefined;
 
   if (p.kind === "zone") {
     const z = p.value ?? mid(p.low, p.high);
     if (z === undefined) return undefined;
-    const lo = Math.floor(z);
-    const hi = Math.ceil(z);
-    const loI = ZONE_INTENSITY[lo];
-    const hiI = ZONE_INTENSITY[hi];
-    if (loI === undefined || hiI === undefined) return undefined;
-    return (loI + hiI) / 2;
+    const lo = ZONE_INTENSITY_MIDPOINTS[Math.floor(z)];
+    const hi = ZONE_INTENSITY_MIDPOINTS[Math.ceil(z)];
+    if (lo === undefined || hi === undefined) return undefined;
+    return (lo + hi) / 2;
   }
 
   if (p.kind === "percent_ftp") {
@@ -261,7 +209,6 @@ function intensityFor(step: SimpleStep, ftpWatts: number | undefined): number | 
     return pct === undefined ? undefined : pct / 100;
   }
 
-  // watts
   if (ftpWatts === undefined) return undefined;
   const w = p.value ?? mid(p.low, p.high);
   return w === undefined ? undefined : w / ftpWatts;
@@ -272,58 +219,46 @@ function computeLoad(steps: AnyStep[], ftpWatts: number | undefined): number | u
   let anyPower = false;
   let wattsNoFtp = false;
 
-  const visit = (step: AnyStep, multiplier: number): void => {
-    if (step.type === "set") {
-      visit(step.interval, multiplier * step.repeat);
-      visit(step.recovery, multiplier * step.repeat);
-      return;
-    }
-    const secs = toSeconds(step.duration) * multiplier;
+  walkSimpleSteps(steps, (step, multiplier) => {
     const intensity = intensityFor(step, ftpWatts);
     if (intensity === undefined) {
       if (step.power?.kind === "watts") wattsNoFtp = true;
       return;
     }
     if (intensity > 0) anyPower = true;
-    sum += secs * intensity * intensity;
-  };
+    sum += toSeconds(step.duration) * multiplier * intensity * intensity;
+  });
 
-  for (const s of steps) visit(s, 1);
-
-  if (wattsNoFtp) return undefined;
-  if (!anyPower) return undefined;
+  if (wattsNoFtp || !anyPower) return undefined;
   return Math.round((sum / 3600) * 100);
 }
 
 function totalSeconds(steps: AnyStep[]): number {
   let total = 0;
-  const visit = (step: AnyStep, multiplier: number): void => {
-    if (step.type === "set") {
-      visit(step.interval, multiplier * step.repeat);
-      visit(step.recovery, multiplier * step.repeat);
-      return;
-    }
+  walkSimpleSteps(steps, (step, multiplier) => {
     total += toSeconds(step.duration) * multiplier;
-  };
-  for (const s of steps) visit(s, 1);
+  });
   return Math.round(total);
 }
 
-// ============================================================================
-// PUBLIC API
-// ============================================================================
-
 export function serializeIntervalsWorkout(
   input: IntervalsWorkoutInput,
-  opts?: { ftpWatts?: number },
+  ftpWatts?: number,
 ): { description: string; movingTime: number; trainingLoad: number | undefined } {
-  const parsed = intervalsWorkoutInputSchema.parse(input);
-  parsed.steps.forEach((s, i) => validateStep(s, `steps[${i}]`));
+  // Defense in depth: tool callers already pass a parsed object via zodSchema(),
+  // but direct callers (tests, future library use) may not. Wrap ZodError so
+  // both paths surface as InvalidWorkoutError to consumers.
+  const parsed = intervalsWorkoutInputSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new InvalidWorkoutError(parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
+  }
+  const checked = parsed.data;
+  checked.steps.forEach((s, i) => preValidate(s, `steps[${i}]`));
 
   const lines: string[] = [];
   let currentLabel: string | null = null;
 
-  parsed.steps.forEach((step, i) => {
+  checked.steps.forEach((step, i) => {
     const label = sectionLabelFor(step.type);
     if (label !== currentLabel) {
       if (lines.length > 0) lines.push("");
@@ -342,7 +277,7 @@ export function serializeIntervalsWorkout(
 
   return {
     description: lines.join("\n"),
-    movingTime: totalSeconds(parsed.steps),
-    trainingLoad: computeLoad(parsed.steps, opts?.ftpWatts),
+    movingTime: totalSeconds(checked.steps),
+    trainingLoad: computeLoad(checked.steps, ftpWatts),
   };
 }
