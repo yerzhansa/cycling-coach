@@ -15,22 +15,23 @@
     "check": "tsc --noEmit && oxlint src/ tests/"
   },
   "dependencies": {
-    "ai": "^6.0.158",
     "@ai-sdk/anthropic": "^3.0.69",
-    "@ai-sdk/openai": "^3.0.52",
     "@ai-sdk/google": "^3.0.63",
-    "intervals-icu-api": "^0.1.1",
+    "@ai-sdk/openai": "^3.0.52",
+    "ai": "^6.0.158",
     "grammy": "^1.42.0",
-    "zod": "^4.3.6",
-    "yaml": "^2.8.3"
+    "intervals-icu-api": "^0.1.2",
+    "yaml": "^2.8.3",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "typescript": "^6.0.2",
-    "tsx": "^4.21.0",
-    "vitest": "^4.1.4",
     "@types/node": "^25.6.0",
+    "msw": "^2.13.3",
+    "oxfmt": "^0.45.0",
     "oxlint": "^1.60.0",
-    "oxfmt": "^0.45.0"
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
   },
   "engines": {
     "node": ">=20"
