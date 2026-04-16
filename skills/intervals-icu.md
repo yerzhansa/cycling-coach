@@ -2,47 +2,47 @@
 
 ## Key Metrics
 
-### CTL (Chronic Training Load) — "Fitness"
-- Rolling ~42-day exponentially weighted average of daily TSS
+### Fitness (Chronic Training Load)
+- Rolling ~42-day exponentially weighted average of daily load
 - Higher = more aerobically fit (adapted to training stress)
 - Typical range: 30 (recreational) → 80+ (competitive) → 120+ (elite)
 - Builds slowly (~1 point/week with consistent training)
 
-### ATL (Acute Training Load) — "Fatigue"
-- Rolling ~7-day exponentially weighted average of daily TSS
+### Fatigue (Acute Training Load)
+- Rolling ~7-day exponentially weighted average of daily load
 - Higher = more fatigued from recent training
 - Spikes after hard blocks, drops during recovery
-- Should periodically exceed CTL (training stimulus)
+- Should periodically exceed fitness (training stimulus)
 
-### TSB (Training Stress Balance) — "Form"
-- TSB = CTL - ATL
+### Form (Training Stress Balance)
+- Form = fitness - fatigue
 - Positive: Fresh, recovered (good for racing, not enough training stimulus)
 - Slightly negative (-10 to -20): Functional overreaching (optimal training zone)
 - Very negative (< -30): Accumulated fatigue (need recovery)
 - Race day target: +5 to +15
 
-### TSS (Training Stress Score)
+### Load (Training Stress)
 - Quantifies how hard a single ride was
-- TSS = (duration × NP × IF) / (FTP × 3600) × 100
-- A 1-hour ride at FTP = 100 TSS
-- Easy ride: 30-50 TSS, Hard interval session: 70-100 TSS, Long ride: 150-250 TSS
+- Load = (duration × norm power × intensity) / (FTP × 3600) × 100
+- A 1-hour ride at FTP = 100 load
+- Easy ride: 30-50, Hard interval session: 70-100, Long ride: 150-250
 
-### IF (Intensity Factor)
-- IF = NP / FTP
+### Intensity
+- Intensity = norm power / FTP
 - < 0.75: Recovery/endurance
 - 0.75-0.85: Tempo
 - 0.85-0.95: Sweet spot
 - 0.95-1.05: Threshold
 - > 1.05: VO2max / anaerobic
 
-### NP (Normalized Power)
+### Norm Power (Normalized Power)
 - Smoothed power that accounts for variability
 - Better represents physiological cost than average power
-- Outdoor rides: NP >> average power (variability)
-- Indoor ERG: NP ≈ average power
+- Outdoor rides: norm power >> average power (variability)
+- Indoor ERG: norm power ≈ average power
 
 ### VI (Variability Index)
-- VI = NP / Average Power
+- VI = norm power / average power
 - 1.0 = perfectly steady (indoor ERG)
 - 1.05-1.1 = typical outdoor ride
 - > 1.15 = highly variable (criterium, mountain ride)
@@ -78,7 +78,7 @@ When creating events on the intervals.icu calendar:
 - `type`: "Ride" for cycling workouts
 - `name`: Descriptive name (e.g., "Sweet Spot 2x20")
 - `moving_time`: Duration in seconds
-- `icu_training_load`: Planned TSS
+- `icu_training_load`: Planned load
 - `description`: Workout details, interval structure, coaching notes
 
 ### Auto-Sync

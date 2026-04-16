@@ -47,7 +47,7 @@ Purpose: Activate legs without fatiguing them.
 - 3x 30s at 120% FTP with 2min recovery
 - 2x 1min at threshold with 3min recovery
 - 10min cooldown
-- Total: ~40min, TSS ~30
+- Total: ~40min, load ~30
 
 ## Pre-Race Nutrition Reminders
 

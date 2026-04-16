@@ -3,7 +3,7 @@
 ## Overtraining Warning Signs
 
 ### Data Signals
-- TSB below -30 for more than 3 consecutive days
+- Form below -30 for more than 3 consecutive days
 - Resting heart rate elevated 5+ bpm above baseline
 - HRV declining trend over 7+ days
 - Power at threshold declining despite training
@@ -18,7 +18,7 @@
 
 ## When to Replace a Hard Session with Recovery
 
-1. TSB is below -30 → recovery ride instead
+1. Form is below -30 → recovery ride instead
 2. Two consecutive missed sessions → restart with easy week
 3. Athlete reports pain (not soreness) → full rest day
 4. Resting HR elevated → easy day only
@@ -31,7 +31,7 @@
 - Cadence: 90+ RPM in easy gear
 - Structure: Flat terrain, no climbs
 - Goal: Blood flow without stress
-- TSS: < 20
+- Load: < 20
 
 ## Deload Week Design
 
