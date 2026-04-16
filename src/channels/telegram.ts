@@ -15,30 +15,33 @@ function formatRateLimitWait(err: unknown): string {
 // TELEGRAM BOT
 // ============================================================================
 
+const WELCOME_MESSAGE =
+  "Welcome to Cycling Coach!\n\n" +
+  "I'm your AI cycling coach. I can build training plans, suggest workouts, " +
+  "and track your fitness using intervals.icu data.\n\n" +
+  "Commands:\n" +
+  "/plan — Generate a training plan\n" +
+  "/workout — Get today's workout\n" +
+  "/status — Check current fitness, fatigue, and form\n" +
+  "/sync — Push plan to intervals.icu calendar\n" +
+  "/version — Show current version\n" +
+  "/update — Check for and install updates\n\n" +
+  "Or just chat with me about your training!";
+
 export function createTelegramBot(token: string, agent: CyclingCoachAgent): Bot {
   const bot = new Bot(token);
+  const greeted = new Set<number>();
 
   // ── Commands ────────────────────────────────────────────────────────────
 
   bot.command("start", async (ctx) => {
+    greeted.add(ctx.chat.id);
     try {
       await agent.resetSession(`telegram:${ctx.chat.id}`);
     } catch (err) {
       console.error("Error resetting session:", err);
     }
-    await ctx.reply(
-      "Welcome to Cycling Coach!\n\n" +
-        "I'm your AI cycling coach. I can build training plans, suggest workouts, " +
-        "and track your fitness using intervals.icu data.\n\n" +
-        "Commands:\n" +
-        "/plan — Generate a training plan\n" +
-        "/workout — Get today's workout\n" +
-        "/status — Check current fitness, fatigue, and form\n" +
-        "/sync — Push plan to intervals.icu calendar\n" +
-        "/version — Show current version\n" +
-        "/update — Check for and install updates\n\n" +
-        "Or just chat with me about your training!",
-    );
+    await ctx.reply(WELCOME_MESSAGE);
   });
 
   bot.command("plan", async (ctx) => {
@@ -133,6 +136,13 @@ export function createTelegramBot(token: string, agent: CyclingCoachAgent): Bot 
 
   bot.on("message:text", async (ctx) => {
     const chatId = `telegram:${ctx.chat.id}`;
+
+    // Welcome newcomers on their very first message
+    if (!greeted.has(ctx.chat.id)) {
+      greeted.add(ctx.chat.id);
+      await ctx.reply(WELCOME_MESSAGE);
+    }
+
     try {
       const response = await agent.chat(chatId, ctx.message.text);
       await sendLongMessage(ctx, response);
