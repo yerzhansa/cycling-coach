@@ -1,5 +1,6 @@
 import {
   readFileSync,
+  writeFileSync,
   appendFileSync,
   renameSync,
   existsSync,
@@ -63,6 +64,19 @@ export class ChatStore {
     const lines = raw.split("\n");
     const last: JsonlLine = JSON.parse(lines[lines.length - 1]);
     return last.ts;
+  }
+
+  overwriteHistory(chatId: string, messages: ModelMessage[]): void {
+    const path = this.filePath(chatId);
+    const lines = messages.map((m) => {
+      const line: JsonlLine = {
+        role: m.role as "user" | "assistant",
+        content: typeof m.content === "string" ? m.content : "",
+        ts: new Date().toISOString(),
+      };
+      return JSON.stringify(line);
+    });
+    writeFileSync(path, lines.join("\n") + "\n", "utf-8");
   }
 
   archiveAndReset(chatId: string): void {

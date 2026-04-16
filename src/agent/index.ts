@@ -11,6 +11,8 @@ export {
   shouldCompact,
   isContextOverflowError,
   isTimeoutError,
+  isRateLimitError,
+  extractRetryAfterMs,
   CHARS_PER_TOKEN,
   SAFETY_MARGIN,
   RESERVE_TOKENS,
