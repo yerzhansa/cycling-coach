@@ -59,3 +59,13 @@ docs(plan): add battle plan for rate limit fix
 - Imperative mood: "add X", "fix Y", not "added X" or "fixes Y"
 - Lowercase after the colon
 - One logical change per commit when practical
+
+## Versioning
+
+Calendar-based: `YYYY.M.D`
+
+- `2026.4.16` — first release of the day
+- `2026.4.16-1` — patch later the same day
+- `2026.4.17` — next day's release
+
+To release: bump `version` in `package.json`, tag `vYYYY.M.D`, push the tag, create a GitHub Release. The publish workflow handles npm automatically.
