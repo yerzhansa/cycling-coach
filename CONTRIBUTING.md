@@ -23,5 +23,39 @@ Examples: `feat/session-management`, `fix/telegram-html-escape`, `chore/bump-int
 
 ## Commits
 
-- Imperative mood: "Add X", "Fix Y", not "Added X" or "Fixes Y"
+Follow [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>(<scope>): <description>
+```
+
+**Types:**
+
+| Type | When |
+|------|------|
+| `feat` | New feature or capability |
+| `fix` | Bug fix |
+| `chore` | Maintenance, deps, config |
+| `docs` | Documentation only |
+| `refactor` | Code restructuring, no behavior change |
+| `test` | Adding or updating tests |
+| `perf` | Performance improvement |
+| `ci` | CI/CD changes |
+| `style` | Formatting, no logic change |
+
+**Scope** is optional — use the module name when helpful: `core`, `telegram`, `soul`, `config`, `tools`, `memory`.
+
+**Examples:**
+```
+feat(core): add rate limit retry with backoff
+fix(soul): prevent coaching tone drift and emoji-only responses
+chore(deps): update intervals-icu-api to 0.1.2
+refactor(telegram): extract error formatting helper
+test(endurance): add 100-message endurance test
+docs(plan): add battle plan for rate limit fix
+```
+
+**Rules:**
+- Imperative mood: "add X", "fix Y", not "added X" or "fixes Y"
+- Lowercase after the colon
 - One logical change per commit when practical
