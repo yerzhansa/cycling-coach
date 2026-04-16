@@ -1,7 +1,14 @@
 import { Bot } from "grammy";
 import type { CyclingCoachAgent } from "../agent/core.js";
 import { isRateLimitError, extractRetryAfterMs } from "../agent/token-utils.js";
-import { checkForUpdate, selfUpdate, getKnownTelegramChatIds, getCurrentVersion } from "../updater.js";
+import {
+  checkForUpdate,
+  selfUpdate,
+  getKnownTelegramChatIds,
+  getCurrentVersion,
+  getLastNotifiedVersion,
+  setLastNotifiedVersion,
+} from "../updater.js";
 
 function formatRateLimitWait(err: unknown): string {
   const ms = extractRetryAfterMs(err);
@@ -125,7 +132,9 @@ export function createTelegramBot(token: string, agent: CyclingCoachAgent): Bot 
         return;
       }
       await ctx.reply(`Updating ${info.current} → ${info.latest}...\nThe bot will stop after installation. Run \`cycling-coach\` to start it again.`);
-      selfUpdate();
+      // Stop polling first so Telegram commits the /update offset — otherwise
+      // Telegram re-sends /update on next startup and we loop forever.
+      void bot.stop().then(selfUpdate);
     } catch (err) {
       console.error("Error in /update:", err);
       await ctx.reply("Update failed. Please run `npm install -g cycling-coach@latest` manually.");
@@ -247,6 +256,8 @@ export async function notifyUpdate(bot: Bot, dataDir: string): Promise<void> {
     const info = await checkForUpdate();
     if (!info?.updateAvailable) return;
 
+    if (getLastNotifiedVersion(dataDir) === info.latest) return;
+
     const chatIds = getKnownTelegramChatIds(dataDir);
     const message = `Update available: ${info.current} → ${info.latest}\nSend /update to install.`;
 
@@ -257,6 +268,8 @@ export async function notifyUpdate(bot: Bot, dataDir: string): Promise<void> {
         // Chat may no longer exist or bot was removed
       }
     }
+
+    setLastNotifiedVersion(dataDir, info.latest);
   } catch {
     // Non-critical — don't crash the bot
   }
