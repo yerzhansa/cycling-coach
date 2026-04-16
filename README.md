@@ -4,6 +4,35 @@ AI-powered cycling coach you can chat with on Telegram or in the terminal. Conne
 
 ## How it works
 
+```
+┌─────────────────────────────────────────────────────────┐
+│  You                                                    │
+│  Telegram / CLI                                         │
+└────────────────────────┬────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────┐
+│  Cycling Coach Agent                                    │
+│                                                         │
+│  ┌──────────────┐  ┌─────────────┐  ┌───────────────┐  │
+│  │ Coaching      │  │ Cycling     │  │ Memory        │  │
+│  │ persona &     │  │ logic       │  │ goals, notes, │  │
+│  │ domain skills │  │ zones, plans│  │ preferences   │  │
+│  └──────────────┘  └─────────────┘  └───────────────┘  │
+│                                                         │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │ intervals.icu API                                │   │
+│  │ fitness · fatigue · form · rides · push workouts │   │
+│  └──────────────────────────────────────────────────┘   │
+└────────────────────────┬────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────┐
+│  LLM  (Claude / GPT / Gemini)                           │
+│  Interprets data + coaching knowledge → response        │
+└─────────────────────────────────────────────────────────┘
+```
+
 1. **You send a message** — via Telegram or the command line ("Build me a 12-week gran fondo plan", "What should I ride today?")
 2. **The coach reads your history** — goals, past conversations, injury notes, and preferences stored locally on your machine
 3. **It pulls your real data** — current fitness, fatigue, form, recent rides, FTP, and zones from intervals.icu
