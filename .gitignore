@@ -5,8 +5,7 @@ docs/
 *.tgz
 .DS_Store
 .idea/
-scripts/*
-!scripts/release.sh
+scripts/
 .claude
 CLAUDE.local.md
 .tests/
