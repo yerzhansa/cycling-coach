@@ -34,12 +34,15 @@ jobs:
 
           if [ -z "$existing" ]; then
             version="$today"
-          elif echo "$existing" | grep -qx "v${today}"; then
-            version="${today}-1"
           else
-            last=$(echo "$existing" | tail -1 | sed "s/v${today}-//")
-            next=$((last + 1))
-            version="${today}-${next}"
+            last=$(echo "$existing" | tail -1)
+            if [ "$last" = "v${today}" ]; then
+              version="${today}-1"
+            else
+              suffix=$(echo "$last" | sed "s/v${today}-//")
+              next=$((suffix + 1))
+              version="${today}-${next}"
+            fi
           fi
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
