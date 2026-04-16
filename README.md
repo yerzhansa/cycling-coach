@@ -6,30 +6,30 @@ AI-powered cycling coach you can chat with on Telegram or in the terminal. Conne
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  You                                                    │
-│  Telegram / CLI                                         │
-└────────────────────────┬────────────────────────────────┘
-                         │
-                         ▼
+│                          You                            │
+│                    Telegram / CLI                       │
+└────────────────────────────┬────────────────────────────┘
+                             │
+                             ▼
 ┌─────────────────────────────────────────────────────────┐
-│  Cycling Coach Agent                                    │
+│                  Cycling Coach Agent                    │
 │                                                         │
-│  ┌──────────────┐  ┌─────────────┐  ┌───────────────┐  │
-│  │ Coaching      │  │ Cycling     │  │ Memory        │  │
-│  │ persona &     │  │ logic       │  │ goals, notes, │  │
-│  │ domain skills │  │ zones, plans│  │ preferences   │  │
-│  └──────────────┘  └─────────────┘  └───────────────┘  │
+│  ┌──────────────┐  ┌─────────────┐  ┌───────────────┐   │
+│  │ Coaching     │  │ Cycling     │  │ Memory        │   │
+│  │ persona &    │  │ logic       │  │ goals, notes, │   │
+│  │ domain skills│  │ zones, plans│  │ preferences   │   │
+│  └──────────────┘  └─────────────┘  └───────────────┘   │
 │                                                         │
 │  ┌──────────────────────────────────────────────────┐   │
-│  │ intervals.icu API                                │   │
+│  │                Intervals.icu API                 │   │
 │  │ fitness · fatigue · form · rides · push workouts │   │
 │  └──────────────────────────────────────────────────┘   │
-└────────────────────────┬────────────────────────────────┘
-                         │
-                         ▼
+└────────────────────────────┬────────────────────────────┘
+                             │
+                             ▼
 ┌─────────────────────────────────────────────────────────┐
-│  LLM  (Claude / GPT / Gemini)                           │
-│  Interprets data + coaching knowledge → response        │
+│             LLM  (Claude / GPT / Gemini)                │
+│      Interprets data + coaching knowledge → response    │
 └─────────────────────────────────────────────────────────┘
 ```
 
