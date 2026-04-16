@@ -11,6 +11,12 @@ const API_KEY_LABELS: Record<string, string> = {
   google: "Google AI API key",
 };
 
+const MODELS: Record<string, string[]> = {
+  anthropic: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-6"],
+  openai: ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "o4-mini"],
+  google: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"],
+};
+
 async function ask(
   rl: ReturnType<typeof createInterface>,
   prompt: string,
@@ -42,6 +48,29 @@ async function askProvider(
   }
 }
 
+async function askModel(
+  rl: ReturnType<typeof createInterface>,
+  provider: string,
+): Promise<string> {
+  const models = MODELS[provider] ?? [];
+  console.log("  Model:");
+  for (let i = 0; i < models.length; i++) {
+    console.log(`    [${i + 1}] ${models[i]}${i === 0 ? " (default)" : ""}`);
+  }
+  console.log("    or type a model name");
+
+  while (true) {
+    const value = await ask(rl, "  > ");
+    if (!value) return models[0];
+
+    const num = parseInt(value, 10);
+    if (num >= 1 && num <= models.length) return models[num - 1];
+    if (Number.isNaN(num)) return value;
+
+    console.log(`  Must be 1-${models.length} or a model name`);
+  }
+}
+
 export async function runSetup(): Promise<void> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   let done = false;
@@ -59,6 +88,7 @@ export async function runSetup(): Promise<void> {
 
     const provider = await askProvider(rl);
     const apiKey = await askRequired(rl, `  ${API_KEY_LABELS[provider]}: `);
+    const model = await askModel(rl, provider);
 
     const intervalsKey = await ask(rl, "  intervals.icu API key (optional, Enter to skip): ");
     let intervalsAthleteId = "";
@@ -87,6 +117,7 @@ export async function runSetup(): Promise<void> {
     const config: Record<string, unknown> = {
       llm: {
         provider,
+        model,
         api_key: apiKey,
       },
     };
