@@ -1,19 +1,60 @@
 #!/usr/bin/env node
+import { parseArgs } from "node:util";
 import { loadConfig } from "./config.js";
 import { CyclingCoachAgent } from "./agent/core.js";
 import { createTelegramBot } from "./channels/telegram.js";
+
+// ============================================================================
+// CLI ROUTING
+// ============================================================================
+
+const USAGE = `Usage: cycling-coach [command]
+
+Commands:
+  setup    Interactive wizard to create ~/.cycling-coach/config.yaml
+  (none)   Start the coaching agent (Telegram or CLI mode)
+
+Options:
+  --help   Show this help message`;
+
+function parseCommand(): string | null {
+  const { positionals, values } = parseArgs({
+    allowPositionals: true,
+    options: { help: { type: "boolean" } },
+    strict: false,
+  });
+  if (values.help) {
+    console.log(USAGE);
+    process.exit(0);
+  }
+  return positionals[0] ?? null;
+}
 
 // ============================================================================
 // ENTRY POINT
 // ============================================================================
 
 async function main() {
+  const command = parseCommand();
+
+  if (command === "setup") {
+    const { runSetup } = await import("./setup.js");
+    await runSetup();
+    return;
+  }
+
+  if (command) {
+    console.error(`Unknown command: ${command}\n`);
+    console.log(USAGE);
+    process.exit(1);
+  }
+
   const config = loadConfig();
 
   // Validate required config
   if (!config.llm.apiKey) {
     console.error(
-      "No LLM API key found. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_GENERATIVE_AI_API_KEY.",
+      "No LLM API key found. Run `cycling-coach setup` to configure, or set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_GENERATIVE_AI_API_KEY.",
     );
     process.exit(1);
   }
