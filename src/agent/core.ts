@@ -16,6 +16,8 @@ import {
   shouldCompact,
   isContextOverflowError,
   isTimeoutError,
+  isRateLimitError,
+  extractRetryAfterMs,
   estimateMessagesTokens,
   TIMEOUT_COMPACTION_THRESHOLD,
 } from "./token-utils.js";
@@ -25,6 +27,14 @@ import { evaluateSessionFreshness } from "./session-freshness.js";
 
 const MAX_OVERFLOW_ATTEMPTS = 3;
 const MAX_TIMEOUT_ATTEMPTS = 2;
+const MAX_RATE_LIMIT_ATTEMPTS = 3;
+const RATE_LIMIT_FALLBACK_BASE_MS = 5_000;
+const RATE_LIMIT_FALLBACK_MULTIPLIER = 2;
+const RATE_LIMIT_FALLBACK_MAX_MS = 30_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 // ============================================================================
 // AGENT
@@ -84,6 +94,7 @@ export class CyclingCoachAgent {
 
       let overflowAttempts = 0;
       let timeoutAttempts = 0;
+      let rateLimitAttempts = 0;
 
       while (true) {
         // Preemptive: compact before sending if over budget
@@ -99,6 +110,7 @@ export class CyclingCoachAgent {
             system: this.systemPrompt,
             messages,
             tools: this.tools,
+            maxRetries: 0,
             stopWhen: stepCountIs(10),
           });
 
@@ -126,6 +138,20 @@ export class CyclingCoachAgent {
               continue;
             }
           }
+          // Rate limit → backoff (respect retry-after) + retry
+          if (isRateLimitError(err) && rateLimitAttempts < MAX_RATE_LIMIT_ATTEMPTS) {
+            rateLimitAttempts++;
+            const retryAfter = extractRetryAfterMs(err);
+            const backoff = retryAfter
+              ?? Math.min(
+                   RATE_LIMIT_FALLBACK_BASE_MS * Math.pow(RATE_LIMIT_FALLBACK_MULTIPLIER, rateLimitAttempts - 1),
+                   RATE_LIMIT_FALLBACK_MAX_MS,
+                 );
+            console.warn(`Rate limited (attempt ${rateLimitAttempts}/${MAX_RATE_LIMIT_ATTEMPTS}), waiting ${backoff}ms`);
+            await sleep(backoff);
+            continue;
+          }
+          // Rate limit retries exhausted → throw to caller (skip compaction — API is rate limited)
           throw err;
         }
       }

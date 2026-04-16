@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import { APICallError } from "@ai-sdk/provider";
 
 export const CHARS_PER_TOKEN = 4;
 export const SAFETY_MARGIN = 1.2;
@@ -52,4 +53,36 @@ export function isTimeoutError(err: unknown): boolean {
     err.name === "TimeoutError" ||
     ("code" in err && (err as { code: string }).code === "ETIMEDOUT")
   );
+}
+
+export function isRateLimitError(err: unknown): boolean {
+  if (APICallError.isInstance(err)) {
+    return err.statusCode === 429;
+  }
+  // Fallback for non-SDK errors
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return msg.includes("rate limit") || msg.includes("too many requests");
+}
+
+export function extractRetryAfterMs(err: unknown): number | null {
+  if (!APICallError.isInstance(err)) return null;
+  const headers = err.responseHeaders;
+  if (!headers) return null;
+
+  // Prefer precise ms header (OpenAI convention)
+  const msHeader = headers["retry-after-ms"];
+  if (msHeader) {
+    const ms = parseInt(msHeader, 10);
+    if (Number.isFinite(ms) && ms > 0) return ms;
+  }
+
+  // Standard retry-after header (seconds)
+  const retryAfter = headers["retry-after"];
+  if (retryAfter) {
+    const secs = parseInt(retryAfter, 10);
+    if (Number.isFinite(secs) && secs > 0) return secs * 1000;
+  }
+
+  return null;
 }
