@@ -40,25 +40,13 @@ AI-powered cycling coach you can chat with on Telegram or in the terminal. Conne
 5. **An LLM puts it together** — Claude, GPT, or Gemini interprets everything and responds like a knowledgeable coach
 6. **Workouts land on your calendar** — structured intervals pushed to intervals.icu, which syncs to Garmin, Wahoo, Hammerhead, COROS, Suunto, and Zwift
 
-## Setup
+## Install
 
-### 1. Install
-
-**From npm** (recommended):
+Runtime: Node.js 22+ (recommended) or Node.js 20+.
 
 ```bash
 npm install -g cycling-coach
 ```
-
-**From source:**
-
-```bash
-git clone git@github.com:yerzhansa/cycling-coach.git
-cd cycling-coach
-npm install
-```
-
-Both require **Node.js 20+** — download from [nodejs.org](https://nodejs.org/) (LTS version).
 
 ### 2. Configure API keys
 
@@ -97,8 +85,7 @@ TELEGRAM_BOT_TOKEN=123456:ABC...  # from @BotFather
 **CLI mode** (no Telegram token set):
 
 ```bash
-npx cycling-coach      # if installed from npm
-npm run dev            # if running from source
+cycling-coach
 ```
 
 ```
@@ -112,8 +99,7 @@ Cycling Coach (CLI mode). Type your message:
 **Telegram mode** (with `TELEGRAM_BOT_TOKEN` set):
 
 ```bash
-npx cycling-coach      # if installed from npm
-npm run dev            # if running from source
+cycling-coach
 ```
 
 The bot starts polling. Open your bot in Telegram and send `/start`.
