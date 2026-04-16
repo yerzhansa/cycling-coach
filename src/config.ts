@@ -47,8 +47,8 @@ function loadYamlConfig(): Record<string, unknown> {
 // ============================================================================
 
 const CONTEXT_WINDOWS: Record<string, number> = {
+  "claude-sonnet-4-6": 1_000_000,
   "claude-haiku-4-5-20251001": 200_000,
-  "claude-sonnet-4-5-20241022": 200_000,
   "gpt-4o": 128_000,
   "gemini-2.0-flash": 1_000_000,
 };
@@ -103,7 +103,7 @@ export function loadConfig(): Config {
   };
 
   const defaultModelMap: Record<string, string> = {
-    anthropic: "claude-sonnet-4-5-20241022",
+    anthropic: "claude-sonnet-4-6",
     openai: "gpt-4o",
     google: "gemini-2.0-flash",
   };
