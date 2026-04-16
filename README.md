@@ -1,37 +1,36 @@
-# cycling-coach
+# Cycling Coach
 
-AI cycling coaching agent. Bring your own LLM API key, connect intervals.icu for real athlete data, chat via Telegram or CLI. Generates periodized training plans and pushes structured workouts to your calendar — auto-syncs to Garmin/Wahoo.
+AI-powered cycling coach you can chat with on Telegram or in the terminal. Connect your [intervals.icu](https://intervals.icu) account to pull real training data — the coach analyzes your fitness, builds periodized plans, and pushes structured workouts straight to your calendar (auto-syncs to Garmin/Wahoo).
 
 ## How it works
 
-```
-You (Telegram / CLI)
-      |
-      v
-  Agent Core (Vercel AI SDK)
-      |
-      |--- SOUL.md (coaching persona)
-      |--- skills/*.md (domain knowledge: zones, periodization, recovery...)
-      |--- memory/ (athlete history, goals, preferences)
-      |--- tools:
-      |      |--- cycling logic (zones, plan builder, feasibility)
-      |      |--- intervals.icu API (fetch data, push workouts)
-      |      |--- memory read/write
-      v
-  LLM (Claude / GPT / Gemini)
-```
-
-The agent loads coaching knowledge from markdown files, fetches your real training data from intervals.icu, runs deterministic cycling logic (zone calculations, periodization), and uses the LLM to tie it all together with coaching decisions.
+1. **You send a message** — via Telegram or the command line ("Build me a 12-week gran fondo plan", "What should I ride today?", "My knee hurts")
+2. **The coach reads your history** — goals, past conversations, injury notes, and preferences stored locally on your machine
+3. **It pulls your real data** — current fitness (CTL), fatigue (ATL), form (TSB), recent rides, FTP, and zones from intervals.icu
+4. **It runs cycling logic** — zone calculations, periodization models, feasibility checks, workout structure — all deterministic, no guessing
+5. **An LLM puts it together** — Claude, GPT, or Gemini interprets everything and responds like a knowledgeable coach
+6. **Workouts land on your calendar** — structured intervals pushed to intervals.icu, which syncs to your Garmin or Wahoo head unit
 
 ## Setup
 
-### 1. Clone and install
+### 1. Install Node.js and clone the project
 
-```bash
-git clone git@github.com:yerzhansa/cycling-coach.git
-cd cycling-coach
-npm install
-```
+This project runs on **Node.js**, a free runtime that lets you run JavaScript applications on your computer. **npm** (Node Package Manager) comes bundled with Node.js and is used to install the project's dependencies.
+
+1. **Download and install Node.js** from [nodejs.org](https://nodejs.org/) — pick the **LTS** (Long Term Support) version. The installer works on Mac, Windows, and Linux.
+2. Verify the install by opening a terminal (Terminal on Mac, Command Prompt or PowerShell on Windows) and running:
+   ```bash
+   node --version
+   npm --version
+   ```
+   Both should print a version number (e.g. `v22.x.x` and `10.x.x`).
+3. Clone this repository and install dependencies:
+   ```bash
+   git clone git@github.com:yerzhansa/cycling-coach.git
+   cd cycling-coach
+   npm install
+   ```
+   `npm install` downloads all the libraries the project needs — this only takes a minute.
 
 ### 2. Configure API keys
 
