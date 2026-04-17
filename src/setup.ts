@@ -41,6 +41,8 @@ const MODELS: Record<string, { value: string; label: string; hint?: string }[]> 
   ],
 };
 
+const CUSTOM_MODEL_SENTINEL = "__custom__";
+
 const DEFAULT_MODELS: Record<string, string> = {
   anthropic: "claude-sonnet-4-6",
   openai: "gpt-5.4",
@@ -109,20 +111,20 @@ export async function runSetup(): Promise<void> {
   const sameProvider = provider === prevProvider;
   const knownModel = MODELS[provider]?.some((m) => m.value === prevModel);
   const initialModel = sameProvider && prevModel
-    ? (knownModel ? prevModel : "__custom__")
+    ? (knownModel ? prevModel : CUSTOM_MODEL_SENTINEL)
     : DEFAULT_MODELS[provider];
   const modelResp = await select({
     message: "Model",
     options: [
       ...(MODELS[provider] ?? []),
-      { value: "__custom__", label: "Other (type model name)" },
+      { value: CUSTOM_MODEL_SENTINEL, label: "Other (type model name)" },
     ],
     initialValue: initialModel,
   });
   handleCancel(modelResp);
   let model = modelResp as string;
 
-  if (model === "__custom__") {
+  if (model === CUSTOM_MODEL_SENTINEL) {
     const custom = await text({
       message: "Model name",
       defaultValue: sameProvider ? prevModel : undefined,

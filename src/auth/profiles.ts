@@ -1,7 +1,8 @@
 import { readFileSync, writeFileSync, existsSync, chmodSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { refreshOpenAICodexToken } from "@mariozechner/pi-ai/oauth";
+
+import { CONFIG_DIR } from "../config.js";
 
 // ============================================================================
 // TYPES
@@ -30,7 +31,7 @@ export class RefreshTokenReusedError extends Error {
 // STORAGE
 // ============================================================================
 
-const PROFILES_FILE = join(homedir(), ".cycling-coach", "auth-profiles.json");
+const PROFILES_FILE = join(CONFIG_DIR, "auth-profiles.json");
 const REFRESH_THRESHOLD_MS = 5 * 60 * 1000;
 
 type ProfilesFile = Record<string, OAuthCredential>;

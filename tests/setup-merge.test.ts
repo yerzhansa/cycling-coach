@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 
+import { scriptedPrompts } from "./helpers/scripted-prompts.js";
+
 let tempHome: string;
 let origHome: string | undefined;
 
@@ -26,30 +28,6 @@ const PROFILES = () => join(tempHome, ".cycling-coach", "auth-profiles.json");
 
 function seedConfig(obj: Record<string, unknown>): void {
   writeFileSync(CONFIG(), toYaml(obj), { mode: 0o600 });
-}
-
-function scriptedPrompts(answers: {
-  selects: unknown[];
-  passwords: string[];
-  texts: string[];
-  confirms: boolean[];
-}) {
-  let s = 0;
-  let p = 0;
-  let t = 0;
-  let c = 0;
-  return {
-    intro: vi.fn(),
-    outro: vi.fn(),
-    cancel: vi.fn(),
-    log: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
-    note: vi.fn(),
-    isCancel: () => false,
-    select: vi.fn(async () => answers.selects[s++]),
-    password: vi.fn(async () => answers.passwords[p++]),
-    text: vi.fn(async () => answers.texts[t++]),
-    confirm: vi.fn(async () => answers.confirms[c++]),
-  };
 }
 
 describe("setup merge", () => {

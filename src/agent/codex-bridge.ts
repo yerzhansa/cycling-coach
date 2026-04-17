@@ -325,10 +325,14 @@ export async function codexGenerateText(
 
   const piMessages: PiMessage[] = convertMessages(initialMessages);
 
+  // Fetch the token once per request. The step loop runs well within the
+  // 5-minute refresh threshold and pi-ai's internal retries are already
+  // short-circuited, so a refresh during the loop is not a concern.
+  const apiKey = await getFreshToken(profileName);
+
   let lastAssistant: AssistantMessage | undefined;
 
   for (let step = 0; step < limit; step++) {
-    const apiKey = await getFreshToken(profileName);
     const context: Context = {
       systemPrompt: system,
       messages: piMessages,
@@ -360,11 +364,12 @@ export async function codexGenerateText(
 
     if (!tools) break;
 
-    const modelMessages = piToModelMessages(piMessages);
-    for (const call of calls) {
-      const result = await executeToolCall(call, tools, modelMessages);
-      piMessages.push(result);
-    }
+    // Run tool calls in parallel to match AI SDK behavior; Promise.all
+    // preserves result order so the pi-ai context stays aligned.
+    const results = await Promise.all(
+      calls.map((call) => executeToolCall(call, tools, initialMessages)),
+    );
+    for (const result of results) piMessages.push(result);
   }
 
   if (!lastAssistant) {
@@ -400,19 +405,3 @@ function getModelOrThrow(modelId: string) {
   }
 }
 
-// ============================================================================
-// HELPERS
-// ============================================================================
-
-function piToModelMessages(piMessages: PiMessage[]): ModelMessage[] {
-  const out: ModelMessage[] = [];
-  for (const m of piMessages) {
-    if (m.role === "user") {
-      out.push({ role: "user", content: extractText(m.content) });
-    } else if (m.role === "assistant") {
-      const text = collectText(m);
-      if (text) out.push({ role: "assistant", content: text });
-    }
-  }
-  return out;
-}

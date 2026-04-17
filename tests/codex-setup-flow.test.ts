@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 
+import { scriptedPrompts } from "./helpers/scripted-prompts.js";
+
 let tempHome: string;
 let origHome: string | undefined;
 
@@ -23,24 +25,12 @@ afterEach(() => {
 
 describe("codex setup flow", () => {
   it("writes config without api_key and saves auth-profiles.json with 0o600", async () => {
-    // Answers the wizard returns, in order. First: provider. Then: model.
-    // Then intervals key (skip). Then telegram token (skip).
-    const answers = ["openai-codex", "gpt-5.4", "", ""];
-    let answerIdx = 0;
-    const nextAnswer = () => answers[answerIdx++];
-
-    vi.doMock("@clack/prompts", () => ({
-      intro: vi.fn(),
-      outro: vi.fn(),
-      cancel: vi.fn(),
-      log: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
-      note: vi.fn(),
-      isCancel: () => false,
-      select: vi.fn(async () => nextAnswer()),
-      text: vi.fn(async () => nextAnswer()),
-      password: vi.fn(async () => nextAnswer()),
-      confirm: vi.fn(async () => true),
-    }));
+    vi.doMock("@clack/prompts", () =>
+      scriptedPrompts({
+        selects: ["openai-codex", "gpt-5.4"],
+        passwords: ["", ""],
+      }),
+    );
 
     vi.doMock("../src/auth/openai-codex-login.js", () => ({
       runCodexLogin: vi.fn(async () => ({
