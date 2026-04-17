@@ -9,9 +9,10 @@ import { parse as parseYaml } from "yaml";
 
 export interface Config {
   llm: {
-    provider: "anthropic" | "openai" | "google";
+    provider: "anthropic" | "openai" | "google" | "openai-codex";
     model: string;
     apiKey: string;
+    authProfile?: string;
   };
   intervals: {
     apiKey: string;
@@ -36,10 +37,14 @@ export interface Config {
 export const CONFIG_DIR = join(homedir(), ".cycling-coach");
 export const CONFIG_FILE = join(CONFIG_DIR, "config.yaml");
 
-function loadYamlConfig(): Record<string, unknown> {
+export function readConfigYaml(): Record<string, unknown> {
   if (!existsSync(CONFIG_FILE)) return {};
   const raw = readFileSync(CONFIG_FILE, "utf-8");
-  return (parseYaml(raw) as Record<string, unknown>) ?? {};
+  try {
+    return (parseYaml(raw) as Record<string, unknown>) ?? {};
+  } catch {
+    return {};
+  }
 }
 
 // ============================================================================
@@ -51,6 +56,9 @@ const CONTEXT_WINDOWS: Record<string, number> = {
   "claude-haiku-4-5-20251001": 200_000,
   "gpt-4o": 128_000,
   "gemini-2.0-flash": 1_000_000,
+  "gpt-5.4": 272_000,
+  "gpt-5.4-mini": 272_000,
+  "gpt-5.4-pro": 272_000,
 };
 
 function resolveContextWindowTokens(model: string): number {
@@ -86,7 +94,7 @@ function envFloat(key: string): number | undefined {
 }
 
 export function loadConfig(): Config {
-  const yaml = loadYamlConfig();
+  const yaml = readConfigYaml();
   const llmYaml = (yaml.llm as Record<string, string>) ?? {};
   const intervalsYaml = (yaml.intervals as Record<string, string>) ?? {};
   const telegramYaml = (yaml.telegram as Record<string, string>) ?? {};
@@ -100,12 +108,14 @@ export function loadConfig(): Config {
     anthropic: env("ANTHROPIC_API_KEY") ?? llmYaml.api_key ?? "",
     openai: env("OPENAI_API_KEY") ?? llmYaml.api_key ?? "",
     google: env("GOOGLE_GENERATIVE_AI_API_KEY") ?? llmYaml.api_key ?? "",
+    "openai-codex": "",
   };
 
   const defaultModelMap: Record<string, string> = {
     anthropic: "claude-sonnet-4-6",
     openai: "gpt-4o",
     google: "gemini-2.0-flash",
+    "openai-codex": "gpt-5.4",
   };
 
   const model = env("LLM_MODEL") ?? llmYaml.model ?? defaultModelMap[provider];
@@ -115,6 +125,7 @@ export function loadConfig(): Config {
       provider,
       model,
       apiKey: apiKeyMap[provider],
+      authProfile: provider === "openai-codex" ? (llmYaml.auth_profile ?? "openai-codex") : undefined,
     },
     intervals: {
       apiKey: env("INTERVALS_API_KEY") ?? intervalsYaml.api_key ?? "",

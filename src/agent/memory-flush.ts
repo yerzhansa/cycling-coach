@@ -1,8 +1,9 @@
-import { generateText, tool, zodSchema, stepCountIs } from "ai";
-import type { LanguageModel, ModelMessage } from "ai";
+import { tool, zodSchema, stepCountIs } from "ai";
+import type { ModelMessage } from "ai";
 import { z } from "zod";
 import type { Memory } from "./memory.js";
 import { createMemoryReadTool } from "./tools.js";
+import type { LLM } from "./llm.js";
 
 // ============================================================================
 // CONSTANTS
@@ -65,7 +66,7 @@ function createFlushMemoryWriteTool(memory: Memory) {
 // ============================================================================
 
 export async function runMemoryFlush(params: {
-  model: LanguageModel;
+  llm: LLM;
   messages: ModelMessage[];
   memory: Memory;
 }): Promise<void> {
@@ -74,8 +75,7 @@ export async function runMemoryFlush(params: {
     memory_read: createMemoryReadTool(params.memory),
   };
 
-  await generateText({
-    model: params.model,
+  await params.llm.generate({
     system: MEMORY_FLUSH_SYSTEM_PROMPT,
     messages: [
       ...params.messages,
@@ -83,8 +83,8 @@ export async function runMemoryFlush(params: {
     ],
     tools: flushTools,
     stopWhen: stepCountIs(5),
+    maxSteps: 5,
   });
 
   params.memory.reload();
 }
-

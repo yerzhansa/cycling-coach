@@ -68,8 +68,15 @@ Cycling Coach (CLI mode). Type your message:
 > /quit
 ```
 
-**Where to get API keys:**
-- **LLM**: [Anthropic Console](https://console.anthropic.com/), [OpenAI Platform](https://platform.openai.com/), or [Google AI Studio](https://aistudio.google.com/)
+**LLM provider options:**
+- **Anthropic (Claude)** — console API key from [Anthropic Console](https://console.anthropic.com/). Recommended default.
+- **OpenAI (GPT)** — console API key from [OpenAI Platform](https://platform.openai.com/).
+- **Google (Gemini)** — console API key from [Google AI Studio](https://aistudio.google.com/).
+- **OpenAI Codex (ChatGPT subscription) — experimental** — browser OAuth sign-in with your ChatGPT Plus / Pro / Business / Edu / Enterprise account. No API key needed; uses your subscription quota. Minimum tier: ChatGPT Plus ($20/mo). Select it in `cycling-coach setup` to start the OAuth flow. On hard rate-limit failures the bot retries up to 4× with backoff (~35s total) before reporting the error to the chat.
+
+Anthropic's Claude Pro/Max subscription does **not** support OAuth for third-party tools (per Anthropic ToS) — the only supported Anthropic path here is the console API key.
+
+**Where to get other keys:**
 - **intervals.icu**: [intervals.icu/settings](https://intervals.icu/settings) > Developer Settings
 - **Telegram**: Message [@BotFather](https://t.me/BotFather) > `/newbot`
 
@@ -141,6 +148,15 @@ intervals:
 
 telegram:
   bot_token: "123456:ABC..."
+```
+
+For the Codex OAuth path, the config has no `api_key` — tokens live in `~/.cycling-coach/auth-profiles.json` (mode `0600`) and rotate automatically:
+
+```yaml
+llm:
+  provider: openai-codex
+  model: gpt-5.4
+  auth_profile: openai-codex
 ```
 
 Env vars take precedence over YAML.
