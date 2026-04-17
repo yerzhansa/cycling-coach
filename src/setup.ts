@@ -37,7 +37,7 @@ const MODELS: Record<string, { value: string; label: string; hint?: string }[]> 
   ],
   "openai-codex": [
     { value: "gpt-5.4", label: "GPT-5.4", hint: "recommended" },
-    { value: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "fast & cheap" },
+    { value: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "faster" },
   ],
 };
 

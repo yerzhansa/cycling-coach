@@ -1,6 +1,6 @@
 # Cycling Coach
 
-AI cycling coaching agent. Bring your own LLM API key, connect [intervals.icu](https://intervals.icu) for real athlete data, chat via Telegram or CLI.
+AI cycling coaching agent. Bring your own LLM API key **or sign in with a ChatGPT Plus subscription**, connect [intervals.icu](https://intervals.icu) for real athlete data, chat via Telegram or CLI.
 
 ## What it does
 
@@ -58,7 +58,7 @@ cycling-coach setup
 cycling-coach
 ```
 
-The setup wizard asks for your LLM API key and optionally connects [intervals.icu](https://intervals.icu) and Telegram. After setup, `cycling-coach` starts in CLI mode — or Telegram mode if you provided a bot token.
+The setup wizard asks for your LLM provider — an API key for Anthropic / OpenAI / Google, **or OAuth sign-in with your ChatGPT subscription** (no API key needed). Then optionally connects [intervals.icu](https://intervals.icu) and Telegram. After setup, `cycling-coach` starts in CLI mode — or Telegram mode if you provided a bot token.
 
 ```
 Cycling Coach (CLI mode). Type your message:
@@ -72,7 +72,7 @@ Cycling Coach (CLI mode). Type your message:
 - **Anthropic (Claude)** — console API key from [Anthropic Console](https://console.anthropic.com/). Recommended default.
 - **OpenAI (GPT)** — console API key from [OpenAI Platform](https://platform.openai.com/).
 - **Google (Gemini)** — console API key from [Google AI Studio](https://aistudio.google.com/).
-- **OpenAI Codex (ChatGPT subscription) — experimental** — browser OAuth sign-in with your ChatGPT Plus / Pro / Business / Edu / Enterprise account. No API key needed; uses your subscription quota. Minimum tier: ChatGPT Plus ($20/mo). Select it in `cycling-coach setup` to start the OAuth flow. On hard rate-limit failures the bot retries up to 4× with backoff (~35s total) before reporting the error to the chat.
+- **OpenAI Codex (ChatGPT subscription) — experimental** — browser OAuth sign-in with your ChatGPT Plus / Pro / Business / Edu / Enterprise account. No API key needed; the bot uses your subscription quota. Minimum tier: ChatGPT Plus ($20/mo). Select it in `cycling-coach setup` to start the OAuth flow. Models offered in the wizard: `gpt-5.4` (balanced, recommended) and `gpt-5.4-mini` (faster, smaller context). Cost is covered by the subscription regardless of which model you pick — the choice is speed vs capability, not price. On hard rate-limit failures the bot retries up to 4× with backoff (~35s total) before reporting the error to the chat.
 
 Anthropic's Claude Pro/Max subscription does **not** support OAuth for third-party tools (per Anthropic ToS) — the only supported Anthropic path here is the console API key.
 
@@ -165,7 +165,7 @@ Env vars take precedence over YAML.
 
 ```bash
 npm run check       # tsc --noEmit + oxlint
-npm test            # vitest (28 tests)
+npm test            # vitest (112 tests)
 npm run test:watch  # vitest watch mode
 npm run lint        # oxlint
 npm run fmt         # oxfmt
@@ -194,7 +194,7 @@ src/
   index.ts           # Entry point
 skills/              # Markdown domain knowledge (loaded into system prompt)
 SOUL.md              # Coaching persona
-tests/               # 28 tests
+tests/               # 112 tests
 ```
 
 ## Tech stack
