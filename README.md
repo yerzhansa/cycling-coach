@@ -1,6 +1,12 @@
 # Cycling Coach
 
-AI-powered cycling coach you can chat with on Telegram or in the terminal. Connect your [intervals.icu](https://intervals.icu) account to pull real training data — the coach analyzes your fitness, builds periodized plans, and pushes structured workouts straight to your calendar (auto-syncs to Garmin, Wahoo, Hammerhead, COROS, Suunto, and Zwift).
+AI cycling coaching agent. Bring your own LLM API key, connect [intervals.icu](https://intervals.icu) for real athlete data, chat via Telegram or CLI.
+
+## What it does
+
+- Analyzes fitness, fatigue, and form from your real rides
+- Builds periodized plans toward your goal event
+- Pushes structured workouts to your intervals.icu calendar (auto-syncs to Garmin, Wahoo, Hammerhead, COROS, Suunto, Zwift)
 
 ## How it works
 
