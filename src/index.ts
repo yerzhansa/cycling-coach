@@ -41,7 +41,9 @@ async function main() {
   if (command === "setup") {
     const { runSetup } = await import("./setup.js");
     await runSetup();
-    return;
+    // pi-ai's OAuth callback server may leave socket/timer handles alive;
+    // exit explicitly so the wizard returns the shell.
+    process.exit(0);
   }
 
   if (command === "version") {
@@ -59,7 +61,7 @@ async function main() {
   const config = loadConfig();
 
   // Validate required config
-  if (!config.llm.apiKey) {
+  if (config.llm.provider !== "openai-codex" && !config.llm.apiKey) {
     console.error(
       "No LLM API key found. Run `cycling-coach setup` to configure, or set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_GENERATIVE_AI_API_KEY.",
     );

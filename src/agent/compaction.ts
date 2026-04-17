@@ -1,5 +1,4 @@
-import { generateText } from "ai";
-import type { LanguageModel, ModelMessage } from "ai";
+import type { ModelMessage } from "ai";
 import {
   estimateTokens,
   estimateMessagesTokens,
@@ -9,6 +8,7 @@ import {
   SUMMARIZATION_OVERHEAD_TOKENS,
 } from "./token-utils.js";
 import { makeSummaryMessage } from "./history-limit.js";
+import type { LLM } from "./llm.js";
 
 // ============================================================================
 // CONSTANTS
@@ -163,12 +163,12 @@ export function auditSummaryQuality(summary: string): { ok: boolean; missing: st
 
 export async function summarizeDroppedMessages(params: {
   dropped: ModelMessage[];
-  model: LanguageModel;
+  llm: LLM;
   previousSummary?: string;
   maxRetries?: number;
   contextWindowTokens?: number;
 }): Promise<string> {
-  const { dropped, model, previousSummary, maxRetries = 1, contextWindowTokens } = params;
+  const { dropped, llm, previousSummary, maxRetries = 1, contextWindowTokens } = params;
 
   if (dropped.length === 0) return previousSummary ?? "";
 
@@ -187,11 +187,9 @@ export async function summarizeDroppedMessages(params: {
     ].join("\n");
 
     try {
-      const { text } = await generateText({
-        model,
+      const { text } = await llm.generate({
         prompt,
         maxOutputTokens: MAX_SUMMARY_TOKENS,
-        maxRetries: 0,
       });
       summary = text;
     } catch (err) {
@@ -208,11 +206,9 @@ export async function summarizeDroppedMessages(params: {
   let best: string = summary;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      const { text } = await generateText({
-        model,
+      const { text } = await llm.generate({
         prompt: `Restructure the following summary to include ALL required section headings: ${audit.missing.join(", ")}.\n\n${best}\n\n${MUST_PRESERVE}`,
         maxOutputTokens: MAX_SUMMARY_TOKENS,
-        maxRetries: 0,
       });
       const retryAudit = auditSummaryQuality(text);
       if (retryAudit.ok) return capSummary(text);
@@ -231,12 +227,12 @@ export async function summarizeDroppedMessages(params: {
 
 export async function summarizeInStages(params: {
   messages: ModelMessage[];
-  model: LanguageModel;
+  llm: LLM;
   recentToKeep?: number;
   previousSummary?: string;
   contextWindowTokens?: number;
 }): Promise<ModelMessage[]> {
-  const { messages, model, recentToKeep = 4, previousSummary, contextWindowTokens } = params;
+  const { messages, llm, recentToKeep = 4, previousSummary, contextWindowTokens } = params;
 
   const keepCount = Math.min(recentToKeep, messages.length);
   const toSummarize = messages.slice(0, messages.length - keepCount);
@@ -257,11 +253,9 @@ export async function summarizeInStages(params: {
       ? `\nExisting summary of earlier context:\n${summary}\n\n`
       : "";
 
-    const { text } = await generateText({
-      model,
+    const { text } = await llm.generate({
       prompt: `${SUMMARIZE_PROMPT}${contextPrefix}\n\n${transcript}`,
       maxOutputTokens: MAX_SUMMARY_TOKENS,
-      maxRetries: 0,
     });
     summary = capSummary(text);
   }

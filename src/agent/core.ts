@@ -1,8 +1,5 @@
-import { generateText, stepCountIs } from "ai";
-import { createAnthropic } from "@ai-sdk/anthropic";
-import { createOpenAI } from "@ai-sdk/openai";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import type { LanguageModel, ModelMessage } from "ai";
+import { stepCountIs } from "ai";
+import type { ModelMessage } from "ai";
 import { IntervalsClient } from "intervals-icu-api";
 import type { Config } from "../config.js";
 import { Memory } from "./memory.js";
@@ -24,6 +21,7 @@ import {
 import { summarizeInStages, summarizeDroppedMessages } from "./compaction.js";
 import { runMemoryFlush } from "./memory-flush.js";
 import { evaluateSessionFreshness } from "./session-freshness.js";
+import { LLM } from "./llm.js";
 
 const MAX_OVERFLOW_ATTEMPTS = 3;
 const MAX_TIMEOUT_ATTEMPTS = 2;
@@ -41,7 +39,7 @@ function sleep(ms: number): Promise<void> {
 // ============================================================================
 
 export class CyclingCoachAgent {
-  private model: LanguageModel;
+  private llm: LLM;
   private config: Config;
   private memory: Memory;
   private chatStore: ChatStore;
@@ -50,7 +48,7 @@ export class CyclingCoachAgent {
 
   constructor(config: Config) {
     this.config = config;
-    this.model = createModel(config);
+    this.llm = new LLM(config);
     this.memory = new Memory(config.dataDir);
     this.chatStore = new ChatStore(config.dataDir);
 
@@ -79,7 +77,7 @@ export class CyclingCoachAgent {
       if (!fresh) {
         // Flush memory before reset, then archive
         if (history.length > 0) {
-          await runMemoryFlush({ model: this.model, messages: history, memory: this.memory });
+          await runMemoryFlush({ llm: this.llm, messages: history, memory: this.memory });
         }
         this.chatStore.archiveAndReset(chatId);
         history = [];
@@ -102,7 +100,7 @@ export class CyclingCoachAgent {
         try {
           const summary = await summarizeDroppedMessages({
             dropped,
-            model: this.model,
+            llm: this.llm,
             previousSummary,
             contextWindowTokens: this.config.contextWindowTokens,
           });
@@ -132,19 +130,18 @@ export class CyclingCoachAgent {
       while (true) {
         // Preemptive: compact before sending if over budget
         if (shouldCompact({ messages, systemPrompt: this.systemPrompt, contextWindowTokens: this.config.contextWindowTokens })) {
-          await runMemoryFlush({ model: this.model, messages, memory: this.memory });
-          messages = await summarizeInStages({ messages, model: this.model, contextWindowTokens: this.config.contextWindowTokens });
+          await runMemoryFlush({ llm: this.llm, messages, memory: this.memory });
+          messages = await summarizeInStages({ messages, llm: this.llm, contextWindowTokens: this.config.contextWindowTokens });
           this.memory.reload();
         }
 
         try {
-          const { text } = await generateText({
-            model: this.model,
+          const { text } = await this.llm.generate({
             system: this.systemPrompt,
             messages,
             tools: this.tools,
-            maxRetries: 0,
             stopWhen: stepCountIs(10),
+            maxSteps: 10,
           });
 
           // Append BOTH after success — JSONL unchanged on failure
@@ -156,8 +153,8 @@ export class CyclingCoachAgent {
           // Reactive: context overflow → flush + compact + retry
           if (isContextOverflowError(err) && overflowAttempts < MAX_OVERFLOW_ATTEMPTS) {
             overflowAttempts++;
-            await runMemoryFlush({ model: this.model, messages, memory: this.memory });
-            messages = await summarizeInStages({ messages, model: this.model, contextWindowTokens: this.config.contextWindowTokens });
+            await runMemoryFlush({ llm: this.llm, messages, memory: this.memory });
+            messages = await summarizeInStages({ messages, llm: this.llm, contextWindowTokens: this.config.contextWindowTokens });
             this.memory.reload();
             continue;
           }
@@ -166,7 +163,7 @@ export class CyclingCoachAgent {
             const ratio = estimateMessagesTokens(messages) / this.config.contextWindowTokens;
             if (ratio > TIMEOUT_COMPACTION_THRESHOLD) {
               timeoutAttempts++;
-              messages = await summarizeInStages({ messages, model: this.model, contextWindowTokens: this.config.contextWindowTokens });
+              messages = await summarizeInStages({ messages, llm: this.llm, contextWindowTokens: this.config.contextWindowTokens });
               this.memory.reload();
               continue;
             }
@@ -195,33 +192,12 @@ export class CyclingCoachAgent {
     // Flush before reset to avoid losing un-persisted context
     const { messages: history } = this.chatStore.load(chatId);
     if (history.length > 0) {
-      await runMemoryFlush({ model: this.model, messages: history, memory: this.memory });
+      await runMemoryFlush({ llm: this.llm, messages: history, memory: this.memory });
     }
     this.chatStore.archiveAndReset(chatId);
   }
 
   getMemory(): Memory {
     return this.memory;
-  }
-}
-
-// ============================================================================
-// MODEL FACTORY
-// ============================================================================
-
-function createModel(config: Config): LanguageModel {
-  switch (config.llm.provider) {
-    case "anthropic": {
-      const anthropic = createAnthropic({ apiKey: config.llm.apiKey });
-      return anthropic(config.llm.model);
-    }
-    case "openai": {
-      const openai = createOpenAI({ apiKey: config.llm.apiKey });
-      return openai(config.llm.model);
-    }
-    case "google": {
-      const google = createGoogleGenerativeAI({ apiKey: config.llm.apiKey });
-      return google(config.llm.model);
-    }
   }
 }
