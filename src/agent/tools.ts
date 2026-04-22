@@ -42,7 +42,11 @@ export function createMemoryReadTool(memory: Memory) {
 // TOOL BUILDER
 // ============================================================================
 
-export function createTools(memory: Memory, intervals: IntervalsClient | null) {
+export function createTools(
+  memory: Memory,
+  intervals: IntervalsClient | null,
+  intervalsAuth: { apiKey: string; athleteId: string } | null,
+) {
   return {
     // ── Cycling logic tools (local, no API) ─────────────────────────────
 
@@ -207,7 +211,7 @@ export function createTools(memory: Memory, intervals: IntervalsClient | null) {
 
     // ── Intervals.icu tools ─────────────────────────────────────────────
 
-    ...(intervals ? createIntervalsTools(intervals) : {}),
+    ...(intervals && intervalsAuth ? createIntervalsTools(intervals, intervalsAuth) : {}),
   };
 }
 
@@ -215,7 +219,10 @@ export function createTools(memory: Memory, intervals: IntervalsClient | null) {
 // INTERVALS.ICU TOOLS
 // ============================================================================
 
-function createIntervalsTools(client: IntervalsClient) {
+function createIntervalsTools(
+  client: IntervalsClient,
+  auth: { apiKey: string; athleteId: string },
+) {
   return {
     intervals_fetch_athlete: tool({
       description:
@@ -301,6 +308,57 @@ function createIntervalsTools(client: IntervalsClient) {
         });
         if (!result.ok) return { error: result.error.kind };
         return { created: true, event: result.value };
+      },
+    }),
+
+    intervals_list_events: tool({
+      description:
+        "List scheduled calendar workouts on intervals.icu for a date range. " +
+        "Use this BEFORE deleting so you can show the athlete the list (id, date, name) " +
+        "and ask which one to delete. Filters to WORKOUT category only.",
+      inputSchema: zodSchema(
+        z.object({
+          oldest: z.string().describe("Oldest date (YYYY-MM-DD)"),
+          newest: z.string().optional().describe("Newest date (YYYY-MM-DD)"),
+        }),
+      ),
+      execute: async (input: { oldest: string; newest?: string }) => {
+        const result = await client.events.list({
+          oldest: input.oldest,
+          newest: input.newest ?? undefined,
+          category: ["WORKOUT"],
+        });
+        if (!result.ok) return { error: result.error.kind };
+        return result.value;
+      },
+    }),
+
+    intervals_delete_workout: tool({
+      description:
+        "Delete a scheduled workout from the intervals.icu calendar by event ID. " +
+        "ALWAYS call intervals_list_events first, show the athlete the list, and " +
+        "confirm which workout to delete before calling this. Past workouts (before " +
+        "today) are protected — the server will reject the delete.",
+      inputSchema: zodSchema(
+        z.object({
+          eventId: z.number().int().describe("Event ID from intervals_list_events"),
+        }),
+      ),
+      execute: async (input: { eventId: number }) => {
+        const today = new Date().toISOString().split("T")[0];
+        const url =
+          `https://intervals.icu/api/v1/athlete/${auth.athleteId}` +
+          `/events/${input.eventId}?notBefore=${today}`;
+        const basic = Buffer.from(`API_KEY:${auth.apiKey}`).toString("base64");
+        const res = await fetch(url, {
+          method: "DELETE",
+          headers: { Authorization: `Basic ${basic}` },
+        });
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          return { error: `http_${res.status}`, message: body || res.statusText };
+        }
+        return { deleted: true };
       },
     }),
   };

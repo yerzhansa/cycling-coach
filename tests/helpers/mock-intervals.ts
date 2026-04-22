@@ -6,11 +6,12 @@
  * a mutable array of every workout POSTed via the events endpoint.
  *
  * Usage:
- *   const { server, createdWorkouts } = createMockIntervalsServer();
+ *   const { server, createdWorkouts, deletedEventIds } = createMockIntervalsServer();
  *   server.listen({ onUnhandledRequest: "bypass" });
  *   // ... run agent ...
  *   server.close();
  *   console.log(createdWorkouts); // inspect created workouts
+ *   console.log(deletedEventIds); // inspect deleted event IDs
  */
 
 import { http, HttpResponse } from "msw";
@@ -294,6 +295,7 @@ export function createMockIntervalsServer(options: MockIntervalsOptions = {}) {
   const activities = defaultActivities(options.activities);
   const wellness = defaultWellness(options.wellness);
   const createdWorkouts: CreatedWorkout[] = [];
+  const deletedEventIds: number[] = [];
   let nextEventId = 5000;
 
   const handlers = [
@@ -352,9 +354,52 @@ export function createMockIntervalsServer(options: MockIntervalsOptions = {}) {
       createdWorkouts.push(workout);
       return HttpResponse.json({ id: eventId, ...body }, { status: 200 });
     }),
+
+    // GET /api/v1/athlete/:id/events — list scheduled events (filters created workouts
+    // by optional oldest/newest query params; ignores category since we only emit WORKOUT)
+    http.get("https://intervals.icu/api/v1/athlete/:id/events", ({ request }) => {
+      const url = new URL(request.url);
+      const oldest = url.searchParams.get("oldest");
+      const newest = url.searchParams.get("newest");
+
+      let filtered = createdWorkouts;
+      if (oldest) {
+        filtered = filtered.filter((w) => w.start_date_local >= oldest);
+      }
+      if (newest) {
+        filtered = filtered.filter((w) => w.start_date_local <= newest + "T23:59:59");
+      }
+      return HttpResponse.json(filtered);
+    }),
+
+    // DELETE /api/v1/athlete/:id/events/:eventId — delete scheduled event; honors
+    // ?notBefore=YYYY-MM-DD by rejecting when the event's date is earlier.
+    http.delete(
+      "https://intervals.icu/api/v1/athlete/:id/events/:eventId",
+      ({ request, params }) => {
+        const eventId = Number(params.eventId);
+        const url = new URL(request.url);
+        const notBefore = url.searchParams.get("notBefore");
+
+        const idx = createdWorkouts.findIndex((w) => w.id === eventId);
+        if (idx === -1) {
+          return HttpResponse.json({ error: "not_found" }, { status: 404 });
+        }
+        const workout = createdWorkouts[idx];
+        if (notBefore && workout.start_date_local.slice(0, 10) < notBefore) {
+          return HttpResponse.json(
+            { error: "event is before notBefore" },
+            { status: 400 },
+          );
+        }
+        createdWorkouts.splice(idx, 1);
+        deletedEventIds.push(eventId);
+        return new HttpResponse(null, { status: 200 });
+      },
+    ),
   ];
 
   const server = setupServer(...handlers);
 
-  return { server, createdWorkouts };
+  return { server, createdWorkouts, deletedEventIds };
 }
