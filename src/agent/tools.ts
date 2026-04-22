@@ -329,7 +329,13 @@ function createIntervalsTools(
           category: ["WORKOUT"],
         });
         if (!result.ok) return { error: result.error.kind };
-        return result.value;
+        return result.value.map((e) => ({
+          id: e.id,
+          start_date_local: e.start_date_local,
+          name: e.name,
+          moving_time: e.moving_time,
+          icu_training_load: e.icu_training_load,
+        }));
       },
     }),
 
@@ -356,7 +362,7 @@ function createIntervalsTools(
         });
         if (!res.ok) {
           const body = await res.text().catch(() => "");
-          return { error: `http_${res.status}`, message: body || res.statusText };
+          return { error: `http_${res.status}`, details: body || res.statusText };
         }
         return { deleted: true };
       },

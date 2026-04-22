@@ -355,8 +355,7 @@ export function createMockIntervalsServer(options: MockIntervalsOptions = {}) {
       return HttpResponse.json({ id: eventId, ...body }, { status: 200 });
     }),
 
-    // GET /api/v1/athlete/:id/events — list scheduled events (filters created workouts
-    // by optional oldest/newest query params; ignores category since we only emit WORKOUT)
+    // GET /api/v1/athlete/:id/events — list scheduled events
     http.get("https://intervals.icu/api/v1/athlete/:id/events", ({ request }) => {
       const url = new URL(request.url);
       const oldest = url.searchParams.get("oldest");
@@ -372,8 +371,7 @@ export function createMockIntervalsServer(options: MockIntervalsOptions = {}) {
       return HttpResponse.json(filtered);
     }),
 
-    // DELETE /api/v1/athlete/:id/events/:eventId — delete scheduled event; honors
-    // ?notBefore=YYYY-MM-DD by rejecting when the event's date is earlier.
+    // DELETE /api/v1/athlete/:id/events/:eventId — delete scheduled event (honors ?notBefore)
     http.delete(
       "https://intervals.icu/api/v1/athlete/:id/events/:eventId",
       ({ request, params }) => {
