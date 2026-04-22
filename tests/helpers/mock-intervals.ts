@@ -371,24 +371,30 @@ export function createMockIntervalsServer(options: MockIntervalsOptions = {}) {
       return HttpResponse.json(filtered);
     }),
 
-    // DELETE /api/v1/athlete/:id/events/:eventId — delete scheduled event (honors ?notBefore)
+    // GET /api/v1/athlete/:id/events/:eventId — fetch single event (used by the
+    // delete tool to read the authoritative date before deciding whether to delete)
+    http.get(
+      "https://intervals.icu/api/v1/athlete/:id/events/:eventId",
+      ({ params }) => {
+        const eventId = Number(params.eventId);
+        const workout = createdWorkouts.find((w) => w.id === eventId);
+        if (!workout) {
+          return HttpResponse.json({ error: "not_found" }, { status: 404 });
+        }
+        return HttpResponse.json(workout);
+      },
+    ),
+
+    // DELETE /api/v1/athlete/:id/events/:eventId — delete scheduled event
+    // (no notBefore enforcement — the real API's notBefore only caps the `others`
+    // cascade, not the target event, so protection lives client-side in the tool)
     http.delete(
       "https://intervals.icu/api/v1/athlete/:id/events/:eventId",
-      ({ request, params }) => {
+      ({ params }) => {
         const eventId = Number(params.eventId);
-        const url = new URL(request.url);
-        const notBefore = url.searchParams.get("notBefore");
-
         const idx = createdWorkouts.findIndex((w) => w.id === eventId);
         if (idx === -1) {
           return HttpResponse.json({ error: "not_found" }, { status: 404 });
-        }
-        const workout = createdWorkouts[idx];
-        if (notBefore && workout.start_date_local.slice(0, 10) < notBefore) {
-          return HttpResponse.json(
-            { error: "event is before notBefore" },
-            { status: 400 },
-          );
         }
         createdWorkouts.splice(idx, 1);
         deletedEventIds.push(eventId);

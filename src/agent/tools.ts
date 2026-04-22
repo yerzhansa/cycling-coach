@@ -42,11 +42,7 @@ export function createMemoryReadTool(memory: Memory) {
 // TOOL BUILDER
 // ============================================================================
 
-export function createTools(
-  memory: Memory,
-  intervals: IntervalsClient | null,
-  intervalsAuth: { apiKey: string; athleteId: string } | null,
-) {
+export function createTools(memory: Memory, intervals: IntervalsClient | null) {
   return {
     // ── Cycling logic tools (local, no API) ─────────────────────────────
 
@@ -211,7 +207,7 @@ export function createTools(
 
     // ── Intervals.icu tools ─────────────────────────────────────────────
 
-    ...(intervals && intervalsAuth ? createIntervalsTools(intervals, intervalsAuth) : {}),
+    ...(intervals ? createIntervalsTools(intervals) : {}),
   };
 }
 
@@ -219,10 +215,18 @@ export function createTools(
 // INTERVALS.ICU TOOLS
 // ============================================================================
 
-function createIntervalsTools(
-  client: IntervalsClient,
-  auth: { apiKey: string; athleteId: string },
-) {
+// intervals-icu-api's TypeScript types declare snake_case fields, but the runtime
+// runs `camelCaseKeys` over every parsed response. So the types lie: at runtime we
+// see `startDateLocal`, not `start_date_local`. This local type reflects reality.
+type IntervalsEventRuntime = {
+  id: number;
+  startDateLocal: string;
+  name?: string | null;
+  movingTime?: number | null;
+  icuTrainingLoad?: number | null;
+};
+
+function createIntervalsTools(client: IntervalsClient) {
   return {
     intervals_fetch_athlete: tool({
       description:
@@ -329,12 +333,12 @@ function createIntervalsTools(
           category: ["WORKOUT"],
         });
         if (!result.ok) return { error: result.error.kind };
-        return result.value.map((e) => ({
+        return (result.value as unknown as IntervalsEventRuntime[]).map((e) => ({
           id: e.id,
-          start_date_local: e.start_date_local,
+          startDateLocal: e.startDateLocal,
           name: e.name,
-          moving_time: e.moving_time,
-          icu_training_load: e.icu_training_load,
+          movingTime: e.movingTime,
+          icuTrainingLoad: e.icuTrainingLoad,
         }));
       },
     }),
@@ -344,26 +348,26 @@ function createIntervalsTools(
         "Delete a scheduled workout from the intervals.icu calendar by event ID. " +
         "ALWAYS call intervals_list_events first, show the athlete the list, and " +
         "confirm which workout to delete before calling this. Past workouts (before " +
-        "today) are protected — the server will reject the delete.",
+        "today) are protected — the tool refuses without calling the server.",
       inputSchema: zodSchema(
         z.object({
           eventId: z.number().int().describe("Event ID from intervals_list_events"),
         }),
       ),
       execute: async (input: { eventId: number }) => {
+        const fetched = await client.events.get(input.eventId);
+        if (!fetched.ok) return { error: fetched.error.kind };
+        const event = fetched.value as unknown as IntervalsEventRuntime;
         const today = new Date().toISOString().split("T")[0];
-        const url =
-          `https://intervals.icu/api/v1/athlete/${auth.athleteId}` +
-          `/events/${input.eventId}?notBefore=${today}`;
-        const basic = Buffer.from(`API_KEY:${auth.apiKey}`).toString("base64");
-        const res = await fetch(url, {
-          method: "DELETE",
-          headers: { Authorization: `Basic ${basic}` },
-        });
-        if (!res.ok) {
-          const body = await res.text().catch(() => "");
-          return { error: `http_${res.status}`, details: body || res.statusText };
+        const eventDate = event.startDateLocal.slice(0, 10);
+        if (eventDate < today) {
+          return {
+            error: "past_workout_protected",
+            details: `Cannot delete workout dated ${eventDate} — it's before today (${today}).`,
+          };
         }
+        const result = await client.events.delete(input.eventId);
+        if (!result.ok) return { error: result.error.kind };
         return { deleted: true };
       },
     }),

@@ -58,11 +58,8 @@ export class CyclingCoachAgent {
           athleteId: config.intervals.athleteId,
         })
       : null;
-    const intervalsAuth = config.intervals.apiKey
-      ? { apiKey: config.intervals.apiKey, athleteId: config.intervals.athleteId }
-      : null;
 
-    this.tools = createTools(this.memory, intervals, intervalsAuth);
+    this.tools = createTools(this.memory, intervals);
     this.systemPrompt = buildSystemPrompt(this.memory);
   }
 
