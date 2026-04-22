@@ -215,6 +215,17 @@ export function createTools(memory: Memory, intervals: IntervalsClient | null) {
 // INTERVALS.ICU TOOLS
 // ============================================================================
 
+// intervals-icu-api's TypeScript types declare snake_case fields, but the runtime
+// runs `camelCaseKeys` over every parsed response. So the types lie: at runtime we
+// see `startDateLocal`, not `start_date_local`. This local type reflects reality.
+type IntervalsEventRuntime = {
+  id: number;
+  startDateLocal: string;
+  name?: string | null;
+  movingTime?: number | null;
+  icuTrainingLoad?: number | null;
+};
+
 function createIntervalsTools(client: IntervalsClient) {
   return {
     intervals_fetch_athlete: tool({
@@ -301,6 +312,63 @@ function createIntervalsTools(client: IntervalsClient) {
         });
         if (!result.ok) return { error: result.error.kind };
         return { created: true, event: result.value };
+      },
+    }),
+
+    intervals_list_events: tool({
+      description:
+        "List scheduled calendar workouts on intervals.icu for a date range. " +
+        "Use this BEFORE deleting so you can show the athlete the list (id, date, name) " +
+        "and ask which one to delete. Filters to WORKOUT category only.",
+      inputSchema: zodSchema(
+        z.object({
+          oldest: z.string().describe("Oldest date (YYYY-MM-DD)"),
+          newest: z.string().optional().describe("Newest date (YYYY-MM-DD)"),
+        }),
+      ),
+      execute: async (input: { oldest: string; newest?: string }) => {
+        const result = await client.events.list({
+          oldest: input.oldest,
+          newest: input.newest ?? undefined,
+          category: ["WORKOUT"],
+        });
+        if (!result.ok) return { error: result.error.kind };
+        return (result.value as unknown as IntervalsEventRuntime[]).map((e) => ({
+          id: e.id,
+          startDateLocal: e.startDateLocal,
+          name: e.name,
+          movingTime: e.movingTime,
+          icuTrainingLoad: e.icuTrainingLoad,
+        }));
+      },
+    }),
+
+    intervals_delete_workout: tool({
+      description:
+        "Delete a scheduled workout from the intervals.icu calendar by event ID. " +
+        "ALWAYS call intervals_list_events first, show the athlete the list, and " +
+        "confirm which workout to delete before calling this. Past workouts (before " +
+        "today) are protected — the tool refuses without calling the server.",
+      inputSchema: zodSchema(
+        z.object({
+          eventId: z.number().int().describe("Event ID from intervals_list_events"),
+        }),
+      ),
+      execute: async (input: { eventId: number }) => {
+        const fetched = await client.events.get(input.eventId);
+        if (!fetched.ok) return { error: fetched.error.kind };
+        const event = fetched.value as unknown as IntervalsEventRuntime;
+        const today = new Date().toISOString().split("T")[0];
+        const eventDate = event.startDateLocal.slice(0, 10);
+        if (eventDate < today) {
+          return {
+            error: "past_workout_protected",
+            details: `Cannot delete workout dated ${eventDate} — it's before today (${today}).`,
+          };
+        }
+        const result = await client.events.delete(input.eventId);
+        if (!result.ok) return { error: result.error.kind };
+        return { deleted: true };
       },
     }),
   };
