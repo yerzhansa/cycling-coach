@@ -172,6 +172,21 @@ npm run fmt         # oxfmt
 npm run build       # tsc → dist/
 ```
 
+### Separating dev from prod
+
+Set `CYCLING_COACH_HOME` to isolate `npm run dev` from the globally-installed
+`cycling-coach` CLI. Each dir has its own `config.yaml`, `auth-profiles.json`,
+`sessions/`, and `memory/`, so dev and prod never collide:
+
+```bash
+# .env (loaded only by `npm run dev`)
+CYCLING_COACH_HOME=~/.cycling-coach-dev
+```
+
+The global install keeps using `~/.cycling-coach`. For full isolation, run
+`npm run setup` once against the dev home to register a separate Telegram bot
+token and (recommended) a separate intervals.icu athlete.
+
 ## Project structure
 
 ```

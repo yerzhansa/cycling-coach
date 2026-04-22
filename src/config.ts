@@ -34,7 +34,18 @@ export interface Config {
 // CONFIG LOADING
 // ============================================================================
 
-export const CONFIG_DIR = join(homedir(), ".cycling-coach");
+function resolveConfigDir(): string {
+  const override = process.env.CYCLING_COACH_HOME;
+  if (override && override.length > 0) {
+    if (override === "~" || override.startsWith("~/")) {
+      return join(homedir(), override.slice(1));
+    }
+    return override;
+  }
+  return join(homedir(), ".cycling-coach");
+}
+
+export const CONFIG_DIR = resolveConfigDir();
 export const CONFIG_FILE = join(CONFIG_DIR, "config.yaml");
 
 export function readConfigYaml(): Record<string, unknown> {
