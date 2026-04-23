@@ -105,7 +105,10 @@ exit 2
   });
 
   it("returns unavailable/other with detail 'timeout' when op hangs past timeoutMs", async () => {
-    const opPath = await makeOpStub(`sleep 5`);
+    // sleep 2 (not 5) — _spawn.ts waits for `close` which only fires once the
+    // sleep child exits; under vitest's 5s default testTimeout, `sleep 5` is
+    // right on the edge and CI's Linux scheduler pushes it over.
+    const opPath = await makeOpStub(`sleep 2`);
     const result = await _detectBackendsWithOverrides({
       opPath,
       platform: "darwin",
