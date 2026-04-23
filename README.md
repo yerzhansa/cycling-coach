@@ -188,7 +188,7 @@ llm:
 | Backend | `command` | `args` | Caveat |
 |---|---|---|---|
 | 1Password CLI | `op` | `["read", "op://Vault/Item/field"]` | GUI session required for Touch ID; not for headless/launchd. |
-| macOS Keychain | `security` | `["find-generic-password", "-w", "-k", "/Users/you/Library/Keychains/login.keychain-db", "-s", "cycling-coach", "-a", "anthropic_api_key"]` | `-w` is mandatory — without it the whole record is dumped. `-k <path>` pins the keychain so a later `security default-keychain -s …` doesn't break cycling-coach. |
+| macOS Keychain | `security` | `["find-generic-password", "-w", "-s", "cycling-coach", "-a", "anthropic_api_key", "/Users/you/Library/Keychains/login.keychain-db"]` | `-w` is mandatory — without it the whole record is dumped. The keychain path is passed as the **last positional argument** (pins the keychain so a later `security default-keychain -s …` doesn't break cycling-coach). macOS's `security` does not support a `-k` flag on `*-generic-password` subcommands. |
 | Bitwarden | `bw` | `["get", "password", "anthropic-api-key"]` | Requires `BW_SESSION` env from `bw unlock` before cycling-coach starts. |
 | HashiCorp Vault | `vault` | `["kv", "get", "-field=key", "secret/anthropic"]` | `-field=` is mandatory — raw `vault kv get` prints JSON. Needs `VAULT_ADDR` + `VAULT_TOKEN`. |
 | AWS Secrets Manager | `aws` | `["secretsmanager", "get-secret-value", "--secret-id", "my/secret", "--query", "SecretString", "--output", "text"]` | `--query SecretString --output text` is mandatory. Without both flags the output is JSON and the bot fails with "invalid API key". |
@@ -235,7 +235,7 @@ telegram:
   bot_token:
     source: exec
     command: /usr/bin/security
-    args: [find-generic-password, -w, -k, /Users/you/Library/Keychains/login.keychain-db, -s, cycling-coach, -a, telegram_bot_token]
+    args: [find-generic-password, -w, -s, cycling-coach, -a, telegram_bot_token, /Users/you/Library/Keychains/login.keychain-db]
 ```
 
 ### Downgrading
