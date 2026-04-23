@@ -8,17 +8,34 @@ import { scriptedPrompts } from "./helpers/scripted-prompts.js";
 
 let tempHome: string;
 let origHome: string | undefined;
+let origStdinTTY: boolean | undefined;
+let origStdoutTTY: boolean | undefined;
 
 beforeEach(() => {
   tempHome = mkdtempSync(join(tmpdir(), "cc-merge-"));
   origHome = process.env.HOME;
   process.env.HOME = tempHome;
   mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+  origStdinTTY = process.stdin.isTTY;
+  origStdoutTTY = process.stdout.isTTY;
+  Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+  Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
   vi.resetModules();
+  // Default to op unavailable + keychain unavailable so backend-choice
+  // shows only "plain" by default. Tests that need backend detection behavior
+  // override this with their own vi.doMock.
+  vi.doMock("../src/secrets/backends/detect.js", () => ({
+    detectBackends: vi.fn(async () => ({
+      op: { state: "unavailable", reason: "not-on-path" },
+      keychain: { available: false },
+    })),
+  }));
 });
 
 afterEach(() => {
   process.env.HOME = origHome;
+  Object.defineProperty(process.stdin, "isTTY", { value: origStdinTTY, configurable: true });
+  Object.defineProperty(process.stdout, "isTTY", { value: origStdoutTTY, configurable: true });
   rmSync(tempHome, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
@@ -40,7 +57,7 @@ describe("setup merge", () => {
 
     vi.doMock("@clack/prompts", () =>
       scriptedPrompts({
-        selects: ["openai-codex", "gpt-5.4"],
+        selects: ["openai-codex", "gpt-5.4", "plain"], // provider, model, backend
         passwords: ["", ""], // intervals Enter-to-keep, telegram Enter-to-keep
         texts: [],
         confirms: [true], // update config
@@ -80,7 +97,7 @@ describe("setup merge", () => {
 
     vi.doMock("@clack/prompts", () =>
       scriptedPrompts({
-        selects: ["openai-codex", "gpt-5.4"],
+        selects: ["openai-codex", "gpt-5.4", "plain"], // provider, model, backend
         passwords: ["", ""],
         texts: [],
         confirms: [false], // decline update
@@ -105,7 +122,7 @@ describe("setup merge", () => {
   it("Case C: fresh install writes full config without requiring merge", async () => {
     vi.doMock("@clack/prompts", () =>
       scriptedPrompts({
-        selects: ["openai-codex", "gpt-5.4"],
+        selects: ["openai-codex", "gpt-5.4", "plain"], // provider, model, backend
         passwords: ["", ""],
         texts: [],
         confirms: [],
@@ -141,6 +158,7 @@ describe("setup merge", () => {
     });
     const before = readFileSync(CONFIG(), "utf-8");
 
+    // Case D: OAuth fails BEFORE backend-choice — only 2 selects needed.
     vi.doMock("@clack/prompts", () =>
       scriptedPrompts({
         selects: ["openai-codex", "gpt-5.4"],
@@ -176,7 +194,7 @@ describe("setup merge", () => {
 
     vi.doMock("@clack/prompts", () =>
       scriptedPrompts({
-        selects: ["openai-codex", "gpt-5.4"],
+        selects: ["openai-codex", "gpt-5.4", "plain"], // provider, model, backend
         passwords: ["", ""],
         texts: [],
         confirms: [true],
