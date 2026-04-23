@@ -161,6 +161,87 @@ llm:
 
 Env vars take precedence over YAML.
 
+## Storing secrets outside config.yaml
+
+If you don't want API keys to live as plaintext in `~/.cycling-coach/config.yaml`, any secret field (`llm.api_key`, `intervals.api_key`, `telegram.bot_token`) can be replaced with a **SecretRef** — a reference to an external command that prints the secret to stdout. Cycling Coach runs the command at startup, reads stdout, and uses the value.
+
+```yaml
+llm:
+  provider: anthropic
+  model: claude-sonnet-4-6
+  api_key:
+    source: exec
+    command: op
+    args: [read, "op://Personal/Anthropic/credential"]
+```
+
+**Precedence**: env var > SecretRef > plain YAML. Setting `ANTHROPIC_API_KEY` in your shell still wins — useful for debugging a vault issue without touching YAML.
+
+**Requirements**:
+- The `command` must print **only the secret** to stdout. JSON blobs, labels, or extra output will be stored verbatim and downstream APIs will reject them.
+- A single trailing `\n` or `\r\n` is trimmed; all other whitespace is preserved.
+- Empty output, non-zero exit, a 30s timeout, or output over 64KB is a fatal startup error with a clear stderr message.
+- `shell: false` — `command` and `args` are passed directly to the OS. `~`, `$HOME`, globs, and shell operators are **not** expanded. Use absolute paths.
+
+### Backend compatibility matrix
+
+| Backend | `command` | `args` | Caveat |
+|---|---|---|---|
+| 1Password CLI | `op` | `["read", "op://Vault/Item/field"]` | GUI session required for Touch ID; not for headless/launchd. |
+| macOS Keychain | `security` | `["find-generic-password", "-w", "-k", "/Users/you/Library/Keychains/login.keychain-db", "-s", "cycling-coach", "-a", "anthropic_api_key"]` | `-w` is mandatory — without it the whole record is dumped. `-k <path>` pins the keychain so a later `security default-keychain -s …` doesn't break cycling-coach. |
+| Bitwarden | `bw` | `["get", "password", "anthropic-api-key"]` | Requires `BW_SESSION` env from `bw unlock` before cycling-coach starts. |
+| HashiCorp Vault | `vault` | `["kv", "get", "-field=key", "secret/anthropic"]` | `-field=` is mandatory — raw `vault kv get` prints JSON. Needs `VAULT_ADDR` + `VAULT_TOKEN`. |
+| AWS Secrets Manager | `aws` | `["secretsmanager", "get-secret-value", "--secret-id", "my/secret", "--query", "SecretString", "--output", "text"]` | `--query SecretString --output text` is mandatory. Without both flags the output is JSON and the bot fails with "invalid API key". |
+| GCP Secret Manager | `gcloud` | `["secrets", "versions", "access", "latest", "--secret=anthropic"]` | Requires `gcloud auth application-default login` in the environment cycling-coach runs under. |
+| age-encrypted file | `age` | `["-d", "-i", "/Users/you/.age/key.txt", "/Users/you/secrets/anthropic.age"]` | **Absolute paths only** — `shell: false` does not expand `~` or `$HOME`. |
+
+### launchd / systemd / Docker (headless daemons)
+
+- Use **absolute paths** in `command:` — macOS `launchd` starts processes with a minimal `PATH` that excludes `/usr/local/bin` and Homebrew paths. Put `/usr/local/bin/op` (the output of `which op`) instead of bare `op`.
+- **1Password Touch ID won't work headless** — no GUI to prompt against. For daemon use, pick a backend with a pre-unlocked session (Vault, cloud secret managers, `age`-encrypted files), or supply the key via env var.
+- Stderr from the resolver command is shown on non-zero exit (last 200 chars). Stick to well-behaved CLIs — a buggy resolver that prints the secret on error will leak it to logs.
+
+### Non-interactive setup (CI / Docker / launchd)
+
+If you can't run `cycling-coach setup` in an interactive terminal, hand-edit `~/.cycling-coach/config.yaml` directly. A minimal YAML with env-supplied secrets:
+
+```yaml
+llm:
+  provider: anthropic
+  model: claude-sonnet-4-6
+# api_key, intervals, telegram sourced from env vars:
+# ANTHROPIC_API_KEY, INTERVALS_API_KEY, INTERVALS_ATHLETE_ID, TELEGRAM_BOT_TOKEN
+```
+
+Or fully SecretRef-driven:
+
+```yaml
+llm:
+  provider: anthropic
+  model: claude-sonnet-4-6
+  api_key:
+    source: exec
+    command: /usr/local/bin/op
+    args: [read, "op://Personal/Anthropic/credential"]
+
+intervals:
+  api_key:
+    source: exec
+    command: /usr/local/bin/vault
+    args: [kv, get, -field=key, secret/intervals]
+  athlete_id: "i12345"
+
+telegram:
+  bot_token:
+    source: exec
+    command: /usr/bin/security
+    args: [find-generic-password, -w, -k, /Users/you/Library/Keychains/login.keychain-db, -s, cycling-coach, -a, telegram_bot_token]
+```
+
+### Downgrading
+
+SecretRef support was added in a recent release. Downgrading cycling-coach while `config.yaml` contains SecretRef blocks will fail at startup — older versions treat non-string secret values as malformed. Keep plain strings or env vars if you need to roll back.
+
 ## Development
 
 ```bash

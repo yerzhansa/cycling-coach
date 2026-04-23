@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { loadConfig } from "./config.js";
+import { loadConfig, resolveConfigSecrets } from "./config.js";
+import { SecretResolutionError } from "./secrets/types.js";
 import { CyclingCoachAgent } from "./agent/core.js";
 import { createTelegramBot, notifyUpdate } from "./channels/telegram.js";
 
@@ -58,7 +59,16 @@ async function main() {
     process.exit(1);
   }
 
-  const config = loadConfig();
+  let config;
+  try {
+    config = await resolveConfigSecrets(loadConfig());
+  } catch (err) {
+    if (err instanceof SecretResolutionError) {
+      console.error(`Config error: ${err.message}`);
+      process.exit(1);
+    }
+    throw err;
+  }
 
   // Validate required config
   if (config.llm.provider !== "openai-codex" && !config.llm.apiKey) {
