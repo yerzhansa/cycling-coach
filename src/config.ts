@@ -160,7 +160,7 @@ export function loadConfig(): Config {
     path: SecretFieldPath,
   ): string => {
     const envValue = envVar !== undefined ? env(envVar) : undefined;
-    if (envValue !== undefined) {
+    if (envValue !== undefined && envValue !== "") {
       if (raw !== undefined && typeof raw !== "string") {
         console.log(`Using env ${envVar}; SecretRef for ${path} skipped.`);
       }

@@ -13,7 +13,8 @@ const SECURITY_I_ERROR_RE = /^\S+:\s+returned (-\d+)/m;
 export class KeychainUnsafeValueError extends Error {
   constructor() {
     super(
-      "Keychain backend cannot store values containing newlines or unmatched quotes. " +
+      "Keychain backend cannot store values containing whitespace, quotes, backslashes, or null bytes " +
+        "(the `security -i` grammar tokenizes by whitespace, so embedded spaces would silently truncate the value). " +
         "Use env var or plain YAML for this secret.",
     );
     this.name = "KeychainUnsafeValueError";
@@ -170,13 +171,14 @@ export function keychainSecretRef(
   };
 }
 
+const NULL_BYTE = String.fromCharCode(0);
+
 export function assertKeychainSafeValue(value: string): void {
-  if (
-    value.includes("\n") ||
-    value.includes("\r") ||
-    value.includes("\u0000") ||
-    value.includes('"')
-  ) {
+  // `security -i` tokenizes each line by whitespace; an embedded space/tab
+  // would truncate the value at the split. Backslash and `"` also break the
+  // grammar. Null bytes terminate C strings (kept out of the regex to stay
+  // clear of oxlint's no-control-regex rule).
+  if (/[\s"\\]/.test(value) || value.includes(NULL_BYTE)) {
     throw new KeychainUnsafeValueError();
   }
 }

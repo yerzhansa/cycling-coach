@@ -5,7 +5,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_VALUE_BYTES = 64 * 1024;
 
 const MULTI_VAULT_RE = /more than one vault|no default vault|--vault required|multiple vaults/i;
-const NOT_AN_ITEM_RE = /isn't an item|not found/i;
+const NOT_AN_ITEM_RE = /isn't an item|item.*not found|could not find item/i;
 
 export class OpVaultAmbiguousError extends Error {
   constructor(message: string) {

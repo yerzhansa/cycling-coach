@@ -356,10 +356,6 @@ async function _runWizardCore(ctx: WizardCtx): Promise<void> {
       chosenVaultRef: { current: chosenVault },
       opAbsPathRef: { current: opAbsPath },
       keychainPathRef: { current: keychainPath },
-      onUnavailableReprompt: async () => {
-        backend = await _pickBackend(ctx);
-        return backend;
-      },
     });
     chosenVault = result.chosenVault;
     opAbsPath = result.opAbsPath;
@@ -384,10 +380,6 @@ async function _runWizardCore(ctx: WizardCtx): Promise<void> {
       chosenVaultRef: { current: chosenVault },
       opAbsPathRef: { current: opAbsPath },
       keychainPathRef: { current: keychainPath },
-      onUnavailableReprompt: async () => {
-        backend = await _pickBackend(ctx);
-        return backend;
-      },
     });
     chosenVault = result.chosenVault;
     opAbsPath = result.opAbsPath;
@@ -410,6 +402,11 @@ async function _runWizardCore(ctx: WizardCtx): Promise<void> {
         api_key: result.yamlValue,
         athlete_id: intervalsAthleteId || "0",
       };
+    } else if (prevIntervalsId) {
+      // User skipped the api_key prompt but a prior athlete_id exists (common
+      // when api_key comes from INTERVALS_API_KEY env var and only athlete_id
+      // is in YAML). Preserve it — don't silently wipe the section.
+      merged.intervals = { athlete_id: prevIntervalsId };
     } else {
       // User skipped and no prev → no intervals section.
       delete merged.intervals;
@@ -427,10 +424,6 @@ async function _runWizardCore(ctx: WizardCtx): Promise<void> {
       chosenVaultRef: { current: chosenVault },
       opAbsPathRef: { current: opAbsPath },
       keychainPathRef: { current: keychainPath },
-      onUnavailableReprompt: async () => {
-        backend = await _pickBackend(ctx);
-        return backend;
-      },
     });
     chosenVault = result.chosenVault;
     opAbsPath = result.opAbsPath;
@@ -565,7 +558,6 @@ type CollectArgs = {
   chosenVaultRef: { current: string | undefined };
   opAbsPathRef: { current: string | undefined };
   keychainPathRef: { current: string | undefined };
-  onUnavailableReprompt: () => Promise<BackendChoice>;
 };
 
 type CollectResult = {
@@ -739,6 +731,9 @@ async function _writeToBackend(
       });
       handleCancel(action, ctx);
       if (action === "cancel") {
+        // Mirror the SIGINT/clack-cancel paths: print manual cleanup for any
+        // items already created earlier in this run.
+        _printOrphanCleanup(ctx);
         process.exit(0);
       }
       if (action === "keep") {
@@ -825,13 +820,12 @@ async function preCheckOpExistence(
   title: string,
   knownVault: string | undefined,
 ): Promise<string | null> {
-  try {
-    const res = await opItemGet(opAbsPath, title, knownVault);
-    if (res.exists) return res.vaultName;
-    return null;
-  } catch {
-    return null;
-  }
+  // Let opItemGet throws propagate. The NOT_AN_ITEM_RE branch inside opItemGet
+  // is the only genuine not-exists signal; everything else (timeout, auth
+  // failure, non-JSON stdout) is a real error that would otherwise silently
+  // become "item doesn't exist" and cause a duplicate item to be created.
+  const res = await opItemGet(opAbsPath, title, knownVault);
+  return res.exists ? res.vaultName : null;
 }
 
 async function createOpItem(
