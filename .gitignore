@@ -9,3 +9,4 @@ scripts/
 .claude
 CLAUDE.local.md
 .tests/
+.agents/

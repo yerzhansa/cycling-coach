@@ -8,17 +8,31 @@ import { scriptedPrompts } from "./helpers/scripted-prompts.js";
 
 let tempHome: string;
 let origHome: string | undefined;
+let origStdinTTY: boolean | undefined;
+let origStdoutTTY: boolean | undefined;
 
 beforeEach(() => {
   tempHome = mkdtempSync(join(tmpdir(), "cc-setup-"));
   origHome = process.env.HOME;
   process.env.HOME = tempHome;
   mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+  origStdinTTY = process.stdin.isTTY;
+  origStdoutTTY = process.stdout.isTTY;
+  Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+  Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
   vi.resetModules();
+  vi.doMock("../src/secrets/backends/detect.js", () => ({
+    detectBackends: vi.fn(async () => ({
+      op: { state: "unavailable", reason: "not-on-path" },
+      keychain: { available: false },
+    })),
+  }));
 });
 
 afterEach(() => {
   process.env.HOME = origHome;
+  Object.defineProperty(process.stdin, "isTTY", { value: origStdinTTY, configurable: true });
+  Object.defineProperty(process.stdout, "isTTY", { value: origStdoutTTY, configurable: true });
   rmSync(tempHome, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
@@ -27,7 +41,7 @@ describe("codex setup flow", () => {
   it("writes config without api_key and saves auth-profiles.json with 0o600", async () => {
     vi.doMock("@clack/prompts", () =>
       scriptedPrompts({
-        selects: ["openai-codex", "gpt-5.4"],
+        selects: ["openai-codex", "gpt-5.4", "plain"], // provider, model, backend
         passwords: ["", ""],
       }),
     );
