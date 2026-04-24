@@ -408,7 +408,6 @@ async function _runWizardCore(ctx: WizardCtx): Promise<void> {
       // is in YAML). Preserve it — don't silently wipe the section.
       merged.intervals = { athlete_id: prevIntervalsId };
     } else {
-      // User skipped and no prev → no intervals section.
       delete merged.intervals;
     }
   }
