@@ -1,6 +1,6 @@
-export type SecretRef =
-  | { source: "exec"; command: string; args?: string[] }
-  | { source: "env"; var: string };
+export type ExecSecretRef = { source: "exec"; command: string; args?: string[] };
+export type EnvSecretRef = { source: "env"; var: string };
+export type SecretRef = ExecSecretRef | EnvSecretRef;
 
 export type SecretResolutionErrorCode =
   | "ENOENT"

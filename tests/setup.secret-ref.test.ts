@@ -107,6 +107,13 @@ describe("_detectPrevBackend", () => {
       }),
     ).toBe("unknown");
   });
+
+  it("returns unknown for env-source SecretRef (wizard does not manage env refs)", async () => {
+    const { _detectPrevBackend } = await import("../src/setup.js");
+    expect(
+      _detectPrevBackend({ source: "env", var: "ANTHROPIC_API_KEY" }),
+    ).toBe("unknown");
+  });
 });
 
 describe("_formatOrphanCleanup", () => {

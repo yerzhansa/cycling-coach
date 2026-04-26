@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { SecretRef, SecretResolutionError } from "./types.js";
+import { ExecSecretRef, SecretRef, SecretResolutionError } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_BYTES = 64 * 1024;
@@ -29,7 +29,7 @@ function resolveEnvRef(name: string): string {
 }
 
 export async function _resolveSecretRefWithOverrides(
-  ref: Extract<SecretRef, { source: "exec" }>,
+  ref: ExecSecretRef,
   overrides: { timeoutMs?: number; maxBytes?: number },
 ): Promise<string> {
   const timeoutMs = overrides.timeoutMs ?? DEFAULT_TIMEOUT_MS;

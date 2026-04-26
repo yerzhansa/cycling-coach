@@ -302,12 +302,11 @@ docker build -t cycling-coach .
 
 docker run -d --name cycling-coach \
   -v cycling-coach-data:/data \
-  -e ANTHROPIC_API_KEY=sk-ant-... \
-  -e INTERVALS_API_KEY=... \
-  -e INTERVALS_ATHLETE_ID=i12345 \
-  -e TELEGRAM_BOT_TOKEN=123456:ABC-DEF... \
+  --env-file .env \
   cycling-coach
 ```
+
+Use `--env-file` rather than inline `-e KEY=value` flags — inline values land in shell history and are visible to other users via `ps`. Your `.env` should contain `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY`), `INTERVALS_API_KEY`, `INTERVALS_ATHLETE_ID`, and `TELEGRAM_BOT_TOKEN`.
 
 The image runs as a non-root user, mounts `/data` for state, and reads `/data/config.yaml` if present. With the `-e` env vars above, no `config.yaml` is required — the legacy env-var fallback (`ANTHROPIC_API_KEY` etc.) covers the three secret fields.
 
