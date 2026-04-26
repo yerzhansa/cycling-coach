@@ -21,8 +21,14 @@ scripts
 
 # Local secrets / configs
 .env
+.env.*
 .env.example
 CLAUDE.local.md
+
+# Local artifacts
+*.log
+coverage
+.vitest-cache
 
 # Repo metadata not needed in image
 README.md

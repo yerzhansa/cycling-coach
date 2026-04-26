@@ -69,6 +69,10 @@ describe("isSecretRef", () => {
   it("rejects env shape missing var", () => {
     expect(isSecretRef({ source: "env" })).toBe(false);
   });
+
+  it("rejects env shape with undefined var (e.g., bare 'var:' in YAML)", () => {
+    expect(isSecretRef({ source: "env", var: undefined })).toBe(false);
+  });
 });
 
 describe("SecretResolutionError", () => {

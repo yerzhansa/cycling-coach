@@ -19,7 +19,7 @@ ENV NODE_ENV=production
 ENV CYCLING_COACH_HOME=/data
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev
 
 COPY --from=builder /app/dist ./dist
 COPY SOUL.md ./SOUL.md
