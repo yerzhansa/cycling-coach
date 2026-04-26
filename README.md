@@ -292,6 +292,7 @@ Cycling Coach is a single Node process holding a long-polling connection to Tele
 - A persistent volume mounted at `/data` (or wherever you point `CYCLING_COACH_HOME`).
 - Secrets injected as env vars, referenced from `config.yaml` via `source: env` (see [Storing secrets outside config.yaml](#storing-secrets-outside-configyaml)).
 - One instance only — sessions are sharded by Telegram chat ID on local disk; do not enable autoscaling.
+- A BYOK provider (`anthropic` / `openai` / `google`). `LLM_PROVIDER=openai-codex` is **not supported in containers** — it depends on an interactive OAuth flow that writes to the data dir, which can't run headless. Use Anthropic, OpenAI, or Google in the cloud.
 
 ### Docker
 
