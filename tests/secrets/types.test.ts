@@ -12,7 +12,11 @@ describe("isSecretRef", () => {
     ).toBe(true);
   });
 
-  it("rejects wrong source", () => {
+  it("rejects unknown source", () => {
+    expect(isSecretRef({ source: "vault", command: "op" })).toBe(false);
+  });
+
+  it("rejects env-shaped object that uses 'command' instead of 'var'", () => {
     expect(isSecretRef({ source: "env", command: "op" })).toBe(false);
   });
 
@@ -44,6 +48,26 @@ describe("isSecretRef", () => {
     expect(isSecretRef("op")).toBe(false);
     expect(isSecretRef(42)).toBe(false);
     expect(isSecretRef(undefined)).toBe(false);
+  });
+
+  it("accepts env shape with var", () => {
+    expect(isSecretRef({ source: "env", var: "MY_TOKEN" })).toBe(true);
+  });
+
+  it("rejects env shape with empty var", () => {
+    expect(isSecretRef({ source: "env", var: "" })).toBe(false);
+  });
+
+  it("rejects env shape with non-string var", () => {
+    expect(isSecretRef({ source: "env", var: 42 })).toBe(false);
+  });
+
+  it("rejects env shape with extra fields", () => {
+    expect(isSecretRef({ source: "env", var: "X", extra: 1 })).toBe(false);
+  });
+
+  it("rejects env shape missing var", () => {
+    expect(isSecretRef({ source: "env" })).toBe(false);
   });
 });
 

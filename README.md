@@ -163,9 +163,13 @@ Env vars take precedence over YAML.
 
 ## Storing secrets outside config.yaml
 
-If you don't want API keys to live as plaintext in `~/.cycling-coach/config.yaml`, any secret field (`llm.api_key`, `intervals.api_key`, `telegram.bot_token`) can be replaced with a **SecretRef** — a reference to an external command that prints the secret to stdout. Cycling Coach runs the command at startup, reads stdout, and uses the value.
+If you don't want API keys to live as plaintext in `~/.cycling-coach/config.yaml`, any secret field (`llm.api_key`, `intervals.api_key`, `telegram.bot_token`) can be replaced with a **SecretRef**. Two shapes are supported:
+
+- **`source: exec`** — runs an external command (1Password CLI, Vault, `age`, etc.) and reads its stdout. Best for local desktop use with a password manager.
+- **`source: env`** — reads a process env var directly (no spawn). Best for cloud / Docker / Railway / Kubernetes where the platform injects secrets as env vars.
 
 ```yaml
+# exec — local with 1Password
 llm:
   provider: anthropic
   model: claude-sonnet-4-6
@@ -173,15 +177,27 @@ llm:
     source: exec
     command: op
     args: [read, "op://Personal/Anthropic/credential"]
+
+# env — cloud / Docker
+llm:
+  provider: anthropic
+  model: claude-sonnet-4-6
+  api_key:
+    source: env
+    var: ANTHROPIC_API_KEY
 ```
 
-**Precedence**: env var > SecretRef > plain YAML. Setting `ANTHROPIC_API_KEY` in your shell still wins — useful for debugging a vault issue without touching YAML.
+**Precedence**: env var (the legacy `ANTHROPIC_API_KEY` / `INTERVALS_API_KEY` / `TELEGRAM_BOT_TOKEN` keys) > SecretRef > plain YAML. Setting `ANTHROPIC_API_KEY` in your shell still wins — useful for debugging a vault issue without touching YAML.
 
-**Requirements**:
+**`exec` requirements**:
 - The `command` must print **only the secret** to stdout. JSON blobs, labels, or extra output will be stored verbatim and downstream APIs will reject them.
 - A single trailing `\n` or `\r\n` is trimmed; all other whitespace is preserved.
 - Empty output, non-zero exit, a 30s timeout, or output over 64KB is a fatal startup error with a clear stderr message.
 - `shell: false` — `command` and `args` are passed directly to the OS. `~`, `$HOME`, globs, and shell operators are **not** expanded. Use absolute paths.
+
+**`env` requirements**:
+- `var` must name an env var that is set and non-empty at startup. Unset → `ENOENT`; empty string → `EMPTY`. Both are fatal startup errors.
+- The value is used verbatim — no trimming, no shell interpretation. If your platform's secret manager appends a newline, set the env var without it.
 
 ### Using the setup wizard with a password manager
 
@@ -267,6 +283,72 @@ telegram:
 ### Downgrading
 
 SecretRef support was added in a recent release. Downgrading cycling-coach while `config.yaml` contains SecretRef blocks will fail at startup — older versions treat non-string secret values as malformed. Keep plain strings or env vars if you need to roll back.
+
+## Deploy in the cloud
+
+Cycling Coach is a single Node process holding a long-polling connection to Telegram, with state on a local volume at `$CYCLING_COACH_HOME` (defaults to `~/.cycling-coach`). It needs:
+
+- An always-on container or VM (no scale-to-zero — long-polling stops when the process stops).
+- A persistent volume mounted at `/data` (or wherever you point `CYCLING_COACH_HOME`).
+- Secrets injected as env vars, referenced from `config.yaml` via `source: env` (see [Storing secrets outside config.yaml](#storing-secrets-outside-configyaml)).
+- One instance only — sessions are sharded by Telegram chat ID on local disk; do not enable autoscaling.
+
+### Docker
+
+A `Dockerfile` is included. Build and run locally:
+
+```bash
+docker build -t cycling-coach .
+
+docker run -d --name cycling-coach \
+  -v cycling-coach-data:/data \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e INTERVALS_API_KEY=... \
+  -e INTERVALS_ATHLETE_ID=i12345 \
+  -e TELEGRAM_BOT_TOKEN=123456:ABC-DEF... \
+  cycling-coach
+```
+
+The image runs as a non-root user, mounts `/data` for state, and reads `/data/config.yaml` if present. With the `-e` env vars above, no `config.yaml` is required — the legacy env-var fallback (`ANTHROPIC_API_KEY` etc.) covers the three secret fields.
+
+For finer control (custom model, idle timeout, etc.) drop a `config.yaml` into the volume:
+
+```yaml
+# /data/config.yaml
+llm:
+  provider: anthropic
+  model: claude-sonnet-4-6
+  api_key:
+    source: env
+    var: ANTHROPIC_API_KEY
+intervals:
+  api_key:
+    source: env
+    var: INTERVALS_API_KEY
+  athlete_id: "i12345"
+telegram:
+  bot_token:
+    source: env
+    var: TELEGRAM_BOT_TOKEN
+```
+
+### Railway
+
+Railway autodetects the `Dockerfile` and deploys with no extra config files. Steps:
+
+1. Push this repo to GitHub.
+2. In Railway, **New Project → Deploy from GitHub repo**.
+3. Add a **Volume** mounted at `/data`.
+4. Add the env vars in **Variables**: `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY`), `INTERVALS_API_KEY`, `INTERVALS_ATHLETE_ID`, `TELEGRAM_BOT_TOKEN`.
+5. Deploy. Railway shows logs; `Telegram bot started` confirms it's polling.
+
+Railway does not scale services with attached volumes to zero, so the bot stays connected.
+
+### Other platforms
+
+- **Fly.io** — works with the same Dockerfile. In `fly.toml` set `auto_stop_machines = false` and `min_machines_running = 1`, otherwise Fly will stop the machine on idle inbound HTTP and the bot stops polling. Mount a 1 GB volume at `/data`.
+- **VPS (Hetzner, DigitalOcean, Lightsail, Oracle Free)** — `docker run` as above, or use systemd. Mount a host directory at `/data` for state.
+- **Avoid** scale-to-zero serverless (Lambda, Cloud Run with `min=0`, Cloudflare Workers, Vercel) and platforms with ephemeral filesystems (Heroku) — both break this app.
 
 ## Development
 

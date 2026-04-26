@@ -5,11 +5,31 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_BYTES = 64 * 1024;
 
 export async function resolveSecretRef(ref: SecretRef): Promise<string> {
+  if (ref.source === "env") {
+    return resolveEnvRef(ref.var);
+  }
   return await _resolveSecretRefWithOverrides(ref, {});
 }
 
+function resolveEnvRef(name: string): string {
+  const value = process.env[name];
+  if (value === undefined) {
+    throw new SecretResolutionError(
+      "ENOENT",
+      `Secret env var '${name}' is not set.`,
+    );
+  }
+  if (value === "") {
+    throw new SecretResolutionError(
+      "EMPTY",
+      `Secret env var '${name}' is set but empty.`,
+    );
+  }
+  return value;
+}
+
 export async function _resolveSecretRefWithOverrides(
-  ref: SecretRef,
+  ref: Extract<SecretRef, { source: "exec" }>,
   overrides: { timeoutMs?: number; maxBytes?: number },
 ): Promise<string> {
   const timeoutMs = overrides.timeoutMs ?? DEFAULT_TIMEOUT_MS;

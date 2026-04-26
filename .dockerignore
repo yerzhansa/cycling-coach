@@ -1,0 +1,30 @@
+# Build artifacts — rebuilt inside the image
+node_modules
+dist
+*.tgz
+
+# VCS / IDE
+.git
+.gitignore
+.idea
+.vscode
+.DS_Store
+
+# Tests, docs, scripts not needed at runtime
+tests
+.tests
+docs
+.agents
+.claude
+.github
+scripts
+
+# Local secrets / configs
+.env
+.env.example
+CLAUDE.local.md
+
+# Repo metadata not needed in image
+README.md
+CONTRIBUTING.md
+LICENSE

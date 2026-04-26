@@ -116,6 +116,7 @@ const FIELD_KEYCHAIN_ACCOUNT: Record<SecretFieldPath, string> = {
 export function _detectPrevBackend(value: unknown): BackendChoice | "unknown" {
   if (typeof value === "string") return "plain";
   if (isSecretRef(value)) {
+    if (value.source === "env") return "unknown";
     const cmd = value.command;
     if (cmd === "op" || cmd.endsWith("/op")) return "op";
     if (cmd === "/usr/bin/security" || cmd.endsWith("/security")) return "keychain";
