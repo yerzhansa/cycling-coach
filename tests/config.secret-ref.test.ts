@@ -146,4 +146,53 @@ describe("config — SecretRef integration", () => {
     expect(cfg.intervals.apiKey).toBe("iv-key");
     expect(cfg.telegram.botToken).toBe("tg-key");
   });
+
+  it("env-source SecretRef on all three fields resolves from process.env", async () => {
+    process.env.MY_LLM_KEY = "llm-from-env";
+    process.env.MY_IV_KEY = "iv-from-env";
+    process.env.MY_TG_KEY = "tg-from-env";
+    try {
+      seed({
+        llm: {
+          provider: "anthropic",
+          api_key: { source: "env", var: "MY_LLM_KEY" },
+          model: "claude-sonnet-4-6",
+        },
+        intervals: {
+          api_key: { source: "env", var: "MY_IV_KEY" },
+          athlete_id: "i1",
+        },
+        telegram: {
+          bot_token: { source: "env", var: "MY_TG_KEY" },
+        },
+      });
+      const { loadConfig, resolveConfigSecrets } = await import("../src/config.js");
+      const cfg = await resolveConfigSecrets(loadConfig());
+      expect(cfg.llm.apiKey).toBe("llm-from-env");
+      expect(cfg.intervals.apiKey).toBe("iv-from-env");
+      expect(cfg.telegram.botToken).toBe("tg-from-env");
+    } finally {
+      delete process.env.MY_LLM_KEY;
+      delete process.env.MY_IV_KEY;
+      delete process.env.MY_TG_KEY;
+    }
+  });
+
+  it("env-source SecretRef throws ENOENT when var is unset", async () => {
+    seed({
+      llm: {
+        provider: "anthropic",
+        api_key: { source: "env", var: "DEFINITELY_UNSET_XYZ_123" },
+        model: "claude-sonnet-4-6",
+      },
+    });
+    const { loadConfig, resolveConfigSecrets } = await import("../src/config.js");
+    const { SecretResolutionError } = await import("../src/secrets/types.js");
+    const err = await resolveConfigSecrets(loadConfig()).catch(
+      (e) => e as SecretResolutionError,
+    );
+    expect(err).toBeInstanceOf(SecretResolutionError);
+    expect(err.code).toBe("ENOENT");
+    expect(err.message).toContain("DEFINITELY_UNSET_XYZ_123");
+  });
 });

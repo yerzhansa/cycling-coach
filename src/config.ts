@@ -120,7 +120,7 @@ function readSecretField(value: unknown, path: SecretFieldPath): string | Secret
   if (isSecretRef(value)) return value;
   throw new SecretResolutionError(
     "INVALID_REF",
-    `Config field ${path} is not a valid SecretRef. Expected a string, or { source: "exec", command: string, args?: string[] }.`,
+    `Config field ${path} is not a valid SecretRef. Expected a string, { source: "exec", command: string, args?: string[] }, or { source: "env", var: string }.`,
   );
 }
 
@@ -255,7 +255,8 @@ export async function resolveConfigSecrets(cfg: Config): Promise<Config> {
   for (const [path, ref] of pending) {
     const value = await resolveSecretRef(ref);
     assignFieldByPath(next, path, value);
-    console.log(`Resolved secret: ${path} (exec: ${ref.command})`);
+    const desc = ref.source === "env" ? `env: ${ref.var}` : `exec: ${ref.command}`;
+    console.log(`Resolved secret: ${path} (${desc})`);
   }
 
   return next;

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import {
   _resolveSecretRefWithOverrides,
   resolveSecretRef,
@@ -100,5 +100,57 @@ describe("resolveSecretRef", () => {
       args: [";", "rm", "-rf", "~"],
     });
     expect(result).toBe("; rm -rf ~");
+  });
+});
+
+describe("resolveSecretRef — env source", () => {
+  const ENV_VAR = "__CC_TEST_ENV_SECRET__";
+
+  afterEach(() => {
+    delete process.env[ENV_VAR];
+  });
+
+  it("resolves env var to its value", async () => {
+    process.env[ENV_VAR] = "env-value";
+    const result = await resolveSecretRef({ source: "env", var: ENV_VAR });
+    expect(result).toBe("env-value");
+  });
+
+  it("preserves whitespace and trailing newlines (no trimming)", async () => {
+    process.env[ENV_VAR] = "  spaced  \n";
+    const result = await resolveSecretRef({ source: "env", var: ENV_VAR });
+    expect(result).toBe("  spaced  \n");
+  });
+
+  it("throws ENOENT when var is unset", async () => {
+    delete process.env[ENV_VAR];
+    const err = await resolveSecretRef({ source: "env", var: ENV_VAR }).catch(
+      (e) => e as SecretResolutionError,
+    );
+    expect(err).toBeInstanceOf(SecretResolutionError);
+    expect(err.code).toBe("ENOENT");
+    expect(err.message).toContain(ENV_VAR);
+  });
+
+  it("throws EMPTY when var is set to ''", async () => {
+    process.env[ENV_VAR] = "";
+    const err = await resolveSecretRef({ source: "env", var: ENV_VAR }).catch(
+      (e) => e as SecretResolutionError,
+    );
+    expect(err).toBeInstanceOf(SecretResolutionError);
+    expect(err.code).toBe("EMPTY");
+    expect(err.message).toContain(ENV_VAR);
+  });
+
+  it("never spawns a process — works without /usr/bin/env on PATH", async () => {
+    process.env[ENV_VAR] = "no-spawn";
+    const origPath = process.env.PATH;
+    process.env.PATH = "";
+    try {
+      const result = await resolveSecretRef({ source: "env", var: ENV_VAR });
+      expect(result).toBe("no-spawn");
+    } finally {
+      process.env.PATH = origPath;
+    }
   });
 });
