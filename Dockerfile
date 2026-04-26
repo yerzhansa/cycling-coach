@@ -25,10 +25,6 @@ COPY --from=builder /app/dist ./dist
 COPY SOUL.md ./SOUL.md
 COPY skills ./skills
 
-RUN addgroup -S app && adduser -S -G app app \
-    && mkdir -p /data \
-    && chown -R app:app /data /app
-
-USER app
+RUN mkdir -p /data
 
 CMD ["node", "dist/index.js"]
