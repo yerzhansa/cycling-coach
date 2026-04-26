@@ -309,7 +309,7 @@ docker run -d --name cycling-coach \
 
 Use `--env-file` rather than inline `-e KEY=value` flags — inline values land in shell history and are visible to other users via `ps`. Your `.env` should contain `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY`), `INTERVALS_API_KEY`, `INTERVALS_ATHLETE_ID`, and `TELEGRAM_BOT_TOKEN`.
 
-The image runs as a non-root user, mounts `/data` for state, and reads `/data/config.yaml` if present. With the `-e` env vars above, no `config.yaml` is required — the legacy env-var fallback (`ANTHROPIC_API_KEY` etc.) covers the three secret fields.
+The image mounts `/data` for state and reads `/data/config.yaml` if present. The container runs as root — managed PaaS platforms (Railway, Fly) typically mount fresh volumes as root-owned, and dropping privileges inside a single-tenant container adds little practical hardening on top of the platform's own isolation. With the `-e` env vars above, no `config.yaml` is required — the legacy env-var fallback (`ANTHROPIC_API_KEY` etc.) covers the three secret fields.
 
 For finer control (custom model, idle timeout, etc.) drop a `config.yaml` into the volume:
 
