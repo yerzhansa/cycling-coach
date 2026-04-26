@@ -30,6 +30,5 @@ RUN addgroup -S app && adduser -S -G app app \
     && chown -R app:app /data /app
 
 USER app
-VOLUME ["/data"]
 
 CMD ["node", "dist/index.js"]
