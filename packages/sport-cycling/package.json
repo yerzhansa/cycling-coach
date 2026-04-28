@@ -1,0 +1,8 @@
+{
+  "name": "@cycling-coach/sport-cycling",
+  "version": "0.0.0-private",
+  "private": true,
+  "description": "Cycling sport package — soul, skills, tools, schemas, must-preserve tokens. Implements the Sport contract from @cycling-coach/core.",
+  "type": "module",
+  "license": "MIT"
+}
