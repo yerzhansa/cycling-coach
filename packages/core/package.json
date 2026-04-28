@@ -4,5 +4,20 @@
   "private": true,
   "description": "Sport-agnostic infrastructure for AI coaching agents (agent loop, memory, secrets, channels, LLM, intervals.icu). Publishes the Sport contract.",
   "type": "module",
-  "license": "MIT"
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ai": "^6.0.158",
+    "intervals-icu-api": "^0.1.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.2"
+  }
 }
