@@ -62,7 +62,7 @@ export class CyclingCoachAgent {
       : null;
 
     this.tools = createTools(this.memory, intervals);
-    this.systemPrompt = buildSystemPrompt(this.memory);
+    this.systemPrompt = buildSystemPrompt(cyclingSport, this.memory);
   }
 
   async chat(chatId: string, userMessage: string): Promise<string> {
@@ -90,7 +90,7 @@ export class CyclingCoachAgent {
         history = [];
       }
 
-      this.systemPrompt = buildSystemPrompt(this.memory);
+      this.systemPrompt = buildSystemPrompt(cyclingSport, this.memory);
 
       const budget = computeHistoryTokenBudget({
         contextWindowTokens: this.config.contextWindowTokens,
