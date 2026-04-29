@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import type { MemorySnapshot, SportMemoryShape } from "@cycling-coach/core";
 import {
   estimateTokens,
   estimateMessagesTokens,
@@ -28,11 +29,22 @@ const REQUIRED_SUMMARY_SECTIONS = [
 ] as const;
 
 // ============================================================================
-// PROMPTS
+// PROMPT BUILDERS (sport-parameterized)
 // ============================================================================
 
-const MUST_PRESERVE = `MUST PRESERVE:
-- Athlete profile details (FTP, weight, experience, schedule, goals)
+function resolveTokens(
+  spec: SportMemoryShape["mustPreserveTokens"],
+  memory: MemorySnapshot,
+): readonly string[] {
+  return typeof spec === "function" ? spec(memory) : spec;
+}
+
+function buildMustPreserveBlock(tokens: readonly string[]): string {
+  const tokensClause = tokens.length > 0
+    ? `\n\nPreserve these literal tokens exactly: ${tokens.join(", ")}.`
+    : "";
+  return `MUST PRESERVE:
+- Athlete profile details
 - Current training plan status and phase
 - Recent workout feedback and performance trends
 - Decisions made about training approach
@@ -43,9 +55,11 @@ Preserve all specific numbers exactly as written (watts, kg, percentages,
 dates, distances, durations).
 
 PRIORITIZE recent context over older history.
-The coach needs to know what was being discussed, not just what topics were covered.`;
+The coach needs to know what was being discussed, not just what topics were covered.${tokensClause}`;
+}
 
-const SUMMARIZE_PROMPT = `Summarize the following conversation concisely — aim for 300-500 words total.
+function buildSummarizePrompt(tokens: readonly string[]): string {
+  return `Summarize the following conversation concisely — aim for 300-500 words total.
 Use bullet points, not paragraphs. Omit generic advice that can be re-derived.
 
 Use these exact section headings:
@@ -54,9 +68,11 @@ Use these exact section headings:
 ## Discussion Context
 ## Pending Questions
 
-${MUST_PRESERVE}`;
+${buildMustPreserveBlock(tokens)}`;
+}
 
-const DROPPED_MESSAGES_PROMPT = `Incorporate these older conversation messages into the existing summary.
+function buildDroppedMessagesPrompt(tokens: readonly string[]): string {
+  return `Incorporate these older conversation messages into the existing summary.
 
 Produce a compact, factual summary — aim for 300-500 words total.
 Use bullet points, not paragraphs. Omit generic advice that can be re-derived.
@@ -67,7 +83,8 @@ Use these exact section headings:
 ## Discussion Context
 ## Pending Questions
 
-${MUST_PRESERVE}`;
+${buildMustPreserveBlock(tokens)}`;
+}
 
 // ============================================================================
 // HELPERS
@@ -164,13 +181,19 @@ export function auditSummaryQuality(summary: string): { ok: boolean; missing: st
 export async function summarizeDroppedMessages(params: {
   dropped: ModelMessage[];
   llm: LLM;
+  mustPreserveTokens: SportMemoryShape["mustPreserveTokens"];
+  memory: MemorySnapshot;
   previousSummary?: string;
   maxRetries?: number;
   contextWindowTokens?: number;
 }): Promise<string> {
-  const { dropped, llm, previousSummary, maxRetries = 1, contextWindowTokens } = params;
+  const { dropped, llm, mustPreserveTokens, memory, previousSummary, maxRetries = 1, contextWindowTokens } = params;
 
   if (dropped.length === 0) return previousSummary ?? "";
+
+  const tokens = resolveTokens(mustPreserveTokens, memory);
+  const droppedPrompt = buildDroppedMessagesPrompt(tokens);
+  const mustPreserveBlock = buildMustPreserveBlock(tokens);
 
   const chunks = computeAdaptiveChunks(dropped, contextWindowTokens);
   // Fallback: if adaptive chunking returns empty (shouldn't happen), use single chunk
@@ -181,7 +204,7 @@ export async function summarizeDroppedMessages(params: {
   for (const chunk of chunks) {
     const transcript = formatTranscript(chunk);
     const prompt = [
-      DROPPED_MESSAGES_PROMPT,
+      droppedPrompt,
       (summary ?? previousSummary) ? `\nExisting summary of earlier context:\n${summary ?? previousSummary}` : "",
       `\nMessages to incorporate:\n${transcript}`,
     ].join("\n");
@@ -207,7 +230,7 @@ export async function summarizeDroppedMessages(params: {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       const { text } = await llm.generate({
-        prompt: `Restructure the following summary to include ALL required section headings: ${audit.missing.join(", ")}.\n\n${best}\n\n${MUST_PRESERVE}`,
+        prompt: `Restructure the following summary to include ALL required section headings: ${audit.missing.join(", ")}.\n\n${best}\n\n${mustPreserveBlock}`,
         maxOutputTokens: MAX_SUMMARY_TOKENS,
       });
       const retryAudit = auditSummaryQuality(text);
@@ -228,11 +251,13 @@ export async function summarizeDroppedMessages(params: {
 export async function summarizeInStages(params: {
   messages: ModelMessage[];
   llm: LLM;
+  mustPreserveTokens: SportMemoryShape["mustPreserveTokens"];
+  memory: MemorySnapshot;
   recentToKeep?: number;
   previousSummary?: string;
   contextWindowTokens?: number;
 }): Promise<ModelMessage[]> {
-  const { messages, llm, recentToKeep = 4, previousSummary, contextWindowTokens } = params;
+  const { messages, llm, mustPreserveTokens, memory, recentToKeep = 4, previousSummary, contextWindowTokens } = params;
 
   const keepCount = Math.min(recentToKeep, messages.length);
   const toSummarize = messages.slice(0, messages.length - keepCount);
@@ -241,6 +266,9 @@ export async function summarizeInStages(params: {
   if (toSummarize.length === 0) {
     return messages;
   }
+
+  const tokens = resolveTokens(mustPreserveTokens, memory);
+  const summarizePrompt = buildSummarizePrompt(tokens);
 
   const chunks = computeAdaptiveChunks(toSummarize, contextWindowTokens);
 
@@ -254,7 +282,7 @@ export async function summarizeInStages(params: {
       : "";
 
     const { text } = await llm.generate({
-      prompt: `${SUMMARIZE_PROMPT}${contextPrefix}\n\n${transcript}`,
+      prompt: `${summarizePrompt}${contextPrefix}\n\n${transcript}`,
       maxOutputTokens: MAX_SUMMARY_TOKENS,
     });
     summary = capSummary(text);

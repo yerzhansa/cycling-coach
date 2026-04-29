@@ -22,6 +22,8 @@ import { summarizeInStages, summarizeDroppedMessages } from "./compaction.js";
 import { runMemoryFlush } from "./memory-flush.js";
 import { evaluateSessionFreshness } from "./session-freshness.js";
 import { LLM } from "./llm.js";
+import { createMemorySnapshot } from "./memory-snapshot.js";
+import { cyclingSport } from "../cycling/sport.js";
 
 const MAX_OVERFLOW_ATTEMPTS = 3;
 const MAX_TIMEOUT_ATTEMPTS = 2;
@@ -101,6 +103,8 @@ export class CyclingCoachAgent {
           const summary = await summarizeDroppedMessages({
             dropped,
             llm: this.llm,
+            mustPreserveTokens: cyclingSport.mustPreserveTokens,
+            memory: createMemorySnapshot(this.memory),
             previousSummary,
             contextWindowTokens: this.config.contextWindowTokens,
           });
@@ -131,7 +135,13 @@ export class CyclingCoachAgent {
         // Preemptive: compact before sending if over budget
         if (shouldCompact({ messages, systemPrompt: this.systemPrompt, contextWindowTokens: this.config.contextWindowTokens })) {
           await runMemoryFlush({ llm: this.llm, messages, memory: this.memory });
-          messages = await summarizeInStages({ messages, llm: this.llm, contextWindowTokens: this.config.contextWindowTokens });
+          messages = await summarizeInStages({
+            messages,
+            llm: this.llm,
+            mustPreserveTokens: cyclingSport.mustPreserveTokens,
+            memory: createMemorySnapshot(this.memory),
+            contextWindowTokens: this.config.contextWindowTokens,
+          });
           this.memory.reload();
         }
 
@@ -154,7 +164,13 @@ export class CyclingCoachAgent {
           if (isContextOverflowError(err) && overflowAttempts < MAX_OVERFLOW_ATTEMPTS) {
             overflowAttempts++;
             await runMemoryFlush({ llm: this.llm, messages, memory: this.memory });
-            messages = await summarizeInStages({ messages, llm: this.llm, contextWindowTokens: this.config.contextWindowTokens });
+            messages = await summarizeInStages({
+            messages,
+            llm: this.llm,
+            mustPreserveTokens: cyclingSport.mustPreserveTokens,
+            memory: createMemorySnapshot(this.memory),
+            contextWindowTokens: this.config.contextWindowTokens,
+          });
             this.memory.reload();
             continue;
           }
@@ -163,7 +179,13 @@ export class CyclingCoachAgent {
             const ratio = estimateMessagesTokens(messages) / this.config.contextWindowTokens;
             if (ratio > TIMEOUT_COMPACTION_THRESHOLD) {
               timeoutAttempts++;
-              messages = await summarizeInStages({ messages, llm: this.llm, contextWindowTokens: this.config.contextWindowTokens });
+              messages = await summarizeInStages({
+            messages,
+            llm: this.llm,
+            mustPreserveTokens: cyclingSport.mustPreserveTokens,
+            memory: createMemorySnapshot(this.memory),
+            contextWindowTokens: this.config.contextWindowTokens,
+          });
               this.memory.reload();
               continue;
             }

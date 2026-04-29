@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { ModelMessage } from "ai";
+import type { MemorySnapshot } from "@cycling-coach/core";
 import {
   auditSummaryQuality,
   summarizeDroppedMessages,
@@ -58,52 +59,83 @@ const VALID_FOUR_SECTION_SUMMARY = [
   "- None outstanding",
 ].join("\n");
 
-// ─── Compaction smoke test (Wave 1 commit 4 baseline) ─────────────────
-//
-// Establishes the pre-parameterization baseline for compaction's
-// must-preserve behavior. Commit 5 parameterizes the MUST_PRESERVE block
-// against `sport.mustPreserveTokens`; this test should still pass after
-// that change because cyclingSport's vocabulary list overlaps with the
-// existing categorical instructions ("FTP", "W/kg" → still appear in
-// the prompt; the wording "athlete profile details" gets replaced by
-// the explicit token list).
+const CYCLING_VOCABULARY = ["FTP", "W/kg", "Coggan", "VO2max", "watts", "sweet spot", "TTE"];
 
-describe("compaction (baseline before sport parameterization)", () => {
-  it("summarizeDroppedMessages prompt instructs the LLM to preserve athlete data", async () => {
+const EMPTY_SNAPSHOT: MemorySnapshot = {
+  read: () => null,
+  has: () => false,
+  listSections: () => [],
+};
+
+// ─── Compaction smoke test ────────────────────────────────────────────
+//
+// After commit 5 the MUST-PRESERVE block is parameterized against
+// `sport.mustPreserveTokens`. The test passes the cycling vocabulary
+// directly so the assertions don't depend on cyclingSport's runtime
+// state.
+
+describe("compaction (sport-parameterized)", () => {
+  it("summarizeDroppedMessages prompt carries MUST-PRESERVE + sport tokens + transcript data", async () => {
     const spy = createSpyLLM(VALID_FOUR_SECTION_SUMMARY);
 
     await summarizeDroppedMessages({
       dropped: REPRESENTATIVE_CONVERSATION,
       llm: spy,
+      mustPreserveTokens: CYCLING_VOCABULARY,
+      memory: EMPTY_SNAPSHOT,
     });
 
     expect(spy.capturedPrompts.length).toBeGreaterThan(0);
     const prompt = spy.capturedPrompts[0];
 
-    // Hard contract: every compaction prompt must carry the
-    // MUST-PRESERVE instruction.
+    // Hard contract: every compaction prompt carries the MUST-PRESERVE
+    // instruction.
     expect(prompt).toContain("MUST PRESERVE");
 
-    // Loose contract: today the prompt enumerates categories ("FTP, weight,
-    // experience, schedule, goals"). After commit 5 it will enumerate
-    // explicit tokens from `cyclingSport.mustPreserveTokens` instead. Either
-    // way, the FTP token and the user's actual data must surface.
+    // Sport-vocabulary tokens flow through.
     expect(prompt).toContain("FTP");
+    expect(prompt).toContain("W/kg");
+    expect(prompt).toContain("Coggan");
+
+    // Transcript data is included verbatim.
     expect(prompt).toContain("247W");
     expect(prompt).toContain("72kg");
   });
 
-  it("summarizeInStages prompt also carries the MUST-PRESERVE instruction", async () => {
+  it("summarizeDroppedMessages with function-form tokens calls the function with the snapshot", async () => {
+    const spy = createSpyLLM(VALID_FOUR_SECTION_SUMMARY);
+    const calls: MemorySnapshot[] = [];
+
+    await summarizeDroppedMessages({
+      dropped: REPRESENTATIVE_CONVERSATION,
+      llm: spy,
+      mustPreserveTokens: (snap) => {
+        calls.push(snap);
+        return ["FTP 247W", "DYNAMIC_TOKEN"];
+      },
+      memory: EMPTY_SNAPSHOT,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toBe(EMPTY_SNAPSHOT);
+    expect(spy.capturedPrompts[0]).toContain("FTP 247W");
+    expect(spy.capturedPrompts[0]).toContain("DYNAMIC_TOKEN");
+  });
+
+  it("summarizeInStages prompt also carries the MUST-PRESERVE instruction and tokens", async () => {
     const spy = createSpyLLM(VALID_FOUR_SECTION_SUMMARY);
 
     await summarizeInStages({
       messages: REPRESENTATIVE_CONVERSATION,
       llm: spy,
+      mustPreserveTokens: CYCLING_VOCABULARY,
+      memory: EMPTY_SNAPSHOT,
       recentToKeep: 2,
     });
 
     expect(spy.capturedPrompts.length).toBeGreaterThan(0);
     expect(spy.capturedPrompts[0]).toContain("MUST PRESERVE");
+    expect(spy.capturedPrompts[0]).toContain("FTP");
   });
 
   it("auditSummaryQuality accepts a summary with all four required sections", () => {
