@@ -36,7 +36,13 @@ function resolveTokens(
   spec: SportMemoryShape["mustPreserveTokens"],
   memory: MemorySnapshot,
 ): readonly string[] {
-  return typeof spec === "function" ? spec(memory) : spec;
+  if (typeof spec !== "function") return spec;
+  try {
+    return spec(memory);
+  } catch (err) {
+    console.warn("Sport.mustPreserveTokens function threw; using empty list", err);
+    return [];
+  }
 }
 
 function buildMustPreserveBlock(tokens: readonly string[]): string {
@@ -44,7 +50,7 @@ function buildMustPreserveBlock(tokens: readonly string[]): string {
     ? `\n\nPreserve these literal tokens exactly: ${tokens.join(", ")}.`
     : "";
   return `MUST PRESERVE:
-- Athlete profile details
+- Athlete profile details (FTP, weight, experience, schedule, goals)
 - Current training plan status and phase
 - Recent workout feedback and performance trends
 - Decisions made about training approach
