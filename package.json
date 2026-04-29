@@ -15,14 +15,15 @@
   "scripts": {
     "dev": "tsx --env-file=.env src/index.ts",
     "setup": "tsx --env-file=.env src/index.ts setup",
-    "build": "tsc",
+    "build:core": "tsc -p packages/core",
+    "build": "npm run build:core && tsc",
     "prepublishOnly": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "oxlint src/ tests/",
     "fmt": "oxfmt src/ tests/",
     "fmt:check": "oxfmt --check src/ tests/",
-    "check": "tsc --noEmit && oxlint src/ tests/"
+    "check": "npm run build:core && tsc --noEmit && oxlint src/ tests/"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.69",
