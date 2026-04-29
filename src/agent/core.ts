@@ -1,8 +1,7 @@
 import { stepCountIs } from "ai";
 import type { ModelMessage, ToolSet } from "ai";
 import { IntervalsClient } from "intervals-icu-api";
-import type { CoreDeps, MemoryStore, SecretsResolver } from "@cycling-coach/core";
-import type { LLM as LLMInterface } from "@cycling-coach/core";
+import type { CoreDeps, SecretsResolver } from "@cycling-coach/core";
 import type { Config } from "../config.js";
 import { resolveSecretRef } from "../secrets/resolve.js";
 import { Memory } from "./memory.js";
@@ -65,14 +64,32 @@ export class CyclingCoachAgent {
 
     const secrets: SecretsResolver = { resolve: resolveSecretRef };
     const coreDeps: CoreDeps = {
-      llm: this.llm as unknown as LLMInterface,
+      llm: this.llm,
       intervals,
-      memory: this.memory as unknown as MemoryStore,
+      memory: this.memory,
       secrets,
     };
     const registrations = cyclingSport.tools(coreDeps);
     this.tools = Object.fromEntries(registrations.map((r) => [r.name, r.tool])) as ToolSet;
     this.systemPrompt = buildSystemPrompt(cyclingSport, this.memory);
+  }
+
+  private async flushMemory(messages: ModelMessage[]): Promise<void> {
+    await runMemoryFlush({
+      llm: this.llm,
+      messages,
+      memory: this.memory,
+      memorySections: cyclingSport.memorySections,
+    });
+  }
+
+  private compactionParams() {
+    return {
+      llm: this.llm,
+      mustPreserveTokens: cyclingSport.mustPreserveTokens,
+      memory: createMemorySnapshot(this.memory),
+      contextWindowTokens: this.config.contextWindowTokens,
+    };
   }
 
   async chat(chatId: string, userMessage: string): Promise<string> {
@@ -89,12 +106,7 @@ export class CyclingCoachAgent {
       if (!fresh) {
         // Flush memory before reset, then archive
         if (history.length > 0) {
-          await runMemoryFlush({
-            llm: this.llm,
-            messages: history,
-            memory: this.memory,
-            memorySections: cyclingSport.memorySections,
-          });
+          await this.flushMemory(history);
         }
         this.chatStore.archiveAndReset(chatId);
         history = [];
@@ -117,11 +129,8 @@ export class CyclingCoachAgent {
         try {
           const summary = await summarizeDroppedMessages({
             dropped,
-            llm: this.llm,
-            mustPreserveTokens: cyclingSport.mustPreserveTokens,
-            memory: createMemorySnapshot(this.memory),
             previousSummary,
-            contextWindowTokens: this.config.contextWindowTokens,
+            ...this.compactionParams(),
           });
           summaryMsg = makeSummaryMessage(summary);
           this.chatStore.overwriteHistory(chatId, [summaryMsg, ...kept]);
@@ -149,19 +158,8 @@ export class CyclingCoachAgent {
       while (true) {
         // Preemptive: compact before sending if over budget
         if (shouldCompact({ messages, systemPrompt: this.systemPrompt, contextWindowTokens: this.config.contextWindowTokens })) {
-          await runMemoryFlush({
-            llm: this.llm,
-            messages,
-            memory: this.memory,
-            memorySections: cyclingSport.memorySections,
-          });
-          messages = await summarizeInStages({
-            messages,
-            llm: this.llm,
-            mustPreserveTokens: cyclingSport.mustPreserveTokens,
-            memory: createMemorySnapshot(this.memory),
-            contextWindowTokens: this.config.contextWindowTokens,
-          });
+          await this.flushMemory(messages);
+          messages = await summarizeInStages({ messages, ...this.compactionParams() });
           this.memory.reload();
         }
 
@@ -183,19 +181,8 @@ export class CyclingCoachAgent {
           // Reactive: context overflow → flush + compact + retry
           if (isContextOverflowError(err) && overflowAttempts < MAX_OVERFLOW_ATTEMPTS) {
             overflowAttempts++;
-            await runMemoryFlush({
-              llm: this.llm,
-              messages,
-              memory: this.memory,
-              memorySections: cyclingSport.memorySections,
-            });
-            messages = await summarizeInStages({
-              messages,
-              llm: this.llm,
-              mustPreserveTokens: cyclingSport.mustPreserveTokens,
-              memory: createMemorySnapshot(this.memory),
-              contextWindowTokens: this.config.contextWindowTokens,
-            });
+            await this.flushMemory(messages);
+            messages = await summarizeInStages({ messages, ...this.compactionParams() });
             this.memory.reload();
             continue;
           }
@@ -204,13 +191,7 @@ export class CyclingCoachAgent {
             const ratio = estimateMessagesTokens(messages) / this.config.contextWindowTokens;
             if (ratio > TIMEOUT_COMPACTION_THRESHOLD) {
               timeoutAttempts++;
-              messages = await summarizeInStages({
-                messages,
-                llm: this.llm,
-                mustPreserveTokens: cyclingSport.mustPreserveTokens,
-                memory: createMemorySnapshot(this.memory),
-                contextWindowTokens: this.config.contextWindowTokens,
-              });
+              messages = await summarizeInStages({ messages, ...this.compactionParams() });
               this.memory.reload();
               continue;
             }
@@ -239,12 +220,7 @@ export class CyclingCoachAgent {
     // Flush before reset to avoid losing un-persisted context
     const { messages: history } = this.chatStore.load(chatId);
     if (history.length > 0) {
-      await runMemoryFlush({
-            llm: this.llm,
-            messages: history,
-            memory: this.memory,
-            memorySections: cyclingSport.memorySections,
-          });
+      await this.flushMemory(history);
     }
     this.chatStore.archiveAndReset(chatId);
   }

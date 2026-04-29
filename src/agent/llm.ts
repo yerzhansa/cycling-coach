@@ -3,6 +3,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import type { LanguageModel } from "ai";
+import type { LLM as LLMInterface } from "@cycling-coach/core";
 
 import type { Config } from "../config.js";
 import { codexGenerateText } from "./codex-bridge.js";
@@ -14,7 +15,7 @@ export type { GenerateOpts, GenerateResult } from "./llm-types.js";
 // LLM DISPATCH
 // ============================================================================
 
-export class LLM {
+export class LLM implements LLMInterface {
   private config: Config;
   private aiSdkModel: LanguageModel | null;
 

@@ -1,11 +1,12 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import type { MemoryStore } from "@cycling-coach/core";
 
 // ============================================================================
 // MEMORY SYSTEM
 // ============================================================================
 
-export class Memory {
+export class Memory implements MemoryStore {
   private memoryDir: string;
   private plansDir: string;
 

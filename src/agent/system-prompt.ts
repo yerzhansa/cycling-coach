@@ -1,8 +1,8 @@
 import type { SportPersona } from "@cycling-coach/core";
-import { Memory } from "./memory.js";
+import type { Memory } from "./memory.js";
 
 // ============================================================================
-// SYSTEM PROMPT BUILDER (sport-parameterized)
+// SYSTEM PROMPT BUILDER
 // ============================================================================
 
 export function buildSystemPrompt(persona: SportPersona, memory: Memory): string {
