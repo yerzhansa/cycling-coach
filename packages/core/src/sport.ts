@@ -107,9 +107,5 @@ export interface RunBinaryArgs {
   binary: Binary;
 }
 
-/**
- * Entry point for binary packages. Implementation lands in commits 14-16
- * when src/agent/ moves to packages/core/src/. Phase 1A keeps the existing
- * CyclingCoachAgent class as the run loop.
- */
+/** Entry point for binary packages. */
 export declare function runBinary(args: RunBinaryArgs): Promise<void>;

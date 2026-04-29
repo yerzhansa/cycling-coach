@@ -29,7 +29,7 @@ const REQUIRED_SUMMARY_SECTIONS = [
 ] as const;
 
 // ============================================================================
-// PROMPT BUILDERS (sport-parameterized)
+// PROMPT BUILDERS
 // ============================================================================
 
 function resolveTokens(
@@ -203,9 +203,10 @@ export async function summarizeDroppedMessages(params: {
 
   for (const chunk of chunks) {
     const transcript = formatTranscript(chunk);
+    const carriedSummary = summary ?? previousSummary;
     const prompt = [
       droppedPrompt,
-      (summary ?? previousSummary) ? `\nExisting summary of earlier context:\n${summary ?? previousSummary}` : "",
+      carriedSummary ? `\nExisting summary of earlier context:\n${carriedSummary}` : "",
       `\nMessages to incorporate:\n${transcript}`,
     ].join("\n");
 

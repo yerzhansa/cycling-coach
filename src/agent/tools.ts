@@ -17,7 +17,7 @@ import type {
   RaceType,
   IntervalsWorkoutInput,
 } from "../cycling/index.js";
-import type { Memory } from "./memory.js";
+import type { MemoryStore } from "@cycling-coach/core";
 import type { IntervalsClient } from "intervals-icu-api";
 
 // ============================================================================
@@ -30,7 +30,7 @@ const daysEnum = z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
 // SHARED TOOL FACTORIES
 // ============================================================================
 
-export function createMemoryReadTool(memory: Memory) {
+export function createMemoryReadTool(memory: MemoryStore) {
   return tool({
     description: "Read long-term athlete memory, today's notes, and current plan state",
     inputSchema: zodSchema(z.object({})),
@@ -42,7 +42,7 @@ export function createMemoryReadTool(memory: Memory) {
 // TOOL BUILDER
 // ============================================================================
 
-export function createTools(memory: Memory, intervals: IntervalsClient | null) {
+export function createTools(memory: MemoryStore, intervals: IntervalsClient | null) {
   return {
     // ── Cycling logic tools (local, no API) ─────────────────────────────
 

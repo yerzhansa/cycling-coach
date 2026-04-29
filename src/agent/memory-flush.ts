@@ -1,8 +1,7 @@
 import { tool, zodSchema, stepCountIs } from "ai";
 import type { ModelMessage } from "ai";
 import { z } from "zod";
-import type { MemorySectionSpec } from "@cycling-coach/core";
-import type { Memory } from "./memory.js";
+import type { MemorySectionSpec, MemoryStore } from "@cycling-coach/core";
 import { createMemoryReadTool } from "./tools.js";
 import type { LLM } from "./llm.js";
 
@@ -13,7 +12,7 @@ import type { LLM } from "./llm.js";
 export const SOFT_THRESHOLD_RATIO = 0.8;
 
 // ============================================================================
-// PROMPTS (sport-parameterized)
+// PROMPTS
 // ============================================================================
 
 const MEMORY_FLUSH_SYSTEM_PROMPT = `You are reviewing a conversation to extract and save important athlete
@@ -41,7 +40,7 @@ Only write sections that have new or changed information.`;
 // APPEND-ONLY MEMORY WRITE TOOL
 // ============================================================================
 
-function createFlushMemoryWriteTool(memory: Memory, sections: readonly MemorySectionSpec[]) {
+function createFlushMemoryWriteTool(memory: MemoryStore, sections: readonly MemorySectionSpec[]) {
   const sectionNames = sections.map((s) => s.name) as [string, ...string[]];
   return tool({
     description: "Write to a memory section (replaces entire section content)",
@@ -65,7 +64,7 @@ function createFlushMemoryWriteTool(memory: Memory, sections: readonly MemorySec
 export async function runMemoryFlush(params: {
   llm: LLM;
   messages: ModelMessage[];
-  memory: Memory;
+  memory: MemoryStore;
   memorySections: readonly MemorySectionSpec[];
 }): Promise<void> {
   const flushTools = {

@@ -8,7 +8,6 @@ import type {
   Sport,
   ToolRegistration,
 } from "@cycling-coach/core";
-import type { Memory } from "../agent/memory.js";
 import { createTools } from "../agent/tools.js";
 import { athleteProfileSchema } from "./schemas.js";
 
@@ -57,18 +56,12 @@ export const cyclingSport: Sport = {
   intervalsActivityTypes: ["Ride", "VirtualRide"],
   athleteProfileSchema,
   tools: (deps: CoreDeps): readonly ToolRegistration[] => {
-    // Phase 1A cast: deps.memory is MemoryStore (interface); the legacy
-    // createTools signature still wants the concrete Memory class because of
-    // private fields. Memory structurally satisfies MemoryStore at runtime.
-    // Commit 6 widens createTools/createMemoryReadTool to MemoryStore.
-    const toolset = createTools(deps.memory as unknown as Memory, deps.intervals);
+    const toolset = createTools(deps.memory, deps.intervals);
     return Object.entries(toolset).map(([name, t]) => ({
       name,
       description: (t as { description?: string }).description ?? "",
-      // Vercel AI SDK wraps the original Zod schema into FlexibleSchema; the raw
-      // ZodTypeAny is not recoverable from the Tool object. Commit 8 redefines
-      // each tool with explicit registration metadata so this placeholder goes
-      // away. No Core consumer reads ToolRegistration.inputSchema in commit 3.
+      // Vercel AI SDK wraps the Zod schema into a FlexibleSchema that
+      // doesn't expose the raw ZodTypeAny; introspection lives on `tool`.
       inputSchema: z.unknown(),
       tool: t,
     }));
