@@ -1,11 +1,13 @@
 import { stepCountIs } from "ai";
-import type { ModelMessage } from "ai";
+import type { ModelMessage, ToolSet } from "ai";
 import { IntervalsClient } from "intervals-icu-api";
+import type { CoreDeps, MemoryStore, SecretsResolver } from "@cycling-coach/core";
+import type { LLM as LLMInterface } from "@cycling-coach/core";
 import type { Config } from "../config.js";
+import { resolveSecretRef } from "../secrets/resolve.js";
 import { Memory } from "./memory.js";
 import { ChatStore } from "./chat-store.js";
 import { buildSystemPrompt } from "./system-prompt.js";
-import { createTools } from "./tools.js";
 import { withSessionLock } from "./session-lock.js";
 import { splitHistoryByBudget, makeSummaryMessage } from "./history-limit.js";
 import {
@@ -45,7 +47,7 @@ export class CyclingCoachAgent {
   private config: Config;
   private memory: Memory;
   private chatStore: ChatStore;
-  private tools: ReturnType<typeof createTools>;
+  private tools: ToolSet;
   private systemPrompt: string;
 
   constructor(config: Config) {
@@ -61,7 +63,15 @@ export class CyclingCoachAgent {
         })
       : null;
 
-    this.tools = createTools(this.memory, intervals);
+    const secrets: SecretsResolver = { resolve: resolveSecretRef };
+    const coreDeps: CoreDeps = {
+      llm: this.llm as unknown as LLMInterface,
+      intervals,
+      memory: this.memory as unknown as MemoryStore,
+      secrets,
+    };
+    const registrations = cyclingSport.tools(coreDeps);
+    this.tools = Object.fromEntries(registrations.map((r) => [r.name, r.tool])) as ToolSet;
     this.systemPrompt = buildSystemPrompt(cyclingSport, this.memory);
   }
 
