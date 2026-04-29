@@ -39,10 +39,10 @@ const CYCLING_VOCABULARY: readonly string[] = [
 
 const memorySections: readonly MemorySectionSpec[] = [
   { name: "profile", description: "FTP, weight, age, experience level, max HR, resting HR, W/kg" },
-  { name: "schedule", description: "Training days, weekly availability, scheduling preferences" },
+  { name: "schedule", description: "Training days, availability, weekly structure" },
   { name: "goals", description: "Target events, FTP targets, race dates, milestones" },
   { name: "equipment", description: "Bikes, trainer, power meter, head unit, indoor setup" },
-  { name: "health", description: "Injuries, sleep patterns, recovery needs, HRV, resting HR" },
+  { name: "health", description: "Injuries, sleep patterns, recovery needs, HRV" },
   { name: "preferences", description: "Indoor/outdoor, coaching style, cross-training" },
   { name: "notes", description: "Anything else important" },
 ];
