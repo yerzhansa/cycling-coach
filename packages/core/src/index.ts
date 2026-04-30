@@ -21,3 +21,9 @@ export type {
   SecretsResolver,
 } from "./secrets.js";
 export type { IntervalsClient } from "./intervals.js";
+
+export { CORE_SHARED_SECTIONS } from "./memory/shared-sections.js";
+export {
+  getEffectiveSections,
+  _resetWarnCacheForTesting,
+} from "./memory/effective-sections.js";
