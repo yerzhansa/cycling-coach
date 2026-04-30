@@ -4,6 +4,10 @@ export type { BinaryConfig } from "./binary.js";
 // ─── Setup wizard ─────────────────────────────────────────────────────
 export { runSetup } from "./setup.js";
 
+// ─── Binary entry point ───────────────────────────────────────────────
+export { runBinary } from "./run-binary.js";
+export type { RunBinaryHooks } from "./run-binary.js";
+
 // ─── Sport contract ───────────────────────────────────────────────────
 export type {
   CoreDeps,
