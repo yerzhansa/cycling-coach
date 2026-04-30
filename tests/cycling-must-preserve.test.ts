@@ -89,4 +89,10 @@ describe("cyclingSport.mustPreserveTokens", () => {
       }),
     ).toContain("FTP 280W");
   });
+
+  it("captures FTP at end of line (no trailing punctuation)", () => {
+    expect(
+      resolve({ "cycling-profile": "Max HR 188\nFTP 280W\nResting HR 52" }),
+    ).toContain("FTP 280W");
+  });
 });
