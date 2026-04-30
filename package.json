@@ -7,21 +7,13 @@
   "scripts": {
     "dev": "tsx --env-file=.env packages/cycling-coach/src/index.ts",
     "setup": "tsx --env-file=.env packages/cycling-coach/src/index.ts setup",
-    "build:core": "tsc -p packages/core",
-    "build:sport-cycling": "tsc -p packages/sport-cycling",
-    "build:cycling-coach": "tsc -p packages/cycling-coach",
-    "build:sport-running": "tsc -p packages/sport-running",
-    "build:sport-duathlon": "tsc -p packages/sport-duathlon",
-    "build:running-coach": "tsc -p packages/running-coach",
-    "build:duathlon-coach": "tsc -p packages/duathlon-coach",
-    "build:packages": "npm run build:core && npm run build:sport-cycling && npm run build:cycling-coach && npm run build:sport-running && npm run build:sport-duathlon && npm run build:running-coach && npm run build:duathlon-coach",
-    "build": "npm run build:packages",
+    "build": "pnpm -r build",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "oxlint packages/",
     "fmt": "oxfmt packages/",
     "fmt:check": "oxfmt --check packages/",
-    "check": "npm run build:packages && oxlint packages/"
+    "check": "pnpm -r build && oxlint packages/"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.69",

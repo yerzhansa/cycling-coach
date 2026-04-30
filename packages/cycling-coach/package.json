@@ -7,10 +7,12 @@
   "bin": {
     "cycling-coach": "dist/index.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "license": "MIT",
   "scripts": {
-    "build": "tsc",
+    "build": "tsup",
     "check": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -20,6 +22,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
+    "tsup": "^8.4.0",
     "typescript": "^6.0.2",
     "vitest": "^4.1.4"
   },
