@@ -9,6 +9,7 @@ import {
   resolveConfigSecrets,
 } from "@enduragent/core";
 import { cyclingSport } from "./cycling/sport.js";
+import { cyclingBinary } from "./cycling/binary.js";
 import { migrateCyclingLegacySections } from "./cycling/migrate-legacy-sections.js";
 
 // ============================================================================
@@ -46,8 +47,8 @@ async function main() {
   const command = parseCommand();
 
   if (command === "setup") {
-    const { runSetup } = await import("./setup.js");
-    await runSetup();
+    const { runSetup } = await import("@enduragent/core");
+    await runSetup(cyclingBinary);
     // pi-ai's OAuth callback server may leave socket/timer handles alive;
     // exit explicitly so the wizard returns the shell.
     process.exit(0);

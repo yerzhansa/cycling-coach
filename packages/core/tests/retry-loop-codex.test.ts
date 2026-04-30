@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { baseAgentConfig } from "../../../tests/helpers/base-agent-config.js";
+import { baseAgentConfig } from "./helpers/base-agent-config.js";
 import { cyclingSport } from "../../../src/cycling/sport.js";
 
 let tempHome: string;

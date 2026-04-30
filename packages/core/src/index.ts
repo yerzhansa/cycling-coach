@@ -1,11 +1,15 @@
+// ─── Binary deployment shell ──────────────────────────────────────────
+export type { BinaryConfig } from "./binary.js";
+
+// ─── Setup wizard ─────────────────────────────────────────────────────
+export { runSetup } from "./setup.js";
+
 // ─── Sport contract ───────────────────────────────────────────────────
 export type {
-  Binary,
   CoreDeps,
   IntervalsActivityType,
   MemorySectionSpec,
   Person,
-  RunBinaryArgs,
   Sport,
   SportId,
   SportMemoryShape,

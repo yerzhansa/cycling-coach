@@ -1,5 +1,3 @@
-// FIXME(commit 4): re-enable when setup.ts moves to packages/core/ — vi.doMock paths target src/secrets|src/auth|src/config which are now under packages/core/src/, but setup.ts at root imports them via @enduragent/core, so the mocks no-op until both test and setup.ts live in the same package.
-
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,6 +5,7 @@ import { join } from "node:path";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 
 import { scriptedPrompts } from "./helpers/scripted-prompts.js";
+import { cyclingBinary } from "../../../src/cycling/binary.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -62,7 +61,7 @@ function mockDetect(factory: () => Record<string, unknown>): void {
 // PURE HELPERS
 // ============================================================================
 
-describe.skip("_detectPrevBackend", () => {
+describe("_detectPrevBackend", () => {
   it("returns plain for string values", async () => {
     const { _detectPrevBackend } = await import("../src/setup.js");
     expect(_detectPrevBackend("sk-plain")).toBe("plain");
@@ -118,10 +117,10 @@ describe.skip("_detectPrevBackend", () => {
   });
 });
 
-describe.skip("_formatOrphanCleanup", () => {
+describe("_formatOrphanCleanup", () => {
   it("returns empty string when no entries", async () => {
     const { _formatOrphanCleanup } = await import("../src/setup.js");
-    expect(_formatOrphanCleanup({ createdThisRun: [] })).toBe("");
+    expect(_formatOrphanCleanup({ createdThisRun: [] }, cyclingBinary)).toBe("");
   });
 
   it("lists op item delete commands for op orphans", async () => {
@@ -137,7 +136,7 @@ describe.skip("_formatOrphanCleanup", () => {
           preExistedBeforeWizard: false,
         },
       ],
-    });
+    }, cyclingBinary);
     expect(out).toContain('op item delete "cycling-coach · llm_api_key" --vault "Personal"');
   });
 
@@ -153,7 +152,7 @@ describe.skip("_formatOrphanCleanup", () => {
           preExistedBeforeWizard: false,
         },
       ],
-    });
+    }, cyclingBinary);
     expect(out).toContain(
       'security delete-generic-password -s cycling-coach -a "llm_api_key" "/Users/x/Library/Keychains/login.keychain-db"',
     );
@@ -180,13 +179,13 @@ describe.skip("_formatOrphanCleanup", () => {
           preExistedBeforeWizard: false,
         },
       ],
-    });
+    }, cyclingBinary);
     expect(out).not.toContain("pre-existing");
     expect(out).toContain("new-this-run");
   });
 });
 
-describe.skip("_createSignalHandler", () => {
+describe("_createSignalHandler", () => {
   it("SIGINT handler prints orphan cleanup and exits 130", async () => {
     const { _createSignalHandler } = await import("../src/setup.js");
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
@@ -206,6 +205,7 @@ describe.skip("_createSignalHandler", () => {
         ],
       },
       "SIGINT",
+      cyclingBinary,
     );
     expect(() => handler()).toThrow("__exit_130");
     expect(stderrAll()).toContain('op item delete "orphan" --vault "Personal"');
@@ -230,6 +230,7 @@ describe.skip("_createSignalHandler", () => {
         ],
       },
       "SIGTERM",
+      cyclingBinary,
     );
     expect(() => handler()).toThrow("__exit_143");
     expect(stderrAll()).toContain("kc_orphan");
@@ -241,7 +242,7 @@ describe.skip("_createSignalHandler", () => {
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
       throw new Error(`__exit_${code}`);
     }) as never);
-    const handler = _createSignalHandler({ createdThisRun: [] }, "SIGINT");
+    const handler = _createSignalHandler({ createdThisRun: [] }, "SIGINT", cyclingBinary);
     expect(() => handler()).toThrow("__exit_130");
     expect(stderrAll()).toBe("");
     exitSpy.mockRestore();
@@ -266,6 +267,7 @@ describe.skip("_createSignalHandler", () => {
         ],
       },
       "SIGINT",
+      cyclingBinary,
     );
     expect(() => handler()).toThrow("__exit_130");
     expect(stderrAll()).not.toContain("pre-existing");
@@ -273,14 +275,14 @@ describe.skip("_createSignalHandler", () => {
   });
 });
 
-describe.skip("process.once signal registration (double-Ctrl+C safety)", () => {
+describe("process.once signal registration (double-Ctrl+C safety)", () => {
   it("registered handler fires at most once via process.once", async () => {
     const { _createSignalHandler } = await import("../src/setup.js");
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
       throw new Error(`__exit_${code}`);
     }) as never);
     const handler = vi.fn(
-      _createSignalHandler({ createdThisRun: [] }, "SIGINT"),
+      _createSignalHandler({ createdThisRun: [] }, "SIGINT", cyclingBinary),
     );
     process.once("SIGINT", handler);
     try {
@@ -299,7 +301,7 @@ describe.skip("process.once signal registration (double-Ctrl+C safety)", () => {
 // TTY GUARD (D14)
 // ============================================================================
 
-describe.skip("TTY guard (D14)", () => {
+describe("TTY guard (D14)", () => {
   it("non-TTY invocation → exit 2 with single-line stderr message and no FS/spawn", async () => {
     Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
     Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
@@ -313,7 +315,7 @@ describe.skip("TTY guard (D14)", () => {
       throw new Error(`__exit_${code}`);
     }) as never);
     const { runSetup } = await import("../src/setup.js");
-    await expect(runSetup()).rejects.toThrow("__exit_2");
+    await expect(runSetup(cyclingBinary)).rejects.toThrow("__exit_2");
     expect(stderrAll()).toContain("interactive TTY");
     expect(existsSync(CONFIG())).toBe(false);
     exitSpy.mockRestore();
@@ -324,7 +326,7 @@ describe.skip("TTY guard (D14)", () => {
 // D19 trim + D17 size cap
 // ============================================================================
 
-describe.skip("D19 trim + D17 size cap on secret inputs", () => {
+describe("D19 trim + D17 size cap on secret inputs", () => {
   it("_processSecretInput trims leading/trailing whitespace and logs INFO", async () => {
     // vi.doMock applies to subsequent import — re-mock clack so log.info is observable
     const infoSpy = vi.fn();
@@ -406,7 +408,7 @@ describe.skip("D19 trim + D17 size cap on secret inputs", () => {
 // BACKEND AVAILABILITY — options filtered by detectBackends
 // ============================================================================
 
-describe.skip("backend availability filtering", () => {
+describe("backend availability filtering", () => {
   it("op unavailable hides the 1Password option from the backend select", async () => {
     seedConfig({
       llm: { provider: "anthropic", model: "claude-sonnet-4-6", api_key: "sk-existing" },
@@ -436,7 +438,7 @@ describe.skip("backend availability filtering", () => {
       keychain: { available: true },
     }));
     const { runSetup } = await import("../src/setup.js");
-    await runSetup();
+    await runSetup(cyclingBinary);
 
     // options at index 2 = backend select; should have plain + keychain only
     const backendOpts = optionsCaptured[2] as Array<{ value: string }>;
@@ -476,7 +478,7 @@ describe.skip("backend availability filtering", () => {
       keychain: { available: false },
     }));
     const { runSetup } = await import("../src/setup.js");
-    await runSetup();
+    await runSetup(cyclingBinary);
 
     const backendOpts = optionsCaptured[2] as Array<{ value: string }>;
     const values = backendOpts.map((o) => o.value);
@@ -488,7 +490,7 @@ describe.skip("backend availability filtering", () => {
 // KEYCHAIN BACKEND — idempotency
 // ============================================================================
 
-describe.skip("Keychain backend", () => {
+describe("Keychain backend", () => {
   it("idempotency: seeded keychain SecretRef + Enter-keep → YAML bytes unchanged, no upsert", async () => {
     seedConfig({
       llm: {
@@ -536,7 +538,7 @@ describe.skip("Keychain backend", () => {
       KeychainUnsafeValueError: class extends Error {},
     }));
     const { runSetup } = await import("../src/setup.js");
-    await runSetup();
+    await runSetup(cyclingBinary);
     const after = readFileSync(CONFIG(), "utf-8");
     const beforeParsed = parseYaml(before);
     const afterParsed = parseYaml(after);
@@ -549,7 +551,7 @@ describe.skip("Keychain backend", () => {
 // 1PASSWORD BACKEND — idempotency + multi-vault fallback + needs-signin
 // ============================================================================
 
-describe.skip("1Password backend", () => {
+describe("1Password backend", () => {
   it("idempotency: seeded op SecretRef + Enter-keep + Keep-existing → no opItemUpdate call", async () => {
     seedConfig({
       llm: {
@@ -591,7 +593,7 @@ describe.skip("1Password backend", () => {
     const { runSetup } = await import("../src/setup.js");
     // Note: Enter-keep on llm triggers the "same backend, keep as-is" fast-path —
     // no opItemGet call either.
-    await runSetup();
+    await runSetup(cyclingBinary);
     expect(updateSpy).not.toHaveBeenCalled();
     const after = parseYaml(readFileSync(CONFIG(), "utf-8"));
     expect(after).toMatchObject({
@@ -647,7 +649,7 @@ describe.skip("1Password backend", () => {
       };
     });
     const { runSetup } = await import("../src/setup.js");
-    await runSetup();
+    await runSetup(cyclingBinary);
     expect(createCalls).toBe(2);
     const after = parseYaml(readFileSync(CONFIG(), "utf-8"));
     expect(after.llm.api_key.args).toEqual([
@@ -728,7 +730,7 @@ describe.skip("1Password backend", () => {
       };
     });
     const { runSetup } = await import("../src/setup.js");
-    await runSetup();
+    await runSetup(cyclingBinary);
     const after = parseYaml(readFileSync(CONFIG(), "utf-8"));
     expect(after.llm.api_key.command).toBe("/usr/local/bin/op");
     expect(detectCalls).toBeGreaterThanOrEqual(2);
@@ -764,7 +766,7 @@ describe.skip("1Password backend", () => {
       }),
     );
     const { runSetup } = await import("../src/setup.js");
-    await runSetup();
+    await runSetup(cyclingBinary);
     const after = parseYaml(readFileSync(CONFIG(), "utf-8"));
     expect(after.llm.api_key).toBe("sk-plain");
   });
@@ -774,7 +776,7 @@ describe.skip("1Password backend", () => {
 // D13 CROSS-BACKEND MIGRATION
 // ============================================================================
 
-describe.skip("D13 cross-backend migration", () => {
+describe("D13 cross-backend migration", () => {
   it("plain → op, new value typed: YAML ends with SecretRef, no plain remnant", async () => {
     seedConfig({
       llm: { provider: "anthropic", model: "claude-sonnet-4-6", api_key: "sk-old-plain" },
@@ -805,7 +807,7 @@ describe.skip("D13 cross-backend migration", () => {
       };
     });
     const { runSetup } = await import("../src/setup.js");
-    await runSetup();
+    await runSetup(cyclingBinary);
     const after = parseYaml(readFileSync(CONFIG(), "utf-8"));
     expect(typeof after.llm.api_key).toBe("object");
     expect(after.llm.api_key.source).toBe("exec");
@@ -844,7 +846,7 @@ describe.skip("D13 cross-backend migration", () => {
       };
     });
     const { runSetup } = await import("../src/setup.js");
-    await runSetup();
+    await runSetup(cyclingBinary);
     const after = readFileSync(CONFIG(), "utf-8");
     expect(parseYaml(after)).toEqual(parseYaml(before));
     expect(createSpy).not.toHaveBeenCalled();
@@ -885,7 +887,7 @@ describe.skip("D13 cross-backend migration", () => {
       KeychainUnsafeValueError: class extends Error {},
     }));
     const { runSetup } = await import("../src/setup.js");
-    await runSetup();
+    await runSetup(cyclingBinary);
     expect(parseYaml(readFileSync(CONFIG(), "utf-8"))).toEqual(parseYaml(before));
     expect(upsertSpy).not.toHaveBeenCalled();
   });
@@ -929,7 +931,7 @@ describe.skip("D13 cross-backend migration", () => {
       };
     });
     const { runSetup } = await import("../src/setup.js");
-    await runSetup();
+    await runSetup(cyclingBinary);
     const after = parseYaml(readFileSync(CONFIG(), "utf-8"));
     expect(after.llm.api_key).toBe("sk-new-plain");
     expect(deleteSpy).not.toHaveBeenCalled();
@@ -973,7 +975,7 @@ describe.skip("D13 cross-backend migration", () => {
       KeychainUnsafeValueError: class extends Error {},
     }));
     const { runSetup } = await import("../src/setup.js");
-    await runSetup();
+    await runSetup(cyclingBinary);
     expect(resolveSpy).not.toHaveBeenCalled();
   });
 });
@@ -982,7 +984,7 @@ describe.skip("D13 cross-backend migration", () => {
 // D11 GUARDED CLEANUP
 // ============================================================================
 
-describe.skip("D11 guarded cleanup on mid-wizard failure", () => {
+describe("D11 guarded cleanup on mid-wizard failure", () => {
   it("accept-cleanup: 2 created + 3rd fails → user accepts → both prior items deleted", async () => {
     vi.doMock("@clack/prompts", () =>
       scriptedPrompts({
@@ -1019,7 +1021,7 @@ describe.skip("D11 guarded cleanup on mid-wizard failure", () => {
       throw new Error(`__exit_${code}`);
     }) as never);
     const { runSetup } = await import("../src/setup.js");
-    await expect(runSetup()).rejects.toThrow("__exit_1");
+    await expect(runSetup(cyclingBinary)).rejects.toThrow("__exit_1");
     expect(deleteSpy).toHaveBeenCalledTimes(2);
     expect(existsSync(CONFIG())).toBe(false); // YAML untouched
     exitSpy.mockRestore();
@@ -1061,7 +1063,7 @@ describe.skip("D11 guarded cleanup on mid-wizard failure", () => {
       throw new Error(`__exit_${code}`);
     }) as never);
     const { runSetup } = await import("../src/setup.js");
-    await expect(runSetup()).rejects.toThrow("__exit_1");
+    await expect(runSetup(cyclingBinary)).rejects.toThrow("__exit_1");
     expect(deleteSpy).not.toHaveBeenCalled();
     expect(stderrAll()).toContain("op item delete");
     exitSpy.mockRestore();
@@ -1119,7 +1121,7 @@ describe.skip("D11 guarded cleanup on mid-wizard failure", () => {
       throw new Error(`__exit_${code}`);
     }) as never);
     const { runSetup } = await import("../src/setup.js");
-    await expect(runSetup()).rejects.toThrow("__exit_1");
+    await expect(runSetup(cyclingBinary)).rejects.toThrow("__exit_1");
     // Only the NEW intervals item should be deleted; the LLM one pre-existed.
     expect(deleteSpy).toHaveBeenCalledTimes(1);
     const firstDeleteArgs = deleteSpy.mock.calls[0];
@@ -1168,7 +1170,7 @@ describe.skip("D11 guarded cleanup on mid-wizard failure", () => {
       throw new Error(`__exit_${code}`);
     }) as never);
     const { runSetup } = await import("../src/setup.js");
-    await expect(runSetup()).rejects.toThrow("__exit_1");
+    await expect(runSetup(cyclingBinary)).rejects.toThrow("__exit_1");
     expect(deleteSpy).toHaveBeenCalledTimes(2); // both attempted
     exitSpy.mockRestore();
   });
@@ -1178,7 +1180,7 @@ describe.skip("D11 guarded cleanup on mid-wizard failure", () => {
 // SecretRef uses discovered vault (not hardcoded "Private")
 // ============================================================================
 
-describe.skip("SecretRef uses discovered vault from opItemCreate", () => {
+describe("SecretRef uses discovered vault from opItemCreate", () => {
   it("single-vault consumer account → YAML SecretRef reflects actual vault name (Personal)", async () => {
     vi.doMock("@clack/prompts", () =>
       scriptedPrompts({
@@ -1206,7 +1208,7 @@ describe.skip("SecretRef uses discovered vault from opItemCreate", () => {
       };
     });
     const { runSetup } = await import("../src/setup.js");
-    await runSetup();
+    await runSetup(cyclingBinary);
     const after = parseYaml(readFileSync(CONFIG(), "utf-8"));
     expect(after.llm.api_key.args[1]).toBe(
       "op://Personal/cycling-coach · llm_api_key/credential",
