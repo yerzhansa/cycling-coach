@@ -59,7 +59,7 @@ const VALID_FOUR_SECTION_SUMMARY = [
   "- None outstanding",
 ].join("\n");
 
-const CYCLING_VOCABULARY = ["FTP", "W/kg", "Coggan", "VO2max", "watts", "sweet spot", "TTE"];
+import { CYCLING_VOCABULARY } from "../src/cycling/sport.js";
 
 const EMPTY_SNAPSHOT: MemorySnapshot = {
   read: () => null,

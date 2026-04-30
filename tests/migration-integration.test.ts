@@ -4,12 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CyclingCoachAgent } from "../src/agent/core.js";
 import { migrateCyclingLegacySections } from "../src/cycling/migrate-legacy-sections.js";
-
-// Steps 1-3 of the Wave 2 integration test, per
-// docs/battle-plan-core-sport-seam-wave-2.md commit 10. Deterministic:
-// pre-seed legacy MEMORY.md → construct agent → invoke the wired-up
-// migrator → assert post-migration file shape. Steps 4-5 (LLM-driven
-// chronic-fact redistribution canary) ship with commit 11b.
+import { baseAgentConfig } from "./helpers/base-agent-config.js";
 
 describe("Wave 2 migration — binary startup integration (steps 1-3)", () => {
   let dataDir: string;
@@ -28,26 +23,6 @@ describe("Wave 2 migration — binary startup integration (steps 1-3)", () => {
     logSpy.mockRestore();
   });
 
-  function baseConfig() {
-    return {
-      llm: {
-        provider: "openai-codex" as const,
-        model: "gpt-5.4",
-        apiKey: "",
-        authProfile: "openai-codex",
-      },
-      intervals: { apiKey: "", athleteId: "0" },
-      telegram: { botToken: "" },
-      session: {
-        historyTokenBudgetRatio: 0.3,
-        idleMinutes: 0,
-        dailyResetHour: 4,
-      },
-      contextWindowTokens: 272_000,
-      dataDir,
-    };
-  }
-
   it("migrates legacy section names through agent.getMemory() at startup", () => {
     // Step 1: pre-seed fixture with full legacy shape.
     writeFileSync(
@@ -63,7 +38,7 @@ describe("Wave 2 migration — binary startup integration (steps 1-3)", () => {
     );
 
     // Step 2: construct the agent (mirrors src/index.ts startup path).
-    const agent = new CyclingCoachAgent(baseConfig());
+    const agent = new CyclingCoachAgent(baseAgentConfig(dataDir));
 
     // Wiring: this is exactly what src/index.ts does immediately after
     // agent construction. The integration test asserts that calling the
@@ -95,7 +70,7 @@ describe("Wave 2 migration — binary startup integration (steps 1-3)", () => {
 
   it("is a no-op for fresh installs (no MEMORY.md present)", () => {
     // No file pre-seeded. Construct agent, run migrator, file should not be created.
-    const agent = new CyclingCoachAgent(baseConfig());
+    const agent = new CyclingCoachAgent(baseAgentConfig(dataDir));
     expect(() => migrateCyclingLegacySections(agent.getMemory())).not.toThrow();
 
     const events = logSpy.mock.calls.map((args) => JSON.parse(String(args[0])));
@@ -105,7 +80,7 @@ describe("Wave 2 migration — binary startup integration (steps 1-3)", () => {
   it("is idempotent — second call after construction leaves file unchanged", () => {
     writeFileSync(memoryFile, "## profile\nFTP 247W\n## schedule\nMon, Wed, Fri\n", "utf-8");
 
-    const agent = new CyclingCoachAgent(baseConfig());
+    const agent = new CyclingCoachAgent(baseAgentConfig(dataDir));
     migrateCyclingLegacySections(agent.getMemory());
     const afterFirst = readFileSync(memoryFile, "utf-8");
 

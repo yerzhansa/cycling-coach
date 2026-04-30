@@ -6,6 +6,10 @@ import type { MemoryStore } from "@cycling-coach/core";
 // MEMORY SYSTEM
 // ============================================================================
 
+const SECTION_SPLIT = /(?=^## )/m;
+const markerOf = (section: string) => `## ${section}`;
+const bodyOf = (block: string) => block.slice(block.indexOf("\n") + 1);
+
 export class Memory implements MemoryStore {
   private memoryDir: string;
   private plansDir: string;
@@ -28,7 +32,7 @@ export class Memory implements MemoryStore {
   writeSection(section: string, content: string): void {
     const path = join(this.memoryDir, "MEMORY.md");
     const existing = this.readMemory();
-    const marker = `## ${section}`;
+    const marker = markerOf(section);
     const newBlock = `${marker}\n${content}\n`;
 
     if (!existing) {
@@ -36,15 +40,14 @@ export class Memory implements MemoryStore {
       return;
     }
 
-    // Split by section headers, find and replace the matching one
-    const parts = existing.split(/(?=^## )/m);
+    const parts = existing.split(SECTION_SPLIT);
     const idx = parts.findIndex((p) => p.startsWith(marker + "\n"));
 
     if (idx >= 0) {
       parts[idx] = newBlock;
       writeFileSync(path, parts.join(""), "utf-8");
     } else {
-      // No matching section → append at end (preserves legacy content)
+      // Append at end (preserves legacy content not covered by any known section)
       writeFileSync(path, existing.trimEnd() + "\n\n" + newBlock, "utf-8");
     }
   }
@@ -52,13 +55,11 @@ export class Memory implements MemoryStore {
   readSection(section: string): string | null {
     const path = join(this.memoryDir, "MEMORY.md");
     if (!existsSync(path)) return null;
-    const existing = readFileSync(path, "utf-8");
-    const marker = `## ${section}`;
-    const parts = existing.split(/(?=^## )/m);
+    const marker = markerOf(section);
+    const parts = readFileSync(path, "utf-8").split(SECTION_SPLIT);
     const block = parts.find((p) => p.startsWith(marker + "\n"));
     if (!block) return null;
-    // Strip header line and any trailing newline; return raw body (may be empty).
-    const body = block.slice(block.indexOf("\n") + 1);
+    const body = bodyOf(block);
     return body.endsWith("\n") ? body.slice(0, -1) : body;
   }
 
@@ -66,14 +67,12 @@ export class Memory implements MemoryStore {
     const path = join(this.memoryDir, "MEMORY.md");
     if (!existsSync(path)) return "noop";
 
-    const existing = readFileSync(path, "utf-8");
-    const fromMarker = `## ${from}`;
-    const toMarker = `## ${to}`;
-    const parts = existing.split(/(?=^## )/m);
+    const fromMarker = markerOf(from);
+    const toMarker = markerOf(to);
+    const parts = readFileSync(path, "utf-8").split(SECTION_SPLIT);
     const fromIdx = parts.findIndex((p) => p.startsWith(fromMarker + "\n"));
     if (fromIdx < 0) return "noop";
 
-    const bodyOf = (block: string) => block.slice(block.indexOf("\n") + 1);
     const toIdx = parts.findIndex((p) => p.startsWith(toMarker + "\n"));
 
     if (toIdx >= 0) {

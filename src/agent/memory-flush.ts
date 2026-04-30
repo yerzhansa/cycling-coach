@@ -22,10 +22,11 @@ write, so include ALL current facts for that section, not just new ones.`;
 
 function buildFlushUserPrompt(sections: readonly MemorySectionSpec[]): string {
   const sectionList = sections.map((s) => `- "${s.name}": ${s.description}`).join("\n");
-  // Transitional migration clause (added in commit 11b). Helps the LLM
-  // redistribute legacy content from the cycling-history rename to the right
-  // destinations. Remove in a future cleanup commit once the chronic-keyword
-  // scan from commit 11c stays silent for an extended period.
+  // The transitional migration clause helps the LLM redistribute legacy
+  // content (chronic facts in cycling-history, body data in cycling-profile)
+  // to the right destinations after the section rename. Remove once the
+  // chronic_facts_stuck_in_cycling_history warn stays silent for an extended
+  // period — likely after one or two flushes per existing user.
   return `Review this conversation and save athlete details to structured memory
 sections. First read existing memory with memory_read, then write each
 section that has new or updated information.
