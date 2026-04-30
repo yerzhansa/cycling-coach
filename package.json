@@ -29,7 +29,10 @@
     "@ai-sdk/anthropic": "^3.0.69",
     "@ai-sdk/google": "^3.0.63",
     "@ai-sdk/openai": "^3.0.52",
+    "@ai-sdk/provider": "^3.0.9",
+    "@ai-sdk/provider-utils": "^4.0.24",
     "@clack/prompts": "^1.2.0",
+    "@cycling-coach/core": "workspace:*",
     "@mariozechner/pi-ai": "0.67.6",
     "ai": "^6.0.158",
     "grammy": "^1.42.0",
@@ -49,9 +52,15 @@
   "engines": {
     "node": ">=20"
   },
-  "workspaces": [
-    "packages/*"
-  ],
+  "packageManager": "pnpm@10.6.3",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@google/genai",
+      "esbuild",
+      "msw",
+      "protobufjs"
+    ]
+  },
   "license": "MIT",
   "repository": {
     "type": "git",

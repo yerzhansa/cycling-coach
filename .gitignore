@@ -10,3 +10,4 @@ scripts/
 CLAUDE.local.md
 .tests/
 .agents/
+skills-lock.json
