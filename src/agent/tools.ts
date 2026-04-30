@@ -17,8 +17,16 @@ import type {
   RaceType,
   IntervalsWorkoutInput,
 } from "../cycling/index.js";
-import type { MemoryStore } from "@cycling-coach/core";
+import type { MemorySectionSpec, MemoryStore } from "@cycling-coach/core";
 import type { IntervalsClient } from "intervals-icu-api";
+
+function buildMemoryWriteDescription(sections: readonly MemorySectionSpec[]): string {
+  const sectionList = sections.map((s) => `${s.name} (${s.description})`).join("; ");
+  return (
+    "Write to long-term memory (replaces section content) or daily notes. " +
+    `Sections: ${sectionList}.`
+  );
+}
 
 // ============================================================================
 // HELPERS
@@ -42,7 +50,12 @@ export function createMemoryReadTool(memory: MemoryStore) {
 // TOOL BUILDER
 // ============================================================================
 
-export function createTools(memory: MemoryStore, intervals: IntervalsClient | null) {
+export function createTools(
+  memory: MemoryStore,
+  intervals: IntervalsClient | null,
+  sections: readonly MemorySectionSpec[],
+) {
+  const sectionNames = sections.map((s) => s.name) as [string, ...string[]];
   return {
     // ── Cycling logic tools (local, no API) ─────────────────────────────
 
@@ -158,19 +171,14 @@ export function createTools(memory: MemoryStore, intervals: IntervalsClient | nu
     memory_read: createMemoryReadTool(memory),
 
     memory_write: tool({
-      description:
-        "Write to long-term memory (replaces section content) or daily notes. " +
-        "Use sections to organize athlete data: profile (FTP, weight, age, experience), " +
-        "schedule (training days, availability), goals (target events, FTP targets), " +
-        "equipment (bikes, trainer, power meter), health (injuries, HR, sleep), " +
-        "preferences (indoor/outdoor, coaching style), notes (anything else).",
+      description: buildMemoryWriteDescription(sections),
       inputSchema: zodSchema(
         z.object({
           type: z
             .enum(["memory", "daily"])
             .describe("'memory' for long-term facts, 'daily' for today's notes"),
           section: z
-            .enum(["profile", "schedule", "goals", "equipment", "health", "preferences", "notes"])
+            .enum(sectionNames)
             .optional()
             .describe("Memory section to write to (required when type='memory'). Replaces the section content."),
           content: z.string().describe("The information to save"),

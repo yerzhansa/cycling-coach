@@ -1,7 +1,7 @@
 import { stepCountIs } from "ai";
 import type { ModelMessage, ToolSet } from "ai";
 import { IntervalsClient } from "intervals-icu-api";
-import type { CoreDeps, SecretsResolver } from "@cycling-coach/core";
+import { getEffectiveSections, type CoreDeps, type SecretsResolver } from "@cycling-coach/core";
 import type { Config } from "../config.js";
 import { resolveSecretRef } from "../secrets/resolve.js";
 import { Memory } from "./memory.js";
@@ -79,7 +79,7 @@ export class CyclingCoachAgent {
       llm: this.llm,
       messages,
       memory: this.memory,
-      memorySections: cyclingSport.memorySections,
+      memorySections: getEffectiveSections(cyclingSport),
     });
   }
 
