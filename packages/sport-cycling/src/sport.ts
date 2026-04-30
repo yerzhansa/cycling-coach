@@ -1,5 +1,3 @@
-import { readFileSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
 import { z } from "zod";
 import {
   createCoreToolsWithSportConfig,
@@ -12,23 +10,13 @@ import {
   type Sport,
   type ToolRegistration,
 } from "@enduragent/core";
+import soul from "../SOUL.md";
+import { skills as skillEntries } from "./skills.generated.js";
 import { createCyclingTools } from "./tools.js";
 import { athleteProfileSchema } from "./schemas.js";
 
-const PACKAGE_ROOT = resolve(import.meta.dirname, "..");
-
-function loadSoul(): string {
-  return readFileSync(join(PACKAGE_ROOT, "SOUL.md"), "utf-8");
-}
-
 function loadSkills(): Record<string, string> {
-  const skillsDir = join(PACKAGE_ROOT, "skills");
-  return Object.fromEntries(
-    readdirSync(skillsDir)
-      .filter((f) => f.endsWith(".md"))
-      .sort()
-      .map((f) => [f.replace(/\.md$/, ""), readFileSync(join(skillsDir, f), "utf-8")]),
-  );
+  return Object.fromEntries(skillEntries.map(({ name, content }) => [name, content]));
 }
 
 export const CYCLING_VOCABULARY: readonly string[] = [
@@ -63,7 +51,7 @@ const memorySections: readonly MemorySectionSpec[] = [
 
 export const cyclingSport: Sport = {
   id: "cycling",
-  soul: loadSoul(),
+  soul,
   skills: loadSkills(),
   memorySections,
   mustPreserveTokens: (memory: MemorySnapshot): readonly string[] => {
