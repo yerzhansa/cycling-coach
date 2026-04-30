@@ -1,0 +1,118 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CyclingCoachAgent } from "../src/agent/core.js";
+import { migrateCyclingLegacySections } from "../src/cycling/migrate-legacy-sections.js";
+
+// Steps 1-3 of the Wave 2 integration test, per
+// docs/battle-plan-core-sport-seam-wave-2.md commit 10. Deterministic:
+// pre-seed legacy MEMORY.md → construct agent → invoke the wired-up
+// migrator → assert post-migration file shape. Steps 4-5 (LLM-driven
+// chronic-fact redistribution canary) ship with commit 11b.
+
+describe("Wave 2 migration — binary startup integration (steps 1-3)", () => {
+  let dataDir: string;
+  let memoryFile: string;
+  let logSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "cc-migrate-int-"));
+    mkdirSync(join(dataDir, "memory"), { recursive: true });
+    memoryFile = join(dataDir, "memory", "MEMORY.md");
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+    logSpy.mockRestore();
+  });
+
+  function baseConfig() {
+    return {
+      llm: {
+        provider: "openai-codex" as const,
+        model: "gpt-5.4",
+        apiKey: "",
+        authProfile: "openai-codex",
+      },
+      intervals: { apiKey: "", athleteId: "0" },
+      telegram: { botToken: "" },
+      session: {
+        historyTokenBudgetRatio: 0.3,
+        idleMinutes: 0,
+        dailyResetHour: 4,
+      },
+      contextWindowTokens: 272_000,
+      dataDir,
+    };
+  }
+
+  it("migrates legacy section names through agent.getMemory() at startup", () => {
+    // Step 1: pre-seed fixture with full legacy shape.
+    writeFileSync(
+      memoryFile,
+      "## profile\nFTP 247W, 72kg\n" +
+        "## schedule\nMon, Wed, Fri\n" +
+        "## goals\nSub-3:30 century in October\n" +
+        "## equipment\nTrek Émonda, Wahoo Kickr\n" +
+        "## health\nHypertension; lisinopril 10mg; knee twinge resolved\n" +
+        "## preferences\nIndoor when raining\n" +
+        "## notes\nCurious about VO2max blocks\n",
+      "utf-8",
+    );
+
+    // Step 2: construct the agent (mirrors src/index.ts startup path).
+    const agent = new CyclingCoachAgent(baseConfig());
+
+    // Wiring: this is exactly what src/index.ts does immediately after
+    // agent construction. The integration test asserts that calling the
+    // migrator via the agent's getMemory() accessor produces the expected
+    // file shape — proving the seam used by the binary is correct.
+    migrateCyclingLegacySections(agent.getMemory());
+
+    // Step 3: assert post-migration file shape.
+    const after = readFileSync(memoryFile, "utf-8");
+
+    // Legacy names absent
+    expect(after).not.toMatch(/^## profile$/m);
+    expect(after).not.toMatch(/^## equipment$/m);
+    expect(after).not.toMatch(/^## health$/m);
+
+    // Cycling-prefixed names present with original content
+    expect(after).toContain("## cycling-profile\nFTP 247W, 72kg\n");
+    expect(after).toContain("## cycling-equipment\nTrek Émonda, Wahoo Kickr\n");
+    expect(after).toContain(
+      "## cycling-history\nHypertension; lisinopril 10mg; knee twinge resolved\n",
+    );
+
+    // Core-shared sections untouched
+    expect(after).toContain("## schedule\nMon, Wed, Fri\n");
+    expect(after).toContain("## goals\nSub-3:30 century in October\n");
+    expect(after).toContain("## preferences\nIndoor when raining\n");
+    expect(after).toContain("## notes\nCurious about VO2max blocks\n");
+  });
+
+  it("is a no-op for fresh installs (no MEMORY.md present)", () => {
+    // No file pre-seeded. Construct agent, run migrator, file should not be created.
+    const agent = new CyclingCoachAgent(baseConfig());
+    expect(() => migrateCyclingLegacySections(agent.getMemory())).not.toThrow();
+
+    const events = logSpy.mock.calls.map((args) => JSON.parse(String(args[0])));
+    expect(events.map((e) => e.outcome)).toEqual(["noop", "noop", "noop"]);
+  });
+
+  it("is idempotent — second call after construction leaves file unchanged", () => {
+    writeFileSync(memoryFile, "## profile\nFTP 247W\n## schedule\nMon, Wed, Fri\n", "utf-8");
+
+    const agent = new CyclingCoachAgent(baseConfig());
+    migrateCyclingLegacySections(agent.getMemory());
+    const afterFirst = readFileSync(memoryFile, "utf-8");
+
+    migrateCyclingLegacySections(agent.getMemory());
+    const afterSecond = readFileSync(memoryFile, "utf-8");
+
+    expect(afterSecond).toBe(afterFirst);
+    expect(afterFirst).toContain("## cycling-profile\nFTP 247W\n");
+  });
+});
