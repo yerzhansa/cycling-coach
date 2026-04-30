@@ -76,8 +76,8 @@ function createFlushMemoryWriteTool(memory: MemoryStore, sections: readonly Memo
 // structured warn if chronic content (which belongs in `medical-history`) is
 // still parked in cycling-history — observability for the Wave 2 migration's
 // "convergence over 1-3 flushes" assumption from ADR-0003. Substring matching
-// is intentional (catches "antihypertensive"); expand the list as we observe
-// real data.
+// is intentional (catches plurals like "medications" via "medication"); expand
+// the list as we observe real data.
 const CHRONIC_KEYWORDS = [
   "hypertension",
   "diabetes",
