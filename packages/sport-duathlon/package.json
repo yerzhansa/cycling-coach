@@ -1,0 +1,26 @@
+{
+  "name": "@enduragent/sport-duathlon",
+  "version": "0.0.1",
+  "private": false,
+  "description": "Duathlon coordinator sport package (alpha — not yet implemented). Composes sport-cycling + sport-running per ADR-0002.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "test": "echo 'no tests yet (alpha)'"
+  },
+  "dependencies": {
+    "@enduragent/core": "workspace:*",
+    "@enduragent/sport-cycling": "workspace:*",
+    "@enduragent/sport-running": "workspace:*",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.2"
+  },
+  "license": "MIT"
+}

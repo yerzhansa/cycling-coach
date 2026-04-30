@@ -1,0 +1,24 @@
+{
+  "name": "@enduragent/sport-running",
+  "version": "0.0.1",
+  "private": false,
+  "description": "Running sport package (alpha — not yet implemented). Implements the Sport contract from @enduragent/core.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "test": "echo 'no tests yet (alpha)'"
+  },
+  "dependencies": {
+    "@enduragent/core": "workspace:*",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.2"
+  },
+  "license": "MIT"
+}

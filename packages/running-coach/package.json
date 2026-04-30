@@ -1,0 +1,28 @@
+{
+  "name": "running-coach",
+  "version": "2026.4.30",
+  "private": false,
+  "description": "AI running coaching agent (alpha — not yet implemented).",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "running-coach": "dist/index.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "test": "echo 'no tests yet (alpha)'"
+  },
+  "dependencies": {
+    "@enduragent/sport-running": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.2"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
+}

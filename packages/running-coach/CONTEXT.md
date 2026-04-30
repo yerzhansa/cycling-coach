@@ -1,0 +1,7 @@
+# Running Coach (binary stub)
+
+Not yet implemented. Tracked in issue #47. When implemented, this binary will wrap `@enduragent/sport-running` with the runner-flavored deployment shell.
+
+## Status: alpha — empty stub
+
+The package exists on npm to reserve the binary name and exercise the publish pipeline. The current `running-coach` CLI prints a status banner and exits.
