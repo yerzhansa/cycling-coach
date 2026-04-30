@@ -49,6 +49,9 @@
   "engines": {
     "node": ">=20"
   },
+  "workspaces": [
+    "packages/*"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
