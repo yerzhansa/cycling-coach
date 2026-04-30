@@ -1,8 +1,8 @@
 {
-  "name": "enduragent-workspace",
+  "name": "enduragent-monorepo",
   "version": "0.0.0-private",
   "private": true,
-  "description": "Workspace coordinator for the enduragent monorepo (Core + sport packages + binary packages).",
+  "description": "Multi-sport AI coaching agent platform — workspace root.",
   "type": "module",
   "scripts": {
     "dev": "tsx --env-file=.env packages/cycling-coach/src/index.ts",
@@ -15,24 +15,10 @@
     "fmt:check": "oxfmt --check packages/",
     "check": "pnpm -r build && oxlint packages/"
   },
-  "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.69",
-    "@ai-sdk/google": "^3.0.63",
-    "@ai-sdk/openai": "^3.0.52",
-    "@ai-sdk/provider": "^3.0.9",
-    "@ai-sdk/provider-utils": "^4.0.24",
-    "@clack/prompts": "^1.2.0",
-    "@enduragent/core": "workspace:*",
-    "@enduragent/sport-cycling": "workspace:*",
-    "@mariozechner/pi-ai": "0.67.6",
-    "ai": "^6.0.158",
-    "grammy": "^1.42.0",
-    "intervals-icu-api": "^0.1.2",
-    "yaml": "^2.8.3",
-    "zod": "^4.3.6"
-  },
   "devDependencies": {
     "@changesets/cli": "^2.27.0",
+    "@enduragent/core": "workspace:*",
+    "@enduragent/sport-cycling": "workspace:*",
     "@types/node": "^25.6.0",
     "msw": "^2.13.3",
     "oxfmt": "^0.45.0",
