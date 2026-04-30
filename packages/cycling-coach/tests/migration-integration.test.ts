@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { CoachAgent } from "@enduragent/core";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import { migrateCyclingLegacySections } from "@enduragent/sport-cycling/migrate";
-import { baseAgentConfig } from "../packages/core/tests/helpers/base-agent-config.js";
+import { baseAgentConfig } from "../../core/tests/helpers/base-agent-config.js";
 
 describe("Wave 2 migration — binary startup integration (steps 1-3)", () => {
   let dataDir: string;

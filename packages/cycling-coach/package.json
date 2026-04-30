@@ -1,0 +1,29 @@
+{
+  "name": "cycling-coach",
+  "version": "2026.4.26",
+  "description": "AI cycling coaching agent — BYOK + intervals.icu + Telegram",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "cycling-coach": "dist/index.js"
+  },
+  "files": ["dist"],
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@enduragent/core": "workspace:*",
+    "@enduragent/sport-cycling": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

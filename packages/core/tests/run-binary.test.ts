@@ -31,7 +31,7 @@ const stubRunningSport: Sport = {
   mustPreserveTokens: () => ["VDOT"],
   intervalsActivityTypes: ["Run", "TrailRun"],
   athleteProfileSchema: z.object({}),
-  tools: (deps: CoreDeps): readonly ToolRegistration[] => {
+  tools: (_deps: CoreDeps): readonly ToolRegistration[] => {
     // Compose only Core's generic memory tools. Sport-specific tools (zones,
     // plan-skeleton, intervals.icu workouts) would land here for a real sport.
     return [];
