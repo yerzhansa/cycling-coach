@@ -49,6 +49,19 @@ export class Memory implements MemoryStore {
     }
   }
 
+  readSection(section: string): string | null {
+    const path = join(this.memoryDir, "MEMORY.md");
+    if (!existsSync(path)) return null;
+    const existing = readFileSync(path, "utf-8");
+    const marker = `## ${section}`;
+    const parts = existing.split(/(?=^## )/m);
+    const block = parts.find((p) => p.startsWith(marker + "\n"));
+    if (!block) return null;
+    // Strip header line and any trailing newline; return raw body (may be empty).
+    const body = block.slice(block.indexOf("\n") + 1);
+    return body.endsWith("\n") ? body.slice(0, -1) : body;
+  }
+
   renameSection(from: string, to: string): "renamed" | "noop" | "merged" {
     const path = join(this.memoryDir, "MEMORY.md");
     if (!existsSync(path)) return "noop";

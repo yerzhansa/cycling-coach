@@ -67,6 +67,43 @@ function createFlushMemoryWriteTool(memory: MemoryStore, sections: readonly Memo
 }
 
 // ============================================================================
+// CHRONIC-KEYWORD CONVERGENCE SCAN
+// ============================================================================
+
+// Substring matches against `cycling-history` body after each flush. Fires a
+// structured warn if chronic content (which belongs in `medical-history`) is
+// still parked in cycling-history — observability for the Wave 2 migration's
+// "convergence over 1-3 flushes" assumption from ADR-0003. Substring matching
+// is intentional (catches "antihypertensive"); expand the list as we observe
+// real data.
+const CHRONIC_KEYWORDS = [
+  "hypertension",
+  "diabetes",
+  "asthma",
+  "chronic",
+  "lisinopril",
+  "metformin",
+  "statins",
+  "long-term",
+  "medication",
+] as const;
+
+function scanForStuckChronic(memory: MemoryStore): void {
+  const cyclingHistory = memory.readSection("cycling-history");
+  if (!cyclingHistory) return;
+  const lower = cyclingHistory.toLowerCase();
+  const matches = CHRONIC_KEYWORDS.filter((k) => lower.includes(k));
+  if (matches.length === 0) return;
+  console.warn(
+    JSON.stringify({
+      event: "chronic_facts_stuck_in_cycling_history",
+      keywords: matches,
+      hint: "Run another memory_flush; if persists, manually move to medical-history",
+    }),
+  );
+}
+
+// ============================================================================
 // MEMORY FLUSH
 // ============================================================================
 
@@ -93,4 +130,5 @@ export async function runMemoryFlush(params: {
   });
 
   params.memory.reload();
+  scanForStuckChronic(params.memory);
 }
