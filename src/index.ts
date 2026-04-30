@@ -3,6 +3,7 @@ import { parseArgs } from "node:util";
 import { loadConfig, resolveConfigSecrets } from "./config.js";
 import { SecretResolutionError } from "./secrets/types.js";
 import { CyclingCoachAgent } from "./agent/core.js";
+import { migrateCyclingLegacySections } from "./cycling/migrate-legacy-sections.js";
 import { createTelegramBot, notifyUpdate } from "./channels/telegram.js";
 
 // ============================================================================
@@ -79,6 +80,11 @@ async function main() {
   }
 
   const agent = new CyclingCoachAgent(config);
+
+  // One-shot migration of legacy cycling-coach section names. Runs once
+  // per process at startup, after Memory exists, before any chat handler
+  // is reachable. Idempotent — noop on already-migrated data.
+  migrateCyclingLegacySections(agent.getMemory());
 
   if (config.telegram.botToken) {
     // Telegram mode
