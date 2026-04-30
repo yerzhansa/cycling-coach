@@ -26,7 +26,11 @@ export class Memory implements MemoryStore {
   readMemory(): string {
     const path = join(this.memoryDir, "MEMORY.md");
     if (!existsSync(path)) return "";
-    return readFileSync(path, "utf-8");
+    // Normalize CRLF → LF so section parsing works for files authored on
+    // Windows or pasted from sources like Word/Notion. The marker check
+    // `parts[idx].startsWith(marker + "\n")` would otherwise miss CRLF
+    // headers and silently no-op every rename / read.
+    return readFileSync(path, "utf-8").replace(/\r\n/g, "\n");
   }
 
   writeSection(section: string, content: string): void {
@@ -53,10 +57,10 @@ export class Memory implements MemoryStore {
   }
 
   readSection(section: string): string | null {
-    const path = join(this.memoryDir, "MEMORY.md");
-    if (!existsSync(path)) return null;
+    const content = this.readMemory();
+    if (!content) return null;
     const marker = markerOf(section);
-    const parts = readFileSync(path, "utf-8").split(SECTION_SPLIT);
+    const parts = content.split(SECTION_SPLIT);
     const block = parts.find((p) => p.startsWith(marker + "\n"));
     if (!block) return null;
     const body = bodyOf(block);
@@ -65,11 +69,12 @@ export class Memory implements MemoryStore {
 
   renameSection(from: string, to: string): "renamed" | "noop" | "merged" {
     const path = join(this.memoryDir, "MEMORY.md");
-    if (!existsSync(path)) return "noop";
+    const content = this.readMemory();
+    if (!content) return "noop";
 
     const fromMarker = markerOf(from);
     const toMarker = markerOf(to);
-    const parts = readFileSync(path, "utf-8").split(SECTION_SPLIT);
+    const parts = content.split(SECTION_SPLIT);
     const fromIdx = parts.findIndex((p) => p.startsWith(fromMarker + "\n"));
     if (fromIdx < 0) return "noop";
 

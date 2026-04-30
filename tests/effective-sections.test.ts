@@ -107,4 +107,35 @@ describe("getEffectiveSections", () => {
     expect(getEffectiveSections(sport)).toEqual(CORE_SHARED_SECTIONS);
     expect(warnSpy).not.toHaveBeenCalled();
   });
+
+  it("warns when sport's memorySections array contains an in-array duplicate", () => {
+    const sport = makeSport("cycling", [
+      { name: "cycling-profile", description: "first" },
+      { name: "cycling-profile", description: "second (dup)" },
+    ]);
+    const effective = getEffectiveSections(sport);
+
+    // First wins; only one cycling-profile in the result.
+    expect(effective.filter((s) => s.name === "cycling-profile")).toHaveLength(1);
+    expect(effective.find((s) => s.name === "cycling-profile")!.description).toBe("first");
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain("more than once");
+    expect(warnSpy.mock.calls[0][0]).toContain('"cycling-profile"');
+  });
+
+  it("distinguishes in-array duplicate from Core-shared collision (separate warn keys)", () => {
+    const sport = makeSport("cycling", [
+      { name: "schedule", description: "core overlap" },
+      { name: "cycling-profile", description: "first" },
+      { name: "cycling-profile", description: "second (dup)" },
+    ]);
+    getEffectiveSections(sport);
+
+    // 1 core-collision warn + 1 self-dup warn = 2 distinct warns.
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    const messages = warnSpy.mock.calls.map((c) => String(c[0]));
+    expect(messages.some((m) => m.includes("Core-shared"))).toBe(true);
+    expect(messages.some((m) => m.includes("more than once"))).toBe(true);
+  });
 });

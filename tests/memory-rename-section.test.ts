@@ -105,4 +105,23 @@ describe("Memory.renameSection", () => {
       "## cycling-profile\n## schedule\nMon, Wed, Fri\n",
     );
   });
+
+  it('renames a CRLF-encoded MEMORY.md (Windows-authored or pasted from Word)', () => {
+    const memory = new Memory(dataDir);
+    const path = join(dataDir, "memory", "MEMORY.md");
+    // Real-world failure mode: file written with CRLF line endings. Without
+    // normalization the marker check fails (sees `## profile\r\n` which does
+    // not startsWith `## profile\n`) and the rename silently no-ops.
+    writeFileSync(
+      path,
+      "## profile\r\nFTP 247W, 72kg\r\n## schedule\r\nMon, Wed, Fri\r\n",
+      "utf-8",
+    );
+
+    expect(memory.renameSection("profile", "cycling-profile")).toBe("renamed");
+    // Output is LF-normalized (Node writeFileSync emits LF).
+    expect(readFileSync(path, "utf-8")).toBe(
+      "## cycling-profile\nFTP 247W, 72kg\n## schedule\nMon, Wed, Fri\n",
+    );
+  });
 });
