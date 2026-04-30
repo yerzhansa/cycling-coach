@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { baseAgentConfig } from "./helpers/base-agent-config.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -22,26 +23,6 @@ afterEach(() => {
   rmSync(tempHome, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
-
-function baseConfig() {
-  return {
-    llm: {
-      provider: "openai-codex" as const,
-      model: "gpt-5.4",
-      apiKey: "",
-      authProfile: "openai-codex",
-    },
-    intervals: { apiKey: "", athleteId: "0" },
-    telegram: { botToken: "" },
-    session: {
-      historyTokenBudgetRatio: 0.3,
-      idleMinutes: 0,
-      dailyResetHour: 4,
-    },
-    contextWindowTokens: 272_000,
-    dataDir,
-  };
-}
 
 async function setupAgent(complete: ReturnType<typeof vi.fn>) {
   const model = {
@@ -73,7 +54,7 @@ async function setupAgent(complete: ReturnType<typeof vi.fn>) {
   }));
 
   const { CyclingCoachAgent } = await import("../src/agent/core.js");
-  return new CyclingCoachAgent(baseConfig());
+  return new CyclingCoachAgent(baseAgentConfig(dataDir));
 }
 
 function mkAssistant(text: string, stopReason: "stop" | "length" = "stop") {

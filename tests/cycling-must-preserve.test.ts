@@ -1,8 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { MemorySnapshot } from "@cycling-coach/core";
-import { cyclingSport } from "../src/cycling/sport.js";
-
-const CYCLING_VOCABULARY = ["FTP", "W/kg", "Coggan", "VO2max", "watts", "sweet spot", "TTE"];
+import { cyclingSport, CYCLING_VOCABULARY } from "../src/cycling/sport.js";
 
 function snapshot(sections: Record<string, string | null>): MemorySnapshot {
   return {
@@ -58,16 +56,16 @@ describe("cyclingSport.mustPreserveTokens", () => {
     expect(tokens.some((t) => t.startsWith("FTP "))).toBe(false);
   });
 
-  it("rejects 4-digit year collisions: 'FTP test 2024-06: 240W' → captures 240, not 2024", () => {
+  it("rejects 4-digit year collisions: 'FTP test 2024-06: 240W' → captures 247, not 2024", () => {
+    // The first "FTP" is followed by " test" — separator class doesn't match
+    // letters, so capture fails there. Regex moves to "current FTP 247W" and
+    // captures 247. Pinned to assert the deterministic outcome.
     const tokens = resolve({
       "cycling-profile": "FTP test 2024-06: 240W resulted in current FTP 247W",
     });
+    expect(tokens).toContain("FTP 247W");
     expect(tokens).not.toContain("FTP 2024W");
-    // First match: "FTP test 2024-06" → no separator-class match for "test"
-    // means the regex starts at the next FTP. Could be 240W or 247W depending
-    // on regex match positioning. Either is acceptable; "FTP 2024W" is the
-    // failure mode we explicitly reject.
-    expect(tokens.some((t) => t === "FTP 240W" || t === "FTP 247W")).toBe(true);
+    expect(tokens).not.toContain("FTP 240W");
   });
 
   it("rejects 4-digit FTP values (intentional guard against year capture)", () => {

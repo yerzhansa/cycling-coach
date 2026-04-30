@@ -28,7 +28,7 @@ function loadSkills(): Record<string, string> {
   );
 }
 
-const CYCLING_VOCABULARY: readonly string[] = [
+export const CYCLING_VOCABULARY: readonly string[] = [
   "FTP",
   "W/kg",
   "Coggan",
