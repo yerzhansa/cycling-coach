@@ -8,9 +8,11 @@
   "bin": {
     "running-coach": "dist/index.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsup",
     "check": "tsc --noEmit",
     "test": "echo 'no tests yet (alpha)'"
   },
@@ -19,6 +21,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
+    "tsup": "^8.4.0",
     "typescript": "^6.0.2"
   },
   "license": "MIT",
