@@ -1,9 +1,10 @@
 import { tool, zodSchema, stepCountIs } from "ai";
 import type { ModelMessage } from "ai";
 import { z } from "zod";
-import type { MemorySectionSpec, MemoryStore } from "@enduragent/core";
+import type { MemorySectionSpec } from "../sport.js";
+import type { MemoryStore } from "../memory.js";
 import { createMemoryReadTool } from "./tools.js";
-import type { LLM } from "./llm.js";
+import type { LLM } from "../llm.js";
 
 // ============================================================================
 // CONSTANTS

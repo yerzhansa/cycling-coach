@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CyclingCoachAgent } from "../src/agent/core.js";
+import { CoachAgent } from "@enduragent/core";
+import { cyclingSport } from "../src/cycling/sport.js";
 import { migrateCyclingLegacySections } from "../src/cycling/migrate-legacy-sections.js";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
 
@@ -38,7 +39,7 @@ describe("Wave 2 migration — binary startup integration (steps 1-3)", () => {
     );
 
     // Step 2: construct the agent (mirrors src/index.ts startup path).
-    const agent = new CyclingCoachAgent(baseAgentConfig(dataDir));
+    const agent = new CoachAgent(cyclingSport, baseAgentConfig(dataDir));
 
     // Wiring: this is exactly what src/index.ts does immediately after
     // agent construction. The integration test asserts that calling the
@@ -70,7 +71,7 @@ describe("Wave 2 migration — binary startup integration (steps 1-3)", () => {
 
   it("is a no-op for fresh installs (no MEMORY.md present)", () => {
     // No file pre-seeded. Construct agent, run migrator, file should not be created.
-    const agent = new CyclingCoachAgent(baseAgentConfig(dataDir));
+    const agent = new CoachAgent(cyclingSport, baseAgentConfig(dataDir));
     expect(() => migrateCyclingLegacySections(agent.getMemory())).not.toThrow();
 
     const events = logSpy.mock.calls.map((args) => JSON.parse(String(args[0])));
@@ -80,7 +81,7 @@ describe("Wave 2 migration — binary startup integration (steps 1-3)", () => {
   it("is idempotent — second call after construction leaves file unchanged", () => {
     writeFileSync(memoryFile, "## profile\nFTP 247W\n## schedule\nMon, Wed, Fri\n", "utf-8");
 
-    const agent = new CyclingCoachAgent(baseAgentConfig(dataDir));
+    const agent = new CoachAgent(cyclingSport, baseAgentConfig(dataDir));
     migrateCyclingLegacySections(agent.getMemory());
     const afterFirst = readFileSync(memoryFile, "utf-8");
 

@@ -1,5 +1,5 @@
 /**
- * Minimal config for constructing CyclingCoachAgent in tests. Uses the
+ * Minimal config for constructing CoachAgent in tests. Uses the
  * openai-codex provider with empty apiKey so no real LLM is reachable.
  */
 export function baseAgentConfig(dataDir: string) {

@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import {
+  createMemoryTools,
   getEffectiveSections,
   type CoreDeps,
   type MemorySectionSpec,
@@ -9,7 +10,7 @@ import {
   type Sport,
   type ToolRegistration,
 } from "@enduragent/core";
-import { createTools } from "../agent/tools.js";
+import { createCyclingTools } from "./tools.js";
 import { athleteProfileSchema } from "./schemas.js";
 
 const PROJECT_ROOT = resolve(import.meta.dirname, "../..");
@@ -81,7 +82,11 @@ export const cyclingSport: Sport = {
   intervalsActivityTypes: ["Ride", "VirtualRide"],
   athleteProfileSchema,
   tools: (deps: CoreDeps): readonly ToolRegistration[] => {
-    const toolset = createTools(deps.memory, deps.intervals, getEffectiveSections(cyclingSport));
+    const sections = getEffectiveSections(cyclingSport);
+    const toolset = {
+      ...createMemoryTools(deps.memory, sections),
+      ...createCyclingTools(deps.memory, deps.intervals),
+    };
     return Object.entries(toolset).map(([name, t]) => ({
       name,
       description: (t as { description?: string }).description ?? "",

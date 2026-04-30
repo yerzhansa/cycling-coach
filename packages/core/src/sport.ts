@@ -3,7 +3,7 @@ import type { z } from "zod";
 import type { IntervalsClient } from "./intervals.js";
 import type { LLM } from "./llm.js";
 import type { MemorySnapshot, MemoryStore } from "./memory.js";
-import type { SecretsResolver } from "./secrets.js";
+import type { SecretsResolver } from "./secrets/types.js";
 
 // ─── Identity ──────────────────────────────────────────────────────────
 /** Closed literal union — adding a sport requires a Core bump. Intentional. */

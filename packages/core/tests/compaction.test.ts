@@ -6,7 +6,7 @@ import {
   summarizeDroppedMessages,
   summarizeInStages,
 } from "../src/agent/compaction.js";
-import type { LLM } from "../src/agent/llm.js";
+import type { LLM } from "../src/llm.js";
 
 // ─── Test helpers ─────────────────────────────────────────────────────
 
@@ -59,7 +59,7 @@ const VALID_FOUR_SECTION_SUMMARY = [
   "- None outstanding",
 ].join("\n");
 
-import { CYCLING_VOCABULARY } from "../src/cycling/sport.js";
+import { CYCLING_VOCABULARY } from "../../../src/cycling/sport.js";
 
 const EMPTY_SNAPSHOT: MemorySnapshot = {
   read: () => null,
