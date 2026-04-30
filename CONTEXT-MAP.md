@@ -1,13 +1,16 @@
 # Context Map
 
-This repo is being refactored from a single-package `cycling-coach` into a multi-context monorepo. Four bounded contexts are committed; see [`docs/architect-review/multi-sport-architecture.md`](./docs/architect-review/multi-sport-architecture.md) for the full architecture.
+This repo is a multi-package monorepo for the enduragent AI coaching agent platform — Core publishes the Sport contract, sport packages implement it, binary packages ship them. See [`docs/architect-review/multi-sport-architecture.md`](./docs/architect-review/multi-sport-architecture.md) for the full architecture.
 
 ## Contexts
 
-- [Core](./packages/core/CONTEXT.md) — sport-agnostic infrastructure: agent loop, memory, session, secrets, channels (Telegram), LLM transport, intervals.icu client, setup wizard, updater. Owns no sport vocabulary. Publishes the `Sport` interface.
-- [Cycling](./packages/sport-cycling/CONTEXT.md) — FTP-based zones, power-prescribed workouts, bike equipment, cyclist persona. Ships as `cycling-coach` binary.
-- [Running](./packages/sport-running/CONTEXT.md) — VDOT/pace-based zones, impact-aware progression, injury-first intake, runner persona. Ships as `running-coach` binary.
-- [Duathlon](./packages/sport-duathlon/CONTEXT.md) — coordinator context. Brick workouts, transitions, dual periodization. Ships as `duathlon-coach` binary.
+- [Core](./packages/core/CONTEXT.md) — sport-agnostic infrastructure: agent loop, memory, session, secrets, channels (Telegram), LLM transport, intervals.icu client (shared tools), setup wizard, runBinary entry-point, updater. Owns no sport vocabulary. Publishes the `Sport` and `BinaryConfig` contracts.
+- [Cycling](./packages/sport-cycling/CONTEXT.md) — FTP-based zones, power-prescribed workouts, bike equipment, cyclist persona. Implements `Sport`. Bundled into the `cycling-coach` binary.
+- [Running](./packages/sport-running/CONTEXT.md) — VDOT/pace-based zones, impact-aware progression, injury-first intake, runner persona. Stub.
+- [Duathlon](./packages/sport-duathlon/CONTEXT.md) — coordinator context. Brick workouts, transitions, dual periodization. Stub.
+- [Cycling Coach](./packages/cycling-coach/CONTEXT.md) — published `cycling-coach` binary; 7-line shim wiring cyclingSport + cyclingBinary into Core's runBinary.
+- [Running Coach](./packages/running-coach/CONTEXT.md) — `running-coach` binary stub; placeholder banner.
+- [Duathlon Coach](./packages/duathlon-coach/CONTEXT.md) — `duathlon-coach` binary stub; placeholder banner.
 
 ## Relationships
 
@@ -24,7 +27,13 @@ If sport-cycling improves its FTP-test guidance, sport-duathlon inherits the imp
 
 ## Status
 
-- **Cycling** — implemented (`src/cycling/`, `src/agent/`, `SOUL.md`, `skills/*.md`). Package boundary not yet enforced.
-- **Running** — not started. Built after Cycling is refactored into monorepo layout.
-- **Duathlon** — not started. Built after Running ships standalone (the architect-recommended sequence).
-- **Core** — implicitly exists across `src/agent/`, `src/secrets/`, `src/auth/`, `src/channels/`, but has cycling vocabulary leaks at `src/agent/compaction.ts:34-46` and `src/agent/memory-flush.ts:28-34` that the refactor will resolve.
+After Wave 3 of the Core/Sport seam refactor (issue #47):
+
+- **Core** — implemented at `packages/core/`. Sport-agnostic; no cycling vocabulary leaks. Three-category tool split per ADR-0004 (Pure-Core memory + intervals tools live in Core; sport-injected config flows in via `BinaryConfig`/`Sport.intervalsActivityTypes`). Published as `@enduragent/core` (SemVer 1.0.0).
+- **Cycling** — implemented at `packages/sport-cycling/`. SOUL.md + skills/*.md inlined into the bundle via tsup `.md: text` loader and skills.generated.ts codegen. Published as `@enduragent/sport-cycling` (SemVer 1.0.0).
+- **Cycling Coach** — implemented at `packages/cycling-coach/`. 7-line bin shim. Published as `cycling-coach` (CalVer continues).
+- **Running, Duathlon, Running Coach, Duathlon Coach** — empty stubs at `packages/{sport-running,sport-duathlon,running-coach,duathlon-coach}/`. Published as alpha placeholders (0.0.1 / 2026.4.30) to reserve npm names and exercise the publish pipeline.
+
+## Wave 3 release flow
+
+Changesets-driven (`.changeset/*.md` + `pnpm exec changeset` CLI). The publish workflow runs on push:main, gates on build + test + smoke (matrix across the 3 binary packages), then merges the bot's Version PR to publish via OIDC trusted publisher (no NPM_TOKEN). `tools/bump-binaries-to-calver.ts` overrides changesets' SemVer bumps for binary packages with today's CalVer.

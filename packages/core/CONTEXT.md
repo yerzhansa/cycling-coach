@@ -35,6 +35,15 @@ Per-Sport list of literal phrases the LLM is forbidden to drop during compaction
 **CoreDeps**:
 The runtime services Core supplies to a Sport's tool factory: `LLM`, `IntervalsClient`, `MemoryStore`, `SecretsResolver`.
 
+**BinaryConfig**:
+Deployment-shell config injected into `runBinary` and `runSetup`. Fields: `binaryName` (npm name + CLI invocation), `displayName` (human-readable for prompts), `dataSubdir` (under `~/.enduragent/`), `keychainPrefix` (Apple Keychain entry prefix), `homeEnvVar` (env override variable name). Each binary package declares one and passes it through.
+
+**runBinary**:
+Core's shared entry-point dispatcher. `runBinary(sport, binary, hooks?)` parses CLI args, routes setup/version/unknown commands, loads config, constructs `CoachAgent`, and runs the Telegram or CLI loop. Per-binary entry is a 5-line shim calling this.
+
+**Version PR**:
+Changesets-generated PR aggregating pending `.changeset/*.md` entries across packages into version bumps + CHANGELOG entries. Merging the Version PR triggers the publish job (which runs `pnpm exec changeset version`, `tools/bump-binaries-to-calver.ts` to override binary CalVer, then `pnpm publish -r`).
+
 **Session**:
 One user's chat state with one Binary, persisted to disk and locked against concurrent processes.
 
