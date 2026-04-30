@@ -14,6 +14,9 @@ export interface MemoryStore {
   /** Replaces the named section's content; appends if section is missing. */
   writeSection(section: string, content: string): void;
 
+  /** Returns the named section's body, or null if file or section is absent. */
+  readSection(section: string): string | null;
+
   /**
    * Renames `from` section to `to`. Lossless:
    * - "renamed": `from` existed, `to` did not — header rewritten in place.
