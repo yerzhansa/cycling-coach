@@ -1,10 +1,7 @@
 import { readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { resolve, join } from "node:path";
-
-const PROJECT_ROOT = resolve(import.meta.dirname, "..");
-const PACKAGE_NAME = "cycling-coach";
-const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}/latest`;
+import { createRequire } from "node:module";
+import { join } from "node:path";
 
 export interface UpdateInfo {
   current: string;
@@ -12,17 +9,33 @@ export interface UpdateInfo {
   updateAvailable: boolean;
 }
 
-export function getCurrentVersion(): string {
-  const pkg = JSON.parse(readFileSync(join(PROJECT_ROOT, "package.json"), "utf-8"));
-  return pkg.version;
+export function getCurrentVersion(binaryName: string): string {
+  // Installed-binary path: resolve via Node's module-resolution to find the
+  // binary package's package.json wherever pnpm/npm placed it.
+  try {
+    const requireFn = createRequire(import.meta.url);
+    const pkgPath = requireFn.resolve(`${binaryName}/package.json`);
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+    return pkg.version;
+  } catch {
+    // Dev-time fallback: cwd is the repo root which contains the binary's package.json.
+    try {
+      const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf-8"));
+      return pkg.version;
+    } catch {
+      return "unknown";
+    }
+  }
 }
 
-export async function checkForUpdate(): Promise<UpdateInfo | null> {
+export async function checkForUpdate(binaryName: string): Promise<UpdateInfo | null> {
   try {
-    const res = await fetch(REGISTRY_URL, { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`https://registry.npmjs.org/${binaryName}/latest`, {
+      signal: AbortSignal.timeout(5000),
+    });
     if (!res.ok) return null;
     const data = (await res.json()) as { version: string };
-    const current = getCurrentVersion();
+    const current = getCurrentVersion(binaryName);
     return {
       current,
       latest: data.version,
@@ -33,9 +46,9 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
   }
 }
 
-export function selfUpdate(): void {
-  console.log("Installing cycling-coach@latest...");
-  execSync(`npm install -g ${PACKAGE_NAME}@latest`, { stdio: "inherit" });
+export function selfUpdate(binaryName: string): void {
+  console.log(`Installing ${binaryName}@latest...`);
+  execSync(`npm install -g ${binaryName}@latest`, { stdio: "inherit" });
   process.exit(0);
 }
 

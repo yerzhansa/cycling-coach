@@ -1,5 +1,6 @@
 import { Bot } from "grammy";
 import type { CoachAgent } from "../agent/coach-agent.js";
+import type { BinaryConfig } from "../binary.js";
 import { isRateLimitError, extractRetryAfterMs } from "../agent/token-utils.js";
 import {
   checkForUpdate,
@@ -35,7 +36,7 @@ const WELCOME_MESSAGE =
   "/update — Check for and install updates\n\n" +
   "Or just chat with me about your training!";
 
-export function createTelegramBot(token: string, agent: CoachAgent): Bot {
+export function createTelegramBot(token: string, agent: CoachAgent, binary: BinaryConfig): Bot {
   const bot = new Bot(token);
   const greeted = new Set<number>();
 
@@ -116,13 +117,13 @@ export function createTelegramBot(token: string, agent: CoachAgent): Bot {
   });
 
   bot.command("version", async (ctx) => {
-    await ctx.reply(`Cycling Coach v${getCurrentVersion()}`);
+    await ctx.reply(`${binary.displayName} v${getCurrentVersion(binary.binaryName)}`);
   });
 
   bot.command("update", async (ctx) => {
     await ctx.reply("Checking for updates...");
     try {
-      const info = await checkForUpdate();
+      const info = await checkForUpdate(binary.binaryName);
       if (!info) {
         await ctx.reply("Could not check for updates. Try again later.");
         return;
@@ -131,13 +132,13 @@ export function createTelegramBot(token: string, agent: CoachAgent): Bot {
         await ctx.reply(`You're on the latest version (${info.current}).`);
         return;
       }
-      await ctx.reply(`Updating ${info.current} → ${info.latest}...\nThe bot will stop after installation. Run \`cycling-coach\` to start it again.`);
+      await ctx.reply(`Updating ${info.current} → ${info.latest}...\nThe bot will stop after installation. Run \`${binary.binaryName}\` to start it again.`);
       // Stop polling first so Telegram commits the /update offset — otherwise
       // Telegram re-sends /update on next startup and we loop forever.
-      void bot.stop().then(selfUpdate);
+      void bot.stop().then(() => selfUpdate(binary.binaryName));
     } catch (err) {
       console.error("Error in /update:", err);
-      await ctx.reply("Update failed. Please run `npm install -g cycling-coach@latest` manually.");
+      await ctx.reply(`Update failed. Please run \`npm install -g ${binary.binaryName}@latest\` manually.`);
     }
   });
 
@@ -251,9 +252,9 @@ async function sendLongMessage(
 // STARTUP UPDATE NOTIFICATION
 // ============================================================================
 
-export async function notifyUpdate(bot: Bot, dataDir: string): Promise<void> {
+export async function notifyUpdate(bot: Bot, dataDir: string, binary: BinaryConfig): Promise<void> {
   try {
-    const info = await checkForUpdate();
+    const info = await checkForUpdate(binary.binaryName);
     if (!info?.updateAvailable) return;
 
     if (getLastNotifiedVersion(dataDir) === info.latest) return;
