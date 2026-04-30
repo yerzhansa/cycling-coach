@@ -49,6 +49,32 @@ export class Memory implements MemoryStore {
     }
   }
 
+  renameSection(from: string, to: string): "renamed" | "noop" | "merged" {
+    const path = join(this.memoryDir, "MEMORY.md");
+    if (!existsSync(path)) return "noop";
+
+    const existing = readFileSync(path, "utf-8");
+    const fromMarker = `## ${from}`;
+    const toMarker = `## ${to}`;
+    const parts = existing.split(/(?=^## )/m);
+    const fromIdx = parts.findIndex((p) => p.startsWith(fromMarker + "\n"));
+    if (fromIdx < 0) return "noop";
+
+    const bodyOf = (block: string) => block.slice(block.indexOf("\n") + 1);
+    const toIdx = parts.findIndex((p) => p.startsWith(toMarker + "\n"));
+
+    if (toIdx >= 0) {
+      parts[toIdx] = `${toMarker}\n${bodyOf(parts[toIdx])}\n${bodyOf(parts[fromIdx])}`;
+      parts.splice(fromIdx, 1);
+      writeFileSync(path, parts.join(""), "utf-8");
+      return "merged";
+    }
+
+    parts[fromIdx] = `${toMarker}\n${bodyOf(parts[fromIdx])}`;
+    writeFileSync(path, parts.join(""), "utf-8");
+    return "renamed";
+  }
+
   /** @deprecated Use writeSection instead */
   appendMemory(entry: string): void {
     const path = join(this.memoryDir, "MEMORY.md");
