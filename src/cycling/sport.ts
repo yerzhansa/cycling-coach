@@ -63,7 +63,21 @@ export const cyclingSport: Sport = {
   soul: loadSoul(),
   skills: loadSkills(),
   memorySections,
-  mustPreserveTokens: (_memory: MemorySnapshot): readonly string[] => CYCLING_VOCABULARY,
+  mustPreserveTokens: (memory: MemorySnapshot): readonly string[] => {
+    const tokens: string[] = [...CYCLING_VOCABULARY];
+    const profile = memory.read("cycling-profile");
+    if (profile) {
+      // \bFTP\b prevents matching "SoftPlate" etc. Separator class accepts FTP 247,
+      // FTP: 247, FTP, 247, FTP - 247. Unit optional. Digit range 2-3 (50-999W)
+      // rejects 4-digit year collisions like "FTP test 2024-06: 240W" → matches 240,
+      // not 2024. Trailing \b ensures we don't capture "FTP 247abc". First match
+      // only — historical FTPs aren't identity-defining and would balloon
+      // false-positive surface.
+      const match = profile.match(/\bFTP\b[\s:,-]*(\d{2,3})\s*[wW]?\b/);
+      if (match) tokens.push(`FTP ${match[1]}W`);
+    }
+    return tokens;
+  },
   intervalsActivityTypes: ["Ride", "VirtualRide"],
   athleteProfileSchema,
   tools: (deps: CoreDeps): readonly ToolRegistration[] => {
