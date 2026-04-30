@@ -8,7 +8,6 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": "./dist/index.js",
-    "./binary": "./dist/binary.js",
     "./migrate": "./dist/migrate.js"
   },
   "files": ["dist", "SOUL.md", "skills"],

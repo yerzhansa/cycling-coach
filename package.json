@@ -1,31 +1,23 @@
 {
-  "name": "cycling-coach",
-  "version": "2026.4.26",
-  "description": "AI cycling coaching agent — BYOK + intervals.icu + Telegram",
+  "name": "enduragent-workspace",
+  "version": "0.0.0-private",
+  "private": true,
+  "description": "Workspace coordinator for the enduragent monorepo (Core + sport packages + binary packages).",
   "type": "module",
-  "main": "dist/index.js",
-  "bin": {
-    "cycling-coach": "dist/index.js"
-  },
-  "files": [
-    "dist",
-    "SOUL.md",
-    "skills"
-  ],
   "scripts": {
-    "dev": "tsx --env-file=.env src/index.ts",
-    "setup": "tsx --env-file=.env src/index.ts setup",
+    "dev": "tsx --env-file=.env packages/cycling-coach/src/index.ts",
+    "setup": "tsx --env-file=.env packages/cycling-coach/src/index.ts setup",
     "build:core": "tsc -p packages/core",
     "build:sport-cycling": "tsc -p packages/sport-cycling",
-    "build:packages": "npm run build:core && npm run build:sport-cycling",
-    "build": "npm run build:packages && tsc",
-    "prepublishOnly": "npm run build",
+    "build:cycling-coach": "tsc -p packages/cycling-coach",
+    "build:packages": "npm run build:core && npm run build:sport-cycling && npm run build:cycling-coach",
+    "build": "npm run build:packages",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "oxlint src/ tests/",
-    "fmt": "oxfmt src/ tests/",
-    "fmt:check": "oxfmt --check src/ tests/",
-    "check": "npm run build:packages && tsc --noEmit && oxlint src/ tests/"
+    "lint": "oxlint packages/",
+    "fmt": "oxfmt packages/",
+    "fmt:check": "oxfmt --check packages/",
+    "check": "npm run build:packages && oxlint packages/"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.69",

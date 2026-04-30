@@ -14,14 +14,8 @@
     "resolveJsonModule": true,
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": true,
-    "paths": {
-      "@enduragent/core": ["./packages/core/dist/index.d.ts"],
-      "@enduragent/sport-cycling": ["./packages/sport-cycling/dist/index.d.ts"],
-      "@enduragent/sport-cycling/binary": ["./packages/sport-cycling/dist/binary.d.ts"],
-      "@enduragent/sport-cycling/migrate": ["./packages/sport-cycling/dist/migrate.d.ts"]
-    }
+    "sourceMap": true
   },
   "include": ["src"],
-  "exclude": ["node_modules", "dist", "tests"]
+  "exclude": ["node_modules", "dist"]
 }
