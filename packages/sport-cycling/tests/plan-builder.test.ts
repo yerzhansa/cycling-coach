@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { buildPlanSkeleton } from "../src/cycling/plan-builder.js";
-import type { AthleteProfile } from "../src/cycling/schemas.js";
+import { buildPlanSkeleton } from "../src/plan-builder.js";
+import type { AthleteProfile } from "../src/schemas.js";
 
 function makeProfile(overrides: Partial<AthleteProfile> = {}): AthleteProfile {
   return {

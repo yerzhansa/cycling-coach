@@ -2,7 +2,9 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import {
+  createCoreToolsWithSportConfig,
   createMemoryTools,
+  createPureCoreIntervalsTools,
   getEffectiveSections,
   type CoreDeps,
   type MemorySectionSpec,
@@ -13,14 +15,14 @@ import {
 import { createCyclingTools } from "./tools.js";
 import { athleteProfileSchema } from "./schemas.js";
 
-const PROJECT_ROOT = resolve(import.meta.dirname, "../..");
+const PACKAGE_ROOT = resolve(import.meta.dirname, "..");
 
 function loadSoul(): string {
-  return readFileSync(join(PROJECT_ROOT, "SOUL.md"), "utf-8");
+  return readFileSync(join(PACKAGE_ROOT, "SOUL.md"), "utf-8");
 }
 
 function loadSkills(): Record<string, string> {
-  const skillsDir = join(PROJECT_ROOT, "skills");
+  const skillsDir = join(PACKAGE_ROOT, "skills");
   return Object.fromEntries(
     readdirSync(skillsDir)
       .filter((f) => f.endsWith(".md"))
@@ -83,8 +85,13 @@ export const cyclingSport: Sport = {
   athleteProfileSchema,
   tools: (deps: CoreDeps): readonly ToolRegistration[] => {
     const sections = getEffectiveSections(cyclingSport);
+    // Per ADR-0004: compose four tool buckets — memory (Pure-Core),
+    // intervals Pure-Core, intervals Core-with-sport-config, and the
+    // sport-specific cycling tools.
     const toolset = {
       ...createMemoryTools(deps.memory, sections),
+      ...createPureCoreIntervalsTools(deps.intervals),
+      ...createCoreToolsWithSportConfig(deps.intervals, cyclingSport.intervalsActivityTypes),
       ...createCyclingTools(deps.memory, deps.intervals),
     };
     return Object.entries(toolset).map(([name, t]) => ({

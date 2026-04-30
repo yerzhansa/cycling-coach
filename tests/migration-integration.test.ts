@@ -3,8 +3,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CoachAgent } from "@enduragent/core";
-import { cyclingSport } from "../src/cycling/sport.js";
-import { migrateCyclingLegacySections } from "../src/cycling/migrate-legacy-sections.js";
+import { cyclingSport } from "@enduragent/sport-cycling";
+import { migrateCyclingLegacySections } from "@enduragent/sport-cycling/migrate";
 import { baseAgentConfig } from "../packages/core/tests/helpers/base-agent-config.js";
 
 describe("Wave 2 migration — binary startup integration (steps 1-3)", () => {

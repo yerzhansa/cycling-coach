@@ -16,14 +16,16 @@
     "dev": "tsx --env-file=.env src/index.ts",
     "setup": "tsx --env-file=.env src/index.ts setup",
     "build:core": "tsc -p packages/core",
-    "build": "npm run build:core && tsc",
+    "build:sport-cycling": "tsc -p packages/sport-cycling",
+    "build:packages": "npm run build:core && npm run build:sport-cycling",
+    "build": "npm run build:packages && tsc",
     "prepublishOnly": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "oxlint src/ tests/",
     "fmt": "oxfmt src/ tests/",
     "fmt:check": "oxfmt --check src/ tests/",
-    "check": "npm run build:core && tsc --noEmit && oxlint src/ tests/"
+    "check": "npm run build:packages && tsc --noEmit && oxlint src/ tests/"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.69",
@@ -33,6 +35,7 @@
     "@ai-sdk/provider-utils": "^4.0.24",
     "@clack/prompts": "^1.2.0",
     "@enduragent/core": "workspace:*",
+    "@enduragent/sport-cycling": "workspace:*",
     "@mariozechner/pi-ai": "0.67.6",
     "ai": "^6.0.158",
     "grammy": "^1.42.0",

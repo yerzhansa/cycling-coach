@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { MemorySnapshot } from "@enduragent/core";
-import { cyclingSport, CYCLING_VOCABULARY } from "../src/cycling/sport.js";
+import { cyclingSport, CYCLING_VOCABULARY } from "../src/sport.js";
 
 function snapshot(sections: Record<string, string | null>): MemorySnapshot {
   return {

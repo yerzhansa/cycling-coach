@@ -123,6 +123,10 @@ export {
   createMemoryReadTool,
   createMemoryTools,
 } from "./agent/tools.js";
+export {
+  createPureCoreIntervalsTools,
+  createCoreToolsWithSportConfig,
+} from "./agent/intervals-tools.js";
 
 // ─── Auth ─────────────────────────────────────────────────────────────
 export {

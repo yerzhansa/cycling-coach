@@ -30,3 +30,7 @@ export {
 export type { IntervalsWorkoutInput } from "./intervals-serializer.js";
 
 export * from "./schemas.js";
+
+export { cyclingSport, CYCLING_VOCABULARY } from "./sport.js";
+export { cyclingBinary } from "./binary.js";
+export { migrateCyclingLegacySections } from "./migrate.js";
