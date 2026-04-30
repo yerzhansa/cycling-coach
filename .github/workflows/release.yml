@@ -1,74 +1,108 @@
 name: Release
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
+
+# PG-16: per-job least-privilege; id-token only on publish.
+permissions:
+  contents: read
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        # Reads `packageManager` from root package.json (corepack-style pin).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - run: pnpm test
+
+  smoke:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        binary: [cycling-coach, running-coach, duathlon-coach]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - name: Pack and smoke ${{ matrix.binary }}
+        # PG-8: no `|| true`; set -euo pipefail; 30s timeout (cold Alpine OK).
+        # pnpm pack rewrites workspace:* to actual versions in the tarball.
+        # Use npm install (not pnpm) to simulate end-user `npm i -g <binary>`.
+        run: |
+          set -euo pipefail
+          cd packages/${{ matrix.binary }}
+          pnpm pack --pack-destination /tmp/smoke-${{ matrix.binary }}
+          mkdir -p /tmp/smoke-extract-${{ matrix.binary }}
+          tar -xf /tmp/smoke-${{ matrix.binary }}/*.tgz -C /tmp/smoke-extract-${{ matrix.binary }} --strip-components=1
+          cd /tmp/smoke-extract-${{ matrix.binary }}
+          npm install --omit=dev
+          timeout 30 node dist/index.js --help
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [build, test, smoke]
+    permissions:
       contents: write
-      id-token: write
+      pull-requests: write
+      id-token: write   # PG-16: OIDC, scoped to publish job only.
     steps:
       - uses: actions/checkout@v4
         with:
-          ssh-key: ${{ secrets.DEPLOY_KEY }}
           fetch-depth: 0
-
+      - uses: pnpm/action-setup@v3
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
-          cache: npm
-
-      - run: npm install
-      - run: npm run check
-      - run: npm test
-      - run: npm run build
-
-      - name: Calculate calendar version
-        id: version
-        run: |
-          today=$(date -u +"%Y.%-m.%-d")
-          existing=$(git tag --list "v${today}*" | sort -V)
-
-          if [ -z "$existing" ]; then
-            version="$today"
-          else
-            last=$(echo "$existing" | tail -1)
-            if [ "$last" = "v${today}" ]; then
-              version="${today}-1"
-            else
-              suffix=$(echo "$last" | sed "s/v${today}-//")
-              next=$((suffix + 1))
-              version="${today}-${next}"
-            fi
-          fi
-
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Releasing v${version}"
-
-      - name: Bump version, commit, and tag
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - name: Create Version PR or publish
+        uses: changesets/action@v1.4   # PG-15: pin major version
+        with:
+          version: |
+            pnpm exec changeset version
+            pnpm exec tsx tools/bump-binaries-to-calver.ts
+          publish: pnpm publish -r --access public --no-git-checks
+          # `pnpm publish -r` walks all packages and publishes the ones whose
+          # version isn't already on npm (idempotent on partial-publish failure).
+          # `--no-git-checks` skips pnpm's "must be on a clean git tag" check —
+          # changesets/action commits version bumps but doesn't tag per package.
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          npm version "${VERSION}" --no-git-tag-version
-          git add package.json package-lock.json
-          git diff --cached --quiet && echo "Version already ${VERSION}, skipping commit" || git commit -m "${VERSION}"
-          git tag -f "v${VERSION}"
-          git push origin main --tags
-
-      - name: Publish to npm
-        run: |
-          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
-          npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: gh release create "v${VERSION}" --title "v${VERSION}" --generate-notes
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No NPM_TOKEN — OIDC trusted publisher per PG-7.
+          # Operator [runtime] AC: configure each scoped npm package's "Trusted
+          # Publisher" to GitHub repo + workflow path .github/workflows/release.yml.
