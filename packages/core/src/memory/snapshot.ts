@@ -1,4 +1,4 @@
-import type { MemorySnapshot, MemoryStore } from "@enduragent/core";
+import type { MemorySnapshot, MemoryStore } from "../memory.js";
 
 /**
  * Wraps a MemoryStore in a frozen-at-call-time read-only sectioned view.

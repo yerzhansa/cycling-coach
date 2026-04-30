@@ -1,10 +1,12 @@
 import { stepCountIs } from "ai";
 import type { ModelMessage, ToolSet } from "ai";
 import { IntervalsClient } from "intervals-icu-api";
-import { getEffectiveSections, type CoreDeps, type SecretsResolver } from "@enduragent/core";
+import { getEffectiveSections } from "../memory/effective-sections.js";
+import type { CoreDeps, Sport } from "../sport.js";
+import type { SecretsResolver } from "../secrets/types.js";
 import type { Config } from "../config.js";
 import { resolveSecretRef } from "../secrets/resolve.js";
-import { Memory } from "./memory.js";
+import { Memory } from "../memory/store.js";
 import { ChatStore } from "./chat-store.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import { withSessionLock } from "./session-lock.js";
@@ -22,9 +24,8 @@ import {
 import { summarizeInStages, summarizeDroppedMessages } from "./compaction.js";
 import { runMemoryFlush } from "./memory-flush.js";
 import { evaluateSessionFreshness } from "./session-freshness.js";
-import { LLM } from "./llm.js";
-import { createMemorySnapshot } from "./memory-snapshot.js";
-import { cyclingSport } from "../cycling/sport.js";
+import { LLM } from "../llm.js";
+import { createMemorySnapshot } from "../memory/snapshot.js";
 
 const MAX_OVERFLOW_ATTEMPTS = 3;
 const MAX_TIMEOUT_ATTEMPTS = 2;
@@ -41,7 +42,8 @@ function sleep(ms: number): Promise<void> {
 // AGENT
 // ============================================================================
 
-export class CyclingCoachAgent {
+export class CoachAgent {
+  private sport: Sport;
   private llm: LLM;
   private config: Config;
   private memory: Memory;
@@ -49,7 +51,8 @@ export class CyclingCoachAgent {
   private tools: ToolSet;
   private systemPrompt: string;
 
-  constructor(config: Config) {
+  constructor(sport: Sport, config: Config) {
+    this.sport = sport;
     this.config = config;
     this.llm = new LLM(config);
     this.memory = new Memory(config.dataDir);
@@ -69,9 +72,10 @@ export class CyclingCoachAgent {
       memory: this.memory,
       secrets,
     };
-    const registrations = cyclingSport.tools(coreDeps);
+    const registrations = sport.tools(coreDeps);
     this.tools = Object.fromEntries(registrations.map((r) => [r.name, r.tool])) as ToolSet;
-    this.systemPrompt = buildSystemPrompt(cyclingSport, this.memory);
+    // systemPrompt is rebuilt at the top of every chat() call; no need to bake one here.
+    this.systemPrompt = "";
   }
 
   private async flushMemory(messages: ModelMessage[]): Promise<void> {
@@ -79,14 +83,14 @@ export class CyclingCoachAgent {
       llm: this.llm,
       messages,
       memory: this.memory,
-      memorySections: getEffectiveSections(cyclingSport),
+      memorySections: getEffectiveSections(this.sport),
     });
   }
 
   private compactionParams() {
     return {
       llm: this.llm,
-      mustPreserveTokens: cyclingSport.mustPreserveTokens,
+      mustPreserveTokens: this.sport.mustPreserveTokens,
       memory: createMemorySnapshot(this.memory),
       contextWindowTokens: this.config.contextWindowTokens,
     };
@@ -112,7 +116,7 @@ export class CyclingCoachAgent {
         history = [];
       }
 
-      this.systemPrompt = buildSystemPrompt(cyclingSport, this.memory);
+      this.systemPrompt = buildSystemPrompt(this.sport, this.memory);
 
       const budget = computeHistoryTokenBudget({
         contextWindowTokens: this.config.contextWindowTokens,

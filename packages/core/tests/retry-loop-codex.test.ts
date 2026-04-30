@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { baseAgentConfig } from "./helpers/base-agent-config.js";
+import { baseAgentConfig } from "../../../tests/helpers/base-agent-config.js";
+import { cyclingSport } from "../../../src/cycling/sport.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -53,8 +54,8 @@ async function setupAgent(complete: ReturnType<typeof vi.fn>) {
     RefreshTokenReusedError: class extends Error {},
   }));
 
-  const { CyclingCoachAgent } = await import("../src/agent/core.js");
-  return new CyclingCoachAgent(baseAgentConfig(dataDir));
+  const { CoachAgent } = await import("../src/agent/coach-agent.js");
+  return new CoachAgent(cyclingSport, baseAgentConfig(dataDir));
 }
 
 function mkAssistant(text: string, stopReason: "stop" | "length" = "stop") {

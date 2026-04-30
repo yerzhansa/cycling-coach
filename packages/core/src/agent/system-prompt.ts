@@ -1,5 +1,5 @@
-import type { SportPersona } from "@enduragent/core";
-import type { Memory } from "./memory.js";
+import type { SportPersona } from "../sport.js";
+import type { Memory } from "../memory/store.js";
 
 // ============================================================================
 // SYSTEM PROMPT BUILDER

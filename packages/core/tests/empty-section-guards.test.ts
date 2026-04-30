@@ -3,10 +3,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelMessage } from "ai";
-import { createTools } from "../src/agent/tools.js";
+import { createMemoryTools } from "../src/agent/tools.js";
 import { runMemoryFlush } from "../src/agent/memory-flush.js";
-import { Memory } from "../src/agent/memory.js";
-import type { LLM } from "../src/agent/llm.js";
+import { Memory } from "../src/memory/store.js";
+import type { LLM } from "../src/llm.js";
 
 // Both consumers convert the section list into a non-empty Zod enum
 // (`z.enum([...] as [string, ...string[]])`). An empty list crashes Zod
@@ -25,7 +25,7 @@ function noopLLM(): LLM {
   } as unknown as LLM;
 }
 
-describe("createTools — empty-section guard", () => {
+describe("createMemoryTools — empty-section guard", () => {
   let dataDir: string;
 
   beforeEach(() => {
@@ -37,7 +37,7 @@ describe("createTools — empty-section guard", () => {
 
   it("throws a clear error when sections is empty", () => {
     const memory = new Memory(dataDir);
-    expect(() => createTools(memory, null, [])).toThrow(/at least one MemorySectionSpec/);
+    expect(() => createMemoryTools(memory, [])).toThrow(/at least one MemorySectionSpec/);
   });
 });
 

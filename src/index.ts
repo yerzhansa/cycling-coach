@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { loadConfig, resolveConfigSecrets } from "./config.js";
-import { SecretResolutionError } from "./secrets/types.js";
-import { CyclingCoachAgent } from "./agent/core.js";
+import {
+  CoachAgent,
+  SecretResolutionError,
+  createTelegramBot,
+  loadConfig,
+  notifyUpdate,
+  resolveConfigSecrets,
+} from "@enduragent/core";
+import { cyclingSport } from "./cycling/sport.js";
 import { migrateCyclingLegacySections } from "./cycling/migrate-legacy-sections.js";
-import { createTelegramBot, notifyUpdate } from "./channels/telegram.js";
 
 // ============================================================================
 // CLI ROUTING
@@ -49,7 +54,7 @@ async function main() {
   }
 
   if (command === "version") {
-    const { getCurrentVersion } = await import("./updater.js");
+    const { getCurrentVersion } = await import("@enduragent/core");
     console.log(`cycling-coach v${getCurrentVersion()}`);
     return;
   }
@@ -79,7 +84,7 @@ async function main() {
     process.exit(1);
   }
 
-  const agent = new CyclingCoachAgent(config);
+  const agent = new CoachAgent(cyclingSport, config);
 
   // One-shot migration of legacy cycling-coach section names. Runs once
   // per process at startup, after Memory exists, before any chat handler

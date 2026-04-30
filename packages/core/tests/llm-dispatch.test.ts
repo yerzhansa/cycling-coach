@@ -15,7 +15,7 @@ function codexConfig(): Config {
 
 type Captured = { stepLimit: number | undefined; called: number };
 
-async function runCodex(opts: Parameters<import("../src/agent/llm.js").LLM["generate"]>[0]): Promise<Captured> {
+async function runCodex(opts: Parameters<import("../src/llm.js").LLM["generate"]>[0]): Promise<Captured> {
   const captured: Captured = { stepLimit: undefined, called: 0 };
   vi.doMock("../src/agent/codex-bridge.js", () => ({
     codexGenerateText: vi.fn(async (o: { stepLimit?: number }) => {
@@ -24,7 +24,7 @@ async function runCodex(opts: Parameters<import("../src/agent/llm.js").LLM["gene
       return { text: "ok", toolCalls: [], finishReason: "stop", usage: {} };
     }),
   }));
-  const { LLM } = await import("../src/agent/llm.js");
+  const { LLM } = await import("../src/llm.js");
   const llm = new LLM(codexConfig());
   await llm.generate(opts);
   return captured;

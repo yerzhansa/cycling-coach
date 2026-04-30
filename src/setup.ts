@@ -2,29 +2,34 @@ import { intro, outro, select, text, password, confirm, isCancel, cancel, log } 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from "node:fs";
 import { stringify as toYaml } from "yaml";
-import { CONFIG_DIR, CONFIG_FILE, readConfigYaml } from "./config.js";
-import { runCodexLogin } from "./auth/openai-codex-login.js";
-import { loadProfile, saveProfile, type OAuthCredential } from "./auth/profiles.js";
-import { isSecretRef, type SecretRef } from "./secrets/types.js";
-import { detectBackends, type BackendAvailability, type OpState } from "./secrets/backends/detect.js";
 import {
+  CONFIG_DIR,
+  CONFIG_FILE,
+  KeychainUnsafeValueError,
   OpVaultAmbiguousError,
   SecretTooLargeError,
+  detectBackends,
+  isSecretRef,
+  keychainItemDelete,
+  keychainItemExists,
+  keychainItemUpsert,
+  keychainLoginPath,
+  keychainSecretRef,
+  loadProfile,
   opItemCreate,
   opItemDelete,
   opItemGet,
   opItemUpdate,
   opSecretRef,
   opVaultList,
-} from "./secrets/backends/op.js";
-import {
-  KeychainUnsafeValueError,
-  keychainItemDelete,
-  keychainItemExists,
-  keychainItemUpsert,
-  keychainLoginPath,
-  keychainSecretRef,
-} from "./secrets/backends/keychain.js";
+  readConfigYaml,
+  runCodexLogin,
+  saveProfile,
+  type BackendAvailability,
+  type OAuthCredential,
+  type OpState,
+  type SecretRef,
+} from "@enduragent/core";
 
 // ============================================================================
 // TYPES

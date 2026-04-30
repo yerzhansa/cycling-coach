@@ -1,5 +1,5 @@
 import { Bot } from "grammy";
-import type { CyclingCoachAgent } from "../agent/core.js";
+import type { CoachAgent } from "../agent/coach-agent.js";
 import { isRateLimitError, extractRetryAfterMs } from "../agent/token-utils.js";
 import {
   checkForUpdate,
@@ -35,7 +35,7 @@ const WELCOME_MESSAGE =
   "/update — Check for and install updates\n\n" +
   "Or just chat with me about your training!";
 
-export function createTelegramBot(token: string, agent: CyclingCoachAgent): Bot {
+export function createTelegramBot(token: string, agent: CoachAgent): Bot {
   const bot = new Bot(token);
   const greeted = new Set<number>();
 

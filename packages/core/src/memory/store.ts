@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import type { MemoryStore } from "@enduragent/core";
+import type { MemoryStore } from "../memory.js";
 
 // ============================================================================
 // MEMORY SYSTEM

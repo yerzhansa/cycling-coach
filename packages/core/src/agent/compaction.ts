@@ -1,5 +1,6 @@
 import type { ModelMessage } from "ai";
-import type { MemorySnapshot, SportMemoryShape } from "@enduragent/core";
+import type { MemorySnapshot } from "../memory.js";
+import type { SportMemoryShape } from "../sport.js";
 import {
   estimateTokens,
   estimateMessagesTokens,
@@ -9,7 +10,7 @@ import {
   SUMMARIZATION_OVERHEAD_TOKENS,
 } from "./token-utils.js";
 import { makeSummaryMessage } from "./history-limit.js";
-import type { LLM } from "./llm.js";
+import type { LLM } from "../llm.js";
 
 // ============================================================================
 // CONSTANTS

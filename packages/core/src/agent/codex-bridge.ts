@@ -19,7 +19,7 @@ import type {
 } from "ai";
 
 import { getFreshToken } from "../auth/profiles.js";
-import type { GenerateOpts, GenerateResult } from "./llm-types.js";
+import type { GenerateOpts, GenerateResult } from "../llm-types.js";
 
 const DEFAULT_STEP_LIMIT = 10;
 

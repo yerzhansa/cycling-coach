@@ -1,5 +1,7 @@
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
+import type { MemoryStore } from "@enduragent/core";
+import type { IntervalsClient } from "intervals-icu-api";
 import {
   calculateCyclingZones,
   buildPlanSkeleton,
@@ -8,7 +10,7 @@ import {
   serializeIntervalsWorkout,
   intervalsWorkoutInputSchema,
   InvalidWorkoutError,
-} from "../cycling/index.js";
+} from "./index.js";
 import type {
   AthleteProfile,
   ExperienceLevel,
@@ -16,55 +18,12 @@ import type {
   DayOfWeek,
   RaceType,
   IntervalsWorkoutInput,
-} from "../cycling/index.js";
-import type { MemorySectionSpec, MemoryStore } from "@enduragent/core";
-import type { IntervalsClient } from "intervals-icu-api";
-
-function buildMemoryWriteDescription(sections: readonly MemorySectionSpec[]): string {
-  const sectionList = sections.map((s) => `${s.name} (${s.description})`).join("; ");
-  return (
-    "Write to long-term memory (replaces section content) or daily notes. " +
-    `Sections: ${sectionList}.`
-  );
-}
-
-// ============================================================================
-// HELPERS
-// ============================================================================
+} from "./index.js";
 
 const daysEnum = z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
 
-// ============================================================================
-// SHARED TOOL FACTORIES
-// ============================================================================
-
-export function createMemoryReadTool(memory: MemoryStore) {
-  return tool({
-    description: "Read long-term athlete memory, today's notes, and current plan state",
-    inputSchema: zodSchema(z.object({})),
-    execute: async () => memory.getContext() || "No athlete data stored yet.",
-  });
-}
-
-// ============================================================================
-// TOOL BUILDER
-// ============================================================================
-
-export function createTools(
-  memory: MemoryStore,
-  intervals: IntervalsClient | null,
-  sections: readonly MemorySectionSpec[],
-) {
-  if (sections.length === 0) {
-    throw new Error(
-      "createTools requires at least one MemorySectionSpec. " +
-        "Pass getEffectiveSections(sport) — Core's shared sections guarantee non-empty.",
-    );
-  }
-  const sectionNames = sections.map((s) => s.name) as [string, ...string[]];
+export function createCyclingTools(memory: MemoryStore, intervals: IntervalsClient | null) {
   return {
-    // ── Cycling logic tools (local, no API) ─────────────────────────────
-
     calculate_zones: tool({
       description: "Calculate 6 power zones from FTP watts",
       inputSchema: zodSchema(
@@ -172,62 +131,9 @@ export function createTools(
         ),
     }),
 
-    // ── Memory tools ─────────────────────────────────────────────────────
-
-    memory_read: createMemoryReadTool(memory),
-
-    memory_write: tool({
-      description: buildMemoryWriteDescription(sections),
-      inputSchema: zodSchema(
-        z.object({
-          type: z
-            .enum(["memory", "daily"])
-            .describe("'memory' for long-term facts, 'daily' for today's notes"),
-          section: z
-            .enum(sectionNames)
-            .optional()
-            .describe("Memory section to write to (required when type='memory'). Replaces the section content."),
-          content: z.string().describe("The information to save"),
-        }),
-      ),
-      execute: async (input: { type: "memory" | "daily"; section?: string; content: string }) => {
-        if (input.type === "memory") {
-          memory.writeSection(input.section ?? "notes", input.content);
-        } else {
-          memory.appendDailyNote(input.content);
-        }
-        return { saved: true };
-      },
-    }),
-
-    plan_save: tool({
-      description: "Save or update the current training plan",
-      inputSchema: zodSchema(
-        z.object({
-          plan: z.record(z.string(), z.unknown()).describe("The training plan object to save"),
-        }),
-      ),
-      execute: async (input: { plan: Record<string, unknown> }) => {
-        memory.savePlan(input.plan);
-        return { saved: true };
-      },
-    }),
-
-    plan_load: tool({
-      description: "Load the current active training plan",
-      inputSchema: zodSchema(z.object({})),
-      execute: async () => memory.loadPlan() ?? { message: "No plan saved yet." },
-    }),
-
-    // ── Intervals.icu tools ─────────────────────────────────────────────
-
     ...(intervals ? createIntervalsTools(intervals) : {}),
   };
 }
-
-// ============================================================================
-// INTERVALS.ICU TOOLS
-// ============================================================================
 
 // intervals-icu-api's TypeScript types declare snake_case fields, but the runtime
 // runs `camelCaseKeys` over every parsed response. So the types lie: at runtime we
