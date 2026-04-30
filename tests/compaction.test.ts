@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { ModelMessage } from "ai";
-import type { MemorySnapshot } from "@cycling-coach/core";
+import type { MemorySnapshot } from "@enduragent/core";
 import {
   auditSummaryQuality,
   summarizeDroppedMessages,

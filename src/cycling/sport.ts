@@ -8,7 +8,7 @@ import {
   type MemorySnapshot,
   type Sport,
   type ToolRegistration,
-} from "@cycling-coach/core";
+} from "@enduragent/core";
 import { createTools } from "../agent/tools.js";
 import { athleteProfileSchema } from "./schemas.js";
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { MemorySnapshot } from "@cycling-coach/core";
+import type { MemorySnapshot } from "@enduragent/core";
 import { cyclingSport, CYCLING_VOCABULARY } from "../src/cycling/sport.js";
 
 function snapshot(sections: Record<string, string | null>): MemorySnapshot {

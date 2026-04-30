@@ -1,7 +1,7 @@
 import { stepCountIs } from "ai";
 import type { ModelMessage, ToolSet } from "ai";
 import { IntervalsClient } from "intervals-icu-api";
-import { getEffectiveSections, type CoreDeps, type SecretsResolver } from "@cycling-coach/core";
+import { getEffectiveSections, type CoreDeps, type SecretsResolver } from "@enduragent/core";
 import type { Config } from "../config.js";
 import { resolveSecretRef } from "../secrets/resolve.js";
 import { Memory } from "./memory.js";

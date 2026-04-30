@@ -1,4 +1,4 @@
-import type { SportPersona } from "@cycling-coach/core";
+import type { SportPersona } from "@enduragent/core";
 import type { Memory } from "./memory.js";
 
 // ============================================================================

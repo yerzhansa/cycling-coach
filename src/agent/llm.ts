@@ -3,7 +3,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import type { LanguageModel } from "ai";
-import type { LLM as LLMInterface } from "@cycling-coach/core";
+import type { LLM as LLMInterface } from "@enduragent/core";
 
 import type { Config } from "../config.js";
 import { codexGenerateText } from "./codex-bridge.js";

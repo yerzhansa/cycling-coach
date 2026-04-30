@@ -1,5 +1,5 @@
 import type { ModelMessage } from "ai";
-import type { MemorySnapshot, SportMemoryShape } from "@cycling-coach/core";
+import type { MemorySnapshot, SportMemoryShape } from "@enduragent/core";
 import {
   estimateTokens,
   estimateMessagesTokens,

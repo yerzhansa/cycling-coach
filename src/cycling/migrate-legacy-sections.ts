@@ -1,4 +1,4 @@
-import type { MemoryStore } from "@cycling-coach/core";
+import type { MemoryStore } from "@enduragent/core";
 
 const LEGACY_RENAMES = [
   ["profile", "cycling-profile"],
