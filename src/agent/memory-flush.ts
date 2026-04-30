@@ -24,9 +24,10 @@ function buildFlushUserPrompt(sections: readonly MemorySectionSpec[]): string {
   const sectionList = sections.map((s) => `- "${s.name}": ${s.description}`).join("\n");
   // The transitional migration clause helps the LLM redistribute legacy
   // content (chronic facts in cycling-history, body data in cycling-profile)
-  // to the right destinations after the section rename. Remove once the
-  // chronic_facts_stuck_in_cycling_history warn stays silent for an extended
-  // period — likely after one or two flushes per existing user.
+  // to the right destinations after the section rename.
+  // TODO(wave-2-cleanup): remove this clause and the surrounding text
+  // when the `chronic_facts_stuck_in_cycling_history` log event has been
+  // silent for ~30 days post-deploy. Saves ~40 input tokens per flush.
   return `Review this conversation and save athlete details to structured memory
 sections. First read existing memory with memory_read, then write each
 section that has new or updated information.
@@ -114,6 +115,12 @@ export async function runMemoryFlush(params: {
   memory: MemoryStore;
   memorySections: readonly MemorySectionSpec[];
 }): Promise<void> {
+  if (params.memorySections.length === 0) {
+    throw new Error(
+      "runMemoryFlush requires at least one memory section. " +
+        "Pass getEffectiveSections(sport) — Core's shared sections guarantee non-empty.",
+    );
+  }
   const flushTools = {
     memory_write: createFlushMemoryWriteTool(params.memory, params.memorySections),
     memory_read: createMemoryReadTool(params.memory),

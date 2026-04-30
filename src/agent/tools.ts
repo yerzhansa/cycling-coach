@@ -55,6 +55,12 @@ export function createTools(
   intervals: IntervalsClient | null,
   sections: readonly MemorySectionSpec[],
 ) {
+  if (sections.length === 0) {
+    throw new Error(
+      "createTools requires at least one MemorySectionSpec. " +
+        "Pass getEffectiveSections(sport) — Core's shared sections guarantee non-empty.",
+    );
+  }
   const sectionNames = sections.map((s) => s.name) as [string, ...string[]];
   return {
     // ── Cycling logic tools (local, no API) ─────────────────────────────
