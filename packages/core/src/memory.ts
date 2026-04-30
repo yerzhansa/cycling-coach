@@ -14,6 +14,15 @@ export interface MemoryStore {
   /** Replaces the named section's content; appends if section is missing. */
   writeSection(section: string, content: string): void;
 
+  /**
+   * Renames `from` section to `to`. Lossless:
+   * - "renamed": `from` existed, `to` did not — header rewritten in place.
+   * - "noop":    file missing or `from` not present.
+   * - "merged":  both `from` and `to` exist — bodies concatenated under `to`,
+   *              `from` block removed.
+   */
+  renameSection(from: string, to: string): "renamed" | "noop" | "merged";
+
   /** Reads today's daily-notes file (or for `date` when supplied). */
   readDailyNotes(date?: string): string;
 
