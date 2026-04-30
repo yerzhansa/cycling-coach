@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 
 import { scriptedPrompts } from "./helpers/scripted-prompts.js";
-import { cyclingBinary } from "../../../src/cycling/binary.js";
+import { cyclingBinary } from "@enduragent/sport-cycling/binary";
 
 let tempHome: string;
 let origHome: string | undefined;

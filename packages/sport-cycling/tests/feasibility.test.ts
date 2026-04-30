@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { assessGoalFeasibility } from "../src/cycling/feasibility.js";
+import { assessGoalFeasibility } from "../src/feasibility.js";
 
 describe("assessGoalFeasibility", () => {
   it("returns null when target is below current FTP", () => {

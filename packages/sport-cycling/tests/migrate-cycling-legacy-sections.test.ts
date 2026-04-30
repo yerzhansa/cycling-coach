@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Memory, type MemoryStore } from "@enduragent/core";
-import { migrateCyclingLegacySections } from "../src/cycling/migrate-legacy-sections.js";
+import { migrateCyclingLegacySections } from "../src/migrate.js";
 
 describe("migrateCyclingLegacySections", () => {
   let dataDir: string;

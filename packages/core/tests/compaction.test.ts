@@ -59,7 +59,7 @@ const VALID_FOUR_SECTION_SUMMARY = [
   "- None outstanding",
 ].join("\n");
 
-import { CYCLING_VOCABULARY } from "../../../src/cycling/sport.js";
+import { CYCLING_VOCABULARY } from "@enduragent/sport-cycling";
 
 const EMPTY_SNAPSHOT: MemorySnapshot = {
   read: () => null,

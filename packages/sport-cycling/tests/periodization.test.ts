@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { selectPeriodizationModel, computeTotalWeeks } from "../src/cycling/periodization.js";
-import type { AthleteProfile } from "../src/cycling/schemas.js";
+import { selectPeriodizationModel, computeTotalWeeks } from "../src/periodization.js";
+import type { AthleteProfile } from "../src/schemas.js";
 
 function makeProfile(overrides: Partial<AthleteProfile> = {}): AthleteProfile {
   return {

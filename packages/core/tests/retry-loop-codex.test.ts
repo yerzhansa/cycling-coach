@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
-import { cyclingSport } from "../../../src/cycling/sport.js";
+import { cyclingSport } from "@enduragent/sport-cycling";
 
 let tempHome: string;
 let origHome: string | undefined;

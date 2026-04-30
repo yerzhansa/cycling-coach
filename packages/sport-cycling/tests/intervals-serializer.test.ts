@@ -4,7 +4,7 @@ import {
   intervalsWorkoutInputSchema,
   InvalidWorkoutError,
   type IntervalsWorkoutInput,
-} from "../src/cycling/intervals-serializer.js";
+} from "../src/intervals-serializer.js";
 
 describe("serializeIntervalsWorkout — description output", () => {
   it("emits a Z2 endurance workout as percent-ftp range", () => {

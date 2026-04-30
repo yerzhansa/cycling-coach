@@ -4,5 +4,29 @@
   "private": true,
   "description": "Cycling sport package — soul, skills, tools, schemas, must-preserve tokens. Implements the Sport contract from @enduragent/core.",
   "type": "module",
-  "license": "MIT"
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./binary": "./dist/binary.js",
+    "./migrate": "./dist/migrate.js"
+  },
+  "files": ["dist", "SOUL.md", "skills"],
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@enduragent/core": "workspace:*",
+    "intervals-icu-api": "^0.1.2",
+    "ai": "^6.0.158",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
+  }
 }

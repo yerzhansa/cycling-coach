@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { calculateCyclingZones } from "../src/cycling/zones.js";
+import { calculateCyclingZones } from "../src/zones.js";
 
 describe("calculateCyclingZones", () => {
   it("returns 6 zones", () => {
