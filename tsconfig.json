@@ -16,7 +16,7 @@
     "declarationMap": true,
     "sourceMap": true,
     "paths": {
-      "@cycling-coach/core": ["./packages/core/dist/index.d.ts"]
+      "@enduragent/core": ["./packages/core/dist/index.d.ts"]
     }
   },
   "include": ["src"],

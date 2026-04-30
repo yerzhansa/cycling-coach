@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { MemoryStore } from "@cycling-coach/core";
+import type { MemoryStore } from "@enduragent/core";
 import { Memory } from "../src/agent/memory.js";
 import { migrateCyclingLegacySections } from "../src/cycling/migrate-legacy-sections.js";
 

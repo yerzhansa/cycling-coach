@@ -1,4 +1,4 @@
-import type { MemorySnapshot, MemoryStore } from "@cycling-coach/core";
+import type { MemorySnapshot, MemoryStore } from "@enduragent/core";
 
 /**
  * Wraps a MemoryStore in a frozen-at-call-time read-only sectioned view.

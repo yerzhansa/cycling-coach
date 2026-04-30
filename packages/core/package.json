@@ -1,5 +1,5 @@
 {
-  "name": "@cycling-coach/core",
+  "name": "@enduragent/core",
   "version": "0.0.0-private",
   "private": true,
   "description": "Sport-agnostic infrastructure for AI coaching agents (agent loop, memory, secrets, channels, LLM, intervals.icu). Publishes the Sport contract.",

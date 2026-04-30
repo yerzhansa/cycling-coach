@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import type { MemoryStore } from "@cycling-coach/core";
+import type { MemoryStore } from "@enduragent/core";
 
 // ============================================================================
 // MEMORY SYSTEM

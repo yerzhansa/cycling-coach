@@ -17,7 +17,7 @@ import type {
   RaceType,
   IntervalsWorkoutInput,
 } from "../cycling/index.js";
-import type { MemorySectionSpec, MemoryStore } from "@cycling-coach/core";
+import type { MemorySectionSpec, MemoryStore } from "@enduragent/core";
 import type { IntervalsClient } from "intervals-icu-api";
 
 function buildMemoryWriteDescription(sections: readonly MemorySectionSpec[]): string {

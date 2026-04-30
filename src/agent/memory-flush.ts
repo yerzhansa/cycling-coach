@@ -1,7 +1,7 @@
 import { tool, zodSchema, stepCountIs } from "ai";
 import type { ModelMessage } from "ai";
 import { z } from "zod";
-import type { MemorySectionSpec, MemoryStore } from "@cycling-coach/core";
+import type { MemorySectionSpec, MemoryStore } from "@enduragent/core";
 import { createMemoryReadTool } from "./tools.js";
 import type { LLM } from "./llm.js";
 

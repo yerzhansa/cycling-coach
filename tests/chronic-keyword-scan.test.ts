@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelMessage } from "ai";
-import type { MemorySectionSpec } from "@cycling-coach/core";
+import type { MemorySectionSpec } from "@enduragent/core";
 import { Memory } from "../src/agent/memory.js";
 import { runMemoryFlush } from "../src/agent/memory-flush.js";
 import type { LLM } from "../src/agent/llm.js";

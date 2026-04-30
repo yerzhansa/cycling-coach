@@ -5,7 +5,7 @@ import {
   _resetWarnCacheForTesting,
   type MemorySectionSpec,
   type Sport,
-} from "@cycling-coach/core";
+} from "@enduragent/core";
 
 function makeSport(id: string, sections: readonly MemorySectionSpec[]): Sport {
   return {

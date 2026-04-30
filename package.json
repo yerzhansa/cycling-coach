@@ -32,7 +32,7 @@
     "@ai-sdk/provider": "^3.0.9",
     "@ai-sdk/provider-utils": "^4.0.24",
     "@clack/prompts": "^1.2.0",
-    "@cycling-coach/core": "workspace:*",
+    "@enduragent/core": "workspace:*",
     "@mariozechner/pi-ai": "0.67.6",
     "ai": "^6.0.158",
     "grammy": "^1.42.0",
