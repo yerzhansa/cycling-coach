@@ -2,34 +2,34 @@ import { intro, outro, select, text, password, confirm, isCancel, cancel, log } 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from "node:fs";
 import { stringify as toYaml } from "yaml";
+import type { BinaryConfig } from "./binary.js";
+import { CONFIG_DIR, CONFIG_FILE, readConfigYaml } from "./config.js";
+import { runCodexLogin } from "./auth/openai-codex-login.js";
+import { loadProfile, saveProfile, type OAuthCredential } from "./auth/profiles.js";
+import { isSecretRef, type SecretRef } from "./secrets/types.js";
 import {
-  CONFIG_DIR,
-  CONFIG_FILE,
-  KeychainUnsafeValueError,
+  detectBackends,
+  type BackendAvailability,
+  type OpState,
+} from "./secrets/backends/detect.js";
+import {
   OpVaultAmbiguousError,
   SecretTooLargeError,
-  detectBackends,
-  isSecretRef,
-  keychainItemDelete,
-  keychainItemExists,
-  keychainItemUpsert,
-  keychainLoginPath,
-  keychainSecretRef,
-  loadProfile,
   opItemCreate,
   opItemDelete,
   opItemGet,
   opItemUpdate,
   opSecretRef,
   opVaultList,
-  readConfigYaml,
-  runCodexLogin,
-  saveProfile,
-  type BackendAvailability,
-  type OAuthCredential,
-  type OpState,
-  type SecretRef,
-} from "@enduragent/core";
+} from "./secrets/backends/op.js";
+import {
+  KeychainUnsafeValueError,
+  keychainItemDelete,
+  keychainItemExists,
+  keychainItemUpsert,
+  keychainLoginPath,
+  keychainSecretRef,
+} from "./secrets/backends/keychain.js";
 
 // ============================================================================
 // TYPES
@@ -102,12 +102,6 @@ const DEFAULT_MODELS: Record<string, string> = {
   "openai-codex": "gpt-5.4",
 };
 
-const FIELD_TITLES: Record<SecretFieldPath, string> = {
-  "llm.api_key": "cycling-coach · llm_api_key",
-  "intervals.api_key": "cycling-coach · intervals_api_key",
-  "telegram.bot_token": "cycling-coach · telegram_bot_token",
-};
-
 const FIELD_KEYCHAIN_ACCOUNT: Record<SecretFieldPath, string> = {
   "llm.api_key": "llm_api_key",
   "intervals.api_key": "intervals_api_key",
@@ -142,7 +136,7 @@ export function _processSecretInput(raw: string, field: string): string {
   return cleaned;
 }
 
-export function _formatOrphanCleanup(ctx: WizardCtx): string {
+export function _formatOrphanCleanup(ctx: WizardCtx, binary: BinaryConfig): string {
   const orphans = ctx.createdThisRun.filter((e) => !e.preExistedBeforeWizard);
   if (orphans.length === 0) return "";
   const lines: string[] = [
@@ -154,15 +148,15 @@ export function _formatOrphanCleanup(ctx: WizardCtx): string {
       lines.push(`  op item delete "${o.title}" --vault "${o.vaultName ?? ""}"`);
     } else if (o.backend === "keychain") {
       lines.push(
-        `  security delete-generic-password -s cycling-coach -a "${o.title}" "${o.keychainPath ?? ""}"`,
+        `  security delete-generic-password -s ${binary.keychainPrefix} -a "${o.title}" "${o.keychainPath ?? ""}"`,
       );
     }
   }
   return lines.join("\n") + "\n";
 }
 
-export function _printOrphanCleanup(ctx: WizardCtx): void {
-  const msg = _formatOrphanCleanup(ctx);
+export function _printOrphanCleanup(ctx: WizardCtx, binary: BinaryConfig): void {
+  const msg = _formatOrphanCleanup(ctx, binary);
   if (msg.length > 0) {
     process.stderr.write(msg);
   }
@@ -171,18 +165,19 @@ export function _printOrphanCleanup(ctx: WizardCtx): void {
 export function _createSignalHandler(
   ctx: WizardCtx,
   signal: "SIGINT" | "SIGTERM",
+  binary: BinaryConfig,
 ): () => void {
   return () => {
-    _printOrphanCleanup(ctx);
+    _printOrphanCleanup(ctx, binary);
     const code = signal === "SIGINT" ? 130 : 143;
     process.exit(code);
   };
 }
 
-export function _assertTTY(): void {
+export function _assertTTY(binary: BinaryConfig): void {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     process.stderr.write(
-      "cycling-coach setup requires an interactive TTY. See README 'Non-interactive setup' for hand-editing YAML directly.\n",
+      `${binary.binaryName} setup requires an interactive TTY. See README 'Non-interactive setup' for hand-editing YAML directly.\n`,
     );
     process.exit(2);
   }
@@ -192,9 +187,9 @@ export function _assertTTY(): void {
 // INTERNAL HELPERS
 // ============================================================================
 
-function handleCancel(value: unknown, ctx: WizardCtx): void {
+function handleCancel(value: unknown, ctx: WizardCtx, binary: BinaryConfig): void {
   if (isCancel(value)) {
-    _printOrphanCleanup(ctx);
+    _printOrphanCleanup(ctx, binary);
     cancel("Setup cancelled.");
     process.exit(0);
   }
@@ -239,19 +234,19 @@ async function runOpSignin(opPath: string): Promise<boolean> {
 // WIZARD FLOW
 // ============================================================================
 
-export async function runSetup(): Promise<void> {
-  _assertTTY();
+export async function runSetup(binary: BinaryConfig): Promise<void> {
+  _assertTTY(binary);
 
   const ctx: WizardCtx = { createdThisRun: [] };
-  const sigintHandler = _createSignalHandler(ctx, "SIGINT");
-  const sigtermHandler = _createSignalHandler(ctx, "SIGTERM");
+  const sigintHandler = _createSignalHandler(ctx, "SIGINT", binary);
+  const sigtermHandler = _createSignalHandler(ctx, "SIGTERM", binary);
   process.once("SIGINT", sigintHandler);
   process.once("SIGTERM", sigtermHandler);
 
   try {
-    await _runWizardCore(ctx);
+    await _runWizardCore(ctx, binary);
   } catch (err) {
-    await _guardedCleanup(ctx);
+    await _guardedCleanup(ctx, binary);
     cancel(`Setup failed: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   } finally {
@@ -260,8 +255,8 @@ export async function runSetup(): Promise<void> {
   }
 }
 
-async function _runWizardCore(ctx: WizardCtx): Promise<void> {
-  intro("Cycling Coach — Setup");
+async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<void> {
+  intro(`${binary.displayName} — Setup`);
 
   const previous = readConfigYaml();
   const prevProvider = getString(previous, "llm", "provider");
@@ -277,7 +272,7 @@ async function _runWizardCore(ctx: WizardCtx): Promise<void> {
     options: PROVIDERS,
     initialValue: prevProvider ?? "anthropic",
   });
-  handleCancel(providerResp, ctx);
+  handleCancel(providerResp, ctx, binary);
   const provider = providerResp as string;
 
   // Model
@@ -294,7 +289,7 @@ async function _runWizardCore(ctx: WizardCtx): Promise<void> {
     ],
     initialValue: initialModel,
   });
-  handleCancel(modelResp, ctx);
+  handleCancel(modelResp, ctx, binary);
   let model = modelResp as string;
 
   if (model === CUSTOM_MODEL_SENTINEL) {
@@ -304,7 +299,7 @@ async function _runWizardCore(ctx: WizardCtx): Promise<void> {
       placeholder: sameProvider ? prevModel : undefined,
       validate: (v) => (!v && !(sameProvider && prevModel) ? "Model name is required" : undefined),
     });
-    handleCancel(custom, ctx);
+    handleCancel(custom, ctx, binary);
     model = (typeof custom === "string" && custom) || prevModel || "";
   }
 
@@ -318,7 +313,7 @@ async function _runWizardCore(ctx: WizardCtx): Promise<void> {
         message: "Existing Codex OAuth profile found. Re-login?",
         initialValue: false,
       });
-      handleCancel(reuse, ctx);
+      handleCancel(reuse, ctx, binary);
       doLogin = Boolean(reuse);
     }
     if (doLogin) {
@@ -334,7 +329,7 @@ async function _runWizardCore(ctx: WizardCtx): Promise<void> {
   }
 
   // Detect backends + pick secret backend (D12 + D9)
-  let backend = await _pickBackend(ctx);
+  let backend = await _pickBackend(ctx, binary);
 
   // Cache vault (D10 multi-vault fallback caches the chosen vault for the run)
   let chosenVault: string | undefined;
@@ -362,7 +357,7 @@ async function _runWizardCore(ctx: WizardCtx): Promise<void> {
       chosenVaultRef: { current: chosenVault },
       opAbsPathRef: { current: opAbsPath },
       keychainPathRef: { current: keychainPath },
-    });
+    }, binary);
     chosenVault = result.chosenVault;
     opAbsPath = result.opAbsPath;
     keychainPath = result.keychainPath;
@@ -386,7 +381,7 @@ async function _runWizardCore(ctx: WizardCtx): Promise<void> {
       chosenVaultRef: { current: chosenVault },
       opAbsPathRef: { current: opAbsPath },
       keychainPathRef: { current: keychainPath },
-    });
+    }, binary);
     chosenVault = result.chosenVault;
     opAbsPath = result.opAbsPath;
     keychainPath = result.keychainPath;
@@ -399,7 +394,7 @@ async function _runWizardCore(ctx: WizardCtx): Promise<void> {
           defaultValue: prevIntervalsId ?? "0",
           placeholder: prevIntervalsId ?? "0",
         });
-        handleCancel(athleteId, ctx);
+        handleCancel(athleteId, ctx, binary);
         intervalsAthleteId = (typeof athleteId === "string" && athleteId) || prevIntervalsId || "0";
       } else if (hasPrev) {
         intervalsAthleteId = prevIntervalsId ?? "0";
@@ -429,7 +424,7 @@ async function _runWizardCore(ctx: WizardCtx): Promise<void> {
       chosenVaultRef: { current: chosenVault },
       opAbsPathRef: { current: opAbsPath },
       keychainPathRef: { current: keychainPath },
-    });
+    }, binary);
     chosenVault = result.chosenVault;
     opAbsPath = result.opAbsPath;
     keychainPath = result.keychainPath;
@@ -447,7 +442,7 @@ async function _runWizardCore(ctx: WizardCtx): Promise<void> {
       message: `Update ${CONFIG_FILE}?`,
       initialValue: true,
     });
-    handleCancel(ok, ctx);
+    handleCancel(ok, ctx, binary);
     if (!ok) {
       log.info("No changes written.");
       return;
@@ -473,7 +468,7 @@ async function _runWizardCore(ctx: WizardCtx): Promise<void> {
     }
   }
 
-  outro(`Config written to ${CONFIG_FILE}\n  Run \`cycling-coach\` to start.`);
+  outro(`Config written to ${CONFIG_FILE}\n  Run \`${binary.binaryName}\` to start.`);
 }
 
 function isNonEmptySecret(value: unknown): boolean {
@@ -482,7 +477,7 @@ function isNonEmptySecret(value: unknown): boolean {
   return false;
 }
 
-async function _pickBackend(ctx: WizardCtx): Promise<BackendChoice> {
+async function _pickBackend(ctx: WizardCtx, binary: BinaryConfig): Promise<BackendChoice> {
   while (true) {
     const avail: BackendAvailability = await detectBackends();
     const options: { value: string; label: string; hint?: string }[] = [
@@ -512,7 +507,7 @@ async function _pickBackend(ctx: WizardCtx): Promise<BackendChoice> {
       options,
       initialValue: BACKEND_PLAIN,
     });
-    handleCancel(picked, ctx);
+    handleCancel(picked, ctx, binary);
 
     if (picked === BACKEND_PLAIN) return "plain";
     if (picked === BACKEND_KEYCHAIN) return "keychain";
@@ -577,6 +572,7 @@ type CollectResult = {
 async function _collectAndWriteSecret(
   ctx: WizardCtx,
   args: CollectArgs,
+  binary: BinaryConfig,
 ): Promise<CollectResult> {
   const { field, label, required, prevValue } = args;
   let backend = args.backend;
@@ -593,7 +589,7 @@ async function _collectAndWriteSecret(
     message: promptLabel,
     validate: () => undefined,
   });
-  handleCancel(entered, ctx);
+  handleCancel(entered, ctx, binary);
   const raw = typeof entered === "string" ? entered : "";
 
   if (raw.length === 0) {
@@ -634,7 +630,7 @@ async function _collectAndWriteSecret(
       ],
       initialValue: "keep",
     });
-    handleCancel(action, ctx);
+    handleCancel(action, ctx, binary);
     if (action === "keep") {
       return {
         yamlValue: prevValue as string | SecretRef,
@@ -651,7 +647,7 @@ async function _collectAndWriteSecret(
       message: `${label} (paste new value)`,
       validate: (v) => (!v ? `${label} is required when migrating.` : undefined),
     });
-    handleCancel(second, ctx);
+    handleCancel(second, ctx, binary);
     const cleanedSecond = _processSecretInput(
       typeof second === "string" ? second : "",
       field,
@@ -660,7 +656,7 @@ async function _collectAndWriteSecret(
       cancel(`${label} is required when migrating.`);
       process.exit(1);
     }
-    return await _writeToBackend(ctx, args, backend, cleanedSecond);
+    return await _writeToBackend(ctx, args, backend, cleanedSecond, binary);
   }
 
   // Non-empty input: trim + size cap, then write to chosen backend.
@@ -690,7 +686,7 @@ async function _collectAndWriteSecret(
     };
   }
 
-  return await _writeToBackend(ctx, args, backend, cleaned);
+  return await _writeToBackend(ctx, args, backend, cleaned, binary);
 }
 
 async function _writeToBackend(
@@ -698,6 +694,7 @@ async function _writeToBackend(
   args: CollectArgs,
   backend: BackendChoice,
   value: string,
+  binary: BinaryConfig,
 ): Promise<CollectResult> {
   const { field } = args;
   if (backend === "plain") {
@@ -713,7 +710,7 @@ async function _writeToBackend(
 
   if (backend === "op") {
     const opAbsPath = args.opAbsPathRef.current ?? (await discoverOpAbsPath());
-    const title = FIELD_TITLES[field];
+    const title = `${binary.keychainPrefix} · ${FIELD_KEYCHAIN_ACCOUNT[field]}`;
     const preExistingVault = await preCheckOpExistence(
       opAbsPath,
       title,
@@ -734,11 +731,11 @@ async function _writeToBackend(
         ],
         initialValue: "update",
       });
-      handleCancel(action, ctx);
+      handleCancel(action, ctx, binary);
       if (action === "cancel") {
         // Mirror the SIGINT/clack-cancel paths: print manual cleanup for any
         // items already created earlier in this run.
-        _printOrphanCleanup(ctx);
+        _printOrphanCleanup(ctx, binary);
         process.exit(0);
       }
       if (action === "keep") {
@@ -769,6 +766,7 @@ async function _writeToBackend(
         title,
         value,
         args.chosenVaultRef.current,
+        binary,
       );
     }
 
@@ -839,6 +837,7 @@ async function createOpItem(
   title: string,
   value: string,
   cachedVault: string | undefined,
+  binary: BinaryConfig,
 ): Promise<string> {
   try {
     const out = await opItemCreate(opAbsPath, title, value, cachedVault);
@@ -850,7 +849,7 @@ async function createOpItem(
         message: "Multiple 1Password vaults — pick one:",
         options: vaults.map((v) => ({ value: v.name, label: v.name })),
       });
-      handleCancel(picked, ctx);
+      handleCancel(picked, ctx, binary);
       const chosen = picked as string;
       const retry = await opItemCreate(opAbsPath, title, value, chosen);
       return retry.vaultName;
@@ -874,7 +873,7 @@ async function discoverOpAbsPath(): Promise<string> {
 // GUARDED CLEANUP (D11)
 // ============================================================================
 
-export async function _guardedCleanup(ctx: WizardCtx): Promise<void> {
+export async function _guardedCleanup(ctx: WizardCtx, binary: BinaryConfig): Promise<void> {
   const orphans = ctx.createdThisRun.filter((e) => !e.preExistedBeforeWizard);
   if (orphans.length === 0) return;
 
@@ -887,7 +886,7 @@ export async function _guardedCleanup(ctx: WizardCtx): Promise<void> {
     initialValue: false,
   });
   if (isCancel(doCleanup) || !doCleanup) {
-    _printOrphanCleanup(ctx);
+    _printOrphanCleanup(ctx, binary);
     return;
   }
 

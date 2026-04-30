@@ -1,12 +1,11 @@
-// FIXME(commit 4): re-enable when setup.ts moves to packages/core/ — vi.doMock paths target src/secrets|src/auth|src/config which are now under packages/core/src/, but setup.ts at root imports them via @enduragent/core, so the mocks no-op until both test and setup.ts live in the same package.
-
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 
-import { scriptedPrompts } from "../../../tests/helpers/scripted-prompts.js";
+import { scriptedPrompts } from "./helpers/scripted-prompts.js";
+import { cyclingBinary } from "../../../src/cycling/binary.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -39,7 +38,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe.skip("codex setup flow", () => {
+describe("codex setup flow", () => {
   it("writes config without api_key and saves auth-profiles.json with 0o600", async () => {
     vi.doMock("@clack/prompts", () =>
       scriptedPrompts({
@@ -58,8 +57,8 @@ describe.skip("codex setup flow", () => {
       })),
     }));
 
-    const { runSetup } = await import("../../../src/setup.js");
-    await runSetup();
+    const { runSetup } = await import("../src/setup.js");
+    await runSetup(cyclingBinary);
 
     const configPath = join(tempHome, ".cycling-coach", "config.yaml");
     expect(existsSync(configPath)).toBe(true);

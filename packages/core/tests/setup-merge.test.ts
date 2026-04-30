@@ -1,5 +1,3 @@
-// FIXME(commit 4): re-enable when setup.ts moves to packages/core/ — vi.doMock paths target src/secrets|src/auth|src/config which are now under packages/core/src/, but setup.ts at root imports them via @enduragent/core, so the mocks no-op until both test and setup.ts live in the same package.
-
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,6 +5,7 @@ import { join } from "node:path";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 
 import { scriptedPrompts } from "./helpers/scripted-prompts.js";
+import { cyclingBinary } from "../../../src/cycling/binary.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -49,7 +48,7 @@ function seedConfig(obj: Record<string, unknown>): void {
   writeFileSync(CONFIG(), toYaml(obj), { mode: 0o600 });
 }
 
-describe.skip("setup merge", () => {
+describe("setup merge", () => {
   it("Case A: switching provider to Codex preserves intervals and telegram", async () => {
     seedConfig({
       llm: { provider: "anthropic", model: "claude-sonnet-4-6", api_key: "sk-ant-keep" },
@@ -75,7 +74,7 @@ describe.skip("setup merge", () => {
     }));
 
     const { runSetup } = await import("../src/setup.js");
-    await runSetup();
+    await runSetup(cyclingBinary);
 
     const merged = parseYaml(readFileSync(CONFIG(), "utf-8")) as Record<string, any>;
     expect(merged.llm.provider).toBe("openai-codex");
@@ -115,7 +114,7 @@ describe.skip("setup merge", () => {
     }));
 
     const { runSetup } = await import("../src/setup.js");
-    await runSetup();
+    await runSetup(cyclingBinary);
 
     expect(readFileSync(CONFIG(), "utf-8")).toBe(before);
     expect(existsSync(PROFILES())).toBe(false);
@@ -140,7 +139,7 @@ describe.skip("setup merge", () => {
     }));
 
     const { runSetup } = await import("../src/setup.js");
-    await runSetup();
+    await runSetup(cyclingBinary);
 
     const config = parseYaml(readFileSync(CONFIG(), "utf-8")) as Record<string, any>;
     expect(config.llm).toEqual({
@@ -180,7 +179,7 @@ describe.skip("setup merge", () => {
     }) as never);
 
     const { runSetup } = await import("../src/setup.js");
-    await expect(runSetup()).rejects.toThrow(/__exit_1/);
+    await expect(runSetup(cyclingBinary)).rejects.toThrow(/__exit_1/);
 
     expect(readFileSync(CONFIG(), "utf-8")).toBe(before);
     expect(existsSync(PROFILES())).toBe(false);
@@ -212,7 +211,7 @@ describe.skip("setup merge", () => {
     }));
 
     const { runSetup } = await import("../src/setup.js");
-    await runSetup();
+    await runSetup(cyclingBinary);
 
     const merged = parseYaml(readFileSync(CONFIG(), "utf-8")) as Record<string, any>;
     expect(merged.data_dir).toBe("/custom/dir");

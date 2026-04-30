@@ -93,19 +93,3 @@ export type SportPersona = Pick<Sport, "soul" | "skills">;
 /** Slice consumed by the memory store factory and the compaction module. */
 export type SportMemoryShape = Pick<Sport, "memorySections" | "mustPreserveTokens">;
 
-// ─── Binary: deployment-shell config (ADR-0001) ────────────────────────
-export interface Binary {
-  readonly name: string;
-  readonly displayName: string;
-  readonly dataSubdir: string;
-  readonly keychainPrefix: string;
-}
-
-// ─── Entry point ───────────────────────────────────────────────────────
-export interface RunBinaryArgs {
-  sport: Sport;
-  binary: Binary;
-}
-
-/** Entry point for binary packages. */
-export declare function runBinary(args: RunBinaryArgs): Promise<void>;
