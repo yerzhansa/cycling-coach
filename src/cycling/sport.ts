@@ -1,12 +1,13 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
-import type {
-  CoreDeps,
-  MemorySectionSpec,
-  MemorySnapshot,
-  Sport,
-  ToolRegistration,
+import {
+  getEffectiveSections,
+  type CoreDeps,
+  type MemorySectionSpec,
+  type MemorySnapshot,
+  type Sport,
+  type ToolRegistration,
 } from "@cycling-coach/core";
 import { createTools } from "../agent/tools.js";
 import { athleteProfileSchema } from "./schemas.js";
@@ -38,13 +39,23 @@ const CYCLING_VOCABULARY: readonly string[] = [
 ];
 
 const memorySections: readonly MemorySectionSpec[] = [
-  { name: "profile", description: "FTP, weight, age, experience level, max HR, resting HR, W/kg" },
-  { name: "schedule", description: "Training days, availability, weekly structure" },
-  { name: "goals", description: "Target events, FTP targets, race dates, milestones" },
-  { name: "equipment", description: "Bikes, trainer, power meter, head unit, indoor setup" },
-  { name: "health", description: "Injuries, sleep patterns, recovery needs, HRV" },
-  { name: "preferences", description: "Indoor/outdoor, coaching style, cross-training" },
-  { name: "notes", description: "Anything else important" },
+  {
+    name: "cycling-profile",
+    description:
+      "FTP (watts), max HR, resting HR, W/kg ratio, experience level. " +
+      "Body data lives in `person`; this is cycling-specific physiology.",
+  },
+  {
+    name: "cycling-equipment",
+    description: "Bikes, trainer, power meter, head unit, indoor setup",
+  },
+  {
+    name: "cycling-history",
+    description:
+      "Cycling-specific injuries (knee, lower back, fit issues), FTP test history, " +
+      "recovery patterns from rides, ride-related sleep/HRV trends. " +
+      "Chronic conditions belong in `medical-history`, not here.",
+  },
 ];
 
 export const cyclingSport: Sport = {
@@ -56,7 +67,7 @@ export const cyclingSport: Sport = {
   intervalsActivityTypes: ["Ride", "VirtualRide"],
   athleteProfileSchema,
   tools: (deps: CoreDeps): readonly ToolRegistration[] => {
-    const toolset = createTools(deps.memory, deps.intervals);
+    const toolset = createTools(deps.memory, deps.intervals, getEffectiveSections(cyclingSport));
     return Object.entries(toolset).map(([name, t]) => ({
       name,
       description: (t as { description?: string }).description ?? "",

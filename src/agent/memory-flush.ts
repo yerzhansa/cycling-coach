@@ -22,6 +22,10 @@ write, so include ALL current facts for that section, not just new ones.`;
 
 function buildFlushUserPrompt(sections: readonly MemorySectionSpec[]): string {
   const sectionList = sections.map((s) => `- "${s.name}": ${s.description}`).join("\n");
+  // Transitional migration clause (added in commit 11b). Helps the LLM
+  // redistribute legacy content from the cycling-history rename to the right
+  // destinations. Remove in a future cleanup commit once the chronic-keyword
+  // scan from commit 11c stays silent for an extended period.
   return `Review this conversation and save athlete details to structured memory
 sections. First read existing memory with memory_read, then write each
 section that has new or updated information.
@@ -32,6 +36,11 @@ ${sectionList}
 For each section you write, include ALL current facts for that section
 (both from memory and from the conversation). This fully replaces the
 section content — omitted facts will be lost.
+
+Note (transitional, post-migration): if \`cycling-profile\` contains weight,
+age, or available training days, move them to \`person\`. If \`cycling-history\`
+contains chronic conditions or long-term medications (hypertension, lisinopril,
+diabetes), move them to \`medical-history\`.
 
 Only write sections that have new or changed information.`;
 }
