@@ -1,7 +1,7 @@
 {
   "name": "@enduragent/sport-cycling",
-  "version": "0.0.0-private",
-  "private": true,
+  "version": "0.0.0",
+  "private": false,
   "description": "Cycling sport package — soul, skills, tools, schemas, must-preserve tokens. Implements the Sport contract from @enduragent/core.",
   "type": "module",
   "main": "dist/index.js",
