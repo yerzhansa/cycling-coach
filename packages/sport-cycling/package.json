@@ -11,9 +11,7 @@
     "./migrate": "./dist/migrate.js"
   },
   "files": [
-    "dist",
-    "SOUL.md",
-    "skills"
+    "dist"
   ],
   "license": "MIT",
   "scripts": {

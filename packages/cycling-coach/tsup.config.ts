@@ -12,6 +12,4 @@ export default defineConfig({
   external: [/^@enduragent\//],
   // Shebang for the bin field — npm preserves bin permissions on publish.
   banner: { js: "#!/usr/bin/env node" },
-  // Raw-text import for SOUL.md and skills/*.md (commit 10 wires these in).
-  loader: { ".md": "text" },
 });
