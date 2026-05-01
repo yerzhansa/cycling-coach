@@ -63,17 +63,21 @@ jobs:
       - run: pnpm -r build
       - name: Pack and smoke ${{ matrix.binary }}
         # PG-8: no `|| true`; set -euo pipefail; 30s timeout (cold Alpine OK).
-        # pnpm pack rewrites workspace:* to actual versions in the tarball.
-        # Use npm install (not pnpm) to simulate end-user `npm i -g <binary>`.
+        # Install the packed tarball as a *dependency* in a fresh consumer
+        # project. This is what end users do (`npm i -g <binary>` resolves
+        # only `dependencies`, never devDependencies). Installing in-place via
+        # `npm install --omit=dev` doesn't work — npm resolves the full
+        # dep graph (including devDeps) before applying --omit, so unpublished
+        # workspace devDeps cause 404s.
         run: |
           set -euo pipefail
           cd packages/${{ matrix.binary }}
-          pnpm pack --pack-destination /tmp/smoke-${{ matrix.binary }}
-          mkdir -p /tmp/smoke-extract-${{ matrix.binary }}
-          tar -xf /tmp/smoke-${{ matrix.binary }}/*.tgz -C /tmp/smoke-extract-${{ matrix.binary }} --strip-components=1
-          cd /tmp/smoke-extract-${{ matrix.binary }}
-          npm install --omit=dev
-          timeout 30 node dist/index.js --help
+          pnpm pack --pack-destination /tmp/smoke-pack-${{ matrix.binary }}
+          mkdir -p /tmp/smoke-consumer-${{ matrix.binary }}
+          cd /tmp/smoke-consumer-${{ matrix.binary }}
+          npm init -y > /dev/null
+          npm install /tmp/smoke-pack-${{ matrix.binary }}/*.tgz
+          timeout 30 node node_modules/${{ matrix.binary }}/dist/index.js --help
 
   publish:
     runs-on: ubuntu-latest
