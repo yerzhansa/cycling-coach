@@ -132,6 +132,12 @@ jobs:
           # version isn't already on npm (idempotent on partial-publish failure).
           # `--no-git-checks` skips pnpm's "must be on a clean git tag" check —
           # changesets/action commits version bumps but doesn't tag per package.
+          # createGithubReleases: auto-create a GitHub Release for every
+          # successfully published package. Tag format is `<name>@<version>`
+          # for monorepo packages — diverges from the pre-Wave-3 `v<version>`
+          # tags but is the changesets convention. Releases page becomes the
+          # canonical changelog surface (in addition to per-package CHANGELOG.md).
+          createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # No NPM_TOKEN — OIDC trusted publisher per PG-7.
