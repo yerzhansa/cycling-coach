@@ -658,10 +658,7 @@ describe("1Password backend", () => {
     ]);
   });
 
-  // 15s timeout — the spawn mock chain (child_process → detectBackends re-poll
-  // → @clack/prompts) is timing-sensitive under CI load and has flaked the
-  // default 5s twice. Bumping is cheaper than a full rewrite of the mock setup.
-  it("needs-signin → op signin succeeds → re-detect ready → continues into op branch", { timeout: 15000 }, async () => {
+  it("needs-signin → op signin succeeds → re-detect ready → continues into op branch", async () => {
     let detectCalls = 0;
     vi.doMock("../src/secrets/backends/detect.js", () => ({
       detectBackends: vi.fn(async () => {
@@ -678,38 +675,17 @@ describe("1Password backend", () => {
         };
       }),
     }));
+    // Stub child_process.spawn so the `op signin` call resolves immediately
+    // with a successful exit code. setImmediate (not synchronous) so the
+    // listener registration order in runOpSignin is preserved.
     vi.doMock("node:child_process", () => ({
-      spawn: vi.fn(() => {
-        const listeners: Record<string, (code: number) => void> = {};
-        return {
-          on: (event: string, cb: (code: number) => void) => {
-            listeners[event] = cb;
-          },
-          emit: (event: string, code: number) => listeners[event]?.(code),
-          // fire 'close' with 0 immediately on next tick
-          _fire: () => setImmediate(() => listeners["close"]?.(0)),
-        };
-      }),
-    }));
-    // Because the child_process mock's spawn won't auto-emit, I need to
-    // patch the behavior differently. Instead, mock the OS "op signin" by
-    // pre-setting the second detectBackends call to "ready" and accepting
-    // that runOpSignin resolves to true. The simplest approach: replace
-    // child_process.spawn with a synchronous stub that emits close(0)
-    // asynchronously.
-    vi.doMock("node:child_process", () => ({
-      spawn: vi.fn(() => {
-        const listeners: Record<string, (code: number) => void> = {};
-        const emitter = {
-          on: (event: string, cb: (code: number) => void) => {
-            listeners[event] = cb;
-            if (event === "close") {
-              setImmediate(() => cb(0));
-            }
-          },
-        };
-        return emitter;
-      }),
+      spawn: vi.fn(() => ({
+        on: (event: string, cb: (code: number) => void) => {
+          if (event === "close") {
+            setImmediate(() => cb(0));
+          }
+        },
+      })),
     }));
     vi.doMock("@clack/prompts", () =>
       scriptedPrompts({
