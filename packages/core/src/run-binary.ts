@@ -33,6 +33,20 @@ function parseCommand(binary: BinaryConfig): string | null {
   return positionals[0] ?? null;
 }
 
+export async function runStartupHook(
+  memory: Memory,
+  hook?: RunBinaryHooks["onStartup"],
+): Promise<void> {
+  if (!hook) return;
+  try {
+    await hook(memory);
+  } catch (err) {
+    console.warn(
+      `Startup hook failed: ${err instanceof Error ? err.message : String(err)}. Continuing with binary startup.`,
+    );
+  }
+}
+
 export async function runBinary(
   sport: Sport,
   binary: BinaryConfig,
@@ -84,9 +98,7 @@ export async function runBinary(
   const { CoachAgent } = await import("./agent/coach-agent.js");
   const agent = new CoachAgent(sport, config);
 
-  if (hooks.onStartup) {
-    await hooks.onStartup(agent.getMemory());
-  }
+  await runStartupHook(agent.getMemory(), hooks.onStartup);
 
   if (config.telegram.botToken) {
     const { createTelegramBot, notifyUpdate } = await import("./channels/telegram.js");
