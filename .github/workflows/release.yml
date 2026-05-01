@@ -1,13 +1,11 @@
 name: Release
 
 on:
-  # build/test/smoke run on every push to main as a regression signal.
-  # The publish job is gated below so it only fires when manually dispatched
-  # (Actions tab → Release → Run workflow). Lets the Version PR / changesets
-  # flow stay deliberate: write a changeset → push → bot opens Version PR →
-  # merge it → manually click Run workflow to actually publish.
-  push:
-    branches: [main]
+  # Manual-only. The whole release pipeline (build → test → smoke → publish)
+  # runs when an operator clicks "Run workflow" on the Release workflow page.
+  # Push-to-main never triggers anything here — PR CI (`.github/workflows/
+  # ci.yml`) is what catches regressions before merge. Release runs are a
+  # deliberate, separately-billed action.
   workflow_dispatch:
 
 # PG-16: per-job least-privilege; id-token only on publish.
@@ -88,9 +86,6 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     needs: [build, test, smoke]
-    # Manual-only — never runs on a push trigger. Click "Run workflow" on
-    # the Release workflow page after merging a Version PR to ship.
-    if: github.event_name == 'workflow_dispatch'
     # Serialize publish runs so two pushes to main on the same day can't both
     # query npm, see the same "latest" version, and race on suffix selection.
     # cancel-in-progress: false — never abort an in-flight publish; queue and run.
