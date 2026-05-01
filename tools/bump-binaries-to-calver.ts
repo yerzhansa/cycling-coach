@@ -30,7 +30,7 @@
  *   operator rather than silently corrupting state.
  */
 import { execSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const BINARY_PACKAGES = ["cycling-coach"];
@@ -70,6 +70,32 @@ function nextCalVer(pkg: string, base: string): string {
 const packagesDir = "packages";
 const today = todayCalVer();
 
+/**
+ * After overriding package.json, rewrite the latest `## <version>` header in
+ * CHANGELOG.md so it matches. `changeset version` writes the SemVer header
+ * before our override runs, so without this the header lags by one release.
+ * Only the FIRST `## ` line is rewritten — historical entries are preserved.
+ */
+function rewriteChangelogHeader(pkg: string, oldVersion: string, newVersion: string): void {
+  const changelogPath = join(packagesDir, pkg, "CHANGELOG.md");
+  if (!existsSync(changelogPath)) return;
+  const contents = readFileSync(changelogPath, "utf-8");
+  const headerNeedle = `## ${oldVersion}`;
+  const headerIndex = contents.indexOf(headerNeedle);
+  if (headerIndex === -1) {
+    console.warn(
+      `${pkg}: CHANGELOG.md has no '${headerNeedle}' header to rewrite — leaving as-is`,
+    );
+    return;
+  }
+  const updated =
+    contents.slice(0, headerIndex) +
+    `## ${newVersion}` +
+    contents.slice(headerIndex + headerNeedle.length);
+  writeFileSync(changelogPath, updated);
+  console.log(`${pkg}: CHANGELOG.md header ${oldVersion} → ${newVersion}`);
+}
+
 for (const pkg of BINARY_PACKAGES) {
   const pkgJsonPath = join(packagesDir, pkg, "package.json");
   let pkgJson: { version: string; [k: string]: unknown };
@@ -79,12 +105,14 @@ for (const pkg of BINARY_PACKAGES) {
     console.error(`skip: ${pkgJsonPath} not found`);
     continue;
   }
+  const oldVersion = pkgJson.version;
   const newVersion = nextCalVer(pkg, today);
-  if (newVersion === pkgJson.version) {
+  if (newVersion === oldVersion) {
     console.log(`${pkg}: already ${newVersion} (no bump)`);
     continue;
   }
   pkgJson.version = newVersion;
   writeFileSync(pkgJsonPath, JSON.stringify(pkgJson, null, 2) + "\n");
-  console.log(`${pkg}: ${pkgJson.version}`);
+  rewriteChangelogHeader(pkg, oldVersion, newVersion);
+  console.log(`${pkg}: ${oldVersion} → ${newVersion}`);
 }
