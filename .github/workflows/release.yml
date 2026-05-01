@@ -105,7 +105,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
       - name: Create Version PR or publish
-        uses: changesets/action@v1.4   # PG-15: pin major version
+        uses: changesets/action@v1.4.10   # PG-15: latest in 1.4.x series
         with:
           version: |
             pnpm exec changeset version
