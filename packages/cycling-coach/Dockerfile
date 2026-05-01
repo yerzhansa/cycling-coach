@@ -36,7 +36,13 @@ RUN pnpm --filter cycling-coach... build
 
 # pnpm deploy: produces a self-contained dir with prod-only deps,
 # resolves workspace:* to actual files, the pnpm-canonical Docker pattern.
-RUN pnpm --filter cycling-coach --prod deploy /app/runtime-bundle
+# --legacy: pnpm 10 made `inject-workspace-packages=true` required for
+# `deploy` by default; without that workspace setting, deploy errors with
+# ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE. We don't need the injection model
+# (cycling-coach bundles @enduragent/* via tsup; workspace deps live in
+# devDependencies and get stripped by --prod anyway), so the legacy flag
+# is the right opt-out.
+RUN pnpm --filter cycling-coach --prod --legacy deploy /app/runtime-bundle
 
 # ── runtime ────────────────────────────────────────────────────────────────
 FROM node:22-alpine AS runtime
