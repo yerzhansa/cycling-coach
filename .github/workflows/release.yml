@@ -107,10 +107,11 @@ jobs:
       - name: Create Version PR or publish
         uses: changesets/action@v1.4.10   # PG-15: latest in 1.4.x series
         with:
-          # changesets/action `version` expects a single shell command, not a
-          # multi-line script. The `|` literal block was concatenating the two
-          # lines into one command and the changesets CLI rejected the args.
-          version: pnpm exec changeset version && pnpm exec tsx tools/bump-binaries-to-calver.ts
+          # changesets/action runs `version` via execa without a shell, so
+          # shell metacharacters (`&&`, `|`, multi-line) don't work — they
+          # become literal args. Wrap the two-step into a package.json script
+          # where pnpm's own shell handles the chaining.
+          version: pnpm release-version
           publish: pnpm publish -r --access public --no-git-checks
           # `pnpm publish -r` walks all packages and publishes the ones whose
           # version isn't already on npm (idempotent on partial-publish failure).

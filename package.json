@@ -13,7 +13,8 @@
     "lint": "oxlint packages/",
     "fmt": "oxfmt packages/",
     "fmt:check": "oxfmt --check packages/",
-    "check": "pnpm -r build && oxlint packages/"
+    "check": "pnpm -r build && oxlint packages/",
+    "release-version": "changeset version && tsx tools/bump-binaries-to-calver.ts"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.0",
