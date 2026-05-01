@@ -74,6 +74,12 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     needs: [build, test, smoke]
+    # Serialize publish runs so two pushes to main on the same day can't both
+    # query npm, see the same "latest" version, and race on suffix selection.
+    # cancel-in-progress: false — never abort an in-flight publish; queue and run.
+    concurrency:
+      group: release-publish
+      cancel-in-progress: false
     permissions:
       contents: write
       pull-requests: write

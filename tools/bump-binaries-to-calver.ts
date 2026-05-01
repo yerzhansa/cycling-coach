@@ -5,10 +5,26 @@
  *
  * Run after `pnpm exec changeset version` in CI, before `pnpm publish -r`.
  *
- * The -N suffix handles same-day re-release: if today's date already matches an
- * existing tag, the script bumps the suffix (2026.5.1 → 2026.5.1-1 → 2026.5.1-2).
+ * Same-day re-release strategy:
+ *   The -N suffix handles multiple binary releases on a single day. The next
+ *   available suffix is determined by querying npm for the latest published
+ *   version of each binary package (`npm view <pkg> version`), not by reading
+ *   the local package.json. The local file is whatever changesets last wrote
+ *   to it on this CI run; npm is the source of truth for what already exists.
+ *
+ *   Example: if 2026.5.1 and 2026.5.1-1 are already on npm and we run again
+ *   today, npm view returns "2026.5.1-1" and this script writes "2026.5.1-2"
+ *   into the local package.json so `pnpm publish -r` succeeds.
+ *
+ * Network failure fallback:
+ *   If `npm view` fails (registry down, package never published, no network),
+ *   we fall back to today's CalVer base. On a first publish this is correct;
+ *   on a subsequent publish with no network the publish step will fail with
+ *   a "version already exists" error — surfaced clearly to the operator
+ *   rather than silently corrupting state.
  */
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const BINARY_PACKAGES = ["cycling-coach", "running-coach", "duathlon-coach"];
@@ -21,11 +37,22 @@ function todayCalVer(): string {
   return `${y}.${m}.${d}`;
 }
 
-function nextSuffix(current: string, base: string): string {
-  // current looks like "2026.5.1" or "2026.5.1-2". If base matches the date
-  // part, increment suffix.
-  if (current === base) return `${base}-1`;
-  const m = current.match(new RegExp(`^${base.replace(/\./g, "\\.")}-(\\d+)$`));
+function getLatestPublishedVersion(pkg: string): string | null {
+  try {
+    return execSync(`npm view ${pkg} version`, {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function nextCalVer(pkg: string, base: string): string {
+  const latest = getLatestPublishedVersion(pkg);
+  if (!latest) return base;
+  if (latest === base) return `${base}-1`;
+  const m = latest.match(new RegExp(`^${base.replace(/\./g, "\\.")}-(\\d+)$`));
   if (m) return `${base}-${parseInt(m[1], 10) + 1}`;
   return base;
 }
@@ -42,7 +69,7 @@ for (const pkg of BINARY_PACKAGES) {
     console.error(`skip: ${pkgJsonPath} not found`);
     continue;
   }
-  const newVersion = nextSuffix(pkgJson.version, today);
+  const newVersion = nextCalVer(pkg, today);
   if (newVersion === pkgJson.version) {
     console.log(`${pkg}: already ${newVersion} (no bump)`);
     continue;
