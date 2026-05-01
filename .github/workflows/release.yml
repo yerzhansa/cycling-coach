@@ -19,7 +19,7 @@ jobs:
         # Reads `packageManager` from root package.json (corepack-style pin).
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
@@ -34,7 +34,7 @@ jobs:
       - uses: pnpm/action-setup@v3
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
@@ -57,7 +57,7 @@ jobs:
       - uses: pnpm/action-setup@v3
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
@@ -99,18 +99,17 @@ jobs:
       - uses: pnpm/action-setup@v3
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # Node 24 ships npm 11.x natively, which `pnpm publish` proxies to
+          # for the registry PUT. npm 11.5.1+ is required for OIDC trusted
+          # publisher handshake — Node 22's bundled npm 10.x doesn't support
+          # it, and `npm install -g npm@latest` self-upgrade hits a known
+          # `Cannot find module 'promise-retry'` race during the swap. Using
+          # a Node version that ships the right npm sidesteps both issues.
+          node-version: 24
           registry-url: https://registry.npmjs.org
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
-      # Node 22 bundles npm 10.x, but OIDC trusted-publisher support landed in
-      # npm 11.5.1. `pnpm publish` proxies to whatever `npm` is on PATH for the
-      # actual HTTP PUT, so the registry call needs a recent npm to negotiate
-      # the OIDC handshake. Without this, publish fails with `404 - PUT
-      # https://registry.npmjs.org/<pkg>` (no auth token sent).
-      - name: Upgrade npm CLI to support OIDC
-        run: npm install -g npm@latest && npm --version
       - name: Create Version PR or publish
         uses: changesets/action@v1.4.10   # PG-15: latest in 1.4.x series
         with:
