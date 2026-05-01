@@ -104,6 +104,13 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
+      # Node 22 bundles npm 10.x, but OIDC trusted-publisher support landed in
+      # npm 11.5.1. `pnpm publish` proxies to whatever `npm` is on PATH for the
+      # actual HTTP PUT, so the registry call needs a recent npm to negotiate
+      # the OIDC handshake. Without this, publish fails with `404 - PUT
+      # https://registry.npmjs.org/<pkg>` (no auth token sent).
+      - name: Upgrade npm CLI to support OIDC
+        run: npm install -g npm@latest && npm --version
       - name: Create Version PR or publish
         uses: changesets/action@v1.4.10   # PG-15: latest in 1.4.x series
         with:
