@@ -29,11 +29,11 @@ If sport-cycling improves its FTP-test guidance, sport-duathlon inherits the imp
 
 After Wave 3 of the Core/Sport seam refactor (issue #47):
 
-- **Core** — implemented at `packages/core/`. Sport-agnostic; no cycling vocabulary leaks. Three-category tool split per ADR-0004 (Pure-Core memory + intervals tools live in Core; sport-injected config flows in via `BinaryConfig`/`Sport.intervalsActivityTypes`). Published as `@enduragent/core` (SemVer 1.0.0).
-- **Cycling** — implemented at `packages/sport-cycling/`. SOUL.md + skills/*.md inlined into the bundle via tsup `.md: text` loader and skills.generated.ts codegen. Published as `@enduragent/sport-cycling` (SemVer 1.0.0).
-- **Cycling Coach** — implemented at `packages/cycling-coach/`. 7-line bin shim. Published as `cycling-coach` (CalVer continues).
-- **Running, Duathlon, Running Coach, Duathlon Coach** — empty stubs at `packages/{sport-running,sport-duathlon,running-coach,duathlon-coach}/`. Published as alpha placeholders (0.0.1 / 2026.4.30) to reserve npm names and exercise the publish pipeline.
+- **Core** — implemented at `packages/core/`. Sport-agnostic; no cycling vocabulary leaks. Three-category tool split per ADR-0004 (Pure-Core memory + intervals tools live in Core; sport-injected config flows in via `BinaryConfig`/`Sport.intervalsActivityTypes`). Private workspace package (`@enduragent/core`); bundled into the `cycling-coach` binary at publish time, not separately published. See ADR-0009.
+- **Cycling** — implemented at `packages/sport-cycling/`. SOUL.md + skills/*.md inlined into the bundle via tsup `.md: text` loader and skills.generated.ts codegen. Private workspace package (`@enduragent/sport-cycling`); bundled into the `cycling-coach` binary at publish time, not separately published.
+- **Cycling Coach** — implemented at `packages/cycling-coach/`. 7-line bin shim. Published as `cycling-coach` on npm (CalVer continues). The published tarball is self-contained — `@enduragent/*` workspace code is inlined via `tsup` `noExternal`.
+- **Running, Duathlon, Running Coach, Duathlon Coach** — empty stubs at `packages/{sport-running,sport-duathlon,running-coach,duathlon-coach}/`. Private workspace packages (SemVer); not published. They graduate to public CalVer-versioned npm binaries once a real implementation lands.
 
-## Wave 3 release flow
+## Release flow
 
-Changesets-driven (`.changeset/*.md` + `pnpm exec changeset` CLI). The publish workflow runs on push:main, gates on build + test + smoke (matrix across the 3 binary packages), then merges the bot's Version PR to publish via OIDC trusted publisher (no NPM_TOKEN). `tools/bump-binaries-to-calver.ts` overrides changesets' SemVer bumps for binary packages with today's CalVer.
+Changesets-driven (`.changeset/*.md` + `pnpm exec changeset` CLI). The publish workflow runs on push:main, gates on build + test + smoke, then merges the bot's Version PR to publish via OIDC trusted publisher (no NPM_TOKEN). Currently only `cycling-coach` is publishable (per ADR-0009); `pnpm publish -r` skips the private libraries and stub binaries automatically. `tools/bump-binaries-to-calver.ts` overrides changesets' SemVer bumps with today's CalVer for published binaries.
