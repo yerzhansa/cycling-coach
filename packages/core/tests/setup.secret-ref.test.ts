@@ -658,7 +658,10 @@ describe("1Password backend", () => {
     ]);
   });
 
-  it("needs-signin → op signin succeeds → re-detect ready → continues into op branch", async () => {
+  // 15s timeout — the spawn mock chain (child_process → detectBackends re-poll
+  // → @clack/prompts) is timing-sensitive under CI load and has flaked the
+  // default 5s twice. Bumping is cheaper than a full rewrite of the mock setup.
+  it("needs-signin → op signin succeeds → re-detect ready → continues into op branch", { timeout: 15000 }, async () => {
     let detectCalls = 0;
     vi.doMock("../src/secrets/backends/detect.js", () => ({
       detectBackends: vi.fn(async () => {
