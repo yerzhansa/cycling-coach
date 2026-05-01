@@ -17,11 +17,13 @@
  *   into the local package.json so `pnpm publish -r` succeeds.
  *
  * Network failure fallback:
- *   If `npm view` fails (registry down, package never published, no network),
- *   we fall back to today's CalVer base. On a first publish this is correct;
- *   on a subsequent publish with no network the publish step will fail with
- *   a "version already exists" error — surfaced clearly to the operator
- *   rather than silently corrupting state.
+ *   If `npm view` fails (registry down, package never published, no network)
+ *   or exceeds the 30s execSync timeout, we fall back to today's CalVer base
+ *   and log a warning naming the failed package + reason. On a first publish
+ *   this is correct; on a subsequent publish with no network the publish step
+ *   will fail with a "version already exists" error — surfaced clearly to the
+ *   operator rather than silently corrupting state. The 30s cap bounds the
+ *   worst-case CI overhead at 30s × N binaries (currently 3, so 90s).
  */
 import { execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -42,8 +44,12 @@ function getLatestPublishedVersion(pkg: string): string | null {
     return execSync(`npm view ${pkg} version`, {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: 30_000,
     }).trim();
-  } catch {
+  } catch (err) {
+    console.warn(
+      `npm view ${pkg} failed (${err instanceof Error ? err.message : String(err)}). Falling back to today's CalVer base.`,
+    );
     return null;
   }
 }
