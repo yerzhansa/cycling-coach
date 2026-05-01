@@ -4,7 +4,7 @@ The published `cycling-coach` npm binary. A 7-line shim that wires the cycling s
 
 ## Status: published
 
-Bundled via tsup with `@enduragent/*` externalized — npm dedupes Core and sport-cycling at install time, fixing Wave 2's runtime resolution bug. CalVer scheme (`YYYY.M.D[-N]`) continues; library deps follow SemVer.
+Bundled via tsup with `@enduragent/*` **inlined** (`noExternal`). The published tarball's `dist/index.js` contains all the workspace code — Core, sport-cycling, and the binary shim — so end users install one self-contained package. CalVer scheme (`YYYY.M.D[-N]`) continues. Library packages stay private workspace deps until an external consumer needs them; see ADR-0009.
 
 ## What lives here
 

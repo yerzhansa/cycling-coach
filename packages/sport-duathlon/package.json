@@ -1,7 +1,7 @@
 {
   "name": "@enduragent/sport-duathlon",
   "version": "0.0.1",
-  "private": false,
+  "private": true,
   "description": "Duathlon coordinator sport package (alpha — not yet implemented). Composes sport-cycling + sport-running per ADR-0002.",
   "type": "module",
   "main": "dist/index.js",

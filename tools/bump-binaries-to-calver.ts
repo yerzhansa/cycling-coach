@@ -1,9 +1,14 @@
 #!/usr/bin/env tsx
 /**
- * Override changesets' SemVer bumps on binary packages with CalVer (YYYY.M.D[-N]).
- * Library packages (@enduragent/*) keep changesets' SemVer bumps.
+ * Override changesets' SemVer bumps on published binary packages with CalVer
+ * (YYYY.M.D[-N]). All other packages (libs, private stub binaries) keep
+ * changesets' SemVer bumps.
  *
  * Run after `pnpm exec changeset version` in CI, before `pnpm publish -r`.
+ *
+ * Currently the only published binary is `cycling-coach`. When `running-coach`
+ * or `duathlon-coach` graduate from private stubs to real npm-published
+ * binaries, add their names to BINARY_PACKAGES. See ADR-0010.
  *
  * Same-day re-release strategy:
  *   The -N suffix handles multiple binary releases on a single day. The next
@@ -22,14 +27,13 @@
  *   and log a warning naming the failed package + reason. On a first publish
  *   this is correct; on a subsequent publish with no network the publish step
  *   will fail with a "version already exists" error — surfaced clearly to the
- *   operator rather than silently corrupting state. The 30s cap bounds the
- *   worst-case CI overhead at 30s × N binaries (currently 3, so 90s).
+ *   operator rather than silently corrupting state.
  */
 import { execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const BINARY_PACKAGES = ["cycling-coach", "running-coach", "duathlon-coach"];
+const BINARY_PACKAGES = ["cycling-coach"];
 
 function todayCalVer(): string {
   const now = new Date();

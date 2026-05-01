@@ -1,7 +1,7 @@
 {
   "name": "running-coach",
-  "version": "2026.4.30",
-  "private": false,
+  "version": "0.0.1",
+  "private": true,
   "description": "AI running coaching agent (alpha — not yet implemented).",
   "type": "module",
   "main": "dist/index.js",

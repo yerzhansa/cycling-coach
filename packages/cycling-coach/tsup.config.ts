@@ -6,10 +6,10 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   splitting: false,
-  // Externalize @enduragent/* explicitly. tsup's default already externalizes
-  // dependencies, but the explicit regex makes the multi-package dedup
-  // contract obvious to a reader.
-  external: [/^@enduragent\//],
+  // Bundle @enduragent/* into the binary. The libs are private workspace
+  // packages (not published to npm) — bundling makes the published tarball
+  // self-contained. See ADR-0010.
+  noExternal: [/^@enduragent\//],
   // Shebang for the bin field — npm preserves bin permissions on publish.
   banner: { js: "#!/usr/bin/env node" },
 });

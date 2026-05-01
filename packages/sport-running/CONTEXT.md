@@ -4,4 +4,4 @@ Not yet implemented. Tracked in issue #47. When implemented, this context will o
 
 ## Status: alpha — empty stub
 
-The package exists on npm to reserve the name and exercise the publish pipeline. No real Sport implementation yet.
+Private workspace package — not published to npm. Becomes a published `@enduragent/sport-running` (SemVer) when a real Sport implementation lands and an external consumer needs it. See ADR-0009.
