@@ -47,7 +47,11 @@ jobs:
       contents: read
     strategy:
       matrix:
-        binary: [cycling-coach, running-coach, duathlon-coach]
+        # Only published binaries belong here. Per ADR-0009, running-coach and
+        # duathlon-coach are private workspace stubs — pnpm pack would fetch
+        # their unpublished @enduragent/* deps and fail the smoke install.
+        # Add them back when they graduate to real npm-published binaries.
+        binary: [cycling-coach]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v3
