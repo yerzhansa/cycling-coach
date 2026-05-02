@@ -1,0 +1,52 @@
+name: Version PR
+
+# Opens or updates the changesets "Version Packages" PR whenever a push to
+# main contains unconsumed `.changeset/*.md` files. The Version PR is the
+# accumulator for pending releases — multiple changesets across multiple
+# pushes batch into one PR. Merging the Version PR doesn't ship anything;
+# release.yml ships it on tag push.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialize so concurrent pushes to main don't race each other when both
+# trying to update changeset-release/main.
+concurrency:
+  group: version-pr
+  cancel-in-progress: false
+
+jobs:
+  version-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Open or update Version PR
+        uses: changesets/action@v1.4.10
+        with:
+          # `version` consumes .changeset/*.md, bumps package.json, updates
+          # CHANGELOG.md, then bump-binaries-to-calver.ts overrides binary
+          # versions to today's CalVer (and rewrites their CHANGELOG headers
+          # to match). All run inside pnpm's shell so `&&` chaining works.
+          version: pnpm release-version
+          # No `publish:` field — publishing happens in release.yml on tag
+          # push, not here. This action only manages the Version PR; if no
+          # changesets exist, it's a no-op.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

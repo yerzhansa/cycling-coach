@@ -1,26 +1,69 @@
 name: Release
 
+# Tag-triggered, per-binary release. Each binary published from this monorepo
+# has its own tag namespace (cycling-coach@<v>, running-coach@<v>, etc.).
+# Pushing a tag — via `git push --tags` or via the GitHub UI's "Draft a new
+# release" page — fires this workflow against the exact tagged commit.
+# Workflow_dispatch is kept as a fallback for re-running after a failed publish
+# without recreating the tag.
+#
+# Today only `cycling-coach` is publishable (per ADR-0009). The trigger globs
+# include the stub binaries' patterns so when running-coach / duathlon-coach
+# graduate to real npm-published binaries no workflow change is needed —
+# just flip `private: false` and tag.
+
 on:
-  # Manual-only. The whole release pipeline (build → test → smoke → publish)
-  # runs when an operator clicks "Run workflow" on the Release workflow page.
-  # Push-to-main never triggers anything here — PR CI (`.github/workflows/
-  # ci.yml`) is what catches regressions before merge. Release runs are a
-  # deliberate, separately-billed action.
+  push:
+    tags:
+      - 'cycling-coach@*'
+      - 'running-coach@*'
+      - 'duathlon-coach@*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release from (e.g., cycling-coach@2026.5.2). Tag must already exist.'
+        required: true
 
 # PG-16: per-job least-privilege; id-token only on publish.
 permissions:
   contents: read
 
 jobs:
+  parse-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      package: ${{ steps.parse.outputs.package }}
+      version: ${{ steps.parse.outputs.version }}
+      ref: ${{ steps.parse.outputs.ref }}
+    steps:
+      - id: parse
+        # Tag format is <package>@<version>. For tag-push events, github.ref_name
+        # is the tag (e.g. "cycling-coach@2026.5.2"). For workflow_dispatch,
+        # github.event.inputs.tag is what the operator typed.
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          PACKAGE="${TAG%@*}"
+          VERSION="${TAG#*@}"
+          if [ "$PACKAGE" = "$TAG" ] || [ "$VERSION" = "$TAG" ]; then
+            echo "::error::Tag '$TAG' is not in <package>@<version> format"
+            exit 1
+          fi
+          echo "package=$PACKAGE" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "ref=$TAG" >> "$GITHUB_OUTPUT"
+          echo "::notice::Releasing $PACKAGE @ $VERSION (ref: $TAG)"
+
   build:
     runs-on: ubuntu-latest
+    needs: parse-tag
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.parse-tag.outputs.ref }}
       - uses: pnpm/action-setup@v3
-        # Reads `packageManager` from root package.json (corepack-style pin).
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -30,11 +73,13 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    needs: build
+    needs: [parse-tag, build]
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.parse-tag.outputs.ref }}
       - uses: pnpm/action-setup@v3
       - uses: actions/setup-node@v4
         with:
@@ -46,18 +91,13 @@ jobs:
 
   smoke:
     runs-on: ubuntu-latest
-    needs: build
+    needs: [parse-tag, build]
     permissions:
       contents: read
-    strategy:
-      matrix:
-        # Only published binaries belong here. Per ADR-0009, running-coach and
-        # duathlon-coach are private workspace stubs — pnpm pack would fetch
-        # their unpublished @enduragent/* deps and fail the smoke install.
-        # Add them back when they graduate to real npm-published binaries.
-        binary: [cycling-coach]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.parse-tag.outputs.ref }}
       - uses: pnpm/action-setup@v3
       - uses: actions/setup-node@v4
         with:
@@ -65,76 +105,93 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
-      - name: Pack and smoke ${{ matrix.binary }}
-        # PG-8: no `|| true`; set -euo pipefail; 30s timeout (cold Alpine OK).
-        # Install the packed tarball as a *dependency* in a fresh consumer
-        # project. This is what end users do (`npm i -g <binary>` resolves
-        # only `dependencies`, never devDependencies). Installing in-place via
-        # `npm install --omit=dev` doesn't work — npm resolves the full
-        # dep graph (including devDeps) before applying --omit, so unpublished
-        # workspace devDeps cause 404s.
+      - name: Pack and smoke ${{ needs.parse-tag.outputs.package }}
+        # Install the packed tarball as a dependency of a fresh consumer
+        # project — what end users actually do. Installing in-place via
+        # `npm install --omit=dev` doesn't work: npm resolves the full
+        # dep graph (incl. devDeps) before applying --omit, hits 404 on
+        # private workspace devDeps.
         run: |
           set -euo pipefail
-          cd packages/${{ matrix.binary }}
-          pnpm pack --pack-destination /tmp/smoke-pack-${{ matrix.binary }}
-          mkdir -p /tmp/smoke-consumer-${{ matrix.binary }}
-          cd /tmp/smoke-consumer-${{ matrix.binary }}
+          PACKAGE="${{ needs.parse-tag.outputs.package }}"
+          cd "packages/$PACKAGE"
+          pnpm pack --pack-destination "/tmp/smoke-pack-$PACKAGE"
+          mkdir -p "/tmp/smoke-consumer-$PACKAGE"
+          cd "/tmp/smoke-consumer-$PACKAGE"
           npm init -y > /dev/null
-          npm install /tmp/smoke-pack-${{ matrix.binary }}/*.tgz
-          timeout 30 node node_modules/${{ matrix.binary }}/dist/index.js --help
+          npm install /tmp/smoke-pack-$PACKAGE/*.tgz
+          timeout 30 node "node_modules/$PACKAGE/dist/index.js" --help
 
   publish:
     runs-on: ubuntu-latest
-    needs: [build, test, smoke]
-    # Serialize publish runs so two pushes to main on the same day can't both
-    # query npm, see the same "latest" version, and race on suffix selection.
-    # cancel-in-progress: false — never abort an in-flight publish; queue and run.
+    needs: [parse-tag, build, test, smoke]
+    # Per-package serialization. Two cycling-coach releases on the same day
+    # never run in parallel (avoids any same-tag publish race), but cycling
+    # and running can publish at the same time once both are real binaries.
     concurrency:
-      group: release-publish
+      group: release-publish-${{ needs.parse-tag.outputs.package }}
       cancel-in-progress: false
     permissions:
-      contents: write
-      pull-requests: write
-      id-token: write   # PG-16: OIDC, scoped to publish job only.
+      contents: write   # for `gh release create` if no UI-created release exists
+      id-token: write   # PG-16: OIDC, scoped to publish job only
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.parse-tag.outputs.ref }}
           fetch-depth: 0
       - uses: pnpm/action-setup@v3
       - uses: actions/setup-node@v4
         with:
-          # Node 24 ships npm 11.x natively, which `pnpm publish` proxies to
-          # for the registry PUT. npm 11.5.1+ is required for OIDC trusted
-          # publisher handshake — Node 22's bundled npm 10.x doesn't support
-          # it, and `npm install -g npm@latest` self-upgrade hits a known
-          # `Cannot find module 'promise-retry'` race during the swap. Using
-          # a Node version that ships the right npm sidesteps both issues.
+          # Node 24 ships npm 11.x natively. npm 11.5.1+ is required for the
+          # OIDC trusted-publisher handshake; Node 22's bundled npm 10.x doesn't
+          # support it, and self-upgrading via `npm install -g npm@latest` is
+          # flaky (`Cannot find module 'promise-retry'` mid-swap).
           node-version: 24
           registry-url: https://registry.npmjs.org
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
-      - name: Create Version PR or publish
-        uses: changesets/action@v1.4.10   # PG-15: latest in 1.4.x series
-        with:
-          # changesets/action runs `version` via execa without a shell, so
-          # shell metacharacters (`&&`, `|`, multi-line) don't work — they
-          # become literal args. Wrap the two-step into a package.json script
-          # where pnpm's own shell handles the chaining.
-          version: pnpm release-version
-          publish: pnpm publish -r --access public --no-git-checks
-          # `pnpm publish -r` walks all packages and publishes the ones whose
-          # version isn't already on npm (idempotent on partial-publish failure).
-          # `--no-git-checks` skips pnpm's "must be on a clean git tag" check —
-          # changesets/action commits version bumps but doesn't tag per package.
-          # createGithubReleases: auto-create a GitHub Release for every
-          # successfully published package. Tag format is `<name>@<version>`
-          # for monorepo packages — diverges from the pre-Wave-3 `v<version>`
-          # tags but is the changesets convention. Releases page becomes the
-          # canonical changelog surface (in addition to per-package CHANGELOG.md).
-          createGithubReleases: true
+
+      - name: Verify tag version matches package.json
+        # Belt-and-suspenders against "tagged before bumping" mistakes. If the
+        # tag says cycling-coach@2026.5.2 but package.json still says 2026.5.1,
+        # fail loudly rather than silently shipping the wrong version.
+        run: |
+          set -euo pipefail
+          PACKAGE="${{ needs.parse-tag.outputs.package }}"
+          EXPECTED="${{ needs.parse-tag.outputs.version }}"
+          ACTUAL=$(node -p "require('./packages/$PACKAGE/package.json').version")
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::Tag $PACKAGE@$EXPECTED does not match packages/$PACKAGE/package.json (version: $ACTUAL)"
+            exit 1
+          fi
+
+      - name: Publish to npm via OIDC
+        # `pnpm publish --filter <pkg>` publishes only the named package.
+        # OIDC is negotiated automatically by npm 11+ when id-token: write
+        # is granted (no NPM_TOKEN secret needed). The trusted publisher
+        # must be configured per-package on npmjs.com (one-time operator
+        # action; matches repo `yerzhansa/cycling-coach` + workflow
+        # `release.yml`).
+        run: pnpm publish --filter ${{ needs.parse-tag.outputs.package }} --access public --no-git-checks
+
+      - name: Create GitHub Release if missing
+        # Tag may have been created via the GitHub UI's "Draft a new release"
+        # flow, in which case the Release already exists with operator-written
+        # notes. Don't overwrite it. Only create one if it's missing (e.g., the
+        # tag came from `git push --tags` with no Release attached).
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # No NPM_TOKEN — OIDC trusted publisher per PG-7.
-          # Operator [runtime] AC: configure each scoped npm package's "Trusted
-          # Publisher" to GitHub repo + workflow path .github/workflows/release.yml.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PACKAGE="${{ needs.parse-tag.outputs.package }}"
+          TAG="${{ needs.parse-tag.outputs.ref }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::Release $TAG already exists (likely created via UI). Leaving it untouched."
+          else
+            # Extract the topmost CHANGELOG entry — content between the first
+            # '## ' header and the second '## ' header (the previous release).
+            BODY=$(awk '/^## /{i++} i==1{print} i==2{exit}' "packages/$PACKAGE/CHANGELOG.md" | tail -n +2)
+            gh release create "$TAG" --title "$TAG" --notes "$BODY"
+            echo "::notice::Created GitHub Release $TAG"
+          fi
