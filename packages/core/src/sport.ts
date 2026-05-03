@@ -49,6 +49,9 @@ export interface CoreDeps {
   intervals: IntervalsClient | null;
   memory: MemoryStore;
   secrets: SecretsResolver;
+  /** Athlete IANA timezone, resolved by Core. Used so tools see the same
+   * "today" the system prompt references. */
+  tz: string;
 }
 
 // ─── Sport: the plug-point ─────────────────────────────────────────────

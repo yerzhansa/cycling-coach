@@ -29,7 +29,11 @@ const daysEnum = z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
  * intervals tools live in `@enduragent/core`'s `createPureCoreIntervalsTools`
  * and `createCoreToolsWithSportConfig`.
  */
-export function createCyclingTools(memory: MemoryStore, intervals: IntervalsClient | null) {
+export function createCyclingTools(
+  memory: MemoryStore,
+  intervals: IntervalsClient | null,
+  tz: string = "UTC",
+) {
   return {
     calculate_zones: tool({
       description: "Calculate 6 power zones from FTP watts",
@@ -81,7 +85,7 @@ export function createCyclingTools(memory: MemoryStore, intervals: IntervalsClie
         generalGoalTarget?: string;
       }) => {
         const profile: AthleteProfile = { ...params, needsExtraRecovery: false };
-        const plan = buildPlanSkeleton(profile);
+        const plan = buildPlanSkeleton(profile, tz);
         memory.savePlan(plan);
         return plan;
       },

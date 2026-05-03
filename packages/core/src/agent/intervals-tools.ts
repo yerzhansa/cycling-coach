@@ -2,6 +2,7 @@ import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import type { IntervalsClient } from "intervals-icu-api";
 import type { IntervalsActivityType } from "../sport.js";
+import { todayInTZ } from "./user-time.js";
 
 // intervals-icu-api's TypeScript types declare snake_case fields, but the runtime
 // runs `camelCaseKeys` over every parsed response. So the types lie: at runtime we
@@ -17,8 +18,15 @@ type IntervalsEventRuntime = {
 /**
  * Pure-Core intervals tools per ADR-0004 — no sport-specific config needed.
  * Wired by the binary entry point alongside the sport's own tools().
+ *
+ * `tz` is the athlete's IANA timezone — used so "today" in the past-workout
+ * guard agrees with `event.startDateLocal` (which is in athlete-local frame),
+ * not with UTC.
  */
-export function createPureCoreIntervalsTools(intervals: IntervalsClient | null) {
+export function createPureCoreIntervalsTools(
+  intervals: IntervalsClient | null,
+  tz: string = "UTC",
+) {
   if (!intervals) return {};
   return {
     intervals_fetch_athlete: tool({
@@ -66,7 +74,7 @@ export function createPureCoreIntervalsTools(intervals: IntervalsClient | null) 
         const fetched = await intervals.events.get(input.eventId);
         if (!fetched.ok) return { error: fetched.error.kind };
         const event = fetched.value as unknown as IntervalsEventRuntime;
-        const today = new Date().toISOString().split("T")[0];
+        const today = todayInTZ(tz);
         const eventDate = event.startDateLocal.slice(0, 10);
         if (eventDate < today) {
           return {

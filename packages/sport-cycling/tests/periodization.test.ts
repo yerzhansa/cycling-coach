@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { selectPeriodizationModel, computeTotalWeeks } from "../src/periodization.js";
 import type { AthleteProfile } from "../src/schemas.js";
 
@@ -96,5 +96,45 @@ describe("computeTotalWeeks", () => {
       experienceLevel: "beginner",
     });
     expect(computeTotalWeeks(p)).toBe(8);
+  });
+
+  // AC4 — daysUntil is local-midnight-to-local-midnight in athlete TZ.
+  // Without the fix, `new Date("2026-08-15")` is parsed as UTC midnight, so
+  // a Pacific athlete at local 23:00 on Aug 14 would see daysUntil = 0
+  // (instead of 1) — and the week count would drop by 1 vs an athlete in UTC.
+  describe("AC4: race countdown is athlete-local", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it("America/Los_Angeles at local 23:00 on Aug 14 → 1 day, 8 weeks (clamped)", () => {
+      // 2026-08-14T23:00 PDT = 2026-08-15T06:00Z
+      vi.setSystemTime(new Date("2026-08-15T06:00:00Z"));
+      const p = makeProfile({
+        goalType: "race",
+        raceDate: "2026-08-15",
+      });
+      expect(computeTotalWeeks(p, "America/Los_Angeles")).toBe(8);
+    });
+
+    it("Asia/Tokyo at local 02:00 on Aug 15 → 0 days, 8 weeks (clamped)", () => {
+      // 2026-08-15T02:00+09:00 = 2026-08-14T17:00Z
+      vi.setSystemTime(new Date("2026-08-14T17:00:00Z"));
+      const p = makeProfile({
+        goalType: "race",
+        raceDate: "2026-08-15",
+      });
+      expect(computeTotalWeeks(p, "Asia/Tokyo")).toBe(8);
+    });
+
+    it("12-week race date counts the same in any TZ", () => {
+      vi.setSystemTime(new Date("2026-05-01T12:00:00Z"));
+      const p = makeProfile({
+        goalType: "race",
+        raceDate: "2026-07-24", // 84 days = 12 weeks
+      });
+      expect(computeTotalWeeks(p, "UTC")).toBe(12);
+      expect(computeTotalWeeks(p, "Asia/Tokyo")).toBe(12);
+      expect(computeTotalWeeks(p, "America/Los_Angeles")).toBe(12);
+    });
   });
 });

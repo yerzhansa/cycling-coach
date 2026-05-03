@@ -202,12 +202,13 @@ export function selectPeriodizationModel(
  * - Race + date: ceil(daysUntil / 7), clamped 8-24
  * - Race + no date: lookup by race type
  * - General: lookup by experience
+ *
+ * `tz` (IANA, default "UTC") frames "today" and the race date as local-midnight
+ * to local-midnight, so the count doesn't drift by a day at TZ boundaries.
  */
-export function computeTotalWeeks(profile: AthleteProfile): number {
+export function computeTotalWeeks(profile: AthleteProfile, tz: string = "UTC"): number {
   if (profile.goalType === "race" && profile.raceDate) {
-    const daysUntil = Math.ceil(
-      (new Date(profile.raceDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24),
-    );
+    const daysUntil = daysBetweenLocal(todayInTZ(tz), profile.raceDate);
     const weeks = Math.ceil(daysUntil / 7);
     return Math.max(8, Math.min(24, weeks));
   }
@@ -217,4 +218,25 @@ export function computeTotalWeeks(profile: AthleteProfile): number {
   }
 
   return DEFAULT_TOTAL_WEEKS_BY_EXPERIENCE[profile.experienceLevel];
+}
+
+function todayInTZ(tz: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+/**
+ * Whole-day diff between two YYYY-MM-DD strings. Date.UTC ignores DST, so this
+ * is exact for calendar-day arithmetic regardless of timezone.
+ */
+function daysBetweenLocal(fromYmd: string, toYmd: string): number {
+  const [fy, fm, fd] = fromYmd.split("-").map(Number);
+  const [ty, tm, td] = toYmd.split("-").map(Number);
+  return Math.ceil(
+    (Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / (1000 * 60 * 60 * 24),
+  );
 }

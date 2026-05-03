@@ -26,6 +26,7 @@ import { runMemoryFlush } from "./memory-flush.js";
 import { evaluateSessionFreshness } from "./session-freshness.js";
 import { LLM } from "../llm.js";
 import { createMemorySnapshot } from "../memory/snapshot.js";
+import { resolveUserTimezone, appendCurrentTimeLine } from "./user-time.js";
 
 const MAX_OVERFLOW_ATTEMPTS = 3;
 const MAX_TIMEOUT_ATTEMPTS = 2;
@@ -50,12 +51,14 @@ export class CoachAgent {
   private chatStore: ChatStore;
   private tools: ToolSet;
   private systemPrompt: string;
+  private tz: string;
 
   constructor(sport: Sport, config: Config) {
     this.sport = sport;
     this.config = config;
     this.llm = new LLM(config);
-    this.memory = new Memory(config.dataDir);
+    this.tz = resolveUserTimezone(config.session.timezone);
+    this.memory = new Memory(config.dataDir, this.tz);
     this.chatStore = new ChatStore(config.dataDir);
 
     const intervals = config.intervals.apiKey
@@ -71,6 +74,7 @@ export class CoachAgent {
       intervals,
       memory: this.memory,
       secrets,
+      tz: this.tz,
     };
     const registrations = sport.tools(coreDeps);
     this.tools = Object.fromEntries(registrations.map((r) => [r.name, r.tool])) as ToolSet;
@@ -105,6 +109,7 @@ export class CoachAgent {
         lastMessageTime,
         dailyResetHour: this.config.session.dailyResetHour,
         idleMinutes: this.config.session.idleMinutes,
+        tz: this.tz,
       });
 
       if (!fresh) {
@@ -116,7 +121,7 @@ export class CoachAgent {
         history = [];
       }
 
-      this.systemPrompt = buildSystemPrompt(this.sport, this.memory);
+      this.systemPrompt = buildSystemPrompt(this.sport, this.memory, this.tz);
 
       const budget = computeHistoryTokenBudget({
         contextWindowTokens: this.config.contextWindowTokens,
@@ -148,11 +153,17 @@ export class CoachAgent {
         summaryMsg = makeSummaryMessage(previousSummary);
       }
 
+      // Append a fresh "Current time:" line to the user message so the LLM
+      // always sees the athlete's local time on this turn — even when the
+      // system prompt (cached) carries only the TZ name. Idempotent: safe
+      // across the retry/compaction loop below.
+      const userMessageWithTime = appendCurrentTimeLine(userMessage, this.tz);
+
       // Build messages array with new user message
       let messages: ModelMessage[] = [
         ...(summaryMsg ? [summaryMsg] : []),
         ...kept,
-        { role: "user", content: userMessage },
+        { role: "user", content: userMessageWithTime },
       ];
 
       let overflowAttempts = 0;

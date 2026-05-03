@@ -127,6 +127,14 @@ export {
   createPureCoreIntervalsTools,
   createCoreToolsWithSportConfig,
 } from "./agent/intervals-tools.js";
+export {
+  appendCurrentTimeLine,
+  buildCurrentTimeLine,
+  formatTimeInTZ,
+  isValidTimezone,
+  resolveUserTimezone,
+  todayInTZ,
+} from "./agent/user-time.js";
 
 // ─── Auth ─────────────────────────────────────────────────────────────
 export {

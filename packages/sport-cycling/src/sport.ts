@@ -78,9 +78,9 @@ export const cyclingSport: Sport = {
     // sport-specific cycling tools.
     const toolset = {
       ...createMemoryTools(deps.memory, sections),
-      ...createPureCoreIntervalsTools(deps.intervals),
+      ...createPureCoreIntervalsTools(deps.intervals, deps.tz),
       ...createCoreToolsWithSportConfig(deps.intervals, cyclingSport.intervalsActivityTypes),
-      ...createCyclingTools(deps.memory, deps.intervals),
+      ...createCyclingTools(deps.memory, deps.intervals, deps.tz),
     };
     return Object.entries(toolset).map(([name, t]) => ({
       name,

@@ -27,6 +27,8 @@ export interface Config {
     historyTokenBudgetRatio: number;
     idleMinutes: number;
     dailyResetHour: number;
+    /** Athlete IANA timezone (e.g. "Europe/Berlin"). Empty = resolver picks host TZ. */
+    timezone: string;
   };
   contextWindowTokens: number;
   dataDir: string;
@@ -228,6 +230,8 @@ export function loadConfig(): Config {
         envInt("SESSION_IDLE_MINUTES") ?? (sessionYaml.idleMinutes as number) ?? 0,
       dailyResetHour:
         envInt("SESSION_DAILY_RESET_HOUR") ?? (sessionYaml.dailyResetHour as number) ?? 4,
+      timezone:
+        env("COACH_TZ") ?? (sessionYaml.timezone as string | undefined) ?? "",
     },
     contextWindowTokens: resolveContextWindowTokens(model),
     dataDir: (yaml.data_dir as string) ?? CONFIG_DIR,
