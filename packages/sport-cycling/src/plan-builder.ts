@@ -26,8 +26,8 @@ import {
 // MAIN ENTRY POINT
 // ============================================================================
 
-export function buildPlanSkeleton(profile: AthleteProfile): TrainingPlan {
-  const totalWeeks = computeTotalWeeks(profile);
+export function buildPlanSkeleton(profile: AthleteProfile, tz: string = "UTC"): TrainingPlan {
+  const totalWeeks = computeTotalWeeks(profile, tz);
   const model = selectPeriodizationModel(profile, totalWeeks);
   const cycleLength = 7;
 

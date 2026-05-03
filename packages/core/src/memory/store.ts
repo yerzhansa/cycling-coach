@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { MemoryStore } from "../memory.js";
+import { todayInTZ } from "../agent/user-time.js";
 
 // ============================================================================
 // MEMORY SYSTEM
@@ -13,10 +14,12 @@ const bodyOf = (block: string) => block.slice(block.indexOf("\n") + 1);
 export class Memory implements MemoryStore {
   private memoryDir: string;
   private plansDir: string;
+  private tz: string;
 
-  constructor(dataDir: string) {
+  constructor(dataDir: string, tz: string = "UTC") {
     this.memoryDir = join(dataDir, "memory");
     this.plansDir = join(dataDir, "plans");
+    this.tz = tz;
     mkdirSync(this.memoryDir, { recursive: true });
     mkdirSync(this.plansDir, { recursive: true });
   }
@@ -103,14 +106,14 @@ export class Memory implements MemoryStore {
   // ── Daily notes ────────────────────────────────────────────────────────
 
   readDailyNotes(date?: string): string {
-    const d = date ?? todayString();
+    const d = date ?? todayInTZ(this.tz);
     const path = join(this.memoryDir, `${d}.md`);
     if (!existsSync(path)) return "";
     return readFileSync(path, "utf-8");
   }
 
   appendDailyNote(note: string, date?: string): void {
-    const d = date ?? todayString();
+    const d = date ?? todayInTZ(this.tz);
     const path = join(this.memoryDir, `${d}.md`);
     const existing = this.readDailyNotes(d);
     const updated = existing ? `${existing}\n${note}` : note;
@@ -165,8 +168,4 @@ export class Memory implements MemoryStore {
 
     return parts.join("\n\n");
   }
-}
-
-function todayString(): string {
-  return new Date().toISOString().split("T")[0];
 }
