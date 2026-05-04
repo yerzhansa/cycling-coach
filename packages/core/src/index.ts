@@ -165,6 +165,7 @@ export {
   getCurrentVersion,
   getKnownTelegramChatIds,
   getLastNotifiedVersion,
+  isUpdateAvailable,
   selfUpdate,
   setLastNotifiedVersion,
 } from "./updater.js";
