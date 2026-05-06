@@ -36,4 +36,9 @@ After Wave 3 of the Core/Sport seam refactor (issue #47):
 
 ## Release flow
 
-Changesets-driven (`.changeset/*.md` + `pnpm exec changeset` CLI). The publish workflow runs on push:main, gates on build + test + smoke, then merges the bot's Version PR to publish via OIDC trusted publisher (no NPM_TOKEN). Currently only `cycling-coach` is publishable (per ADR-0009); `pnpm publish -r` skips the private libraries and stub binaries automatically. `tools/bump-binaries-to-calver.ts` overrides changesets' SemVer bumps with today's CalVer for published binaries.
+Changesets-driven, tag-triggered, two-workflow split:
+
+1. **`version-pr.yml`** runs on every push to `main`. It (a) opens or updates the bot-managed "Version Packages" PR whenever unconsumed `.changeset/*.md` files exist, and (b) when that PR is merged, auto-pushes `<package>@<version>` tags for every non-private bumped package. The tag push is what fires the next workflow.
+2. **`release.yml`** runs on tag push (`cycling-coach@*`, `running-coach@*`, `duathlon-coach@*`). It gates on build + test + smoke-install of the packed tarball, then publishes to npm via OIDC trusted publisher (no `NPM_TOKEN`), and auto-creates the GitHub Release with notes pulled from `CHANGELOG.md`.
+
+Currently only `cycling-coach` is publishable (per ADR-0009); the other six packages are `private: true` and skipped by both the changesets bump path and the tag-push step. `tools/bump-binaries-to-calver.ts` overrides changesets' SemVer bumps with today's CalVer for the publishable binaries (handles same-day re-releases by querying npm). See `CONTRIBUTING.md` for the contributor-side steps.

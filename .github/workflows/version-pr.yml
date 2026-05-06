@@ -50,3 +50,36 @@ jobs:
           # changesets exist, it's a no-op.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push tags for publishable packages on Version-PR merge
+        # Closes the manual gap between "Version PR merged" and "release fires".
+        # When the operator merges the changesets-bot PR, package.json versions
+        # bump on main but no tag is created — release.yml never sees it. This
+        # step pushes <name>@<version> for every non-private packages/*/package.json
+        # whose tag is missing on origin; each pushed tag triggers release.yml.
+        #
+        # Gated to push events (skip workflow_dispatch — that path is for
+        # operator-driven re-runs of the changesets step itself, not for
+        # tagging) and to commits whose message starts with "Version Packages",
+        # the changesets/action default PR title that the squash-merge inherits.
+        if: github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Version Packages')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for pkg_json in packages/*/package.json; do
+            PRIVATE=$(node -p "require('./$pkg_json').private === true")
+            if [ "$PRIVATE" = "true" ]; then
+              continue
+            fi
+            NAME=$(node -p "require('./$pkg_json').name")
+            VERSION=$(node -p "require('./$pkg_json').version")
+            TAG="$NAME@$VERSION"
+            if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+              echo "::notice::Tag $TAG already on origin — skipping"
+              continue
+            fi
+            git tag "$TAG"
+            git push origin "$TAG"
+            echo "::notice::Pushed tag $TAG (release.yml will fire)"
+          done
