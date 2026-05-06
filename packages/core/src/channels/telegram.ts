@@ -10,6 +10,7 @@ import {
   getLastNotifiedVersion,
   setLastNotifiedVersion,
 } from "../updater.js";
+import { buildWhatsNewMessage } from "../release-notes.js";
 
 function formatRateLimitWait(err: unknown): string {
   const ms = extractRetryAfterMs(err);
@@ -33,6 +34,7 @@ const WELCOME_MESSAGE =
   "/status — Check current fitness, fatigue, and form\n" +
   "/sync — Push plan to intervals.icu calendar\n" +
   "/version — Show current version\n" +
+  "/whatsnew — See what changed in the latest version\n" +
   "/update — Check for and install updates\n\n" +
   "Or just chat with me about your training!";
 
@@ -118,6 +120,27 @@ export function createTelegramBot(token: string, agent: CoachAgent, binary: Bina
 
   bot.command("version", async (ctx) => {
     await ctx.reply(`${binary.displayName} v${getCurrentVersion(binary.binaryName)}`);
+  });
+
+  bot.command("whatsnew", async (ctx) => {
+    await ctx.reply("Fetching release notes...");
+    try {
+      const info = await checkForUpdate(binary.binaryName);
+      if (!info) {
+        await ctx.reply("Couldn't reach npm to check the latest version. Try again later.");
+        return;
+      }
+      const message = await buildWhatsNewMessage({
+        binaryName: binary.binaryName,
+        currentVersion: info.current,
+        latestVersion: info.latest,
+        updateAvailable: info.updateAvailable,
+      });
+      await sendLongMessage(ctx, message);
+    } catch (err) {
+      console.error("Error in /whatsnew:", err);
+      await ctx.reply("Sorry, couldn't fetch release notes. Please try again.");
+    }
   });
 
   bot.command("update", async (ctx) => {
@@ -405,7 +428,7 @@ export async function notifyUpdate(bot: Bot, dataDir: string, binary: BinaryConf
     if (getLastNotifiedVersion(dataDir) === info.latest) return;
 
     const chatIds = getKnownTelegramChatIds(dataDir);
-    const message = `Update available: ${info.current} → ${info.latest}\nSend /update to install.`;
+    const message = `Update available: ${info.current} → ${info.latest}\nSend /whatsnew to see what changed, /update to install.`;
 
     for (const chatId of chatIds) {
       try {
