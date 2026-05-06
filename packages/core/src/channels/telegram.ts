@@ -32,6 +32,7 @@ const WELCOME_MESSAGE =
   "/plan — Generate a training plan\n" +
   "/workout — Get today's workout\n" +
   "/status — Check current fitness, fatigue, and form\n" +
+  "/review — Review your last session\n" +
   "/sync — Push plan to intervals.icu calendar\n" +
   "/version — Show current version\n" +
   "/whatsnew — See what changed in the latest version\n" +
@@ -114,6 +115,26 @@ export function createTelegramBot(token: string, agent: CoachAgent, binary: Bina
         await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
       } else {
         await ctx.reply("Sorry, something went wrong. Please try again.");
+      }
+    }
+  });
+
+  bot.command("review", async (ctx) => {
+    const args = (ctx.match ?? "").trim();
+    await ctx.reply(
+      args ? `Reviewing your last session (${args})...` : "Reviewing your last session...",
+    );
+    const chatId = `telegram:${ctx.chat.id}`;
+    try {
+      const message = args ? `/review ${args}` : "/review";
+      const response = await agent.chat(chatId, message);
+      await sendLongMessage(ctx, response);
+    } catch (err) {
+      console.error("Error in /review:", err);
+      if (isRateLimitError(err)) {
+        await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
+      } else {
+        await ctx.reply("Sorry, something went wrong reviewing your session. Please try again.");
       }
     }
   });
