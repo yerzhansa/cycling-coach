@@ -59,6 +59,59 @@ export function createPureCoreIntervalsTools(
       },
     }),
 
+    intervals_fetch_activity: tool({
+      description:
+        "Fetch a single activity from intervals.icu by ID. Returns the full Activity " +
+        "object including per-rep `icu_intervals` (lap/interval splits with avg power, " +
+        "HR, time), `analyzed` flag (null while analysis still in progress), " +
+        "`paired_event_id` (link to planned workout), zone times, and the headline " +
+        "metrics from the list view. Use this for Tier B+ workout reviews; for " +
+        "summary-only Tier A, use `intervals_fetch_activities`.",
+      inputSchema: zodSchema(
+        z.object({
+          activityId: z.number().int().describe("Activity ID from intervals_fetch_activities"),
+        }),
+      ),
+      execute: async (input: { activityId: number }) => {
+        const result = await intervals.activities.get(String(input.activityId));
+        if (!result.ok) return { error: result.error.kind };
+        return result.value;
+      },
+    }),
+
+    intervals_fetch_streams: tool({
+      description:
+        "Fetch raw time-series streams for an activity (watts, heartrate, cadence, " +
+        "time, altitude, distance, lat, lng). Returns an object with each requested " +
+        "type as a sample array. EXPENSIVE: a 3-hour ride is ~10,800 samples per " +
+        "type. ONLY call for Tier C deep reviews (races + explicit 'deep' override). " +
+        "For Tier A/B reviews, use `intervals_fetch_activities` and " +
+        "`intervals_fetch_activity` instead. Default types are watts, heartrate, " +
+        "cadence, time, altitude.",
+      inputSchema: zodSchema(
+        z.object({
+          activityId: z.number().int().describe("Activity ID"),
+          types: z
+            .array(z.string())
+            .optional()
+            .describe(
+              "Stream types to fetch. Defaults to ['watts','heartrate','cadence','time','altitude']. " +
+                "Other valid types: distance, lat, lng, temp, smooth_grade.",
+            ),
+        }),
+      ),
+      execute: async (input: { activityId: number; types?: string[] }) => {
+        // Treat empty array the same as omitted — defensively handle the LLM
+        // calling with `types: []` "to play it safe" instead of dropping the field.
+        const types = input.types?.length
+          ? input.types
+          : ["watts", "heartrate", "cadence", "time", "altitude"];
+        const result = await intervals.activities.getStreams(String(input.activityId), types);
+        if (!result.ok) return { error: result.error.kind };
+        return result.value;
+      },
+    }),
+
     intervals_delete_workout: tool({
       description:
         "Delete a scheduled workout from the intervals.icu calendar by event ID. " +
