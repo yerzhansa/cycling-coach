@@ -176,7 +176,7 @@ export function createTelegramBot(token: string, agent: CoachAgent, binary: Bina
 // MARKDOWN → TELEGRAM HTML
 // ============================================================================
 
-function markdownToTelegramHtml(md: string): string {
+export function markdownToTelegramHtml(md: string): string {
   // Telegram has no table primitive. Extract tables first so the bullet-point
   // regex below doesn't mangle their leading `|`, then restore as <pre> blocks.
   const { text, tables } = extractTables(md);
@@ -192,11 +192,12 @@ function markdownToTelegramHtml(md: string): string {
   html = html.replace(/(?<!\w)\*([^*]+?)\*(?!\w)/g, "<i>$1</i>");
   html = html.replace(/(?<!\w)_([^_]+?)_(?!\w)/g, "<i>$1</i>");
 
+  // Code blocks: ```...``` → <pre>...</pre> (must run before inline-code, otherwise the
+  // single-backtick regex eats pairs of fence backticks and breaks the block).
+  html = html.replace(/```[\w]*\n?([\s\S]*?)```/g, "<pre>$1</pre>");
+
   // Inline code: `text` → <code>text</code>
   html = html.replace(/`([^`]+?)`/g, "<code>$1</code>");
-
-  // Code blocks: ```...``` → <pre>...</pre>
-  html = html.replace(/```[\w]*\n?([\s\S]*?)```/g, "<pre>$1</pre>");
 
   // Strikethrough: ~~text~~ → <s>text</s>
   html = html.replace(/~~(.+?)~~/g, "<s>$1</s>");
@@ -278,36 +279,110 @@ function renderTableAsPre(header: string[], rows: string[][]): string {
 
 const TELEGRAM_MAX_LENGTH = 4096;
 
+type RenderUnit = { kind: "line"; text: string } | { kind: "pre"; text: string };
+
+// Group consecutive lines that belong to the same multi-line <pre> block, so the chunker
+// can treat them as one indivisible unit. Single-line <pre>...</pre> stays a "line".
+function tokenizeHtml(html: string): RenderUnit[] {
+  const units: RenderUnit[] = [];
+  const lines = html.split("\n");
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const openIdx = line.indexOf("<pre>");
+    const closeOnSame = openIdx >= 0 ? line.indexOf("</pre>", openIdx) : -1;
+    if (openIdx >= 0 && closeOnSame < 0) {
+      let j = i + 1;
+      while (j < lines.length && !lines[j].includes("</pre>")) j++;
+      if (j < lines.length) {
+        units.push({ kind: "pre", text: lines.slice(i, j + 1).join("\n") });
+        i = j + 1;
+        continue;
+      }
+      // Unclosed <pre> — fall through and treat each line individually.
+    }
+    units.push({ kind: "line", text: line });
+    i++;
+  }
+  return units;
+}
+
+// Split a <pre> block whose own length exceeds maxLen into multiple wrapped <pre> chunks
+// so each chunk Telegram receives has a matching open/close tag.
+function splitPreBlock(block: string, maxLen: number): string[] {
+  const inner = block.replace(/^<pre>/, "").replace(/<\/pre>$/, "");
+  const wrapOverhead = "<pre></pre>".length;
+  const out: string[] = [];
+  let current = "";
+  for (const row of inner.split("\n")) {
+    const candidate = current ? `${current}\n${row}` : row;
+    if (candidate.length + wrapOverhead <= maxLen) {
+      current = candidate;
+      continue;
+    }
+    if (current) {
+      out.push(`<pre>${current}</pre>`);
+      current = row;
+      if (current.length + wrapOverhead <= maxLen) continue;
+    }
+    // Single row alone exceeds the budget — hard-split, wrap each piece.
+    const sliceMax = Math.max(1, maxLen - wrapOverhead);
+    for (let k = 0; k < row.length; k += sliceMax) {
+      out.push(`<pre>${row.slice(k, k + sliceMax)}</pre>`);
+    }
+    current = "";
+  }
+  if (current) out.push(`<pre>${current}</pre>`);
+  return out;
+}
+
+export function chunkHtml(html: string, maxLen: number = TELEGRAM_MAX_LENGTH): string[] {
+  if (html.length <= maxLen) return [html];
+
+  const chunks: string[] = [];
+  let current = "";
+  const flush = () => {
+    if (current) {
+      chunks.push(current);
+      current = "";
+    }
+  };
+
+  for (const unit of tokenizeHtml(html)) {
+    const text = unit.text;
+    const joinCost = current ? 1 : 0;
+
+    if (current.length + text.length + joinCost <= maxLen) {
+      current += (current ? "\n" : "") + text;
+      continue;
+    }
+
+    flush();
+
+    if (text.length <= maxLen) {
+      current = text;
+      continue;
+    }
+
+    if (unit.kind === "pre") {
+      chunks.push(...splitPreBlock(text, maxLen));
+    } else {
+      for (let i = 0; i < text.length; i += maxLen) {
+        chunks.push(text.slice(i, i + maxLen));
+      }
+    }
+  }
+
+  flush();
+  return chunks;
+}
+
 async function sendLongMessage(
   ctx: { reply: (text: string, options?: Record<string, unknown>) => Promise<unknown> },
   text: string,
 ): Promise<void> {
   const html = markdownToTelegramHtml(text);
-
-  if (html.length <= TELEGRAM_MAX_LENGTH) {
-    await ctx.reply(html, { parse_mode: "HTML" });
-    return;
-  }
-
-  // Split on paragraph boundaries, hard-split lines that exceed the limit
-  const chunks: string[] = [];
-  let current = "";
-  for (const line of html.split("\n")) {
-    if (line.length > TELEGRAM_MAX_LENGTH) {
-      if (current) { chunks.push(current); current = ""; }
-      for (let i = 0; i < line.length; i += TELEGRAM_MAX_LENGTH) {
-        chunks.push(line.slice(i, i + TELEGRAM_MAX_LENGTH));
-      }
-    } else if (current.length + line.length + 1 > TELEGRAM_MAX_LENGTH) {
-      chunks.push(current);
-      current = line;
-    } else {
-      current += (current ? "\n" : "") + line;
-    }
-  }
-  if (current) chunks.push(current);
-
-  for (const chunk of chunks) {
+  for (const chunk of chunkHtml(html)) {
     await ctx.reply(chunk, { parse_mode: "HTML" });
   }
 }
