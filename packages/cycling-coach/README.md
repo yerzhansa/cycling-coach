@@ -82,6 +82,6 @@ npx cycling-coach
 
 ## More
 
-- **Cloud deploy** (Docker, Railway, Fly), **secrets backends** (1Password, macOS Keychain, Vault, AWS/GCP Secret Manager, age, env), **architecture diagram**, and **development setup** — see the [GitHub repo](https://github.com/yerzhansa/cycling-coach#readme).
+- **Secrets backends** (1Password, macOS Keychain, Vault, AWS/GCP Secret Manager, age, env), **architecture diagram**, and **development setup** — see the [GitHub repo](https://github.com/yerzhansa/cycling-coach#readme).
 - **Issues**: <https://github.com/yerzhansa/cycling-coach/issues>
 - **License**: MIT
