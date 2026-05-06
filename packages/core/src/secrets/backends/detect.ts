@@ -92,20 +92,25 @@ async function detectOpState(opPath: string, timeoutMs: number): Promise<OpState
   return { state: "unavailable", reason: "other", detail };
 }
 
-// Pull a clean, single-line summary out of `op` stderr. Strips the
-// "[ERROR] yyyy/mm/dd hh:mm:ss " log prefix, keeps the leading line (where op
-// puts its headline), and caps length at a word boundary so the message stays
-// readable in `describeOpState`.
+// op puts its headline on the first stderr line; everything below is context
+// or a docs URL we don't want to surface in describeOpState.
+const OP_LOG_DATETIME_RE = /^\[\w+\]\s+\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2}\s+/;
+const OP_LOG_LEVEL_RE = /^\[\w+\]\s+/;
+const OP_STDERR_MAX_LEN = 240;
+// Don't word-break if the boundary lands too early — we'd throw away most of
+// the message just to avoid one mid-word cut.
+const OP_STDERR_MIN_WORDBREAK = 80;
+
 export function cleanOpStderr(stderr: string): string {
   const lines = stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (lines.length === 0) return "";
-  let line = lines[0]
-    .replace(/^\[\w+\]\s+\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2}\s+/, "")
-    .replace(/^\[\w+\]\s+/, "");
-  const MAX = 240;
-  if (line.length > MAX) {
-    const cut = line.lastIndexOf(" ", MAX);
-    line = (cut > 80 ? line.slice(0, cut) : line.slice(0, MAX)) + "…";
+  let line = lines[0].replace(OP_LOG_DATETIME_RE, "").replace(OP_LOG_LEVEL_RE, "");
+  if (line.length > OP_STDERR_MAX_LEN) {
+    const cut = line.lastIndexOf(" ", OP_STDERR_MAX_LEN);
+    line =
+      (cut > OP_STDERR_MIN_WORDBREAK
+        ? line.slice(0, cut)
+        : line.slice(0, OP_STDERR_MAX_LEN)) + "…";
   }
   return line;
 }

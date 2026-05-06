@@ -535,16 +535,19 @@ async function _pickBackend(ctx: WizardCtx, binary: BinaryConfig): Promise<Backe
   }
 }
 
+const OP_DESKTOP_APP_HINT_RE = /desktop app|update the 1Password app|1password\.app/i;
+const OP_LOCKED_HINT_RE = /biometric|touch id|locked/i;
+
 function describeOpState(state: OpState): string {
   if (state.state === "ready") return `signed in as ${state.signedInAs}`;
   if (state.state === "needs-signin") return "needs sign-in";
   if (state.reason === "not-on-path") return "not installed";
   if (state.reason === "no-account") return "no account configured";
   const detail = state.detail ?? "unknown";
-  if (/desktop app|update the 1Password app|1password\.app/i.test(detail)) {
+  if (OP_DESKTOP_APP_HINT_RE.test(detail)) {
     return "1Password desktop app integration unavailable; quit and reopen the 1Password app, then re-run setup";
   }
-  if (/biometric|touch id|locked/i.test(detail)) {
+  if (OP_LOCKED_HINT_RE.test(detail)) {
     return "1Password is locked; unlock the desktop app and re-run setup";
   }
   return `op CLI error: ${detail}`;
