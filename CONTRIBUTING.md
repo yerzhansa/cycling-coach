@@ -69,6 +69,8 @@ Calendar-based for npm-published binaries: `YYYY.M.D` (e.g., `2026.4.16` — fir
 Changesets-driven and CI-automated. Contributors do **not** create tags or GitHub Releases by hand — those steps are wrong, and the tag namespace is `<package>@<version>` (e.g., `cycling-coach@2026.5.4`), not `vYYYY.M.D`.
 
 1. **Add a changeset to your PR.** Run `pnpm exec changeset`, pick the affected publishable package(s), describe the change in athlete-readable language. Commit the resulting `.changeset/<slug>.md`. A PR with a user-visible change but no changeset will skip release — this is intentional, not a bug.
+
+   For user-visible changes, add a `User-facing: <one-sentence description>` line at the top of the changeset body — see `.changeset/README.md` for the convention. The bot's `/whatsnew` command surfaces only those lines to athletes; engineering details, hashes, and infra-only changesets stay in `CHANGELOG.md` for git history but never reach users.
 2. **Merge your PR to `main`.** `version-pr.yml` opens (or updates) a bot-managed "Version Packages" PR aggregating all pending changesets.
 3. **Merge the "Version Packages" PR when ready to ship.** It bumps `package.json` + CHANGELOG.md for the listed packages plus their internal dependents (per `updateInternalDependencies: "patch"` in `.changeset/config.json`). On merge, `version-pr.yml` then auto-pushes `<package>@<version>` tags for every **non-private** bumped package.
 4. **`release.yml` fires on the tag.** It builds, runs tests, packs the binary and smoke-installs the tarball, publishes to npm via OIDC trusted publisher (no `NPM_TOKEN`), and auto-creates the GitHub Release with notes extracted from `CHANGELOG.md`.
