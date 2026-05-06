@@ -16,10 +16,12 @@ The setup wizard asks for your LLM provider — an API key for Anthropic / OpenA
 
 ```
 Cycling Coach (CLI mode). Type your message:
-> Calculate my zones for FTP 280
+> Create a 2-hour Z2 ride with sprints
+> Create 3x15 min sweet spot intervals
+> Create VO2max intervals
+> Review my last ride
 > Build me a 12-week plan for a gran fondo
 > What should I do today?
-> /quit
 ```
 
 ## What it does
