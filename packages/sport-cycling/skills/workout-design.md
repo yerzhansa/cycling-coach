@@ -75,17 +75,15 @@ Every workout follows: Warmup → Main Set → Cooldown
 When pushing a workout to the calendar, pass the structured shape (never prose — see
 `intervals-icu.md`). Step types map to what's actually happening:
 
-| Step                          | Use                                                      |
-| ----------------------------- | -------------------------------------------------------- |
-| `warmup`                      | Pre-set progressive build-up                             |
-| `ramp`                        | Transition with `low`+`high` power bounds                |
-| `steady`                      | Single block at one intensity (e.g. Z2 endurance)        |
-| `interval`                    | Work effort inside a set (sweet spot, threshold, VO2max) |
-| `recovery`                    | Easy spin between intervals inside a set                 |
-| `rest`                        | Off-bike-style complete rest (rare in cycling)           |
-| `cooldown`                    | Post-set easy spin                                       |
-| `freeride`                    | No power target (Zwift freeride / outdoor easy)          |
-| `set { repeat, interval, recovery }` | Group repeated intervals (e.g. 3×15 sweet spot)  |
+- `warmup` — pre-set progressive build-up
+- `ramp` — transition with `low`+`high` power bounds
+- `steady` — single block at one intensity (e.g. Z2 endurance)
+- `interval` — work effort inside a set (sweet spot, threshold, VO2max)
+- `recovery` — easy spin between intervals inside a set
+- `rest` — off-bike-style complete rest (rare in cycling)
+- `cooldown` — post-set easy spin
+- `freeride` — no power target (Zwift freeride / outdoor easy)
+- `set { repeat, interval, recovery }` — group repeated intervals (e.g. 3×15 sweet spot)
 
 ### Sweet Spot 3×15 → tool input
 

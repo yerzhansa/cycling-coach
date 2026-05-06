@@ -2,12 +2,10 @@
 
 ## Taper Duration by Race Type
 
-| Race Type | Taper Weeks | Volume Reduction |
-|-----------|-------------|------------------|
-| Century (100mi) | 2 weeks | 40-50% |
-| Gran Fondo | 2 weeks | 40-50% |
-| Criterium | 1 week | 30-40% |
-| Time Trial | 1 week | 30-40% |
+- **Century (100mi):** 2 weeks taper, 40-50% volume reduction
+- **Gran Fondo:** 2 weeks taper, 40-50% volume reduction
+- **Criterium:** 1 week taper, 30-40% volume reduction
+- **Time Trial:** 1 week taper, 30-40% volume reduction
 
 ## Taper Strategy
 

@@ -32,23 +32,19 @@ Default/fallback model. Versatile for most athletes without specific needs.
 
 ## Phase Allocation
 
-| Phase | Purpose | Intensity |
-|-------|---------|-----------|
-| Base Building | Aerobic foundation, volume buildup | 85% easy / 10% tempo / 5% threshold |
-| Aerobic Development | Extend endurance, tempo work | 80% easy / 15% tempo / 5% threshold |
-| Threshold | FTP development, race-pace work | 70% easy / 20% threshold / 10% VO2max |
-| VO2max | Top-end power, short sharp efforts | 65% easy / 15% threshold / 20% VO2max |
-| Race Prep | Event-specific simulation | 60% easy / 25% race-pace / 15% VO2max |
-| Taper | Reduce volume, maintain intensity | 85% easy / 15% light efforts |
+- **Base Building** — aerobic foundation, volume buildup. 85% easy / 10% tempo / 5% threshold.
+- **Aerobic Development** — extend endurance, tempo work. 80% easy / 15% tempo / 5% threshold.
+- **Threshold** — FTP development, race-pace work. 70% easy / 20% threshold / 10% VO2max.
+- **VO2max** — top-end power, short sharp efforts. 65% easy / 15% threshold / 20% VO2max.
+- **Race Prep** — event-specific simulation. 60% easy / 25% race-pace / 15% VO2max.
+- **Taper** — reduce volume, maintain intensity. 85% easy / 15% light efforts.
 
 ## Build:Recovery Ratios
 
-| Level | Ratio | Meaning |
-|-------|-------|---------|
-| Beginner | 2:1 | 2 build weeks, 1 recovery week |
-| Intermediate | 3:1 | 3 build weeks, 1 recovery week |
-| Advanced | 3:1 | 3 build weeks, 1 recovery week |
-| Elite | 4:1 | 4 build weeks, 1 recovery week |
+- **Beginner:** 2:1 — 2 build weeks, 1 recovery week
+- **Intermediate:** 3:1 — 3 build weeks, 1 recovery week
+- **Advanced:** 3:1 — 3 build weeks, 1 recovery week
+- **Elite:** 4:1 — 4 build weeks, 1 recovery week
 
 ## Volume Progression Multipliers
 
