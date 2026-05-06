@@ -130,12 +130,7 @@ export function createTelegramBot(token: string, agent: CoachAgent, binary: Bina
         await ctx.reply("Couldn't reach npm to check the latest version. Try again later.");
         return;
       }
-      const message = await buildWhatsNewMessage({
-        binaryName: binary.binaryName,
-        currentVersion: info.current,
-        latestVersion: info.latest,
-        updateAvailable: info.updateAvailable,
-      });
+      const message = await buildWhatsNewMessage(binary.binaryName, info);
       await sendLongMessage(ctx, message);
     } catch (err) {
       console.error("Error in /whatsnew:", err);
