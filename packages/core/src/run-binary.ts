@@ -103,7 +103,9 @@ export async function runBinary(
   if (config.telegram.botToken) {
     const { createTelegramBot, notifyUpdate } = await import("./channels/telegram.js");
     const bot = createTelegramBot(config.telegram.botToken, agent, binary);
-    console.log(`${binary.displayName} is running. Waiting for messages...`);
+    console.log(
+      `${binary.displayName} (Telegram mode) is running. Open Telegram and message your bot — Ctrl+C to stop.`,
+    );
     bot.start();
     notifyUpdate(bot, config.dataDir, binary).catch(() => {});
   } else {

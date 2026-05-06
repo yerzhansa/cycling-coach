@@ -58,8 +58,8 @@ async function detectOpState(opPath: string, timeoutMs: number): Promise<OpState
     return { state: "unavailable", reason: "other", detail: "timeout" };
   }
   if (accountsRaw.exitCode !== 0) {
-    const detail = accountsRaw.stderr.slice(-200).trim();
-    return { state: "unavailable", reason: "other", detail: detail || "account list failed" };
+    const detail = cleanOpStderr(accountsRaw.stderr) || "account list failed";
+    return { state: "unavailable", reason: "other", detail };
   }
 
   let accounts: unknown;
@@ -88,8 +88,26 @@ async function detectOpState(opPath: string, timeoutMs: number): Promise<OpState
   if (/not signed in/i.test(vaultsRaw.stderr)) {
     return { state: "needs-signin", absolutePath: opPath };
   }
-  const detail = vaultsRaw.stderr.slice(-200).trim();
-  return { state: "unavailable", reason: "other", detail: detail || "vault list failed" };
+  const detail = cleanOpStderr(vaultsRaw.stderr) || "vault list failed";
+  return { state: "unavailable", reason: "other", detail };
+}
+
+// Pull a clean, single-line summary out of `op` stderr. Strips the
+// "[ERROR] yyyy/mm/dd hh:mm:ss " log prefix, keeps the leading line (where op
+// puts its headline), and caps length at a word boundary so the message stays
+// readable in `describeOpState`.
+export function cleanOpStderr(stderr: string): string {
+  const lines = stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return "";
+  let line = lines[0]
+    .replace(/^\[\w+\]\s+\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2}\s+/, "")
+    .replace(/^\[\w+\]\s+/, "");
+  const MAX = 240;
+  if (line.length > MAX) {
+    const cut = line.lastIndexOf(" ", MAX);
+    line = (cut > 80 ? line.slice(0, cut) : line.slice(0, MAX)) + "…";
+  }
+  return line;
 }
 
 export async function findInPath(bin: string, pathEnv: string): Promise<string | null> {

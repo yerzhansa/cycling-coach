@@ -494,9 +494,7 @@ async function _pickBackend(ctx: WizardCtx, binary: BinaryConfig): Promise<Backe
         label: "1Password CLI — sign in first",
       });
     } else {
-      log.info(
-        `1Password CLI unavailable (${describeOpState(avail.op)}); backend not offered.`,
-      );
+      log.info(`1Password backend not offered — ${describeOpState(avail.op)}.`);
     }
     if (avail.keychain.available) {
       options.push({ value: BACKEND_KEYCHAIN, label: "macOS Keychain" });
@@ -528,7 +526,7 @@ async function _pickBackend(ctx: WizardCtx, binary: BinaryConfig): Promise<Backe
         return "op";
       }
       log.info(
-        `1Password still not available (${describeOpState(reDetected.op)}). Pick another backend.`,
+        `1Password still unavailable — ${describeOpState(reDetected.op)}. Pick another backend.`,
       );
       continue;
     }
@@ -539,10 +537,17 @@ async function _pickBackend(ctx: WizardCtx, binary: BinaryConfig): Promise<Backe
 
 function describeOpState(state: OpState): string {
   if (state.state === "ready") return `signed in as ${state.signedInAs}`;
-  if (state.state === "needs-signin") return "needs-signin";
+  if (state.state === "needs-signin") return "needs sign-in";
   if (state.reason === "not-on-path") return "not installed";
   if (state.reason === "no-account") return "no account configured";
-  return `other: ${state.detail ?? "unknown"}`;
+  const detail = state.detail ?? "unknown";
+  if (/desktop app|update the 1Password app|1password\.app/i.test(detail)) {
+    return "1Password desktop app integration unavailable; quit and reopen the 1Password app, then re-run setup";
+  }
+  if (/biometric|touch id|locked/i.test(detail)) {
+    return "1Password is locked; unlock the desktop app and re-run setup";
+  }
+  return `op CLI error: ${detail}`;
 }
 
 // ============================================================================
@@ -759,6 +764,7 @@ async function _writeToBackend(
       }
       await opItemUpdate(opAbsPath, title, value, preExistingVault);
       resolvedVault = preExistingVault;
+      log.success(`Updated ${field} in 1Password vault "${resolvedVault}".`);
     } else {
       resolvedVault = await createOpItem(
         ctx,
@@ -768,6 +774,7 @@ async function _writeToBackend(
         args.chosenVaultRef.current,
         binary,
       );
+      log.success(`Stored ${field} in 1Password vault "${resolvedVault}".`);
     }
 
     ctx.createdThisRun.push({
@@ -801,6 +808,9 @@ async function _writeToBackend(
     }
     throw err;
   }
+  log.success(
+    `${preExisted ? "Updated" : "Stored"} ${field} in macOS Keychain (service: ${binary.keychainPrefix}, account: ${account}). config.yaml stores a /usr/bin/security reference, not the secret.`,
+  );
   ctx.createdThisRun.push({
     backend: "keychain",
     field,
