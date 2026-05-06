@@ -177,12 +177,10 @@ export function createTelegramBot(token: string, agent: CoachAgent, binary: Bina
 // ============================================================================
 
 function markdownToTelegramHtml(md: string): string {
-  // Telegram has no table primitive in any parse mode. Extract markdown tables first
-  // and stash them as placeholders so the other regex passes don't mangle their contents.
-  // They get rendered into <pre> (monospace) blocks at the end, with cell content already
-  // HTML-escaped.
-  const tables: string[] = [];
-  let html = extractTables(md, tables);
+  // Telegram has no table primitive. Extract tables first so the bullet-point
+  // regex below doesn't mangle their leading `|`, then restore as <pre> blocks.
+  const { text, tables } = extractTables(md);
+  let html = text;
 
   // Headers: ### Title → <b>Title</b>
   html = html.replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>");
@@ -210,10 +208,7 @@ function markdownToTelegramHtml(md: string): string {
   html = html.replace(/&(?!amp;|lt;|gt;)/g, "&amp;");
   html = html.replace(/<(?!\/?(?:b|i|u|s|code|pre)>)/g, "&lt;");
 
-  // Restore tables (already-rendered <pre> blocks with escaped cell content).
-  html = html.replace(/ TBL(\d+) /g, (_, idx) => tables[Number(idx)] ?? "");
-
-  return html;
+  return html.replace(/\[\[__TBL_(\d+)__\]\]/g, (_, idx) => tables[Number(idx)] ?? "");
 }
 
 const TABLE_SEPARATOR_RE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/;
@@ -233,8 +228,9 @@ function parseTableRow(line: string): string[] {
     .map((s) => s.trim());
 }
 
-function extractTables(md: string, tables: string[]): string {
+function extractTables(md: string): { text: string; tables: string[] } {
   const lines = md.split("\n");
+  const tables: string[] = [];
   const out: string[] = [];
   let i = 0;
   while (i < lines.length) {
@@ -247,16 +243,19 @@ function extractTables(md: string, tables: string[]): string {
         rows.push(parseTableRow(lines[j]));
         j++;
       }
-      const idx = tables.length;
+      out.push(`[[__TBL_${tables.length}__]]`);
       tables.push(renderTableAsPre(header, rows));
-      out.push(` TBL${idx} `);
       i = j;
     } else {
       out.push(lines[i]);
       i++;
     }
   }
-  return out.join("\n");
+  return { text: out.join("\n"), tables };
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function renderTableAsPre(header: string[], rows: string[][]): string {
@@ -269,9 +268,7 @@ function renderTableAsPre(header: string[], rows: string[][]): string {
   }
   const fmt = (r: string[]) =>
     Array.from({ length: cols }, (_, c) => (r[c] ?? "").padEnd(widths[c])).join("  ").trimEnd();
-  const escape = (s: string) =>
-    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const text = [fmt(header), ...rows.map(fmt)].map(escape).join("\n");
+  const text = [fmt(header), ...rows.map(fmt)].map(escapeHtml).join("\n");
   return `<pre>${text}</pre>`;
 }
 
