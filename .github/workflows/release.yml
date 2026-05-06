@@ -20,9 +20,18 @@ on:
       - 'duathlon-coach@*'
   workflow_dispatch:
     inputs:
+      package:
+        description: 'Package to release'
+        type: choice
+        default: cycling-coach
+        options:
+          - cycling-coach
+          - running-coach
+          - duathlon-coach
       tag:
-        description: 'Tag to release from (e.g., cycling-coach@2026.5.2). Tag must already exist.'
-        required: true
+        description: 'Tag (leave empty to use packages/<package>/package.json version on main)'
+        required: false
+        default: ''
 
 # PG-16: per-job least-privilege; id-token only on publish.
 permissions:
@@ -36,13 +45,34 @@ jobs:
       version: ${{ steps.parse.outputs.version }}
       ref: ${{ steps.parse.outputs.ref }}
     steps:
+      # Needed only when workflow_dispatch is invoked with an empty tag input —
+      # we resolve the version from packages/<package>/package.json on the
+      # dispatched ref. Cheap enough to always run; keeps the resolver simple.
+      - uses: actions/checkout@v4
       - id: parse
-        # Tag format is <package>@<version>. For tag-push events, github.ref_name
-        # is the tag (e.g. "cycling-coach@2026.5.2"). For workflow_dispatch,
-        # github.event.inputs.tag is what the operator typed.
+        # Three trigger paths produce a tag string:
+        #   push:tags          -> github.ref_name is the tag (cycling-coach@2026.5.2)
+        #   workflow_dispatch  -> if inputs.tag is non-empty, use it verbatim;
+        #                         otherwise build <inputs.package>@<package.json version>
+        #                         so the operator can dispatch with a single click
+        #                         after a Version-PR merge without typing the tag.
         run: |
           set -euo pipefail
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          INPUT_TAG="${{ github.event.inputs.tag }}"
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            PKG="${{ github.event.inputs.package }}"
+            if [ ! -f "packages/$PKG/package.json" ]; then
+              echo "::error::packages/$PKG/package.json not found on this ref"
+              exit 1
+            fi
+            VERSION=$(node -p "require('./packages/$PKG/package.json').version")
+            TAG="$PKG@$VERSION"
+            echo "::notice::Empty tag input — resolved to $TAG via packages/$PKG/package.json"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
           PACKAGE="${TAG%@*}"
           VERSION="${TAG#*@}"
           if [ "$PACKAGE" = "$TAG" ] || [ "$VERSION" = "$TAG" ]; then
