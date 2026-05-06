@@ -12,13 +12,6 @@ cycling-coach setup
 cycling-coach
 ```
 
-If you'd rather not install globally, drop the `-g` and use `npx`:
-
-```bash
-npx cycling-coach setup
-npx cycling-coach
-```
-
 The setup wizard asks for your LLM provider — an API key for Anthropic / OpenAI / Google, **or OAuth sign-in with your ChatGPT subscription** (no API key needed). Then optionally connects [intervals.icu](https://intervals.icu) and Telegram. After setup, `cycling-coach` starts in CLI mode — or Telegram mode if you provided a bot token.
 
 ```
@@ -73,6 +66,17 @@ Free-form chat works too — ask anything about training, report an injury, requ
 - `sessions/<chatId>.jsonl` — per-chat history
 
 The agent reads memory at the start of each conversation and writes to it when significant decisions are made (new goal, plan change, injury).
+
+## Troubleshooting
+
+**`cycling-coach: command not found`** — if you installed without the `-g` flag, the binary isn't on your `$PATH`. Either re-install globally (`npm install -g cycling-coach`), or run it via `npx`:
+
+```bash
+npx cycling-coach setup
+npx cycling-coach
+```
+
+`npx` ships with Node.js, so no extra install step is needed.
 
 ## More
 
