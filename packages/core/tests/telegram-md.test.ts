@@ -149,4 +149,19 @@ describe("chunkHtml", () => {
       expect(c.length).toBeLessThanOrEqual(MAX);
     }
   });
+
+  it("preserves consecutive multi-line <pre> blocks across chunking", () => {
+    const pre1 = "<pre>a\nb\nc</pre>";
+    const pre2 = "<pre>d\ne\nf</pre>";
+    // Two paragraphs of filler force chunking; both <pre> blocks must end up intact.
+    const filler = "x".repeat(2500);
+    const html = `${pre1}\n\n${filler}\n\n${pre2}\n\n${filler}`;
+    expect(html.length).toBeGreaterThan(MAX);
+    const chunks = chunkHtml(html);
+    expect(chunks.join("\n")).toContain(pre1);
+    expect(chunks.join("\n")).toContain(pre2);
+    for (const c of chunks) {
+      expect((c.match(/<pre>/g) ?? []).length).toBe((c.match(/<\/pre>/g) ?? []).length);
+    }
+  });
 });

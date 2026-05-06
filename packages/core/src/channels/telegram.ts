@@ -278,22 +278,25 @@ function renderTableAsPre(header: string[], rows: string[][]): string {
 // ============================================================================
 
 const TELEGRAM_MAX_LENGTH = 4096;
+const PRE_OPEN = "<pre>";
+const PRE_CLOSE = "</pre>";
+const PRE_OVERHEAD = PRE_OPEN.length + PRE_CLOSE.length;
 
 type RenderUnit = { kind: "line"; text: string } | { kind: "pre"; text: string };
 
-// Group consecutive lines that belong to the same multi-line <pre> block, so the chunker
-// can treat them as one indivisible unit. Single-line <pre>...</pre> stays a "line".
+// Group multi-line <pre> blocks so the chunker treats each as one indivisible unit
+// (Telegram rejects chunks with unmatched <pre>/</pre>).
 function tokenizeHtml(html: string): RenderUnit[] {
   const units: RenderUnit[] = [];
   const lines = html.split("\n");
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
-    const openIdx = line.indexOf("<pre>");
-    const closeOnSame = openIdx >= 0 ? line.indexOf("</pre>", openIdx) : -1;
+    const openIdx = line.indexOf(PRE_OPEN);
+    const closeOnSame = openIdx >= 0 ? line.indexOf(PRE_CLOSE, openIdx) : -1;
     if (openIdx >= 0 && closeOnSame < 0) {
       let j = i + 1;
-      while (j < lines.length && !lines[j].includes("</pre>")) j++;
+      while (j < lines.length && !lines[j].includes(PRE_CLOSE)) j++;
       if (j < lines.length) {
         units.push({ kind: "pre", text: lines.slice(i, j + 1).join("\n") });
         i = j + 1;
@@ -311,28 +314,27 @@ function tokenizeHtml(html: string): RenderUnit[] {
 // so each chunk Telegram receives has a matching open/close tag.
 function splitPreBlock(block: string, maxLen: number): string[] {
   const inner = block.replace(/^<pre>/, "").replace(/<\/pre>$/, "");
-  const wrapOverhead = "<pre></pre>".length;
   const out: string[] = [];
   let current = "";
   for (const row of inner.split("\n")) {
     const candidate = current ? `${current}\n${row}` : row;
-    if (candidate.length + wrapOverhead <= maxLen) {
+    if (candidate.length + PRE_OVERHEAD <= maxLen) {
       current = candidate;
       continue;
     }
     if (current) {
-      out.push(`<pre>${current}</pre>`);
+      out.push(`${PRE_OPEN}${current}${PRE_CLOSE}`);
       current = row;
-      if (current.length + wrapOverhead <= maxLen) continue;
+      if (current.length + PRE_OVERHEAD <= maxLen) continue;
     }
     // Single row alone exceeds the budget — hard-split, wrap each piece.
-    const sliceMax = Math.max(1, maxLen - wrapOverhead);
+    const sliceMax = Math.max(1, maxLen - PRE_OVERHEAD);
     for (let k = 0; k < row.length; k += sliceMax) {
-      out.push(`<pre>${row.slice(k, k + sliceMax)}</pre>`);
+      out.push(`${PRE_OPEN}${row.slice(k, k + sliceMax)}${PRE_CLOSE}`);
     }
     current = "";
   }
-  if (current) out.push(`<pre>${current}</pre>`);
+  if (current) out.push(`${PRE_OPEN}${current}${PRE_CLOSE}`);
   return out;
 }
 
