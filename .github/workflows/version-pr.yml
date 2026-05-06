@@ -26,6 +26,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write   # for `gh workflow run release.yml` after a Version-PR merge
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,12 +52,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push tags for publishable packages on Version-PR merge
+      - name: Push tags and dispatch release for publishable packages on Version-PR merge
         # Closes the manual gap between "Version PR merged" and "release fires".
         # When the operator merges the changesets-bot PR, package.json versions
         # bump on main but no tag is created — release.yml never sees it. This
         # step pushes <name>@<version> for every non-private packages/*/package.json
-        # whose tag is missing on origin; each pushed tag triggers release.yml.
+        # whose tag is missing on origin, then dispatches release.yml for it.
+        #
+        # Why dispatch instead of relying on the `push: tags:` trigger in
+        # release.yml: GitHub blocks workflow runs from events triggered by
+        # GITHUB_TOKEN as an anti-recursion measure, EXCEPT for workflow_dispatch
+        # and repository_dispatch (documented exception). Tag pushes from this
+        # job use GITHUB_TOKEN, so the tag-push event is silently dropped by
+        # release.yml. workflow_dispatch is the supported escape hatch.
         #
         # Gated to push events (skip workflow_dispatch — that path is for
         # operator-driven re-runs of the changesets step itself, not for
@@ -81,5 +89,6 @@ jobs:
             fi
             git tag "$TAG"
             git push origin "$TAG"
-            echo "::notice::Pushed tag $TAG (release.yml will fire)"
+            gh workflow run release.yml --ref main -f tag="$TAG"
+            echo "::notice::Pushed tag $TAG and dispatched release.yml"
           done
