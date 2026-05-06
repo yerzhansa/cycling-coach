@@ -177,7 +177,12 @@ export function createTelegramBot(token: string, agent: CoachAgent, binary: Bina
 // ============================================================================
 
 function markdownToTelegramHtml(md: string): string {
-  let html = md;
+  // Telegram has no table primitive in any parse mode. Extract markdown tables first
+  // and stash them as placeholders so the other regex passes don't mangle their contents.
+  // They get rendered into <pre> (monospace) blocks at the end, with cell content already
+  // HTML-escaped.
+  const tables: string[] = [];
+  let html = extractTables(md, tables);
 
   // Headers: ### Title → <b>Title</b>
   html = html.replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>");
@@ -205,7 +210,69 @@ function markdownToTelegramHtml(md: string): string {
   html = html.replace(/&(?!amp;|lt;|gt;)/g, "&amp;");
   html = html.replace(/<(?!\/?(?:b|i|u|s|code|pre)>)/g, "&lt;");
 
+  // Restore tables (already-rendered <pre> blocks with escaped cell content).
+  html = html.replace(/ TBL(\d+) /g, (_, idx) => tables[Number(idx)] ?? "");
+
   return html;
+}
+
+const TABLE_SEPARATOR_RE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/;
+
+function isTableRow(line: string | undefined): boolean {
+  if (!line) return false;
+  const t = line.trim();
+  return t.startsWith("|") && t.endsWith("|") && t.length > 1;
+}
+
+function parseTableRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((s) => s.trim());
+}
+
+function extractTables(md: string, tables: string[]): string {
+  const lines = md.split("\n");
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const next = lines[i + 1];
+    if (isTableRow(lines[i]) && next !== undefined && TABLE_SEPARATOR_RE.test(next)) {
+      const header = parseTableRow(lines[i]);
+      const rows: string[][] = [];
+      let j = i + 2;
+      while (j < lines.length && isTableRow(lines[j])) {
+        rows.push(parseTableRow(lines[j]));
+        j++;
+      }
+      const idx = tables.length;
+      tables.push(renderTableAsPre(header, rows));
+      out.push(` TBL${idx} `);
+      i = j;
+    } else {
+      out.push(lines[i]);
+      i++;
+    }
+  }
+  return out.join("\n");
+}
+
+function renderTableAsPre(header: string[], rows: string[][]): string {
+  const cols = Math.max(header.length, ...rows.map((r) => r.length));
+  const widths: number[] = [];
+  for (let c = 0; c < cols; c++) {
+    let w = (header[c] ?? "").length;
+    for (const r of rows) w = Math.max(w, (r[c] ?? "").length);
+    widths.push(w);
+  }
+  const fmt = (r: string[]) =>
+    Array.from({ length: cols }, (_, c) => (r[c] ?? "").padEnd(widths[c])).join("  ").trimEnd();
+  const escape = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const text = [fmt(header), ...rows.map(fmt)].map(escape).join("\n");
+  return `<pre>${text}</pre>`;
 }
 
 // ============================================================================
