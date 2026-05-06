@@ -1,6 +1,4 @@
-import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { join } from "node:path";
+import { readBinaryPackageJson, type UpdateInfo } from "./updater.js";
 
 export interface RepoInfo {
   owner: string;
@@ -14,24 +12,10 @@ export function parseRepoFromUrl(url: string): RepoInfo | null {
 }
 
 export function getRepoForBinary(binaryName: string): RepoInfo | null {
-  const tryParse = (pkgPath: string): RepoInfo | null => {
-    try {
-      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { repository?: { url?: string } | string };
-      const url = typeof pkg.repository === "string" ? pkg.repository : pkg.repository?.url;
-      return url ? parseRepoFromUrl(url) : null;
-    } catch {
-      return null;
-    }
-  };
-
-  try {
-    const requireFn = createRequire(import.meta.url);
-    const installed = tryParse(requireFn.resolve(`${binaryName}/package.json`));
-    if (installed) return installed;
-  } catch {
-    // fall through to dev fallback
-  }
-  return tryParse(join(process.cwd(), "package.json"));
+  const pkg = readBinaryPackageJson(binaryName);
+  const repo = pkg?.repository as { url?: string } | string | undefined;
+  const url = typeof repo === "string" ? repo : repo?.url;
+  return url ? parseRepoFromUrl(url) : null;
 }
 
 export function parseUserFacing(body: string): string[] {
@@ -64,25 +48,26 @@ export async function fetchReleaseBody(
   }
 }
 
-export interface WhatsNewArgs {
-  binaryName: string;
-  currentVersion: string;
-  latestVersion: string;
-  updateAvailable: boolean;
-}
-
-export async function buildWhatsNewMessage(args: WhatsNewArgs): Promise<string> {
-  const repo = getRepoForBinary(args.binaryName);
+/**
+ * Build the `/whatsnew` reply for the latest published version of `binaryName`.
+ * Always shows the latest version's notes (per product decision) — when the
+ * user is up to date that's their version's notes; when behind, it's a preview
+ * of what `/update` will install. Renders only `User-facing:` lines extracted
+ * from the GitHub Release body; engineering details and changeset hashes never
+ * surface to athletes.
+ */
+export async function buildWhatsNewMessage(binaryName: string, info: UpdateInfo): Promise<string> {
+  const repo = getRepoForBinary(binaryName);
   if (!repo) {
-    return `Couldn't locate the GitHub repository for ${args.binaryName}.`;
+    return `Couldn't locate the GitHub repository for ${binaryName}.`;
   }
 
-  const tag = `${args.binaryName}@${args.latestVersion}`;
+  const tag = `${binaryName}@${info.latest}`;
   const releaseUrl = `https://github.com/${repo.owner}/${repo.name}/releases/tag/${tag}`;
   const body = await fetchReleaseBody(repo, tag);
 
   const lines: string[] = [];
-  lines.push(`**What's new in ${args.latestVersion}**`);
+  lines.push(`**What's new in ${info.latest}**`);
   lines.push("");
 
   if (body === null) {
@@ -98,8 +83,8 @@ export async function buildWhatsNewMessage(args: WhatsNewArgs): Promise<string> 
   }
 
   lines.push("");
-  if (args.updateAvailable) {
-    lines.push(`You're on ${args.currentVersion}. Send /update to install ${args.latestVersion}.`);
+  if (info.updateAvailable) {
+    lines.push(`You're on ${info.current}. Send /update to install ${info.latest}.`);
   } else {
     lines.push(`You're up to date.`);
   }

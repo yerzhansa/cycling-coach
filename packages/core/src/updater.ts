@@ -44,23 +44,40 @@ export function isUpdateAvailable(latest: string, current: string): boolean {
   return false;
 }
 
-export function getCurrentVersion(binaryName: string): string {
-  // Installed-binary path: resolve via Node's module-resolution to find the
-  // binary package's package.json wherever pnpm/npm placed it.
+/**
+ * Read the binary's package.json — installed path first (via Node's module
+ * resolution), cwd fallback for dev. Memoized: package.json doesn't change
+ * mid-process, and `/update` exits the process before installing a new
+ * version, so the cache is naturally invalidated by restart.
+ */
+const pkgCache = new Map<string, Record<string, unknown> | null>();
+export function readBinaryPackageJson(binaryName: string): Record<string, unknown> | null {
+  if (pkgCache.has(binaryName)) return pkgCache.get(binaryName) ?? null;
+
+  const tryRead = (path: string): Record<string, unknown> | null => {
+    try {
+      return JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  };
+
+  let pkg: Record<string, unknown> | null = null;
   try {
     const requireFn = createRequire(import.meta.url);
-    const pkgPath = requireFn.resolve(`${binaryName}/package.json`);
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-    return pkg.version;
+    pkg = tryRead(requireFn.resolve(`${binaryName}/package.json`));
   } catch {
-    // Dev-time fallback: cwd is the repo root which contains the binary's package.json.
-    try {
-      const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf-8"));
-      return pkg.version;
-    } catch {
-      return "unknown";
-    }
+    // resolve() threw (binary not installed via npm) — fall through
   }
+  if (!pkg) pkg = tryRead(join(process.cwd(), "package.json"));
+
+  pkgCache.set(binaryName, pkg);
+  return pkg;
+}
+
+export function getCurrentVersion(binaryName: string): string {
+  const pkg = readBinaryPackageJson(binaryName);
+  return (pkg?.version as string | undefined) ?? "unknown";
 }
 
 export async function checkForUpdate(binaryName: string): Promise<UpdateInfo | null> {
