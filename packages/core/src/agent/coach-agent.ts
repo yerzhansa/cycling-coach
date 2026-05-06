@@ -231,6 +231,10 @@ export class CoachAgent {
     });
   }
 
+  hasSession(chatId: string): boolean {
+    return this.chatStore.hasSession(chatId);
+  }
+
   async resetSession(chatId: string): Promise<void> {
     // Flush before reset to avoid losing un-persisted context
     const { messages: history } = this.chatStore.load(chatId);

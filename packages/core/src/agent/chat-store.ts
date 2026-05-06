@@ -28,6 +28,10 @@ export class ChatStore {
     return join(this.sessionsDir, `${chatId}.jsonl`);
   }
 
+  hasSession(chatId: string): boolean {
+    return existsSync(this.filePath(chatId));
+  }
+
   load(chatId: string): { messages: ModelMessage[]; lastMessageTime: string | null } {
     const path = this.filePath(chatId);
     if (!existsSync(path)) return { messages: [], lastMessageTime: null };

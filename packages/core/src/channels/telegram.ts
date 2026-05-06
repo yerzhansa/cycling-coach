@@ -147,10 +147,14 @@ export function createTelegramBot(token: string, agent: CoachAgent, binary: Bina
   bot.on("message:text", async (ctx) => {
     const chatId = `telegram:${ctx.chat.id}`;
 
-    // Welcome newcomers on their very first message
+    // Welcome newcomers on their very first message. `greeted` is in-memory,
+    // so after a process restart we consult the on-disk session to tell
+    // returning users from true newcomers.
     if (!greeted.has(ctx.chat.id)) {
       greeted.add(ctx.chat.id);
-      await ctx.reply(WELCOME_MESSAGE);
+      if (!agent.hasSession(chatId)) {
+        await ctx.reply(WELCOME_MESSAGE);
+      }
     }
 
     try {
