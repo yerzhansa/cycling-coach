@@ -23,12 +23,10 @@ export type {
 } from "./sport.js";
 
 // ─── Reference (section-11 port; see NOTICE.md) ───────────────────────
-// Type-only landings in Wave 1; runtime helpers ship across Waves 2-7.
-export type {
-  DfaSummary,
-  PowerCurveDelta,
-  ReferenceSportAdapter,
-} from "./reference/sport-adapter.js";
+// Wave 1 lands: per-sport seam types, freshness/timing constants, path
+// resolver, I/O helpers, 7 strict Zod schemas + per-file SCHEMA_VERSION
+// constants, an empty REFERENCE_PRESERVE_TOKENS slot. Waves 2-7 extend.
+export * from "./reference/index.js";
 
 // ─── LLM ──────────────────────────────────────────────────────────────
 export { LLM } from "./llm.js";

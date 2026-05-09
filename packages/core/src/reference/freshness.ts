@@ -1,0 +1,49 @@
+// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
+//
+// Single source of truth for Reference's freshness, retention, and sync-loop
+// timing constants. Imported by every Reference module that needs a window;
+// no Reference module hardcodes these numbers locally.
+
+// ─── Freshness windows (since `last_updated` in latest.json) ───────────
+/** <24 h: data is fresh; coaching uses it without caveat. */
+export const FRESH_MS = 24 * 60 * 60 * 1000;
+/** 24-48 h: data is borderline; flag in metadata, no behavior change. */
+export const FLAG_MS = 48 * 60 * 60 * 1000;
+/** >48 h: data is stale; trigger lazy refresh in the background. */
+export const STALE_MS = 48 * 60 * 60 * 1000;
+/** >7 d: data is critical; force a fresh sync before answering. */
+export const CRITICAL_MS = 7 * 24 * 60 * 60 * 1000;
+
+// ─── Retention windows ─────────────────────────────────────────────────
+/** Days of history retained at "latest" granularity (recent activities + wellness). */
+export const LATEST_RETENTION_DAYS = 7;
+/** Days of daily-resolution history retained in `history.json`. */
+export const HISTORY_DAILY_DAYS = 90;
+/** Days of weekly-resolution history retained. */
+export const HISTORY_WEEKLY_DAYS = 180;
+/** Years of monthly-resolution history retained. */
+export const HISTORY_MONTHLY_YEARS = 3;
+/** Days of per-rep interval data retained. */
+export const INTERVALS_RETENTION_DAYS = 14;
+/** Days of route metadata retained. */
+export const ROUTES_RETENTION_DAYS = 90;
+
+// ─── Sync-loop timing (mutex / cooldown / scheduled tick) ──────────────
+/**
+ * Maximum time `runSync()` waits to acquire the sync mutex before responding
+ * with a soft "another sync in flight, try again shortly" message. Wave 1b
+ * (F4) implements the actual mutex; this constant pins the SLA.
+ */
+export const MUTEX_ACQUIRE_TIMEOUT_MS = 30_000;
+/**
+ * Outer-operation timeout for a single `runSync()` body. If this fires, the
+ * mutex is force-released, in-flight HTTP is aborted, and `error_state.json`
+ * is written for the curator's visibility.
+ */
+export const SYNC_OPERATION_TIMEOUT_MS = 120_000;
+/** Per-chat cooldown for the `/sync` Telegram command. */
+export const SYNC_COOLDOWN_MS = 30_000;
+/** Mutex acquire time over this threshold logs a WARN — operator signal. */
+export const MUTEX_HOT_WARN_MS = 10_000;
+/** Scheduled refresh cadence (in-process timer). */
+export const SCHEDULED_SYNC_INTERVAL_MS = 30 * 60 * 1000;
