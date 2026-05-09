@@ -1,6 +1,6 @@
 {
   "name": "@enduragent/sport-running",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "description": "Running sport package (alpha — not yet implemented). Implements the Sport contract from @enduragent/core.",
   "type": "module",
