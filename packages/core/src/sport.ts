@@ -3,6 +3,7 @@ import type { z } from "zod";
 import type { IntervalsClient } from "./intervals.js";
 import type { LLM } from "./llm.js";
 import type { MemorySnapshot, MemoryStore } from "./memory.js";
+import type { ReferenceSportAdapter } from "./reference/sport-adapter.js";
 import type { SecretsResolver } from "./secrets/types.js";
 
 // ─── Identity ──────────────────────────────────────────────────────────
@@ -87,6 +88,22 @@ export interface Sport {
 
   /** The one and only method: tools need runtime services. */
   tools(deps: CoreDeps): readonly ToolRegistration[];
+
+  /**
+   * Optional Reference-layer adapters for this sport. Returns a `readonly`
+   * array so composing sports (duathlon, per ADR-0002) can spread upstream
+   * sports' adapters: `() => [...cycling.referenceAdapters!(),
+   * ...running.referenceAdapters!()]`.
+   *
+   * Validation lives in Reference's startup dispatcher, NOT in `Sport`:
+   * disjoint coverage (no two adapters claim the same `IntervalsActivityType`)
+   * and subset coverage (union of `activityTypes` ⊆ `intervalsActivityTypes`)
+   * throw at boot before any traffic. Sports without per-sport Reference
+   * affordances simply omit this method — the dispatcher treats absence as
+   * "fall back to declarative defaults." See ADR-0010 for the canonical
+   * pattern this method instances.
+   */
+  referenceAdapters?(): readonly ReferenceSportAdapter[];
 }
 
 // ─── Consumer-narrowed slices (interface segregation via Pick) ─────────

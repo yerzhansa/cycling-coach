@@ -22,6 +22,14 @@ export type {
   ToolRegistration,
 } from "./sport.js";
 
+// ─── Reference (section-11 port; see NOTICE.md) ───────────────────────
+// Type-only landings in Wave 1; runtime helpers ship across Waves 2-7.
+export type {
+  DfaSummary,
+  PowerCurveDelta,
+  ReferenceSportAdapter,
+} from "./reference/sport-adapter.js";
+
 // ─── LLM ──────────────────────────────────────────────────────────────
 export { LLM } from "./llm.js";
 export type { GenerateOpts, GenerateResult } from "./llm-types.js";
