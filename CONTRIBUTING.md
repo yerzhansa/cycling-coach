@@ -1,3 +1,5 @@
+<!-- trademark-lint:skip-file — the "Trademark hygiene" section below documents
+the substitution table and must legitimately name the forbidden tokens. -->
 # Contributing
 
 ## Branch Naming
@@ -59,6 +61,29 @@ docs(plan): add battle plan for rate limit fix
 - Imperative mood: "add X", "fix Y", not "added X" or "fixes Y"
 - Lowercase after the colon
 - One logical change per commit when practical
+
+## Trademark hygiene
+
+The Reference submodule (`packages/core/src/reference/`) is ported from [section-11](https://github.com/CrankAddict/section-11) (CrankAddict, MIT) — see [`NOTICE.md`](./NOTICE.md). Section-11 was authored against TrainingPeaks vocabulary; this codebase uses [intervals.icu](https://intervals.icu)'s plain-English alternatives throughout. **PRs that introduce the forbidden tokens in Reference source or docs are rejected by the lint.**
+
+| TrainingPeaks (forbidden) | intervals.icu (use this) |
+|---------------------------|--------------------------|
+| CTL                       | Fitness                  |
+| ATL                       | Fatigue                  |
+| TSB                       | Form                     |
+| TSS                       | Load                     |
+| IF                        | Intensity                |
+| NP / "Normalized Power"   | weighted average power   |
+
+`pnpm check:trademarks` runs the AST-walking linter at `tools/check-trademarks.ts`. For TypeScript files, only string literals, template literals, and comment trivia are checked — code identifiers are ignored, so a name like `IF` as an identifier never trips a false positive. Markdown files are scanned with word-boundary regex, with fenced code blocks excluded.
+
+A file that legitimately needs to mention the forbidden tokens (the linter's own source, a glossary file, a test fixture) opts out by placing `trademark-lint:skip-file` in any commenting style within the first 1 KB of the file. Use sparingly; the default scope is the Reference submodule and `tools/`.
+
+Per-ported-file boilerplate: every file in `packages/core/src/reference/` carries a one-line header comment naming section-11 — `// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.`
+
+## Reference schema-version policy
+
+Each cache file under `<coach-home>/data/` (`latest.json`, `history.json`, `intervals.json`, `routes.json`, `ftp_history.json`) declares its own `<FILE>_SCHEMA_VERSION` constant in `packages/core/src/reference/schemas/`. **Bump only the file whose shape changed; never bump them in lockstep.** The version is informational — Zod-strict-as-gate is what handles drift via discard-and-resync per [the Reference PRD's Decision 9](./docs/initiatives/section-11/reference-prd-decisions.md). There is no `migrations/` directory; a schema bump is a code-only change that triggers a fresh sync on the next `runSync()`.
 
 ## Telegram allowlist file
 

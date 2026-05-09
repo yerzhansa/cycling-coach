@@ -451,6 +451,10 @@ tests/               # 112 tests
 | [TypeScript](https://www.typescriptlang.org/) | 6.x | |
 | [Vitest](https://vitest.dev/) | 4.x | Testing |
 
+## Credits
+
+Cycling Coach's data substrate (the "Reference" submodule that grounds coaching in verified athlete numerics) is a port of [section-11](https://github.com/CrankAddict/section-11) (CrankAddict, MIT-licensed). See [`NOTICE.md`](./NOTICE.md) for the full attribution and the list of modifications introduced during the port.
+
 ## License
 
 MIT

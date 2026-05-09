@@ -13,7 +13,8 @@
     "lint": "oxlint packages/",
     "fmt": "oxfmt packages/",
     "fmt:check": "oxfmt --check packages/",
-    "check": "pnpm -r build && oxlint packages/",
+    "check": "pnpm -r build && oxlint packages/ && pnpm check:trademarks",
+    "check:trademarks": "tsx tools/check-trademarks.ts",
     "release-version": "changeset version && tsx tools/bump-binaries-to-calver.ts"
   },
   "devDependencies": {
