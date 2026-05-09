@@ -170,10 +170,13 @@ describe("migrateCyclingLegacySections", () => {
 
   // ── failure handling ────────────────────────────────────────────────
 
-  it("survives partial failure: prior renames stay committed, function does not throw", () => {
-    // Stub MemoryStore that throws on the third call only.
-    let calls = 0;
-    const captured: Array<[string, string]> = [];
+  // Architect-final: migration is now all-or-nothing via the bulk
+  // `renameSections` API. Either all three renames land via a single atomic
+  // write, or none do. Reference Wave 1b's init order assumes step 3 never
+  // sees half-migrated MEMORY.md, so per-section partial commits are no
+  // longer a supported state.
+  it("on bulk failure: function does not throw, no per-rename log events fire, single warn is emitted", () => {
+    const captured: Array<ReadonlyArray<readonly [string, string]>> = [];
     const stub: MemoryStore = {
       readMemory: () => "",
       writeSection: () => {},
@@ -183,28 +186,24 @@ describe("migrateCyclingLegacySections", () => {
       loadPlan: () => null,
       reload: () => {},
       getContext: () => "",
-      renameSection: (from, to) => {
-        calls++;
-        captured.push([from, to]);
-        if (calls === 3) throw new Error("disk full");
-        return "renamed";
+      renameSection: () => "noop",
+      renameSections: (renames) => {
+        captured.push(renames);
+        throw new Error("disk full");
       },
     };
 
     expect(() => migrateCyclingLegacySections(stub)).not.toThrow();
 
-    // All three rename attempts were made (loop continued past the failure).
-    expect(captured).toEqual([
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toEqual([
       ["profile", "cycling-profile"],
       ["equipment", "cycling-equipment"],
       ["health", "cycling-history"],
     ]);
-    // First two emit success; third emits failure.
-    expect(logEvents()).toHaveLength(2);
+    expect(logEvents()).toHaveLength(0);
     expect(warnEvents()).toContainEqual({
-      event: "section_rename_failed",
-      from: "health",
-      to: "cycling-history",
+      event: "section_rename_bulk_failed",
       error: "Error: disk full",
     });
   });

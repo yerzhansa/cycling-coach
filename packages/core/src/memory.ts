@@ -26,6 +26,16 @@ export interface MemoryStore {
    */
   renameSection(from: string, to: string): "renamed" | "noop" | "merged";
 
+  /**
+   * Apply multiple renames as a single read + single atomic write. Returns
+   * outcomes in the order of `renames`. Used by sport migrations so a partial
+   * rename cannot leave half-migrated state observable to subsequent init
+   * steps (architect-final concern 4 for Wave 1b / ADR-0011).
+   */
+  renameSections(
+    renames: ReadonlyArray<readonly [string, string]>,
+  ): Array<"renamed" | "noop" | "merged">;
+
   /** Reads today's daily-notes file (or for `date` when supplied). */
   readDailyNotes(date?: string): string;
 
