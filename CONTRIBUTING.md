@@ -60,6 +60,12 @@ docs(plan): add battle plan for rate limit fix
 - Lowercase after the colon
 - One logical change per commit when practical
 
+## Telegram allowlist file
+
+The bot enforces a per-user-ID allowlist via `~/.cycling-coach/allowed-senders.json` (mode `0600`). Schema and validation live in `packages/core/src/channels/allowed-senders.ts`. CLI mutations (`add-sender`, `remove-sender`) acquire a PID lockfile at `~/.cycling-coach/.allowed-senders.lock` so concurrent invocations serialize cleanly. **Do not edit `allowed-senders.json` by hand while the bot is running** — the bot re-reads it on every inbound message, but a hand-edit during a write will lose updates. Use the CLI subcommands instead.
+
+`dmPolicy: "open"` is rejected when read from the file (defense in depth — only settable via the `CYCLING_COACH_DM_POLICY=open` env var, intended for debugging). The setup wizard never offers it.
+
 ## Versioning
 
 Calendar-based for npm-published binaries: `YYYY.M.D` (e.g., `2026.4.16` — first release of the day; `2026.4.16-1` — patch later the same day; `2026.4.17` — next day). Private workspace packages (`@enduragent/*`, stub binaries) use SemVer and are not published. See ADR-0007 and ADR-0009.

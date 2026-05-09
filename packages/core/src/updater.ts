@@ -1,7 +1,8 @@
-import { readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { join } from "node:path";
+import { enumerateTelegramSessions } from "./channels/telegram-sessions.js";
 
 export interface UpdateInfo {
   current: string;
@@ -105,14 +106,7 @@ export function selfUpdate(binaryName: string): void {
 }
 
 export function getKnownTelegramChatIds(dataDir: string): string[] {
-  const sessionsDir = join(dataDir, "sessions");
-  try {
-    return readdirSync(sessionsDir)
-      .filter((f) => f.startsWith("telegram:") && f.endsWith(".jsonl"))
-      .map((f) => f.replace("telegram:", "").replace(".jsonl", ""));
-  } catch {
-    return [];
-  }
+  return enumerateTelegramSessions(dataDir).map((s) => s.chatId);
 }
 
 const NOTIFIED_VERSION_FILE = "last-notified-version";

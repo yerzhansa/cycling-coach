@@ -11,6 +11,9 @@ import {
   setLastNotifiedVersion,
 } from "../updater.js";
 import { buildWhatsNewMessage } from "../release-notes.js";
+import { createAuthMiddleware } from "./telegram-access.js";
+import { loadAllowedSenders, loadAllowedSendersWithSource } from "./allowed-senders.js";
+import { escapeHtmlText } from "./html-escape.js";
 
 function formatRateLimitWait(err: unknown): string {
   const ms = extractRetryAfterMs(err);
@@ -39,8 +42,52 @@ const WELCOME_MESSAGE =
   "/update — Check for and install updates\n\n" +
   "Or just chat with me about your training!";
 
-export function createTelegramBot(token: string, agent: CoachAgent, binary: BinaryConfig): Bot {
-  const bot = new Bot(token);
+// Module-private factory: every Bot in this module is constructed here, with
+// the auth middleware registered FIRST. Future maintainers cannot add a handler
+// ahead of auth without modifying this function — and reviewers scrutinize
+// changes here because this file holds the security model.
+function createSecuredBot(opts: {
+  token: string;
+  binary: BinaryConfig;
+  dataDir: string;
+}): Bot {
+  const bot = new Bot(opts.token);
+
+  // Per-sender pairing-challenge rate-limit map (process-lifetime; LRU-bounded).
+  const challengeRateLimit = new Map<string, number>();
+  bot.use(
+    createAuthMiddleware({
+      dataDir: opts.dataDir,
+      binaryName: opts.binary.binaryName,
+      challengeRateLimit,
+      challengeMinIntervalMs: 60_000,
+    }),
+  );
+
+  return bot;
+}
+
+function logSecurityStartup(dataDir: string, binaryName: string): void {
+  const { state, source } = loadAllowedSendersWithSource(dataDir);
+  const primary = state.primaryOperator ?? "none";
+  console.error(
+    `[security] Telegram allowlist: ${state.dmPolicy} mode (${state.allowFrom.length} allowed senders, primary: ${primary}). Source: ${source}.`,
+  );
+  if (state.dmPolicy === "pairing" && state.allowFrom.length === 0) {
+    console.error(
+      `[security] No allowed senders configured. DM the bot to receive your user-ID, then run \`${binaryName} add-sender <id>\` to authorize yourself.`,
+    );
+  }
+}
+
+export function createTelegramBot(
+  token: string,
+  agent: CoachAgent,
+  binary: BinaryConfig,
+  dataDir: string,
+): Bot {
+  logSecurityStartup(dataDir, binary.binaryName);
+  const bot = createSecuredBot({ token, binary, dataDir });
   const greeted = new Set<number>();
 
   // ── Commands ────────────────────────────────────────────────────────────
@@ -298,10 +345,6 @@ function extractTables(md: string): { text: string; tables: string[] } {
   return { text: out.join("\n"), tables };
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
 function renderTableAsPre(header: string[], rows: string[][]): string {
   const cols = Math.max(header.length, ...rows.map((r) => r.length));
   const widths: number[] = [];
@@ -312,7 +355,7 @@ function renderTableAsPre(header: string[], rows: string[][]): string {
   }
   const fmt = (r: string[]) =>
     Array.from({ length: cols }, (_, c) => (r[c] ?? "").padEnd(widths[c])).join("  ").trimEnd();
-  const text = [fmt(header), ...rows.map(fmt)].map(escapeHtml).join("\n");
+  const text = [fmt(header), ...rows.map(fmt)].map(escapeHtmlText).join("\n");
   return `<pre>${text}</pre>`;
 }
 
@@ -443,7 +486,14 @@ export async function notifyUpdate(bot: Bot, dataDir: string, binary: BinaryConf
 
     if (getLastNotifiedVersion(dataDir) === info.latest) return;
 
-    const chatIds = getKnownTelegramChatIds(dataDir);
+    // Filter the broadcast list against the current allowlist. Pre-update
+    // strangers' chat-ids may still be in getKnownTelegramChatIds (their session
+    // files persist on disk) but must NOT receive update notifications.
+    const allowed = loadAllowedSenders(dataDir);
+    const allowSet = new Set(allowed.allowFrom);
+    const knownChats = getKnownTelegramChatIds(dataDir);
+    const chatIds =
+      allowed.dmPolicy === "open" ? knownChats : knownChats.filter((id) => allowSet.has(id));
     const message = `Update available: ${info.current} → ${info.latest}\nSend /whatsnew to see what changed, /update to install.`;
 
     for (const chatId of chatIds) {

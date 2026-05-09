@@ -24,7 +24,7 @@ export function scriptedPrompts(answers: ScriptedAnswers) {
     intro: vi.fn(),
     outro: vi.fn(),
     cancel: vi.fn(),
-    log: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
+    log: { info: vi.fn(), success: vi.fn(), error: vi.fn(), warn: vi.fn() },
     note: vi.fn(),
     isCancel: () => false,
     select: vi.fn(async () => selects[s++]),

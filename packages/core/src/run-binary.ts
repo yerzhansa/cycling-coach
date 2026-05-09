@@ -1,7 +1,15 @@
 import { parseArgs } from "node:util";
+import { createInterface as createReadlineInterface } from "node:readline";
 import type { Sport } from "./sport.js";
 import type { BinaryConfig } from "./binary.js";
 import type { Memory } from "./memory/store.js";
+import { CONFIG_DIR, envInt } from "./config.js";
+import {
+  addSender,
+  removeSender,
+  listSenders,
+  loadAllowedSenders,
+} from "./channels/allowed-senders.js";
 
 export interface RunBinaryHooks {
   /** Called once per process at startup, after Memory exists, before any chat handler is reachable. */
@@ -12,15 +20,18 @@ function usage(binary: BinaryConfig): string {
   return `Usage: ${binary.binaryName} [command]
 
 Commands:
-  setup    Interactive wizard to create the config file
-  version  Show current version
-  (none)   Start the coaching agent (Telegram or CLI mode)
+  setup                     Interactive wizard to create the config file
+  version                   Show current version
+  add-sender <userId>       Authorize a Telegram user-id to interact with the bot
+  remove-sender <userId>    Revoke a previously-authorized Telegram user-id
+  list-senders              Show current allowlist + known session candidates
+  (none)                    Start the coaching agent (Telegram or CLI mode)
 
 Options:
-  --help   Show this help message`;
+  --help                    Show this help message`;
 }
 
-function parseCommand(binary: BinaryConfig): string | null {
+function parseCommand(binary: BinaryConfig): { command: string | null; positionals: string[] } {
   const { positionals, values } = parseArgs({
     allowPositionals: true,
     options: { help: { type: "boolean" } },
@@ -30,7 +41,171 @@ function parseCommand(binary: BinaryConfig): string | null {
     console.log(usage(binary));
     process.exit(0);
   }
-  return positionals[0] ?? null;
+  return { command: positionals[0] ?? null, positionals };
+}
+
+// Readline-based confirmation for startup capture: renders a multi-line prompt
+// to make the bot username visually prominent, parses with decline-on-ambiguous
+// semantics, declines cleanly on SIGINT, and times out after
+// CYCLING_COACH_CAPTURE_CONFIRM_TIMEOUT_MS (default 5 min).
+
+interface MakeReadlineConfirmOpts {
+  timeoutMs: number;
+  /** Inject for tests. Defaults to node:readline createInterface. */
+  createInterface?: (opts: {
+    input: NodeJS.ReadableStream;
+    output: NodeJS.WritableStream;
+  }) => {
+    question(prompt: string, cb: (answer: string) => void): void;
+    on(event: "SIGINT", cb: () => void): unknown;
+    close(): void;
+  };
+  /** Inject for tests. */
+  log?: (line: string) => void;
+}
+
+export function _parseConfirmAnswer(input: string): boolean {
+  const trimmed = input.trim().toLowerCase();
+  if (trimmed === "" || trimmed === "y" || trimmed === "yes") return true;
+  // Anything outside {y, yes, Enter, n, no} → decline-on-ambiguous (no re-prompt).
+  return false;
+}
+
+export function makeReadlineConfirm(
+  opts: MakeReadlineConfirmOpts,
+): (info: {
+  capturedId: string;
+  senderUsername: string | undefined;
+  senderFirstName: string | undefined;
+  botUsername: string;
+  binaryName: string;
+}) => Promise<boolean> {
+  const log = opts.log ?? ((s: string) => console.log(s));
+  const create = opts.createInterface ?? createReadlineInterface;
+
+  return async (info) => {
+    log("");
+    log("==========================================================");
+    log(`  Captured operator ID for @${info.botUsername}`);
+    log("==========================================================");
+    log(`  User ID:      ${info.capturedId}`);
+    log(`  Telegram:     @${info.senderUsername ?? "—"}`);
+    log(`  Display name: ${info.senderFirstName ?? "—"}`);
+    log("==========================================================");
+    log("");
+
+    const rl = create({ input: process.stdin, output: process.stdout });
+
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (value: boolean) => {
+        if (settled) return;
+        settled = true;
+        try {
+          rl.close();
+        } catch {
+          /* ignore */
+        }
+        resolve(value);
+      };
+
+      const timer = setTimeout(() => finish(false), opts.timeoutMs);
+
+      rl.on("SIGINT", () => {
+        clearTimeout(timer);
+        finish(false);
+      });
+
+      rl.question("Save this as the primary operator? [Y/n]: ", (answer: string) => {
+        clearTimeout(timer);
+        finish(_parseConfirmAnswer(answer));
+      });
+    });
+  };
+}
+
+async function runStartupCapture(
+  botToken: string,
+  binary: BinaryConfig,
+  dataDir: string,
+): Promise<void> {
+  console.log(
+    `\n${binary.displayName} has no allowed senders configured.\n` +
+      `Send /start to your bot from Telegram within 60 seconds to claim ownership.\n` +
+      `(Press Ctrl+C to skip — you can run \`${binary.binaryName} add-sender <id>\` later.)\n`,
+  );
+  const { captureAndPersistOperator } = await import("./channels/operator-capture.js");
+  const captureTimeoutMs = envInt("CYCLING_COACH_SETUP_CAPTURE_TIMEOUT_MS") ?? 60_000;
+  const confirmTimeoutMs = envInt("CYCLING_COACH_CAPTURE_CONFIRM_TIMEOUT_MS") ?? 300_000;
+  const result = await captureAndPersistOperator({
+    botToken,
+    binary,
+    dataDir,
+    timeoutMs: captureTimeoutMs,
+    confirm: makeReadlineConfirm({ timeoutMs: confirmTimeoutMs }),
+  });
+  if (result.status === "captured") {
+    console.log(`Operator registered (id: ${result.capturedId}). Starting bot...`);
+  } else {
+    console.log(
+      `Operator not captured (${result.status}). Bot will start in pairing mode — DM it to receive your user-ID, then run \`${binary.binaryName} add-sender <id>\`.`,
+    );
+  }
+}
+
+const MUTATORS: Record<
+  "add-sender" | "remove-sender",
+  { fn: (dir: string, id: string) => void; verb: string }
+> = {
+  "add-sender": { fn: addSender, verb: "Added" },
+  "remove-sender": { fn: removeSender, verb: "Removed" },
+};
+
+async function runAllowlistCommand(
+  command: "add-sender" | "remove-sender" | "list-senders",
+  positionals: string[],
+  binary: BinaryConfig,
+): Promise<void> {
+  const reportError = (err: unknown): never => {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`Error: ${msg}`);
+    return process.exit(1);
+  };
+
+  if (command === "add-sender" || command === "remove-sender") {
+    const { fn, verb } = MUTATORS[command];
+    const id = positionals[1];
+    if (!id) {
+      console.error(`Usage: ${binary.binaryName} ${command} <userId>`);
+      process.exit(1);
+    }
+    try {
+      fn(CONFIG_DIR, id);
+    } catch (err) {
+      reportError(err);
+    }
+    console.log(`${verb} sender ${id}.`);
+    process.exit(0);
+  }
+
+  let result: Awaited<ReturnType<typeof listSenders>>;
+  try {
+    result = await listSenders(CONFIG_DIR);
+  } catch (err) {
+    return reportError(err);
+  }
+  console.log(`Policy: ${result.senders.dmPolicy}`);
+  console.log(`Primary operator: ${result.senders.primaryOperator ?? "—"}`);
+  console.log(`Allowed senders (${result.senders.allowFrom.length}):`);
+  for (const id of result.senders.allowFrom) {
+    const added = result.senders.addedAt[id];
+    console.log(`  ${id}${added ? `  added ${added}` : ""}`);
+  }
+  console.log(`Session candidates (${result.sessionCandidates.length}):`);
+  for (const c of result.sessionCandidates) {
+    console.log(`  ${c.chatId}  ${c.lineCount} lines  last modified ${c.lastModified}`);
+  }
+  process.exit(0);
 }
 
 export async function runStartupHook(
@@ -52,7 +227,7 @@ export async function runBinary(
   binary: BinaryConfig,
   hooks: RunBinaryHooks = {},
 ): Promise<void> {
-  const command = parseCommand(binary);
+  const { command, positionals } = parseCommand(binary);
 
   if (command === "setup") {
     const { runSetup } = await import("./setup.js");
@@ -65,6 +240,11 @@ export async function runBinary(
   if (command === "version") {
     const { getCurrentVersion } = await import("./updater.js");
     console.log(`${binary.binaryName} v${getCurrentVersion(binary.binaryName)}`);
+    return;
+  }
+
+  if (command === "add-sender" || command === "remove-sender" || command === "list-senders") {
+    await runAllowlistCommand(command, positionals, binary);
     return;
   }
 
@@ -101,8 +281,22 @@ export async function runBinary(
   await runStartupHook(agent.getMemory(), hooks.onStartup);
 
   if (config.telegram.botToken) {
+    // Interactive startup capture: when no allowlist is set up yet AND we have
+    // a TTY AND a token, run the same one-message claim flow the setup wizard
+    // uses. Non-TTY paths (Docker, systemd, fly.io) skip the prompt and fall
+    // back to pairing-mode + pairing-challenge CLI.
+    const allowed = loadAllowedSenders(config.dataDir);
+    const needsCapture =
+      allowed.dmPolicy === "pairing" &&
+      allowed.allowFrom.length === 0 &&
+      Boolean(config.telegram.botToken) &&
+      process.stdin.isTTY === true;
+    if (needsCapture) {
+      await runStartupCapture(config.telegram.botToken, binary, config.dataDir);
+    }
+
     const { createTelegramBot, notifyUpdate } = await import("./channels/telegram.js");
-    const bot = createTelegramBot(config.telegram.botToken, agent, binary);
+    const bot = createTelegramBot(config.telegram.botToken, agent, binary, config.dataDir);
     console.log(
       `${binary.displayName} (Telegram mode) is running. Open Telegram and message your bot — Ctrl+C to stop.`,
     );

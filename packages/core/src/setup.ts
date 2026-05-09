@@ -3,7 +3,9 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from "node:fs";
 import { stringify as toYaml } from "yaml";
 import type { BinaryConfig } from "./binary.js";
-import { CONFIG_DIR, CONFIG_FILE, readConfigYaml } from "./config.js";
+import { CONFIG_DIR, CONFIG_FILE, envInt, readConfigYaml } from "./config.js";
+import { captureAndPersistOperator } from "./channels/operator-capture.js";
+import { loadAllowedSenders } from "./channels/allowed-senders.js";
 import { runCodexLogin } from "./auth/openai-codex-login.js";
 import { loadProfile, saveProfile, type OAuthCredential } from "./auth/profiles.js";
 import { isSecretRef, type SecretRef } from "./secrets/types.js";
@@ -468,7 +470,89 @@ async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<voi
     }
   }
 
+  // Operator capture runs AFTER config.yaml is committed: cancelling at the
+  // confirm-write prompt above leaves no orphan allowed-senders.json. Only fires
+  // for plain-string tokens — SecretRef tokens (1Password / keychain) defer to
+  // the CLI `add-sender` path. Capture is opportunistic; any failure logs and
+  // continues without aborting the wizard.
+  const tgToken = (merged.telegram as { bot_token?: unknown } | undefined)?.bot_token;
+  if (typeof tgToken === "string" && tgToken.length > 0) {
+    await runOperatorCaptureStep(tgToken, binary, ctx);
+  }
+
   outro(`Config written to ${CONFIG_FILE}\n  Run \`${binary.binaryName}\` to start.`);
+}
+
+async function runOperatorCaptureStep(
+  botToken: string,
+  binary: BinaryConfig,
+  ctx: WizardCtx,
+): Promise<void> {
+  const existing = loadAllowedSenders(CONFIG_DIR);
+  const hasAllowlist = existing.allowFrom.length > 0;
+  if (hasAllowlist) {
+    const reCapture = await confirm({
+      message: `Operator already configured (id: ${existing.primaryOperator ?? "—"}; allowFrom has ${existing.allowFrom.length} entr${existing.allowFrom.length === 1 ? "y" : "ies"}). Re-capture? This preserves all existing entries.`,
+      initialValue: false,
+    });
+    handleCancel(reCapture, ctx, binary);
+    if (!reCapture) {
+      log.info("Skipping operator capture; existing allowlist preserved.");
+      return;
+    }
+  }
+
+  log.info(
+    `Setup will register your Telegram account as the primary operator. Send /start to your bot from your Telegram app within 60 seconds.`,
+  );
+  const timeoutMs = envInt("CYCLING_COACH_SETUP_CAPTURE_TIMEOUT_MS") ?? 60_000;
+  const result = await captureAndPersistOperator({
+    botToken,
+    binary,
+    dataDir: CONFIG_DIR,
+    timeoutMs,
+    confirm: async (info) => {
+      const ok = await confirm({
+        message:
+          `Captured operator id ${info.capturedId} (Telegram: @${info.senderUsername ?? "—"}, name: ${info.senderFirstName ?? "—"}) for bot @${info.botUsername}. Save?`,
+        initialValue: true,
+      });
+      handleCancel(ok, ctx, binary);
+      return Boolean(ok);
+    },
+    log: (line) => log.info(line),
+  });
+
+  switch (result.status) {
+    case "captured":
+      log.success(`Operator registered (id: ${result.capturedId}).`);
+      return;
+    case "declined":
+      log.warn(
+        `Capture discarded. Run \`${binary.binaryName} add-sender <id>\` later to authorize yourself.`,
+      );
+      return;
+    case "timeout":
+      log.warn(
+        `No /start received within the capture window. Run \`${binary.binaryName} add-sender <id>\` once you know your Telegram user-id (DM the bot to receive it).`,
+      );
+      return;
+    case "getme-failed":
+      log.warn(
+        `Bot token did not resolve to a valid Telegram bot (${result.reason ?? "unknown error"}). Skipping capture; re-run \`${binary.binaryName} setup\` once the token is fixed.`,
+      );
+      return;
+    case "lockfile-contention":
+      log.warn(
+        `Allowlist lockfile is held by another process. Run \`${binary.binaryName} add-sender <id>\` once it releases.`,
+      );
+      return;
+    case "write-failed":
+      log.warn(
+        `Failed to persist allowlist (${result.reason ?? "unknown error"}). Run \`${binary.binaryName} add-sender <id>\` once the underlying issue is fixed.`,
+      );
+      return;
+  }
 }
 
 function isNonEmptySecret(value: unknown): boolean {

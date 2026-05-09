@@ -94,7 +94,7 @@ function env(key: string): string | undefined {
   return process.env[key];
 }
 
-function envInt(key: string): number | undefined {
+export function envInt(key: string): number | undefined {
   const v = process.env[key];
   if (v === undefined) return undefined;
   const n = parseInt(v, 10);
