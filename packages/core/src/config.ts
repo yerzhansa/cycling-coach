@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { parse as parseYaml } from "yaml";
+import { getCoachHome } from "./coach-home.js";
 import { SecretRef, isSecretRef, SecretResolutionError } from "./secrets/types.js";
 import { resolveSecretRef } from "./secrets/resolve.js";
 
@@ -38,18 +38,7 @@ export interface Config {
 // CONFIG LOADING
 // ============================================================================
 
-function resolveConfigDir(): string {
-  const override = process.env.CYCLING_COACH_HOME;
-  if (override && override.length > 0) {
-    if (override === "~" || override.startsWith("~/")) {
-      return join(homedir(), override.slice(1));
-    }
-    return override;
-  }
-  return join(homedir(), ".cycling-coach");
-}
-
-export const CONFIG_DIR = resolveConfigDir();
+export const CONFIG_DIR = getCoachHome("cycling-coach");
 export const CONFIG_FILE = join(CONFIG_DIR, "config.yaml");
 
 export function readConfigYaml(): Record<string, unknown> {

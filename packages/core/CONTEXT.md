@@ -63,6 +63,10 @@ A delivery surface (currently only Telegram); sport-agnostic.
 > **Dev:** "When the duathlete asks about FTP, does the duathlon **Sport** answer or delegate to cycling?"
 > **Domain expert:** "There's only one active **Sport** per **Agent**. Duathlon's `soul` and `tools` are *composed* from cycling and running at construction time. From Core's view, one **Sport** answers."
 
+## Path resolution
+
+`getCoachHome(binaryName)` (exported from `@enduragent/core`) is the single helper that resolves a binary's data directory using the three-tier fallback codified in ADR-0006: env-var override (`<BINARY>_HOME`, with `~`/`~/...` expansion) → legacy `~/.cycling-coach/` (only for the `cycling-coach` binary, only when that directory exists on disk) → fresh-install canonical `~/.enduragent/<dataSubdir>/` (subdir derived by stripping `-coach` from the binary name). All persisted state — Core config, Memory, Reference cache files (per the section-11 Reference initiative) — routes through this helper. Pure function; callers create the directory when they need it.
+
 ## Flagged ambiguities
 
 - "Coach" was used to mean both **Sport** (coaching domain) and **Binary** (CLI executable). Resolved: code uses **Sport** for domain, **Binary** for deployment shell. "Coach" remains in product surfaces (display names, READMEs) but is not a code-level term.

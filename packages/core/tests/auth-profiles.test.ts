@@ -36,6 +36,13 @@ describe("auth/profiles", () => {
   });
 
   it("saveProfile writes 0o600 file and loadProfile returns the saved data", async () => {
+    // Parent directory is created by loadConfig usually — create here, BEFORE
+    // loadModule(): config.ts captures CONFIG_DIR at module load, and
+    // getCoachHome's tier-2 (legacy `~/.cycling-coach/`) only fires when that
+    // directory exists at the call site.
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+
     const { saveProfile, loadProfile } = await loadModule();
     const cred = {
       type: "oauth" as const,
@@ -45,9 +52,6 @@ describe("auth/profiles", () => {
       accountId: "acct",
       email: "foo@example.com",
     };
-    // Parent directory is created by loadConfig usually — create here.
-    const { mkdirSync } = await import("node:fs");
-    mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
     saveProfile("openai-codex", cred);
 
     const st = statSync(profilesPath());
@@ -58,9 +62,10 @@ describe("auth/profiles", () => {
   });
 
   it("getFreshToken returns cached access when not near expiry", async () => {
-    const { saveProfile, getFreshToken } = await loadModule();
     const { mkdirSync } = await import("node:fs");
     mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+
+    const { saveProfile, getFreshToken } = await loadModule();
     saveProfile("openai-codex", {
       type: "oauth",
       access: "cached-access",

@@ -1,5 +1,6 @@
 // ─── Binary deployment shell ──────────────────────────────────────────
 export type { BinaryConfig } from "./binary.js";
+export { getCoachHome } from "./coach-home.js";
 
 // ─── Setup wizard ─────────────────────────────────────────────────────
 export { runSetup } from "./setup.js";
