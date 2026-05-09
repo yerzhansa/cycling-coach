@@ -3,6 +3,7 @@ import { createInterface as createReadlineInterface } from "node:readline";
 import type { Sport } from "./sport.js";
 import type { BinaryConfig } from "./binary.js";
 import type { Memory } from "./memory/store.js";
+import type { LatestJson } from "./reference/schemas/latest.js";
 import { CONFIG_DIR, envInt } from "./config.js";
 import {
   addSender,
@@ -278,7 +279,69 @@ export async function runBinary(
   const { CoachAgent } = await import("./agent/coach-agent.js");
   const agent = new CoachAgent(sport, config);
 
+  // ─── Init order pinned by PRD Decision 13 + ADR-0011 ──────────────────
+  // Step 1: Memory (constructed inside `new CoachAgent` above).
+  // Step 2: Startup hook (binary-specific; cycling-coach runs migrate).
   await runStartupHook(agent.getMemory(), hooks.onStartup);
+
+  // Step 3: Construct Reference services. Two-phase scheduler — NO timer
+  // registered yet (architect-final ADR-0011). The first runSync (step 4)
+  // writes `.scheduler.json`; only then does step 5b call `start()`.
+  const { mkdirSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const referenceData = join(config.dataDir, "data");
+  mkdirSync(referenceData, { recursive: true });
+
+  const { AsyncMutex } = await import("./reference/sync/mutex.js");
+  const { Cooldown } = await import("./reference/sync/cooldown.js");
+  const { createRunSync } = await import("./reference/sync/run-sync.js");
+  const { Scheduler } = await import("./reference/sync/scheduler.js");
+  const { makeProductionFetcher } = await import(
+    "./reference/sync/fetch-reference-data.js"
+  );
+  const { safeReadJson: refSafeRead } = await import("./reference/io/safe-read.js");
+  const { LatestJsonSchema } = await import("./reference/schemas/latest.js");
+  const { SYNC_COOLDOWN_MS } = await import("./reference/freshness.js");
+
+  const refMutex = new AsyncMutex();
+  const refCooldown = new Cooldown();
+  const runSync = createRunSync({
+    dataDir: referenceData,
+    mutex: refMutex,
+    cooldown: refCooldown,
+    cooldownWindowMs: SYNC_COOLDOWN_MS,
+    fetchReferenceData: makeProductionFetcher({
+      apiKey: config.intervals.apiKey,
+      athleteId: config.intervals.athleteId,
+    }),
+  });
+  const scheduler = new Scheduler({
+    dataDir: referenceData,
+    runSync,
+    intervalMs: (await import("./reference/freshness.js")).SCHEDULED_SYNC_INTERVAL_MS,
+  });
+
+  // Step 4: First runSync (best-effort — failure logs but never crashes).
+  try {
+    await runSync({ caller: "scheduled" });
+  } catch (err) {
+    console.warn(
+      `Reference: initial sync failed (${err instanceof Error ? err.message : String(err)}). Continuing with empty cache; lazy fallback will retry.`,
+    );
+  }
+
+  // Step 5: Lazy `Person.units` bootstrap — Wave 6 fills; no-op call site
+  // exists in Wave 1b so the integration test sees the slot.
+  // (Intentionally empty — Wave 6 will populate via `agent.getMemory()`.)
+
+  // Step 5b: Start the periodic scheduler. Reads now-current `.scheduler.json`.
+  scheduler.start();
+
+  const referenceServices = {
+    runSync,
+    loadLatest: (): LatestJson | null =>
+      refSafeRead<LatestJson>(join(referenceData, "latest.json"), LatestJsonSchema),
+  };
 
   if (config.telegram.botToken) {
     // Interactive startup capture: when no allowlist is set up yet AND we have
@@ -296,7 +359,14 @@ export async function runBinary(
     }
 
     const { createTelegramBot, notifyUpdate } = await import("./channels/telegram.js");
-    const bot = createTelegramBot(config.telegram.botToken, agent, binary, config.dataDir);
+    // Step 6: Open Telegram with Reference services wired in.
+    const bot = createTelegramBot(
+      config.telegram.botToken,
+      agent,
+      binary,
+      config.dataDir,
+      referenceServices,
+    );
     console.log(
       `${binary.displayName} (Telegram mode) is running. Open Telegram and message your bot — Ctrl+C to stop.`,
     );

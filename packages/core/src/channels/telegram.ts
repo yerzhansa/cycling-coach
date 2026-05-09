@@ -1,4 +1,4 @@
-import { Bot } from "grammy";
+import { Bot, InputFile } from "grammy";
 import type { CoachAgent } from "../agent/coach-agent.js";
 import type { BinaryConfig } from "../binary.js";
 import { isRateLimitError, extractRetryAfterMs } from "../agent/token-utils.js";
@@ -14,6 +14,16 @@ import { buildWhatsNewMessage } from "../release-notes.js";
 import { createAuthMiddleware } from "./telegram-access.js";
 import { loadAllowedSenders, loadAllowedSendersWithSource } from "./allowed-senders.js";
 import { escapeHtmlText } from "./html-escape.js";
+import type { RunSyncOpts, SyncResult } from "../reference/sync/run-sync.js";
+import type { LatestJson } from "../reference/schemas/latest.js";
+import { formatSyncReply } from "../reference/sync/format-sync-reply.js";
+import { formatSnapshotRaw } from "../reference/sync/snapshot-debug.js";
+import { sendSnapshotOutput } from "../reference/sync/send-snapshot.js";
+
+export interface ReferenceServices {
+  readonly runSync: (opts: RunSyncOpts) => Promise<SyncResult>;
+  readonly loadLatest: () => LatestJson | null;
+}
 
 function formatRateLimitWait(err: unknown): string {
   const ms = extractRetryAfterMs(err);
@@ -36,11 +46,19 @@ const WELCOME_MESSAGE =
   "/workout — Get today's workout\n" +
   "/status — Check current fitness, fatigue, and form\n" +
   "/review — Review your last session\n" +
-  "/sync — Push plan to intervals.icu calendar\n" +
+  "/sync — Force-refresh training data from intervals.icu\n" +
   "/version — Show current version\n" +
   "/whatsnew — See what changed in the latest version\n" +
   "/update — Check for and install updates\n\n" +
   "Or just chat with me about your training!";
+
+const SNAPSHOT_HELP =
+  "/snapshot raw [section]    — dump pre-curation latest.json (or one section)\n" +
+  "/snapshot help             — show this list\n\n" +
+  "Wave 7 will add: /snapshot, /snapshot metrics, /snapshot activities,\n" +
+  "/snapshot wellness, /snapshot intervals <id>, /snapshot routes <id>,\n" +
+  "/snapshot history, /snapshot ftp, /snapshot validation.\n\n" +
+  "Until then, only /snapshot raw is wired.";
 
 // Module-private factory: every Bot in this module is constructed here, with
 // the auth middleware registered FIRST. Future maintainers cannot add a handler
@@ -85,6 +103,7 @@ export function createTelegramBot(
   agent: CoachAgent,
   binary: BinaryConfig,
   dataDir: string,
+  reference?: ReferenceServices,
 ): Bot {
   logSecurityStartup(dataDir, binary.binaryName);
   const bot = createSecuredBot({ token, binary, dataDir });
@@ -150,21 +169,50 @@ export function createTelegramBot(
     }
   });
 
-  bot.command("sync", async (ctx) => {
-    await ctx.reply("Syncing plan to calendar...");
-    const chatId = `telegram:${ctx.chat.id}`;
-    try {
-      const response = await agent.chat(chatId, "/sync");
-      await sendLongMessage(ctx, response);
-    } catch (err) {
-      console.error("Error in /sync:", err);
-      if (isRateLimitError(err)) {
-        await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
-      } else {
-        await ctx.reply("Sorry, something went wrong. Please try again.");
+  if (reference !== undefined) {
+    bot.command("sync", async (ctx) => {
+      await ctx.reply("Syncing training data from intervals.icu...");
+      try {
+        const result = await reference.runSync({
+          caller: "/sync",
+          chatId: `telegram:${ctx.chat.id}`,
+        });
+        await ctx.reply(formatSyncReply(result));
+      } catch (err) {
+        console.error("Error in /sync:", err);
+        await ctx.reply("Sorry, something went wrong syncing. Please try again.");
       }
-    }
-  });
+    });
+
+    bot.command("snapshot", async (ctx) => {
+      const args = (ctx.match ?? "").trim().split(/\s+/).filter(Boolean);
+      const sub = args[0]?.toLowerCase() ?? "help";
+
+      if (sub === "help") {
+        await ctx.reply(SNAPSHOT_HELP);
+        return;
+      }
+
+      if (sub === "raw") {
+        const section = args[1];
+        const latest = reference.loadLatest();
+        const output = formatSnapshotRaw(latest, section);
+        try {
+          await sendSnapshotOutput(output, {
+            reply: (text) => ctx.reply(text, { parse_mode: "Markdown" }) as Promise<unknown>,
+            sendDocument: (buffer, filename) =>
+              ctx.replyWithDocument(new InputFile(buffer, filename)) as Promise<unknown>,
+          });
+        } catch (err) {
+          console.error("Error in /snapshot raw:", err);
+          await ctx.reply("Sorry, something went wrong rendering the snapshot.");
+        }
+        return;
+      }
+
+      await ctx.reply(SNAPSHOT_HELP);
+    });
+  }
 
   bot.command("review", async (ctx) => {
     const args = (ctx.match ?? "").trim();
