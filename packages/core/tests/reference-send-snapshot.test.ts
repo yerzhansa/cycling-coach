@@ -133,4 +133,53 @@ describe("sendSnapshotOutput", () => {
     expect(reply).toHaveBeenNthCalledWith(2, "chunk-fallback-2");
     expect(r).toEqual({ sent: 2, total: 2, interrupted: false });
   });
+
+  it("falls back to default backoff when retry_after is Infinity (would otherwise park ~25 days)", async () => {
+    const reply = vi
+      .fn()
+      .mockRejectedValueOnce(makeGrammyRateLimitError(Infinity))
+      .mockResolvedValue(undefined);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    const r = await sendSnapshotOutput(chunkedOutput(1), { reply, sleep });
+
+    expect(sleep).toHaveBeenCalledWith(1_000); // default, not Infinity
+    expect(r).toEqual({ sent: 1, total: 1, interrupted: false });
+  });
+
+  it("falls back to default backoff when retry_after is NaN", async () => {
+    const reply = vi
+      .fn()
+      .mockRejectedValueOnce(makeGrammyRateLimitError(NaN))
+      .mockResolvedValue(undefined);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    await sendSnapshotOutput(chunkedOutput(1), { reply, sleep });
+
+    expect(sleep).toHaveBeenCalledWith(1_000);
+  });
+
+  it("falls back to default backoff when retry_after exceeds the 300s cap", async () => {
+    const reply = vi
+      .fn()
+      .mockRejectedValueOnce(makeGrammyRateLimitError(999_999))
+      .mockResolvedValue(undefined);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    await sendSnapshotOutput(chunkedOutput(1), { reply, sleep });
+
+    expect(sleep).toHaveBeenCalledWith(1_000);
+  });
+
+  it("honors retry_after at the 300s cap boundary", async () => {
+    const reply = vi
+      .fn()
+      .mockRejectedValueOnce(makeGrammyRateLimitError(300))
+      .mockResolvedValue(undefined);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    await sendSnapshotOutput(chunkedOutput(1), { reply, sleep });
+
+    expect(sleep).toHaveBeenCalledWith(300_000);
+  });
 });

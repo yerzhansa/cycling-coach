@@ -7,8 +7,6 @@
 // ─── Freshness windows (since `last_updated` in latest.json) ───────────
 /** <24 h: data is fresh; coaching uses it without caveat. */
 export const FRESH_MS = 24 * 60 * 60 * 1000;
-/** 24-48 h: data is borderline; flag in metadata, no behavior change. */
-export const FLAG_MS = 48 * 60 * 60 * 1000;
 /** >48 h: data is stale; trigger lazy refresh in the background. */
 export const STALE_MS = 48 * 60 * 60 * 1000;
 /** >7 d: data is critical; force a fresh sync before answering. */

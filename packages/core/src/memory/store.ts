@@ -15,31 +15,27 @@ const bodyOf = (block: string) => block.slice(block.indexOf("\n") + 1);
 type RenameOutcome = "renamed" | "noop" | "merged";
 
 /**
- * Apply a single section rename to an in-memory `parts` array (split by
- * `SECTION_SPLIT`). Pure function so `renameSection` and `renameSections`
- * share the same logic; `renameSections` chains multiple renames in memory
- * before a single atomic write.
+ * Apply a single section rename to `parts` IN PLACE. Shared between
+ * `renameSection` (one rename + write) and `renameSections` (chain of
+ * renames + single write); the in-place contract lets `renameSections`
+ * chain without copying the array between iterations.
  */
-function applyRename(
-  parts: string[],
-  from: string,
-  to: string,
-): { parts: string[]; outcome: RenameOutcome } {
+function applyRename(parts: string[], from: string, to: string): RenameOutcome {
   const fromMarker = markerOf(from);
   const toMarker = markerOf(to);
   const fromIdx = parts.findIndex((p) => p.startsWith(fromMarker + "\n"));
-  if (fromIdx < 0) return { parts, outcome: "noop" };
+  if (fromIdx < 0) return "noop";
 
   const toIdx = parts.findIndex((p) => p.startsWith(toMarker + "\n"));
 
   if (toIdx >= 0) {
     parts[toIdx] = `${toMarker}\n${bodyOf(parts[toIdx])}\n${bodyOf(parts[fromIdx])}`;
     parts.splice(fromIdx, 1);
-    return { parts, outcome: "merged" };
+    return "merged";
   }
 
   parts[fromIdx] = `${toMarker}\n${bodyOf(parts[fromIdx])}`;
-  return { parts, outcome: "renamed" };
+  return "renamed";
 }
 
 export class Memory implements MemoryStore {
@@ -106,7 +102,8 @@ export class Memory implements MemoryStore {
     const content = this.readMemory();
     if (!content) return "noop";
 
-    const { parts, outcome } = applyRename(content.split(SECTION_SPLIT), from, to);
+    const parts = content.split(SECTION_SPLIT);
+    const outcome = applyRename(parts, from, to);
     if (outcome === "noop") return outcome;
 
     atomicWriteFileSync(path, parts.join(""));
@@ -126,14 +123,13 @@ export class Memory implements MemoryStore {
     const content = this.readMemory();
     if (!content) return renames.map(() => "noop" as const);
 
-    let parts = content.split(SECTION_SPLIT);
+    const parts = content.split(SECTION_SPLIT);
     const outcomes: RenameOutcome[] = [];
     let mutated = false;
     for (const [from, to] of renames) {
-      const result = applyRename(parts, from, to);
-      parts = result.parts;
-      outcomes.push(result.outcome);
-      if (result.outcome !== "noop") mutated = true;
+      const outcome = applyRename(parts, from, to);
+      outcomes.push(outcome);
+      if (outcome !== "noop") mutated = true;
     }
 
     if (mutated) atomicWriteFileSync(path, parts.join(""));

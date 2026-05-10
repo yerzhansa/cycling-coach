@@ -36,4 +36,18 @@ describe("Cooldown", () => {
     expect(cd.check("chat-1", 30_000).ok).toBe(false);
     expect(cd.check("chat-2", 30_000)).toEqual({ ok: true });
   });
+
+  it("clamps elapsed to non-negative when the clock skews backwards (NTP correction)", () => {
+    let now = 1_000_000;
+    const cd = new Cooldown(() => now);
+    cd.record("chat-1");
+    // Clock jumps back 5 seconds before the next check.
+    now -= 5_000;
+    const r = cd.check("chat-1", 30_000);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      // Without the clamp this would be 35_000 (windowMs - negative-elapsed).
+      expect(r.retryAfterMs).toBe(30_000);
+    }
+  });
 });

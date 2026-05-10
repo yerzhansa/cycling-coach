@@ -8,8 +8,22 @@ import {
 } from "../src/reference/sync/intervals-client-factory.js";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
+
+/**
+ * `AbortSignal.timeout` uses Node's internal timer scheduler — `vi.useFakeTimers()`
+ * cannot intercept it directly. Replace it with a `setTimeout`-driven controller
+ * for tests that need deterministic per-request-timeout firing.
+ */
+function mockAbortSignalTimeout(): ReturnType<typeof vi.spyOn> {
+  return vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new Error("timeout (mock)")), ms);
+    return controller.signal;
+  });
+}
 
 describe("wrapFetchWithSignal", () => {
   it("threads a chained AbortSignal into the init passed to baseFetch", async () => {
@@ -51,14 +65,10 @@ describe("wrapFetchWithSignal", () => {
     expect(captured!.aborted).toBe(true);
   });
 
-  // Per-request-timeout propagation is verified end-to-end at the runSync
-  // level (`reference-run-sync.test.ts`'s outer-timeout test asserts the
-  // wrapper-fetch's signal aborts when runSync's outer controller fires).
-  // Pinning it here against `AbortSignal.timeout` flakes under vitest's
-  // parallel pool — fake timers don't intercept `AbortSignal.timeout`'s
-  // scheduler reliably, and real-timer waits race with other files'
-  // worker pressure.
-  it.skip("aborts in-flight signals when the per-request timeout fires", async () => {
+  it("aborts in-flight signals when the per-request timeout fires", async () => {
+    vi.useFakeTimers();
+    mockAbortSignalTimeout();
+
     let captured: AbortSignal | undefined;
     const baseFetch: typeof globalThis.fetch = async (_input, init) => {
       captured = init?.signal ?? undefined;
@@ -73,7 +83,9 @@ describe("wrapFetchWithSignal", () => {
     });
     await wrapped("https://example.test/", {});
     expect(captured!.aborted).toBe(false);
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+
+    await vi.advanceTimersByTimeAsync(60);
+
     expect(captured!.aborted).toBe(true);
     expect(outer.signal.aborted).toBe(false);
   });

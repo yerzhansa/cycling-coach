@@ -14,7 +14,6 @@ export type {
 // ─── Constants ────────────────────────────────────────────────────────
 export {
   FRESH_MS,
-  FLAG_MS,
   STALE_MS,
   CRITICAL_MS,
   LATEST_RETENTION_DAYS,

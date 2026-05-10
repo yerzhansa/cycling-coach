@@ -67,8 +67,13 @@ export class Scheduler {
       this.timerHandle = null;
       try {
         await this.deps.runSync({ caller: "scheduled" });
-      } catch {
-        // runSync handles its own failures; swallow so the loop continues.
+      } catch (err) {
+        // runSync handles its own failures internally (writes error_state.json).
+        // Anything escaping here is a bug above that layer — log it so
+        // production regressions don't disappear into a silent loop.
+        console.warn(
+          `Reference: scheduler tick threw (${err instanceof Error ? err.message : String(err)}). Continuing.`,
+        );
       }
       if (!this.stopped) {
         this.nextDelay = this.deps.intervalMs;

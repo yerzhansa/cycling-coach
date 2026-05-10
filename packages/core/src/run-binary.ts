@@ -301,7 +301,9 @@ export async function runBinary(
   );
   const { safeReadJson: refSafeRead } = await import("./reference/io/safe-read.js");
   const { LatestJsonSchema } = await import("./reference/schemas/latest.js");
-  const { SYNC_COOLDOWN_MS } = await import("./reference/freshness.js");
+  const { SYNC_COOLDOWN_MS, SCHEDULED_SYNC_INTERVAL_MS } = await import(
+    "./reference/freshness.js"
+  );
 
   const refMutex = new AsyncMutex();
   const refCooldown = new Cooldown();
@@ -318,7 +320,7 @@ export async function runBinary(
   const scheduler = new Scheduler({
     dataDir: referenceData,
     runSync,
-    intervalMs: (await import("./reference/freshness.js")).SCHEDULED_SYNC_INTERVAL_MS,
+    intervalMs: SCHEDULED_SYNC_INTERVAL_MS,
   });
 
   // Step 4: First runSync (best-effort — failure logs but never crashes).
@@ -330,9 +332,7 @@ export async function runBinary(
     );
   }
 
-  // Step 5: Lazy `Person.units` bootstrap — Wave 6 fills; no-op call site
-  // exists in Wave 1b so the integration test sees the slot.
-  // (Intentionally empty — Wave 6 will populate via `agent.getMemory()`.)
+  // Step 5: Lazy `Person.units` bootstrap — Wave 6 fills (no-op slot).
 
   // Step 5b: Start the periodic scheduler. Reads now-current `.scheduler.json`.
   scheduler.start();

@@ -4,8 +4,24 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 import { chainedSignal } from "../src/reference/sync/abort-budget.js";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
+
+/**
+ * `AbortSignal.timeout` uses Node's internal timer scheduler — `vi.useFakeTimers()`
+ * cannot intercept it directly, so the per-request-timeout tests below replace
+ * `AbortSignal.timeout` with a `setTimeout`-driven controller (which fake timers
+ * DO intercept). The mock preserves the only observable behavior the tests
+ * care about: the returned signal aborts after `ms` of fake time.
+ */
+function mockAbortSignalTimeout(): ReturnType<typeof vi.spyOn> {
+  return vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new Error("timeout (mock)")), ms);
+    return controller.signal;
+  });
+}
 
 describe("chainedSignal", () => {
   it("aborts when the outer signal aborts", () => {
@@ -16,19 +32,16 @@ describe("chainedSignal", () => {
     expect(signal.aborted).toBe(true);
   });
 
-  // Per-request-timeout abort propagation is exercised at the runSync level
-  // (`reference-run-sync.test.ts`'s outer-timeout test verifies the chained
-  // signal aborts in-flight fetches). A unit test here against
-  // `AbortSignal.timeout` flakes under vitest's parallel pool — vi fake
-  // timers don't fully cover `AbortSignal.timeout`'s internal scheduler, and
-  // real-timer waits are unreliable when other test files saturate the
-  // worker. The other two specs (outer aborts; already-aborted at construct)
-  // cover the glue without timer dependence.
-  it.skip("aborts when the per-request timeout fires before the outer aborts", async () => {
+  it("aborts when the per-request timeout fires before the outer aborts", async () => {
+    vi.useFakeTimers();
+    mockAbortSignalTimeout();
+
     const outer = new AbortController();
     const signal = chainedSignal({ outer: outer.signal, perRequestMs: 50 });
     expect(signal.aborted).toBe(false);
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+
+    await vi.advanceTimersByTimeAsync(60);
+
     expect(signal.aborted).toBe(true);
     expect(outer.signal.aborted).toBe(false);
   });

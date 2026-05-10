@@ -19,8 +19,16 @@ export class Cooldown {
   check(key: string, windowMs: number): { ok: true } | { ok: false; retryAfterMs: number } {
     const last = this.timestamps.get(key);
     if (last === undefined) return { ok: true };
-    const elapsed = this.now() - last;
-    if (elapsed >= windowMs) return { ok: true };
+    // Clamp to non-negative: an NTP correction (or VM time-sync) can push the
+    // wall clock backwards, making `now() < last`. Without the clamp we'd
+    // report `retryAfterMs > windowMs` to the caller.
+    const elapsed = Math.max(0, this.now() - last);
+    if (elapsed >= windowMs) {
+      // Drop the entry — it's no longer load-bearing and would otherwise
+      // accumulate per unique key for the lifetime of the process.
+      this.timestamps.delete(key);
+      return { ok: true };
+    }
     return { ok: false, retryAfterMs: windowMs - elapsed };
   }
 

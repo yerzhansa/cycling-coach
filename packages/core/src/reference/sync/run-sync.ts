@@ -143,30 +143,35 @@ export function createRunSync(
           const lastUpdated = now().toISOString();
           phase.current = "writing_cache";
 
-          await writeJson(join(deps.dataDir, "latest.json"), {
-            metadata: {
-              schema_version: LATEST_SCHEMA_VERSION,
-              last_updated: lastUpdated,
-              freshness: "fresh",
-            },
-            ...fetched.latest,
-          });
-          await writeJson(join(deps.dataDir, "history.json"), {
-            metadata: { schema_version: HISTORY_SCHEMA_VERSION, last_updated: lastUpdated },
-            ...fetched.history,
-          });
-          await writeJson(join(deps.dataDir, "intervals.json"), {
-            metadata: { schema_version: INTERVALS_SCHEMA_VERSION, last_updated: lastUpdated },
-            ...fetched.intervals,
-          });
-          await writeJson(join(deps.dataDir, "routes.json"), {
-            metadata: { schema_version: ROUTES_SCHEMA_VERSION, last_updated: lastUpdated },
-            ...fetched.routes,
-          });
-          await writeJson(join(deps.dataDir, "ftp_history.json"), {
-            metadata: { schema_version: FTP_HISTORY_SCHEMA_VERSION, last_updated: lastUpdated },
-            ...fetched.ftp_history,
-          });
+          // Cache files are independent — parallelize. ADR-0011 only requires
+          // `.scheduler.json` (commit marker) to land LAST; that write follows
+          // the Promise.all below.
+          await Promise.all([
+            writeJson(join(deps.dataDir, "latest.json"), {
+              metadata: {
+                schema_version: LATEST_SCHEMA_VERSION,
+                last_updated: lastUpdated,
+                freshness: "fresh",
+              },
+              ...fetched.latest,
+            }),
+            writeJson(join(deps.dataDir, "history.json"), {
+              metadata: { schema_version: HISTORY_SCHEMA_VERSION, last_updated: lastUpdated },
+              ...fetched.history,
+            }),
+            writeJson(join(deps.dataDir, "intervals.json"), {
+              metadata: { schema_version: INTERVALS_SCHEMA_VERSION, last_updated: lastUpdated },
+              ...fetched.intervals,
+            }),
+            writeJson(join(deps.dataDir, "routes.json"), {
+              metadata: { schema_version: ROUTES_SCHEMA_VERSION, last_updated: lastUpdated },
+              ...fetched.routes,
+            }),
+            writeJson(join(deps.dataDir, "ftp_history.json"), {
+              metadata: { schema_version: FTP_HISTORY_SCHEMA_VERSION, last_updated: lastUpdated },
+              ...fetched.ftp_history,
+            }),
+          ]);
 
           // Commit-marker LAST per ADR-0011.
           phase.current = "writing_scheduler";

@@ -22,6 +22,8 @@ export interface SendDeps {
 }
 
 const DEFAULT_TRANSIENT_BACKOFF_MS = 1_000;
+/** Hard cap on `retry_after` to defend against malformed or pathological values. */
+const MAX_RETRY_AFTER_SEC = 300;
 
 /**
  * Send a `SnapshotOutput` to Telegram with single-retry on transient errors
@@ -95,7 +97,15 @@ async function trySendWithSingleRetry(
 function backoffMsFor(err: unknown): number {
   if (err instanceof GrammyError && err.error_code === 429) {
     const retryAfter = err.parameters?.retry_after;
-    if (typeof retryAfter === "number" && retryAfter > 0) {
+    // Reject NaN, Infinity, negatives, zero, and any value beyond the cap.
+    // Telegram realistically returns small integer seconds; an Infinity or
+    // pathological 999_999 would otherwise park us for ~25 days.
+    if (
+      typeof retryAfter === "number" &&
+      Number.isFinite(retryAfter) &&
+      retryAfter > 0 &&
+      retryAfter <= MAX_RETRY_AFTER_SEC
+    ) {
       return retryAfter * 1_000;
     }
   }

@@ -110,4 +110,40 @@ describe("formatSnapshotRaw", () => {
       expect(out.filename).toMatch(/^snapshot-.*\.json$/);
     }
   });
+
+  it("forces document mode when athlete data contains a Markdown fence-breaker (```)", () => {
+    // An athlete's activity description containing a code block would close
+    // the outer ```json fence early under Markdown parse mode. Document mode
+    // side-steps the escaping entirely.
+    const fenceBreaking: LatestJson = {
+      ...tinyLatest,
+      recent_activities: [
+        {
+          id: 1,
+          name: "Easy ride",
+          description: "Notes from coach:\n```\npush 220W on the climb\n```\nfelt good",
+        },
+      ],
+    };
+
+    const out = formatSnapshotRaw(fenceBreaking);
+    expect(out.kind).toBe("document");
+    if (out.kind === "document") {
+      expect(out.filename).toMatch(/^snapshot-.*\.json$/);
+      // The serialized body still contains the offending substring — the fix
+      // is about routing, not sanitizing.
+      expect(out.buffer.toString("utf8")).toContain("```");
+    }
+  });
+
+  it("forces document mode when a single section contains a fence-breaker", () => {
+    // Sectioned snapshot must apply the same protection.
+    const fenceBreaking: LatestJson = {
+      ...tinyLatest,
+      athlete_profile: { id: "test", bio: "weekend warrior ```cyclist```" },
+    };
+
+    const out = formatSnapshotRaw(fenceBreaking, "athlete_profile");
+    expect(out.kind).toBe("document");
+  });
 });

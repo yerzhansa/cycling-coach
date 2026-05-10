@@ -74,7 +74,15 @@ function wrap(body: string): SnapshotOutput {
   const totalBytes = Buffer.byteLength(body, "utf8");
   const chunks = splitIntoChunks(body);
 
+  // Body containing "```" would close the outer ```json…``` Markdown fence
+  // prematurely, producing a Telegram 400 (parse-mode error) or rendered
+  // garbage. Force document mode in that case to side-step Markdown escaping
+  // entirely. Realistic trigger: an athlete's intervals.icu activity name or
+  // description that includes a code block (mirrored from Strava etc.).
+  const containsFenceBreaker = body.includes("```");
+
   if (
+    containsFenceBreaker ||
     totalBytes > SNAPSHOT_DOCUMENT_THRESHOLD_BYTES ||
     chunks.length > SNAPSHOT_DOCUMENT_THRESHOLD_CHUNKS
   ) {
