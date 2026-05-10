@@ -236,18 +236,35 @@ describe("createRunSync", () => {
     const now = new Date("2026-05-09T14:00:00Z");
     const fetchSpy = vi.fn().mockResolvedValue(emptyFetched);
 
-    // Real atomicWriteJson for cache files; injected slow write only for .scheduler.json.
+    // Timing budget — must hold on slow CI runners:
+    //   T_cache: real atomicWriteJson with fsync ≤ ~150ms worst-case.
+    //   T_timeout = 300ms — well above T_cache, so timeout fires AFTER
+    //               cache writes complete (phase has advanced to
+    //               writing_scheduler).
+    //   T_scheduler = 600ms — longer than (T_timeout - T_cache), so
+    //               timeout fires DURING the scheduler write. Kept tight
+    //               so the dangling write resolves promptly after the
+    //               orchestrator returns (afterEach removes the temp
+    //               dir; the dangling write then fails harmlessly via
+    //               PR D's A2 body-after-timeout warn path).
+    // Pre-fix budget was 50ms / 200ms — too tight; cache writes
+    // occasionally consumed >50ms on slow CI, making the timeout fire
+    // during writing_cache instead of writing_scheduler.
     const { atomicWriteJson: realAtomicWrite } = await import(
       "../src/io/atomic-write-json.js"
     );
     const slowSchedulerWrite = vi.fn(
       async (path: string, value: unknown): Promise<void> => {
         if (path.endsWith(".scheduler.json")) {
-          await new Promise((resolve) => setTimeout(resolve, 200));
+          await new Promise((resolve) => setTimeout(resolve, 600));
         }
         await realAtomicWrite(path, value);
       },
     );
+
+    // Suppress the expected body-after-timeout warn from the dangling
+    // scheduler write that completes after the orchestrator returns.
+    vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const runSync = createRunSync({
       dataDir: dir,
@@ -257,7 +274,7 @@ describe("createRunSync", () => {
       fetchReferenceData: fetchSpy,
       atomicWrite: slowSchedulerWrite,
       now: () => now,
-      timing: { outerTimeoutMs: 50 },
+      timing: { outerTimeoutMs: 300 },
     });
 
     const result = await runSync({ caller: "scheduled" });
