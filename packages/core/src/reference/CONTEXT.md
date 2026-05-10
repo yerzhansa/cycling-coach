@@ -12,6 +12,7 @@ Reference lives **inside core** at `packages/core/src/reference/` per the Refere
 reference/
 ├── CONTEXT.md          (you are here)
 ├── index.ts            (public barrel — wired into packages/core/src/index.ts)
+├── services.ts         (ReferenceServices — service-aggregate exposed to channels per ADR-0010)
 ├── sport-adapter.ts    (the per-sport seam type — ReferenceSportAdapter + DfaSummary + PowerCurveDelta)
 ├── freshness.ts        (single-source-of-truth constants: freshness, retention, mutex/cooldown timings)
 ├── paths.ts            (referenceDataDir(binaryName) — composes via getCoachHome)
@@ -57,6 +58,13 @@ There is no `migrate-v1-to-v2.ts`. The gate handles drift via discard-and-resync
 ## Sport seam (per ADR-0010)
 
 Sports plug into Reference via the optional `Sport.referenceAdapters?(): readonly ReferenceSportAdapter[]` method (lands type-only in Wave 1; cycling implementation in Wave 3). Each adapter declares activity types it handles, plus declarative metadata (zone basis, decoupling basis, sustainability anchors, DFA-validated flag) and optional algorithm hooks (`computeDfa`, `computePowerCurve`). Two startup invariants — disjoint coverage + subset coverage of `sport.intervalsActivityTypes` — are enforced by Reference's dispatcher (Wave 3 / F12).
+
+## Channel seam (`services.ts`)
+
+Reference exposes a `ReferenceServices` aggregate to downstream channels (Telegram in Wave 1b; CLI / web later) via `services.ts`. The channel imports the type; Reference does not import from channels. Per ADR-0010, layers own their contracts — and this aggregate IS Reference's. Future waves extend `ReferenceServices` in place rather than per-channel:
+
+- Wave 5 / F19 — adds `maybeRefreshIfStale()` for the curator's lazy-sync trigger.
+- Wave 7 — adds operator-facing scheduler controls (`/sync now`, `/scheduler stop`, etc.).
 
 ## Relationships
 

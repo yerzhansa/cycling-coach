@@ -11,6 +11,9 @@ export type {
   ReferenceSportAdapter,
 } from "./sport-adapter.js";
 
+// ─── Service-aggregate type for downstream channels ───────────────────
+export type { ReferenceServices } from "./services.js";
+
 // ─── Constants ────────────────────────────────────────────────────────
 export {
   FRESH_MS,

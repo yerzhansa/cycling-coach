@@ -14,16 +14,10 @@ import { buildWhatsNewMessage } from "../release-notes.js";
 import { createAuthMiddleware } from "./telegram-access.js";
 import { loadAllowedSenders, loadAllowedSendersWithSource } from "./allowed-senders.js";
 import { escapeHtmlText } from "./html-escape.js";
-import type { RunSyncOpts, SyncResult } from "../reference/sync/run-sync.js";
-import type { LatestJson } from "../reference/schemas/latest.js";
+import type { ReferenceServices } from "../reference/services.js";
 import { formatSyncReply } from "../reference/sync/format-sync-reply.js";
 import { formatSnapshotRaw } from "../reference/sync/snapshot-debug.js";
 import { sendSnapshotOutput } from "../reference/sync/send-snapshot.js";
-
-export interface ReferenceServices {
-  readonly runSync: (opts: RunSyncOpts) => Promise<SyncResult>;
-  readonly loadLatest: () => LatestJson | null;
-}
 
 function formatRateLimitWait(err: unknown): string {
   const ms = extractRetryAfterMs(err);
