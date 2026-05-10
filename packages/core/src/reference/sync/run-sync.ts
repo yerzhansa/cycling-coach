@@ -14,14 +14,19 @@ import { INTERVALS_SCHEMA_VERSION } from "../schemas/intervals.js";
 import { ROUTES_SCHEMA_VERSION } from "../schemas/routes.js";
 import { FTP_HISTORY_SCHEMA_VERSION } from "../schemas/ftp-history.js";
 import { SCHEDULER_SCHEMA_VERSION } from "../schemas/scheduler.js";
-import type { ErrorPhase } from "../schemas/error-state.js";
+import type { ErrorPhase, ErrorCaller } from "../schemas/error-state.js";
 import { gateLatestJson } from "../validation/sync-gate.js";
 import { writeErrorState } from "./error-state-writer.js";
 import type { AsyncMutex } from "../../concurrency/mutex.js";
 import type { Cooldown } from "../../concurrency/cooldown.js";
 import type { Clock } from "../../concurrency/clock.js";
 
-export type SyncCaller = "scheduled" | "lazy" | "/sync";
+/**
+ * Re-exported from `error-state.ts` so the runtime opt and the on-disk
+ * persisted schema share a single source of truth (`SYNC_CALLERS` tuple).
+ * Adding a new caller updates both in lockstep.
+ */
+export type SyncCaller = ErrorCaller;
 
 export interface RunSyncOpts {
   readonly forceFresh?: boolean;

@@ -190,5 +190,24 @@ describe("bootstrapReference (behavioral)", () => {
     expect(runtime.services.loadLatest()).toBeNull();
     runtime.scheduler.stop();
   });
+
+  it("services.maybeRefreshIfStale stub does not trigger a sync (Wave 5 fills body)", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(emptyFetched);
+
+    const runtime = await bootstrapReference({
+      dataDir,
+      intervals: { apiKey: "test-key" },
+      fetchReferenceData: fetchSpy,
+    });
+
+    const result = await runtime.services.maybeRefreshIfStale();
+    expect(result.kind).toBe("fresh");
+    // The stub MUST NOT trigger an extra fetch — only the bootstrap sync ran.
+    // This assertion survives Wave 5 (Wave 5's body MAY fire syncs based on
+    // freshness band; this test will need a re-shape then).
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    runtime.scheduler.stop();
+  });
 });
 

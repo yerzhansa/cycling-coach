@@ -62,4 +62,10 @@ export {
   ERROR_STATE_SCHEMA_VERSION,
   ErrorStateSchema,
   type ErrorState,
+  ErrorPhaseSchema,
+  type ErrorPhase,
+  ErrorCallerSchema,
+  type ErrorCaller,
+  ErrorMitigationSchema,
+  type ErrorMitigation,
 } from "./schemas/index.js";

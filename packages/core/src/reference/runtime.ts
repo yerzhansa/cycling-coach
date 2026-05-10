@@ -93,6 +93,8 @@ export async function bootstrapReference(
     runSync: (req) => runSyncInternal({ caller: "/sync", chatId: req.chatId }),
     loadLatest: (): LatestJson | null =>
       safeReadJson<LatestJson>(join(referenceDataPath, "latest.json"), LatestJsonSchema),
+    // Wave 1b stub; Wave 5 fills (see ReferenceServices.maybeRefreshIfStale).
+    maybeRefreshIfStale: () => Promise.resolve({ kind: "fresh" }),
   };
 
   return { services, scheduler };
