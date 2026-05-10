@@ -19,6 +19,7 @@ import { gateLatestJson } from "../validation/sync-gate.js";
 import { writeErrorState } from "./error-state-writer.js";
 import type { AsyncMutex } from "../../concurrency/mutex.js";
 import type { Cooldown } from "../../concurrency/cooldown.js";
+import type { Clock } from "../../concurrency/clock.js";
 
 export type SyncCaller = "scheduled" | "lazy" | "/sync";
 
@@ -93,7 +94,15 @@ export interface RunSyncDeps {
   readonly cooldown: Cooldown;
   readonly cooldownWindowMs: number;
   readonly fetchReferenceData: (signal: AbortSignal) => Promise<FetchedReference>;
+  /** @deprecated prefer `clock.now`; retained for tests that pin time only. */
   readonly now?: () => Date;
+  /**
+   * Injectable clock primitives. Unifies the `now`/`setTimeout`/`clearTimeout`
+   * boundary so tests can drive the outer-timeout deterministically without
+   * relying on vitest's fake timers (which don't intercept `AbortSignal.timeout`
+   * cleanly under the parallel pool).
+   */
+  readonly clock?: Partial<Clock>;
   /** Override timing constants for tests; defaults from `freshness.ts`. */
   readonly timing?: {
     readonly acquireTimeoutMs?: number;
@@ -107,13 +116,12 @@ export interface RunSyncDeps {
   readonly atomicWrite?: (path: string, value: unknown) => Promise<void>;
 }
 
-const ALL_FILES: readonly CacheFile[] = [
-  "latest",
-  "history",
-  "intervals",
-  "routes",
-  "ftp_history",
-];
+interface CacheWriteSpec {
+  readonly file: CacheFile;
+  readonly version: string;
+  readonly payload: Readonly<Record<string, unknown>>;
+  readonly extras?: Readonly<Record<string, unknown>>;
+}
 
 /** Shared between runtime + tests so the warn-after-timeout string stays in sync. */
 export const BODY_AFTER_TIMEOUT_LOG_PREFIX = "Reference: body threw after outer timeout";
@@ -121,7 +129,12 @@ export const BODY_AFTER_TIMEOUT_LOG_PREFIX = "Reference: body threw after outer 
 export function createRunSync(
   deps: RunSyncDeps,
 ): (opts?: RunSyncOpts) => Promise<SyncResult> {
-  const now = deps.now ?? (() => new Date());
+  const now = deps.clock?.now ?? deps.now ?? (() => new Date());
+  const setTimeoutFn: (fn: () => void, ms: number) => unknown =
+    deps.clock?.setTimeout ?? ((fn, ms) => setTimeout(fn, ms));
+  const clearTimeoutFn: (handle: unknown) => void =
+    deps.clock?.clearTimeout ??
+    ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
   const acquireTimeoutMs = deps.timing?.acquireTimeoutMs ?? MUTEX_ACQUIRE_TIMEOUT_MS;
   const hotWarnMs = deps.timing?.hotWarnMs ?? MUTEX_HOT_WARN_MS;
   const outerTimeoutMs = deps.timing?.outerTimeoutMs ?? SYNC_OPERATION_TIMEOUT_MS;
@@ -144,7 +157,7 @@ export function createRunSync(
     const mutexResult = await deps.mutex.runExclusive(
       async (): Promise<SyncResult> => {
         const controller = new AbortController();
-        const phase = { current: "fetching" as ErrorPhase };
+        let phase: ErrorPhase = "fetching";
 
         // Returned at any phase boundary where `controller.signal.aborted` is
         // true after an `await` resolves. Prevents body from doing the next
@@ -159,7 +172,7 @@ export function createRunSync(
           const fetched = await deps.fetchReferenceData(controller.signal);
           if (controller.signal.aborted) return abortedResult();
 
-          phase.current = "gating";
+          phase = "gating";
           const gateResult = gate(fetched, null);
           if (!gateResult.ok) {
             await writeErrorState(deps.dataDir, {
@@ -178,37 +191,37 @@ export function createRunSync(
           if (controller.signal.aborted) return abortedResult();
 
           const lastUpdated = now().toISOString();
-          phase.current = "writing_cache";
+          phase = "writing_cache";
 
           // Cache files are independent — parallelize. ADR-0011 only requires
           // `.scheduler.json` (commit marker) to land LAST; that write follows
-          // the Promise.all below.
-          await Promise.all([
-            writeJson(join(deps.dataDir, "latest.json"), {
-              metadata: {
-                schema_version: LATEST_SCHEMA_VERSION,
-                last_updated: lastUpdated,
-                freshness: "fresh",
-              },
-              ...fetched.latest,
-            }),
-            writeJson(join(deps.dataDir, "history.json"), {
-              metadata: { schema_version: HISTORY_SCHEMA_VERSION, last_updated: lastUpdated },
-              ...fetched.history,
-            }),
-            writeJson(join(deps.dataDir, "intervals.json"), {
-              metadata: { schema_version: INTERVALS_SCHEMA_VERSION, last_updated: lastUpdated },
-              ...fetched.intervals,
-            }),
-            writeJson(join(deps.dataDir, "routes.json"), {
-              metadata: { schema_version: ROUTES_SCHEMA_VERSION, last_updated: lastUpdated },
-              ...fetched.routes,
-            }),
-            writeJson(join(deps.dataDir, "ftp_history.json"), {
-              metadata: { schema_version: FTP_HISTORY_SCHEMA_VERSION, last_updated: lastUpdated },
-              ...fetched.ftp_history,
-            }),
-          ]);
+          // the Promise.all below. The asymmetric `freshness: "fresh"` on
+          // `latest` is encoded as data via the `extras` field, so adding a
+          // new cache file in a future wave is one row, not one branch.
+          const cacheWrites: readonly CacheWriteSpec[] = [
+            {
+              file: "latest",
+              version: LATEST_SCHEMA_VERSION,
+              payload: fetched.latest,
+              extras: { freshness: "fresh" },
+            },
+            { file: "history", version: HISTORY_SCHEMA_VERSION, payload: fetched.history },
+            { file: "intervals", version: INTERVALS_SCHEMA_VERSION, payload: fetched.intervals },
+            { file: "routes", version: ROUTES_SCHEMA_VERSION, payload: fetched.routes },
+            {
+              file: "ftp_history",
+              version: FTP_HISTORY_SCHEMA_VERSION,
+              payload: fetched.ftp_history,
+            },
+          ];
+          await Promise.all(
+            cacheWrites.map(({ file, version, payload, extras }) =>
+              writeJson(join(deps.dataDir, `${file}.json`), {
+                metadata: { schema_version: version, last_updated: lastUpdated, ...extras },
+                ...payload,
+              }),
+            ),
+          );
           // A1 fix: if the outer timeout fired during the cache writes,
           // bail before writing the commit marker. Without this guard the
           // scheduler.json could land after error_state.json was written,
@@ -216,7 +229,7 @@ export function createRunSync(
           if (controller.signal.aborted) return abortedResult();
 
           // Commit-marker LAST per ADR-0011.
-          phase.current = "writing_scheduler";
+          phase = "writing_scheduler";
           await writeJson(join(deps.dataDir, ".scheduler.json"), {
             schema_version: SCHEDULER_SCHEMA_VERSION,
             last_sync_at: lastUpdated,
@@ -226,7 +239,7 @@ export function createRunSync(
           return {
             kind: "ran",
             lastSyncAt: lastUpdated,
-            refreshed: ALL_FILES,
+            refreshed: cacheWrites.map((w) => w.file),
           };
         };
 
@@ -244,9 +257,9 @@ export function createRunSync(
           },
         );
 
-        let timerHandle: ReturnType<typeof setTimeout> | undefined;
+        let timerHandle: unknown;
         const timerFired = new Promise<true>((resolve) => {
-          timerHandle = setTimeout(() => resolve(true), outerTimeoutMs);
+          timerHandle = setTimeoutFn(() => resolve(true), outerTimeoutMs);
         });
 
         const winner = await Promise.race([
@@ -254,7 +267,7 @@ export function createRunSync(
           timerFired.then(() => "timeout" as const),
         ]);
 
-        if (timerHandle !== undefined) clearTimeout(timerHandle);
+        if (timerHandle !== undefined) clearTimeoutFn(timerHandle);
 
         if (winner === "timeout") {
           controller.abort();
@@ -271,8 +284,8 @@ export function createRunSync(
           });
           await writeErrorState(deps.dataDir, {
             step: "outer_timeout",
-            phase: phase.current,
-            detail: `runSync exceeded ${outerTimeoutMs}ms during ${phase.current} phase`,
+            phase,
+            detail: `runSync exceeded ${outerTimeoutMs}ms during ${phase} phase`,
           });
           return { kind: "failed", reason: "outer_timeout", failures: [] };
         }

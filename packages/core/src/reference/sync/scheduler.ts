@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { safeReadJson } from "../../io/safe-read-json.js";
 import { SchedulerStateSchema } from "../schemas/scheduler.js";
 import type { RunSyncOpts, SyncResult } from "./run-sync.js";
+import type { Clock } from "../../concurrency/clock.js";
 
 /**
  * In-process scheduler for the periodic Reference sync. Two-phase per
@@ -16,15 +17,31 @@ export interface SchedulerDeps {
   readonly dataDir: string;
   readonly runSync: (opts: RunSyncOpts) => Promise<SyncResult>;
   readonly intervalMs: number;
+  /** @deprecated prefer `clock.now`; retained for backwards compatibility. */
   readonly now?: () => Date;
+  /**
+   * Injectable clock primitives. Mirrors `Cooldown`'s `now()` injection and
+   * `RunSyncDeps.clock`, so tests can drive timers without relying on
+   * vitest's fake-timer hooks.
+   */
+  readonly clock?: Partial<Clock>;
 }
 
 export class Scheduler {
-  private timerHandle: ReturnType<typeof setTimeout> | null = null;
+  private timerHandle: unknown = null;
   private stopped = false;
   private nextDelay = 0;
+  private readonly nowFn: () => Date;
+  private readonly setTimeoutFn: (fn: () => void, ms: number) => unknown;
+  private readonly clearTimeoutFn: (handle: unknown) => void;
 
-  constructor(private readonly deps: SchedulerDeps) {}
+  constructor(private readonly deps: SchedulerDeps) {
+    this.nowFn = deps.clock?.now ?? deps.now ?? (() => new Date());
+    this.setTimeoutFn = deps.clock?.setTimeout ?? ((fn, ms) => setTimeout(fn, ms));
+    this.clearTimeoutFn =
+      deps.clock?.clearTimeout ??
+      ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
+  }
 
   /**
    * Register the periodic timer. Reads `.scheduler.json` exactly once on
@@ -41,11 +58,10 @@ export class Scheduler {
       join(this.deps.dataDir, ".scheduler.json"),
       SchedulerStateSchema,
     );
-    const nowFn = this.deps.now ?? (() => new Date());
     if (state !== null && state.next_sync_at !== null) {
       this.nextDelay = Math.max(
         0,
-        new Date(state.next_sync_at).getTime() - nowFn().getTime(),
+        new Date(state.next_sync_at).getTime() - this.nowFn().getTime(),
       );
     } else {
       this.nextDelay = 0;
@@ -57,13 +73,13 @@ export class Scheduler {
   stop(): void {
     this.stopped = true;
     if (this.timerHandle !== null) {
-      clearTimeout(this.timerHandle);
+      this.clearTimeoutFn(this.timerHandle);
       this.timerHandle = null;
     }
   }
 
   private scheduleNext(): void {
-    this.timerHandle = setTimeout(async () => {
+    this.timerHandle = this.setTimeoutFn(async () => {
       this.timerHandle = null;
       try {
         await this.deps.runSync({ caller: "scheduled" });

@@ -7,7 +7,8 @@ concurrency/
 ├── CONTEXT.md      (you are here)
 ├── mutex.ts        (AsyncMutex — non-reentrant, FIFO waiter queue, per-waiter acquire-timeout, hot-warn telemetry)
 ├── abort-budget.ts (chainedSignal — composes outer signal with per-request timeout via AbortSignal.any)
-└── cooldown.ts     (per-key cooldown tracker; lazy-prune on expiry; clock-skew-clamped)
+├── cooldown.ts     (per-key cooldown tracker; lazy-prune on expiry; clock-skew-clamped)
+└── clock.ts        (Clock interface — injectable now/setTimeout/clearTimeout for orchestrator outer-timeout determinism in tests)
 ```
 
 These were originally adapted from [section-11](https://github.com/CrankAddict/section-11) (CrankAddict, MIT) and lived under `reference/sync/` and `reference/io/` in Wave 1b. Promoted to `core/concurrency/` in PR C of the architectural followup sequence so future horizontal layers import from one canonical location instead of reaching across module boundaries into Reference.

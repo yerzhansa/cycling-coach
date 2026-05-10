@@ -421,4 +421,36 @@ describe("createRunSync", () => {
       retryAfterMs: 25_000,
     });
   });
+
+  it("uses the injected clock.setTimeout/clearTimeout for the outer timer with the configured ms", async () => {
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const fetchSpy = vi.fn().mockResolvedValue(emptyFetched);
+
+    const setSpy = vi.fn((fn: () => void, ms: number) => setTimeout(fn, ms));
+    const clearSpy = vi.fn((handle: unknown) =>
+      clearTimeout(handle as ReturnType<typeof setTimeout>),
+    );
+
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: fetchSpy,
+      clock: { setTimeout: setSpy, clearTimeout: clearSpy },
+      timing: { outerTimeoutMs: 7_777 },
+    });
+
+    const result = await runSync({ caller: "scheduled" });
+
+    expect(result.kind).toBe("ran");
+    // The outer-timeout race calls setTimeoutFn with the configured ms.
+    // Asserting the ms argument prevents a regression where someone calls
+    // global setTimeout directly while still touching the spy elsewhere.
+    expect(setSpy).toHaveBeenCalledWith(expect.any(Function), 7_777);
+    // clearTimeoutFn must receive the handle that setTimeoutFn returned.
+    const expectedHandle = setSpy.mock.results[0]?.value;
+    expect(clearSpy).toHaveBeenCalledWith(expectedHandle);
+  });
 });
