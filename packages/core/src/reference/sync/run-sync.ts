@@ -32,14 +32,39 @@ export interface RunSyncOpts {
 
 export type CacheFile = "latest" | "history" | "intervals" | "routes" | "ftp_history";
 
-export interface SyncResult {
-  readonly ok: boolean;
-  readonly lastSyncAt?: string;
-  readonly refreshed: readonly CacheFile[];
-  readonly failures: readonly { file: string; reason: string }[];
-  readonly skipped?: "mutex_held" | "cooldown";
-  readonly retryAfterMs?: number;
+export interface SyncFailure {
+  readonly file: string;
+  readonly reason: string;
 }
+
+/**
+ * Discriminated-union outcome shape per ADR-0011's "future horizontal layers
+ * copy this orchestrator pattern" — Decision Layer's `runReadinessCheck` and
+ * Heartbeat's `runHeartbeat` will mirror this shape. Three exhaustive cases:
+ *
+ *   - `ran`     — body completed successfully; cache files are committed.
+ *   - `skipped` — orchestrator declined to run (cooldown or contended mutex);
+ *                 caller may retry after `retryAfterMs` (cooldown only).
+ *   - `failed`  — body started but did not produce a valid commit. Cache
+ *                 state may be partial (timeout) or untouched (gate_rejected).
+ *                 `error_state.json` is written; curator (Wave 5) reads it.
+ */
+export type SyncResult =
+  | {
+      readonly kind: "ran";
+      readonly lastSyncAt: string;
+      readonly refreshed: readonly CacheFile[];
+    }
+  | {
+      readonly kind: "skipped";
+      readonly reason: "cooldown" | "mutex_held";
+      readonly retryAfterMs?: number;
+    }
+  | {
+      readonly kind: "failed";
+      readonly reason: "outer_timeout" | "gate_rejected";
+      readonly failures: readonly SyncFailure[];
+    };
 
 export interface FetchedReference {
   readonly latest: {
@@ -90,6 +115,9 @@ const ALL_FILES: readonly CacheFile[] = [
   "ftp_history",
 ];
 
+/** Shared between runtime + tests so the warn-after-timeout string stays in sync. */
+export const BODY_AFTER_TIMEOUT_LOG_PREFIX = "Reference: body threw after outer timeout";
+
 export function createRunSync(
   deps: RunSyncDeps,
 ): (opts?: RunSyncOpts) => Promise<SyncResult> {
@@ -106,10 +134,8 @@ export function createRunSync(
       const c = deps.cooldown.check(opts.chatId, deps.cooldownWindowMs);
       if (!c.ok) {
         return {
-          ok: true,
-          refreshed: [],
-          failures: [],
-          skipped: "cooldown",
+          kind: "skipped",
+          reason: "cooldown",
           retryAfterMs: c.retryAfterMs,
         };
       }
@@ -120,8 +146,18 @@ export function createRunSync(
         const controller = new AbortController();
         const phase = { current: "fetching" as ErrorPhase };
 
+        // Returned at any phase boundary where `controller.signal.aborted` is
+        // true after an `await` resolves. Prevents body from doing the next
+        // write phase once the outer timeout has fired (A1 from QA review).
+        const abortedResult = (): SyncResult => ({
+          kind: "failed",
+          reason: "outer_timeout",
+          failures: [],
+        });
+
         const body = async (): Promise<SyncResult> => {
           const fetched = await deps.fetchReferenceData(controller.signal);
+          if (controller.signal.aborted) return abortedResult();
 
           phase.current = "gating";
           const gateResult = gate(fetched, null);
@@ -131,14 +167,15 @@ export function createRunSync(
               detail: gateResult.failures.map((f) => `${f.step}: ${f.detail}`).join("; "),
             });
             return {
-              ok: false,
-              refreshed: [],
+              kind: "failed",
+              reason: "gate_rejected",
               failures: gateResult.failures.map((f) => ({
                 file: "latest",
                 reason: `${f.step}: ${f.detail}`,
               })),
             };
           }
+          if (controller.signal.aborted) return abortedResult();
 
           const lastUpdated = now().toISOString();
           phase.current = "writing_cache";
@@ -172,6 +209,11 @@ export function createRunSync(
               ...fetched.ftp_history,
             }),
           ]);
+          // A1 fix: if the outer timeout fired during the cache writes,
+          // bail before writing the commit marker. Without this guard the
+          // scheduler.json could land after error_state.json was written,
+          // producing contradictory on-disk markers (curator confusion).
+          if (controller.signal.aborted) return abortedResult();
 
           // Commit-marker LAST per ADR-0011.
           phase.current = "writing_scheduler";
@@ -182,15 +224,17 @@ export function createRunSync(
           });
 
           return {
-            ok: true,
+            kind: "ran",
             lastSyncAt: lastUpdated,
             refreshed: ALL_FILES,
-            failures: [],
           };
         };
 
         let bodyResult: SyncResult | undefined;
         let bodyError: unknown;
+        // `bodySettled` swallows both branches; subsequent `.then` chains
+        // never see a rejection. If a future refactor adds `throw` to the
+        // handlers, the post-timeout logger below would also need a catch.
         const bodySettled = body().then(
           (r) => {
             bodyResult = r;
@@ -214,15 +258,25 @@ export function createRunSync(
 
         if (winner === "timeout") {
           controller.abort();
+          // A2 fix: a body that throws AFTER the outer timeout fired
+          // would otherwise have its error captured in `bodyError` and
+          // never observed (we already returned). Log it so a regression
+          // in body-after-timeout handling is visible in stderr.
+          bodySettled.then(() => {
+            if (bodyError !== undefined) {
+              console.warn(
+                `${BODY_AFTER_TIMEOUT_LOG_PREFIX} — ${bodyError instanceof Error ? bodyError.message : String(bodyError)}`,
+              );
+            }
+          });
           await writeErrorState(deps.dataDir, {
             step: "outer_timeout",
             phase: phase.current,
             detail: `runSync exceeded ${outerTimeoutMs}ms during ${phase.current} phase`,
           });
-          return { ok: false, refreshed: [], failures: [] };
+          return { kind: "failed", reason: "outer_timeout", failures: [] };
         }
 
-        controller.abort(); // ensure no zombies even on success path
         if (bodyError !== undefined) throw bodyError;
         return bodyResult!;
       },
@@ -234,11 +288,11 @@ export function createRunSync(
     );
 
     if (mutexResult.kind === "timeout") {
-      return { ok: true, refreshed: [], failures: [], skipped: "mutex_held" };
+      return { kind: "skipped", reason: "mutex_held" };
     }
 
     const result = mutexResult.value;
-    if (result.ok && opts.caller === "/sync" && opts.chatId !== undefined) {
+    if (result.kind === "ran" && opts.caller === "/sync" && opts.chatId !== undefined) {
       deps.cooldown.record(opts.chatId);
     }
     return result;

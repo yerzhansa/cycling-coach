@@ -7,12 +7,11 @@ import type { SyncResult } from "../src/reference/sync/run-sync.js";
 const fixedNow = new Date("2026-05-09T14:23:32Z");
 
 describe("formatSyncReply", () => {
-  it("formats a successful sync (US-18 shape) with last sync time, refreshed list, and no failures", () => {
+  it("formats a successful sync (US-18 shape) with last sync time and refreshed list", () => {
     const r: SyncResult = {
-      ok: true,
+      kind: "ran",
       lastSyncAt: "2026-05-09T14:23:00Z",
       refreshed: ["latest", "history", "intervals", "routes", "ftp_history"],
-      failures: [],
     };
     const text = formatSyncReply(r, fixedNow);
     expect(text).toContain("Sync");
@@ -20,29 +19,12 @@ describe("formatSyncReply", () => {
     expect(text).toContain("Refreshed:");
     expect(text).toContain("latest");
     expect(text).toContain("history");
-    expect(text).not.toContain("Failures");
-  });
-
-  it("includes a Failures line when at least one file failed", () => {
-    const r: SyncResult = {
-      ok: true,
-      lastSyncAt: "2026-05-09T14:23:00Z",
-      refreshed: ["latest", "history", "intervals"],
-      failures: [{ file: "routes", reason: "intervals.icu_503" }],
-    };
-    const text = formatSyncReply(r, fixedNow);
-    expect(text).toContain("Refreshed:");
-    expect(text).toContain("Failures:");
-    expect(text).toContain("routes");
-    expect(text).toContain("intervals.icu_503");
   });
 
   it("formats the cooldown skip with a per-second retryAfter countdown", () => {
     const r: SyncResult = {
-      ok: true,
-      refreshed: [],
-      failures: [],
-      skipped: "cooldown",
+      kind: "skipped",
+      reason: "cooldown",
       retryAfterMs: 18_000,
     };
     const text = formatSyncReply(r, fixedNow);
@@ -52,24 +34,36 @@ describe("formatSyncReply", () => {
 
   it("formats the mutex_held skip as 'sync in progress, please retry shortly'", () => {
     const r: SyncResult = {
-      ok: true,
-      refreshed: [],
-      failures: [],
-      skipped: "mutex_held",
+      kind: "skipped",
+      reason: "mutex_held",
     };
     const text = formatSyncReply(r, fixedNow);
     expect(text.toLowerCase()).toContain("sync in progress");
   });
 
-  it("formats an outer-timeout failure as 'I can't reach intervals.icu' with last good sync if known", () => {
+  it("formats an outer-timeout failure as 'I can't reach intervals.icu'", () => {
     const r: SyncResult = {
-      ok: false,
-      lastSyncAt: "2026-05-09T13:45:00Z",
-      refreshed: [],
+      kind: "failed",
+      reason: "outer_timeout",
       failures: [],
     };
     const text = formatSyncReply(r, fixedNow);
     expect(text.toLowerCase()).toContain("can't reach intervals.icu");
-    expect(text).toContain("Last good sync:");
+  });
+
+  it("formats a gate_rejected failure as 'I can't reach intervals.icu' (Wave 5 curator may differentiate)", () => {
+    const r: SyncResult = {
+      kind: "failed",
+      reason: "gate_rejected",
+      failures: [{ file: "latest", reason: "ftp_source_check: missing FTP" }],
+    };
+    const text = formatSyncReply(r, fixedNow);
+    expect(text.toLowerCase()).toContain("can't reach intervals.icu");
+  });
+
+  it("renders a cooldown skip without retryAfterMs as 'Just synced — please wait 0s'", () => {
+    const r: SyncResult = { kind: "skipped", reason: "cooldown" };
+    const text = formatSyncReply(r, fixedNow);
+    expect(text).toContain("0s");
   });
 });

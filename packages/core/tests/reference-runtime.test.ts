@@ -152,7 +152,7 @@ describe("bootstrapReference (behavioral)", () => {
     // that IS observable: a /sync call with chatId works.
     const result = await runtime.services.runSync({ chatId: "telegram:99999" });
 
-    expect(result.ok).toBe(true);
+    expect(result.kind).toBe("ran");
     // Two fetches: bootstrap's `caller: scheduled` + this services.runSync's
     // `caller: /sync` (different cooldown key, so not gated).
     expect(fetchSpy).toHaveBeenCalledTimes(2);

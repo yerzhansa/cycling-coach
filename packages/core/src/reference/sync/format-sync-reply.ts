@@ -9,41 +9,48 @@ import type { SyncResult } from "./run-sync.js";
  * ```
  * Sync ✅
  * Last sync: 2026-05-09 14:23 UTC (32s ago)
- * Refreshed: latest, history, intervals
- * Failures: routes (intervals.icu 503; will retry next tick)
+ * Refreshed: latest, history, intervals, routes, ftp_history
  * ```
  *
  * Plus cooldown / mutex_held / unreachable variants. Pure function over a
  * clock so tests can pin "now."
  */
 export function formatSyncReply(result: SyncResult, now: Date = new Date()): string {
-  if (result.skipped === "cooldown") {
-    const retrySec = Math.ceil((result.retryAfterMs ?? 0) / 1000);
-    return `Just synced — please wait ${retrySec}s before forcing another refresh.`;
+  switch (result.kind) {
+    case "skipped":
+      switch (result.reason) {
+        case "cooldown":
+          return `Just synced — please wait ${Math.ceil((result.retryAfterMs ?? 0) / 1000)}s before forcing another refresh.`;
+        case "mutex_held":
+          return "Another sync in progress — please retry in a moment.";
+        default: {
+          const _exhaustive: never = result.reason;
+          throw new Error(`formatSyncReply: unhandled skipped reason ${String(_exhaustive)}`);
+        }
+      }
+    case "failed":
+      // Both `outer_timeout` and `gate_rejected` surface to athletes as the
+      // same "can't reach" message in Wave 1b. Wave 5's curator will inspect
+      // `error_state.json` and may inject more specific guidance.
+      switch (result.reason) {
+        case "outer_timeout":
+        case "gate_rejected":
+          return "I can't reach intervals.icu right now.";
+        default: {
+          const _exhaustive: never = result.reason;
+          throw new Error(`formatSyncReply: unhandled failed reason ${String(_exhaustive)}`);
+        }
+      }
+    case "ran": {
+      const lastLine = `Last sync: ${formatTimestamp(result.lastSyncAt, now)}`;
+      const refreshedLine = `Refreshed: ${result.refreshed.join(", ")}`;
+      return `Sync ✅\n${lastLine}\n${refreshedLine}`;
+    }
+    default: {
+      const _exhaustive: never = result;
+      throw new Error(`formatSyncReply: unhandled SyncResult kind ${String(_exhaustive)}`);
+    }
   }
-
-  if (result.skipped === "mutex_held") {
-    return "Another sync in progress — please retry in a moment.";
-  }
-
-  if (!result.ok) {
-    const last = result.lastSyncAt
-      ? `\nLast good sync: ${formatTimestamp(result.lastSyncAt, now)}`
-      : "";
-    return `I can't reach intervals.icu right now.${last}`;
-  }
-
-  const lastLine = result.lastSyncAt
-    ? `Last sync: ${formatTimestamp(result.lastSyncAt, now)}`
-    : "Last sync: just now";
-  const refreshedLine = `Refreshed: ${result.refreshed.join(", ")}`;
-  const failuresLine =
-    result.failures.length > 0
-      ? `\nFailures: ${result.failures
-          .map((f) => `${f.file} (${f.reason})`)
-          .join(", ")}`
-      : "";
-  return `Sync ✅\n${lastLine}\n${refreshedLine}${failuresLine}`;
 }
 
 function formatTimestamp(iso: string, now: Date): string {
