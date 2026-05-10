@@ -125,8 +125,11 @@ describe("AsyncMutex.runExclusive", () => {
     const mutex = new AsyncMutex();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
+    const HOT_WARN_MS = 50;
     const slow = async () => {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Hold the mutex for substantially longer than HOT_WARN_MS so the
+      // warn definitively fires before slow releases.
+      await new Promise((resolve) => setTimeout(resolve, 200));
       return "first";
     };
     const fast = async () => "second";
@@ -139,7 +142,7 @@ describe("AsyncMutex.runExclusive", () => {
       }),
       mutex.runExclusive(fast, {
         acquireTimeoutMs: 5_000,
-        hotWarnMs: 30, // wait > 30ms triggers warn
+        hotWarnMs: HOT_WARN_MS,
         caller: "/sync",
       }),
     ]);
@@ -149,7 +152,11 @@ describe("AsyncMutex.runExclusive", () => {
     expect(payload.event).toBe("mutex_hot");
     expect(payload.caller).toBe("/sync");
     expect(typeof payload.wait_ms).toBe("number");
-    expect(payload.wait_ms).toBeGreaterThanOrEqual(30);
+    // Allow ±5ms jitter — Node's setTimeout can fire ~1-2ms early due to
+    // libuv timer rounding, and Date.now()'s ms resolution can shave
+    // another ms off the measured elapsed. The test's intent is "warn
+    // fired roughly at hotWarnMs", not "at-or-after to the millisecond."
+    expect(payload.wait_ms).toBeGreaterThanOrEqual(HOT_WARN_MS - 5);
     expect(typeof payload.ts).toBe("string");
     expect(new Date(payload.ts).toString()).not.toBe("Invalid Date");
   });
