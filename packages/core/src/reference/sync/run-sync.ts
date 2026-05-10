@@ -7,7 +7,7 @@ import {
   SCHEDULED_SYNC_INTERVAL_MS,
   SYNC_OPERATION_TIMEOUT_MS,
 } from "../freshness.js";
-import { atomicWriteJson } from "../io/atomic-write.js";
+import { atomicWriteJson } from "../../io/atomic-write-json.js";
 import { LATEST_SCHEMA_VERSION } from "../schemas/latest.js";
 import { HISTORY_SCHEMA_VERSION } from "../schemas/history.js";
 import { INTERVALS_SCHEMA_VERSION } from "../schemas/intervals.js";
@@ -17,8 +17,8 @@ import { SCHEDULER_SCHEMA_VERSION } from "../schemas/scheduler.js";
 import type { ErrorPhase } from "../schemas/error-state.js";
 import { gateLatestJson } from "../validation/sync-gate.js";
 import { writeErrorState } from "./error-state-writer.js";
-import type { AsyncMutex } from "./mutex.js";
-import type { Cooldown } from "./cooldown.js";
+import type { AsyncMutex } from "../../concurrency/mutex.js";
+import type { Cooldown } from "../../concurrency/cooldown.js";
 
 export type SyncCaller = "scheduled" | "lazy" | "/sync";
 

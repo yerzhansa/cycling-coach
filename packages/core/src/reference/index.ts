@@ -38,9 +38,6 @@ export { referenceDataDir } from "./paths.js";
 // ─── Compaction tokens (Wave 5 / F21 fills) ───────────────────────────
 export { REFERENCE_PRESERVE_TOKENS } from "./preserve-tokens.js";
 
-// ─── I/O helpers ──────────────────────────────────────────────────────
-export { atomicWriteJson } from "./io/atomic-write.js";
-export { safeReadJson } from "./io/safe-read.js";
 
 // ─── Zod schemas + per-file SCHEMA_VERSION constants ──────────────────
 export {

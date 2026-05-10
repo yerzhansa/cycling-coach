@@ -1,7 +1,7 @@
 // Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
 
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { chainedSignal } from "../src/reference/sync/abort-budget.js";
+import { chainedSignal } from "../src/concurrency/abort-budget.js";
 
 afterEach(() => {
   vi.restoreAllMocks();

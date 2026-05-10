@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { atomicWriteJson } from "../src/reference/io/atomic-write.js";
+import { atomicWriteJson } from "../src/io/atomic-write-json.js";
 
 let tempDir: string;
 

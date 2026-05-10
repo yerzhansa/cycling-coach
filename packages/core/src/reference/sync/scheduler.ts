@@ -1,7 +1,7 @@
 // Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
 
 import { join } from "node:path";
-import { safeReadJson } from "../io/safe-read.js";
+import { safeReadJson } from "../../io/safe-read-json.js";
 import { SchedulerStateSchema } from "../schemas/scheduler.js";
 import type { RunSyncOpts, SyncResult } from "./run-sync.js";
 

@@ -1,13 +1,13 @@
 // Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { AsyncMutex } from "../src/reference/sync/mutex.js";
+import { AsyncMutex } from "../src/concurrency/mutex.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const opts = { acquireTimeoutMs: 5_000, hotWarnMs: 10_000, caller: "test" };
+const opts = { acquireTimeoutMs: 5_000, hotWarnMs: 1_000, caller: "test" };
 
 describe("AsyncMutex.runExclusive", () => {
   it("serializes concurrent callers — second body starts only after the first resolves", async () => {
@@ -70,8 +70,8 @@ describe("AsyncMutex.runExclusive", () => {
     };
 
     const [r1, r2] = await Promise.all([
-      mutex.runExclusive(slow, { acquireTimeoutMs: 5_000, hotWarnMs: 10_000, caller: "first" }),
-      mutex.runExclusive(fast, { acquireTimeoutMs: 30, hotWarnMs: 10_000, caller: "second" }),
+      mutex.runExclusive(slow, { acquireTimeoutMs: 5_000, hotWarnMs: 1_000, caller: "first" }),
+      mutex.runExclusive(fast, { acquireTimeoutMs: 30, hotWarnMs: 10, caller: "second" }),
     ]);
 
     expect(r1).toEqual({ kind: "ran", value: "first" });
@@ -110,18 +110,18 @@ describe("AsyncMutex.runExclusive", () => {
       async () => {
         innerResult = await mutex.runExclusive(
           async () => "inner-body-ran",
-          { acquireTimeoutMs: 50, hotWarnMs: 10_000, caller: "inner" },
+          { acquireTimeoutMs: 50, hotWarnMs: 10, caller: "inner" },
         );
         return "outer-body-ran";
       },
-      { acquireTimeoutMs: 5_000, hotWarnMs: 10_000, caller: "outer" },
+      { acquireTimeoutMs: 5_000, hotWarnMs: 1_000, caller: "outer" },
     );
 
     expect(outerResult).toEqual({ kind: "ran", value: "outer-body-ran" });
     expect(innerResult).toEqual({ kind: "timeout" });
   });
 
-  it("emits a structured reference_mutex_hot warn to stderr when acquire wait exceeds hotWarnMs", async () => {
+  it("emits a structured mutex_hot warn to stderr when acquire wait exceeds hotWarnMs", async () => {
     const mutex = new AsyncMutex();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -134,7 +134,7 @@ describe("AsyncMutex.runExclusive", () => {
     await Promise.all([
       mutex.runExclusive(slow, {
         acquireTimeoutMs: 5_000,
-        hotWarnMs: 5_000, // first never waits, never warns
+        hotWarnMs: 1_000, // first never waits, never warns
         caller: "scheduled",
       }),
       mutex.runExclusive(fast, {
@@ -146,11 +146,100 @@ describe("AsyncMutex.runExclusive", () => {
 
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const payload = JSON.parse(warnSpy.mock.calls[0]![0] as string);
-    expect(payload.event).toBe("reference_mutex_hot");
+    expect(payload.event).toBe("mutex_hot");
     expect(payload.caller).toBe("/sync");
     expect(typeof payload.wait_ms).toBe("number");
     expect(payload.wait_ms).toBeGreaterThanOrEqual(30);
     expect(typeof payload.ts).toBe("string");
     expect(new Date(payload.ts).toString()).not.toBe("Invalid Date");
+  });
+});
+
+describe("AsyncMutex.runExclusive — input validation (B2 from QA review)", () => {
+  it("throws when acquireTimeoutMs is zero", async () => {
+    const mutex = new AsyncMutex();
+    await expect(
+      mutex.runExclusive(async () => "x", {
+        acquireTimeoutMs: 0,
+        hotWarnMs: 0,
+        caller: "test",
+      }),
+    ).rejects.toThrow(/acquireTimeoutMs must be a finite positive number/);
+  });
+
+  it("throws when acquireTimeoutMs is negative", async () => {
+    const mutex = new AsyncMutex();
+    await expect(
+      mutex.runExclusive(async () => "x", {
+        acquireTimeoutMs: -100,
+        hotWarnMs: 0,
+        caller: "test",
+      }),
+    ).rejects.toThrow(/acquireTimeoutMs must be a finite positive number/);
+  });
+
+  it("throws when acquireTimeoutMs is NaN", async () => {
+    const mutex = new AsyncMutex();
+    await expect(
+      mutex.runExclusive(async () => "x", {
+        acquireTimeoutMs: Number.NaN,
+        hotWarnMs: 0,
+        caller: "test",
+      }),
+    ).rejects.toThrow(/acquireTimeoutMs must be a finite positive number/);
+  });
+
+  it("throws when acquireTimeoutMs is Infinity", async () => {
+    const mutex = new AsyncMutex();
+    await expect(
+      mutex.runExclusive(async () => "x", {
+        acquireTimeoutMs: Number.POSITIVE_INFINITY,
+        hotWarnMs: 0,
+        caller: "test",
+      }),
+    ).rejects.toThrow(/acquireTimeoutMs must be a finite positive number/);
+  });
+
+  it("throws when hotWarnMs is negative", async () => {
+    const mutex = new AsyncMutex();
+    await expect(
+      mutex.runExclusive(async () => "x", {
+        acquireTimeoutMs: 1_000,
+        hotWarnMs: -1,
+        caller: "test",
+      }),
+    ).rejects.toThrow(/hotWarnMs must be a finite non-negative number/);
+  });
+
+  it("throws when hotWarnMs equals acquireTimeoutMs (warn would never fire)", async () => {
+    const mutex = new AsyncMutex();
+    await expect(
+      mutex.runExclusive(async () => "x", {
+        acquireTimeoutMs: 1_000,
+        hotWarnMs: 1_000,
+        caller: "test",
+      }),
+    ).rejects.toThrow(/hotWarnMs.*must be less than acquireTimeoutMs/);
+  });
+
+  it("throws when hotWarnMs exceeds acquireTimeoutMs", async () => {
+    const mutex = new AsyncMutex();
+    await expect(
+      mutex.runExclusive(async () => "x", {
+        acquireTimeoutMs: 1_000,
+        hotWarnMs: 2_000,
+        caller: "test",
+      }),
+    ).rejects.toThrow(/hotWarnMs.*must be less than acquireTimeoutMs/);
+  });
+
+  it("accepts hotWarnMs === 0 (warn fires immediately when waiting)", async () => {
+    const mutex = new AsyncMutex();
+    const result = await mutex.runExclusive(async () => "ok", {
+      acquireTimeoutMs: 1_000,
+      hotWarnMs: 0,
+      caller: "test",
+    });
+    expect(result).toEqual({ kind: "ran", value: "ok" });
   });
 });

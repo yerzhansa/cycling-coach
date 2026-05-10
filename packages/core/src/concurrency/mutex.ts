@@ -26,6 +26,26 @@ export class AsyncMutex {
     fn: () => Promise<T>,
     opts: { acquireTimeoutMs: number; hotWarnMs: number; caller: string },
   ): Promise<{ kind: "ran"; value: T } | { kind: "timeout" }> {
+    // Fail-loud at the boundary so future horizontal layers (Decision,
+    // Heartbeat, Coaching Loop) can't silently misconfigure timing.
+    // Reference's freshness.ts hard-codes valid values today; this guard is
+    // for the multi-consumer future ADR-0011 explicitly anticipates.
+    if (!Number.isFinite(opts.acquireTimeoutMs) || opts.acquireTimeoutMs <= 0) {
+      throw new Error(
+        `AsyncMutex: acquireTimeoutMs must be a finite positive number; got ${opts.acquireTimeoutMs}`,
+      );
+    }
+    if (!Number.isFinite(opts.hotWarnMs) || opts.hotWarnMs < 0) {
+      throw new Error(
+        `AsyncMutex: hotWarnMs must be a finite non-negative number; got ${opts.hotWarnMs}`,
+      );
+    }
+    if (opts.hotWarnMs >= opts.acquireTimeoutMs) {
+      throw new Error(
+        `AsyncMutex: hotWarnMs (${opts.hotWarnMs}) must be less than acquireTimeoutMs (${opts.acquireTimeoutMs}); the warn would never fire before the timeout`,
+      );
+    }
+
     const enqueuedAt = Date.now();
     const waiter: Waiter = {
       signalAcquired: () => {},
@@ -69,7 +89,7 @@ export class AsyncMutex {
         hotWarnHandle = setTimeout(() => {
           console.warn(
             JSON.stringify({
-              event: "reference_mutex_hot",
+              event: "mutex_hot",
               wait_ms: Date.now() - enqueuedAt,
               caller: opts.caller,
               ts: new Date().toISOString(),

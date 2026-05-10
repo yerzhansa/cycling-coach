@@ -4,8 +4,8 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AsyncMutex } from "../src/reference/sync/mutex.js";
-import { Cooldown } from "../src/reference/sync/cooldown.js";
+import { AsyncMutex } from "../src/concurrency/mutex.js";
+import { Cooldown } from "../src/concurrency/cooldown.js";
 import {
   createRunSync,
   type FetchedReference,
@@ -123,7 +123,7 @@ describe("createRunSync", () => {
       cooldownWindowMs: 30_000,
       fetchReferenceData: slowFetch,
       now: () => now,
-      timing: { acquireTimeoutMs: 5_000 },
+      timing: { acquireTimeoutMs: 5_000, hotWarnMs: 1_000 },
     });
     const runSyncFast = createRunSync({
       dataDir: dir,
@@ -132,7 +132,7 @@ describe("createRunSync", () => {
       cooldownWindowMs: 30_000,
       fetchReferenceData: fastFetch,
       now: () => now,
-      timing: { acquireTimeoutMs: 30 },
+      timing: { acquireTimeoutMs: 30, hotWarnMs: 10 },
     });
 
     const p1 = runSyncSlow({ caller: "scheduled" });
@@ -242,7 +242,7 @@ describe("createRunSync", () => {
 
     // Real atomicWriteJson for cache files; injected slow write only for .scheduler.json.
     const { atomicWriteJson: realAtomicWrite } = await import(
-      "../src/reference/io/atomic-write.js"
+      "../src/io/atomic-write-json.js"
     );
     const slowSchedulerWrite = vi.fn(
       async (path: string, value: unknown): Promise<void> => {

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 
-import { safeReadJson } from "../src/reference/io/safe-read.js";
+import { safeReadJson } from "../src/io/safe-read-json.js";
 
 let tempDir: string;
 

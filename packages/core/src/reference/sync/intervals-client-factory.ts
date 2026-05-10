@@ -1,7 +1,7 @@
 // Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
 
 import { IntervalsClient } from "intervals-icu-api";
-import { chainedSignal } from "./abort-budget.js";
+import { chainedSignal } from "../../concurrency/abort-budget.js";
 
 /**
  * Construct a fetch wrapper that injects a chained `AbortSignal` (orchestrator

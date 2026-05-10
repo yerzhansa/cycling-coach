@@ -1,7 +1,7 @@
 // Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
 
 import { describe, it, expect } from "vitest";
-import { Cooldown } from "../src/reference/sync/cooldown.js";
+import { Cooldown } from "../src/concurrency/cooldown.js";
 
 describe("Cooldown", () => {
   it("returns ok for the first check on a previously-unseen key", () => {

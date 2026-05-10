@@ -5,7 +5,7 @@ import {
   ERROR_STATE_SCHEMA_VERSION,
   type ErrorPhase,
 } from "../schemas/error-state.js";
-import { atomicWriteJson } from "../io/atomic-write.js";
+import { atomicWriteJson } from "../../io/atomic-write-json.js";
 
 export type { ErrorPhase };
 

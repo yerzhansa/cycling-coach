@@ -240,12 +240,17 @@ function formatHit(hit: TrademarkHit): string {
 
 /**
  * Default scan scope when no paths are supplied. The Reference submodule is
- * the directly-ported code; `tools/` is in scope because this very linter
- * lives there. Add new layer directories here as future horizontal layers
- * land (e.g., `packages/core/src/decision/`).
+ * the directly-ported code; `core/concurrency/` and `core/io/` host the
+ * primitives + I/O helpers that originated from section-11 and were promoted
+ * to shared locations in the architectural followup sequence (PR C);
+ * `tools/` is in scope because this very linter lives there. Add new layer
+ * directories here as future horizontal layers land (e.g.,
+ * `packages/core/src/decision/`).
  */
 const DEFAULT_SCAN_PATHS: readonly string[] = [
   "packages/core/src/reference",
+  "packages/core/src/concurrency",
+  "packages/core/src/io",
   "tools",
 ];
 

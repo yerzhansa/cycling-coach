@@ -63,7 +63,12 @@ copy; the following modifications were applied during the port:
 - **Mutex / cooldown discipline for sync.** A single mutex-protected
   `runSync()` orchestrates scheduled, lazy-fallback, and `/sync`-triggered
   refreshes with a 30 s acquire timeout, 2 min outer timeout, and 30 s
-  per-chat cooldown. See `packages/core/src/reference/sync/`.
+  per-chat cooldown. The orchestrator lives at
+  `packages/core/src/reference/sync/run-sync.ts`; the underlying
+  primitives (`AsyncMutex`, `chainedSignal`, `Cooldown`) live in
+  `packages/core/src/concurrency/` and are reused unchanged by future
+  horizontal layers (Decision Layer, Heartbeat, Coaching Loop) per
+  ADR-0011.
 - **Three-layer validation.** Layer 1 sync gate (mechanical), Layer 2
   Zod-validated LLM output with one retry on citation mismatch, Layer 3
   prompt rules. See `docs/initiatives/section-11/reference-prd.md`
@@ -76,8 +81,10 @@ copy; the following modifications were applied during the port:
 
 - `packages/core/src/reference/CONTEXT.md` opens with a section-11 credit
   paragraph.
-- Each ported file in `packages/core/src/reference/` carries a one-line
-  header comment: `// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.`
+- Each ported file in `packages/core/src/reference/`,
+  `packages/core/src/concurrency/`, and the JSON I/O helpers under
+  `packages/core/src/io/` carries a one-line header comment:
+  `// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.`
 - This file (`NOTICE.md`) and the [`README.md` Credits section](./README.md#credits)
   are the canonical attribution surfaces.
 

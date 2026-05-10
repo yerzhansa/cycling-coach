@@ -13,13 +13,11 @@ reference/
 ├── CONTEXT.md          (you are here)
 ├── index.ts            (public barrel — wired into packages/core/src/index.ts)
 ├── services.ts         (ReferenceServices — service-aggregate exposed to channels per ADR-0010)
+├── runtime.ts          (ReferenceRuntime + bootstrapReference — pins ADR-0011 two-phase init)
 ├── sport-adapter.ts    (the per-sport seam type — ReferenceSportAdapter + DfaSummary + PowerCurveDelta)
 ├── freshness.ts        (single-source-of-truth constants: freshness, retention, mutex/cooldown timings)
 ├── paths.ts            (referenceDataDir(binaryName) — composes via getCoachHome)
 ├── preserve-tokens.ts  (REFERENCE_PRESERVE_TOKENS — Wave 5 / F21 fills; sports spread)
-├── io/
-│   ├── atomic-write.ts (atomicWriteJson — temp + fsync + rename)
-│   └── safe-read.ts    (safeReadJson<T>(path, schema) — null on missing/parse-fail/Zod-fail)
 ├── schemas/
 │   ├── index.ts        (barrel — every schema declares .strict() per Decision 9)
 │   ├── latest.ts       (latest.json — curator's authoritative snapshot)
@@ -29,7 +27,7 @@ reference/
 │   ├── ftp-history.ts  (ftp_history.json — FTP test + eFTP time series)
 │   ├── scheduler.ts    (.scheduler.json — last_sync_at / next_sync_at coordination state)
 │   └── error-state.ts  (error_state.json — Layer-1 sync gate failures, curator-visible)
-├── sync/               (Wave 1b / F4 — runSync, scheduler, mutex, /sync command)
+├── sync/               (Wave 1b / F4 — runSync orchestrator, scheduler, /sync command)
 ├── metrics/            (Wave 2 — load / distribution / capability / compliance metric computers)
 ├── validation/         (Wave 4 — Layer 1 sync gate, Layer 2 LLM-output validator)
 ├── curator/            (Wave 5 — latest.json curator + system-prompt injection)
@@ -71,7 +69,8 @@ Reference exposes a `ReferenceServices` aggregate to downstream channels (Telegr
 - **Reference → `getCoachHome` (F1)** — every persisted file routes through `referenceDataDir(binaryName)` which composes `getCoachHome`. No Reference module hardcodes `~/.cycling-coach` or `~/.enduragent/cycling`.
 - **Reference → `Sport.referenceAdapters?()` (F2)** — type-only seam. Sports without per-sport affordances simply omit the method.
 - **Reference → freshness constants** — every Reference window number lives in `freshness.ts`. Imported, never re-declared.
-- **Reference → I/O helpers** — every persisted-state read uses `safeReadJson`; every write uses `atomicWriteJson`. Reference NEVER calls `JSON.parse(readFileSync(...))` or `writeFileSync(path, JSON.stringify(...))` directly.
+- **Reference → I/O helpers** — every persisted-state read uses `safeReadJson` (now in `core/io/safe-read-json.ts`); every write uses `atomicWriteJson` (now in `core/io/atomic-write-json.ts`). Reference NEVER calls `JSON.parse(readFileSync(...))` or `writeFileSync(path, JSON.stringify(...))` directly.
+- **Reference → concurrency primitives** — `AsyncMutex`, `chainedSignal`, `Cooldown` live in `core/concurrency/` (per ADR-0011's "future horizontal layers reuse the shared primitives"). Reference imports them; Decision/Heartbeat/Coaching Loop will too.
 
 ## Out of scope (Wave 1)
 

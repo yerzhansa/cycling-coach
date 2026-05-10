@@ -2,12 +2,12 @@
 
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { AsyncMutex } from "./sync/mutex.js";
-import { Cooldown } from "./sync/cooldown.js";
+import { AsyncMutex } from "../concurrency/mutex.js";
+import { Cooldown } from "../concurrency/cooldown.js";
 import { createRunSync } from "./sync/run-sync.js";
 import { Scheduler } from "./sync/scheduler.js";
 import { makeProductionFetcher } from "./sync/fetch-reference-data.js";
-import { safeReadJson } from "./io/safe-read.js";
+import { safeReadJson } from "../io/safe-read-json.js";
 import { LatestJsonSchema, type LatestJson } from "./schemas/latest.js";
 import { SYNC_COOLDOWN_MS, SCHEDULED_SYNC_INTERVAL_MS } from "./freshness.js";
 import type { FetchedReference } from "./sync/run-sync.js";
