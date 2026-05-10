@@ -12,21 +12,7 @@ import {
 } from "../src/reference/sync/run-sync.js";
 import { SCHEDULED_SYNC_INTERVAL_MS } from "../src/reference/freshness.js";
 import { LATEST_SCHEMA_VERSION } from "../src/reference/schemas/latest.js";
-
-const emptyFetched: FetchedReference = {
-  latest: {
-    athlete_profile: {},
-    current_status: {},
-    derived_metrics: {},
-    recent_activities: [],
-    planned_workouts: [],
-    wellness_data: {},
-  },
-  history: { daily: [], weekly: [], monthly: [] },
-  intervals: { by_activity: {} },
-  routes: { routes: [] },
-  ftp_history: { entries: [] },
-};
+import { emptyFetched } from "./helpers/reference-fixtures.js";
 
 describe("createRunSync", () => {
   let dir: string;

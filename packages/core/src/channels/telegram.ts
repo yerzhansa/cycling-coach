@@ -168,7 +168,6 @@ export function createTelegramBot(
       await ctx.reply("Syncing training data from intervals.icu...");
       try {
         const result = await reference.runSync({
-          caller: "/sync",
           chatId: `telegram:${ctx.chat.id}`,
         });
         await ctx.reply(formatSyncReply(result));
