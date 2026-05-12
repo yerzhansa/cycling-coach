@@ -9,7 +9,10 @@ strict-test won't catch it — the schema bypasses the drift gate silently.
 
 **Rule 1 — re-export discipline**: every Zod schema declared inside
 `metrics/*.ts` MUST be re-exported from `metrics/index.ts`. Add the
-re-export in the same PR that adds the schema.
+re-export in the same PR that adds the schema. Mechanically enforced by
+the second `describe` in `tests/reference-strict-schemas.test.ts`, which
+scans `metrics/*.ts` for `export const *Schema` declarations and asserts
+each appears in the barrel.
 
 **Rule 2 — optional-chaining discipline**: when a metric reads an
 `.optional()` field on `Activity`/`WellnessDay`/etc. (e.g.,
@@ -46,9 +49,9 @@ until the third metric needs it; until then, inlining is cheaper than a
 shared abstraction that freezes the wrong shape. ADR-0009 ("defer library
 publishing until a real second consumer exists") is the project's published
 stance against this kind of speculative extraction; it applies one layer
-down too.
+down too. **And when the third metric does need it, extract it** —
+otherwise F11 review opens with four identical copy-pastes.
 
-All three rules are currently enforced by reviewer attention. A future PR may
-add a mechanical lint check (e.g., a build-time script that diffs declared
-schemas against re-exported ones, plus an ESLint rule banning
-`'<input-field>' in <obj>` for known-optional fields).
+Rule 1 is mechanically gated (see above). Rules 2 and 3 are enforced by
+reviewer attention. A future PR may add an ESLint rule banning
+`'<input-field>' in <obj>` for known-optional fields.

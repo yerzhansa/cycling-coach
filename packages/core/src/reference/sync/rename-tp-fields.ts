@@ -19,6 +19,7 @@
 // parse and any downstream consumer — this is the single anti-corruption
 // boundary for this vocabulary. See ADR-0012 + reference/CONTEXT.md.
 
+import { ActivitySchema, WellnessDaySchema, type Activity, type WellnessDay } from "../schemas/inputs.js";
 import { TP_DENYLIST_FIELDS } from "../trademark-policy.js";
 
 export interface NormalizedWellnessFields {
@@ -33,6 +34,20 @@ export interface NormalizedActivityFields {
   fitnessAtEnd?: number | null;
   fatigueAtEnd?: number | null;
 }
+
+// Phantom brand carried only in the type system — at runtime the value is
+// a plain object. The unique symbol makes the brand structurally
+// inaccessible from any module that doesn't import this file, so a future
+// sync-path author can't fake the type by hand-shaping a `Record<string,
+// unknown>` and asserting it. The only legitimate way to obtain a branded
+// row is to call `renameTpFieldsOnActivity` / `renameTpFieldsOnWellnessRow`.
+declare const __renamedBrand: unique symbol;
+
+export type RenamedActivityRow = Record<string, unknown> &
+  NormalizedActivityFields & { readonly [__renamedBrand]: "activity" };
+
+export type RenamedWellnessRow = Record<string, unknown> &
+  NormalizedWellnessFields & { readonly [__renamedBrand]: "wellness" };
 
 /** Aggregator passed by the operator CLI to surface non-number TP values
  *  (real-world drift: API ships a string or boolean where a number was
@@ -112,12 +127,8 @@ function applyKeyRename(
 export function renameTpFieldsOnWellnessRow(
   raw: Record<string, unknown>,
   summary?: RenameSummary,
-): Record<string, unknown> & NormalizedWellnessFields {
-  return applyKeyRename(raw, WELLNESS_TP_TO_PLAIN, WELLNESS_TP_SET, summary) as Record<
-    string,
-    unknown
-  > &
-    NormalizedWellnessFields;
+): RenamedWellnessRow {
+  return applyKeyRename(raw, WELLNESS_TP_TO_PLAIN, WELLNESS_TP_SET, summary) as RenamedWellnessRow;
 }
 
 /**
@@ -128,12 +139,32 @@ export function renameTpFieldsOnWellnessRow(
 export function renameTpFieldsOnActivity(
   raw: Record<string, unknown>,
   summary?: RenameSummary,
-): Record<string, unknown> & NormalizedActivityFields {
-  return applyKeyRename(raw, ACTIVITY_TP_TO_PLAIN, ACTIVITY_TP_SET, summary) as Record<
-    string,
-    unknown
-  > &
-    NormalizedActivityFields;
+): RenamedActivityRow {
+  return applyKeyRename(raw, ACTIVITY_TP_TO_PLAIN, ACTIVITY_TP_SET, summary) as RenamedActivityRow;
+}
+
+/**
+ * Parse a renamed activity row into a typed Activity. The branded input
+ * type is the type-level enforcement of ADR-0012's anti-corruption
+ * boundary: a future sync-path author who calls `ActivitySchema.parse(raw)`
+ * directly bypasses the rename layer; this helper makes that bypass
+ * a type error. F4-style sync paths SHOULD use this instead of calling
+ * `ActivitySchema.parse` themselves.
+ *
+ * Defense-in-depth only — `ActivitySchema` is still publicly exported for
+ * tests and historical callers, so the brand catches forgetfulness, not
+ * malice. Pair with `assertNoTpKeysRemain` for nested-aggregate drift.
+ */
+export function parseRenamedActivity(row: RenamedActivityRow): Activity {
+  return ActivitySchema.parse(row);
+}
+
+/**
+ * Parse a renamed wellness row into a typed WellnessDay. See
+ * `parseRenamedActivity` for the contract.
+ */
+export function parseRenamedWellnessRow(row: RenamedWellnessRow): WellnessDay {
+  return WellnessDaySchema.parse(row);
 }
 
 const DENYLIST_SET: ReadonlySet<string> = new Set(TP_DENYLIST_FIELDS);

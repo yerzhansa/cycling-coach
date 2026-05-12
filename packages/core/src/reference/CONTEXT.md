@@ -69,13 +69,14 @@ intervals.icu emits seven fields named in TP-trademarked vocabulary. Reference r
 | `activity.icu_ctl` | `fitnessAtEnd` |
 | `activity.icu_atl` | `fatigueAtEnd` |
 
-Two functions + a defensive walker live in `sync/rename-tp-fields.ts`:
+Two functions + a defensive walker + two type-gated parsers live in `sync/rename-tp-fields.ts`:
 
-- `renameTpFieldsOnWellnessRow(raw, summary?)` — five wellness renames.
-- `renameTpFieldsOnActivity(raw, summary?)` — two activity renames.
+- `renameTpFieldsOnWellnessRow(raw, summary?) → RenamedWellnessRow` — five wellness renames.
+- `renameTpFieldsOnActivity(raw, summary?) → RenamedActivityRow` — two activity renames.
 - `assertNoTpKeysRemain(value)` — recursive walker that throws if any TP-denylist key survives anywhere in the input (defense-in-depth for the "intervals.icu adds nested TP aggregates" failure mode). The error path uses `[<index>]` array form only — never includes row-id values — so operator log forwarding stays safe.
+- `parseRenamedActivity(row: RenamedActivityRow) → Activity` and `parseRenamedWellnessRow(row: RenamedWellnessRow) → WellnessDay` — type-gated parse helpers. The branded input type is the type-level half of the anti-corruption boundary: a sync-path author who calls `ActivitySchema.parse(apiResponse)` directly bypasses the rename layer; using the parse helper makes that bypass a type error. Defense-in-depth only — the schemas remain publicly exported, so the brand catches forgetfulness, not malice.
 
-**F8 wiring obligation.** F8 (Wave 2) activates `sync/fetch-reference-data.ts`. When that wiring lands, fetch-reference-data MUST call the rename layer between the API-response parse and the cache-write step. The rename layer is also wired into the operator fixture CLI (`tools/sanitize-fixture.ts`); both call sites stay in lockstep so the typed surface is consistent across sync paths.
+**F8 wiring obligation.** F8 (Wave 2) activates `sync/fetch-reference-data.ts`. When that wiring lands, fetch-reference-data MUST go through `parseRenamedActivity` / `parseRenamedWellnessRow` (which forces the rename call by virtue of their input type) instead of calling `ActivitySchema.parse` / `WellnessDaySchema.parse` directly. The rename layer is also wired into the operator fixture CLI (`tools/sanitize-fixture.ts`); both call sites stay in lockstep so the typed surface is consistent across sync paths.
 
 **Naming-collision callout.** intervals.icu's `WellnessRecord` lib type declares a `fatigue` field (subjective 1–5 scale, athlete-reported). Our Banister-derived `fatigue` (renamed from `atl`) has different semantics. The lib's field rides through via the `z.looseObject` index signature; no future feature should consume both under the same name. If a future feature needs the subjective scale, promote it under a different name (e.g., `subjectiveFatigue`).
 

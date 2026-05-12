@@ -1,3 +1,7 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
 
@@ -81,4 +85,66 @@ describe("Reference Zod schemas — every object schema declares .strict()", () 
       `Schema ${name} is not strict: ${result.reason ?? "unknown reason"}`,
     ).toBe(true);
   });
+});
+
+/**
+ * Re-export-discipline gate for metrics/. The barrel walker above only
+ * fires on schemas that *did* reach `metrics/index.ts`. A metric author
+ * who declares `LoadManagementSchema` in `metrics/load-management.ts` but
+ * forgets the re-export silently bypasses the strict-gate. This test
+ * scans every `metrics/*.ts` sibling, extracts top-level
+ * `export const *Schema = ...` declarations, and asserts each one appears
+ * in the imported barrel. Contract documented in `metrics/README.md`
+ * (Rule 1).
+ *
+ * Scope: top-level `export const FooSchema` only. Multi-line declarations,
+ * re-exports through `export {}` aliases, and conditionally-exported
+ * schemas are out of scope — adding any of those should be paired with a
+ * tightening of the regex.
+ */
+
+const METRICS_DIR = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "src",
+  "reference",
+  "metrics",
+);
+const SCHEMA_DECL_RE = /^export\s+const\s+([A-Z][A-Za-z0-9_]*Schema)\b/gm;
+
+function declaredMetricSchemas(): Array<readonly [string, string]> {
+  const found: Array<readonly [string, string]> = [];
+  for (const entry of readdirSync(METRICS_DIR, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    if (!entry.name.endsWith(".ts")) continue;
+    if (entry.name === "index.ts") continue;
+    if (entry.name.endsWith(".test.ts")) continue;
+    const source = readFileSync(resolve(METRICS_DIR, entry.name), "utf-8");
+    for (const match of source.matchAll(SCHEMA_DECL_RE)) {
+      found.push([entry.name, match[1]]);
+    }
+  }
+  return found;
+}
+
+describe("metrics/ re-export discipline (metrics/README.md Rule 1)", () => {
+  const declared = declaredMetricSchemas();
+  const barrelExports = new Set(Object.keys(metricsBarrel));
+
+  if (declared.length === 0) {
+    it.skip("no metric schemas declared yet — gate becomes active when F8 lands the first one", () => {});
+    return;
+  }
+
+  it.each(declared)(
+    "%s declares export const %s — barrel re-exports it",
+    (file, name) => {
+      expect(
+        barrelExports.has(name),
+        `${file} declares \`export const ${name}\` but it is missing from metrics/index.ts. ` +
+          `Add the re-export in the same PR per metrics/README.md Rule 1, or the schema bypasses ` +
+          `the strict-gate above.`,
+      ).toBe(true);
+    },
+  );
 });

@@ -12,6 +12,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   assertNoTpKeysRemain,
+  parseRenamedActivity,
+  parseRenamedWellnessRow,
   renameTpFieldsOnActivity,
   renameTpFieldsOnWellnessRow,
   type RenameSummary,
@@ -236,5 +238,65 @@ describe("assertNoTpKeysRemain", () => {
       ],
     };
     expect(() => assertNoTpKeysRemain(cleanBundle)).not.toThrow();
+  });
+});
+
+describe("parseRenamedActivity / parseRenamedWellnessRow — branded type gate", () => {
+  // Type-level test: the branded input type forces sync-path authors
+  // through the rename layer. The runtime body just delegates to the
+  // schema parse; the load-bearing piece is the type signature, exercised
+  // here by composing rename → parse and asserting the resulting Activity
+  // has the post-rename fields.
+
+  it("parseRenamedActivity accepts the output of renameTpFieldsOnActivity and returns a typed Activity", () => {
+    const renamed = renameTpFieldsOnActivity({
+      id: 17654321,
+      start_date_local: "2026-04-15T07:00:00",
+      type: "Ride",
+      moving_time: 3600,
+      elapsed_time: 3700,
+      icu_ctl: 52.1,
+      icu_atl: 38.4,
+    });
+    const activity = parseRenamedActivity(renamed);
+    expect(activity.fitnessAtEnd).toBe(52.1);
+    expect(activity.fatigueAtEnd).toBe(38.4);
+    // TP source keys never appear on the typed surface — the rename layer
+    // strips them and the schema's named fields don't include them.
+    expect((activity as Record<string, unknown>).icu_ctl).toBeUndefined();
+    expect((activity as Record<string, unknown>).icu_atl).toBeUndefined();
+  });
+
+  it("parseRenamedWellnessRow accepts the output of renameTpFieldsOnWellnessRow", () => {
+    const renamed = renameTpFieldsOnWellnessRow({
+      id: "2026-04-15",
+      weight: 70,
+      restingHR: 50,
+      hrv: 80,
+      sleepSecs: 28800,
+      sleepQuality: 4,
+      ctl: 52.1,
+      atl: 38.4,
+    });
+    const day = parseRenamedWellnessRow(renamed);
+    expect(day.fitness).toBe(52.1);
+    expect(day.fatigue).toBe(38.4);
+    expect((day as Record<string, unknown>).ctl).toBeUndefined();
+    expect((day as Record<string, unknown>).atl).toBeUndefined();
+  });
+
+  it("type system rejects un-renamed input — checked via @ts-expect-error", () => {
+    // The directive below fails the build if the line *does* type-check.
+    // That's the load-bearing assertion: a sync-path author who skips the
+    // rename call gets a type error, not a silent runtime bypass.
+    const unrenamedRaw: Record<string, unknown> = {
+      id: 17654321,
+      start_date_local: "2026-04-15T07:00:00",
+      type: "Ride",
+      moving_time: 3600,
+      elapsed_time: 3700,
+    };
+    // @ts-expect-error — RenamedActivityRow brand cannot be conjured from a plain Record
+    parseRenamedActivity(unrenamedRaw);
   });
 });
