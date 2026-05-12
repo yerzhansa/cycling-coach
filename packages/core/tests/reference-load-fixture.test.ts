@@ -12,7 +12,7 @@ import { z } from "zod";
 import { ActivitySchema } from "../src/reference/schemas/inputs.js";
 import { TP_DENYLIST_FIELDS } from "../src/reference/trademark-policy.js";
 import { GoldenFixtureSchema, loadFixture } from "./helpers/load-fixture.js";
-import { ALLOWED_FIXTURE_KEYS } from "./helpers/sanitize-fixture.js";
+import { ALLOWED_FIXTURE_KEYS } from "../../../tools/sanitize-fixture-transform.js";
 
 const tmpRoot = mkdtempSync(join(tmpdir(), "reference-load-fixture-"));
 afterAll(() => {

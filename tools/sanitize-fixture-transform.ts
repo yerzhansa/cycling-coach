@@ -22,7 +22,7 @@ import {
   WeeklyRollupSchema,
   WellnessDaySchema,
   ZoneTimesSchema,
-} from "../../src/reference/schemas/inputs.js";
+} from "../packages/core/src/reference/schemas/inputs.js";
 
 // Mechanically derived from the project's input schemas. Adding a field to
 // a schema auto-allows it in the sanitizer — keeps the privacy boundary

@@ -5,8 +5,9 @@
 // Usage:
 //   pnpm exec tsx tools/sanitize-fixture.ts <input.json> <output-name> [--force]
 
-import { readFileSync, statSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { atomicWriteJson } from "../packages/core/src/io/atomic-write-json.js";
@@ -19,7 +20,7 @@ import {
 import {
   sanitizeFixtureWithSummary,
   type SanitizeSummary,
-} from "../packages/core/tests/helpers/sanitize-fixture.js";
+} from "./sanitize-fixture-transform.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_OUTPUT_ROOT = resolve(
@@ -109,7 +110,19 @@ export async function main(argv: string[], opts?: MainOptions): Promise<number> 
 
   await atomicWriteJson(outputPath, data);
 
+  // Emit the SHA-256 checksum alongside the JSON. The companion test at
+  // `realistic-athlete-fixture-checksum.test.ts` re-hashes the committed
+  // file and compares to this checksum on every CI run; if they ever
+  // diverge, either the operator forgot to commit one of the two files or
+  // the JSON was mutated in place after regen. Both are bugs we want loud.
+  // Format matches `shasum -a 256` output: `<hex>  <basename>`.
+  const writtenBytes = readFileSync(outputPath);
+  const hash = createHash("sha256").update(writtenBytes).digest("hex");
+  const checksumPath = `${outputPath}.sha256`;
+  writeFileSync(checksumPath, `${hash}  ${basename(outputPath)}\n`);
+
   out(`Wrote sanitized fixture: ${outputPath}`);
+  out(`Wrote checksum:          ${checksumPath}`);
   for (const line of formatSummary(summary)) out(line);
   for (const line of formatRenameWarnings(wellnessRenameSummary, "wellness")) err(line);
   for (const line of formatRenameWarnings(activitiesRenameSummary, "activities")) err(line);

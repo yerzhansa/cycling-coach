@@ -85,6 +85,23 @@ Per-ported-file boilerplate: every file in `packages/core/src/reference/` carrie
 
 Each cache file under `<coach-home>/data/` (`latest.json`, `history.json`, `intervals.json`, `routes.json`, `ftp_history.json`) declares its own `<FILE>_SCHEMA_VERSION` constant in `packages/core/src/reference/schemas/`. **Bump only the file whose shape changed; never bump them in lockstep.** The version is informational — Zod-strict-as-gate is what handles drift via discard-and-resync per [the Reference PRD's Decision 9](./docs/initiatives/section-11/reference-prd-decisions.md). There is no `migrations/` directory; a schema bump is a code-only change that triggers a fresh sync on the next `runSync()`.
 
+## Fixture stewardship
+
+The committed fixture at `packages/core/tests/fixtures/golden/realistic-athlete.json` is derived from a real operator's intervals.icu account, sanitized via `tools/sanitize-fixture.ts` per the schema-derived allowlist policy. The fixture lives next to a SHA-256 checksum (`realistic-athlete.json.sha256`) that CI verifies on every PR — a mismatch fires `realistic-athlete-fixture-checksum.test.ts` and surfaces accidental in-place mutation (bad merge, editor save, formatter pass).
+
+The deeper provenance check — re-running the sanitize CLI against the saved source mock and comparing bytes — is operator-machine-only: `sanitize-cli-fixture-stability.test.ts` skips when `docs/mocks/intervals-icu-raw-2026-05-11.json` is absent (gitignored, so absent on CI and on fresh clones). The operator is responsible for re-running it before any fixture-regen PR.
+
+**Operator regen flow:**
+
+```
+INTERVALS_API_KEY=… pnpm exec tsx tools/fetch-real-athlete.ts
+pnpm exec tsx tools/sanitize-fixture.ts /tmp/raw-bundle.json realistic-athlete --force
+```
+
+The second command writes both `realistic-athlete.json` and `realistic-athlete.json.sha256`. Commit both, or neither. Reviewers don't read the 70 KB JSON diff line-by-line — the review focuses on the `SanitizeSummary` the CLI prints (which keys were dropped, which were transformed) and a green metric-test suite.
+
+**Reviewer checklist for schema-adding PRs.** When a PR adds a field to any of the seven input schemas in `packages/core/src/reference/schemas/inputs.ts`, the new field is now auto-allowed in committed fixtures via `ALLOWED_FIXTURE_KEYS`. Confirm the field is either (a) not present in the source mock, or (b) carries no PII once the mock includes it. If neither holds, the field must land with a value-level transform in `TRANSFORMS` (see `source` as precedent) or be excluded via a schema-shape carve-out.
+
 ## Telegram allowlist file
 
 The bot enforces a per-user-ID allowlist via `~/.cycling-coach/allowed-senders.json` (mode `0600`). Schema and validation live in `packages/core/src/channels/allowed-senders.ts`. CLI mutations (`add-sender`, `remove-sender`) acquire a PID lockfile at `~/.cycling-coach/.allowed-senders.lock` so concurrent invocations serialize cleanly. **Do not edit `allowed-senders.json` by hand while the bot is running** — the bot re-reads it on every inbound message, but a hand-edit during a write will lose updates. Use the CLI subcommands instead.

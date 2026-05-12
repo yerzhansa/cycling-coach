@@ -1,8 +1,9 @@
-// Behavioral tests for `tests/helpers/sanitize-fixture.ts` — an allowlist
+// Behavioral tests for `tools/sanitize-fixture-transform.ts` — an allowlist
 // privacy transform. Default-deny: every key not in the schema-derived
 // allowlist (plus a small EXTRA_ALLOW list) is dropped. Allowed keys ride
-// through verbatim; a few (id, paired_event_id, name) have value-level
-// transforms. Numeric signal is preserved at full precision.
+// through verbatim; a few (id, paired_event_id, name, source) have value-level
+// transforms. Numeric signal is preserved at full precision. Lives in tools/
+// alongside the CLI per ADR-0013-companion (sanitizer-home decision).
 
 import { describe, expect, it } from "vitest";
 
@@ -10,7 +11,7 @@ import {
   ALLOWED_FIXTURE_KEYS,
   sanitizeFixture,
   sanitizeFixtureWithSummary,
-} from "./helpers/sanitize-fixture.js";
+} from "./sanitize-fixture-transform.js";
 
 describe("sanitizeFixture (allowlist)", () => {
   it("drops keys not in the schema-derived allowlist (default-deny)", () => {
