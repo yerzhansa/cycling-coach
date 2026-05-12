@@ -120,6 +120,23 @@ describe("renameTpFieldsOnWellnessRow", () => {
     expect(Object.keys(out)).not.toContain("fitness");
     expect(Object.keys(out)).not.toContain("ctl");
   });
+
+  it("throws on collision — input has both ctl AND a non-null fitness (rename would silently overwrite real data)", () => {
+    const raw = { id: "2026-04-15", ctl: 52.1, fitness: 99 };
+    expect(() => renameTpFieldsOnWellnessRow(raw)).toThrow(
+      /collision.*'ctl'.*'fitness'/,
+    );
+  });
+
+  it("tolerates target=null collision — API ships fatigue:null alongside atl:<number>; rename fills in safely", () => {
+    // Real-world shape: intervals.icu wellness rows carry both `atl` (Banister
+    // ATL) and `fatigue` (subjective 1-5, currently always null). The rename
+    // overwriting null is not data loss — only non-null targets trigger the
+    // throw. See WellnessDaySchema comment for context.
+    const raw = { id: "2026-04-15", atl: 38.4, fatigue: null };
+    const out = renameTpFieldsOnWellnessRow(raw);
+    expect(out).toEqual({ id: "2026-04-15", fatigue: 38.4 });
+  });
 });
 
 describe("renameTpFieldsOnActivity", () => {
@@ -172,6 +189,13 @@ describe("renameTpFieldsOnActivity", () => {
     const out = renameTpFieldsOnActivity(raw);
     expect(Object.keys(out)).not.toContain("icu_ctl");
     expect(Object.keys(out)).not.toContain("icu_atl");
+  });
+
+  it("throws on collision — input has both icu_ctl AND a non-null fitnessAtEnd", () => {
+    const raw = { id: 17654321, icu_ctl: 52.1, fitnessAtEnd: 99 };
+    expect(() => renameTpFieldsOnActivity(raw)).toThrow(
+      /collision.*'icu_ctl'.*'fitnessAtEnd'/,
+    );
   });
 });
 

@@ -84,9 +84,14 @@ const arbitraryActivityRaw: fc.Arbitrary<Activity> = fc.record({
   moving_time: positiveSeconds,
   elapsed_time: positiveSeconds,
 
-  // Load + intensity
-  icu_training_load: fc.float({ min: 0, max: 500, noNaN: true }),
-  icu_intensity: fc.float({ min: 0, max: 1.5, noNaN: true }),
+  // Load + intensity — schema marks both .optional() (WeightTraining and
+  // other unscored sessions ship without them, per
+  // `reference-input-schemas.test.ts:75-88`). Wrap in fc.option so property
+  // tests exercise the `undefined` branch — a metric reading
+  // `act.icu_training_load` without optional-chaining would NPE on a real
+  // WeightTraining row, and an always-populated arbitrary would hide it.
+  icu_training_load: fc.option(fc.float({ min: 0, max: 500, noNaN: true }), { nil: undefined }),
+  icu_intensity: fc.option(fc.float({ min: 0, max: 1.5, noNaN: true }), { nil: undefined }),
 
   // Power + HR (nullable, NOT optional)
   average_watts: fc.option(fc.float({ min: 50, max: 600, noNaN: true }), { nil: null }),
@@ -121,13 +126,14 @@ const arbitraryActivityRaw: fc.Arbitrary<Activity> = fc.record({
   fatigueAtEnd: nullableOptional(fc.float({ min: 20, max: 100, noNaN: true })),
 });
 
-/** Cross-field constraint: decoupling and pa_hr both require HR data. When
- *  average_heartrate is null, force these to null too — otherwise property
- *  tests for capability metrics fail on inputs that can't physically exist
- *  (decoupling without HR is meaningless). */
+/** Cross-field constraint: decoupling, pa_hr, and icu_efficiency_factor all
+ *  require HR data. Efficiency factor is the watts/HR ratio — undefined
+ *  without HR. When average_heartrate is null, force all three to null too
+ *  — otherwise property tests for capability metrics fail on inputs that
+ *  can't physically exist. */
 export const arbitraryActivity: fc.Arbitrary<Activity> = arbitraryActivityRaw.map((a) => {
   if (a.average_heartrate === null) {
-    return { ...a, decoupling: null, pa_hr: null };
+    return { ...a, decoupling: null, pa_hr: null, icu_efficiency_factor: null };
   }
   return a;
 });

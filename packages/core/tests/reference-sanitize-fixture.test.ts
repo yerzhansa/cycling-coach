@@ -1,262 +1,280 @@
-// Behavioral tests for `tests/helpers/sanitize-fixture.ts` — a privacy-
-// denylist transform. Redact fields that could re-identify the operator,
-// drop GPS + TP-trademark keys, preserve numeric signal verbatim. No
-// projection. No rounding. No date jitter.
+// Behavioral tests for `tests/helpers/sanitize-fixture.ts` — an allowlist
+// privacy transform. Default-deny: every key not in the schema-derived
+// allowlist (plus a small EXTRA_ALLOW list) is dropped. Allowed keys ride
+// through verbatim; a few (id, paired_event_id, name) have value-level
+// transforms. Numeric signal is preserved at full precision.
 
 import { describe, expect, it } from "vitest";
 
-import { sanitizeFixture, sanitizeFixtureWithSummary } from "./helpers/sanitize-fixture.js";
+import {
+  ALLOWED_FIXTURE_KEYS,
+  sanitizeFixture,
+  sanitizeFixtureWithSummary,
+} from "./helpers/sanitize-fixture.js";
 
-describe("sanitizeFixture", () => {
-  it("replaces top-level id and athlete_id with 12345", () => {
-    expect(sanitizeFixture({ id: 9876543, athlete_id: "operator-uuid-xyz" })).toEqual({
-      id: 12345,
-      athlete_id: 12345,
-    });
-  });
-
-  it("replaces email-shaped strings with redacted@example.com", () => {
-    expect(
-      sanitizeFixture({ contact: "operator@example.com", deeply: { nested: "x@y.z" } }),
-    ).toEqual({
-      contact: "redacted@example.com",
-      deeply: { nested: "redacted@example.com" },
-    });
-  });
-
-  it("replaces free-text PII fields with 'sanitized' (name, description, notes, nickname, bio)", () => {
+describe("sanitizeFixture (allowlist)", () => {
+  it("drops keys not in the schema-derived allowlist (default-deny)", () => {
+    // `athlete_id` is not in any input schema — dropped entirely (not redacted).
+    // `unknown_vendor_field` likewise. Compare with the old denylist behavior
+    // which would have redacted athlete_id to 12345.
     expect(
       sanitizeFixture({
-        name: "Yerzhan's Friday ride near home",
-        description: "felt great, mile 12 on Cherry Lane was tough",
-        notes: "left calf twinge",
-        nickname: "operator-handle",
-        bio: "long bio with location hints",
-        // Same keys nested in an object
-        athlete: { name: "Operator Real Name", bio: "..." },
+        athlete_id: "operator-uuid-xyz",
+        unknown_vendor_field: "anything",
+        activities: [{ id: 1, type: "Ride", power_meter_serial: "1607870937" }],
       }),
     ).toEqual({
-      name: "sanitized",
-      description: "sanitized",
-      notes: "sanitized",
-      nickname: "sanitized",
-      bio: "sanitized",
-      athlete: { name: "sanitized", bio: "sanitized" },
+      activities: [{ id: 12345, type: "Ride" }],
     });
   });
 
-  it("drops GPS coordinate keys (start_latlng, end_latlng) anywhere in the tree", () => {
+  it("redacts numeric and prefixed-string id values to 12345 (activity / planned event)", () => {
     expect(
       sanitizeFixture({
-        keep: 1,
-        start_latlng: [37.7749, -122.4194],
-        end_latlng: [37.7849, -122.4094],
-        nested: { keep_too: 2, start_latlng: [40, -74] },
+        activities: [{ id: 9876543, type: "Ride" }, { id: "i146622609", type: "Ride" }],
       }),
     ).toEqual({
-      keep: 1,
-      nested: { keep_too: 2 },
+      activities: [{ id: 12345, type: "Ride" }, { id: 12345, type: "Ride" }],
     });
   });
 
-  it("drops TP-trademark-named keys (cosmetic JSON hygiene; type already excludes them)", () => {
-    const dirty = {
-      ftp: 285,
-      ctl: 52.1,
-      atl: 38.4,
-      ctlLoad: 51.9,
-      atlLoad: 38.1,
-      rampRate: 4.7,
-      icu_atl: 38.4,
-      icu_ctl: 52.1,
-      tsb: 13.7,
-      tss: 142,
-      if: 0.82,
-      activities: [{ id: 1, ctl: 50, kj: 1180 }],
-    };
-
-    expect(sanitizeFixture(dirty)).toEqual({
-      ftp: 285,
-      activities: [{ id: 12345, kj: 1180 }],
-    });
-  });
-
-  it("preserves structural `id` patterns (ISO date, zone label) but redacts identifier-shaped `id` (numeric or string-prefixed) and any `athlete_id`", () => {
-    const data = {
-      // Wellness `id` is the YYYY-MM-DD date — structural, not PII.
-      wellness: [
-        { id: "2026-04-15", weight: 73.4 },
-        { id: "2026-04-16", weight: 73.5 },
-      ],
-      activities: [
-        {
-          // Numeric activity id — account-linking, must redact.
-          id: 9876,
-          average_watts: 200,
-          // Zone-bin `id` "Z1"/"Z2" — structural label, preserve.
-          icu_zone_times: [
-            { id: "Z1", secs: 600 },
-            { id: "Z2", secs: 1800 },
-            // intervals.icu also emits named cross-zone bins like Sweet
-            // Spot ("SS") — preserve any short uppercase-prefixed label.
-            { id: "SS", secs: 780 },
-          ],
-        },
-        {
-          // String activity id like "i146622609" — account-linking, redact.
-          id: "i146622609",
-          average_watts: 220,
-        },
-      ],
-      // athlete_id always redacts, even when string-typed (UUID-shaped).
-      athlete_id: "operator-uuid-xyz",
-    };
-    expect(sanitizeFixture(data)).toEqual({
-      wellness: [
-        { id: "2026-04-15", weight: 73.4 },
-        { id: "2026-04-16", weight: 73.5 },
-      ],
-      activities: [
-        {
-          id: 12345,
-          average_watts: 200,
-          icu_zone_times: [
-            { id: "Z1", secs: 600 },
-            { id: "Z2", secs: 1800 },
-            { id: "SS", secs: 780 },
-          ],
-        },
-        {
-          id: 12345,
-          average_watts: 220,
-        },
-      ],
-      athlete_id: 12345,
-    });
-  });
-
-  it("preserves ISO date strings verbatim (no jitter — destroys training-pattern signal)", () => {
-    const data = {
-      start_date_local: "2026-04-15T07:30:00",
-      weekStartDate: "2026-04-13",
-      activity: { start_date_local: "2026-04-14T18:00:00" },
-    };
-    expect(sanitizeFixture(data)).toEqual(data);
-  });
-
-  it("preserves numeric metrics at full precision (no rounding)", () => {
-    const data = {
-      weight: 73.42, // 0.1kg precision is meaningful test signal
-      icu_intensity: 0.823456,
-      ftp: 285,
-      icu_training_load: 142.7,
-      decoupling: 4.21,
-      bodyFat: 14.6,
-      activities: [{ id: 1, average_watts: 218.4, hrv: 84 }],
-    };
-
-    const sanitized = sanitizeFixture(data) as typeof data;
-    expect(sanitized.weight).toBe(73.42);
-    expect(sanitized.icu_intensity).toBe(0.823456);
-    expect(sanitized.ftp).toBe(285);
-    expect(sanitized.icu_training_load).toBe(142.7);
-    expect(sanitized.decoupling).toBe(4.21);
-    expect(sanitized.bodyFat).toBe(14.6);
-    expect(sanitized.activities[0].average_watts).toBe(218.4);
-    expect(sanitized.activities[0].hrv).toBe(84);
-  });
-
-  it("returns empty object for empty input without crashing", () => {
-    expect(sanitizeFixture({})).toEqual({});
-  });
-
-  it("mocks every vendor-prefixed *_id key, preserving the value type", () => {
-    // The leak audit on the operator-generated fixture revealed vendor-id
-    // surfaces (icu_athlete_id, strava_id, external_id, route_id, …)
-    // surviving sanitize because the old rule only matched `id` and
-    // `athlete_id`. The widened rule catches any `*_id` suffix; type is
-    // preserved (string → "99999", number → 12345) so test consumers see
-    // realistic shape. Test inputs below use synthetic placeholder values
-    // — never the operator's real ids — so this file itself can't carry
-    // PII the way the fixture did pre-fix.
+  it("preserves structural `id` patterns (ISO date, zone-bin label)", () => {
     expect(
       sanitizeFixture({
-        icu_athlete_id: "iEXAMPLE",
-        strava_id: "STRAVA-PLACEHOLDER",
-        external_id: "GARMIN-PLACEHOLDER",
-        route_id: "ROUTE-PLACEHOLDER",
-        icu_chat_id: null,
-        oauth_client_id: null,
-        paired_event_id: 11,
+        wellness: [
+          { id: "2026-04-15", weight: 73.4 },
+          { id: "2026-04-16", weight: 73.5 },
+        ],
         activities: [
           {
-            strava_id: "STRAVA-PLACEHOLDER-2",
-            external_id: null,
-            paired_event_id: null,
+            id: 9876,
+            average_watts: 200,
+            icu_zone_times: [
+              { id: "Z1", secs: 600 },
+              { id: "Z2", secs: 1800 },
+              // intervals.icu also emits named cross-zone bins like "SS".
+              { id: "SS", secs: 780 },
+            ],
           },
         ],
       }),
     ).toEqual({
-      icu_athlete_id: "i12345",
-      strava_id: "99999",
-      external_id: "99999",
-      route_id: "99999",
-      icu_chat_id: null,
-      oauth_client_id: null,
-      paired_event_id: 12345,
+      wellness: [
+        { id: "2026-04-15", weight: 73.4 },
+        { id: "2026-04-16", weight: 73.5 },
+      ],
       activities: [
-        { strava_id: "99999", external_id: null, paired_event_id: null },
+        {
+          id: 12345,
+          average_watts: 200,
+          icu_zone_times: [
+            { id: "Z1", secs: 600 },
+            { id: "Z2", secs: 1800 },
+            { id: "SS", secs: 780 },
+          ],
+        },
       ],
     });
   });
 
-  it("mocks vendor-correlation strings (device_name, group, oauth_client_name, timezone) with stable sentinels", () => {
-    // Synthetic placeholders only — no real device names, no real
-    // intervals.icu group fragments, no operator's actual timezone.
+  it("redacts paired_event_id to 12345 (operator's planned-event linkage)", () => {
     expect(
       sanitizeFixture({
-        device_name: "Test Brand Test Model",
-        group: "testgrp1",
-        oauth_client_name: "Test OAuth App",
-        timezone: "Test/Zone",
         activities: [
-          { device_name: "Other Test Device", group: "testgrp2" },
+          { id: 1, type: "Ride", paired_event_id: 8899 },
+          { id: 2, type: "Run", paired_event_id: null },
         ],
       }),
     ).toEqual({
-      device_name: "sanitized-device",
-      group: "00000000",
-      oauth_client_name: "sanitized",
-      timezone: "UTC",
       activities: [
-        { device_name: "sanitized-device", group: "00000000" },
+        { id: 12345, type: "Ride", paired_event_id: 12345 },
+        { id: 12345, type: "Run", paired_event_id: null },
       ],
     });
   });
 
-  it("preserves null/undefined values on *_id keys (doesn't fabricate fake IDs out of thin air)", () => {
-    expect(sanitizeFixture({ strava_id: null, route_id: null })).toEqual({
-      strava_id: null,
-      route_id: null,
-    });
-  });
-
-  it("preserves zone-bin id label ('Z1', 'SS') under the new rules", () => {
-    // Zone bins use `id` not `_id`-suffix, so the existing structural-id
-    // preservation still applies. Regression guard: don't break this.
+  it("sanitizes `name` to the 'sanitized' sentinel (free-text PII via PlannedEventSchema field)", () => {
     expect(
       sanitizeFixture({
-        icu_zone_times: [
-          { id: "Z1", secs: 600 },
-          { id: "SS", secs: 780 },
+        activities: [
+          { id: 1, type: "Ride", name: "Yerzhan's Friday ride near home" },
         ],
       }),
     ).toEqual({
-      icu_zone_times: [
-        { id: "Z1", secs: 600 },
-        { id: "SS", secs: 780 },
+      activities: [{ id: 12345, type: "Ride", name: "sanitized" }],
+    });
+  });
+
+  it("drops the hardware/source/route surfaces the prior denylist missed", () => {
+    // Regression guard for the four leaks the QA review surfaced —
+    // power_meter_serial (Favero hardware serial), power_meter (model),
+    // source (vendor fingerprint), skyline_chart_bytes (route polyline).
+    // None are in any schema, so default-deny drops them. Test inputs use
+    // synthetic placeholders only — never the operator's real values.
+    expect(
+      sanitizeFixture({
+        activities: [
+          {
+            id: 1,
+            type: "Ride",
+            power_meter_serial: "PLACEHOLDER-1234",
+            power_meter: "PLACEHOLDER-BRAND",
+            source: "GARMIN_CONNECT",
+            skyline_chart_bytes: "CAcSPLACEHOLDER==",
+            device_name: "Some Device",
+            timezone: "America/Los_Angeles",
+            athlete_max_hr: 190,
+            lthr: 157,
+          },
+        ],
+      }),
+    ).toEqual({
+      activities: [{ id: 12345, type: "Ride" }],
+    });
+  });
+
+  it("drops GPS coordinate keys (start_latlng, end_latlng) — not in any schema", () => {
+    expect(
+      sanitizeFixture({
+        activities: [
+          {
+            id: 1,
+            type: "Ride",
+            start_latlng: [37.7749, -122.4194],
+            end_latlng: [37.7849, -122.4094],
+            average_watts: 200,
+          },
+        ],
+      }),
+    ).toEqual({
+      activities: [{ id: 12345, type: "Ride", average_watts: 200 }],
+    });
+  });
+
+  it("drops TP-trademark-named keys (ctl/atl/tsb/tss/if/ctlLoad/atlLoad/rampRate/icu_ctl/icu_atl) — excluded from typed surface", () => {
+    expect(
+      sanitizeFixture({
+        wellness: [
+          {
+            id: "2026-04-15",
+            weight: 73.4,
+            ctl: 52.1,
+            atl: 38.4,
+            ctlLoad: 51.9,
+            atlLoad: 38.1,
+            rampRate: 4.7,
+            tsb: 13.7,
+          },
+        ],
+        activities: [{ id: 1, type: "Ride", icu_ctl: 52.1, icu_atl: 38.4, tss: 142 }],
+      }),
+    ).toEqual({
+      wellness: [{ id: "2026-04-15", weight: 73.4 }],
+      activities: [{ id: 12345, type: "Ride" }],
+    });
+  });
+
+  it("preserves ISO date strings verbatim (no jitter — destroys training-pattern signal)", () => {
+    // start_date_local, weekStartDate are schema fields. Date values ride
+    // through; no rounding, no jitter.
+    expect(
+      sanitizeFixture({
+        activities: [{ id: 1, type: "Ride", start_date_local: "2026-04-15T07:30:00" }],
+      }),
+    ).toEqual({
+      activities: [{ id: 12345, type: "Ride", start_date_local: "2026-04-15T07:30:00" }],
+    });
+  });
+
+  it("preserves numeric metrics at full precision (no rounding)", () => {
+    const input = {
+      activities: [
+        {
+          id: 1,
+          type: "Ride",
+          icu_intensity: 0.823456,
+          icu_training_load: 142.7,
+          decoupling: 4.21,
+          average_watts: 218.4,
+        },
+      ],
+      wellness: [{ id: "2026-04-15", weight: 73.42, hrv: 84, bodyFat: 14.6 }],
+    };
+    expect(sanitizeFixture(input)).toEqual({
+      activities: [
+        {
+          id: 12345,
+          type: "Ride",
+          icu_intensity: 0.823456,
+          icu_training_load: 142.7,
+          decoupling: 4.21,
+          average_watts: 218.4,
+        },
+      ],
+      wellness: [{ id: "2026-04-15", weight: 73.42, hrv: 84, bodyFat: 14.6 }],
+    });
+  });
+
+  it("preserves the renamed fitness/fatigue fields (anti-corruption layer's emission target)", () => {
+    expect(
+      sanitizeFixture({
+        wellness: [
+          {
+            id: "2026-04-15",
+            fitness: 52.1,
+            fatigue: 38.4,
+            fitnessContribution: 51.9,
+            fatigueContribution: 38.1,
+            weeklyFitnessChange: 4.7,
+          },
+        ],
+        activities: [
+          { id: 1, type: "Ride", fitnessAtEnd: 52.1, fatigueAtEnd: 38.4 },
+        ],
+      }),
+    ).toEqual({
+      wellness: [
+        {
+          id: "2026-04-15",
+          fitness: 52.1,
+          fatigue: 38.4,
+          fitnessContribution: 51.9,
+          fatigueContribution: 38.1,
+          weeklyFitnessChange: 4.7,
+        },
+      ],
+      activities: [
+        { id: 12345, type: "Ride", fitnessAtEnd: 52.1, fatigueAtEnd: 38.4 },
       ],
     });
+  });
+
+  it("preserves sportInfo[].eftp — load-bearing for tools/fetch-real-athlete.ts ftp_history derivation", () => {
+    // sportInfo is not in any named schema but the deriver reads it.
+    // Explicit EXTRA_ALLOW entry — keep this passing or update the comment.
+    expect(
+      sanitizeFixture({
+        wellness: [
+          {
+            id: "2026-04-15",
+            weight: 73.4,
+            sportInfo: [{ type: "Ride", eftp: 285 }],
+          },
+        ],
+      }),
+    ).toEqual({
+      wellness: [
+        {
+          id: "2026-04-15",
+          weight: 73.4,
+          sportInfo: [{ type: "Ride", eftp: 285 }],
+        },
+      ],
+    });
+  });
+
+  it("returns empty object for empty input without crashing", () => {
+    expect(sanitizeFixture({})).toEqual({});
   });
 
   it("preserves null and primitive top-level values without crashing", () => {
@@ -266,44 +284,120 @@ describe("sanitizeFixture", () => {
     expect(sanitizeFixture([])).toEqual([]);
   });
 
+  it("filters `source` to FtpHistoryPoint enum values; activity-row vendor values are dropped", () => {
+    // FtpHistoryPointSchema allowlists `source` for "test"/"estimate". Real
+    // intervals.icu activities carry an unrelated `source: "GARMIN_CONNECT"`
+    // / "WAHOO" / etc. — operator-identifying. Value-level transform filters
+    // non-enum values out so activity rows lose their head-unit fingerprint
+    // while ftp_history rows keep theirs.
+    expect(
+      sanitizeFixture({
+        ftp_history: [{ date: "2026-04-15", ftp: 285, source: "test" }],
+        activities: [{ id: 1, type: "Ride", source: "GARMIN_CONNECT" }],
+      }),
+    ).toEqual({
+      ftp_history: [{ date: "2026-04-15", ftp: 285, source: "test" }],
+      activities: [{ id: 12345, type: "Ride" }],
+    });
+  });
+
   it("is deterministic — same input twice produces byte-identical output", () => {
     const dirty = {
-      id: 9876543,
-      ctl: 52.1,
       activities: [
         {
           id: 1,
+          type: "Ride",
           name: "ride",
           start_latlng: [37, -122],
           icu_atl: 38,
-          contact: "x@y.z",
+          power_meter_serial: "PLACEHOLDER",
         },
       ],
     };
-
     const a = JSON.stringify(sanitizeFixture(dirty));
     const b = JSON.stringify(sanitizeFixture(dirty));
     expect(a).toBe(b);
   });
 });
 
+describe("ALLOWED_FIXTURE_KEYS", () => {
+  it("is exported as a ReadonlySet (used by the load-fixture PII regression scanner)", () => {
+    expect(ALLOWED_FIXTURE_KEYS).toBeInstanceOf(Set);
+    expect(typeof ALLOWED_FIXTURE_KEYS.has).toBe("function");
+  });
+
+  it("includes envelope top-level keys (activities, wellness, ftp_history)", () => {
+    expect(ALLOWED_FIXTURE_KEYS.has("activities")).toBe(true);
+    expect(ALLOWED_FIXTURE_KEYS.has("wellness")).toBe(true);
+    expect(ALLOWED_FIXTURE_KEYS.has("ftp_history")).toBe(true);
+  });
+
+  it("includes the renamed fitness/fatigue fields (ADR-0012 anti-corruption layer emissions)", () => {
+    for (const k of [
+      "fitness",
+      "fatigue",
+      "fitnessContribution",
+      "fatigueContribution",
+      "weeklyFitnessChange",
+      "fitnessAtEnd",
+      "fatigueAtEnd",
+    ]) {
+      expect(ALLOWED_FIXTURE_KEYS.has(k)).toBe(true);
+    }
+  });
+
+  it("excludes TP-trademarked source field names (rename layer strips them before sanitize sees them)", () => {
+    for (const banned of ["ctl", "atl", "tsb", "tss", "if", "ctlLoad", "atlLoad", "rampRate", "icu_ctl", "icu_atl"]) {
+      expect(ALLOWED_FIXTURE_KEYS.has(banned)).toBe(false);
+    }
+  });
+
+  it("excludes the operator-identifying hardware fields the prior denylist missed", () => {
+    // Regression guard — explicitly assert these don't leak back into the
+    // allowlist via a schema change without justification. Note: `source`
+    // is intentionally allowlisted because FtpHistoryPointSchema names it
+    // (z.enum(["test","estimate"])). The value-level transform in
+    // sanitize-fixture.ts filters non-enum `source` values (e.g.
+    // "GARMIN_CONNECT" on an activity row) — verified by the sanitizeFixture
+    // tests above.
+    for (const banned of [
+      "power_meter_serial",
+      "power_meter",
+      "skyline_chart_bytes",
+      "device_name",
+      "athlete_id",
+      "athlete_max_hr",
+      "lthr",
+      "icu_athlete_id",
+      "strava_id",
+      "external_id",
+      "route_id",
+      "oauth_client_id",
+      "oauth_client_name",
+      "group",
+      "timezone",
+    ]) {
+      expect(ALLOWED_FIXTURE_KEYS.has(banned)).toBe(false);
+    }
+  });
+});
+
 describe("sanitizeFixtureWithSummary", () => {
-  it("returns the sanitized data plus a count of dropped TP-trademark + GPS keys and replaced fields", () => {
+  it("returns the sanitized data plus counts of dropped + transformed keys", () => {
     const dirty = {
-      id: 11,
-      ctl: 50,
-      atl: 38,
-      tsb: 12,
+      athlete_id: "operator-uuid",
       activities: [
         {
           id: 1,
-          ctl: 51,
+          type: "Ride",
+          ctl: 52,
           start_latlng: [37, -122],
           name: "morning ride",
-          contact: "x@y.z",
+          power_meter_serial: "PLACEHOLDER",
         },
         {
           id: 2,
+          type: "Ride",
           atl: 37,
           end_latlng: [38, -123],
           name: "evening ride",
@@ -313,47 +407,18 @@ describe("sanitizeFixtureWithSummary", () => {
 
     const { data, summary } = sanitizeFixtureWithSummary(dirty);
 
-    // The data is identical to what sanitizeFixture would have produced.
     expect(data).toEqual(sanitizeFixture(dirty));
 
-    // Counts: ctl appears 2x (top + activities[0]), atl appears 2x, tsb 1x.
-    expect(summary.droppedTpKeys.ctl).toBe(2);
-    expect(summary.droppedTpKeys.atl).toBe(2);
-    expect(summary.droppedTpKeys.tsb).toBe(1);
-    // GPS: start_latlng 1x, end_latlng 1x.
-    expect(summary.droppedGpsKeys.start_latlng).toBe(1);
-    expect(summary.droppedGpsKeys.end_latlng).toBe(1);
-    // Replaced: 3 ids → 12345, 2 free-text names → "sanitized", 1 email.
-    expect(summary.replacedIds).toBe(3);
-    expect(summary.replacedFreeText.name).toBe(2);
-    expect(summary.replacedEmails).toBe(1);
-    // No vendor-correlation strings in this input.
-    expect(summary.replacedVendor).toEqual({});
-  });
-
-  it("counts vendor-prefixed *_id redactions in replacedIds and vendor-correlation strings in replacedVendor", () => {
-    // Synthetic placeholders only — never the operator's real ids.
-    const dirty = {
-      icu_athlete_id: "iEXAMPLE",
-      strava_id: "STRAVA-PLACEHOLDER-A",
-      device_name: "Test Brand A",
-      group: "testgrpA",
-      activities: [
-        {
-          strava_id: "STRAVA-PLACEHOLDER-B",
-          device_name: "Test Brand B",
-          paired_event_id: 99,
-        },
-        { strava_id: null, device_name: "Test Brand A" },
-      ],
-    };
-
-    const { summary } = sanitizeFixtureWithSummary(dirty);
-
-    // 1 (icu_athlete_id) + 1 (top strava_id) + 1 (acts[0].strava_id) + 1 (paired_event_id) = 4.
-    // acts[1].strava_id is null and doesn't increment.
-    expect(summary.replacedIds).toBe(4);
-    expect(summary.replacedVendor.device_name).toBe(3);
-    expect(summary.replacedVendor.group).toBe(1);
+    // Dropped: athlete_id (×1 top), ctl (×1), start_latlng (×1),
+    // power_meter_serial (×1), atl (×1), end_latlng (×1).
+    expect(summary.droppedKeys.athlete_id).toBe(1);
+    expect(summary.droppedKeys.ctl).toBe(1);
+    expect(summary.droppedKeys.atl).toBe(1);
+    expect(summary.droppedKeys.start_latlng).toBe(1);
+    expect(summary.droppedKeys.end_latlng).toBe(1);
+    expect(summary.droppedKeys.power_meter_serial).toBe(1);
+    // Transformed: id ×2, name ×2.
+    expect(summary.transformedKeys.id).toBe(2);
+    expect(summary.transformedKeys.name).toBe(2);
   });
 });

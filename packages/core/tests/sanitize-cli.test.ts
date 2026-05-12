@@ -34,8 +34,7 @@ describe("sanitize-fixture CLI — main()", () => {
     writeFileSync(
       inputPath,
       JSON.stringify({
-        id: 9876543,
-        activity: { id: 1, name: "morning ride", kj: 1180 },
+        activities: [{ id: 1, type: "Ride", name: "morning ride", kj: 1180 }],
       }),
     );
 
@@ -44,27 +43,22 @@ describe("sanitize-fixture CLI — main()", () => {
     expect(exit).toBe(0);
     const written = JSON.parse(readFileSync(join(outputDir, "tracer-output.json"), "utf-8"));
     expect(written).toEqual({
-      id: 12345,
-      activity: { id: 12345, name: "sanitized", kj: 1180 },
+      activities: [{ id: 12345, type: "Ride", name: "sanitized", kj: 1180 }],
     });
   });
 
-  it("prints a summary listing dropped GPS keys and replaced fields; TP keys are gone before sanitize (rename strips them first)", async () => {
+  it("prints a summary listing dropped + transformed keys", async () => {
     const { inputDir, outputDir } = makeTmpDirs();
     const inputPath = join(inputDir, "raw.json");
     writeFileSync(
       inputPath,
       JSON.stringify({
-        id: 1,
+        athlete_id: "operator-uuid",
         activities: [
-          {
-            id: 2,
-            start_latlng: [37, -122],
-            description: "morning ride",
-          },
-          { id: 3, end_latlng: [38, -123], notes: "x" },
+          { id: 2, type: "Ride", start_latlng: [37, -122], description: "morning" },
+          { id: 3, type: "Run", end_latlng: [38, -123], notes: "x" },
         ],
-        wellness: [{ ctl: 52, atl: 39, contact: "x@y.z" }],
+        wellness: [{ id: "2026-05-11", ctl: 52, atl: 39 }],
       }),
     );
     const lines: string[] = [];
@@ -77,19 +71,41 @@ describe("sanitize-fixture CLI — main()", () => {
     expect(exit).toBe(0);
     const joined = lines.join("\n");
     expect(joined).toMatch(/Wrote sanitized fixture: .+summary-output\.json/);
-    // After rename, the sanitize step sees zero TP keys to drop — the
-    // "Dropped TP-trademark keys" line is absent on properly-shaped data.
-    expect(joined).not.toMatch(/Dropped TP-trademark keys/);
-    expect(joined).toMatch(/Dropped GPS keys.*start_latlng \(×1\)/);
-    expect(joined).toMatch(/Dropped GPS keys.*end_latlng \(×1\)/);
-    expect(joined).toMatch(/Replaced 3 id-shaped fields → mock; 1 emails → redacted/);
-    expect(joined).toMatch(/Replaced free-text PII fields.*description.*notes/);
+    // Default-deny drops athlete_id + GPS + description + notes; TP keys
+    // are dropped by rename layer before sanitize so they don't show here.
+    expect(joined).toMatch(/Dropped \d+ key occurrence/);
+    expect(joined).toMatch(/athlete_id/);
+    expect(joined).toMatch(/start_latlng/);
+    expect(joined).toMatch(/end_latlng/);
+    // Transformed: 3 ids redacted (2 activities + 1 wellness; wellness id is a
+    // YYYY-MM-DD which is preserved structurally but still counts as a transform).
+    expect(joined).toMatch(/Transformed:.*id \(×3\)/);
+  });
+
+  it("rejects unknown flags with non-zero exit and a stderr message listing known flags", async () => {
+    const { inputDir, outputDir } = makeTmpDirs();
+    const inputPath = join(inputDir, "raw.json");
+    writeFileSync(inputPath, JSON.stringify({ activities: [] }));
+    const errs: string[] = [];
+
+    // Operator typo: `--force-overrride` instead of `--force`. Prior CLI
+    // silently swallowed unknown flags; now it errors out so the operator
+    // sees the typo before the file is (or isn't) written.
+    const exit = await main(
+      [inputPath, "typo-output", "--force-overrride"],
+      { outputRoot: outputDir, err: (m) => errs.push(m) },
+    );
+
+    expect(exit).not.toBe(0);
+    const errMsg = errs.join("\n");
+    expect(errMsg).toMatch(/unknown flag.*--force-overrride/);
+    expect(errMsg).toMatch(/known flags:.*--force/);
   });
 
   it("refuses to overwrite an existing fixture without --force; output is byte-identical", async () => {
     const { inputDir, outputDir } = makeTmpDirs();
     const inputPath = join(inputDir, "raw.json");
-    writeFileSync(inputPath, JSON.stringify({ id: 1 }));
+    writeFileSync(inputPath, JSON.stringify({ activities: [{ id: 1, type: "Ride" }] }));
 
     // First run with --force → succeeds, writes file.
     await main([inputPath, "guarded-output", "--force"], { outputRoot: outputDir });
@@ -98,7 +114,7 @@ describe("sanitize-fixture CLI — main()", () => {
     const firstMtimeNs = statSync(outputPath).mtimeNs;
 
     // Second run WITHOUT --force, with mutated input → must refuse.
-    writeFileSync(inputPath, JSON.stringify({ id: 2 }));
+    writeFileSync(inputPath, JSON.stringify({ activities: [{ id: 2, type: "Run" }] }));
     const errs: string[] = [];
     const exit = await main([inputPath, "guarded-output"], {
       outputRoot: outputDir,
@@ -115,20 +131,26 @@ describe("sanitize-fixture CLI — main()", () => {
   it("with --force, overwrites the existing fixture", async () => {
     const { inputDir, outputDir } = makeTmpDirs();
     const inputPath = join(inputDir, "raw.json");
-    writeFileSync(inputPath, JSON.stringify({ id: 1 }));
+    writeFileSync(inputPath, JSON.stringify({ activities: [{ id: 1, type: "Ride" }] }));
 
     await main([inputPath, "force-output", "--force"], { outputRoot: outputDir });
     const outputPath = join(outputDir, "force-output.json");
     const firstContent = readFileSync(outputPath, "utf-8");
 
     // Second run, mutated input, --force → overwrites.
-    writeFileSync(inputPath, JSON.stringify({ id: 2, weight: 73.4 }));
+    writeFileSync(
+      inputPath,
+      JSON.stringify({ activities: [{ id: 2, type: "Run" }], wellness: [{ id: "2026-05-11", weight: 73.4 }] }),
+    );
     const exit = await main([inputPath, "force-output", "--force"], { outputRoot: outputDir });
 
     expect(exit).toBe(0);
     const secondContent = readFileSync(outputPath, "utf-8");
     expect(secondContent).not.toBe(firstContent);
-    expect(JSON.parse(secondContent)).toEqual({ id: 12345, weight: 73.4 });
+    expect(JSON.parse(secondContent)).toEqual({
+      activities: [{ id: 12345, type: "Run" }],
+      wellness: [{ id: "2026-05-11", weight: 73.4 }],
+    });
   });
 
   it("renames TP wellness fields to plain-English in the CLI output", async () => {
@@ -183,6 +205,7 @@ describe("sanitize-fixture CLI — main()", () => {
         activities: [
           {
             id: "i12345",
+            type: "Ride",
             icu_ctl: 50.5,
             icu_atl: 38.2,
             start_date_local: "2026-05-11T08:00:00",
@@ -215,8 +238,8 @@ describe("sanitize-fixture CLI — main()", () => {
       inputPath,
       JSON.stringify({
         activities: [
-          { id: "i1", icu_ctl: 50, icu_atl: 38, start_date_local: "2026-05-11" },
-          { id: "i2", icu_ctl: 51, start_date_local: "2026-05-10" },
+          { id: "i1", type: "Ride", icu_ctl: 50, icu_atl: 38, start_date_local: "2026-05-11" },
+          { id: "i2", type: "Ride", icu_ctl: 51, start_date_local: "2026-05-10" },
         ],
         wellness: [
           {
@@ -262,7 +285,7 @@ describe("sanitize-fixture CLI — main()", () => {
       inputPath,
       JSON.stringify({
         activities: [
-          { id: "i9876543", start_date_local: "2026-05-11T08:00:00" },
+          { id: "i9876543", type: "Ride", start_date_local: "2026-05-11T08:00:00" },
         ],
         wellness: [
           { id: "2026-05-11", weeklyAggregates: { ctl: 50 } },

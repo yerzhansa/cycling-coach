@@ -12,6 +12,7 @@ import { z } from "zod";
 import { ActivitySchema } from "../src/reference/schemas/inputs.js";
 import { TP_DENYLIST_FIELDS } from "../src/reference/trademark-policy.js";
 import { GoldenFixtureSchema, loadFixture } from "./helpers/load-fixture.js";
+import { ALLOWED_FIXTURE_KEYS } from "./helpers/sanitize-fixture.js";
 
 const tmpRoot = mkdtempSync(join(tmpdir(), "reference-load-fixture-"));
 afterAll(() => {
@@ -135,95 +136,79 @@ describe("loadFixture against committed golden fixtures", () => {
     }
   });
 
-  // ─── PII regression scanner ──────────────────────────────────────────
+  // ─── PII regression scanner — single allowlist assertion ─────────────
   //
-  // Walk the committed fixture and assert that every `*_id` field, plus
-  // the vendor-correlation keys, holds the mock sentinel (or null) —
-  // never a real-shaped value.
+  // Walk the committed fixture and assert every key appears in
+  // ALLOWED_FIXTURE_KEYS (the union of schema-derived names + the small
+  // EXTRA_ALLOW list in tests/helpers/sanitize-fixture.ts).
   //
-  // Known mock sentinels:
-  //   icu_athlete_id → "i12345"            (preserves "i<digits>" form)
-  //   <vendor>_id    → "99999" or 12345    (type preserved)
-  //   id             → 12345 or structural (date / zone label)
-  //   device_name    → "sanitized-device"
-  //   group          → "00000000"
-  //   oauth_client_name → "sanitized"
-  //   timezone       → "UTC"
-  describe("realistic-athlete — PII regression scanner", () => {
-    type AnyObj = Record<string, unknown>;
-    function walkRows(): AnyObj[] {
+  // Why one assertion instead of a growing list of negative checks: the
+  // prior denylist-style scanner only caught fields it explicitly named
+  // (`*_id`, `device_name`, `group`, `timezone`, `oauth_client_name`). It
+  // missed power_meter_serial, power_meter, source, skyline_chart_bytes,
+  // and any future operator-identifying field intervals.icu adds. The
+  // allowlist assertion is structural: a new leak class can't sneak past
+  // it because the default action is fail.
+  //
+  // No byte-level needle scan: encoding the operator's known-leak strings
+  // here would re-introduce the exact PII this fixture-regen was meant to
+  // remove. The structural assertion covers the surface without naming
+  // leaked values.
+  describe("realistic-athlete — PII regression scanner (allowlist)", () => {
+    it("every key in the committed fixture appears in ALLOWED_FIXTURE_KEYS", () => {
       const data = loadFixture("golden/realistic-athlete", GoldenFixtureSchema);
-      const out: AnyObj[] = [];
+      const offending: string[] = [];
+      const recurse = (v: unknown, path: string): void => {
+        if (Array.isArray(v)) {
+          v.forEach((item, i) => recurse(item, `${path}[${i}]`));
+          return;
+        }
+        if (v !== null && typeof v === "object") {
+          for (const [key, child] of Object.entries(v as Record<string, unknown>)) {
+            const childPath = path === "" ? key : `${path}.${key}`;
+            if (!ALLOWED_FIXTURE_KEYS.has(key)) {
+              offending.push(`${childPath} (key not in allowlist)`);
+            }
+            recurse(child, childPath);
+          }
+        }
+      };
+      recurse(data, "");
+      expect(
+        offending,
+        `Fixture carries keys outside ALLOWED_FIXTURE_KEYS — likely PII leak.\n` +
+          `Either regenerate the fixture under the current sanitizer or, if the key is genuinely load-bearing test signal,\n` +
+          `add it to EXTRA_ALLOW in tests/helpers/sanitize-fixture.ts with a one-line justification.\n` +
+          `Offending paths:\n  ${offending.slice(0, 20).join("\n  ")}${offending.length > 20 ? `\n  …+${offending.length - 20} more` : ""}`,
+      ).toEqual([]);
+    });
+
+    it("every `*_id` value is either null/undefined or the redacted-id mock (12345 / structural date / Z-label)", () => {
+      // Secondary check: even allowlisted *_id keys (only paired_event_id
+      // under current schemas) must hold the mock sentinel, never a
+      // real-shaped value. Future schema additions that introduce another
+      // *_id key would also be caught here.
+      const data = loadFixture("golden/realistic-athlete", GoldenFixtureSchema);
+      const allowedIdValues = new Set<unknown>([12345]);
       const recurse = (v: unknown): void => {
-        if (Array.isArray(v)) v.forEach(recurse);
-        else if (v !== null && typeof v === "object") {
-          out.push(v as AnyObj);
-          for (const child of Object.values(v as AnyObj)) recurse(child);
+        if (Array.isArray(v)) {
+          v.forEach(recurse);
+          return;
+        }
+        if (v !== null && typeof v === "object") {
+          for (const [key, child] of Object.entries(v as Record<string, unknown>)) {
+            if (key.endsWith("_id") && child !== null && child !== undefined) {
+              expect(
+                allowedIdValues.has(child),
+                `${key}=${JSON.stringify(child)} is not the mock sentinel — possible PII leak.`,
+              ).toBe(true);
+            }
+            recurse(child);
+          }
         }
       };
       recurse(data);
-      return out;
-    }
-    const allowedIdMocks = new Set<unknown>([12345, "99999", "i12345"]);
-
-    it("no `*_id` key holds a real-shaped value — only null, undefined, or the mock sentinels", () => {
-      for (const row of walkRows()) {
-        for (const [key, v] of Object.entries(row)) {
-          if (!key.endsWith("_id")) continue;
-          if (v === null || v === undefined) continue;
-          expect(
-            allowedIdMocks.has(v),
-            `${key}=${JSON.stringify(v)} is not a mock sentinel — possible PII leak. Allowed: ${[...allowedIdMocks].join(",")}`,
-          ).toBe(true);
-        }
-      }
     });
-
-    it("no activity carries a real device_name (must be 'sanitized-device' if present)", () => {
-      for (const row of walkRows()) {
-        if ("device_name" in row && typeof row.device_name === "string") {
-          expect(row.device_name).toBe("sanitized-device");
-        }
-      }
-    });
-
-    it("no activity carries a real `group` fragment (must be '00000000' if present)", () => {
-      for (const row of walkRows()) {
-        if ("group" in row && typeof row.group === "string") {
-          expect(row.group).toBe("00000000");
-        }
-      }
-    });
-
-    it("no row carries a real timezone (must be 'UTC' or null if present)", () => {
-      for (const row of walkRows()) {
-        if ("timezone" in row) {
-          const tz = row.timezone;
-          if (tz === null) continue;
-          expect(tz).toBe("UTC");
-        }
-      }
-    });
-
-    it("no row carries a real oauth_client_name (must be 'sanitized' or null)", () => {
-      for (const row of walkRows()) {
-        if ("oauth_client_name" in row) {
-          const name = row.oauth_client_name;
-          if (name === null) continue;
-          expect(name).toBe("sanitized");
-        }
-      }
-    });
-
-    // No byte-level needle scan: encoding the operator's known-leak strings
-    // here would re-introduce the exact PII this fixture-regen was meant to
-    // remove. The structural assertions above (every `*_id` key is a mock
-    // sentinel, every device_name is "sanitized-device", every group is
-    // "00000000", timezone is "UTC" or null, oauth_client_name is
-    // "sanitized" or null) cover the same surface without naming the
-    // leaked values. If a future regression surfaces a new leak class,
-    // extend the structural scans — never add the leaked plaintext to a
-    // checked-in file.
   });
 
   it("loads synthetic/has-intervals-placeholder — ride whose icu_intervals is a single RECOVERY placeholder (section-11 v3.106 regression case)", () => {

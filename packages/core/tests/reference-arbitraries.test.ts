@@ -188,6 +188,30 @@ describe("cross-field constraints", () => {
       { numRuns: 1000 },
     );
   });
+
+  it("arbitraryActivity: pa_hr is null/undefined when average_heartrate is null", () => {
+    fc.assert(
+      fc.property(arbitraryActivity, (a) => {
+        if (a.average_heartrate === null) {
+          return a.pa_hr === null || a.pa_hr === undefined;
+        }
+        return true;
+      }),
+      { numRuns: 1000 },
+    );
+  });
+
+  it("arbitraryActivity: icu_efficiency_factor is null/undefined when average_heartrate is null (watts/HR ratio is undefined without HR)", () => {
+    fc.assert(
+      fc.property(arbitraryActivity, (a) => {
+        if (a.average_heartrate === null) {
+          return a.icu_efficiency_factor === null || a.icu_efficiency_factor === undefined;
+        }
+        return true;
+      }),
+      { numRuns: 1000 },
+    );
+  });
 });
 
 describe("fc.option discipline", () => {
@@ -202,6 +226,30 @@ describe("fc.option discipline", () => {
     );
     // fc.option default produces nil ~10% of the time → expect ~100 omitted in 1000 runs.
     // Generous lower bound: 20 catches "always present" without flaking on randomness.
+    expect(omitted).toBeGreaterThan(20);
+  });
+
+  it("arbitraryActivity sometimes produces icu_training_load: undefined (schema marks it .optional(); WeightTraining ships without it)", () => {
+    let omitted = 0;
+    fc.assert(
+      fc.property(arbitraryActivity, (a) => {
+        if (a.icu_training_load === undefined) omitted++;
+        return true;
+      }),
+      { numRuns: 1000 },
+    );
+    expect(omitted).toBeGreaterThan(20);
+  });
+
+  it("arbitraryActivity sometimes produces icu_intensity: undefined", () => {
+    let omitted = 0;
+    fc.assert(
+      fc.property(arbitraryActivity, (a) => {
+        if (a.icu_intensity === undefined) omitted++;
+        return true;
+      }),
+      { numRuns: 1000 },
+    );
     expect(omitted).toBeGreaterThan(20);
   });
 });
@@ -341,22 +389,22 @@ describe("arbitraryPairedActivityList", () => {
 });
 
 describe("shrinking", () => {
-  it("induced failure shrinks toward a minimal counterexample (icu_training_load)", () => {
-    // Property: every activity has icu_training_load < 1_000_000. Trivially true,
-    // but we falsify it to observe shrinking. fast-check should shrink the
-    // counterexample's icu_training_load downward (not all the way to 0 — the
-    // float arbitrary's lower bound is 0 — but markedly lower than the
-    // generated-and-failing initial value).
+  it("induced failure shrinks toward a minimal counterexample (moving_time)", () => {
+    // We falsify a trivially-true property to observe shrinking. fast-check
+    // should shrink the counterexample's moving_time downward (not all the
+    // way to 0 — the float arbitrary's lower bound is 1 — but markedly lower
+    // than the typical mid-range generated value).
+    //
+    // moving_time chosen because it's required (always a number in [1, 14400]).
+    // icu_training_load is .optional() now, so shrinking can produce
+    // `undefined` and the assertion wouldn't be comparable.
     const out = fc.check(
-      fc.property(arbitraryActivity, (a) => a.icu_training_load < -1),
+      fc.property(arbitraryActivity, (a) => a.moving_time < -1),
       { numRuns: 50 },
     );
 
     expect(out.failed).toBe(true);
     const shrunk = out.counterexample![0];
-    // The arbitrary generates icu_training_load in [0, 500]. Shrunk value
-    // should be at the floor (0) or very close to it — strictly less than
-    // the typical mid-range generated value (250).
-    expect(shrunk.icu_training_load).toBeLessThan(50);
+    expect(shrunk.moving_time).toBeLessThan(50);
   });
 });

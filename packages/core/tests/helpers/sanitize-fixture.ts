@@ -1,58 +1,113 @@
-// Privacy-denylist transform for fixture JSON. Redacts identifiers, emails,
-// free-text PII, GPS coordinates, and TP-trademark-named keys. Preserves all
-// numeric signal verbatim — metric tests rely on the realistic distribution
-// of weights/HR/power/load. No date jitter (destroys temporal training
-// structure). No weight rounding (0.1 kg precision is meaningful test signal).
+// Allowlist-based privacy transform for fixture JSON. Default-deny: every
+// key not in the schema-derived allowlist (plus a small EXTRA_ALLOW list of
+// structural extras) is dropped. Allowed keys ride through verbatim; a few
+// have value-level transforms (id structural-pattern preserve, paired_event_id
+// redact, name sanitize). Numeric signal is preserved at full precision —
+// the realistic distribution of weights/HR/power/load is load-bearing test
+// signal. ISO date strings ride through verbatim (no jitter — destroys
+// temporal training structure that downstream metrics consume).
 //
-// The seed option is reserved for future per-row id rewriting (e.g.,
-// preserving referential integrity between paired_event_id and event ids);
-// current rules are constant-replacement so the seed is unused today.
+// Why allowlist instead of denylist: the prior denylist defaulted to
+// "include" and missed several operator-identifying fields the schemas
+// don't name (power_meter_serial, source, skyline_chart_bytes, etc.). The
+// allowlist inverts the bias — the next intervals.icu field that ships,
+// or the next field a future operator's account has that today's doesn't,
+// is default-dropped rather than default-leaked.
 
-import { TP_DENYLIST_FIELDS } from "../../src/reference/trademark-policy.js";
+import {
+  ActivitySchema,
+  FtpHistoryPointSchema,
+  IcuIntervalRepSchema,
+  PlannedEventSchema,
+  WeeklyRollupSchema,
+  WellnessDaySchema,
+  ZoneTimesSchema,
+} from "../../src/reference/schemas/inputs.js";
 
-const ID_KEYS = new Set(["id", "athlete_id"]);
-const FREE_TEXT_KEYS = new Set(["name", "description", "notes", "nickname", "bio"]);
-const GPS_KEYS = new Set(["start_latlng", "end_latlng"]);
-// Structural `id` patterns that ride through redaction unmodified:
+// Mechanically derived from the project's input schemas. Adding a field to
+// a schema auto-allows it in the sanitizer — keeps the privacy boundary
+// aligned with what metrics consume by name.
+const SCHEMA_DERIVED_ALLOW: ReadonlySet<string> = new Set([
+  ...Object.keys(ActivitySchema.shape),
+  ...Object.keys(WellnessDaySchema.shape),
+  ...Object.keys(FtpHistoryPointSchema.shape),
+  ...Object.keys(IcuIntervalRepSchema.shape),
+  ...Object.keys(WeeklyRollupSchema.shape),
+  ...Object.keys(PlannedEventSchema.shape),
+  ...Object.keys(ZoneTimesSchema.shape),
+]);
+
+// Load-bearing structural keys the schemas don't enumerate. Each entry has
+// a one-line justification — review-checklist for future additions.
+const EXTRA_ALLOW: ReadonlySet<string> = new Set([
+  // Top-level envelope arrays in GoldenFixtureSchema.
+  "activities",
+  "wellness",
+  "ftp_history",
+  // ZoneTimeEntrySchema is a union (number | {id, secs}); .shape doesn't
+  // enumerate union members. `id` is already in SCHEMA_DERIVED_ALLOW via
+  // Activity/Wellness; name `secs` here.
+  "secs",
+  // tools/fetch-real-athlete.ts derives ftp_history from sportInfo[].eftp
+  // (cycling sport types). Not in named schemas but load-bearing for the
+  // deriver pipeline. `type` is in ActivitySchema; just name the others.
+  "sportInfo",
+  "eftp",
+]);
+
+/** Union of every key permitted to appear anywhere in a sanitized fixture.
+ *  Exported so the load-fixture PII regression scanner can assert the
+ *  committed fixture carries nothing outside this set. */
+export const ALLOWED_FIXTURE_KEYS: ReadonlySet<string> = new Set([
+  ...SCHEMA_DERIVED_ALLOW,
+  ...EXTRA_ALLOW,
+]);
+
+// `id` requires context-aware redaction. Two structural patterns ride through
+// unmodified because they're load-bearing test signal, not PII:
 //   - YYYY-MM-DD wellness date
 //   - Short uppercase-prefixed label (zone bins like "Z1"/"Z10"/"SS"/"WORK")
-// Activity ids ("i146622609" or 17654321) and athlete ids are lowercase-
-// or numeric-prefixed and longer than 4 chars, so they fall through to
-// the redact branch.
+// Everything else under the `id` key gets redacted to ID_NUMERIC_MOCK.
 const PRESERVED_ID_RE = /^(?:\d{4}-\d{2}-\d{2}|[A-Z][A-Za-z0-9]{0,3})$/;
-const TP_KEYS = new Set<string>(TP_DENYLIST_FIELDS);
-const EMAIL_RE = /.+@.+\..+/;
-
-// Vendor-correlation strings that aren't IDs but still re-identify the
-// operator (model name, intervals.icu group handle, app name, timezone
-// — geolocation hint). Mocked with stable sentinels that preserve type so
-// test consumers reading these fields see the right *shape* without the
-// real value. `timezone: "UTC"` is the safest non-revealing default;
-// `group: "00000000"` matches the 8-char hex-fragment intervals.icu emits.
-const VENDOR_STRING_MOCK: Record<string, string> = {
-  device_name: "sanitized-device",
-  group: "00000000",
-  oauth_client_name: "sanitized",
-  timezone: "UTC",
-};
-
-// Specific mock for `icu_athlete_id` — the API form is "i<digits>" and
-// preserving that shape lets consuming tests exercise the same parse
-// branch a real id would hit. Generic `_id$` redactions below preserve
-// type (string → ID_STRING_MOCK, number → ID_NUMERIC_MOCK).
-const ICU_ATHLETE_ID_MOCK = "i12345";
-const ID_STRING_MOCK = "99999";
 const ID_NUMERIC_MOCK = 12345;
 
-function mockSuffixId(key: string, v: unknown): unknown {
-  if (v === null || v === undefined) return v;
-  if (key === "icu_athlete_id") return ICU_ATHLETE_ID_MOCK;
-  if (typeof v === "string") return ID_STRING_MOCK;
-  if (typeof v === "number") return ID_NUMERIC_MOCK;
-  // Unknown shape (boolean / array / object) — fall back to the numeric
-  // sentinel rather than ride through; an ID field shouldn't carry these.
-  return ID_NUMERIC_MOCK;
-}
+type Transform = (value: unknown) => unknown;
+
+// `source` is in FtpHistoryPointSchema (z.enum(["test", "estimate"])) but
+// real intervals.icu activities carry an unrelated `source` field naming
+// the head-unit vendor ("GARMIN_CONNECT", "WAHOO") — operator-identifying.
+// Filter to the legitimate enum values; everything else drops.
+const FTP_HISTORY_SOURCE_VALUES: ReadonlySet<unknown> = new Set(["test", "estimate"]);
+
+const TRANSFORMS: ReadonlyMap<string, Transform> = new Map<string, Transform>([
+  [
+    "id",
+    (v) => {
+      if (v === null || v === undefined) return v;
+      if (typeof v === "string" && PRESERVED_ID_RE.test(v)) return v;
+      return ID_NUMERIC_MOCK;
+    },
+  ],
+  [
+    "paired_event_id",
+    (v) => (v === null || v === undefined ? v : ID_NUMERIC_MOCK),
+  ],
+  [
+    "name",
+    (v) => (v === null || v === undefined ? v : "sanitized"),
+  ],
+  [
+    "source",
+    (v) => {
+      if (v === null || v === undefined) return v;
+      if (FTP_HISTORY_SOURCE_VALUES.has(v)) return v;
+      // Not a legitimate FtpHistoryPoint source — likely an activity-level
+      // vendor fingerprint. Drop the value (return undefined so the walker
+      // omits the key entirely, the way default-deny treats unknown keys).
+      return undefined;
+    },
+  ],
+]);
 
 export interface SanitizeOptions {
   /** Reserved for deterministic per-row id rewriting (unused today). */
@@ -60,17 +115,10 @@ export interface SanitizeOptions {
 }
 
 export interface SanitizeSummary {
-  droppedTpKeys: Record<string, number>;
-  droppedGpsKeys: Record<string, number>;
-  replacedFreeText: Record<string, number>;
-  /** Counts every redacted ID — top-level `id`, `athlete_id`, and any
-   *  vendor-prefixed key matching `*_id` (icu_athlete_id, strava_id,
-   *  external_id, paired_event_id, route_id, oauth_client_id, …). */
-  replacedIds: number;
-  replacedEmails: number;
-  /** Vendor-correlation strings replaced with stable sentinels
-   *  (device_name, group, oauth_client_name, timezone). */
-  replacedVendor: Record<string, number>;
+  /** Keys dropped under default-deny. Aggregated counts across the whole tree. */
+  droppedKeys: Record<string, number>;
+  /** Keys allowed but value-transformed (id redacted, name sanitized, paired_event_id mocked). */
+  transformedKeys: Record<string, number>;
 }
 
 export function sanitizeFixture(input: unknown, _opts?: SanitizeOptions): unknown {
@@ -87,14 +135,7 @@ export function sanitizeFixtureWithSummary(
 }
 
 function makeSummary(): SanitizeSummary {
-  return {
-    droppedTpKeys: {},
-    droppedGpsKeys: {},
-    replacedFreeText: {},
-    replacedIds: 0,
-    replacedEmails: 0,
-    replacedVendor: {},
-  };
+  return { droppedKeys: {}, transformedKeys: {} };
 }
 
 function bump(record: Record<string, number>, key: string): void {
@@ -108,56 +149,23 @@ function walk(value: unknown, summary: SanitizeSummary): unknown {
   if (value !== null && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
-      if (GPS_KEYS.has(key)) {
-        bump(summary.droppedGpsKeys, key);
+      if (!ALLOWED_FIXTURE_KEYS.has(key)) {
+        bump(summary.droppedKeys, key);
         continue;
       }
-      if (TP_KEYS.has(key)) {
-        bump(summary.droppedTpKeys, key);
-        continue;
-      }
-      if (ID_KEYS.has(key)) {
-        // `athlete_id` is unconditionally account-linking; redact always.
-        // `id` is account-linking by default — activity ids ("i146622609"
-        // or 17654321), athlete ids — both forms must redact. Two
-        // structural exceptions ride through verbatim because they're
-        // load-bearing test signal, not PII:
-        //   - wellness `id` is the YYYY-MM-DD date
-        //   - zone-bin `id` is "Z1" / "Z2" / etc.
-        // Everything else under the `id` key gets redacted.
-        if (key === "id" && typeof v === "string" && PRESERVED_ID_RE.test(v)) {
-          out[key] = v;
+      const transform = TRANSFORMS.get(key);
+      if (transform !== undefined) {
+        const transformed = transform(v);
+        // Transform returning undefined for a non-undefined input means
+        // "drop the key" (e.g., `source: "GARMIN_CONNECT"` on an activity
+        // row — not a valid FtpHistoryPoint enum value). Counts as a drop
+        // for summary purposes so operators see the leak surface.
+        if (transformed === undefined && v !== undefined) {
+          bump(summary.droppedKeys, key);
           continue;
         }
-        out[key] = ID_NUMERIC_MOCK;
-        summary.replacedIds++;
-        continue;
-      }
-      // Vendor-prefixed identifiers — every key ending in `_id` is
-      // account-linking (icu_athlete_id, strava_id, external_id,
-      // route_id, oauth_client_id, …). Strava IDs in particular are
-      // dereferenceable on strava.com and de-anonymize the operator's
-      // account if the activity is public. Mock with a stable sentinel
-      // that preserves type so test consumers see realistic shape.
-      // Keep null/undefined as null/undefined.
-      if (key.endsWith("_id")) {
-        out[key] = mockSuffixId(key, v);
-        if (v !== null && v !== undefined) summary.replacedIds++;
-        continue;
-      }
-      if (key in VENDOR_STRING_MOCK && typeof v === "string") {
-        out[key] = VENDOR_STRING_MOCK[key];
-        bump(summary.replacedVendor, key);
-        continue;
-      }
-      if (FREE_TEXT_KEYS.has(key) && typeof v === "string") {
-        out[key] = "sanitized";
-        bump(summary.replacedFreeText, key);
-        continue;
-      }
-      if (typeof v === "string" && EMAIL_RE.test(v)) {
-        out[key] = "redacted@example.com";
-        summary.replacedEmails++;
+        out[key] = transformed;
+        bump(summary.transformedKeys, key);
         continue;
       }
       out[key] = walk(v, summary);

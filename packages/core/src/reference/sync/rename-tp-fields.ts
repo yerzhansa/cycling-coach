@@ -63,6 +63,30 @@ function applyKeyRename(
   tpKeys: ReadonlySet<string>,
   summary: RenameSummary | undefined,
 ): Record<string, unknown> {
+  // Collision check before any work: if the input already has both a TP
+  // source field AND the rename target with a non-null value, the rename
+  // would silently overwrite real data. For an anti-corruption layer that
+  // is the single source of truth for this vocabulary, silent overwrite
+  // on conflict is the wrong default — throw and force the contributor
+  // to investigate.
+  //
+  // We tolerate `target === null` because intervals.icu ships the rename
+  // targets as `null`-valued keys today (e.g., `fatigue: null` accompanies
+  // `atl: 38.4`) — the inputs.ts comment notes the API's `fatigue` field
+  // is reserved for a subjective 1-5 scale that the API doesn't currently
+  // populate. When (if) it starts populating it, this throws.
+  for (const [src, dst] of mapping) {
+    if (src in raw && dst in raw) {
+      const dstValue = raw[dst];
+      if (dstValue !== null && dstValue !== undefined) {
+        throw new Error(
+          `renameTpFields: collision — input has both source '${src}' and target '${dst}' with a non-null value.` +
+            ` The anti-corruption layer would silently overwrite real data.` +
+            ` Update reference/sync/rename-tp-fields.ts.`,
+        );
+      }
+    }
+  }
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(raw)) {
     if (tpKeys.has(key)) continue;

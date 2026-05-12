@@ -1,5 +1,5 @@
 // Operator CLI for piping a real intervals.icu JSON dump through the
-// privacy-denylist transform. Output lands under
+// privacy-allowlist transform. Output lands under
 // `tests/fixtures/golden/<name>.json` for committing.
 //
 // Usage:
@@ -31,6 +31,12 @@ const DEFAULT_OUTPUT_ROOT = resolve(
   "golden",
 );
 
+// Allowlisted CLI flags. Unknown --<word> arguments are rejected so an
+// operator typo like `--force-overrride` or `--dryrun` doesn't get
+// silently swallowed (which would either bypass overwrite protection,
+// or fail intent-of-dry-run, depending on the typo).
+const KNOWN_FLAGS: ReadonlySet<string> = new Set(["--force"]);
+
 export interface MainOptions {
   /** Override the output-root directory. Tests pass tmpdir; production uses
    *  `packages/core/tests/fixtures/golden/`. */
@@ -47,7 +53,15 @@ export async function main(argv: string[], opts?: MainOptions): Promise<number> 
   const outputRoot = opts?.outputRoot ?? DEFAULT_OUTPUT_ROOT;
 
   const positional = argv.filter((a) => !a.startsWith("--"));
-  const flags = new Set(argv.filter((a) => a.startsWith("--")));
+  const flagsList = argv.filter((a) => a.startsWith("--"));
+
+  const unknown = flagsList.filter((f) => !KNOWN_FLAGS.has(f));
+  if (unknown.length > 0) {
+    err(`unknown flag(s): ${unknown.join(", ")}`);
+    err(`known flags: ${[...KNOWN_FLAGS].join(", ")}`);
+    return 2;
+  }
+  const flags = new Set(flagsList);
 
   if (positional.length < 2) {
     err(
@@ -127,27 +141,16 @@ function fileExists(path: string): boolean {
 
 function formatSummary(s: SanitizeSummary): string[] {
   const lines: string[] = [];
-  const tpEntries = orderedEntries(s.droppedTpKeys);
-  if (tpEntries.length > 0) {
-    lines.push(`Dropped TP-trademark keys (cosmetic): ${formatCounts(tpEntries)}`);
+  const droppedEntries = orderedEntries(s.droppedKeys);
+  if (droppedEntries.length > 0) {
+    const total = droppedEntries.reduce((sum, [, n]) => sum + n, 0);
+    const top = droppedEntries.slice(0, 12);
+    const tail = droppedEntries.length > top.length ? `, …+${droppedEntries.length - top.length} more` : "";
+    lines.push(`Dropped ${total} key occurrence(s) (${droppedEntries.length} distinct): ${formatCounts(top)}${tail}`);
   }
-  const gpsEntries = orderedEntries(s.droppedGpsKeys);
-  if (gpsEntries.length > 0) {
-    lines.push(`Dropped GPS keys: ${formatCounts(gpsEntries)}`);
-  }
-  if (s.replacedIds > 0 || s.replacedEmails > 0) {
-    const parts: string[] = [];
-    if (s.replacedIds > 0) parts.push(`${s.replacedIds} id-shaped fields → mock`);
-    if (s.replacedEmails > 0) parts.push(`${s.replacedEmails} emails → redacted@example.com`);
-    lines.push(`Replaced ${parts.join("; ")}`);
-  }
-  const vendorEntries = orderedEntries(s.replacedVendor);
-  if (vendorEntries.length > 0) {
-    lines.push(`Replaced vendor-correlation strings: ${formatCounts(vendorEntries)}`);
-  }
-  const freeTextEntries = orderedEntries(s.replacedFreeText);
-  if (freeTextEntries.length > 0) {
-    lines.push(`Replaced free-text PII fields: ${formatCounts(freeTextEntries)}`);
+  const transformedEntries = orderedEntries(s.transformedKeys);
+  if (transformedEntries.length > 0) {
+    lines.push(`Transformed: ${formatCounts(transformedEntries)}`);
   }
   return lines;
 }
