@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 import { open, rename, unlink } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 

@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 /**
  * Non-reentrant async mutex per ADR-0011. Single-owner with a FIFO waiter
  * queue. Each waiter has its own acquire-timeout — timed-out waiters never

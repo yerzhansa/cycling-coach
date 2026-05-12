@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 import { readFileSync } from "node:fs";
 import type { ZodTypeAny } from "zod";
 

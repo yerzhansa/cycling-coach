@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 /**
  * Per-key cooldown tracker for `/sync` rate-limiting. In-process by design
  * (Decision 5 in F4 spec) — Reference is single-operator; restart-spam is

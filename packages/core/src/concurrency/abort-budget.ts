@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 /**
  * Compose a per-runSync orchestrator signal with a per-request timeout
  * budget. Either source aborting fires the returned signal. Used by the

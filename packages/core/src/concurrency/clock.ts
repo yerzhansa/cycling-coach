@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 /**
  * Injectable clock primitives for horizontal-layer orchestrators (Reference's
  * `runSync` + `Scheduler`, plus future Decision/Heartbeat/Coaching Loop
