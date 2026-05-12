@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 import type { FetchedReference } from "../../src/reference/sync/run-sync.js";
 
 /**

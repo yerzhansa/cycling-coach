@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GrammyError } from "grammy";
 import { sendSnapshotOutput } from "../src/reference/sync/send-snapshot.js";

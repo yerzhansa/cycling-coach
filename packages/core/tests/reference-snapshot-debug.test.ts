@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 import { describe, expect, it } from "vitest";
 import { formatSnapshotRaw } from "../src/reference/sync/snapshot-debug.js";
 import type { LatestJson } from "../src/reference/schemas/latest.js";

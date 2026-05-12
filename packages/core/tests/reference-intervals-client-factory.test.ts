@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { IntervalsClient } from "intervals-icu-api";
 import {

@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { AsyncMutex } from "../src/concurrency/mutex.js";
 

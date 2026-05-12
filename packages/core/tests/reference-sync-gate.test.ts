@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 import { describe, expect, it } from "vitest";
 import { gateLatestJson } from "../src/reference/validation/sync-gate.js";
 

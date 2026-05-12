@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 import { describe, expect, it } from "vitest";
 import { formatSyncReply } from "../src/reference/sync/format-sync-reply.js";
 import type { SyncResult } from "../src/reference/sync/run-sync.js";
