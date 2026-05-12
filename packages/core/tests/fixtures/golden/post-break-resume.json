@@ -1,0 +1,187 @@
+{
+  "activities": [
+    {
+      "id": 12345,
+      "start_date_local": "2026-04-15T07:00:00",
+      "type": "Ride",
+      "moving_time": 3600,
+      "elapsed_time": 3700,
+      "icu_training_load": 60,
+      "icu_intensity": 0.65,
+      "average_watts": 180,
+      "average_heartrate": 130,
+      "kj": 648
+    }
+  ],
+  "wellness": [
+    {
+      "id": "2026-03-25",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-03-26",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-03-27",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-03-28",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-03-29",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-03-30",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-03-31",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-01",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-02",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-03",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-04",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-05",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-06",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-07",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-08",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-09",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-10",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-11",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-12",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-13",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-14",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    }
+  ],
+  "ftp_history": []
+}

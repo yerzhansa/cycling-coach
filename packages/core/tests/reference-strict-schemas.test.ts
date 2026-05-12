@@ -1,13 +1,20 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
 
-import * as schemasBarrel from "../src/reference/schemas/index.js";
+import * as cacheBarrel from "../src/reference/schemas/cache-index.js";
+import * as metricsBarrel from "../src/reference/metrics/index.js";
 
 /**
- * Walks every export of the Reference schemas barrel and asserts each Zod
- * object schema declares `.strict()`. This catches the most common Reference
- * regression — adding a new cache shape without `.strict()`, which makes
- * intervals.icu API drift land silently in our cache.
+ * Walks every export of the Reference cache + metrics barrels and asserts
+ * each Zod object schema declares `.strict()`. This catches the most common
+ * Reference regression — adding a new cache or metric shape without
+ * `.strict()`, which makes intervals.icu API drift land silently in our
+ * cache or metric authors silently widen the metric contract.
+ *
+ * The input-schema barrel (inputs.ts) is excluded by design: input schemas
+ * use `z.looseObject()` to project the upstream API; their drift-gate is
+ * the trademark denylist test (reference-input-schemas-no-tp.test.ts), not
+ * the strict gate.
  *
  * Asserted via behavior, not Zod internals: for each ZodObject we extract,
  * we feed it an input shaped `{ __forbidden_extra__: <value> }` and verify
@@ -47,16 +54,23 @@ function declaresStrict(schema: z.ZodObject<z.ZodRawShape>): {
 }
 
 describe("Reference Zod schemas — every object schema declares .strict()", () => {
+  const allBarrels = [
+    ["cache", cacheBarrel],
+    ["metrics", metricsBarrel],
+  ] as const;
+
   const exportedSchemas: Array<readonly [string, z.ZodObject<z.ZodRawShape>]> = [];
-  for (const [exportName, value] of Object.entries(schemasBarrel)) {
-    if (isZodObject(value)) {
-      exportedSchemas.push([exportName, value]);
+  for (const [barrelName, barrel] of allBarrels) {
+    for (const [exportName, value] of Object.entries(barrel)) {
+      if (isZodObject(value)) {
+        exportedSchemas.push([`${barrelName}/${exportName}`, value]);
+      }
     }
   }
 
-  it("schemas barrel exports at least one Zod object schema", () => {
-    // If this fails, F3's schemas barrel forgot to re-export. This is a
-    // canary against accidentally emptying the barrel during refactors.
+  it("at least one Zod object schema across cache + metrics barrels", () => {
+    // If this fails, the cache barrel emptied or metric schemas are not
+    // surfaced through metrics/index.ts (re-export discipline broke).
     expect(exportedSchemas.length).toBeGreaterThan(0);
   });
 

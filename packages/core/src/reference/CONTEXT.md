@@ -19,7 +19,9 @@ reference/
 ├── paths.ts            (referenceDataDir(binaryName) — composes via getCoachHome)
 ├── preserve-tokens.ts  (REFERENCE_PRESERVE_TOKENS — Wave 5 / F21 fills; sports spread)
 ├── schemas/
-│   ├── index.ts        (barrel — every schema declares .strict() per Decision 9)
+│   ├── index.ts        (public barrel — re-exports cache-index.ts + inputs.ts)
+│   ├── cache-index.ts  (cache-schemas-only barrel for the strict-schemas regression test; not a public-facing surface)
+│   ├── inputs.ts       (sport-agnostic forward-looking inputs — Activity, WellnessDay, WeeklyRollup, FtpHistoryPoint, PlannedEvent, IcuIntervalRep, ZoneTimes — consumed by Wave 2 metric computers; z.looseObject() so real intervals.icu shape rides along)
 │   ├── latest.ts       (latest.json — curator's authoritative snapshot)
 │   ├── history.ts      (history.json — daily / weekly / monthly retention buckets)
 │   ├── intervals.ts    (intervals.json — per-rep workout segments)
@@ -28,7 +30,7 @@ reference/
 │   ├── scheduler.ts    (.scheduler.json — last_sync_at / next_sync_at coordination state)
 │   └── error-state.ts  (error_state.json — Layer-1 sync gate failures, curator-visible)
 ├── sync/               (Wave 1b / F4 — runSync orchestrator, scheduler, /sync command)
-├── metrics/            (Wave 2 — load / distribution / capability / compliance metric computers)
+├── metrics/            (Wave 2 — load / distribution / capability / compliance metric computers; index.ts barrel scaffolded by F7, populated by F8–F11; re-export discipline doc at metrics/README.md)
 ├── validation/         (Wave 4 — Layer 1 sync gate, Layer 2 LLM-output validator)
 ├── curator/            (Wave 5 — latest.json curator + system-prompt injection)
 ├── units/              (Wave 6 — Quantity, formatQuantity, athlete preference plumbing)
@@ -52,6 +54,32 @@ Per the Reference PRD's Decision 9, schema versioning is informational; **Zod-st
 4. `safeReadJson` rejects any pre-existing cache file via the Zod `.strict()` parse — caller treats it as a cache miss and triggers a fresh sync.
 
 There is no `migrate-v1-to-v2.ts`. The gate handles drift via discard-and-resync.
+
+## Anti-corruption layer (per ADR-0012)
+
+intervals.icu emits seven fields named in TP-trademarked vocabulary. Reference reads them at the I/O boundary and re-emits plain-English equivalents; the source field names never appear on the typed surface. The rename layer at `sync/rename-tp-fields.ts` is the single anti-corruption boundary for this vocabulary — downstream consumers (F8–F11 metric computers, curator projection, channel-side display) consume the renamed fields only.
+
+| API field (raw, intervals.icu) | Plain-English emitted |
+|---|---|
+| `wellness.ctl` | `fitness` |
+| `wellness.atl` | `fatigue` |
+| `wellness.ctlLoad` | `fitnessContribution` |
+| `wellness.atlLoad` | `fatigueContribution` |
+| `wellness.rampRate` | `weeklyFitnessChange` |
+| `activity.icu_ctl` | `fitnessAtEnd` |
+| `activity.icu_atl` | `fatigueAtEnd` |
+
+Two functions + a defensive walker live in `sync/rename-tp-fields.ts`:
+
+- `renameTpFieldsOnWellnessRow(raw, summary?)` — five wellness renames.
+- `renameTpFieldsOnActivity(raw, summary?)` — two activity renames.
+- `assertNoTpKeysRemain(value)` — recursive walker that throws if any TP-denylist key survives anywhere in the input (defense-in-depth for the "intervals.icu adds nested TP aggregates" failure mode). The error path uses `[<index>]` array form only — never includes row-id values — so operator log forwarding stays safe.
+
+**F8 wiring obligation.** F8 (Wave 2) activates `sync/fetch-reference-data.ts`. When that wiring lands, fetch-reference-data MUST call the rename layer between the API-response parse and the cache-write step. The rename layer is also wired into the operator fixture CLI (`tools/sanitize-fixture.ts`); both call sites stay in lockstep so the typed surface is consistent across sync paths.
+
+**Naming-collision callout.** intervals.icu's `WellnessRecord` lib type declares a `fatigue` field (subjective 1–5 scale, athlete-reported). Our Banister-derived `fatigue` (renamed from `atl`) has different semantics. The lib's field rides through via the `z.looseObject` index signature; no future feature should consume both under the same name. If a future feature needs the subjective scale, promote it under a different name (e.g., `subjectiveFatigue`).
+
+**Trademark policy.** The single source of truth for the typed-surface field-name policy lives at `trademark-policy.ts` (`TP_API_FIELDS`, `TP_DENYLIST_FIELDS`). The PR-time lint at `tools/check-trademarks.ts` is independent (uppercase string-literal scope). Background, USPTO records, and the Golden Cheetah enforcement precedent: `docs/knowledge/research/trademark-tp-terms.md`.
 
 ## Sport seam (per ADR-0010)
 

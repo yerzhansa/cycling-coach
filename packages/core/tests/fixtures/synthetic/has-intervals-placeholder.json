@@ -1,0 +1,20 @@
+{
+  "_comment": "section-11 v3.106 regression: intervals.icu auto-generates a single RECOVERY placeholder segment for unstructured rides. Pre-fix, has_intervals returned true for any non-empty icu_intervals; that classified plain rides as structured workouts and contaminated F8/F9/F10 tests. F11's isStructuredWorkout MUST require at least one segment with type === 'WORK' to pass for this fixture; otherwise this regression returns.",
+  "id": 999,
+  "start_date_local": "2026-04-15T07:00:00",
+  "type": "Ride",
+  "moving_time": 7200,
+  "elapsed_time": 7350,
+  "icu_training_load": 78,
+  "icu_intensity": 0.61,
+  "average_watts": 165,
+  "average_heartrate": 122,
+  "icu_intervals": [
+    {
+      "type": "RECOVERY",
+      "duration": 7200,
+      "average_watts": 165,
+      "average_heartrate": 122
+    }
+  ]
+}

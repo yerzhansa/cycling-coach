@@ -1,0 +1,14 @@
+{
+  "activities": [],
+  "wellness": [
+    {
+      "id": "2026-04-15",
+      "weight": null,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    }
+  ],
+  "ftp_history": []
+}

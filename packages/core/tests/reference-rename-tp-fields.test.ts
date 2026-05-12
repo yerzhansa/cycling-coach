@@ -1,0 +1,216 @@
+// trademark-lint:skip-file — anti-corruption layer tests legitimately name
+// the TP-trademarked source fields the rename layer reads.
+//
+// Behavioral tests for the anti-corruption layer per ADR-0012. The rename
+// layer reads intervals.icu's TP-trademarked API field names (ctl, atl,
+// ctlLoad, atlLoad, rampRate, icu_ctl, icu_atl) at runtime via Record-key
+// access and emits plain-English equivalents that metric computers consume
+// by name. The TP keys are stripped from the output; the rest of the row
+// rides through verbatim.
+
+import { describe, expect, it } from "vitest";
+
+import {
+  assertNoTpKeysRemain,
+  renameTpFieldsOnActivity,
+  renameTpFieldsOnWellnessRow,
+  type RenameSummary,
+} from "../src/reference/sync/rename-tp-fields.js";
+
+describe("renameTpFieldsOnWellnessRow", () => {
+  it("renames a wellness row with all 5 TP fields populated", () => {
+    const raw = {
+      id: "2026-04-15",
+      ctl: 52.1,
+      atl: 38.4,
+      ctlLoad: 51.9,
+      atlLoad: 38.1,
+      rampRate: 4.7,
+    };
+    const out = renameTpFieldsOnWellnessRow(raw);
+    expect(out).toEqual({
+      id: "2026-04-15",
+      fitness: 52.1,
+      fatigue: 38.4,
+      fitnessContribution: 51.9,
+      fatigueContribution: 38.1,
+      weeklyFitnessChange: 4.7,
+    });
+  });
+
+  it("renames a wellness row with only ctl set — other normalized keys absent", () => {
+    const raw = { id: "2026-04-15", ctl: 52.1 };
+    const out = renameTpFieldsOnWellnessRow(raw);
+    expect(out).toEqual({ id: "2026-04-15", fitness: 52.1 });
+    expect(Object.keys(out)).not.toContain("fatigue");
+    expect(Object.keys(out)).not.toContain("fitnessContribution");
+    expect(Object.keys(out)).not.toContain("fatigueContribution");
+    expect(Object.keys(out)).not.toContain("weeklyFitnessChange");
+  });
+
+  it("renames a wellness row with ctl: null — emits fitness: null", () => {
+    const raw = { id: "2026-04-15", ctl: null };
+    const out = renameTpFieldsOnWellnessRow(raw);
+    expect(out).toEqual({ id: "2026-04-15", fitness: null });
+  });
+
+  it("renames a wellness row with no TP fields — no normalized keys added", () => {
+    const raw = { id: "2026-04-15", weight: 73.42, restingHR: 51 };
+    const out = renameTpFieldsOnWellnessRow(raw);
+    expect(out).toEqual({ id: "2026-04-15", weight: 73.42, restingHR: 51 });
+    for (const k of [
+      "fitness",
+      "fatigue",
+      "fitnessContribution",
+      "fatigueContribution",
+      "weeklyFitnessChange",
+    ]) {
+      expect(Object.keys(out)).not.toContain(k);
+    }
+  });
+
+  it("preserves non-TP wellness fields verbatim (id, weight, hrv, soreness, vendor extras)", () => {
+    const raw = {
+      id: "2026-04-15",
+      weight: 73.42,
+      restingHR: 51,
+      hrv: 84,
+      sleepSecs: 27000,
+      soreness: 2,
+      vo2max: 56.4,
+      bodyFat: 14.6,
+      mood: "good",
+      vendor_extra: { nested: "yes" },
+      ctl: 52.1,
+    };
+    const out = renameTpFieldsOnWellnessRow(raw);
+    expect(out.id).toBe("2026-04-15");
+    expect(out.weight).toBe(73.42);
+    expect(out.restingHR).toBe(51);
+    expect(out.hrv).toBe(84);
+    expect(out.sleepSecs).toBe(27000);
+    expect(out.soreness).toBe(2);
+    expect(out.vo2max).toBe(56.4);
+    expect(out.bodyFat).toBe(14.6);
+    expect(out.mood).toBe("good");
+    expect(out.vendor_extra).toEqual({ nested: "yes" });
+  });
+
+  it("never emits a TP-named key on wellness output", () => {
+    const raw = {
+      id: "2026-04-15",
+      ctl: 52.1,
+      atl: 38.4,
+      ctlLoad: 51.9,
+      atlLoad: 38.1,
+      rampRate: 4.7,
+    };
+    const out = renameTpFieldsOnWellnessRow(raw);
+    const banned = ["ctl", "atl", "ctlLoad", "atlLoad", "rampRate"];
+    for (const k of banned) {
+      expect(Object.keys(out)).not.toContain(k);
+    }
+  });
+
+  it("increments RenameSummary.skippedNonNumeric for string-typed ctl", () => {
+    const summary: RenameSummary = { skippedNonNumeric: {} };
+    const raw = { id: "2026-04-15", ctl: "52.1" };
+    const out = renameTpFieldsOnWellnessRow(raw, summary);
+    expect(summary.skippedNonNumeric).toEqual({ ctl: 1 });
+    expect(Object.keys(out)).not.toContain("fitness");
+    expect(Object.keys(out)).not.toContain("ctl");
+  });
+});
+
+describe("renameTpFieldsOnActivity", () => {
+  it("renames an activity with both icu_ctl and icu_atl", () => {
+    const raw = {
+      id: 17654321,
+      start_date_local: "2026-04-15T07:30:00",
+      type: "Ride",
+      icu_ctl: 52.1,
+      icu_atl: 38.4,
+    };
+    const out = renameTpFieldsOnActivity(raw);
+    expect(out).toEqual({
+      id: 17654321,
+      start_date_local: "2026-04-15T07:30:00",
+      type: "Ride",
+      fitnessAtEnd: 52.1,
+      fatigueAtEnd: 38.4,
+    });
+  });
+
+  it("preserves non-TP activity fields verbatim", () => {
+    const raw = {
+      id: 17654321,
+      start_date_local: "2026-04-15T07:30:00",
+      type: "Ride",
+      moving_time: 5400,
+      average_watts: 218,
+      icu_training_load: 142,
+      icu_intensity: 0.82,
+      icu_ctl: 52.1,
+      icu_atl: 38.4,
+    };
+    const out = renameTpFieldsOnActivity(raw);
+    expect(out.id).toBe(17654321);
+    expect(out.start_date_local).toBe("2026-04-15T07:30:00");
+    expect(out.type).toBe("Ride");
+    expect(out.moving_time).toBe(5400);
+    expect(out.average_watts).toBe(218);
+    expect(out.icu_training_load).toBe(142);
+    expect(out.icu_intensity).toBe(0.82);
+  });
+
+  it("never emits a TP-named key on activity output", () => {
+    const raw = {
+      id: 17654321,
+      icu_ctl: 52.1,
+      icu_atl: 38.4,
+    };
+    const out = renameTpFieldsOnActivity(raw);
+    expect(Object.keys(out)).not.toContain("icu_ctl");
+    expect(Object.keys(out)).not.toContain("icu_atl");
+  });
+});
+
+describe("assertNoTpKeysRemain", () => {
+  it("throws on a nested ctl with [<index>]-style path and no row-id values", () => {
+    const bundle = {
+      wellness: [{ id: "i146400073", weeklyAggregates: { ctl: 50 } }],
+    };
+    let caught: unknown;
+    try {
+      assertNoTpKeysRemain(bundle);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const msg = (caught as Error).message;
+    expect(msg).toContain("[0]");
+    expect(msg).toContain("weeklyAggregates");
+    expect(msg).toContain("ctl");
+    expect(msg).not.toMatch(/i\d+/);
+  });
+
+  it("passes on a clean post-rename bundle", () => {
+    const cleanBundle = {
+      wellness: [
+        {
+          id: "2026-04-15",
+          fitness: 52.1,
+          fatigue: 38.4,
+        },
+      ],
+      activities: [
+        {
+          id: 17654321,
+          fitnessAtEnd: 52.1,
+          fatigueAtEnd: 38.4,
+        },
+      ],
+    };
+    expect(() => assertNoTpKeysRemain(cleanBundle)).not.toThrow();
+  });
+});

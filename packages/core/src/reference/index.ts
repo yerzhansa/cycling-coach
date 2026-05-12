@@ -1,8 +1,4 @@
 // Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-//
-// Reference submodule public barrel. Wired into `packages/core/src/index.ts`
-// at the package boundary. Wave 1 lands the type-only + I/O + schema surface;
-// Waves 2-7 extend incrementally.
 
 // ─── Per-sport seam type (ADR-0010) ───────────────────────────────────
 export type {
@@ -35,9 +31,8 @@ export {
 // ─── Path resolution ──────────────────────────────────────────────────
 export { referenceDataDir } from "./paths.js";
 
-// ─── Compaction tokens (Wave 5 / F21 fills) ───────────────────────────
+// ─── Compaction tokens ───────────────────────────────────────────────
 export { REFERENCE_PRESERVE_TOKENS } from "./preserve-tokens.js";
-
 
 // ─── Zod schemas + per-file SCHEMA_VERSION constants ──────────────────
 export {
@@ -69,3 +64,34 @@ export {
   ErrorMitigationSchema,
   type ErrorMitigation,
 } from "./schemas/index.js";
+
+// ─── Input-schema projections ────────────────────────────────────────
+export {
+  ActivitySchema,
+  type Activity,
+  WellnessDaySchema,
+  type WellnessDay,
+  WeeklyRollupSchema,
+  type WeeklyRollup,
+  FtpHistoryPointSchema,
+  type FtpHistoryPoint,
+  PlannedEventSchema,
+  type PlannedEvent,
+  IcuIntervalRepSchema,
+  type IcuIntervalRep,
+  ZoneTimesSchema,
+  type ZoneTimes,
+  ZoneTimeEntrySchema,
+  type ZoneTimeEntry,
+} from "./schemas/index.js";
+
+// ─── Trademark policy + anti-corruption layer (ADR-0012) ──────────────
+export {
+  TP_API_FIELDS,
+  TP_DENYLIST_FIELDS,
+} from "./trademark-policy.js";
+export {
+  assertNoTpKeysRemain,
+  renameTpFieldsOnActivity,
+  renameTpFieldsOnWellnessRow,
+} from "./sync/rename-tp-fields.js";
