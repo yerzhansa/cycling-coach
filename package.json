@@ -16,7 +16,8 @@
     "check": "pnpm -r build && oxlint packages/ && pnpm check:trademarks",
     "check:trademarks": "tsx tools/check-trademarks.ts",
     "release-version": "changeset version && tsx tools/bump-binaries-to-calver.ts",
-    "snapshot:section-11": "tsx tools/snapshot-section-11.ts"
+    "snapshot:section-11": "tsx tools/snapshot-section-11.ts",
+    "check-parity": "tsx tools/check-metric-parity.ts"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.0",
