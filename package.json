@@ -29,7 +29,8 @@
     "pyodide": "^0.29.4",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
-    "vitest": "^4.1.4"
+    "vitest": "^4.1.4",
+    "yaml": "^2.8.3"
   },
   "engines": {
     "node": ">=20"

@@ -1,0 +1,108 @@
+# tools/intentional-deviations.yaml
+#
+# Registry of every approved deviation from section-11 (the upstream
+# Python source whose outputs are the oracle for the Reference layer's
+# metric ports). Every entry here is also discoverable via the gate
+# (`pnpm check-parity`) and the workflow driver (`/port-metric`).
+#
+# Discipline: see docs/initiatives/section-11/porting-discipline-starting-point.md
+# (gitignored, local only). A deviation may only be approved if backed
+# by peer-reviewed sports-science literature captured under
+# docs/knowledge/research/. Architect intuition is not a justification.
+#
+# Schema (v1):
+#
+#   schema_version: 1
+#   deviations:
+#     - metric: <metric_name>                      # required: snapshot key
+#       section_11_implementation: |               # required: prose description
+#         "<what section-11 does> (sync.py:<line>)"
+#       our_implementation: |                      # required: prose description
+#         "<what our TS does> (<path>:<line> or 'not yet code')"
+#       type: algorithmic | constant | branch-order | other
+#       justification:                             # required if status != pending
+#         kind: research_file | revert-pending | upstream-bug
+#         path: docs/knowledge/research/<topic>.md
+#         cited_papers:
+#           - "<author year> (<short citation>)"
+#           - DOI: 10.xxxx/yyyy
+#       adr: docs/adr/<id>-<slug>.md               # optional pointer
+#       status: pending | approved-revert | approved-cite | approved-bug | rejected
+#       decided_by: <reviewer>                     # required if status != pending
+#       decided_at: <YYYY-MM-DD>                   # required if status != pending
+#       notes: |
+#         <freeform context, decision rationale, follow-ups>
+#
+# Tools that read this file:
+#   - tools/check-metric-parity.ts (the gate) — reports deviation status
+#     in pass/fail output, does not change assertion behavior (registry is
+#     informational at the gate layer; correctness is the bit-identical
+#     match against the snapshot).
+#   - .claude/skills/port-metric/SKILL.md (the workflow driver) — halts
+#     when a metric being ported has a `pending` entry; surfaces the
+#     deviation when porting against an `approved-cite` entry.
+#
+# Lifecycle: every entry starts `pending` and stays there until a human
+# review (see porting-discipline §Phase 4) records a decision. No agent
+# may flip status without an explicit human instruction citing literature
+# OR an explicit instruction to revert.
+
+schema_version: 1
+
+deviations:
+  - metric: recovery_index
+    section_11_implementation: |
+      7-day HRV / RHR baseline ratio with 2 contributors (HRV + RHR),
+      computed in sync.py around line 3113 inside
+      `_calculate_derived_metrics`.
+    our_implementation: |
+      28-day signed z-score over 4 contributors (HRV, RHR, sleep, soreness).
+      Specified in F8 spec rev 6; not yet code in main. The spec deviation
+      was identified during F8 Commit C review (2026-05-12) and is the
+      origin of the Phase 4 discipline.
+    type: algorithmic
+    status: pending
+    notes: |
+      Phase 4 review owing. Default decision = Option A (revert to
+      section-11's 7-day / 2-contributor implementation). Garmin, Whoop,
+      Polar, and HRV4Training all converge on 7-day baselines; Plews 2013
+      and Buchheit 2014 are the standard citations for endurance athletes.
+
+      If Option B (cite literature for a 28-day deviation) is chosen, the
+      required research file is `docs/knowledge/research/hrv-monitoring.md`
+      with explicit findings supporting a 28-day window against the 7-day
+      consensus. That research file does not exist yet — writing it is part
+      of the Option B cost, not a separate task.
+
+  - metric: stress_tolerance
+    section_11_implementation: |
+      `weekly_load / 100` (sync.py around line 3131 inside
+      `_calculate_derived_metrics`).
+    our_implementation: |
+      Capacity-cap family with peak-chronic-load lookback — see ADR-0015
+      for the project-original framing. Specified in F8 spec rev 6;
+      not yet code in main.
+    type: algorithmic
+    status: pending
+    notes: |
+      Phase 4 review owing. ADR-0015 documents the rationale for the
+      capacity-cap approach but is the same architect-intuition class
+      of decision that the porting discipline was created to constrain.
+      Decision needs literature (e.g., Foster 2001 monotony/strain
+      framing, Busso 2003 IRM dose-response) OR a revert to
+      `weekly_load / 100`. Default = revert.
+
+  - metric: load_recovery_ratio
+    section_11_implementation: |
+      HRV / RHR denominator framing — recovery scaled directly against
+      autonomic-nervous-system signals. Implemented in sync.py inside
+      `_calculate_derived_metrics`.
+    our_implementation: |
+      Composite denominator: Z1-hours + rest-day-hours. Specified in F8
+      spec rev 6; not yet code in main.
+    type: algorithmic
+    status: pending
+    notes: |
+      Phase 4 review owing. The composite denominator was introduced
+      alongside the recovery_index deviation and inherits the same lack
+      of literature backing. Default = revert.
