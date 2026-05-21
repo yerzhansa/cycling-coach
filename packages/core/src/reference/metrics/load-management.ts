@@ -26,10 +26,10 @@ import type { MetricInput } from "./metric-input.js";
  * `sync.py:3629-3644` (the daily-load aggregator). See `NOTICE.md` for
  * upstream attribution.
  *
- * Return shape is the raw upstream output (number or null), not the
- * discriminated-union envelope from ADR-0014; per the 2026-05-21 ADR-0014
- * scope clarification, raw compute functions feed the parity gate and a
- * sibling envelope wrapper feeds the curator.
+ * Return shape is the raw upstream output (number or null), not a
+ * discriminated-union envelope. Raw compute functions feed the parity
+ * gate; a sibling envelope wrapper will feed the curator when the
+ * curator integration lands.
  *
  * @see Gabbett, T.J. (2016). The training-injury prevention paradox:
  *      should athletes be training smarter and harder?
@@ -50,6 +50,77 @@ export function computeAcwr(input: MetricInput): number | null {
 
   if (chronicLoad <= 0) return null;
   return roundHalfEven(acuteLoad / chronicLoad, 2);
+}
+
+/**
+ * Training monotony (Foster 1998).
+ *
+ * Monotony = mean(dailyLoad) / sampleStdev(dailyLoad) over the trailing
+ * 7 days (today and the six prior). The aggregator is the same one
+ * ACWR uses — calendar-window length, days with no activity contribute 0.
+ *
+ * Returns `null` when:
+ *   - fewer than 2 daily values are available (cannot happen for the
+ *     fixed 7-day window, but the Python guards it),
+ *   - every day's Load is 0 (rest week / empty fixture),
+ *   - the sample standard deviation is 0 (constant non-zero series).
+ *
+ * Otherwise returns `round(mean / stdev, 2)` with half-to-even rounding
+ * to mirror Python's `round()` bit-identically.
+ *
+ * Upstream source mirrored line-by-line: `sync.py:3030-3041`
+ * (`_calculate_derived_metrics`). The daily aggregator at
+ * `sync.py:3629-3644` is shared with ACWR. See `NOTICE.md` for upstream
+ * attribution.
+ *
+ * Return shape is the raw upstream output (number or null), not a
+ * discriminated-union envelope. Raw compute functions feed the parity
+ * gate; a sibling envelope wrapper will feed the curator when the
+ * curator integration lands.
+ *
+ * @see Foster, C. (1998). Monitoring training in athletes with reference
+ *      to overtraining syndrome. Med Sci Sports Exerc 30(7):1164-1168.
+ *      DOI: 10.1097/00005768-199807000-00023
+ */
+export function computeMonotony(input: MetricInput): number | null {
+  const fixture = input.fixture as { activities?: Activity[] };
+  const activities = fixture.activities ?? [];
+
+  const dailyLoad7d = getDailyLoad(activities, 7, input.frozenNow);
+
+  if (dailyLoad7d.length <= 1 || !dailyLoad7d.some((d) => d !== 0)) {
+    return null;
+  }
+
+  const meanLoad = arithmeticMean(dailyLoad7d);
+  const stdevLoad = sampleStdev(dailyLoad7d, meanLoad);
+  if (stdevLoad <= 0) return null;
+
+  return roundHalfEven(meanLoad / stdevLoad, 2);
+}
+
+function arithmeticMean(values: number[]): number {
+  let total = 0;
+  for (const v of values) total += v;
+  return total / values.length;
+}
+
+// Python `statistics.stdev` uses the numerically stable two-pass
+// `sum((x-c)**2) - sum(x-c)**2 / n` correction so the residual mean
+// drift cancels out. Mirror the same accumulation order so the float
+// result matches bit-for-bit on inputs that aren't exactly centered on
+// the recomputed mean.
+function sampleStdev(values: number[], xbar: number): number {
+  const n = values.length;
+  let total = 0;
+  let total2 = 0;
+  for (const x of values) {
+    const d = x - xbar;
+    total += d * d;
+    total2 += d;
+  }
+  const ss = total - (total2 * total2) / n;
+  return Math.sqrt(ss / (n - 1));
 }
 
 function getDailyLoad(
