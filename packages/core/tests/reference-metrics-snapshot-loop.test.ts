@@ -29,7 +29,7 @@ type MetricSnapshot = {
 type Manifest = {
   section_11_sha: string;
   section_11_protocol_version: string;
-  capture_date_utc: string;
+  section_11_commit_date: string;
   fixtures: string[];
   metrics: string[];
   pyodide_version: string;
@@ -46,7 +46,7 @@ describe("section-11 snapshot loop", () => {
     const manifest = readJson<Manifest>(resolve(SNAPSHOT_ROOT, "manifest.json"));
     expect(manifest.section_11_sha).toMatch(/^[0-9a-f]{40}$/);
     expect(manifest.section_11_protocol_version).toMatch(/^\d+\.\d+$/);
-    expect(manifest.capture_date_utc).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(manifest.section_11_commit_date).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(manifest.fixtures).toContain("realistic-athlete");
     expect(manifest.metrics.length).toBeGreaterThan(0);
     expect(manifest.frozen_now).toBe("2026-05-10T12:00:00");

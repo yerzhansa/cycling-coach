@@ -48,7 +48,7 @@ const FROZEN_NOW = "2026-05-10T12:00:00";
 interface Manifest {
   section_11_sha: string;
   section_11_protocol_version: string;
-  capture_date_utc: string;
+  section_11_commit_date: string;
   fixtures: string[];
   metrics: string[];
   pyodide_version: string;
@@ -65,6 +65,16 @@ function readPyodideVersion(): string {
 
 function readSection11Sha(): string {
   return execSync("git rev-parse HEAD", {
+    cwd: SECTION_11_REPO,
+    encoding: "utf8",
+  }).trim();
+}
+
+function readSection11CommitDate(sha: string): string {
+  // ISO 8601 UTC, derived from section-11's commit object — deterministic
+  // for a given SHA, replaces the old wall-clock `capture_date_utc` which
+  // broke `pnpm snapshot:section-11` byte-identity across consecutive runs.
+  return execSync(`git show -s --format=%cI ${sha}`, {
     cwd: SECTION_11_REPO,
     encoding: "utf8",
   }).trim();
@@ -246,9 +256,15 @@ OUTPUT_JSON = json.dumps(derived, default=str, sort_keys=True)
 
 async function main(): Promise<void> {
   const fixturePath = resolve(REPO_ROOT, FIXTURE_REL);
+  // `SNAPSHOT_OUT_DIR` overrides the snapshot output root — used by the
+  // determinism test to write to temp dirs instead of clobbering the
+  // committed snapshots. Defaults to the canonical SNAPSHOT_ROOT_REL.
+  const snapshotRoot = process.env.SNAPSHOT_OUT_DIR
+    ? resolve(process.env.SNAPSHOT_OUT_DIR)
+    : resolve(REPO_ROOT, SNAPSHOT_ROOT_REL);
   const snapshotDirRel = join(SNAPSHOT_ROOT_REL, ATHLETE_SLUG);
-  const snapshotDir = resolve(REPO_ROOT, snapshotDirRel);
-  const manifestPath = resolve(REPO_ROOT, SNAPSHOT_ROOT_REL, "manifest.json");
+  const snapshotDir = join(snapshotRoot, ATHLETE_SLUG);
+  const manifestPath = join(snapshotRoot, "manifest.json");
 
   if (!existsSync(SYNC_PY_PATH)) {
     throw new Error(
@@ -264,6 +280,7 @@ async function main(): Promise<void> {
   const syncPySource = readFileSync(SYNC_PY_PATH, "utf8");
   const fixtureJson = readFileSync(fixturePath, "utf8");
   const sha = readSection11Sha();
+  const commitDate = readSection11CommitDate(sha);
   const protocolVersion = readSyncPyVersion(syncPySource);
   const pyodideVersion = readPyodideVersion();
 
@@ -316,7 +333,7 @@ async function main(): Promise<void> {
   const manifest: Manifest = {
     section_11_sha: sha,
     section_11_protocol_version: protocolVersion,
-    capture_date_utc: new Date().toISOString(),
+    section_11_commit_date: commitDate,
     fixtures: [ATHLETE_SLUG],
     metrics,
     pyodide_version: pyodideVersion,

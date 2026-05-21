@@ -66,7 +66,7 @@ The manifest pins the oracle:
 {
   "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
   "section_11_protocol_version": "3.112",
-  "capture_date_utc": "2026-05-21T04:42:19.005Z",
+  "section_11_commit_date": "2026-04-28T18:14:07+00:00",
   "fixtures": ["realistic-athlete"],
   "metrics": [ ... 52 names ... ],
   "pyodide_version": "0.29.4",
@@ -74,6 +74,12 @@ The manifest pins the oracle:
   "offline_mode": "A_stub_requests_plus_monkey_patch"
 }
 ```
+
+`section_11_commit_date` is derived deterministically from the
+section-11 SHA's commit object (`git show -s --format=%cI`). It
+replaces the old wall-clock `capture_date_utc` field — that one
+broke byte-identity across consecutive harness runs, see the
+Determinism section below.
 
 ## When to regenerate
 
@@ -188,6 +194,41 @@ path fix listed above before T12 can port it.
 | `stress_tolerance` | populated | 2.6 |
 | `load_recovery_ratio` | populated | 2.8 |
 | `ramp_rate` | **absent** | — (gap above) |
+
+## Determinism
+
+The harness aims for **byte-identical output across consecutive runs**
+given the same inputs (fixture, section-11 SHA, pyodide version,
+`FROZEN_NOW`). This invariant is enforced by
+`packages/core/tests/snapshot-determinism.test.ts`, which runs the
+harness twice into temp directories and `diff`s the trees.
+
+Sources of potential non-determinism that have been audited and
+pinned:
+
+- **`datetime.now()`** — frozen to `FROZEN_NOW` (see "Frozen clock"
+  below). Without this, every rolling-window metric drifts.
+- **Manifest `section_11_commit_date`** — derived deterministically
+  from the section-11 SHA's commit object (`git show -s
+  --format=%cI`). The pre-pinning manifest carried a wall-clock
+  `capture_date_utc = new Date().toISOString()`, which made two
+  back-to-back runs diff on the manifest line. Replaced.
+- **JSON output ordering** — `json.dumps(..., sort_keys=True)` in
+  the Python prologue + `JSON.stringify(wrapper, null, 2)` with
+  insertion-ordered keys in the TS writer. Both stable.
+- **Dict iteration order** — CPython 3.7+ uses insertion order;
+  pyodide ships CPython 3.x with the same guarantee.
+- **`set()` iteration** — section-11's `_calculate_derived_metrics`
+  does not iterate unordered sets in a way that reaches output
+  surface (audited 2026-05-21 against SHA `224c369d`). If a future
+  SHA bump introduces one, the determinism test will surface it.
+- **`PYTHONHASHSEED`** — pyodide does not honor the env var the way
+  CPython does, but the same audit confirms no dict iteration order
+  reaches the output. Re-verify on every SHA bump.
+
+If the determinism test fails after a section-11 SHA bump or a
+pyodide upgrade, the divergence source must be pinned in this list
+before the bump can land.
 
 ## Frozen clock
 
