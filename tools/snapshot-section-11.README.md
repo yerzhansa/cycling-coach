@@ -167,6 +167,71 @@ end-to-end with a richer fixture-mapped `_intervals_get` stub, or
 inputs. The snapshot baseline locks in "given these inputs, these
 metrics are null" — which is itself a useful regression signal.
 
+## Contract validation
+
+`sync.py` reads fixture fields almost exclusively via `dict.get('foo')`,
+which silently returns `None` on a missing key. A fixture with a typo'd
+field name (`"activitiez"` instead of `"activities"`) would produce a
+wrong-but-not-crashing snapshot, and the TS port would faithfully
+assert against that wrong oracle. T06 closes this hole by wrapping
+every dict that ultimately came from the loaded fixture in a
+`_TrackedDict` that logs every `.get()` of an absent key. After
+`_calculate_derived_metrics` returns, the harness checks the log; if
+any unallowlisted access happened, it raises a structured error
+listing each missing path and aborts the run.
+
+Failure shape:
+
+```
+$ pnpm snapshot:section-11
+[snapshot] section-11 sha=… protocol=… pyodide=…
+Error: fixture/sync.py contract violation: 1 unique missing key(s)
+read silently as None (1 total .get() accesses):
+  - FIXTURE.activities
+
+sync.py read None silently from fixture paths that don't exist.
+Either fix the fixture to include the keys, or — if a key is
+intentionally optional in the schema — extend the contract
+allowlist in tools/snapshot-section-11.ts. See the README's
+'Contract validation' section.
+```
+
+Allowlist semantics:
+
+- The harness's Python prologue holds `_ALLOWED_OPTIONAL_PATHS`, a
+  set of dotted paths with `[*]` as the array-index wildcard.
+- A missing key whose normalized path is in the allowlist is
+  treated as a per-record optional field — `sync.py` is expected
+  to handle None there, and the absence is part of the schema's
+  contract.
+- A missing key not in the allowlist is a contract violation and
+  fails the run.
+
+Initial allowlist (intervals.icu fields that may legitimately be
+absent on a per-record basis — old activities computed before the
+field existed, rest-day wellness entries with no Fitness/Fatigue,
+etc.):
+
+```python
+_ALLOWED_OPTIONAL_PATHS = {
+    "FIXTURE.activities[*].icu_hr_decoupling",
+    "FIXTURE.activities[*].icu_hr_zone_times",
+    "FIXTURE.activities[*].icu_hrr",
+    "FIXTURE.activities[*].icu_variability_index",
+    "FIXTURE.wellness[*].atl",
+    "FIXTURE.wellness[*].ctl",
+}
+```
+
+Extending the allowlist requires a README update in this section so
+the reviewer can trace why a particular field is treated as
+schema-optional.
+
+Tested by `packages/core/tests/snapshot-contract.test.ts`, which
+deliberately renames `"activities"` to `"activitiez"` in a temp
+fixture, runs the harness against it, and asserts the structured
+failure surfaces the renamed path.
+
 ## Null / absent audit (against F8 metric scope)
 
 Audit run 2026-05-21 against the realistic-athlete snapshot set
