@@ -230,6 +230,50 @@ If the determinism test fails after a section-11 SHA bump or a
 pyodide upgrade, the divergence source must be pinned in this list
 before the bump can land.
 
+## Pyodide vs CPython parity
+
+Pyodide ships CPython compiled to WebAssembly. Behavior is ~99% identical
+to a host CPython of the same version for stdlib `math`, `statistics`,
+and the operators sync.py uses — but `math.fsum`, `statistics.median_grouped`,
+and float-repr corner cases have historically diverged in narrow cases.
+T09 confirms parity by running section-11's `_calculate_derived_metrics`
+twice: once via the pyodide harness (`pnpm snapshot:section-11`), once
+via host CPython 3.12 (`tools/snapshot-section-11-native.py`), then
+diffing every metric.
+
+**Verdict (2026-05-21):** all 52 metrics produced by `pnpm snapshot:section-11`
+on the `realistic-athlete` fixture against `section_11_sha = 224c369d`
+are bit-identical between:
+
+- pyodide `0.29.4` (CPython 3.12, WASM)
+- host CPython `3.12.13` (managed by `uv`)
+
+Reproduce the check:
+
+```bash
+# Install uv and Python 3.12 (one-time setup)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+uv python install 3.12
+
+# Generate native + pyodide snapshots, diff them
+pnpm snapshot:section-11
+uv run --python 3.12 tools/snapshot-section-11-native.py --out /tmp/native-snapshots.json
+pnpm tsx tools/diff-pyodide-vs-cpython.ts /tmp/native-snapshots.json
+# expect: [diff] OK — 52 metrics bit-identical...
+```
+
+If the diff surfaces a divergence in the future (new fixture, new
+section-11 SHA, new pyodide version), re-pin parity before letting
+the harness become the oracle for additional metrics — running TS
+ports against a known-divergent pyodide output silently drifts the
+gate from CPython's real-world behavior.
+
+Spot-check only — runs by hand at setup, on every section-11 SHA
+bump, and on every pyodide upgrade. Not part of `pnpm test` because
+it requires `uv` + Python 3.12 on the host, which CI doesn't
+currently provision.
+
 ## Frozen clock
 
 `FROZEN_NOW = "2026-05-10T12:00:00"` is hardcoded in the harness.
