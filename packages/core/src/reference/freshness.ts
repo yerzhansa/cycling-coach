@@ -1,4 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
 //
 // Single source of truth for Reference's freshness, retention, and sync-loop
 // timing constants. Imported by every Reference module that needs a window;

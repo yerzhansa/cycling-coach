@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 /**
  * Layer-1 sync gate per Reference PRD Decision 7. Wave-1 STUB — always
  * returns ok. Wave 4 / F15 replaces the body with the actual mechanical

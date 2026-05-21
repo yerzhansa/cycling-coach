@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 import { IntervalsClient } from "intervals-icu-api";
 import { chainedSignal } from "../../concurrency/abort-budget.js";
 

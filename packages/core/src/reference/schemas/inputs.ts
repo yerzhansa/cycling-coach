@@ -1,4 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
 //
 // Why z.looseObject and not .strict(): cache schemas gate against on-disk
 // drift via .strict(). Input schemas project upstream-API responses we

@@ -77,15 +77,8 @@ copy; the following modifications were applied during the port:
   disk; `formatQuantity(quantity, athleteUnits)` renders to the athlete's
   preferred system. Section-11's mixed-units assumptions are removed.
 
-### Where the upstream credit appears in source
+### Canonical attribution surfaces
 
-- `packages/core/src/reference/CONTEXT.md` opens with a section-11 credit
-  paragraph.
-- Each ported file in `packages/core/src/reference/`,
-  `packages/core/src/concurrency/`, and the JSON I/O helpers under
-  `packages/core/src/io/` carries a one-line header comment:
-  `// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.`
-- This file (`NOTICE.md`) and the [`README.md` Credits section](./README.md#credits)
-  are the canonical attribution surfaces.
-
-The full upstream repository is at https://github.com/CrankAddict/section-11.
+This file (`NOTICE.md`) and the [`README.md` Credits section](./README.md#credits)
+are the canonical attribution surfaces. The full upstream repository is at
+https://github.com/CrankAddict/section-11.

@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 import { CRITICAL_MS, FRESH_MS, STALE_MS } from "../freshness.js";
 
 export type Freshness = "fresh" | "flag" | "stale" | "critical";

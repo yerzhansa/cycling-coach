@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 import type { Activity } from "intervals-icu-api";
 import type { IntervalsActivityType } from "../sport.js";
 

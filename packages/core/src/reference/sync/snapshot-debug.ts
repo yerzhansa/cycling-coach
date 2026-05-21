@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 import {
   SNAPSHOT_DOCUMENT_THRESHOLD_BYTES,
   SNAPSHOT_DOCUMENT_THRESHOLD_CHUNKS,

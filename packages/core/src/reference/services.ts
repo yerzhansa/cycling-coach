@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 import type { SyncResult } from "./sync/run-sync.js";
 import type { LatestJson } from "./schemas/latest.js";
 

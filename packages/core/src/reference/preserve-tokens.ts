@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 /**
  * Reference-owned MUST-PRESERVE compaction tokens — metric and framework
  * names whose verbatim form must survive 200-turn sessions. Each sport's

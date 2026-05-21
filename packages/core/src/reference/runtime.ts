@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { AsyncMutex } from "../concurrency/mutex.js";

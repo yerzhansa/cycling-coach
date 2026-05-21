@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 import type { IntervalsClient } from "intervals-icu-api";
 import type { FetchedReference } from "./run-sync.js";
 import { makeAbortableClient } from "./intervals-client-factory.js";

@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 // ─── Per-sport seam type (ADR-0010) ───────────────────────────────────
 export type {
   DfaSummary,

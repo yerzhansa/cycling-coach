@@ -1,4 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
 //
 // Cache-schemas-only barrel — used by the strict-schemas regression test
 // (tests/reference-strict-schemas.test.ts) which scopes to cache schemas

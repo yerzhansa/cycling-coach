@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 import { z } from "zod";
 
 export const INTERVALS_SCHEMA_VERSION = "1";

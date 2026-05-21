@@ -1,5 +1,3 @@
-// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.
-
 import { GrammyError } from "grammy";
 import type { SnapshotOutput } from "./snapshot-debug.js";
 
