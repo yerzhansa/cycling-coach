@@ -1,25 +1,20 @@
 /**
- * T09: compare the pyodide harness's per-metric snapshots against
- * a native CPython 3.12 run of the same logic via
- * `tools/snapshot-section-11-native.py`.
+ * Compare the committed per-metric snapshots (pyodide-generated) against
+ * a native CPython run of the same logic via
+ * `tools/snapshot-section-11-native.py`. Exit 0 if every populated
+ * metric is bit-identical; exit 1 with a structured diff otherwise.
  *
- * Usage:
- *
- *   uv run --python 3.12 tools/snapshot-section-11-native.py --out /tmp/native.json
- *   tsx tools/diff-pyodide-vs-cpython.ts /tmp/native.json
- *
- * Exit 0 if every populated metric matches bit-identically (numeric
- * values use Object.is to catch NaN / signed-zero / float drift).
- * Exit 1 otherwise; prints a structured diff to stderr.
- *
- * Spot-check only — runs by hand at T09 setup and on every pyodide
- * version bump. Not part of `pnpm test` because it requires uv +
- * Python 3.12 on the host, which CI doesn't currently install.
+ * Spot-check tool — not part of `pnpm test` because it needs `uv` +
+ * host Python 3.12, which CI doesn't currently provision. Run by
+ * hand at setup, on pyodide upgrades, and on upstream SHA bumps.
  */
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { deepCompare } from "./check-metric-parity";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..");
@@ -45,37 +40,18 @@ function loadNativeSnapshot(path: string): Map<string, unknown> {
   return new Map(Object.entries(raw));
 }
 
-function deepEqual(a: unknown, b: unknown): boolean {
-  if (Object.is(a, b)) return true;
-  if (typeof a !== typeof b) return false;
-  if (a === null || b === null) return a === b;
-  if (typeof a !== "object") return false;
-  if (Array.isArray(a) || Array.isArray(b)) {
-    if (!Array.isArray(a) || !Array.isArray(b)) return false;
-    if (a.length !== b.length) return false;
-    return a.every((x, i) => deepEqual(x, b[i]));
-  }
-  const ao = a as Record<string, unknown>;
-  const bo = b as Record<string, unknown>;
-  const keys = new Set([...Object.keys(ao), ...Object.keys(bo)]);
-  for (const k of keys) {
-    if (!deepEqual(ao[k], bo[k])) return false;
-  }
-  return true;
-}
-
-function summarize(value: unknown): string {
-  const s = JSON.stringify(value);
-  return s.length > 120 ? `${s.slice(0, 117)}...` : s;
-}
-
 function main(): number {
-  const nativePath = process.argv[2] ?? "/tmp/native-snapshots.json";
-  if (!existsSync(nativePath)) {
+  const nativePath = process.argv[2];
+  if (!nativePath) {
+    const exampleOut = join(tmpdir(), "native-snapshots.json");
     console.error(
-      `[diff] native JSON not found: ${nativePath}\n` +
-        `       Run: uv run --python 3.12 tools/snapshot-section-11-native.py --out ${nativePath}`,
+      `[diff] usage: tsx tools/diff-pyodide-vs-cpython.ts <native-json-path>\n` +
+        `       generate it first: uv run --python 3.12 tools/snapshot-section-11-native.py --out ${exampleOut}`,
     );
+    return 2;
+  }
+  if (!existsSync(nativePath)) {
+    console.error(`[diff] native JSON not found: ${nativePath}`);
     return 2;
   }
 
@@ -86,28 +62,29 @@ function main(): number {
   const diffs: { metric: string; reason: string }[] = [];
   let matched = 0;
   for (const metric of allMetrics) {
-    const p = pyodide.get(metric);
-    const n = native.get(metric);
     if (!pyodide.has(metric)) {
-      diffs.push({ metric, reason: `missing from pyodide; native=${summarize(n)}` });
+      diffs.push({ metric, reason: "missing from pyodide snapshots" });
       continue;
     }
     if (!native.has(metric)) {
-      diffs.push({ metric, reason: `missing from native; pyodide=${summarize(p)}` });
+      diffs.push({ metric, reason: "missing from native output" });
       continue;
     }
-    if (deepEqual(p, n)) {
+    const leafDiffs = deepCompare(pyodide.get(metric), native.get(metric));
+    if (leafDiffs.length === 0) {
       matched += 1;
       continue;
     }
-    diffs.push({
-      metric,
-      reason: `pyodide=${summarize(p)} | cpython=${summarize(n)}`,
-    });
+    const summary = leafDiffs
+      .slice(0, 5)
+      .map((d) => `${d.path}: pyodide=${JSON.stringify(d.expected)} cpython=${JSON.stringify(d.actual)}`)
+      .join("; ");
+    const tail = leafDiffs.length > 5 ? ` (+${leafDiffs.length - 5} more leaves)` : "";
+    diffs.push({ metric, reason: `${summary}${tail}` });
   }
 
   if (diffs.length === 0) {
-    console.log(`[diff] OK — ${matched} metrics bit-identical across pyodide + CPython 3.12.`);
+    console.log(`[diff] OK — ${matched} metrics bit-identical across pyodide + CPython.`);
     return 0;
   }
 

@@ -10,21 +10,13 @@ import {
 } from "../../../tools/check-metric-parity";
 
 /**
- * The Reference layer ↔ section-11 parity gate's Vitest surface.
+ * Reference parity gate's Vitest surface — two responsibilities:
  *
- * Two responsibilities, kept distinct in the suites below:
- *
- *   1. The empty-registry contract: when no metrics have been
- *      registered yet (the state pre-T12), the suite must produce
- *      zero parity test cases and `pnpm test` continues to pass.
- *
- *   2. Internals (deep comparator, research-file validator, registry
- *      miss error) get direct unit coverage so the gate's enforcement
- *      semantics are pinned by tests, not by integration alone.
- *
- * Once T12 registers its first metric, the cross-product loop below
- * starts producing real parity test cases — no test-file edits
- * required at that point.
+ *   1. Empty-registry contract: when no metrics are registered yet,
+ *      the matrix below produces zero parity test cases and the unit
+ *      tests above still pin the gate's enforcement semantics.
+ *   2. Once metrics register, the cross-product loop populates with
+ *      real parity assertions without further test-file edits.
  */
 
 describe("reference-parity gate — internals", () => {
@@ -82,7 +74,7 @@ describe("reference-parity gate — internals", () => {
   });
 
   describe("listRegisteredMetrics", () => {
-    it("returns an array of strings (possibly empty pre-T12)", () => {
+    it("returns an array of strings (possibly empty)", () => {
       const metrics = listRegisteredMetrics();
       expect(Array.isArray(metrics)).toBe(true);
       for (const m of metrics) expect(typeof m).toBe("string");
@@ -110,20 +102,16 @@ describe("reference-parity gate — registered metric × fixture matrix", () => 
   const fixtures = listFixtures();
 
   if (metrics.length === 0) {
-    // Pre-T12 state: registry is empty by design. The matrix has no
-    // test cases, but `pnpm test` continues to pass because the suite
-    // contains the unit tests above. Once T12 registers ACWR the
-    // matrix populates without code changes here.
-    it.skip("registry is empty — parity matrix produces 0 test cases (this is normal pre-T12)", () => {
-      // marker test only
+    it.skip("registry is empty — parity matrix produces 0 test cases", () => {
+      // marker
     });
     return;
   }
 
   for (const metric of metrics) {
     for (const fixture of fixtures) {
-      it(`${metric} matches the section-11 snapshot for ${fixture}`, async () => {
-        const result = await runParityCheck({ metric, fixture, oracle: "section-11" });
+      it(`${metric} matches snapshot for ${fixture}`, async () => {
+        const result = await runParityCheck({ metric, fixture });
         expect(
           result.passed,
           result.diff

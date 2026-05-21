@@ -1,51 +1,23 @@
 /**
- * The gate (T04). Mechanical bit-identical assertion between our
- * Reference layer TS metric implementations and the section-11
- * Python oracle's snapshots captured by `pnpm snapshot:section-11`.
+ * Bit-identical parity gate between the Reference layer's TypeScript
+ * metric implementations and the per-metric snapshots produced by
+ * `pnpm snapshot:section-11`.
  *
- * CLI:
+ * Why no `--update-snapshot` flag: the snapshot IS the oracle; rewriting
+ * it from the implementation under test defeats the discipline. Snapshots
+ * regenerate only by re-running the harness against the upstream source.
  *
- *   pnpm check-parity --metric=<name> --fixture=<athlete>
- *   pnpm check-parity --all                  # every metric × every fixture
- *   pnpm check-parity --metric=acwr --json   # machine-readable diff
- *
- * Exit codes:
- *   0  bit-identical match (silent) — and, if the deviation registry
- *      marks the metric `approved-cite`, the cited research file
- *      exists, contains a DOI or PMID marker, and is at least 300
- *      words. Both conditions must hold.
- *   1  parity mismatch OR cite-path enforcement failure (research
- *      file missing, no DOI/PMID, < 300 words). Structured diff goes
- *      to stdout (json mode) or stderr (default).
- *   2  the metric isn't in the registry yet. The error message tells
- *      the operator where to add it.
- *
- * Reads:
- *   - packages/core/tests/fixtures/snapshots/<athlete>/<metric>.json
- *   - packages/core/tests/fixtures/golden/<athlete>.json
- *   - tools/intentional-deviations.yaml (informational + cite enforcement)
- *
- * Does NOT:
- *   - Regenerate snapshots. That's `pnpm snapshot:section-11`. The
- *     gate is read-only.
- *   - Overwrite snapshots from current TS output. There is no
- *     `--update-snapshot` flag, by design — the snapshot is the
- *     oracle, updating it from the implementation under test
- *     defeats the discipline.
- *
- * The registry's role is intentionally split:
- *   - All entries are surfaced in the gate's output for visibility.
- *   - Only `approved-cite` entries trigger the research-file content
- *     check; `approved-revert` and `pending` entries change nothing
- *     about the bit-identical assertion (a revert means the TS now
- *     mirrors section-11, so the snapshot will match by construction).
- *   - `pending` entries that fail bit-identical surface that failure
- *     normally — the registry is not a free pass.
+ * Why a research-file content check sits inside the gate: bit-identical
+ * parity is necessary but not sufficient for a deviation that ships
+ * `approved-cite` — the discipline requires that the cited research
+ * file exists, contains a DOI or PMID marker, and is at least 300
+ * words. The gate enforces it mechanically so the cite path can't
+ * silently weaken.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { parse as parseYaml } from "yaml";
 
@@ -64,32 +36,25 @@ const DEVIATIONS_PATH = resolve(REPO_ROOT, "tools/intentional-deviations.yaml");
 
 // ─── Metric registry ────────────────────────────────────────────────────
 //
-// How to add a metric (once the TS port lands via /port-metric):
+// How to add a metric:
 //
 //   1. Implement the metric in `packages/core/src/reference/metrics/<file>.ts`
 //      with the signature `(fixture: <FixtureShape>) => <ValueType>`.
 //   2. Add an entry below, with `module` pointing at the TS module
-//      (workspace-relative) and `exportName` matching the exported
+//      (this-file-relative) and `exportName` matching the exported
 //      function. The CLI will dynamically `import()` it.
-//   3. Re-run `pnpm test`. The Vitest suite at
+//   3. Re-run `pnpm test`. The Vitest matrix at
 //      `packages/core/tests/reference-parity.test.ts` automatically
 //      picks up new entries.
 //
-// The registry is empty until the first metric lands (T12 ports ACWR).
-// An empty registry is correct, not a bug: the Vitest suite produces
-// 0 test cases and `pnpm test` continues to pass.
+// An empty registry is correct: the Vitest matrix produces zero cases
+// and `pnpm test` continues to pass.
 export interface MetricRegistryEntry {
   module: string;
   exportName: string;
 }
 
-export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {
-  // Example shape for when ACWR lands via T12:
-  //   acwr: {
-  //     module: "../packages/core/src/reference/metrics/load-management",
-  //     exportName: "computeAcwr",
-  //   },
-};
+export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {};
 
 // ─── Deviation registry ─────────────────────────────────────────────────
 
@@ -122,13 +87,9 @@ export interface DeviationRegistry {
   deviations: DeviationEntry[];
 }
 
-let _cachedRegistry: DeviationRegistry | null = null;
 export function loadDeviationRegistry(): DeviationRegistry {
-  if (_cachedRegistry !== null) return _cachedRegistry;
   const raw = readFileSync(DEVIATIONS_PATH, "utf8");
-  const parsed = parseYaml(raw) as DeviationRegistry;
-  _cachedRegistry = parsed;
-  return parsed;
+  return parseYaml(raw) as DeviationRegistry;
 }
 
 export function findDeviation(metric: string): DeviationEntry | undefined {
@@ -137,21 +98,16 @@ export function findDeviation(metric: string): DeviationEntry | undefined {
 
 // ─── Research file content validation (cite-path enforcement) ─────────
 //
-// `/architect` finding #2 (2026-05-21): the cite path of the porting
-// discipline had zero runs against real machinery. When a deviation
-// is `approved-cite`, the gate must verify the cited research file
-// (a) exists at `justification.path`, (b) contains a DOI or PMID
-// marker, and (c) is at least 300 words. Failing any of these is a
-// gate failure — bit-identical parity alone is not enough for a
-// cited deviation. This is the only place the registry's `status`
-// field changes the gate's exit code; bit-identical assertion is
-// unconditional.
+// When a deviation ships `approved-cite`, bit-identical parity against
+// the snapshot is not sufficient — the gate also verifies (a) the
+// `justification.path` file exists, (b) it contains a DOI or PMID
+// marker, and (c) it is at least 300 words. Failing any of those is
+// a gate failure: a thin or absent citation makes the deviation hollow.
 export const RESEARCH_FILE_MIN_WORDS = 300;
 export const DOI_OR_PMID_REGEX = /(10\.\d{4,9}\/[^\s\]]+|PMID:?\s*\d{3,})/i;
 
 export interface ResearchFileValidation {
   ok: boolean;
-  path?: string;
   reasons: string[];
 }
 
@@ -166,7 +122,7 @@ export function validateResearchFile(
   const abs = resolve(REPO_ROOT, justificationPath);
   if (!existsSync(abs)) {
     reasons.push(`file does not exist at ${justificationPath}`);
-    return { ok: false, path: abs, reasons };
+    return { ok: false, reasons };
   }
   const content = readFileSync(abs, "utf8");
   if (!DOI_OR_PMID_REGEX.test(content)) {
@@ -178,7 +134,7 @@ export function validateResearchFile(
       `word count ${wordCount} is below the ${RESEARCH_FILE_MIN_WORDS}-word minimum for a research summary`,
     );
   }
-  return { ok: reasons.length === 0, path: abs, reasons };
+  return { ok: reasons.length === 0, reasons };
 }
 
 // ─── Comparison ─────────────────────────────────────────────────────────
@@ -259,14 +215,9 @@ export function listRegisteredMetrics(): string[] {
 
 export function listFixtures(): string[] {
   if (!existsSync(SNAPSHOTS_ROOT)) return [];
-  return readdirSync(SNAPSHOTS_ROOT)
-    .filter((entry) => {
-      try {
-        return statSync(join(SNAPSHOTS_ROOT, entry)).isDirectory();
-      } catch {
-        return false;
-      }
-    })
+  return readdirSync(SNAPSHOTS_ROOT, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
     .sort();
 }
 
@@ -275,7 +226,6 @@ export function listFixtures(): string[] {
 export interface ParityResult {
   metric: string;
   fixture: string;
-  oracle: "section-11";
   passed: boolean;
   diff: DiffLeaf[];
   deviation?: {
@@ -289,9 +239,7 @@ export interface ParityResult {
 export async function runParityCheck(args: {
   metric: string;
   fixture: string;
-  oracle?: "section-11";
 }): Promise<ParityResult> {
-  const oracle = args.oracle ?? "section-11";
   const entry = METRIC_REGISTRY[args.metric];
   if (!entry) {
     throw new RegistryMissError(args.metric);
@@ -300,7 +248,7 @@ export async function runParityCheck(args: {
   const fixture = loadFixture(args.fixture);
 
   const moduleSpecifier = entry.module.startsWith(".")
-    ? resolve(__dirname, entry.module)
+    ? pathToFileURL(resolve(__dirname, entry.module)).href
     : entry.module;
   const mod = (await import(moduleSpecifier)) as Record<string, unknown>;
   const computeFn = mod[entry.exportName] as
@@ -326,7 +274,6 @@ export async function runParityCheck(args: {
   return {
     metric: args.metric,
     fixture: args.fixture,
-    oracle,
     passed,
     diff,
     deviation: deviation
@@ -356,7 +303,6 @@ interface CliArgs {
   fixture?: string;
   all?: boolean;
   json?: boolean;
-  oracle?: "section-11" | "gc" | "both";
 }
 
 function parseCli(argv: string[]): CliArgs {
@@ -376,12 +322,6 @@ function parseCli(argv: string[]): CliArgs {
       case "json":
         out.json = true;
         break;
-      case "oracle":
-        if (v !== "section-11" && v !== "gc" && v !== "both") {
-          throw new Error(`unknown --oracle value: ${v}`);
-        }
-        out.oracle = v;
-        break;
       default:
         throw new Error(`unknown flag: ${tok}`);
     }
@@ -389,13 +329,16 @@ function parseCli(argv: string[]): CliArgs {
   return out;
 }
 
+function summarize(value: unknown, maxLen = 120): string {
+  const s = JSON.stringify(value);
+  return s !== undefined && s.length > maxLen ? `${s.slice(0, maxLen - 3)}...` : String(s);
+}
+
 function formatHumanDiff(r: ParityResult): string {
   const header = `[parity] ${r.metric} / ${r.fixture}: FAIL`;
   const lines: string[] = [header];
   for (const d of r.diff.slice(0, 20)) {
-    lines.push(
-      `  ${d.path}: expected ${JSON.stringify(d.expected)} | got ${JSON.stringify(d.actual)}`,
-    );
+    lines.push(`  ${d.path}: expected ${summarize(d.expected)} | got ${summarize(d.actual)}`);
   }
   if (r.diff.length > 20) {
     lines.push(`  … ${r.diff.length - 20} more leaf diffs not shown`);
@@ -406,28 +349,16 @@ function formatHumanDiff(r: ParityResult): string {
       lines.push(`    - ${reason}`);
     }
   }
-  if (r.deviation && r.diff.length === 0 && r.deviation.status !== "approved-cite") {
-    // Shouldn't reach here under the passed=false branch, but defensive
-    lines.push(`  deviation status: ${r.deviation.status} (informational)`);
-  }
   return lines.join("\n");
 }
 
 function formatHumanPass(r: ParityResult): string {
-  const tail = r.deviation
-    ? ` (deviation: ${r.deviation.status})`
-    : "";
+  const tail = r.deviation ? ` (deviation: ${r.deviation.status})` : "";
   return `[parity] ${r.metric} / ${r.fixture}: OK${tail}`;
 }
 
 async function main(): Promise<number> {
   const args = parseCli(process.argv);
-  if (args.oracle === "gc" || args.oracle === "both") {
-    console.error(
-      `[parity] --oracle=${args.oracle} not implemented in this build (deferred to F10)`,
-    );
-    return 2;
-  }
 
   const pairs: { metric: string; fixture: string }[] = [];
   if (args.all) {
@@ -445,7 +376,7 @@ async function main(): Promise<number> {
 
   if (pairs.length === 0) {
     if (args.all) {
-      console.log("[parity] registry is empty — nothing to check (this is normal pre-T12)");
+      console.log("[parity] registry is empty — nothing to check");
       return 0;
     }
     console.error("[parity] no fixtures found");
@@ -484,8 +415,9 @@ async function main(): Promise<number> {
   return 0;
 }
 
-// Run only when invoked as a script (not when imported by Vitest)
-const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === resolve(__filename);
-if (invokedDirectly) {
+const invokedAsScript =
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+if (invokedAsScript) {
   void main().then((code) => process.exit(code));
 }
