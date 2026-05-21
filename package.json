@@ -15,7 +15,8 @@
     "fmt:check": "oxfmt --check packages/",
     "check": "pnpm -r build && oxlint packages/ && pnpm check:trademarks",
     "check:trademarks": "tsx tools/check-trademarks.ts",
-    "release-version": "changeset version && tsx tools/bump-binaries-to-calver.ts"
+    "release-version": "changeset version && tsx tools/bump-binaries-to-calver.ts",
+    "snapshot:section-11": "tsx tools/snapshot-section-11.ts"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.0",
@@ -25,6 +26,7 @@
     "msw": "^2.13.3",
     "oxfmt": "^0.45.0",
     "oxlint": "^1.60.0",
+    "pyodide": "^0.29.4",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
     "vitest": "^4.1.4"
