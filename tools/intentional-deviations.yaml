@@ -220,30 +220,28 @@ deviations:
       rename + REST_DAY_RECOVERY_HOURS removal). Status lives there;
       this entry remains anchored to the 2026-05-21 revert decision.
 
-# ─── Pre-F8 audit (T02, 2026-05-21) ──────────────────────────────────────
+# Pre-port deviation audit (2026-05-21)
 #
-# Mechanical sweep over shipped Reference layer code (Waves 1, 1b, F7)
-# against section-11/examples/sync.py to surface undiscovered constant
-# or behavioral drift before F8 starts adding domain math.
+# Mechanical sweep over the shipped non-metric Reference layer code
+# (sync infrastructure + schemas + concurrency + io primitives) against
+# section-11/examples/sync.py to surface undiscovered constant or
+# behavioral drift before metric math starts landing.
 #
 # Scope (TS):
-#   packages/core/src/reference/sync/**.ts          (10 files)
-#   packages/core/src/reference/schemas/**.ts       (10 files)
-#   packages/core/src/reference/*.ts top-level      (freshness, runtime,
-#                                                    paths, services,
-#                                                    sport-adapter,
-#                                                    trademark-policy,
-#                                                    preserve-tokens,
-#                                                    index)
-#   packages/core/src/concurrency/*.ts              (4 files)
-#   packages/core/src/io/*.ts                       (3 files)
+#   packages/core/src/reference/sync/**.ts
+#   packages/core/src/reference/schemas/**.ts
+#   packages/core/src/reference/*.ts top-level (freshness, runtime,
+#     paths, services, sport-adapter, trademark-policy, preserve-tokens,
+#     index)
+#   packages/core/src/concurrency/*.ts
+#   packages/core/src/io/*.ts
 #
-# Out of scope (no domain math shipped yet, or different wave):
-#   packages/core/src/reference/metrics/            (F8+ — Wave 2)
-#   packages/core/src/reference/validation/         (Wave 4)
-#   packages/core/src/reference/curator/            (Wave 5)
-#   packages/core/src/reference/units/              (Wave 6)
-#   packages/core/src/reference/audit/              (Wave 7)
+# Out of scope (no domain math shipped, audited per-metric on port):
+#   packages/core/src/reference/metrics/
+#   packages/core/src/reference/validation/
+#   packages/core/src/reference/curator/
+#   packages/core/src/reference/units/
+#   packages/core/src/reference/audit/
 #
 # Patterns searched in section-11/examples/sync.py:
 #   - Module-level UPPER_CASE constants (lines ~250-330):
@@ -268,7 +266,7 @@ deviations:
 #   | Latest display window         | days_back default = 7        | LATEST_RETENTION_DAYS = 7 (freshness.ts)      |
 #   | Week-start convention         | WEEK_START_DAY = 0 (Monday)  | WeeklyRollupSchema "Monday" (inputs.ts:144)   |
 #   | Per-request HTTP timeout      | timeout=30 (intervals.icu)   | PER_REQUEST_TIMEOUT_MS = 30_000 (freshness)   |
-#   | Cache file names              | *.json (latest/history/etc.) | runtime.ts JSDoc lists same five filenames    |
+#   | Cache file names              | *.json (latest/history/etc.) | paths.ts JSDoc lists same five filenames      |
 #
 # TS-only architecture (no section-11 counterpart — not deviations):
 #
@@ -286,22 +284,17 @@ deviations:
 #     indefinitely (no explicit retention rule); the 90-day TS choice is
 #     a cache-layer policy, not a port of a section-11 number.
 #
-# Wave-2+ domain math NOT shipped yet (cannot be audited until ported):
+# Domain math in sync.py NOT yet ported (cannot be audited until ported;
+# each lands as a `deviations:` entry above if drift is introduced):
 #
-#   - days_for_acwr = 28 (sync.py:2275)        → F8 metric work
-#   - SUSTAINABILITY_WINDOW_DAYS = 42 (line 328) → Wave 3+
-#   - BLOCK_WINDOW_DAYS = 28 / BOUNDARY_WIDTH_DAYS = 4 (lines 2833-2834)
-#                                              → Wave 4 validation
-#   - DFA_* family (lines 277-283)             → Wave 3+ capability
-#   - Event lookahead 90 d / near-future 42 d (lines 2391, 2397)
-#                                              → compliance / F11
-#   - Power-curve windows (lines 2466-2468)    → Wave 3+ capability
+#   - days_for_acwr = 28 (sync.py:2275)
+#   - SUSTAINABILITY_WINDOW_DAYS = 42 (sync.py:328)
+#   - BLOCK_WINDOW_DAYS = 28 / BOUNDARY_WIDTH_DAYS = 4 (sync.py:2833-2834)
+#   - DFA_* family (sync.py:277-283)
+#   - Event lookahead 90 d / near-future 42 d (sync.py:2391, 2397)
+#   - Power-curve windows (sync.py:2466-2468)
 #
-# Verdict: 0 undiscovered deviations in the shipped Reference layer.
-# The drift surface is metric math (Waves 2+); the cache + sync
-# infrastructure shipped in Waves 1, 1b, F7 mirrors section-11's
-# constants where the two layers semantically overlap.
-#
-# Coverage time: ~50 min. Reviewer: Yerzhan (operator). Method: grep
-# audit of UPPER_CASE constants + day-window literals + timeout values
-# across both codebases, cross-walked into the table above.
+# Verdict: 0 undiscovered deviations in the shipped non-metric Reference
+# layer. The drift surface is metric math; the cache + sync infrastructure
+# already mirrors section-11's constants where the two layers semantically
+# overlap.
