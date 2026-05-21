@@ -93,13 +93,9 @@ deviations:
           analyzed each metric independently — no composite, no
           weighted-worst aggregation, no rolling 28d baseline.
 
-      Action items spawned by this decision:
-        - F8 spec must move to rev 7 with recovery_index mirroring
-          sync.py:3110-3115 line-by-line. Schema simplifies: single
-          `ratio: number | null` field, no `contributors` object, no
-          color bucket, no z-score machinery.
-        - ADR-0015 §Note on naming overlap loses one of its three
-          "project-original" metrics — amendment defer-able.
+      Follow-ups tracked in docs/progress/progress.json wave-2 (F8 spec
+      rev 7 inline rewrite + ADR-0015 amendment). Status lives there;
+      this entry remains anchored to the 2026-05-21 revert decision.
 
   - metric: stress_tolerance
     section_11_implementation: |
@@ -149,13 +145,9 @@ deviations:
       intuition is not standing for a sports-science deviation; the
       construction is reverted absent literature.
 
-      Action items spawned by this decision:
-        - F8 spec must move to rev 7 with stress_tolerance mirroring
-          sync.py:3131. Schema collapses: single `value: number | null`,
-          no bands, no audit fields, no `framework: "capacity-cap"`.
-        - ADR-0015 needs amendment in a follow-up ticket — either
-          deprecate the capacity-cap framing entirely OR retain it as
-          historical-context only.
+      Follow-ups tracked in docs/progress/progress.json wave-2 (F8 spec
+      rev 7 inline rewrite + ADR-0015 amendment). Status lives there;
+      this entry remains anchored to the 2026-05-21 revert decision.
 
   - metric: load_recovery_ratio
     section_11_implementation: |
@@ -208,16 +200,7 @@ deviations:
       formula becomes self-consistent — both metrics now derive from the
       same HRV/RHR autonomic signal.
 
-      Action items spawned by this decision:
-        - F8 spec must move to rev 7 with load_recovery_ratio mirroring
-          sync.py:3135. Schema collapses: single `value: number | null`,
-          no bands, no audit fields.
-        - The F7 schema change renaming `weeklyRecoveryHours` →
-          `weeklyRecoveryProxyHours` (proposed in F8 spec rev 6) is no
-          longer needed and should be dropped from rev 7. The exported
-          `REST_DAY_RECOVERY_HOURS = 8` constant introduced by F8 spec
-          rev 6 is also no longer referenced; rev 7 removes it.
-        - The `flattenZoneTimes`/`getZoneSeconds` helper extraction
-          remains valid for F9 (TID metrics still need zone access);
-          rev 7 keeps the helpers but disconnects them from the
-          load_recovery_ratio computation path.
+      Follow-ups tracked in docs/progress/progress.json wave-2 (F8 spec
+      rev 7 inline rewrite + F7 schema rev to drop weeklyRecoveryProxyHours
+      rename + REST_DAY_RECOVERY_HOURS removal). Status lives there;
+      this entry remains anchored to the 2026-05-21 revert decision.
