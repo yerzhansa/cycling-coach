@@ -43,6 +43,14 @@
 #     when a metric being ported has a `pending` entry; surfaces the
 #     deviation when porting against an `approved-cite` entry.
 #
+# Companion artifact (footer of this file):
+#   The bottom of this file carries a one-time Reference-layer baseline
+#   audit. Subsequent porting drift is audited PER-METRIC via
+#   /port-metric (which writes entries directly to `deviations:` above),
+#   NOT by appending additional bulk-audit footers here. Keep the
+#   footer count = 1; if you find yourself appending a second, that's
+#   a sign the audit log should be lifted to a separate markdown file.
+#
 # Lifecycle: every entry starts `pending` and stays there until a human
 # review (see porting-discipline §Phase 4) records a decision. No agent
 # may flip status without an explicit human instruction citing literature
@@ -220,12 +228,13 @@ deviations:
       rename + REST_DAY_RECOVERY_HOURS removal). Status lives there;
       this entry remains anchored to the 2026-05-21 revert decision.
 
-# Pre-port deviation audit (2026-05-21)
+# Reference-layer baseline audit (2026-05-21)
 #
 # Mechanical sweep over the shipped non-metric Reference layer code
 # (sync infrastructure + schemas + concurrency + io primitives) against
-# section-11/examples/sync.py to surface undiscovered constant or
-# behavioral drift before metric math starts landing.
+# section-11/examples/sync.py to surface undiscovered constant drift
+# before metric math starts landing. Behavioral drift is out of scope
+# for this sweep — it's enforced by the parity gate, not by audit.
 #
 # Scope (TS):
 #   packages/core/src/reference/sync/**.ts
