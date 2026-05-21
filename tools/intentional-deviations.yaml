@@ -54,55 +54,174 @@ deviations:
     section_11_implementation: |
       7-day HRV / RHR baseline ratio with 2 contributors (HRV + RHR),
       computed in sync.py around line 3113 inside
-      `_calculate_derived_metrics`.
+      `_calculate_derived_metrics`. Formula:
+      `(latest_hrv / hrv_baseline_7d) / (latest_rhr / rhr_baseline_7d)`,
+      rounded to 2 decimals. Returns None when either baseline or
+      latest reading is missing.
     our_implementation: |
-      28-day signed z-score over 4 contributors (HRV, RHR, sleep, soreness).
-      Specified in F8 spec rev 6; not yet code in main. The spec deviation
-      was identified during F8 Commit C review (2026-05-12) and is the
-      origin of the Phase 4 discipline.
+      F8 spec rev 6 proposed a 28-day rolling signed z-score over 4
+      contributors (sleep, rhr, hrv, soreness) with weighted-worst
+      aggregation (W = sleep:1, rhr:1, hrv:1.5, soreness:0.5) and
+      color buckets (|z| ≤ 0.5 green, ≤ 1.5 amber, > 1.5 red). Decision
+      below reverts that to section-11's shape; F8 spec rev 7 will
+      mirror sync.py:3110-3115.
     type: algorithmic
-    status: pending
+    status: approved-revert
+    decided_by: Yerzhan (operator)
+    decided_at: 2026-05-21
     notes: |
-      Phase 4 review owing. Default decision = Option A (revert to
-      section-11's 7-day / 2-contributor implementation). Garmin, Whoop,
-      Polar, and HRV4Training all converge on 7-day baselines; Plews 2013
-      and Buchheit 2014 are the standard citations for endurance athletes.
+      Phase 4 (T01) decision: revert to section-11's 7-day / 2-contributor
+      implementation.
 
-      If Option B (cite literature for a 28-day deviation) is chosen, the
-      required research file is `docs/knowledge/research/hrv-monitoring.md`
-      with explicit findings supporting a 28-day window against the 7-day
-      consensus. That research file does not exist yet — writing it is part
-      of the Option B cost, not a separate task.
+      Literature reviewed (2026-05-21, agent-assisted search):
+        - Plews 2012, "Heart rate variability in elite triathletes, is
+          variation in variability the key to effective training? A case
+          comparison" (Eur J Appl Physiol, PMID 22367011) — used 7-day
+          rolling Ln rMSSD average to detect non-functional overreaching
+          in elite triathletes. The de facto methodological standard.
+        - Buchheit 2014, "Monitoring training status with HR measures: do
+          all roads lead to Rome?" (Frontiers in Physiology,
+          DOI 10.3389/fphys.2014.00073) — recommends averaging at least
+          3-4 days; correlations with running performance only emerge
+          using ≥3-4 day averages. Consistent with 7d, not 28d.
+        - Industry convergence (Garmin, Whoop, Polar, HRV4Training): all
+          use 7-10 day baselines for endurance athletes.
+        - For the 28-day / 4-contributor / weighted-worst construction:
+          no peer-reviewed paper found supporting the specific shape.
+          Closest reference (Flatt 2018, sports/6030093) z-scored
+          subjective wellness against individual distributions but
+          analyzed each metric independently — no composite, no
+          weighted-worst aggregation, no rolling 28d baseline.
+
+      Action items spawned by this decision (out of scope here, captured
+      so they aren't lost):
+        - F8 spec must move to rev 7 with recovery_index mirroring
+          sync.py:3110-3115 line-by-line. Schema simplifies: single
+          `ratio: number | null` field, no `contributors` object, no
+          color bucket, no z-score machinery.
+        - ADR-0015 §Note on naming overlap loses one of its three
+          "project-original" metrics — amendment defer-able to a
+          follow-up ticket, not load-bearing for the revert PR itself.
 
   - metric: stress_tolerance
     section_11_implementation: |
-      `weekly_load / 100` (sync.py around line 3131 inside
-      `_calculate_derived_metrics`).
+      `round((strain / monotony) / 100, 1)` at sync.py:3131. Since
+      `strain = tss_7d_total × monotony` (sync.py:3087), this simplifies
+      algebraically to `tss_7d_total / 100` when monotony is non-zero.
+      Returns None when strain or monotony is missing.
     our_implementation: |
-      Capacity-cap family with peak-chronic-load lookback — see ADR-0015
-      for the project-original framing. Specified in F8 spec rev 6;
-      not yet code in main.
+      F8 spec rev 6 proposed a capacity-cap family: ratio of recent load
+      to peak-chronic-load (max of rolling-4w means inside a lookback
+      window), with band enum `["under", "healthy", "over"]` and audit
+      fields (peakChronicWeekIndex, windowDays, lookbackWeeks). ADR-0015
+      framed this as a project-original construction. Decision below
+      reverts to section-11's shape; F8 spec rev 7 will mirror
+      sync.py:3131 line-by-line.
     type: algorithmic
-    status: pending
+    status: approved-revert
+    decided_by: Yerzhan (operator)
+    decided_at: 2026-05-21
+    adr: docs/adr/0015-stress-tolerance-capacity-cap-family.md
     notes: |
-      Phase 4 review owing. ADR-0015 documents the rationale for the
-      capacity-cap approach but is the same architect-intuition class
-      of decision that the porting discipline was created to constrain.
-      Decision needs literature (e.g., Foster 2001 monotony/strain
-      framing, Busso 2003 IRM dose-response) OR a revert to
-      `weekly_load / 100`. Default = revert.
+      Phase 4 (T01) decision: revert to section-11's
+      `(strain / monotony) / 100` implementation.
+
+      Literature reviewed (2026-05-21, agent-assisted search):
+        - Foster 2001, "A new approach to monitoring exercise training"
+          (J Strength Cond Res 15(1):109–115) — establishes monotony,
+          strain, and the broader load-monitoring framework. Section-11's
+          formula reduces to a Foster-grounded weekly-load tolerance
+          scaled by 100.
+        - Busso 2003, "Variable Dose-Response Relationship between
+          Exercise Training and Performance" (Med Sci Sports Exerc
+          35(7):1188–1195) — nonlinear fitness-fatigue (IRM) model.
+          Sophisticated pharmacodynamic-style construction; NOT a
+          capacity-cap. Cannot justify recentLoad/peakChronicLoad.
+        - Banister 1975 fitness-fatigue lineage — convolution model
+          with τ time constants; not a peak-chronic-cap denominator.
+        - ACWR family (Gabbett 2016, Hulin 2016, Impellizzeri 2020) —
+          uses acute/chronic ratios but with rolling-mean denominators,
+          not peak-chronic maxima.
+        - General load-management consensus ("consistently maintained
+          chronic loads enhance tolerance") is supported, but the
+          specific peak-chronic-cap shape has no peer-reviewed source.
+
+      ADR-0015 captures the architect-intuition rationale for the
+      capacity-cap family. Per the porting discipline, architect
+      intuition is not standing for a sports-science deviation; the
+      construction is reverted absent literature.
+
+      Action items spawned by this decision:
+        - F8 spec must move to rev 7 with stress_tolerance mirroring
+          sync.py:3131. Schema collapses: single `value: number | null`,
+          no bands, no audit fields, no `framework: "capacity-cap"`.
+        - ADR-0015 needs amendment in a follow-up ticket — either
+          deprecate the capacity-cap framing entirely OR retain it as
+          historical-context only (decision out of scope here).
+        - The metric is algebraically thin (weekly_load/100). That's a
+          separate observation about utility, not a deviation decision.
+          Section-11 ships it; we port it faithfully.
 
   - metric: load_recovery_ratio
     section_11_implementation: |
-      HRV / RHR denominator framing — recovery scaled directly against
-      autonomic-nervous-system signals. Implemented in sync.py inside
-      `_calculate_derived_metrics`.
+      `round(tss_7d_total / (ri * 100), 1) if ri and ri > 0 else None`
+      at sync.py:3135. The denominator is the recovery_index (HRV/RHR
+      autonomic-nervous-system ratio) scaled by 100. Inherits dependency
+      on the recovery_index metric.
     our_implementation: |
-      Composite denominator: Z1-hours + rest-day-hours. Specified in F8
-      spec rev 6; not yet code in main.
+      F8 spec rev 6 proposed a time-proxy denominator:
+      `ratio = weeklyLoad / weeklyRecoveryProxyHours`, where
+      `weeklyRecoveryProxyHours = z1Hours + restDayCount × 8` (with the
+      8-hour rest-day constant flagged TENTATIVE). Bands enum
+      `["under", "healthy", "over"]`. Decision below reverts to
+      section-11's HRV/RHR-denominated shape; F8 spec rev 7 will mirror
+      sync.py:3135 line-by-line.
     type: algorithmic
-    status: pending
+    status: approved-revert
+    decided_by: Yerzhan (operator)
+    decided_at: 2026-05-21
     notes: |
-      Phase 4 review owing. The composite denominator was introduced
-      alongside the recovery_index deviation and inherits the same lack
-      of literature backing. Default = revert.
+      Phase 4 (T01) decision: revert to section-11's
+      `tss_7d / (ri × 100)` implementation.
+
+      Literature reviewed (2026-05-21, agent-assisted search):
+        - HRV/RHR as recovery indicators: Buchheit 2014
+          (DOI 10.3389/fphys.2014.00073), Plews 2012/2013, narrative
+          reviews (PMC7663087, PMC12787763). All converge on HRV being
+          a primary autonomic recovery marker for endurance athletes.
+          Section-11's denominator inherits this support indirectly.
+        - Saw 2016, "Monitoring the athlete training response: subjective
+          self-reported measures trump commonly used objective measures"
+          (Br J Sports Med 50:281–291, PMID 26423706) — caveats HRV's
+          primacy; subjective wellness outperforms objective markers.
+          Not a justification for the Z1-time deviation, just context.
+        - Z1 as a recovery DENOMINATOR (the F8 spec's choice): searched
+          polarized-training literature (Seiler 2010, recent reviews on
+          intensity distribution), HRV-guided training corpus, recovery
+          monitoring papers. Z1's role in adaptation is well-established
+          (polarized 75/5/20 pyramidal); as a recovery-dose denominator
+          specifically, NO peer-reviewed source found.
+        - The 8-hour rest-day constant in the proxy has no literature
+          anchor; F8 spec itself marks it TENTATIVE.
+
+      Asymmetric resolution under the discipline rule: deviations from
+      section-11 require literature. Section-11's HRV/RHR denominator
+      has indirect support; the Z1-time denominator has none. Revert.
+
+      Internal-coherence dividend: with recovery_index also reverted to
+      section-11's 7d/2-contributor `ri`, the `tss_7d / (ri × 100)`
+      formula becomes self-consistent — both metrics now derive from the
+      same HRV/RHR autonomic signal.
+
+      Action items spawned by this decision:
+        - F8 spec must move to rev 7 with load_recovery_ratio mirroring
+          sync.py:3135. Schema collapses: single `value: number | null`,
+          no bands, no audit fields, drop the weeklyRecoveryProxyHours
+          rename + JSDoc + 8-hour proxy constant.
+        - The F7 schema change renaming `weeklyRecoveryHours` →
+          `weeklyRecoveryProxyHours` (proposed in F8 spec rev 6) is no
+          longer needed and should be dropped from rev 7.
+        - The `flattenZoneTimes`/`getZoneSeconds` helper extraction
+          remains valid for F9 (TID metrics still need zone access);
+          rev 7 keeps the helpers but disconnects them from the
+          load_recovery_ratio computation path.
