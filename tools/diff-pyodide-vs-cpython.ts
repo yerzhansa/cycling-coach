@@ -11,13 +11,10 @@
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
 
-import { deepCompare } from "./check-metric-parity";
+import { deepCompare, REPO_ROOT } from "./check-metric-parity";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(__dirname, "..");
 const SNAPSHOT_DIR = resolve(
   REPO_ROOT,
   "packages/core/tests/fixtures/snapshots/realistic-athlete",

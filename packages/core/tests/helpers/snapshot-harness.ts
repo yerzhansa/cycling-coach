@@ -1,5 +1,4 @@
-import { execSync } from "node:child_process";
-import { exec } from "node:child_process";
+import { exec, execSync } from "node:child_process";
 import { statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";

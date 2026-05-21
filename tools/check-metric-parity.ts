@@ -15,11 +15,12 @@
  * silently weaken.
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { parse as parseYaml } from "yaml";
+import { z } from "zod";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -57,43 +58,85 @@ export interface MetricRegistryEntry {
 export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {};
 
 // ─── Deviation registry ─────────────────────────────────────────────────
+//
+// Schema-validated at load time so a Phase-4 reviewer typo (status:
+// "approved-revrt", missing required field, extra key) fails loud with the
+// path that's wrong instead of silently weakening the cite-path check.
 
-export type DeviationStatus =
-  | "pending"
-  | "approved-revert"
-  | "approved-cite"
-  | "approved-bug"
-  | "rejected";
+export const DeviationStatusSchema = z.enum([
+  "pending",
+  "approved-revert",
+  "approved-cite",
+  "approved-bug",
+  "rejected",
+]);
+export type DeviationStatus = z.infer<typeof DeviationStatusSchema>;
 
-export interface DeviationEntry {
-  metric: string;
-  section_11_implementation: string;
-  our_implementation: string;
-  type: string;
-  status: DeviationStatus;
-  justification?: {
-    kind?: string;
-    path?: string;
-    cited_papers?: unknown[];
-  };
-  adr?: string;
-  decided_by?: string;
-  decided_at?: string;
-  notes?: string;
-}
+export const DeviationJustificationSchema = z
+  .object({
+    kind: z.string().optional(),
+    path: z.string().optional(),
+    cited_papers: z.array(z.unknown()).optional(),
+  })
+  .strict();
 
-export interface DeviationRegistry {
-  schema_version: number;
-  deviations: DeviationEntry[];
-}
+export const DeviationEntrySchema = z
+  .object({
+    metric: z.string(),
+    section_11_implementation: z.string(),
+    our_implementation: z.string(),
+    type: z.string(),
+    status: DeviationStatusSchema,
+    justification: DeviationJustificationSchema.optional(),
+    adr: z.string().optional(),
+    decided_by: z.string().optional(),
+    decided_at: z.string().optional(),
+    notes: z.string().optional(),
+  })
+  .strict();
+export type DeviationEntry = z.infer<typeof DeviationEntrySchema>;
+
+export const DeviationRegistrySchema = z
+  .object({
+    schema_version: z.literal(1),
+    deviations: z.array(DeviationEntrySchema),
+  })
+  .strict();
+export type DeviationRegistry = z.infer<typeof DeviationRegistrySchema>;
+
+let registryCache: DeviationRegistry | undefined;
+let deviationByMetricCache: Map<string, DeviationEntry> | undefined;
 
 export function loadDeviationRegistry(): DeviationRegistry {
-  const raw = readFileSync(DEVIATIONS_PATH, "utf8");
-  return parseYaml(raw) as DeviationRegistry;
+  if (registryCache === undefined) {
+    const raw = readFileSync(DEVIATIONS_PATH, "utf8");
+    const parsed = parseYaml(raw);
+    const result = DeviationRegistrySchema.safeParse(parsed);
+    if (!result.success) {
+      throw new Error(
+        `tools/intentional-deviations.yaml failed schema validation:\n${result.error.message}`,
+      );
+    }
+    registryCache = result.data;
+  }
+  return registryCache;
 }
 
 export function findDeviation(metric: string): DeviationEntry | undefined {
-  return loadDeviationRegistry().deviations.find((d) => d.metric === metric);
+  if (deviationByMetricCache === undefined) {
+    deviationByMetricCache = new Map(
+      loadDeviationRegistry().deviations.map((d) => [d.metric, d]),
+    );
+  }
+  return deviationByMetricCache.get(metric);
+}
+
+// Test-only hook: tests that drive synthetic registries through edge cases
+// need to invalidate the module-level memo between assertions. Production
+// callers should never touch this.
+export function __resetRegistryCacheForTesting(): void {
+  registryCache = undefined;
+  deviationByMetricCache = undefined;
 }
 
 // ─── Research file content validation (cite-path enforcement) ─────────
@@ -120,11 +163,16 @@ export function validateResearchFile(
     return { ok: false, reasons };
   }
   const abs = resolve(REPO_ROOT, justificationPath);
-  if (!existsSync(abs)) {
-    reasons.push(`file does not exist at ${justificationPath}`);
-    return { ok: false, reasons };
+  let content: string;
+  try {
+    content = readFileSync(abs, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      reasons.push(`file does not exist at ${justificationPath}`);
+      return { ok: false, reasons };
+    }
+    throw err;
   }
-  const content = readFileSync(abs, "utf8");
   if (!DOI_OR_PMID_REGEX.test(content)) {
     reasons.push("no DOI or PMID marker found (expected '10.xxxx/...' or 'PMID:...')");
   }
@@ -193,6 +241,17 @@ export interface Snapshot {
   value: unknown;
 }
 
+export interface Manifest {
+  section_11_sha: string;
+  section_11_protocol_version: string;
+  section_11_commit_date: string;
+  fixtures: string[];
+  metrics: string[];
+  pyodide_version: string;
+  frozen_now: string;
+  offline_mode: "A_stub_requests_plus_monkey_patch";
+}
+
 export function snapshotPath(athlete: string, metric: string): string {
   return join(SNAPSHOTS_ROOT, athlete, `${metric}.json`);
 }
@@ -202,7 +261,11 @@ export function loadSnapshot(athlete: string, metric: string): Snapshot {
   return JSON.parse(readFileSync(path, "utf8")) as Snapshot;
 }
 
-export function loadFixture(athlete: string): unknown {
+// Returns the parsed JSON as `unknown`. The gate intentionally does not
+// Zod-validate fixtures here — that's a metric-function entry concern.
+// (`packages/core/tests/helpers/load-fixture.ts` is the validating loader
+// for in-package tests.)
+export function loadGoldenFixture(athlete: string): unknown {
   const path = join(FIXTURES_ROOT, `${athlete}.json`);
   return JSON.parse(readFileSync(path, "utf8"));
 }
@@ -214,8 +277,14 @@ export function listRegisteredMetrics(): string[] {
 }
 
 export function listFixtures(): string[] {
-  if (!existsSync(SNAPSHOTS_ROOT)) return [];
-  return readdirSync(SNAPSHOTS_ROOT, { withFileTypes: true })
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = readdirSync(SNAPSHOTS_ROOT, { withFileTypes: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
+  }
+  return entries
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
@@ -245,7 +314,7 @@ export async function runParityCheck(args: {
     throw new RegistryMissError(args.metric);
   }
   const snap = loadSnapshot(args.fixture, args.metric);
-  const fixture = loadFixture(args.fixture);
+  const fixture = loadGoldenFixture(args.fixture);
 
   const moduleSpecifier = entry.module.startsWith(".")
     ? pathToFileURL(resolve(__dirname, entry.module)).href
@@ -329,6 +398,8 @@ function parseCli(argv: string[]): CliArgs {
   return out;
 }
 
+const DIFF_LEAF_LIMIT = 20;
+
 function summarize(value: unknown, maxLen = 120): string {
   const s = JSON.stringify(value);
   return s !== undefined && s.length > maxLen ? `${s.slice(0, maxLen - 3)}...` : String(s);
@@ -337,11 +408,11 @@ function summarize(value: unknown, maxLen = 120): string {
 function formatHumanDiff(r: ParityResult): string {
   const header = `[parity] ${r.metric} / ${r.fixture}: FAIL`;
   const lines: string[] = [header];
-  for (const d of r.diff.slice(0, 20)) {
+  for (const d of r.diff.slice(0, DIFF_LEAF_LIMIT)) {
     lines.push(`  ${d.path}: expected ${summarize(d.expected)} | got ${summarize(d.actual)}`);
   }
-  if (r.diff.length > 20) {
-    lines.push(`  … ${r.diff.length - 20} more leaf diffs not shown`);
+  if (r.diff.length > DIFF_LEAF_LIMIT) {
+    lines.push(`  … ${r.diff.length - DIFF_LEAF_LIMIT} more leaf diffs not shown`);
   }
   if (r.deviation?.status === "approved-cite" && r.deviation.cite_check && !r.deviation.cite_check.ok) {
     lines.push("  cite-path enforcement:");
@@ -359,6 +430,11 @@ function formatHumanPass(r: ParityResult): string {
 
 async function main(): Promise<number> {
   const args = parseCli(process.argv);
+
+  if (args.all && args.metric) {
+    console.error("[parity] --all and --metric are mutually exclusive");
+    return 2;
+  }
 
   const pairs: { metric: string; fixture: string }[] = [];
   if (args.all) {

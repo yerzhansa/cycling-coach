@@ -101,10 +101,11 @@ describe("reference-parity gate — registered metric × fixture matrix", () => 
   const metrics = listRegisteredMetrics();
   const fixtures = listFixtures();
 
+  // Vitest 4.x errors on a describe with zero tests; this skipped marker
+  // is the one case body so the empty-registry path still has a parseable
+  // suite. Real cases fan out below once the registry populates.
   if (metrics.length === 0) {
-    it.skip("registry is empty — parity matrix produces 0 test cases", () => {
-      // marker
-    });
+    it.skip("registry is empty — parity matrix produces 0 test cases", () => {});
     return;
   }
 

@@ -2,19 +2,19 @@
 """Native-CPython twin of tools/snapshot-section-11.ts.
 
 The pyodide harness in `tools/snapshot-section-11.ts` produces the
-oracle JSON snapshots used as the section-11 → TypeScript port's
-ground truth. Pyodide ships CPython compiled to WebAssembly; ~99%
-of stdlib behavior is identical, but `math.fsum`, `statistics`
-edge cases, and float-repr have historically diverged in narrow
-cases. T09 spot-checks parity by running the SAME logic against
-host CPython 3.12 (matching pyodide 0.29.4's interpreter version)
-and diffing the per-metric outputs.
+oracle JSON snapshots used as the Reference layer's ground truth.
+Pyodide ships CPython compiled to WebAssembly; ~99% of stdlib
+behavior is identical, but `math.fsum`, `statistics` edge cases,
+and float-repr have historically diverged in narrow cases. This
+script spot-checks parity by running the SAME logic against host
+CPython 3.12 (matching pyodide 0.29.4's interpreter version) and
+diffing the per-metric outputs via `tools/diff-pyodide-vs-cpython.ts`.
 
 This script is intentionally a duplication of the harness prologue
 in TS, not a shared module — the pyodide path lives inside a
 heredoc literal in `tools/snapshot-section-11.ts` and can't be
 import-shared without packaging gymnastics. The two paths must
-stay in lock-step; the T09 diff IS the lock-step check.
+stay in lock-step; the diff IS the lock-step check.
 
 Usage (recommended, via uv):
 

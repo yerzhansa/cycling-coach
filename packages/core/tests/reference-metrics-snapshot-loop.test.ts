@@ -4,38 +4,20 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import type { Manifest, Snapshot } from "../../../tools/check-metric-parity";
+
 /**
  * Smoke test for the section-11 snapshot harness oracle.
  *
  * Proves that the per-metric JSON snapshots produced by
  * `pnpm snapshot:section-11` are loadable from Vitest and carry
  * the wrapper fields downstream parity tests will need. This is
- * NOT a parity assertion — those come with the F8+ metric ports.
+ * NOT a parity assertion — that's the gate's job.
  */
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SNAPSHOT_ROOT = resolve(__dirname, "fixtures/snapshots");
 const ATHLETE_DIR = resolve(SNAPSHOT_ROOT, "realistic-athlete");
-
-type MetricSnapshot = {
-  metric: string;
-  athlete: string;
-  section_11_sha: string;
-  section_11_protocol_version: string;
-  frozen_now: string;
-  value: unknown;
-};
-
-type Manifest = {
-  section_11_sha: string;
-  section_11_protocol_version: string;
-  section_11_commit_date: string;
-  fixtures: string[];
-  metrics: string[];
-  pyodide_version: string;
-  frozen_now: string;
-  offline_mode: string;
-};
 
 function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(path, "utf8")) as T;
@@ -53,22 +35,19 @@ describe("section-11 snapshot loop", () => {
   });
 
   it("loads a representative per-metric snapshot with the wrapper schema", () => {
-    const acwr = readJson<MetricSnapshot>(resolve(ATHLETE_DIR, "acwr.json"));
+    const acwr = readJson<Snapshot>(resolve(ATHLETE_DIR, "acwr.json"));
     expect(acwr.metric).toBe("acwr");
     expect(acwr.athlete).toBe("realistic-athlete");
     expect(acwr.section_11_sha).toMatch(/^[0-9a-f]{40}$/);
     expect(acwr.section_11_protocol_version).toMatch(/^\d+\.\d+$/);
     expect(acwr.frozen_now).toBe("2026-05-10T12:00:00");
-    // acwr is a scalar number (ratio) for the realistic-athlete fixture
-    // — the wrapper preserves Python's None as JSON null, so reject
-    // undefined explicitly.
     expect(acwr).toHaveProperty("value");
   });
 
   it("manifest's metrics list matches the on-disk file inventory", () => {
     const manifest = readJson<Manifest>(resolve(SNAPSHOT_ROOT, "manifest.json"));
     for (const name of manifest.metrics) {
-      const snap = readJson<MetricSnapshot>(resolve(ATHLETE_DIR, `${name}.json`));
+      const snap = readJson<Snapshot>(resolve(ATHLETE_DIR, `${name}.json`));
       expect(snap.metric).toBe(name);
     }
   });

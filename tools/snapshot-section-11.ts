@@ -7,14 +7,11 @@
  * The Python at upstream is the source of truth; we capture its
  * outputs here so future TS metric ports have something to assert
  * against. No parity assertions ship from this script — those
- * come later, per F8+.
+ * are the gate's job.
  *
  * Offline-mode choice: Option A (stub `requests` + monkey-patch
  * `IntervalsSync._intervals_get`). See tools/snapshot-section-11.README.md
  * for rationale and trade-offs.
- *
- * GPL discipline: this script reads only the section-11 (MIT)
- * source tree. It does not touch GC.
  */
 
 import { execSync } from "node:child_process";
@@ -23,6 +20,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadPyodide } from "pyodide";
+
+import type { Manifest, Snapshot } from "./check-metric-parity";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..");
@@ -44,17 +43,6 @@ const SNAPSHOT_ROOT_REL = "packages/core/tests/fixtures/snapshots";
 // data; for now it's a script-level constant documented in the
 // README.
 const FROZEN_NOW = "2026-05-10T12:00:00";
-
-interface Manifest {
-  section_11_sha: string;
-  section_11_protocol_version: string;
-  section_11_commit_date: string;
-  fixtures: string[];
-  metrics: string[];
-  pyodide_version: string;
-  frozen_now: string;
-  offline_mode: "A_stub_requests_plus_monkey_patch";
-}
 
 function readPyodideVersion(): string {
   const pkg = JSON.parse(
@@ -91,9 +79,7 @@ function readSyncPyVersion(syncPySource: string): string {
 }
 
 function ensureDir(path: string): void {
-  if (!existsSync(path)) {
-    mkdirSync(path, { recursive: true });
-  }
+  mkdirSync(path, { recursive: true });
 }
 
 const HARNESS_PROLOGUE = `
@@ -181,8 +167,8 @@ IntervalsSync = _sync_ns["IntervalsSync"]
 # Allowlist patterns use [*] as wildcard for any array index. The
 # entries below are intervals.icu fields that may legitimately be
 # absent on a per-record basis (older activities computed before
-# the field existed, rest-day wellness entries with no CTL/ATL,
-# etc.) — they are part of the intervals.icu schema's optionality,
+# the field existed, rest-day wellness entries with no Fitness/Fatigue
+# scores, etc.) — they are part of the intervals.icu schema's optionality,
 # not contract violations. Extending the list requires a README
 # update in the "Contract validation" section.
 import re as _re
@@ -422,7 +408,7 @@ async function main(): Promise<void> {
       section_11_protocol_version: protocolVersion,
       frozen_now: FROZEN_NOW,
       value,
-    };
+    } satisfies Snapshot;
     writeFileSync(filePath, `${JSON.stringify(wrapper, null, 2)}\n`);
     metrics.push(name);
   }
