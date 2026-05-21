@@ -59,12 +59,16 @@ deviations:
       rounded to 2 decimals. Returns None when either baseline or
       latest reading is missing.
     our_implementation: |
-      F8 spec rev 6 proposed a 28-day rolling signed z-score over 4
-      contributors (sleep, rhr, hrv, soreness) with weighted-worst
-      aggregation (W = sleep:1, rhr:1, hrv:1.5, soreness:0.5) and
-      color buckets (|z| ≤ 0.5 green, ≤ 1.5 amber, > 1.5 red). Decision
-      below reverts that to section-11's shape; F8 spec rev 7 will
-      mirror sync.py:3110-3115.
+      Mirrors `sync.py:3110-3115` line-by-line per the T01 revert
+      decision below. Schema: `{ kind: "computed", ratio: number }` or
+      `{ kind: "unknown", reason: "no_wellness" }`. No `contributors`
+      object, no color bucket, no z-score machinery.
+
+      Historical (rejected) proposal from F8 spec rev 6: 28-day rolling
+      signed z-score over 4 contributors (sleep, rhr, hrv, soreness)
+      with weighted-worst aggregation (W = sleep:1, rhr:1, hrv:1.5,
+      soreness:0.5) and color buckets (|z| ≤ 0.5 green, ≤ 1.5 amber,
+      > 1.5 red). Rejected by the T01 review below.
     type: algorithmic
     status: approved-revert
     decided_by: Yerzhan (operator)
@@ -104,13 +108,18 @@ deviations:
       algebraically to `tss_7d_total / 100` when monotony is non-zero.
       Returns None when strain or monotony is missing.
     our_implementation: |
-      F8 spec rev 6 proposed a capacity-cap family: ratio of recent load
-      to peak-chronic-load (max of rolling-4w means inside a lookback
-      window), with band enum `["under", "healthy", "over"]` and audit
-      fields (peakChronicWeekIndex, windowDays, lookbackWeeks). ADR-0015
-      framed this as a project-original construction. Decision below
-      reverts to section-11's shape; F8 spec rev 7 will mirror
-      sync.py:3131 line-by-line.
+      Mirrors `sync.py:3131` line-by-line per the T01 revert decision
+      below. Schema: `{ kind: "computed", value: number }` or
+      `{ kind: "unknown", reason: "insufficient_data" }`. Cascades
+      Unknown from monotony.
+
+      Historical (rejected) proposal from F8 spec rev 6: capacity-cap
+      family — ratio of recent load to peak-chronic-load (max of
+      rolling-4w means inside a lookback window), with band enum
+      `["under", "healthy", "over"]` and audit fields
+      (peakChronicWeekIndex, windowDays, lookbackWeeks). ADR-0015 framed
+      this as a project-original construction. ADR-0015 is now
+      `Status: Superseded` after the T01 revert.
     type: algorithmic
     status: approved-revert
     decided_by: Yerzhan (operator)
@@ -156,13 +165,19 @@ deviations:
       autonomic-nervous-system ratio) scaled by 100. Inherits dependency
       on the recovery_index metric.
     our_implementation: |
-      F8 spec rev 6 proposed a time-proxy denominator:
-      `ratio = weeklyLoad / weeklyRecoveryProxyHours`, where
-      `weeklyRecoveryProxyHours = z1Hours + restDayCount × 8` (with the
-      8-hour rest-day constant flagged TENTATIVE). Bands enum
-      `["under", "healthy", "over"]`. Decision below reverts to
-      section-11's HRV/RHR-denominated shape; F8 spec rev 7 will mirror
-      sync.py:3135 line-by-line.
+      Mirrors `sync.py:3135` line-by-line per the T01 revert decision
+      below. Schema: `{ kind: "computed", ratio: number }` or
+      `{ kind: "unknown", reason: "no_wellness" }`. Cascades Unknown
+      from recovery_index — both metrics derive from the same HRV/RHR
+      autonomic signal.
+
+      Historical (rejected) proposal from F8 spec rev 6: time-proxy
+      denominator `ratio = weeklyLoad / weeklyRecoveryProxyHours`,
+      where `weeklyRecoveryProxyHours = z1Hours + restDayCount × 8`
+      (8-hour rest-day constant flagged TENTATIVE). Bands enum
+      `["under", "healthy", "over"]`. Rejected by the T01 review below;
+      the `weeklyRecoveryProxyHours` rename of `WeeklyRollup` is also
+      dropped from rev 7 (the proxy field is no longer constructed).
     type: algorithmic
     status: approved-revert
     decided_by: Yerzhan (operator)
