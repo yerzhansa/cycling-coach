@@ -1,0 +1,19 @@
+{
+  "metric": "seiler_tid_7d_primary",
+  "athlete": "realistic-athlete",
+  "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
+  "section_11_protocol_version": "3.112",
+  "frozen_now": "2026-05-10T12:00:00",
+  "value": {
+    "classification": "Pyramidal",
+    "polarization_index": null,
+    "sport": "cycling",
+    "z1_pct": 65.3,
+    "z1_seconds": 9281,
+    "z2_pct": 21.9,
+    "z2_seconds": 3112,
+    "z3_pct": 12.8,
+    "z3_seconds": 1820,
+    "zone_basis": "power"
+  }
+}
