@@ -22,6 +22,15 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
+import type { MetricInput } from "../packages/core/src/reference/metrics/metric-input.js";
+import {
+  METRIC_REGISTRY,
+  type MetricRegistryEntry,
+} from "../packages/core/src/reference/metrics/registry.js";
+
+export type { MetricInput, MetricRegistryEntry };
+export { METRIC_REGISTRY };
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 export const REPO_ROOT = resolve(__dirname, "..");
@@ -34,28 +43,6 @@ const FIXTURES_ROOT = resolve(
   "packages/core/tests/fixtures/golden",
 );
 const DEVIATIONS_PATH = resolve(REPO_ROOT, "tools/intentional-deviations.yaml");
-
-// ─── Metric registry ────────────────────────────────────────────────────
-//
-// How to add a metric:
-//
-//   1. Implement the metric in `packages/core/src/reference/metrics/<file>.ts`
-//      with the signature `(fixture: <FixtureShape>) => <ValueType>`.
-//   2. Add an entry below, with `module` pointing at the TS module
-//      (this-file-relative) and `exportName` matching the exported
-//      function. The CLI will dynamically `import()` it.
-//   3. Re-run `pnpm test`. The Vitest matrix at
-//      `packages/core/tests/reference-parity.test.ts` automatically
-//      picks up new entries.
-//
-// An empty registry is correct: the Vitest matrix produces zero cases
-// and `pnpm test` continues to pass.
-export interface MetricRegistryEntry {
-  module: string;
-  exportName: string;
-}
-
-export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {};
 
 // ─── Deviation registry ─────────────────────────────────────────────────
 //
@@ -316,20 +303,7 @@ export async function runParityCheck(args: {
   const snap = loadSnapshot(args.fixture, args.metric);
   const fixture = loadGoldenFixture(args.fixture);
 
-  const moduleSpecifier = entry.module.startsWith(".")
-    ? pathToFileURL(resolve(__dirname, entry.module)).href
-    : entry.module;
-  const mod = (await import(moduleSpecifier)) as Record<string, unknown>;
-  const computeFn = mod[entry.exportName] as
-    | ((input: unknown) => unknown)
-    | undefined;
-  if (typeof computeFn !== "function") {
-    throw new Error(
-      `metric '${args.metric}' registry entry resolves to ${entry.module}#${entry.exportName} ` +
-        "but that export is not a function",
-    );
-  }
-  const actual = computeFn(fixture);
+  const actual = entry.compute({ fixture, frozenNow: snap.frozen_now });
   const diff = deepCompare(snap.value, actual);
 
   const deviation = findDeviation(args.metric);

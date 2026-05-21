@@ -14,6 +14,13 @@ the second `describe` in `tests/reference-strict-schemas.test.ts`, which
 scans `metrics/*.ts` for `export const *Schema` declarations and asserts
 each appears in the barrel.
 
+Per the 2026-05-21 ADR-0014 scope clarification, this rule applies to
+**envelope schemas** (the curator-facing discriminated unions). Raw
+`compute*` functions that feed the parity gate are NOT barrel-exported —
+they are called via `METRIC_REGISTRY` (`./registry.ts`) which statically
+imports each compute function from its sibling file. The barrel is the
+curator-consumable surface; the registry is the gate-consumable surface.
+
 **Rule 2 — optional-chaining discipline**: when a metric reads an
 `.optional()` field on `Activity`/`WellnessDay`/etc. (e.g.,
 `activity.icu_intervals`, `wellness.bodyFat`), use optional-chaining or

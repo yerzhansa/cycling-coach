@@ -1,0 +1,15 @@
+{
+  "metric": "zone_distribution_7d",
+  "athlete": "data-gap-mid-history",
+  "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
+  "section_11_protocol_version": "3.112",
+  "frozen_now": "2026-05-20T12:00:00",
+  "value": {
+    "total_hours": 5.14,
+    "z1_hours": 0.51,
+    "z2_hours": 2.83,
+    "z3_hours": 1.03,
+    "z4_plus_hours": 0.77,
+    "zone_basis": "power"
+  }
+}

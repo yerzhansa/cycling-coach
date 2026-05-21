@@ -3,6 +3,8 @@
   "section_11_protocol_version": "3.112",
   "section_11_commit_date": "2026-04-30T21:50:59+02:00",
   "fixtures": [
+    "data-gap-mid-history",
+    "new-athlete-empty",
     "realistic-athlete"
   ],
   "metrics": [

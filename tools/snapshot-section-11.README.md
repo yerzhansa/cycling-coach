@@ -33,12 +33,16 @@ imports. No network calls are made.
 ```
 packages/core/tests/fixtures/snapshots/
 ├── manifest.json
-└── realistic-athlete/
-    ├── acwr.json
-    ├── monotony.json
-    ├── strain.json
-    ├── ... (52 per-metric files)
-    └── zone_distribution_7d.json
+├── realistic-athlete/
+│   ├── acwr.json
+│   ├── monotony.json
+│   ├── strain.json
+│   ├── ... (52 per-metric files)
+│   └── zone_distribution_7d.json
+├── new-athlete-empty/
+│   └── ... (52 per-metric files, most `value: null` because no activities/wellness)
+└── data-gap-mid-history/
+    └── ... (52 per-metric files; ACWR is non-null because the resumed week populates the acute window)
 ```
 
 Each per-metric file:
@@ -67,13 +71,18 @@ The manifest pins the oracle:
   "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
   "section_11_protocol_version": "3.112",
   "section_11_commit_date": "2026-04-28T18:14:07+00:00",
-  "fixtures": ["realistic-athlete"],
-  "metrics": [ ... 52 names ... ],
+  "fixtures": ["data-gap-mid-history", "new-athlete-empty", "realistic-athlete"],
+  "metrics": [ ... 52 names — union across all fixtures ... ],
   "pyodide_version": "0.29.4",
   "frozen_now": "2026-05-10T12:00:00",
   "offline_mode": "A_stub_requests_plus_monkey_patch"
 }
 ```
+
+The `frozen_now` field carries the harness's default anchor. Per-fixture
+overrides (e.g., `data-gap-mid-history` uses `2026-05-20T12:00:00` to
+catch its resumed week in the acute window) are recorded in each
+per-snapshot wrapper's `frozen_now` field, not in the manifest top-level.
 
 `section_11_commit_date` is derived deterministically from the
 section-11 SHA's commit object (`git show -s --format=%cI`). It
@@ -91,11 +100,16 @@ of these change:
    value diffs alongside it before committing — those diffs ARE the
    upstream-change signal.
 2. **New golden fixture** is added under `packages/core/tests/fixtures/golden/`.
-   Extend the harness's fixture list (currently a single hardcoded
-   slug) to capture against the new athlete.
-3. **`FROZEN_NOW` is moved.** The clock anchor is currently a
-   script-level constant; bumping it shifts every rolling-window
-   metric. Coordinate with the PR description.
+   Add an entry to the `HARNESS_FIXTURES` allowlist in
+   `tools/snapshot-section-11.ts` (slug + frozenNow + description) and
+   re-run. Fixtures owned by other test suites (e.g., F7 reference
+   substrate's `post-break-resume` and `zero-activities`) live in the
+   same dir but are intentionally excluded from the harness — they
+   don't conform to sync.py's input contract.
+3. **A fixture's `frozenNow` anchor is moved.** Anchors live on each
+   `HARNESS_FIXTURES` entry (with `DEFAULT_FROZEN_NOW` as the fallback);
+   bumping one shifts every rolling-window metric for that fixture.
+   Coordinate with the PR description.
 4. **pyodide version bump.** Verify the manifest's `pyodide_version`
    reflects the new install, then re-run.
 
@@ -341,22 +355,27 @@ currently provision.
 
 ## Frozen clock
 
-`FROZEN_NOW = "2026-05-10T12:00:00"` is hardcoded in the harness.
-Rationale: the realistic-athlete fixture's last activity is 2026-05-09;
-anchoring "now" to one day later puts the activity within the 7-day
-ACWR window and gives every rolling metric non-trivial input. If the
-fixture is re-sanitized with a different date range, move this
-constant in lockstep.
+The harness exports a `DEFAULT_FROZEN_NOW = "2026-05-10T12:00:00"` anchor
+and the `HARNESS_FIXTURES` allowlist binds a `frozenNow` to each fixture.
+Most fixtures use the default; `data-gap-mid-history` overrides to
+`2026-05-20T12:00:00` so its resumed week lands inside the 7d acute
+window. Per-snapshot wrappers record the exact anchor each metric was
+captured against (`frozen_now` field); the manifest top-level reports
+the default. If a fixture's date range shifts, move its allowlist entry
+in lockstep.
 
 ## Adding a new athlete
 
-Today the harness has a single hardcoded slug (`realistic-athlete`).
-To capture a second fixture (e.g., `post-break-resume`, `zero-activities`):
+The harness iterates over the `HARNESS_FIXTURES` allowlist in
+`tools/snapshot-section-11.ts`. To add a fixture:
 
-1. Add the slug to a `FIXTURES` array in `tools/snapshot-section-11.ts`
-   (replace the hardcoded `ATHLETE_SLUG`/`FIXTURE_REL` constants).
-2. Re-run `pnpm snapshot:section-11`. The script will create one
-   subdirectory per slug and one combined `manifest.json`.
+1. Hand-craft `packages/core/tests/fixtures/golden/<slug>.json` with the
+   intervals.icu envelope shape.
+2. Append an entry to `HARNESS_FIXTURES` — `slug`, `frozenNow`, and a
+   `description` explaining the branches the fixture exercises and the
+   reason for its anchor.
+3. Re-run `pnpm snapshot:section-11`. The script creates one subdirectory
+   per slug and rewrites `manifest.json`.
 
 The 3-golden cap from `packages/core/tests/fixtures/README.md` applies
 — don't sprawl. Synthetic regression fixtures get their own targeted

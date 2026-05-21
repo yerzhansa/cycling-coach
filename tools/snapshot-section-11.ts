@@ -15,8 +15,14 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadPyodide } from "pyodide";
@@ -31,18 +37,47 @@ const SECTION_11_REPO =
   process.env.SECTION_11_REPO ?? resolve(REPO_ROOT, "../section-11");
 const SYNC_PY_PATH = join(SECTION_11_REPO, "examples/sync.py");
 
-const DEFAULT_FIXTURE_REL = "packages/core/tests/fixtures/golden/realistic-athlete.json";
-const ATHLETE_SLUG = "realistic-athlete";
+const GOLDEN_DIR_REL = "packages/core/tests/fixtures/golden";
 const SNAPSHOT_ROOT_REL = "packages/core/tests/fixtures/snapshots";
 
-// Anchor "now" inside the fixture's data window so date-relative
-// filters in sync.py return non-empty slices. The realistic-athlete
-// fixture's last activity is 2026-05-09; pinning to 2026-05-10
-// gives ACWR a populated 7d window and keeps the 28d window
-// representative. Future fixtures may store this alongside the
-// data; for now it's a script-level constant documented in the
-// README.
-const FROZEN_NOW = "2026-05-10T12:00:00";
+// Default anchor used when SNAPSHOT_FIXTURE_PATH points at a fixture not
+// in the allowlist (determinism/contract tests). The manifest's
+// `frozen_now` field also takes this value as the default; per-fixture
+// overrides ride through each per-snapshot wrapper's `frozen_now` field.
+const DEFAULT_FROZEN_NOW = "2026-05-10T12:00:00";
+
+// Allowlist of golden fixtures the snapshot harness processes. Adding a
+// fixture is an explicit edit here — the golden dir also holds fixtures
+// owned by other tests (F7 reference substrate's `post-break-resume`,
+// `zero-activities`) that don't conform to sync.py's contract and must
+// not be run through this harness. Each entry's `description` field
+// carries the rationale for the slug + the anchor it chose.
+interface HarnessFixtureConfig {
+  slug: string;
+  frozenNow: string;
+  description: string;
+}
+
+const HARNESS_FIXTURES: HarnessFixtureConfig[] = [
+  {
+    slug: "realistic-athlete",
+    frozenNow: DEFAULT_FROZEN_NOW,
+    description:
+      "Happy-path baseline — sanitized real athlete bundle. Exercises the populated branches of every metric. Anchor 2026-05-10 sits one day after the fixture's last activity.",
+  },
+  {
+    slug: "new-athlete-empty",
+    frozenNow: DEFAULT_FROZEN_NOW,
+    description:
+      "Zero activities, zero wellness, zero ftp_history. Forces every 'no data' branch — ACWR div-by-zero, monotony of empty week, recovery_index no-contributors. Anchor doesn't matter; reuses the default.",
+  },
+  {
+    slug: "data-gap-mid-history",
+    frozenNow: "2026-05-20T12:00:00",
+    description:
+      "21 activities split by a 28-day gap (14 days 2026-04-01..04-14, gap 04-15..05-12, 7 days resumed 05-13..05-19). Exercises EWMA decay through the gap, ACWR chronic window seeing zeros, monotony on the resumed week. Anchor 2026-05-20 catches the resumed week in the 7d acute window.",
+  },
+];
 
 function readPyodideVersion(): string {
   const pkg = JSON.parse(
@@ -80,6 +115,25 @@ function readSyncPyVersion(syncPySource: string): string {
 
 function ensureDir(path: string): void {
   mkdirSync(path, { recursive: true });
+}
+
+interface FixtureEntry {
+  slug: string;
+  path: string;
+  frozenNow: string;
+}
+
+function resolveAllowlistedFixtures(goldenDir: string): FixtureEntry[] {
+  return HARNESS_FIXTURES.map(({ slug, frozenNow }) => {
+    const path = join(goldenDir, `${slug}.json`);
+    if (!existsSync(path)) {
+      throw new Error(
+        `Allowlisted harness fixture not found: ${path}. ` +
+          `Either create it or remove the entry from HARNESS_FIXTURES in tools/snapshot-section-11.ts.`,
+      );
+    }
+    return { slug, path, frozenNow };
+  });
 }
 
 const HARNESS_PROLOGUE = `
@@ -317,23 +371,103 @@ if "__error__" not in derived:
 OUTPUT_JSON = json.dumps(derived, default=str, sort_keys=True)
 `;
 
+async function processFixture(
+  pyodide: Awaited<ReturnType<typeof loadPyodide>>,
+  fixture: FixtureEntry,
+  snapshotRoot: string,
+  sha: string,
+  protocolVersion: string,
+): Promise<{ metrics: string[]; frozenNow: string }> {
+  const fixtureJson = readFileSync(fixture.path, "utf8");
+
+  pyodide.globals.set("FROZEN_NOW", fixture.frozenNow);
+  pyodide.globals.set("FIXTURE_JSON", fixtureJson);
+
+  await pyodide.runPythonAsync(HARNESS_PROLOGUE);
+  const outputJson = pyodide.globals.get("OUTPUT_JSON") as string;
+  const derived = JSON.parse(outputJson) as Record<string, unknown>;
+
+  if ("__error__" in derived) {
+    const err = derived.__error__ as {
+      type: string;
+      message: string;
+      traceback: string;
+    };
+    throw new Error(
+      `section-11 metric computation raised ${err.type} for fixture '${fixture.slug}': ${err.message}\n${err.traceback}`,
+    );
+  }
+
+  if ("__contract_violation__" in derived) {
+    const violation = derived.__contract_violation__ as {
+      missing_keys: string[];
+      total_accesses: number;
+      message: string;
+    };
+    const lines = violation.missing_keys.map((k) => `  - ${k}`).join("\n");
+    throw new Error(
+      `fixture/sync.py contract violation for '${fixture.slug}': ${violation.missing_keys.length} ` +
+        `unique missing key(s) read silently as None ` +
+        `(${violation.total_accesses} total .get() accesses):\n${lines}\n\n` +
+        violation.message,
+    );
+  }
+
+  const snapshotDir = join(snapshotRoot, fixture.slug);
+  ensureDir(snapshotDir);
+
+  const metrics: string[] = [];
+  for (const [name, value] of Object.entries(derived)) {
+    const filePath = join(snapshotDir, `${name}.json`);
+    const wrapper = {
+      metric: name,
+      athlete: fixture.slug,
+      section_11_sha: sha,
+      section_11_protocol_version: protocolVersion,
+      frozen_now: fixture.frozenNow,
+      value,
+    } satisfies Snapshot;
+    writeFileSync(filePath, `${JSON.stringify(wrapper, null, 2)}\n`);
+    metrics.push(name);
+  }
+  metrics.sort();
+  return { metrics, frozenNow: fixture.frozenNow };
+}
+
 async function main(): Promise<void> {
-  // `SNAPSHOT_FIXTURE_PATH` overrides the input fixture path —
-  // used by the contract-validation test to point at deliberately
-  // corrupted fixtures without disturbing the committed golden one.
-  // Defaults to the canonical realistic-athlete fixture.
-  const fixturePath = process.env.SNAPSHOT_FIXTURE_PATH
-    ? resolve(process.env.SNAPSHOT_FIXTURE_PATH)
-    : resolve(REPO_ROOT, DEFAULT_FIXTURE_REL);
+  // `SNAPSHOT_FIXTURE_PATH` overrides the input — used by the
+  // contract-validation/determinism tests to point at a single
+  // deliberately corrupted or temp fixture without touching the
+  // committed golden set. When unset, every `.json` under
+  // `packages/core/tests/fixtures/golden/` is processed.
   // `SNAPSHOT_OUT_DIR` overrides the snapshot output root — used by the
   // determinism test to write to temp dirs instead of clobbering the
   // committed snapshots. Defaults to the canonical SNAPSHOT_ROOT_REL.
   const snapshotRoot = process.env.SNAPSHOT_OUT_DIR
     ? resolve(process.env.SNAPSHOT_OUT_DIR)
     : resolve(REPO_ROOT, SNAPSHOT_ROOT_REL);
-  const snapshotDirRel = join(SNAPSHOT_ROOT_REL, ATHLETE_SLUG);
-  const snapshotDir = join(snapshotRoot, ATHLETE_SLUG);
+  const goldenDir = resolve(REPO_ROOT, GOLDEN_DIR_REL);
   const manifestPath = join(snapshotRoot, "manifest.json");
+
+  let fixtures: FixtureEntry[];
+  if (process.env.SNAPSHOT_FIXTURE_PATH) {
+    const path = resolve(process.env.SNAPSHOT_FIXTURE_PATH);
+    if (!existsSync(path)) {
+      throw new Error(`Fixture not found: ${path}`);
+    }
+    fixtures = [
+      {
+        slug: basename(path).replace(/\.json$/, ""),
+        path,
+        frozenNow: DEFAULT_FROZEN_NOW,
+      },
+    ];
+  } else {
+    if (!existsSync(goldenDir)) {
+      throw new Error(`Golden fixtures dir not found: ${goldenDir}`);
+    }
+    fixtures = resolveAllowlistedFixtures(goldenDir);
+  }
 
   if (!existsSync(SYNC_PY_PATH)) {
     throw new Error(
@@ -342,12 +476,8 @@ async function main(): Promise<void> {
         `or clone CrankAddict/section-11 to ../section-11.`,
     );
   }
-  if (!existsSync(fixturePath)) {
-    throw new Error(`Fixture not found: ${fixturePath}`);
-  }
 
   const syncPySource = readFileSync(SYNC_PY_PATH, "utf8");
-  const fixtureJson = readFileSync(fixturePath, "utf8");
   const sha = readSection11Sha();
   const commitDate = readSection11CommitDate(sha);
   const protocolVersion = readSyncPyVersion(syncPySource);
@@ -365,70 +495,45 @@ async function main(): Promise<void> {
     },
   });
 
-  pyodide.globals.set("FROZEN_NOW", FROZEN_NOW);
   pyodide.globals.set("SYNC_PY_PATH", SYNC_PY_PATH);
   pyodide.globals.set("SYNC_PY_SOURCE", syncPySource);
-  pyodide.globals.set("FIXTURE_JSON", fixtureJson);
 
-  await pyodide.runPythonAsync(HARNESS_PROLOGUE);
-  const outputJson = pyodide.globals.get("OUTPUT_JSON") as string;
-  const derived = JSON.parse(outputJson) as Record<string, unknown>;
-
-  if ("__error__" in derived) {
-    const err = derived.__error__ as { type: string; message: string; traceback: string };
-    throw new Error(
-      `section-11 metric computation raised ${err.type}: ${err.message}\n${err.traceback}`,
+  const results: { slug: string; metrics: string[] }[] = [];
+  for (const fixture of fixtures) {
+    const { metrics } = await processFixture(
+      pyodide,
+      fixture,
+      snapshotRoot,
+      sha,
+      protocolVersion,
     );
+    results.push({ slug: fixture.slug, metrics });
   }
 
-  if ("__contract_violation__" in derived) {
-    const violation = derived.__contract_violation__ as {
-      missing_keys: string[];
-      total_accesses: number;
-      message: string;
-    };
-    const lines = violation.missing_keys.map((k) => `  - ${k}`).join("\n");
-    throw new Error(
-      `fixture/sync.py contract violation: ${violation.missing_keys.length} ` +
-        `unique missing key(s) read silently as None ` +
-        `(${violation.total_accesses} total .get() accesses):\n${lines}\n\n` +
-        violation.message,
-    );
-  }
-
-  ensureDir(snapshotDir);
-
-  const metrics: string[] = [];
-  for (const [name, value] of Object.entries(derived)) {
-    const filePath = join(snapshotDir, `${name}.json`);
-    const wrapper = {
-      metric: name,
-      athlete: ATHLETE_SLUG,
-      section_11_sha: sha,
-      section_11_protocol_version: protocolVersion,
-      frozen_now: FROZEN_NOW,
-      value,
-    } satisfies Snapshot;
-    writeFileSync(filePath, `${JSON.stringify(wrapper, null, 2)}\n`);
-    metrics.push(name);
-  }
-  metrics.sort();
+  const fixtureSlugs = results.map((r) => r.slug).sort();
+  const allMetrics = [...new Set(results.flatMap((r) => r.metrics))].sort();
 
   const manifest: Manifest = {
     section_11_sha: sha,
     section_11_protocol_version: protocolVersion,
     section_11_commit_date: commitDate,
-    fixtures: [ATHLETE_SLUG],
-    metrics,
+    fixtures: fixtureSlugs,
+    metrics: allMetrics,
     pyodide_version: pyodideVersion,
-    frozen_now: FROZEN_NOW,
+    frozen_now: DEFAULT_FROZEN_NOW,
     offline_mode: "A_stub_requests_plus_monkey_patch",
   };
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
+  for (const { slug, metrics } of results) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[snapshot] wrote ${metrics.length} per-metric files under ${join(SNAPSHOT_ROOT_REL, slug)}/`,
+    );
+  }
   // eslint-disable-next-line no-console
   console.log(
-    `[snapshot] wrote ${metrics.length} per-metric files under ${snapshotDirRel}/ + manifest`,
+    `[snapshot] manifest pins ${fixtureSlugs.length} fixture(s) + ${allMetrics.length} metric(s)`,
   );
 }
 
