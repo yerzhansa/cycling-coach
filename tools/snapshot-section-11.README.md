@@ -142,12 +142,52 @@ this harness:
 - `benchmark_indoor`, `benchmark_outdoor` — passed as `(None, None,
   None)`. Affects `benchmark_indoor`/`benchmark_outdoor` outputs.
 
+In addition, some metric names are emitted by `collect_training_data`
+itself (the orchestrating method that wraps `_calculate_derived_metrics`)
+and are therefore **absent entirely** from this snapshot set, not merely
+null:
+
+- `ramp_rate` — derived by `collect_training_data` from wellness data
+  (api `rampRate` + decay smoothing, see `sync.py` around line 2399 and
+  the emit at line 2674). Bypassed by the direct-call path. Tracked as
+  a follow-up: the harness either needs to call `collect_training_data`
+  end-to-end (with a fixture-mapped `_intervals_get` stub) or expose
+  `ramp_rate` via an additional capture site.
+
 These gaps are intentional for the first oracle pass. Future waves
 will either (a) extend the harness to invoke `collect_training_data`
 end-to-end with a richer fixture-mapped `_intervals_get` stub, or
 (b) extend the fixture format to ship pre-aggregated stream-derived
 inputs. The snapshot baseline locks in "given these inputs, these
 metrics are null" — which is itself a useful regression signal.
+
+## Null / absent audit (against F8 metric scope)
+
+Audit run 2026-05-21 against the realistic-athlete snapshot set
+generated from `section_11_sha = 224c369d`.
+
+**Null-value snapshots (7):**
+`consistency_index`, `eftp`, `p_max`, `power_model_source`, `vo2max`,
+`w_prime`, `w_prime_kj`. All are deferred to F10 (capability/stream
+metrics) or follow-on F8 wiring — none of them are in F8's load-management
+scope.
+
+**Absent-from-output (1):**
+`ramp_rate`. Emitted only by `collect_training_data`, not by the
+direct-call path used here. F8 metric — needs the harness invocation
+path fix listed above before T12 can port it.
+
+**F8 metric coverage (6 of 7 populated, 1 absent):**
+
+| F8 metric | Status | Snapshot value |
+| --- | --- | --- |
+| `acwr` | populated | 0.81 |
+| `monotony` | populated | 0.97 |
+| `strain` | populated | 249 |
+| `recovery_index` | populated | 0.91 |
+| `stress_tolerance` | populated | 2.6 |
+| `load_recovery_ratio` | populated | 2.8 |
+| `ramp_rate` | **absent** | — (gap above) |
 
 ## Frozen clock
 
