@@ -20,12 +20,13 @@
 #       our_implementation: |                      # required: prose description
 #         "<what our TS does> (<path>:<line> or 'not yet code')"
 #       type: algorithmic | constant | branch-order | other
-#       justification:                             # required if status != pending
-#         kind: research_file | revert-pending | upstream-bug
-#         path: docs/knowledge/research/<topic>.md
-#         cited_papers:
-#           - "<author year> (<short citation>)"
-#           - DOI: 10.xxxx/yyyy
+#       justification:                             # required if status in
+#         kind: research_file | upstream-bug       #   (approved-cite, approved-bug);
+#         path: docs/knowledge/research/<topic>.md #   for approved-revert, the
+#         cited_papers:                            #   `notes:` block captures the
+#           - "<author year> (<short citation>)"   #   literature reviewed and the
+#           - DOI: 10.xxxx/yyyy                    #   reason for revert (no
+                                                   #   separate justification field).
 #       adr: docs/adr/<id>-<slug>.md               # optional pointer
 #       status: pending | approved-revert | approved-cite | approved-bug | rejected
 #       decided_by: <reviewer>                     # required if status != pending
@@ -53,9 +54,8 @@ deviations:
   - metric: recovery_index
     section_11_implementation: |
       7-day HRV / RHR baseline ratio with 2 contributors (HRV + RHR),
-      computed in sync.py around line 3113 inside
-      `_calculate_derived_metrics`. Formula:
-      `(latest_hrv / hrv_baseline_7d) / (latest_rhr / rhr_baseline_7d)`,
+      computed at sync.py:3110-3115 inside `_calculate_derived_metrics`.
+      Formula: `(latest_hrv / hrv_baseline_7d) / (latest_rhr / rhr_baseline_7d)`,
       rounded to 2 decimals. Returns None when either baseline or
       latest reading is missing.
     our_implementation: |
@@ -73,7 +73,7 @@ deviations:
       Phase 4 (T01) decision: revert to section-11's 7-day / 2-contributor
       implementation.
 
-      Literature reviewed (2026-05-21, agent-assisted search):
+      Literature reviewed (2026-05-21, agent-assisted abstract-level search):
         - Plews 2012, "Heart rate variability in elite triathletes, is
           variation in variability the key to effective training? A case
           comparison" (Eur J Appl Physiol, PMID 22367011) — used 7-day
@@ -93,15 +93,13 @@ deviations:
           analyzed each metric independently — no composite, no
           weighted-worst aggregation, no rolling 28d baseline.
 
-      Action items spawned by this decision (out of scope here, captured
-      so they aren't lost):
+      Action items spawned by this decision:
         - F8 spec must move to rev 7 with recovery_index mirroring
           sync.py:3110-3115 line-by-line. Schema simplifies: single
           `ratio: number | null` field, no `contributors` object, no
           color bucket, no z-score machinery.
         - ADR-0015 §Note on naming overlap loses one of its three
-          "project-original" metrics — amendment defer-able to a
-          follow-up ticket, not load-bearing for the revert PR itself.
+          "project-original" metrics — amendment defer-able.
 
   - metric: stress_tolerance
     section_11_implementation: |
@@ -126,7 +124,7 @@ deviations:
       Phase 4 (T01) decision: revert to section-11's
       `(strain / monotony) / 100` implementation.
 
-      Literature reviewed (2026-05-21, agent-assisted search):
+      Literature reviewed (2026-05-21, agent-assisted abstract-level search):
         - Foster 2001, "A new approach to monitoring exercise training"
           (J Strength Cond Res 15(1):109–115) — establishes monotony,
           strain, and the broader load-monitoring framework. Section-11's
@@ -157,10 +155,7 @@ deviations:
           no bands, no audit fields, no `framework: "capacity-cap"`.
         - ADR-0015 needs amendment in a follow-up ticket — either
           deprecate the capacity-cap framing entirely OR retain it as
-          historical-context only (decision out of scope here).
-        - The metric is algebraically thin (weekly_load/100). That's a
-          separate observation about utility, not a deviation decision.
-          Section-11 ships it; we port it faithfully.
+          historical-context only.
 
   - metric: load_recovery_ratio
     section_11_implementation: |
@@ -184,7 +179,7 @@ deviations:
       Phase 4 (T01) decision: revert to section-11's
       `tss_7d / (ri × 100)` implementation.
 
-      Literature reviewed (2026-05-21, agent-assisted search):
+      Literature reviewed (2026-05-21, agent-assisted abstract-level search):
         - HRV/RHR as recovery indicators: Buchheit 2014
           (DOI 10.3389/fphys.2014.00073), Plews 2012/2013, narrative
           reviews (PMC7663087, PMC12787763). All converge on HRV being
@@ -216,11 +211,12 @@ deviations:
       Action items spawned by this decision:
         - F8 spec must move to rev 7 with load_recovery_ratio mirroring
           sync.py:3135. Schema collapses: single `value: number | null`,
-          no bands, no audit fields, drop the weeklyRecoveryProxyHours
-          rename + JSDoc + 8-hour proxy constant.
+          no bands, no audit fields.
         - The F7 schema change renaming `weeklyRecoveryHours` →
           `weeklyRecoveryProxyHours` (proposed in F8 spec rev 6) is no
-          longer needed and should be dropped from rev 7.
+          longer needed and should be dropped from rev 7. The exported
+          `REST_DAY_RECOVERY_HOURS = 8` constant introduced by F8 spec
+          rev 6 is also no longer referenced; rev 7 removes it.
         - The `flattenZoneTimes`/`getZoneSeconds` helper extraction
           remains valid for F9 (TID metrics still need zone access);
           rev 7 keeps the helpers but disconnects them from the
