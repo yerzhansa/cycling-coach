@@ -196,11 +196,15 @@ function arithmeticMean(values: number[]): number {
   return total / values.length;
 }
 
-// Python `statistics.stdev` uses the numerically stable two-pass
-// `sum((x-c)**2) - sum(x-c)**2 / n` correction so the residual mean
-// drift cancels out. Mirror the same accumulation order so the float
-// result matches bit-for-bit on inputs that aren't exactly centered on
-// the recomputed mean.
+// Python's `statistics.stdev` uses Fraction-exact internal arithmetic
+// (`statistics._sum`); the TS port cannot reproduce that in pure float.
+// This two-pass Neumaier-style correction
+// (`sum((x-c)^2) - sum(x-c)^2/n`) is the closest float-only
+// approximation. Bit-identity to Python holds empirically on captured
+// fixtures because the final `roundHalfEven(_, 2)` masks sub-0.005
+// drift. A future fixture whose unrounded mean/stdev lands near a
+// rounding boundary may surface as a gate failure — treat as a real
+// divergence to triage, not as proof of algorithm equivalence.
 function sampleStdev(values: number[], xbar: number): number {
   const n = values.length;
   let total = 0;
@@ -254,7 +258,13 @@ function getDailyLoadBySport(
     if (load <= 0) continue;
     const dateStr = act.start_date_local.slice(0, 10);
     if (!windowDates.has(dateStr)) continue;
-    const sportFamily = SPORT_FAMILIES[act.type] ?? "other";
+    // Object.hasOwn guards against prototype-chain lookups: a fixture
+    // with act.type === "toString" / "constructor" / "__proto__" would
+    // otherwise resolve to an inherited Function reference (truthy, so
+    // `?? "other"` does not fire) and pollute the bySport key set.
+    const sportFamily = Object.hasOwn(SPORT_FAMILIES, act.type)
+      ? SPORT_FAMILIES[act.type]
+      : "other";
     let dailyMap = bySport.get(sportFamily);
     if (dailyMap === undefined) {
       dailyMap = new Map<string, number>();
