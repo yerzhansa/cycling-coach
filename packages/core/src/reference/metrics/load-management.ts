@@ -168,6 +168,49 @@ export function computePrimarySportMonotony(input: MetricInput): number | null {
   return roundHalfEven(meanLoad / stdevLoad, 2);
 }
 
+/**
+ * Effective monotony — the selector that picks between total and
+ * primary-sport monotony for downstream alert thresholds.
+ *
+ * Multi-sport athletes' total monotony can be inflated by a consistent
+ * cross-training Load floor; the primary-sport variant isolates the
+ * dominant modality. This selector switches to the primary-sport value
+ * when (a) more than one sport family appeared in the 7-day window AND
+ * (b) the primary-sport computation produced a non-null result.
+ * Otherwise falls through to total monotony (which itself may be null).
+ *
+ * Pure composition — no new math. Calls the sibling compute functions
+ * for the two candidate values and the shared per-sport aggregator for
+ * the multi-sport check. The duplicate aggregation work (getDailyLoad
+ * runs three times across this call's transitive helpers) is intentional:
+ * the discipline rewards line-by-line transliteration over optimization,
+ * and the snapshot gate would catch any drift from a structural rewrite.
+ *
+ * Upstream source mirrored line-by-line: `sync.py:3081-3082` inside
+ * `_calculate_derived_metrics`. The `daily_tss_by_sport` Python local
+ * is the same map produced by the per-sport aggregation helper at
+ * `sync.py:3646-3675`. See `NOTICE.md` for upstream attribution.
+ *
+ * Return shape is the raw upstream output (number or null), not a
+ * discriminated-union envelope. Raw compute functions feed the parity
+ * gate; a sibling envelope wrapper will feed the curator when the
+ * curator integration lands.
+ */
+export function computeEffectiveMonotony(input: MetricInput): number | null {
+  const fixture = input.fixture as { activities?: Activity[] };
+  const activities = fixture.activities ?? [];
+
+  const dailyLoadBySport = getDailyLoadBySport(activities, 7, input.frozenNow);
+  const isMultiSport = dailyLoadBySport.size > 1;
+
+  const primarySportMonotony = computePrimarySportMonotony(input);
+  const monotony = computeMonotony(input);
+
+  return isMultiSport && primarySportMonotony !== null
+    ? primarySportMonotony
+    : monotony;
+}
+
 // Mirrors `SPORT_FAMILIES` at sync.py:290-308. Unmapped types fall
 // through to "other" at the lookup site.
 const SPORT_FAMILIES: Record<string, string> = {
