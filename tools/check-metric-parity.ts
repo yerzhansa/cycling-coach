@@ -277,6 +277,33 @@ export function listFixtures(): string[] {
     .sort();
 }
 
+// Returns the set of metric names that have at least one snapshot file
+// on disk across any fixture directory. Used by `--all` to surface
+// metrics that have an oracle snapshot but no TS implementation in the
+// registry — without it, those snapshots silently sit unverified and
+// `--all` reports an all-green signal that is weaker than it appears.
+export function listMetricsWithSnapshotsOnDisk(): string[] {
+  const fixtures = listFixtures();
+  const metrics = new Set<string>();
+  for (const fixture of fixtures) {
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = readdirSync(join(SNAPSHOTS_ROOT, fixture), {
+        withFileTypes: true,
+      });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw err;
+    }
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.endsWith(".json")) {
+        metrics.add(entry.name.slice(0, -".json".length));
+      }
+    }
+  }
+  return [...metrics].sort();
+}
+
 // ─── Parity check ──────────────────────────────────────────────────────
 
 export interface ParityResult {
@@ -296,7 +323,13 @@ export async function runParityCheck(args: {
   metric: string;
   fixture: string;
 }): Promise<ParityResult> {
-  const entry = METRIC_REGISTRY[args.metric];
+  // Object.hasOwn guards against prototype-chain lookups: `--metric=toString`
+  // would otherwise resolve to `Object.prototype.toString` (a Function) and
+  // crash with an opaque `entry.compute is not a function` instead of a
+  // clean RegistryMissError.
+  const entry = Object.hasOwn(METRIC_REGISTRY, args.metric)
+    ? METRIC_REGISTRY[args.metric]
+    : undefined;
   if (!entry) {
     throw new RegistryMissError(args.metric);
   }
@@ -346,6 +379,7 @@ interface CliArgs {
   fixture?: string;
   all?: boolean;
   json?: boolean;
+  strict?: boolean;
 }
 
 function parseCli(argv: string[]): CliArgs {
@@ -364,6 +398,9 @@ function parseCli(argv: string[]): CliArgs {
         break;
       case "json":
         out.json = true;
+        break;
+      case "strict":
+        out.strict = true;
         break;
       default:
         throw new Error(`unknown flag: ${tok}`);
@@ -409,6 +446,10 @@ async function main(): Promise<number> {
     console.error("[parity] --all and --metric are mutually exclusive");
     return 2;
   }
+  if (args.strict && !args.all) {
+    console.error("[parity] --strict requires --all");
+    return 2;
+  }
 
   const pairs: { metric: string; fixture: string }[] = [];
   if (args.all) {
@@ -451,16 +492,43 @@ async function main(): Promise<number> {
     }
   }
 
+  // Audit-only check: when running --all, surface metrics that have a
+  // snapshot on disk but no entry in METRIC_REGISTRY. Without this, --all
+  // reports an all-green signal that silently excludes ~40 unimplemented
+  // metrics. --strict promotes the warning to an exit-2 error.
+  let unregisteredOnDisk: string[] = [];
+  if (args.all) {
+    const registered = new Set(listRegisteredMetrics());
+    unregisteredOnDisk = listMetricsWithSnapshotsOnDisk().filter(
+      (m) => !registered.has(m),
+    );
+  }
+
   if (args.json) {
-    process.stdout.write(`${JSON.stringify({ results }, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ results, unregistered_on_disk: unregisteredOnDisk }, null, 2)}\n`,
+    );
   } else {
     for (const r of results) {
       if (r.passed) console.log(formatHumanPass(r));
       else console.error(formatHumanDiff(r));
     }
+    if (unregisteredOnDisk.length > 0) {
+      const level = args.strict ? "ERROR" : "WARN";
+      console.error(
+        `[parity] ${level}: ${unregisteredOnDisk.length} metric(s) have snapshots on disk but no METRIC_REGISTRY entry:`,
+      );
+      for (const m of unregisteredOnDisk) console.error(`  - ${m}`);
+      if (!args.strict) {
+        console.error(
+          "[parity]   (these snapshots were NOT verified; pass --strict to fail on this)",
+        );
+      }
+    }
   }
 
   if (registryMissed > 0) return 2;
+  if (args.strict && unregisteredOnDisk.length > 0) return 2;
   if (failed > 0) return 1;
   return 0;
 }
