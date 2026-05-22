@@ -9,7 +9,11 @@
  */
 
 import type { MetricInput } from "./metric-input.js";
-import { computeAcwr, computeMonotony } from "./load-management.js";
+import {
+  computeAcwr,
+  computeMonotony,
+  computePrimarySportMonotony,
+} from "./load-management.js";
 
 export interface MetricRegistryEntry {
   compute: (input: MetricInput) => unknown;
@@ -18,4 +22,5 @@ export interface MetricRegistryEntry {
 export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {
   acwr: { compute: computeAcwr },
   monotony: { compute: computeMonotony },
+  primary_sport_monotony: { compute: computePrimarySportMonotony },
 };
