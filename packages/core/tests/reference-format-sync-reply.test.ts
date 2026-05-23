@@ -49,7 +49,7 @@ describe("formatSyncReply", () => {
     expect(text.toLowerCase()).toContain("can't reach intervals.icu");
   });
 
-  it("formats a gate_rejected failure as 'I can't reach intervals.icu' (Wave 5 curator may differentiate)", () => {
+  it("formats a gate_rejected failure as 'I can't reach intervals.icu' (curator may differentiate)", () => {
     const r: SyncResult = {
       kind: "failed",
       reason: "gate_rejected",

@@ -1,7 +1,7 @@
 /**
- * F2 of Wave 1a — type-only landing of `ReferenceSportAdapter` and the
- * optional `Sport.referenceAdapters?()` method. There is no runtime behavior
- * to assert (no sport implements the field in Wave 1; that lands in Wave 3).
+ * Type-only landing of `ReferenceSportAdapter` and the optional
+ * `Sport.referenceAdapters?()` method. There is no runtime behavior to
+ * assert (no sport implements the field yet; integration lands later).
  *
  * What we verify here:
  *   1. The new types are exported from `@enduragent/core`'s public surface.
@@ -13,7 +13,7 @@
  *   5. The duathlon composition pattern compiles: `() => [...c.referenceAdapters!(),
  *      ...r.referenceAdapters!()]` (per ADR-0002 + ADR-0010).
  *
- * If F2's interface drifts (a field is renamed, made required, etc.), this
+ * If the interface drifts (a field is renamed, made required, etc.), this
  * file fails to compile, and vitest reports the suite as failed before any
  * runtime assertion runs.
  */
@@ -26,7 +26,7 @@ import type {
   Sport,
 } from "../src/index.js";
 
-describe("F2 — ReferenceSportAdapter type surface", () => {
+describe("ReferenceSportAdapter type surface", () => {
   it("ReferenceSportAdapter is exported and accepts a metadata-only adapter", () => {
     const declarativeOnly: ReferenceSportAdapter = {
       activityTypes: ["Ride", "VirtualRide"] as const,
@@ -67,7 +67,7 @@ describe("F2 — ReferenceSportAdapter type surface", () => {
   });
 });
 
-describe("F2 — Sport.referenceAdapters?() integration", () => {
+describe("Sport.referenceAdapters?() integration", () => {
   it("a Sport-shaped slice that omits referenceAdapters still typechecks (optional)", () => {
     // Pick the slice we care about so we don't have to populate every field of
     // Sport just to assert the optionality of one method.

@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
  *   3. Reference bootstrap
  *   4. Telegram bot
  *
- * Reordering any of these is a correctness regression (Wave 6's units
+ * Reordering any of these is a correctness regression (future migration units'
  * bootstrap will read MEMORY.md and depends on the migration step having
  * completed). Refactors that move steps into other modules require updating
  * this list, which is intentional friction.

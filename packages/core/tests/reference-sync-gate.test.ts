@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { gateLatestJson } from "../src/reference/validation/sync-gate.js";
 
-describe("gateLatestJson (Wave 1b stub)", () => {
-  it("returns ok with no failures or warnings — Wave 4 / F15 fills the body", () => {
+describe("gateLatestJson (stub)", () => {
+  it("returns ok with no failures or warnings — body lands when the gate is wired", () => {
     const result = gateLatestJson({ anything: 1 }, { prior: "state" });
     expect(result).toEqual({ ok: true, failures: [], warnings: [] });
   });

@@ -7,7 +7,7 @@ import { cyclingSport } from "@enduragent/sport-cycling";
 import { migrateCyclingLegacySections } from "@enduragent/sport-cycling/migrate";
 import { baseAgentConfig } from "../../core/tests/helpers/base-agent-config.js";
 
-describe("Wave 2 migration — binary startup integration (steps 1-3)", () => {
+describe("legacy-section migration — binary startup integration (steps 1-3)", () => {
   let dataDir: string;
   let memoryFile: string;
   let logSpy: ReturnType<typeof vi.spyOn>;

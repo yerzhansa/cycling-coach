@@ -114,7 +114,7 @@ describe("sendSnapshotOutput", () => {
     expect(r).toEqual({ sent: 1, total: 1, interrupted: false });
   });
 
-  it("falls through to chunked-with-retry when sendDocument throws (architect-final F5)", async () => {
+  it("falls through to chunked-with-retry when sendDocument throws", async () => {
     const reply = vi.fn().mockResolvedValue(undefined);
     const sendDocument = vi.fn().mockRejectedValue(new Error("upload denied"));
     const sleep = vi.fn().mockResolvedValue(undefined);

@@ -9,7 +9,7 @@ const LEGACY_RENAMES = [
 /**
  * Apply all three legacy renames as a single in-memory transform + single
  * atomic write to MEMORY.md. Replaces the prior per-rename loop so that
- * either the migration lands in full or not at all — Reference Wave 1b's
+ * either the migration lands in full or not at all — the Reference layer's
  * init order assumes the next step never sees a half-migrated MEMORY.md
  * (ADR-0011 commit-marker pattern applied to memory writes).
  */

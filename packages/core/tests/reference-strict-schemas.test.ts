@@ -132,7 +132,7 @@ describe("metrics/ re-export discipline (metrics/README.md Rule 1)", () => {
   const barrelExports = new Set(Object.keys(metricsBarrel));
 
   if (declared.length === 0) {
-    it.skip("no metric schemas declared yet — gate becomes active when F8 lands the first one", () => {});
+    it.skip("no metric schemas declared yet — gate becomes active when the first one lands", () => {});
     return;
   }
 

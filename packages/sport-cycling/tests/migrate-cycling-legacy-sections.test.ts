@@ -170,11 +170,11 @@ describe("migrateCyclingLegacySections", () => {
 
   // ── failure handling ────────────────────────────────────────────────
 
-  // Architect-final: migration is now all-or-nothing via the bulk
-  // `renameSections` API. Either all three renames land via a single atomic
-  // write, or none do. Reference Wave 1b's init order assumes step 3 never
-  // sees half-migrated MEMORY.md, so per-section partial commits are no
-  // longer a supported state.
+  // Migration is now all-or-nothing via the bulk `renameSections` API.
+  // Either all three renames land via a single atomic write, or none do.
+  // The Reference layer's init order assumes step 3 never sees a
+  // half-migrated MEMORY.md, so per-section partial commits are no longer
+  // a supported state.
   it("on bulk failure: function does not throw, no per-rename log events fire, single warn is emitted", () => {
     const captured: Array<ReadonlyArray<readonly [string, string]>> = [];
     const stub: MemoryStore = {
