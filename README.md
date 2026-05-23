@@ -448,7 +448,7 @@ tests/               # 112 tests
 | [Zod](https://zod.dev/) | 4.x | Schema validation |
 | [oxlint](https://oxc.rs/) | 1.x | Linter |
 | [oxfmt](https://oxc.rs/) | 0.x | Formatter |
-| [TypeScript](https://www.typescriptlang.org/) | 6.x | |
+| [TypeScript](https://www.typescriptlang.org/) | 6.x | Type system |
 | [Vitest](https://vitest.dev/) | 4.x | Testing |
 
 ## Credits
