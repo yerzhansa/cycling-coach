@@ -16,10 +16,10 @@ import type { ZodTypeAny } from "zod";
  * through this helper so error semantics are uniform across cache files,
  * scheduler state, error_state, and audit reads.
  *
- * Schema versioning is handled via Zod-strict-as-gate per the Reference PRD's
- * Decision 9: when intervals.icu adds a field, our `.strict()` parse fails
- * here, the helper returns null, the caller treats it as "cache miss" and
- * triggers a fresh sync. There is no `migrate-v1-to-v2.ts`.
+ * Schema versioning is handled via Zod-strict-as-gate: when intervals.icu
+ * adds a field, our `.strict()` parse fails here, the helper returns null,
+ * the caller treats it as "cache miss" and triggers a fresh sync. There is
+ * no `migrate-v1-to-v2.ts`.
  */
 export function safeReadJson<T>(path: string, schema: ZodTypeAny): T | null {
   let raw: string;

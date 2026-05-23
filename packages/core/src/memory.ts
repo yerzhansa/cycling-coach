@@ -30,7 +30,7 @@ export interface MemoryStore {
    * Apply multiple renames as a single read + single atomic write. Returns
    * outcomes in the order of `renames`. Used by sport migrations so a partial
    * rename cannot leave half-migrated state observable to subsequent init
-   * steps (architect-final concern 4 for Wave 1b / ADR-0011).
+   * steps.
    */
   renameSections(
     renames: ReadonlyArray<readonly [string, string]>,

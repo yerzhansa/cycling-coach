@@ -27,7 +27,7 @@ const MAX_RETRY_AFTER_SEC = 300;
  * Send a `SnapshotOutput` to Telegram with single-retry on transient errors
  * (429 honors Grammy's `parameters.retry_after`; other errors sleep 1s).
  * Document mode falls through to chunked-with-retry on `sendDocument`
- * failure per architect-final F5.
+ * failure.
  */
 export async function sendSnapshotOutput(
   output: SnapshotOutput,

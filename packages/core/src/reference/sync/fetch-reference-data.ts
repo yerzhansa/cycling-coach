@@ -4,11 +4,11 @@ import { makeAbortableClient } from "./intervals-client-factory.js";
 import { PER_REQUEST_TIMEOUT_MS } from "../freshness.js";
 
 /**
- * Wave 1b production fetcher. Wave 2 / F11 fleshes out per-metric population;
- * Wave 1b just proves the orchestration writes a parseable cache for the
- * scheduler-and-snapshot debug surface to read. Constructs a per-runSync
- * `IntervalsClient` (per ADR-0011) so the orchestrator's outer
- * `AbortController` propagates into in-flight requests.
+ * Production fetcher. Today just proves the orchestration writes a
+ * parseable cache for the scheduler-and-snapshot debug surface to read;
+ * per-metric population is filled in by upcoming changes. Constructs a
+ * per-runSync `IntervalsClient` (per ADR-0011) so the orchestrator's
+ * outer `AbortController` propagates into in-flight requests.
  */
 export function makeProductionFetcher(deps: {
   apiKey: string;

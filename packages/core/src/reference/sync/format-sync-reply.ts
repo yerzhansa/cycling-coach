@@ -2,7 +2,7 @@ import type { SyncResult } from "./run-sync.js";
 
 /**
  * Render a `SyncResult` as athlete-facing prose for the `/sync` Telegram
- * reply. Spec shape per F4 (US-18):
+ * reply. Spec shape:
  *
  * ```
  * Sync ✅
@@ -28,7 +28,7 @@ export function formatSyncReply(result: SyncResult, now: Date = new Date()): str
       }
     case "failed":
       // Both `outer_timeout` and `gate_rejected` surface to athletes as the
-      // same "can't reach" message in Wave 1b. Wave 5's curator will inspect
+      // same "can't reach" message today. The future curator will inspect
       // `error_state.json` and may inject more specific guidance.
       switch (result.reason) {
         case "outer_timeout":

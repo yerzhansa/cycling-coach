@@ -148,7 +148,7 @@ export function renameTpFieldsOnActivity(
  * type is the type-level enforcement of ADR-0012's anti-corruption
  * boundary: a future sync-path author who calls `ActivitySchema.parse(raw)`
  * directly bypasses the rename layer; this helper makes that bypass
- * a type error. F4-style sync paths SHOULD use this instead of calling
+ * a type error. Sync-path code SHOULD use this instead of calling
  * `ActivitySchema.parse` themselves.
  *
  * Defense-in-depth only — `ActivitySchema` is still publicly exported for

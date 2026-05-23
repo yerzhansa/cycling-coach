@@ -1,6 +1,6 @@
 # Concurrency primitives
 
-Horizontal-layer primitives per [ADR-0011](../../../../docs/adr/0011-async-operation-discipline-for-horizontal-layers.md). Reference (Wave 1b) is the first consumer; Decision Layer, Heartbeat, and Coaching Loop will reuse these unchanged.
+Horizontal-layer primitives per [ADR-0011](../../../../docs/adr/0011-async-operation-discipline-for-horizontal-layers.md). Reference is the first consumer; Decision Layer, Heartbeat, and Coaching Loop will reuse these unchanged.
 
 ```
 concurrency/
@@ -11,7 +11,7 @@ concurrency/
 └── clock.ts        (Clock interface — injectable now/setTimeout/clearTimeout for orchestrator outer-timeout determinism in tests)
 ```
 
-These were originally adapted from the Reference layer's upstream protocol (MIT — see [`NOTICE.md`](../../../../NOTICE.md) for full attribution) and lived under `reference/sync/` and `reference/io/` in Wave 1b. Promoted to `core/concurrency/` in PR C of the architectural followup sequence so future horizontal layers import from one canonical location instead of reaching across module boundaries into Reference.
+These were originally adapted from the Reference layer's upstream protocol (MIT — see [`NOTICE.md`](../../../../NOTICE.md) for full attribution) and lived inside the Reference layer. Promoted to `core/concurrency/` so future horizontal layers import from one canonical location instead of reaching across module boundaries into Reference.
 
 ## Invariants
 
@@ -22,4 +22,4 @@ These were originally adapted from the Reference layer's upstream protocol (MIT 
 
 ## Related I/O helpers
 
-`core/io/` houses the filesystem primitives that horizontal layers also share: `atomicWriteJson` (async, JSON-serialized), `atomicWriteFileSync` (sync, UTF-8 string — used by `MemoryStore`), and `safeReadJson<T>(path, schema)` (Zod-strict-as-gate per Reference PRD Decision 9). They live in `io/` rather than here because they're general filesystem primitives, not concurrency primitives.
+`core/io/` houses the filesystem primitives that horizontal layers also share: `atomicWriteJson` (async, JSON-serialized), `atomicWriteFileSync` (sync, UTF-8 string — used by `MemoryStore`), and `safeReadJson<T>(path, schema)` (Zod-strict-as-gate). They live in `io/` rather than here because they're general filesystem primitives, not concurrency primitives.

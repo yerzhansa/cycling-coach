@@ -1,7 +1,7 @@
 /**
  * Per-key cooldown tracker for `/sync` rate-limiting. In-process by design
- * (Decision 5 in F4 spec) — Reference is single-operator; restart-spam is
- * bounded by mutex serialization + intervals.icu's server-side rate-limit.
+ * — Reference is single-operator; restart-spam is bounded by mutex
+ * serialization + intervals.icu's server-side rate-limit.
  *
  * `check` is observation only; `record` stamps the success path. The
  * runSync caller pattern is: check → if ok, record after the sync settles.
