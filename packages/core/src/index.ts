@@ -22,7 +22,7 @@ export type {
   ToolRegistration,
 } from "./sport.js";
 
-// ─── Reference (section-11 port; see NOTICE.md) ───────────────────────
+// ─── Reference (see NOTICE.md for upstream attribution) ──────────────
 // Wave 1 lands: per-sport seam types, freshness/timing constants, path
 // resolver, I/O helpers, 7 strict Zod schemas + per-file SCHEMA_VERSION
 // constants, an empty REFERENCE_PRESERVE_TOKENS slot. Waves 2-7 extend.

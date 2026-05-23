@@ -30,8 +30,7 @@ export function wrapFetchWithSignal(opts: {
  *
  * `intervals-icu-api@0.1.2` does not expose `signal?: AbortSignal` on its
  * resource methods; the constructor's `fetch` option is the only injection
- * point. Track upstream PR at
- * `docs/initiatives/section-11/learnings/upstream-intervals-icu-abort-signal.md`.
+ * point.
  */
 export function makeAbortableClient(opts: {
   apiKey: string;

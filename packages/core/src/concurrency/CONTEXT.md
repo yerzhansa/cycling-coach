@@ -11,7 +11,7 @@ concurrency/
 └── clock.ts        (Clock interface — injectable now/setTimeout/clearTimeout for orchestrator outer-timeout determinism in tests)
 ```
 
-These were originally adapted from [section-11](https://github.com/CrankAddict/section-11) (CrankAddict, MIT) and lived under `reference/sync/` and `reference/io/` in Wave 1b. Promoted to `core/concurrency/` in PR C of the architectural followup sequence so future horizontal layers import from one canonical location instead of reaching across module boundaries into Reference.
+These were originally adapted from the Reference layer's upstream protocol (MIT — see [`NOTICE.md`](../../../../NOTICE.md) for full attribution) and lived under `reference/sync/` and `reference/io/` in Wave 1b. Promoted to `core/concurrency/` in PR C of the architectural followup sequence so future horizontal layers import from one canonical location instead of reaching across module boundaries into Reference.
 
 ## Invariants
 

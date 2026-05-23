@@ -33,8 +33,8 @@ export interface ReferenceSportAdapter {
   readonly sustainabilityAnchors: readonly number[];
 
   /**
-   * Section-11 explicitly flags DFA as cycling-validated only; running
-   * adapters set this `false` until upstream validation lands.
+   * Reference's upstream protocol flags DFA as cycling-validated only;
+   * running adapters set this `false` until upstream validation lands.
    */
   readonly dfaValidated: boolean;
 
