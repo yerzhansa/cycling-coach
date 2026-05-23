@@ -1,3 +1,5 @@
+import type { Activity } from "../schemas/inputs.js";
+
 /**
  * The contract between a metric port and the parity gate.
  *
@@ -10,4 +12,13 @@
 export interface MetricInput {
   fixture: unknown;
   frozenNow: string;
+}
+
+// Fixtures are trusted at the gate boundary; this helper does not
+// re-validate (Zod ran upstream of the snapshot capture). When a wellness
+// metric joins the port (e.g. recovery_index), add a sibling
+// `getWellness(input)` the same way rather than widening this one.
+export function getActivities(input: MetricInput): Activity[] {
+  const fixture = input.fixture as { activities?: Activity[] };
+  return fixture.activities ?? [];
 }

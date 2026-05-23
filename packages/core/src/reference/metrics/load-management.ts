@@ -7,7 +7,7 @@
 
 import type { Activity } from "../schemas/inputs.js";
 
-import type { MetricInput } from "./metric-input.js";
+import { getActivities, type MetricInput } from "./metric-input.js";
 
 /**
  * Acute:Chronic Workload Ratio (Gabbett 2016).
@@ -36,8 +36,7 @@ import type { MetricInput } from "./metric-input.js";
  *      Br J Sports Med 50(5):273-280. DOI: 10.1136/bjsports-2015-095788
  */
 export function computeAcwr(input: MetricInput): number | null {
-  const fixture = input.fixture as { activities?: Activity[] };
-  const activities = fixture.activities ?? [];
+  const activities = getActivities(input);
 
   const dailyLoad7d = getDailyLoad(activities, 7, input.frozenNow);
   const dailyLoad28d = getDailyLoad(activities, 28, input.frozenNow);
@@ -83,8 +82,7 @@ export function computeAcwr(input: MetricInput): number | null {
  *      DOI: 10.1097/00005768-199807000-00023
  */
 export function computeMonotony(input: MetricInput): number | null {
-  const fixture = input.fixture as { activities?: Activity[] };
-  const activities = fixture.activities ?? [];
+  const activities = getActivities(input);
 
   const dailyLoad7d = getDailyLoad(activities, 7, input.frozenNow);
 
@@ -139,8 +137,7 @@ export function computeMonotony(input: MetricInput): number | null {
  *      DOI: 10.1097/00005768-199807000-00023
  */
 export function computePrimarySportMonotony(input: MetricInput): number | null {
-  const fixture = input.fixture as { activities?: Activity[] };
-  const activities = fixture.activities ?? [];
+  const activities = getActivities(input);
 
   const dailyLoadBySport = getDailyLoadBySport(activities, 7, input.frozenNow);
   if (dailyLoadBySport.size === 0) return null;
@@ -197,8 +194,7 @@ export function computePrimarySportMonotony(input: MetricInput): number | null {
  * curator integration lands.
  */
 export function computeEffectiveMonotony(input: MetricInput): number | null {
-  const fixture = input.fixture as { activities?: Activity[] };
-  const activities = fixture.activities ?? [];
+  const activities = getActivities(input);
 
   const dailyLoadBySport = getDailyLoadBySport(activities, 7, input.frozenNow);
   const isMultiSport = dailyLoadBySport.size > 1;
