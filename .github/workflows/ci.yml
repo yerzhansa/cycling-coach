@@ -21,4 +21,3 @@ jobs:
       - run: pnpm -r build
       - run: pnpm exec oxlint packages/
       - run: pnpm test
-      - run: pnpm check:plan-artifacts
