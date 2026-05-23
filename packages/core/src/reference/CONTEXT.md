@@ -1,6 +1,6 @@
 # Reference
 
-Reference is a port of an external upstream protocol (MIT, v11.43). See [`NOTICE.md`](../../../../NOTICE.md) for full attribution and the list of modifications introduced during the port. NOTICE.md is the canonical attribution surface; the repo does not carry per-file header boilerplate.
+Reference is a port of the Reference layer's upstream protocol (MIT, v11.43). See [`NOTICE.md`](../../../../NOTICE.md) for full attribution and the list of modifications introduced during the port. NOTICE.md is the canonical attribution surface; the repo does not carry per-file header boilerplate.
 
 Reference is the **data + sport-aware adapter substrate** that grounds coaching in verified athlete numerics. Without Reference, the agent answered training questions from whatever fragments the LLM remembered + whatever live `intervals_fetch_*` call happened to fire that turn — a fragile composition that drifted across sessions and produced different numbers for the same question depending on what slipped through compaction. Reference replaces that with a curated `latest.json` snapshot injected into every system prompt, plus `reference_read_*` tools for the LLM to ask for derived metrics by name.
 
