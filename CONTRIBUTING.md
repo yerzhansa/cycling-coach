@@ -54,7 +54,7 @@ fix(soul): prevent coaching tone drift and emoji-only responses
 chore(deps): update intervals-icu-api to 0.1.2
 refactor(telegram): extract error formatting helper
 test(endurance): add 100-message endurance test
-docs(plan): add battle plan for rate limit fix
+docs(readme): document the /whatsnew command
 ```
 
 **Rules:**
@@ -64,7 +64,7 @@ docs(plan): add battle plan for rate limit fix
 
 ## Trademark hygiene
 
-The Reference submodule (`packages/core/src/reference/`) is ported from [section-11](https://github.com/CrankAddict/section-11) (CrankAddict, MIT) — see [`NOTICE.md`](./NOTICE.md). Section-11 was authored against TrainingPeaks vocabulary; this codebase uses [intervals.icu](https://intervals.icu)'s plain-English alternatives throughout. **PRs that introduce the forbidden tokens in Reference source or docs are rejected by the lint.**
+The Reference submodule (`packages/core/src/reference/`) ports from an MIT-licensed upstream; the full attribution (author, copyright, license text, and source link) lives in [`NOTICE.md`](./NOTICE.md). That upstream was authored against TrainingPeaks vocabulary; this codebase uses [intervals.icu](https://intervals.icu)'s plain-English alternatives throughout. **PRs that introduce the forbidden tokens in Reference source or docs are rejected by the lint.**
 
 | TrainingPeaks (forbidden) | intervals.icu (use this) |
 |---------------------------|--------------------------|
@@ -79,11 +79,9 @@ The Reference submodule (`packages/core/src/reference/`) is ported from [section
 
 A file that legitimately needs to mention the forbidden tokens (the linter's own source, a glossary file, a test fixture) opts out by placing `trademark-lint:skip-file` in any commenting style within the first 1 KB of the file. Use sparingly; the default scope is the Reference submodule and `tools/`.
 
-Per-ported-file boilerplate: every file in `packages/core/src/reference/` carries a one-line header comment naming section-11 — `// Adapted from CrankAddict/section-11 (MIT, 2026); see NOTICE.md.`
-
 ## Reference schema-version policy
 
-Each cache file under `<coach-home>/data/` (`latest.json`, `history.json`, `intervals.json`, `routes.json`, `ftp_history.json`) declares its own `<FILE>_SCHEMA_VERSION` constant in `packages/core/src/reference/schemas/`. **Bump only the file whose shape changed; never bump them in lockstep.** The version is informational — Zod-strict-as-gate is what handles drift via discard-and-resync per [the Reference PRD's Decision 9](./docs/initiatives/section-11/reference-prd-decisions.md). There is no `migrations/` directory; a schema bump is a code-only change that triggers a fresh sync on the next `runSync()`.
+Each cache file under `<coach-home>/data/` (`latest.json`, `history.json`, `intervals.json`, `routes.json`, `ftp_history.json`) declares its own `<FILE>_SCHEMA_VERSION` constant in `packages/core/src/reference/schemas/`. **Bump only the file whose shape changed; never bump them in lockstep.** The version is informational — Zod-strict-as-gate is what handles drift via discard-and-resync. There is no `migrations/` directory; a schema bump is a code-only change that triggers a fresh sync on the next `runSync()`.
 
 ## Fixture stewardship
 
