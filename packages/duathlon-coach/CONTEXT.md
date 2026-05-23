@@ -1,6 +1,6 @@
 # Duathlon Coach (binary stub)
 
-Not yet implemented. Tracked in issue #47. When implemented, this binary will wrap `@enduragent/sport-duathlon` (which composes sport-cycling + sport-running) with the duathlete-flavored deployment shell.
+Not yet implemented. When implemented, this binary will wrap `@enduragent/sport-duathlon` (which composes sport-cycling + sport-running) with the duathlete-flavored deployment shell.
 
 ## Status: alpha — empty stub
 
