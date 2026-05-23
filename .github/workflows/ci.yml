@@ -20,5 +20,5 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
       - run: pnpm exec oxlint packages/
-      - run: pnpm check:plan-artifacts
       - run: pnpm test
+      - run: pnpm check:plan-artifacts

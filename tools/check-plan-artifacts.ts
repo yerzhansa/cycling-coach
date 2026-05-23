@@ -28,6 +28,7 @@
 
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export interface PlanArtifactHit {
   readonly file: string;
@@ -51,14 +52,14 @@ export const PATTERNS: readonly Pattern[] = Object.freeze([
   { re: /\bWave[ -]?\d+\b/g, label: "Wave-N" },
   { re: /\bF\d+(?:[–-]F?\d+)?\b/g, label: "F-ID" },
   { re: /\bDecision \d+\b/g, label: "Decision-N" },
-  { re: /\bPhase [A-Z\d]\b/g, label: "Phase-X" },
+  { re: /\bPhase [A-Z\d]+\b/g, label: "Phase-X" },
   { re: /\bPR [A-F]\b/g, label: "PR-X" },
   { re: /\bbattle[- ]plan\b/g, label: "battle-plan" },
   { re: /\bReference PRD\b/g, label: "Reference-PRD" },
   { re: /\barchitect-final\b/g, label: "architect-final" },
-  { re: /section-11/g, label: "section-11" },
-  { re: /section 11/g, label: "section-11" },
-  { re: /issue #\d+/g, label: "issue-#N" },
+  { re: /\bsection-11\b/g, label: "section-11" },
+  { re: /\bsection 11\b/g, label: "section-11" },
+  { re: /\bissue #\d+\b/g, label: "issue-#N" },
 ]);
 
 const SKIP_DIRECTIVE = "plan-artifact-lint:skip-file";
@@ -216,6 +217,12 @@ export function collectScopedFiles(repoRoot: string): string[] {
 function walkSrc(dir: string, out: string[]): void {
   for (const entry of readdirSync(dir)) {
     if (entry === "node_modules" || entry === "dist" || entry.startsWith(".")) continue;
+    // Co-located tests routinely reference plan-artifact tokens in describe
+    // strings for traceability. The lint targets shipped surfaces (CONTEXT,
+    // SOUL, README, src code); tests are out of scope per the ticket's AC2.
+    if (entry === "__tests__") continue;
+    if (entry.endsWith(".test.ts") || entry.endsWith(".test.tsx") ||
+        entry.endsWith(".spec.ts") || entry.endsWith(".spec.tsx")) continue;
     const p = join(dir, entry);
     let st;
     try {
@@ -300,10 +307,13 @@ export function main(argv: readonly string[], repoRoot: string = process.cwd()):
   return 1;
 }
 
+// Compare paths via fileURLToPath so directories with spaces or non-ASCII
+// don't break the CLI dispatch — `import.meta.url` is percent-encoded while
+// `process.argv[1]` is the raw path.
 const isCli =
   typeof process !== "undefined" &&
   process.argv[1] !== undefined &&
-  import.meta.url === `file://${process.argv[1]}`;
+  fileURLToPath(import.meta.url) === process.argv[1];
 
 if (isCli) {
   process.exit(main(process.argv.slice(2)));

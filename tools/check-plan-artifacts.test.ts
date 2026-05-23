@@ -42,13 +42,23 @@ describe("findPlanArtifactHits — pattern coverage", () => {
     expect(tokens).toEqual(["F12–F14", "F8", "F8-F11"].sort());
   });
 
-  it("flags Decision-N, Phase-X, PR-X", () => {
+  it("flags Decision-N, Phase-X (single + multi-char), PR-X", () => {
     const file = write(
       "c.md",
-      `See Decision 4 from Phase D before PR C lands.\n`,
+      `See Decision 4 from Phase D and Phase 10 before PR C lands.\n`,
     );
     const labels = findPlanArtifactHits([file]).map((h) => h.label).sort();
-    expect(labels).toEqual(["Decision-N", "PR-X", "Phase-X"]);
+    expect(labels).toEqual(["Decision-N", "PR-X", "Phase-X", "Phase-X"]);
+    const tokens = findPlanArtifactHits([file]).map((h) => h.token).sort();
+    expect(tokens).toContain("Phase 10");
+  });
+
+  it("does not false-positive on section-11 neighbours (section-110, subsection 11)", () => {
+    const file = write(
+      "neighbours.md",
+      `Per subsection 110 of RFC X, the section-110 numbering is reserved.\n`,
+    );
+    expect(findPlanArtifactHits([file])).toEqual([]);
   });
 
   it("flags battle-plan, Reference PRD, architect-final", () => {
@@ -203,6 +213,18 @@ describe("collectScopedFiles — scope coverage", () => {
     expect(files).not.toContain("packages/core/CHANGELOG.md");
     expect(files).not.toContain(".changeset/foo.md");
   });
+
+  it("skips co-located test files under src/ (.test.ts, .spec.ts, __tests__/)", () => {
+    write("packages/core/src/lib.ts", `export const x = 1;\n`);
+    write("packages/core/src/lib.test.ts", `import "./lib";\n`);
+    write("packages/core/src/lib.spec.ts", `import "./lib";\n`);
+    write("packages/core/src/__tests__/extra.ts", `export {};\n`);
+    const files = collectScopedFiles(tempDir).map((p) => p.replace(tempDir + "/", ""));
+    expect(files).toContain("packages/core/src/lib.ts");
+    expect(files).not.toContain("packages/core/src/lib.test.ts");
+    expect(files).not.toContain("packages/core/src/lib.spec.ts");
+    expect(files).not.toContain("packages/core/src/__tests__/extra.ts");
+  });
 });
 
 describe("main — exit codes and allowlist", () => {
@@ -233,5 +255,18 @@ describe("main — exit codes and allowlist", () => {
     write("packages/core/CHANGELOG.md", `# Core\n\nF8 entry.\n`);
     write(".changeset/x.md", `---\n---\nWave 2 fix.\n`);
     expect(main([], tempDir)).toBe(0);
+  });
+
+  it("allowlist tolerates explicit CLI paths (CHANGELOG suffix + .changeset prefix + root surfaces)", () => {
+    // Exercises ALLOWLIST_EXACT, ALLOWLIST_PREFIX, ALLOWLIST_SUFFIX directly:
+    // the collector never surfaces these paths, so the only way to reach the
+    // allowlist branch is to pass them as explicit CLI args. A regression
+    // here would otherwise pass green in the collector-driven test above.
+    const notice = write("NOTICE.md", `Adapted from section-11.\n`);
+    const readme = write("README.md", `# Root\n\nCredits: section-11.\n`);
+    const rootChangelog = write("CHANGELOG.md", `# Root\n\nWave 2 changelog.\n`);
+    const pkgChangelog = write("packages/core/CHANGELOG.md", `# Core\n\nF8 entry.\n`);
+    const changeset = write(".changeset/x.md", `---\n---\nWave 2 fix.\n`);
+    expect(main([notice, readme, rootChangelog, pkgChangelog, changeset], tempDir)).toBe(0);
   });
 });
