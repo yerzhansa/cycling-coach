@@ -18,9 +18,9 @@ export const SYNC_CALLERS = ["scheduled", "lazy", "/sync"] as const;
  * successful sync.
  */
 /**
- * `phase` is set by `runSync()` when the outer 2-min timeout fires, so the
- * Wave 4 / Wave 5 readers can tell whether cache files made it to disk.
- * Other failure modes (Layer-1 gate reject, etc.) omit it.
+ * `phase` is set by `runSync()` when the outer 2-min timeout fires, so
+ * downstream readers (sync gate, curator) can tell whether cache files
+ * made it to disk. Other failure modes (Layer-1 gate reject, etc.) omit it.
  */
 export const ErrorPhaseSchema = z.enum([
   "fetching",
@@ -32,11 +32,11 @@ export const ErrorPhaseSchema = z.enum([
 export type ErrorPhase = z.infer<typeof ErrorPhaseSchema>;
 
 /**
- * Wave 4's sync gate populates `mitigation` so the curator (Wave 5) can
- * choose: force-resync (transient), block-coaching (data corruption that
- * could mislead the athlete), or warn-only (non-blocking inconsistency).
- * The schema lands in Wave 1b so on-disk format doesn't need a version
- * bump when Wave 4 begins writing the field.
+ * The sync gate populates `mitigation` so the curator can choose:
+ * force-resync (transient), block-coaching (data corruption that could
+ * mislead the athlete), or warn-only (non-blocking inconsistency). The
+ * schema is declared here ahead of the gate body so on-disk format doesn't
+ * need a version bump when the gate begins writing the field.
  */
 export const ErrorMitigationSchema = z.enum([
   "force_resync",
@@ -48,7 +48,7 @@ export type ErrorMitigation = z.infer<typeof ErrorMitigationSchema>;
 
 /**
  * `caller` records which orchestrator entry-point triggered the failure —
- * curator (Wave 5) uses it to decide whether to surface the failure to the
+ * the curator uses it to decide whether to surface the failure to the
  * athlete (a `/sync` failure goes to the athlete; a scheduled failure stays
  * internal until the staleness band crosses a threshold).
  *

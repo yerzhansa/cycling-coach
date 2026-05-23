@@ -75,7 +75,7 @@ function createFlushMemoryWriteTool(memory: MemoryStore, sections: readonly Memo
 
 // Substring matches against `cycling-history` body after each flush. Fires a
 // structured warn if chronic content (which belongs in `medical-history`) is
-// still parked in cycling-history — observability for the Wave 2 migration's
+// still parked in cycling-history — observability for the section-migration
 // "convergence over 1-3 flushes" assumption from ADR-0003. Substring matching
 // is intentional (catches plurals like "medications" via "medication"); expand
 // the list as we observe real data.

@@ -28,8 +28,8 @@ export const ROUTES_RETENTION_DAYS = 90;
 // ─── Sync-loop timing (mutex / cooldown / scheduled tick) ──────────────
 /**
  * Maximum time `runSync()` waits to acquire the sync mutex before responding
- * with a soft "another sync in flight, try again shortly" message. Wave 1b
- * (F4) implements the actual mutex; this constant pins the SLA.
+ * with a soft "another sync in flight, try again shortly" message. This
+ * constant pins the SLA.
  */
 export const MUTEX_ACQUIRE_TIMEOUT_MS = 30_000;
 /**
@@ -51,7 +51,7 @@ export const SCHEDULED_SYNC_INTERVAL_MS = 30 * 60 * 1000;
  */
 export const PER_REQUEST_TIMEOUT_MS = 30_000;
 
-// ─── /snapshot raw chunked-vs-document dispatch (F5) ────────────────────
+// ─── /snapshot raw chunked-vs-document dispatch ─────────────────────────
 /** If `formatSnapshotRaw` produces more chunks than this, send as a document. */
 export const SNAPSHOT_DOCUMENT_THRESHOLD_CHUNKS = 10;
 /** If the raw dump exceeds this byte budget, send as a document instead of chunked replies. */

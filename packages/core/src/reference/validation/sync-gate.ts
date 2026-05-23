@@ -1,11 +1,11 @@
 /**
- * Layer-1 sync gate per Reference PRD Decision 7. Wave-1 STUB — always
- * returns ok. Wave 4 / F15 replaces the body with the actual mechanical
- * checks (FTP source, weekly hours, UTC clock, tolerance bands, etc.).
+ * Layer-1 sync gate. STUB — always returns ok. A future body will add
+ * mechanical checks (FTP source, weekly hours, UTC clock, tolerance bands,
+ * etc.).
  *
- * The call site exists in `runSync()` from Wave 1b onwards (between fetch
- * and cache-file writes), so F15's PR only changes the function body — it
- * doesn't introduce a new cross-wave seam.
+ * The call site already exists in `runSync()` (between fetch and cache-file
+ * writes) so the future implementation is a body-only change, not a new
+ * cross-layer seam.
  */
 export interface GateFailure {
   readonly step: string;

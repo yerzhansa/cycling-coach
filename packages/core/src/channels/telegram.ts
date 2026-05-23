@@ -49,10 +49,9 @@ const WELCOME_MESSAGE =
 const SNAPSHOT_HELP =
   "/snapshot raw [section]    — dump pre-curation latest.json (or one section)\n" +
   "/snapshot help             — show this list\n\n" +
-  "Wave 7 will add: /snapshot, /snapshot metrics, /snapshot activities,\n" +
-  "/snapshot wellness, /snapshot intervals <id>, /snapshot routes <id>,\n" +
-  "/snapshot history, /snapshot ftp, /snapshot validation.\n\n" +
-  "Until then, only /snapshot raw is wired.";
+  "Future variants of /snapshot will surface metrics, activities, wellness,\n" +
+  "intervals, routes, history, FTP, and validation cuts. For now, only\n" +
+  "/snapshot raw is wired.";
 
 // Module-private factory: every Bot in this module is constructed here, with
 // the auth middleware registered FIRST. Future maintainers cannot add a handler

@@ -113,8 +113,8 @@ export class Memory implements MemoryStore {
   /**
    * Apply multiple section renames as a single read + single atomic write.
    * Used by the cycling-coach legacy migration so a partial migration cannot
-   * be observed by Reference initialization (architect-final concern 4 for
-   * Wave 1b). Returns the per-rename outcomes in the same order as `renames`.
+   * be observed by Reference initialization. Returns the per-rename outcomes
+   * in the same order as `renames`.
    */
   renameSections(
     renames: ReadonlyArray<readonly [string, string]>,

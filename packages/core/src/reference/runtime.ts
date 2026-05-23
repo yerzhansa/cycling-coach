@@ -17,7 +17,7 @@ export const INITIAL_SYNC_FAILED_LOG_PREFIX = "Reference: initial sync failed";
 /**
  * Live, started Reference instance. Held by the binary entry-point
  * (`run-binary.ts`); channels see only `services`. The scheduler handle is
- * exposed for shutdown handlers and Wave 7's operator-controlled lifecycle.
+ * exposed for shutdown handlers and future operator-controlled lifecycle.
  */
 export interface ReferenceRuntime {
   readonly services: ReferenceServices;
@@ -91,7 +91,7 @@ export async function bootstrapReference(
     runSync: (req) => runSyncInternal({ caller: "/sync", chatId: req.chatId }),
     loadLatest: (): LatestJson | null =>
       safeReadJson<LatestJson>(join(referenceDataPath, "latest.json"), LatestJsonSchema),
-    // Wave 1b stub; Wave 5 fills (see ReferenceServices.maybeRefreshIfStale).
+    // Stub; the curator fills this (see ReferenceServices.maybeRefreshIfStale).
     maybeRefreshIfStale: () => Promise.resolve({ kind: "fresh" }),
   };
 

@@ -28,7 +28,7 @@ export type SnapshotOutput =
       readonly kind: "document";
       readonly buffer: Buffer;
       readonly filename: string;
-      /** Same body re-chunked, for the handler's document→chunks fall-through (F5). */
+      /** Same body re-chunked, for the handler's document→chunks fall-through. */
       readonly chunks: readonly string[];
     };
 

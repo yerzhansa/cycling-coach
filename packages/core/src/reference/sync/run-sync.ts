@@ -51,7 +51,7 @@ export interface SyncFailure {
  *                 caller may retry after `retryAfterMs` (cooldown only).
  *   - `failed`  — body started but did not produce a valid commit. Cache
  *                 state may be partial (timeout) or untouched (gate_rejected).
- *                 `error_state.json` is written; curator (Wave 5) reads it.
+ *                 `error_state.json` is written; the curator reads it.
  */
 export type SyncResult =
   | {
@@ -113,7 +113,7 @@ export interface RunSyncDeps {
     readonly outerTimeoutMs?: number;
     readonly scheduledIntervalMs?: number;
   };
-  /** Override Layer-1 gate for tests; defaults to the Wave-1 stub `gateLatestJson`. */
+  /** Override Layer-1 gate for tests; defaults to the stub `gateLatestJson`. */
   readonly gate?: typeof gateLatestJson;
   /** Override atomic write for tests; defaults to `atomicWriteJson`. */
   readonly atomicWrite?: (path: string, value: unknown) => Promise<void>;

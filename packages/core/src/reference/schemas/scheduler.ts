@@ -6,8 +6,7 @@ export const SCHEDULER_SCHEMA_VERSION = "1";
  * `.scheduler.json` — durable coordination state for the sync loop.
  * `last_sync_at` and `next_sync_at` are ISO 8601 strings; both nullable so
  * the cold-start case (never synced) round-trips cleanly. Atomic-write on
- * update; safe-read on startup with discard-and-resync on parse failure
- * (per Reference PRD Decision 9).
+ * update; safe-read on startup with discard-and-resync on parse failure.
  */
 export const SchedulerStateSchema = z
   .object({
