@@ -1,6 +1,6 @@
 # Sport-Running (placeholder)
 
-Not yet implemented. Tracked in issue #47. When implemented, this context will own VDOT/pace-based zones, impact-aware progression, injury-first intake, runner persona. Ships as `running-coach` binary.
+Not yet implemented. When implemented, this context will own VDOT/pace-based zones, impact-aware progression, injury-first intake, runner persona. Ships as `running-coach` binary.
 
 ## Status: alpha — empty stub
 

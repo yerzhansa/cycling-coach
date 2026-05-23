@@ -1,2 +1,2 @@
-// Stub — running sport not yet implemented. Track issue #47.
+// Stub — running sport not yet implemented.
 export const STATUS = "alpha-not-yet-implemented" as const;
