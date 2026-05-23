@@ -65,9 +65,9 @@ A delivery surface (currently only Telegram); sport-agnostic.
 
 ## Path resolution
 
-`getCoachHome(binaryName)` (exported from `@enduragent/core`) is the single helper that resolves a binary's data directory using the three-tier fallback codified in ADR-0006: env-var override (`<BINARY>_HOME`, with `~`/`~/...` expansion) → legacy `~/.cycling-coach/` (only for the `cycling-coach` binary, only when that directory exists on disk) → fresh-install canonical `~/.enduragent/<dataSubdir>/` (subdir derived by stripping `-coach` from the binary name). All persisted state — Core config, Memory, Reference cache files (per the section-11 Reference initiative) — routes through this helper. Pure function; callers create the directory when they need it.
+`getCoachHome(binaryName)` (exported from `@enduragent/core`) is the single helper that resolves a binary's data directory using the three-tier fallback codified in ADR-0006: env-var override (`<BINARY>_HOME`, with `~`/`~/...` expansion) → legacy `~/.cycling-coach/` (only for the `cycling-coach` binary, only when that directory exists on disk) → fresh-install canonical `~/.enduragent/<dataSubdir>/` (subdir derived by stripping `-coach` from the binary name). All persisted state — Core config, Memory, Reference cache files (per the Reference layer's upstream protocol) — routes through this helper. Pure function; callers create the directory when they need it.
 
-## Reference test substrate (Wave 2 / F7)
+## Reference test substrate (property-based + golden fixtures)
 
 Property-based generators wrapping the Reference input schemas live at
 `tests/helpers/reference-arbitraries.ts` (fast-check arbitraries; opt-in
