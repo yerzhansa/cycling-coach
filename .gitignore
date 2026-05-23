@@ -10,4 +10,5 @@ scripts/
 CLAUDE.local.md
 .tests/
 .agents/
+.ralph/
 skills-lock.json
