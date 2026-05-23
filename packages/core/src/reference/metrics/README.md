@@ -34,7 +34,7 @@ present-key-with-`undefined` (Zod accepts it; type-checks; serializes); but
 `'key' in obj` will not exercise the missing-data branch under property
 tests, and F11's `has_intervals` regression case in particular needs the
 optional-chaining form (`activity.icu_intervals?.some(...)`) to detect the
-section-11 v3.106 bug class.
+upstream v3.106 bug class.
 
 **Rule 3 — zone-times shape variance is read-side, not ingest-side**:
 `Activity.icu_zone_times` / `pace_zone_times` / `hr_zone_times` are typed
