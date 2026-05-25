@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   computeGreyZoneNote,
   computeGreyZonePercentage,
+  computeQualityIntensityNote,
+  computeQualityIntensityPercentage,
   computeZoneDistribution7d,
 } from "./distribution.js";
 import type { MetricInput } from "./metric-input.js";
@@ -196,6 +198,71 @@ describe("computeGreyZoneNote", () => {
   it("returns the static polarized-training note constant", () => {
     expect(computeGreyZoneNote()).toBe(
       "Gray Zone % (Z3/tempo) - minimize in polarized training",
+    );
+  });
+});
+
+describe("computeQualityIntensityPercentage", () => {
+  it("returns the Z4+ share of total zone time, rounded to 1 dp", () => {
+    // z1 3600, z2 3600, z3 1800, z4 600, z5 600 ⇒ total 10200s,
+    // z4_plus 1200s. share 1200 / 10200 = 0.117647… → 11.7647% →
+    // round(11.7647, 1) = 11.8.
+    const result = computeQualityIntensityPercentage(
+      input(
+        [
+          {
+            type: "Ride",
+            start_date_local: "2026-05-09T08:00:00",
+            icu_zone_times: [
+              { id: "Z1", secs: 3600 },
+              { id: "Z2", secs: 3600 },
+              { id: "Z3", secs: 1800 },
+              { id: "Z4", secs: 600 },
+              { id: "Z5", secs: 600 },
+            ],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+
+    expect(result).toBe(11.8);
+  });
+
+  it("returns null when no activity has zone time", () => {
+    const result = computeQualityIntensityPercentage(
+      input(
+        [{ type: "WeightTraining", start_date_local: "2026-05-09T08:00:00" }],
+        FROZEN,
+      ),
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it("returns null when the window is empty", () => {
+    // The only ride is one day older than the trailing 7-day window.
+    const result = computeQualityIntensityPercentage(
+      input(
+        [
+          {
+            type: "Ride",
+            start_date_local: "2026-05-03T08:00:00",
+            icu_zone_times: [{ id: "Z4", secs: 3600 }],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+
+    expect(result).toBeNull();
+  });
+});
+
+describe("computeQualityIntensityNote", () => {
+  it("returns the static polarized-training note constant", () => {
+    expect(computeQualityIntensityNote()).toBe(
+      "Quality Intensity % (Z4+/threshold+) - target ~20% in polarized training",
     );
   });
 });
