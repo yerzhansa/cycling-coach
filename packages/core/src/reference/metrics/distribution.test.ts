@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  computeEasyTimeRatio,
+  computeEasyTimeRatioNote,
   computeGreyZoneNote,
   computeGreyZonePercentage,
   computeQualityIntensityNote,
@@ -263,6 +265,92 @@ describe("computeQualityIntensityNote", () => {
   it("returns the static polarized-training note constant", () => {
     expect(computeQualityIntensityNote()).toBe(
       "Quality Intensity % (Z4+/threshold+) - target ~20% in polarized training",
+    );
+  });
+});
+
+describe("computeEasyTimeRatio", () => {
+  it("returns the (Z1+Z2) share of total zone time as a bare ratio, rounded to 2 dp", () => {
+    // z1 3600, z2 3600, z3 1800, z4 600, z5 600 ⇒ total 10200s,
+    // easy 7200s. ratio 7200 / 10200 = 0.70588… → round(…, 2) = 0.71.
+    const result = computeEasyTimeRatio(
+      input(
+        [
+          {
+            type: "Ride",
+            start_date_local: "2026-05-09T08:00:00",
+            icu_zone_times: [
+              { id: "Z1", secs: 3600 },
+              { id: "Z2", secs: 3600 },
+              { id: "Z3", secs: 1800 },
+              { id: "Z4", secs: 600 },
+              { id: "Z5", secs: 600 },
+            ],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+
+    expect(result).toBe(0.71);
+  });
+
+  it("rounds half-to-even at the 2-dp boundary like Python's round", () => {
+    // easy 1250s, total 5000s ⇒ 0.25 exactly — no boundary. Use easy 1500s,
+    // total 4000s ⇒ 0.375 → round(0.375, 2) half-to-even = 0.38.
+    const result = computeEasyTimeRatio(
+      input(
+        [
+          {
+            type: "Ride",
+            start_date_local: "2026-05-09T08:00:00",
+            icu_zone_times: [
+              { id: "Z1", secs: 1500 },
+              { id: "Z4", secs: 2500 },
+            ],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+
+    expect(result).toBe(0.38);
+  });
+
+  it("returns null when no activity has zone time", () => {
+    const result = computeEasyTimeRatio(
+      input(
+        [{ type: "WeightTraining", start_date_local: "2026-05-09T08:00:00" }],
+        FROZEN,
+      ),
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it("returns null when the window is empty", () => {
+    // The only ride is one day older than the trailing 7-day window.
+    const result = computeEasyTimeRatio(
+      input(
+        [
+          {
+            type: "Ride",
+            start_date_local: "2026-05-03T08:00:00",
+            icu_zone_times: [{ id: "Z1", secs: 3600 }],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+
+    expect(result).toBeNull();
+  });
+});
+
+describe("computeEasyTimeRatioNote", () => {
+  it("returns the static polarized-training note constant", () => {
+    expect(computeEasyTimeRatioNote()).toBe(
+      "Easy time (Z1+Z2) / Total - target ~80% in polarized training",
     );
   });
 });

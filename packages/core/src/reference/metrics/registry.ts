@@ -9,6 +9,8 @@
  */
 
 import {
+  computeEasyTimeRatio,
+  computeEasyTimeRatioNote,
   computeGreyZoneNote,
   computeGreyZonePercentage,
   computeQualityIntensityNote,
@@ -47,4 +49,6 @@ export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {
   grey_zone_note: { compute: computeGreyZoneNote },
   quality_intensity_percentage: { compute: computeQualityIntensityPercentage },
   quality_intensity_note: { compute: computeQualityIntensityNote },
+  easy_time_ratio: { compute: computeEasyTimeRatio },
+  easy_time_ratio_note: { compute: computeEasyTimeRatioNote },
 };
