@@ -5,7 +5,7 @@
  * upstream protocol. See `NOTICE.md` for license attribution.
  */
 
-import type { Activity } from "../schemas/inputs.js";
+import type { Activity, WellnessDay } from "../schemas/inputs.js";
 
 import { getActivities, type MetricInput } from "./metric-input.js";
 
@@ -295,6 +295,97 @@ export function computeMonotonyInterpretation(input: MetricInput): string | null
   }
   if (effectiveMonotony > 2.0) return "elevated";
   return "normal";
+}
+
+/**
+ * Recovery index — the morning HRV/RHR readiness ratio.
+ *
+ * Reads the trailing 7-day wellness window (today and the six prior
+ * calendar days, in fixture order) and forms a two-contributor ratio:
+ * the day's HRV relative to its 7-day baseline, divided by the day's
+ * resting HR relative to its 7-day baseline. Above 1.0 reads as good
+ * recovery, below 1.0 as suppressed.
+ *
+ *   ri = (latestHrv / hrvBaseline7d) / (latestRhr / rhrBaseline7d)
+ *
+ * Baselines are the mean of the in-window readings, rounded to 1
+ * decimal: HRV readings filtered to the physiological band (10-250ms
+ * RMSSD, sensor-error rejection), resting-HR readings filtered to
+ * truthy values. "Latest" is the last reading in the window (HRV gated
+ * by the same validity band, resting HR taken raw). Returns `null` when
+ * any of the two latest readings or two baselines is missing or zero,
+ * mirroring the upstream truthiness guard — so an empty or wellness-free
+ * window cascades to Unknown.
+ *
+ * Upstream source mirrored line-by-line: `sync.py:3089-3115`
+ * (`_calculate_derived_metrics`) — the 7-day baseline block plus the
+ * recovery-index ratio — and the validity band at `sync.py:6225-6231`
+ * (`_is_valid_hrv`). The 7-day window matches the harness call-site slice
+ * (`wellness_7d`); see `NOTICE.md` for upstream attribution.
+ *
+ * Two-contributor, 7-day-baseline shape per the deviation registry's
+ * `recovery_index` `approved-revert` entry in
+ * `tools/intentional-deviations.yaml` (the 28-day / 4-contributor
+ * z-score variant was reviewed and rejected for lack of literature).
+ *
+ * Return shape is the raw upstream output (number or null), not a
+ * discriminated-union envelope. Raw compute functions feed the parity
+ * gate; a sibling envelope wrapper will feed the curator when the
+ * curator integration lands.
+ */
+export function computeRecoveryIndex(input: MetricInput): number | null {
+  const wellness7d = getWellnessWindow(input, 7);
+
+  const hrvValues7d = wellness7d
+    .map((w) => w.hrv)
+    .filter((v): v is number => isValidHrv(v));
+  const rhrValues7d = wellness7d
+    .map((w) => w.restingHR)
+    .filter((v): v is number => !!v);
+
+  const hrvBaseline7d =
+    hrvValues7d.length > 0 ? roundHalfEven(arithmeticMean(hrvValues7d), 1) : null;
+  const rhrBaseline7d =
+    rhrValues7d.length > 0 ? roundHalfEven(arithmeticMean(rhrValues7d), 1) : null;
+
+  const latest = wellness7d.length > 0 ? wellness7d[wellness7d.length - 1]! : null;
+  const latestHrvRaw = latest ? latest.hrv : null;
+  const latestHrv = isValidHrv(latestHrvRaw) ? latestHrvRaw : null;
+  const latestRhr = latest ? latest.restingHR : null;
+
+  if (latestHrv && latestRhr && hrvBaseline7d && rhrBaseline7d) {
+    const hrvRatio = latestHrv / hrvBaseline7d;
+    const rhrRatio = latestRhr / rhrBaseline7d;
+    return rhrRatio > 0 ? roundHalfEven(hrvRatio / rhrRatio, 2) : null;
+  }
+  return null;
+}
+
+// Mirrors `_is_valid_hrv` at sync.py:6225-6231: rejects null and
+// out-of-band readings (valid RMSSD is 10-250ms), filtering sensor
+// errors while preserving legitimate elite-athlete highs.
+function isValidHrv(value: number | null | undefined): value is number {
+  return value !== null && value !== undefined && value >= 10 && value <= 250;
+}
+
+// The 7-day wellness window the upstream reads as `wellness_7d`: rows
+// whose `id` date falls in [frozenNow-(days-1), frozenNow], inclusive,
+// in fixture order. Mirrors the harness `_within(_wellness_all, "id",
+// ...)` slice — the inclusive lexicographic date comparison and the
+// preserved input order matter, because the recovery index reads the
+// LAST row of this list (`wellness_7d[-1]`), not the chronologically
+// latest. Fixtures are trusted at the gate boundary (Zod ran upstream
+// of snapshot capture), matching the `getActivities` cast.
+function getWellnessWindow(input: MetricInput, days: number): WellnessDay[] {
+  const fixture = input.fixture as { wellness?: WellnessDay[] };
+  const wellness = fixture.wellness ?? [];
+  const oldest = isoDateDaysBefore(input.frozenNow, days - 1);
+  const today = input.frozenNow.slice(0, 10);
+  return wellness.filter((w) => {
+    if (typeof w.id !== "string") return false;
+    const d = w.id.slice(0, 10);
+    return oldest <= d && d <= today;
+  });
 }
 
 // Python's f-string interpolates a float via str(), which renders an
