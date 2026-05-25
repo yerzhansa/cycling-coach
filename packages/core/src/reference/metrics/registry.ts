@@ -11,6 +11,8 @@
 import {
   computeGreyZoneNote,
   computeGreyZonePercentage,
+  computeQualityIntensityNote,
+  computeQualityIntensityPercentage,
   computeZoneDistribution7d,
 } from "./distribution.js";
 import {
@@ -43,4 +45,6 @@ export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {
   zone_distribution_7d: { compute: computeZoneDistribution7d },
   grey_zone_percentage: { compute: computeGreyZonePercentage },
   grey_zone_note: { compute: computeGreyZoneNote },
+  quality_intensity_percentage: { compute: computeQualityIntensityPercentage },
+  quality_intensity_note: { compute: computeQualityIntensityNote },
 };

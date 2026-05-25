@@ -84,6 +84,37 @@ export function computeGreyZoneNote(): string {
   return GREY_ZONE_NOTE;
 }
 
+/**
+ * Quality-intensity percentage — the share of trailing-7-day zone time
+ * spent in Z4+ (above LT2, the "hard" work). Per Seiler's polarized model
+ * this is the band to target at ~20%. Returns `null` when no zone time was
+ * accumulated. There is no low/ok/high band classification — the upstream
+ * emits the bare percentage.
+ *
+ * Mirrors `sync.py:3154` line-by-line:
+ *   round((z4_plus_time / total_zone_time) * 100, 1) if total_zone_time > 0 else None
+ */
+export function computeQualityIntensityPercentage(input: MetricInput): number | null {
+  const activities7d = getActivitiesInWindow(getActivities(input), 7, input.frozenNow);
+  const totals = aggregateZones(activities7d, DEFAULT_ZONE_PREFERENCE);
+
+  if (totals.totalTime > 0) {
+    return roundHalfEven((totals.z4PlusTime / totals.totalTime) * 100, 1);
+  }
+  return null;
+}
+
+/**
+ * Static companion note the upstream emits alongside the quality-intensity
+ * percentage. A constant string — mirrors `sync.py:3387` exactly.
+ */
+const QUALITY_INTENSITY_NOTE =
+  "Quality Intensity % (Z4+/threshold+) - target ~20% in polarized training";
+
+export function computeQualityIntensityNote(): string {
+  return QUALITY_INTENSITY_NOTE;
+}
+
 // ─── Zone substrate ───────────────────────────────────────────────────
 //
 // Shared by every distribution-tier metric (grey-zone %, quality-intensity
