@@ -11,4 +11,5 @@ CLAUDE.local.md
 .tests/
 .agents/
 .ralph/
+.specify/
 skills-lock.json
