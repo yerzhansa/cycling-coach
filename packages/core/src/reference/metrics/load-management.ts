@@ -207,6 +207,46 @@ export function computeEffectiveMonotony(input: MetricInput): number | null {
     : monotony;
 }
 
+/**
+ * Training strain (Foster 1998).
+ *
+ * Strain = weekly Load × total monotony, where weekly Load is the sum of
+ * the trailing 7-day daily-Load series (the aggregator ACWR and monotony
+ * share) and monotony is the already-rounded total monotony. Foster
+ * associates strain above ~3500-4000 with overtraining.
+ *
+ * Returns `null` whenever monotony is falsy — `null` (the empty/rest-week
+ * cascade) or `0`. This mirrors the upstream `if monotony else None`
+ * guard, so an Unknown monotony cascades to an Unknown strain.
+ *
+ * Otherwise returns `round(weeklyLoad × monotony, 0)` with half-to-even
+ * rounding to mirror Python's `round()` bit-identically.
+ *
+ * Upstream source mirrored line-by-line: `sync.py:3087`
+ * (`_calculate_derived_metrics`). `tss_7d_total` is the sum of the 7-day
+ * series from the daily aggregator at `sync.py:3629-3644`, shared with
+ * ACWR and monotony. See `NOTICE.md` for upstream attribution.
+ *
+ * Return shape is the raw upstream output (number or null), not a
+ * discriminated-union envelope. Raw compute functions feed the parity
+ * gate; a sibling envelope wrapper will feed the curator when the
+ * curator integration lands.
+ *
+ * @see Foster, C. (1998). Monitoring training in athletes with reference
+ *      to overtraining syndrome. Med Sci Sports Exerc 30(7):1164-1168.
+ *      DOI: 10.1097/00005768-199807000-00023
+ */
+export function computeStrain(input: MetricInput): number | null {
+  const monotony = computeMonotony(input);
+  if (!monotony) return null;
+
+  const activities = getActivities(input);
+  const dailyLoad7d = getDailyLoad(activities, 7, input.frozenNow);
+  const load7dTotal = dailyLoad7d.reduce((s, t) => s + t, 0);
+
+  return roundHalfEven(load7dTotal * monotony, 0);
+}
+
 // Mirrors `SPORT_FAMILIES` at sync.py:290-308. Unmapped types fall
 // through to "other" at the lookup site.
 const SPORT_FAMILIES: Record<string, string> = {

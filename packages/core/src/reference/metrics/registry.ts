@@ -14,6 +14,7 @@ import {
   computeEffectiveMonotony,
   computeMonotony,
   computePrimarySportMonotony,
+  computeStrain,
 } from "./load-management.js";
 
 export interface MetricRegistryEntry {
@@ -25,4 +26,5 @@ export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {
   monotony: { compute: computeMonotony },
   primary_sport_monotony: { compute: computePrimarySportMonotony },
   effective_monotony: { compute: computeEffectiveMonotony },
+  strain: { compute: computeStrain },
 };
