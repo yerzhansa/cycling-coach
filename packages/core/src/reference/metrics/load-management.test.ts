@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   computeEffectiveMonotony,
+  computeLoadRecoveryRatio,
   computeMonotony,
   computeMonotonyInterpretation,
   computeRecoveryIndex,
@@ -212,5 +213,56 @@ describe("computeRecoveryIndex", () => {
       ),
     );
     expect(result).toBe(0.89);
+  });
+});
+
+// computeLoadRecoveryRatio reads activities (for weekly Load) and the
+// trailing 7-day wellness window (for the recovery index). These rows
+// isolate the ratio formula and the recovery-index cascade; bit-identity
+// on the populated path is the parity matrix's job (realistic-athlete =
+// 2.8, data-gap-mid-history = 3.6).
+function loadRecoveryInput(
+  activities: { start_date_local: string; icu_training_load: number }[],
+  wellness: { id: string; hrv: number | null; restingHR: number | null }[],
+  frozenNow: string,
+): MetricInput {
+  return { fixture: { activities, wellness }, frozenNow };
+}
+
+describe("computeLoadRecoveryRatio", () => {
+  const FROZEN = "2026-05-10T12:00:00";
+
+  it("returns weeklyLoad / (recoveryIndex × 100), rounded half-to-even", () => {
+    // Window 05-04..05-10. Loads 50/50/100 ⇒ weekly Load 200. Wellness
+    // baseline mean(40,50)=45, latest (05-10) HRV 50 / RHR 60 ⇒ ri 1.11.
+    // 200 / (1.11 × 100) = 200 / 111 ⇒ round(1.801…, 1) = 1.8.
+    const result = computeLoadRecoveryRatio(
+      loadRecoveryInput(
+        [
+          { start_date_local: "2026-05-06T08:00:00", icu_training_load: 50 },
+          { start_date_local: "2026-05-08T08:00:00", icu_training_load: 50 },
+          { start_date_local: "2026-05-10T08:00:00", icu_training_load: 100 },
+        ],
+        [
+          { id: "2026-05-09", hrv: 40, restingHR: 60 },
+          { id: "2026-05-10", hrv: 50, restingHR: 60 },
+        ],
+        FROZEN,
+      ),
+    );
+    expect(result).toBe(1.8);
+  });
+
+  it("cascades Unknown: recovery index null ⇒ load-recovery ratio null", () => {
+    // Activities present, but no wellness ⇒ recovery index null ⇒ the
+    // `ri and ri > 0` guard fails ⇒ null, even with weekly Load > 0.
+    const result = computeLoadRecoveryRatio(
+      loadRecoveryInput(
+        [{ start_date_local: "2026-05-10T08:00:00", icu_training_load: 100 }],
+        [],
+        FROZEN,
+      ),
+    );
+    expect(result).toBeNull();
   });
 });

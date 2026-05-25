@@ -405,6 +405,50 @@ export function computeRecoveryIndex(input: MetricInput): number | null {
   return null;
 }
 
+/**
+ * Load-recovery ratio — weekly Load weighed against autonomic recovery.
+ *
+ *   loadRecoveryRatio = weeklyLoad / (recoveryIndex × 100)
+ *
+ * The numerator is the sum of the trailing 7-day daily-Load series (the
+ * aggregator ACWR, monotony, and strain share). The denominator is the
+ * recovery index — the morning HRV/RHR readiness ratio — scaled by 100,
+ * so a healthier autonomic signal shrinks the ratio. The result is
+ * rounded half-to-even to 1 decimal.
+ *
+ * Returns `null` whenever the recovery index is falsy (`null` from the
+ * empty/wellness-free cascade, or `0`) or non-positive, mirroring the
+ * upstream `if ri and ri > 0 else None` guard — so an Unknown recovery
+ * index cascades to an Unknown load-recovery ratio.
+ *
+ * Upstream source mirrored line-by-line: `sync.py:3135`
+ * (`_calculate_derived_metrics`). `tss_7d_total` is the sum of the 7-day
+ * series from the daily aggregator at `sync.py:3629-3644`, shared with
+ * ACWR; `ri` is the recovery-index local at `sync.py:3113`. See
+ * `NOTICE.md` for upstream attribution.
+ *
+ * Mirrors `sync.py:3135` line-by-line per the deviation registry's
+ * `load_recovery_ratio` `approved-revert` entry in
+ * `tools/intentional-deviations.yaml` (the time-proxy-denominator family
+ * proposed in an earlier spec revision was reviewed and reverted for lack
+ * of literature).
+ *
+ * Return shape is the raw upstream output (number or null), not a
+ * discriminated-union envelope. Raw compute functions feed the parity
+ * gate; a sibling envelope wrapper will feed the curator when the
+ * curator integration lands.
+ */
+export function computeLoadRecoveryRatio(input: MetricInput): number | null {
+  const ri = computeRecoveryIndex(input);
+  if (!ri || ri <= 0) return null;
+
+  const activities = getActivities(input);
+  const dailyLoad7d = getDailyLoad(activities, 7, input.frozenNow);
+  const load7dTotal = dailyLoad7d.reduce((s, t) => s + t, 0);
+
+  return roundHalfEven(load7dTotal / (ri * 100), 1);
+}
+
 // Mirrors `_is_valid_hrv` at sync.py:6225-6231: rejects null and
 // out-of-band readings (valid RMSSD is 10-250ms), filtering sensor
 // errors while preserving legitimate elite-athlete highs.
