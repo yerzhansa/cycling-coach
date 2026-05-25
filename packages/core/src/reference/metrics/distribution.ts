@@ -54,6 +54,36 @@ export function computeZoneDistribution7d(input: MetricInput): ZoneDistribution7
   };
 }
 
+/**
+ * Grey-zone percentage — the share of trailing-7-day zone time spent in
+ * Z3 (tempo). Per Seiler's polarized model this is the band to minimize
+ * ("too much pain for too little gain"). Returns `null` when no zone time
+ * was accumulated. There is no low/ok/high band classification — the
+ * upstream emits the bare percentage.
+ *
+ * Mirrors `sync.py:3149` line-by-line:
+ *   round((z3_time / total_zone_time) * 100, 1) if total_zone_time > 0 else None
+ */
+export function computeGreyZonePercentage(input: MetricInput): number | null {
+  const activities7d = getActivitiesInWindow(getActivities(input), 7, input.frozenNow);
+  const totals = aggregateZones(activities7d, DEFAULT_ZONE_PREFERENCE);
+
+  if (totals.totalTime > 0) {
+    return roundHalfEven((totals.z3Time / totals.totalTime) * 100, 1);
+  }
+  return null;
+}
+
+/**
+ * Static companion note the upstream emits alongside the grey-zone
+ * percentage. A constant string — mirrors `sync.py:3385` exactly.
+ */
+const GREY_ZONE_NOTE = "Gray Zone % (Z3/tempo) - minimize in polarized training";
+
+export function computeGreyZoneNote(): string {
+  return GREY_ZONE_NOTE;
+}
+
 // ─── Zone substrate ───────────────────────────────────────────────────
 //
 // Shared by every distribution-tier metric (grey-zone %, quality-intensity
