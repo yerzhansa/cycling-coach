@@ -8,6 +8,7 @@ import {
   computeQualityIntensityNote,
   computeQualityIntensityPercentage,
   computeSeilerTid,
+  computeSeilerTidPrimary,
   computeZoneDistribution7d,
 } from "./distribution.js";
 import type { MetricInput } from "./metric-input.js";
@@ -566,5 +567,134 @@ describe("computeSeilerTid", () => {
       classification: null,
       zone_basis: null,
     });
+  });
+});
+
+describe("computeSeilerTidPrimary", () => {
+  // The golden fixtures are cycling-only, so the sport-family filter is a
+  // no-op there and the primary variant equals the all-sport one (plus the
+  // sport key). These synthetic rows isolate the multi-sport branches the
+  // parity matrix can't reach: primary selection by Load, the filter
+  // excluding non-primary activities, the insertion-order tiebreak, and the
+  // null path when no activity carries Load.
+
+  it("restricts aggregation to the highest-Load family and appends its name as sport", () => {
+    // Cycling Load 100 > Run Load 50 ⇒ primary = cycling. Only the ride
+    // enters the aggregation; the run's all-hard HR zones (which would push
+    // SeilerZ3 to 9000 and flip the basis to mixed) are excluded. SeilerZ1
+    // = 5000+1000, SeilerZ2 = 3000, SeilerZ3 = 1000 ⇒ 0.6/0.3/0.1 Pyramidal.
+    const result = computeSeilerTidPrimary(
+      input(
+        [
+          {
+            type: "Ride",
+            icu_training_load: 100,
+            start_date_local: "2026-05-09T08:00:00",
+            icu_zone_times: [
+              { id: "Z1", secs: 5000 },
+              { id: "Z2", secs: 1000 },
+              { id: "Z3", secs: 3000 },
+              { id: "Z4", secs: 1000 },
+            ],
+          },
+          {
+            type: "Run",
+            icu_training_load: 50,
+            start_date_local: "2026-05-08T08:00:00",
+            icu_hr_zone_times: [0, 0, 0, 9000],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+
+    expect(result).toEqual({
+      z1_seconds: 6000,
+      z2_seconds: 3000,
+      z3_seconds: 1000,
+      z1_pct: 60,
+      z2_pct: 30,
+      z3_pct: 10,
+      polarization_index: null,
+      classification: "Pyramidal",
+      zone_basis: "power",
+      sport: "cycling",
+    });
+  });
+
+  it("breaks a Load tie in favour of the first-encountered family", () => {
+    // Run and Ride both carry Load 100. `max(sport_totals, key=...)` returns
+    // the first key at the maximum in insertion order, so the run (listed
+    // first) wins. Only its HR zones enter: SeilerZ1 = 6000+3000, SeilerZ2 =
+    // 1000, SeilerZ3 = 0 ⇒ 0.9/0.1/0.0 ⇒ Base; sport "run", basis "hr".
+    const result = computeSeilerTidPrimary(
+      input(
+        [
+          {
+            type: "Run",
+            icu_training_load: 100,
+            start_date_local: "2026-05-08T08:00:00",
+            icu_hr_zone_times: [6000, 3000, 1000],
+          },
+          {
+            type: "Ride",
+            icu_training_load: 100,
+            start_date_local: "2026-05-09T08:00:00",
+            icu_zone_times: [{ id: "Z4", secs: 9000 }],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+
+    expect(result?.sport).toBe("run");
+    expect(result?.zone_basis).toBe("hr");
+    expect(result?.classification).toBe("Base");
+    expect(result?.z3_seconds).toBe(0);
+  });
+
+  it("returns null when no in-window activity carries Load (even with zone data)", () => {
+    // Zone data is present but Load is 0, so the upstream `primary_sport`
+    // stays None and the variant is never built — null, unlike the all-sport
+    // metric which would still aggregate the zone time.
+    const rows = [
+      {
+        type: "Ride",
+        icu_training_load: 0,
+        start_date_local: "2026-05-09T08:00:00",
+        icu_zone_times: [{ id: "Z1", secs: 3600 }],
+      },
+    ];
+
+    expect(computeSeilerTidPrimary(input(rows, FROZEN))).toBeNull();
+    // The all-sport variant still has data — confirming the null is the
+    // primary-sport gate, not an empty window.
+    expect(computeSeilerTid(input(rows, FROZEN)).z1_seconds).toBe(3600);
+  });
+
+  it("equals the all-sport build plus the sport key for a single-family window", () => {
+    const rows = [
+      {
+        type: "Ride",
+        icu_training_load: 80,
+        start_date_local: "2026-05-09T08:00:00",
+        icu_zone_times: [
+          { id: "Z1", secs: 5000 },
+          { id: "Z3", secs: 3000 },
+          { id: "Z4", secs: 2000 },
+        ],
+      },
+      {
+        type: "VirtualRide",
+        icu_training_load: 40,
+        start_date_local: "2026-05-08T08:00:00",
+        icu_zone_times: [{ id: "Z2", secs: 1000 }],
+      },
+    ];
+
+    const all = computeSeilerTid(input(rows, FROZEN));
+    const primary = computeSeilerTidPrimary(input(rows, FROZEN));
+
+    expect(primary).toEqual({ ...all, sport: "cycling" });
   });
 });

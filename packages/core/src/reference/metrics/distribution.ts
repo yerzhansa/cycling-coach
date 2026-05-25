@@ -192,6 +192,40 @@ export function computeSeilerTid(input: MetricInput): SeilerTid {
   return buildSeilerTid(activities7d, null);
 }
 
+/**
+ * 7-day Seiler TID restricted to the athlete's primary sport family.
+ *
+ * The primary sport is the family carrying the greatest accumulated Load
+ * over the trailing-7-day window. With that family as the
+ * `sport_family_filter`, only its activities enter the aggregation, while
+ * each activity's own sport family still drives its zone-preference lookup
+ * (the filter controls inclusion, not zone selection). The result is the
+ * same shape as `seiler_tid_7d` plus a `sport` key naming the family.
+ *
+ * Returns `null` when there is no primary sport — i.e. no in-window
+ * activity carries Load > 0, so the upstream `primary_sport` stays `None`
+ * and the variant is never built.
+ *
+ * Upstream source mirrored line-by-line: the call site at `sync.py:3166-3171`
+ * (`_build_seiler_tid(activities_7d, sport_family_filter=primary_sport)`
+ * then `["sport"] = primary_sport`) over the same Seiler substrate as
+ * `computeSeilerTid`. The `primary_sport` derivation mirrors `sync.py:3048-3056`
+ * (`_get_daily_tss_by_sport` then `max(sport_totals, key=sport_totals.get)`).
+ * See `NOTICE.md` for upstream attribution.
+ */
+export interface SeilerTidPrimary extends SeilerTid {
+  sport: string;
+}
+
+export function computeSeilerTidPrimary(input: MetricInput): SeilerTidPrimary | null {
+  const activities7d = getActivitiesInWindow(getActivities(input), 7, input.frozenNow);
+
+  const primarySport = selectPrimarySport(activities7d);
+  if (!primarySport) return null;
+
+  return { ...buildSeilerTid(activities7d, primarySport), sport: primarySport };
+}
+
 // ─── Zone substrate ───────────────────────────────────────────────────
 //
 // Shared by every distribution-tier metric (grey-zone %, quality-intensity
@@ -478,6 +512,42 @@ function buildSeilerTid(
     classification,
     zone_basis: zoneBasis,
   };
+}
+
+// Primary sport family = the family with the greatest accumulated Load over
+// the window. Mirrors the inline derivation at `sync.py:3048-3056`:
+// `_get_daily_tss_by_sport(activities_7d, days=7)` builds per-family daily
+// arrays (each value being summed Load, skipping rows with Load <= 0,
+// unmapped types grouped as "other"), then
+// `max(sport_totals, key=sport_totals.get)` picks the family whose summed
+// days are largest. Because every passed activity is already inside the
+// window, summing each family's Load directly equals `sum(days)`. `max`
+// returns the first key at the maximum in dict-insertion order, so totals
+// are tracked in first-encountered order and ties resolve to the earliest
+// family — keeping the selection bit-identical. Returns `null` when no
+// in-window activity carries Load > 0 (upstream `primary_sport` is `None`).
+function selectPrimarySport(activities: Activity[]): string | null {
+  const totals = new Map<string, number>();
+
+  for (const act of activities) {
+    const load = act.icu_training_load || 0;
+    if (load <= 0) continue;
+    const activityType = act.type ?? "Unknown";
+    const sportFamily = Object.hasOwn(SPORT_FAMILIES, activityType)
+      ? SPORT_FAMILIES[activityType]
+      : "other";
+    totals.set(sportFamily, (totals.get(sportFamily) ?? 0) + load);
+  }
+
+  let primary: string | null = null;
+  let maxTotal = -Infinity;
+  for (const [sport, total] of totals) {
+    if (total > maxTotal) {
+      maxTotal = total;
+      primary = sport;
+    }
+  }
+  return primary;
 }
 
 // The trailing 7-day activity window the upstream reads as `activities_7d`:
