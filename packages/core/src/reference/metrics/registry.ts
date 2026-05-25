@@ -17,6 +17,7 @@ import {
   computePrimarySportMonotony,
   computeRecoveryIndex,
   computeStrain,
+  computeStressTolerance,
 } from "./load-management.js";
 
 export interface MetricRegistryEntry {
@@ -31,4 +32,5 @@ export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {
   monotony_interpretation: { compute: computeMonotonyInterpretation },
   strain: { compute: computeStrain },
   recovery_index: { compute: computeRecoveryIndex },
+  stress_tolerance: { compute: computeStressTolerance },
 };
