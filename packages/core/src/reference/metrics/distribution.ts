@@ -226,6 +226,24 @@ export function computeSeilerTidPrimary(input: MetricInput): SeilerTidPrimary | 
   return { ...buildSeilerTid(activities7d, primarySport), sport: primarySport };
 }
 
+/**
+ * 28-day Seiler training-intensity distribution (TID) — the chronic window.
+ *
+ * Identical to `computeSeilerTid` in every respect except the aggregation
+ * window: the same all-sport Seiler builder runs over the trailing 28 days
+ * instead of 7. Pairing the acute (7d) and chronic (28d) distributions is
+ * what lets the upstream detect intensity-distribution drift.
+ *
+ * Upstream source mirrored line-by-line: `sync.py:3184`
+ * (`_build_seiler_tid(activities_28d)`, no sport-family filter), the same
+ * builder (`sync.py:3993`) as the 7-day variant over the wider window. See
+ * `NOTICE.md` for upstream attribution.
+ */
+export function computeSeilerTid28d(input: MetricInput): SeilerTid {
+  const activities28d = getActivitiesInWindow(getActivities(input), 28, input.frozenNow);
+  return buildSeilerTid(activities28d, null);
+}
+
 // ─── Zone substrate ───────────────────────────────────────────────────
 //
 // Shared by every distribution-tier metric (grey-zone %, quality-intensity

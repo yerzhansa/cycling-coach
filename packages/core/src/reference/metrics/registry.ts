@@ -16,6 +16,7 @@ import {
   computeQualityIntensityNote,
   computeQualityIntensityPercentage,
   computeSeilerTid,
+  computeSeilerTid28d,
   computeSeilerTidPrimary,
   computeZoneDistribution7d,
 } from "./distribution.js";
@@ -55,4 +56,5 @@ export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {
   easy_time_ratio_note: { compute: computeEasyTimeRatioNote },
   seiler_tid_7d: { compute: computeSeilerTid },
   seiler_tid_7d_primary: { compute: computeSeilerTidPrimary },
+  seiler_tid_28d: { compute: computeSeilerTid28d },
 };

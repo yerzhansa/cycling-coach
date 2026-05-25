@@ -8,6 +8,7 @@ import {
   computeQualityIntensityNote,
   computeQualityIntensityPercentage,
   computeSeilerTid,
+  computeSeilerTid28d,
   computeSeilerTidPrimary,
   computeZoneDistribution7d,
 } from "./distribution.js";
@@ -696,5 +697,89 @@ describe("computeSeilerTidPrimary", () => {
     const primary = computeSeilerTidPrimary(input(rows, FROZEN));
 
     expect(primary).toEqual({ ...all, sport: "cycling" });
+  });
+});
+
+describe("computeSeilerTid28d", () => {
+  // The golden fixtures are cycling-only, so the parity matrix already
+  // exercises the 28d window against the snapshot. These synthetic rows
+  // isolate the one thing that distinguishes this from the 7d variant: the
+  // wider aggregation window. The Seiler fold / PI / classifier logic is the
+  // shared `buildSeilerTid` substrate already covered by `computeSeilerTid`.
+
+  it("aggregates an activity that falls outside the 7d window but inside 28d", () => {
+    // FROZEN 2026-05-10: the 7d window is [05-04, 05-10], the 28d window is
+    // [04-13, 05-10]. The 04-25 ride is too old for 7d but in-window for 28d.
+    // SeilerZ1 = 5000+1000 = 6000, SeilerZ2 = 3000, SeilerZ3 = 1000.
+    // total 10000 ⇒ 0.6/0.3/0.1 ⇒ Pyramidal, PI null.
+    const rows = [
+      {
+        type: "Ride",
+        start_date_local: "2026-04-25T08:00:00",
+        icu_zone_times: [
+          { id: "Z1", secs: 5000 },
+          { id: "Z2", secs: 1000 },
+          { id: "Z3", secs: 3000 },
+          { id: "Z4", secs: 1000 },
+        ],
+      },
+    ];
+
+    expect(computeSeilerTid28d(input(rows, FROZEN))).toEqual({
+      z1_seconds: 6000,
+      z2_seconds: 3000,
+      z3_seconds: 1000,
+      z1_pct: 60,
+      z2_pct: 30,
+      z3_pct: 10,
+      polarization_index: null,
+      classification: "Pyramidal",
+      zone_basis: "power",
+    });
+    // The same row is empty for the 7d builder — confirming the only
+    // difference is the window, not the aggregation.
+    expect(computeSeilerTid(input(rows, FROZEN)).z1_seconds).toBe(0);
+  });
+
+  it("excludes activities older than the trailing 28-day window", () => {
+    // 04-12 is one day older than the 28d window [04-13, 05-10].
+    const result = computeSeilerTid28d(
+      input(
+        [
+          {
+            type: "Ride",
+            start_date_local: "2026-04-12T08:00:00",
+            icu_zone_times: [{ id: "Z2", secs: 3600 }],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+
+    expect(result.z1_seconds).toBe(0);
+    expect(result.z2_seconds).toBe(0);
+    expect(result.z3_seconds).toBe(0);
+    expect(result.zone_basis).toBeNull();
+  });
+
+  it("returns zero seconds and null fields when total zone time is zero", () => {
+    const result = computeSeilerTid28d(
+      input(
+        [{ type: "WeightTraining", start_date_local: "2026-04-25T08:00:00" }],
+        FROZEN,
+      ),
+    );
+
+    expect(result).toEqual({
+      z1_seconds: 0,
+      z2_seconds: 0,
+      z3_seconds: 0,
+      z1_pct: null,
+      z2_pct: null,
+      z3_pct: null,
+      polarization_index: null,
+      classification: null,
+      zone_basis: null,
+    });
   });
 });
