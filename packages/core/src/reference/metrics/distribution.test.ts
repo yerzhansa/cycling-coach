@@ -7,6 +7,7 @@ import {
   computeGreyZonePercentage,
   computeQualityIntensityNote,
   computeQualityIntensityPercentage,
+  computeSeilerTid,
   computeZoneDistribution7d,
 } from "./distribution.js";
 import type { MetricInput } from "./metric-input.js";
@@ -352,5 +353,218 @@ describe("computeEasyTimeRatioNote", () => {
     expect(computeEasyTimeRatioNote()).toBe(
       "Easy time (Z1+Z2) / Total - target ~80% in polarized training",
     );
+  });
+});
+
+describe("computeSeilerTid", () => {
+  // The seven-zone fold into Seiler's model: SeilerZ1 = z1+z2,
+  // SeilerZ2 = z3, SeilerZ3 = z4+z5+z6+z7. The golden fixtures only land
+  // the Pyramidal-with-null-PI branch; these synthetic rows isolate the
+  // classification and polarization-index branches the parity matrix can't
+  // reach.
+
+  it("folds seven zones into the Seiler 3-zone model and classifies Pyramidal (PI null)", () => {
+    // SeilerZ1 = 5000+1000 = 6000, SeilerZ2 = 3000, SeilerZ3 = 1000.
+    // total 10000 ⇒ fracs 0.6/0.3/0.1. z1>z2>z3 ⇒ Pyramidal. PI null
+    // because the polarized gate (z1>z3>z2) fails (z3 0.1 < z2 0.3).
+    const result = computeSeilerTid(
+      input(
+        [
+          {
+            type: "Ride",
+            start_date_local: "2026-05-09T08:00:00",
+            icu_zone_times: [
+              { id: "Z1", secs: 5000 },
+              { id: "Z2", secs: 1000 },
+              { id: "Z3", secs: 3000 },
+              { id: "Z4", secs: 1000 },
+            ],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+
+    expect(result).toEqual({
+      z1_seconds: 6000,
+      z2_seconds: 3000,
+      z3_seconds: 1000,
+      z1_pct: 60,
+      z2_pct: 30,
+      z3_pct: 10,
+      polarization_index: null,
+      classification: "Pyramidal",
+      zone_basis: "power",
+    });
+  });
+
+  it("computes the Treff polarization index and classifies Polarized when Z1>Z3>Z2 and PI>2.0", () => {
+    // SeilerZ1 = 7500, SeilerZ2 = 500, SeilerZ3 = 2000. fracs 0.75/0.05/0.20.
+    // PI = log10((0.75/0.05) × 0.20 × 100) = log10(300) = 2.48 > 2.0.
+    const result = computeSeilerTid(
+      input(
+        [
+          {
+            type: "Ride",
+            start_date_local: "2026-05-09T08:00:00",
+            icu_zone_times: [
+              { id: "Z1", secs: 7500 },
+              { id: "Z3", secs: 500 },
+              { id: "Z4", secs: 2000 },
+            ],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+
+    expect(result.polarization_index).toBe(2.48);
+    expect(result.classification).toBe("Polarized");
+    expect(result.z1_pct).toBe(75);
+    expect(result.z2_pct).toBe(5);
+    expect(result.z3_pct).toBe(20);
+  });
+
+  it("substitutes Z2=0 with 0.01 in the PI formula", () => {
+    // SeilerZ1 = 8000, SeilerZ2 = 0, SeilerZ3 = 2000. fracs 0.8/0.0/0.20.
+    // z1>z3>z2 (0.8>0.2>0); effective Z2 = 0.01.
+    // PI = log10((0.8/0.01) × 0.20 × 100) = log10(1600) = 3.2 > 2.0.
+    const result = computeSeilerTid(
+      input(
+        [
+          {
+            type: "Ride",
+            start_date_local: "2026-05-09T08:00:00",
+            icu_zone_times: [
+              { id: "Z1", secs: 8000 },
+              { id: "Z4", secs: 2000 },
+            ],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+
+    expect(result.z2_seconds).toBe(0);
+    expect(result.z2_pct).toBe(0);
+    expect(result.polarization_index).toBe(3.2);
+    expect(result.classification).toBe("Polarized");
+  });
+
+  it("falls back to Pyramidal when the structure is polarized but PI <= 2.0", () => {
+    // SeilerZ1 = 5000, SeilerZ2 = 2000, SeilerZ3 = 3000. fracs 0.5/0.2/0.3.
+    // z1>z3>z2 so the PI gate opens; PI = log10((0.5/0.2) × 0.3 × 100) =
+    // log10(75) = 1.88 ≤ 2.0, so not Polarized. Pyramidal needs z1>z2>z3
+    // (fails: z3 0.3 > z2 0.2), and Z2/Z3 aren't dominant ⇒ final fallback.
+    const result = computeSeilerTid(
+      input(
+        [
+          {
+            type: "Ride",
+            start_date_local: "2026-05-09T08:00:00",
+            icu_zone_times: [
+              { id: "Z1", secs: 5000 },
+              { id: "Z3", secs: 2000 },
+              { id: "Z4", secs: 3000 },
+            ],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+
+    expect(result.polarization_index).toBe(1.88);
+    expect(result.classification).toBe("Pyramidal");
+  });
+
+  it("classifies Base when Z3 is near zero and Z1 dominates", () => {
+    // SeilerZ1 = 9900, SeilerZ2 = 100, SeilerZ3 = 0. fracs 0.99/0.01/0.0.
+    // z3_frac 0 < 0.01 and z1 dominant ⇒ Base; PI null (z3 < 0.01).
+    const result = computeSeilerTid(
+      input(
+        [
+          {
+            type: "Ride",
+            start_date_local: "2026-05-09T08:00:00",
+            icu_zone_times: [
+              { id: "Z1", secs: 9900 },
+              { id: "Z3", secs: 100 },
+            ],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+
+    expect(result.classification).toBe("Base");
+    expect(result.polarization_index).toBeNull();
+    expect(result.z3_seconds).toBe(0);
+  });
+
+  it("classifies Threshold when Seiler Z2 (tempo) dominates", () => {
+    // SeilerZ1 = 2000, SeilerZ2 = 6000, SeilerZ3 = 2000. fracs 0.2/0.6/0.2.
+    const result = computeSeilerTid(
+      input(
+        [
+          {
+            type: "Ride",
+            start_date_local: "2026-05-09T08:00:00",
+            icu_zone_times: [
+              { id: "Z1", secs: 2000 },
+              { id: "Z3", secs: 6000 },
+              { id: "Z4", secs: 2000 },
+            ],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+
+    expect(result.classification).toBe("Threshold");
+    expect(result.polarization_index).toBeNull();
+  });
+
+  it("classifies High Intensity when Seiler Z3 (hard) dominates", () => {
+    // SeilerZ1 = 2000, SeilerZ2 = 2000, SeilerZ3 = 6000. fracs 0.2/0.2/0.6.
+    const result = computeSeilerTid(
+      input(
+        [
+          {
+            type: "Ride",
+            start_date_local: "2026-05-09T08:00:00",
+            icu_zone_times: [
+              { id: "Z1", secs: 2000 },
+              { id: "Z3", secs: 2000 },
+              { id: "Z4", secs: 6000 },
+            ],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+
+    expect(result.classification).toBe("High Intensity");
+    expect(result.polarization_index).toBeNull();
+  });
+
+  it("returns zero seconds and null fields when total zone time is zero", () => {
+    const result = computeSeilerTid(
+      input(
+        [{ type: "WeightTraining", start_date_local: "2026-05-09T08:00:00" }],
+        FROZEN,
+      ),
+    );
+
+    expect(result).toEqual({
+      z1_seconds: 0,
+      z2_seconds: 0,
+      z3_seconds: 0,
+      z1_pct: null,
+      z2_pct: null,
+      z3_pct: null,
+      polarization_index: null,
+      classification: null,
+      zone_basis: null,
+    });
   });
 });

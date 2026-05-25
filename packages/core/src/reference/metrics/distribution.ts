@@ -146,6 +146,52 @@ export function computeEasyTimeRatioNote(): string {
   return EASY_TIME_RATIO_NOTE;
 }
 
+/**
+ * 7-day Seiler training-intensity distribution (TID).
+ *
+ * Folds the seven training zones into Seiler's three-zone model over the
+ * trailing-7-day window (per Treff et al. 2019, *The Polarization-Index*,
+ * Front. Physiol. 10:707, doi:10.3389/fphys.2019.00707):
+ *   - Seiler Z1 = z1 + z2  (below LT1, "easy")
+ *   - Seiler Z2 = z3       (between LT1 and LT2, "threshold/grey")
+ *   - Seiler Z3 = z4 + z5 + z6 + z7  (above LT2, "hard")
+ *
+ * Emits the three zone-second totals, their percentage shares (round 1 dp),
+ * the Treff polarization index (a `log10` score, `null` unless the
+ * distribution is structurally polarized — see `calculatePolarizationIndex`),
+ * the TID classification (Base / Polarized / Pyramidal / Threshold / High
+ * Intensity), and the aggregate `zone_basis`. When no zone time accumulated
+ * (`total_seconds == 0`) every percentage, the index, the classification, and
+ * the basis are `null` while the second totals are `0`.
+ *
+ * Upstream source mirrored line-by-line: `sync.py:3993` (`_build_seiler_tid`,
+ * called with `activities_7d` and no sport-family filter at `sync.py:3164`)
+ * over `sync.py:3866` (`_aggregate_seiler_zones`), `sync.py:3930`
+ * (`_calculate_polarization_index`) and `sync.py:3958` (`_classify_tid`).
+ * The polarization index and classification are emitted as fields of this
+ * metric, not as standalone metrics. See `NOTICE.md` for upstream attribution.
+ *
+ * Return shape is the raw upstream output, not a discriminated-union
+ * envelope. Raw compute functions feed the parity gate; a sibling envelope
+ * wrapper will feed the curator when the curator integration lands.
+ */
+export interface SeilerTid {
+  z1_seconds: number;
+  z2_seconds: number;
+  z3_seconds: number;
+  z1_pct: number | null;
+  z2_pct: number | null;
+  z3_pct: number | null;
+  polarization_index: number | null;
+  classification: string | null;
+  zone_basis: "power" | "hr" | "mixed" | null;
+}
+
+export function computeSeilerTid(input: MetricInput): SeilerTid {
+  const activities7d = getActivitiesInWindow(getActivities(input), 7, input.frozenNow);
+  return buildSeilerTid(activities7d, null);
+}
+
 // ─── Zone substrate ───────────────────────────────────────────────────
 //
 // Shared by every distribution-tier metric (grey-zone %, quality-intensity
@@ -294,6 +340,144 @@ function getActivityZones(
   }
 
   return { zones: {}, basis: null };
+}
+
+// ─── Seiler TID substrate ─────────────────────────────────────────────
+//
+// The Seiler three-zone aggregation + Treff polarization index + TID
+// classifier. Mirrors `_aggregate_seiler_zones`, `_calculate_polarization_index`,
+// `_classify_tid` and `_build_seiler_tid` line-by-line. Note the Seiler
+// aggregation defaults an unmapped/missing sport family to "other" (NOT
+// `null`, as the seven-zone `_aggregate_zones` does) — this only changes
+// the zone-preference lookup, which is inert under the harness's empty
+// preference, but is mirrored faithfully because it is a distinct upstream
+// function.
+
+interface SeilerZoneTotals {
+  z1Seconds: number;
+  z2Seconds: number;
+  z3Seconds: number;
+  totalSeconds: number;
+  zoneBasis: "power" | "hr" | "mixed" | null;
+}
+
+function aggregateSeilerZones(
+  activities: Activity[],
+  sportFamilyFilter: string | null,
+): SeilerZoneTotals {
+  let sz1 = 0;
+  let sz2 = 0;
+  let sz3 = 0;
+  const basisSet = new Set<string>();
+
+  for (const act of activities) {
+    const activityType = act.type ?? "Unknown";
+    const actSportFamily = Object.hasOwn(SPORT_FAMILIES, activityType)
+      ? SPORT_FAMILIES[activityType]
+      : "other";
+    if (sportFamilyFilter) {
+      if (actSportFamily !== sportFamilyFilter) continue;
+    }
+
+    const { zones, basis } = getActivityZones(act, actSportFamily, DEFAULT_ZONE_PREFERENCE);
+
+    if (Object.keys(zones).length > 0) {
+      if (basis) basisSet.add(basis);
+      sz1 += (zones.z1 ?? 0) + (zones.z2 ?? 0);
+      sz2 += zones.z3 ?? 0;
+      sz3 += (zones.z4 ?? 0) + (zones.z5 ?? 0) + (zones.z6 ?? 0) + (zones.z7 ?? 0);
+    }
+  }
+
+  const totalSeconds = sz1 + sz2 + sz3;
+
+  let zoneBasis: "power" | "hr" | "mixed" | null;
+  if (basisSet.size > 1) {
+    zoneBasis = "mixed";
+  } else if (basisSet.size === 1) {
+    zoneBasis = basisSet.values().next().value as "power" | "hr";
+  } else {
+    zoneBasis = null;
+  }
+
+  return { z1Seconds: sz1, z2Seconds: sz2, z3Seconds: sz3, totalSeconds, zoneBasis };
+}
+
+// Treff Polarization Index: PI = log10((Z1 / Z2) × Z3 × 100). Computed only
+// when the distribution is structurally polarized (Z1 > Z3 > Z2 and
+// Z3 >= 0.01); Z2 = 0 is substituted with 0.01. Mirrors `sync.py:3930`.
+function calculatePolarizationIndex(
+  z1Frac: number,
+  z2Frac: number,
+  z3Frac: number,
+): number | null {
+  if (z3Frac < 0.01) return null;
+  if (!(z1Frac > z3Frac && z3Frac > z2Frac)) return null;
+
+  const effectiveZ2 = z2Frac > 0 ? z2Frac : 0.01;
+
+  const raw = (z1Frac / effectiveZ2) * z3Frac * 100;
+  if (raw <= 0) return null;
+  return roundHalfEven(Math.log10(raw), 2);
+}
+
+// TID classification with the upstream's explicit priority order to avoid
+// overlaps. Mirrors `sync.py:3958`.
+function classifyTid(
+  z1Frac: number,
+  z2Frac: number,
+  z3Frac: number,
+  pi: number | null,
+): string {
+  if (z3Frac < 0.01 && z1Frac >= z2Frac && z1Frac >= z3Frac) return "Base";
+  if (z1Frac > z3Frac && z3Frac > z2Frac && pi !== null && pi > 2.0) return "Polarized";
+  if (z1Frac > z2Frac && z2Frac > z3Frac) return "Pyramidal";
+  if (z2Frac >= z1Frac && z2Frac >= z3Frac) return "Threshold";
+  if (z3Frac >= z1Frac && z3Frac >= z2Frac) return "High Intensity";
+  return "Pyramidal";
+}
+
+// Build the complete Seiler TID structure. Mirrors `sync.py:3993`.
+function buildSeilerTid(
+  activities: Activity[],
+  sportFamilyFilter: string | null,
+): SeilerTid {
+  const zones = aggregateSeilerZones(activities, sportFamilyFilter);
+  const total = zones.totalSeconds;
+  const zoneBasis = zones.zoneBasis;
+
+  if (total === 0) {
+    return {
+      z1_seconds: 0,
+      z2_seconds: 0,
+      z3_seconds: 0,
+      z1_pct: null,
+      z2_pct: null,
+      z3_pct: null,
+      polarization_index: null,
+      classification: null,
+      zone_basis: null,
+    };
+  }
+
+  const z1Frac = zones.z1Seconds / total;
+  const z2Frac = zones.z2Seconds / total;
+  const z3Frac = zones.z3Seconds / total;
+
+  const pi = calculatePolarizationIndex(z1Frac, z2Frac, z3Frac);
+  const classification = classifyTid(z1Frac, z2Frac, z3Frac, pi);
+
+  return {
+    z1_seconds: zones.z1Seconds,
+    z2_seconds: zones.z2Seconds,
+    z3_seconds: zones.z3Seconds,
+    z1_pct: roundHalfEven(z1Frac * 100, 1),
+    z2_pct: roundHalfEven(z2Frac * 100, 1),
+    z3_pct: roundHalfEven(z3Frac * 100, 1),
+    polarization_index: pi,
+    classification,
+    zone_basis: zoneBasis,
+  };
 }
 
 // The trailing 7-day activity window the upstream reads as `activities_7d`:
