@@ -17,6 +17,7 @@ import {
   computeQualityIntensityPercentage,
   computeSeilerTid,
   computeSeilerTid28d,
+  computeSeilerTid28dPrimary,
   computeSeilerTidPrimary,
   computeZoneDistribution7d,
 } from "./distribution.js";
@@ -57,4 +58,5 @@ export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {
   seiler_tid_7d: { compute: computeSeilerTid },
   seiler_tid_7d_primary: { compute: computeSeilerTidPrimary },
   seiler_tid_28d: { compute: computeSeilerTid28d },
+  seiler_tid_28d_primary: { compute: computeSeilerTid28dPrimary },
 };

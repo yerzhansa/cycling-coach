@@ -244,6 +244,39 @@ export function computeSeilerTid28d(input: MetricInput): SeilerTid {
   return buildSeilerTid(activities28d, null);
 }
 
+/**
+ * 28-day Seiler TID restricted to the athlete's primary sport family — the
+ * chronic-window counterpart to `computeSeilerTidPrimary`.
+ *
+ * The primary sport is still the family carrying the greatest accumulated
+ * Load over the trailing-7-day window (the upstream derives it once from
+ * `activities_7d`), but the Seiler aggregation runs over the wider 28-day
+ * window with that family as the `sport_family_filter`. The result is the
+ * same shape as `seiler_tid_28d` plus a `sport` key naming the family.
+ *
+ * Returns `null` when there is no primary sport — i.e. no in-window-7d
+ * activity carries Load > 0, so the upstream `primary_sport` stays `None`
+ * and the variant is never built.
+ *
+ * Upstream source mirrored line-by-line: the call site at `sync.py:3186-3191`
+ * (`_build_seiler_tid(activities_28d, sport_family_filter=primary_sport)`
+ * then `["sport"] = primary_sport`) over the same Seiler substrate as
+ * `computeSeilerTid28d`. The `primary_sport` derivation mirrors
+ * `sync.py:3048-3056` (`_get_daily_tss_by_sport(activities_7d, days=7)` then
+ * `max(sport_totals, key=sport_totals.get)`). See `NOTICE.md` for upstream
+ * attribution.
+ */
+export function computeSeilerTid28dPrimary(input: MetricInput): SeilerTidPrimary | null {
+  const activities = getActivities(input);
+  const activities7d = getActivitiesInWindow(activities, 7, input.frozenNow);
+  const activities28d = getActivitiesInWindow(activities, 28, input.frozenNow);
+
+  const primarySport = selectPrimarySport(activities7d);
+  if (!primarySport) return null;
+
+  return { ...buildSeilerTid(activities28d, primarySport), sport: primarySport };
+}
+
 // ─── Zone substrate ───────────────────────────────────────────────────
 //
 // Shared by every distribution-tier metric (grey-zone %, quality-intensity
