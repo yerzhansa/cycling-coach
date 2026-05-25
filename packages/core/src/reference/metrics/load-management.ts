@@ -247,6 +247,66 @@ export function computeStrain(input: MetricInput): number | null {
   return roundHalfEven(load7dTotal * monotony, 0);
 }
 
+/**
+ * Monotony interpretation band — the human-readable verdict on monotony,
+ * multi-sport aware.
+ *
+ * Reads the three already-computed monotony quantities — total monotony,
+ * effective monotony (the selector that prefers primary-sport monotony
+ * when multi-sport is detected), and the multi-sport flag (more than one
+ * sport family in the trailing 7-day window). The band is driven by
+ * effective monotony against a single threshold of 2.0:
+ *
+ *   - effective monotony Unknown ⇒ Unknown (cascades from monotony),
+ *   - multi-sport inflation (multi-sport AND total monotony truthy AND
+ *     effective < total) ⇒ an annotated string naming both values, with
+ *     "elevated"/"normal" chosen by effective > 2.0,
+ *   - otherwise ⇒ the bare "elevated"/"normal", chosen by effective > 2.0.
+ *
+ * Upstream source mirrored line-by-line: `sync.py:3473-3491`
+ * (`_interpret_monotony`). The three inputs are the call-site locals at
+ * `sync.py:3362-3363` — `monotony` (computeMonotony), `effective_monotony`
+ * (computeEffectiveMonotony), and `is_multi_sport`
+ * (`len(daily_tss_by_sport) > 1`, sync.py:3081). See `NOTICE.md` for
+ * upstream attribution.
+ *
+ * Return shape is the raw upstream output (string or null), not a
+ * discriminated-union envelope. Raw compute functions feed the parity
+ * gate; a sibling envelope wrapper will feed the curator when the
+ * curator integration lands.
+ *
+ * @see Foster, C. (1998). Monitoring training in athletes with reference
+ *      to overtraining syndrome. Med Sci Sports Exerc 30(7):1164-1168.
+ *      DOI: 10.1097/00005768-199807000-00023
+ */
+export function computeMonotonyInterpretation(input: MetricInput): string | null {
+  const totalMonotony = computeMonotony(input);
+  const effectiveMonotony = computeEffectiveMonotony(input);
+
+  const activities = getActivities(input);
+  const isMultiSport = getDailyLoadBySport(activities, 7, input.frozenNow).size > 1;
+
+  if (effectiveMonotony === null) return null;
+  if (isMultiSport && totalMonotony && effectiveMonotony < totalMonotony) {
+    if (effectiveMonotony > 2.0) {
+      return `elevated (primary sport ${pyFloatStr(effectiveMonotony)}, total ${pyFloatStr(totalMonotony)} inflated by multi-sport)`;
+    }
+    return `normal (primary sport ${pyFloatStr(effectiveMonotony)}, total ${pyFloatStr(totalMonotony)} inflated by multi-sport)`;
+  }
+  if (effectiveMonotony > 2.0) return "elevated";
+  return "normal";
+}
+
+// Python's f-string interpolates a float via str(), which renders an
+// integer-valued float with a trailing ".0" (str(2.0) == "2.0"); JS
+// String(2.0) drops it ("2"). The monotony inputs here are round(_, 2)
+// floats, so the only divergence from shortest-round-trip repr — shared
+// by both runtimes — is that integer case. Reproduce Python's rendering
+// so an integer-valued monotony interpolates bit-identically.
+function pyFloatStr(value: number): string {
+  return Number.isInteger(value) ? `${value}.0` : `${value}`;
+}
+
 // Mirrors `SPORT_FAMILIES` at sync.py:290-308. Unmapped types fall
 // through to "other" at the lookup site.
 const SPORT_FAMILIES: Record<string, string> = {
