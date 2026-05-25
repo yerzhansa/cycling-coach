@@ -115,6 +115,37 @@ export function computeQualityIntensityNote(): string {
   return QUALITY_INTENSITY_NOTE;
 }
 
+/**
+ * Easy-time ratio — the share of trailing-7-day zone time spent in Z1+Z2
+ * (the "easy" work below LT1). Per Seiler's polarized model the target is
+ * ~0.80. Unlike the grey-zone and quality-intensity metrics this is a bare
+ * ratio, not a percentage: no ×100, rounded to 2 dp. Returns `null` when no
+ * zone time was accumulated.
+ *
+ * Mirrors `sync.py:3159` line-by-line:
+ *   round((z1_time + z2_time) / total_zone_time, 2) if total_zone_time > 0 else None
+ */
+export function computeEasyTimeRatio(input: MetricInput): number | null {
+  const activities7d = getActivitiesInWindow(getActivities(input), 7, input.frozenNow);
+  const totals = aggregateZones(activities7d, DEFAULT_ZONE_PREFERENCE);
+
+  if (totals.totalTime > 0) {
+    return roundHalfEven((totals.z1Time + totals.z2Time) / totals.totalTime, 2);
+  }
+  return null;
+}
+
+/**
+ * Static companion note the upstream emits alongside the easy-time ratio.
+ * A constant string — mirrors `sync.py:3389` exactly.
+ */
+const EASY_TIME_RATIO_NOTE =
+  "Easy time (Z1+Z2) / Total - target ~80% in polarized training";
+
+export function computeEasyTimeRatioNote(): string {
+  return EASY_TIME_RATIO_NOTE;
+}
+
 // ─── Zone substrate ───────────────────────────────────────────────────
 //
 // Shared by every distribution-tier metric (grey-zone %, quality-intensity
