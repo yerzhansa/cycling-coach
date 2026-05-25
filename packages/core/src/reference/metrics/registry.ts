@@ -15,6 +15,7 @@ import {
   computeMonotony,
   computeMonotonyInterpretation,
   computePrimarySportMonotony,
+  computeRecoveryIndex,
   computeStrain,
 } from "./load-management.js";
 
@@ -29,4 +30,5 @@ export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {
   effective_monotony: { compute: computeEffectiveMonotony },
   monotony_interpretation: { compute: computeMonotonyInterpretation },
   strain: { compute: computeStrain },
+  recovery_index: { compute: computeRecoveryIndex },
 };

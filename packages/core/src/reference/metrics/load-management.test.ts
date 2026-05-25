@@ -4,6 +4,7 @@ import {
   computeEffectiveMonotony,
   computeMonotony,
   computeMonotonyInterpretation,
+  computeRecoveryIndex,
   computeStrain,
 } from "./load-management.js";
 import type { MetricInput } from "./metric-input.js";
@@ -116,5 +117,73 @@ describe("computeMonotonyInterpretation", () => {
     );
     expect(out).toContain(`primary sport ${computeEffectiveMonotony(multi)}`);
     expect(out).toContain(`total ${computeMonotony(multi)}`);
+  });
+});
+
+// computeRecoveryIndex reads only id, hrv, and restingHR from the
+// trailing 7-day wellness window; bit-identity against the upstream on
+// the populated path is the parity matrix's job (realistic-athlete = 0.91,
+// data-gap-mid-history = 1). These rows isolate the ratio formula and the
+// edge cases the three fixtures don't separate.
+function wellnessInput(
+  wellness: { id: string; hrv: number | null; restingHR: number | null }[],
+  frozenNow: string,
+): MetricInput {
+  return { fixture: { wellness }, frozenNow };
+}
+
+describe("computeRecoveryIndex", () => {
+  const FROZEN = "2026-05-10T12:00:00";
+
+  it("returns (latestHrv/hrvBaseline) ÷ (latestRhr/rhrBaseline), rounded half-to-even", () => {
+    // Window 05-04..05-10. HRV baseline mean(40,50)=45, RHR baseline 60,
+    // latest (05-10) HRV 50 / RHR 60 ⇒ (50/45)/(60/60) ⇒ round(1.111…)=1.11.
+    const result = computeRecoveryIndex(
+      wellnessInput(
+        [
+          { id: "2026-05-09", hrv: 40, restingHR: 60 },
+          { id: "2026-05-10", hrv: 50, restingHR: 60 },
+        ],
+        FROZEN,
+      ),
+    );
+    expect(result).toBe(1.11);
+  });
+
+  it("returns Unknown (null) when there is no wellness data", () => {
+    expect(computeRecoveryIndex(wellnessInput([], FROZEN))).toBeNull();
+  });
+
+  it("returns Unknown (null) when the latest HRV reading is out of band", () => {
+    // 5ms RMSSD is below the 10-250 validity band ⇒ latest HRV rejected ⇒
+    // the ratio guard fails even though a baseline exists from prior days.
+    const result = computeRecoveryIndex(
+      wellnessInput(
+        [
+          { id: "2026-05-09", hrv: 45, restingHR: 60 },
+          { id: "2026-05-10", hrv: 5, restingHR: 60 },
+        ],
+        FROZEN,
+      ),
+    );
+    expect(result).toBeNull();
+  });
+
+  it("reads the LAST in-window row as latest, in fixture order — not the chronologically latest", () => {
+    // Rows supplied with the earlier date last. The upstream takes
+    // wellness_7d[-1] (last array element), so latest = the 05-08 row
+    // (HRV 40), not the 05-10 row. Baseline mean(50,40)=45 ⇒
+    // (40/45)/(60/60) ⇒ round(0.888…)=0.89. Chronological-latest would
+    // give 1.11.
+    const result = computeRecoveryIndex(
+      wellnessInput(
+        [
+          { id: "2026-05-10", hrv: 50, restingHR: 60 },
+          { id: "2026-05-08", hrv: 40, restingHR: 60 },
+        ],
+        FROZEN,
+      ),
+    );
+    expect(result).toBe(0.89);
   });
 });
