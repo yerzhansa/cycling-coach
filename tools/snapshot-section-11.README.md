@@ -167,19 +167,25 @@ itself (the orchestrating method that wraps `_calculate_derived_metrics`)
 and are therefore **absent entirely** from this snapshot set, not merely
 null:
 
-- `ramp_rate` — derived by `collect_training_data` from wellness data
-  (api `rampRate` + decay smoothing, see `sync.py` around line 2399 and
-  the emit at line 2674). Bypassed by the direct-call path. Tracked as
-  a follow-up: the harness either needs to call `collect_training_data`
-  end-to-end (with a fixture-mapped `_intervals_get` stub) or expose
-  `ramp_rate` via an additional capture site.
+- `ramp_rate` — emitted by `collect_training_data` from wellness data
+  (intervals.icu's `rampRate` + decay smoothing, see `sync.py` around
+  line 2399 and the emit at line 2674). **Intentionally not captured.**
+  We decided not to port a `ramp_rate` metric at all: intervals.icu
+  computes the value server-side and hands it to us finished, so there
+  is no algorithm worth porting — the Reference layer consumes it
+  directly as `weeklyFitnessChange` (the renamed input field) where a
+  fitness-trend signal is needed. The harness deliberately stays
+  direct-call-only and does NOT drive `collect_training_data`
+  end-to-end. Decision recorded local-only; not a gap to close.
 
-These gaps are intentional for the first oracle pass. Future waves
-will either (a) extend the harness to invoke `collect_training_data`
-end-to-end with a richer fixture-mapped `_intervals_get` stub, or
-(b) extend the fixture format to ship pre-aggregated stream-derived
-inputs. The snapshot baseline locks in "given these inputs, these
-metrics are null" — which is itself a useful regression signal.
+These gaps are intentional for the first oracle pass. The null-valued
+inputs above (power/HR curves, `sustainability_curves`, `power_model`,
+`vo2max`, etc.) are deferred to the capability/stream wave, which will
+either extend the harness or extend the fixture format to supply them.
+The one absent-entirely entry, `ramp_rate`, is NOT such a gap — that
+metric is intentionally not ported (see above), so no harness extension
+is planned for it. The snapshot baseline locks in "given these inputs,
+these metrics are null" — which is itself a useful regression signal.
 
 ## Contract validation
 
@@ -259,10 +265,12 @@ scope.
 
 **Absent-from-output (1):**
 `ramp_rate`. Emitted only by `collect_training_data`, not by the
-direct-call path used here. F8 metric — needs the harness invocation
-path fix listed above before T12 can port it.
+direct-call path used here. **Intentionally not captured** — the
+`ramp_rate` metric is not ported (intervals.icu computes it; the
+Reference layer consumes `weeklyFitnessChange` directly). Not a gap
+to close; see "Known gaps" above.
 
-**F8 metric coverage (6 of 7 populated, 1 absent):**
+**F8 metric coverage (6 metrics — `ramp_rate` dropped, not ported):**
 
 | F8 metric | Status | Snapshot value |
 | --- | --- | --- |
@@ -272,7 +280,7 @@ path fix listed above before T12 can port it.
 | `recovery_index` | populated | 0.91 |
 | `stress_tolerance` | populated | 2.6 |
 | `load_recovery_ratio` | populated | 2.8 |
-| `ramp_rate` | **absent** | — (gap above) |
+| `ramp_rate` | **not ported** | — (sourced from intervals.icu) |
 
 ## Determinism
 
