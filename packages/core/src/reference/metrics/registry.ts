@@ -8,7 +8,11 @@
  * `packages/core/tests/reference-parity.test.ts` picks it up automatically.
  */
 
-import { computeZoneDistribution7d } from "./distribution.js";
+import {
+  computeGreyZoneNote,
+  computeGreyZonePercentage,
+  computeZoneDistribution7d,
+} from "./distribution.js";
 import {
   computeAcwr,
   computeEffectiveMonotony,
@@ -37,4 +41,6 @@ export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {
   stress_tolerance: { compute: computeStressTolerance },
   load_recovery_ratio: { compute: computeLoadRecoveryRatio },
   zone_distribution_7d: { compute: computeZoneDistribution7d },
+  grey_zone_percentage: { compute: computeGreyZonePercentage },
+  grey_zone_note: { compute: computeGreyZoneNote },
 };

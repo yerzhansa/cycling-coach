@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { computeZoneDistribution7d } from "./distribution.js";
+import {
+  computeGreyZoneNote,
+  computeGreyZonePercentage,
+  computeZoneDistribution7d,
+} from "./distribution.js";
 import type { MetricInput } from "./metric-input.js";
 
 // The golden fixtures only exercise the power-zone and empty-window paths,
@@ -130,5 +134,68 @@ describe("computeZoneDistribution7d", () => {
 
     expect(result.total_hours).toBe(0);
     expect(result.zone_basis).toBeNull();
+  });
+});
+
+describe("computeGreyZonePercentage", () => {
+  it("returns the Z3 share of total zone time, rounded to 1 dp", () => {
+    // z1 3600, z2 3600, z3 1800, z4 600 ⇒ total 9600s, z3 share
+    // 1800 / 9600 = 0.1875 → 18.75% → round(18.75, 1) = 18.8 (half-to-even).
+    const result = computeGreyZonePercentage(
+      input(
+        [
+          {
+            type: "Ride",
+            start_date_local: "2026-05-09T08:00:00",
+            icu_zone_times: [
+              { id: "Z1", secs: 3600 },
+              { id: "Z2", secs: 3600 },
+              { id: "Z3", secs: 1800 },
+              { id: "Z4", secs: 600 },
+            ],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+
+    expect(result).toBe(18.8);
+  });
+
+  it("returns null when no activity has zone time", () => {
+    const result = computeGreyZonePercentage(
+      input(
+        [{ type: "WeightTraining", start_date_local: "2026-05-09T08:00:00" }],
+        FROZEN,
+      ),
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it("returns null when the window is empty", () => {
+    // The only ride is one day older than the trailing 7-day window.
+    const result = computeGreyZonePercentage(
+      input(
+        [
+          {
+            type: "Ride",
+            start_date_local: "2026-05-03T08:00:00",
+            icu_zone_times: [{ id: "Z3", secs: 3600 }],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+
+    expect(result).toBeNull();
+  });
+});
+
+describe("computeGreyZoneNote", () => {
+  it("returns the static polarized-training note constant", () => {
+    expect(computeGreyZoneNote()).toBe(
+      "Gray Zone % (Z3/tempo) - minimize in polarized training",
+    );
   });
 });
