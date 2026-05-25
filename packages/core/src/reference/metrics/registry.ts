@@ -8,7 +8,7 @@
  * `packages/core/tests/reference-parity.test.ts` picks it up automatically.
  */
 
-import type { MetricInput } from "./metric-input.js";
+import { computeZoneDistribution7d } from "./distribution.js";
 import {
   computeAcwr,
   computeEffectiveMonotony,
@@ -20,6 +20,7 @@ import {
   computeStrain,
   computeStressTolerance,
 } from "./load-management.js";
+import type { MetricInput } from "./metric-input.js";
 
 export interface MetricRegistryEntry {
   compute: (input: MetricInput) => unknown;
@@ -35,4 +36,5 @@ export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {
   recovery_index: { compute: computeRecoveryIndex },
   stress_tolerance: { compute: computeStressTolerance },
   load_recovery_ratio: { compute: computeLoadRecoveryRatio },
+  zone_distribution_7d: { compute: computeZoneDistribution7d },
 };
