@@ -9,6 +9,7 @@ import {
   computeQualityIntensityPercentage,
   computeSeilerTid,
   computeSeilerTid28d,
+  computeSeilerTid28dPrimary,
   computeSeilerTidPrimary,
   computeZoneDistribution7d,
 } from "./distribution.js";
@@ -781,5 +782,112 @@ describe("computeSeilerTid28d", () => {
       classification: null,
       zone_basis: null,
     });
+  });
+});
+
+describe("computeSeilerTid28dPrimary", () => {
+  // The golden fixtures are cycling-only, so the parity matrix already
+  // exercises this against the snapshot. These synthetic rows isolate the two
+  // things that distinguish it from its siblings: (1) the primary family is
+  // chosen from the 7d window (like the 7d-primary variant) while the Seiler
+  // fold runs over the wider 28d window (like the 28d all-sport variant), and
+  // (2) the family filter still excludes non-primary activities.
+
+  it("selects the primary family from the 7d window, then aggregates it over 28d", () => {
+    // FROZEN 2026-05-10: 7d window [05-04, 05-10], 28d window [04-13, 05-10].
+    // 7d Load: cycling 100 > run 50 ⇒ primary = cycling. The 28d build then
+    // pulls in the 04-25 ride (cycling, outside 7d but inside 28d) and excludes
+    // the 04-24 run. Cycling zones: Z1 2000 + (Z1 4000, Z3 3000, Z4 1000) ⇒
+    // SeilerZ1 6000, SeilerZ2 3000, SeilerZ3 1000 ⇒ 0.6/0.3/0.1 Pyramidal.
+    const rows = [
+      {
+        type: "Ride",
+        icu_training_load: 100,
+        start_date_local: "2026-05-09T08:00:00",
+        icu_zone_times: [{ id: "Z1", secs: 2000 }],
+      },
+      {
+        type: "Run",
+        icu_training_load: 50,
+        start_date_local: "2026-05-08T08:00:00",
+        icu_hr_zone_times: [0, 0, 0, 9000],
+      },
+      {
+        type: "Ride",
+        icu_training_load: 0,
+        start_date_local: "2026-04-25T08:00:00",
+        icu_zone_times: [
+          { id: "Z1", secs: 4000 },
+          { id: "Z3", secs: 3000 },
+          { id: "Z4", secs: 1000 },
+        ],
+      },
+      {
+        type: "Run",
+        icu_training_load: 0,
+        start_date_local: "2026-04-24T08:00:00",
+        icu_hr_zone_times: [0, 0, 0, 9000],
+      },
+    ];
+
+    expect(computeSeilerTid28dPrimary(input(rows, FROZEN))).toEqual({
+      z1_seconds: 6000,
+      z2_seconds: 3000,
+      z3_seconds: 1000,
+      z1_pct: 60,
+      z2_pct: 30,
+      z3_pct: 10,
+      polarization_index: null,
+      classification: "Pyramidal",
+      zone_basis: "power",
+      sport: "cycling",
+    });
+    // The 7d-primary variant sees only the 05-09 ride for cycling ⇒ all Z1.
+    expect(computeSeilerTidPrimary(input(rows, FROZEN))?.z1_seconds).toBe(2000);
+  });
+
+  it("returns null when the 7d window carries no Load, even if the 28d window does", () => {
+    // The only ride is at 04-25 — inside the 28d window but outside the 7d
+    // window. `primary_sport` derives from `activities_7d`, which is empty, so
+    // it stays None and the variant is never built.
+    const rows = [
+      {
+        type: "Ride",
+        icu_training_load: 100,
+        start_date_local: "2026-04-25T08:00:00",
+        icu_zone_times: [{ id: "Z1", secs: 3600 }],
+      },
+    ];
+
+    expect(computeSeilerTid28dPrimary(input(rows, FROZEN))).toBeNull();
+    // The 28d all-sport variant still aggregates it — confirming the null is
+    // the 7d-derived primary-sport gate, not an empty 28d window.
+    expect(computeSeilerTid28d(input(rows, FROZEN)).z1_seconds).toBe(3600);
+  });
+
+  it("equals the 28d all-sport build plus the sport key for a single-family window", () => {
+    const rows = [
+      {
+        type: "Ride",
+        icu_training_load: 80,
+        start_date_local: "2026-05-09T08:00:00",
+        icu_zone_times: [
+          { id: "Z1", secs: 5000 },
+          { id: "Z3", secs: 3000 },
+          { id: "Z4", secs: 2000 },
+        ],
+      },
+      {
+        type: "VirtualRide",
+        icu_training_load: 40,
+        start_date_local: "2026-04-25T08:00:00",
+        icu_zone_times: [{ id: "Z2", secs: 1000 }],
+      },
+    ];
+
+    const all = computeSeilerTid28d(input(rows, FROZEN));
+    const primary = computeSeilerTid28dPrimary(input(rows, FROZEN));
+
+    expect(primary).toEqual({ ...all, sport: "cycling" });
   });
 });
