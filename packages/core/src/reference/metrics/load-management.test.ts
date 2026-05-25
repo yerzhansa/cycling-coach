@@ -6,6 +6,7 @@ import {
   computeMonotonyInterpretation,
   computeRecoveryIndex,
   computeStrain,
+  computeStressTolerance,
 } from "./load-management.js";
 import type { MetricInput } from "./metric-input.js";
 
@@ -47,6 +48,32 @@ describe("computeStrain", () => {
   it("cascades Unknown: monotony null ⇒ strain null", () => {
     // No activity in the window ⇒ every daily Load is 0 ⇒ monotony null.
     expect(computeStrain(input([], FROZEN))).toBeNull();
+  });
+});
+
+describe("computeStressTolerance", () => {
+  const FROZEN = "2026-05-10T12:00:00";
+
+  it("returns (strain / monotony) / 100, rounded half-to-even", () => {
+    // Same window as the strain test: loads 50/50/100 ⇒ weekly Load 200,
+    // monotony 0.73, strain round(200 × 0.73) = 146. Stress tolerance is
+    // (146 / 0.73) / 100 = 200 / 100 = round(2.0, 1) = 2.
+    const result = computeStressTolerance(
+      input(
+        [
+          { start_date_local: "2026-05-06T08:00:00", icu_training_load: 50 },
+          { start_date_local: "2026-05-08T08:00:00", icu_training_load: 50 },
+          { start_date_local: "2026-05-10T08:00:00", icu_training_load: 100 },
+        ],
+        FROZEN,
+      ),
+    );
+    expect(result).toBe(2);
+  });
+
+  it("cascades Unknown: monotony null ⇒ strain null ⇒ stress tolerance null", () => {
+    // No activity in the window ⇒ monotony null ⇒ strain null ⇒ null.
+    expect(computeStressTolerance(input([], FROZEN))).toBeNull();
   });
 });
 

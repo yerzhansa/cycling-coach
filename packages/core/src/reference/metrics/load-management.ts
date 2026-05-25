@@ -248,6 +248,50 @@ export function computeStrain(input: MetricInput): number | null {
 }
 
 /**
+ * Stress tolerance — strain normalised by monotony, scaled to a 0-100
+ * reference band.
+ *
+ *   stressTolerance = (strain / monotony) / 100
+ *
+ * Both inputs are the already-rounded total-monotony quantities the
+ * strain metric uses: `strain` is `round(weeklyLoad × monotony, 0)` and
+ * `monotony` is `round(mean / stdev, 2)`. Because `strain` carries the
+ * `monotony` factor, the ratio collapses to roughly `weeklyLoad / 100`,
+ * but the upstream computes it from the two rounded locals — so the
+ * port does too, rather than short-cutting to weekly Load. The result
+ * is rounded half-to-even to 1 decimal.
+ *
+ * Returns `null` whenever `strain` or `monotony` is falsy (`null` from
+ * the empty/rest-week cascade, or `0`), mirroring the upstream
+ * `if strain and monotony else None` guard — so an Unknown monotony
+ * cascades through Unknown strain to an Unknown stress tolerance.
+ *
+ * Upstream source mirrored line-by-line: `sync.py:3131`
+ * (`_calculate_derived_metrics`). `strain` and `monotony` are the locals
+ * at `sync.py:3087` and `sync.py:3037`, both built from the daily
+ * aggregator at `sync.py:3629-3644` shared with ACWR. See `NOTICE.md`
+ * for upstream attribution.
+ *
+ * Mirrors `sync.py:3131` line-by-line per the deviation registry's
+ * `stress_tolerance` `approved-revert` entry in
+ * `tools/intentional-deviations.yaml` (the capacity-cap family proposed
+ * in an earlier spec revision was reviewed and reverted; ADR-0015 is
+ * superseded).
+ *
+ * Return shape is the raw upstream output (number or null), not a
+ * discriminated-union envelope. Raw compute functions feed the parity
+ * gate; a sibling envelope wrapper will feed the curator when the
+ * curator integration lands.
+ */
+export function computeStressTolerance(input: MetricInput): number | null {
+  const strain = computeStrain(input);
+  const monotony = computeMonotony(input);
+  if (!strain || !monotony) return null;
+
+  return roundHalfEven(strain / monotony / 100, 1);
+}
+
+/**
  * Monotony interpretation band — the human-readable verdict on monotony,
  * multi-sport aware.
  *
