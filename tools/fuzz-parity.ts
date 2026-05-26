@@ -30,7 +30,7 @@
  *   Usage: pnpm fuzz-parity [--n=5000] [--seed=20260525] [--fixture=realistic-athlete]
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { loadPyodide } from "pyodide";
@@ -41,7 +41,10 @@ import { decideVerdict } from "./fuzz-parity-verdict";
 const SECTION_11_REPO = process.env.SECTION_11_REPO ?? resolve(REPO_ROOT, "../section-11");
 const SYNC_PY_PATH = join(SECTION_11_REPO, "examples/sync.py");
 const GOLDEN_DIR = resolve(REPO_ROOT, "packages/core/tests/fixtures/golden");
-const FAIL_DIR = resolve(REPO_ROOT, "packages/core/tests/fixtures/golden");
+// Divergence + oracle-error captures are random, oversized dumps — NOT curated
+// fixtures. They land in a gitignored sibling dir so a stray `git add -A` can't
+// sweep them into the committed golden corpus the gate and snapshot harness trust.
+const FAIL_DIR = resolve(REPO_ROOT, "packages/core/tests/fixtures/_fuzz-fail");
 
 interface Args {
   n: number;
@@ -191,6 +194,13 @@ function perturb(base: { activities: Record<string, unknown>[]; wellness: Record
   return f;
 }
 
+// Lazily create FAIL_DIR so a clean run leaves no empty dir behind, then write
+// the capture. Both the divergence and oracle-error paths funnel through here.
+function writeCapture(filePath: string, fixture: unknown): void {
+  mkdirSync(FAIL_DIR, { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(fixture, null, 2)}\n`);
+}
+
 async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
   const base = JSON.parse(readFileSync(join(GOLDEN_DIR, `${args.fixture}.json`), "utf8"));
@@ -205,11 +215,20 @@ async function main(): Promise<number> {
   const rnd = makeRng(args.seed);
   const metrics = Object.keys(METRIC_REGISTRY);
   const mismatch: Record<string, number> = Object.fromEntries(metrics.map((m) => [m, 0]));
+  // Per-metric coverage: `?? null` (below) masks an absent oracle key as null,
+  // so a metric the oracle never emits — or emits only null — would ride the
+  // green headline without ever being compared against a real value. Track both
+  // so the verdict can disclose anything we never actually exercised.
+  const oraclePresent: Record<string, number> = Object.fromEntries(metrics.map((m) => [m, 0]));
+  const oracleNonNull: Record<string, number> = Object.fromEntries(metrics.map((m) => [m, 0]));
   let oracleErrors = 0;
   let firstOracleError: string | null = null;
   let firstOracleErrorPath: string | null = null;
   let compared = 0;
-  let firstFailPath: string | null = null;
+  // One reproducing fixture per diverging metric. A single global capture would
+  // discard every metric that isn't the first to diverge — defeating the
+  // capture-and-defend purpose for all the rest.
+  const failPaths: Record<string, string> = {};
 
   for (let i = 0; i < args.n; i++) {
     const fixture = perturb(base, rnd);
@@ -220,27 +239,34 @@ async function main(): Promise<number> {
       if (!firstOracleError) {
         firstOracleError = String(derived.__error__);
         firstOracleErrorPath = join(FAIL_DIR, `_fuzz-oracle-error-seed${args.seed}-i${i}.json`);
-        writeFileSync(firstOracleErrorPath, `${JSON.stringify(fixture, null, 2)}\n`);
+        writeCapture(firstOracleErrorPath, fixture);
       }
       continue;
     }
     compared++;
     for (const m of metrics) {
+      // The oracle emits absent metrics as missing keys; the registry emits
+      // explicit null. Normalize both to null before the bit-identity check —
+      // but first record whether the oracle genuinely exercised this metric
+      // (emitted the key, with a non-null value) so the mask can't hide a
+      // never-compared metric.
+      if (m in derived) oraclePresent[m]!++;
+      const expected = derived[m] ?? null;
+      if (expected !== null) oracleNonNull[m]!++;
+
       let tsVal: unknown;
       try {
         tsVal = METRIC_REGISTRY[m]!.compute({ fixture, frozenNow: args.frozenNow });
       } catch (e) {
         tsVal = `__ts_threw__:${(e as Error).message}`;
       }
-      // The oracle emits absent metrics as missing keys; the registry emits
-      // explicit null. Normalize both to null before the bit-identity check.
-      const expected = derived[m] ?? null;
       const actual = tsVal === undefined ? null : tsVal;
       if (deepCompare(expected, actual).length > 0) {
         mismatch[m]!++;
-        if (!firstFailPath) {
-          firstFailPath = join(FAIL_DIR, `_fuzz-fail-${m}-seed${args.seed}-i${i}.json`);
-          writeFileSync(firstFailPath, `${JSON.stringify(fixture, null, 2)}\n`);
+        if (!(m in failPaths)) {
+          const failPath = join(FAIL_DIR, `_fuzz-fail-${m}-seed${args.seed}-i${i}.json`);
+          writeCapture(failPath, fixture);
+          failPaths[m] = failPath;
         }
       }
     }
@@ -251,6 +277,26 @@ async function main(): Promise<number> {
   for (const m of metrics) {
     if (mismatch[m]! > 0) console.log(`[fuzz-parity]   MISMATCH ${m}: ${mismatch[m]}`);
   }
+
+  // Coverage disclosure: a metric the oracle never emitted (likely a registry/
+  // oracle name mismatch) or emitted only null was never compared against a real
+  // value — `?? null` would otherwise let it pass silently. Surface both so a
+  // green run can't overstate what it proved.
+  const neverPresent = metrics.filter((m) => oraclePresent[m] === 0);
+  const presentButAlwaysNull = metrics.filter(
+    (m) => oraclePresent[m]! > 0 && oracleNonNull[m] === 0,
+  );
+  const neverExercised = neverPresent.length + presentButAlwaysNull.length;
+  if (compared > 0 && neverExercised > 0) {
+    console.log(`[fuzz-parity]   NOTE — ${neverExercised}/${metrics.length} metric(s) never exercised on a real value:`);
+    for (const m of neverPresent) {
+      console.log(`[fuzz-parity]     ${m}: oracle never emitted this key (registry/oracle name mismatch?)`);
+    }
+    for (const m of presentButAlwaysNull) {
+      console.log(`[fuzz-parity]     ${m}: oracle emitted only null across all ${compared} fixtures`);
+    }
+  }
+
   // OK is reported ONLY on a run that proved bit-identity: a non-zero fixture
   // count, every one compared clean, zero oracle throws. Any `__error__` means
   // the differential silently skipped that input (the signature-drift-on-a-SHA-
@@ -262,16 +308,21 @@ async function main(): Promise<number> {
       console.error(`[fuzz-parity]   first oracle error: ${firstOracleError}`);
       console.error(`[fuzz-parity]   erroring fixture written to:\n  ${firstOracleErrorPath}`);
       break;
-    case "mismatch":
-      console.error(`[fuzz-parity] FAIL — ${total} metric mismatch(es). First failing fixture written to:\n  ${firstFailPath}`);
-      console.error(`[fuzz-parity] Freeze it as a golden fixture (add to HARNESS_FIXTURES in tools/snapshot-section-11.ts, then \`pnpm snapshot:section-11\`) so the gate defends it.`);
+    case "mismatch": {
+      const captured = Object.values(failPaths);
+      console.error(`[fuzz-parity] FAIL — ${total} metric mismatch(es) across ${captured.length} metric(s). Reproducing fixture(s) written to:`);
+      for (const p of captured) console.error(`  ${p}`);
+      console.error(`[fuzz-parity] Freeze each as a golden fixture (add to HARNESS_FIXTURES in tools/snapshot-section-11.ts, then \`pnpm snapshot:section-11\`) so the gate defends it.`);
       break;
+    }
     case "empty":
       console.error(`[fuzz-parity] FAIL — 0 fixtures compared (n=${args.n}); refusing to report OK on a run that proved nothing.`);
       break;
-    case "ok":
-      console.log(`[fuzz-parity] OK — all ${metrics.length} metrics bit-identical across ${compared}/${args.n} fixtures`);
+    case "ok": {
+      const caveat = neverExercised > 0 ? ` (${neverExercised} never exercised — see NOTE above)` : "";
+      console.log(`[fuzz-parity] OK — all ${metrics.length} metrics bit-identical across ${compared}/${args.n} fixtures${caveat}`);
       break;
+    }
   }
   return verdict.code;
 }
