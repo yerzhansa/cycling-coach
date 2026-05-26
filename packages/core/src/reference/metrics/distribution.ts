@@ -357,7 +357,7 @@ function aggregateZones(
       z2Time += zones.z2 ?? 0;
       z3Time += zones.z3 ?? 0;
       z4PlusTime += (zones.z4 ?? 0) + (zones.z5 ?? 0) + (zones.z6 ?? 0) + (zones.z7 ?? 0);
-      for (const v of Object.values(zones)) totalTime += v;
+      totalTime += pythonSum(Object.values(zones));
     }
   }
 
