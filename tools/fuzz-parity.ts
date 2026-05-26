@@ -50,14 +50,27 @@ interface Args {
   frozenNow: string;
 }
 
+// Reject typo'd numeric flags fast and loudly, before the expensive Pyodide
+// boot. Without this, `--n=5k` (→ NaN) or `--n=-1` runs the loop zero times:
+// the compared===0 guard still fails the run, but only after loading the oracle
+// and with a generic message. This points straight at the bad flag.
+function intArg(flag: string, raw: string, min: number): number {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < min) {
+    console.error(`[fuzz-parity] invalid ${flag}=${raw}: expected an integer >= ${min}`);
+    process.exit(2);
+  }
+  return n;
+}
+
 function parseArgs(argv: string[]): Args {
   const out: Args = { n: 5000, seed: 20260525, fixture: "realistic-athlete", frozenNow: "2026-05-10T12:00:00" };
   for (const a of argv) {
     const m = /^--([a-zA-Z]+)=(.+)$/.exec(a);
     if (!m) continue;
     const [, k, v] = m;
-    if (k === "n") out.n = Number(v);
-    else if (k === "seed") out.seed = Number(v);
+    if (k === "n") out.n = intArg("--n", v!, 1);
+    else if (k === "seed") out.seed = intArg("--seed", v!, 0);
     else if (k === "fixture") out.fixture = v!;
     else if (k === "frozen") out.frozenNow = v!;
   }
