@@ -490,6 +490,56 @@ describe("computeSeilerTid", () => {
     expect(result.z3_pct).toBe(20);
   });
 
+  it("pins the PI=2.0 knife-edge where log10 is the cross-runtime-fragile op", () => {
+    // These two rows sit just either side of the Polarized/Pyramidal line —
+    // the one place the metric depends on `Math.log10` matching the oracle's
+    // libm bit-for-bit (see the note at calculatePolarizationIndex). They pin
+    // the emitted PI so any future log10 reimplementation must be re-validated
+    // against the oracle here, not just on the boundary-dodging golden fixtures.
+
+    // Just below: SeilerZ1/Z2/Z3 = 8220/800/980, raw 100.695,
+    // log10 = 2.00300… → PI 2.0, not > 2.0 ⇒ Pyramidal.
+    const below = computeSeilerTid(
+      input(
+        [
+          {
+            type: "Ride",
+            start_date_local: "2026-05-09T08:00:00",
+            icu_zone_times: [
+              { id: "Z1", secs: 8220 },
+              { id: "Z3", secs: 800 },
+              { id: "Z4", secs: 980 },
+            ],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+    expect(below.polarization_index).toBe(2);
+    expect(below.classification).toBe("Pyramidal");
+
+    // Just above: 8200/800/1000, raw 102.5, log10 = 2.01072… → PI 2.01 > 2.0
+    // ⇒ Polarized. A 1-ULP log10 disagreement near here would flip the label.
+    const above = computeSeilerTid(
+      input(
+        [
+          {
+            type: "Ride",
+            start_date_local: "2026-05-09T08:00:00",
+            icu_zone_times: [
+              { id: "Z1", secs: 8200 },
+              { id: "Z3", secs: 800 },
+              { id: "Z4", secs: 1000 },
+            ],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+    expect(above.polarization_index).toBe(2.01);
+    expect(above.classification).toBe("Polarized");
+  });
+
   it("substitutes Z2=0 with 0.01 in the PI formula", () => {
     // SeilerZ1 = 8000, SeilerZ2 = 0, SeilerZ3 = 2000. fracs 0.8/0.0/0.20.
     // z1>z3>z2 (0.8>0.2>0); effective Z2 = 0.01.

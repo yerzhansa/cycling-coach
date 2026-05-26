@@ -505,6 +505,18 @@ function calculatePolarizationIndex(
 
   const raw = (z1Frac / effectiveZ2) * z3Frac * 100;
   if (raw <= 0) return null;
+  // `raw` is built from `× ÷` only — correctly-rounded IEEE-754, so identical
+  // across runtimes — but `log10` is the one transcendental in the metric path
+  // and the only op here NOT bit-identical to the oracle by construction. It is
+  // not correctly-rounded by IEEE-754: V8's `Math.log10` and the oracle's libm
+  // (Pyodide/emscripten) are different implementations free to disagree in the
+  // last ULP. A disagreement that straddles a 2-dp midpoint flips the emitted
+  // PI and — through `pi > 2.0` in `classifyTid` — the Polarized/Pyramidal
+  // label. The measure is ~1e-14 per call (the 1-ULP split must land on an
+  // X.XX5 boundary), so unlike sum/stdev/round (reproduced exact-rationally in
+  // `statistics.ts` / `rounding.ts`) this is an accepted residual, not closed.
+  // Closing it means mirroring the oracle's exact log10 — its rounding errors
+  // included; a "more accurate" log10 would diverge from the oracle MORE.
   return roundHalfEven(Math.log10(raw), 2);
 }
 
