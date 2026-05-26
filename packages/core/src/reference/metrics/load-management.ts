@@ -9,6 +9,7 @@ import type { Activity, WellnessDay } from "../schemas/inputs.js";
 
 import { getActivities, type MetricInput } from "./metric-input.js";
 import { roundHalfEven } from "./rounding.js";
+import { SPORT_FAMILIES } from "./sport-families.js";
 import { mean, pythonSum, sampleStdev } from "./statistics.js";
 
 /**
@@ -486,28 +487,6 @@ function getWellnessWindow(input: MetricInput, days: number): WellnessDay[] {
 function pyFloatStr(value: number): string {
   return Number.isInteger(value) ? `${value}.0` : `${value}`;
 }
-
-// Mirrors `SPORT_FAMILIES` at sync.py:290-308. Unmapped types fall
-// through to "other" at the lookup site.
-const SPORT_FAMILIES: Record<string, string> = {
-  Ride: "cycling",
-  VirtualRide: "cycling",
-  MountainBikeRide: "cycling",
-  GravelRide: "cycling",
-  EBikeRide: "cycling",
-  VirtualSki: "ski",
-  NordicSki: "ski",
-  Walk: "walk",
-  Hike: "walk",
-  Run: "run",
-  VirtualRun: "run",
-  TrailRun: "run",
-  Swim: "swim",
-  Rowing: "rowing",
-  WeightTraining: "strength",
-  Yoga: "other",
-  Workout: "other",
-};
 
 function getDailyLoad(
   activities: Activity[],

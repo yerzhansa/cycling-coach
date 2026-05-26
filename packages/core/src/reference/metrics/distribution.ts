@@ -12,6 +12,7 @@ import type { Activity } from "../schemas/inputs.js";
 
 import { getActivities, type MetricInput } from "./metric-input.js";
 import { roundHalfEven } from "./rounding.js";
+import { SPORT_FAMILIES } from "./sport-families.js";
 import { pythonSum } from "./statistics.js";
 
 /**
@@ -299,29 +300,6 @@ interface ZoneTotals {
 // power-preferred / HR-fallback path; the substrate still honours a
 // per-sport-family `"hr"` preference when one is supplied.
 const DEFAULT_ZONE_PREFERENCE: Record<string, string> = {};
-
-// Mirrors `SPORT_FAMILIES` at sync.py:290-308. In `_aggregate_zones` the
-// lookup defaults to `None` for unmapped types (NOT "other"), so an
-// unmapped type yields no `prefer_hr` and rides the power-preferred path.
-const SPORT_FAMILIES: Record<string, string> = {
-  Ride: "cycling",
-  VirtualRide: "cycling",
-  MountainBikeRide: "cycling",
-  GravelRide: "cycling",
-  EBikeRide: "cycling",
-  VirtualSki: "ski",
-  NordicSki: "ski",
-  Walk: "walk",
-  Hike: "walk",
-  Run: "run",
-  VirtualRun: "run",
-  TrailRun: "run",
-  Swim: "swim",
-  Rowing: "rowing",
-  WeightTraining: "strength",
-  Yoga: "other",
-  Workout: "other",
-};
 
 const ZONE_IDS = new Set(["z1", "z2", "z3", "z4", "z5", "z6", "z7"]);
 const ZONE_LABELS = ["z1", "z2", "z3", "z4", "z5", "z6", "z7"] as const;
