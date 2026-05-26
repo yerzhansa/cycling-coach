@@ -11,6 +11,8 @@
 import type { Activity } from "../schemas/inputs.js";
 
 import { getActivities, type MetricInput } from "./metric-input.js";
+import { roundHalfEven } from "./rounding.js";
+import { pythonSum } from "./statistics.js";
 
 /**
  * 7-day zone-hours distribution.
@@ -566,33 +568,44 @@ function buildSeilerTid(
 }
 
 // Primary sport family = the family with the greatest accumulated Load over
-// the window. Mirrors the inline derivation at `sync.py:3048-3056`:
-// `_get_daily_tss_by_sport(activities_7d, days=7)` builds per-family daily
-// arrays (each value being summed Load, skipping rows with Load <= 0,
-// unmapped types grouped as "other"), then
-// `max(sport_totals, key=sport_totals.get)` picks the family whose summed
-// days are largest. Because every passed activity is already inside the
-// window, summing each family's Load directly equals `sum(days)`. `max`
-// returns the first key at the maximum in dict-insertion order, so totals
-// are tracked in first-encountered order and ties resolve to the earliest
-// family — keeping the selection bit-identical. Returns `null` when no
-// in-window activity carries Load > 0 (upstream `primary_sport` is `None`).
+// the window. Mirrors the inline derivation at `sync.py:3048-3056` over
+// `_get_daily_tss_by_sport` (`sync.py:3646-3675`): Load is bucketed per
+// (sport family, date) in activity order (skipping rows with Load <= 0,
+// unmapped types grouped as "other"), each family's daily buckets are then
+// summed and `max(sport_totals, key=sport_totals.get)` picks the largest.
+// Float addition is non-associative, so the per-date bucketing is reproduced
+// rather than collapsed to a flat per-family sum — that keeps the argmax
+// input bit-identical at a near-tie. The absent window days the upstream sums
+// as 0 are a no-op (`x + 0 === x`), so iterating only the present dates in
+// ascending order matches `sum(daily_array)` exactly. `max` returns the first
+// key at the maximum in dict-insertion order, so families are tracked in
+// first-encountered order and ties resolve to the earliest. Returns `null`
+// when no in-window activity carries Load > 0 (upstream `primary_sport` is
+// `None`).
 function selectPrimarySport(activities: Activity[]): string | null {
-  const totals = new Map<string, number>();
+  const loadByFamilyDate = new Map<string, Map<string, number>>();
 
   for (const act of activities) {
     const load = act.icu_training_load || 0;
     if (load <= 0) continue;
+    const date =
+      typeof act.start_date_local === "string" ? act.start_date_local.slice(0, 10) : "";
     const activityType = act.type ?? "Unknown";
     const sportFamily = Object.hasOwn(SPORT_FAMILIES, activityType)
       ? SPORT_FAMILIES[activityType]
       : "other";
-    totals.set(sportFamily, (totals.get(sportFamily) ?? 0) + load);
+    let byDate = loadByFamilyDate.get(sportFamily);
+    if (!byDate) {
+      byDate = new Map();
+      loadByFamilyDate.set(sportFamily, byDate);
+    }
+    byDate.set(date, (byDate.get(date) ?? 0) + load);
   }
 
   let primary: string | null = null;
   let maxTotal = -Infinity;
-  for (const [sport, total] of totals) {
+  for (const [sport, byDate] of loadByFamilyDate) {
+    const total = pythonSum([...byDate.keys()].sort().map((date) => byDate.get(date) as number));
     if (total > maxTotal) {
       maxTotal = total;
       primary = sport;
@@ -626,19 +639,4 @@ function isoDateDaysBefore(isoNow: string, daysBefore: number): string {
   const utc = new Date(Date.UTC(y, m - 1, d));
   utc.setUTCDate(utc.getUTCDate() - daysBefore);
   return utc.toISOString().slice(0, 10);
-}
-
-// Python's `round(x, n)` uses banker's rounding (round-half-to-even) and
-// diverges from `Math.round(x*10**n)/10**n` (round-half-up) for values
-// exactly at the half boundary. Mirroring Python keeps the gate
-// bit-identical on any zone-hours value that lands at the boundary.
-function roundHalfEven(value: number, decimals: number): number {
-  const factor = 10 ** decimals;
-  const scaled = value * factor;
-  const floor = Math.floor(scaled);
-  const diff = scaled - floor;
-  const epsilon = 1e-9;
-  if (diff < 0.5 - epsilon) return floor / factor;
-  if (diff > 0.5 + epsilon) return (floor + 1) / factor;
-  return (floor % 2 === 0 ? floor : floor + 1) / factor;
 }

@@ -82,7 +82,12 @@ describe("computeZoneDistribution7d", () => {
     expect(result.z4_plus_hours).toBe(0.17); // 600 / 3600 = 0.1666… → 0.17
   });
 
-  it("reports mixed basis when power- and HR-based activities both contribute", () => {
+  it("reports mixed basis and places each activity's zones correctly", () => {
+    // Power Ride contributes Z2; HR Run's flat array maps index 0 → z1. The
+    // per-zone assertions pin the HR index→zone mapping: an off-by-one that
+    // mapped index 0 → z2 would leave total_hours=2 and zone_basis="mixed"
+    // unchanged (z2 would just become 2h, z1 0h), so total/basis alone can't
+    // catch it.
     const result = computeZoneDistribution7d(
       input(
         [
@@ -101,8 +106,44 @@ describe("computeZoneDistribution7d", () => {
       ),
     );
 
-    expect(result.zone_basis).toBe("mixed");
-    expect(result.total_hours).toBe(2); // 3600 + 3600 = 7200s = 2h
+    expect(result).toEqual({
+      total_hours: 2, // 3600 (power Z2) + 3600 (HR z1) = 7200s = 2h
+      z1_hours: 1, // HR Run, flat-array index 0 → z1
+      z2_hours: 1, // power Ride Z2
+      z3_hours: 0,
+      z4_plus_hours: 0,
+      zone_basis: "mixed",
+    });
+  });
+
+  it("prefers power zones over HR when a single activity carries both", () => {
+    // A dual-recorded Ride with both icu_zone_times (power) and
+    // icu_hr_zone_times (HR). The default preference is power-first, so the
+    // power Z2 is used and the HR array is ignored — basis "power", not "hr".
+    // Flipping the preference order (returning HR when power also exists)
+    // would surface here as basis "hr" and z1 0.5h instead.
+    const result = computeZoneDistribution7d(
+      input(
+        [
+          {
+            type: "Ride",
+            start_date_local: "2026-05-09T08:00:00",
+            icu_zone_times: [{ id: "Z2", secs: 3600 }],
+            icu_hr_zone_times: [1800], // index 0 → z1; ignored when power wins
+          },
+        ],
+        FROZEN,
+      ),
+    );
+
+    expect(result).toEqual({
+      total_hours: 1, // only the power Z2 (3600s); the HR 1800s is not counted
+      z1_hours: 0,
+      z2_hours: 1,
+      z3_hours: 0,
+      z4_plus_hours: 0,
+      zone_basis: "power",
+    });
   });
 
   it("returns all-zero hours and null basis when no activity has zone data", () => {
@@ -299,26 +340,47 @@ describe("computeEasyTimeRatio", () => {
     expect(result).toBe(0.71);
   });
 
-  it("rounds half-to-even at the 2-dp boundary like Python's round", () => {
-    // easy 1250s, total 5000s ⇒ 0.25 exactly — no boundary. Use easy 1500s,
-    // total 4000s ⇒ 0.375 → round(0.375, 2) half-to-even = 0.38.
-    const result = computeEasyTimeRatio(
+  it("rounds half-to-even on the true value at the 2-dp boundary like Python's round", () => {
+    // easy 500s / total 4000s = 0.125 exactly: an even-floor tie that rounds
+    // DOWN to 0.12 (round-half-away would give 0.13). 0.375 — the prior
+    // fixture here — has an odd floor, so half-even and half-away agree and it
+    // could not discriminate the rounding mode.
+    const evenTieDown = computeEasyTimeRatio(
       input(
         [
           {
             type: "Ride",
             start_date_local: "2026-05-09T08:00:00",
             icu_zone_times: [
-              { id: "Z1", secs: 1500 },
-              { id: "Z4", secs: 2500 },
+              { id: "Z1", secs: 500 },
+              { id: "Z4", secs: 3500 },
             ],
           },
         ],
         FROZEN,
       ),
     );
+    expect(evenTieDown).toBe(0.12);
 
-    expect(result).toBe(0.38);
+    // easy 18s / total 3600s = 0.005: the nearest double is 0.005000…0104,
+    // strictly above 0.005, so Python rounds UP to 0.01. Scaling by 100 first
+    // gave 0.4999…94 and rounded to 0 — the bug this pins.
+    const aboveHalfBoundary = computeEasyTimeRatio(
+      input(
+        [
+          {
+            type: "Ride",
+            start_date_local: "2026-05-09T08:00:00",
+            icu_zone_times: [
+              { id: "Z1", secs: 18 },
+              { id: "Z4", secs: 3582 },
+            ],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+    expect(aboveHalfBoundary).toBe(0.01);
   });
 
   it("returns null when no activity has zone time", () => {

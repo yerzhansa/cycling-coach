@@ -27,6 +27,30 @@ function input(
   return { fixture: { activities }, frozenNow };
 }
 
+describe("computeMonotony", () => {
+  const FROZEN = "2026-05-10T12:00:00";
+
+  it("rounds on the exact mean/stdev at a 2-dp boundary, not the float ones", () => {
+    // 7-day window 05-04..05-10, one activity per day with loads whose exact
+    // mean is 123.5 and exact stdev 100.0 ⇒ ratio exactly 1.235 ⇒ Python
+    // round-half-to-even = 1.24. The previous float mean/stdev nudged the
+    // ratio just under 1.235 and rounded to 1.23. Monotony is order-
+    // independent under exact arithmetic, so the day assignment is arbitrary.
+    const loads = [21.2, 154.3, 268.1, 122.0, 34.6, 33.1, 231.2];
+    const days = ["04", "05", "06", "07", "08", "09", "10"];
+    const result = computeMonotony(
+      input(
+        loads.map((load, i) => ({
+          start_date_local: `2026-05-${days[i]}T08:00:00`,
+          icu_training_load: load,
+        })),
+        FROZEN,
+      ),
+    );
+    expect(result).toBe(1.24);
+  });
+});
+
 describe("computeStrain", () => {
   const FROZEN = "2026-05-10T12:00:00";
 
@@ -44,6 +68,25 @@ describe("computeStrain", () => {
       ),
     );
     expect(result).toBe(146);
+  });
+
+  it("sums weekly Load with Neumaier compensation at a round-0 boundary", () => {
+    // Daily loads 9.7/266.4/239.5/9.4 sum to exactly 525.0 under the oracle's
+    // compensated sum() (3.12+); a naive reduce gives 524.999…9. With monotony
+    // 0.62 the product is 325.5 → round-half-even = 326. Naive summation made
+    // it 325.499…9 → 325. Pins the pythonSum fix end-to-end.
+    const result = computeStrain(
+      input(
+        [
+          { start_date_local: "2026-05-06T08:00:00", icu_training_load: 9.7 },
+          { start_date_local: "2026-05-07T08:00:00", icu_training_load: 266.4 },
+          { start_date_local: "2026-05-08T08:00:00", icu_training_load: 239.5 },
+          { start_date_local: "2026-05-09T08:00:00", icu_training_load: 9.4 },
+        ],
+        FROZEN,
+      ),
+    );
+    expect(result).toBe(326);
   });
 
   it("cascades Unknown: monotony null ⇒ strain null", () => {
