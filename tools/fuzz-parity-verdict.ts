@@ -9,7 +9,7 @@
  * nothing was fuzzed at all — must never look like success.
  */
 
-export type VerdictStatus = "ok" | "mismatch" | "oracle-error" | "empty";
+export type VerdictStatus = "ok" | "mismatch" | "oracle-error" | "contract-violation" | "empty";
 
 export interface Verdict {
   /** Process exit code: 0 pass · 1 metric divergence · 2 broken/empty run. */
@@ -22,20 +22,34 @@ export interface RunCounts {
   compared: number;
   /** Fixtures the oracle threw on (returned `__error__`) and were skipped. */
   oracleErrors: number;
+  /**
+   * Fixtures the oracle read a silently-missing fixture key on (returned
+   * `__contract_violation__`) and were skipped. Both sides reading the same
+   * silent None would report a false parity, so these are not trustworthy.
+   */
+  contractViolations: number;
   /** Total metric mismatches summed across every compared fixture. */
   mismatchTotal: number;
 }
 
 /**
  * Strict gate: `code` is 0 IFF the run compared at least one fixture, the oracle
- * never threw, and no metric diverged. Any oracle error fails — a broken oracle
- * (e.g. an upstream signature drift on a SHA bump) invalidates the run, and a
- * partial-error run is just as vacuous as a total one. Oracle errors take
- * precedence over mismatches: fix the oracle first, then re-run for a clean
- * mismatch signal.
+ * never threw, no contract violation occurred, and no metric diverged. Any
+ * oracle error or contract violation fails — a broken oracle (e.g. an upstream
+ * signature drift on a SHA bump) or an input read through a silent-None path
+ * invalidates the run, and a partial failure is just as vacuous as a total one.
+ * Oracle errors take precedence over contract violations, which take precedence
+ * over mismatches: a mismatch computed on an untrustworthy input is meaningless,
+ * so fix the oracle and the input contract first, then re-run for a clean signal.
  */
-export function decideVerdict({ compared, oracleErrors, mismatchTotal }: RunCounts): Verdict {
+export function decideVerdict({
+  compared,
+  oracleErrors,
+  contractViolations,
+  mismatchTotal,
+}: RunCounts): Verdict {
   if (oracleErrors > 0) return { code: 2, status: "oracle-error" };
+  if (contractViolations > 0) return { code: 2, status: "contract-violation" };
   if (mismatchTotal > 0) return { code: 1, status: "mismatch" };
   if (compared === 0) return { code: 2, status: "empty" };
   return { code: 0, status: "ok" };

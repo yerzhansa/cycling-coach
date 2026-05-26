@@ -118,9 +118,52 @@ _ns = {"__name__": "upstream_under_test", "__file__": "sync.py"}
 exec(SYNC_PY_SOURCE, _ns)
 IntervalsSync = _ns["IntervalsSync"]
 
+# Fixture contract validation — mirrors the snapshot harness so the fuzzer's
+# differential is as strong as the gate's. sync.py reads fixture
+# fields via dict.get(), which silently returns None on a missing key; a
+# perturbation that introduced an untracked silent-None path (or a typo'd
+# field) would be read the same way by both sides and report a false parity.
+# _TrackedDict logs every .get() of an absent key; compute() checks the log
+# (minus the allowlist) after each run and fails loud on anything unexpected.
+import re as _re
+_TRACKED_MISSING = []
+# Allowlist ported from the snapshot harness, plus icu_zone_times: perturb
+# deletes it on ~30% of activities. The golden fixtures always include it, so
+# the snapshot allowlist omits it — but here it is a legitimate optionality.
+_ALLOWED_OPTIONAL_PATHS = {
+    "FIXTURE.activities[*].icu_hr_decoupling",
+    "FIXTURE.activities[*].icu_hr_zone_times",
+    "FIXTURE.activities[*].icu_hrr",
+    "FIXTURE.activities[*].icu_variability_index",
+    "FIXTURE.activities[*].icu_zone_times",
+    "FIXTURE.wellness[*].atl",
+    "FIXTURE.wellness[*].ctl",
+}
+def _normalize_path(path):
+    return _re.sub(r"\\[\\d+\\]", "[*]", path)
+class _TrackedDict(dict):
+    def __init__(self, data, path):
+        super().__init__()
+        self._path = path
+        for k, v in data.items():
+            super().__setitem__(k, _wrap_tracked(v, f"{path}.{k}"))
+    def get(self, key, default=None):
+        if dict.__contains__(self, key):
+            return dict.__getitem__(self, key)
+        _TRACKED_MISSING.append(f"{self._path}.{key}")
+        return default
+def _wrap_tracked(value, path):
+    if isinstance(value, dict):
+        return _TrackedDict(value, path)
+    if isinstance(value, list):
+        return [_wrap_tracked(item, f"{path}[{i}]") for i, item in enumerate(value)]
+    return value
+
 def compute(fixture_json):
     try:
-        FIX = json.loads(fixture_json)
+        # Reset the tracker each call — the loop reuses this module after one exec.
+        _TRACKED_MISSING.clear()
+        FIX = _TrackedDict(json.loads(fixture_json), "FIXTURE")
         acts = FIX.get("activities", []) or []
         well = FIX.get("wellness", []) or []
         def within(items, key, oldest, newest):
@@ -151,6 +194,12 @@ def compute(fixture_json):
             vo2max=None, formatted_planned_workouts=[], race_calendar=None, power_curve_data=None,
             power_curve_dates=None, hr_curve_data=None, sustainability_curves={}, sustainability_window=None,
             sport_settings={}, icu_weight=lw.get("weight"))
+        unallowed = sorted({
+            p for p in _TRACKED_MISSING
+            if _normalize_path(p) not in _ALLOWED_OPTIONAL_PATHS
+        })
+        if unallowed:
+            return json.dumps({"__contract_violation__": {"missing_keys": unallowed}})
         return json.dumps(derived, default=str, sort_keys=True)
     except Exception as e:
         return json.dumps({"__error__": f"{type(e).__name__}: {e}"})
@@ -224,6 +273,9 @@ async function main(): Promise<number> {
   let oracleErrors = 0;
   let firstOracleError: string | null = null;
   let firstOracleErrorPath: string | null = null;
+  let contractViolations = 0;
+  let firstViolation: string | null = null;
+  let firstViolationPath: string | null = null;
   let compared = 0;
   // One reproducing fixture per diverging metric. A single global capture would
   // discard every metric that isn't the first to diverge — defeating the
@@ -240,6 +292,16 @@ async function main(): Promise<number> {
         firstOracleError = String(derived.__error__);
         firstOracleErrorPath = join(FAIL_DIR, `_fuzz-oracle-error-seed${args.seed}-i${i}.json`);
         writeCapture(firstOracleErrorPath, fixture);
+      }
+      continue;
+    }
+    if ("__contract_violation__" in derived) {
+      contractViolations++;
+      if (!firstViolation) {
+        const v = derived.__contract_violation__ as { missing_keys?: string[] };
+        firstViolation = (v.missing_keys ?? []).join(", ");
+        firstViolationPath = join(FAIL_DIR, `_fuzz-contract-violation-seed${args.seed}-i${i}.json`);
+        writeCapture(firstViolationPath, fixture);
       }
       continue;
     }
@@ -273,7 +335,7 @@ async function main(): Promise<number> {
   }
 
   const total = Object.values(mismatch).reduce((s, x) => s + x, 0);
-  console.log(`[fuzz-parity] oracle: Python ${pyVersion} (Pyodide) · seed ${args.seed} · fixtures ${compared}/${args.n} (oracle errors: ${oracleErrors})`);
+  console.log(`[fuzz-parity] oracle: Python ${pyVersion} (Pyodide) · seed ${args.seed} · fixtures ${compared}/${args.n} (oracle errors: ${oracleErrors}, contract violations: ${contractViolations})`);
   for (const m of metrics) {
     if (mismatch[m]! > 0) console.log(`[fuzz-parity]   MISMATCH ${m}: ${mismatch[m]}`);
   }
@@ -301,12 +363,17 @@ async function main(): Promise<number> {
   // count, every one compared clean, zero oracle throws. Any `__error__` means
   // the differential silently skipped that input (the signature-drift-on-a-SHA-
   // bump failure that used to slip through as a green "OK across 0 fixtures").
-  const verdict = decideVerdict({ compared, oracleErrors, mismatchTotal: total });
+  const verdict = decideVerdict({ compared, oracleErrors, contractViolations, mismatchTotal: total });
   switch (verdict.status) {
     case "oracle-error":
       console.error(`[fuzz-parity] FAIL — oracle threw on ${oracleErrors}/${args.n} input(s); the differential never ran on them, so this is NOT a pass.`);
       console.error(`[fuzz-parity]   first oracle error: ${firstOracleError}`);
       console.error(`[fuzz-parity]   erroring fixture written to:\n  ${firstOracleErrorPath}`);
+      break;
+    case "contract-violation":
+      console.error(`[fuzz-parity] FAIL — oracle read a silently-missing fixture key on ${contractViolations}/${args.n} input(s); both sides reading the same None would report a false parity, so this is NOT a pass.`);
+      console.error(`[fuzz-parity]   first missing key(s): ${firstViolation}`);
+      console.error(`[fuzz-parity]   If it is a legitimate schema optionality, add the path to _ALLOWED_OPTIONAL_PATHS in the prologue; otherwise fix perturb so it stops generating it. Fixture written to:\n  ${firstViolationPath}`);
       break;
     case "mismatch": {
       const captured = Object.values(failPaths);
