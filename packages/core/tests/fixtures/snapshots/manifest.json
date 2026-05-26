@@ -5,6 +5,7 @@
   "fixtures": [
     "boundary-monotony",
     "boundary-sum-strain",
+    "boundary-zone-total-secs",
     "data-gap-mid-history",
     "new-athlete-empty",
     "realistic-athlete"

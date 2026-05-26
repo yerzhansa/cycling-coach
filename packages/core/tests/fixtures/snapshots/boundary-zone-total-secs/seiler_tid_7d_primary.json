@@ -1,0 +1,19 @@
+{
+  "metric": "seiler_tid_7d_primary",
+  "athlete": "boundary-zone-total-secs",
+  "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
+  "section_11_protocol_version": "3.112",
+  "frozen_now": "2026-05-10T12:00:00",
+  "value": {
+    "classification": "High Intensity",
+    "polarization_index": null,
+    "sport": "cycling",
+    "z1_pct": 20.1,
+    "z1_seconds": 7346.8,
+    "z2_pct": 17,
+    "z2_seconds": 6233.700000000001,
+    "z3_pct": 62.9,
+    "z3_seconds": 23013.5,
+    "zone_basis": "power"
+  }
+}

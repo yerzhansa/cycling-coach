@@ -164,11 +164,11 @@ function perturb(base: { activities: Record<string, unknown>[]; wellness: Record
     a.type = pick(SPORT_TYPES);
     a.icu_training_load = rnd() < 0.1 ? 0 : dec1(300);
     if (rnd() < 0.7) {
-      a.icu_zone_times = ZONE_IDS.map((id) => ({ id, secs: Math.floor(rnd() * 3600) }));
+      a.icu_zone_times = ZONE_IDS.map((id) => ({ id, secs: dec1(3600) }));
     } else {
       delete a.icu_zone_times;
     }
-    if (rnd() < 0.4) a.icu_hr_zone_times = Array.from({ length: 5 }, () => Math.floor(rnd() * 3000));
+    if (rnd() < 0.4) a.icu_hr_zone_times = Array.from({ length: 5 }, () => dec1(3000));
   }
   for (const w of f.wellness) {
     w.hrv = rnd() < 0.05 ? null : Math.round((10 + rnd() * 240) * 10) / 10;

@@ -89,6 +89,12 @@ const HARNESS_FIXTURES: HarnessFixtureConfig[] = [
     description:
       "Boundary-seeking fixture (fuzz-derived). Daily loads 9.7/266.4/239.5/9.4 over 05-06..05-09 sum to exactly 525.0 under compensated (Neumaier) summation but 524.999…9 naively; with monotony 0.62 the product 325.5 rounds to strain 326 where a naive sum gives 325. Defends the compensated-sum port at the gate. Load-only (no wellness/ftp).",
   },
+  {
+    slug: "boundary-zone-total-secs",
+    frozenNow: DEFAULT_FROZEN_NOW,
+    description:
+      "Boundary-seeking fixture (fuzz-derived). Three activities (05-08..05-10) whose z1–z7 one-decimal-second bins sum, per-activity-compensated, to exactly 36594s, but accumulate to 36594.00000000001s under a single flat naive sum across every activity's bins; that 1-ULP drift pushes total_hours across the 10.165 boundary (compensated 10.16 vs naive 10.17). Defends the per-activity compensated zone-total summation in the zone-distribution port. Zone-only (empty wellness/ftp).",
+  },
 ];
 
 function readPyodideVersion(): string {

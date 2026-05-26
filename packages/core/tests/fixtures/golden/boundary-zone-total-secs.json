@@ -1,0 +1,84 @@
+{
+  "activities": [
+    {
+      "id": "bz0",
+      "start_date_local": "2026-05-08T08:00:00",
+      "type": "Ride",
+      "name": "sanitized",
+      "moving_time": 15215,
+      "elapsed_time": 15225,
+      "icu_training_load": 80.0,
+      "icu_intensity": 78.97436,
+      "average_heartrate": 142,
+      "icu_zone_times": [
+        { "id": "Z1", "secs": 2628.8 },
+        { "id": "Z2", "secs": 1557.8 },
+        { "id": "Z3", "secs": 1075.8 },
+        { "id": "Z4", "secs": 3037.5 },
+        { "id": "Z5", "secs": 1497.4 },
+        { "id": "Z6", "secs": 2199.4 },
+        { "id": "Z7", "secs": 3218.5 }
+      ],
+      "paired_event_id": null,
+      "pace_zone_times": null,
+      "decoupling": -4.7151833,
+      "icu_efficiency_factor": 1.084507,
+      "fitnessAtEnd": 28.78709,
+      "fatigueAtEnd": 53.354916
+    },
+    {
+      "id": "bz1",
+      "start_date_local": "2026-05-09T08:00:00",
+      "type": "Ride",
+      "name": "sanitized",
+      "moving_time": 12933,
+      "elapsed_time": 12943,
+      "icu_training_load": 90.0,
+      "icu_intensity": 78.97436,
+      "average_heartrate": 142,
+      "icu_zone_times": [
+        { "id": "Z1", "secs": 102.1 },
+        { "id": "Z2", "secs": 2302.3 },
+        { "id": "Z3", "secs": 2861 },
+        { "id": "Z4", "secs": 1620.1 },
+        { "id": "Z5", "secs": 904.1 },
+        { "id": "Z6", "secs": 2212.4 },
+        { "id": "Z7", "secs": 2930.6 }
+      ],
+      "paired_event_id": null,
+      "pace_zone_times": null,
+      "decoupling": -4.7151833,
+      "icu_efficiency_factor": 1.084507,
+      "fitnessAtEnd": 28.78709,
+      "fatigueAtEnd": 53.354916
+    },
+    {
+      "id": "bz2",
+      "start_date_local": "2026-05-10T08:00:00",
+      "type": "Ride",
+      "name": "sanitized",
+      "moving_time": 8446,
+      "elapsed_time": 8456,
+      "icu_training_load": 70.0,
+      "icu_intensity": 78.97436,
+      "average_heartrate": 142,
+      "icu_zone_times": [
+        { "id": "Z1", "secs": 113.4 },
+        { "id": "Z2", "secs": 642.4 },
+        { "id": "Z3", "secs": 2296.9 },
+        { "id": "Z4", "secs": 951.6 },
+        { "id": "Z5", "secs": 1762.6 },
+        { "id": "Z6", "secs": 459.5 },
+        { "id": "Z7", "secs": 2219.8 }
+      ],
+      "paired_event_id": null,
+      "pace_zone_times": null,
+      "decoupling": -4.7151833,
+      "icu_efficiency_factor": 1.084507,
+      "fitnessAtEnd": 28.78709,
+      "fatigueAtEnd": 53.354916
+    }
+  ],
+  "wellness": [],
+  "ftp_history": []
+}
