@@ -495,7 +495,14 @@ function getDailyLoad(
 ): number[] {
   const dailyLoad = new Map<string, number>();
   for (const act of activities) {
-    const dateStr = act.start_date_local.slice(0, 10);
+    // The load aggregators run over raw, unwindowed activities, so a
+    // non-string start_date_local reaches here (the distribution path is
+    // pre-filtered by getActivitiesInWindow and never sees one). The oracle's
+    // window filter drops such rows; bucketing them under "" is equivalent —
+    // the result array only ever reads real dates — and avoids throwing on
+    // malformed fixture input. Mirrors the guard in selectPrimarySport.
+    const dateStr =
+      typeof act.start_date_local === "string" ? act.start_date_local.slice(0, 10) : "";
     const load = act.icu_training_load || 0;
     dailyLoad.set(dateStr, (dailyLoad.get(dateStr) ?? 0) + load);
   }
@@ -526,7 +533,10 @@ function getDailyLoadBySport(
   for (const act of activities) {
     const load = act.icu_training_load || 0;
     if (load <= 0) continue;
-    const dateStr = act.start_date_local.slice(0, 10);
+    // Guarded like getDailyLoad: a non-string date buckets to "", which is
+    // never a window date, so the row is dropped — matching the oracle.
+    const dateStr =
+      typeof act.start_date_local === "string" ? act.start_date_local.slice(0, 10) : "";
     if (!windowDates.has(dateStr)) continue;
     // Object.hasOwn guards against prototype-chain lookups: a fixture
     // with act.type === "toString" / "constructor" / "__proto__" would

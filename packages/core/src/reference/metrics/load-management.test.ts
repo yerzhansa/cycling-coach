@@ -309,3 +309,46 @@ describe("computeLoadRecoveryRatio", () => {
     expect(result).toBeNull();
   });
 });
+
+describe("load aggregators — malformed start_date_local is dropped, not thrown", () => {
+  const FROZEN = "2026-05-10T12:00:00";
+
+  // The load aggregators run over raw, unwindowed activities, so a row with a
+  // non-string start_date_local reaches the date slice (the distribution path
+  // is pre-windowed and never sees one). The oracle's window filter silently
+  // drops such rows; we must match — drop the row, compute over the rest —
+  // rather than throwing on it.
+  const wellFormed = [
+    { start_date_local: "2026-05-06T08:00:00", icu_training_load: 50, type: "Ride" },
+    { start_date_local: "2026-05-08T08:00:00", icu_training_load: 50, type: "Ride" },
+    { start_date_local: "2026-05-10T08:00:00", icu_training_load: 100, type: "Ride" },
+  ];
+
+  function fixtureOf(activities: unknown[]): MetricInput {
+    return { fixture: { activities }, frozenNow: FROZEN };
+  }
+
+  it("computeMonotony drops a null-date row (getDailyLoad)", () => {
+    const baseline = computeMonotony(fixtureOf(wellFormed));
+    expect(baseline).not.toBeNull();
+
+    const nullDate = { start_date_local: null, icu_training_load: 999, type: "Ride" };
+    let withMalformed: number | null = null;
+    expect(() => {
+      withMalformed = computeMonotony(fixtureOf([...wellFormed, nullDate]));
+    }).not.toThrow();
+    expect(withMalformed).toBe(baseline);
+  });
+
+  it("computeEffectiveMonotony drops a missing-date row (getDailyLoadBySport)", () => {
+    const baseline = computeEffectiveMonotony(fixtureOf(wellFormed));
+    expect(baseline).not.toBeNull();
+
+    const missingDate = { icu_training_load: 999, type: "Ride" };
+    let withMalformed: number | null = null;
+    expect(() => {
+      withMalformed = computeEffectiveMonotony(fixtureOf([...wellFormed, missingDate]));
+    }).not.toThrow();
+    expect(withMalformed).toBe(baseline);
+  });
+});
