@@ -1,0 +1,363 @@
+{
+  "activities": [
+    {
+      "id": "bm0",
+      "start_date_local": "2026-05-04T08:00:00",
+      "type": "Ride",
+      "name": "sanitized",
+      "moving_time": 5207,
+      "elapsed_time": 5217,
+      "icu_training_load": 21.2,
+      "icu_intensity": 78.97436,
+      "average_heartrate": 142,
+      "icu_zone_times": [
+        {
+          "id": "Z1",
+          "secs": 608
+        },
+        {
+          "id": "Z2",
+          "secs": 2361
+        },
+        {
+          "id": "Z3",
+          "secs": 1321
+        },
+        {
+          "id": "Z4",
+          "secs": 561
+        },
+        {
+          "id": "Z5",
+          "secs": 196
+        },
+        {
+          "id": "Z6",
+          "secs": 107
+        },
+        {
+          "id": "Z7",
+          "secs": 53
+        },
+        {
+          "id": "SS",
+          "secs": 780
+        }
+      ],
+      "paired_event_id": null,
+      "pace_zone_times": null,
+      "decoupling": -4.7151833,
+      "icu_efficiency_factor": 1.084507,
+      "fitnessAtEnd": 28.78709,
+      "fatigueAtEnd": 53.354916
+    },
+    {
+      "id": "bm1",
+      "start_date_local": "2026-05-05T08:00:00",
+      "type": "Ride",
+      "name": "sanitized",
+      "moving_time": 5207,
+      "elapsed_time": 5217,
+      "icu_training_load": 154.3,
+      "icu_intensity": 78.97436,
+      "average_heartrate": 142,
+      "icu_zone_times": [
+        {
+          "id": "Z1",
+          "secs": 608
+        },
+        {
+          "id": "Z2",
+          "secs": 2361
+        },
+        {
+          "id": "Z3",
+          "secs": 1321
+        },
+        {
+          "id": "Z4",
+          "secs": 561
+        },
+        {
+          "id": "Z5",
+          "secs": 196
+        },
+        {
+          "id": "Z6",
+          "secs": 107
+        },
+        {
+          "id": "Z7",
+          "secs": 53
+        },
+        {
+          "id": "SS",
+          "secs": 780
+        }
+      ],
+      "paired_event_id": null,
+      "pace_zone_times": null,
+      "decoupling": -4.7151833,
+      "icu_efficiency_factor": 1.084507,
+      "fitnessAtEnd": 28.78709,
+      "fatigueAtEnd": 53.354916
+    },
+    {
+      "id": "bm2",
+      "start_date_local": "2026-05-06T08:00:00",
+      "type": "Ride",
+      "name": "sanitized",
+      "moving_time": 5207,
+      "elapsed_time": 5217,
+      "icu_training_load": 268.1,
+      "icu_intensity": 78.97436,
+      "average_heartrate": 142,
+      "icu_zone_times": [
+        {
+          "id": "Z1",
+          "secs": 608
+        },
+        {
+          "id": "Z2",
+          "secs": 2361
+        },
+        {
+          "id": "Z3",
+          "secs": 1321
+        },
+        {
+          "id": "Z4",
+          "secs": 561
+        },
+        {
+          "id": "Z5",
+          "secs": 196
+        },
+        {
+          "id": "Z6",
+          "secs": 107
+        },
+        {
+          "id": "Z7",
+          "secs": 53
+        },
+        {
+          "id": "SS",
+          "secs": 780
+        }
+      ],
+      "paired_event_id": null,
+      "pace_zone_times": null,
+      "decoupling": -4.7151833,
+      "icu_efficiency_factor": 1.084507,
+      "fitnessAtEnd": 28.78709,
+      "fatigueAtEnd": 53.354916
+    },
+    {
+      "id": "bm3",
+      "start_date_local": "2026-05-07T08:00:00",
+      "type": "Ride",
+      "name": "sanitized",
+      "moving_time": 5207,
+      "elapsed_time": 5217,
+      "icu_training_load": 122,
+      "icu_intensity": 78.97436,
+      "average_heartrate": 142,
+      "icu_zone_times": [
+        {
+          "id": "Z1",
+          "secs": 608
+        },
+        {
+          "id": "Z2",
+          "secs": 2361
+        },
+        {
+          "id": "Z3",
+          "secs": 1321
+        },
+        {
+          "id": "Z4",
+          "secs": 561
+        },
+        {
+          "id": "Z5",
+          "secs": 196
+        },
+        {
+          "id": "Z6",
+          "secs": 107
+        },
+        {
+          "id": "Z7",
+          "secs": 53
+        },
+        {
+          "id": "SS",
+          "secs": 780
+        }
+      ],
+      "paired_event_id": null,
+      "pace_zone_times": null,
+      "decoupling": -4.7151833,
+      "icu_efficiency_factor": 1.084507,
+      "fitnessAtEnd": 28.78709,
+      "fatigueAtEnd": 53.354916
+    },
+    {
+      "id": "bm4",
+      "start_date_local": "2026-05-08T08:00:00",
+      "type": "Ride",
+      "name": "sanitized",
+      "moving_time": 5207,
+      "elapsed_time": 5217,
+      "icu_training_load": 34.6,
+      "icu_intensity": 78.97436,
+      "average_heartrate": 142,
+      "icu_zone_times": [
+        {
+          "id": "Z1",
+          "secs": 608
+        },
+        {
+          "id": "Z2",
+          "secs": 2361
+        },
+        {
+          "id": "Z3",
+          "secs": 1321
+        },
+        {
+          "id": "Z4",
+          "secs": 561
+        },
+        {
+          "id": "Z5",
+          "secs": 196
+        },
+        {
+          "id": "Z6",
+          "secs": 107
+        },
+        {
+          "id": "Z7",
+          "secs": 53
+        },
+        {
+          "id": "SS",
+          "secs": 780
+        }
+      ],
+      "paired_event_id": null,
+      "pace_zone_times": null,
+      "decoupling": -4.7151833,
+      "icu_efficiency_factor": 1.084507,
+      "fitnessAtEnd": 28.78709,
+      "fatigueAtEnd": 53.354916
+    },
+    {
+      "id": "bm5",
+      "start_date_local": "2026-05-09T08:00:00",
+      "type": "Ride",
+      "name": "sanitized",
+      "moving_time": 5207,
+      "elapsed_time": 5217,
+      "icu_training_load": 33.1,
+      "icu_intensity": 78.97436,
+      "average_heartrate": 142,
+      "icu_zone_times": [
+        {
+          "id": "Z1",
+          "secs": 608
+        },
+        {
+          "id": "Z2",
+          "secs": 2361
+        },
+        {
+          "id": "Z3",
+          "secs": 1321
+        },
+        {
+          "id": "Z4",
+          "secs": 561
+        },
+        {
+          "id": "Z5",
+          "secs": 196
+        },
+        {
+          "id": "Z6",
+          "secs": 107
+        },
+        {
+          "id": "Z7",
+          "secs": 53
+        },
+        {
+          "id": "SS",
+          "secs": 780
+        }
+      ],
+      "paired_event_id": null,
+      "pace_zone_times": null,
+      "decoupling": -4.7151833,
+      "icu_efficiency_factor": 1.084507,
+      "fitnessAtEnd": 28.78709,
+      "fatigueAtEnd": 53.354916
+    },
+    {
+      "id": "bm6",
+      "start_date_local": "2026-05-10T08:00:00",
+      "type": "Ride",
+      "name": "sanitized",
+      "moving_time": 5207,
+      "elapsed_time": 5217,
+      "icu_training_load": 231.2,
+      "icu_intensity": 78.97436,
+      "average_heartrate": 142,
+      "icu_zone_times": [
+        {
+          "id": "Z1",
+          "secs": 608
+        },
+        {
+          "id": "Z2",
+          "secs": 2361
+        },
+        {
+          "id": "Z3",
+          "secs": 1321
+        },
+        {
+          "id": "Z4",
+          "secs": 561
+        },
+        {
+          "id": "Z5",
+          "secs": 196
+        },
+        {
+          "id": "Z6",
+          "secs": 107
+        },
+        {
+          "id": "Z7",
+          "secs": 53
+        },
+        {
+          "id": "SS",
+          "secs": 780
+        }
+      ],
+      "paired_event_id": null,
+      "pace_zone_times": null,
+      "decoupling": -4.7151833,
+      "icu_efficiency_factor": 1.084507,
+      "fitnessAtEnd": 28.78709,
+      "fatigueAtEnd": 53.354916
+    }
+  ],
+  "wellness": [],
+  "ftp_history": []
+}

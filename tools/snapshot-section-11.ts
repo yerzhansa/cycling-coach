@@ -77,6 +77,18 @@ const HARNESS_FIXTURES: HarnessFixtureConfig[] = [
     description:
       "21 activities split by a 28-day gap (14 days 2026-04-01..04-14, gap 04-15..05-12, 7 days resumed 05-13..05-19). Exercises EWMA decay through the gap, ACWR chronic window seeing zeros, monotony on the resumed week. Anchor 2026-05-20 catches the resumed week in the 7d acute window.",
   },
+  {
+    slug: "boundary-monotony",
+    frozenNow: DEFAULT_FROZEN_NOW,
+    description:
+      "Boundary-seeking fixture (fuzz-derived). Daily loads [21.2,154.3,268.1,122.0,34.6,33.1,231.2] over 05-04..05-10 put monotony's mean/stdev ratio exactly on the 2-dp boundary: the correctly-rounded statistics path gives 1.24, a naive float stdev gives 1.23. Defends the exact-rational mean/stdev port at the gate. Load-only (no wellness/ftp).",
+  },
+  {
+    slug: "boundary-sum-strain",
+    frozenNow: DEFAULT_FROZEN_NOW,
+    description:
+      "Boundary-seeking fixture (fuzz-derived). Daily loads 9.7/266.4/239.5/9.4 over 05-06..05-09 sum to exactly 525.0 under compensated (Neumaier) summation but 524.999…9 naively; with monotony 0.62 the product 325.5 rounds to strain 326 where a naive sum gives 325. Defends the compensated-sum port at the gate. Load-only (no wellness/ftp).",
+  },
 ];
 
 function readPyodideVersion(): string {

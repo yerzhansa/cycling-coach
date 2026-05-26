@@ -17,7 +17,8 @@
     "check:trademarks": "tsx tools/check-trademarks.ts",
     "release-version": "changeset version && tsx tools/bump-binaries-to-calver.ts",
     "snapshot:section-11": "tsx tools/snapshot-section-11.ts",
-    "check-parity": "tsx tools/check-metric-parity.ts"
+    "check-parity": "tsx tools/check-metric-parity.ts",
+    "fuzz-parity": "tsx tools/fuzz-parity.ts"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.0",
