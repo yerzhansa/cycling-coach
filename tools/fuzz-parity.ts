@@ -36,6 +36,7 @@ import { join, resolve } from "node:path";
 import { loadPyodide } from "pyodide";
 
 import { deepCompare, METRIC_REGISTRY, REPO_ROOT } from "./check-metric-parity";
+import { decideVerdict } from "./fuzz-parity-verdict";
 
 const SECTION_11_REPO = process.env.SECTION_11_REPO ?? resolve(REPO_ROOT, "../section-11");
 const SYNC_PY_PATH = join(SECTION_11_REPO, "examples/sync.py");
@@ -192,6 +193,8 @@ async function main(): Promise<number> {
   const metrics = Object.keys(METRIC_REGISTRY);
   const mismatch: Record<string, number> = Object.fromEntries(metrics.map((m) => [m, 0]));
   let oracleErrors = 0;
+  let firstOracleError: string | null = null;
+  let firstOracleErrorPath: string | null = null;
   let compared = 0;
   let firstFailPath: string | null = null;
 
@@ -201,6 +204,11 @@ async function main(): Promise<number> {
     const derived = JSON.parse(py.runPython("compute(FIXJSON)") as string) as Record<string, unknown>;
     if ("__error__" in derived) {
       oracleErrors++;
+      if (!firstOracleError) {
+        firstOracleError = String(derived.__error__);
+        firstOracleErrorPath = join(FAIL_DIR, `_fuzz-oracle-error-seed${args.seed}-i${i}.json`);
+        writeFileSync(firstOracleErrorPath, `${JSON.stringify(fixture, null, 2)}\n`);
+      }
       continue;
     }
     compared++;
@@ -230,13 +238,29 @@ async function main(): Promise<number> {
   for (const m of metrics) {
     if (mismatch[m]! > 0) console.log(`[fuzz-parity]   MISMATCH ${m}: ${mismatch[m]}`);
   }
-  if (total === 0) {
-    console.log(`[fuzz-parity] OK — all ${metrics.length} metrics bit-identical across ${compared} fixtures`);
-    return 0;
+  // OK is reported ONLY on a run that proved bit-identity: a non-zero fixture
+  // count, every one compared clean, zero oracle throws. Any `__error__` means
+  // the differential silently skipped that input (the signature-drift-on-a-SHA-
+  // bump failure that used to slip through as a green "OK across 0 fixtures").
+  const verdict = decideVerdict({ compared, oracleErrors, mismatchTotal: total });
+  switch (verdict.status) {
+    case "oracle-error":
+      console.error(`[fuzz-parity] FAIL — oracle threw on ${oracleErrors}/${args.n} input(s); the differential never ran on them, so this is NOT a pass.`);
+      console.error(`[fuzz-parity]   first oracle error: ${firstOracleError}`);
+      console.error(`[fuzz-parity]   erroring fixture written to:\n  ${firstOracleErrorPath}`);
+      break;
+    case "mismatch":
+      console.error(`[fuzz-parity] FAIL — ${total} metric mismatch(es). First failing fixture written to:\n  ${firstFailPath}`);
+      console.error(`[fuzz-parity] Freeze it as a golden fixture (add to HARNESS_FIXTURES in tools/snapshot-section-11.ts, then \`pnpm snapshot:section-11\`) so the gate defends it.`);
+      break;
+    case "empty":
+      console.error(`[fuzz-parity] FAIL — 0 fixtures compared (n=${args.n}); refusing to report OK on a run that proved nothing.`);
+      break;
+    case "ok":
+      console.log(`[fuzz-parity] OK — all ${metrics.length} metrics bit-identical across ${compared}/${args.n} fixtures`);
+      break;
   }
-  console.log(`[fuzz-parity] FAIL — ${total} metric mismatch(es). First failing fixture written to:\n  ${firstFailPath}`);
-  console.log(`[fuzz-parity] Freeze it as a golden fixture (add to HARNESS_FIXTURES in tools/snapshot-section-11.ts, then \`pnpm snapshot:section-11\`) so the gate defends it.`);
-  return 1;
+  return verdict.code;
 }
 
 main().then(
