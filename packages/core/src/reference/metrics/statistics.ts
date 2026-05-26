@@ -180,10 +180,15 @@ function integerSqrtOfFracRto(n: bigint, m: bigint): bigint {
 
 const SQRT_BIT_WIDTH = 2 * 53 + 3; // 2 · mantissa-digits + 3
 
-// Python `statistics._float_sqrt_of_frac` — correctly-rounded √(n/m). The
-// round-to-odd integer sqrt is scaled so the final `numerator / denominator`
-// (numerator ≤ 53 bits, denominator a power of two) is exact except for the
-// single round-to-nearest-even of the division.
+// Python `statistics._float_sqrt_of_frac` — correctly-rounded √(n/m).
+// SQRT_BIT_WIDTH scales the round-to-odd integer sqrt so `numerator` carries
+// ~mant_dig+2 (≈55) significant bits — NOT ≤53 — with its low bit set as a
+// sticky round bit (round-to-odd) so that narrowing it to a 53-bit double is
+// correctly rounded. `denominator` (and the `<< q` factor) are powers of two,
+// so `Number(numerator) / Number(denominator)` only shifts the binary exponent
+// — no second rounding. The lone rounding is `Number(numerator)`, which
+// round-to-odd makes exact. A non-power-of-two denominator would round a second
+// time and defeat round-to-odd, diverging from CPython's Fraction-exact sqrt.
 function floatSqrtOfFrac(n: bigint, m: bigint): number {
   if (n === 0n) return 0;
   const q = Math.floor((bitLength(n) - bitLength(m) - SQRT_BIT_WIDTH) / 2);
@@ -199,7 +204,9 @@ function floatSqrtOfFrac(n: bigint, m: bigint): number {
   return Number(numerator) / Number(denominator);
 }
 
-// Python `statistics.mean(values)` — float(Σxᵢ / n).
+// Python `statistics.mean(values)` — float(Σxᵢ / n). `mean([])` returns 0
+// (ratioToDouble short-circuits on a zero numerator), not NaN and not the
+// StatisticsError Python raises; every caller guards a non-empty input.
 export function mean(values: number[]): number {
   const n = BigInt(values.length);
   const { sx, maxK } = exactSums(values);
@@ -209,7 +216,11 @@ export function mean(values: number[]): number {
 // Python `statistics.stdev(values)` on CPython 3.12+ — the correctly-rounded
 // square root of the exact variance (exact sum of squared deviations over
 // n − 1). The variance fraction is reduced first, matching the `Fraction`
-// `mss.numerator/mss.denominator` the upstream passes in. Requires n ≥ 2.
+// `mss.numerator/mss.denominator` the upstream passes in. Requires n ≥ 2;
+// below that it returns 0 (varianceNum is 0n, so floatSqrtOfFrac short-circuits
+// before the n−1 = 0 denominator divides — no throw), not the NaN the
+// pre-rewrite float impl produced. 0 is guard-friendly: callers gate on
+// `stdev <= 0`, which 0 satisfies but NaN would have slipped through.
 export function sampleStdev(values: number[]): number {
   const n = BigInt(values.length);
   const { sx, sxx, maxK } = exactSums(values);
