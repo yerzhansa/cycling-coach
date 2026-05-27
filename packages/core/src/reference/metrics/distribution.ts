@@ -499,9 +499,14 @@ function calculatePolarizationIndex(
   // PI and — through `pi > 2.0` in `classifyTid` — the Polarized/Pyramidal
   // label. The measure is ~1e-14 per call (the 1-ULP split must land on an
   // X.XX5 boundary), so unlike sum/stdev/round (reproduced exact-rationally in
-  // `statistics.ts` / `rounding.ts`) this is an accepted residual, not closed.
-  // Closing it means mirroring the oracle's exact log10 — its rounding errors
-  // included; a "more accurate" log10 would diverge from the oracle MORE.
+  // `statistics.ts` / `rounding.ts`) this residual is deliberately accepted:
+  // reproducing the oracle's exact libm log10 is ~200 lines of version-pinned,
+  // table-driven musl transliteration re-verified on every Pyodide bump — not
+  // worth closing a ~1e-14 gap. The tolerance-zero gate is the safety net: if a
+  // fixture ever lands on the boundary it turns red HERE (caught in CI, never
+  // shipped silently), and the fix is then to regenerate that snapshot or
+  // reproduce the exact log10. A "more accurate" log10 would diverge MORE, not
+  // less — the target is the oracle's bits, not correctness.
   return roundHalfEven(Math.log10(raw), 2);
 }
 

@@ -30,6 +30,17 @@
  * signed, `k ≥ 0`); sums of such rationals stay exact in `BigInt`, so the
  * only rounding is the single correctly-rounded `ratioToDouble` at the end
  * — mirroring `float(Fraction)`.
+ *
+ * Out of scope here, by policy: transcendentals (`log`/`exp`/`pow`/trig).
+ * IEEE-754 does not mandate correctly-rounded transcendentals, so V8's `Math.*`
+ * and the oracle's libm (Pyodide/emscripten) may disagree in the last ULP. We
+ * do NOT reproduce the oracle's libm for these — V8's `Math.*` is used directly
+ * and the last-ULP agreement is accepted as a platform fidelity residual. The
+ * first instance is `polarization_index`'s `log10` (see `distribution.ts`):
+ * ~1e-14 reachability, and the tolerance-zero gate would surface a
+ * boundary-straddle in CI rather than ship it. Future transcendental metrics
+ * inherit this acceptance unless a real fixture trips the gate — at which point
+ * the choice is regenerate-the-snapshot or reproduce-the-exact-libm for that op.
  */
 
 function bitLength(value: bigint): number {
