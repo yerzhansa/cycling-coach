@@ -7,6 +7,8 @@
     "boundary-sum-strain",
     "boundary-zone-total-secs",
     "data-gap-mid-history",
+    "multisport-thin-primary",
+    "multisport-tie",
     "new-athlete-empty",
     "realistic-athlete"
   ],

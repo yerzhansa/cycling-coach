@@ -1,0 +1,19 @@
+{
+  "metric": "seiler_tid_28d_primary",
+  "athlete": "multisport-thin-primary",
+  "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
+  "section_11_protocol_version": "3.112",
+  "frozen_now": "2026-05-10T12:00:00",
+  "value": {
+    "classification": "Pyramidal",
+    "polarization_index": null,
+    "sport": "run",
+    "z1_pct": 57,
+    "z1_seconds": 5938,
+    "z2_pct": 25.4,
+    "z2_seconds": 2642,
+    "z3_pct": 17.6,
+    "z3_seconds": 1834,
+    "zone_basis": "power"
+  }
+}

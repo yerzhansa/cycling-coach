@@ -95,6 +95,18 @@ const HARNESS_FIXTURES: HarnessFixtureConfig[] = [
     description:
       "Boundary-seeking fixture (fuzz-derived). Three activities (05-08..05-10) whose z1–z7 one-decimal-second bins sum, per-activity-compensated, to exactly 36594s, but accumulate to 36594.00000000001s under a single flat naive sum across every activity's bins; that 1-ULP drift pushes total_hours across the 10.165 boundary (compensated 10.16 vs naive 10.17). Defends the per-activity compensated zone-total summation in the zone-distribution port. Zone-only (empty wellness/ftp).",
   },
+  {
+    slug: "multisport-tie",
+    frozenNow: DEFAULT_FROZEN_NOW,
+    description:
+      "Primary-sport tiebreak fixture. Cycling [100,80,60] on 05-04..06 and run [60,60,60,60] on 05-07..10 each total exactly 240 over the 7d window; cycling is encountered first, so the `total > maxTotal` strict tiebreak (mirroring Python `max(dict, key=dict.get)` insertion order) must pick cycling. The two sports' daily distributions differ, so a tiebreak regression flips primary_sport_monotony to run's value — caught at the gate. Load+zones only (empty wellness/ftp).",
+  },
+  {
+    slug: "multisport-thin-primary",
+    frozenNow: DEFAULT_FROZEN_NOW,
+    description:
+      "effective_monotony selector branch B (multi-sport, primary=null → fall back to total). Cycling [80,80,80] on 05-04..06 (total 240, 3 days) and run [150,150] on 05-09..10 (total 300, 2 days): run wins primary on total but has <3 active days, so primary_sport_monotony is null while total monotony is non-null. The selector's `!== null` gate does load-bearing work here — inverting it regresses with no other fixture defense. Load+zones only (empty wellness/ftp).",
+  },
 ];
 
 function readPyodideVersion(): string {
