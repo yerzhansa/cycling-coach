@@ -82,6 +82,32 @@ describe("computeZoneDistribution7d", () => {
     expect(result.z4_plus_hours).toBe(0.17); // 600 / 3600 = 0.1666… → 0.17
   });
 
+  it("drops a non-numeric icu_hr_zone_times bin instead of poisoning the zone sum", () => {
+    // icu_hr_zone_times rides through unschematized (it isn't on the typed
+    // Activity surface), so a malformed string bin can reach the reader. The
+    // guard coerces it to 0 and skips it; without the guard `z2Time += "bad"`
+    // would string-concat and NaN the total. The upstream keeps the string
+    // and raises on the sum, so this input can't be captured by the gate.
+    const result = computeZoneDistribution7d(
+      input(
+        [
+          {
+            type: "Run",
+            start_date_local: "2026-05-08T08:00:00",
+            icu_hr_zone_times: [720, "bad", 1800],
+          },
+        ],
+        FROZEN,
+      ),
+    );
+
+    expect(result.zone_basis).toBe("hr");
+    expect(result.z1_hours).toBe(0.2); // 720 / 3600
+    expect(result.z2_hours).toBe(0); // the "bad" bin coerced to 0 and skipped
+    expect(result.z3_hours).toBe(0.5); // 1800 / 3600
+    expect(result.total_hours).toBe(0.7); // (720 + 1800) / 3600 — no string poison
+  });
+
   it("reports mixed basis and places each activity's zones correctly", () => {
     // Power Ride contributes Z2; HR Run's flat array maps index 0 → z1. The
     // per-zone assertions pin the HR index→zone mapping: an off-by-one that

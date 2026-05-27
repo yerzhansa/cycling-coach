@@ -503,6 +503,8 @@ function getDailyLoad(
     // malformed fixture input. Mirrors the guard in selectPrimarySport.
     const dateStr =
       typeof act.start_date_local === "string" ? act.start_date_local.slice(0, 10) : "";
+    // `|| 0` maps a hypothetical NaN load to 0; the upstream `or 0` keeps NaN.
+    // Unreachable: z.number() rejects NaN at the schema boundary.
     const load = act.icu_training_load || 0;
     dailyLoad.set(dateStr, (dailyLoad.get(dateStr) ?? 0) + load);
   }
@@ -531,6 +533,8 @@ function getDailyLoadBySport(
 
   const bySport = new Map<string, Map<string, number>>();
   for (const act of activities) {
+    // `|| 0` maps a hypothetical NaN load to 0 (skipped); the upstream `or 0`
+    // keeps NaN. Unreachable: z.number() rejects NaN at the schema boundary.
     const load = act.icu_training_load || 0;
     if (load <= 0) continue;
     // Guarded like getDailyLoad: a non-string date buckets to "", which is

@@ -389,8 +389,15 @@ function getActivityZones(
   if (Array.isArray(icuHrZoneTimes) && icuHrZoneTimes.length > 0) {
     const hz: Record<string, number> = {};
     icuHrZoneTimes.forEach((secs, idx) => {
-      if (idx < ZONE_LABELS.length && secs) {
-        hz[ZONE_LABELS[idx]] = secs as number;
+      // Mirror the power-zone guard above: coerce a non-numeric bin to 0 (then
+      // skipped by the truthiness check) instead of storing it. icu_hr_zone_times
+      // is read off the raw, unvalidated record, so a malformed string bin can
+      // reach here — the upstream keeps it and raises on the later sum (an
+      // unportable input the parity gate can't capture), but concatenating a
+      // string into our running zone sums is strictly worse than dropping it.
+      const numericSecs = typeof secs === "number" ? secs : 0;
+      if (idx < ZONE_LABELS.length && numericSecs) {
+        hz[ZONE_LABELS[idx]] = numericSecs;
       }
     });
     if (Object.keys(hz).length > 0) hrZones = hz;
@@ -576,6 +583,9 @@ function selectPrimarySport(activities: Activity[]): string | null {
   const loadByFamilyDate = new Map<string, Map<string, number>>();
 
   for (const act of activities) {
+    // `|| 0` maps a hypothetical NaN load to 0 (skipped); the upstream `or 0`
+    // would keep it (NaN <= 0 is False). Unreachable divergence: z.number()
+    // rejects NaN at the schema boundary, so a NaN load never reaches here.
     const load = act.icu_training_load || 0;
     if (load <= 0) continue;
     const date =
