@@ -55,11 +55,11 @@ export const arbitraryIcuIntervalRep: fc.Arbitrary<IcuIntervalRep> = fc.record({
   average_heartrate: nullableOptional(fc.float({ min: 60, max: 200, noNaN: true })),
 });
 
-/** Zone-time entry — intervals.icu returns the object form `{id, secs}` for
- *  native bins and the bare-number form for pre-flattened payloads. The
- *  schema accepts both per ZoneTimeEntrySchema; this arbitrary exercises
- *  both forms so read-side normalization (metrics/README.md Rule 3) sees
- *  both branches under property tests. */
+/** Zone-time entry for the pace/HR fields — those can appear as the object
+ *  form `{id, secs}` or a bare-number form (pre-flattened payloads), and
+ *  ZoneTimeEntrySchema accepts both; this arbitrary exercises both branches
+ *  under property tests. NOTE: `icu_zone_times` is object-form ONLY — use
+ *  `icuZoneTimeEntry` for it, not this one. */
 const zoneTimeEntry: fc.Arbitrary<number | { id: string; secs: number }> = fc.oneof(
   fc.float({ min: 0, max: 3600, noNaN: true }),
   fc.record({
@@ -69,6 +69,17 @@ const zoneTimeEntry: fc.Arbitrary<number | { id: string; secs: number }> = fc.on
 );
 
 const sevenZoneTimes = fc.array(zoneTimeEntry, { minLength: 7, maxLength: 7 });
+
+/** `icu_zone_times` entry — object form only, matching IcuZoneTimeEntrySchema.
+ *  The upstream reads `zone.get("id")` and raises on a bare number, so the
+ *  schema rejects bare numbers for this field; the arbitrary must not produce
+ *  shapes the schema rejects. */
+const icuZoneTimeEntry: fc.Arbitrary<{ id: string; secs: number }> = fc.record({
+  id: fc.constantFrom("Z1", "Z2", "Z3", "Z4", "Z5", "Z6", "Z7", "SS"),
+  secs: fc.float({ min: 0, max: 3600, noNaN: true }),
+});
+
+const sevenIcuZoneTimes = fc.array(icuZoneTimeEntry, { minLength: 7, maxLength: 7 });
 
 const arbitraryActivityRaw: fc.Arbitrary<Activity> = fc.record({
   // Identity + timing — the API uses both the string form ("i146622609",
@@ -98,7 +109,7 @@ const arbitraryActivityRaw: fc.Arbitrary<Activity> = fc.record({
   average_heartrate: fc.option(fc.float({ min: 60, max: 200, noNaN: true }), { nil: null }),
 
   // Zone-time breakdowns (optional)
-  icu_zone_times: fc.option(sevenZoneTimes, { nil: undefined }),
+  icu_zone_times: fc.option(sevenIcuZoneTimes, { nil: undefined }),
   pace_zone_times: fc.option(sevenZoneTimes, { nil: undefined }),
   hr_zone_times: fc.option(sevenZoneTimes, { nil: undefined }),
 

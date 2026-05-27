@@ -22,11 +22,11 @@ export const IcuIntervalRepSchema = z.looseObject({
 });
 export type IcuIntervalRep = z.infer<typeof IcuIntervalRepSchema>;
 
-/** Per-bin zone-time entry as returned by intervals.icu. The API returns
- *  the object form `{id: "Z1", secs: N}` for native bins and the bare
- *  `number` form for pre-flattened payloads. The lib's own ActivitySchema
- *  encodes the same union; we mirror it here so `z.looseObject()` keeps
- *  its promise — real intervals.icu shape rides through unmodified. */
+/** Per-bin zone-time entry. The pace/HR zone-time fields can appear either as
+ *  the object form `{id: "Z1", secs: N}` or a bare-number form (pre-flattened
+ *  seconds); this union stays permissive for those because their shape isn't
+ *  pinned to the oracle. `icu_zone_times` is the exception — it is object-form
+ *  ONLY (see `IcuZoneTimeEntrySchema`). */
 export const ZoneTimeEntrySchema = z.union([
   z.number().nonnegative(),
   z.looseObject({
@@ -35,6 +35,21 @@ export const ZoneTimeEntrySchema = z.union([
   }),
 ]);
 export type ZoneTimeEntry = z.infer<typeof ZoneTimeEntrySchema>;
+
+/** `icu_zone_times` entry — object form `{id, secs}` only, never a bare number.
+ *  The upstream protocol reads this field with `zone.get("id")` /
+ *  `zone.get("secs")` and raises `AttributeError` on a bare number (an `int`
+ *  has no `.get`). So a bare-number entry is a shape the oracle cannot process
+ *  and the parity gate can never capture; accepting it here would only let it
+ *  reach the read side, which doesn't recognize it and silently undercounts the
+ *  activity's zone time. Reject it at the boundary — object-form is the API's
+ *  native bin shape (confirmed against the upstream's `_get_activity_zones`)
+ *  and the only portable one. */
+export const IcuZoneTimeEntrySchema = z.looseObject({
+  id: z.string().optional(),
+  secs: z.number().nonnegative(),
+});
+export type IcuZoneTimeEntry = z.infer<typeof IcuZoneTimeEntrySchema>;
 
 /** Time-in-zone breakdown — Seiler 3-zone bins are derived from these. */
 export const ZoneTimesSchema = z.looseObject({
@@ -70,12 +85,14 @@ export const ActivitySchema = z.looseObject({
   average_watts: z.number().nullable().optional(),
   average_heartrate: z.number().nullable().optional(),
 
-  // Zone-time breakdowns. See ZoneTimeEntrySchema above for the
-  // number-vs-object union the API actually returns. Nullable because
-  // intervals.icu writes `null` (not just absent) for activities that
-  // lack the zone-time series — e.g., a strength session has no
-  // pace_zone_times and the API ships the field with a null value.
-  icu_zone_times: z.array(ZoneTimeEntrySchema).nullable().optional(),
+  // Zone-time breakdowns. `icu_zone_times` is object-form only
+  // (IcuZoneTimeEntrySchema) — the shape the upstream reads and the only one
+  // the parity gate can capture; the pace/HR fields stay on the permissive
+  // union since their shape isn't pinned. Nullable because intervals.icu
+  // writes `null` (not just absent) for activities that lack the zone-time
+  // series — e.g., a strength session has no pace_zone_times and the API
+  // ships the field with a null value.
+  icu_zone_times: z.array(IcuZoneTimeEntrySchema).nullable().optional(),
   pace_zone_times: z.array(ZoneTimeEntrySchema).nullable().optional(),
   hr_zone_times: z.array(ZoneTimeEntrySchema).nullable().optional(),
 

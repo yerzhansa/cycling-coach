@@ -36,8 +36,16 @@ describe("ActivitySchema (z.looseObject)", () => {
       average_watts: 218,
       average_heartrate: 148,
 
-      // Zone-time breakdowns (named, optional)
-      icu_zone_times: [600, 1800, 2400, 540, 60, 0, 0],
+      // Zone-time breakdowns (named, optional). icu_zone_times is the API's
+      // native object-form bins; hr_zone_times exercises the still-permissive
+      // bare-number union arm.
+      icu_zone_times: [
+        { id: "Z1", secs: 600 },
+        { id: "Z2", secs: 1800 },
+        { id: "Z3", secs: 2400 },
+        { id: "Z4", secs: 540 },
+        { id: "Z5", secs: 60 },
+      ],
       pace_zone_times: undefined,
       hr_zone_times: [500, 1700, 2600, 540, 60, 0, 0],
 
@@ -130,6 +138,18 @@ describe("ActivitySchema (z.looseObject)", () => {
       hr_zone_times: [{ id: "Z1", secs: 500 }, { id: "Z2", secs: 1700 }],
     };
     expect(ActivitySchema.parse(objectFormActivity)).toEqual(objectFormActivity);
+  });
+
+  it("rejects an Activity whose icu_zone_times carries a bare-number entry (the upstream reads zone.get('id') and raises on an int, so bare-number bins are unportable and must not reach the read side)", () => {
+    const bareNumberZoneActivity = {
+      id: 17654324,
+      start_date_local: "2026-04-15T07:30:00",
+      type: "Ride",
+      moving_time: 5400,
+      elapsed_time: 5650,
+      icu_zone_times: [600, 1800, 2400, 540, 60, 0, 0],
+    };
+    expect(ActivitySchema.safeParse(bareNumberZoneActivity).success).toBe(false);
   });
 });
 

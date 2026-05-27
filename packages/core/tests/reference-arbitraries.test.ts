@@ -272,24 +272,22 @@ describe("schema-union coverage (id form, zone-times form, rename-layer fields)"
     expect(numberForm).toBeGreaterThan(40);
   });
 
-  it("arbitraryActivity sometimes produces icu_zone_times in the object form {id, secs} and sometimes the bare-number form", () => {
-    let withObjectEntry = 0;
-    let withNumberEntry = 0;
+  it("arbitraryActivity produces icu_zone_times only in the object form {id, secs} — never a bare number (IcuZoneTimeEntrySchema rejects those)", () => {
+    let withZones = 0;
     fc.assert(
       fc.property(arbitraryActivity, (a) => {
         const zones = a.icu_zone_times;
         if (!Array.isArray(zones) || zones.length === 0) return true;
-        if (zones.some((z) => typeof z === "object" && z !== null)) withObjectEntry++;
-        if (zones.some((z) => typeof z === "number")) withNumberEntry++;
-        return true;
+        withZones++;
+        // The upstream reads `zone.get("id")` and raises on a bare number, so
+        // the schema (and this arbitrary) must keep icu_zone_times object-form.
+        return zones.every((z) => typeof z === "object" && z !== null);
       }),
       { numRuns: 500 },
     );
-    // Each of the 7 entries is ~50/50; an activity with zone-times set will
-    // almost always have at least one of each. ~90% of activities have
-    // zone-times set, so 500 runs → ~450 with both forms present.
-    expect(withObjectEntry).toBeGreaterThan(100);
-    expect(withNumberEntry).toBeGreaterThan(100);
+    // ~90% of generated activities have zone-times set, so 500 runs covers the
+    // object-only invariant on a large sample rather than vacuously.
+    expect(withZones).toBeGreaterThan(100);
   });
 
   it("arbitraryActivity sometimes produces a numeric fitnessAtEnd (rename-layer field — metric tests must exercise the populated branch)", () => {

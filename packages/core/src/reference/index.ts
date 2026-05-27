@@ -81,6 +81,8 @@ export {
   type ZoneTimes,
   ZoneTimeEntrySchema,
   type ZoneTimeEntry,
+  IcuZoneTimeEntrySchema,
+  type IcuZoneTimeEntry,
 } from "./schemas/index.js";
 
 // ─── Trademark policy + anti-corruption layer (ADR-0012) ──────────────
