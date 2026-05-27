@@ -44,10 +44,12 @@ export type ZoneTimeEntry = z.infer<typeof ZoneTimeEntrySchema>;
  *  reach the read side, which doesn't recognize it and silently undercounts the
  *  activity's zone time. Reject it at the boundary — object-form is the API's
  *  native bin shape (confirmed against the upstream's `_get_activity_zones`)
- *  and the only portable one. */
+ *  and the only portable one. `secs` is optional: the oracle reads it as
+ *  `zone.get("secs", 0)` and the reader coerces a missing value to 0, so a
+ *  `{ id }`-only bin is processable (contributes 0), not a parse failure. */
 export const IcuZoneTimeEntrySchema = z.looseObject({
   id: z.string().optional(),
-  secs: z.number().nonnegative(),
+  secs: z.number().nonnegative().optional(),
 });
 export type IcuZoneTimeEntry = z.infer<typeof IcuZoneTimeEntrySchema>;
 

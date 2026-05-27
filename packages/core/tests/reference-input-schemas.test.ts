@@ -151,6 +151,18 @@ describe("ActivitySchema (z.looseObject)", () => {
     };
     expect(ActivitySchema.safeParse(bareNumberZoneActivity).success).toBe(false);
   });
+
+  it("accepts an icu_zone_times object bin without `secs` (the oracle defaults a missing secs to 0 via zone.get('secs', 0), so the bin is processable, not a parse failure)", () => {
+    const missingSecsActivity = {
+      id: 17654325,
+      start_date_local: "2026-04-15T07:30:00",
+      type: "Ride",
+      moving_time: 5400,
+      elapsed_time: 5650,
+      icu_zone_times: [{ id: "Z1", secs: 600 }, { id: "Z2" }],
+    };
+    expect(ActivitySchema.safeParse(missingSecsActivity).success).toBe(true);
+  });
 });
 
 describe("WellnessDaySchema (z.looseObject)", () => {
