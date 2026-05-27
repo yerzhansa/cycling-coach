@@ -5,6 +5,7 @@ import {
   computeLoadRecoveryRatio,
   computeMonotony,
   computeMonotonyInterpretation,
+  computePrimarySportMonotony,
   computeRecoveryIndex,
   computeStrain,
   computeStressTolerance,
@@ -350,5 +351,77 @@ describe("load aggregators — malformed start_date_local is dropped, not thrown
       withMalformed = computeEffectiveMonotony(fixtureOf([...wellFormed, missingDate]));
     }).not.toThrow();
     expect(withMalformed).toBe(baseline);
+  });
+});
+
+describe("computePrimarySportMonotony", () => {
+  const FROZEN = "2026-05-10T12:00:00";
+
+  // The primary sport is the family with the greatest 7-day Load; the
+  // selector uses a strict `total > maxTotal`, so on an exact tie the first
+  // family encountered in fixture order wins (mirroring Python's
+  // `max(dict, key=dict.get)` insertion-order semantics). No golden fixture
+  // hits a deliberate tie, so pin it here.
+  it("breaks an exact Load tie toward the first sport family in fixture order", () => {
+    // Ride and Run each total 300 over the window but with different daily
+    // spreads, so their isolated monotony values differ — which makes the
+    // tiebreak observable.
+    const rideRows = [
+      { start_date_local: "2026-05-04T08:00:00", icu_training_load: 100, type: "Ride" },
+      { start_date_local: "2026-05-05T08:00:00", icu_training_load: 100, type: "Ride" },
+      { start_date_local: "2026-05-06T08:00:00", icu_training_load: 100, type: "Ride" },
+    ];
+    const runRows = [
+      { start_date_local: "2026-05-07T08:00:00", icu_training_load: 50, type: "Run" },
+      { start_date_local: "2026-05-08T08:00:00", icu_training_load: 100, type: "Run" },
+      { start_date_local: "2026-05-09T08:00:00", icu_training_load: 150, type: "Run" },
+    ];
+
+    const rideMonotony = computePrimarySportMonotony(input(rideRows, FROZEN));
+    const runMonotony = computePrimarySportMonotony(input(runRows, FROZEN));
+
+    // Precondition: the two families are distinguishable, so the tiebreak
+    // assertions below aren't vacuous.
+    expect(rideMonotony).not.toBeNull();
+    expect(runMonotony).not.toBeNull();
+    expect(rideMonotony).not.toBe(runMonotony);
+
+    // Equal totals → the first-listed family wins, both orderings round.
+    expect(computePrimarySportMonotony(input([...rideRows, ...runRows], FROZEN))).toBe(
+      rideMonotony,
+    );
+    expect(computePrimarySportMonotony(input([...runRows, ...rideRows], FROZEN))).toBe(
+      runMonotony,
+    );
+  });
+});
+
+describe("computeEffectiveMonotony", () => {
+  const FROZEN = "2026-05-10T12:00:00";
+
+  // Selector branch B: a multi-sport window, but the primary sport's own
+  // monotony is null (here the highest-Load family has fewer than 3 active
+  // days), so the selector falls back to total monotony. Before this, only
+  // the interpretation test and the parity matrix touched the selector — the
+  // primary-null fallback was never pinned directly.
+  it("falls back to total monotony when multi-sport but primary-sport monotony is null", () => {
+    const rows = [
+      // Ride is the highest-Load family (600) but only 2 active days, so its
+      // primary-sport monotony is null (the computer needs ≥ 3).
+      { start_date_local: "2026-05-09T08:00:00", icu_training_load: 300, type: "Ride" },
+      { start_date_local: "2026-05-10T08:00:00", icu_training_load: 300, type: "Ride" },
+      // Run is a second family (so the window is multi-sport) with 3 days.
+      { start_date_local: "2026-05-04T08:00:00", icu_training_load: 50, type: "Run" },
+      { start_date_local: "2026-05-05T08:00:00", icu_training_load: 50, type: "Run" },
+      { start_date_local: "2026-05-06T08:00:00", icu_training_load: 50, type: "Run" },
+    ];
+    const multiSport = input(rows, FROZEN);
+
+    // Multi-sport (Ride + Run) yet the primary family's monotony is null.
+    expect(computePrimarySportMonotony(multiSport)).toBeNull();
+
+    const total = computeMonotony(multiSport);
+    expect(total).not.toBeNull();
+    expect(computeEffectiveMonotony(multiSport)).toBe(total);
   });
 });
