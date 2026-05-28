@@ -41,3 +41,17 @@ export function getFtpHistoryIndoor(
   };
   return fixture.ftp_history_indoor ?? {};
 }
+
+export function getCurrentFtpOutdoor(input: MetricInput): number | null {
+  const fixture = input.fixture as { current_ftp_outdoor?: number | null };
+  return fixture.current_ftp_outdoor ?? null;
+}
+
+export function getFtpHistoryOutdoor(
+  input: MetricInput,
+): Record<string, number> {
+  const fixture = input.fixture as {
+    ftp_history_outdoor?: Record<string, number>;
+  };
+  return fixture.ftp_history_outdoor ?? {};
+}

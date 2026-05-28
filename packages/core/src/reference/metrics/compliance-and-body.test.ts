@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   calculateBenchmarkIndex,
   computeBenchmarkIndoor,
+  computeBenchmarkOutdoor,
   computeConsistencyDetails,
   computeConsistencyIndex,
   formatBenchmarkPercentage,
@@ -437,5 +438,93 @@ describe("computeBenchmarkIndoor", () => {
     // 270 / 280 - 1 = -0.035714… → -0.036. Inside [-0.05, -0.02] → true.
     expect(result.benchmark_index).toBe(-0.036);
     expect(result.seasonal_expected).toBe(true);
+  });
+});
+
+function benchmarkOutdoorInput(
+  overrides: {
+    currentFtpOutdoor?: number | null;
+    ftpHistoryOutdoor?: Record<string, number>;
+    frozenNow?: string;
+  } = {},
+): MetricInput {
+  return {
+    fixture: {
+      current_ftp_outdoor: overrides.currentFtpOutdoor ?? null,
+      ftp_history_outdoor: overrides.ftpHistoryOutdoor ?? {},
+    },
+    frozenNow: overrides.frozenNow ?? "2026-05-10T12:00:00",
+  };
+}
+
+describe("computeBenchmarkOutdoor", () => {
+  it("emits the all-null 5-key dict when current_ftp_outdoor + ftp_history_outdoor are absent (the golden-fixture branch)", () => {
+    // Every current snapshot lands here: the harness passes
+    // (None, None, None) into _calculate_derived_metrics for both indoor
+    // and outdoor, so the emission dict collapses to all-null on the
+    // outdoor branch too.
+    const env: MetricInput = {
+      fixture: {},
+      frozenNow: "2026-05-10T12:00:00",
+    };
+    expect(computeBenchmarkOutdoor(env)).toEqual({
+      current_ftp: null,
+      ftp_8_weeks_ago: null,
+      benchmark_index: null,
+      benchmark_percentage: null,
+      seasonal_expected: null,
+    });
+  });
+
+  it("emits the full 5-key populated dict when a match exists in the ±7d window", () => {
+    // frozenNow 2026-05-10 → May → Build / Early Race Season → [0.01, 0.04].
+    // 320 / 290 - 1 = 0.10344… → round 3 dp = 0.103 → above 0.04 → expected
+    // false. benchmark_percentage = (0.103 * 100).toFixed(1) = '+10.3%'.
+    const env = benchmarkOutdoorInput({
+      currentFtpOutdoor: 320,
+      ftpHistoryOutdoor: { "2026-03-15": 290 },
+    });
+    expect(computeBenchmarkOutdoor(env)).toEqual({
+      current_ftp: 320,
+      ftp_8_weeks_ago: 290,
+      benchmark_index: 0.103,
+      benchmark_percentage: "+10.3%",
+      seasonal_expected: false,
+    });
+  });
+
+  it("uses the outdoor accessors — does NOT cross-read the indoor fixture keys", () => {
+    // Mixed fixture: indoor keys are present (and would yield a populated
+    // dict on the indoor branch) but outdoor keys are absent. The outdoor
+    // branch must still collapse to all-null — proves the accessor split.
+    const env: MetricInput = {
+      fixture: {
+        current_ftp_indoor: 300,
+        ftp_history_indoor: { "2026-03-15": 270 },
+      },
+      frozenNow: "2026-05-10T12:00:00",
+    };
+    expect(computeBenchmarkOutdoor(env)).toEqual({
+      current_ftp: null,
+      ftp_8_weeks_ago: null,
+      benchmark_index: null,
+      benchmark_percentage: null,
+      seasonal_expected: null,
+    });
+  });
+
+  it("returns seasonal_expected=true when the index sits inside the per-phase range", () => {
+    // 285 / 280 - 1 = 0.017857… → round 3 dp = 0.018. In Build [0.01, 0.04].
+    const env = benchmarkOutdoorInput({
+      currentFtpOutdoor: 285,
+      ftpHistoryOutdoor: { "2026-03-15": 280 },
+    });
+    expect(computeBenchmarkOutdoor(env)).toEqual({
+      current_ftp: 285,
+      ftp_8_weeks_ago: 280,
+      benchmark_index: 0.018,
+      benchmark_percentage: "+1.8%",
+      seasonal_expected: true,
+    });
   });
 });
