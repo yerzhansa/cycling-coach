@@ -6,6 +6,7 @@ import {
   computeBenchmarkOutdoor,
   computeConsistencyDetails,
   computeConsistencyIndex,
+  computeHasIntervals,
   formatBenchmarkPercentage,
   isBenchmarkExpected,
 } from "./compliance-and-body.js";
@@ -543,5 +544,161 @@ describe("computeBenchmarkOutdoor", () => {
       benchmark_percentage: "+1.8%",
       seasonal_expected: true,
     });
+  });
+});
+
+describe("computeHasIntervals", () => {
+  // The v3.106 fix narrows the predicate to WORK segments only — a non-empty
+  // intervals list is no longer sufficient. The five branches at
+  // `sync.py:7866-7873` are exercised here at unit scope; the populated
+  // fixture exercises the same five at the parity gate.
+  interface IntervalEntry {
+    intervals?: { type: string }[];
+    [k: string]: unknown;
+  }
+
+  function withIntervals(
+    activities: { id: string | number }[],
+    intervals: Record<string, IntervalEntry>,
+  ): MetricInput {
+    return {
+      fixture: {
+        activities: activities.map((a) => ({
+          id: a.id,
+          start_date_local: "2026-05-10T07:00:00",
+          type: "Ride",
+          moving_time: 1800,
+          elapsed_time: 1900,
+        })),
+        intervals,
+      } as MetricInput["fixture"],
+      frozenNow: "2026-05-10T12:00:00",
+    };
+  }
+
+  it("flags an activity true when its lookup entry has a WORK segment (branch a)", () => {
+    const env = withIntervals(
+      [{ id: "a1" }],
+      { a1: { intervals: [{ type: "WORK" }] } },
+    );
+    expect(computeHasIntervals(env)).toEqual({ a1: true });
+  });
+
+  it("flags an activity false when its lookup entry has only RECOVERY segments (branch b, v3.106 regression test)", () => {
+    // Pre-v3.106 this returned true (non-empty intervals list). The fix at
+    // sync.py:133 narrowed the predicate; whole-session RECOVERY placeholders
+    // on unstructured endurance rides now classify as false.
+    const env = withIntervals(
+      [{ id: "a2" }],
+      { a2: { intervals: [{ type: "RECOVERY" }] } },
+    );
+    expect(computeHasIntervals(env)).toEqual({ a2: false });
+  });
+
+  it("flags an activity false when its lookup entry has an empty intervals list (branch c)", () => {
+    const env = withIntervals(
+      [{ id: "a3" }],
+      { a3: { intervals: [] } },
+    );
+    expect(computeHasIntervals(env)).toEqual({ a3: false });
+  });
+
+  it("flags an activity false when it is NOT in the intervals lookup (branch d, default)", () => {
+    // No entry for a4 in the lookup. Upstream's `intervals_by_id.get(id)`
+    // returns None; the `if _entry:` gate short-circuits.
+    const env = withIntervals([{ id: "a4" }], {});
+    expect(computeHasIntervals(env)).toEqual({ a4: false });
+  });
+
+  it("flags an activity false when its lookup entry is missing the intervals key (branch e, `or []` short-circuit)", () => {
+    // Mirrors sync.py:7872 — `(_entry.get("intervals") or [])` coerces a
+    // missing or falsy `intervals` to an empty iterable; the WORK check
+    // then has nothing to match.
+    const env = withIntervals(
+      [{ id: "a5" }],
+      { a5: { dfa: { quality: { sufficient: false } } } },
+    );
+    expect(computeHasIntervals(env)).toEqual({ a5: false });
+  });
+
+  it("returns an empty map when there are no activities", () => {
+    const env = withIntervals([], {});
+    expect(computeHasIntervals(env)).toEqual({});
+  });
+
+  it("stringifies numeric activity ids for the lookup (mirrors `str(act.get('id'))` at sync.py:7870)", () => {
+    // Real intervals.icu activity ids round-trip as numbers on some endpoints.
+    // The upstream's lookup key is `str(activity_id)`, so the TS port must
+    // stringify too.
+    const env = withIntervals(
+      [{ id: 12345 }],
+      { "12345": { intervals: [{ type: "WORK" }] } },
+    );
+    expect(computeHasIntervals(env)).toEqual({ "12345": true });
+  });
+
+  it("emits the per-activity map with keys sorted ascending as strings (architect Q1+Q9 push-back)", () => {
+    // The harness sorts via `sorted(d.keys())` before emit. The TS port also
+    // sorts so call-site iteration order is locked across Pyodide / CPython /
+    // Node. Non-integer-like keys are used here because V8 / SpiderMonkey
+    // / JSC iterate integer-like string keys ('1','2','10') in numeric
+    // ascending order regardless of insertion order — a quirk of the
+    // ECMAScript Object key-ordering spec that masks insertion-order bugs
+    // on numeric-id activities (the parity gate's deepCompare is order-
+    // insensitive, so this matters for downstream LLM iteration only).
+    // Real intervals.icu ids carry the 'i' prefix (e.g. 'i146622609'),
+    // which stays non-integer-like.
+    const env = withIntervals(
+      [{ id: "i20" }, { id: "i03" }, { id: "i10" }],
+      {
+        i20: { intervals: [{ type: "WORK" }] },
+        i03: { intervals: [{ type: "WORK" }] },
+        i10: { intervals: [{ type: "RECOVERY" }] },
+      },
+    );
+    expect(Object.keys(computeHasIntervals(env))).toEqual([
+      "i03",
+      "i10",
+      "i20",
+    ]);
+  });
+
+  it("returns true when any segment is WORK (mixed list with RECOVERY + WORK)", () => {
+    // Defends against an over-narrow predicate that requires ALL segments
+    // to be WORK. Upstream uses `any(...)` semantics.
+    const env = withIntervals(
+      [{ id: "mix" }],
+      {
+        mix: {
+          intervals: [
+            { type: "RECOVERY" },
+            { type: "WORK" },
+            { type: "RECOVERY" },
+          ],
+        },
+      },
+    );
+    expect(computeHasIntervals(env)).toEqual({ mix: true });
+  });
+
+  it("treats a missing intervals top-level key as an empty lookup (FixtureSchema .optional() compatibility)", () => {
+    // ADR-0017 + architect Q8 push-back: existing fixtures without an
+    // `intervals` top-level key must still classify cleanly; every
+    // activity falls into branch (d).
+    const env: MetricInput = {
+      fixture: {
+        activities: [
+          {
+            id: "a1",
+            start_date_local: "2026-05-10T07:00:00",
+            type: "Ride",
+            moving_time: 1800,
+            elapsed_time: 1900,
+          },
+        ],
+      } as MetricInput["fixture"],
+      frozenNow: "2026-05-10T12:00:00",
+    };
+    expect(computeHasIntervals(env)).toEqual({ a1: false });
   });
 });

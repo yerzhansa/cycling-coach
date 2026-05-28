@@ -1,0 +1,30 @@
+{
+  "metric": "has_intervals",
+  "athlete": "data-gap-mid-history",
+  "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
+  "section_11_protocol_version": "3.112",
+  "frozen_now": "2026-05-20T12:00:00",
+  "value": {
+    "100000": false,
+    "100001": false,
+    "100002": false,
+    "100003": false,
+    "100004": false,
+    "100005": false,
+    "100006": false,
+    "100007": false,
+    "100008": false,
+    "100009": false,
+    "100010": false,
+    "100011": false,
+    "100012": false,
+    "100013": false,
+    "100014": false,
+    "100015": false,
+    "100016": false,
+    "100017": false,
+    "100018": false,
+    "100019": false,
+    "100020": false
+  }
+}

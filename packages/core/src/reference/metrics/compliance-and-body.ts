@@ -19,7 +19,10 @@ import {
   getCurrentFtpOutdoor,
   getFtpHistoryIndoor,
   getFtpHistoryOutdoor,
+  getIntervalsLookup,
   getPastEvents,
+  type IntervalsEntry,
+  type IntervalsLookup,
   type MetricInput,
 } from "./metric-input.js";
 import { computeSeasonalContext, type SeasonalContext } from "./seasonal-context.js";
@@ -319,6 +322,64 @@ export function computeBenchmarkIndoor(input: MetricInput): BenchmarkEmission {
         : formatBenchmarkPercentage(benchmarkIndex),
     seasonal_expected: seasonalExpected,
   };
+}
+
+/**
+ * v3.106 has-intervals classifier. Per-activity flag — `true` only when the
+ * activity's lookup entry exists AND carries at least one segment with
+ * `type === "WORK"`. RECOVERY-only placeholders, empty interval lists,
+ * activities absent from the lookup, and lookup entries missing the
+ * `intervals` key all return `false`. The v3.105 implementation flagged
+ * any non-empty intervals list as structured; the v3.106 fix narrows the
+ * predicate to WORK segments only so that intervals.icu's whole-session
+ * RECOVERY placeholder on unstructured endurance rides no longer
+ * misclassifies them.
+ *
+ * Upstream source mirrored line-by-line: `sync.py:7866-7873`. v3.106
+ * changelog entry at `sync.py:133` documents the regression fix.
+ */
+function hasIntervalsForActivity(
+  activity: Activity,
+  intervalsLookup: IntervalsLookup,
+): boolean {
+  const entry: IntervalsEntry | undefined = intervalsLookup[String(activity.id)];
+  if (!entry) return false;
+  const segments = entry.intervals ?? [];
+  for (const segment of segments) {
+    if (segment.type === "WORK") return true;
+  }
+  return false;
+}
+
+/**
+ * Per-activity has-intervals emission. Returns a map keyed by stringified
+ * `activity.id` (mirroring upstream's `str(act.get("id"))` lookup at
+ * `sync.py:7870`). Keys are sorted ascending as strings to lock JSON
+ * key-order across Pyodide / CPython / Node (architect Q1+Q9 push-back
+ * on the snapshot harness).
+ *
+ * Upstream source: per-activity loop at `sync.py:7866-7873` inside
+ * `_format_activities`; this Reference-port hoists the predicate into a
+ * standalone derived map so the parity gate can assert it without
+ * exposing the whole formatted-activity dict.
+ */
+export function computeHasIntervals(
+  input: MetricInput,
+): Record<string, boolean> {
+  const intervalsLookup = getIntervalsLookup(input);
+  const activities = getActivities(input);
+
+  const flagByActivityId: Record<string, boolean> = {};
+  for (const activity of activities) {
+    const key = String(activity.id);
+    flagByActivityId[key] = hasIntervalsForActivity(activity, intervalsLookup);
+  }
+
+  const sorted: Record<string, boolean> = {};
+  for (const key of Object.keys(flagByActivityId).sort()) {
+    sorted[key] = flagByActivityId[key]!;
+  }
+  return sorted;
 }
 
 /**

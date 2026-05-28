@@ -223,6 +223,23 @@ export const FixtureSchema = z
     current_ftp_outdoor: z.number().nullable().optional(),
     ftp_history_indoor: z.record(z.string(), z.number()).optional(),
     ftp_history_outdoor: z.record(z.string(), z.number()).optional(),
+
+    // Per-activity intervals lookup, mirroring upstream's intervals.json
+    // surface (a distinct API endpoint from activities). Keyed by activity
+    // id as a string. Optional so existing fixtures without the key still
+    // validate. Only the `intervals[].type` field is consumed by the
+    // current Reference port (`has_intervals` WORK-segment classifier);
+    // other fields ride through via the loose row schemas. See ADR-0017.
+    intervals: z
+      .record(
+        z.string(),
+        z.looseObject({
+          intervals: z
+            .array(z.looseObject({ type: z.string() }))
+            .optional(),
+        }),
+      )
+      .optional(),
   })
   .strict();
 export type FixtureShape = z.infer<typeof FixtureSchema>;

@@ -65,6 +65,22 @@
       ],
       "decoupling": -3.8,
       "icu_efficiency_factor": 1.10
+    },
+    {
+      "id": "pbc4",
+      "start_date_local": "2026-04-05T07:00:00",
+      "type": "Ride",
+      "name": "out-of-28d-window",
+      "moving_time": 1800,
+      "elapsed_time": 1900
+    },
+    {
+      "id": "pbc5",
+      "start_date_local": "2026-04-01T07:00:00",
+      "type": "Ride",
+      "name": "out-of-28d-window",
+      "moving_time": 1800,
+      "elapsed_time": 1900
     }
   ],
   "wellness": [
@@ -161,5 +177,11 @@
     "2026-02-01": 255,
     "2026-03-15": 260,
     "2026-04-15": 265
+  },
+  "intervals": {
+    "pbc1": { "intervals": [{ "type": "WORK", "duration": 300 }] },
+    "pbc2": { "intervals": [{ "type": "RECOVERY", "duration": 600 }] },
+    "pbc4": { "intervals": [] },
+    "pbc5": { "dfa": { "quality": { "sufficient": false } } }
   }
 }

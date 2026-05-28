@@ -280,6 +280,7 @@ _ALLOWED_OPTIONAL_PATHS = {
     "FIXTURE.current_ftp_outdoor",
     "FIXTURE.ftp_history_indoor",
     "FIXTURE.ftp_history_outdoor",
+    "FIXTURE.intervals",
 }
 
 def _normalize_path(path):
@@ -425,6 +426,42 @@ except Exception as e:
     }
 
 if "__error__" not in derived:
+    # === has_intervals per-activity classifier (v3.106) ===
+    # Hoisted from sync.py:7866-7873 inside _format_activities. The upstream
+    # emits has_intervals per activity in the formatted activity dict; we
+    # surface it as a top-level derived key so the parity gate can assert
+    # it without ingesting the full per-activity display block (which mixes
+    # protocol output with formatting orthogonal to the predicate).
+    #
+    # Bypass _TrackedDict on the intervals lookup by reparsing FIXTURE_JSON:
+    # (a) the upstream's intervals_by_id is built from self._intervals_data
+    #     (a separate API surface), so the contract tracker has nothing to
+    #     assert on it; (b) branch (e) of the predicate — entry present
+    #     without an 'intervals' key — would otherwise raise a spurious
+    #     missing-key event on _entry.get('intervals').
+    _raw_fixture = json.loads(FIXTURE_JSON)
+    _intervals_raw = _raw_fixture.get("intervals") or {}
+    _has_intervals = {}
+    for _act in _activities_all:
+        if not isinstance(_act, dict):
+            continue
+        _act_id = str(_act.get("id"))
+        _entry = _intervals_raw.get(_act_id)
+        _flag = False
+        if _entry:
+            for _seg in (_entry.get("intervals") or []):
+                if isinstance(_seg, dict) and _seg.get("type") == "WORK":
+                    _flag = True
+                    break
+        _has_intervals[_act_id] = _flag
+    # Explicit sort defends per-activity-map key order across Pyodide /
+    # CPython / Node (architect Q1+Q9). json.dumps(sort_keys=True) below
+    # already sorts globally; the explicit pre-sort keeps the convention
+    # legible at the point the map is constructed.
+    derived["has_intervals"] = {
+        k: _has_intervals[k] for k in sorted(_has_intervals.keys())
+    }
+
     _unallowed = sorted({
         p for p in _TRACKED_MISSING
         if _normalize_path(p) not in _ALLOWED_OPTIONAL_PATHS

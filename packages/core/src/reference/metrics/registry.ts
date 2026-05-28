@@ -13,6 +13,7 @@ import {
   computeBenchmarkOutdoor,
   computeConsistencyDetails,
   computeConsistencyIndex,
+  computeHasIntervals,
 } from "./compliance-and-body.js";
 import {
   computeEasyTimeRatio,
@@ -71,4 +72,5 @@ export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {
   seasonal_context: { compute: computeSeasonalContext },
   benchmark_indoor: { compute: computeBenchmarkIndoor },
   benchmark_outdoor: { compute: computeBenchmarkOutdoor },
+  has_intervals: { compute: computeHasIntervals },
 };

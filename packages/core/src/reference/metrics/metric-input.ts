@@ -4,6 +4,15 @@ import type {
   PlannedEvent,
 } from "../schemas/inputs.js";
 
+/** Per-activity intervals entry projected to the fields the Reference layer
+ *  consumes. Mirrors the upstream's intervals.json row shape (a distinct API
+ *  surface from `activities`). The `intervals` sub-array can be absent, empty,
+ *  or carry segments with `type` strings like `"WORK"` / `"RECOVERY"`. */
+export interface IntervalsEntry {
+  intervals?: { type: string }[];
+}
+export type IntervalsLookup = Record<string, IntervalsEntry>;
+
 /**
  * The contract between a metric port and the parity gate.
  *
@@ -49,4 +58,8 @@ export function getFtpHistoryOutdoor(
   input: MetricInput,
 ): Record<string, number> {
   return input.fixture.ftp_history_outdoor ?? {};
+}
+
+export function getIntervalsLookup(input: MetricInput): IntervalsLookup {
+  return (input.fixture.intervals ?? {}) as IntervalsLookup;
 }
