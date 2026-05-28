@@ -27,3 +27,17 @@ export function getPastEvents(input: MetricInput): PlannedEvent[] {
   const fixture = input.fixture as { past_events?: PlannedEvent[] };
   return fixture.past_events ?? [];
 }
+
+export function getCurrentFtpIndoor(input: MetricInput): number | null {
+  const fixture = input.fixture as { current_ftp_indoor?: number | null };
+  return fixture.current_ftp_indoor ?? null;
+}
+
+export function getFtpHistoryIndoor(
+  input: MetricInput,
+): Record<string, number> {
+  const fixture = input.fixture as {
+    ftp_history_indoor?: Record<string, number>;
+  };
+  return fixture.ftp_history_indoor ?? {};
+}
