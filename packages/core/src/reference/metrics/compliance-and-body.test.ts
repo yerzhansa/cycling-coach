@@ -332,6 +332,24 @@ describe("calculateBenchmarkIndex", () => {
     );
     expect(result).toEqual({ benchmarkIndex: 0.12, ftp8WeeksAgo: 250 });
   });
+
+  it("rejects calendar-invalid dates that JS Date.UTC would silently normalise (Feb 30 etc.)", () => {
+    // Date.UTC(2026, 1, 30) rolls to 2026-03-02 — without a round-trip check
+    // the entry would slip into the ±7d window around the 2026-03-01 target
+    // (frozenNow 2026-04-26) and bind ftp_8_weeks_ago to 999. Python's
+    // strptime raises ValueError and the except clause skips, so the only
+    // surviving entry must be the calendar-real 2026-03-04 one.
+    const result = calculateBenchmarkIndex(
+      280,
+      {
+        "2026-02-30": 999, // not a real date
+        "2026-04-31": 998, // not a real date
+        "2026-03-04": 250,
+      },
+      "2026-04-26T12:00:00",
+    );
+    expect(result).toEqual({ benchmarkIndex: 0.12, ftp8WeeksAgo: 250 });
+  });
 });
 
 describe("isBenchmarkExpected", () => {
@@ -339,9 +357,8 @@ describe("isBenchmarkExpected", () => {
     expect(isBenchmarkExpected(null, "Build / Early Race Season")).toBeNull();
   });
 
-  it("returns null for an unrecognised seasonal context (incl. the defensive Unknown)", () => {
+  it("returns null for the defensive Unknown phase", () => {
     expect(isBenchmarkExpected(0.03, "Unknown")).toBeNull();
-    expect(isBenchmarkExpected(0.03, "something else")).toBeNull();
   });
 
   it("matches the per-phase expectations table at the inclusive endpoints", () => {

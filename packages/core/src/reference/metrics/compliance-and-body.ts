@@ -17,7 +17,7 @@ import {
   getPastEvents,
   type MetricInput,
 } from "./metric-input.js";
-import { computeSeasonalContext } from "./seasonal-context.js";
+import { computeSeasonalContext, type SeasonalContext } from "./seasonal-context.js";
 
 const CYCLING_TYPES = new Set([
   "Ride",
@@ -182,9 +182,15 @@ export interface BenchmarkEmission {
 
 const MS_PER_DAY = 86_400_000;
 
-// Seasonal expectations table, mirroring sync.py:3590-3596. Iteration order
-// is irrelevant — the lookup is by exact-match string key.
-const SEASONAL_EXPECTATIONS: Record<string, readonly [number, number]> = {
+// Seasonal expectations table, mirroring sync.py:3590-3596. Keyed by the
+// `SeasonalContext` union (minus `Unknown`) so that the lookup is checked at
+// compile time: a typo or a phase added to `SeasonalContext` without a paired
+// range here becomes a TypeScript error rather than a silent `null` at the
+// `seasonal_expected` emission.
+const SEASONAL_EXPECTATIONS: Record<
+  Exclude<SeasonalContext, "Unknown">,
+  readonly [number, number]
+> = {
   "Off-season / Transition": [-0.05, -0.02],
   "Early Base": [-0.02, 0.01],
   "Late Base / Build": [0.02, 0.05],
@@ -262,12 +268,11 @@ export function calculateBenchmarkIndex(
  */
 export function isBenchmarkExpected(
   benchmarkIndex: number | null,
-  seasonalContext: string,
+  seasonalContext: SeasonalContext,
 ): boolean | null {
   if (benchmarkIndex === null) return null;
-  const range = SEASONAL_EXPECTATIONS[seasonalContext];
-  if (!range) return null;
-  const [low, high] = range;
+  if (seasonalContext === "Unknown") return null;
+  const [low, high] = SEASONAL_EXPECTATIONS[seasonalContext];
   return low <= benchmarkIndex && benchmarkIndex <= high;
 }
 
@@ -377,7 +382,12 @@ function isoToMs(iso: string): number {
 function parseIsoDateMidnightMs(dateStr: string): number | null {
   // sync.py:2221 wraps the strptime in try/except; malformed entries are
   // skipped silently. Mirror that here — anything that isn't strict
-  // YYYY-MM-DD with calendar-plausible month/day is dropped.
+  // YYYY-MM-DD with a calendar-real month/day is dropped. The round-trip
+  // check is load-bearing: `Date.UTC(2026, 1, 30)` silently normalises to
+  // 2026-03-02, but `datetime.strptime("2026-02-30", "%Y-%m-%d")` raises
+  // and the upstream `except` skips the entry. Without the check, a
+  // calendar-invalid history key would slip into the ±7d window with the
+  // wrong timestamp and break parity.
   if (typeof dateStr !== "string") return null;
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
   if (!match) return null;
@@ -385,5 +395,14 @@ function parseIsoDateMidnightMs(dateStr: string): number | null {
   const mo = Number(match[2]);
   const d = Number(match[3]);
   if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
-  return Date.UTC(y, mo - 1, d);
+  const ms = Date.UTC(y, mo - 1, d);
+  const back = new Date(ms);
+  if (
+    back.getUTCFullYear() !== y ||
+    back.getUTCMonth() + 1 !== mo ||
+    back.getUTCDate() !== d
+  ) {
+    return null;
+  }
+  return ms;
 }
