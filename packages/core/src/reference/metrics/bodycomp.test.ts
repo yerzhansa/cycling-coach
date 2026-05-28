@@ -277,43 +277,6 @@ describe("computeWeightSignal", () => {
       );
       expect(r?.wkg_block_start).toBeUndefined();
     });
-
-    it("nearestInRange picks newest on a tied distance (newest-first iteration)", () => {
-      // Anchor for last-4 is today (offset 0). Same distance both directions
-      // is impossible inside [today-3, today] because today itself is the anchor.
-      // Construct a tie within first-4: anchor is today-27. Days today-26 and
-      // today-25 are both distance 1 and 2 — different distances. To force a
-      // tie we need symmetric distances. Use anchor today-25 (mid of [today-27,
-      // today-24]): days today-27 and today-23 would be ±2 — but today-23 is
-      // outside the range. Instead test that on a tied window with two entries
-      // newest-first iteration picks the newer.
-      //
-      // Setup: first-4 window [today-27, today-24], anchor today-27.
-      //   today-26 (dist 1) and today-26 (dist 1) — same date can't tie.
-      //   today-25 (dist 2) and today-24 (dist 3) — different.
-      // The newest-first tiebreak is exercised when distances are equal.
-      // We force a tie by constructing two entries at SAME distance via
-      // distinct dates: today-27 (dist 0) and today-25 (dist 2) — different.
-      // The strict `< bestDist` (not `<=`) tiebreak means the FIRST seen wins,
-      // which on newest-first means the most-recent entry. Verify with two
-      // entries at distance 2 from anchor today-27: today-25 (dist 2) is the
-      // only such day (today-29 would be out-of-range). So no real tie exists
-      // in the first-4 anchor=today-27 config.
-      //
-      // Construct an artificial tie via the last-4 window with anchor=today:
-      // today-1 (dist 1), today-1 again is impossible. Tie requires equidistant
-      // dates from anchor; only achievable when the window straddles the anchor.
-      // For the last-4 window [today-3, today], anchor=today, no two distinct
-      // dates can tie. For the first-4 window [today-27, today-24], anchor=
-      // today-27, no two dates can tie either (each date is uniquely distant).
-      //
-      // Conclusion: the upstream's _nearest_in_range cannot produce a tie under
-      // the calling convention (both anchors are at window boundaries). The
-      // newest-first iteration is still the documented protocol; we mirror it
-      // and rely on parity-gate bit-identity for tiebreak ordering rather than
-      // a unit-level forced tie.
-      expect(true).toBe(true);
-    });
   });
 
   describe("weight_7d_avg_kg", () => {
