@@ -81,6 +81,7 @@ export const ActivitySchema = z.looseObject({
   // ActivitySchema marks them nullish for the same reason.
   icu_training_load: z.number().nonnegative().optional(),
   icu_intensity: z.number().nonnegative().optional(),
+  icu_rpe: z.number().nullable().optional(),
 
   // Power + HR. Optional because real activities can lack a
   // power meter (no Ride power data) or a HR strap (forgotten / dead).

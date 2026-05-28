@@ -447,11 +447,7 @@ export function computeEffortResponseSignal(
   for (const activity of activities) {
     const key = String(activity.id);
     const intensity = activity.icu_intensity ?? null;
-    const rpe =
-      ((activity as Record<string, unknown>).icu_rpe as
-        | number
-        | null
-        | undefined) ?? null;
+    const rpe = activity.icu_rpe ?? null;
     verdictByActivityId[key] = classifyEffortResponse(intensity, rpe);
   }
 
