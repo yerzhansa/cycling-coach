@@ -183,3 +183,46 @@ export const PlannedEventSchema = z.looseObject({
   name: z.string().optional(),
 });
 export type PlannedEvent = z.infer<typeof PlannedEventSchema>;
+
+/**
+ * Top-level envelope for a golden fixture. The shape every parity-gate
+ * metric receives. Strict at the envelope level (rogue top-level keys
+ * fail the parse — typos can't masquerade as silently-present optional
+ * fields); per-row schemas remain `z.looseObject()` so real upstream
+ * shape rides through (see the file header on the trademark-hygiene
+ * justification for that decision).
+ *
+ * Adding a new field is an explicit schema change: a new fixture key
+ * that isn't here fails parse at the gate boundary, forcing the
+ * accessor + schema to land in lockstep. That friction is the point —
+ * it's what stops a sixth-or-seventh ad-hoc `as { ... }` cast from
+ * accreting in metric files when an author judges the schema-update
+ * tax to be higher than an inline cast (the pattern that proliferated
+ * before this seam landed).
+ *
+ * Used by:
+ *   - `tools/check-metric-parity.ts` — parses every fixture at the
+ *     gate boundary; metric implementations see a typed shape, never
+ *     `unknown`.
+ *   - `packages/core/tests/helpers/load-fixture.ts` — the test loader
+ *     re-uses this schema as its validation surface (no duplicate
+ *     definition).
+ */
+export const FixtureSchema = z
+  .object({
+    activities: z.array(ActivitySchema),
+    wellness: z.array(WellnessDaySchema),
+    ftp_history: z.array(FtpHistoryPointSchema),
+
+    // Optional fixture extensions for the compliance + benchmark batch.
+    // None of the current committed fixtures populate these; the schema
+    // declares them so future populated-branch fixtures can land
+    // without a rogue-key parse failure.
+    past_events: z.array(PlannedEventSchema).optional(),
+    current_ftp_indoor: z.number().nullable().optional(),
+    current_ftp_outdoor: z.number().nullable().optional(),
+    ftp_history_indoor: z.record(z.string(), z.number()).optional(),
+    ftp_history_outdoor: z.record(z.string(), z.number()).optional(),
+  })
+  .strict();
+export type FixtureShape = z.infer<typeof FixtureSchema>;

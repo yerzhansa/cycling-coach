@@ -75,6 +75,8 @@ export {
   type FtpHistoryPoint,
   PlannedEventSchema,
   type PlannedEvent,
+  FixtureSchema,
+  type FixtureShape,
   IcuIntervalRepSchema,
   type IcuIntervalRep,
   ZoneTimesSchema,

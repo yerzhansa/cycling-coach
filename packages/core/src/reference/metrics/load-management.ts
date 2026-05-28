@@ -468,8 +468,7 @@ function isValidHrv(value: number | null | undefined): value is number {
 // latest. Fixtures are trusted at the gate boundary (Zod ran upstream
 // of snapshot capture), matching the `getActivities` cast.
 function getWellnessWindow(input: MetricInput, days: number): WellnessDay[] {
-  const fixture = input.fixture as { wellness?: WellnessDay[] };
-  const wellness = fixture.wellness ?? [];
+  const wellness = input.fixture.wellness;
   const oldest = isoDateDaysBefore(input.frozenNow, days - 1);
   const today = input.frozenNow.slice(0, 10);
   return wellness.filter((w) => {

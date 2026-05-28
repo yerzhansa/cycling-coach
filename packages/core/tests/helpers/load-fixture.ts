@@ -6,26 +6,19 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { z, type ZodTypeAny } from "zod";
+import { type ZodTypeAny, type z } from "zod";
 
 import {
-  ActivitySchema,
-  FtpHistoryPointSchema,
-  WellnessDaySchema,
+  FixtureSchema,
+  type FixtureShape,
 } from "../../src/reference/schemas/inputs.js";
 
-/** Aggregate envelope for committed golden fixtures. Top-level `.strict()`
- *  ensures the envelope has exactly the 3 named arrays — no rogue keys
- *  masquerading as fixture data. Per-row schemas are `z.looseObject()` so
- *  real intervals.icu shape rides through without losing TP-trademark fields. */
-export const GoldenFixtureSchema = z
-  .object({
-    activities: z.array(ActivitySchema),
-    wellness: z.array(WellnessDaySchema),
-    ftp_history: z.array(FtpHistoryPointSchema),
-  })
-  .strict();
-export type GoldenFixture = z.infer<typeof GoldenFixtureSchema>;
+/** Re-export the canonical fixture schema for in-package test callers.
+ *  Single source of truth for the envelope shape lives in
+ *  `reference/schemas/inputs.ts` (ADR-0017); both this helper and the
+ *  parity gate at `tools/check-metric-parity.ts` consume it from there. */
+export const GoldenFixtureSchema = FixtureSchema;
+export type GoldenFixture = FixtureShape;
 
 const DEFAULT_FIXTURES_ROOT = resolve(
   dirname(fileURLToPath(import.meta.url)),

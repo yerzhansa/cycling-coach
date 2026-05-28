@@ -27,6 +27,10 @@ import {
   METRIC_REGISTRY,
   type MetricRegistryEntry,
 } from "../packages/core/src/reference/metrics/registry.js";
+import {
+  FixtureSchema,
+  type FixtureShape,
+} from "../packages/core/src/reference/schemas/inputs.js";
 
 export type { MetricInput, MetricRegistryEntry };
 export { METRIC_REGISTRY };
@@ -248,13 +252,22 @@ export function loadSnapshot(athlete: string, metric: string): Snapshot {
   return JSON.parse(readFileSync(path, "utf8")) as Snapshot;
 }
 
-// Returns the parsed JSON as `unknown`. The gate intentionally does not
-// Zod-validate fixtures here — that's a metric-function entry concern.
-// (`packages/core/tests/helpers/load-fixture.ts` is the validating loader
-// for in-package tests.)
-export function loadGoldenFixture(athlete: string): unknown {
+// Validates the fixture against `FixtureSchema` at the gate boundary
+// (ADR-0017). Failures throw with the fixture path and the Zod issue
+// tree so a malformed fixture surfaces here, not deep inside a metric.
+// Top-level keys are strict — a rogue field (typo, undeclared addition)
+// fails the parse; per-row schemas stay loose so real upstream shape
+// rides through.
+export function loadGoldenFixture(athlete: string): FixtureShape {
   const path = join(FIXTURES_ROOT, `${athlete}.json`);
-  return JSON.parse(readFileSync(path, "utf8"));
+  const raw = JSON.parse(readFileSync(path, "utf8"));
+  const result = FixtureSchema.safeParse(raw);
+  if (!result.success) {
+    throw new Error(
+      `fixture ${athlete}.json failed schema parse:\n${result.error.message}`,
+    );
+  }
+  return result.data;
 }
 
 // ─── Discovery ─────────────────────────────────────────────────────────
