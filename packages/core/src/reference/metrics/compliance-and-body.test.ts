@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   calculateBenchmarkIndex,
+  classifyEffortResponse,
   computeBenchmarkIndoor,
   computeBenchmarkOutdoor,
   computeConsistencyDetails,
   computeConsistencyIndex,
+  computeEffortResponseSignal,
   computeHasIntervals,
   formatBenchmarkPercentage,
   isBenchmarkExpected,
@@ -699,5 +701,162 @@ describe("computeHasIntervals", () => {
       frozenNow: "2026-05-10T12:00:00",
     };
     expect(computeHasIntervals(env)).toEqual({ a1: false });
+  });
+});
+
+describe("classifyEffortResponse", () => {
+  // The 6 bands × 3 outcomes matrix below covers every rpe vs band-edge
+  // verdict the upstream returns. Each table row is (intensityPct, rpe,
+  // expected) with a comment naming the band it targets. The first 3 rows
+  // cover the Intensity<0.65 None branch (band 1, all-None). The remaining 15
+  // cover the 5 verdict-producing bands (bands 2-6) × {positive, neutral,
+  // negative}.
+  type Verdict = ReturnType<typeof classifyEffortResponse>;
+
+  const matrix: Array<[number, number, Verdict, string]> = [
+    // Band 1: if_decimal < 0.65 → null (deliberate design gap)
+    [60, 2, null, "if_decimal=0.60 (band 1) — rpe low, still null"],
+    [60, 5, null, "if_decimal=0.60 (band 1) — rpe mid, still null"],
+    [60, 8, null, "if_decimal=0.60 (band 1) — rpe high, still null"],
+    // Band 2: 0.65 ≤ if_decimal < 0.75 → [2, 4]
+    [70, 1, "positive", "if_decimal=0.70 (band 2) — rpe=1 < 2 → positive"],
+    [70, 3, "neutral", "if_decimal=0.70 (band 2) — rpe=3 in [2,4] → neutral"],
+    [70, 5, "negative", "if_decimal=0.70 (band 2) — rpe=5 > 4 → negative"],
+    // Band 3: 0.75 ≤ if_decimal < 0.85 → [4, 6]
+    [80, 3, "positive", "if_decimal=0.80 (band 3) — rpe=3 < 4 → positive"],
+    [80, 5, "neutral", "if_decimal=0.80 (band 3) — rpe=5 in [4,6] → neutral"],
+    [80, 7, "negative", "if_decimal=0.80 (band 3) — rpe=7 > 6 → negative"],
+    // Band 4: 0.85 ≤ if_decimal < 0.95 → [6, 8]
+    [90, 5, "positive", "if_decimal=0.90 (band 4) — rpe=5 < 6 → positive"],
+    [90, 7, "neutral", "if_decimal=0.90 (band 4) — rpe=7 in [6,8] → neutral"],
+    [90, 9, "negative", "if_decimal=0.90 (band 4) — rpe=9 > 8 → negative"],
+    // Band 5: 0.95 ≤ if_decimal < 1.05 → [8, 9]
+    [100, 7, "positive", "if_decimal=1.00 (band 5) — rpe=7 < 8 → positive"],
+    [100, 8.5, "neutral", "if_decimal=1.00 (band 5) — rpe=8.5 in [8,9] → neutral"],
+    [100, 10, "negative", "if_decimal=1.00 (band 5) — rpe=10 > 9 → negative"],
+    // Band 6: if_decimal ≥ 1.05 → [9, 10]
+    [110, 8, "positive", "if_decimal=1.10 (band 6) — rpe=8 < 9 → positive"],
+    [110, 9.5, "neutral", "if_decimal=1.10 (band 6) — rpe=9.5 in [9,10] → neutral"],
+    [110, 10.1, "negative", "if_decimal=1.10 (band 6) — rpe=10.1 > 10 → negative"],
+  ];
+
+  for (const [intensityPct, rpe, expected, label] of matrix) {
+    it(label, () => {
+      expect(classifyEffortResponse(intensityPct, rpe)).toBe(expected);
+    });
+  }
+
+  it("returns null when intensityPct is null (sync.py:3515 if_value is None)", () => {
+    expect(classifyEffortResponse(null, 5)).toBeNull();
+  });
+
+  it("returns null when intensityPct is undefined", () => {
+    expect(classifyEffortResponse(undefined, 5)).toBeNull();
+  });
+
+  it("returns null when rpe is null (sync.py:3515 rpe is None)", () => {
+    expect(classifyEffortResponse(80, null)).toBeNull();
+  });
+
+  it("returns null when rpe is undefined", () => {
+    expect(classifyEffortResponse(80, undefined)).toBeNull();
+  });
+
+  it("returns null when rpe is 0 (sync.py:3515 rpe <= 0)", () => {
+    // rpe=0 is treated as 'unset' rather than 'easiest possible' — the
+    // upstream's <=0 gate captures the intervals.icu placeholder some
+    // unscored activities ship.
+    expect(classifyEffortResponse(80, 0)).toBeNull();
+  });
+
+  it("returns null when rpe is negative (sync.py:3515 rpe <= 0)", () => {
+    expect(classifyEffortResponse(80, -1)).toBeNull();
+  });
+
+  it("uses band 2 (not band 1) exactly at if_decimal = 0.65 (lower edge inclusive)", () => {
+    // The `< 0.65` gate excludes only strictly-less; 0.65 enters band 2 [2,4].
+    expect(classifyEffortResponse(65, 3)).toBe("neutral");
+  });
+
+  it("uses band 3 (not band 2) exactly at if_decimal = 0.75 (band 2 upper exclusive)", () => {
+    // `if if_decimal < 0.75` is exclusive on 0.75; the value falls through to
+    // band 3 [4,6]. rpe=3 is < 4 → positive.
+    expect(classifyEffortResponse(75, 3)).toBe("positive");
+  });
+
+  it("uses band 6 (not band 5) exactly at if_decimal = 1.05 (band 5 upper exclusive)", () => {
+    // `if if_decimal < 1.05` is exclusive on 1.05; the value enters band 6
+    // [9,10]. rpe=9 in [9,10] → neutral.
+    expect(classifyEffortResponse(105, 9)).toBe("neutral");
+  });
+});
+
+describe("computeEffortResponseSignal", () => {
+  function withActivities(
+    rows: { id: string | number; icu_intensity?: number; icu_rpe?: number }[],
+  ): MetricInput {
+    return {
+      fixture: {
+        activities: rows.map((r) => ({
+          id: r.id,
+          start_date_local: "2026-05-10T07:00:00",
+          type: "Ride",
+          moving_time: 1800,
+          elapsed_time: 1900,
+          ...(r.icu_intensity !== undefined
+            ? { icu_intensity: r.icu_intensity }
+            : {}),
+          ...(r.icu_rpe !== undefined ? { icu_rpe: r.icu_rpe } : {}),
+        })),
+      } as MetricInput["fixture"],
+      frozenNow: "2026-05-10T12:00:00",
+    };
+  }
+
+  it("emits null for an activity missing both icu_intensity and icu_rpe (golden-fixture branch)", () => {
+    // Every golden fixture today omits icu_rpe — the verdict for every
+    // activity collapses to null. This is the parity-snapshot reality.
+    const env = withActivities([{ id: "a1" }]);
+    expect(computeEffortResponseSignal(env)).toEqual({ a1: null });
+  });
+
+  it("emits null for an activity that has icu_intensity but no icu_rpe", () => {
+    const env = withActivities([{ id: "a1", icu_intensity: 80 }]);
+    expect(computeEffortResponseSignal(env)).toEqual({ a1: null });
+  });
+
+  it("emits the verdict when both fields are present (read-through smoke test)", () => {
+    const env = withActivities([
+      { id: "a1", icu_intensity: 80, icu_rpe: 5 },
+    ]);
+    expect(computeEffortResponseSignal(env)).toEqual({ a1: "neutral" });
+  });
+
+  it("returns an empty map when there are no activities", () => {
+    const env = withActivities([]);
+    expect(computeEffortResponseSignal(env)).toEqual({});
+  });
+
+  it("stringifies numeric activity ids (mirrors str(act.get('id')) at sync.py:7870)", () => {
+    const env = withActivities([
+      { id: 12345, icu_intensity: 70, icu_rpe: 3 },
+    ]);
+    expect(computeEffortResponseSignal(env)).toEqual({ "12345": "neutral" });
+  });
+
+  it("emits the per-activity map with keys sorted ascending as strings", () => {
+    // Non-integer-like keys defeat V8's numeric key-ordering quirk so
+    // insertion-order bugs are visible. Mirrors the has_intervals sort
+    // discipline landed alongside the per-activity snapshot pattern.
+    const env = withActivities([
+      { id: "i20", icu_intensity: 80, icu_rpe: 5 },
+      { id: "i03", icu_intensity: 80, icu_rpe: 5 },
+      { id: "i10", icu_intensity: 80, icu_rpe: 5 },
+    ]);
+    expect(Object.keys(computeEffortResponseSignal(env))).toEqual([
+      "i03",
+      "i10",
+      "i20",
+    ]);
   });
 });

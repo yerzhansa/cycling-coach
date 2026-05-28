@@ -462,6 +462,25 @@ if "__error__" not in derived:
         k: _has_intervals[k] for k in sorted(_has_intervals.keys())
     }
 
+    # === effort_response_signal per-activity classifier (v3.105 / v11.34) ===
+    # Hoisted from sync.py:3493-3534 (_classify_effort_response) +
+    # sync.py:7858-7860 per-activity emission inside _format_activities.
+    # As with has_intervals, reparse FIXTURE_JSON for the per-activity loop so
+    # the icu_intensity / icu_rpe .get() calls don't log spurious missing-key
+    # events on fixtures that don't carry those fields (the classifier itself
+    # returns None for absent inputs, matching upstream behaviour).
+    _effort_response = {}
+    for _act in _raw_fixture.get("activities", []):
+        if not isinstance(_act, dict):
+            continue
+        _act_id = str(_act.get("id"))
+        _effort_response[_act_id] = sync._classify_effort_response(
+            _act.get("icu_intensity"), _act.get("icu_rpe")
+        )
+    derived["effort_response_signal"] = {
+        k: _effort_response[k] for k in sorted(_effort_response.keys())
+    }
+
     _unallowed = sorted({
         p for p in _TRACKED_MISSING
         if _normalize_path(p) not in _ALLOWED_OPTIONAL_PATHS

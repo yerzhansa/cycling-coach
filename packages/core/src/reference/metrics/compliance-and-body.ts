@@ -362,6 +362,106 @@ export function computeHasIntervals(
   return sorted;
 }
 
+export type EffortResponseVerdict = "positive" | "neutral" | "negative";
+
+/**
+ * Classify one activity's RPE against the protocol's expected band for its
+ * normalized intensity. Returns `"positive"` when the reported RPE undershoots
+ * the band (fitness / freshness tell), `"negative"` when it overshoots
+ * (fatigue / under-recovery tell), `"neutral"` inside the band, and `null`
+ * outside the classifier's coverage range.
+ *
+ * `intensityPct` is the per-activity intensity stored as a percentage
+ * (0–100+), matching upstream's `icu_intensity`; the function normalizes to a
+ * decimal before bucketing. `rpe` is the 1–10 reported value. The Intensity<0.65
+ * null branch is a deliberate design gap, not missing-data handling —
+ * recovery rides and aborted sessions fall outside the bands' calibration
+ * range and fabricating a band there would produce noise on the sessions
+ * least worth flagging.
+ *
+ * Band edges (0.65 / 0.75 / 0.85 / 0.95 / 1.05) are protocol-invented per
+ * the Reference protocol v11.43 §RPE Expectation Bands, not derived from
+ * peer-reviewed literature — this is a faithful port of an upstream-defined
+ * classifier. Future readers should not expect a Borg / Foster / Bandura
+ * citation; the only authority is the upstream protocol spec.
+ *
+ * Upstream source mirrored line-by-line: `sync.py:3493-3534`
+ * (`_classify_effort_response`), per the Reference protocol v11.43 §RPE
+ * Expectation Bands docstring at `sync.py:3500`. See `NOTICE.md` for
+ * upstream attribution.
+ */
+export function classifyEffortResponse(
+  intensityPct: number | null | undefined,
+  rpe: number | null | undefined,
+): EffortResponseVerdict | null {
+  if (intensityPct == null || rpe == null || rpe <= 0) return null;
+  const ifDecimal = intensityPct / 100;
+  if (ifDecimal < 0.65) return null;
+
+  let bandLow: number;
+  let bandHigh: number;
+  if (ifDecimal < 0.75) {
+    bandLow = 2;
+    bandHigh = 4;
+  } else if (ifDecimal < 0.85) {
+    bandLow = 4;
+    bandHigh = 6;
+  } else if (ifDecimal < 0.95) {
+    bandLow = 6;
+    bandHigh = 8;
+  } else if (ifDecimal < 1.05) {
+    bandLow = 8;
+    bandHigh = 9;
+  } else {
+    bandLow = 9;
+    bandHigh = 10;
+  }
+
+  if (rpe < bandLow) return "positive";
+  if (rpe > bandHigh) return "negative";
+  return "neutral";
+}
+
+/**
+ * Per-activity v3.105 effort-response classification. Iterates the fixture's
+ * activities, applies `classifyEffortResponse` to each `(icu_intensity,
+ * icu_rpe)` pair, and emits a per-activity-id map with keys sorted ascending
+ * as strings.
+ *
+ * `icu_rpe` is read via a narrow cast on the activity row — the upstream
+ * Activity schema (`z.looseObject`) preserves unknown fields through the
+ * boundary, and the predicate is the only consumer of `icu_rpe` today.
+ * Matches `act.get("icu_rpe")` in `sync.py:7859`.
+ *
+ * Upstream emission point mirrored: `sync.py:7858-7860` inside
+ * `_format_activities`. As with `has_intervals`, this Reference-port hoists
+ * the per-activity field into a standalone derived map so the parity gate
+ * can assert it without ingesting the full formatted-activity dict.
+ */
+export function computeEffortResponseSignal(
+  input: MetricInput,
+): Record<string, EffortResponseVerdict | null> {
+  const activities = getActivities(input);
+
+  const verdictByActivityId: Record<string, EffortResponseVerdict | null> = {};
+  for (const activity of activities) {
+    const key = String(activity.id);
+    const intensity = activity.icu_intensity ?? null;
+    const rpe =
+      ((activity as Record<string, unknown>).icu_rpe as
+        | number
+        | null
+        | undefined) ?? null;
+    verdictByActivityId[key] = classifyEffortResponse(intensity, rpe);
+  }
+
+  const sorted: Record<string, EffortResponseVerdict | null> = {};
+  for (const key of Object.keys(verdictByActivityId).sort()) {
+    sorted[key] = verdictByActivityId[key]!;
+  }
+  return sorted;
+}
+
 /**
  * Outdoor benchmark emission. Five keys, mirroring `sync.py:3430-3436` —
  * identical shape and semantics to the indoor branch, just sourced from

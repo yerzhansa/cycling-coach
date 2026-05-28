@@ -13,6 +13,7 @@ import {
   computeBenchmarkOutdoor,
   computeConsistencyDetails,
   computeConsistencyIndex,
+  computeEffortResponseSignal,
   computeHasIntervals,
 } from "./compliance-and-body.js";
 import {
@@ -73,4 +74,5 @@ export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {
   benchmark_indoor: { compute: computeBenchmarkIndoor },
   benchmark_outdoor: { compute: computeBenchmarkOutdoor },
   has_intervals: { compute: computeHasIntervals },
+  effort_response_signal: { compute: computeEffortResponseSignal },
 };
