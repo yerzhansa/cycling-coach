@@ -107,6 +107,12 @@ const HARNESS_FIXTURES: HarnessFixtureConfig[] = [
     description:
       "effective_monotony selector branch B (multi-sport, primary=null → fall back to total). Cycling [80,80,80] on 05-04..06 (total 240, 3 days) and run [150,150] on 05-09..10 (total 300, 2 days): run wins primary on total but has <3 active days, so primary_sport_monotony is null while total monotony is non-null. The selector's `!== null` gate does load-bearing work here — inverting it regresses with no other fixture defense. Load+zones only (empty wellness/ftp).",
   },
+  {
+    slug: "populated-benchmark-and-consistency",
+    frozenNow: DEFAULT_FROZEN_NOW,
+    description:
+      "Populated-branch coverage for consistency_index + benchmark_indoor + benchmark_outdoor — the F11 metrics whose previous fixtures all collapsed to the null branch. 4 WORKOUT events on 05-05/07/09/10 paired with cycling activities on 05-05/07/09 give matched=3, planned=4, consistency_index=0.75. FTP history has a 2026-03-15 entry sitting exactly at (frozenNow - 56d), exercising the +/-7d nearest-match window: indoor 280/270-1=0.037 in seasonal range [0.01,0.04] → seasonal_expected=true; outdoor 270/260-1=0.038 same range true. Without this fixture the parity gate is theatre for those three metrics.",
+  },
 ];
 
 function readPyodideVersion(): string {
@@ -265,6 +271,15 @@ _ALLOWED_OPTIONAL_PATHS = {
     "FIXTURE.activities[*].icu_variability_index",
     "FIXTURE.wellness[*].atl",
     "FIXTURE.wellness[*].ctl",
+    # F11 fixture extensions — absent on every fixture that doesn't exercise
+    # the populated benchmark / consistency branches; present on fixtures that
+    # do. The harness reads them pass-through (no hardcoded overrides) per
+    # ADR-0017's boundary contract.
+    "FIXTURE.past_events",
+    "FIXTURE.current_ftp_indoor",
+    "FIXTURE.current_ftp_outdoor",
+    "FIXTURE.ftp_history_indoor",
+    "FIXTURE.ftp_history_outdoor",
 }
 
 def _normalize_path(path):
@@ -343,6 +358,37 @@ sync._intervals_data = {}
 # (None, None, None) is the documented "insufficient FTP history" path.
 _BENCH_NONE = (None, None, None)
 
+# Pass-through read of F11 fixture extensions. The harness used to
+# hardcode past_events=[] and benchmark_*=_BENCH_NONE, which made the
+# parity gate vacuous for those metrics (every snapshot collapsed to
+# the null branch). ADR-0017 makes the fixture the boundary — these
+# fields are optional on every committed fixture and the harness
+# computes the benchmark tuples by handing the fixture-provided FTP
+# data to sync.py's own _calculate_benchmark_index. Absent fields
+# produce the same null branches the hardcoded path did, so existing
+# snapshots stay bit-identical; populated branches now actually run.
+_past_events = FIXTURE.get("past_events", []) or []
+_current_ftp_indoor = FIXTURE.get("current_ftp_indoor")
+_ftp_history_indoor = FIXTURE.get("ftp_history_indoor") or {}
+_current_ftp_outdoor = FIXTURE.get("current_ftp_outdoor")
+_ftp_history_outdoor = FIXTURE.get("ftp_history_outdoor") or {}
+
+if _current_ftp_indoor and _ftp_history_indoor:
+    _idx_in, _ftp8_in = sync._calculate_benchmark_index(
+        _current_ftp_indoor, _ftp_history_indoor
+    )
+    _benchmark_indoor = (_idx_in, _ftp8_in, _current_ftp_indoor)
+else:
+    _benchmark_indoor = _BENCH_NONE
+
+if _current_ftp_outdoor and _ftp_history_outdoor:
+    _idx_out, _ftp8_out = sync._calculate_benchmark_index(
+        _current_ftp_outdoor, _ftp_history_outdoor
+    )
+    _benchmark_outdoor = (_idx_out, _ftp8_out, _current_ftp_outdoor)
+else:
+    _benchmark_outdoor = _BENCH_NONE
+
 try:
     derived = sync._calculate_derived_metrics(
         activities_7d=_ACTIVITIES_7D,
@@ -352,11 +398,11 @@ try:
         current_ctl=_CURRENT_CTL,
         current_atl=_CURRENT_ATL,
         current_tsb=_CURRENT_TSB,
-        past_events=[],
+        past_events=_past_events,
         activities_for_consistency=_ACTIVITIES_7D,
         power_model={},
-        benchmark_indoor=_BENCH_NONE,
-        benchmark_outdoor=_BENCH_NONE,
+        benchmark_indoor=_benchmark_indoor,
+        benchmark_outdoor=_benchmark_outdoor,
         vo2max=None,
         formatted_planned_workouts=[],
         race_calendar=None,

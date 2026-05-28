@@ -1,0 +1,165 @@
+{
+  "activities": [
+    {
+      "id": "pbc1",
+      "start_date_local": "2026-05-05T07:00:00",
+      "type": "Ride",
+      "name": "sanitized",
+      "moving_time": 3600,
+      "elapsed_time": 3700,
+      "icu_training_load": 60,
+      "icu_intensity": 70.0,
+      "average_heartrate": 142,
+      "icu_zone_times": [
+        { "id": "Z1", "secs": 600 },
+        { "id": "Z2", "secs": 1500 },
+        { "id": "Z3", "secs": 900 },
+        { "id": "Z4", "secs": 400 },
+        { "id": "Z5", "secs": 150 },
+        { "id": "Z6", "secs": 40 },
+        { "id": "Z7", "secs": 10 }
+      ],
+      "decoupling": -3.1,
+      "icu_efficiency_factor": 1.08
+    },
+    {
+      "id": "pbc2",
+      "start_date_local": "2026-05-07T18:00:00",
+      "type": "VirtualRide",
+      "name": "sanitized",
+      "moving_time": 2700,
+      "elapsed_time": 2800,
+      "icu_training_load": 45,
+      "icu_intensity": 65.0,
+      "average_heartrate": 138,
+      "icu_zone_times": [
+        { "id": "Z1", "secs": 500 },
+        { "id": "Z2", "secs": 1200 },
+        { "id": "Z3", "secs": 700 },
+        { "id": "Z4", "secs": 200 },
+        { "id": "Z5", "secs": 80 },
+        { "id": "Z6", "secs": 20 },
+        { "id": "Z7", "secs": 0 }
+      ],
+      "decoupling": -2.4,
+      "icu_efficiency_factor": 1.05
+    },
+    {
+      "id": "pbc3",
+      "start_date_local": "2026-05-09T16:00:00",
+      "type": "GravelRide",
+      "name": "sanitized",
+      "moving_time": 5400,
+      "elapsed_time": 5500,
+      "icu_training_load": 80,
+      "icu_intensity": 75.0,
+      "average_heartrate": 145,
+      "icu_zone_times": [
+        { "id": "Z1", "secs": 900 },
+        { "id": "Z2", "secs": 2200 },
+        { "id": "Z3", "secs": 1200 },
+        { "id": "Z4", "secs": 700 },
+        { "id": "Z5", "secs": 300 },
+        { "id": "Z6", "secs": 80 },
+        { "id": "Z7", "secs": 20 }
+      ],
+      "decoupling": -3.8,
+      "icu_efficiency_factor": 1.10
+    }
+  ],
+  "wellness": [
+    {
+      "id": "2026-05-10",
+      "weight": 72.0,
+      "restingHR": 54,
+      "hrv": 68,
+      "sleepSecs": 25200,
+      "sleepQuality": 80
+    },
+    {
+      "id": "2026-05-09",
+      "weight": 72.1,
+      "restingHR": 55,
+      "hrv": 66,
+      "sleepSecs": 24300,
+      "sleepQuality": 75
+    },
+    {
+      "id": "2026-05-08",
+      "weight": 72.2,
+      "restingHR": 56,
+      "hrv": 64,
+      "sleepSecs": 23400,
+      "sleepQuality": 70
+    },
+    {
+      "id": "2026-05-07",
+      "weight": 72.0,
+      "restingHR": 55,
+      "hrv": 67,
+      "sleepSecs": 25200,
+      "sleepQuality": 80
+    },
+    {
+      "id": "2026-05-06",
+      "weight": 71.9,
+      "restingHR": 54,
+      "hrv": 69,
+      "sleepSecs": 26100,
+      "sleepQuality": 85
+    },
+    {
+      "id": "2026-05-05",
+      "weight": 72.0,
+      "restingHR": 55,
+      "hrv": 66,
+      "sleepSecs": 25200,
+      "sleepQuality": 80
+    },
+    {
+      "id": "2026-05-04",
+      "weight": 72.1,
+      "restingHR": 56,
+      "hrv": 65,
+      "sleepSecs": 24300,
+      "sleepQuality": 75
+    }
+  ],
+  "ftp_history": [],
+  "past_events": [
+    {
+      "id": 1001,
+      "category": "WORKOUT",
+      "start_date_local": "2026-05-05T06:00:00"
+    },
+    {
+      "id": 1002,
+      "category": "WORKOUT",
+      "start_date_local": "2026-05-07T06:00:00"
+    },
+    {
+      "id": 1003,
+      "category": "WORKOUT",
+      "start_date_local": "2026-05-09T06:00:00"
+    },
+    {
+      "id": 1004,
+      "category": "WORKOUT",
+      "start_date_local": "2026-05-10T06:00:00"
+    }
+  ],
+  "current_ftp_indoor": 280,
+  "ftp_history_indoor": {
+    "2026-01-01": 260,
+    "2026-02-01": 265,
+    "2026-03-15": 270,
+    "2026-04-15": 275
+  },
+  "current_ftp_outdoor": 270,
+  "ftp_history_outdoor": {
+    "2026-01-01": 250,
+    "2026-02-01": 255,
+    "2026-03-15": 260,
+    "2026-04-15": 265
+  }
+}
