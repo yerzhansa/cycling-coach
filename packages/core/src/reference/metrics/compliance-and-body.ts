@@ -11,7 +11,9 @@ import { roundHalfEven } from "./rounding.js";
 import {
   getActivities,
   getCurrentFtpIndoor,
+  getCurrentFtpOutdoor,
   getFtpHistoryIndoor,
+  getFtpHistoryOutdoor,
   getPastEvents,
   type MetricInput,
 } from "./metric-input.js";
@@ -299,6 +301,38 @@ export function formatBenchmarkPercentage(benchmarkIndex: number): string {
 export function computeBenchmarkIndoor(input: MetricInput): BenchmarkEmission {
   const currentFtp = getCurrentFtpIndoor(input);
   const ftpHistory = getFtpHistoryIndoor(input);
+  const { benchmarkIndex, ftp8WeeksAgo } = calculateBenchmarkIndex(
+    currentFtp,
+    ftpHistory,
+    input.frozenNow,
+  );
+  const seasonalContext = computeSeasonalContext(input);
+  const seasonalExpected = isBenchmarkExpected(benchmarkIndex, seasonalContext);
+
+  return {
+    current_ftp: currentFtp,
+    ftp_8_weeks_ago: ftp8WeeksAgo,
+    benchmark_index: benchmarkIndex,
+    benchmark_percentage:
+      benchmarkIndex === null
+        ? null
+        : formatBenchmarkPercentage(benchmarkIndex),
+    seasonal_expected: seasonalExpected,
+  };
+}
+
+/**
+ * Outdoor benchmark emission. Five keys, mirroring `sync.py:3430-3436` —
+ * identical shape and semantics to the indoor branch, just sourced from
+ * the outdoor FTP and the outdoor slice of `ftp_history`. Upstream calls
+ * the same `_calculate_benchmark_index` helper at `sync.py:2434` with
+ * `current_ftp_outdoor` and `ftp_history.get("outdoor", {})`; the
+ * shared `calculateBenchmarkIndex` + `isBenchmarkExpected` helpers
+ * therefore apply unchanged.
+ */
+export function computeBenchmarkOutdoor(input: MetricInput): BenchmarkEmission {
+  const currentFtp = getCurrentFtpOutdoor(input);
+  const ftpHistory = getFtpHistoryOutdoor(input);
   const { benchmarkIndex, ftp8WeeksAgo } = calculateBenchmarkIndex(
     currentFtp,
     ftpHistory,

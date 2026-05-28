@@ -10,6 +10,7 @@
 
 import {
   computeBenchmarkIndoor,
+  computeBenchmarkOutdoor,
   computeConsistencyDetails,
   computeConsistencyIndex,
 } from "./compliance-and-body.js";
@@ -69,4 +70,5 @@ export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {
   consistency_details: { compute: computeConsistencyDetails },
   seasonal_context: { compute: computeSeasonalContext },
   benchmark_indoor: { compute: computeBenchmarkIndoor },
+  benchmark_outdoor: { compute: computeBenchmarkOutdoor },
 };
