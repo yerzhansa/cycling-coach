@@ -225,6 +225,13 @@ export const FixtureSchema = z
     ftp_history_indoor: z.record(z.string(), z.number()).optional(),
     ftp_history_outdoor: z.record(z.string(), z.number()).optional(),
 
+    // Top-level eFTP fallback consumed by `_build_weight_signal`'s FTP
+    // source resolution when tested outdoor FTP is null. Distinct from
+    // `sportInfo[].eftp` (inner field, used by tools/fetch-real-athlete.ts
+    // to derive ftp_history). Optional — current golden fixtures don't
+    // populate this branch; the eFTP path is exercised by unit tests.
+    eftp: z.number().nullable().optional(),
+
     // Per-activity intervals lookup, mirroring upstream's intervals.json
     // surface (a distinct API endpoint from activities). Keyed by activity
     // id as a string. Optional so existing fixtures without the key still

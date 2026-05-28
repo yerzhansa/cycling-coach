@@ -73,13 +73,8 @@ export function getWellnessExtendedWeight(input: MetricInput): WellnessDay[] {
   return input.fixture.wellness;
 }
 
-// Optional top-level fixture field surfacing the eFTP fallback for
-// `_build_weight_signal`'s FTP source resolution. Not declared on
-// FixtureSchema (the populated fixture exercises the tested-FTP branch;
-// the eFTP path is covered by unit tests that synthesise MetricInput
-// directly), so this accessor reads via the loose-object ride-through.
+// Top-level eFTP fallback for `_build_weight_signal`'s FTP source
+// resolution when tested outdoor FTP is null. See FixtureSchema.eftp.
 export function getEftp(input: MetricInput): number | null {
-  const raw = (input.fixture as Record<string, unknown>).eftp;
-  if (typeof raw === "number") return raw;
-  return null;
+  return input.fixture.eftp ?? null;
 }
