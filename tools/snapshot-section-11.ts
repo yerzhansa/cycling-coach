@@ -455,9 +455,9 @@ if "__error__" not in derived:
                     break
         _has_intervals[_act_id] = _flag
     # Explicit sort defends per-activity-map key order across Pyodide /
-    # CPython / Node (architect Q1+Q9). json.dumps(sort_keys=True) below
-    # already sorts globally; the explicit pre-sort keeps the convention
-    # legible at the point the map is constructed.
+    # CPython / Node. json.dumps(sort_keys=True) below already sorts
+    # globally; the explicit pre-sort keeps the convention legible at
+    # the point the map is constructed.
     derived["has_intervals"] = {
         k: _has_intervals[k] for k in sorted(_has_intervals.keys())
     }

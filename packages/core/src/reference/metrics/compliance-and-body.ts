@@ -334,8 +334,7 @@ export function computeBenchmarkIndoor(input: MetricInput): BenchmarkEmission {
  *
  * Keys are stringified `activity.id` (mirroring `str(act.get("id"))` at
  * `sync.py:7870`) and sorted ascending as strings to lock JSON key-order
- * across Pyodide / CPython / Node (architect Q1+Q9 push-back on the
- * snapshot harness).
+ * across Pyodide / CPython / Node.
  *
  * Upstream source mirrored line-by-line: `sync.py:7866-7873` inside
  * `_format_activities`; v3.106 changelog entry at `sync.py:133` documents

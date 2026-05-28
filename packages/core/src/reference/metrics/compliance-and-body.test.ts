@@ -637,7 +637,7 @@ describe("computeHasIntervals", () => {
     expect(computeHasIntervals(env)).toEqual({ "12345": true });
   });
 
-  it("emits the per-activity map with keys sorted ascending as strings (architect Q1+Q9 push-back)", () => {
+  it("emits the per-activity map with keys sorted ascending as strings", () => {
     // The harness sorts via `sorted(d.keys())` before emit. The TS port also
     // sorts so call-site iteration order is locked across Pyodide / CPython /
     // Node. Non-integer-like keys are used here because V8 / SpiderMonkey
@@ -682,9 +682,8 @@ describe("computeHasIntervals", () => {
   });
 
   it("treats a missing intervals top-level key as an empty lookup (FixtureSchema .optional() compatibility)", () => {
-    // ADR-0017 + architect Q8 push-back: existing fixtures without an
-    // `intervals` top-level key must still classify cleanly; every
-    // activity falls into branch (d).
+    // ADR-0017: existing fixtures without an `intervals` top-level key
+    // must still classify cleanly; every activity falls into branch (d).
     const env: MetricInput = {
       fixture: {
         activities: [

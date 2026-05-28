@@ -60,6 +60,8 @@ export function getFtpHistoryOutdoor(
   return input.fixture.ftp_history_outdoor ?? {};
 }
 
+// Cast narrows Zod's looseObject ride-through inference to the named
+// IntervalsEntry surface; the schema already validates the shape.
 export function getIntervalsLookup(input: MetricInput): IntervalsLookup {
   return (input.fixture.intervals ?? {}) as IntervalsLookup;
 }
