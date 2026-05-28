@@ -67,6 +67,7 @@
     "vo2max",
     "w_prime",
     "w_prime_kj",
+    "weight_signal",
     "zone_distribution_7d"
   ],
   "pyodide_version": "0.29.4",

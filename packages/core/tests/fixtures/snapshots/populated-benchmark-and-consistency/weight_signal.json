@@ -1,0 +1,19 @@
+{
+  "metric": "weight_signal",
+  "athlete": "populated-benchmark-and-consistency",
+  "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
+  "section_11_protocol_version": "3.112",
+  "frozen_now": "2026-05-10T12:00:00",
+  "value": {
+    "ftp_setting_date": "2026-04-15",
+    "weight_28d_slope_kg_per_week": -0.279,
+    "weight_7d_avg_kg": 72,
+    "weight_latest_date": "2026-05-10",
+    "weight_latest_kg": 72,
+    "wkg_block_delta": 0.05,
+    "wkg_block_end": 3.75,
+    "wkg_block_start": 3.7,
+    "wkg_current": 3.75,
+    "wkg_ftp_source": "tested"
+  }
+}

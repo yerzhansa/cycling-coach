@@ -481,6 +481,43 @@ if "__error__" not in derived:
         k: _effort_response[k] for k in sorted(_effort_response.keys())
     }
 
+    # === weight_signal (v3.112) ===
+    # Hoisted from sync.py:2746-2752 outside _calculate_derived_metrics.
+    # The upstream assigns the result to data["current_status"]["weight"];
+    # we surface it as a top-level derived key for the parity gate.
+    #
+    # _load_ftp_history is monkey-patched to read from the fixture's
+    # ftp_history_indoor / ftp_history_outdoor records instead of disk —
+    # the production helper reads ftp_history.json from cwd, which is
+    # neither portable nor reproducible in the harness. _raw_fixture
+    # bypasses _TrackedDict so empty / absent history dicts don't log
+    # spurious missing-key events on the dict.get accesses inside
+    # _build_weight_signal.
+    _raw_ftp_indoor = _raw_fixture.get("ftp_history_indoor") or {}
+    _raw_ftp_outdoor = _raw_fixture.get("ftp_history_outdoor") or {}
+    sync._load_ftp_history = lambda: {
+        "indoor": _raw_ftp_indoor,
+        "outdoor": _raw_ftp_outdoor,
+    }
+    _raw_current_ftp_outdoor = _raw_fixture.get("current_ftp_outdoor")
+    _raw_eftp = _raw_fixture.get("eftp")
+    _weight_sport_settings = {
+        "cycling": {"ftp": _raw_current_ftp_outdoor},
+    } if _raw_current_ftp_outdoor else {}
+    _weight_power_model = {"eftp": _raw_eftp} if _raw_eftp else {}
+    _raw_wellness = _raw_fixture.get("wellness") or []
+    _weight_signal_value = sync._build_weight_signal(
+        _raw_wellness,
+        _weight_sport_settings,
+        _weight_power_model,
+        None,
+    )
+    # Display sub-dict is out of scope per Wave 6 deferral — strip before
+    # snapshotting so the parity gate doesn't pin a contract we don't ship.
+    if _weight_signal_value and "display" in _weight_signal_value:
+        del _weight_signal_value["display"]
+    derived["weight_signal"] = _weight_signal_value
+
     _unallowed = sorted({
         p for p in _TRACKED_MISSING
         if _normalize_path(p) not in _ALLOWED_OPTIONAL_PATHS

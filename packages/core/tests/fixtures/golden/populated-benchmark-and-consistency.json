@@ -139,6 +139,62 @@
       "hrv": 65,
       "sleepSecs": 24300,
       "sleepQuality": 75
+    },
+    {
+      "id": "2026-05-02",
+      "weight": 72.3,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-30",
+      "weight": 72.4,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-28",
+      "weight": 72.5,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-25",
+      "weight": 72.6,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-22",
+      "weight": 72.7,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-19",
+      "weight": 72.8,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "2026-04-15",
+      "weight": 72.9,
+      "restingHR": null,
+      "hrv": null,
+      "sleepSecs": null,
+      "sleepQuality": null
     }
   ],
   "ftp_history": [],

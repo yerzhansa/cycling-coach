@@ -8,6 +8,7 @@
  * `packages/core/tests/reference-parity.test.ts` picks it up automatically.
  */
 
+import { computeWeightSignal } from "./bodycomp.js";
 import {
   computeBenchmarkIndoor,
   computeBenchmarkOutdoor,
@@ -75,4 +76,5 @@ export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {
   benchmark_outdoor: { compute: computeBenchmarkOutdoor },
   has_intervals: { compute: computeHasIntervals },
   effort_response_signal: { compute: computeEffortResponseSignal },
+  weight_signal: { compute: computeWeightSignal },
 };
