@@ -7,6 +7,11 @@
 
 import type { Activity } from "../schemas/inputs.js";
 
+import {
+  isoDateDaysBefore,
+  isoToMs,
+  parseIsoMs,
+} from "./date-helpers.js";
 import { roundHalfEven } from "./rounding.js";
 import {
   getActivities,
@@ -19,6 +24,10 @@ import {
 } from "./metric-input.js";
 import { computeSeasonalContext, type SeasonalContext } from "./seasonal-context.js";
 
+// Upstream sync.py:3553 hardcodes this 4-element subset; e-bike rides are
+// deliberately excluded from consistency tracking even though they appear in
+// SPORT_FAMILIES as cycling. Don't derive from SPORT_FAMILIES — the
+// divergence is upstream-faithful.
 const CYCLING_TYPES = new Set([
   "Ride",
   "VirtualRide",
@@ -158,20 +167,6 @@ function sliceTrailing7d(activities: Activity[], frozenNow: string): Activity[] 
   });
 }
 
-function isoDateDaysBefore(isoNow: string, daysBefore: number): string {
-  const [y, m, d] = isoNow.slice(0, 10).split("-").map(Number) as [
-    number,
-    number,
-    number,
-  ];
-  const utc = new Date(Date.UTC(y, m - 1, d));
-  utc.setUTCDate(utc.getUTCDate() - daysBefore);
-  const yy = utc.getUTCFullYear();
-  const mm = String(utc.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(utc.getUTCDate()).padStart(2, "0");
-  return `${yy}-${mm}-${dd}`;
-}
-
 export interface BenchmarkEmission {
   current_ftp: number | null;
   ftp_8_weeks_ago: number | null;
@@ -238,7 +233,7 @@ export function calculateBenchmarkIndex(
   let bestDiff = Number.POSITIVE_INFINITY;
 
   for (const dateStr of Object.keys(ftpHistory)) {
-    const entryMs = parseIsoDateMidnightMs(dateStr);
+    const entryMs = parseIsoMs(dateStr);
     if (entryMs === null) continue;
     if (entryMs < earliestMs || entryMs > latestMs) continue;
     const diff = Math.abs(Math.floor((entryMs - targetMs) / MS_PER_DAY));
@@ -358,51 +353,3 @@ export function computeBenchmarkOutdoor(input: MetricInput): BenchmarkEmission {
   };
 }
 
-function isoToMs(iso: string): number {
-  // Parse 'YYYY-MM-DDTHH:MM:SS' (or 'YYYY-MM-DD') as a UTC instant. Both
-  // sides of the window comparison go through this helper, so the choice
-  // of zone is internal — what matters is that the wall-clock offset
-  // between a frozenNow datetime and a date-only history entry mirrors
-  // Python's naive-datetime subtraction.
-  const datePart = iso.slice(0, 10);
-  const timePart = iso.length >= 19 ? iso.slice(11, 19) : "00:00:00";
-  const [y, m, d] = datePart.split("-").map(Number) as [
-    number,
-    number,
-    number,
-  ];
-  const [hh, mm, ss] = timePart.split(":").map(Number) as [
-    number,
-    number,
-    number,
-  ];
-  return Date.UTC(y, m - 1, d, hh, mm, ss);
-}
-
-function parseIsoDateMidnightMs(dateStr: string): number | null {
-  // sync.py:2221 wraps the strptime in try/except; malformed entries are
-  // skipped silently. Mirror that here — anything that isn't strict
-  // YYYY-MM-DD with a calendar-real month/day is dropped. The round-trip
-  // check is load-bearing: `Date.UTC(2026, 1, 30)` silently normalises to
-  // 2026-03-02, but `datetime.strptime("2026-02-30", "%Y-%m-%d")` raises
-  // and the upstream `except` skips the entry. Without the check, a
-  // calendar-invalid history key would slip into the ±7d window with the
-  // wrong timestamp and break parity.
-  if (typeof dateStr !== "string") return null;
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
-  if (!match) return null;
-  const y = Number(match[1]);
-  const mo = Number(match[2]);
-  const d = Number(match[3]);
-  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
-  const ms = Date.UTC(y, mo - 1, d);
-  const back = new Date(ms);
-  if (
-    back.getUTCFullYear() !== y ||
-    back.getUTCMonth() + 1 !== mo ||
-    back.getUTCDate() !== d
-  ) {
-    return null;
-  }
-  return ms;
-}

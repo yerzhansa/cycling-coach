@@ -7,6 +7,7 @@
 
 import type { Activity, WellnessDay } from "../schemas/inputs.js";
 
+import { isoDateDaysBefore } from "./date-helpers.js";
 import { getActivities, type MetricInput } from "./metric-input.js";
 import { roundHalfEven } from "./rounding.js";
 import { SPORT_FAMILIES } from "./sport-families.js";
@@ -569,10 +570,3 @@ function getDailyLoadBySport(
   return result;
 }
 
-function isoDateDaysBefore(isoNow: string, daysBefore: number): string {
-  const datePart = isoNow.slice(0, 10);
-  const [y, m, d] = datePart.split("-").map(Number) as [number, number, number];
-  const utc = new Date(Date.UTC(y, m - 1, d));
-  utc.setUTCDate(utc.getUTCDate() - daysBefore);
-  return utc.toISOString().slice(0, 10);
-}
