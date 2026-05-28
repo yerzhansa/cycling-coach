@@ -10,9 +10,12 @@ import type { Activity } from "../schemas/inputs.js";
 import { roundHalfEven } from "./rounding.js";
 import {
   getActivities,
+  getCurrentFtpIndoor,
+  getFtpHistoryIndoor,
   getPastEvents,
   type MetricInput,
 } from "./metric-input.js";
+import { computeSeasonalContext } from "./seasonal-context.js";
 
 const CYCLING_TYPES = new Set([
   "Ride",
@@ -165,4 +168,188 @@ function isoDateDaysBefore(isoNow: string, daysBefore: number): string {
   const mm = String(utc.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(utc.getUTCDate()).padStart(2, "0");
   return `${yy}-${mm}-${dd}`;
+}
+
+export interface BenchmarkEmission {
+  current_ftp: number | null;
+  ftp_8_weeks_ago: number | null;
+  benchmark_index: number | null;
+  benchmark_percentage: string | null;
+  seasonal_expected: boolean | null;
+}
+
+const MS_PER_DAY = 86_400_000;
+
+// Seasonal expectations table, mirroring sync.py:3590-3596. Iteration order
+// is irrelevant — the lookup is by exact-match string key.
+const SEASONAL_EXPECTATIONS: Record<string, readonly [number, number]> = {
+  "Off-season / Transition": [-0.05, -0.02],
+  "Early Base": [-0.02, 0.01],
+  "Late Base / Build": [0.02, 0.05],
+  "Build / Early Race Season": [0.01, 0.04],
+  "Peak Race Season": [0.01, 0.03],
+  "Late Season / Transition": [-0.03, 0.0],
+};
+
+/**
+ * Benchmark Index = round((FTP_current / FTP_8_weeks_ago) - 1, 3).
+ *
+ * Searches `ftpHistory` for the entry whose date is closest to (today - 56d),
+ * limited to a ±7d tolerance window around that target. When multiple entries
+ * fall in the window, the one with the smallest |date - target| in days wins
+ * (insertion-order tiebreak — first match retains, because the strict `<`
+ * comparison doesn't replace on equality). Returns `(null, null)` when
+ * `currentFtp` is falsy, when `ftpHistory` is empty, or when no entry sits
+ * in the window.
+ *
+ * The day-diff measurement mirrors Python's `timedelta.days` — floor of the
+ * second-difference divided by 86 400. With a frozenNow that includes a time
+ * component (e.g. `2026-05-10T12:00:00`), this is asymmetric: an entry at
+ * `target - 12h` has `.days == -1` (abs 1), while one at `target + 12h`
+ * has `.days == 0`. Replicating that exactly is what keeps the port
+ * bit-identical to the captured oracle.
+ *
+ * Upstream source mirrored line-by-line: `sync.py:2201-2249`
+ * (`_calculate_benchmark_index`). See `NOTICE.md` for upstream attribution.
+ */
+export function calculateBenchmarkIndex(
+  currentFtp: number | null | undefined,
+  ftpHistory: Record<string, number>,
+  today: string,
+): { benchmarkIndex: number | null; ftp8WeeksAgo: number | null } {
+  if (!currentFtp || Object.keys(ftpHistory).length === 0) {
+    return { benchmarkIndex: null, ftp8WeeksAgo: null };
+  }
+
+  const todayMs = isoToMs(today);
+  const targetMs = todayMs - 56 * MS_PER_DAY;
+  const earliestMs = targetMs - 7 * MS_PER_DAY;
+  const latestMs = targetMs + 7 * MS_PER_DAY;
+
+  let bestDateKey: string | null = null;
+  let bestDiff = Number.POSITIVE_INFINITY;
+
+  for (const dateStr of Object.keys(ftpHistory)) {
+    const entryMs = parseIsoDateMidnightMs(dateStr);
+    if (entryMs === null) continue;
+    if (entryMs < earliestMs || entryMs > latestMs) continue;
+    const diff = Math.abs(Math.floor((entryMs - targetMs) / MS_PER_DAY));
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestDateKey = dateStr;
+    }
+  }
+
+  if (bestDateKey !== null) {
+    const ftp8WeeksAgo = ftpHistory[bestDateKey];
+    const benchmarkIndex = roundHalfEven(currentFtp / ftp8WeeksAgo - 1, 3);
+    return { benchmarkIndex, ftp8WeeksAgo };
+  }
+
+  return { benchmarkIndex: null, ftp8WeeksAgo: null };
+}
+
+/**
+ * Returns whether the benchmark index falls inside the per-phase expected
+ * range. Both endpoints are inclusive. Returns `null` when the index is
+ * `null` or when the seasonal context string is not in the expectations
+ * table (the defensive `"Unknown"` branch falls through here).
+ *
+ * Upstream source mirrored line-by-line: `sync.py:3582-3603`
+ * (`_is_benchmark_expected`). See `NOTICE.md` for upstream attribution.
+ */
+export function isBenchmarkExpected(
+  benchmarkIndex: number | null,
+  seasonalContext: string,
+): boolean | null {
+  if (benchmarkIndex === null) return null;
+  const range = SEASONAL_EXPECTATIONS[seasonalContext];
+  if (!range) return null;
+  const [low, high] = range;
+  return low <= benchmarkIndex && benchmarkIndex <= high;
+}
+
+/**
+ * Replicates Python's `f"{x:+.1%}"` format: multiply by 100, format with an
+ * explicit sign and exactly one decimal place, append `%`. Negative zero
+ * keeps its `-` sign (Python distinguishes `-0.0` from `0.0` in this
+ * specifier), so the check uses `Object.is(pct, -0)` rather than `<`.
+ */
+export function formatBenchmarkPercentage(benchmarkIndex: number): string {
+  const pct = roundHalfEven(benchmarkIndex * 100, 1);
+  const negative = pct < 0 || Object.is(pct, -0);
+  const sign = negative ? "-" : "+";
+  const magnitudeStr = Math.abs(pct).toFixed(1);
+  return `${sign}${magnitudeStr}%`;
+}
+
+/**
+ * Indoor benchmark emission. Five keys, mirroring `sync.py:3422-3428`:
+ *   - `current_ftp`: the indoor FTP from settings (None when absent).
+ *   - `ftp_8_weeks_ago`: the FTP value at the best-matched history entry.
+ *   - `benchmark_index`: change ratio rounded to 3 dp.
+ *   - `benchmark_percentage`: `:+.1%` string when index is non-null.
+ *   - `seasonal_expected`: whether the index sits in the per-phase range.
+ *
+ * Today is sourced from `input.frozenNow` so the 56-day target and ±7d
+ * tolerance window track the captured oracle's clock. Seasonal context
+ * is computed from the same `frozenNow`, keeping the two metrics in
+ * lockstep with whatever month the fixture pins.
+ */
+export function computeBenchmarkIndoor(input: MetricInput): BenchmarkEmission {
+  const currentFtp = getCurrentFtpIndoor(input);
+  const ftpHistory = getFtpHistoryIndoor(input);
+  const { benchmarkIndex, ftp8WeeksAgo } = calculateBenchmarkIndex(
+    currentFtp,
+    ftpHistory,
+    input.frozenNow,
+  );
+  const seasonalContext = computeSeasonalContext(input);
+  const seasonalExpected = isBenchmarkExpected(benchmarkIndex, seasonalContext);
+
+  return {
+    current_ftp: currentFtp,
+    ftp_8_weeks_ago: ftp8WeeksAgo,
+    benchmark_index: benchmarkIndex,
+    benchmark_percentage:
+      benchmarkIndex === null
+        ? null
+        : formatBenchmarkPercentage(benchmarkIndex),
+    seasonal_expected: seasonalExpected,
+  };
+}
+
+function isoToMs(iso: string): number {
+  // Parse 'YYYY-MM-DDTHH:MM:SS' (or 'YYYY-MM-DD') as a UTC instant. Both
+  // sides of the window comparison go through this helper, so the choice
+  // of zone is internal — what matters is that the wall-clock offset
+  // between a frozenNow datetime and a date-only history entry mirrors
+  // Python's naive-datetime subtraction.
+  const datePart = iso.slice(0, 10);
+  const timePart = iso.length >= 19 ? iso.slice(11, 19) : "00:00:00";
+  const [y, m, d] = datePart.split("-").map(Number) as [
+    number,
+    number,
+    number,
+  ];
+  const [hh, mm, ss] = timePart.split(":").map(Number) as [
+    number,
+    number,
+    number,
+  ];
+  return Date.UTC(y, m - 1, d, hh, mm, ss);
+}
+
+function parseIsoDateMidnightMs(dateStr: string): number | null {
+  // sync.py:2221 wraps the strptime in try/except; malformed entries are
+  // skipped silently. Mirror that here — anything that isn't strict
+  // YYYY-MM-DD with calendar-plausible month/day is dropped.
+  if (typeof dateStr !== "string") return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
+  if (!match) return null;
+  const y = Number(match[1]);
+  const mo = Number(match[2]);
+  const d = Number(match[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  return Date.UTC(y, mo - 1, d);
 }
