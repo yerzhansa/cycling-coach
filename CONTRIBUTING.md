@@ -4,17 +4,25 @@ the substitution table and must legitimately name the forbidden tokens. -->
 
 ## Branch Naming
 
+Branches use full English-word prefixes (NOT the abbreviated commit-type form):
+
 ```
-feat/<short-description>   — new feature
-fix/<short-description>    — bug fix
-chore/<short-description>  — maintenance, deps, config
-docs/<short-description>   — documentation only
-refactor/<short-description> — code restructuring, no behavior change
+feature/<short-description>      — new feature or capability
+bugfix/<short-description>       — bug fix
+chore/<short-description>        — maintenance, deps, config
+docs/<short-description>         — documentation only
+refactor/<short-description>     — code restructuring, no behavior change
+test/<short-description>         — test-only changes
+performance/<short-description>  — performance improvement
+ci/<short-description>           — CI/CD changes
+style/<short-description>        — formatting, no logic change
 ```
 
-Use lowercase, kebab-case. Keep it under 50 characters.
+Use lowercase, kebab-case. Keep the description under 50 characters.
 
-Examples: `feat/session-management`, `fix/telegram-html-escape`, `chore/bump-intervals-api`.
+Examples: `feature/session-management`, `bugfix/telegram-html-escape`, `chore/bump-intervals-api`, `performance/snapshot-harness-parallel`.
+
+**Branch prefix vs commit type.** Branches use full words (`feature/`, `bugfix/`, `performance/`); commit messages keep Conventional Commits' abbreviated forms (`feat:`, `fix:`, `perf:`). This is deliberate — branch names are read by humans navigating `git branch`, commit messages are read by tooling.
 
 ## Pull Requests
 
