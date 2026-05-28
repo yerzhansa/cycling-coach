@@ -1,4 +1,4 @@
-import type { Activity } from "../schemas/inputs.js";
+import type { Activity, PlannedEvent } from "../schemas/inputs.js";
 
 /**
  * The contract between a metric port and the parity gate.
@@ -21,4 +21,9 @@ export interface MetricInput {
 export function getActivities(input: MetricInput): Activity[] {
   const fixture = input.fixture as { activities?: Activity[] };
   return fixture.activities ?? [];
+}
+
+export function getPastEvents(input: MetricInput): PlannedEvent[] {
+  const fixture = input.fixture as { past_events?: PlannedEvent[] };
+  return fixture.past_events ?? [];
 }

@@ -9,6 +9,10 @@
  */
 
 import {
+  computeConsistencyDetails,
+  computeConsistencyIndex,
+} from "./compliance-and-body.js";
+import {
   computeEasyTimeRatio,
   computeEasyTimeRatioNote,
   computeGreyZoneNote,
@@ -59,4 +63,6 @@ export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {
   seiler_tid_7d_primary: { compute: computeSeilerTidPrimary },
   seiler_tid_28d: { compute: computeSeilerTid28d },
   seiler_tid_28d_primary: { compute: computeSeilerTid28dPrimary },
+  consistency_index: { compute: computeConsistencyIndex },
+  consistency_details: { compute: computeConsistencyDetails },
 };
