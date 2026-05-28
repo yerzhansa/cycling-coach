@@ -12,6 +12,7 @@ CLAUDE.local.md
 .agents/
 .ralph/
 .specify/
+specs/
 skills-lock.json
 # fuzz-parity divergence / oracle-error captures (dev-time only, never committed)
 packages/core/tests/fixtures/_fuzz-fail/
