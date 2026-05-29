@@ -12,6 +12,7 @@
  */
 
 import { getActivities, getActivitiesInWindow, type MetricInput } from "./metric-input.js";
+import { computeSeilerTid, computeSeilerTid28d, type SeilerTid } from "./distribution.js";
 import { mean } from "./statistics.js";
 import { roundHalfEven } from "./rounding.js";
 import type { Activity } from "../schemas/inputs.js";
@@ -272,4 +273,76 @@ export function computeHrrc(input: MetricInput): HrrcSignal {
       "before cooldown, or no HR data. Trend: 7d mean vs 28d mean, >10% = meaningful " +
       "(min 1 session/7d, 3 sessions/28d). Display only — not wired into readiness_decision signals.",
   };
+}
+
+export interface TidComparisonSignal {
+  classification_7d: string | null;
+  classification_28d: string | null;
+  pi_7d: number | null;
+  pi_28d: number | null;
+  pi_delta: number | null;
+  drift: "consistent" | "shifting" | "acute_depolarization" | null;
+  note: string;
+}
+
+const TID_COMPARISON_NOTE_INSUFFICIENT =
+  "Compares 7d vs 28d Seiler TID to detect distribution shifts. Insufficient data in one or both windows.";
+const TID_COMPARISON_NOTE_FULL =
+  "Compares 7d vs 28d Seiler TID to detect distribution shifts. pi_delta positive = more polarized acutely.";
+
+export function compareTid(
+  seiler7d: Pick<SeilerTid, "classification" | "polarization_index">,
+  seiler28d: Pick<SeilerTid, "classification" | "polarization_index">,
+): TidComparisonSignal {
+  const cls7d = seiler7d.classification;
+  const cls28d = seiler28d.classification;
+  const pi7d = seiler7d.polarization_index;
+  const pi28d = seiler28d.polarization_index;
+
+  if (cls7d === null || cls28d === null) {
+    return {
+      classification_7d: cls7d,
+      classification_28d: cls28d,
+      pi_7d: pi7d,
+      pi_28d: pi28d,
+      pi_delta: null,
+      drift: null,
+      note: TID_COMPARISON_NOTE_INSUFFICIENT,
+    };
+  }
+
+  let piDelta: number | null = null;
+  if (pi7d !== null && pi28d !== null) {
+    piDelta = roundHalfEven(pi7d - pi28d, 2);
+  }
+
+  let drift: TidComparisonSignal["drift"];
+  if (pi7d !== null && pi28d !== null && pi7d < 2.0 && pi28d >= 2.0) {
+    drift = "acute_depolarization";
+  } else if (cls7d !== cls28d) {
+    drift = "shifting";
+  } else {
+    drift = "consistent";
+  }
+
+  return {
+    classification_7d: cls7d,
+    classification_28d: cls28d,
+    pi_7d: pi7d,
+    pi_28d: pi28d,
+    pi_delta: piDelta,
+    drift,
+    note: TID_COMPARISON_NOTE_FULL,
+  };
+}
+
+/**
+ * TID comparison — acute-vs-chronic Seiler distribution drift.
+ *
+ * Purely composes the all-sport 7d and 28d Seiler outputs and mirrors the
+ * upstream call site at `sync.py:3199` into the comparator ported from
+ * `sync.py:5094-5154`. See `NOTICE.md` for upstream attribution.
+ */
+export function computeTidComparison(input: MetricInput): TidComparisonSignal {
+  return compareTid(computeSeilerTid(input), computeSeilerTid28d(input));
 }

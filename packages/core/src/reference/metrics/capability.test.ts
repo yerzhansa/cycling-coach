@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { computeDurability, computeEfficiencyFactor, computeHrrc } from "./capability.js";
+import {
+  compareTid,
+  computeDurability,
+  computeEfficiencyFactor,
+  computeHrrc,
+  computeTidComparison,
+} from "./capability.js";
 import type { MetricInput } from "./metric-input.js";
 
 interface SyntheticActivity {
@@ -328,5 +334,160 @@ describe("computeHrrc", () => {
     expect(result.mean_hrrc_7d).toBe(31.0);
     expect(result.mean_hrrc_28d).toBe(30.0);
     expect(result.trend).toBe("stable");
+  });
+});
+
+const TID_NOTE_INSUFFICIENT =
+  "Compares 7d vs 28d Seiler TID to detect distribution shifts. Insufficient data in one or both windows.";
+const TID_NOTE_FULL =
+  "Compares 7d vs 28d Seiler TID to detect distribution shifts. pi_delta positive = more polarized acutely.";
+
+describe("compareTid", () => {
+  it("insufficient (cls_7d null)", () => {
+    expect(
+      compareTid(
+        { classification: null, polarization_index: null },
+        { classification: "Base", polarization_index: 1.5 },
+      ),
+    ).toEqual({
+      classification_7d: null,
+      classification_28d: "Base",
+      pi_7d: null,
+      pi_28d: 1.5,
+      pi_delta: null,
+      drift: null,
+      note: TID_NOTE_INSUFFICIENT,
+    });
+  });
+
+  it("consistent (cls equal, pi null)", () => {
+    expect(
+      compareTid(
+        { classification: "Pyramidal", polarization_index: null },
+        { classification: "Pyramidal", polarization_index: null },
+      ),
+    ).toEqual({
+      classification_7d: "Pyramidal",
+      classification_28d: "Pyramidal",
+      pi_7d: null,
+      pi_28d: null,
+      pi_delta: null,
+      drift: "consistent",
+      note: TID_NOTE_FULL,
+    });
+  });
+
+  it("shifting (cls differ, pi null)", () => {
+    expect(
+      compareTid(
+        { classification: "Polarized", polarization_index: null },
+        { classification: "Pyramidal", polarization_index: null },
+      ),
+    ).toEqual({
+      classification_7d: "Polarized",
+      classification_28d: "Pyramidal",
+      pi_7d: null,
+      pi_28d: null,
+      pi_delta: null,
+      drift: "shifting",
+      note: TID_NOTE_FULL,
+    });
+  });
+
+  it("acute_depolarization beats shifting", () => {
+    expect(
+      compareTid(
+        { classification: "Polarized", polarization_index: 1.5 },
+        { classification: "Pyramidal", polarization_index: 2.5 },
+      ),
+    ).toEqual({
+      classification_7d: "Polarized",
+      classification_28d: "Pyramidal",
+      pi_7d: 1.5,
+      pi_28d: 2.5,
+      pi_delta: -1.0,
+      drift: "acute_depolarization",
+      note: TID_NOTE_FULL,
+    });
+  });
+
+  it("acute_depolarization boundary (>= 2.0) beats consistent", () => {
+    expect(
+      compareTid(
+        { classification: "Pyramidal", polarization_index: 1.99 },
+        { classification: "Pyramidal", polarization_index: 2.0 },
+      ),
+    ).toEqual({
+      classification_7d: "Pyramidal",
+      classification_28d: "Pyramidal",
+      pi_7d: 1.99,
+      pi_28d: 2.0,
+      pi_delta: -0.01,
+      drift: "acute_depolarization",
+      note: TID_NOTE_FULL,
+    });
+  });
+
+  it("NOT acute when pi_28d < 2.0", () => {
+    expect(
+      compareTid(
+        { classification: "Base", polarization_index: 1.5 },
+        { classification: "Base", polarization_index: 1.8 },
+      ),
+    ).toEqual({
+      classification_7d: "Base",
+      classification_28d: "Base",
+      pi_7d: 1.5,
+      pi_28d: 1.8,
+      pi_delta: -0.3,
+      drift: "consistent",
+      note: TID_NOTE_FULL,
+    });
+  });
+
+  it("pi_delta banker's tie", () => {
+    expect(
+      compareTid(
+        { classification: "Base", polarization_index: 2.125 },
+        { classification: "Base", polarization_index: 2.0 },
+      ),
+    ).toEqual({
+      classification_7d: "Base",
+      classification_28d: "Base",
+      pi_7d: 2.125,
+      pi_28d: 2.0,
+      pi_delta: 0.12,
+      drift: "consistent",
+      note: TID_NOTE_FULL,
+    });
+  });
+
+  it("pi_delta null when one pi null (cls present)", () => {
+    expect(
+      compareTid(
+        { classification: "Base", polarization_index: 2.0 },
+        { classification: "Base", polarization_index: null },
+      ),
+    ).toEqual({
+      classification_7d: "Base",
+      classification_28d: "Base",
+      pi_7d: 2.0,
+      pi_28d: null,
+      pi_delta: null,
+      drift: "consistent",
+      note: TID_NOTE_FULL,
+    });
+  });
+
+  it("integration", () => {
+    expect(computeTidComparison(input([]))).toEqual({
+      classification_7d: null,
+      classification_28d: null,
+      pi_7d: null,
+      pi_28d: null,
+      pi_delta: null,
+      drift: null,
+      note: TID_NOTE_INSUFFICIENT,
+    });
   });
 });
