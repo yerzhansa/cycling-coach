@@ -5,6 +5,7 @@ import {
   computeLoadRecoveryRatio,
   computeMonotony,
   computeMonotonyInterpretation,
+  computeMultiSportDetected,
   computePrimarySportMonotony,
   computeRecoveryIndex,
   computeStrain,
@@ -14,9 +15,9 @@ import type { MetricInput } from "./metric-input.js";
 
 // These computers read only start_date_local, icu_training_load, and (for
 // the per-sport split) type through the shared daily-Load aggregators; the
-// full Activity shape is exercised by the parity matrix against golden
-// fixtures. These synthetic rows isolate the formulae. `fixture` is typed
-// `unknown` at the gate boundary, so minimal rows ride through untyped.
+// full Activity shape is exercised by the parity matrix against captured
+// fixtures. These synthetic rows isolate the formulae and cast through the
+// parsed fixture shape at the local unit-test boundary.
 function input(
   activities: {
     start_date_local: string;
@@ -25,7 +26,10 @@ function input(
   }[],
   frozenNow: string,
 ): MetricInput {
-  return { fixture: { activities }, frozenNow };
+  return {
+    fixture: { activities } as unknown as MetricInput["fixture"],
+    frozenNow,
+  };
 }
 
 describe("computeMonotony", () => {
@@ -192,6 +196,40 @@ describe("computeMonotonyInterpretation", () => {
   });
 });
 
+describe("computeMultiSportDetected", () => {
+  const FROZEN = "2026-05-10T12:00:00";
+
+  it("returns true when the 7-day window spans two sport families", () => {
+    const result = computeMultiSportDetected(
+      input(
+        [
+          { start_date_local: "2026-05-09T08:00:00", icu_training_load: 80, type: "Ride" },
+          { start_date_local: "2026-05-10T08:00:00", icu_training_load: 40, type: "Run" },
+        ],
+        FROZEN,
+      ),
+    );
+    expect(result).toBe(true);
+  });
+
+  it("returns false when all in-window activity is one sport family", () => {
+    const result = computeMultiSportDetected(
+      input(
+        [
+          { start_date_local: "2026-05-08T08:00:00", icu_training_load: 50, type: "Ride" },
+          { start_date_local: "2026-05-10T08:00:00", icu_training_load: 100, type: "Ride" },
+        ],
+        FROZEN,
+      ),
+    );
+    expect(result).toBe(false);
+  });
+
+  it("returns false with no activities", () => {
+    expect(computeMultiSportDetected(input([], FROZEN))).toBe(false);
+  });
+});
+
 // computeRecoveryIndex reads only id, hrv, and restingHR from the
 // trailing 7-day wellness window; bit-identity against the upstream on
 // the populated path is the parity matrix's job (realistic-athlete = 0.91,
@@ -201,7 +239,10 @@ function wellnessInput(
   wellness: { id: string; hrv: number | null; restingHR: number | null }[],
   frozenNow: string,
 ): MetricInput {
-  return { fixture: { wellness }, frozenNow };
+  return {
+    fixture: { wellness } as unknown as MetricInput["fixture"],
+    frozenNow,
+  };
 }
 
 describe("computeRecoveryIndex", () => {
@@ -270,7 +311,10 @@ function loadRecoveryInput(
   wellness: { id: string; hrv: number | null; restingHR: number | null }[],
   frozenNow: string,
 ): MetricInput {
-  return { fixture: { activities, wellness }, frozenNow };
+  return {
+    fixture: { activities, wellness } as unknown as MetricInput["fixture"],
+    frozenNow,
+  };
 }
 
 describe("computeLoadRecoveryRatio", () => {
@@ -326,7 +370,10 @@ describe("load aggregators — malformed start_date_local is dropped, not thrown
   ];
 
   function fixtureOf(activities: unknown[]): MetricInput {
-    return { fixture: { activities }, frozenNow: FROZEN };
+    return {
+      fixture: { activities } as unknown as MetricInput["fixture"],
+      frozenNow: FROZEN,
+    };
   }
 
   it("computeMonotony drops a null-date row (getDailyLoad)", () => {
