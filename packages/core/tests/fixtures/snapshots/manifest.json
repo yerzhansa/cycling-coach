@@ -11,7 +11,8 @@
     "multisport-tie",
     "new-athlete-empty",
     "populated-benchmark-and-consistency",
-    "realistic-athlete"
+    "realistic-athlete",
+    "rest-week-with-baseline"
   ],
   "metrics": [
     "acwr",

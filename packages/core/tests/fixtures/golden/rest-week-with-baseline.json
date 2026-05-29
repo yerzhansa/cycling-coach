@@ -1,0 +1,846 @@
+{
+  "activities": [
+    {
+      "id": "rwb0",
+      "start_date_local": "2026-05-04T09:00:00",
+      "type": "Ride",
+      "name": "recovery ride",
+      "moving_time": 2700,
+      "elapsed_time": 2730,
+      "icu_training_load": 35.0,
+      "icu_intensity": 65.5,
+      "average_heartrate": 125,
+      "icu_zone_times": [
+        {
+          "id": "Z1",
+          "secs": 600
+        },
+        {
+          "id": "Z2",
+          "secs": 1500
+        },
+        {
+          "id": "Z3",
+          "secs": 600
+        }
+      ],
+      "paired_event_id": null,
+      "pace_zone_times": null,
+      "decoupling": -2.1,
+      "icu_efficiency_factor": 1.05,
+      "fitnessAtEnd": 30.0,
+      "fatigueAtEnd": 24.0
+    },
+    {
+      "id": "rwb1",
+      "start_date_local": "2026-05-05T09:00:00",
+      "type": "Ride",
+      "name": "recovery ride",
+      "moving_time": 2700,
+      "elapsed_time": 2730,
+      "icu_training_load": 35.0,
+      "icu_intensity": 65.5,
+      "average_heartrate": 125,
+      "icu_zone_times": [
+        {
+          "id": "Z1",
+          "secs": 600
+        },
+        {
+          "id": "Z2",
+          "secs": 1500
+        },
+        {
+          "id": "Z3",
+          "secs": 600
+        }
+      ],
+      "paired_event_id": null,
+      "pace_zone_times": null,
+      "decoupling": -2.1,
+      "icu_efficiency_factor": 1.05,
+      "fitnessAtEnd": 30.0,
+      "fatigueAtEnd": 24.0
+    },
+    {
+      "id": "rwb2",
+      "start_date_local": "2026-05-06T09:00:00",
+      "type": "Ride",
+      "name": "recovery ride",
+      "moving_time": 2700,
+      "elapsed_time": 2730,
+      "icu_training_load": 35.0,
+      "icu_intensity": 65.5,
+      "average_heartrate": 125,
+      "icu_zone_times": [
+        {
+          "id": "Z1",
+          "secs": 600
+        },
+        {
+          "id": "Z2",
+          "secs": 1500
+        },
+        {
+          "id": "Z3",
+          "secs": 600
+        }
+      ],
+      "paired_event_id": null,
+      "pace_zone_times": null,
+      "decoupling": -2.1,
+      "icu_efficiency_factor": 1.05,
+      "fitnessAtEnd": 30.0,
+      "fatigueAtEnd": 24.0
+    },
+    {
+      "id": "rwb3",
+      "start_date_local": "2026-05-07T09:00:00",
+      "type": "Ride",
+      "name": "recovery ride",
+      "moving_time": 2700,
+      "elapsed_time": 2730,
+      "icu_training_load": 35.0,
+      "icu_intensity": 65.5,
+      "average_heartrate": 125,
+      "icu_zone_times": [
+        {
+          "id": "Z1",
+          "secs": 600
+        },
+        {
+          "id": "Z2",
+          "secs": 1500
+        },
+        {
+          "id": "Z3",
+          "secs": 600
+        }
+      ],
+      "paired_event_id": null,
+      "pace_zone_times": null,
+      "decoupling": -2.1,
+      "icu_efficiency_factor": 1.05,
+      "fitnessAtEnd": 30.0,
+      "fatigueAtEnd": 24.0
+    },
+    {
+      "id": "rwb4",
+      "start_date_local": "2026-05-08T09:00:00",
+      "type": "Ride",
+      "name": "recovery ride",
+      "moving_time": 2700,
+      "elapsed_time": 2730,
+      "icu_training_load": 35.0,
+      "icu_intensity": 65.5,
+      "average_heartrate": 125,
+      "icu_zone_times": [
+        {
+          "id": "Z1",
+          "secs": 600
+        },
+        {
+          "id": "Z2",
+          "secs": 1500
+        },
+        {
+          "id": "Z3",
+          "secs": 600
+        }
+      ],
+      "paired_event_id": null,
+      "pace_zone_times": null,
+      "decoupling": -2.1,
+      "icu_efficiency_factor": 1.05,
+      "fitnessAtEnd": 30.0,
+      "fatigueAtEnd": 24.0
+    },
+    {
+      "id": "rwb5",
+      "start_date_local": "2026-05-09T09:00:00",
+      "type": "Ride",
+      "name": "recovery ride",
+      "moving_time": 2700,
+      "elapsed_time": 2730,
+      "icu_training_load": 35.0,
+      "icu_intensity": 65.5,
+      "average_heartrate": 125,
+      "icu_zone_times": [
+        {
+          "id": "Z1",
+          "secs": 600
+        },
+        {
+          "id": "Z2",
+          "secs": 1500
+        },
+        {
+          "id": "Z3",
+          "secs": 600
+        }
+      ],
+      "paired_event_id": null,
+      "pace_zone_times": null,
+      "decoupling": -2.1,
+      "icu_efficiency_factor": 1.05,
+      "fitnessAtEnd": 30.0,
+      "fatigueAtEnd": 24.0
+    },
+    {
+      "id": "rwb6",
+      "start_date_local": "2026-05-10T09:00:00",
+      "type": "Ride",
+      "name": "recovery ride",
+      "moving_time": 2700,
+      "elapsed_time": 2730,
+      "icu_training_load": 35.0,
+      "icu_intensity": 65.5,
+      "average_heartrate": 125,
+      "icu_zone_times": [
+        {
+          "id": "Z1",
+          "secs": 600
+        },
+        {
+          "id": "Z2",
+          "secs": 1500
+        },
+        {
+          "id": "Z3",
+          "secs": 600
+        }
+      ],
+      "paired_event_id": null,
+      "pace_zone_times": null,
+      "decoupling": -2.1,
+      "icu_efficiency_factor": 1.05,
+      "fitnessAtEnd": 30.0,
+      "fatigueAtEnd": 24.0
+    }
+  ],
+  "wellness": [
+    {
+      "id": "2026-04-13",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 32.0,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-04-14",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 31.9,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-04-15",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 31.7,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-04-16",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 31.6,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-04-17",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 31.5,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-04-18",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 31.3,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-04-19",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 31.2,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-04-20",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 31.0,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-04-21",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 30.9,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-04-22",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 30.8,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-04-23",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 30.6,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-04-24",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 30.5,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-04-25",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 30.4,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-04-26",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 30.2,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-04-27",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 30.1,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-04-28",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 29.9,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-04-29",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 29.8,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-04-30",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 29.7,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-05-01",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 29.5,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-05-02",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 29.4,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-05-03",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 29.3,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-05-04",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 29.1,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-05-05",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 29.0,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-05-06",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 28.8,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-05-07",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 28.7,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-05-08",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 28.6,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-05-09",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 28.4,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    },
+    {
+      "id": "2026-05-10",
+      "weight": null,
+      "restingHR": 58,
+      "hrv": 52,
+      "sleepSecs": 28800,
+      "sleepQuality": 4,
+      "soreness": null,
+      "fatigue": null,
+      "sportInfo": [
+        {
+          "type": "Ride",
+          "eftp": 240
+        }
+      ],
+      "bodyFat": null,
+      "vo2max": null,
+      "fitness": 28.3,
+      "fitnessContribution": 0,
+      "fatigueContribution": 0,
+      "weeklyFitnessChange": 0
+    }
+  ],
+  "ftp_history": [
+    {
+      "date": "2026-03-15",
+      "ftp": 280,
+      "source": "test"
+    }
+  ]
+}

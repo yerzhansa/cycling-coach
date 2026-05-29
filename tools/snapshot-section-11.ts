@@ -113,6 +113,12 @@ const HARNESS_FIXTURES: HarnessFixtureConfig[] = [
     description:
       "Populated-branch coverage for consistency_index + benchmark_indoor + benchmark_outdoor — the F11 metrics whose previous fixtures all collapsed to the null branch. 4 WORKOUT events on 05-05/07/09/10 paired with cycling activities on 05-05/07/09 give matched=3, planned=4, consistency_index=0.75. FTP history has a 2026-03-15 entry sitting exactly at (frozenNow - 56d), exercising the +/-7d nearest-match window: indoor 280/270-1=0.037 in seasonal range [0.01,0.04] → seasonal_expected=true; outdoor 270/260-1=0.038 same range true. Without this fixture the parity gate is theatre for those three metrics.",
   },
+  {
+    slug: "rest-week-with-baseline",
+    frozenNow: DEFAULT_FROZEN_NOW,
+    description:
+      "Constant-Load coverage for the monotony stdev=0 branch. 7 recovery rides on 05-04..05-10 at an IDENTICAL daily Load of 35.0 give the 7d series [35,35,35,35,35,35,35] — non-zero mean, sample stdev exactly 0 — so monotony hits the `stdevLoad <= 0 -> null` guard (a path the all-zero fixtures reach via a different branch). That null cascades: strain -> null, stress_tolerance -> null. Single-sport, so primary_sport_monotony hits its own stdev=0 null too. The 28-day wellness baseline (stable RHR 58 / HRV 52) populates recovery_index + HRV/RHR baselines through the flat block. Anchor 2026-05-10 puts the constant week in the 7d acute window.",
+  },
 ];
 
 function readPyodideVersion(): string {
