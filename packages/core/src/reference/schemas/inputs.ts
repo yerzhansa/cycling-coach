@@ -105,6 +105,18 @@ export const ActivitySchema = z.looseObject({
   icu_variability_index: z.number().nullable().optional(),
   pa_hr: z.number().nullable().optional(),
   icu_efficiency_factor: z.number().nullable().optional(),
+  icu_hrr: z
+    .union([
+      z.number(),
+      z
+        .object({
+          value: z.number().nullable().optional(),
+          hrr: z.number().nullable().optional(),
+        })
+        .loose(),
+    ])
+    .nullable()
+    .optional(),
   icu_intervals: z.array(IcuIntervalRepSchema).optional(),
 
   // Compliance

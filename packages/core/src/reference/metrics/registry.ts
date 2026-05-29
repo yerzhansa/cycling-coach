@@ -9,7 +9,7 @@
  */
 
 import { computeWeightSignal } from "./bodycomp.js";
-import { computeDurability, computeEfficiencyFactor } from "./capability.js";
+import { computeDurability, computeEfficiencyFactor, computeHrrc } from "./capability.js";
 import {
   computeBenchmarkIndoor,
   computeBenchmarkOutdoor,
@@ -80,4 +80,5 @@ export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {
   weight_signal: { compute: computeWeightSignal },
   "capability.durability": { compute: computeDurability },
   "capability.efficiency_factor": { compute: computeEfficiencyFactor },
+  "capability.hrrc": { compute: computeHrrc },
 };

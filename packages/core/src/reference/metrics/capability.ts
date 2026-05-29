@@ -201,3 +201,75 @@ export function computeEfficiencyFactor(input: MetricInput): EfficiencyFactorSig
       "EF varies with intensity. Trend compares 7d vs 28d mean (+/-0.03 = stable).",
   };
 }
+
+export interface HrrcSignal {
+  mean_hrrc_7d: number | null;
+  mean_hrrc_28d: number | null;
+  qualifying_sessions_7d: number;
+  qualifying_sessions_28d: number;
+  trend: "improving" | "declining" | "stable" | null;
+  note: string;
+}
+
+// Heart-rate-recovery values from a window. Qualifying = HRRc present, plain
+// number or object value/hrr payload, and > 0. Mirrors the nested
+// _filter_qualifying at sync.py:4217-4232.
+function filterQualifyingHrrc(activities: Activity[]): number[] {
+  const qualifying: number[] = [];
+  for (const act of activities) {
+    let hrrc = act.icu_hrr;
+    if (hrrc === null || hrrc === undefined) continue;
+    if (typeof hrrc === "object") {
+      let v = hrrc.value;
+      if (v === null || v === undefined) v = hrrc.hrr;
+      hrrc = v;
+    }
+    if (typeof hrrc === "number" && hrrc > 0) {
+      qualifying.push(hrrc);
+    }
+  }
+  return qualifying;
+}
+
+/**
+ * HRRc — aggregate heart-rate recovery across qualifying sessions, as a
+ * 7d-vs-28d trend.
+ *
+ * The 7d mean needs >= 1 qualifying session; the 28d mean needs >= 3
+ * qualifying sessions. The trend needs both windows and uses a +/-10%
+ * dead-band around the proportional 7d-vs-28d difference.
+ *
+ * Upstream source mirrored line-by-line: sync.py:4216-4295
+ * (_calculate_hrrc_trend) plus the nested _filter_qualifying helper at
+ * sync.py:4217-4232. The 7d/28d activity windows mirror the harness
+ * slice_window calls. See NOTICE.md for upstream attribution.
+ */
+export function computeHrrc(input: MetricInput): HrrcSignal {
+  const activities = getActivities(input);
+  const vals7d = filterQualifyingHrrc(getActivitiesInWindow(activities, 7, input.frozenNow));
+  const vals28d = filterQualifyingHrrc(getActivitiesInWindow(activities, 28, input.frozenNow));
+
+  const mean7d = vals7d.length >= 1 ? roundHalfEven(mean(vals7d), 1) : null;
+  const mean28d = vals28d.length >= 3 ? roundHalfEven(mean(vals28d), 1) : null;
+
+  let trend: HrrcSignal["trend"] = null;
+  if (mean7d !== null && mean28d !== null && mean28d > 0) {
+    const pctChange = (mean7d - mean28d) / mean28d;
+    if (pctChange > 0.10) trend = "improving";
+    else if (pctChange < -0.10) trend = "declining";
+    else trend = "stable";
+  }
+
+  return {
+    mean_hrrc_7d: mean7d,
+    mean_hrrc_28d: mean28d,
+    qualifying_sessions_7d: vals7d.length,
+    qualifying_sessions_28d: vals28d.length,
+    trend,
+    note:
+      "HRRc = heart rate recovery (largest 60s HR drop in bpm after exceeding threshold HR for >1 min). " +
+      "Higher = better parasympathetic recovery. Null when threshold not reached, recording stopped " +
+      "before cooldown, or no HR data. Trend: 7d mean vs 28d mean, >10% = meaningful " +
+      "(min 1 session/7d, 3 sessions/28d). Display only — not wired into readiness_decision signals.",
+  };
+}

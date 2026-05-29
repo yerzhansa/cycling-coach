@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { computeDurability, computeEfficiencyFactor } from "./capability.js";
+import { computeDurability, computeEfficiencyFactor, computeHrrc } from "./capability.js";
 import type { MetricInput } from "./metric-input.js";
 
 interface SyntheticActivity {
@@ -12,6 +12,7 @@ interface SyntheticActivity {
   icu_hr_decoupling?: number | null;
   decoupling?: number | null;
   icu_efficiency_factor?: number | null;
+  icu_hrr?: number | { value?: number | null; hrr?: number | null } | null;
 }
 
 function input(activities: SyntheticActivity[], frozenNow = "2026-05-10T12:00:00"): MetricInput {
@@ -222,5 +223,110 @@ describe("computeEfficiencyFactor", () => {
     expect(result.qualifying_sessions_7d).toBe(1);
     expect(result.mean_ef_7d).toBeNull(); // needs >= 2
     expect(result.trend).toBeNull();
+  });
+});
+
+const HRRC_NOTE =
+  "HRRc = heart rate recovery (largest 60s HR drop in bpm after exceeding threshold HR for >1 min). " +
+  "Higher = better parasympathetic recovery. Null when threshold not reached, recording stopped " +
+  "before cooldown, or no HR data. Trend: 7d mean vs 28d mean, >10% = meaningful " +
+  "(min 1 session/7d, 3 sessions/28d). Display only — not wired into readiness_decision signals.";
+
+// A session that passes the HRRc _filter_qualifying: HRRc present and > 0.
+function qualifyingHrrc(date: string, hrr: number): SyntheticActivity {
+  return {
+    id: `hrrc-${date}-${hrr}`,
+    start_date_local: `${date}T09:00:00`,
+    type: "Ride",
+    moving_time: 3600,
+    icu_hrr: hrr,
+  };
+}
+
+describe("computeHrrc", () => {
+  it("empty → insufficient shape (golden-fixture branch)", () => {
+    const result = computeHrrc(input([]));
+    expect(result).toEqual({
+      mean_hrrc_7d: null,
+      mean_hrrc_28d: null,
+      qualifying_sessions_7d: 0,
+      qualifying_sessions_28d: 0,
+      trend: null,
+      note: HRRC_NOTE,
+    });
+  });
+
+  it("dict-form extraction + value/hrr fallback + banker rounding", () => {
+    const result = computeHrrc(
+      input([
+        { start_date_local: "2026-05-08T09:00:00", type: "Ride", moving_time: 3600, icu_hrr: { value: 34 } },
+        { start_date_local: "2026-04-20T09:00:00", type: "Ride", moving_time: 3600, icu_hrr: { hrr: 30 } },
+        { start_date_local: "2026-04-25T09:00:00", type: "Ride", moving_time: 3600, icu_hrr: { value: null, hrr: 28 } },
+      ]),
+    );
+    expect(result.qualifying_sessions_7d).toBe(1);
+    expect(result.qualifying_sessions_28d).toBe(3);
+    expect(result.mean_hrrc_7d).toBe(34.0);
+    expect(result.mean_hrrc_28d).toBe(30.7);
+  });
+
+  it("filter rejects icu_hrr <= 0 and missing", () => {
+    const result = computeHrrc(
+      input([
+        { start_date_local: "2026-05-08T09:00:00", type: "Ride", moving_time: 3600, icu_hrr: 0 },
+        { start_date_local: "2026-05-08T09:00:00", type: "Ride", moving_time: 3600, icu_hrr: -5 },
+        { start_date_local: "2026-05-08T09:00:00", type: "Ride", moving_time: 3600 },
+        qualifyingHrrc("2026-05-08", 25),
+      ]),
+    );
+    expect(result.qualifying_sessions_28d).toBe(1);
+  });
+
+  it("7d>=1 emits a mean but 28d<3 stays null", () => {
+    const result = computeHrrc(input([qualifyingHrrc("2026-05-08", 35)]));
+    expect(result.qualifying_sessions_7d).toBe(1);
+    expect(result.mean_hrrc_7d).toBe(35.0);
+    expect(result.mean_hrrc_28d).toBeNull();
+    expect(result.qualifying_sessions_28d).toBe(1);
+    expect(result.trend).toBeNull();
+  });
+
+  it("improving trend", () => {
+    const result = computeHrrc(
+      input([
+        qualifyingHrrc("2026-05-08", 40),
+        qualifyingHrrc("2026-04-20", 30),
+        qualifyingHrrc("2026-04-25", 20),
+      ]),
+    );
+    expect(result.mean_hrrc_7d).toBe(40.0);
+    expect(result.mean_hrrc_28d).toBe(30.0);
+    expect(result.trend).toBe("improving");
+  });
+
+  it("declining trend", () => {
+    const result = computeHrrc(
+      input([
+        qualifyingHrrc("2026-05-08", 26),
+        qualifyingHrrc("2026-04-20", 32),
+        qualifyingHrrc("2026-04-25", 32),
+      ]),
+    );
+    expect(result.mean_hrrc_7d).toBe(26.0);
+    expect(result.mean_hrrc_28d).toBe(30.0);
+    expect(result.trend).toBe("declining");
+  });
+
+  it("stable trend (inside ±10%)", () => {
+    const result = computeHrrc(
+      input([
+        qualifyingHrrc("2026-05-08", 31),
+        qualifyingHrrc("2026-04-20", 30),
+        qualifyingHrrc("2026-04-25", 29),
+      ]),
+    );
+    expect(result.mean_hrrc_7d).toBe(31.0);
+    expect(result.mean_hrrc_28d).toBe(30.0);
+    expect(result.trend).toBe("stable");
   });
 });
