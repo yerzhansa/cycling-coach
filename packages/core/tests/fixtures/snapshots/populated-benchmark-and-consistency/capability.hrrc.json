@@ -1,0 +1,15 @@
+{
+  "metric": "capability.hrrc",
+  "athlete": "populated-benchmark-and-consistency",
+  "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
+  "section_11_protocol_version": "3.112",
+  "frozen_now": "2026-05-10T12:00:00",
+  "value": {
+    "mean_hrrc_28d": null,
+    "mean_hrrc_7d": null,
+    "note": "HRRc = heart rate recovery (largest 60s HR drop in bpm after exceeding threshold HR for >1 min). Higher = better parasympathetic recovery. Null when threshold not reached, recording stopped before cooldown, or no HR data. Trend: 7d mean vs 28d mean, >10% = meaningful (min 1 session/7d, 3 sessions/28d). Display only — not wired into readiness_decision signals.",
+    "qualifying_sessions_28d": 0,
+    "qualifying_sessions_7d": 0,
+    "trend": null
+  }
+}

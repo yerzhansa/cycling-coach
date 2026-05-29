@@ -101,6 +101,8 @@ export const ActivitySchema = z.looseObject({
 
   // Capability proxies
   decoupling: z.number().nullable().optional(),
+  icu_hr_decoupling: z.number().nullable().optional(),
+  icu_variability_index: z.number().nullable().optional(),
   pa_hr: z.number().nullable().optional(),
   icu_efficiency_factor: z.number().nullable().optional(),
   icu_intervals: z.array(IcuIntervalRepSchema).optional(),

@@ -245,6 +245,13 @@ def main() -> int:
             }
         }
 
+    # Explode the capability dict into capability.<sub> sibling keys, in
+    # lockstep with the pyodide harness's per-sub-key emission so
+    # diff-pyodide-vs-cpython compares the same key set.
+    if isinstance(derived.get("capability"), dict):
+        for _sub, _val in list(derived["capability"].items()):
+            derived[f"capability.{_sub}"] = _val
+
     payload = json.dumps(derived, default=str, sort_keys=True, indent=2) + "\n"
     if args.out is None:
         sys.stdout.write(payload)

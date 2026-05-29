@@ -625,7 +625,7 @@ function selectPrimarySport(activities: Activity[]): string | null {
 // frozenNow], inclusive, in fixture order. Mirrors the harness
 // `_within(_activities_all, "start_date_local", ...)` slice — an inclusive
 // lexicographic date comparison over the YYYY-MM-DD prefix.
-function getActivitiesInWindow(
+export function getActivitiesInWindow(
   activities: Activity[],
   days: number,
   frozenNow: string,

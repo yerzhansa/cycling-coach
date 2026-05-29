@@ -543,6 +543,13 @@ if "__error__" not in derived:
             }
         }
 
+    # Explode the capability dict into capability.<sub> sibling keys so the
+    # parity gate can assert each sub-key as its own one-metric-one-file
+    # oracle. Lockstep with tools/snapshot-section-11-native.py.
+    if isinstance(derived.get("capability"), dict):
+        for _sub, _val in list(derived["capability"].items()):
+            derived[f"capability.{_sub}"] = _val
+
 OUTPUT_JSON = json.dumps(derived, default=str, sort_keys=True)
 `;
 

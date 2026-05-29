@@ -1,0 +1,16 @@
+{
+  "metric": "capability.tid_comparison",
+  "athlete": "boundary-zone-total-secs",
+  "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
+  "section_11_protocol_version": "3.112",
+  "frozen_now": "2026-05-10T12:00:00",
+  "value": {
+    "classification_28d": "High Intensity",
+    "classification_7d": "High Intensity",
+    "drift": "consistent",
+    "note": "Compares 7d vs 28d Seiler TID to detect distribution shifts. pi_delta positive = more polarized acutely.",
+    "pi_28d": null,
+    "pi_7d": null,
+    "pi_delta": null
+  }
+}

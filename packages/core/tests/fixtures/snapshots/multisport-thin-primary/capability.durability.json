@@ -1,0 +1,19 @@
+{
+  "metric": "capability.durability",
+  "athlete": "multisport-thin-primary",
+  "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
+  "section_11_protocol_version": "3.112",
+  "frozen_now": "2026-05-10T12:00:00",
+  "value": {
+    "high_drift_count_28d": 0,
+    "high_drift_count_7d": 0,
+    "mean_decoupling_28d": null,
+    "mean_decoupling_7d": null,
+    "note": "Steady-state power sessions only (VI <= 1.05, VI > 0, >= 90min, power data). Negative decoupling = strong durability. Trend compares 7d vs 28d mean (+/-1% = stable). Alerts require N28>=5 (alarm) or N7>=3 AND N28>=5 (declining warning) for statistical reliability.",
+    "qualifying_sessions_28d": 0,
+    "qualifying_sessions_7d": 0,
+    "reliability_limited": true,
+    "reliability_note": "insufficient qualifying sessions for alert evaluation: 7d N=0 (min 3), 28d N=0 (min 5)",
+    "trend": null
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "metric": "capability.efficiency_factor",
+  "athlete": "realistic-athlete",
+  "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
+  "section_11_protocol_version": "3.112",
+  "frozen_now": "2026-05-10T12:00:00",
+  "value": {
+    "mean_ef_28d": null,
+    "mean_ef_7d": null,
+    "note": "Steady-state cycling sessions only (VI <= 1.05, VI > 0, >= 20min, power+HR data). Rising EF = improving aerobic efficiency. Compare like-for-like sessions only — EF varies with intensity. Trend compares 7d vs 28d mean (+/-0.03 = stable).",
+    "qualifying_sessions_28d": 0,
+    "qualifying_sessions_7d": 0,
+    "trend": null
+  }
+}
