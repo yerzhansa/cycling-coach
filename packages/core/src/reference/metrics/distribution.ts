@@ -10,8 +10,7 @@
 
 import type { Activity } from "../schemas/inputs.js";
 
-import { isoDateDaysBefore } from "./date-helpers.js";
-import { getActivities, type MetricInput } from "./metric-input.js";
+import { getActivities, getActivitiesInWindow, type MetricInput } from "./metric-input.js";
 import { roundHalfEven } from "./rounding.js";
 import { SPORT_FAMILIES } from "./sport-families.js";
 import { pythonSum } from "./statistics.js";
@@ -618,24 +617,5 @@ function selectPrimarySport(activities: Activity[]): string | null {
     }
   }
   return primary;
-}
-
-// The trailing 7-day activity window the upstream reads as `activities_7d`:
-// rows whose `start_date_local` date falls in [frozenNow-(days-1),
-// frozenNow], inclusive, in fixture order. Mirrors the harness
-// `_within(_activities_all, "start_date_local", ...)` slice — an inclusive
-// lexicographic date comparison over the YYYY-MM-DD prefix.
-export function getActivitiesInWindow(
-  activities: Activity[],
-  days: number,
-  frozenNow: string,
-): Activity[] {
-  const oldest = isoDateDaysBefore(frozenNow, days - 1);
-  const today = frozenNow.slice(0, 10);
-  return activities.filter((a) => {
-    if (typeof a.start_date_local !== "string") return false;
-    const d = a.start_date_local.slice(0, 10);
-    return oldest <= d && d <= today;
-  });
 }
 

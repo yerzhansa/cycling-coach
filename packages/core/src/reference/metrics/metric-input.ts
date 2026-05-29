@@ -4,6 +4,7 @@ import type {
   PlannedEvent,
   WellnessDay,
 } from "../schemas/inputs.js";
+import { isoDateDaysBefore } from "./date-helpers.js";
 
 /** Per-activity intervals entry projected to the fields the Reference layer
  *  consumes. Mirrors the upstream's intervals.json row shape (a distinct API
@@ -35,6 +36,25 @@ export interface MetricInput {
 
 export function getActivities(input: MetricInput): Activity[] {
   return input.fixture.activities;
+}
+
+// The trailing activity window the upstream reads as `activities_7d` /
+// `activities_28d`: rows whose `start_date_local` date falls in
+// [frozenNow-(days-1), frozenNow], inclusive, in fixture order. Mirrors the
+// harness `slice_window(_activities_all, "start_date_local", ...)` — an
+// inclusive lexicographic date comparison over the YYYY-MM-DD prefix.
+export function getActivitiesInWindow(
+  activities: Activity[],
+  days: number,
+  frozenNow: string,
+): Activity[] {
+  const oldest = isoDateDaysBefore(frozenNow, days - 1);
+  const today = frozenNow.slice(0, 10);
+  return activities.filter((a) => {
+    if (typeof a.start_date_local !== "string") return false;
+    const d = a.start_date_local.slice(0, 10);
+    return oldest <= d && d <= today;
+  });
 }
 
 export function getPastEvents(input: MetricInput): PlannedEvent[] {

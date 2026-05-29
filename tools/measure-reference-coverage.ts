@@ -27,28 +27,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { REPO_ROOT } from "./check-metric-parity";
+import { HARNESS_FIXTURES } from "./harness-fixtures.js";
 
 const GOLDEN_DIR = resolve(REPO_ROOT, "packages/core/tests/fixtures/golden");
-const MANIFEST_PATH = resolve(
-  REPO_ROOT,
-  "packages/core/tests/fixtures/snapshots/manifest.json",
-);
 const SECTION_11_REPO =
   process.env.SECTION_11_REPO ?? resolve(REPO_ROOT, "../section-11");
 const NATIVE_SCRIPT = resolve(REPO_ROOT, "tools/measure-reference-coverage-native.py");
-
-// Per-fixture frozen-now anchor. Mirrors the HARNESS_FIXTURES allowlist in
-// tools/snapshot-section-11.ts: every fixture uses the default anchor except
-// data-gap-mid-history, whose 28-day gap needs a later anchor to land the
-// resumed week in the acute window. Keep in step with that allowlist.
-const DEFAULT_FROZEN_NOW = "2026-05-10T12:00:00";
-const FROZEN_NOW_OVERRIDES: Record<string, string> = {
-  "data-gap-mid-history": "2026-05-20T12:00:00",
-};
-
-interface ManifestFile {
-  fixtures: string[];
-}
 
 interface CoverageReport {
   upstream_sync_py: string;
@@ -71,13 +55,12 @@ interface CoverageReport {
   }[];
 }
 
+// Drive coverage over the same fixtures + anchors the snapshot harness uses,
+// straight from the shared allowlist — no second copy of the anchor table.
 function buildManifest(tmpDir: string): string {
-  const { fixtures } = JSON.parse(
-    readFileSync(MANIFEST_PATH, "utf8"),
-  ) as ManifestFile;
-  const entries = fixtures.map((slug) => ({
+  const entries = HARNESS_FIXTURES.map(({ slug, frozenNow }) => ({
     path: join(GOLDEN_DIR, `${slug}.json`),
-    frozen_now: FROZEN_NOW_OVERRIDES[slug] ?? DEFAULT_FROZEN_NOW,
+    frozen_now: frozenNow,
   }));
   const manifestPath = join(tmpDir, "coverage-manifest.json");
   writeFileSync(manifestPath, JSON.stringify(entries, null, 2));

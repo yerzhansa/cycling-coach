@@ -264,28 +264,34 @@ def main() -> int:
     data = cov.get_data()
     executed_lines = set(data.lines(str(sync_py_path)) or [])
 
-    # Missing lines + branch arcs via coverage's analysis. analysis2 is the
-    # public surface for missing lines; _analyze exposes branch arcs (kept
-    # in a try/except so a coverage-API shift degrades to line-only).
+    # Missing lines come from analysis2 (public API). One _analyze pass
+    # (private API — hence the noqa + guard) then yields both the missing
+    # branch arcs and the branch totals; a coverage-API shift degrades to the
+    # line-only coverage above.
     _f, statements, _excl, missing, _fmt = cov.analysis2(str(sync_py_path))
     missing_set = set(missing)
     missing_branch_arcs: dict[int, list[int]] = {}
+    total_branches = 0
+    covered_branches = 0
     try:
         analysis = cov._analyze(str(sync_py_path))  # noqa: SLF001
         for src, dsts in analysis.missing_branch_arcs().items():
             missing_branch_arcs[int(src)] = sorted(int(d) for d in dsts)
+        total_branches = analysis.numbers.n_branches
+        covered_branches = total_branches - analysis.numbers.n_missing_branches
     except Exception:  # noqa: BLE001
-        missing_branch_arcs = {}
+        pass
 
+    # A function ran iff a BODY line executed — the def line alone executes at
+    # module-load for every function and is not evidence of a call. Compute the
+    # entered set once; the report loop and the summary count both reuse it.
     def entered(fn: dict) -> bool:
-        # A function ran iff a BODY line executed — the def line alone executes
-        # at module-load for every function and is not evidence of a call.
         return any(ln in executed_lines for ln in range(fn["body_start"], fn["end"] + 1))
 
+    entered_fns = [fn for fn in fns if entered(fn)]
+
     report_fns = []
-    for fn in fns:
-        if not entered(fn):
-            continue  # function never ran on the metrics path — not a callee
+    for fn in entered_fns:
         rng = range(fn["start"], fn["end"] + 1)
         fn_missing_lines = sorted(ln for ln in missing_set if ln in rng)
         fn_missing_branches = {
@@ -302,16 +308,6 @@ def main() -> int:
             "missing_branch_arcs": [{"from": s, "to": d} for s, dsts in fn_missing_branches.items() for d in dsts],
         })
 
-    total_branches = 0
-    covered_branches = 0
-    try:
-        analysis = cov._analyze(str(sync_py_path))  # noqa: SLF001
-        n_branches, n_partial = analysis.numbers.n_branches, analysis.numbers.n_missing_branches
-        total_branches = n_branches
-        covered_branches = n_branches - n_partial
-    except Exception:  # noqa: BLE001
-        pass
-
     report = {
         "upstream_sync_py": str(sync_py_path),
         "fixtures_run": ran,
@@ -321,7 +317,7 @@ def main() -> int:
             "executed_statements": len(statements) - len(missing_set),
             "total_branches": total_branches,
             "covered_branches": covered_branches,
-            "functions_entered": sum(1 for fn in fns if entered(fn)),
+            "functions_entered": len(entered_fns),
             "functions_with_gaps": len(report_fns),
         },
         # Only functions the metrics path actually entered, that still have gaps.

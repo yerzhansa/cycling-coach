@@ -11,8 +11,7 @@
  * See `NOTICE.md` for upstream attribution.
  */
 
-import { getActivitiesInWindow } from "./distribution.js";
-import { getActivities, type MetricInput } from "./metric-input.js";
+import { getActivities, getActivitiesInWindow, type MetricInput } from "./metric-input.js";
 import { mean } from "./statistics.js";
 import { roundHalfEven } from "./rounding.js";
 import type { Activity } from "../schemas/inputs.js";
