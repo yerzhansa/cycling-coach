@@ -29,6 +29,15 @@ export interface DurabilitySignal {
   note: string;
 }
 
+export interface EfficiencyFactorSignal {
+  mean_ef_7d: number | null;
+  mean_ef_28d: number | null;
+  qualifying_sessions_7d: number;
+  qualifying_sessions_28d: number;
+  trend: "improving" | "declining" | "stable" | null;
+  note: string;
+}
+
 // Steady-state-session decoupling values from a window. Qualifying =
 // decoupling present, variability index in (0, 1.05], moving_time ≥ 90 min.
 // Mirrors the nested `_filter_qualifying` at sync.py:4061-4078. The raw API
@@ -51,6 +60,36 @@ function filterQualifying(activities: Activity[]): number[] {
       mt >= 5400
     ) {
       qualifying.push(dec);
+    }
+  }
+  return qualifying;
+}
+
+// Cycling activity types EF is restricted to. Mirrors the CYCLING_TYPES set
+// at sync.py:4161.
+const CYCLING_TYPES = new Set(["Ride", "VirtualRide", "MountainBikeRide", "GravelRide"]);
+
+// Steady-state-session efficiency-factor values from a window. Qualifying =
+// EF present, a cycling type, variability index in (0, 1.05], moving_time >=
+// 20 min. Mirrors the nested _filter_qualifying at sync.py:4163-4179.
+function filterQualifyingEf(activities: Activity[]): number[] {
+  const qualifying: number[] = [];
+  for (const act of activities) {
+    const ef = act.icu_efficiency_factor;
+    const vi = act.icu_variability_index;
+    const mt = act.moving_time || 0;
+
+    if (
+      ef !== null &&
+      ef !== undefined &&
+      CYCLING_TYPES.has(act.type) &&
+      vi !== null &&
+      vi !== undefined &&
+      vi > 0 &&
+      vi <= 1.05 &&
+      mt >= 1200
+    ) {
+      qualifying.push(ef);
     }
   }
   return qualifying;
@@ -116,5 +155,49 @@ export function computeDurability(input: MetricInput): DurabilitySignal {
       "Negative decoupling = strong durability. Trend compares 7d vs 28d mean " +
       "(+/-1% = stable). Alerts require N28>=5 (alarm) or N7>=3 AND N28>=5 " +
       "(declining warning) for statistical reliability.",
+  };
+}
+
+/**
+ * Efficiency Factor — aggregate EF across qualifying steady-state cycling
+ * sessions, as a 7d-vs-28d trend. EF is a power-to-heart-rate efficiency
+ * ratio (intervals.icu supplies it per activity as icu_efficiency_factor);
+ * rising EF at a given intensity indicates improving aerobic fitness, and
+ * because EF varies with intensity the trend compares like-for-like windows.
+ *
+ * Means need >= 2 qualifying sessions; the trend needs both windows and uses
+ * a +/-0.03 dead-band around the 7d-minus-28d delta.
+ *
+ * Upstream source mirrored line-by-line: sync.py:4138-4214
+ * (_calculate_efficiency_factor) plus the nested _filter_qualifying helper at
+ * sync.py:4163-4179. The 7d/28d activity windows mirror the harness
+ * slice_window calls. See NOTICE.md for upstream attribution.
+ */
+export function computeEfficiencyFactor(input: MetricInput): EfficiencyFactorSignal {
+  const activities = getActivities(input);
+  const vals7d = filterQualifyingEf(getActivitiesInWindow(activities, 7, input.frozenNow));
+  const vals28d = filterQualifyingEf(getActivitiesInWindow(activities, 28, input.frozenNow));
+
+  const mean7d = vals7d.length >= 2 ? roundHalfEven(mean(vals7d), 2) : null;
+  const mean28d = vals28d.length >= 2 ? roundHalfEven(mean(vals28d), 2) : null;
+
+  let trend: EfficiencyFactorSignal["trend"] = null;
+  if (mean7d !== null && mean28d !== null) {
+    const delta = mean7d - mean28d;
+    if (delta > 0.03) trend = "improving";
+    else if (delta < -0.03) trend = "declining";
+    else trend = "stable";
+  }
+
+  return {
+    mean_ef_7d: mean7d,
+    mean_ef_28d: mean28d,
+    qualifying_sessions_7d: vals7d.length,
+    qualifying_sessions_28d: vals28d.length,
+    trend,
+    note:
+      "Steady-state cycling sessions only (VI <= 1.05, VI > 0, >= 20min, power+HR data). " +
+      "Rising EF = improving aerobic efficiency. Compare like-for-like sessions only — " +
+      "EF varies with intensity. Trend compares 7d vs 28d mean (+/-0.03 = stable).",
   };
 }

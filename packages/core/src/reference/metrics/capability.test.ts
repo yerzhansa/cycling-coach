@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { computeDurability } from "./capability.js";
+import { computeDurability, computeEfficiencyFactor } from "./capability.js";
 import type { MetricInput } from "./metric-input.js";
 
 interface SyntheticActivity {
@@ -11,6 +11,7 @@ interface SyntheticActivity {
   icu_variability_index?: number | null;
   icu_hr_decoupling?: number | null;
   decoupling?: number | null;
+  icu_efficiency_factor?: number | null;
 }
 
 function input(activities: SyntheticActivity[], frozenNow = "2026-05-10T12:00:00"): MetricInput {
@@ -106,5 +107,120 @@ describe("computeDurability", () => {
     expect(result.qualifying_sessions_7d).toBe(1);
     expect(result.mean_decoupling_7d).toBeNull(); // needs >= 2
     expect(result.reliability_limited).toBe(true);
+  });
+});
+
+const EF_NOTE =
+  "Steady-state cycling sessions only (VI <= 1.05, VI > 0, >= 20min, power+HR data). " +
+  "Rising EF = improving aerobic efficiency. Compare like-for-like sessions only — " +
+  "EF varies with intensity. Trend compares 7d vs 28d mean (+/-0.03 = stable).";
+
+// A steady-state cycling session that passes the EF _filter_qualifying: EF
+// present, a cycling type, 0 < VI <= 1.05, moving_time >= 1200s. `ef` is the
+// efficiency-factor value.
+function qualifyingEf(date: string, ef: number, type = "Ride"): SyntheticActivity {
+  return {
+    id: `ef-${date}-${ef}`,
+    start_date_local: `${date}T09:00:00`,
+    type,
+    moving_time: 1800,
+    icu_variability_index: 1.0,
+    icu_efficiency_factor: ef,
+  };
+}
+
+describe("computeEfficiencyFactor", () => {
+  it("returns the insufficient-sessions shape when no activity qualifies (golden-fixture branch)", () => {
+    const result = computeEfficiencyFactor(input([]));
+    expect(result).toEqual({
+      mean_ef_7d: null,
+      mean_ef_28d: null,
+      qualifying_sessions_7d: 0,
+      qualifying_sessions_28d: 0,
+      trend: null,
+      note: EF_NOTE,
+    });
+  });
+
+  it("rejects non-qualifying sessions: non-cycling type, VI out of range, too short, or missing EF", () => {
+    const result = computeEfficiencyFactor(
+      input([
+        { id: 1, start_date_local: "2026-05-08T09:00:00", type: "Run", moving_time: 1800, icu_variability_index: 1.0, icu_efficiency_factor: 2.0 }, // not a cycling type
+        { id: 2, start_date_local: "2026-05-08T09:00:00", type: "Ride", moving_time: 1800, icu_variability_index: 1.06, icu_efficiency_factor: 2.0 }, // VI > 1.05
+        { id: 3, start_date_local: "2026-05-08T09:00:00", type: "Ride", moving_time: 1800, icu_variability_index: 0, icu_efficiency_factor: 2.0 }, // VI not > 0
+        { id: 4, start_date_local: "2026-05-08T09:00:00", type: "Ride", moving_time: 1199, icu_variability_index: 1.0, icu_efficiency_factor: 2.0 }, // < 20 min
+        { id: 5, start_date_local: "2026-05-08T09:00:00", type: "Ride", moving_time: 1800, icu_variability_index: 1.0 }, // missing EF
+      ]),
+    );
+    expect(result.qualifying_sessions_7d).toBe(0);
+    expect(result.qualifying_sessions_28d).toBe(0);
+  });
+
+  it("accepts all four cycling types and rejects other sports", () => {
+    const result = computeEfficiencyFactor(
+      input([
+        qualifyingEf("2026-05-07", 2.0, "Ride"),
+        qualifyingEf("2026-05-08", 2.0, "VirtualRide"),
+        qualifyingEf("2026-05-09", 2.0, "MountainBikeRide"),
+        qualifyingEf("2026-05-10", 2.0, "GravelRide"),
+        qualifyingEf("2026-05-10", 9.0, "Swim"), // rejected — not a cycling type
+      ]),
+    );
+    expect(result.qualifying_sessions_7d).toBe(4);
+  });
+
+  it("computes means and an improving trend when both windows have >= 2 qualifying sessions", () => {
+    const result = computeEfficiencyFactor(
+      input([
+        // 3 in the 7d window (05-04..05-10)
+        qualifyingEf("2026-05-08", 2.5),
+        qualifyingEf("2026-05-09", 2.5),
+        qualifyingEf("2026-05-10", 2.5),
+        // 2 more in 28d-only (04-13..05-03)
+        qualifyingEf("2026-04-20", 2.0),
+        qualifyingEf("2026-04-25", 2.0),
+      ]),
+    );
+    expect(result.qualifying_sessions_7d).toBe(3);
+    expect(result.qualifying_sessions_28d).toBe(5);
+    expect(result.mean_ef_7d).toBe(2.5);
+    expect(result.mean_ef_28d).toBe(2.3); // (2.5*3 + 2.0*2) / 5 = 11.5 / 5
+    expect(result.trend).toBe("improving"); // 2.5 - 2.3 = 0.2 > 0.03
+  });
+
+  it("reports a declining trend when the 7d mean drops below the 28d mean by more than 0.03", () => {
+    const result = computeEfficiencyFactor(
+      input([
+        qualifyingEf("2026-05-08", 2.0),
+        qualifyingEf("2026-05-09", 2.0),
+        qualifyingEf("2026-05-10", 2.0),
+        qualifyingEf("2026-04-20", 2.5),
+        qualifyingEf("2026-04-25", 2.5),
+      ]),
+    );
+    expect(result.mean_ef_7d).toBe(2.0);
+    expect(result.mean_ef_28d).toBe(2.2); // (2.0*3 + 2.5*2) / 5 = 11 / 5
+    expect(result.trend).toBe("declining"); // 2.0 - 2.2 = -0.2 < -0.03
+  });
+
+  it("reports a stable trend when the 7d and 28d means sit inside the +/-0.03 dead-band", () => {
+    const result = computeEfficiencyFactor(
+      input([
+        qualifyingEf("2026-05-08", 2.0),
+        qualifyingEf("2026-05-09", 2.0),
+        qualifyingEf("2026-04-20", 2.0),
+        qualifyingEf("2026-04-25", 2.0),
+      ]),
+    );
+    expect(result.mean_ef_7d).toBe(2.0);
+    expect(result.mean_ef_28d).toBe(2.0);
+    expect(result.trend).toBe("stable");
+  });
+
+  it("leaves the mean null but counts the session when only one qualifies", () => {
+    const result = computeEfficiencyFactor(input([qualifyingEf("2026-05-08", 2.0)]));
+    expect(result.qualifying_sessions_7d).toBe(1);
+    expect(result.mean_ef_7d).toBeNull(); // needs >= 2
+    expect(result.trend).toBeNull();
   });
 });
