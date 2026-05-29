@@ -1,0 +1,15 @@
+{
+  "metric": "effort_response_signal",
+  "athlete": "capability-qualifying",
+  "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
+  "section_11_protocol_version": "3.112",
+  "frozen_now": "2026-05-10T12:00:00",
+  "value": {
+    "12345": "positive",
+    "90001": null,
+    "90002": null,
+    "90003": null,
+    "90004": null,
+    "90005": null
+  }
+}

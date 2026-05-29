@@ -84,4 +84,10 @@ export const HARNESS_FIXTURES: HarnessFixtureConfig[] = [
     description:
       "Constant-Load coverage for the monotony stdev=0 branch. 7 recovery rides on 05-04..05-10 at an IDENTICAL daily Load of 35.0 give the 7d series [35,35,35,35,35,35,35] — non-zero mean, sample stdev exactly 0 — so monotony hits the `stdevLoad <= 0 -> null` guard (a path the all-zero fixtures reach via a different branch). That null cascades: strain -> null, stress_tolerance -> null. Single-sport, so primary_sport_monotony hits its own stdev=0 null too. The 28-day wellness baseline (stable RHR 58 / HRV 52) populates recovery_index + HRV/RHR baselines through the flat block. Anchor 2026-05-10 puts the constant week in the 7d acute window.",
   },
+  {
+    slug: "capability-qualifying",
+    frozenNow: DEFAULT_FROZEN_NOW,
+    description:
+      "Populated-branch coverage for the capability sub-keys (durability, efficiency_factor, hrrc). Appends 5 steady-state qualifying Rides (VI 1.0, moving_time 6000s, decoupling/EF/hrr present) to the realistic-athlete base — 3 in the 7d window, 5 in the 28d window — clearing durability's reliability gate (N7>=3, N28>=5) and exercising the means + trends the all-null fixtures never reach.",
+  },
 ];
