@@ -12,6 +12,7 @@ import { computeWeightSignal } from "./bodycomp.js";
 import {
   computeDurability,
   computeEfficiencyFactor,
+  computeHrCurveDelta,
   computeHrrc,
   computePowerCurveDelta,
   computeTidComparison,
@@ -99,6 +100,7 @@ export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {
   "capability.hrrc": { compute: computeHrrc },
   "capability.tid_comparison": { compute: computeTidComparison },
   "capability.power_curve_delta": { compute: computePowerCurveDelta },
+  "capability.hr_curve_delta": { compute: computeHrCurveDelta },
   eftp: { compute: computeEftp },
   w_prime: { compute: computeWPrime },
   w_prime_kj: { compute: computeWPrimeKj },

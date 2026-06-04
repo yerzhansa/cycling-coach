@@ -2,6 +2,7 @@ import type {
   Activity,
   AthleteSettings,
   FixtureShape,
+  HrCurveData,
   PlannedEvent,
   PowerCurveData,
   WellnessDay,
@@ -123,4 +124,12 @@ export function getWellness(input: MetricInput): WellnessDay[] {
 // is present, so absent curves reproduce the null block without window keys.
 export function getPowerCurves(input: MetricInput): PowerCurveData | null {
   return input.fixture.power_curves ?? null;
+}
+
+// The `{list}` HR mean-max curve envelope the upstream fetches and passes as
+// the `hr_curve_data` kwarg. Entries carry the `values` key (HR bpm) where
+// power carries `watts`. The delta reuses `power_curve_dates`, so HR curves
+// without power dates reproduce the dateless null block.
+export function getHrCurves(input: MetricInput): HrCurveData | null {
+  return input.fixture.hr_curves ?? null;
 }

@@ -15,13 +15,14 @@ import { isoDateDaysBefore } from "./date-helpers.js";
 import {
   getActivities,
   getActivitiesInWindow,
+  getHrCurves,
   getPowerCurves,
   type MetricInput,
 } from "./metric-input.js";
 import { computeSeilerTid, computeSeilerTid28d, type SeilerTid } from "./distribution.js";
 import { mean, pythonSum } from "./statistics.js";
 import { roundHalfEven } from "./rounding.js";
-import type { Activity, PowerCurveData } from "../schemas/inputs.js";
+import type { Activity, HrCurveData, PowerCurveData } from "../schemas/inputs.js";
 
 export interface DurabilitySignal {
   mean_decoupling_7d: number | null;
@@ -537,4 +538,168 @@ function powerCurveDatesFrom(
     isoDateDaysBefore(frozenNow, 55),
     isoDateDaysBefore(frozenNow, 28),
   ];
+}
+
+export interface HrCurveAnchor {
+  current_bpm: number | null;
+  previous_bpm: number | null;
+  pct_change: number | null;
+}
+
+export interface HrCurveDelta {
+  window_days: 28;
+  current_window?: PowerCurveWindow;
+  previous_window?: PowerCurveWindow;
+  anchors: Record<string, HrCurveAnchor> | null;
+  rotation_index: number | null;
+  note: string;
+}
+
+// No 5s anchor — peak HR at 5s is just max HR, not an energy-system signal.
+const HR_CURVE_ANCHORS: Record<string, number> = {
+  "60s": 60,
+  "300s": 300,
+  "1200s": 1200,
+  "3600s": 3600,
+};
+
+const HR_CURVE_DELTA_NOTE =
+  "Compares max sustained HR at 4 anchor durations (60s anaerobic ceiling, " +
+  "300s VO2max HR, 1200s threshold HR, 3600s endurance HR) across two 28d windows. " +
+  "rotation_index = mean(60s,300s pct_change) - mean(1200s,3600s pct_change). " +
+  "Positive = intensity-biased HR shift, negative = endurance-biased. " +
+  "No sport filter — HR is cross-sport physiological (dominated by hardest efforts). " +
+  "IMPORTANT: rising max sustained HR is ambiguous — may indicate improved cardiac " +
+  "output (good) or accumulated fatigue/dehydration/heat (bad). Cross-reference with " +
+  "resting HRV, resting HR, RPE, and environmental context before interpreting. " +
+  "Null when either window has fewer than 3 valid anchor durations.";
+
+/**
+ * HR curve delta — the shift in max sustained heart rate at anchor durations
+ * across two adjacent 28-day windows, plus a `rotation_index` summarising
+ * whether the shift is intensity- (positive) or endurance-biased (negative).
+ *
+ * Unlike power, rising max sustained HR is ambiguous (improved cardiac output
+ * vs accumulated fatigue/heat), so the signal is display-only context. There is
+ * no 5s anchor and no sport filter — HR is cross-sport physiological. The
+ * `values` key carries bpm where power curves carry `watts`.
+ *
+ * The delta REUSES `power_curve_dates` (the call site passes the power tuple),
+ * so the window dates are gated on the harness having fetched `power_curves` —
+ * HR curves without power dates reproduce the dateless null block byte-for-byte.
+ *
+ * Upstream source mirrored line-by-line: `sync.py:4441-4586`
+ * (`_calculate_hr_curve_delta`) with the call site at `sync.py:3210` passing
+ * `power_curve_dates`. See `NOTICE.md` for upstream attribution.
+ */
+export function computeHrCurveDelta(input: MetricInput): HrCurveDelta {
+  const hrCurveData = getHrCurves(input);
+  const curveDates = powerCurveDatesFrom(input.frozenNow, getPowerCurves(input));
+
+  const nullBlock = (note = "Insufficient HR data in one or both windows."): HrCurveDelta => {
+    const dates: Pick<HrCurveDelta, "current_window" | "previous_window"> = {};
+    if (curveDates) {
+      dates.current_window = { start: curveDates[0], end: curveDates[1] };
+      dates.previous_window = { start: curveDates[2], end: curveDates[3] };
+    }
+    return {
+      window_days: 28,
+      ...dates,
+      anchors: null,
+      rotation_index: null,
+      note,
+    };
+  };
+
+  if (!hrCurveData || !curveDates) {
+    return nullBlock();
+  }
+
+  const curvesList = hrCurveData.list ?? [];
+  if (curvesList.length === 0) {
+    return nullBlock();
+  }
+
+  const [pcStart1, pcEnd1, pcStart2, pcEnd2] = curveDates;
+  const currentId = `r.${pcStart1}.${pcEnd1}`;
+  const previousId = `r.${pcStart2}.${pcEnd2}`;
+
+  const curvesById = new Map<string, HrCurveData["list"][number]>();
+  for (const c of curvesList) {
+    if (!curvesById.has(c.id)) curvesById.set(c.id, c);
+  }
+  const currentCurve = curvesById.get(currentId);
+  const previousCurve = curvesById.get(previousId);
+
+  if (!currentCurve || !previousCurve) {
+    const missing: string[] = [];
+    if (!currentCurve) missing.push("current");
+    if (!previousCurve) missing.push("previous");
+    return nullBlock(`No HR data in ${missing.join(" and ")} window(s).`);
+  }
+
+  const anchors: Record<string, HrCurveAnchor> = {};
+  for (const [label, durationSecs] of Object.entries(HR_CURVE_ANCHORS)) {
+    const curSecs = currentCurve.secs ?? [];
+    const curValues = currentCurve.values ?? [];
+    const prevSecs = previousCurve.secs ?? [];
+    const prevValues = previousCurve.values ?? [];
+
+    let curV: number | null = null;
+    if (curSecs.includes(durationSecs)) {
+      const idx = curSecs.indexOf(durationSecs);
+      const val = idx < curValues.length ? curValues[idx] : null;
+      if (val !== null && val !== undefined && val > 0) {
+        curV = val;
+      }
+    }
+
+    let prevV: number | null = null;
+    if (prevSecs.includes(durationSecs)) {
+      const idx = prevSecs.indexOf(durationSecs);
+      const val = idx < prevValues.length ? prevValues[idx] : null;
+      if (val !== null && val !== undefined && val > 0) {
+        prevV = val;
+      }
+    }
+
+    let pctChange: number | null = null;
+    if (curV !== null && prevV !== null) {
+      pctChange = roundHalfEven(((curV - prevV) / prevV) * 100, 1);
+    }
+
+    anchors[label] = {
+      current_bpm: curV,
+      previous_bpm: prevV,
+      pct_change: pctChange,
+    };
+  }
+
+  const currentValid = Object.values(anchors).filter((a) => a.current_bpm !== null).length;
+  const previousValid = Object.values(anchors).filter((a) => a.previous_bpm !== null).length;
+
+  if (currentValid < 3 || previousValid < 3) {
+    return nullBlock(
+      `Too few valid anchors (current: ${currentValid}, previous: ${previousValid}, need 3+).`,
+    );
+  }
+
+  const shortChanges = [anchors["60s"].pct_change, anchors["300s"].pct_change];
+  const longChanges = [anchors["1200s"].pct_change, anchors["3600s"].pct_change];
+
+  let rotationIndex: number | null = null;
+  if ([...shortChanges, ...longChanges].every((v) => v !== null)) {
+    const shortMean = pythonSum(shortChanges as number[]) / shortChanges.length;
+    const longMean = pythonSum(longChanges as number[]) / longChanges.length;
+    rotationIndex = roundHalfEven(shortMean - longMean, 1);
+  }
+
+  return {
+    window_days: 28,
+    current_window: { start: pcStart1, end: pcEnd1 },
+    previous_window: { start: pcStart2, end: pcEnd2 },
+    anchors,
+    rotation_index: rotationIndex,
+    note: HR_CURVE_DELTA_NOTE,
+  };
 }
