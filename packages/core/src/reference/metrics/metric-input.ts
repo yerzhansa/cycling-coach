@@ -1,5 +1,6 @@
 import type {
   Activity,
+  AthleteSettings,
   FixtureShape,
   PlannedEvent,
   WellnessDay,
@@ -97,4 +98,20 @@ export function getWellnessExtendedWeight(input: MetricInput): WellnessDay[] {
 // resolution when tested outdoor FTP is null. See FixtureSchema.eftp.
 export function getEftp(input: MetricInput): number | null {
   return input.fixture.eftp ?? null;
+}
+
+// The athlete-settings carrier. In the snapshot harness this key's
+// presence gates the live power-model pipeline: only when the fixture
+// carries `athlete` does the harness run `_extract_power_model_from_wellness`
+// against the latest wellness row and read its `vo2max`; absent athlete →
+// empty power model + null vo2max (the prior stub). Mirror that gate by
+// keying the power-model passthroughs on this accessor returning non-null.
+export function getAthlete(input: MetricInput): AthleteSettings | null {
+  return input.fixture.athlete ?? null;
+}
+
+// Full wellness array, in fixture order. Power-model passthroughs select
+// the latest row within the 28-day window from this surface.
+export function getWellness(input: MetricInput): WellnessDay[] {
+  return input.fixture.wellness;
 }

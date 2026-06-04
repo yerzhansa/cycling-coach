@@ -49,6 +49,14 @@ import {
   computeStressTolerance,
 } from "./load-management.js";
 import type { MetricInput } from "./metric-input.js";
+import {
+  computeEftp,
+  computePMax,
+  computePowerModelSource,
+  computeVo2max,
+  computeWPrime,
+  computeWPrimeKj,
+} from "./power-model.js";
 import { computeSeasonalContext } from "./seasonal-context.js";
 
 export interface MetricRegistryEntry {
@@ -89,4 +97,10 @@ export const METRIC_REGISTRY: Record<string, MetricRegistryEntry> = {
   "capability.efficiency_factor": { compute: computeEfficiencyFactor },
   "capability.hrrc": { compute: computeHrrc },
   "capability.tid_comparison": { compute: computeTidComparison },
+  eftp: { compute: computeEftp },
+  w_prime: { compute: computeWPrime },
+  w_prime_kj: { compute: computeWPrimeKj },
+  p_max: { compute: computePMax },
+  power_model_source: { compute: computePowerModelSource },
+  vo2max: { compute: computeVo2max },
 };
