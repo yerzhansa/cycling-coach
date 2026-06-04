@@ -15,14 +15,26 @@ import { isoDateDaysBefore } from "./date-helpers.js";
 import {
   getActivities,
   getActivitiesInWindow,
+  getAthlete,
   getHrCurves,
   getPowerCurves,
+  getSustainabilityCurves,
+  getWellness,
   type MetricInput,
 } from "./metric-input.js";
 import { computeSeilerTid, computeSeilerTid28d, type SeilerTid } from "./distribution.js";
+import { resolvePowerModel } from "./power-model.js";
 import { mean, pythonSum } from "./statistics.js";
 import { roundHalfEven } from "./rounding.js";
-import type { Activity, HrCurveData, PowerCurveData } from "../schemas/inputs.js";
+import type {
+  Activity,
+  AthleteSettings,
+  HrCurveData,
+  PowerCurveData,
+  SportSettingsRow,
+  SustainabilityFamilyCurves,
+  WellnessDay,
+} from "../schemas/inputs.js";
 
 export interface DurabilitySignal {
   mean_decoupling_7d: number | null;
@@ -702,4 +714,492 @@ export function computeHrCurveDelta(input: MetricInput): HrCurveDelta {
     rotation_index: rotationIndex,
     note: HR_CURVE_DELTA_NOTE,
   };
+}
+
+const SUSTAINABILITY_WINDOW_DAYS = 42;
+
+// Per-sport anchor durations (seconds). Mirrors SUSTAINABILITY_ANCHORS at
+// sync.py:331-335 — only the families listed here get a block; everything else
+// in the curve bundle is skipped.
+const SUSTAINABILITY_ANCHORS: Record<string, Record<string, number>> = {
+  cycling: {
+    "300s": 300,
+    "600s": 600,
+    "1200s": 1200,
+    "1800s": 1800,
+    "3600s": 3600,
+    "5400s": 5400,
+    "7200s": 7200,
+  },
+  ski: { "60s": 60, "120s": 120, "300s": 300, "600s": 600, "1200s": 1200, "1800s": 1800 },
+  rowing: { "60s": 60, "120s": 120, "300s": 300, "600s": 600, "1200s": 1200, "1800s": 1800 },
+};
+
+// Coggan duration factors — midpoints of published ranges, cycling only.
+// Sustainable power as fraction of FTP by duration. Mirrors
+// COGGAN_DURATION_FACTORS at sync.py:340-348.
+const COGGAN_DURATION_FACTORS: Record<number, number> = {
+  300: 1.06,
+  600: 0.97,
+  1200: 0.93,
+  1800: 0.9,
+  3600: 0.86,
+  5400: 0.82,
+  7200: 0.78,
+};
+
+// Maps an intervals.icu activity type to a sport family. Mirrors SPORT_FAMILIES
+// at sync.py:290-305 (only the entries `_build_sport_thresholds` can fold into a
+// sustainability family matter, but the full map is transliterated for fidelity).
+const SPORT_FAMILIES: Record<string, string> = {
+  Ride: "cycling",
+  VirtualRide: "cycling",
+  MountainBikeRide: "cycling",
+  GravelRide: "cycling",
+  EBikeRide: "cycling",
+  VirtualSki: "ski",
+  NordicSki: "ski",
+  Walk: "walk",
+  Hike: "walk",
+  Run: "run",
+  VirtualRun: "run",
+  TrailRun: "run",
+  Swim: "swim",
+  Rowing: "rowing",
+  WeightTraining: "strength",
+};
+
+// Indoor cycling activity types. Mirrors INDOOR_CYCLING_TYPES at sync.py:315.
+const INDOOR_CYCLING_TYPES = new Set(["VirtualRide"]);
+
+// `_is_indoor_cycling` (sync.py:317-320).
+function isIndoorCycling(activityType: string): boolean {
+  return INDOOR_CYCLING_TYPES.has(activityType);
+}
+
+// The per-family threshold entry `_build_sport_thresholds` folds each
+// sportSettings row into. Only `ftp`/`ftp_indoor`/`lthr` feed the sustainability
+// model; the other fields are transliterated so the populated-count tiebreak
+// matches the upstream's.
+interface SportThreshold {
+  lthr: number | null;
+  max_hr: number | null;
+  threshold_pace: number | null;
+  pace_units: string | null;
+  ftp: number | null;
+  ftp_indoor: number | null;
+}
+
+// `_build_sport_thresholds(athlete)` (sync.py:2756-2788). Folds the athlete's
+// sportSettings array into a per-family threshold map. Each sport_type maps to a
+// family via SPORT_FAMILIES; when multiple types collide on a family, the entry
+// with more populated fields wins, ties broken by the lexicographically smaller
+// sport_type. `ftp`/`ftp_indoor` carry Python's `x or None` truthiness (0 → null).
+function buildSportThresholds(
+  athlete: AthleteSettings | null,
+): Record<string, SportThreshold> {
+  const candidates = new Map<string, { entry: SportThreshold; populated: number; type: string }>();
+
+  for (const sport of athlete?.sportSettings ?? []) {
+    const row = sport as SportSettingsRow & {
+      max_hr?: number | null;
+      threshold_pace?: number | null;
+      pace_units?: string | null;
+    };
+    for (const sportType of row.types ?? []) {
+      const family = SPORT_FAMILIES[sportType];
+      if (!family) continue;
+
+      const rawPace = row.threshold_pace;
+      const thresholdPace =
+        rawPace !== null && rawPace !== undefined && rawPace !== 0 ? rawPace : null;
+      const paceUnits = thresholdPace !== null ? row.pace_units ?? null : null;
+
+      const entry: SportThreshold = {
+        lthr: row.lthr ?? null,
+        max_hr: row.max_hr ?? null,
+        threshold_pace: thresholdPace,
+        pace_units: paceUnits,
+        ftp: row.ftp ? row.ftp : null,
+        ftp_indoor: row.indoor_ftp ? row.indoor_ftp : null,
+      };
+
+      const populated = Object.values(entry).filter((v) => v !== null).length;
+      const existing = candidates.get(family);
+      if (
+        !existing ||
+        populated > existing.populated ||
+        (populated === existing.populated && sportType < existing.type)
+      ) {
+        candidates.set(family, { entry, populated, type: sportType });
+      }
+    }
+  }
+
+  const out: Record<string, SportThreshold> = {};
+  for (const [family, { entry }] of candidates) out[family] = entry;
+  return out;
+}
+
+export interface SustainabilityAnchor {
+  actual_watts: number | null;
+  actual_wpkg: number | null;
+  actual_hr: number | null;
+  pct_lthr: number | null;
+  source: string | null;
+  coggan_watts?: number | null;
+  coggan_wpkg?: number | null;
+  cp_model_watts?: number | null;
+  cp_model_wpkg?: number | null;
+  model_divergence_pct?: number | null;
+}
+
+export interface SustainabilitySportBlock {
+  anchors: Record<string, SustainabilityAnchor> | null;
+  coverage_ratio: number;
+  note?: string;
+  ftp_used?: number | null;
+  w_prime_used?: number | null;
+  ftp_staleness_days?: number | null;
+  model_trust_note?: string;
+}
+
+export interface SustainabilityWindow {
+  days: number;
+  start: string;
+  end: string;
+}
+
+export interface SustainabilityProfile {
+  note?: string;
+  window?: SustainabilityWindow;
+  weight_kg?: number | null;
+  weight_source?: string | null;
+  [sportFamily: string]: SustainabilitySportBlock | SustainabilityWindow | number | string | null | undefined;
+}
+
+const SUSTAINABILITY_MODEL_TRUST_NOTE =
+  "CP/W' model (P=CP+W'/t) is primary for durations ≤20min where W' contribution " +
+  "is meaningful. Coggan duration factors (Allen & Coggan, 3rd ed.) are the established " +
+  "reference for ≥60min. 30min is the crossover zone where both apply. " +
+  "model_divergence_pct = (actual - CP_model) / CP_model × 100. " +
+  "Positive divergence at short durations may indicate strong anaerobic capacity " +
+  "or stale W' value. Indoor MMP is typically 3-5% lower than outdoor (cooling, " +
+  "motivation) — source flag indicates which environment produced each anchor.";
+
+// Trailing wellness rows whose `id[:10]` falls in [frozenNow-(days-1), frozenNow],
+// in fixture order. Mirrors the harness `_within(_wellness_all, "id", ...)` slices
+// the upstream consumes as `wellness_7d` / `wellness_extended`.
+function wellnessWindow(rows: WellnessDay[], days: number, frozenNow: string): WellnessDay[] {
+  const oldest = isoDateDaysBefore(frozenNow, days - 1);
+  const today = frozenNow.slice(0, 10);
+  return rows.filter((r) => {
+    if (typeof r.id !== "string") return false;
+    const d = r.id.slice(0, 10);
+    return oldest <= d && d <= today;
+  });
+}
+
+// The harness's `icu_weight = _LATEST_WELLNESS.get("weight")`: the weight of the
+// 28d-window row with the largest `id` (sorted descending). Null when no row
+// qualifies or the latest row carries no weight.
+function latestWindowWeight(rows28d: WellnessDay[]): number | null {
+  if (rows28d.length === 0) return null;
+  let latest = rows28d[0]!;
+  for (const r of rows28d) {
+    if ((r.id ?? "") > (latest.id ?? "")) latest = r;
+  }
+  return latest.weight ?? null;
+}
+
+/**
+ * Sustainability profile — the per-sport race-estimation lookup table. For each
+ * active sport family in `sustainability_curves`, extracts observed mean-maximal
+ * power and max sustained HR at sport-specific anchor durations from a single
+ * 42-day window, and (cycling only) layers two predicted-power models: Coggan
+ * duration factors (FTP × factor) and the CP/W' model (P = CP + W'/t, CP
+ * approximated by athlete-set FTP).
+ *
+ * The single 42d window is gated on the harness having fetched
+ * `sustainability_curves`, so absent curves reproduce the bare null block (no
+ * window key) byte-for-byte. `sport_settings` is rebuilt from `athlete` via the
+ * upstream's own `_build_sport_thresholds`, `power_model.w_prime` from the live
+ * power-model extraction (the same source the scalar passthroughs read), and the
+ * weight fallback chain walks wellness_7d → wellness_extended → icu_weight.
+ *
+ * Upstream source mirrored line-by-line: `sync.py:4804-5092`
+ * (`_calculate_sustainability_profile`) plus the `_build_sport_thresholds`
+ * helper at `sync.py:2756-2788` and the `_is_indoor_cycling` classifier at
+ * `sync.py:317-320`. The single 42d window and the cycling FTP/W' inputs are
+ * wired by the harness per the live fetch path. `ftp_staleness_days` is null in
+ * the gate context — the FTP-history file the upstream's `_load_ftp_history`
+ * reads is not provided to this path, so its date set is always empty.
+ * See `NOTICE.md` for upstream attribution.
+ *
+ * @see Allen, H., & Coggan, A. (2010). Training and Racing with a Power Meter
+ *      (2nd ed.). VeloPress.
+ * @see Skiba, P. F. et al. (2012). Modeling the expenditure and reconstitution
+ *      of work capacity above critical power. Med Sci Sports Exerc 44(8):1526-1532.
+ */
+export function computeSustainabilityProfile(input: MetricInput): SustainabilityProfile {
+  const sustainabilityCurves = getSustainabilityCurves(input);
+  const sustainabilityWindow = sustainabilityWindowFrom(input.frozenNow, sustainabilityCurves);
+
+  const nullProfile = (note = "No sustainability data available."): SustainabilityProfile => {
+    const result: SustainabilityProfile = { note };
+    if (sustainabilityWindow) {
+      result.window = {
+        days: SUSTAINABILITY_WINDOW_DAYS,
+        start: sustainabilityWindow[0],
+        end: sustainabilityWindow[1],
+      };
+    }
+    return result;
+  };
+
+  if (Object.keys(sustainabilityCurves).length === 0 || !sustainabilityWindow) {
+    return nullProfile();
+  }
+
+  const allWellness = getWellness(input);
+  const wellness7d = wellnessWindow(allWellness, 7, input.frozenNow);
+  const wellnessExtended = wellnessWindow(allWellness, 28, input.frozenNow);
+  const icuWeight = latestWindowWeight(wellnessExtended);
+
+  // --- Weight fallback chain ---
+  let weightKg: number | null = null;
+  let weightSource: string | null = null;
+
+  for (let i = wellness7d.length - 1; i >= 0; i--) {
+    const w = wellness7d[i]!.weight;
+    if (w) {
+      weightKg = roundHalfEven(w, 1);
+      weightSource = "wellness_recent";
+      break;
+    }
+  }
+  if (weightKg === null) {
+    for (let i = wellnessExtended.length - 1; i >= 0; i--) {
+      const w = wellnessExtended[i]!.weight;
+      if (w) {
+        weightKg = roundHalfEven(w, 1);
+        weightSource = "wellness_extended";
+        break;
+      }
+    }
+  }
+  if (weightKg === null && icuWeight !== null && icuWeight !== undefined) {
+    weightKg = roundHalfEven(icuWeight, 1);
+    weightSource = "athlete_profile";
+  }
+
+  // --- FTP staleness (cycling only) — null in the gate context, see JSDoc. ---
+  const ftpStalenessDays: number | null = null;
+
+  // --- Cycling model inputs ---
+  const sportSettings = buildSportThresholds(getAthlete(input));
+  const cyclingSettings = sportSettings.cycling ?? null;
+  // Use athlete-set FTP from sportSettings (not eFTP); fall back to indoor FTP.
+  let cyclingFtp: number | null = cyclingSettings?.ftp ?? null;
+  if (!cyclingFtp) {
+    cyclingFtp = cyclingSettings?.ftp_indoor ?? null;
+  }
+  const cyclingWPrime = resolvePowerModel(input)?.w_prime ?? null;
+
+  // --- Build per-sport blocks ---
+  const profile: SustainabilityProfile = {
+    window: {
+      days: SUSTAINABILITY_WINDOW_DAYS,
+      start: sustainabilityWindow[0],
+      end: sustainabilityWindow[1],
+    },
+    weight_kg: weightKg,
+    weight_source: weightSource,
+  };
+
+  const curveId = `r.${sustainabilityWindow[0]}.${sustainabilityWindow[1]}`;
+
+  for (const [sportFamily, sportData] of Object.entries(sustainabilityCurves)) {
+    const anchorsMap = SUSTAINABILITY_ANCHORS[sportFamily];
+    if (!anchorsMap) continue;
+
+    const sportLthr = sportSettings[sportFamily]?.lthr ?? null;
+    const powerCurvesByType = sportData.power ?? {};
+    const hrCurvesByType = sportData.hr ?? {};
+    const isCycling = sportFamily === "cycling";
+
+    const anchors: Record<string, SustainabilityAnchor> = {};
+
+    for (const [label, durationSecs] of Object.entries(anchorsMap)) {
+      let bestWatts: number | null = null;
+      let bestSource: string | null = null;
+
+      for (const [ptype, pdata] of Object.entries(powerCurvesByType)) {
+        const curve = curveById(pdata, curveId);
+        if (!curve) continue;
+        const secs = curve.secs ?? [];
+        const watts = curve.watts ?? [];
+        if (secs.includes(durationSecs)) {
+          const idx = secs.indexOf(durationSecs);
+          const val = idx < watts.length ? watts[idx] : null;
+          if (val !== null && val !== undefined && val > 0) {
+            if (bestWatts === null || val > bestWatts) {
+              bestWatts = val;
+              if (isCycling) {
+                bestSource = isIndoorCycling(ptype) ? "observed_indoor" : "observed_outdoor";
+              } else {
+                bestSource = "observed";
+              }
+            }
+          }
+        }
+      }
+
+      let bestHr: number | null = null;
+      for (const [, hdata] of Object.entries(hrCurvesByType)) {
+        const curve = hrCurveById(hdata, curveId);
+        if (!curve) continue;
+        const secs = curve.secs ?? [];
+        const values = curve.values ?? [];
+        if (secs.includes(durationSecs)) {
+          const idx = secs.indexOf(durationSecs);
+          const val = idx < values.length ? values[idx] : null;
+          if (val !== null && val !== undefined && val > 0) {
+            if (bestHr === null || val > bestHr) {
+              bestHr = roundHalfEven(val, 0);
+            }
+          }
+        }
+      }
+
+      let actualWpkg: number | null = null;
+      if (bestWatts !== null && weightKg !== null && weightKg > 0) {
+        actualWpkg = roundHalfEven(bestWatts / weightKg, 2);
+      }
+
+      let pctLthr: number | null = null;
+      if (bestHr !== null && sportLthr !== null && sportLthr > 0) {
+        pctLthr = roundHalfEven((bestHr / sportLthr) * 100, 1);
+      }
+
+      let cogganWatts: number | null = null;
+      let cogganWpkg: number | null = null;
+      if (isCycling && cyclingFtp && durationSecs in COGGAN_DURATION_FACTORS) {
+        cogganWatts = roundHalfEven(cyclingFtp * COGGAN_DURATION_FACTORS[durationSecs]!, 0);
+        if (weightKg && weightKg > 0) {
+          cogganWpkg = roundHalfEven(cogganWatts / weightKg, 2);
+        }
+      }
+
+      let cpModelWatts: number | null = null;
+      let cpModelWpkg: number | null = null;
+      if (isCycling && cyclingFtp && cyclingWPrime && durationSecs > 0) {
+        cpModelWatts = roundHalfEven(cyclingFtp + cyclingWPrime / durationSecs, 0);
+        if (weightKg && weightKg > 0) {
+          cpModelWpkg = roundHalfEven(cpModelWatts / weightKg, 2);
+        }
+      }
+
+      let modelDivergencePct: number | null = null;
+      if (bestWatts !== null && cpModelWatts !== null && cpModelWatts > 0) {
+        modelDivergencePct = roundHalfEven(((bestWatts - cpModelWatts) / cpModelWatts) * 100, 1);
+      }
+
+      const anchorData: SustainabilityAnchor = {
+        actual_watts: bestWatts,
+        actual_wpkg: actualWpkg,
+        actual_hr: bestHr,
+        pct_lthr: pctLthr,
+        source: bestSource,
+      };
+
+      if (isCycling) {
+        anchorData.coggan_watts = cogganWatts;
+        anchorData.coggan_wpkg = cogganWpkg;
+        anchorData.cp_model_watts = cpModelWatts;
+        anchorData.cp_model_wpkg = cpModelWpkg;
+        anchorData.model_divergence_pct = modelDivergencePct;
+      }
+
+      anchors[label] = anchorData;
+    }
+
+    const totalAnchors = Object.keys(anchors).length;
+    const observedAnchors = Object.values(anchors).filter(
+      (a) => a.actual_watts !== null,
+    ).length;
+    const coverageRatio =
+      totalAnchors > 0 ? roundHalfEven(observedAnchors / totalAnchors, 2) : 0;
+
+    if (observedAnchors < 2) {
+      profile[sportFamily] = {
+        anchors: null,
+        coverage_ratio: coverageRatio,
+        note: `Too few observed anchors (${observedAnchors}, need 2+).`,
+      };
+      continue;
+    }
+
+    const sportBlock: SustainabilitySportBlock = {
+      anchors,
+      coverage_ratio: coverageRatio,
+    };
+
+    if (isCycling) {
+      sportBlock.ftp_used = cyclingFtp;
+      sportBlock.w_prime_used = cyclingWPrime;
+      sportBlock.ftp_staleness_days = ftpStalenessDays;
+      sportBlock.model_trust_note = SUSTAINABILITY_MODEL_TRUST_NOTE;
+    }
+
+    profile[sportFamily] = sportBlock;
+  }
+
+  const hasSportData = Object.keys(profile).some(
+    (k) => k !== "window" && k !== "weight_kg" && k !== "weight_source" && k !== "note",
+  );
+  if (!hasSportData) {
+    return nullProfile("No sport families produced valid sustainability data.");
+  }
+
+  return profile;
+}
+
+// The single 42d window the harness passes as `sustainability_window`, derived
+// from the frozen clock — present only when the fixture carried
+// `sustainability_curves` (the upstream fetch gate, sync.py:2493-2494):
+// [now-41, today].
+function sustainabilityWindowFrom(
+  frozenNow: string,
+  curves: Record<string, SustainabilityFamilyCurves>,
+): [string, string] | null {
+  if (Object.keys(curves).length === 0) return null;
+  return [isoDateDaysBefore(frozenNow, SUSTAINABILITY_WINDOW_DAYS - 1), frozenNow.slice(0, 10)];
+}
+
+// `curves_by_id.get(curve_id)` for a power `{list}` envelope, mirroring the
+// upstream's `{c["id"]: c for c in list}` dict comprehension — last occurrence
+// wins on duplicate ids.
+function curveById(
+  pdata: PowerCurveData,
+  curveId: string,
+): PowerCurveData["list"][number] | null {
+  const list = pdata?.list ?? [];
+  let match: PowerCurveData["list"][number] | null = null;
+  for (const c of list) {
+    if (c.id === curveId) match = c;
+  }
+  return match;
+}
+
+function hrCurveById(
+  hdata: HrCurveData,
+  curveId: string,
+): HrCurveData["list"][number] | null {
+  const list = hdata?.list ?? [];
+  let match: HrCurveData["list"][number] | null = null;
+  for (const c of list) {
+    if (c.id === curveId) match = c;
+  }
+  return match;
 }

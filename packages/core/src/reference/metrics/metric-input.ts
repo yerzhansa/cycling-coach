@@ -5,6 +5,7 @@ import type {
   HrCurveData,
   PlannedEvent,
   PowerCurveData,
+  SustainabilityFamilyCurves,
   WellnessDay,
 } from "../schemas/inputs.js";
 import { isoDateDaysBefore } from "./date-helpers.js";
@@ -132,4 +133,17 @@ export function getPowerCurves(input: MetricInput): PowerCurveData | null {
 // without power dates reproduce the dateless null block.
 export function getHrCurves(input: MetricInput): HrCurveData | null {
   return input.fixture.hr_curves ?? null;
+}
+
+// The per-family sustainability curve bundle the upstream fetch loop builds and
+// passes as the `sustainability_curves` kwarg: `{family: {power: {type: {list}},
+// hr: {type: {list}}}}`. Its presence gates the single 42-day window the
+// profile reads — the harness derives `sustainability_window` from frozenNow
+// ONLY when this key is present, so absent curves reproduce the bare null block
+// (no window key). Returns the empty record when absent, mirroring the harness's
+// `sustainability_curves=_sus_curves or {}` passthrough.
+export function getSustainabilityCurves(
+  input: MetricInput,
+): Record<string, SustainabilityFamilyCurves> {
+  return input.fixture.sustainability_curves ?? {};
 }

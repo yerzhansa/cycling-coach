@@ -132,7 +132,7 @@ function selectTodayWellness(input: MetricInput): WellnessDay | null {
 // Absent athlete → null (so every consumed `.get(...)` key resolves to null).
 // Present athlete but no in-window wellness → the empty-row extraction
 // (source "unavailable", scalars null), matching `_extract_power_model_from_wellness({})`.
-function resolvePowerModel(input: MetricInput): PowerModel | null {
+export function resolvePowerModel(input: MetricInput): PowerModel | null {
   if (getAthlete(input) === null) return null;
   const today = selectTodayWellness(input);
   if (today === null) {

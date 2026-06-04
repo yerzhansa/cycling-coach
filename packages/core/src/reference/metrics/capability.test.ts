@@ -6,10 +6,14 @@ import {
   computeEfficiencyFactor,
   computeHrrc,
   computePowerCurveDelta,
+  computeSustainabilityProfile,
   computeTidComparison,
 } from "./capability.js";
 import type { MetricInput } from "./metric-input.js";
-import type { PowerCurveData } from "../schemas/inputs.js";
+import type {
+  PowerCurveData,
+  SustainabilityFamilyCurves,
+} from "../schemas/inputs.js";
 
 interface SyntheticActivity {
   id?: string | number;
@@ -643,5 +647,256 @@ describe("computePowerCurveDelta", () => {
     expect(result.anchors?.["5s"].current_watts).toBe(637);
     // 60s pct_change null → rotation null even though block guard (4 valid each) passes
     expect(result.rotation_index).toBeNull();
+  });
+});
+
+// frozenNow=2026-06-04 → single 42d window r.2026-04-24.2026-06-04
+// (now-41..today). Matches the curve-equipped oracle snapshot's window math.
+const SUS_FROZEN_NOW = "2026-06-04T12:00:00";
+const SUS_CURVE_ID = "r.2026-04-24.2026-06-04";
+
+interface SusWellnessRow {
+  id: string;
+  weight?: number | null;
+}
+
+interface SusAthlete {
+  sportSettings: {
+    types: string[];
+    ftp?: number | null;
+    indoor_ftp?: number | null;
+    lthr?: number | null;
+  }[];
+}
+
+function susInput(opts: {
+  curves?: Record<string, SustainabilityFamilyCurves>;
+  wellness?: SusWellnessRow[];
+  athlete?: SusAthlete | null;
+  frozenNow?: string;
+}): MetricInput {
+  const { curves, wellness = [], athlete = null, frozenNow = SUS_FROZEN_NOW } = opts;
+  return {
+    fixture: {
+      activities: [],
+      wellness,
+      ...(curves ? { sustainability_curves: curves } : {}),
+      ...(athlete ? { athlete } : {}),
+    },
+    frozenNow,
+  } as unknown as MetricInput;
+}
+
+// A cycling family bundle with Ride (outdoor) + VirtualRide (indoor) power and
+// HR curves, both on the single 42d window id. Mirrors the curve-equipped
+// fixture's sustainability_curves shape.
+function cyclingCurves(over?: {
+  rideWatts?: (number | null)[];
+  virtualRideWatts?: (number | null)[];
+  rideValues?: (number | null)[];
+}): Record<string, SustainabilityFamilyCurves> {
+  const secs = [300, 600, 1200, 1800, 3600, 5400, 7200];
+  const rideWatts = over?.rideWatts ?? [218, 204, 191, 175, 169, 163, 163];
+  const virtualRideWatts = over?.virtualRideWatts ?? [218, 204, 191, 175, 169, 163, 163];
+  const rideValues = over?.rideValues ?? [176, 173, 171, 169, 162, 160, 155];
+  return {
+    cycling: {
+      power: {
+        Ride: { list: [{ id: SUS_CURVE_ID, secs, watts: rideWatts }] },
+        VirtualRide: { list: [{ id: SUS_CURVE_ID, secs, watts: virtualRideWatts }] },
+      },
+      hr: {
+        Ride: { list: [{ id: SUS_CURVE_ID, secs, values: rideValues }] },
+        VirtualRide: { list: [{ id: SUS_CURVE_ID, secs, values: rideValues }] },
+      },
+    },
+  } as unknown as Record<string, SustainabilityFamilyCurves>;
+}
+
+const SUS_ATHLETE: SusAthlete = {
+  sportSettings: [{ types: ["Ride", "VirtualRide"], ftp: 200, indoor_ftp: 195, lthr: 168 }],
+};
+
+describe("computeSustainabilityProfile", () => {
+  it("absent sustainability_curves → bare null block, no window key (the 12-fixture branch)", () => {
+    expect(computeSustainabilityProfile(susInput({}))).toEqual({
+      note: "No sustainability data available.",
+    });
+  });
+
+  it("populated cycling block reproduces the curve-equipped oracle anchors", () => {
+    const result = computeSustainabilityProfile(
+      susInput({
+        curves: cyclingCurves(),
+        wellness: [{ id: "2026-05-17", weight: 87 }],
+        athlete: SUS_ATHLETE,
+      }),
+    );
+
+    expect(result.window).toEqual({ days: 42, start: "2026-04-24", end: "2026-06-04" });
+    expect(result.weight_kg).toBe(87);
+    expect(result.weight_source).toBe("wellness_extended");
+
+    const cycling = result.cycling as unknown as {
+      anchors: Record<string, Record<string, unknown>>;
+      coverage_ratio: number;
+      ftp_used: number;
+      w_prime_used: number;
+      ftp_staleness_days: number | null;
+    };
+    expect(cycling.coverage_ratio).toBe(1);
+    expect(cycling.ftp_used).toBe(200);
+    expect(cycling.w_prime_used).toBeNull(); // no wellness sportInfo here → power_model.w_prime null
+    expect(cycling.ftp_staleness_days).toBeNull();
+
+    // 1200s: actual 191W, HR 171, wpkg round(191/87,2)=2.2, coggan round(200×0.93)=186,
+    // pct_lthr round(171/168×100,1)=101.8, source observed_outdoor (Ride before VirtualRide).
+    expect(cycling.anchors["1200s"]).toMatchObject({
+      actual_watts: 191,
+      actual_hr: 171,
+      actual_wpkg: 2.2,
+      coggan_watts: 186,
+      coggan_wpkg: 2.14,
+      pct_lthr: 101.8,
+      source: "observed_outdoor",
+      // CP/W' model needs w_prime; null here → cp_model_watts + divergence null
+      cp_model_watts: null,
+      model_divergence_pct: null,
+    });
+    // 300s coggan round(200×1.06)=212
+    expect(cycling.anchors["300s"]).toMatchObject({ coggan_watts: 212, actual_watts: 218 });
+  });
+
+  it("CP/W' model layer activates when power_model.w_prime is present (wPrime via sportInfo)", () => {
+    const result = computeSustainabilityProfile(
+      susInput({
+        curves: cyclingCurves(),
+        wellness: [
+          { id: "2026-05-17", weight: 87 },
+          // latest in-window row carries the Ride sportInfo → power model w_prime
+          {
+            id: "2026-06-04",
+            weight: null,
+            sportInfo: [{ type: "Ride", eftp: 200, wPrime: 13882, pMax: 727 }],
+          } as unknown as SusWellnessRow,
+        ],
+        athlete: SUS_ATHLETE,
+      }),
+    );
+    const cycling = result.cycling as unknown as {
+      w_prime_used: number;
+      anchors: Record<string, Record<string, unknown>>;
+    };
+    expect(cycling.w_prime_used).toBe(13882);
+    // cp_model_watts 1200s = round(200 + 13882/1200) = round(211.57) = 212
+    // divergence = round((191-212)/212×100,1) = -9.9
+    expect(cycling.anchors["1200s"]).toMatchObject({
+      cp_model_watts: 212,
+      cp_model_wpkg: 2.44,
+      model_divergence_pct: -9.9,
+    });
+    // 300s cp_model = round(200 + 13882/300) = round(246.27) = 246
+    expect(cycling.anchors["300s"]).toMatchObject({ cp_model_watts: 246 });
+  });
+
+  it("VirtualRide wins an anchor → source flag flips to observed_indoor", () => {
+    const result = computeSustainabilityProfile(
+      susInput({
+        curves: cyclingCurves({
+          rideWatts: [218, 204, 191, 175, 169, 163, 163],
+          // VirtualRide higher at 300s → indoor wins that anchor
+          virtualRideWatts: [230, 204, 191, 175, 169, 163, 163],
+        }),
+        wellness: [{ id: "2026-05-17", weight: 87 }],
+        athlete: SUS_ATHLETE,
+      }),
+    );
+    const cycling = result.cycling as unknown as { anchors: Record<string, Record<string, unknown>> };
+    expect(cycling.anchors["300s"]).toMatchObject({
+      actual_watts: 230,
+      source: "observed_indoor",
+    });
+    // 600s unchanged → outdoor (Ride encountered first, equal value not > )
+    expect(cycling.anchors["600s"]).toMatchObject({ source: "observed_outdoor" });
+  });
+
+  it("< 2 observed anchors → null-anchors block with the count note", () => {
+    const result = computeSustainabilityProfile(
+      susInput({
+        curves: cyclingCurves({
+          // only 300s carries watts
+          rideWatts: [218, null, null, null, null, null, null],
+          virtualRideWatts: [218, null, null, null, null, null, null],
+        }),
+        wellness: [{ id: "2026-05-17", weight: 87 }],
+        athlete: SUS_ATHLETE,
+      }),
+    );
+    expect(result.cycling).toMatchObject({
+      anchors: null,
+      coverage_ratio: 0.14, // round(1/7, 2)
+      note: "Too few observed anchors (1, need 2+).",
+    });
+  });
+
+  it("weight chain: wellness_7d weight wins over the extended window", () => {
+    const result = computeSustainabilityProfile(
+      susInput({
+        curves: cyclingCurves(),
+        wellness: [
+          { id: "2026-05-17", weight: 80 }, // extended window only
+          { id: "2026-06-02", weight: 86 }, // inside 7d window [now-6, today]
+        ],
+        athlete: SUS_ATHLETE,
+      }),
+    );
+    expect(result.weight_kg).toBe(86);
+    expect(result.weight_source).toBe("wellness_recent");
+  });
+
+  it("no weight anywhere → null weight, W/kg fields null but watts still observed", () => {
+    const result = computeSustainabilityProfile(
+      susInput({ curves: cyclingCurves(), wellness: [], athlete: SUS_ATHLETE }),
+    );
+    expect(result.weight_kg).toBeNull();
+    expect(result.weight_source).toBeNull();
+    const cycling = result.cycling as unknown as { anchors: Record<string, Record<string, unknown>> };
+    expect(cycling.anchors["1200s"]).toMatchObject({ actual_watts: 191, actual_wpkg: null });
+  });
+
+  it("non-cycling family (rowing) gets actual MMP only — no model layers", () => {
+    const secs = [60, 120, 300, 600, 1200, 1800];
+    const rowingCurves = {
+      rowing: {
+        power: {
+          Rowing: { list: [{ id: SUS_CURVE_ID, secs, watts: [400, 380, 320, 300, 280, 270] }] },
+        },
+        hr: {
+          Rowing: { list: [{ id: SUS_CURVE_ID, secs, values: [180, 178, 175, 172, 168, 165] }] },
+        },
+      },
+    } as unknown as Record<string, SustainabilityFamilyCurves>;
+    const result = computeSustainabilityProfile(
+      susInput({ curves: rowingCurves, wellness: [{ id: "2026-05-17", weight: 80 }] }),
+    );
+    const rowing = result.rowing as unknown as { anchors: Record<string, Record<string, unknown>> };
+    const anchor = rowing.anchors["300s"];
+    expect(anchor).toMatchObject({ actual_watts: 320, source: "observed", actual_wpkg: 4 });
+    // no cycling-only model keys present on a non-cycling family
+    expect(anchor).not.toHaveProperty("coggan_watts");
+    expect(anchor).not.toHaveProperty("cp_model_watts");
+  });
+
+  it("family not in SUSTAINABILITY_ANCHORS is skipped → null profile if nothing else qualifies", () => {
+    const swimCurves = {
+      swim: {
+        power: { Swim: { list: [{ id: SUS_CURVE_ID, secs: [300], watts: [200] }] } },
+        hr: {},
+      },
+    } as unknown as Record<string, SustainabilityFamilyCurves>;
+    expect(computeSustainabilityProfile(susInput({ curves: swimCurves }))).toEqual({
+      note: "No sport families produced valid sustainability data.",
+      window: { days: 42, start: "2026-04-24", end: "2026-06-04" },
+    });
   });
 });
