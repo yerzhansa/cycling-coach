@@ -228,6 +228,25 @@ def compute(fixture_json):
             _vo2 = lw.get("vo2max")
         else:
             _ss = {}; _pm = {}; _vo2 = None
+        # dfa_a1_profile assembly — parallel to the snapshot harness. The fuzzer
+        # perturbs only activities/wellness, so streams is always absent here and
+        # _intervals_data stays empty (profile null); the parallel block keeps the
+        # stub sites in lockstep with the snapshot harness.
+        _streams = FIX.get("streams")
+        if _streams:
+            _dfa_acts = []
+            for _sact in acts:
+                if not isinstance(_sact, dict): continue
+                _srec = _streams.get(str(_sact.get("id")))
+                if not _srec or not _srec.get("dfa_a1"): continue
+                _dblk = sync._compute_dfa_block(_srec)
+                if _dblk is None: continue
+                _dfa_acts.append({"activity_id": _sact.get("id"),
+                    "date": (_sact.get("start_date_local") or "")[:10],
+                    "type": _sact.get("type", "Unknown"),
+                    "name": _sact.get("name", ""), "dfa": _dblk})
+            if _dfa_acts:
+                sync._intervals_data = {"activities": _dfa_acts}
         derived = sync._calculate_derived_metrics(
             activities_7d=a7, activities_28d=a28, wellness_7d=w7, wellness_extended=w28,
             current_ctl=cctl, current_atl=catl, current_tsb=ctsb, past_events=[],

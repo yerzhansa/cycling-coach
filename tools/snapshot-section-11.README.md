@@ -45,6 +45,8 @@ packages/core/tests/fixtures/snapshots/
 │   └── ... (63 per-metric files; ACWR is non-null because the resumed week populates the acute window)
 ├── curve-equipped/
 │   └── ... (63 per-metric files; the curve / power-model capability keys + 6 scalars are NON-NULL here)
+├── dfa-equipped/
+│   └── ... (63 per-metric files; capability.dfa_a1_profile is NON-NULL here — cycling trailing window at confidence=high)
 └── ... (the boundary / multisport / benchmark / capability fixtures)
 ```
 
@@ -173,8 +175,10 @@ the branch (see "Closed gaps" below).
   `athlete` key. Affects `eftp`, `w_prime`, `w_prime_kj`, `p_max`,
   `vo2max`, `power_model_source`.
 - `self._intervals_data` — populated by `_generate_intervals()` in the
-  live pipeline; primed from the fixture's `streams` key (a separate
-  fixture/PR). Affects `capability.dfa_a1_profile`.
+  live pipeline; primed from the fixture's `streams` key by joining each
+  per-second stream record (keyed by `String(activity.id)`) back to the
+  activities array and running it through the upstream's own
+  `_compute_dfa_block`. Affects `capability.dfa_a1_profile`.
 - `race_calendar` — still `None`. Affects phase-detection's
   `race_proximity` slot.
 - `formatted_planned_workouts`, `past_events` — `past_events` rides
@@ -199,7 +203,24 @@ power-model scalars (`eftp`, `w_prime`, `w_prime_kj`, `p_max`,
 sanitizer (`tools/build-curve-fixture.ts`) — the schema-derived
 default-deny sanitizer would otherwise drop every curve key and the id
 transform would clobber the `r.<start>.<end>` curve ids. `dfa_a1_profile`
-remains null here — its `streams` input ships with a separate fixture.
+remains null on `curve-equipped` — it deliberately carries no `streams`
+key (the dfa stream blob lives in its own fixture, below).
+
+### Closed gaps (populated by the dfa fixture)
+
+`dfa-equipped` is fully synthetic (no sanitizer, no real data,
+`tools/build-dfa-fixture.ts`): 7 Ride sessions each carrying a per-second
+`streams` record (`dfa_a1`/`artifacts`/`heartrate`/`watts`, keyed by
+`String(activity.id)`). Every session clears the sufficiency gate
+(`valid_secs>=1200` ∧ `valid_pct>=70`) and holds >=60s of dfa_a1 dwell in
+BOTH the LT1 band `[0.95,1.05]` and the LT2 band `[0.45,0.55]` with
+co-present heartrate+watts. The harness joins the streams to the
+activities array and runs each through the upstream's own
+`_compute_dfa_block` to prime `_intervals_data`, so against it the harness
+emits NON-NULL `capability.dfa_a1_profile` — the cycling trailing window
+reports `confidence=high` with non-null `lt1_estimate` + `lt2_estimate`.
+The builder ends with a non-vacuity guard that recomputes the sufficiency
++ crossing-band counters, so a parity-green-but-vacuous capture can't ship.
 
 In addition, some metric names are emitted by `collect_training_data`
 itself (the orchestrating method that wraps `_calculate_derived_metrics`)
@@ -217,14 +238,15 @@ null:
   direct-call-only and does NOT drive `collect_training_data`
   end-to-end. Decision recorded local-only; not a gap to close.
 
-These gaps are intentional for the first oracle pass. The null-valued
-inputs above (power/HR curves, `sustainability_curves`, `power_model`,
-`vo2max`, etc.) are deferred to the capability/stream wave, which will
-either extend the harness or extend the fixture format to supply them.
-The one absent-entirely entry, `ramp_rate`, is NOT such a gap — that
-metric is intentionally not ported (see above), so no harness extension
-is planned for it. The snapshot baseline locks in "given these inputs,
-these metrics are null" — which is itself a useful regression signal.
+The curve/stream inputs above (power/HR curves, `sustainability_curves`,
+`power_model`, `vo2max`, `streams`) are now supplied by the
+`curve-equipped` + `dfa-equipped` fixtures (see "Closed gaps"). On every
+OTHER fixture the harness still passes the prior stub, so those metrics
+stay null there — the snapshot baseline locks in "given these inputs,
+these metrics are null" on the fixtures that don't carry the keys, which
+is itself a useful regression signal. The one absent-entirely entry,
+`ramp_rate`, is NOT such a gap — that metric is intentionally not ported
+(see above), so no harness extension is planned for it.
 
 ## Contract validation
 
@@ -392,16 +414,16 @@ via host CPython 3.12 (`tools/snapshot-section-11-native.py`), then
 diffing every metric.
 
 **Verdict (2026-06-04):** all 63 metrics produced by `pnpm snapshot:section-11`
-on the `realistic-athlete` AND `curve-equipped` fixtures against
-`section_11_sha = 224c369d` are bit-identical between:
+on the `realistic-athlete`, `curve-equipped`, AND `dfa-equipped` fixtures
+against `section_11_sha = 224c369d` are bit-identical between:
 
 - pyodide `0.29.4` (CPython 3.12, WASM)
 - host CPython `3.12.13` (managed by `uv`)
 
-`curve-equipped` is verified separately (it uses a different frozen anchor,
-`2026-06-04T12:00:00`): generate its native snapshot with
-`--fixture packages/core/tests/fixtures/golden/curve-equipped.json
---frozen-now 2026-06-04T12:00:00` and diff against its committed snapshot dir.
+`curve-equipped` and `dfa-equipped` are verified separately (each uses the
+`2026-06-04T12:00:00` anchor): generate the native snapshot with
+`--fixture packages/core/tests/fixtures/golden/<slug>.json
+--frozen-now 2026-06-04T12:00:00` and diff against the committed snapshot dir.
 
 Reproduce the check:
 
@@ -457,10 +479,12 @@ Fixtures are signal, not collection — each `HARNESS_FIXTURES` entry must
 name the specific sync.py branch it newly covers (the `description` field
 is that record). The set is intentionally heterogeneous:
 real-sanitized (`realistic-athlete`), real-derived hybrid
-(`curve-equipped` — sanitized rows + synthetic curve blocks), synthetic
-boundary-seekers (`boundary-*`, `multisport-*`), and zero-data edges
-(`new-athlete-empty`). A fixture that doesn't cover a NEW branch belongs
-as a targeted synthetic test, not a full per-metric capture.
+(`curve-equipped` — sanitized rows + synthetic curve blocks), fully
+synthetic with a generated stream blob (`dfa-equipped` —
+`tools/build-dfa-fixture.ts`), synthetic boundary-seekers (`boundary-*`,
+`multisport-*`), and zero-data edges (`new-athlete-empty`). A fixture
+that doesn't cover a NEW branch belongs as a targeted synthetic test, not
+a full per-metric capture.
 
 ## Why pyodide and not subprocess Python
 

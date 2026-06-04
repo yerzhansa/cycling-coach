@@ -383,6 +383,37 @@ else:
     _power_model = {}
     _vo2max = None
 
+# dfa_a1_profile assembly: when the fixture carries per-second streams, join
+# them back to the activities array (String(id) both sides) and run each
+# qualifying stream through the upstream's own _compute_dfa_block, building the
+# _intervals_data['activities'] entries the profile path reads. Absent streams
+# leave _intervals_data empty (the prior stub), so the profile stays null and
+# every fixture without streams keeps its byte-identical snapshot. Stream
+# records come from the fresh parse (not the _TrackedDict FIXTURE) because
+# _compute_dfa_block probes channel keys (artifacts/heartrate/watts) a session
+# may legitimately omit — the same tracker-bypass rationale as the curve blocks.
+_streams = _curve_raw_fixture.get("streams")
+if _streams:
+    _dfa_activities = []
+    for _sact in _curve_raw_fixture.get("activities", []):
+        if not isinstance(_sact, dict):
+            continue
+        _srec = _streams.get(str(_sact.get("id")))
+        if not _srec or not _srec.get("dfa_a1"):
+            continue
+        _dfa_block = sync._compute_dfa_block(_srec)
+        if _dfa_block is None:
+            continue
+        _dfa_activities.append({
+            "activity_id": _sact.get("id"),
+            "date": (_sact.get("start_date_local") or "")[:10],
+            "type": _sact.get("type", "Unknown"),
+            "name": _sact.get("name", ""),
+            "dfa": _dfa_block,
+        })
+    if _dfa_activities:
+        sync._intervals_data = {"activities": _dfa_activities}
+
 try:
     derived = sync._calculate_derived_metrics(
         activities_7d=_ACTIVITIES_7D,

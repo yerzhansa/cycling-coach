@@ -96,4 +96,10 @@ export const HARNESS_FIXTURES: HarnessFixtureConfig[] = [
     description:
       "Populated-branch coverage for the curve/power-model capability keys (power_curve_delta, hr_curve_delta, sustainability_profile) + the 6 power-model scalars (eftp, w_prime, w_prime_kj, p_max, power_model_source, vo2max). Hybrid: real sanitized activity/wellness rows plus synthetic power_curves/hr_curves (both 28d delta windows at all rotation anchors), sustainability_curves (single 42d window, cycling Ride+VirtualRide), athlete.sportSettings (ftp 200 / indoor 195 / lthr 168), and a latest-row Ride sportInfo carrying eftp/wPrime/pMax + vo2max. Anchor 2026-06-04 places win1 (now-27..today) and win2 (now-55..now-28) over distinct real-data windows, so every pct_change and rotation_index is non-null. Built by tools/build-curve-fixture.ts (curve blocks attached AFTER the sanitizer — they bypass the default-deny key filter and the id redaction that would clobber the r.<start>.<end> curve ids).",
   },
+  {
+    slug: "dfa-equipped",
+    frozenNow: "2026-06-04T12:00:00",
+    description:
+      "Populated-branch coverage for capability.dfa_a1_profile. Fully synthetic (no sanitizer, no real data): 7 Ride activities (ids 90201-90207) on 2026-05-28..06-03, each carrying a per-second streams record (dfa_a1/artifacts/heartrate/watts, 1800 samples) keyed by String(id) in the top-level `streams` key. Every session is 3×600s segments at dfa_a1 1.0 / 0.75 / 0.5 with artifacts 0 — so valid_secs=1800, valid_pct=100, and each session holds 600s of dwell in BOTH the LT1 band [0.95,1.05] and the LT2 band [0.45,0.55] with co-present heartrate+watts. The 7 qualifying sessions push crossing_n to 7 (>=6), so the cycling trailing window reports confidence=high with non-null lt1_estimate + lt2_estimate. Built by tools/build-dfa-fixture.ts (synthetic stream blob + non-vacuity guard recomputing the sufficiency + crossing-band thresholds). Anchor 2026-06-04 sits one day after the last ride.",
+  },
 ];

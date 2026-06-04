@@ -28,10 +28,11 @@ import { describe, expect, it } from "vitest";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-// Both real-derived fixtures carry a committed `.sha256` integrity guard.
+// Every fixture with a committed `.sha256` integrity guard is checked here.
 // realistic-athlete is fully sanitizer-produced; curve-equipped is a hybrid
-// (sanitized rows + synthetic curve blocks) emitted by tools/build-curve-fixture.ts.
-// Either regen path writes the checksum alongside the JSON.
+// (sanitized rows + synthetic curve blocks); dfa-equipped is fully synthetic
+// (generated stream blob). Each fixture's regen path writes the checksum
+// alongside the JSON.
 const FIXTURES: Array<{ slug: string; regen: string }> = [
   {
     slug: "realistic-athlete",
@@ -40,6 +41,10 @@ const FIXTURES: Array<{ slug: string; regen: string }> = [
   {
     slug: "curve-equipped",
     regen: "tools/build-curve-fixture.ts",
+  },
+  {
+    slug: "dfa-equipped",
+    regen: "tools/build-dfa-fixture.ts",
   },
 ];
 

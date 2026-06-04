@@ -196,6 +196,33 @@ def run_one_fixture(IntervalsSync, fixture: dict, frozen_now: datetime) -> None:
         power_model = {}
         vo2max = None
 
+    # dfa_a1_profile assembly — mirror the snapshot harness so the branches
+    # under coverage match the oracle the parity gate snapshots. When the
+    # fixture carries per-second streams, join them to the activities array and
+    # run each qualifying stream through _compute_dfa_block; absent streams
+    # leave _intervals_data empty (profile stays null).
+    streams = fixture.get("streams")
+    if streams:
+        dfa_activities = []
+        for sact in fixture.get("activities", []):
+            if not isinstance(sact, dict):
+                continue
+            srec = streams.get(str(sact.get("id")))
+            if not srec or not srec.get("dfa_a1"):
+                continue
+            dfa_block = sync._compute_dfa_block(srec)
+            if dfa_block is None:
+                continue
+            dfa_activities.append({
+                "activity_id": sact.get("id"),
+                "date": (sact.get("start_date_local") or "")[:10],
+                "type": sact.get("type", "Unknown"),
+                "name": sact.get("name", ""),
+                "dfa": dfa_block,
+            })
+        if dfa_activities:
+            sync._intervals_data = {"activities": dfa_activities}
+
     sync._calculate_derived_metrics(
         activities_7d=activities_7d,
         activities_28d=activities_28d,

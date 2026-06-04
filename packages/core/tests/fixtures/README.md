@@ -19,7 +19,10 @@ Three kinds live here, distinguished by provenance — not by a fixed cap:
   specific regression or boundary case. The boundary fixtures are fuzz-derived
   (a `fuzz-parity` divergence frozen as a golden). `synthetic/` fixtures ship
   with a `_comment` key explaining the bug they lock in (JSON has no comment
-  syntax, so the comment rides through `z.looseObject()`).
+  syntax, so the comment rides through `z.looseObject()`). `dfa-equipped.json`
+  is a fully-synthetic golden (zero sanitizer involvement, zero real data): its
+  per-second stream blob is generated entirely by `tools/build-dfa-fixture.ts`
+  from closed-form segment patterns.
 
 ## Current fixtures
 
@@ -41,6 +44,7 @@ one newly covers (the justification the harness fixture registry records).
 | `golden/populated-benchmark-and-consistency.json` | synthetic | populated `consistency_index` + `benchmark_indoor`/`benchmark_outdoor` (the +/-7d FTP nearest-match window) |
 | `golden/rest-week-with-baseline.json` | synthetic | monotony `stdev<=0 → null` cascade (strain/stress_tolerance null) + flat HRV/RHR baseline block |
 | `golden/capability-qualifying.json` | synthetic | `_calculate_durability` reliability gate (N7>=3, N28>=5) + efficiency_factor + HRRc means/trends |
+| `golden/dfa-equipped.json` | synthetic | `_compute_dfa_block` + `_calculate_dfa_a1_profile` populated branch: 7 Ride sessions with per-second `dfa_a1`/`artifacts`/`heartrate`/`watts` streams clearing valid_secs>=1200 ∧ valid_pct>=70 and >=60s dwell in BOTH crossing bands → cycling trailing window at confidence=high with non-null lt1/lt2 estimates |
 | `synthetic/has-intervals-placeholder.json` | synthetic | upstream v3.106 bug: a `RECOVERY`-only `icu_intervals` placeholder must NOT be flagged as a structured workout |
 
 Fixtures owned by other test suites (`golden/zero-activities.json`,
@@ -69,18 +73,27 @@ pnpm exec tsx tools/build-curve-fixture.ts --raw-bundle <bundle.json> --raw-curv
 For a new **synthetic** fixture, add the file by hand, include a `_comment` key
 explaining the regression case, and write a test that asserts the offending
 behavior is now blocked. Then register it in `HARNESS_FIXTURES` (with its own
-`frozenNow`) if it should get a full per-metric oracle capture.
+`frozenNow`) if it should get a full per-metric oracle capture. A
+**fully-synthetic stream fixture** (large generated blob) gets its own builder
+instead — `tools/build-dfa-fixture.ts` generates `dfa-equipped.json`
+deterministically and ends with a non-vacuity guard that recomputes the
+sufficiency + crossing-band thresholds, so the capture can't be silently
+vacuous.
 
 ## Integrity + privacy guards
 
-- **`.sha256` checksum** — `realistic-athlete` and `curve-equipped` each carry a
-  committed checksum; `realistic-athlete-fixture-checksum.test.ts` re-hashes the
-  bytes on every CI run, catching in-place mutation (bad merge, editor save).
-- **PII allowlist scan** — `reference-load-fixture.test.ts` walks both
-  real-derived fixtures and asserts every key is in `ALLOWED_FIXTURE_KEYS`
-  (real rows) or the enumerated synthetic-block key set (curve-equipped), and
-  that every numeric `id`/`*_id` is the redacted sentinel (12345) or a synthetic
-  curve-fixture id (>= 90101) — never a real-shaped account id.
+- **`.sha256` checksum** — `realistic-athlete`, `curve-equipped`, and
+  `dfa-equipped` each carry a committed checksum;
+  `realistic-athlete-fixture-checksum.test.ts` re-hashes the bytes on every CI
+  run, catching in-place mutation (bad merge, editor save).
+- **PII allowlist scan** — `reference-load-fixture.test.ts` walks the
+  real-derived + synthetic-stream fixtures and asserts every key is in
+  `ALLOWED_FIXTURE_KEYS` (real rows) or the enumerated synthetic-block key set
+  (curve-equipped curve/athlete blocks; dfa-equipped stream channels), and that
+  every numeric `id`/`*_id` is the redacted sentinel (12345) or a synthetic
+  fixture id (curve >= 90101, dfa >= 90201) — never a real-shaped account id.
+  `dfa-equipped` is fully synthetic, so its only out-of-allowlist keys are the
+  structural stream-channel names + the `String(id)` record keys (>= 90201).
 
 ## Privacy callout
 

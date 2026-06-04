@@ -1,0 +1,59 @@
+{
+  "metric": "capability.dfa_a1_profile",
+  "athlete": "dfa-equipped",
+  "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
+  "section_11_protocol_version": "3.112",
+  "frozen_now": "2026-06-04T12:00:00",
+  "value": {
+    "latest_session": {
+      "activity_id": 90207,
+      "avg": 0.75,
+      "date": "2026-06-03",
+      "drift_delta": -0.5,
+      "drift_interpretable": true,
+      "name": "synthetic-dfa-ride",
+      "quality_pct": 100,
+      "sport": "Ride",
+      "sufficient": true,
+      "tiz_split_pct": {
+        "above_lt2": 0,
+        "below_lt1": 0,
+        "lt1_transition": 66.7,
+        "transition_lt2": 33.3
+      },
+      "validated": true
+    },
+    "trailing_by_sport": {
+      "cycling": {
+        "avg_dfa_a1": 0.75,
+        "confidence": "high",
+        "date_range": [
+          "2026-05-28",
+          "2026-06-03"
+        ],
+        "drift_delta_mean": -0.5,
+        "lt1_crossing_sessions": 7,
+        "lt1_estimate": {
+          "hr": 141,
+          "n_sessions": 7,
+          "n_sessions_indoor": 0,
+          "n_sessions_outdoor": 7,
+          "watts_indoor": null,
+          "watts_outdoor": 181
+        },
+        "lt2_crossing_sessions": 7,
+        "lt2_estimate": {
+          "hr": 169,
+          "n_sessions": 7,
+          "n_sessions_indoor": 0,
+          "n_sessions_outdoor": 7,
+          "watts_indoor": null,
+          "watts_outdoor": 261
+        },
+        "n_sessions": 7,
+        "quality_avg_pct": 100,
+        "validated": true
+      }
+    }
+  }
+}

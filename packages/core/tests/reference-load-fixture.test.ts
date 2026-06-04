@@ -155,13 +155,16 @@ describe("loadFixture against committed golden fixtures", () => {
   // remove. The structural assertion covers the surface without naming
   // leaked values.
   //
-  // Two fixtures are scanned. realistic-athlete is fully sanitizer-produced,
+  // Three fixtures are scanned. realistic-athlete is fully sanitizer-produced,
   // so EVERY key must be in ALLOWED_FIXTURE_KEYS. curve-equipped is a hybrid:
   // its activity/wellness ROWS are sanitizer-produced (same allowlist), but
   // its curve/athlete BLOCKS are attached AFTER the sanitizer (they would be
   // default-dropped otherwise) and legitimately carry synthetic structural
-  // keys outside the sanitizer allowlist. Those keys are a fixed, PII-free set
-  // enumerated below — a new key the builder introduces still fails the scan.
+  // keys outside the sanitizer allowlist. dfa-equipped is fully synthetic (no
+  // sanitizer at all) — its activity/wellness keys still happen to land in the
+  // sanitizer allowlist, but its per-second stream blob carries structural keys
+  // outside it. Both extra sets are fixed, PII-free, and enumerated below — a
+  // new key a builder introduces still fails the scan.
   const CURVE_FIXTURE_BLOCK_KEYS = new Set<string>([
     // Top-level curve / athlete blocks attached post-sanitization.
     "power_curves",
@@ -190,10 +193,27 @@ describe("loadFixture against committed golden fixtures", () => {
     "pMax",
   ]);
 
+  // dfa-equipped is fully synthetic. Its activity/wellness keys land in the
+  // sanitizer allowlist already; only the per-second stream blob adds keys
+  // outside it. All are structural channel names — zero PII.
+  const DFA_FIXTURE_BLOCK_KEYS = new Set<string>([
+    // Top-level per-second streams record + its four channel arrays.
+    "streams",
+    "dfa_a1",
+    "artifacts",
+    "heartrate",
+    "watts",
+  ]);
+
   const piiScanFixtures: Array<{
     slug: string;
     extraKeys: ReadonlySet<string>;
     idSentinel: (v: unknown) => boolean;
+    // Allows keys that are dynamic record keys (not static field names) — e.g.
+    // the `streams` record is keyed by String(activity.id), so its child keys
+    // are synthetic ids, not enumerable structural names. `parentPath` is the
+    // dotted path of the object the key sits on (e.g. "streams").
+    dynamicKeyAllowed?: (key: string, parentPath: string) => boolean;
   }> = [
     {
       slug: "golden/realistic-athlete",
@@ -207,9 +227,21 @@ describe("loadFixture against committed golden fixtures", () => {
       // the 12345 sentinel that survives on rows the builder didn't reassign.
       idSentinel: (v) => v === 12345 || (typeof v === "number" && v >= 90101),
     },
+    {
+      slug: "golden/dfa-equipped",
+      extraKeys: DFA_FIXTURE_BLOCK_KEYS,
+      // dfa-equipped is fully synthetic — every numeric id is a generated
+      // value >= 90201 (no real-data sentinel, no real account-linking ids).
+      idSentinel: (v) => typeof v === "number" && v >= 90201,
+      // The `streams` record is keyed by String(activity.id); those id-shaped
+      // keys (>= 90201) are synthetic, not PII, and aren't enumerable static
+      // names. Accept them under the `streams` parent only.
+      dynamicKeyAllowed: (key, parentPath) =>
+        parentPath === "streams" && /^\d+$/.test(key) && Number(key) >= 90201,
+    },
   ];
 
-  describe.each(piiScanFixtures)("$slug — PII regression scanner (allowlist)", ({ slug, extraKeys, idSentinel }) => {
+  describe.each(piiScanFixtures)("$slug — PII regression scanner (allowlist)", ({ slug, extraKeys, idSentinel, dynamicKeyAllowed }) => {
     const allowed = new Set<string>([...ALLOWED_FIXTURE_KEYS, ...extraKeys]);
 
     it("every key in the committed fixture appears in the allowlist", () => {
@@ -223,7 +255,7 @@ describe("loadFixture against committed golden fixtures", () => {
         if (v !== null && typeof v === "object") {
           for (const [key, child] of Object.entries(v as Record<string, unknown>)) {
             const childPath = path === "" ? key : `${path}.${key}`;
-            if (!allowed.has(key)) {
+            if (!allowed.has(key) && !(dynamicKeyAllowed?.(key, path) ?? false)) {
               offending.push(`${childPath} (key not in allowlist)`);
             }
             recurse(child, childPath);
