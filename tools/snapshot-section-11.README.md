@@ -272,9 +272,9 @@ read silently as None (1 total .get() accesses):
 
 sync.py read None silently from fixture paths that don't exist.
 Either fix the fixture to include the keys, or — if a key is
-intentionally optional in the schema — extend the contract
-allowlist in tools/snapshot-section-11.ts. See the README's
-'Contract validation' section.
+intentionally optional in the schema — add the path to
+optionalFixturePaths in tools/harness-contract.json. See the
+README's 'Contract validation' section.
 ```
 
 Allowlist semantics:
@@ -288,51 +288,74 @@ Allowlist semantics:
 - A missing key not in the allowlist is a contract violation and
   fails the run.
 
-Initial allowlist (intervals.icu fields that may legitimately be
+Allowlist (intervals.icu fields that may legitimately be
 absent on a per-record basis — old activities computed before the
 field existed, rest-day wellness entries with no Fitness/Fatigue,
 etc.):
 
-```python
-_ALLOWED_OPTIONAL_PATHS = {
-    # Per-record intervals.icu fields that may legitimately be absent.
-    "FIXTURE.activities[*].icu_hr_decoupling",
-    "FIXTURE.activities[*].icu_hr_zone_times",
-    "FIXTURE.activities[*].icu_hrr",
-    "FIXTURE.activities[*].icu_hrr.value",
-    "FIXTURE.activities[*].icu_hrr.hrr",
-    "FIXTURE.activities[*].icu_variability_index",
-    "FIXTURE.wellness[*].atl",
-    "FIXTURE.wellness[*].ctl",
-    # Top-level fixture extensions — present only on the fixtures that exercise
-    # the corresponding populated branch; absent (and pass-through) on the rest.
-    "FIXTURE.past_events",
-    "FIXTURE.current_ftp_indoor",
-    "FIXTURE.current_ftp_outdoor",
-    "FIXTURE.ftp_history_indoor",
-    "FIXTURE.ftp_history_outdoor",
-    "FIXTURE.intervals",
-    "FIXTURE.power_curves",
-    "FIXTURE.hr_curves",
-    "FIXTURE.sustainability_curves",
-    "FIXTURE.streams",
-    "FIXTURE.athlete",
-}
+```json
+[
+  "FIXTURE.activities[*].icu_hr_decoupling",
+  "FIXTURE.activities[*].icu_hr_zone_times",
+  "FIXTURE.activities[*].icu_hrr",
+  "FIXTURE.activities[*].icu_hrr.value",
+  "FIXTURE.activities[*].icu_hrr.hrr",
+  "FIXTURE.activities[*].icu_variability_index",
+  "FIXTURE.wellness[*].atl",
+  "FIXTURE.wellness[*].ctl",
+  "FIXTURE.past_events",
+  "FIXTURE.current_ftp_indoor",
+  "FIXTURE.current_ftp_outdoor",
+  "FIXTURE.ftp_history_indoor",
+  "FIXTURE.ftp_history_outdoor",
+  "FIXTURE.intervals",
+  "FIXTURE.power_curves",
+  "FIXTURE.hr_curves",
+  "FIXTURE.sustainability_curves",
+  "FIXTURE.streams",
+  "FIXTURE.athlete"
+]
 ```
 
-The same allowlist is duplicated in three places that must stay in lockstep:
-`tools/snapshot-section-11.ts` (the canonical copy the harness uses),
-`tools/fuzz-parity.ts` (so the fuzzer's contract check is as strong as the
-gate's), and this README block. Extending it means editing all three.
+This list is the `optionalFixturePaths` array of the shared harness
+contract (`tools/harness-contract.json`) — the single source of truth
+the harness and its twins read at runtime. The block above is NOT a
+separate copy to hand-sync; `packages/core/tests/harness-contract.test.ts`
+parses it and asserts it equals the contract's `optionalFixturePaths`
+exactly, so the two cannot drift. The fuzz-parity differential adds one
+fuzz-only optionality (`FIXTURE.activities[*].icu_zone_times`, which its
+perturbation deletes on ~30% of activities) via the contract's
+`fuzzOnlyOptionalPaths` array; the harness, the native twin, and the
+coverage probe use the canonical list only.
 
-Extending the allowlist requires a README update in this section so
-the reviewer can trace why a particular field is treated as
-schema-optional.
+Extending the allowlist means editing `tools/harness-contract.json` and
+this README block (the test keeps them aligned) so a reviewer can trace
+why a particular field is treated as schema-optional.
 
 Tested by `packages/core/tests/snapshot-contract.test.ts`, which
 deliberately renames `"activities"` to `"activitiez"` in a temp
 fixture, runs the harness against it, and asserts the structured
 failure surfaces the renamed path.
+
+## Harness contract
+
+This harness has four implementations that must agree on the same literal
+data: the pyodide harness (`tools/snapshot-section-11.ts`), its native
+CPython twin (`tools/snapshot-section-11-native.py`), the fuzz-parity
+differential (`tools/fuzz-parity.ts`), and the branch-coverage probe
+(`tools/measure-reference-coverage-native.py`). Because two of them are
+Python and cannot import the TypeScript module, that shared data lives in
+a language-neutral file, `tools/harness-contract.json`: the optional-path
+allowlist (`optionalFixturePaths` + `fuzzOnlyOptionalPaths`), the
+fixture-key → derived-kwarg conditions (`conditionalKwargs`), and the
+power/HR delta-window day-offsets (`powerCurveDeltaWindowDaysAgo`). The
+TypeScript files read it through `tools/harness-contract.ts`; the Python
+twins `json.load` it relative to their own path. Each file keeps its own
+logic — only the literal values are shared, so the twins stay independent
+reimplementations and the cross-interpreter diff remains a real check.
+`packages/core/tests/harness-contract.test.ts` asserts the contract's
+schema shape, that this README's allowlist block matches it, and that no
+file carries a residual inline copy of the extracted literals.
 
 ## Null / absent audit (against F8 metric scope)
 

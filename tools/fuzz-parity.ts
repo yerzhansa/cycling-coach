@@ -36,6 +36,10 @@ import { join, resolve } from "node:path";
 import { loadPyodide } from "pyodide";
 
 import { deepCompare, METRIC_REGISTRY, REPO_ROOT } from "./check-metric-parity";
+import {
+  FUZZ_OPTIONAL_FIXTURE_PATHS,
+  HARNESS_CONTRACT,
+} from "./harness-contract.js";
 import { decideVerdict } from "./fuzz-parity-verdict";
 
 const SECTION_11_REPO = process.env.SECTION_11_REPO ?? resolve(REPO_ROOT, "../section-11");
@@ -127,35 +131,18 @@ IntervalsSync = _ns["IntervalsSync"]
 # (minus the allowlist) after each run and fails loud on anything unexpected.
 import re as _re
 _TRACKED_MISSING = []
-# Allowlist ported from the snapshot harness, plus icu_zone_times: perturb
-# deletes it on ~30% of activities. The golden fixtures always include it, so
-# the snapshot allowlist omits it — but here it is a legitimate optionality.
-_ALLOWED_OPTIONAL_PATHS = {
-    "FIXTURE.activities[*].icu_hr_decoupling",
-    "FIXTURE.activities[*].icu_hr_zone_times",
-    "FIXTURE.activities[*].icu_hrr",
-    "FIXTURE.activities[*].icu_hrr.value",
-    "FIXTURE.activities[*].icu_hrr.hrr",
-    "FIXTURE.activities[*].icu_variability_index",
-    "FIXTURE.activities[*].icu_zone_times",
-    "FIXTURE.wellness[*].atl",
-    "FIXTURE.wellness[*].ctl",
-    # Top-level fixture extensions — reconciled with the snapshot harness's
-    # allowlist so the fuzzer's contract check is as strong as the gate's.
-    # The fuzzer perturbs only activities/wellness, so these are always absent
-    # here; the entries keep the two allowlists in lockstep.
-    "FIXTURE.past_events",
-    "FIXTURE.current_ftp_indoor",
-    "FIXTURE.current_ftp_outdoor",
-    "FIXTURE.ftp_history_indoor",
-    "FIXTURE.ftp_history_outdoor",
-    "FIXTURE.intervals",
-    "FIXTURE.power_curves",
-    "FIXTURE.hr_curves",
-    "FIXTURE.sustainability_curves",
-    "FIXTURE.streams",
-    "FIXTURE.athlete",
-}
+# Allowlist shared with the snapshot harness via tools/harness-contract.json,
+# injected here as ALLOWED_OPTIONAL_PATHS_JSON. The fuzz copy is the canonical
+# set PLUS the fuzz-only extras (icu_zone_times — perturb deletes it on ~30% of
+# activities; golden fixtures always include it, so the snapshot allowlist omits
+# it). The TS side unions the two contract lists before injecting them here.
+_ALLOWED_OPTIONAL_PATHS = set(json.loads(ALLOWED_OPTIONAL_PATHS_JSON))
+# Power/HR delta-window day-offsets — shared literal data from the contract,
+# injected as PC_DELTA_WINDOW_JSON. compute() closes over these module globals.
+_PC_WINDOW = json.loads(PC_DELTA_WINDOW_JSON)
+_PC_WIN1_START = _PC_WINDOW["win1StartDaysAgo"]
+_PC_WIN2_START = _PC_WINDOW["win2StartDaysAgo"]
+_PC_WIN2_END = _PC_WINDOW["win2EndDaysAgo"]
 def _normalize_path(path):
     return _re.sub(r"\\[\\d+\\]", "[*]", path)
 class _TrackedDict(dict):
@@ -213,9 +200,9 @@ def compute(fixture_json):
         _scurves = FIX.get("sustainability_curves")
         _athlete = FIX.get("athlete")
         if _pcurves:
-            _pcd = ((_FN - timedelta(days=27)).strftime("%Y-%m-%d"), today,
-                    (_FN - timedelta(days=55)).strftime("%Y-%m-%d"),
-                    (_FN - timedelta(days=28)).strftime("%Y-%m-%d"))
+            _pcd = ((_FN - timedelta(days=_PC_WIN1_START)).strftime("%Y-%m-%d"), today,
+                    (_FN - timedelta(days=_PC_WIN2_START)).strftime("%Y-%m-%d"),
+                    (_FN - timedelta(days=_PC_WIN2_END)).strftime("%Y-%m-%d"))
         else:
             _pcd = None
         if _scurves:
@@ -318,6 +305,14 @@ async function main(): Promise<number> {
   const py = await loadPyodide({ indexURL: resolve(REPO_ROOT, "node_modules/pyodide") });
   py.globals.set("FROZEN_NOW", args.frozenNow);
   py.globals.set("SYNC_PY_SOURCE", syncSource);
+  py.globals.set(
+    "ALLOWED_OPTIONAL_PATHS_JSON",
+    JSON.stringify(FUZZ_OPTIONAL_FIXTURE_PATHS),
+  );
+  py.globals.set(
+    "PC_DELTA_WINDOW_JSON",
+    JSON.stringify(HARNESS_CONTRACT.powerCurveDeltaWindowDaysAgo),
+  );
   py.runPython(ORACLE_PROLOGUE);
   const pyVersion = py.runPython("__import__('sys').version.split()[0]") as string;
 
@@ -433,7 +428,7 @@ async function main(): Promise<number> {
     case "contract-violation":
       console.error(`[fuzz-parity] FAIL — oracle read a silently-missing fixture key on ${contractViolations}/${args.n} input(s); both sides reading the same None would report a false parity, so this is NOT a pass.`);
       console.error(`[fuzz-parity]   first missing key(s): ${firstViolation}`);
-      console.error(`[fuzz-parity]   If it is a legitimate schema optionality, add the path to _ALLOWED_OPTIONAL_PATHS in the prologue; otherwise fix perturb so it stops generating it. Fixture written to:\n  ${firstViolationPath}`);
+      console.error(`[fuzz-parity]   If it is a legitimate schema optionality, add the path to optionalFixturePaths (or fuzzOnlyOptionalPaths) in tools/harness-contract.json; otherwise fix perturb so it stops generating it. Fixture written to:\n  ${firstViolationPath}`);
       break;
     case "mismatch": {
       const captured = Object.values(failPaths);

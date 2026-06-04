@@ -1,0 +1,45 @@
+{
+  "$comment": "Language-neutral lockstep contract for the Reference layer's snapshot harness and its three twins (the pyodide harness, the native-CPython twin, the fuzz-parity differential, and the coverage probe). PURE DATA ONLY: literal values that must be identical across all four files. Each file keeps its own logic and reads these values (TypeScript via readFileSync+JSON.parse, Python via json.load). NEVER add expressions, templates, or per-file logic here — the twins are intentionally independent reimplementations, and that independence is what makes the cross-interpreter diff a real check. See the harness README's 'Harness contract' section.",
+  "optionalFixturePaths": [
+    "FIXTURE.activities[*].icu_hr_decoupling",
+    "FIXTURE.activities[*].icu_hr_zone_times",
+    "FIXTURE.activities[*].icu_hrr",
+    "FIXTURE.activities[*].icu_hrr.value",
+    "FIXTURE.activities[*].icu_hrr.hrr",
+    "FIXTURE.activities[*].icu_variability_index",
+    "FIXTURE.wellness[*].atl",
+    "FIXTURE.wellness[*].ctl",
+    "FIXTURE.past_events",
+    "FIXTURE.current_ftp_indoor",
+    "FIXTURE.current_ftp_outdoor",
+    "FIXTURE.ftp_history_indoor",
+    "FIXTURE.ftp_history_outdoor",
+    "FIXTURE.intervals",
+    "FIXTURE.power_curves",
+    "FIXTURE.hr_curves",
+    "FIXTURE.sustainability_curves",
+    "FIXTURE.streams",
+    "FIXTURE.athlete"
+  ],
+  "fuzzOnlyOptionalPaths": [
+    "FIXTURE.activities[*].icu_zone_times"
+  ],
+  "conditionalKwargs": {
+    "$comment": "Derived-kwarg name -> the fixture key whose presence gates it. Each twin derives the kwarg ONLY when the source key is present; absent keys reproduce the prior stub so fixtures carrying none stay byte-identical (including the absence of the upstream null-blocks' window keys). The map encodes that 'derive only when the key exists' rule as data; the per-kwarg derivation arithmetic stays as logic in each file.",
+    "power_curve_data": "power_curves",
+    "power_curve_dates": "power_curves",
+    "hr_curve_data": "hr_curves",
+    "sustainability_curves": "sustainability_curves",
+    "sustainability_window": "sustainability_curves",
+    "sport_settings": "athlete",
+    "power_model": "athlete",
+    "vo2max": "athlete",
+    "dfa_intervals_data": "streams"
+  },
+  "powerCurveDeltaWindowDaysAgo": {
+    "$comment": "Integer day-offsets-from-frozen-now for the two power/HR delta windows the upstream derives in pc_dates (sync.py:2465-2469). Each twin still does its own `frozen_now - timedelta(days=N)` calendar arithmetic; only the integers N live here. win1 = (now - win1StartDaysAgo)..today; win2 = (now - win2StartDaysAgo)..(now - win2EndDaysAgo).",
+    "win1StartDaysAgo": 27,
+    "win2StartDaysAgo": 55,
+    "win2EndDaysAgo": 28
+  }
+}

@@ -27,6 +27,10 @@ import { fileURLToPath } from "node:url";
 import { loadPyodide } from "pyodide";
 
 import type { Manifest, Snapshot } from "./check-metric-parity";
+import {
+  HARNESS_CONTRACT,
+  OPTIONAL_FIXTURE_PATHS,
+} from "./harness-contract.js";
 import { DEFAULT_FROZEN_NOW, HARNESS_FIXTURES } from "./harness-fixtures.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -189,36 +193,19 @@ IntervalsSync = _sync_ns["IntervalsSync"]
 import re as _re
 _TRACKED_MISSING = []
 
-_ALLOWED_OPTIONAL_PATHS = {
-    "FIXTURE.activities[*].icu_hr_decoupling",
-    "FIXTURE.activities[*].icu_hr_zone_times",
-    "FIXTURE.activities[*].icu_hrr",
-    # icu_hrr may arrive as a dict; the upstream reads .value then .hrr,
-    # defaulting both to None (see _calculate_hrrc_trend's _filter_qualifying).
-    "FIXTURE.activities[*].icu_hrr.value",
-    "FIXTURE.activities[*].icu_hrr.hrr",
-    "FIXTURE.activities[*].icu_variability_index",
-    "FIXTURE.wellness[*].atl",
-    "FIXTURE.wellness[*].ctl",
-    # F11 fixture extensions — absent on every fixture that doesn't exercise
-    # the populated benchmark / consistency branches; present on fixtures that
-    # do. The harness reads them pass-through (no hardcoded overrides) per
-    # ADR-0017's boundary contract.
-    "FIXTURE.past_events",
-    "FIXTURE.current_ftp_indoor",
-    "FIXTURE.current_ftp_outdoor",
-    "FIXTURE.ftp_history_indoor",
-    "FIXTURE.ftp_history_outdoor",
-    "FIXTURE.intervals",
-    # Curve + stream extensions — present only on the curve/stream fixtures.
-    # The harness derives the date/window kwargs ONLY when the matching key
-    # is present, so absent keys reproduce the prior null-block snapshots.
-    "FIXTURE.power_curves",
-    "FIXTURE.hr_curves",
-    "FIXTURE.sustainability_curves",
-    "FIXTURE.streams",
-    "FIXTURE.athlete",
-}
+# The allowlist of legitimately-optional fixture paths is shared literal data
+# across the harness twins; it lives in tools/harness-contract.json and is
+# injected here as ALLOWED_OPTIONAL_PATHS_JSON (see the README's "Harness
+# contract" section). [*] is the array-index wildcard.
+_ALLOWED_OPTIONAL_PATHS = set(json.loads(ALLOWED_OPTIONAL_PATHS_JSON))
+
+# Power/HR delta-window day-offsets — shared literal data from
+# tools/harness-contract.json (injected as PC_DELTA_WINDOW_JSON). Each twin
+# keeps its own timedelta arithmetic; only the integers come from the contract.
+_PC_WINDOW = json.loads(PC_DELTA_WINDOW_JSON)
+_PC_WIN1_START = _PC_WINDOW["win1StartDaysAgo"]
+_PC_WIN2_START = _PC_WINDOW["win2StartDaysAgo"]
+_PC_WIN2_END = _PC_WINDOW["win2EndDaysAgo"]
 
 def _normalize_path(path):
     return _re.sub(r"\\[\\d+\\]", "[*]", path)
@@ -353,9 +340,9 @@ _raw_latest_wellness = _pick_latest_wellness(
 # when it fetched power curves; both delta metrics read this same tuple.
 if _power_curves:
     _pc_end1 = _TODAY
-    _pc_start1 = (_FROZEN_NOW - timedelta(days=27)).strftime("%Y-%m-%d")
-    _pc_end2 = (_FROZEN_NOW - timedelta(days=28)).strftime("%Y-%m-%d")
-    _pc_start2 = (_FROZEN_NOW - timedelta(days=55)).strftime("%Y-%m-%d")
+    _pc_start1 = (_FROZEN_NOW - timedelta(days=_PC_WIN1_START)).strftime("%Y-%m-%d")
+    _pc_end2 = (_FROZEN_NOW - timedelta(days=_PC_WIN2_END)).strftime("%Y-%m-%d")
+    _pc_start2 = (_FROZEN_NOW - timedelta(days=_PC_WIN2_START)).strftime("%Y-%m-%d")
     _pc_dates = (_pc_start1, _pc_end1, _pc_start2, _pc_end2)
 else:
     _pc_dates = None
@@ -554,9 +541,9 @@ if "__error__" not in derived:
                 "message": (
                     "sync.py read None silently from fixture paths that don't exist. "
                     "Either fix the fixture to include the keys, or — if a key is "
-                    "intentionally optional in the schema — extend the contract "
-                    "allowlist in tools/snapshot-section-11.ts. See the README's "
-                    "'Contract validation' section."
+                    "intentionally optional in the schema — add the path to "
+                    "optionalFixturePaths in tools/harness-contract.json. See the "
+                    "README's 'Contract validation' section."
                 ),
             }
         }
@@ -697,6 +684,14 @@ async function main(): Promise<void> {
 
   pyodide.globals.set("SYNC_PY_PATH", SYNC_PY_PATH);
   pyodide.globals.set("SYNC_PY_SOURCE", syncPySource);
+  pyodide.globals.set(
+    "ALLOWED_OPTIONAL_PATHS_JSON",
+    JSON.stringify(OPTIONAL_FIXTURE_PATHS),
+  );
+  pyodide.globals.set(
+    "PC_DELTA_WINDOW_JSON",
+    JSON.stringify(HARNESS_CONTRACT.powerCurveDeltaWindowDaysAgo),
+  );
 
   const results: { slug: string; metrics: string[] }[] = [];
   for (const fixture of fixtures) {

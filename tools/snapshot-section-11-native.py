@@ -161,6 +161,14 @@ def latest_wellness(rows):
     return sorted(rows, key=lambda r: r.get("id", ""), reverse=True)[0]
 
 
+def load_harness_contract() -> dict:
+    """Read the language-neutral lockstep contract shared with the pyodide
+    harness (tools/harness-contract.json), resolved relative to this file —
+    not cwd — so the twin reads the same literal data from any working dir."""
+    contract_path = Path(__file__).resolve().parent / "harness-contract.json"
+    return json.loads(contract_path.read_text(encoding="utf-8"))
+
+
 def main() -> int:
     args = parse_args()
     sync_py_path = args.section_11_repo / "examples/sync.py"
@@ -172,6 +180,9 @@ def main() -> int:
         return 2
 
     stub_requests()
+
+    contract = load_harness_contract()
+    pc_window = contract["powerCurveDeltaWindowDaysAgo"]
 
     frozen_now = datetime.fromisoformat(args.frozen_now)
     install_frozen_datetime(frozen_now)
@@ -224,9 +235,9 @@ def main() -> int:
 
     if power_curves:
         pc_end1 = today
-        pc_start1 = (frozen_now - timedelta(days=27)).strftime("%Y-%m-%d")
-        pc_end2 = (frozen_now - timedelta(days=28)).strftime("%Y-%m-%d")
-        pc_start2 = (frozen_now - timedelta(days=55)).strftime("%Y-%m-%d")
+        pc_start1 = (frozen_now - timedelta(days=pc_window["win1StartDaysAgo"])).strftime("%Y-%m-%d")
+        pc_end2 = (frozen_now - timedelta(days=pc_window["win2EndDaysAgo"])).strftime("%Y-%m-%d")
+        pc_start2 = (frozen_now - timedelta(days=pc_window["win2StartDaysAgo"])).strftime("%Y-%m-%d")
         pc_dates = (pc_start1, pc_end1, pc_start2, pc_end2)
     else:
         pc_dates = None

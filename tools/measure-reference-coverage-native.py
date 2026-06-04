@@ -132,7 +132,17 @@ def latest_wellness(rows):
     return sorted(rows, key=lambda r: r.get("id", ""), reverse=True)[0]
 
 
-def run_one_fixture(IntervalsSync, fixture: dict, frozen_now: datetime) -> None:
+def load_harness_contract() -> dict:
+    """Read the language-neutral lockstep contract shared with the pyodide
+    harness (tools/harness-contract.json), resolved relative to this file —
+    not cwd — so the probe reads the same literal data from any working dir."""
+    contract_path = Path(__file__).resolve().parent / "harness-contract.json"
+    return json.loads(contract_path.read_text(encoding="utf-8"))
+
+
+def run_one_fixture(
+    IntervalsSync, fixture: dict, frozen_now: datetime, pc_window: dict
+) -> None:
     """Drive _calculate_derived_metrics for a single fixture. Mirrors the
     arg-marshalling of tools/snapshot-section-11-native.py exactly so the
     code paths under coverage match the oracle the parity gate snapshots."""
@@ -171,10 +181,10 @@ def run_one_fixture(IntervalsSync, fixture: dict, frozen_now: datetime) -> None:
 
     if power_curves:
         pc_dates = (
-            (frozen_now - timedelta(days=27)).strftime("%Y-%m-%d"),
+            (frozen_now - timedelta(days=pc_window["win1StartDaysAgo"])).strftime("%Y-%m-%d"),
             today,
-            (frozen_now - timedelta(days=55)).strftime("%Y-%m-%d"),
-            (frozen_now - timedelta(days=28)).strftime("%Y-%m-%d"),
+            (frozen_now - timedelta(days=pc_window["win2StartDaysAgo"])).strftime("%Y-%m-%d"),
+            (frozen_now - timedelta(days=pc_window["win2EndDaysAgo"])).strftime("%Y-%m-%d"),
         )
     else:
         pc_dates = None
@@ -294,6 +304,7 @@ def main() -> int:
         print(f"upstream sync.py not found at {sync_py_path}", file=sys.stderr)
         return 2
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
+    pc_window = load_harness_contract()["powerCurveDeltaWindowDaysAgo"]
 
     stub_requests()
     install_frozen_datetime()
@@ -317,7 +328,7 @@ def main() -> int:
         frozen = datetime.fromisoformat(entry["frozen_now"])
         try:
             fixture = json.loads(fx_path.read_text(encoding="utf-8"))
-            run_one_fixture(IntervalsSync, fixture, frozen)
+            run_one_fixture(IntervalsSync, fixture, frozen, pc_window)
             ran.append(fx_path.name)
         except Exception as e:  # noqa: BLE001 — record, keep measuring the rest
             errors.append({"fixture": fx_path.name, "type": type(e).__name__, "message": str(e),
