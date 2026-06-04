@@ -181,10 +181,10 @@ export function computePrimarySportMonotony(input: MetricInput): number | null {
  *
  * Pure composition — no new math. Calls the sibling compute functions
  * for the two candidate values and the shared per-sport aggregator for
- * the multi-sport check. The `isMultiSport` branch selector shares the
- * same derivation as `computeMultiSportDetected`. The duplicate
- * aggregation work (getDailyLoad runs three times across this call's
- * transitive helpers) is intentional:
+ * the multi-sport check. The `isMultiSport` branch selector re-derives the
+ * same `getDailyLoadBySport(...).size > 1` predicate emitted standalone as
+ * `multi_sport_detected`. The duplicate aggregation work (getDailyLoad runs
+ * three times across this call's transitive helpers) is intentional:
  * the discipline rewards line-by-line transliteration over optimization,
  * and the snapshot gate would catch any drift from a structural rewrite.
  *
@@ -214,10 +214,12 @@ export function computeEffectiveMonotony(input: MetricInput): number | null {
 
 /**
  * `multi_sport_detected` — whether the trailing-7-day window spans more than
- * one sport family by accumulated Load. This is the SAME `is_multi_sport`
- * derivation `computeEffectiveMonotony` uses for its branch selector
- * (`getDailyLoadBySport(...).size > 1`); the two share one definition so the
- * runtime indicator and the monotony selector can never disagree.
+ * one sport family by accumulated Load. Computes the same
+ * `getDailyLoadBySport(...).size > 1` predicate that the monotony selectors
+ * (`computeEffectiveMonotony`, `computeMonotonyInterpretation`) apply inline.
+ * Each site re-derives it to mirror the single upstream `is_multi_sport` local
+ * line-by-line rather than sharing a TS symbol; the snapshot gate is what
+ * guards them against drifting apart.
  *
  * Upstream source mirrored line-by-line: `sync.py:3081`
  * (`is_multi_sport = len(daily_tss_by_sport) > 1`), emitted at `sync.py:3368`.

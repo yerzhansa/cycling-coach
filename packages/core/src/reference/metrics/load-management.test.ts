@@ -13,11 +13,20 @@ import {
 } from "./load-management.js";
 import type { MetricInput } from "./metric-input.js";
 
+// The synthetic rows in this file are intentionally minimal — only the fields
+// each formula reads — so they don't satisfy the full parsed Activity /
+// WellnessDay shape. asFixture casts them through the gate-boundary fixture
+// type at one local seam; the full shape is exercised by the parity matrix
+// against captured fixtures.
+function asFixture(rows: {
+  activities?: unknown[];
+  wellness?: unknown[];
+}): MetricInput["fixture"] {
+  return rows as unknown as MetricInput["fixture"];
+}
+
 // These computers read only start_date_local, icu_training_load, and (for
-// the per-sport split) type through the shared daily-Load aggregators; the
-// full Activity shape is exercised by the parity matrix against captured
-// fixtures. These synthetic rows isolate the formulae and cast through the
-// parsed fixture shape at the local unit-test boundary.
+// the per-sport split) type through the shared daily-Load aggregators.
 function input(
   activities: {
     start_date_local: string;
@@ -26,10 +35,7 @@ function input(
   }[],
   frozenNow: string,
 ): MetricInput {
-  return {
-    fixture: { activities } as unknown as MetricInput["fixture"],
-    frozenNow,
-  };
+  return { fixture: asFixture({ activities }), frozenNow };
 }
 
 describe("computeMonotony", () => {
@@ -239,10 +245,7 @@ function wellnessInput(
   wellness: { id: string; hrv: number | null; restingHR: number | null }[],
   frozenNow: string,
 ): MetricInput {
-  return {
-    fixture: { wellness } as unknown as MetricInput["fixture"],
-    frozenNow,
-  };
+  return { fixture: asFixture({ wellness }), frozenNow };
 }
 
 describe("computeRecoveryIndex", () => {
@@ -311,10 +314,7 @@ function loadRecoveryInput(
   wellness: { id: string; hrv: number | null; restingHR: number | null }[],
   frozenNow: string,
 ): MetricInput {
-  return {
-    fixture: { activities, wellness } as unknown as MetricInput["fixture"],
-    frozenNow,
-  };
+  return { fixture: asFixture({ activities, wellness }), frozenNow };
 }
 
 describe("computeLoadRecoveryRatio", () => {
@@ -370,10 +370,7 @@ describe("load aggregators — malformed start_date_local is dropped, not thrown
   ];
 
   function fixtureOf(activities: unknown[]): MetricInput {
-    return {
-      fixture: { activities } as unknown as MetricInput["fixture"],
-      frozenNow: FROZEN,
-    };
+    return { fixture: asFixture({ activities }), frozenNow: FROZEN };
   }
 
   it("computeMonotony drops a null-date row (getDailyLoad)", () => {
