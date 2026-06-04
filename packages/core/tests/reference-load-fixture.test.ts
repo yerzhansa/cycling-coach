@@ -136,11 +136,11 @@ describe("loadFixture against committed golden fixtures", () => {
     }
   });
 
-  // ─── PII regression scanner — single allowlist assertion ─────────────
+  // ─── PII regression scanner — allowlist assertion ───────────────────
   //
-  // Walk the committed fixture and assert every key appears in
+  // Walk a committed real-derived fixture and assert every key appears in
   // ALLOWED_FIXTURE_KEYS (the union of schema-derived names + the small
-  // EXTRA_ALLOW list in tests/helpers/sanitize-fixture.ts).
+  // EXTRA_ALLOW list in tools/sanitize-fixture-transform.ts).
   //
   // Why one assertion instead of a growing list of negative checks: the
   // prior denylist-style scanner only caught fields it explicitly named
@@ -154,9 +154,66 @@ describe("loadFixture against committed golden fixtures", () => {
   // here would re-introduce the exact PII this fixture-regen was meant to
   // remove. The structural assertion covers the surface without naming
   // leaked values.
-  describe("realistic-athlete — PII regression scanner (allowlist)", () => {
-    it("every key in the committed fixture appears in ALLOWED_FIXTURE_KEYS", () => {
-      const data = loadFixture("golden/realistic-athlete", GoldenFixtureSchema);
+  //
+  // Two fixtures are scanned. realistic-athlete is fully sanitizer-produced,
+  // so EVERY key must be in ALLOWED_FIXTURE_KEYS. curve-equipped is a hybrid:
+  // its activity/wellness ROWS are sanitizer-produced (same allowlist), but
+  // its curve/athlete BLOCKS are attached AFTER the sanitizer (they would be
+  // default-dropped otherwise) and legitimately carry synthetic structural
+  // keys outside the sanitizer allowlist. Those keys are a fixed, PII-free set
+  // enumerated below — a new key the builder introduces still fails the scan.
+  const CURVE_FIXTURE_BLOCK_KEYS = new Set<string>([
+    // Top-level curve / athlete blocks attached post-sanitization.
+    "power_curves",
+    "hr_curves",
+    "sustainability_curves",
+    "athlete",
+    // Curve-envelope + entry structure.
+    "list",
+    "secs",
+    "watts",
+    "values",
+    // Sustainability nesting (sport family / type / power|hr) + sport types.
+    "cycling",
+    "power",
+    "hr",
+    "Ride",
+    "VirtualRide",
+    // Athlete sportSettings rows + the synthetic power-model scalars attached
+    // to the latest wellness row's Ride sportInfo.
+    "sportSettings",
+    "types",
+    "ftp",
+    "indoor_ftp",
+    "lthr",
+    "wPrime",
+    "pMax",
+  ]);
+
+  const piiScanFixtures: Array<{
+    slug: string;
+    extraKeys: ReadonlySet<string>;
+    idSentinel: (v: unknown) => boolean;
+  }> = [
+    {
+      slug: "golden/realistic-athlete",
+      extraKeys: new Set(),
+      idSentinel: (v) => v === 12345,
+    },
+    {
+      slug: "golden/curve-equipped",
+      extraKeys: CURVE_FIXTURE_BLOCK_KEYS,
+      // curve-equipped uses distinct synthetic activity ids (>= 90101) plus
+      // the 12345 sentinel that survives on rows the builder didn't reassign.
+      idSentinel: (v) => v === 12345 || (typeof v === "number" && v >= 90101),
+    },
+  ];
+
+  describe.each(piiScanFixtures)("$slug — PII regression scanner (allowlist)", ({ slug, extraKeys, idSentinel }) => {
+    const allowed = new Set<string>([...ALLOWED_FIXTURE_KEYS, ...extraKeys]);
+
+    it("every key in the committed fixture appears in the allowlist", () => {
+      const data = loadFixture(slug, GoldenFixtureSchema);
       const offending: string[] = [];
       const recurse = (v: unknown, path: string): void => {
         if (Array.isArray(v)) {
@@ -166,7 +223,7 @@ describe("loadFixture against committed golden fixtures", () => {
         if (v !== null && typeof v === "object") {
           for (const [key, child] of Object.entries(v as Record<string, unknown>)) {
             const childPath = path === "" ? key : `${path}.${key}`;
-            if (!ALLOWED_FIXTURE_KEYS.has(key)) {
+            if (!allowed.has(key)) {
               offending.push(`${childPath} (key not in allowlist)`);
             }
             recurse(child, childPath);
@@ -176,20 +233,15 @@ describe("loadFixture against committed golden fixtures", () => {
       recurse(data, "");
       expect(
         offending,
-        `Fixture carries keys outside ALLOWED_FIXTURE_KEYS — likely PII leak.\n` +
+        `Fixture carries keys outside the allowlist — likely PII leak.\n` +
           `Either regenerate the fixture under the current sanitizer or, if the key is genuinely load-bearing test signal,\n` +
-          `add it to EXTRA_ALLOW in tests/helpers/sanitize-fixture.ts with a one-line justification.\n` +
+          `add it to EXTRA_ALLOW in tools/sanitize-fixture-transform.ts (real rows) or CURVE_FIXTURE_BLOCK_KEYS (synthetic blocks) with a one-line justification.\n` +
           `Offending paths:\n  ${offending.slice(0, 20).join("\n  ")}${offending.length > 20 ? `\n  …+${offending.length - 20} more` : ""}`,
       ).toEqual([]);
     });
 
-    it("every `*_id` value is either null/undefined or the redacted-id mock (12345 / structural date / Z-label)", () => {
-      // Secondary check: even allowlisted *_id keys (only paired_event_id
-      // under current schemas) must hold the mock sentinel, never a
-      // real-shaped value. Future schema additions that introduce another
-      // *_id key would also be caught here.
-      const data = loadFixture("golden/realistic-athlete", GoldenFixtureSchema);
-      const allowedIdValues = new Set<unknown>([12345]);
+    it("every `id` / `*_id` numeric value is the redacted sentinel (no real-shaped account-linking id leaks)", () => {
+      const data = loadFixture(slug, GoldenFixtureSchema);
       const recurse = (v: unknown): void => {
         if (Array.isArray(v)) {
           v.forEach(recurse);
@@ -197,9 +249,14 @@ describe("loadFixture against committed golden fixtures", () => {
         }
         if (v !== null && typeof v === "object") {
           for (const [key, child] of Object.entries(v as Record<string, unknown>)) {
-            if (key.endsWith("_id") && child !== null && child !== undefined) {
+            // Only numeric ids are PII-bearing here; curve ids ("r.<date>.<date>")
+            // and wellness/zone string ids are structural and ride through.
+            if (
+              (key === "id" || key.endsWith("_id")) &&
+              typeof child === "number"
+            ) {
               expect(
-                allowedIdValues.has(child),
+                idSentinel(child),
                 `${key}=${JSON.stringify(child)} is not the mock sentinel — possible PII leak.`,
               ).toBe(true);
             }

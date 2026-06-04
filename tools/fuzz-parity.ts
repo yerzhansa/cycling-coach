@@ -134,10 +134,27 @@ _ALLOWED_OPTIONAL_PATHS = {
     "FIXTURE.activities[*].icu_hr_decoupling",
     "FIXTURE.activities[*].icu_hr_zone_times",
     "FIXTURE.activities[*].icu_hrr",
+    "FIXTURE.activities[*].icu_hrr.value",
+    "FIXTURE.activities[*].icu_hrr.hrr",
     "FIXTURE.activities[*].icu_variability_index",
     "FIXTURE.activities[*].icu_zone_times",
     "FIXTURE.wellness[*].atl",
     "FIXTURE.wellness[*].ctl",
+    # Top-level fixture extensions — reconciled with the snapshot harness's
+    # allowlist so the fuzzer's contract check is as strong as the gate's.
+    # The fuzzer perturbs only activities/wellness, so these are always absent
+    # here; the entries keep the two allowlists in lockstep.
+    "FIXTURE.past_events",
+    "FIXTURE.current_ftp_indoor",
+    "FIXTURE.current_ftp_outdoor",
+    "FIXTURE.ftp_history_indoor",
+    "FIXTURE.ftp_history_outdoor",
+    "FIXTURE.intervals",
+    "FIXTURE.power_curves",
+    "FIXTURE.hr_curves",
+    "FIXTURE.sustainability_curves",
+    "FIXTURE.streams",
+    "FIXTURE.athlete",
 }
 def _normalize_path(path):
     return _re.sub(r"\\[\\d+\\]", "[*]", path)
@@ -187,13 +204,37 @@ def compute(fixture_json):
         sync = IntervalsSync(athlete_id="s", intervals_api_key="k", github_token=None, debug=False)
         sync._intervals_data = {}
         BN = (None, None, None)
+        # Conditional curve / athlete kwargs — mirror the snapshot harness. The
+        # fuzzer perturbs only activities/wellness, so these source keys are
+        # always absent here and every derived kwarg falls back to the stub;
+        # the parallel structure keeps the three stub sites in lockstep.
+        _pcurves = FIX.get("power_curves")
+        _hcurves = FIX.get("hr_curves")
+        _scurves = FIX.get("sustainability_curves")
+        _athlete = FIX.get("athlete")
+        if _pcurves:
+            _pcd = ((_FN - timedelta(days=27)).strftime("%Y-%m-%d"), today,
+                    (_FN - timedelta(days=55)).strftime("%Y-%m-%d"),
+                    (_FN - timedelta(days=28)).strftime("%Y-%m-%d"))
+        else:
+            _pcd = None
+        if _scurves:
+            _sw = ((_FN - timedelta(days=sync.SUSTAINABILITY_WINDOW_DAYS - 1)).strftime("%Y-%m-%d"), today)
+        else:
+            _sw = None
+        if _athlete:
+            _ss = sync._build_sport_thresholds(_athlete)
+            _pm = sync._extract_power_model_from_wellness(lw)
+            _vo2 = lw.get("vo2max")
+        else:
+            _ss = {}; _pm = {}; _vo2 = None
         derived = sync._calculate_derived_metrics(
             activities_7d=a7, activities_28d=a28, wellness_7d=w7, wellness_extended=w28,
             current_ctl=cctl, current_atl=catl, current_tsb=ctsb, past_events=[],
-            activities_for_consistency=a7, power_model={}, benchmark_indoor=BN, benchmark_outdoor=BN,
-            vo2max=None, formatted_planned_workouts=[], race_calendar=None, power_curve_data=None,
-            power_curve_dates=None, hr_curve_data=None, sustainability_curves={}, sustainability_window=None,
-            sport_settings={}, icu_weight=lw.get("weight"))
+            activities_for_consistency=a7, power_model=_pm, benchmark_indoor=BN, benchmark_outdoor=BN,
+            vo2max=_vo2, formatted_planned_workouts=[], race_calendar=None, power_curve_data=_pcurves,
+            power_curve_dates=_pcd, hr_curve_data=_hcurves, sustainability_curves=_scurves or {}, sustainability_window=_sw,
+            sport_settings=_ss, icu_weight=lw.get("weight"))
         unallowed = sorted({
             p for p in _TRACKED_MISSING
             if _normalize_path(p) not in _ALLOWED_OPTIONAL_PATHS

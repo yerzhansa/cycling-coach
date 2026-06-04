@@ -199,6 +199,81 @@ export const PlannedEventSchema = z.looseObject({
 });
 export type PlannedEvent = z.infer<typeof PlannedEventSchema>;
 
+/** One entry in a power mean-max curve list. The upstream matches by the
+ *  `id` string (`r.<start>.<end>`) and indexes `secs`/`watts` positionally:
+ *  `watts[secs.index(duration)]`. Arrays may be trimmed to the anchor
+ *  durations a fixture exercises — positional lookup is by value, not slot. */
+export const PowerCurveEntrySchema = z.looseObject({
+  id: z.string(),
+  secs: z.array(z.number()),
+  watts: z.array(z.number().nullable()),
+});
+export type PowerCurveEntry = z.infer<typeof PowerCurveEntrySchema>;
+
+/** One entry in an HR mean-max curve list. Same matching as power, but the
+ *  value array is keyed `values` (HR bpm), not `watts`. */
+export const HrCurveEntrySchema = z.looseObject({
+  id: z.string(),
+  secs: z.array(z.number()),
+  values: z.array(z.number().nullable()),
+});
+export type HrCurveEntry = z.infer<typeof HrCurveEntrySchema>;
+
+/** A curve API response envelope — the `{list: [...]}` shape the upstream
+ *  reads via `data.get("list", [])`. */
+export const PowerCurveDataSchema = z.looseObject({
+  list: z.array(PowerCurveEntrySchema),
+});
+export type PowerCurveData = z.infer<typeof PowerCurveDataSchema>;
+
+export const HrCurveDataSchema = z.looseObject({
+  list: z.array(HrCurveEntrySchema),
+});
+export type HrCurveData = z.infer<typeof HrCurveDataSchema>;
+
+/** Per-sport sustainability curve bundle, mirroring the nested kwarg the
+ *  upstream fetch loop builds: `{power: {Ride: {list}, VirtualRide: {list}},
+ *  hr: {Ride: {list}, ...}}`. Keyed by activity type, then by `{list}`
+ *  envelope, matched on the single 42d-window curve id. */
+export const SustainabilityFamilyCurvesSchema = z.looseObject({
+  power: z.record(z.string(), PowerCurveDataSchema),
+  hr: z.record(z.string(), HrCurveDataSchema),
+});
+export type SustainabilityFamilyCurves = z.infer<
+  typeof SustainabilityFamilyCurvesSchema
+>;
+
+/** Per-second activity stream channels, keyed by `String(activity.id)`. The
+ *  dfa-profile path joins this record back to the activities array (both
+ *  sides coerce id to string). All channels optional — the curve fixture
+ *  carries none; the dfa fixture carries all four. */
+export const ActivityStreamsSchema = z.looseObject({
+  dfa_a1: z.array(z.number().nullable()).optional(),
+  artifacts: z.array(z.number().nullable()).optional(),
+  heartrate: z.array(z.number().nullable()).optional(),
+  watts: z.array(z.number().nullable()).optional(),
+});
+export type ActivityStreams = z.infer<typeof ActivityStreamsSchema>;
+
+/** One per-sport-family threshold row from the athlete's sportSettings array.
+ *  The upstream builds `sport_settings` from these via `_build_sport_thresholds`:
+ *  `types` maps to a sport family, `ftp`/`indoor_ftp`/`lthr` feed the
+ *  sustainability and zone-basis logic. */
+export const SportSettingsRowSchema = z.looseObject({
+  types: z.array(z.string()),
+  ftp: z.number().nullable().optional(),
+  indoor_ftp: z.number().nullable().optional(),
+  lthr: z.number().nullable().optional(),
+});
+export type SportSettingsRow = z.infer<typeof SportSettingsRowSchema>;
+
+/** Athlete-level settings carrier. `sportSettings` is the array the upstream
+ *  hands to `_build_sport_thresholds(athlete)`. */
+export const AthleteSchema = z.looseObject({
+  sportSettings: z.array(SportSettingsRowSchema),
+});
+export type AthleteSettings = z.infer<typeof AthleteSchema>;
+
 /**
  * Top-level envelope for a golden fixture. The shape every parity-gate
  * metric receives. Strict at the envelope level (rogue top-level keys
@@ -262,6 +337,22 @@ export const FixtureSchema = z
         }),
       )
       .optional(),
+
+    // Curve + stream inputs for the capability/stream metrics (power_curve_delta,
+    // hr_curve_delta, sustainability_profile, dfa_a1_profile). Each is the
+    // EXACT object the harness passes to the upstream's _calculate_derived_metrics
+    // kwarg of the same role — not a projection. Optional so the 11 existing
+    // fixtures (which carry none) still parse; only the curve/stream fixtures
+    // populate them. The harness derives the window dates/tuples ONLY when the
+    // matching key is present, so absent keys reproduce the prior null-block
+    // snapshots byte-for-byte.
+    power_curves: PowerCurveDataSchema.optional(),
+    hr_curves: HrCurveDataSchema.optional(),
+    sustainability_curves: z
+      .record(z.string(), SustainabilityFamilyCurvesSchema)
+      .optional(),
+    streams: z.record(z.string(), ActivityStreamsSchema).optional(),
+    athlete: AthleteSchema.optional(),
   })
   .strict();
 export type FixtureShape = z.infer<typeof FixtureSchema>;

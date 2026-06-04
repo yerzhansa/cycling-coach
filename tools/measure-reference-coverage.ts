@@ -138,9 +138,9 @@ function printSummary(report: CoverageReport): void {
     );
   }
   console.log(
-    `\n[coverage] Reading it: large gaps in _calculate_sustainability_profile / _calculate_dfa_a1_profile / ` +
-      `_calculate_power_curve_delta / _calculate_hr_curve_delta / _calculate_durability / _calculate_efficiency_factor / ` +
-      `_calculate_hrrc_trend / _calculate_tid_comparison are the F10 stream-based metrics — they need stream fixtures (T13). ` +
+    `\n[coverage] Reading it: _calculate_power_curve_delta / _calculate_hr_curve_delta / ` +
+      `_calculate_sustainability_profile are now exercised by the curve-equipped fixture (curve + ` +
+      `athlete inputs). _calculate_dfa_a1_profile still needs its per-second stream fixture. ` +
       `Smaller gaps in non-stream functions are candidate targets for the next golden fixture.`,
   );
 }

@@ -16,6 +16,12 @@ import {
   PlannedEventSchema,
   IcuIntervalRepSchema,
   ZoneTimesSchema,
+  PowerCurveDataSchema,
+  HrCurveDataSchema,
+  SustainabilityFamilyCurvesSchema,
+  ActivityStreamsSchema,
+  AthleteSchema,
+  FixtureSchema,
 } from "../src/reference/schemas/inputs.js";
 
 describe("ActivitySchema (z.looseObject)", () => {
@@ -348,6 +354,102 @@ describe("ZoneTimesSchema (z.looseObject)", () => {
   it("accepts a partially-populated zone-times object (sparse rides)", () => {
     const partial = { z1: 1200, z2: 4200 };
     expect(ZoneTimesSchema.parse(partial)).toEqual(partial);
+  });
+});
+
+describe("Curve / stream / athlete input schemas", () => {
+  const win1 = "r.2026-05-08.2026-06-04";
+  const win2 = "r.2026-04-10.2026-05-07";
+  const sus = "r.2026-04-24.2026-06-04";
+
+  it("PowerCurveDataSchema round-trips the {list:[{id,secs,watts}]} shape (power uses `watts`)", () => {
+    const data = {
+      list: [
+        { id: win1, secs: [5, 60, 1200, 3600], watts: [637, 310, 191, 169] },
+        { id: win2, secs: [5, 60, 1200, 3600], watts: [564, 259, 167, 157] },
+      ],
+    };
+    expect(PowerCurveDataSchema.parse(data)).toEqual(data);
+  });
+
+  it("HrCurveDataSchema round-trips the {list:[{id,secs,values}]} shape (HR uses `values`, not `watts`)", () => {
+    const data = {
+      list: [{ id: win1, secs: [60, 300, 1200, 3600], values: [181, 176, 171, 162] }],
+    };
+    expect(HrCurveDataSchema.parse(data)).toEqual(data);
+  });
+
+  it("curve entries accept nulls in the value array (a duration whose anchor watts/values is null)", () => {
+    expect(
+      PowerCurveDataSchema.safeParse({ list: [{ id: win1, secs: [5, 60], watts: [637, null] }] })
+        .success,
+    ).toBe(true);
+    expect(
+      HrCurveDataSchema.safeParse({ list: [{ id: win1, secs: [60, 300], values: [181, null] }] })
+        .success,
+    ).toBe(true);
+  });
+
+  it("SustainabilityFamilyCurvesSchema round-trips the nested {power:{Ride,VirtualRide}, hr:{...}} shape", () => {
+    const family = {
+      power: {
+        Ride: { list: [{ id: sus, secs: [300, 1200], watts: [218, 191] }] },
+        VirtualRide: { list: [{ id: sus, secs: [300, 1200], watts: [218, 191] }] },
+      },
+      hr: {
+        Ride: { list: [{ id: sus, secs: [300, 1200], values: [176, 171] }] },
+      },
+    };
+    expect(SustainabilityFamilyCurvesSchema.parse(family)).toEqual(family);
+  });
+
+  it("ActivityStreamsSchema round-trips per-second channels and accepts all-absent (curve fixtures carry none)", () => {
+    const full = {
+      dfa_a1: [1.0, 0.95, null],
+      artifacts: [1.0, 2.0, 0],
+      heartrate: [140, 141, 142],
+      watts: [200, 210, null],
+    };
+    expect(ActivityStreamsSchema.parse(full)).toEqual(full);
+    expect(ActivityStreamsSchema.parse({})).toEqual({});
+  });
+
+  it("AthleteSchema round-trips the sportSettings array the upstream feeds _build_sport_thresholds", () => {
+    const athlete = {
+      sportSettings: [
+        { types: ["Ride", "VirtualRide"], ftp: 200, indoor_ftp: 195, lthr: 168 },
+      ],
+    };
+    expect(AthleteSchema.parse(athlete)).toEqual(athlete);
+  });
+
+  it("FixtureSchema accepts the 5 new top-level keys when present", () => {
+    const fixture = {
+      activities: [],
+      wellness: [],
+      ftp_history: [],
+      power_curves: { list: [{ id: win1, secs: [5], watts: [637] }] },
+      hr_curves: { list: [{ id: win1, secs: [60], values: [181] }] },
+      sustainability_curves: {
+        cycling: {
+          power: { Ride: { list: [{ id: sus, secs: [300], watts: [218] }] } },
+          hr: { Ride: { list: [{ id: sus, secs: [300], values: [176] }] } },
+        },
+      },
+      streams: { "90101": { watts: [200, 210] } },
+      athlete: { sportSettings: [{ types: ["Ride"], ftp: 200, lthr: 168 }] },
+    };
+    expect(FixtureSchema.safeParse(fixture).success).toBe(true);
+  });
+
+  it("FixtureSchema still parses a fixture with NONE of the new keys (existing fixtures unaffected)", () => {
+    const legacy = { activities: [], wellness: [], ftp_history: [] };
+    expect(FixtureSchema.safeParse(legacy).success).toBe(true);
+  });
+
+  it("FixtureSchema rejects an unknown top-level key (the .strict() envelope still bites)", () => {
+    const rogue = { activities: [], wellness: [], ftp_history: [], power_curvez: {} };
+    expect(FixtureSchema.safeParse(rogue).success).toBe(false);
   });
 });
 

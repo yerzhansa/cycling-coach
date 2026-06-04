@@ -211,6 +211,44 @@ def main() -> int:
     sync._intervals_data = {}
 
     bench_none = (None, None, None)
+
+    # Conditional curve / athlete kwargs — mirror the pyodide harness. Each
+    # derived kwarg is computed ONLY when its source fixture key is present;
+    # absent keys reproduce the prior stub so fixtures carrying none stay
+    # byte-identical (including the absence of the upstream null-blocks' window
+    # keys). `fixture` is already a plain dict here, so no tracker bypass needed.
+    power_curves = fixture.get("power_curves")
+    hr_curves = fixture.get("hr_curves")
+    sus_curves = fixture.get("sustainability_curves")
+    athlete = fixture.get("athlete")
+
+    if power_curves:
+        pc_end1 = today
+        pc_start1 = (frozen_now - timedelta(days=27)).strftime("%Y-%m-%d")
+        pc_end2 = (frozen_now - timedelta(days=28)).strftime("%Y-%m-%d")
+        pc_start2 = (frozen_now - timedelta(days=55)).strftime("%Y-%m-%d")
+        pc_dates = (pc_start1, pc_end1, pc_start2, pc_end2)
+    else:
+        pc_dates = None
+
+    if sus_curves:
+        sus_end = today
+        sus_start = (
+            frozen_now - timedelta(days=sync.SUSTAINABILITY_WINDOW_DAYS - 1)
+        ).strftime("%Y-%m-%d")
+        sus_window = (sus_start, sus_end)
+    else:
+        sus_window = None
+
+    if athlete:
+        sport_settings = sync._build_sport_thresholds(athlete)
+        power_model = sync._extract_power_model_from_wellness(latest)
+        vo2max = latest.get("vo2max")
+    else:
+        sport_settings = {}
+        power_model = {}
+        vo2max = None
+
     try:
         derived = sync._calculate_derived_metrics(
             activities_7d=activities_7d,
@@ -222,18 +260,18 @@ def main() -> int:
             current_tsb=current_tsb,
             past_events=[],
             activities_for_consistency=activities_7d,
-            power_model={},
+            power_model=power_model,
             benchmark_indoor=bench_none,
             benchmark_outdoor=bench_none,
-            vo2max=None,
+            vo2max=vo2max,
             formatted_planned_workouts=[],
             race_calendar=None,
-            power_curve_data=None,
-            power_curve_dates=None,
-            hr_curve_data=None,
-            sustainability_curves={},
-            sustainability_window=None,
-            sport_settings={},
+            power_curve_data=power_curves,
+            power_curve_dates=pc_dates,
+            hr_curve_data=hr_curves,
+            sustainability_curves=sus_curves or {},
+            sustainability_window=sus_window,
+            sport_settings=sport_settings,
             icu_weight=latest.get("weight"),
         )
     except Exception as e:

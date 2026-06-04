@@ -193,6 +193,10 @@ _ALLOWED_OPTIONAL_PATHS = {
     "FIXTURE.activities[*].icu_hr_decoupling",
     "FIXTURE.activities[*].icu_hr_zone_times",
     "FIXTURE.activities[*].icu_hrr",
+    # icu_hrr may arrive as a dict; the upstream reads .value then .hrr,
+    # defaulting both to None (see _calculate_hrrc_trend's _filter_qualifying).
+    "FIXTURE.activities[*].icu_hrr.value",
+    "FIXTURE.activities[*].icu_hrr.hrr",
     "FIXTURE.activities[*].icu_variability_index",
     "FIXTURE.wellness[*].atl",
     "FIXTURE.wellness[*].ctl",
@@ -206,6 +210,14 @@ _ALLOWED_OPTIONAL_PATHS = {
     "FIXTURE.ftp_history_indoor",
     "FIXTURE.ftp_history_outdoor",
     "FIXTURE.intervals",
+    # Curve + stream extensions — present only on the curve/stream fixtures.
+    # The harness derives the date/window kwargs ONLY when the matching key
+    # is present, so absent keys reproduce the prior null-block snapshots.
+    "FIXTURE.power_curves",
+    "FIXTURE.hr_curves",
+    "FIXTURE.sustainability_curves",
+    "FIXTURE.streams",
+    "FIXTURE.athlete",
 }
 
 def _normalize_path(path):
@@ -315,6 +327,62 @@ if _current_ftp_outdoor and _ftp_history_outdoor:
 else:
     _benchmark_outdoor = _BENCH_NONE
 
+# === curve / stream / power-model inputs (conditional kwargs) ===
+# Read the curve + athlete fixture keys. Each downstream kwarg is derived ONLY
+# when its source key is present; absent keys reproduce the prior stub
+# (None / {}) so the 11 fixtures that carry none stay byte-identical — including
+# the ABSENCE of the upstream null-blocks' window keys (which the upstream adds
+# only when the dates tuple is truthy).
+#
+# The curve/athlete blocks are read from a fresh parse (not the _TrackedDict
+# FIXTURE) because the upstream helpers (_build_sport_thresholds,
+# _extract_power_model_from_wellness) probe many per-row keys (threshold_pace,
+# max_hr, wPrime, ...) that a minimal synthetic block legitimately omits — the
+# helpers .get()-default them, but on _TrackedDict each absent probe would log a
+# spurious contract violation. Same pattern the weight_signal block uses below.
+_curve_raw_fixture = json.loads(FIXTURE_JSON)
+_power_curves = _curve_raw_fixture.get("power_curves")
+_hr_curves = _curve_raw_fixture.get("hr_curves")
+_sus_curves = _curve_raw_fixture.get("sustainability_curves")
+_athlete = _curve_raw_fixture.get("athlete")
+_raw_latest_wellness = _pick_latest_wellness(
+    _within(_curve_raw_fixture.get("wellness") or [], "id", _OLDEST_28, _TODAY)
+) or {}
+
+# Power/HR delta windows: the upstream derives pc_dates from frozen-now only
+# when it fetched power curves; both delta metrics read this same tuple.
+if _power_curves:
+    _pc_end1 = _TODAY
+    _pc_start1 = (_FROZEN_NOW - timedelta(days=27)).strftime("%Y-%m-%d")
+    _pc_end2 = (_FROZEN_NOW - timedelta(days=28)).strftime("%Y-%m-%d")
+    _pc_start2 = (_FROZEN_NOW - timedelta(days=55)).strftime("%Y-%m-%d")
+    _pc_dates = (_pc_start1, _pc_end1, _pc_start2, _pc_end2)
+else:
+    _pc_dates = None
+
+# Sustainability single 42d window.
+if _sus_curves:
+    _sus_end = _TODAY
+    _sus_start = (
+        _FROZEN_NOW - timedelta(days=sync.SUSTAINABILITY_WINDOW_DAYS - 1)
+    ).strftime("%Y-%m-%d")
+    _sus_window = (_sus_start, _sus_end)
+else:
+    _sus_window = None
+
+# sport_settings via the upstream's own _build_sport_thresholds(athlete); the
+# athlete key also gates the live power-model pipeline (latest wellness row as
+# today_wellness, per the upstream's _fetch_today_wellness → _extract_power_model
+# flow). Absent athlete → empty settings + empty power model (the prior stub).
+if _athlete:
+    _sport_settings = sync._build_sport_thresholds(_athlete)
+    _power_model = sync._extract_power_model_from_wellness(_raw_latest_wellness)
+    _vo2max = _raw_latest_wellness.get("vo2max")
+else:
+    _sport_settings = {}
+    _power_model = {}
+    _vo2max = None
+
 try:
     derived = sync._calculate_derived_metrics(
         activities_7d=_ACTIVITIES_7D,
@@ -326,18 +394,18 @@ try:
         current_tsb=_CURRENT_TSB,
         past_events=_past_events,
         activities_for_consistency=_ACTIVITIES_7D,
-        power_model={},
+        power_model=_power_model,
         benchmark_indoor=_benchmark_indoor,
         benchmark_outdoor=_benchmark_outdoor,
-        vo2max=None,
+        vo2max=_vo2max,
         formatted_planned_workouts=[],
         race_calendar=None,
-        power_curve_data=None,
-        power_curve_dates=None,
-        hr_curve_data=None,
-        sustainability_curves={},
-        sustainability_window=None,
-        sport_settings={},
+        power_curve_data=_power_curves,
+        power_curve_dates=_pc_dates,
+        hr_curve_data=_hr_curves,
+        sustainability_curves=_sus_curves or {},
+        sustainability_window=_sus_window,
+        sport_settings=_sport_settings,
         icu_weight=_LATEST_WELLNESS.get("weight"),
     )
 except Exception as e:

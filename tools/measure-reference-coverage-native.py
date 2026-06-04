@@ -160,6 +160,42 @@ def run_one_fixture(IntervalsSync, fixture: dict, frozen_now: datetime) -> None:
     )
     sync._intervals_data = {}
     bench_none = (None, None, None)
+
+    # Conditional curve / athlete kwargs — mirror the snapshot harness so the
+    # branches under coverage match the oracle the parity gate snapshots. Each
+    # derived kwarg is computed ONLY when its source fixture key is present.
+    power_curves = fixture.get("power_curves")
+    hr_curves = fixture.get("hr_curves")
+    sus_curves = fixture.get("sustainability_curves")
+    athlete = fixture.get("athlete")
+
+    if power_curves:
+        pc_dates = (
+            (frozen_now - timedelta(days=27)).strftime("%Y-%m-%d"),
+            today,
+            (frozen_now - timedelta(days=55)).strftime("%Y-%m-%d"),
+            (frozen_now - timedelta(days=28)).strftime("%Y-%m-%d"),
+        )
+    else:
+        pc_dates = None
+
+    if sus_curves:
+        sus_window = (
+            (frozen_now - timedelta(days=sync.SUSTAINABILITY_WINDOW_DAYS - 1)).strftime("%Y-%m-%d"),
+            today,
+        )
+    else:
+        sus_window = None
+
+    if athlete:
+        sport_settings = sync._build_sport_thresholds(athlete)
+        power_model = sync._extract_power_model_from_wellness(latest)
+        vo2max = latest.get("vo2max")
+    else:
+        sport_settings = {}
+        power_model = {}
+        vo2max = None
+
     sync._calculate_derived_metrics(
         activities_7d=activities_7d,
         activities_28d=activities_28d,
@@ -170,18 +206,18 @@ def run_one_fixture(IntervalsSync, fixture: dict, frozen_now: datetime) -> None:
         current_tsb=current_tsb,
         past_events=[],
         activities_for_consistency=activities_7d,
-        power_model={},
+        power_model=power_model,
         benchmark_indoor=bench_none,
         benchmark_outdoor=bench_none,
-        vo2max=None,
+        vo2max=vo2max,
         formatted_planned_workouts=[],
         race_calendar=None,
-        power_curve_data=None,
-        power_curve_dates=None,
-        hr_curve_data=None,
-        sustainability_curves={},
-        sustainability_window=None,
-        sport_settings={},
+        power_curve_data=power_curves,
+        power_curve_dates=pc_dates,
+        hr_curve_data=hr_curves,
+        sustainability_curves=sus_curves or {},
+        sustainability_window=sus_window,
+        sport_settings=sport_settings,
         icu_weight=latest.get("weight"),
     )
 

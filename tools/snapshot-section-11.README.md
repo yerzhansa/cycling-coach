@@ -37,13 +37,20 @@ packages/core/tests/fixtures/snapshots/
 │   ├── acwr.json
 │   ├── monotony.json
 │   ├── strain.json
-│   ├── ... (52 per-metric files)
+│   ├── ... (63 per-metric files)
 │   └── zone_distribution_7d.json
 ├── new-athlete-empty/
-│   └── ... (52 per-metric files, most `value: null` because no activities/wellness)
-└── data-gap-mid-history/
-    └── ... (52 per-metric files; ACWR is non-null because the resumed week populates the acute window)
+│   └── ... (63 per-metric files, most `value: null` because no activities/wellness)
+├── data-gap-mid-history/
+│   └── ... (63 per-metric files; ACWR is non-null because the resumed week populates the acute window)
+├── curve-equipped/
+│   └── ... (63 per-metric files; the curve / power-model capability keys + 6 scalars are NON-NULL here)
+└── ... (the boundary / multisport / benchmark / capability fixtures)
 ```
+
+The `manifest.metrics` union currently lists 63 metric names (per-fixture
+counts vary — e.g. `capability.*` and the power-model scalars are null on
+fixtures that don't carry curve/athlete inputs).
 
 Each per-metric file:
 
@@ -71,8 +78,8 @@ The manifest pins the oracle:
   "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
   "section_11_protocol_version": "3.112",
   "section_11_commit_date": "2026-04-28T18:14:07+00:00",
-  "fixtures": ["data-gap-mid-history", "new-athlete-empty", "realistic-athlete"],
-  "metrics": [ ... 52 names — union across all fixtures ... ],
+  "fixtures": ["boundary-monotony", "...", "curve-equipped", "realistic-athlete", "..."],
+  "metrics": [ ... 63 names — union across all fixtures ... ],
   "pyodide_version": "0.29.4",
   "frozen_now": "2026-05-10T12:00:00",
   "offline_mode": "A_stub_requests_plus_monkey_patch"
@@ -141,26 +148,58 @@ time. See "Known gaps" for what the direct-call path skips.
 ## Known gaps
 
 The direct-call path bypasses the orchestration in
-`collect_training_data` and its upstream fetchers. The following
-inputs to `_calculate_derived_metrics` come in as `None`/empty in
-this harness:
+`collect_training_data` and its upstream fetchers. Each input below is
+derived from the fixture **when the fixture carries the corresponding
+key** and otherwise falls back to the prior stub (`None`/empty) — so a
+fixture that doesn't exercise a branch still produces the same null
+snapshot it always did. The fixtures that DO carry these keys populate
+the branch (see "Closed gaps" below).
 
-- `power_curve_data`, `power_curve_dates` — would normally come from
-  `_intervals_get("power-curves", ...)`. Affects
-  `capability.power_curve_delta`.
-- `hr_curve_data` — affects `capability.hr_curve_delta`.
-- `sustainability_curves` — affects `capability.sustainability_profile`.
+- `power_curve_data`, `power_curve_dates` — derived from the fixture's
+  `power_curves` key (dates from the frozen clock: `now-27..today` /
+  `now-55..now-28`). Affects `capability.power_curve_delta`.
+- `hr_curve_data` — derived from `hr_curves`; reuses the power dates.
+  Affects `capability.hr_curve_delta`.
+- `sustainability_curves`, `sustainability_window` — derived from the
+  fixture's `sustainability_curves` key (single 42d window
+  `now-41..today`). Affects `capability.sustainability_profile`.
+- `sport_settings` — built by the upstream's own
+  `_build_sport_thresholds(athlete)` from the fixture's `athlete.sportSettings`
+  key. Affects FTP-dependent zone-basis selection + the sustainability
+  model layer.
+- `vo2max`, `power_model` — derived from the latest wellness row
+  (designated `today_wellness`, mirroring `_fetch_today_wellness` →
+  `_extract_power_model_from_wellness`) when the fixture carries the
+  `athlete` key. Affects `eftp`, `w_prime`, `w_prime_kj`, `p_max`,
+  `vo2max`, `power_model_source`.
 - `self._intervals_data` — populated by `_generate_intervals()` in the
-  live pipeline; affects `capability.dfa_a1_profile`.
-- `vo2max`, `power_model` — come from `_fetch_today_wellness()`;
-  affects `eftp`, `w_prime`, `w_prime_kj`, `p_max`, `vo2max`,
-  `power_model_source`.
-- `race_calendar` — affects phase-detection's `race_proximity` slot.
-- `formatted_planned_workouts`, `past_events` — affect Consistency
-  Index, phase-detection's stream_2 plan-coverage slots.
-- `sport_settings` — affects FTP-dependent zone-basis selection.
-- `benchmark_indoor`, `benchmark_outdoor` — passed as `(None, None,
+  live pipeline; primed from the fixture's `streams` key (a separate
+  fixture/PR). Affects `capability.dfa_a1_profile`.
+- `race_calendar` — still `None`. Affects phase-detection's
+  `race_proximity` slot.
+- `formatted_planned_workouts`, `past_events` — `past_events` rides
+  through from the fixture; `formatted_planned_workouts` is `[]`. Affect
+  Consistency Index, phase-detection's stream_2 plan-coverage slots.
+- `benchmark_indoor`, `benchmark_outdoor` — computed from the fixture's
+  `current_ftp_*` / `ftp_history_*` keys when present, else `(None, None,
   None)`. Affects `benchmark_indoor`/`benchmark_outdoor` outputs.
+
+### Closed gaps (populated by the curve fixture)
+
+`curve-equipped` carries `power_curves` + `hr_curves` (both 28d delta
+windows at all rotation anchors), `sustainability_curves` (single 42d
+window, cycling Ride+VirtualRide), `athlete.sportSettings` (ftp/lthr),
+and a latest-row Ride `sportInfo` carrying `eftp`/`wPrime`/`pMax` +
+`vo2max`. Against it the harness emits NON-NULL
+`capability.power_curve_delta` / `capability.hr_curve_delta` (anchors +
+`rotation_index`), `capability.sustainability_profile` (actual_watts,
+actual_hr, pct_lthr, coggan_watts, cp_model_watts), and all six
+power-model scalars (`eftp`, `w_prime`, `w_prime_kj`, `p_max`,
+`power_model_source`, `vo2max`). The blocks are attached AFTER the
+sanitizer (`tools/build-curve-fixture.ts`) — the schema-derived
+default-deny sanitizer would otherwise drop every curve key and the id
+transform would clobber the `r.<start>.<end>` curve ids. `dfa_a1_profile`
+remains null here — its `streams` input ships with a separate fixture.
 
 In addition, some metric names are emitted by `collect_training_data`
 itself (the orchestrating method that wraps `_calculate_derived_metrics`)
@@ -234,14 +273,35 @@ etc.):
 
 ```python
 _ALLOWED_OPTIONAL_PATHS = {
+    # Per-record intervals.icu fields that may legitimately be absent.
     "FIXTURE.activities[*].icu_hr_decoupling",
     "FIXTURE.activities[*].icu_hr_zone_times",
     "FIXTURE.activities[*].icu_hrr",
+    "FIXTURE.activities[*].icu_hrr.value",
+    "FIXTURE.activities[*].icu_hrr.hrr",
     "FIXTURE.activities[*].icu_variability_index",
     "FIXTURE.wellness[*].atl",
     "FIXTURE.wellness[*].ctl",
+    # Top-level fixture extensions — present only on the fixtures that exercise
+    # the corresponding populated branch; absent (and pass-through) on the rest.
+    "FIXTURE.past_events",
+    "FIXTURE.current_ftp_indoor",
+    "FIXTURE.current_ftp_outdoor",
+    "FIXTURE.ftp_history_indoor",
+    "FIXTURE.ftp_history_outdoor",
+    "FIXTURE.intervals",
+    "FIXTURE.power_curves",
+    "FIXTURE.hr_curves",
+    "FIXTURE.sustainability_curves",
+    "FIXTURE.streams",
+    "FIXTURE.athlete",
 }
 ```
+
+The same allowlist is duplicated in three places that must stay in lockstep:
+`tools/snapshot-section-11.ts` (the canonical copy the harness uses),
+`tools/fuzz-parity.ts` (so the fuzzer's contract check is as strong as the
+gate's), and this README block. Extending it means editing all three.
 
 Extending the allowlist requires a README update in this section so
 the reviewer can trace why a particular field is treated as
@@ -257,11 +317,14 @@ failure surfaces the renamed path.
 Audit run 2026-05-21 against the realistic-athlete snapshot set
 generated from `section_11_sha = 224c369d`.
 
-**Null-value snapshots (7):**
-`consistency_index`, `eftp`, `p_max`, `power_model_source`, `vo2max`,
-`w_prime`, `w_prime_kj`. All are deferred to F10 (capability/stream
-metrics) or follow-on F8 wiring — none of them are in F8's load-management
-scope.
+**Null-value snapshots on the realistic-athlete fixture (6 power-model
+scalars):** `eftp`, `p_max`, `power_model_source`, `vo2max`, `w_prime`,
+`w_prime_kj` are null on `realistic-athlete` (it carries no `athlete`
+key, so the power-model pipeline stays stubbed). They are NON-NULL on
+`curve-equipped`, which supplies the `athlete` key + a latest-row Ride
+sportInfo carrying `eftp`/`wPrime`/`pMax`. `consistency_index` is
+populated on `populated-benchmark-and-consistency`. None are in F8's
+load-management scope.
 
 **Absent-from-output (1):**
 `ramp_rate`. Emitted only by `collect_training_data`, not by the
@@ -328,12 +391,17 @@ twice: once via the pyodide harness (`pnpm snapshot:section-11`), once
 via host CPython 3.12 (`tools/snapshot-section-11-native.py`), then
 diffing every metric.
 
-**Verdict (2026-05-21):** all 52 metrics produced by `pnpm snapshot:section-11`
-on the `realistic-athlete` fixture against `section_11_sha = 224c369d`
-are bit-identical between:
+**Verdict (2026-06-04):** all 63 metrics produced by `pnpm snapshot:section-11`
+on the `realistic-athlete` AND `curve-equipped` fixtures against
+`section_11_sha = 224c369d` are bit-identical between:
 
 - pyodide `0.29.4` (CPython 3.12, WASM)
 - host CPython `3.12.13` (managed by `uv`)
+
+`curve-equipped` is verified separately (it uses a different frozen anchor,
+`2026-06-04T12:00:00`): generate its native snapshot with
+`--fixture packages/core/tests/fixtures/golden/curve-equipped.json
+--frozen-now 2026-06-04T12:00:00` and diff against its committed snapshot dir.
 
 Reproduce the check:
 
@@ -347,7 +415,7 @@ uv python install 3.12
 pnpm snapshot:section-11
 uv run --python 3.12 tools/snapshot-section-11-native.py --out /tmp/native-snapshots.json
 pnpm tsx tools/diff-pyodide-vs-cpython.ts /tmp/native-snapshots.json
-# expect: [diff] OK — 52 metrics bit-identical...
+# expect: [diff] OK — 63 metrics bit-identical...
 ```
 
 If the diff surfaces a divergence in the future (new fixture, new
@@ -385,9 +453,14 @@ The harness iterates over the `HARNESS_FIXTURES` allowlist in
 3. Re-run `pnpm snapshot:section-11`. The script creates one subdirectory
    per slug and rewrites `manifest.json`.
 
-The 3-golden cap from `packages/core/tests/fixtures/README.md` applies
-— don't sprawl. Synthetic regression fixtures get their own targeted
-snapshot test, not a full per-metric capture.
+Fixtures are signal, not collection — each `HARNESS_FIXTURES` entry must
+name the specific sync.py branch it newly covers (the `description` field
+is that record). The set is intentionally heterogeneous:
+real-sanitized (`realistic-athlete`), real-derived hybrid
+(`curve-equipped` — sanitized rows + synthetic curve blocks), synthetic
+boundary-seekers (`boundary-*`, `multisport-*`), and zero-data edges
+(`new-athlete-empty`). A fixture that doesn't cover a NEW branch belongs
+as a targeted synthetic test, not a full per-metric capture.
 
 ## Why pyodide and not subprocess Python
 

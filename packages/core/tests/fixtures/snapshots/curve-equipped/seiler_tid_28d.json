@@ -1,0 +1,18 @@
+{
+  "metric": "seiler_tid_28d",
+  "athlete": "curve-equipped",
+  "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
+  "section_11_protocol_version": "3.112",
+  "frozen_now": "2026-06-04T12:00:00",
+  "value": {
+    "classification": "Pyramidal",
+    "polarization_index": 1.69,
+    "z1_pct": 44,
+    "z1_seconds": 31195,
+    "z2_pct": 26.5,
+    "z2_seconds": 18760,
+    "z3_pct": 29.6,
+    "z3_seconds": 20963,
+    "zone_basis": "power"
+  }
+}

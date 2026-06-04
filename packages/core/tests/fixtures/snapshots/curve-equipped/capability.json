@@ -1,0 +1,224 @@
+{
+  "metric": "capability",
+  "athlete": "curve-equipped",
+  "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
+  "section_11_protocol_version": "3.112",
+  "frozen_now": "2026-06-04T12:00:00",
+  "value": {
+    "dfa_a1_profile": null,
+    "durability": {
+      "high_drift_count_28d": 0,
+      "high_drift_count_7d": 0,
+      "mean_decoupling_28d": null,
+      "mean_decoupling_7d": null,
+      "note": "Steady-state power sessions only (VI <= 1.05, VI > 0, >= 90min, power data). Negative decoupling = strong durability. Trend compares 7d vs 28d mean (+/-1% = stable). Alerts require N28>=5 (alarm) or N7>=3 AND N28>=5 (declining warning) for statistical reliability.",
+      "qualifying_sessions_28d": 1,
+      "qualifying_sessions_7d": 0,
+      "reliability_limited": true,
+      "reliability_note": "insufficient qualifying sessions for alert evaluation: 7d N=0 (min 3), 28d N=1 (min 5)",
+      "trend": null
+    },
+    "efficiency_factor": {
+      "mean_ef_28d": null,
+      "mean_ef_7d": null,
+      "note": "Steady-state cycling sessions only (VI <= 1.05, VI > 0, >= 20min, power+HR data). Rising EF = improving aerobic efficiency. Compare like-for-like sessions only — EF varies with intensity. Trend compares 7d vs 28d mean (+/-0.03 = stable).",
+      "qualifying_sessions_28d": 1,
+      "qualifying_sessions_7d": 0,
+      "trend": null
+    },
+    "hr_curve_delta": {
+      "anchors": {
+        "1200s": {
+          "current_bpm": 171,
+          "pct_change": 4.9,
+          "previous_bpm": 163
+        },
+        "300s": {
+          "current_bpm": 176,
+          "pct_change": 1.7,
+          "previous_bpm": 173
+        },
+        "3600s": {
+          "current_bpm": 162,
+          "pct_change": 4.5,
+          "previous_bpm": 155
+        },
+        "60s": {
+          "current_bpm": 181,
+          "pct_change": 1.1,
+          "previous_bpm": 179
+        }
+      },
+      "current_window": {
+        "end": "2026-06-04",
+        "start": "2026-05-08"
+      },
+      "note": "Compares max sustained HR at 4 anchor durations (60s anaerobic ceiling, 300s VO2max HR, 1200s threshold HR, 3600s endurance HR) across two 28d windows. rotation_index = mean(60s,300s pct_change) - mean(1200s,3600s pct_change). Positive = intensity-biased HR shift, negative = endurance-biased. No sport filter — HR is cross-sport physiological (dominated by hardest efforts). IMPORTANT: rising max sustained HR is ambiguous — may indicate improved cardiac output (good) or accumulated fatigue/dehydration/heat (bad). Cross-reference with resting HRV, resting HR, RPE, and environmental context before interpreting. Null when either window has fewer than 3 valid anchor durations.",
+      "previous_window": {
+        "end": "2026-05-07",
+        "start": "2026-04-10"
+      },
+      "rotation_index": -3.3,
+      "window_days": 28
+    },
+    "hrrc": {
+      "mean_hrrc_28d": null,
+      "mean_hrrc_7d": null,
+      "note": "HRRc = heart rate recovery (largest 60s HR drop in bpm after exceeding threshold HR for >1 min). Higher = better parasympathetic recovery. Null when threshold not reached, recording stopped before cooldown, or no HR data. Trend: 7d mean vs 28d mean, >10% = meaningful (min 1 session/7d, 3 sessions/28d). Display only — not wired into readiness_decision signals.",
+      "qualifying_sessions_28d": 0,
+      "qualifying_sessions_7d": 0,
+      "trend": null
+    },
+    "power_curve_delta": {
+      "anchors": {
+        "1200s": {
+          "current_watts": 191,
+          "pct_change": 14.4,
+          "previous_watts": 167
+        },
+        "300s": {
+          "current_watts": 218,
+          "pct_change": 11.8,
+          "previous_watts": 195
+        },
+        "3600s": {
+          "current_watts": 169,
+          "pct_change": 7.6,
+          "previous_watts": 157
+        },
+        "5s": {
+          "current_watts": 637,
+          "pct_change": 12.9,
+          "previous_watts": 564
+        },
+        "60s": {
+          "current_watts": 310,
+          "pct_change": 19.7,
+          "previous_watts": 259
+        }
+      },
+      "current_window": {
+        "end": "2026-06-04",
+        "start": "2026-05-08"
+      },
+      "note": "Compares MMP at 5 anchor durations (5s neuromuscular, 60s anaerobic, 300s MAP, 1200s threshold, 3600s endurance) across two 28d windows. rotation_index = mean(5s,60s pct_change) - mean(1200s,3600s pct_change). Positive = sprint-biased gains, negative = endurance-biased. 300s excluded from rotation (transitional). Null when either window has fewer than 3 valid anchor durations.",
+      "previous_window": {
+        "end": "2026-05-07",
+        "start": "2026-04-10"
+      },
+      "rotation_index": 5.3,
+      "window_days": 28
+    },
+    "sustainability_profile": {
+      "cycling": {
+        "anchors": {
+          "1200s": {
+            "actual_hr": 171,
+            "actual_watts": 191,
+            "actual_wpkg": 2.2,
+            "coggan_watts": 186,
+            "coggan_wpkg": 2.14,
+            "cp_model_watts": 212,
+            "cp_model_wpkg": 2.44,
+            "model_divergence_pct": -9.9,
+            "pct_lthr": 101.8,
+            "source": "observed_outdoor"
+          },
+          "1800s": {
+            "actual_hr": 169,
+            "actual_watts": 175,
+            "actual_wpkg": 2.01,
+            "coggan_watts": 180,
+            "coggan_wpkg": 2.07,
+            "cp_model_watts": 208,
+            "cp_model_wpkg": 2.39,
+            "model_divergence_pct": -15.9,
+            "pct_lthr": 100.6,
+            "source": "observed_outdoor"
+          },
+          "300s": {
+            "actual_hr": 176,
+            "actual_watts": 218,
+            "actual_wpkg": 2.51,
+            "coggan_watts": 212,
+            "coggan_wpkg": 2.44,
+            "cp_model_watts": 246,
+            "cp_model_wpkg": 2.83,
+            "model_divergence_pct": -11.4,
+            "pct_lthr": 104.8,
+            "source": "observed_outdoor"
+          },
+          "3600s": {
+            "actual_hr": 162,
+            "actual_watts": 169,
+            "actual_wpkg": 1.94,
+            "coggan_watts": 172,
+            "coggan_wpkg": 1.98,
+            "cp_model_watts": 204,
+            "cp_model_wpkg": 2.34,
+            "model_divergence_pct": -17.2,
+            "pct_lthr": 96.4,
+            "source": "observed_outdoor"
+          },
+          "5400s": {
+            "actual_hr": 160,
+            "actual_watts": 163,
+            "actual_wpkg": 1.87,
+            "coggan_watts": 164,
+            "coggan_wpkg": 1.89,
+            "cp_model_watts": 203,
+            "cp_model_wpkg": 2.33,
+            "model_divergence_pct": -19.7,
+            "pct_lthr": 95.2,
+            "source": "observed_outdoor"
+          },
+          "600s": {
+            "actual_hr": 173,
+            "actual_watts": 204,
+            "actual_wpkg": 2.34,
+            "coggan_watts": 194,
+            "coggan_wpkg": 2.23,
+            "cp_model_watts": 223,
+            "cp_model_wpkg": 2.56,
+            "model_divergence_pct": -8.5,
+            "pct_lthr": 103,
+            "source": "observed_outdoor"
+          },
+          "7200s": {
+            "actual_hr": 155,
+            "actual_watts": 163,
+            "actual_wpkg": 1.87,
+            "coggan_watts": 156,
+            "coggan_wpkg": 1.79,
+            "cp_model_watts": 202,
+            "cp_model_wpkg": 2.32,
+            "model_divergence_pct": -19.3,
+            "pct_lthr": 92.3,
+            "source": "observed_outdoor"
+          }
+        },
+        "coverage_ratio": 1,
+        "ftp_staleness_days": null,
+        "ftp_used": 200,
+        "model_trust_note": "CP/W' model (P=CP+W'/t) is primary for durations ≤20min where W' contribution is meaningful. Coggan duration factors (Allen & Coggan, 3rd ed.) are the established reference for ≥60min. 30min is the crossover zone where both apply. model_divergence_pct = (actual - CP_model) / CP_model × 100. Positive divergence at short durations may indicate strong anaerobic capacity or stale W' value. Indoor MMP is typically 3-5% lower than outdoor (cooling, motivation) — source flag indicates which environment produced each anchor.",
+        "w_prime_used": 13882
+      },
+      "weight_kg": 87,
+      "weight_source": "wellness_extended",
+      "window": {
+        "days": 42,
+        "end": "2026-06-04",
+        "start": "2026-04-24"
+      }
+    },
+    "tid_comparison": {
+      "classification_28d": "Pyramidal",
+      "classification_7d": "High Intensity",
+      "drift": "shifting",
+      "note": "Compares 7d vs 28d Seiler TID to detect distribution shifts. pi_delta positive = more polarized acutely.",
+      "pi_28d": 1.69,
+      "pi_7d": null,
+      "pi_delta": null
+    }
+  }
+}
