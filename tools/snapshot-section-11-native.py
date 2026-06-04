@@ -245,6 +245,85 @@ def main() -> int:
             }
         }
 
+    if "__error__" not in derived:
+        # === has_intervals per-activity classifier (v3.106) ===
+        # Hoisted from sync.py:7866-7873 inside _format_activities. The upstream
+        # emits has_intervals per activity in the formatted activity dict; we
+        # surface it as a top-level derived key so the parity gate can assert
+        # it without ingesting the full per-activity display block.
+        #
+        # `fixture` here is already a plain dict (no contract-tracking wrapper
+        # like the pyodide twin's _TrackedDict), so it plays the role of the
+        # pyodide harness's reparsed _raw_fixture directly.
+        intervals_raw = fixture.get("intervals") or {}
+        has_intervals = {}
+        for act in activities_all:
+            if not isinstance(act, dict):
+                continue
+            act_id = str(act.get("id"))
+            entry = intervals_raw.get(act_id)
+            flag = False
+            if entry:
+                for seg in entry.get("intervals") or []:
+                    if isinstance(seg, dict) and seg.get("type") == "WORK":
+                        flag = True
+                        break
+            has_intervals[act_id] = flag
+        derived["has_intervals"] = {
+            k: has_intervals[k] for k in sorted(has_intervals.keys())
+        }
+
+        # === effort_response_signal per-activity classifier (v3.105 / v11.34) ===
+        # Hoisted from sync.py:3493-3534 (_classify_effort_response) +
+        # sync.py:7858-7860 per-activity emission inside _format_activities.
+        effort_response = {}
+        for act in fixture.get("activities", []):
+            if not isinstance(act, dict):
+                continue
+            act_id = str(act.get("id"))
+            effort_response[act_id] = sync._classify_effort_response(
+                act.get("icu_intensity"), act.get("icu_rpe")
+            )
+        derived["effort_response_signal"] = {
+            k: effort_response[k] for k in sorted(effort_response.keys())
+        }
+
+        # === weight_signal (v3.112) ===
+        # Hoisted from sync.py:2746-2752 outside _calculate_derived_metrics.
+        # The upstream assigns the result to data["current_status"]["weight"];
+        # we surface it as a top-level derived key for the parity gate.
+        #
+        # _load_ftp_history is monkey-patched to read from the fixture's
+        # ftp_history_indoor / ftp_history_outdoor records instead of disk —
+        # the production helper reads ftp_history.json from cwd, which is
+        # neither portable nor reproducible in the harness.
+        raw_ftp_indoor = fixture.get("ftp_history_indoor") or {}
+        raw_ftp_outdoor = fixture.get("ftp_history_outdoor") or {}
+        sync._load_ftp_history = lambda: {
+            "indoor": raw_ftp_indoor,
+            "outdoor": raw_ftp_outdoor,
+        }
+        raw_current_ftp_outdoor = fixture.get("current_ftp_outdoor")
+        raw_eftp = fixture.get("eftp")
+        weight_sport_settings = (
+            {"cycling": {"ftp": raw_current_ftp_outdoor}}
+            if raw_current_ftp_outdoor
+            else {}
+        )
+        weight_power_model = {"eftp": raw_eftp} if raw_eftp else {}
+        raw_wellness = fixture.get("wellness") or []
+        weight_signal_value = sync._build_weight_signal(
+            raw_wellness,
+            weight_sport_settings,
+            weight_power_model,
+            None,
+        )
+        # Display sub-dict is out of scope per Wave 6 deferral — strip before
+        # snapshotting so the parity gate doesn't pin a contract we don't ship.
+        if weight_signal_value and "display" in weight_signal_value:
+            del weight_signal_value["display"]
+        derived["weight_signal"] = weight_signal_value
+
     # Explode the capability dict into capability.<sub> sibling keys, in
     # lockstep with the pyodide harness's per-sub-key emission so
     # diff-pyodide-vs-cpython compares the same key set.
