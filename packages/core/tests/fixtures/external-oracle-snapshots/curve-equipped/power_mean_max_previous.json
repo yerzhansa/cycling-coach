@@ -1,0 +1,27 @@
+{
+  "athlete": "curve-equipped",
+  "frozen_now": "2026-06-04T12:00:00",
+  "metric": "power_mean_max_previous",
+  "oracle": "external",
+  "oracle_arch": "x86_64",
+  "oracle_host_os": "macOS 26.2",
+  "oracle_version": "3.7.1",
+  "value": {
+    "anchors_s": [
+      5,
+      60,
+      300,
+      1200,
+      3600
+    ],
+    "mean_max": {
+      "1200": 167.8524932861328,
+      "300": 195.13333129882812,
+      "3600": 157.04222106933594,
+      "5": 564.4000244140625,
+      "60": 259.3833312988281
+    },
+    "unit": "watts",
+    "window_id": "r.2026-04-10.2026-05-07"
+  }
+}

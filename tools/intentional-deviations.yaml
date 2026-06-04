@@ -34,6 +34,51 @@
 #       notes: |
 #         <freeform context, decision rationale, follow-ups>
 #
+# ─── External-oracle coverage (separate section) ──────────────────────
+#
+# The `external_coverage:` block below is NOT a section-11-deviation
+# record. It is the tolerance + coverage registry for the external
+# oracle — a second, independent implementation that computes mean-max
+# curves from the same underlying rides the `curve-equipped` fixture's
+# curve blocks aggregate. It exists so the parity gate's
+# `--oracle=external|both` mode can cross-check those fixture anchor
+# values against the external computation.
+#
+# This is the ONLY surface the gate honors for external tolerances: the
+# gate refuses any external tolerance that is not declared here (no
+# inline tolerances in gate code, no CLI-tunable epsilon). Tolerances
+# are written from the documented oracle-vs-fixture relation FIRST, then
+# the comparison is run against them — never widened to make a run pass.
+#
+# Per-entry schema (external_coverage v1):
+#
+#   external_coverage:
+#     - quantity: <external snapshot key, e.g. power_mean_max_current>
+#       fixture: <golden fixture the cross-check anchors on>
+#       anchor:                      # what the comparison anchors on,
+#         fixture_path: |            #   fixture side
+#           <dotted path into the fixture to the curve block, e.g.
+#            power_curves.list[id=r.<start>.<end>]>
+#         oracle_path: value.mean_max
+#         window_id: r.<start>.<end> # the calendar window both sides share
+#         units: watts | bpm
+#       tolerance:
+#         kind: floor_int            # fixture == floor(oracle): the only
+#                                    #   kind the gate implements today
+#         max_offset: <number>       # documented upper bound on
+#                                    #   (oracle - fixture); a record, not
+#                                    #   a knob — the gate enforces the
+#                                    #   kind relation, this annotates it
+#       computed_by: |
+#         <who performs the mean-max aggregation: the external oracle's
+#          harness, over which calendar window>
+#       rationale: |
+#         <why this quantity/anchor/tolerance; the documented relation>
+#
+# Quantities the external oracle emits but the gate does NOT cross-check
+# are recorded here with `covered: false` and a one-line reason, so the
+# coverage output can report them as uncovered (never silently skipped).
+#
 # Tools that read this file:
 #   - tools/check-metric-parity.ts (the gate) — reports deviation status
 #     in pass/fail output, does not change assertion behavior (registry is
@@ -227,6 +272,156 @@ deviations:
       rev 7 inline rewrite + F7 schema rev to drop weeklyRecoveryProxyHours
       rename + REST_DAY_RECOVERY_HOURS removal). Status lives there;
       this entry remains anchored to the 2026-05-21 revert decision.
+
+# ─── External-oracle coverage registry (v1) ──────────────────────────
+#
+# Tolerance + coverage records for the external oracle's mean-max
+# cross-check against the curve-equipped fixture. See the schema block in
+# the header. The `floor_int` relation below was measured from the
+# committed snapshots before the first gate run (anti-tolerance-shopping):
+# the fixture's curve anchors are integer-floored (intervals.icu
+# convention) while the external oracle emits floats; every observed
+# offset (oracle - fixture) is in [0, 1) and ≤ 0.8525 across all 28
+# cross-checked anchors. The gate enforces `fixture == floor(oracle)`
+# exactly; max_offset is the documented bound, not a tunable knob.
+
+external_coverage:
+  - quantity: power_mean_max_current
+    fixture: curve-equipped
+    anchor:
+      fixture_path: power_curves.list[id=r.2026-05-08.2026-06-04]
+      oracle_path: value.mean_max
+      window_id: r.2026-05-08.2026-06-04
+      units: watts
+    tolerance:
+      kind: floor_int
+      max_offset: 0.8
+    computed_by: |
+      The external oracle's producer harness computes the mean-max power
+      curve over the current delta window (sync.py win1 = now-27..today)
+      by max-over-rides-in-window aggregation from the same underlying
+      _2-account rides the fixture's power_curves win1 block aggregates.
+    rationale: |
+      Grounds the fixture's power_curves win1 anchors (the input the
+      ported power_curve_delta capability consumes) in an independent
+      mean-max computation. The fixture floors each anchor to an integer
+      watt (intervals.icu convention); the oracle keeps the float.
+      Relation: fixture == floor(oracle).
+
+  - quantity: power_mean_max_previous
+    fixture: curve-equipped
+    anchor:
+      fixture_path: power_curves.list[id=r.2026-04-10.2026-05-07]
+      oracle_path: value.mean_max
+      window_id: r.2026-04-10.2026-05-07
+      units: watts
+    tolerance:
+      kind: floor_int
+      max_offset: 0.86
+    computed_by: |
+      The external oracle's producer harness computes the mean-max power
+      curve over the previous delta window (sync.py win2 = now-55..now-28)
+      from the same underlying rides the fixture's power_curves win2 block
+      aggregates.
+    rationale: |
+      Grounds the fixture's power_curves win2 anchors in an independent
+      mean-max computation. Relation: fixture == floor(oracle).
+
+  - quantity: hr_mean_max_current
+    fixture: curve-equipped
+    anchor:
+      fixture_path: hr_curves.list[id=r.2026-05-08.2026-06-04]
+      oracle_path: value.mean_max
+      window_id: r.2026-05-08.2026-06-04
+      units: bpm
+    tolerance:
+      kind: floor_int
+      max_offset: 0.78
+    computed_by: |
+      The external oracle's producer harness computes the mean-max HR
+      curve over the current delta window (sync.py win1) from the same
+      underlying rides the fixture's hr_curves win1 block aggregates.
+    rationale: |
+      Grounds the fixture's hr_curves win1 anchors (the input the ported
+      hr_curve_delta capability consumes) in an independent mean-max
+      computation. Relation: fixture == floor(oracle).
+
+  - quantity: hr_mean_max_previous
+    fixture: curve-equipped
+    anchor:
+      fixture_path: hr_curves.list[id=r.2026-04-10.2026-05-07]
+      oracle_path: value.mean_max
+      window_id: r.2026-04-10.2026-05-07
+      units: bpm
+    tolerance:
+      kind: floor_int
+      max_offset: 0.72
+    computed_by: |
+      The external oracle's producer harness computes the mean-max HR
+      curve over the previous delta window (sync.py win2) from the same
+      underlying rides the fixture's hr_curves win2 block aggregates.
+    rationale: |
+      Grounds the fixture's hr_curves win2 anchors in an independent
+      mean-max computation. Relation: fixture == floor(oracle).
+
+  - quantity: sustainability_power_mean_max
+    fixture: curve-equipped
+    anchor:
+      fixture_path: sustainability_curves.cycling.power.Ride.list[id=r.2026-04-24.2026-06-04]
+      oracle_path: value.mean_max
+      window_id: r.2026-04-24.2026-06-04
+      units: watts
+    tolerance:
+      kind: floor_int
+      max_offset: 0.64
+    computed_by: |
+      The external oracle's producer harness computes the mean-max power
+      curve over the sustainability window (sync.py = now-41..today) from
+      the same underlying Ride activities the fixture's cycling/power/Ride
+      sustainability block aggregates.
+    rationale: |
+      Grounds the fixture's cycling power sustainability anchors (input to
+      the ported sustainability_profile capability) in an independent
+      mean-max computation. Relation: fixture == floor(oracle).
+
+  - quantity: sustainability_hr_mean_max
+    fixture: curve-equipped
+    anchor:
+      fixture_path: sustainability_curves.cycling.hr.Ride.list[id=r.2026-04-24.2026-06-04]
+      oracle_path: value.mean_max
+      window_id: r.2026-04-24.2026-06-04
+      units: bpm
+    tolerance:
+      kind: floor_int
+      max_offset: 0.78
+    computed_by: |
+      The external oracle's producer harness computes the mean-max HR
+      curve over the sustainability window (sync.py = now-41..today) from
+      the same underlying Ride activities the fixture's cycling/hr/Ride
+      sustainability block aggregates.
+    rationale: |
+      Grounds the fixture's cycling HR sustainability anchors in an
+      independent mean-max computation. The oracle's mean_max map for this
+      quantity carries the HR anchor set {60,300,1200,3600}; the
+      cross-check anchors on the intersection of anchors present in both
+      the oracle map and the fixture block (the fixture's additional
+      600/1800/5400/7200 HR anchors have no oracle counterpart and are not
+      cross-checked). Relation on the shared anchors: fixture == floor(oracle).
+
+  # Uncovered: emitted by the external oracle, NOT cross-checked by the gate.
+  - quantity: cp_model_peak_power_per_ride
+    fixture: curve-equipped
+    covered: false
+    reason: |
+      Per-ride CP-model peak-power estimates from the external oracle.
+      There is no athlete-level PD-model estimate surface in our fixtures
+      to anchor on: the athlete-level eFTP / W' / PMax our fixtures carry
+      are athlete CONFIG inputs (sportInfo settings the oracle echoes back
+      as settings), not independently-computed estimates. The external
+      cross-check therefore anchors on the mean-max curves above, which
+      ARE independently recomputed by the producer harness. This per-ride
+      file is retained for future use and reported as uncovered in the
+      gate's coverage output.
 
 # Reference-layer baseline audit (2026-05-21)
 #

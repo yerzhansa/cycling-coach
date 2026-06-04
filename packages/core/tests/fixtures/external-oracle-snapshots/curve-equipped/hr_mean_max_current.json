@@ -1,0 +1,25 @@
+{
+  "athlete": "curve-equipped",
+  "frozen_now": "2026-06-04T12:00:00",
+  "metric": "hr_mean_max_current",
+  "oracle": "external",
+  "oracle_arch": "x86_64",
+  "oracle_host_os": "macOS 26.2",
+  "oracle_version": "3.7.1",
+  "value": {
+    "anchors_s": [
+      60,
+      300,
+      1200,
+      3600
+    ],
+    "mean_max": {
+      "1200": 171.07416666666666,
+      "300": 176.77666666666667,
+      "3600": 162.70444444444445,
+      "60": 181.73333333333332
+    },
+    "unit": "bpm",
+    "window_id": "r.2026-05-08.2026-06-04"
+  }
+}

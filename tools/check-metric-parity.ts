@@ -91,6 +91,11 @@ export const DeviationRegistrySchema = z
   .object({
     schema_version: z.literal(1),
     deviations: z.array(DeviationEntrySchema),
+    // The external-oracle coverage section is a separate concern (tolerance
+    // + coverage records for the external mean-max cross-check, NOT
+    // section-11-deviation records). The gate's section-11 path passes it
+    // through unread; tools/external-oracle.ts owns its strict schema.
+    external_coverage: z.array(z.unknown()).optional(),
   })
   .strict();
 export type DeviationRegistry = z.infer<typeof DeviationRegistrySchema>;
@@ -387,16 +392,38 @@ export class RegistryMissError extends Error {
 
 // ─── CLI ────────────────────────────────────────────────────────────────
 
+export type OracleMode = "section-11" | "external" | "both";
+
+// Both the hyphenated and non-hyphenated spellings resolve to the same
+// section-11 mode — the default and the only spelling CI ever passes.
+function parseOracle(raw: string | undefined): OracleMode {
+  switch (raw) {
+    case undefined:
+    case "section-11":
+    case "section11":
+      return "section-11";
+    case "external":
+      return "external";
+    case "both":
+      return "both";
+    default:
+      throw new Error(
+        `unknown --oracle value '${raw}' (expected section-11 | external | both)`,
+      );
+  }
+}
+
 interface CliArgs {
   metric?: string;
   fixture?: string;
   all?: boolean;
   json?: boolean;
   strict?: boolean;
+  oracle: OracleMode;
 }
 
 function parseCli(argv: string[]): CliArgs {
-  const out: CliArgs = {};
+  const out: CliArgs = { oracle: "section-11" };
   for (const tok of argv.slice(2)) {
     const [k, v] = tok.startsWith("--") ? tok.slice(2).split("=") : [tok, "true"];
     switch (k) {
@@ -415,11 +442,108 @@ function parseCli(argv: string[]): CliArgs {
       case "strict":
         out.strict = true;
         break;
+      case "oracle":
+        out.oracle = parseOracle(v);
+        break;
       default:
         throw new Error(`unknown flag: ${tok}`);
     }
   }
   return out;
+}
+
+// ─── External-oracle mode ──────────────────────────────────────────────
+//
+// Imported lazily inside the external/both branches so the section-11
+// default path neither loads the external module nor reads the external
+// snapshot tree — the default CLI run stays byte-for-byte unchanged.
+
+interface ExternalModeOutcome {
+  exitCode: number;
+  lines: string[];
+  json: unknown;
+}
+
+async function runExternalMode(
+  fixture: string,
+  mode: "external" | "both",
+): Promise<ExternalModeOutcome> {
+  const { runExternalForFixture } = await import("./external-oracle.js");
+  const result = runExternalForFixture(fixture);
+
+  const lines: string[] = [];
+  let exitCode = 0;
+
+  // Zero-coverage guard: an external/both run that finds no covered
+  // quantity (wrong fixture, missing snapshot dir) must never pass empty.
+  const totalCovered = result.coveredCount + result.missingSnapshots.length;
+  if (totalCovered === 0) {
+    const msg =
+      `[parity] --oracle=${mode}: ZERO covered quantities for fixture '${fixture}'. ` +
+      `No external-coverage entry in tools/intentional-deviations.yaml matches this ` +
+      `fixture, or its external snapshots are missing under ` +
+      `external-oracle-snapshots/${fixture}/. The flag must never pass empty.`;
+    lines.push(msg);
+    return {
+      exitCode: 2,
+      lines,
+      json: { fixture, mode, error: "zero_coverage", result },
+    };
+  }
+
+  // In both mode, a covered quantity whose external snapshot is absent is
+  // a FAILURE (both-fails-not-skips): the cross-check was declared but
+  // cannot run. In external mode it is reported as missing but is not a
+  // hard failure on its own (the coverage count still excludes it).
+  if (mode === "both" && result.missingSnapshots.length > 0) {
+    exitCode = 1;
+    for (const q of result.missingSnapshots) {
+      lines.push(
+        `[parity:external] ${q} / ${fixture}: FAIL — declared external coverage but no snapshot on disk (both-mode requires both legs)`,
+      );
+    }
+  } else {
+    for (const q of result.missingSnapshots) {
+      lines.push(
+        `[parity:external] ${q} / ${fixture}: SKIP — declared external coverage but no snapshot on disk`,
+      );
+    }
+  }
+
+  for (const check of result.checks) {
+    if (check.passed) {
+      const unmatchedTail =
+        check.unmatchedAnchors.length > 0
+          ? ` (uncompared anchors: ${check.unmatchedAnchors.join(", ")})`
+          : "";
+      lines.push(
+        `[parity:external] ${check.quantity} / ${fixture}: OK — ${check.comparedAnchors} anchor(s) match floor(oracle) over ${check.windowId}${unmatchedTail}`,
+      );
+    } else {
+      exitCode = exitCode === 2 ? 2 : 1;
+      lines.push(`[parity:external] ${check.quantity} / ${fixture}: FAIL`);
+      for (const f of check.failures) {
+        lines.push(`  ${f.anchorSecs}s: ${f.reason}`);
+      }
+    }
+  }
+
+  for (const u of result.uncovered) {
+    lines.push(
+      `[parity:external] ${u.quantity} / ${fixture}: UNCOVERED — ${u.reason.split("\n")[0]}`,
+    );
+  }
+
+  lines.push(
+    `[parity:external] coverage: ${result.passedCount}/${result.coveredCount} covered quantity(ies) passed; ` +
+      `${result.uncovered.length} uncovered; ${result.missingSnapshots.length} missing-snapshot.`,
+  );
+
+  return {
+    exitCode,
+    lines,
+    json: { fixture, mode, result },
+  };
 }
 
 const DIFF_LEAF_LIMIT = 20;
@@ -462,6 +586,59 @@ async function main(): Promise<number> {
   if (args.strict && !args.all) {
     console.error("[parity] --strict requires --all");
     return 2;
+  }
+
+  // External / both modes: the cross-check is quantity-level (driven by the
+  // registry's external_coverage section), not metric-level. `--fixture`
+  // selects which fixture's coverage to run; `--metric` is not used here.
+  if (args.oracle === "external" || args.oracle === "both") {
+    if (!args.fixture || args.fixture === "all") {
+      console.error(
+        `[parity] --oracle=${args.oracle} requires an explicit --fixture (the external cross-check is fixture-scoped)`,
+      );
+      return 2;
+    }
+    let externalExit = 0;
+    if (args.oracle === "both") {
+      // The section-11 leg runs the full registered metric matrix for the
+      // fixture; either leg failing fails the both-run.
+      const metrics = listRegisteredMetrics();
+      let s11Failed = 0;
+      let s11Missed = 0;
+      for (const metric of metrics) {
+        try {
+          const r = await runParityCheck({ metric, fixture: args.fixture });
+          if (!args.json) {
+            if (r.passed) console.log(formatHumanPass(r));
+            else console.error(formatHumanDiff(r));
+          }
+          if (!r.passed) s11Failed += 1;
+        } catch (err) {
+          if (err instanceof RegistryMissError) {
+            s11Missed += 1;
+          } else {
+            throw err;
+          }
+        }
+      }
+      if (s11Missed > 0) externalExit = 2;
+      else if (s11Failed > 0) externalExit = 1;
+    }
+    const outcome = await runExternalMode(args.fixture, args.oracle);
+    if (args.json) {
+      process.stdout.write(`${JSON.stringify(outcome.json, null, 2)}\n`);
+    } else {
+      for (const line of outcome.lines) {
+        if (line.includes(": FAIL") || line.includes("ZERO covered")) {
+          console.error(line);
+        } else {
+          console.log(line);
+        }
+      }
+    }
+    // Worst exit wins: a missing-registry (2) or any failure (≥1) on
+    // either leg surfaces.
+    return Math.max(externalExit, outcome.exitCode);
   }
 
   const pairs: { metric: string; fixture: string }[] = [];

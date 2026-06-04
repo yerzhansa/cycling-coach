@@ -1,0 +1,28 @@
+{
+  "athlete": "curve-equipped",
+  "frozen_now": "2026-06-04T12:00:00",
+  "metric": "sustainability_hr_mean_max",
+  "oracle": "external",
+  "oracle_arch": "x86_64",
+  "oracle_host_os": "macOS 26.2",
+  "oracle_version": "3.7.1",
+  "value": {
+    "anchors_s": [
+      300,
+      600,
+      1200,
+      1800,
+      3600,
+      5400,
+      7200
+    ],
+    "mean_max": {
+      "1200": 171.07416666666666,
+      "300": 176.77666666666667,
+      "3600": 162.70444444444445,
+      "60": 181.73333333333332
+    },
+    "unit": "bpm",
+    "window_id": "r.2026-04-24.2026-06-04"
+  }
+}
