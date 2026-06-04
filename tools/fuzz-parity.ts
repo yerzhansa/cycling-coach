@@ -86,9 +86,13 @@ function parseArgs(argv: string[]): Args {
 
 // The Pyodide prologue: stub `requests`, freeze `datetime` to the anchor,
 // exec the upstream source, then expose `compute(fixture_json)` returning the
-// full derived-metrics dict. Mirrors the setup in `tools/snapshot-section-11.ts`
-// (kept inline so the loop can call `compute` thousands of times after a
-// single `exec`).
+// derived-metrics dict augmented with the same hoist surface the snapshot
+// harness emits — three value-emitting hoists (the per-activity has_intervals
+// and effort_response_signal classifier maps, and the weight_signal block) plus
+// the exploded capability.<sub> sibling keys, none of which
+// `_calculate_derived_metrics` returns directly. Mirrors the setup in
+// `tools/snapshot-section-11.ts` (kept inline so the loop can call `compute`
+// thousands of times after a single `exec`).
 const ORACLE_PROLOGUE = `
 import sys, json, types
 from datetime import datetime, timedelta
@@ -241,12 +245,96 @@ def compute(fixture_json):
             vo2max=_vo2, formatted_planned_workouts=[], race_calendar=None, power_curve_data=_pcurves,
             power_curve_dates=_pcd, hr_curve_data=_hcurves, sustainability_curves=_scurves or {}, sustainability_window=_sw,
             sport_settings=_ss, icu_weight=lw.get("weight"))
+
+        # === has_intervals per-activity classifier ===
+        # Hoisted from _format_activities (sync.py:7866-7873): has_intervals is
+        # true for an activity iff its interval list carries at least one
+        # type=="WORK" segment. _calculate_derived_metrics never returns this
+        # key, so the snapshot harness surfaces it as a top-level derived key;
+        # mirror that here or the fuzz oracle emits nothing and the '?? null'
+        # mask compares the real TS map against null.
+        #
+        # Reparse the raw fixture JSON rather than reading the _TrackedDict: the
+        # intervals lookup is a separate API surface the tracker has nothing to
+        # assert on, and branch (e) of the predicate — an entry present without
+        # an 'intervals' key — would otherwise log a spurious missing-key event
+        # on _entry.get('intervals'). Iterate every activity (not the 7d/28d
+        # window) to match the harness.
+        _raw_fixture = json.loads(fixture_json)
+        _intervals_raw = _raw_fixture.get("intervals") or {}
+        _has_intervals = {}
+        for _act in _raw_fixture.get("activities", []):
+            if not isinstance(_act, dict): continue
+            _act_id = str(_act.get("id"))
+            _entry = _intervals_raw.get(_act_id)
+            _flag = False
+            if _entry:
+                for _seg in (_entry.get("intervals") or []):
+                    if isinstance(_seg, dict) and _seg.get("type") == "WORK":
+                        _flag = True
+                        break
+            _has_intervals[_act_id] = _flag
+        # Explicit pre-sort keeps the per-activity-map key order legible at the
+        # point of construction; json.dumps(sort_keys=True) re-sorts globally.
+        derived["has_intervals"] = {k: _has_intervals[k] for k in sorted(_has_intervals.keys())}
+
+        # === effort_response_signal per-activity classifier ===
+        # Hoisted from _format_activities (sync.py:7858-7860): each activity's
+        # (icu_intensity, icu_rpe) pair is classified via
+        # _classify_effort_response into positive/neutral/negative or None. As
+        # with has_intervals, reparse the raw fixture so the icu_intensity /
+        # icu_rpe .get() calls on activities lacking those fields don't log
+        # spurious missing-key events and trip a false contract violation.
+        _effort_response = {}
+        for _act in _raw_fixture.get("activities", []):
+            if not isinstance(_act, dict): continue
+            _act_id = str(_act.get("id"))
+            _effort_response[_act_id] = sync._classify_effort_response(
+                _act.get("icu_intensity"), _act.get("icu_rpe"))
+        derived["effort_response_signal"] = {k: _effort_response[k] for k in sorted(_effort_response.keys())}
+
+        # === weight_signal (v3.112) ===
+        # Hoisted from sync.py:2746-2752 outside _calculate_derived_metrics; the
+        # upstream assigns the result to data["current_status"]["weight"], so
+        # _calculate_derived_metrics never returns it. Surface it as a top-level
+        # derived key or the fuzz oracle emits nothing and the '?? null' mask
+        # compares the real TS object against null.
+        #
+        # _load_ftp_history is monkeypatched to read the raw fixture's
+        # ftp_history_indoor / ftp_history_outdoor records instead of disk — the
+        # production helper reads ftp_history.json from cwd, which is neither
+        # portable nor reproducible here. compute() builds a fresh IntervalsSync
+        # per call, so the per-call patch is safe. Reads come from _raw_fixture
+        # (not the _TrackedDict) so empty / absent history dicts don't log
+        # spurious missing-key events inside _build_weight_signal.
+        _raw_ftp_indoor = _raw_fixture.get("ftp_history_indoor") or {}
+        _raw_ftp_outdoor = _raw_fixture.get("ftp_history_outdoor") or {}
+        sync._load_ftp_history = lambda: {"indoor": _raw_ftp_indoor, "outdoor": _raw_ftp_outdoor}
+        _raw_current_ftp_outdoor = _raw_fixture.get("current_ftp_outdoor")
+        _raw_eftp = _raw_fixture.get("eftp")
+        _weight_sport_settings = {"cycling": {"ftp": _raw_current_ftp_outdoor}} if _raw_current_ftp_outdoor else {}
+        _weight_power_model = {"eftp": _raw_eftp} if _raw_eftp else {}
+        _raw_wellness = _raw_fixture.get("wellness") or []
+        _weight_signal = sync._build_weight_signal(_raw_wellness, _weight_sport_settings, _weight_power_model, None)
+        # Strip the display sub-dict — out of scope, so the gate doesn't pin it.
+        if _weight_signal and "display" in _weight_signal:
+            del _weight_signal["display"]
+        derived["weight_signal"] = _weight_signal
+
         unallowed = sorted({
             p for p in _TRACKED_MISSING
             if _normalize_path(p) not in _ALLOWED_OPTIONAL_PATHS
         })
         if unallowed:
             return json.dumps({"__contract_violation__": {"missing_keys": unallowed}})
+        # Explode the capability dict into capability.<sub> sibling keys so the
+        # parity gate can assert each sub-key as its own one-metric oracle.
+        # Runs after the contract-violation guard so a violation still
+        # short-circuits without emitting partial capability keys. list(...)
+        # snapshots the items before mutating derived during iteration.
+        if isinstance(derived.get("capability"), dict):
+            for _sub, _val in list(derived["capability"].items()):
+                derived[f"capability.{_sub}"] = _val
         return json.dumps(derived, default=str, sort_keys=True)
     except Exception as e:
         return json.dumps({"__error__": f"{type(e).__name__}: {e}"})
