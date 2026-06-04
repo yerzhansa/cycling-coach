@@ -1,5 +1,6 @@
 import type {
   Activity,
+  ActivityStreams,
   AthleteSettings,
   FixtureShape,
   HrCurveData,
@@ -146,4 +147,15 @@ export function getSustainabilityCurves(
   input: MetricInput,
 ): Record<string, SustainabilityFamilyCurves> {
   return input.fixture.sustainability_curves ?? {};
+}
+
+// The per-second stream record bundle, keyed by `String(activity.id)`. The
+// dfa-profile path joins this back to the activities array (both sides coerce
+// id to string), runs each qualifying record through the per-session DFA block,
+// and reads the result as the trailing-window source. Its presence gates the
+// whole profile — the harness leaves the upstream's `_intervals_data` empty when
+// no stream record carries a `dfa_a1` channel, so absent streams reproduce the
+// null profile byte-for-byte. Returns the empty record when absent.
+export function getStreams(input: MetricInput): Record<string, ActivityStreams> {
+  return input.fixture.streams ?? {};
 }

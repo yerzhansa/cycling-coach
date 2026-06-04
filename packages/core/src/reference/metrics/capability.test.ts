@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildDfaBlock,
   compareTid,
+  computeDfaA1Profile,
   computeDurability,
   computeEfficiencyFactor,
   computeHrrc,
@@ -11,6 +13,7 @@ import {
 } from "./capability.js";
 import type { MetricInput } from "./metric-input.js";
 import type {
+  ActivityStreams,
   PowerCurveData,
   SustainabilityFamilyCurves,
 } from "../schemas/inputs.js";
@@ -898,5 +901,240 @@ describe("computeSustainabilityProfile", () => {
       note: "No sport families produced valid sustainability data.",
       window: { days: 42, start: "2026-04-24", end: "2026-06-04" },
     });
+  });
+});
+
+// ─── DFA a1 profile ─────────────────────────────────────────────────────────
+
+interface DfaActivityIn {
+  id: number;
+  start_date_local: string;
+  type?: string;
+  name?: string;
+  moving_time?: number;
+  elapsed_time?: number;
+}
+
+function dfaInput(opts: {
+  activities: DfaActivityIn[];
+  streams?: Record<string, ActivityStreams>;
+  frozenNow?: string;
+}): MetricInput {
+  const { activities, streams, frozenNow = "2026-06-04T12:00:00" } = opts;
+  return {
+    fixture: {
+      activities: activities.map((a) => ({
+        moving_time: 1800,
+        elapsed_time: 1800,
+        type: "Ride",
+        ...a,
+      })),
+      wellness: [],
+      ftp_history: [],
+      ...(streams ? { streams } : {}),
+    },
+    frozenNow,
+  } as unknown as MetricInput;
+}
+
+// Reproduces one synthetic dfa-equipped stream: 1800 samples split 600/600/600
+// across dfa_a1 = 1.0 / 0.75 / 0.5, with matching HR (138/152/166) and watts
+// (175/218/255) plateaus and zero artifacts — a sufficient, steady cycling
+// session. The 1.0 plateau lands in the LT1 crossing band (0.95-1.05), the 0.5
+// plateau in the LT2 band (0.45-0.55), each well past the 60s dwell gate.
+function syntheticDfaStream(): ActivityStreams {
+  const rep = (v: number, n: number): number[] => Array.from({ length: n }, () => v);
+  return {
+    dfa_a1: [...rep(1.0, 600), ...rep(0.75, 600), ...rep(0.5, 600)],
+    artifacts: rep(0, 1800),
+    heartrate: [...rep(138, 600), ...rep(152, 600), ...rep(166, 600)],
+    watts: [...rep(175, 600), ...rep(218, 600), ...rep(255, 600)],
+  };
+}
+
+describe("buildDfaBlock", () => {
+  it("absent dfa_a1 channel → null (no AlphaHRV recording)", () => {
+    expect(buildDfaBlock({ heartrate: [140, 141], watts: [200, 201] })).toBeNull();
+    expect(buildDfaBlock({ dfa_a1: [] })).toBeNull();
+  });
+
+  it("too short → block with quality.sufficient=false and all-null rollups", () => {
+    // 100 valid seconds < DFA_MIN_DURATION_SECS (1200).
+    const block = buildDfaBlock({
+      dfa_a1: Array.from({ length: 100 }, () => 0.8),
+      artifacts: Array.from({ length: 100 }, () => 0),
+    });
+    expect(block).not.toBeNull();
+    expect(block!.quality.sufficient).toBe(false);
+    expect(block!.quality.valid_secs).toBe(100);
+    expect(block!.avg).toBeNull();
+    expect(block!.tiz_lt1_transition).toBeNull();
+    expect(block!.lt1_crossing).toBeNull();
+  });
+
+  it("sentinel zeros (<0.01) and high-artifact seconds are filtered jointly", () => {
+    const block = buildDfaBlock({
+      dfa_a1: [0.0, 0.8, 0.8, 0.8],
+      artifacts: [0, 0, 99, 0], // 3rd second dropped on artifact gate
+    });
+    // 2 valid of 4 → valid_pct round(100*2/4,1)=50.0; artifact_rate_avg
+    // round((0+0+99+0)/4,2)=24.75 over all 4 (artifact sum counts every second).
+    expect(block!.quality.valid_secs).toBe(2);
+    expect(block!.quality.valid_pct).toBe(50);
+    expect(block!.quality.artifact_rate_avg).toBe(24.75);
+  });
+
+  it("sufficient steady session → avg + band/crossing rollups (banker's rounding)", () => {
+    const block = buildDfaBlock(syntheticDfaStream());
+    expect(block!.quality.sufficient).toBe(true);
+    expect(block!.quality.valid_pct).toBe(100);
+    // avg = round((600·1 + 600·0.75 + 600·0.5)/1800, 3) = round(0.75, 3)
+    expect(block!.avg).toBe(0.75);
+    // tiz bands: 1.0 → below_lt1 is d>1.0 (none); 1.0 falls in lt1_transition
+    // (0.75<=d<=1.0) along with the 0.75 plateau → 1200/1800 = 66.7%.
+    expect(block!.tiz_below_lt1).toBeNull();
+    expect(block!.tiz_lt1_transition!.pct).toBe(66.7);
+    expect(block!.tiz_transition_lt2!.pct).toBe(33.3); // the 0.5 plateau
+    expect(block!.tiz_above_lt2).toBeNull();
+    // LT1 crossing band 0.95-1.05 catches the 1.0 plateau (600s ≥ 60 dwell).
+    expect(block!.lt1_crossing).toEqual({ secs_in_band: 600, avg_hr: 138, avg_watts: 175 });
+    // LT2 crossing band 0.45-0.55 catches the 0.5 plateau.
+    expect(block!.lt2_crossing).toEqual({ secs_in_band: 600, avg_hr: 166, avg_watts: 255 });
+  });
+});
+
+describe("computeDfaA1Profile", () => {
+  it("no streams → null profile (the 12-fixture branch)", () => {
+    expect(
+      computeDfaA1Profile(
+        dfaInput({ activities: [{ id: 1, start_date_local: "2026-06-03T07:00:00" }] }),
+      ),
+    ).toBeNull();
+  });
+
+  it("streams present but no dfa_a1 channel anywhere → null", () => {
+    expect(
+      computeDfaA1Profile(
+        dfaInput({
+          activities: [{ id: 1, start_date_local: "2026-06-03T07:00:00" }],
+          streams: { "1": { heartrate: [140], watts: [200] } },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("seven sufficient cycling sessions → high confidence, watts split outdoor", () => {
+    const dates = [
+      "2026-05-28",
+      "2026-05-29",
+      "2026-05-30",
+      "2026-05-31",
+      "2026-06-01",
+      "2026-06-02",
+      "2026-06-03",
+    ];
+    const ids = [90201, 90202, 90203, 90204, 90205, 90206, 90207];
+    const activities = ids.map((id, i) => ({
+      id,
+      start_date_local: `${dates[i]}T07:00:00`,
+      type: "Ride",
+      name: "synthetic-dfa-ride",
+    }));
+    const streams: Record<string, ActivityStreams> = {};
+    for (const id of ids) streams[String(id)] = syntheticDfaStream();
+
+    const profile = computeDfaA1Profile(dfaInput({ activities, streams }))!;
+
+    expect(profile.latest_session).toMatchObject({
+      activity_id: 90207,
+      date: "2026-06-03",
+      sport: "Ride",
+      validated: true,
+      avg: 0.75,
+      drift_delta: -0.5,
+      drift_interpretable: true,
+      quality_pct: 100,
+      sufficient: true,
+      tiz_split_pct: { below_lt1: 0, lt1_transition: 66.7, transition_lt2: 33.3, above_lt2: 0 },
+    });
+
+    const cycling = profile.trailing_by_sport.cycling!;
+    expect(cycling.confidence).toBe("high");
+    expect(cycling.n_sessions).toBe(7);
+    expect(cycling.avg_dfa_a1).toBe(0.75);
+    expect(cycling.date_range).toEqual(["2026-05-28", "2026-06-03"]);
+    expect(cycling.validated).toBe(true);
+    expect(cycling).not.toHaveProperty("note");
+    expect(cycling.lt1_estimate).toEqual({
+      hr: 138,
+      watts_outdoor: 175,
+      watts_indoor: null,
+      n_sessions: 7,
+      n_sessions_outdoor: 7,
+      n_sessions_indoor: 0,
+    });
+    expect(cycling.lt2_estimate).toEqual({
+      hr: 166,
+      watts_outdoor: 255,
+      watts_indoor: null,
+      n_sessions: 7,
+      n_sessions_outdoor: 7,
+      n_sessions_indoor: 0,
+    });
+  });
+
+  it("non-cycling family → pooled watts + validated=false with the informational note", () => {
+    const dates = [
+      "2026-05-28",
+      "2026-05-29",
+      "2026-05-30",
+      "2026-05-31",
+      "2026-06-01",
+      "2026-06-02",
+    ];
+    const activities = dates.map((d, i) => ({
+      id: 70001 + i,
+      start_date_local: `${d}T07:00:00`,
+      type: "Rowing",
+      name: "synthetic-dfa-row",
+    }));
+    const streams: Record<string, ActivityStreams> = {};
+    for (const a of activities) streams[String(a.id)] = syntheticDfaStream();
+
+    const profile = computeDfaA1Profile(dfaInput({ activities, streams }))!;
+    const rowing = profile.trailing_by_sport.rowing!;
+    expect(rowing.validated).toBe(false);
+    expect(rowing.confidence).toBe("high"); // 6 crossing sessions
+    const lt1 = rowing.lt1_estimate as { hr: number; watts: number; n_sessions: number };
+    expect(lt1).toEqual({ hr: 138, watts: 175, n_sessions: 6 });
+    expect(rowing.note).toContain("cycling-validated");
+    // latest_session for a non-cycling sport is validated=false too.
+    expect(profile.latest_session.validated).toBe(false);
+  });
+
+  it("only insufficient sessions → latest_session sufficient=false, no trailing block", () => {
+    // 100 valid seconds is below the 1200s sufficiency floor.
+    const shortStream: ActivityStreams = {
+      dfa_a1: Array.from({ length: 100 }, () => 0.8),
+      artifacts: Array.from({ length: 100 }, () => 0),
+      heartrate: Array.from({ length: 100 }, () => 140),
+      watts: Array.from({ length: 100 }, () => 200),
+    };
+    const profile = computeDfaA1Profile(
+      dfaInput({
+        activities: [
+          { id: 1, start_date_local: "2026-06-01T07:00:00", name: "short-a" },
+          { id: 2, start_date_local: "2026-06-03T07:00:00", name: "short-b" },
+        ],
+        streams: { "1": shortStream, "2": shortStream },
+      }),
+    )!;
+    expect(profile.latest_session).toMatchObject({
+      activity_id: 2, // most recent
+      sufficient: false,
+      avg: null,
+      tiz_split_pct: null,
+    });
+    expect(profile.trailing_by_sport).toEqual({});
   });
 });
