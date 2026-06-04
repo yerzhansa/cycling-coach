@@ -400,13 +400,15 @@ external_coverage:
       the same underlying Ride activities the fixture's cycling/hr/Ride
       sustainability block aggregates.
     rationale: |
-      Grounds the fixture's cycling HR sustainability anchors in an
-      independent mean-max computation. The oracle's mean_max map for this
-      quantity carries the HR anchor set {60,300,1200,3600}; the
-      cross-check anchors on the intersection of anchors present in both
-      the oracle map and the fixture block (the fixture's additional
-      600/1800/5400/7200 HR anchors have no oracle counterpart and are not
-      cross-checked). Relation on the shared anchors: fixture == floor(oracle).
+      Grounds the fixture's cycling HR sustainability anchors (input to
+      the ported sustainability_profile capability) in an independent
+      mean-max computation across the full sustainability anchor set
+      {300,600,1200,1800,3600,5400,7200}. Relation: fixture == floor(oracle).
+      This quantity is the one that pinned down the source's gap
+      semantics: HR mean-max bridges only short recording dropouts and
+      zero-fills pauses, which the producer harness mirrors (probe
+      evidence recorded in the harness; long-gap rides overshoot by
+      ~2.5 bpm at the 7200s anchor under naive carry-forward).
 
   # Uncovered: emitted by the external oracle, NOT cross-checked by the gate.
   - quantity: cp_model_peak_power_per_ride
