@@ -5,9 +5,11 @@ import {
   computeDurability,
   computeEfficiencyFactor,
   computeHrrc,
+  computePowerCurveDelta,
   computeTidComparison,
 } from "./capability.js";
 import type { MetricInput } from "./metric-input.js";
+import type { PowerCurveData } from "../schemas/inputs.js";
 
 interface SyntheticActivity {
   id?: string | number;
@@ -489,5 +491,157 @@ describe("compareTid", () => {
       drift: null,
       note: TID_NOTE_INSUFFICIENT,
     });
+  });
+});
+
+const PCD_NOTE =
+  "Compares MMP at 5 anchor durations (5s neuromuscular, 60s anaerobic, " +
+  "300s MAP, 1200s threshold, 3600s endurance) across two 28d windows. " +
+  "rotation_index = mean(5s,60s pct_change) - mean(1200s,3600s pct_change). " +
+  "Positive = sprint-biased gains, negative = endurance-biased. " +
+  "300s excluded from rotation (transitional). " +
+  "Null when either window has fewer than 3 valid anchor durations.";
+
+// frozenNow=2026-06-04 → current window r.2026-05-08.2026-06-04 (now-27..today),
+// previous window r.2026-04-10.2026-05-07 (now-55..now-28). Matches the
+// curve-equipped oracle snapshot's window math.
+const PCD_FROZEN_NOW = "2026-06-04T12:00:00";
+const PCD_CURRENT_ID = "r.2026-05-08.2026-06-04";
+const PCD_PREVIOUS_ID = "r.2026-04-10.2026-05-07";
+
+function powerInput(
+  powerCurves: PowerCurveData | undefined,
+  frozenNow = PCD_FROZEN_NOW,
+): MetricInput {
+  return {
+    fixture: { activities: [], ...(powerCurves ? { power_curves: powerCurves } : {}) },
+    frozenNow,
+  } as unknown as MetricInput;
+}
+
+describe("computePowerCurveDelta", () => {
+  it("absent power_curves → dateless null block (the 12-fixture branch)", () => {
+    expect(computePowerCurveDelta(powerInput(undefined))).toEqual({
+      window_days: 28,
+      anchors: null,
+      rotation_index: null,
+      note: "Insufficient power data in one or both windows.",
+    });
+  });
+
+  it("empty list → null block but WITH window keys (curves present gates the dates)", () => {
+    expect(computePowerCurveDelta(powerInput({ list: [] }))).toEqual({
+      window_days: 28,
+      current_window: { start: "2026-05-08", end: "2026-06-04" },
+      previous_window: { start: "2026-04-10", end: "2026-05-07" },
+      anchors: null,
+      rotation_index: null,
+      note: "Insufficient power data in one or both windows.",
+    });
+  });
+
+  it("missing-id curve is a silent null branch, named per which window is absent", () => {
+    const result = computePowerCurveDelta(
+      powerInput({
+        list: [{ id: PCD_CURRENT_ID, secs: [5, 60, 1200, 3600], watts: [600, 300, 190, 170] }],
+      }),
+    );
+    expect(result.anchors).toBeNull();
+    expect(result.rotation_index).toBeNull();
+    expect(result.note).toBe("No power data in previous window(s).");
+    expect(result.current_window).toEqual({ start: "2026-05-08", end: "2026-06-04" });
+  });
+
+  it("populated: per-anchor pct_change + rotation_index match the curve-equipped oracle", () => {
+    const result = computePowerCurveDelta(
+      powerInput({
+        list: [
+          {
+            id: PCD_CURRENT_ID,
+            secs: [5, 60, 300, 1200, 3600],
+            watts: [637, 310, 218, 191, 169],
+          },
+          {
+            id: PCD_PREVIOUS_ID,
+            secs: [5, 60, 300, 1200, 3600],
+            watts: [564, 259, 195, 167, 157],
+          },
+        ],
+      }),
+    );
+    expect(result).toEqual({
+      window_days: 28,
+      current_window: { start: "2026-05-08", end: "2026-06-04" },
+      previous_window: { start: "2026-04-10", end: "2026-05-07" },
+      anchors: {
+        "5s": { current_watts: 637, previous_watts: 564, pct_change: 12.9 },
+        "60s": { current_watts: 310, previous_watts: 259, pct_change: 19.7 },
+        "300s": { current_watts: 218, previous_watts: 195, pct_change: 11.8 },
+        "1200s": { current_watts: 191, previous_watts: 167, pct_change: 14.4 },
+        "3600s": { current_watts: 169, previous_watts: 157, pct_change: 7.6 },
+      },
+      // short mean(12.9,19.7)=16.3, long mean(14.4,7.6)=11.0 → 5.3
+      rotation_index: 5.3,
+      note: PCD_NOTE,
+    });
+  });
+
+  it("zero/null watts → anchor null; pct_change null when either side null", () => {
+    const result = computePowerCurveDelta(
+      powerInput({
+        list: [
+          { id: PCD_CURRENT_ID, secs: [5, 60, 300, 1200, 3600], watts: [600, 0, 218, 191, 169] },
+          { id: PCD_PREVIOUS_ID, secs: [5, 60, 300, 1200, 3600], watts: [564, 259, null, 167, 157] },
+        ],
+      }),
+    );
+    // 60s current=0 → not > 0 → current_watts null → pct_change null
+    expect(result.anchors?.["60s"]).toEqual({
+      current_watts: null,
+      previous_watts: 259,
+      pct_change: null,
+    });
+    // 300s previous=null → previous_watts null → pct_change null
+    expect(result.anchors?.["300s"]).toEqual({
+      current_watts: 218,
+      previous_watts: null,
+      pct_change: null,
+    });
+    // current valid = {5s,300s,1200s,3600s}=4, previous valid = {5s,60s,1200s,3600s}=4 → block survives
+    // but rotation needs 5s,60s,1200s,3600s all non-null; 60s pct_change null → rotation null
+    expect(result.rotation_index).toBeNull();
+  });
+
+  it("block guard: < 3 valid anchors in a window → null block with the count message", () => {
+    const result = computePowerCurveDelta(
+      powerInput({
+        list: [
+          // current window: only 5s and 60s carry watts → 2 valid (< 3)
+          { id: PCD_CURRENT_ID, secs: [5, 60], watts: [600, 300] },
+          { id: PCD_PREVIOUS_ID, secs: [5, 60, 300, 1200, 3600], watts: [564, 259, 195, 167, 157] },
+        ],
+      }),
+    );
+    expect(result.anchors).toBeNull();
+    expect(result.rotation_index).toBeNull();
+    expect(result.note).toBe(
+      "Too few valid anchors (current: 2, previous: 5, need 3+).",
+    );
+  });
+
+  it("anchor absent from secs array → that anchor null, others computed", () => {
+    const result = computePowerCurveDelta(
+      powerInput({
+        list: [
+          // 60s omitted from secs entirely (not a zero, just not present)
+          { id: PCD_CURRENT_ID, secs: [5, 300, 1200, 3600], watts: [637, 218, 191, 169] },
+          { id: PCD_PREVIOUS_ID, secs: [5, 60, 300, 1200, 3600], watts: [564, 259, 195, 167, 157] },
+        ],
+      }),
+    );
+    expect(result.anchors?.["60s"].current_watts).toBeNull();
+    expect(result.anchors?.["5s"].current_watts).toBe(637);
+    // 60s pct_change null → rotation null even though block guard (4 valid each) passes
+    expect(result.rotation_index).toBeNull();
   });
 });

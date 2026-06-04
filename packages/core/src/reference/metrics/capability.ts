@@ -11,11 +11,17 @@
  * See `NOTICE.md` for upstream attribution.
  */
 
-import { getActivities, getActivitiesInWindow, type MetricInput } from "./metric-input.js";
+import { isoDateDaysBefore } from "./date-helpers.js";
+import {
+  getActivities,
+  getActivitiesInWindow,
+  getPowerCurves,
+  type MetricInput,
+} from "./metric-input.js";
 import { computeSeilerTid, computeSeilerTid28d, type SeilerTid } from "./distribution.js";
-import { mean } from "./statistics.js";
+import { mean, pythonSum } from "./statistics.js";
 import { roundHalfEven } from "./rounding.js";
-import type { Activity } from "../schemas/inputs.js";
+import type { Activity, PowerCurveData } from "../schemas/inputs.js";
 
 export interface DurabilitySignal {
   mean_decoupling_7d: number | null;
@@ -345,4 +351,190 @@ export function compareTid(
  */
 export function computeTidComparison(input: MetricInput): TidComparisonSignal {
   return compareTid(computeSeilerTid(input), computeSeilerTid28d(input));
+}
+
+export interface PowerCurveAnchor {
+  current_watts: number | null;
+  previous_watts: number | null;
+  pct_change: number | null;
+}
+
+export interface PowerCurveWindow {
+  start: string;
+  end: string;
+}
+
+export interface PowerCurveDelta {
+  window_days: 28;
+  current_window?: PowerCurveWindow;
+  previous_window?: PowerCurveWindow;
+  anchors: Record<string, PowerCurveAnchor> | null;
+  rotation_index: number | null;
+  note: string;
+}
+
+const POWER_CURVE_ANCHORS: Record<string, number> = {
+  "5s": 5,
+  "60s": 60,
+  "300s": 300,
+  "1200s": 1200,
+  "3600s": 3600,
+};
+
+const POWER_CURVE_DELTA_NOTE =
+  "Compares MMP at 5 anchor durations (5s neuromuscular, 60s anaerobic, " +
+  "300s MAP, 1200s threshold, 3600s endurance) across two 28d windows. " +
+  "rotation_index = mean(5s,60s pct_change) - mean(1200s,3600s pct_change). " +
+  "Positive = sprint-biased gains, negative = endurance-biased. " +
+  "300s excluded from rotation (transitional). " +
+  "Null when either window has fewer than 3 valid anchor durations.";
+
+/**
+ * Power curve delta — the shift in mean-maximal power at anchor durations
+ * across two adjacent 28-day windows, plus a `rotation_index` summarising
+ * whether the gains are sprint- (positive) or endurance-biased (negative).
+ *
+ * The upstream derives `power_curve_dates` from the frozen clock ONLY when it
+ * fetched power curves (the snapshot harness mirrors that gate), so
+ * `powerCurveDates` here stays null whenever the fixture omits `power_curves`
+ * — reproducing the dateless null block byte-for-byte. Curves are matched by
+ * the `r.{start}.{end}` id string, never by list position; a missing id is a
+ * silent null branch, not an error.
+ *
+ * Upstream source mirrored line-by-line: `sync.py:4297-4439`
+ * (`_calculate_power_curve_delta`) with the window math wired by the harness
+ * at `sync.py:2465-2469` (win1 = now-27..today, win2 = now-55..now-28).
+ * See `NOTICE.md` for upstream attribution.
+ *
+ * @see Pinot, J., & Grappe, F. (2011). The record power profile to assess
+ *      performance in elite cyclists. Int J Sports Med 32(11):839-844.
+ */
+export function computePowerCurveDelta(input: MetricInput): PowerCurveDelta {
+  const powerCurveData = getPowerCurves(input);
+  const powerCurveDates = powerCurveDatesFrom(input.frozenNow, powerCurveData);
+
+  const nullBlock = (note = "Insufficient power data in one or both windows."): PowerCurveDelta => {
+    const dates: Pick<PowerCurveDelta, "current_window" | "previous_window"> = {};
+    if (powerCurveDates) {
+      dates.current_window = { start: powerCurveDates[0], end: powerCurveDates[1] };
+      dates.previous_window = { start: powerCurveDates[2], end: powerCurveDates[3] };
+    }
+    return {
+      window_days: 28,
+      ...dates,
+      anchors: null,
+      rotation_index: null,
+      note,
+    };
+  };
+
+  if (!powerCurveData || !powerCurveDates) {
+    return nullBlock();
+  }
+
+  const curvesList = powerCurveData.list ?? [];
+  if (curvesList.length === 0) {
+    return nullBlock();
+  }
+
+  const [pcStart1, pcEnd1, pcStart2, pcEnd2] = powerCurveDates;
+  const currentId = `r.${pcStart1}.${pcEnd1}`;
+  const previousId = `r.${pcStart2}.${pcEnd2}`;
+
+  const curvesById = new Map<string, PowerCurveData["list"][number]>();
+  for (const c of curvesList) {
+    if (!curvesById.has(c.id)) curvesById.set(c.id, c);
+  }
+  const currentCurve = curvesById.get(currentId);
+  const previousCurve = curvesById.get(previousId);
+
+  if (!currentCurve || !previousCurve) {
+    const missing: string[] = [];
+    if (!currentCurve) missing.push("current");
+    if (!previousCurve) missing.push("previous");
+    return nullBlock(`No power data in ${missing.join(" and ")} window(s).`);
+  }
+
+  const anchors: Record<string, PowerCurveAnchor> = {};
+  for (const [label, durationSecs] of Object.entries(POWER_CURVE_ANCHORS)) {
+    const curSecs = currentCurve.secs ?? [];
+    const curWatts = currentCurve.watts ?? [];
+    const prevSecs = previousCurve.secs ?? [];
+    const prevWatts = previousCurve.watts ?? [];
+
+    let curW: number | null = null;
+    if (curSecs.includes(durationSecs)) {
+      const idx = curSecs.indexOf(durationSecs);
+      const val = idx < curWatts.length ? curWatts[idx] : null;
+      if (val !== null && val !== undefined && val > 0) {
+        curW = val;
+      }
+    }
+
+    let prevW: number | null = null;
+    if (prevSecs.includes(durationSecs)) {
+      const idx = prevSecs.indexOf(durationSecs);
+      const val = idx < prevWatts.length ? prevWatts[idx] : null;
+      if (val !== null && val !== undefined && val > 0) {
+        prevW = val;
+      }
+    }
+
+    let pctChange: number | null = null;
+    if (curW !== null && prevW !== null) {
+      pctChange = roundHalfEven(((curW - prevW) / prevW) * 100, 1);
+    }
+
+    anchors[label] = {
+      current_watts: curW,
+      previous_watts: prevW,
+      pct_change: pctChange,
+    };
+  }
+
+  const currentValid = Object.values(anchors).filter((a) => a.current_watts !== null).length;
+  const previousValid = Object.values(anchors).filter((a) => a.previous_watts !== null).length;
+
+  if (currentValid < 3 || previousValid < 3) {
+    return nullBlock(
+      `Too few valid anchors (current: ${currentValid}, previous: ${previousValid}, need 3+).`,
+    );
+  }
+
+  const shortChanges = [anchors["5s"].pct_change, anchors["60s"].pct_change];
+  const longChanges = [anchors["1200s"].pct_change, anchors["3600s"].pct_change];
+
+  let rotationIndex: number | null = null;
+  if ([...shortChanges, ...longChanges].every((v) => v !== null)) {
+    const shortMean = pythonSum(shortChanges as number[]) / shortChanges.length;
+    const longMean = pythonSum(longChanges as number[]) / longChanges.length;
+    rotationIndex = roundHalfEven(shortMean - longMean, 1);
+  }
+
+  return {
+    window_days: 28,
+    current_window: { start: pcStart1, end: pcEnd1 },
+    previous_window: { start: pcStart2, end: pcEnd2 },
+    anchors,
+    rotation_index: rotationIndex,
+    note: POWER_CURVE_DELTA_NOTE,
+  };
+}
+
+// The four-date window tuple the harness passes as `power_curve_dates`,
+// derived from the frozen clock — present only when the fixture carried
+// `power_curves` (the upstream fetch gate, `sync.py:2465-2469`):
+// current = [now-27, today], previous = [now-55, now-28].
+function powerCurveDatesFrom(
+  frozenNow: string,
+  powerCurveData: PowerCurveData | null,
+): [string, string, string, string] | null {
+  if (!powerCurveData) return null;
+  const today = frozenNow.slice(0, 10);
+  return [
+    isoDateDaysBefore(frozenNow, 27),
+    today,
+    isoDateDaysBefore(frozenNow, 55),
+    isoDateDaysBefore(frozenNow, 28),
+  ];
 }

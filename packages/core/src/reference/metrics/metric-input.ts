@@ -3,6 +3,7 @@ import type {
   AthleteSettings,
   FixtureShape,
   PlannedEvent,
+  PowerCurveData,
   WellnessDay,
 } from "../schemas/inputs.js";
 import { isoDateDaysBefore } from "./date-helpers.js";
@@ -114,4 +115,12 @@ export function getAthlete(input: MetricInput): AthleteSettings | null {
 // the latest row within the 28-day window from this surface.
 export function getWellness(input: MetricInput): WellnessDay[] {
   return input.fixture.wellness;
+}
+
+// The `{list}` power mean-max curve envelope the upstream fetches and passes
+// as the `power_curve_data` kwarg. Its presence gates the delta window math:
+// the harness derives `power_curve_dates` from frozenNow ONLY when this key
+// is present, so absent curves reproduce the null block without window keys.
+export function getPowerCurves(input: MetricInput): PowerCurveData | null {
+  return input.fixture.power_curves ?? null;
 }
