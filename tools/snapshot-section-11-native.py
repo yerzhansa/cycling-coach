@@ -231,8 +231,8 @@ def main() -> int:
 
     bench_none = (None, None, None)
 
-    # Pass-through read of the F11 fixture extensions — mirror the pyodide
-    # harness. Each field is optional on every committed fixture; absent fields
+    # Pass-through read of the event/benchmark fixture extensions — mirror the
+    # pyodide harness. Each field is optional on every committed fixture; absent fields
     # reproduce the prior hardcoded null branch, so fixtures carrying none stay
     # byte-identical, while populated branches (past_events → consistency_index,
     # current_ftp_* + ftp_history_* → benchmark_*) actually run. `fixture` is a
