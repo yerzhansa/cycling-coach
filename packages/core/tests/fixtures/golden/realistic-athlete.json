@@ -46,9 +46,13 @@
       ],
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": {
+        "average_watts": null
+      },
       "icu_rpe": null,
       "decoupling": -4.7151833,
       "icu_efficiency_factor": 1.084507,
+      "icu_variability_index": 1.0694444,
       "fitnessAtEnd": 28.78709,
       "fatigueAtEnd": 53.354916
     },
@@ -65,9 +69,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": null,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 27.312151,
       "fatigueAtEnd": 47.727512
     },
@@ -117,9 +123,11 @@
       ],
       "paired_event_id": 12345,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": null,
       "decoupling": -5.1646986,
       "icu_efficiency_factor": 1.0882353,
+      "icu_variability_index": 1.0496454,
       "fitnessAtEnd": 27.970243,
       "fatigueAtEnd": 49.37488
     },
@@ -169,9 +177,11 @@
       ],
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": null,
       "decoupling": -3.520694,
       "icu_efficiency_factor": 1,
+      "icu_variability_index": 1.0465117,
       "fitnessAtEnd": 27.198479,
       "fatigueAtEnd": 47.743237
     },
@@ -221,9 +231,13 @@
       ],
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": {
+        "average_watts": null
+      },
       "icu_rpe": null,
       "decoupling": -5.401834,
       "icu_efficiency_factor": 1.0344827,
+      "icu_variability_index": 1.0563381,
       "fitnessAtEnd": 27.443367,
       "fatigueAtEnd": 58.98432
     },
@@ -273,9 +287,13 @@
       ],
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": {
+        "average_watts": null
+      },
       "icu_rpe": null,
       "decoupling": -14.990025,
       "icu_efficiency_factor": 1.0138888,
+      "icu_variability_index": 1.0656934,
       "fitnessAtEnd": 24.389515,
       "fatigueAtEnd": 46.958954
     },
@@ -292,9 +310,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": null,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 23.025473,
       "fatigueAtEnd": 41.73144
     },
@@ -344,9 +364,13 @@
       ],
       "paired_event_id": 12345,
       "pace_zone_times": null,
+      "icu_hrr": {
+        "average_watts": null
+      },
       "icu_rpe": null,
       "decoupling": -4.877258,
       "icu_efficiency_factor": 1.028777,
+      "icu_variability_index": 1.0592593,
       "fitnessAtEnd": 23.580276,
       "fatigueAtEnd": 43.532978
     },
@@ -396,9 +420,13 @@
       ],
       "paired_event_id": 12345,
       "pace_zone_times": null,
+      "icu_hrr": {
+        "average_watts": null
+      },
       "icu_rpe": null,
       "decoupling": 2.8127115,
       "icu_efficiency_factor": 0.9929078,
+      "icu_variability_index": 1.0447761,
       "fitnessAtEnd": 22.805597,
       "fatigueAtEnd": 44.112385
     },
@@ -448,9 +476,11 @@
       ],
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": null,
       "decoupling": -4.818208,
       "icu_efficiency_factor": 1.0212766,
+      "icu_variability_index": 1.0510949,
       "fitnessAtEnd": 21.537523,
       "fatigueAtEnd": 43.806248
     },
@@ -467,9 +497,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": null,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 20.128857,
       "fatigueAtEnd": 38.248154
     },
@@ -519,9 +551,13 @@
       ],
       "paired_event_id": 12345,
       "pace_zone_times": null,
+      "icu_hrr": {
+        "average_watts": null
+      },
       "icu_rpe": null,
       "decoupling": -0.509351,
       "icu_efficiency_factor": 1.0070423,
+      "icu_variability_index": 1.0437956,
       "fitnessAtEnd": 20.613867,
       "fatigueAtEnd": 41.357563
     },
@@ -538,9 +574,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": 1,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 19.25523,
       "fatigueAtEnd": 35.884132
     },
@@ -590,9 +628,11 @@
       ],
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": null,
       "decoupling": 1.5639164,
       "icu_efficiency_factor": 0.8196721,
+      "icu_variability_index": 1.010101,
       "fitnessAtEnd": 19.092712,
       "fatigueAtEnd": 37.40199
     },
@@ -609,9 +649,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": 1,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 19.191328,
       "fatigueAtEnd": 40.84215
     },
@@ -661,9 +703,13 @@
       ],
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": {
+        "average_watts": null
+      },
       "icu_rpe": 1,
       "decoupling": -0.9092801,
       "icu_efficiency_factor": 1.04,
+      "icu_variability_index": 1.0833334,
       "fitnessAtEnd": 18.400795,
       "fatigueAtEnd": 39.128696
     },
@@ -680,9 +726,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": 1,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 16.50693,
       "fatigueAtEnd": 30.24169
     },
@@ -699,9 +747,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": null,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 16.621067,
       "fatigueAtEnd": 35.282864
     },
@@ -751,9 +801,13 @@
       ],
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": {
+        "average_watts": null
+      },
       "icu_rpe": null,
       "decoupling": -8.35423,
       "icu_efficiency_factor": 1.0140845,
+      "icu_variability_index": 1.0746269,
       "fitnessAtEnd": 16.322794,
       "fatigueAtEnd": 36.247692
     },
@@ -770,9 +824,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": null,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 14.668,
       "fatigueAtEnd": 28.761044
     },
@@ -789,9 +845,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": 1,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 15.021429,
       "fatigueAtEnd": 31.027822
     },
@@ -841,9 +899,13 @@
       ],
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": {
+        "average_watts": null
+      },
       "icu_rpe": null,
       "decoupling": -5.821107,
       "icu_efficiency_factor": 0.9868421,
+      "icu_variability_index": 1.0638298,
       "fitnessAtEnd": 14.660517,
       "fatigueAtEnd": 31.18566
     },
@@ -860,9 +922,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": null,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 12.957295,
       "fatigueAtEnd": 24.138712
     },
@@ -912,9 +976,13 @@
       ],
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": {
+        "average_watts": null
+      },
       "icu_rpe": null,
       "decoupling": -2.744324,
       "icu_efficiency_factor": 1,
+      "icu_variability_index": 1.1230769,
       "fitnessAtEnd": 13.269505,
       "fatigueAtEnd": 25.234968
     },
@@ -964,9 +1032,11 @@
       ],
       "paired_event_id": 12345,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": null,
       "decoupling": -7.1944137,
       "icu_efficiency_factor": 0.8881119,
+      "icu_variability_index": 1.0409836,
       "fitnessAtEnd": 11.720525,
       "fatigueAtEnd": 17.814379
     },
@@ -1016,9 +1086,13 @@
       ],
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": {
+        "average_watts": null
+      },
       "icu_rpe": null,
       "decoupling": -3.015162,
       "icu_efficiency_factor": 0.92763156,
+      "icu_variability_index": 1.0681819,
       "fitnessAtEnd": 10.920485,
       "fatigueAtEnd": 13.859039
     },
@@ -1035,9 +1109,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": 1,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 10.21283,
       "fatigueAtEnd": 9.01345
     },
@@ -1054,9 +1130,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": null,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 11.3309965,
       "fatigueAtEnd": 13.236021
     },
@@ -1073,9 +1151,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": 1,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 12.169959,
       "fatigueAtEnd": 13.983252
     },
@@ -1092,9 +1172,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": null,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 12.338198,
       "fatigueAtEnd": 15.539
     },
@@ -1111,9 +1193,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": 1,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 12.635489,
       "fatigueAtEnd": 14.086121
     },
@@ -1130,9 +1214,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": 1,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 12.313469,
       "fatigueAtEnd": 12.256566
     },
@@ -1149,9 +1235,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": 1,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 11.887308,
       "fatigueAtEnd": 9.5317955
     },
@@ -1168,9 +1256,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": 1,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 11.933538,
       "fatigueAtEnd": 7.888329
     },
@@ -1187,9 +1277,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": 1,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 13.917642,
       "fatigueAtEnd": 10.14109
     },
@@ -1206,9 +1298,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": 1,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 14.887822,
       "fatigueAtEnd": 10.407923
     },
@@ -1225,9 +1319,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": 1,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 15.156215,
       "fatigueAtEnd": 9.233241
     },
@@ -1244,9 +1340,11 @@
       "icu_zone_times": null,
       "paired_event_id": null,
       "pace_zone_times": null,
+      "icu_hrr": null,
       "icu_rpe": 1,
       "decoupling": null,
       "icu_efficiency_factor": null,
+      "icu_variability_index": null,
       "fitnessAtEnd": 15.520292,
       "fatigueAtEnd": 8.043082
     }

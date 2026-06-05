@@ -12,19 +12,19 @@
       "mean_decoupling_28d": null,
       "mean_decoupling_7d": null,
       "note": "Steady-state power sessions only (VI <= 1.05, VI > 0, >= 90min, power data). Negative decoupling = strong durability. Trend compares 7d vs 28d mean (+/-1% = stable). Alerts require N28>=5 (alarm) or N7>=3 AND N28>=5 (declining warning) for statistical reliability.",
-      "qualifying_sessions_28d": 0,
+      "qualifying_sessions_28d": 1,
       "qualifying_sessions_7d": 0,
       "reliability_limited": true,
-      "reliability_note": "insufficient qualifying sessions for alert evaluation: 7d N=0 (min 3), 28d N=0 (min 5)",
+      "reliability_note": "insufficient qualifying sessions for alert evaluation: 7d N=0 (min 3), 28d N=1 (min 5)",
       "trend": null
     },
     "efficiency_factor": {
-      "mean_ef_28d": null,
-      "mean_ef_7d": null,
+      "mean_ef_28d": 0.98,
+      "mean_ef_7d": 1.04,
       "note": "Steady-state cycling sessions only (VI <= 1.05, VI > 0, >= 20min, power+HR data). Rising EF = improving aerobic efficiency. Compare like-for-like sessions only — EF varies with intensity. Trend compares 7d vs 28d mean (+/-0.03 = stable).",
-      "qualifying_sessions_28d": 0,
-      "qualifying_sessions_7d": 0,
-      "trend": null
+      "qualifying_sessions_28d": 5,
+      "qualifying_sessions_7d": 2,
+      "trend": "improving"
     },
     "hr_curve_delta": {
       "anchors": null,
