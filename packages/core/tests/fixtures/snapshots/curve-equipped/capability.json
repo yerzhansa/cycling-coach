@@ -3,7 +3,7 @@
   "athlete": "curve-equipped",
   "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
   "section_11_protocol_version": "3.112",
-  "frozen_now": "2026-06-04T12:00:00",
+  "frozen_now": "1998-06-04T12:00:00",
   "value": {
     "dfa_a1_profile": null,
     "durability": {
@@ -50,13 +50,13 @@
         }
       },
       "current_window": {
-        "end": "2026-06-04",
-        "start": "2026-05-08"
+        "end": "1998-06-04",
+        "start": "1998-05-08"
       },
       "note": "Compares max sustained HR at 4 anchor durations (60s anaerobic ceiling, 300s VO2max HR, 1200s threshold HR, 3600s endurance HR) across two 28d windows. rotation_index = mean(60s,300s pct_change) - mean(1200s,3600s pct_change). Positive = intensity-biased HR shift, negative = endurance-biased. No sport filter — HR is cross-sport physiological (dominated by hardest efforts). IMPORTANT: rising max sustained HR is ambiguous — may indicate improved cardiac output (good) or accumulated fatigue/dehydration/heat (bad). Cross-reference with resting HRV, resting HR, RPE, and environmental context before interpreting. Null when either window has fewer than 3 valid anchor durations.",
       "previous_window": {
-        "end": "2026-05-07",
-        "start": "2026-04-10"
+        "end": "1998-05-07",
+        "start": "1998-04-10"
       },
       "rotation_index": -3.3,
       "window_days": 28
@@ -98,13 +98,13 @@
         }
       },
       "current_window": {
-        "end": "2026-06-04",
-        "start": "2026-05-08"
+        "end": "1998-06-04",
+        "start": "1998-05-08"
       },
       "note": "Compares MMP at 5 anchor durations (5s neuromuscular, 60s anaerobic, 300s MAP, 1200s threshold, 3600s endurance) across two 28d windows. rotation_index = mean(5s,60s pct_change) - mean(1200s,3600s pct_change). Positive = sprint-biased gains, negative = endurance-biased. 300s excluded from rotation (transitional). Null when either window has fewer than 3 valid anchor durations.",
       "previous_window": {
-        "end": "2026-05-07",
-        "start": "2026-04-10"
+        "end": "1998-05-07",
+        "start": "1998-04-10"
       },
       "rotation_index": 5.3,
       "window_days": 28
@@ -207,8 +207,8 @@
       "weight_source": "wellness_extended",
       "window": {
         "days": 42,
-        "end": "2026-06-04",
-        "start": "2026-04-24"
+        "end": "1998-06-04",
+        "start": "1998-04-24"
       }
     },
     "tid_comparison": {

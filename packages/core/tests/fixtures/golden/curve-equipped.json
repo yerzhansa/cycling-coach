@@ -2,7 +2,7 @@
   "activities": [
     {
       "id": 90101,
-      "start_date_local": "2026-03-14T13:18:48",
+      "start_date_local": "1998-03-14T13:18:48",
       "type": "VirtualRun",
       "name": "sanitized",
       "moving_time": 2395,
@@ -23,7 +23,7 @@
     },
     {
       "id": 90102,
-      "start_date_local": "2026-03-15T13:24:47",
+      "start_date_local": "1998-03-15T13:24:47",
       "type": "VirtualRun",
       "name": "sanitized",
       "moving_time": 2400,
@@ -44,7 +44,7 @@
     },
     {
       "id": 90103,
-      "start_date_local": "2026-03-16T09:22:31",
+      "start_date_local": "1998-03-16T09:22:31",
       "type": "VirtualRun",
       "name": "sanitized",
       "moving_time": 1791,
@@ -65,7 +65,7 @@
     },
     {
       "id": 90104,
-      "start_date_local": "2026-03-17T12:36:50",
+      "start_date_local": "1998-03-17T12:36:50",
       "type": "WeightTraining",
       "name": "sanitized",
       "moving_time": 2707,
@@ -86,7 +86,7 @@
     },
     {
       "id": 90105,
-      "start_date_local": "2026-03-20T16:17:31",
+      "start_date_local": "1998-03-20T16:17:31",
       "type": "VirtualRun",
       "name": "sanitized",
       "moving_time": 2394,
@@ -107,7 +107,7 @@
     },
     {
       "id": 90106,
-      "start_date_local": "2026-03-23T17:18:29",
+      "start_date_local": "1998-03-23T17:18:29",
       "type": "WeightTraining",
       "name": "sanitized",
       "moving_time": 3689,
@@ -128,7 +128,7 @@
     },
     {
       "id": 90107,
-      "start_date_local": "2026-03-31T06:44:10",
+      "start_date_local": "1998-03-31T06:44:10",
       "type": "Run",
       "name": "sanitized",
       "moving_time": 2076,
@@ -149,7 +149,7 @@
     },
     {
       "id": 90108,
-      "start_date_local": "2026-04-03T11:57:27",
+      "start_date_local": "1998-04-03T11:57:27",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 4163,
@@ -205,7 +205,7 @@
     },
     {
       "id": 90109,
-      "start_date_local": "2026-04-06T10:04:51",
+      "start_date_local": "1998-04-06T10:04:51",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 5637,
@@ -259,7 +259,7 @@
     },
     {
       "id": 90110,
-      "start_date_local": "2026-04-08T09:18:15",
+      "start_date_local": "1998-04-08T09:18:15",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 5709,
@@ -315,7 +315,7 @@
     },
     {
       "id": 90111,
-      "start_date_local": "2026-04-09T11:30:57",
+      "start_date_local": "1998-04-09T11:30:57",
       "type": "WeightTraining",
       "name": "sanitized",
       "moving_time": 2746,
@@ -336,7 +336,7 @@
     },
     {
       "id": 90112,
-      "start_date_local": "2026-04-11T07:30:53",
+      "start_date_local": "1998-04-11T07:30:53",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 5961,
@@ -392,7 +392,7 @@
     },
     {
       "id": 90113,
-      "start_date_local": "2026-04-12T05:59:50",
+      "start_date_local": "1998-04-12T05:59:50",
       "type": "Run",
       "name": "sanitized",
       "moving_time": 1792,
@@ -413,7 +413,7 @@
     },
     {
       "id": 90114,
-      "start_date_local": "2026-04-13T12:02:43",
+      "start_date_local": "1998-04-13T12:02:43",
       "type": "WeightTraining",
       "name": "sanitized",
       "moving_time": 2735,
@@ -434,7 +434,7 @@
     },
     {
       "id": 90115,
-      "start_date_local": "2026-04-14T10:59:58",
+      "start_date_local": "1998-04-14T10:59:58",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 5614,
@@ -490,7 +490,7 @@
     },
     {
       "id": 90116,
-      "start_date_local": "2026-04-15T10:22:28",
+      "start_date_local": "1998-04-15T10:22:28",
       "type": "Run",
       "name": "sanitized",
       "moving_time": 2380,
@@ -511,7 +511,7 @@
     },
     {
       "id": 90117,
-      "start_date_local": "2026-04-17T14:49:06",
+      "start_date_local": "1998-04-17T14:49:06",
       "type": "VirtualRun",
       "name": "sanitized",
       "moving_time": 2428,
@@ -532,7 +532,7 @@
     },
     {
       "id": 90118,
-      "start_date_local": "2026-04-18T09:02:18",
+      "start_date_local": "1998-04-18T09:02:18",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 5445,
@@ -588,7 +588,7 @@
     },
     {
       "id": 90119,
-      "start_date_local": "2026-04-19T06:59:28",
+      "start_date_local": "1998-04-19T06:59:28",
       "type": "Run",
       "name": "sanitized",
       "moving_time": 3597,
@@ -609,7 +609,7 @@
     },
     {
       "id": 90120,
-      "start_date_local": "2026-04-20T11:43:02",
+      "start_date_local": "1998-04-20T11:43:02",
       "type": "VirtualRide",
       "name": "sanitized",
       "moving_time": 1922,
@@ -663,7 +663,7 @@
     },
     {
       "id": 90121,
-      "start_date_local": "2026-04-21T15:36:12",
+      "start_date_local": "1998-04-21T15:36:12",
       "type": "VirtualRun",
       "name": "sanitized",
       "moving_time": 2383,
@@ -684,7 +684,7 @@
     },
     {
       "id": 90122,
-      "start_date_local": "2026-04-22T08:41:28",
+      "start_date_local": "1998-04-22T08:41:28",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 5164,
@@ -740,7 +740,7 @@
     },
     {
       "id": 90123,
-      "start_date_local": "2026-04-23T10:24:06",
+      "start_date_local": "1998-04-23T10:24:06",
       "type": "WeightTraining",
       "name": "sanitized",
       "moving_time": 3303,
@@ -761,7 +761,7 @@
     },
     {
       "id": 90124,
-      "start_date_local": "2026-04-24T07:26:18",
+      "start_date_local": "1998-04-24T07:26:18",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 5267,
@@ -815,7 +815,7 @@
     },
     {
       "id": 90125,
-      "start_date_local": "2026-04-27T10:01:13",
+      "start_date_local": "1998-04-27T10:01:13",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 8157,
@@ -871,7 +871,7 @@
     },
     {
       "id": 90126,
-      "start_date_local": "2026-04-29T08:08:07",
+      "start_date_local": "1998-04-29T08:08:07",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 5248,
@@ -927,7 +927,7 @@
     },
     {
       "id": 90127,
-      "start_date_local": "2026-04-30T12:10:20",
+      "start_date_local": "1998-04-30T12:10:20",
       "type": "WeightTraining",
       "name": "sanitized",
       "moving_time": 4696,
@@ -948,7 +948,7 @@
     },
     {
       "id": 90128,
-      "start_date_local": "2026-05-01T07:25:58",
+      "start_date_local": "1998-05-01T07:25:58",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 5232,
@@ -1004,7 +1004,7 @@
     },
     {
       "id": 90129,
-      "start_date_local": "2026-05-03T06:19:03",
+      "start_date_local": "1998-05-03T06:19:03",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 10803,
@@ -1060,7 +1060,7 @@
     },
     {
       "id": 90130,
-      "start_date_local": "2026-05-06T07:28:50",
+      "start_date_local": "1998-05-06T07:28:50",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 5236,
@@ -1114,7 +1114,7 @@
     },
     {
       "id": 90131,
-      "start_date_local": "2026-05-07T07:40:34",
+      "start_date_local": "1998-05-07T07:40:34",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 3769,
@@ -1168,7 +1168,7 @@
     },
     {
       "id": 90132,
-      "start_date_local": "2026-05-08T11:25:33",
+      "start_date_local": "1998-05-08T11:25:33",
       "type": "WeightTraining",
       "name": "sanitized",
       "moving_time": 5338,
@@ -1189,7 +1189,7 @@
     },
     {
       "id": 90133,
-      "start_date_local": "2026-05-09T07:52:37",
+      "start_date_local": "1998-05-09T07:52:37",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 5207,
@@ -1245,7 +1245,7 @@
     },
     {
       "id": 90134,
-      "start_date_local": "2026-05-11T08:20:27",
+      "start_date_local": "1998-05-11T08:20:27",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 5454,
@@ -1301,7 +1301,7 @@
     },
     {
       "id": 90135,
-      "start_date_local": "2026-05-14T08:37:45",
+      "start_date_local": "1998-05-14T08:37:45",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 4945,
@@ -1357,7 +1357,7 @@
     },
     {
       "id": 90136,
-      "start_date_local": "2026-05-16T08:10:28",
+      "start_date_local": "1998-05-16T08:10:28",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 9330,
@@ -1413,7 +1413,7 @@
     },
     {
       "id": 90137,
-      "start_date_local": "2026-05-18T11:06:21",
+      "start_date_local": "1998-05-18T11:06:21",
       "type": "WeightTraining",
       "name": "sanitized",
       "moving_time": 6089,
@@ -1434,7 +1434,7 @@
     },
     {
       "id": 90138,
-      "start_date_local": "2026-05-20T08:14:22",
+      "start_date_local": "1998-05-20T08:14:22",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 8438,
@@ -1490,7 +1490,7 @@
     },
     {
       "id": 90139,
-      "start_date_local": "2026-05-22T08:43:52",
+      "start_date_local": "1998-05-22T08:43:52",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 5742,
@@ -1544,7 +1544,7 @@
     },
     {
       "id": 90140,
-      "start_date_local": "2026-05-24T08:43:15",
+      "start_date_local": "1998-05-24T08:43:15",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 9534,
@@ -1600,7 +1600,7 @@
     },
     {
       "id": 90141,
-      "start_date_local": "2026-05-26T10:40:46",
+      "start_date_local": "1998-05-26T10:40:46",
       "type": "WeightTraining",
       "name": "sanitized",
       "moving_time": 4601,
@@ -1621,7 +1621,7 @@
     },
     {
       "id": 90142,
-      "start_date_local": "2026-05-27T07:53:16",
+      "start_date_local": "1998-05-27T07:53:16",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 4778,
@@ -1677,7 +1677,7 @@
     },
     {
       "id": 90143,
-      "start_date_local": "2026-05-27T08:53:05",
+      "start_date_local": "1998-05-27T08:53:05",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 4779,
@@ -1733,7 +1733,7 @@
     },
     {
       "id": 90144,
-      "start_date_local": "2026-05-28T11:03:06",
+      "start_date_local": "1998-05-28T11:03:06",
       "type": "WeightTraining",
       "name": "sanitized",
       "moving_time": 4426,
@@ -1754,7 +1754,7 @@
     },
     {
       "id": 90145,
-      "start_date_local": "2026-05-30T07:16:06",
+      "start_date_local": "1998-05-30T07:16:06",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 6354,
@@ -1810,7 +1810,7 @@
     },
     {
       "id": 90146,
-      "start_date_local": "2026-05-30T08:16:06",
+      "start_date_local": "1998-05-30T08:16:06",
       "type": "Ride",
       "name": "sanitized",
       "moving_time": 6354,
@@ -1866,7 +1866,7 @@
     },
     {
       "id": 90147,
-      "start_date_local": "2026-06-01T20:06:01",
+      "start_date_local": "1998-06-01T20:06:01",
       "type": "WeightTraining",
       "name": "sanitized",
       "moving_time": 3012,
@@ -1887,7 +1887,7 @@
     },
     {
       "id": 90148,
-      "start_date_local": "2026-06-02T11:12:13",
+      "start_date_local": "1998-06-02T11:12:13",
       "type": "WeightTraining",
       "name": "sanitized",
       "moving_time": 4739,
@@ -1908,7 +1908,7 @@
     },
     {
       "id": 90149,
-      "start_date_local": "2026-06-03T13:44:44",
+      "start_date_local": "1998-06-03T13:44:44",
       "type": "VirtualRun",
       "name": "sanitized",
       "moving_time": 1786,
@@ -1930,7 +1930,7 @@
   ],
   "wellness": [
     {
-      "id": "2026-03-12",
+      "id": "1998-03-12",
       "weight": null,
       "restingHR": 60,
       "hrv": 34,
@@ -1952,7 +1952,7 @@
       "weeklyFitnessChange": -0.9906931
     },
     {
-      "id": "2026-03-13",
+      "id": "1998-03-13",
       "weight": null,
       "restingHR": 51,
       "hrv": 47,
@@ -1974,7 +1974,7 @@
       "weeklyFitnessChange": -0.96738434
     },
     {
-      "id": "2026-03-14",
+      "id": "1998-03-14",
       "weight": null,
       "restingHR": 61,
       "hrv": 34,
@@ -1996,7 +1996,7 @@
       "weeklyFitnessChange": -0.16818905
     },
     {
-      "id": "2026-03-15",
+      "id": "1998-03-15",
       "weight": null,
       "restingHR": 55,
       "hrv": 42,
@@ -2018,7 +2018,7 @@
       "weeklyFitnessChange": 0.5416174
     },
     {
-      "id": "2026-03-16",
+      "id": "1998-03-16",
       "weight": null,
       "restingHR": 59,
       "hrv": 36,
@@ -2040,7 +2040,7 @@
       "weeklyFitnessChange": 1.1406097
     },
     {
-      "id": "2026-03-17",
+      "id": "1998-03-17",
       "weight": null,
       "restingHR": 61,
       "hrv": null,
@@ -2062,7 +2062,7 @@
       "weeklyFitnessChange": 1.1137733
     },
     {
-      "id": "2026-03-18",
+      "id": "1998-03-18",
       "weight": null,
       "restingHR": 60,
       "hrv": 34,
@@ -2084,7 +2084,7 @@
       "weeklyFitnessChange": 0.12290764
     },
     {
-      "id": "2026-03-19",
+      "id": "1998-03-19",
       "weight": null,
       "restingHR": 57,
       "hrv": 39,
@@ -2106,7 +2106,7 @@
       "weeklyFitnessChange": 0.1200161
     },
     {
-      "id": "2026-03-20",
+      "id": "1998-03-20",
       "weight": null,
       "restingHR": 53,
       "hrv": 46,
@@ -2128,7 +2128,7 @@
       "weeklyFitnessChange": 0.7995138
     },
     {
-      "id": "2026-03-21",
+      "id": "1998-03-21",
       "weight": null,
       "restingHR": 57,
       "hrv": 40,
@@ -2150,7 +2150,7 @@
       "weeklyFitnessChange": 0.0042686462
     },
     {
-      "id": "2026-03-22",
+      "id": "1998-03-22",
       "weight": null,
       "restingHR": 55,
       "hrv": 45,
@@ -2172,7 +2172,7 @@
       "weeklyFitnessChange": -0.70168114
     },
     {
-      "id": "2026-03-23",
+      "id": "1998-03-23",
       "weight": null,
       "restingHR": 59,
       "hrv": 37,
@@ -2194,7 +2194,7 @@
       "weeklyFitnessChange": -1.2969074
     },
     {
-      "id": "2026-03-24",
+      "id": "1998-03-24",
       "weight": null,
       "restingHR": 57,
       "hrv": 36,
@@ -2216,7 +2216,7 @@
       "weeklyFitnessChange": -1.2663927
     },
     {
-      "id": "2026-03-25",
+      "id": "1998-03-25",
       "weight": null,
       "restingHR": 53,
       "hrv": 46,
@@ -2238,7 +2238,7 @@
       "weeklyFitnessChange": -1.2365961
     },
     {
-      "id": "2026-03-26",
+      "id": "1998-03-26",
       "weight": null,
       "restingHR": 60,
       "hrv": 30,
@@ -2260,7 +2260,7 @@
       "weeklyFitnessChange": -1.2075014
     },
     {
-      "id": "2026-03-27",
+      "id": "1998-03-27",
       "weight": null,
       "restingHR": 57,
       "hrv": 35,
@@ -2282,7 +2282,7 @@
       "weeklyFitnessChange": -1.861412
     },
     {
-      "id": "2026-03-28",
+      "id": "1998-03-28",
       "weight": null,
       "restingHR": 54,
       "hrv": 44,
@@ -2304,7 +2304,7 @@
       "weeklyFitnessChange": -1.8176165
     },
     {
-      "id": "2026-03-29",
+      "id": "1998-03-29",
       "weight": null,
       "restingHR": 56,
       "hrv": 40,
@@ -2326,7 +2326,7 @@
       "weeklyFitnessChange": -1.7748508
     },
     {
-      "id": "2026-03-30",
+      "id": "1998-03-30",
       "weight": null,
       "restingHR": 53,
       "hrv": 42,
@@ -2348,7 +2348,7 @@
       "weeklyFitnessChange": -1.7330923
     },
     {
-      "id": "2026-03-31",
+      "id": "1998-03-31",
       "weight": null,
       "restingHR": 48,
       "hrv": 58,
@@ -2370,7 +2370,7 @@
       "weeklyFitnessChange": -0.84529686
     },
     {
-      "id": "2026-04-01",
+      "id": "1998-04-01",
       "weight": null,
       "restingHR": 51,
       "hrv": 49,
@@ -2392,7 +2392,7 @@
       "weeklyFitnessChange": -0.82540894
     },
     {
-      "id": "2026-04-02",
+      "id": "1998-04-02",
       "weight": null,
       "restingHR": 57,
       "hrv": 43,
@@ -2414,7 +2414,7 @@
       "weeklyFitnessChange": -0.8059883
     },
     {
-      "id": "2026-04-03",
+      "id": "1998-04-03",
       "weight": 87,
       "restingHR": 51,
       "hrv": 51,
@@ -2436,7 +2436,7 @@
       "weeklyFitnessChange": 0.62467384
     },
     {
-      "id": "2026-04-04",
+      "id": "1998-04-04",
       "weight": null,
       "restingHR": 57,
       "hrv": 37,
@@ -2458,7 +2458,7 @@
       "weeklyFitnessChange": 0.60997677
     },
     {
-      "id": "2026-04-05",
+      "id": "1998-04-05",
       "weight": null,
       "restingHR": 57,
       "hrv": 30,
@@ -2480,7 +2480,7 @@
       "weeklyFitnessChange": 0.5956249
     },
     {
-      "id": "2026-04-06",
+      "id": "1998-04-06",
       "weight": null,
       "restingHR": 55,
       "hrv": 42,
@@ -2502,7 +2502,7 @@
       "weeklyFitnessChange": 2.1344795
     },
     {
-      "id": "2026-04-07",
+      "id": "1998-04-07",
       "weight": null,
       "restingHR": 57,
       "hrv": 44,
@@ -2524,7 +2524,7 @@
       "weeklyFitnessChange": 1.2372398
     },
     {
-      "id": "2026-04-08",
+      "id": "1998-04-08",
       "weight": null,
       "restingHR": 57,
       "hrv": 41,
@@ -2546,7 +2546,7 @@
       "weeklyFitnessChange": 3.3021498
     },
     {
-      "id": "2026-04-09",
+      "id": "1998-04-09",
       "weight": null,
       "restingHR": 57,
       "hrv": 37,
@@ -2568,7 +2568,7 @@
       "weeklyFitnessChange": 3.2244558
     },
     {
-      "id": "2026-04-10",
+      "id": "1998-04-10",
       "weight": null,
       "restingHR": 55,
       "hrv": 47,
@@ -2590,7 +2590,7 @@
       "weeklyFitnessChange": 1.7368908
     },
     {
-      "id": "2026-04-11",
+      "id": "1998-04-11",
       "weight": null,
       "restingHR": 51,
       "hrv": 57,
@@ -2612,7 +2612,7 @@
       "weeklyFitnessChange": 4.0017986
     },
     {
-      "id": "2026-04-12",
+      "id": "1998-04-12",
       "weight": null,
       "restingHR": 57,
       "hrv": 33,
@@ -2634,7 +2634,7 @@
       "weeklyFitnessChange": 4.613492
     },
     {
-      "id": "2026-04-13",
+      "id": "1998-04-13",
       "weight": null,
       "restingHR": 55,
       "hrv": 44,
@@ -2656,7 +2656,7 @@
       "weeklyFitnessChange": 2.952076
     },
     {
-      "id": "2026-04-14",
+      "id": "1998-04-14",
       "weight": null,
       "restingHR": 54,
       "hrv": 46,
@@ -2678,7 +2678,7 @@
       "weeklyFitnessChange": 4.8825254
     },
     {
-      "id": "2026-04-15",
+      "id": "1998-04-15",
       "weight": null,
       "restingHR": 55,
       "hrv": 40,
@@ -2700,7 +2700,7 @@
       "weeklyFitnessChange": 3.3559494
     },
     {
-      "id": "2026-04-16",
+      "id": "1998-04-16",
       "weight": null,
       "restingHR": 54,
       "hrv": 52,
@@ -2722,7 +2722,7 @@
       "weeklyFitnessChange": 3.276989
     },
     {
-      "id": "2026-04-17",
+      "id": "1998-04-17",
       "weight": null,
       "restingHR": 56,
       "hrv": 44,
@@ -2744,7 +2744,7 @@
       "weeklyFitnessChange": 3.8586807
     },
     {
-      "id": "2026-04-18",
+      "id": "1998-04-18",
       "weight": null,
       "restingHR": 54,
       "hrv": 49,
@@ -2766,7 +2766,7 @@
       "weeklyFitnessChange": 3.7443647
     },
     {
-      "id": "2026-04-19",
+      "id": "1998-04-19",
       "weight": null,
       "restingHR": 58,
       "hrv": 34,
@@ -2788,7 +2788,7 @@
       "weeklyFitnessChange": 4.17389
     },
     {
-      "id": "2026-04-20",
+      "id": "1998-04-20",
       "weight": null,
       "restingHR": 55,
       "hrv": 43,
@@ -2810,7 +2810,7 @@
       "weeklyFitnessChange": 4.428611
     },
     {
-      "id": "2026-04-21",
+      "id": "1998-04-21",
       "weight": null,
       "restingHR": 57,
       "hrv": 38,
@@ -2832,7 +2832,7 @@
       "weeklyFitnessChange": 2.936243
     },
     {
-      "id": "2026-04-22",
+      "id": "1998-04-22",
       "weight": null,
       "restingHR": 58,
       "hrv": 40,
@@ -2854,7 +2854,7 @@
       "weeklyFitnessChange": 3.9965172
     },
     {
-      "id": "2026-04-23",
+      "id": "1998-04-23",
       "weight": null,
       "restingHR": 53,
       "hrv": 45,
@@ -2876,7 +2876,7 @@
       "weeklyFitnessChange": 3.9024868
     },
     {
-      "id": "2026-04-24",
+      "id": "1998-04-24",
       "weight": null,
       "restingHR": 58,
       "hrv": 40,
@@ -2898,7 +2898,7 @@
       "weeklyFitnessChange": 5.0341396
     },
     {
-      "id": "2026-04-25",
+      "id": "1998-04-25",
       "weight": null,
       "restingHR": 58,
       "hrv": 35,
@@ -2920,7 +2920,7 @@
       "weeklyFitnessChange": 2.6334476
     },
     {
-      "id": "2026-04-26",
+      "id": "1998-04-26",
       "weight": null,
       "restingHR": 53,
       "hrv": 47,
@@ -2942,7 +2942,7 @@
       "weeklyFitnessChange": 1.3480148
     },
     {
-      "id": "2026-04-27",
+      "id": "1998-04-27",
       "weight": null,
       "restingHR": 57,
       "hrv": 35,
@@ -2964,7 +2964,7 @@
       "weeklyFitnessChange": 3.7161865
     },
     {
-      "id": "2026-04-28",
+      "id": "1998-04-28",
       "weight": null,
       "restingHR": 55,
       "hrv": 37,
@@ -2986,7 +2986,7 @@
       "weeklyFitnessChange": 3.0170135
     },
     {
-      "id": "2026-04-29",
+      "id": "1998-04-29",
       "weight": null,
       "restingHR": 54,
       "hrv": 53,
@@ -3008,7 +3008,7 @@
       "weeklyFitnessChange": 2.9695568
     },
     {
-      "id": "2026-04-30",
+      "id": "1998-04-30",
       "weight": null,
       "restingHR": 58,
       "hrv": 43,
@@ -3030,7 +3030,7 @@
       "weeklyFitnessChange": 2.8996887
     },
     {
-      "id": "2026-05-01",
+      "id": "1998-05-01",
       "weight": null,
       "restingHR": 55,
       "hrv": 45,
@@ -3052,7 +3052,7 @@
       "weeklyFitnessChange": 2.854992
     },
     {
-      "id": "2026-05-02",
+      "id": "1998-05-02",
       "weight": null,
       "restingHR": 58,
       "hrv": 38,
@@ -3074,7 +3074,7 @@
       "weeklyFitnessChange": 2.787819
     },
     {
-      "id": "2026-05-03",
+      "id": "1998-05-03",
       "weight": null,
       "restingHR": 55,
       "hrv": 51,
@@ -3096,7 +3096,7 @@
       "weeklyFitnessChange": 6.910265
     },
     {
-      "id": "2026-05-04",
+      "id": "1998-05-04",
       "weight": null,
       "restingHR": 61,
       "hrv": 35,
@@ -3118,7 +3118,7 @@
       "weeklyFitnessChange": 3.9948654
     },
     {
-      "id": "2026-05-05",
+      "id": "1998-05-05",
       "weight": null,
       "restingHR": 58,
       "hrv": 45,
@@ -3140,7 +3140,7 @@
       "weeklyFitnessChange": 3.9008732
     },
     {
-      "id": "2026-05-06",
+      "id": "1998-05-06",
       "weight": null,
       "restingHR": 54,
       "hrv": 43,
@@ -3162,7 +3162,7 @@
       "weeklyFitnessChange": 3.6208649
     },
     {
-      "id": "2026-05-07",
+      "id": "1998-05-07",
       "weight": null,
       "restingHR": 58,
       "hrv": 39,
@@ -3184,7 +3184,7 @@
       "weeklyFitnessChange": 4.9473705
     },
     {
-      "id": "2026-05-08",
+      "id": "1998-05-08",
       "weight": null,
       "restingHR": 56,
       "hrv": 44,
@@ -3206,7 +3206,7 @@
       "weeklyFitnessChange": 2.9251747
     },
     {
-      "id": "2026-05-09",
+      "id": "1998-05-09",
       "weight": null,
       "restingHR": 58,
       "hrv": 39,
@@ -3228,7 +3228,7 @@
       "weeklyFitnessChange": 4.973898
     },
     {
-      "id": "2026-05-10",
+      "id": "1998-05-10",
       "weight": null,
       "restingHR": 58,
       "hrv": 37,
@@ -3250,7 +3250,7 @@
       "weeklyFitnessChange": 0.6688309
     },
     {
-      "id": "2026-05-11",
+      "id": "1998-05-11",
       "weight": null,
       "restingHR": 54,
       "hrv": 44,
@@ -3272,7 +3272,7 @@
       "weeklyFitnessChange": 3.0059242
     },
     {
-      "id": "2026-05-12",
+      "id": "1998-05-12",
       "weight": null,
       "restingHR": 57,
       "hrv": 41,
@@ -3294,7 +3294,7 @@
       "weeklyFitnessChange": 2.9351997
     },
     {
-      "id": "2026-05-13",
+      "id": "1998-05-13",
       "weight": null,
       "restingHR": 54,
       "hrv": 42,
@@ -3316,7 +3316,7 @@
       "weeklyFitnessChange": 1.2191582
     },
     {
-      "id": "2026-05-14",
+      "id": "1998-05-14",
       "weight": null,
       "restingHR": 55,
       "hrv": 37,
@@ -3338,7 +3338,7 @@
       "weeklyFitnessChange": 2.5080585
     },
     {
-      "id": "2026-05-15",
+      "id": "1998-05-15",
       "weight": null,
       "restingHR": 55,
       "hrv": 38,
@@ -3360,7 +3360,7 @@
       "weeklyFitnessChange": 2.449047
     },
     {
-      "id": "2026-05-16",
+      "id": "1998-05-16",
       "weight": null,
       "restingHR": 53,
       "hrv": 45,
@@ -3382,7 +3382,7 @@
       "weeklyFitnessChange": 5.591276
     },
     {
-      "id": "2026-05-17",
+      "id": "1998-05-17",
       "weight": 87,
       "restingHR": 60,
       "hrv": 32,
@@ -3404,7 +3404,7 @@
       "weeklyFitnessChange": 5.4597225
     },
     {
-      "id": "2026-05-18",
+      "id": "1998-05-18",
       "weight": null,
       "restingHR": 58,
       "hrv": 35,
@@ -3426,7 +3426,7 @@
       "weeklyFitnessChange": 2.9784336
     },
     {
-      "id": "2026-05-19",
+      "id": "1998-05-19",
       "weight": null,
       "restingHR": 53,
       "hrv": 48,
@@ -3448,7 +3448,7 @@
       "weeklyFitnessChange": 2.9083557
     },
     {
-      "id": "2026-05-20",
+      "id": "1998-05-20",
       "weight": null,
       "restingHR": 53,
       "hrv": 41,
@@ -3470,7 +3470,7 @@
       "weeklyFitnessChange": 6.157419
     },
     {
-      "id": "2026-05-21",
+      "id": "1998-05-21",
       "weight": null,
       "restingHR": 54,
       "hrv": 45,
@@ -3492,7 +3492,7 @@
       "weeklyFitnessChange": 3.2832603
     },
     {
-      "id": "2026-05-22",
+      "id": "1998-05-22",
       "weight": null,
       "restingHR": 54,
       "hrv": 45,
@@ -3514,7 +3514,7 @@
       "weeklyFitnessChange": 5.2059174
     },
     {
-      "id": "2026-05-23",
+      "id": "1998-05-23",
       "weight": null,
       "restingHR": 57,
       "hrv": 33,
@@ -3536,7 +3536,7 @@
       "weeklyFitnessChange": -0.23396683
     },
     {
-      "id": "2026-05-24",
+      "id": "1998-05-24",
       "weight": null,
       "restingHR": 53,
       "hrv": 45,
@@ -3558,7 +3558,7 @@
       "weeklyFitnessChange": 5.2065773
     },
     {
-      "id": "2026-05-25",
+      "id": "1998-05-25",
       "weight": null,
       "restingHR": 55,
       "hrv": 37,
@@ -3580,7 +3580,7 @@
       "weeklyFitnessChange": 5.084076
     },
     {
-      "id": "2026-05-26",
+      "id": "1998-05-26",
       "weight": null,
       "restingHR": 52,
       "hrv": 56,
@@ -3602,7 +3602,7 @@
       "weeklyFitnessChange": 4.9644566
     },
     {
-      "id": "2026-05-27",
+      "id": "1998-05-27",
       "weight": null,
       "restingHR": 53,
       "hrv": 46,
@@ -3624,7 +3624,7 @@
       "weeklyFitnessChange": 5.4358597
     },
     {
-      "id": "2026-05-28",
+      "id": "1998-05-28",
       "weight": null,
       "restingHR": 55,
       "hrv": 39,
@@ -3646,7 +3646,7 @@
       "weeklyFitnessChange": 5.3079643
     },
     {
-      "id": "2026-05-29",
+      "id": "1998-05-29",
       "weight": null,
       "restingHR": 53,
       "hrv": 50,
@@ -3668,7 +3668,7 @@
       "weeklyFitnessChange": 3.1831703
     },
     {
-      "id": "2026-05-30",
+      "id": "1998-05-30",
       "weight": null,
       "restingHR": 52,
       "hrv": 46,
@@ -3690,7 +3690,7 @@
       "weeklyFitnessChange": 10.449108
     },
     {
-      "id": "2026-05-31",
+      "id": "1998-05-31",
       "weight": null,
       "restingHR": 57,
       "hrv": 38,
@@ -3712,7 +3712,7 @@
       "weeklyFitnessChange": 4.768219
     },
     {
-      "id": "2026-06-01",
+      "id": "1998-06-01",
       "weight": null,
       "restingHR": 58,
       "hrv": 32,
@@ -3734,7 +3734,7 @@
       "weeklyFitnessChange": 4.6560287
     },
     {
-      "id": "2026-06-02",
+      "id": "1998-06-02",
       "weight": null,
       "restingHR": 58,
       "hrv": 36,
@@ -3756,7 +3756,7 @@
       "weeklyFitnessChange": 4.546482
     },
     {
-      "id": "2026-06-03",
+      "id": "1998-06-03",
       "weight": null,
       "restingHR": 57,
       "hrv": 40,
@@ -3778,7 +3778,7 @@
       "weeklyFitnessChange": 2.251377
     },
     {
-      "id": "2026-06-04",
+      "id": "1998-06-04",
       "weight": null,
       "restingHR": null,
       "hrv": null,
@@ -3804,32 +3804,32 @@
   ],
   "ftp_history": [
     {
-      "date": "2026-03-12",
+      "date": "1998-03-12",
       "ftp": 174,
       "source": "estimate"
     },
     {
-      "date": "2026-03-23",
+      "date": "1998-03-23",
       "ftp": 173,
       "source": "estimate"
     },
     {
-      "date": "2026-03-28",
+      "date": "1998-03-28",
       "ftp": 172,
       "source": "estimate"
     },
     {
-      "date": "2026-05-14",
+      "date": "1998-05-14",
       "ftp": 178,
       "source": "estimate"
     },
     {
-      "date": "2026-05-16",
+      "date": "1998-05-16",
       "ftp": 182,
       "source": "estimate"
     },
     {
-      "date": "2026-05-30",
+      "date": "1998-05-30",
       "ftp": 185,
       "source": "estimate"
     }
@@ -3837,7 +3837,7 @@
   "power_curves": {
     "list": [
       {
-        "id": "r.2026-05-08.2026-06-04",
+        "id": "r.1998-05-08.1998-06-04",
         "secs": [
           5,
           60,
@@ -3854,7 +3854,7 @@
         ]
       },
       {
-        "id": "r.2026-04-10.2026-05-07",
+        "id": "r.1998-04-10.1998-05-07",
         "secs": [
           5,
           60,
@@ -3875,7 +3875,7 @@
   "hr_curves": {
     "list": [
       {
-        "id": "r.2026-05-08.2026-06-04",
+        "id": "r.1998-05-08.1998-06-04",
         "secs": [
           60,
           300,
@@ -3890,7 +3890,7 @@
         ]
       },
       {
-        "id": "r.2026-04-10.2026-05-07",
+        "id": "r.1998-04-10.1998-05-07",
         "secs": [
           60,
           300,
@@ -3912,7 +3912,7 @@
         "Ride": {
           "list": [
             {
-              "id": "r.2026-04-24.2026-06-04",
+              "id": "r.1998-04-24.1998-06-04",
               "secs": [
                 300,
                 600,
@@ -3937,7 +3937,7 @@
         "VirtualRide": {
           "list": [
             {
-              "id": "r.2026-04-24.2026-06-04",
+              "id": "r.1998-04-24.1998-06-04",
               "secs": [
                 300,
                 600,
@@ -3964,7 +3964,7 @@
         "Ride": {
           "list": [
             {
-              "id": "r.2026-04-24.2026-06-04",
+              "id": "r.1998-04-24.1998-06-04",
               "secs": [
                 300,
                 600,
@@ -3989,7 +3989,7 @@
         "VirtualRide": {
           "list": [
             {
-              "id": "r.2026-04-24.2026-06-04",
+              "id": "r.1998-04-24.1998-06-04",
               "secs": [
                 300,
                 600,

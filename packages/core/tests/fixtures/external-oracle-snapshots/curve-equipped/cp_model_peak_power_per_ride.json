@@ -1,6 +1,6 @@
 {
   "athlete": "curve-equipped",
-  "frozen_now": "2026-06-04T12:00:00",
+  "frozen_now": "1998-06-04T12:00:00",
   "metric": "cp_model_peak_power_per_ride",
   "oracle": "external",
   "oracle_arch": "x86_64",

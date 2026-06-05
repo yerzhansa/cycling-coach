@@ -3,7 +3,7 @@
   "athlete": "curve-equipped",
   "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
   "section_11_protocol_version": "3.112",
-  "frozen_now": "2026-06-04T12:00:00",
+  "frozen_now": "1998-06-04T12:00:00",
   "value": {
     "anchors": {
       "1200s": {
@@ -33,13 +33,13 @@
       }
     },
     "current_window": {
-      "end": "2026-06-04",
-      "start": "2026-05-08"
+      "end": "1998-06-04",
+      "start": "1998-05-08"
     },
     "note": "Compares MMP at 5 anchor durations (5s neuromuscular, 60s anaerobic, 300s MAP, 1200s threshold, 3600s endurance) across two 28d windows. rotation_index = mean(5s,60s pct_change) - mean(1200s,3600s pct_change). Positive = sprint-biased gains, negative = endurance-biased. 300s excluded from rotation (transitional). Null when either window has fewer than 3 valid anchor durations.",
     "previous_window": {
-      "end": "2026-05-07",
-      "start": "2026-04-10"
+      "end": "1998-05-07",
+      "start": "1998-04-10"
     },
     "rotation_index": 5.3,
     "window_days": 28

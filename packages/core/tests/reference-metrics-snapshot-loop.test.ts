@@ -40,7 +40,7 @@ describe("section-11 snapshot loop", () => {
     expect(acwr.athlete).toBe("realistic-athlete");
     expect(acwr.section_11_sha).toMatch(/^[0-9a-f]{40}$/);
     expect(acwr.section_11_protocol_version).toMatch(/^\d+\.\d+$/);
-    expect(acwr.frozen_now).toBe("2026-05-10T12:00:00");
+    expect(acwr.frozen_now).toBe("1998-05-10T12:00:00");
     expect(acwr).toHaveProperty("value");
   });
 

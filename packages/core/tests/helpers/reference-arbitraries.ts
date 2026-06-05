@@ -82,7 +82,7 @@ const icuZoneTimeEntry: fc.Arbitrary<{ id: string; secs: number }> = fc.record({
 const sevenIcuZoneTimes = fc.array(icuZoneTimeEntry, { minLength: 7, maxLength: 7 });
 
 const arbitraryActivityRaw: fc.Arbitrary<Activity> = fc.record({
-  // Identity + timing — the API uses both the string form ("i146622609",
+  // Identity + timing — the API uses both the string form ("i12345678",
   // some endpoints) and the bare-number form (other endpoints); the schema
   // accepts the union. Generate both so metric tests reading `act.id`
   // exercise both branches under property tests.

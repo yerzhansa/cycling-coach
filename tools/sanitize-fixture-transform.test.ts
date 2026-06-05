@@ -32,14 +32,14 @@ describe("sanitizeFixture (allowlist)", () => {
   it("redacts numeric and prefixed-string id values to 12345 (activity / planned event)", () => {
     expect(
       sanitizeFixture({
-        activities: [{ id: 9876543, type: "Ride" }, { id: "i146622609", type: "Ride" }],
+        activities: [{ id: 9876543, type: "Ride" }, { id: "i12345678", type: "Ride" }],
       }),
     ).toEqual({
       activities: [{ id: 12345, type: "Ride" }, { id: 12345, type: "Ride" }],
     });
   });
 
-  it("preserves structural `id` patterns (ISO date, zone-bin label)", () => {
+  it("shifts wellness-date `id`s to the synthetic epoch and rides zone-bin labels through", () => {
     expect(
       sanitizeFixture({
         wellness: [
@@ -61,20 +61,34 @@ describe("sanitizeFixture (allowlist)", () => {
       }),
     ).toEqual({
       wellness: [
-        { id: "2026-04-15", weight: 73.4 },
-        { id: "2026-04-16", weight: 73.5 },
+        // Date-shaped wellness ids shift back one full Gregorian cycle.
+        { id: "1998-04-15", weight: 73.4 },
+        { id: "1998-04-16", weight: 73.5 },
       ],
       activities: [
         {
           id: 12345,
           average_watts: 200,
           icu_zone_times: [
+            // Zone-bin labels carry no calendar info — unchanged.
             { id: "Z1", secs: 600 },
             { id: "Z2", secs: 1800 },
             { id: "SS", secs: 780 },
           ],
         },
       ],
+    });
+  });
+
+  it("shifts `start_date_local` and ftp_history `date` to the synthetic epoch", () => {
+    expect(
+      sanitizeFixture({
+        activities: [{ id: 1, start_date_local: "2026-01-02T03:04:05", type: "Ride" }],
+        ftp_history: [{ date: "2026-03-15", ftp: 280, source: "test" }],
+      }),
+    ).toEqual({
+      activities: [{ id: 12345, start_date_local: "1998-01-02T03:04:05", type: "Ride" }],
+      ftp_history: [{ date: "1998-03-15", ftp: 280, source: "test" }],
     });
   });
 
@@ -170,20 +184,21 @@ describe("sanitizeFixture (allowlist)", () => {
         activities: [{ id: 1, type: "Ride", icu_ctl: 52.1, icu_atl: 38.4, tss: 142 }],
       }),
     ).toEqual({
-      wellness: [{ id: "2026-04-15", weight: 73.4 }],
+      wellness: [{ id: "1998-04-15", weight: 73.4 }],
       activities: [{ id: 12345, type: "Ride" }],
     });
   });
 
-  it("preserves ISO date strings verbatim (no jitter — destroys training-pattern signal)", () => {
-    // start_date_local, weekStartDate are schema fields. Date values ride
-    // through; no rounding, no jitter.
+  it("shifts ISO date strings to the synthetic epoch (no rounding, no jitter — preserves day-deltas)", () => {
+    // start_date_local is a schema field; its date value is shifted back one
+    // full Gregorian cycle so the committed fixture carries no real calendar.
+    // The time-of-day tail rides through unchanged.
     expect(
       sanitizeFixture({
         activities: [{ id: 1, type: "Ride", start_date_local: "2026-04-15T07:30:00" }],
       }),
     ).toEqual({
-      activities: [{ id: 12345, type: "Ride", start_date_local: "2026-04-15T07:30:00" }],
+      activities: [{ id: 12345, type: "Ride", start_date_local: "1998-04-15T07:30:00" }],
     });
   });
 
@@ -212,7 +227,7 @@ describe("sanitizeFixture (allowlist)", () => {
           average_watts: 218.4,
         },
       ],
-      wellness: [{ id: "2026-04-15", weight: 73.42, hrv: 84, bodyFat: 14.6 }],
+      wellness: [{ id: "1998-04-15", weight: 73.42, hrv: 84, bodyFat: 14.6 }],
     });
   });
 
@@ -236,7 +251,7 @@ describe("sanitizeFixture (allowlist)", () => {
     ).toEqual({
       wellness: [
         {
-          id: "2026-04-15",
+          id: "1998-04-15",
           fitness: 52.1,
           fatigue: 38.4,
           fitnessContribution: 51.9,
@@ -266,7 +281,7 @@ describe("sanitizeFixture (allowlist)", () => {
     ).toEqual({
       wellness: [
         {
-          id: "2026-04-15",
+          id: "1998-04-15",
           weight: 73.4,
           sportInfo: [{ type: "Ride", eftp: 285 }],
         },
@@ -297,7 +312,7 @@ describe("sanitizeFixture (allowlist)", () => {
         activities: [{ id: 1, type: "Ride", source: "GARMIN_CONNECT" }],
       }),
     ).toEqual({
-      ftp_history: [{ date: "2026-04-15", ftp: 285, source: "test" }],
+      ftp_history: [{ date: "1998-04-15", ftp: 285, source: "test" }],
       activities: [{ id: 12345, type: "Ride" }],
     });
   });

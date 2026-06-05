@@ -1,6 +1,6 @@
 {
   "athlete": "curve-equipped",
-  "frozen_now": "2026-06-04T12:00:00",
+  "frozen_now": "1998-06-04T12:00:00",
   "metric": "power_mean_max_previous",
   "oracle": "external",
   "oracle_arch": "x86_64",
@@ -22,6 +22,6 @@
       "60": 259.3833312988281
     },
     "unit": "watts",
-    "window_id": "r.2026-04-10.2026-05-07"
+    "window_id": "r.1998-04-10.1998-05-07"
   }
 }

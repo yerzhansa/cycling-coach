@@ -1,6 +1,6 @@
 {
   "athlete": "curve-equipped",
-  "frozen_now": "2026-06-04T12:00:00",
+  "frozen_now": "1998-06-04T12:00:00",
   "metric": "sustainability_hr_mean_max",
   "oracle": "external",
   "oracle_arch": "x86_64",
@@ -26,6 +26,6 @@
       "7200": 155.68430555555557
     },
     "unit": "bpm",
-    "window_id": "r.2026-04-24.2026-06-04"
+    "window_id": "r.1998-04-24.1998-06-04"
   }
 }

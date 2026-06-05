@@ -26,9 +26,13 @@ export interface HarnessFixtureConfig {
 export const HARNESS_FIXTURES: HarnessFixtureConfig[] = [
   {
     slug: "realistic-athlete",
-    frozenNow: DEFAULT_FROZEN_NOW,
+    // Own explicit anchor (NOT DEFAULT_FROZEN_NOW): this fixture's dates were
+    // shifted back one full Gregorian cycle to de-identify the real athlete's
+    // training calendar, so its anchor must shift in lockstep. Out-of-scope
+    // fixtures still share DEFAULT_FROZEN_NOW and must not move.
+    frozenNow: "1998-05-10T12:00:00",
     description:
-      "Happy-path baseline — sanitized real athlete bundle. Exercises the populated branches of every metric. Anchor 2026-05-10 sits one day after the fixture's last activity.",
+      "Happy-path baseline — sanitized real athlete bundle. Exercises the populated branches of every metric. Anchor 1998-05-10 sits one day after the fixture's last activity.",
   },
   {
     slug: "new-athlete-empty",
@@ -86,15 +90,18 @@ export const HARNESS_FIXTURES: HarnessFixtureConfig[] = [
   },
   {
     slug: "capability-qualifying",
-    frozenNow: DEFAULT_FROZEN_NOW,
+    // Own explicit anchor (NOT DEFAULT_FROZEN_NOW): derived from the
+    // realistic-athlete base, its dates were shifted back one full Gregorian
+    // cycle for de-identification, so its anchor moves with them.
+    frozenNow: "1998-05-10T12:00:00",
     description:
       "Populated-branch coverage for the capability sub-keys (durability, efficiency_factor, hrrc). Appends 5 steady-state qualifying Rides (VI 1.0, moving_time 6000s, decoupling/EF/hrr present) to the realistic-athlete base — 3 in the 7d window, 5 in the 28d window — clearing durability's reliability gate (N7>=3, N28>=5) and exercising the means + trends the all-null fixtures never reach.",
   },
   {
     slug: "curve-equipped",
-    frozenNow: "2026-06-04T12:00:00",
+    frozenNow: "1998-06-04T12:00:00",
     description:
-      "Populated-branch coverage for the curve/power-model capability keys (power_curve_delta, hr_curve_delta, sustainability_profile) + the 6 power-model scalars (eftp, w_prime, w_prime_kj, p_max, power_model_source, vo2max). Hybrid: real sanitized activity/wellness rows plus synthetic power_curves/hr_curves (both 28d delta windows at all rotation anchors), sustainability_curves (single 42d window, cycling Ride+VirtualRide), athlete.sportSettings (ftp 200 / indoor 195 / lthr 168), and a latest-row Ride sportInfo carrying eftp/wPrime/pMax + vo2max. Anchor 2026-06-04 places win1 (now-27..today) and win2 (now-55..now-28) over distinct real-data windows, so every pct_change and rotation_index is non-null. Built by tools/build-curve-fixture.ts (curve blocks attached AFTER the sanitizer — they bypass the default-deny key filter and the id redaction that would clobber the r.<start>.<end> curve ids).",
+      "Populated-branch coverage for the curve/power-model capability keys (power_curve_delta, hr_curve_delta, sustainability_profile) + the 6 power-model scalars (eftp, w_prime, w_prime_kj, p_max, power_model_source, vo2max). Hybrid: real sanitized activity/wellness rows plus synthetic power_curves/hr_curves (both 28d delta windows at all rotation anchors), sustainability_curves (single 42d window, cycling Ride+VirtualRide), athlete.sportSettings (ftp 200 / indoor 195 / lthr 168), and a latest-row Ride sportInfo carrying eftp/wPrime/pMax + vo2max. Anchor 1998-06-04 places win1 (now-27..today) and win2 (now-55..now-28) over distinct real-data windows, so every pct_change and rotation_index is non-null. Built by tools/build-curve-fixture.ts (curve blocks attached AFTER the sanitizer — they bypass the default-deny key filter and the id redaction that would clobber the r.<start>.<end> curve ids).",
   },
   {
     slug: "dfa-equipped",

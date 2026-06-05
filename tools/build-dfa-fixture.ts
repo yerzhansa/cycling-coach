@@ -23,7 +23,7 @@
 // threshold — so a "parity-green-but-vacuous" fixture can never ship.
 //
 // Usage (operator, dev-time):
-//   pnpm exec tsx tools/build-dfa-fixture.ts [--frozen-now 2026-06-04T12:00:00] [--out <path>]
+//   pnpm exec tsx tools/build-dfa-fixture.ts [--frozen-now 1998-06-04T12:00:00] [--out <path>]
 
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
@@ -32,7 +32,13 @@ import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_OUT = resolve(REPO_ROOT, "packages/core/tests/fixtures/golden/dfa-equipped.json");
-const DEFAULT_FROZEN_NOW = "2026-06-04T12:00:00";
+// Synthetic-epoch anchor (one full Gregorian cycle back from the real era).
+// This fixture is fully synthetic — no real PII — but the anchor sits in the
+// synthetic epoch so any future regen lands its dates pre-cutoff, consistent
+// with the fixture-privacy invariant (tools/check-fixture-privacy.ts). The
+// currently-committed dfa-equipped.json predates this anchor change and stays
+// on its prior dates until the next regen; it is exempt from the date lint.
+const DEFAULT_FROZEN_NOW = "1998-06-04T12:00:00";
 
 // Synthetic id base, well above the real-data sentinel and the curve fixture's
 // 90101 base, so the two synthetic fixtures never collide.

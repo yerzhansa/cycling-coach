@@ -68,7 +68,7 @@ export type ZoneTimes = z.infer<typeof ZoneTimesSchema>;
 /** Single intervals.icu activity, projected to fields metric layers consume. */
 export const ActivitySchema = z.looseObject({
   // Identity + timing — the API returns activity ids in either string form
-  // ("i146622609") or number form (17654321) depending on the endpoint and
+  // ("i12345678") or number form (17654321) depending on the endpoint and
   // sport; we mirror that union so real intervals.icu shape rides through.
   id: z.union([z.string(), z.number()]),
   start_date_local: z.string(), // ISO 8601

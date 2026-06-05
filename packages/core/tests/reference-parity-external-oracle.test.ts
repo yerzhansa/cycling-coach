@@ -85,7 +85,7 @@ describe("external-oracle snapshots (committed, immutable)", () => {
       expect(snap, `${entry.quantity} snapshot missing`).toBeDefined();
       expect(snap?.oracle).toBe("external");
       expect(snap?.athlete).toBe("curve-equipped");
-      expect(snap?.frozen_now).toBe("2026-06-04T12:00:00");
+      expect(snap?.frozen_now).toBe("1998-06-04T12:00:00");
     }
   });
 

@@ -3,6 +3,6 @@
   "athlete": "realistic-athlete",
   "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
   "section_11_protocol_version": "3.112",
-  "frozen_now": "2026-05-10T12:00:00",
+  "frozen_now": "1998-05-10T12:00:00",
   "value": "Power ladder: z3+ >= 30min, z4+ >= 10min, z5+ >= 5min, z6+ >= 2min, z7 >= 1min. HR fallback (when no power): z4+ >= 10min, z5+ >= 5min. Per Seiler 3-zone model + Foster. HR-based days flagged with intensity_basis: hr"
 }

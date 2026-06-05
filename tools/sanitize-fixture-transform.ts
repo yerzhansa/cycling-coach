@@ -4,8 +4,11 @@
 // have value-level transforms (id structural-pattern preserve, paired_event_id
 // redact, name sanitize). Numeric signal is preserved at full precision —
 // the realistic distribution of weights/HR/power/load is load-bearing test
-// signal. ISO date strings ride through verbatim (no jitter — destroys
-// temporal training structure that downstream metrics consume).
+// signal. ISO date strings are shifted back one full Gregorian cycle (the
+// synthetic epoch) so the committed fixture never publishes the real athlete's
+// training calendar; the whole-cycle shift preserves every date-to-date day
+// delta exactly, so the temporal training structure downstream metrics consume
+// is bit-identical in shape AND value (see tools/shift-to-synthetic-epoch.ts).
 //
 // Why allowlist instead of denylist: the prior denylist defaulted to
 // "include" and missed several operator-identifying fields the schemas
@@ -23,6 +26,7 @@ import {
   WellnessDaySchema,
   ZoneTimesSchema,
 } from "../packages/core/src/reference/schemas/inputs.js";
+import { shiftIsoToSyntheticEpoch } from "./shift-to-synthetic-epoch.js";
 
 // Mechanically derived from the project's input schemas. Adding a field to
 // a schema auto-allows it in the sanitizer — keeps the privacy boundary
@@ -63,12 +67,16 @@ export const ALLOWED_FIXTURE_KEYS: ReadonlySet<string> = new Set([
   ...EXTRA_ALLOW,
 ]);
 
-// `id` requires context-aware redaction. Two structural patterns ride through
-// unmodified because they're load-bearing test signal, not PII:
-//   - YYYY-MM-DD wellness date
-//   - Short uppercase-prefixed label (zone bins like "Z1"/"Z10"/"SS"/"WORK")
+// `id` requires context-aware redaction. Two structural patterns are NOT
+// redacted to the numeric sentinel because they're load-bearing test signal,
+// not account-linking PII:
+//   - YYYY-MM-DD wellness date — kept as a date, but date-shifted to the
+//     synthetic epoch (the date itself is the athlete's training calendar).
+//   - Short uppercase-prefixed label (zone bins like "Z1"/"Z10"/"SS"/"WORK") —
+//     rides through unchanged (carries no calendar or account information).
 // Everything else under the `id` key gets redacted to ID_NUMERIC_MOCK.
-const PRESERVED_ID_RE = /^(?:\d{4}-\d{2}-\d{2}|[A-Z][A-Za-z0-9]{0,3})$/;
+const WELLNESS_DATE_ID_RE = /^\d{4}-\d{2}-\d{2}$/;
+const ZONE_LABEL_RE = /^[A-Z][A-Za-z0-9]{0,3}$/;
 const ID_NUMERIC_MOCK = 12345;
 
 type Transform = (value: unknown) => unknown;
@@ -84,9 +92,24 @@ const TRANSFORMS: ReadonlyMap<string, Transform> = new Map<string, Transform>([
     "id",
     (v) => {
       if (v === null || v === undefined) return v;
-      if (typeof v === "string" && PRESERVED_ID_RE.test(v)) return v;
+      if (typeof v === "string") {
+        // Wellness-date id: keep the date shape but shift it to the synthetic
+        // epoch so the committed fixture doesn't carry the real calendar.
+        if (WELLNESS_DATE_ID_RE.test(v)) return shiftIsoToSyntheticEpoch(v);
+        // Zone-bin label: carries no calendar/account info — ride through.
+        if (ZONE_LABEL_RE.test(v)) return v;
+      }
       return ID_NUMERIC_MOCK;
     },
+  ],
+  [
+    "start_date_local",
+    (v) => (typeof v === "string" ? shiftIsoToSyntheticEpoch(v) : v),
+  ],
+  // FtpHistoryPointSchema.date — the only other ISO-date-valued schema field.
+  [
+    "date",
+    (v) => (typeof v === "string" ? shiftIsoToSyntheticEpoch(v) : v),
   ],
   [
     "paired_event_id",

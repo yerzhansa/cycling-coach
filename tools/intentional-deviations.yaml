@@ -125,12 +125,12 @@ deviations:
     type: algorithmic
     status: approved-revert
     decided_by: Yerzhan (operator)
-    decided_at: 2026-05-21
+    decided_at: 1998-05-21
     notes: |
       Phase 4 (T01) decision: revert to section-11's 7-day / 2-contributor
       implementation.
 
-      Literature reviewed (2026-05-21, agent-assisted abstract-level search):
+      Literature reviewed (1998-05-21, agent-assisted abstract-level search):
         - Plews 2012, "Heart rate variability in elite triathletes, is
           variation in variability the key to effective training? A case
           comparison" (Eur J Appl Physiol, PMID 22367011) — used 7-day
@@ -152,7 +152,7 @@ deviations:
 
       Follow-ups tracked in docs/progress/progress.json wave-2 (F8 spec
       rev 7 inline rewrite + ADR-0015 amendment). Status lives there;
-      this entry remains anchored to the 2026-05-21 revert decision.
+      this entry remains anchored to the 1998-05-21 revert decision.
 
   - metric: stress_tolerance
     section_11_implementation: |
@@ -176,13 +176,13 @@ deviations:
     type: algorithmic
     status: approved-revert
     decided_by: Yerzhan (operator)
-    decided_at: 2026-05-21
+    decided_at: 1998-05-21
     adr: docs/adr/0015-stress-tolerance-capacity-cap-family.md
     notes: |
       Phase 4 (T01) decision: revert to section-11's
       `(strain / monotony) / 100` implementation.
 
-      Literature reviewed (2026-05-21, agent-assisted abstract-level search):
+      Literature reviewed (1998-05-21, agent-assisted abstract-level search):
         - Foster 2001, "A new approach to monitoring exercise training"
           (J Strength Cond Res 15(1):109–115) — establishes monotony,
           strain, and the broader load-monitoring framework. Section-11's
@@ -209,7 +209,7 @@ deviations:
 
       Follow-ups tracked in docs/progress/progress.json wave-2 (F8 spec
       rev 7 inline rewrite + ADR-0015 amendment). Status lives there;
-      this entry remains anchored to the 2026-05-21 revert decision.
+      this entry remains anchored to the 1998-05-21 revert decision.
 
   - metric: load_recovery_ratio
     section_11_implementation: |
@@ -234,12 +234,12 @@ deviations:
     type: algorithmic
     status: approved-revert
     decided_by: Yerzhan (operator)
-    decided_at: 2026-05-21
+    decided_at: 1998-05-21
     notes: |
       Phase 4 (T01) decision: revert to section-11's
       `tss_7d / (ri × 100)` implementation.
 
-      Literature reviewed (2026-05-21, agent-assisted abstract-level search):
+      Literature reviewed (1998-05-21, agent-assisted abstract-level search):
         - HRV/RHR as recovery indicators: Buchheit 2014
           (DOI 10.3389/fphys.2014.00073), Plews 2012/2013, narrative
           reviews (PMC7663087, PMC12787763). All converge on HRV being
@@ -271,7 +271,7 @@ deviations:
       Follow-ups tracked in docs/progress/progress.json wave-2 (F8 spec
       rev 7 inline rewrite + F7 schema rev to drop weeklyRecoveryProxyHours
       rename + REST_DAY_RECOVERY_HOURS removal). Status lives there;
-      this entry remains anchored to the 2026-05-21 revert decision.
+      this entry remains anchored to the 1998-05-21 revert decision.
 
 # ─── External-oracle coverage registry (v1) ──────────────────────────
 #
@@ -289,9 +289,9 @@ external_coverage:
   - quantity: power_mean_max_current
     fixture: curve-equipped
     anchor:
-      fixture_path: power_curves.list[id=r.2026-05-08.2026-06-04]
+      fixture_path: power_curves.list[id=r.1998-05-08.1998-06-04]
       oracle_path: value.mean_max
-      window_id: r.2026-05-08.2026-06-04
+      window_id: r.1998-05-08.1998-06-04
       units: watts
     tolerance:
       kind: floor_int
@@ -311,9 +311,9 @@ external_coverage:
   - quantity: power_mean_max_previous
     fixture: curve-equipped
     anchor:
-      fixture_path: power_curves.list[id=r.2026-04-10.2026-05-07]
+      fixture_path: power_curves.list[id=r.1998-04-10.1998-05-07]
       oracle_path: value.mean_max
-      window_id: r.2026-04-10.2026-05-07
+      window_id: r.1998-04-10.1998-05-07
       units: watts
     tolerance:
       kind: floor_int
@@ -330,9 +330,9 @@ external_coverage:
   - quantity: hr_mean_max_current
     fixture: curve-equipped
     anchor:
-      fixture_path: hr_curves.list[id=r.2026-05-08.2026-06-04]
+      fixture_path: hr_curves.list[id=r.1998-05-08.1998-06-04]
       oracle_path: value.mean_max
-      window_id: r.2026-05-08.2026-06-04
+      window_id: r.1998-05-08.1998-06-04
       units: bpm
     tolerance:
       kind: floor_int
@@ -349,9 +349,9 @@ external_coverage:
   - quantity: hr_mean_max_previous
     fixture: curve-equipped
     anchor:
-      fixture_path: hr_curves.list[id=r.2026-04-10.2026-05-07]
+      fixture_path: hr_curves.list[id=r.1998-04-10.1998-05-07]
       oracle_path: value.mean_max
-      window_id: r.2026-04-10.2026-05-07
+      window_id: r.1998-04-10.1998-05-07
       units: bpm
     tolerance:
       kind: floor_int
@@ -367,9 +367,9 @@ external_coverage:
   - quantity: sustainability_power_mean_max
     fixture: curve-equipped
     anchor:
-      fixture_path: sustainability_curves.cycling.power.Ride.list[id=r.2026-04-24.2026-06-04]
+      fixture_path: sustainability_curves.cycling.power.Ride.list[id=r.1998-04-24.1998-06-04]
       oracle_path: value.mean_max
-      window_id: r.2026-04-24.2026-06-04
+      window_id: r.1998-04-24.1998-06-04
       units: watts
     tolerance:
       kind: floor_int
@@ -387,9 +387,9 @@ external_coverage:
   - quantity: sustainability_hr_mean_max
     fixture: curve-equipped
     anchor:
-      fixture_path: sustainability_curves.cycling.hr.Ride.list[id=r.2026-04-24.2026-06-04]
+      fixture_path: sustainability_curves.cycling.hr.Ride.list[id=r.1998-04-24.1998-06-04]
       oracle_path: value.mean_max
-      window_id: r.2026-04-24.2026-06-04
+      window_id: r.1998-04-24.1998-06-04
       units: bpm
     tolerance:
       kind: floor_int
@@ -425,7 +425,7 @@ external_coverage:
       file is retained for future use and reported as uncovered in the
       gate's coverage output.
 
-# Reference-layer baseline audit (2026-05-21)
+# Reference-layer baseline audit (1998-05-21)
 #
 # Mechanical sweep over the shipped non-metric Reference layer code
 # (sync infrastructure + schemas + concurrency + io primitives) against

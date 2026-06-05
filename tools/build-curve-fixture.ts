@@ -22,7 +22,7 @@
 //   pnpm exec tsx tools/build-curve-fixture.ts \
 //     --raw-bundle /tmp/raw-bundle.json \
 //     --raw-curves /tmp/curves-raw.json \
-//     [--frozen-now 2026-06-04T12:00:00] [--out <path>]
+//     [--frozen-now 1998-06-04T12:00:00] [--out <path>]
 
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -39,7 +39,12 @@ import { sanitizeFixture } from "./sanitize-fixture-transform.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_OUT = resolve(REPO_ROOT, "packages/core/tests/fixtures/golden/curve-equipped.json");
-const DEFAULT_FROZEN_NOW = "2026-06-04T12:00:00";
+// Synthetic-epoch anchor (one full Gregorian cycle back from the real era).
+// The curve-window `r.<start>.<end>` ids are derived from this clock and are
+// attached AFTER the sanitizer (which does not see them), so the anchor itself
+// must already sit in the synthetic epoch for the committed ids to be
+// de-identified. A whole-cycle shift keeps every derived window aligned.
+const DEFAULT_FROZEN_NOW = "1998-06-04T12:00:00";
 
 // Cycling sport types and synthetic id base. Curve metrics never join on
 // activity id (curves match by curve-id string; active_sport_families reads

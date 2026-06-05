@@ -103,7 +103,7 @@ describe("ActivitySchema (z.looseObject)", () => {
 
   it("accepts an Activity whose id is the string form 'i<digits>' (the API uses this shape on some endpoints)", () => {
     const stringIdActivity = {
-      id: "i146622609",
+      id: "i12345678",
       start_date_local: "2026-04-15T07:30:00",
       type: "Ride",
       moving_time: 5400,
@@ -115,7 +115,7 @@ describe("ActivitySchema (z.looseObject)", () => {
 
   it("accepts an Activity whose pace_zone_times is null (API writes null, not absent, when the series is unavailable)", () => {
     const nullZoneActivity = {
-      id: "i146400073",
+      id: "i12345679",
       start_date_local: "2026-04-15T07:30:00",
       type: "Ride",
       moving_time: 5400,

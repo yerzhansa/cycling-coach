@@ -149,7 +149,7 @@ describe("sanitize-fixture CLI — main()", () => {
     expect(secondContent).not.toBe(firstContent);
     expect(JSON.parse(secondContent)).toEqual({
       activities: [{ id: 12345, type: "Run" }],
-      wellness: [{ id: "2026-05-11", weight: 73.4 }],
+      wellness: [{ id: "1998-05-11", weight: 73.4 }],
     });
   });
 
@@ -191,9 +191,9 @@ describe("sanitize-fixture CLI — main()", () => {
     expect(written.wellness[0]).not.toHaveProperty("ctlLoad");
     expect(written.wellness[0]).not.toHaveProperty("atlLoad");
     expect(written.wellness[0]).not.toHaveProperty("rampRate");
-    // Non-TP field rides through; YYYY-MM-DD id preserved.
+    // Non-TP field rides through; YYYY-MM-DD id shifted to the synthetic epoch.
     expect(written.wellness[0].weight).toBe(73.4);
-    expect(written.wellness[0].id).toBe("2026-05-11");
+    expect(written.wellness[0].id).toBe("1998-05-11");
   });
 
   it("renames TP activity fields to fitnessAtEnd/fatigueAtEnd", async () => {
@@ -226,8 +226,9 @@ describe("sanitize-fixture CLI — main()", () => {
     expect(written.activities[0].fatigueAtEnd).toBe(38.2);
     expect(written.activities[0]).not.toHaveProperty("icu_ctl");
     expect(written.activities[0]).not.toHaveProperty("icu_atl");
-    // Non-TP fields ride through; account-linking id is redacted.
-    expect(written.activities[0].start_date_local).toBe("2026-05-11T08:00:00");
+    // Non-TP fields ride through; the date shifts to the synthetic epoch and
+    // the account-linking id is redacted.
+    expect(written.activities[0].start_date_local).toBe("1998-05-11T08:00:00");
     expect(written.activities[0].id).toBe(12345);
   });
 

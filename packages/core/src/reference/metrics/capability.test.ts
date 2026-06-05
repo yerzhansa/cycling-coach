@@ -509,12 +509,12 @@ const PCD_NOTE =
   "300s excluded from rotation (transitional). " +
   "Null when either window has fewer than 3 valid anchor durations.";
 
-// frozenNow=2026-06-04 → current window r.2026-05-08.2026-06-04 (now-27..today),
-// previous window r.2026-04-10.2026-05-07 (now-55..now-28). Matches the
+// frozenNow=1998-06-04 → current window r.1998-05-08.1998-06-04 (now-27..today),
+// previous window r.1998-04-10.1998-05-07 (now-55..now-28). Matches the
 // curve-equipped oracle snapshot's window math.
-const PCD_FROZEN_NOW = "2026-06-04T12:00:00";
-const PCD_CURRENT_ID = "r.2026-05-08.2026-06-04";
-const PCD_PREVIOUS_ID = "r.2026-04-10.2026-05-07";
+const PCD_FROZEN_NOW = "1998-06-04T12:00:00";
+const PCD_CURRENT_ID = "r.1998-05-08.1998-06-04";
+const PCD_PREVIOUS_ID = "r.1998-04-10.1998-05-07";
 
 function powerInput(
   powerCurves: PowerCurveData | undefined,
@@ -539,8 +539,8 @@ describe("computePowerCurveDelta", () => {
   it("empty list → null block but WITH window keys (curves present gates the dates)", () => {
     expect(computePowerCurveDelta(powerInput({ list: [] }))).toEqual({
       window_days: 28,
-      current_window: { start: "2026-05-08", end: "2026-06-04" },
-      previous_window: { start: "2026-04-10", end: "2026-05-07" },
+      current_window: { start: "1998-05-08", end: "1998-06-04" },
+      previous_window: { start: "1998-04-10", end: "1998-05-07" },
       anchors: null,
       rotation_index: null,
       note: "Insufficient power data in one or both windows.",
@@ -556,7 +556,7 @@ describe("computePowerCurveDelta", () => {
     expect(result.anchors).toBeNull();
     expect(result.rotation_index).toBeNull();
     expect(result.note).toBe("No power data in previous window(s).");
-    expect(result.current_window).toEqual({ start: "2026-05-08", end: "2026-06-04" });
+    expect(result.current_window).toEqual({ start: "1998-05-08", end: "1998-06-04" });
   });
 
   it("populated: per-anchor pct_change + rotation_index match the curve-equipped oracle", () => {
@@ -578,8 +578,8 @@ describe("computePowerCurveDelta", () => {
     );
     expect(result).toEqual({
       window_days: 28,
-      current_window: { start: "2026-05-08", end: "2026-06-04" },
-      previous_window: { start: "2026-04-10", end: "2026-05-07" },
+      current_window: { start: "1998-05-08", end: "1998-06-04" },
+      previous_window: { start: "1998-04-10", end: "1998-05-07" },
       anchors: {
         "5s": { current_watts: 637, previous_watts: 564, pct_change: 12.9 },
         "60s": { current_watts: 310, previous_watts: 259, pct_change: 19.7 },
@@ -653,10 +653,10 @@ describe("computePowerCurveDelta", () => {
   });
 });
 
-// frozenNow=2026-06-04 → single 42d window r.2026-04-24.2026-06-04
+// frozenNow=1998-06-04 → single 42d window r.1998-04-24.1998-06-04
 // (now-41..today). Matches the curve-equipped oracle snapshot's window math.
-const SUS_FROZEN_NOW = "2026-06-04T12:00:00";
-const SUS_CURVE_ID = "r.2026-04-24.2026-06-04";
+const SUS_FROZEN_NOW = "1998-06-04T12:00:00";
+const SUS_CURVE_ID = "r.1998-04-24.1998-06-04";
 
 interface SusWellnessRow {
   id: string;
@@ -731,12 +731,12 @@ describe("computeSustainabilityProfile", () => {
     const result = computeSustainabilityProfile(
       susInput({
         curves: cyclingCurves(),
-        wellness: [{ id: "2026-05-17", weight: 87 }],
+        wellness: [{ id: "1998-05-17", weight: 87 }],
         athlete: SUS_ATHLETE,
       }),
     );
 
-    expect(result.window).toEqual({ days: 42, start: "2026-04-24", end: "2026-06-04" });
+    expect(result.window).toEqual({ days: 42, start: "1998-04-24", end: "1998-06-04" });
     expect(result.weight_kg).toBe(87);
     expect(result.weight_source).toBe("wellness_extended");
 
@@ -775,10 +775,10 @@ describe("computeSustainabilityProfile", () => {
       susInput({
         curves: cyclingCurves(),
         wellness: [
-          { id: "2026-05-17", weight: 87 },
+          { id: "1998-05-17", weight: 87 },
           // latest in-window row carries the Ride sportInfo → power model w_prime
           {
-            id: "2026-06-04",
+            id: "1998-06-04",
             weight: null,
             sportInfo: [{ type: "Ride", eftp: 200, wPrime: 13882, pMax: 727 }],
           } as unknown as SusWellnessRow,
@@ -810,7 +810,7 @@ describe("computeSustainabilityProfile", () => {
           // VirtualRide higher at 300s → indoor wins that anchor
           virtualRideWatts: [230, 204, 191, 175, 169, 163, 163],
         }),
-        wellness: [{ id: "2026-05-17", weight: 87 }],
+        wellness: [{ id: "1998-05-17", weight: 87 }],
         athlete: SUS_ATHLETE,
       }),
     );
@@ -831,7 +831,7 @@ describe("computeSustainabilityProfile", () => {
           rideWatts: [218, null, null, null, null, null, null],
           virtualRideWatts: [218, null, null, null, null, null, null],
         }),
-        wellness: [{ id: "2026-05-17", weight: 87 }],
+        wellness: [{ id: "1998-05-17", weight: 87 }],
         athlete: SUS_ATHLETE,
       }),
     );
@@ -847,8 +847,8 @@ describe("computeSustainabilityProfile", () => {
       susInput({
         curves: cyclingCurves(),
         wellness: [
-          { id: "2026-05-17", weight: 80 }, // extended window only
-          { id: "2026-06-02", weight: 86 }, // inside 7d window [now-6, today]
+          { id: "1998-05-17", weight: 80 }, // extended window only
+          { id: "1998-06-02", weight: 86 }, // inside 7d window [now-6, today]
         ],
         athlete: SUS_ATHLETE,
       }),
@@ -880,7 +880,7 @@ describe("computeSustainabilityProfile", () => {
       },
     } as unknown as Record<string, SustainabilityFamilyCurves>;
     const result = computeSustainabilityProfile(
-      susInput({ curves: rowingCurves, wellness: [{ id: "2026-05-17", weight: 80 }] }),
+      susInput({ curves: rowingCurves, wellness: [{ id: "1998-05-17", weight: 80 }] }),
     );
     const rowing = result.rowing as unknown as { anchors: Record<string, Record<string, unknown>> };
     const anchor = rowing.anchors["300s"];
@@ -899,7 +899,7 @@ describe("computeSustainabilityProfile", () => {
     } as unknown as Record<string, SustainabilityFamilyCurves>;
     expect(computeSustainabilityProfile(susInput({ curves: swimCurves }))).toEqual({
       note: "No sport families produced valid sustainability data.",
-      window: { days: 42, start: "2026-04-24", end: "2026-06-04" },
+      window: { days: 42, start: "1998-04-24", end: "1998-06-04" },
     });
   });
 });

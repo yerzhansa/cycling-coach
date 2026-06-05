@@ -71,7 +71,7 @@ function intArg(flag: string, raw: string, min: number): number {
 }
 
 function parseArgs(argv: string[]): Args {
-  const out: Args = { n: 5000, seed: 20260525, fixture: "realistic-athlete", frozenNow: "2026-05-10T12:00:00" };
+  const out: Args = { n: 5000, seed: 20260525, fixture: "realistic-athlete", frozenNow: "1998-05-10T12:00:00" };
   for (const a of argv) {
     const m = /^--([a-zA-Z]+)=(.+)$/.exec(a);
     if (!m) continue;

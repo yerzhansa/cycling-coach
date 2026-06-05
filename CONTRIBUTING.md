@@ -108,6 +108,15 @@ The second command writes both `realistic-athlete.json` and `realistic-athlete.j
 
 **Reviewer checklist for schema-adding PRs.** When a PR adds a field to any of the seven input schemas in `packages/core/src/reference/schemas/inputs.ts`, the new field is now auto-allowed in committed fixtures via `ALLOWED_FIXTURE_KEYS`. Confirm the field is either (a) not present in the source mock, or (b) carries no PII once the mock includes it. If neither holds, the field must land with a value-level transform in `TRANSFORMS` (see `source` as precedent) or be excluded via a schema-shape carve-out.
 
+## Fixture privacy
+
+Golden fixtures under `packages/core/tests/fixtures/golden/` derive from a real intervals.icu athlete account. Two classes of identifier must NEVER reach a committed fixture:
+
+1. **Account-linking ids.** Real intervals.icu activity ids have the shape `i` + 8-9 digits (string form) or a large bare integer (number form). The operator sanitizer (`tools/sanitize-fixture.ts` -> `tools/sanitize-fixture-transform.ts`) redacts every numeric `id`/`*_id` to the `12345` sentinel; synthetic build fixtures use the reserved ranges `90101+` (curve-equipped) and `90201+` (dfa-equipped).
+2. **The athlete's real training calendar.** ISO dates are no longer ridden through verbatim — the sanitizer and the `build-*-fixture.ts` scripts shift every date back one full Gregorian cycle to a synthetic pre-2010 epoch via the shared `tools/shift-to-synthetic-epoch.ts` util. A full-cycle (year -= 28) shift preserves every date-to-date day-delta exactly, so temporal metrics stay bit-identical in shape AND value.
+
+A static gate, `pnpm check:fixture-privacy` (`tools/check-fixture-privacy.ts`), runs in CI and enforces both invariants by SHAPE: it forbids the real id shape `i\d{8,9}` anywhere under `packages/` and `tools/` (outside the documented synthetic-placeholder allowlist or a `fixture-privacy-lint:skip-file` marker), and forbids ISO dates with year >= 2015 inside real-data golden fixtures. Fully-synthetic golden fixtures (hand-crafted / fuzz-derived, zero real data — see the provenance column in `packages/core/tests/fixtures/README.md`) are exempt from the date rule via `SYNTHETIC_FIXTURE_ALLOWLIST`. After regenerating any fixture, run `pnpm check:fixture-privacy` locally; if it flags a date, you forgot to run the regen through the sanitizer / build script. To exempt a file that legitimately needs a forbidden shape (the linter's own source, its test fixtures), add `fixture-privacy-lint:skip-file` within the first 1 KB — same convention as the trademark lint.
+
 ## Telegram allowlist file
 
 The bot enforces a per-user-ID allowlist via `~/.cycling-coach/allowed-senders.json` (mode `0600`). Schema and validation live in `packages/core/src/channels/allowed-senders.ts`. CLI mutations (`add-sender`, `remove-sender`) acquire a PID lockfile at `~/.cycling-coach/.allowed-senders.lock` so concurrent invocations serialize cleanly. **Do not edit `allowed-senders.json` by hand while the bot is running** — the bot re-reads it on every inbound message, but a hand-edit during a write will lose updates. Use the CLI subcommands instead.

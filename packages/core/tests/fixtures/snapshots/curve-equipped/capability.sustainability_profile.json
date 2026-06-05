@@ -3,7 +3,7 @@
   "athlete": "curve-equipped",
   "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
   "section_11_protocol_version": "3.112",
-  "frozen_now": "2026-06-04T12:00:00",
+  "frozen_now": "1998-06-04T12:00:00",
   "value": {
     "cycling": {
       "anchors": {
@@ -102,8 +102,8 @@
     "weight_source": "wellness_extended",
     "window": {
       "days": 42,
-      "end": "2026-06-04",
-      "start": "2026-04-24"
+      "end": "1998-06-04",
+      "start": "1998-04-24"
     }
   }
 }

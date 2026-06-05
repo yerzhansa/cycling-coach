@@ -648,7 +648,7 @@ describe("computeHasIntervals", () => {
     // ECMAScript Object key-ordering spec that masks insertion-order bugs
     // on numeric-id activities (the parity gate's deepCompare is order-
     // insensitive, so this matters for downstream LLM iteration only).
-    // Real intervals.icu ids carry the 'i' prefix (e.g. 'i146622609'),
+    // Real intervals.icu ids carry the 'i' prefix (e.g. 'i12345678'),
     // which stays non-integer-like.
     const env = withIntervals(
       [{ id: "i20" }, { id: "i03" }, { id: "i10" }],
