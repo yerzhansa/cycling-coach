@@ -21,11 +21,12 @@ Usage (recommended, via uv):
   uv run --python 3.12 tools/snapshot-section-11-native.py \\
       > /tmp/native-snapshots.json
 
-  # Or with arguments:
+  # Or with arguments (realistic-athlete is 1998-anchored after the
+  # de-identify shift — its frozen-now must match the fixture's anchor):
   uv run --python 3.12 tools/snapshot-section-11-native.py \\
       --section-11-repo /path/to/section-11 \\
       --fixture packages/core/tests/fixtures/golden/realistic-athlete.json \\
-      --frozen-now 2026-05-10T12:00:00 \\
+      --frozen-now 1998-05-10T12:00:00 \\
       --out /tmp/native-snapshots.json
 
 The output JSON is a flat map of metric name → value, the same
@@ -63,8 +64,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--frozen-now",
         type=str,
-        default="2026-05-10T12:00:00",
-        help="ISO-8601 datetime to freeze datetime.now() to (matches the pyodide harness default).",
+        default="1998-05-10T12:00:00",
+        help=(
+            "ISO-8601 datetime to freeze datetime.now() to. MUST match the "
+            "anchor the pyodide harness wrote for the fixture (each fixture's "
+            "frozen_now field). The default matches the realistic-athlete "
+            "fixture, whose dates were shifted back one full Gregorian cycle "
+            "for de-identification (1998-anchored); pass the matching anchor "
+            "for any other fixture or the diff goes false-red."
+        ),
     )
     parser.add_argument(
         "--out",
@@ -223,6 +231,34 @@ def main() -> int:
 
     bench_none = (None, None, None)
 
+    # Pass-through read of the F11 fixture extensions — mirror the pyodide
+    # harness. Each field is optional on every committed fixture; absent fields
+    # reproduce the prior hardcoded null branch, so fixtures carrying none stay
+    # byte-identical, while populated branches (past_events → consistency_index,
+    # current_ftp_* + ftp_history_* → benchmark_*) actually run. `fixture` is a
+    # plain dict here, so no tracker bypass is needed.
+    past_events = fixture.get("past_events", []) or []
+    current_ftp_indoor = fixture.get("current_ftp_indoor")
+    ftp_history_indoor = fixture.get("ftp_history_indoor") or {}
+    current_ftp_outdoor = fixture.get("current_ftp_outdoor")
+    ftp_history_outdoor = fixture.get("ftp_history_outdoor") or {}
+
+    if current_ftp_indoor and ftp_history_indoor:
+        idx_in, ftp8_in = sync._calculate_benchmark_index(
+            current_ftp_indoor, ftp_history_indoor
+        )
+        benchmark_indoor = (idx_in, ftp8_in, current_ftp_indoor)
+    else:
+        benchmark_indoor = bench_none
+
+    if current_ftp_outdoor and ftp_history_outdoor:
+        idx_out, ftp8_out = sync._calculate_benchmark_index(
+            current_ftp_outdoor, ftp_history_outdoor
+        )
+        benchmark_outdoor = (idx_out, ftp8_out, current_ftp_outdoor)
+    else:
+        benchmark_outdoor = bench_none
+
     # Conditional curve / athlete kwargs — mirror the pyodide harness. Each
     # derived kwarg is computed ONLY when its source fixture key is present;
     # absent keys reproduce the prior stub so fixtures carrying none stay
@@ -298,11 +334,11 @@ def main() -> int:
             current_ctl=current_ctl,
             current_atl=current_atl,
             current_tsb=current_tsb,
-            past_events=[],
+            past_events=past_events,
             activities_for_consistency=activities_7d,
             power_model=power_model,
-            benchmark_indoor=bench_none,
-            benchmark_outdoor=bench_none,
+            benchmark_indoor=benchmark_indoor,
+            benchmark_outdoor=benchmark_outdoor,
             vo2max=vo2max,
             formatted_planned_workouts=[],
             race_calendar=None,

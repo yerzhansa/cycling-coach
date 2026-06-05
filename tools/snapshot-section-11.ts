@@ -32,6 +32,7 @@ import {
   OPTIONAL_FIXTURE_PATHS,
 } from "./harness-contract.js";
 import { DEFAULT_FROZEN_NOW, HARNESS_FIXTURES } from "./harness-fixtures.js";
+import { runNativeCheckGate } from "./native-check-gate.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..");
@@ -730,6 +731,20 @@ async function main(): Promise<void> {
   console.log(
     `[snapshot] manifest pins ${fixtureSlugs.length} fixture(s) + ${allMetrics.length} metric(s)`,
   );
+
+  // Gate the regen on a green native runtime-parity diff: re-run the just-
+  // written snapshots through the host-CPython twin and assert bit-identity.
+  // Throws on a red diff (main().catch maps to a non-zero exit); a written-
+  // but-unverified tree is the accepted trade-off — the thrown message tells
+  // the operator to revert via git checkout.
+  const skipNativeCheck =
+    process.env.SKIP_NATIVE_CHECK === "1" ||
+    process.argv.includes("--skip-native-check");
+  await runNativeCheckGate({
+    snapshotRoot,
+    fixtures: results,
+    skip: skipNativeCheck,
+  });
 }
 
 main().catch((err) => {

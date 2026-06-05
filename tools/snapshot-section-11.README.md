@@ -443,12 +443,25 @@ against `section_11_sha = 224c369d` are bit-identical between:
 - pyodide `0.29.4` (CPython 3.12, WASM)
 - host CPython `3.12.13` (managed by `uv`)
 
-`curve-equipped` and `dfa-equipped` are verified separately (each uses the
-`2026-06-04T12:00:00` anchor): generate the native snapshot with
+Each fixture is verified against the anchor the pyodide harness wrote for
+it (its `frozen_now` field): `realistic-athlete` and `capability-qualifying`
+are `1998-05-10T12:00:00`, `curve-equipped` is `1998-06-04T12:00:00`, and
+`dfa-equipped` is `2026-06-04T12:00:00`. To verify one fixture by hand,
+generate the native snapshot with
 `--fixture packages/core/tests/fixtures/golden/<slug>.json
---frozen-now 2026-06-04T12:00:00` and diff against the committed snapshot dir.
+--frozen-now <that fixture's anchor>` and diff against the committed
+snapshot dir.
 
-Reproduce the check:
+**This diff now runs automatically on every regen.** `pnpm snapshot:section-11`
+invokes the native runtime-parity gate (`tools/native-check-gate.ts`) after
+writing the snapshots: it runs the host-CPython twin against every
+just-regenerated fixture — sourcing each fixture's frozen-now from the
+snapshot it just wrote — and throws if any metric diverges, so the regen
+exits non-zero and the operator reverts with
+`git checkout packages/core/tests/fixtures/snapshots`. The gate lives only on
+the local regen path; CI never regenerates, so it never needs `uv`.
+
+Reproduce the check by hand (or to inspect a single fixture):
 
 ```bash
 # Install uv and Python 3.12 (one-time setup)
@@ -456,11 +469,13 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 uv python install 3.12
 
-# Generate native + pyodide snapshots, diff them
+# realistic-athlete is 1998-anchored after the de-identify shift — its
+# frozen-now MUST match the fixture's anchor or the diff goes false-red.
 pnpm snapshot:section-11
-uv run --python 3.12 tools/snapshot-section-11-native.py --out /tmp/native-snapshots.json
+uv run --python 3.12 tools/snapshot-section-11-native.py \
+    --frozen-now 1998-05-10T12:00:00 --out /tmp/native-snapshots.json
 pnpm tsx tools/diff-pyodide-vs-cpython.ts /tmp/native-snapshots.json
-# expect: [diff] OK — 63 metrics bit-identical...
+# expect: [diff] OK — N metrics bit-identical...
 ```
 
 If the diff surfaces a divergence in the future (new fixture, new
@@ -469,21 +484,34 @@ the harness become the oracle for additional metrics — running TS
 ports against a known-divergent pyodide output silently drifts the
 gate from CPython's real-world behavior.
 
-Spot-check only — runs by hand at setup, on every section-11 SHA
-bump, and on every pyodide upgrade. Not part of `pnpm test` because
-it requires `uv` + Python 3.12 on the host, which CI doesn't
-currently provision.
+To bypass the auto-gate (loud last resort — e.g. host CPython genuinely
+unavailable), pass `--skip-native-check` or set `SKIP_NATIVE_CHECK=1`; the
+harness prints a loud warning naming exactly what was NOT cross-checked and
+exits 0. Re-run without the flag before committing.
+
+**Every future change to the harness's compute logic must land a matched
+change in the native twin (`tools/snapshot-section-11-native.py`).** The two
+paths are independent reimplementations of the same logic shape, and this
+gate is the lock-step check — if they drift, the gate goes red on the next
+regen (that is the point).
 
 ## Frozen clock
 
 The harness exports a `DEFAULT_FROZEN_NOW = "2026-05-10T12:00:00"` anchor
 and the `HARNESS_FIXTURES` allowlist binds a `frozenNow` to each fixture.
-Most fixtures use the default; `data-gap-mid-history` overrides to
-`2026-05-20T12:00:00` so its resumed week lands inside the 7d acute
-window. Per-snapshot wrappers record the exact anchor each metric was
-captured against (`frozen_now` field); the manifest top-level reports
-the default. If a fixture's date range shifts, move its allowlist entry
-in lockstep.
+Most synthetic fixtures use the default; `data-gap-mid-history` overrides
+to `2026-05-20T12:00:00` so its resumed week lands inside the 7d acute
+window. The real-data fixtures carry their own anchors because their dates
+were shifted back one full Gregorian cycle for de-identification:
+`realistic-athlete` and `capability-qualifying` anchor at
+`1998-05-10T12:00:00` and `curve-equipped` at `1998-06-04T12:00:00`, so the
+anchor moves in lockstep with the shifted calendar. Per-snapshot wrappers
+record the exact anchor each metric was captured against (`frozen_now`
+field); the manifest top-level reports the default. The native-check gate
+sources each fixture's anchor from this `frozen_now` field (never a
+hardcoded default), which is why the 1998-anchored real-data fixtures don't
+go false-red against the native twin. If a fixture's date range shifts,
+move its allowlist entry in lockstep.
 
 ## Adding a new athlete
 

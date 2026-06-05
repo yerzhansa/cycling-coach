@@ -4,9 +4,11 @@
  * `tools/snapshot-section-11-native.py`. Exit 0 if every populated
  * metric is bit-identical; exit 1 with a structured diff otherwise.
  *
- * Spot-check tool — not part of `pnpm test` because it needs `uv` +
- * host Python 3.12, which CI doesn't currently provision. Run by
- * hand at setup, on pyodide upgrades, and on upstream SHA bumps.
+ * The pure comparators (`loadPyodideSnapshots`, `compareSnapshots`) are
+ * exported so `tools/native-check-gate.ts` can run the same diff per
+ * fixture on the local regen path. This CLI keeps its hand-run behavior:
+ * one native JSON argument, diffed against the realistic-athlete pyodide
+ * snapshot dir.
  */
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -15,18 +17,29 @@ import { join, resolve } from "node:path";
 
 import { deepCompare, REPO_ROOT } from "./check-metric-parity";
 
-const SNAPSHOT_DIR = resolve(
+const REALISTIC_ATHLETE_DIR = resolve(
   REPO_ROOT,
   "packages/core/tests/fixtures/snapshots/realistic-athlete",
 );
 
-function loadPyodideSnapshots(): Map<string, unknown> {
+export interface SnapshotDiff {
+  metric: string;
+  reason: string;
+}
+
+/**
+ * Load the committed per-metric pyodide snapshots from a slug's snapshot
+ * directory into a metric → value map. Each `*.json` file under `dir` is a
+ * wrapper carrying `{ metric, value }`; the value is what the comparator pins.
+ */
+export function loadPyodideSnapshots(dir: string): Map<string, unknown> {
   const out = new Map<string, unknown>();
-  for (const entry of readdirSync(SNAPSHOT_DIR)) {
+  for (const entry of readdirSync(dir)) {
     if (!entry.endsWith(".json")) continue;
-    const parsed = JSON.parse(
-      readFileSync(join(SNAPSHOT_DIR, entry), "utf8"),
-    ) as { metric: string; value: unknown };
+    const parsed = JSON.parse(readFileSync(join(dir, entry), "utf8")) as {
+      metric: string;
+      value: unknown;
+    };
     out.set(parsed.metric, parsed.value);
   }
   return out;
@@ -35,6 +48,43 @@ function loadPyodideSnapshots(): Map<string, unknown> {
 function loadNativeSnapshot(path: string): Map<string, unknown> {
   const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
   return new Map(Object.entries(raw));
+}
+
+/**
+ * Pure comparator: diff a pyodide metric→value map against a native
+ * metric→value map. Returns one `SnapshotDiff` per metric that is missing
+ * from either side or whose leaves diverge. An empty array means every
+ * shared, populated metric is bit-identical.
+ */
+export function compareSnapshots(
+  pyodide: Map<string, unknown>,
+  native: Map<string, unknown>,
+): SnapshotDiff[] {
+  const allMetrics = new Set([...pyodide.keys(), ...native.keys()]);
+  const diffs: SnapshotDiff[] = [];
+  for (const metric of allMetrics) {
+    if (!pyodide.has(metric)) {
+      diffs.push({ metric, reason: "missing from pyodide snapshots" });
+      continue;
+    }
+    if (!native.has(metric)) {
+      diffs.push({ metric, reason: "missing from native output" });
+      continue;
+    }
+    const leafDiffs = deepCompare(pyodide.get(metric), native.get(metric));
+    if (leafDiffs.length === 0) continue;
+    const summary = leafDiffs
+      .slice(0, 5)
+      .map(
+        (d) =>
+          `${d.path}: pyodide=${JSON.stringify(d.expected)} cpython=${JSON.stringify(d.actual)}`,
+      )
+      .join("; ");
+    const tail =
+      leafDiffs.length > 5 ? ` (+${leafDiffs.length - 5} more leaves)` : "";
+    diffs.push({ metric, reason: `${summary}${tail}` });
+  }
+  return diffs;
 }
 
 function main(): number {
@@ -52,36 +102,16 @@ function main(): number {
     return 2;
   }
 
-  const pyodide = loadPyodideSnapshots();
+  const pyodide = loadPyodideSnapshots(REALISTIC_ATHLETE_DIR);
   const native = loadNativeSnapshot(nativePath);
-
+  const diffs = compareSnapshots(pyodide, native);
   const allMetrics = new Set([...pyodide.keys(), ...native.keys()]);
-  const diffs: { metric: string; reason: string }[] = [];
-  let matched = 0;
-  for (const metric of allMetrics) {
-    if (!pyodide.has(metric)) {
-      diffs.push({ metric, reason: "missing from pyodide snapshots" });
-      continue;
-    }
-    if (!native.has(metric)) {
-      diffs.push({ metric, reason: "missing from native output" });
-      continue;
-    }
-    const leafDiffs = deepCompare(pyodide.get(metric), native.get(metric));
-    if (leafDiffs.length === 0) {
-      matched += 1;
-      continue;
-    }
-    const summary = leafDiffs
-      .slice(0, 5)
-      .map((d) => `${d.path}: pyodide=${JSON.stringify(d.expected)} cpython=${JSON.stringify(d.actual)}`)
-      .join("; ");
-    const tail = leafDiffs.length > 5 ? ` (+${leafDiffs.length - 5} more leaves)` : "";
-    diffs.push({ metric, reason: `${summary}${tail}` });
-  }
+  const matched = allMetrics.size - diffs.length;
 
   if (diffs.length === 0) {
-    console.log(`[diff] OK — ${matched} metrics bit-identical across pyodide + CPython.`);
+    console.log(
+      `[diff] OK — ${matched} metrics bit-identical across pyodide + CPython.`,
+    );
     return 0;
   }
 
@@ -92,4 +122,6 @@ function main(): number {
   return 1;
 }
 
-process.exit(main());
+if (process.argv[1]?.endsWith("diff-pyodide-vs-cpython.ts")) {
+  process.exit(main());
+}
