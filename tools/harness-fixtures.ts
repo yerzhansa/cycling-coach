@@ -110,3 +110,17 @@ export const HARNESS_FIXTURES: HarnessFixtureConfig[] = [
       "Populated-branch coverage for capability.dfa_a1_profile. Fully synthetic (no sanitizer, no real data): 7 Ride activities (ids 90201-90207) on 2026-05-28..06-03, each carrying a per-second streams record (dfa_a1/artifacts/heartrate/watts, 1800 samples) keyed by String(id) in the top-level `streams` key. Every session is 3×600s segments at dfa_a1 1.0 / 0.75 / 0.5 with artifacts 0 — so valid_secs=1800, valid_pct=100, and each session holds 600s of dwell in BOTH the LT1 band [0.95,1.05] and the LT2 band [0.45,0.55] with co-present heartrate+watts. The 7 qualifying sessions push crossing_n to 7 (>=6), so the cycling trailing window reports confidence=high with non-null lt1_estimate + lt2_estimate. Built by tools/build-dfa-fixture.ts (synthetic stream blob + non-vacuity guard recomputing the sufficiency + crossing-band thresholds). Anchor 2026-06-04 sits one day after the last ride.",
   },
 ];
+
+/**
+ * Anchor for a slug that may or may not be allowlisted. Single-fixture debug
+ * regens (SNAPSHOT_FIXTURE_PATH) must reuse the allowlisted anchor — writing a
+ * 1998-anchored fixture's snapshots at the 2026 default would be a wrong-anchor
+ * regen the native-check gate cannot catch, because the gate mirrors whatever
+ * anchor was written.
+ */
+export function resolveFixtureAnchor(slug: string): string {
+  return (
+    HARNESS_FIXTURES.find((f) => f.slug === slug)?.frozenNow ??
+    DEFAULT_FROZEN_NOW
+  );
+}

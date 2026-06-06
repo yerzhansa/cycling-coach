@@ -475,7 +475,7 @@ pnpm snapshot:section-11
 uv run --python 3.12 tools/snapshot-section-11-native.py \
     --frozen-now 1998-05-10T12:00:00 --out /tmp/native-snapshots.json
 pnpm tsx tools/diff-pyodide-vs-cpython.ts /tmp/native-snapshots.json
-# expect: [diff] OK — N metrics bit-identical...
+# expect: [diff] OK — 63 metrics bit-identical...
 ```
 
 If the diff surfaces a divergence in the future (new fixture, new
