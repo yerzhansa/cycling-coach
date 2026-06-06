@@ -195,10 +195,32 @@ def compute(fixture_json):
         sync = IntervalsSync(athlete_id="s", intervals_api_key="k", github_token=None, debug=False)
         sync._intervals_data = {}
         BN = (None, None, None)
+        # Event / benchmark kwargs — mirror the snapshot harness. The fixture is
+        # the boundary: past_events and the indoor/outdoor FTP keys are optional
+        # on every committed fixture (allowlisted in optionalFixturePaths), so an
+        # absent key reproduces the prior stub (past_events=[] / BN) while a
+        # populated fixture hands its FTP data to sync's own
+        # _calculate_benchmark_index. Absent keys keep existing snapshots
+        # byte-identical; populated branches now actually run.
+        _past_events = FIX.get("past_events", []) or []
+        _current_ftp_indoor = FIX.get("current_ftp_indoor")
+        _ftp_history_indoor = FIX.get("ftp_history_indoor") or {}
+        _current_ftp_outdoor = FIX.get("current_ftp_outdoor")
+        _ftp_history_outdoor = FIX.get("ftp_history_outdoor") or {}
+        if _current_ftp_indoor and _ftp_history_indoor:
+            _idx_in, _ftp8_in = sync._calculate_benchmark_index(_current_ftp_indoor, _ftp_history_indoor)
+            _benchmark_indoor = (_idx_in, _ftp8_in, _current_ftp_indoor)
+        else:
+            _benchmark_indoor = BN
+        if _current_ftp_outdoor and _ftp_history_outdoor:
+            _idx_out, _ftp8_out = sync._calculate_benchmark_index(_current_ftp_outdoor, _ftp_history_outdoor)
+            _benchmark_outdoor = (_idx_out, _ftp8_out, _current_ftp_outdoor)
+        else:
+            _benchmark_outdoor = BN
         # Conditional curve / athlete kwargs — mirror the snapshot harness. The
-        # fuzzer perturbs only activities/wellness, so these source keys are
-        # always absent here and every derived kwarg falls back to the stub;
-        # the parallel structure keeps the three stub sites in lockstep.
+        # fuzzer perturbs only activities/wellness, so these curve/athlete source
+        # keys are absent on the perturbed fixtures and every derived kwarg falls
+        # back to the stub; the parallel structure keeps the stub sites in lockstep.
         _pcurves = FIX.get("power_curves")
         _hcurves = FIX.get("hr_curves")
         _scurves = FIX.get("sustainability_curves")
@@ -240,8 +262,8 @@ def compute(fixture_json):
                 sync._intervals_data = {"activities": _dfa_acts}
         derived = sync._calculate_derived_metrics(
             activities_7d=a7, activities_28d=a28, wellness_7d=w7, wellness_extended=w28,
-            current_ctl=cctl, current_atl=catl, current_tsb=ctsb, past_events=[],
-            activities_for_consistency=a7, power_model=_pm, benchmark_indoor=BN, benchmark_outdoor=BN,
+            current_ctl=cctl, current_atl=catl, current_tsb=ctsb, past_events=_past_events,
+            activities_for_consistency=a7, power_model=_pm, benchmark_indoor=_benchmark_indoor, benchmark_outdoor=_benchmark_outdoor,
             vo2max=_vo2, formatted_planned_workouts=[], race_calendar=None, power_curve_data=_pcurves,
             power_curve_dates=_pcd, hr_curve_data=_hcurves, sustainability_curves=_scurves or {}, sustainability_window=_sw,
             sport_settings=_ss, icu_weight=lw.get("weight"))

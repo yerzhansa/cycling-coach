@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 /**
  * Vite (which vitest is built on) doesn't natively handle `import x from "*.md"`
@@ -8,6 +8,9 @@ import { defineConfig } from "vitest/config";
  * markdown imports resolve to inline default-export strings during vitest runs.
  */
 export default defineConfig({
+  test: {
+    exclude: [...configDefaults.exclude, "**/.claude/**"],
+  },
   plugins: [
     {
       name: "raw-md",
