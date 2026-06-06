@@ -117,7 +117,7 @@ function isUvAvailable(): boolean {
  * twin's default — the de-identified realistic-athlete snapshots are
  * 1998-anchored, and the twin's 2026 default would produce a false-red diff.
  */
-function readSlugFrozenNow(slugSnapshotDir: string): string {
+export function readSlugFrozenNow(slugSnapshotDir: string): string {
   for (const entry of readdirSync(slugSnapshotDir)) {
     if (!entry.endsWith(".json")) continue;
     const parsed = JSON.parse(

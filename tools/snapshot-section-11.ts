@@ -31,7 +31,11 @@ import {
   HARNESS_CONTRACT,
   OPTIONAL_FIXTURE_PATHS,
 } from "./harness-contract.js";
-import { DEFAULT_FROZEN_NOW, HARNESS_FIXTURES } from "./harness-fixtures.js";
+import {
+  DEFAULT_FROZEN_NOW,
+  HARNESS_FIXTURES,
+  resolveFixtureAnchor,
+} from "./harness-fixtures.js";
 import { runNativeCheckGate } from "./native-check-gate.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -643,11 +647,12 @@ async function main(): Promise<void> {
     if (!existsSync(path)) {
       throw new Error(`Fixture not found: ${path}`);
     }
+    const slug = basename(path).replace(/\.json$/, "");
     fixtures = [
       {
-        slug: basename(path).replace(/\.json$/, ""),
+        slug,
         path,
-        frozenNow: DEFAULT_FROZEN_NOW,
+        frozenNow: resolveFixtureAnchor(slug),
       },
     ];
   } else {
