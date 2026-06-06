@@ -5,11 +5,11 @@
   "section_11_protocol_version": "3.112",
   "frozen_now": "1998-05-10T12:00:00",
   "value": {
-    "mean_ef_28d": 2.3,
-    "mean_ef_7d": 2.5,
+    "mean_ef_28d": 1.64,
+    "mean_ef_7d": 1.92,
     "note": "Steady-state cycling sessions only (VI <= 1.05, VI > 0, >= 20min, power+HR data). Rising EF = improving aerobic efficiency. Compare like-for-like sessions only — EF varies with intensity. Trend compares 7d vs 28d mean (+/-0.03 = stable).",
-    "qualifying_sessions_28d": 5,
-    "qualifying_sessions_7d": 3,
+    "qualifying_sessions_28d": 10,
+    "qualifying_sessions_7d": 5,
     "trend": "improving"
   }
 }

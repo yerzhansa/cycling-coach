@@ -239,6 +239,16 @@ describe("loadFixture against committed golden fixtures", () => {
       dynamicKeyAllowed: (key, parentPath) =>
         parentPath === "streams" && /^\d+$/.test(key) && Number(key) >= 90201,
     },
+    {
+      slug: "golden/capability-qualifying",
+      // No extra keys: the appended qualifying Rides carry only ActivitySchema
+      // fields (icu_hr_decoupling, icu_hrr, icu_variability_index, …), all
+      // already in ALLOWED_FIXTURE_KEYS.
+      extraKeys: new Set(),
+      // The realistic-athlete base rows keep the 12345 sentinel; the appended
+      // Rides use distinct synthetic ids (>= 90001, below the curve/dfa ranges).
+      idSentinel: (v) => v === 12345 || (typeof v === "number" && v >= 90001),
+    },
   ];
 
   describe.each(piiScanFixtures)("$slug — PII regression scanner (allowlist)", ({ slug, extraKeys, idSentinel, dynamicKeyAllowed }) => {

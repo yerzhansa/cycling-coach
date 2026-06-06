@@ -43,7 +43,7 @@ one newly covers (the justification the harness fixture registry records).
 | `golden/multisport-thin-primary.json` | synthetic | `effective_monotony` fallback when primary-sport monotony is null (<3 active days) |
 | `golden/populated-benchmark-and-consistency.json` | synthetic | populated `consistency_index` + `benchmark_indoor`/`benchmark_outdoor` (the +/-7d FTP nearest-match window) |
 | `golden/rest-week-with-baseline.json` | synthetic | monotony `stdev<=0 → null` cascade (strain/stress_tolerance null) + flat HRV/RHR baseline block |
-| `golden/capability-qualifying.json` | synthetic | `_calculate_durability` reliability gate (N7>=3, N28>=5) + efficiency_factor + HRRc means/trends |
+| `golden/capability-qualifying.json` | real-derived hybrid | `_calculate_durability` reliability gate (N7>=3, N28>=5) + efficiency_factor + HRRc means/trends — sanitized realistic-athlete base + 5 synthetic qualifying Rides appended at the tail |
 | `golden/dfa-equipped.json` | synthetic | `_compute_dfa_block` + `_calculate_dfa_a1_profile` populated branch: 7 Ride sessions with per-second `dfa_a1`/`artifacts`/`heartrate`/`watts` streams clearing valid_secs>=1200 ∧ valid_pct>=70 and >=60s dwell in BOTH crossing bands → cycling trailing window at confidence=high with non-null lt1/lt2 estimates |
 | `synthetic/has-intervals-placeholder.json` | synthetic | upstream v3.106 bug: a `RECOVERY`-only `icu_intervals` placeholder must NOT be flagged as a structured workout |
 
@@ -63,11 +63,14 @@ The CLI emits a summary listing dropped TP-trademark + PII keys so you can
 confirm the default-deny transform ran, and writes a `.sha256` checksum
 alongside the JSON.
 
-For a new **real-derived hybrid** (curve/stream fixture), use the dedicated
-builder so the curve blocks bypass the sanitizer correctly:
+For a new **real-derived hybrid**, use a dedicated builder so the synthetic
+blocks bypass the sanitizer correctly. `tools/build-curve-fixture.ts` attaches
+synthetic curve blocks to sanitized real rows; `tools/build-capability-fixture.ts`
+appends synthetic qualifying Rides to the sanitized realistic-athlete base.
 
 ```bash
 pnpm exec tsx tools/build-curve-fixture.ts --raw-bundle <bundle.json> --raw-curves <curves.json>
+pnpm exec tsx tools/build-capability-fixture.ts
 ```
 
 For a new **synthetic** fixture, add the file by hand, include a `_comment` key
@@ -82,8 +85,8 @@ vacuous.
 
 ## Integrity + privacy guards
 
-- **`.sha256` checksum** — `realistic-athlete`, `curve-equipped`, and
-  `dfa-equipped` each carry a committed checksum;
+- **`.sha256` checksum** — `realistic-athlete`, `curve-equipped`,
+  `dfa-equipped`, and `capability-qualifying` each carry a committed checksum;
   `realistic-athlete-fixture-checksum.test.ts` re-hashes the bytes on every CI
   run, catching in-place mutation (bad merge, editor save).
 - **PII allowlist scan** — `reference-load-fixture.test.ts` walks the
@@ -91,9 +94,11 @@ vacuous.
   `ALLOWED_FIXTURE_KEYS` (real rows) or the enumerated synthetic-block key set
   (curve-equipped curve/athlete blocks; dfa-equipped stream channels), and that
   every numeric `id`/`*_id` is the redacted sentinel (12345) or a synthetic
-  fixture id (curve >= 90101, dfa >= 90201) — never a real-shaped account id.
-  `dfa-equipped` is fully synthetic, so its only out-of-allowlist keys are the
-  structural stream-channel names + the `String(id)` record keys (>= 90201).
+  fixture id (curve >= 90101, dfa >= 90201, capability-qualifying Rides >= 90001)
+  — never a real-shaped account id. `dfa-equipped` is fully synthetic, so its
+  only out-of-allowlist keys are the structural stream-channel names + the
+  `String(id)` record keys (>= 90201); `capability-qualifying` adds no
+  out-of-allowlist keys (its appended Rides carry only ActivitySchema fields).
 
 ## Privacy callout
 

@@ -31,8 +31,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // Every fixture with a committed `.sha256` integrity guard is checked here.
 // realistic-athlete is fully sanitizer-produced; curve-equipped is a hybrid
 // (sanitized rows + synthetic curve blocks); dfa-equipped is fully synthetic
-// (generated stream blob). Each fixture's regen path writes the checksum
-// alongside the JSON.
+// (generated stream blob); capability-qualifying is a hybrid (the
+// realistic-athlete base + synthetic qualifying Rides appended at the tail).
+// Each fixture's regen path writes the checksum alongside the JSON.
 const FIXTURES: Array<{ slug: string; regen: string }> = [
   {
     slug: "realistic-athlete",
@@ -45,6 +46,10 @@ const FIXTURES: Array<{ slug: string; regen: string }> = [
   {
     slug: "dfa-equipped",
     regen: "tools/build-dfa-fixture.ts",
+  },
+  {
+    slug: "capability-qualifying",
+    regen: "tools/build-capability-fixture.ts",
   },
 ];
 

@@ -95,7 +95,7 @@ export const HARNESS_FIXTURES: HarnessFixtureConfig[] = [
     // cycle for de-identification, so its anchor moves with them.
     frozenNow: "1998-05-10T12:00:00",
     description:
-      "Populated-branch coverage for the capability sub-keys (durability, efficiency_factor, hrrc). Appends 5 steady-state qualifying Rides (VI 1.0, moving_time 6000s, decoupling/EF/hrr present) to the realistic-athlete base — 3 in the 7d window, 5 in the 28d window — clearing durability's reliability gate (N7>=3, N28>=5) and exercising the means + trends the all-null fixtures never reach.",
+      "Populated-branch coverage for the capability sub-keys (durability, efficiency_factor, hrrc). Appends 5 steady-state qualifying Rides (VI 1.0, moving_time 6000s, decoupling/EF/hrr present) to the realistic-athlete base — 3 in the 7d window, 5 in the 28d window — clearing durability's reliability gate (N7>=3, N28>=5) and exercising the means + trends the all-null fixtures never reach. Built by tools/build-capability-fixture.ts (qualifying Rides appended to the tail AFTER the sanitizer over the realistic-athlete base — they carry the raw icu_hr_decoupling/bare-icu_hrr API surface and de-identified synthetic ids, so they bypass the base's sanitizer walk; the builder's non-vacuity guard recomputes the reliability gate).",
   },
   {
     slug: "curve-equipped",
