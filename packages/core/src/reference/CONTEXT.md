@@ -80,7 +80,7 @@ Two functions + a defensive walker + two type-gated parsers live in `sync/rename
 
 **Naming-collision callout.** intervals.icu's `WellnessRecord` lib type declares a `fatigue` field (subjective 1–5 scale, athlete-reported). Our Banister-derived `fatigue` (renamed from `atl`) has different semantics. The lib's field rides through via the `z.looseObject` index signature; no future feature should consume both under the same name. If a future feature needs the subjective scale, promote it under a different name (e.g., `subjectiveFatigue`).
 
-**Trademark policy.** The single source of truth for the typed-surface field-name policy lives at `trademark-policy.ts` (`TP_API_FIELDS`, `TP_DENYLIST_FIELDS`). The PR-time lint at `tools/check-trademarks.ts` is independent (uppercase string-literal scope). Background, USPTO records, and the Golden Cheetah enforcement precedent: `docs/knowledge/research/trademark-tp-terms.md`.
+**Trademark policy.** The single source of truth for the typed-surface field-name policy lives at `trademark-policy.ts` (`TP_API_FIELDS`, `TP_DENYLIST_FIELDS`). The PR-time lint at `tools/check-trademarks.ts` is independent (uppercase string-literal scope). Background, USPTO records, and the prior enforcement precedent against an open-source analytics project: `docs/knowledge/research/trademark-tp-terms.md`.
 
 ## Sport seam (per ADR-0010)
 

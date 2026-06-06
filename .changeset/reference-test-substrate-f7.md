@@ -2,7 +2,7 @@
 "@enduragent/core": patch
 ---
 
-Reference test substrate + anti-corruption layer (F7 + Layer A, Wave 2).
+Reference test substrate + anti-corruption layer.
 Lands the privacy-denylist sanitizer (`tools/sanitize-fixture.ts`), the
 schema-checked fixture loader (`tests/helpers/load-fixture.ts`), the
 property-test arbitraries (`tests/helpers/reference-arbitraries.ts`), the
@@ -11,7 +11,7 @@ and the trademark-wall mechanical assertion
 (`tests/reference-input-schemas-no-tp.test.ts`).
 
 Repairs `ActivitySchema` in `src/reference/schemas/inputs.ts` to match
-intervals.icu API reality (Decision 3 of the F7 battle plan: real shape
+intervals.icu API reality (design decision: real shape
 rides through `z.looseObject` unmodified). Surfaces revealed by piping a
 real 12-week pull through the substrate:
 
@@ -43,7 +43,7 @@ TP-trademarked API fields and the project's typed surface:
   gitignored `scripts/` directory; the two tools now form one operator
   pipeline.
 - Regenerated `tests/fixtures/golden/realistic-athlete.json` with plain-
-  English keys throughout; F8-F11 metric tests consume `fitness` /
+  English keys throughout; future metric tests consume `fitness` /
   `fatigue` / `fitnessAtEnd` directly without reaching into the
   index-signature underlay.
 

@@ -4,7 +4,7 @@
 /**
  * Trademark substitution lint — `pnpm check:trademarks`.
  *
- * Wave 1a (F6) of the section-11 Reference initiative. Section-11 was authored
+ * Section-11 was authored
  * against TrainingPeaks vocabulary (CTL, ATL, TSB, TSS, IF, NP, "Normalized
  * Power"). Reference adopts intervals.icu's plain-English alternatives —
  * Fitness, Fatigue, Form, Load, Intensity, weighted average power. This linter

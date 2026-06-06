@@ -4,8 +4,8 @@
  * `YYYY-MM-DDThh:mm:ss`); conversion to/from millisecond timestamps is
  * hidden inside.
  *
- * Extracted from three near-identical local copies after the F11 batch
- * surfaced the duplication and a divergence in the formatter
+ * Extracted from three near-identical local copies after a metric-port
+ * batch surfaced the duplication and a divergence in the formatter
  * implementation (two sites used `toISOString().slice(0, 10)`, one
  * used manual `padStart`). The manual formatter is canonical here: it
  * keeps a YYYY-prefixed shape for all years in `[0, 9999]` and never

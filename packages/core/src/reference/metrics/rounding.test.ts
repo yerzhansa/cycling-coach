@@ -55,7 +55,7 @@ describe("roundHalfEven matches Python round()", () => {
     expect(roundHalfEven(value, 0)).toBe(expected);
   });
 
-  it("rounds the true value, not the base-10 scaling (regression for the F8/F9 bug)", () => {
+  it("rounds the true value, not the base-10 scaling (regression for the scaled-rounding bug)", () => {
     // 18s / 3600 = 0.005 h. The scaled form computed 0.005*100 = 0.4999…94 and
     // rounded to 0, dropping the bin; Python keeps it at 0.01.
     expect(roundHalfEven(18 / 3600, 2)).toBe(0.01);

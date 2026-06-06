@@ -2,7 +2,7 @@
 "@enduragent/core": patch
 ---
 
-Reference test substrate (F7) — privacy hardening + review-feedback polish
+Reference test substrate — privacy hardening + review-feedback polish
 
 - Inverted the fixture sanitizer from denylist to allowlist (`tests/helpers/sanitize-fixture.ts`). Default-deny: every key outside the schema-derived allowlist is dropped. The prior denylist missed several operator-identifying fields (`power_meter_serial`, `power_meter`, `source` on activity rows, `skyline_chart_bytes`, `athlete_max_hr`, `lthr`, hardware vendor names) — now removed structurally. `realistic-athlete.json` regenerated and shrunk from 347KB to 70KB.
 - Replaced the PII regression scanner with a single allowlist assertion that walks the committed fixture and asserts every key appears in `ALLOWED_FIXTURE_KEYS`. Adds a defense-in-depth check that every `*_id` value is the redacted sentinel.

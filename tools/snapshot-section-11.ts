@@ -288,10 +288,10 @@ sync._intervals_data = {}
 # (None, None, None) is the documented "insufficient FTP history" path.
 _BENCH_NONE = (None, None, None)
 
-# Pass-through read of F11 fixture extensions. The harness used to
-# hardcode past_events=[] and benchmark_*=_BENCH_NONE, which made the
-# parity gate vacuous for those metrics (every snapshot collapsed to
-# the null branch). ADR-0017 makes the fixture the boundary — these
+# Pass-through read of the event/benchmark fixture extensions. The
+# harness used to hardcode past_events=[] and benchmark_*=_BENCH_NONE,
+# which made the parity gate vacuous for those metrics (every snapshot
+# collapsed to the null branch). The fixture is the boundary — these
 # fields are optional on every committed fixture and the harness
 # computes the benchmark tuples by handing the fixture-provided FTP
 # data to sync.py's own _calculate_benchmark_index. Absent fields
@@ -528,8 +528,8 @@ if "__error__" not in derived:
         _weight_power_model,
         None,
     )
-    # Display sub-dict is out of scope per Wave 6 deferral — strip before
-    # snapshotting so the parity gate doesn't pin a contract we don't ship.
+    # Display sub-dict is presentation-layer output we don't port — strip
+    # before snapshotting so the parity gate doesn't pin a contract we don't ship.
     if _weight_signal_value and "display" in _weight_signal_value:
         del _weight_signal_value["display"]
     derived["weight_signal"] = _weight_signal_value

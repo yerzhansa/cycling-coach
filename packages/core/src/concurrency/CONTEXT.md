@@ -1,6 +1,6 @@
 # Concurrency primitives
 
-Horizontal-layer primitives per [ADR-0011](../../../../docs/adr/0011-async-operation-discipline-for-horizontal-layers.md). Reference is the first consumer; Decision Layer, Heartbeat, and Coaching Loop will reuse these unchanged.
+Horizontal-layer primitives per ADR-0011 (async-operation discipline for horizontal layers). Reference is the first consumer; Decision Layer, Heartbeat, and Coaching Loop will reuse these unchanged.
 
 ```
 concurrency/

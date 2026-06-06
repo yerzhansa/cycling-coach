@@ -9,8 +9,8 @@ top-level `manifest.json`.
 **Methodology**: characterization + differential testing. The upstream
 Python is the source of truth; we transcribe its outputs here so future
 TS metric ports have something to assert against. This script does not
-itself assert parity — parity tests ship with F8+ alongside each TS
-metric.
+itself assert parity — parity tests ship alongside each TS metric
+port.
 
 ## Quick start
 
@@ -111,8 +111,8 @@ of these change:
 2. **New golden fixture** is added under `packages/core/tests/fixtures/golden/`.
    Add an entry to the `HARNESS_FIXTURES` allowlist in
    `tools/snapshot-section-11.ts` (slug + frozenNow + description) and
-   re-run. Fixtures owned by other test suites (e.g., F7 reference
-   substrate's `post-break-resume` and `zero-activities`) live in the
+   re-run. Fixtures owned by other test suites (e.g., the reference
+   test substrate's `post-break-resume` and `zero-activities`) live in the
    same dir but are intentionally excluded from the harness — they
    don't conform to sync.py's input contract.
 3. **A fixture's `frozenNow` anchor is moved.** Anchors live on each
@@ -254,7 +254,7 @@ is itself a useful regression signal. The one absent-entirely entry,
 which silently returns `None` on a missing key. A fixture with a typo'd
 field name (`"activitiez"` instead of `"activities"`) would produce a
 wrong-but-not-crashing snapshot, and the TS port would faithfully
-assert against that wrong oracle. T06 closes this hole by wrapping
+assert against that wrong oracle. The harness closes this hole by wrapping
 every dict that ultimately came from the loaded fixture in a
 `_TrackedDict` that logs every `.get()` of an absent key. After
 `_calculate_derived_metrics` returns, the harness checks the log; if
@@ -357,7 +357,7 @@ reimplementations and the cross-interpreter diff remains a real check.
 schema shape, that this README's allowlist block matches it, and that no
 file carries a residual inline copy of the extracted literals.
 
-## Null / absent audit (against F8 metric scope)
+## Null / absent audit (against the load-management metric scope)
 
 Audit run 2026-05-21 against the realistic-athlete snapshot set
 generated from `section_11_sha = 224c369d`.
@@ -368,7 +368,7 @@ scalars):** `eftp`, `p_max`, `power_model_source`, `vo2max`, `w_prime`,
 key, so the power-model pipeline stays stubbed). They are NON-NULL on
 `curve-equipped`, which supplies the `athlete` key + a latest-row Ride
 sportInfo carrying `eftp`/`wPrime`/`pMax`. `consistency_index` is
-populated on `populated-benchmark-and-consistency`. None are in F8's
+populated on `populated-benchmark-and-consistency`. None are in the
 load-management scope.
 
 **Absent-from-output (1):**
@@ -378,9 +378,9 @@ direct-call path used here. **Intentionally not captured** — the
 Reference layer consumes `weeklyFitnessChange` directly). Not a gap
 to close; see "Known gaps" above.
 
-**F8 metric coverage (6 metrics — `ramp_rate` dropped, not ported):**
+**Load-management metric coverage (6 metrics — `ramp_rate` dropped, not ported):**
 
-| F8 metric | Status | Snapshot value |
+| Metric | Status | Snapshot value |
 | --- | --- | --- |
 | `acwr` | populated | 0.81 |
 | `monotony` | populated | 0.97 |
@@ -431,7 +431,7 @@ Pyodide ships CPython compiled to WebAssembly. Behavior is ~99% identical
 to a host CPython of the same version for stdlib `math`, `statistics`,
 and the operators sync.py uses — but `math.fsum`, `statistics.median_grouped`,
 and float-repr corner cases have historically diverged in narrow cases.
-T09 confirms parity by running section-11's `_calculate_derived_metrics`
+The audit confirms parity by running section-11's `_calculate_derived_metrics`
 twice: once via the pyodide harness (`pnpm snapshot:section-11`), once
 via host CPython 3.12 (`tools/snapshot-section-11-native.py`), then
 diffing every metric.
@@ -539,8 +539,8 @@ a full per-metric capture.
 
 ## Why pyodide and not subprocess Python
 
-The architect review (`docs/initiatives/section-11/learnings/`,
-local-only — see PR body for the path) calls out two requirements:
+The architect review (a local-only design doc) calls out two
+requirements:
 
 1. **No system Python dependency for CI / contributor reproducibility.**
    Pyodide is a Node devDependency, so the harness runs anywhere

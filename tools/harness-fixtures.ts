@@ -6,7 +6,7 @@
  * drift between the two.
  *
  * Adding a fixture is an explicit edit here — the golden dir also holds
- * fixtures owned by other tests (the F7 reference substrate's
+ * fixtures owned by other tests (the reference test substrate's
  * `post-break-resume`, `zero-activities`) that don't conform to sync.py's
  * contract and must not be run through the harness. Each entry's `description`
  * carries the rationale for the slug + the anchor it chose.
@@ -80,7 +80,7 @@ export const HARNESS_FIXTURES: HarnessFixtureConfig[] = [
     slug: "populated-benchmark-and-consistency",
     frozenNow: DEFAULT_FROZEN_NOW,
     description:
-      "Populated-branch coverage for consistency_index + benchmark_indoor + benchmark_outdoor — the F11 metrics whose previous fixtures all collapsed to the null branch. 4 WORKOUT events on 05-05/07/09/10 paired with cycling activities on 05-05/07/09 give matched=3, planned=4, consistency_index=0.75. FTP history has a 2026-03-15 entry sitting exactly at (frozenNow - 56d), exercising the +/-7d nearest-match window: indoor 280/270-1=0.037 in seasonal range [0.01,0.04] → seasonal_expected=true; outdoor 270/260-1=0.038 same range true. Without this fixture the parity gate is theatre for those three metrics.",
+      "Populated-branch coverage for consistency_index + benchmark_indoor + benchmark_outdoor — metrics whose previous fixtures all collapsed to the null branch. 4 WORKOUT events on 05-05/07/09/10 paired with cycling activities on 05-05/07/09 give matched=3, planned=4, consistency_index=0.75. FTP history has a 2026-03-15 entry sitting exactly at (frozenNow - 56d), exercising the +/-7d nearest-match window: indoor 280/270-1=0.037 in seasonal range [0.01,0.04] → seasonal_expected=true; outdoor 270/260-1=0.038 same range true. Without this fixture the parity gate is theatre for those three metrics.",
   },
   {
     slug: "rest-week-with-baseline",

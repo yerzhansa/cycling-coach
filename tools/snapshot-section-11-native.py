@@ -432,8 +432,8 @@ def main() -> int:
             weight_power_model,
             None,
         )
-        # Display sub-dict is out of scope per Wave 6 deferral — strip before
-        # snapshotting so the parity gate doesn't pin a contract we don't ship.
+        # Display sub-dict is presentation-layer output we don't port — strip
+        # before snapshotting so the parity gate doesn't pin a contract we don't ship.
         if weight_signal_value and "display" in weight_signal_value:
             del weight_signal_value["display"]
         derived["weight_signal"] = weight_signal_value

@@ -71,8 +71,7 @@ copy; the following modifications were applied during the port:
   ADR-0011.
 - **Three-layer validation.** Layer 1 sync gate (mechanical), Layer 2
   Zod-validated LLM output with one retry on citation mismatch, Layer 3
-  prompt rules. See `docs/initiatives/section-11/reference-prd.md`
-  (Decision 7).
+  prompt rules.
 - **Display-units conversion at prompt-injection time.** Canonical metric on
   disk; `formatQuantity(quantity, athleteUnits)` renders to the athlete's
   preferred system. Section-11's mixed-units assumptions are removed.

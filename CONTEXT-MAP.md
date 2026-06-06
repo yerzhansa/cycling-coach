@@ -1,6 +1,6 @@
 # Context Map
 
-This repo is a multi-package monorepo for the enduragent AI coaching agent platform — Core publishes the Sport contract, sport packages implement it, binary packages ship them. See [`docs/initiatives/multi-sport-refactor/architect-review/multi-sport-architecture.md`](./docs/initiatives/multi-sport-refactor/architect-review/multi-sport-architecture.md) for the full architecture.
+This repo is a multi-package monorepo for the enduragent AI coaching agent platform — Core publishes the Sport contract, sport packages implement it, binary packages ship them.
 
 ## Contexts
 
