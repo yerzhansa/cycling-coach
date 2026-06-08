@@ -14,29 +14,31 @@ const persona: SportPersona = {
   skills: { example: "# Example Skill\n\nSome cycling content." },
 };
 
-describe("buildSystemPrompt — WORKOUT_REVIEW_RULES placement", () => {
-  it("places WORKOUT_REVIEW_RULES as the LAST section", () => {
+describe("buildSystemPrompt — review + data-grounding placement", () => {
+  it("places WORKOUT_REVIEW_RULES second-to-last and Data Grounding last", () => {
     const prompt = buildSystemPrompt(persona, makeFakeMemory("athlete context"));
     const sections = prompt.split("\n\n---\n\n");
+    const review = sections[sections.length - 2];
     const last = sections[sections.length - 1];
-    expect(last).toMatch(/^# Workout Review/);
-    expect(last).toContain("3-questions framework");
+    expect(review).toMatch(/^# Workout Review/);
+    expect(review).toContain("3-questions framework");
+    expect(last).toMatch(/^# Data Grounding/);
   });
 
-  it("places WORKOUT_REVIEW_RULES last even when context is empty", () => {
+  it("places Data Grounding last even when context is empty", () => {
     const prompt = buildSystemPrompt(persona, makeFakeMemory(""));
     const sections = prompt.split("\n\n---\n\n");
     const last = sections[sections.length - 1];
-    expect(last).toMatch(/^# Workout Review/);
+    expect(last).toMatch(/^# Data Grounding/);
   });
 
-  it("places WORKOUT_REVIEW_RULES last when skills are empty", () => {
+  it("places Data Grounding last when skills are empty", () => {
     const prompt = buildSystemPrompt({ ...persona, skills: {} }, makeFakeMemory("ctx"));
     const sections = prompt.split("\n\n---\n\n");
-    expect(sections[sections.length - 1]).toMatch(/^# Workout Review/);
+    expect(sections[sections.length - 1]).toMatch(/^# Data Grounding/);
   });
 
-  it("preserves [soul, skills, context, time, review-rules] order", () => {
+  it("preserves [soul, skills, context, time, review-rules, data-grounding] order", () => {
     const prompt = buildSystemPrompt(persona, makeFakeMemory("ctx"));
     const sections = prompt.split("\n\n---\n\n");
     expect(sections[0]).toContain("Cycling Coach");
@@ -44,7 +46,15 @@ describe("buildSystemPrompt — WORKOUT_REVIEW_RULES placement", () => {
     expect(sections[2]).toMatch(/^# Athlete Context/);
     expect(sections[3]).toMatch(/^# Current Date & Time/);
     expect(sections[4]).toMatch(/^# Workout Review/);
-    expect(sections.length).toBe(5);
+    expect(sections[5]).toMatch(/^# Data Grounding/);
+    expect(sections.length).toBe(6);
+  });
+
+  it("injects the Layer-3 data-grounding marker", () => {
+    const prompt = buildSystemPrompt(persona, makeFakeMemory("ctx"));
+    expect(prompt).toContain(
+      "Numeric claims MUST come from the current JSON snapshot you read this turn",
+    );
   });
 });
 

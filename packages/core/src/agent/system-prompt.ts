@@ -1,5 +1,6 @@
 import type { SportPersona } from "../sport.js";
 import type { Memory } from "../memory/store.js";
+import { LAYER_3_PROMPT_RULES } from "../reference/validation/layer3-prompt.js";
 
 // ============================================================================
 // SYSTEM PROMPT BUILDER
@@ -114,9 +115,10 @@ export function buildSystemPrompt(
   // doesn't go stale crossing local midnight. See user-time.ts.
   parts.push(`# Current Date & Time\n\nTime zone: ${tz}`);
 
-  // Output rules ride the recency slot — review block is last so its rules
-  // sit closest to the user message in the prompt.
+  // Output rules ride the recency slot — review block then the data-grounding
+  // rules sit closest to the user message in the prompt.
   parts.push(WORKOUT_REVIEW_RULES);
+  parts.push(LAYER_3_PROMPT_RULES);
 
   return parts.join("\n\n---\n\n");
 }

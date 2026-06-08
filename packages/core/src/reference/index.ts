@@ -101,3 +101,41 @@ export {
   type RenamedActivityRow,
   type RenamedWellnessRow,
 } from "./sync/rename-tp-fields.js";
+
+// ─── Validation: recommendation metadata + audit log ──────────────────
+export {
+  AUDIT_SCHEMA_VERSION,
+  CitationSchema,
+  type Citation,
+  RecommendationMetadataSchema,
+  type RecommendationMetadata,
+  AuditLogEntrySchema,
+  type AuditLogEntry,
+} from "./validation/recommendation-metadata.js";
+export { writeAuditEntry, computeResponseHash } from "./audit/writer.js";
+export { parseAuditLog } from "./audit/parse.js";
+
+// ─── Validation: Layer-1 sync gate ────────────────────────────────────
+export { gateLatestJson } from "./validation/sync-gate.js";
+export type {
+  GateResult,
+  GateStep,
+  GateFailure,
+  GateWarning,
+} from "./validation/sync-gate.js";
+
+// ─── Validation: Layer-2 validator + Layer-3 prompt rules ──────────────
+export {
+  validateRecommendation,
+  parseMetaBlock,
+  getByPath,
+  DEFAULT_LAYER_2_MODE,
+  type Layer2Mode,
+  type ValidationResult,
+} from "./validation/validate-response.js";
+export {
+  validateAndRetry,
+  type RetryOpts,
+  type RetryResult,
+} from "./validation/retry-with-feedback.js";
+export { LAYER_3_PROMPT_RULES } from "./validation/layer3-prompt.js";

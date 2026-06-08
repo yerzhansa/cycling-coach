@@ -14,7 +14,7 @@ import { FTP_HISTORY_SCHEMA_VERSION } from "../schemas/ftp-history.js";
 import { SCHEDULER_SCHEMA_VERSION } from "../schemas/scheduler.js";
 import type { ErrorPhase, ErrorCaller } from "../schemas/error-state.js";
 import { gateLatestJson } from "../validation/sync-gate.js";
-import { writeErrorState } from "./error-state-writer.js";
+import { writeErrorState, clearErrorState } from "./error-state-writer.js";
 import type { AsyncMutex } from "../../concurrency/mutex.js";
 import type { Cooldown } from "../../concurrency/cooldown.js";
 import type { Clock } from "../../concurrency/clock.js";
@@ -113,10 +113,12 @@ export interface RunSyncDeps {
     readonly outerTimeoutMs?: number;
     readonly scheduledIntervalMs?: number;
   };
-  /** Override Layer-1 gate for tests; defaults to the stub `gateLatestJson`. */
+  /** Override Layer-1 gate for tests; defaults to `gateLatestJson`. */
   readonly gate?: typeof gateLatestJson;
   /** Override atomic write for tests; defaults to `atomicWriteJson`. */
   readonly atomicWrite?: (path: string, value: unknown) => Promise<void>;
+  /** Override error_state.json removal for tests; defaults to `clearErrorState`. */
+  readonly clearError?: (dataDir: string) => Promise<void>;
 }
 
 interface CacheWriteSpec {
@@ -144,6 +146,7 @@ export function createRunSync(
   const scheduledIntervalMs = deps.timing?.scheduledIntervalMs ?? SCHEDULED_SYNC_INTERVAL_MS;
   const gate = deps.gate ?? gateLatestJson;
   const writeJson = deps.atomicWrite ?? atomicWriteJson;
+  const clearError = deps.clearError ?? clearErrorState;
 
   return async (opts = {}) => {
     if (opts.caller === "/sync" && opts.chatId !== undefined) {
@@ -176,7 +179,9 @@ export function createRunSync(
           if (controller.signal.aborted) return abortedResult();
 
           phase = "gating";
-          const gateResult = gate(fetched, null);
+          // `prior` is null here: no current mechanical check consumes the
+          // on-disk LatestJson, so prior-vs-incoming comparison is not yet wired.
+          const gateResult = gate(fetched, null, now());
           if (!gateResult.ok) {
             await writeErrorState(deps.dataDir, {
               step: "gate_rejected",
@@ -206,7 +211,7 @@ export function createRunSync(
               file: "latest",
               version: LATEST_SCHEMA_VERSION,
               payload: fetched.latest,
-              extras: { freshness: "fresh" },
+              extras: { freshness: gateResult.freshness ?? "fresh" },
             },
             { file: "history", version: HISTORY_SCHEMA_VERSION, payload: fetched.history },
             { file: "intervals", version: INTERVALS_SCHEMA_VERSION, payload: fetched.intervals },
@@ -238,6 +243,21 @@ export function createRunSync(
             last_sync_at: lastUpdated,
             next_sync_at: new Date(now().getTime() + scheduledIntervalMs).toISOString(),
           });
+
+          // error_state.json lifecycle, AFTER the commit marker (ADR-0011
+          // commit-marker-last) so a curator reading mid-sync never observes a
+          // scheduler-fresh + error_state-present contradiction. Soft warnings
+          // record a non-blocking warn_only state; a fully-clean sync clears
+          // any error_state left by a prior failed/soft run.
+          if (gateResult.warnings.length > 0) {
+            await writeErrorState(deps.dataDir, {
+              step: "gate_warnings",
+              detail: gateResult.warnings.map((w) => `${w.step}: ${w.detail}`).join("; "),
+              mitigation: "warn_only",
+            });
+          } else {
+            await clearError(deps.dataDir);
+          }
 
           return {
             kind: "ran",

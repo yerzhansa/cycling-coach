@@ -437,6 +437,100 @@ describe("createRunSync", () => {
     });
   });
 
+  it("soft-fail path: gate warnings → latest.json + .scheduler.json written, error_state mitigation:warn_only, kind:ran", async () => {
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const now = new Date("2026-05-09T14:00:00Z");
+
+    const fetchSpy = vi.fn().mockResolvedValue(emptyFetched);
+    const warningGate = vi.fn().mockReturnValue({
+      ok: true,
+      failures: [],
+      warnings: [{ step: "step6_freshness_24h", detail: "data freshness=stale" }],
+      freshness: "stale",
+    });
+
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: fetchSpy,
+      gate: warningGate,
+      now: () => now,
+    });
+
+    const result = await runSync({ caller: "scheduled" });
+    expect(result.kind).toBe("ran");
+
+    const latest = JSON.parse(readFileSync(join(dir, "latest.json"), "utf-8"));
+    expect(latest.metadata.freshness).toBe("stale");
+
+    expect(() => readFileSync(join(dir, ".scheduler.json"), "utf-8")).not.toThrow();
+
+    const errorState = JSON.parse(readFileSync(join(dir, "error_state.json"), "utf-8"));
+    expect(errorState.step).toBe("gate_warnings");
+    expect(errorState.mitigation).toBe("warn_only");
+    expect(errorState.detail).toContain("step6_freshness_24h");
+  });
+
+  it("clear-on-success: a clean sync removes a pre-existing error_state.json, only after the commit marker", async () => {
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const now = new Date("2026-05-09T14:00:00Z");
+    const fetchSpy = vi.fn().mockResolvedValue(emptyFetched);
+
+    // Pre-create a stale error_state.json from a prior failed run.
+    const { writeErrorState } = await import("../src/reference/sync/error-state-writer.js");
+    await writeErrorState(dir, { step: "outer_timeout", detail: "prior failure" });
+    expect(() => readFileSync(join(dir, "error_state.json"), "utf-8")).not.toThrow();
+
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: fetchSpy,
+      now: () => now,
+    });
+
+    const result = await runSync({ caller: "scheduled" });
+    expect(result.kind).toBe("ran");
+
+    expect(() => readFileSync(join(dir, "error_state.json"), "utf-8")).toThrow();
+    expect(() => readFileSync(join(dir, ".scheduler.json"), "utf-8")).not.toThrow();
+  });
+
+  it("freshness wiring: gate's freshness band lands on latest.json.metadata.freshness (not hardcoded fresh)", async () => {
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const now = new Date("2026-05-09T14:00:00Z");
+    const fetchSpy = vi.fn().mockResolvedValue(emptyFetched);
+
+    const flaggingGate = vi.fn().mockReturnValue({
+      ok: true,
+      failures: [],
+      warnings: [],
+      freshness: "flag",
+    });
+
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: fetchSpy,
+      gate: flaggingGate,
+      now: () => now,
+    });
+
+    const result = await runSync({ caller: "scheduled" });
+    expect(result.kind).toBe("ran");
+
+    const latest = JSON.parse(readFileSync(join(dir, "latest.json"), "utf-8"));
+    expect(latest.metadata.freshness).toBe("flag");
+  });
+
   it("uses the injected clock.setTimeout/clearTimeout for the outer timer with the configured ms", async () => {
     const mutex = new AsyncMutex();
     const cooldown = new Cooldown();
