@@ -1,0 +1,44 @@
+{
+  "activities": [
+    {
+      "id": 90205,
+      "start_date_local": "1998-06-03T07:00:00",
+      "type": "Ride",
+      "name": "synthetic-cycling-ride",
+      "moving_time": 3600,
+      "elapsed_time": 3600
+    }
+  ],
+  "wellness": [],
+  "ftp_history": [],
+  "power_curves": {
+    "list": [
+      {
+        "id": "r.1998-05-08.1998-06-04",
+        "secs": [
+          60,
+          300,
+          1200
+        ],
+        "watts": [
+          550,
+          420,
+          303
+        ]
+      },
+      {
+        "id": "r.1998-04-10.1998-05-07",
+        "secs": [
+          5,
+          60,
+          300
+        ],
+        "watts": [
+          1000,
+          500,
+          400
+        ]
+      }
+    ]
+  }
+}
