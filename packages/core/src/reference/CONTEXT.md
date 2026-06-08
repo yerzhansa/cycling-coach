@@ -84,7 +84,12 @@ Two functions + a defensive walker + two type-gated parsers live in `sync/rename
 
 ## Sport seam (per ADR-0010)
 
-Sports plug into Reference via the optional `Sport.referenceAdapters?(): readonly ReferenceSportAdapter[]` method (type-only seam; sport implementations register adapters as they come online). Each adapter declares activity types it handles, plus declarative metadata (zone basis, decoupling basis, sustainability anchors, DFA-validated flag) and optional algorithm hooks (`computeDfa`, `computePowerCurve`). Two startup invariants — disjoint coverage + subset coverage of `sport.intervalsActivityTypes` — are enforced by Reference's dispatcher.
+Sports plug into Reference via the optional `Sport.referenceAdapters?(): readonly ReferenceSportAdapter[]` method (sport implementations register adapters as they come online). Each adapter declares activity types it handles, plus declarative metadata (zone basis, decoupling basis, sustainability anchors, DFA-validated flag) and optional algorithm hooks (`computeDfa`, `computePowerCurve`).
+
+The dispatch + invariant kernel lives in `sport-adapter-dispatcher.ts` and `sport-adapter-invariants.ts`:
+
+- **Routing.** `findAdapterForActivity` resolves one activity to its covering adapter; `runAdaptersForActivities` pairs a batch of activities with their adapters (selections only — it invokes no hooks; the live `Activity → MetricInput` bridge that feeds the hooks is deferred). Routing is family-aware: an adapter listing only `Ride`/`VirtualRide` also covers gravel/mountain-bike/e-bike rides because the registry counts those under the same family. Out-of-sport activities are skipped silently; an in-sport activity with no covering adapter warns once per distinct type per call.
+- **Invariants.** `assertDisjointCoverage` (no two adapters claim the same activity type) and `assertSubsetCoverage` (every declared type ⊆ `sport.intervalsActivityTypes`) run at boot, throwing `ReferenceConfigError` and naming offenders by stable identity. Only `ReferenceConfigError` is re-exported from the Reference barrel; the dispatcher and invariant functions are imported from their own module paths.
 
 ## Channel seam (`services.ts`)
 

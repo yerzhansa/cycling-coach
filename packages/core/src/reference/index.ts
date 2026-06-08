@@ -5,6 +5,9 @@ export type {
   ReferenceSportAdapter,
 } from "./sport-adapter.js";
 
+// ─── Per-sport seam boot-config error ─────────────────────────────────
+export { ReferenceConfigError } from "./errors.js";
+
 // ─── Service-aggregate type for downstream channels ───────────────────
 export type { ReferenceServices } from "./services.js";
 
