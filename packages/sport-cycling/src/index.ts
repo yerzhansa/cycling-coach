@@ -37,4 +37,6 @@ export { migrateCyclingLegacySections } from "./migrate.js";
 export {
   cyclingReferenceAdapter,
   CYCLING_SUSTAINABILITY_ANCHORS,
+  projectDfaSummary,
+  projectPowerCurveDelta,
 } from "./reference/index.js";

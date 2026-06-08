@@ -5,6 +5,15 @@ export type {
   ReferenceSportAdapter,
 } from "./sport-adapter.js";
 
+// ─── Per-sport adapter delegation targets (ADR-0010) ──────────────────
+// A per-sport adapter hook surfacing a registry-owned metric delegates to
+// the registry compute and projects its rich output to a thin shape; it must
+// never re-derive or register a second compute. The rich return types stay
+// inferred — re-exporting the rich PowerCurveDelta unaliased would collide
+// (TS2308) with the thin PowerCurveDeltaSummary already exported above.
+export { computeDfaA1Profile, computePowerCurveDelta } from "./metrics/capability.js";
+export type { MetricInput } from "./metrics/metric-input.js";
+
 // ─── Per-sport seam boot-config error ─────────────────────────────────
 export { ReferenceConfigError } from "./errors.js";
 
