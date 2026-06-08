@@ -7,12 +7,14 @@ import {
   type CoreDeps,
   type MemorySectionSpec,
   type MemorySnapshot,
+  type ReferenceSportAdapter,
   type Sport,
   type ToolRegistration,
 } from "@enduragent/core";
 import soul from "../SOUL.md";
 import { skills as skillEntries } from "./skills.generated.js";
 import { createCyclingTools } from "./tools.js";
+import { cyclingReferenceAdapter } from "./reference/index.js";
 import { athleteProfileSchema } from "./schemas.js";
 
 function loadSkills(): Record<string, string> {
@@ -91,4 +93,7 @@ export const cyclingSport: Sport = {
       tool: t,
     }));
   },
+  // Fresh array per call so composing sports can spread it without sharing a
+  // mutable reference.
+  referenceAdapters: (): readonly ReferenceSportAdapter[] => [cyclingReferenceAdapter],
 };

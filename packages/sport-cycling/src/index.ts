@@ -33,3 +33,8 @@ export * from "./schemas.js";
 
 export { cyclingSport, CYCLING_VOCABULARY } from "./sport.js";
 export { migrateCyclingLegacySections } from "./migrate.js";
+
+export {
+  cyclingReferenceAdapter,
+  CYCLING_SUSTAINABILITY_ANCHORS,
+} from "./reference/index.js";

@@ -28,3 +28,10 @@ A single training session (cycling discipline) — name, duration, structured in
 - `mustPreserveTokens` is function-form; reads `cycling-profile` to extract current FTP value.
 - `tools()` composes four buckets per ADR-0004: `createMemoryTools` + `createPureCoreIntervalsTools` + `createCoreToolsWithSportConfig` + sport-specific `createCyclingTools`.
 - Migration: `migrateCyclingLegacySections` (`@enduragent/sport-cycling/migrate`) renames legacy `profile`/`equipment`/`health` sections (one-time, idempotent).
+
+## Reference adapter
+
+- `cyclingReferenceAdapter` (`src/reference/`) implements the `ReferenceSportAdapter` contract from `@enduragent/core` (ADR-0010). Declarative metadata only: `activityTypes` `["Ride", "VirtualRide"]`, `zoneBasis`/`decouplingBasis` `"power"`, `sustainabilityAnchors` `CYCLING_SUSTAINABILITY_ANCHORS` (`[300, 600, 1200, 1800, 3600, 5400, 7200]` seconds), `dfaValidated` `true`.
+- `cyclingSport.referenceAdapters()` returns `[cyclingReferenceAdapter]`, a fresh array per call so composing sports (duathlon, per ADR-0002) can spread it without sharing a mutable reference.
+- The optional `computeDfa`/`computePowerCurve` projection hooks are omitted here; they delegate to the parity-green capability metrics over live data and land once the activity-stream bridge exists.
+- The adapter and `CYCLING_SUSTAINABILITY_ANCHORS` are re-exported from the package's public index so a future composing sport can spread them.
