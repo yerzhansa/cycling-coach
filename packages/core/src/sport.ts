@@ -11,7 +11,16 @@ import type { SecretsResolver } from "./secrets/types.js";
 export type SportId = "cycling" | "running" | "duathlon";
 
 /** intervals.icu activity-type filter values. */
-export type IntervalsActivityType = "Ride" | "Run" | "VirtualRide" | "TrailRun";
+export type IntervalsActivityType =
+  | "Ride"
+  | "Run"
+  | "VirtualRide"
+  | "TrailRun"
+  // The cycling-family rides the registry already counts as cycling, so they
+  // route to the cycling adapter and reconcile with its sport-family counts.
+  | "MountainBikeRide"
+  | "GravelRide"
+  | "EBikeRide";
 
 // ─── Shared kernel ─────────────────────────────────────────────────────
 /** Every sport's profile schema must extend this. */

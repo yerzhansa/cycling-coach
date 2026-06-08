@@ -69,7 +69,7 @@ export const cyclingSport: Sport = {
     }
     return tokens;
   },
-  intervalsActivityTypes: ["Ride", "VirtualRide"],
+  intervalsActivityTypes: ["Ride", "VirtualRide", "MountainBikeRide", "GravelRide", "EBikeRide"],
   athleteProfileSchema,
   tools: (deps: CoreDeps): readonly ToolRegistration[] => {
     const sections = getEffectiveSections(cyclingSport);
