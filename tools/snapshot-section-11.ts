@@ -26,17 +26,22 @@ import { fileURLToPath } from "node:url";
 
 import { loadPyodide } from "pyodide";
 
-import type { Manifest, Snapshot } from "./check-metric-parity";
+import type { Snapshot } from "./check-metric-parity";
 import {
   HARNESS_CONTRACT,
   OPTIONAL_FIXTURE_PATHS,
 } from "./harness-contract.js";
 import {
-  DEFAULT_FROZEN_NOW,
   HARNESS_FIXTURES,
   resolveFixtureAnchor,
 } from "./harness-fixtures.js";
 import { runNativeCheckGate } from "./native-check-gate.js";
+import {
+  buildManifest,
+  loadManifestForDebugOrThrow,
+  mergeManifestForDebug,
+  type ManifestCoordinates,
+} from "./snapshot-manifest.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..");
@@ -641,9 +646,11 @@ async function main(): Promise<void> {
   const goldenDir = resolve(REPO_ROOT, GOLDEN_DIR_REL);
   const manifestPath = join(snapshotRoot, "manifest.json");
 
+  const debugFixturePath = process.env.SNAPSHOT_FIXTURE_PATH;
+  const isDebug = Boolean(debugFixturePath);
   let fixtures: FixtureEntry[];
-  if (process.env.SNAPSHOT_FIXTURE_PATH) {
-    const path = resolve(process.env.SNAPSHOT_FIXTURE_PATH);
+  if (debugFixturePath) {
+    const path = resolve(debugFixturePath);
     if (!existsSync(path)) {
       throw new Error(`Fixture not found: ${path}`);
     }
@@ -711,19 +718,23 @@ async function main(): Promise<void> {
     results.push({ slug: fixture.slug, metrics });
   }
 
-  const fixtureSlugs = results.map((r) => r.slug).sort();
-  const allMetrics = [...new Set(results.flatMap((r) => r.metrics))].sort();
-
-  const manifest: Manifest = {
-    section_11_sha: sha,
-    section_11_protocol_version: protocolVersion,
-    section_11_commit_date: commitDate,
-    fixtures: fixtureSlugs,
-    metrics: allMetrics,
-    pyodide_version: pyodideVersion,
-    frozen_now: DEFAULT_FROZEN_NOW,
-    offline_mode: "A_stub_requests_plus_monkey_patch",
+  const coords: ManifestCoordinates = {
+    sha,
+    protocolVersion,
+    commitDate,
+    pyodideVersion,
   };
+  // The debug path processed a single fixture; patch it into the existing
+  // index instead of rebuilding from one slug (which would drop the rest).
+  // Built AFTER the fixture loop so a contract violation in processFixture
+  // surfaces first and the merge never runs on a corrupt fixture.
+  const manifest = isDebug
+    ? mergeManifestForDebug(
+        loadManifestForDebugOrThrow(manifestPath),
+        results,
+        coords,
+      )
+    : buildManifest(results, coords);
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
   for (const { slug, metrics } of results) {
@@ -734,7 +745,7 @@ async function main(): Promise<void> {
   }
   // eslint-disable-next-line no-console
   console.log(
-    `[snapshot] manifest pins ${fixtureSlugs.length} fixture(s) + ${allMetrics.length} metric(s)`,
+    `[snapshot] manifest pins ${manifest.fixtures.length} fixture(s) + ${manifest.metrics.length} metric(s)`,
   );
 
   // Gate the regen on a green native runtime-parity diff: re-run the just-

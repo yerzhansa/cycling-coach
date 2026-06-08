@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import type { Manifest, Snapshot } from "../../../tools/check-metric-parity";
+import { HARNESS_FIXTURES } from "../../../tools/harness-fixtures";
 
 /**
  * Smoke test for the section-11 snapshot harness oracle.
@@ -29,7 +30,13 @@ describe("section-11 snapshot loop", () => {
     expect(manifest.section_11_sha).toMatch(/^[0-9a-f]{40}$/);
     expect(manifest.section_11_protocol_version).toMatch(/^\d+\.\d+$/);
     expect(manifest.section_11_commit_date).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-    expect(manifest.fixtures).toContain("realistic-athlete");
+    // Assert the FULL allowlist, not just one slug: a single-fixture debug
+    // regen that clobbered the manifest down to its own slug would slip past a
+    // `toContain("realistic-athlete")` check whenever that slug is the one
+    // debugged. Pinned to HARNESS_FIXTURES, the single source of truth.
+    expect([...manifest.fixtures].sort()).toEqual(
+      HARNESS_FIXTURES.map((f) => f.slug).sort(),
+    );
     expect(manifest.metrics.length).toBeGreaterThan(0);
     expect(manifest.frozen_now).toBe("2026-05-10T12:00:00");
   });
