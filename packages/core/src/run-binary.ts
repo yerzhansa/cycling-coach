@@ -287,6 +287,7 @@ export async function runBinary(
   const reference = await bootstrapReference({
     dataDir: config.dataDir,
     intervals: config.intervals,
+    sport,
   });
 
   if (config.telegram.botToken) {

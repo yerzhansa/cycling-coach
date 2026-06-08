@@ -8,8 +8,13 @@ import { makeProductionFetcher } from "./sync/fetch-reference-data.js";
 import { safeReadJson } from "../io/safe-read-json.js";
 import { LatestJsonSchema, type LatestJson } from "./schemas/latest.js";
 import { SYNC_COOLDOWN_MS, SCHEDULED_SYNC_INTERVAL_MS } from "./freshness.js";
+import {
+  assertDisjointCoverage,
+  assertSubsetCoverage,
+} from "./sport-adapter-invariants.js";
 import type { FetchedReference } from "./sync/run-sync.js";
 import type { ReferenceServices } from "./services.js";
+import type { Sport } from "../sport.js";
 
 /** Shared between runtime + tests so the strings stay in sync. */
 export const INITIAL_SYNC_FAILED_LOG_PREFIX = "Reference: initial sync failed";
@@ -28,6 +33,7 @@ export interface BootstrapReferenceDeps {
   /** Binary's per-coach data root (e.g., `~/.cycling-coach/`). */
   readonly dataDir: string;
   readonly intervals: { readonly apiKey: string; readonly athleteId?: string };
+  readonly sport: Sport;
   /** Inject a fetcher for tests. Defaults to `makeProductionFetcher`. */
   readonly fetchReferenceData?: (signal: AbortSignal) => Promise<FetchedReference>;
 }
@@ -49,6 +55,14 @@ export interface BootstrapReferenceDeps {
 export async function bootstrapReference(
   deps: BootstrapReferenceDeps,
 ): Promise<ReferenceRuntime> {
+  // Validate adapter coverage before any side effect: a misconfigured adapter
+  // array is a config error, not a transient one, so it must crash the boot
+  // synchronously — no data dir, no scheduler timer, no fetch — rather than
+  // degrade like a failed first sync would.
+  const adapters = deps.sport.referenceAdapters?.() ?? [];
+  assertDisjointCoverage(adapters);
+  assertSubsetCoverage(adapters, deps.sport.intervalsActivityTypes);
+
   const referenceDataPath = join(deps.dataDir, "data");
   mkdirSync(referenceDataPath, { recursive: true });
 

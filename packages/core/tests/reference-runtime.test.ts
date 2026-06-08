@@ -6,8 +6,22 @@ import {
   bootstrapReference,
   INITIAL_SYNC_FAILED_LOG_PREFIX,
 } from "../src/reference/runtime.js";
+import { ReferenceConfigError } from "../src/reference/errors.js";
+import type { ReferenceSportAdapter } from "../src/reference/sport-adapter.js";
+import type { Sport } from "../src/sport.js";
 import { Scheduler } from "../src/reference/sync/scheduler.js";
 import { emptyFetched } from "./helpers/reference-fixtures.js";
+
+// A real `cyclingSport` import would create a core→sport-cycling dependency
+// cycle (core declares no such dep), so every call site uses a minimal fake.
+const fakeSport = (
+  overrides: Partial<Pick<Sport, "intervalsActivityTypes" | "referenceAdapters">> = {},
+): Sport =>
+  ({
+    intervalsActivityTypes: [],
+    referenceAdapters: undefined,
+    ...overrides,
+  }) as unknown as Sport;
 
 // Source-anchor checks for run-binary.ts's outer init order live in
 // `run-binary-init-order.test.ts` — different test category, different
@@ -36,6 +50,7 @@ describe("bootstrapReference (behavioral)", () => {
     const runtime = await bootstrapReference({
       dataDir,
       intervals: { apiKey: "test-key" },
+      sport: fakeSport(),
       fetchReferenceData: fetchSpy,
     });
 
@@ -49,6 +64,7 @@ describe("bootstrapReference (behavioral)", () => {
     const runtime = await bootstrapReference({
       dataDir,
       intervals: { apiKey: "test-key" },
+      sport: fakeSport(),
       fetchReferenceData: fetchSpy,
     });
 
@@ -62,6 +78,7 @@ describe("bootstrapReference (behavioral)", () => {
     const runtime = await bootstrapReference({
       dataDir,
       intervals: { apiKey: "test-key" },
+      sport: fakeSport(),
       fetchReferenceData: fetchSpy,
     });
 
@@ -83,6 +100,7 @@ describe("bootstrapReference (behavioral)", () => {
     const runtime = await bootstrapReference({
       dataDir,
       intervals: { apiKey: "test-key" },
+      sport: fakeSport(),
       fetchReferenceData: failingFetch,
     });
 
@@ -116,6 +134,7 @@ describe("bootstrapReference (behavioral)", () => {
     const bootstrapPromise = bootstrapReference({
       dataDir,
       intervals: { apiKey: "test-key" },
+      sport: fakeSport(),
       fetchReferenceData: slowFetch,
     });
 
@@ -140,6 +159,7 @@ describe("bootstrapReference (behavioral)", () => {
     const runtime = await bootstrapReference({
       dataDir,
       intervals: { apiKey: "test-key" },
+      sport: fakeSport(),
       fetchReferenceData: fetchSpy,
     });
 
@@ -164,6 +184,7 @@ describe("bootstrapReference (behavioral)", () => {
     const runtime = await bootstrapReference({
       dataDir,
       intervals: { apiKey: "test-key" },
+      sport: fakeSport(),
       fetchReferenceData: fetchSpy,
     });
 
@@ -182,6 +203,7 @@ describe("bootstrapReference (behavioral)", () => {
     const runtime = await bootstrapReference({
       dataDir,
       intervals: { apiKey: "test-key" },
+      sport: fakeSport(),
       fetchReferenceData: failingFetch,
     });
 
@@ -195,6 +217,7 @@ describe("bootstrapReference (behavioral)", () => {
     const runtime = await bootstrapReference({
       dataDir,
       intervals: { apiKey: "test-key" },
+      sport: fakeSport(),
       fetchReferenceData: fetchSpy,
     });
 
@@ -207,6 +230,67 @@ describe("bootstrapReference (behavioral)", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
     runtime.scheduler.stop();
+  });
+});
+
+describe("bootstrapReference (fail-fast on misconfigured adapters)", () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "reference-runtime-failfast-"));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  const rideAdapter = (): ReferenceSportAdapter => ({
+    activityTypes: ["Ride"],
+    zoneBasis: "power",
+    decouplingBasis: "power",
+    sustainabilityAnchors: [],
+    dfaValidated: true,
+  });
+
+  it("rejects with ReferenceConfigError when two adapters overlap, before any IO", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(emptyFetched);
+    const overlappingSport = fakeSport({
+      intervalsActivityTypes: ["Ride"],
+      referenceAdapters: () => [rideAdapter(), rideAdapter()],
+    });
+
+    await expect(
+      bootstrapReference({
+        dataDir,
+        intervals: { apiKey: "test-key" },
+        sport: overlappingSport,
+        fetchReferenceData: fetchSpy,
+      }),
+    ).rejects.toBeInstanceOf(ReferenceConfigError);
+
+    expect(existsSync(join(dataDir, "data"))).toBe(false);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects with ReferenceConfigError when an adapter claims a type outside the sport, before any IO", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(emptyFetched);
+    const strayingSport = fakeSport({
+      intervalsActivityTypes: [],
+      referenceAdapters: () => [rideAdapter()],
+    });
+
+    await expect(
+      bootstrapReference({
+        dataDir,
+        intervals: { apiKey: "test-key" },
+        sport: strayingSport,
+        fetchReferenceData: fetchSpy,
+      }),
+    ).rejects.toBeInstanceOf(ReferenceConfigError);
+
+    expect(existsSync(join(dataDir, "data"))).toBe(false);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 
