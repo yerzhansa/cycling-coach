@@ -21,7 +21,7 @@
 import { describe, it, expect } from "vitest";
 import type {
   DfaSummary,
-  PowerCurveDelta,
+  PowerCurveDeltaSummary,
   ReferenceSportAdapter,
   Sport,
 } from "../src/index.js";
@@ -41,7 +41,7 @@ describe("ReferenceSportAdapter type surface", () => {
 
   it("ReferenceSportAdapter accepts optional algorithm hooks", () => {
     const fakeDfa: DfaSummary = { sufficient: true, value: 0.78 };
-    const fakeCurveDelta: PowerCurveDelta = { anchorsCovered: 5, trend: "up" };
+    const fakeCurveDelta: PowerCurveDeltaSummary = { anchorsCovered: 5, trend: "up" };
 
     const withHooks: ReferenceSportAdapter = {
       activityTypes: ["Ride"] as const,
@@ -59,10 +59,10 @@ describe("ReferenceSportAdapter type surface", () => {
     expect(delta?.anchorsCovered).toBe(5);
   });
 
-  it("DfaSummary and PowerCurveDelta are exported and usable", () => {
+  it("DfaSummary and PowerCurveDeltaSummary are exported and usable", () => {
     const noisy: DfaSummary = { sufficient: false };
     expect(noisy.sufficient).toBe(false);
-    const flat: PowerCurveDelta = { anchorsCovered: 0, trend: "flat" };
+    const flat: PowerCurveDeltaSummary = { anchorsCovered: 0, trend: "flat" };
     expect(flat.trend).toBe("flat");
   });
 });

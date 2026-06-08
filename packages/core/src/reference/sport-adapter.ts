@@ -45,7 +45,7 @@ export interface ReferenceSportAdapter {
   computeDfa?(activity: Activity): DfaSummary | null;
 
   /** Optional. Sports without a power-equivalent curve omit this hook. */
-  computePowerCurve?(activities: readonly Activity[]): PowerCurveDelta | null;
+  computePowerCurve?(activities: readonly Activity[]): PowerCurveDeltaSummary | null;
 }
 
 export interface DfaSummary {
@@ -59,7 +59,12 @@ export interface DfaSummary {
   readonly value?: number;
 }
 
-export interface PowerCurveDelta {
+/**
+ * Thin public projection shape returned by `computePowerCurve`. Distinct from
+ * the rich internal compute type so a projection module can import both in one
+ * scope without a name collision.
+ */
+export interface PowerCurveDeltaSummary {
   readonly anchorsCovered: number;
   readonly trend?: "up" | "down" | "flat";
 }

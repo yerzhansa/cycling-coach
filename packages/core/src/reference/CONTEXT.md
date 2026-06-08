@@ -14,7 +14,7 @@ reference/
 ├── index.ts            (public barrel — wired into packages/core/src/index.ts)
 ├── services.ts         (ReferenceServices — service-aggregate exposed to channels per ADR-0010)
 ├── runtime.ts          (ReferenceRuntime + bootstrapReference — pins ADR-0011 two-phase init)
-├── sport-adapter.ts    (the per-sport seam type — ReferenceSportAdapter + DfaSummary + PowerCurveDelta)
+├── sport-adapter.ts    (the per-sport seam type — ReferenceSportAdapter + DfaSummary + PowerCurveDeltaSummary)
 ├── freshness.ts        (single-source-of-truth constants: freshness, retention, mutex/cooldown timings)
 ├── paths.ts            (referenceDataDir(binaryName) — composes via getCoachHome)
 ├── preserve-tokens.ts  (REFERENCE_PRESERVE_TOKENS — populated alongside the curator; sports spread)

@@ -1,7 +1,7 @@
 // ─── Per-sport seam type (ADR-0010) ───────────────────────────────────
 export type {
   DfaSummary,
-  PowerCurveDelta,
+  PowerCurveDeltaSummary,
   ReferenceSportAdapter,
 } from "./sport-adapter.js";
 
