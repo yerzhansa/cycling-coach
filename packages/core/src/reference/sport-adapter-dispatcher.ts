@@ -46,6 +46,7 @@ export function findAdapterForActivity(
   return adapters.find((a) => adapterCoversType(a, type)) ?? null;
 }
 
+/** A selected (activity, adapter) pair — the unit produced by {@link runAdaptersForActivities}. */
 export interface AdapterRun {
   readonly activity: Activity;
   readonly adapter: ReferenceSportAdapter;
@@ -56,6 +57,11 @@ export interface AdapterRun {
  * does not invoke any adapter hook. Out-of-sport types are skipped silently; an
  * in-sport type with no covering adapter warns once per distinct type per call
  * so a misconfigured adapter array is visible without flooding the log.
+ *
+ * Intentionally has no in-tree caller yet: this is the selection seam the live
+ * activity→metric path will consume to drive per-sport projections. Landed
+ * ahead of that consumer so it arrives as an additive call site rather than a
+ * new seam — do not remove as unused.
  */
 export function runAdaptersForActivities(
   adapters: readonly ReferenceSportAdapter[],

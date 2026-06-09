@@ -3,13 +3,16 @@
  * surfaces a registry-owned metric delegates to the registry compute and
  * projects its output — it must never register a second compute or re-derive.
  *
- * Two surfaces are pinned:
+ * Three surfaces are pinned:
  *   1. The delegation targets (`computeDfaA1Profile`, `computePowerCurveDelta`,
  *      and the `MetricInput` type) are reachable from `@enduragent/core`, so a
  *      downstream adapter can import them without reaching into core internals.
  *   2. The registry key set is byte-identical to the recorded baseline — no new
  *      `capability.*` writer slipped in. Parity-green alone can't prove this: a
  *      redundant entry would ADD a passing case, not fail one.
+ *   3. The registry itself is NOT reachable from the public barrel, so a sport
+ *      package cannot acquire it without deep-importing core internals (the form
+ *      the registry-isolation lint catches). Defense in depth for that lint.
  */
 
 import { describe, it, expect, expectTypeOf } from "vitest";
@@ -18,6 +21,7 @@ import {
   computePowerCurveDelta,
   type MetricInput,
 } from "@enduragent/core";
+import * as corePublicApi from "@enduragent/core";
 import { METRIC_REGISTRY } from "../src/reference/metrics/registry.js";
 
 const REGISTRY_KEYS_BASELINE = [
@@ -78,5 +82,9 @@ describe("registry stays the sole writer of the capability metrics (OP1)", () =>
   it("has no new key beyond the recorded baseline", () => {
     const keys = Object.keys(METRIC_REGISTRY).sort();
     expect(keys).toEqual([...REGISTRY_KEYS_BASELINE]);
+  });
+
+  it("does not leak the registry through the public barrel", () => {
+    expect("METRIC_REGISTRY" in corePublicApi).toBe(false);
   });
 });
