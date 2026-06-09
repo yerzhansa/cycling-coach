@@ -15,7 +15,7 @@
  * silently weaken.
  */
 
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -77,6 +77,15 @@ export const DeviationEntrySchema = z
     section_11_implementation: z.string(),
     our_implementation: z.string(),
     type: z.string(),
+    // Output paths our implementation emits that the upstream oracle does NOT
+    // (an ADDITIVE, literature-grounded deviation). The gate excludes exactly
+    // these paths from the bit-identity assertion when the entry is
+    // `approved-cite`, so every ported value still asserts bit-identical while
+    // the added fields ride alongside. Honored only for `approved-cite`: an
+    // additive field under any other status still fails parity (forcing the
+    // Phase-4 decision). Dotted paths relative to the metric value root; `*`
+    // matches every key of an object map / every index of an array.
+    added_paths: z.array(z.string()).optional(),
     status: DeviationStatusSchema,
     justification: DeviationJustificationSchema.optional(),
     adr: z.string().optional(),
@@ -142,12 +151,24 @@ export function __resetRegistryCacheForTesting(): void {
 // `justification.path` file exists, (b) it contains a DOI or PMID
 // marker, and (c) it is at least 300 words. Failing any of those is
 // a gate failure: a thin or absent citation makes the deviation hollow.
+//
+// Reconciling this with the project rule that `docs/` is gitignored: the
+// cited research lives under `docs/knowledge/research/`, which is NOT checked
+// out in CI. So the cite-CONTENT check is a LOCAL enforcement surface (run via
+// `pnpm check-parity` on the operator's machine, the same place the Phase-4
+// human review happens). When the research tree itself is absent — i.e. `docs/`
+// was not checked out, as in CI — the content check is SKIPPED (ok=true,
+// recorded), because the material it would inspect is out of the checkout by
+// design. The bit-identity core still runs everywhere. A file that IS missing
+// while its research directory exists (a real typo / deleted cite, locally)
+// still FAILS. `skipped` lets callers tell "couldn't check" from "checked, ok".
 export const RESEARCH_FILE_MIN_WORDS = 300;
 export const DOI_OR_PMID_REGEX = /(10\.\d{4,9}\/[^\s\]]+|PMID:?\s*\d{3,})/i;
 
 export interface ResearchFileValidation {
   ok: boolean;
   reasons: string[];
+  skipped?: boolean;
 }
 
 export function validateResearchFile(
@@ -164,6 +185,16 @@ export function validateResearchFile(
     content = readFileSync(abs, "utf8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      // If the whole research tree is absent, `docs/` was not checked out
+      // (CI): skip the content check rather than fail. If the directory IS
+      // present, this is a genuine missing/typo'd cite (local): fail.
+      if (!existsSync(dirname(abs))) {
+        reasons.push(
+          `research tree not checked out (${dirname(justificationPath)} absent); ` +
+            `cite-content check skipped — enforced locally where docs/ exists`,
+        );
+        return { ok: true, reasons, skipped: true };
+      }
       reasons.push(`file does not exist at ${justificationPath}`);
       return { ok: false, reasons };
     }
@@ -224,6 +255,70 @@ export function deepCompare(
     out.push(...deepCompare(eo[k], ao[k], `${path}.${k}`));
   }
   return out;
+}
+
+// ─── Additive-deviation path stripping ──────────────────────────────────
+//
+// For an `approved-cite` deviation that ships ADDITIVE output (fields the
+// upstream oracle never emits), the gate removes exactly the declared paths
+// from `actual` before `deepCompare`. The bit-identity assertion then runs on
+// the upstream-faithful surface only; the added fields are out of the oracle's
+// reach by construction and are verified by unit tests instead. Stripping is
+// surgical — it deletes only the declared keys, so any OTHER divergence (a
+// drifted ported value, an undeclared extra key) still surfaces as a diff.
+
+// One dotted path, e.g. `trailing_by_sport.*.aet_estimate`. A leading `$` /
+// `$.` is tolerated. `*` matches every key of an object map or every index of
+// an array at that position.
+export function parseAddedPath(path: string): string[] {
+  return path.replace(/^\$\.?/, "").split(".").filter((s) => s.length > 0);
+}
+
+function deletePathSegments(node: unknown, segments: string[]): void {
+  if (segments.length === 0 || node === null || typeof node !== "object") return;
+  const [head, ...rest] = segments;
+  const isLast = rest.length === 0;
+
+  const visit = (container: Record<string, unknown> | unknown[], key: string): void => {
+    if (isLast) {
+      // Deleting a concrete key off an object map; array elements are not
+      // removed by key (no declared path targets an array index as a leaf).
+      if (!Array.isArray(container)) delete container[key];
+    } else {
+      deletePathSegments((container as Record<string, unknown>)[key], rest);
+    }
+  };
+
+  if (head === "*") {
+    if (Array.isArray(node)) {
+      for (let i = 0; i < node.length; i++) deletePathSegments(node[i], rest);
+    } else {
+      for (const k of Object.keys(node as Record<string, unknown>)) {
+        visit(node as Record<string, unknown>, k);
+      }
+    }
+    return;
+  }
+  if (Array.isArray(node)) {
+    const idx = Number(head);
+    if (Number.isInteger(idx) && idx >= 0 && idx < node.length) {
+      deletePathSegments(node[idx], rest);
+    }
+    return;
+  }
+  visit(node as Record<string, unknown>, head as string);
+}
+
+// Returns a deep clone of `value` with every `added_paths` entry removed.
+// Never mutates the input. `structuredClone` is available in the Node version
+// the gate runs under.
+export function stripAddedPaths(value: unknown, paths: readonly string[]): unknown {
+  if (paths.length === 0) return value;
+  const clone = structuredClone(value);
+  for (const p of paths) {
+    deletePathSegments(clone, parseAddedPath(p));
+  }
+  return clone;
 }
 
 // ─── Snapshot + fixture loaders ────────────────────────────────────────
@@ -355,13 +450,22 @@ export async function runParityCheck(args: {
   const fixture = loadGoldenFixture(args.fixture);
 
   const actual = entry.compute({ fixture, frozenNow: snap.frozen_now });
-  const diff = deepCompare(snap.value, actual);
 
   const deviation = findDeviation(args.metric);
   let citeCheck: ResearchFileValidation | undefined;
   if (deviation?.status === "approved-cite") {
     citeCheck = validateResearchFile(deviation.justification?.path);
   }
+
+  // Additive `added_paths` are stripped from `actual` ONLY for an approved-cite
+  // deviation — under any other status the added field stays in the comparison
+  // and fails parity, which is what forces the Phase-4 decision before such a
+  // field can ship.
+  const comparable =
+    deviation?.status === "approved-cite" && deviation.added_paths?.length
+      ? stripAddedPaths(actual, deviation.added_paths)
+      : actual;
+  const diff = deepCompare(snap.value, comparable);
 
   const passed = diff.length === 0 && (citeCheck?.ok ?? true);
 

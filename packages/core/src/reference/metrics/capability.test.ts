@@ -970,6 +970,7 @@ describe("buildDfaBlock", () => {
     expect(block!.avg).toBeNull();
     expect(block!.tiz_lt1_transition).toBeNull();
     expect(block!.lt1_crossing).toBeNull();
+    expect(block!.aet_crossing).toBeNull();
   });
 
   it("sentinel zeros (<0.01) and high-artifact seconds are filtered jointly", () => {
@@ -998,6 +999,8 @@ describe("buildDfaBlock", () => {
     expect(block!.tiz_above_lt2).toBeNull();
     // LT1 crossing band 0.95-1.05 catches the 1.0 plateau (600s ≥ 60 dwell).
     expect(block!.lt1_crossing).toEqual({ secs_in_band: 600, avg_hr: 138, avg_watts: 175 });
+    // Additive AeT crossing band 0.70-0.80 catches the 0.75 plateau.
+    expect(block!.aet_crossing).toEqual({ secs_in_band: 600, avg_hr: 152, avg_watts: 218 });
     // LT2 crossing band 0.45-0.55 catches the 0.5 plateau.
     expect(block!.lt2_crossing).toEqual({ secs_in_band: 600, avg_hr: 166, avg_watts: 255 });
   });
@@ -1073,6 +1076,17 @@ describe("computeDfaA1Profile", () => {
       n_sessions_outdoor: 7,
       n_sessions_indoor: 0,
     });
+    // Additive AeT (0.75) estimate — same cycling indoor/outdoor split shape as
+    // lt1, read off the 0.75 plateau (HR 152, watts 218).
+    expect(cycling.aet_crossing_sessions).toBe(7);
+    expect(cycling.aet_estimate).toEqual({
+      hr: 152,
+      watts_outdoor: 218,
+      watts_indoor: null,
+      n_sessions: 7,
+      n_sessions_outdoor: 7,
+      n_sessions_indoor: 0,
+    });
     expect(cycling.lt2_estimate).toEqual({
       hr: 166,
       watts_outdoor: 255,
@@ -1107,6 +1121,10 @@ describe("computeDfaA1Profile", () => {
     expect(rowing.confidence).toBe("high"); // 6 crossing sessions
     const lt1 = rowing.lt1_estimate as { hr: number; watts: number; n_sessions: number };
     expect(lt1).toEqual({ hr: 138, watts: 175, n_sessions: 6 });
+    // Additive AeT estimate for a non-cycling family is pooled-watts shaped.
+    expect(rowing.aet_crossing_sessions).toBe(6);
+    const aet = rowing.aet_estimate as { hr: number; watts: number; n_sessions: number };
+    expect(aet).toEqual({ hr: 152, watts: 218, n_sessions: 6 });
     expect(rowing.note).toContain("cycling-validated");
     // latest_session for a non-cycling sport is validated=false too.
     expect(profile.latest_session.validated).toBe(false);

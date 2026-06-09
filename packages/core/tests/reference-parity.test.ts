@@ -5,7 +5,9 @@ import {
   deepCompare,
   listFixtures,
   listRegisteredMetrics,
+  parseAddedPath,
   runParityCheck,
+  stripAddedPaths,
   validateResearchFile,
 } from "../../../tools/check-metric-parity";
 
@@ -66,10 +68,83 @@ describe("reference-parity gate — internals", () => {
       expect(r.reasons.join("\n")).toMatch(/justification\.path is empty/);
     });
 
-    it("rejects a missing file path", () => {
-      const r = validateResearchFile("docs/knowledge/research/does-not-exist.md");
+    it("fails a missing file when its research directory IS present (real typo/deleted cite)", () => {
+      // `tools/` is in every checkout, so a missing file under it is a genuine
+      // missing-cite failure — not an un-checked-out docs tree. Deterministic
+      // in both local and CI runs.
+      const r = validateResearchFile("tools/__no_such_cite__.md");
       expect(r.ok).toBe(false);
+      expect(r.skipped).toBeFalsy();
       expect(r.reasons.join("\n")).toMatch(/file does not exist/);
+    });
+
+    it("skips (non-failing) when the research tree itself is absent (docs/ not checked out, e.g. CI)", () => {
+      // This subdir is never checked out, so the skip branch is deterministic
+      // regardless of whether docs/ is present in this run.
+      const r = validateResearchFile("docs/__never_checked_out__/cite.md");
+      expect(r.ok).toBe(true);
+      expect(r.skipped).toBe(true);
+      expect(r.reasons.join("\n")).toMatch(/research tree not checked out/);
+    });
+  });
+
+  describe("stripAddedPaths / additive-deviation exclusion", () => {
+    it("parseAddedPath strips a leading $ and splits on dots", () => {
+      expect(parseAddedPath("$.trailing_by_sport.*.aet_estimate")).toEqual([
+        "trailing_by_sport",
+        "*",
+        "aet_estimate",
+      ]);
+      expect(parseAddedPath("a.b.c")).toEqual(["a", "b", "c"]);
+    });
+
+    it("removes wildcard-map paths and never mutates the input", () => {
+      const actual = {
+        trailing_by_sport: {
+          cycling: { lt1_estimate: { hr: 138 }, aet_estimate: { hr: 152 }, aet_crossing_sessions: 7 },
+          running: { lt1_estimate: { hr: 150 }, aet_estimate: { hr: 165 }, aet_crossing_sessions: 4 },
+        },
+      };
+      const stripped = stripAddedPaths(actual, [
+        "trailing_by_sport.*.aet_estimate",
+        "trailing_by_sport.*.aet_crossing_sessions",
+      ]);
+      expect(stripped).toEqual({
+        trailing_by_sport: {
+          cycling: { lt1_estimate: { hr: 138 } },
+          running: { lt1_estimate: { hr: 150 } },
+        },
+      });
+      expect(actual.trailing_by_sport.cycling.aet_estimate).toEqual({ hr: 152 });
+    });
+
+    it("a diff OUTSIDE the added paths still surfaces (no over-masking of drifted ported values)", () => {
+      const snap = { trailing_by_sport: { cycling: { lt1_estimate: { hr: 138 } } } };
+      const actual = {
+        trailing_by_sport: { cycling: { lt1_estimate: { hr: 999 }, aet_estimate: { hr: 152 } } },
+      };
+      const diff = deepCompare(snap, stripAddedPaths(actual, ["trailing_by_sport.*.aet_estimate"]));
+      expect(diff).toEqual([
+        { path: "$.trailing_by_sport.cycling.lt1_estimate.hr", expected: 138, actual: 999 },
+      ]);
+    });
+
+    it("an UNDECLARED extra key still fails (only declared paths are excluded)", () => {
+      const snap = { trailing_by_sport: { cycling: { lt1_estimate: { hr: 138 } } } };
+      const actual = {
+        trailing_by_sport: {
+          cycling: { lt1_estimate: { hr: 138 }, aet_estimate: { hr: 152 }, sneaky: 1 },
+        },
+      };
+      const diff = deepCompare(snap, stripAddedPaths(actual, ["trailing_by_sport.*.aet_estimate"]));
+      expect(diff).toEqual([
+        { path: "$.trailing_by_sport.cycling.sneaky", expected: undefined, actual: 1 },
+      ]);
+    });
+
+    it("returns the input unchanged for an empty path list", () => {
+      const v = { a: 1 };
+      expect(stripAddedPaths(v, [])).toBe(v);
     });
   });
 

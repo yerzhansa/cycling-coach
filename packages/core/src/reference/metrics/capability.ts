@@ -1214,6 +1214,17 @@ const DFA_LT1 = 1.0;
 const DFA_LT2 = 0.5;
 const DFA_LT1_BAND = 0.05;
 const DFA_LT2_BAND = 0.05;
+// Aerobic-threshold crossing band — additive to the faithful upstream port, not
+// present in `sync.py`. The literature operationalizes the aerobic threshold
+// (AeT / LT1) at DFA a1 = 0.75 (Rogers 2020, DOI 10.3389/fphys.2020.596567;
+// Gronwald 2022, DOI 10.1007/s00421-022-05050-x; Mateo-March 2023, DOI
+// 10.3390/sports10020025), whereas the upstream `lt1_crossing` centers on the
+// 1.0 well-correlated baseline (1.0 is the easy-exercise baseline, not a
+// transition). `aet_crossing` surfaces the validated 0.75 marker ALONGSIDE the
+// unchanged 1.0 crossing; see the approved-cite entry for
+// `capability.dfa_a1_profile` in `tools/intentional-deviations.yaml`.
+const DFA_AET = 0.75;
+const DFA_AET_BAND = 0.05;
 const DFA_MIN_CROSSING_DWELL_SECS = 60;
 const DFA_ARTIFACT_MAX_PCT = 5.0;
 const DFA_MIN_VALID_VALUE = 0.01;
@@ -1262,6 +1273,9 @@ interface DfaBlock {
   tiz_above_lt2: DfaBandStats | null;
   drift: DfaDrift | null;
   lt1_crossing: DfaCrossing | null;
+  // Additive literature-grounded crossing (0.75 ± 0.05); not in the upstream
+  // block. Sits between lt1 (1.0) and lt2 (0.5) on the descending α1 scale.
+  aet_crossing: DfaCrossing | null;
   lt2_crossing: DfaCrossing | null;
   quality: DfaQuality;
 }
@@ -1375,6 +1389,7 @@ export function buildDfaBlock(streams: ActivityStreams): DfaBlock | null {
       tiz_above_lt2: null,
       drift: null,
       lt1_crossing: null,
+      aet_crossing: null,
       lt2_crossing: null,
       quality,
     };
@@ -1473,6 +1488,7 @@ export function buildDfaBlock(streams: ActivityStreams): DfaBlock | null {
   };
 
   const lt1Crossing = crossingStats(DFA_LT1, DFA_LT1_BAND);
+  const aetCrossing = crossingStats(DFA_AET, DFA_AET_BAND);
   const lt2Crossing = crossingStats(DFA_LT2, DFA_LT2_BAND);
 
   return {
@@ -1486,6 +1502,7 @@ export function buildDfaBlock(streams: ActivityStreams): DfaBlock | null {
     tiz_above_lt2: tizAboveLt2,
     drift,
     lt1_crossing: lt1Crossing,
+    aet_crossing: aetCrossing,
     lt2_crossing: lt2Crossing,
     quality,
   };
@@ -1557,8 +1574,12 @@ interface DfaSportBlock {
   avg_dfa_a1: number | null;
   drift_delta_mean: number | null;
   lt1_crossing_sessions: number;
+  // Additive (0.75 crossing); excluded from the upstream parity surface via the
+  // approved-cite entry's `added_paths`. Derived identically to lt1/lt2.
+  aet_crossing_sessions: number;
   lt2_crossing_sessions: number;
   lt1_estimate: DfaThresholdEstimateCycling | DfaThresholdEstimatePooled | null;
+  aet_estimate: DfaThresholdEstimateCycling | DfaThresholdEstimatePooled | null;
   lt2_estimate: DfaThresholdEstimateCycling | DfaThresholdEstimatePooled | null;
   quality_avg_pct: number;
   validated: boolean;
@@ -1594,8 +1615,18 @@ export interface DfaA1Profile {
  * compensated `pythonSum`. Integer floor division `//` is `Math.floor` (all
  * operands non-negative). See `NOTICE.md` for upstream attribution.
  *
- * @see Rowlands, D. S. et al. (2017); Gronwald, T. & Hoos, O. (2020);
- *      Mateo-March, M. et al. (2023) — cycling DFA a1 threshold validation.
+ * Per sport block also carries an additive `aet_estimate` /
+ * `aet_crossing_sessions` from the 0.75 ± 0.05 `aet_crossing` band — the
+ * literature-validated aerobic threshold, surfaced ALONGSIDE the faithfully
+ * ported 1.0-centered `lt1_crossing` (which is the well-correlated baseline,
+ * not the aerobic transition). This is a cite-backed additive deviation
+ * excluded from the upstream parity surface; its values are pinned by unit
+ * tests, not the oracle snapshot. See `tools/intentional-deviations.yaml`.
+ *
+ * @see Rogers, B. et al. (2020), DOI 10.3389/fphys.2020.596567 — 0.75 ↔ AeT;
+ *      Gronwald, T. et al. (2022), DOI 10.1007/s00421-022-05050-x;
+ *      Mateo-March, M. et al. (2023), DOI 10.3390/sports10020025 — cycling
+ *      DFA a1 threshold validation.
  */
 export function computeDfaA1Profile(input: MetricInput): DfaA1Profile | null {
   const activities = assembleDfaActivities(input);
@@ -1702,7 +1733,7 @@ export function computeDfaA1Profile(input: MetricInput): DfaA1Profile | null {
 
     // Threshold estimates from crossing bands — only sessions with sufficient dwell.
     const avgCrossing = (
-      key: "lt1_crossing" | "lt2_crossing",
+      key: "lt1_crossing" | "aet_crossing" | "lt2_crossing",
       field: "avg_hr" | "avg_watts",
       subset?: DfaActivity[],
     ): [number | null, number] => {
@@ -1719,21 +1750,29 @@ export function computeDfaA1Profile(input: MetricInput): DfaA1Profile | null {
       return [roundHalfEven(pythonSum(vals) / vals.length, 0), vals.length];
     };
 
-    // HR estimates — pooled across all sessions.
+    // HR estimates — pooled across all sessions. `aet*` mirror `lt1*`/`lt2*`
+    // exactly but read the additive 0.75 crossing band.
     const [lt1Hr, lt1NHr] = avgCrossing("lt1_crossing", "avg_hr");
+    const [aetHr, aetNHr] = avgCrossing("aet_crossing", "avg_hr");
     const [lt2Hr, lt2NHr] = avgCrossing("lt2_crossing", "avg_hr");
 
     const isCycling = family === "cycling";
     let lt1Watts: number | null = null;
+    let aetWatts: number | null = null;
     let lt2Watts: number | null = null;
     let lt1NW = 0;
+    let aetNW = 0;
     let lt2NW = 0;
     let lt1WattsOut: number | null = null;
     let lt1WattsIn: number | null = null;
+    let aetWattsOut: number | null = null;
+    let aetWattsIn: number | null = null;
     let lt2WattsOut: number | null = null;
     let lt2WattsIn: number | null = null;
     let lt1NWOut = 0;
     let lt1NWIn = 0;
+    let aetNWOut = 0;
+    let aetNWIn = 0;
     let lt2NWOut = 0;
     let lt2NWIn = 0;
     if (isCycling) {
@@ -1741,17 +1780,24 @@ export function computeDfaA1Profile(input: MetricInput): DfaA1Profile | null {
       const outdoor = window.filter((a) => !dfaIsIndoorCycling(a.type));
       [lt1WattsOut, lt1NWOut] = avgCrossing("lt1_crossing", "avg_watts", outdoor);
       [lt1WattsIn, lt1NWIn] = avgCrossing("lt1_crossing", "avg_watts", indoor);
+      [aetWattsOut, aetNWOut] = avgCrossing("aet_crossing", "avg_watts", outdoor);
+      [aetWattsIn, aetNWIn] = avgCrossing("aet_crossing", "avg_watts", indoor);
       [lt2WattsOut, lt2NWOut] = avgCrossing("lt2_crossing", "avg_watts", outdoor);
       [lt2WattsIn, lt2NWIn] = avgCrossing("lt2_crossing", "avg_watts", indoor);
       lt1NW = lt1NWOut + lt1NWIn;
+      aetNW = aetNWOut + aetNWIn;
       lt2NW = lt2NWOut + lt2NWIn;
     } else {
       [lt1Watts, lt1NW] = avgCrossing("lt1_crossing", "avg_watts");
+      [aetWatts, aetNW] = avgCrossing("aet_crossing", "avg_watts");
       [lt2Watts, lt2NW] = avgCrossing("lt2_crossing", "avg_watts");
     }
 
     const lt1CrossingSessions = window.filter(
       (a) => (a.dfa.lt1_crossing?.secs_in_band ?? 0) >= DFA_MIN_CROSSING_DWELL_SECS,
+    ).length;
+    const aetCrossingSessions = window.filter(
+      (a) => (a.dfa.aet_crossing?.secs_in_band ?? 0) >= DFA_MIN_CROSSING_DWELL_SECS,
     ).length;
     const lt2CrossingSessions = window.filter(
       (a) => (a.dfa.lt2_crossing?.secs_in_band ?? 0) >= DFA_MIN_CROSSING_DWELL_SECS,
@@ -1772,6 +1818,7 @@ export function computeDfaA1Profile(input: MetricInput): DfaA1Profile | null {
     const validated = DFA_VALIDATED_SPORTS.has(family);
 
     let lt1Est: DfaThresholdEstimateCycling | DfaThresholdEstimatePooled | null;
+    let aetEst: DfaThresholdEstimateCycling | DfaThresholdEstimatePooled | null;
     let lt2Est: DfaThresholdEstimateCycling | DfaThresholdEstimatePooled | null;
     if (isCycling) {
       lt1Est = confidence
@@ -1782,6 +1829,16 @@ export function computeDfaA1Profile(input: MetricInput): DfaA1Profile | null {
             n_sessions: Math.max(lt1NHr, lt1NW),
             n_sessions_outdoor: lt1NWOut,
             n_sessions_indoor: lt1NWIn,
+          }
+        : null;
+      aetEst = confidence
+        ? {
+            hr: aetHr,
+            watts_outdoor: aetWattsOut,
+            watts_indoor: aetWattsIn,
+            n_sessions: Math.max(aetNHr, aetNW),
+            n_sessions_outdoor: aetNWOut,
+            n_sessions_indoor: aetNWIn,
           }
         : null;
       lt2Est = confidence
@@ -1802,6 +1859,13 @@ export function computeDfaA1Profile(input: MetricInput): DfaA1Profile | null {
             n_sessions: Math.max(lt1NHr, lt1NW),
           }
         : null;
+      aetEst = confidence
+        ? {
+            hr: aetHr,
+            watts: aetWatts,
+            n_sessions: Math.max(aetNHr, aetNW),
+          }
+        : null;
       lt2Est = confidence
         ? {
             hr: lt2Hr,
@@ -1817,8 +1881,10 @@ export function computeDfaA1Profile(input: MetricInput): DfaA1Profile | null {
       avg_dfa_a1: avgDfa,
       drift_delta_mean: driftMean,
       lt1_crossing_sessions: lt1CrossingSessions,
+      aet_crossing_sessions: aetCrossingSessions,
       lt2_crossing_sessions: lt2CrossingSessions,
       lt1_estimate: lt1Est,
+      aet_estimate: aetEst,
       lt2_estimate: lt2Est,
       quality_avg_pct: qualityAvg,
       validated,

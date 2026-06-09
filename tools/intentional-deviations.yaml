@@ -273,6 +273,87 @@ deviations:
       rename + REST_DAY_RECOVERY_HOURS removal). Status lives there;
       this entry remains anchored to the 1998-05-21 revert decision.
 
+  - metric: capability.dfa_a1_profile
+    section_11_implementation: |
+      Per-sport DFA a1 threshold rollups carry LT1 and LT2 crossing-band
+      estimates ONLY: LT1 at DFA a1 = 1.0 ± 0.05 (DFA_LT1, sync.py:273) and
+      LT2 at 0.5 ± 0.05 (DFA_LT2, sync.py:274), aggregated in
+      `_calculate_dfa_a1_profile` (sync.py:4588-4802) into
+      `trailing_by_sport.<family>.{lt1_estimate, lt2_estimate,
+      lt1_crossing_sessions, lt2_crossing_sessions}`. The upstream emits NO
+      0.75-centered crossing — 0.75 appears only as a time-in-zone band edge
+      (sync.py:1062-1063), never as a threshold crossing.
+    our_implementation: |
+      The faithful 1.0 `lt1_crossing` and 0.5 `lt2_crossing` are mirrored
+      bit-for-bit and asserted bit-identical against the oracle snapshot. We
+      ADD, alongside them, a literature-validated aerobic-threshold field: a
+      0.75 ± 0.05 `aet_crossing` band per session (capability.ts), aggregated
+      into `trailing_by_sport.<family>.aet_estimate` (same cycling
+      indoor/outdoor-split / non-cycling-pooled shape as `lt1_estimate`) plus
+      `aet_crossing_sessions`. The confidence calc and every ported value are
+      UNCHANGED — `aet` is purely additive.
+
+      The added output paths are declared in `added_paths` below; the gate
+      strips exactly those from `actual` before the bit-identity assertion
+      (the oracle has no 0.75 surface to compare against), so the ported
+      LT1/LT2 surface still asserts bit-identical. The additive `aet` values
+      are verified by unit tests (capability.test.ts), not the oracle.
+
+      Why additive and not a relabel: 0.75 is the literature's aerobic
+      threshold; 1.0 is the well-correlated easy-exercise baseline (no paper
+      maps a threshold to 1.0). Changing DFA_LT1 1.0 -> 0.75 would shift
+      `lt1_crossing` on every fixture and break parity — a SEPARATE deviation.
+      Adding `aet_crossing` preserves the faithful port AND surfaces the
+      validated value.
+    type: other
+    added_paths:
+      - trailing_by_sport.*.aet_estimate
+      - trailing_by_sport.*.aet_crossing_sessions
+    justification:
+      kind: research_file
+      path: docs/knowledge/research/dfa-alpha1.md
+      cited_papers:
+        - "Rogers et al. 2020 — first operationalization of DFA a1 = 0.75 as the aerobic-threshold (VT1) surrogate (treadmill running)"
+        - DOI: 10.3389/fphys.2020.596567
+        - "Gronwald et al. 2022 — DFA a1 0.75 -> aerobic threshold, incremental cycling (women)"
+        - DOI: 10.1007/s00421-022-05050-x
+        - "Mateo-March et al. 2023 — DFA a1 0.75 -> lactate LT1, elite cyclists (power r=0.98, ICC=0.98)"
+        - DOI: 10.3390/sports10020025
+    adr: docs/adr/0016-metric-porting-discipline.md
+    status: approved-cite
+    decided_by: Yerzhan (operator)
+    decided_at: 1998-06-09
+    notes: |
+      Phase 4 decision: APPROVE as an additive, cite-backed field. The
+      operator instructed (real date 2026-06-09; recorded here in the file's
+      synthetic epoch as 1998-06-09, matching the other entries) to surface
+      the validated 0.75 aerobic threshold ALONGSIDE the faithful 1.0 crossing
+      rather than relabel the upstream constant.
+
+      Literature reviewed (docs/knowledge/research/dfa-alpha1.md, 16 papers /
+      16 DOIs):
+        - The aerobic threshold (AeT / LT1) is operationalized at DFA a1 =
+          0.75 — first in treadmill running (Rogers 2020, r=0.99 VO2 / 0.97 HR)
+          then in incremental cycling (Gronwald 2022 women; Mateo-March 2023
+          elite cyclists, power r=0.98 / ICC=0.98; Rogers elite-cyclist study).
+          1.0 is the well-correlated easy-exercise baseline, NOT a transition.
+        - The upstream credits "Rowlands 2017 / Gronwald 2020 / Mateo-March
+          2023" for a 1.0 <-> AeT mapping, but those papers operationalize
+          0.75; "Rowlands 2017" could not be located (likely a phantom cite).
+          The upstream conflated the 1.0 baseline with the 0.75 threshold.
+
+      Caveats carried by the research file gate the athlete-facing REVEAL, not
+      this field's existence: the 0.75/0.5 crossings are validated only in
+      incremental ramp tests, not constant-load / everyday rides; single-ride
+      threshold readout is materially weaker (drift, hysteresis, fatigue);
+      prefer power over HR; surface as a monitoring signal with confidence
+      tiers, never a one-ride prescription.
+
+      Cite-content enforcement is LOCAL (docs/ is gitignored, absent in CI);
+      see validateResearchFile in tools/check-metric-parity.ts. Follow-up:
+      athlete-facing reveal + 1.0-crossing labeling fix tracked in
+      docs/progress/progress.json.
+
 # ─── External-oracle coverage registry (v1) ──────────────────────────
 #
 # Tolerance + coverage records for the external oracle's mean-max

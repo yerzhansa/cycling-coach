@@ -37,10 +37,17 @@ describe("computeDerivedMetrics", () => {
     const out = computeDerivedMetrics(dfaEquippedInput());
     const profile = out["capability.dfa_a1_profile"] as {
       latest_session?: { sufficient?: boolean };
+      trailing_by_sport?: Record<string, { aet_estimate?: unknown; aet_crossing_sessions?: number }>;
     } | null;
     expect(profile).not.toBeNull();
     expect(profile?.latest_session).toBeDefined();
     expect(profile?.latest_session?.sufficient).toBe(true);
+    // The additive 0.75 aerobic-threshold field rides through the production
+    // registry path alongside the faithful lt1/lt2 estimates.
+    const cycling = profile?.trailing_by_sport?.cycling;
+    expect(cycling).toBeDefined();
+    expect(cycling).toHaveProperty("aet_estimate");
+    expect(typeof cycling?.aet_crossing_sessions).toBe("number");
   });
 
   it("computes load-management metrics (no throw on real data)", () => {
