@@ -66,7 +66,7 @@ export type SyncResult =
     }
   | {
       readonly kind: "failed";
-      readonly reason: "outer_timeout" | "gate_rejected";
+      readonly reason: "outer_timeout" | "gate_rejected" | "fetch_failed";
       readonly failures: readonly SyncFailure[];
     };
 
@@ -175,7 +175,24 @@ export function createRunSync(
         });
 
         const body = async (): Promise<SyncResult> => {
-          const fetched = await deps.fetchReferenceData(controller.signal);
+          let fetched: FetchedReference;
+          try {
+            fetched = await deps.fetchReferenceData(controller.signal);
+          } catch (err) {
+            // A hard fetch/assembly failure (unreachable list endpoint, a
+            // surviving TP-trademarked key, a malformed bundle) must surface to
+            // the curator like any other failed sync — write error_state and
+            // return `failed`. Letting the rejection escape would leave the
+            // scheduled tick logging-only and the curator blind to the failure.
+            if (controller.signal.aborted) return abortedResult();
+            const detail = err instanceof Error ? err.message : String(err);
+            await writeErrorState(deps.dataDir, { step: "fetch_failed", phase, detail });
+            return {
+              kind: "failed",
+              reason: "fetch_failed",
+              failures: [{ file: "latest", reason: detail }],
+            };
+          }
           if (controller.signal.aborted) return abortedResult();
 
           phase = "gating";

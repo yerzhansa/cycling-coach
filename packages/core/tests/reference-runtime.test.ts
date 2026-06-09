@@ -2,10 +2,7 @@ import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  bootstrapReference,
-  INITIAL_SYNC_FAILED_LOG_PREFIX,
-} from "../src/reference/runtime.js";
+import { bootstrapReference } from "../src/reference/runtime.js";
 import { ReferenceConfigError } from "../src/reference/errors.js";
 import type { ReferenceSportAdapter } from "../src/reference/sport-adapter.js";
 import type { Sport } from "../src/sport.js";
@@ -93,9 +90,9 @@ describe("bootstrapReference (behavioral)", () => {
     runtime.scheduler.stop();
   });
 
-  it("does not throw when the initial fetch fails (best-effort init)", async () => {
+  it("does not throw when the initial fetch fails; writes error_state for the curator (best-effort init)", async () => {
     const failingFetch = vi.fn().mockRejectedValue(new Error("intervals.icu unreachable"));
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const runtime = await bootstrapReference({
       dataDir,
@@ -105,9 +102,10 @@ describe("bootstrapReference (behavioral)", () => {
     });
 
     expect(runtime).toBeDefined();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining(INITIAL_SYNC_FAILED_LOG_PREFIX),
-    );
+    // The fetch rejection is now handled inside runSync (converted to a failed
+    // sync + error_state.json) rather than rethrown, so bootstrap continues and
+    // the curator can see the failure on disk.
+    expect(existsSync(join(dataDir, "data", "error_state.json"))).toBe(true);
     runtime.scheduler.stop();
   });
 

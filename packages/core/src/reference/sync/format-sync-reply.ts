@@ -27,12 +27,13 @@ export function formatSyncReply(result: SyncResult, now: Date = new Date()): str
         }
       }
     case "failed":
-      // Both `outer_timeout` and `gate_rejected` surface to athletes as the
-      // same "can't reach" message today. The future curator will inspect
-      // `error_state.json` and may inject more specific guidance.
+      // `outer_timeout`, `gate_rejected`, and `fetch_failed` all surface to
+      // athletes as the same "can't reach" message today. The future curator
+      // will inspect `error_state.json` and may inject more specific guidance.
       switch (result.reason) {
         case "outer_timeout":
         case "gate_rejected":
+        case "fetch_failed":
           return "I can't reach intervals.icu right now.";
         default: {
           const _exhaustive: never = result.reason;
