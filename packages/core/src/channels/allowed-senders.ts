@@ -277,7 +277,7 @@ function releaseLockfile(lockPath: string): void {
   }
 }
 
-function ensureDataDirSecure(dataDir: string): void {
+export function ensureDataDirSecure(dataDir: string): void {
   // mkdirSync with `mode` is a no-op on existing dirs, so explicit chmod is the
   // only path that tightens upgrade installs that pre-date this enforcement.
   if (existsSync(dataDir)) {

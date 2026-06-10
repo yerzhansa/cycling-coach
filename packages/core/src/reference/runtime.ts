@@ -64,7 +64,7 @@ export async function bootstrapReference(
   assertSubsetCoverage(adapters, deps.sport.intervalsActivityTypes);
 
   const referenceDataPath = join(deps.dataDir, "data");
-  mkdirSync(referenceDataPath, { recursive: true });
+  mkdirSync(referenceDataPath, { recursive: true, mode: 0o700 });
 
   const fetchReferenceData =
     deps.fetchReferenceData ??

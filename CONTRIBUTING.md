@@ -101,8 +101,10 @@ The deeper provenance check — re-running the sanitize CLI against the saved so
 
 ```
 INTERVALS_API_KEY=… pnpm exec tsx tools/fetch-real-athlete.ts
-pnpm exec tsx tools/sanitize-fixture.ts /tmp/raw-bundle.json realistic-athlete --force
+pnpm exec tsx tools/sanitize-fixture.ts <bundle path printed by fetch-real-athlete> realistic-athlete --force
 ```
+
+The fetch step writes the unsanitized bundle to a private per-run temp directory (mode 0600) and prints the path; delete it once the sanitized fixture is committed.
 
 The second command writes both `realistic-athlete.json` and `realistic-athlete.json.sha256`. Commit both, or neither. Reviewers don't read the 70 KB JSON diff line-by-line — the review focuses on the `SanitizeSummary` the CLI prints (which keys were dropped, which were transformed) and a green metric-test suite.
 

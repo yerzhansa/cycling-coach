@@ -1,6 +1,6 @@
 import { intro, outro, select, text, password, confirm, isCancel, cancel, log } from "@clack/prompts";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, chmodSync } from "node:fs";
 import { stringify as toYaml } from "yaml";
 import type { BinaryConfig } from "./binary.js";
 import { CONFIG_DIR, CONFIG_FILE, envInt, readConfigYaml } from "./config.js";
@@ -453,8 +453,10 @@ async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<voi
 
   const originalBytes = existsSync(CONFIG_FILE) ? readFileSync(CONFIG_FILE) : null;
 
-  mkdirSync(CONFIG_DIR, { recursive: true });
+  mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   writeFileSync(CONFIG_FILE, toYaml(merged), { mode: 0o600 });
+  // Ensure perms on existing files created before this write
+  chmodSync(CONFIG_FILE, 0o600);
 
   if (freshCodexCreds) {
     try {
@@ -462,6 +464,7 @@ async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<voi
     } catch (err) {
       if (originalBytes) {
         writeFileSync(CONFIG_FILE, originalBytes, { mode: 0o600 });
+        chmodSync(CONFIG_FILE, 0o600);
       } else {
         try { unlinkSync(CONFIG_FILE); } catch { /* best-effort */ }
       }
@@ -503,7 +506,7 @@ async function runOperatorCaptureStep(
   }
 
   log.info(
-    `Setup will register your Telegram account as the primary operator. Send /start to your bot from your Telegram app within 60 seconds.`,
+    `Setup will register your Telegram account as the primary operator. Send your bot the pairing code shown below from your Telegram app within 60 seconds.`,
   );
   const timeoutMs = envInt("CYCLING_COACH_SETUP_CAPTURE_TIMEOUT_MS") ?? 60_000;
   const result = await captureAndPersistOperator({
@@ -515,7 +518,7 @@ async function runOperatorCaptureStep(
       const ok = await confirm({
         message:
           `Captured operator id ${info.capturedId} (Telegram: @${info.senderUsername ?? "—"}, name: ${info.senderFirstName ?? "—"}) for bot @${info.botUsername}. Save?`,
-        initialValue: true,
+        initialValue: false,
       });
       handleCancel(ok, ctx, binary);
       return Boolean(ok);
@@ -534,7 +537,7 @@ async function runOperatorCaptureStep(
       return;
     case "timeout":
       log.warn(
-        `No /start received within the capture window. Run \`${binary.binaryName} add-sender <id>\` once you know your Telegram user-id (DM the bot to receive it).`,
+        `No pairing code received within the capture window. Run \`${binary.binaryName} add-sender <id>\` once you know your Telegram user-id (DM the bot to receive it).`,
       );
       return;
     case "getme-failed":
@@ -564,9 +567,10 @@ function isNonEmptySecret(value: unknown): boolean {
 async function _pickBackend(ctx: WizardCtx, binary: BinaryConfig): Promise<BackendChoice> {
   while (true) {
     const avail: BackendAvailability = await detectBackends();
-    const options: { value: string; label: string; hint?: string }[] = [
-      { value: BACKEND_PLAIN, label: "Plain config.yaml" },
-    ];
+    const options: { value: string; label: string; hint?: string }[] = [];
+    if (avail.keychain.available) {
+      options.push({ value: BACKEND_KEYCHAIN, label: "macOS Keychain" });
+    }
     if (avail.op.state === "ready") {
       options.push({
         value: BACKEND_OP,
@@ -580,14 +584,24 @@ async function _pickBackend(ctx: WizardCtx, binary: BinaryConfig): Promise<Backe
     } else {
       log.info(`1Password backend not offered — ${describeOpState(avail.op)}.`);
     }
-    if (avail.keychain.available) {
-      options.push({ value: BACKEND_KEYCHAIN, label: "macOS Keychain" });
-    }
+    options.push({
+      value: BACKEND_PLAIN,
+      label: "Plain config.yaml",
+      hint: "stored unencrypted on disk (mode 600)",
+    });
+
+    // op-signin is never the default: a bare Enter must not spawn an
+    // interactive `op signin` on headless installs.
+    const initialValue = avail.keychain.available
+      ? BACKEND_KEYCHAIN
+      : avail.op.state === "ready"
+        ? BACKEND_OP
+        : BACKEND_PLAIN;
 
     const picked = await select({
       message: "Where to store secrets?",
       options,
-      initialValue: BACKEND_PLAIN,
+      initialValue,
     });
     handleCancel(picked, ctx, binary);
 

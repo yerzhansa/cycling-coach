@@ -6,6 +6,7 @@ import {
   writeFileSync,
   readdirSync,
   existsSync,
+  statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,6 +52,22 @@ describe("atomicWriteJson — happy path", () => {
 
     const onDisk = JSON.parse(readFileSync(target, "utf-8"));
     expect(onDisk).toEqual({ fresh: 42 });
+  });
+
+  it("creates the target with owner-only 0o600 permissions", async () => {
+    const target = join(tempDir, "private.json");
+    await atomicWriteJson(target, { hrv: 62 });
+
+    expect(statSync(target).mode & 0o777).toBe(0o600);
+  });
+
+  it("tightens a pre-existing world-readable target to 0o600 on overwrite", async () => {
+    const target = join(tempDir, "was-readable.json");
+    writeFileSync(target, JSON.stringify({ old: true }), { encoding: "utf-8", mode: 0o644 });
+
+    await atomicWriteJson(target, { fresh: true });
+
+    expect(statSync(target).mode & 0o777).toBe(0o600);
   });
 
   it("handles repeated writes without leaving dangling temp files", async () => {

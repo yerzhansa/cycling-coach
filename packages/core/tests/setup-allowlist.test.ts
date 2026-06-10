@@ -168,6 +168,40 @@ describe("setup wizard — operator capture integration (Phase 5)", () => {
     expect(reloaded.primaryOperator).toBe("12345");
   });
 
+  it("captured-id confirm defaults to decline (bare Enter does not save)", async () => {
+    const confirmCalls: Array<{ message: string; initialValue?: boolean }> = [];
+    vi.doMock("@clack/prompts", () => {
+      const selects = ["anthropic", "claude-sonnet-4-6", "plain"];
+      let s = 0;
+      const passwords = ["sk-ant-fresh", "", "BOT-TOKEN-1234"];
+      let p = 0;
+      return {
+        intro: vi.fn(),
+        outro: vi.fn(),
+        cancel: vi.fn(),
+        log: { info: vi.fn(), success: vi.fn(), error: vi.fn(), warn: vi.fn() },
+        note: vi.fn(),
+        isCancel: () => false,
+        select: vi.fn(async () => selects[s++]),
+        password: vi.fn(async () => passwords[p++]),
+        text: vi.fn(async () => ""),
+        confirm: vi.fn(async (opts: { message: string; initialValue?: boolean }) => {
+          confirmCalls.push(opts);
+          return true;
+        }),
+      };
+    });
+    const captureFn = mockOperatorCapture({ status: "captured", capturedId: "12345" });
+
+    const { runSetup } = await import("../src/setup.js");
+    await runSetup(cyclingBinary);
+
+    expect(captureFn).toHaveBeenCalledTimes(1);
+    const saveConfirm = confirmCalls.find((c) => c.message.includes("Captured operator id"));
+    expect(saveConfirm).toBeDefined();
+    expect(saveConfirm?.initialValue).toBe(false);
+  });
+
   it("declined at captured-id prompt → no allowed-senders.json written", async () => {
     vi.doMock("@clack/prompts", () =>
       scriptedPrompts({

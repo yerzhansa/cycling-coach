@@ -22,7 +22,7 @@ export async function atomicWriteJson(path: string, value: unknown): Promise<voi
 
   let fh: Awaited<ReturnType<typeof open>> | null = null;
   try {
-    fh = await open(tempPath, "w", 0o644);
+    fh = await open(tempPath, "w", 0o600);
     await fh.writeFile(body, "utf-8");
     await fh.sync();
     await fh.close();

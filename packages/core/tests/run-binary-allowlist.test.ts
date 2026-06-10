@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, existsSync, chmodSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -125,7 +125,7 @@ describe("CLI subcommands — allowlist mutations", () => {
 describe("makeReadlineConfirm — parsing matrix (T4)", () => {
   it.each([
     // [input, expected]
-    ["", true],
+    ["", false],
     ["y", true],
     ["Y", true],
     ["yes", true],
@@ -159,7 +159,7 @@ describe("startup-capture predicate (T3)", () => {
     botToken: string;
     allowFromInFile?: string[];
     operatorIdEnv?: string;
-  }): { captureFn: ReturnType<typeof vi.fn> } {
+  }): { captureFn: ReturnType<typeof vi.fn>; notifyUpdateFn: ReturnType<typeof vi.fn> } {
     Object.defineProperty(process.stdin, "isTTY", { value: opts.isTTY, configurable: true });
 
     if (opts.allowFromInFile && opts.allowFromInFile.length > 0) {
@@ -209,19 +209,21 @@ describe("startup-capture predicate (T3)", () => {
       },
     }));
     // Stub the telegram bot construction so we don't actually try to start polling.
+    const notifyUpdateFn = vi.fn(async () => undefined);
     vi.doMock("../src/channels/telegram.js", () => ({
       createTelegramBot: vi.fn(() => ({
         start: vi.fn(),
         api: { sendMessage: vi.fn() },
       })),
-      notifyUpdate: vi.fn(async () => undefined),
+      notifyUpdate: notifyUpdateFn,
     }));
 
-    return { captureFn };
+    return { captureFn, notifyUpdateFn };
   }
 
   afterEach(() => {
     delete process.env.CYCLING_COACH_OPERATOR_ID;
+    delete process.env.CYCLING_COACH_NO_UPDATE_CHECK;
     vi.doUnmock("../src/channels/operator-capture.js");
     vi.doUnmock("../src/config.js");
     vi.doUnmock("../src/agent/coach-agent.js");
@@ -278,6 +280,42 @@ describe("startup-capture predicate (T3)", () => {
     const { runBinary } = await import("../src/run-binary.js");
     await runBinary(stubSport as never, cyclingBinary);
     expect(captureFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("CYCLING_COACH_NO_UPDATE_CHECK set → notifyUpdate NOT invoked", async () => {
+    process.argv = ["node", "cycling-coach"];
+    process.env.CYCLING_COACH_NO_UPDATE_CHECK = "1";
+    const { notifyUpdateFn } = setupBaseMocks({ isTTY: false, botToken: "TOKEN" });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { runBinary } = await import("../src/run-binary.js");
+    await runBinary(stubSport as never, cyclingBinary);
+    expect(notifyUpdateFn).not.toHaveBeenCalled();
+  });
+
+  it("CYCLING_COACH_NO_UPDATE_CHECK unset → notifyUpdate invoked once", async () => {
+    process.argv = ["node", "cycling-coach"];
+    delete process.env.CYCLING_COACH_NO_UPDATE_CHECK;
+    const { notifyUpdateFn } = setupBaseMocks({ isTTY: false, botToken: "TOKEN" });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { runBinary } = await import("../src/run-binary.js");
+    await runBinary(stubSport as never, cyclingBinary);
+    expect(notifyUpdateFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("startup tightens the data dir to 0o700", async () => {
+    process.argv = ["node", "cycling-coach"];
+    setupBaseMocks({ isTTY: false, botToken: "TOKEN" });
+    chmodSync(dataDir(), 0o755);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { runBinary } = await import("../src/run-binary.js");
+    await runBinary(stubSport as never, cyclingBinary);
+    expect(statSync(dataDir()).mode & 0o777).toBe(0o700);
   });
 
   it("file already exists with non-empty allowFrom → capture NOT invoked", async () => {
@@ -338,5 +376,6 @@ describe("startup-capture predicate (T3)", () => {
     await runBinary(stubSport as never, cyclingBinary);
     expect(captureFn).toHaveBeenCalledTimes(1);
     expect(startSpy).toHaveBeenCalledTimes(1); // bot started despite getme-failed
+    expect(startSpy).toHaveBeenCalledWith({ drop_pending_updates: true });
   });
 });

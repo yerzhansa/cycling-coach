@@ -47,8 +47,8 @@ export class Memory implements MemoryStore {
     this.memoryDir = join(dataDir, "memory");
     this.plansDir = join(dataDir, "plans");
     this.tz = tz;
-    mkdirSync(this.memoryDir, { recursive: true });
-    mkdirSync(this.plansDir, { recursive: true });
+    mkdirSync(this.memoryDir, { recursive: true, mode: 0o700 });
+    mkdirSync(this.plansDir, { recursive: true, mode: 0o700 });
   }
 
   // ── Long-term memory ──────────────────────────────────────────────────

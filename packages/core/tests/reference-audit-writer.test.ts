@@ -4,6 +4,7 @@ import {
   rmSync,
   existsSync,
   writeFileSync,
+  statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -82,6 +83,12 @@ describe("writeAuditEntry — append semantics", () => {
     await writeAuditEntry(BINARY, makeEntry());
 
     expect(existsSync(join(tempDir, "data"))).toBe(true);
+  });
+
+  it("creates the audit file with owner-only 0o600 permissions", async () => {
+    await writeAuditEntry(BINARY, makeEntry());
+
+    expect(statSync(auditPath()).mode & 0o777).toBe(0o600);
   });
 
   it("writes compact lines with no embedded newline — N calls yield N lines", async () => {

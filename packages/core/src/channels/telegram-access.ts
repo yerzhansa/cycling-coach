@@ -6,6 +6,7 @@ export type { DmPolicy } from "./allowed-senders.js";
 
 export interface AuthDecision {
   allow: boolean;
+  viaOpenPolicy?: boolean;
   pairingChallenge?: string;
 }
 
@@ -41,7 +42,7 @@ export function evaluateAccess(ctx: Context, allowed: AllowedSenders): AuthDecis
 
   const senderId = String(fromId);
   if (allowed.allowFrom.includes(senderId)) return { allow: true };
-  if (allowed.dmPolicy === "open") return { allow: true };
+  if (allowed.dmPolicy === "open") return { allow: true, viaOpenPolicy: true };
 
   // Sender not allowlisted. Pairing mode → return challenge; allowlist → silent drop.
   if (allowed.dmPolicy === "pairing") {
@@ -71,12 +72,27 @@ function recordChallenge(map: Map<string, number>, senderId: string, now: number
   }
 }
 
+function warnOpenPolicyServe(warned: Set<string>, fromId: number | undefined): void {
+  if (fromId === undefined) return;
+  const senderId = String(fromId);
+  if (warned.has(senderId)) return;
+  warned.add(senderId);
+  while (warned.size > RATE_LIMIT_MAX_ENTRIES) {
+    const oldestKey = warned.keys().next().value;
+    if (oldestKey === undefined) break;
+    warned.delete(oldestKey);
+  }
+  console.error(`[security] Open DM policy: serving non-allowlisted sender ${senderId}.`);
+}
+
 export function createAuthMiddleware(opts: CreateAuthMiddlewareOpts): MiddlewareFn<Context> {
+  const openPolicyWarned = new Set<string>();
   return async (ctx, next) => {
     try {
       const allowed = loadAllowedSenders(opts.dataDir);
       const decision = evaluateAccess(ctx, allowed);
       if (decision.allow) {
+        if (decision.viaOpenPolicy) warnOpenPolicyServe(openPolicyWarned, ctx.from?.id);
         await next();
         return;
       }

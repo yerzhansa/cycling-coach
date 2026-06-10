@@ -1,4 +1,4 @@
-import { asSchema } from "@ai-sdk/provider-utils";
+import { asSchema, safeValidateTypes } from "@ai-sdk/provider-utils";
 import { complete, getModel } from "@mariozechner/pi-ai";
 import type {
   AssistantMessage,
@@ -279,8 +279,28 @@ async function executeToolCall(
     };
   }
 
+  const validation = await safeValidateTypes({
+    value: call.arguments,
+    schema: asSchema(tool.inputSchema),
+  });
+  if (!validation.success) {
+    return {
+      role: "toolResult",
+      toolCallId: call.id,
+      toolName: call.name,
+      content: [
+        {
+          type: "text",
+          text: `Invalid arguments for tool "${call.name}": ${validation.error.message}`,
+        },
+      ],
+      isError: true,
+      timestamp: Date.now(),
+    };
+  }
+
   try {
-    const result = await tool.execute(call.arguments, {
+    const result = await tool.execute(validation.value, {
       toolCallId: call.id,
       messages,
       abortSignal,

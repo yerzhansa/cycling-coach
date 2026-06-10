@@ -1,10 +1,11 @@
 // Operator CLI for pulling 12 weeks of activities + wellness from
 // intervals.icu for the authenticated athlete. Derives an ftp_history
 // time series from per-day sportInfo.eftp (cycling only) and writes the
-// union to /tmp/raw-bundle.json. The next step (operator-driven) pipes
-// that file through `pnpm exec tsx tools/sanitize-fixture.ts
-// /tmp/raw-bundle.json realistic-athlete --force` to produce the
-// committable fixture.
+// union to a raw-bundle.json inside a fresh private temp directory
+// (operator-only mode 0600; the path is printed on completion). The next
+// step (operator-driven) pipes that file through `pnpm exec tsx
+// tools/sanitize-fixture.ts <printed path> realistic-athlete --force`
+// to produce the committable fixture.
 //
 // ftp_history caveat: intervals.icu has no public ftp-history endpoint
 // (verified against intervals-icu-api@0.1.2 OpenAPI). We synthesize a
@@ -15,7 +16,9 @@
 // Usage (must be run from project root for pnpm module resolution):
 //   INTERVALS_API_KEY=xxxxx pnpm exec tsx tools/fetch-real-athlete.ts
 
-import { writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { IntervalsClient, snakeCaseKeys } from "intervals-icu-api";
 
 const CYCLING_TYPES = new Set([
@@ -109,8 +112,12 @@ async function main(): Promise<void> {
   console.error(`Derived ${ftp_history.length} ftp_history points from sportInfo.eftp`);
 
   const bundle = { activities, wellness, ftp_history };
-  writeFileSync("/tmp/raw-bundle.json", JSON.stringify(bundle, null, 2));
-  console.error("Wrote /tmp/raw-bundle.json");
+  // The bundle is the raw, unsanitized athlete export — keep it out of the
+  // shared world-readable /tmp root: fresh 0700 temp dir, file mode 0600.
+  const outDir = mkdtempSync(join(tmpdir(), "raw-bundle-"));
+  const outPath = join(outDir, "raw-bundle.json");
+  writeFileSync(outPath, JSON.stringify(bundle, null, 2), { mode: 0o600 });
+  console.error(`Wrote ${outPath}`);
 }
 
 main().catch((err) => {

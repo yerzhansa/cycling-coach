@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, statSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 
@@ -17,6 +17,7 @@ beforeEach(() => {
 afterEach(() => {
   process.env.HOME = origHome;
   rmSync(tempHome, { recursive: true, force: true });
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -130,14 +131,15 @@ describe("auth/profiles", () => {
     expect(token).toBe("rotated");
   });
 
-  it("getFreshToken surfaces RefreshTokenReusedError on refresh failure", async () => {
+  it("getFreshToken surfaces RefreshTokenReusedError only after a retry also fails", async () => {
     const { mkdirSync } = await import("node:fs");
     mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
 
+    const refreshMock = vi.fn(async () => {
+      throw new Error("Failed to refresh OpenAI Codex token");
+    });
     vi.doMock("@mariozechner/pi-ai/oauth", () => ({
-      refreshOpenAICodexToken: vi.fn(async () => {
-        throw new Error("Failed to refresh OpenAI Codex token");
-      }),
+      refreshOpenAICodexToken: refreshMock,
       loginOpenAICodex: vi.fn(),
     }));
 
@@ -149,7 +151,137 @@ describe("auth/profiles", () => {
       expires: Date.now() - 1000,
     });
 
-    await expect(getFreshToken("openai-codex")).rejects.toBeInstanceOf(RefreshTokenReusedError);
+    vi.useFakeTimers();
+    const settled = getFreshToken("openai-codex").then(
+      () => null,
+      (err: unknown) => err,
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await settled).toBeInstanceOf(RefreshTokenReusedError);
+    expect(refreshMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("getFreshToken recovers when a transient failure clears on retry", async () => {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+
+    const refreshMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Failed to refresh OpenAI Codex token"))
+      .mockResolvedValueOnce({
+        access: "retry-access",
+        refresh: "retry-refresh",
+        expires: Date.now() + 3_600_000,
+        accountId: "acct",
+      });
+    vi.doMock("@mariozechner/pi-ai/oauth", () => ({
+      refreshOpenAICodexToken: refreshMock,
+      loginOpenAICodex: vi.fn(),
+    }));
+
+    const { saveProfile, getFreshToken } = await loadModule();
+    saveProfile("openai-codex", {
+      type: "oauth",
+      access: "old",
+      refresh: "old-refresh",
+      expires: Date.now() - 1000,
+    });
+
+    vi.useFakeTimers();
+    const settled = getFreshToken("openai-codex");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await settled).toBe("retry-access");
+    expect(refreshMock).toHaveBeenCalledTimes(2);
+
+    const saved = JSON.parse(readFileSync(profilesPath(), "utf-8"));
+    expect(saved["openai-codex"].refresh).toBe("retry-refresh");
+  });
+
+  it("getFreshToken rethrows timeout-flavored errors untouched", async () => {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+
+    const refreshMock = vi.fn(async () => {
+      throw new Error("Request timed out");
+    });
+    vi.doMock("@mariozechner/pi-ai/oauth", () => ({
+      refreshOpenAICodexToken: refreshMock,
+      loginOpenAICodex: vi.fn(),
+    }));
+
+    const { saveProfile, getFreshToken, RefreshTokenReusedError } = await loadModule();
+    saveProfile("openai-codex", {
+      type: "oauth",
+      access: "old",
+      refresh: "old-refresh",
+      expires: Date.now() - 1000,
+    });
+
+    const err = await getFreshToken("openai-codex").then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(RefreshTokenReusedError);
+    expect((err as Error).message).toBe("Request timed out");
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("concurrent getFreshToken calls perform a single refresh", async () => {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+
+    const refreshMock = vi.fn(async () => ({
+      access: "fresh",
+      refresh: "fresh-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "acct",
+    }));
+    vi.doMock("@mariozechner/pi-ai/oauth", () => ({
+      refreshOpenAICodexToken: refreshMock,
+      loginOpenAICodex: vi.fn(),
+    }));
+
+    const { saveProfile, getFreshToken } = await loadModule();
+    saveProfile("openai-codex", {
+      type: "oauth",
+      access: "old",
+      refresh: "old-refresh",
+      expires: Date.now() - 1000,
+    });
+
+    const [a, b, c] = await Promise.all([
+      getFreshToken("openai-codex"),
+      getFreshToken("openai-codex"),
+      getFreshToken("openai-codex"),
+    ]);
+    expect(a).toBe("fresh");
+    expect(b).toBe("fresh");
+    expect(c).toBe("fresh");
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("saveProfile writes atomically, leaving a single valid 0o600 file", async () => {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+
+    const { saveProfile, loadProfile } = await loadModule();
+    const base = {
+      type: "oauth" as const,
+      refresh: "r",
+      expires: Date.now() + 60_000,
+    };
+    saveProfile("openai-codex", { ...base, access: "first" });
+    saveProfile("openai-codex", { ...base, access: "second" });
+
+    const entries = readdirSync(join(tempHome, ".cycling-coach"));
+    expect(entries).toEqual(["auth-profiles.json"]);
+
+    expect(statSync(profilesPath()).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(profilesPath(), "utf-8"))["openai-codex"].access).toBe(
+      "second",
+    );
+    expect(loadProfile("openai-codex")?.access).toBe("second");
   });
 
   it("survives a corrupt profiles file", async () => {

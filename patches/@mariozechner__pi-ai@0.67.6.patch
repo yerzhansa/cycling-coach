@@ -1,0 +1,34 @@
+diff --git a/dist/utils/oauth/openai-codex.js b/dist/utils/oauth/openai-codex.js
+index a2d3ebf17bc720b103883f6ef833e87cf37488d3..373065c4a4618675a12967433a7006ddf6effc1a 100644
+--- a/dist/utils/oauth/openai-codex.js
++++ b/dist/utils/oauth/openai-codex.js
+@@ -83,12 +83,12 @@ async function exchangeAuthorizationCode(code, verifier, redirectUri = REDIRECT_
+     });
+     if (!response.ok) {
+         const text = await response.text().catch(() => "");
+-        console.error("[openai-codex] code->token failed:", response.status, text);
++        console.error("[openai-codex] code->token failed:", response.status);
+         return { type: "failed" };
+     }
+     const json = (await response.json());
+     if (!json.access_token || !json.refresh_token || typeof json.expires_in !== "number") {
+-        console.error("[openai-codex] token response missing fields:", json);
++        console.error("[openai-codex] token response missing fields:", { hasAccessToken: !!json.access_token, hasRefreshToken: !!json.refresh_token, hasExpiresIn: typeof json.expires_in === "number" });
+         return { type: "failed" };
+     }
+     return {
+@@ -111,12 +111,12 @@ async function refreshAccessToken(refreshToken) {
+         });
+         if (!response.ok) {
+             const text = await response.text().catch(() => "");
+-            console.error("[openai-codex] Token refresh failed:", response.status, text);
++            console.error("[openai-codex] Token refresh failed:", response.status);
+             return { type: "failed" };
+         }
+         const json = (await response.json());
+         if (!json.access_token || !json.refresh_token || typeof json.expires_in !== "number") {
+-            console.error("[openai-codex] Token refresh response missing fields:", json);
++            console.error("[openai-codex] Token refresh response missing fields:", { hasAccessToken: !!json.access_token, hasRefreshToken: !!json.refresh_token, hasExpiresIn: typeof json.expires_in === "number" });
+             return { type: "failed" };
+         }
+         return {

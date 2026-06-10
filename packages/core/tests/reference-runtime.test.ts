@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -44,7 +44,7 @@ describe("bootstrapReference (behavioral)", () => {
     vi.restoreAllMocks();
   });
 
-  it("creates the reference data directory under dataDir/data", async () => {
+  it("creates the reference data directory under dataDir/data with owner-only 0o700", async () => {
     const fetchSpy = vi.fn().mockResolvedValue(emptyFetched);
 
     const runtime = await bootstrapReference({
@@ -55,6 +55,7 @@ describe("bootstrapReference (behavioral)", () => {
     });
 
     expect(existsSync(join(dataDir, "data"))).toBe(true);
+    expect(statSync(join(dataDir, "data")).mode & 0o777).toBe(0o700);
     runtime.scheduler.stop();
   });
 

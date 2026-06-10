@@ -1,5 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import {
+  mkdtempSync,
+  rmSync,
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  mkdirSync,
+  chmodSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
@@ -483,6 +492,165 @@ describe("backend availability filtering", () => {
     const backendOpts = optionsCaptured[2] as Array<{ value: string }>;
     const values = backendOpts.map((o) => o.value);
     expect(values).toEqual(["plain"]);
+  });
+});
+
+// ============================================================================
+// BACKEND SELECT — secure-by-default ordering + initialValue
+// ============================================================================
+
+type BackendSelectOpts = {
+  message: string;
+  options: { value: string; label: string; hint?: string }[];
+  initialValue?: string;
+};
+
+describe("backend select secure-by-default", () => {
+  function captureSelects(): BackendSelectOpts[] {
+    const captured: BackendSelectOpts[] = [];
+    vi.doMock("@clack/prompts", () => {
+      const selects = ["anthropic", "claude-sonnet-4-6", "plain"];
+      let s = 0;
+      return {
+        intro: vi.fn(),
+        outro: vi.fn(),
+        cancel: vi.fn(),
+        log: { info: vi.fn(), success: vi.fn(), error: vi.fn(), warn: vi.fn() },
+        note: vi.fn(),
+        isCancel: () => false,
+        select: vi.fn(async (opts: BackendSelectOpts) => {
+          captured.push(opts);
+          return selects[s++];
+        }),
+        password: vi.fn(async () => ""),
+        text: vi.fn(),
+        confirm: vi.fn(async () => true),
+      };
+    });
+    return captured;
+  }
+
+  function seedPlainConfig(): void {
+    seedConfig({
+      llm: { provider: "anthropic", model: "claude-sonnet-4-6", api_key: "sk-existing" },
+    });
+  }
+
+  it("keychain available + op ready → keychain default, listed first, plain last with hint", async () => {
+    seedPlainConfig();
+    const captured = captureSelects();
+    mockDetect(() => ({
+      op: { state: "ready", absolutePath: "/usr/local/bin/op", signedInAs: "me@x.com" },
+      keychain: { available: true },
+    }));
+    const { runSetup } = await import("../src/setup.js");
+    await runSetup(cyclingBinary);
+
+    const backendSelect = captured[2];
+    expect(backendSelect.initialValue).toBe("keychain");
+    expect(backendSelect.options.map((o) => o.value)).toEqual(["keychain", "op", "plain"]);
+    const plain = backendSelect.options.find((o) => o.value === "plain");
+    expect(plain?.hint).toContain("unencrypted");
+  });
+
+  it("keychain unavailable + op ready → op default, listed before plain", async () => {
+    seedPlainConfig();
+    const captured = captureSelects();
+    mockDetect(() => ({
+      op: { state: "ready", absolutePath: "/usr/local/bin/op", signedInAs: "me@x.com" },
+      keychain: { available: false },
+    }));
+    const { runSetup } = await import("../src/setup.js");
+    await runSetup(cyclingBinary);
+
+    const backendSelect = captured[2];
+    expect(backendSelect.initialValue).toBe("op");
+    expect(backendSelect.options.map((o) => o.value)).toEqual(["op", "plain"]);
+  });
+
+  it("op needs-signin only → plain default (op-signin offered but never auto-selected)", async () => {
+    seedPlainConfig();
+    const captured = captureSelects();
+    mockDetect(() => ({
+      op: { state: "needs-signin", absolutePath: "/usr/local/bin/op" },
+      keychain: { available: false },
+    }));
+    const { runSetup } = await import("../src/setup.js");
+    await runSetup(cyclingBinary);
+
+    const backendSelect = captured[2];
+    expect(backendSelect.initialValue).toBe("plain");
+    expect(backendSelect.options.map((o) => o.value)).toEqual(["op-signin", "plain"]);
+  });
+
+  it("no secure backend detected → plain default", async () => {
+    seedPlainConfig();
+    const captured = captureSelects();
+    mockDetect(() => ({
+      op: { state: "unavailable", reason: "not-on-path" },
+      keychain: { available: false },
+    }));
+    const { runSetup } = await import("../src/setup.js");
+    await runSetup(cyclingBinary);
+
+    const backendSelect = captured[2];
+    expect(backendSelect.initialValue).toBe("plain");
+    expect(backendSelect.options.map((o) => o.value)).toEqual(["plain"]);
+  });
+});
+
+// ============================================================================
+// CONFIG FILE PERMISSIONS
+// ============================================================================
+
+describe("config file permissions", () => {
+  it("fresh install: config dir created 0o700, config.yaml written 0o600", async () => {
+    const freshHome = join(tempHome, "fresh-coach-home");
+    process.env.CYCLING_COACH_HOME = freshHome;
+    try {
+      vi.doMock("@clack/prompts", () =>
+        scriptedPrompts({
+          selects: ["anthropic", "claude-sonnet-4-6", "plain"],
+          passwords: ["sk-fresh", "", ""],
+          texts: [],
+          confirms: [],
+        }),
+      );
+      mockDetect(() => ({
+        op: { state: "unavailable", reason: "not-on-path" },
+        keychain: { available: false },
+      }));
+      const { runSetup } = await import("../src/setup.js");
+      await runSetup(cyclingBinary);
+
+      expect(statSync(freshHome).mode & 0o777).toBe(0o700);
+      expect(statSync(join(freshHome, "config.yaml")).mode & 0o777).toBe(0o600);
+    } finally {
+      delete process.env.CYCLING_COACH_HOME;
+    }
+  });
+
+  it("re-run tightens a pre-existing world-readable config.yaml to 0o600", async () => {
+    seedConfig({
+      llm: { provider: "anthropic", model: "claude-sonnet-4-6", api_key: "sk-existing" },
+    });
+    chmodSync(CONFIG(), 0o644);
+    vi.doMock("@clack/prompts", () =>
+      scriptedPrompts({
+        selects: ["anthropic", "claude-sonnet-4-6", "plain"],
+        passwords: ["", "", ""],
+        texts: [],
+        confirms: [true],
+      }),
+    );
+    mockDetect(() => ({
+      op: { state: "unavailable", reason: "not-on-path" },
+      keychain: { available: false },
+    }));
+    const { runSetup } = await import("../src/setup.js");
+    await runSetup(cyclingBinary);
+
+    expect(statSync(CONFIG()).mode & 0o777).toBe(0o600);
   });
 });
 

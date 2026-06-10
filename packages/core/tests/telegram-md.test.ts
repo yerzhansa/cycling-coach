@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { markdownToTelegramHtml, chunkHtml } from "../src/channels/telegram.js";
+import { describe, it, expect, vi } from "vitest";
+import { markdownToTelegramHtml, chunkHtml, sendLongMessage } from "../src/channels/telegram.js";
 
 describe("markdownToTelegramHtml", () => {
   it("passes plain markdown through with existing transforms", () => {
@@ -81,6 +81,88 @@ describe("markdownToTelegramHtml", () => {
     expect(preBlocks.length).toBe(2);
     expect(out).toContain("some code");
     expect(out).toContain("1");
+  });
+
+  it("escapes a literal <pre> tag pair in the source text", () => {
+    const out = markdownToTelegramHtml("a literal <pre>block</pre> here");
+    expect(out).toContain("&lt;pre&gt;");
+    expect(out).toContain("&lt;/pre&gt;");
+    expect(out).not.toContain("<pre>");
+  });
+
+  it("escapes a literal closing </b> tag in the source text", () => {
+    const out = markdownToTelegramHtml("danger </b> here");
+    expect(out).toContain("&lt;/b&gt;");
+    expect(out).not.toContain("</b>");
+  });
+
+  it("escapes an unbalanced literal <pre> so the output stays well-formed", () => {
+    const out = markdownToTelegramHtml("start <pre> and never closed");
+    expect(out).toContain("&lt;pre&gt;");
+    expect(out).not.toContain("<pre>");
+  });
+
+  it("escapes bare '>' and '<' characters", () => {
+    const out = markdownToTelegramHtml("threshold > 0.75 and < 1.0");
+    expect(out).toContain("threshold &gt; 0.75 and &lt; 1.0");
+  });
+
+  it("escapes HTML inside a fenced code block while the fence still becomes <pre>", () => {
+    const out = markdownToTelegramHtml("```\n<b>not bold</b> & co\n```");
+    expect(out).toContain("<pre>");
+    expect(out).toContain("&lt;b&gt;not bold&lt;/b&gt; &amp; co");
+  });
+
+  it("converter markup still produces real tags after source escaping", () => {
+    const out = markdownToTelegramHtml("**bold** and <b>literal</b>");
+    expect(out).toContain("<b>bold</b>");
+    expect(out).toContain("&lt;b&gt;literal&lt;/b&gt;");
+  });
+
+  it("escapes pre-encoded entities so they render literally", () => {
+    const out = markdownToTelegramHtml("a &amp; b");
+    expect(out).toContain("a &amp;amp; b");
+  });
+});
+
+describe("sendLongMessage", () => {
+  function makeCtx(replyImpl: (text: string, options?: Record<string, unknown>) => Promise<unknown>) {
+    return { reply: vi.fn(replyImpl) };
+  }
+
+  it("retries a chunk as plain text when Telegram rejects the HTML parse", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const ctx = makeCtx(async (_text, options) => {
+      if (options?.parse_mode === "HTML") {
+        throw new Error(
+          "Call to 'sendMessage' failed! (400: Bad Request: can't parse entities: Unsupported start tag)",
+        );
+      }
+      return undefined;
+    });
+    await expect(sendLongMessage(ctx, "hello **world**")).resolves.toBeUndefined();
+    expect(ctx.reply).toHaveBeenCalledTimes(2);
+    const [firstCall, secondCall] = ctx.reply.mock.calls;
+    expect(firstCall[1]).toEqual({ parse_mode: "HTML" });
+    expect(secondCall[1]).toBeUndefined();
+    expect(secondCall[0]).toBe(firstCall[0]);
+    errSpy.mockRestore();
+  });
+
+  it("rethrows non-parse errors without a plain-text retry", async () => {
+    const ctx = makeCtx(async () => {
+      throw new Error("Call to 'sendMessage' failed! (403: Forbidden: bot was blocked by the user)");
+    });
+    await expect(sendLongMessage(ctx, "hi")).rejects.toThrow("blocked");
+    expect(ctx.reply).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers attacker-shaped literal tags without throwing", async () => {
+    const ctx = makeCtx(async () => undefined);
+    await expect(sendLongMessage(ctx, "echoed <pre> from intervals.icu notes </b>")).resolves.toBeUndefined();
+    const sent = String(ctx.reply.mock.calls[0][0]);
+    expect(sent).toContain("&lt;pre&gt;");
+    expect(sent).toContain("&lt;/b&gt;");
   });
 });
 

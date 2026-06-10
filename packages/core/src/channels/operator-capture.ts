@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { Bot } from "grammy";
 import type { BinaryConfig } from "../binary.js";
 import {
@@ -68,7 +69,9 @@ export async function captureAndPersistOperator(opts: CaptureOpts): Promise<Capt
     };
   }
   const botUsername = me.username;
-  log(`Capturing for @${botUsername}. Send /start now.`);
+  const pairingCode = randomBytes(3).toString("hex").toUpperCase();
+  log(`Capturing for @${botUsername}. Pairing code: ${pairingCode}`);
+  log("Send this code to the bot from your own account.");
 
   let capturedFrom: CapturedFrom | undefined;
 
@@ -77,6 +80,7 @@ export async function captureAndPersistOperator(opts: CaptureOpts): Promise<Capt
     if (typeof ctx.from?.id !== "number") return;
     const id = String(ctx.from.id);
     if (!SENDER_ID_RE.test(id)) return;
+    if (ctx.message?.text?.trim() !== pairingCode) return;
     capturedFrom = {
       id: ctx.from.id,
       username: ctx.from.username,
@@ -88,7 +92,7 @@ export async function captureAndPersistOperator(opts: CaptureOpts): Promise<Capt
 
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([
-    bot.start(),
+    bot.start({ drop_pending_updates: true }),
     new Promise<void>((res) => {
       timeoutHandle = setTimeout(() => {
         void bot.stop();

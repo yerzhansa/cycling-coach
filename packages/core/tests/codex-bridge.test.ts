@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { zodSchema } from "ai";
+import { z } from "zod";
 
 // Test the bridge's error normalization and result mapping. Mocks pi-ai's
 // `complete` / `getModel` and auth profile access.
@@ -236,6 +238,90 @@ describe("codex-bridge", () => {
     });
 
     expect(complete).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects schema-violating tool arguments without executing the tool", async () => {
+    const execute = vi.fn(async () => "should not run");
+    const tools = {
+      log_ride: {
+        description: "log a ride",
+        inputSchema: zodSchema(z.object({ minutes: z.number() })),
+        execute,
+      },
+    };
+
+    const contexts: Array<{ messages: Array<Record<string, unknown>> }> = [];
+    const complete = vi.fn(
+      async (_m: unknown, ctx: { messages: Array<Record<string, unknown>> }) => {
+        contexts.push({ messages: [...ctx.messages] });
+        if (contexts.length === 1) {
+          return asstMsg({
+            stopReason: "toolUse",
+            content: [
+              { type: "toolCall", id: "c1", name: "log_ride", arguments: { minutes: "sixty" } },
+            ],
+          });
+        }
+        return asstMsg();
+      },
+    );
+    const { codexGenerateText } = await loadBridgeWithMocks({ complete });
+
+    await codexGenerateText({
+      messages: [{ role: "user", content: "hi" }],
+      tools: tools as never,
+      modelId: "gpt-5.4",
+      profileName: "openai-codex",
+    });
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledTimes(2);
+    const toolResult = contexts[1].messages.find((m) => m.role === "toolResult");
+    expect(toolResult).toBeDefined();
+    expect(toolResult!.isError).toBe(true);
+    expect(JSON.stringify(toolResult!.content)).toContain("Invalid arguments");
+  });
+
+  it("executes the tool with validated arguments when the schema matches", async () => {
+    const execute = vi.fn(async (input: { minutes: number }) => `logged ${input.minutes}`);
+    const tools = {
+      log_ride: {
+        description: "log a ride",
+        inputSchema: zodSchema(z.object({ minutes: z.number() })),
+        execute,
+      },
+    };
+
+    const contexts: Array<{ messages: Array<Record<string, unknown>> }> = [];
+    const complete = vi.fn(
+      async (_m: unknown, ctx: { messages: Array<Record<string, unknown>> }) => {
+        contexts.push({ messages: [...ctx.messages] });
+        if (contexts.length === 1) {
+          return asstMsg({
+            stopReason: "toolUse",
+            content: [
+              { type: "toolCall", id: "c1", name: "log_ride", arguments: { minutes: 60 } },
+            ],
+          });
+        }
+        return asstMsg();
+      },
+    );
+    const { codexGenerateText } = await loadBridgeWithMocks({ complete });
+
+    await codexGenerateText({
+      messages: [{ role: "user", content: "hi" }],
+      tools: tools as never,
+      modelId: "gpt-5.4",
+      profileName: "openai-codex",
+    });
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0][0]).toEqual({ minutes: 60 });
+    const toolResult = contexts[1].messages.find((m) => m.role === "toolResult");
+    expect(toolResult).toBeDefined();
+    expect(toolResult!.isError).toBe(false);
+    expect(JSON.stringify(toolResult!.content)).toContain("logged 60");
   });
 
   it("does not leak fake tokens via console.warn/error", async () => {

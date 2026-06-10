@@ -81,9 +81,11 @@ export function getCurrentVersion(binaryName: string): string {
   return (pkg?.version as string | undefined) ?? "unknown";
 }
 
+const NPM_REGISTRY = "https://registry.npmjs.org";
+
 export async function checkForUpdate(binaryName: string): Promise<UpdateInfo | null> {
   try {
-    const res = await fetch(`https://registry.npmjs.org/${binaryName}/latest`, {
+    const res = await fetch(`${NPM_REGISTRY}/${binaryName}/latest`, {
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return null;
@@ -99,9 +101,22 @@ export async function checkForUpdate(binaryName: string): Promise<UpdateInfo | n
   }
 }
 
-export function selfUpdate(binaryName: string): void {
-  console.log(`Installing ${binaryName}@latest...`);
-  execSync(`npm install -g ${binaryName}@latest`, { stdio: "inherit" });
+/**
+ * `version` originates from a registry response and is interpolated into a
+ * shell command, so anything outside npm's version charset falls back to the
+ * `latest` dist-tag instead of reaching the shell.
+ */
+function updateTarget(version?: string): string {
+  return version && /^[0-9A-Za-z.-]+$/.test(version) ? version : "latest";
+}
+
+export function buildSelfUpdateCommand(binaryName: string, version?: string): string {
+  return `npm install -g --ignore-scripts --registry=${NPM_REGISTRY} ${binaryName}@${updateTarget(version)}`;
+}
+
+export function selfUpdate(binaryName: string, version?: string): void {
+  console.log(`Installing ${binaryName}@${updateTarget(version)}...`);
+  execSync(buildSelfUpdateCommand(binaryName, version), { stdio: "inherit" });
   process.exit(0);
 }
 

@@ -68,9 +68,15 @@ describe("evaluateAccess — allowlist matching", () => {
     expect(result).toEqual({ allow: true });
   });
 
-  it("allows when dmPolicy is 'open' (env-var-only escape hatch)", () => {
+  it("allows when dmPolicy is 'open' (env-var-only escape hatch), flagged viaOpenPolicy", () => {
     const ctx = makeCtx({ chatType: "private", fromId: 99999 });
     const result = evaluateAccess(ctx, makeAllowed({ dmPolicy: "open", allowFrom: [] }));
+    expect(result).toEqual({ allow: true, viaOpenPolicy: true });
+  });
+
+  it("allows an allowlisted sender under open policy WITHOUT the viaOpenPolicy flag", () => {
+    const ctx = makeCtx({ chatType: "private", fromId: 12345 });
+    const result = evaluateAccess(ctx, makeAllowed({ dmPolicy: "open", allowFrom: ["12345"] }));
     expect(result).toEqual({ allow: true });
   });
 
@@ -135,6 +141,7 @@ describe("createAuthMiddleware — gating", () => {
     dataDir = mkdtempSync(join(tmpdir(), "cc-mw-"));
   });
   afterEach(() => {
+    vi.unstubAllEnvs();
     rmSync(dataDir, { recursive: true, force: true });
   });
 
@@ -282,6 +289,65 @@ describe("createAuthMiddleware — gating", () => {
     // The *last-seen* sender should still be in the map (not the first).
     expect(map.has("101000")).toBe(true);
     expect(map.has("100000")).toBe(false);
+  });
+
+  it("open policy (env): serves non-allowlisted sender but warns to stderr once per sender", async () => {
+    vi.stubEnv("CYCLING_COACH_DM_POLICY", "open");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const mw = createAuthMiddleware({
+      dataDir,
+      binaryName: "cycling-coach",
+      challengeRateLimit: new Map(),
+      challengeMinIntervalMs: 60_000,
+    });
+    const next = vi.fn(async () => undefined);
+    await mw(makeMwCtx({ chatType: "private", fromId: 99999 }), next);
+    await mw(makeMwCtx({ chatType: "private", fromId: 99999 }), next);
+    expect(next).toHaveBeenCalledTimes(2);
+    const warnings = errSpy.mock.calls.filter((c) => String(c[0]).includes("Open DM policy"));
+    expect(warnings.length).toBe(1);
+    expect(String(warnings[0][0])).toContain("99999");
+    errSpy.mockRestore();
+  });
+
+  it("open policy (env): distinct non-allowlisted senders each get one warning", async () => {
+    vi.stubEnv("CYCLING_COACH_DM_POLICY", "open");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const mw = createAuthMiddleware({
+      dataDir,
+      binaryName: "cycling-coach",
+      challengeRateLimit: new Map(),
+      challengeMinIntervalMs: 60_000,
+    });
+    const next = vi.fn(async () => undefined);
+    await mw(makeMwCtx({ chatType: "private", fromId: 11111 }), next);
+    await mw(makeMwCtx({ chatType: "private", fromId: 22222 }), next);
+    const warnings = errSpy.mock.calls.filter((c) => String(c[0]).includes("Open DM policy"));
+    expect(warnings.length).toBe(2);
+    errSpy.mockRestore();
+  });
+
+  it("open policy (env): allowlisted sender is served without the open-policy warning", async () => {
+    saveAllowedSenders(dataDir, () => ({
+      ...defaultPairingState(),
+      dmPolicy: "allowlist",
+      allowFrom: ["12345"],
+      primaryOperator: "12345",
+    }));
+    vi.stubEnv("CYCLING_COACH_DM_POLICY", "open");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const mw = createAuthMiddleware({
+      dataDir,
+      binaryName: "cycling-coach",
+      challengeRateLimit: new Map(),
+      challengeMinIntervalMs: 60_000,
+    });
+    const next = vi.fn(async () => undefined);
+    await mw(makeMwCtx({ chatType: "private", fromId: 12345 }), next);
+    expect(next).toHaveBeenCalledTimes(1);
+    const warnings = errSpy.mock.calls.filter((c) => String(c[0]).includes("Open DM policy"));
+    expect(warnings.length).toBe(0);
+    errSpy.mockRestore();
   });
 
   it("fail-closed: load throws → drops update without calling next() and logs to stderr", async () => {

@@ -104,12 +104,18 @@ Note: `npm run dev` runs TypeScript directly (via tsx). `npm run build` produces
 | `/workout` | Checks your current fitness, fatigue, and form — suggests today's workout with structured intervals |
 | `/status` | Shows fitness, fatigue, form, and coaching notes |
 | `/sync` | Pushes next 1-2 weeks of planned workouts to intervals.icu calendar |
+| `/whatsnew` | Shows what changed in the latest release |
+| `/update` | Updates the bot — installs the exact version it verified against the npm registry, with lifecycle scripts disabled (`npm install -g --ignore-scripts`) |
 
 Free-form chat works too — ask anything about training, report an injury, request plan adjustments.
 
 ## Privacy
 
 Cycling Coach restricts Telegram interactions to a configured allowlist of user IDs. Only senders in `~/.cycling-coach/allowed-senders.json` (or set via the `CYCLING_COACH_OPERATOR_ID` env var, single ID) can interact with the bot. Random Telegram users who discover your bot's username are dropped at the middleware layer.
+
+### No telemetry, one update check
+
+Cycling Coach collects no analytics and sends no telemetry. The one background network call it makes on its own: on Telegram-mode startup, a single HTTPS request to `registry.npmjs.org` to check whether a newer version exists. It carries no athlete data and no credentials — the only thing disclosed is the request itself. Set `CYCLING_COACH_NO_UPDATE_CHECK=1` to disable it. The operator-initiated `/update` and `/whatsnew` commands still reach the registry (and, for `/whatsnew`, the GitHub Releases API for release notes) — those are explicit requests, not background checks.
 
 ### First-time setup
 
@@ -344,9 +350,9 @@ docker run -d --name cycling-coach \
   cycling-coach
 ```
 
-Use `--env-file` rather than inline `-e KEY=value` flags — inline values land in shell history and are visible to other users via `ps`. Your `.env` should contain `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY`), `INTERVALS_API_KEY`, `INTERVALS_ATHLETE_ID`, and `TELEGRAM_BOT_TOKEN`.
+Use `--env-file` rather than inline `-e KEY=value` flags — inline values land in shell history and are visible to other users via `ps`. Your `.env` should contain `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY`), `INTERVALS_API_KEY`, `INTERVALS_ATHLETE_ID`, and `TELEGRAM_BOT_TOKEN`. Restrict the file to the user that invokes `docker`: `chmod 600 .env`. Note that env vars passed to a container remain visible via `docker inspect` to anything with Docker-socket access — where available, prefer Docker Compose `secrets:` or podman secrets instead. For non-container installs, the config-based secret backends (macOS Keychain, 1Password SecretRef — see [Storing secrets outside config.yaml](#storing-secrets-outside-configyaml)) keep keys out of the environment entirely.
 
-The image mounts `/data` for state and reads `/data/config.yaml` if present. The container runs as root — managed PaaS platforms (Railway, Fly) typically mount fresh volumes as root-owned, and dropping privileges inside a single-tenant container adds little practical hardening on top of the platform's own isolation. With the `-e` env vars above, no `config.yaml` is required — the legacy env-var fallback (`ANTHROPIC_API_KEY` etc.) covers the three secret fields.
+The image mounts `/data` for state and reads `/data/config.yaml` if present. The container runs as the non-root `node` user (uid 1000), and `/data` inside the image is owned by it. A volume mounted over `/data` carries its own ownership — managed PaaS platforms (Railway, Fly) typically mount fresh volumes as root-owned, so the bot can't write state until ownership is fixed. Configure the mount's ownership where the platform supports it, or fix it once with `docker run --rm --user root -v cycling-coach-data:/data cycling-coach chown -R node:node /data`; for host bind-mounts, `docker run --user "$(id -u):$(id -g)"` also works. With the env vars above, no `config.yaml` is required — the legacy env-var fallback (`ANTHROPIC_API_KEY` etc.) covers the three secret fields.
 
 For finer control (custom model, idle timeout, etc.) drop a `config.yaml` into the volume:
 

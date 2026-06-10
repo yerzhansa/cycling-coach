@@ -20,8 +20,8 @@
 //
 // Usage (operator, dev-time):
 //   pnpm exec tsx tools/build-curve-fixture.ts \
-//     --raw-bundle /tmp/raw-bundle.json \
-//     --raw-curves /tmp/curves-raw.json \
+//     --raw-bundle <bundle.json from tools/fetch-real-athlete.ts> \
+//     --raw-curves <curves-raw.json> \
 //     [--frozen-now 1998-06-04T12:00:00] [--out <path>]
 
 import { createHash } from "node:crypto";

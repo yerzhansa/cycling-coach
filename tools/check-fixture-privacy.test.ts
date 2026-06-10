@@ -1,12 +1,12 @@
 // fixture-privacy-lint:skip-file — this test embeds the forbidden id shape and
 // current-era dates in synthetic fixtures and assertions; it would always flag
 // itself otherwise.
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { findIdHits, findDateHits, type PrivacyHit } from "./check-fixture-privacy.js";
+import { findIdHits, findDateHits, main, type PrivacyHit } from "./check-fixture-privacy.js";
 
 let tempDir: string;
 
@@ -107,6 +107,60 @@ describe("Rule B — current-era dates in real-data golden fixtures", () => {
       `{ "_comment": "fixture-privacy-lint:skip-file", "d": "2026-05-09" }\n`,
     );
     expect(findDateHits([file])).toHaveLength(0);
+  });
+});
+
+describe("default scan paths — GitHub-visible surfaces", () => {
+  const coveredPaths = [
+    ".changeset/sneaky-change.md",
+    "README.md",
+    "CONTRIBUTING.md",
+    "CONTEXT-MAP.md",
+    "NOTICE.md",
+  ];
+
+  let originalCwd: string;
+  let errSpy: ReturnType<typeof vi.spyOn>;
+  let logSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    originalCwd = process.cwd();
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    errSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it("flags a real-shaped id planted under each newly covered default path", () => {
+    for (const rel of coveredPaths) {
+      write(rel, `prose mentioning the id i123456789 outside any code fence\n`);
+    }
+    process.chdir(tempDir);
+    expect(main([])).toBe(1);
+    const output = errSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+    for (const rel of coveredPaths) {
+      expect(output).toContain(rel);
+    }
+  });
+
+  it("scans the dot-named .changeset directory when given as a top-level path", () => {
+    write(".changeset/leak.md", `id i987654321 in a changeset\n`);
+    process.chdir(tempDir);
+    expect(main([])).toBe(1);
+    const output = errSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+    expect(output).toContain(join(".changeset", "leak.md"));
+  });
+
+  it("returns 0 when the default surfaces are clean", () => {
+    for (const rel of coveredPaths) {
+      write(rel, "nothing id-shaped here\n");
+    }
+    process.chdir(tempDir);
+    expect(main([])).toBe(0);
   });
 });
 

@@ -1,12 +1,10 @@
-# syntax=docker/dockerfile:1.7
-
 # Multi-stage Dockerfile for the cycling-coach binary. Builds Core + sport-cycling
 # + cycling-coach via pnpm workspace, then ships only the runtime bundle via
 # `pnpm deploy --prod` (pnpm-canonical: rewrites workspace:* to real paths,
 # strips dev deps, produces a self-contained directory).
 
 # ── builder ────────────────────────────────────────────────────────────────
-FROM node:22-alpine AS builder
+FROM node:22-alpine@sha256:968df39aedcea65eeb078fb336ed7191baf48f972b4479711397108be0966920 AS builder
 WORKDIR /app
 
 # Honor the packageManager pin in root package.json.
@@ -45,14 +43,16 @@ RUN pnpm --filter cycling-coach... build
 RUN pnpm --filter cycling-coach --prod --legacy deploy /app/runtime-bundle
 
 # ── runtime ────────────────────────────────────────────────────────────────
-FROM node:22-alpine AS runtime
+FROM node:22-alpine@sha256:968df39aedcea65eeb078fb336ed7191baf48f972b4479711397108be0966920 AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV CYCLING_COACH_HOME=/data
 
-COPY --from=builder /app/runtime-bundle ./
+COPY --from=builder --chown=root:root /app/runtime-bundle ./
 
-RUN mkdir -p /data
+RUN mkdir -p /data && chown node:node /data && chmod 700 /data
+
+USER node
 
 CMD ["node", "dist/index.js"]

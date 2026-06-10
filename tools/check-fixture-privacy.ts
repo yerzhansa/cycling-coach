@@ -11,8 +11,10 @@
  * Two classes of identifier must never reach a committed fixture, both enforced
  * here by SHAPE (no real tokens live in this source):
  *
- *   Rule A — real intervals.icu id shape `i\d{8,9}` anywhere under `packages/`
- *            and `tools/`. The documented real shape (see the JSDoc on
+ *   Rule A — real intervals.icu id shape `i\d{8,9}` anywhere under `packages/`,
+ *            `tools/`, `.changeset/`, and the committed root prose surfaces
+ *            (README.md, CONTRIBUTING.md, CONTEXT-MAP.md, NOTICE.md).
+ *            The documented real shape (see the JSDoc on
  *            ActivitySchema.id) is a lowercase `i` followed by 8-9 digits.
  *            Short synthetic placeholders (`i1`, `i9876543` — <= 7 digits) are
  *            below the shape and pass; the few synthetic placeholders that DO
@@ -339,7 +341,18 @@ function collectFiles(path: string, out: string[]): void {
   }
 }
 
-const DEFAULT_SCAN_PATHS: readonly string[] = ["packages", "tools"];
+// Top-level args are statSync'd directly, so the dot-entry skip inside
+// collectFiles (which only applies while recursing) does not exclude
+// `.changeset` here.
+const DEFAULT_SCAN_PATHS: readonly string[] = [
+  "packages",
+  "tools",
+  ".changeset",
+  "README.md",
+  "CONTRIBUTING.md",
+  "CONTEXT-MAP.md",
+  "NOTICE.md",
+];
 
 function formatHit(hit: PrivacyHit): string {
   const loc = hit.line > 0 ? `${hit.file}:${hit.line}:${hit.column}` : hit.file;

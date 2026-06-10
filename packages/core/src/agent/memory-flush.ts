@@ -79,7 +79,7 @@ function createFlushMemoryWriteTool(memory: MemoryStore, sections: readonly Memo
 // "convergence over 1-3 flushes" assumption from ADR-0003. Substring matching
 // is intentional (catches plurals like "medications" via "medication"); expand
 // the list as we observe real data.
-const CHRONIC_KEYWORDS = [
+export const CHRONIC_KEYWORDS = [
   "hypertension",
   "diabetes",
   "asthma",
@@ -97,10 +97,12 @@ function scanForStuckChronic(memory: MemoryStore): void {
   const lower = cyclingHistory.toLowerCase();
   const matches = CHRONIC_KEYWORDS.filter((k) => lower.includes(k));
   if (matches.length === 0) return;
+  // Log only the count — the matched keywords are the athlete's actual
+  // conditions/medications and must not land in logs.
   console.warn(
     JSON.stringify({
       event: "chronic_facts_stuck_in_cycling_history",
-      keywords: matches,
+      matchCount: matches.length,
       hint: "Run another memory_flush; if persists, manually move to medical-history",
     }),
   );

@@ -5,10 +5,14 @@ import {
   renameSync,
   existsSync,
   mkdirSync,
+  readdirSync,
+  unlinkSync,
 } from "node:fs";
 import { join } from "node:path";
 import type { ModelMessage } from "ai";
 import { messageText } from "./token-utils.js";
+
+const MAX_RESET_ARCHIVES = 20;
 
 interface JsonlLine {
   role: "user" | "assistant" | "system";
@@ -21,7 +25,7 @@ export class ChatStore {
 
   constructor(dataDir: string) {
     this.sessionsDir = join(dataDir, "sessions");
-    mkdirSync(this.sessionsDir, { recursive: true });
+    mkdirSync(this.sessionsDir, { recursive: true, mode: 0o700 });
   }
 
   private filePath(chatId: string): string {
@@ -58,7 +62,7 @@ export class ChatStore {
   appendMessage(chatId: string, role: "user" | "assistant", content: string): void {
     const path = this.filePath(chatId);
     const line: JsonlLine = { role, content, ts: new Date().toISOString() };
-    appendFileSync(path, JSON.stringify(line) + "\n", "utf-8");
+    appendFileSync(path, JSON.stringify(line) + "\n", { encoding: "utf-8", mode: 0o600 });
   }
 
   overwriteHistory(chatId: string, messages: ModelMessage[]): void {
@@ -75,7 +79,7 @@ export class ChatStore {
         return JSON.stringify(line);
       })
       .join("\n") + "\n";
-    writeFileSync(tmpPath, content, "utf-8");
+    writeFileSync(tmpPath, content, { encoding: "utf-8", mode: 0o600 });
     renameSync(tmpPath, path);
   }
 
@@ -86,5 +90,18 @@ export class ChatStore {
     const ts = new Date().toISOString().replace(/:/g, "-");
     const archivePath = `${path}.reset.${ts}`;
     renameSync(path, archivePath);
+    this.pruneArchives(chatId);
+  }
+
+  private pruneArchives(chatId: string): void {
+    const prefix = `${chatId}.jsonl.reset.`;
+    // Archive names embed a fixed-width ISO timestamp, so a lexicographic
+    // sort is chronological — the oldest archives sort first.
+    const archives = readdirSync(this.sessionsDir)
+      .filter((f) => f.startsWith(prefix))
+      .sort();
+    for (const stale of archives.slice(0, Math.max(0, archives.length - MAX_RESET_ARCHIVES))) {
+      unlinkSync(join(this.sessionsDir, stale));
+    }
   }
 }

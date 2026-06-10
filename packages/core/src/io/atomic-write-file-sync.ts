@@ -21,7 +21,7 @@ export function atomicWriteFileSync(path: string, content: string): void {
   const tempPath = `${path}.tmp.${randomBytes(4).toString("hex")}`;
   let fd: number | null = null;
   try {
-    fd = openSync(tempPath, "w", 0o644);
+    fd = openSync(tempPath, "w", 0o600);
     writeSync(fd, content, null, "utf-8");
     fdatasyncSync(fd);
     closeSync(fd);

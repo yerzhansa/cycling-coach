@@ -81,6 +81,20 @@ async function importHelper() {
   return (await import("../src/channels/operator-capture.js")).captureAndPersistOperator;
 }
 
+// The pairing code is generated inside the helper and only surfaced via log();
+// tests read it back from the logged lines to echo it in fake updates.
+function pairingLog() {
+  const lines: string[] = [];
+  return {
+    log: (s: string) => lines.push(s),
+    code: () => {
+      const line = lines.find((l) => l.includes("Pairing code:"));
+      if (!line) throw new Error("Test bug: pairing code was never logged");
+      return line.split("Pairing code:")[1]!.trim();
+    },
+  };
+}
+
 describe("captureAndPersistOperator — getMe gate", () => {
   it("getMe rejects → status: 'getme-failed', no bot.start() invoked", async () => {
     const bot = makeFakeBot({
@@ -134,12 +148,14 @@ describe("captureAndPersistOperator — getMe gate", () => {
 
 describe("captureAndPersistOperator — capture flow", () => {
   it("captures + confirm true → file written, status 'captured'", async () => {
+    const pairing = pairingLog();
     const bot = makeFakeBot({
       getMe: async () => ({ is_bot: true, username: "testbot" }),
       onStart: async (b) => {
         await b.fireUpdate({
           chat: { type: "private", id: 12345 },
           from: { id: 12345, username: "alice", first_name: "Alice" },
+          message: { text: pairing.code() },
         });
       },
     });
@@ -151,8 +167,12 @@ describe("captureAndPersistOperator — capture flow", () => {
       binary: cyclingBinary,
       dataDir,
       confirm,
+      log: pairing.log,
     });
     expect(result.status).toBe("captured");
+    expect(bot.start).toHaveBeenCalledWith(
+      expect.objectContaining({ drop_pending_updates: true }),
+    );
     expect(result.capturedId).toBe("12345");
     expect(result.botUsername).toBe("testbot");
     expect(confirm).toHaveBeenCalledWith(
@@ -172,12 +192,14 @@ describe("captureAndPersistOperator — capture flow", () => {
   });
 
   it("captures + confirm false → status 'declined', no file written", async () => {
+    const pairing = pairingLog();
     const bot = makeFakeBot({
       getMe: async () => ({ is_bot: true, username: "testbot" }),
       onStart: async (b) => {
         await b.fireUpdate({
           chat: { type: "private", id: 12345 },
           from: { id: 12345, username: "alice", first_name: "Alice" },
+          message: { text: pairing.code() },
         });
       },
     });
@@ -188,6 +210,7 @@ describe("captureAndPersistOperator — capture flow", () => {
       binary: cyclingBinary,
       dataDir,
       confirm: async () => false,
+      log: pairing.log,
     });
     expect(result.status).toBe("declined");
     expect(existsSync(join(dataDir, "allowed-senders.json"))).toBe(false);
@@ -212,12 +235,14 @@ describe("captureAndPersistOperator — capture flow", () => {
   });
 
   it("captured from.id failing ^[1-9]\\d+$ → 'getme-failed' (defense-in-depth)", async () => {
+    const pairing = pairingLog();
     const bot = makeFakeBot({
       getMe: async () => ({ is_bot: true, username: "testbot" }),
       onStart: async (b) => {
         await b.fireUpdate({
           chat: { type: "private", id: 0 },
           from: { id: 0, username: "x", first_name: "x" }, // id=0 violates regex
+          message: { text: pairing.code() },
         });
       },
     });
@@ -229,6 +254,7 @@ describe("captureAndPersistOperator — capture flow", () => {
       dataDir,
       timeoutMs: 100,
       confirm: async () => true,
+      log: pairing.log,
     });
     // Either the bad id is rejected at capture (timeout) or surfaced as getme-failed.
     expect(["getme-failed", "timeout"]).toContain(result.status);
@@ -236,13 +262,101 @@ describe("captureAndPersistOperator — capture flow", () => {
   });
 
   it("non-private chat ctx is ignored during capture window", async () => {
+    const pairing = pairingLog();
     const bot = makeFakeBot({
       getMe: async () => ({ is_bot: true, username: "testbot" }),
       onStart: async (b) => {
-        // Group-chat update fires but capture should ignore it; capture window
-        // then expires.
+        // Group-chat update fires but capture should ignore it even with the
+        // right code; capture window then expires.
         await b.fireUpdate({
           chat: { type: "group", id: -1234 },
+          from: { id: 12345, username: "alice", first_name: "Alice" },
+          message: { text: pairing.code() },
+        });
+      },
+    });
+    nextBots.push(bot);
+    const captureAndPersistOperator = await importHelper();
+    const result = await captureAndPersistOperator({
+      botToken: "FAKE",
+      binary: cyclingBinary,
+      dataDir,
+      timeoutMs: 50,
+      confirm: async () => true,
+      log: pairing.log,
+    });
+    expect(result.status).toBe("timeout");
+  });
+});
+
+describe("captureAndPersistOperator — pairing code gate", () => {
+  it("sender with non-matching text is ignored → timeout, no confirm, no file", async () => {
+    const pairing = pairingLog();
+    const bot = makeFakeBot({
+      getMe: async () => ({ is_bot: true, username: "testbot" }),
+      onStart: async (b) => {
+        await b.fireUpdate({
+          chat: { type: "private", id: 99999 },
+          from: { id: 99999, username: "stranger", first_name: "Mallory" },
+          message: { text: "/start" },
+        });
+      },
+    });
+    nextBots.push(bot);
+    const confirm = vi.fn(async () => true);
+    const captureAndPersistOperator = await importHelper();
+    const result = await captureAndPersistOperator({
+      botToken: "FAKE",
+      binary: cyclingBinary,
+      dataDir,
+      timeoutMs: 50,
+      confirm,
+      log: pairing.log,
+    });
+    expect(result.status).toBe("timeout");
+    expect(confirm).not.toHaveBeenCalled();
+    expect(existsSync(join(dataDir, "allowed-senders.json"))).toBe(false);
+  });
+
+  it("wrong-code sender then matching sender → captures only the matching sender", async () => {
+    const pairing = pairingLog();
+    const bot = makeFakeBot({
+      getMe: async () => ({ is_bot: true, username: "testbot" }),
+      onStart: async (b) => {
+        await b.fireUpdate({
+          chat: { type: "private", id: 99999 },
+          from: { id: 99999, username: "stranger", first_name: "Mallory" },
+          message: { text: "not-the-code" },
+        });
+        await b.fireUpdate({
+          chat: { type: "private", id: 12345 },
+          from: { id: 12345, username: "alice", first_name: "Alice" },
+          message: { text: `  ${pairing.code()}  ` }, // surrounding whitespace is trimmed
+        });
+      },
+    });
+    nextBots.push(bot);
+    const captureAndPersistOperator = await importHelper();
+    const result = await captureAndPersistOperator({
+      botToken: "FAKE",
+      binary: cyclingBinary,
+      dataDir,
+      confirm: async () => true,
+      log: pairing.log,
+    });
+    expect(result.status).toBe("captured");
+    expect(result.capturedId).toBe("12345");
+    const reloaded = loadAllowedSenders(dataDir);
+    expect(reloaded.primaryOperator).toBe("12345");
+  });
+
+  it("update without message text is ignored → timeout", async () => {
+    const pairing = pairingLog();
+    const bot = makeFakeBot({
+      getMe: async () => ({ is_bot: true, username: "testbot" }),
+      onStart: async (b) => {
+        await b.fireUpdate({
+          chat: { type: "private", id: 12345 },
           from: { id: 12345, username: "alice", first_name: "Alice" },
         });
       },
@@ -255,6 +369,7 @@ describe("captureAndPersistOperator — capture flow", () => {
       dataDir,
       timeoutMs: 50,
       confirm: async () => true,
+      log: pairing.log,
     });
     expect(result.status).toBe("timeout");
   });
@@ -269,12 +384,14 @@ describe("captureAndPersistOperator — re-capture preserves allowFrom (S11)", (
       primaryOperator: "11111",
       capturedAt: "2026-01-01T00:00:00.000Z",
     }));
+    const pairing = pairingLog();
     const bot = makeFakeBot({
       getMe: async () => ({ is_bot: true, username: "testbot" }),
       onStart: async (b) => {
         await b.fireUpdate({
           chat: { type: "private", id: 33333 },
           from: { id: 33333, username: "newop", first_name: "New" },
+          message: { text: pairing.code() },
         });
       },
     });
@@ -285,6 +402,7 @@ describe("captureAndPersistOperator — re-capture preserves allowFrom (S11)", (
       binary: cyclingBinary,
       dataDir,
       confirm: async () => true,
+      log: pairing.log,
     });
     expect(result.status).toBe("captured");
     const reloaded = loadAllowedSenders(dataDir);
@@ -313,12 +431,14 @@ describe("captureAndPersistOperator — write-failed mapping (T2)", () => {
         }),
       };
     });
+    const pairing = pairingLog();
     const bot = makeFakeBot({
       getMe: async () => ({ is_bot: true, username: "testbot" }),
       onStart: async (b) => {
         await b.fireUpdate({
           chat: { type: "private", id: 12345 },
           from: { id: 12345, username: "alice", first_name: "Alice" },
+          message: { text: pairing.code() },
         });
       },
     });
@@ -329,6 +449,7 @@ describe("captureAndPersistOperator — write-failed mapping (T2)", () => {
       binary: cyclingBinary,
       dataDir,
       confirm: async () => true,
+      log: pairing.log,
     });
     expect(result.status).toBe("write-failed");
     expect(result.reason).toContain(message);
@@ -346,12 +467,14 @@ describe("captureAndPersistOperator — write-failed mapping (T2)", () => {
         }),
       };
     });
+    const pairing = pairingLog();
     const bot = makeFakeBot({
       getMe: async () => ({ is_bot: true, username: "testbot" }),
       onStart: async (b) => {
         await b.fireUpdate({
           chat: { type: "private", id: 12345 },
           from: { id: 12345, username: "alice", first_name: "Alice" },
+          message: { text: pairing.code() },
         });
       },
     });
@@ -362,6 +485,7 @@ describe("captureAndPersistOperator — write-failed mapping (T2)", () => {
       binary: cyclingBinary,
       dataDir,
       confirm: async () => true,
+      log: pairing.log,
     });
     expect(result.status).toBe("lockfile-contention");
   });

@@ -29,7 +29,7 @@ export async function writeAuditEntry(
 
   try {
     await mkdir(dirname(path), { recursive: true });
-    const fh = await open(path, "a", 0o644);
+    const fh = await open(path, "a", 0o600);
     try {
       await fh.appendFile(line, "utf-8");
     } finally {

@@ -81,6 +81,14 @@ function createSecuredBot(opts: {
 function logSecurityStartup(dataDir: string, binaryName: string): void {
   const { state, source } = loadAllowedSendersWithSource(dataDir);
   const primary = state.primaryOperator ?? "none";
+  if (state.dmPolicy === "open") {
+    console.error(
+      "[security] WARNING: DM policy is OPEN — this bot will answer ANY Telegram user who finds it.\n" +
+        "[security] WARNING: Unset CYCLING_COACH_DM_POLICY to restore allowlist/pairing.\n" +
+        `[security] Allowlist on record: ${state.allowFrom.length} senders (primary: ${primary}). Source: ${source}.`,
+    );
+    return;
+  }
   console.error(
     `[security] Telegram allowlist: ${state.dmPolicy} mode (${state.allowFrom.length} allowed senders, primary: ${primary}). Source: ${source}.`,
   );
@@ -248,6 +256,7 @@ export function createTelegramBot(
 
   bot.command("update", async (ctx) => {
     await ctx.reply("Checking for updates...");
+    let latest: string | undefined;
     try {
       const info = await checkForUpdate(binary.binaryName);
       if (!info) {
@@ -258,13 +267,16 @@ export function createTelegramBot(
         await ctx.reply(`You're on the latest version (${info.current}).`);
         return;
       }
+      latest = info.latest;
       await ctx.reply(`Updating ${info.current} → ${info.latest}...\nThe bot will stop after installation. Run \`${binary.binaryName}\` to start it again.`);
       // Stop polling first so Telegram commits the /update offset — otherwise
       // Telegram re-sends /update on next startup and we loop forever.
-      void bot.stop().then(() => selfUpdate(binary.binaryName));
+      void bot.stop().then(() => selfUpdate(binary.binaryName, info.latest));
     } catch (err) {
       console.error("Error in /update:", err);
-      await ctx.reply(`Update failed. Please run \`npm install -g ${binary.binaryName}@latest\` manually.`);
+      await ctx.reply(
+        `Update failed. Please run \`npm install -g ${binary.binaryName}@${latest ?? "latest"} --ignore-scripts\` manually.`,
+      );
     }
   });
 
@@ -310,7 +322,12 @@ export function markdownToTelegramHtml(md: string): string {
   // Telegram has no table primitive. Extract tables first so the bullet-point
   // regex below doesn't mangle their leading `|`, then restore as <pre> blocks.
   const { text, tables } = extractTables(md);
-  let html = text;
+
+  // Escape the raw source BEFORE any markdown conversion so the only real tags
+  // in the output are the ones this converter emits. Literal HTML in the LLM
+  // output (which can echo attacker-influenced intervals.icu text) must render
+  // as text, never as markup. Table cells are escaped inside renderTableAsPre.
+  let html = escapeHtmlText(text);
 
   // Headers: ### Title → <b>Title</b>
   html = html.replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>");
@@ -334,10 +351,6 @@ export function markdownToTelegramHtml(md: string): string {
 
   // Bullet points: - item → • item
   html = html.replace(/^[-*]\s+/gm, "• ");
-
-  // Escape remaining HTML-special chars (but not our tags)
-  html = html.replace(/&(?!amp;|lt;|gt;)/g, "&amp;");
-  html = html.replace(/<(?!\/?(?:b|i|u|s|code|pre)>)/g, "&lt;");
 
   return html.replace(/\[\[__TBL_(\d+)__\]\]/g, (_, idx) => tables[Number(idx)] ?? "");
 }
@@ -505,13 +518,29 @@ export function chunkHtml(html: string, maxLen: number = TELEGRAM_MAX_LENGTH): s
   return chunks;
 }
 
-async function sendLongMessage(
+function isTelegramParseError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes("can't parse entities");
+}
+
+export async function sendLongMessage(
   ctx: { reply: (text: string, options?: Record<string, unknown>) => Promise<unknown> },
   text: string,
 ): Promise<void> {
   const html = markdownToTelegramHtml(text);
   for (const chunk of chunkHtml(html)) {
-    await ctx.reply(chunk, { parse_mode: "HTML" });
+    try {
+      await ctx.reply(chunk, { parse_mode: "HTML" });
+    } catch (err) {
+      if (!isTelegramParseError(err)) throw err;
+      // Log the message only — a grammY error object carries the request
+      // payload, i.e. the athlete's reply text, which must stay out of logs.
+      console.error(
+        "Telegram rejected HTML chunk; resending as plain text:",
+        err instanceof Error ? err.message : String(err),
+      );
+      await ctx.reply(chunk);
+    }
   }
 }
 

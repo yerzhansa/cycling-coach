@@ -28,18 +28,18 @@ jobs:
       pull-requests: write
       actions: write   # for `gh workflow run release.yml` after a Version-PR merge
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
-      - uses: pnpm/action-setup@v3
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@a3252b78c470c02df07e9d59298aecedc3ccdd6d # v3.0.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
       - name: Open or update Version PR
-        uses: changesets/action@v1.4.10
+        uses: changesets/action@06245a4e0a36c064a573d4150030f5ec548e4fcc # v1.4.10
         with:
           # `version` consumes .changeset/*.md, bumps package.json, updates
           # CHANGELOG.md, then bump-binaries-to-calver.ts overrides binary

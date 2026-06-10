@@ -9,6 +9,7 @@ import {
   removeSender,
   listSenders,
   loadAllowedSenders,
+  ensureDataDirSecure,
 } from "./channels/allowed-senders.js";
 
 export interface RunBinaryHooks {
@@ -66,9 +67,8 @@ interface MakeReadlineConfirmOpts {
 
 export function _parseConfirmAnswer(input: string): boolean {
   const trimmed = input.trim().toLowerCase();
-  if (trimmed === "" || trimmed === "y" || trimmed === "yes") return true;
-  // Anything outside {y, yes, Enter, n, no} → decline-on-ambiguous (no re-prompt).
-  return false;
+  // Anything except an explicit y/yes (including bare Enter) → decline, no re-prompt.
+  return trimmed === "y" || trimmed === "yes";
 }
 
 export function makeReadlineConfirm(
@@ -116,7 +116,7 @@ export function makeReadlineConfirm(
         finish(false);
       });
 
-      rl.question("Save this as the primary operator? [Y/n]: ", (answer: string) => {
+      rl.question("Save this as the primary operator? [y/N]: ", (answer: string) => {
         clearTimeout(timer);
         finish(_parseConfirmAnswer(answer));
       });
@@ -131,7 +131,7 @@ async function runStartupCapture(
 ): Promise<void> {
   console.log(
     `\n${binary.displayName} has no allowed senders configured.\n` +
-      `Send /start to your bot from Telegram within 60 seconds to claim ownership.\n` +
+      `Send your bot the pairing code shown below, from your own Telegram account, within 60 seconds to claim ownership.\n` +
       `(Press Ctrl+C to skip — you can run \`${binary.binaryName} add-sender <id>\` later.)\n`,
   );
   const { captureAndPersistOperator } = await import("./channels/operator-capture.js");
@@ -268,6 +268,8 @@ export async function runBinary(
     throw err;
   }
 
+  ensureDataDirSecure(config.dataDir);
+
   if (config.llm.provider !== "openai-codex" && !config.llm.apiKey) {
     console.error(
       `No LLM API key found. Run \`${binary.binaryName} setup\` to configure, or set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_GENERATIVE_AI_API_KEY.`,
@@ -316,8 +318,10 @@ export async function runBinary(
     console.log(
       `${binary.displayName} (Telegram mode) is running. Open Telegram and message your bot — Ctrl+C to stop.`,
     );
-    bot.start();
-    notifyUpdate(bot, config.dataDir, binary).catch(() => {});
+    bot.start({ drop_pending_updates: true });
+    if (!process.env.CYCLING_COACH_NO_UPDATE_CHECK) {
+      notifyUpdate(bot, config.dataDir, binary).catch(() => {});
+    }
   } else {
     console.log(`${binary.displayName} (CLI mode). Type your message:`);
     const { createInterface } = await import("node:readline");

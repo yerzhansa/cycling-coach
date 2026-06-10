@@ -1,8 +1,41 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Memory } from "../src/memory/store.js";
+
+describe("Memory — data directory permissions", () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "cc-memory-perms-"));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("creates memory/ and plans/ with owner-only 0o700", () => {
+    new Memory(dataDir);
+
+    expect(statSync(join(dataDir, "memory")).mode & 0o777).toBe(0o700);
+    expect(statSync(join(dataDir, "plans")).mode & 0o777).toBe(0o700);
+  });
+
+  it("writes MEMORY.md with owner-only 0o600", () => {
+    const memory = new Memory(dataDir);
+    memory.writeSection("health", "Resting HR 44, HRV 92ms");
+
+    expect(statSync(join(dataDir, "memory", "MEMORY.md")).mode & 0o777).toBe(0o600);
+  });
+});
 
 describe("Memory.renameSection", () => {
   let dataDir: string;
