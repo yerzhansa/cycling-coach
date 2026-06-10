@@ -4,7 +4,7 @@
 # strips dev deps, produces a self-contained directory).
 
 # ── builder ────────────────────────────────────────────────────────────────
-FROM node:22-alpine@sha256:968df39aedcea65eeb078fb336ed7191baf48f972b4479711397108be0966920 AS builder
+FROM node:26-alpine@sha256:144769ec3f32e8ee36b3cfde91e82bee25d9367b20f31a151f3f7eea3a2a8541 AS builder
 WORKDIR /app
 
 # Honor the packageManager pin in root package.json.
@@ -43,7 +43,7 @@ RUN pnpm --filter cycling-coach... build
 RUN pnpm --filter cycling-coach --prod --legacy deploy /app/runtime-bundle
 
 # ── runtime ────────────────────────────────────────────────────────────────
-FROM node:22-alpine@sha256:968df39aedcea65eeb078fb336ed7191baf48f972b4479711397108be0966920 AS runtime
+FROM node:26-alpine@sha256:144769ec3f32e8ee36b3cfde91e82bee25d9367b20f31a151f3f7eea3a2a8541 AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production
