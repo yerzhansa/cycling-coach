@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { APICallError } from "@ai-sdk/provider";
 import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -146,5 +147,79 @@ describe("retry loop on Codex path", () => {
     expect(text).toBe("recovered-after-compaction");
     // 1 overflow + 1 memory flush during compaction + 1 retry success = 3
     expect(complete).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("rate-limit backoff clamp", () => {
+  it("clamps a header-derived retry-after above the cap to RATE_LIMIT_MAX_WAIT_MS", async () => {
+    let n = 0;
+    const complete = vi.fn(async () => {
+      n++;
+      if (n === 1) {
+        // Message must not match codex-bridge normalizeError patterns, or the
+        // headers are stripped before reaching the retry loop.
+        throw new APICallError({
+          message: "quota exhausted",
+          url: "https://chatgpt.com/backend-api",
+          requestBodyValues: {},
+          statusCode: 429,
+          responseHeaders: { "retry-after": "3600" },
+        });
+      }
+      return mkAssistant("recovered-after-clamp");
+    });
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.useFakeTimers();
+    const agent = await setupAgent(complete);
+
+    const chatPromise = agent.chat("test-chat-clamp", "hello");
+    await vi.advanceTimersByTimeAsync(120_000);
+    const text = await chatPromise;
+
+    expect(text).toBe("recovered-after-clamp");
+    expect(complete).toHaveBeenCalledTimes(2);
+    const warnLine = warnSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((s) => s.includes("Rate limited"));
+    expect(warnLine).toContain("waiting 120000ms");
+    expect(warnLine).toContain("provider requested 3600000ms");
+
+    vi.useRealTimers();
+  });
+
+  it("honors a sub-cap header-derived retry-after unchanged", async () => {
+    let n = 0;
+    const complete = vi.fn(async () => {
+      n++;
+      if (n === 1) {
+        throw new APICallError({
+          message: "quota exhausted",
+          url: "https://chatgpt.com/backend-api",
+          requestBodyValues: {},
+          statusCode: 429,
+          responseHeaders: { "retry-after": "10" },
+        });
+      }
+      return mkAssistant("recovered-fast");
+    });
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.useFakeTimers();
+    const agent = await setupAgent(complete);
+
+    const chatPromise = agent.chat("test-chat-subcap", "hello");
+    await vi.advanceTimersByTimeAsync(10_000);
+    const text = await chatPromise;
+
+    expect(text).toBe("recovered-fast");
+    expect(complete).toHaveBeenCalledTimes(2);
+    const warnLine = warnSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((s) => s.includes("Rate limited"));
+    expect(warnLine).toContain("waiting 10000ms");
+    expect(warnLine).not.toContain("clamped");
+
+    vi.useRealTimers();
   });
 });

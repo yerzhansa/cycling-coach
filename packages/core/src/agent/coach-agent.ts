@@ -34,6 +34,7 @@ const MAX_RATE_LIMIT_ATTEMPTS = 3;
 const RATE_LIMIT_FALLBACK_BASE_MS = 5_000;
 const RATE_LIMIT_FALLBACK_MULTIPLIER = 2;
 const RATE_LIMIT_FALLBACK_MAX_MS = 30_000;
+const RATE_LIMIT_MAX_WAIT_MS = 120_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -215,12 +216,16 @@ export class CoachAgent {
           if (isRateLimitError(err) && rateLimitAttempts < MAX_RATE_LIMIT_ATTEMPTS) {
             rateLimitAttempts++;
             const retryAfter = extractRetryAfterMs(err);
-            const backoff = retryAfter
+            const requestedMs = retryAfter
               ?? Math.min(
                    RATE_LIMIT_FALLBACK_BASE_MS * Math.pow(RATE_LIMIT_FALLBACK_MULTIPLIER, rateLimitAttempts - 1),
                    RATE_LIMIT_FALLBACK_MAX_MS,
                  );
-            console.warn(`Rate limited (attempt ${rateLimitAttempts}/${MAX_RATE_LIMIT_ATTEMPTS}), waiting ${backoff}ms`);
+            const backoff = Math.min(requestedMs, RATE_LIMIT_MAX_WAIT_MS);
+            const clampNote = requestedMs > RATE_LIMIT_MAX_WAIT_MS
+              ? ` (provider requested ${requestedMs}ms, clamped to ${RATE_LIMIT_MAX_WAIT_MS}ms)`
+              : "";
+            console.warn(`Rate limited (attempt ${rateLimitAttempts}/${MAX_RATE_LIMIT_ATTEMPTS}), waiting ${backoff}ms${clampNote}`);
             await sleep(backoff);
             continue;
           }
