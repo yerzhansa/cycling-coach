@@ -58,6 +58,16 @@ export interface MemoryStore {
   appendDailyNote(note: string, date?: string): void;
 
   /**
+   * Daily notes for every date in [from, to] (inclusive, YYYY-MM-DD), ascending,
+   * skipping dates with no note file. Returns [] when either bound is not a
+   * parseable date.
+   */
+  readDailyNotesInRange(from: string, to: string): Array<{ date: string; text: string }>;
+
+  /** Raw contents of the append-only event ledger (memory/events.jsonl), or "" if absent. */
+  readEventsRaw(): string;
+
+  /**
    * Appends one event to the append-only event ledger
    * (`memory/events.jsonl`). Entries are never rewritten or pruned.
    */

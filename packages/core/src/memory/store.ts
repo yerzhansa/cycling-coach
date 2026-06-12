@@ -4,7 +4,7 @@ import type { MemoryStore, MemoryWriteSource } from "../memory.js";
 import { todayInTZ } from "../agent/user-time.js";
 import { atomicWriteFileSync } from "../io/atomic-write-file-sync.js";
 import { appendJournalEntry } from "./journal.js";
-import { appendLedgerEvent, type LedgerEventInput } from "./event-ledger.js";
+import { appendLedgerEvent, LEDGER_FILENAME, type LedgerEventInput } from "./event-ledger.js";
 
 // ============================================================================
 // MEMORY SYSTEM
@@ -191,6 +191,25 @@ export class Memory implements MemoryStore {
     const existing = this.readDailyNotes(d);
     const updated = existing ? `${existing}\n${note}` : note;
     atomicWriteFileSync(path, updated);
+  }
+
+  readDailyNotesInRange(from: string, to: string): Array<{ date: string; text: string }> {
+    const fromMs = Date.parse(`${from}T00:00:00Z`);
+    const toMs = Date.parse(`${to}T00:00:00Z`);
+    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return [];
+    const out: Array<{ date: string; text: string }> = [];
+    for (let t = fromMs; t <= toMs; t += 86_400_000) {
+      const date = new Date(t).toISOString().slice(0, 10);
+      const text = this.readDailyNotes(date);
+      if (text) out.push({ date, text });
+    }
+    return out;
+  }
+
+  readEventsRaw(): string {
+    const path = join(this.memoryDir, LEDGER_FILENAME);
+    if (!existsSync(path)) return "";
+    return readFileSync(path, "utf-8");
   }
 
   appendEvent(event: LedgerEventInput): void {

@@ -19,6 +19,94 @@ export function createMemoryReadTool(memory: MemoryStore) {
   });
 }
 
+const MEMORY_QUERY_MAX_RANGE_DAYS = 366;
+const MEMORY_QUERY_MAX_RESULT_CHARS = 20_000;
+const MEMORY_QUERY_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function isRealDate(d: string): boolean {
+  const ms = Date.parse(`${d}T00:00:00Z`);
+  return Number.isFinite(ms) && new Date(ms).toISOString().slice(0, 10) === d;
+}
+
+export function createMemoryQueryTool(memory: MemoryStore) {
+  return tool({
+    description:
+      "Query dated athlete memory: daily notes and the event ledger over a date range. " +
+      "Use this for any question about past notes, decisions, overrides, illness, or " +
+      "experiments. Returns matching notes and events grouped by date.",
+    inputSchema: zodSchema(
+      z.object({
+        from: z
+          .string()
+          .regex(MEMORY_QUERY_DATE_RE)
+          .describe("Start date (inclusive), YYYY-MM-DD"),
+        to: z
+          .string()
+          .regex(MEMORY_QUERY_DATE_RE)
+          .describe("End date (inclusive), YYYY-MM-DD"),
+        query: z
+          .string()
+          .optional()
+          .describe("Case-insensitive substring filter. Omit to return everything in the range."),
+      }),
+    ),
+    execute: async (input: { from: string; to: string; query?: string }) => {
+      const { from, to, query } = input;
+      if (!isRealDate(from) || !isRealDate(to)) {
+        return `Error: ${from}..${to} contains an invalid calendar date. Use real YYYY-MM-DD dates.`;
+      }
+      if (from > to) {
+        return `Error: 'from' (${from}) is after 'to' (${to}). Swap the bounds.`;
+      }
+      const rangeDays =
+        (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 + 1;
+      if (rangeDays > MEMORY_QUERY_MAX_RANGE_DAYS) {
+        return `Error: range is ${rangeDays} days; the maximum is ${MEMORY_QUERY_MAX_RANGE_DAYS}. Query a narrower range.`;
+      }
+
+      const q = query?.toLowerCase();
+      const byDate = new Map<string, string[]>();
+
+      for (const { date, text } of memory.readDailyNotesInRange(from, to)) {
+        const lines = q
+          ? text.split("\n").filter((l) => l.toLowerCase().includes(q))
+          : [text];
+        if (lines.length > 0) byDate.set(date, lines);
+      }
+
+      for (const line of memory.readEventsRaw().split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(trimmed);
+        } catch {
+          continue;
+        }
+        const date = (parsed as { date?: unknown }).date;
+        if (typeof date !== "string" || date < from || date > to) continue;
+        if (q && !trimmed.toLowerCase().includes(q)) continue;
+        const bucket = byDate.get(date) ?? [];
+        bucket.push(`event: ${trimmed}`);
+        byDate.set(date, bucket);
+      }
+
+      const header = `Memory query ${from}..${to}` + (query ? ` matching "${query}"` : "");
+      if (byDate.size === 0) {
+        return `${header}: no daily notes or events found.`;
+      }
+      const sections = [...byDate.keys()]
+        .sort()
+        .map((d) => `## ${d}\n${byDate.get(d)!.join("\n")}`);
+      const result = [header, ...sections].join("\n\n");
+      return result.length > MEMORY_QUERY_MAX_RESULT_CHARS
+        ? result.slice(0, MEMORY_QUERY_MAX_RESULT_CHARS) +
+            "\n[truncated — narrow the date range or add a query term]"
+        : result;
+    },
+  });
+}
+
 export function createMemoryTools(
   memory: MemoryStore,
   sections: readonly MemorySectionSpec[],
@@ -32,6 +120,7 @@ export function createMemoryTools(
   const sectionNames = sections.map((s) => s.name) as [string, ...string[]];
   return {
     memory_read: createMemoryReadTool(memory),
+    memory_query: createMemoryQueryTool(memory),
 
     memory_write: tool({
       description: buildMemoryWriteDescription(sections),

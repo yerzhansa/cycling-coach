@@ -129,6 +129,7 @@ export {
   resolveDailyResetAtMs,
 } from "./agent/session-freshness.js";
 export {
+  createMemoryQueryTool,
   createMemoryReadTool,
   createMemoryTools,
 } from "./agent/tools.js";

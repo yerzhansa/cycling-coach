@@ -42,7 +42,7 @@ describe("buildSystemPrompt — review + data-grounding placement", () => {
     expect(sections[sections.length - 1]).toMatch(/^# Data Grounding/);
   });
 
-  it("preserves [soul, skills, context, time, untrusted-data, review-rules, data-grounding] order", () => {
+  it("preserves [soul, skills, context, time, untrusted-data, recall-rules, review-rules, data-grounding] order", () => {
     const prompt = buildSystemPrompt(persona, makeFakeMemory("ctx"));
     const sections = prompt.split("\n\n---\n\n");
     expect(sections[0]).toContain("Cycling Coach");
@@ -50,9 +50,10 @@ describe("buildSystemPrompt — review + data-grounding placement", () => {
     expect(sections[2]).toMatch(/^# Athlete Context/);
     expect(sections[3]).toMatch(/^# Current Date & Time/);
     expect(sections[4]).toMatch(/^# Untrusted Data Handling/);
-    expect(sections[5]).toMatch(/^# Workout Review/);
-    expect(sections[6]).toMatch(/^# Data Grounding/);
-    expect(sections.length).toBe(7);
+    expect(sections[5]).toMatch(/^# Recall Before Answering/);
+    expect(sections[6]).toMatch(/^# Workout Review/);
+    expect(sections[7]).toMatch(/^# Data Grounding/);
+    expect(sections.length).toBe(8);
   });
 
   it("injects the Layer-3 data-grounding marker", () => {
@@ -60,6 +61,33 @@ describe("buildSystemPrompt — review + data-grounding placement", () => {
     expect(prompt).toContain(
       "Numeric claims MUST come from the current JSON snapshot you read this turn",
     );
+  });
+});
+
+describe("MEMORY_RECALL_RULES content", () => {
+  const prompt = buildSystemPrompt(persona, makeFakeMemory(""));
+
+  it("contains the recall-before-answering heading", () => {
+    expect(prompt).toContain("# Recall Before Answering");
+  });
+
+  it("names the memory_query tool and the covering-range discipline", () => {
+    expect(prompt).toContain("memory_query");
+    expect(prompt).toContain("Never claim a past note or decision does not exist");
+  });
+
+  it("is byte-stable across consecutive builds", () => {
+    expect(buildSystemPrompt(persona, makeFakeMemory("ctx"))).toBe(
+      buildSystemPrompt(persona, makeFakeMemory("ctx")),
+    );
+  });
+
+  it("recall section contains no concrete date", () => {
+    const recall = prompt
+      .split("\n\n---\n\n")
+      .find((s) => s.startsWith("# Recall Before Answering"));
+    expect(recall).toBeDefined();
+    expect(recall).not.toMatch(/\d{4}-\d{2}-\d{2}/);
   });
 });
 
