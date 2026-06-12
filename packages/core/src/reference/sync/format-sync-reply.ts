@@ -22,7 +22,7 @@ export function formatSyncReply(result: SyncResult, now: Date = new Date()): str
         case "mutex_held":
           return "Another sync in progress — please retry in a moment.";
         default: {
-          const _exhaustive: never = result.reason;
+          const _exhaustive: never = result;
           throw new Error(`formatSyncReply: unhandled skipped reason ${String(_exhaustive)}`);
         }
       }
@@ -35,7 +35,7 @@ export function formatSyncReply(result: SyncResult, now: Date = new Date()): str
         case "gate_rejected":
           return "I can't reach intervals.icu right now.";
         default: {
-          const _exhaustive: never = result.reason;
+          const _exhaustive: never = result;
           throw new Error(`formatSyncReply: unhandled failed reason ${String(_exhaustive)}`);
         }
       }

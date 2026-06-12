@@ -18,11 +18,11 @@ import type { MetricInput } from "./metric-input.js";
 // The golden fixtures only exercise the power-zone and empty-window paths,
 // so these synthetic rows isolate the substrate branches the parity matrix
 // can't reach: HR fallback, mixed basis, no-zone-data, the z4+ fold, and
-// the trailing-window cutoff. `fixture` is typed `unknown` at the gate
-// boundary, so minimal rows — including the flat `icu_hr_zone_times` array
-// that isn't on the typed Activity surface — ride through untyped.
+// the trailing-window cutoff. The rows are cast through `MetricInput`
+// (mirroring capability.test.ts) so the flat `icu_hr_zone_times` array
+// that isn't on the typed Activity surface still rides through.
 function input(activities: unknown[], frozenNow: string): MetricInput {
-  return { fixture: { activities }, frozenNow };
+  return { fixture: { activities }, frozenNow } as unknown as MetricInput;
 }
 
 const FROZEN = "2026-05-10T12:00:00";

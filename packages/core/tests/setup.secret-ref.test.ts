@@ -1271,7 +1271,7 @@ describe("D11 guarded cleanup on mid-wizard failure", () => {
     await expect(runSetup(cyclingBinary)).rejects.toThrow("__exit_1");
     // Only the NEW intervals item should be deleted; the LLM one pre-existed.
     expect(deleteSpy).toHaveBeenCalledTimes(1);
-    const firstDeleteArgs = deleteSpy.mock.calls[0];
+    const firstDeleteArgs = deleteSpy.mock.calls[0] as unknown[];
     expect(firstDeleteArgs[1]).toBe("cycling-coach · intervals_api_key");
     exitSpy.mockRestore();
   });

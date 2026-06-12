@@ -95,14 +95,14 @@ describe("post-flush chronic-keyword scan", () => {
 
   function warnEvents(): Array<Record<string, unknown>> {
     return warnSpy.mock.calls
-      .map((args) => {
+      .map((args: unknown[]) => {
         try {
           return JSON.parse(String(args[0]));
         } catch {
           return null;
         }
       })
-      .filter((e): e is Record<string, unknown> => e !== null);
+      .filter((e: unknown): e is Record<string, unknown> => e !== null);
   }
 
   it("does not warn when cycling-history is absent", async () => {

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
 import { cyclingSport } from "@enduragent/sport-cycling";
+import type { Sport } from "../src/sport.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -55,7 +56,7 @@ async function setupAgent(complete: ReturnType<typeof vi.fn>) {
   }));
 
   const { CoachAgent } = await import("../src/agent/coach-agent.js");
-  return new CoachAgent(cyclingSport, baseAgentConfig(dataDir));
+  return new CoachAgent(cyclingSport as unknown as Sport, baseAgentConfig(dataDir));
 }
 
 function mkAssistant(text: string, stopReason: "stop" | "length" = "stop") {

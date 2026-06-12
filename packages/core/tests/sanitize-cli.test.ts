@@ -111,7 +111,7 @@ describe("sanitize-fixture CLI — main()", () => {
     await main([inputPath, "guarded-output", "--force"], { outputRoot: outputDir });
     const outputPath = join(outputDir, "guarded-output.json");
     const firstBytes = readFileSync(outputPath);
-    const firstMtimeNs = statSync(outputPath).mtimeNs;
+    const firstMtimeNs = statSync(outputPath, { bigint: true }).mtimeNs;
 
     // Second run WITHOUT --force, with mutated input → must refuse.
     writeFileSync(inputPath, JSON.stringify({ activities: [{ id: 2, type: "Run" }] }));
@@ -125,7 +125,7 @@ describe("sanitize-fixture CLI — main()", () => {
     expect(errs.join("\n")).toMatch(/refusing to overwrite .+--force/);
     // Output bytes unchanged.
     expect(readFileSync(outputPath).equals(firstBytes)).toBe(true);
-    expect(statSync(outputPath).mtimeNs).toBe(firstMtimeNs);
+    expect(statSync(outputPath, { bigint: true }).mtimeNs).toBe(firstMtimeNs);
   });
 
   it("with --force, overwrites the existing fixture", async () => {

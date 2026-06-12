@@ -159,7 +159,7 @@ describe("createAuthMiddleware — gating", () => {
     if (opts.fromId !== undefined) {
       ctx.from = { id: opts.fromId, first_name: opts.fromFirstName };
     }
-    return ctx as Context & { reply: ReturnType<typeof vi.fn> };
+    return ctx as unknown as Context & { reply: ReturnType<typeof vi.fn> };
   }
 
   it("calls next() for allowed senders (allowlist mode)", async () => {

@@ -79,7 +79,7 @@ describe("notifyUpdate — broadcast filtering (L3)", () => {
     const { notifyUpdate } = await import("../src/channels/telegram.js");
     await notifyUpdate(fakeBot, dataDir, cyclingBinary);
 
-    const calledIds = sendMessage.mock.calls.map((c) => String(c[0])).sort();
+    const calledIds = sendMessage.mock.calls.map((c: unknown[]) => String(c[0])).sort();
     expect(calledIds).toEqual(["11111", "22222"]);
     expect(calledIds).not.toContain("99999");
   });
@@ -120,7 +120,7 @@ describe("notifyUpdate — broadcast filtering (L3)", () => {
     const { notifyUpdate } = await import("../src/channels/telegram.js");
     await notifyUpdate(fakeBot, dataDir, cyclingBinary);
 
-    const calledIds = sendMessage.mock.calls.map((c) => String(c[0])).sort();
+    const calledIds = sendMessage.mock.calls.map((c: unknown[]) => String(c[0])).sort();
     expect(calledIds).toEqual(["11111", "99999"]);
   });
 

@@ -381,9 +381,12 @@ describe("keychainSecretRef", () => {
         "/Users/x/Library/Keychains/login.keychain-db",
       ],
     });
-    expect(ref.args![ref.args!.length - 1]).toBe(
-      "/Users/x/Library/Keychains/login.keychain-db",
-    );
+    expect(ref.source).toBe("exec");
+    if (ref.source === "exec") {
+      expect(ref.args![ref.args!.length - 1]).toBe(
+        "/Users/x/Library/Keychains/login.keychain-db",
+      );
+    }
   });
 });
 

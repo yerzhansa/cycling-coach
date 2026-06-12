@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { safeReadJson } from "../../io/safe-read-json.js";
-import { SchedulerStateSchema } from "../schemas/scheduler.js";
+import { SchedulerStateSchema, type SchedulerState } from "../schemas/scheduler.js";
 import type { RunSyncOpts, SyncResult } from "./run-sync.js";
 import type { Clock } from "../../concurrency/clock.js";
 
@@ -52,7 +52,7 @@ export class Scheduler {
     if (this.stopped) return;
     if (this.timerHandle !== null) return;
 
-    const state = safeReadJson(
+    const state = safeReadJson<SchedulerState>(
       join(this.deps.dataDir, ".scheduler.json"),
       SchedulerStateSchema,
     );

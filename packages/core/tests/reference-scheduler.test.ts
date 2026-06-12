@@ -6,10 +6,9 @@ import { Scheduler } from "../src/reference/sync/scheduler.js";
 import type { SyncResult } from "../src/reference/sync/run-sync.js";
 
 const okResult = (lastSyncAt: string): SyncResult => ({
-  ok: true,
+  kind: "ran",
   lastSyncAt,
   refreshed: ["latest", "history", "intervals", "routes", "ftp_history"],
-  failures: [],
 });
 
 describe("Scheduler", () => {

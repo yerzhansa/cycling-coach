@@ -5,9 +5,10 @@ import {
   _resetWarnCacheForTesting,
   type MemorySectionSpec,
   type Sport,
+  type SportId,
 } from "@enduragent/core";
 
-function makeSport(id: string, sections: readonly MemorySectionSpec[]): Sport {
+function makeSport(id: SportId, sections: readonly MemorySectionSpec[]): Sport {
   return {
     id,
     soul: "",
@@ -134,8 +135,8 @@ describe("getEffectiveSections", () => {
 
     // 1 core-collision warn + 1 self-dup warn = 2 distinct warns.
     expect(warnSpy).toHaveBeenCalledTimes(2);
-    const messages = warnSpy.mock.calls.map((c) => String(c[0]));
-    expect(messages.some((m) => m.includes("Core-shared"))).toBe(true);
-    expect(messages.some((m) => m.includes("more than once"))).toBe(true);
+    const messages = warnSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(messages.some((m: string) => m.includes("Core-shared"))).toBe(true);
+    expect(messages.some((m: string) => m.includes("more than once"))).toBe(true);
   });
 });

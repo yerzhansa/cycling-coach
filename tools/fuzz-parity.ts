@@ -41,6 +41,7 @@ import {
   HARNESS_CONTRACT,
 } from "./harness-contract.js";
 import { decideVerdict } from "./fuzz-parity-verdict";
+import type { MetricInput } from "../packages/core/src/reference/metrics/metric-input.js";
 
 const SECTION_11_REPO = process.env.SECTION_11_REPO ?? resolve(REPO_ROOT, "../section-11");
 const SYNC_PY_PATH = join(SECTION_11_REPO, "examples/sync.py");
@@ -483,7 +484,10 @@ async function main(): Promise<number> {
 
       let tsVal: unknown;
       try {
-        tsVal = METRIC_REGISTRY[m]!.compute({ fixture, frozenNow: args.frozenNow });
+        tsVal = METRIC_REGISTRY[m]!.compute({
+          fixture: fixture as MetricInput["fixture"],
+          frozenNow: args.frozenNow,
+        });
       } catch (e) {
         tsVal = `__ts_threw__:${(e as Error).message}`;
       }

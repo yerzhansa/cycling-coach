@@ -74,8 +74,12 @@ describe("legacy-section migration — binary startup integration (steps 1-3)", 
     const agent = new CoachAgent(cyclingSport, baseAgentConfig(dataDir));
     expect(() => migrateCyclingLegacySections(agent.getMemory())).not.toThrow();
 
-    const events = logSpy.mock.calls.map((args) => JSON.parse(String(args[0])));
-    expect(events.map((e) => e.outcome)).toEqual(["noop", "noop", "noop"]);
+    const events = logSpy.mock.calls.map((args: unknown[]) => JSON.parse(String(args[0])));
+    expect(events.map((e: Record<string, unknown>) => e.outcome)).toEqual([
+      "noop",
+      "noop",
+      "noop",
+    ]);
   });
 
   it("is idempotent — second call after construction leaves file unchanged", () => {

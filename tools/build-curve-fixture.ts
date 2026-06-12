@@ -312,7 +312,7 @@ interface BuiltFixture {
 }
 
 function assertNonVacuous(fixture: BuiltFixture, w: CurveWindows, frozenNow: string): void {
-  const fail = (msg: string): never => {
+  const fail: (msg: string) => never = (msg) => {
     throw new Error(`[build-curve-fixture] non-vacuity guard failed: ${msg}`);
   };
 

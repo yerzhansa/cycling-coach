@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stringify as toYaml } from "yaml";
+import type { SecretResolutionError as SecretResolutionErrorType } from "../src/secrets/types.js";
 
 const MANAGED_ENV = [
   "ANTHROPIC_API_KEY",
@@ -188,8 +189,11 @@ describe("config — SecretRef integration", () => {
     });
     const { loadConfig, resolveConfigSecrets } = await import("../src/config.js");
     const { SecretResolutionError } = await import("../src/secrets/types.js");
-    const err = await resolveConfigSecrets(loadConfig()).catch(
-      (e) => e as SecretResolutionError,
+    const err = await resolveConfigSecrets(loadConfig()).then(
+      () => {
+        throw new Error("expected rejection");
+      },
+      (e) => e as SecretResolutionErrorType,
     );
     expect(err).toBeInstanceOf(SecretResolutionError);
     expect(err.code).toBe("ENOENT");

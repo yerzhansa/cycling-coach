@@ -30,7 +30,7 @@ function input(
   frozenNow = "2026-05-10T12:00:00",
 ): MetricInput {
   return {
-    fixture: { activities, past_events: pastEvents },
+    fixture: { activities, past_events: pastEvents } as unknown as MetricInput["fixture"],
     frozenNow,
   };
 }
@@ -46,7 +46,7 @@ describe("computeConsistencyIndex / computeConsistencyDetails", () => {
           { start_date_local: "2026-05-09T07:00:00", type: "Run" },
           { start_date_local: "2026-05-10T07:00:00", type: "VirtualRide" },
         ],
-      },
+      } as unknown as MetricInput["fixture"],
       frozenNow: "2026-05-10T12:00:00",
     };
 
@@ -71,7 +71,7 @@ describe("computeConsistencyIndex / computeConsistencyDetails", () => {
           { start_date_local: "2026-05-04T07:00:00", type: "Ride" },
           { start_date_local: "2026-05-10T07:00:00", type: "Ride" },
         ],
-      },
+      } as unknown as MetricInput["fixture"],
       frozenNow: "2026-05-10T12:00:00",
     };
     expect(computeConsistencyDetails(env)).toMatchObject({
@@ -242,7 +242,7 @@ function benchmarkInput(
     fixture: {
       current_ftp_indoor: overrides.currentFtpIndoor ?? null,
       ftp_history_indoor: overrides.ftpHistoryIndoor ?? {},
-    },
+    } as unknown as MetricInput["fixture"],
     frozenNow: overrides.frozenNow ?? "2026-05-10T12:00:00",
   };
 }
@@ -400,7 +400,7 @@ describe("computeBenchmarkIndoor", () => {
     // collapse to null. Seasonal context never affects this branch — it's
     // gated upstream by the null benchmark_index.
     const env: MetricInput = {
-      fixture: {},
+      fixture: {} as MetricInput["fixture"],
       frozenNow: "2026-05-10T12:00:00",
     };
     expect(computeBenchmarkIndoor(env)).toEqual({
@@ -472,7 +472,7 @@ function benchmarkOutdoorInput(
     fixture: {
       current_ftp_outdoor: overrides.currentFtpOutdoor ?? null,
       ftp_history_outdoor: overrides.ftpHistoryOutdoor ?? {},
-    },
+    } as unknown as MetricInput["fixture"],
     frozenNow: overrides.frozenNow ?? "2026-05-10T12:00:00",
   };
 }
@@ -484,7 +484,7 @@ describe("computeBenchmarkOutdoor", () => {
     // and outdoor, so the emission dict collapses to all-null on the
     // outdoor branch too.
     const env: MetricInput = {
-      fixture: {},
+      fixture: {} as MetricInput["fixture"],
       frozenNow: "2026-05-10T12:00:00",
     };
     expect(computeBenchmarkOutdoor(env)).toEqual({
@@ -521,7 +521,7 @@ describe("computeBenchmarkOutdoor", () => {
       fixture: {
         current_ftp_indoor: 300,
         ftp_history_indoor: { "2026-03-15": 270 },
-      },
+      } as unknown as MetricInput["fixture"],
       frozenNow: "2026-05-10T12:00:00",
     };
     expect(computeBenchmarkOutdoor(env)).toEqual({

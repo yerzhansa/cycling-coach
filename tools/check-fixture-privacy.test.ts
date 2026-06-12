@@ -141,7 +141,7 @@ describe("default scan paths — GitHub-visible surfaces", () => {
     }
     process.chdir(tempDir);
     expect(main([])).toBe(1);
-    const output = errSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+    const output = errSpy.mock.calls.map((call: unknown[]) => call.join(" ")).join("\n");
     for (const rel of coveredPaths) {
       expect(output).toContain(rel);
     }
@@ -151,7 +151,7 @@ describe("default scan paths — GitHub-visible surfaces", () => {
     write(".changeset/leak.md", `id i987654321 in a changeset\n`);
     process.chdir(tempDir);
     expect(main([])).toBe(1);
-    const output = errSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+    const output = errSpy.mock.calls.map((call: unknown[]) => call.join(" ")).join("\n");
     expect(output).toContain(join(".changeset", "leak.md"));
   });
 

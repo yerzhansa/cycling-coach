@@ -25,11 +25,11 @@ describe("migrateCyclingLegacySections", () => {
   });
 
   function logEvents(): Array<Record<string, unknown>> {
-    return logSpy.mock.calls.map((args) => JSON.parse(String(args[0])));
+    return logSpy.mock.calls.map((args: unknown[]) => JSON.parse(String(args[0])));
   }
 
   function warnEvents(): Array<Record<string, unknown>> {
-    return warnSpy.mock.calls.map((args) => JSON.parse(String(args[0])));
+    return warnSpy.mock.calls.map((args: unknown[]) => JSON.parse(String(args[0])));
   }
 
   // ── per-rename behavior ──────────────────────────────────────────────
@@ -187,6 +187,7 @@ describe("migrateCyclingLegacySections", () => {
       reload: () => {},
       getContext: () => "",
       renameSection: () => "noop",
+      readSection: () => null,
       renameSections: (renames) => {
         captured.push(renames);
         throw new Error("disk full");

@@ -5,6 +5,15 @@ import {
 } from "../../src/secrets/resolve.js";
 import { SecretResolutionError } from "../../src/secrets/types.js";
 
+function expectRejection(p: Promise<unknown>): Promise<SecretResolutionError> {
+  return p.then(
+    () => {
+      throw new Error("expected SecretResolutionError rejection");
+    },
+    (e) => e as SecretResolutionError,
+  );
+}
+
 describe("resolveSecretRef", () => {
   it("resolves printf 'hello' to 'hello'", async () => {
     const result = await resolveSecretRef({
@@ -34,31 +43,37 @@ describe("resolveSecretRef", () => {
   });
 
   it("throws EMPTY for empty stdout", async () => {
-    const err = await resolveSecretRef({
-      source: "exec",
-      command: "printf",
-      args: [""],
-    }).catch((e) => e as SecretResolutionError);
+    const err = await expectRejection(
+      resolveSecretRef({
+        source: "exec",
+        command: "printf",
+        args: [""],
+      }),
+    );
     expect(err).toBeInstanceOf(SecretResolutionError);
     expect(err.code).toBe("EMPTY");
   });
 
   it("throws EMPTY for newline-only stdout", async () => {
-    const err = await resolveSecretRef({
-      source: "exec",
-      command: "printf",
-      args: ["\n"],
-    }).catch((e) => e as SecretResolutionError);
+    const err = await expectRejection(
+      resolveSecretRef({
+        source: "exec",
+        command: "printf",
+        args: ["\n"],
+      }),
+    );
     expect(err).toBeInstanceOf(SecretResolutionError);
     expect(err.code).toBe("EMPTY");
   });
 
   it("throws EXIT_NONZERO with stderr tail in message", async () => {
-    const err = await resolveSecretRef({
-      source: "exec",
-      command: "sh",
-      args: ["-c", "echo boom >&2; exit 2"],
-    }).catch((e) => e as SecretResolutionError);
+    const err = await expectRejection(
+      resolveSecretRef({
+        source: "exec",
+        command: "sh",
+        args: ["-c", "echo boom >&2; exit 2"],
+      }),
+    );
     expect(err).toBeInstanceOf(SecretResolutionError);
     expect(err.code).toBe("EXIT_NONZERO");
     expect(err.message).toContain("boom");
@@ -66,29 +81,35 @@ describe("resolveSecretRef", () => {
   });
 
   it("throws ENOENT for missing binary", async () => {
-    const err = await resolveSecretRef({
-      source: "exec",
-      command: "definitely-not-a-real-binary-xyz",
-    }).catch((e) => e as SecretResolutionError);
+    const err = await expectRejection(
+      resolveSecretRef({
+        source: "exec",
+        command: "definitely-not-a-real-binary-xyz",
+      }),
+    );
     expect(err).toBeInstanceOf(SecretResolutionError);
     expect(err.code).toBe("ENOENT");
     expect(err.message).toContain("$PATH");
   });
 
   it("throws TIMEOUT with 200ms override + sleep 60", async () => {
-    const err = await _resolveSecretRefWithOverrides(
-      { source: "exec", command: "sleep", args: ["60"] },
-      { timeoutMs: 200 },
-    ).catch((e) => e as SecretResolutionError);
+    const err = await expectRejection(
+      _resolveSecretRefWithOverrides(
+        { source: "exec", command: "sleep", args: ["60"] },
+        { timeoutMs: 200 },
+      ),
+    );
     expect(err).toBeInstanceOf(SecretResolutionError);
     expect(err.code).toBe("TIMEOUT");
   });
 
   it("throws OVERFLOW with low maxBytes + yes", async () => {
-    const err = await _resolveSecretRefWithOverrides(
-      { source: "exec", command: "yes" },
-      { maxBytes: 100, timeoutMs: 2000 },
-    ).catch((e) => e as SecretResolutionError);
+    const err = await expectRejection(
+      _resolveSecretRefWithOverrides(
+        { source: "exec", command: "yes" },
+        { maxBytes: 100, timeoutMs: 2000 },
+      ),
+    );
     expect(err).toBeInstanceOf(SecretResolutionError);
     expect(err.code).toBe("OVERFLOW");
   });
@@ -124,9 +145,7 @@ describe("resolveSecretRef — env source", () => {
 
   it("throws ENOENT when var is unset", async () => {
     delete process.env[ENV_VAR];
-    const err = await resolveSecretRef({ source: "env", var: ENV_VAR }).catch(
-      (e) => e as SecretResolutionError,
-    );
+    const err = await expectRejection(resolveSecretRef({ source: "env", var: ENV_VAR }));
     expect(err).toBeInstanceOf(SecretResolutionError);
     expect(err.code).toBe("ENOENT");
     expect(err.message).toContain(ENV_VAR);
@@ -134,9 +153,7 @@ describe("resolveSecretRef — env source", () => {
 
   it("throws EMPTY when var is set to ''", async () => {
     process.env[ENV_VAR] = "";
-    const err = await resolveSecretRef({ source: "env", var: ENV_VAR }).catch(
-      (e) => e as SecretResolutionError,
-    );
+    const err = await expectRejection(resolveSecretRef({ source: "env", var: ENV_VAR }));
     expect(err).toBeInstanceOf(SecretResolutionError);
     expect(err.code).toBe("EMPTY");
     expect(err.message).toContain(ENV_VAR);

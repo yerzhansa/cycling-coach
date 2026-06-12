@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { computeSeasonalContext } from "./seasonal-context.js";
+import type { MetricInput } from "./metric-input.js";
 
-function inputFor(frozenNow: string) {
-  return { fixture: {}, frozenNow };
+function inputFor(frozenNow: string): MetricInput {
+  return { fixture: {} as MetricInput["fixture"], frozenNow };
 }
 
 describe("computeSeasonalContext", () => {
