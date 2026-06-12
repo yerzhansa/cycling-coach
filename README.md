@@ -175,6 +175,8 @@ File-based at `~/.cycling-coach/`:
 
 The agent reads memory at the start of each conversation and writes to it when significant decisions are made (new goal, plan change, injury).
 
+Conversation transcripts live at `~/.cycling-coach/sessions/<chatId>.jsonl`. A session reset renames the transcript to a timestamped archive (`<chatId>.jsonl.reset.<timestamp>`) rather than deleting it, and archives are kept indefinitely by default. To opt into age-based cleanup, set `session.resetArchiveRetentionDays` in `config.yaml` (or the `SESSION_RESET_ARCHIVE_RETENTION_DAYS` env var) to the number of days to keep archives; `0` — the default — keeps them forever. Archive files are owner-readable only (mode `0600`).
+
 ## Alternative config: YAML
 
 Instead of env vars, you can create `~/.cycling-coach/config.yaml`:

@@ -16,6 +16,7 @@ export function baseAgentConfig(dataDir: string) {
       historyTokenBudgetRatio: 0.3,
       idleMinutes: 0,
       dailyResetHour: 4,
+      resetArchiveRetentionDays: 0,
       timezone: "",
     },
     contextWindowTokens: 272_000,

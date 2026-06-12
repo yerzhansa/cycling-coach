@@ -27,6 +27,8 @@ export interface Config {
     historyTokenBudgetRatio: number;
     idleMinutes: number;
     dailyResetHour: number;
+    /** Days to keep session reset archives; 0 = keep forever (pruning disabled). */
+    resetArchiveRetentionDays: number;
     /** Athlete IANA timezone (e.g. "Europe/Berlin"). Empty = resolver picks host TZ. */
     timezone: string;
   };
@@ -220,6 +222,10 @@ export function loadConfig(): Config {
         envInt("SESSION_IDLE_MINUTES") ?? (sessionYaml.idleMinutes as number) ?? 0,
       dailyResetHour:
         envInt("SESSION_DAILY_RESET_HOUR") ?? (sessionYaml.dailyResetHour as number) ?? 4,
+      resetArchiveRetentionDays:
+        envInt("SESSION_RESET_ARCHIVE_RETENTION_DAYS") ??
+        (sessionYaml.resetArchiveRetentionDays as number) ??
+        0,
       timezone:
         env("COACH_TZ") ?? (sessionYaml.timezone as string | undefined) ?? "",
     },

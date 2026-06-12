@@ -60,7 +60,7 @@ export class CoachAgent {
     this.llm = new LLM(config);
     this.tz = resolveUserTimezone(config.session.timezone);
     this.memory = new Memory(config.dataDir, this.tz);
-    this.chatStore = new ChatStore(config.dataDir);
+    this.chatStore = new ChatStore(config.dataDir, config.session.resetArchiveRetentionDays);
 
     const intervals = config.intervals.apiKey
       ? makeChatClient({

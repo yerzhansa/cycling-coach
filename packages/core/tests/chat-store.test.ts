@@ -29,6 +29,14 @@ function listArchives(chatId: string): string[] {
     .sort();
 }
 
+const MS_PER_DAY = 86_400_000;
+
+function plantArchive(chatId: string, date: Date): string {
+  const name = `${chatId}.jsonl.reset.${date.toISOString().replace(/:/g, "-")}`;
+  writeFileSync(join(sessionsDir, name), "{}\n", "utf-8");
+  return name;
+}
+
 describe("ChatStore — on-disk permissions", () => {
   it("creates the sessions directory with owner-only 0o700", () => {
     new ChatStore(dataDir);
@@ -63,11 +71,8 @@ describe("ChatStore.archiveAndReset — archive retention", () => {
     expect(listArchives("123")).toHaveLength(1);
   });
 
-  it("keeps at most 20 archives per chat, deleting the oldest first", () => {
+  it("keeps every archive by default — count-based pruning is gone", () => {
     const store = new ChatStore(dataDir);
-    // archiveAndReset timestamps have millisecond resolution, so rapid
-    // looped resets would collide on one archive name; plant distinct
-    // pre-existing archives directly instead.
     const planted = Array.from({ length: 25 }, (_, i) => {
       const name = `123.jsonl.reset.2026-06-01T00-00-${String(i).padStart(2, "0")}.000Z`;
       writeFileSync(join(sessionsDir, name), "{}\n", "utf-8");
@@ -78,29 +83,10 @@ describe("ChatStore.archiveAndReset — archive retention", () => {
     store.archiveAndReset("123");
 
     const archives = listArchives("123");
-    expect(archives).toHaveLength(20);
-    // The 6 oldest planted archives are gone (25 planted + 1 new = 26 → 20).
-    for (const stale of planted.slice(0, 6)) {
-      expect(archives).not.toContain(stale);
-    }
-    // The newest planted archives and the fresh one survive.
-    for (const kept of planted.slice(6)) {
+    expect(archives).toHaveLength(26);
+    for (const kept of planted) {
       expect(archives).toContain(kept);
     }
-  });
-
-  it("prunes only the resetting chat's archives, not other chats'", () => {
-    const store = new ChatStore(dataDir);
-    for (let i = 0; i < 25; i++) {
-      const suffix = `2026-06-01T00-00-${String(i).padStart(2, "0")}.000Z`;
-      writeFileSync(join(sessionsDir, `456.jsonl.reset.${suffix}`), "{}\n", "utf-8");
-    }
-
-    store.appendMessage("123", "user", "hello");
-    store.archiveAndReset("123");
-
-    expect(listArchives("456")).toHaveLength(25);
-    expect(listArchives("123")).toHaveLength(1);
   });
 
   it("is a no-op when no live session exists", () => {
@@ -110,5 +96,52 @@ describe("ChatStore.archiveAndReset — archive retention", () => {
 
     expect(existsSync(join(sessionsDir, "123.jsonl"))).toBe(false);
     expect(listArchives("123")).toHaveLength(0);
+  });
+});
+
+describe("ChatStore.archiveAndReset — opt-in age-based retention", () => {
+  it("deletes archives older than the horizon and keeps newer ones", () => {
+    const store = new ChatStore(dataDir, 365);
+    const old = plantArchive("123", new Date(Date.now() - 366 * MS_PER_DAY));
+    const recent = plantArchive("123", new Date(Date.now() - 1 * MS_PER_DAY));
+
+    store.appendMessage("123", "user", "hello");
+    store.archiveAndReset("123");
+
+    const archives = listArchives("123");
+    expect(archives).not.toContain(old);
+    expect(archives).toContain(recent);
+    expect(archives).toHaveLength(2);
+  });
+
+  it("never deletes an archive whose timestamp suffix cannot be parsed", () => {
+    const store = new ChatStore(dataDir, 1);
+    const odd = "123.jsonl.reset.not-a-timestamp";
+    writeFileSync(join(sessionsDir, odd), "{}\n", "utf-8");
+
+    store.appendMessage("123", "user", "hello");
+    store.archiveAndReset("123");
+
+    expect(listArchives("123")).toContain(odd);
+  });
+
+  it("prunes only the resetting chat's archives", () => {
+    const store = new ChatStore(dataDir, 1);
+    const otherOld = plantArchive("456", new Date(Date.now() - 400 * MS_PER_DAY));
+
+    store.appendMessage("123", "user", "hello");
+    store.archiveAndReset("123");
+
+    expect(listArchives("456")).toContain(otherOld);
+  });
+
+  it("does not prune even ancient archives when retention is disabled", () => {
+    const store = new ChatStore(dataDir);
+    const ancient = plantArchive("123", new Date(Date.now() - 4000 * MS_PER_DAY));
+
+    store.appendMessage("123", "user", "hello");
+    store.archiveAndReset("123");
+
+    expect(listArchives("123")).toContain(ancient);
   });
 });

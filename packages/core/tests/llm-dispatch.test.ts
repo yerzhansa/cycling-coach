@@ -7,7 +7,7 @@ function codexConfig(): Config {
     llm: { provider: "openai-codex", model: "gpt-5.4", apiKey: "", authProfile: "openai-codex" },
     intervals: { apiKey: "", athleteId: "0" },
     telegram: { botToken: "" },
-    session: { historyTokenBudgetRatio: 0.3, idleMinutes: 0, dailyResetHour: 4, timezone: "" },
+    session: { historyTokenBudgetRatio: 0.3, idleMinutes: 0, dailyResetHour: 4, resetArchiveRetentionDays: 0, timezone: "" },
     contextWindowTokens: 272_000,
     dataDir: "/tmp/cc-dispatch-test",
   };

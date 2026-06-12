@@ -12,7 +12,14 @@ import { join } from "node:path";
 import type { ModelMessage } from "ai";
 import { messageText } from "./token-utils.js";
 
-const MAX_RESET_ARCHIVES = 20;
+const MS_PER_DAY = 86_400_000;
+
+function parseArchiveTimestampMs(suffix: string): number | null {
+  // archiveAndReset writes toISOString() with ":" replaced by "-"; reverse
+  // only the time-part dashes before parsing.
+  const ms = Date.parse(suffix.replace(/T(\d{2})-(\d{2})-(\d{2})/, "T$1:$2:$3"));
+  return Number.isNaN(ms) ? null : ms;
+}
 
 interface JsonlLine {
   role: "user" | "assistant" | "system";
@@ -22,9 +29,11 @@ interface JsonlLine {
 
 export class ChatStore {
   private sessionsDir: string;
+  private resetArchiveRetentionDays: number;
 
-  constructor(dataDir: string) {
+  constructor(dataDir: string, resetArchiveRetentionDays = 0) {
     this.sessionsDir = join(dataDir, "sessions");
+    this.resetArchiveRetentionDays = resetArchiveRetentionDays;
     mkdirSync(this.sessionsDir, { recursive: true, mode: 0o700 });
   }
 
@@ -94,14 +103,17 @@ export class ChatStore {
   }
 
   private pruneArchives(chatId: string): void {
+    if (this.resetArchiveRetentionDays <= 0) return;
     const prefix = `${chatId}.jsonl.reset.`;
-    // Archive names embed a fixed-width ISO timestamp, so a lexicographic
-    // sort is chronological — the oldest archives sort first.
-    const archives = readdirSync(this.sessionsDir)
-      .filter((f) => f.startsWith(prefix))
-      .sort();
-    for (const stale of archives.slice(0, Math.max(0, archives.length - MAX_RESET_ARCHIVES))) {
-      unlinkSync(join(this.sessionsDir, stale));
+    const cutoffMs = Date.now() - this.resetArchiveRetentionDays * MS_PER_DAY;
+    for (const name of readdirSync(this.sessionsDir)) {
+      if (!name.startsWith(prefix)) continue;
+      const archivedAtMs = parseArchiveTimestampMs(name.slice(prefix.length));
+      // Unparseable timestamps are kept: never delete an archive that
+      // cannot be dated.
+      if (archivedAtMs !== null && archivedAtMs < cutoffMs) {
+        unlinkSync(join(this.sessionsDir, name));
+      }
     }
   }
 }
