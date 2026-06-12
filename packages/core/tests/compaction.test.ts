@@ -23,11 +23,13 @@ const REPRESENTATIVE_CONVERSATION: ModelMessage[] = [
   { role: "assistant", content: "Health note: prior knee issue, watch high-volume blocks." },
 ];
 
-const VALID_FOUR_SECTION_SUMMARY = [
+const VALID_FIVE_SECTION_SUMMARY = [
   "## Athlete Profile",
   "- FTP 247W, 72kg, training Mon/Wed/Fri",
   "## Training Status",
   "- Build phase, target FTP 280W",
+  "## Coach Stance",
+  "- Hold volume this week (prior knee issue); athlete has not pushed back",
   "## Discussion Context",
   "- Goal-setting and equipment review",
   "## Pending Questions",
@@ -51,7 +53,7 @@ const EMPTY_SNAPSHOT: MemorySnapshot = {
 
 describe("compaction (sport-parameterized)", () => {
   it("summarizeDroppedMessages prompt carries MUST-PRESERVE + sport tokens + transcript data", async () => {
-    const spy = createFakeLLM([VALID_FOUR_SECTION_SUMMARY], { repeatLast: true });
+    const spy = createFakeLLM([VALID_FIVE_SECTION_SUMMARY], { repeatLast: true });
 
     await summarizeDroppedMessages({
       dropped: REPRESENTATIVE_CONVERSATION,
@@ -75,10 +77,16 @@ describe("compaction (sport-parameterized)", () => {
     // Transcript data is included verbatim.
     expect(prompt).toContain("247W");
     expect(prompt).toContain("72kg");
+
+    expect(prompt).toContain("## Coach Stance");
+    expect(prompt).toContain("stance per axis");
+    expect(prompt).toContain("currently disputing");
+    expect(prompt).toContain("illness or symptoms");
+    expect(prompt).toContain("agreed but not yet executed");
   });
 
   it("summarizeDroppedMessages with function-form tokens calls the function with the snapshot", async () => {
-    const spy = createFakeLLM([VALID_FOUR_SECTION_SUMMARY], { repeatLast: true });
+    const spy = createFakeLLM([VALID_FIVE_SECTION_SUMMARY], { repeatLast: true });
     const calls: MemorySnapshot[] = [];
 
     await summarizeDroppedMessages({
@@ -98,7 +106,7 @@ describe("compaction (sport-parameterized)", () => {
   });
 
   it("summarizeInStages prompt also carries the MUST-PRESERVE instruction and tokens", async () => {
-    const spy = createFakeLLM([VALID_FOUR_SECTION_SUMMARY], { repeatLast: true });
+    const spy = createFakeLLM([VALID_FIVE_SECTION_SUMMARY], { repeatLast: true });
 
     await summarizeInStages({
       messages: REPRESENTATIVE_CONVERSATION,
@@ -111,10 +119,16 @@ describe("compaction (sport-parameterized)", () => {
     expect(spy.capturedPrompts.length).toBeGreaterThan(0);
     expect(spy.capturedPrompts[0]).toContain("MUST PRESERVE");
     expect(spy.capturedPrompts[0]).toContain("FTP");
+
+    expect(spy.capturedPrompts[0]).toContain("## Coach Stance");
+    expect(spy.capturedPrompts[0]).toContain("stance per axis");
+    expect(spy.capturedPrompts[0]).toContain("currently disputing");
+    expect(spy.capturedPrompts[0]).toContain("illness or symptoms");
+    expect(spy.capturedPrompts[0]).toContain("agreed but not yet executed");
   });
 
-  it("auditSummaryQuality accepts a summary with all four required sections", () => {
-    const audit = auditSummaryQuality(VALID_FOUR_SECTION_SUMMARY);
+  it("auditSummaryQuality accepts a summary with all five required sections", () => {
+    const audit = auditSummaryQuality(VALID_FIVE_SECTION_SUMMARY);
     expect(audit.ok).toBe(true);
     expect(audit.missing).toEqual([]);
   });
@@ -124,6 +138,23 @@ describe("compaction (sport-parameterized)", () => {
     const audit = auditSummaryQuality(partial);
     expect(audit.ok).toBe(false);
     expect(audit.missing).toContain("## Training Status");
+    expect(audit.missing).toContain("## Coach Stance");
     expect(audit.missing).toContain("## Pending Questions");
+  });
+
+  it("auditSummaryQuality flags a summary missing only ## Coach Stance", () => {
+    const fourSection = [
+      "## Athlete Profile",
+      "- FTP 247W",
+      "## Training Status",
+      "- Build phase",
+      "## Discussion Context",
+      "- Goal review",
+      "## Pending Questions",
+      "- None",
+    ].join("\n");
+    const audit = auditSummaryQuality(fourSection);
+    expect(audit.ok).toBe(false);
+    expect(audit.missing).toEqual(["## Coach Stance"]);
   });
 });

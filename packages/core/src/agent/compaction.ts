@@ -25,6 +25,7 @@ const MIN_CHUNK_RATIO = 0.15;
 const REQUIRED_SUMMARY_SECTIONS = [
   "## Athlete Profile",
   "## Training Status",
+  "## Coach Stance",
   "## Discussion Context",
   "## Pending Questions",
 ] as const;
@@ -55,6 +56,10 @@ function buildMustPreserveBlock(tokens: readonly string[]): string {
 - Current training plan status and phase
 - Recent workout feedback and performance trends
 - Decisions made about training approach
+- The coach's most recent stance per axis ({volume, intensity} in increase/hold/reduce/none plus rest/refer_out flags) and the receipt it was grounded in
+- Any coach recommendation the athlete is currently disputing
+- Any illness or symptoms mentioned
+- Actions agreed but not yet executed
 - Any injuries, constraints, or preferences mentioned
 - The last thing the athlete asked and what was being discussed
 
@@ -72,6 +77,7 @@ Use bullet points, not paragraphs. Omit generic advice that can be re-derived.
 Use these exact section headings:
 ## Athlete Profile
 ## Training Status
+## Coach Stance
 ## Discussion Context
 ## Pending Questions
 
@@ -87,6 +93,7 @@ Use bullet points, not paragraphs. Omit generic advice that can be re-derived.
 Use these exact section headings:
 ## Athlete Profile
 ## Training Status
+## Coach Stance
 ## Discussion Context
 ## Pending Questions
 

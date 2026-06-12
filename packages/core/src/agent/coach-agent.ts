@@ -117,7 +117,11 @@ export class CoachAgent {
       if (!fresh) {
         // Flush memory before reset, then archive
         if (history.length > 0) {
-          await this.flushMemory(history);
+          try {
+            await this.flushMemory(history);
+          } catch (err) {
+            console.warn("Pre-reset memory flush failed; archiving session anyway", err);
+          }
         }
         this.chatStore.archiveAndReset(chatId);
         history = [];
@@ -245,7 +249,11 @@ export class CoachAgent {
     // Flush before reset to avoid losing un-persisted context
     const { messages: history } = this.chatStore.load(chatId);
     if (history.length > 0) {
-      await this.flushMemory(history);
+      try {
+        await this.flushMemory(history);
+      } catch (err) {
+        console.warn("Pre-reset memory flush failed; archiving session anyway", err);
+      }
     }
     this.chatStore.archiveAndReset(chatId);
   }
