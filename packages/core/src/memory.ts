@@ -7,6 +7,8 @@
  * (e.g. "FTP 247W") from current memory state.
  */
 
+import type { LedgerEventInput } from "./memory/event-ledger.js";
+
 /** Who performed a destructive memory write — recorded on every journal line. */
 export type MemoryWriteSource =
   | "chat-tool"
@@ -54,6 +56,12 @@ export interface MemoryStore {
 
   /** Appends a note to today's daily-notes file. */
   appendDailyNote(note: string, date?: string): void;
+
+  /**
+   * Appends one event to the append-only event ledger
+   * (`memory/events.jsonl`). Entries are never rewritten or pruned.
+   */
+  appendEvent(event: LedgerEventInput): void;
 
   /** Persists the active training plan as JSON. */
   savePlan(plan: unknown, source?: MemoryWriteSource): void;

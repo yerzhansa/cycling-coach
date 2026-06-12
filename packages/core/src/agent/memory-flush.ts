@@ -5,6 +5,8 @@ import type { MemorySectionSpec } from "../sport.js";
 import type { MemoryStore } from "../memory.js";
 import { createMemoryReadTool } from "./tools.js";
 import type { LLM } from "../llm.js";
+import { LEDGER_EVENT_KINDS, LEDGER_DATE_PATTERN, type LedgerEventKind } from "../memory/event-ledger.js";
+import { todayInTZ } from "./user-time.js";
 
 // ============================================================================
 // CONSTANTS
@@ -19,9 +21,11 @@ export const SOFT_THRESHOLD_RATIO = 0.8;
 const MEMORY_FLUSH_SYSTEM_PROMPT = `You are reviewing a conversation to extract and save important athlete
 information before it is summarized. Use the memory_write tool to save
 details into the appropriate section. Each section is fully replaced on
-write, so include ALL current facts for that section, not just new ones.`;
+write, so include ALL current facts for that section, not just new ones.
+Use the ledger_append tool to record dated events (decisions, overrides,
+illness, experiment outcomes); ledger entries are appended, never replaced.`;
 
-function buildFlushUserPrompt(sections: readonly MemorySectionSpec[]): string {
+function buildFlushUserPrompt(sections: readonly MemorySectionSpec[], today: string): string {
   const sectionList = sections.map((s) => `- "${s.name}": ${s.description}`).join("\n");
   // The transitional migration clause helps the LLM redistribute legacy
   // content (chronic facts in cycling-history, body data in cycling-profile)
@@ -45,6 +49,17 @@ age, or available training days, move them to \`person\`. If \`cycling-history\`
 contains chronic conditions or long-term medications (hypertension, lisinopril,
 diabetes), move them to \`medical-history\`.
 
+Today is ${today}.
+
+Also record dated events in the permanent event ledger using ledger_append:
+- decisions made with the athlete, with the rationale
+- times the athlete overrode, declined, or changed a recommendation
+- illness, injury, or pain mentions (acute ones count — they need no memory section)
+- experiment outcomes (what was tried, what happened)
+Date each event (YYYY-MM-DD) with the day it happened, which may be earlier
+than today. Record only events from this conversation; never re-record
+events that earlier reviews already saved.
+
 Only write sections that have new or changed information.`;
 }
 
@@ -65,6 +80,30 @@ function createFlushMemoryWriteTool(memory: MemoryStore, sections: readonly Memo
     execute: async (input: { section: string; content: string }) => {
       memory.writeSection(input.section, input.content, "flush");
       return { saved: true };
+    },
+  });
+}
+
+function createLedgerAppendTool(memory: MemoryStore) {
+  return tool({
+    description:
+      "Record a dated athlete event (decision, override, illness, experiment, outcome) in the permanent event ledger. Entries are appended, never replaced.",
+    inputSchema: zodSchema(
+      z.object({
+        date: z
+          .string()
+          .regex(LEDGER_DATE_PATTERN)
+          .describe("Date the event happened (YYYY-MM-DD, athlete-local)"),
+        kind: z.enum(LEDGER_EVENT_KINDS).describe("Event category"),
+        text: z
+          .string()
+          .min(1)
+          .describe("What happened, in one or two sentences, including rationale or outcome when stated"),
+      }),
+    ),
+    execute: async (input: { date: string; kind: LedgerEventKind; text: string }) => {
+      memory.appendEvent({ ...input, source: "flush" });
+      return { recorded: true };
     },
   });
 }
@@ -117,6 +156,7 @@ export async function runMemoryFlush(params: {
   messages: ModelMessage[];
   memory: MemoryStore;
   memorySections: readonly MemorySectionSpec[];
+  tz?: string;
 }): Promise<void> {
   if (params.memorySections.length === 0) {
     throw new Error(
@@ -127,13 +167,17 @@ export async function runMemoryFlush(params: {
   const flushTools = {
     memory_write: createFlushMemoryWriteTool(params.memory, params.memorySections),
     memory_read: createMemoryReadTool(params.memory),
+    ledger_append: createLedgerAppendTool(params.memory),
   };
 
   await params.llm.generate({
     system: MEMORY_FLUSH_SYSTEM_PROMPT,
     messages: [
       ...params.messages,
-      { role: "user" as const, content: buildFlushUserPrompt(params.memorySections) },
+      {
+        role: "user" as const,
+        content: buildFlushUserPrompt(params.memorySections, todayInTZ(params.tz ?? "UTC")),
+      },
     ],
     tools: flushTools,
     stopWhen: stepCountIs(5),

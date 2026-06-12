@@ -89,6 +89,7 @@ export class CoachAgent {
       messages,
       memory: this.memory,
       memorySections: getEffectiveSections(this.sport),
+      tz: this.tz,
     });
   }
 

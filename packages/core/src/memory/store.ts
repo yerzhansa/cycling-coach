@@ -4,6 +4,7 @@ import type { MemoryStore, MemoryWriteSource } from "../memory.js";
 import { todayInTZ } from "../agent/user-time.js";
 import { atomicWriteFileSync } from "../io/atomic-write-file-sync.js";
 import { appendJournalEntry } from "./journal.js";
+import { appendLedgerEvent, type LedgerEventInput } from "./event-ledger.js";
 
 // ============================================================================
 // MEMORY SYSTEM
@@ -190,6 +191,10 @@ export class Memory implements MemoryStore {
     const existing = this.readDailyNotes(d);
     const updated = existing ? `${existing}\n${note}` : note;
     atomicWriteFileSync(path, updated);
+  }
+
+  appendEvent(event: LedgerEventInput): void {
+    appendLedgerEvent(this.memoryDir, event);
   }
 
   // ── Plans ──────────────────────────────────────────────────────────────

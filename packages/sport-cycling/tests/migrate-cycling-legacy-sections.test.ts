@@ -182,6 +182,7 @@ describe("migrateCyclingLegacySections", () => {
       writeSection: () => {},
       readDailyNotes: () => "",
       appendDailyNote: () => {},
+      appendEvent: () => {},
       savePlan: () => {},
       loadPlan: () => null,
       reload: () => {},
