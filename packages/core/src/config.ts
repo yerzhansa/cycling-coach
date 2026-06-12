@@ -60,6 +60,7 @@ const CONTEXT_WINDOWS: Record<string, number> = {
   "claude-haiku-4-5-20251001": 200_000,
   "gpt-4o": 128_000,
   "gemini-2.0-flash": 1_000_000,
+  "gemini-2.5-flash": 1_000_000,
   "gpt-5.4": 272_000,
   "gpt-5.4-mini": 272_000,
   "gpt-5.4-pro": 272_000,
@@ -183,7 +184,7 @@ export function loadConfig(): Config {
   const defaultModelMap: Record<string, string> = {
     anthropic: "claude-sonnet-4-6",
     openai: "gpt-4o",
-    google: "gemini-2.0-flash",
+    google: "gemini-2.5-flash",
     "openai-codex": "gpt-5.4",
   };
 
