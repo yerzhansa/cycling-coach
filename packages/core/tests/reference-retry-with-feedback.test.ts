@@ -1,8 +1,7 @@
 import { describe, it, expect } from "vitest";
-import type { ModelMessage } from "ai";
 import { validateAndRetry } from "../src/reference/validation/retry-with-feedback.js";
 import type { LatestJson } from "../src/reference/schemas/latest.js";
-import type { LLM } from "../src/llm.js";
+import { createFakeLLM } from "./helpers/fake-llm.js";
 
 function makeSnapshot(currentStatus: unknown): LatestJson {
   return {
@@ -36,36 +35,11 @@ function withMeta(prose: string, value: unknown): string {
   return `${prose}\n---meta---\n${JSON.stringify(makeMetadata(value))}`;
 }
 
-interface SpyLLM {
-  generate: LLM["generate"];
-  capturedPrompts: string[];
-}
-
-/** Queue-backed LLM stub mirroring tests/compaction.test.ts:18-36. */
-function createQueueLLM(queue: string[]): SpyLLM {
-  const capturedPrompts: string[] = [];
-  let i = 0;
-  const spy = {
-    capturedPrompts,
-    async generate(opts: { prompt?: string; messages?: ModelMessage[] }) {
-      if (opts.prompt !== undefined) capturedPrompts.push(opts.prompt);
-      const text = queue[i++] ?? "";
-      return {
-        text,
-        toolCalls: [],
-        finishReason: "stop" as const,
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      };
-    },
-  };
-  return spy as unknown as SpyLLM;
-}
-
 const SNAPSHOT = makeSnapshot({ acwr: { value: 1.42 } });
 
 describe("validateAndRetry — enforce mode", () => {
   it("does not call the LLM when the first attempt validates", async () => {
-    const llm = createQueueLLM([]);
+    const llm = createFakeLLM([]);
     const result = await validateAndRetry(
       llm,
       "how am I doing?",
@@ -81,7 +55,7 @@ describe("validateAndRetry — enforce mode", () => {
 
   it("retries exactly once with feedback and succeeds on the corrected reply", async () => {
     const corrected = withMeta("corrected coaching", 1.42);
-    const llm = createQueueLLM([corrected]);
+    const llm = createFakeLLM([corrected]);
     const result = await validateAndRetry(
       llm,
       "how am I doing?",
@@ -102,7 +76,7 @@ describe("validateAndRetry — enforce mode", () => {
 
   it("returns the second response with validation_warning on a double failure", async () => {
     const stillWrong = withMeta("still wrong", 1.99);
-    const llm = createQueueLLM([stillWrong]);
+    const llm = createFakeLLM([stillWrong]);
     const result = await validateAndRetry(
       llm,
       "how am I doing?",
@@ -117,7 +91,7 @@ describe("validateAndRetry — enforce mode", () => {
 
   it("never makes a third call even when the retry is also wrong", async () => {
     const stillWrong = withMeta("still wrong", 1.99);
-    const llm = createQueueLLM([stillWrong, withMeta("third", 1.42)]);
+    const llm = createFakeLLM([stillWrong, withMeta("third", 1.42)]);
     await validateAndRetry(
       llm,
       "how am I doing?",
@@ -131,7 +105,7 @@ describe("validateAndRetry — enforce mode", () => {
 
 describe("validateAndRetry — observe mode", () => {
   it("flags would_have_retried on a mismatch without calling the LLM", async () => {
-    const llm = createQueueLLM([]);
+    const llm = createFakeLLM([]);
     const result = await validateAndRetry(
       llm,
       "how am I doing?",
@@ -146,7 +120,7 @@ describe("validateAndRetry — observe mode", () => {
   });
 
   it("does not flag would_have_retried on a match", async () => {
-    const llm = createQueueLLM([]);
+    const llm = createFakeLLM([]);
     const result = await validateAndRetry(
       llm,
       "how am I doing?",
@@ -161,7 +135,7 @@ describe("validateAndRetry — observe mode", () => {
 
 describe("validateAndRetry — off mode", () => {
   it("returns the original response untouched with no validation or retry", async () => {
-    const llm = createQueueLLM([]);
+    const llm = createFakeLLM([]);
     const result = await validateAndRetry(
       llm,
       "how am I doing?",

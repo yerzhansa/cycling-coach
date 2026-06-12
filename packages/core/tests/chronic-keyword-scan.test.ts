@@ -5,24 +5,8 @@ import { join } from "node:path";
 import type { ModelMessage } from "ai";
 import { Memory } from "../src/memory/store.js";
 import { runMemoryFlush, CHRONIC_KEYWORDS } from "../src/agent/memory-flush.js";
-import type { LLM } from "../src/llm.js";
 import type { MemorySectionSpec } from "../src/sport.js";
-
-// LLM stub that produces no tool calls — runMemoryFlush completes quickly,
-// then the post-flush scan runs. Lets us assert scan behavior without the
-// real LLM rewriting the file.
-function noopLLM(): LLM {
-  return {
-    async generate() {
-      return {
-        text: "",
-        toolCalls: [],
-        finishReason: "stop" as const,
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      };
-    },
-  } as unknown as LLM;
-}
+import { createFakeLLM } from "./helpers/fake-llm.js";
 
 const SECTIONS: readonly MemorySectionSpec[] = [
   { name: "cycling-history", description: "cycling-specific history" },
@@ -108,7 +92,7 @@ describe("post-flush chronic-keyword scan", () => {
   it("does not warn when cycling-history is absent", async () => {
     const memory = new Memory(dataDir);
     await runMemoryFlush({
-      llm: noopLLM(),
+      llm: createFakeLLM(),
       messages: NO_MESSAGES,
       memory,
       memorySections: SECTIONS,
@@ -122,7 +106,7 @@ describe("post-flush chronic-keyword scan", () => {
     writeFileSync(memoryFile, "## cycling-history\nKnee twinge resolved\n", "utf-8");
     const memory = new Memory(dataDir);
     await runMemoryFlush({
-      llm: noopLLM(),
+      llm: createFakeLLM(),
       messages: NO_MESSAGES,
       memory,
       memorySections: SECTIONS,
@@ -140,7 +124,7 @@ describe("post-flush chronic-keyword scan", () => {
     );
     const memory = new Memory(dataDir);
     await runMemoryFlush({
-      llm: noopLLM(),
+      llm: createFakeLLM(),
       messages: NO_MESSAGES,
       memory,
       memorySections: SECTIONS,
@@ -161,7 +145,7 @@ describe("post-flush chronic-keyword scan", () => {
     );
     const memory = new Memory(dataDir);
     await runMemoryFlush({
-      llm: noopLLM(),
+      llm: createFakeLLM(),
       messages: NO_MESSAGES,
       memory,
       memorySections: SECTIONS,
@@ -181,7 +165,7 @@ describe("post-flush chronic-keyword scan", () => {
     );
     const memory = new Memory(dataDir);
     await runMemoryFlush({
-      llm: noopLLM(),
+      llm: createFakeLLM(),
       messages: NO_MESSAGES,
       memory,
       memorySections: SECTIONS,
@@ -197,7 +181,7 @@ describe("post-flush chronic-keyword scan", () => {
     writeFileSync(memoryFile, "## cycling-history\nDIABETES diagnosis 2020.\n", "utf-8");
     const memory = new Memory(dataDir);
     await runMemoryFlush({
-      llm: noopLLM(),
+      llm: createFakeLLM(),
       messages: NO_MESSAGES,
       memory,
       memorySections: SECTIONS,
@@ -214,7 +198,7 @@ describe("post-flush chronic-keyword scan", () => {
     writeFileSync(memoryFile, `## cycling-history\n${body}\n`, "utf-8");
     const memory = new Memory(dataDir);
     await runMemoryFlush({
-      llm: noopLLM(),
+      llm: createFakeLLM(),
       messages: NO_MESSAGES,
       memory,
       memorySections: SECTIONS,

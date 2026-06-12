@@ -6,34 +6,9 @@ import {
   summarizeDroppedMessages,
   summarizeInStages,
 } from "../src/agent/compaction.js";
-import type { LLM } from "../src/llm.js";
+import { createFakeLLM } from "./helpers/fake-llm.js";
 
 // ─── Test helpers ─────────────────────────────────────────────────────
-
-interface SpyLLM extends LLM {
-  capturedPrompts: string[];
-  capturedMessages: ModelMessage[][];
-}
-
-function createSpyLLM(response: string): SpyLLM {
-  const capturedPrompts: string[] = [];
-  const capturedMessages: ModelMessage[][] = [];
-  const spy = {
-    capturedPrompts,
-    capturedMessages,
-    async generate(opts: { prompt?: string; messages?: ModelMessage[] }) {
-      if (opts.prompt !== undefined) capturedPrompts.push(opts.prompt);
-      if (opts.messages !== undefined) capturedMessages.push(opts.messages);
-      return {
-        text: response,
-        toolCalls: [],
-        finishReason: "stop" as const,
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      };
-    },
-  };
-  return spy as unknown as SpyLLM;
-}
 
 const REPRESENTATIVE_CONVERSATION: ModelMessage[] = [
   { role: "user", content: "My FTP is 247W and I weigh 72kg." },
@@ -76,7 +51,7 @@ const EMPTY_SNAPSHOT: MemorySnapshot = {
 
 describe("compaction (sport-parameterized)", () => {
   it("summarizeDroppedMessages prompt carries MUST-PRESERVE + sport tokens + transcript data", async () => {
-    const spy = createSpyLLM(VALID_FOUR_SECTION_SUMMARY);
+    const spy = createFakeLLM([VALID_FOUR_SECTION_SUMMARY], { repeatLast: true });
 
     await summarizeDroppedMessages({
       dropped: REPRESENTATIVE_CONVERSATION,
@@ -103,7 +78,7 @@ describe("compaction (sport-parameterized)", () => {
   });
 
   it("summarizeDroppedMessages with function-form tokens calls the function with the snapshot", async () => {
-    const spy = createSpyLLM(VALID_FOUR_SECTION_SUMMARY);
+    const spy = createFakeLLM([VALID_FOUR_SECTION_SUMMARY], { repeatLast: true });
     const calls: MemorySnapshot[] = [];
 
     await summarizeDroppedMessages({
@@ -123,7 +98,7 @@ describe("compaction (sport-parameterized)", () => {
   });
 
   it("summarizeInStages prompt also carries the MUST-PRESERVE instruction and tokens", async () => {
-    const spy = createSpyLLM(VALID_FOUR_SECTION_SUMMARY);
+    const spy = createFakeLLM([VALID_FOUR_SECTION_SUMMARY], { repeatLast: true });
 
     await summarizeInStages({
       messages: REPRESENTATIVE_CONVERSATION,

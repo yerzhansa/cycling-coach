@@ -6,24 +6,11 @@ import type { ModelMessage } from "ai";
 import { createMemoryTools } from "../src/agent/tools.js";
 import { runMemoryFlush } from "../src/agent/memory-flush.js";
 import { Memory } from "../src/memory/store.js";
-import type { LLM } from "../src/llm.js";
+import { createFakeLLM } from "./helpers/fake-llm.js";
 
 // Both consumers convert the section list into a non-empty Zod enum
 // (`z.enum([...] as [string, ...string[]])`). An empty list crashes Zod
 // with an opaque message; the explicit guard surfaces a real diagnostic.
-
-function noopLLM(): LLM {
-  return {
-    async generate() {
-      return {
-        text: "",
-        toolCalls: [],
-        finishReason: "stop" as const,
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      };
-    },
-  } as unknown as LLM;
-}
 
 describe("createMemoryTools — empty-section guard", () => {
   let dataDir: string;
@@ -55,7 +42,7 @@ describe("runMemoryFlush — empty-section guard", () => {
     const memory = new Memory(dataDir);
     await expect(
       runMemoryFlush({
-        llm: noopLLM(),
+        llm: createFakeLLM(),
         messages: [] as ModelMessage[],
         memory,
         memorySections: [],
