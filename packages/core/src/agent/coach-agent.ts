@@ -1,6 +1,6 @@
 import { stepCountIs } from "ai";
 import type { ModelMessage, ToolSet } from "ai";
-import { IntervalsClient } from "intervals-icu-api";
+import { makeChatClient } from "../reference/sync/intervals-client-factory.js";
 import { getEffectiveSections } from "../memory/effective-sections.js";
 import type { CoreDeps, Sport } from "../sport.js";
 import type { SecretsResolver } from "../secrets/types.js";
@@ -63,7 +63,7 @@ export class CoachAgent {
     this.chatStore = new ChatStore(config.dataDir);
 
     const intervals = config.intervals.apiKey
-      ? new IntervalsClient({
+      ? makeChatClient({
           apiKey: config.intervals.apiKey,
           athleteId: config.intervals.athleteId,
         })

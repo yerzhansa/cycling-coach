@@ -49,3 +49,23 @@ export function makeAbortableClient(opts: {
     retry: { maxAttempts: 1 },
   });
 }
+
+/**
+ * Chat-path IntervalsClient. Lib-side retry is disabled (`maxAttempts: 1`) so
+ * non-idempotent calendar writes (POST/PUT/DELETE) are never replayed by the
+ * HTTP layer; transient-failure handling belongs to the caller. `fetch` is
+ * injectable for tests — the constructor's `fetch` option is the lib's only
+ * injection point (see the note on `makeAbortableClient`).
+ */
+export function makeChatClient(opts: {
+  apiKey: string;
+  athleteId?: string;
+  fetch?: typeof globalThis.fetch;
+}): IntervalsClient {
+  return new IntervalsClient({
+    apiKey: opts.apiKey,
+    athleteId: opts.athleteId,
+    fetch: opts.fetch,
+    retry: { maxAttempts: 1 },
+  });
+}
