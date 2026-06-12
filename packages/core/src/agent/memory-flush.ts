@@ -63,7 +63,7 @@ function createFlushMemoryWriteTool(memory: MemoryStore, sections: readonly Memo
       }),
     ),
     execute: async (input: { section: string; content: string }) => {
-      memory.writeSection(input.section, input.content);
+      memory.writeSection(input.section, input.content, "flush");
       return { saved: true };
     },
   });

@@ -34,8 +34,9 @@ export { LLM } from "./llm.js";
 export type { GenerateOpts, GenerateResult } from "./llm-types.js";
 
 // ─── Memory ───────────────────────────────────────────────────────────
-export type { MemorySnapshot, MemoryStore } from "./memory.js";
+export type { MemorySnapshot, MemoryStore, MemoryWriteSource } from "./memory.js";
 export { Memory } from "./memory/store.js";
+export type { MemoryJournalEntry } from "./memory/journal.js";
 export { createMemorySnapshot } from "./memory/snapshot.js";
 export { CORE_SHARED_SECTIONS } from "./memory/shared-sections.js";
 export {

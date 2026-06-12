@@ -52,7 +52,7 @@ export function createMemoryTools(
       execute: async (input: { type: "memory" | "daily"; section?: string; content: string }) => {
         if (input.type === "memory") {
           // "notes" is a CORE_SHARED_SECTIONS catch-all — safe default when the LLM forgets to pick a section.
-          memory.writeSection(input.section ?? "notes", input.content);
+          memory.writeSection(input.section ?? "notes", input.content, "chat-tool");
         } else {
           memory.appendDailyNote(input.content);
         }
@@ -68,7 +68,7 @@ export function createMemoryTools(
         }),
       ),
       execute: async (input: { plan: Record<string, unknown> }) => {
-        memory.savePlan(input.plan);
+        memory.savePlan(input.plan, "chat-tool");
         return { saved: true };
       },
     }),

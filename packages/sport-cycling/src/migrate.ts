@@ -16,7 +16,7 @@ const LEGACY_RENAMES = [
 export function migrateCyclingLegacySections(memory: MemoryStore): void {
   let outcomes: Array<"renamed" | "noop" | "merged">;
   try {
-    outcomes = memory.renameSections(LEGACY_RENAMES);
+    outcomes = memory.renameSections(LEGACY_RENAMES, "migration");
   } catch (err) {
     console.warn(
       JSON.stringify({

@@ -7,12 +7,20 @@
  * (e.g. "FTP 247W") from current memory state.
  */
 
+/** Who performed a destructive memory write — recorded on every journal line. */
+export type MemoryWriteSource =
+  | "chat-tool"
+  | "flush"
+  | "sport-tool"
+  | "migration"
+  | "unattributed";
+
 export interface MemoryStore {
   /** Returns full MEMORY.md contents, or "" if absent. */
   readMemory(): string;
 
   /** Replaces the named section's content; appends if section is missing. */
-  writeSection(section: string, content: string): void;
+  writeSection(section: string, content: string, source?: MemoryWriteSource): void;
 
   /** Returns the named section's body, or null if file or section is absent. */
   readSection(section: string): string | null;
@@ -24,7 +32,11 @@ export interface MemoryStore {
    * - "merged":  both `from` and `to` exist — bodies concatenated under `to`,
    *              `from` block removed.
    */
-  renameSection(from: string, to: string): "renamed" | "noop" | "merged";
+  renameSection(
+    from: string,
+    to: string,
+    source?: MemoryWriteSource,
+  ): "renamed" | "noop" | "merged";
 
   /**
    * Apply multiple renames as a single read + single atomic write. Returns
@@ -34,6 +46,7 @@ export interface MemoryStore {
    */
   renameSections(
     renames: ReadonlyArray<readonly [string, string]>,
+    source?: MemoryWriteSource,
   ): Array<"renamed" | "noop" | "merged">;
 
   /** Reads today's daily-notes file (or for `date` when supplied). */
@@ -43,7 +56,7 @@ export interface MemoryStore {
   appendDailyNote(note: string, date?: string): void;
 
   /** Persists the active training plan as JSON. */
-  savePlan(plan: unknown): void;
+  savePlan(plan: unknown, source?: MemoryWriteSource): void;
 
   /** Loads the active training plan, or null if none. */
   loadPlan(): unknown | null;

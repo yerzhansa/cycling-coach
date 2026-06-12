@@ -1,8 +1,9 @@
 import { readFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import type { MemoryStore } from "../memory.js";
+import type { MemoryStore, MemoryWriteSource } from "../memory.js";
 import { todayInTZ } from "../agent/user-time.js";
 import { atomicWriteFileSync } from "../io/atomic-write-file-sync.js";
+import { appendJournalEntry } from "./journal.js";
 
 // ============================================================================
 // MEMORY SYSTEM
@@ -63,11 +64,20 @@ export class Memory implements MemoryStore {
     return readFileSync(path, "utf-8").replace(/\r\n/g, "\n");
   }
 
-  writeSection(section: string, content: string): void {
+  writeSection(section: string, content: string, source: MemoryWriteSource = "unattributed"): void {
     const path = join(this.memoryDir, "MEMORY.md");
     const existing = this.readMemory();
     const marker = markerOf(section);
     const newBlock = `${marker}\n${content}\n`;
+
+    appendJournalEntry(this.memoryDir, {
+      ts: new Date().toISOString(),
+      op: "write-section",
+      section,
+      oldBody: this.readSection(section),
+      newBody: content,
+      source,
+    });
 
     if (!existing) {
       atomicWriteFileSync(path, newBlock);
@@ -97,7 +107,7 @@ export class Memory implements MemoryStore {
     return body.endsWith("\n") ? body.slice(0, -1) : body;
   }
 
-  renameSection(from: string, to: string): RenameOutcome {
+  renameSection(from: string, to: string, source: MemoryWriteSource = "unattributed"): RenameOutcome {
     const path = join(this.memoryDir, "MEMORY.md");
     const content = this.readMemory();
     if (!content) return "noop";
@@ -106,7 +116,16 @@ export class Memory implements MemoryStore {
     const outcome = applyRename(parts, from, to);
     if (outcome === "noop") return outcome;
 
-    atomicWriteFileSync(path, parts.join(""));
+    const updated = parts.join("");
+    appendJournalEntry(this.memoryDir, {
+      ts: new Date().toISOString(),
+      op: "rename-sections",
+      section: null,
+      oldBody: content,
+      newBody: updated,
+      source,
+    });
+    atomicWriteFileSync(path, updated);
     return outcome;
   }
 
@@ -118,6 +137,7 @@ export class Memory implements MemoryStore {
    */
   renameSections(
     renames: ReadonlyArray<readonly [string, string]>,
+    source: MemoryWriteSource = "unattributed",
   ): RenameOutcome[] {
     const path = join(this.memoryDir, "MEMORY.md");
     const content = this.readMemory();
@@ -132,7 +152,18 @@ export class Memory implements MemoryStore {
       if (outcome !== "noop") mutated = true;
     }
 
-    if (mutated) atomicWriteFileSync(path, parts.join(""));
+    if (mutated) {
+      const updated = parts.join("");
+      appendJournalEntry(this.memoryDir, {
+        ts: new Date().toISOString(),
+        op: "rename-sections",
+        section: null,
+        oldBody: content,
+        newBody: updated,
+        source,
+      });
+      atomicWriteFileSync(path, updated);
+    }
     return outcomes;
   }
 
@@ -163,9 +194,18 @@ export class Memory implements MemoryStore {
 
   // ── Plans ──────────────────────────────────────────────────────────────
 
-  savePlan(plan: unknown): void {
+  savePlan(plan: unknown, source: MemoryWriteSource = "unattributed"): void {
     const path = join(this.plansDir, "current-plan.json");
-    atomicWriteFileSync(path, JSON.stringify(plan, null, 2));
+    const newBody = JSON.stringify(plan, null, 2);
+    appendJournalEntry(this.memoryDir, {
+      ts: new Date().toISOString(),
+      op: "save-plan",
+      section: null,
+      oldBody: existsSync(path) ? readFileSync(path, "utf-8") : null,
+      newBody,
+      source,
+    });
+    atomicWriteFileSync(path, newBody);
   }
 
   loadPlan(): unknown | null {

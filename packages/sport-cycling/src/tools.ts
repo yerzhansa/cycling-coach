@@ -86,7 +86,7 @@ export function createCyclingTools(
       }) => {
         const profile: AthleteProfile = { ...params, needsExtraRecovery: false };
         const plan = buildPlanSkeleton(profile, tz);
-        memory.savePlan(plan);
+        memory.savePlan(plan, "sport-tool");
         return plan;
       },
     }),
