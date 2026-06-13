@@ -267,12 +267,20 @@ export class CoachAgent {
           if (isContextOverflowError(err) && overflowAttempts < MAX_OVERFLOW_ATTEMPTS) {
             overflowAttempts++;
             try {
-              await this.flushMemory(messages, "overflow-recovery");
-            } catch (flushErr) {
-              console.warn("In-turn memory flush failed; compacting without flush", flushErr);
+              try {
+                await this.flushMemory(messages, "overflow-recovery");
+              } catch (flushErr) {
+                console.warn("In-turn memory flush failed; compacting without flush", flushErr);
+              }
+              messages = await summarizeInStages({ messages, ...this.compactionParams() });
+              this.memory.reload();
+            } catch (rescueErr) {
+              console.warn("Compaction rescue failed; rethrowing the original turn error", rescueErr);
+              if (err instanceof Error && err.cause === undefined) {
+                (err as Error & { cause?: unknown }).cause = rescueErr;
+              }
+              throw err;
             }
-            messages = await summarizeInStages({ messages, ...this.compactionParams() });
-            this.memory.reload();
             continue;
           }
           // Timeout with high context usage → compact + retry (no flush)
@@ -280,8 +288,16 @@ export class CoachAgent {
             const ratio = estimateMessagesTokens(messages) / this.config.contextWindowTokens;
             if (ratio > TIMEOUT_COMPACTION_THRESHOLD) {
               timeoutAttempts++;
-              messages = await summarizeInStages({ messages, ...this.compactionParams() });
-              this.memory.reload();
+              try {
+                messages = await summarizeInStages({ messages, ...this.compactionParams() });
+                this.memory.reload();
+              } catch (rescueErr) {
+                console.warn("Compaction rescue failed; rethrowing the original turn error", rescueErr);
+                if (err instanceof Error && err.cause === undefined) {
+                  (err as Error & { cause?: unknown }).cause = rescueErr;
+                }
+                throw err;
+              }
               continue;
             }
           }

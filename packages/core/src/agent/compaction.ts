@@ -19,6 +19,7 @@ import type { LLM } from "../llm.js";
 const MAX_SUMMARY_CHARS = 4_000;
 const SUMMARY_TRUNCATED_MARKER = "\n\n[Summary truncated]";
 const MAX_SUMMARY_TOKENS = 1000;
+const SUMMARIZATION_TIMEOUT_MS = 120_000;
 const BASE_CHUNK_RATIO = 0.4;
 const MIN_CHUNK_RATIO = 0.15;
 
@@ -117,6 +118,29 @@ function capSummary(summary: string): string {
   return summary.slice(0, MAX_SUMMARY_CHARS) + SUMMARY_TRUNCATED_MARKER;
 }
 
+async function generateSummaryWithTimeout(
+  llm: LLM,
+  opts: { prompt: string; maxOutputTokens: number },
+): Promise<string> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`Summarization timed out after ${SUMMARIZATION_TIMEOUT_MS}ms`)),
+      SUMMARIZATION_TIMEOUT_MS,
+    );
+  });
+  const call = llm.generate(opts);
+  try {
+    const { text } = await Promise.race([call, deadline]);
+    return text;
+  } finally {
+    clearTimeout(timer);
+    // Race-only deadline: the losing call keeps running; swallow its late
+    // rejection so it cannot surface as an unhandled rejection.
+    call.catch(() => {});
+  }
+}
+
 export function computeAdaptiveChunkRatio(
   messages: ModelMessage[],
   contextWindowTokens: number,
@@ -205,7 +229,7 @@ async function finalizeSummary(params: {
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      const { text } = await llm.generate({
+      const text = await generateSummaryWithTimeout(llm, {
         prompt: `Restructure the following summary to include ALL required section headings: ${audit.missing.join(", ")}.\n\n${best}\n\n${mustPreserveBlock}`,
         maxOutputTokens: MAX_SUMMARY_TOKENS,
       });
@@ -259,7 +283,7 @@ export async function summarizeDroppedMessages(params: {
     ].join("\n");
 
     try {
-      const { text } = await llm.generate({
+      const text = await generateSummaryWithTimeout(llm, {
         prompt,
         maxOutputTokens: MAX_SUMMARY_TOKENS,
       });
@@ -335,15 +359,24 @@ export async function summarizeInStages(params: {
       ? `\nExisting summary of earlier context:\n${summary}\n\n`
       : "";
 
-    const { text } = await llm.generate({
-      prompt: `${summarizePrompt}${contextPrefix}\n\n${transcript}`,
-      maxOutputTokens: MAX_SUMMARY_TOKENS,
-    });
-    summary = text;
+    try {
+      const text = await generateSummaryWithTimeout(llm, {
+        prompt: `${summarizePrompt}${contextPrefix}\n\n${transcript}`,
+        maxOutputTokens: MAX_SUMMARY_TOKENS,
+      });
+      summary = text;
+    } catch (err) {
+      console.warn("Staged summarization chunk failed; continuing with carried summary", err);
+    }
+  }
+
+  if (summary === undefined) {
+    console.warn("Staged summarization produced no summary; dropping oldest messages without one");
+    return [...recent];
   }
 
   const finalSummary = await finalizeSummary({
-    summary: summary ?? "",
+    summary,
     llm,
     mustPreserveBlock,
     maxRetries: 1,
