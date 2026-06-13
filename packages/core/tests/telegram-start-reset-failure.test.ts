@@ -21,6 +21,9 @@ afterEach(() => {
 const RESET_FAILURE_REPLY =
   "Something went wrong resetting your session — your history is untouched. Please try /start again.";
 
+const RESET_CAVEAT =
+  "Note: I couldn't fully reset our previous session, so some earlier context may still apply.";
+
 async function buildStartHandler(resetSession: ReturnType<typeof vi.fn>) {
   const bot = { api: { sendMessage: vi.fn() }, use: vi.fn(), command: vi.fn(), on: vi.fn() };
   vi.doMock("grammy", () => ({
@@ -62,7 +65,7 @@ describe("/start reset-failure reply", () => {
   });
 
   it("reset success → Welcome, no failure copy", async () => {
-    const resetSession = vi.fn(async () => undefined);
+    const resetSession = vi.fn(async () => ({ memoryFlushed: true }));
     const start = await buildStartHandler(resetSession);
     const ctx = { chat: { id: 777 }, reply: vi.fn(async () => undefined) };
 
@@ -73,6 +76,32 @@ describe("/start reset-failure reply", () => {
       ctx.reply.mock.calls.some((c: unknown[]) =>
         String(c[0]).startsWith("Welcome to Cycling Coach!"),
       ),
+    ).toBe(true);
+    expect(
+      ctx.reply.mock.calls.some((c: unknown[]) =>
+        String(c[0]).includes("Something went wrong resetting"),
+      ),
+    ).toBe(false);
+    expect(
+      ctx.reply.mock.calls.some((c: unknown[]) => String(c[0]).includes(RESET_CAVEAT)),
+    ).toBe(false);
+  });
+
+  it("degraded reset → Welcome plus the caveat line", async () => {
+    const resetSession = vi.fn(async () => ({ memoryFlushed: false }));
+    const start = await buildStartHandler(resetSession);
+    const ctx = { chat: { id: 777 }, reply: vi.fn(async () => undefined) };
+
+    await start(ctx);
+
+    expect(ctx.reply).toHaveBeenCalledTimes(1);
+    expect(
+      ctx.reply.mock.calls.some((c: unknown[]) =>
+        String(c[0]).startsWith("Welcome to Cycling Coach!"),
+      ),
+    ).toBe(true);
+    expect(
+      ctx.reply.mock.calls.some((c: unknown[]) => String(c[0]).includes(RESET_CAVEAT)),
     ).toBe(true);
     expect(
       ctx.reply.mock.calls.some((c: unknown[]) =>

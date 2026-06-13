@@ -22,7 +22,8 @@ import {
   TIMEOUT_COMPACTION_THRESHOLD,
 } from "./token-utils.js";
 import { summarizeInStages, summarizeDroppedMessages } from "./compaction.js";
-import { runMemoryFlush } from "./memory-flush.js";
+import { runMemoryFlush, FLUSH_ZERO_WRITE_MIN_MESSAGES } from "./memory-flush.js";
+import type { MemoryFlushOutcome } from "./memory-flush.js";
 import { evaluateSessionFreshness } from "./session-freshness.js";
 import { LLM } from "../llm.js";
 import { createMemorySnapshot } from "../memory/snapshot.js";
@@ -35,6 +36,14 @@ const RATE_LIMIT_FALLBACK_BASE_MS = 5_000;
 const RATE_LIMIT_FALLBACK_MULTIPLIER = 2;
 const RATE_LIMIT_FALLBACK_MAX_MS = 30_000;
 const RATE_LIMIT_MAX_WAIT_MS = 120_000;
+const MAX_FLUSH_ATTEMPTS = 2;
+
+type MemoryFlushTrigger =
+  | "stale-reset"
+  | "explicit-reset"
+  | "trim"
+  | "pre-compaction"
+  | "overflow-recovery";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -53,6 +62,7 @@ export class CoachAgent {
   private tools: ToolSet;
   private systemPrompt: string;
   private tz: string;
+  private archiveDeferred = new Set<string>();
 
   constructor(sport: Sport, config: Config) {
     this.sport = sport;
@@ -83,14 +93,34 @@ export class CoachAgent {
     this.systemPrompt = "";
   }
 
-  private async flushMemory(messages: ModelMessage[]): Promise<void> {
-    await runMemoryFlush({
-      llm: this.llm,
-      messages,
-      memory: this.memory,
-      memorySections: getEffectiveSections(this.sport),
-      tz: this.tz,
-    });
+  private async flushMemory(
+    messages: ModelMessage[],
+    trigger: MemoryFlushTrigger,
+  ): Promise<MemoryFlushOutcome> {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= MAX_FLUSH_ATTEMPTS; attempt++) {
+      try {
+        return await runMemoryFlush({
+          llm: this.llm,
+          messages,
+          memory: this.memory,
+          memorySections: getEffectiveSections(this.sport),
+          tz: this.tz,
+        });
+      } catch (err) {
+        lastError = err;
+        console.warn(
+          JSON.stringify({
+            event: "memory_flush_failed",
+            trigger,
+            attempt,
+            maxAttempts: MAX_FLUSH_ATTEMPTS,
+            error: (err instanceof Error ? err.message : String(err)).slice(0, 200),
+          }),
+        );
+      }
+    }
+    throw lastError;
   }
 
   private compactionParams() {
@@ -116,15 +146,32 @@ export class CoachAgent {
 
       if (!fresh) {
         // Flush memory before reset, then archive
+        let outcome: MemoryFlushOutcome | null = null;
         if (history.length > 0) {
           try {
-            await this.flushMemory(history);
+            outcome = await this.flushMemory(history, "stale-reset");
           } catch (err) {
             console.warn("Pre-reset memory flush failed; archiving session anyway", err);
           }
         }
-        this.chatStore.archiveAndReset(chatId);
-        history = [];
+        const zeroWrite =
+          outcome !== null &&
+          outcome.writes === 0 &&
+          outcome.ledgerAppends === 0 &&
+          history.length >= FLUSH_ZERO_WRITE_MIN_MESSAGES;
+        if (zeroWrite && !this.archiveDeferred.has(chatId)) {
+          this.archiveDeferred.add(chatId);
+          console.warn(
+            JSON.stringify({
+              event: "memory_flush_archive_deferred",
+              messageCount: history.length,
+            }),
+          );
+        } else {
+          this.archiveDeferred.delete(chatId);
+          this.chatStore.archiveAndReset(chatId);
+          history = [];
+        }
       }
 
       this.systemPrompt = buildSystemPrompt(this.sport, this.memory, this.tz);
@@ -144,7 +191,7 @@ export class CoachAgent {
       if (dropped.length > 0) {
         let flushed = true;
         try {
-          await this.flushMemory(history);
+          await this.flushMemory(history, "trim");
         } catch (err) {
           flushed = false;
           console.warn("Pre-compaction memory flush failed; keeping session file unchanged", err);
@@ -192,7 +239,11 @@ export class CoachAgent {
       while (true) {
         // Preemptive: compact before sending if over budget
         if (shouldCompact({ messages, systemPrompt: this.systemPrompt, contextWindowTokens: this.config.contextWindowTokens })) {
-          await this.flushMemory(messages);
+          try {
+            await this.flushMemory(messages, "pre-compaction");
+          } catch (err) {
+            console.warn("In-turn memory flush failed; compacting without flush", err);
+          }
           messages = await summarizeInStages({ messages, ...this.compactionParams() });
           this.memory.reload();
         }
@@ -215,7 +266,11 @@ export class CoachAgent {
           // Reactive: context overflow → flush + compact + retry
           if (isContextOverflowError(err) && overflowAttempts < MAX_OVERFLOW_ATTEMPTS) {
             overflowAttempts++;
-            await this.flushMemory(messages);
+            try {
+              await this.flushMemory(messages, "overflow-recovery");
+            } catch (flushErr) {
+              console.warn("In-turn memory flush failed; compacting without flush", flushErr);
+            }
             messages = await summarizeInStages({ messages, ...this.compactionParams() });
             this.memory.reload();
             continue;
@@ -258,22 +313,27 @@ export class CoachAgent {
     return this.chatStore.hasSession(chatId);
   }
 
-  async resetSession(chatId: string): Promise<void> {
+  async resetSession(chatId: string): Promise<{ memoryFlushed: boolean }> {
     // Flush before reset to avoid losing un-persisted context
+    let memoryFlushed = true;
     let history: ModelMessage[] = [];
     try {
       ({ messages: history } = this.chatStore.load(chatId));
     } catch (err) {
+      memoryFlushed = false;
       console.warn("Pre-reset session load failed; archiving session anyway", err);
     }
     if (history.length > 0) {
       try {
-        await this.flushMemory(history);
+        await this.flushMemory(history, "explicit-reset");
       } catch (err) {
+        memoryFlushed = false;
         console.warn("Pre-reset memory flush failed; archiving session anyway", err);
       }
     }
+    this.archiveDeferred.delete(chatId);
     this.chatStore.archiveAndReset(chatId);
+    return { memoryFlushed };
   }
 
   getMemory(): Memory {

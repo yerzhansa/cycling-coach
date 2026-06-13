@@ -114,7 +114,7 @@ describe("CoachAgent corrupt-session recovery", () => {
     const valid = JSON.stringify({ role: "user", content: "we agreed: hold volume", ts: STALE_TS });
     seedRaw("corrupt-reset", `${valid}\n{"role":"assistant","content":"torn mid-wri`);
 
-    await expect(agent.resetSession("corrupt-reset")).resolves.toBeUndefined();
+    await expect(agent.resetSession("corrupt-reset")).resolves.toEqual({ memoryFlushed: true });
 
     expect(complete).toHaveBeenCalledTimes(1);
     expect(agent.hasSession("corrupt-reset")).toBe(false);
@@ -154,7 +154,7 @@ describe("CoachAgent corrupt-session recovery", () => {
     const agent = await setupAgent(complete);
     mkdirSync(join(dataDir, "sessions", "unreadable.jsonl"), { recursive: true });
 
-    await expect(agent.resetSession("unreadable")).resolves.toBeUndefined();
+    await expect(agent.resetSession("unreadable")).resolves.toEqual({ memoryFlushed: false });
 
     expect(
       warnSpy.mock.calls.some((c) => String(c[0]).includes("Pre-reset session load failed")),

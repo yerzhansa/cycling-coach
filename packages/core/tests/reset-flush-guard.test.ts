@@ -116,9 +116,9 @@ describe("reset-path flush guards", () => {
       { role: "assistant", content: "yes - hold volume, recheck Friday", ts: STALE_TS },
     ]);
 
-    await expect(agent.resetSession("reset-guard")).resolves.toBeUndefined();
+    await expect(agent.resetSession("reset-guard")).resolves.toEqual({ memoryFlushed: false });
 
-    expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete).toHaveBeenCalledTimes(2);
     expect(agent.hasSession("reset-guard")).toBe(false);
     const archives = listArchives("reset-guard");
     expect(archives).toHaveLength(1);
@@ -134,7 +134,7 @@ describe("reset-path flush guards", () => {
     let n = 0;
     const complete = vi.fn(async () => {
       n++;
-      if (n === 1) throw new Error("boom");
+      if (n <= 2) throw new Error("boom");
       return mkAssistant("fresh-start");
     });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -147,7 +147,7 @@ describe("reset-path flush guards", () => {
     const text = await agent.chat("stale-guard", "hello");
 
     expect(text).toBe("fresh-start");
-    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledTimes(3);
     const archives = listArchives("stale-guard");
     expect(archives).toHaveLength(1);
     const archived = readFileSync(join(dataDir, "sessions", archives[0]), "utf-8");
@@ -169,7 +169,7 @@ describe("reset-path flush guards", () => {
       { role: "user", content: "remember my FTP is 247", ts: STALE_TS },
     ]);
 
-    await agent.resetSession("healthy-reset");
+    await expect(agent.resetSession("healthy-reset")).resolves.toEqual({ memoryFlushed: true });
 
     expect(complete).toHaveBeenCalledTimes(1);
     expect(agent.hasSession("healthy-reset")).toBe(false);

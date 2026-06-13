@@ -163,8 +163,8 @@ describe("trim-path compaction guard", () => {
     let n = 0;
     const complete = vi.fn(async () => {
       n++;
-      if (n === 1) throw new Error("boom");
-      if (n === 2) return mkAssistant(FIVE_SECTION_SUMMARY);
+      if (n <= 2) throw new Error("boom");
+      if (n === 3) return mkAssistant(FIVE_SECTION_SUMMARY);
       return mkAssistant("final-reply");
     });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -174,7 +174,7 @@ describe("trim-path compaction guard", () => {
     const text = await agent.chat("trim-flush-fail", "hello");
 
     expect(text).toBe("final-reply");
-    expect(complete).toHaveBeenCalledTimes(3);
+    expect(complete).toHaveBeenCalledTimes(4);
     expect(listPrecompact("trim-flush-fail")).toHaveLength(0);
 
     const session = readFileSync(join(dataDir, "sessions", "trim-flush-fail.jsonl"), "utf-8");

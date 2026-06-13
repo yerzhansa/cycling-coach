@@ -46,6 +46,9 @@ const WELCOME_MESSAGE =
   "/update — Check for and install updates\n\n" +
   "Or just chat with me about your training!";
 
+const RESET_CAVEAT_NOTE =
+  "Note: I couldn't fully reset our previous session, so some earlier context may still apply.";
+
 const SNAPSHOT_HELP =
   "/snapshot raw [section]    — dump pre-curation latest.json (or one section)\n" +
   "/snapshot help             — show this list\n\n" +
@@ -114,8 +117,9 @@ export function createTelegramBot(
 
   bot.command("start", async (ctx) => {
     greeted.add(ctx.chat.id);
+    let memoryFlushed = true;
     try {
-      await agent.resetSession(`telegram:${ctx.chat.id}`);
+      ({ memoryFlushed } = await agent.resetSession(`telegram:${ctx.chat.id}`));
     } catch (err) {
       console.error("Error resetting session:", err);
       await ctx.reply(
@@ -123,7 +127,9 @@ export function createTelegramBot(
       );
       return;
     }
-    await ctx.reply(WELCOME_MESSAGE);
+    await ctx.reply(
+      memoryFlushed ? WELCOME_MESSAGE : `${WELCOME_MESSAGE}\n\n${RESET_CAVEAT_NOTE}`,
+    );
   });
 
   bot.command("plan", async (ctx) => {
