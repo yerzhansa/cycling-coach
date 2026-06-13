@@ -124,6 +124,7 @@ export {
   summarizeInStages,
 } from "./agent/compaction.js";
 export { runMemoryFlush } from "./agent/memory-flush.js";
+export type { MemoryFlushOutcome } from "./agent/memory-flush.js";
 export {
   evaluateSessionFreshness,
   resolveDailyResetAtMs,

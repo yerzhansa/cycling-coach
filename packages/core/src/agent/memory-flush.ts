@@ -5,6 +5,7 @@ import type { MemorySectionSpec } from "../sport.js";
 import type { MemoryStore } from "../memory.js";
 import { createMemoryReadTool } from "./tools.js";
 import type { LLM } from "../llm.js";
+import type { GenerateResult } from "../llm-types.js";
 import { LEDGER_EVENT_KINDS, LEDGER_DATE_PATTERN, type LedgerEventKind } from "../memory/event-ledger.js";
 import { todayInTZ } from "./user-time.js";
 
@@ -13,6 +14,18 @@ import { todayInTZ } from "./user-time.js";
 // ============================================================================
 
 export const SOFT_THRESHOLD_RATIO = 0.8;
+
+export const FLUSH_ZERO_WRITE_MIN_MESSAGES = 4;
+export const FLUSH_SHRINK_MIN_CHARS = 200;
+export const FLUSH_SHRINK_RATIO = 0.7;
+
+export interface MemoryFlushOutcome {
+  writes: number;
+  ledgerAppends: number;
+  finishReason: GenerateResult["finishReason"];
+  usage: GenerateResult["usage"];
+  shrunkSections: Array<{ section: string; beforeChars: number; afterChars: number }>;
+}
 
 // ============================================================================
 // PROMPTS
@@ -67,7 +80,11 @@ Only write sections that have new or changed information.`;
 // APPEND-ONLY MEMORY WRITE TOOL
 // ============================================================================
 
-function createFlushMemoryWriteTool(memory: MemoryStore, sections: readonly MemorySectionSpec[]) {
+function createFlushMemoryWriteTool(
+  memory: MemoryStore,
+  sections: readonly MemorySectionSpec[],
+  onWrite: () => void,
+) {
   const sectionNames = sections.map((s) => s.name) as [string, ...string[]];
   return tool({
     description: "Write to a memory section (replaces entire section content)",
@@ -79,12 +96,13 @@ function createFlushMemoryWriteTool(memory: MemoryStore, sections: readonly Memo
     ),
     execute: async (input: { section: string; content: string }) => {
       memory.writeSection(input.section, input.content, "flush");
+      onWrite();
       return { saved: true };
     },
   });
 }
 
-function createLedgerAppendTool(memory: MemoryStore) {
+function createLedgerAppendTool(memory: MemoryStore, onAppend: () => void) {
   return tool({
     description:
       "Record a dated athlete event (decision, override, illness, experiment, outcome) in the permanent event ledger. Entries are appended, never replaced.",
@@ -103,6 +121,7 @@ function createLedgerAppendTool(memory: MemoryStore) {
     ),
     execute: async (input: { date: string; kind: LedgerEventKind; text: string }) => {
       memory.appendEvent({ ...input, source: "flush" });
+      onAppend();
       return { recorded: true };
     },
   });
@@ -157,20 +176,29 @@ export async function runMemoryFlush(params: {
   memory: MemoryStore;
   memorySections: readonly MemorySectionSpec[];
   tz?: string;
-}): Promise<void> {
+}): Promise<MemoryFlushOutcome> {
   if (params.memorySections.length === 0) {
     throw new Error(
       "runMemoryFlush requires at least one memory section. " +
         "Pass getEffectiveSections(sport) — Core's shared sections guarantee non-empty.",
     );
   }
+  let writes = 0;
+  let ledgerAppends = 0;
+  const beforeChars = new Map(
+    params.memorySections.map((s) => [s.name, (params.memory.readSection(s.name) ?? "").length]),
+  );
   const flushTools = {
-    memory_write: createFlushMemoryWriteTool(params.memory, params.memorySections),
+    memory_write: createFlushMemoryWriteTool(params.memory, params.memorySections, () => {
+      writes++;
+    }),
     memory_read: createMemoryReadTool(params.memory),
-    ledger_append: createLedgerAppendTool(params.memory),
+    ledger_append: createLedgerAppendTool(params.memory, () => {
+      ledgerAppends++;
+    }),
   };
 
-  await params.llm.generate({
+  const result = await params.llm.generate({
     system: MEMORY_FLUSH_SYSTEM_PROMPT,
     messages: [
       ...params.messages,
@@ -186,4 +214,45 @@ export async function runMemoryFlush(params: {
 
   params.memory.reload();
   scanForStuckChronic(params.memory);
+
+  const shrunkSections: MemoryFlushOutcome["shrunkSections"] = [];
+  for (const spec of params.memorySections) {
+    const before = beforeChars.get(spec.name) ?? 0;
+    const after = (params.memory.readSection(spec.name) ?? "").length;
+    if (before >= FLUSH_SHRINK_MIN_CHARS && after < before * FLUSH_SHRINK_RATIO) {
+      shrunkSections.push({ section: spec.name, beforeChars: before, afterChars: after });
+      // Char counts only — section bodies are athlete data and must not land in logs.
+      console.warn(
+        JSON.stringify({
+          event: "memory_flush_section_shrunk",
+          section: spec.name,
+          beforeChars: before,
+          afterChars: after,
+        }),
+      );
+    }
+  }
+
+  if (
+    writes === 0 &&
+    ledgerAppends === 0 &&
+    params.messages.length >= FLUSH_ZERO_WRITE_MIN_MESSAGES
+  ) {
+    console.warn(
+      JSON.stringify({
+        event: "memory_flush_zero_writes",
+        messageCount: params.messages.length,
+        finishReason: result.finishReason,
+        outputTokens: result.usage.outputTokens ?? null,
+      }),
+    );
+  }
+
+  return {
+    writes,
+    ledgerAppends,
+    finishReason: result.finishReason,
+    usage: result.usage,
+    shrunkSections,
+  };
 }
