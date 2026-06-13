@@ -9,7 +9,7 @@ import {
   MIN_PROMPT_BUDGET_TOKENS,
   SUMMARIZATION_OVERHEAD_TOKENS,
 } from "./token-utils.js";
-import { makeSummaryMessage } from "./history-limit.js";
+import { makeSummaryMessage, SUMMARY_PREFIX } from "./history-limit.js";
 import type { LLM } from "../llm.js";
 
 // ============================================================================
@@ -18,7 +18,7 @@ import type { LLM } from "../llm.js";
 
 const MAX_SUMMARY_CHARS = 4_000;
 const SUMMARY_TRUNCATED_MARKER = "\n\n[Summary truncated]";
-const MAX_SUMMARY_TOKENS = 2048;
+const MAX_SUMMARY_TOKENS = 1000;
 const BASE_CHUNK_RATIO = 0.4;
 const MIN_CHUNK_RATIO = 0.15;
 
@@ -74,6 +74,8 @@ function buildSummarizePrompt(tokens: readonly string[]): string {
   return `Summarize the following conversation concisely — aim for 300-500 words total.
 Use bullet points, not paragraphs. Omit generic advice that can be re-derived.
 
+If an existing summary of earlier context is provided, PRESERVE every fact in it unless a newer message directly supersedes it — do not drop a fact merely because it is old.
+
 Use these exact section headings:
 ## Athlete Profile
 ## Training Status
@@ -89,6 +91,8 @@ function buildDroppedMessagesPrompt(tokens: readonly string[]): string {
 
 Produce a compact, factual summary — aim for 300-500 words total.
 Use bullet points, not paragraphs. Omit generic advice that can be re-derived.
+
+If an existing summary of earlier context is provided, PRESERVE every fact in it unless a newer message directly supersedes it — do not drop a fact merely because it is old.
 
 Use these exact section headings:
 ## Athlete Profile
@@ -188,6 +192,34 @@ export function auditSummaryQuality(summary: string): { ok: boolean; missing: st
   return missing.length === 0 ? { ok: true, missing: [] } : { ok: false, missing };
 }
 
+async function finalizeSummary(params: {
+  summary: string;
+  llm: LLM;
+  mustPreserveBlock: string;
+  maxRetries: number;
+}): Promise<string> {
+  const { llm, mustPreserveBlock, maxRetries } = params;
+  let best = capSummary(params.summary);
+  const audit = auditSummaryQuality(best);
+  if (audit.ok) return best;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const { text } = await llm.generate({
+        prompt: `Restructure the following summary to include ALL required section headings: ${audit.missing.join(", ")}.\n\n${best}\n\n${mustPreserveBlock}`,
+        maxOutputTokens: MAX_SUMMARY_TOKENS,
+      });
+      const capped = capSummary(text);
+      if (auditSummaryQuality(capped).ok) return capped;
+      best = capped;
+    } catch (err) {
+      console.warn("Summary audit retry failed", err);
+    }
+  }
+
+  return best;
+}
+
 // ============================================================================
 // DROPPED MESSAGE SUMMARIZATION
 // ============================================================================
@@ -245,26 +277,10 @@ export async function summarizeDroppedMessages(params: {
     });
   }
 
-  // Quality guard with retry
-  const audit = auditSummaryQuality(summary);
-  if (audit.ok) return { summary: capSummary(summary), unsummarized };
-
-  let best: string = summary;
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      const { text } = await llm.generate({
-        prompt: `Restructure the following summary to include ALL required section headings: ${audit.missing.join(", ")}.\n\n${best}\n\n${mustPreserveBlock}`,
-        maxOutputTokens: MAX_SUMMARY_TOKENS,
-      });
-      const retryAudit = auditSummaryQuality(text);
-      if (retryAudit.ok) return { summary: capSummary(text), unsummarized };
-      best = text;
-    } catch (err) {
-      console.warn("Dropped message summarization retry failed", err);
-    }
-  }
-
-  return { summary: capSummary(best), unsummarized };
+  return {
+    summary: await finalizeSummary({ summary, llm, mustPreserveBlock, maxRetries }),
+    unsummarized,
+  };
 }
 
 // ============================================================================
@@ -280,18 +296,33 @@ export async function summarizeInStages(params: {
   previousSummary?: string;
   contextWindowTokens?: number;
 }): Promise<ModelMessage[]> {
-  const { messages, llm, mustPreserveTokens, memory, recentToKeep = 4, previousSummary, contextWindowTokens } = params;
+  const { llm, mustPreserveTokens, memory, recentToKeep = 4, contextWindowTokens } = params;
+
+  let messages = params.messages;
+  let previousSummary = params.previousSummary;
+  const first = messages[0];
+  if (
+    previousSummary === undefined &&
+    first !== undefined &&
+    first.role === "system" &&
+    typeof first.content === "string" &&
+    first.content.startsWith(SUMMARY_PREFIX)
+  ) {
+    previousSummary = first.content.slice(SUMMARY_PREFIX.length + 1);
+    messages = messages.slice(1);
+  }
 
   const keepCount = Math.min(recentToKeep, messages.length);
   const toSummarize = messages.slice(0, messages.length - keepCount);
   const recent = messages.slice(messages.length - keepCount);
 
   if (toSummarize.length === 0) {
-    return messages;
+    return params.messages;
   }
 
   const tokens = resolveTokens(mustPreserveTokens, memory);
   const summarizePrompt = buildSummarizePrompt(tokens);
+  const mustPreserveBlock = buildMustPreserveBlock(tokens);
 
   const chunks = computeAdaptiveChunks(toSummarize, contextWindowTokens);
 
@@ -308,8 +339,14 @@ export async function summarizeInStages(params: {
       prompt: `${summarizePrompt}${contextPrefix}\n\n${transcript}`,
       maxOutputTokens: MAX_SUMMARY_TOKENS,
     });
-    summary = capSummary(text);
+    summary = text;
   }
 
-  return [makeSummaryMessage(summary!), ...recent];
+  const finalSummary = await finalizeSummary({
+    summary: summary ?? "",
+    llm,
+    mustPreserveBlock,
+    maxRetries: 1,
+  });
+  return [makeSummaryMessage(finalSummary), ...recent];
 }
