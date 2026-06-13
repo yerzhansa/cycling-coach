@@ -118,6 +118,10 @@ export function createTelegramBot(
       await agent.resetSession(`telegram:${ctx.chat.id}`);
     } catch (err) {
       console.error("Error resetting session:", err);
+      await ctx.reply(
+        "Something went wrong resetting your session — your history is untouched. Please try /start again.",
+      );
+      return;
     }
     await ctx.reply(WELCOME_MESSAGE);
   });

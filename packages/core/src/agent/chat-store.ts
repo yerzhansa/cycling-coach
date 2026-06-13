@@ -28,6 +28,22 @@ interface JsonlLine {
   ts: string;
 }
 
+const VALID_ROLES = new Set(["user", "assistant", "system"]);
+
+function parseSessionLine(line: string): JsonlLine | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.role !== "string" || !VALID_ROLES.has(v.role)) return null;
+  if (typeof v.content !== "string" || typeof v.ts !== "string") return null;
+  return value as JsonlLine;
+}
+
 export class ChatStore {
   private sessionsDir: string;
   private resetArchiveRetentionDays: number;
@@ -50,10 +66,30 @@ export class ChatStore {
     const path = this.filePath(chatId);
     if (!existsSync(path)) return { messages: [], lastMessageTime: null };
 
-    const raw = readFileSync(path, "utf-8").trim();
-    if (!raw) return { messages: [], lastMessageTime: null };
+    const lines = readFileSync(path, "utf-8")
+      .split("\n")
+      .filter((line) => line.trim() !== "");
+    const good: string[] = [];
+    const corrupt: string[] = [];
+    const parsed: JsonlLine[] = [];
+    for (const line of lines) {
+      const entry = parseSessionLine(line);
+      if (entry === null) {
+        corrupt.push(line);
+      } else {
+        good.push(line);
+        parsed.push(entry);
+      }
+    }
 
-    const parsed = raw.split("\n").map((line) => JSON.parse(line) as JsonlLine);
+    if (corrupt.length > 0) {
+      try {
+        this.quarantineCorruptLines(chatId, good, corrupt);
+      } catch (err) {
+        console.warn("Failed to quarantine corrupt session lines; continuing with parseable lines", err);
+      }
+    }
+
     const messages = parsed.map(
       (p) => ({ role: p.role, content: p.content }) as ModelMessage,
     );
@@ -110,6 +146,26 @@ export class ChatStore {
     const ts = new Date().toISOString().replace(/:/g, "-");
     copyFileSync(path, `${path}.precompact.${ts}`);
     this.pruneArchives(chatId, "precompact");
+  }
+
+  private quarantineCorruptLines(chatId: string, good: string[], corrupt: string[]): void {
+    const path = this.filePath(chatId);
+    const ts = new Date().toISOString().replace(/:/g, "-");
+    const sidecarPath = `${path}.corrupt.${ts}`;
+    appendFileSync(sidecarPath, corrupt.join("\n") + "\n", { encoding: "utf-8", mode: 0o600 });
+    if (good.length === 0) {
+      unlinkSync(path);
+      console.warn(
+        `Quarantined ${corrupt.length} corrupt session line(s) to ${sidecarPath}; removed empty session`,
+      );
+      return;
+    }
+    const tmpPath = `${path}.tmp`;
+    writeFileSync(tmpPath, good.join("\n") + "\n", { encoding: "utf-8", mode: 0o600 });
+    renameSync(tmpPath, path);
+    console.warn(
+      `Quarantined ${corrupt.length} corrupt session line(s) to ${sidecarPath}; kept ${good.length} valid line(s)`,
+    );
   }
 
   private pruneArchives(chatId: string, suffix: "reset" | "precompact"): void {

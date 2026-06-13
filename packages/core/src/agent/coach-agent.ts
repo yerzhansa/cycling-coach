@@ -260,7 +260,12 @@ export class CoachAgent {
 
   async resetSession(chatId: string): Promise<void> {
     // Flush before reset to avoid losing un-persisted context
-    const { messages: history } = this.chatStore.load(chatId);
+    let history: ModelMessage[] = [];
+    try {
+      ({ messages: history } = this.chatStore.load(chatId));
+    } catch (err) {
+      console.warn("Pre-reset session load failed; archiving session anyway", err);
+    }
     if (history.length > 0) {
       try {
         await this.flushMemory(history);
