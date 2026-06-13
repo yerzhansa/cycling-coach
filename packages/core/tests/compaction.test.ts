@@ -158,3 +158,64 @@ describe("compaction (sport-parameterized)", () => {
     expect(audit.missing).toEqual(["## Coach Stance"]);
   });
 });
+
+describe("summarizeDroppedMessages failure containment", () => {
+  it("throws when every chunk fails", async () => {
+    const llm = createFakeLLM([{ error: new Error("boom") }], { repeatLast: true });
+
+    await expect(
+      summarizeDroppedMessages({
+        dropped: REPRESENTATIVE_CONVERSATION,
+        llm,
+        mustPreserveTokens: [],
+        memory: EMPTY_SNAPSHOT,
+      }),
+    ).rejects.toThrow("Dropped message summarization failed for every chunk");
+  });
+
+  it("requeues the failed chunk's messages when one chunk fails", async () => {
+    const firstMessage: ModelMessage = { role: "user", content: "CHUNK-A " + "a".repeat(20_000) };
+    const secondMessage: ModelMessage = { role: "user", content: "CHUNK-B " + "b".repeat(20_000) };
+    const llm = createFakeLLM([{ error: new Error("boom") }, VALID_FIVE_SECTION_SUMMARY]);
+
+    const result = await summarizeDroppedMessages({
+      dropped: [firstMessage, secondMessage],
+      llm,
+      mustPreserveTokens: [],
+      memory: EMPTY_SNAPSHOT,
+      contextWindowTokens: 30_000,
+    });
+
+    expect(result.unsummarized).toEqual([firstMessage]);
+    expect(result.summary).toContain("## Coach Stance");
+  });
+
+  it("returns an empty requeue on success", async () => {
+    const llm = createFakeLLM([VALID_FIVE_SECTION_SUMMARY]);
+
+    const result = await summarizeDroppedMessages({
+      dropped: REPRESENTATIVE_CONVERSATION,
+      llm,
+      mustPreserveTokens: [],
+      memory: EMPTY_SNAPSHOT,
+    });
+
+    expect(result.unsummarized).toEqual([]);
+    expect(result.summary).toContain("## Coach Stance");
+  });
+
+  it("short-circuits empty dropped without an LLM call", async () => {
+    const llm = createFakeLLM([VALID_FIVE_SECTION_SUMMARY]);
+
+    const result = await summarizeDroppedMessages({
+      dropped: [],
+      llm,
+      mustPreserveTokens: [],
+      memory: EMPTY_SNAPSHOT,
+      previousSummary: "prior",
+    });
+
+    expect(result).toEqual({ summary: "prior", unsummarized: [] });
+    expect(llm.capturedPrompts).toHaveLength(0);
+  });
+});

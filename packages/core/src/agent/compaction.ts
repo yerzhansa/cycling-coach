@@ -200,10 +200,10 @@ export async function summarizeDroppedMessages(params: {
   previousSummary?: string;
   maxRetries?: number;
   contextWindowTokens?: number;
-}): Promise<string> {
+}): Promise<{ summary: string; unsummarized: ModelMessage[] }> {
   const { dropped, llm, mustPreserveTokens, memory, previousSummary, maxRetries = 1, contextWindowTokens } = params;
 
-  if (dropped.length === 0) return previousSummary ?? "";
+  if (dropped.length === 0) return { summary: previousSummary ?? "", unsummarized: [] };
 
   const tokens = resolveTokens(mustPreserveTokens, memory);
   const droppedPrompt = buildDroppedMessagesPrompt(tokens);
@@ -214,6 +214,8 @@ export async function summarizeDroppedMessages(params: {
   if (chunks.length === 0) chunks.push(dropped);
 
   let summary: string | undefined;
+  const unsummarized: ModelMessage[] = [];
+  let lastError: unknown;
 
   for (const chunk of chunks) {
     const transcript = formatTranscript(chunk);
@@ -231,15 +233,21 @@ export async function summarizeDroppedMessages(params: {
       });
       summary = text;
     } catch (err) {
+      lastError = err;
+      unsummarized.push(...chunk);
       console.warn("Dropped message summarization LLM call failed, using fallback", err);
     }
   }
 
-  if (summary === undefined) return capSummary(previousSummary ?? "");
+  if (summary === undefined) {
+    throw new Error("Dropped message summarization failed for every chunk", {
+      cause: lastError,
+    });
+  }
 
   // Quality guard with retry
   const audit = auditSummaryQuality(summary);
-  if (audit.ok) return capSummary(summary);
+  if (audit.ok) return { summary: capSummary(summary), unsummarized };
 
   let best: string = summary;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -249,14 +257,14 @@ export async function summarizeDroppedMessages(params: {
         maxOutputTokens: MAX_SUMMARY_TOKENS,
       });
       const retryAudit = auditSummaryQuality(text);
-      if (retryAudit.ok) return capSummary(text);
+      if (retryAudit.ok) return { summary: capSummary(text), unsummarized };
       best = text;
     } catch (err) {
       console.warn("Dropped message summarization retry failed", err);
     }
   }
 
-  return capSummary(best);
+  return { summary: capSummary(best), unsummarized };
 }
 
 // ============================================================================

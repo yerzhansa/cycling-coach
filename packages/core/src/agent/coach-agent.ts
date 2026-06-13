@@ -140,15 +140,27 @@ export class CoachAgent {
       });
 
       let summaryMsg: ModelMessage | undefined;
+      let requeued: ModelMessage[] = [];
       if (dropped.length > 0) {
+        let flushed = true;
         try {
-          const summary = await summarizeDroppedMessages({
+          await this.flushMemory(history);
+        } catch (err) {
+          flushed = false;
+          console.warn("Pre-compaction memory flush failed; keeping session file unchanged", err);
+        }
+        try {
+          const { summary, unsummarized } = await summarizeDroppedMessages({
             dropped,
             previousSummary,
             ...this.compactionParams(),
           });
           summaryMsg = makeSummaryMessage(summary);
-          this.chatStore.overwriteHistory(chatId, [summaryMsg, ...kept]);
+          requeued = unsummarized;
+          if (flushed) {
+            this.chatStore.archivePreCompact(chatId);
+            this.chatStore.overwriteHistory(chatId, [summaryMsg, ...requeued, ...kept]);
+          }
         } catch (err) {
           console.warn("Dropped message summarization failed, continuing without summary", err);
           if (previousSummary) {
@@ -168,6 +180,7 @@ export class CoachAgent {
       // Build messages array with new user message
       let messages: ModelMessage[] = [
         ...(summaryMsg ? [summaryMsg] : []),
+        ...requeued,
         ...kept,
         { role: "user", content: userMessageWithTime },
       ];

@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -29,10 +30,16 @@ function listArchives(chatId: string): string[] {
     .sort();
 }
 
+function listPrecompactArchives(chatId: string): string[] {
+  return readdirSync(sessionsDir)
+    .filter((f) => f.startsWith(`${chatId}.jsonl.precompact.`))
+    .sort();
+}
+
 const MS_PER_DAY = 86_400_000;
 
-function plantArchive(chatId: string, date: Date): string {
-  const name = `${chatId}.jsonl.reset.${date.toISOString().replace(/:/g, "-")}`;
+function plantArchive(chatId: string, date: Date, suffix = "reset"): string {
+  const name = `${chatId}.jsonl.${suffix}.${date.toISOString().replace(/:/g, "-")}`;
   writeFileSync(join(sessionsDir, name), "{}\n", "utf-8");
   return name;
 }
@@ -143,5 +150,67 @@ describe("ChatStore.archiveAndReset — opt-in age-based retention", () => {
     store.archiveAndReset("123");
 
     expect(listArchives("123")).toContain(ancient);
+  });
+});
+
+describe("ChatStore.archivePreCompact — pre-compaction archives", () => {
+  it("copies the session file, leaving the original intact", () => {
+    const store = new ChatStore(dataDir);
+    store.appendMessage("123", "user", "precious context");
+
+    store.archivePreCompact("123");
+
+    expect(store.hasSession("123")).toBe(true);
+    expect(readFileSync(join(sessionsDir, "123.jsonl"), "utf-8")).toContain("precious context");
+    const archives = listPrecompactArchives("123");
+    expect(archives).toHaveLength(1);
+    expect(readFileSync(join(sessionsDir, archives[0]), "utf-8")).toContain("precious context");
+  });
+
+  it("writes the archive with owner-only 0o600", () => {
+    const store = new ChatStore(dataDir);
+    store.appendMessage("123", "user", "precious context");
+
+    store.archivePreCompact("123");
+
+    const archives = listPrecompactArchives("123");
+    expect(statSync(join(sessionsDir, archives[0])).mode & 0o777).toBe(0o600);
+  });
+
+  it("is a no-op when no live session exists", () => {
+    const store = new ChatStore(dataDir);
+
+    store.archivePreCompact("ghost");
+
+    expect(existsSync(join(sessionsDir, "ghost.jsonl"))).toBe(false);
+    expect(listPrecompactArchives("ghost")).toHaveLength(0);
+  });
+
+  it("never prunes pre-compaction archives when retention is disabled", () => {
+    const store = new ChatStore(dataDir);
+    const old = plantArchive("123", new Date(Date.now() - 40 * MS_PER_DAY), "precompact");
+
+    store.appendMessage("123", "user", "hello");
+    store.archivePreCompact("123");
+
+    expect(listPrecompactArchives("123")).toContain(old);
+  });
+
+  it("prunes only its own suffix when opt-in retention is active", () => {
+    const store = new ChatStore(dataDir, 30);
+    const oldPrecompact = plantArchive("123", new Date(Date.now() - 40 * MS_PER_DAY), "precompact");
+    const oldReset = plantArchive("123", new Date(Date.now() - 40 * MS_PER_DAY), "reset");
+
+    store.appendMessage("123", "user", "hello");
+    store.archivePreCompact("123");
+
+    expect(listPrecompactArchives("123")).not.toContain(oldPrecompact);
+    expect(listPrecompactArchives("123")).toHaveLength(1);
+    expect(listArchives("123")).toContain(oldReset);
+
+    store.archiveAndReset("123");
+
+    expect(listArchives("123")).not.toContain(oldReset);
+    expect(listPrecompactArchives("123")).toHaveLength(1);
   });
 });

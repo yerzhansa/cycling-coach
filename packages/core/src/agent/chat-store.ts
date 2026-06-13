@@ -3,6 +3,7 @@ import {
   writeFileSync,
   appendFileSync,
   renameSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -99,12 +100,21 @@ export class ChatStore {
     const ts = new Date().toISOString().replace(/:/g, "-");
     const archivePath = `${path}.reset.${ts}`;
     renameSync(path, archivePath);
-    this.pruneArchives(chatId);
+    this.pruneArchives(chatId, "reset");
   }
 
-  private pruneArchives(chatId: string): void {
+  archivePreCompact(chatId: string): void {
+    const path = this.filePath(chatId);
+    if (!existsSync(path)) return;
+
+    const ts = new Date().toISOString().replace(/:/g, "-");
+    copyFileSync(path, `${path}.precompact.${ts}`);
+    this.pruneArchives(chatId, "precompact");
+  }
+
+  private pruneArchives(chatId: string, suffix: "reset" | "precompact"): void {
     if (this.resetArchiveRetentionDays <= 0) return;
-    const prefix = `${chatId}.jsonl.reset.`;
+    const prefix = `${chatId}.jsonl.${suffix}.`;
     const cutoffMs = Date.now() - this.resetArchiveRetentionDays * MS_PER_DAY;
     for (const name of readdirSync(this.sessionsDir)) {
       if (!name.startsWith(prefix)) continue;
