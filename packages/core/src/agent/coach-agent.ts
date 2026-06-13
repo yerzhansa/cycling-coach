@@ -22,7 +22,7 @@ import {
   TIMEOUT_COMPACTION_THRESHOLD,
 } from "./token-utils.js";
 import { summarizeInStages, summarizeDroppedMessages } from "./compaction.js";
-import { runMemoryFlush, FLUSH_ZERO_WRITE_MIN_MESSAGES } from "./memory-flush.js";
+import { runMemoryFlush, FLUSH_ZERO_WRITE_MIN_MESSAGES, shouldRunMemoryFlush } from "./memory-flush.js";
 import type { MemoryFlushOutcome } from "./memory-flush.js";
 import { evaluateSessionFreshness } from "./session-freshness.js";
 import { LLM } from "../llm.js";
@@ -43,7 +43,8 @@ type MemoryFlushTrigger =
   | "explicit-reset"
   | "trim"
   | "pre-compaction"
-  | "overflow-recovery";
+  | "overflow-recovery"
+  | "soft-threshold";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -63,6 +64,7 @@ export class CoachAgent {
   private systemPrompt: string;
   private tz: string;
   private archiveDeferred = new Set<string>();
+  private lastFlushMessageCount = new Map<string, number>();
 
   constructor(sport: Sport, config: Config) {
     this.sport = sport;
@@ -170,6 +172,7 @@ export class CoachAgent {
         } else {
           this.archiveDeferred.delete(chatId);
           this.chatStore.archiveAndReset(chatId);
+          this.lastFlushMessageCount.delete(chatId);
           history = [];
         }
       }
@@ -189,6 +192,7 @@ export class CoachAgent {
       let summaryMsg: ModelMessage | undefined;
       let requeued: ModelMessage[] = [];
       if (dropped.length > 0) {
+        this.lastFlushMessageCount.set(chatId, history.length);
         let flushed = true;
         try {
           await this.flushMemory(history, "trim");
@@ -216,6 +220,23 @@ export class CoachAgent {
         }
       } else if (previousSummary) {
         summaryMsg = makeSummaryMessage(previousSummary);
+      }
+
+      if (
+        dropped.length === 0 &&
+        shouldRunMemoryFlush({
+          estimatedTokens: estimateMessagesTokens(history),
+          tokenBudget: budget,
+          lastFlushMessageCount: this.lastFlushMessageCount.get(chatId) ?? 0,
+          currentMessageCount: history.length,
+        })
+      ) {
+        this.lastFlushMessageCount.set(chatId, history.length);
+        try {
+          await this.flushMemory(history, "soft-threshold");
+        } catch (err) {
+          console.warn("Soft-threshold memory flush failed; continuing turn", err);
+        }
       }
 
       // Append a fresh "Current time:" line to the user message so the LLM
@@ -349,6 +370,7 @@ export class CoachAgent {
     }
     this.archiveDeferred.delete(chatId);
     this.chatStore.archiveAndReset(chatId);
+    this.lastFlushMessageCount.delete(chatId);
     return { memoryFlushed };
   }
 

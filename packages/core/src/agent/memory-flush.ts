@@ -15,6 +15,20 @@ import { todayInTZ } from "./user-time.js";
 
 export const SOFT_THRESHOLD_RATIO = 0.8;
 
+export const FLUSH_COOLDOWN_MESSAGES = 5;
+
+export function shouldRunMemoryFlush(params: {
+  estimatedTokens: number;
+  tokenBudget: number;
+  lastFlushMessageCount: number;
+  currentMessageCount: number;
+}): boolean {
+  if (params.currentMessageCount - params.lastFlushMessageCount < FLUSH_COOLDOWN_MESSAGES) {
+    return false;
+  }
+  return params.estimatedTokens > params.tokenBudget * SOFT_THRESHOLD_RATIO;
+}
+
 export const FLUSH_ZERO_WRITE_MIN_MESSAGES = 4;
 export const FLUSH_SHRINK_MIN_CHARS = 200;
 export const FLUSH_SHRINK_RATIO = 0.7;
