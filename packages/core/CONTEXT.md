@@ -32,6 +32,12 @@ Sport-specific sections declared by a Sport package, with the sport id as prefix
 **Must-Preserve Tokens**:
 Per-Sport list of literal phrases the LLM is forbidden to drop during compaction (e.g., `FTP`, `VDOT`).
 
+**Trim Compaction**:
+The persistent compaction path. At session load, when history exceeds the token budget, the oldest messages are summarized and the session JSONL is rewritten as `[summary, ...unsummarized, ...kept]` — after a pre-overwrite memory flush and a `.precompact` archive copy of the original file; the rewrite is skipped entirely when the flush fails. The only compaction that mutates the on-disk record.
+
+**In-Turn Compaction**:
+The ephemeral compaction path (`summarizeInStages`). Reshapes only the in-memory message array, from three sites in the chat loop (preemptive over-budget, context-overflow recovery, timeout recovery); the session JSONL keeps the full history and the reshaped array is discarded at end of turn.
+
 **CoreDeps**:
 The runtime services Core supplies to a Sport's tool factory: `LLM`, `IntervalsClient`, `MemoryStore`, `SecretsResolver`.
 

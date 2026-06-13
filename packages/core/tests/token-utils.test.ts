@@ -1,0 +1,82 @@
+import { describe, it, expect } from "vitest";
+import type { ModelMessage } from "ai";
+import {
+  messageText,
+  estimateTokens,
+  estimateMessagesTokens,
+  computeHistoryTokenBudget,
+  shouldCompact,
+} from "../src/agent/token-utils.js";
+
+const msg = (chars: number): ModelMessage => ({ role: "user", content: "x".repeat(chars) });
+
+describe("estimateTokens", () => {
+  it("pins the chars/4 x 1.2 formula", () => {
+    expect(estimateTokens("")).toBe(0);
+    expect(estimateTokens("abcd")).toBe(2);
+    expect(estimateTokens("x".repeat(40))).toBe(12);
+    expect(estimateTokens("x".repeat(400))).toBe(120);
+  });
+});
+
+describe("messageText", () => {
+  it("returns string content verbatim and \"\" for part-array content", () => {
+    expect(messageText({ role: "user", content: "hello" })).toBe("hello");
+    expect(messageText({ role: "user", content: [{ type: "text", text: "hi" }] })).toBe("");
+  });
+});
+
+describe("estimateMessagesTokens", () => {
+  it("sums per-message estimates, with part-array messages contributing 0", () => {
+    expect(estimateMessagesTokens([msg(400), msg(400)])).toBe(240);
+    expect(
+      estimateMessagesTokens([
+        msg(400),
+        { role: "user", content: [{ type: "text", text: "x".repeat(400) }] },
+      ]),
+    ).toBe(120);
+  });
+});
+
+describe("computeHistoryTokenBudget", () => {
+  it("computes window x ratio minus system-prompt tokens minus the reserve", () => {
+    expect(
+      computeHistoryTokenBudget({
+        contextWindowTokens: 200_000,
+        systemPrompt: "x".repeat(4000),
+        budgetRatio: 0.3,
+      }),
+    ).toBe(38_800);
+  });
+
+  it("floors at 8,000 tokens", () => {
+    expect(
+      computeHistoryTokenBudget({
+        contextWindowTokens: 100_000,
+        systemPrompt: "x".repeat(8000),
+        budgetRatio: 0.3,
+      }),
+    ).toBe(8000);
+    expect(
+      computeHistoryTokenBudget({
+        contextWindowTokens: 10_000,
+        systemPrompt: "",
+        budgetRatio: 0.3,
+      }),
+    ).toBe(8000);
+  });
+});
+
+describe("shouldCompact", () => {
+  it("is strict at the boundary and counts the system prompt", () => {
+    expect(
+      shouldCompact({ messages: [msg(4000)], systemPrompt: "", contextWindowTokens: 21_200 }),
+    ).toBe(false);
+    expect(
+      shouldCompact({ messages: [msg(4000)], systemPrompt: "", contextWindowTokens: 21_199 }),
+    ).toBe(true);
+    expect(
+      shouldCompact({ messages: [msg(4000)], systemPrompt: "xxxx", contextWindowTokens: 21_200 }),
+    ).toBe(true);
+  });
+});
