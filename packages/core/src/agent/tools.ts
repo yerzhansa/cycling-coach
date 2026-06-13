@@ -2,6 +2,7 @@ import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import type { MemorySectionSpec } from "../sport.js";
 import type { MemoryStore } from "../memory.js";
+import { isRealDateKey, parseDateKeyMs, MS_PER_DAY } from "../io/date-keys.js";
 
 function buildMemoryWriteDescription(sections: readonly MemorySectionSpec[]): string {
   const sectionList = sections.map((s) => `${s.name} (${s.description})`).join("; ");
@@ -22,11 +23,6 @@ export function createMemoryReadTool(memory: MemoryStore) {
 const MEMORY_QUERY_MAX_RANGE_DAYS = 366;
 const MEMORY_QUERY_MAX_RESULT_CHARS = 20_000;
 const MEMORY_QUERY_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-function isRealDate(d: string): boolean {
-  const ms = Date.parse(`${d}T00:00:00Z`);
-  return Number.isFinite(ms) && new Date(ms).toISOString().slice(0, 10) === d;
-}
 
 export function createMemoryQueryTool(memory: MemoryStore) {
   return tool({
@@ -52,14 +48,13 @@ export function createMemoryQueryTool(memory: MemoryStore) {
     ),
     execute: async (input: { from: string; to: string; query?: string }) => {
       const { from, to, query } = input;
-      if (!isRealDate(from) || !isRealDate(to)) {
+      if (!isRealDateKey(from) || !isRealDateKey(to)) {
         return `Error: ${from}..${to} contains an invalid calendar date. Use real YYYY-MM-DD dates.`;
       }
       if (from > to) {
         return `Error: 'from' (${from}) is after 'to' (${to}). Swap the bounds.`;
       }
-      const rangeDays =
-        (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 + 1;
+      const rangeDays = (parseDateKeyMs(to) - parseDateKeyMs(from)) / MS_PER_DAY + 1;
       if (rangeDays > MEMORY_QUERY_MAX_RANGE_DAYS) {
         return `Error: range is ${rangeDays} days; the maximum is ${MEMORY_QUERY_MAX_RANGE_DAYS}. Query a narrower range.`;
       }

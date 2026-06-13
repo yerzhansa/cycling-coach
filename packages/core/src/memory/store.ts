@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { MemoryStore, MemoryWriteSource } from "../memory.js";
 import { todayInTZ } from "../agent/user-time.js";
 import { atomicWriteFileSync } from "../io/atomic-write-file-sync.js";
+import { eachDateKeyInRange } from "../io/date-keys.js";
 import { appendJournalEntry } from "./journal.js";
 import { appendLedgerEvent, LEDGER_FILENAME, type LedgerEventInput } from "./event-ledger.js";
 
@@ -213,12 +214,8 @@ export class Memory implements MemoryStore {
   }
 
   readDailyNotesInRange(from: string, to: string): Array<{ date: string; text: string }> {
-    const fromMs = Date.parse(`${from}T00:00:00Z`);
-    const toMs = Date.parse(`${to}T00:00:00Z`);
-    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return [];
     const out: Array<{ date: string; text: string }> = [];
-    for (let t = fromMs; t <= toMs; t += 86_400_000) {
-      const date = new Date(t).toISOString().slice(0, 10);
+    for (const date of eachDateKeyInRange(from, to)) {
       const text = this.readDailyNotes(date);
       if (text) out.push({ date, text });
     }
