@@ -161,10 +161,14 @@ describe("runMemoryFlush outcome detection", () => {
     expect(shrunk).toHaveLength(1);
     expect(shrunk[0].section).toBe("medical-history");
     expect(shrunk[0].beforeChars).toBe(body.length);
-    expect(shrunk[0].afterChars).toBe("Asthma, mild".length);
+    expect(shrunk[0].afterChars).toBe("_updated: 0000-00-00\n".length + "Asthma, mild".length);
     expect(JSON.stringify(shrunk[0]).toLowerCase()).not.toContain("lisinopril");
     expect(outcome.shrunkSections).toEqual([
-      { section: "medical-history", beforeChars: body.length, afterChars: "Asthma, mild".length },
+      {
+        section: "medical-history",
+        beforeChars: body.length,
+        afterChars: "_updated: 0000-00-00\n".length + "Asthma, mild".length,
+      },
     ]);
   });
 

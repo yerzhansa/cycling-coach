@@ -87,13 +87,13 @@ describe("Memory.renameSection", () => {
     memory.writeSection("schedule", "Mon, Wed, Fri");
     memory.writeSection("health", "Knee twinge resolved");
     const beforeRename = readFileSync(path, "utf-8");
-    expect(beforeRename.endsWith("## health\nKnee twinge resolved\n")).toBe(true);
+    expect(beforeRename).toMatch(/## health\n_updated: \d{4}-\d{2}-\d{2}\nKnee twinge resolved\n$/);
 
     expect(memory.renameSection("health", "cycling-history")).toBe("renamed");
     const after = readFileSync(path, "utf-8");
-    expect(after.endsWith("## cycling-history\nKnee twinge resolved\n")).toBe(true);
+    expect(after).toMatch(/## cycling-history\n_updated: \d{4}-\d{2}-\d{2}\nKnee twinge resolved\n$/);
     // schedule (the prior section) should be untouched
-    expect(after.includes("## schedule\nMon, Wed, Fri\n")).toBe(true);
+    expect(after).toMatch(/## schedule\n_updated: \d{4}-\d{2}-\d{2}\nMon, Wed, Fri\n/);
   });
 
   it('merges bodies under `to` when both sections exist; `from` block removed', () => {

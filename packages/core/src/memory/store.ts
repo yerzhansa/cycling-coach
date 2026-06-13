@@ -14,6 +14,24 @@ const SECTION_SPLIT = /(?=^## )/m;
 const markerOf = (section: string) => `## ${section}`;
 const bodyOf = (block: string) => block.slice(block.indexOf("\n") + 1);
 
+const UPDATED_STAMP_PREFIX = "_updated: ";
+
+/**
+ * Stamp a section body's first line with its write date. Idempotent: an
+ * existing leading stamp (e.g. echoed back by the LLM from memory_read)
+ * is replaced, never stacked — a body carries at most one leading stamp.
+ */
+function stampUpdated(content: string, date: string): string {
+  let body = content;
+  if (body.startsWith(UPDATED_STAMP_PREFIX)) {
+    const nl = body.indexOf("\n");
+    body = nl === -1 ? "" : body.slice(nl + 1);
+  }
+  return body === ""
+    ? `${UPDATED_STAMP_PREFIX}${date}`
+    : `${UPDATED_STAMP_PREFIX}${date}\n${body}`;
+}
+
 type RenameOutcome = "renamed" | "noop" | "merged";
 
 /**
@@ -69,14 +87,15 @@ export class Memory implements MemoryStore {
     const path = join(this.memoryDir, "MEMORY.md");
     const existing = this.readMemory();
     const marker = markerOf(section);
-    const newBlock = `${marker}\n${content}\n`;
+    const stamped = stampUpdated(content, todayInTZ(this.tz));
+    const newBlock = `${marker}\n${stamped}\n`;
 
     appendJournalEntry(this.memoryDir, {
       ts: new Date().toISOString(),
       op: "write-section",
       section,
       oldBody: this.readSection(section),
-      newBody: content,
+      newBody: stamped,
       source,
     });
 

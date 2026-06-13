@@ -40,9 +40,9 @@ describe("memory journal", () => {
       op: "write-section",
       section: "goals",
       oldBody: null,
-      newBody: "Sub-3:30 century",
       source: "chat-tool",
     });
+    expect(lines[0].newBody).toMatch(/^_updated: \d{4}-\d{2}-\d{2}\nSub-3:30 century$/);
     expect(lines[0].ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   });
 
@@ -55,7 +55,7 @@ describe("memory journal", () => {
 
     const lines = readJournal(dataDir);
     expect(lines).toHaveLength(2);
-    expect(lines[1].oldBody).toBe("Hypertension; lisinopril 10mg");
+    expect(lines[1].oldBody).toMatch(/^_updated: \d{4}-\d{2}-\d{2}\nHypertension; lisinopril 10mg$/);
 
     const replayDir = mkdtempSync(join(tmpdir(), "cc-journal-replay-"));
     const replayMemory = new Memory(replayDir);
@@ -136,7 +136,7 @@ describe("memory journal", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     expect(() => memory.writeSection("goals", "Sub-3:30 century")).not.toThrow();
-    expect(memory.readSection("goals")).toBe("Sub-3:30 century");
+    expect(memory.readSection("goals")).toMatch(/^_updated: \d{4}-\d{2}-\d{2}\nSub-3:30 century$/);
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("memory journal append failed"),
     );

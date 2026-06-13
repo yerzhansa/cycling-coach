@@ -71,6 +71,17 @@ For each section you write, include ALL current facts for that section
 (both from memory and from the conversation). This fully replaces the
 section content — omitted facts will be lost.
 
+Dating discipline for durable facts:
+- Append "(<source>, <YYYY-MM-DD>)" to each material fact — who stated it
+  (athlete, coach, intervals.icu) and the date it was last confirmed.
+  Example: "- FTP 252W (athlete, 2026-06-08)".
+- When carrying an unchanged fact forward, keep its existing source and date;
+  re-date a fact only when this conversation re-confirmed it.
+- If a fact's date is more than 6 months before today, keep the fact and
+  append "(re-confirm)" so it can be verified with the athlete.
+- Never write "_updated:" lines yourself; the system stamps each section's
+  update date automatically.
+
 Note (transitional, post-migration): if \`cycling-profile\` contains weight,
 age, or available training days, move them to \`person\`. If \`cycling-history\`
 contains chronic conditions or long-term medications (hypertension, lisinopril,
