@@ -8,3 +8,9 @@ updates:
     directory: /packages/cycling-coach
     schedule:
       interval: weekly
+    # Hold the base image on its current Node LTS line; take digest/minor/patch
+    # security updates automatically but bump the major by hand to the next LTS
+    # (even majors), skipping odd-numbered Current releases.
+    ignore:
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
