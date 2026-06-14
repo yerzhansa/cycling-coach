@@ -122,3 +122,29 @@ export type SportPersona = Pick<Sport, "soul" | "skills">;
 /** Slice consumed by the memory store factory and the compaction module. */
 export type SportMemoryShape = Pick<Sport, "memorySections" | "mustPreserveTokens">;
 
+/**
+ * Composes multiple sports' skill records into one, throwing on any colliding
+ * key. The bare-spread alternative silently drops the earlier sport's skill;
+ * a skill block is large enough that a silent loss is worse than a hard failure
+ * at boot. Sports keep their keys sport-prefixed (e.g. `cycling-periodization`)
+ * so collisions are structurally unreachable; this guard is the backstop if a
+ * prefix is ever forgotten.
+ */
+export function mergeSportSkills(
+  ...records: ReadonlyArray<Readonly<Record<string, string>>>
+): Record<string, string> {
+  const merged: Record<string, string> = {};
+  for (const record of records) {
+    for (const [key, value] of Object.entries(record)) {
+      if (key in merged) {
+        throw new Error(
+          `Duplicate skill key "${key}" while composing sports. ` +
+            `Skill keys must be sport-prefixed (e.g. "cycling-${key}") to compose.`,
+        );
+      }
+      merged[key] = value;
+    }
+  }
+  return merged;
+}
+

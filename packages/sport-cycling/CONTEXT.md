@@ -24,6 +24,7 @@ A single training session (cycling discipline) — name, duration, structured in
 
 - Implements the **Sport** contract from `@enduragent/core` (declared `cyclingSport: Sport`).
 - Owns Memory sections: `cycling-profile`, `cycling-equipment`, `cycling-history` (all sport-prefixed per ADR-0003).
+- Skill keys are sport-prefixed (`cycling-periodization`, `cycling-recovery`, …) so duathlon composition (ADR-0002) can merge sports' skills without collision; Core's `mergeSportSkills` guard throws on a duplicate key.
 - Declares `intervalsActivityTypes: ["Ride", "VirtualRide"]` for intervals.icu sync.
 - `mustPreserveTokens` is function-form; reads `cycling-profile` to extract current FTP value.
 - `tools()` composes four buckets per ADR-0004: `createMemoryTools` + `createPureCoreIntervalsTools` + `createCoreToolsWithSportConfig` + sport-specific `createCyclingTools`.

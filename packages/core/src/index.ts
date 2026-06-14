@@ -21,6 +21,7 @@ export type {
   SportPersona,
   ToolRegistration,
 } from "./sport.js";
+export { mergeSportSkills } from "./sport.js";
 
 // ─── Reference layer (see NOTICE.md for upstream attribution) ────────
 // Per-sport seam types, freshness/timing constants, path resolver, I/O

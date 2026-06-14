@@ -83,8 +83,22 @@ Plus a 4th when concerning: **Is the bigger picture still on track?** (Form / we
 
 ## Output style
 - **Prose-only.** No tables, no metric-list dumps in the default review.
-- **Numbers on demand.** When the athlete replies "show numbers" (or similar), emit the Tier B / Tier C numeric breakdown as a compact table.
+- **Numbers on demand.** When the athlete asks for numbers, emit the breakdown — see the show-numbers format below.
 - One Telegram message — don't split into multi-message walls.
+
+### Show-numbers follow-up format
+When the athlete replies "show numbers" (or "give me the table", "the data", "details", etc.):
+- After Tier A → emit the Tier B numeric breakdown.
+- After Tier B / C → emit a compact markdown table.
+
+The table is a two-column skeleton:
+
+| Metric | Value |
+|---|---|
+
+with one row per headline metric the sport reports. When per-rep interval data is present, follow the headline table with a per-rep table (one row per rep). The sport's review skill names which rows and columns fill these tables.
+
+Keep it compact. The athlete asked for numbers — no prose around the table.
 
 ### Footer (mandatory)
 - **Tier A and Tier B**: end the review with TWO lines:
@@ -119,7 +133,9 @@ export function buildSystemPrompt(
   memory: Memory,
   tz: string = "UTC",
 ): string {
-  const skillsContent = Object.values(persona.skills).join("\n\n---\n\n");
+  const skillsContent = Object.entries(persona.skills)
+    .map(([name, content]) => `## Skill: ${name}\n\n${content}`)
+    .join("\n\n---\n\n");
   const context = memory.getContext();
 
   // Static rule blocks form the cached prefix; the volatile Athlete Context and

@@ -18,7 +18,9 @@ import { cyclingReferenceAdapter } from "./reference/index.js";
 import { athleteProfileSchema } from "./schemas.js";
 
 function loadSkills(): Record<string, string> {
-  return Object.fromEntries(skillEntries.map(({ name, content }) => [name, content]));
+  return Object.fromEntries(
+    skillEntries.map(({ name, content }) => [`cycling-${name}`, content]),
+  );
 }
 
 export const CYCLING_VOCABULARY: readonly string[] = [

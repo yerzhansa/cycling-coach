@@ -170,4 +170,24 @@ describe("WORKOUT_REVIEW_RULES content", () => {
   it("contains the natural-language scoping clause", () => {
     expect(prompt).toMatch(/remaining text as a scoping hint/);
   });
+
+  it("carries the show-numbers escalation ladder in Core", () => {
+    expect(prompt).toContain("After Tier A");
+    expect(prompt).toContain("compact markdown table");
+    expect(prompt).toContain("give me the table");
+  });
+
+  it("carries the generic show-numbers table skeleton in Core", () => {
+    expect(prompt).toContain("| Metric | Value |");
+    expect(prompt).toContain("no prose around the table");
+  });
+
+  it("keeps cycling metric rows out of Core's WORKOUT_REVIEW_RULES", () => {
+    const reviewSection = prompt
+      .split("\n\n---\n\n")
+      .find((s) => s.startsWith("# Workout Review"));
+    expect(reviewSection).toBeDefined();
+    expect(reviewSection).not.toContain("Avg cadence");
+    expect(reviewSection).not.toContain("Target W");
+  });
 });

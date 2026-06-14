@@ -70,14 +70,13 @@ Reviewing differs by venue:
   athlete for high VI on outdoor rides; only flag if a structured interval session
   shows VI > 1.10 (suggesting they didn't hold steady on what should have been steady).
 
-## Show numbers follow-up format
+## Show numbers — the cycling rows
 
-When the athlete replies "show numbers" (or "give me the table", "the data", "details",
-etc.):
-- After Tier A → emit the Tier B numeric breakdown.
-- After Tier B / C → emit a compact markdown table.
+Core's review-rules block owns the show-numbers trigger, the tier-escalation ladder,
+the `| Metric | Value |` skeleton, and the compact-table formatting rule. This
+section names the cycling rows that fill that skeleton.
 
-Tier B / C "show numbers" table shape:
+Headline table rows:
 
 | Metric | Value |
 |---|---|
@@ -90,8 +89,6 @@ Tier B / C "show numbers" table shape:
 | Avg cadence | rpm |
 | Fitness / Fatigue / Form | n / n / n |
 
-If `icu_intervals` present, follow the headline table with a per-rep table:
+When `icu_intervals` is present, the per-rep table columns are:
 
 | Rep | Target W | Actual avg W | Avg HR | Time |
-
-Keep it compact. The athlete asked for numbers — no prose around the table.
