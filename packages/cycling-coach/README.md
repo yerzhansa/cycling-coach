@@ -4,7 +4,7 @@ AI cycling coaching agent. Bring your own LLM API key **or sign in with a ChatGP
 
 ## Install
 
-Requires [Node.js](https://nodejs.org/) 20+.
+Requires [Node.js](https://nodejs.org/) 22+.
 
 ```bash
 npm install -g cycling-coach

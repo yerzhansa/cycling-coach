@@ -48,7 +48,7 @@ AI cycling coaching agent. Bring your own LLM API key **or sign in with a ChatGP
 
 ## Quick start
 
-Requires [Node.js](https://nodejs.org/) 20+ (comes with npm).
+Requires [Node.js](https://nodejs.org/) 22+ (comes with npm).
 
 Open **Terminal** (Mac/Linux) or **PowerShell** (Windows) and run:
 
