@@ -27,12 +27,14 @@
  * import, member access, mutation) is a violation. Every realistic import/use
  * form surfaces the identifier by name, so this covers them all.
  *
- * One adversarial form is an accepted residual gap, NOT caught here: a dynamic
+ * The one adversarial form this lint cannot see by construction — a dynamic
  * string-keyed access (`ns["METRIC_REGISTRY"]`) reached via a deep import of
- * core internals. The public `@enduragent/core` barrel does not export the
- * registry (pinned in `reference-adapter-delegation-surface`), but deep
- * subpath/relative imports into core are not yet mechanically blocked, so that
- * exotic path is left to reviewer discipline rather than this lint.
+ * core internals — is now closed structurally rather than by this lint. The
+ * public `@enduragent/core` barrel does not export the registry (pinned in
+ * `reference-adapter-delegation-surface`), AND `@enduragent/core`'s package
+ * `exports` map exposes only the public entry, so any package-specifier deep
+ * import into core internals fails to resolve (`ERR_PACKAGE_PATH_NOT_EXPORTED`).
+ * The exotic path therefore cannot be reached from a sport package at all.
  *
  * Files that legitimately name the identifier (this linter, its test) opt out
  * via a `registry-isolation-lint:skip-file` marker in the first 1 KB.

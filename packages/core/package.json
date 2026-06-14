@@ -6,6 +6,9 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
   "license": "MIT",
   "scripts": {
     "build": "tsup",

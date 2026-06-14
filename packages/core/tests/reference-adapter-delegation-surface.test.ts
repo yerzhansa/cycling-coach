@@ -16,6 +16,9 @@
  */
 
 import { describe, it, expect, expectTypeOf } from "vitest";
+import { execFileSync } from "node:child_process";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   computeDfaA1Profile,
   computePowerCurveDelta,
@@ -86,5 +89,21 @@ describe("registry stays the sole writer of the capability metrics (OP1)", () =>
 
   it("does not leak the registry through the public barrel", () => {
     expect("METRIC_REGISTRY" in corePublicApi).toBe(false);
+  });
+
+  it("blocks deep package-specifier imports into core internals", () => {
+    // vitest resolves through Vite, which ignores Node's package `exports`
+    // field, so the boundary is asserted under Node's own loader via a child.
+    const corePkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+    const probe =
+      "import('@enduragent/core/dist/reference/metrics/registry.js')" +
+      ".then(() => process.stdout.write('RESOLVED'))" +
+      ".catch((err) => process.stdout.write(String(err?.code)));";
+    const reported = execFileSync(
+      process.execPath,
+      ["--input-type=module", "-e", probe],
+      { cwd: corePkgRoot, encoding: "utf8" },
+    );
+    expect(reported).toBe("ERR_PACKAGE_PATH_NOT_EXPORTED");
   });
 });
