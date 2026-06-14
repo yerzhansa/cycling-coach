@@ -135,16 +135,6 @@ describe("main", () => {
     expect(main([join(tempDir, "packages")])).toBe(0);
   });
 
-  it("skips node_modules, dist, and dotfile dirs while walking a package tree", () => {
-    // Each excluded dir carries a violation that MUST NOT be reported; only the
-    // src file is in scope and it is clean. Pins the load-bearing exclusion.
-    write("packages/sport-x/node_modules/dep/bad.ts", `export const k = METRIC_REGISTRY;\n`);
-    write("packages/sport-x/dist/out.ts", `export const k = METRIC_REGISTRY;\n`);
-    write("packages/sport-x/.cache/hidden.ts", `export const k = METRIC_REGISTRY;\n`);
-    write("packages/sport-x/src/ok.ts", `export const clean = 1;\n`);
-    expect(main([join(tempDir, "packages")])).toBe(0);
-  });
-
   it("treats an empty or nonexistent scope as a clean pass", () => {
     expect(main([join(tempDir, "does-not-exist")])).toBe(0);
   });

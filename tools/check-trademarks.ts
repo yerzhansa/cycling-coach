@@ -24,8 +24,8 @@
  */
 
 import * as ts from "typescript";
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { TS_EXTS, ext, collectFiles, makeSkipCheck, nonFlagArgs, runGateCli } from "./lint-fs.js";
 
 export interface TrademarkHit {
   readonly file: string;
@@ -48,13 +48,7 @@ export const FORBIDDEN_TOKENS: Readonly<Record<string, string>> = Object.freeze(
   "Normalized Power": "weighted average power",
 });
 
-const TS_EXTS = new Set([".ts", ".tsx", ".cts", ".mts"]);
 const MD_EXTS = new Set([".md", ".mdx"]);
-
-function getExt(file: string): string {
-  const i = file.lastIndexOf(".");
-  return i === -1 ? "" : file.slice(i);
-}
 
 /**
  * Build a regex that matches each forbidden token with proper word boundaries.
@@ -93,9 +87,7 @@ function* matchInText(
  */
 const SKIP_DIRECTIVE = "trademark-lint:skip-file";
 
-function isSkippedFile(source: string): boolean {
-  return source.slice(0, 1024).includes(SKIP_DIRECTIVE);
-}
+const isSkippedFile = makeSkipCheck(SKIP_DIRECTIVE);
 
 function findHitsInTsFile(file: string): TrademarkHit[] {
   const source = readFileSync(file, "utf-8");
@@ -204,33 +196,14 @@ function findHitsInMdFile(file: string): TrademarkHit[] {
 export function findTrademarkHits(files: readonly string[]): TrademarkHit[] {
   const out: TrademarkHit[] = [];
   for (const file of files) {
-    const ext = getExt(file);
-    if (TS_EXTS.has(ext)) {
+    const fileExt = ext(file);
+    if (TS_EXTS.has(fileExt)) {
       out.push(...findHitsInTsFile(file));
-    } else if (MD_EXTS.has(ext)) {
+    } else if (MD_EXTS.has(fileExt)) {
       out.push(...findHitsInMdFile(file));
     }
   }
   return out;
-}
-
-/** Recursively collect lintable files under a directory. */
-function collectFiles(path: string, out: string[]): void {
-  let st;
-  try {
-    st = statSync(path);
-  } catch {
-    return; // missing path — caller decides whether that's an error
-  }
-  if (st.isFile()) {
-    out.push(path);
-    return;
-  }
-  if (!st.isDirectory()) return;
-  for (const entry of readdirSync(path)) {
-    if (entry === "node_modules" || entry === "dist" || entry.startsWith(".")) continue;
-    collectFiles(join(path, entry), out);
-  }
 }
 
 function formatHit(hit: TrademarkHit): string {
@@ -255,7 +228,7 @@ const DEFAULT_SCAN_PATHS: readonly string[] = [
 ];
 
 export function main(argv: readonly string[]): number {
-  const args = argv.filter((a) => !a.startsWith("-"));
+  const args = nonFlagArgs(argv);
   const inputPaths = args.length > 0 ? args : DEFAULT_SCAN_PATHS;
   const files: string[] = [];
   for (const p of inputPaths) collectFiles(p, files);
@@ -280,13 +253,4 @@ export function main(argv: readonly string[]): number {
   return 1;
 }
 
-// CLI entrypoint when invoked directly via `tsx tools/check-trademarks.ts <files>`.
-// Detect via import.meta.url instead of require.main; this file is ESM.
-const isCli =
-  typeof process !== "undefined" &&
-  process.argv[1] !== undefined &&
-  import.meta.url === `file://${process.argv[1]}`;
-
-if (isCli) {
-  process.exit(main(process.argv.slice(2)));
-}
+runGateCli(import.meta.url, main);

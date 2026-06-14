@@ -43,6 +43,7 @@
 import * as ts from "typescript";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { TS_EXTS, ext, collectFiles, makeSkipCheck, nonFlagArgs, runGateCli } from "./lint-fs.js";
 
 export interface RegistryReferenceHit {
   readonly file: string;
@@ -53,18 +54,9 @@ export interface RegistryReferenceHit {
 /** The registry export sport packages must never reference. */
 const TARGET_IDENTIFIER = "METRIC_REGISTRY";
 
-const TS_EXTS = new Set([".ts", ".tsx", ".cts", ".mts"]);
-
-function getExt(file: string): string {
-  const i = file.lastIndexOf(".");
-  return i === -1 ? "" : file.slice(i);
-}
-
 const SKIP_DIRECTIVE = "registry-isolation-lint:skip-file";
 
-function isSkippedFile(source: string): boolean {
-  return source.slice(0, 1024).includes(SKIP_DIRECTIVE);
-}
+const isSkippedFile = makeSkipCheck(SKIP_DIRECTIVE);
 
 function findHitsInTsFile(file: string): RegistryReferenceHit[] {
   const source = readFileSync(file, "utf-8");
@@ -93,28 +85,9 @@ function findHitsInTsFile(file: string): RegistryReferenceHit[] {
 export function findRegistryReferences(files: readonly string[]): RegistryReferenceHit[] {
   const out: RegistryReferenceHit[] = [];
   for (const file of files) {
-    if (TS_EXTS.has(getExt(file))) out.push(...findHitsInTsFile(file));
+    if (TS_EXTS.has(ext(file))) out.push(...findHitsInTsFile(file));
   }
   return out;
-}
-
-/** Recursively collect scannable files under a directory. */
-function collectFiles(path: string, out: string[]): void {
-  let st;
-  try {
-    st = statSync(path);
-  } catch {
-    return;
-  }
-  if (st.isFile()) {
-    out.push(path);
-    return;
-  }
-  if (!st.isDirectory()) return;
-  for (const entry of readdirSync(path)) {
-    if (entry === "node_modules" || entry === "dist" || entry.startsWith(".")) continue;
-    collectFiles(join(path, entry), out);
-  }
 }
 
 const PACKAGES_DIR = "packages";
@@ -149,7 +122,7 @@ function formatHit(hit: RegistryReferenceHit): string {
 }
 
 export function main(argv: readonly string[]): number {
-  const args = argv.filter((a) => !a.startsWith("-"));
+  const args = nonFlagArgs(argv);
   const inputPaths = args.length > 0 ? args : discoverSportPackageDirs();
   const files: string[] = [];
   for (const p of inputPaths) collectFiles(p, files);
@@ -176,12 +149,4 @@ export function main(argv: readonly string[]): number {
   return 1;
 }
 
-// CLI entrypoint when invoked directly via `tsx tools/check-registry-isolation.ts`.
-const isCli =
-  typeof process !== "undefined" &&
-  process.argv[1] !== undefined &&
-  import.meta.url === `file://${process.argv[1]}`;
-
-if (isCli) {
-  process.exit(main(process.argv.slice(2)));
-}
+runGateCli(import.meta.url, main);

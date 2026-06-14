@@ -38,8 +38,8 @@
  */
 
 import * as ts from "typescript";
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { TS_EXTS, ext, collectFiles, makeSkipCheck, nonFlagArgs, runGateCli } from "./lint-fs.js";
 
 export type PrivacyRule = "intervals-id" | "current-era-date";
 
@@ -91,7 +91,6 @@ export const SYNTHETIC_FIXTURE_ALLOWLIST: ReadonlySet<string> = new Set([
   "zero-activities.json",
 ]);
 
-const TS_EXTS = new Set([".ts", ".tsx", ".cts", ".mts"]);
 const MD_EXTS = new Set([".md", ".mdx"]);
 const JSON_EXTS = new Set([".json"]);
 
@@ -99,19 +98,12 @@ const SKIP_DIRECTIVE = "fixture-privacy-lint:skip-file";
 
 const GOLDEN_FIXTURE_DIR = "packages/core/tests/fixtures/golden";
 
-function getExt(file: string): string {
-  const i = file.lastIndexOf(".");
-  return i === -1 ? "" : file.slice(i);
-}
-
 function basenameOf(file: string): string {
   const i = Math.max(file.lastIndexOf("/"), file.lastIndexOf("\\"));
   return i === -1 ? file : file.slice(i + 1);
 }
 
-function isSkippedFile(source: string): boolean {
-  return source.slice(0, 1024).includes(SKIP_DIRECTIVE);
-}
+const isSkippedFile = makeSkipCheck(SKIP_DIRECTIVE);
 
 function* matchIntervalsId(
   text: string,
@@ -300,10 +292,10 @@ function findDateHitsInGoldenFixture(file: string): PrivacyHit[] {
 export function findIdHits(files: readonly string[]): PrivacyHit[] {
   const out: PrivacyHit[] = [];
   for (const file of files) {
-    const ext = getExt(file);
-    if (TS_EXTS.has(ext)) out.push(...findIdHitsInTsFile(file));
-    else if (JSON_EXTS.has(ext)) out.push(...findIdHitsInJsonFile(file));
-    else if (MD_EXTS.has(ext)) out.push(...findIdHitsInMdFile(file));
+    const fileExt = ext(file);
+    if (TS_EXTS.has(fileExt)) out.push(...findIdHitsInTsFile(file));
+    else if (JSON_EXTS.has(fileExt)) out.push(...findIdHitsInJsonFile(file));
+    else if (MD_EXTS.has(fileExt)) out.push(...findIdHitsInMdFile(file));
   }
   return out;
 }
@@ -312,7 +304,7 @@ export function findIdHits(files: readonly string[]): PrivacyHit[] {
 export function findDateHits(goldenFiles: readonly string[]): PrivacyHit[] {
   const out: PrivacyHit[] = [];
   for (const file of goldenFiles) {
-    if (getExt(file) === ".json") out.push(...findDateHitsInGoldenFixture(file));
+    if (ext(file) === ".json") out.push(...findDateHitsInGoldenFixture(file));
   }
   return out;
 }
@@ -321,24 +313,6 @@ export function findDateHits(goldenFiles: readonly string[]): PrivacyHit[] {
 export function findFixturePrivacyHits(files: readonly string[]): PrivacyHit[] {
   const golden = files.filter((f) => f.includes(GOLDEN_FIXTURE_DIR));
   return [...findIdHits(files), ...findDateHits(golden)];
-}
-
-function collectFiles(path: string, out: string[]): void {
-  let st;
-  try {
-    st = statSync(path);
-  } catch {
-    return;
-  }
-  if (st.isFile()) {
-    out.push(path);
-    return;
-  }
-  if (!st.isDirectory()) return;
-  for (const entry of readdirSync(path)) {
-    if (entry === "node_modules" || entry === "dist" || entry.startsWith(".")) continue;
-    collectFiles(join(path, entry), out);
-  }
 }
 
 // Top-level args are statSync'd directly, so the dot-entry skip inside
@@ -360,7 +334,7 @@ function formatHit(hit: PrivacyHit): string {
 }
 
 export function main(argv: readonly string[]): number {
-  const args = argv.filter((a) => !a.startsWith("-"));
+  const args = nonFlagArgs(argv);
   const inputPaths = args.length > 0 ? args : DEFAULT_SCAN_PATHS;
 
   const files: string[] = [];
@@ -391,11 +365,4 @@ export function main(argv: readonly string[]): number {
   return 1;
 }
 
-const isCli =
-  typeof process !== "undefined" &&
-  process.argv[1] !== undefined &&
-  import.meta.url === `file://${process.argv[1]}`;
-
-if (isCli) {
-  process.exit(main(process.argv.slice(2)));
-}
+runGateCli(import.meta.url, main);
