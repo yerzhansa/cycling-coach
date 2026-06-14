@@ -53,10 +53,15 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV CYCLING_COACH_HOME=/data
 
+# su-exec drops root to `node` in the entrypoint after the mounted volume's
+# ownership is fixed (managed-platform volumes mount as root).
+RUN apk add --no-cache su-exec
+
 COPY --from=builder --chown=root:root /app/runtime-bundle ./
+COPY packages/cycling-coach/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh && mkdir -p /data
 
-RUN mkdir -p /data && chown node:node /data && chmod 700 /data
-
-USER node
-
+# Intentionally NOT `USER node`: the container starts as root so the entrypoint
+# can chown the runtime-mounted volume, then execs the process as `node`.
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "dist/index.js"]
