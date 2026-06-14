@@ -349,7 +349,7 @@ async function executeToolCall(
 export async function codexGenerateText(
   opts: GenerateOpts & { modelId: string; profileName: string; stepLimit?: number },
 ): Promise<GenerateResult> {
-  const { system, messages, prompt, tools, modelId, profileName, maxOutputTokens, stepLimit } = opts;
+  const { system, messages, prompt, tools, modelId, profileName, maxOutputTokens, stepLimit, cacheKey } = opts;
 
   const initialMessages: ModelMessage[] = prompt
     ? [{ role: "user", content: prompt }]
@@ -384,6 +384,7 @@ export async function codexGenerateText(
         apiKey,
         maxTokens: maxOutputTokens,
         onResponse: onCodexResponse,
+        sessionId: cacheKey,
       });
     } catch (err) {
       throw normalizeError(err);

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { stepCountIs } from "ai";
 import type { ModelMessage, ToolSet } from "ai";
 import { makeChatClient } from "../reference/sync/intervals-client-factory.js";
@@ -50,6 +51,10 @@ type MemoryFlushTrigger =
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function cacheKeyForChat(chatId: string): string {
+  return createHash("sha256").update(chatId).digest("hex").slice(0, 16);
 }
 
 // ============================================================================
@@ -280,6 +285,7 @@ export class CoachAgent {
             stopWhen: stepCountIs(10),
             maxSteps: 10,
             caller: "chat",
+            cacheKey: cacheKeyForChat(chatId),
           });
 
           const lineage = computePromptLineage({

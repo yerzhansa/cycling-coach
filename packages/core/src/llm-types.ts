@@ -14,6 +14,7 @@ export interface GenerateOpts {
   stopWhen?: StopCondition<any> | Array<StopCondition<any>>;
   maxSteps?: number;
   maxOutputTokens?: number;
+  cacheKey?: string;
   caller?: "chat" | "flush" | "compact";
 }
 

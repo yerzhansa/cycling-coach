@@ -177,6 +177,40 @@ describe("codex-bridge", () => {
     );
   });
 
+  it("forwards opts.cacheKey to pi-ai's complete as sessionId; omits it when absent", async () => {
+    const completeWithKey = vi.fn(async () => asstMsg());
+    const { codexGenerateText: genWithKey } = await loadBridgeWithMocks({ complete: completeWithKey });
+
+    await genWithKey({
+      messages: [{ role: "user", content: "hi" }],
+      modelId: "gpt-5.4",
+      profileName: "openai-codex",
+      cacheKey: "abc123def456",
+    });
+
+    expect(completeWithKey).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({ sessionId: "abc123def456" }),
+    );
+
+    vi.resetModules();
+    const completeNoKey = vi.fn(async () => asstMsg());
+    const { codexGenerateText: genNoKey } = await loadBridgeWithMocks({ complete: completeNoKey });
+
+    await genNoKey({
+      messages: [{ role: "user", content: "hi" }],
+      modelId: "gpt-5.4",
+      profileName: "openai-codex",
+    });
+
+    expect(completeNoKey).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({ sessionId: undefined }),
+    );
+  });
+
   it("surfaces finishReason=length so isContextOverflowError can catch it upstream via retry", async () => {
     const complete = vi.fn(async () =>
       asstMsg({ stopReason: "length", content: [{ type: "text", text: "truncated" }] }),

@@ -13,13 +13,14 @@ function codexConfig(): Config {
   };
 }
 
-type Captured = { stepLimit: number | undefined; called: number };
+type Captured = { stepLimit: number | undefined; cacheKey: string | undefined; called: number };
 
 async function runCodex(opts: Parameters<import("../src/llm.js").LLM["generate"]>[0]): Promise<Captured> {
-  const captured: Captured = { stepLimit: undefined, called: 0 };
+  const captured: Captured = { stepLimit: undefined, cacheKey: undefined, called: 0 };
   vi.doMock("../src/agent/codex-bridge.js", () => ({
-    codexGenerateText: vi.fn(async (o: { stepLimit?: number }) => {
+    codexGenerateText: vi.fn(async (o: { stepLimit?: number; cacheKey?: string }) => {
       captured.stepLimit = o.stepLimit;
+      captured.cacheKey = o.cacheKey;
       captured.called++;
       return { text: "ok", toolCalls: [], finishReason: "stop", usage: {} };
     }),
@@ -51,5 +52,13 @@ describe("LLM dispatch — codex path forwards maxSteps to bridge", () => {
   it("forwards undefined when maxSteps is not provided (bridge applies its own default)", async () => {
     const captured = await runCodex({ messages: [{ role: "user", content: "hi" }] });
     expect(captured.stepLimit).toBeUndefined();
+  });
+
+  it("forwards opts.cacheKey to the bridge", async () => {
+    const captured = await runCodex({
+      messages: [{ role: "user", content: "hi" }],
+      cacheKey: "deadbeefdeadbeef",
+    });
+    expect(captured.cacheKey).toBe("deadbeefdeadbeef");
   });
 });
