@@ -15,6 +15,8 @@ export interface Config {
     model: string;
     apiKey: string;
     authProfile?: string;
+    /** Cheaper model for the memory flush; unset reuses the chat model. */
+    flushModel?: string;
   };
   intervals: {
     apiKey: string;
@@ -193,6 +195,9 @@ export function loadConfig(): Config {
   const model =
     env("LLM_MODEL") ?? (llmYaml.model as string | undefined) ?? defaultModelMap[provider];
 
+  const flushModel =
+    env("LLM_FLUSH_MODEL") ?? (llmYaml.flush_model as string | undefined);
+
   const config: Config = {
     llm: {
       provider,
@@ -202,6 +207,7 @@ export function loadConfig(): Config {
         provider === "openai-codex"
           ? ((llmYaml.auth_profile as string | undefined) ?? "openai-codex")
           : undefined,
+      flushModel,
     },
     intervals: {
       apiKey: intervalsApiKey,

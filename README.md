@@ -188,6 +188,7 @@ llm:
   provider: anthropic
   model: claude-opus-4-6
   api_key: sk-ant-...
+  flush_model: claude-haiku-4-5-20251001 # optional: cheaper model for memory tidy-up
 
 intervals:
   api_key: your-intervals-api-key
@@ -207,6 +208,10 @@ llm:
 ```
 
 Env vars take precedence over YAML.
+
+### Cheaper model for memory tidy-up
+
+The bot periodically summarizes a conversation into structured memory ("memory tidy-up"). This runs on your chat model by default, but it is a mechanical extract-the-facts task that a cheaper model handles just as well. Set `llm.flush_model` in `config.yaml` (or the `LLM_FLUSH_MODEL` env var) to route only the tidy-up through a cheaper model while your chat replies keep the default model. When unset, the tidy-up reuses your chat model (no change). Suggested cheap models per provider: Anthropic — a haiku-class model such as `claude-haiku-4-5-20251001`; OpenAI — a mini-class model such as `gpt-5.4-mini` or `gpt-4o-mini`; Google — a flash-class model such as `gemini-2.5-flash`.
 
 ## Storing secrets outside config.yaml
 

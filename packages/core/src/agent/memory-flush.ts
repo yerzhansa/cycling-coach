@@ -235,6 +235,7 @@ export async function runMemoryFlush(params: {
     tools: flushTools,
     stopWhen: stepCountIs(5),
     maxSteps: 5,
+    caller: "flush",
   });
 
   params.memory.reload();

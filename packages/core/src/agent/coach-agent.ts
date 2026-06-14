@@ -64,6 +64,7 @@ function cacheKeyForChat(chatId: string): string {
 export class CoachAgent {
   private sport: Sport;
   private llm: LLM;
+  private flushLlm: LLM;
   private config: Config;
   private memory: Memory;
   private chatStore: ChatStore;
@@ -77,6 +78,11 @@ export class CoachAgent {
     this.sport = sport;
     this.config = config;
     this.llm = new LLM(config);
+    const { flushModel } = config.llm;
+    this.flushLlm =
+      flushModel !== undefined && flushModel !== config.llm.model
+        ? new LLM({ ...config, llm: { ...config.llm, model: flushModel } })
+        : this.llm;
     this.tz = resolveUserTimezone(config.session.timezone);
     this.memory = new Memory(config.dataDir, this.tz);
     this.chatStore = new ChatStore(config.dataDir, config.session.resetArchiveRetentionDays);
@@ -110,7 +116,7 @@ export class CoachAgent {
     for (let attempt = 1; attempt <= MAX_FLUSH_ATTEMPTS; attempt++) {
       try {
         return await runMemoryFlush({
-          llm: this.llm,
+          llm: this.flushLlm,
           messages,
           memory: this.memory,
           memorySections: getEffectiveSections(this.sport),
@@ -135,6 +141,7 @@ export class CoachAgent {
   private compactionParams() {
     return {
       llm: this.llm,
+      caller: "compact" as const,
       mustPreserveTokens: this.sport.mustPreserveTokens,
       memory: createMemorySnapshot(this.memory),
       contextWindowTokens: this.config.contextWindowTokens,
@@ -144,6 +151,9 @@ export class CoachAgent {
   async chat(chatId: string, userMessage: string): Promise<string> {
     return withSessionLock(chatId, async () => {
       const turnStart = Date.now();
+      // One flush per turn: the latch flips on entry (before the await
+      // resolves) so a thrown flush still consumes the turn's single flush.
+      let flushedThisTurn = false;
       // Single file read: load history + last message time together
       let { messages: history, lastMessageTime } = this.chatStore.load(chatId);
 
@@ -157,7 +167,8 @@ export class CoachAgent {
       if (!fresh) {
         // Flush memory before reset, then archive
         let outcome: MemoryFlushOutcome | null = null;
-        if (history.length > 0) {
+        if (history.length > 0 && !flushedThisTurn) {
+          flushedThisTurn = true;
           try {
             outcome = await this.flushMemory(history, "stale-reset");
           } catch (err) {
@@ -202,11 +213,14 @@ export class CoachAgent {
       if (dropped.length > 0) {
         this.lastFlushMessageCount.set(chatId, history.length);
         let flushed = true;
-        try {
-          await this.flushMemory(history, "trim");
-        } catch (err) {
-          flushed = false;
-          console.warn("Pre-compaction memory flush failed; keeping session file unchanged", err);
+        if (!flushedThisTurn) {
+          flushedThisTurn = true;
+          try {
+            await this.flushMemory(history, "trim");
+          } catch (err) {
+            flushed = false;
+            console.warn("Pre-compaction memory flush failed; keeping session file unchanged", err);
+          }
         }
         try {
           const { summary, unsummarized } = await summarizeDroppedMessages({
@@ -240,10 +254,13 @@ export class CoachAgent {
         })
       ) {
         this.lastFlushMessageCount.set(chatId, history.length);
-        try {
-          await this.flushMemory(history, "soft-threshold");
-        } catch (err) {
-          console.warn("Soft-threshold memory flush failed; continuing turn", err);
+        if (!flushedThisTurn) {
+          flushedThisTurn = true;
+          try {
+            await this.flushMemory(history, "soft-threshold");
+          } catch (err) {
+            console.warn("Soft-threshold memory flush failed; continuing turn", err);
+          }
         }
       }
 
@@ -268,10 +285,13 @@ export class CoachAgent {
       while (true) {
         // Preemptive: compact before sending if over budget
         if (shouldCompact({ messages, systemPrompt: this.systemPrompt, contextWindowTokens: this.config.contextWindowTokens })) {
-          try {
-            await this.flushMemory(messages, "pre-compaction");
-          } catch (err) {
-            console.warn("In-turn memory flush failed; compacting without flush", err);
+          if (!flushedThisTurn) {
+            flushedThisTurn = true;
+            try {
+              await this.flushMemory(messages, "pre-compaction");
+            } catch (err) {
+              console.warn("In-turn memory flush failed; compacting without flush", err);
+            }
           }
           messages = await summarizeInStages({ messages, ...this.compactionParams() });
           this.memory.reload();
@@ -330,10 +350,13 @@ export class CoachAgent {
           if (isContextOverflowError(err) && overflowAttempts < MAX_OVERFLOW_ATTEMPTS) {
             overflowAttempts++;
             try {
-              try {
-                await this.flushMemory(messages, "overflow-recovery");
-              } catch (flushErr) {
-                console.warn("In-turn memory flush failed; compacting without flush", flushErr);
+              if (!flushedThisTurn) {
+                flushedThisTurn = true;
+                try {
+                  await this.flushMemory(messages, "overflow-recovery");
+                } catch (flushErr) {
+                  console.warn("In-turn memory flush failed; compacting without flush", flushErr);
+                }
               }
               messages = await summarizeInStages({ messages, ...this.compactionParams() });
               this.memory.reload();

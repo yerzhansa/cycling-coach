@@ -1,0 +1,193 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { baseAgentConfig } from "./helpers/base-agent-config.js";
+import { cyclingSport } from "@enduragent/sport-cycling";
+import type { Sport } from "../src/sport.js";
+
+const FLUSH_MARKER = "reviewing a conversation to extract and save important athlete";
+const FIVE_SECTION_SUMMARY = [
+  "## Athlete Profile",
+  "- FTP 247W, 72kg, training Mon/Wed/Fri",
+  "## Training Status",
+  "- Build phase, target FTP 280W",
+  "## Coach Stance",
+  "- Hold volume this week; athlete has not pushed back",
+  "## Discussion Context",
+  "- Goal-setting and equipment review",
+  "## Pending Questions",
+  "- None outstanding",
+].join("\n");
+
+let tempHome: string;
+let origHome: string | undefined;
+let dataDir: string;
+
+beforeEach(() => {
+  tempHome = mkdtempSync(join(tmpdir(), "cc-dedupe-"));
+  origHome = process.env.HOME;
+  process.env.HOME = tempHome;
+  dataDir = join(tempHome, ".cycling-coach");
+  mkdirSync(dataDir, { recursive: true });
+  mkdirSync(join(dataDir, "memory"), { recursive: true });
+  vi.resetModules();
+});
+
+afterEach(() => {
+  process.env.HOME = origHome;
+  rmSync(tempHome, { recursive: true, force: true });
+  vi.restoreAllMocks();
+});
+
+async function setupAgent(complete: ReturnType<typeof vi.fn>) {
+  const model = {
+    id: "gpt-5.4",
+    name: "gpt-5.4",
+    api: "openai-codex-responses",
+    provider: "openai-codex",
+    baseUrl: "https://chatgpt.com/backend-api",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 272_000,
+    maxTokens: 128_000,
+  };
+
+  vi.doMock("@mariozechner/pi-ai", () => ({
+    complete,
+    getModel: vi.fn(() => model),
+  }));
+  vi.doMock("@mariozechner/pi-ai/oauth", () => ({
+    refreshOpenAICodexToken: vi.fn(),
+    loginOpenAICodex: vi.fn(),
+  }));
+  vi.doMock("../src/auth/profiles.js", () => ({
+    getFreshToken: vi.fn(async () => "token"),
+    loadProfile: vi.fn(),
+    saveProfile: vi.fn(),
+    RefreshTokenReusedError: class extends Error {},
+  }));
+
+  const { CoachAgent } = await import("../src/agent/coach-agent.js");
+  return new CoachAgent(cyclingSport as unknown as Sport, {
+    ...baseAgentConfig(dataDir),
+    contextWindowTokens: 80_000,
+  });
+}
+
+function mkAssistant(text: string, stopReason: "stop" | "length" = "stop") {
+  return {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text }],
+    api: "openai-codex-responses",
+    provider: "openai-codex",
+    model: "gpt-5.4",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason,
+    timestamp: Date.now(),
+  };
+}
+
+// A call is a flush iff the codex Context carries the memory-flush system prompt.
+function isFlushCall(call: unknown[]): boolean {
+  const context = call[1] as { systemPrompt?: string } | undefined;
+  return typeof context?.systemPrompt === "string" && context.systemPrompt.includes(FLUSH_MARKER);
+}
+
+function countFlushCalls(complete: ReturnType<typeof vi.fn>): number {
+  return complete.mock.calls.filter((c) => isFlushCall(c)).length;
+}
+
+function seedSession(
+  chatId: string,
+  lines: Array<{ role: string; content: string; ts: string }>,
+) {
+  const sessionsDir = join(dataDir, "sessions");
+  mkdirSync(sessionsDir, { recursive: true });
+  writeFileSync(
+    join(sessionsDir, `${chatId}.jsonl`),
+    lines.map((l) => JSON.stringify(l)).join("\n") + "\n",
+    "utf-8",
+  );
+}
+
+function overBudgetLines(ts: string): Array<{ role: string; content: string; ts: string }> {
+  return Array.from({ length: 13 }, (_, i) => ({
+    role: i % 2 === 0 ? "user" : "assistant",
+    content: "x".repeat(2_400),
+    ts,
+  }));
+}
+
+const FRESH_TS = new Date().toISOString();
+const STALE_TS = "2020-01-01T00:00:00.000Z";
+
+describe("flush dedupe — at most one memory flush per chat() turn", () => {
+  it("an overflow-retry storm flushes at most once", async () => {
+    const complete = vi.fn(async (_model: unknown, context: { systemPrompt?: string }) => {
+      const sys = context.systemPrompt ?? "";
+      if (sys.includes(FLUSH_MARKER)) return mkAssistant("facts noted");
+      if (sys.length === 0) return mkAssistant(FIVE_SECTION_SUMMARY); // compaction (prompt-only)
+      // Main turn: throw overflow twice to drive the retry loop, then recover.
+      const mainTurns = complete.mock.calls.filter((c) => {
+        const s = (c[1] as { systemPrompt?: string } | undefined)?.systemPrompt ?? "";
+        return s.length > 0 && !s.includes(FLUSH_MARKER);
+      }).length;
+      if (mainTurns <= 2) {
+        throw new Error("Request exceeds the maximum context length of 272000 tokens");
+      }
+      return mkAssistant("recovered");
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const agent = await setupAgent(complete);
+    seedSession("storm", overBudgetLines(FRESH_TS));
+
+    const text = await agent.chat("storm", "hello");
+
+    expect(text).toBe("recovered");
+    expect(countFlushCalls(complete)).toBeLessThanOrEqual(1);
+  });
+
+  it("a daily-reset turn does not also flush on trim or compaction", async () => {
+    const complete = vi.fn(async (_model: unknown, context: { systemPrompt?: string }) => {
+      const sys = context.systemPrompt ?? "";
+      if (sys.includes(FLUSH_MARKER)) return mkAssistant("facts noted");
+      if (sys.length === 0) return mkAssistant(FIVE_SECTION_SUMMARY);
+      return mkAssistant("fresh-day-reply");
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const agent = await setupAgent(complete);
+    // Stale (predates the daily reset hour) AND over budget.
+    seedSession("daily", overBudgetLines(STALE_TS));
+
+    const text = await agent.chat("daily", "hello");
+
+    expect(text).toBe("fresh-day-reply");
+    expect(countFlushCalls(complete)).toBeLessThanOrEqual(1);
+  });
+
+  it("a normal single-flush trim turn is unchanged (no false suppression)", async () => {
+    const complete = vi.fn(async (_model: unknown, context: { systemPrompt?: string }) => {
+      const sys = context.systemPrompt ?? "";
+      if (sys.includes(FLUSH_MARKER)) return mkAssistant("facts noted");
+      if (sys.length === 0) return mkAssistant(FIVE_SECTION_SUMMARY);
+      return mkAssistant("trim-reply");
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const agent = await setupAgent(complete);
+    seedSession("trim", overBudgetLines(FRESH_TS));
+
+    const text = await agent.chat("trim", "hello");
+
+    expect(text).toBe("trim-reply");
+    expect(countFlushCalls(complete)).toBe(1);
+  });
+});
