@@ -11,6 +11,7 @@ import {
 } from "./token-utils.js";
 import { makeSummaryMessage, SUMMARY_PREFIX } from "./history-limit.js";
 import type { LLM } from "../llm.js";
+import type { GenerateOpts } from "../llm-types.js";
 
 // ============================================================================
 // CONSTANTS
@@ -120,7 +121,7 @@ function capSummary(summary: string): string {
 
 async function generateSummaryWithTimeout(
   llm: LLM,
-  opts: { prompt: string; maxOutputTokens: number },
+  opts: { prompt: string; maxOutputTokens: number; caller?: GenerateOpts["caller"] },
 ): Promise<string> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
@@ -221,8 +222,9 @@ async function finalizeSummary(params: {
   llm: LLM;
   mustPreserveBlock: string;
   maxRetries: number;
+  caller?: GenerateOpts["caller"];
 }): Promise<string> {
-  const { llm, mustPreserveBlock, maxRetries } = params;
+  const { llm, mustPreserveBlock, maxRetries, caller } = params;
   let best = capSummary(params.summary);
   const audit = auditSummaryQuality(best);
   if (audit.ok) return best;
@@ -232,6 +234,7 @@ async function finalizeSummary(params: {
       const text = await generateSummaryWithTimeout(llm, {
         prompt: `Restructure the following summary to include ALL required section headings: ${audit.missing.join(", ")}.\n\n${best}\n\n${mustPreserveBlock}`,
         maxOutputTokens: MAX_SUMMARY_TOKENS,
+        caller,
       });
       const capped = capSummary(text);
       if (auditSummaryQuality(capped).ok) return capped;
@@ -256,8 +259,9 @@ export async function summarizeDroppedMessages(params: {
   previousSummary?: string;
   maxRetries?: number;
   contextWindowTokens?: number;
+  caller?: GenerateOpts["caller"];
 }): Promise<{ summary: string; unsummarized: ModelMessage[] }> {
-  const { dropped, llm, mustPreserveTokens, memory, previousSummary, maxRetries = 1, contextWindowTokens } = params;
+  const { dropped, llm, mustPreserveTokens, memory, previousSummary, maxRetries = 1, contextWindowTokens, caller } = params;
 
   if (dropped.length === 0) return { summary: previousSummary ?? "", unsummarized: [] };
 
@@ -286,6 +290,7 @@ export async function summarizeDroppedMessages(params: {
       const text = await generateSummaryWithTimeout(llm, {
         prompt,
         maxOutputTokens: MAX_SUMMARY_TOKENS,
+        caller,
       });
       summary = text;
     } catch (err) {
@@ -302,7 +307,7 @@ export async function summarizeDroppedMessages(params: {
   }
 
   return {
-    summary: await finalizeSummary({ summary, llm, mustPreserveBlock, maxRetries }),
+    summary: await finalizeSummary({ summary, llm, mustPreserveBlock, maxRetries, caller }),
     unsummarized,
   };
 }
@@ -319,8 +324,9 @@ export async function summarizeInStages(params: {
   recentToKeep?: number;
   previousSummary?: string;
   contextWindowTokens?: number;
+  caller?: GenerateOpts["caller"];
 }): Promise<ModelMessage[]> {
-  const { llm, mustPreserveTokens, memory, recentToKeep = 4, contextWindowTokens } = params;
+  const { llm, mustPreserveTokens, memory, recentToKeep = 4, contextWindowTokens, caller } = params;
 
   let messages = params.messages;
   let previousSummary = params.previousSummary;
@@ -363,6 +369,7 @@ export async function summarizeInStages(params: {
       const text = await generateSummaryWithTimeout(llm, {
         prompt: `${summarizePrompt}${contextPrefix}\n\n${transcript}`,
         maxOutputTokens: MAX_SUMMARY_TOKENS,
+        caller,
       });
       summary = text;
     } catch (err) {
@@ -380,6 +387,7 @@ export async function summarizeInStages(params: {
     llm,
     mustPreserveBlock,
     maxRetries: 1,
+    caller,
   });
   return [makeSummaryMessage(finalSummary), ...recent];
 }

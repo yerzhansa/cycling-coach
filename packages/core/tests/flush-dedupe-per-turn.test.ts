@@ -2,9 +2,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ModelMessage } from "ai";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import type { Sport } from "../src/sport.js";
+import type { LLM, GenerateResult, GenerateOpts } from "../src/llm.js";
+import type { MemorySnapshot } from "../src/memory.js";
+import { summarizeInStages, summarizeDroppedMessages } from "../src/agent/compaction.js";
 
 const FLUSH_MARKER = "reviewing a conversation to extract and save important athlete";
 const FIVE_SECTION_SUMMARY = [
@@ -189,5 +193,67 @@ describe("flush dedupe — at most one memory flush per chat() turn", () => {
 
     expect(text).toBe("trim-reply");
     expect(countFlushCalls(complete)).toBe(1);
+  });
+});
+
+describe("compaction caller tag — the compact tag reaches llm.generate end-to-end", () => {
+  const emptyMemory: MemorySnapshot = {
+    read: () => null,
+    has: () => false,
+    listSections: () => [],
+  };
+
+  function makeLlmSpy() {
+    // The compaction path reads only `.text` off the result; the rest of
+    // GenerateResult is supplied via cast so the mock stays minimal.
+    const generate = vi.fn(
+      async (_opts: GenerateOpts): Promise<GenerateResult> =>
+        ({
+          text: FIVE_SECTION_SUMMARY,
+          toolCalls: [],
+          finishReason: "stop" as const,
+        }) as unknown as GenerateResult,
+    );
+    return { llm: { generate } as unknown as LLM, generate };
+  }
+
+  function mkText(text: string): ModelMessage {
+    return { role: "user", content: text };
+  }
+
+  it("summarizeInStages threads caller:'compact' into every llm.generate call", async () => {
+    const { llm, generate } = makeLlmSpy();
+    // recentToKeep defaults to 4, so 6 messages leaves 2 to summarize.
+    const messages = Array.from({ length: 6 }, (_, i) => mkText(`turn ${i}`));
+
+    await summarizeInStages({
+      messages,
+      llm,
+      mustPreserveTokens: [],
+      memory: emptyMemory,
+      caller: "compact",
+    });
+
+    expect(generate).toHaveBeenCalled();
+    for (const call of generate.mock.calls) {
+      expect(call[0]).toMatchObject({ caller: "compact" });
+    }
+  });
+
+  it("summarizeDroppedMessages threads caller:'compact' into every llm.generate call", async () => {
+    const { llm, generate } = makeLlmSpy();
+
+    await summarizeDroppedMessages({
+      dropped: [mkText("older turn a"), mkText("older turn b")],
+      llm,
+      mustPreserveTokens: [],
+      memory: emptyMemory,
+      caller: "compact",
+    });
+
+    expect(generate).toHaveBeenCalled();
+    for (const call of generate.mock.calls) {
+      expect(call[0]).toMatchObject({ caller: "compact" });
+    }
   });
 });
