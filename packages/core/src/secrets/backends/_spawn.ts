@@ -40,6 +40,7 @@ function runSpawn(
       stdio: [stdinData === null ? "ignore" : "pipe", "pipe", "pipe"],
       windowsHide: true,
       env: process.env,
+      detached: true,
     });
 
     let stdout = "";
@@ -49,7 +50,17 @@ function runSpawn(
 
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGKILL");
+      // Kill the whole process group, not just the direct child, so a forked
+      // grandchild can't keep the inherited stdio pipes open and stall "close".
+      if (process.platform !== "win32" && child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          child.kill("SIGKILL");
+        }
+      } else {
+        child.kill("SIGKILL");
+      }
     }, opts.timeoutMs);
 
     child.stdout?.on("data", (chunk: Buffer) => {
