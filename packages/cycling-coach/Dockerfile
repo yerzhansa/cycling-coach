@@ -20,6 +20,10 @@ COPY packages/core/package.json ./packages/core/
 COPY packages/sport-cycling/package.json ./packages/sport-cycling/
 COPY packages/cycling-coach/package.json ./packages/cycling-coach/
 
+# pnpm.patchedDependencies in the root manifest references patches/*.patch;
+# `pnpm install` reads them during resolution, so they must exist before install.
+COPY patches ./patches
+
 RUN pnpm install --filter cycling-coach... --frozen-lockfile
 
 # Source after deps for cache reuse.
