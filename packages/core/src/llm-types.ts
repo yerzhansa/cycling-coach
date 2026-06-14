@@ -14,6 +14,7 @@ export interface GenerateOpts {
   stopWhen?: StopCondition<any> | Array<StopCondition<any>>;
   maxSteps?: number;
   maxOutputTokens?: number;
+  caller?: "chat" | "flush" | "compact";
 }
 
 export interface GenerateResult {
@@ -26,4 +27,7 @@ export interface GenerateResult {
   }>;
   finishReason: FinishReason;
   usage: LanguageModelUsage;
+  totalUsage?: LanguageModelUsage;
+  steps?: number;
+  cost?: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 }

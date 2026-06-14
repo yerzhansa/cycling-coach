@@ -226,6 +226,23 @@ function mapStopReason(reason: StopReason): FinishReason {
   }
 }
 
+function addUsage(acc: PiUsage, u: PiUsage): PiUsage {
+  return {
+    input: acc.input + u.input,
+    output: acc.output + u.output,
+    cacheRead: acc.cacheRead + u.cacheRead,
+    cacheWrite: acc.cacheWrite + u.cacheWrite,
+    totalTokens: acc.totalTokens + u.totalTokens,
+    cost: {
+      input: acc.cost.input + u.cost.input,
+      output: acc.cost.output + u.cost.output,
+      cacheRead: acc.cost.cacheRead + u.cost.cacheRead,
+      cacheWrite: acc.cost.cacheWrite + u.cost.cacheWrite,
+      total: acc.cost.total + u.cost.total,
+    },
+  };
+}
+
 function mapUsage(u: PiUsage): LanguageModelUsage {
   return {
     inputTokens: u.input,
@@ -351,6 +368,8 @@ export async function codexGenerateText(
   const apiKey = await getFreshToken(profileName);
 
   let lastAssistant: AssistantMessage | undefined;
+  let accumulated = emptyUsage();
+  let stepCount = 0;
 
   for (let step = 0; step < limit; step++) {
     const context: Context = {
@@ -375,6 +394,8 @@ export async function codexGenerateText(
     }
 
     lastAssistant = assistant;
+    accumulated = addUsage(accumulated, assistant.usage);
+    stepCount++;
     piMessages.push(assistant);
 
     const calls = collectToolCalls(assistant);
@@ -408,6 +429,9 @@ export async function codexGenerateText(
     toolCalls: toolCalls as GenerateResult["toolCalls"],
     finishReason: mapStopReason(lastAssistant.stopReason),
     usage: mapUsage(lastAssistant.usage),
+    totalUsage: mapUsage(accumulated),
+    steps: stepCount,
+    cost: accumulated.cost,
   };
 }
 

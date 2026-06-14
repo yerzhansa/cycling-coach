@@ -26,6 +26,7 @@ import { runMemoryFlush, FLUSH_ZERO_WRITE_MIN_MESSAGES, shouldRunMemoryFlush } f
 import type { MemoryFlushOutcome } from "./memory-flush.js";
 import { evaluateSessionFreshness } from "./session-freshness.js";
 import { LLM } from "../llm.js";
+import { appendUsageLine } from "../usage-ledger.js";
 import { createMemorySnapshot } from "../memory/snapshot.js";
 import { resolveUserTimezone, appendCurrentTimeLine } from "./user-time.js";
 
@@ -136,6 +137,7 @@ export class CoachAgent {
 
   async chat(chatId: string, userMessage: string): Promise<string> {
     return withSessionLock(chatId, async () => {
+      const turnStart = Date.now();
       // Single file read: load history + last message time together
       let { messages: history, lastMessageTime } = this.chatStore.load(chatId);
 
@@ -276,11 +278,29 @@ export class CoachAgent {
             tools: this.tools,
             stopWhen: stepCountIs(10),
             maxSteps: 10,
+            caller: "chat",
           });
 
           // Append BOTH after success — JSONL unchanged on failure
           this.chatStore.appendMessage(chatId, "user", userMessage);
           this.chatStore.appendMessage(chatId, "assistant", text);
+
+          appendUsageLine(this.config.dataDir, {
+            ts: Date.now(),
+            kind: "turn",
+            caller: "chat",
+            provider: this.config.llm.provider,
+            model: this.config.llm.model,
+            durationMs: Date.now() - turnStart,
+            steps: undefined,
+            inputTokens: undefined,
+            outputTokens: undefined,
+            totalTokens: undefined,
+            cacheReadTokens: undefined,
+            cacheWriteTokens: undefined,
+            cost: undefined,
+            stopReason: undefined,
+          });
 
           return text;
         } catch (err) {

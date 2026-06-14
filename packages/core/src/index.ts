@@ -33,6 +33,8 @@ export * from "./reference/index.js";
 // ─── LLM ──────────────────────────────────────────────────────────────
 export { LLM } from "./llm.js";
 export type { GenerateOpts, GenerateResult } from "./llm-types.js";
+export { appendUsageLine, USAGE_LEDGER_FILE, USAGE_LEDGER_MAX_BYTES } from "./usage-ledger.js";
+export type { UsageLedgerLine } from "./usage-ledger.js";
 
 // ─── Memory ───────────────────────────────────────────────────────────
 export type { MemorySnapshot, MemoryStore, MemoryWriteSource } from "./memory.js";

@@ -4,6 +4,7 @@ import type { Sport } from "./sport.js";
 import type { BinaryConfig } from "./binary.js";
 import type { Memory } from "./memory/store.js";
 import { CONFIG_DIR, envInt } from "./config.js";
+import { appendUsageLine } from "./usage-ledger.js";
 import {
   addSender,
   removeSender,
@@ -277,6 +278,7 @@ export async function runBinary(
     process.exit(1);
   }
 
+  const bootStart = Date.now();
   const { CoachAgent } = await import("./agent/coach-agent.js");
   const agent = new CoachAgent(sport, config);
 
@@ -290,6 +292,23 @@ export async function runBinary(
     dataDir: config.dataDir,
     intervals: config.intervals,
     sport,
+  });
+
+  appendUsageLine(config.dataDir, {
+    ts: Date.now(),
+    kind: "boot",
+    caller: undefined,
+    provider: config.llm.provider,
+    model: config.llm.model,
+    durationMs: Date.now() - bootStart,
+    steps: undefined,
+    inputTokens: undefined,
+    outputTokens: undefined,
+    totalTokens: undefined,
+    cacheReadTokens: undefined,
+    cacheWriteTokens: undefined,
+    cost: undefined,
+    stopReason: undefined,
   });
 
   if (config.telegram.botToken) {

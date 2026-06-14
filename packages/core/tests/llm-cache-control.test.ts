@@ -24,7 +24,7 @@ function codexConfig(): Config {
   };
 }
 
-const MINIMAL_RESULT = { text: "ok", toolCalls: [], finishReason: "stop", usage: {} };
+const MINIMAL_RESULT = { text: "ok", toolCalls: [], finishReason: "stop", usage: {}, totalUsage: {}, steps: [] };
 
 beforeEach(() => {
   vi.resetModules();

@@ -7,6 +7,7 @@ import type { LanguageModel } from "ai";
 import type { Config } from "./config.js";
 import { codexGenerateText } from "./agent/codex-bridge.js";
 import type { GenerateOpts, GenerateResult } from "./llm-types.js";
+import { appendUsageLine } from "./usage-ledger.js";
 
 export type { GenerateOpts, GenerateResult } from "./llm-types.js";
 
@@ -24,6 +25,14 @@ export class LLM {
   }
 
   async generate(opts: GenerateOpts): Promise<GenerateResult> {
+    const start = Date.now();
+    const result = await this.dispatch(opts);
+    const durationMs = Date.now() - start;
+    this.recordGenerate(opts, result, durationMs);
+    return result;
+  }
+
+  private async dispatch(opts: GenerateOpts): Promise<GenerateResult> {
     if (this.config.llm.provider === "openai-codex") {
       return await codexGenerateText({
         ...opts,
@@ -67,7 +76,32 @@ export class LLM {
       toolCalls: result.toolCalls as GenerateResult["toolCalls"],
       finishReason: result.finishReason,
       usage: result.usage,
+      totalUsage: result.totalUsage,
+      steps: result.steps.length,
     };
+  }
+
+  private recordGenerate(opts: GenerateOpts, result: GenerateResult, durationMs: number): void {
+    const usage = result.totalUsage;
+    const details = usage?.inputTokenDetails as
+      | { cacheReadTokens?: number; cacheWriteTokens?: number }
+      | undefined;
+    appendUsageLine(this.config.dataDir, {
+      ts: Date.now(),
+      kind: "generate",
+      caller: opts.caller,
+      provider: this.config.llm.provider,
+      model: this.config.llm.model,
+      durationMs,
+      steps: result.steps,
+      inputTokens: usage?.inputTokens,
+      outputTokens: usage?.outputTokens,
+      totalTokens: usage?.totalTokens,
+      cacheReadTokens: details?.cacheReadTokens,
+      cacheWriteTokens: details?.cacheWriteTokens,
+      cost: result.cost,
+      stopReason: result.finishReason,
+    });
   }
 }
 
