@@ -1,0 +1,45 @@
+{
+  "activities": [
+    {
+      "id": 12345,
+      "start_date_local": "1998-03-01T07:00:00",
+      "type": "Ride",
+      "moving_time": 3600,
+      "elapsed_time": 3720,
+      "icu_training_load": 65,
+      "average_watts": 180,
+      "average_heartrate": 142
+    },
+    {
+      "id": 12345,
+      "start_date_local": "1998-03-03T06:30:00",
+      "type": "Ride",
+      "moving_time": 5400,
+      "elapsed_time": 5500,
+      "icu_training_load": 95,
+      "average_watts": 195,
+      "average_heartrate": 150
+    }
+  ],
+  "wellness": [
+    {
+      "id": "1998-03-01",
+      "weight": 72,
+      "restingHR": 48,
+      "hrv": 65
+    },
+    {
+      "id": "1998-03-03",
+      "weight": 71.8,
+      "restingHR": 47,
+      "hrv": 68
+    }
+  ],
+  "ftp_history": [
+    {
+      "date": "1998-02-15",
+      "ftp": 250,
+      "source": "estimate"
+    }
+  ]
+}

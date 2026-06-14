@@ -28,6 +28,24 @@ const GOLDEN_PATH = join(
   "golden",
   "realistic-athlete.json",
 );
+const SYNTHETIC_MOCK_PATH = join(
+  REPO_ROOT,
+  "packages",
+  "core",
+  "tests",
+  "fixtures",
+  "mocks",
+  "synthetic-raw-mock.json",
+);
+const SYNTHETIC_EXPECTED_PATH = join(
+  REPO_ROOT,
+  "packages",
+  "core",
+  "tests",
+  "fixtures",
+  "mocks",
+  "synthetic-raw-mock.expected.json",
+);
 
 let dirs: string[] = [];
 afterEach(() => {
@@ -55,4 +73,22 @@ describe("sanitize CLI fixture stability", () => {
       expect(regenerated.equals(committed)).toBe(true);
     },
   );
+});
+
+describe("sanitize CLI fixture stability (synthetic, CI-runnable)", () => {
+  it("running the CLI on the committed synthetic mock is byte-identical to the committed expected output", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "sanitize-synth-stability-"));
+    dirs.push(outputDir);
+
+    const exit = await main([SYNTHETIC_MOCK_PATH, "synthetic-raw-mock", "--force"], {
+      outputRoot: outputDir,
+      out: () => {},
+      err: () => {},
+    });
+
+    expect(exit).toBe(0);
+    const regenerated = readFileSync(join(outputDir, "synthetic-raw-mock.json"));
+    const expected = readFileSync(SYNTHETIC_EXPECTED_PATH);
+    expect(regenerated.equals(expected)).toBe(true);
+  });
 });

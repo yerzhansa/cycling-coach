@@ -50,6 +50,8 @@ AI cycling coaching agent. Bring your own LLM API key **or sign in with a ChatGP
 
 Requires [Node.js](https://nodejs.org/) 22+ (comes with npm).
 
+Supported on macOS and Linux. Windows is not supported — the secrets backends and process handling are POSIX-shaped (use WSL2 if you must run on Windows).
+
 Open **Terminal** (Mac/Linux) or **PowerShell** (Windows) and run:
 
 ```bash

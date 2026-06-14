@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import {
   KeychainUnsafeValueError,
   KeychainUnsupportedPlatformError,
@@ -390,16 +392,30 @@ describe("keychainSecretRef", () => {
   });
 });
 
-describe("keychain idempotency (CI-only)", () => {
+const execFileAsync = promisify(execFile);
+
+describe("keychain idempotency (CI-only, real keychain)", () => {
   it.skipIf(process.env.CI !== "macos")(
-    "keychainItemUpsert stores the second value when called twice with different values",
+    "upsert twice with different values; find-generic-password returns the second",
     async () => {
-      // Placeholder for the CI-only integration test. Real implementation would:
-      //   1. keychainItemUpsert(field, "v1", realLoginPath)
-      //   2. keychainItemUpsert(field, "v2", realLoginPath)
-      //   3. spawn `security find-generic-password -w ...` and assert stdout === "v2"
-      //   4. keychainItemDelete(field, realLoginPath) for cleanup.
-      expect(true).toBe(true);
+      const field = `cc_citest_${process.pid}_${Math.random().toString(36).slice(2)}`;
+      const loginPath = await keychainLoginPath();
+      try {
+        await keychainItemUpsert(field, "v1", loginPath, { platform: "darwin" });
+        await keychainItemUpsert(field, "v2", loginPath, { platform: "darwin" });
+        const { stdout } = await execFileAsync("/usr/bin/security", [
+          "find-generic-password",
+          "-w",
+          "-s",
+          "cycling-coach",
+          "-a",
+          field,
+          loginPath,
+        ]);
+        expect(stdout.trim()).toBe("v2");
+      } finally {
+        await keychainItemDelete(field, loginPath);
+      }
     },
   );
 });
