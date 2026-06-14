@@ -240,8 +240,8 @@ export class CoachAgent {
       }
 
       // Append a fresh "Current time:" line to the user message so the LLM
-      // always sees the athlete's local time on this turn — even when the
-      // system prompt (cached) carries only the TZ name. Idempotent: safe
+      // always sees the athlete's local time on this turn — the cached system
+      // prefix carries only the TZ name, not the date. Idempotent: safe
       // across the retry/compaction loop below.
       const userMessageWithTime = appendCurrentTimeLine(userMessage, this.tz);
 

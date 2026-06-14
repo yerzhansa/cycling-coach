@@ -3,6 +3,7 @@ import {
   buildSystemPrompt,
   ATHLETE_CONTEXT_FENCE_OPEN,
   ATHLETE_CONTEXT_FENCE_CLOSE,
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
 } from "../src/agent/system-prompt.js";
 import type { SportPersona } from "../src/sport.js";
 import type { Memory } from "../src/memory/store.js";
@@ -19,41 +20,45 @@ const persona: SportPersona = {
 };
 
 describe("buildSystemPrompt — review + data-grounding placement", () => {
-  it("places WORKOUT_REVIEW_RULES second-to-last and Data Grounding last", () => {
+  it("places the cache boundary after the static rules and the volatile blocks last", () => {
     const prompt = buildSystemPrompt(persona, makeFakeMemory("athlete context"));
     const sections = prompt.split("\n\n---\n\n");
-    const review = sections[sections.length - 2];
-    const last = sections[sections.length - 1];
-    expect(review).toMatch(/^# Workout Review/);
+    expect(sections[sections.length - 1]).toMatch(/^# Current Date & Time/);
+    expect(sections[sections.length - 2]).toMatch(/^# Athlete Context/);
+    const review = sections.find((s) => s.startsWith("# Workout Review"));
     expect(review).toContain("3-questions framework");
-    expect(last).toMatch(/^# Data Grounding/);
+    const dataGrounding = sections.find((s) => s.startsWith("# Data Grounding"));
+    expect(dataGrounding).toBeDefined();
+    expect(sections[sections.length - 1]).not.toMatch(/^# Data Grounding/);
   });
 
-  it("places Data Grounding last even when context is empty", () => {
+  it("renders Current Date & Time last even when context is empty", () => {
     const prompt = buildSystemPrompt(persona, makeFakeMemory(""));
     const sections = prompt.split("\n\n---\n\n");
-    const last = sections[sections.length - 1];
-    expect(last).toMatch(/^# Data Grounding/);
+    expect(sections[sections.length - 1]).toMatch(/^# Current Date & Time/);
+    expect(prompt).not.toContain("# Athlete Context");
   });
 
-  it("places Data Grounding last when skills are empty", () => {
+  it("renders Current Date & Time last when skills are empty", () => {
     const prompt = buildSystemPrompt({ ...persona, skills: {} }, makeFakeMemory("ctx"));
     const sections = prompt.split("\n\n---\n\n");
-    expect(sections[sections.length - 1]).toMatch(/^# Data Grounding/);
+    expect(sections[sections.length - 1]).toMatch(/^# Current Date & Time/);
   });
 
-  it("preserves [soul, skills, context, time, untrusted-data, recall-rules, review-rules, data-grounding] order", () => {
+  it("preserves the [soul, ...static rules, boundary, athlete-context, time] order", () => {
     const prompt = buildSystemPrompt(persona, makeFakeMemory("ctx"));
     const sections = prompt.split("\n\n---\n\n");
     expect(sections[0]).toContain("Cycling Coach");
     expect(sections[1]).toMatch(/^# Domain Knowledge/);
-    expect(sections[2]).toMatch(/^# Athlete Context/);
-    expect(sections[3]).toMatch(/^# Current Date & Time/);
-    expect(sections[4]).toMatch(/^# Untrusted Data Handling/);
-    expect(sections[5]).toMatch(/^# Recall Before Answering/);
-    expect(sections[6]).toMatch(/^# Workout Review/);
-    expect(sections[7]).toMatch(/^# Data Grounding/);
-    expect(sections.length).toBe(8);
+    expect(sections[2]).toMatch(/^# Untrusted Data Handling/);
+    expect(sections[3]).toMatch(/^# Recall Before Answering/);
+    expect(sections[4]).toMatch(/^# Workout Review/);
+    expect(sections[5]).toMatch(/^# Data Grounding/);
+    expect(sections[6]).toContain("cache boundary:");
+    expect(sections[7]).toMatch(/^# Athlete Context/);
+    expect(sections[8]).toMatch(/^# Current Date & Time/);
+    expect(sections.length).toBe(9);
+    expect(prompt).toContain(SYSTEM_PROMPT_CACHE_BOUNDARY);
   });
 
   it("injects the Layer-3 data-grounding marker", () => {

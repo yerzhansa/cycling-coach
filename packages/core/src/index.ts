@@ -92,7 +92,7 @@ export type { IntervalsClient } from "./intervals.js";
 // ─── Agent ────────────────────────────────────────────────────────────
 export { CoachAgent } from "./agent/coach-agent.js";
 export { ChatStore } from "./agent/chat-store.js";
-export { buildSystemPrompt } from "./agent/system-prompt.js";
+export { buildSystemPrompt, SYSTEM_PROMPT_CACHE_BOUNDARY } from "./agent/system-prompt.js";
 export { withSessionLock } from "./agent/session-lock.js";
 export {
   splitHistoryByBudget,

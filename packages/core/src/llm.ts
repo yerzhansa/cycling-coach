@@ -37,9 +37,22 @@ export class LLM {
       throw new Error("AI SDK model not initialized");
     }
 
+    // Breakpoint on the last (only) stable system block; the provider renders
+    // tools before system, so the marker caches tools + system together.
+    const cachedSystem =
+      opts.system === undefined
+        ? undefined
+        : [
+            {
+              role: "system" as const,
+              content: opts.system,
+              providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
+            },
+          ];
+
     const base = {
       model: this.aiSdkModel,
-      system: opts.system,
+      system: cachedSystem ?? opts.system,
       tools: opts.tools,
       stopWhen: opts.stopWhen,
       maxOutputTokens: opts.maxOutputTokens,
