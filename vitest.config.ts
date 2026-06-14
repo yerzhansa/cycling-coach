@@ -1,4 +1,4 @@
-import { configDefaults, defineConfig } from "vitest/config";
+import { configDefaults, coverageConfigDefaults, defineConfig } from "vitest/config";
 
 /**
  * Vite (which vitest is built on) doesn't natively handle `import x from "*.md"`
@@ -16,6 +16,18 @@ export default defineConfig({
     pool: "forks",
     isolate: true,
     exclude: [...configDefaults.exclude, "**/.claude/**"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "json-summary"],
+      reportsDirectory: "./coverage",
+      include: ["packages/*/src/**/*.ts"],
+      exclude: [
+        ...(coverageConfigDefaults.exclude ?? []),
+        "**/*.test.ts",
+        "**/*.generated.ts",
+        "**/index.ts",
+      ],
+    },
   },
   plugins: [
     {
