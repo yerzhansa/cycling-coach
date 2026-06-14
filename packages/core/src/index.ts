@@ -96,6 +96,8 @@ export type { IntervalsClient } from "./intervals.js";
 export { CoachAgent } from "./agent/coach-agent.js";
 export { ChatStore } from "./agent/chat-store.js";
 export { buildSystemPrompt, SYSTEM_PROMPT_CACHE_BOUNDARY } from "./agent/system-prompt.js";
+export { computePromptLineage } from "./agent/prompt-lineage.js";
+export type { PromptLineage, PromptLineageInput } from "./agent/prompt-lineage.js";
 export { withSessionLock } from "./agent/session-lock.js";
 export {
   splitHistoryByBudget,

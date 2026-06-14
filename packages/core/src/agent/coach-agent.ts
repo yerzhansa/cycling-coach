@@ -8,7 +8,8 @@ import type { Config } from "../config.js";
 import { resolveSecretRef } from "../secrets/resolve.js";
 import { Memory } from "../memory/store.js";
 import { ChatStore } from "./chat-store.js";
-import { buildSystemPrompt } from "./system-prompt.js";
+import { buildSystemPrompt, staticRuleBlocks } from "./system-prompt.js";
+import { computePromptLineage } from "./prompt-lineage.js";
 import { withSessionLock } from "./session-lock.js";
 import { splitHistoryByBudget, makeSummaryMessage } from "./history-limit.js";
 import {
@@ -281,9 +282,24 @@ export class CoachAgent {
             caller: "chat",
           });
 
+          const lineage = computePromptLineage({
+            soul: this.sport.soul,
+            skills: this.sport.skills,
+            ruleBlocks: staticRuleBlocks(),
+            toolSchemas: this.tools,
+            model: this.config.llm.model,
+            systemPrompt: this.systemPrompt,
+            messages,
+          });
+
           // Append BOTH after success — JSONL unchanged on failure
           this.chatStore.appendMessage(chatId, "user", userMessage);
-          this.chatStore.appendMessage(chatId, "assistant", text);
+          this.chatStore.appendMessage(chatId, "assistant", text, {
+            templateHash: lineage.templateHash,
+            assembledHash: lineage.assembledHash,
+            provider: this.config.llm.provider,
+            model: this.config.llm.model,
+          });
 
           appendUsageLine(this.config.dataDir, {
             ts: Date.now(),

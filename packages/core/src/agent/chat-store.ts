@@ -26,6 +26,10 @@ interface JsonlLine {
   role: "user" | "assistant" | "system";
   content: string;
   ts: string;
+  templateHash?: string;
+  assembledHash?: string;
+  provider?: string;
+  model?: string;
 }
 
 const VALID_ROLES = new Set(["user", "assistant", "system"]);
@@ -41,6 +45,9 @@ function parseSessionLine(line: string): JsonlLine | null {
   const v = value as Record<string, unknown>;
   if (typeof v.role !== "string" || !VALID_ROLES.has(v.role)) return null;
   if (typeof v.content !== "string" || typeof v.ts !== "string") return null;
+  for (const k of ["templateHash", "assembledHash", "provider", "model"] as const) {
+    if (k in v && typeof v[k] !== "string") return null;
+  }
   return value as JsonlLine;
 }
 
@@ -105,9 +112,14 @@ export class ChatStore {
     return { messages, lastMessageTime };
   }
 
-  appendMessage(chatId: string, role: "user" | "assistant", content: string): void {
+  appendMessage(
+    chatId: string,
+    role: "user" | "assistant",
+    content: string,
+    lineage?: { templateHash: string; assembledHash: string; provider: string; model: string },
+  ): void {
     const path = this.filePath(chatId);
-    const line: JsonlLine = { role, content, ts: new Date().toISOString() };
+    const line: JsonlLine = { role, content, ts: new Date().toISOString(), ...lineage };
     appendFileSync(path, JSON.stringify(line) + "\n", { encoding: "utf-8", mode: 0o600 });
   }
 

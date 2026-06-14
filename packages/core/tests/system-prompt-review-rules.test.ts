@@ -4,6 +4,7 @@ import {
   ATHLETE_CONTEXT_FENCE_OPEN,
   ATHLETE_CONTEXT_FENCE_CLOSE,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
+  LAYER_3_GROUNDING_ENABLED,
 } from "../src/agent/system-prompt.js";
 import type { SportPersona } from "../src/sport.js";
 import type { Memory } from "../src/memory/store.js";
@@ -27,8 +28,6 @@ describe("buildSystemPrompt — review + data-grounding placement", () => {
     expect(sections[sections.length - 2]).toMatch(/^# Athlete Context/);
     const review = sections.find((s) => s.startsWith("# Workout Review"));
     expect(review).toContain("3-questions framework");
-    const dataGrounding = sections.find((s) => s.startsWith("# Data Grounding"));
-    expect(dataGrounding).toBeDefined();
     expect(sections[sections.length - 1]).not.toMatch(/^# Data Grounding/);
   });
 
@@ -45,7 +44,7 @@ describe("buildSystemPrompt — review + data-grounding placement", () => {
     expect(sections[sections.length - 1]).toMatch(/^# Current Date & Time/);
   });
 
-  it("preserves the [soul, ...static rules, boundary, athlete-context, time] order", () => {
+  it("preserves the [soul, ...static rules, boundary, athlete-context, time] order with the grounding rule gated off", () => {
     const prompt = buildSystemPrompt(persona, makeFakeMemory("ctx"));
     const sections = prompt.split("\n\n---\n\n");
     expect(sections[0]).toContain("Cycling Coach");
@@ -53,19 +52,23 @@ describe("buildSystemPrompt — review + data-grounding placement", () => {
     expect(sections[2]).toMatch(/^# Untrusted Data Handling/);
     expect(sections[3]).toMatch(/^# Recall Before Answering/);
     expect(sections[4]).toMatch(/^# Workout Review/);
-    expect(sections[5]).toMatch(/^# Data Grounding/);
-    expect(sections[6]).toContain("cache boundary:");
-    expect(sections[7]).toMatch(/^# Athlete Context/);
-    expect(sections[8]).toMatch(/^# Current Date & Time/);
-    expect(sections.length).toBe(9);
+    expect(sections[5]).toContain("cache boundary:");
+    expect(sections[6]).toMatch(/^# Athlete Context/);
+    expect(sections[7]).toMatch(/^# Current Date & Time/);
+    expect(sections.length).toBe(8);
     expect(prompt).toContain(SYSTEM_PROMPT_CACHE_BOUNDARY);
   });
 
-  it("injects the Layer-3 data-grounding marker", () => {
+  it("ties the Data Grounding section's presence to the grounding flag", () => {
     const prompt = buildSystemPrompt(persona, makeFakeMemory("ctx"));
-    expect(prompt).toContain(
-      "Numeric claims MUST come from the current JSON snapshot you read this turn",
-    );
+    expect(prompt.includes("# Data Grounding")).toBe(LAYER_3_GROUNDING_ENABLED);
+  });
+
+  it("ties the Layer-3 marker string's presence to the grounding flag", () => {
+    const prompt = buildSystemPrompt(persona, makeFakeMemory("ctx"));
+    expect(
+      prompt.includes("Numeric claims MUST come from the current JSON snapshot you read this turn"),
+    ).toBe(LAYER_3_GROUNDING_ENABLED);
   });
 });
 
