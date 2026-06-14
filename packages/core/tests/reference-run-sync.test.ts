@@ -234,31 +234,43 @@ describe("createRunSync", () => {
     const now = new Date("2026-05-09T14:00:00Z");
     const fetchSpy = vi.fn().mockResolvedValue(emptyFetched);
 
-    // Timing budget — must hold on slow CI runners:
-    //   T_cache: real atomicWriteJson with fsync ≤ ~150ms worst-case.
-    //   T_timeout = 300ms — well above T_cache, so timeout fires AFTER
-    //               cache writes complete (phase has advanced to
-    //               writing_scheduler).
-    //   T_scheduler = 600ms — longer than (T_timeout - T_cache), so
-    //               timeout fires DURING the scheduler write. Kept tight
-    //               so the dangling write resolves promptly after the
-    //               orchestrator returns (afterEach removes the temp
-    //               dir; the dangling write then fails harmlessly via
-    //               PR D's A2 body-after-timeout warn path).
-    // Pre-fix budget was 50ms / 200ms — too tight; cache writes
-    // occasionally consumed >50ms on slow CI, making the timeout fire
-    // during writing_cache instead of writing_scheduler.
     const { atomicWriteJson: realAtomicWrite } = await import(
       "../src/io/atomic-write-json.js"
     );
-    const slowSchedulerWrite = vi.fn(
+
+    // The scheduler write parks on schedulerGate, so the body sits inside the
+    // .scheduler.json write (phase === "writing_scheduler") until the hand-fired
+    // outer timer wins the race — no wall-clock dependence. `arrivedAtGate`
+    // resolves the instant the body reaches the parked scheduler write, so the
+    // test fires the timer at exactly the right phase regardless of how long the
+    // upstream cache writes take.
+    let releaseScheduler!: () => void;
+    const schedulerGate = new Promise<void>((resolve) => {
+      releaseScheduler = resolve;
+    });
+    let signalArrived!: () => void;
+    const arrivedAtGate = new Promise<void>((resolve) => {
+      signalArrived = resolve;
+    });
+    const pendingWrites: Array<Promise<unknown>> = [];
+    const latchedSchedulerWrite = vi.fn(
       async (path: string, value: unknown): Promise<void> => {
         if (path.endsWith(".scheduler.json")) {
-          await new Promise((resolve) => setTimeout(resolve, 600));
+          signalArrived();
+          await schedulerGate;
         }
-        await realAtomicWrite(path, value);
+        const w = realAtomicWrite(path, value);
+        pendingWrites.push(w);
+        await w;
       },
     );
+
+    let capturedTimeoutFn!: () => void;
+    const setTimeoutFn = vi.fn((fn: () => void) => {
+      capturedTimeoutFn = fn;
+      return 1;
+    });
+    const clearTimeoutFn = vi.fn();
 
     // Suppress the expected body-after-timeout warn from the dangling
     // scheduler write that completes after the orchestrator returns.
@@ -270,12 +282,21 @@ describe("createRunSync", () => {
       cooldown,
       cooldownWindowMs: 30_000,
       fetchReferenceData: fetchSpy,
-      atomicWrite: slowSchedulerWrite,
+      atomicWrite: latchedSchedulerWrite,
+      clock: { setTimeout: setTimeoutFn, clearTimeout: clearTimeoutFn },
       now: () => now,
       timing: { outerTimeoutMs: 300 },
     });
 
-    const result = await runSync({ caller: "scheduled" });
+    const p = runSync({ caller: "scheduled" });
+
+    // Synchronize on the body parking at the scheduler write (phase ===
+    // "writing_scheduler"), then fire the captured outer-timer callback by hand.
+    await arrivedAtGate;
+    await Promise.resolve();
+
+    capturedTimeoutFn();
+    const result = await p;
 
     expect(result.kind).toBe("failed");
     if (result.kind === "failed") {
@@ -297,6 +318,12 @@ describe("createRunSync", () => {
     expect(() => readFileSync(join(dir, ".scheduler.json"), "utf-8")).toThrow();
 
     expect(mutex.isHeld()).toBe(false);
+
+    // Let the dangling scheduler write settle before afterEach removes the dir.
+    releaseScheduler();
+    await schedulerGate;
+    await Promise.resolve();
+    await Promise.allSettled(pendingWrites);
   });
 
   // ── A1: body must NOT proceed past writing_cache once outer timeout fired ──
@@ -307,21 +334,46 @@ describe("createRunSync", () => {
     const now = new Date("2026-05-09T14:00:00Z");
     const fetchSpy = vi.fn().mockResolvedValue(emptyFetched);
 
-    // Real atomicWriteJson; inject 200ms delay PER cache write, normal speed for scheduler.
-    // Promise.all runs the 5 cache writes in parallel, so total writing_cache wall-clock
-    // is ~200ms. With outerTimeoutMs: 30, the timeout fires DURING writing_cache.
-    // The wide gap (200ms write vs 30ms timeout) keeps this deterministic on slow CI.
     const { atomicWriteJson: realAtomicWrite } = await import(
       "../src/io/atomic-write-json.js"
     );
-    const slowCacheWrite = vi.fn(
+
+    // Every cache write parks on cacheGate, so the body sits at
+    // phase === "writing_cache" until the hand-fired outer timer wins; abort
+    // then runs while in writing_cache, so the A1 guard bails the body before
+    // the scheduler write. `arrivedAtGate` resolves the instant the first cache
+    // write reaches the gate, so the timer fires at exactly the writing_cache
+    // phase regardless of upstream timing.
+    let releaseCache!: () => void;
+    const cacheGate = new Promise<void>((resolve) => {
+      releaseCache = resolve;
+    });
+    let signalArrived: (() => void) | null = () => {};
+    const arrivedAtGate = new Promise<void>((resolve) => {
+      signalArrived = resolve;
+    });
+    const pendingWrites: Array<Promise<unknown>> = [];
+    const latchedCacheWrite = vi.fn(
       async (path: string, value: unknown): Promise<void> => {
         if (!path.endsWith(".scheduler.json")) {
-          await new Promise((resolve) => setTimeout(resolve, 200));
+          if (signalArrived !== null) {
+            signalArrived();
+            signalArrived = null;
+          }
+          await cacheGate;
         }
-        await realAtomicWrite(path, value);
+        const w = realAtomicWrite(path, value);
+        pendingWrites.push(w);
+        await w;
       },
     );
+
+    let capturedTimeoutFn!: () => void;
+    const setTimeoutFn = vi.fn((fn: () => void) => {
+      capturedTimeoutFn = fn;
+      return 1;
+    });
+    const clearTimeoutFn = vi.fn();
 
     const runSync = createRunSync({
       dataDir: dir,
@@ -329,12 +381,21 @@ describe("createRunSync", () => {
       cooldown,
       cooldownWindowMs: 30_000,
       fetchReferenceData: fetchSpy,
-      atomicWrite: slowCacheWrite,
+      atomicWrite: latchedCacheWrite,
+      clock: { setTimeout: setTimeoutFn, clearTimeout: clearTimeoutFn },
       now: () => now,
       timing: { outerTimeoutMs: 30 },
     });
 
-    const result = await runSync({ caller: "scheduled" });
+    const p = runSync({ caller: "scheduled" });
+
+    // Synchronize on the body parking inside the held cache writes (phase ===
+    // "writing_cache"), then fire the captured outer-timer callback by hand.
+    await arrivedAtGate;
+    await Promise.resolve();
+
+    capturedTimeoutFn();
+    const result = await p;
 
     expect(result.kind).toBe("failed");
     if (result.kind === "failed") {
@@ -354,6 +415,14 @@ describe("createRunSync", () => {
     expect(() => readFileSync(join(dir, ".scheduler.json"), "utf-8")).toThrow();
 
     expect(mutex.isHeld()).toBe(false);
+
+    // Let the held cache writes finish, then drain microtasks so the body runs
+    // through its aborted-guard and returns, all before afterEach removes the dir.
+    releaseCache();
+    await cacheGate;
+    await Promise.allSettled(pendingWrites);
+    await Promise.resolve();
+    await Promise.resolve();
   });
 
   // ── A2: body throws after timeout — error must NOT be silently swallowed ──

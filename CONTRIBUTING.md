@@ -70,6 +70,14 @@ docs(readme): document the /whatsnew command
 - Lowercase after the colon
 - One logical change per commit when practical
 
+**Flake remediation marker.** A commit that fixes or remediates a test flake carries a `flake:` note — either a `flake:` trailer line in the body or a `flake:` marker in the subject — so `git log --grep=flake` is a deliberate, durable measurement surface for flake-remediation history. This is a searchable marker for measurement, **not** a new Conventional-Commits type: the subject still uses one of the types above (`fix(test):`, `test:`, `chore:` as appropriate), and the release tooling does not interpret `flake:`.
+
+## Test determinism
+
+- **Restore real timers.** A test that calls `vi.useFakeTimers()` MUST restore real timers in `afterEach` via `vi.useRealTimers()`. The default `vi.restoreAllMocks()` does NOT restore fake timers, so a converted test that forgets this leaks faked time into the next test in the file.
+- **Never run fake-timer tests under `isolate: false`.** Shared fake-timer state across files corrupts unrelated suites. The root `vitest.config.ts` pins `pool: "forks"` + `isolate: true` precisely so each file gets its own process and clock; do not weaken that to `isolate: false`.
+- **Prefer fake-timer or injected-clock determinism over wall-clock sleeps.** Tests that assert on elapsed time (mutex acquire timeouts, run-sync phase ordering) drive time through `vi.advanceTimersByTimeAsync` or an injected clock seam rather than racing a real `setTimeout`, so they cannot flake on a slow runner.
+
 ## Trademark hygiene
 
 The Reference submodule (`packages/core/src/reference/`) ports from an MIT-licensed upstream; the full attribution (author, copyright, license text, and source link) lives in [`NOTICE.md`](./NOTICE.md). That upstream was authored against TrainingPeaks vocabulary; this codebase uses [intervals.icu](https://intervals.icu)'s plain-English alternatives throughout. **PRs that introduce the forbidden tokens in Reference source or docs are rejected by the lint.**

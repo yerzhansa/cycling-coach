@@ -16,6 +16,14 @@ export class AsyncMutex {
   private heldBy: Waiter | null = null;
   private waiters: Waiter[] = [];
 
+  constructor(
+    private readonly clock: {
+      now: () => number;
+      setTimeout: typeof setTimeout;
+      clearTimeout: typeof clearTimeout;
+    } = { now: Date.now, setTimeout, clearTimeout },
+  ) {}
+
   isHeld(): boolean {
     return this.heldBy !== null;
   }
@@ -44,7 +52,7 @@ export class AsyncMutex {
       );
     }
 
-    const enqueuedAt = Date.now();
+    const enqueuedAt = this.clock.now();
     const waiter: Waiter = {
       signalAcquired: () => {},
       timeoutHandle: null,
@@ -54,7 +62,7 @@ export class AsyncMutex {
     let hotWarnHandle: ReturnType<typeof setTimeout> | null = null;
     const clearHotWarn = () => {
       if (hotWarnHandle !== null) {
-        clearTimeout(hotWarnHandle);
+        this.clock.clearTimeout(hotWarnHandle);
         hotWarnHandle = null;
       }
     };
@@ -64,13 +72,13 @@ export class AsyncMutex {
         if (waiter.timedOut) return;
         waiter.acquired = true;
         if (waiter.timeoutHandle !== null) {
-          clearTimeout(waiter.timeoutHandle);
+          this.clock.clearTimeout(waiter.timeoutHandle);
           waiter.timeoutHandle = null;
         }
         clearHotWarn();
         resolve(true);
       };
-      waiter.timeoutHandle = setTimeout(() => {
+      waiter.timeoutHandle = this.clock.setTimeout(() => {
         if (waiter.acquired) return;
         waiter.timedOut = true;
         clearHotWarn();
@@ -84,11 +92,11 @@ export class AsyncMutex {
         waiter.signalAcquired();
       } else {
         this.waiters.push(waiter);
-        hotWarnHandle = setTimeout(() => {
+        hotWarnHandle = this.clock.setTimeout(() => {
           console.warn(
             JSON.stringify({
               event: "mutex_hot",
-              wait_ms: Date.now() - enqueuedAt,
+              wait_ms: this.clock.now() - enqueuedAt,
               caller: opts.caller,
               ts: new Date().toISOString(),
             }),

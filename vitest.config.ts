@@ -9,6 +9,12 @@ import { configDefaults, defineConfig } from "vitest/config";
  */
 export default defineConfig({
   test: {
+    // Pinned (not relying on vitest defaults): the parallel-safety contract —
+    // per-file isolation + process-level forks — is what every mkdtemp fixture
+    // and module-singleton reset seam depends on; a vitest-major default flip
+    // to shared-globals `threads` would silently break it.
+    pool: "forks",
+    isolate: true,
     exclude: [...configDefaults.exclude, "**/.claude/**"],
   },
   plugins: [
