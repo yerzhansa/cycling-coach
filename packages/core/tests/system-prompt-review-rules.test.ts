@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildSystemPrompt,
+  staticRuleBlocks,
   ATHLETE_CONTEXT_FENCE_OPEN,
   ATHLETE_CONTEXT_FENCE_CLOSE,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
@@ -69,6 +70,19 @@ describe("buildSystemPrompt — review + data-grounding placement", () => {
     expect(
       prompt.includes("Numeric claims MUST come from the current JSON snapshot you read this turn"),
     ).toBe(LAYER_3_GROUNDING_ENABLED);
+  });
+
+  it("assembles exactly the blocks staticRuleBlocks() returns, contiguously and in order", () => {
+    // The builder and the prompt-lineage template hash must read the same
+    // rule-block set; the builder consumes staticRuleBlocks() directly so the
+    // two cannot drift. This pins that contract: every accessor block appears in
+    // the assembled prompt, contiguous and in order.
+    const prompt = buildSystemPrompt(persona, makeFakeMemory("ctx"));
+    const sections = prompt.split("\n\n---\n\n");
+    const blocks = staticRuleBlocks();
+    const start = sections.indexOf(blocks[0]);
+    expect(start).toBeGreaterThan(-1);
+    expect(sections.slice(start, start + blocks.length)).toEqual(blocks);
   });
 });
 

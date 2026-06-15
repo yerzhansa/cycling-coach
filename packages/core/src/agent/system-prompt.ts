@@ -161,12 +161,7 @@ export function buildSystemPrompt(
     parts.push("# Domain Knowledge\n\n" + skillsContent);
   }
 
-  parts.push(UNTRUSTED_DATA_RULES);
-  parts.push(MEMORY_RECALL_RULES);
-  parts.push(WORKOUT_REVIEW_RULES);
-  if (LAYER_3_GROUNDING_ENABLED) {
-    parts.push(LAYER_3_PROMPT_RULES);
-  }
+  parts.push(...staticRuleBlocks());
 
   // Strip the marker's leading separator so the join adds exactly one.
   parts.push(SYSTEM_PROMPT_CACHE_BOUNDARY.replace(/^\n\n---\n\n/, ""));

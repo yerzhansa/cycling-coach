@@ -1,16 +1,19 @@
 import { createHash } from "node:crypto";
 import type { ModelMessage } from "ai";
 
-function sha256_16(input: string): string {
+export function sha256_16(input: string): string {
   return createHash("sha256").update(input).digest("hex").slice(0, 16);
 }
 
-export interface PromptLineageInput {
+export interface PromptTemplateInput {
   soul: string;
   skills: Record<string, string>;
   ruleBlocks: string[];
   toolSchemas: unknown;
   model: string;
+}
+
+export interface PromptLineageInput extends PromptTemplateInput {
   systemPrompt: string;
   messages: ModelMessage[];
 }
@@ -35,7 +38,7 @@ function stableSerialize(value: unknown): unknown {
   return value;
 }
 
-export function computePromptLineage(input: PromptLineageInput): PromptLineage {
+export function computeTemplateHash(input: PromptTemplateInput): string {
   const templateBasis = JSON.stringify({
     soul: input.soul,
     skills: stableSerialize(input.skills),
@@ -43,12 +46,17 @@ export function computePromptLineage(input: PromptLineageInput): PromptLineage {
     toolSchemas: stableSerialize(input.toolSchemas),
     model: input.model,
   });
-  const assembledBasis = JSON.stringify({
-    system: input.systemPrompt,
-    messages: input.messages,
-  });
+  return sha256_16(templateBasis);
+}
+
+export function computeAssembledHash(systemPrompt: string, messages: ModelMessage[]): string {
+  const assembledBasis = JSON.stringify({ system: systemPrompt, messages });
+  return sha256_16(assembledBasis);
+}
+
+export function computePromptLineage(input: PromptLineageInput): PromptLineage {
   return {
-    templateHash: sha256_16(templateBasis),
-    assembledHash: sha256_16(assembledBasis),
+    templateHash: computeTemplateHash(input),
+    assembledHash: computeAssembledHash(input.systemPrompt, input.messages),
   };
 }

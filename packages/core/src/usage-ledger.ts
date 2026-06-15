@@ -7,18 +7,19 @@ export const USAGE_LEDGER_MAX_BYTES = 10 * 1024 * 1024;
 export interface UsageLedgerLine {
   ts: number;
   kind: "generate" | "turn" | "boot";
-  caller: "chat" | "flush" | "compact" | undefined;
   provider: string;
   model: string;
   durationMs: number;
-  steps: number | undefined;
-  inputTokens: number | undefined;
-  outputTokens: number | undefined;
-  totalTokens: number | undefined;
-  cacheReadTokens: number | undefined;
-  cacheWriteTokens: number | undefined;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number } | undefined;
-  stopReason: string | undefined;
+  // Populated on per-generation lines; absent on the whole-turn and boot lines.
+  caller?: "chat" | "flush" | "compact";
+  steps?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  cost?: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+  stopReason?: string;
 }
 
 export function appendUsageLine(dataDir: string, line: UsageLedgerLine): void {

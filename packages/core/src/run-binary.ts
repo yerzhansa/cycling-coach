@@ -297,18 +297,9 @@ export async function runBinary(
   appendUsageLine(config.dataDir, {
     ts: Date.now(),
     kind: "boot",
-    caller: undefined,
     provider: config.llm.provider,
     model: config.llm.model,
     durationMs: Date.now() - bootStart,
-    steps: undefined,
-    inputTokens: undefined,
-    outputTokens: undefined,
-    totalTokens: undefined,
-    cacheReadTokens: undefined,
-    cacheWriteTokens: undefined,
-    cost: undefined,
-    stopReason: undefined,
   });
 
   if (config.telegram.botToken) {

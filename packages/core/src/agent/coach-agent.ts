@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { stepCountIs } from "ai";
 import type { ModelMessage, ToolSet } from "ai";
 import { makeChatClient } from "../reference/sync/intervals-client-factory.js";
@@ -10,7 +9,7 @@ import { resolveSecretRef } from "../secrets/resolve.js";
 import { Memory } from "../memory/store.js";
 import { ChatStore } from "./chat-store.js";
 import { buildSystemPrompt, staticRuleBlocks } from "./system-prompt.js";
-import { computePromptLineage } from "./prompt-lineage.js";
+import { computeAssembledHash, computeTemplateHash, sha256_16 } from "./prompt-lineage.js";
 import { withSessionLock } from "./session-lock.js";
 import { splitHistoryByBudget, makeSummaryMessage } from "./history-limit.js";
 import {
@@ -53,10 +52,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function cacheKeyForChat(chatId: string): string {
-  return createHash("sha256").update(chatId).digest("hex").slice(0, 16);
-}
-
 // ============================================================================
 // AGENT
 // ============================================================================
@@ -73,6 +68,10 @@ export class CoachAgent {
   private tz: string;
   private archiveDeferred = new Set<string>();
   private lastFlushMessageCount = new Map<string, number>();
+  // The prompt-template hash is derived from constructor-stable inputs (soul,
+  // skills, tool schemas, model, and the compile-time rule-block set), so it is
+  // computed once on first use and reused for every turn of the process.
+  private templateHash?: string;
 
   constructor(sport: Sport, config: Config) {
     this.sport = sport;
@@ -305,24 +304,23 @@ export class CoachAgent {
             stopWhen: stepCountIs(10),
             maxSteps: 10,
             caller: "chat",
-            cacheKey: cacheKeyForChat(chatId),
+            cacheKey: sha256_16(chatId),
           });
 
-          const lineage = computePromptLineage({
+          const templateHash = (this.templateHash ??= computeTemplateHash({
             soul: this.sport.soul,
             skills: this.sport.skills,
             ruleBlocks: staticRuleBlocks(),
             toolSchemas: this.tools,
             model: this.config.llm.model,
-            systemPrompt: this.systemPrompt,
-            messages,
-          });
+          }));
+          const assembledHash = computeAssembledHash(this.systemPrompt, messages);
 
           // Append BOTH after success — JSONL unchanged on failure
           this.chatStore.appendMessage(chatId, "user", userMessage);
           this.chatStore.appendMessage(chatId, "assistant", text, {
-            templateHash: lineage.templateHash,
-            assembledHash: lineage.assembledHash,
+            templateHash,
+            assembledHash,
             provider: this.config.llm.provider,
             model: this.config.llm.model,
           });
@@ -334,14 +332,6 @@ export class CoachAgent {
             provider: this.config.llm.provider,
             model: this.config.llm.model,
             durationMs: Date.now() - turnStart,
-            steps: undefined,
-            inputTokens: undefined,
-            outputTokens: undefined,
-            totalTokens: undefined,
-            cacheReadTokens: undefined,
-            cacheWriteTokens: undefined,
-            cost: undefined,
-            stopReason: undefined,
           });
 
           return text;
