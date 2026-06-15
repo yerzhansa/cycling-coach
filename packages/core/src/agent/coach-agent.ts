@@ -281,6 +281,9 @@ export class CoachAgent {
       let timeoutAttempts = 0;
       let rateLimitAttempts = 0;
 
+      // Loop-invariant: the prompt cache key derives only from the chat id.
+      const cacheKey = sha256_16(chatId);
+
       while (true) {
         // Preemptive: compact before sending if over budget
         if (shouldCompact({ messages, systemPrompt: this.systemPrompt, contextWindowTokens: this.config.contextWindowTokens })) {
@@ -304,7 +307,7 @@ export class CoachAgent {
             stopWhen: stepCountIs(10),
             maxSteps: 10,
             caller: "chat",
-            cacheKey: sha256_16(chatId),
+            cacheKey,
           });
 
           const templateHash = (this.templateHash ??= computeTemplateHash({
