@@ -156,6 +156,48 @@ describe("LLM.generate — AI-SDK path", () => {
     expect(parsed.cacheWriteTokens).toBe(4);
     expect(parsed.steps).toBe(2);
   });
+
+  it("prices the generate line from the model catalog when the model is catalogued", async () => {
+    const { getModels } = await import("@mariozechner/pi-ai");
+    const known = getModels("anthropic").find((m) => m.cost.input > 0);
+    if (!known) throw new Error("expected at least one priced anthropic model in the catalog");
+
+    const { LLM } = await loadLLMWithGenerateText({
+      text: "ok",
+      toolCalls: [],
+      finishReason: "stop",
+      usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      totalUsage: { inputTokens: 1_000_000, outputTokens: 0, totalTokens: 1_000_000 },
+      steps: [{ s: "a" }],
+    });
+    const config: Config = { ...anthropicConfig(dir), llm: { provider: "anthropic", model: known.id, apiKey: "sk-test" } };
+    const llm = new LLM(config);
+
+    await llm.generate({ prompt: "hi", caller: "chat" });
+
+    const parsed = JSON.parse(readLines(dir)[0]) as UsageLedgerLine;
+    expect(parsed.cost).toBeDefined();
+    // 1,000,000 input tokens at a per-million-token rate equals exactly that rate.
+    expect(parsed.cost?.input).toBeCloseTo(known.cost.input, 10);
+    expect(parsed.cost?.total).toBeCloseTo(known.cost.input, 10);
+  });
+
+  it("leaves cost undefined when the model is not in the catalog", async () => {
+    const { LLM } = await loadLLMWithGenerateText({
+      text: "ok",
+      toolCalls: [],
+      finishReason: "stop",
+      usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+      totalUsage: { inputTokens: 30, outputTokens: 20, totalTokens: 50 },
+      steps: [{ s: "a" }],
+    });
+    const llm = new LLM(anthropicConfig(dir)); // model "claude-test" — not catalogued
+
+    await llm.generate({ prompt: "hi", caller: "chat" });
+
+    const parsed = JSON.parse(readLines(dir)[0]) as UsageLedgerLine;
+    expect(parsed.cost).toBeUndefined();
+  });
 });
 
 describe("codex bridge — usage accumulation across the loop", () => {

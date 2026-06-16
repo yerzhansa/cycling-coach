@@ -4,6 +4,8 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import type { LanguageModel } from "ai";
 
+import { calculateCost, getModels } from "@mariozechner/pi-ai";
+
 import type { Config } from "./config.js";
 import { codexGenerateText } from "./agent/codex-bridge.js";
 import type { GenerateOpts, GenerateResult } from "./llm-types.js";
@@ -81,6 +83,7 @@ export class LLM {
       usage: result.usage,
       totalUsage: result.totalUsage,
       steps: result.steps.length,
+      cost: priceAiSdkUsage(this.config.llm.provider, this.config.llm.model, result.totalUsage),
     };
   }
 
@@ -106,6 +109,31 @@ export class LLM {
       stopReason: result.finishReason,
     });
   }
+}
+
+// The AI SDK reports token usage but no cost, so derive it from the same
+// maintained model catalog the codex path already prices against. Codex carries
+// its own provider-reported cost and is never re-priced here. An uncatalogued
+// model yields undefined rather than a fabricated figure (best-effort ledger).
+function priceAiSdkUsage(
+  provider: Config["llm"]["provider"],
+  modelId: string,
+  totalUsage: GenerateResult["totalUsage"],
+): GenerateResult["cost"] | undefined {
+  if (!totalUsage) return undefined;
+  const model = getModels(provider).find((m) => m.id === modelId);
+  if (!model) return undefined;
+  const details = totalUsage.inputTokenDetails as
+    | { cacheReadTokens?: number; cacheWriteTokens?: number }
+    | undefined;
+  return calculateCost(model, {
+    input: totalUsage.inputTokens ?? 0,
+    output: totalUsage.outputTokens ?? 0,
+    cacheRead: details?.cacheReadTokens ?? 0,
+    cacheWrite: details?.cacheWriteTokens ?? 0,
+    totalTokens: totalUsage.totalTokens ?? 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  });
 }
 
 // ============================================================================
