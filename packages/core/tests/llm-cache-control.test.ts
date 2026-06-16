@@ -24,6 +24,17 @@ function codexConfig(): Config {
   };
 }
 
+function aiSdkConfig(provider: "openai" | "google", model: string): Config {
+  return {
+    llm: { provider, model, apiKey: "test-key" },
+    intervals: { apiKey: "", athleteId: "0" },
+    telegram: { botToken: "" },
+    session: { historyTokenBudgetRatio: 0.3, idleMinutes: 0, dailyResetHour: 4, resetArchiveRetentionDays: 0, timezone: "" },
+    contextWindowTokens: 272_000,
+    dataDir: "/tmp/cc-cache-control-test",
+  };
+}
+
 const MINIMAL_RESULT = { text: "ok", toolCalls: [], finishReason: "stop", usage: {}, totalUsage: {}, steps: [] };
 
 beforeEach(() => {
@@ -85,4 +96,34 @@ describe("LLM cache control — Anthropic system breakpoint", () => {
     expect(typeof captured?.system).toBe("string");
     expect(captured?.system).toBe("STABLE SYSTEM PROMPT");
   });
+});
+
+describe("LLM cache control — non-Anthropic AI-SDK providers carry no Anthropic directive", () => {
+  for (const { provider, model, mockPath, mockFactory } of [
+    { provider: "openai" as const, model: "gpt-4o", mockPath: "@ai-sdk/openai", mockFactory: () => ({ createOpenAI: () => () => ({ provider: "openai-stub" }) }) },
+    { provider: "google" as const, model: "gemini-2.0-flash", mockPath: "@ai-sdk/google", mockFactory: () => ({ createGoogleGenerativeAI: () => () => ({ provider: "google-stub" }) }) },
+  ]) {
+    it(`passes the system as a plain string with no providerOptions on the ${provider} path`, async () => {
+      let captured: { system?: unknown } | undefined;
+      vi.doMock("ai", () => ({
+        generateText: vi.fn(async (arg: { system?: unknown }) => {
+          captured = arg;
+          return MINIMAL_RESULT;
+        }),
+      }));
+      vi.doMock(mockPath, mockFactory);
+
+      const { LLM } = await import("../src/llm.js");
+      const llm = new LLM(aiSdkConfig(provider, model));
+      await llm.generate({
+        system: "STABLE SYSTEM PROMPT",
+        messages: [{ role: "user", content: "hi" }],
+      });
+
+      expect(typeof captured?.system).toBe("string");
+      expect(captured?.system).toBe("STABLE SYSTEM PROMPT");
+      expect(JSON.stringify(captured)).not.toContain("cacheControl");
+      expect(JSON.stringify(captured)).not.toContain("providerOptions");
+    });
+  }
 });

@@ -14,6 +14,7 @@ export interface GenerateOpts {
   stopWhen?: StopCondition<any> | Array<StopCondition<any>>;
   maxSteps?: number;
   maxOutputTokens?: number;
+  /** Codex-only: forwarded to the codex bridge as its session id. The AI-SDK providers never read it. */
   cacheKey?: string;
   caller?: "chat" | "flush" | "compact";
 }

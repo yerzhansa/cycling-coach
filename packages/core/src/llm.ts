@@ -47,17 +47,20 @@ export class LLM {
     }
 
     // Breakpoint on the last (only) stable system block; the provider renders
-    // tools before system, so the marker caches tools + system together.
+    // tools before system, so the marker caches tools + system together. The
+    // cacheControl directive is Anthropic-specific — openai/google get the plain
+    // system string. A second AI-SDK provider that needs prompt caching adds its
+    // own branch here rather than extending this Anthropic-only one.
     const cachedSystem =
-      opts.system === undefined
-        ? undefined
-        : [
+      this.config.llm.provider === "anthropic" && opts.system !== undefined
+        ? [
             {
               role: "system" as const,
               content: opts.system,
               providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
             },
-          ];
+          ]
+        : undefined;
 
     const base = {
       model: this.aiSdkModel,
