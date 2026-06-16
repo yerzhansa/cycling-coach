@@ -10,7 +10,9 @@ export interface UsageLedgerLine {
   provider: string;
   model: string;
   durationMs: number;
-  // Populated on per-generation lines; absent on the whole-turn and boot lines.
+  // Populated on per-generation lines and on the whole-turn line; absent on the
+  // boot line. On a turn line the token/cost figures are the final successful
+  // generation's, not a sum across retry/compaction attempts.
   caller?: "chat" | "flush" | "compact";
   steps?: number;
   inputTokens?: number;

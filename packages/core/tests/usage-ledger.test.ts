@@ -1,10 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, statSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, statSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { cyclingSport } from "@enduragent/sport-cycling";
 import type { Config } from "../src/config.js";
+import type { Sport } from "../src/sport.js";
 import type { UsageLedgerLine } from "../src/usage-ledger.js";
+import { baseAgentConfig } from "./helpers/base-agent-config.js";
 
 let dir: string;
 
@@ -78,6 +81,31 @@ describe("appendUsageLine", () => {
       expect(parsed.durationMs).toBeDefined();
       expect(parsed.provider).toBe("anthropic");
     }
+  });
+
+  it("carries the per-turn token usage and cost on a turn line", async () => {
+    const { appendUsageLine } = await import("../src/usage-ledger.js");
+    appendUsageLine(
+      dir,
+      ledgerLine({
+        kind: "turn",
+        inputTokens: 30,
+        outputTokens: 12,
+        totalTokens: 42,
+        cacheReadTokens: 7,
+        cacheWriteTokens: 4,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.03 },
+      }),
+    );
+
+    const parsed = JSON.parse(readLines(dir)[0]) as UsageLedgerLine;
+    expect(parsed.kind).toBe("turn");
+    expect(parsed.inputTokens).toBe(30);
+    expect(parsed.outputTokens).toBe(12);
+    expect(parsed.totalTokens).toBe(42);
+    expect(parsed.cacheReadTokens).toBe(7);
+    expect(parsed.cacheWriteTokens).toBe(4);
+    expect(parsed.cost?.total).toBe(0.03);
   });
 
   it("rotates the ledger to .jsonl.1 once it crosses 10 MB", async () => {
@@ -272,5 +300,112 @@ describe("LLM.generate — codex path writes a ledger line", () => {
     expect(parsed.provider).toBe("openai-codex");
     expect(parsed.totalTokens).toBe(42);
     expect(parsed.cost?.total).toBe(0.03);
+  });
+});
+
+describe("turn line — winning generation usage and cost", () => {
+  let tempHome: string;
+  let origHome: string | undefined;
+  let agentDataDir: string;
+
+  beforeEach(() => {
+    tempHome = mkdtempSync(join(tmpdir(), "cc-turn-"));
+    origHome = process.env.HOME;
+    process.env.HOME = tempHome;
+    agentDataDir = join(tempHome, ".cycling-coach");
+    mkdirSync(agentDataDir, { recursive: true });
+    mkdirSync(join(agentDataDir, "memory"), { recursive: true });
+    vi.resetModules();
+    // A sibling describe block stubs the codex bridge to a fixed reply; drop
+    // that registration so this block drives the real retry loop.
+    vi.doUnmock("../src/agent/codex-bridge.js");
+  });
+
+  afterEach(() => {
+    process.env.HOME = origHome;
+    rmSync(tempHome, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  function piUsage(input: number, output: number, cost = 0) {
+    return {
+      input,
+      output,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: input + output,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
+    };
+  }
+
+  function mkAssistant(text: string, usage = piUsage(0, 0)) {
+    return {
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text }],
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      usage,
+      stopReason: "stop" as const,
+      timestamp: Date.now(),
+    };
+  }
+
+  async function setupAgent(complete: ReturnType<typeof vi.fn>) {
+    const model = {
+      id: "gpt-5.4",
+      name: "gpt-5.4",
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 272_000,
+      maxTokens: 128_000,
+    };
+    vi.doMock("@mariozechner/pi-ai", () => ({
+      complete,
+      getModel: vi.fn(() => model),
+    }));
+    vi.doMock("@mariozechner/pi-ai/oauth", () => ({
+      refreshOpenAICodexToken: vi.fn(),
+      loginOpenAICodex: vi.fn(),
+    }));
+    vi.doMock("../src/auth/profiles.js", () => ({
+      getFreshToken: vi.fn(async () => "token"),
+      loadProfile: vi.fn(),
+      saveProfile: vi.fn(),
+      RefreshTokenReusedError: class extends Error {},
+    }));
+    const { CoachAgent } = await import("../src/agent/coach-agent.js");
+    return new CoachAgent(cyclingSport as unknown as Sport, baseAgentConfig(agentDataDir));
+  }
+
+  it("records the final successful generation's usage/cost, not a failed attempt's", async () => {
+    let n = 0;
+    const complete = vi.fn(async () => {
+      n++;
+      if (n === 1) {
+        // First attempt overflows: its usage must never reach the turn line.
+        throw new Error("Request exceeds the maximum context length of 272000 tokens");
+      }
+      // The winning retry carries the figures the turn line must report.
+      return mkAssistant("recovered", piUsage(30, 12, 0.03));
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const agent = await setupAgent(complete);
+
+    const text = await agent.chat("turn-winner", "hello");
+    expect(text).toBe("recovered");
+
+    const turnLine = readLines(agentDataDir)
+      .map((l) => JSON.parse(l) as UsageLedgerLine)
+      .find((l) => l.kind === "turn");
+    expect(turnLine).toBeDefined();
+    expect(turnLine?.inputTokens).toBe(30);
+    expect(turnLine?.outputTokens).toBe(12);
+    expect(turnLine?.totalTokens).toBe(42);
+    expect(turnLine?.cost?.total).toBe(0.03);
   });
 });

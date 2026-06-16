@@ -300,7 +300,7 @@ export class CoachAgent {
         }
 
         try {
-          const { text } = await this.llm.generate({
+          const result = await this.llm.generate({
             system: this.systemPrompt,
             messages,
             tools: this.tools,
@@ -309,6 +309,7 @@ export class CoachAgent {
             caller: "chat",
             cacheKey,
           });
+          const { text } = result;
 
           const templateHash = (this.templateHash ??= computeTemplateHash({
             soul: this.sport.soul,
@@ -328,6 +329,14 @@ export class CoachAgent {
             model: this.config.llm.model,
           });
 
+          // A turn can run several generations (retry/compaction/overflow
+          // recovery); these usage/cost figures are the FINAL successful
+          // generation's only — not a turn-wide sum across attempts. A true
+          // accumulator over all attempts is deferred.
+          const turnUsage = result.totalUsage;
+          const turnCacheDetails = turnUsage?.inputTokenDetails as
+            | { cacheReadTokens?: number; cacheWriteTokens?: number }
+            | undefined;
           appendUsageLine(this.config.dataDir, {
             ts: Date.now(),
             kind: "turn",
@@ -335,6 +344,12 @@ export class CoachAgent {
             provider: this.config.llm.provider,
             model: this.config.llm.model,
             durationMs: Date.now() - turnStart,
+            inputTokens: turnUsage?.inputTokens,
+            outputTokens: turnUsage?.outputTokens,
+            totalTokens: turnUsage?.totalTokens,
+            cacheReadTokens: turnCacheDetails?.cacheReadTokens,
+            cacheWriteTokens: turnCacheDetails?.cacheWriteTokens,
+            cost: result.cost,
           });
 
           return text;
