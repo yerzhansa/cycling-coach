@@ -67,6 +67,53 @@ function readLines(dataDir: string, file = "usage-ledger.jsonl"): string[] {
   return readFileSync(join(dataDir, file), "utf-8").split("\n").filter((l) => l.length > 0);
 }
 
+describe("usageFieldsFromResult", () => {
+  it("maps whole-turn usage, cache details, and cost onto the ledger fields", async () => {
+    const { usageFieldsFromResult } = await import("../src/usage-ledger.js");
+    const fields = usageFieldsFromResult({
+      text: "ok",
+      toolCalls: [],
+      finishReason: "stop",
+      usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+      totalUsage: {
+        inputTokens: 30,
+        outputTokens: 12,
+        totalTokens: 42,
+        inputTokenDetails: { cacheReadTokens: 7, cacheWriteTokens: 4 },
+      },
+      steps: 1,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.03 },
+    } as unknown as import("../src/llm-types.js").GenerateResult);
+
+    expect(fields).toEqual({
+      inputTokens: 30,
+      outputTokens: 12,
+      totalTokens: 42,
+      cacheReadTokens: 7,
+      cacheWriteTokens: 4,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.03 },
+    });
+  });
+
+  it("leaves token fields undefined when totalUsage is absent", async () => {
+    const { usageFieldsFromResult } = await import("../src/usage-ledger.js");
+    const fields = usageFieldsFromResult({
+      text: "ok",
+      toolCalls: [],
+      finishReason: "stop",
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      totalUsage: undefined,
+      cost: undefined,
+    } as unknown as import("../src/llm-types.js").GenerateResult);
+
+    expect(fields.inputTokens).toBeUndefined();
+    expect(fields.totalTokens).toBeUndefined();
+    expect(fields.cacheReadTokens).toBeUndefined();
+    expect(fields.cacheWriteTokens).toBeUndefined();
+    expect(fields.cost).toBeUndefined();
+  });
+});
+
 describe("appendUsageLine", () => {
   it("writes one JSON line per call to <dataDir>/usage-ledger.jsonl", async () => {
     const { appendUsageLine } = await import("../src/usage-ledger.js");

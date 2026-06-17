@@ -1,6 +1,8 @@
 import { appendFileSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 
+import type { GenerateResult } from "./llm-types.js";
+
 export const USAGE_LEDGER_FILE = "usage-ledger.jsonl";
 export const USAGE_LEDGER_MAX_BYTES = 10 * 1024 * 1024;
 
@@ -22,6 +24,37 @@ export interface UsageLedgerLine {
   cacheWriteTokens?: number;
   cost?: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
   stopReason?: string;
+}
+
+// The AI SDK leaves `inputTokenDetails` loosely typed; this is the single point
+// where its cache-token shape is asserted, so every consumer reads it the same way.
+export function cacheTokenDetails(
+  usage: GenerateResult["totalUsage"],
+): { cacheReadTokens?: number; cacheWriteTokens?: number } | undefined {
+  return usage?.inputTokenDetails as
+    | { cacheReadTokens?: number; cacheWriteTokens?: number }
+    | undefined;
+}
+
+// Maps a completed generation's whole-turn usage and derived cost onto the
+// ledger's token/cost fields. The per-generation line and the per-turn line
+// carry the same shape, so both build it through this one mapper.
+export function usageFieldsFromResult(
+  result: GenerateResult,
+): Pick<
+  UsageLedgerLine,
+  "inputTokens" | "outputTokens" | "totalTokens" | "cacheReadTokens" | "cacheWriteTokens" | "cost"
+> {
+  const usage = result.totalUsage;
+  const details = cacheTokenDetails(usage);
+  return {
+    inputTokens: usage?.inputTokens,
+    outputTokens: usage?.outputTokens,
+    totalTokens: usage?.totalTokens,
+    cacheReadTokens: details?.cacheReadTokens,
+    cacheWriteTokens: details?.cacheWriteTokens,
+    cost: result.cost,
+  };
 }
 
 export function appendUsageLine(dataDir: string, line: UsageLedgerLine): void {

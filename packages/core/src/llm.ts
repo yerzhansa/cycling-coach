@@ -10,7 +10,7 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import type { Config } from "./config.js";
 import { codexGenerateText } from "./agent/codex-bridge.js";
 import type { GenerateOpts, GenerateResult } from "./llm-types.js";
-import { appendUsageLine } from "./usage-ledger.js";
+import { appendUsageLine, cacheTokenDetails, usageFieldsFromResult } from "./usage-ledger.js";
 
 export type { GenerateOpts, GenerateResult } from "./llm-types.js";
 
@@ -97,8 +97,6 @@ export class LLM {
   }
 
   private recordGenerate(opts: GenerateOpts, result: GenerateResult, durationMs: number): void {
-    const usage = result.totalUsage;
-    const details = cacheTokenDetails(usage);
     appendUsageLine(this.config.dataDir, {
       ts: Date.now(),
       kind: "generate",
@@ -107,25 +105,10 @@ export class LLM {
       model: this.config.llm.model,
       durationMs,
       steps: result.steps,
-      inputTokens: usage?.inputTokens,
-      outputTokens: usage?.outputTokens,
-      totalTokens: usage?.totalTokens,
-      cacheReadTokens: details?.cacheReadTokens,
-      cacheWriteTokens: details?.cacheWriteTokens,
-      cost: result.cost,
+      ...usageFieldsFromResult(result),
       stopReason: result.finishReason,
     });
   }
-}
-
-// The AI SDK leaves `inputTokenDetails` loosely typed; this is the single point
-// where its cache-token shape is asserted, so every consumer reads it the same way.
-function cacheTokenDetails(
-  usage: GenerateResult["totalUsage"],
-): { cacheReadTokens?: number; cacheWriteTokens?: number } | undefined {
-  return usage?.inputTokenDetails as
-    | { cacheReadTokens?: number; cacheWriteTokens?: number }
-    | undefined;
 }
 
 // The AI SDK reports token usage but no cost, so derive it from the same
