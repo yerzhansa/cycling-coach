@@ -29,6 +29,7 @@ function ledgerLine(overrides: Partial<UsageLedgerLine> = {}): UsageLedgerLine {
     provider: "anthropic",
     model: "claude-test",
     durationMs: 12,
+    templateHash: undefined,
     steps: 1,
     inputTokens: 5,
     outputTokens: 3,
@@ -136,6 +137,7 @@ describe("appendUsageLine", () => {
       dir,
       ledgerLine({
         kind: "turn",
+        templateHash: "0123456789abcdef",
         inputTokens: 30,
         outputTokens: 12,
         totalTokens: 42,
@@ -153,6 +155,19 @@ describe("appendUsageLine", () => {
     expect(parsed.cacheReadTokens).toBe(7);
     expect(parsed.cacheWriteTokens).toBe(4);
     expect(parsed.cost?.total).toBe(0.03);
+    expect(parsed.templateHash).toBe("0123456789abcdef");
+  });
+
+  it("omits templateHash on a generate line and round-trips it on a turn line", async () => {
+    const { appendUsageLine } = await import("../src/usage-ledger.js");
+    appendUsageLine(dir, ledgerLine({ kind: "generate" }));
+    appendUsageLine(dir, ledgerLine({ kind: "turn", templateHash: "abcdef0123456789" }));
+
+    const [gen, turn] = readLines(dir).map((l) => JSON.parse(l) as UsageLedgerLine);
+    expect(gen.kind).toBe("generate");
+    expect(gen.templateHash).toBeUndefined();
+    expect(turn.kind).toBe("turn");
+    expect(turn.templateHash).toBe("abcdef0123456789");
   });
 
   it("rotates the ledger to .jsonl.1 once it crosses 10 MB", async () => {
@@ -496,5 +511,6 @@ describe("turn line — winning generation usage and cost", () => {
     expect(turnLine?.outputTokens).toBe(12);
     expect(turnLine?.totalTokens).toBe(42);
     expect(turnLine?.cost?.total).toBe(0.03);
+    expect(turnLine?.templateHash).toMatch(/^[0-9a-f]{16}$/);
   });
 });

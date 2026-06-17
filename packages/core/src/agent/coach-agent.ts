@@ -354,6 +354,7 @@ export class CoachAgent {
             provider: this.config.llm.provider,
             model: this.config.llm.model,
             durationMs: Date.now() - turnStart,
+            templateHash,
             ...usageFieldsFromResult(result),
           });
 

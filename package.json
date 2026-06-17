@@ -23,7 +23,8 @@
     "snapshot:section-11": "tsx tools/snapshot-section-11.ts",
     "check-parity": "tsx tools/check-metric-parity.ts",
     "fuzz-parity": "tsx tools/fuzz-parity.ts",
-    "coverage:reference": "tsx tools/measure-reference-coverage.ts"
+    "coverage:reference": "tsx tools/measure-reference-coverage.ts",
+    "usage:baseline": "tsx tools/usage-baseline.ts"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.0",

@@ -16,6 +16,10 @@ export interface UsageLedgerLine {
   // boot line. On a turn line the token/cost figures are the final successful
   // generation's, not a sum across retry/compaction attempts.
   caller?: "chat" | "flush" | "compact";
+  // Prompt-template lineage of the turn (computeTemplateHash). Present only on
+  // kind:"turn" lines, where it makes a latency/usage sample self-attributable
+  // to a prompt revision without a timestamp join against the chat-store JSONL.
+  templateHash?: string;
   steps?: number;
   inputTokens?: number;
   outputTokens?: number;
