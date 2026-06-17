@@ -5,6 +5,7 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import type { LanguageModel } from "ai";
 
 import { calculateCost, getModels } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@mariozechner/pi-ai";
 
 import type { Config } from "./config.js";
 import { codexGenerateText } from "./agent/codex-bridge.js";
@@ -20,10 +21,18 @@ export type { GenerateOpts, GenerateResult } from "./llm-types.js";
 export class LLM {
   private config: Config;
   private aiSdkModel: LanguageModel | null;
+  // Provider + model are fixed for the instance, so resolve the pricing model
+  // once here. getModels() allocates a fresh array per call, so doing this in
+  // generate() would re-scan the catalog on every LLM round-trip.
+  private pricingModel: Model<Api> | null;
 
   constructor(config: Config) {
     this.config = config;
     this.aiSdkModel = config.llm.provider === "openai-codex" ? null : buildAiSdkModel(config);
+    this.pricingModel =
+      config.llm.provider === "openai-codex"
+        ? null
+        : (getModels(config.llm.provider).find((m) => m.id === config.llm.model) ?? null);
   }
 
   async generate(opts: GenerateOpts): Promise<GenerateResult> {
@@ -83,15 +92,13 @@ export class LLM {
       usage: result.usage,
       totalUsage: result.totalUsage,
       steps: result.steps.length,
-      cost: priceAiSdkUsage(this.config.llm.provider, this.config.llm.model, result.totalUsage),
+      cost: priceAiSdkUsage(this.pricingModel, result.totalUsage),
     };
   }
 
   private recordGenerate(opts: GenerateOpts, result: GenerateResult, durationMs: number): void {
     const usage = result.totalUsage;
-    const details = usage?.inputTokenDetails as
-      | { cacheReadTokens?: number; cacheWriteTokens?: number }
-      | undefined;
+    const details = cacheTokenDetails(usage);
     appendUsageLine(this.config.dataDir, {
       ts: Date.now(),
       kind: "generate",
@@ -111,21 +118,27 @@ export class LLM {
   }
 }
 
-// The AI SDK reports token usage but no cost, so derive it from the same
-// maintained model catalog the codex path already prices against. Codex carries
-// its own provider-reported cost and is never re-priced here. An uncatalogued
-// model yields undefined rather than a fabricated figure (best-effort ledger).
-function priceAiSdkUsage(
-  provider: Config["llm"]["provider"],
-  modelId: string,
-  totalUsage: GenerateResult["totalUsage"],
-): GenerateResult["cost"] | undefined {
-  if (!totalUsage) return undefined;
-  const model = getModels(provider).find((m) => m.id === modelId);
-  if (!model) return undefined;
-  const details = totalUsage.inputTokenDetails as
+// The AI SDK leaves `inputTokenDetails` loosely typed; this is the single point
+// where its cache-token shape is asserted, so every consumer reads it the same way.
+function cacheTokenDetails(
+  usage: GenerateResult["totalUsage"],
+): { cacheReadTokens?: number; cacheWriteTokens?: number } | undefined {
+  return usage?.inputTokenDetails as
     | { cacheReadTokens?: number; cacheWriteTokens?: number }
     | undefined;
+}
+
+// The AI SDK reports token usage but no cost, so derive it from the same
+// maintained model catalog the codex path already prices against. The model is
+// resolved once at construction; codex carries its own provider-reported cost
+// and is never re-priced here. An uncatalogued (null) model yields undefined
+// rather than a fabricated figure (best-effort ledger).
+function priceAiSdkUsage(
+  model: Model<Api> | null,
+  totalUsage: GenerateResult["totalUsage"],
+): GenerateResult["cost"] | undefined {
+  if (!model || !totalUsage) return undefined;
+  const details = cacheTokenDetails(totalUsage);
   return calculateCost(model, {
     input: totalUsage.inputTokens ?? 0,
     output: totalUsage.outputTokens ?? 0,
