@@ -1,5 +1,175 @@
 # cycling-coach
 
+## 2026.6.18
+
+### Patch Changes
+
+- 40072ae: Derive per-call cost for the AI-SDK providers (anthropic/openai/google) in the LLM dispatch chokepoint, so the local usage ledger's cost column is populated for them — previously only the codex path carried a cost. Cost is computed from the maintained model-pricing catalog (`pi-ai`'s `calculateCost`), the same catalog the codex path already prices against. The codex path keeps its own provider-reported cost and is never re-priced, and an uncatalogued model leaves cost undefined rather than fabricating a figure.
+- 62a39cf: User-facing: Lower per-message API cost on the default Anthropic model by caching the stable system prompt and tool definitions across a turn.
+
+  Sets an ephemeral cache breakpoint on the last stable system block in the LLM dispatch chokepoint, so multi-step tool turns and the memory-flush prompt re-read the system + tool prefix at cache-read rates instead of full price. The system prompt is reordered so all static rule blocks form one frozen prefix ahead of a cache-boundary marker, with the volatile Athlete Context and time-zone blocks last, so a memory write no longer invalidates the cached prefix. Corrects two comments that wrongly claimed caching was already active.
+
+- 00495bf: User-facing: On the ChatGPT/Codex subscription, your conversation's static context is now served from the model's prompt cache, easing usage-limit pressure during long chats.
+
+  Threads a stable per-chat cache-routing key (sha256 prefix of the chat id, never the raw id) from the chat entry point through the codex bridge into the Responses prompt cache key. The non-codex provider path ignores the field by construction.
+
+- 5e302b6: User-facing: The coach now carries its current training recommendation (and any pushback you've raised) across long conversations instead of sometimes losing it when older messages are condensed.
+
+  User-facing: Session resets no longer get stuck when saving memory fails — the coach archives the conversation and starts fresh anyway.
+
+  Compaction summaries gain a required Coach Stance section (enforced by the
+  headings audit) and the MUST-PRESERVE block gains stance, dispute, illness,
+  and agreed-action bullets, so the summarizer can no longer file the coach's
+  own recommendation under omittable generic advice. Both reset-path memory
+  flushes are now wrapped in warn-and-proceed guards so a flush failure cannot
+  block the session archive.
+
+- 9c650bb: User-facing: Long conversations are now condensed safely — the coach saves durable facts to memory and keeps a local archive of the full transcript before condensing older messages, leaves your history untouched if anything fails along the way, and completeness-checks every condensed summary.
+
+  The trim-path compaction now flushes memory before rewriting the session
+  file and skips the rewrite when the flush fails; every successful trim
+  archives the pre-rewrite transcript to a .precompact sidecar governed by
+  the existing opt-in retention knob. Summarization of dropped messages
+  returns failed chunks to the caller instead of discarding them and throws
+  on total failure so history is never replaced by an empty summary. The
+  summary-quality audit is extracted into a shared post-step applied by
+  both compaction pipelines, with output bounded at generation time and the
+  audit running after any final truncation.
+
+- be7db0d: User-facing: Added an optional cheaper model for memory tidy-up (config `llm.flush_model` / env `LLM_FLUSH_MODEL`); unset keeps using your chat model.
+  User-facing: The first reply of the day and recovery from long conversations are faster — the bot no longer re-runs the memory tidy-up multiple times in one turn.
+
+  The memory tidy-up can now run on a configurable cheaper model via a second, lazily-built LLM while the chat reply keeps the default model; when unset it reuses the chat model (no change). A per-turn latch deduplicates the tidy-up to at most once per chat turn — the daily-reset tidy-up counts as the one, and the trim, over-budget, and overflow-recovery paths no longer re-run it. The tidy-up and compaction calls are now tagged in the local-only usage ledger so their cost is visible.
+
+- 4defe74: User-facing: If the coach can't fully reset your previous session, it now says so ("some earlier context may still apply") instead of failing silently.
+
+  Memory flushes now return a structured outcome ({writes, ledgerAppends,
+  finishReason, usage, shrunkSections}) instead of discarding the model
+  result. A flush that writes nothing on a non-trivial conversation, or
+  that shrinks a memory section by more than 30%, emits a structured warn
+  event (char counts only — never section content). The flush trigger
+  paths gain bounded retry and a degradation policy that defers the
+  session archive when extraction visibly failed.
+
+- 4e76fe9: User-facing: Fixed the default Google model: setups that never chose a model now use gemini-2.5-flash, replacing the retired gemini-2.0-flash that made the coach fail to respond.
+
+  The google provider's hardcoded default pointed at gemini-2.0-flash, retired
+  by Google on 2026-06-01, so env-only deployments hard-errored on every call.
+  CONTEXT_WINDOWS gains a gemini-2.5-flash entry (1,000,000) so the model
+  resolves its real window instead of the 200,000-token fallback.
+
+- 8b04894: Gate the Anthropic ephemeral cache-control directive behind the anthropic provider in the LLM dispatch chokepoint, so openai/google requests carry the plain system string instead of an Anthropic-only `providerOptions` block. Document `GenerateOpts.cacheKey` as codex-only (the AI-SDK arm never reads it; it is forwarded to the codex bridge as its session id). Adds a guardrail test pinning that non-Anthropic AI-SDK providers carry no `cacheControl`/`providerOptions`.
+- be42450: User-facing: The coach no longer claims it lacks your latest numbers when it has just fetched them — a premature data-grounding rule is held back until the underlying snapshot read is wired in.
+
+  The Layer-3 data-grounding rule was pushed into every prompt before any tool surfaced the snapshot it names, so it is now gated behind a default-off module constant that the cutover flips on once the read tool lands; the ported prose is byte-unchanged and a test pins both flag states. Each assistant session line now also carries a template hash over the static prompt ingredients, an assembled hash over the full built prompt that turn, and the resolved provider and model, so a past reply maps back to its prompt revision; older sessions without the fields still load and everything stays local with zero telemetry.
+
+- c397a32: Adds an append-only event ledger (memory/events.jsonl) recording dated
+  athlete events — decisions, overrides, illness, experiments, outcomes —
+  with a closed kind enum and host-stamped timestamps. The memory flush
+  gains a ledger_append tool and an event-extraction prompt clause so these
+  events are captured durably instead of being lost at extraction time.
+- b95107a: User-facing: The coach now records when each remembered fact was last confirmed and flags facts older than six months for re-confirmation.
+
+  Every memory section write stamps an "\_updated: YYYY-MM-DD" first body line
+  (athlete-timezone date, idempotent restamp), and the memory-extraction prompt
+  now requires a source and as-of date on durable facts, keeps existing dates
+  on unchanged facts, and appends "(re-confirm)" to facts older than six months.
+
+- 66fd011: User-facing: The coach can now look back through past daily notes and logged events by date — ask "what did we note in March?" and it retrieves the actual record instead of forgetting everything older than today.
+
+  Adds a memory_query tool ({from, to, query?}) doing an index-free, case-insensitive
+  substring scan over dated daily-note files plus the append-only event ledger, and a
+  static recall-before-answering system-prompt rule. Tool definition and prompt rule
+  are cache-stable (no per-turn variance).
+
+- e4b1b7e: User-facing: cycling-coach now requires Node.js 22 or newer.
+
+  The advertised runtime floor was raised from Node 20 (end-of-life
+  2026-04-30) to Node 22 across the workspace package manifests and the
+  install docs, matching the only Node versions any first-party runtime
+  (CI, the published Docker image, the release pipeline) actually uses.
+
+- 5c44291: User-facing: When the model provider asks the coach to back off, waits are now capped at 2 minutes — a huge provider-requested delay can no longer freeze the chat for hours.
+
+  Clamps the header-derived retry wait in the chat retry loop to a named 120 s ceiling at the existing backoff site (the 30 s cap previously bound only the locally computed fallback). The existing rate-limit warn line now reports the provider-requested value when clamping occurs.
+
+- 496b068: User-facing: Archived chat sessions are now kept indefinitely by default — previously only the 20 most recent were kept; a new retention setting lets you opt into age-based cleanup.
+
+  Session reset archives were pruned to the newest 20 per chat, silently
+  deleting the only copy of older conversations before any extraction
+  substrate exists. The count-based prune is removed; a new
+  session.resetArchiveRetentionDays config knob (env:
+  SESSION_RESET_ARCHIVE_RETENTION_DAYS, default 0 = keep forever) provides
+  opt-in age-based pruning instead. Archive file permissions are unchanged.
+
+- ad3b710: User-facing: Operator pairing now requires sending a one-time code shown in your terminal, so a stranger racing you to the bot during setup can no longer claim ownership.
+  User-facing: /update now installs the exact version it verified against the registry, with dependency install scripts disabled.
+  User-facing: Health data, session transcripts, and memory files are now written owner-only (0600 files in 0700 directories) on every deployment path, and old session archives are pruned automatically.
+  User-facing: The automatic startup update check can be disabled with CYCLING_COACH_NO_UPDATE_CHECK=1; it is now disclosed in the README's privacy section.
+  User-facing: Running with CYCLING_COACH_DM_POLICY=open now prints a loud startup warning and logs each non-allowlisted sender it serves.
+
+  Security-hardening pass across the bot's trust boundaries:
+
+  - File permissions: all JSON/JSONL/markdown writers create files 0600 and data
+    directories 0700; the data-dir tightening that previously ran only on
+    allowlist writes is now an unconditional startup invariant; pre-existing
+    world-readable files are tightened on rewrite. Session reset archives are
+    capped at the newest 20 per chat.
+  - Telegram output: raw reply text is HTML-escaped before markdown conversion
+    (only converter-emitted tags survive), and a reply that Telegram rejects for
+    entity-parse errors is retried as plain text instead of being dropped.
+  - Prompt-injection containment: athlete memory is fenced in the system prompt
+    as data-not-instructions, an untrusted-data handling rule covers tool
+    results, and the codex-bridge tool loop now validates tool arguments against
+    their schema before execution (parity with the AI SDK providers).
+  - OAuth: refresh failures retry once before being classified as token reuse,
+    refreshes are serialized per profile, profile writes are atomic, and the
+    pinned pi-ai dependency is patched to stop logging token-endpoint response
+    bodies on malformed responses.
+  - Operator capture: pairing-code gated, queued pre-start updates dropped,
+    capture confirmations default to decline on bare Enter.
+  - Setup wizard: secret storage defaults to a detected keychain/1Password
+    backend instead of plaintext; config dir/file permissions tightened on
+    re-run.
+  - Supply chain: GitHub Actions pinned to commit SHAs with Dependabot coverage,
+    Docker base images pinned by digest, the container runs as the non-root
+    node user, corepack's pnpm download is integrity-pinned, and the privacy
+    lint now scans .changeset and root markdown surfaces.
+
+- 63a1184: User-facing: A damaged conversation file no longer blocks the chat — unreadable lines are set aside and the rest of your conversation loads normally.
+
+  User-facing: /start now tells you when a session reset fails instead of replying with the usual welcome as if it had succeeded.
+
+  The session JSONL loader tolerates torn or malformed lines: invalid lines
+  are quarantined verbatim to a timestamped .corrupt sidecar next to the
+  session file, the session file is rewritten with only the valid lines, and
+  loading never throws on corruption. The pre-reset session read is now
+  best-effort (warn and archive anyway), so the reset path can no longer be
+  gated behind a successful read of the state it exists to discard.
+
+- d829e74: User-facing: The coach now saves important details to long-term memory proactively as a long conversation approaches its condensing point, instead of waiting until older messages are about to be dropped.
+
+  When the loaded history exceeds 80% of its token budget and at least five
+  messages have arrived since the last proactive save, the agent runs a
+  memory flush before building the turn, so facts reach durable memory while
+  the full raw history still exists. A per-chat in-memory cooldown prevents
+  repeated flushes; trim-time flushes count toward it and session resets
+  clear it. A flush failure warns and never blocks the turn.
+
+- 315639a: User-facing: Condensing a long conversation can no longer hang or fail your message — summarization now times out after two minutes and the coach continues with the best summary it has.
+
+  Every staged-summarization LLM call now runs under a 120 s race-only
+  deadline (classified as a timeout by the existing error classifier).
+  summarizeInStages degrades instead of throwing: a failed chunk falls back
+  to the carried summary, and with no summary at all it head-drops the
+  oldest messages so the turn can proceed. The overflow/timeout rescue
+  paths rethrow the ORIGINAL turn error with any rescue failure attached
+  as its cause, so summarization failures can no longer mask the error
+  that actually ended the turn.
+
+- d1889d1: Record per-turn token usage and cost on the local usage-ledger turn line. The chat turn line previously carried only timing (`durationMs`); it now also folds in the winning generation's input/output/total tokens, cache read/write tokens, and cost, mirroring the per-generation line. v1 records the final successful generation's figures — not a sum across retry/compaction attempts — and a true turn-wide accumulator is deferred.
+- 7ddfde3: Internal refactor: route the per-generation and per-turn usage-ledger lines through one shared `usageFieldsFromResult` mapper, and assert the AI-SDK `inputTokenDetails` cache-token shape in a single `cacheTokenDetails` helper, instead of copying the field-by-field block and cast across `llm.ts` and `coach-agent.ts`. Behavior-neutral.
+
 ## 2026.5.9
 
 ### Patch Changes
