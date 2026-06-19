@@ -184,7 +184,8 @@ describe("agent-backed commands", () => {
       agent.chat.mockResolvedValue("ok");
       const ctx = makeCtx();
       await getCommand(bot, name)(ctx);
-      expect(agent.chat).toHaveBeenCalledWith("telegram:777", messageFor[name]);
+      // No reference wired in this buildBot() → no per-turn anchor passed.
+      expect(agent.chat).toHaveBeenCalledWith("telegram:777", messageFor[name], undefined);
       const htmlReply = ctx.reply.mock.calls.find(
         (c: unknown[]) =>
           String(c[0]).includes("ok") &&
@@ -222,8 +223,26 @@ describe("agent-backed commands", () => {
     agent.chat.mockResolvedValue("ok");
     const ctx = makeCtx({ match: "2026-05-01" });
     await getCommand(bot, "review")(ctx);
-    expect(agent.chat).toHaveBeenCalledWith("telegram:777", "/review 2026-05-01");
+    expect(agent.chat).toHaveBeenCalledWith("telegram:777", "/review 2026-05-01", undefined);
     expect(someReply(ctx, "Reviewing your last session (2026-05-01)...")).toBe(true);
+  });
+
+  it("resolves the running CS anchor from a synced profile and passes it into chat", async () => {
+    const reference: StubReference = {
+      runSync: vi.fn(),
+      loadLatest: vi.fn(() => ({
+        athlete_profile: {
+          sportSettings: [{ types: ["Run"], threshold_pace: 4.0, cs_confidence: "high" }],
+        },
+      })),
+    };
+    const { bot, agent } = await buildBot({ reference });
+    agent.chat.mockResolvedValue("ok");
+    const ctx = makeCtx();
+    await getCommand(bot, "plan")(ctx);
+    expect(agent.chat).toHaveBeenCalledWith("telegram:777", "/plan", {
+      resolvedCs: { criticalSpeedMps: 4.0, source: "platform", confidence: "high" },
+    });
   });
 });
 

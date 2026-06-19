@@ -15,6 +15,7 @@ import { createAuthMiddleware } from "./telegram-access.js";
 import { loadAllowedSenders, loadAllowedSendersWithSource } from "./allowed-senders.js";
 import { escapeHtmlText } from "./html-escape.js";
 import type { ReferenceServices } from "../reference/services.js";
+import { resolveRunningCs, type ResolvedCs } from "../reference/cs-resolution.js";
 import { formatSyncReply } from "../reference/sync/format-sync-reply.js";
 import { formatSnapshotRaw } from "../reference/sync/snapshot-debug.js";
 import { sendSnapshotOutput } from "../reference/sync/send-snapshot.js";
@@ -113,6 +114,14 @@ export function createTelegramBot(
   const bot = createSecuredBot({ token, binary, dataDir });
   const greeted = new Set<number>();
 
+  // Resolve the running CS anchor once per turn from the latest synced profile so
+  // calculate_zones reads the athlete's real critical speed instead of an LLM
+  // guess. Returns undefined — leaving the tool on its LLM-supplied param — when no
+  // reference sync is wired; resolveRunningCs itself returns null for cycling,
+  // pre-sync, or a profile with no run-family row.
+  const turnDeps = (): { resolvedCs: ResolvedCs | null } | undefined =>
+    reference !== undefined ? { resolvedCs: resolveRunningCs(reference.loadLatest()) } : undefined;
+
   // ── Commands ────────────────────────────────────────────────────────────
 
   bot.command("start", async (ctx) => {
@@ -136,7 +145,7 @@ export function createTelegramBot(
     await ctx.reply("Analyzing your data and building a plan...");
     const chatId = `telegram:${ctx.chat.id}`;
     try {
-      const response = await agent.chat(chatId, "/plan");
+      const response = await agent.chat(chatId, "/plan", turnDeps());
       await sendLongMessage(ctx, response);
     } catch (err) {
       console.error("Error in /plan:", err);
@@ -152,7 +161,7 @@ export function createTelegramBot(
     await ctx.reply("Checking your form and plan...");
     const chatId = `telegram:${ctx.chat.id}`;
     try {
-      const response = await agent.chat(chatId, "/workout");
+      const response = await agent.chat(chatId, "/workout", turnDeps());
       await sendLongMessage(ctx, response);
     } catch (err) {
       console.error("Error in /workout:", err);
@@ -168,7 +177,7 @@ export function createTelegramBot(
     await ctx.reply("Fetching your fitness data...");
     const chatId = `telegram:${ctx.chat.id}`;
     try {
-      const response = await agent.chat(chatId, "/status");
+      const response = await agent.chat(chatId, "/status", turnDeps());
       await sendLongMessage(ctx, response);
     } catch (err) {
       console.error("Error in /status:", err);
@@ -232,7 +241,7 @@ export function createTelegramBot(
     const chatId = `telegram:${ctx.chat.id}`;
     try {
       const message = args ? `/review ${args}` : "/review";
-      const response = await agent.chat(chatId, message);
+      const response = await agent.chat(chatId, message, turnDeps());
       await sendLongMessage(ctx, response);
     } catch (err) {
       console.error("Error in /review:", err);
@@ -306,7 +315,7 @@ export function createTelegramBot(
     }
 
     try {
-      const response = await agent.chat(chatId, ctx.message.text);
+      const response = await agent.chat(chatId, ctx.message.text, turnDeps());
       await sendLongMessage(ctx, response);
     } catch (err) {
       console.error("Error in chat:", err);

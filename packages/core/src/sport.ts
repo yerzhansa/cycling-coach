@@ -3,6 +3,7 @@ import type { z } from "zod";
 import type { IntervalsClient } from "./intervals.js";
 import type { LLM } from "./llm.js";
 import type { MemorySnapshot, MemoryStore } from "./memory.js";
+import type { ResolvedCs } from "./reference/cs-resolution.js";
 import type { ReferenceSportAdapter } from "./reference/sport-adapter.js";
 import type { SecretsResolver } from "./secrets/types.js";
 
@@ -62,6 +63,22 @@ export interface CoreDeps {
   /** Athlete IANA timezone, resolved by Core. Used so tools see the same
    * "today" the system prompt references. */
   tz: string;
+  /**
+   * Per-turn getter for the resolved primary anchor (running critical speed),
+   * sourced from the latest synced reference data just before the turn. A getter
+   * (not a value) because tools are built once at construction while the anchor
+   * changes per turn — reading it lazily keeps the tool SCHEMA, and thus the
+   * prompt-template hash, stable. Returns `null` when no sync data / no run-family
+   * row / a non-running sport / the CLI path; sports that don't anchor on CS
+   * ignore it.
+   *
+   * Why this rides `CoreDeps` rather than the ADR-0010 Reference adapter: the
+   * adapter is built once at boot (declarative metadata + pure compute hooks),
+   * whereas this is a runtime value re-resolved every turn — the adapter seam
+   * can't carry it. Running-specific for now; generalize to a discriminated
+   * anchor (e.g. swim CSS, cycling auto-FTP) under the rule of three.
+   */
+  resolvedCs?: () => ResolvedCs | null;
 }
 
 // ─── Sport: the plug-point ─────────────────────────────────────────────

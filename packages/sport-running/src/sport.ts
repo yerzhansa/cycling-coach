@@ -79,7 +79,7 @@ export const runningSport: Sport = {
       ...createMemoryTools(deps.memory, sections),
       ...createPureCoreIntervalsTools(deps.intervals, deps.tz),
       ...createCoreToolsWithSportConfig(deps.intervals, runningSport.intervalsActivityTypes),
-      ...createRunningTools(deps.memory, deps.intervals, deps.tz),
+      ...createRunningTools(deps.memory, deps.intervals, deps.tz, deps.resolvedCs),
     };
     return Object.entries(toolset).map(([name, t]) => ({
       name,

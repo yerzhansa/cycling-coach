@@ -20,6 +20,12 @@ export { ReferenceConfigError } from "./errors.js";
 // ─── Service-aggregate type for downstream channels ───────────────────
 export type { ReferenceServices } from "./services.js";
 
+// ─── Running CS-anchor resolution (Tier 2) ────────────────────────────
+// `resolveRunningCs` reads the latest synced profile; channels call it per turn.
+// `ResolvedCs` is the anchor shape sport tools receive via `CoreDeps.resolvedCs`.
+export { resolveRunningCs, collectRunCsRows } from "./cs-resolution.js";
+export type { ResolvedCs, RunCsRow, CsConfidence } from "./cs-resolution.js";
+
 // ─── Constants ────────────────────────────────────────────────────────
 export {
   FRESH_MS,

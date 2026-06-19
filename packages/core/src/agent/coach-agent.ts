@@ -3,6 +3,7 @@ import type { ModelMessage, ToolSet } from "ai";
 import { makeChatClient } from "../reference/sync/intervals-client-factory.js";
 import { getEffectiveSections } from "../memory/effective-sections.js";
 import type { CoreDeps, Sport } from "../sport.js";
+import type { ResolvedCs } from "../reference/cs-resolution.js";
 import type { SecretsResolver } from "../secrets/types.js";
 import type { Config } from "../config.js";
 import { resolveSecretRef } from "../secrets/resolve.js";
@@ -68,6 +69,11 @@ export class CoachAgent {
   private tz: string;
   private archiveDeferred = new Set<string>();
   private lastFlushMessageCount = new Map<string, number>();
+  // Resolved primary anchor (running CS) for the in-flight turn. Set at the top
+  // of chat() from the channel's per-turn value and read lazily by sport tools
+  // via the `coreDeps.resolvedCs` getter, so the tool set (and the cached
+  // template hash) never has to be rebuilt per turn.
+  private currentResolvedCs: ResolvedCs | null = null;
   // The prompt-template hash is derived from constructor-stable inputs (soul,
   // skills, tool schemas, model, and the compile-time rule-block set), so it is
   // computed once on first use and reused for every turn of the process.
@@ -100,6 +106,7 @@ export class CoachAgent {
       memory: this.memory,
       secrets,
       tz: this.tz,
+      resolvedCs: () => this.currentResolvedCs,
     };
     const registrations = sport.tools(coreDeps);
     this.tools = Object.fromEntries(registrations.map((r) => [r.name, r.tool])) as ToolSet;
@@ -147,7 +154,14 @@ export class CoachAgent {
     };
   }
 
-  async chat(chatId: string, userMessage: string): Promise<string> {
+  async chat(
+    chatId: string,
+    userMessage: string,
+    turn?: { resolvedCs?: ResolvedCs | null },
+  ): Promise<string> {
+    // Per-turn anchor, read lazily by sport tools through the coreDeps getter.
+    // Cleared to null when the channel supplies nothing (CLI path, no sync data).
+    this.currentResolvedCs = turn?.resolvedCs ?? null;
     return withSessionLock(chatId, async () => {
       const turnStart = Date.now();
       // One flush per turn: the latch flips on entry (before the await
