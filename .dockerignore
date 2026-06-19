@@ -30,7 +30,10 @@ CLAUDE.local.md
 coverage
 .vitest-cache
 
-# Repo metadata not needed in image
-README.md
-CONTRIBUTING.md
-LICENSE
+# Repo metadata not needed in image — exclude the root copies only. The
+# package-level LICENSE / NOTICE.md / README.md must reach the runtime image
+# (they ride into the pnpm-deploy runtime bundle) so the shipped image carries
+# the MIT attribution the upstream license requires.
+/README.md
+/CONTRIBUTING.md
+/LICENSE

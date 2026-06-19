@@ -8,7 +8,8 @@
     "cycling-coach": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "NOTICE.md"
   ],
   "license": "MIT",
   "repository": {

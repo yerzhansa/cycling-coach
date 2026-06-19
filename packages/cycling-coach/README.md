@@ -85,4 +85,11 @@ npx cycling-coach
 - Follow [@enduragent](https://x.com/enduragent) on X for updates, or drop a question/feedback anytime.
 - **Secrets backends** (1Password, macOS Keychain, Vault, AWS/GCP Secret Manager, age, env), **architecture diagram**, and **development setup** — see the [GitHub repo](https://github.com/yerzhansa/cycling-coach#readme).
 - **Issues**: <https://github.com/yerzhansa/cycling-coach/issues>
-- **License**: MIT
+
+## Credits
+
+Cycling Coach's data substrate (the "Reference" submodule that grounds coaching in verified athlete numerics) is a port of [section-11](https://github.com/CrankAddict/section-11) (CrankAddict, MIT-licensed). See the bundled `NOTICE.md` for the full attribution and the list of modifications introduced during the port.
+
+## License
+
+MIT
