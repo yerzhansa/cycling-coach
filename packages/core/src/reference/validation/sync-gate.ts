@@ -18,6 +18,7 @@ import { checkDataFetch } from "./checks/step0-data-fetch.js";
 import { checkFtpSource } from "./checks/step1-ftp-source.js";
 import { checkWeeklyHours } from "./checks/step2-weekly-hours.js";
 import { checkTolerance } from "./checks/step4-tolerance.js";
+import { checkCsSource } from "./checks/step5-cs-source.js";
 import { checkFreshness } from "./checks/step6-freshness-24h.js";
 import { checkClockOffset } from "./checks/step6b-clock-offset.js";
 import { checkMultiMetricConflict } from "./checks/step7-multi-metric-conflict.js";
@@ -27,6 +28,7 @@ export type GateStep =
   | "step1_ftp_source"
   | "step2_weekly_hours_consistency"
   | "step4_tolerance_band"
+  | "step5_cs_source"
   | "step6_freshness_24h"
   | "step6b_clock_offset"
   | "step7_multi_metric_conflict";
@@ -71,6 +73,7 @@ export function gateLatestJson(
     checkFtpSource(fetched),
     checkWeeklyHours(fetched),
     checkTolerance(fetched),
+    checkCsSource(fetched),
     freshnessResult,
     checkClockOffset(fetched, now),
     checkMultiMetricConflict(fetched),

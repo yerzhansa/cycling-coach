@@ -190,6 +190,9 @@ importers:
 
   packages/running-coach:
     dependencies:
+      '@enduragent/core':
+        specifier: workspace:*
+        version: link:../core
       '@enduragent/sport-running':
         specifier: workspace:*
         version: link:../sport-running
@@ -203,6 +206,9 @@ importers:
       typescript:
         specifier: ^6.0.2
         version: 6.0.3
+      vitest:
+        specifier: ^4.1.4
+        version: 4.1.5(@opentelemetry/api@1.9.0)(@types/node@25.6.0)(@vitest/coverage-v8@4.1.8(vitest@4.1.5))(msw@2.14.2(@types/node@25.6.0)(typescript@6.0.3))(vite@8.0.10(@types/node@25.6.0)(esbuild@0.27.7)(tsx@4.21.0)(yaml@2.8.3))
 
   packages/sport-cycling:
     dependencies:
@@ -265,6 +271,12 @@ importers:
       '@enduragent/core':
         specifier: workspace:*
         version: link:../core
+      ai:
+        specifier: ^6.0.158
+        version: 6.0.170(zod@4.4.1)
+      intervals-icu-api:
+        specifier: ^0.1.2
+        version: 0.1.2(typescript@6.0.3)
       zod:
         specifier: ^4.3.6
         version: 4.4.1
@@ -275,9 +287,15 @@ importers:
       tsup:
         specifier: ^8.4.0
         version: 8.5.1(postcss@8.5.12)(tsx@4.21.0)(typescript@6.0.3)(yaml@2.8.3)
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^6.0.2
         version: 6.0.3
+      vitest:
+        specifier: ^4.1.4
+        version: 4.1.5(@opentelemetry/api@1.9.0)(@types/node@25.6.0)(@vitest/coverage-v8@4.1.8(vitest@4.1.5))(msw@2.14.2(@types/node@25.6.0)(typescript@6.0.3))(vite@8.0.10(@types/node@25.6.0)(esbuild@0.27.7)(tsx@4.21.0)(yaml@2.8.3))
 
 packages:
 

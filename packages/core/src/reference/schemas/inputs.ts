@@ -264,6 +264,19 @@ export const SportSettingsRowSchema = z.looseObject({
   ftp: z.number().nullable().optional(),
   indoor_ftp: z.number().nullable().optional(),
   lthr: z.number().nullable().optional(),
+  // Pace-anchored thresholds. `threshold_pace` (the platform-supplied critical-
+  // speed anchor for running zones) is stored in SI m/s; `pace_units` is the
+  // athlete's display preference only. These already rode through the
+  // `z.looseObject` surface (buildSportThresholds casts them inline); typing
+  // them here makes that surface explicit. `critical_speed` is the manual
+  // override the CS-source gate reads (also m/s). `cs_source`/`cs_confidence`
+  // are forward-declared provenance/reliability labels for the anchor's read
+  // path; the gate validates only the numeric anchor and does not read them yet.
+  threshold_pace: z.number().nullable().optional(),
+  pace_units: z.string().nullable().optional(),
+  critical_speed: z.number().nullable().optional(),
+  cs_source: z.enum(["platform", "athlete_manual", "computed"]).nullable().optional(),
+  cs_confidence: z.enum(["high", "medium", "low"]).nullable().optional(),
 });
 export type SportSettingsRow = z.infer<typeof SportSettingsRowSchema>;
 

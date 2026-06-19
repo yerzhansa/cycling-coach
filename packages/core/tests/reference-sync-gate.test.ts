@@ -127,6 +127,89 @@ describe("gateLatestJson", () => {
     expect(step4!.detail).toContain("[30,200]");
   });
 
+  // ── step5: CS source (HARD) ───────────────────────────────────────────
+
+  it("step5 PASS: Run row critical_speed:4.0 → no step5 failure", () => {
+    const fetched = withProfile({ sportSettings: [{ types: ["Run"], critical_speed: 4.0 }] });
+    const result = gateLatestJson(fetched, null, NOW);
+    expect(result.failures.map((f) => f.step)).not.toContain("step5_cs_source");
+  });
+
+  it("step5 PASS (resolve-or-skip): no Run row → no step5 failure", () => {
+    const fetched = withProfile({ sportSettings: [{ types: ["Ride"], ftp: 247 }] });
+    const result = gateLatestJson(fetched, null, NOW);
+    expect(result.failures.map((f) => f.step)).not.toContain("step5_cs_source");
+  });
+
+  it("step5 FAIL: Run row threshold_pace:0 → ok:false, step5 in failures", () => {
+    const fetched = withProfile({ sportSettings: [{ types: ["Run"], threshold_pace: 0 }] });
+    const result = gateLatestJson(fetched, null, NOW);
+    expect(result.ok).toBe(false);
+    expect(result.failures.map((f) => f.step)).toContain("step5_cs_source");
+  });
+
+  it("step5 FAIL: Run row threshold_pace:7.5 (>6.5 sanity) → step5 in failures", () => {
+    const fetched = withProfile({ sportSettings: [{ types: ["Run"], threshold_pace: 7.5 }] });
+    const result = gateLatestJson(fetched, null, NOW);
+    expect(result.ok).toBe(false);
+    expect(result.failures.map((f) => f.step)).toContain("step5_cs_source");
+  });
+
+  it("step5 FAIL: Run row critical_speed:-1 → step5 in failures", () => {
+    const fetched = withProfile({ sportSettings: [{ types: ["Run"], critical_speed: -1 }] });
+    const result = gateLatestJson(fetched, null, NOW);
+    expect(result.ok).toBe(false);
+    expect(result.failures.map((f) => f.step)).toContain("step5_cs_source");
+  });
+
+  it("step5 PASS: manual outranks platform — critical_speed:4.0 valid, threshold_pace:0 ignored", () => {
+    const fetched = withProfile({
+      sportSettings: [{ types: ["Run"], critical_speed: 4.0, threshold_pace: 0 }],
+    });
+    const result = gateLatestJson(fetched, null, NOW);
+    expect(result.failures.map((f) => f.step)).not.toContain("step5_cs_source");
+  });
+
+  it("step5 FAIL: manual present-but-invalid (-1) outranks a valid platform (4.0)", () => {
+    const fetched = withProfile({
+      sportSettings: [{ types: ["Run"], critical_speed: -1, threshold_pace: 4.0 }],
+    });
+    const result = gateLatestJson(fetched, null, NOW);
+    expect(result.ok).toBe(false);
+    expect(result.failures.map((f) => f.step)).toContain("step5_cs_source");
+  });
+
+  it("step5 FAIL: non-finite CS (NaN, Infinity) → step5 in failures", () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      const fetched = withProfile({ sportSettings: [{ types: ["Run"], critical_speed: bad }] });
+      const result = gateLatestJson(fetched, null, NOW);
+      expect(result.failures.map((f) => f.step)).toContain("step5_cs_source");
+    }
+  });
+
+  it("step5 PASS: multiple running rows all sane → no step5 failure", () => {
+    const fetched = withProfile({
+      sportSettings: [
+        { types: ["Run"], critical_speed: 4.0 },
+        { types: ["TrailRun"], critical_speed: 3.5 },
+      ],
+    });
+    const result = gateLatestJson(fetched, null, NOW);
+    expect(result.failures.map((f) => f.step)).not.toContain("step5_cs_source");
+  });
+
+  it("step5 FAIL: multiple running rows, one with critical_speed:0 → step5 in failures", () => {
+    const fetched = withProfile({
+      sportSettings: [
+        { types: ["Run"], critical_speed: 4.0 },
+        { types: ["TrailRun"], critical_speed: 0 },
+      ],
+    });
+    const result = gateLatestJson(fetched, null, NOW);
+    expect(result.ok).toBe(false);
+    expect(result.failures.map((f) => f.step)).toContain("step5_cs_source");
+  });
+
   // ── step6: freshness (SOFT) ───────────────────────────────────────────
 
   it("step6 SOFT: data 72h old (via activity date, no server ts) → ok:TRUE, warnings contain step6, freshness 'stale'", () => {

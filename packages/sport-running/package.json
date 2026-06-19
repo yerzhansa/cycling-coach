@@ -2,26 +2,34 @@
   "name": "@enduragent/sport-running",
   "version": "0.0.3",
   "private": true,
-  "description": "Running sport package (alpha — not yet implemented). Implements the Sport contract from @enduragent/core.",
+  "description": "Running sport package — critical-speed-anchored pace zones, soul, skills, tools. Implements the Sport contract from @enduragent/core.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
   "files": [
     "dist"
   ],
+  "license": "MIT",
   "scripts": {
-    "build": "tsup",
+    "build": "npm run codegen && tsup",
     "check": "tsc --noEmit",
-    "test": "echo 'no tests yet (alpha)'"
+    "test": "vitest run",
+    "codegen": "tsx ../../tools/generate-sport-skills.ts $PWD"
   },
   "dependencies": {
     "@enduragent/core": "workspace:*",
+    "intervals-icu-api": "^0.1.2",
+    "ai": "^6.0.158",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
     "tsup": "^8.4.0",
-    "typescript": "^6.0.2"
-  },
-  "license": "MIT"
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
+  }
 }

@@ -1,4 +1,5 @@
-const PKG_VERSION = "2026.4.30"; // Bumped at publish via changesets/CalVer.
-console.log(`Running Coach v${PKG_VERSION} (alpha — not yet implemented)`);
-console.log("Status: scaffolding only. Real implementation imminent.");
-process.exit(0);
+import { runBinary } from "@enduragent/core";
+import { runningSport } from "@enduragent/sport-running";
+import { runningBinary } from "./binary.js";
+
+await runBinary(runningSport, runningBinary);
