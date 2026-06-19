@@ -388,6 +388,14 @@ telegram:
 
 ### Railway
 
+**One-click deploy** — provisions a single-tenant instance you own end to end (your own @BotFather bot, your intervals.icu key, your LLM key — BYOK, no shared service):
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/TEMPLATE_ID?utm_medium=integration&utm_source=button&utm_campaign=cycling-coach)
+
+<!-- Replace TEMPLATE_ID above with the real id after publishing the Railway template (Project Settings → Generate Template from Project). Until then the button links to a placeholder; the manual steps below always work. -->
+
+Or set it up manually:
+
 Railway autodetects the `Dockerfile` and deploys with no extra config files. Steps:
 
 1. Push this repo to GitHub.
