@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildSelfUpdateCommand, checkForUpdate, isUpdateAvailable } from "../src/updater.js";
+import {
+  buildSelfUpdateCommand,
+  checkForUpdate,
+  isManagedDeploy,
+  isUpdateAvailable,
+} from "../src/updater.js";
 
 // Regression: the original `data.version !== current` returned true for ANY
 // inequality, including the case where the running bot is ahead of npm — a
@@ -93,5 +98,31 @@ describe("checkForUpdate", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe("isManagedDeploy", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('is true when CYCLING_COACH_MANAGED_DEPLOY="1"', () => {
+    vi.stubEnv("CYCLING_COACH_MANAGED_DEPLOY", "1");
+    expect(isManagedDeploy()).toBe(true);
+  });
+
+  it('is true when the flag is "true" (any case)', () => {
+    vi.stubEnv("CYCLING_COACH_MANAGED_DEPLOY", "TRUE");
+    expect(isManagedDeploy()).toBe(true);
+  });
+
+  it("is false when the flag is unset", () => {
+    vi.stubEnv("CYCLING_COACH_MANAGED_DEPLOY", "");
+    expect(isManagedDeploy()).toBe(false);
+  });
+
+  it('is false when the flag is "0"', () => {
+    vi.stubEnv("CYCLING_COACH_MANAGED_DEPLOY", "0");
+    expect(isManagedDeploy()).toBe(false);
   });
 });

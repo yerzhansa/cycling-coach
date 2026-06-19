@@ -120,6 +120,22 @@ export function selfUpdate(binaryName: string, version?: string): void {
   process.exit(0);
 }
 
+/**
+ * True in a platform-managed container deploy (Railway, Fly, PikaPods, …) where
+ * the code is image-baked and `npm install -g` is guaranteed to fail with
+ * EACCES. The Dockerfile bakes `CYCLING_COACH_MANAGED_DEPLOY=1` into the runtime
+ * stage. In this mode the bot must not offer or attempt a self-update — the
+ * platform updates by rebuilding the image from a newer commit.
+ */
+export function isManagedDeploy(): boolean {
+  const flag = process.env.CYCLING_COACH_MANAGED_DEPLOY;
+  return flag === "1" || flag?.toLowerCase() === "true";
+}
+
+/** Operator-facing guidance shown instead of a self-update in managed deploys. */
+export const MANAGED_DEPLOY_UPDATE_NOTICE =
+  "This deployment updates by redeploying the image, not via /update — your hosting platform rebuilds the bot from the latest version when you redeploy.";
+
 export function getKnownTelegramChatIds(dataDir: string): string[] {
   return enumerateTelegramSessions(dataDir).map((s) => s.chatId);
 }

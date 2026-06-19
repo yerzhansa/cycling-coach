@@ -124,6 +124,49 @@ describe("notifyUpdate — broadcast filtering (L3)", () => {
     expect(calledIds).toEqual(["11111", "99999"]);
   });
 
+  it("managed-deploy broadcast swaps the /update call-to-action for redeploy guidance", async () => {
+    vi.stubEnv("CYCLING_COACH_MANAGED_DEPLOY", "1");
+    seedSession("11111");
+    saveAllowedSenders(dataDir, () => ({
+      ...defaultPairingState(),
+      dmPolicy: "allowlist",
+      allowFrom: ["11111"],
+      primaryOperator: "11111",
+    }));
+
+    vi.doMock("../src/updater.js", async () => {
+      const real = await vi.importActual<typeof import("../src/updater.js")>(
+        "../src/updater.js",
+      );
+      return {
+        ...real,
+        checkForUpdate: vi.fn(async () => ({
+          current: "2026.5.5",
+          latest: "2026.5.10",
+          updateAvailable: true,
+        })),
+        getKnownTelegramChatIds: vi.fn(() => ["11111"]),
+        getLastNotifiedVersion: vi.fn(() => null),
+        setLastNotifiedVersion: vi.fn(),
+      };
+    });
+
+    const sendMessage = vi.fn(async () => undefined);
+    const fakeBot = { api: { sendMessage } } as unknown as Parameters<
+      typeof import("../src/channels/telegram.js")["notifyUpdate"]
+    >[0];
+
+    const { notifyUpdate } = await import("../src/channels/telegram.js");
+    await notifyUpdate(fakeBot, dataDir, cyclingBinary);
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    const text = String(sendMessage.mock.calls[0][1]);
+    expect(text).toContain("redeploying the image");
+    expect(text).not.toContain("/update to install");
+
+    vi.unstubAllEnvs();
+  });
+
   it("does NOT broadcast in default-pairing mode (no allowed senders → empty filter)", async () => {
     seedSession("99999");
 

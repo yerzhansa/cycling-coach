@@ -53,6 +53,10 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV CYCLING_COACH_HOME=/data
 
+# Image-baked deploys can't self-update via `npm install -g` (EACCES). This
+# flag makes /update tell the operator to redeploy instead of execing npm.
+ENV CYCLING_COACH_MANAGED_DEPLOY=1
+
 # su-exec drops root to `node` in the entrypoint after the mounted volume's
 # ownership is fixed (managed-platform volumes mount as root).
 RUN apk add --no-cache su-exec
