@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +10,13 @@ import {
   BODY_AFTER_TIMEOUT_LOG_PREFIX,
 } from "../src/reference/sync/run-sync.js";
 import { SCHEDULED_SYNC_INTERVAL_MS } from "../src/reference/freshness.js";
-import { LATEST_SCHEMA_VERSION } from "../src/reference/schemas/latest.js";
+import {
+  LATEST_SCHEMA_VERSION,
+  LatestJsonSchema,
+} from "../src/reference/schemas/latest.js";
+import { readLatestVersioned } from "../src/reference/io/read-latest-versioned.js";
+import { bootstrapReference } from "../src/reference/runtime.js";
+import type { Sport } from "../src/sport.js";
 import { emptyFetched } from "./helpers/reference-fixtures.js";
 
 describe("createRunSync", () => {
@@ -630,5 +636,129 @@ describe("createRunSync", () => {
     // clearTimeoutFn must receive the handle that setTimeoutFn returned.
     const expectedHandle = setSpy.mock.results[0]?.value;
     expect(clearSpy).toHaveBeenCalledWith(expectedHandle);
+  });
+});
+
+const fakeSport = (): Sport =>
+  ({
+    intervalsActivityTypes: [],
+    referenceAdapters: undefined,
+  }) as unknown as Sport;
+
+// A v2-shaped body the schema accepts on its own merits — used to prove the
+// version-equality gate runs AFTER safeReadJson (safeReadJson types
+// schema_version only as z.string(), so a shape-valid stale file parses clean).
+const v2BodyShapeValid = {
+  athlete_profile: { id: "test-athlete" },
+  current_status: {},
+  derived_metrics: { acwr: null, monotony: 1.2 },
+  recent_activities: [],
+  planned_workouts: [],
+  wellness_data: {},
+};
+
+const onDiskWithVersion = (version: string) => ({
+  metadata: {
+    schema_version: version,
+    last_updated: "1998-06-20T00:00:00.000Z",
+    freshness: "fresh" as const,
+  },
+  ...v2BodyShapeValid,
+});
+
+describe("latest derived_metrics structured schema + version gate", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "reference-run-schema-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it("the current cache schema version is \"2\"", () => {
+    expect(LATEST_SCHEMA_VERSION).toBe("2");
+  });
+
+  it("a sparse running derived_metrics map (power keys absent, others null) parses clean", () => {
+    const sparse = {
+      ...onDiskWithVersion(LATEST_SCHEMA_VERSION),
+      derived_metrics: {
+        acwr: null,
+        monotony: null,
+        strain: null,
+        easy_time_ratio: null,
+        consistency_index: null,
+        seiler_tid_7d: null,
+        seasonal_context: null,
+        "capability.durability": null,
+        "capability.efficiency_factor": null,
+      },
+    };
+    expect(() => LatestJsonSchema.parse(sparse)).not.toThrow();
+  });
+
+  it("the 8 dotted capability.* keys round-trip verbatim as FLAT properties", () => {
+    const withCapabilities = {
+      ...onDiskWithVersion(LATEST_SCHEMA_VERSION),
+      derived_metrics: {
+        "capability.durability": { score: 1 },
+        "capability.efficiency_factor": { ef: 2 },
+        "capability.hrrc": { v: 3 },
+        "capability.tid_comparison": { v: 4 },
+        "capability.power_curve_delta": null,
+        "capability.hr_curve_delta": null,
+        "capability.sustainability_profile": { v: 7 },
+        "capability.dfa_a1_profile": { v: 8 },
+      },
+    };
+    const parsed = LatestJsonSchema.parse(withCapabilities);
+    expect(parsed.derived_metrics["capability.durability"]).toEqual({ score: 1 });
+    expect(parsed.derived_metrics["capability.dfa_a1_profile"]).toEqual({ v: 8 });
+    // The flat dotted key is NOT a nested capability object.
+    expect(
+      (parsed.derived_metrics as Record<string, unknown>).capability,
+    ).toBeUndefined();
+  });
+
+  it("readLatestVersioned returns the parsed envelope for a current-v2 file", () => {
+    const path = join(dir, "latest.json");
+    writeFileSync(path, JSON.stringify(onDiskWithVersion(LATEST_SCHEMA_VERSION)), "utf-8");
+    const result = readLatestVersioned(path);
+    expect(result).not.toBeNull();
+    expect(result?.metadata.schema_version).toBe(LATEST_SCHEMA_VERSION);
+  });
+
+  it("readLatestVersioned routes a stale v1 file to discard-and-resync (null) even when its body fits v2", () => {
+    const path = join(dir, "latest.json");
+    // Deliberately schema_version "1" — do NOT bump this literal.
+    writeFileSync(path, JSON.stringify(onDiskWithVersion("1")), "utf-8");
+    expect(readLatestVersioned(path)).toBeNull();
+  });
+
+  it("readLatestVersioned returns null for a missing or corrupt file (safeReadJson behavior preserved)", () => {
+    expect(readLatestVersioned(join(dir, "does-not-exist.json"))).toBeNull();
+    const corrupt = join(dir, "corrupt.json");
+    writeFileSync(corrupt, "{ not valid json", "utf-8");
+    expect(readLatestVersioned(corrupt)).toBeNull();
+  });
+
+  it("runtime loadLatest (delegating to readLatestVersioned) returns null for a stale v1 cache that fits v2", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(emptyFetched);
+    const runtime = await bootstrapReference({
+      dataDir: dir,
+      intervals: { apiKey: "test-key" },
+      sport: fakeSport(),
+      fetchReferenceData: fetchSpy,
+    });
+    runtime.scheduler.stop();
+
+    // Overwrite the freshly-synced cache with a stale v1 file whose body is
+    // otherwise v2-shape-valid. loadLatest must treat it as a cache miss.
+    const latestPath = join(dir, "data", "latest.json");
+    writeFileSync(latestPath, JSON.stringify(onDiskWithVersion("1")), "utf-8");
+    expect(runtime.services.loadLatest()).toBeNull();
   });
 });

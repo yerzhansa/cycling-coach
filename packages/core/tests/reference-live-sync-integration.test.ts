@@ -18,7 +18,7 @@ import type { ReferenceSportAdapter } from "../src/reference/sport-adapter.js";
 import type { IntervalsActivityType } from "../src/sport.js";
 import type { FetchedReference } from "../src/reference/sync/run-sync.js";
 import { gateLatestJson } from "../src/reference/validation/sync-gate.js";
-import { LatestJsonSchema, type LatestJson } from "../src/reference/schemas/latest.js";
+import { LatestJsonSchema, LATEST_SCHEMA_VERSION, type LatestJson } from "../src/reference/schemas/latest.js";
 import { METRIC_REGISTRY } from "../src/reference/metrics/registry.js";
 import { SPORT_FAMILIES } from "../src/reference/metrics/sport-families.js";
 import { safeReadJson } from "../src/io/safe-read-json.js";
@@ -132,7 +132,7 @@ describe("live-data bridge integration", () => {
   it("produces a latest envelope that parses against LatestJsonSchema", async () => {
     const fetched = await composeFetched();
     const onDisk = {
-      metadata: { schema_version: "1", last_updated: NOW.toISOString(), freshness: "fresh" as const },
+      metadata: { schema_version: LATEST_SCHEMA_VERSION, last_updated: NOW.toISOString(), freshness: "fresh" as const },
       ...fetched.latest,
     };
     expect(() => LatestJsonSchema.parse(onDisk)).not.toThrow();
@@ -144,7 +144,7 @@ describe("live-data bridge integration", () => {
     expect(fetched.latest.derived_metrics_meta).toEqual(tag);
 
     const onDisk = {
-      metadata: { schema_version: "1", last_updated: NOW.toISOString(), freshness: "fresh" as const },
+      metadata: { schema_version: LATEST_SCHEMA_VERSION, last_updated: NOW.toISOString(), freshness: "fresh" as const },
       ...fetched.latest,
     };
     const dir = mkdtempSync(join(tmpdir(), "reference-latest-"));

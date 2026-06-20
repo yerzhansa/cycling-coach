@@ -50,8 +50,7 @@ function deriveMeta(runs: readonly AdapterRun[]): DerivedMetricsMeta | undefined
  *
  * Out of scope (separate deferred tickets): the per-window power/HR/
  * sustainability curve fetch (the curve-delta capability metrics reproduce
- * their null blocks until it lands), and the structured `derived_metrics`
- * schema + cache version bump (the field stays `z.unknown()` for now). The
+ * their null blocks until it lands). The
  * `history`/`intervals`/`routes`/`ftp_history` retention cache files keep their
  * empty stubs — they are populated by their own retention pipeline, not here.
  */

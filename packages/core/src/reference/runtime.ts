@@ -5,8 +5,8 @@ import { Cooldown } from "../concurrency/cooldown.js";
 import { createRunSync } from "./sync/run-sync.js";
 import { Scheduler } from "./sync/scheduler.js";
 import { makeProductionFetcher } from "./sync/fetch-reference-data.js";
-import { safeReadJson } from "../io/safe-read-json.js";
-import { LatestJsonSchema, type LatestJson } from "./schemas/latest.js";
+import { readLatestVersioned } from "./io/read-latest-versioned.js";
+import { type LatestJson } from "./schemas/latest.js";
 import { SYNC_COOLDOWN_MS, SCHEDULED_SYNC_INTERVAL_MS } from "./freshness.js";
 import {
   assertDisjointCoverage,
@@ -106,7 +106,7 @@ export async function bootstrapReference(
   const services: ReferenceServices = {
     runSync: (req) => runSyncInternal({ caller: "/sync", chatId: req.chatId }),
     loadLatest: (): LatestJson | null =>
-      safeReadJson<LatestJson>(join(referenceDataPath, "latest.json"), LatestJsonSchema),
+      readLatestVersioned(join(referenceDataPath, "latest.json")),
     // Stub; the curator fills this (see ReferenceServices.maybeRefreshIfStale).
     maybeRefreshIfStale: () => Promise.resolve({ kind: "fresh" }),
   };
