@@ -228,6 +228,130 @@ describe("createRunSync", () => {
     expect(mutex.isHeld()).toBe(false);
   });
 
+  it("a fetched bundle carrying fetch_errors hard-fails the gate, writes error_state, and never writes latest.json", async () => {
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const now = new Date("2026-05-09T14:00:00Z");
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ...emptyFetched,
+      fetch_errors: [{ endpoint: "athlete", detail: "timeout" }],
+    });
+    const writeSpy = vi.fn(async (_path: string, _value: unknown): Promise<void> => {});
+
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: fetchSpy,
+      atomicWrite: writeSpy,
+      now: () => now,
+    });
+
+    const result = await runSync({ caller: "scheduled" });
+
+    expect(result.kind).toBe("failed");
+    if (result.kind === "failed") {
+      expect(result.reason).toBe("gate_rejected");
+      expect(result.failures.some((f) => f.reason.includes("athlete"))).toBe(true);
+    }
+
+    // The prior cache is preserved: no latest.json (or any cache file) write fired.
+    const wrotePaths = writeSpy.mock.calls.map((c) => c[0]);
+    expect(wrotePaths.some((p) => p.endsWith("latest.json"))).toBe(false);
+    expect(wrotePaths.some((p) => p.endsWith(".scheduler.json"))).toBe(false);
+
+    // error_state.json names the failed endpoint (real write, gate-rejection path).
+    const errorState = JSON.parse(readFileSync(join(dir, "error_state.json"), "utf-8"));
+    expect(errorState.step).toBe("gate_rejected");
+    expect(errorState.detail).toContain("athlete");
+
+    expect(mutex.isHeld()).toBe(false);
+  });
+
+  it("no-op cycle: a re-fetch with byte-identical data leaves all 5 cache files byte-identical (frozen last_updated)", async () => {
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const first = new Date("2026-05-09T14:00:00Z");
+    const second = new Date("2026-05-09T14:30:00Z");
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ...emptyFetched,
+      latest: { ...emptyFetched.latest, athlete_profile: { id: "test-athlete" } },
+    });
+
+    const makeRunSync = (now: Date) =>
+      createRunSync({
+        dataDir: dir,
+        mutex,
+        cooldown,
+        cooldownWindowMs: 30_000,
+        fetchReferenceData: fetchSpy,
+        now: () => now,
+      });
+
+    const files = ["latest", "history", "intervals", "routes", "ftp_history"];
+
+    const r1 = await makeRunSync(first)({ caller: "scheduled" });
+    expect(r1.kind).toBe("ran");
+    const afterFirst = files.map((f) => readFileSync(join(dir, `${f}.json`), "utf-8"));
+
+    const r2 = await makeRunSync(second)({ caller: "scheduled" });
+    expect(r2.kind).toBe("ran");
+    const afterSecond = files.map((f) => readFileSync(join(dir, `${f}.json`), "utf-8"));
+
+    expect(afterSecond).toEqual(afterFirst);
+    if (r2.kind === "ran") expect(r2.refreshed).toEqual([]);
+
+    // The commit marker still advanced even though no cache file was rewritten.
+    const scheduler = JSON.parse(readFileSync(join(dir, ".scheduler.json"), "utf-8"));
+    expect(scheduler.last_sync_at).toBe(second.toISOString());
+    // latest.json kept the FIRST run's timestamp (skipped, not rewritten).
+    const latest = JSON.parse(readFileSync(join(dir, "latest.json"), "utf-8"));
+    expect(latest.metadata.last_updated).toBe(first.toISOString());
+  });
+
+  it("changed-file-only: a second fetch that changes intervals rewrites only intervals.json; siblings keep their bytes", async () => {
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const first = new Date("2026-05-09T14:00:00Z");
+    const second = new Date("2026-05-09T14:30:00Z");
+
+    const base = {
+      ...emptyFetched,
+      latest: { ...emptyFetched.latest, athlete_profile: { id: "test-athlete" } },
+    };
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(base)
+      .mockResolvedValueOnce({
+        ...base,
+        intervals: { by_activity: { a1: [{ id: "i1" }] } },
+      });
+
+    const makeRunSync = (now: Date) =>
+      createRunSync({
+        dataDir: dir,
+        mutex,
+        cooldown,
+        cooldownWindowMs: 30_000,
+        fetchReferenceData: fetchSpy,
+        now: () => now,
+      });
+
+    await makeRunSync(first)({ caller: "scheduled" });
+    const latestBefore = readFileSync(join(dir, "latest.json"), "utf-8");
+
+    const r2 = await makeRunSync(second)({ caller: "scheduled" });
+    if (r2.kind === "ran") expect(r2.refreshed).toEqual(["intervals"]);
+
+    const intervals = JSON.parse(readFileSync(join(dir, "intervals.json"), "utf-8"));
+    expect(intervals.metadata.last_updated).toBe(second.toISOString());
+    expect(intervals.by_activity).toEqual({ a1: [{ id: "i1" }] });
+    // latest.json untouched (no data change) — bytes + timestamp frozen at run 1.
+    expect(readFileSync(join(dir, "latest.json"), "utf-8")).toBe(latestBefore);
+  });
+
   it("when outer timeout fires during writing_scheduler phase, error_state.phase reflects it and caches survive", async () => {
     const mutex = new AsyncMutex();
     const cooldown = new Cooldown();

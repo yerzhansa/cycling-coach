@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   MUTEX_ACQUIRE_TIMEOUT_MS,
@@ -89,6 +90,12 @@ export interface FetchedReference {
   };
   readonly routes: { readonly routes: readonly unknown[] };
   readonly ftp_history: { readonly entries: readonly unknown[] };
+  /** Source endpoints that errored during the fetch (athlete-profile, wellness).
+   *  Present + non-empty means a fetch failed and was filled with empty data;
+   *  step0 hard-fails on it so the swallowed failure can no longer commit empties
+   *  behind a fresh stamp. Omitted when every endpoint was reachable, so a
+   *  fully-successful fetch is shape-identical to a genuinely-empty account. */
+  readonly fetch_errors?: readonly { readonly endpoint: string; readonly detail: string }[];
 }
 
 export interface RunSyncDeps {
@@ -130,6 +137,41 @@ interface CacheWriteSpec {
 
 /** Shared between runtime + tests so the warn-after-timeout string stays in sync. */
 export const BODY_AFTER_TIMEOUT_LOG_PREFIX = "Reference: body threw after outer timeout";
+
+/** Read a prior on-disk cache file as a parsed object, or `null` when it is
+ *  absent / unreadable / not an object — any of which means "no comparable
+ *  prior, must write". */
+function readPriorCache(path: string): Record<string, unknown> | null {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf-8");
+  } catch {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  return typeof parsed === "object" && parsed !== null
+    ? (parsed as Record<string, unknown>)
+    : null;
+}
+
+/** True when the prior file's payload (everything except the churning
+ *  `metadata` envelope) serializes identically to the new payload, using the
+ *  same serializer settings `atomicWriteJson` writes with — so a no-op cycle
+ *  skips the write and leaves the file byte-identical. */
+function priorPayloadEquals(
+  prior: Record<string, unknown>,
+  payload: Readonly<Record<string, unknown>>,
+): boolean {
+  const { metadata: _metadata, ...priorPayload } = prior;
+  return (
+    JSON.stringify(priorPayload, null, 2) === JSON.stringify(payload, null, 2)
+  );
+}
 
 export function createRunSync(
   deps: RunSyncDeps,
@@ -239,14 +281,28 @@ export function createRunSync(
               payload: fetched.ftp_history,
             },
           ];
-          await Promise.all(
-            cacheWrites.map(({ file, version, payload, extras }) =>
-              writeJson(join(deps.dataDir, `${file}.json`), {
-                metadata: { schema_version: version, last_updated: lastUpdated, ...extras },
-                ...payload,
+          // Content-hash short-circuit: re-stamping `last_updated` every cycle
+          // makes each cache file byte-different even when the underlying data
+          // is unchanged. The `metadata` envelope (which carries the churning
+          // `last_updated`) is excluded from the comparison so a no-op cycle
+          // leaves the file — old timestamp and all — byte-identical, and only
+          // a genuine data change rewrites the file with a fresh stamp.
+          const refreshed = (
+            await Promise.all(
+              cacheWrites.map(async ({ file, version, payload, extras }) => {
+                const path = join(deps.dataDir, `${file}.json`);
+                const prior = readPriorCache(path);
+                if (prior !== null && priorPayloadEquals(prior, payload)) {
+                  return null;
+                }
+                await writeJson(path, {
+                  metadata: { schema_version: version, last_updated: lastUpdated, ...extras },
+                  ...payload,
+                });
+                return file;
               }),
-            ),
-          );
+            )
+          ).filter((f): f is CacheFile => f !== null);
           // A1 fix: if the outer timeout fired during the cache writes,
           // bail before writing the commit marker. Without this guard the
           // scheduler.json could land after error_state.json was written,
@@ -279,7 +335,7 @@ export function createRunSync(
           return {
             kind: "ran",
             lastSyncAt: lastUpdated,
-            refreshed: cacheWrites.map((w) => w.file),
+            refreshed,
           };
         };
 

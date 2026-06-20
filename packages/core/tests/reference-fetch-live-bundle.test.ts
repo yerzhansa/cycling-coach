@@ -251,6 +251,19 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
     expect(logs.some((l) => l.includes("athlete.get failed"))).toBe(true);
   });
 
+  it("records a fetchErrors entry naming the athlete endpoint when athlete.get fails (still a usable bundle)", async () => {
+    const client: BundleFetchClient = {
+      athlete: { get: async () => ({ ok: false, error: "unauthorized" }) },
+      activities: { list: async () => ({ ok: true, value: [] }), getStreams: async () => STREAM_OK },
+      wellness: { list: async () => ({ ok: true, value: [] }) },
+    };
+    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0, log: () => {} });
+    expect(res.fetchErrors).toBeDefined();
+    expect(res.fetchErrors?.some((e) => e.endpoint === "athlete")).toBe(true);
+    // Bundle is still well-typed: the athlete fallback is `{}`, no crash.
+    expect(res.bundle.athlete).toBeUndefined();
+  });
+
   it("resolves with empty wellness + a warning when wellness.list fails", async () => {
     const logs: string[] = [];
     const client: BundleFetchClient = {
@@ -262,6 +275,24 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
     expect(res.bundle.wellness).toEqual([]);
     expect(res.bundle.ftpHistory).toEqual([]);
     expect(logs.some((l) => l.includes("wellness.list failed"))).toBe(true);
+  });
+
+  it("records a fetchErrors entry naming the wellness endpoint when wellness.list fails (still a usable bundle)", async () => {
+    const client: BundleFetchClient = {
+      athlete: { get: async () => ({ ok: true, value: {} }) },
+      activities: { list: async () => ({ ok: true, value: [] }), getStreams: async () => STREAM_OK },
+      wellness: { list: async () => ({ ok: false, error: "timeout" }) },
+    };
+    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0, log: () => {} });
+    expect(res.fetchErrors).toBeDefined();
+    expect(res.fetchErrors?.some((e) => e.endpoint === "wellness")).toBe(true);
+    expect(res.bundle.wellness).toEqual([]);
+  });
+
+  it("omits fetchErrors entirely when every endpoint succeeds", async () => {
+    const { client } = fakeClient({ activities: [], wellness: [], athlete: {} });
+    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0 });
+    expect(res.fetchErrors).toBeUndefined();
   });
 
   it("treats a non-array activities body as empty (ok:true, malformed) without crashing", async () => {
