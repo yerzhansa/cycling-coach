@@ -139,7 +139,7 @@ export interface RunSyncDeps {
     opts?: { signal?: AbortSignal },
   ) => Promise<void>;
   /** Override error_state.json removal for tests; defaults to `clearErrorState`. */
-  readonly clearError?: (dataDir: string) => Promise<void>;
+  readonly clearError?: (dataDir: string, opts?: { signal?: AbortSignal }) => Promise<void>;
   /**
    * Override the per-tick outcome writer for tests; defaults to
    * `createSyncHistoryWriter(deps.dataDir)`. Best-effort and never throws, so it
@@ -324,12 +324,17 @@ export function createRunSync(
             // scheduled tick logging-only and the curator blind to the failure.
             if (controller.signal.aborted) return abortedResult();
             const detail = err instanceof Error ? err.message : String(err);
-            await writeErrorState(deps.dataDir, {
-              step: "fetch_failed",
-              phase,
-              detail,
-              ...priorBlockCoaching(deps.dataDir),
-            });
+            // Route through the injectable abort-aware seam so a late body write skips its rename if the outer timeout already force-released the mutex.
+            await writeErrorState(
+              deps.dataDir,
+              {
+                step: "fetch_failed",
+                phase,
+                detail,
+                ...priorBlockCoaching(deps.dataDir),
+              },
+              { write: writeJson, signal: controller.signal },
+            );
             return {
               kind: "failed",
               reason: "fetch_failed",
@@ -349,11 +354,15 @@ export function createRunSync(
             // instead of quoting numbers from data we could not trust. The soft
             // path below keeps its non-blocking warn-only mitigation.
             cycleBlockCoaching = true;
-            await writeErrorState(deps.dataDir, {
-              step: "gate_rejected",
-              detail: gateResult.failures.map((f) => `${f.step}: ${f.detail}`).join("; "),
-              mitigation: "block_coaching",
-            });
+            await writeErrorState(
+              deps.dataDir,
+              {
+                step: "gate_rejected",
+                detail: gateResult.failures.map((f) => `${f.step}: ${f.detail}`).join("; "),
+                mitigation: "block_coaching",
+              },
+              { write: writeJson, signal: controller.signal },
+            );
             return {
               kind: "failed",
               reason: "gate_rejected",
@@ -439,13 +448,17 @@ export function createRunSync(
           // record a non-blocking warn_only state; a fully-clean sync clears
           // any error_state left by a prior failed/soft run.
           if (gateResult.warnings.length > 0) {
-            await writeErrorState(deps.dataDir, {
-              step: "gate_warnings",
-              detail: gateResult.warnings.map((w) => `${w.step}: ${w.detail}`).join("; "),
-              mitigation: "warn_only",
-            });
+            await writeErrorState(
+              deps.dataDir,
+              {
+                step: "gate_warnings",
+                detail: gateResult.warnings.map((w) => `${w.step}: ${w.detail}`).join("; "),
+                mitigation: "warn_only",
+              },
+              { write: writeJson, signal: controller.signal },
+            );
           } else {
-            await clearError(deps.dataDir);
+            await clearError(deps.dataDir, { signal: controller.signal });
           }
 
           return {
@@ -494,14 +507,19 @@ export function createRunSync(
               );
             }
           });
-          await writeErrorState(deps.dataDir, {
-            step: "outer_timeout",
-            phase,
-            detail: `runSync exceeded ${outerTimeoutMs}ms during ${phase} phase`,
-            ...(cycleBlockCoaching
-              ? ({ mitigation: "block_coaching" } as const)
-              : priorBlockCoaching(deps.dataDir)),
-          });
+          // No signal here: this write runs AFTER controller.abort() and is the authoritative timeout record. Threading the (already-aborted) signal would make the abort-aware helper skip its rename and drop the record entirely.
+          await writeErrorState(
+            deps.dataDir,
+            {
+              step: "outer_timeout",
+              phase,
+              detail: `runSync exceeded ${outerTimeoutMs}ms during ${phase} phase`,
+              ...(cycleBlockCoaching
+                ? ({ mitigation: "block_coaching" } as const)
+                : priorBlockCoaching(deps.dataDir)),
+            },
+            { write: writeJson },
+          );
           return { kind: "failed", reason: "outer_timeout", failures: [] };
         }
 

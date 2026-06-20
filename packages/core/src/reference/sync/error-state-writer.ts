@@ -9,12 +9,22 @@ import { atomicWriteJson } from "../../io/atomic-write-json.js";
 
 export type { ErrorPhase };
 
+export type ErrorStateWrite = (
+  path: string,
+  value: unknown,
+  opts?: { signal?: AbortSignal },
+) => Promise<void>;
+
 /**
  * Atomic-write `error_state.json` to the data dir. Called by `runSync()`
  * when the outer 2-min timeout fires (with `phase` set per ADR-0011's
  * commit-marker-last write order), when the Layer-1 gate rejects a fetch
  * (with `phase` omitted), or on the soft-warn path (with
  * `mitigation: "warn_only"`). Cleared on the next fully-clean sync.
+ *
+ * The write is injectable (defaults to `atomicWriteJson`) and threads an
+ * optional abort signal so a late body write skips its rename after the outer
+ * timeout force-releases the mutex.
  */
 export async function writeErrorState(
   dataDir: string,
@@ -24,15 +34,21 @@ export async function writeErrorState(
     phase?: ErrorPhase;
     mitigation?: ErrorMitigation;
   },
+  opts?: { write?: ErrorStateWrite; signal?: AbortSignal },
 ): Promise<void> {
-  await atomicWriteJson(join(dataDir, "error_state.json"), {
-    schema_version: ERROR_STATE_SCHEMA_VERSION,
-    step: payload.step,
-    detail: payload.detail,
-    ts: new Date().toISOString(),
-    ...(payload.phase !== undefined ? { phase: payload.phase } : {}),
-    ...(payload.mitigation !== undefined ? { mitigation: payload.mitigation } : {}),
-  });
+  const write = opts?.write ?? atomicWriteJson;
+  await write(
+    join(dataDir, "error_state.json"),
+    {
+      schema_version: ERROR_STATE_SCHEMA_VERSION,
+      step: payload.step,
+      detail: payload.detail,
+      ts: new Date().toISOString(),
+      ...(payload.phase !== undefined ? { phase: payload.phase } : {}),
+      ...(payload.mitigation !== undefined ? { mitigation: payload.mitigation } : {}),
+    },
+    { signal: opts?.signal },
+  );
 }
 
 /**
@@ -42,7 +58,11 @@ export async function writeErrorState(
  * stale-error_state interleave. Swallows ENOENT — a missing file is the
  * desired post-state.
  */
-export async function clearErrorState(dataDir: string): Promise<void> {
+export async function clearErrorState(
+  dataDir: string,
+  opts?: { signal?: AbortSignal },
+): Promise<void> {
+  if (opts?.signal?.aborted === true) return;
   try {
     await unlink(join(dataDir, "error_state.json"));
   } catch (err) {

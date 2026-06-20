@@ -340,7 +340,17 @@ describe("createRunSync", () => {
       ...emptyFetched,
       fetch_errors: [{ endpoint: "athlete", detail: "timeout" }],
     });
-    const writeSpy = vi.fn(async (_path: string, _value: unknown): Promise<void> => {});
+    const { atomicWriteJson: realAtomicWrite } = await import(
+      "../src/io/atomic-write-json.js"
+    );
+    // The gate-reject error_state write now routes through the injectable seam
+    // (deps.atomicWrite), so forward it to the real writer for the on-disk
+    // assertion below; cache/scheduler writes are still recorded as spy calls.
+    const writeSpy = vi.fn(
+      async (path: string, value: unknown, opts?: { signal?: AbortSignal }): Promise<void> => {
+        await realAtomicWrite(path, value, opts);
+      },
+    );
 
     const runSync = createRunSync({
       dataDir: dir,
@@ -628,7 +638,10 @@ describe("createRunSync", () => {
         value: unknown,
         opts?: { signal?: AbortSignal },
       ): Promise<void> => {
-        if (!path.endsWith(".scheduler.json")) {
+        // Park only the cache writes; the post-timeout error_state record (which
+        // now routes through this same seam, signal-less) must pass straight
+        // through so the orchestrator can land the authoritative timeout record.
+        if (!path.endsWith(".scheduler.json") && !path.endsWith("error_state.json")) {
           if (signalArrived !== null) {
             signalArrived();
             signalArrived = null;
@@ -734,14 +747,26 @@ describe("createRunSync", () => {
     const fetchSpy = vi.fn().mockResolvedValue(emptyFetched);
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
+    const { atomicWriteJson: realAtomicWrite } = await import(
+      "../src/io/atomic-write-json.js"
+    );
     // atomicWrite that throws (simulating disk-full or fs error) AFTER a 200ms
     // delay. With outerTimeoutMs: 20, the outer race wins ("timeout") at ~20ms;
     // the body's await of this write rejects at ~200ms. The 10× gap keeps the
-    // test deterministic on slow CI runners.
-    const failingWrite = vi.fn(async (): Promise<void> => {
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      throw new Error("simulated disk-full mid-write");
-    });
+    // test deterministic on slow CI runners. The timeout-path error_state write
+    // now routes through this same seam — forward it to the real writer so the
+    // authoritative timeout record still lands and only the body's cache write
+    // simulates the disk failure under test.
+    const failingWrite = vi.fn(
+      async (path: string, value: unknown, opts?: { signal?: AbortSignal }): Promise<void> => {
+        if (path.endsWith("error_state.json")) {
+          await realAtomicWrite(path, value, opts);
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        throw new Error("simulated disk-full mid-write");
+      },
+    );
 
     const runSync = createRunSync({
       dataDir: dir,
