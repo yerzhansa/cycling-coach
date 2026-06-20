@@ -159,17 +159,39 @@ function readPriorCache(path: string, file: CacheFile): Record<string, unknown> 
   return safeReadJson<Record<string, unknown>>(path, CACHE_SCHEMAS[file]);
 }
 
+/** Recursively rebuild an object/array with every object's keys in sorted
+ *  order, so two structurally-equal payloads serialize identically regardless
+ *  of key insertion order. `priorPayloadEquals` reads the prior payload back
+ *  through a Zod re-parse, which rebuilds objects in schema-declaration order
+ *  rather than the producer's insertion order; canonicalizing both sides makes
+ *  the no-op short-circuit immune to that reordering (and to any future
+ *  producer that emits the same data in a different key order). */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value).sort()) {
+      out[key] = canonicalize((value as Record<string, unknown>)[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
 /** True when the prior file's payload (everything except the churning
- *  `metadata` envelope) serializes identically to the new payload, using the
- *  same serializer settings `atomicWriteJson` writes with — so a no-op cycle
- *  skips the write and leaves the file byte-identical. */
+ *  `metadata` envelope) is structurally equal to the new payload — so a no-op
+ *  cycle skips the write and leaves the file byte-identical. The comparison is
+ *  key-order-insensitive (see `canonicalize`): the no-op guarantee must not
+ *  hinge on the producer emitting keys in the same order the cache schema
+ *  declares them. */
 function priorPayloadEquals(
   prior: Record<string, unknown>,
   payload: Readonly<Record<string, unknown>>,
 ): boolean {
   const { metadata: _metadata, ...priorPayload } = prior;
   return (
-    JSON.stringify(priorPayload, null, 2) === JSON.stringify(payload, null, 2)
+    JSON.stringify(canonicalize(priorPayload)) ===
+    JSON.stringify(canonicalize(payload))
   );
 }
 

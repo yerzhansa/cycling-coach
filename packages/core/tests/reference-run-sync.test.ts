@@ -311,6 +311,48 @@ describe("createRunSync", () => {
     expect(latest.metadata.last_updated).toBe(first.toISOString());
   });
 
+  it("no-op cycle: a re-fetch with the same data but a different top-level key order still short-circuits", async () => {
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const first = new Date("2026-05-09T14:00:00Z");
+    const second = new Date("2026-05-09T14:30:00Z");
+
+    // The on-disk file is read back through a Zod re-parse, which rebuilds the
+    // payload in schema-declaration order; the live producer emits it in
+    // insertion order. A future producer (or a re-ordered nested object) can
+    // legitimately differ in key order while carrying identical data — the
+    // short-circuit must not be defeated by that.
+    const profile = { name: "test", id: "test-athlete", ftp: 250 };
+    const reordered = { ftp: 250, id: "test-athlete", name: "test" };
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...emptyFetched,
+        latest: { ...emptyFetched.latest, athlete_profile: profile },
+      })
+      .mockResolvedValueOnce({
+        ...emptyFetched,
+        latest: { ...emptyFetched.latest, athlete_profile: reordered },
+      });
+
+    const makeRunSync = (now: Date) =>
+      createRunSync({
+        dataDir: dir,
+        mutex,
+        cooldown,
+        cooldownWindowMs: 30_000,
+        fetchReferenceData: fetchSpy,
+        now: () => now,
+      });
+
+    await makeRunSync(first)({ caller: "scheduled" });
+    const latestBefore = readFileSync(join(dir, "latest.json"), "utf-8");
+
+    const r2 = await makeRunSync(second)({ caller: "scheduled" });
+    if (r2.kind === "ran") expect(r2.refreshed).toEqual([]);
+    expect(readFileSync(join(dir, "latest.json"), "utf-8")).toBe(latestBefore);
+  });
+
   it("changed-file-only: a second fetch that changes intervals rewrites only intervals.json; siblings keep their bytes", async () => {
     const mutex = new AsyncMutex();
     const cooldown = new Cooldown();
