@@ -1,5 +1,6 @@
 import { GrammyError } from "grammy";
 import type { SnapshotOutput } from "./snapshot-debug.js";
+import { retryWithBackoff } from "../../concurrency/retry.js";
 
 /**
  * Outcome of sending a snapshot to Telegram. `sent` counts successful chunks
@@ -78,17 +79,21 @@ async function trySendWithSingleRetry(
   sleep: (ms: number) => Promise<void>,
 ): Promise<boolean> {
   try {
-    await reply(chunk);
+    await retryWithBackoff(() => reply(chunk), {
+      attempts: 2,
+      baseMs: DEFAULT_TRANSIENT_BACKOFF_MS,
+      capMs: MAX_RETRY_AFTER_SEC * 1_000,
+      shouldRetry: () => true,
+      // backoffMsFor is a validated lower bound (Telegram's retry_after, or the
+      // default transient backoff); honor it exactly, with jitter disabled so the
+      // single-retry delay stays deterministic.
+      retryAfterMs: (err) => backoffMsFor(err),
+      random: () => 0,
+      sleep,
+    });
     return true;
-  } catch (firstErr) {
-    const delayMs = backoffMsFor(firstErr);
-    await sleep(delayMs);
-    try {
-      await reply(chunk);
-      return true;
-    } catch {
-      return false;
-    }
+  } catch {
+    return false;
   }
 }
 

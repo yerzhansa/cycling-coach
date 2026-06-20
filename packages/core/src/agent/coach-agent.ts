@@ -32,6 +32,7 @@ import { appendUsageLine, usageFieldsFromResult } from "../usage-ledger.js";
 import { createMemorySnapshot } from "../memory/snapshot.js";
 import { resolveUserTimezone, appendCurrentTimeLine } from "./user-time.js";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/index.js";
+import { retryWithBackoff } from "../concurrency/retry.js";
 
 const MAX_OVERFLOW_ATTEMPTS = 3;
 const MAX_TIMEOUT_ATTEMPTS = 2;
@@ -49,10 +50,6 @@ type MemoryFlushTrigger =
   | "pre-compaction"
   | "overflow-recovery"
   | "soft-threshold";
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 // ============================================================================
 // AGENT
@@ -407,18 +404,38 @@ export class CoachAgent {
           // Rate limit → backoff (respect retry-after) + retry
           if (isRateLimitError(err) && rateLimitAttempts < MAX_RATE_LIMIT_ATTEMPTS) {
             rateLimitAttempts++;
-            const retryAfter = extractRetryAfterMs(err);
-            const requestedMs = retryAfter
+            const attemptNo = rateLimitAttempts;
+            // The server hint (if any) is a lower bound; absent one, fall back to a
+            // capped exponential. Either feeds the primitive as the Retry-After
+            // floor so the 120s ceiling and the clamp note are honored bit-for-bit.
+            const requestedMs = extractRetryAfterMs(err)
               ?? Math.min(
-                   RATE_LIMIT_FALLBACK_BASE_MS * Math.pow(RATE_LIMIT_FALLBACK_MULTIPLIER, rateLimitAttempts - 1),
+                   RATE_LIMIT_FALLBACK_BASE_MS * RATE_LIMIT_FALLBACK_MULTIPLIER ** (attemptNo - 1),
                    RATE_LIMIT_FALLBACK_MAX_MS,
                  );
-            const backoff = Math.min(requestedMs, RATE_LIMIT_MAX_WAIT_MS);
             const clampNote = requestedMs > RATE_LIMIT_MAX_WAIT_MS
               ? ` (provider requested ${requestedMs}ms, clamped to ${RATE_LIMIT_MAX_WAIT_MS}ms)`
               : "";
-            console.warn(`Rate limited (attempt ${rateLimitAttempts}/${MAX_RATE_LIMIT_ATTEMPTS}), waiting ${backoff}ms${clampNote}`);
-            await sleep(backoff);
+            let retried = false;
+            await retryWithBackoff(
+              async () => {
+                if (!retried) {
+                  retried = true;
+                  throw err;
+                }
+              },
+              {
+                attempts: 2,
+                baseMs: requestedMs,
+                capMs: RATE_LIMIT_MAX_WAIT_MS,
+                shouldRetry: () => true,
+                retryAfterMs: () => requestedMs,
+                random: () => 0,
+                onRetry: ({ delayMs }) => {
+                  console.warn(`Rate limited (attempt ${attemptNo}/${MAX_RATE_LIMIT_ATTEMPTS}), waiting ${delayMs}ms${clampNote}`);
+                },
+              },
+            );
             continue;
           }
           // Rate limit retries exhausted → throw to caller (skip compaction — API is rate limited)
