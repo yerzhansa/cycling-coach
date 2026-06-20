@@ -9,12 +9,18 @@ import {
   THRESHOLD_DEFINITION,
   type RunningZoneDisplay,
 } from "./zones.js";
+import {
+  serializeRunningWorkout,
+  runningWorkoutInputSchema,
+  InvalidWorkoutError,
+  type RunningWorkoutInput,
+} from "./intervals-serializer.js";
 
 /**
- * Pure-Sport running tools per ADR-0004. This wave ships the CS-anchored
- * `calculate_zones` tool only; the intervals.icu workout creator is deferred
- * until a running workout serializer exists (Pure-Core + Core-with-sport-config
- * intervals tools still compose in via `runningSport.tools`).
+ * Pure-Sport running tools per ADR-0004 — the CS-anchored `calculate_zones` tool
+ * plus the running-flavored intervals.icu workout creator (hardcoded
+ * `type: "Run"`, gated on a configured intervals client). Pure-Core and
+ * Core-with-sport-config intervals tools still compose in via `runningSport.tools`.
  *
  * The athlete's critical speed is resolved automatically from synced
  * intervals.icu data when available (`resolvedCs` getter, fed per turn by Core);
@@ -34,7 +40,7 @@ function clampLowerFraction(requested: number): { value: number; clamped: boolea
 
 export function createRunningTools(
   _memory: MemoryStore,
-  _intervals: IntervalsClient | null,
+  intervals: IntervalsClient | null,
   _tz: string = "UTC",
   resolvedCs?: () => ResolvedCs | null,
 ) {
@@ -137,5 +143,66 @@ export function createRunningTools(
         };
       },
     }),
+
+    ...(intervals
+      ? {
+          intervals_create_workout: tool({
+            description:
+              "Create a structured running workout on the intervals.icu calendar (auto-syncs to " +
+              "Garmin/Wahoo). Supply the workout as structured steps — the tool serializes them into " +
+              "intervals.icu's native pace syntax so the pace chart renders and the server computes load " +
+              "against the athlete's own threshold pace. Anchor pace targets on the critical-speed zones " +
+              "(kind:'zone' 1-6, or kind:'cs_fraction') — these are RPE-checked estimates from a " +
+              "population-mean model, not lab-measured thresholds. If the athlete's critical speed is a " +
+              "manual/coach-entered override, prefer absolute kind:'pace' targets so the prescription " +
+              "matches the zone table you showed them. Strides are a neuromuscular drill — prescribe them " +
+              "as a duration-only step (or with a relaxed-fast kind:'pace'), never a CS zone. Do not invent " +
+              "a pace the resolved CS doesn't support. Durations may be time (seconds/minutes) or distance " +
+              "(meters/km/mi); a distance step needs a pace target so its planned time can be derived. For " +
+              "every pushed workout, put the RPE-check + provenance framing, plus athlete-facing coaching " +
+              "narrative (feel, RPE cues, target spm, hydration), in your chat reply — the calendar entry " +
+              "cannot carry it.",
+            inputSchema: zodSchema(
+              z.object({
+                date: z.string().describe("Workout date (YYYY-MM-DD)"),
+                workout: runningWorkoutInputSchema.describe(
+                  "Structured workout: name + ordered steps. Top-level steps can be simple " +
+                    "(warmup/steady/tempo/threshold/interval/repetition/strides/ramp/recovery/rest/cooldown) " +
+                    "or a set {type:'set', repeat, interval, recovery}. Durations use time (seconds/minutes) " +
+                    "or distance (meters/distance_km/distance_mi); a distance step needs a pace target. Pace " +
+                    "targets: {kind:'zone'|'cs_fraction'|'pace', value} or {kind, low, high} for ranges. " +
+                    "cs_fraction is a fraction of critical speed (1.0 = threshold). Absolute 'pace' is M:SS " +
+                    "strings, slower-first for ranges. Ramps require low+high.",
+                ),
+              }),
+            ),
+            execute: async (input: { date: string; workout: RunningWorkoutInput }) => {
+              // The serializer stays pure: pass OUR resolved CS in so distance steps
+              // with relative targets can derive their planned time.
+              let serialized: ReturnType<typeof serializeRunningWorkout>;
+              try {
+                serialized = serializeRunningWorkout(input.workout, resolvedCs?.()?.criticalSpeedMps);
+              } catch (err) {
+                if (err instanceof InvalidWorkoutError) {
+                  return { error: "invalid_workout", details: err.message };
+                }
+                throw err;
+              }
+              const result = await intervals.events.create({
+                start_date_local: `${input.date}T00:00:00`,
+                category: "WORKOUT",
+                name: input.workout.name,
+                type: "Run",
+                moving_time: serialized.movingTime,
+                // No icu_training_load — the server derives running Pace Load from the
+                // parsed steps against the athlete's own threshold pace.
+                description: serialized.description,
+              });
+              if (!result.ok) return { error: result.error.kind };
+              return { created: true, event: result.value };
+            },
+          }),
+        }
+      : {}),
   };
 }
