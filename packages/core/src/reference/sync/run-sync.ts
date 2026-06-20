@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ZodTypeAny } from "zod";
 import {
   MUTEX_ACQUIRE_TIMEOUT_MS,
   MUTEX_HOT_WARN_MS,
@@ -7,11 +7,12 @@ import {
   SYNC_OPERATION_TIMEOUT_MS,
 } from "../freshness.js";
 import { atomicWriteJson } from "../../io/atomic-write-json.js";
-import { LATEST_SCHEMA_VERSION } from "../schemas/latest.js";
-import { HISTORY_SCHEMA_VERSION } from "../schemas/history.js";
-import { INTERVALS_SCHEMA_VERSION } from "../schemas/intervals.js";
-import { ROUTES_SCHEMA_VERSION } from "../schemas/routes.js";
-import { FTP_HISTORY_SCHEMA_VERSION } from "../schemas/ftp-history.js";
+import { safeReadJson } from "../../io/safe-read-json.js";
+import { LATEST_SCHEMA_VERSION, LatestJsonSchema } from "../schemas/latest.js";
+import { HISTORY_SCHEMA_VERSION, HistoryJsonSchema } from "../schemas/history.js";
+import { INTERVALS_SCHEMA_VERSION, IntervalsJsonSchema } from "../schemas/intervals.js";
+import { ROUTES_SCHEMA_VERSION, RoutesJsonSchema } from "../schemas/routes.js";
+import { FTP_HISTORY_SCHEMA_VERSION, FtpHistoryJsonSchema } from "../schemas/ftp-history.js";
 import { SCHEDULER_SCHEMA_VERSION } from "../schemas/scheduler.js";
 import type { ErrorPhase, ErrorCaller } from "../schemas/error-state.js";
 import { gateLatestJson } from "../validation/sync-gate.js";
@@ -138,25 +139,24 @@ interface CacheWriteSpec {
 /** Shared between runtime + tests so the warn-after-timeout string stays in sync. */
 export const BODY_AFTER_TIMEOUT_LOG_PREFIX = "Reference: body threw after outer timeout";
 
+/** Per-cache-file Zod schema, so the prior-read routes through the same
+ *  `safeReadJson` boundary every other Reference read uses (CONTEXT.md: Reference
+ *  NEVER calls `JSON.parse(readFileSync(...))` directly). A schema mismatch or an
+ *  unreadable file yields `null` — which `readPriorCache` already treats as "no
+ *  comparable prior, must write". */
+const CACHE_SCHEMAS: Readonly<Record<CacheFile, ZodTypeAny>> = {
+  latest: LatestJsonSchema,
+  history: HistoryJsonSchema,
+  intervals: IntervalsJsonSchema,
+  routes: RoutesJsonSchema,
+  ftp_history: FtpHistoryJsonSchema,
+};
+
 /** Read a prior on-disk cache file as a parsed object, or `null` when it is
- *  absent / unreadable / not an object — any of which means "no comparable
+ *  absent / unreadable / schema-invalid — any of which means "no comparable
  *  prior, must write". */
-function readPriorCache(path: string): Record<string, unknown> | null {
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf-8");
-  } catch {
-    return null;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  return typeof parsed === "object" && parsed !== null
-    ? (parsed as Record<string, unknown>)
-    : null;
+function readPriorCache(path: string, file: CacheFile): Record<string, unknown> | null {
+  return safeReadJson<Record<string, unknown>>(path, CACHE_SCHEMAS[file]);
 }
 
 /** True when the prior file's payload (everything except the churning
@@ -291,7 +291,7 @@ export function createRunSync(
             await Promise.all(
               cacheWrites.map(async ({ file, version, payload, extras }) => {
                 const path = join(deps.dataDir, `${file}.json`);
-                const prior = readPriorCache(path);
+                const prior = readPriorCache(path, file);
                 if (prior !== null && priorPayloadEquals(prior, payload)) {
                   return null;
                 }
