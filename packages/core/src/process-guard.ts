@@ -84,10 +84,17 @@ export function logBootLine(opts: { dataDir: string }): void {
   const log = createSubsystemLogger("agent", opts.dataDir);
   try {
     log.info("boot", { pid: process.pid });
-    if (prior !== undefined && prior.status !== "unclean") {
-      // A breadcrumb left in `running` state at the next boot means the prior
-      // run died without a clean shutdown.
-      log.warn("previous_run_unclean", undefined, { startedAt: prior.startedAt });
+    if (prior !== undefined) {
+      // Any breadcrumb still present at boot means the prior run never reached a
+      // clean shutdown (which deletes it): `unclean` = a crash handler fired and
+      // recorded the death; `running` = a hard death (SIGKILL / power loss) with
+      // no handler. Both must surface, and a handler-recorded `uncleanAt` must
+      // carry into this durable line before the file is re-armed below.
+      log.warn("previous_run_unclean", undefined, {
+        startedAt: prior.startedAt,
+        priorStatus: prior.status,
+        ...(prior.uncleanAt !== undefined ? { uncleanAt: prior.uncleanAt } : {}),
+      });
     }
   } catch {
     // The logger never throws by contract; stay defensive at startup.

@@ -501,10 +501,13 @@ describe("codex-bridge network-error escape", () => {
     expect(out.status).toBe(500);
   });
 
-  it("installs the wrapper around complete() so a single fetch throw surfaces marked, once", async () => {
-    // Drive the real bridge wrapper: complete() makes ONE fetch call, which the
-    // installed wrapper has swapped to throw-and-mark. The library would retry a
-    // raw network throw up to 4x; the marker short-circuits it to one attempt.
+  it("installs the wrapper so the library retry loop short-circuits a network throw to one fetch", async () => {
+    // The wrapper the bridge installs around complete() rethrows a network throw
+    // carrying PI_AI_NO_RETRY_MARKER. `complete` models pi-ai's real predicate —
+    // retry up to 4x UNLESS the error message carries that marker — so this test
+    // actually exercises the short-circuit: with the marker, fetch runs once;
+    // remove the marker rethrow and the loop runs the inner fetch 4 times.
+    const PI_AI_MAX_RETRIES = 4;
     const fetchSpy = vi.fn(async () => {
       // Undici buries the connection code on .cause.code of a "fetch failed".
       const e = new TypeError("fetch failed");
@@ -512,9 +515,19 @@ describe("codex-bridge network-error escape", () => {
       throw e;
     });
     const complete = vi.fn(async () => {
-      // Exactly one fetch attempt, mirroring the marker-short-circuited loop.
-      await (globalThis.fetch as unknown as typeof fetchSpy)();
-      return asstMsg();
+      let lastError: unknown;
+      for (let attempt = 0; attempt < PI_AI_MAX_RETRIES; attempt++) {
+        try {
+          await (globalThis.fetch as unknown as typeof fetchSpy)();
+          return asstMsg();
+        } catch (e) {
+          lastError = e;
+          // pi-ai 0.67.x retries a network throw unless its message carries the
+          // no-retry marker; the installed wrapper is what stamps that marker.
+          if (e instanceof Error && e.message.includes(PI_AI_NO_RETRY_MARKER)) throw e;
+        }
+      }
+      throw lastError;
     });
     const { codexGenerateText } = await loadBridgeWithMocks({ complete });
     vi.spyOn(globalThis, "fetch").mockImplementation(fetchSpy as unknown as typeof fetch);
@@ -530,6 +543,7 @@ describe("codex-bridge network-error escape", () => {
       thrown = err;
     }
 
+    // The marker stopped pi-ai's loop after the first attempt (not 4).
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(thrown).toBeInstanceOf(Error);
     // The surfaced (normalized) error is a network error, never rate-limit.

@@ -165,6 +165,23 @@ describe("logBootLine + breadcrumb lifecycle", () => {
 
     expect(captured.some((c) => c.event === "previous_run_unclean")).toBe(false);
   });
+
+  it("flags a handler-written `unclean` breadcrumb at the next boot and carries uncleanAt", async () => {
+    const { logBootLine } = await loadGuard();
+    const uncleanAt = 1_700_000_000_000;
+    // Simulate a prior run whose crash handler fired and recorded the death.
+    writeFileSync(
+      breadcrumb(),
+      JSON.stringify({ startedAt: uncleanAt - 5_000, status: "unclean", uncleanAt }),
+    );
+    captured.length = 0;
+    logBootLine({ dataDir: tempHome });
+
+    const warn = captured.find((c) => c.event === "previous_run_unclean");
+    expect(warn).toBeDefined();
+    expect(warn!.line.priorStatus).toBe("unclean");
+    expect(warn!.line.uncleanAt).toBe(uncleanAt);
+  });
 });
 
 describe("reportFatal", () => {

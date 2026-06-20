@@ -44,6 +44,17 @@ const MAX_RATE_LIMIT_ATTEMPTS = 3;
 const MAX_SERVER_ERROR_ATTEMPTS = 2;
 const SERVER_ERROR_BACKOFF_BASE_MS = 500;
 const SERVER_ERROR_BACKOFF_MAX_MS = 5_000;
+
+// The AI-SDK path exposes Retry-After via APICallError response headers
+// (extractRetryAfterMs). Codex-normalized ServerError/RateLimitError instead
+// carry the parsed hint as a numeric `retryAfterMs` property, so honor that too;
+// otherwise the bridge parses a header the retry loop never reads.
+function retryAfterFloorMs(err: unknown): number | null {
+  const fromHeaders = extractRetryAfterMs(err);
+  if (fromHeaders !== null) return fromHeaders;
+  const carried = (err as { retryAfterMs?: unknown }).retryAfterMs;
+  return typeof carried === "number" && Number.isFinite(carried) && carried > 0 ? carried : null;
+}
 const RATE_LIMIT_FALLBACK_BASE_MS = 5_000;
 const RATE_LIMIT_FALLBACK_MULTIPLIER = 2;
 const RATE_LIMIT_FALLBACK_MAX_MS = 30_000;
@@ -583,7 +594,7 @@ export class CoachAgent {
               // The server hint (if any) is a lower bound; absent one, fall back to a
               // capped exponential. Either feeds the primitive as the Retry-After
               // floor so the 120s ceiling and the clamp note are honored bit-for-bit.
-              const requestedMs = extractRetryAfterMs(err)
+              const requestedMs = retryAfterFloorMs(err)
                 ?? Math.min(
                      RATE_LIMIT_FALLBACK_BASE_MS * RATE_LIMIT_FALLBACK_MULTIPLIER ** (attemptNo - 1),
                      RATE_LIMIT_FALLBACK_MAX_MS,
@@ -634,7 +645,7 @@ export class CoachAgent {
               serverErrorAttempts < MAX_SERVER_ERROR_ATTEMPTS
             ) {
               serverErrorAttempts++;
-              const retryAfterFloor = extractRetryAfterMs(err);
+              const retryAfterFloor = retryAfterFloorMs(err);
               let retried = false;
               await retryWithBackoff(
                 async () => {
