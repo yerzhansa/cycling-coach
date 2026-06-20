@@ -7,6 +7,7 @@ docs/
 .idea/
 scripts/
 .claude
+.codex/
 CLAUDE.local.md
 .tests/
 .agents/

@@ -70,44 +70,25 @@ describe("Core is sport-agnostic — CoachAgent constructs and chats with a non-
   });
 
   it("constructs CoachAgent with stubRunningSport and round-trips a chat through a mocked codex LLM", async () => {
-    const model = {
-      id: "gpt-5.4",
-      name: "gpt-5.4",
-      api: "openai-codex-responses",
-      provider: "openai-codex",
-      baseUrl: "https://chatgpt.com/backend-api",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 272_000,
-      maxTokens: 128_000,
-    };
-
     const complete = vi.fn(async () => ({
-      role: "assistant" as const,
-      content: [{ type: "text" as const, text: "ack from running-coach" }],
-      api: "openai-codex-responses",
-      provider: "openai-codex",
-      model: "gpt-5.4",
+      text: "ack from running-coach",
+      toolCalls: [],
       usage: {
         input: 0,
         output: 0,
         cacheRead: 0,
         cacheWrite: 0,
         totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
       stopReason: "stop" as const,
-      timestamp: Date.now(),
     }));
 
-    vi.doMock("@mariozechner/pi-ai", () => ({
-      complete,
-      getModel: vi.fn(() => model),
+    vi.doMock("../src/agent/codex/responses.js", () => ({
+      codexResponses: complete,
     }));
-    vi.doMock("@mariozechner/pi-ai/oauth", () => ({
-      refreshOpenAICodexToken: vi.fn(),
-      loginOpenAICodex: vi.fn(),
+    vi.doMock("../src/agent/codex/oauth.js", () => ({
+      refreshCodexToken: vi.fn(),
+      loginCodex: vi.fn(),
     }));
     vi.doMock("../src/auth/profiles.js", () => ({
       getFreshToken: vi.fn(async () => "token"),

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { note, text, isCancel, log } from "@clack/prompts";
-import { loginOpenAICodex } from "@mariozechner/pi-ai/oauth";
+import { loginCodex } from "../agent/codex/oauth.js";
 import type { OAuthCredential } from "./profiles.js";
 
 const LOCAL_CALLBACK_FALLBACK_MS = 120_000;
@@ -43,7 +43,7 @@ async function promptForCode(message: string): Promise<string> {
 export async function runCodexLogin(): Promise<OAuthCredential> {
   const headless = isHeadless();
 
-  const creds = await loginOpenAICodex({
+  const creds = await loginCodex({
     originator: "cycling-coach",
     onAuth: ({ url }) => {
       if (headless) {

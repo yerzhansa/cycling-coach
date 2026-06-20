@@ -30,21 +30,16 @@ const FLUSH_MARKER = "reviewing a conversation to extract and save important ath
 
 function mkAssistant(text: string) {
   return {
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text }],
-    api: "openai-codex-responses",
-    provider: "openai-codex",
-    model: "gpt-5.4",
+    text,
+    toolCalls: [],
     usage: {
       input: 0,
       output: 0,
       cacheRead: 0,
       cacheWrite: 0,
       totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: "stop" as const,
-    timestamp: Date.now(),
   };
 }
 
@@ -53,26 +48,12 @@ function errored(code: string): NodeJS.ErrnoException {
 }
 
 async function setupAgent(complete: ReturnType<typeof vi.fn>) {
-  const model = {
-    id: "gpt-5.4",
-    name: "gpt-5.4",
-    api: "openai-codex-responses",
-    provider: "openai-codex",
-    baseUrl: "https://chatgpt.com/backend-api",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 272_000,
-    maxTokens: 128_000,
-  };
-
-  vi.doMock("@mariozechner/pi-ai", () => ({
-    complete,
-    getModel: vi.fn(() => model),
+  vi.doMock("../src/agent/codex/responses.js", () => ({
+    codexResponses: complete,
   }));
-  vi.doMock("@mariozechner/pi-ai/oauth", () => ({
-    refreshOpenAICodexToken: vi.fn(),
-    loginOpenAICodex: vi.fn(),
+  vi.doMock("../src/agent/codex/oauth.js", () => ({
+    refreshCodexToken: vi.fn(),
+    loginCodex: vi.fn(),
   }));
   vi.doMock("../src/auth/profiles.js", () => ({
     getFreshToken: vi.fn(async () => "token"),
@@ -88,8 +69,8 @@ async function setupAgent(complete: ReturnType<typeof vi.fn>) {
 }
 
 function happyComplete(reply: string) {
-  return vi.fn(async (_model: unknown, context: { systemPrompt?: string }) => {
-    const sys = context.systemPrompt ?? "";
+  return vi.fn(async (params: { system?: string }) => {
+    const sys = params.system ?? "";
     if (sys.includes(FLUSH_MARKER)) return mkAssistant("facts noted");
     if (sys.length === 0) return mkAssistant("summary");
     return mkAssistant(reply);

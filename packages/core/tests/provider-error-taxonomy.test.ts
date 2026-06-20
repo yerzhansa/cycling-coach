@@ -27,27 +27,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function setupAgent(complete: ReturnType<typeof vi.fn>) {
-  const model = {
-    id: "gpt-5.4",
-    name: "gpt-5.4",
-    api: "openai-codex-responses",
-    provider: "openai-codex",
-    baseUrl: "https://chatgpt.com/backend-api",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 272_000,
-    maxTokens: 128_000,
-  };
-
-  vi.doMock("@mariozechner/pi-ai", () => ({
-    complete,
-    getModel: vi.fn(() => model),
+// Drives the codex path: the in-house round-trip (codexResponses) is mocked.
+async function setupCodexAgent(complete: ReturnType<typeof vi.fn>) {
+  vi.doMock("../src/agent/codex/responses.js", () => ({
+    codexResponses: complete,
   }));
-  vi.doMock("@mariozechner/pi-ai/oauth", () => ({
-    refreshOpenAICodexToken: vi.fn(),
-    loginOpenAICodex: vi.fn(),
+  vi.doMock("../src/agent/codex/oauth.js", () => ({
+    refreshCodexToken: vi.fn(),
+    loginCodex: vi.fn(),
   }));
   vi.doMock("../src/auth/profiles.js", () => ({
     getFreshToken: vi.fn(async () => "token"),
@@ -60,23 +47,39 @@ async function setupAgent(complete: ReturnType<typeof vi.fn>) {
   return new CoachAgent(cyclingSport as unknown as Sport, baseAgentConfig(dataDir));
 }
 
+// Drives the AI-SDK path (anthropic provider): the `ai` generateText call is
+// mocked. Network errors on this path are plain (not name="NetworkError"), so the
+// outer loop retries them — unlike the codex path.
+async function setupAiSdkAgent(generateText: ReturnType<typeof vi.fn>) {
+  vi.doMock("ai", async () => {
+    const actual = await vi.importActual<typeof import("ai")>("ai");
+    return { ...actual, generateText };
+  });
+  const { CoachAgent } = await import("../src/agent/coach-agent.js");
+  const config = {
+    ...baseAgentConfig(dataDir),
+    llm: { provider: "anthropic" as const, model: "claude-sonnet-4-6", apiKey: "sk-test" },
+  };
+  return new CoachAgent(cyclingSport as unknown as Sport, config);
+}
+
 function mkAssistant(text: string) {
   return {
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text }],
-    api: "openai-codex-responses",
-    provider: "openai-codex",
-    model: "gpt-5.4",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    text,
+    toolCalls: [] as Array<{ id: string; name: string; arguments: Record<string, unknown> }>,
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
     stopReason: "stop" as const,
-    timestamp: Date.now(),
+  };
+}
+
+function aiSdkResult(text: string) {
+  return {
+    text,
+    toolCalls: [],
+    finishReason: "stop",
+    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    totalUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    steps: [{}],
   };
 }
 
@@ -99,7 +102,7 @@ describe("provider error taxonomy", () => {
     });
 
     vi.useFakeTimers();
-    const agent = await setupAgent(complete);
+    const agent = await setupCodexAgent(complete);
     const chatPromise = agent.chat("taxonomy-502", "hello");
     await vi.advanceTimersByTimeAsync(10_000);
     const text = await chatPromise;
@@ -111,24 +114,24 @@ describe("provider error taxonomy", () => {
 
   it("recovers an AI-SDK network error (ECONNREFUSED on .cause) in two attempts", async () => {
     let n = 0;
-    const complete = vi.fn(async () => {
+    const generateText = vi.fn(async () => {
       n++;
       if (n === 1) {
         const e = new TypeError("fetch failed");
         (e as Error & { cause?: unknown }).cause = { code: "ECONNREFUSED" };
         throw e;
       }
-      return mkAssistant("recovered-network");
+      return aiSdkResult("recovered-network");
     });
 
     vi.useFakeTimers();
-    const agent = await setupAgent(complete);
+    const agent = await setupAiSdkAgent(generateText);
     const chatPromise = agent.chat("taxonomy-network", "hello");
     await vi.advanceTimersByTimeAsync(10_000);
     const text = await chatPromise;
 
     expect(text).toBe("recovered-network");
-    expect(complete).toHaveBeenCalledTimes(2);
+    expect(generateText).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });
 
@@ -137,11 +140,9 @@ describe("provider error taxonomy", () => {
     const complete = vi.fn(async () => {
       n++;
       if (n === 1) {
-        // Mirror the bridge's marker error for a 5xx: message carries the marker,
-        // status is machine-readable so normalizeError splits it into ServerError.
-        const e = new Error("usage limit blocked client retry (status=503)") as Error & {
-          httpStatus?: number;
-        };
+        // The codex round-trip throws an httpStatus-carrying error on a 5xx;
+        // normalizeError splits it into ServerError via the status, not rate-limit.
+        const e = new Error("Server error (status=503)") as Error & { httpStatus?: number };
         e.httpStatus = 503;
         throw e;
       }
@@ -150,7 +151,7 @@ describe("provider error taxonomy", () => {
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.useFakeTimers();
-    const agent = await setupAgent(complete);
+    const agent = await setupCodexAgent(complete);
 
     const chatPromise = agent.chat("taxonomy-codex-5xx", "hello");
     // A short advance (under the 5s rate-limit base) suffices for the server-error backoff.
@@ -167,22 +168,19 @@ describe("provider error taxonomy", () => {
   });
 
   it("retries a codex network error at exactly one layer (no outer re-retry)", async () => {
-    // pi-ai exhausts its own internal retries before the throw surfaces (the
-    // bridge short-circuited it to one attempt and tagged it NetworkError), so
-    // the outer loop classifies it for logging but does NOT re-enter its network
-    // retry — network is retried at exactly one layer.
+    // The codex round-trip surfaces a raw thrown fetch (errno on the cause chain);
+    // normalizeError tags it NetworkError, so the outer loop classifies it for
+    // logging but does NOT re-enter its network retry — codex network is retried
+    // at exactly one layer.
     const complete = vi.fn(async () => {
-      const e = new Error("usage limit: fetch failed") as Error & {
-        isNetworkThrow?: boolean;
-        cause?: unknown;
-      };
-      e.isNetworkThrow = true;
-      e.cause = Object.assign(new Error("fetch failed"), { code: "ECONNRESET" });
+      const e = Object.assign(new TypeError("fetch failed"), {
+        cause: { code: "ECONNRESET" },
+      });
       throw e;
     });
 
     vi.useFakeTimers();
-    const agent = await setupAgent(complete);
+    const agent = await setupCodexAgent(complete);
     const settled = agent
       .chat("taxonomy-codex-network", "hello")
       .then((v) => ({ ok: true as const, value: v }), (err: unknown) => ({ ok: false as const, err }));

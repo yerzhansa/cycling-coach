@@ -8,7 +8,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { refreshOpenAICodexToken } from "@mariozechner/pi-ai/oauth";
+import { refreshCodexToken } from "../agent/codex/oauth.js";
 
 import { CONFIG_DIR } from "../config.js";
 
@@ -104,7 +104,7 @@ function delay(ms: number): Promise<void> {
 
 async function refreshWithRetry(name: string, cred: OAuthCredential) {
   try {
-    return await refreshOpenAICodexToken(cred.refresh);
+    return await refreshCodexToken(cred.refresh);
   } catch (err) {
     if (!isRefreshDenied(err)) throw err;
     // pi-ai reports invalid_grant, 5xx, and network failures with one generic
@@ -113,7 +113,7 @@ async function refreshWithRetry(name: string, cred: OAuthCredential) {
     await delay(REFRESH_RETRY_DELAY_MS);
     const onDisk = loadProfile(name) ?? cred;
     try {
-      return await refreshOpenAICodexToken(onDisk.refresh);
+      return await refreshCodexToken(onDisk.refresh);
     } catch (retryErr) {
       if (isRefreshDenied(retryErr)) {
         throw new RefreshTokenReusedError(name, retryErr);

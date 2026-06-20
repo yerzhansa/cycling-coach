@@ -1,175 +1,61 @@
 import { asSchema, safeValidateTypes } from "@ai-sdk/provider-utils";
-import { complete, getModel } from "@mariozechner/pi-ai";
-import type {
-  AssistantMessage,
-  Context,
-  Message as PiMessage,
-  StopReason,
-  TextContent,
-  Tool as PiTool,
-  ToolCall as PiToolCall,
-  ToolResultMessage,
-  Usage as PiUsage,
-} from "@mariozechner/pi-ai";
-import type {
-  FinishReason,
-  LanguageModelUsage,
-  ModelMessage,
-  ToolSet,
-} from "ai";
+import type { FinishReason, LanguageModelUsage, ModelMessage, ToolSet } from "ai";
 
 import { getFreshToken } from "../auth/profiles.js";
 import type { GenerateOpts, GenerateResult } from "../llm-types.js";
+import { isNetworkError } from "./token-utils.js";
+import { codexResponses } from "./codex/responses.js";
+import type { CodexResponsesResult, CodexStopReason, CodexToolCall, CodexUsage } from "./codex/responses.js";
+import { PRICE_TABLE, priceUsage } from "./codex/cost.js";
 
 const DEFAULT_STEP_LIMIT = 10;
 
-// Pi-ai's codex provider has its own internal retry loop with two branches, and
-// our outer retry loop in agent/coach-agent.ts owns backoff for both:
-//   - Status-code path: a non-OK response (429/5xx) calls onResponse; throwing an
-//     Error whose message contains PI_AI_NO_RETRY_MARKER makes pi-ai's status-code
-//     retry guard stop after one attempt, so the failure surfaces immediately.
-//   - Network-throw path: a thrown fetch (DNS/connection failure, socket reset)
-//     skips onResponse entirely, so the bridge wraps the runtime fetch for the
-//     duration of the complete() call to rethrow network throws carrying the same
-//     marker — short-circuiting pi-ai's internal network-retry loop at one attempt
-//     so the network class is retried at exactly one (outer) layer.
-// Do not rephrase the marker without verifying the library still honors it.
-const RETRYABLE_HTTP_STATUSES = new Set([429, 500, 502, 503, 504]);
 const SERVER_ERROR_HTTP_STATUSES = new Set([500, 502, 503, 504]);
-export const PI_AI_NO_RETRY_MARKER = "usage limit";
-
-function parseRetryAfterMs(headers: Record<string, string> | undefined): number | undefined {
-  if (!headers) return undefined;
-  const msHeader = headers["retry-after-ms"];
-  if (msHeader) {
-    const ms = parseInt(msHeader, 10);
-    if (Number.isFinite(ms) && ms > 0) return ms;
-  }
-  const secHeader = headers["retry-after"];
-  if (secHeader) {
-    const secs = parseInt(secHeader, 10);
-    if (Number.isFinite(secs) && secs > 0) return secs * 1000;
-  }
-  return undefined;
-}
-
-const onCodexResponse = async ({
-  status,
-  headers,
-}: {
-  status: number;
-  headers?: Record<string, string>;
-}): Promise<void> => {
-  if (RETRYABLE_HTTP_STATUSES.has(status)) {
-    const e = new Error(`${PI_AI_NO_RETRY_MARKER} blocked client retry (status=${status})`) as Error & {
-      httpStatus?: number;
-      retryAfterMs?: number;
-    };
-    e.httpStatus = status;
-    const retryAfterMs = parseRetryAfterMs(headers);
-    if (retryAfterMs !== undefined) e.retryAfterMs = retryAfterMs;
-    throw e;
-  }
-};
-
-// ============================================================================
-// NETWORK-THROW ESCAPE
-// ============================================================================
-
-type NetworkThrowError = Error & { isNetworkThrow?: boolean };
-
-// Rewrites a thrown fetch (network error, no Response) so its message begins
-// with PI_AI_NO_RETRY_MARKER, making pi-ai's `!message.includes("usage limit")`
-// network-retry guard false — the library stops after one attempt and the single
-// outer loop owns the network class. The original message and cause are
-// preserved so the outer classifier still reads it as a network error.
-export function markNetworkThrow(err: unknown): NetworkThrowError {
-  if (err instanceof Error && (err as NetworkThrowError).isNetworkThrow) {
-    return err as NetworkThrowError;
-  }
-  const original = err instanceof Error ? err : new Error(String(err));
-  const out = new Error(`${PI_AI_NO_RETRY_MARKER}: ${original.message}`) as NetworkThrowError;
-  out.isNetworkThrow = true;
-  out.cause = original.cause ?? original;
-  return out;
-}
-
-// The library exposes no fetch-injection option on 0.67.6, so the network-throw
-// escape is realized at the runtime-global seam: globalThis.fetch is wrapped for
-// the duration of one complete() call and restored after. Concurrent per-chatId
-// turns can overlap the swap, so installs are ref-counted and restore to the
-// captured original; the marker rethrow is idempotent (no double-prefix).
-let originalFetch: typeof globalThis.fetch | undefined;
-let fetchWrapInstalls = 0;
-
-async function withNetworkErrorMarker<T>(fn: () => Promise<T>): Promise<T> {
-  if (fetchWrapInstalls === 0) {
-    originalFetch = globalThis.fetch;
-    const captured = originalFetch;
-    globalThis.fetch = async (...args: Parameters<typeof fetch>): Promise<Response> => {
-      try {
-        return await captured(...args);
-      } catch (err) {
-        throw markNetworkThrow(err);
-      }
-    };
-  }
-  fetchWrapInstalls++;
-  try {
-    return await fn();
-  } finally {
-    fetchWrapInstalls--;
-    if (fetchWrapInstalls === 0 && originalFetch !== undefined) {
-      globalThis.fetch = originalFetch;
-      originalFetch = undefined;
-    }
-  }
-}
 
 // ============================================================================
 // ERROR NORMALIZATION
 // ============================================================================
 
 /**
- * Pi-ai throws plain Error instances with human messages. Our retry loop in
- * agent/coach-agent.ts relies on token-utils predicates that look for specific
- * substrings. Rewrite the message so those predicates trigger correctly without
- * having to teach them about pi-ai's error surface.
+ * The codex path throws plain Errors with human messages (plus an httpStatus /
+ * retryAfterMs carrier on HTTP failures, and an errno cause chain on network
+ * throws). Our retry loop in agent/coach-agent.ts relies on the token-utils
+ * predicates, which key off err.name and message substrings. Rewrite the error
+ * so those predicates trigger without teaching them about the codex surface.
  */
 export function normalizeError(err: unknown): Error {
   if (!(err instanceof Error)) return new Error(String(err));
   const msg = err.message ?? "";
   const lower = msg.toLowerCase();
+  const carried = err as Error & { httpStatus?: number; retryAfterMs?: number };
 
-  // A thrown fetch (no response) is a network failure, not a rate limit, even
-  // when the wrapper tags it with the no-retry marker. Classify it as network
-  // (the cause-chain walk reads the preserved errno) BEFORE the marker matches
-  // the rate-limit pattern below.
-  const carried = err as Error & { httpStatus?: number; isNetworkThrow?: boolean };
-  if (carried.isNetworkThrow) {
+  // A thrown fetch (no Response) is a network failure — the errno lives on the
+  // cause chain. Classify it first so an ETIMEDOUT connection error routes as
+  // network (matching how it classified before the provider library was owned),
+  // and so the outer loop's NetworkError guard still recognizes it.
+  if (isNetworkError(err)) {
     const out = new Error(msg) as Error & { cause?: unknown };
     out.name = "NetworkError";
     out.cause = err.cause ?? err;
     return out;
   }
 
-  // A transient 5xx must take the short server-error backoff, not the 5-35s
-  // rate-limit ramp — so split it out into a ServerError class before the
-  // rate-limit pattern (which the carried "usage limit" marker would match).
+  // A transient 5xx must take the short server-error backoff, not the rate-limit
+  // ramp — split it out before the rate-limit pattern.
   const status = carried.httpStatus;
   if (status !== undefined && SERVER_ERROR_HTTP_STATUSES.has(status)) {
     const out = new Error(`Server error: ${msg}`) as Error & { retryAfterMs?: number };
     out.name = "ServerError";
-    const retryAfterMs = (err as { retryAfterMs?: number }).retryAfterMs;
-    if (retryAfterMs !== undefined) out.retryAfterMs = retryAfterMs;
+    if (carried.retryAfterMs !== undefined) out.retryAfterMs = carried.retryAfterMs;
     return out;
   }
 
-  if (/usage.?limit|rate.?limit|too many requests|429/i.test(msg)) {
+  // 429 / usage limit → rate limit. The httpStatus check covers an opaque-body
+  // 429; the regex covers the ChatGPT usage-limit friendly message.
+  if (carried.httpStatus === 429 || /usage.?limit|rate.?limit|too many requests|429/i.test(msg)) {
     const out = new Error(`Rate limit exceeded: ${msg}`) as Error & { retryAfterMs?: number };
     out.name = "RateLimitError";
-    const retryAfterMs = (err as { retryAfterMs?: number }).retryAfterMs;
-    if (retryAfterMs !== undefined) out.retryAfterMs = retryAfterMs;
+    if (carried.retryAfterMs !== undefined) out.retryAfterMs = carried.retryAfterMs;
     return out;
   }
 
@@ -193,138 +79,10 @@ export function normalizeError(err: unknown): Error {
 }
 
 // ============================================================================
-// MESSAGE CONVERSION: AI SDK ModelMessage[] → pi-ai Context
+// RESULT MAPPING
 // ============================================================================
 
-function extractText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((part) => {
-      if (typeof part === "string") return part;
-      if (part && typeof part === "object" && "type" in part) {
-        const p = part as { type: string; text?: string };
-        if (p.type === "text" && typeof p.text === "string") return p.text;
-      }
-      return "";
-    })
-    .join("");
-}
-
-function convertMessages(messages: ModelMessage[]): PiMessage[] {
-  const out: PiMessage[] = [];
-
-  for (const m of messages) {
-    if (m.role === "system") {
-      // System is carried separately on Context; ignore here.
-      continue;
-    }
-
-    if (m.role === "user") {
-      out.push({
-        role: "user",
-        content: extractText(m.content),
-        timestamp: Date.now(),
-      });
-      continue;
-    }
-
-    if (m.role === "assistant") {
-      const parts: (TextContent | PiToolCall)[] = [];
-      if (typeof m.content === "string") {
-        if (m.content) parts.push({ type: "text", text: m.content });
-      } else if (Array.isArray(m.content)) {
-        for (const p of m.content) {
-          if (p.type === "text" && p.text) {
-            parts.push({ type: "text", text: p.text });
-          } else if (p.type === "tool-call") {
-            parts.push({
-              type: "toolCall",
-              id: p.toolCallId,
-              name: p.toolName,
-              arguments: (p.input ?? {}) as Record<string, unknown>,
-            });
-          }
-        }
-      }
-      out.push({
-        role: "assistant",
-        content: parts,
-        api: "openai-codex-responses",
-        provider: "openai-codex",
-        model: "",
-        usage: emptyUsage(),
-        stopReason: "stop",
-        timestamp: Date.now(),
-      });
-      continue;
-    }
-
-    if (m.role === "tool") {
-      if (!Array.isArray(m.content)) continue;
-      for (const p of m.content) {
-        if (p.type !== "tool-result") continue;
-        out.push({
-          role: "toolResult",
-          toolCallId: p.toolCallId,
-          toolName: p.toolName,
-          content: [{ type: "text", text: stringifyToolOutput(p.output) }],
-          isError: false,
-          timestamp: Date.now(),
-        });
-      }
-    }
-  }
-
-  return out;
-}
-
-function stringifyToolOutput(output: unknown): string {
-  if (output && typeof output === "object" && "type" in output) {
-    const o = output as { type: string; value?: unknown };
-    if (o.type === "text" && typeof o.value === "string") return o.value;
-    if (o.type === "error-text" && typeof o.value === "string") return o.value;
-    if (o.type === "json") return JSON.stringify(o.value);
-    if (o.type === "error-json") return JSON.stringify(o.value);
-  }
-  return typeof output === "string" ? output : JSON.stringify(output);
-}
-
-function emptyUsage(): PiUsage {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-}
-
-// ============================================================================
-// TOOL CONVERSION: AI SDK ToolSet → pi-ai Tool[]
-// ============================================================================
-
-async function convertTools(tools: ToolSet | undefined): Promise<PiTool[]> {
-  if (!tools) return [];
-  const out: PiTool[] = [];
-  for (const [name, t] of Object.entries(tools)) {
-    const schema = asSchema(t.inputSchema);
-    const json = await Promise.resolve(schema.jsonSchema);
-    out.push({
-      name,
-      description: t.description ?? "",
-      parameters: json as PiTool["parameters"],
-    });
-  }
-  return out;
-}
-
-// ============================================================================
-// RESULT CONVERSION: pi-ai AssistantMessage → AI SDK GenerateResult
-// ============================================================================
-
-function mapStopReason(reason: StopReason): FinishReason {
+function mapStopReason(reason: CodexStopReason): FinishReason {
   switch (reason) {
     case "stop":
       return "stop";
@@ -332,8 +90,6 @@ function mapStopReason(reason: StopReason): FinishReason {
       return "length";
     case "toolUse":
       return "tool-calls";
-    case "aborted":
-      return "other";
     case "error":
       return "error";
     default:
@@ -341,24 +97,21 @@ function mapStopReason(reason: StopReason): FinishReason {
   }
 }
 
-function addUsage(acc: PiUsage, u: PiUsage): PiUsage {
+function emptyTokens(): CodexUsage {
+  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 };
+}
+
+function addTokens(acc: CodexUsage, u: CodexUsage): CodexUsage {
   return {
     input: acc.input + u.input,
     output: acc.output + u.output,
     cacheRead: acc.cacheRead + u.cacheRead,
     cacheWrite: acc.cacheWrite + u.cacheWrite,
     totalTokens: acc.totalTokens + u.totalTokens,
-    cost: {
-      input: acc.cost.input + u.cost.input,
-      output: acc.cost.output + u.cost.output,
-      cacheRead: acc.cost.cacheRead + u.cost.cacheRead,
-      cacheWrite: acc.cost.cacheWrite + u.cost.cacheWrite,
-      total: acc.cost.total + u.cost.total,
-    },
   };
 }
 
-function mapUsage(u: PiUsage): LanguageModelUsage {
+function mapUsage(u: CodexUsage): LanguageModelUsage {
   return {
     inputTokens: u.input,
     outputTokens: u.output,
@@ -378,37 +131,33 @@ function mapUsage(u: PiUsage): LanguageModelUsage {
   } as unknown as LanguageModelUsage;
 }
 
-function collectText(msg: AssistantMessage): string {
-  return msg.content
-    .filter((b): b is TextContent => b.type === "text")
-    .map((b) => b.text)
-    .join("");
-}
-
-function collectToolCalls(msg: AssistantMessage): PiToolCall[] {
-  return msg.content.filter((b): b is PiToolCall => b.type === "toolCall");
+// Codex accepts model ids (e.g. "pro") that are not in the price catalog;
+// upstream fell back to the gpt-5.4 template for those, so price unknown codex
+// ids at gpt-5.4 rates rather than dropping to undefined.
+function resolveCodexPriceId(modelId: string): string {
+  return PRICE_TABLE["openai-codex"]?.[modelId] ? modelId : "gpt-5.4";
 }
 
 // ============================================================================
 // TOOL EXECUTION
 // ============================================================================
 
+interface ToolResultPart {
+  type: "tool-result";
+  toolCallId: string;
+  toolName: string;
+  output: { type: "text" | "error-text"; value: string };
+}
+
 async function executeToolCall(
-  call: PiToolCall,
+  call: CodexToolCall,
   tools: ToolSet,
   messages: ModelMessage[],
   abortSignal?: AbortSignal,
-): Promise<ToolResultMessage> {
+): Promise<ToolResultPart> {
   const tool = tools[call.name];
   if (!tool || typeof tool.execute !== "function") {
-    return {
-      role: "toolResult",
-      toolCallId: call.id,
-      toolName: call.name,
-      content: [{ type: "text", text: `Tool "${call.name}" not found` }],
-      isError: true,
-      timestamp: Date.now(),
-    };
+    return errorResult(call, `Tool "${call.name}" not found`);
   }
 
   const validation = await safeValidateTypes({
@@ -416,19 +165,7 @@ async function executeToolCall(
     schema: asSchema(tool.inputSchema),
   });
   if (!validation.success) {
-    return {
-      role: "toolResult",
-      toolCallId: call.id,
-      toolName: call.name,
-      content: [
-        {
-          type: "text",
-          text: `Invalid arguments for tool "${call.name}": ${validation.error.message}`,
-        },
-      ],
-      isError: true,
-      timestamp: Date.now(),
-    };
+    return errorResult(call, `Invalid arguments for tool "${call.name}": ${validation.error.message}`);
   }
 
   try {
@@ -438,23 +175,23 @@ async function executeToolCall(
       abortSignal,
     });
     return {
-      role: "toolResult",
+      type: "tool-result",
       toolCallId: call.id,
       toolName: call.name,
-      content: [{ type: "text", text: typeof result === "string" ? result : JSON.stringify(result) }],
-      isError: false,
-      timestamp: Date.now(),
+      output: { type: "text", value: typeof result === "string" ? result : JSON.stringify(result) },
     };
   } catch (err) {
-    return {
-      role: "toolResult",
-      toolCallId: call.id,
-      toolName: call.name,
-      content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }],
-      isError: true,
-      timestamp: Date.now(),
-    };
+    return errorResult(call, err instanceof Error ? err.message : String(err));
   }
+}
+
+function errorResult(call: CodexToolCall, message: string): ToolResultPart {
+  return {
+    type: "tool-result",
+    toolCallId: call.id,
+    toolName: call.name,
+    output: { type: "error-text", value: message },
+  };
 }
 
 // ============================================================================
@@ -464,106 +201,86 @@ async function executeToolCall(
 export async function codexGenerateText(
   opts: GenerateOpts & { modelId: string; profileName: string; stepLimit?: number },
 ): Promise<GenerateResult> {
-  const { system, messages, prompt, tools, modelId, profileName, maxOutputTokens, stepLimit, cacheKey } = opts;
+  const { system, messages, prompt, tools, modelId, profileName, stepLimit, cacheKey } = opts;
 
   const initialMessages: ModelMessage[] = prompt
     ? [{ role: "user", content: prompt }]
     : (messages ?? []);
 
-  const piTools = await convertTools(tools);
-
-  const model = getModelOrThrow(modelId);
   const limit = stepLimit ?? DEFAULT_STEP_LIMIT;
 
-  const piMessages: PiMessage[] = convertMessages(initialMessages);
-
   // Fetch the token once per request. The step loop runs well within the
-  // 5-minute refresh threshold and pi-ai's internal retries are already
-  // short-circuited, so a refresh during the loop is not a concern.
-  const apiKey = await getFreshToken(profileName);
+  // 5-minute refresh threshold, so a refresh mid-loop is not a concern.
+  const accessToken = await getFreshToken(profileName);
 
-  let lastAssistant: AssistantMessage | undefined;
-  let accumulated = emptyUsage();
+  const toToolCallPart = (tc: CodexToolCall) => ({
+    type: "tool-call" as const,
+    toolCallId: tc.id,
+    toolName: tc.name,
+    input: tc.arguments,
+  });
+
+  const convo: ModelMessage[] = [...initialMessages];
+  let lastResult: CodexResponsesResult | undefined;
+  let accumulated = emptyTokens();
   let stepCount = 0;
 
   for (let step = 0; step < limit; step++) {
-    const context: Context = {
-      systemPrompt: system,
-      messages: piMessages,
-      tools: piTools,
-    };
-
-    let assistant: AssistantMessage;
+    let result: CodexResponsesResult;
     try {
-      assistant = await withNetworkErrorMarker(() =>
-        complete(model, context, {
-          apiKey,
-          maxTokens: maxOutputTokens,
-          onResponse: onCodexResponse,
-          sessionId: cacheKey,
-        }),
-      );
+      result = await codexResponses({
+        modelId,
+        system,
+        messages: convo,
+        tools,
+        accessToken,
+        sessionId: cacheKey,
+      });
     } catch (err) {
       throw normalizeError(err);
     }
 
-    if (assistant.stopReason === "error" || assistant.stopReason === "aborted") {
-      throw normalizeError(new Error(assistant.errorMessage ?? "Codex request failed"));
+    if (result.stopReason === "error") {
+      throw normalizeError(new Error(result.errorMessage ?? "Codex request failed"));
     }
 
-    lastAssistant = assistant;
-    accumulated = addUsage(accumulated, assistant.usage);
+    lastResult = result;
+    accumulated = addTokens(accumulated, result.usage);
     stepCount++;
-    piMessages.push(assistant);
 
-    const calls = collectToolCalls(assistant);
-    if (calls.length === 0 || assistant.stopReason !== "toolUse") {
-      break;
-    }
+    const assistantContent: Array<
+      | { type: "text"; text: string }
+      | { type: "tool-call"; toolCallId: string; toolName: string; input: unknown }
+    > = [];
+    if (result.text) assistantContent.push({ type: "text", text: result.text });
+    assistantContent.push(...result.toolCalls.map(toToolCallPart));
+    convo.push({ role: "assistant", content: assistantContent } as ModelMessage);
 
+    const calls = result.toolCalls;
+    if (calls.length === 0 || result.stopReason !== "toolUse") break;
     if (!tools) break;
 
-    // Run tool calls in parallel to match AI SDK behavior; Promise.all
-    // preserves result order so the pi-ai context stays aligned.
+    // Run tool calls in parallel to match AI SDK behavior; Promise.all preserves
+    // order so the conversation stays aligned.
     const results = await Promise.all(
       calls.map((call) => executeToolCall(call, tools, initialMessages)),
     );
-    for (const result of results) piMessages.push(result);
+    convo.push({ role: "tool", content: results } as ModelMessage);
   }
 
-  if (!lastAssistant) {
+  if (!lastResult) {
     throw new Error("Codex completion returned no assistant message");
   }
 
-  const toolCalls = collectToolCalls(lastAssistant).map((c) => ({
-    type: "tool-call" as const,
-    toolCallId: c.id,
-    toolName: c.name,
-    input: c.arguments,
-  }));
+  const toolCalls = lastResult.toolCalls.map(toToolCallPart);
 
   return {
-    text: collectText(lastAssistant),
+    text: lastResult.text,
     toolCalls: toolCalls as GenerateResult["toolCalls"],
-    finishReason: mapStopReason(lastAssistant.stopReason),
-    usage: mapUsage(lastAssistant.usage),
+    finishReason: mapStopReason(lastResult.stopReason),
+    usage: mapUsage(lastResult.usage),
     totalUsage: mapUsage(accumulated),
     steps: stepCount,
-    cost: accumulated.cost,
+    cost: priceUsage("openai-codex", resolveCodexPriceId(modelId), accumulated),
   };
 }
-
-// ============================================================================
-// MODEL RESOLUTION
-// ============================================================================
-
-function getModelOrThrow(modelId: string) {
-  // Fall back to gpt-5.4 template for IDs not in pi-ai's catalog (e.g. pro).
-  try {
-    return getModel("openai-codex", modelId as "gpt-5.4");
-  } catch {
-    const fallback = getModel("openai-codex", "gpt-5.4");
-    return { ...fallback, id: modelId, name: modelId };
-  }
-}
-

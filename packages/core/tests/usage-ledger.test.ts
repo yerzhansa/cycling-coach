@@ -247,10 +247,11 @@ describe("LLM.generate — AI-SDK path", () => {
     expect(parsed.steps).toBe(2);
   });
 
-  it("prices the generate line from the model catalog when the model is catalogued", async () => {
-    const { getModels } = await import("@mariozechner/pi-ai");
-    const known = getModels("anthropic").find((m) => m.cost.input > 0);
+  it("prices the generate line from the price table when the model is catalogued", async () => {
+    const { PRICE_TABLE } = await import("../src/agent/codex/cost.js");
+    const known = Object.entries(PRICE_TABLE.anthropic).find(([, c]) => c.input > 0);
     if (!known) throw new Error("expected at least one priced anthropic model in the catalog");
+    const [knownId, knownCost] = known;
 
     const { LLM } = await loadLLMWithGenerateText({
       text: "ok",
@@ -260,7 +261,7 @@ describe("LLM.generate — AI-SDK path", () => {
       totalUsage: { inputTokens: 1_000_000, outputTokens: 0, totalTokens: 1_000_000 },
       steps: [{ s: "a" }],
     });
-    const config: Config = { ...anthropicConfig(dir), llm: { provider: "anthropic", model: known.id, apiKey: "sk-test" } };
+    const config: Config = { ...anthropicConfig(dir), llm: { provider: "anthropic", model: knownId, apiKey: "sk-test" } };
     const llm = new LLM(config);
 
     await llm.generate({ prompt: "hi", caller: "chat" });
@@ -268,8 +269,8 @@ describe("LLM.generate — AI-SDK path", () => {
     const parsed = JSON.parse(readLines(dir)[0]) as UsageLedgerLine;
     expect(parsed.cost).toBeDefined();
     // 1,000,000 input tokens at a per-million-token rate equals exactly that rate.
-    expect(parsed.cost?.input).toBeCloseTo(known.cost.input, 10);
-    expect(parsed.cost?.total).toBeCloseTo(known.cost.input, 10);
+    expect(parsed.cost?.input).toBeCloseTo(knownCost.input, 10);
+    expect(parsed.cost?.total).toBeCloseTo(knownCost.input, 10);
   });
 
   it("leaves cost undefined when the model is not in the catalog", async () => {
@@ -291,46 +292,29 @@ describe("LLM.generate — AI-SDK path", () => {
 });
 
 describe("codex bridge — usage accumulation across the loop", () => {
-  function piUsage(input: number, output: number, cost = 0) {
-    return {
-      input,
-      output,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: input + output,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
-    };
+  function tokens(input: number, output: number) {
+    return { input, output, cacheRead: 0, cacheWrite: 0, totalTokens: input + output };
   }
 
-  function asstMsg(overrides: Record<string, unknown> = {}) {
+  function asstMsg(
+    overrides: {
+      text?: string;
+      toolCalls?: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
+      usage?: ReturnType<typeof tokens>;
+      stopReason?: "stop" | "length" | "toolUse" | "error";
+    } = {},
+  ) {
     return {
-      role: "assistant" as const,
-      content: [{ type: "text" as const, text: "hi" }],
-      api: "openai-codex-responses",
-      provider: "openai-codex",
-      model: "gpt-5.4",
-      usage: piUsage(10, 5),
-      stopReason: "stop" as const,
-      timestamp: 1,
-      ...overrides,
+      text: overrides.text ?? "hi",
+      toolCalls: overrides.toolCalls ?? [],
+      usage: overrides.usage ?? tokens(10, 5),
+      stopReason: overrides.stopReason ?? "stop",
     };
   }
 
   async function loadBridge(complete: ReturnType<typeof vi.fn>) {
-    vi.doMock("@mariozechner/pi-ai", () => ({
-      complete,
-      getModel: vi.fn(() => ({
-        id: "gpt-5.4",
-        name: "gpt-5.4",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
-        baseUrl: "https://chatgpt.com/backend-api",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 272_000,
-        maxTokens: 128_000,
-      })),
+    vi.doMock("../src/agent/codex/responses.js", () => ({
+      codexResponses: complete,
     }));
     vi.doMock("../src/auth/profiles.js", () => ({
       getFreshToken: vi.fn(async () => "test-access-token"),
@@ -343,10 +327,10 @@ describe("codex bridge — usage accumulation across the loop", () => {
     const calls = [
       asstMsg({
         stopReason: "toolUse",
-        usage: piUsage(10, 5),
-        content: [{ type: "toolCall", id: "c1", name: "noop", arguments: {} }],
+        usage: tokens(10, 5),
+        toolCalls: [{ id: "c1", name: "noop", arguments: {} }],
       }),
-      asstMsg({ stopReason: "stop", usage: piUsage(20, 7) }),
+      asstMsg({ stopReason: "stop", usage: tokens(20, 7) }),
     ];
     let i = 0;
     const complete = vi.fn(async () => calls[i++]);
@@ -364,8 +348,8 @@ describe("codex bridge — usage accumulation across the loop", () => {
     expect(result.usage.inputTokens).toBe(20);
   });
 
-  it("carries pi-ai's per-call cost object on the result", async () => {
-    const complete = vi.fn(async () => asstMsg({ usage: piUsage(10, 5, 0.03) }));
+  it("computes the result cost from the codex price table (gpt-5.4 rates)", async () => {
+    const complete = vi.fn(async () => asstMsg({ usage: tokens(10, 5) }));
     const codexGenerateText = await loadBridge(complete);
 
     const result = await codexGenerateText({
@@ -374,7 +358,8 @@ describe("codex bridge — usage accumulation across the loop", () => {
       profileName: "openai-codex",
     });
 
-    expect(result.cost?.total).toBe(0.03);
+    // gpt-5.4: input 2.5, output 15 per 1e6 tokens → (2.5*10 + 15*5)/1e6 = 0.0001.
+    expect(result.cost?.total).toBeCloseTo(0.0001, 12);
   });
 });
 
@@ -431,50 +416,26 @@ describe("turn line — winning generation usage and cost", () => {
     vi.restoreAllMocks();
   });
 
-  function piUsage(input: number, output: number, cost = 0) {
-    return {
-      input,
-      output,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: input + output,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
-    };
+  function tokens(input: number, output: number) {
+    return { input, output, cacheRead: 0, cacheWrite: 0, totalTokens: input + output };
   }
 
-  function mkAssistant(text: string, usage = piUsage(0, 0)) {
+  function mkAssistant(text: string, usage = tokens(0, 0)) {
     return {
-      role: "assistant" as const,
-      content: [{ type: "text" as const, text }],
-      api: "openai-codex-responses",
-      provider: "openai-codex",
-      model: "gpt-5.4",
+      text,
+      toolCalls: [] as Array<{ id: string; name: string; arguments: Record<string, unknown> }>,
       usage,
       stopReason: "stop" as const,
-      timestamp: Date.now(),
     };
   }
 
   async function setupAgent(complete: ReturnType<typeof vi.fn>) {
-    const model = {
-      id: "gpt-5.4",
-      name: "gpt-5.4",
-      api: "openai-codex-responses",
-      provider: "openai-codex",
-      baseUrl: "https://chatgpt.com/backend-api",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 272_000,
-      maxTokens: 128_000,
-    };
-    vi.doMock("@mariozechner/pi-ai", () => ({
-      complete,
-      getModel: vi.fn(() => model),
+    vi.doMock("../src/agent/codex/responses.js", () => ({
+      codexResponses: complete,
     }));
-    vi.doMock("@mariozechner/pi-ai/oauth", () => ({
-      refreshOpenAICodexToken: vi.fn(),
-      loginOpenAICodex: vi.fn(),
+    vi.doMock("../src/agent/codex/oauth.js", () => ({
+      refreshCodexToken: vi.fn(),
+      loginCodex: vi.fn(),
     }));
     vi.doMock("../src/auth/profiles.js", () => ({
       getFreshToken: vi.fn(async () => "token"),
@@ -495,7 +456,7 @@ describe("turn line — winning generation usage and cost", () => {
         throw new Error("Request exceeds the maximum context length of 272000 tokens");
       }
       // The winning retry carries the figures the turn line must report.
-      return mkAssistant("recovered", piUsage(30, 12, 0.03));
+      return mkAssistant("recovered", tokens(30, 12));
     });
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const agent = await setupAgent(complete);
@@ -510,7 +471,8 @@ describe("turn line — winning generation usage and cost", () => {
     expect(turnLine?.inputTokens).toBe(30);
     expect(turnLine?.outputTokens).toBe(12);
     expect(turnLine?.totalTokens).toBe(42);
-    expect(turnLine?.cost?.total).toBe(0.03);
+    // Computed from the codex price table: (2.5*30 + 15*12)/1e6 = 0.000255.
+    expect(turnLine?.cost?.total).toBeCloseTo(0.000255, 12);
     expect(turnLine?.templateHash).toMatch(/^[0-9a-f]{16}$/);
   });
 });

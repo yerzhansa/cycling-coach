@@ -53,10 +53,7 @@
       "esbuild",
       "msw",
       "protobufjs"
-    ],
-    "patchedDependencies": {
-      "@mariozechner/pi-ai@0.67.6": "patches/@mariozechner__pi-ai@0.67.6.patch"
-    }
+    ]
   },
   "license": "MIT",
   "repository": {

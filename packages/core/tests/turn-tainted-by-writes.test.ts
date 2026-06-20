@@ -34,25 +34,19 @@ function mkAssistant(opts: {
   toolCall?: { id: string; name: string; arguments: Record<string, unknown> };
   stopReason?: "stop" | "toolUse";
 }) {
-  const content = opts.toolCall
-    ? [{ type: "toolCall" as const, id: opts.toolCall.id, name: opts.toolCall.name, arguments: opts.toolCall.arguments }]
-    : [{ type: "text" as const, text: opts.text ?? "" }];
   return {
-    role: "assistant" as const,
-    content,
-    api: "openai-codex-responses",
-    provider: "openai-codex",
-    model: "gpt-5.4",
+    text: opts.toolCall ? "" : opts.text ?? "",
+    toolCalls: opts.toolCall
+      ? [{ id: opts.toolCall.id, name: opts.toolCall.name, arguments: opts.toolCall.arguments }]
+      : [],
     usage: {
       input: 0,
       output: 0,
       cacheRead: 0,
       cacheWrite: 0,
       totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: opts.stopReason ?? "stop",
-    timestamp: Date.now(),
   };
 }
 
@@ -64,26 +58,12 @@ function intervalsConfig() {
 }
 
 async function setupAgent(complete: ReturnType<typeof vi.fn>) {
-  const model = {
-    id: "gpt-5.4",
-    name: "gpt-5.4",
-    api: "openai-codex-responses",
-    provider: "openai-codex",
-    baseUrl: "https://chatgpt.com/backend-api",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 272_000,
-    maxTokens: 128_000,
-  };
-
-  vi.doMock("@mariozechner/pi-ai", () => ({
-    complete,
-    getModel: vi.fn(() => model),
+  vi.doMock("../src/agent/codex/responses.js", () => ({
+    codexResponses: complete,
   }));
-  vi.doMock("@mariozechner/pi-ai/oauth", () => ({
-    refreshOpenAICodexToken: vi.fn(),
-    loginOpenAICodex: vi.fn(),
+  vi.doMock("../src/agent/codex/oauth.js", () => ({
+    refreshCodexToken: vi.fn(),
+    loginCodex: vi.fn(),
   }));
   vi.doMock("../src/auth/profiles.js", () => ({
     getFreshToken: vi.fn(async () => "token"),
@@ -111,16 +91,16 @@ describe("tainted-by-writes refusal", () => {
     try {
       let mainTurns = 0;
       let secondMainAfterWrite = false;
-      const complete = vi.fn(async (_model: unknown, context: { systemPrompt?: string }, _opts: unknown) => {
-        const sys = context.systemPrompt ?? "";
+      const complete = vi.fn(async (params: { system?: string }) => {
+        const sys = params.system ?? "";
         if (sys.includes(FLUSH_MARKER)) return mkAssistant({ text: "facts noted" });
         if (sys.length === 0) return mkAssistant({ text: "summary" });
         mainTurns++;
         // Within attempt 1: step 1 emits the create tool-call (non-final), the
         // bridge executes it (write commits via MSW), then step 2 throws — so
         // the write lands on a non-final step that the final-step result misses.
-        const ctx = context as { messages?: { role: string }[] };
-        const hasToolResult = (ctx.messages ?? []).some((m) => m.role === "toolResult");
+        const ctx = params as { messages?: { role: string }[] };
+        const hasToolResult = (ctx.messages ?? []).some((m) => m.role === "tool");
         if (mainTurns === 1 && !hasToolResult) {
           return mkAssistant({
             toolCall: {
@@ -172,13 +152,13 @@ describe("tainted-by-writes refusal", () => {
     server.listen({ onUnhandledRequest: "bypass" });
     try {
       let mainTurns = 0;
-      const complete = vi.fn(async (_model: unknown, context: { systemPrompt?: string }) => {
-        const sys = context.systemPrompt ?? "";
+      const complete = vi.fn(async (params: { system?: string }) => {
+        const sys = params.system ?? "";
         if (sys.includes(FLUSH_MARKER)) return mkAssistant({ text: "facts noted" });
         if (sys.length === 0) return mkAssistant({ text: "summary" });
         mainTurns++;
-        const ctx = context as { messages?: { role: string }[] };
-        const hasToolResult = (ctx.messages ?? []).some((m) => m.role === "toolResult");
+        const ctx = params as { messages?: { role: string }[] };
+        const hasToolResult = (ctx.messages ?? []).some((m) => m.role === "tool");
         if (mainTurns === 1 && !hasToolResult) {
           return mkAssistant({
             toolCall: { id: "call-d", name: "intervals_delete_workout", arguments: { eventId: 7777 } },
@@ -201,8 +181,8 @@ describe("tainted-by-writes refusal", () => {
 
   it("a no-write brownout still retries normally and the guard does not over-fire", async () => {
     let mainTurns = 0;
-    const complete = vi.fn(async (_model: unknown, context: { systemPrompt?: string }) => {
-      const sys = context.systemPrompt ?? "";
+    const complete = vi.fn(async (params: { system?: string }) => {
+      const sys = params.system ?? "";
       if (sys.includes(FLUSH_MARKER)) return mkAssistant({ text: "facts noted" });
       if (sys.length === 0) return mkAssistant({ text: "summary" });
       mainTurns++;
@@ -235,13 +215,13 @@ describe("tainted-by-writes refusal", () => {
     server.listen({ onUnhandledRequest: "bypass" });
     try {
       let mainTurns = 0;
-      const complete = vi.fn(async (_model: unknown, context: { systemPrompt?: string }) => {
-        const sys = context.systemPrompt ?? "";
+      const complete = vi.fn(async (params: { system?: string }) => {
+        const sys = params.system ?? "";
         if (sys.includes(FLUSH_MARKER)) return mkAssistant({ text: "facts noted" });
         if (sys.length === 0) return mkAssistant({ text: "summary" });
         mainTurns++;
-        const ctx = context as { messages?: { role: string }[] };
-        const hasToolResult = (ctx.messages ?? []).some((m) => m.role === "toolResult");
+        const ctx = params as { messages?: { role: string }[] };
+        const hasToolResult = (ctx.messages ?? []).some((m) => m.role === "tool");
         if (mainTurns === 1 && !hasToolResult) {
           return mkAssistant({
             toolCall: {

@@ -81,14 +81,14 @@ describe("auth/profiles", () => {
     const { mkdirSync } = await import("node:fs");
     mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
 
-    vi.doMock("@mariozechner/pi-ai/oauth", () => ({
-      refreshOpenAICodexToken: vi.fn(async () => ({
+    vi.doMock("../src/agent/codex/oauth.js", () => ({
+      refreshCodexToken: vi.fn(async () => ({
         access: "new-access",
         refresh: "new-refresh",
         expires: Date.now() + 60 * 60_000,
         accountId: "acct",
       })),
-      loginOpenAICodex: vi.fn(),
+      loginCodex: vi.fn(),
     }));
 
     const { saveProfile, getFreshToken } = await loadModule();
@@ -110,14 +110,14 @@ describe("auth/profiles", () => {
     const { mkdirSync } = await import("node:fs");
     mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
 
-    vi.doMock("@mariozechner/pi-ai/oauth", () => ({
-      refreshOpenAICodexToken: vi.fn(async () => ({
+    vi.doMock("../src/agent/codex/oauth.js", () => ({
+      refreshCodexToken: vi.fn(async () => ({
         access: "rotated",
         refresh: "rotated-refresh",
         expires: Date.now() + 3_600_000,
         accountId: "acct",
       })),
-      loginOpenAICodex: vi.fn(),
+      loginCodex: vi.fn(),
     }));
 
     const { saveProfile, getFreshToken } = await loadModule();
@@ -138,9 +138,9 @@ describe("auth/profiles", () => {
     const refreshMock = vi.fn(async () => {
       throw new Error("Failed to refresh OpenAI Codex token");
     });
-    vi.doMock("@mariozechner/pi-ai/oauth", () => ({
-      refreshOpenAICodexToken: refreshMock,
-      loginOpenAICodex: vi.fn(),
+    vi.doMock("../src/agent/codex/oauth.js", () => ({
+      refreshCodexToken: refreshMock,
+      loginCodex: vi.fn(),
     }));
 
     const { saveProfile, getFreshToken, RefreshTokenReusedError } = await loadModule();
@@ -174,9 +174,9 @@ describe("auth/profiles", () => {
         expires: Date.now() + 3_600_000,
         accountId: "acct",
       });
-    vi.doMock("@mariozechner/pi-ai/oauth", () => ({
-      refreshOpenAICodexToken: refreshMock,
-      loginOpenAICodex: vi.fn(),
+    vi.doMock("../src/agent/codex/oauth.js", () => ({
+      refreshCodexToken: refreshMock,
+      loginCodex: vi.fn(),
     }));
 
     const { saveProfile, getFreshToken } = await loadModule();
@@ -204,9 +204,9 @@ describe("auth/profiles", () => {
     const refreshMock = vi.fn(async () => {
       throw new Error("Request timed out");
     });
-    vi.doMock("@mariozechner/pi-ai/oauth", () => ({
-      refreshOpenAICodexToken: refreshMock,
-      loginOpenAICodex: vi.fn(),
+    vi.doMock("../src/agent/codex/oauth.js", () => ({
+      refreshCodexToken: refreshMock,
+      loginCodex: vi.fn(),
     }));
 
     const { saveProfile, getFreshToken, RefreshTokenReusedError } = await loadModule();
@@ -237,9 +237,9 @@ describe("auth/profiles", () => {
       expires: Date.now() + 3_600_000,
       accountId: "acct",
     }));
-    vi.doMock("@mariozechner/pi-ai/oauth", () => ({
-      refreshOpenAICodexToken: refreshMock,
-      loginOpenAICodex: vi.fn(),
+    vi.doMock("../src/agent/codex/oauth.js", () => ({
+      refreshCodexToken: refreshMock,
+      loginCodex: vi.fn(),
     }));
 
     const { saveProfile, getFreshToken } = await loadModule();

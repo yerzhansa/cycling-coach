@@ -45,26 +45,12 @@ afterEach(() => {
 });
 
 async function setupAgent(complete: ReturnType<typeof vi.fn>) {
-  const model = {
-    id: "gpt-5.4",
-    name: "gpt-5.4",
-    api: "openai-codex-responses",
-    provider: "openai-codex",
-    baseUrl: "https://chatgpt.com/backend-api",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 272_000,
-    maxTokens: 128_000,
-  };
-
-  vi.doMock("@mariozechner/pi-ai", () => ({
-    complete,
-    getModel: vi.fn(() => model),
+  vi.doMock("../src/agent/codex/responses.js", () => ({
+    codexResponses: complete,
   }));
-  vi.doMock("@mariozechner/pi-ai/oauth", () => ({
-    refreshOpenAICodexToken: vi.fn(),
-    loginOpenAICodex: vi.fn(),
+  vi.doMock("../src/agent/codex/oauth.js", () => ({
+    refreshCodexToken: vi.fn(),
+    loginCodex: vi.fn(),
   }));
   vi.doMock("../src/auth/profiles.js", () => ({
     getFreshToken: vi.fn(async () => "token"),
@@ -82,28 +68,23 @@ async function setupAgent(complete: ReturnType<typeof vi.fn>) {
 
 function mkAssistant(text: string, stopReason: "stop" | "length" = "stop") {
   return {
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text }],
-    api: "openai-codex-responses",
-    provider: "openai-codex",
-    model: "gpt-5.4",
+    text,
+    toolCalls: [],
     usage: {
       input: 0,
       output: 0,
       cacheRead: 0,
       cacheWrite: 0,
       totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason,
-    timestamp: Date.now(),
   };
 }
 
 // A call is a flush iff the codex Context carries the memory-flush system prompt.
 function isFlushCall(call: unknown[]): boolean {
-  const context = call[1] as { systemPrompt?: string } | undefined;
-  return typeof context?.systemPrompt === "string" && context.systemPrompt.includes(FLUSH_MARKER);
+  const params = call[0] as { system?: string } | undefined;
+  return typeof params?.system === "string" && params.system.includes(FLUSH_MARKER);
 }
 
 function countFlushCalls(complete: ReturnType<typeof vi.fn>): number {
@@ -136,13 +117,13 @@ const STALE_TS = "2020-01-01T00:00:00.000Z";
 
 describe("flush dedupe — at most one memory flush per chat() turn", () => {
   it("an overflow-retry storm flushes at most once", async () => {
-    const complete = vi.fn(async (_model: unknown, context: { systemPrompt?: string }) => {
-      const sys = context.systemPrompt ?? "";
+    const complete = vi.fn(async (params: { system?: string }) => {
+      const sys = params.system ?? "";
       if (sys.includes(FLUSH_MARKER)) return mkAssistant("facts noted");
       if (sys.length === 0) return mkAssistant(FIVE_SECTION_SUMMARY); // compaction (prompt-only)
       // Main turn: throw overflow twice to drive the retry loop, then recover.
       const mainTurns = complete.mock.calls.filter((c) => {
-        const s = (c[1] as { systemPrompt?: string } | undefined)?.systemPrompt ?? "";
+        const s = (c[0] as { system?: string } | undefined)?.system ?? "";
         return s.length > 0 && !s.includes(FLUSH_MARKER);
       }).length;
       if (mainTurns <= 2) {
@@ -161,8 +142,8 @@ describe("flush dedupe — at most one memory flush per chat() turn", () => {
   });
 
   it("a daily-reset turn does not also flush on trim or compaction", async () => {
-    const complete = vi.fn(async (_model: unknown, context: { systemPrompt?: string }) => {
-      const sys = context.systemPrompt ?? "";
+    const complete = vi.fn(async (params: { system?: string }) => {
+      const sys = params.system ?? "";
       if (sys.includes(FLUSH_MARKER)) return mkAssistant("facts noted");
       if (sys.length === 0) return mkAssistant(FIVE_SECTION_SUMMARY);
       return mkAssistant("fresh-day-reply");
@@ -179,8 +160,8 @@ describe("flush dedupe — at most one memory flush per chat() turn", () => {
   });
 
   it("a normal single-flush trim turn is unchanged (no false suppression)", async () => {
-    const complete = vi.fn(async (_model: unknown, context: { systemPrompt?: string }) => {
-      const sys = context.systemPrompt ?? "";
+    const complete = vi.fn(async (params: { system?: string }) => {
+      const sys = params.system ?? "";
       if (sys.includes(FLUSH_MARKER)) return mkAssistant("facts noted");
       if (sys.length === 0) return mkAssistant(FIVE_SECTION_SUMMARY);
       return mkAssistant("trim-reply");

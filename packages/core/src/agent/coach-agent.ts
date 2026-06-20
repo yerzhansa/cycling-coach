@@ -640,11 +640,13 @@ export class CoachAgent {
             // not match, so a single 502 or connection blip no longer kills the
             // turn on attempt 1 and discards paid multi-step tool work.
             const failure = classifyFailure(err);
-            // A codex network throw was already retried inside the provider
-            // library (the bridge short-circuited it to one attempt and tagged
-            // it NetworkError), so retrying it here would be a second layer —
-            // network is retried at exactly one layer. The outer network retry
-            // is for the AI-SDK path, whose SDK does zero retries.
+            // A codex network throw is surfaced as a single attempt and tagged
+            // NetworkError by the bridge's normalizeError. We deliberately cap the
+            // codex network class at zero outer retries to keep it at exactly one
+            // layer; the outer network retry below is for the AI-SDK path, whose
+            // errors are plain TypeErrors (not name="NetworkError") and whose SDK
+            // does zero retries. (Unifying codex network retry with the AI-SDK
+            // path is tracked as a follow-up.)
             const alreadyRetriedNetwork = failure === "network" && err instanceof Error && err.name === "NetworkError";
             if (
               (failure === "server_error" || failure === "network") &&

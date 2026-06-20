@@ -21,10 +21,9 @@ function cfg(provider: string, model: string, baseUrl?: string): Config {
 }
 
 describe("LLM — new provider construction + pricing guard", () => {
-  // Construction must not throw for any new provider. For the non-KnownProvider
-  // members (deepseek/qwen/kimi) this is the regression test for the TS2345
-  // getModels guard: an unguarded getModels(provider) would reject these at
-  // runtime; the PI_AI_PRICED narrowing routes them to a null pricing model.
+  // Construction must not throw for any new provider, including the providers
+  // (deepseek/qwen/kimi/minimax) deliberately absent from the vendored price
+  // catalog — they resolve to an unpriced LLM (cost: undefined on the ledger).
   it.each([
     ["deepseek", "deepseek-v4-flash", "https://api.deepseek.com/v1"],
     ["qwen", "qwen-plus", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"],
@@ -38,14 +37,14 @@ describe("LLM — new provider construction + pricing guard", () => {
     expect((llm as unknown as { aiSdkModel: unknown }).aiSdkModel).not.toBeNull();
   });
 
-  // deepseek/qwen/kimi are not pi-ai KnownProviders; minimax is, but its default
-  // model isn't in pi-ai's catalog so it's deliberately excluded from PI_AI_PRICED.
-  // Both paths must yield a null pricing model (cost: undefined on the ledger).
+  // deepseek/qwen/kimi/minimax are absent from the vendored price catalog (their
+  // default models aren't listed), so each must resolve to an unpriced LLM
+  // (cost: undefined on the ledger).
   it.each([["deepseek"], ["qwen"], ["kimi"], ["minimax"]])(
-    "%s resolves to a null pricingModel",
+    "%s resolves to an unpriced LLM",
     (provider) => {
       const llm = new LLM(cfg(provider, "some-model"));
-      expect((llm as unknown as { pricingModel: unknown }).pricingModel).toBeNull();
+      expect((llm as unknown as { priced: boolean }).priced).toBe(false);
     },
   );
 });

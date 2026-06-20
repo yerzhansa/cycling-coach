@@ -8,8 +8,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModel } from "ai";
 
-import { calculateCost, getModels } from "@mariozechner/pi-ai";
-import type { Api, Model, KnownProvider } from "@mariozechner/pi-ai";
+import { isPriced, priceUsage } from "./agent/codex/cost.js";
 
 import type { Config } from "./config.js";
 import { PROVIDER_BASE_URLS } from "./config.js";
@@ -22,17 +21,6 @@ export type { GenerateOpts, GenerateResult } from "./llm-types.js";
 // ============================================================================
 // LLM DISPATCH
 // ============================================================================
-
-// Providers whose model catalog pi-ai prices via getModels(). Two kinds of
-// member are deliberately excluded. (1) Widened-union members that are NOT
-// pi-ai KnownProviders (deepseek/qwen/kimi) — passing those to getModels() is
-// a compile error (TS2345), so membership here is the runtime narrowing that
-// keeps the catalog lookup to known tokens. (2) minimax IS a KnownProvider but
-// its shipped default model (MiniMax-M2-Stable) is not in pi-ai's catalog, so
-// the lookup never resolves; listing it would advertise pricing that can't
-// happen. Non-members fall through to a null pricing model → cost: undefined on
-// the ledger (best-effort, by design).
-const PI_AI_PRICED = new Set<KnownProvider>(["anthropic", "openai", "google", "openrouter", "zai"]);
 
 // Most providers cache the stable system prefix automatically server-side and
 // get the plain system string, so they are absent here: direct openai/google,
@@ -56,10 +44,10 @@ export function cacheBreakpointKey(
 export class LLM {
   private config: Config;
   private aiSdkModel: LanguageModel | null;
-  // Provider + model are fixed for the instance, so resolve the pricing model
-  // once here. getModels() allocates a fresh array per call, so doing this in
-  // generate() would re-scan the catalog on every LLM round-trip.
-  private pricingModel: Model<Api> | null;
+  // Provider + model are fixed for the instance, so resolve once whether this
+  // configuration is in the vendored price catalog. A miss yields undefined cost
+  // on the ledger (best-effort), never a fabricated figure.
+  private priced: boolean;
   // Instance-constant for the same reason: the cache-breakpoint decision depends
   // only on provider + model, so resolve it once rather than per dispatch().
   private breakpointKey: "anthropic" | "openrouter" | undefined;
@@ -67,11 +55,7 @@ export class LLM {
   constructor(config: Config) {
     this.config = config;
     this.aiSdkModel = config.llm.provider === "openai-codex" ? null : buildAiSdkModel(config);
-    this.pricingModel = PI_AI_PRICED.has(config.llm.provider as KnownProvider)
-      ? (getModels(config.llm.provider as KnownProvider).find(
-          (m) => m.id === config.llm.model,
-        ) ?? null)
-      : null;
+    this.priced = isPriced(config.llm.provider, config.llm.model);
     this.breakpointKey = cacheBreakpointKey(config.llm.provider, config.llm.model);
   }
 
@@ -131,7 +115,7 @@ export class LLM {
       usage: result.usage,
       totalUsage: result.totalUsage,
       steps: result.steps.length,
-      cost: priceAiSdkUsage(this.pricingModel, result.totalUsage),
+      cost: priceAiSdkUsage(this.config.llm.provider, this.config.llm.model, this.priced, result.totalUsage),
     };
   }
 
@@ -150,24 +134,23 @@ export class LLM {
   }
 }
 
-// The AI SDK reports token usage but no cost, so derive it from the same
-// maintained model catalog the codex path already prices against. The model is
-// resolved once at construction; codex carries its own provider-reported cost
-// and is never re-priced here. An uncatalogued (null) model yields undefined
-// rather than a fabricated figure (best-effort ledger).
+// The AI SDK reports token usage but no cost, so derive it from the vendored
+// per-million price catalog (the same numbers the codex path prices against).
+// `priced` is resolved once at construction; an uncatalogued configuration
+// yields undefined rather than a fabricated figure (best-effort ledger).
 function priceAiSdkUsage(
-  model: Model<Api> | null,
+  provider: string,
+  modelId: string,
+  priced: boolean,
   totalUsage: GenerateResult["totalUsage"],
 ): GenerateResult["cost"] | undefined {
-  if (!model || !totalUsage) return undefined;
+  if (!priced || !totalUsage) return undefined;
   const details = cacheTokenDetails(totalUsage);
-  return calculateCost(model, {
+  return priceUsage(provider, modelId, {
     input: totalUsage.inputTokens ?? 0,
     output: totalUsage.outputTokens ?? 0,
     cacheRead: details?.cacheReadTokens ?? 0,
     cacheWrite: details?.cacheWriteTokens ?? 0,
-    totalTokens: totalUsage.totalTokens ?? 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   });
 }
 
