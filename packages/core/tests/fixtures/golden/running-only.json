@@ -1,0 +1,413 @@
+{
+  "activities": [
+    {
+      "id": 90301,
+      "start_date_local": "1998-05-08T07:00:00",
+      "type": "Run",
+      "name": "synthetic-run",
+      "moving_time": 3600,
+      "elapsed_time": 3660,
+      "icu_training_load": 48,
+      "icu_hr_zone_times": [
+        1800,
+        1080,
+        180,
+        540,
+        0,
+        0,
+        0
+      ],
+      "icu_zone_times": null,
+      "decoupling": null,
+      "icu_efficiency_factor": null
+    },
+    {
+      "id": 90302,
+      "start_date_local": "1998-05-10T07:00:00",
+      "type": "Run",
+      "name": "synthetic-run",
+      "moving_time": 4200,
+      "elapsed_time": 4260,
+      "icu_training_load": 72,
+      "icu_hr_zone_times": [
+        2100,
+        1260,
+        210,
+        630,
+        0,
+        0,
+        0
+      ],
+      "icu_zone_times": null,
+      "decoupling": null,
+      "icu_efficiency_factor": null
+    },
+    {
+      "id": 90303,
+      "start_date_local": "1998-05-12T07:00:00",
+      "type": "TrailRun",
+      "name": "synthetic-trail-run",
+      "moving_time": 6000,
+      "elapsed_time": 6060,
+      "icu_training_load": 90,
+      "icu_hr_zone_times": [
+        3000,
+        1800,
+        300,
+        900,
+        0,
+        0,
+        0
+      ],
+      "icu_zone_times": null,
+      "decoupling": null,
+      "icu_efficiency_factor": null
+    },
+    {
+      "id": 90304,
+      "start_date_local": "1998-05-14T07:00:00",
+      "type": "Run",
+      "name": "synthetic-run",
+      "moving_time": 2400,
+      "elapsed_time": 2460,
+      "icu_training_load": 35,
+      "icu_hr_zone_times": [
+        1200,
+        720,
+        120,
+        360,
+        0,
+        0,
+        0
+      ],
+      "icu_zone_times": null,
+      "decoupling": null,
+      "icu_efficiency_factor": null
+    },
+    {
+      "id": 90305,
+      "start_date_local": "1998-05-17T07:00:00",
+      "type": "Run",
+      "name": "synthetic-run",
+      "moving_time": 3600,
+      "elapsed_time": 3660,
+      "icu_training_load": 55,
+      "icu_hr_zone_times": [
+        1800,
+        1080,
+        180,
+        540,
+        0,
+        0,
+        0
+      ],
+      "icu_zone_times": null,
+      "decoupling": null,
+      "icu_efficiency_factor": null
+    },
+    {
+      "id": 90306,
+      "start_date_local": "1998-05-19T07:00:00",
+      "type": "Run",
+      "name": "synthetic-run",
+      "moving_time": 4800,
+      "elapsed_time": 4860,
+      "icu_training_load": 80,
+      "icu_hr_zone_times": [
+        2400,
+        1440,
+        240,
+        720,
+        0,
+        0,
+        0
+      ],
+      "icu_zone_times": null,
+      "decoupling": null,
+      "icu_efficiency_factor": null
+    },
+    {
+      "id": 90307,
+      "start_date_local": "1998-05-21T07:00:00",
+      "type": "Run",
+      "name": "synthetic-run",
+      "moving_time": 3000,
+      "elapsed_time": 3060,
+      "icu_training_load": 42,
+      "icu_hr_zone_times": [
+        1500,
+        900,
+        150,
+        450,
+        0,
+        0,
+        0
+      ],
+      "icu_zone_times": null,
+      "decoupling": null,
+      "icu_efficiency_factor": null
+    },
+    {
+      "id": 90308,
+      "start_date_local": "1998-05-24T07:00:00",
+      "type": "Run",
+      "name": "synthetic-run",
+      "moving_time": 3600,
+      "elapsed_time": 3660,
+      "icu_training_load": 60,
+      "icu_hr_zone_times": [
+        1800,
+        1080,
+        180,
+        540,
+        0,
+        0,
+        0
+      ],
+      "icu_zone_times": null,
+      "decoupling": null,
+      "icu_efficiency_factor": null
+    },
+    {
+      "id": 90309,
+      "start_date_local": "1998-05-26T07:00:00",
+      "type": "Run",
+      "name": "synthetic-run",
+      "moving_time": 3000,
+      "elapsed_time": 3060,
+      "icu_training_load": 50,
+      "icu_hr_zone_times": [
+        1500,
+        900,
+        150,
+        450,
+        0,
+        0,
+        0
+      ],
+      "icu_zone_times": null,
+      "decoupling": null,
+      "icu_efficiency_factor": null
+    },
+    {
+      "id": 90310,
+      "start_date_local": "1998-05-29T07:00:00",
+      "type": "Run",
+      "name": "synthetic-run",
+      "moving_time": 3600,
+      "elapsed_time": 3660,
+      "icu_training_load": 45,
+      "icu_hr_zone_times": [
+        1800,
+        1080,
+        180,
+        540,
+        0,
+        0,
+        0
+      ],
+      "icu_zone_times": null,
+      "decoupling": null,
+      "icu_efficiency_factor": null
+    },
+    {
+      "id": 90311,
+      "start_date_local": "1998-05-31T07:00:00",
+      "type": "Run",
+      "name": "synthetic-run",
+      "moving_time": 4200,
+      "elapsed_time": 4260,
+      "icu_training_load": 70,
+      "icu_hr_zone_times": [
+        2100,
+        1260,
+        210,
+        630,
+        0,
+        0,
+        0
+      ],
+      "icu_zone_times": null,
+      "decoupling": null,
+      "icu_efficiency_factor": null
+    },
+    {
+      "id": 90312,
+      "start_date_local": "1998-06-01T07:00:00",
+      "type": "Run",
+      "name": "synthetic-run",
+      "moving_time": 2400,
+      "elapsed_time": 2460,
+      "icu_training_load": 38,
+      "icu_hr_zone_times": [
+        1200,
+        720,
+        120,
+        360,
+        0,
+        0,
+        0
+      ],
+      "icu_zone_times": null,
+      "decoupling": null,
+      "icu_efficiency_factor": null
+    },
+    {
+      "id": 90313,
+      "start_date_local": "1998-06-02T07:00:00",
+      "type": "TrailRun",
+      "name": "synthetic-trail-run",
+      "moving_time": 6000,
+      "elapsed_time": 6060,
+      "icu_training_load": 85,
+      "icu_hr_zone_times": [
+        3000,
+        1800,
+        300,
+        900,
+        0,
+        0,
+        0
+      ],
+      "icu_zone_times": null,
+      "decoupling": null,
+      "icu_efficiency_factor": null
+    },
+    {
+      "id": 90314,
+      "start_date_local": "1998-06-04T07:00:00",
+      "type": "Run",
+      "name": "synthetic-run",
+      "moving_time": 3600,
+      "elapsed_time": 3660,
+      "icu_training_load": 52,
+      "icu_hr_zone_times": [
+        1800,
+        1080,
+        180,
+        540,
+        0,
+        0,
+        0
+      ],
+      "icu_zone_times": null,
+      "decoupling": null,
+      "icu_efficiency_factor": null
+    }
+  ],
+  "wellness": [
+    {
+      "id": "1998-05-08",
+      "weight": null,
+      "restingHR": 50,
+      "hrv": 70,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "1998-05-10",
+      "weight": null,
+      "restingHR": 50,
+      "hrv": 70,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "1998-05-12",
+      "weight": null,
+      "restingHR": 50,
+      "hrv": 70,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "1998-05-14",
+      "weight": null,
+      "restingHR": 50,
+      "hrv": 70,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "1998-05-17",
+      "weight": null,
+      "restingHR": 50,
+      "hrv": 70,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "1998-05-19",
+      "weight": null,
+      "restingHR": 50,
+      "hrv": 70,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "1998-05-21",
+      "weight": null,
+      "restingHR": 50,
+      "hrv": 70,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "1998-05-24",
+      "weight": null,
+      "restingHR": 50,
+      "hrv": 70,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "1998-05-26",
+      "weight": null,
+      "restingHR": 50,
+      "hrv": 70,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "1998-05-29",
+      "weight": null,
+      "restingHR": 50,
+      "hrv": 70,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "1998-05-31",
+      "weight": null,
+      "restingHR": 50,
+      "hrv": 70,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "1998-06-01",
+      "weight": null,
+      "restingHR": 50,
+      "hrv": 70,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "1998-06-02",
+      "weight": null,
+      "restingHR": 50,
+      "hrv": 70,
+      "sleepSecs": null,
+      "sleepQuality": null
+    },
+    {
+      "id": "1998-06-04",
+      "weight": null,
+      "restingHR": 50,
+      "hrv": 70,
+      "sleepSecs": null,
+      "sleepQuality": null
+    }
+  ],
+  "ftp_history": []
+}

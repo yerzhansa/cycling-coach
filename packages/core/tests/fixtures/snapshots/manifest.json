@@ -15,7 +15,8 @@
     "new-athlete-empty",
     "populated-benchmark-and-consistency",
     "realistic-athlete",
-    "rest-week-with-baseline"
+    "rest-week-with-baseline",
+    "running-only"
   ],
   "metrics": [
     "acwr",

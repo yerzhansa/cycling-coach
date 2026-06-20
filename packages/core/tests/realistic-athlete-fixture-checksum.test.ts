@@ -51,6 +51,10 @@ const FIXTURES: Array<{ slug: string; regen: string }> = [
     slug: "capability-qualifying",
     regen: "tools/build-capability-fixture.ts",
   },
+  {
+    slug: "running-only",
+    regen: "tools/build-running-fixture.ts",
+  },
 ];
 
 describe.each(FIXTURES)("$slug fixture checksum", ({ slug, regen }) => {

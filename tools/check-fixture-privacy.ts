@@ -87,6 +87,7 @@ export const SYNTHETIC_FIXTURE_ALLOWLIST: ReadonlySet<string> = new Set([
   "populated-benchmark-and-consistency.json",
   "rest-week-with-baseline.json",
   "dfa-equipped.json",
+  "running-only.json",
   "post-break-resume.json",
   "zero-activities.json",
 ]);

@@ -17,6 +17,7 @@ import { METRIC_REGISTRY } from "../src/reference/metrics/registry.js";
 import type { MetricInput } from "../src/reference/metrics/metric-input.js";
 import {
   buildFixtureShape,
+  buildMetricInput,
   type ReferenceBundle,
 } from "../src/reference/sync/fixture-bridge.js";
 import { runAdaptersForActivities } from "../src/reference/sport-adapter-dispatcher.js";
@@ -321,5 +322,63 @@ describe("cycling-shaped survivors on a pure-Run bundle (intentional, wave-3 rea
     expect(durability?.mean_decoupling_7d).toBeNull();
     expect(durability?.mean_decoupling_28d).toBeNull();
     expect(durability?.note).toContain("power sessions only");
+  });
+});
+
+// ─── running-only golden fixture: watts-fence + run-realism at the TS layer ──
+//
+// Distinct from the oracle snapshot set (which asserts bit-identity per metric):
+// this drives the PRODUCTION pure-pace path — buildMetricInput + the
+// `omitPowerFamily: true` watts-fence — over the committed running-only golden
+// fixture, then proves the persisted map (a) omits every power-family key and
+// (b) populates the run-realism survivors non-degenerately off HR zones.
+
+describe("running-only golden fixture (pure-pace production path)", () => {
+  function runningOnlyInput(): MetricInput {
+    const fixture = loadFixture("golden/running-only", GoldenFixtureSchema);
+    // Map the golden FixtureShape back through the production assembly path
+    // (buildMetricInput over a ReferenceBundle) — the same shape the live sync
+    // hands the registry for a pure-pace bundle.
+    const bundle: ReferenceBundle = {
+      activities: fixture.activities,
+      wellness: fixture.wellness,
+      ftpHistory: fixture.ftp_history,
+    };
+    return buildMetricInput(bundle, "1998-06-04T12:00:00");
+  }
+
+  it("omits all 9 power-family keys under the pure-pace watts-fence", () => {
+    const out = computeDerivedMetrics(runningOnlyInput(), { omitPowerFamily: true });
+    for (const key of POWER_FAMILY_OMIT_KEYS) {
+      expect(out).not.toHaveProperty(key);
+    }
+  });
+
+  it("populates the Seiler-TID / zone-distribution / easy-time survivors non-degenerately off HR zones", () => {
+    const out = computeDerivedMetrics(runningOnlyInput(), { omitPowerFamily: true });
+
+    const seiler = out["seiler_tid_7d"] as {
+      classification: string | null;
+      zone_basis: string | null;
+      z1_pct: number | null;
+    } | null;
+    expect(seiler).not.toBeNull();
+    expect(seiler?.classification).not.toBeNull();
+    expect(seiler?.zone_basis).toBe("hr");
+    expect(seiler?.z1_pct).toBeGreaterThan(0);
+
+    const zoneDist = out["zone_distribution_7d"] as {
+      total_hours: number;
+      zone_basis: string | null;
+    } | null;
+    expect(zoneDist).not.toBeNull();
+    expect(zoneDist?.zone_basis).toBe("hr");
+    expect(zoneDist?.total_hours).toBeGreaterThan(0);
+
+    const easyRatio = out["easy_time_ratio"] as number | null;
+    expect(easyRatio).not.toBeNull();
+    // Low-intensity-dominant by construction (~0.80).
+    expect(easyRatio).toBeGreaterThanOrEqual(0.7);
+    expect(easyRatio).toBeLessThanOrEqual(0.9);
   });
 });

@@ -1,0 +1,18 @@
+{
+  "metric": "data_quality",
+  "athlete": "running-only",
+  "section_11_sha": "224c369d2f14a71725cb9157fc133cf3cff5cd32",
+  "section_11_protocol_version": "3.112",
+  "frozen_now": "1998-06-04T12:00:00",
+  "value": {
+    "activities_28d": 14,
+    "activities_7d": 5,
+    "ftp_history_days": {
+      "indoor": 0,
+      "outdoor": 0
+    },
+    "hrv_data_points": 5,
+    "planned_workouts_7d": 0,
+    "rhr_data_points": 5
+  }
+}
