@@ -7,35 +7,42 @@ import { buildMetricInput } from "./fixture-bridge.js";
 import { computeDerivedMetrics } from "./compute-derived-metrics.js";
 import {
   runAdaptersForActivities,
+  familyOf,
   type AdapterRun,
 } from "../sport-adapter-dispatcher.js";
 import type { ReferenceSportAdapter } from "../sport-adapter.js";
 import type { IntervalsActivityType } from "../../sport.js";
-import { SPORT_FAMILIES } from "../metrics/sport-families.js";
-
-interface DerivedMetricsMeta {
-  readonly sportFamily: string;
-  readonly basis: "power" | "pace" | "hr";
-  readonly anchorType: "critical-speed" | "ftp";
-}
+import type { DerivedMetricsMeta } from "../schemas/latest.js";
 
 /**
- * Derive the emit-time provenance tag from the covering adapters. Prefers a
- * power-basis adapter when one is present so a mixed bundle (a duathlete's
- * Ride+Run) tags as its kept power family, matching the omission decision;
- * otherwise the first covering adapter wins. Returns `undefined` for an
- * empty-coverage bundle (no adapter to attribute), leaving the optional tag off.
+ * Resolve, in a single scan of `runs`, both the watts-fence decision and the
+ * emit-time provenance tag from one representative covering adapter:
+ *
+ *   - The representative is the power-basis covering adapter when one is present
+ *     (so a mixed bundle — a duathlete's Ride+Run — keeps its power family and
+ *     tags as cycling/power), else the first covering adapter.
+ *   - `omitPowerFamily` is a positive pace-sport assertion: at least one
+ *     activity is covered AND the representative is not power-basis. An
+ *     empty-coverage bundle keeps the full family (no positive signal).
+ *   - `meta` is `undefined` for an empty-coverage bundle (no adapter to
+ *     attribute); otherwise it carries the representative's family + basis +
+ *     anchor. The family falls back to `"other"` for an unmapped or missing
+ *     first activity type.
  */
-function deriveMeta(runs: readonly AdapterRun[]): DerivedMetricsMeta | undefined {
-  if (runs.length === 0) return undefined;
+export function composeProvenance(runs: readonly AdapterRun[]): {
+  omitPowerFamily: boolean;
+  meta: DerivedMetricsMeta | undefined;
+} {
+  if (runs.length === 0) return { omitPowerFamily: false, meta: undefined };
   const covering =
     runs.find((r) => r.adapter.zoneBasis === "power")?.adapter ?? runs[0].adapter;
+  const omitPowerFamily = covering.zoneBasis !== "power";
   const firstType = covering.activityTypes[0];
-  const sportFamily =
-    firstType !== undefined && Object.hasOwn(SPORT_FAMILIES, firstType)
-      ? SPORT_FAMILIES[firstType]
-      : "other";
-  return { sportFamily, basis: covering.zoneBasis, anchorType: covering.anchorType };
+  const sportFamily = firstType !== undefined ? familyOf(firstType, "other") : "other";
+  return {
+    omitPowerFamily,
+    meta: { sportFamily, basis: covering.zoneBasis, anchorType: covering.anchorType },
+  };
 }
 
 /**
@@ -83,16 +90,11 @@ async function fetchOnce(
     sportTypes,
     live.bundle.activities,
   );
-  // Omit the power family only on a positive pace-sport assertion: at least one
-  // activity is covered AND no covering adapter is power-basis. An
-  // empty-coverage bundle keeps the full family (no positive signal).
-  const coveredPowerBasis = runs.some((r) => r.adapter.zoneBasis === "power");
-  const omitPowerFamily = runs.length > 0 && !coveredPowerBasis;
+  const { omitPowerFamily, meta } = composeProvenance(runs);
   const derivedMetrics = computeDerivedMetrics(
     buildMetricInput(live.bundle, live.frozenNow),
     { omitPowerFamily },
   );
-  const meta = deriveMeta(runs);
 
   return {
     latest: {

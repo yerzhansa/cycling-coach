@@ -21,6 +21,7 @@ import {
   type ReferenceBundle,
 } from "../src/reference/sync/fixture-bridge.js";
 import { runAdaptersForActivities } from "../src/reference/sport-adapter-dispatcher.js";
+import { composeProvenance } from "../src/reference/sync/fetch-reference-data.js";
 import type { ReferenceSportAdapter } from "../src/reference/sport-adapter.js";
 import type { IntervalsActivityType } from "../src/sport.js";
 import { GoldenFixtureSchema, loadFixture } from "./helpers/load-fixture.js";
@@ -157,10 +158,10 @@ function inputFor(activities: readonly TestActivity[]): MetricInput {
 }
 
 /**
- * Mirror the production `fetchOnce` predicate + emit-time tag without exporting
- * the private function: dispatch the activities, derive `omitPowerFamily`, run
- * the registry, and attach the sibling provenance tag exactly as the producer
- * does. The tag is layered OUTSIDE the derived map.
+ * Drive the production provenance helper end-to-end: dispatch the activities,
+ * derive `omitPowerFamily` + the sibling tag via `composeProvenance`, then run
+ * the registry under that fence. The tag is layered OUTSIDE the derived map,
+ * exactly as the producer does.
  */
 function composeLikeFetchOnce(
   adapters: readonly ReferenceSportAdapter[],
@@ -172,21 +173,9 @@ function composeLikeFetchOnce(
   omitPowerFamily: boolean;
 } {
   const runs = runAdaptersForActivities(adapters, sportTypes, activities as unknown as readonly Activity[]);
-  const coveredPowerBasis = runs.some((r) => r.adapter.zoneBasis === "power");
-  const omitPowerFamily = runs.length > 0 && !coveredPowerBasis;
+  const { omitPowerFamily, meta } = composeProvenance(runs);
   const derived_metrics = computeDerivedMetrics(inputFor(activities), { omitPowerFamily });
-  let derived_metrics_meta: { sportFamily: string; basis: string; anchorType: string } | undefined;
-  if (runs.length > 0) {
-    const covering =
-      runs.find((r) => r.adapter.zoneBasis === "power")?.adapter ?? runs[0].adapter;
-    const families: Record<string, string> = { Ride: "cycling", VirtualRide: "cycling", Run: "run", TrailRun: "run" };
-    derived_metrics_meta = {
-      sportFamily: families[covering.activityTypes[0]] ?? "other",
-      basis: covering.zoneBasis,
-      anchorType: covering.anchorType,
-    };
-  }
-  return { derived_metrics, derived_metrics_meta, omitPowerFamily };
+  return { derived_metrics, derived_metrics_meta: meta, omitPowerFamily };
 }
 
 describe("computeDerivedMetrics power-family omission", () => {

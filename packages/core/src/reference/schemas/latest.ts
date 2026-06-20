@@ -79,3 +79,11 @@ export const LatestJsonSchema = z
   .strict();
 
 export type LatestJson = z.infer<typeof LatestJsonSchema>;
+
+/**
+ * Single source of truth for the emit-time provenance tag's shape. Derived from
+ * the schema (the `derived_metrics_meta` field minus its optionality) so the
+ * producer, the `FetchedReference` envelope, and any test all reference one type
+ * instead of re-declaring the literal three times.
+ */
+export type DerivedMetricsMeta = NonNullable<LatestJson["derived_metrics_meta"]>;

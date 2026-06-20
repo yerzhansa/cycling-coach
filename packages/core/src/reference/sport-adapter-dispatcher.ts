@@ -15,7 +15,7 @@ export function adapterIdentity(adapter: ReferenceSportAdapter): string {
  * in as its own family — per the SPORT_FAMILIES convention that each caller owns
  * its default rather than folding one into the table.
  */
-function familyOf<F extends string | undefined>(type: string, fallback: F): string | F {
+export function familyOf<F extends string | undefined>(type: string, fallback: F): string | F {
   return Object.hasOwn(SPORT_FAMILIES, type) ? SPORT_FAMILIES[type] : fallback;
 }
 

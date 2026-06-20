@@ -6,7 +6,7 @@ import {
   SYNC_OPERATION_TIMEOUT_MS,
 } from "../freshness.js";
 import { atomicWriteJson } from "../../io/atomic-write-json.js";
-import { LATEST_SCHEMA_VERSION } from "../schemas/latest.js";
+import { LATEST_SCHEMA_VERSION, type DerivedMetricsMeta } from "../schemas/latest.js";
 import { HISTORY_SCHEMA_VERSION } from "../schemas/history.js";
 import { INTERVALS_SCHEMA_VERSION } from "../schemas/intervals.js";
 import { ROUTES_SCHEMA_VERSION } from "../schemas/routes.js";
@@ -77,11 +77,7 @@ export interface FetchedReference {
     readonly derived_metrics: unknown;
     /** Emit-time provenance tag — a sibling of `derived_metrics`, never inside
      *  it. Optional: an empty-coverage bundle attaches no tag. */
-    readonly derived_metrics_meta?: {
-      readonly sportFamily: string;
-      readonly basis: "power" | "pace" | "hr";
-      readonly anchorType: "critical-speed" | "ftp";
-    };
+    readonly derived_metrics_meta?: DerivedMetricsMeta;
     readonly recent_activities: readonly unknown[];
     readonly planned_workouts: readonly unknown[];
     readonly wellness_data: unknown;

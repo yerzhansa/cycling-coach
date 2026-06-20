@@ -25,10 +25,15 @@
 // Usage (operator, dev-time):
 //   pnpm exec tsx tools/build-dfa-fixture.ts [--frozen-now 1998-06-04T12:00:00] [--out <path>]
 
-import { createHash } from "node:crypto";
-import { writeFileSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import {
+  parseFixtureArgs,
+  runFixtureCli,
+  writeFixtureWithChecksum,
+  ymdMinus,
+} from "./fixture-builder-util.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_OUT = resolve(REPO_ROOT, "packages/core/tests/fixtures/golden/dfa-equipped.json");
@@ -66,45 +71,6 @@ const SESSION_SECS = SEGMENT_SECS * 3;
 const DFA_LT1_SEGMENT = 1.0;
 const DFA_MID_SEGMENT = 0.75;
 const DFA_LT2_SEGMENT = 0.5;
-
-interface Args {
-  frozenNow: string;
-  out: string;
-}
-
-function parseArgs(argv: string[]): Args {
-  const out: Args = { frozenNow: DEFAULT_FROZEN_NOW, out: DEFAULT_OUT };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    const next = (): string => {
-      const v = argv[i + 1];
-      if (v === undefined || v.startsWith("--")) {
-        throw new Error(`flag ${arg} requires a value`);
-      }
-      i++;
-      return v;
-    };
-    switch (arg) {
-      case "--frozen-now":
-        out.frozenNow = next();
-        break;
-      case "--out":
-        out.out = resolve(next());
-        break;
-      default:
-        throw new Error(`unknown flag: ${arg}`);
-    }
-  }
-  return out;
-}
-
-// Python-equivalent calendar math: parse the anchor as a UTC date, subtract
-// whole days, format %Y-%m-%d. Matches `datetime - timedelta(days=n)` exactly.
-function ymdMinus(frozenNow: string, days: number): string {
-  const base = new Date(`${frozenNow.slice(0, 10)}T00:00:00Z`);
-  base.setUTCDate(base.getUTCDate() - days);
-  return base.toISOString().slice(0, 10);
-}
 
 interface StreamChannels {
   dfa_a1: number[];
@@ -278,31 +244,12 @@ function assertNonVacuous(fixture: BuiltFixture): void {
 }
 
 function main(argv: string[]): void {
-  const args = parseArgs(argv);
+  const args = parseFixtureArgs(argv, { frozenNow: DEFAULT_FROZEN_NOW, out: DEFAULT_OUT });
   const fixture = buildFixture(args.frozenNow);
   assertNonVacuous(fixture);
-
-  const json = `${JSON.stringify(fixture, null, 2)}\n`;
-  writeFileSync(args.out, json);
-  const hash = createHash("sha256").update(json).digest("hex");
-  writeFileSync(`${args.out}.sha256`, `${hash}  ${basename(args.out)}\n`);
-  // eslint-disable-next-line no-console
-  console.error(`Wrote ${args.out} (${json.length} bytes), checksum ${args.out}.sha256`);
+  writeFixtureWithChecksum(args.out, fixture);
 }
 
-const isCli =
-  typeof process !== "undefined" &&
-  process.argv[1] !== undefined &&
-  import.meta.url === `file://${process.argv[1]}`;
-
-if (isCli) {
-  try {
-    main(process.argv.slice(2));
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error((err as Error).message);
-    process.exit(1);
-  }
-}
+runFixtureCli(import.meta.url, main);
 
 export { buildFixture, ymdMinus };
