@@ -72,21 +72,20 @@ const MODELS: Record<string, { value: string; label: string; hint?: string }[]> 
   anthropic: [
     { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", hint: "recommended" },
     { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5", hint: "fast & cheap" },
-    { value: "claude-opus-4-6", label: "Claude Opus 4.6", hint: "most capable" },
+    { value: "claude-opus-4-8", label: "Claude Opus 4.8", hint: "most capable" },
   ],
   openai: [
-    { value: "gpt-5.4", label: "GPT-5.4", hint: "recommended" },
+    { value: "gpt-5.5", label: "GPT-5.5", hint: "recommended" },
     { value: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "fast & cheap" },
     { value: "gpt-5.4-nano", label: "GPT-5.4 Nano", hint: "cheapest" },
-    { value: "o4-mini", label: "o4-mini", hint: "reasoning" },
   ],
   google: [
-    { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash", hint: "recommended" },
-    { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro", hint: "most capable" },
-    { value: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite", hint: "cheapest" },
+    { value: "gemini-3.5-flash", label: "Gemini 3.5 Flash", hint: "recommended" },
+    { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro", hint: "most capable" },
+    { value: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite", hint: "cheapest" },
   ],
   "openai-codex": [
-    { value: "gpt-5.4", label: "GPT-5.4", hint: "recommended" },
+    { value: "gpt-5.5", label: "GPT-5.5", hint: "recommended" },
     { value: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "faster" },
   ],
   deepseek: [
@@ -94,20 +93,27 @@ const MODELS: Record<string, { value: string; label: string; hint?: string }[]> 
     { value: "deepseek-v4-pro", label: "DeepSeek V4 Pro", hint: "most capable" },
   ],
   qwen: [
-    { value: "qwen-plus", label: "Qwen Plus", hint: "recommended" },
+    { value: "qwen3.5-plus", label: "Qwen3.5 Plus", hint: "recommended" },
     { value: "qwen3-max", label: "Qwen3 Max", hint: "most capable" },
   ],
-  minimax: [{ value: "MiniMax-M2-Stable", label: "MiniMax M2 (stable)", hint: "recommended" }],
-  kimi: [{ value: "kimi-k2-0905", label: "Kimi K2 (0905)", hint: "recommended" }],
+  minimax: [
+    { value: "MiniMax-M2.7", label: "MiniMax M2.7", hint: "recommended" },
+    { value: "MiniMax-M3", label: "MiniMax M3", hint: "most capable" },
+  ],
+  kimi: [
+    { value: "kimi-k2.6", label: "Kimi K2.6", hint: "recommended" },
+    { value: "kimi-k2.5", label: "Kimi K2.5", hint: "cheaper" },
+  ],
   zai: [
-    { value: "glm-4.6", label: "GLM-4.6", hint: "recommended" },
-    { value: "glm-4.5", label: "GLM-4.5" },
+    { value: "glm-4.7", label: "GLM-4.7", hint: "recommended" },
+    { value: "glm-5.2", label: "GLM-5.2", hint: "most capable" },
+    { value: "glm-4.7-flashx", label: "GLM-4.7 FlashX", hint: "cheapest" },
   ],
   openrouter: [
-    { value: "deepseek/deepseek-chat", label: "DeepSeek Chat", hint: "cheap" },
-    { value: "z-ai/glm-4.6", label: "GLM-4.6 (via OpenRouter)" },
-    { value: "qwen/qwen-plus", label: "Qwen Plus (via OpenRouter)" },
-    { value: "moonshotai/kimi-k2", label: "Kimi K2 (via OpenRouter)" },
+    { value: "deepseek/deepseek-v4-flash", label: "DeepSeek V4 Flash (via OpenRouter)", hint: "cheap" },
+    { value: "z-ai/glm-5.2", label: "GLM-5.2 (via OpenRouter)", hint: "most capable" },
+    { value: "qwen/qwen3.7-plus", label: "Qwen3.7 Plus (via OpenRouter)" },
+    { value: "moonshotai/kimi-k2.6", label: "Kimi K2.6 (via OpenRouter)" },
   ],
 };
 
@@ -137,15 +143,15 @@ export type WizardCtx = {
 
 const DEFAULT_MODELS: Record<string, string> = {
   anthropic: "claude-sonnet-4-6",
-  openai: "gpt-5.4",
-  google: "gemini-2.5-flash",
-  "openai-codex": "gpt-5.4",
+  openai: "gpt-5.5",
+  google: "gemini-3.5-flash",
+  "openai-codex": "gpt-5.5",
   deepseek: "deepseek-v4-flash",
-  qwen: "qwen-plus",
-  minimax: "MiniMax-M2-Stable",
-  kimi: "kimi-k2-0905",
-  zai: "glm-4.6",
-  openrouter: "deepseek/deepseek-chat",
+  qwen: "qwen3.5-plus",
+  minimax: "MiniMax-M2.7",
+  kimi: "kimi-k2.6",
+  zai: "glm-4.7",
+  openrouter: "deepseek/deepseek-v4-flash",
 };
 
 const FIELD_KEYCHAIN_ACCOUNT: Record<SecretFieldPath, string> = {
