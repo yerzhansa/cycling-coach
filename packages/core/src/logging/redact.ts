@@ -6,7 +6,7 @@ const DENYLIST_KEY_SUBSTRINGS = ["authorization", "api_key", "apikey", "token", 
 // Bounded so a hostile or cyclic object can never hang the logger.
 const MAX_REDACT_DEPTH = 6;
 
-function keyIsDenied(key: string): boolean {
+export function keyIsDenied(key: string): boolean {
   const lower = key.toLowerCase();
   return DENYLIST_KEY_SUBSTRINGS.some((needle) => lower.includes(needle));
 }

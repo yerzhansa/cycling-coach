@@ -1,4 +1,4 @@
-import { redactObject, REDACTION_SENTINEL } from "./redact.js";
+import { redactObject, REDACTION_SENTINEL, keyIsDenied } from "./redact.js";
 
 // Fields on a provider/SDK error that carry the outbound prompt or response
 // body — the conversation, the memory-bearing system prompt, the athlete's
@@ -51,14 +51,7 @@ export function serializeError(err: unknown): Record<string, unknown> {
       if (DROP_FIELDS.has(key)) continue;
       if (key === "name" || key === "message" || key === "stack") continue;
       if ((KEEP_FIELDS as readonly string[]).includes(key)) continue;
-      const lower = key.toLowerCase();
-      if (
-        lower.includes("authorization") ||
-        lower.includes("api_key") ||
-        lower.includes("apikey") ||
-        lower.includes("token") ||
-        lower.includes("cookie")
-      ) {
+      if (keyIsDenied(key)) {
         out[key] = REDACTION_SENTINEL;
         continue;
       }

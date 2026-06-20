@@ -117,6 +117,22 @@ function classifyError(err: unknown): string {
   return "unknown";
 }
 
+// Replays a pre-captured error to retryWithBackoff exactly once so it performs a
+// single capped backoff sleep: the first invocation rethrows `err`, the second
+// resolves. All scheduling (jitter, retry-after floor, onRetry) stays in opts.
+function backoffWithSentinelError(
+  err: unknown,
+  opts: Parameters<typeof retryWithBackoff>[1],
+): Promise<void> {
+  let retried = false;
+  return retryWithBackoff(async () => {
+    if (!retried) {
+      retried = true;
+      throw err;
+    }
+  }, opts);
+}
+
 // ============================================================================
 // AGENT
 // ============================================================================
@@ -602,26 +618,17 @@ export class CoachAgent {
               const clampNote = requestedMs > RATE_LIMIT_MAX_WAIT_MS
                 ? ` (provider requested ${requestedMs}ms, clamped to ${RATE_LIMIT_MAX_WAIT_MS}ms)`
                 : "";
-              let retried = false;
-              await retryWithBackoff(
-                async () => {
-                  if (!retried) {
-                    retried = true;
-                    throw err;
-                  }
+              await backoffWithSentinelError(err, {
+                attempts: 2,
+                baseMs: requestedMs,
+                capMs: RATE_LIMIT_MAX_WAIT_MS,
+                shouldRetry: () => true,
+                retryAfterMs: () => requestedMs,
+                random: () => 0,
+                onRetry: ({ delayMs }) => {
+                  console.warn(`Rate limited (attempt ${attemptNo}/${MAX_RATE_LIMIT_ATTEMPTS}), waiting ${delayMs}ms${clampNote}`);
                 },
-                {
-                  attempts: 2,
-                  baseMs: requestedMs,
-                  capMs: RATE_LIMIT_MAX_WAIT_MS,
-                  shouldRetry: () => true,
-                  retryAfterMs: () => requestedMs,
-                  random: () => 0,
-                  onRetry: ({ delayMs }) => {
-                    console.warn(`Rate limited (attempt ${attemptNo}/${MAX_RATE_LIMIT_ATTEMPTS}), waiting ${delayMs}ms${clampNote}`);
-                  },
-                },
-              );
+              });
               // The backoff sleep is the one place a turn can silently burn
               // minutes; converting a long Retry-After wait into a clean budget
               // stop here means the deadline never wedges the session lock.
@@ -646,22 +653,13 @@ export class CoachAgent {
             ) {
               serverErrorAttempts++;
               const retryAfterFloor = retryAfterFloorMs(err);
-              let retried = false;
-              await retryWithBackoff(
-                async () => {
-                  if (!retried) {
-                    retried = true;
-                    throw err;
-                  }
-                },
-                {
-                  attempts: 2,
-                  baseMs: retryAfterFloor ?? SERVER_ERROR_BACKOFF_BASE_MS,
-                  capMs: SERVER_ERROR_BACKOFF_MAX_MS,
-                  shouldRetry: () => true,
-                  retryAfterMs: () => retryAfterFloor,
-                },
-              );
+              await backoffWithSentinelError(err, {
+                attempts: 2,
+                baseMs: retryAfterFloor ?? SERVER_ERROR_BACKOFF_BASE_MS,
+                capMs: SERVER_ERROR_BACKOFF_MAX_MS,
+                shouldRetry: () => true,
+                retryAfterMs: () => retryAfterFloor,
+              });
               turnBudget.checkDeadline();
               continue;
             }

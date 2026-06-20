@@ -17,10 +17,6 @@ export function normalizeLogLevel(s?: string): LogLevel {
     : "info";
 }
 
-export function logLevelRank(level: LogLevel): number {
-  return LEVEL_ORDER[level];
-}
-
 // A line at `lineLevel` is emitted when the configured threshold is at least as
 // verbose. `silent` emits nothing; `debug` lets everything through.
 export function isLevelEnabled(lineLevel: LogLevel, threshold: LogLevel): boolean {

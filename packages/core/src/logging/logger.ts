@@ -150,7 +150,3 @@ export function createRootLogger(dataDir: string, options: RootLoggerOptions = {
     },
   };
 }
-
-export function __resetLoggingEscalationForTesting(): void {
-  escalatedOnce = false;
-}
