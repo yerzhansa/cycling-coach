@@ -4,6 +4,10 @@
 // shape `runSync` commits to `latest.json`. This is the "real adapter output on
 // disk stays valid" guarantee behind AC3.
 
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { fetchLiveBundle, type BundleFetchClient } from "../src/reference/sync/fetch-live-bundle.js";
@@ -14,8 +18,10 @@ import type { ReferenceSportAdapter } from "../src/reference/sport-adapter.js";
 import type { IntervalsActivityType } from "../src/sport.js";
 import type { FetchedReference } from "../src/reference/sync/run-sync.js";
 import { gateLatestJson } from "../src/reference/validation/sync-gate.js";
-import { LatestJsonSchema } from "../src/reference/schemas/latest.js";
+import { LatestJsonSchema, type LatestJson } from "../src/reference/schemas/latest.js";
 import { METRIC_REGISTRY } from "../src/reference/metrics/registry.js";
+import { SPORT_FAMILIES } from "../src/reference/metrics/sport-families.js";
+import { safeReadJson } from "../src/io/safe-read-json.js";
 
 const NOW = new Date("2026-06-09T12:00:00.000Z");
 
@@ -70,16 +76,22 @@ function fakeClient(): BundleFetchClient {
   };
 }
 
+type DerivedMetricsMeta = NonNullable<LatestJson["derived_metrics_meta"]>;
+
 /** Compose exactly as the production `fetchOnce` does. */
 async function composeFetched(): Promise<FetchedReference> {
   const live = await fetchLiveBundle({ client: fakeClient(), signal: new AbortController().signal, now: NOW, throttleMs: 0 });
-  runAdaptersForActivities([CYCLING_ADAPTER], SPORT_TYPES, live.bundle.activities);
-  const derived_metrics = computeDerivedMetrics(buildMetricInput(live.bundle, live.frozenNow));
+  const runs = runAdaptersForActivities([CYCLING_ADAPTER], SPORT_TYPES, live.bundle.activities);
+  const coveredPowerBasis = runs.some((r) => r.adapter.zoneBasis === "power");
+  const omitPowerFamily = runs.length > 0 && !coveredPowerBasis;
+  const derived_metrics = computeDerivedMetrics(buildMetricInput(live.bundle, live.frozenNow), { omitPowerFamily });
+  const meta = deriveMeta(runs);
   return {
     latest: {
       athlete_profile: live.athleteProfile,
       current_status: {},
       derived_metrics,
+      ...(meta ? { derived_metrics_meta: meta } : {}),
       recent_activities: live.recentActivities,
       planned_workouts: [],
       wellness_data: live.wellnessData,
@@ -89,6 +101,24 @@ async function composeFetched(): Promise<FetchedReference> {
     routes: { routes: [] },
     ftp_history: { entries: [] },
   };
+}
+
+/**
+ * Local reconstruction of `fetchOnce`'s private `deriveMeta`: pick the covering
+ * adapter (power-basis preferred), then attribute its sport family + basis +
+ * anchor. Returns undefined for empty coverage so the optional tag stays off.
+ */
+function deriveMeta(
+  runs: ReturnType<typeof runAdaptersForActivities>,
+): DerivedMetricsMeta | undefined {
+  if (runs.length === 0) return undefined;
+  const covering = runs.find((r) => r.adapter.zoneBasis === "power")?.adapter ?? runs[0].adapter;
+  const firstType = covering.activityTypes[0];
+  const sportFamily =
+    firstType !== undefined && Object.hasOwn(SPORT_FAMILIES, firstType)
+      ? SPORT_FAMILIES[firstType]
+      : "other";
+  return { sportFamily, basis: covering.zoneBasis, anchorType: covering.anchorType };
 }
 
 describe("live-data bridge integration", () => {
@@ -106,6 +136,24 @@ describe("live-data bridge integration", () => {
       ...fetched.latest,
     };
     expect(() => LatestJsonSchema.parse(onDisk)).not.toThrow();
+  });
+
+  it("round-trips the derived_metrics_meta tag through the real strict read path (no cache-miss loop)", async () => {
+    const fetched = await composeFetched();
+    const tag = { sportFamily: "cycling", basis: "power", anchorType: "ftp" };
+    expect(fetched.latest.derived_metrics_meta).toEqual(tag);
+
+    const onDisk = {
+      metadata: { schema_version: "1", last_updated: NOW.toISOString(), freshness: "fresh" as const },
+      ...fetched.latest,
+    };
+    const dir = mkdtempSync(join(tmpdir(), "reference-latest-"));
+    const path = join(dir, "latest.json");
+    writeFileSync(path, JSON.stringify(onDisk), "utf-8");
+
+    const readBack = safeReadJson<LatestJson>(path, LatestJsonSchema);
+    expect(readBack).not.toBeNull();
+    expect(readBack?.derived_metrics_meta).toEqual(tag);
   });
 
   it("writes a populated, full-registry derived_metrics block", async () => {

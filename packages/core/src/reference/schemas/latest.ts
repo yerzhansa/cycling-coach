@@ -16,6 +16,14 @@ export const LatestJsonSchema = z
     athlete_profile: z.unknown(),
     current_status: z.unknown(),
     derived_metrics: z.unknown(),
+    derived_metrics_meta: z
+      .object({
+        sportFamily: z.string(),
+        basis: z.enum(["power", "pace", "hr"]),
+        anchorType: z.enum(["critical-speed", "ftp"]),
+      })
+      .strict()
+      .optional(),
     recent_activities: z.array(z.unknown()),
     planned_workouts: z.array(z.unknown()),
     wellness_data: z.unknown(),
