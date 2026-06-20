@@ -12,7 +12,11 @@ import { randomBytes } from "node:crypto";
  * rethrown. The on-disk target at `path` is untouched on every failure path
  * because rename is the last step.
  */
-export async function atomicWriteJson(path: string, value: unknown): Promise<void> {
+export async function atomicWriteJson(
+  path: string,
+  value: unknown,
+  opts?: { signal?: AbortSignal },
+): Promise<void> {
   // Serialize FIRST so circular-reference / BigInt failures don't leave a
   // half-baked temp file on disk.
   const body = JSON.stringify(value, null, 2) + "\n";
@@ -27,6 +31,20 @@ export async function atomicWriteJson(path: string, value: unknown): Promise<voi
     await fh.sync();
     await fh.close();
     fh = null;
+    // Check the abort signal at the LAST instant before commit. A sync cycle
+    // whose outer timeout fired has already force-released the mutex to its
+    // successor; renaming this dead cycle's payload in now would replace the
+    // live file mid-successor-cycle. So if aborted, drop the temp sibling and
+    // return cleanly — the skip is a successful no-op, not an error. Checking
+    // earlier would race the abort against the in-flight writeFile/sync.
+    if (opts?.signal?.aborted === true) {
+      try {
+        await unlink(tempPath);
+      } catch {
+        // Temp file may already be gone; best-effort cleanup.
+      }
+      return;
+    }
     await rename(tempPath, path);
   } catch (err) {
     if (fh !== null) {

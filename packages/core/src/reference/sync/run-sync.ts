@@ -131,7 +131,11 @@ export interface RunSyncDeps {
   /** Override Layer-1 gate for tests; defaults to `gateLatestJson`. */
   readonly gate?: typeof gateLatestJson;
   /** Override atomic write for tests; defaults to `atomicWriteJson`. */
-  readonly atomicWrite?: (path: string, value: unknown) => Promise<void>;
+  readonly atomicWrite?: (
+    path: string,
+    value: unknown,
+    opts?: { signal?: AbortSignal },
+  ) => Promise<void>;
   /** Override error_state.json removal for tests; defaults to `clearErrorState`. */
   readonly clearError?: (dataDir: string) => Promise<void>;
 }
@@ -333,10 +337,14 @@ export function createRunSync(
                 if (prior !== null && priorPayloadEquals(prior, payload)) {
                   return null;
                 }
-                await writeJson(path, {
-                  metadata: { schema_version: version, last_updated: lastUpdated, ...extras },
-                  ...payload,
-                });
+                await writeJson(
+                  path,
+                  {
+                    metadata: { schema_version: version, last_updated: lastUpdated, ...extras },
+                    ...payload,
+                  },
+                  { signal: controller.signal },
+                );
                 return file;
               }),
             )
@@ -349,11 +357,15 @@ export function createRunSync(
 
           // Commit-marker LAST per ADR-0011.
           phase = "writing_scheduler";
-          await writeJson(join(deps.dataDir, ".scheduler.json"), {
-            schema_version: SCHEDULER_SCHEMA_VERSION,
-            last_sync_at: lastUpdated,
-            next_sync_at: new Date(now().getTime() + scheduledIntervalMs).toISOString(),
-          });
+          await writeJson(
+            join(deps.dataDir, ".scheduler.json"),
+            {
+              schema_version: SCHEDULER_SCHEMA_VERSION,
+              last_sync_at: lastUpdated,
+              next_sync_at: new Date(now().getTime() + scheduledIntervalMs).toISOString(),
+            },
+            { signal: controller.signal },
+          );
 
           // error_state.json lifecycle, AFTER the commit marker (ADR-0011
           // commit-marker-last) so a curator reading mid-sync never observes a

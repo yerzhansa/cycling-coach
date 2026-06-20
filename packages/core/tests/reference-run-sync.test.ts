@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -623,7 +623,11 @@ describe("createRunSync", () => {
     });
     const pendingWrites: Array<Promise<unknown>> = [];
     const latchedCacheWrite = vi.fn(
-      async (path: string, value: unknown): Promise<void> => {
+      async (
+        path: string,
+        value: unknown,
+        opts?: { signal?: AbortSignal },
+      ): Promise<void> => {
         if (!path.endsWith(".scheduler.json")) {
           if (signalArrived !== null) {
             signalArrived();
@@ -631,7 +635,10 @@ describe("createRunSync", () => {
           }
           await cacheGate;
         }
-        const w = realAtomicWrite(path, value);
+        // Forward the threaded signal so the real abort-aware helper sees the
+        // aborted state once the hand-fired timer ran — the rename-skip fires
+        // exactly as in production.
+        const w = realAtomicWrite(path, value, opts);
         pendingWrites.push(w);
         await w;
       },
@@ -677,10 +684,8 @@ describe("createRunSync", () => {
     expect(errorState.step).toBe("outer_timeout");
     expect(errorState.phase).toBe("writing_cache");
 
-    // The 5 cache files COMPLETED (they were already in flight when abort fired —
-    // filesystem writes aren't cancellable). Without the A1 fix, .scheduler.json
-    // would also have been written, contradicting the error_state.json marker.
-    // With A1: scheduler.json must NOT exist.
+    // With A1 + the abort-aware write helper, .scheduler.json must NOT exist
+    // (the body bailed before the commit-marker write).
     expect(() => readFileSync(join(dir, ".scheduler.json"), "utf-8")).toThrow();
 
     expect(mutex.isHeld()).toBe(false);
@@ -692,6 +697,23 @@ describe("createRunSync", () => {
     await Promise.allSettled(pendingWrites);
     await Promise.resolve();
     await Promise.resolve();
+
+    // The in-flight cache writes were aborted at the rename boundary: each
+    // helper fsync'd its temp file then skipped the rename, so NONE of the
+    // payload files landed. A dead cycle's stale payload must never replace the
+    // live file after the mutex was handed to the successor cycle.
+    for (const file of [
+      "latest.json",
+      "history.json",
+      "intervals.json",
+      "routes.json",
+      "ftp_history.json",
+    ]) {
+      expect(() => readFileSync(join(dir, file), "utf-8")).toThrow();
+    }
+    // No temp siblings linger — the aborted branch unlinked each one.
+    const orphans = readdirSync(dir).filter((e) => e.includes(".tmp."));
+    expect(orphans).toEqual([]);
   });
 
   // ── A2: body throws after timeout — error must NOT be silently swallowed ──
