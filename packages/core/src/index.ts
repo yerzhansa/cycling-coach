@@ -8,6 +8,7 @@ export { runSetup } from "./setup.js";
 // ─── Binary entry point ───────────────────────────────────────────────
 export { runBinary } from "./run-binary.js";
 export type { RunBinaryHooks } from "./run-binary.js";
+export { reportFatal } from "./process-guard.js";
 
 // ─── Sport contract ───────────────────────────────────────────────────
 export type {

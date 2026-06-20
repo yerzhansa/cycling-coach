@@ -1,8 +1,12 @@
-import { runBinary } from "@enduragent/core";
+import { runBinary, reportFatal, getCoachHome } from "@enduragent/core";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import { migrateCyclingLegacySections } from "@enduragent/sport-cycling/migrate";
 import { cyclingBinary } from "./binary.js";
 
-await runBinary(cyclingSport, cyclingBinary, {
-  onStartup: (memory) => migrateCyclingLegacySections(memory),
-});
+try {
+  await runBinary(cyclingSport, cyclingBinary, {
+    onStartup: (memory) => migrateCyclingLegacySections(memory),
+  });
+} catch (err) {
+  reportFatal(err, { dataDir: getCoachHome(cyclingBinary.binaryName) });
+}

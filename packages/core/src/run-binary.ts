@@ -271,6 +271,10 @@ export async function runBinary(
 
   ensureDataDirSecure(config.dataDir);
 
+  const { installCrashHandlers, logBootLine } = await import("./process-guard.js");
+  installCrashHandlers({ dataDir: config.dataDir });
+  logBootLine({ dataDir: config.dataDir });
+
   if (config.llm.provider !== "openai-codex" && !config.llm.apiKey) {
     console.error(
       `No LLM API key found. Run \`${binary.binaryName} setup\` to configure, or set ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY, DEEPSEEK_API_KEY, ALIBABA_API_KEY, MINIMAX_API_KEY, MOONSHOT_API_KEY, ZAI_API_KEY, or OPENROUTER_API_KEY.`,
@@ -328,7 +332,10 @@ export async function runBinary(
     console.log(
       `${binary.displayName} (Telegram mode) is running. Open Telegram and message your bot — Ctrl+C to stop.`,
     );
-    bot.start({ drop_pending_updates: true });
+    bot.start({ drop_pending_updates: true }).catch(async (err) => {
+      const { reportFatal } = await import("./process-guard.js");
+      reportFatal(err, { dataDir: config.dataDir });
+    });
     if (!process.env.CYCLING_COACH_NO_UPDATE_CHECK) {
       notifyUpdate(bot, config.dataDir, binary).catch(() => {});
     }

@@ -212,7 +212,7 @@ describe("startup-capture predicate (T3)", () => {
     const notifyUpdateFn = vi.fn(async () => undefined);
     vi.doMock("../src/channels/telegram.js", () => ({
       createTelegramBot: vi.fn(() => ({
-        start: vi.fn(),
+        start: vi.fn(async () => undefined),
         api: { sendMessage: vi.fn() },
       })),
       notifyUpdate: notifyUpdateFn,
@@ -363,7 +363,7 @@ describe("startup-capture predicate (T3)", () => {
         getMemory() { return {} as never; }
       },
     }));
-    const startSpy = vi.fn();
+    const startSpy = vi.fn(async () => undefined);
     vi.doMock("../src/channels/telegram.js", () => ({
       createTelegramBot: vi.fn(() => ({ start: startSpy, api: { sendMessage: vi.fn() } })),
       notifyUpdate: vi.fn(async () => undefined),
