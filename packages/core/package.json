@@ -16,13 +16,17 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@ai-sdk/alibaba": "^1.0.29",
     "@ai-sdk/anthropic": "^3.0.69",
+    "@ai-sdk/deepseek": "^2.0.25",
     "@ai-sdk/google": "^3.0.63",
     "@ai-sdk/openai": "^3.0.52",
+    "@ai-sdk/openai-compatible": "^2.0.51",
     "@ai-sdk/provider": "^3.0.9",
     "@ai-sdk/provider-utils": "^4.0.24",
     "@clack/prompts": "^1.2.0",
     "@mariozechner/pi-ai": "0.67.6",
+    "@openrouter/ai-sdk-provider": "^2.9.1",
     "ai": "^6.0.158",
     "grammy": "^1.42.0",
     "intervals-icu-api": "^0.1.2",

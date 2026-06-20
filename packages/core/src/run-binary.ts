@@ -273,7 +273,7 @@ export async function runBinary(
 
   if (config.llm.provider !== "openai-codex" && !config.llm.apiKey) {
     console.error(
-      `No LLM API key found. Run \`${binary.binaryName} setup\` to configure, or set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_GENERATIVE_AI_API_KEY.`,
+      `No LLM API key found. Run \`${binary.binaryName} setup\` to configure, or set ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY, DEEPSEEK_API_KEY, ALIBABA_API_KEY, MINIMAX_API_KEY, MOONSHOT_API_KEY, ZAI_API_KEY, or OPENROUTER_API_KEY.`,
     );
     process.exit(1);
   }

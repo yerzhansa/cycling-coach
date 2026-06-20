@@ -2,12 +2,17 @@ import { generateText } from "ai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { createDeepSeek } from "@ai-sdk/deepseek";
+import { createAlibaba } from "@ai-sdk/alibaba";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModel } from "ai";
 
 import { calculateCost, getModels } from "@mariozechner/pi-ai";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model, KnownProvider } from "@mariozechner/pi-ai";
 
 import type { Config } from "./config.js";
+import { PROVIDER_BASE_URLS } from "./config.js";
 import { codexGenerateText } from "./agent/codex-bridge.js";
 import type { GenerateOpts, GenerateResult } from "./llm-types.js";
 import { appendUsageLine, cacheTokenDetails, usageFieldsFromResult } from "./usage-ledger.js";
@@ -17,6 +22,17 @@ export type { GenerateOpts, GenerateResult } from "./llm-types.js";
 // ============================================================================
 // LLM DISPATCH
 // ============================================================================
+
+// Providers whose model catalog pi-ai prices via getModels(). Two kinds of
+// member are deliberately excluded. (1) Widened-union members that are NOT
+// pi-ai KnownProviders (deepseek/qwen/kimi) — passing those to getModels() is
+// a compile error (TS2345), so membership here is the runtime narrowing that
+// keeps the catalog lookup to known tokens. (2) minimax IS a KnownProvider but
+// its shipped default model (MiniMax-M2-Stable) is not in pi-ai's catalog, so
+// the lookup never resolves; listing it would advertise pricing that can't
+// happen. Non-members fall through to a null pricing model → cost: undefined on
+// the ledger (best-effort, by design).
+const PI_AI_PRICED = new Set<KnownProvider>(["anthropic", "openai", "google", "openrouter", "zai"]);
 
 export class LLM {
   private config: Config;
@@ -29,10 +45,11 @@ export class LLM {
   constructor(config: Config) {
     this.config = config;
     this.aiSdkModel = config.llm.provider === "openai-codex" ? null : buildAiSdkModel(config);
-    this.pricingModel =
-      config.llm.provider === "openai-codex"
-        ? null
-        : (getModels(config.llm.provider).find((m) => m.id === config.llm.model) ?? null);
+    this.pricingModel = PI_AI_PRICED.has(config.llm.provider as KnownProvider)
+      ? (getModels(config.llm.provider as KnownProvider).find(
+          (m) => m.id === config.llm.model,
+        ) ?? null)
+      : null;
   }
 
   async generate(opts: GenerateOpts): Promise<GenerateResult> {
@@ -149,6 +166,49 @@ function buildAiSdkModel(config: Config): LanguageModel {
     case "google": {
       const google = createGoogleGenerativeAI({ apiKey: config.llm.apiKey });
       return google(config.llm.model);
+    }
+    case "deepseek": {
+      // baseUrl is undefined only on direct construction (loadConfig always
+      // resolves it); undefined lets the SDK fall back to its package default.
+      const deepseek = createDeepSeek({ apiKey: config.llm.apiKey, baseURL: config.llm.baseUrl });
+      return deepseek(config.llm.model);
+    }
+    case "qwen": {
+      const alibaba = createAlibaba({ apiKey: config.llm.apiKey, baseURL: config.llm.baseUrl });
+      return alibaba(config.llm.model);
+    }
+    case "minimax": {
+      // createOpenAICompatible requires a baseURL, so fall back to the shared
+      // default when one wasn't resolved (direct construction in tests).
+      const minimax = createOpenAICompatible({
+        name: "minimax",
+        apiKey: config.llm.apiKey,
+        baseURL: config.llm.baseUrl ?? PROVIDER_BASE_URLS.minimax,
+      });
+      return minimax(config.llm.model);
+    }
+    case "kimi": {
+      const moonshot = createOpenAICompatible({
+        name: "moonshot",
+        apiKey: config.llm.apiKey,
+        baseURL: config.llm.baseUrl ?? PROVIDER_BASE_URLS.kimi,
+      });
+      return moonshot(config.llm.model);
+    }
+    case "zai": {
+      const zai = createOpenAICompatible({
+        name: "zai",
+        apiKey: config.llm.apiKey,
+        baseURL: config.llm.baseUrl ?? PROVIDER_BASE_URLS.zai,
+      });
+      return zai(config.llm.model);
+    }
+    case "openrouter": {
+      const openrouter = createOpenRouter({
+        apiKey: config.llm.apiKey,
+        baseURL: config.llm.baseUrl,
+      });
+      return openrouter.chat(config.llm.model);
     }
     case "openai-codex":
       throw new Error("openai-codex is handled via the bridge, not AI SDK");

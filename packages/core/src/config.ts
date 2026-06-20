@@ -11,12 +11,24 @@ import { resolveSecretRef } from "./secrets/resolve.js";
 
 export interface Config {
   llm: {
-    provider: "anthropic" | "openai" | "google" | "openai-codex";
+    provider:
+      | "anthropic"
+      | "openai"
+      | "google"
+      | "openai-codex"
+      | "deepseek"
+      | "qwen"
+      | "minimax"
+      | "kimi"
+      | "zai"
+      | "openrouter";
     model: string;
     apiKey: string;
     authProfile?: string;
     /** Cheaper model for the memory flush; unset reuses the chat model. */
     flushModel?: string;
+    /** Override base URL for OpenAI-compatible / direct providers. Empty = provider default. */
+    baseUrl?: string;
   };
   intervals: {
     apiKey: string;
@@ -68,6 +80,31 @@ const CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-5.4": 272_000,
   "gpt-5.4-mini": 272_000,
   "gpt-5.4-pro": 272_000,
+  "deepseek-v4-flash": 128_000,
+  "deepseek-v4-pro": 128_000,
+  "qwen-plus": 131_072,
+  "qwen3-max": 262_144,
+  "MiniMax-M2-Stable": 200_000,
+  "kimi-k2-0905": 256_000,
+  "glm-4.6": 200_000,
+  "glm-4.5": 128_000,
+  "deepseek/deepseek-chat": 128_000,
+};
+
+// Per-provider default API host. OpenAI-compatible providers (minimax/kimi/zai)
+// REQUIRE a base URL; the direct providers and OpenRouter ship a package default
+// but accept an override for proxies / mainland endpoints. The built-in four
+// (anthropic/openai/google/openai-codex) have no entry, so their base URL stays
+// undefined unless the operator sets one. Single source of truth: loadConfig
+// resolves it, the setup wizard prompts with it, and llm.ts uses it as the
+// required-baseURL fallback for the OpenAI-compatible providers.
+export const PROVIDER_BASE_URLS: Record<string, string> = {
+  deepseek: "https://api.deepseek.com/v1",
+  qwen: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+  minimax: "https://api.minimax.io/v1",
+  kimi: "https://api.moonshot.ai/v1",
+  zai: "https://api.z.ai/api/openai/v1",
+  openrouter: "https://openrouter.ai/api/v1",
 };
 
 function resolveContextWindowTokens(model: string): number {
@@ -146,6 +183,12 @@ export function loadConfig(): Config {
     openai: "OPENAI_API_KEY",
     google: "GOOGLE_GENERATIVE_AI_API_KEY",
     "openai-codex": undefined,
+    deepseek: "DEEPSEEK_API_KEY",
+    qwen: "ALIBABA_API_KEY",
+    minimax: "MINIMAX_API_KEY",
+    kimi: "MOONSHOT_API_KEY",
+    zai: "ZAI_API_KEY",
+    openrouter: "OPENROUTER_API_KEY",
   };
 
   const pending = new Map<SecretFieldPath, SecretRef>();
@@ -190,6 +233,12 @@ export function loadConfig(): Config {
     openai: "gpt-4o",
     google: "gemini-2.5-flash",
     "openai-codex": "gpt-5.4",
+    deepseek: "deepseek-v4-flash",
+    qwen: "qwen-plus",
+    minimax: "MiniMax-M2-Stable",
+    kimi: "kimi-k2-0905",
+    zai: "glm-4.6",
+    openrouter: "deepseek/deepseek-chat",
   };
 
   const model =
@@ -197,6 +246,11 @@ export function loadConfig(): Config {
 
   const flushModel =
     env("LLM_FLUSH_MODEL") ?? (llmYaml.flush_model as string | undefined);
+
+  const baseUrl =
+    env("LLM_BASE_URL") ??
+    (llmYaml.base_url as string | undefined) ??
+    PROVIDER_BASE_URLS[provider];
 
   const config: Config = {
     llm: {
@@ -208,6 +262,7 @@ export function loadConfig(): Config {
           ? ((llmYaml.auth_profile as string | undefined) ?? "openai-codex")
           : undefined,
       flushModel,
+      baseUrl,
     },
     intervals: {
       apiKey: intervalsApiKey,

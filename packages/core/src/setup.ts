@@ -3,7 +3,13 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, chmodSync } from "node:fs";
 import { stringify as toYaml } from "yaml";
 import type { BinaryConfig } from "./binary.js";
-import { CONFIG_DIR, CONFIG_FILE, envInt, readConfigYaml } from "./config.js";
+import {
+  CONFIG_DIR,
+  CONFIG_FILE,
+  PROVIDER_BASE_URLS,
+  envInt,
+  readConfigYaml,
+} from "./config.js";
 import { captureAndPersistOperator } from "./channels/operator-capture.js";
 import { loadAllowedSenders } from "./channels/allowed-senders.js";
 import { runCodexLogin } from "./auth/openai-codex-login.js";
@@ -42,12 +48,24 @@ const PROVIDERS = [
   { value: "openai", label: "OpenAI (GPT)" },
   { value: "google", label: "Google (Gemini)" },
   { value: "openai-codex", label: "OpenAI Codex (ChatGPT subscription)", hint: "experimental" },
+  { value: "deepseek", label: "DeepSeek" },
+  { value: "qwen", label: "Qwen (Alibaba Model Studio)" },
+  { value: "minimax", label: "MiniMax" },
+  { value: "kimi", label: "Kimi (Moonshot AI)" },
+  { value: "zai", label: "Z.AI (GLM)" },
+  { value: "openrouter", label: "OpenRouter", hint: "one key, many models" },
 ];
 
 const API_KEY_LABELS: Record<string, string> = {
   anthropic: "Anthropic API key",
   openai: "OpenAI API key",
   google: "Google AI API key",
+  deepseek: "DeepSeek API key",
+  qwen: "Alibaba (Model Studio) API key",
+  minimax: "MiniMax API key",
+  kimi: "Moonshot API key",
+  zai: "Z.AI API key",
+  openrouter: "OpenRouter API key",
 };
 
 const MODELS: Record<string, { value: string; label: string; hint?: string }[]> = {
@@ -70,6 +88,26 @@ const MODELS: Record<string, { value: string; label: string; hint?: string }[]> 
   "openai-codex": [
     { value: "gpt-5.4", label: "GPT-5.4", hint: "recommended" },
     { value: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "faster" },
+  ],
+  deepseek: [
+    { value: "deepseek-v4-flash", label: "DeepSeek V4 Flash", hint: "recommended" },
+    { value: "deepseek-v4-pro", label: "DeepSeek V4 Pro", hint: "most capable" },
+  ],
+  qwen: [
+    { value: "qwen-plus", label: "Qwen Plus", hint: "recommended" },
+    { value: "qwen3-max", label: "Qwen3 Max", hint: "most capable" },
+  ],
+  minimax: [{ value: "MiniMax-M2-Stable", label: "MiniMax M2 (stable)", hint: "recommended" }],
+  kimi: [{ value: "kimi-k2-0905", label: "Kimi K2 (0905)", hint: "recommended" }],
+  zai: [
+    { value: "glm-4.6", label: "GLM-4.6", hint: "recommended" },
+    { value: "glm-4.5", label: "GLM-4.5" },
+  ],
+  openrouter: [
+    { value: "deepseek/deepseek-chat", label: "DeepSeek Chat", hint: "cheap" },
+    { value: "z-ai/glm-4.6", label: "GLM-4.6 (via OpenRouter)" },
+    { value: "qwen/qwen-plus", label: "Qwen Plus (via OpenRouter)" },
+    { value: "moonshotai/kimi-k2", label: "Kimi K2 (via OpenRouter)" },
   ],
 };
 
@@ -102,6 +140,12 @@ const DEFAULT_MODELS: Record<string, string> = {
   openai: "gpt-5.4",
   google: "gemini-2.5-flash",
   "openai-codex": "gpt-5.4",
+  deepseek: "deepseek-v4-flash",
+  qwen: "qwen-plus",
+  minimax: "MiniMax-M2-Stable",
+  kimi: "kimi-k2-0905",
+  zai: "glm-4.6",
+  openrouter: "deepseek/deepseek-chat",
 };
 
 const FIELD_KEYCHAIN_ACCOUNT: Record<SecretFieldPath, string> = {
@@ -305,6 +349,22 @@ async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<voi
     model = (typeof custom === "string" && custom) || prevModel || "";
   }
 
+  // Base URL — only for OpenAI-compatible / direct providers that declare a
+  // default. The built-in providers (anthropic/openai/google/openai-codex) have
+  // no PROVIDER_BASE_URLS entry, so their prompt order is unchanged.
+  let baseUrl: string | undefined;
+  const defaultBaseUrl = PROVIDER_BASE_URLS[provider];
+  if (defaultBaseUrl) {
+    const prevBaseUrl = getString(previous, "llm", "base_url");
+    const baseUrlResp = await text({
+      message: "Base URL (Enter for default)",
+      defaultValue: prevBaseUrl ?? defaultBaseUrl,
+      placeholder: defaultBaseUrl,
+    });
+    handleCancel(baseUrlResp, ctx, binary);
+    baseUrl = (typeof baseUrlResp === "string" && baseUrlResp) || defaultBaseUrl;
+  }
+
   // Codex OAuth — reuse existing profile unless the operator asks to re-login
   let freshCodexCreds: OAuthCredential | null = null;
   if (provider === "openai-codex") {
@@ -345,6 +405,9 @@ async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<voi
   const llmConfig: Record<string, unknown> = { provider, model };
   if (provider === "openai-codex") {
     llmConfig.auth_profile = "openai-codex";
+  }
+  if (baseUrl !== undefined) {
+    llmConfig.base_url = baseUrl;
   }
 
   // llm.api_key (required unless Codex)
