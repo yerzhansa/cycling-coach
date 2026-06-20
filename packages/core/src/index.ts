@@ -105,6 +105,14 @@ export type { IntervalsClient } from "./intervals.js";
 
 // ─── Agent ────────────────────────────────────────────────────────────
 export { CoachAgent } from "./agent/coach-agent.js";
+export {
+  TurnBudgetExceededError,
+  MAX_TURN_MODEL_CALLS,
+  MAX_TURN_GENERATE_ATTEMPTS,
+  TURN_WALL_CLOCK_MS,
+} from "./agent/turn-budget.js";
+export type { BudgetExceededKind, TurnBudget } from "./agent/turn-budget.js";
+export { TAINTED_BY_WRITES_MESSAGE } from "./agent/coach-agent-copy.js";
 export { ChatStore } from "./agent/chat-store.js";
 export { buildSystemPrompt, SYSTEM_PROMPT_CACHE_BOUNDARY } from "./agent/system-prompt.js";
 export { computePromptLineage } from "./agent/prompt-lineage.js";

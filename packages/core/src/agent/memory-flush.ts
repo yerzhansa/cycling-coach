@@ -6,6 +6,7 @@ import type { MemoryStore } from "../memory.js";
 import { createMemoryReadTool } from "./tools.js";
 import type { LLM } from "../llm.js";
 import type { GenerateResult } from "../llm-types.js";
+import type { TurnBudget } from "./turn-budget.js";
 import { LEDGER_EVENT_KINDS, LEDGER_DATE_PATTERN, type LedgerEventKind } from "../memory/event-ledger.js";
 import { todayInTZ } from "./user-time.js";
 
@@ -201,6 +202,7 @@ export async function runMemoryFlush(params: {
   memory: MemoryStore;
   memorySections: readonly MemorySectionSpec[];
   tz?: string;
+  budget?: Pick<TurnBudget, "chargeModelCall">;
 }): Promise<MemoryFlushOutcome> {
   if (params.memorySections.length === 0) {
     throw new Error(
@@ -223,6 +225,7 @@ export async function runMemoryFlush(params: {
     }),
   };
 
+  params.budget?.chargeModelCall();
   const result = await params.llm.generate({
     system: MEMORY_FLUSH_SYSTEM_PROMPT,
     messages: [

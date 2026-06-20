@@ -1,5 +1,5 @@
 import { stepCountIs } from "ai";
-import type { ModelMessage, ToolSet } from "ai";
+import type { ModelMessage, Tool, ToolSet } from "ai";
 import { makeChatClient } from "../reference/sync/intervals-client-factory.js";
 import { getEffectiveSections } from "../memory/effective-sections.js";
 import type { CoreDeps, Sport } from "../sport.js";
@@ -33,6 +33,8 @@ import { createMemorySnapshot } from "../memory/snapshot.js";
 import { resolveUserTimezone, appendCurrentTimeLine } from "./user-time.js";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/index.js";
 import { retryWithBackoff } from "../concurrency/retry.js";
+import { createTurnBudget, TurnBudgetExceededError, type TurnBudget } from "./turn-budget.js";
+import { TAINTED_BY_WRITES_MESSAGE } from "./coach-agent-copy.js";
 
 const MAX_OVERFLOW_ATTEMPTS = 3;
 const MAX_TIMEOUT_ATTEMPTS = 2;
@@ -42,6 +44,10 @@ const RATE_LIMIT_FALLBACK_MULTIPLIER = 2;
 const RATE_LIMIT_FALLBACK_MAX_MS = 30_000;
 const RATE_LIMIT_MAX_WAIT_MS = 120_000;
 const MAX_FLUSH_ATTEMPTS = 2;
+
+// Calendar write tools whose committed success makes a turn non-replayable.
+// Kept here so the taint set can't drift from the actual tool names.
+const WRITE_TOOL_NAMES = new Set(["intervals_create_workout", "intervals_delete_workout"]);
 
 type MemoryFlushTrigger =
   | "stale-reset"
@@ -68,6 +74,12 @@ export class CoachAgent {
   private tz: string;
   private archiveDeferred = new Set<string>();
   private lastFlushMessageCount = new Map<string, number>();
+  // Per-turn record of committed calendar writes, reset at the top of chat().
+  // A committed write makes the turn non-replayable: the retry loop re-sends the
+  // pre-turn messages, so a second generate could re-run a non-idempotent create.
+  private turnWrites: { writesCommitted: number; lastWriteSummary?: string } = {
+    writesCommitted: 0,
+  };
   // Resolved primary anchor (running CS) for the in-flight turn. Set at the top
   // of chat() from the channel's per-turn value and read lazily by sport tools
   // via the `coreDeps.resolvedCs` getter, so the tool set (and the cached
@@ -109,14 +121,47 @@ export class CoachAgent {
       resolvedCs: () => this.currentResolvedCs,
     };
     const registrations = sport.tools(coreDeps);
-    this.tools = Object.fromEntries(registrations.map((r) => [r.name, r.tool])) as ToolSet;
+    this.tools = Object.fromEntries(
+      registrations.map((r) => [r.name, this.wrapWriteTool(r.name, r.tool)]),
+    ) as ToolSet;
     // systemPrompt is rebuilt at the top of every chat() call; no need to bake one here.
     this.systemPrompt = "";
+  }
+
+  // Agent-owned wrapper that records a committed calendar write the moment its
+  // tool executes — at the execution boundary, not from the generate result,
+  // because result.toolCalls carries only the last agentic step and would miss
+  // a write committed on an earlier step. Non-write tools pass through untouched.
+  private wrapWriteTool(name: string, tool: Tool): Tool {
+    if (!WRITE_TOOL_NAMES.has(name)) return tool;
+    const inner = tool.execute;
+    if (typeof inner !== "function") return tool;
+    const record = this.turnWrites;
+    return {
+      ...tool,
+      execute: async (input: unknown, options: unknown) => {
+        const result = await (inner as (i: unknown, o: unknown) => unknown)(input, options);
+        if (
+          result !== null &&
+          typeof result === "object" &&
+          ((result as { created?: unknown }).created === true ||
+            (result as { deleted?: unknown }).deleted === true)
+        ) {
+          record.writesCommitted++;
+          record.lastWriteSummary =
+            (result as { created?: unknown }).created === true
+              ? "created a workout on the calendar"
+              : "deleted a scheduled workout";
+        }
+        return result;
+      },
+    } as Tool;
   }
 
   private async flushMemory(
     messages: ModelMessage[],
     trigger: MemoryFlushTrigger,
+    budget?: Pick<TurnBudget, "chargeModelCall">,
   ): Promise<MemoryFlushOutcome> {
     let lastError: unknown;
     for (let attempt = 1; attempt <= MAX_FLUSH_ATTEMPTS; attempt++) {
@@ -127,6 +172,7 @@ export class CoachAgent {
           memory: this.memory,
           memorySections: getEffectiveSections(this.sport),
           tz: this.tz,
+          budget,
         });
       } catch (err) {
         lastError = err;
@@ -144,13 +190,14 @@ export class CoachAgent {
     throw lastError;
   }
 
-  private compactionParams() {
+  private compactionParams(budget?: Pick<TurnBudget, "chargeModelCall">) {
     return {
       llm: this.llm,
       caller: "compact" as const,
       mustPreserveTokens: this.sport.mustPreserveTokens,
       memory: createMemorySnapshot(this.memory),
       contextWindowTokens: this.config.contextWindowTokens,
+      budget,
     };
   }
 
@@ -164,6 +211,11 @@ export class CoachAgent {
     this.currentResolvedCs = turn?.resolvedCs ?? null;
     return withSessionLock(chatId, async () => {
       const turnStart = Date.now();
+      const turnBudget = createTurnBudget(() => Date.now());
+      // Reset the per-turn write record in place (the wrapped write tools hold a
+      // reference to this object, captured once at construction).
+      this.turnWrites.writesCommitted = 0;
+      this.turnWrites.lastWriteSummary = undefined;
       // One flush per turn: the latch flips on entry (before the await
       // resolves) so a thrown flush still consumes the turn's single flush.
       let flushedThisTurn = false;
@@ -183,7 +235,7 @@ export class CoachAgent {
         if (history.length > 0 && !flushedThisTurn) {
           flushedThisTurn = true;
           try {
-            outcome = await this.flushMemory(history, "stale-reset");
+            outcome = await this.flushMemory(history, "stale-reset", turnBudget);
           } catch (err) {
             this.log.warn("Pre-reset memory flush failed; archiving session anyway", err);
           }
@@ -229,7 +281,7 @@ export class CoachAgent {
         if (!flushedThisTurn) {
           flushedThisTurn = true;
           try {
-            await this.flushMemory(history, "trim");
+            await this.flushMemory(history, "trim", turnBudget);
           } catch (err) {
             flushed = false;
             this.log.warn("Pre-compaction memory flush failed; keeping session file unchanged", err);
@@ -239,7 +291,7 @@ export class CoachAgent {
           const { summary, unsummarized } = await summarizeDroppedMessages({
             dropped,
             previousSummary,
-            ...this.compactionParams(),
+            ...this.compactionParams(turnBudget),
           });
           summaryMsg = makeSummaryMessage(summary);
           requeued = unsummarized;
@@ -270,7 +322,7 @@ export class CoachAgent {
         if (!flushedThisTurn) {
           flushedThisTurn = true;
           try {
-            await this.flushMemory(history, "soft-threshold");
+            await this.flushMemory(history, "soft-threshold", turnBudget);
           } catch (err) {
             this.log.warn("Soft-threshold memory flush failed; continuing turn", err);
           }
@@ -299,21 +351,28 @@ export class CoachAgent {
       const cacheKey = sha256_16(chatId);
 
       while (true) {
+        // Between-attempt budget gates: the attempt charge and the wall-clock
+        // check run at the loop top so the deadline stops the NEXT attempt and
+        // never aborts a generate/compaction already in flight.
+        turnBudget.chargeAttempt();
+        turnBudget.checkDeadline();
+
         // Preemptive: compact before sending if over budget
         if (shouldCompact({ messages, systemPrompt: this.systemPrompt, contextWindowTokens: this.config.contextWindowTokens })) {
           if (!flushedThisTurn) {
             flushedThisTurn = true;
             try {
-              await this.flushMemory(messages, "pre-compaction");
+              await this.flushMemory(messages, "pre-compaction", turnBudget);
             } catch (err) {
               this.log.warn("In-turn memory flush failed; compacting without flush", err);
             }
           }
-          messages = await summarizeInStages({ messages, ...this.compactionParams() });
+          messages = await summarizeInStages({ messages, ...this.compactionParams(turnBudget) });
           this.memory.reload();
         }
 
         try {
+          turnBudget.chargeModelCall();
           const result = await this.llm.generate({
             system: this.systemPrompt,
             messages,
@@ -360,6 +419,24 @@ export class CoachAgent {
 
           return text;
         } catch (err) {
+          // The classified budget error is terminal: re-throw it before any
+          // retry branch so a future reordering can never mistake it for one of
+          // the retryable classes and swallow it.
+          if (err instanceof TurnBudgetExceededError) throw err;
+          // A committed calendar write makes this turn non-replayable: retrying
+          // would re-send the pre-turn messages and could re-run a
+          // non-idempotent create. Refuse honestly instead of looping.
+          if (this.turnWrites.writesCommitted > 0) {
+            console.warn(
+              JSON.stringify({
+                event: "turn_failed_after_write",
+                writesCommitted: this.turnWrites.writesCommitted,
+                lastWriteSummary: this.turnWrites.lastWriteSummary,
+                error: (err instanceof Error ? err.message : String(err)).slice(0, 200),
+              }),
+            );
+            return TAINTED_BY_WRITES_MESSAGE;
+          }
           // Reactive: context overflow → flush + compact + retry
           if (isContextOverflowError(err) && overflowAttempts < MAX_OVERFLOW_ATTEMPTS) {
             overflowAttempts++;
@@ -367,12 +444,12 @@ export class CoachAgent {
               if (!flushedThisTurn) {
                 flushedThisTurn = true;
                 try {
-                  await this.flushMemory(messages, "overflow-recovery");
+                  await this.flushMemory(messages, "overflow-recovery", turnBudget);
                 } catch (flushErr) {
                   this.log.warn("In-turn memory flush failed; compacting without flush", flushErr);
                 }
               }
-              messages = await summarizeInStages({ messages, ...this.compactionParams() });
+              messages = await summarizeInStages({ messages, ...this.compactionParams(turnBudget) });
               this.memory.reload();
             } catch (rescueErr) {
               this.log.warn("Compaction rescue failed; rethrowing the original turn error", rescueErr);
@@ -389,7 +466,7 @@ export class CoachAgent {
             if (ratio > TIMEOUT_COMPACTION_THRESHOLD) {
               timeoutAttempts++;
               try {
-                messages = await summarizeInStages({ messages, ...this.compactionParams() });
+                messages = await summarizeInStages({ messages, ...this.compactionParams(turnBudget) });
                 this.memory.reload();
               } catch (rescueErr) {
                 this.log.warn("Compaction rescue failed; rethrowing the original turn error", rescueErr);
@@ -436,6 +513,10 @@ export class CoachAgent {
                 },
               },
             );
+            // The backoff sleep is the one place a turn can silently burn
+            // minutes; converting a long Retry-After wait into a clean budget
+            // stop here means the deadline never wedges the session lock.
+            turnBudget.checkDeadline();
             continue;
           }
           // Rate limit retries exhausted → throw to caller (skip compaction — API is rate limited)

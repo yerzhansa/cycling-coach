@@ -12,6 +12,9 @@ import {
 import { makeSummaryMessage, SUMMARY_PREFIX } from "./history-limit.js";
 import type { LLM } from "../llm.js";
 import type { GenerateOpts } from "../llm-types.js";
+import type { TurnBudget } from "./turn-budget.js";
+
+type ModelCallCharger = Pick<TurnBudget, "chargeModelCall">;
 
 // ============================================================================
 // CONSTANTS
@@ -121,8 +124,10 @@ function capSummary(summary: string): string {
 
 async function generateSummaryWithTimeout(
   llm: LLM,
-  opts: { prompt: string; maxOutputTokens: number; caller?: GenerateOpts["caller"] },
+  opts: { prompt: string; maxOutputTokens: number; caller?: GenerateOpts["caller"]; budget?: ModelCallCharger },
 ): Promise<string> {
+  const { budget, ...generateOpts } = opts;
+  budget?.chargeModelCall();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(
@@ -130,7 +135,7 @@ async function generateSummaryWithTimeout(
       SUMMARIZATION_TIMEOUT_MS,
     );
   });
-  const call = llm.generate(opts);
+  const call = llm.generate(generateOpts);
   try {
     const { text } = await Promise.race([call, deadline]);
     return text;
@@ -223,8 +228,9 @@ async function finalizeSummary(params: {
   mustPreserveBlock: string;
   maxRetries: number;
   caller?: GenerateOpts["caller"];
+  budget?: ModelCallCharger;
 }): Promise<string> {
-  const { llm, mustPreserveBlock, maxRetries, caller } = params;
+  const { llm, mustPreserveBlock, maxRetries, caller, budget } = params;
   let best = capSummary(params.summary);
   const audit = auditSummaryQuality(best);
   if (audit.ok) return best;
@@ -235,6 +241,7 @@ async function finalizeSummary(params: {
         prompt: `Restructure the following summary to include ALL required section headings: ${audit.missing.join(", ")}.\n\n${best}\n\n${mustPreserveBlock}`,
         maxOutputTokens: MAX_SUMMARY_TOKENS,
         caller,
+        budget,
       });
       const capped = capSummary(text);
       if (auditSummaryQuality(capped).ok) return capped;
@@ -260,8 +267,9 @@ export async function summarizeDroppedMessages(params: {
   maxRetries?: number;
   contextWindowTokens?: number;
   caller?: GenerateOpts["caller"];
+  budget?: ModelCallCharger;
 }): Promise<{ summary: string; unsummarized: ModelMessage[] }> {
-  const { dropped, llm, mustPreserveTokens, memory, previousSummary, maxRetries = 1, contextWindowTokens, caller } = params;
+  const { dropped, llm, mustPreserveTokens, memory, previousSummary, maxRetries = 1, contextWindowTokens, caller, budget } = params;
 
   if (dropped.length === 0) return { summary: previousSummary ?? "", unsummarized: [] };
 
@@ -291,6 +299,7 @@ export async function summarizeDroppedMessages(params: {
         prompt,
         maxOutputTokens: MAX_SUMMARY_TOKENS,
         caller,
+        budget,
       });
       summary = text;
     } catch (err) {
@@ -307,7 +316,7 @@ export async function summarizeDroppedMessages(params: {
   }
 
   return {
-    summary: await finalizeSummary({ summary, llm, mustPreserveBlock, maxRetries, caller }),
+    summary: await finalizeSummary({ summary, llm, mustPreserveBlock, maxRetries, caller, budget }),
     unsummarized,
   };
 }
@@ -325,8 +334,9 @@ export async function summarizeInStages(params: {
   previousSummary?: string;
   contextWindowTokens?: number;
   caller?: GenerateOpts["caller"];
+  budget?: ModelCallCharger;
 }): Promise<ModelMessage[]> {
-  const { llm, mustPreserveTokens, memory, recentToKeep = 4, contextWindowTokens, caller } = params;
+  const { llm, mustPreserveTokens, memory, recentToKeep = 4, contextWindowTokens, caller, budget } = params;
 
   let messages = params.messages;
   let previousSummary = params.previousSummary;
@@ -370,6 +380,7 @@ export async function summarizeInStages(params: {
         prompt: `${summarizePrompt}${contextPrefix}\n\n${transcript}`,
         maxOutputTokens: MAX_SUMMARY_TOKENS,
         caller,
+        budget,
       });
       summary = text;
     } catch (err) {
@@ -388,6 +399,7 @@ export async function summarizeInStages(params: {
     mustPreserveBlock,
     maxRetries: 1,
     caller,
+    budget,
   });
   return [makeSummaryMessage(finalSummary), ...recent];
 }
