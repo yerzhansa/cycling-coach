@@ -9,12 +9,25 @@ import { describe, expect, it } from "vitest";
 import { fetchLiveBundle, type BundleFetchClient } from "../src/reference/sync/fetch-live-bundle.js";
 import { buildMetricInput } from "../src/reference/sync/fixture-bridge.js";
 import { computeDerivedMetrics } from "../src/reference/sync/compute-derived-metrics.js";
+import { runAdaptersForActivities } from "../src/reference/sport-adapter-dispatcher.js";
+import type { ReferenceSportAdapter } from "../src/reference/sport-adapter.js";
+import type { IntervalsActivityType } from "../src/sport.js";
 import type { FetchedReference } from "../src/reference/sync/run-sync.js";
 import { gateLatestJson } from "../src/reference/validation/sync-gate.js";
 import { LatestJsonSchema } from "../src/reference/schemas/latest.js";
 import { METRIC_REGISTRY } from "../src/reference/metrics/registry.js";
 
 const NOW = new Date("2026-06-09T12:00:00.000Z");
+
+const CYCLING_ADAPTER: ReferenceSportAdapter = {
+  activityTypes: ["Ride", "VirtualRide"],
+  zoneBasis: "power",
+  decouplingBasis: "power",
+  sustainabilityAnchors: [300, 1200, 3600],
+  dfaValidated: true,
+};
+
+const SPORT_TYPES: readonly IntervalsActivityType[] = ["Ride", "VirtualRide"];
 
 function daysAgo(n: number): string {
   return new Date(NOW.getTime() - n * 24 * 60 * 60 * 1000).toISOString();
@@ -59,6 +72,7 @@ function fakeClient(): BundleFetchClient {
 /** Compose exactly as the production `fetchOnce` does. */
 async function composeFetched(): Promise<FetchedReference> {
   const live = await fetchLiveBundle({ client: fakeClient(), signal: new AbortController().signal, now: NOW, throttleMs: 0 });
+  runAdaptersForActivities([CYCLING_ADAPTER], SPORT_TYPES, live.bundle.activities);
   const derived_metrics = computeDerivedMetrics(buildMetricInput(live.bundle, live.frozenNow));
   return {
     latest: {
@@ -107,6 +121,7 @@ describe("live-data bridge integration", () => {
       wellness: { list: async () => ({ ok: true, value: [] }) },
     };
     const live = await fetchLiveBundle({ client: emptyClient, signal: new AbortController().signal, now: NOW, throttleMs: 0 });
+    runAdaptersForActivities([CYCLING_ADAPTER], SPORT_TYPES, live.bundle.activities);
     const derived_metrics = computeDerivedMetrics(buildMetricInput(live.bundle, live.frozenNow));
     const fetched: FetchedReference = {
       latest: {

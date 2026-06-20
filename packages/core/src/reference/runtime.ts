@@ -71,6 +71,8 @@ export async function bootstrapReference(
     makeProductionFetcher({
       apiKey: deps.intervals.apiKey,
       athleteId: deps.intervals.athleteId,
+      adapters,
+      sportTypes: deps.sport.intervalsActivityTypes,
     });
 
   const mutex = new AsyncMutex();
