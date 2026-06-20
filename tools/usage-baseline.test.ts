@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 
+import type { UsageLedgerLine } from "../packages/core/src/usage-ledger.js";
 import {
   parseCli,
   resolveDataDir,
@@ -9,13 +10,12 @@ import {
   mean,
   safeDiv,
   buildReport,
-  type LedgerLineWithLineage,
 } from "./usage-baseline.js";
 
 const DAY = 24 * 60 * 60 * 1000;
 const T0 = 1_700_000_000_000; // fixed anchor; the tool never reads wall-clock
 
-function line(over: Partial<LedgerLineWithLineage>): LedgerLineWithLineage {
+function line(over: Partial<UsageLedgerLine>): UsageLedgerLine {
   return {
     ts: T0,
     kind: "turn",
@@ -26,7 +26,7 @@ function line(over: Partial<LedgerLineWithLineage>): LedgerLineWithLineage {
     ...over,
   };
 }
-function jsonl(lines: LedgerLineWithLineage[]): string {
+function jsonl(lines: UsageLedgerLine[]): string {
   return lines.map((l) => JSON.stringify(l)).join("\n") + "\n";
 }
 

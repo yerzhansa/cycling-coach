@@ -25,7 +25,7 @@ import { join } from "node:path";
 
 const LEGACY_CYCLING_COACH_BASENAME = ".cycling-coach";
 
-function expandTilde(p: string): string {
+export function expandTilde(p: string): string {
   if (p === "~") return homedir();
   if (p.startsWith("~/")) return join(homedir(), p.slice(2));
   return p;

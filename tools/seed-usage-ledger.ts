@@ -21,6 +21,7 @@ import { homedir } from "node:os";
 import { resolve, join } from "node:path";
 
 import { loadConfig, resolveConfigSecrets, CoachAgent, USAGE_LEDGER_FILE } from "@enduragent/core";
+import { expandTilde } from "../packages/core/src/coach-home.js";
 import { cyclingSport } from "@enduragent/sport-cycling";
 
 // Respect the operator's configured provider (their real auth runs the turns).
@@ -29,12 +30,6 @@ import { cyclingSport } from "@enduragent/sport-cycling";
 // — resolving it from the LLM_PROVIDER env var alone would mis-fire for a
 // yaml-configured codex operator and force a Claude model onto the codex bridge.
 const HAIKU = "claude-haiku-4-5-20251001";
-
-function expandTilde(p: string): string {
-  if (p === "~") return homedir();
-  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
-  return p;
-}
 
 // --- Hard safety guard --------------------------------------------------------
 const rawHome = process.env.CYCLING_COACH_HOME;

@@ -25,16 +25,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { USAGE_LEDGER_FILE, type UsageLedgerLine } from "../packages/core/src/usage-ledger.js";
-import { getCoachHome } from "../packages/core/src/coach-home.js";
-
-// `templateHash` lands on the ledger turn line via the lineage change; widen
-// defensively so the tool also handles older lines that predate it (bucketed
-// under "unknown").
-export type LedgerLineWithLineage = UsageLedgerLine & { templateHash?: string };
+import { getCoachHome, expandTilde } from "../packages/core/src/coach-home.js";
+import { MS_PER_DAY } from "../packages/core/src/io/date-keys.js";
 
 const UNKNOWN_TEMPLATE = "unknown";
 const MIN_SPAN_DAYS = 3;
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 // ─── CLI ────────────────────────────────────────────────────────────────
 
@@ -100,11 +95,11 @@ export function parseCli(argv: readonly string[]): CliArgs {
 
 export function resolveDataDir(dataDirFlag: string | undefined): { dir: string; source: string } {
   if (dataDirFlag !== undefined && dataDirFlag.length > 0) {
-    return { dir: dataDirFlag, source: "--data-dir" };
+    return { dir: expandTilde(dataDirFlag), source: "--data-dir" };
   }
   const env = process.env.CYCLING_COACH_HOME;
   if (env !== undefined && env.length > 0) {
-    return { dir: env, source: "CYCLING_COACH_HOME" };
+    return { dir: expandTilde(env), source: "CYCLING_COACH_HOME" };
   }
   return { dir: getCoachHome("cycling-coach"), source: 'getCoachHome("cycling-coach")' };
 }
@@ -113,8 +108,8 @@ export function resolveDataDir(dataDirFlag: string | undefined): { dir: string; 
 
 // Parses JSONL, skipping blank lines and any line that fails to parse or lacks
 // a numeric ts / string kind (defensive: the ledger is a best-effort sink).
-export function parseLedger(raw: string): LedgerLineWithLineage[] {
-  const out: LedgerLineWithLineage[] = [];
+export function parseLedger(raw: string): UsageLedgerLine[] {
+  const out: UsageLedgerLine[] = [];
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
     if (trimmed.length === 0) continue;
@@ -130,17 +125,17 @@ export function parseLedger(raw: string): LedgerLineWithLineage[] {
       typeof (parsed as { ts?: unknown }).ts === "number" &&
       typeof (parsed as { kind?: unknown }).kind === "string"
     ) {
-      out.push(parsed as LedgerLineWithLineage);
+      out.push(parsed as UsageLedgerLine);
     }
   }
   return out;
 }
 
 export function selectLines(
-  lines: readonly LedgerLineWithLineage[],
+  lines: readonly UsageLedgerLine[],
   kind: UsageLedgerLine["kind"],
   caller: CliArgs["caller"],
-): LedgerLineWithLineage[] {
+): UsageLedgerLine[] {
   // Boot lines never carry a caller, so the caller filter is skipped for them;
   // otherwise `--kind boot` with the default `--caller chat` would select none.
   return lines.filter(
@@ -221,7 +216,7 @@ export interface Report {
 
 function summarizeGroup(
   templateHash: string,
-  lines: readonly LedgerLineWithLineage[],
+  lines: readonly UsageLedgerLine[],
 ): GroupSummary {
   const durations = lines.map((l) => l.durationMs).filter((d): d is number => Number.isFinite(d));
 
@@ -249,8 +244,8 @@ function summarizeGroup(
       p50: percentile(durations, 50),
       p95: percentile(durations, 95),
       mean: mean(durations),
-      min: durations.length > 0 ? Math.min(...durations) : null,
-      max: durations.length > 0 ? Math.max(...durations) : null,
+      min: percentile(durations, 0),
+      max: percentile(durations, 100),
     },
     cacheRead: {
       perLineRatioMean: mean(perLineRatios),
@@ -288,7 +283,7 @@ export function buildReport(args: {
         ? `window spans ${spanDays.toFixed(2)} day(s) — below the ${MIN_SPAN_DAYS}-day minimum a real baseline needs`
         : null;
 
-  const byHash = new Map<string, LedgerLineWithLineage[]>();
+  const byHash = new Map<string, UsageLedgerLine[]>();
   for (const l of selected) {
     const key = l.templateHash ?? UNKNOWN_TEMPLATE;
     const bucket = byHash.get(key);
