@@ -149,6 +149,103 @@ describe("createRunSync", () => {
     expect(slowFetch).toHaveBeenCalledOnce();
   });
 
+  it("interactive /sync fails fast on a held mutex: returns mutex_held promptly without fetching or waiting the acquire timeout", async () => {
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const now = new Date("2026-05-09T14:00:00Z");
+
+    let resolveSlow!: () => void;
+    const slowFetch = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveSlow = resolve;
+      });
+      return emptyFetched;
+    });
+    const fastFetch = vi.fn().mockResolvedValue(emptyFetched);
+
+    const runSyncSlow = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: slowFetch,
+      now: () => now,
+      timing: { acquireTimeoutMs: 5_000, hotWarnMs: 1_000 },
+    });
+    const runSyncInteractive = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: fastFetch,
+      now: () => now,
+      // A LONG acquire timeout: if the fast-path did not short-circuit, the
+      // interactive call would hang here, so a prompt resolution proves the
+      // `isHeld()` guard fired before the blocking acquire.
+      timing: { acquireTimeoutMs: 60_000, hotWarnMs: 1_000 },
+    });
+
+    const p1 = runSyncSlow({ caller: "scheduled" });
+    // Let the slow sync acquire and start holding the mutex.
+    await Promise.resolve();
+    expect(mutex.isHeld()).toBe(true);
+
+    const r2 = await runSyncInteractive({ caller: "/sync", chatId: "telegram:1" });
+    expect(r2).toEqual({ kind: "skipped", reason: "mutex_held" });
+    expect(fastFetch).not.toHaveBeenCalled();
+
+    resolveSlow();
+    const r1 = await p1;
+    expect(r1.kind).toBe("ran");
+  });
+
+  it("scheduled caller does NOT short-circuit on a held mutex: it reaches the blocking acquire and waits", async () => {
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const now = new Date("2026-05-09T14:00:00Z");
+
+    let resolveSlow!: () => void;
+    const slowFetch = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveSlow = resolve;
+      });
+      return emptyFetched;
+    });
+    const fastFetch = vi.fn().mockResolvedValue(emptyFetched);
+
+    const runSyncSlow = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: slowFetch,
+      now: () => now,
+      timing: { acquireTimeoutMs: 5_000, hotWarnMs: 1_000 },
+    });
+    const runSyncScheduled = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: fastFetch,
+      now: () => now,
+      timing: { acquireTimeoutMs: 30, hotWarnMs: 10 },
+    });
+
+    const p1 = runSyncSlow({ caller: "scheduled" });
+    await Promise.resolve();
+    expect(mutex.isHeld()).toBe(true);
+
+    // The scheduled caller queue-waits and times out (kind:skipped after the
+    // acquire timeout), proving the fast-path guard did not fire for it.
+    const r2 = await runSyncScheduled({ caller: "scheduled" });
+    expect(r2).toEqual({ kind: "skipped", reason: "mutex_held" });
+    expect(fastFetch).not.toHaveBeenCalled();
+
+    resolveSlow();
+    await p1;
+  });
+
   it("times out at outerTimeoutMs: aborts the controller, writes error_state.json with phase, releases mutex, returns kind:failed", async () => {
     const mutex = new AsyncMutex();
     const cooldown = new Cooldown();

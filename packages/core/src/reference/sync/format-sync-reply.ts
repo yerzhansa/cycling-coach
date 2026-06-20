@@ -20,7 +20,7 @@ export function formatSyncReply(result: SyncResult, now: Date = new Date()): str
         case "cooldown":
           return `Just synced — please wait ${Math.ceil((result.retryAfterMs ?? 0) / 1000)}s before forcing another refresh.`;
         case "mutex_held":
-          return "Another sync in progress — please retry in a moment.";
+          return "A sync is already running — it'll finish within about 2 minutes; your data will be fresh then.";
         default: {
           const _exhaustive: never = result;
           throw new Error(`formatSyncReply: unhandled skipped reason ${String(_exhaustive)}`);
@@ -42,8 +42,14 @@ export function formatSyncReply(result: SyncResult, now: Date = new Date()): str
       }
     case "ran": {
       const lastLine = `Last sync: ${formatTimestamp(result.lastSyncAt, now)}`;
-      const refreshedLine = `Refreshed: ${result.refreshed.join(", ")}`;
-      return `Sync ✅\n${lastLine}\n${refreshedLine}`;
+      // The content-hash short-circuit returns `refreshed: []` on a genuine
+      // no-op cycle; rendering a bare "Refreshed: " label would be a dangling
+      // line, so say nothing-changed instead.
+      const detailLine =
+        result.refreshed.length === 0
+          ? "Already up to date — nothing changed since the last sync."
+          : `Refreshed: ${result.refreshed.join(", ")}`;
+      return `Sync ✅\n${lastLine}\n${detailLine}`;
     }
     default: {
       const _exhaustive: never = result;

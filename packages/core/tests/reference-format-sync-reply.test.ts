@@ -19,6 +19,19 @@ describe("formatSyncReply", () => {
     expect(text).toContain("history");
   });
 
+  it("renders a no-op ran result (empty refreshed) without a dangling 'Refreshed:' line", () => {
+    const r: SyncResult = {
+      kind: "ran",
+      lastSyncAt: "2026-05-09T14:23:00Z",
+      refreshed: [],
+    };
+    const text = formatSyncReply(r, fixedNow);
+    expect(text).toContain("Sync");
+    expect(text).toContain("Last sync:");
+    expect(text).not.toContain("Refreshed:");
+    expect(text.toLowerCase()).toContain("nothing changed");
+  });
+
   it("formats the cooldown skip with a per-second retryAfter countdown", () => {
     const r: SyncResult = {
       kind: "skipped",
@@ -30,13 +43,14 @@ describe("formatSyncReply", () => {
     expect(text).toContain("18s");
   });
 
-  it("formats the mutex_held skip as 'sync in progress, please retry shortly'", () => {
+  it("formats the mutex_held skip as the static 'already running' reply", () => {
     const r: SyncResult = {
       kind: "skipped",
       reason: "mutex_held",
     };
     const text = formatSyncReply(r, fixedNow);
-    expect(text.toLowerCase()).toContain("sync in progress");
+    expect(text.toLowerCase()).toContain("already running");
+    expect(text.toLowerCase()).not.toContain("sync in progress");
   });
 
   it("formats an outer-timeout failure as 'I can't reach intervals.icu'", () => {

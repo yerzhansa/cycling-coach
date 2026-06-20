@@ -231,6 +231,15 @@ export function createRunSync(
       }
     }
 
+    // Fail fast for the interactive caller: if a sync is already running, the
+    // athlete's /sync would otherwise enqueue a waiter and block the full
+    // acquire timeout before skipping. Reply immediately instead. The scheduled
+    // caller deliberately keeps queue-and-wait semantics (it has no one waiting
+    // on a reply), so this branch is /sync-only.
+    if (opts.caller === "/sync" && deps.mutex.isHeld()) {
+      return { kind: "skipped", reason: "mutex_held" };
+    }
+
     const mutexResult = await deps.mutex.runExclusive(
       async (): Promise<SyncResult> => {
         const controller = new AbortController();
