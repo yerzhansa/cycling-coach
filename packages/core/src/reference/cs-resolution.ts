@@ -17,8 +17,9 @@ export const RUN_FAMILY_TYPES = new Set<string>(["Run", "TrailRun"]);
 
 // Hard-refusal CS band in m/s: a value outside is unit-confused or corrupt, not a
 // real CS. Typical recreational-to-trained range (~2.5–6.0 m/s, ≈6:40–2:47/km)
-// sits inside; [2.0, 6.5] adds headroom before refusing. Kept in sync with the
-// sport-running CS_SANITY_MPS constant.
+// sits inside; [2.0, 6.5] adds headroom before refusing. Single source of truth:
+// sport-running derives its CS_SANITY_MPS from these via the core barrel re-export
+// (compiler-enforced), so the two bands cannot drift.
 export const CS_MIN_MPS = 2.0;
 export const CS_MAX_MPS = 6.5;
 

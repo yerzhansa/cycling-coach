@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CS_MIN_MPS, CS_MAX_MPS } from "@enduragent/core";
 
 // ============================================================================
 // SHARED ENUMS
@@ -28,7 +29,7 @@ export const csConfidenceSchema = z.enum(["high", "medium", "low"]);
 export const athleteProfileSchema = z.object({
   experienceLevel: experienceLevelSchema.optional(),
   weightKg: z.number().positive().optional(),
-  criticalSpeedMps: z.number().min(2.0).max(6.5).nullable().optional(),
+  criticalSpeedMps: z.number().min(CS_MIN_MPS).max(CS_MAX_MPS).nullable().optional(),
   paceUnits: paceUnitsSchema.nullable().optional(),
   csSource: csSourceSchema.nullable().optional(),
   csConfidence: csConfidenceSchema.nullable().optional(),

@@ -7,6 +7,8 @@
 // convention. CS and all band speeds are SI metres-per-second — intervals.icu
 // stores threshold_pace in m/s and uses pace_units only as a display preference.
 
+import { CS_MIN_MPS, CS_MAX_MPS } from "@enduragent/core";
+
 export interface RunningZoneDisplay {
   label: string;
   value: string;
@@ -31,10 +33,10 @@ export const LOWER_FRACTION_CLAMP = { min: 0.78, max: 0.88 } as const;
 /**
  * Hard-refusal CS band in m/s: a value outside is unit-confused or corrupt, not a
  * real CS. The typical recreational-to-trained range (~2.5–6.0 m/s, ≈6:40–2:47/km)
- * sits inside; the [2.0, 6.5] edges add headroom before refusing. Kept in sync
- * with the core CS-source gate.
+ * sits inside; the edges add headroom before refusing. Derived from core
+ * (compiler-enforced) so the band cannot drift from the CS-source gate.
  */
-export const CS_SANITY_MPS = { min: 2.0, max: 6.5 } as const;
+export const CS_SANITY_MPS = { min: CS_MIN_MPS, max: CS_MAX_MPS } as const;
 
 /** One-sentence disclosure of the threshold definitions the table assumes. */
 export const THRESHOLD_DEFINITION =
@@ -130,7 +132,11 @@ export const ZONE_DESCRIPTIONS: Record<string, string> = {
 /**
  * Zone-number → representative fraction-of-CS midpoint (open-ended Z1/Z6 use an
  * interior point). Parallels cycling's ZONE_INTENSITY_MIDPOINTS; assumes the flat
- * 0.823 LT1 edge.
+ * 0.823 LT1 edge. The open-ended Z1=0.66 / Z6=1.2 midpoints are
+ * representative-not-prescribed interior points: any duration derived from them
+ * (e.g. seeding a distance step's planned time) is a coarse seed only, consistent
+ * with the server's per-athlete recompute — do not harden it into a precise pace
+ * claim.
  */
 export const ZONE_INTENSITY_MIDPOINTS: Record<number, number> = {
   1: 0.66,
