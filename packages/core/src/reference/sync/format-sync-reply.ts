@@ -58,16 +58,27 @@ export function formatSyncReply(result: SyncResult, now: Date = new Date()): str
   }
 }
 
+// Display flags any meaningful future-dating of the cache stamp. Deliberately
+// tighter than freshness.ts's FUTURE_TOLERANCE_MS (5 min): the staleness
+// classifier tolerates benign sub-tolerance skew, but the human-facing line
+// should surface even a small clock disagreement rather than print "0s ago".
+const FUTURE_DISPLAY_THRESHOLD_MS = 1000;
+
 function formatTimestamp(iso: string, now: Date): string {
   const d = new Date(iso);
-  const diffMs = Math.max(0, now.getTime() - d.getTime());
-  const diffSec = Math.round(diffMs / 1000);
+  const deltaMs = now.getTime() - d.getTime();
+  const utc = `${d.toISOString().slice(0, 16).replace("T", " ")} UTC`;
+  if (deltaMs < -FUTURE_DISPLAY_THRESHOLD_MS) {
+    // A future timestamp means the cache stamp is ahead of the wall clock —
+    // almost always clock skew. Word it honestly instead of clamping to "0s ago".
+    return `${utc} (in the future — check system clock)`;
+  }
+  const diffSec = Math.round(Math.max(0, deltaMs) / 1000);
   const ago =
     diffSec < 60
       ? `${diffSec}s ago`
       : diffSec < 3600
         ? `${Math.round(diffSec / 60)} min ago`
         : `${Math.round(diffSec / 3600)} h ago`;
-  const utc = `${d.toISOString().slice(0, 16).replace("T", " ")} UTC`;
   return `${utc} (${ago})`;
 }

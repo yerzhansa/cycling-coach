@@ -32,6 +32,27 @@ describe("formatSyncReply", () => {
     expect(text.toLowerCase()).toContain("nothing changed");
   });
 
+  it("words a future lastSyncAt honestly instead of clamping it to '0s ago'", () => {
+    const r: SyncResult = {
+      kind: "ran",
+      lastSyncAt: new Date(fixedNow.getTime() + 10 * 60 * 1000).toISOString(),
+      refreshed: ["latest"],
+    };
+    const text = formatSyncReply(r, fixedNow);
+    expect(text).not.toContain("0s ago");
+    expect(text.toLowerCase()).toMatch(/future|clock/);
+  });
+
+  it("renders a normal past lastSyncAt as 'Xs ago' (ladder unchanged)", () => {
+    const r: SyncResult = {
+      kind: "ran",
+      lastSyncAt: "2026-05-09T14:23:00Z",
+      refreshed: ["latest"],
+    };
+    const text = formatSyncReply(r, fixedNow);
+    expect(text).toContain("32s ago");
+  });
+
   it("formats the cooldown skip with a per-second retryAfter countdown", () => {
     const r: SyncResult = {
       kind: "skipped",

@@ -27,4 +27,14 @@ describe("freshnessOf", () => {
     expect(freshnessOf({ last_updated: ago(7 * DAY) }, fixedNow)).toBe("critical");
     expect(freshnessOf({ last_updated: ago(30 * DAY) }, fixedNow)).toBe("critical");
   });
+
+  it("returns 'stale' when last_updated is in the future beyond the skew tolerance", () => {
+    const thirtyMinAhead = new Date(fixedNow.getTime() + 30 * 60 * 1000).toISOString();
+    expect(freshnessOf({ last_updated: thirtyMinAhead }, fixedNow)).toBe("stale");
+  });
+
+  it("stays 'fresh' when last_updated is in the future within the skew tolerance", () => {
+    const oneMinAhead = new Date(fixedNow.getTime() + 60 * 1000).toISOString();
+    expect(freshnessOf({ last_updated: oneMinAhead }, fixedNow)).toBe("fresh");
+  });
 });

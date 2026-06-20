@@ -10,6 +10,12 @@ export const FRESH_MS = 24 * 60 * 60 * 1000;
 export const STALE_MS = 48 * 60 * 60 * 1000;
 /** >7 d: data is critical; force a fresh sync before answering. */
 export const CRITICAL_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * Tolerance for a `last_updated` timestamp in the future. A few minutes of
+ * clock skew (NTP correction, VM time-sync) is benign; beyond this the
+ * timestamp is impossible and the cache is treated as stale rather than fresh.
+ */
+export const FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
 
 // ─── Retention windows ─────────────────────────────────────────────────
 /** Days of history retained at "latest" granularity (recent activities + wellness). */
