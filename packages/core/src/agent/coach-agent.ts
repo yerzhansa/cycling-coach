@@ -54,6 +54,25 @@ const MAX_FLUSH_ATTEMPTS = 2;
 // Kept here so the taint set can't drift from the actual tool names.
 const WRITE_TOOL_NAMES = new Set(["intervals_create_workout", "intervals_delete_workout"]);
 
+const DISK_FULL_NOTE =
+  "\n\n(Heads up: my disk is full, so I couldn't save this to our history — but your message went through. Please free up some space when you can.)";
+
+// Disk-full is a host condition, not a per-chat one, so the athlete is told
+// once for the whole process rather than every turn the disk stays full.
+let persistenceNoticeShown = false;
+
+function noteForPersistenceFailure(err: unknown): string {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  if (code !== "ENOSPC") return "";
+  if (persistenceNoticeShown) return "";
+  persistenceNoticeShown = true;
+  return DISK_FULL_NOTE;
+}
+
+export function __resetPersistenceNoticeState(): void {
+  persistenceNoticeShown = false;
+}
+
 type MemoryFlushTrigger =
   | "stale-reset"
   | "explicit-reset"
@@ -439,14 +458,23 @@ export class CoachAgent {
             }));
             const assembledHash = computeAssembledHash(this.systemPrompt, messages);
 
-            // Append BOTH after success — JSONL unchanged on failure
-            this.chatStore.appendMessage(chatId, "user", userMessage);
-            this.chatStore.appendMessage(chatId, "assistant", text, {
-              templateHash,
-              assembledHash,
-              provider: this.config.llm.provider,
-              model: this.config.llm.model,
-            });
+            // Append BOTH after success as one atomic write — JSONL unchanged
+            // on failure, no dangling user line on a partial write.
+            let persistenceNote = "";
+            try {
+              this.chatStore.appendTurn(chatId, userMessage, text, {
+                templateHash,
+                assembledHash,
+                provider: this.config.llm.provider,
+                model: this.config.llm.model,
+              });
+            } catch (persistErr) {
+              // Deliver-first: a full disk or permission error must never
+              // discard a reply the athlete already paid for. Swallow the
+              // persistence throw, warn once, and still return the reply.
+              console.warn("Session persistence failed; delivering reply unsaved", persistErr);
+              persistenceNote = noteForPersistenceFailure(persistErr);
+            }
 
             // A turn can run several generations (retry/compaction/overflow
             // recovery); these usage/cost figures are the FINAL successful
@@ -474,7 +502,7 @@ export class CoachAgent {
               compactions,
             });
 
-            return text;
+            return text + persistenceNote;
           } catch (err) {
             // The classified budget error is terminal: re-throw it before any
             // retry branch so a future reordering can never mistake it for one of

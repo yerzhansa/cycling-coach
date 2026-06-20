@@ -123,6 +123,22 @@ export class ChatStore {
     appendFileSync(path, JSON.stringify(line) + "\n", { encoding: "utf-8", mode: 0o600 });
   }
 
+  appendTurn(
+    chatId: string,
+    userContent: string,
+    assistantContent: string,
+    lineage: { templateHash: string; assembledHash: string; provider: string; model: string },
+  ): void {
+    const path = this.filePath(chatId);
+    const ts = new Date().toISOString();
+    const userLine: JsonlLine = { role: "user", content: userContent, ts };
+    const assistantLine: JsonlLine = { role: "assistant", content: assistantContent, ts, ...lineage };
+    // Both lines in one buffer and one write so the pair lands together or not
+    // at all — a partial write can never leave a dangling user line.
+    const buffer = JSON.stringify(userLine) + "\n" + JSON.stringify(assistantLine) + "\n";
+    appendFileSync(path, buffer, { encoding: "utf-8", mode: 0o600 });
+  }
+
   overwriteHistory(chatId: string, messages: ModelMessage[]): void {
     const path = this.filePath(chatId);
     const tmpPath = `${path}.tmp`;

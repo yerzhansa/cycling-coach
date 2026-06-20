@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   existsSync,
   mkdtempSync,
@@ -12,6 +12,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ChatStore } from "../src/agent/chat-store.js";
 
+// ESM module namespaces are non-configurable, so vi.spyOn cannot intercept a
+// named fs import. Mock the module up front: appendFileSync is a spy that
+// delegates to the real implementation (captured inside the factory so it is
+// not itself the mock) unless a test flips throwState.shouldThrow. vi.hoisted
+// makes the spy + flag available to the hoisted vi.mock factory.
+const { appendFileSyncSpy, throwState } = vi.hoisted(() => ({
+  appendFileSyncSpy: vi.fn(),
+  throwState: { shouldThrow: null as (() => never) | null },
+}));
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const realAppend = actual.appendFileSync;
+  appendFileSyncSpy.mockImplementation((path: string, data: string, opts?: unknown) => {
+    if (throwState.shouldThrow) throwState.shouldThrow();
+    return realAppend(path, data, opts as Parameters<typeof realAppend>[2]);
+  });
+  return { ...actual, appendFileSync: (...args: [string, string, unknown?]) => appendFileSyncSpy(...args) };
+});
+
 let dataDir: string;
 let sessionsDir: string;
 
@@ -22,7 +41,11 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true });
+  throwState.shouldThrow = null;
+  appendFileSyncSpy.mockClear();
 });
+
+const LINEAGE = { templateHash: "t", assembledHash: "h", provider: "p", model: "m" };
 
 function listArchives(chatId: string): string[] {
   return readdirSync(sessionsDir)
@@ -212,5 +235,40 @@ describe("ChatStore.archivePreCompact — pre-compaction archives", () => {
 
     expect(listArchives("123")).not.toContain(oldReset);
     expect(listPrecompactArchives("123")).toHaveLength(1);
+  });
+});
+
+describe("ChatStore.appendTurn — single-buffer atomic two-line append", () => {
+  it("issues exactly one appendFileSync writing both the user and assistant line", () => {
+    const store = new ChatStore(dataDir);
+    appendFileSyncSpy.mockClear();
+
+    store.appendTurn("c1", "u", "a", LINEAGE);
+
+    // The ChatStore constructor's mkdir does not append, so the only append in
+    // this turn is appendTurn's single write.
+    expect(appendFileSyncSpy).toHaveBeenCalledTimes(1);
+    const buffer = appendFileSyncSpy.mock.calls[0][1] as string;
+    expect(buffer).toContain('"role":"user"');
+    expect(buffer).toContain('"role":"assistant"');
+
+    const { messages } = store.load("c1");
+    expect(messages).toEqual([
+      { role: "user", content: "u" },
+      { role: "assistant", content: "a" },
+    ]);
+  });
+
+  it("throws on an fs error and leaves no dangling user line", () => {
+    const store = new ChatStore(dataDir);
+    throwState.shouldThrow = () => {
+      throw Object.assign(new Error("ENOSPC: no space left"), { code: "ENOSPC" });
+    };
+
+    expect(() => store.appendTurn("c1", "u", "a", LINEAGE)).toThrow();
+
+    throwState.shouldThrow = null;
+    expect(existsSync(join(sessionsDir, "c1.jsonl"))).toBe(false);
+    expect(store.load("c1").messages).toEqual([]);
   });
 });
