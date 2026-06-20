@@ -17,6 +17,7 @@ export const overlapAdapterShape: Pick<
       decouplingBasis: "power",
       sustainabilityAnchors: [],
       dfaValidated: true,
+      anchorType: "ftp",
     },
     {
       activityTypes: ["Ride"],
@@ -24,6 +25,7 @@ export const overlapAdapterShape: Pick<
       decouplingBasis: "power",
       sustainabilityAnchors: [],
       dfaValidated: true,
+      anchorType: "ftp",
     },
   ],
 };

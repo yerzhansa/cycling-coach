@@ -39,6 +39,15 @@ export interface ReferenceSportAdapter {
   readonly dfaValidated: boolean;
 
   /**
+   * The training-intensity anchor the sport's zones derive from:
+   * `"critical-speed"` for pace sports, `"ftp"` for power sports. Net-new
+   * declarative metadata — it is NOT derivable from `zoneBasis` (a future pace
+   * sport could anchor on something other than critical speed), so it is stated
+   * explicitly rather than inferred.
+   */
+  readonly anchorType: "critical-speed" | "ftp";
+
+  /**
    * Optional. When absent OR when `dfaValidated === false`, Reference's
    * curator records `{ sufficient: false }` and skips the metric.
    */

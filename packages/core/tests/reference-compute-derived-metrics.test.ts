@@ -5,15 +5,23 @@
 // single throwing metric is isolated to `null` + a warning, never sinking the
 // rest.
 
+import type { Activity } from "intervals-icu-api";
 import { describe, expect, it, vi } from "vitest";
 
 import {
   computeDerivedMetrics,
   METRIC_COMPUTE_FAILED_LOG_PREFIX,
+  POWER_FAMILY_OMIT_KEYS,
 } from "../src/reference/sync/compute-derived-metrics.js";
 import { METRIC_REGISTRY } from "../src/reference/metrics/registry.js";
 import type { MetricInput } from "../src/reference/metrics/metric-input.js";
-import { buildFixtureShape } from "../src/reference/sync/fixture-bridge.js";
+import {
+  buildFixtureShape,
+  type ReferenceBundle,
+} from "../src/reference/sync/fixture-bridge.js";
+import { runAdaptersForActivities } from "../src/reference/sport-adapter-dispatcher.js";
+import type { ReferenceSportAdapter } from "../src/reference/sport-adapter.js";
+import type { IntervalsActivityType } from "../src/sport.js";
 import { GoldenFixtureSchema, loadFixture } from "./helpers/load-fixture.js";
 
 function dfaEquippedInput(): MetricInput {
@@ -93,5 +101,225 @@ describe("computeDerivedMetrics", () => {
     expect(log.mock.calls[0]?.[0]).toContain(METRIC_COMPUTE_FAILED_LOG_PREFIX);
     expect(log.mock.calls[0]?.[0]).toContain("bad");
     expect(log.mock.calls[0]?.[0]).toContain("boom");
+  });
+});
+
+// ─── Power-family watts-fence (pure-pace omission) ──────────────────────────
+
+const RUNNING_ADAPTER: ReferenceSportAdapter = {
+  activityTypes: ["Run", "TrailRun"],
+  zoneBasis: "pace",
+  decouplingBasis: "pace",
+  sustainabilityAnchors: [],
+  dfaValidated: false,
+  anchorType: "critical-speed",
+};
+
+const CYCLING_ADAPTER: ReferenceSportAdapter = {
+  activityTypes: ["Ride", "VirtualRide"],
+  zoneBasis: "power",
+  decouplingBasis: "power",
+  sustainabilityAnchors: [300, 1200, 3600],
+  dfaValidated: true,
+  anchorType: "ftp",
+};
+
+const EXCLUDE_FROM_OMISSION = [
+  "capability.sustainability_profile",
+  "capability.efficiency_factor",
+] as const;
+
+// A renamed row carrying the required numeric fields the bridge schema demands
+// plus an index signature so it also satisfies the dispatcher's `Activity`.
+type TestActivity = ReferenceBundle["activities"][number];
+
+function activity(id: number, type: string, daysAgo: number): TestActivity {
+  // Anchor relative to the shared frozenNow so the load windows see the rows.
+  const day = String(4 - daysAgo).padStart(2, "0");
+  return {
+    id,
+    start_date_local: `2026-06-${day}T07:00:00`,
+    type,
+    moving_time: 3600,
+    elapsed_time: 3700,
+    icu_training_load: 60,
+  };
+}
+
+function inputFor(activities: readonly TestActivity[]): MetricInput {
+  const bundle: ReferenceBundle = {
+    activities,
+    wellness: [],
+    ftpHistory: [],
+  };
+  return { fixture: buildFixtureShape(bundle), frozenNow: "2026-06-04T12:00:00" };
+}
+
+/**
+ * Mirror the production `fetchOnce` predicate + emit-time tag without exporting
+ * the private function: dispatch the activities, derive `omitPowerFamily`, run
+ * the registry, and attach the sibling provenance tag exactly as the producer
+ * does. The tag is layered OUTSIDE the derived map.
+ */
+function composeLikeFetchOnce(
+  adapters: readonly ReferenceSportAdapter[],
+  sportTypes: readonly IntervalsActivityType[],
+  activities: readonly TestActivity[],
+): {
+  derived_metrics: Record<string, unknown>;
+  derived_metrics_meta?: { sportFamily: string; basis: string; anchorType: string };
+  omitPowerFamily: boolean;
+} {
+  const runs = runAdaptersForActivities(adapters, sportTypes, activities as unknown as readonly Activity[]);
+  const coveredPowerBasis = runs.some((r) => r.adapter.zoneBasis === "power");
+  const omitPowerFamily = runs.length > 0 && !coveredPowerBasis;
+  const derived_metrics = computeDerivedMetrics(inputFor(activities), { omitPowerFamily });
+  let derived_metrics_meta: { sportFamily: string; basis: string; anchorType: string } | undefined;
+  if (runs.length > 0) {
+    const covering =
+      runs.find((r) => r.adapter.zoneBasis === "power")?.adapter ?? runs[0].adapter;
+    const families: Record<string, string> = { Ride: "cycling", VirtualRide: "cycling", Run: "run", TrailRun: "run" };
+    derived_metrics_meta = {
+      sportFamily: families[covering.activityTypes[0]] ?? "other",
+      basis: covering.zoneBasis,
+      anchorType: covering.anchorType,
+    };
+  }
+  return { derived_metrics, derived_metrics_meta, omitPowerFamily };
+}
+
+describe("computeDerivedMetrics power-family omission", () => {
+  it("omits exactly the 9 power-family keys when omitPowerFamily is true", () => {
+    const out = computeDerivedMetrics(inputFor([activity(1, "Run", 1)]), { omitPowerFamily: true });
+    for (const key of POWER_FAMILY_OMIT_KEYS) {
+      expect(out).not.toHaveProperty(key);
+    }
+    const expected = Object.keys(METRIC_REGISTRY).filter((k) => !POWER_FAMILY_OMIT_KEYS.has(k));
+    expect(Object.keys(out).sort()).toEqual(expected.sort());
+  });
+
+  it("keeps the EXCLUDE-SET (sustainability_profile + efficiency_factor) even when omitting", () => {
+    const out = computeDerivedMetrics(inputFor([activity(1, "Run", 1)]), { omitPowerFamily: true });
+    for (const key of EXCLUDE_FROM_OMISSION) {
+      expect(out).toHaveProperty(key);
+    }
+  });
+
+  it("DEFAULT (omitPowerFamily unset/false) returns the full registry key-set, byte-identical", () => {
+    const noOpts = computeDerivedMetrics(inputFor([activity(1, "Run", 1)]));
+    const explicitFalse = computeDerivedMetrics(inputFor([activity(1, "Run", 1)]), { omitPowerFamily: false });
+    expect(Object.keys(noOpts).sort()).toEqual(Object.keys(METRIC_REGISTRY).sort());
+    expect(Object.keys(explicitFalse).sort()).toEqual(Object.keys(METRIC_REGISTRY).sort());
+    expect(explicitFalse).toEqual(noOpts);
+  });
+
+  it("POWER_FAMILY_OMIT_KEYS has exactly 9 members, excludes the EXCLUDE-SET, and is a registry subset", () => {
+    expect(POWER_FAMILY_OMIT_KEYS.size).toBe(9);
+    for (const key of EXCLUDE_FROM_OMISSION) {
+      expect(POWER_FAMILY_OMIT_KEYS.has(key)).toBe(false);
+    }
+    for (const key of POWER_FAMILY_OMIT_KEYS) {
+      expect(Object.hasOwn(METRIC_REGISTRY, key)).toBe(true);
+    }
+  });
+});
+
+describe("fetchOnce-shaped power-family fence + provenance tag", () => {
+  const RUN_TYPES: readonly IntervalsActivityType[] = ["Run", "TrailRun"];
+  const RIDE_TYPES: readonly IntervalsActivityType[] = ["Ride", "VirtualRide"];
+  const DUATHLON_TYPES: readonly IntervalsActivityType[] = ["Ride", "VirtualRide", "Run", "TrailRun"];
+
+  it("pure-Run bundle: omits power keys from derived_metrics and tags run/pace/critical-speed", () => {
+    const { derived_metrics, derived_metrics_meta, omitPowerFamily } = composeLikeFetchOnce(
+      [RUNNING_ADAPTER],
+      RUN_TYPES,
+      [activity(1, "Run", 1), activity(2, "TrailRun", 2)],
+    );
+    expect(omitPowerFamily).toBe(true);
+    for (const key of POWER_FAMILY_OMIT_KEYS) {
+      expect(derived_metrics).not.toHaveProperty(key);
+    }
+    // The tag is a SIBLING — no provenance key leaked into the map.
+    expect(derived_metrics).not.toHaveProperty("sportFamily");
+    expect(derived_metrics).not.toHaveProperty("basis");
+    expect(derived_metrics).not.toHaveProperty("anchorType");
+    expect(derived_metrics_meta).toEqual({ sportFamily: "run", basis: "pace", anchorType: "critical-speed" });
+  });
+
+  it("cycling-only bundle: keeps the full power family and tags cycling/power/ftp", () => {
+    const { derived_metrics, derived_metrics_meta, omitPowerFamily } = composeLikeFetchOnce(
+      [CYCLING_ADAPTER],
+      RIDE_TYPES,
+      [activity(1, "Ride", 1)],
+    );
+    expect(omitPowerFamily).toBe(false);
+    expect(Object.keys(derived_metrics).sort()).toEqual(Object.keys(METRIC_REGISTRY).sort());
+    expect(derived_metrics_meta).toEqual({ sportFamily: "cycling", basis: "power", anchorType: "ftp" });
+  });
+
+  it("mixed Ride+Run bundle: keeps the full power family (duathlete keeps cycling power) and tags", () => {
+    const { derived_metrics, derived_metrics_meta, omitPowerFamily } = composeLikeFetchOnce(
+      [CYCLING_ADAPTER, RUNNING_ADAPTER],
+      DUATHLON_TYPES,
+      [activity(1, "Ride", 1), activity(2, "Run", 2)],
+    );
+    expect(omitPowerFamily).toBe(false);
+    expect(Object.keys(derived_metrics).sort()).toEqual(Object.keys(METRIC_REGISTRY).sort());
+    for (const key of POWER_FAMILY_OMIT_KEYS) {
+      expect(derived_metrics).toHaveProperty(key);
+    }
+    expect(derived_metrics_meta?.basis).toBe("power");
+    expect(derived_metrics_meta?.anchorType).toBe("ftp");
+  });
+
+  it("empty-coverage bundle: omitPowerFamily false, full family, no tag", () => {
+    const { derived_metrics, derived_metrics_meta, omitPowerFamily } = composeLikeFetchOnce(
+      [RUNNING_ADAPTER],
+      RUN_TYPES,
+      [],
+    );
+    expect(omitPowerFamily).toBe(false);
+    expect(Object.keys(derived_metrics).sort()).toEqual(Object.keys(METRIC_REGISTRY).sort());
+    expect(derived_metrics_meta).toBeUndefined();
+  });
+
+  it("out-of-sport-only bundle (no covering adapter): omitPowerFamily false, full family", () => {
+    const { derived_metrics, omitPowerFamily } = composeLikeFetchOnce(
+      [RUNNING_ADAPTER],
+      RUN_TYPES,
+      [activity(1, "Ride", 1)], // Ride is not covered by the running-only adapter set
+    );
+    expect(omitPowerFamily).toBe(false);
+    expect(Object.keys(derived_metrics).sort()).toEqual(Object.keys(METRIC_REGISTRY).sort());
+  });
+});
+
+describe("cycling-shaped survivors on a pure-Run bundle (intentional, wave-3 reader handles)", () => {
+  it("consistency_index reads completed=0 / matched=0 via the CYCLING_TYPES gate", () => {
+    const out = computeDerivedMetrics(inputFor([activity(1, "Run", 1), activity(2, "Run", 2)]), {
+      omitPowerFamily: true,
+    });
+    const details = out["consistency_details"] as {
+      completed_days?: number;
+      matched_days?: number;
+    } | null;
+    expect(details).not.toBeNull();
+    expect(details?.completed_days).toBe(0);
+    expect(details?.matched_days).toBe(0);
+  });
+
+  it("capability.durability survives with null means + the 'power sessions only' note", () => {
+    const out = computeDerivedMetrics(inputFor([activity(1, "Run", 1), activity(2, "Run", 2)]), {
+      omitPowerFamily: true,
+    });
+    const durability = out["capability.durability"] as {
+      mean_decoupling_7d: number | null;
+      mean_decoupling_28d: number | null;
+      note: string;
+    } | null;
+    expect(durability).not.toBeNull();
+    expect(durability?.mean_decoupling_7d).toBeNull();
+    expect(durability?.mean_decoupling_28d).toBeNull();
+    expect(durability?.note).toContain("power sessions only");
   });
 });

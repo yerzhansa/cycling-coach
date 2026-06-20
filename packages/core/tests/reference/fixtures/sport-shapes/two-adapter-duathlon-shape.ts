@@ -11,6 +11,7 @@ const cyclingAdapter: ReferenceSportAdapter = {
   decouplingBasis: "power",
   sustainabilityAnchors: [300, 600, 1200, 1800, 3600, 5400, 7200],
   dfaValidated: true,
+  anchorType: "ftp",
 };
 
 const runningAdapter: ReferenceSportAdapter = {
@@ -19,6 +20,7 @@ const runningAdapter: ReferenceSportAdapter = {
   decouplingBasis: "pace",
   sustainabilityAnchors: [],
   dfaValidated: false,
+  anchorType: "critical-speed",
 };
 
 export const twoAdapterDuathlonShape: Pick<

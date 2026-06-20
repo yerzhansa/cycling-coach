@@ -15,12 +15,43 @@ import type { MetricInput } from "../metrics/metric-input.js";
 /** Shared between the runner + its test so the warn string stays in sync. */
 export const METRIC_COMPUTE_FAILED_LOG_PREFIX = "Reference: metric compute failed";
 
+/**
+ * Registry keys omitted from a pure-pace sync when `omitPowerFamily` is set —
+ * the watts-fence. Matched by EXACT STRING, never by prefix: the set mixes bare
+ * keys (`eftp`) with dotted ones (`capability.power_curve_delta`), and prefix
+ * matching would wrongly catch `capability.sustainability_profile` /
+ * `capability.efficiency_factor`, which MUST ride through (they are
+ * multi-family / tag-fenced, not omitted).
+ *
+ * `vo2max` is an intentional conservative over-omission — it reads a
+ * sport-ambiguous wellness scalar, not a watt — so a cycling-derived value is
+ * not leaked into a runner's map; a future running VO2max path will need it
+ * removed from this set.
+ *
+ * Hand-maintained: a future power-derived registry metric must be added here or
+ * it leaks a watt into a pure-pace map. There is no key-shape shortcut.
+ */
+export const POWER_FAMILY_OMIT_KEYS: ReadonlySet<string> = new Set([
+  "eftp",
+  "w_prime",
+  "w_prime_kj",
+  "p_max",
+  "power_model_source",
+  "vo2max",
+  "capability.power_curve_delta",
+  "capability.hr_curve_delta",
+  "capability.dfa_a1_profile",
+]);
+
 export interface ComputeDerivedMetricsOptions {
   /** Sink for per-metric failures; defaults to console.warn. */
   readonly log?: (msg: string) => void;
   /** Registry override — defaults to the canonical `METRIC_REGISTRY`. Exposed
    *  for tests of the per-metric isolation path. */
   readonly registry?: Record<string, MetricRegistryEntry>;
+  /** When `true`, skip the {@link POWER_FAMILY_OMIT_KEYS} — the pure-pace
+   *  watts-fence. Defaults to `false`, leaving output byte-identical. */
+  readonly omitPowerFamily?: boolean;
 }
 
 export function computeDerivedMetrics(
@@ -31,6 +62,7 @@ export function computeDerivedMetrics(
   const registry = opts.registry ?? METRIC_REGISTRY;
   const out: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(registry)) {
+    if (opts.omitPowerFamily === true && POWER_FAMILY_OMIT_KEYS.has(key)) continue;
     try {
       out[key] = entry.compute(input);
     } catch (err) {

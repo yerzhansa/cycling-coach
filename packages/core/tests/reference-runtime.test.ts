@@ -250,6 +250,7 @@ describe("bootstrapReference (fail-fast on misconfigured adapters)", () => {
     decouplingBasis: "power",
     sustainabilityAnchors: [],
     dfaValidated: true,
+    anchorType: "ftp",
   });
 
   it("rejects with ReferenceConfigError when two adapters overlap, before any IO", async () => {

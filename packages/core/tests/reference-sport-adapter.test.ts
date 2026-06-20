@@ -34,6 +34,7 @@ describe("ReferenceSportAdapter type surface", () => {
       decouplingBasis: "power",
       sustainabilityAnchors: [60, 90, 120, 180, 240],
       dfaValidated: true,
+      anchorType: "ftp",
     };
     expect(declarativeOnly.activityTypes.length).toBeGreaterThan(0);
     expect(declarativeOnly.zoneBasis).toBe("power");
@@ -49,6 +50,7 @@ describe("ReferenceSportAdapter type surface", () => {
       decouplingBasis: "power",
       sustainabilityAnchors: [60],
       dfaValidated: true,
+      anchorType: "ftp",
       computeDfa: () => fakeDfa,
       computePowerCurve: () => fakeCurveDelta,
     };
@@ -85,6 +87,7 @@ describe("Sport.referenceAdapters?() integration", () => {
       decouplingBasis: "power",
       sustainabilityAnchors: [60],
       dfaValidated: true,
+      anchorType: "ftp",
     };
     const sliceWithMethod: Pick<Sport, "id" | "referenceAdapters"> = {
       id: "cycling",
@@ -102,6 +105,7 @@ describe("Sport.referenceAdapters?() integration", () => {
       decouplingBasis: "power",
       sustainabilityAnchors: [60, 120],
       dfaValidated: true,
+      anchorType: "ftp",
     };
     const runningAdapter: ReferenceSportAdapter = {
       activityTypes: ["Run", "TrailRun"] as const,
@@ -109,6 +113,7 @@ describe("Sport.referenceAdapters?() integration", () => {
       decouplingBasis: "pace",
       sustainabilityAnchors: [30, 60],
       dfaValidated: false,
+      anchorType: "critical-speed",
     };
 
     const cycling: Pick<Sport, "id" | "referenceAdapters"> = {

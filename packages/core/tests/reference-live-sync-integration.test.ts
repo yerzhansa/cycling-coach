@@ -25,6 +25,7 @@ const CYCLING_ADAPTER: ReferenceSportAdapter = {
   decouplingBasis: "power",
   sustainabilityAnchors: [300, 1200, 3600],
   dfaValidated: true,
+  anchorType: "ftp",
 };
 
 const SPORT_TYPES: readonly IntervalsActivityType[] = ["Ride", "VirtualRide"];

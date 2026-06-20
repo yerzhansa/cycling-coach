@@ -11,6 +11,32 @@ import {
 } from "../sport-adapter-dispatcher.js";
 import type { ReferenceSportAdapter } from "../sport-adapter.js";
 import type { IntervalsActivityType } from "../../sport.js";
+import { SPORT_FAMILIES } from "../metrics/sport-families.js";
+
+interface DerivedMetricsMeta {
+  readonly sportFamily: string;
+  readonly basis: "power" | "pace" | "hr";
+  readonly anchorType: "critical-speed" | "ftp";
+}
+
+/**
+ * Derive the emit-time provenance tag from the covering adapters. Prefers a
+ * power-basis adapter when one is present so a mixed bundle (a duathlete's
+ * Ride+Run) tags as its kept power family, matching the omission decision;
+ * otherwise the first covering adapter wins. Returns `undefined` for an
+ * empty-coverage bundle (no adapter to attribute), leaving the optional tag off.
+ */
+function deriveMeta(runs: readonly AdapterRun[]): DerivedMetricsMeta | undefined {
+  if (runs.length === 0) return undefined;
+  const covering =
+    runs.find((r) => r.adapter.zoneBasis === "power")?.adapter ?? runs[0].adapter;
+  const firstType = covering.activityTypes[0];
+  const sportFamily =
+    firstType !== undefined && Object.hasOwn(SPORT_FAMILIES, firstType)
+      ? SPORT_FAMILIES[firstType]
+      : "other";
+  return { sportFamily, basis: covering.zoneBasis, anchorType: covering.anchorType };
+}
 
 /**
  * Production fetcher. Pulls the live intervals.icu bundle (athlete profile,
@@ -58,16 +84,25 @@ async function fetchOnce(
     sportTypes,
     live.bundle.activities,
   );
-  void runs;
+  // Omit the power family only on a positive pace-sport assertion: at least one
+  // activity is covered AND no covering adapter is power-basis. An
+  // empty-coverage bundle keeps the full family (no positive signal).
+  const coveredPowerBasis = runs.some((r) => r.adapter.zoneBasis === "power");
+  const omitPowerFamily = runs.length > 0 && !coveredPowerBasis;
   const derivedMetrics = computeDerivedMetrics(
     buildMetricInput(live.bundle, live.frozenNow),
+    { omitPowerFamily },
   );
+  const meta = deriveMeta(runs);
 
   return {
     latest: {
       athlete_profile: live.athleteProfile,
       current_status: {},
       derived_metrics: derivedMetrics,
+      // Sibling of `derived_metrics`, NEVER a key inside it — the parity gate's
+      // key-union deepCompare runs over the map only, so the tag must stay out.
+      ...(meta ? { derived_metrics_meta: meta } : {}),
       recent_activities: live.recentActivities,
       planned_workouts: [],
       wellness_data: live.wellnessData,

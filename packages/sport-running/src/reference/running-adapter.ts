@@ -10,4 +10,5 @@ export const runningReferenceAdapter: ReferenceSportAdapter = {
   decouplingBasis: "pace",
   sustainabilityAnchors: [],
   dfaValidated: false,
+  anchorType: "critical-speed",
 };

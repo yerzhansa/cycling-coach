@@ -75,6 +75,13 @@ export interface FetchedReference {
     readonly athlete_profile: unknown;
     readonly current_status: unknown;
     readonly derived_metrics: unknown;
+    /** Emit-time provenance tag — a sibling of `derived_metrics`, never inside
+     *  it. Optional: an empty-coverage bundle attaches no tag. */
+    readonly derived_metrics_meta?: {
+      readonly sportFamily: string;
+      readonly basis: "power" | "pace" | "hr";
+      readonly anchorType: "critical-speed" | "ftp";
+    };
     readonly recent_activities: readonly unknown[];
     readonly planned_workouts: readonly unknown[];
     readonly wellness_data: unknown;

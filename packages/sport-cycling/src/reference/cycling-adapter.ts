@@ -17,4 +17,5 @@ export const cyclingReferenceAdapter: ReferenceSportAdapter = {
   decouplingBasis: "power",
   sustainabilityAnchors: CYCLING_SUSTAINABILITY_ANCHORS,
   dfaValidated: true,
+  anchorType: "ftp",
 };

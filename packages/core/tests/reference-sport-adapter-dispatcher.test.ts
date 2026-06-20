@@ -13,6 +13,7 @@ const cyclingAdapter: ReferenceSportAdapter = {
   decouplingBasis: "power",
   sustainabilityAnchors: [300, 1200, 3600],
   dfaValidated: true,
+  anchorType: "ftp",
 };
 
 const runningAdapter: ReferenceSportAdapter = {
@@ -21,6 +22,7 @@ const runningAdapter: ReferenceSportAdapter = {
   decouplingBasis: "pace",
   sustainabilityAnchors: [60, 300],
   dfaValidated: false,
+  anchorType: "critical-speed",
 };
 
 function activity(type: string): Activity {

@@ -14,6 +14,7 @@ const cyclingAdapter: ReferenceSportAdapter = {
   decouplingBasis: "power",
   sustainabilityAnchors: [300, 1200, 3600],
   dfaValidated: true,
+  anchorType: "ftp",
 };
 
 const runningAdapter: ReferenceSportAdapter = {
@@ -22,6 +23,7 @@ const runningAdapter: ReferenceSportAdapter = {
   decouplingBasis: "pace",
   sustainabilityAnchors: [60, 300],
   dfaValidated: false,
+  anchorType: "critical-speed",
 };
 
 describe("ReferenceConfigError", () => {
@@ -50,6 +52,7 @@ describe("assertDisjointCoverage", () => {
       decouplingBasis: "power",
       sustainabilityAnchors: [300],
       dfaValidated: true,
+      anchorType: "ftp",
     };
     const overlapB: ReferenceSportAdapter = {
       activityTypes: ["Ride", "VirtualRide"],
@@ -57,6 +60,7 @@ describe("assertDisjointCoverage", () => {
       decouplingBasis: "power",
       sustainabilityAnchors: [600],
       dfaValidated: true,
+      anchorType: "ftp",
     };
     let caught: unknown;
     try {
@@ -90,6 +94,7 @@ describe("assertSubsetCoverage", () => {
       decouplingBasis: "power",
       sustainabilityAnchors: [300],
       dfaValidated: true,
+      anchorType: "ftp",
     };
     let caught: unknown;
     try {
