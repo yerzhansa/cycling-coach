@@ -63,8 +63,9 @@ export async function validateAndRetry(
     return { response, metadata: parseMetadata(metadata) };
   }
 
+  const feedback = first.failures.map((f) => f.detail).join("\n- ");
   const retryPrompt = `Your previous response had a citation mismatch:
-- ${first.feedback}
+- ${feedback}
 Please regenerate your reply, citing only values that exist in the latest snapshot. Same coaching content, corrected numbers.`;
 
   const result = await llm.generate({

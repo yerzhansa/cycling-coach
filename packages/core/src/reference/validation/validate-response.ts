@@ -22,9 +22,19 @@ export type Layer2Mode = "off" | "observe" | "enforce";
  */
 export const DEFAULT_LAYER_2_MODE: Layer2Mode = "observe";
 
+export type ValidationCheck =
+  | "metadata_schema" // RecommendationMetadataSchema.safeParse failed
+  | "citation_source" // a cited field is absent from the snapshot
+  | "citation_value"; // a cited value mismatches the snapshot (beyond ±0.01)
+
+export interface ValidationFailure {
+  readonly check: ValidationCheck;
+  readonly detail: string;
+}
+
 export interface ValidationResult {
-  ok: boolean;
-  feedback?: string;
+  readonly ok: boolean;
+  readonly failures: readonly ValidationFailure[];
 }
 
 const META_DELIMITER = "---meta---";
@@ -76,8 +86,10 @@ export function getByPath(obj: unknown, path: string): unknown {
 /**
  * Asserts every citation in `metadata` resolves to a matching value in the
  * snapshot. Numbers compare within a ±0.01 tolerance; strings/enums compare
- * strictly. Returns the first failure's feedback string (the exact phrasing the
- * enforce-mode retry prompt quotes back to the LLM).
+ * strictly. Evaluates ALL checks and returns one failure per miss, each tagged
+ * with its check identity, so the offline per-lens gate can read each lens's
+ * verdict. The one short-circuit: a schema-parse failure leaves the citations
+ * unparseable, so the per-citation checks have nothing to run on.
  */
 export function validateRecommendation(
   _response: string,
@@ -88,29 +100,36 @@ export function validateRecommendation(
   if (!parsed.success) {
     return {
       ok: false,
-      feedback: `Metadata failed schema validation: ${parsed.error.message}`,
+      failures: [
+        {
+          check: "metadata_schema",
+          detail: `Metadata failed schema validation: ${parsed.error.message}`,
+        },
+      ],
     };
   }
 
   const meta: RecommendationMetadata = parsed.data;
+  const failures: ValidationFailure[] = [];
   for (const citation of meta.citations) {
     const actual = getByPath(snapshot, citation.field);
     if (actual === undefined) {
-      return {
-        ok: false,
-        feedback: `Citation source missing: ${citation.field} not found in snapshot.`,
-      };
+      failures.push({
+        check: "citation_source",
+        detail: `Citation source missing: ${citation.field} not found in snapshot.`,
+      });
+      continue;
     }
 
     if (!valuesMatch(actual, citation.value)) {
-      return {
-        ok: false,
-        feedback: `Citation mismatch: cited ${citation.field}=${String(citation.value)}, snapshot has ${String(actual)}.`,
-      };
+      failures.push({
+        check: "citation_value",
+        detail: `Citation mismatch: cited ${citation.field}=${String(citation.value)}, snapshot has ${String(actual)}.`,
+      });
     }
   }
 
-  return { ok: true };
+  return { ok: failures.length === 0, failures };
 }
 
 function valuesMatch(actual: unknown, cited: unknown): boolean {

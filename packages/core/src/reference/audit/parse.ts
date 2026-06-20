@@ -19,6 +19,21 @@ import {
   type AuditLogEntry,
 } from "../validation/recommendation-metadata.js";
 
+/**
+ * Maps a v1-shaped line forward to the v2 shape: a v1 reply line is a `reply`
+ * event with no recomputable per-lens verdicts and no template hash, so the
+ * offline gate reads the whole observe window across the bump boundary.
+ */
+function mapV1ToV2(obj: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...obj,
+    schema_version: "2",
+    event_type: "reply",
+    verdicts: null,
+    prompt_template_hash: null,
+  };
+}
+
 export async function* parseAuditLog(
   binaryName: string,
 ): AsyncGenerator<AuditLogEntry> {
@@ -45,14 +60,19 @@ export async function* parseAuditLog(
     }
 
     const version = (obj as { schema_version?: unknown })?.schema_version;
-    if (version !== AUDIT_SCHEMA_VERSION) {
+    let candidate: unknown;
+    if (version === AUDIT_SCHEMA_VERSION) {
+      candidate = obj;
+    } else if (version === "1") {
+      candidate = mapV1ToV2(obj as Record<string, unknown>);
+    } else {
       console.warn(
         `parseAuditLog: skipping unknown schema_version ${String(version)} (parser supports ${AUDIT_SCHEMA_VERSION})`,
       );
       continue;
     }
 
-    const result = AuditLogEntrySchema.safeParse(obj);
+    const result = AuditLogEntrySchema.safeParse(candidate);
     if (!result.success) {
       console.warn(
         `parseAuditLog: skipping line failing schema: ${result.error.message}`,

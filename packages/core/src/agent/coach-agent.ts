@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { stepCountIs } from "ai";
 import type { ModelMessage, Tool, ToolSet } from "ai";
 import { makeChatClient } from "../reference/sync/intervals-client-factory.js";
@@ -56,6 +57,31 @@ type MemoryFlushTrigger =
   | "pre-compaction"
   | "overflow-recovery"
   | "soft-threshold";
+
+// The per-turn terminal record. Field names are frozen by the operator spec:
+// error_class and duration_ms are snake_case, and the three *Attempts mirror the
+// in-scope retry counters exactly.
+interface TurnOutcome {
+  turnId: string;
+  chatId: string;
+  ok: boolean;
+  error_class?: string;
+  overflowAttempts: number;
+  timeoutAttempts: number;
+  rateLimitAttempts: number;
+  duration_ms: number;
+  compactions: number;
+}
+
+function classifyError(err: unknown): string {
+  // TurnBudgetExceededError crosses a dynamic-import boundary in tests, so match
+  // on the structural name rather than instanceof.
+  if (err instanceof Error && err.name === "TurnBudgetExceededError") return "budget";
+  if (isContextOverflowError(err)) return "overflow";
+  if (isTimeoutError(err)) return "timeout";
+  if (isRateLimitError(err)) return "rate_limit";
+  return "unknown";
+}
 
 // ============================================================================
 // AGENT
@@ -201,6 +227,16 @@ export class CoachAgent {
     };
   }
 
+  private emitTurnOutcome(outcome: TurnOutcome): void {
+    // An observability write must never break a turn: a failed outcome emit is
+    // swallowed exactly like the usage-ledger and substrate writes.
+    try {
+      this.log.info("turn_outcome", { ...outcome });
+    } catch {
+      // Swallow.
+    }
+  }
+
   async chat(
     chatId: string,
     userMessage: string,
@@ -211,6 +247,8 @@ export class CoachAgent {
     this.currentResolvedCs = turn?.resolvedCs ?? null;
     return withSessionLock(chatId, async () => {
       const turnStart = Date.now();
+      const turnId = randomUUID();
+      let compactions = 0;
       const turnBudget = createTurnBudget(() => Date.now());
       // Reset the per-turn write record in place (the wrapped write tools hold a
       // reference to this object, captured once at construction).
@@ -293,6 +331,7 @@ export class CoachAgent {
             previousSummary,
             ...this.compactionParams(turnBudget),
           });
+          compactions++;
           summaryMsg = makeSummaryMessage(summary);
           requeued = unsummarized;
           if (flushed) {
@@ -350,123 +389,131 @@ export class CoachAgent {
       // Loop-invariant: the prompt cache key derives only from the chat id.
       const cacheKey = sha256_16(chatId);
 
-      while (true) {
-        // Between-attempt budget gates: the attempt charge and the wall-clock
-        // check run at the loop top so the deadline stops the NEXT attempt and
-        // never aborts a generate/compaction already in flight.
-        turnBudget.chargeAttempt();
-        turnBudget.checkDeadline();
+      try {
+        while (true) {
+          // Between-attempt budget gates: the attempt charge and the wall-clock
+          // check run at the loop top so the deadline stops the NEXT attempt and
+          // never aborts a generate/compaction already in flight.
+          turnBudget.chargeAttempt();
+          turnBudget.checkDeadline();
 
-        // Preemptive: compact before sending if over budget
-        if (shouldCompact({ messages, systemPrompt: this.systemPrompt, contextWindowTokens: this.config.contextWindowTokens })) {
-          if (!flushedThisTurn) {
-            flushedThisTurn = true;
-            try {
-              await this.flushMemory(messages, "pre-compaction", turnBudget);
-            } catch (err) {
-              this.log.warn("In-turn memory flush failed; compacting without flush", err);
-            }
-          }
-          messages = await summarizeInStages({ messages, ...this.compactionParams(turnBudget) });
-          this.memory.reload();
-        }
-
-        try {
-          turnBudget.chargeModelCall();
-          const result = await this.llm.generate({
-            system: this.systemPrompt,
-            messages,
-            tools: this.tools,
-            stopWhen: stepCountIs(10),
-            maxSteps: 10,
-            caller: "chat",
-            cacheKey,
-          });
-          const { text } = result;
-
-          const templateHash = (this.templateHash ??= computeTemplateHash({
-            soul: this.sport.soul,
-            skills: this.sport.skills,
-            ruleBlocks: staticRuleBlocks(),
-            toolSchemas: this.tools,
-            model: this.config.llm.model,
-          }));
-          const assembledHash = computeAssembledHash(this.systemPrompt, messages);
-
-          // Append BOTH after success — JSONL unchanged on failure
-          this.chatStore.appendMessage(chatId, "user", userMessage);
-          this.chatStore.appendMessage(chatId, "assistant", text, {
-            templateHash,
-            assembledHash,
-            provider: this.config.llm.provider,
-            model: this.config.llm.model,
-          });
-
-          // A turn can run several generations (retry/compaction/overflow
-          // recovery); these usage/cost figures are the FINAL successful
-          // generation's only — not a turn-wide sum across attempts. A true
-          // accumulator over all attempts is deferred.
-          appendUsageLine(this.config.dataDir, {
-            ts: Date.now(),
-            kind: "turn",
-            caller: "chat",
-            provider: this.config.llm.provider,
-            model: this.config.llm.model,
-            durationMs: Date.now() - turnStart,
-            templateHash,
-            ...usageFieldsFromResult(result),
-          });
-
-          return text;
-        } catch (err) {
-          // The classified budget error is terminal: re-throw it before any
-          // retry branch so a future reordering can never mistake it for one of
-          // the retryable classes and swallow it.
-          if (err instanceof TurnBudgetExceededError) throw err;
-          // A committed calendar write makes this turn non-replayable: retrying
-          // would re-send the pre-turn messages and could re-run a
-          // non-idempotent create. Refuse honestly instead of looping.
-          if (this.turnWrites.writesCommitted > 0) {
-            console.warn(
-              JSON.stringify({
-                event: "turn_failed_after_write",
-                writesCommitted: this.turnWrites.writesCommitted,
-                lastWriteSummary: this.turnWrites.lastWriteSummary,
-                error: (err instanceof Error ? err.message : String(err)).slice(0, 200),
-              }),
-            );
-            return TAINTED_BY_WRITES_MESSAGE;
-          }
-          // Reactive: context overflow → flush + compact + retry
-          if (isContextOverflowError(err) && overflowAttempts < MAX_OVERFLOW_ATTEMPTS) {
-            overflowAttempts++;
-            try {
-              if (!flushedThisTurn) {
-                flushedThisTurn = true;
-                try {
-                  await this.flushMemory(messages, "overflow-recovery", turnBudget);
-                } catch (flushErr) {
-                  this.log.warn("In-turn memory flush failed; compacting without flush", flushErr);
-                }
-              }
-              messages = await summarizeInStages({ messages, ...this.compactionParams(turnBudget) });
-              this.memory.reload();
-            } catch (rescueErr) {
-              this.log.warn("Compaction rescue failed; rethrowing the original turn error", rescueErr);
-              if (err instanceof Error && err.cause === undefined) {
-                (err as Error & { cause?: unknown }).cause = rescueErr;
-              }
-              throw err;
-            }
-            continue;
-          }
-          // Timeout with high context usage → compact + retry (no flush)
-          if (isTimeoutError(err) && timeoutAttempts < MAX_TIMEOUT_ATTEMPTS) {
-            const ratio = estimateMessagesTokens(messages) / this.config.contextWindowTokens;
-            if (ratio > TIMEOUT_COMPACTION_THRESHOLD) {
-              timeoutAttempts++;
+          // Preemptive: compact before sending if over budget
+          if (shouldCompact({ messages, systemPrompt: this.systemPrompt, contextWindowTokens: this.config.contextWindowTokens })) {
+            if (!flushedThisTurn) {
+              flushedThisTurn = true;
               try {
+                await this.flushMemory(messages, "pre-compaction", turnBudget);
+              } catch (err) {
+                this.log.warn("In-turn memory flush failed; compacting without flush", err);
+              }
+            }
+            messages = await summarizeInStages({ messages, ...this.compactionParams(turnBudget) });
+            compactions++;
+            this.memory.reload();
+          }
+
+          try {
+            turnBudget.chargeModelCall();
+            const result = await this.llm.generate({
+              system: this.systemPrompt,
+              messages,
+              tools: this.tools,
+              stopWhen: stepCountIs(10),
+              maxSteps: 10,
+              caller: "chat",
+              cacheKey,
+            });
+            const { text } = result;
+
+            const templateHash = (this.templateHash ??= computeTemplateHash({
+              soul: this.sport.soul,
+              skills: this.sport.skills,
+              ruleBlocks: staticRuleBlocks(),
+              toolSchemas: this.tools,
+              model: this.config.llm.model,
+            }));
+            const assembledHash = computeAssembledHash(this.systemPrompt, messages);
+
+            // Append BOTH after success — JSONL unchanged on failure
+            this.chatStore.appendMessage(chatId, "user", userMessage);
+            this.chatStore.appendMessage(chatId, "assistant", text, {
+              templateHash,
+              assembledHash,
+              provider: this.config.llm.provider,
+              model: this.config.llm.model,
+            });
+
+            // A turn can run several generations (retry/compaction/overflow
+            // recovery); these usage/cost figures are the FINAL successful
+            // generation's only — not a turn-wide sum across attempts. A true
+            // accumulator over all attempts is deferred.
+            appendUsageLine(this.config.dataDir, {
+              ts: Date.now(),
+              kind: "turn",
+              caller: "chat",
+              provider: this.config.llm.provider,
+              model: this.config.llm.model,
+              durationMs: Date.now() - turnStart,
+              templateHash,
+              ...usageFieldsFromResult(result),
+            });
+
+            this.emitTurnOutcome({
+              turnId,
+              chatId,
+              ok: true,
+              overflowAttempts,
+              timeoutAttempts,
+              rateLimitAttempts,
+              duration_ms: Date.now() - turnStart,
+              compactions,
+            });
+
+            return text;
+          } catch (err) {
+            // The classified budget error is terminal: re-throw it before any
+            // retry branch so a future reordering can never mistake it for one of
+            // the retryable classes and swallow it.
+            if (err instanceof TurnBudgetExceededError) throw err;
+            // A committed calendar write makes this turn non-replayable: retrying
+            // would re-send the pre-turn messages and could re-run a
+            // non-idempotent create. Refuse honestly instead of looping.
+            if (this.turnWrites.writesCommitted > 0) {
+              console.warn(
+                JSON.stringify({
+                  event: "turn_failed_after_write",
+                  writesCommitted: this.turnWrites.writesCommitted,
+                  lastWriteSummary: this.turnWrites.lastWriteSummary,
+                  error: (err instanceof Error ? err.message : String(err)).slice(0, 200),
+                }),
+              );
+              this.emitTurnOutcome({
+                turnId,
+                chatId,
+                ok: false,
+                error_class: classifyError(err),
+                overflowAttempts,
+                timeoutAttempts,
+                rateLimitAttempts,
+                duration_ms: Date.now() - turnStart,
+                compactions,
+              });
+              return TAINTED_BY_WRITES_MESSAGE;
+            }
+            // Reactive: context overflow → flush + compact + retry
+            if (isContextOverflowError(err) && overflowAttempts < MAX_OVERFLOW_ATTEMPTS) {
+              overflowAttempts++;
+              try {
+                if (!flushedThisTurn) {
+                  flushedThisTurn = true;
+                  try {
+                    await this.flushMemory(messages, "overflow-recovery", turnBudget);
+                  } catch (flushErr) {
+                    this.log.warn("In-turn memory flush failed; compacting without flush", flushErr);
+                  }
+                }
                 messages = await summarizeInStages({ messages, ...this.compactionParams(turnBudget) });
+                compactions++;
                 this.memory.reload();
               } catch (rescueErr) {
                 this.log.warn("Compaction rescue failed; rethrowing the original turn error", rescueErr);
@@ -477,51 +524,85 @@ export class CoachAgent {
               }
               continue;
             }
-          }
-          // Rate limit → backoff (respect retry-after) + retry
-          if (isRateLimitError(err) && rateLimitAttempts < MAX_RATE_LIMIT_ATTEMPTS) {
-            rateLimitAttempts++;
-            const attemptNo = rateLimitAttempts;
-            // The server hint (if any) is a lower bound; absent one, fall back to a
-            // capped exponential. Either feeds the primitive as the Retry-After
-            // floor so the 120s ceiling and the clamp note are honored bit-for-bit.
-            const requestedMs = extractRetryAfterMs(err)
-              ?? Math.min(
-                   RATE_LIMIT_FALLBACK_BASE_MS * RATE_LIMIT_FALLBACK_MULTIPLIER ** (attemptNo - 1),
-                   RATE_LIMIT_FALLBACK_MAX_MS,
-                 );
-            const clampNote = requestedMs > RATE_LIMIT_MAX_WAIT_MS
-              ? ` (provider requested ${requestedMs}ms, clamped to ${RATE_LIMIT_MAX_WAIT_MS}ms)`
-              : "";
-            let retried = false;
-            await retryWithBackoff(
-              async () => {
-                if (!retried) {
-                  retried = true;
+            // Timeout with high context usage → compact + retry (no flush)
+            if (isTimeoutError(err) && timeoutAttempts < MAX_TIMEOUT_ATTEMPTS) {
+              const ratio = estimateMessagesTokens(messages) / this.config.contextWindowTokens;
+              if (ratio > TIMEOUT_COMPACTION_THRESHOLD) {
+                timeoutAttempts++;
+                try {
+                  messages = await summarizeInStages({ messages, ...this.compactionParams(turnBudget) });
+                  compactions++;
+                  this.memory.reload();
+                } catch (rescueErr) {
+                  this.log.warn("Compaction rescue failed; rethrowing the original turn error", rescueErr);
+                  if (err instanceof Error && err.cause === undefined) {
+                    (err as Error & { cause?: unknown }).cause = rescueErr;
+                  }
                   throw err;
                 }
-              },
-              {
-                attempts: 2,
-                baseMs: requestedMs,
-                capMs: RATE_LIMIT_MAX_WAIT_MS,
-                shouldRetry: () => true,
-                retryAfterMs: () => requestedMs,
-                random: () => 0,
-                onRetry: ({ delayMs }) => {
-                  console.warn(`Rate limited (attempt ${attemptNo}/${MAX_RATE_LIMIT_ATTEMPTS}), waiting ${delayMs}ms${clampNote}`);
+                continue;
+              }
+            }
+            // Rate limit → backoff (respect retry-after) + retry
+            if (isRateLimitError(err) && rateLimitAttempts < MAX_RATE_LIMIT_ATTEMPTS) {
+              rateLimitAttempts++;
+              const attemptNo = rateLimitAttempts;
+              // The server hint (if any) is a lower bound; absent one, fall back to a
+              // capped exponential. Either feeds the primitive as the Retry-After
+              // floor so the 120s ceiling and the clamp note are honored bit-for-bit.
+              const requestedMs = extractRetryAfterMs(err)
+                ?? Math.min(
+                     RATE_LIMIT_FALLBACK_BASE_MS * RATE_LIMIT_FALLBACK_MULTIPLIER ** (attemptNo - 1),
+                     RATE_LIMIT_FALLBACK_MAX_MS,
+                   );
+              const clampNote = requestedMs > RATE_LIMIT_MAX_WAIT_MS
+                ? ` (provider requested ${requestedMs}ms, clamped to ${RATE_LIMIT_MAX_WAIT_MS}ms)`
+                : "";
+              let retried = false;
+              await retryWithBackoff(
+                async () => {
+                  if (!retried) {
+                    retried = true;
+                    throw err;
+                  }
                 },
-              },
-            );
-            // The backoff sleep is the one place a turn can silently burn
-            // minutes; converting a long Retry-After wait into a clean budget
-            // stop here means the deadline never wedges the session lock.
-            turnBudget.checkDeadline();
-            continue;
+                {
+                  attempts: 2,
+                  baseMs: requestedMs,
+                  capMs: RATE_LIMIT_MAX_WAIT_MS,
+                  shouldRetry: () => true,
+                  retryAfterMs: () => requestedMs,
+                  random: () => 0,
+                  onRetry: ({ delayMs }) => {
+                    console.warn(`Rate limited (attempt ${attemptNo}/${MAX_RATE_LIMIT_ATTEMPTS}), waiting ${delayMs}ms${clampNote}`);
+                  },
+                },
+              );
+              // The backoff sleep is the one place a turn can silently burn
+              // minutes; converting a long Retry-After wait into a clean budget
+              // stop here means the deadline never wedges the session lock.
+              turnBudget.checkDeadline();
+              continue;
+            }
+            // Rate limit retries exhausted → throw to caller (skip compaction — API is rate limited)
+            throw err;
           }
-          // Rate limit retries exhausted → throw to caller (skip compaction — API is rate limited)
-          throw err;
         }
+      } catch (terminalErr) {
+        // Single failure-emit point: every terminal throw out of the loop is one
+        // failed turn, so the outcome line fires exactly once before the rethrow.
+        this.emitTurnOutcome({
+          turnId,
+          chatId,
+          ok: false,
+          error_class: classifyError(terminalErr),
+          overflowAttempts,
+          timeoutAttempts,
+          rateLimitAttempts,
+          duration_ms: Date.now() - turnStart,
+          compactions,
+        });
+        throw terminalErr;
       }
     });
   }

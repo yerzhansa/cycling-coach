@@ -84,17 +84,59 @@ describe("parseAuditLog", () => {
     expect(parsed).toEqual([a, b, c]);
   });
 
-  it("skips an unknown schema_version line with a warn", async () => {
+  it("parses a v2 line natively", async () => {
+    const v2 = {
+      schema_version: "2",
+      ts: new Date().toISOString(),
+      chatId: "v2-native",
+      responseHash: "0000000000000010",
+      metadata,
+      event_type: "tool_gate_block",
+      verdicts: [{ lens: "citation", ok: false, detail: "missing source" }],
+      prompt_template_hash: "abc123",
+    };
+    writeRawLog(JSON.stringify(v2) + "\n");
+
+    const parsed = await collect();
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].chatId).toBe("v2-native");
+    expect(parsed[0].event_type).toBe("tool_gate_block");
+    expect(parsed[0].verdicts).toEqual([
+      { lens: "citation", ok: false, detail: "missing source" },
+    ]);
+    expect(parsed[0].prompt_template_hash).toBe("abc123");
+  });
+
+  it("maps a v1 line forward to v2 with null verdicts and event_type reply", async () => {
+    const v1 = {
+      schema_version: "1",
+      ts: new Date().toISOString(),
+      chatId: "v1-line",
+      responseHash: "0000000000000011",
+      metadata,
+    };
+    writeRawLog(JSON.stringify(v1) + "\n");
+
+    const parsed = await collect();
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].chatId).toBe("v1-line");
+    expect(parsed[0].schema_version).toBe("2");
+    expect(parsed[0].event_type).toBe("reply");
+    expect(parsed[0].verdicts).toBeNull();
+    expect(parsed[0].prompt_template_hash).toBeNull();
+  });
+
+  it("still skips a genuinely unknown schema_version with a warn", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const valid = makeEntry({ chatId: "v1" });
-    const future = makeEntry({ chatId: "v2", schema_version: "2" });
+    const valid = makeEntry({ chatId: "current" });
+    const future = makeEntry({ chatId: "future", schema_version: "3" });
     writeRawLog(JSON.stringify(valid) + "\n" + JSON.stringify(future) + "\n");
 
     const parsed = await collect();
     expect(parsed).toHaveLength(1);
-    expect(parsed[0].chatId).toBe("v1");
+    expect(parsed[0].chatId).toBe("current");
     expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls[0][0]).toContain("schema_version 2");
+    expect(warnSpy.mock.calls[0][0]).toContain("schema_version 3");
   });
 
   it("skips a malformed JSON line with a warn", async () => {

@@ -35,21 +35,23 @@ describe("validateRecommendation", () => {
   it("returns ok for an exactly-matching numeric citation", () => {
     const snapshot = makeSnapshot({ acwr: { value: 1.42 } });
     const meta = makeMetadata([{ field: "current_status.acwr.value", value: 1.42 }]);
-    expect(validateRecommendation("reply", meta, snapshot)).toEqual({ ok: true });
+    expect(validateRecommendation("reply", meta, snapshot)).toEqual({ ok: true, failures: [] });
   });
 
   it("returns ok for a citation within the ±0.01 tolerance", () => {
     const snapshot = makeSnapshot({ acwr: { value: 1.42 } });
     const meta = makeMetadata([{ field: "current_status.acwr.value", value: 1.425 }]);
-    expect(validateRecommendation("reply", meta, snapshot)).toEqual({ ok: true });
+    expect(validateRecommendation("reply", meta, snapshot)).toEqual({ ok: true, failures: [] });
   });
 
-  it("returns the exact mismatch feedback when off by more than tolerance", () => {
+  it("returns the exact mismatch detail when off by more than tolerance", () => {
     const snapshot = makeSnapshot({ acwr: { value: 1.42 } });
     const meta = makeMetadata([{ field: "current_status.acwr.value", value: 1.45 }]);
     const result = validateRecommendation("reply", meta, snapshot);
     expect(result.ok).toBe(false);
-    expect(result.feedback).toBe(
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0].check).toBe("citation_value");
+    expect(result.failures[0].detail).toBe(
       "Citation mismatch: cited current_status.acwr.value=1.45, snapshot has 1.42.",
     );
   });
@@ -61,8 +63,10 @@ describe("validateRecommendation", () => {
     ]);
     const result = validateRecommendation("reply", meta, snapshot);
     expect(result.ok).toBe(false);
-    expect(result.feedback).toContain("current_status.monotony.value");
-    expect(result.feedback).toContain("not found in snapshot");
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0].check).toBe("citation_source");
+    expect(result.failures[0].detail).toContain("current_status.monotony.value");
+    expect(result.failures[0].detail).toContain("not found in snapshot");
   });
 
   it("returns a strict mismatch for a string/enum citation", () => {
@@ -70,13 +74,14 @@ describe("validateRecommendation", () => {
     const meta = makeMetadata([{ field: "current_status.phase", value: "build" }]);
     const result = validateRecommendation("reply", meta, snapshot);
     expect(result.ok).toBe(false);
-    expect(result.feedback).toContain("current_status.phase");
+    expect(result.failures[0].check).toBe("citation_value");
+    expect(result.failures[0].detail).toContain("current_status.phase");
   });
 
   it("returns ok for a matching string/enum citation", () => {
     const snapshot = makeSnapshot({ phase: "base" });
     const meta = makeMetadata([{ field: "current_status.phase", value: "base" }]);
-    expect(validateRecommendation("reply", meta, snapshot)).toEqual({ ok: true });
+    expect(validateRecommendation("reply", meta, snapshot)).toEqual({ ok: true, failures: [] });
   });
 
   it("does not let a snapshot false/null/empty-string satisfy a cited 0", () => {
@@ -85,7 +90,7 @@ describe("validateRecommendation", () => {
       const meta = makeMetadata([{ field: "current_status.rest_flag", value: 0 }]);
       const result = validateRecommendation("reply", meta, snapshot);
       expect(result.ok).toBe(false);
-      expect(result.feedback).toContain("current_status.rest_flag");
+      expect(result.failures[0].detail).toContain("current_status.rest_flag");
     }
   });
 
@@ -95,7 +100,7 @@ describe("validateRecommendation", () => {
       const meta = makeMetadata([{ field: "current_status.load", value: citedValue }]);
       const result = validateRecommendation("reply", meta, snapshot);
       expect(result.ok).toBe(false);
-      expect(result.feedback).toContain("current_status.load");
+      expect(result.failures[0].detail).toContain("current_status.load");
     }
   });
 
@@ -111,7 +116,26 @@ describe("validateRecommendation", () => {
     };
     const result = validateRecommendation("reply", badMeta, snapshot);
     expect(result.ok).toBe(false);
-    expect(result.feedback).toContain("Metadata failed schema validation");
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0].check).toBe("metadata_schema");
+    expect(result.failures[0].detail).toContain("Metadata failed schema validation");
+  });
+
+  it("collects ALL citation failures, not just the first", () => {
+    const snapshot = makeSnapshot({ acwr: { value: 1.42 } });
+    const meta = makeMetadata([
+      // First citation: a missing source.
+      { field: "current_status.monotony.value", value: 1.1 },
+      // Second citation: a value mismatch on a present field.
+      { field: "current_status.acwr.value", value: 1.99 },
+    ]);
+    const result = validateRecommendation("reply", meta, snapshot);
+    expect(result.ok).toBe(false);
+    expect(result.failures).toHaveLength(2);
+    expect(result.failures.map((f) => f.check)).toEqual([
+      "citation_source",
+      "citation_value",
+    ]);
   });
 });
 

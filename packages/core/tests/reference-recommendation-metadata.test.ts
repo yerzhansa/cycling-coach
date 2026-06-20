@@ -68,8 +68,8 @@ describe("CitationSchema", () => {
 });
 
 describe("AuditLogEntrySchema", () => {
-  it("exposes AUDIT_SCHEMA_VERSION === '1'", () => {
-    expect(AUDIT_SCHEMA_VERSION).toBe("1");
+  it("exposes AUDIT_SCHEMA_VERSION === '2'", () => {
+    expect(AUDIT_SCHEMA_VERSION).toBe("2");
   });
 
   it("accepts a valid entry and round-trips it", () => {
@@ -95,6 +95,36 @@ describe("AuditLogEntrySchema", () => {
     };
     const parsed = AuditLogEntrySchema.parse(entry);
     expect(parsed.validation_warning).toBe(true);
+  });
+
+  it("accepts the v2 fields and round-trips them", () => {
+    const entry = {
+      schema_version: AUDIT_SCHEMA_VERSION,
+      ts: new Date().toISOString(),
+      chatId: "12345",
+      responseHash: "abcdef0123456789",
+      metadata: validMetadata,
+      event_type: "turn_failed" as const,
+      verdicts: [{ lens: "citation", ok: true, detail: null }],
+      prompt_template_hash: "deadbeefdeadbeef",
+    };
+    const parsed = AuditLogEntrySchema.parse(entry);
+    expect(parsed.event_type).toBe("turn_failed");
+    expect(parsed.verdicts).toEqual([{ lens: "citation", ok: true, detail: null }]);
+    expect(parsed.prompt_template_hash).toBe("deadbeefdeadbeef");
+  });
+
+  it("a minimal (v1-field-set) entry still parses under the v2 schema", () => {
+    // The v2 fields being optional is what keeps the v1->v2 map and the existing
+    // minimal-entry shape valid.
+    const entry = {
+      schema_version: AUDIT_SCHEMA_VERSION,
+      ts: new Date().toISOString(),
+      chatId: "12345",
+      responseHash: "abcdef0123456789",
+      metadata: validMetadata,
+    };
+    expect(() => AuditLogEntrySchema.parse(entry)).not.toThrow();
   });
 
   it("rejects an unknown top-level field (.strict() boundary)", () => {
