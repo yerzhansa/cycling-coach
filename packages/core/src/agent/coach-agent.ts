@@ -20,6 +20,7 @@ import {
   isContextOverflowError,
   isTimeoutError,
   isRateLimitError,
+  classifyFailure,
   extractRetryAfterMs,
   estimateMessagesTokens,
   TIMEOUT_COMPACTION_THRESHOLD,
@@ -40,6 +41,9 @@ import { TAINTED_BY_WRITES_MESSAGE } from "./coach-agent-copy.js";
 const MAX_OVERFLOW_ATTEMPTS = 3;
 const MAX_TIMEOUT_ATTEMPTS = 2;
 const MAX_RATE_LIMIT_ATTEMPTS = 3;
+const MAX_SERVER_ERROR_ATTEMPTS = 2;
+const SERVER_ERROR_BACKOFF_BASE_MS = 500;
+const SERVER_ERROR_BACKOFF_MAX_MS = 5_000;
 const RATE_LIMIT_FALLBACK_BASE_MS = 5_000;
 const RATE_LIMIT_FALLBACK_MULTIPLIER = 2;
 const RATE_LIMIT_FALLBACK_MAX_MS = 30_000;
@@ -385,6 +389,7 @@ export class CoachAgent {
       let overflowAttempts = 0;
       let timeoutAttempts = 0;
       let rateLimitAttempts = 0;
+      let serverErrorAttempts = 0;
 
       // Loop-invariant: the prompt cache key derives only from the chat id.
       const cacheKey = sha256_16(chatId);
@@ -581,6 +586,43 @@ export class CoachAgent {
               // The backoff sleep is the one place a turn can silently burn
               // minutes; converting a long Retry-After wait into a clean budget
               // stop here means the deadline never wedges the session lock.
+              turnBudget.checkDeadline();
+              continue;
+            }
+            // Transient server (5xx) or network failure → brief jittered retry.
+            // The residual class: only fires when overflow/timeout/rate_limit did
+            // not match, so a single 502 or connection blip no longer kills the
+            // turn on attempt 1 and discards paid multi-step tool work.
+            const failure = classifyFailure(err);
+            // A codex network throw was already retried inside the provider
+            // library (the bridge short-circuited it to one attempt and tagged
+            // it NetworkError), so retrying it here would be a second layer —
+            // network is retried at exactly one layer. The outer network retry
+            // is for the AI-SDK path, whose SDK does zero retries.
+            const alreadyRetriedNetwork = failure === "network" && err instanceof Error && err.name === "NetworkError";
+            if (
+              (failure === "server_error" || failure === "network") &&
+              !alreadyRetriedNetwork &&
+              serverErrorAttempts < MAX_SERVER_ERROR_ATTEMPTS
+            ) {
+              serverErrorAttempts++;
+              const retryAfterFloor = extractRetryAfterMs(err);
+              let retried = false;
+              await retryWithBackoff(
+                async () => {
+                  if (!retried) {
+                    retried = true;
+                    throw err;
+                  }
+                },
+                {
+                  attempts: 2,
+                  baseMs: retryAfterFloor ?? SERVER_ERROR_BACKOFF_BASE_MS,
+                  capMs: SERVER_ERROR_BACKOFF_MAX_MS,
+                  shouldRetry: () => true,
+                  retryAfterMs: () => retryAfterFloor,
+                },
+              );
               turnBudget.checkDeadline();
               continue;
             }

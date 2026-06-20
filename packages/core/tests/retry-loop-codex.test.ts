@@ -188,6 +188,41 @@ describe("rate-limit backoff clamp", () => {
     vi.useRealTimers();
   });
 
+  it("recovers a codex 5xx via the short server-error backoff, not the rate-limit ramp", async () => {
+    let n = 0;
+    const complete = vi.fn(async () => {
+      n++;
+      if (n === 1) {
+        // The bridge's marker error for a 5xx: message carries the marker, but
+        // the machine-readable status splits it into ServerError, not RateLimit.
+        const e = new Error("usage limit blocked client retry (status=502)") as Error & {
+          httpStatus?: number;
+        };
+        e.httpStatus = 502;
+        throw e;
+      }
+      return mkAssistant("recovered-5xx");
+    });
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.useFakeTimers();
+    const agent = await setupAgent(complete);
+
+    const chatPromise = agent.chat("test-chat-5xx", "hello");
+    // A short advance (well under RATE_LIMIT_FALLBACK_BASE_MS=5000) recovers it.
+    await vi.advanceTimersByTimeAsync(5_000);
+    const text = await chatPromise;
+
+    expect(text).toBe("recovered-5xx");
+    expect(complete).toHaveBeenCalledTimes(2);
+    const rateLimitWarn = warnSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((s) => s.includes("Rate limited"));
+    expect(rateLimitWarn).toBeUndefined();
+
+    vi.useRealTimers();
+  });
+
   it("honors a sub-cap header-derived retry-after unchanged", async () => {
     let n = 0;
     const complete = vi.fn(async () => {

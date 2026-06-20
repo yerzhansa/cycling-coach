@@ -23,19 +23,108 @@ import type { GenerateOpts, GenerateResult } from "../llm-types.js";
 
 const DEFAULT_STEP_LIMIT = 10;
 
-// Pi-ai's codex provider retries 429/5xx internally and ignores maxRetryDelayMs;
-// our outer loop in core.ts owns backoff. Throwing an Error whose message
-// contains PI_AI_NO_RETRY_MARKER triggers pi-ai's no-retry escape
-// (openai-codex-responses.js: the retry loop skips when the message matches).
-// Do not rephrase the marker without verifying pi-ai still honors it.
+// Pi-ai's codex provider has its own internal retry loop with two branches, and
+// our outer retry loop in agent/coach-agent.ts owns backoff for both:
+//   - Status-code path: a non-OK response (429/5xx) calls onResponse; throwing an
+//     Error whose message contains PI_AI_NO_RETRY_MARKER makes pi-ai's status-code
+//     retry guard stop after one attempt, so the failure surfaces immediately.
+//   - Network-throw path: a thrown fetch (DNS/connection failure, socket reset)
+//     skips onResponse entirely, so the bridge wraps the runtime fetch for the
+//     duration of the complete() call to rethrow network throws carrying the same
+//     marker — short-circuiting pi-ai's internal network-retry loop at one attempt
+//     so the network class is retried at exactly one (outer) layer.
+// Do not rephrase the marker without verifying the library still honors it.
 const RETRYABLE_HTTP_STATUSES = new Set([429, 500, 502, 503, 504]);
-const PI_AI_NO_RETRY_MARKER = "usage limit";
+const SERVER_ERROR_HTTP_STATUSES = new Set([500, 502, 503, 504]);
+export const PI_AI_NO_RETRY_MARKER = "usage limit";
 
-const onCodexResponse = async ({ status }: { status: number }): Promise<void> => {
+function parseRetryAfterMs(headers: Record<string, string> | undefined): number | undefined {
+  if (!headers) return undefined;
+  const msHeader = headers["retry-after-ms"];
+  if (msHeader) {
+    const ms = parseInt(msHeader, 10);
+    if (Number.isFinite(ms) && ms > 0) return ms;
+  }
+  const secHeader = headers["retry-after"];
+  if (secHeader) {
+    const secs = parseInt(secHeader, 10);
+    if (Number.isFinite(secs) && secs > 0) return secs * 1000;
+  }
+  return undefined;
+}
+
+const onCodexResponse = async ({
+  status,
+  headers,
+}: {
+  status: number;
+  headers?: Record<string, string>;
+}): Promise<void> => {
   if (RETRYABLE_HTTP_STATUSES.has(status)) {
-    throw new Error(`${PI_AI_NO_RETRY_MARKER} blocked client retry (status=${status})`);
+    const e = new Error(`${PI_AI_NO_RETRY_MARKER} blocked client retry (status=${status})`) as Error & {
+      httpStatus?: number;
+      retryAfterMs?: number;
+    };
+    e.httpStatus = status;
+    const retryAfterMs = parseRetryAfterMs(headers);
+    if (retryAfterMs !== undefined) e.retryAfterMs = retryAfterMs;
+    throw e;
   }
 };
+
+// ============================================================================
+// NETWORK-THROW ESCAPE
+// ============================================================================
+
+type NetworkThrowError = Error & { isNetworkThrow?: boolean };
+
+// Rewrites a thrown fetch (network error, no Response) so its message begins
+// with PI_AI_NO_RETRY_MARKER, making pi-ai's `!message.includes("usage limit")`
+// network-retry guard false — the library stops after one attempt and the single
+// outer loop owns the network class. The original message and cause are
+// preserved so the outer classifier still reads it as a network error.
+export function markNetworkThrow(err: unknown): NetworkThrowError {
+  if (err instanceof Error && (err as NetworkThrowError).isNetworkThrow) {
+    return err as NetworkThrowError;
+  }
+  const original = err instanceof Error ? err : new Error(String(err));
+  const out = new Error(`${PI_AI_NO_RETRY_MARKER}: ${original.message}`) as NetworkThrowError;
+  out.isNetworkThrow = true;
+  out.cause = original.cause ?? original;
+  return out;
+}
+
+// The library exposes no fetch-injection option on 0.67.6, so the network-throw
+// escape is realized at the runtime-global seam: globalThis.fetch is wrapped for
+// the duration of one complete() call and restored after. Concurrent per-chatId
+// turns can overlap the swap, so installs are ref-counted and restore to the
+// captured original; the marker rethrow is idempotent (no double-prefix).
+let originalFetch: typeof globalThis.fetch | undefined;
+let fetchWrapInstalls = 0;
+
+async function withNetworkErrorMarker<T>(fn: () => Promise<T>): Promise<T> {
+  if (fetchWrapInstalls === 0) {
+    originalFetch = globalThis.fetch;
+    const captured = originalFetch;
+    globalThis.fetch = async (...args: Parameters<typeof fetch>): Promise<Response> => {
+      try {
+        return await captured(...args);
+      } catch (err) {
+        throw markNetworkThrow(err);
+      }
+    };
+  }
+  fetchWrapInstalls++;
+  try {
+    return await fn();
+  } finally {
+    fetchWrapInstalls--;
+    if (fetchWrapInstalls === 0 && originalFetch !== undefined) {
+      globalThis.fetch = originalFetch;
+      originalFetch = undefined;
+    }
+  }
+}
 
 // ============================================================================
 // ERROR NORMALIZATION
@@ -43,18 +132,44 @@ const onCodexResponse = async ({ status }: { status: number }): Promise<void> =>
 
 /**
  * Pi-ai throws plain Error instances with human messages. Our retry loop in
- * core.ts relies on token-utils predicates that look for specific substrings.
- * Rewrite the message so those predicates trigger correctly without having to
- * teach them about pi-ai's error surface.
+ * agent/coach-agent.ts relies on token-utils predicates that look for specific
+ * substrings. Rewrite the message so those predicates trigger correctly without
+ * having to teach them about pi-ai's error surface.
  */
-function normalizeError(err: unknown): Error {
+export function normalizeError(err: unknown): Error {
   if (!(err instanceof Error)) return new Error(String(err));
   const msg = err.message ?? "";
   const lower = msg.toLowerCase();
 
+  // A thrown fetch (no response) is a network failure, not a rate limit, even
+  // when the wrapper tags it with the no-retry marker. Classify it as network
+  // (the cause-chain walk reads the preserved errno) BEFORE the marker matches
+  // the rate-limit pattern below.
+  const carried = err as Error & { httpStatus?: number; isNetworkThrow?: boolean };
+  if (carried.isNetworkThrow) {
+    const out = new Error(msg) as Error & { cause?: unknown };
+    out.name = "NetworkError";
+    out.cause = err.cause ?? err;
+    return out;
+  }
+
+  // A transient 5xx must take the short server-error backoff, not the 5-35s
+  // rate-limit ramp — so split it out into a ServerError class before the
+  // rate-limit pattern (which the carried "usage limit" marker would match).
+  const status = carried.httpStatus;
+  if (status !== undefined && SERVER_ERROR_HTTP_STATUSES.has(status)) {
+    const out = new Error(`Server error: ${msg}`) as Error & { retryAfterMs?: number };
+    out.name = "ServerError";
+    const retryAfterMs = (err as { retryAfterMs?: number }).retryAfterMs;
+    if (retryAfterMs !== undefined) out.retryAfterMs = retryAfterMs;
+    return out;
+  }
+
   if (/usage.?limit|rate.?limit|too many requests|429/i.test(msg)) {
-    const out = new Error(`Rate limit exceeded: ${msg}`);
+    const out = new Error(`Rate limit exceeded: ${msg}`) as Error & { retryAfterMs?: number };
     out.name = "RateLimitError";
+    const retryAfterMs = (err as { retryAfterMs?: number }).retryAfterMs;
+    if (retryAfterMs !== undefined) out.retryAfterMs = retryAfterMs;
     return out;
   }
 
@@ -380,12 +495,14 @@ export async function codexGenerateText(
 
     let assistant: AssistantMessage;
     try {
-      assistant = await complete(model, context, {
-        apiKey,
-        maxTokens: maxOutputTokens,
-        onResponse: onCodexResponse,
-        sessionId: cacheKey,
-      });
+      assistant = await withNetworkErrorMarker(() =>
+        complete(model, context, {
+          apiKey,
+          maxTokens: maxOutputTokens,
+          onResponse: onCodexResponse,
+          sessionId: cacheKey,
+        }),
+      );
     } catch (err) {
       throw normalizeError(err);
     }

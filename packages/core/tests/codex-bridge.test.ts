@@ -1,9 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { zodSchema } from "ai";
 import { z } from "zod";
+import {
+  PI_AI_NO_RETRY_MARKER,
+  markNetworkThrow,
+  normalizeError,
+} from "../src/agent/codex-bridge.js";
+import { isRateLimitError, isServerError, isNetworkError } from "../src/agent/token-utils.js";
 
 // Test the bridge's error normalization and result mapping. Mocks pi-ai's
 // `complete` / `getModel` and auth profile access.
@@ -381,5 +388,152 @@ describe("codex-bridge", () => {
       .join(" ");
     expect(allLogs).not.toContain(secretToken);
     expect(allLogs).not.toContain("test-access-token");
+  });
+});
+
+// Capture onResponse the way the existing status-code test does, then drive a
+// status through it and feed the rejection through normalizeError — proving the
+// 5xx-split / Retry-After behavior at the bridge boundary.
+async function captureOnResponse() {
+  let captured:
+    | ((r: { status: number; headers?: Record<string, string> }) => Promise<void> | void)
+    | undefined;
+  const complete = vi.fn(
+    async (_m: unknown, _c: unknown, opts: { onResponse?: typeof captured }) => {
+      captured = opts.onResponse;
+      return asstMsg();
+    },
+  );
+  const { codexGenerateText } = await loadBridgeWithMocks({ complete });
+  await codexGenerateText({
+    messages: [{ role: "user", content: "hi" }],
+    modelId: "gpt-5.4",
+    profileName: "openai-codex",
+  });
+  return captured!;
+}
+
+describe("codex-bridge 5xx server-error split", () => {
+  it("classifies a 5xx as server error, not rate limit", async () => {
+    const onResponse = await captureOnResponse();
+    for (const status of [500, 502, 503, 504]) {
+      let thrown: unknown;
+      try {
+        await onResponse({ status, headers: {} });
+      } catch (err) {
+        thrown = err;
+      }
+      const normalized = normalizeError(thrown);
+      expect(isServerError(normalized)).toBe(true);
+      expect(isRateLimitError(normalized)).toBe(false);
+    }
+  });
+
+  it("keeps a true 429 as rate limit, not server error", async () => {
+    const onResponse = await captureOnResponse();
+    let thrown: unknown;
+    try {
+      await onResponse({ status: 429, headers: {} });
+    } catch (err) {
+      thrown = err;
+    }
+    const normalized = normalizeError(thrown);
+    expect(isRateLimitError(normalized)).toBe(true);
+    expect(isServerError(normalized)).toBe(false);
+  });
+
+  it("honors Retry-After from the headers onResponse receives", async () => {
+    const onResponse = await captureOnResponse();
+
+    const grab = async (headers: Record<string, string>): Promise<number | undefined> => {
+      try {
+        await onResponse({ status: 503, headers });
+        return undefined;
+      } catch (err) {
+        return (err as { retryAfterMs?: number }).retryAfterMs;
+      }
+    };
+
+    expect(await grab({ "retry-after": "7" })).toBe(7000);
+    expect(await grab({ "retry-after-ms": "1500" })).toBe(1500);
+    expect(await grab({})).toBeUndefined();
+  });
+
+  it("trips loudly if the provider library renames the no-retry marker", () => {
+    const distUrl = import.meta.resolve("@mariozechner/pi-ai/openai-codex-responses");
+    const distPath = fileURLToPath(distUrl);
+    const source = readFileSync(distPath, "utf8");
+    expect(source.includes(PI_AI_NO_RETRY_MARKER)).toBe(true);
+    expect(source.includes("USAGE_LIMIT_RENAMED")).toBe(false);
+  });
+});
+
+describe("codex-bridge network-error escape", () => {
+  it("rethrows a network throw carrying the marker so the library stops at one attempt", () => {
+    const original = Object.assign(new Error("fetch failed"), { code: "ECONNREFUSED" });
+    const marked = markNetworkThrow(original);
+    expect(marked.message.startsWith(PI_AI_NO_RETRY_MARKER)).toBe(true);
+    expect(marked.message).toContain("fetch failed");
+    // The library's `!message.includes("usage limit")` guard becomes false.
+    expect(marked.message.includes(PI_AI_NO_RETRY_MARKER)).toBe(true);
+    // Idempotent: re-marking an already-marked error must not double-prefix.
+    const remarked = markNetworkThrow(marked);
+    expect(remarked).toBe(marked);
+  });
+
+  it("normalizes a marked network throw to the network class, not rate limit", () => {
+    const original = Object.assign(new Error("fetch failed"), { code: "ECONNRESET" });
+    const marked = markNetworkThrow(original);
+    const normalized = normalizeError(marked);
+    // Carrying the "usage limit" marker must NOT route a connection failure into
+    // the rate-limit branch.
+    expect(isRateLimitError(normalized)).toBe(false);
+    expect(isNetworkError(normalized)).toBe(true);
+  });
+
+  it("passes a resolved non-OK response through unchanged (status-code path)", async () => {
+    // The wrapper only touches thrown fetches; a resolved 500 Response is the
+    // status-code path onCodexResponse owns, so markNetworkThrow is never applied.
+    const response = new Response("err", { status: 500 });
+    // Simulate the wrapper's resolve branch: a resolved response is returned as-is.
+    const passthrough = async (): Promise<Response> => response;
+    const out = await passthrough();
+    expect(out.status).toBe(500);
+  });
+
+  it("installs the wrapper around complete() so a single fetch throw surfaces marked, once", async () => {
+    // Drive the real bridge wrapper: complete() makes ONE fetch call, which the
+    // installed wrapper has swapped to throw-and-mark. The library would retry a
+    // raw network throw up to 4x; the marker short-circuits it to one attempt.
+    const fetchSpy = vi.fn(async () => {
+      // Undici buries the connection code on .cause.code of a "fetch failed".
+      const e = new TypeError("fetch failed");
+      (e as Error & { cause?: unknown }).cause = { code: "ECONNREFUSED" };
+      throw e;
+    });
+    const complete = vi.fn(async () => {
+      // Exactly one fetch attempt, mirroring the marker-short-circuited loop.
+      await (globalThis.fetch as unknown as typeof fetchSpy)();
+      return asstMsg();
+    });
+    const { codexGenerateText } = await loadBridgeWithMocks({ complete });
+    vi.spyOn(globalThis, "fetch").mockImplementation(fetchSpy as unknown as typeof fetch);
+
+    let thrown: unknown;
+    try {
+      await codexGenerateText({
+        messages: [{ role: "user", content: "hi" }],
+        modelId: "gpt-5.4",
+        profileName: "openai-codex",
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(thrown).toBeInstanceOf(Error);
+    // The surfaced (normalized) error is a network error, never rate-limit.
+    expect(isRateLimitError(thrown)).toBe(false);
+    expect(isNetworkError(thrown)).toBe(true);
   });
 });

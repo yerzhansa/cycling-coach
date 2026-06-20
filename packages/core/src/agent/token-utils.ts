@@ -78,6 +78,62 @@ export function isRateLimitError(err: unknown): boolean {
   return msg.includes("rate limit") || msg.includes("too many requests");
 }
 
+export type FailureReason =
+  | "overflow"
+  | "timeout"
+  | "rate_limit"
+  | "server_error"
+  | "network"
+  | "auth"
+  | "invalid_request"
+  | "unknown";
+
+const NETWORK_ERROR_CODES = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN"]);
+
+export function isServerError(err: unknown): boolean {
+  if (APICallError.isInstance(err)) {
+    return [500, 502, 503, 504, 529].includes(err.statusCode ?? -1);
+  }
+  // A codex 5xx is normalized into a plain Error with this name so both
+  // providers route the server-error class identically.
+  return err instanceof Error && err.name === "ServerError";
+}
+
+interface Caused {
+  code?: unknown;
+  cause?: unknown;
+}
+
+export function isNetworkError(err: unknown): boolean {
+  // undici hides the conn code on the wrapped inner error, so chase the chain.
+  let n = err as Caused | null | undefined;
+  const seen = new Set<unknown>();
+  for (let d = 0; d < 5 && n != null && !seen.has(n); d++, n = n.cause as Caused | null) {
+    seen.add(n);
+    if (typeof n.code === "string" && NETWORK_ERROR_CODES.has(n.code)) return true;
+  }
+  return false;
+}
+
+export function isAuthError(err: unknown): boolean {
+  return APICallError.isInstance(err) && (err.statusCode === 401 || err.statusCode === 403);
+}
+
+export function isInvalidRequestError(err: unknown): boolean {
+  return APICallError.isInstance(err) && err.statusCode === 400;
+}
+
+export function classifyFailure(err: unknown): FailureReason {
+  if (isContextOverflowError(err)) return "overflow";
+  if (isTimeoutError(err)) return "timeout";
+  if (isRateLimitError(err)) return "rate_limit";
+  if (isServerError(err)) return "server_error";
+  if (isNetworkError(err)) return "network";
+  if (isAuthError(err)) return "auth";
+  if (isInvalidRequestError(err)) return "invalid_request";
+  return "unknown";
+}
+
 export function extractRetryAfterMs(err: unknown): number | null {
   if (!APICallError.isInstance(err)) return null;
   const headers = err.responseHeaders;
