@@ -34,6 +34,25 @@ export type { GenerateOpts, GenerateResult } from "./llm-types.js";
 // the ledger (best-effort, by design).
 const PI_AI_PRICED = new Set<KnownProvider>(["anthropic", "openai", "google", "openrouter", "zai"]);
 
+// Providers that need an EXPLICIT system-prompt cache breakpoint, and the
+// providerOptions key each one reads it from. openai/google and the
+// OpenAI-compatible providers (deepseek / direct-qwen / minimax / kimi / zai)
+// cache the stable prefix automatically server-side, so they send the plain
+// system string and are absent here. OpenRouter auto-caches every routed model
+// EXCEPT Qwen/Alibaba-backed ones, which OpenRouter will not cache without an
+// explicit breakpoint — so it is gated on a `qwen/`-namespaced model id. (The
+// breakpoint shape is identical to the Anthropic one; only the key differs, and
+// the @openrouter/ai-sdk-provider reads it from message-level
+// providerOptions.openrouter.cacheControl.)
+export function cacheBreakpointKey(
+  provider: string,
+  model: string,
+): "anthropic" | "openrouter" | undefined {
+  if (provider === "anthropic") return "anthropic";
+  if (provider === "openrouter" && model.startsWith("qwen/")) return "openrouter";
+  return undefined;
+}
+
 export class LLM {
   private config: Config;
   private aiSdkModel: LanguageModel | null;
@@ -75,17 +94,21 @@ export class LLM {
     }
 
     // Breakpoint on the last (only) stable system block; the provider renders
-    // tools before system, so the marker caches tools + system together. The
-    // cacheControl directive is Anthropic-specific — openai/google get the plain
-    // system string. A second AI-SDK provider that needs prompt caching adds its
-    // own branch here rather than extending this Anthropic-only one.
+    // tools before system, so the marker caches tools + system together. Most
+    // providers cache the stable prefix automatically and get the plain system
+    // string; only the providers cacheBreakpointKey() names need an explicit
+    // directive, each under its own providerOptions key (anthropic for direct
+    // Anthropic; openrouter for Qwen-routed-through-OpenRouter, which OpenRouter
+    // will not cache without it). Other OpenRouter-routed models auto-cache and
+    // stay on the plain-string path.
+    const breakpointKey = cacheBreakpointKey(this.config.llm.provider, this.config.llm.model);
     const cachedSystem =
-      this.config.llm.provider === "anthropic" && opts.system !== undefined
+      breakpointKey !== undefined && opts.system !== undefined
         ? [
             {
               role: "system" as const,
               content: opts.system,
-              providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
+              providerOptions: { [breakpointKey]: { cacheControl: { type: "ephemeral" } } },
             },
           ]
         : undefined;
