@@ -34,15 +34,15 @@ export type { GenerateOpts, GenerateResult } from "./llm-types.js";
 // the ledger (best-effort, by design).
 const PI_AI_PRICED = new Set<KnownProvider>(["anthropic", "openai", "google", "openrouter", "zai"]);
 
-// Providers that need an EXPLICIT system-prompt cache breakpoint, and the
-// providerOptions key each one reads it from. openai/google and the
-// OpenAI-compatible providers (deepseek / direct-qwen / minimax / kimi / zai)
-// cache the stable prefix automatically server-side, so they send the plain
-// system string and are absent here. OpenRouter auto-caches every routed model
-// EXCEPT Qwen/Alibaba-backed ones, which OpenRouter will not cache without an
-// explicit breakpoint — so it is gated on a `qwen/`-namespaced model id. (The
-// breakpoint shape is identical to the Anthropic one; only the key differs, and
-// the @openrouter/ai-sdk-provider reads it from message-level
+// Most providers cache the stable system prefix automatically server-side and
+// get the plain system string, so they are absent here: direct openai/google,
+// the OpenAI-compatible direct providers, and OpenRouter's OpenAI/DeepSeek/
+// Grok/Moonshot routes. Explicit breakpoints are needed by direct Anthropic and
+// — through OpenRouter — the Anthropic/Qwen/Gemini routes; of those we ship only
+// the Qwen route (`qwen/`-namespaced ids), so `anthropic/` and `google/` via
+// OpenRouter are intentionally out of scope and stay uncached. (Same breakpoint
+// shape as Anthropic; only the providerOptions key differs —
+// @openrouter/ai-sdk-provider reads it from message-level
 // providerOptions.openrouter.cacheControl.)
 export function cacheBreakpointKey(
   provider: string,
@@ -60,6 +60,9 @@ export class LLM {
   // once here. getModels() allocates a fresh array per call, so doing this in
   // generate() would re-scan the catalog on every LLM round-trip.
   private pricingModel: Model<Api> | null;
+  // Instance-constant for the same reason: the cache-breakpoint decision depends
+  // only on provider + model, so resolve it once rather than per dispatch().
+  private breakpointKey: "anthropic" | "openrouter" | undefined;
 
   constructor(config: Config) {
     this.config = config;
@@ -69,6 +72,7 @@ export class LLM {
           (m) => m.id === config.llm.model,
         ) ?? null)
       : null;
+    this.breakpointKey = cacheBreakpointKey(config.llm.provider, config.llm.model);
   }
 
   async generate(opts: GenerateOpts): Promise<GenerateResult> {
@@ -93,15 +97,10 @@ export class LLM {
       throw new Error("AI SDK model not initialized");
     }
 
-    // Breakpoint on the last (only) stable system block; the provider renders
-    // tools before system, so the marker caches tools + system together. Most
-    // providers cache the stable prefix automatically and get the plain system
-    // string; only the providers cacheBreakpointKey() names need an explicit
-    // directive, each under its own providerOptions key (anthropic for direct
-    // Anthropic; openrouter for Qwen-routed-through-OpenRouter, which OpenRouter
-    // will not cache without it). Other OpenRouter-routed models auto-cache and
-    // stay on the plain-string path.
-    const breakpointKey = cacheBreakpointKey(this.config.llm.provider, this.config.llm.model);
+    // The provider renders tools before system, so breakpointing the (only)
+    // stable system block caches tools + system together. Which providers need a
+    // breakpoint, and why the rest don't, lives on cacheBreakpointKey above.
+    const breakpointKey = this.breakpointKey;
     const cachedSystem =
       breakpointKey !== undefined && opts.system !== undefined
         ? [
