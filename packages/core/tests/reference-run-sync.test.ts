@@ -698,10 +698,19 @@ describe("createRunSync", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    // The in-flight cache writes were aborted at the rename boundary: each
-    // helper fsync'd its temp file then skipped the rename, so NONE of the
-    // payload files landed. A dead cycle's stale payload must never replace the
-    // live file after the mutex was handed to the successor cycle.
+    // The rename-boundary check skips any cache write that had not yet reached
+    // its rename commit when the abort fired. This test's cacheGate parks all 5
+    // writes BEFORE they delegate to the real helper, so the hand-fired abort
+    // lands while every write is still ahead of its check — deterministically
+    // forcing all 5 into the skip window, so NONE of the payload files land.
+    // Production does NOT gate the writes (run-sync fires them concurrently), so
+    // an abort at an arbitrary instant may leave a PARTIAL subset renamed: any
+    // write already past its check is uncancellable and still commits, while
+    // writes still ahead of the check skip. The guarantee the check delivers is
+    // per-write ("no write renames after observing the abort"), not an
+    // all-or-nothing across the 5 files. Either way, a dead cycle's payload that
+    // had not yet committed never replaces the live file after the mutex was
+    // handed to the successor cycle.
     for (const file of [
       "latest.json",
       "history.json",
