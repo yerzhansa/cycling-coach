@@ -36,6 +36,16 @@ export type { GenerateOpts, GenerateResult } from "./llm-types.js";
 export { appendUsageLine, USAGE_LEDGER_FILE, USAGE_LEDGER_MAX_BYTES } from "./usage-ledger.js";
 export type { UsageLedgerLine } from "./usage-ledger.js";
 
+// ─── Logging substrate ────────────────────────────────────────────────
+export {
+  createSubsystemLogger,
+  createSubsystemLoggers,
+  serializeError,
+  LOG_LEVELS,
+  normalizeLogLevel,
+} from "./logging/index.js";
+export type { LogLine, LogLevel, SubsystemLogger, Subsystem } from "./logging/index.js";
+
 // ─── Memory ───────────────────────────────────────────────────────────
 export type { MemorySnapshot, MemoryStore, MemoryWriteSource } from "./memory.js";
 export { Memory } from "./memory/store.js";

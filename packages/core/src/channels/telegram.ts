@@ -19,6 +19,7 @@ import { resolveRunningCs, type ResolvedCs } from "../reference/cs-resolution.js
 import { formatSyncReply } from "../reference/sync/format-sync-reply.js";
 import { formatSnapshotRaw } from "../reference/sync/snapshot-debug.js";
 import { sendSnapshotOutput } from "../reference/sync/send-snapshot.js";
+import { createSubsystemLogger } from "../logging/index.js";
 
 function formatRateLimitWait(err: unknown): string {
   const ms = extractRetryAfterMs(err);
@@ -112,6 +113,7 @@ export function createTelegramBot(
 ): Bot {
   logSecurityStartup(dataDir, binary.binaryName);
   const bot = createSecuredBot({ token, binary, dataDir });
+  const log = createSubsystemLogger("telegram", dataDir);
   const greeted = new Set<number>();
 
   // Resolve the running CS anchor once per turn from the latest synced profile so
@@ -130,7 +132,7 @@ export function createTelegramBot(
     try {
       ({ memoryFlushed } = await agent.resetSession(`telegram:${ctx.chat.id}`));
     } catch (err) {
-      console.error("Error resetting session:", err);
+      log.error("command_failed", err, { command: "start", chatId: `telegram:${ctx.chat.id}` });
       await ctx.reply(
         "Something went wrong resetting your session — your history is untouched. Please try /start again.",
       );
@@ -148,7 +150,7 @@ export function createTelegramBot(
       const response = await agent.chat(chatId, "/plan", turnDeps());
       await sendLongMessage(ctx, response);
     } catch (err) {
-      console.error("Error in /plan:", err);
+      log.error("command_failed", err, { command: "plan", chatId });
       if (isRateLimitError(err)) {
         await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
       } else {
@@ -164,7 +166,7 @@ export function createTelegramBot(
       const response = await agent.chat(chatId, "/workout", turnDeps());
       await sendLongMessage(ctx, response);
     } catch (err) {
-      console.error("Error in /workout:", err);
+      log.error("command_failed", err, { command: "workout", chatId });
       if (isRateLimitError(err)) {
         await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
       } else {
@@ -180,7 +182,7 @@ export function createTelegramBot(
       const response = await agent.chat(chatId, "/status", turnDeps());
       await sendLongMessage(ctx, response);
     } catch (err) {
-      console.error("Error in /status:", err);
+      log.error("command_failed", err, { command: "status", chatId });
       if (isRateLimitError(err)) {
         await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
       } else {
@@ -198,7 +200,7 @@ export function createTelegramBot(
         });
         await ctx.reply(formatSyncReply(result));
       } catch (err) {
-        console.error("Error in /sync:", err);
+        log.error("command_failed", err, { command: "sync", chatId: `telegram:${ctx.chat.id}` });
         await ctx.reply("Sorry, something went wrong syncing. Please try again.");
       }
     });
@@ -223,7 +225,7 @@ export function createTelegramBot(
               ctx.replyWithDocument(new InputFile(buffer, filename)) as Promise<unknown>,
           });
         } catch (err) {
-          console.error("Error in /snapshot raw:", err);
+          log.error("command_failed", err, { command: "snapshot", chatId: `telegram:${ctx.chat.id}` });
           await ctx.reply("Sorry, something went wrong rendering the snapshot.");
         }
         return;
@@ -244,7 +246,7 @@ export function createTelegramBot(
       const response = await agent.chat(chatId, message, turnDeps());
       await sendLongMessage(ctx, response);
     } catch (err) {
-      console.error("Error in /review:", err);
+      log.error("command_failed", err, { command: "review", chatId });
       if (isRateLimitError(err)) {
         await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
       } else {
@@ -268,7 +270,7 @@ export function createTelegramBot(
       const message = await buildWhatsNewMessage(binary.binaryName, info);
       await sendLongMessage(ctx, message);
     } catch (err) {
-      console.error("Error in /whatsnew:", err);
+      log.error("command_failed", err, { command: "whatsnew", chatId: `telegram:${ctx.chat.id}` });
       await ctx.reply("Sorry, couldn't fetch release notes. Please try again.");
     }
   });
@@ -292,7 +294,7 @@ export function createTelegramBot(
       // Telegram re-sends /update on next startup and we loop forever.
       void bot.stop().then(() => selfUpdate(binary.binaryName, info.latest));
     } catch (err) {
-      console.error("Error in /update:", err);
+      log.error("command_failed", err, { command: "update", chatId: `telegram:${ctx.chat.id}` });
       await ctx.reply(
         `Update failed. Please run \`npm install -g ${binary.binaryName}@${latest ?? "latest"} --ignore-scripts\` manually.`,
       );
@@ -318,7 +320,7 @@ export function createTelegramBot(
       const response = await agent.chat(chatId, ctx.message.text, turnDeps());
       await sendLongMessage(ctx, response);
     } catch (err) {
-      console.error("Error in chat:", err);
+      log.error("command_failed", err, { command: "chat", chatId });
       if (isRateLimitError(err)) {
         const wait = formatRateLimitWait(err);
         await ctx.reply(

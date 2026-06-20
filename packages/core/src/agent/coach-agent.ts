@@ -31,6 +31,7 @@ import { LLM } from "../llm.js";
 import { appendUsageLine, usageFieldsFromResult } from "../usage-ledger.js";
 import { createMemorySnapshot } from "../memory/snapshot.js";
 import { resolveUserTimezone, appendCurrentTimeLine } from "./user-time.js";
+import { createSubsystemLogger, type SubsystemLogger } from "../logging/index.js";
 
 const MAX_OVERFLOW_ATTEMPTS = 3;
 const MAX_TIMEOUT_ATTEMPTS = 2;
@@ -64,6 +65,7 @@ export class CoachAgent {
   private config: Config;
   private memory: Memory;
   private chatStore: ChatStore;
+  private log: SubsystemLogger;
   private tools: ToolSet;
   private systemPrompt: string;
   private tz: string;
@@ -91,6 +93,7 @@ export class CoachAgent {
     this.tz = resolveUserTimezone(config.session.timezone);
     this.memory = new Memory(config.dataDir, this.tz);
     this.chatStore = new ChatStore(config.dataDir, config.session.resetArchiveRetentionDays);
+    this.log = createSubsystemLogger("agent", config.dataDir);
 
     const intervals = config.intervals.apiKey
       ? makeChatClient({
@@ -185,7 +188,7 @@ export class CoachAgent {
           try {
             outcome = await this.flushMemory(history, "stale-reset");
           } catch (err) {
-            console.warn("Pre-reset memory flush failed; archiving session anyway", err);
+            this.log.warn("Pre-reset memory flush failed; archiving session anyway", err);
           }
         }
         const zeroWrite =
@@ -232,7 +235,7 @@ export class CoachAgent {
             await this.flushMemory(history, "trim");
           } catch (err) {
             flushed = false;
-            console.warn("Pre-compaction memory flush failed; keeping session file unchanged", err);
+            this.log.warn("Pre-compaction memory flush failed; keeping session file unchanged", err);
           }
         }
         try {
@@ -248,7 +251,7 @@ export class CoachAgent {
             this.chatStore.overwriteHistory(chatId, [summaryMsg, ...requeued, ...kept]);
           }
         } catch (err) {
-          console.warn("Dropped message summarization failed, continuing without summary", err);
+          this.log.warn("Dropped message summarization failed, continuing without summary", err);
           if (previousSummary) {
             summaryMsg = makeSummaryMessage(previousSummary);
           }
@@ -272,7 +275,7 @@ export class CoachAgent {
           try {
             await this.flushMemory(history, "soft-threshold");
           } catch (err) {
-            console.warn("Soft-threshold memory flush failed; continuing turn", err);
+            this.log.warn("Soft-threshold memory flush failed; continuing turn", err);
           }
         }
       }
@@ -306,7 +309,7 @@ export class CoachAgent {
             try {
               await this.flushMemory(messages, "pre-compaction");
             } catch (err) {
-              console.warn("In-turn memory flush failed; compacting without flush", err);
+              this.log.warn("In-turn memory flush failed; compacting without flush", err);
             }
           }
           messages = await summarizeInStages({ messages, ...this.compactionParams() });
@@ -368,13 +371,13 @@ export class CoachAgent {
                 try {
                   await this.flushMemory(messages, "overflow-recovery");
                 } catch (flushErr) {
-                  console.warn("In-turn memory flush failed; compacting without flush", flushErr);
+                  this.log.warn("In-turn memory flush failed; compacting without flush", flushErr);
                 }
               }
               messages = await summarizeInStages({ messages, ...this.compactionParams() });
               this.memory.reload();
             } catch (rescueErr) {
-              console.warn("Compaction rescue failed; rethrowing the original turn error", rescueErr);
+              this.log.warn("Compaction rescue failed; rethrowing the original turn error", rescueErr);
               if (err instanceof Error && err.cause === undefined) {
                 (err as Error & { cause?: unknown }).cause = rescueErr;
               }
@@ -391,7 +394,7 @@ export class CoachAgent {
                 messages = await summarizeInStages({ messages, ...this.compactionParams() });
                 this.memory.reload();
               } catch (rescueErr) {
-                console.warn("Compaction rescue failed; rethrowing the original turn error", rescueErr);
+                this.log.warn("Compaction rescue failed; rethrowing the original turn error", rescueErr);
                 if (err instanceof Error && err.cause === undefined) {
                   (err as Error & { cause?: unknown }).cause = rescueErr;
                 }
@@ -436,14 +439,14 @@ export class CoachAgent {
       ({ messages: history } = this.chatStore.load(chatId));
     } catch (err) {
       memoryFlushed = false;
-      console.warn("Pre-reset session load failed; archiving session anyway", err);
+      this.log.warn("Pre-reset session load failed; archiving session anyway", err);
     }
     if (history.length > 0) {
       try {
         await this.flushMemory(history, "explicit-reset");
       } catch (err) {
         memoryFlushed = false;
-        console.warn("Pre-reset memory flush failed; archiving session anyway", err);
+        this.log.warn("Pre-reset memory flush failed; archiving session anyway", err);
       }
     }
     this.archiveDeferred.delete(chatId);
