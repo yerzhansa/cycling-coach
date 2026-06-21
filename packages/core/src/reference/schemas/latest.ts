@@ -2,7 +2,7 @@ import { z } from "zod";
 
 // Bump this only when THIS file's shape changes — never in lockstep with
 // sibling schemas. See CONTRIBUTING.md "Reference schema-version policy."
-export const LATEST_SCHEMA_VERSION = "2";
+export const LATEST_SCHEMA_VERSION = "3";
 
 const DerivedMetricsSchema = z
   .object({
@@ -67,8 +67,9 @@ export const LatestJsonSchema = z
     derived_metrics_meta: z
       .object({
         sportFamily: z.string(),
-        basis: z.enum(["power", "pace", "hr"]),
+        prescriptionBasis: z.enum(["power", "pace"]),
         anchorType: z.enum(["critical-speed", "ftp"]),
+        analysisBasis: z.enum(["power", "hr", "mixed"]).nullable(),
       })
       .strict()
       .optional(),

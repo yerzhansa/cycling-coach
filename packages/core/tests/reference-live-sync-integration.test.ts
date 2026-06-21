@@ -85,7 +85,12 @@ async function composeFetched(): Promise<FetchedReference> {
   const coveredPowerBasis = runs.some((r) => r.adapter.zoneBasis === "power");
   const omitPowerFamily = runs.length > 0 && !coveredPowerBasis;
   const derived_metrics = computeDerivedMetrics(buildMetricInput(live.bundle, live.frozenNow), { omitPowerFamily });
-  const meta = deriveMeta(runs);
+  const zoneDist = derived_metrics["zone_distribution_7d"];
+  const analysisBasis: "power" | "hr" | "mixed" | null =
+    zoneDist !== null && typeof zoneDist === "object" && "zone_basis" in zoneDist
+      ? ((zoneDist as { zone_basis: "power" | "hr" | "mixed" | null }).zone_basis ?? null)
+      : null;
+  const meta = deriveMeta(runs, analysisBasis);
   return {
     latest: {
       athlete_profile: live.athleteProfile,
@@ -110,6 +115,7 @@ async function composeFetched(): Promise<FetchedReference> {
  */
 function deriveMeta(
   runs: ReturnType<typeof runAdaptersForActivities>,
+  analysisBasis: "power" | "hr" | "mixed" | null,
 ): DerivedMetricsMeta | undefined {
   if (runs.length === 0) return undefined;
   const covering = runs.find((r) => r.adapter.zoneBasis === "power")?.adapter ?? runs[0].adapter;
@@ -118,7 +124,12 @@ function deriveMeta(
     firstType !== undefined && Object.hasOwn(SPORT_FAMILIES, firstType)
       ? SPORT_FAMILIES[firstType]
       : "other";
-  return { sportFamily, basis: covering.zoneBasis, anchorType: covering.anchorType };
+  return {
+    sportFamily,
+    prescriptionBasis: covering.zoneBasis as "power" | "pace",
+    anchorType: covering.anchorType,
+    analysisBasis,
+  };
 }
 
 describe("live-data bridge integration", () => {
@@ -140,7 +151,15 @@ describe("live-data bridge integration", () => {
 
   it("round-trips the derived_metrics_meta tag through the real strict read path (no cache-miss loop)", async () => {
     const fetched = await composeFetched();
-    const tag = { sportFamily: "cycling", basis: "power", anchorType: "ftp" };
+    // The fakeClient activities carry no zone-time blocks, so the window-level
+    // zone_distribution_7d.zone_basis is null — analysisBasis tracks it (null),
+    // distinct from the power prescriptionBasis.
+    const tag = {
+      sportFamily: "cycling",
+      prescriptionBasis: "power",
+      anchorType: "ftp",
+      analysisBasis: null,
+    };
     expect(fetched.latest.derived_metrics_meta).toEqual(tag);
 
     const onDisk = {

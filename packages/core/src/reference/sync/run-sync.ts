@@ -80,11 +80,14 @@ export interface FetchedReference {
     readonly current_status: unknown;
     readonly derived_metrics: unknown;
     /** Emit-time provenance tag — a sibling of `derived_metrics`, never inside
-     *  it. Optional: an empty-coverage bundle attaches no tag. */
+     *  it. Optional: an empty-coverage bundle attaches no tag. `prescriptionBasis`
+     *  is the adapter's declared prescription anchor; `analysisBasis` is the
+     *  substrate the distribution numbers were actually computed off. */
     readonly derived_metrics_meta?: {
       readonly sportFamily: string;
-      readonly basis: "power" | "pace" | "hr";
+      readonly prescriptionBasis: "power" | "pace";
       readonly anchorType: "critical-speed" | "ftp";
+      readonly analysisBasis: "power" | "hr" | "mixed" | null;
     };
     readonly recent_activities: readonly unknown[];
     readonly planned_workouts: readonly unknown[];

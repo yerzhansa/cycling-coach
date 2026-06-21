@@ -15,8 +15,9 @@ import { SPORT_FAMILIES } from "../metrics/sport-families.js";
 
 interface DerivedMetricsMeta {
   readonly sportFamily: string;
-  readonly basis: "power" | "pace" | "hr";
+  readonly prescriptionBasis: "power" | "pace";
   readonly anchorType: "critical-speed" | "ftp";
+  readonly analysisBasis: "power" | "hr" | "mixed" | null;
 }
 
 /**
@@ -25,8 +26,17 @@ interface DerivedMetricsMeta {
  * Ride+Run) tags as its kept power family, matching the omission decision;
  * otherwise the first covering adapter wins. Returns `undefined` for an
  * empty-coverage bundle (no adapter to attribute), leaving the optional tag off.
+ *
+ * `prescriptionBasis` is the adapter's declared prescription anchor
+ * (`zoneBasis`) — what zones we'd write a workout against. `analysisBasis` is
+ * the substrate the distribution numbers were ACTUALLY computed off (the
+ * registry's `zone_distribution_7d.zone_basis`: power|hr|mixed|null) — for a
+ * power-less run these diverge (prescription `pace`, analysis `hr`).
  */
-function deriveMeta(runs: readonly AdapterRun[]): DerivedMetricsMeta | undefined {
+function deriveMeta(
+  runs: readonly AdapterRun[],
+  analysisBasis: "power" | "hr" | "mixed" | null,
+): DerivedMetricsMeta | undefined {
   if (runs.length === 0) return undefined;
   const covering =
     runs.find((r) => r.adapter.zoneBasis === "power")?.adapter ?? runs[0].adapter;
@@ -35,7 +45,14 @@ function deriveMeta(runs: readonly AdapterRun[]): DerivedMetricsMeta | undefined
     firstType !== undefined && Object.hasOwn(SPORT_FAMILIES, firstType)
       ? SPORT_FAMILIES[firstType]
       : "other";
-  return { sportFamily, basis: covering.zoneBasis, anchorType: covering.anchorType };
+  return {
+    sportFamily,
+    // No shipped adapter declares a 'hr' prescription anchor; only power/pace
+    // are instantiated, so narrowing off the wider interface type is safe.
+    prescriptionBasis: covering.zoneBasis as "power" | "pace",
+    anchorType: covering.anchorType,
+    analysisBasis,
+  };
 }
 
 /**
@@ -92,7 +109,17 @@ async function fetchOnce(
     buildMetricInput(live.bundle, live.frozenNow),
     { omitPowerFamily },
   );
-  const meta = deriveMeta(runs);
+  // Read the actual analysis substrate off the already-computed window metric —
+  // never recompute it. `zone_distribution_7d.zone_basis` is the canonical
+  // window-level substrate (distribution.ts emits it). Default to null when the
+  // metric is absent or not an object (defensive — the omitPowerFamily fence
+  // does NOT strip zone_distribution_7d today, but guard anyway).
+  const zoneDist = derivedMetrics["zone_distribution_7d"];
+  const analysisBasis =
+    zoneDist !== null && typeof zoneDist === "object" && "zone_basis" in zoneDist
+      ? ((zoneDist as { zone_basis: "power" | "hr" | "mixed" | null }).zone_basis ?? null)
+      : null;
+  const meta = deriveMeta(runs, analysisBasis);
 
   return {
     latest: {

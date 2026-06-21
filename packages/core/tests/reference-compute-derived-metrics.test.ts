@@ -168,22 +168,35 @@ function composeLikeFetchOnce(
   activities: readonly TestActivity[],
 ): {
   derived_metrics: Record<string, unknown>;
-  derived_metrics_meta?: { sportFamily: string; basis: string; anchorType: string };
+  derived_metrics_meta?: {
+    sportFamily: string;
+    prescriptionBasis: string;
+    anchorType: string;
+    analysisBasis: "power" | "hr" | "mixed" | null;
+  };
   omitPowerFamily: boolean;
 } {
   const runs = runAdaptersForActivities(adapters, sportTypes, activities as unknown as readonly Activity[]);
   const coveredPowerBasis = runs.some((r) => r.adapter.zoneBasis === "power");
   const omitPowerFamily = runs.length > 0 && !coveredPowerBasis;
   const derived_metrics = computeDerivedMetrics(inputFor(activities), { omitPowerFamily });
-  let derived_metrics_meta: { sportFamily: string; basis: string; anchorType: string } | undefined;
+  const zoneDist = derived_metrics["zone_distribution_7d"];
+  const analysisBasis: "power" | "hr" | "mixed" | null =
+    zoneDist !== null && typeof zoneDist === "object" && "zone_basis" in zoneDist
+      ? ((zoneDist as { zone_basis: "power" | "hr" | "mixed" | null }).zone_basis ?? null)
+      : null;
+  let derived_metrics_meta:
+    | { sportFamily: string; prescriptionBasis: string; anchorType: string; analysisBasis: "power" | "hr" | "mixed" | null }
+    | undefined;
   if (runs.length > 0) {
     const covering =
       runs.find((r) => r.adapter.zoneBasis === "power")?.adapter ?? runs[0].adapter;
     const families: Record<string, string> = { Ride: "cycling", VirtualRide: "cycling", Run: "run", TrailRun: "run" };
     derived_metrics_meta = {
       sportFamily: families[covering.activityTypes[0]] ?? "other",
-      basis: covering.zoneBasis,
+      prescriptionBasis: covering.zoneBasis,
       anchorType: covering.anchorType,
+      analysisBasis,
     };
   }
   return { derived_metrics, derived_metrics_meta, omitPowerFamily };
@@ -242,9 +255,14 @@ describe("fetchOnce-shaped power-family fence + provenance tag", () => {
     }
     // The tag is a SIBLING — no provenance key leaked into the map.
     expect(derived_metrics).not.toHaveProperty("sportFamily");
-    expect(derived_metrics).not.toHaveProperty("basis");
+    expect(derived_metrics).not.toHaveProperty("prescriptionBasis");
     expect(derived_metrics).not.toHaveProperty("anchorType");
-    expect(derived_metrics_meta).toEqual({ sportFamily: "run", basis: "pace", anchorType: "critical-speed" });
+    expect(derived_metrics_meta).toEqual({
+      sportFamily: "run",
+      prescriptionBasis: "pace",
+      anchorType: "critical-speed",
+      analysisBasis: null,
+    });
   });
 
   it("cycling-only bundle: keeps the full power family and tags cycling/power/ftp", () => {
@@ -255,7 +273,12 @@ describe("fetchOnce-shaped power-family fence + provenance tag", () => {
     );
     expect(omitPowerFamily).toBe(false);
     expect(Object.keys(derived_metrics).sort()).toEqual(Object.keys(METRIC_REGISTRY).sort());
-    expect(derived_metrics_meta).toEqual({ sportFamily: "cycling", basis: "power", anchorType: "ftp" });
+    expect(derived_metrics_meta).toEqual({
+      sportFamily: "cycling",
+      prescriptionBasis: "power",
+      anchorType: "ftp",
+      analysisBasis: null,
+    });
   });
 
   it("mixed Ride+Run bundle: keeps the full power family (duathlete keeps cycling power) and tags", () => {
@@ -269,7 +292,7 @@ describe("fetchOnce-shaped power-family fence + provenance tag", () => {
     for (const key of POWER_FAMILY_OMIT_KEYS) {
       expect(derived_metrics).toHaveProperty(key);
     }
-    expect(derived_metrics_meta?.basis).toBe("power");
+    expect(derived_metrics_meta?.prescriptionBasis).toBe("power");
     expect(derived_metrics_meta?.anchorType).toBe("ftp");
   });
 
@@ -380,5 +403,26 @@ describe("running-only golden fixture (pure-pace production path)", () => {
     // Low-intensity-dominant by construction (~0.80).
     expect(easyRatio).toBeGreaterThanOrEqual(0.7);
     expect(easyRatio).toBeLessThanOrEqual(0.9);
+  });
+
+  it("provenance tag diverges: prescriptionBasis is pace, analysisBasis is the HR substrate the numbers were computed off", () => {
+    // A power-less running bundle is PRESCRIBED off pace/critical-speed but the
+    // distribution numbers are ANALYZED off HR zones — the exact mislabel this
+    // fix corrects. Derive the tag the production way: run the pace adapter and
+    // read the already-computed zone_distribution_7d.zone_basis as the substrate.
+    const out = computeDerivedMetrics(runningOnlyInput(), { omitPowerFamily: true });
+    const zoneDist = out["zone_distribution_7d"] as { zone_basis: string | null } | null;
+    const analysisBasis = zoneDist?.zone_basis ?? null;
+
+    const fixture = loadFixture("golden/running-only", GoldenFixtureSchema);
+    const runs = runAdaptersForActivities(
+      [RUNNING_ADAPTER],
+      ["Run", "TrailRun"],
+      fixture.activities as unknown as readonly Activity[],
+    );
+    const covering = runs.find((r) => r.adapter.zoneBasis === "power")?.adapter ?? runs[0].adapter;
+
+    expect(covering.zoneBasis).toBe("pace");
+    expect(analysisBasis).toBe("hr");
   });
 });
