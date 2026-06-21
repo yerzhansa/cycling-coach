@@ -1056,3 +1056,282 @@ describe("latest derived_metrics structured schema + version gate", () => {
     expect(runtime.services.loadLatest()).toBeNull();
   });
 });
+
+describe("createRunSync sync-history emit", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "reference-run-sync-history-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  const okGate = vi.fn().mockReturnValue({ ok: true, failures: [], warnings: [] });
+
+  it("clean ran: emits exactly one line with kind:ran, no reason, finite duration ≥ 0", async () => {
+    const syncHistory = vi.fn();
+    // Advancing clock so duration is a positive measured delta, not zero.
+    let t = Date.parse("2026-05-09T14:00:00.000Z");
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex: new AsyncMutex(),
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn().mockResolvedValue({
+        ...emptyFetched,
+        latest: { ...emptyFetched.latest, athlete_profile: { id: "a" } },
+      }),
+      gate: okGate,
+      syncHistory,
+      now: () => new Date((t += 5)),
+    });
+
+    const result = await runSync({ caller: "scheduled" });
+
+    expect(result.kind).toBe("ran");
+    expect(syncHistory).toHaveBeenCalledOnce();
+    const line = syncHistory.mock.calls[0]![0];
+    expect(line.kind).toBe("ran");
+    expect(line.caller).toBe("scheduled");
+    expect(line.reason).toBeUndefined();
+    expect(typeof line.duration_ms).toBe("number");
+    expect(Number.isFinite(line.duration_ms)).toBe(true);
+    expect(line.duration_ms).toBeGreaterThanOrEqual(0);
+    expect(typeof line.ts).toBe("string");
+  });
+
+  it("clamps duration_ms to 0 when the wall clock steps backward mid-tick", async () => {
+    const syncHistory = vi.fn();
+    // Clock steps backward between startedAt and the emit (a backward NTP step):
+    // the recorded duration must clamp to 0, never a negative number.
+    const times = [
+      Date.parse("2026-05-09T14:00:10.000Z"),
+      Date.parse("2026-05-09T14:00:00.000Z"),
+      Date.parse("2026-05-09T14:00:00.000Z"),
+    ];
+    let i = 0;
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex: new AsyncMutex(),
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn().mockResolvedValue(emptyFetched),
+      gate: okGate,
+      syncHistory,
+      now: () => new Date(times[Math.min(i++, times.length - 1)]!),
+    });
+
+    await runSync({ caller: "scheduled" });
+
+    expect(syncHistory).toHaveBeenCalledOnce();
+    expect(syncHistory.mock.calls[0]![0].duration_ms).toBe(0);
+  });
+
+  it("gate_rejected: emits one line with kind:failed reason:gate_rejected", async () => {
+    const syncHistory = vi.fn();
+    const now = new Date("2026-05-09T14:00:00Z");
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex: new AsyncMutex(),
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn().mockResolvedValue(emptyFetched),
+      gate: vi.fn().mockReturnValue({
+        ok: false,
+        failures: [{ step: "ftp_source_check", detail: "missing" }],
+        warnings: [],
+      }),
+      syncHistory,
+      now: () => now,
+    });
+
+    await runSync({ caller: "lazy" });
+
+    expect(syncHistory).toHaveBeenCalledOnce();
+    const line = syncHistory.mock.calls[0]![0];
+    expect(line.kind).toBe("failed");
+    expect(line.reason).toBe("gate_rejected");
+    expect(line.caller).toBe("lazy");
+  });
+
+  it("fetch_failed (fetcher rejects): emits one line with kind:failed reason:fetch_failed", async () => {
+    const syncHistory = vi.fn();
+    const now = new Date("2026-05-09T14:00:00Z");
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex: new AsyncMutex(),
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn().mockRejectedValue(new Error("net down")),
+      syncHistory,
+      now: () => now,
+    });
+
+    const result = await runSync({ caller: "scheduled" });
+
+    expect(result.kind).toBe("failed");
+    expect(syncHistory).toHaveBeenCalledOnce();
+    const line = syncHistory.mock.calls[0]![0];
+    expect(line.kind).toBe("failed");
+    expect(line.reason).toBe("fetch_failed");
+  });
+
+  it("outer_timeout: emits one line with kind:failed reason:outer_timeout", async () => {
+    const syncHistory = vi.fn();
+    const now = new Date("2026-05-09T14:00:00Z");
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex: new AsyncMutex(),
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn(
+        async (): Promise<FetchedReference> => await new Promise<FetchedReference>(() => {}),
+      ),
+      syncHistory,
+      now: () => now,
+      timing: { outerTimeoutMs: 30 },
+    });
+
+    await runSync({ caller: "scheduled" });
+
+    expect(syncHistory).toHaveBeenCalledOnce();
+    const line = syncHistory.mock.calls[0]![0];
+    expect(line.kind).toBe("failed");
+    expect(line.reason).toBe("outer_timeout");
+  });
+
+  it("mutex_held skip: a contended scheduled tick emits one line with kind:skipped reason:mutex_held", async () => {
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const now = new Date("2026-05-09T14:00:00Z");
+    const syncHistory = vi.fn();
+
+    let resolveSlow!: () => void;
+    const slowFetch = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveSlow = resolve;
+      });
+      return emptyFetched;
+    });
+
+    const runSyncSlow = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: slowFetch,
+      gate: okGate,
+      now: () => now,
+      timing: { acquireTimeoutMs: 5_000, hotWarnMs: 1_000 },
+    });
+    const runSyncFast = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn().mockResolvedValue(emptyFetched),
+      gate: okGate,
+      syncHistory,
+      now: () => now,
+      timing: { acquireTimeoutMs: 30, hotWarnMs: 10 },
+    });
+
+    const p1 = runSyncSlow({ caller: "scheduled" });
+    const r2 = await runSyncFast({ caller: "scheduled" });
+
+    expect(r2).toEqual({ kind: "skipped", reason: "mutex_held" });
+    expect(syncHistory).toHaveBeenCalledOnce();
+    expect(syncHistory.mock.calls[0]![0].kind).toBe("skipped");
+    expect(syncHistory.mock.calls[0]![0].reason).toBe("mutex_held");
+
+    resolveSlow();
+    await p1;
+  });
+
+  it("/sync cooldown skip: emits one line with kind:skipped reason:cooldown (early-return path)", async () => {
+    let now = 1_000_000;
+    const cooldown = new Cooldown(() => now);
+    cooldown.record("telegram:123");
+    now += 5_000;
+    const syncHistory = vi.fn();
+
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex: new AsyncMutex(),
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn(),
+      syncHistory,
+      now: () => new Date(now),
+    });
+
+    const result = await runSync({ caller: "/sync", chatId: "telegram:123" });
+
+    expect(result.kind).toBe("skipped");
+    expect(syncHistory).toHaveBeenCalledOnce();
+    const line = syncHistory.mock.calls[0]![0];
+    expect(line.kind).toBe("skipped");
+    expect(line.reason).toBe("cooldown");
+    expect(line.caller).toBe("/sync");
+  });
+
+  it("a body that throws still leaves exactly one failed line before the throw propagates", async () => {
+    const syncHistory = vi.fn();
+    const now = new Date("2026-05-09T14:00:00Z");
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex: new AsyncMutex(),
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn().mockResolvedValue(emptyFetched),
+      // An unguarded throw from inside the mutex body (here the gate) re-throws
+      // out of runExclusive — the path that previously bypassed the emit.
+      gate: vi.fn(() => {
+        throw new Error("gate blew up");
+      }),
+      syncHistory,
+      now: () => now,
+    });
+
+    await expect(runSync({ caller: "scheduled" })).rejects.toThrow("gate blew up");
+
+    expect(syncHistory).toHaveBeenCalledOnce();
+    const line = syncHistory.mock.calls[0]![0];
+    expect(line.kind).toBe("failed");
+    expect(line.reason).toBe("unexpected_error");
+    expect(line.caller).toBe("scheduled");
+    expect(line.duration_ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it("a throwing syncHistory spy cannot break the tick: runSync still resolves to the correct result", async () => {
+    const throwingHistory = vi.fn(() => {
+      throw new Error("history write blew up");
+    });
+    const now = new Date("2026-05-09T14:00:00Z");
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex: new AsyncMutex(),
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn().mockResolvedValue(emptyFetched),
+      gate: vi.fn().mockReturnValue({
+        ok: false,
+        failures: [{ step: "ftp_source_check", detail: "missing" }],
+        warnings: [],
+      }),
+      syncHistory: throwingHistory,
+      now: () => now,
+    });
+
+    // The wiring positions the emit so its throw cannot escape the tick: the
+    // real writer never throws, but a defensive guard keeps a misbehaving
+    // injected writer from corrupting the SyncResult.
+    await expect(runSync({ caller: "scheduled" })).resolves.toMatchObject({
+      kind: "failed",
+      reason: "gate_rejected",
+    });
+  });
+});

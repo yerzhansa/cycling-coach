@@ -17,6 +17,7 @@ import { SCHEDULER_SCHEMA_VERSION } from "../schemas/scheduler.js";
 import type { ErrorPhase, ErrorCaller } from "../schemas/error-state.js";
 import { gateLatestJson } from "../validation/sync-gate.js";
 import { writeErrorState, clearErrorState } from "./error-state-writer.js";
+import { createSyncHistoryWriter, type SyncOutcomeLine } from "./sync-history.js";
 import type { AsyncMutex } from "../../concurrency/mutex.js";
 import type { Cooldown } from "../../concurrency/cooldown.js";
 import type { Clock } from "../../concurrency/clock.js";
@@ -138,6 +139,12 @@ export interface RunSyncDeps {
   ) => Promise<void>;
   /** Override error_state.json removal for tests; defaults to `clearErrorState`. */
   readonly clearError?: (dataDir: string) => Promise<void>;
+  /**
+   * Override the per-tick outcome writer for tests; defaults to
+   * `createSyncHistoryWriter(deps.dataDir)`. Best-effort and never throws, so it
+   * can never alter or break the `SyncResult` it records.
+   */
+  readonly syncHistory?: (line: SyncOutcomeLine) => void;
 }
 
 interface CacheWriteSpec {
@@ -222,16 +229,42 @@ export function createRunSync(
   const gate = deps.gate ?? gateLatestJson;
   const writeJson = deps.atomicWrite ?? atomicWriteJson;
   const clearError = deps.clearError ?? clearErrorState;
+  const syncHistory = deps.syncHistory ?? createSyncHistoryWriter(deps.dataDir);
 
   return async (opts = {}) => {
+    const startedAt = now();
+    // The outcome line is a best-effort diagnostics trail: a write (or a
+    // misbehaving injected writer) must never alter or break the tick it
+    // records. The default writer already swallows; this guard also fences a
+    // throwing test seam from escaping the tick. A backward wall-clock step
+    // between `startedAt` and the emit must never write a negative duration, so
+    // the delta is clamped non-negative.
+    const emit = (kind: SyncResult["kind"], reason: string | undefined): void => {
+      try {
+        syncHistory({
+          ts: now().toISOString(),
+          caller: opts.caller ?? "scheduled",
+          kind,
+          reason,
+          duration_ms: Math.max(0, now().getTime() - startedAt.getTime()),
+        });
+      } catch {
+        // Swallowed — see comment above.
+      }
+    };
+    const emitOutcome = (result: SyncResult): SyncResult => {
+      emit(result.kind, "reason" in result ? result.reason : undefined);
+      return result;
+    };
+
     if (opts.caller === "/sync" && opts.chatId !== undefined) {
       const c = deps.cooldown.check(opts.chatId, deps.cooldownWindowMs);
       if (!c.ok) {
-        return {
+        return emitOutcome({
           kind: "skipped",
           reason: "cooldown",
           retryAfterMs: c.retryAfterMs,
-        };
+        });
       }
     }
 
@@ -241,11 +274,13 @@ export function createRunSync(
     // caller deliberately keeps queue-and-wait semantics (it has no one waiting
     // on a reply), so this branch is /sync-only.
     if (opts.caller === "/sync" && deps.mutex.isHeld()) {
-      return { kind: "skipped", reason: "mutex_held" };
+      return emitOutcome({ kind: "skipped", reason: "mutex_held" });
     }
 
-    const mutexResult = await deps.mutex.runExclusive(
-      async (): Promise<SyncResult> => {
+    let mutexResult;
+    try {
+      mutexResult = await deps.mutex.runExclusive(
+        async (): Promise<SyncResult> => {
         const controller = new AbortController();
         let phase: ErrorPhase = "fetching";
 
@@ -438,22 +473,31 @@ export function createRunSync(
 
         if (bodyError !== undefined) throw bodyError;
         return bodyResult!;
-      },
-      {
-        acquireTimeoutMs,
-        hotWarnMs,
-        caller: opts.caller ?? "scheduled",
-      },
-    );
+        },
+        {
+          acquireTimeoutMs,
+          hotWarnMs,
+          caller: opts.caller ?? "scheduled",
+        },
+      );
+    } catch (err) {
+      // The mutex body re-throws an unguarded error (e.g. a gate or cache-write
+      // throw) out of `runExclusive`. The ticket's invariant is that EVERY tick
+      // leaves exactly one history line, so stamp a `failed` line before letting
+      // the throw propagate — otherwise a disk error mid-write would erase its
+      // own evidence, the exact failure mode this trail exists to capture.
+      emit("failed", "unexpected_error");
+      throw err;
+    }
 
     if (mutexResult.kind === "timeout") {
-      return { kind: "skipped", reason: "mutex_held" };
+      return emitOutcome({ kind: "skipped", reason: "mutex_held" });
     }
 
     const result = mutexResult.value;
     if (result.kind === "ran" && opts.caller === "/sync" && opts.chatId !== undefined) {
       deps.cooldown.record(opts.chatId);
     }
-    return result;
+    return emitOutcome(result);
   };
 }
