@@ -6,6 +6,13 @@ import type { ErrorCaller } from "../schemas/error-state.js";
 export const SYNC_HISTORY_FILE = "sync-history.jsonl";
 
 /**
+ * Forward-compatibility primitive: stamped on every outcome line so a later
+ * reader can version-discriminate the trail. It can never be retrofitted onto
+ * lines already written to disk, so it must lead every line from the first write.
+ */
+export const SYNC_HISTORY_SCHEMA_VERSION = "1";
+
+/**
  * Size-only cap. Outcome lines are ~80–120 bytes each, so 1 MB holds tens of
  * thousands of ticks — far more than a month of frequent syncs. The history
  * file deliberately has NO age cap (unlike the rolling logger's 14-day prune):
@@ -16,6 +23,7 @@ export const SYNC_HISTORY_FILE = "sync-history.jsonl";
 export const SYNC_HISTORY_MAX_BYTES = 1 * 1024 * 1024;
 
 export interface SyncOutcomeLine {
+  readonly schema_version: string;
   readonly ts: string;
   readonly caller: ErrorCaller;
   readonly kind: "ran" | "skipped" | "failed";

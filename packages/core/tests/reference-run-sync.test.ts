@@ -1119,6 +1119,7 @@ describe("createRunSync sync-history emit", () => {
     expect(result.kind).toBe("ran");
     expect(syncHistory).toHaveBeenCalledOnce();
     const line = syncHistory.mock.calls[0]![0];
+    expect(line.schema_version).toBe("1");
     expect(line.kind).toBe("ran");
     expect(line.caller).toBe("scheduled");
     expect(line.reason).toBeUndefined();

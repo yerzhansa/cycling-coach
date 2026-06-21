@@ -34,6 +34,7 @@ describe("createSyncHistoryWriter", () => {
     const writer = createSyncHistoryWriter(dir);
 
     const line: SyncOutcomeLine = {
+      schema_version: "1",
       ts: "1998-05-09T14:00:00.000Z",
       caller: "scheduled",
       kind: "failed",
@@ -41,7 +42,13 @@ describe("createSyncHistoryWriter", () => {
       duration_ms: 1234,
     };
     writer(line);
-    writer({ ts: "1998-05-09T14:01:00.000Z", caller: "lazy", kind: "ran", duration_ms: 5 });
+    writer({
+      schema_version: "1",
+      ts: "1998-05-09T14:01:00.000Z",
+      caller: "lazy",
+      kind: "ran",
+      duration_ms: 5,
+    });
 
     // The file lives beside error_state.json — NOT under logs/, NOT log.jsonl.
     expect(existsSync(path)).toBe(true);
@@ -50,6 +57,7 @@ describe("createSyncHistoryWriter", () => {
     const lines = readFileSync(path, "utf-8").trim().split("\n");
     expect(lines).toHaveLength(2);
     expect(JSON.parse(lines[0])).toEqual({
+      schema_version: "1",
       ts: "1998-05-09T14:00:00.000Z",
       caller: "scheduled",
       kind: "failed",
@@ -66,6 +74,7 @@ describe("createSyncHistoryWriter", () => {
 
     // Seed the live file above the (tiny, injected) cap with an ANCIENT line.
     const ancient: SyncOutcomeLine = {
+      schema_version: "1",
       ts: "1990-01-01T00:00:00.000Z",
       caller: "scheduled",
       kind: "ran",
@@ -77,7 +86,13 @@ describe("createSyncHistoryWriter", () => {
 
     // The next write trips the size rotate: the seeded content moves to `.1`,
     // the live file holds only the fresh line.
-    writer({ ts: "1998-05-09T14:00:00.000Z", caller: "lazy", kind: "ran", duration_ms: 9 });
+    writer({
+      schema_version: "1",
+      ts: "1998-05-09T14:00:00.000Z",
+      caller: "lazy",
+      kind: "ran",
+      duration_ms: 9,
+    });
 
     expect(existsSync(`${path}.1`)).toBe(true);
     const live = readFileSync(path, "utf-8").trim().split("\n");
@@ -99,6 +114,7 @@ describe("createSyncHistoryWriter", () => {
     const writer = createSyncHistoryWriter(join(blocker, "nested"));
 
     const line: SyncOutcomeLine = {
+      schema_version: "1",
       ts: "1998-05-09T14:00:00.000Z",
       caller: "scheduled",
       kind: "ran",

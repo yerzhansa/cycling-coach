@@ -18,7 +18,11 @@ import { ErrorStateSchema } from "../schemas/error-state.js";
 import type { ErrorPhase, ErrorCaller, ErrorState } from "../schemas/error-state.js";
 import { gateLatestJson } from "../validation/sync-gate.js";
 import { writeErrorState, clearErrorState } from "./error-state-writer.js";
-import { createSyncHistoryWriter, type SyncOutcomeLine } from "./sync-history.js";
+import {
+  createSyncHistoryWriter,
+  SYNC_HISTORY_SCHEMA_VERSION,
+  type SyncOutcomeLine,
+} from "./sync-history.js";
 import type { AsyncMutex } from "../../concurrency/mutex.js";
 import type { Cooldown } from "../../concurrency/cooldown.js";
 import type { Clock } from "../../concurrency/clock.js";
@@ -255,6 +259,7 @@ export function createRunSync(
     const emit = (kind: SyncResult["kind"], reason: string | undefined): void => {
       try {
         syncHistory({
+          schema_version: SYNC_HISTORY_SCHEMA_VERSION,
           ts: now().toISOString(),
           caller: opts.caller ?? "scheduled",
           kind,
