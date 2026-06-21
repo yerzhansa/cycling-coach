@@ -383,6 +383,90 @@ describe("createRunSync", () => {
     expect(mutex.isHeld()).toBe(false);
   });
 
+  it("composition: fetch_errors AND an independent hard check (weight band) both fail the real gate → block_coaching, no cache/scheduler write", async () => {
+    // Invariant: when a single cycle trips TWO independent HARD checks — a
+    // partial fetch failure (fetch_errors channel, step0) AND an out-of-band
+    // wellness weight (step4) — the REAL default gate aggregates both and the
+    // cycle BLOCKS coaching. The mitigation is `block_coaching`, NOT the
+    // `warn_only` reserved for the soft path; a blocked cycle persists no
+    // cache or scheduler file. Distinct from the fetch_errors-ALONE test above:
+    // this pins the COMPOSITION of two sources plus the block-vs-warn record.
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const now = new Date("2026-05-09T14:00:00Z");
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ...emptyFetched,
+      // Source #1: a partial-fetch error channel naming the athlete endpoint
+      // → step0_data_fetch HARD failure.
+      fetch_errors: [{ endpoint: "athlete", detail: "timeout" }],
+      // Source #2 (independent): wellness weight=500 is outside the [30,200]
+      // band → step4_tolerance_band HARD failure, on its own merits.
+      latest: {
+        ...emptyFetched.latest,
+        wellness_data: { days: [{ id: "1998-04-11", weight: 500, restingHR: 50 }] },
+      },
+    });
+    const { atomicWriteJson: realAtomicWrite } = await import(
+      "../src/io/atomic-write-json.js"
+    );
+    // Forward to the real writer so the on-disk error_state read below works,
+    // while still recording every write path the cycle attempted.
+    const writeSpy = vi.fn(
+      async (path: string, value: unknown, opts?: { signal?: AbortSignal }): Promise<void> => {
+        await realAtomicWrite(path, value, opts);
+      },
+    );
+
+    // No `gate` override: the whole point is that the REAL default gate maps
+    // fetch_errors -> block_coaching alongside the independent band failure.
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: fetchSpy,
+      atomicWrite: writeSpy,
+      now: () => now,
+    });
+
+    const result = await runSync({ caller: "scheduled" });
+
+    expect(result.kind).toBe("failed");
+    if (result.kind === "failed") {
+      expect(result.reason).toBe("gate_rejected");
+      // BOTH sources must be present — asserting both guarantees the test is
+      // green because BOTH checks fired, not because only one did. Each source
+      // is pinned by its step identifier (not just an endpoint name) so the
+      // assertion cannot pass on an unrelated check that happens to echo it.
+      expect(
+        result.failures.some(
+          (f) => f.reason.includes("step0_data_fetch") && f.reason.includes("athlete"),
+        ),
+      ).toBe(true);
+      expect(
+        result.failures.some((f) => f.reason.includes("step4_tolerance_band")),
+      ).toBe(true);
+    }
+
+    // A blocked cycle persists no cache (latest.json) and no commit marker
+    // (.scheduler.json) — the prior cache stays untouched.
+    const wrotePaths = writeSpy.mock.calls.map((c) => c[0]);
+    expect(wrotePaths.some((p) => p.endsWith("latest.json"))).toBe(false);
+    expect(wrotePaths.some((p) => p.endsWith(".scheduler.json"))).toBe(false);
+
+    // error_state.json records the block-coaching mitigation and names BOTH
+    // independent failures (step0 endpoint + step4 band).
+    const errorState = JSON.parse(readFileSync(join(dir, "error_state.json"), "utf-8"));
+    expect(errorState.mitigation).toBe("block_coaching");
+    expect(errorState.step).toBe("gate_rejected");
+    expect(errorState.detail).toContain("step0_data_fetch");
+    expect(errorState.detail).toContain("athlete");
+    expect(errorState.detail).toContain("step4_tolerance_band");
+
+    expect(mutex.isHeld()).toBe(false);
+  });
+
   it("no-op cycle: a re-fetch with byte-identical data leaves all 5 cache files byte-identical (frozen last_updated)", async () => {
     const mutex = new AsyncMutex();
     const cooldown = new Cooldown();
