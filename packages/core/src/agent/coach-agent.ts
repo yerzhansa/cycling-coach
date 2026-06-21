@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { stepCountIs } from "ai";
 import type { ModelMessage, Tool, ToolSet } from "ai";
 import { makeChatClient } from "../reference/sync/intervals-client-factory.js";
@@ -8,6 +9,13 @@ import type { ResolvedCs } from "../reference/cs-resolution.js";
 import type { SecretsResolver } from "../secrets/types.js";
 import type { Config } from "../config.js";
 import { resolveSecretRef } from "../secrets/resolve.js";
+import { safeReadJson } from "../io/safe-read-json.js";
+import {
+  ErrorStateSchema,
+  type ErrorState,
+  LatestJsonSchema,
+  type LatestJson,
+} from "../reference/index.js";
 import { Memory } from "../memory/store.js";
 import { ChatStore } from "./chat-store.js";
 import { buildSystemPrompt, staticRuleBlocks } from "./system-prompt.js";
@@ -234,6 +242,44 @@ export class CoachAgent {
     } as Tool;
   }
 
+  /**
+   * Read the sync error-state once at turn start and, when the last sync was
+   * rejected for a corruption-class (HARD) failure, return a degrade-and-disclose
+   * instruction block for the volatile prompt tail. The READ itself fails OPEN:
+   * a missing, unparseable, or schema-invalid error-state file must never brick
+   * a chat turn, so `safeReadJson` returning null yields no block.
+   */
+  private buildDegradeBlock(): string | undefined {
+    const referenceDir = join(this.config.dataDir, "data");
+    const errorState = safeReadJson<ErrorState>(
+      join(referenceDir, "error_state.json"),
+      ErrorStateSchema,
+    );
+    if (errorState?.mitigation !== "block_coaching") return undefined;
+
+    // Prefer the cache's last successful-sync stamp as the "last synced" anchor;
+    // fall back to the failure timestamp when the cache is unavailable.
+    const latest = safeReadJson<LatestJson>(
+      join(referenceDir, "latest.json"),
+      LatestJsonSchema,
+    );
+    const lastSynced = latest?.metadata?.last_updated ?? errorState.ts;
+
+    return (
+      "# Data Freshness — DEGRADED\n\n" +
+      "The latest training data could not be validated, so the on-disk cache " +
+      "may be stale or corrupt. You MUST NOT quote specific numbers (paces, " +
+      "power, Load, Fitness, Fatigue, Form, heart rate, durations) from that " +
+      "data — they cannot be trusted. Give general, qualitative guidance only. " +
+      "Open your reply by disclosing the staleness to the athlete, in your own " +
+      `voice, matching this posture: "Your training data hasn't synced since ` +
+      `${lastSynced}, so I won't base numbers on it — here's general guidance ` +
+      `only." State the last-synced time in natural language (e.g. a date or "a ` +
+      `few days ago"); do not echo the raw timestamp verbatim. Then help as best ` +
+      `you can without fabricating figures.`
+    );
+  }
+
   private async flushMemory(
     messages: ModelMessage[],
     trigger: MemoryFlushTrigger,
@@ -349,7 +395,12 @@ export class CoachAgent {
         }
       }
 
-      this.systemPrompt = buildSystemPrompt(this.sport, this.memory, this.tz);
+      this.systemPrompt = buildSystemPrompt(
+        this.sport,
+        this.memory,
+        this.tz,
+        this.buildDegradeBlock(),
+      );
 
       const budget = computeHistoryTokenBudget({
         contextWindowTokens: this.config.contextWindowTokens,

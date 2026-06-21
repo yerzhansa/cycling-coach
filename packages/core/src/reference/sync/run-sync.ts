@@ -14,7 +14,8 @@ import { INTERVALS_SCHEMA_VERSION, IntervalsJsonSchema } from "../schemas/interv
 import { ROUTES_SCHEMA_VERSION, RoutesJsonSchema } from "../schemas/routes.js";
 import { FTP_HISTORY_SCHEMA_VERSION, FtpHistoryJsonSchema } from "../schemas/ftp-history.js";
 import { SCHEDULER_SCHEMA_VERSION } from "../schemas/scheduler.js";
-import type { ErrorPhase, ErrorCaller } from "../schemas/error-state.js";
+import { ErrorStateSchema } from "../schemas/error-state.js";
+import type { ErrorPhase, ErrorCaller, ErrorState } from "../schemas/error-state.js";
 import { gateLatestJson } from "../validation/sync-gate.js";
 import { writeErrorState, clearErrorState } from "./error-state-writer.js";
 import { createSyncHistoryWriter, type SyncOutcomeLine } from "./sync-history.js";
@@ -177,6 +178,18 @@ function readPriorCache(path: string, file: CacheFile): Record<string, unknown> 
   return safeReadJson<Record<string, unknown>>(path, CACHE_SCHEMAS[file]);
 }
 
+/** Carry forward an active `block_coaching` mitigation onto a subsequent
+ *  failure-path write. `error_state.json` is single-slot/last-writer-wins, so a
+ *  transient timeout or fetch failure following a HARD gate rejection would
+ *  otherwise overwrite the corruption-class block with a mitigation-less record
+ *  and silently re-open coaching while the cache is still unvalidated. A
+ *  timeout/fetch failure is an unknown outcome, not proof the cache became
+ *  trustworthy — only the clean-sync `clearError` path removes the block. */
+function priorBlockCoaching(dataDir: string): { mitigation: "block_coaching" } | undefined {
+  const prior = safeReadJson<ErrorState>(join(dataDir, "error_state.json"), ErrorStateSchema);
+  return prior?.mitigation === "block_coaching" ? { mitigation: prior.mitigation } : undefined;
+}
+
 /** Recursively rebuild an object/array with every object's keys in sorted
  *  order, so two structurally-equal payloads serialize identically regardless
  *  of key insertion order. `priorPayloadEquals` reads the prior payload back
@@ -283,6 +296,12 @@ export function createRunSync(
         async (): Promise<SyncResult> => {
         const controller = new AbortController();
         let phase: ErrorPhase = "fetching";
+        // Set synchronously the instant this cycle classifies the bundle as
+        // unusable, before the (async) error_state write. The outer-timeout path
+        // races the body's write and cannot re-read error_state.json reliably
+        // (the body's rename may not have landed yet), so it ORs this flag in
+        // rather than demote a same-cycle HARD rejection to a mitigation-less record.
+        let cycleBlockCoaching = false;
 
         // Returned at any phase boundary where `controller.signal.aborted` is
         // true after an `await` resolves. Prevents body from doing the next
@@ -305,7 +324,12 @@ export function createRunSync(
             // scheduled tick logging-only and the curator blind to the failure.
             if (controller.signal.aborted) return abortedResult();
             const detail = err instanceof Error ? err.message : String(err);
-            await writeErrorState(deps.dataDir, { step: "fetch_failed", phase, detail });
+            await writeErrorState(deps.dataDir, {
+              step: "fetch_failed",
+              phase,
+              detail,
+              ...priorBlockCoaching(deps.dataDir),
+            });
             return {
               kind: "failed",
               reason: "fetch_failed",
@@ -319,9 +343,16 @@ export function createRunSync(
           // on-disk LatestJson, so prior-vs-incoming comparison is not yet wired.
           const gateResult = gate(fetched, null, now());
           if (!gateResult.ok) {
+            // A HARD gate failure means the freshly-fetched bundle could not be
+            // validated — the cache is unvalidated/corrupt. Mark the failure
+            // block-coaching so the chat path degrades to general guidance
+            // instead of quoting numbers from data we could not trust. The soft
+            // path below keeps its non-blocking warn-only mitigation.
+            cycleBlockCoaching = true;
             await writeErrorState(deps.dataDir, {
               step: "gate_rejected",
               detail: gateResult.failures.map((f) => `${f.step}: ${f.detail}`).join("; "),
+              mitigation: "block_coaching",
             });
             return {
               kind: "failed",
@@ -467,6 +498,9 @@ export function createRunSync(
             step: "outer_timeout",
             phase,
             detail: `runSync exceeded ${outerTimeoutMs}ms during ${phase} phase`,
+            ...(cycleBlockCoaching
+              ? ({ mitigation: "block_coaching" } as const)
+              : priorBlockCoaching(deps.dataDir)),
           });
           return { kind: "failed", reason: "outer_timeout", failures: [] };
         }
