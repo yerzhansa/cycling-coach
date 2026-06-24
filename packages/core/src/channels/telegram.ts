@@ -60,11 +60,11 @@ const SNAPSHOT_HELP =
 
 // Descriptions mirror the command one-liners in WELCOME_MESSAGE so the native
 // "/" menu and the welcome card never drift. /sync is conditional on the same
-// reference predicate the command registration uses; /start and /snapshot are
-// excluded by construction (Telegram surfaces /start via the start affordance,
-// and /snapshot is operator-only debug).
+// reference predicate the command registration uses; /snapshot is excluded by
+// construction (operator-only debug). /start is included as an athlete command.
 function buildCommandMenu(reference?: ReferenceServices): { command: string; description: string }[] {
   const menu = [
+    { command: "start", description: "Start a fresh session" },
     { command: "plan", description: "Generate a training plan" },
     { command: "workout", description: "Get today's workout" },
     { command: "status", description: "Check current fitness, fatigue, and form" },

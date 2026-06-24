@@ -218,7 +218,7 @@ describe("non-blocking dispatch", () => {
 });
 
 describe("setMyCommands menu list", () => {
-  it("includes the full command set and excludes snapshot/start when reference is present", async () => {
+  it("includes the full command set (with start) and excludes snapshot when reference is present", async () => {
     const reference: StubReference = { runSync: vi.fn(), loadLatest: vi.fn() };
     const { bot } = await buildBot({ reference });
     expect(bot.api.setMyCommands).toHaveBeenCalledTimes(1);
@@ -228,6 +228,7 @@ describe("setMyCommands menu list", () => {
     }[];
     const names = menu.map((c) => c.command);
     for (const c of [
+      "start",
       "plan",
       "workout",
       "status",
@@ -240,7 +241,6 @@ describe("setMyCommands menu list", () => {
       expect(names).toContain(c);
     }
     expect(names).not.toContain("snapshot");
-    expect(names).not.toContain("start");
     for (const entry of menu) {
       expect(typeof entry.description).toBe("string");
       expect(entry.description.length).toBeGreaterThan(0);
@@ -256,8 +256,7 @@ describe("setMyCommands menu list", () => {
     const names = menu.map((c) => c.command);
     expect(names).not.toContain("sync");
     expect(names).not.toContain("snapshot");
-    expect(names).not.toContain("start");
-    for (const c of ["plan", "workout", "status", "review", "version", "whatsnew", "update"]) {
+    for (const c of ["start", "plan", "workout", "status", "review", "version", "whatsnew", "update"]) {
       expect(names).toContain(c);
     }
   });

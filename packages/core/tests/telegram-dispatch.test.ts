@@ -521,6 +521,7 @@ describe("command menu (setMyCommands)", () => {
     expect(bot.api.setMyCommands).toHaveBeenCalledTimes(1);
     expect(menuCommands(bot)).toEqual(
       expect.arrayContaining([
+        { command: "start", description: "Start a fresh session" },
         { command: "plan", description: "Generate a training plan" },
         { command: "workout", description: "Get today's workout" },
         { command: "status", description: "Check current fitness, fatigue, and form" },
@@ -532,12 +533,12 @@ describe("command menu (setMyCommands)", () => {
     );
   });
 
-  it("includes /sync when reference is provided; never /start or /snapshot", async () => {
+  it("includes /sync and /start when reference is provided; never /snapshot", async () => {
     const reference: StubReference = { runSync: vi.fn(), loadLatest: vi.fn() };
     const { bot } = await buildBot({ reference });
     const names = menuCommands(bot).map((c) => c.command);
     expect(names).toContain("sync");
-    expect(names).not.toContain("start");
+    expect(names).toContain("start");
     expect(names).not.toContain("snapshot");
   });
 
@@ -545,9 +546,8 @@ describe("command menu (setMyCommands)", () => {
     const { bot } = await buildBot();
     const names = menuCommands(bot).map((c) => c.command);
     expect(names).not.toContain("sync");
-    expect(names).not.toContain("start");
     expect(names).not.toContain("snapshot");
-    for (const c of ["plan", "workout", "status", "review", "version", "whatsnew", "update"]) {
+    for (const c of ["start", "plan", "workout", "status", "review", "version", "whatsnew", "update"]) {
       expect(names).toContain(c);
     }
   });
