@@ -27,15 +27,18 @@ describe("formatSnapshotRaw", () => {
     }
   });
 
-  it("returns chunked markdown for a small full dump (each chunk ≤4096 chars)", () => {
+  it("returns HTML-path-renderable chunks for a small full dump (each chunk ≤4096 chars)", () => {
     const out = formatSnapshotRaw(tinyLatest);
     expect(out.kind).toBe("chunks");
     if (out.kind === "chunks") {
       expect(out.chunks.length).toBeGreaterThanOrEqual(1);
       for (const chunk of out.chunks) {
         expect(chunk.length).toBeLessThanOrEqual(4096);
-        expect(chunk.startsWith("```json")).toBe(true);
-        expect(chunk.endsWith("```")).toBe(true);
+        // Each chunk is a plain code fence the HTML path renders as an escaped
+        // <pre> block (no language tag, no legacy ```json wrapper).
+        expect(chunk.startsWith("```\n")).toBe(true);
+        expect(chunk.endsWith("\n```")).toBe(true);
+        expect(chunk.startsWith("```json")).toBe(false);
       }
       // The serialized data should appear somewhere in the chunks.
       expect(out.chunks.join("")).toContain("\"id\": \"test\"");

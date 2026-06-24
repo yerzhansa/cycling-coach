@@ -310,7 +310,7 @@ export function createTelegramBot(
         const output = formatSnapshotRaw(latest, section);
         try {
           await sendSnapshotOutput(output, {
-            reply: (text) => ctx.reply(text, { parse_mode: "Markdown" }) as Promise<unknown>,
+            reply: (text) => sendLongMessage(ctx, text) as Promise<unknown>,
             sendDocument: (buffer, filename) =>
               ctx.replyWithDocument(new InputFile(buffer, filename)) as Promise<unknown>,
           });
@@ -433,12 +433,20 @@ export function createTelegramBot(
 export function markdownToTelegramHtml(md: string): string {
   // Telegram has no table primitive. Extract tables first so the bullet-point
   // regex below doesn't mangle their leading `|`, then restore as <pre> blocks.
-  const { text, tables } = extractTables(md);
+  const { text: noTables, tables } = extractTables(md);
+
+  // Extract fenced code blocks from the RAW (table-stripped) markdown BEFORE
+  // escaping, exactly as extractTables does. This preserves the fence body
+  // byte-for-byte through the regex passes (no header/bold/italic/bullet
+  // transform reaches inside) and restores it as an escaped <pre> at the end,
+  // keeping the escape-first security property intact.
+  const { text, fences } = extractFences(noTables);
 
   // Escape the raw source BEFORE any markdown conversion so the only real tags
   // in the output are the ones this converter emits. Literal HTML in the LLM
   // output (which can echo attacker-influenced intervals.icu text) must render
-  // as text, never as markup. Table cells are escaped inside renderTableAsPre.
+  // as text, never as markup. Table cells are escaped inside renderTableAsPre;
+  // fence bodies are escaped on restore below.
   let html = escapeHtmlText(text);
 
   // Headers: ### Title → <b>Title</b>
@@ -447,13 +455,21 @@ export function markdownToTelegramHtml(md: string): string {
   // Bold: **text** → <b>text</b>
   html = html.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
 
-  // Italic: *text* or _text_ → <i>text</i>
-  html = html.replace(/(?<!\w)\*([^*]+?)\*(?!\w)/g, "<i>$1</i>");
+  // Italic: *text* or _text_ → <i>text</i>. A space (or another `*`) adjacent to
+  // either delimiter disqualifies the match, so interval math like
+  // `do 3 * 8 reps then 2 * 20min` keeps its literal `*` and emits no <i>.
+  html = html.replace(/(?<![\w*])\*(?![\s*])([^*\n]+?)(?<![\s*])\*(?![\w*])/g, "<i>$1</i>");
   html = html.replace(/(?<!\w)_([^_]+?)_(?!\w)/g, "<i>$1</i>");
 
-  // Code blocks: ```...``` → <pre>...</pre> (must run before inline-code, otherwise the
-  // single-backtick regex eats pairs of fence backticks and breaks the block).
-  html = html.replace(/```[\w]*\n?([\s\S]*?)```/g, "<pre>$1</pre>");
+  // Links: [text](http(s)://url) → <a href="url">text</a>. Runs on the
+  // post-escape html string, so the link text is already escaped; the url is
+  // captured from this same (escaped) string and only attribute-quote-escaped —
+  // re-running escapeHtmlText would double-escape an already-escaped `&` in a
+  // multi-param query string. http/https only; other schemes stay literal.
+  html = html.replace(
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    (_, label: string, url: string) => `<a href="${escapeHtmlAttrPreEscaped(url)}">${label}</a>`,
+  );
 
   // Inline code: `text` → <code>text</code>
   html = html.replace(/`([^`]+?)`/g, "<code>$1</code>");
@@ -464,7 +480,34 @@ export function markdownToTelegramHtml(md: string): string {
   // Bullet points: - item → • item
   html = html.replace(/^[-*]\s+/gm, "• ");
 
-  return html.replace(/\[\[__TBL_(\d+)__\]\]/g, (_, idx) => tables[Number(idx)] ?? "");
+  html = html.replace(/\[\[__TBL_(\d+)__\]\]/g, (_, idx) => tables[Number(idx)] ?? "");
+  return html.replace(
+    /\[\[__FENCE_(\d+)__\]\]/g,
+    (_, idx) => `<pre>${escapeHtmlText(fences[Number(idx)] ?? "")}</pre>`,
+  );
+}
+
+// Quote/apostrophe-escape a URL that has ALREADY passed through escapeHtmlText
+// (so `&`/`<`/`>` are entities). Only `"` and `'` remain to neutralize for an
+// attribute context; escapeHtmlAttr would re-escape the entities' `&`.
+function escapeHtmlAttrPreEscaped(s: string): string {
+  return s.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+const FENCE_RE = /```[^\n]*\n?([\s\S]*?)```/g;
+
+// Mirror extractTables: walk the RAW markdown, replace each fenced code block
+// with an inert placeholder (no `* _ ` # -` or leading `[-*]`, so no regex
+// between extraction and restore touches it), and collect the raw fence body
+// for escaped-<pre> restore at the end of markdownToTelegramHtml.
+function extractFences(md: string): { text: string; fences: string[] } {
+  const fences: string[] = [];
+  const text = md.replace(FENCE_RE, (_, body: string) => {
+    const idx = fences.length;
+    fences.push(body);
+    return `[[__FENCE_${idx}__]]`;
+  });
+  return { text, fences };
 }
 
 const TABLE_SEPARATOR_RE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/;
@@ -620,14 +663,58 @@ export function chunkHtml(html: string, maxLen: number = TELEGRAM_MAX_LENGTH): s
     if (unit.kind === "pre") {
       chunks.push(...splitPreBlock(text, maxLen));
     } else {
-      for (let i = 0; i < text.length; i += maxLen) {
-        chunks.push(text.slice(i, i + maxLen));
-      }
+      chunks.push(...hardSplit(text, maxLen));
     }
   }
 
   flush();
   return chunks;
+}
+
+// Hard-split a single oversized line at a boundary that never bisects an HTML
+// tag (`<…>`), an entity (`&…;`), or a UTF-16 surrogate pair. Scans back from
+// the fixed offset to the last safe cut; if none exists below maxLen the line is
+// pathological (e.g. one >maxLen tag) and we fall back to the raw slice for that
+// one piece to guarantee forward progress.
+function hardSplit(text: string, maxLen: number): string[] {
+  const out: string[] = [];
+  let start = 0;
+  while (text.length - start > maxLen) {
+    let cut = start + maxLen;
+    while (cut > start && !isSafeCut(text, cut)) cut--;
+    if (cut === start) cut = start + maxLen; // pathological: no safe boundary
+    out.push(text.slice(start, cut));
+    start = cut;
+  }
+  out.push(text.slice(start));
+  return out;
+}
+
+// A cut at index `i` (split into [..i) and [i..]) is safe when it does not land
+// inside an open `<…>` tag, inside an unterminated `&…;` entity, or between the
+// two halves of a surrogate pair.
+function isSafeCut(text: string, i: number): boolean {
+  const prev = text.charCodeAt(i - 1);
+  if (prev >= 0xd800 && prev <= 0xdbff) return false; // high surrogate before cut
+
+  // Inside a tag if the nearest unescaped `<`/`>` scanning back is a `<`.
+  const lt = text.lastIndexOf("<", i - 1);
+  const gt = text.lastIndexOf(">", i - 1);
+  if (lt > gt) return false;
+
+  // Inside an entity if the nearest `&` scanning back has no terminating `;`
+  // before the cut and is close enough to still be an open entity run.
+  const amp = text.lastIndexOf("&", i - 1);
+  if (amp >= 0) {
+    const semi = text.indexOf(";", amp);
+    if (semi < 0 || semi >= i) {
+      // No `;` yet; only treat as an open entity if the run so far is entity-ish
+      // (no whitespace/`<`/`&`), otherwise a bare `&` is just literal text.
+      const run = text.slice(amp + 1, i);
+      if (/^[a-zA-Z0-9#]*$/.test(run)) return false;
+    }
+  }
+  return true;
 }
 
 function isTelegramParseError(err: unknown): boolean {
@@ -655,9 +742,30 @@ export async function sendLongMessage(
         "Telegram rejected HTML chunk; resending as plain text:",
         err instanceof Error ? err.message : String(err),
       );
-      await ctx.reply(chunk);
+      // Resend human-readable source, not the rejected HTML. Strip the converter
+      // tags and invert the (trivially invertible) HTML escape so the athlete
+      // sees clean text — never tag soup or double-escaped entities.
+      const plain = htmlChunkToPlainText(chunk);
+      if (plain.trim() === "") continue;
+      await ctx.reply(plain);
     }
   }
+}
+
+// Turn a rejected HTML chunk back into readable plain text for the no-parse-mode
+// fallback: drop the converter tags this module emits, then invert escapeHtmlText
+// (`&lt;`→`<`, `&gt;`→`>`, and `&amp;`→`&` LAST so `&amp;lt;` round-trips to
+// `&lt;`). The output carries no tags and no double-escaped entities.
+function htmlChunkToPlainText(chunk: string): string {
+  return chunk
+    .replace(/<\/?(?:b|i|s|u|pre|code)>/g, "")
+    .replace(/<a href="[^"]*">/g, "")
+    .replace(/<\/a>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
 }
 
 // ============================================================================

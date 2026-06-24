@@ -5,12 +5,15 @@ import {
 import type { LatestJson } from "../schemas/latest.js";
 
 const TELEGRAM_MAX_CHUNK = 4096;
-// Wrap inside ```json ... ``` fences for readability; reserve overhead for the
-// fences themselves so the body fits.
-const FENCE_OPEN = "```json\n";
+// Each chunk is a code fence the Telegram HTML path renders as an escaped
+// <pre> block (the snapshot reply runs every chunk through markdownToTelegramHtml).
+// Reserve overhead for the fence + the <pre>…</pre> the converter adds so the
+// rendered chunk still fits Telegram's 4096-char limit.
+const FENCE_OPEN = "```\n";
 const FENCE_CLOSE = "\n```";
 const FENCE_OVERHEAD = FENCE_OPEN.length + FENCE_CLOSE.length;
-const BODY_BUDGET = TELEGRAM_MAX_CHUNK - FENCE_OVERHEAD;
+const PRE_RENDER_OVERHEAD = "<pre></pre>".length;
+const BODY_BUDGET = TELEGRAM_MAX_CHUNK - FENCE_OVERHEAD - PRE_RENDER_OVERHEAD;
 
 const VALID_SECTIONS: readonly (keyof LatestJson)[] = [
   "athlete_profile",

@@ -123,6 +123,60 @@ describe("markdownToTelegramHtml", () => {
     const out = markdownToTelegramHtml("a &amp; b");
     expect(out).toContain("a &amp;amp; b");
   });
+
+  it("preserves fenced content byte-for-byte (modulo escaping) with no transform injection", () => {
+    const out = markdownToTelegramHtml("```\n- 4x8min @ 105%\n# main set\ndo 3 * 8\n```");
+    const pre = out.match(/<pre>([\s\S]*?)<\/pre>/);
+    expect(pre).not.toBeNull();
+    const body = pre![1];
+    expect(body).toContain("- 4x8min @ 105%");
+    expect(body).toContain("# main set");
+    expect(body).toContain("do 3 * 8");
+    expect(out).not.toContain("•");
+    expect(out).not.toContain("<b>main set</b>");
+    expect(out).not.toContain("<i>");
+  });
+
+  it("does not italicize spaced asterisks in interval math", () => {
+    const out = markdownToTelegramHtml("do 3 * 8 reps then 2 * 20min");
+    expect(out).toContain("3 * 8");
+    expect(out).toContain("2 * 20min");
+    expect(out).not.toContain("<i>");
+  });
+
+  it("still italicizes genuine emphasis with no internal spaces", () => {
+    const out = markdownToTelegramHtml("this is *important*");
+    expect(out).toContain("<i>important</i>");
+  });
+
+  it("renders an https link as an escaped <a href>", () => {
+    const out = markdownToTelegramHtml("see [the plan](https://example.com)");
+    expect(out).toContain('<a href="https://example.com">the plan</a>');
+  });
+
+  it("renders an http link as an escaped <a href>", () => {
+    const out = markdownToTelegramHtml("[x](http://a.b)");
+    expect(out).toContain('<a href="http://a.b">x</a>');
+  });
+
+  it("leaves a non-http(s) link as literal text", () => {
+    const out = markdownToTelegramHtml("[x](javascript:alert(1))");
+    expect(out).not.toContain("<a");
+    expect(out).toContain("[x](javascript:alert(1))");
+  });
+
+  it("attribute-escapes a quote in the link href", () => {
+    const out = markdownToTelegramHtml('[x](https://a.b/?q="hi")');
+    const href = out.match(/href="([^"]*)"/);
+    expect(href).not.toBeNull();
+    expect(out).toContain("&quot;");
+  });
+
+  it("does not double-escape an ampersand in a multi-param link href", () => {
+    const out = markdownToTelegramHtml("[plan](https://example.com/?a=1&b=2)");
+    expect(out).toContain('href="https://example.com/?a=1&amp;b=2"');
+    expect(out).not.toContain("&amp;amp;");
+  });
 });
 
 describe("sendLongMessage", () => {
@@ -130,7 +184,7 @@ describe("sendLongMessage", () => {
     return { reply: vi.fn(replyImpl) };
   }
 
-  it("retries a chunk as plain text when Telegram rejects the HTML parse", async () => {
+  it("falls back to human-readable source text when Telegram rejects the HTML parse", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const ctx = makeCtx(async (_text, options) => {
       if (options?.parse_mode === "HTML") {
@@ -140,12 +194,21 @@ describe("sendLongMessage", () => {
       }
       return undefined;
     });
-    await expect(sendLongMessage(ctx, "hello **world**")).resolves.toBeUndefined();
+    await expect(
+      sendLongMessage(ctx, "**Week 1** a & b [link](https://x.y)"),
+    ).resolves.toBeUndefined();
     expect(ctx.reply).toHaveBeenCalledTimes(2);
     const [firstCall, secondCall] = ctx.reply.mock.calls;
     expect(firstCall[1]).toEqual({ parse_mode: "HTML" });
     expect(secondCall[1]).toBeUndefined();
-    expect(secondCall[0]).toBe(firstCall[0]);
+    const fallback = String(secondCall[0]);
+    expect(fallback).not.toContain("<b>");
+    expect(fallback).not.toContain("<i>");
+    expect(fallback).not.toContain("<pre>");
+    expect(fallback).not.toContain("<a");
+    expect(fallback).not.toContain("&amp;amp;");
+    expect(fallback).toContain("Week 1");
+    expect(fallback).toContain("a & b");
     errSpy.mockRestore();
   });
 
@@ -248,6 +311,23 @@ describe("chunkHtml", () => {
       expect(opens).toBe(closes);
       expect(c.length).toBeLessThanOrEqual(MAX);
     }
+  });
+
+  it("hard-splits without cutting a tag, entity, or surrogate pair", () => {
+    const unit = "<b>x</b> &amp; ";
+    const line = unit.repeat(Math.ceil((MAX + 1000) / unit.length));
+    const chunks = chunkHtml(line);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const c of chunks) {
+      expect(c.length).toBeLessThanOrEqual(MAX);
+      expect(c.match(/<[^>]*$/)).toBeNull(); // no chunk ends mid-tag
+      expect(c.match(/&[^;]*$/)).toBeNull(); // no chunk ends mid-entity
+      const last = c.charCodeAt(c.length - 1);
+      expect(last >= 0xd800 && last <= 0xdbff).toBe(false); // no lone high surrogate
+      const first = c.charCodeAt(0);
+      expect(first >= 0xdc00 && first <= 0xdfff).toBe(false); // no lone low surrogate
+    }
+    expect(chunks.join("")).toBe(line);
   });
 
   it("preserves consecutive multi-line <pre> blocks across chunking", () => {
