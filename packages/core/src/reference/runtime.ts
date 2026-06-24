@@ -94,7 +94,12 @@ export async function bootstrapReference(
   // continue with whatever cache (if any) is on disk; the scheduler's next
   // tick will retry.
   try {
-    await runSyncInternal({ caller: "scheduled" });
+    const firstSync = await runSyncInternal({ caller: "scheduled" });
+    if (firstSync.kind === "failed") {
+      console.warn(
+        `${INITIAL_SYNC_FAILED_LOG_PREFIX} (${firstSync.reason}). Continuing with cached data if available; the next scheduled sync will retry.`,
+      );
+    }
   } catch (err) {
     console.warn(
       `${INITIAL_SYNC_FAILED_LOG_PREFIX} (${err instanceof Error ? err.message : String(err)}). Continuing with empty cache; lazy fallback will retry.`,

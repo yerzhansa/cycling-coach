@@ -108,6 +108,26 @@ describe("Scheduler", () => {
     expect(runSyncSpy).toHaveBeenCalledOnce();
   });
 
+  it("unref's the production timer handle when it exposes unref (defense-in-depth)", () => {
+    const fixedNow = new Date("2026-05-09T14:00:00Z");
+    const fakeHandle = { unref: vi.fn() };
+    const runSyncSpy = vi.fn();
+
+    const scheduler = new Scheduler({
+      dataDir: dir,
+      runSync: runSyncSpy,
+      intervalMs: 30 * 60_000,
+      clock: {
+        now: () => fixedNow,
+        setTimeout: () => fakeHandle,
+        clearTimeout: () => {},
+      },
+    });
+    scheduler.start();
+
+    expect(fakeHandle.unref).toHaveBeenCalledOnce();
+  });
+
   it("stop() cancels the pending timer; subsequent ticks do not fire", async () => {
     const fixedNow = new Date("2026-05-09T14:00:00Z");
     vi.setSystemTime(fixedNow);

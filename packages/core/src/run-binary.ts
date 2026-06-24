@@ -342,6 +342,7 @@ export async function runBinary(
   await runStartupHook(agent.getMemory(), hooks.onStartup);
 
   const { bootstrapReference } = await import("./reference/runtime.js");
+  console.log("syncing training data from intervals.icu…");
   const reference = await bootstrapReference({
     dataDir: config.dataDir,
     intervals: config.intervals,
@@ -424,6 +425,11 @@ export async function runBinary(
       input: process.stdin,
       output: process.stdout,
       prompt: "> ",
+    });
+
+    rl.on("close", () => {
+      reference.scheduler.stop();
+      process.exit(0);
     });
 
     rl.prompt();

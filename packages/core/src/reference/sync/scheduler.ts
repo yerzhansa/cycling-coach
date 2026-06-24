@@ -94,5 +94,12 @@ export class Scheduler {
         this.scheduleNext();
       }
     }, this.nextDelay);
+
+    // Defense-in-depth: don't let the periodic timer keep the process alive on
+    // its own. A test-injected fake handle may not expose `unref`, so guard it.
+    const handle = this.timerHandle as { unref?: () => void } | null;
+    if (handle !== null && typeof handle.unref === "function") {
+      handle.unref();
+    }
   }
 }

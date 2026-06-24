@@ -88,6 +88,32 @@ describe("run-binary shutdown-window latch", () => {
   });
 });
 
+describe("run-binary CLI exit + cold-start banner", () => {
+  const SOURCE_PATH = join(__dirname, "..", "src", "run-binary.ts");
+  const src = readFileSync(SOURCE_PATH, "utf-8");
+
+  it("prints the verbatim cold-start banner before the awaited bootstrap", () => {
+    const banner = "syncing training data from intervals.icu…";
+    expect(countOccurrences(src, banner)).toBe(1);
+    expect(src.indexOf(banner)).toBeLessThan(src.indexOf("await bootstrapReference("));
+  });
+
+  it("registers a close handler that stops the scheduler and exits 0", () => {
+    expect(src).toContain('rl.on("close"');
+    expect(src).toContain("reference.scheduler.stop()");
+    expect(src).toContain("process.exit(0)");
+  });
+
+  it("keeps /quit and /exit routing to rl.close()", () => {
+    expect(countOccurrences(src, 'input === "/quit" || input === "/exit"')).toBe(1);
+    expect(src).toContain("rl.close()");
+  });
+
+  it("does not smuggle in a mid-turn abort (AbortController is the LLM-deadline work's)", () => {
+    expect(src).not.toContain("AbortController");
+  });
+});
+
 function countOccurrences(haystack: string, needle: string): number {
   let count = 0;
   let idx = 0;

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { bootstrapReference } from "../src/reference/runtime.js";
+import { bootstrapReference, INITIAL_SYNC_FAILED_LOG_PREFIX } from "../src/reference/runtime.js";
 import { ReferenceConfigError } from "../src/reference/errors.js";
 import type { ReferenceSportAdapter } from "../src/reference/sport-adapter.js";
 import type { Sport } from "../src/sport.js";
@@ -106,6 +106,27 @@ describe("bootstrapReference (behavioral)", () => {
     // The fetch rejection is now handled inside runSync (converted to a failed
     // sync + error_state.json) rather than rethrown, so bootstrap continues and
     // the curator can see the failure on disk.
+    expect(existsSync(join(dataDir, "data", "error_state.json"))).toBe(true);
+    runtime.scheduler.stop();
+  });
+
+  it("warns when the initial sync RESOLVES failed (errored endpoints, not a thrown fetch)", async () => {
+    const failedFetch = vi.fn().mockResolvedValue({
+      ...emptyFetched,
+      fetch_errors: [{ endpoint: "athlete-profile", detail: "503 from intervals.icu" }],
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const runtime = await bootstrapReference({
+      dataDir,
+      intervals: { apiKey: "test-key" },
+      sport: fakeSport(),
+      fetchReferenceData: failedFetch,
+    });
+
+    expect(runtime).toBeDefined();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(INITIAL_SYNC_FAILED_LOG_PREFIX));
+    // The gate rejection still records the curator's error_state on disk.
     expect(existsSync(join(dataDir, "data", "error_state.json"))).toBe(true);
     runtime.scheduler.stop();
   });
