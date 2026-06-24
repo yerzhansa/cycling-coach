@@ -177,6 +177,12 @@ describe("markdownToTelegramHtml", () => {
     expect(out).toContain('href="https://example.com/?a=1&amp;b=2"');
     expect(out).not.toContain("&amp;amp;");
   });
+
+  it("keeps a balanced closing paren inside the link URL", () => {
+    const out = markdownToTelegramHtml("see [Foo](https://en.wikipedia.org/wiki/Foo_(bar))");
+    expect(out).toContain('<a href="https://en.wikipedia.org/wiki/Foo_(bar)">Foo</a>');
+    expect(out).not.toContain(">)"); // no stray dangling paren after the link
+  });
 });
 
 describe("sendLongMessage", () => {
@@ -328,6 +334,18 @@ describe("chunkHtml", () => {
       expect(first >= 0xdc00 && first <= 0xdfff).toBe(false); // no lone low surrogate
     }
     expect(chunks.join("")).toBe(line);
+  });
+
+  it("keeps inline tags balanced when hard-splitting a long formatted line", () => {
+    const unit = "<b>workout</b> ";
+    const line = unit.repeat(Math.ceil((MAX + 1000) / unit.length));
+    const chunks = chunkHtml(line);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const c of chunks) {
+      expect(c.length).toBeLessThanOrEqual(MAX);
+      expect((c.match(/<b>/g) ?? []).length).toBe((c.match(/<\/b>/g) ?? []).length);
+      expect(c.match(/<[^>]*$/)).toBeNull(); // no chunk ends mid-tag
+    }
   });
 
   it("preserves consecutive multi-line <pre> blocks across chunking", () => {

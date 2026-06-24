@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatSnapshotRaw } from "../src/reference/sync/snapshot-debug.js";
+import { markdownToTelegramHtml, chunkHtml } from "../src/channels/telegram.js";
 import type { LatestJson } from "../src/reference/schemas/latest.js";
 
 const tinyLatest: LatestJson = {
@@ -43,6 +44,28 @@ describe("formatSnapshotRaw", () => {
       // The serialized data should appear somewhere in the chunks.
       expect(out.chunks.join("")).toContain("\"id\": \"test\"");
       expect(out.chunks.join("")).toContain("\"sleep_hours\": 7.5");
+    }
+  });
+
+  it("renders every chunk to a single <pre> within Telegram's limit even when the body is escape-dense", () => {
+    // intervals.icu activity names/descriptions are Strava-mirrored and can be
+    // dense with `& < >`, which expand under HTML escaping (`&`→`&amp;` is +4).
+    // If the chunk budget ignored that expansion, a rendered <pre> would overflow
+    // 4096 and the converter's chunker would re-split it — breaking the 1:1
+    // raw→sent mapping the snapshot retry relies on.
+    const escapeDense: LatestJson = {
+      ...tinyLatest,
+      recent_activities: [{ id: 1, name: "<&>".repeat(1000) }],
+    };
+    const out = formatSnapshotRaw(escapeDense);
+    expect(out.kind).toBe("chunks");
+    if (out.kind === "chunks") {
+      expect(out.chunks.length).toBeGreaterThan(1);
+      for (const chunk of out.chunks) {
+        const rendered = markdownToTelegramHtml(chunk);
+        expect(rendered.length).toBeLessThanOrEqual(4096);
+        expect(chunkHtml(rendered)).toHaveLength(1);
+      }
     }
   });
 

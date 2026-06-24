@@ -465,9 +465,11 @@ export function markdownToTelegramHtml(md: string): string {
   // post-escape html string, so the link text is already escaped; the url is
   // captured from this same (escaped) string and only attribute-quote-escaped —
   // re-running escapeHtmlText would double-escape an already-escaped `&` in a
-  // multi-param query string. http/https only; other schemes stay literal.
+  // multi-param query string. http/https only; other schemes stay literal. The
+  // URL allows one level of balanced parens so Wikipedia-style URLs like
+  // `…/Foo_(bar)` keep their closing paren instead of truncating at it.
   html = html.replace(
-    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    /\[([^\]]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)/g,
     (_, label: string, url: string) => `<a href="${escapeHtmlAttrPreEscaped(url)}">${label}</a>`,
   );
 
@@ -672,16 +674,19 @@ export function chunkHtml(html: string, maxLen: number = TELEGRAM_MAX_LENGTH): s
 }
 
 // Hard-split a single oversized line at a boundary that never bisects an HTML
-// tag (`<…>`), an entity (`&…;`), or a UTF-16 surrogate pair. Scans back from
-// the fixed offset to the last safe cut; if none exists below maxLen the line is
-// pathological (e.g. one >maxLen tag) and we fall back to the raw slice for that
-// one piece to guarantee forward progress.
+// tag (`<…>`), an entity (`&…;`), or a UTF-16 surrogate pair, and never lands
+// BETWEEN a converter tag's open and its close (which would leave a chunk with
+// an unbalanced `<b>`/`<a>`/… — Telegram rejects it and forces the plain-text
+// fallback). Scans back from the fixed offset to the last such safe cut; if none
+// exists below maxLen the line is pathological (e.g. one >maxLen tag) and we fall
+// back to the raw slice for that one piece to guarantee forward progress.
+// (`<pre>` blocks never reach here; they are split by splitPreBlock.)
 function hardSplit(text: string, maxLen: number): string[] {
   const out: string[] = [];
   let start = 0;
   while (text.length - start > maxLen) {
     let cut = start + maxLen;
-    while (cut > start && !isSafeCut(text, cut)) cut--;
+    while (cut > start && !isSafeCut(text, start, cut)) cut--;
     if (cut === start) cut = start + maxLen; // pathological: no safe boundary
     out.push(text.slice(start, cut));
     start = cut;
@@ -690,10 +695,28 @@ function hardSplit(text: string, maxLen: number): string[] {
   return out;
 }
 
-// A cut at index `i` (split into [..i) and [i..]) is safe when it does not land
-// inside an open `<…>` tag, inside an unterminated `&…;` entity, or between the
-// two halves of a surrogate pair.
-function isSafeCut(text: string, i: number): boolean {
+const INLINE_TAG_RE = /<(\/?)(b|i|s|u|code|a)\b[^>]*>/g;
+
+// True when cutting at `i` would leave an inline converter tag opened within
+// [start, i) still unclosed at `i` — i.e. the cut falls between an open tag and
+// its matching close, which yields an unbalanced chunk.
+function cutSplitsOpenTag(text: string, start: number, i: number): boolean {
+  const stack: string[] = [];
+  for (const m of text.slice(start, i).matchAll(INLINE_TAG_RE)) {
+    if (m[1] === "/") {
+      const k = stack.lastIndexOf(m[2]);
+      if (k >= 0) stack.splice(k, 1);
+    } else {
+      stack.push(m[2]);
+    }
+  }
+  return stack.length > 0;
+}
+
+// A cut at index `i` (split into [start..i) and [i..]) is safe when it does not
+// land inside an open `<…>` tag, inside an unterminated `&…;` entity, between the
+// two halves of a surrogate pair, or between a converter tag's open and close.
+function isSafeCut(text: string, start: number, i: number): boolean {
   const prev = text.charCodeAt(i - 1);
   if (prev >= 0xd800 && prev <= 0xdbff) return false; // high surrogate before cut
 
@@ -714,6 +737,8 @@ function isSafeCut(text: string, i: number): boolean {
       if (/^[a-zA-Z0-9#]*$/.test(run)) return false;
     }
   }
+
+  if (cutSplitsOpenTag(text, start, i)) return false;
   return true;
 }
 
