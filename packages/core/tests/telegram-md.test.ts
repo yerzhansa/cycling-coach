@@ -164,6 +164,24 @@ describe("sendLongMessage", () => {
     expect(sent).toContain("&lt;pre&gt;");
     expect(sent).toContain("&lt;/b&gt;");
   });
+
+  it("sends nothing for empty text", async () => {
+    const ctx = makeCtx(async () => undefined);
+    await sendLongMessage(ctx, "");
+    expect(ctx.reply).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing for whitespace-only text", async () => {
+    const ctx = makeCtx(async () => undefined);
+    await sendLongMessage(ctx, "   \n  ");
+    expect(ctx.reply).not.toHaveBeenCalled();
+  });
+
+  it("still sends real text", async () => {
+    const ctx = makeCtx(async () => undefined);
+    await sendLongMessage(ctx, "real reply");
+    expect(ctx.reply).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("chunkHtml", () => {

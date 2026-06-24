@@ -272,3 +272,38 @@ describe("ChatStore.appendTurn — single-buffer atomic two-line append", () => 
     expect(store.load("c1").messages).toEqual([]);
   });
 });
+
+describe("ChatStore — empty assistant guard", () => {
+  function assistantCount(store: ChatStore, chatId: string): number {
+    return store.load(chatId).messages.filter((m) => m.role === "assistant").length;
+  }
+
+  it("appendTurn with empty assistant content writes no assistant line", () => {
+    const store = new ChatStore(dataDir);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    store.appendTurn("g", "user text", "", LINEAGE);
+    expect(assistantCount(store, "g")).toBe(0);
+  });
+
+  it("appendTurn with whitespace-only assistant content is treated as empty", () => {
+    const store = new ChatStore(dataDir);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    store.appendTurn("g", "user text", "   \n  ", LINEAGE);
+    expect(assistantCount(store, "g")).toBe(0);
+  });
+
+  it("appendTurn with real assistant content persists normally", () => {
+    const store = new ChatStore(dataDir);
+    store.appendTurn("g2", "u", "real reply", LINEAGE);
+    const assistants = store.load("g2").messages.filter((m) => m.role === "assistant");
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0].content).toBe("real reply");
+  });
+
+  it('appendMessage("assistant", "") writes nothing', () => {
+    const store = new ChatStore(dataDir);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    store.appendMessage("g3", "assistant", "");
+    expect(assistantCount(store, "g3")).toBe(0);
+  });
+});

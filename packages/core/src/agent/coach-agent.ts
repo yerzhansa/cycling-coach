@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { stepCountIs } from "ai";
-import type { ModelMessage, Tool, ToolSet } from "ai";
+import type { FinishReason, ModelMessage, Tool, ToolSet } from "ai";
 import { makeChatClient } from "../reference/sync/intervals-client-factory.js";
 import { getEffectiveSections } from "../memory/effective-sections.js";
 import type { CoreDeps, Sport } from "../sport.js";
@@ -45,7 +45,7 @@ import { resolveUserTimezone, appendCurrentTimeLine } from "./user-time.js";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/index.js";
 import { retryWithBackoff } from "../concurrency/retry.js";
 import { createTurnBudget, TurnBudgetExceededError, type TurnBudget } from "./turn-budget.js";
-import { TAINTED_BY_WRITES_MESSAGE } from "./coach-agent-copy.js";
+import { TAINTED_BY_WRITES_MESSAGE, STEP_LIMIT_TRUNCATION_MESSAGE } from "./coach-agent-copy.js";
 
 const MAX_OVERFLOW_ATTEMPTS = 3;
 const MAX_TIMEOUT_ATTEMPTS = 2;
@@ -73,6 +73,16 @@ const MAX_FLUSH_ATTEMPTS = 2;
 // Calendar write tools whose committed success makes a turn non-replayable.
 // Kept here so the taint set can't drift from the actual tool names.
 const WRITE_TOOL_NAMES = new Set(["intervals_create_workout", "intervals_delete_workout"]);
+
+// A turn that spent its whole step budget on tool calls (or hit the output-token
+// cap) and never emitted final text. Kept a single named predicate so the future
+// window-exceeded classification can extend the same switch rather than adding a
+// competing finishReason branch.
+function isStepExhaustedEmpty(text: string, finishReason: FinishReason): boolean {
+  return text.trim() === "" && (finishReason === "tool-calls" || finishReason === "length");
+}
+
+const RECOVERY_PROMPT = "summarize what you did and what's left";
 
 const DISK_FULL_NOTE =
   "\n\n(Heads up: my disk is full, so I couldn't save this to our history — but your message went through. Please free up some space when you can.)";
@@ -534,7 +544,34 @@ export class CoachAgent {
               caller: "chat",
               cacheKey,
             });
-            const { text } = result;
+            const { text, finishReason } = result;
+
+            // Step-exhaustion recovery: the model spent all 10 steps on tool
+            // calls (or hit the output cap) and never emitted final text. One
+            // no-tools completion asks it to summarize; if that yields nothing
+            // (or throws), fall to the static floor — the athlete always gets
+            // actionable text and is never told to blindly "try again", which
+            // would re-run already-committed paid side effects. The recovery
+            // call carries NO tools, so it cannot commit a new write, and runs
+            // only here on the success path (before the catch below).
+            let effectiveText = text;
+            if (isStepExhaustedEmpty(text, finishReason)) {
+              try {
+                turnBudget.chargeModelCall();
+                const recovery = await this.llm.generate({
+                  system: this.systemPrompt,
+                  messages: [...messages, { role: "user", content: RECOVERY_PROMPT }],
+                  tools: undefined,
+                  caller: "chat",
+                  cacheKey,
+                });
+                effectiveText =
+                  recovery.text.trim() !== "" ? recovery.text : STEP_LIMIT_TRUNCATION_MESSAGE;
+              } catch (recoveryErr) {
+                console.warn("Step-limit recovery completion failed; using truncation floor", recoveryErr);
+                effectiveText = STEP_LIMIT_TRUNCATION_MESSAGE;
+              }
+            }
 
             const templateHash = (this.templateHash ??= computeTemplateHash({
               soul: this.sport.soul,
@@ -549,7 +586,7 @@ export class CoachAgent {
             // on failure, no dangling user line on a partial write.
             let persistenceNote = "";
             try {
-              this.chatStore.appendTurn(chatId, userMessage, text, {
+              this.chatStore.appendTurn(chatId, userMessage, effectiveText, {
                 templateHash,
                 assembledHash,
                 provider: this.config.llm.provider,
@@ -589,7 +626,7 @@ export class CoachAgent {
               compactions,
             });
 
-            return text + persistenceNote;
+            return effectiveText + persistenceNote;
           } catch (err) {
             // The classified budget error is terminal: re-throw it before any
             // retry branch so a future reordering can never mistake it for one of

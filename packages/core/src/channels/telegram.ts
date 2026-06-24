@@ -641,6 +641,10 @@ export async function sendLongMessage(
 ): Promise<void> {
   const html = markdownToTelegramHtml(text);
   for (const chunk of chunkHtml(html)) {
+    // Telegram rejects an empty message (400: message text is empty), and an
+    // empty chunk carries nothing for the athlete anyway — skip it so ctx.reply
+    // is never called with empty/whitespace-only text.
+    if (chunk.trim() === "") continue;
     try {
       await ctx.reply(chunk, { parse_mode: "HTML" });
     } catch (err) {

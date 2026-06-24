@@ -118,6 +118,13 @@ export class ChatStore {
     content: string,
     lineage?: { templateHash: string; assembledHash: string; provider: string; model: string },
   ): void {
+    // An empty assistant reply pollutes the next turn's loaded history. Skip it
+    // and warn — never throw, so a deliver-first turn can't crash on a guarded
+    // append.
+    if (role === "assistant" && content.trim() === "") {
+      console.warn("Skipping empty assistant message append");
+      return;
+    }
     const path = this.filePath(chatId);
     const line: JsonlLine = { role, content, ts: new Date().toISOString(), ...lineage };
     appendFileSync(path, JSON.stringify(line) + "\n", { encoding: "utf-8", mode: 0o600 });
@@ -129,6 +136,13 @@ export class ChatStore {
     assistantContent: string,
     lineage: { templateHash: string; assembledHash: string; provider: string; model: string },
   ): void {
+    // Keep the atomic pair honest: an empty assistant reply must never persist,
+    // and a lone user line with no reply is the same context pollution. Skip the
+    // whole turn and warn — never throw (deliver-first).
+    if (assistantContent.trim() === "") {
+      console.warn("Skipping turn with empty assistant content");
+      return;
+    }
     const path = this.filePath(chatId);
     const ts = new Date().toISOString();
     const userLine: JsonlLine = { role: "user", content: userContent, ts };
