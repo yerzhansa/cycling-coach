@@ -113,6 +113,13 @@ export {
 } from "./agent/turn-budget.js";
 export type { BudgetExceededKind, TurnBudget } from "./agent/turn-budget.js";
 export { TAINTED_BY_WRITES_MESSAGE } from "./agent/coach-agent-copy.js";
+export { capToolResult, TOOL_RESULT_SHARE, STEP_BOUNDARY_RATIO } from "./agent/tool-result-cap.js";
+export {
+  downsampleStreams,
+  STREAM_BIN_SECONDS,
+  STREAM_RESULT_TARGET_TOKENS,
+} from "./agent/stream-downsample.js";
+export type { DownsampledStreams } from "./agent/stream-downsample.js";
 export { ChatStore } from "./agent/chat-store.js";
 export { buildSystemPrompt, SYSTEM_PROMPT_CACHE_BOUNDARY } from "./agent/system-prompt.js";
 export { computePromptLineage } from "./agent/prompt-lineage.js";

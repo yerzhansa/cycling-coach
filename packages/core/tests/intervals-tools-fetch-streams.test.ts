@@ -61,15 +61,19 @@ describe("intervals_fetch_streams", () => {
     expect(capture.types).toEqual(["watts", "heartrate", "cadence", "time", "altitude"]);
   });
 
-  it("returns the stream payload verbatim on success", async () => {
+  it("returns a downsampled stream object on success", async () => {
     const streams = { watts: [100, 200, 300], time: [0, 1, 2] };
     const fake = makeFakeIntervals({ ok: true, value: streams }, {});
     const tools = createPureCoreIntervalsTools(fake);
     const tool = tools.intervals_fetch_streams!;
 
-    const result = await tool.execute!({ activityId: 1 }, {} as never);
+    const result = (await tool.execute!({ activityId: 1 }, {} as never)) as {
+      sampleCount: number;
+      channels: Record<string, { max: number }>;
+    };
 
-    expect(result).toEqual(streams);
+    expect(result.sampleCount).toBe(3);
+    expect(result.channels.watts.max).toBe(300);
   });
 
   it("returns { error: kind } on SDK error", async () => {

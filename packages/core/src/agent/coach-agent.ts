@@ -22,6 +22,7 @@ import { ChatStore } from "./chat-store.js";
 import { buildSystemPrompt, staticRuleBlocks } from "./system-prompt.js";
 import { computeAssembledHash, computeTemplateHash, sha256_16 } from "./prompt-lineage.js";
 import { withSessionLock } from "./session-lock.js";
+import { capToolResult, TOOL_RESULT_SHARE } from "./tool-result-cap.js";
 import { splitHistoryByBudget, makeSummaryMessage } from "./history-limit.js";
 import {
   shouldCompact,
@@ -221,8 +222,12 @@ export class CoachAgent {
       resolvedCs: () => this.resolvedCsStore.getStore() ?? null,
     };
     const registrations = sport.tools(coreDeps);
+    const maxResultTokens = Math.floor(this.config.contextWindowTokens * TOOL_RESULT_SHARE);
     this.tools = Object.fromEntries(
-      registrations.map((r) => [r.name, this.wrapWriteTool(r.name, r.tool)]),
+      registrations.map((r) => [
+        r.name,
+        this.wrapWriteTool(r.name, capToolResult(r.tool, { maxResultTokens })),
+      ]),
     ) as ToolSet;
     // systemPrompt is rebuilt at the top of every chat() call; no need to bake one here.
     this.systemPrompt = "";

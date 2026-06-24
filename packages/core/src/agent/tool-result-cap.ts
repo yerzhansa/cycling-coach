@@ -1,0 +1,49 @@
+import type { Tool } from "ai";
+import { estimateTokens } from "./token-utils.js";
+
+export const TOOL_RESULT_SHARE = 0.5;
+export const STEP_BOUNDARY_RATIO = 0.9;
+
+type CappedResult = {
+  truncated: true;
+  notice: string;
+  omittedSamples: number;
+  estimatedTokens: number;
+};
+
+function omittedSampleCount(result: unknown, serializedLength: number): number {
+  if (result !== null && typeof result === "object" && !Array.isArray(result)) {
+    let largest = 0;
+    for (const value of Object.values(result as Record<string, unknown>)) {
+      if (Array.isArray(value) && value.length > largest) largest = value.length;
+    }
+    if (largest > 0) return largest;
+  }
+  if (Array.isArray(result)) return result.length;
+  return serializedLength > 0 && typeof result === "string" ? serializedLength : 0;
+}
+
+export function capToolResult(tool: Tool, opts: { maxResultTokens: number }): Tool {
+  const inner = tool.execute;
+  if (typeof inner !== "function") return tool;
+  return {
+    ...tool,
+    execute: async (input: unknown, options: unknown) => {
+      const result = await (inner as (i: unknown, o: unknown) => unknown)(input, options);
+      const serialized =
+        typeof result === "string" ? result : (JSON.stringify(result) ?? "");
+      const estimatedTokens = estimateTokens(serialized);
+      if (estimatedTokens <= opts.maxResultTokens) return result;
+      const omittedSamples = omittedSampleCount(result, serialized.length);
+      const capped: CappedResult = {
+        truncated: true,
+        notice:
+          `Tool result too large (~${estimatedTokens} tokens) and was omitted to protect context. ` +
+          "Rerun with narrower arguments (e.g. a smaller date range, fewer stream types, or a shorter activity).",
+        omittedSamples,
+        estimatedTokens,
+      };
+      return capped;
+    },
+  };
+}

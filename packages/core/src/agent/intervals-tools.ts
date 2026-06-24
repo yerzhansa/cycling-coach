@@ -1,8 +1,17 @@
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
-import type { IntervalsClient } from "intervals-icu-api";
+import type { ApiError, IntervalsClient } from "intervals-icu-api";
 import type { IntervalsActivityType } from "../sport.js";
 import { todayInTZ } from "./user-time.js";
+import { downsampleStreams } from "./stream-downsample.js";
+
+function toTypedError(error: ApiError): { error: string; status?: number; message?: string } {
+  return {
+    error: error.kind,
+    ...("status" in error ? { status: error.status } : {}),
+    ...("message" in error ? { message: error.message } : {}),
+  };
+}
 
 // intervals-icu-api's TypeScript types declare snake_case fields, but the runtime
 // runs `camelCaseKeys` over every parsed response. So the types lie: at runtime we
@@ -35,7 +44,7 @@ export function createPureCoreIntervalsTools(
       inputSchema: zodSchema(z.object({})),
       execute: async () => {
         const result = await intervals.athlete.get();
-        if (!result.ok) return { error: result.error.kind };
+        if (!result.ok) return toTypedError(result.error);
         return result.value;
       },
     }),
@@ -54,7 +63,7 @@ export function createPureCoreIntervalsTools(
           oldest: input.oldest,
           newest: input.newest ?? undefined,
         });
-        if (!result.ok) return { error: result.error.kind };
+        if (!result.ok) return toTypedError(result.error);
         return result.value;
       },
     }),
@@ -74,7 +83,7 @@ export function createPureCoreIntervalsTools(
       ),
       execute: async (input: { activityId: number }) => {
         const result = await intervals.activities.get(String(input.activityId));
-        if (!result.ok) return { error: result.error.kind };
+        if (!result.ok) return toTypedError(result.error);
         return result.value;
       },
     }),
@@ -82,9 +91,11 @@ export function createPureCoreIntervalsTools(
     intervals_fetch_streams: tool({
       description:
         "Fetch raw time-series streams for an activity (watts, heartrate, cadence, " +
-        "time, altitude, distance, lat, lng). Returns an object with each requested " +
-        "type as a sample array. EXPENSIVE: a 3-hour ride is ~10,800 samples per " +
-        "type. ONLY call for Tier C deep reviews (races + explicit 'deep' override). " +
+        "time, altitude, distance, lat, lng). Returns a downsampled object: each " +
+        "requested type is binned to 10-second windows (one mean value per bin) with " +
+        "a per-channel min/max/mean stats header carrying the true peaks and averages " +
+        "over the full series. EXPENSIVE: a 3-hour ride is ~10,800 samples per " +
+        "type even before binning. ONLY call for Tier C deep reviews (races + explicit 'deep' override). " +
         "For Tier A/B reviews, use `intervals_fetch_activities` and " +
         "`intervals_fetch_activity` instead. Default types are watts, heartrate, " +
         "cadence, time, altitude.",
@@ -107,8 +118,8 @@ export function createPureCoreIntervalsTools(
           ? input.types
           : ["watts", "heartrate", "cadence", "time", "altitude"];
         const result = await intervals.activities.getStreams(String(input.activityId), types);
-        if (!result.ok) return { error: result.error.kind };
-        return result.value;
+        if (!result.ok) return toTypedError(result.error);
+        return downsampleStreams(result.value as Record<string, unknown>);
       },
     }),
 
@@ -125,7 +136,7 @@ export function createPureCoreIntervalsTools(
       ),
       execute: async (input: { eventId: number }) => {
         const fetched = await intervals.events.get(input.eventId);
-        if (!fetched.ok) return { error: fetched.error.kind };
+        if (!fetched.ok) return toTypedError(fetched.error);
         const event = fetched.value as unknown as IntervalsEventRuntime;
         const today = todayInTZ(tz);
         const eventDate = event.startDateLocal.slice(0, 10);
@@ -136,7 +147,7 @@ export function createPureCoreIntervalsTools(
           };
         }
         const result = await intervals.events.delete(input.eventId);
-        if (!result.ok) return { error: result.error.kind };
+        if (!result.ok) return toTypedError(result.error);
         return { deleted: true };
       },
     }),
@@ -172,7 +183,7 @@ export function createCoreToolsWithSportConfig(
           oldest: input.oldest,
           newest: input.newest ?? undefined,
         });
-        if (!result.ok) return { error: result.error.kind };
+        if (!result.ok) return toTypedError(result.error);
         return result.value;
       },
     }),
@@ -194,7 +205,7 @@ export function createCoreToolsWithSportConfig(
           newest: input.newest ?? undefined,
           category: ["WORKOUT"],
         });
-        if (!result.ok) return { error: result.error.kind };
+        if (!result.ok) return toTypedError(result.error);
         return (result.value as unknown as IntervalsEventRuntime[]).map((e) => ({
           id: e.id,
           startDateLocal: e.startDateLocal,
