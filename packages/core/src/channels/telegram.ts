@@ -162,7 +162,7 @@ export function createTelegramBot(
     pending.add(task);
     void task.finally(() => pending.delete(task));
   };
-  const drainPending = (): Promise<void> => Promise.all(Array.from(pending)).then(() => undefined);
+  const drainPending = (): Promise<void> => Promise.all(pending).then(() => undefined);
 
   void bot.api.setMyCommands(buildCommandMenu(reference)).catch((err) => {
     log.error("set_commands_failed", err, {});
@@ -175,6 +175,38 @@ export function createTelegramBot(
   // pre-sync, or a profile with no run-family row.
   const turnDeps = (): { resolvedCs: ResolvedCs | null } | undefined =>
     reference !== undefined ? { resolvedCs: resolveRunningCs(reference.loadLatest()) } : undefined;
+
+  // Shared turn skeleton: every chat-bearing handler captures its deps/message
+  // synchronously, then hands the LLM turn here to run on the fire-and-forget
+  // task. The only per-handler differences are the user-facing strings, the log
+  // command name, and (for the text chat handler) the rate-limited reply wording,
+  // all passed in rather than re-templated so the handlers stay byte-identical.
+  function runTurn(opts: {
+    ctx: { reply: (text: string, options?: Record<string, unknown>) => Promise<unknown> };
+    command: string;
+    chatId: string;
+    message: string;
+    deps: ReturnType<typeof turnDeps>;
+    genericReply: string;
+    rateLimitReply?: (err: unknown) => string;
+  }): void {
+    dispatch(async () => {
+      try {
+        const response = await agent.chat(opts.chatId, opts.message, opts.deps);
+        await sendLongMessage(opts.ctx, response);
+      } catch (err) {
+        log.error("command_failed", err, { command: opts.command, chatId: opts.chatId });
+        if (isRateLimitError(err)) {
+          const reply = opts.rateLimitReply
+            ? opts.rateLimitReply(err)
+            : `Rate limited — please try again in ${formatRateLimitWait(err)}.`;
+          await opts.ctx.reply(reply);
+        } else {
+          await opts.ctx.reply(opts.genericReply);
+        }
+      }
+    });
+  }
 
   // ── Commands ────────────────────────────────────────────────────────────
 
@@ -199,18 +231,13 @@ export function createTelegramBot(
     await ctx.reply("Analyzing your data and building a plan...");
     const chatId = `telegram:${ctx.chat.id}`;
     const deps = turnDeps();
-    dispatch(async () => {
-      try {
-        const response = await agent.chat(chatId, "/plan", deps);
-        await sendLongMessage(ctx, response);
-      } catch (err) {
-        log.error("command_failed", err, { command: "plan", chatId });
-        if (isRateLimitError(err)) {
-          await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
-        } else {
-          await ctx.reply("Sorry, something went wrong generating your plan. Please try again.");
-        }
-      }
+    runTurn({
+      ctx,
+      command: "plan",
+      chatId,
+      message: "/plan",
+      deps,
+      genericReply: "Sorry, something went wrong generating your plan. Please try again.",
     });
   });
 
@@ -218,18 +245,13 @@ export function createTelegramBot(
     await ctx.reply("Checking your form and plan...");
     const chatId = `telegram:${ctx.chat.id}`;
     const deps = turnDeps();
-    dispatch(async () => {
-      try {
-        const response = await agent.chat(chatId, "/workout", deps);
-        await sendLongMessage(ctx, response);
-      } catch (err) {
-        log.error("command_failed", err, { command: "workout", chatId });
-        if (isRateLimitError(err)) {
-          await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
-        } else {
-          await ctx.reply("Sorry, something went wrong. Please try again.");
-        }
-      }
+    runTurn({
+      ctx,
+      command: "workout",
+      chatId,
+      message: "/workout",
+      deps,
+      genericReply: "Sorry, something went wrong. Please try again.",
     });
   });
 
@@ -237,18 +259,13 @@ export function createTelegramBot(
     await ctx.reply("Fetching your fitness data...");
     const chatId = `telegram:${ctx.chat.id}`;
     const deps = turnDeps();
-    dispatch(async () => {
-      try {
-        const response = await agent.chat(chatId, "/status", deps);
-        await sendLongMessage(ctx, response);
-      } catch (err) {
-        log.error("command_failed", err, { command: "status", chatId });
-        if (isRateLimitError(err)) {
-          await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
-        } else {
-          await ctx.reply("Sorry, something went wrong. Please try again.");
-        }
-      }
+    runTurn({
+      ctx,
+      command: "status",
+      chatId,
+      message: "/status",
+      deps,
+      genericReply: "Sorry, something went wrong. Please try again.",
     });
   });
 
@@ -304,18 +321,13 @@ export function createTelegramBot(
     const chatId = `telegram:${ctx.chat.id}`;
     const deps = turnDeps();
     const message = args ? `/review ${args}` : "/review";
-    dispatch(async () => {
-      try {
-        const response = await agent.chat(chatId, message, deps);
-        await sendLongMessage(ctx, response);
-      } catch (err) {
-        log.error("command_failed", err, { command: "review", chatId });
-        if (isRateLimitError(err)) {
-          await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
-        } else {
-          await ctx.reply("Sorry, something went wrong reviewing your session. Please try again.");
-        }
-      }
+    runTurn({
+      ctx,
+      command: "review",
+      chatId,
+      message,
+      deps,
+      genericReply: "Sorry, something went wrong reviewing your session. Please try again.",
     });
   });
 
@@ -382,21 +394,15 @@ export function createTelegramBot(
 
     const text = ctx.message.text;
     const deps = turnDeps();
-    dispatch(async () => {
-      try {
-        const response = await agent.chat(chatId, text, deps);
-        await sendLongMessage(ctx, response);
-      } catch (err) {
-        log.error("command_failed", err, { command: "chat", chatId });
-        if (isRateLimitError(err)) {
-          const wait = formatRateLimitWait(err);
-          await ctx.reply(
-            `Your message was not processed (rate limited). Please wait ${wait} and resend:\n\n"${text.slice(0, 200)}"`,
-          );
-        } else {
-          await ctx.reply("Sorry, something went wrong. Please try again.");
-        }
-      }
+    runTurn({
+      ctx,
+      command: "chat",
+      chatId,
+      message: text,
+      deps,
+      genericReply: "Sorry, something went wrong. Please try again.",
+      rateLimitReply: (err) =>
+        `Your message was not processed (rate limited). Please wait ${formatRateLimitWait(err)} and resend:\n\n"${text.slice(0, 200)}"`,
     });
   });
 
