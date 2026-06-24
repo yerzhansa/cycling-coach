@@ -322,7 +322,7 @@ export async function runBinary(
     }
 
     const { createTelegramBot, notifyUpdate } = await import("./channels/telegram.js");
-    const bot = createTelegramBot(
+    const { bot } = createTelegramBot(
       config.telegram.botToken,
       agent,
       binary,

@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 interface FakeBot {
-  api: { sendMessage: ReturnType<typeof vi.fn> };
+  api: { sendMessage: ReturnType<typeof vi.fn>; setMyCommands: ReturnType<typeof vi.fn> };
   use: ReturnType<typeof vi.fn>;
   command: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
@@ -44,14 +44,19 @@ interface BuildBotResult {
   bot: FakeBot;
   agent: StubAgent;
   reference: StubReference | undefined;
+  drainPending: () => Promise<void>;
 }
 
 async function buildBot(opts?: {
   reference?: StubReference;
   stop?: () => Promise<void>;
+  setMyCommands?: () => Promise<unknown>;
 }): Promise<BuildBotResult> {
   const bot: FakeBot = {
-    api: { sendMessage: vi.fn(async () => undefined) },
+    api: {
+      sendMessage: vi.fn(async () => undefined),
+      setMyCommands: vi.fn(opts?.setMyCommands ?? (async () => true)),
+    },
     use: vi.fn(),
     command: vi.fn(),
     on: vi.fn(),
@@ -71,7 +76,7 @@ async function buildBot(opts?: {
   };
 
   const { createTelegramBot } = await import("../src/channels/telegram.js");
-  createTelegramBot(
+  const { drainPending } = createTelegramBot(
     "FAKE_TOKEN",
     agent as unknown as Parameters<typeof createTelegramBot>[1],
     cyclingBinary,
@@ -81,7 +86,7 @@ async function buildBot(opts?: {
       : (opts.reference as unknown as Parameters<typeof createTelegramBot>[4]),
   );
 
-  return { bot, agent, reference: opts?.reference };
+  return { bot, agent, reference: opts?.reference, drainPending };
 }
 
 function getCommand(bot: FakeBot, name: string) {
@@ -180,10 +185,11 @@ describe("agent-backed commands", () => {
   it.each(["plan", "workout", "status", "review"])(
     "%s: agent.chat success → response routed through sendLongMessage",
     async (name) => {
-      const { bot, agent } = await buildBot();
+      const { bot, agent, drainPending } = await buildBot();
       agent.chat.mockResolvedValue("ok");
       const ctx = makeCtx();
       await getCommand(bot, name)(ctx);
+      await drainPending();
       // No reference wired in this buildBot() → no per-turn anchor passed.
       expect(agent.chat).toHaveBeenCalledWith("telegram:777", messageFor[name], undefined);
       const htmlReply = ctx.reply.mock.calls.find(
@@ -198,10 +204,11 @@ describe("agent-backed commands", () => {
   it.each(["plan", "workout", "status", "review"])(
     "%s: agent.chat throws non-rate-limit → apology, never silent",
     async (name) => {
-      const { bot, agent } = await buildBot();
+      const { bot, agent, drainPending } = await buildBot();
       agent.chat.mockRejectedValue(new Error("boom"));
       const ctx = makeCtx();
       await getCommand(bot, name)(ctx);
+      await drainPending();
       expect(someReply(ctx, "Sorry, something went wrong")).toBe(true);
       expect(ctx.reply.mock.calls.length).toBeGreaterThanOrEqual(1);
     },
@@ -210,19 +217,21 @@ describe("agent-backed commands", () => {
   it.each(["plan", "workout", "status", "review"])(
     "%s: agent.chat rate-limited → wait-time message",
     async (name) => {
-      const { bot, agent } = await buildBot();
+      const { bot, agent, drainPending } = await buildBot();
       agent.chat.mockRejectedValue(rateLimitError(30));
       const ctx = makeCtx();
       await getCommand(bot, name)(ctx);
+      await drainPending();
       expect(someReply(ctx, "Rate limited — please try again in ~30 seconds.")).toBe(true);
     },
   );
 
   it("review with args forwards the args in the chat message", async () => {
-    const { bot, agent } = await buildBot();
+    const { bot, agent, drainPending } = await buildBot();
     agent.chat.mockResolvedValue("ok");
     const ctx = makeCtx({ match: "2026-05-01" });
     await getCommand(bot, "review")(ctx);
+    await drainPending();
     expect(agent.chat).toHaveBeenCalledWith("telegram:777", "/review 2026-05-01", undefined);
     expect(someReply(ctx, "Reviewing your last session (2026-05-01)...")).toBe(true);
   });
@@ -236,10 +245,11 @@ describe("agent-backed commands", () => {
         },
       })),
     };
-    const { bot, agent } = await buildBot({ reference });
+    const { bot, agent, drainPending } = await buildBot({ reference });
     agent.chat.mockResolvedValue("ok");
     const ctx = makeCtx();
     await getCommand(bot, "plan")(ctx);
+    await drainPending();
     expect(agent.chat).toHaveBeenCalledWith("telegram:777", "/plan", {
       resolvedCs: { criticalSpeedMps: 4.0, source: "platform", confidence: "high" },
     });
@@ -248,63 +258,69 @@ describe("agent-backed commands", () => {
 
 describe("message:text — apology vs rate-limit fork", () => {
   it("agent.chat throw → apology (NOT silence)", async () => {
-    const { bot, agent } = await buildBot();
+    const { bot, agent, drainPending } = await buildBot();
     agent.hasSession.mockReturnValue(true);
     agent.chat.mockRejectedValue(new Error("boom"));
     const ctx = makeCtx({ message: { text: "how's my form?" } });
     await getMessageText(bot)(ctx);
+    await drainPending();
     expect(someReply(ctx, "Sorry, something went wrong. Please try again.")).toBe(true);
     expect(ctx.reply.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
   it("rate-limit with retry-after header → precise wait echoing the user text", async () => {
-    const { bot, agent } = await buildBot();
+    const { bot, agent, drainPending } = await buildBot();
     agent.hasSession.mockReturnValue(true);
     agent.chat.mockRejectedValue(rateLimitError(45));
     const ctx = makeCtx({ message: { text: "plan my week" } });
     await getMessageText(bot)(ctx);
+    await drainPending();
     expect(someReply(ctx, "Please wait ~45 seconds and resend:")).toBe(true);
     expect(someReply(ctx, "plan my week")).toBe(true);
   });
 
   it("rate-limit without header → default 'about a minute' wait", async () => {
-    const { bot, agent } = await buildBot();
+    const { bot, agent, drainPending } = await buildBot();
     agent.hasSession.mockReturnValue(true);
     agent.chat.mockRejectedValue(new Error("rate limit"));
     const ctx = makeCtx({ message: { text: "ride plan" } });
     await getMessageText(bot)(ctx);
+    await drainPending();
     expect(someReply(ctx, "about a minute")).toBe(true);
   });
 });
 
 describe("message:text — greet / re-greet logic", () => {
   it("first message from a newcomer (no session) → WELCOME then chat", async () => {
-    const { bot, agent } = await buildBot();
+    const { bot, agent, drainPending } = await buildBot();
     agent.hasSession.mockReturnValue(false);
     agent.chat.mockResolvedValue("reply text");
     const ctx = makeCtx();
     await getMessageText(bot)(ctx);
+    await drainPending();
     expect(String(ctx.reply.mock.calls[0][0]).startsWith("Welcome to Cycling Coach!")).toBe(true);
     expect(someReply(ctx, "reply text")).toBe(true);
   });
 
   it("returning user after restart (hasSession true) is NOT re-greeted", async () => {
-    const { bot, agent } = await buildBot();
+    const { bot, agent, drainPending } = await buildBot();
     agent.hasSession.mockReturnValue(true);
     agent.chat.mockResolvedValue("reply text");
     const ctx = makeCtx();
     await getMessageText(bot)(ctx);
+    await drainPending();
     expect(someReply(ctx, "Welcome to Cycling Coach!")).toBe(false);
   });
 
   it("second message in the same process is NOT re-greeted", async () => {
-    const { bot, agent } = await buildBot();
+    const { bot, agent, drainPending } = await buildBot();
     agent.hasSession.mockReturnValue(false);
     agent.chat.mockResolvedValue("reply text");
     const handler = getMessageText(bot);
     const ctx = makeCtx({ chat: { id: 775 } });
     await handler(ctx);
     await handler(ctx);
+    await drainPending();
     const welcomeCount = replyTexts(ctx).filter((t) =>
       t.includes("Welcome to Cycling Coach!"),
     ).length;
@@ -480,13 +496,69 @@ describe("version / whatsnew / sync", () => {
 
 describe("long replies chunk via sendLongMessage", () => {
   it("a >4096-char agent reply arrives as multiple HTML chunks", async () => {
-    const { bot, agent } = await buildBot();
+    const { bot, agent, drainPending } = await buildBot();
     agent.chat.mockResolvedValue("x".repeat(9000));
     const ctx = makeCtx();
     await getCommand(bot, "status")(ctx);
+    await drainPending();
     const htmlChunks = ctx.reply.mock.calls.filter(
       (c: unknown[]) => (c[1] as { parse_mode?: string } | undefined)?.parse_mode === "HTML",
     );
     expect(htmlChunks.length).toBeGreaterThan(1);
+  });
+});
+
+function menuCommands(bot: FakeBot): { command: string; description: string }[] {
+  const call = bot.api.setMyCommands.mock.calls[0];
+  if (!call) throw new Error("setMyCommands not called");
+  return call[0] as { command: string; description: string }[];
+}
+
+describe("command menu (setMyCommands)", () => {
+  it("is called once at construction, with descriptions matching the WELCOME one-liners", async () => {
+    const reference: StubReference = { runSync: vi.fn(), loadLatest: vi.fn() };
+    const { bot } = await buildBot({ reference });
+    expect(bot.api.setMyCommands).toHaveBeenCalledTimes(1);
+    expect(menuCommands(bot)).toEqual(
+      expect.arrayContaining([
+        { command: "plan", description: "Generate a training plan" },
+        { command: "workout", description: "Get today's workout" },
+        { command: "status", description: "Check current fitness, fatigue, and form" },
+        { command: "review", description: "Review your last session" },
+        { command: "version", description: "Show current version" },
+        { command: "whatsnew", description: "See what changed in the latest version" },
+        { command: "update", description: "Check for and install updates" },
+      ]),
+    );
+  });
+
+  it("includes /sync when reference is provided; never /start or /snapshot", async () => {
+    const reference: StubReference = { runSync: vi.fn(), loadLatest: vi.fn() };
+    const { bot } = await buildBot({ reference });
+    const names = menuCommands(bot).map((c) => c.command);
+    expect(names).toContain("sync");
+    expect(names).not.toContain("start");
+    expect(names).not.toContain("snapshot");
+  });
+
+  it("omits /sync when reference is undefined", async () => {
+    const { bot } = await buildBot();
+    const names = menuCommands(bot).map((c) => c.command);
+    expect(names).not.toContain("sync");
+    expect(names).not.toContain("start");
+    expect(names).not.toContain("snapshot");
+    for (const c of ["plan", "workout", "status", "review", "version", "whatsnew", "update"]) {
+      expect(names).toContain(c);
+    }
+  });
+
+  it("a setMyCommands rejection at startup is swallowed (construction does not throw)", async () => {
+    await expect(
+      buildBot({
+        setMyCommands: async () => {
+          throw new Error("telegram down");
+        },
+      }),
+    ).resolves.toBeDefined();
   });
 });

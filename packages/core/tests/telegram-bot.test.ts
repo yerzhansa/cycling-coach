@@ -163,7 +163,7 @@ describe("createTelegramBot — startup diagnostic + no security broadcast", () 
     const use = vi.fn();
     const command = vi.fn();
     const on = vi.fn();
-    const bot = { api: { sendMessage }, use, command, on };
+    const bot = { api: { sendMessage, setMyCommands: vi.fn(async () => true) }, use, command, on };
 
     vi.doMock("grammy", () => ({
       Bot: function FakeBot() {
@@ -181,7 +181,7 @@ describe("createTelegramBot — startup diagnostic + no security broadcast", () 
       cyclingBinary,
       dataDir,
     );
-    expect(result).toBe(bot);
+    expect(result.bot).toBe(bot);
 
     // No bot.api.sendMessage anywhere in createTelegramBot — security info goes
     // to stderr only (the operator-constraint).
@@ -207,7 +207,12 @@ describe("createTelegramBot — startup diagnostic + no security broadcast", () 
     }));
 
     const sendMessage = vi.fn(async () => undefined);
-    const bot = { api: { sendMessage }, use: vi.fn(), command: vi.fn(), on: vi.fn() };
+    const bot = {
+      api: { sendMessage, setMyCommands: vi.fn(async () => true) },
+      use: vi.fn(),
+      command: vi.fn(),
+      on: vi.fn(),
+    };
     vi.doMock("grammy", () => ({
       Bot: function FakeBot() {
         return bot;

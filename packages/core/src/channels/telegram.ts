@@ -58,6 +58,29 @@ const SNAPSHOT_HELP =
   "intervals, routes, history, FTP, and validation cuts. For now, only\n" +
   "/snapshot raw is wired.";
 
+// Descriptions mirror the command one-liners in WELCOME_MESSAGE so the native
+// "/" menu and the welcome card never drift. /sync is conditional on the same
+// reference predicate the command registration uses; /start and /snapshot are
+// excluded by construction (Telegram surfaces /start via the start affordance,
+// and /snapshot is operator-only debug).
+function buildCommandMenu(reference?: ReferenceServices): { command: string; description: string }[] {
+  const menu = [
+    { command: "plan", description: "Generate a training plan" },
+    { command: "workout", description: "Get today's workout" },
+    { command: "status", description: "Check current fitness, fatigue, and form" },
+    { command: "review", description: "Review your last session" },
+  ];
+  if (reference !== undefined) {
+    menu.push({ command: "sync", description: "Force-refresh training data from intervals.icu" });
+  }
+  menu.push(
+    { command: "version", description: "Show current version" },
+    { command: "whatsnew", description: "See what changed in the latest version" },
+    { command: "update", description: "Check for and install updates" },
+  );
+  return menu;
+}
+
 // Module-private factory: every Bot in this module is constructed here, with
 // the auth middleware registered FIRST. Future maintainers cannot add a handler
 // ahead of auth without modifying this function — and reviewers scrutinize
@@ -104,17 +127,46 @@ function logSecurityStartup(dataDir: string, binaryName: string): void {
   }
 }
 
+export interface TelegramBotHandle {
+  bot: Bot;
+  drainPending: () => Promise<void>;
+}
+
 export function createTelegramBot(
   token: string,
   agent: CoachAgent,
   binary: BinaryConfig,
   dataDir: string,
   reference?: ReferenceServices,
-): Bot {
+): TelegramBotHandle {
   logSecurityStartup(dataDir, binary.binaryName);
   const bot = createSecuredBot({ token, binary, dataDir });
   const log = createSubsystemLogger("telegram", dataDir);
   const greeted = new Set<number>();
+
+  // Fire-and-forget turn dispatch. Telegram handlers spawn the LLM turn on a
+  // tracked task and return immediately so grammY's sequential update loop is
+  // never blocked by a long turn. The task owns its user-facing error reply; the
+  // outer catch here is the last-resort net so a throw inside the reply path can
+  // never escape as an unhandled rejection. Per-chat ordering is preserved by the
+  // existing per-chat session lock inside agent.chat, not by any lock here.
+  const pending = new Set<Promise<void>>();
+  const dispatch = (work: () => Promise<void>): void => {
+    const task = (async () => {
+      try {
+        await work();
+      } catch (err) {
+        log.error("dispatch_failed", err, {});
+      }
+    })();
+    pending.add(task);
+    void task.finally(() => pending.delete(task));
+  };
+  const drainPending = (): Promise<void> => Promise.all(Array.from(pending)).then(() => undefined);
+
+  void bot.api.setMyCommands(buildCommandMenu(reference)).catch((err) => {
+    log.error("set_commands_failed", err, {});
+  });
 
   // Resolve the running CS anchor once per turn from the latest synced profile so
   // calculate_zones reads the athlete's real critical speed instead of an LLM
@@ -146,49 +198,58 @@ export function createTelegramBot(
   bot.command("plan", async (ctx) => {
     await ctx.reply("Analyzing your data and building a plan...");
     const chatId = `telegram:${ctx.chat.id}`;
-    try {
-      const response = await agent.chat(chatId, "/plan", turnDeps());
-      await sendLongMessage(ctx, response);
-    } catch (err) {
-      log.error("command_failed", err, { command: "plan", chatId });
-      if (isRateLimitError(err)) {
-        await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
-      } else {
-        await ctx.reply("Sorry, something went wrong generating your plan. Please try again.");
+    const deps = turnDeps();
+    dispatch(async () => {
+      try {
+        const response = await agent.chat(chatId, "/plan", deps);
+        await sendLongMessage(ctx, response);
+      } catch (err) {
+        log.error("command_failed", err, { command: "plan", chatId });
+        if (isRateLimitError(err)) {
+          await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
+        } else {
+          await ctx.reply("Sorry, something went wrong generating your plan. Please try again.");
+        }
       }
-    }
+    });
   });
 
   bot.command("workout", async (ctx) => {
     await ctx.reply("Checking your form and plan...");
     const chatId = `telegram:${ctx.chat.id}`;
-    try {
-      const response = await agent.chat(chatId, "/workout", turnDeps());
-      await sendLongMessage(ctx, response);
-    } catch (err) {
-      log.error("command_failed", err, { command: "workout", chatId });
-      if (isRateLimitError(err)) {
-        await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
-      } else {
-        await ctx.reply("Sorry, something went wrong. Please try again.");
+    const deps = turnDeps();
+    dispatch(async () => {
+      try {
+        const response = await agent.chat(chatId, "/workout", deps);
+        await sendLongMessage(ctx, response);
+      } catch (err) {
+        log.error("command_failed", err, { command: "workout", chatId });
+        if (isRateLimitError(err)) {
+          await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
+        } else {
+          await ctx.reply("Sorry, something went wrong. Please try again.");
+        }
       }
-    }
+    });
   });
 
   bot.command("status", async (ctx) => {
     await ctx.reply("Fetching your fitness data...");
     const chatId = `telegram:${ctx.chat.id}`;
-    try {
-      const response = await agent.chat(chatId, "/status", turnDeps());
-      await sendLongMessage(ctx, response);
-    } catch (err) {
-      log.error("command_failed", err, { command: "status", chatId });
-      if (isRateLimitError(err)) {
-        await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
-      } else {
-        await ctx.reply("Sorry, something went wrong. Please try again.");
+    const deps = turnDeps();
+    dispatch(async () => {
+      try {
+        const response = await agent.chat(chatId, "/status", deps);
+        await sendLongMessage(ctx, response);
+      } catch (err) {
+        log.error("command_failed", err, { command: "status", chatId });
+        if (isRateLimitError(err)) {
+          await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
+        } else {
+          await ctx.reply("Sorry, something went wrong. Please try again.");
+        }
       }
-    }
+    });
   });
 
   if (reference !== undefined) {
@@ -241,18 +302,21 @@ export function createTelegramBot(
       args ? `Reviewing your last session (${args})...` : "Reviewing your last session...",
     );
     const chatId = `telegram:${ctx.chat.id}`;
-    try {
-      const message = args ? `/review ${args}` : "/review";
-      const response = await agent.chat(chatId, message, turnDeps());
-      await sendLongMessage(ctx, response);
-    } catch (err) {
-      log.error("command_failed", err, { command: "review", chatId });
-      if (isRateLimitError(err)) {
-        await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
-      } else {
-        await ctx.reply("Sorry, something went wrong reviewing your session. Please try again.");
+    const deps = turnDeps();
+    const message = args ? `/review ${args}` : "/review";
+    dispatch(async () => {
+      try {
+        const response = await agent.chat(chatId, message, deps);
+        await sendLongMessage(ctx, response);
+      } catch (err) {
+        log.error("command_failed", err, { command: "review", chatId });
+        if (isRateLimitError(err)) {
+          await ctx.reply(`Rate limited — please try again in ${formatRateLimitWait(err)}.`);
+        } else {
+          await ctx.reply("Sorry, something went wrong reviewing your session. Please try again.");
+        }
       }
-    }
+    });
   });
 
   bot.command("version", async (ctx) => {
@@ -316,23 +380,27 @@ export function createTelegramBot(
       }
     }
 
-    try {
-      const response = await agent.chat(chatId, ctx.message.text, turnDeps());
-      await sendLongMessage(ctx, response);
-    } catch (err) {
-      log.error("command_failed", err, { command: "chat", chatId });
-      if (isRateLimitError(err)) {
-        const wait = formatRateLimitWait(err);
-        await ctx.reply(
-          `Your message was not processed (rate limited). Please wait ${wait} and resend:\n\n"${ctx.message.text.slice(0, 200)}"`,
-        );
-      } else {
-        await ctx.reply("Sorry, something went wrong. Please try again.");
+    const text = ctx.message.text;
+    const deps = turnDeps();
+    dispatch(async () => {
+      try {
+        const response = await agent.chat(chatId, text, deps);
+        await sendLongMessage(ctx, response);
+      } catch (err) {
+        log.error("command_failed", err, { command: "chat", chatId });
+        if (isRateLimitError(err)) {
+          const wait = formatRateLimitWait(err);
+          await ctx.reply(
+            `Your message was not processed (rate limited). Please wait ${wait} and resend:\n\n"${text.slice(0, 200)}"`,
+          );
+        } else {
+          await ctx.reply("Sorry, something went wrong. Please try again.");
+        }
       }
-    }
+    });
   });
 
-  return bot;
+  return { bot, drainPending };
 }
 
 // ============================================================================

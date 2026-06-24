@@ -25,7 +25,12 @@ const RESET_CAVEAT =
   "Note: I couldn't fully reset our previous session, so some earlier context may still apply.";
 
 async function buildStartHandler(resetSession: ReturnType<typeof vi.fn>) {
-  const bot = { api: { sendMessage: vi.fn() }, use: vi.fn(), command: vi.fn(), on: vi.fn() };
+  const bot = {
+    api: { sendMessage: vi.fn(), setMyCommands: vi.fn(async () => true) },
+    use: vi.fn(),
+    command: vi.fn(),
+    on: vi.fn(),
+  };
   vi.doMock("grammy", () => ({
     Bot: function FakeBot() {
       return bot;

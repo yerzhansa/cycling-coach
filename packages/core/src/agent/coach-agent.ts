@@ -744,27 +744,32 @@ export class CoachAgent {
   }
 
   async resetSession(chatId: string): Promise<{ memoryFlushed: boolean }> {
-    // Flush before reset to avoid losing un-persisted context
-    let memoryFlushed = true;
-    let history: ModelMessage[] = [];
-    try {
-      ({ messages: history } = this.chatStore.load(chatId));
-    } catch (err) {
-      memoryFlushed = false;
-      this.log.warn("Pre-reset session load failed; archiving session anyway", err);
-    }
-    if (history.length > 0) {
+    // Run under the same per-chat lock chat() uses so a reset cannot interleave
+    // with an in-flight turn for the same chat (which would archive history the
+    // turn is mid-write on).
+    return withSessionLock(chatId, async () => {
+      // Flush before reset to avoid losing un-persisted context
+      let memoryFlushed = true;
+      let history: ModelMessage[] = [];
       try {
-        await this.flushMemory(history, "explicit-reset");
+        ({ messages: history } = this.chatStore.load(chatId));
       } catch (err) {
         memoryFlushed = false;
-        this.log.warn("Pre-reset memory flush failed; archiving session anyway", err);
+        this.log.warn("Pre-reset session load failed; archiving session anyway", err);
       }
-    }
-    this.archiveDeferred.delete(chatId);
-    this.chatStore.archiveAndReset(chatId);
-    this.lastFlushMessageCount.delete(chatId);
-    return { memoryFlushed };
+      if (history.length > 0) {
+        try {
+          await this.flushMemory(history, "explicit-reset");
+        } catch (err) {
+          memoryFlushed = false;
+          this.log.warn("Pre-reset memory flush failed; archiving session anyway", err);
+        }
+      }
+      this.archiveDeferred.delete(chatId);
+      this.chatStore.archiveAndReset(chatId);
+      this.lastFlushMessageCount.delete(chatId);
+      return { memoryFlushed };
+    });
   }
 
   getMemory(): Memory {
