@@ -49,7 +49,7 @@ export const SYNC_COOLDOWN_MS = 30_000;
 /** Mutex acquire time over this threshold logs a WARN — operator signal. */
 export const MUTEX_HOT_WARN_MS = 10_000;
 /** Scheduled refresh cadence (in-process timer). */
-export const SCHEDULED_SYNC_INTERVAL_MS = 30 * 60 * 1000;
+export const SCHEDULED_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
 /**
  * Per-request HTTP timeout chained with the orchestrator-level signal so a
  * single hung endpoint cannot consume the full SYNC_OPERATION_TIMEOUT_MS
