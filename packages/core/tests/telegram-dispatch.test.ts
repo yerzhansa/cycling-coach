@@ -383,8 +383,9 @@ describe("/update — ordering invariant", () => {
     expect(selfUpdate).not.toHaveBeenCalled();
 
     releaseStop();
-    await Promise.resolve();
-    await Promise.resolve();
+    // /update chains stop → bounded drain → selfUpdate; drain the microtask
+    // queue past the intermediate Promise.race so selfUpdate is reached.
+    for (let i = 0; i < 10; i++) await Promise.resolve();
 
     expect(selfUpdate).toHaveBeenCalledWith("cycling-coach", "2026.5.10");
     expect(bot.stop.mock.invocationCallOrder[0]).toBeLessThan(

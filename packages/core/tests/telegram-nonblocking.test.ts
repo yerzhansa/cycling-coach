@@ -201,9 +201,13 @@ describe("non-blocking dispatch", () => {
     }
   });
 
-  it("same-chat dispatches both reach agent.chat; ordering is the agent's lock, not a channel lock", async () => {
+  it("same-chat dispatches reach agent.chat in send order; ordering is the agent's lock, not a channel lock", async () => {
     const { bot, agent, drainPending } = await buildBot();
-    agent.chat.mockResolvedValue("ok");
+    const chatOrder: string[] = [];
+    agent.chat.mockImplementation(async (_chatId: string, message: string) => {
+      chatOrder.push(message);
+      return "ok";
+    });
     const ctxA = makeCtx({ chat: { id: 333 }, message: { text: "first" } });
     const ctxB = makeCtx({ chat: { id: 333 }, message: { text: "second" } });
     agent.hasSession.mockReturnValue(true);
@@ -214,6 +218,11 @@ describe("non-blocking dispatch", () => {
 
     expect(agent.chat).toHaveBeenCalledWith("telegram:333", "first", undefined);
     expect(agent.chat).toHaveBeenCalledWith("telegram:333", "second", undefined);
+    // The synchronous handler prologue captures each message before dispatching,
+    // so the two turns must reach agent.chat in send order. A future change that
+    // awaited anything before capturing the text (reordering the prologue) would
+    // let "second" jump ahead and fail this.
+    expect(chatOrder).toEqual(["first", "second"]);
   });
 });
 

@@ -209,6 +209,52 @@ async function runAllowlistCommand(
   process.exit(0);
 }
 
+// Upper bound on how long a graceful shutdown waits for in-flight turns to
+// drain before forcing exit. A hung turn (wedged LLM call, stuck network) must
+// never wedge process exit, so the drain races a timeout.
+const SHUTDOWN_DRAIN_TIMEOUT_MS = 10_000;
+
+interface BotShutdownDeps {
+  stop: () => Promise<void>;
+  drainPending: () => Promise<void>;
+  dataDir: string;
+  markCleanShutdown: (opts: { dataDir: string }) => void;
+  exit: (code: number) => void;
+  drainTimeoutMs?: number;
+  log?: (line: string) => void;
+}
+
+// Builds the SIGTERM/SIGINT handler that brings the bot down cleanly: halt new
+// updates, let in-flight turns finish (bounded), clear the run breadcrumb so the
+// next boot is not mislabeled unclean, then exit. The returned closure owns a
+// re-entry latch so a second signal (operator mashing Ctrl+C) cannot run the
+// teardown twice. The body is wrapped so any throw still reaches the exit call —
+// a stuck shutdown must never leave the process hanging.
+export function makeBotShutdown(deps: BotShutdownDeps): () => Promise<void> {
+  const log = deps.log ?? ((line: string) => console.log(line));
+  const drainTimeoutMs = deps.drainTimeoutMs ?? SHUTDOWN_DRAIN_TIMEOUT_MS;
+  let shuttingDown = false;
+  return async function shutdownBot(): Promise<void> {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log("\nShutting down — finishing in-flight messages...");
+    try {
+      await deps.stop();
+      await Promise.race([
+        deps.drainPending(),
+        new Promise<void>((resolve) => setTimeout(resolve, drainTimeoutMs).unref?.()),
+      ]);
+      deps.markCleanShutdown({ dataDir: deps.dataDir });
+    } catch (err) {
+      console.error(
+        `Shutdown encountered an error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      deps.exit(0);
+    }
+  };
+}
+
 export async function runStartupHook(
   memory: Memory,
   hook?: RunBinaryHooks["onStartup"],
@@ -322,7 +368,7 @@ export async function runBinary(
     }
 
     const { createTelegramBot, notifyUpdate } = await import("./channels/telegram.js");
-    const { bot } = createTelegramBot(
+    const { bot, drainPending } = createTelegramBot(
       config.telegram.botToken,
       agent,
       binary,
@@ -336,6 +382,25 @@ export async function runBinary(
       const { reportFatal } = await import("./process-guard.js");
       reportFatal(err, { dataDir: config.dataDir });
     });
+
+    // Register graceful-shutdown signal handlers only on the bot-run path —
+    // after bot.start — so they never fire during the operator-capture readline
+    // above, which owns its own SIGINT on a different emitter.
+    const { markCleanShutdown } = await import("./process-guard.js");
+    const shutdownBot = makeBotShutdown({
+      stop: () => bot.stop(),
+      drainPending,
+      dataDir: config.dataDir,
+      markCleanShutdown,
+      exit: (code) => process.exit(code),
+    });
+    process.once("SIGTERM", () => {
+      void shutdownBot();
+    });
+    process.once("SIGINT", () => {
+      void shutdownBot();
+    });
+
     if (!process.env.CYCLING_COACH_NO_UPDATE_CHECK) {
       notifyUpdate(bot, config.dataDir, binary).catch(() => {});
     }

@@ -29,6 +29,18 @@ function formatRateLimitWait(err: unknown): string {
   return `~${Math.ceil(secs / 60)} minute${Math.ceil(secs / 60) > 1 ? "s" : ""}`;
 }
 
+// Upper bound on how long /update waits for in-flight turns to finish before
+// self-updating. A hung turn must never wedge the update, so the drain races a
+// timeout.
+const UPDATE_DRAIN_TIMEOUT_MS = 10_000;
+
+function drainBounded(drain: () => Promise<void>, timeoutMs: number): Promise<void> {
+  return Promise.race([
+    drain(),
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs).unref?.()),
+  ]);
+}
+
 // ============================================================================
 // TELEGRAM BOT
 // ============================================================================
@@ -367,8 +379,13 @@ export function createTelegramBot(
       latest = info.latest;
       await ctx.reply(`Updating ${info.current} → ${info.latest}...\nThe bot will stop after installation. Run \`${binary.binaryName}\` to start it again.`);
       // Stop polling first so Telegram commits the /update offset — otherwise
-      // Telegram re-sends /update on next startup and we loop forever.
-      void bot.stop().then(() => selfUpdate(binary.binaryName, info.latest));
+      // Telegram re-sends /update on next startup and we loop forever — then let
+      // in-flight turns finish (bounded) so a self-update never drops a reply the
+      // athlete is already waiting on.
+      void bot
+        .stop()
+        .then(() => drainBounded(drainPending, UPDATE_DRAIN_TIMEOUT_MS))
+        .then(() => selfUpdate(binary.binaryName, info.latest));
     } catch (err) {
       log.error("command_failed", err, { command: "update", chatId: `telegram:${ctx.chat.id}` });
       await ctx.reply(
