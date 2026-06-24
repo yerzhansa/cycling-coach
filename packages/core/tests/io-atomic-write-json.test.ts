@@ -124,3 +124,36 @@ describe("atomicWriteJson — atomicity invariant", () => {
     expect(onDisk).toEqual(original);
   });
 });
+
+describe("atomicWriteJson — abort semantics", () => {
+  it("skips the rename when the signal is already aborted and leaves the target untouched", async () => {
+    const target = join(tempDir, "guarded.json");
+    await atomicWriteJson(target, { old: true });
+
+    const controller = new AbortController();
+    controller.abort();
+
+    // The aborted-skip is a clean no-op, not a rejection.
+    await expect(
+      atomicWriteJson(target, { fresh: 1 }, { signal: controller.signal }),
+    ).resolves.toBeUndefined();
+
+    // Rename was skipped — the live file still holds the prior payload.
+    const onDisk = JSON.parse(readFileSync(target, "utf-8"));
+    expect(onDisk).toEqual({ old: true });
+
+    // The aborted branch unlinked its temp sibling — none should linger.
+    const orphans = readdirSync(tempDir).filter((e) => e.includes(".tmp."));
+    expect(orphans).toEqual([]);
+  });
+
+  it("renames normally when the signal is present but not aborted", async () => {
+    const target = join(tempDir, "live.json");
+    const controller = new AbortController();
+
+    await atomicWriteJson(target, { fresh: 1 }, { signal: controller.signal });
+
+    const onDisk = JSON.parse(readFileSync(target, "utf-8"));
+    expect(onDisk).toEqual({ fresh: 1 });
+  });
+});

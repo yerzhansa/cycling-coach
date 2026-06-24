@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -149,6 +149,103 @@ describe("createRunSync", () => {
     expect(slowFetch).toHaveBeenCalledOnce();
   });
 
+  it("interactive /sync fails fast on a held mutex: returns mutex_held promptly without fetching or waiting the acquire timeout", async () => {
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const now = new Date("2026-05-09T14:00:00Z");
+
+    let resolveSlow!: () => void;
+    const slowFetch = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveSlow = resolve;
+      });
+      return emptyFetched;
+    });
+    const fastFetch = vi.fn().mockResolvedValue(emptyFetched);
+
+    const runSyncSlow = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: slowFetch,
+      now: () => now,
+      timing: { acquireTimeoutMs: 5_000, hotWarnMs: 1_000 },
+    });
+    const runSyncInteractive = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: fastFetch,
+      now: () => now,
+      // A LONG acquire timeout: if the fast-path did not short-circuit, the
+      // interactive call would hang here, so a prompt resolution proves the
+      // `isHeld()` guard fired before the blocking acquire.
+      timing: { acquireTimeoutMs: 60_000, hotWarnMs: 1_000 },
+    });
+
+    const p1 = runSyncSlow({ caller: "scheduled" });
+    // Let the slow sync acquire and start holding the mutex.
+    await Promise.resolve();
+    expect(mutex.isHeld()).toBe(true);
+
+    const r2 = await runSyncInteractive({ caller: "/sync", chatId: "telegram:1" });
+    expect(r2).toEqual({ kind: "skipped", reason: "mutex_held" });
+    expect(fastFetch).not.toHaveBeenCalled();
+
+    resolveSlow();
+    const r1 = await p1;
+    expect(r1.kind).toBe("ran");
+  });
+
+  it("scheduled caller does NOT short-circuit on a held mutex: it reaches the blocking acquire and waits", async () => {
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const now = new Date("2026-05-09T14:00:00Z");
+
+    let resolveSlow!: () => void;
+    const slowFetch = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveSlow = resolve;
+      });
+      return emptyFetched;
+    });
+    const fastFetch = vi.fn().mockResolvedValue(emptyFetched);
+
+    const runSyncSlow = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: slowFetch,
+      now: () => now,
+      timing: { acquireTimeoutMs: 5_000, hotWarnMs: 1_000 },
+    });
+    const runSyncScheduled = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: fastFetch,
+      now: () => now,
+      timing: { acquireTimeoutMs: 30, hotWarnMs: 10 },
+    });
+
+    const p1 = runSyncSlow({ caller: "scheduled" });
+    await Promise.resolve();
+    expect(mutex.isHeld()).toBe(true);
+
+    // The scheduled caller queue-waits and times out (kind:skipped after the
+    // acquire timeout), proving the fast-path guard did not fire for it.
+    const r2 = await runSyncScheduled({ caller: "scheduled" });
+    expect(r2).toEqual({ kind: "skipped", reason: "mutex_held" });
+    expect(fastFetch).not.toHaveBeenCalled();
+
+    resolveSlow();
+    await p1;
+  });
+
   it("times out at outerTimeoutMs: aborts the controller, writes error_state.json with phase, releases mutex, returns kind:failed", async () => {
     const mutex = new AsyncMutex();
     const cooldown = new Cooldown();
@@ -232,6 +329,266 @@ describe("createRunSync", () => {
     expect(() => readFileSync(join(dir, "latest.json"), "utf-8")).toThrow();
     expect(() => readFileSync(join(dir, ".scheduler.json"), "utf-8")).toThrow();
     expect(mutex.isHeld()).toBe(false);
+  });
+
+  it("a fetched bundle carrying fetch_errors hard-fails the gate, writes error_state, and never writes latest.json", async () => {
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const now = new Date("2026-05-09T14:00:00Z");
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ...emptyFetched,
+      fetch_errors: [{ endpoint: "athlete", detail: "timeout" }],
+    });
+    const { atomicWriteJson: realAtomicWrite } = await import(
+      "../src/io/atomic-write-json.js"
+    );
+    // The gate-reject error_state write now routes through the injectable seam
+    // (deps.atomicWrite), so forward it to the real writer for the on-disk
+    // assertion below; cache/scheduler writes are still recorded as spy calls.
+    const writeSpy = vi.fn(
+      async (path: string, value: unknown, opts?: { signal?: AbortSignal }): Promise<void> => {
+        await realAtomicWrite(path, value, opts);
+      },
+    );
+
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: fetchSpy,
+      atomicWrite: writeSpy,
+      now: () => now,
+    });
+
+    const result = await runSync({ caller: "scheduled" });
+
+    expect(result.kind).toBe("failed");
+    if (result.kind === "failed") {
+      expect(result.reason).toBe("gate_rejected");
+      expect(result.failures.some((f) => f.reason.includes("athlete"))).toBe(true);
+    }
+
+    // The prior cache is preserved: no latest.json (or any cache file) write fired.
+    const wrotePaths = writeSpy.mock.calls.map((c) => c[0]);
+    expect(wrotePaths.some((p) => p.endsWith("latest.json"))).toBe(false);
+    expect(wrotePaths.some((p) => p.endsWith(".scheduler.json"))).toBe(false);
+
+    // error_state.json names the failed endpoint (real write, gate-rejection path).
+    const errorState = JSON.parse(readFileSync(join(dir, "error_state.json"), "utf-8"));
+    expect(errorState.step).toBe("gate_rejected");
+    expect(errorState.detail).toContain("athlete");
+
+    expect(mutex.isHeld()).toBe(false);
+  });
+
+  it("composition: fetch_errors AND an independent hard check (weight band) both fail the real gate → block_coaching, no cache/scheduler write", async () => {
+    // Invariant: when a single cycle trips TWO independent HARD checks — a
+    // partial fetch failure (fetch_errors channel, step0) AND an out-of-band
+    // wellness weight (step4) — the REAL default gate aggregates both and the
+    // cycle BLOCKS coaching. The mitigation is `block_coaching`, NOT the
+    // `warn_only` reserved for the soft path; a blocked cycle persists no
+    // cache or scheduler file. Distinct from the fetch_errors-ALONE test above:
+    // this pins the COMPOSITION of two sources plus the block-vs-warn record.
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const now = new Date("2026-05-09T14:00:00Z");
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ...emptyFetched,
+      // Source #1: a partial-fetch error channel naming the athlete endpoint
+      // → step0_data_fetch HARD failure.
+      fetch_errors: [{ endpoint: "athlete", detail: "timeout" }],
+      // Source #2 (independent): wellness weight=500 is outside the [30,200]
+      // band → step4_tolerance_band HARD failure, on its own merits.
+      latest: {
+        ...emptyFetched.latest,
+        wellness_data: { days: [{ id: "1998-04-11", weight: 500, restingHR: 50 }] },
+      },
+    });
+    const { atomicWriteJson: realAtomicWrite } = await import(
+      "../src/io/atomic-write-json.js"
+    );
+    // Forward to the real writer so the on-disk error_state read below works,
+    // while still recording every write path the cycle attempted.
+    const writeSpy = vi.fn(
+      async (path: string, value: unknown, opts?: { signal?: AbortSignal }): Promise<void> => {
+        await realAtomicWrite(path, value, opts);
+      },
+    );
+
+    // No `gate` override: the whole point is that the REAL default gate maps
+    // fetch_errors -> block_coaching alongside the independent band failure.
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: fetchSpy,
+      atomicWrite: writeSpy,
+      now: () => now,
+    });
+
+    const result = await runSync({ caller: "scheduled" });
+
+    expect(result.kind).toBe("failed");
+    if (result.kind === "failed") {
+      expect(result.reason).toBe("gate_rejected");
+      // BOTH sources must be present — asserting both guarantees the test is
+      // green because BOTH checks fired, not because only one did. Each source
+      // is pinned by its step identifier (not just an endpoint name) so the
+      // assertion cannot pass on an unrelated check that happens to echo it.
+      expect(
+        result.failures.some(
+          (f) => f.reason.includes("step0_data_fetch") && f.reason.includes("athlete"),
+        ),
+      ).toBe(true);
+      expect(
+        result.failures.some((f) => f.reason.includes("step4_tolerance_band")),
+      ).toBe(true);
+    }
+
+    // A blocked cycle persists no cache (latest.json) and no commit marker
+    // (.scheduler.json) — the prior cache stays untouched.
+    const wrotePaths = writeSpy.mock.calls.map((c) => c[0]);
+    expect(wrotePaths.some((p) => p.endsWith("latest.json"))).toBe(false);
+    expect(wrotePaths.some((p) => p.endsWith(".scheduler.json"))).toBe(false);
+
+    // error_state.json records the block-coaching mitigation and names BOTH
+    // independent failures (step0 endpoint + step4 band).
+    const errorState = JSON.parse(readFileSync(join(dir, "error_state.json"), "utf-8"));
+    expect(errorState.mitigation).toBe("block_coaching");
+    expect(errorState.step).toBe("gate_rejected");
+    expect(errorState.detail).toContain("step0_data_fetch");
+    expect(errorState.detail).toContain("athlete");
+    expect(errorState.detail).toContain("step4_tolerance_band");
+
+    expect(mutex.isHeld()).toBe(false);
+  });
+
+  it("no-op cycle: a re-fetch with byte-identical data leaves all 5 cache files byte-identical (frozen last_updated)", async () => {
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const first = new Date("2026-05-09T14:00:00Z");
+    const second = new Date("2026-05-09T14:30:00Z");
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ...emptyFetched,
+      latest: { ...emptyFetched.latest, athlete_profile: { id: "test-athlete" } },
+    });
+
+    const makeRunSync = (now: Date) =>
+      createRunSync({
+        dataDir: dir,
+        mutex,
+        cooldown,
+        cooldownWindowMs: 30_000,
+        fetchReferenceData: fetchSpy,
+        now: () => now,
+      });
+
+    const files = ["latest", "history", "intervals", "routes", "ftp_history"];
+
+    const r1 = await makeRunSync(first)({ caller: "scheduled" });
+    expect(r1.kind).toBe("ran");
+    const afterFirst = files.map((f) => readFileSync(join(dir, `${f}.json`), "utf-8"));
+
+    const r2 = await makeRunSync(second)({ caller: "scheduled" });
+    expect(r2.kind).toBe("ran");
+    const afterSecond = files.map((f) => readFileSync(join(dir, `${f}.json`), "utf-8"));
+
+    expect(afterSecond).toEqual(afterFirst);
+    if (r2.kind === "ran") expect(r2.refreshed).toEqual([]);
+
+    // The commit marker still advanced even though no cache file was rewritten.
+    const scheduler = JSON.parse(readFileSync(join(dir, ".scheduler.json"), "utf-8"));
+    expect(scheduler.last_sync_at).toBe(second.toISOString());
+    // latest.json kept the FIRST run's timestamp (skipped, not rewritten).
+    const latest = JSON.parse(readFileSync(join(dir, "latest.json"), "utf-8"));
+    expect(latest.metadata.last_updated).toBe(first.toISOString());
+  });
+
+  it("no-op cycle: a re-fetch with the same data but a different top-level key order still short-circuits", async () => {
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const first = new Date("2026-05-09T14:00:00Z");
+    const second = new Date("2026-05-09T14:30:00Z");
+
+    // The on-disk file is read back through a Zod re-parse, which rebuilds the
+    // payload in schema-declaration order; the live producer emits it in
+    // insertion order. A future producer (or a re-ordered nested object) can
+    // legitimately differ in key order while carrying identical data — the
+    // short-circuit must not be defeated by that.
+    const profile = { name: "test", id: "test-athlete", ftp: 250 };
+    const reordered = { ftp: 250, id: "test-athlete", name: "test" };
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...emptyFetched,
+        latest: { ...emptyFetched.latest, athlete_profile: profile },
+      })
+      .mockResolvedValueOnce({
+        ...emptyFetched,
+        latest: { ...emptyFetched.latest, athlete_profile: reordered },
+      });
+
+    const makeRunSync = (now: Date) =>
+      createRunSync({
+        dataDir: dir,
+        mutex,
+        cooldown,
+        cooldownWindowMs: 30_000,
+        fetchReferenceData: fetchSpy,
+        now: () => now,
+      });
+
+    await makeRunSync(first)({ caller: "scheduled" });
+    const latestBefore = readFileSync(join(dir, "latest.json"), "utf-8");
+
+    const r2 = await makeRunSync(second)({ caller: "scheduled" });
+    if (r2.kind === "ran") expect(r2.refreshed).toEqual([]);
+    expect(readFileSync(join(dir, "latest.json"), "utf-8")).toBe(latestBefore);
+  });
+
+  it("changed-file-only: a second fetch that changes intervals rewrites only intervals.json; siblings keep their bytes", async () => {
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const first = new Date("2026-05-09T14:00:00Z");
+    const second = new Date("2026-05-09T14:30:00Z");
+
+    const base = {
+      ...emptyFetched,
+      latest: { ...emptyFetched.latest, athlete_profile: { id: "test-athlete" } },
+    };
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(base)
+      .mockResolvedValueOnce({
+        ...base,
+        intervals: { by_activity: { a1: [{ id: "i1" }] } },
+      });
+
+    const makeRunSync = (now: Date) =>
+      createRunSync({
+        dataDir: dir,
+        mutex,
+        cooldown,
+        cooldownWindowMs: 30_000,
+        fetchReferenceData: fetchSpy,
+        now: () => now,
+      });
+
+    await makeRunSync(first)({ caller: "scheduled" });
+    const latestBefore = readFileSync(join(dir, "latest.json"), "utf-8");
+
+    const r2 = await makeRunSync(second)({ caller: "scheduled" });
+    if (r2.kind === "ran") expect(r2.refreshed).toEqual(["intervals"]);
+
+    const intervals = JSON.parse(readFileSync(join(dir, "intervals.json"), "utf-8"));
+    expect(intervals.metadata.last_updated).toBe(second.toISOString());
+    expect(intervals.by_activity).toEqual({ a1: [{ id: "i1" }] });
+    // latest.json untouched (no data change) — bytes + timestamp frozen at run 1.
+    expect(readFileSync(join(dir, "latest.json"), "utf-8")).toBe(latestBefore);
   });
 
   it("when outer timeout fires during writing_scheduler phase, error_state.phase reflects it and caches survive", async () => {
@@ -360,15 +717,25 @@ describe("createRunSync", () => {
     });
     const pendingWrites: Array<Promise<unknown>> = [];
     const latchedCacheWrite = vi.fn(
-      async (path: string, value: unknown): Promise<void> => {
-        if (!path.endsWith(".scheduler.json")) {
+      async (
+        path: string,
+        value: unknown,
+        opts?: { signal?: AbortSignal },
+      ): Promise<void> => {
+        // Park only the cache writes; the post-timeout error_state record (which
+        // now routes through this same seam, signal-less) must pass straight
+        // through so the orchestrator can land the authoritative timeout record.
+        if (!path.endsWith(".scheduler.json") && !path.endsWith("error_state.json")) {
           if (signalArrived !== null) {
             signalArrived();
             signalArrived = null;
           }
           await cacheGate;
         }
-        const w = realAtomicWrite(path, value);
+        // Forward the threaded signal so the real abort-aware helper sees the
+        // aborted state once the hand-fired timer ran — the rename-skip fires
+        // exactly as in production.
+        const w = realAtomicWrite(path, value, opts);
         pendingWrites.push(w);
         await w;
       },
@@ -414,10 +781,8 @@ describe("createRunSync", () => {
     expect(errorState.step).toBe("outer_timeout");
     expect(errorState.phase).toBe("writing_cache");
 
-    // The 5 cache files COMPLETED (they were already in flight when abort fired —
-    // filesystem writes aren't cancellable). Without the A1 fix, .scheduler.json
-    // would also have been written, contradicting the error_state.json marker.
-    // With A1: scheduler.json must NOT exist.
+    // With A1 + the abort-aware write helper, .scheduler.json must NOT exist
+    // (the body bailed before the commit-marker write).
     expect(() => readFileSync(join(dir, ".scheduler.json"), "utf-8")).toThrow();
 
     expect(mutex.isHeld()).toBe(false);
@@ -429,6 +794,32 @@ describe("createRunSync", () => {
     await Promise.allSettled(pendingWrites);
     await Promise.resolve();
     await Promise.resolve();
+
+    // The rename-boundary check skips any cache write that had not yet reached
+    // its rename commit when the abort fired. This test's cacheGate parks all 5
+    // writes BEFORE they delegate to the real helper, so the hand-fired abort
+    // lands while every write is still ahead of its check — deterministically
+    // forcing all 5 into the skip window, so NONE of the payload files land.
+    // Production does NOT gate the writes (run-sync fires them concurrently), so
+    // an abort at an arbitrary instant may leave a PARTIAL subset renamed: any
+    // write already past its check is uncancellable and still commits, while
+    // writes still ahead of the check skip. The guarantee the check delivers is
+    // per-write ("no write renames after observing the abort"), not an
+    // all-or-nothing across the 5 files. Either way, a dead cycle's payload that
+    // had not yet committed never replaces the live file after the mutex was
+    // handed to the successor cycle.
+    for (const file of [
+      "latest.json",
+      "history.json",
+      "intervals.json",
+      "routes.json",
+      "ftp_history.json",
+    ]) {
+      expect(() => readFileSync(join(dir, file), "utf-8")).toThrow();
+    }
+    // No temp siblings linger — the aborted branch unlinked each one.
+    const orphans = readdirSync(dir).filter((e) => e.includes(".tmp."));
+    expect(orphans).toEqual([]);
   });
 
   // ── A2: body throws after timeout — error must NOT be silently swallowed ──
@@ -440,14 +831,26 @@ describe("createRunSync", () => {
     const fetchSpy = vi.fn().mockResolvedValue(emptyFetched);
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
+    const { atomicWriteJson: realAtomicWrite } = await import(
+      "../src/io/atomic-write-json.js"
+    );
     // atomicWrite that throws (simulating disk-full or fs error) AFTER a 200ms
     // delay. With outerTimeoutMs: 20, the outer race wins ("timeout") at ~20ms;
     // the body's await of this write rejects at ~200ms. The 10× gap keeps the
-    // test deterministic on slow CI runners.
-    const failingWrite = vi.fn(async (): Promise<void> => {
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      throw new Error("simulated disk-full mid-write");
-    });
+    // test deterministic on slow CI runners. The timeout-path error_state write
+    // now routes through this same seam — forward it to the real writer so the
+    // authoritative timeout record still lands and only the body's cache write
+    // simulates the disk failure under test.
+    const failingWrite = vi.fn(
+      async (path: string, value: unknown, opts?: { signal?: AbortSignal }): Promise<void> => {
+        if (path.endsWith("error_state.json")) {
+          await realAtomicWrite(path, value, opts);
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        throw new Error("simulated disk-full mid-write");
+      },
+    );
 
     const runSync = createRunSync({
       dataDir: dir,
@@ -678,8 +1081,8 @@ describe("latest derived_metrics structured schema + version gate", () => {
     vi.restoreAllMocks();
   });
 
-  it("the current cache schema version is \"2\"", () => {
-    expect(LATEST_SCHEMA_VERSION).toBe("2");
+  it("the current cache schema version is \"3\"", () => {
+    expect(LATEST_SCHEMA_VERSION).toBe("3");
   });
 
   it("a sparse running derived_metrics map (power keys absent, others null) parses clean", () => {
@@ -760,5 +1163,285 @@ describe("latest derived_metrics structured schema + version gate", () => {
     const latestPath = join(dir, "data", "latest.json");
     writeFileSync(latestPath, JSON.stringify(onDiskWithVersion("1")), "utf-8");
     expect(runtime.services.loadLatest()).toBeNull();
+  });
+});
+
+describe("createRunSync sync-history emit", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "reference-run-sync-history-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  const okGate = vi.fn().mockReturnValue({ ok: true, failures: [], warnings: [] });
+
+  it("clean ran: emits exactly one line with kind:ran, no reason, finite duration ≥ 0", async () => {
+    const syncHistory = vi.fn();
+    // Advancing clock so duration is a positive measured delta, not zero.
+    let t = Date.parse("2026-05-09T14:00:00.000Z");
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex: new AsyncMutex(),
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn().mockResolvedValue({
+        ...emptyFetched,
+        latest: { ...emptyFetched.latest, athlete_profile: { id: "a" } },
+      }),
+      gate: okGate,
+      syncHistory,
+      now: () => new Date((t += 5)),
+    });
+
+    const result = await runSync({ caller: "scheduled" });
+
+    expect(result.kind).toBe("ran");
+    expect(syncHistory).toHaveBeenCalledOnce();
+    const line = syncHistory.mock.calls[0]![0];
+    expect(line.schema_version).toBe("1");
+    expect(line.kind).toBe("ran");
+    expect(line.caller).toBe("scheduled");
+    expect(line.reason).toBeUndefined();
+    expect(typeof line.duration_ms).toBe("number");
+    expect(Number.isFinite(line.duration_ms)).toBe(true);
+    expect(line.duration_ms).toBeGreaterThanOrEqual(0);
+    expect(typeof line.ts).toBe("string");
+  });
+
+  it("clamps duration_ms to 0 when the wall clock steps backward mid-tick", async () => {
+    const syncHistory = vi.fn();
+    // Clock steps backward between startedAt and the emit (a backward NTP step):
+    // the recorded duration must clamp to 0, never a negative number.
+    const times = [
+      Date.parse("2026-05-09T14:00:10.000Z"),
+      Date.parse("2026-05-09T14:00:00.000Z"),
+      Date.parse("2026-05-09T14:00:00.000Z"),
+    ];
+    let i = 0;
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex: new AsyncMutex(),
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn().mockResolvedValue(emptyFetched),
+      gate: okGate,
+      syncHistory,
+      now: () => new Date(times[Math.min(i++, times.length - 1)]!),
+    });
+
+    await runSync({ caller: "scheduled" });
+
+    expect(syncHistory).toHaveBeenCalledOnce();
+    expect(syncHistory.mock.calls[0]![0].duration_ms).toBe(0);
+  });
+
+  it("gate_rejected: emits one line with kind:failed reason:gate_rejected", async () => {
+    const syncHistory = vi.fn();
+    const now = new Date("2026-05-09T14:00:00Z");
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex: new AsyncMutex(),
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn().mockResolvedValue(emptyFetched),
+      gate: vi.fn().mockReturnValue({
+        ok: false,
+        failures: [{ step: "ftp_source_check", detail: "missing" }],
+        warnings: [],
+      }),
+      syncHistory,
+      now: () => now,
+    });
+
+    await runSync({ caller: "lazy" });
+
+    expect(syncHistory).toHaveBeenCalledOnce();
+    const line = syncHistory.mock.calls[0]![0];
+    expect(line.kind).toBe("failed");
+    expect(line.reason).toBe("gate_rejected");
+    expect(line.caller).toBe("lazy");
+  });
+
+  it("fetch_failed (fetcher rejects): emits one line with kind:failed reason:fetch_failed", async () => {
+    const syncHistory = vi.fn();
+    const now = new Date("2026-05-09T14:00:00Z");
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex: new AsyncMutex(),
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn().mockRejectedValue(new Error("net down")),
+      syncHistory,
+      now: () => now,
+    });
+
+    const result = await runSync({ caller: "scheduled" });
+
+    expect(result.kind).toBe("failed");
+    expect(syncHistory).toHaveBeenCalledOnce();
+    const line = syncHistory.mock.calls[0]![0];
+    expect(line.kind).toBe("failed");
+    expect(line.reason).toBe("fetch_failed");
+  });
+
+  it("outer_timeout: emits one line with kind:failed reason:outer_timeout", async () => {
+    const syncHistory = vi.fn();
+    const now = new Date("2026-05-09T14:00:00Z");
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex: new AsyncMutex(),
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn(
+        async (): Promise<FetchedReference> => await new Promise<FetchedReference>(() => {}),
+      ),
+      syncHistory,
+      now: () => now,
+      timing: { outerTimeoutMs: 30 },
+    });
+
+    await runSync({ caller: "scheduled" });
+
+    expect(syncHistory).toHaveBeenCalledOnce();
+    const line = syncHistory.mock.calls[0]![0];
+    expect(line.kind).toBe("failed");
+    expect(line.reason).toBe("outer_timeout");
+  });
+
+  it("mutex_held skip: a contended scheduled tick emits one line with kind:skipped reason:mutex_held", async () => {
+    const mutex = new AsyncMutex();
+    const cooldown = new Cooldown();
+    const now = new Date("2026-05-09T14:00:00Z");
+    const syncHistory = vi.fn();
+
+    let resolveSlow!: () => void;
+    const slowFetch = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveSlow = resolve;
+      });
+      return emptyFetched;
+    });
+
+    const runSyncSlow = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: slowFetch,
+      gate: okGate,
+      now: () => now,
+      timing: { acquireTimeoutMs: 5_000, hotWarnMs: 1_000 },
+    });
+    const runSyncFast = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn().mockResolvedValue(emptyFetched),
+      gate: okGate,
+      syncHistory,
+      now: () => now,
+      timing: { acquireTimeoutMs: 30, hotWarnMs: 10 },
+    });
+
+    const p1 = runSyncSlow({ caller: "scheduled" });
+    const r2 = await runSyncFast({ caller: "scheduled" });
+
+    expect(r2).toEqual({ kind: "skipped", reason: "mutex_held" });
+    expect(syncHistory).toHaveBeenCalledOnce();
+    expect(syncHistory.mock.calls[0]![0].kind).toBe("skipped");
+    expect(syncHistory.mock.calls[0]![0].reason).toBe("mutex_held");
+
+    resolveSlow();
+    await p1;
+  });
+
+  it("/sync cooldown skip: emits one line with kind:skipped reason:cooldown (early-return path)", async () => {
+    let now = 1_000_000;
+    const cooldown = new Cooldown(() => now);
+    cooldown.record("telegram:123");
+    now += 5_000;
+    const syncHistory = vi.fn();
+
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex: new AsyncMutex(),
+      cooldown,
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn(),
+      syncHistory,
+      now: () => new Date(now),
+    });
+
+    const result = await runSync({ caller: "/sync", chatId: "telegram:123" });
+
+    expect(result.kind).toBe("skipped");
+    expect(syncHistory).toHaveBeenCalledOnce();
+    const line = syncHistory.mock.calls[0]![0];
+    expect(line.kind).toBe("skipped");
+    expect(line.reason).toBe("cooldown");
+    expect(line.caller).toBe("/sync");
+  });
+
+  it("a body that throws still leaves exactly one failed line before the throw propagates", async () => {
+    const syncHistory = vi.fn();
+    const now = new Date("2026-05-09T14:00:00Z");
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex: new AsyncMutex(),
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn().mockResolvedValue(emptyFetched),
+      // An unguarded throw from inside the mutex body (here the gate) re-throws
+      // out of runExclusive — the path that previously bypassed the emit.
+      gate: vi.fn(() => {
+        throw new Error("gate blew up");
+      }),
+      syncHistory,
+      now: () => now,
+    });
+
+    await expect(runSync({ caller: "scheduled" })).rejects.toThrow("gate blew up");
+
+    expect(syncHistory).toHaveBeenCalledOnce();
+    const line = syncHistory.mock.calls[0]![0];
+    expect(line.kind).toBe("failed");
+    expect(line.reason).toBe("unexpected_error");
+    expect(line.caller).toBe("scheduled");
+    expect(line.duration_ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it("a throwing syncHistory spy cannot break the tick: runSync still resolves to the correct result", async () => {
+    const throwingHistory = vi.fn(() => {
+      throw new Error("history write blew up");
+    });
+    const now = new Date("2026-05-09T14:00:00Z");
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex: new AsyncMutex(),
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn().mockResolvedValue(emptyFetched),
+      gate: vi.fn().mockReturnValue({
+        ok: false,
+        failures: [{ step: "ftp_source_check", detail: "missing" }],
+        warnings: [],
+      }),
+      syncHistory: throwingHistory,
+      now: () => now,
+    });
+
+    // The wiring positions the emit so its throw cannot escape the tick: the
+    // real writer never throws, but a defensive guard keeps a misbehaving
+    // injected writer from corrupting the SyncResult.
+    await expect(runSync({ caller: "scheduled" })).resolves.toMatchObject({
+      kind: "failed",
+      reason: "gate_rejected",
+    });
   });
 });

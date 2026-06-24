@@ -96,6 +96,14 @@ export interface BundleFetchClient {
   };
 }
 
+/** One per-endpoint fetch failure: which source envelope returned an error and
+ *  a human-readable reason. A present, non-empty list is "errored" — distinct
+ *  from a successful fetch that legitimately returned empty data. */
+export interface FetchEndpointError {
+  readonly endpoint: string;
+  readonly detail: string;
+}
+
 export interface LiveFetchResult {
   /** Raw athlete object — cached verbatim as `latest.athlete_profile`. */
   readonly athleteProfile: unknown;
@@ -107,6 +115,12 @@ export interface LiveFetchResult {
   readonly bundle: ReferenceBundle;
   /** Sync wall-clock as an ISO string — the metric date-window anchor. */
   readonly frozenNow: string;
+  /** Endpoints that returned an error (athlete-profile, wellness) and were
+   *  filled with empty fallbacks to keep the bundle well-typed. The gate turns
+   *  a non-empty list into a hard-fail so a swallowed failure can no longer
+   *  commit empty data behind a fresh stamp. Omitted when every endpoint was
+   *  reachable. */
+  readonly fetchErrors?: readonly FetchEndpointError[];
 }
 
 function ymd(date: Date): string {
@@ -240,8 +254,14 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
   const newest = ymd(now);
   const oldest = ymd(new Date(now.getTime() - FETCH_WINDOW_DAYS * 24 * 60 * 60 * 1000));
 
+  const fetchErrors: FetchEndpointError[] = [];
+
   const athleteResult = await client.athlete.get();
-  if (!athleteResult.ok) log(`Reference: athlete.get failed: ${String(athleteResult.error)}`);
+  if (!athleteResult.ok) {
+    const detail = String(athleteResult.error);
+    log(`Reference: athlete.get failed: ${detail}`);
+    fetchErrors.push({ endpoint: "athlete", detail });
+  }
   const athleteProfile = athleteResult.ok ? athleteResult.value : {};
 
   const actResult = await client.activities.list({ oldest, newest });
@@ -260,7 +280,11 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
   }
 
   const wellResult = await client.wellness.list({ oldest, newest });
-  if (!wellResult.ok) log(`Reference: wellness.list failed: ${String(wellResult.error)}`);
+  if (!wellResult.ok) {
+    const detail = String(wellResult.error);
+    log(`Reference: wellness.list failed: ${detail}`);
+    fetchErrors.push({ endpoint: "wellness", detail });
+  }
   const rawWellness: Array<Record<string, unknown>> =
     wellResult.ok && Array.isArray(wellResult.value)
       ? (wellResult.value as Array<Record<string, unknown>>)
@@ -309,7 +333,14 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
     return Number.isFinite(ms) && ms >= retentionCutoffMs;
   });
 
-  return { athleteProfile, recentActivities, wellnessData: wellness, bundle, frozenNow };
+  return {
+    athleteProfile,
+    recentActivities,
+    wellnessData: wellness,
+    bundle,
+    frozenNow,
+    ...(fetchErrors.length > 0 ? { fetchErrors } : {}),
+  };
 }
 
 async function fetchStreams(

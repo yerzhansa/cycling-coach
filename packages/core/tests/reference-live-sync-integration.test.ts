@@ -14,7 +14,7 @@ import { fetchLiveBundle, type BundleFetchClient } from "../src/reference/sync/f
 import { buildMetricInput } from "../src/reference/sync/fixture-bridge.js";
 import { computeDerivedMetrics } from "../src/reference/sync/compute-derived-metrics.js";
 import { runAdaptersForActivities } from "../src/reference/sport-adapter-dispatcher.js";
-import { composeProvenance } from "../src/reference/sync/fetch-reference-data.js";
+import { composeProvenance, readAnalysisBasis } from "../src/reference/sync/fetch-reference-data.js";
 import type { ReferenceSportAdapter } from "../src/reference/sport-adapter.js";
 import type { IntervalsActivityType } from "../src/sport.js";
 import type { FetchedReference } from "../src/reference/sync/run-sync.js";
@@ -81,8 +81,11 @@ function fakeClient(): BundleFetchClient {
 async function composeFetched(): Promise<FetchedReference> {
   const live = await fetchLiveBundle({ client: fakeClient(), signal: new AbortController().signal, now: NOW, throttleMs: 0 });
   const runs = runAdaptersForActivities([CYCLING_ADAPTER], SPORT_TYPES, live.bundle.activities);
-  const { omitPowerFamily, meta } = composeProvenance(runs);
+  const { omitPowerFamily, meta: baseMeta } = composeProvenance(runs);
   const derived_metrics = computeDerivedMetrics(buildMetricInput(live.bundle, live.frozenNow), { omitPowerFamily });
+  const meta = baseMeta
+    ? { ...baseMeta, analysisBasis: readAnalysisBasis(derived_metrics) }
+    : undefined;
   return {
     latest: {
       athlete_profile: live.athleteProfile,
@@ -119,7 +122,15 @@ describe("live-data bridge integration", () => {
 
   it("round-trips the derived_metrics_meta tag through the real strict read path (no cache-miss loop)", async () => {
     const fetched = await composeFetched();
-    const tag = { sportFamily: "cycling", basis: "power", anchorType: "ftp" };
+    // The fakeClient activities carry no zone-time blocks, so the window-level
+    // zone_distribution_7d.zone_basis is null — analysisBasis tracks it (null),
+    // distinct from the power prescriptionBasis.
+    const tag = {
+      sportFamily: "cycling",
+      prescriptionBasis: "power",
+      anchorType: "ftp",
+      analysisBasis: null,
+    };
     expect(fetched.latest.derived_metrics_meta).toEqual(tag);
 
     const onDisk = {

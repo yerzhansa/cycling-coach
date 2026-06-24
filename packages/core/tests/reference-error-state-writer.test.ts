@@ -1,12 +1,15 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ERROR_STATE_SCHEMA_VERSION,
   ErrorStateSchema,
 } from "../src/reference/schemas/error-state.js";
-import { writeErrorState } from "../src/reference/sync/error-state-writer.js";
+import {
+  clearErrorState,
+  writeErrorState,
+} from "../src/reference/sync/error-state-writer.js";
 
 describe("writeErrorState", () => {
   let dir: string;
@@ -45,6 +48,69 @@ describe("writeErrorState", () => {
     const parsed = ErrorStateSchema.parse(JSON.parse(raw));
     expect(parsed.step).toBe("gate_rejected");
     expect(parsed.phase).toBeUndefined();
+  });
+
+  it("routes through an injected write and threads the signal (B1)", async () => {
+    const spy = vi.fn().mockResolvedValue(undefined);
+    const controller = new AbortController();
+
+    await writeErrorState(
+      dir,
+      { step: "gate_rejected", detail: "x", mitigation: "block_coaching" },
+      { write: spy, signal: controller.signal },
+    );
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect((spy.mock.calls[0][0] as string).endsWith("error_state.json")).toBe(true);
+    const value = spy.mock.calls[0][1] as Record<string, unknown>;
+    expect(value.step).toBe("gate_rejected");
+    expect(value.detail).toBe("x");
+    expect(value.mitigation).toBe("block_coaching");
+    expect(value.schema_version).toBe(ERROR_STATE_SCHEMA_VERSION);
+    expect(typeof value.ts).toBe("string");
+    expect(spy.mock.calls[0][2]).toEqual({ signal: controller.signal });
+  });
+
+  it("default write honours an already-aborted signal — no file lands (B2)", async () => {
+    const aborted = new AbortController();
+    aborted.abort();
+
+    await writeErrorState(
+      dir,
+      { step: "gate_rejected", detail: "x" },
+      { signal: aborted.signal },
+    );
+    expect(existsSync(join(dir, "error_state.json"))).toBe(false);
+
+    // A fresh, non-aborted write lands the file — proving the seam threads the
+    // signal into the real abort-aware atomicWriteJson rather than swallowing it.
+    await writeErrorState(dir, { step: "gate_rejected", detail: "x" });
+    expect(existsSync(join(dir, "error_state.json"))).toBe(true);
+  });
+});
+
+describe("clearErrorState", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "reference-error-state-clear-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("skips the unlink when the signal is aborted (B3)", async () => {
+    await writeErrorState(dir, { step: "gate_rejected", detail: "x" });
+    expect(existsSync(join(dir, "error_state.json"))).toBe(true);
+
+    const aborted = new AbortController();
+    aborted.abort();
+    await clearErrorState(dir, { signal: aborted.signal });
+    expect(existsSync(join(dir, "error_state.json"))).toBe(true);
+
+    await clearErrorState(dir);
+    expect(existsSync(join(dir, "error_state.json"))).toBe(false);
   });
 });
 

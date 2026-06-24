@@ -146,6 +146,7 @@ export function buildSystemPrompt(
   persona: SportPersona,
   memory: Memory,
   tz: string = "UTC",
+  degradeBlock?: string,
 ): string {
   const skillsContent = Object.entries(persona.skills)
     .map(([name, content]) => `## Skill: ${name}\n\n${content}`)
@@ -181,6 +182,13 @@ export function buildSystemPrompt(
   // appendCurrentTimeLine() so it stays fresh across long sessions and
   // doesn't go stale crossing local midnight. See user-time.ts.
   parts.push(`# Current Date & Time\n\nTime zone: ${tz}`);
+
+  // Volatile per-turn block: rendered AFTER the cache boundary because it
+  // depends on disk state (whether the last sync failed validation) and would
+  // reshape the cached prefix every turn if it rode above the boundary.
+  if (degradeBlock) {
+    parts.push(degradeBlock);
+  }
 
   return parts.join("\n\n---\n\n");
 }

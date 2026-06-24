@@ -76,6 +76,16 @@ The turn-invariant head of the system prompt — SOUL, the joined skill prompts,
 
 `getCoachHome(binaryName)` (exported from `@enduragent/core`) is the single helper that resolves a binary's data directory using the three-tier fallback codified in ADR-0006: env-var override (`<BINARY>_HOME`, with `~`/`~/...` expansion) → legacy `~/.cycling-coach/` (only for the `cycling-coach` binary, only when that directory exists on disk) → fresh-install canonical `~/.enduragent/<dataSubdir>/` (subdir derived by stripping `-coach` from the binary name). All persisted state — Core config, Memory, Reference cache files (per the Reference layer's upstream protocol) — routes through this helper. Pure function; callers create the directory when they need it.
 
+## Fail-mode policy
+
+Each subsystem's behavior under failure is a recorded fail-open / fail-closed decision (full table + rationale in the project's fail-mode policy ADR; only this one-line-per-row mirror ships):
+
+- **Coaching from stale/corrupt cache** → **CLOSED** (degrade-and-disclose). A HARD sync-gate rejection stamps `mitigation: "block_coaching"`; the chat turn reads it and declines to quote numbers from unvalidated data, telling the athlete the data is stale instead. The one row wired in code.
+- **Audit-write** (append throws) → **OPEN**. Audit is observability, not the reply path; never break coaching to record a log line.
+- **`error_state.json` unreadable** (missing / unparseable / schema-invalid) → **OPEN** on the read. A broken error-state file must not brick chat — absent/unreadable yields no block, coach normally.
+- **Sender-allowlist lock contention** → **CLOSED**. Access control is a security boundary; deny on uncertainty rather than admit an unverified sender.
+- **Secrets backend unavailable** → **CLOSED**. No credential ⇒ no upstream call; fail loudly rather than proceed with an empty/guessed secret.
+
 ## Reference test substrate (property-based + golden fixtures)
 
 Property-based generators wrapping the Reference input schemas live at

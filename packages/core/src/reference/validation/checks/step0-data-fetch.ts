@@ -31,5 +31,17 @@ export function checkDataFetch(fetched: FetchedReference): CheckResult {
     }
   }
 
+  // A present-but-errored envelope (a fetch that failed and was filled with an
+  // empty fallback) is distinct from a present-but-legitimately-empty one: the
+  // presence null-check above passes both, but the data-fetch precondition is
+  // "every source envelope was fetched", so an errored endpoint must hard-fail
+  // rather than commit empty data behind a fresh stamp.
+  for (const e of fetched.fetch_errors ?? []) {
+    failures.push({
+      step: "step0_data_fetch",
+      detail: `source endpoint errored: ${e.endpoint} (${e.detail})`,
+    });
+  }
+
   return { failures, warnings: [] };
 }

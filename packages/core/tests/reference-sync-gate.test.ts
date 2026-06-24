@@ -35,6 +35,26 @@ describe("gateLatestJson", () => {
     expect(result.failures.map((f) => f.step)).toContain("step0_data_fetch");
   });
 
+  it("step0 FAIL: a non-empty fetch_errors channel → ok:false, step0 failure names the endpoint", () => {
+    const fetched: FetchedReference = {
+      ...emptyFetched,
+      fetch_errors: [{ endpoint: "wellness", detail: "429" }],
+    };
+    const result = gateLatestJson(fetched, null, NOW);
+    expect(result.ok).toBe(false);
+    const step0 = result.failures.find((f) => f.step === "step0_data_fetch");
+    expect(step0).toBeDefined();
+    expect(step0!.detail).toContain("wellness");
+  });
+
+  it("step0 PASS: empty-but-error-free envelope (no fetch_errors) stays green", () => {
+    // Guards the errored-vs-empty distinction: a genuinely-empty account must
+    // still pass step0 clean. (Same invariant as the :19-22 empty-stub test.)
+    const result = gateLatestJson(emptyFetched, null, NOW);
+    expect(result.ok).toBe(true);
+    expect(result.failures.map((f) => f.step)).not.toContain("step0_data_fetch");
+  });
+
   // ── step1: FTP source (HARD) ──────────────────────────────────────────
 
   it("step1 PASS: sportSettings ftp:247 → no step1 failure", () => {

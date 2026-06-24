@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import type { ZodTypeAny } from "zod";
 import {
   MUTEX_ACQUIRE_TIMEOUT_MS,
   MUTEX_HOT_WARN_MS,
@@ -6,15 +7,22 @@ import {
   SYNC_OPERATION_TIMEOUT_MS,
 } from "../freshness.js";
 import { atomicWriteJson } from "../../io/atomic-write-json.js";
-import { LATEST_SCHEMA_VERSION, type DerivedMetricsMeta } from "../schemas/latest.js";
-import { HISTORY_SCHEMA_VERSION } from "../schemas/history.js";
-import { INTERVALS_SCHEMA_VERSION } from "../schemas/intervals.js";
-import { ROUTES_SCHEMA_VERSION } from "../schemas/routes.js";
-import { FTP_HISTORY_SCHEMA_VERSION } from "../schemas/ftp-history.js";
+import { safeReadJson } from "../../io/safe-read-json.js";
+import { LATEST_SCHEMA_VERSION, LatestJsonSchema, type DerivedMetricsMeta } from "../schemas/latest.js";
+import { HISTORY_SCHEMA_VERSION, HistoryJsonSchema } from "../schemas/history.js";
+import { INTERVALS_SCHEMA_VERSION, IntervalsJsonSchema } from "../schemas/intervals.js";
+import { ROUTES_SCHEMA_VERSION, RoutesJsonSchema } from "../schemas/routes.js";
+import { FTP_HISTORY_SCHEMA_VERSION, FtpHistoryJsonSchema } from "../schemas/ftp-history.js";
 import { SCHEDULER_SCHEMA_VERSION } from "../schemas/scheduler.js";
-import type { ErrorPhase, ErrorCaller } from "../schemas/error-state.js";
+import { ErrorStateSchema } from "../schemas/error-state.js";
+import type { ErrorPhase, ErrorCaller, ErrorState } from "../schemas/error-state.js";
 import { gateLatestJson } from "../validation/sync-gate.js";
 import { writeErrorState, clearErrorState } from "./error-state-writer.js";
+import {
+  createSyncHistoryWriter,
+  SYNC_HISTORY_SCHEMA_VERSION,
+  type SyncOutcomeLine,
+} from "./sync-history.js";
 import type { AsyncMutex } from "../../concurrency/mutex.js";
 import type { Cooldown } from "../../concurrency/cooldown.js";
 import type { Clock } from "../../concurrency/clock.js";
@@ -76,7 +84,9 @@ export interface FetchedReference {
     readonly current_status: unknown;
     readonly derived_metrics: unknown;
     /** Emit-time provenance tag — a sibling of `derived_metrics`, never inside
-     *  it. Optional: an empty-coverage bundle attaches no tag. */
+     *  it. Optional: an empty-coverage bundle attaches no tag. `prescriptionBasis`
+     *  is the adapter's declared prescription anchor; `analysisBasis` is the
+     *  substrate the distribution numbers were actually computed off. */
     readonly derived_metrics_meta?: DerivedMetricsMeta;
     readonly recent_activities: readonly unknown[];
     readonly planned_workouts: readonly unknown[];
@@ -92,6 +102,12 @@ export interface FetchedReference {
   };
   readonly routes: { readonly routes: readonly unknown[] };
   readonly ftp_history: { readonly entries: readonly unknown[] };
+  /** Source endpoints that errored during the fetch (athlete-profile, wellness).
+   *  Present + non-empty means a fetch failed and was filled with empty data;
+   *  step0 hard-fails on it so the swallowed failure can no longer commit empties
+   *  behind a fresh stamp. Omitted when every endpoint was reachable, so a
+   *  fully-successful fetch is shape-identical to a genuinely-empty account. */
+  readonly fetch_errors?: readonly { readonly endpoint: string; readonly detail: string }[];
 }
 
 export interface RunSyncDeps {
@@ -119,9 +135,19 @@ export interface RunSyncDeps {
   /** Override Layer-1 gate for tests; defaults to `gateLatestJson`. */
   readonly gate?: typeof gateLatestJson;
   /** Override atomic write for tests; defaults to `atomicWriteJson`. */
-  readonly atomicWrite?: (path: string, value: unknown) => Promise<void>;
+  readonly atomicWrite?: (
+    path: string,
+    value: unknown,
+    opts?: { signal?: AbortSignal },
+  ) => Promise<void>;
   /** Override error_state.json removal for tests; defaults to `clearErrorState`. */
-  readonly clearError?: (dataDir: string) => Promise<void>;
+  readonly clearError?: (dataDir: string, opts?: { signal?: AbortSignal }) => Promise<void>;
+  /**
+   * Override the per-tick outcome writer for tests; defaults to
+   * `createSyncHistoryWriter(deps.dataDir)`. Best-effort and never throws, so it
+   * can never alter or break the `SyncResult` it records.
+   */
+  readonly syncHistory?: (line: SyncOutcomeLine) => void;
 }
 
 interface CacheWriteSpec {
@@ -133,6 +159,74 @@ interface CacheWriteSpec {
 
 /** Shared between runtime + tests so the warn-after-timeout string stays in sync. */
 export const BODY_AFTER_TIMEOUT_LOG_PREFIX = "Reference: body threw after outer timeout";
+
+/** Per-cache-file Zod schema, so the prior-read routes through the same
+ *  `safeReadJson` boundary every other Reference read uses (CONTEXT.md: Reference
+ *  NEVER calls `JSON.parse(readFileSync(...))` directly). A schema mismatch or an
+ *  unreadable file yields `null` — which `readPriorCache` already treats as "no
+ *  comparable prior, must write". */
+const CACHE_SCHEMAS: Readonly<Record<CacheFile, ZodTypeAny>> = {
+  latest: LatestJsonSchema,
+  history: HistoryJsonSchema,
+  intervals: IntervalsJsonSchema,
+  routes: RoutesJsonSchema,
+  ftp_history: FtpHistoryJsonSchema,
+};
+
+/** Read a prior on-disk cache file as a parsed object, or `null` when it is
+ *  absent / unreadable / schema-invalid — any of which means "no comparable
+ *  prior, must write". */
+function readPriorCache(path: string, file: CacheFile): Record<string, unknown> | null {
+  return safeReadJson<Record<string, unknown>>(path, CACHE_SCHEMAS[file]);
+}
+
+/** Carry forward an active `block_coaching` mitigation onto a subsequent
+ *  failure-path write. `error_state.json` is single-slot/last-writer-wins, so a
+ *  transient timeout or fetch failure following a HARD gate rejection would
+ *  otherwise overwrite the corruption-class block with a mitigation-less record
+ *  and silently re-open coaching while the cache is still unvalidated. A
+ *  timeout/fetch failure is an unknown outcome, not proof the cache became
+ *  trustworthy — only the clean-sync `clearError` path removes the block. */
+function priorBlockCoaching(dataDir: string): { mitigation: "block_coaching" } | undefined {
+  const prior = safeReadJson<ErrorState>(join(dataDir, "error_state.json"), ErrorStateSchema);
+  return prior?.mitigation === "block_coaching" ? { mitigation: prior.mitigation } : undefined;
+}
+
+/** Recursively rebuild an object/array with every object's keys in sorted
+ *  order, so two structurally-equal payloads serialize identically regardless
+ *  of key insertion order. `priorPayloadEquals` reads the prior payload back
+ *  through a Zod re-parse, which rebuilds objects in schema-declaration order
+ *  rather than the producer's insertion order; canonicalizing both sides makes
+ *  the no-op short-circuit immune to that reordering (and to any future
+ *  producer that emits the same data in a different key order). */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value).sort()) {
+      out[key] = canonicalize((value as Record<string, unknown>)[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+/** True when the prior file's payload (everything except the churning
+ *  `metadata` envelope) is structurally equal to the new payload — so a no-op
+ *  cycle skips the write and leaves the file byte-identical. The comparison is
+ *  key-order-insensitive (see `canonicalize`): the no-op guarantee must not
+ *  hinge on the producer emitting keys in the same order the cache schema
+ *  declares them. */
+function priorPayloadEquals(
+  prior: Record<string, unknown>,
+  payload: Readonly<Record<string, unknown>>,
+): boolean {
+  const { metadata: _metadata, ...priorPayload } = prior;
+  return (
+    JSON.stringify(canonicalize(priorPayload)) ===
+    JSON.stringify(canonicalize(payload))
+  );
+}
 
 export function createRunSync(
   deps: RunSyncDeps,
@@ -150,23 +244,67 @@ export function createRunSync(
   const gate = deps.gate ?? gateLatestJson;
   const writeJson = deps.atomicWrite ?? atomicWriteJson;
   const clearError = deps.clearError ?? clearErrorState;
+  const syncHistory = deps.syncHistory ?? createSyncHistoryWriter(deps.dataDir);
 
   return async (opts = {}) => {
+    const startedAt = now();
+    // The outcome line is a best-effort diagnostics trail: a write (or a
+    // misbehaving injected writer) must never alter or break the tick it
+    // records. The default writer already swallows; this guard also fences a
+    // throwing test seam from escaping the tick. A backward wall-clock step
+    // between `startedAt` and the emit must never write a negative duration, so
+    // the delta is clamped non-negative.
+    const emit = (kind: SyncResult["kind"], reason: string | undefined): void => {
+      try {
+        syncHistory({
+          schema_version: SYNC_HISTORY_SCHEMA_VERSION,
+          ts: now().toISOString(),
+          caller: opts.caller ?? "scheduled",
+          kind,
+          reason,
+          duration_ms: Math.max(0, now().getTime() - startedAt.getTime()),
+        });
+      } catch {
+        // Swallowed — see comment above.
+      }
+    };
+    const emitOutcome = (result: SyncResult): SyncResult => {
+      emit(result.kind, "reason" in result ? result.reason : undefined);
+      return result;
+    };
+
     if (opts.caller === "/sync" && opts.chatId !== undefined) {
       const c = deps.cooldown.check(opts.chatId, deps.cooldownWindowMs);
       if (!c.ok) {
-        return {
+        return emitOutcome({
           kind: "skipped",
           reason: "cooldown",
           retryAfterMs: c.retryAfterMs,
-        };
+        });
       }
     }
 
-    const mutexResult = await deps.mutex.runExclusive(
-      async (): Promise<SyncResult> => {
+    // Fail fast for the interactive caller: if a sync is already running, the
+    // athlete's /sync would otherwise enqueue a waiter and block the full
+    // acquire timeout before skipping. Reply immediately instead. The scheduled
+    // caller deliberately keeps queue-and-wait semantics (it has no one waiting
+    // on a reply), so this branch is /sync-only.
+    if (opts.caller === "/sync" && deps.mutex.isHeld()) {
+      return emitOutcome({ kind: "skipped", reason: "mutex_held" });
+    }
+
+    let mutexResult;
+    try {
+      mutexResult = await deps.mutex.runExclusive(
+        async (): Promise<SyncResult> => {
         const controller = new AbortController();
         let phase: ErrorPhase = "fetching";
+        // Set synchronously the instant this cycle classifies the bundle as
+        // unusable, before the (async) error_state write. The outer-timeout path
+        // races the body's write and cannot re-read error_state.json reliably
+        // (the body's rename may not have landed yet), so it ORs this flag in
+        // rather than demote a same-cycle HARD rejection to a mitigation-less record.
+        let cycleBlockCoaching = false;
 
         // Returned at any phase boundary where `controller.signal.aborted` is
         // true after an `await` resolves. Prevents body from doing the next
@@ -189,7 +327,17 @@ export function createRunSync(
             // scheduled tick logging-only and the curator blind to the failure.
             if (controller.signal.aborted) return abortedResult();
             const detail = err instanceof Error ? err.message : String(err);
-            await writeErrorState(deps.dataDir, { step: "fetch_failed", phase, detail });
+            // Route through the injectable abort-aware seam so a late body write skips its rename if the outer timeout already force-released the mutex.
+            await writeErrorState(
+              deps.dataDir,
+              {
+                step: "fetch_failed",
+                phase,
+                detail,
+                ...priorBlockCoaching(deps.dataDir),
+              },
+              { write: writeJson, signal: controller.signal },
+            );
             return {
               kind: "failed",
               reason: "fetch_failed",
@@ -203,10 +351,21 @@ export function createRunSync(
           // on-disk LatestJson, so prior-vs-incoming comparison is not yet wired.
           const gateResult = gate(fetched, null, now());
           if (!gateResult.ok) {
-            await writeErrorState(deps.dataDir, {
-              step: "gate_rejected",
-              detail: gateResult.failures.map((f) => `${f.step}: ${f.detail}`).join("; "),
-            });
+            // A HARD gate failure means the freshly-fetched bundle could not be
+            // validated — the cache is unvalidated/corrupt. Mark the failure
+            // block-coaching so the chat path degrades to general guidance
+            // instead of quoting numbers from data we could not trust. The soft
+            // path below keeps its non-blocking warn-only mitigation.
+            cycleBlockCoaching = true;
+            await writeErrorState(
+              deps.dataDir,
+              {
+                step: "gate_rejected",
+                detail: gateResult.failures.map((f) => `${f.step}: ${f.detail}`).join("; "),
+                mitigation: "block_coaching",
+              },
+              { write: writeJson, signal: controller.signal },
+            );
             return {
               kind: "failed",
               reason: "gate_rejected",
@@ -242,14 +401,32 @@ export function createRunSync(
               payload: fetched.ftp_history,
             },
           ];
-          await Promise.all(
-            cacheWrites.map(({ file, version, payload, extras }) =>
-              writeJson(join(deps.dataDir, `${file}.json`), {
-                metadata: { schema_version: version, last_updated: lastUpdated, ...extras },
-                ...payload,
+          // Content-hash short-circuit: re-stamping `last_updated` every cycle
+          // makes each cache file byte-different even when the underlying data
+          // is unchanged. The `metadata` envelope (which carries the churning
+          // `last_updated`) is excluded from the comparison so a no-op cycle
+          // leaves the file — old timestamp and all — byte-identical, and only
+          // a genuine data change rewrites the file with a fresh stamp.
+          const refreshed = (
+            await Promise.all(
+              cacheWrites.map(async ({ file, version, payload, extras }) => {
+                const path = join(deps.dataDir, `${file}.json`);
+                const prior = readPriorCache(path, file);
+                if (prior !== null && priorPayloadEquals(prior, payload)) {
+                  return null;
+                }
+                await writeJson(
+                  path,
+                  {
+                    metadata: { schema_version: version, last_updated: lastUpdated, ...extras },
+                    ...payload,
+                  },
+                  { signal: controller.signal },
+                );
+                return file;
               }),
-            ),
-          );
+            )
+          ).filter((f): f is CacheFile => f !== null);
           // A1 fix: if the outer timeout fired during the cache writes,
           // bail before writing the commit marker. Without this guard the
           // scheduler.json could land after error_state.json was written,
@@ -258,11 +435,15 @@ export function createRunSync(
 
           // Commit-marker LAST per ADR-0011.
           phase = "writing_scheduler";
-          await writeJson(join(deps.dataDir, ".scheduler.json"), {
-            schema_version: SCHEDULER_SCHEMA_VERSION,
-            last_sync_at: lastUpdated,
-            next_sync_at: new Date(now().getTime() + scheduledIntervalMs).toISOString(),
-          });
+          await writeJson(
+            join(deps.dataDir, ".scheduler.json"),
+            {
+              schema_version: SCHEDULER_SCHEMA_VERSION,
+              last_sync_at: lastUpdated,
+              next_sync_at: new Date(now().getTime() + scheduledIntervalMs).toISOString(),
+            },
+            { signal: controller.signal },
+          );
 
           // error_state.json lifecycle, AFTER the commit marker (ADR-0011
           // commit-marker-last) so a curator reading mid-sync never observes a
@@ -270,19 +451,23 @@ export function createRunSync(
           // record a non-blocking warn_only state; a fully-clean sync clears
           // any error_state left by a prior failed/soft run.
           if (gateResult.warnings.length > 0) {
-            await writeErrorState(deps.dataDir, {
-              step: "gate_warnings",
-              detail: gateResult.warnings.map((w) => `${w.step}: ${w.detail}`).join("; "),
-              mitigation: "warn_only",
-            });
+            await writeErrorState(
+              deps.dataDir,
+              {
+                step: "gate_warnings",
+                detail: gateResult.warnings.map((w) => `${w.step}: ${w.detail}`).join("; "),
+                mitigation: "warn_only",
+              },
+              { write: writeJson, signal: controller.signal },
+            );
           } else {
-            await clearError(deps.dataDir);
+            await clearError(deps.dataDir, { signal: controller.signal });
           }
 
           return {
             kind: "ran",
             lastSyncAt: lastUpdated,
-            refreshed: cacheWrites.map((w) => w.file),
+            refreshed,
           };
         };
 
@@ -325,32 +510,49 @@ export function createRunSync(
               );
             }
           });
-          await writeErrorState(deps.dataDir, {
-            step: "outer_timeout",
-            phase,
-            detail: `runSync exceeded ${outerTimeoutMs}ms during ${phase} phase`,
-          });
+          // No signal here: this write runs AFTER controller.abort() and is the authoritative timeout record. Threading the (already-aborted) signal would make the abort-aware helper skip its rename and drop the record entirely.
+          await writeErrorState(
+            deps.dataDir,
+            {
+              step: "outer_timeout",
+              phase,
+              detail: `runSync exceeded ${outerTimeoutMs}ms during ${phase} phase`,
+              ...(cycleBlockCoaching
+                ? ({ mitigation: "block_coaching" } as const)
+                : priorBlockCoaching(deps.dataDir)),
+            },
+            { write: writeJson },
+          );
           return { kind: "failed", reason: "outer_timeout", failures: [] };
         }
 
         if (bodyError !== undefined) throw bodyError;
         return bodyResult!;
-      },
-      {
-        acquireTimeoutMs,
-        hotWarnMs,
-        caller: opts.caller ?? "scheduled",
-      },
-    );
+        },
+        {
+          acquireTimeoutMs,
+          hotWarnMs,
+          caller: opts.caller ?? "scheduled",
+        },
+      );
+    } catch (err) {
+      // The mutex body re-throws an unguarded error (e.g. a gate or cache-write
+      // throw) out of `runExclusive`. The ticket's invariant is that EVERY tick
+      // leaves exactly one history line, so stamp a `failed` line before letting
+      // the throw propagate — otherwise a disk error mid-write would erase its
+      // own evidence, the exact failure mode this trail exists to capture.
+      emit("failed", "unexpected_error");
+      throw err;
+    }
 
     if (mutexResult.kind === "timeout") {
-      return { kind: "skipped", reason: "mutex_held" };
+      return emitOutcome({ kind: "skipped", reason: "mutex_held" });
     }
 
     const result = mutexResult.value;
     if (result.kind === "ran" && opts.caller === "/sync" && opts.chatId !== undefined) {
       deps.cooldown.record(opts.chatId);
     }
-    return result;
+    return emitOutcome(result);
   };
 }
