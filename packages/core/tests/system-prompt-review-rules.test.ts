@@ -53,10 +53,11 @@ describe("buildSystemPrompt — review + data-grounding placement", () => {
     expect(sections[2]).toMatch(/^# Untrusted Data Handling/);
     expect(sections[3]).toMatch(/^# Recall Before Answering/);
     expect(sections[4]).toMatch(/^# Workout Review/);
-    expect(sections[5]).toContain("cache boundary:");
-    expect(sections[6]).toMatch(/^# Athlete Context/);
-    expect(sections[7]).toMatch(/^# Current Date & Time/);
-    expect(sections.length).toBe(8);
+    expect(sections[5]).toMatch(/^# Tool-Call Budget/);
+    expect(sections[6]).toContain("cache boundary:");
+    expect(sections[7]).toMatch(/^# Athlete Context/);
+    expect(sections[8]).toMatch(/^# Current Date & Time/);
+    expect(sections.length).toBe(9);
     expect(prompt).toContain(SYSTEM_PROMPT_CACHE_BOUNDARY);
   });
 

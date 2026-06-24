@@ -23,6 +23,7 @@ import { buildSystemPrompt, staticRuleBlocks } from "./system-prompt.js";
 import { computeAssembledHash, computeTemplateHash, sha256_16 } from "./prompt-lineage.js";
 import { withSessionLock } from "./session-lock.js";
 import { capToolResult, TOOL_RESULT_SHARE } from "./tool-result-cap.js";
+import { memoizeReadTool } from "./read-memoizer.js";
 import { splitHistoryByBudget, makeSummaryMessage } from "./history-limit.js";
 import {
   shouldCompact,
@@ -176,6 +177,10 @@ export class CoachAgent {
   private turnWrites: { writesCommitted: number; lastWriteSummary?: string } = {
     writesCommitted: 0,
   };
+  // Per-turn read memoizer cache. The wrapped read tools (built once at
+  // construction) close over this reference; chat() clears it in place at the
+  // top of every turn, so caching is strictly within one turn.
+  private readToolCache = new Map<string, unknown>();
   // Resolved primary anchor (running CS) for the in-flight turn. Held in
   // async-context storage rather than a shared instance field so that
   // fire-and-forget turns running concurrently (different chats, or rapid
@@ -226,7 +231,11 @@ export class CoachAgent {
     this.tools = Object.fromEntries(
       registrations.map((r) => [
         r.name,
-        this.wrapWriteTool(r.name, capToolResult(r.tool, { maxResultTokens })),
+        memoizeReadTool(
+          r.name,
+          this.wrapWriteTool(r.name, capToolResult(r.tool, { maxResultTokens })),
+          this.readToolCache,
+        ),
       ]),
     ) as ToolSet;
     // systemPrompt is rebuilt at the top of every chat() call; no need to bake one here.
@@ -407,6 +416,10 @@ export class CoachAgent {
       // reference to this object, captured once at construction).
       this.turnWrites.writesCommitted = 0;
       this.turnWrites.lastWriteSummary = undefined;
+      // Reset the per-turn read memoizer in place (the wrapped read tools hold a
+      // reference to this map, captured once at construction), so an identical
+      // read on a later turn re-invokes the inner execute.
+      this.readToolCache.clear();
       // One flush per turn: the latch flips on entry (before the await
       // resolves) so a thrown flush still consumes the turn's single flush.
       let flushedThisTurn = false;

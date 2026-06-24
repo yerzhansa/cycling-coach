@@ -134,11 +134,27 @@ These are Peaksware trademarks; do not surface the abbreviations in athlete-faci
 - Streams payload is empty or missing watts/heartrate (manual entry, indoor without power, virtual ride with no recorded streams): note "stream data not available for this activity" and degrade to Tier B — do NOT invent pacing curves or best-efforts content.
 - \`intervals_fetch_activities\` returns \`{ error: ... }\`: relay the error to the athlete in plain language; do not invent a review. Translate the raw \`error.kind\` to a friendly phrase: \`Unauthorized\` → "I don't have access to your intervals.icu account", \`RateLimit\` → "intervals.icu rate-limited me — try again in a minute", \`NotFound\` → "couldn't find that activity", \`Network\` / \`Timeout\` → "couldn't reach intervals.icu", anything else → "something went wrong fetching your data". Never surface the raw \`kind\` token.`;
 
+export const STEP_BUDGET_RULES = `# Tool-Call Budget
+
+You can make at most about 10 tool calls per turn. Plan within that budget:
+don't repeat an identical read (same tool, same arguments) in one turn — you
+already have its result. When a request needs many calendar writes (e.g.
+scheduling a whole week, where each workout is its own intervals_create_workout
+call), do NOT try to write them all at once: confirm the plan with the athlete
+first, then create the workouts a few at a time across follow-up turns. A turn
+that runs out of budget mid-write leaves the week half-scheduled, because writes
+already committed on earlier steps are real and are not rolled back.`;
+
 // The single source of the static rule-block list. The builder pushes exactly
 // these blocks, and the prompt-lineage template hash reads the same set, so the
 // Layer-3 gate flip is reflected in both in lock-step.
 export function staticRuleBlocks(): string[] {
-  const blocks = [UNTRUSTED_DATA_RULES, MEMORY_RECALL_RULES, WORKOUT_REVIEW_RULES];
+  const blocks = [
+    UNTRUSTED_DATA_RULES,
+    MEMORY_RECALL_RULES,
+    WORKOUT_REVIEW_RULES,
+    STEP_BUDGET_RULES,
+  ];
   return LAYER_3_GROUNDING_ENABLED ? [...blocks, LAYER_3_PROMPT_RULES] : blocks;
 }
 
