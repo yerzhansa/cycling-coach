@@ -148,7 +148,7 @@ describe("integration: system prompt + daily notes agree on 'today'", () => {
     expect(existsSync(join(dataDir, "memory", "2026-05-01.md"))).toBe(true);
     expect(existsSync(join(dataDir, "memory", "2026-04-30.md"))).toBe(false);
 
-    const persona = { soul: "soul", skills: {} };
+    const persona = { soul: "soul", skills: {}, sessionClusterGapMinutes: 60 };
     const sp = buildSystemPrompt(persona, memory, tz);
     expect(sp).toContain(`Time zone: ${tz}`);
     expect(sp).not.toMatch(/Today is /); // never bake the date into the prompt

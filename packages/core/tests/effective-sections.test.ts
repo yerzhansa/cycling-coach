@@ -13,6 +13,7 @@ function makeSport(id: SportId, sections: readonly MemorySectionSpec[]): Sport {
     id,
     soul: "",
     skills: {},
+    sessionClusterGapMinutes: 30,
     memorySections: sections,
     mustPreserveTokens: () => [],
     intervalsActivityTypes: [],

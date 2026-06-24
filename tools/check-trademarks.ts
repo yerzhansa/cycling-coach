@@ -17,7 +17,10 @@
  *
  * For `.md` files, we use a regex pass with word boundaries and skip fenced
  * code blocks (markdown has no AST, but code blocks are technical content
- * where forbidden tokens are typically code identifiers or test fixtures).
+ * where forbidden tokens are typically code identifiers or test fixtures). A
+ * line-level `trademark-lint:skip-line` / `skip-next-line` directive (in an
+ * HTML comment) exempts a single legitimate token line — for prose that is
+ * mostly checkable but carries one ban table — without skipping the whole file.
  *
  * The forbidden-token list lives in `FORBIDDEN_TOKENS` below. Keep it in sync
  * with `CLAUDE.local.md` and `CONTRIBUTING.md`'s "Trademark hygiene" section.
@@ -88,6 +91,29 @@ function* matchInText(
 const SKIP_DIRECTIVE = "trademark-lint:skip-file";
 
 const isSkippedFile = makeSkipCheck(SKIP_DIRECTIVE);
+
+/**
+ * Line-level skip for markdown prose that is MOSTLY checkable but carries one
+ * legitimate token line (e.g. a surviving ban table that names the forbidden
+ * tokens to teach the substitution). A `trademark-lint:skip-line` directive on
+ * the line suppresses hits on THAT line; a `trademark-lint:skip-next-line`
+ * directive suppresses hits on the FOLLOWING line. Both are recognized inside
+ * an HTML comment so they don't render in the prose. The whole-file
+ * `skip-file` mechanism is unchanged.
+ */
+const SKIP_LINE_DIRECTIVE = "trademark-lint:skip-line";
+const SKIP_NEXT_LINE_DIRECTIVE = "trademark-lint:skip-next-line";
+
+function computeMdSkippedLines(source: string): ReadonlySet<number> {
+  const skipped = new Set<number>();
+  const lines = source.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const lineNo = i + 1;
+    if (lines[i].includes(SKIP_LINE_DIRECTIVE)) skipped.add(lineNo);
+    if (lines[i].includes(SKIP_NEXT_LINE_DIRECTIVE)) skipped.add(lineNo + 1);
+  }
+  return skipped;
+}
 
 function findHitsInTsFile(file: string): TrademarkHit[] {
   const source = readFileSync(file, "utf-8");
@@ -161,6 +187,8 @@ function findHitsInMdFile(file: string): TrademarkHit[] {
     (block) => block.replace(/[^\n]/g, " "),
   );
 
+  const skippedLines = computeMdSkippedLines(source);
+
   const hits: TrademarkHit[] = [];
   // Compute line offsets once so we can map offset → (line, column) cheaply.
   const lineStarts: number[] = [0];
@@ -181,6 +209,7 @@ function findHitsInMdFile(file: string): TrademarkHit[] {
 
   for (const hit of matchInText(stripped, 0)) {
     const { line, column } = offsetToLineCol(hit.offset);
+    if (skippedLines.has(line)) continue;
     hits.push({ file, line, column, token: hit.token });
   }
   return hits;
@@ -214,16 +243,23 @@ function formatHit(hit: TrademarkHit): string {
 /**
  * Default scan scope when no paths are supplied. The Reference submodule is
  * the directly-ported code; `core/concurrency/` and `core/io/` host the
- * primitives + I/O helpers that originated from section-11 and were promoted
- * to shared locations in the architectural followup sequence (PR C);
- * `tools/` is in scope because this very linter lives there. Add new layer
- * directories here as future horizontal layers land (e.g.,
- * `packages/core/src/decision/`).
+ * primitives + I/O helpers that were promoted to shared locations in the
+ * architectural followup sequence (PR C); `tools/` is in scope because this
+ * very linter lives there. The per-sport `skills/` markdown and the two SOUL
+ * files are athlete-facing prose surfaces, so the forbidden tokens must not
+ * re-enter them either; a line-level `trademark-lint:skip-line` /
+ * `skip-next-line` directive exempts a single legitimate token line (e.g. a
+ * surviving substitution table) without exempting the whole file. Add new
+ * layer directories here as future horizontal layers land.
  */
 const DEFAULT_SCAN_PATHS: readonly string[] = [
   "packages/core/src/reference",
   "packages/core/src/concurrency",
   "packages/core/src/io",
+  "packages/sport-cycling/skills",
+  "packages/sport-running/skills",
+  "packages/sport-cycling/SOUL.md",
+  "packages/sport-running/SOUL.md",
   "tools",
 ];
 

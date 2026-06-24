@@ -27,6 +27,7 @@ const stubRunningSport: Sport = {
   id: "running",
   soul: "",
   skills: {},
+  sessionClusterGapMinutes: 30,
   memorySections: runningSections,
   mustPreserveTokens: () => ["VDOT"],
   intervalsActivityTypes: ["Run", "TrailRun"],

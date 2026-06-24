@@ -7,9 +7,14 @@ import type { SportPersona } from "../src/sport.js";
 
 const emptyMemory = { getContext: () => "" } as unknown as Memory;
 
-// Bumped to accommodate the step-budget disclosure (a data-integrity safeguard
-// against half-scheduled weeks) while still bounding runaway prefix growth.
-const STATIC_PREFIX_TOKEN_CEILING = 12_500;
+// Budget guard with headroom — the cached prefix must stay well under the
+// model's context window. Raised from 12_000 as two bounded additions joined the
+// static rules: the cross-sport Voice & Register block (with the cycling zone
+// reference's fully-populated anaerobic/neuromuscular rows) and the step-budget
+// disclosure (a data-integrity safeguard against half-scheduled weeks). A
+// deliberate, bounded prefix growth, not unbounded drift; the real prefix sits a
+// few hundred tokens below this ceiling.
+const STATIC_PREFIX_TOKEN_CEILING = 13_000;
 
 describe("static system-prompt prefix token ceiling", () => {
   it("keeps the real cycling static prefix under the ceiling", () => {
@@ -27,6 +32,7 @@ describe("static system-prompt prefix token ceiling", () => {
     const persona: SportPersona = {
       soul: "# Coach",
       skills: { periodization: "P content", recovery: "R content" },
+      sessionClusterGapMinutes: 30,
     };
     const prompt = buildSystemPrompt(persona, emptyMemory);
     expect(prompt).toContain("## Skill: periodization");

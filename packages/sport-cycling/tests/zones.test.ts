@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { calculateCyclingZones } from "../src/zones.js";
 
 describe("calculateCyclingZones", () => {
-  it("returns 6 zones", () => {
+  it("returns 6 display rows", () => {
     const zones = calculateCyclingZones(280);
     expect(zones).toHaveLength(6);
   });
@@ -19,15 +19,26 @@ describe("calculateCyclingZones", () => {
     expect(zones[2].label).toBe("Z3 Tempo");
     expect(zones[2].value).toBe("213-252W");
 
-    expect(zones[3].label).toBe("Z4 Sweet Spot");
+    expect(zones[3].label).toBe("Sweet Spot (88-94%)");
     expect(zones[3].value).toBe("246-263W");
     expect(zones[3].overlaps).toBe(true);
 
-    expect(zones[4].label).toBe("Z5 Threshold");
+    expect(zones[4].label).toBe("Z4 Threshold");
     expect(zones[4].value).toBe("266-294W");
 
-    expect(zones[5].label).toBe("Z6 VO2max");
+    expect(zones[5].label).toBe("Z5 VO2max");
     expect(zones[5].value).toBe("297-336W");
+  });
+
+  it("uses 7-zone numbering above tempo: threshold is Z4, sweet spot is a named percent sub-range", () => {
+    const zones = calculateCyclingZones(280);
+
+    const threshold = zones.find((z) => /Threshold/.test(z.label));
+    expect(threshold?.label).toBe("Z4 Threshold");
+
+    const sweetSpot = zones.find((z) => /Sweet Spot/.test(z.label));
+    expect(sweetSpot?.label).toBe("Sweet Spot (88-94%)");
+    expect(sweetSpot?.label).not.toMatch(/Z4/);
   });
 
   it("handles low FTP values", () => {
@@ -38,7 +49,7 @@ describe("calculateCyclingZones", () => {
 
   it("handles high FTP values", () => {
     const zones = calculateCyclingZones(400);
-    expect(zones[4].label).toBe("Z5 Threshold");
+    expect(zones[4].label).toBe("Z4 Threshold");
     expect(zones[4].value).toBe("380-420W");
   });
 });

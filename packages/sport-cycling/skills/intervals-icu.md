@@ -31,15 +31,15 @@
 - Intensity = norm power / FTP
 - < 0.75: Recovery/endurance
 - 0.75-0.85: Tempo
-- 0.85-0.95: Sweet spot
+- 0.85-0.95: Sweet spot (named sub-range, not a numbered zone)
 - 0.95-1.05: Threshold
 - > 1.05: VO2max / anaerobic
 
-### Norm Power (Normalized Power)
-- Smoothed power that accounts for variability
-- Better represents physiological cost than average power
-- Outdoor rides: norm power >> average power (variability)
-- Indoor ERG: norm power ≈ average power
+### Weighted Average Power
+- Smoothed power that accounts for variability — weights harder efforts more heavily
+- Better represents physiological cost than plain average power
+- Outdoor rides: weighted average power >> plain average power (variability)
+- Indoor ERG: weighted average power ≈ plain average power
 
 ### VI (Variability Index)
 - VI = norm power / average power
@@ -108,8 +108,15 @@ Each top-level step is either a **simple step** or a **set** (repeating group).
 Rules:
 - Power is optional only for `freeride` and `rest`. All other step types should have a power target.
 - Ramps **require** `power.low` and `power.high` (the ramp bounds).
-- For zone targets, `value` / `low` / `high` are integers 1–7 (cycling power zones). `Z2` defaults
-  to the power zone for Ride workouts.
+- Prefer `percent_ftp` for every serialized target — the head unit resolves a percent
+  unambiguously. A bare zone integer resolves against the athlete's **configured** bands
+  (the mainstream **7-zone** Coggan model by default: Z4 = Threshold, Z5 = VO2max), so a
+  `Z<n>` token can render **one band** off. Sweet spot is a named sub-range (see Power
+  Zone Reference for the band), not a numbered zone — serialize it as a `percent_ftp`
+  range, never a bare integer.
+- Zone targets accept integers 1–7 — the athlete's configured 7-zone bands (Z4 = Threshold,
+  not sweet spot). `Z2` defaults to the power zone for Ride workouts. Use a zone integer only
+  when `percent_ftp` is genuinely unavailable.
 - Ramps are most reliably expressed as `percent_ftp` ranges (e.g. `low: 55, high: 75`). Zone-based
   ramps may not render — prefer `percent_ftp` for warmup ramps.
 - Durations are time-only: `seconds` or `minutes`. Distance-based workouts are not supported here.

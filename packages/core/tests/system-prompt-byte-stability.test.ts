@@ -9,6 +9,7 @@ import type { SportPersona } from "../src/sport.js";
 const persona: SportPersona = {
   soul: "# Cycling Coach\n\nYou are a cycling coach.",
   skills: { example: "# Example Skill\n\nSome cycling content." },
+  sessionClusterGapMinutes: 30,
 };
 
 function makeFakeMemory(context = ""): Memory {

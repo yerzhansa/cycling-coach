@@ -55,6 +55,7 @@ export const runningSport: Sport = {
   id: "running",
   soul,
   skills: loadSkills(),
+  sessionClusterGapMinutes: 30,
   memorySections,
   mustPreserveTokens: (memory: MemorySnapshot): readonly string[] => {
     const tokens: string[] = [...RUNNING_VOCABULARY];

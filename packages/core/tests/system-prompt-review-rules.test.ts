@@ -19,6 +19,7 @@ function makeFakeMemory(context = ""): Memory {
 const persona: SportPersona = {
   soul: "# Cycling Coach\n\nYou are a cycling coach.",
   skills: { example: "# Example Skill\n\nSome cycling content." },
+  sessionClusterGapMinutes: 30,
 };
 
 describe("buildSystemPrompt — review + data-grounding placement", () => {
@@ -52,13 +53,47 @@ describe("buildSystemPrompt — review + data-grounding placement", () => {
     expect(sections[1]).toMatch(/^# Domain Knowledge/);
     expect(sections[2]).toMatch(/^# Untrusted Data Handling/);
     expect(sections[3]).toMatch(/^# Recall Before Answering/);
-    expect(sections[4]).toMatch(/^# Workout Review/);
-    expect(sections[5]).toMatch(/^# Tool-Call Budget/);
-    expect(sections[6]).toContain("cache boundary:");
-    expect(sections[7]).toMatch(/^# Athlete Context/);
-    expect(sections[8]).toMatch(/^# Current Date & Time/);
-    expect(sections.length).toBe(9);
+    expect(sections[4]).toMatch(/^# Voice & Register/);
+    expect(sections[5]).toMatch(/^# Workout Review/);
+    expect(sections[6]).toMatch(/^# Tool-Call Budget/);
+    expect(sections[7]).toContain("cache boundary:");
+    expect(sections[8]).toMatch(/^# Athlete Context/);
+    expect(sections[9]).toMatch(/^# Current Date & Time/);
+    expect(sections.length).toBe(10);
     expect(prompt).toContain(SYSTEM_PROMPT_CACHE_BOUNDARY);
+  });
+
+  it("carries the cross-sport register-mirroring + name-your-basis voice block", () => {
+    const prompt = buildSystemPrompt(persona, makeFakeMemory("ctx"));
+    expect(prompt).toContain("# Voice & Register");
+    expect(prompt).toMatch(/mirror/i);
+    expect(prompt).toMatch(/feel-language/i);
+    expect(prompt).toMatch(/names[\s\S]*?the signal\(s\) it rests on/i);
+    expect(prompt).toMatch(/must[\s\S]*?NOT invent or quote a precise number/i);
+  });
+
+  it("scopes reply structure (reviews → prose, prescriptions → one step per line) without a bullets-always absolute", () => {
+    const prompt = buildSystemPrompt(persona, makeFakeMemory("ctx"));
+    const voice = prompt
+      .split("\n\n---\n\n")
+      .find((s) => s.startsWith("# Voice & Register"));
+    expect(voice).toBeDefined();
+    expect(voice).toMatch(/prose/i);
+    expect(voice).toMatch(/one step per line/i);
+  });
+
+  it("renders the per-sport session-cluster gap generically from the persona", () => {
+    const cyclingLike = buildSystemPrompt(
+      { ...persona, sessionClusterGapMinutes: 30 },
+      makeFakeMemory("ctx"),
+    );
+    const wideGap = buildSystemPrompt(
+      { ...persona, sessionClusterGapMinutes: 60 },
+      makeFakeMemory("ctx"),
+    );
+    expect(cyclingLike).toContain("within 30 minutes");
+    expect(wideGap).toContain("within 60 minutes");
+    expect(cyclingLike).not.toContain("30 min for cycling, 60 min for running");
   });
 
   it("ties the Data Grounding section's presence to the grounding flag", () => {

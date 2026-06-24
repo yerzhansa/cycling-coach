@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { findTrademarkHits, type TrademarkHit } from "./check-trademarks.js";
+import { collectFiles } from "./lint-fs.js";
 
 let tempDir: string;
 
@@ -166,6 +167,45 @@ describe("findTrademarkHits — skip directive", () => {
     );
     const hits = findTrademarkHits([file]);
     expect(hits.length).toBeGreaterThan(0);
+  });
+});
+
+describe("findTrademarkHits — markdown line-level skip", () => {
+  it("skips a forbidden token on a `skip-line`-marked line but flags it elsewhere", () => {
+    const file = write(
+      "line-skip.md",
+      `# Substitution table\n\n| TSS | Load | <!-- trademark-lint:skip-line -->\n\nWe still report TSS in the legacy export.\n`,
+    );
+    const hits = findTrademarkHits([file]);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].token).toBe("TSS");
+    // The surviving hit is the un-marked prose line, not the table line.
+    expect(hits[0].line).toBe(5);
+  });
+
+  it("skips the following line when `skip-next-line` is used", () => {
+    const file = write(
+      "next-line-skip.md",
+      `# Ban list\n\n<!-- trademark-lint:skip-next-line -->\n| CTL | Fitness |\n\nUnmarked CTL mention.\n`,
+    );
+    const hits = findTrademarkHits([file]);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].token).toBe("CTL");
+    expect(hits[0].line).toBe(6);
+  });
+});
+
+describe("findTrademarkHits — extended scan scope", () => {
+  it("collects and lints `.md` files under a skills-shaped directory", () => {
+    const skillFile = write(
+      "packages/sport-cycling/skills/zone-reference.md",
+      `# Power Zone Reference\n\nWe report TSS on the dashboard.\n`,
+    );
+    const collected: string[] = [];
+    collectFiles(join(tempDir, "packages/sport-cycling/skills"), collected);
+    expect(collected).toContain(skillFile);
+    const hits = findTrademarkHits(collected);
+    expect(hits.map((h: TrademarkHit) => h.token)).toContain("TSS");
   });
 });
 

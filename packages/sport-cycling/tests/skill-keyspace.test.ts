@@ -27,6 +27,7 @@ describe("cycling skill keyspace", () => {
     const persona: SportPersona = {
       soul: cyclingSport.soul,
       skills: cyclingSport.skills,
+      sessionClusterGapMinutes: cyclingSport.sessionClusterGapMinutes,
     };
     expect(buildSystemPrompt(persona, fakeMemory)).toBe(
       buildSystemPrompt(persona, fakeMemory),

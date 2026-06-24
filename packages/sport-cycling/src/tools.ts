@@ -36,7 +36,7 @@ export function createCyclingTools(
 ) {
   return {
     calculate_zones: tool({
-      description: "Calculate 6 power zones from FTP watts",
+      description: "Calculate power-zone watt ranges from FTP watts (7-zone numbering)",
       inputSchema: zodSchema(
         z.object({
           ftpWatts: z.number().int().min(50).max(600).describe("FTP in watts"),

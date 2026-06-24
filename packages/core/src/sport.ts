@@ -91,6 +91,14 @@ export interface Sport {
   /** Skill prompts indexed by skill name (e.g. "build_plan", "assess_workout"). */
   readonly skills: Readonly<Record<string, string>>;
 
+  /**
+   * The within-N-minutes window for clustering activities into one training
+   * session during a review. An operational grouping convention (coaching
+   * judgment about when two efforts count as one session), NOT a physiological
+   * constant.
+   */
+  readonly sessionClusterGapMinutes: number;
+
   /** Sport-prefixed memory sections. Core auto-merges shared sections at runtime. */
   readonly memorySections: readonly MemorySectionSpec[];
 
@@ -134,7 +142,7 @@ export interface Sport {
 
 // ─── Consumer-narrowed slices (interface segregation via Pick) ─────────
 /** Slice consumed by the system-prompt builder. */
-export type SportPersona = Pick<Sport, "soul" | "skills">;
+export type SportPersona = Pick<Sport, "soul" | "skills" | "sessionClusterGapMinutes">;
 
 /** Slice consumed by the memory store factory and the compaction module. */
 export type SportMemoryShape = Pick<Sport, "memorySections" | "mustPreserveTokens">;

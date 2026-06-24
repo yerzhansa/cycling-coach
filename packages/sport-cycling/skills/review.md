@@ -2,7 +2,8 @@
 
 Cycling-specific analysis content for workout reviews. The structural rules
 (3-questions, prose voice, depth tiers, footer) live in Core's review-rules block;
-the trademark forbids and gap rule live in SOUL.md. This file teaches the analysis.
+the trademark substitution table also lives there, and the session-cluster gap is a
+sport-persona field Core renders. This file teaches the analysis.
 
 ## Decoupling — what the number means
 
