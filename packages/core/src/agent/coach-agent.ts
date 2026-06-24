@@ -556,8 +556,11 @@ export class CoachAgent {
             // only here on the success path (before the catch below).
             let effectiveText = text;
             if (isStepExhaustedEmpty(text, finishReason)) {
+              // Charge OUTSIDE the recovery try/catch: a TurnBudgetExceededError
+              // is terminal everywhere else in this loop, so it must propagate to
+              // the outer terminal-budget handler, not degrade to the static floor.
+              turnBudget.chargeModelCall();
               try {
-                turnBudget.chargeModelCall();
                 const recovery = await this.llm.generate({
                   system: this.systemPrompt,
                   messages: [...messages, { role: "user", content: RECOVERY_PROMPT }],
