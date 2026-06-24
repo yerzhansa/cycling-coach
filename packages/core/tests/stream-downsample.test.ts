@@ -51,6 +51,28 @@ describe("downsampleStreams", () => {
     expect(out.channels.cadence).toBeUndefined();
   });
 
+  it("a channel survives null gaps without NaN (dropped sensor packets)", () => {
+    const out = downsampleStreams({
+      watts: [100, null as unknown as number, 102],
+    });
+    expect(out.channels.watts).toBeDefined();
+    expect(out.channels.watts.min).toBe(100);
+    expect(out.channels.watts.max).toBe(102);
+    expect(Number.isNaN(out.channels.watts.mean)).toBe(false);
+    expect(out.channels.watts.samples.every((v) => Number.isFinite(v))).toBe(true);
+  });
+
+  it("accepts the live array-of-channel shape from the streams endpoint", () => {
+    const out = downsampleStreams([
+      { type: "watts", data: Array(600).fill(200) },
+      { type: "heartrate", data: Array(600).fill(150) },
+    ]);
+    expect(out.channels.watts).toBeDefined();
+    expect(out.channels.heartrate).toBeDefined();
+    expect(out.channels.watts.samples).toHaveLength(60);
+    expect(out.sampleCount).toBe(600);
+  });
+
   it("a 3 h-ride payload fits the per-result target after shaping (fits)", () => {
     const big = {
       watts: Array(10800).fill(250),
@@ -83,6 +105,23 @@ describe("downsampleStreams", () => {
     expect(out.sampleCount).toBe(10800);
     expect(out.channels.watts).toBeDefined();
     expect(Array.isArray((out as { watts?: unknown }).watts)).toBe(false);
+  });
+
+  it("shaped tool downsamples the live array-of-channel payload", async () => {
+    const live = [
+      { type: "watts", data: Array(10800).fill(250) },
+      { type: "heartrate", data: Array(10800).fill(150) },
+    ];
+    const fake = makeFakeIntervals({ ok: true, value: live });
+    const tools = createPureCoreIntervalsTools(fake);
+    const out = (await tools.intervals_fetch_streams!.execute!(
+      { activityId: 12345 },
+      {} as never,
+    )) as { bins: number; sampleCount: number; channels: Record<string, unknown> };
+    expect(out.sampleCount).toBe(10800);
+    expect(out.bins).toBeGreaterThan(0);
+    expect(out.channels.watts).toBeDefined();
+    expect(out.channels.heartrate).toBeDefined();
   });
 
   it("typed error object on the streams failure path", async () => {

@@ -119,7 +119,7 @@ export function createPureCoreIntervalsTools(
           : ["watts", "heartrate", "cadence", "time", "altitude"];
         const result = await intervals.activities.getStreams(String(input.activityId), types);
         if (!result.ok) return toTypedError(result.error);
-        return downsampleStreams(result.value as Record<string, unknown>);
+        return downsampleStreams(result.value as Record<string, unknown> | unknown[]);
       },
     }),
 

@@ -11,16 +11,16 @@ type CappedResult = {
   estimatedTokens: number;
 };
 
-function omittedSampleCount(result: unknown, serializedLength: number): number {
-  if (result !== null && typeof result === "object" && !Array.isArray(result)) {
+function omittedSampleCount(result: unknown): number {
+  if (Array.isArray(result)) return result.length;
+  if (result !== null && typeof result === "object") {
     let largest = 0;
     for (const value of Object.values(result as Record<string, unknown>)) {
       if (Array.isArray(value) && value.length > largest) largest = value.length;
     }
-    if (largest > 0) return largest;
+    return largest;
   }
-  if (Array.isArray(result)) return result.length;
-  return serializedLength > 0 && typeof result === "string" ? serializedLength : 0;
+  return 0;
 }
 
 export function capToolResult(tool: Tool, opts: { maxResultTokens: number }): Tool {
@@ -34,7 +34,7 @@ export function capToolResult(tool: Tool, opts: { maxResultTokens: number }): To
         typeof result === "string" ? result : (JSON.stringify(result) ?? "");
       const estimatedTokens = estimateTokens(serialized);
       if (estimatedTokens <= opts.maxResultTokens) return result;
-      const omittedSamples = omittedSampleCount(result, serialized.length);
+      const omittedSamples = omittedSampleCount(result);
       const capped: CappedResult = {
         truncated: true,
         notice:
