@@ -29,12 +29,13 @@ export function stableStringify(value: unknown): string {
   if (Array.isArray(value)) {
     return "[" + value.map(stableStringify).join(",") + "]";
   }
-  const entries = Object.keys(value as Record<string, unknown>)
+  const record = value as Record<string, unknown>;
+  // Skip undefined-valued keys so the serialization mirrors JSON.stringify
+  // (which omits them) instead of collapsing `{a: undefined}` with `{a: null}`.
+  const entries = Object.keys(record)
+    .filter((key) => record[key] !== undefined)
     .sort()
-    .map(
-      (key) =>
-        JSON.stringify(key) + ":" + stableStringify((value as Record<string, unknown>)[key]),
-    );
+    .map((key) => JSON.stringify(key) + ":" + stableStringify(record[key]));
   return "{" + entries.join(",") + "}";
 }
 
@@ -46,18 +47,37 @@ export function memoizeKey(toolName: string, args: unknown): string {
     .digest("hex");
 }
 
-export function memoizeReadTool(name: string, tool: Tool, cache: Map<string, unknown>): Tool {
+// A per-turn cache, supplied either directly (the unit-test path) or via a
+// resolver that reads the running turn's cache from async-context storage (the
+// agent path) so concurrent turns never share or clear each other's entries. A
+// resolver returning undefined means "no turn in scope" — the read runs unmemoized.
+export type ReadCacheSource =
+  | Map<string, unknown>
+  | (() => Map<string, unknown> | undefined);
+
+export function memoizeReadTool(name: string, tool: Tool, cache: ReadCacheSource): Tool {
   if (!READ_ONLY_TOOL_NAMES.has(name)) return tool;
   const inner = tool.execute;
   if (typeof inner !== "function") return tool;
+  const resolveCache = typeof cache === "function" ? cache : () => cache;
   return {
     ...tool,
     execute: async (input: unknown, options: unknown) => {
+      const store = resolveCache();
+      const run = () => (inner as (i: unknown, o: unknown) => unknown)(input, options);
+      if (store === undefined) return run();
       const key = memoizeKey(name, input);
-      if (cache.has(key)) return cache.get(key);
-      const result = await (inner as (i: unknown, o: unknown) => unknown)(input, options);
-      cache.set(key, result);
-      return result;
+      const cached = store.get(key);
+      if (cached !== undefined) return cached;
+      // Cache the in-flight promise (not the resolved value) so two identical
+      // reads launched in the same agentic step share one call. A rejected read
+      // is evicted so the failure isn't cached as a poisoned promise.
+      const pending = Promise.resolve(run());
+      store.set(key, pending);
+      pending.catch(() => {
+        if (store.get(key) === pending) store.delete(key);
+      });
+      return pending;
     },
   } as Tool;
 }

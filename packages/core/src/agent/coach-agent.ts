@@ -177,10 +177,13 @@ export class CoachAgent {
   private turnWrites: { writesCommitted: number; lastWriteSummary?: string } = {
     writesCommitted: 0,
   };
-  // Per-turn read memoizer cache. The wrapped read tools (built once at
-  // construction) close over this reference; chat() clears it in place at the
-  // top of every turn, so caching is strictly within one turn.
-  private readToolCache = new Map<string, unknown>();
+  // Per-turn read memoizer cache. Held in async-context storage (mirroring
+  // resolvedCsStore below) rather than a shared instance field so that
+  // concurrent fire-and-forget turns each memoize into their OWN map and can
+  // neither read nor clear another turn's entries; chat() runs every turn
+  // inside a fresh map. The wrapped read tools (built once at construction)
+  // resolve the running turn's map lazily through this store.
+  private readonly readToolCacheStore = new AsyncLocalStorage<Map<string, unknown>>();
   // Resolved primary anchor (running CS) for the in-flight turn. Held in
   // async-context storage rather than a shared instance field so that
   // fire-and-forget turns running concurrently (different chats, or rapid
@@ -234,7 +237,7 @@ export class CoachAgent {
         memoizeReadTool(
           r.name,
           this.wrapWriteTool(r.name, capToolResult(r.tool, { maxResultTokens })),
-          this.readToolCache,
+          () => this.readToolCacheStore.getStore(),
         ),
       ]),
     ) as ToolSet;
@@ -407,6 +410,7 @@ export class CoachAgent {
     // channel supplies nothing (CLI path, no sync data).
     const resolvedCs = turn?.resolvedCs ?? null;
     return this.resolvedCsStore.run(resolvedCs, () =>
+      this.readToolCacheStore.run(new Map<string, unknown>(), () =>
       withSessionLock(chatId, async () => {
       const turnStart = Date.now();
       const turnId = randomUUID();
@@ -416,10 +420,6 @@ export class CoachAgent {
       // reference to this object, captured once at construction).
       this.turnWrites.writesCommitted = 0;
       this.turnWrites.lastWriteSummary = undefined;
-      // Reset the per-turn read memoizer in place (the wrapped read tools hold a
-      // reference to this map, captured once at construction), so an identical
-      // read on a later turn re-invokes the inner execute.
-      this.readToolCache.clear();
       // One flush per turn: the latch flips on entry (before the await
       // resolves) so a thrown flush still consumes the turn's single flush.
       let flushedThisTurn = false;
@@ -816,6 +816,7 @@ export class CoachAgent {
         throw terminalErr;
       }
       }),
+      ),
     );
   }
 
