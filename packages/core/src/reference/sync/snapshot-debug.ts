@@ -11,7 +11,10 @@ const TELEGRAM_MAX_CHUNK = 4096;
 const FENCE_OPEN = "```\n";
 const FENCE_CLOSE = "\n```";
 // Room the rendered `<pre>${escapeHtmlText(body)}</pre>` leaves for the body.
-const RENDERED_BUDGET = TELEGRAM_MAX_CHUNK - "<pre></pre>".length;
+// The trailing `-1` reserves the leading `\n` of FENCE_CLOSE: FENCE_RE captures
+// `slice + "\n"` as the fence body, so the restored <pre> carries one extra char
+// the `<pre></pre>` overhead alone doesn't account for.
+const RENDERED_BUDGET = TELEGRAM_MAX_CHUNK - "<pre></pre>".length - 1;
 
 const VALID_SECTIONS: readonly (keyof LatestJson)[] = [
   "athlete_profile",

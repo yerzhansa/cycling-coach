@@ -69,6 +69,37 @@ describe("formatSnapshotRaw", () => {
     }
   });
 
+  it("keeps a budget-filling plain-ASCII chunk inside Telegram's limit (1:1 raw→sent)", () => {
+    // The COMMON case: JSON snapshots are predominantly ASCII, where each char
+    // escapes to length 1, so a full-size chunk fills the rendered budget exactly.
+    // FENCE_RE captures `slice + "\n"` (the leading newline of the closing fence)
+    // as the <pre> body, so the restored block carries one char the `<pre></pre>`
+    // overhead alone never reserves. Sizing the section so a slice lands on the
+    // budget boundary exercises that path: without the trailing -1 in
+    // RENDERED_BUDGET the rendered <pre> would be 4097, defeating the 1:1
+    // raw→sent invariant this chunker exists to guarantee.
+    const asciiHeavy: LatestJson = {
+      ...tinyLatest,
+      derived_metrics: { note: "z".repeat(9000) },
+    };
+    const out = formatSnapshotRaw(asciiHeavy);
+    expect(out.kind).toBe("chunks");
+    if (out.kind === "chunks") {
+      expect(out.chunks.length).toBeGreaterThan(1);
+      // At least one chunk must actually fill the budget — otherwise the test
+      // never exercises the boundary it's meant to guard.
+      const maxRendered = Math.max(
+        ...out.chunks.map((chunk) => markdownToTelegramHtml(chunk).length),
+      );
+      expect(maxRendered).toBe(4096);
+      for (const chunk of out.chunks) {
+        const rendered = markdownToTelegramHtml(chunk);
+        expect(rendered.length).toBeLessThanOrEqual(4096);
+        expect(chunkHtml(rendered)).toHaveLength(1);
+      }
+    }
+  });
+
   it("returns just the requested section when a valid name is passed", () => {
     const out = formatSnapshotRaw(tinyLatest, "wellness_data");
     expect(out.kind).toBe("chunks");
