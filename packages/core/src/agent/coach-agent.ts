@@ -328,6 +328,39 @@ export class CoachAgent {
     throw lastError;
   }
 
+  // Step-exhaustion recovery: when the model spent all 10 steps on tool calls
+  // (or hit the output cap) and never emitted final text, run one no-tools
+  // completion asking it to summarize. If that yields nothing (or throws), fall
+  // to the static floor — the athlete always gets actionable text and is never
+  // told to blindly "try again", which would re-run already-committed paid side
+  // effects. The recovery call carries NO tools, so it cannot commit a new write.
+  private async recoverStepExhaustedText(
+    text: string,
+    finishReason: FinishReason,
+    messages: ModelMessage[],
+    cacheKey: string,
+    turnBudget: TurnBudget,
+  ): Promise<string> {
+    if (!isStepExhaustedEmpty(text, finishReason)) return text;
+    // Charge OUTSIDE the recovery try/catch: a TurnBudgetExceededError is
+    // terminal everywhere else in the turn loop, so it must propagate to the
+    // outer terminal-budget handler, not degrade to the static floor.
+    turnBudget.chargeModelCall();
+    try {
+      const recovery = await this.llm.generate({
+        system: this.systemPrompt,
+        messages: [...messages, { role: "user", content: RECOVERY_PROMPT }],
+        tools: undefined,
+        caller: "chat",
+        cacheKey,
+      });
+      return recovery.text.trim() !== "" ? recovery.text : STEP_LIMIT_TRUNCATION_MESSAGE;
+    } catch (recoveryErr) {
+      console.warn("Step-limit recovery completion failed; using truncation floor", recoveryErr);
+      return STEP_LIMIT_TRUNCATION_MESSAGE;
+    }
+  }
+
   private compactionParams(budget?: Pick<TurnBudget, "chargeModelCall">) {
     return {
       llm: this.llm,
@@ -546,35 +579,14 @@ export class CoachAgent {
             });
             const { text, finishReason } = result;
 
-            // Step-exhaustion recovery: the model spent all 10 steps on tool
-            // calls (or hit the output cap) and never emitted final text. One
-            // no-tools completion asks it to summarize; if that yields nothing
-            // (or throws), fall to the static floor — the athlete always gets
-            // actionable text and is never told to blindly "try again", which
-            // would re-run already-committed paid side effects. The recovery
-            // call carries NO tools, so it cannot commit a new write, and runs
-            // only here on the success path (before the catch below).
-            let effectiveText = text;
-            if (isStepExhaustedEmpty(text, finishReason)) {
-              // Charge OUTSIDE the recovery try/catch: a TurnBudgetExceededError
-              // is terminal everywhere else in this loop, so it must propagate to
-              // the outer terminal-budget handler, not degrade to the static floor.
-              turnBudget.chargeModelCall();
-              try {
-                const recovery = await this.llm.generate({
-                  system: this.systemPrompt,
-                  messages: [...messages, { role: "user", content: RECOVERY_PROMPT }],
-                  tools: undefined,
-                  caller: "chat",
-                  cacheKey,
-                });
-                effectiveText =
-                  recovery.text.trim() !== "" ? recovery.text : STEP_LIMIT_TRUNCATION_MESSAGE;
-              } catch (recoveryErr) {
-                console.warn("Step-limit recovery completion failed; using truncation floor", recoveryErr);
-                effectiveText = STEP_LIMIT_TRUNCATION_MESSAGE;
-              }
-            }
+            // Recovery runs only on this success path (before the catch below).
+            const effectiveText = await this.recoverStepExhaustedText(
+              text,
+              finishReason,
+              messages,
+              cacheKey,
+              turnBudget,
+            );
 
             const templateHash = (this.templateHash ??= computeTemplateHash({
               soul: this.sport.soul,
