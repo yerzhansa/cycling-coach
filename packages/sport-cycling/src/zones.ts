@@ -40,7 +40,7 @@ export function calculateCyclingZones(ftpWatts: number): CyclingZoneDisplay[] {
     },
     {
       label: "Z4 Threshold",
-      value: `${Math.round(ftpWatts * 0.95)}-${Math.round(ftpWatts * 1.05)}W`,
+      value: `${Math.round(ftpWatts * 0.91)}-${Math.round(ftpWatts * 1.05)}W`,
     },
     {
       label: "Z5 VO2max",

@@ -24,7 +24,7 @@ describe("calculateCyclingZones", () => {
     expect(zones[3].overlaps).toBe(true);
 
     expect(zones[4].label).toBe("Z4 Threshold");
-    expect(zones[4].value).toBe("266-294W");
+    expect(zones[4].value).toBe("255-294W");
 
     expect(zones[5].label).toBe("Z5 VO2max");
     expect(zones[5].value).toBe("297-336W");
@@ -50,6 +50,6 @@ describe("calculateCyclingZones", () => {
   it("handles high FTP values", () => {
     const zones = calculateCyclingZones(400);
     expect(zones[4].label).toBe("Z4 Threshold");
-    expect(zones[4].value).toBe("380-420W");
+    expect(zones[4].value).toBe("364-420W");
   });
 });
