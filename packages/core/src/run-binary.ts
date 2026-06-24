@@ -1,5 +1,6 @@
 import { parseArgs } from "node:util";
 import { createInterface as createReadlineInterface } from "node:readline";
+import { writeSync } from "node:fs";
 import type { Sport } from "./sport.js";
 import type { BinaryConfig } from "./binary.js";
 import type { Memory } from "./memory/store.js";
@@ -231,7 +232,10 @@ interface BotShutdownDeps {
 // teardown twice. The body is wrapped so any throw still reaches the exit call —
 // a stuck shutdown must never leave the process hanging.
 export function makeBotShutdown(deps: BotShutdownDeps): () => Promise<void> {
-  const log = deps.log ?? ((line: string) => console.log(line));
+  // Default to a synchronous fd-1 write, not console.log: when stdout is a pipe
+  // (Docker/systemd) console.log is async-buffered, and the immediate
+  // process.exit(0) below drops the buffered banner. writeSync cannot be lost.
+  const log = deps.log ?? ((line: string) => writeSync(1, `${line}\n`));
   const drainTimeoutMs = deps.drainTimeoutMs ?? SHUTDOWN_DRAIN_TIMEOUT_MS;
   let shuttingDown = false;
   return async function shutdownBot(): Promise<void> {
@@ -378,7 +382,16 @@ export async function runBinary(
     console.log(
       `${binary.displayName} (Telegram mode) is running. Open Telegram and message your bot — Ctrl+C to stop.`,
     );
+    // When a signal lands in the startup / first-long-poll window, our own
+    // bot.stop() aborts the in-flight getUpdates; grammy surfaces that as a
+    // rejected start-promise (abort / 409 Conflict). That rejection is the
+    // EXPECTED consequence of a graceful shutdown, not a crash — suppress it so
+    // it cannot race reportFatal()'s markUnclean+exit(1) ahead of the shutdown
+    // handler's clean exit(0). A genuine startup failure (bad token, pre-signal
+    // crash) leaves shuttingDown false and still fatals.
+    let shuttingDown = false;
     bot.start({ drop_pending_updates: true }).catch(async (err) => {
+      if (shuttingDown) return;
       const { reportFatal } = await import("./process-guard.js");
       reportFatal(err, { dataDir: config.dataDir });
     });
@@ -394,12 +407,12 @@ export async function runBinary(
       markCleanShutdown,
       exit: (code) => process.exit(code),
     });
-    process.once("SIGTERM", () => {
+    const onSignal = function onSignal(): void {
+      shuttingDown = true;
       void shutdownBot();
-    });
-    process.once("SIGINT", () => {
-      void shutdownBot();
-    });
+    };
+    process.once("SIGTERM", onSignal);
+    process.once("SIGINT", onSignal);
 
     if (!process.env.CYCLING_COACH_NO_UPDATE_CHECK) {
       notifyUpdate(bot, config.dataDir, binary).catch(() => {});

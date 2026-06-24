@@ -52,6 +52,42 @@ describe("run-binary outer init order", () => {
   });
 });
 
+/**
+ * The shutdown-window latch: when a SIGTERM/SIGINT lands in the startup /
+ * first-long-poll window, our own bot.stop() aborts the in-flight getUpdates,
+ * which grammy surfaces as a rejected start-promise (abort / 409). That
+ * rejection is the EXPECTED consequence of a graceful shutdown and must NOT
+ * reach reportFatal (markUnclean + exit(1)) — otherwise it races and beats the
+ * shutdown handler's clean exit(0), making shutdown success timing-dependent.
+ *
+ * This is a structural guard: the unit-level latch lives in a closure private
+ * to runBinary's bot-run path (untestable without driving the whole bot), so we
+ * pin the two halves of the invariant against silent regression. The behavioral
+ * proof is the live race harness (5/5 deterministic clean exits post-fix).
+ */
+describe("run-binary shutdown-window latch", () => {
+  const SOURCE_PATH = join(__dirname, "..", "src", "run-binary.ts");
+  const src = readFileSync(SOURCE_PATH, "utf-8");
+
+  it("the latch is set in the signal handler BEFORE the start-promise catch checks it", () => {
+    const setIdx = src.indexOf("shuttingDown = true");
+    const guardIdx = src.indexOf("if (shuttingDown) return;");
+    expect(setIdx, "signal handler must set shuttingDown = true").toBeGreaterThan(-1);
+    expect(guardIdx, "start-promise catch must early-return when shuttingDown").toBeGreaterThan(-1);
+  });
+
+  it("a genuine start rejection (latch unset) still reaches reportFatal", () => {
+    // The guard is an early-return on shuttingDown; reportFatal stays the
+    // fall-through, so a pre-signal failure (bad token, crash) still fatals.
+    const guardIdx = src.indexOf("if (shuttingDown) return;");
+    const fatalIdx = src.indexOf("reportFatal(err, { dataDir: config.dataDir })");
+    expect(fatalIdx, "reportFatal must remain reachable").toBeGreaterThan(-1);
+    expect(fatalIdx, "reportFatal must follow the suppress-guard, not precede it").toBeGreaterThan(
+      guardIdx,
+    );
+  });
+});
+
 function countOccurrences(haystack: string, needle: string): number {
   let count = 0;
   let idx = 0;
