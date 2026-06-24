@@ -113,7 +113,7 @@ export {
 } from "./agent/turn-budget.js";
 export type { BudgetExceededKind, TurnBudget } from "./agent/turn-budget.js";
 export { TAINTED_BY_WRITES_MESSAGE } from "./agent/coach-agent-copy.js";
-export { capToolResult, TOOL_RESULT_SHARE, STEP_BOUNDARY_RATIO } from "./agent/tool-result-cap.js";
+export { capToolResult, TOOL_RESULT_SHARE } from "./agent/tool-result-cap.js";
 export {
   downsampleStreams,
   STREAM_BIN_SECONDS,

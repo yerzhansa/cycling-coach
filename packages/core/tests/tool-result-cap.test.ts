@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Tool } from "ai";
-import { capToolResult, TOOL_RESULT_SHARE, STEP_BOUNDARY_RATIO } from "../src/agent/tool-result-cap.js";
+import { capToolResult, TOOL_RESULT_SHARE } from "../src/agent/tool-result-cap.js";
 
 const stubTool = (value: unknown): Tool =>
   ({ description: "stub", execute: async () => value }) as unknown as Tool;
@@ -8,7 +8,6 @@ const stubTool = (value: unknown): Tool =>
 describe("capToolResult", () => {
   it("constants pin the configured shares", () => {
     expect(TOOL_RESULT_SHARE).toBe(0.5);
-    expect(STEP_BOUNDARY_RATIO).toBe(0.9);
   });
 
   it("small result passes through byte-identical (same reference)", async () => {

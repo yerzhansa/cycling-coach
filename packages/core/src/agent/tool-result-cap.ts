@@ -2,7 +2,6 @@ import type { Tool } from "ai";
 import { estimateTokens } from "./token-utils.js";
 
 export const TOOL_RESULT_SHARE = 0.5;
-export const STEP_BOUNDARY_RATIO = 0.9;
 
 type CappedResult = {
   truncated: true;
