@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { stepCountIs } from "ai";
@@ -164,11 +165,16 @@ export class CoachAgent {
   private turnWrites: { writesCommitted: number; lastWriteSummary?: string } = {
     writesCommitted: 0,
   };
-  // Resolved primary anchor (running CS) for the in-flight turn. Set at the top
-  // of chat() from the channel's per-turn value and read lazily by sport tools
-  // via the `coreDeps.resolvedCs` getter, so the tool set (and the cached
-  // template hash) never has to be rebuilt per turn.
-  private currentResolvedCs: ResolvedCs | null = null;
+  // Resolved primary anchor (running CS) for the in-flight turn. Held in
+  // async-context storage rather than a shared instance field so that
+  // fire-and-forget turns running concurrently (different chats, or rapid
+  // same-chat sends whose synchronous prologues interleave before each turn's
+  // lock body resumes) each read their OWN anchor — a shared field would let a
+  // later turn's value clobber an in-flight turn's and compute zones from the
+  // wrong athlete's critical speed. The getter (read lazily by sport tools via
+  // the `coreDeps.resolvedCs` closure) resolves against the running turn's
+  // context, so the tool set and cached template hash still never rebuild.
+  private readonly resolvedCsStore = new AsyncLocalStorage<ResolvedCs | null>();
   // The prompt-template hash is derived from constructor-stable inputs (soul,
   // skills, tool schemas, model, and the compile-time rule-block set), so it is
   // computed once on first use and reused for every turn of the process.
@@ -202,7 +208,7 @@ export class CoachAgent {
       memory: this.memory,
       secrets,
       tz: this.tz,
-      resolvedCs: () => this.currentResolvedCs,
+      resolvedCs: () => this.resolvedCsStore.getStore() ?? null,
     };
     const registrations = sport.tools(coreDeps);
     this.tools = Object.fromEntries(
@@ -339,9 +345,12 @@ export class CoachAgent {
     turn?: { resolvedCs?: ResolvedCs | null },
   ): Promise<string> {
     // Per-turn anchor, read lazily by sport tools through the coreDeps getter.
-    // Cleared to null when the channel supplies nothing (CLI path, no sync data).
-    this.currentResolvedCs = turn?.resolvedCs ?? null;
-    return withSessionLock(chatId, async () => {
+    // Scoped to this turn's async context (not a shared field) so concurrent
+    // fire-and-forget turns never clobber each other's anchor. null when the
+    // channel supplies nothing (CLI path, no sync data).
+    const resolvedCs = turn?.resolvedCs ?? null;
+    return this.resolvedCsStore.run(resolvedCs, () =>
+      withSessionLock(chatId, async () => {
       const turnStart = Date.now();
       const turnId = randomUUID();
       let compactions = 0;
@@ -736,7 +745,8 @@ export class CoachAgent {
         });
         throw terminalErr;
       }
-    });
+      }),
+    );
   }
 
   hasSession(chatId: string): boolean {
