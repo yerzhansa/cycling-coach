@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { Tool } from "ai";
 
 // Membership requires the tool's `execute` to be side-effect-free: a memoized
@@ -40,11 +39,11 @@ export function stableStringify(value: unknown): string {
 }
 
 export function memoizeKey(toolName: string, args: unknown): string {
-  // The " " separator cannot appear in a tool name, so it disambiguates
-  // the toolName/args boundary without colliding with any name's own bytes.
-  return createHash("sha256")
-    .update(toolName + " " + stableStringify(args))
-    .digest("hex");
+  // Used only as an in-memory Map key for the per-turn cache, so the raw
+  // string is its own collision-free key — no hashing needed. The " "
+  // separator cannot appear in a tool name, so it disambiguates the
+  // toolName/args boundary without colliding with any name's own bytes.
+  return toolName + " " + stableStringify(args);
 }
 
 // A per-turn cache, supplied either directly (the unit-test path) or via a
@@ -79,5 +78,5 @@ export function memoizeReadTool(name: string, tool: Tool, cache: ReadCacheSource
       });
       return pending;
     },
-  } as Tool;
+  };
 }
