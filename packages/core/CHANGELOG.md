@@ -1,5 +1,102 @@
 # @enduragent/core
 
+## 0.1.0
+
+### Minor Changes
+
+- 1e40e7d: User-facing: Added six new LLM providers to setup — DeepSeek, Qwen, MiniMax, Kimi, Z.AI (GLM), and OpenRouter — each selectable in `setup` with its own model list and an optional base-URL override.
+
+  Wires DeepSeek (`@ai-sdk/deepseek`), Qwen (`@ai-sdk/alibaba`), and OpenRouter (`@openrouter/ai-sdk-provider`) through dedicated AI SDK factories, and MiniMax/Kimi/Z.AI through `@ai-sdk/openai-compatible` with provider-default base URLs. Adds an `LLM_BASE_URL` override and `llm.base_url` config field, plus a pi-ai KnownProvider typing guard so the widened provider union compiles (providers absent from the priced catalog report `cost: undefined` on the usage ledger).
+
+- ffe679a: Auto-resolve the running critical-speed anchor from synced intervals.icu data so `calculate_zones` no longer depends on the LLM supplying it.
+
+  Core gains `resolveRunningCs(latest)` (sharing one row-walk with the step-5 CS-source gate so the two cannot drift) and a per-turn `CoreDeps.resolvedCs` getter; the Telegram channel resolves the anchor from the latest synced profile each turn and passes it into `chat()`. The running `calculate_zones` tool makes `criticalSpeedMps` optional — it falls back to the synced anchor (manual `critical_speed` outranking platform `threshold_pace`), reports real provenance (`csSource` / `anchorOrigin` / `platformConfidence`), and returns a `no_cs_anchor` error rather than guessing when neither is present. The per-turn value is read lazily through a closure, so the prompt-template hash and cache prefix stay stable; non-running sports and the CLI path are unaffected.
+
+### Patch Changes
+
+- a9d75f7: User-facing: /quit, /exit, and Ctrl-D now exit cleanly, and startup shows a "syncing training data" line (with an explanation if the first sync fails).
+
+  The CLI readline loop registers a single close handler that stops the periodic Reference sync scheduler and exits with code 0, so /quit, /exit, Ctrl-D, and a single Ctrl-C at the prompt all return the athlete to their shell instead of leaving a zombie process syncing under their API key. A verbatim banner prints before the awaited boot sync (in both CLI and Telegram modes) so the previously blank up-to-120s cold start is visible. A first sync that resolves failed (rather than throwing) is now surfaced with a one-line explanation from the Reference bootstrap. As defense-in-depth, the periodic scheduler timer is unref'd behind a guard so it cannot keep the process alive on its own.
+
+- fabc7f7: User-facing: A backward or frozen system clock no longer makes stale training data appear fresh.
+
+  The freshness band now treats a cache timestamp more than five minutes in the future as stale (raising a freshness warning) instead of fresh, and the `/sync` reply words a future timestamp honestly instead of clamping it to "0s ago".
+
+- f18878d: User-facing: The coach now declines to quote numbers from stale data and tells you so, instead of fabricating from a stale cache.
+
+  When the latest sync fails validation, the gate records a block-coaching mitigation and the chat turn degrades to general, qualitative guidance with a one-line disclosure of how long since the data last synced. The validation-failure signal flows through an already-present on-disk mitigation channel (no schema change): a HARD sync-gate rejection stamps the error state, and the turn reads it once at start, failing open if that state file is itself unreadable. The degrade block renders in the volatile prompt tail so prompt caching is preserved.
+
+- 3003f2a: Add a sport-agnostic pace formatter that renders an SI speed (metres per second) to an athlete-facing M:SS pace, keyed on the `pace_units` display preference (per-mile for `MINS_MILE`, per-kilometre otherwise). Distance is parameterised so a per-100 pace can reuse it. Additive presentation helper with no caller yet.
+- 4eafde4: User-facing: Fixed a bug where a full disk could discard a reply you'd already received — the coach now always shows the reply and tells you once if it couldn't save it to your history.
+
+  The chat turn now delivers the generated reply even when the session append throws, so a full disk or permission error never discards a reply you already paid for. Both session lines are written as a single atomic append, so a partial half-turn can never land, and a disk-full condition is surfaced to you once per process. The fix lives in Core, so both the CLI and the Telegram channel are fixed without a channel edit — mirroring the audit writer's never-break-the-reply-path discipline.
+
+- b64d7ac: Make the `derived_metrics_meta` provenance honest. Rename `basis` to `prescriptionBasis` (the adapter's declared prescription anchor — `power`/`pace`) and add a separate `analysisBasis` carrying the substrate the distribution numbers were actually computed off (`power`/`hr`/`mixed`/`null`, read from the already-computed `zone_distribution_7d.zone_basis`). For a power-less run these diverge: prescription `pace`, analysis `hr`. `latest.json` schema bumps v2 -> v3 (discard-and-resync). No ported metric math changes.
+- 96053cf: User-facing: A coaching turn that runs out of steps now tells you what it gathered and to ask it to continue, instead of failing with a generic apology.
+
+  When a tool-heavy turn spends its whole step budget without producing a final reply, the agent now reads the model's finish reason and runs one final no-tools completion to summarize what it did and what's left; if that still yields nothing (or fails), it falls back to a static "I ran out of steps" line so the athlete always gets actionable text and is never invited to blindly retry — which would re-run already-committed paid side effects. Two defense-in-depth guards back this up: the session store refuses to persist an empty or whitespace-only assistant message, and the long-message sender skips empty chunks so an empty reply can never reach the chat. The finish-reason reader is a single named predicate that the future overflow-classification work will extend.
+
+- 698ad66: Enable prompt caching for Qwen models routed through OpenRouter.
+
+  OpenRouter auto-caches its OpenAI/DeepSeek/Grok/Moonshot routes but requires an explicit cache_control breakpoint for Anthropic-, Qwen/Alibaba-, and Gemini-backed routes; the five direct providers all cache the stable system prefix automatically. The dispatch path now emits the breakpoint under the `openrouter` providerOptions key for `qwen/`-namespaced models only — `anthropic/` and `google/` routes via OpenRouter remain uncached by design and can be added later. Every other provider and OpenRouter-routed model is unchanged. The Anthropic branch is generalized into a small `cacheBreakpointKey` resolver (same breakpoint shape, only the key differs).
+
+- c8b9d74: User-facing: Added a per-turn safety cap so a flaky provider connection can never run up a large surprise bill on your API key in a single message.
+  User-facing: Fixed a bug where retrying after a hiccup could create a duplicate workout on your calendar; the coach now tells you honestly if a change was saved but the reply didn't finish.
+
+  A single per-turn budget now caps total model calls and total generate attempts across every error class and the flush and compaction ladders, with a five-minute wall-clock checked only between attempts that never aborts an in-flight call, so a brownout turn stops with a classified budget error instead of spending the athlete's pay-as-you-go budget. The agent also records each committed calendar write within a turn and refuses to silently retry once a write has committed, returning an honest message that a change was saved but the reply failed rather than replaying a non-idempotent create into a duplicate workout.
+
+- 82defb5: User-facing: A single server hiccup or network blip from the AI provider no longer ends your turn — the coach now retries briefly and keeps going.
+
+  Both the AI-SDK and codex provider paths now route transient 5xx/network failures through one closed error taxonomy and a single jittered-retry layer; a connection-refused error buried on `error.cause` is detected via a cause-chain walk. The codex provider path stops mis-classing a transient gateway 5xx as a rate limit (it took 5-35s of rate-limit-grade backoff it did not deserve) and now honors Retry-After from the response headers; a runtime-fetch wrapper stops the provider library's internal network-retry loop so network errors are retried at exactly one layer, and a static-dist smoke test trips loudly if a provider-library upgrade renames the no-retry marker.
+
+- e7b8236: User-facing: Refreshed the model picker to the current generation — added Claude Opus 4.8, GPT-5.5, Gemini 3.5/3.1, GLM-5.2, MiniMax M3/M2.7, Kimi K2.6 and Qwen 3.5, and retired stale options.
+
+  Refreshed the setup-wizard model picklist, the per-provider default models (`setup.ts` + `config.ts`), the context-window table, and the cost price catalog (`cost.ts`) to the current-generation models across every provider. Model IDs, per-million pricing, and context windows were verified against each provider's official pricing/docs pages.
+
+- 0c34c56: Vendored the ChatGPT-subscription ("openai-codex") provider in-house and removed the `@mariozechner/pi-ai` dependency. OAuth login + token refresh, the Responses-API round-trip, the JWT account-id helper, and the per-million pricing catalog now live under `packages/core/src/agent/codex/`, re-expressed in the codebase's own AI-SDK type vocabulary (`ModelMessage[]` / `LanguageModelUsage`). Behavior is preserved — SSE transport, one request attempt with structured errors propagated to the shared retry layer, and native token-endpoint redaction (status + boolean field-presence only, never token bodies). No user-visible change.
+- eb4b9a6: Land critical-speed-anchored running pace zones and make them reachable through the running-coach binary.
+
+  `@enduragent/sport-running` now ships the `calculate_zones` tool (six CS-anchored pace zones), the running soul + skills, the athlete-profile schema, and a pace-based reference adapter. `@enduragent/core` gains a hard CS-source sync gate (step 5) that refuses to sync a running zone table from a missing or out-of-band critical-speed anchor, plus the `threshold_pace`/`critical_speed`/`cs_source`/`cs_confidence` fields on the sport-settings schema. The `running-coach` binary, previously a stub, now wraps the running sport via Core's `runBinary` — it runs from the workspace (externalized, still private/unpublished).
+
+- 73b3af4: Serialize structured running workouts and add the calendar-create running tool.
+
+  `@enduragent/sport-running` now ships `serializeRunningWorkout` (pace-based steps → intervals.icu native step syntax) plus a gated `intervals_create_workout` tool that writes the workout to the intervals.icu calendar. Steps carry zone, critical-speed-fraction, or absolute-pace targets over time or distance, rendered so the server parses them into a structured workout (distances emit as km/mi so they are never misread as minutes); running Pace Load stays server-authoritative, so no client load is sent. `@enduragent/core` re-exports the critical-speed sanity band (`CS_MIN_MPS` / `CS_MAX_MPS`) as a single constant the running package now derives its band from.
+
+- 383982b: User-facing: The coach no longer silently half-schedules a multi-workout week — it confirms the plan and writes workouts across follow-up turns instead of running out of room mid-write.
+  User-facing: Repeated identical data lookups within a single message are reused instead of re-fetched, so the coach answers faster and uses less of your API budget.
+
+  Adds a per-turn read memoizer that wraps read-only tools and reuses an identical same-turn read (keyed on a stable hash of the tool name and its arguments) instead of re-invoking the tool's execute, so a duplicate lookup no longer burns an agentic step or re-pays the athlete's API spend. The memoizer applies ONLY to an explicit, hand-audited read-only allowlist that deliberately excludes the plan-skeleton tool and the calendar/memory writers (a memoized hit would skip their side effects). The cache is per-turn: it is cleared at the top of each chat turn, so an identical read on a later turn re-fetches. A new static rule block discloses the per-turn tool-call budget and prescribes the multi-workout follow-up protocol, riding the cached prompt prefix.
+
+- 65c8d82: Change the in-process scheduled sync cadence from every 30 minutes to every 6 hours (`SCHEDULED_SYNC_INTERVAL_MS`). The boot sync is unchanged; this only lengthens the recurring in-process refresh timer, reducing intervals.icu API load. Data stays within the 24h "fresh" band between refreshes.
+- 0cd853b: User-facing: /sync now replies instantly when a sync is already running, instead of appearing to hang.
+
+  The interactive /sync path consults the sync mutex and returns the "already running" reply immediately rather than blocking the full acquire timeout; the background scheduler's queue-and-wait behavior is unchanged. The /sync reply also no longer renders a dangling "Refreshed:" line on a no-op cycle — it now says the data was already up to date.
+
+- 12f522a: User-facing: A sync hiccup no longer silently blanks your data behind a "fresh" stamp — if a data source errors, the coach keeps the last good snapshot and records the failure instead of overwriting it with empties.
+
+  Per-endpoint fetch failures (athlete-profile, wellness) now ride a Result-shaped error channel into the Reference layer's data-fetch gate; the gate's data-fetch precondition hard-fails naming the endpoint, so the failed sync routes through the existing gate-rejection path — the prior cache file is preserved, the freshness stamp is not advanced, and the error state records the failure. The same pass adds a content-hash short-circuit to the sync write loop: a no-op cycle (re-fetched data identical modulo metadata) now skips the cache writes entirely, leaving the files byte-identical instead of re-stamping a fresh timestamp every cycle; the sidecar commit marker still advances each cycle.
+
+- ebb0c3e: User-facing: The bot now answers quick commands like /version while a long /plan is still being generated, and Telegram's "/" menu lists every command.
+
+  Telegram turn handlers (/plan, /workout, /status, /review, and free-form messages) now spawn the LLM turn on a tracked task and return immediately, so grammY's sequential update loop is never blocked by a long turn. Per-chat reply ordering is preserved by the existing per-chat session lock inside the agent's chat path. The session reset now runs under that same lock so a reset can no longer interleave with an in-flight turn for the same chat. The command surface is registered with Telegram via setMyCommands at startup (fire-and-forget, conditional on Reference services for /sync, excluding /snapshot), so the client's "/" auto-complete menu populates.
+
+- 147e7e4: User-facing: Workout prescriptions and code blocks now render exactly as written, links are clickable, and formatting errors fall back to clean readable text.
+
+  The Telegram markdown→HTML converter now extracts fenced code blocks from the raw source before escaping (mirroring the table path), so a fenced workout like `- 4x8min @ 105%` survives byte-for-byte instead of having its bullets, headers, and italics mangled inside the `<pre>`. The italic regex is tightened so spaced asterisks in interval math (`do 3 * 8 reps`) keep their literal `*`. An http/https-only `[text](url)` rule renders clickable links with attribute-escaped hrefs and no double-escaped `&` in multi-param query strings. The long-message hard split no longer bisects an HTML tag, entity, or surrogate pair. When Telegram rejects a chunk, the fallback now delivers human-readable source text rather than resending raw tag soup. Finally, the `/snapshot` debug dump rides the same HTML path, dropping the lone legacy Markdown parse mode.
+
+- 955990e: User-facing: Deep race-review turns with very large data fetches now degrade gracefully instead of failing.
+
+  A generic per-result token-share cap is applied at the tool-registration boundary: any tool whose serialized result exceeds half the context window is replaced with a count-preserving notice the model can act on (rerun with narrower arguments), while small results pass through byte-identical. On top of that backstop, the intervals.icu stream fetch now downsamples raw time-series to 10-second bins with a per-channel min/max/mean stats header that preserves true peaks, so a 3-hour ride fits the smallest supported context window instead of overflowing the mid-turn step loop and exhausting the overflow-recovery retries. Every intervals.icu fetch tool's error path now returns a typed object carrying the error kind plus optional HTTP status or message, additively, without changing the kind key the prompt's error-translation table reads.
+
+- 1079871: User-facing: The "update available" notification now invites you to tag or DM @yerzhansa on X.com with feedback, feature requests, or bugs.
+
+  Appends a one-line feedback call-to-action to the startup update-available broadcast in the Telegram channel. Plain-text only (the broadcast sends without a parse mode), so no markdown/HTML escaping concerns. Broadcast filtering and once-per-version dedupe are unchanged.
+
+- e755f86: Tag the local usage-ledger turn line with the prompt template hash. The turn line now carries an optional `templateHash` so a recorded latency/timing sample is attributable to the exact prompt revision that produced it, without a timestamp join against the chat-store. The value is already computed at the append site; only the turn line carries it (the per-generation line stays as-is). Additive and optional — existing ledger lines and readers are unaffected.
+- 1d414e5: User-facing: The coach now mirrors your wording — it explains efforts in plain feel-language unless you used the technical term first, names the signal behind every recommendation, and the cycling zone numbers it prescribes now match the mainstream 7-zone scheme your head unit uses.
+
+  Cross-sport voice rules (register-mirroring, name-your-basis, and scoped reply structure — reviews → prose, quick answers → direct, prescriptions → one step per line) move into Core's system-prompt builder, so they apply to every sport; the contradictory SOUL copies and the duplicate trademark substitution table are deleted, leaving exactly one table in Core's review block. The session-cluster gap becomes a sport-persona field Core renders generically instead of a hardcoded per-sport string. Cycling zone vocabulary aligns to the mainstream 7-zone numbering — sweet spot is taught as the named 88-94% sub-range rather than its own integer, threshold moves to Z4, and the zone-intensity midpoints are re-keyed so the calendar Load estimate agrees with the band a serialized zone step actually demands; the heart-rate cross-reference closes its gap and caveats that heart rate is an unreliable target above threshold. Periodization and taper numbers are steered to the deterministic plan tool instead of transcribed in skill prose, with a guard test pinning the dedup. The trademark lint now scans the per-sport skill markdown and SOUL files with a line-level skip directive.
+
 ## 0.0.2
 
 ### Patch Changes

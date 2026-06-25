@@ -1,5 +1,41 @@
 # @enduragent/sport-cycling
 
+## 0.0.3
+
+### Patch Changes
+
+- 1d414e5: User-facing: The coach now mirrors your wording — it explains efforts in plain feel-language unless you used the technical term first, names the signal behind every recommendation, and the cycling zone numbers it prescribes now match the mainstream 7-zone scheme your head unit uses.
+
+  Cross-sport voice rules (register-mirroring, name-your-basis, and scoped reply structure — reviews → prose, quick answers → direct, prescriptions → one step per line) move into Core's system-prompt builder, so they apply to every sport; the contradictory SOUL copies and the duplicate trademark substitution table are deleted, leaving exactly one table in Core's review block. The session-cluster gap becomes a sport-persona field Core renders generically instead of a hardcoded per-sport string. Cycling zone vocabulary aligns to the mainstream 7-zone numbering — sweet spot is taught as the named 88-94% sub-range rather than its own integer, threshold moves to Z4, and the zone-intensity midpoints are re-keyed so the calendar Load estimate agrees with the band a serialized zone step actually demands; the heart-rate cross-reference closes its gap and caveats that heart rate is an unreliable target above threshold. Periodization and taper numbers are steered to the deterministic plan tool instead of transcribed in skill prose, with a guard test pinning the dedup. The trademark lint now scans the per-sport skill markdown and SOUL files with a line-level skip directive.
+
+- Updated dependencies [a9d75f7]
+- Updated dependencies [fabc7f7]
+- Updated dependencies [f18878d]
+- Updated dependencies [3003f2a]
+- Updated dependencies [4eafde4]
+- Updated dependencies [b64d7ac]
+- Updated dependencies [96053cf]
+- Updated dependencies [1e40e7d]
+- Updated dependencies [698ad66]
+- Updated dependencies [c8b9d74]
+- Updated dependencies [82defb5]
+- Updated dependencies [e7b8236]
+- Updated dependencies [0c34c56]
+- Updated dependencies [ffe679a]
+- Updated dependencies [eb4b9a6]
+- Updated dependencies [73b3af4]
+- Updated dependencies [383982b]
+- Updated dependencies [65c8d82]
+- Updated dependencies [0cd853b]
+- Updated dependencies [12f522a]
+- Updated dependencies [ebb0c3e]
+- Updated dependencies [147e7e4]
+- Updated dependencies [955990e]
+- Updated dependencies [1079871]
+- Updated dependencies [e755f86]
+- Updated dependencies [1d414e5]
+  - @enduragent/core@0.1.0
+
 ## 0.0.2
 
 ### Patch Changes
