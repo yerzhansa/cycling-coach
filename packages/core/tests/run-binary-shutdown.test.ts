@@ -1,11 +1,11 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, type Mock } from "vitest";
 import { makeBotShutdown } from "../src/run-binary.js";
 
 interface Recorded {
-  stop: ReturnType<typeof vi.fn>;
-  drainPending: ReturnType<typeof vi.fn>;
-  markCleanShutdown: ReturnType<typeof vi.fn>;
-  exit: ReturnType<typeof vi.fn>;
+  stop: Mock<() => Promise<void>>;
+  drainPending: Mock<() => Promise<void>>;
+  markCleanShutdown: Mock<(opts: { dataDir: string }) => void>;
+  exit: Mock<(code: number) => void>;
 }
 
 function makeDeps(overrides?: {
@@ -14,10 +14,10 @@ function makeDeps(overrides?: {
   drainTimeoutMs?: number;
 }): { shutdown: () => Promise<void>; rec: Recorded } {
   const rec: Recorded = {
-    stop: vi.fn(overrides?.stop ?? (async () => undefined)),
-    drainPending: vi.fn(overrides?.drainPending ?? (async () => undefined)),
-    markCleanShutdown: vi.fn(),
-    exit: vi.fn(),
+    stop: vi.fn<() => Promise<void>>(overrides?.stop ?? (async () => undefined)),
+    drainPending: vi.fn<() => Promise<void>>(overrides?.drainPending ?? (async () => undefined)),
+    markCleanShutdown: vi.fn<(opts: { dataDir: string }) => void>(),
+    exit: vi.fn<(code: number) => void>(),
   };
   const shutdown = makeBotShutdown({
     stop: rec.stop,
