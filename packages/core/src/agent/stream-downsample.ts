@@ -43,29 +43,27 @@ function summarizeChannel(values: readonly unknown[], binSeconds: number): Chann
   let max = -Infinity;
   let sum = 0;
   let count = 0;
-  for (const v of values) {
-    if (typeof v !== "number" || !Number.isFinite(v)) continue;
-    if (v < min) min = v;
-    if (v > max) max = v;
-    sum += v;
-    count++;
-  }
-  if (count === 0) return null;
-  const mean = Math.round((sum / count) * 10) / 10;
-
   const samples: number[] = [];
+
   for (let i = 0; i < values.length; i += binSeconds) {
     let binSum = 0;
     let binCount = 0;
     for (let j = i; j < i + binSeconds && j < values.length; j++) {
       const v = values[j];
       if (typeof v !== "number" || !Number.isFinite(v)) continue;
+      if (v < min) min = v;
+      if (v > max) max = v;
       binSum += v;
       binCount++;
     }
-    if (binCount > 0) samples.push(Math.round(binSum / binCount));
+    if (binCount === 0) continue;
+    sum += binSum;
+    count += binCount;
+    samples.push(Math.round(binSum / binCount));
   }
 
+  if (count === 0) return null;
+  const mean = Math.round((sum / count) * 10) / 10;
   return { min, max, mean, samples };
 }
 
