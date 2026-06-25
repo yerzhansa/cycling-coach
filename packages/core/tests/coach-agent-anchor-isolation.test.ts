@@ -74,6 +74,7 @@ function makeStubRunningSport(): Sport {
     id: "running",
     soul: "",
     skills: {},
+    sessionClusterGapMinutes: 60,
     memorySections: sections,
     mustPreserveTokens: () => ["VDOT"],
     intervalsActivityTypes: ["Run", "TrailRun"],
