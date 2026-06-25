@@ -812,7 +812,7 @@ export async function notifyUpdate(bot: Bot, dataDir: string, binary: BinaryConf
     const knownChats = getKnownTelegramChatIds(dataDir);
     const chatIds =
       allowed.dmPolicy === "open" ? knownChats : knownChats.filter((id) => allowSet.has(id));
-    const message = `Update available: ${info.current} → ${info.latest}\nSend /whatsnew to see what changed, /update to install.\n\nTag or DM @yerzhansa on X.com with feedback, feature requests, or bugs — help shape what's next.`;
+    const message = `Update available: ${info.current} → ${info.latest}\nSend /whatsnew to see what changed, /update to install.\n\nTag or DM me at x.com/yerzhansa with feedback, feature requests, or bugs — help shape what's next.`;
 
     for (const chatId of chatIds) {
       try {
