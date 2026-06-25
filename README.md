@@ -2,7 +2,7 @@
 
 AI cycling coaching agent. Bring your own LLM API key **or sign in with a ChatGPT Plus subscription**, connect [intervals.icu](https://intervals.icu) for real athlete data, chat via Telegram or CLI.
 
-Follow [@enduragent](https://x.com/enduragent) on X for updates, or drop a question/feedback anytime.
+Follow [@yerzhansa](https://x.com/yerzhansa) on X for updates, or drop a question/feedback anytime.
 
 ## What it does
 
