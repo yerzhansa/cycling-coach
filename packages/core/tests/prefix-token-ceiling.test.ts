@@ -7,7 +7,9 @@ import type { SportPersona } from "../src/sport.js";
 
 const emptyMemory = { getContext: () => "" } as unknown as Memory;
 
-const STATIC_PREFIX_TOKEN_CEILING = 12_000;
+// Bumped to accommodate the step-budget disclosure (a data-integrity safeguard
+// against half-scheduled weeks) while still bounding runaway prefix growth.
+const STATIC_PREFIX_TOKEN_CEILING = 12_500;
 
 describe("static system-prompt prefix token ceiling", () => {
   it("keeps the real cycling static prefix under the ceiling", () => {
