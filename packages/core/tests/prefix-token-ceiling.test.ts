@@ -8,12 +8,11 @@ import type { SportPersona } from "../src/sport.js";
 const emptyMemory = { getContext: () => "" } as unknown as Memory;
 
 // Budget guard with headroom — the cached prefix must stay well under the
-// model's context window. Raised from 12_000 as two bounded additions joined the
-// static rules: the cross-sport Voice & Register block (with the cycling zone
-// reference's fully-populated anaerobic/neuromuscular rows) and the step-budget
-// disclosure (a data-integrity safeguard against half-scheduled weeks). A
-// deliberate, bounded prefix growth, not unbounded drift; the real prefix sits a
-// few hundred tokens below this ceiling.
+// model's context window. Raised from 12_500 as the cross-sport Voice & Register
+// block (plus the cycling zone reference's fully-populated
+// anaerobic/neuromuscular rows) joined the static rules. A deliberate, bounded
+// prefix growth, not unbounded drift; the real prefix sits a few hundred tokens
+// below this ceiling.
 const STATIC_PREFIX_TOKEN_CEILING = 13_000;
 
 describe("static system-prompt prefix token ceiling", () => {
