@@ -400,9 +400,9 @@ telegram:
 
 The Railway distribution path is an image-backed marketplace template, not a GitHub fork or source build.
 
-Template link placeholder: `https://railway.com/new/template/TEMPLATE_ID`
+Template link: `https://railway.com/new/template/cycling-coach`
 
-Replace `TEMPLATE_ID` only after the GHCR package is public and the template is published in Railway's marketplace. The template service should use:
+The published Railway marketplace template service uses:
 
 - Docker image: `ghcr.io/yerzhansa/cycling-coach:stable`.
 - Volume: mount a persistent Railway volume at `/data`.
