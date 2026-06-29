@@ -62,7 +62,7 @@ cycling-coach setup
 cycling-coach
 ```
 
-The setup wizard asks for your LLM provider — an API key for Anthropic / OpenAI / Google, **or OAuth sign-in with your ChatGPT subscription** (no API key needed). Then optionally connects [intervals.icu](https://intervals.icu) and Telegram. After setup, `cycling-coach` starts in CLI mode — or Telegram mode if you provided a bot token.
+The setup wizard asks for your LLM provider — an API key for Anthropic / OpenAI / Google / DeepSeek / Qwen / MiniMax / Kimi / Z.AI / OpenRouter, **or OAuth sign-in with your ChatGPT subscription** (no API key needed). Then optionally connects [intervals.icu](https://intervals.icu) and Telegram. After setup, `cycling-coach` starts in CLI mode — or Telegram mode if you provided a bot token.
 
 ```
 Cycling Coach (CLI mode). Type your message:
@@ -76,6 +76,12 @@ Cycling Coach (CLI mode). Type your message:
 - **Anthropic (Claude)** — console API key from [Anthropic Console](https://console.anthropic.com/). Recommended default.
 - **OpenAI (GPT)** — console API key from [OpenAI Platform](https://platform.openai.com/).
 - **Google (Gemini)** — console API key from [Google AI Studio](https://aistudio.google.com/).
+- **DeepSeek** — API key from [DeepSeek Platform](https://platform.deepseek.com/).
+- **Qwen** — API key from Alibaba Cloud DashScope.
+- **MiniMax** — API key from [MiniMax Platform](https://platform.minimaxi.com/).
+- **Kimi** — API key from [Moonshot AI](https://platform.moonshot.ai/).
+- **Z.AI (GLM)** — API key from [Z.AI](https://z.ai/).
+- **OpenRouter** — API key from [OpenRouter](https://openrouter.ai/).
 - **OpenAI Codex (ChatGPT subscription) — experimental** — browser OAuth sign-in with your ChatGPT Plus / Pro / Business / Edu / Enterprise account. No API key needed; the bot uses your subscription quota. Minimum tier: ChatGPT Plus ($20/mo). Select it in `cycling-coach setup` to start the OAuth flow. Models offered in the wizard: `gpt-5.4` (balanced, recommended) and `gpt-5.4-mini` (faster, smaller context). Cost is covered by the subscription regardless of which model you pick — the choice is speed vs capability, not price. On hard rate-limit failures the bot retries up to 4× with backoff (~35s total) before reporting the error to the chat.
 
 Anthropic's Claude Pro/Max subscription does **not** support OAuth for third-party tools (per Anthropic ToS) — the only supported Anthropic path here is the console API key.
@@ -346,7 +352,7 @@ Cycling Coach is a single Node process holding a long-polling connection to Tele
 - A persistent volume mounted at `/data` (or wherever you point `CYCLING_COACH_HOME`).
 - Secrets injected as env vars, referenced from `config.yaml` via `source: env` (see [Storing secrets outside config.yaml](#storing-secrets-outside-configyaml)).
 - One instance only — sessions are sharded by Telegram chat ID on local disk; do not enable autoscaling.
-- A BYOK provider (`anthropic` / `openai` / `google`). `LLM_PROVIDER=openai-codex` is **not supported in containers** — it depends on an interactive OAuth flow that writes to the data dir, which can't run headless. Use Anthropic, OpenAI, or Google in the cloud.
+- A BYOK API-key provider (`anthropic` / `openai` / `google` / `deepseek` / `qwen` / `minimax` / `kimi` / `zai` / `openrouter`). `LLM_PROVIDER=openai-codex` is **not supported in containers** — it depends on an interactive OAuth flow that writes to the data dir, which can't run headless.
 
 ### Docker
 
@@ -371,9 +377,9 @@ Or build the same image locally from this repo:
 docker build -f packages/cycling-coach/Dockerfile -t cycling-coach .
 ```
 
-Use `--env-file` rather than inline `-e KEY=value` flags — inline values land in shell history and are visible to other users via `ps`. Your `.env` should contain `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY`), `INTERVALS_API_KEY`, `INTERVALS_ATHLETE_ID`, `TELEGRAM_BOT_TOKEN`, and `CYCLING_COACH_OPERATOR_ID` for unattended cloud/container starts. Restrict the file to the user that invokes `docker`: `chmod 600 .env`. Note that env vars passed to a container remain visible via `docker inspect` to anything with Docker-socket access — where available, prefer Docker Compose `secrets:` or podman secrets instead. For non-container installs, the config-based secret backends (macOS Keychain, 1Password SecretRef — see [Storing secrets outside config.yaml](#storing-secrets-outside-configyaml)) keep keys out of the environment entirely.
+Use `--env-file` rather than inline `-e KEY=value` flags — inline values land in shell history and are visible to other users via `ps`. Your `.env` should contain `LLM_PROVIDER`, `LLM_API_KEY`, `INTERVALS_API_KEY`, `INTERVALS_ATHLETE_ID`, `TELEGRAM_BOT_TOKEN`, and `CYCLING_COACH_OPERATOR_ID` for unattended cloud/container starts. Provider-specific LLM env vars still work and take precedence over `LLM_API_KEY`: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `DEEPSEEK_API_KEY`, `ALIBABA_API_KEY`, `MINIMAX_API_KEY`, `MOONSHOT_API_KEY`, `ZAI_API_KEY`, or `OPENROUTER_API_KEY`. Restrict the file to the user that invokes `docker`: `chmod 600 .env`. Note that env vars passed to a container remain visible via `docker inspect` to anything with Docker-socket access — where available, prefer Docker Compose `secrets:` or podman secrets instead. For non-container installs, the config-based secret backends (macOS Keychain, 1Password SecretRef — see [Storing secrets outside config.yaml](#storing-secrets-outside-configyaml)) keep keys out of the environment entirely.
 
-The image mounts `/data` for state and reads `/data/config.yaml` if present. The image sets `CYCLING_COACH_MANAGED_DEPLOY=1`, so `/update` is disabled and updates happen by pulling/redeploying a newer image. The container starts as root only long enough to fix managed-platform volume ownership, then drops to the non-root `node` user (uid 1000). With the env vars above, no `config.yaml` is required — the legacy env-var fallback (`ANTHROPIC_API_KEY` etc.) covers the three secret fields.
+The image mounts `/data` for state and reads `/data/config.yaml` if present. The image sets `CYCLING_COACH_MANAGED_DEPLOY=1`, so `/update` is disabled and updates happen by pulling/redeploying a newer image. The container starts as root only long enough to fix managed-platform volume ownership, then drops to the non-root `node` user (uid 1000). With the env vars above, no `config.yaml` is required — `LLM_PROVIDER` + `LLM_API_KEY` covers all API-key LLM providers.
 
 For finer control (custom model, idle timeout, etc.) drop a `config.yaml` into the volume:
 
@@ -384,7 +390,7 @@ llm:
   model: claude-sonnet-4-6
   api_key:
     source: env
-    var: ANTHROPIC_API_KEY
+    var: LLM_API_KEY
 intervals:
   api_key:
     source: env
@@ -406,7 +412,8 @@ The published Railway marketplace template service uses:
 
 - Docker image: `ghcr.io/yerzhansa/cycling-coach:stable`.
 - Volume: mount a persistent Railway volume at `/data`.
-- Variables: `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY`), `INTERVALS_API_KEY`, `INTERVALS_ATHLETE_ID`, `TELEGRAM_BOT_TOKEN`, `CYCLING_COACH_OPERATOR_ID`.
+- Variables: `LLM_PROVIDER`, `LLM_API_KEY`, `INTERVALS_API_KEY`, `INTERVALS_ATHLETE_ID`, `TELEGRAM_BOT_TOKEN`, `CYCLING_COACH_OPERATOR_ID`.
+- Supported Railway `LLM_PROVIDER` values: `anthropic`, `openai`, `google`, `deepseek`, `qwen`, `minimax`, `kimi`, `zai`, `openrouter`.
 - Instances: exactly one replica, no autoscaling.
 - Networking: no public domain/gateway is required; Telegram uses outbound long polling.
 - Restart policy: restart on failure so the bot reconnects after crashes or Railway maintenance.

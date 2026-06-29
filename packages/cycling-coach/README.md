@@ -12,7 +12,7 @@ cycling-coach setup
 cycling-coach
 ```
 
-The setup wizard asks for your LLM provider — an API key for Anthropic / OpenAI / Google, **or OAuth sign-in with your ChatGPT subscription** (no API key needed). Then optionally connects [intervals.icu](https://intervals.icu) and Telegram. After setup, `cycling-coach` starts in CLI mode — or Telegram mode if you provided a bot token.
+The setup wizard asks for your LLM provider — an API key for Anthropic / OpenAI / Google / DeepSeek / Qwen / MiniMax / Kimi / Z.AI / OpenRouter, **or OAuth sign-in with your ChatGPT subscription** (no API key needed). Then optionally connects [intervals.icu](https://intervals.icu) and Telegram. After setup, `cycling-coach` starts in CLI mode — or Telegram mode if you provided a bot token.
 
 ```
 Cycling Coach (CLI mode). Type your message:
@@ -35,6 +35,12 @@ Cycling Coach (CLI mode). Type your message:
 - **Anthropic (Claude)** — API key from [Anthropic Console](https://console.anthropic.com/). Recommended default.
 - **OpenAI (GPT)** — API key from [OpenAI Platform](https://platform.openai.com/).
 - **Google (Gemini)** — API key from [Google AI Studio](https://aistudio.google.com/).
+- **DeepSeek** — API key from [DeepSeek Platform](https://platform.deepseek.com/).
+- **Qwen** — API key from Alibaba Cloud DashScope.
+- **MiniMax** — API key from [MiniMax Platform](https://platform.minimaxi.com/).
+- **Kimi** — API key from [Moonshot AI](https://platform.moonshot.ai/).
+- **Z.AI (GLM)** — API key from [Z.AI](https://z.ai/).
+- **OpenRouter** — API key from [OpenRouter](https://openrouter.ai/).
 - **ChatGPT subscription (experimental)** — browser OAuth sign-in with your ChatGPT Plus / Pro / Business / Edu / Enterprise account. No API key; uses your subscription quota. Models: `gpt-5.4` (recommended) and `gpt-5.4-mini` (faster, smaller context). Cost is covered by the subscription regardless of which model you pick.
 
 Anthropic's Claude Pro/Max subscription does **not** support OAuth for third-party tools — the only supported Anthropic path is the console API key.

@@ -15,6 +15,7 @@ const MANAGED_ENV = [
   "MOONSHOT_API_KEY",
   "ZAI_API_KEY",
   "OPENROUTER_API_KEY",
+  "LLM_API_KEY",
   "LLM_BASE_URL",
   "INTERVALS_API_KEY",
   "INTERVALS_ATHLETE_ID",
@@ -100,6 +101,46 @@ describe("config — SecretRef integration", () => {
     const { loadConfig, resolveConfigSecrets } = await import("../src/config.js");
     const cfg = await resolveConfigSecrets(loadConfig());
     expect(cfg.llm.apiKey).toBe("env-wins");
+  });
+
+  it("generic LLM_API_KEY works for API-key providers", async () => {
+    seed({
+      llm: {
+        provider: "openrouter",
+        model: "deepseek/deepseek-v4-flash",
+      },
+    });
+    process.env.LLM_API_KEY = "generic-key";
+    const { loadConfig } = await import("../src/config.js");
+    const cfg = loadConfig();
+    expect(cfg.llm.apiKey).toBe("generic-key");
+  });
+
+  it("provider-specific env var wins over generic LLM_API_KEY", async () => {
+    seed({
+      llm: {
+        provider: "openai",
+        model: "gpt-5.5",
+      },
+    });
+    process.env.LLM_API_KEY = "generic-key";
+    process.env.OPENAI_API_KEY = "provider-key";
+    const { loadConfig } = await import("../src/config.js");
+    const cfg = loadConfig();
+    expect(cfg.llm.apiKey).toBe("provider-key");
+  });
+
+  it("generic LLM_API_KEY is ignored for the ChatGPT OAuth provider", async () => {
+    seed({
+      llm: {
+        provider: "openai-codex",
+        model: "gpt-5.5",
+      },
+    });
+    process.env.LLM_API_KEY = "generic-key";
+    const { loadConfig } = await import("../src/config.js");
+    const cfg = loadConfig();
+    expect(cfg.llm.apiKey).toBe("");
   });
 
   it("malformed SecretRef throws INVALID_REF at loadConfig (eager validation)", async () => {

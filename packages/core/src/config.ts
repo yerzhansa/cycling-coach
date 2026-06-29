@@ -203,16 +203,19 @@ export function loadConfig(): Config {
   const pending = new Map<SecretFieldPath, SecretRef>();
 
   const resolveWithPrecedence = (
-    envVar: string | undefined,
+    envVars: string | string[] | undefined,
     raw: string | SecretRef | undefined,
     path: SecretFieldPath,
   ): string => {
-    const envValue = envVar !== undefined ? env(envVar) : undefined;
-    if (envValue !== undefined && envValue !== "") {
-      if (raw !== undefined && typeof raw !== "string") {
-        console.log(`Using env ${envVar}; SecretRef for ${path} skipped.`);
+    const envVarList = Array.isArray(envVars) ? envVars : envVars !== undefined ? [envVars] : [];
+    for (const envVar of envVarList) {
+      const envValue = env(envVar);
+      if (envValue !== undefined && envValue !== "") {
+        if (raw !== undefined && typeof raw !== "string") {
+          console.log(`Using env ${envVar}; SecretRef for ${path} skipped.`);
+        }
+        return envValue;
       }
-      return envValue;
     }
     if (typeof raw === "string") return raw;
     if (raw !== undefined) {
@@ -225,7 +228,11 @@ export function loadConfig(): Config {
   const apiKey =
     provider === "openai-codex"
       ? ""
-      : resolveWithPrecedence(envKeyForProvider[provider], llmApiKeyRaw, "llm.api_key");
+      : resolveWithPrecedence(
+          [envKeyForProvider[provider], "LLM_API_KEY"].filter((key): key is string => key !== undefined),
+          llmApiKeyRaw,
+          "llm.api_key",
+        );
   const intervalsApiKey = resolveWithPrecedence(
     "INTERVALS_API_KEY",
     intervalsApiKeyRaw,
