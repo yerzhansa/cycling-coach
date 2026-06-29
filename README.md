@@ -414,16 +414,20 @@ Railway hosts the container and volume in your Railway account. The bot reads yo
 
 The template uses `ghcr.io/yerzhansa/cycling-coach:stable`, mounts persistent state at `/data`, and has image auto-updates enabled.
 
+Before you click **Deploy**, prepare three accounts: one LLM provider account, intervals.icu, and Telegram.
+
 Fill these Railway variables:
 
-- `LLM_PROVIDER` — choose one: `anthropic`, `openai`, `google`, `deepseek`, `qwen`, `minimax`, `kimi`, `zai`, `openrouter`. Default recommendation: `anthropic`.
-- `LLM_API_KEY` — API key from the provider above: [Anthropic Console](https://console.anthropic.com/), [OpenAI Platform](https://platform.openai.com/), [Google AI Studio](https://aistudio.google.com/), [DeepSeek Platform](https://platform.deepseek.com/), Alibaba Cloud DashScope, [MiniMax Platform](https://platform.minimaxi.com/), [Moonshot AI](https://platform.moonshot.ai/), [Z.AI](https://z.ai/), or [OpenRouter](https://openrouter.ai/).
-- `INTERVALS_API_KEY` — [intervals.icu/settings](https://intervals.icu/settings) > Developer Settings.
-- `INTERVALS_ATHLETE_ID` — your intervals.icu athlete ID from your profile/settings URL, usually like `i12345`.
-- `TELEGRAM_BOT_TOKEN` — create a bot with Telegram [@BotFather](https://t.me/BotFather), then copy the token.
-- `CYCLING_COACH_OPERATOR_ID` — your numeric Telegram user ID; get it from a bot such as [@userinfobot](https://t.me/userinfobot).
+| Variable | What to enter | Where to get it |
+| --- | --- | --- |
+| `LLM_PROVIDER` | One lower-case provider id: `anthropic`, `openai`, `google`, `deepseek`, `qwen`, `minimax`, `kimi`, `zai`, or `openrouter`. Start with `anthropic` if unsure. | Pick the provider that issued your `LLM_API_KEY`. `openai-codex` / ChatGPT Plus login is not supported in Railway because it needs an interactive browser login. |
+| `LLM_API_KEY` | API key for the provider in `LLM_PROVIDER`. | [Anthropic Console](https://console.anthropic.com/), [OpenAI Platform](https://platform.openai.com/), [Google AI Studio](https://aistudio.google.com/), [DeepSeek Platform](https://platform.deepseek.com/), Alibaba Cloud DashScope, [MiniMax Platform](https://platform.minimaxi.com/), [Moonshot AI](https://platform.moonshot.ai/), [Z.AI](https://z.ai/), or [OpenRouter](https://openrouter.ai/). |
+| `INTERVALS_API_KEY` | Your intervals.icu API key. | [intervals.icu/settings](https://intervals.icu/settings) > Developer Settings. |
+| `INTERVALS_ATHLETE_ID` | Your intervals.icu athlete id, usually like `i12345`. Include the leading `i` when intervals.icu shows one. | Open your intervals.icu profile/settings URL and copy the athlete id from the URL or profile details. |
+| `TELEGRAM_BOT_TOKEN` | Token for the Telegram bot users will message. | In Telegram, open [@BotFather](https://t.me/BotFather), run `/newbot`, choose a name and username, then copy the token. |
+| `CYCLING_COACH_OPERATOR_ID` | Your numeric Telegram user id, for example `123456789`. This is not the bot token and not the bot username. | In Telegram, message a helper bot such as [@userinfobot](https://t.me/userinfobot) and copy your numeric id. Only this Telegram user is allowed to talk to your bot by default. |
 
-Railway does not run `cycling-coach setup`; these variables are the setup. After deploy, open Telegram and message your bot.
+Railway does not run `cycling-coach setup`; the variables above are the setup. After deploy, open Telegram and send `/start` to the bot you created with BotFather. If a value is wrong, edit the service variables in Railway and redeploy or restart the service.
 
 ### Other platforms
 
