@@ -1,5 +1,16 @@
 # cycling-coach
 
+## 2026.6.29
+
+### Patch Changes
+
+- 4ff5428: User-facing: Managed container deploys now explain that updates happen by redeploying the image instead of trying to run npm self-update inside the bot.
+
+  Publish and document the official GHCR image path for Railway image-backed templates.
+
+- 34c4bd4: User-facing: Container and Railway deploys can now set `LLM_PROVIDER` plus a generic `LLM_API_KEY` for any API-key LLM provider. Provider-specific env vars such as `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, or `OPENROUTER_API_KEY` still work and take precedence.
+- bdbb513: User-facing: Want the bot running 24/7 without keeping your computer on? Deploy the Railway template: https://railway.com/deploy/cycling-coach
+
 ## 2026.6.25-1
 
 ### Patch Changes
