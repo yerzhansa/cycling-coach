@@ -109,7 +109,7 @@ Note: `npm run dev` runs TypeScript directly (via tsx). `npm run build` produces
 | `/status` | Shows fitness, fatigue, form, and coaching notes |
 | `/sync` | Pushes next 1-2 weeks of planned workouts to intervals.icu calendar |
 | `/whatsnew` | Shows what changed in the latest release |
-| `/update` | Updates the bot — installs the exact version it verified against the npm registry, with lifecycle scripts disabled (`npm install -g --ignore-scripts`) |
+| `/update` | npm installs: updates the bot to the exact verified registry version. Managed container deploys: explains that updates happen by image redeploy. |
 
 Free-form chat works too — ask anything about training, report an injury, request plan adjustments.
 
@@ -119,7 +119,7 @@ Cycling Coach restricts Telegram interactions to a configured allowlist of user 
 
 ### No telemetry, one update check
 
-Cycling Coach collects no analytics and sends no telemetry. The one background network call it makes on its own: on Telegram-mode startup, a single HTTPS request to `registry.npmjs.org` to check whether a newer version exists. It carries no athlete data and no credentials — the only thing disclosed is the request itself. Set `CYCLING_COACH_NO_UPDATE_CHECK=1` to disable it. The operator-initiated `/update` and `/whatsnew` commands still reach the registry (and, for `/whatsnew`, the GitHub Releases API for release notes) — those are explicit requests, not background checks.
+Cycling Coach collects no analytics and sends no telemetry. The one background network call it makes on its own: on Telegram-mode startup, a single HTTPS request to `registry.npmjs.org` to check whether a newer version exists. It carries no athlete data and no credentials — the only thing disclosed is the request itself. Set `CYCLING_COACH_NO_UPDATE_CHECK=1` to disable it. The operator-initiated `/update` and `/whatsnew` commands still reach the registry (and, for `/whatsnew`, the GitHub Releases API for release notes) — those are explicit requests, not background checks. In managed container deploys, `/update` does not run npm; image hosts update by redeploying the container image.
 
 ### First-time setup
 
@@ -350,20 +350,30 @@ Cycling Coach is a single Node process holding a long-polling connection to Tele
 
 ### Docker
 
-A `Dockerfile` is included. Build and run locally:
+The official image is published to GHCR:
 
 ```bash
-docker build -t cycling-coach .
+docker pull ghcr.io/yerzhansa/cycling-coach:stable
+```
 
+Run it with a persistent `/data` volume:
+
+```bash
 docker run -d --name cycling-coach \
   -v cycling-coach-data:/data \
   --env-file .env \
-  cycling-coach
+  ghcr.io/yerzhansa/cycling-coach:stable
 ```
 
-Use `--env-file` rather than inline `-e KEY=value` flags — inline values land in shell history and are visible to other users via `ps`. Your `.env` should contain `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY`), `INTERVALS_API_KEY`, `INTERVALS_ATHLETE_ID`, and `TELEGRAM_BOT_TOKEN`. Restrict the file to the user that invokes `docker`: `chmod 600 .env`. Note that env vars passed to a container remain visible via `docker inspect` to anything with Docker-socket access — where available, prefer Docker Compose `secrets:` or podman secrets instead. For non-container installs, the config-based secret backends (macOS Keychain, 1Password SecretRef — see [Storing secrets outside config.yaml](#storing-secrets-outside-configyaml)) keep keys out of the environment entirely.
+Or build the same image locally from this repo:
 
-The image mounts `/data` for state and reads `/data/config.yaml` if present. The container runs as the non-root `node` user (uid 1000), and `/data` inside the image is owned by it. A volume mounted over `/data` carries its own ownership — managed PaaS platforms (Railway, Fly) typically mount fresh volumes as root-owned, so the bot can't write state until ownership is fixed. Configure the mount's ownership where the platform supports it, or fix it once with `docker run --rm --user root -v cycling-coach-data:/data cycling-coach chown -R node:node /data`; for host bind-mounts, `docker run --user "$(id -u):$(id -g)"` also works. With the env vars above, no `config.yaml` is required — the legacy env-var fallback (`ANTHROPIC_API_KEY` etc.) covers the three secret fields.
+```bash
+docker build -f packages/cycling-coach/Dockerfile -t cycling-coach .
+```
+
+Use `--env-file` rather than inline `-e KEY=value` flags — inline values land in shell history and are visible to other users via `ps`. Your `.env` should contain `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY`), `INTERVALS_API_KEY`, `INTERVALS_ATHLETE_ID`, `TELEGRAM_BOT_TOKEN`, and `CYCLING_COACH_OPERATOR_ID` for unattended cloud/container starts. Restrict the file to the user that invokes `docker`: `chmod 600 .env`. Note that env vars passed to a container remain visible via `docker inspect` to anything with Docker-socket access — where available, prefer Docker Compose `secrets:` or podman secrets instead. For non-container installs, the config-based secret backends (macOS Keychain, 1Password SecretRef — see [Storing secrets outside config.yaml](#storing-secrets-outside-configyaml)) keep keys out of the environment entirely.
+
+The image mounts `/data` for state and reads `/data/config.yaml` if present. The image sets `CYCLING_COACH_MANAGED_DEPLOY=1`, so `/update` is disabled and updates happen by pulling/redeploying a newer image. The container starts as root only long enough to fix managed-platform volume ownership, then drops to the non-root `node` user (uid 1000). With the env vars above, no `config.yaml` is required — the legacy env-var fallback (`ANTHROPIC_API_KEY` etc.) covers the three secret fields.
 
 For finer control (custom model, idle timeout, etc.) drop a `config.yaml` into the volume:
 
@@ -388,15 +398,21 @@ telegram:
 
 ### Railway
 
-Railway autodetects the `Dockerfile` and deploys with no extra config files. Steps:
+The Railway distribution path is an image-backed marketplace template, not a GitHub fork or source build.
 
-1. Push this repo to GitHub.
-2. In Railway, **New Project → Deploy from GitHub repo**.
-3. Add a **Volume** mounted at `/data`.
-4. Add the env vars in **Variables**: `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY`), `INTERVALS_API_KEY`, `INTERVALS_ATHLETE_ID`, `TELEGRAM_BOT_TOKEN`.
-5. Deploy. Railway shows logs; `Telegram bot started` confirms it's polling.
+Template link placeholder: `https://railway.com/new/template/TEMPLATE_ID`
 
-Railway does not scale services with attached volumes to zero, so the bot stays connected.
+Replace `TEMPLATE_ID` only after the GHCR package is public and the template is published in Railway's marketplace. The template service should use:
+
+- Docker image: `ghcr.io/yerzhansa/cycling-coach:stable`.
+- Volume: mount a persistent Railway volume at `/data`.
+- Variables: `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY`), `INTERVALS_API_KEY`, `INTERVALS_ATHLETE_ID`, `TELEGRAM_BOT_TOKEN`, `CYCLING_COACH_OPERATOR_ID`.
+- Instances: exactly one replica, no autoscaling.
+- Networking: no public domain/gateway is required; Telegram uses outbound long polling.
+- Restart policy: restart on failure so the bot reconnects after crashes or Railway maintenance.
+- Updates: enable Railway image auto-updates for the GHCR image/tag and choose a maintenance window. Railway will redeploy the updated `stable` image; `/update` inside the bot stays disabled for managed deploys.
+
+Each deployment is single-tenant: the user's secrets and `/data` volume stay inside their Railway project, and Cycling Coach has no shared backend or telemetry.
 
 ### Other platforms
 

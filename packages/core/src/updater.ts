@@ -10,6 +10,14 @@ export interface UpdateInfo {
   updateAvailable: boolean;
 }
 
+export const MANAGED_DEPLOY_UPDATE_NOTICE =
+  "This deployment updates through its container image. If Railway image auto-updates are enabled, Railway redeploys the latest GHCR image during the configured maintenance window; otherwise redeploy the service from the latest image in Railway.";
+
+export function isManagedDeploy(env: Record<string, string | undefined> = process.env): boolean {
+  const value = env.CYCLING_COACH_MANAGED_DEPLOY?.trim().toLowerCase();
+  return value === "1" || value === "true";
+}
+
 /**
  * Parse a CalVer string `YYYY.M.D` (with optional same-day re-release suffix
  * `-N`) into a comparable 4-tuple. Returns null for unparseable input —

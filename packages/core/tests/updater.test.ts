@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildSelfUpdateCommand, checkForUpdate, isUpdateAvailable } from "../src/updater.js";
+import {
+  buildSelfUpdateCommand,
+  checkForUpdate,
+  isManagedDeploy,
+  isUpdateAvailable,
+} from "../src/updater.js";
 
 // Regression: the original `data.version !== current` returned true for ANY
 // inequality, including the case where the running bot is ahead of npm — a
@@ -68,6 +73,20 @@ describe("buildSelfUpdateCommand", () => {
     const cmd = buildSelfUpdateCommand("cycling-coach", "1.0.0; touch /tmp/pwned");
     expect(cmd).toContain("cycling-coach@latest");
     expect(cmd).not.toContain(";");
+  });
+});
+
+describe("isManagedDeploy", () => {
+  it("treats 1 and true as managed deploy signals", () => {
+    expect(isManagedDeploy({ CYCLING_COACH_MANAGED_DEPLOY: "1" })).toBe(true);
+    expect(isManagedDeploy({ CYCLING_COACH_MANAGED_DEPLOY: "true" })).toBe(true);
+    expect(isManagedDeploy({ CYCLING_COACH_MANAGED_DEPLOY: " TRUE " })).toBe(true);
+  });
+
+  it("treats absent or non-true values as unmanaged installs", () => {
+    expect(isManagedDeploy({})).toBe(false);
+    expect(isManagedDeploy({ CYCLING_COACH_MANAGED_DEPLOY: "0" })).toBe(false);
+    expect(isManagedDeploy({ CYCLING_COACH_MANAGED_DEPLOY: "false" })).toBe(false);
   });
 });
 

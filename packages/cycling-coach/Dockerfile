@@ -48,12 +48,16 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV CYCLING_COACH_HOME=/data
+# Image-backed hosts update by pulling/redeploying the container, not by npm
+# self-update inside the running process.
+ENV CYCLING_COACH_MANAGED_DEPLOY=1
 
 # su-exec drops root to `node` in the entrypoint after the mounted volume's
 # ownership is fixed (managed-platform volumes mount as root).
 RUN apk add --no-cache su-exec
 
 COPY --from=builder --chown=root:root /app/runtime-bundle ./
+COPY --chown=root:root LICENSE NOTICE.md ./
 COPY packages/cycling-coach/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh && mkdir -p /data
 

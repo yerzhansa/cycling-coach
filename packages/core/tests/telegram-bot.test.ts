@@ -9,7 +9,11 @@ import {
 } from "../src/channels/allowed-senders.js";
 
 let dataDir: string;
-const ENV_KEYS = ["CYCLING_COACH_OPERATOR_ID", "CYCLING_COACH_DM_POLICY"];
+const ENV_KEYS = [
+  "CYCLING_COACH_OPERATOR_ID",
+  "CYCLING_COACH_DM_POLICY",
+  "CYCLING_COACH_MANAGED_DEPLOY",
+];
 let savedEnv: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -71,7 +75,7 @@ describe("notifyUpdate — broadcast filtering (L3)", () => {
       };
     });
 
-    const sendMessage = vi.fn(async () => undefined);
+    const sendMessage = vi.fn(async (_chatId: string, _message: string) => undefined);
     const fakeBot = { api: { sendMessage } } as unknown as Parameters<
       typeof import("../src/channels/telegram.js")["notifyUpdate"]
     >[0];
@@ -112,7 +116,7 @@ describe("notifyUpdate — broadcast filtering (L3)", () => {
       };
     });
 
-    const sendMessage = vi.fn(async () => undefined);
+    const sendMessage = vi.fn(async (_chatId: string, _message: string) => undefined);
     const fakeBot = { api: { sendMessage } } as unknown as Parameters<
       typeof import("../src/channels/telegram.js")["notifyUpdate"]
     >[0];
@@ -144,7 +148,7 @@ describe("notifyUpdate — broadcast filtering (L3)", () => {
       };
     });
 
-    const sendMessage = vi.fn(async () => undefined);
+    const sendMessage = vi.fn(async (_chatId: string, _message: string) => undefined);
     const fakeBot = { api: { sendMessage } } as unknown as Parameters<
       typeof import("../src/channels/telegram.js")["notifyUpdate"]
     >[0];
@@ -153,6 +157,51 @@ describe("notifyUpdate — broadcast filtering (L3)", () => {
     await notifyUpdate(fakeBot, dataDir, cyclingBinary);
 
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("managed deploy broadcast points at image redeploys instead of /update", async () => {
+    seedSession("11111");
+    saveAllowedSenders(dataDir, () => ({
+      ...defaultPairingState(),
+      dmPolicy: "allowlist",
+      allowFrom: ["11111"],
+      primaryOperator: "11111",
+    }));
+    process.env.CYCLING_COACH_MANAGED_DEPLOY = "1";
+
+    vi.doMock("../src/updater.js", async () => {
+      const real = await vi.importActual<typeof import("../src/updater.js")>(
+        "../src/updater.js",
+      );
+      return {
+        ...real,
+        checkForUpdate: vi.fn(async () => ({
+          current: "2026.5.5",
+          latest: "2026.5.10",
+          updateAvailable: true,
+        })),
+        getKnownTelegramChatIds: vi.fn(() => ["11111"]),
+        getLastNotifiedVersion: vi.fn(() => null),
+        setLastNotifiedVersion: vi.fn(),
+      };
+    });
+
+    const sendMessage = vi.fn(async (_chatId: string, _message: string) => undefined);
+    const fakeBot = { api: { sendMessage } } as unknown as Parameters<
+      typeof import("../src/channels/telegram.js")["notifyUpdate"]
+    >[0];
+
+    const { notifyUpdate } = await import("../src/channels/telegram.js");
+    await notifyUpdate(fakeBot, dataDir, cyclingBinary);
+
+    const message = sendMessage.mock.calls[0]?.[1] ?? "";
+    expect(message).toContain("Update available: 2026.5.5");
+    expect(message).toContain("Send /whatsnew to see what changed.");
+    expect(message).toContain("container image");
+    expect(message).toContain("GHCR image");
+    expect(message).toContain("Railway");
+    expect(message).not.toContain("/update to install");
+    expect(message).toContain("x.com/yerzhansa");
   });
 });
 

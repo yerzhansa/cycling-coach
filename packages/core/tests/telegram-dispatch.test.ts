@@ -17,6 +17,7 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true });
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.doUnmock("grammy");
   vi.doUnmock("../src/updater.js");
 });
@@ -355,6 +356,34 @@ describe("/snapshot — arg fallback", () => {
 });
 
 describe("/update — ordering invariant", () => {
+  it("managed deploys reply with image-update guidance and skip npm self-update", async () => {
+    vi.stubEnv("CYCLING_COACH_MANAGED_DEPLOY", "1");
+    const checkForUpdate = vi.fn(async () => ({
+      current: "2026.5.5",
+      latest: "2026.5.10",
+      updateAvailable: true,
+    }));
+    const selfUpdate = vi.fn();
+    vi.doMock("../src/updater.js", async () => {
+      const real = await vi.importActual<typeof import("../src/updater.js")>("../src/updater.js");
+      return {
+        ...real,
+        checkForUpdate,
+        selfUpdate,
+      };
+    });
+
+    const { bot } = await buildBot();
+    const ctx = makeCtx();
+    await getCommand(bot, "update")(ctx);
+
+    expect(someReply(ctx, "container image")).toBe(true);
+    expect(someReply(ctx, "GHCR image")).toBe(true);
+    expect(checkForUpdate).not.toHaveBeenCalled();
+    expect(bot.stop).not.toHaveBeenCalled();
+    expect(selfUpdate).not.toHaveBeenCalled();
+  });
+
   it("REGRESSION: /update calls bot.stop() BEFORE selfUpdate (no infinite re-send loop)", async () => {
     const selfUpdate = vi.fn();
     vi.doMock("../src/updater.js", async () => {

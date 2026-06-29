@@ -8,6 +8,8 @@ import {
   getKnownTelegramChatIds,
   getCurrentVersion,
   getLastNotifiedVersion,
+  isManagedDeploy,
+  MANAGED_DEPLOY_UPDATE_NOTICE,
   setLastNotifiedVersion,
 } from "../updater.js";
 import { buildWhatsNewMessage } from "../release-notes.js";
@@ -364,6 +366,11 @@ export function createTelegramBot(
   });
 
   bot.command("update", async (ctx) => {
+    if (isManagedDeploy()) {
+      await ctx.reply(MANAGED_DEPLOY_UPDATE_NOTICE);
+      return;
+    }
+
     await ctx.reply("Checking for updates...");
     let latest: string | undefined;
     try {
@@ -812,7 +819,10 @@ export async function notifyUpdate(bot: Bot, dataDir: string, binary: BinaryConf
     const knownChats = getKnownTelegramChatIds(dataDir);
     const chatIds =
       allowed.dmPolicy === "open" ? knownChats : knownChats.filter((id) => allowSet.has(id));
-    const message = `Update available: ${info.current} → ${info.latest}\nSend /whatsnew to see what changed, /update to install.\n\nTag or DM me at x.com/yerzhansa with feedback, feature requests, or bugs — help shape what's next.`;
+    const updateInstruction = isManagedDeploy()
+      ? `Send /whatsnew to see what changed. ${MANAGED_DEPLOY_UPDATE_NOTICE}`
+      : "Send /whatsnew to see what changed, /update to install.";
+    const message = `Update available: ${info.current} → ${info.latest}\n${updateInstruction}\n\nTag or DM me at x.com/yerzhansa with feedback, feature requests, or bugs — help shape what's next.`;
 
     for (const chatId of chatIds) {
       try {

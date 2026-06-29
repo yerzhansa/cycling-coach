@@ -11,7 +11,7 @@ Bundled via tsup with `@enduragent/*` **inlined** (`noExternal`). The published 
 - `src/index.ts` — the bin shim (`runBinary(cyclingSport, cyclingBinary, { onStartup })`).
 - `src/binary.ts` — `cyclingBinary: BinaryConfig` (binaryName: "cycling-coach", displayName: "Cycling Coach", dataSubdir: "cycling", keychainPrefix: "cycling-coach", homeEnvVar: "CYCLING_COACH_HOME").
 - `tests/migration-integration.test.ts` — end-to-end check that the legacy-section migration runs through `agent.getMemory()` exactly as `runBinary`'s onStartup does.
-- `Dockerfile` — multi-stage workspace build via `pnpm deploy --prod`. Railway picks this up.
+- `Dockerfile` — multi-stage workspace build via `pnpm deploy --prod`. The published GHCR image sets `CYCLING_COACH_MANAGED_DEPLOY=1` so image-backed hosts update by redeploying the container, not by `/update`.
 
 ## Not here (intentionally)
 

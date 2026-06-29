@@ -217,7 +217,9 @@ export {
   getCurrentVersion,
   getKnownTelegramChatIds,
   getLastNotifiedVersion,
+  isManagedDeploy,
   isUpdateAvailable,
+  MANAGED_DEPLOY_UPDATE_NOTICE,
   selfUpdate,
   setLastNotifiedVersion,
 } from "./updater.js";
