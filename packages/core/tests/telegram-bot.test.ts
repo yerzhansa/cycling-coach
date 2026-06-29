@@ -201,7 +201,13 @@ describe("notifyUpdate — broadcast filtering (L3)", () => {
     expect(message).toContain("GHCR image");
     expect(message).toContain("Railway");
     expect(message).not.toContain("/update to install");
+    expect(message).toContain(
+      "Want the bot running 24/7 without keeping your computer on? Deploy the Railway template: https://railway.com/deploy/cycling-coach",
+    );
     expect(message).toContain("x.com/yerzhansa");
+    expect(message.indexOf("railway.com/deploy/cycling-coach")).toBeLessThan(
+      message.indexOf("x.com/yerzhansa"),
+    );
   });
 });
 

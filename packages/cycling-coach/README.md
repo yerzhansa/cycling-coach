@@ -50,6 +50,25 @@ Anthropic's Claude Pro/Max subscription does **not** support OAuth for third-par
 - **intervals.icu** API key from [intervals.icu/settings](https://intervals.icu/settings) > Developer Settings.
 - **Telegram bot** token from [@BotFather](https://t.me/BotFather) (`/newbot`).
 
+## Railway template
+
+Want the bot running 24/7 without keeping your computer on? Use the Railway template:
+
+https://railway.com/deploy/cycling-coach
+
+Railway deploys your own private container from `ghcr.io/yerzhansa/cycling-coach:stable` with persistent `/data` storage and image auto-updates. The bot runs inside your Railway project and uses your Railway variables to call Telegram, intervals.icu, and your chosen LLM provider. We do not run a shared backend or store your secrets, athlete data, or Telegram messages. Your hosting and billing relationship is with Railway. Railway currently lists Hobby as the practical minimum for always-on apps: $5 minimum usage/month, including $5 monthly usage credits.
+
+Fill these template variables:
+
+- `LLM_PROVIDER` — `anthropic`, `openai`, `google`, `deepseek`, `qwen`, `minimax`, `kimi`, `zai`, or `openrouter`. Default recommendation: `anthropic`.
+- `LLM_API_KEY` — API key from that LLM provider: [Anthropic Console](https://console.anthropic.com/), [OpenAI Platform](https://platform.openai.com/), [Google AI Studio](https://aistudio.google.com/), [DeepSeek Platform](https://platform.deepseek.com/), Alibaba Cloud DashScope, [MiniMax Platform](https://platform.minimaxi.com/), [Moonshot AI](https://platform.moonshot.ai/), [Z.AI](https://z.ai/), or [OpenRouter](https://openrouter.ai/).
+- `INTERVALS_API_KEY` — [intervals.icu/settings](https://intervals.icu/settings) > Developer Settings.
+- `INTERVALS_ATHLETE_ID` — your intervals.icu athlete ID from your profile/settings URL, usually like `i12345`.
+- `TELEGRAM_BOT_TOKEN` — create a bot with Telegram [@BotFather](https://t.me/BotFather), then copy the token.
+- `CYCLING_COACH_OPERATOR_ID` — your numeric Telegram user ID; get it from a bot such as [@userinfobot](https://t.me/userinfobot).
+
+Railway does not run `cycling-coach setup`; these variables are the setup. After deploy, open Telegram and message your bot.
+
 ## Telegram commands
 
 | Command | What it does |

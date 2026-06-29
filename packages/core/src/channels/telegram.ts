@@ -822,7 +822,7 @@ export async function notifyUpdate(bot: Bot, dataDir: string, binary: BinaryConf
     const updateInstruction = isManagedDeploy()
       ? `Send /whatsnew to see what changed. ${MANAGED_DEPLOY_UPDATE_NOTICE}`
       : "Send /whatsnew to see what changed, /update to install.";
-    const message = `Update available: ${info.current} → ${info.latest}\n${updateInstruction}\n\nTag or DM me at x.com/yerzhansa with feedback, feature requests, or bugs — help shape what's next.`;
+    const message = `Update available: ${info.current} → ${info.latest}\n${updateInstruction}\n\nWant the bot running 24/7 without keeping your computer on? Deploy the Railway template: https://railway.com/deploy/cycling-coach\n\nTag or DM me at x.com/yerzhansa with feedback, feature requests, or bugs — help shape what's next.`;
 
     for (const chatId of chatIds) {
       try {

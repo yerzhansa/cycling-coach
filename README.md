@@ -2,6 +2,8 @@
 
 AI cycling coaching agent. Bring your own LLM API key **or sign in with a ChatGPT Plus subscription**, connect [intervals.icu](https://intervals.icu) for real athlete data, chat via Telegram or CLI.
 
+Want the bot running 24/7 without keeping your computer on? Deploy the Railway template: https://railway.com/deploy/cycling-coach
+
 Follow [@yerzhansa](https://x.com/yerzhansa) on X.com for updates, or drop a question/feedback anytime.
 
 ## What it does
@@ -402,24 +404,26 @@ telegram:
     var: TELEGRAM_BOT_TOKEN
 ```
 
-### Railway
+### Railway template
 
-The Railway distribution path is an image-backed marketplace template, not a GitHub fork or source build.
+Railway templates are one-click deploy recipes. The Cycling Coach template runs your own private bot on Railway 24/7, so your computer does not need to stay on.
 
-Template link: `https://railway.com/new/template/cycling-coach`
+Deploy: https://railway.com/deploy/cycling-coach
 
-The published Railway marketplace template service uses:
+Railway hosts the container and volume in your Railway account. The bot reads your Railway variables, talks to Telegram, intervals.icu, and your chosen LLM provider from inside your Railway project. We do not host a shared backend, store your secrets, store your athlete data, or receive your Telegram messages. Your hosting and billing relationship is with Railway. Railway currently lists Hobby as the practical minimum for always-on apps: $5 minimum usage/month, including $5 monthly usage credits.
 
-- Docker image: `ghcr.io/yerzhansa/cycling-coach:stable`.
-- Volume: mount a persistent Railway volume at `/data`.
-- Variables: `LLM_PROVIDER`, `LLM_API_KEY`, `INTERVALS_API_KEY`, `INTERVALS_ATHLETE_ID`, `TELEGRAM_BOT_TOKEN`, `CYCLING_COACH_OPERATOR_ID`.
-- Supported Railway `LLM_PROVIDER` values: `anthropic`, `openai`, `google`, `deepseek`, `qwen`, `minimax`, `kimi`, `zai`, `openrouter`.
-- Instances: exactly one replica, no autoscaling.
-- Networking: no public domain/gateway is required; Telegram uses outbound long polling.
-- Restart policy: restart on failure so the bot reconnects after crashes or Railway maintenance.
-- Updates: enable Railway image auto-updates for the GHCR image/tag and choose a maintenance window. Railway will redeploy the updated `stable` image; `/update` inside the bot stays disabled for managed deploys.
+The template uses `ghcr.io/yerzhansa/cycling-coach:stable`, mounts persistent state at `/data`, and has image auto-updates enabled.
 
-Each deployment is single-tenant: the user's secrets and `/data` volume stay inside their Railway project, and Cycling Coach has no shared backend or telemetry.
+Fill these Railway variables:
+
+- `LLM_PROVIDER` — choose one: `anthropic`, `openai`, `google`, `deepseek`, `qwen`, `minimax`, `kimi`, `zai`, `openrouter`. Default recommendation: `anthropic`.
+- `LLM_API_KEY` — API key from the provider above: [Anthropic Console](https://console.anthropic.com/), [OpenAI Platform](https://platform.openai.com/), [Google AI Studio](https://aistudio.google.com/), [DeepSeek Platform](https://platform.deepseek.com/), Alibaba Cloud DashScope, [MiniMax Platform](https://platform.minimaxi.com/), [Moonshot AI](https://platform.moonshot.ai/), [Z.AI](https://z.ai/), or [OpenRouter](https://openrouter.ai/).
+- `INTERVALS_API_KEY` — [intervals.icu/settings](https://intervals.icu/settings) > Developer Settings.
+- `INTERVALS_ATHLETE_ID` — your intervals.icu athlete ID from your profile/settings URL, usually like `i12345`.
+- `TELEGRAM_BOT_TOKEN` — create a bot with Telegram [@BotFather](https://t.me/BotFather), then copy the token.
+- `CYCLING_COACH_OPERATOR_ID` — your numeric Telegram user ID; get it from a bot such as [@userinfobot](https://t.me/userinfobot).
+
+Railway does not run `cycling-coach setup`; these variables are the setup. After deploy, open Telegram and message your bot.
 
 ### Other platforms
 
