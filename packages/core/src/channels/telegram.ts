@@ -33,6 +33,9 @@ const UPDATE_DRAIN_TIMEOUT_MS = 10_000;
 // (athlete content) so it is size- and time-bounded and never logged.
 const RESEND_TTL_MS = 30 * 60_000;
 const RESEND_MAX_ENTRIES = 1000;
+// The bare word an athlete types to re-emit the last answer. Shared by the
+// matcher and the delivery-failure hint so the two can never drift apart.
+const RESEND_KEYWORD = "resend";
 
 function drainBounded(drain: () => Promise<void>, timeoutMs: number): Promise<void> {
   return Promise.race([
@@ -180,7 +183,7 @@ export function createTelegramBot(
     for (const [key, entry] of resendCache) {
       if (entry.expires <= now) resendCache.delete(key);
     }
-    if (resendCache.has(chatId)) resendCache.delete(chatId); // bump to MRU position
+    resendCache.delete(chatId); // bump to MRU position (no-op if absent)
     resendCache.set(chatId, { answer, expires: now + RESEND_TTL_MS });
     while (resendCache.size > RESEND_MAX_ENTRIES) {
       const oldest = resendCache.keys().next().value;
@@ -261,7 +264,7 @@ export function createTelegramBot(
       } catch (err) {
         log.error("delivery_failed", err, { command: opts.command, chatId: opts.chatId });
         await opts.ctx.reply(
-          'I generated the answer, but Telegram had trouble delivering it. Send "resend" and I\'ll send the same answer again.',
+          `I generated the answer, but Telegram had trouble delivering it. Send "${RESEND_KEYWORD}" and I'll send the same answer again.`,
         );
       }
     });
@@ -458,7 +461,7 @@ export function createTelegramBot(
 
     // Resend the last cached answer without re-running the LLM turn. Short-circuit
     // BEFORE any greeting/dispatch so it never reaches agent.chat.
-    if (text.trim().toLowerCase() === "resend") {
+    if (text.trim().toLowerCase() === RESEND_KEYWORD) {
       const cached = readResend(chatId);
       if (cached !== undefined) await sendLongMessage(ctx, cached);
       else await ctx.reply("I don't have a recent answer to resend.");

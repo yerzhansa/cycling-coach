@@ -34,23 +34,24 @@ function isIntervalsApiError(err: unknown): err is ApiError {
   );
 }
 
+function rateLimited(err: unknown): { kind: AgentErrorKind; athleteMessage: string } {
+  return {
+    kind: "rate_limit",
+    athleteMessage: `Rate limited — please try again in ${formatRateLimitWait(err)}.`,
+  };
+}
+
 export function classifyAgentError(err: unknown): {
   kind: AgentErrorKind;
   athleteMessage: string;
 } {
   if (isRateLimitError(err)) {
-    return {
-      kind: "rate_limit",
-      athleteMessage: `Rate limited — please try again in ${formatRateLimitWait(err)}.`,
-    };
+    return rateLimited(err);
   }
 
   if (isIntervalsApiError(err)) {
     if (err.kind === "RateLimit") {
-      return {
-        kind: "rate_limit",
-        athleteMessage: `Rate limited — please try again in ${formatRateLimitWait(err)}.`,
-      };
+      return rateLimited(err);
     }
     if (err.kind === "Timeout" || err.kind === "Network") {
       return {
