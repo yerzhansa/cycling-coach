@@ -822,7 +822,7 @@ export async function notifyUpdate(bot: Bot, dataDir: string, binary: BinaryConf
     const updateInstruction = isManagedDeploy()
       ? `Send /whatsnew to see what changed. ${MANAGED_DEPLOY_UPDATE_NOTICE}`
       : "Send /whatsnew to see what changed, /update to install.";
-    const message = `Update available: ${info.current} → ${info.latest}\n${updateInstruction}\n\nWant the bot running 24/7 without keeping your computer on? Deploy the Railway template: https://railway.com/deploy/cycling-coach\n\nTag or DM me at x.com/yerzhansa with feedback, feature requests, or bugs — help shape what's next.`;
+    const message = `Update available: ${info.current} → ${info.latest}\n${updateInstruction}\n\nWant the bot running 24/7 without keeping your computer on? Deploy the Railway template: https://railway.com/deploy/cycling-coach\n\nHelp shape what Cycling Coach builds next: please take 3 minutes to answer this short survey so the mobile app, 24/7 bot, Railway template, and setup/payment options are prioritized around what would actually help you: https://tally.so/r/b5Dv4g`;
 
     for (const chatId of chatIds) {
       try {

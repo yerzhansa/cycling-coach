@@ -204,9 +204,11 @@ describe("notifyUpdate — broadcast filtering (L3)", () => {
     expect(message).toContain(
       "Want the bot running 24/7 without keeping your computer on? Deploy the Railway template: https://railway.com/deploy/cycling-coach",
     );
-    expect(message).toContain("x.com/yerzhansa");
+    expect(message).toContain("https://tally.so/r/b5Dv4g");
+    expect(message).toContain("Help shape what Cycling Coach builds next");
+    expect(message).not.toContain("x.com/yerzhansa");
     expect(message.indexOf("railway.com/deploy/cycling-coach")).toBeLessThan(
-      message.indexOf("x.com/yerzhansa"),
+      message.indexOf("https://tally.so/r/b5Dv4g"),
     );
   });
 });
