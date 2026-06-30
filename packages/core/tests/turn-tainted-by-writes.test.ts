@@ -231,6 +231,53 @@ describe("tainted-by-writes refusal", () => {
     expect((dailyMemoryText().match(new RegExp(note, "g")) ?? []).length).toBe(1);
   });
 
+  it("a plan-skeleton build then a timeout refuses without replaying the plan save", async () => {
+    let mainTurns = 0;
+    const complete = vi.fn(async (params: { system?: string }) => {
+      const sys = params.system ?? "";
+      if (sys.includes(FLUSH_MARKER)) return mkAssistant({ text: "facts noted" });
+      if (sys.length === 0) return mkAssistant({ text: "summary" });
+      mainTurns++;
+      const ctx = params as { messages?: { role: string }[] };
+      const hasToolResult = (ctx.messages ?? []).some((m) => m.role === "tool");
+      if (mainTurns === 1 && !hasToolResult) {
+        return mkAssistant({
+          toolCall: {
+            id: "call-plan",
+            name: "build_plan_skeleton",
+            arguments: {
+              experienceLevel: "intermediate",
+              ftpWatts: 250,
+              volumeTier: "medium",
+              scheduleType: "flexible",
+              goalType: "general",
+              generalGoal: "build aerobic base",
+            },
+          },
+          stopReason: "toolUse",
+        });
+      }
+      const err = new Error("deadline exceeded");
+      err.name = "TimeoutError";
+      throw err;
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const agent = await setupAgent(complete);
+
+    const result = await agent.chat("taint-plan", "build me a training plan");
+
+    expect(result).toBe(TAINTED_BY_WRITES_MESSAGE);
+    expect(mainTurns).toBe(2);
+    // The plan committed exactly once and was never replayed on the retry.
+    const journal = join(dataDir, "memory", "MEMORY.history.jsonl");
+    const planSaves = readFileSync(journal, "utf-8")
+      .split("\n")
+      .filter((line) => line.trim() !== "")
+      .map((line) => JSON.parse(line) as { op?: string })
+      .filter((entry) => entry.op === "save-plan");
+    expect(planSaves.length).toBe(1);
+  });
+
   it("keeps write taint scoped when different chats run concurrently", async () => {
     const note = "freshness note scoped to the first chat";
     let firstMainCalls = 0;

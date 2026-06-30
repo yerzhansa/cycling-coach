@@ -301,4 +301,51 @@ describe("codexResponses error surface (single attempt, no retry loop)", () => {
     const err = (await codexResponses(baseParams()).catch((e) => e)) as Error;
     expect(err.message).toContain("stream blew up");
   });
+
+  it("returns a fully-accumulated result even if the signal aborts right after accumulation resolves", async () => {
+    const controller = new AbortController();
+    // The stream completes cleanly, then the signal flips to aborted as the
+    // boundary check would run — the already-paid-for result must still return.
+    // The abort must fire while the stream is being READ (not at construction:
+    // ReadableStream.start runs eagerly, which would abort before codexResponses
+    // is even called and trip the entry guard). pull() runs lazily per read, so
+    // the first pull delivers the body and the second aborts after it.
+    let pulls = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(c) {
+        if (pulls === 0) {
+          const enc = new TextEncoder();
+          const body =
+            TEXT_EVENTS.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("") + "data: [DONE]\n\n";
+          c.enqueue(enc.encode(body));
+          pulls++;
+        } else {
+          controller.abort(new Error("aborted after accumulate"));
+          c.close();
+        }
+      },
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } }),
+    );
+
+    const result = await codexResponses(baseParams({ signal: controller.signal }));
+
+    expect(result.text).toBe("Hello world");
+    expect(result.stopReason).toBe("stop");
+  });
+
+  it("serializes a non-string, non-Error abort reason without producing '[object Object]'", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const controller = new AbortController();
+    controller.abort({ code: "cancel" });
+
+    const err = (await codexResponses(baseParams({ signal: controller.signal })).catch(
+      (e) => e,
+    )) as Error;
+
+    expect(err.message).toContain("cancel");
+    expect(err.message).not.toContain("[object Object]");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 });

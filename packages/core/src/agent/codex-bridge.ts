@@ -211,7 +211,9 @@ export async function codexGenerateText(
 
   // Fetch the token once per request. The step loop runs well within the
   // 5-minute refresh threshold, so a refresh mid-loop is not a concern.
-  const accessToken = await getFreshToken(profileName);
+  // Thread the per-call signal so a stalled token endpoint is bounded by the
+  // same deadline as the request rather than hanging the turn.
+  const accessToken = await getFreshToken(profileName, signal);
 
   const toToolCallPart = (tc: CodexToolCall) => ({
     type: "tool-call" as const,

@@ -15,6 +15,8 @@ export interface GenerateOpts {
   maxSteps?: number;
   maxOutputTokens?: number;
   signal?: AbortSignal;
+  /** Upper bound (ms) on this single call, intersected with the caller's per-call deadline. Lets the agent loop cap a call by the turn's remaining wall-clock budget so a retry after an early timeout cannot open a fresh full deadline window. */
+  deadlineMs?: number;
   /** Codex-only: forwarded to the codex bridge as its session id. The AI-SDK providers never read it. */
   cacheKey?: string;
   caller?: "chat" | "flush" | "compact";

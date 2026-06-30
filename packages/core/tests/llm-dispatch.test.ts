@@ -165,3 +165,76 @@ describe("LLM dispatch — AI SDK path forwards abort signals", () => {
     expect(captured.maxRetries).toBe(0);
   });
 });
+
+describe("LLM generate — per-call deadline bounded by opts.deadlineMs", () => {
+  it("uses the smaller of the caller deadline and opts.deadlineMs", async () => {
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(new AbortController().signal);
+
+    await runAiSdk({ messages: [{ role: "user", content: "hi" }], caller: "chat", deadlineMs: 120_000 });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(120_000);
+  });
+
+  it("ignores opts.deadlineMs when it exceeds the caller deadline", async () => {
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(new AbortController().signal);
+
+    await runAiSdk({ messages: [{ role: "user", content: "hi" }], caller: "chat", deadlineMs: 999_999 });
+    const { CHAT_LLM_CALL_DEADLINE_MS } = await import("../src/llm.js");
+
+    expect(timeoutSpy).toHaveBeenCalledWith(CHAT_LLM_CALL_DEADLINE_MS);
+  });
+});
+
+describe("LLM generate — timeout reclassification gated on our timer + abort shape", () => {
+  function abortedTimeoutSignal(): AbortSignal {
+    const ac = new AbortController();
+    ac.abort(new DOMException("The operation timed out.", "TimeoutError"));
+    return ac.signal;
+  }
+
+  async function generateThrowing(thrown: unknown): Promise<unknown> {
+    vi.doMock("ai", () => ({
+      generateText: vi.fn(async () => {
+        throw thrown;
+      }),
+      stepCountIs: vi.fn((count: number) => ({ type: "step-count", count })),
+    }));
+    vi.doMock("@ai-sdk/anthropic", () => ({
+      createAnthropic: () => () => ({ provider: "anthropic-stub" }),
+    }));
+    // The per-call timer has already fired by the time dispatch throws.
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(abortedTimeoutSignal());
+
+    const { LLM } = await import("../src/llm.js");
+    const llm = new LLM(anthropicConfig());
+    let rejected = false;
+    let caught: unknown;
+    try {
+      await llm.generate({ messages: [{ role: "user", content: "hi" }] });
+    } catch (err) {
+      rejected = true;
+      caught = err;
+    }
+    expect(rejected).toBe(true);
+    return caught;
+  }
+
+  it("does NOT relabel a 5xx thrown while the deadline signal is aborted", async () => {
+    const serverErr = Object.assign(new Error("upstream 500"), { httpStatus: 500 });
+    const caught = await generateThrowing(serverErr);
+    expect(caught).toBe(serverErr);
+    expect((caught as Error).name).not.toBe("TimeoutError");
+    expect((caught as { httpStatus?: number }).httpStatus).toBe(500);
+  });
+
+  it("surfaces a genuine per-call abort as a TimeoutError", async () => {
+    const abortErr = new Error("The operation was aborted");
+    abortErr.name = "AbortError";
+    const caught = await generateThrowing(abortErr);
+    expect((caught as Error).name).toBe("TimeoutError");
+  });
+});

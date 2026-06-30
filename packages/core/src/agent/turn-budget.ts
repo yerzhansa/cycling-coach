@@ -20,6 +20,8 @@ export interface TurnBudget {
   chargeAttempt(): void;
   /** Between-attempt deadline check (never mid-attempt). Throws "wall_clock" on overrun. */
   checkDeadline(): void;
+  /** Milliseconds left in the turn's wall-clock budget (never negative). Lets a per-call LLM deadline be bounded by the budget the next attempt still has. */
+  remainingMs(): number;
 }
 
 export function createTurnBudget(now: () => number): TurnBudget {
@@ -52,6 +54,9 @@ export function createTurnBudget(now: () => number): TurnBudget {
           `Per-turn wall-clock deadline exceeded (${TURN_WALL_CLOCK_MS}ms).`,
         );
       }
+    },
+    remainingMs() {
+      return Math.max(0, TURN_WALL_CLOCK_MS - (now() - turnStart));
     },
   };
 }

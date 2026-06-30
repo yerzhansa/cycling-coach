@@ -15,7 +15,6 @@ import { PROVIDER_BASE_URLS } from "./config.js";
 import { codexGenerateText } from "./agent/codex-bridge.js";
 import type { GenerateOpts, GenerateResult } from "./llm-types.js";
 import { appendUsageLine, cacheTokenDetails, usageFieldsFromResult } from "./usage-ledger.js";
-import { chainedSignal } from "./concurrency/abort-budget.js";
 
 export type { GenerateOpts, GenerateResult } from "./llm-types.js";
 export const LLM_CALL_DEADLINE_MS = 180_000;
@@ -64,12 +63,23 @@ export class LLM {
 
   async generate(opts: GenerateOpts): Promise<GenerateResult> {
     const start = Date.now();
-    const signal = withLLMDeadline(opts.signal, deadlineMsForCaller(opts.caller));
+    // The per-call deadline is the caller's class budget intersected with any
+    // turn-remaining bound the agent loop passes, so a retry after an early
+    // timeout inherits only the time the turn has left — never a fresh window.
+    const deadlineMs = Math.min(
+      deadlineMsForCaller(opts.caller),
+      opts.deadlineMs ?? Number.POSITIVE_INFINITY,
+    );
+    const { signal, deadline } = withLLMDeadline(opts.signal, deadlineMs);
     let result: GenerateResult;
     try {
       result = await this.dispatch({ ...opts, signal });
     } catch (err) {
-      if (isDeadlineAbort(signal)) throw toTimeoutError(err);
+      // Relabel to TimeoutError only when OUR per-call timer fired AND the error
+      // is abort-shaped: a 5xx/429/network thrown while the timer happens to be
+      // aborted must keep its own class, and an outer caller cancellation that
+      // never tripped our timer is not our deadline.
+      if (deadline.aborted && isAbortError(err, deadline)) throw toTimeoutError(err);
       throw err;
     }
     const durationMs = Date.now() - start;
@@ -169,21 +179,29 @@ function deadlineMsForCaller(caller: GenerateOpts["caller"]): number {
   return caller === "chat" ? CHAT_LLM_CALL_DEADLINE_MS : LLM_CALL_DEADLINE_MS;
 }
 
-function withLLMDeadline(signal: AbortSignal | undefined, deadlineMs: number): AbortSignal {
-  return signal === undefined
-    ? AbortSignal.timeout(deadlineMs)
-    : chainedSignal({ outer: signal, perRequestMs: deadlineMs });
+// Returns BOTH the per-call timer (so the catch can ask "did our timer fire?")
+// and the signal actually handed to the provider — the timer alone when there is
+// no outer signal, else the union of the two.
+function withLLMDeadline(
+  signal: AbortSignal | undefined,
+  deadlineMs: number,
+): { signal: AbortSignal; deadline: AbortSignal } {
+  const deadline = AbortSignal.timeout(deadlineMs);
+  return {
+    deadline,
+    signal: signal === undefined ? deadline : AbortSignal.any([signal, deadline]),
+  };
 }
 
-function isDeadlineAbort(signal: AbortSignal): boolean {
-  if (!signal.aborted) return false;
-  const reason = signal.reason;
-  if (reason instanceof Error && /timeout|deadline/i.test(`${reason.name} ${reason.message}`)) {
-    return true;
-  }
-  if (reason && typeof reason === "object") {
-    const { name, message } = reason as { name?: unknown; message?: unknown };
-    return /timeout|deadline/i.test(`${String(name ?? "")} ${String(message ?? "")}`);
+// True when the caught error is the shape an aborted request produces — an
+// AbortError/TimeoutError, or the timer's own reason. A 5xx/429/network error
+// (APICallError, ServerError/RateLimitError/NetworkError) carries a different
+// name and is NOT matched, so it keeps its own retry class.
+function isAbortError(err: unknown, deadline: AbortSignal): boolean {
+  if (err === deadline.reason) return true;
+  if (err !== null && typeof err === "object") {
+    const name = (err as { name?: unknown }).name;
+    return name === "AbortError" || name === "TimeoutError";
   }
   return false;
 }

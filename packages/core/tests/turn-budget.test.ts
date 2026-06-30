@@ -112,6 +112,16 @@ describe("createTurnBudget (unit)", () => {
     expect((thrown as TurnBudgetExceededError).kind).toBe("generate_attempts");
   });
 
+  it("remainingMs returns the budget left and clamps to zero past the deadline", () => {
+    let clock = 5_000;
+    const budget = createTurnBudget(() => clock);
+    expect(budget.remainingMs()).toBe(TURN_WALL_CLOCK_MS);
+    clock += 100_000;
+    expect(budget.remainingMs()).toBe(TURN_WALL_CLOCK_MS - 100_000);
+    clock += TURN_WALL_CLOCK_MS;
+    expect(budget.remainingMs()).toBe(0);
+  });
+
   it("checkDeadline throws wall_clock only once the injected clock crosses the deadline", () => {
     let clock = 1_000;
     const budget = createTurnBudget(() => clock);
@@ -178,6 +188,48 @@ describe("per-turn budget through chat() (behavioral)", () => {
 
     expect(text).toBe("all good");
     expect(countMainTurns(complete)).toBe(1);
+  });
+
+  it("a retry after an early timeout gets only the budget left, capping total chat time", async () => {
+    // Each chat generate mints its per-call deadline from the turn's remaining
+    // wall-clock budget. A timeout 100s into the 300s turn must leave the retry
+    // only ~200s — not a fresh full window (the ~600s double-window bug).
+    let clock = 0;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => clock);
+    const deadlines: number[] = [];
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      deadlines.push(ms);
+      return new AbortController().signal;
+    });
+
+    let mainCalls = 0;
+    const complete = vi.fn(async (params: { system?: string }) => {
+      const sys = params.system ?? "";
+      if (sys.includes(FLUSH_MARKER)) return mkAssistant("facts noted");
+      if (sys.length === 0) return mkAssistant("summary");
+      mainCalls++;
+      if (mainCalls === 1) {
+        clock += 100_000;
+        const err = new Error("deadline exceeded");
+        err.name = "TimeoutError";
+        throw err;
+      }
+      return mkAssistant("done");
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const agent = await setupAgent(complete);
+
+    const text = await agent.chat("budget-deadline", "hello");
+    nowSpy.mockRestore();
+
+    expect(text).toBe("done");
+    expect(mainCalls).toBe(2);
+    expect(deadlines.length).toBe(2);
+    // First call: full budget. Retry: only the ~200s the turn has left.
+    expect(deadlines[0]).toBe(TURN_WALL_CLOCK_MS);
+    expect(deadlines[1]).toBe(TURN_WALL_CLOCK_MS - 100_000);
+    // Total chat time stays bounded by the wall-clock budget.
+    expect(100_000 + deadlines[1]).toBeLessThanOrEqual(TURN_WALL_CLOCK_MS);
   });
 
   it("a between-attempts wall-clock overrun stops with a wall_clock error and lets the in-flight call complete", async () => {

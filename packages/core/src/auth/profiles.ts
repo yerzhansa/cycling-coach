@@ -102,9 +102,9 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function refreshWithRetry(name: string, cred: OAuthCredential) {
+async function refreshWithRetry(name: string, cred: OAuthCredential, signal?: AbortSignal) {
   try {
-    return await refreshCodexToken(cred.refresh);
+    return await refreshCodexToken(cred.refresh, signal);
   } catch (err) {
     if (!isRefreshDenied(err)) throw err;
     // pi-ai reports invalid_grant, 5xx, and network failures with one generic
@@ -113,7 +113,7 @@ async function refreshWithRetry(name: string, cred: OAuthCredential) {
     await delay(REFRESH_RETRY_DELAY_MS);
     const onDisk = loadProfile(name) ?? cred;
     try {
-      return await refreshCodexToken(onDisk.refresh);
+      return await refreshCodexToken(onDisk.refresh, signal);
     } catch (retryErr) {
       if (isRefreshDenied(retryErr)) {
         throw new RefreshTokenReusedError(name, retryErr);
@@ -125,11 +125,11 @@ async function refreshWithRetry(name: string, cred: OAuthCredential) {
 
 const refreshQueues = new Map<string, Promise<unknown>>();
 
-export async function getFreshToken(name: string): Promise<string> {
+export async function getFreshToken(name: string, signal?: AbortSignal): Promise<string> {
   const prev = refreshQueues.get(name) ?? Promise.resolve();
   const run = prev.then(
-    () => getFreshTokenExclusive(name),
-    () => getFreshTokenExclusive(name),
+    () => getFreshTokenExclusive(name, signal),
+    () => getFreshTokenExclusive(name, signal),
   );
   refreshQueues.set(name, run);
   try {
@@ -141,7 +141,7 @@ export async function getFreshToken(name: string): Promise<string> {
   }
 }
 
-async function getFreshTokenExclusive(name: string): Promise<string> {
+async function getFreshTokenExclusive(name: string, signal?: AbortSignal): Promise<string> {
   const cred = loadProfile(name);
   if (!cred) {
     throw new Error(`No OAuth profile "${name}". Run \`cycling-coach setup\` to create one.`);
@@ -155,7 +155,7 @@ async function getFreshTokenExclusive(name: string): Promise<string> {
     throw new Error(`Refresh not implemented for profile "${name}"`);
   }
 
-  const refreshed = await refreshWithRetry(name, cred);
+  const refreshed = await refreshWithRetry(name, cred, signal);
 
   const next: OAuthCredential = {
     type: "oauth",

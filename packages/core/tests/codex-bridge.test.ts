@@ -148,10 +148,26 @@ describe("codex-bridge", () => {
       profileName: "openai-codex",
     });
 
-    expect(freshToken).toHaveBeenCalledWith("openai-codex");
+    expect(freshToken).toHaveBeenCalledWith("openai-codex", undefined);
     expect(complete).toHaveBeenCalledWith(
       expect.objectContaining({ accessToken: "fresh-token-abc", modelId: "gpt-5.4" }),
     );
+  });
+
+  it("threads the per-call abort signal into getFreshToken so the token refresh shares the deadline", async () => {
+    const complete = vi.fn(async () => asstMsg());
+    const freshToken = vi.fn(async () => "fresh-token-abc");
+    const { codexGenerateText } = await loadBridgeWithMocks({ complete, freshToken });
+    const controller = new AbortController();
+
+    await codexGenerateText({
+      messages: [{ role: "user", content: "hi" }],
+      modelId: "gpt-5.4",
+      profileName: "openai-codex",
+      signal: controller.signal,
+    });
+
+    expect(freshToken).toHaveBeenCalledWith("openai-codex", controller.signal);
   });
 
   it("forwards opts.cacheKey as the request sessionId; omits it when absent", async () => {

@@ -74,6 +74,32 @@ describe("refreshCodexToken", () => {
     await expect(refreshCodexToken("rt")).rejects.toThrow("Failed to extract accountId from token");
   });
 
+  it("aborts a stalled token fetch when the caller's signal fires instead of hanging", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // A token endpoint that never responds on its own; the only way the promise
+    // settles is the passed-in abort signal firing.
+    vi.spyOn(globalThis, "fetch").mockImplementation((_url, init?: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        const sig = init?.signal;
+        if (!sig) return; // never settles without a signal -> proves we thread one
+        if (sig.aborted) {
+          reject(new DOMException("Aborted", "AbortError"));
+          return;
+        }
+        sig.addEventListener("abort", () => {
+          reject(new DOMException("Aborted", "AbortError"));
+        });
+      });
+    });
+
+    const controller = new AbortController();
+    const pending = refreshCodexToken("rt", controller.signal);
+    // Fire the deadline; the in-flight token refresh must unwind, not hang.
+    controller.abort();
+
+    await expect(pending).rejects.toThrow("Failed to refresh OpenAI Codex token");
+  });
+
   it("never logs the refresh token or response body on failure (redaction)", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(globalThis, "fetch").mockResolvedValue(

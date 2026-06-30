@@ -593,7 +593,13 @@ function abortError(signal: AbortSignal | undefined, fallback?: unknown): Error 
   const reason = signal?.reason;
   if (reason instanceof Error) return reason;
   if (fallback instanceof Error) return fallback;
-  return new Error(reason === undefined ? "Request was aborted" : String(reason));
+  if (reason === undefined) return new Error("Request was aborted");
+  if (typeof reason === "string") return new Error(reason);
+  try {
+    return new Error(JSON.stringify(reason));
+  } catch {
+    return new Error("Request was aborted");
+  }
 }
 
 // ============================================================================
@@ -657,7 +663,7 @@ export async function codexResponses(params: CodexResponsesParams): Promise<Code
     throw err;
   }
 
-  if (params.signal?.aborted) throw abortError(params.signal);
-
+  // A fully-accumulated result is already paid for; return it even if the signal
+  // races the boundary and flips to aborted after accumulation has resolved.
   return result;
 }
