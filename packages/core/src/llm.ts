@@ -19,6 +19,7 @@ import { chainedSignal } from "./concurrency/abort-budget.js";
 
 export type { GenerateOpts, GenerateResult } from "./llm-types.js";
 export const LLM_CALL_DEADLINE_MS = 180_000;
+export const CHAT_LLM_CALL_DEADLINE_MS = 300_000;
 
 // ============================================================================
 // LLM DISPATCH
@@ -63,7 +64,7 @@ export class LLM {
 
   async generate(opts: GenerateOpts): Promise<GenerateResult> {
     const start = Date.now();
-    const signal = withLLMDeadline(opts.signal);
+    const signal = withLLMDeadline(opts.signal, deadlineMsForCaller(opts.caller));
     let result: GenerateResult;
     try {
       result = await this.dispatch({ ...opts, signal });
@@ -164,10 +165,14 @@ function priceAiSdkUsage(
   });
 }
 
-function withLLMDeadline(signal: AbortSignal | undefined): AbortSignal {
+function deadlineMsForCaller(caller: GenerateOpts["caller"]): number {
+  return caller === "chat" ? CHAT_LLM_CALL_DEADLINE_MS : LLM_CALL_DEADLINE_MS;
+}
+
+function withLLMDeadline(signal: AbortSignal | undefined, deadlineMs: number): AbortSignal {
   return signal === undefined
-    ? AbortSignal.timeout(LLM_CALL_DEADLINE_MS)
-    : chainedSignal({ outer: signal, perRequestMs: LLM_CALL_DEADLINE_MS });
+    ? AbortSignal.timeout(deadlineMs)
+    : chainedSignal({ outer: signal, perRequestMs: deadlineMs });
 }
 
 function isDeadlineAbort(signal: AbortSignal): boolean {

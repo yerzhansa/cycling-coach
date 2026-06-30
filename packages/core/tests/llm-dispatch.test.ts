@@ -127,6 +127,17 @@ describe("LLM dispatch — codex path forwards maxSteps to bridge", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(LLM_CALL_DEADLINE_MS);
     expect(captured.signal).toBe(timeoutController.signal);
   });
+
+  it("uses the longer chat deadline for chat calls", async () => {
+    const timeoutController = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+
+    const captured = await runCodex({ messages: [{ role: "user", content: "hi" }], caller: "chat" });
+    const { CHAT_LLM_CALL_DEADLINE_MS } = await import("../src/llm.js");
+
+    expect(timeoutSpy).toHaveBeenCalledWith(CHAT_LLM_CALL_DEADLINE_MS);
+    expect(captured.signal).toBe(timeoutController.signal);
+  });
 });
 
 describe("LLM dispatch — AI SDK path forwards abort signals", () => {

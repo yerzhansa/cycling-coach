@@ -84,6 +84,14 @@ function tomorrowISODate(): string {
   return d.toISOString().slice(0, 10);
 }
 
+function dailyMemoryText(): string {
+  const memoryDir = join(dataDir, "memory");
+  return readdirSync(memoryDir)
+    .filter((name) => name.endsWith(".md") && name !== "MEMORY.md")
+    .map((name) => readFileSync(join(memoryDir, name), "utf-8"))
+    .join("\n");
+}
+
 describe("tainted-by-writes refusal", () => {
   it("a write on a non-final step then a brownout refuses without replaying the write", async () => {
     const { server, createdWorkouts } = createMockIntervalsServer();
@@ -220,12 +228,69 @@ describe("tainted-by-writes refusal", () => {
 
     expect(result).toBe(TAINTED_BY_WRITES_MESSAGE);
     expect(mainTurns).toBe(2);
-    const memoryDir = join(dataDir, "memory");
-    const dailyNotes = readdirSync(memoryDir)
-      .filter((name) => name.endsWith(".md") && name !== "MEMORY.md")
-      .map((name) => readFileSync(join(memoryDir, name), "utf-8"))
-      .join("\n");
-    expect((dailyNotes.match(new RegExp(note, "g")) ?? []).length).toBe(1);
+    expect((dailyMemoryText().match(new RegExp(note, "g")) ?? []).length).toBe(1);
+  });
+
+  it("keeps write taint scoped when different chats run concurrently", async () => {
+    const note = "freshness note scoped to the first chat";
+    let firstMainCalls = 0;
+    let secondMainCalls = 0;
+    let releaseFirstAfterWrite = () => {};
+    const firstAfterWrite = new Promise<void>((resolve) => {
+      releaseFirstAfterWrite = resolve;
+    });
+    let markFirstPostWrite = () => {};
+    const firstPostWrite = new Promise<void>((resolve) => {
+      markFirstPostWrite = resolve;
+    });
+    const complete = vi.fn(async (params: { system?: string; messages?: { role: string; content?: unknown }[] }) => {
+      const sys = params.system ?? "";
+      if (sys.includes(FLUSH_MARKER)) return mkAssistant({ text: "facts noted" });
+      if (sys.length === 0) return mkAssistant({ text: "summary" });
+
+      const messages = params.messages ?? [];
+      const transcript = JSON.stringify(messages);
+      const hasToolResult = messages.some((m) => m.role === "tool");
+      if (transcript.includes("first memory note")) {
+        firstMainCalls++;
+        if (!hasToolResult) {
+          return mkAssistant({
+            toolCall: {
+              id: "call-concurrent-memory",
+              name: "memory_write",
+              arguments: { type: "daily", content: note },
+            },
+            stopReason: "toolUse",
+          });
+        }
+        markFirstPostWrite();
+        await firstAfterWrite;
+        const err = new Error("deadline exceeded");
+        err.name = "TimeoutError";
+        throw err;
+      }
+
+      if (transcript.includes("second normal turn")) {
+        secondMainCalls++;
+        return mkAssistant({ text: "second ok" });
+      }
+
+      throw new Error(`unexpected messages: ${transcript}`);
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const agent = await setupAgent(complete);
+
+    const firstResultPromise = agent.chat("taint-concurrent-a", "first memory note");
+    await firstPostWrite;
+    const secondResult = await agent.chat("taint-concurrent-b", "second normal turn");
+    releaseFirstAfterWrite();
+    const firstResult = await firstResultPromise;
+
+    expect(secondResult).toBe("second ok");
+    expect(firstResult).toBe(TAINTED_BY_WRITES_MESSAGE);
+    expect(firstMainCalls).toBe(2);
+    expect(secondMainCalls).toBe(1);
+    expect((dailyMemoryText().match(new RegExp(note, "g")) ?? []).length).toBe(1);
   });
 
   it("a delete on a turn that then errors also taints", async () => {

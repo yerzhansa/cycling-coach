@@ -132,6 +132,11 @@ interface TurnOutcome {
   compactions: number;
 }
 
+interface TurnWriteRecord {
+  writesCommitted: number;
+  lastWriteSummary?: string;
+}
+
 function classifyError(err: unknown): string {
   // TurnBudgetExceededError crosses a dynamic-import boundary in tests, so match
   // on the structural name rather than instanceof.
@@ -186,10 +191,9 @@ export class CoachAgent {
   private archiveDeferred = new Set<string>();
   private lastFlushMessageCount = new Map<string, number>();
   // A committed tool write makes the turn non-replayable: the retry loop re-sends
-  // the pre-turn messages, so a second generate could re-run the write.
-  private turnWrites: { writesCommitted: number; lastWriteSummary?: string } = {
-    writesCommitted: 0,
-  };
+  // the pre-turn messages, so a second generate could re-run the write. Keep it
+  // in async-local turn state so concurrent chats cannot reset each other.
+  private readonly turnWritesStore = new AsyncLocalStorage<TurnWriteRecord>();
   // Per-turn read memoizer cache. Held in async-context storage (mirroring
   // resolvedCsStore below) rather than a shared instance field so that
   // concurrent fire-and-forget turns each memoize into their OWN map and can
@@ -266,13 +270,13 @@ export class CoachAgent {
     if (!REPLAY_UNSAFE_TOOL_NAMES.has(name)) return tool;
     const inner = tool.execute;
     if (typeof inner !== "function") return tool;
-    const record = this.turnWrites;
     return {
       ...tool,
       execute: async (input: unknown, options: unknown) => {
         const result = await (inner as (i: unknown, o: unknown) => unknown)(input, options);
         const summary = committedWriteSummary(name, result);
-        if (summary !== undefined) {
+        const record = this.turnWritesStore.getStore();
+        if (record !== undefined && summary !== undefined) {
           record.writesCommitted++;
           record.lastWriteSummary = summary;
         }
@@ -415,17 +419,15 @@ export class CoachAgent {
     // fire-and-forget turns never clobber each other's anchor. null when the
     // channel supplies nothing (CLI path, no sync data).
     const resolvedCs = turn?.resolvedCs ?? null;
+    const turnWrites: TurnWriteRecord = { writesCommitted: 0 };
     return this.resolvedCsStore.run(resolvedCs, () =>
       this.readToolCacheStore.run(new Map<string, unknown>(), () =>
-      withSessionLock(chatId, async () => {
+        this.turnWritesStore.run(turnWrites, () =>
+          withSessionLock(chatId, async () => {
       const turnStart = Date.now();
       const turnId = randomUUID();
       let compactions = 0;
       const turnBudget = createTurnBudget(() => Date.now());
-      // Reset the per-turn write record in place (the wrapped write tools hold a
-      // reference to this object, captured once at construction).
-      this.turnWrites.writesCommitted = 0;
-      this.turnWrites.lastWriteSummary = undefined;
       // One flush per turn: the latch flips on entry (before the await
       // resolves) so a thrown flush still consumes the turn's single flush.
       let flushedThisTurn = false;
@@ -674,12 +676,13 @@ export class CoachAgent {
             if (err instanceof TurnBudgetExceededError) throw err;
             // A committed tool write makes this turn non-replayable: retrying
             // would re-send the pre-turn messages and could re-run the write.
-            if (this.turnWrites.writesCommitted > 0) {
+            const committedWrites = this.turnWritesStore.getStore() ?? turnWrites;
+            if (committedWrites.writesCommitted > 0) {
               console.warn(
                 JSON.stringify({
                   event: "turn_failed_after_write",
-                  writesCommitted: this.turnWrites.writesCommitted,
-                  lastWriteSummary: this.turnWrites.lastWriteSummary,
+                  writesCommitted: committedWrites.writesCommitted,
+                  lastWriteSummary: committedWrites.lastWriteSummary,
                   error: (err instanceof Error ? err.message : String(err)).slice(0, 200),
                 }),
               );
@@ -827,6 +830,7 @@ export class CoachAgent {
         throw terminalErr;
       }
       }),
+        ),
       ),
     );
   }
