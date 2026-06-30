@@ -207,8 +207,8 @@ describe("notifyUpdate — broadcast filtering (L3)", () => {
     expect(message).toContain("https://tally.so/r/b5Dv4g");
     expect(message).toContain("Help shape what Cycling Coach builds next");
     expect(message).not.toContain("x.com/yerzhansa");
-    expect(message.indexOf("railway.com/deploy/cycling-coach")).toBeLessThan(
-      message.indexOf("https://tally.so/r/b5Dv4g"),
+    expect(message.indexOf("https://tally.so/r/b5Dv4g")).toBeLessThan(
+      message.indexOf("railway.com/deploy/cycling-coach"),
     );
   });
 });
