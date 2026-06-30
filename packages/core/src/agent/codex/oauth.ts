@@ -252,6 +252,12 @@ async function exchangeAuthorizationCode(
   };
 }
 
+function isAbortShaped(error: unknown): boolean {
+  if (error === null || typeof error !== "object") return false;
+  const name = (error as { name?: unknown }).name;
+  return name === "AbortError" || name === "TimeoutError";
+}
+
 async function refreshAccessToken(
   refreshToken: string,
   signal?: AbortSignal,
@@ -295,6 +301,10 @@ async function refreshAccessToken(
       expires: Date.now() + json.expires_in * 1000,
     };
   } catch (error) {
+    // A deadline or 30s-backstop abort is not a credential failure -- propagate it
+    // with its real shape so the retry/deny path is skipped and the surfaced error
+    // is the abort, not a misleading "re-run setup".
+    if (isAbortShaped(error) || signal?.aborted) throw error;
     console.error("[codex-oauth] Token refresh error:", error);
     return { type: "failed" };
   }

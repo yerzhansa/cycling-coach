@@ -237,4 +237,56 @@ describe("LLM generate — timeout reclassification gated on our timer + abort s
     const caught = await generateThrowing(abortErr);
     expect((caught as Error).name).toBe("TimeoutError");
   });
+
+  // Sibling of generateThrowing: our timer never fires (AbortSignal.timeout
+  // returns a non-aborted signal), and opts.signal is threaded through so an
+  // OUTER caller cancellation can be exercised.
+  async function generateThrowingWithSignal(
+    thrown: unknown,
+    signal: AbortSignal,
+  ): Promise<unknown> {
+    vi.doMock("ai", () => ({
+      generateText: vi.fn(async () => {
+        throw thrown;
+      }),
+      stepCountIs: vi.fn((count: number) => ({ type: "step-count", count })),
+    }));
+    vi.doMock("@ai-sdk/anthropic", () => ({
+      createAnthropic: () => () => ({ provider: "anthropic-stub" }),
+    }));
+    // Our per-call timer never fires: deadline.aborted stays false.
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(new AbortController().signal);
+
+    const { LLM } = await import("../src/llm.js");
+    const llm = new LLM(anthropicConfig());
+    let rejected = false;
+    let caught: unknown;
+    try {
+      await llm.generate({ messages: [{ role: "user", content: "hi" }], signal });
+    } catch (err) {
+      rejected = true;
+      caught = err;
+    }
+    expect(rejected).toBe(true);
+    return caught;
+  }
+
+  it("does NOT relabel an outer-signal abort when our timer never fired", async () => {
+    const outer = new AbortController();
+    outer.abort(new DOMException("The operation was aborted.", "AbortError"));
+    const abortErr = new Error("The operation was aborted");
+    abortErr.name = "AbortError";
+    const caught = await generateThrowingWithSignal(abortErr, outer.signal);
+    expect((caught as Error).name).toBe("AbortError");
+    expect((caught as Error).name).not.toBe("TimeoutError");
+  });
+
+  it("relabels a genuine deadline abort wrapped under a non-standard name", async () => {
+    const wrapped = Object.assign(new Error("api call failed"), {
+      name: "AI_APICallError",
+      cause: Object.assign(new Error("aborted"), { name: "AbortError" }),
+    });
+    const caught = await generateThrowing(wrapped);
+    expect((caught as Error).name).toBe("TimeoutError");
+  });
 });

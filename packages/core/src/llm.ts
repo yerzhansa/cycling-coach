@@ -193,15 +193,20 @@ function withLLMDeadline(
   };
 }
 
-// True when the caught error is the shape an aborted request produces — an
-// AbortError/TimeoutError, or the timer's own reason. A 5xx/429/network error
-// (APICallError, ServerError/RateLimitError/NetworkError) carries a different
-// name and is NOT matched, so it keeps its own retry class.
+// True when the caught error is the shape an aborted request produces -- the
+// timer's own reason, or an AbortError/TimeoutError anywhere in its cause chain
+// (some providers wrap the abort under a non-standard name). A 5xx/429/network
+// error carries no such cause and is NOT matched, so it keeps its own retry
+// class. Only consulted when OUR timer fired (deadline.aborted), so widening to
+// the cause chain cannot mislabel an unrelated failure.
 function isAbortError(err: unknown, deadline: AbortSignal): boolean {
-  if (err === deadline.reason) return true;
-  if (err !== null && typeof err === "object") {
-    const name = (err as { name?: unknown }).name;
-    return name === "AbortError" || name === "TimeoutError";
+  let current: unknown = err;
+  for (let depth = 0; depth < 5 && current != null; depth++) {
+    if (current === deadline.reason) return true;
+    if (typeof current !== "object") return false;
+    const name = (current as { name?: unknown }).name;
+    if (name === "AbortError" || name === "TimeoutError") return true;
+    current = (current as { cause?: unknown }).cause;
   }
   return false;
 }

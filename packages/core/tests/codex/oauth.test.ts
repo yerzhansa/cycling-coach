@@ -74,7 +74,7 @@ describe("refreshCodexToken", () => {
     await expect(refreshCodexToken("rt")).rejects.toThrow("Failed to extract accountId from token");
   });
 
-  it("aborts a stalled token fetch when the caller's signal fires instead of hanging", async () => {
+  it("propagates the abort instead of relabeling when the caller signal fires", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     // A token endpoint that never responds on its own; the only way the promise
     // settles is the passed-in abort signal firing.
@@ -97,7 +97,20 @@ describe("refreshCodexToken", () => {
     // Fire the deadline; the in-flight token refresh must unwind, not hang.
     controller.abort();
 
-    await expect(pending).rejects.toThrow("Failed to refresh OpenAI Codex token");
+    const err = await pending.catch((e) => e);
+    expect((err as Error).name).toBe("AbortError");
+    expect((err as Error).message).not.toMatch(/Failed to refresh/);
+  });
+
+  it("propagates the 30s backstop TimeoutError instead of relabeling", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      throw new DOMException("The operation timed out", "TimeoutError");
+    });
+
+    const err = await refreshCodexToken("rt").catch((e) => e);
+    expect((err as Error).name).toBe("TimeoutError");
+    expect((err as Error).message).not.toMatch(/Failed to refresh/);
   });
 
   it("never logs the refresh token or response body on failure (redaction)", async () => {

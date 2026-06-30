@@ -596,7 +596,8 @@ function abortError(signal: AbortSignal | undefined, fallback?: unknown): Error 
   if (reason === undefined) return new Error("Request was aborted");
   if (typeof reason === "string") return new Error(reason);
   try {
-    return new Error(JSON.stringify(reason));
+    const serialized = JSON.stringify(reason);
+    return new Error(serialized ?? "Request was aborted");
   } catch {
     return new Error("Request was aborted");
   }

@@ -106,6 +106,9 @@ async function refreshWithRetry(name: string, cred: OAuthCredential, signal?: Ab
   try {
     return await refreshCodexToken(cred.refresh, signal);
   } catch (err) {
+    // A caller-deadline abort is not a denied refresh -- skip the 2s retry/deny path
+    // and propagate it so the surfaced error is not a misleading "re-run setup".
+    if (signal?.aborted) throw err;
     if (!isRefreshDenied(err)) throw err;
     // pi-ai reports invalid_grant, 5xx, and network failures with one generic
     // message; retry once with the on-disk token before declaring the

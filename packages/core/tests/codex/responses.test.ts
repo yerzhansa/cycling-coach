@@ -335,6 +335,19 @@ describe("codexResponses error surface (single attempt, no retry loop)", () => {
     expect(result.stopReason).toBe("stop");
   });
 
+  it("falls back to 'Request was aborted' when the abort reason serializes to undefined", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const controller = new AbortController();
+    controller.abort(() => {});
+
+    const err = (await codexResponses(baseParams({ signal: controller.signal })).catch(
+      (e) => e,
+    )) as Error;
+
+    expect(err.message).toBe("Request was aborted");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("serializes a non-string, non-Error abort reason without producing '[object Object]'", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const controller = new AbortController();
