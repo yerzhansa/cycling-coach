@@ -17,8 +17,8 @@ import type { GenerateOpts, GenerateResult } from "./llm-types.js";
 import { appendUsageLine, cacheTokenDetails, usageFieldsFromResult } from "./usage-ledger.js";
 
 export type { GenerateOpts, GenerateResult } from "./llm-types.js";
-export const LLM_CALL_DEADLINE_MS = 180_000;
-export const CHAT_LLM_CALL_DEADLINE_MS = 300_000;
+export const LLM_CALL_DEADLINE_MS = 300_000;
+export const CHAT_LLM_CALL_DEADLINE_MS = 600_000;
 
 // ============================================================================
 // LLM DISPATCH

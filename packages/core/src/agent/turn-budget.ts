@@ -1,6 +1,6 @@
 export const MAX_TURN_MODEL_CALLS = 40;
 export const MAX_TURN_GENERATE_ATTEMPTS = 4;
-export const TURN_WALL_CLOCK_MS = 5 * 60_000;
+export const TURN_WALL_CLOCK_MS = 10 * 60_000;
 
 export type BudgetExceededKind = "model_calls" | "generate_attempts" | "wall_clock";
 

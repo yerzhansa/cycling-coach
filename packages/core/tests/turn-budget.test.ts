@@ -192,8 +192,9 @@ describe("per-turn budget through chat() (behavioral)", () => {
 
   it("a retry after an early timeout gets only the budget left, capping total chat time", async () => {
     // Each chat generate mints its per-call deadline from the turn's remaining
-    // wall-clock budget. A timeout 100s into the 300s turn must leave the retry
-    // only ~200s — not a fresh full window (the ~600s double-window bug).
+    // wall-clock budget. A timeout 100s into the 600s turn must leave the retry
+    // only ~500s — not a fresh full window (which would let a turn run ~1200s,
+    // the double-window bug).
     let clock = 0;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => clock);
     const deadlines: number[] = [];
@@ -234,7 +235,7 @@ describe("per-turn budget through chat() (behavioral)", () => {
 
   it("a between-attempts wall-clock overrun stops with a wall_clock error and lets the in-flight call complete", async () => {
     // Inject a clock that stays at turnStart through the first attempt and jumps
-    // past the 5-minute deadline once the first attempt's generate has thrown
+    // past the 10-minute deadline once the first attempt's generate has thrown
     // (a rate-limit error the loop would normally retry). The first attempt's
     // generate runs to completion (its throw is observed), proving the deadline
     // never aborted the in-flight call; the between-attempts check then stops it.
