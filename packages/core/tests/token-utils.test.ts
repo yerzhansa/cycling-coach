@@ -8,6 +8,7 @@ import {
   computeHistoryTokenBudget,
   shouldCompact,
   classifyFailure,
+  formatRateLimitWait,
 } from "../src/agent/token-utils.js";
 
 function apiError(statusCode: number): APICallError {
@@ -16,6 +17,16 @@ function apiError(statusCode: number): APICallError {
     url: "https://example.test",
     requestBodyValues: {},
     statusCode,
+  });
+}
+
+function rateLimitError(retryAfterSeconds: number): APICallError {
+  return new APICallError({
+    message: "rate limited",
+    url: "https://example.test",
+    requestBodyValues: {},
+    statusCode: 429,
+    responseHeaders: { "retry-after": String(retryAfterSeconds) },
   });
 }
 
@@ -120,6 +131,26 @@ describe("classifyFailure", () => {
 
   it("classifies an unmatched error as unknown", () => {
     expect(classifyFailure(new Error("???"))).toBe("unknown");
+  });
+});
+
+describe("formatRateLimitWait", () => {
+  it("returns 'about a minute' when no retry-after header is present", () => {
+    expect(formatRateLimitWait(new Error("rate limited"))).toBe("about a minute");
+    expect(formatRateLimitWait(apiError(429))).toBe("about a minute");
+  });
+
+  it("returns '~Ns' for a sub-minute retry-after", () => {
+    expect(formatRateLimitWait(rateLimitError(30))).toBe("~30 seconds");
+  });
+
+  it("returns '~N minute(s)' for a >=60s retry-after", () => {
+    expect(formatRateLimitWait(rateLimitError(90))).toBe("~2 minutes");
+    expect(formatRateLimitWait(rateLimitError(60))).toBe("~1 minute");
+  });
+
+  it("is importable from token-utils.js", () => {
+    expect(typeof formatRateLimitWait).toBe("function");
   });
 });
 

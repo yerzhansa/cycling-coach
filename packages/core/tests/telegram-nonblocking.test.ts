@@ -20,11 +20,16 @@ afterEach(() => {
 });
 
 interface FakeBot {
-  api: { sendMessage: ReturnType<typeof vi.fn>; setMyCommands: ReturnType<typeof vi.fn> };
+  api: {
+    sendMessage: ReturnType<typeof vi.fn>;
+    setMyCommands: ReturnType<typeof vi.fn>;
+    config: { use: ReturnType<typeof vi.fn> };
+  };
   use: ReturnType<typeof vi.fn>;
   command: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
+  catch: ReturnType<typeof vi.fn>;
 }
 
 interface StubAgent {
@@ -49,11 +54,13 @@ async function buildBot(opts?: { reference?: StubReference }): Promise<BuildBotR
     api: {
       sendMessage: vi.fn(async () => undefined),
       setMyCommands: vi.fn(async () => true),
+      config: { use: vi.fn() },
     },
     use: vi.fn(),
     command: vi.fn(),
     on: vi.fn(),
     stop: vi.fn(async () => undefined),
+    catch: vi.fn(),
   };
   vi.doMock("grammy", () => ({
     Bot: function FakeBot() {

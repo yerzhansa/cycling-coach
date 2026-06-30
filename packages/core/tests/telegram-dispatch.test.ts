@@ -23,11 +23,16 @@ afterEach(() => {
 });
 
 interface FakeBot {
-  api: { sendMessage: ReturnType<typeof vi.fn>; setMyCommands: ReturnType<typeof vi.fn> };
+  api: {
+    sendMessage: ReturnType<typeof vi.fn>;
+    setMyCommands: ReturnType<typeof vi.fn>;
+    config: { use: ReturnType<typeof vi.fn> };
+  };
   use: ReturnType<typeof vi.fn>;
   command: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
+  catch: ReturnType<typeof vi.fn>;
 }
 
 interface StubAgent {
@@ -57,11 +62,13 @@ async function buildBot(opts?: {
     api: {
       sendMessage: vi.fn(async () => undefined),
       setMyCommands: vi.fn(opts?.setMyCommands ?? (async () => true)),
+      config: { use: vi.fn() },
     },
     use: vi.fn(),
     command: vi.fn(),
     on: vi.fn(),
     stop: vi.fn(opts?.stop ?? (async () => undefined)),
+    catch: vi.fn(),
   };
   vi.doMock("grammy", () => ({
     Bot: function FakeBot() {
@@ -102,10 +109,16 @@ function getMessageText(bot: FakeBot) {
   return call[1] as (ctx: unknown) => Promise<void>;
 }
 
+function getBotCatch(bot: FakeBot) {
+  const call = bot.catch.mock.calls[0];
+  if (!call) throw new Error("bot.catch handler not registered");
+  return call[0] as (botError: { error: unknown; ctx?: unknown }) => Promise<void>;
+}
+
 interface FakeCtx {
   chat: { id: number };
   match: string;
-  message: { text: string };
+  message: { text: string; message_id?: number };
   reply: ReturnType<typeof vi.fn>;
   replyWithDocument: ReturnType<typeof vi.fn>;
 }
@@ -132,6 +145,15 @@ function rateLimitError(retryAfterSec?: number): unknown {
     });
   }
   return new Error("rate limit");
+}
+
+function apiError(statusCode: number): unknown {
+  return new APICallError({
+    message: "api error",
+    url: "https://example.invalid/api",
+    requestBodyValues: {},
+    statusCode,
+  });
 }
 
 function replyTexts(ctx: FakeCtx): string[] {
@@ -269,15 +291,15 @@ describe("message:text — apology vs rate-limit fork", () => {
     expect(ctx.reply.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("rate-limit with retry-after header → precise wait echoing the user text", async () => {
+  it("rate-limit with retry-after header → classified wait copy, no stale 'not processed' line", async () => {
     const { bot, agent, drainPending } = await buildBot();
     agent.hasSession.mockReturnValue(true);
     agent.chat.mockRejectedValue(rateLimitError(45));
     const ctx = makeCtx({ message: { text: "plan my week" } });
     await getMessageText(bot)(ctx);
     await drainPending();
-    expect(someReply(ctx, "Please wait ~45 seconds and resend:")).toBe(true);
-    expect(someReply(ctx, "plan my week")).toBe(true);
+    expect(someReply(ctx, "Rate limited — please try again in ~45 seconds.")).toBe(true);
+    expect(someReply(ctx, "was not processed")).toBe(false);
   });
 
   it("rate-limit without header → default 'about a minute' wait", async () => {
@@ -288,6 +310,141 @@ describe("message:text — apology vs rate-limit fork", () => {
     await getMessageText(bot)(ctx);
     await drainPending();
     expect(someReply(ctx, "about a minute")).toBe(true);
+  });
+});
+
+describe("G1 — retry transformer / classified errors / delivery split", () => {
+  it("createSecuredBot installs the auto-retry transformer exactly once", async () => {
+    const { bot } = await buildBot();
+    expect(bot.api.config.use).toHaveBeenCalledTimes(1);
+  });
+
+  it("generation provider-auth error → provider-auth copy (NOT delivery copy, NOT genericReply)", async () => {
+    const { bot, agent, drainPending } = await buildBot();
+    agent.chat.mockRejectedValue(apiError(401));
+    const ctx = makeCtx();
+    await getCommand(bot, "plan")(ctx);
+    await drainPending();
+    expect(
+      someReply(ctx, "The model provider rejected the API key — check your provider credentials."),
+    ).toBe(true);
+    expect(someReply(ctx, "Telegram had trouble delivering")).toBe(false);
+    expect(someReply(ctx, "Sorry, something went wrong generating your plan")).toBe(false);
+  });
+
+  it("generation unknown-kind error → caller genericReply (fallback only on unknown)", async () => {
+    const { bot, agent, drainPending } = await buildBot();
+    agent.chat.mockRejectedValue(new Error("???"));
+    const ctx = makeCtx();
+    await getCommand(bot, "plan")(ctx);
+    await drainPending();
+    expect(someReply(ctx, "Sorry, something went wrong generating your plan. Please try again.")).toBe(
+      true,
+    );
+  });
+
+  it("generation succeeds but delivery rejects (non-parse) → D1 delivery copy AND the answer is resendable", async () => {
+    const { bot, agent, drainPending } = await buildBot();
+    agent.hasSession.mockReturnValue(true);
+    agent.chat.mockResolvedValue("the generated answer");
+    const ctx = makeCtx({ message: { text: "how's my form?" } });
+    ctx.reply.mockImplementation(async (_text: string, options?: Record<string, unknown>) => {
+      if (options?.parse_mode === "HTML") {
+        throw new Error("Call to 'sendMessage' failed! (403: Forbidden: bot was blocked by the user)");
+      }
+      return undefined;
+    });
+    await getMessageText(bot)(ctx);
+    await drainPending();
+    expect(someReply(ctx, "I generated the answer, but Telegram had trouble delivering it.")).toBe(true);
+
+    // The resend cache was written before delivery, so a follow-up resend re-emits it.
+    const ctx2 = makeCtx({ message: { text: "resend" } });
+    await getMessageText(bot)(ctx2);
+    await drainPending();
+    expect(someReply(ctx2, "the generated answer")).toBe(true);
+  });
+
+  it("after a successful turn, 'resend' (and '  RESEND  ') re-emit the same answer without re-running agent.chat", async () => {
+    const { bot, agent, drainPending } = await buildBot();
+    agent.hasSession.mockReturnValue(true);
+    agent.chat.mockResolvedValue("cached answer body");
+    const handler = getMessageText(bot);
+
+    await handler(makeCtx({ message: { text: "how's my form?" } }));
+    await drainPending();
+
+    const ctx2 = makeCtx({ message: { text: "resend" } });
+    await handler(ctx2);
+    await drainPending();
+    expect(someReply(ctx2, "cached answer body")).toBe(true);
+
+    const ctx3 = makeCtx({ message: { text: "  RESEND  " } });
+    await handler(ctx3);
+    await drainPending();
+    expect(someReply(ctx3, "cached answer body")).toBe(true);
+
+    expect(agent.chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("'resend' with no cached answer → guidance reply and NO agent.chat", async () => {
+    const { bot, agent } = await buildBot();
+    agent.hasSession.mockReturnValue(true);
+    const ctx = makeCtx({ message: { text: "resend" } });
+    await getMessageText(bot)(ctx);
+    expect(someReply(ctx, "I don't have a recent answer to resend.")).toBe(true);
+    expect(agent.chat).not.toHaveBeenCalled();
+  });
+
+  it("threads the first delivered chunk to ctx.message.message_id; later chunks are unthreaded", async () => {
+    const { bot, agent, drainPending } = await buildBot();
+    agent.hasSession.mockReturnValue(true);
+    agent.chat.mockResolvedValue("x".repeat(9000));
+    const ctx = makeCtx({ message: { text: "long please", message_id: 4242 } });
+    await getMessageText(bot)(ctx);
+    await drainPending();
+    const htmlCalls = ctx.reply.mock.calls.filter(
+      (c: unknown[]) => (c[1] as { parse_mode?: string } | undefined)?.parse_mode === "HTML",
+    );
+    expect(htmlCalls.length).toBeGreaterThan(1);
+    expect((htmlCalls[0][1] as { reply_parameters?: unknown }).reply_parameters).toEqual({
+      message_id: 4242,
+      allow_sending_without_reply: true,
+    });
+    for (const c of htmlCalls.slice(1)) {
+      expect((c[1] as { reply_parameters?: unknown }).reply_parameters).toBeUndefined();
+    }
+  });
+
+  it("the stale 'was not processed (rate limited)… resend:' copy never appears", async () => {
+    const { bot, agent, drainPending } = await buildBot();
+    agent.hasSession.mockReturnValue(true);
+    agent.chat.mockRejectedValue(rateLimitError(30));
+    const ctx = makeCtx({ message: { text: "plan my week" } });
+    await getMessageText(bot)(ctx);
+    await drainPending();
+    expect(replyTexts(ctx).some((t) => t.includes("was not processed"))).toBe(false);
+    expect(replyTexts(ctx).some((t) => t.includes("and resend:"))).toBe(false);
+  });
+
+  it("the captured bot.catch handler replies classified copy; a reply throw does not escape", async () => {
+    const { bot } = await buildBot();
+    const handler = getBotCatch(bot);
+
+    const reply = vi.fn(async () => undefined);
+    await expect(
+      handler({ error: apiError(401), ctx: { chat: { id: 1 }, reply } }),
+    ).resolves.toBeUndefined();
+    expect(reply).toHaveBeenCalledWith(
+      "The model provider rejected the API key — check your provider credentials.",
+    );
+
+    const throwingReply = vi.fn(async () => {
+      throw new Error("cannot reply");
+    });
+    await expect(
+      handler({ error: new Error("boom"), ctx: { chat: { id: 1 }, reply: throwingReply } }),
+    ).resolves.toBeUndefined();
   });
 });
 

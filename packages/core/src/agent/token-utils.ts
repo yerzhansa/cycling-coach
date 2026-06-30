@@ -155,3 +155,11 @@ export function extractRetryAfterMs(err: unknown): number | null {
 
   return null;
 }
+
+export function formatRateLimitWait(err: unknown): string {
+  const ms = extractRetryAfterMs(err);
+  if (!ms) return "about a minute";
+  const secs = Math.ceil(ms / 1000);
+  if (secs < 60) return `~${secs} seconds`;
+  return `~${Math.ceil(secs / 60)} minute${Math.ceil(secs / 60) > 1 ? "s" : ""}`;
+}

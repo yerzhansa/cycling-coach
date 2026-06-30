@@ -220,7 +220,13 @@ describe("createTelegramBot — startup diagnostic + no security broadcast", () 
     const use = vi.fn();
     const command = vi.fn();
     const on = vi.fn();
-    const bot = { api: { sendMessage, setMyCommands: vi.fn(async () => true) }, use, command, on };
+    const bot = {
+      api: { sendMessage, setMyCommands: vi.fn(async () => true), config: { use: vi.fn() } },
+      use,
+      command,
+      on,
+      catch: vi.fn(),
+    };
 
     vi.doMock("grammy", () => ({
       Bot: function FakeBot() {
@@ -265,10 +271,11 @@ describe("createTelegramBot — startup diagnostic + no security broadcast", () 
 
     const sendMessage = vi.fn(async () => undefined);
     const bot = {
-      api: { sendMessage, setMyCommands: vi.fn(async () => true) },
+      api: { sendMessage, setMyCommands: vi.fn(async () => true), config: { use: vi.fn() } },
       use: vi.fn(),
       command: vi.fn(),
       on: vi.fn(),
+      catch: vi.fn(),
     };
     vi.doMock("grammy", () => ({
       Bot: function FakeBot() {

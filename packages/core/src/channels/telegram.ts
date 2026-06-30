@@ -1,7 +1,8 @@
 import { Bot, InputFile } from "grammy";
+import { autoRetry } from "@grammyjs/auto-retry";
 import type { CoachAgent } from "../agent/coach-agent.js";
 import type { BinaryConfig } from "../binary.js";
-import { isRateLimitError, extractRetryAfterMs } from "../agent/token-utils.js";
+import { classifyAgentError } from "../agent/error-classify.js";
 import {
   checkForUpdate,
   selfUpdate,
@@ -23,18 +24,15 @@ import { formatSnapshotRaw } from "../reference/sync/snapshot-debug.js";
 import { sendSnapshotOutput } from "../reference/sync/send-snapshot.js";
 import { createSubsystemLogger } from "../logging/index.js";
 
-function formatRateLimitWait(err: unknown): string {
-  const ms = extractRetryAfterMs(err);
-  if (!ms) return "about a minute";
-  const secs = Math.ceil(ms / 1000);
-  if (secs < 60) return `~${secs} seconds`;
-  return `~${Math.ceil(secs / 60)} minute${Math.ceil(secs / 60) > 1 ? "s" : ""}`;
-}
-
 // Upper bound on how long /update waits for in-flight turns to finish before
 // self-updating. A hung turn must never wedge the update, so the drain races a
 // timeout.
 const UPDATE_DRAIN_TIMEOUT_MS = 10_000;
+
+// Process-local resend cache bounds. The cache holds full generated answers
+// (athlete content) so it is size- and time-bounded and never logged.
+const RESEND_TTL_MS = 30 * 60_000;
+const RESEND_MAX_ENTRIES = 1000;
 
 function drainBounded(drain: () => Promise<void>, timeoutMs: number): Promise<void> {
   return Promise.race([
@@ -106,6 +104,21 @@ function createSecuredBot(opts: {
 }): Bot {
   const bot = new Bot(opts.token);
 
+  // Bounded API-level retry restricted to a Telegram 429 carrying a `retry_after`
+  // (the one failure class where the original send provably did NOT land).
+  // rethrowInternalServerErrors / rethrowHttpErrors disable this plugin's default
+  // 5xx and network retries, which would risk a duplicate send on an ambiguous
+  // failure whose original request may already have been delivered server-side.
+  // maxDelaySeconds caps how long we'll wait out a flood.
+  bot.api.config.use(
+    autoRetry({
+      maxRetryAttempts: 1,
+      maxDelaySeconds: 300,
+      rethrowInternalServerErrors: true,
+      rethrowHttpErrors: true,
+    }),
+  );
+
   // Per-sender pairing-challenge rate-limit map (process-lifetime; LRU-bounded).
   const challengeRateLimit = new Map<string, number>();
   bot.use(
@@ -158,6 +171,33 @@ export function createTelegramBot(
   const log = createSubsystemLogger("telegram", dataDir);
   const greeted = new Set<number>();
 
+  // Process-local per-chat cache of the last generated answer, so an athlete can
+  // ask for it again after a Telegram delivery failure without re-running the LLM
+  // turn. Bounded + TTL'd; contents (athlete text) are never logged.
+  const resendCache = new Map<string, { answer: string; expires: number }>();
+  const writeResend = (chatId: string, answer: string): void => {
+    const now = Date.now();
+    for (const [key, entry] of resendCache) {
+      if (entry.expires <= now) resendCache.delete(key);
+    }
+    if (resendCache.has(chatId)) resendCache.delete(chatId); // bump to MRU position
+    resendCache.set(chatId, { answer, expires: now + RESEND_TTL_MS });
+    while (resendCache.size > RESEND_MAX_ENTRIES) {
+      const oldest = resendCache.keys().next().value;
+      if (oldest === undefined) break;
+      resendCache.delete(oldest);
+    }
+  };
+  const readResend = (chatId: string): string | undefined => {
+    const entry = resendCache.get(chatId);
+    if (!entry) return undefined;
+    if (entry.expires <= Date.now()) {
+      resendCache.delete(chatId);
+      return undefined;
+    }
+    return entry.answer;
+  };
+
   // Fire-and-forget turn dispatch. Telegram handlers spawn the LLM turn on a
   // tracked task and return immediately so grammY's sequential update loop is
   // never blocked by a long turn. The task owns its user-facing error reply; the
@@ -192,9 +232,10 @@ export function createTelegramBot(
 
   // Shared turn skeleton: every chat-bearing handler captures its deps/message
   // synchronously, then hands the LLM turn here to run on the fire-and-forget
-  // task. The only per-handler differences are the user-facing strings, the log
-  // command name, and (for the text chat handler) the rate-limited reply wording,
-  // all passed in rather than re-templated so the handlers stay byte-identical.
+  // task. Generation and delivery are split into separate try blocks so a
+  // post-generation Telegram delivery failure is never shown generation copy and
+  // vice versa. The only per-handler differences (genericReply text, log command
+  // name, reply-to id) are passed in rather than re-templated.
   function runTurn(opts: {
     ctx: { reply: (text: string, options?: Record<string, unknown>) => Promise<unknown> };
     command: string;
@@ -202,22 +243,26 @@ export function createTelegramBot(
     message: string;
     deps: ReturnType<typeof turnDeps>;
     genericReply: string;
-    rateLimitReply?: (err: unknown) => string;
+    replyToMessageId?: number;
   }): void {
     dispatch(async () => {
+      let response: string;
       try {
-        const response = await agent.chat(opts.chatId, opts.message, opts.deps);
-        await sendLongMessage(opts.ctx, response);
+        response = await agent.chat(opts.chatId, opts.message, opts.deps);
       } catch (err) {
         log.error("command_failed", err, { command: opts.command, chatId: opts.chatId });
-        if (isRateLimitError(err)) {
-          const reply = opts.rateLimitReply
-            ? opts.rateLimitReply(err)
-            : `Rate limited — please try again in ${formatRateLimitWait(err)}.`;
-          await opts.ctx.reply(reply);
-        } else {
-          await opts.ctx.reply(opts.genericReply);
-        }
+        const { kind, athleteMessage } = classifyAgentError(err);
+        await opts.ctx.reply(kind === "unknown" ? opts.genericReply : athleteMessage);
+        return;
+      }
+      writeResend(opts.chatId, response);
+      try {
+        await sendLongMessage(opts.ctx, response, opts.replyToMessageId);
+      } catch (err) {
+        log.error("delivery_failed", err, { command: opts.command, chatId: opts.chatId });
+        await opts.ctx.reply(
+          'I generated the answer, but Telegram had trouble delivering it. Send "resend" and I\'ll send the same answer again.',
+        );
       }
     });
   }
@@ -252,6 +297,7 @@ export function createTelegramBot(
       message: "/plan",
       deps,
       genericReply: "Sorry, something went wrong generating your plan. Please try again.",
+      replyToMessageId: ctx.message?.message_id,
     });
   });
 
@@ -266,6 +312,7 @@ export function createTelegramBot(
       message: "/workout",
       deps,
       genericReply: "Sorry, something went wrong. Please try again.",
+      replyToMessageId: ctx.message?.message_id,
     });
   });
 
@@ -280,6 +327,7 @@ export function createTelegramBot(
       message: "/status",
       deps,
       genericReply: "Sorry, something went wrong. Please try again.",
+      replyToMessageId: ctx.message?.message_id,
     });
   });
 
@@ -342,6 +390,7 @@ export function createTelegramBot(
       message,
       deps,
       genericReply: "Sorry, something went wrong reviewing your session. Please try again.",
+      replyToMessageId: ctx.message?.message_id,
     });
   });
 
@@ -405,6 +454,16 @@ export function createTelegramBot(
 
   bot.on("message:text", async (ctx) => {
     const chatId = `telegram:${ctx.chat.id}`;
+    const text = ctx.message.text;
+
+    // Resend the last cached answer without re-running the LLM turn. Short-circuit
+    // BEFORE any greeting/dispatch so it never reaches agent.chat.
+    if (text.trim().toLowerCase() === "resend") {
+      const cached = readResend(chatId);
+      if (cached !== undefined) await sendLongMessage(ctx, cached);
+      else await ctx.reply("I don't have a recent answer to resend.");
+      return;
+    }
 
     // Welcome newcomers on their very first message. `greeted` is in-memory,
     // so after a process restart we consult the on-disk session to tell
@@ -416,7 +475,6 @@ export function createTelegramBot(
       }
     }
 
-    const text = ctx.message.text;
     const deps = turnDeps();
     runTurn({
       ctx,
@@ -425,9 +483,22 @@ export function createTelegramBot(
       message: text,
       deps,
       genericReply: "Sorry, something went wrong. Please try again.",
-      rateLimitReply: (err) =>
-        `Your message was not processed (rate limited). Please wait ${formatRateLimitWait(err)} and resend:\n\n"${text.slice(0, 200)}"`,
+      replyToMessageId: ctx.message?.message_id,
     });
+  });
+
+  bot.catch(async (botError) => {
+    // Real surface: synchronous handler/ack reply failures NOT on a dispatched
+    // turn (dispatched-turn errors are already swallowed by the dispatch wrapper).
+    // The classified-reply attempt is itself guarded so a reply throw cannot
+    // re-enter bot.catch or escape as an unhandled rejection.
+    log.error("bot_catch", botError.error, {});
+    const c = botError.ctx;
+    try {
+      if (c?.chat) await c.reply(classifyAgentError(botError.error).athleteMessage);
+    } catch (replyErr) {
+      log.error("bot_catch_reply_failed", replyErr, {});
+    }
   });
 
   return { bot, drainPending };
@@ -757,15 +828,25 @@ function isTelegramParseError(err: unknown): boolean {
 export async function sendLongMessage(
   ctx: { reply: (text: string, options?: Record<string, unknown>) => Promise<unknown> },
   text: string,
+  replyToMessageId?: number,
 ): Promise<void> {
   const html = markdownToTelegramHtml(text);
+  // Thread the FIRST delivered chunk to the inbound message; later chunks stay
+  // unthreaded. allow_sending_without_reply keeps the send working even if the
+  // inbound message was deleted (otherwise reply-to-deleted is a new failure).
+  let pendingThread =
+    replyToMessageId !== undefined
+      ? { reply_parameters: { message_id: replyToMessageId, allow_sending_without_reply: true } }
+      : undefined;
   for (const chunk of chunkHtml(html)) {
     // Telegram rejects an empty message (400: message text is empty), and an
     // empty chunk carries nothing for the athlete anyway — skip it so ctx.reply
     // is never called with empty/whitespace-only text.
     if (chunk.trim() === "") continue;
+    const thread = pendingThread;
     try {
-      await ctx.reply(chunk, { parse_mode: "HTML" });
+      await ctx.reply(chunk, { parse_mode: "HTML", ...thread });
+      pendingThread = undefined;
     } catch (err) {
       if (!isTelegramParseError(err)) throw err;
       // Log the message only — a grammY error object carries the request
@@ -779,7 +860,8 @@ export async function sendLongMessage(
       // sees clean text — never tag soup or double-escaped entities.
       const plain = htmlChunkToPlainText(chunk);
       if (plain.trim() === "") continue;
-      await ctx.reply(plain);
+      await ctx.reply(plain, thread);
+      pendingThread = undefined;
     }
   }
 }

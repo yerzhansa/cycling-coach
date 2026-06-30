@@ -13,6 +13,14 @@ import {
   loadAllowedSenders,
   ensureDataDirSecure,
 } from "./channels/allowed-senders.js";
+import { classifyAgentError } from "./agent/error-classify.js";
+
+// Shared error classifier output as the CLI's athlete-facing reply, so the CLI
+// and the Telegram channel speak the same error vocabulary and never dump a raw
+// error object in the reply position.
+export function formatCliReply(err: unknown): string {
+  return classifyAgentError(err).athleteMessage;
+}
 
 export interface RunBinaryHooks {
   /** Called once per process at startup, after Memory exists, before any chat handler is reachable. */
@@ -448,7 +456,11 @@ export async function runBinary(
         const response = await agent.chat("cli", input);
         console.log("\n" + response + "\n");
       } catch (err) {
-        console.error("Error:", err);
+        // Full detail (stack, provider payload) → stderr; a friendly classified
+        // reply → stdout in the reply position. The raw err never lands as the
+        // coach reply.
+        console.error("Error detail:", err);
+        console.log("\n" + formatCliReply(err) + "\n");
       }
       rl.prompt();
     });
