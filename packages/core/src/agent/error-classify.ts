@@ -8,29 +8,33 @@ export type AgentErrorKind =
   | "intervals"
   | "unknown";
 
-const INTERVALS_API_ERROR_KINDS: ReadonlySet<string> = new Set([
-  "Unauthorized",
-  "Forbidden",
-  "NotFound",
-  "RateLimit",
-  "Validation",
-  "Http",
-  "Timeout",
-  "Network",
-  "Unknown",
-]);
+// Routing for intervals' ApiError, whose `kind` is a type-only discriminated
+// union (no importable class) we mirror here. The `satisfies Record<ApiError
+// ["kind"], …>` tie makes `pnpm check` fail if the upstream union gains or
+// renames a kind, forcing a routing decision instead of silently degrading to
+// the generic apology.
+const INTERVALS_KIND_ROUTING = {
+  Unauthorized: "intervals",
+  Forbidden: "intervals",
+  NotFound: "intervals",
+  Validation: "intervals",
+  Http: "intervals",
+  Unknown: "intervals",
+  RateLimit: "rate_limit",
+  Timeout: "provider-down",
+  Network: "provider-down",
+} satisfies Record<ApiError["kind"], AgentErrorKind>;
 
-// Narrow guard: intervals' ApiError is a type-only discriminated union (no
-// importable class), so match on its specific `kind` literals rather than any
-// object that happens to carry a string `kind`, which would misclassify
-// unrelated errors.
+// Narrow guard: match only objects whose string `kind` is one the upstream
+// union actually defines, so unrelated errors that happen to carry a `kind`
+// are not misclassified as intervals failures.
 function isIntervalsApiError(err: unknown): err is ApiError {
   return (
     typeof err === "object" &&
     err !== null &&
     "kind" in err &&
     typeof (err as { kind: unknown }).kind === "string" &&
-    INTERVALS_API_ERROR_KINDS.has((err as { kind: string }).kind)
+    (err as { kind: string }).kind in INTERVALS_KIND_ROUTING
   );
 }
 
@@ -50,10 +54,11 @@ export function classifyAgentError(err: unknown): {
   }
 
   if (isIntervalsApiError(err)) {
-    if (err.kind === "RateLimit") {
+    const routed = INTERVALS_KIND_ROUTING[err.kind];
+    if (routed === "rate_limit") {
       return rateLimited(err);
     }
-    if (err.kind === "Timeout" || err.kind === "Network") {
+    if (routed === "provider-down") {
       return {
         kind: "provider-down",
         athleteMessage: "The model provider is having trouble — try again in a few minutes.",
