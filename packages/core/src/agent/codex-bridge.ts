@@ -201,7 +201,7 @@ function errorResult(call: CodexToolCall, message: string): ToolResultPart {
 export async function codexGenerateText(
   opts: GenerateOpts & { modelId: string; profileName: string; stepLimit?: number },
 ): Promise<GenerateResult> {
-  const { system, messages, prompt, tools, modelId, profileName, stepLimit, cacheKey } = opts;
+  const { system, messages, prompt, tools, modelId, profileName, stepLimit, cacheKey, signal } = opts;
 
   const initialMessages: ModelMessage[] = prompt
     ? [{ role: "user", content: prompt }]
@@ -235,6 +235,7 @@ export async function codexGenerateText(
         tools,
         accessToken,
         sessionId: cacheKey,
+        signal,
       });
     } catch (err) {
       throw normalizeError(err);
@@ -263,7 +264,7 @@ export async function codexGenerateText(
     // Run tool calls in parallel to match AI SDK behavior; Promise.all preserves
     // order so the conversation stays aligned.
     const results = await Promise.all(
-      calls.map((call) => executeToolCall(call, tools, initialMessages)),
+      calls.map((call) => executeToolCall(call, tools, initialMessages, signal)),
     );
     convo.push({ role: "tool", content: results } as ModelMessage);
   }

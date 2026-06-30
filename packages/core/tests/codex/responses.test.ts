@@ -245,15 +245,53 @@ describe("codexResponses error surface (single attempt, no retry loop)", () => {
     expect(isNetworkError(normalizeError(err))).toBe(true);
   });
 
-  it("throws 'Request was aborted' when the signal is already aborted, without fetching", async () => {
+  it("preserves a non-timeout abort reason when the signal is already aborted, without fetching", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const controller = new AbortController();
-    controller.abort();
+    controller.abort(new Error("operator cancelled"));
+
+    const err = (await codexResponses(baseParams({ signal: controller.signal })).catch((e) => e)) as Error;
+
+    expect(err.message).toBe("operator cancelled");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("throws 'Request was aborted' for a timeout abort reason, without fetching", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const controller = new AbortController();
+    const reason = new Error("deadline exceeded");
+    reason.name = "TimeoutError";
+    controller.abort(reason);
 
     const err = (await codexResponses(baseParams({ signal: controller.signal })).catch((e) => e)) as Error;
 
     expect(err.message).toBe("Request was aborted");
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("maps a timeout abort during stream reading to 'Request was aborted'", async () => {
+    const controller = new AbortController();
+    const reason = new Error("deadline exceeded");
+    reason.name = "TimeoutError";
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: "response.created" })}\n\n`));
+        controller.abort(reason);
+        const abortErr = new Error("stream aborted");
+        abortErr.name = "AbortError";
+        c.error(abortErr);
+      },
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(stream, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }),
+    );
+
+    const err = (await codexResponses(baseParams({ signal: controller.signal })).catch((e) => e)) as Error;
+
+    expect(err.message).toBe("Request was aborted");
   });
 
   it("throws the codex error message on a stream error event", async () => {

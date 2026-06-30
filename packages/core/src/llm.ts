@@ -15,8 +15,10 @@ import { PROVIDER_BASE_URLS } from "./config.js";
 import { codexGenerateText } from "./agent/codex-bridge.js";
 import type { GenerateOpts, GenerateResult } from "./llm-types.js";
 import { appendUsageLine, cacheTokenDetails, usageFieldsFromResult } from "./usage-ledger.js";
+import { chainedSignal } from "./concurrency/abort-budget.js";
 
 export type { GenerateOpts, GenerateResult } from "./llm-types.js";
+export const LLM_CALL_DEADLINE_MS = 180_000;
 
 // ============================================================================
 // LLM DISPATCH
@@ -61,7 +63,14 @@ export class LLM {
 
   async generate(opts: GenerateOpts): Promise<GenerateResult> {
     const start = Date.now();
-    const result = await this.dispatch(opts);
+    const signal = withLLMDeadline(opts.signal);
+    let result: GenerateResult;
+    try {
+      result = await this.dispatch({ ...opts, signal });
+    } catch (err) {
+      if (isDeadlineAbort(signal)) throw toTimeoutError(err);
+      throw err;
+    }
     const durationMs = Date.now() - start;
     this.recordGenerate(opts, result, durationMs);
     return result;
@@ -103,6 +112,7 @@ export class LLM {
       stopWhen: opts.stopWhen,
       maxOutputTokens: opts.maxOutputTokens,
       maxRetries: 0,
+      abortSignal: opts.signal,
     };
     const result = opts.prompt !== undefined
       ? await generateText({ ...base, prompt: opts.prompt })
@@ -152,6 +162,34 @@ function priceAiSdkUsage(
     cacheRead: details?.cacheReadTokens ?? 0,
     cacheWrite: details?.cacheWriteTokens ?? 0,
   });
+}
+
+function withLLMDeadline(signal: AbortSignal | undefined): AbortSignal {
+  return signal === undefined
+    ? AbortSignal.timeout(LLM_CALL_DEADLINE_MS)
+    : chainedSignal({ outer: signal, perRequestMs: LLM_CALL_DEADLINE_MS });
+}
+
+function isDeadlineAbort(signal: AbortSignal): boolean {
+  if (!signal.aborted) return false;
+  const reason = signal.reason;
+  if (reason instanceof Error && /timeout|deadline/i.test(`${reason.name} ${reason.message}`)) {
+    return true;
+  }
+  if (reason && typeof reason === "object") {
+    const { name, message } = reason as { name?: unknown; message?: unknown };
+    return /timeout|deadline/i.test(`${String(name ?? "")} ${String(message ?? "")}`);
+  }
+  return false;
+}
+
+function toTimeoutError(err: unknown): Error {
+  if (err instanceof Error && err.name === "TimeoutError") return err;
+  const message = err instanceof Error ? err.message : String(err);
+  const out = new Error(`Request timeout: ${message}`) as Error & { cause?: unknown };
+  out.name = "TimeoutError";
+  if (err instanceof Error) out.cause = err;
+  return out;
 }
 
 // ============================================================================

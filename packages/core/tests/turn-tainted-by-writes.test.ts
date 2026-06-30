@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { http, HttpResponse } from "msw";
@@ -136,6 +136,96 @@ describe("tainted-by-writes refusal", () => {
     } finally {
       server.close();
     }
+  });
+
+  it("a write on a non-final step then a timeout refuses without replaying the write", async () => {
+    const { server, createdWorkouts } = createMockIntervalsServer();
+    server.listen({ onUnhandledRequest: "bypass" });
+    try {
+      let mainTurns = 0;
+      let secondMainAfterWrite = false;
+      const complete = vi.fn(async (params: { system?: string }) => {
+        const sys = params.system ?? "";
+        if (sys.includes(FLUSH_MARKER)) return mkAssistant({ text: "facts noted" });
+        if (sys.length === 0) return mkAssistant({ text: "summary" });
+        mainTurns++;
+        const ctx = params as { messages?: { role: string }[] };
+        const hasToolResult = (ctx.messages ?? []).some((m) => m.role === "tool");
+        if (mainTurns === 1 && !hasToolResult) {
+          return mkAssistant({
+            toolCall: {
+              id: "call-timeout",
+              name: "intervals_create_workout",
+              arguments: {
+                date: tomorrowISODate(),
+                workout: {
+                  name: "Endurance 45",
+                  steps: [
+                    { type: "warmup", duration: { value: 10, unit: "minutes" }, power: { kind: "percent_ftp", value: 50 } },
+                    { type: "steady", duration: { value: 35, unit: "minutes" }, power: { kind: "percent_ftp", value: 70 } },
+                  ],
+                },
+              },
+            },
+            stopReason: "toolUse",
+          });
+        }
+        secondMainAfterWrite = true;
+        const err = new Error("deadline exceeded");
+        err.name = "TimeoutError";
+        throw err;
+      });
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const agent = await setupAgent(complete);
+
+      const result = await agent.chat("taint-timeout", "create an endurance workout for tomorrow");
+
+      expect(result).toBe(TAINTED_BY_WRITES_MESSAGE);
+      expect(createdWorkouts.length).toBe(1);
+      expect(secondMainAfterWrite).toBe(true);
+      expect(mainTurns).toBe(2);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("a memory write then timeout refuses without replaying the memory append", async () => {
+    let mainTurns = 0;
+    const note = "felt unusually fresh after breakfast";
+    const complete = vi.fn(async (params: { system?: string }) => {
+      const sys = params.system ?? "";
+      if (sys.includes(FLUSH_MARKER)) return mkAssistant({ text: "facts noted" });
+      if (sys.length === 0) return mkAssistant({ text: "summary" });
+      mainTurns++;
+      const ctx = params as { messages?: { role: string }[] };
+      const hasToolResult = (ctx.messages ?? []).some((m) => m.role === "tool");
+      if (mainTurns === 1 && !hasToolResult) {
+        return mkAssistant({
+          toolCall: {
+            id: "call-memory",
+            name: "memory_write",
+            arguments: { type: "daily", content: note },
+          },
+          stopReason: "toolUse",
+        });
+      }
+      const err = new Error("deadline exceeded");
+      err.name = "TimeoutError";
+      throw err;
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const agent = await setupAgent(complete);
+
+    const result = await agent.chat("taint-memory", "remember that breakfast helped");
+
+    expect(result).toBe(TAINTED_BY_WRITES_MESSAGE);
+    expect(mainTurns).toBe(2);
+    const memoryDir = join(dataDir, "memory");
+    const dailyNotes = readdirSync(memoryDir)
+      .filter((name) => name.endsWith(".md") && name !== "MEMORY.md")
+      .map((name) => readFileSync(join(memoryDir, name), "utf-8"))
+      .join("\n");
+    expect((dailyNotes.match(new RegExp(note, "g")) ?? []).length).toBe(1);
   });
 
   it("a delete on a turn that then errors also taints", async () => {

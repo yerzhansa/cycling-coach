@@ -185,6 +185,63 @@ describe("per-turn outcome line", () => {
     expect(lines[0].compactions).toBeGreaterThanOrEqual(1);
   });
 
+  it("a small-context timeout retries once without compaction and can recover", async () => {
+    let mainCalls = 0;
+    const complete = vi.fn(async (params: { system?: string }) => {
+      const sys = params.system ?? "";
+      if (sys.includes(FLUSH_MARKER)) return mkAssistant("facts noted");
+      if (sys.length === 0) return mkAssistant("summary");
+      mainCalls++;
+      if (mainCalls === 1) {
+        const err = new Error("deadline exceeded");
+        err.name = "TimeoutError";
+        throw err;
+      }
+      return mkAssistant("recovered timeout reply");
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const agent = await setupAgent(complete);
+
+    const text = await agent.chat("timeout-recover-chat", "hello");
+
+    expect(text).toBe("recovered timeout reply");
+    expect(mainCalls).toBe(2);
+    const lines = readOutcomeLines();
+    expect(lines).toHaveLength(1);
+    expect(lines[0].ok).toBe(true);
+    expect(lines[0].timeoutAttempts).toBe(1);
+    expect(lines[0].compactions).toBe(0);
+  });
+
+  it("a persistent small-context timeout makes exactly one plain retry", async () => {
+    let mainCalls = 0;
+    const complete = vi.fn(async (params: { system?: string }) => {
+      const sys = params.system ?? "";
+      if (sys.includes(FLUSH_MARKER)) return mkAssistant("facts noted");
+      if (sys.length === 0) return mkAssistant("summary");
+      mainCalls++;
+      const err = new Error("deadline exceeded");
+      err.name = "TimeoutError";
+      throw err;
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const agent = await setupAgent(complete);
+
+    const outcome = await agent.chat("timeout-fail-chat", "hello").then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(mainCalls).toBe(2);
+    const lines = readOutcomeLines();
+    expect(lines).toHaveLength(1);
+    expect(lines[0].ok).toBe(false);
+    expect(lines[0].error_class).toBe("timeout");
+    expect(lines[0].timeoutAttempts).toBe(1);
+    expect(lines[0].compactions).toBe(0);
+  });
+
   it("leaves the session JSONL byte-identical on a failed turn", async () => {
     const complete = vi.fn(async (params: { system?: string }) => {
       const sys = params.system ?? "";
