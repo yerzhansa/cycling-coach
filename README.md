@@ -420,7 +420,7 @@ Fill these Railway variables:
 
 | Variable | What to enter | Where to get it |
 | --- | --- | --- |
-| `LLM_PROVIDER` | One lower-case provider id: `anthropic`, `openai`, `google`, `deepseek`, `qwen`, `minimax`, `kimi`, `zai`, or `openrouter`. Start with `anthropic` if unsure. | Pick the provider that issued your `LLM_API_KEY`. `openai-codex` / ChatGPT Plus login is not supported in Railway because it needs an interactive browser login. |
+| `LLM_PROVIDER` | One lower-case provider id: `anthropic`, `openai`, `google`, `deepseek`, `qwen`, `minimax`, `kimi`, `zai`, or `openrouter`. Start with `anthropic` if unsure. | Pick the provider that issued your `LLM_API_KEY`. ChatGPT Plus login is not supported in Railway because it needs an interactive browser login. |
 | `LLM_API_KEY` | API key for the provider in `LLM_PROVIDER`. | [Anthropic Console](https://console.anthropic.com/), [OpenAI Platform](https://platform.openai.com/), [Google AI Studio](https://aistudio.google.com/), [DeepSeek Platform](https://platform.deepseek.com/), Alibaba Cloud DashScope, [MiniMax Platform](https://platform.minimaxi.com/), [Moonshot AI](https://platform.moonshot.ai/), [Z.AI](https://z.ai/), or [OpenRouter](https://openrouter.ai/). |
 | `INTERVALS_API_KEY` | Your intervals.icu API key. | [intervals.icu/settings](https://intervals.icu/settings) > Developer Settings. |
 | `INTERVALS_ATHLETE_ID` | Your intervals.icu athlete id, usually like `i12345`. Include the leading `i` when intervals.icu shows one. | Open your intervals.icu profile/settings URL and copy the athlete id from the URL or profile details. |
