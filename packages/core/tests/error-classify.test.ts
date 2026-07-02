@@ -57,27 +57,42 @@ describe("classifyAgentError", () => {
     );
   });
 
-  it("classifies an intervals ApiError (Unauthorized/NotFound) as intervals", () => {
+  it("classifies intervals Unauthorized/Forbidden as intervals with the credentials copy, NotFound as intervals transient", () => {
     const unauthorized: ApiError = { kind: "Unauthorized", status: 401, body: {} };
-    const notFound: ApiError = { kind: "NotFound", status: 404, body: {} };
-    for (const err of [unauthorized, notFound]) {
+    const forbidden: ApiError = { kind: "Forbidden", status: 403, body: {} };
+    for (const err of [unauthorized, forbidden]) {
       const result = classifyAgentError(err);
       expect(result.kind).toBe("intervals");
       expect(result.athleteMessage).toBe(
-        "Couldn't reach intervals.icu right now — try again shortly.",
+        "intervals.icu rejected the request — check your intervals.icu connection or API key.",
       );
     }
+
+    const notFound: ApiError = { kind: "NotFound", status: 404, body: {} };
+    const notFoundResult = classifyAgentError(notFound);
+    expect(notFoundResult.kind).toBe("intervals");
+    expect(notFoundResult.athleteMessage).toBe(
+      "Couldn't reach intervals.icu right now — try again shortly.",
+    );
   });
 
-  it("routes intervals RateLimit to rate_limit and Timeout/Network to provider-down", () => {
+  it("routes intervals RateLimit to rate_limit and Timeout/Network to the intervals transient classification", () => {
     const rateLimit: ApiError = { kind: "RateLimit", status: 429, retryAfterMs: 1000, body: {} };
     expect(classifyAgentError(rateLimit).kind).toBe("rate_limit");
 
     const timeout: ApiError = { kind: "Timeout", message: "slow" };
-    expect(classifyAgentError(timeout).kind).toBe("provider-down");
+    const timeoutResult = classifyAgentError(timeout);
+    expect(timeoutResult.kind).toBe("intervals");
+    expect(timeoutResult.athleteMessage).toBe(
+      "Couldn't reach intervals.icu right now — try again shortly.",
+    );
 
     const network: ApiError = { kind: "Network", message: "down" };
-    expect(classifyAgentError(network).kind).toBe("provider-down");
+    const networkResult = classifyAgentError(network);
+    expect(networkResult.kind).toBe("intervals");
+    expect(networkResult.athleteMessage).toBe(
+      "Couldn't reach intervals.icu right now — try again shortly.",
+    );
   });
 
   it("does NOT classify an unrelated object carrying a string kind as intervals", () => {

@@ -37,6 +37,16 @@ const RESEND_MAX_ENTRIES = 1000;
 // matcher and the delivery-failure hint so the two can never drift apart.
 const RESEND_KEYWORD = "resend";
 
+// Shown when generation succeeded but Telegram couldn't deliver the answer.
+// Used by both the runTurn delivery catch and the resend-dispatch catch so the
+// two delivery-failure paths can never drift apart.
+const DELIVERY_FAILURE_HINT = `I generated the answer, but Telegram had trouble delivering it. Send "${RESEND_KEYWORD}" and I'll send the same answer again.`;
+
+// Neutral apology for synchronous handler/ack failures surfaced through
+// bot.catch — those are Telegram transport errors, not LLM/tool errors, so they
+// must not be dressed in provider-specific vocabulary.
+const GENERIC_TRANSPORT_APOLOGY = "Sorry, something went wrong. Please try again.";
+
 function drainBounded(drain: () => Promise<void>, timeoutMs: number): Promise<void> {
   return Promise.race([
     drain(),
@@ -112,11 +122,17 @@ function createSecuredBot(opts: {
   // rethrowInternalServerErrors / rethrowHttpErrors disable this plugin's default
   // 5xx and network retries, which would risk a duplicate send on an ambiguous
   // failure whose original request may already have been delivered server-side.
-  // maxDelaySeconds caps how long we'll wait out a flood.
+  // Deliberately a separate retry policy from the shared primitive in
+  // concurrency/retry.ts: this is a grammY API-transformer seam handling
+  // bot-transport 429s, not an LLM/tool retry.
+  // The only calls that can block grammY's sequential update loop are the
+  // synchronous command acks, so maxDelaySeconds is a small bound: a 429 whose
+  // retry_after exceeds it must fail fast rather than freeze every chat. The
+  // fire-and-forget delivery path and the resend cache are the backstops.
   bot.api.config.use(
     autoRetry({
       maxRetryAttempts: 1,
-      maxDelaySeconds: 300,
+      maxDelaySeconds: 5,
       rethrowInternalServerErrors: true,
       rethrowHttpErrors: true,
     }),
@@ -263,9 +279,7 @@ export function createTelegramBot(
         await sendLongMessage(opts.ctx, response, opts.replyToMessageId);
       } catch (err) {
         log.error("delivery_failed", err, { command: opts.command, chatId: opts.chatId });
-        await opts.ctx.reply(
-          `I generated the answer, but Telegram had trouble delivering it. Send "${RESEND_KEYWORD}" and I'll send the same answer again.`,
-        );
+        await opts.ctx.reply(DELIVERY_FAILURE_HINT);
       }
     });
   }
@@ -277,6 +291,7 @@ export function createTelegramBot(
     let memoryFlushed = true;
     try {
       ({ memoryFlushed } = await agent.resetSession(`telegram:${ctx.chat.id}`));
+      resendCache.delete(`telegram:${ctx.chat.id}`);
     } catch (err) {
       log.error("command_failed", err, { command: "start", chatId: `telegram:${ctx.chat.id}` });
       await ctx.reply(
@@ -463,8 +478,20 @@ export function createTelegramBot(
     // BEFORE any greeting/dispatch so it never reaches agent.chat.
     if (text.trim().toLowerCase() === RESEND_KEYWORD) {
       const cached = readResend(chatId);
-      if (cached !== undefined) await sendLongMessage(ctx, cached);
-      else await ctx.reply("I don't have a recent answer to resend.");
+      if (cached !== undefined) {
+        // Route through dispatch so re-emitting a long multi-chunk answer runs on
+        // the fire-and-forget task instead of blocking the sequential update loop,
+        // and a delivery failure gets the same hint runTurn uses rather than
+        // escaping to bot.catch as generic classified copy.
+        dispatch(async () => {
+          try {
+            await sendLongMessage(ctx, cached);
+          } catch (err) {
+            log.error("delivery_failed", err, { command: "resend", chatId });
+            await ctx.reply(DELIVERY_FAILURE_HINT);
+          }
+        });
+      } else await ctx.reply("I don't have a recent answer to resend.");
       return;
     }
 
@@ -498,7 +525,7 @@ export function createTelegramBot(
     log.error("bot_catch", botError.error, {});
     const c = botError.ctx;
     try {
-      if (c?.chat) await c.reply(classifyAgentError(botError.error).athleteMessage);
+      if (c?.chat) await c.reply(GENERIC_TRANSPORT_APOLOGY);
     } catch (replyErr) {
       log.error("bot_catch_reply_failed", replyErr, {});
     }

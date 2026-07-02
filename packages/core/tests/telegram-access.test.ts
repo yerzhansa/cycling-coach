@@ -99,7 +99,7 @@ describe("evaluateAccess — allowlist matching", () => {
 });
 
 describe("buildPairingChallenge — HTML body", () => {
-  it("includes sender's user-ID, owner CLI command, and 'ask the bot owner' fallback (S5)", () => {
+  it("includes sender's user-ID, owner CLI command, and 'ask the bot owner' fallback", () => {
     const html = buildPairingChallenge("99999", "Stranger", "cycling-coach");
     expect(html).toContain("99999");
     expect(html).toContain("cycling-coach add-sender 99999");
@@ -221,7 +221,7 @@ describe("createAuthMiddleware — gating", () => {
     expect(ctx.reply).not.toHaveBeenCalled();
   });
 
-  it("rate-limit (H2): same sender messaging twice within window → only one reply", async () => {
+  it("rate-limit: same sender messaging twice within window → only one reply", async () => {
     const map = new Map<string, number>();
     const mw = createAuthMiddleware({
       dataDir,
@@ -379,8 +379,8 @@ describe("createAuthMiddleware — gating", () => {
     errSpy.mockRestore();
   });
 
-  // ── AC8: next() runs OUTSIDE the auth guard ─────────────────────────────
-  it("AC8: a downstream next() throw propagates and is NOT logged as a security error", async () => {
+  // ── next() runs OUTSIDE the auth guard ─────────────────────────────
+  it("a downstream next() throw propagates and is NOT logged as a security error", async () => {
     saveAllowedSenders(dataDir, () => ({
       ...defaultPairingState(),
       dmPolicy: "allowlist",
@@ -406,7 +406,7 @@ describe("createAuthMiddleware — gating", () => {
     errSpy.mockRestore();
   });
 
-  it("AC8: an allowlist-load throw is caught fail-closed (logged, no next(), no rethrow)", async () => {
+  it("an allowlist-load throw is caught fail-closed (logged, no next(), no rethrow)", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     // A throwing challengeRateLimit.get forces a throw on the pairing path,
     // exercising the guarded auth-logic catch (default-pairing dataDir).
@@ -434,7 +434,7 @@ describe("createAuthMiddleware — gating", () => {
     errSpy.mockRestore();
   });
 
-  it("AC8: a granted (allowlisted) sender runs next() exactly once", async () => {
+  it("a granted (allowlisted) sender runs next() exactly once", async () => {
     saveAllowedSenders(dataDir, () => ({
       ...defaultPairingState(),
       dmPolicy: "allowlist",
@@ -453,7 +453,7 @@ describe("createAuthMiddleware — gating", () => {
     expect(next).toHaveBeenCalledTimes(1);
   });
 
-  it("AC8: a non-allowlisted pairing sender gets the challenge and next() is NOT called", async () => {
+  it("a non-allowlisted pairing sender gets the challenge and next() is NOT called", async () => {
     const mw = createAuthMiddleware({
       dataDir,
       binaryName: "cycling-coach",

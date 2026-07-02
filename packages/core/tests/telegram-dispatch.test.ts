@@ -313,7 +313,7 @@ describe("message:text — apology vs rate-limit fork", () => {
   });
 });
 
-describe("G1 — retry transformer / classified errors / delivery split", () => {
+describe("retry transformer / classified errors / delivery split", () => {
   it("createSecuredBot installs the auto-retry transformer exactly once", async () => {
     const { bot } = await buildBot();
     expect(bot.api.config.use).toHaveBeenCalledTimes(1);
@@ -343,7 +343,7 @@ describe("G1 — retry transformer / classified errors / delivery split", () => 
     );
   });
 
-  it("generation succeeds but delivery rejects (non-parse) → D1 delivery copy AND the answer is resendable", async () => {
+  it("generation succeeds but delivery rejects (non-parse) → delivery copy AND the answer is resendable", async () => {
     const { bot, agent, drainPending } = await buildBot();
     agent.hasSession.mockReturnValue(true);
     agent.chat.mockResolvedValue("the generated answer");
@@ -427,7 +427,7 @@ describe("G1 — retry transformer / classified errors / delivery split", () => 
     expect(replyTexts(ctx).some((t) => t.includes("and resend:"))).toBe(false);
   });
 
-  it("the captured bot.catch handler replies classified copy; a reply throw does not escape", async () => {
+  it("the captured bot.catch handler replies a neutral apology; a reply throw does not escape", async () => {
     const { bot } = await buildBot();
     const handler = getBotCatch(bot);
 
@@ -435,9 +435,7 @@ describe("G1 — retry transformer / classified errors / delivery split", () => 
     await expect(
       handler({ error: apiError(401), ctx: { chat: { id: 1 }, reply } }),
     ).resolves.toBeUndefined();
-    expect(reply).toHaveBeenCalledWith(
-      "The model provider rejected the API key — check your provider credentials.",
-    );
+    expect(reply).toHaveBeenCalledWith("Sorry, something went wrong. Please try again.");
 
     const throwingReply = vi.fn(async () => {
       throw new Error("cannot reply");

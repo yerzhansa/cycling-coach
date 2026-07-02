@@ -1,5 +1,10 @@
 import type { ApiError } from "intervals-icu-api";
-import { classifyFailure, formatRateLimitWait, isRateLimitError } from "./token-utils.js";
+import {
+  classifyFailure,
+  extractRetryAfterMs,
+  formatRateLimitWaitMs,
+  isRateLimitError,
+} from "./token-utils.js";
 
 export type AgentErrorKind =
   | "rate_limit"
@@ -7,6 +12,13 @@ export type AgentErrorKind =
   | "provider-down"
   | "intervals"
   | "unknown";
+
+const PROVIDER_DOWN_MESSAGE =
+  "The model provider is having trouble — try again in a few minutes.";
+const INTERVALS_TRANSIENT_MESSAGE =
+  "Couldn't reach intervals.icu right now — try again shortly.";
+const INTERVALS_CREDENTIALS_MESSAGE =
+  "intervals.icu rejected the request — check your intervals.icu connection or API key.";
 
 // Routing for intervals' ApiError, whose `kind` is a type-only discriminated
 // union (no importable class) we mirror here. The `satisfies Record<ApiError
@@ -21,8 +33,8 @@ const INTERVALS_KIND_ROUTING = {
   Http: "intervals",
   Unknown: "intervals",
   RateLimit: "rate_limit",
-  Timeout: "provider-down",
-  Network: "provider-down",
+  Timeout: "intervals",
+  Network: "intervals",
 } satisfies Record<ApiError["kind"], AgentErrorKind>;
 
 // Narrow guard: match only objects whose string `kind` is one the upstream
@@ -38,10 +50,16 @@ function isIntervalsApiError(err: unknown): err is ApiError {
   );
 }
 
+function carriedRetryAfterMs(err: unknown): number | null {
+  const carried = (err as { retryAfterMs?: unknown }).retryAfterMs;
+  return typeof carried === "number" && Number.isFinite(carried) && carried > 0 ? carried : null;
+}
+
 function rateLimited(err: unknown): { kind: AgentErrorKind; athleteMessage: string } {
+  const ms = extractRetryAfterMs(err) ?? carriedRetryAfterMs(err);
   return {
     kind: "rate_limit",
-    athleteMessage: `Rate limited — please try again in ${formatRateLimitWait(err)}.`,
+    athleteMessage: `Rate limited — please try again in ${formatRateLimitWaitMs(ms)}.`,
   };
 }
 
@@ -54,19 +72,18 @@ export function classifyAgentError(err: unknown): {
   }
 
   if (isIntervalsApiError(err)) {
-    const routed = INTERVALS_KIND_ROUTING[err.kind];
-    if (routed === "rate_limit") {
+    if (INTERVALS_KIND_ROUTING[err.kind] === "rate_limit") {
       return rateLimited(err);
     }
-    if (routed === "provider-down") {
+    if (err.kind === "Unauthorized" || err.kind === "Forbidden") {
       return {
-        kind: "provider-down",
-        athleteMessage: "The model provider is having trouble — try again in a few minutes.",
+        kind: "intervals",
+        athleteMessage: INTERVALS_CREDENTIALS_MESSAGE,
       };
     }
     return {
       kind: "intervals",
-      athleteMessage: "Couldn't reach intervals.icu right now — try again shortly.",
+      athleteMessage: INTERVALS_TRANSIENT_MESSAGE,
     };
   }
 
@@ -82,7 +99,7 @@ export function classifyAgentError(err: unknown): {
     case "timeout":
       return {
         kind: "provider-down",
-        athleteMessage: "The model provider is having trouble — try again in a few minutes.",
+        athleteMessage: PROVIDER_DOWN_MESSAGE,
       };
     default:
       return {
