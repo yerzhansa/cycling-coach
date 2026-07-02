@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { execSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { enumerateTelegramSessions } from "./channels/telegram-sessions.js";
@@ -90,20 +91,73 @@ export function getCurrentVersion(binaryName: string): string {
 }
 
 const NPM_REGISTRY = "https://registry.npmjs.org";
+const PING_ENDPOINT = "https://ping.enduragent.icu/v1/check";
+const INSTANCE_ID_FILE = "instance-id";
 
-export async function checkForUpdate(binaryName: string): Promise<UpdateInfo | null> {
+function isDevOrTest(): boolean {
+  return process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
+}
+
+/** Random anonymous ID, created once and persisted in the data dir. */
+export function getInstanceId(dataDir: string): string {
+  const path = join(dataDir, INSTANCE_ID_FILE);
   try {
-    const res = await fetch(`${NPM_REGISTRY}/${binaryName}/latest`, {
-      signal: AbortSignal.timeout(5000),
-    });
+    const existing = readFileSync(path, "utf-8").trim();
+    if (/^[0-9a-f-]{36}$/.test(existing)) return existing;
+  } catch {
+    // fall through — create it
+  }
+  const id = randomUUID();
+  try {
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(path, id);
+  } catch {
+    // Non-critical — an unpersisted ID still identifies this process run
+  }
+  return id;
+}
+
+export function buildCheckUrl(binaryName: string, dataDir?: string): string {
+  if (isDevOrTest()) return `${NPM_REGISTRY}/${binaryName}/latest`;
+  const params = new URLSearchParams({
+    bin: binaryName,
+    version: getCurrentVersion(binaryName),
+    channel: isManagedDeploy() ? "docker" : "npm",
+  });
+  if (dataDir) params.set("instance", getInstanceId(dataDir));
+  return `${PING_ENDPOINT}?${params}`;
+}
+
+export async function checkForUpdate(
+  binaryName: string,
+  dataDir?: string,
+): Promise<UpdateInfo | null> {
+  const current = getCurrentVersion(binaryName);
+  const parse = async (res: Response): Promise<UpdateInfo | null> => {
     if (!res.ok) return null;
     const data = (await res.json()) as { version: string };
-    const current = getCurrentVersion(binaryName);
     return {
       current,
       latest: data.version,
       updateAvailable: isUpdateAvailable(data.version, current),
     };
+  };
+  try {
+    const res = await fetch(buildCheckUrl(binaryName, dataDir), {
+      signal: AbortSignal.timeout(5000),
+    });
+    const info = await parse(res);
+    if (info) return info;
+  } catch {
+    // fall through to npm fallback
+  }
+  // In dev/test the primary request WAS npm — don't retry the same host.
+  if (isDevOrTest()) return null;
+  try {
+    const res = await fetch(`${NPM_REGISTRY}/${binaryName}/latest`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    return await parse(res);
   } catch {
     return null;
   }

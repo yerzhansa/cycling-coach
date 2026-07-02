@@ -125,9 +125,13 @@ Free-form chat works too — ask anything about training, report an injury, requ
 
 Cycling Coach restricts Telegram interactions to a configured allowlist of user IDs. Only senders in `~/.cycling-coach/allowed-senders.json` (or set via the `CYCLING_COACH_OPERATOR_ID` env var, single ID) can interact with the bot. Random Telegram users who discover your bot's username are dropped at the middleware layer.
 
-### No telemetry, one update check
+### Update checks & usage counting
 
-Cycling Coach collects no analytics and sends no telemetry. The one background network call it makes on its own: on Telegram-mode startup, a single HTTPS request to `registry.npmjs.org` to check whether a newer version exists. It carries no athlete data and no credentials — the only thing disclosed is the request itself. Set `CYCLING_COACH_NO_UPDATE_CHECK=1` to disable it. The operator-initiated `/update` and `/whatsnew` commands still reach the registry (and, for `/whatsnew`, the GitHub Releases API for release notes) — those are explicit requests, not background checks. In managed container deploys, `/update` does not run npm; image hosts update by redeploying the container image.
+To check whether a newer version exists, Cycling Coach makes one background HTTPS request to `ping.enduragent.icu`. That endpoint returns the latest published version (the same answer `registry.npmjs.org` gives) and records an anonymous usage count so the project can see roughly how many instances are running across install channels. The count contains no personal information.
+
+The check runs on Telegram-mode startup and again every 24 hours (so a long-running deployment learns about new releases without a restart). The same request powers the "update available" notification and the `/whatsnew` and `/update` commands. In development and test the bot talks to `registry.npmjs.org` directly instead; if the `ping.enduragent.icu` endpoint is ever unreachable, the bot silently falls back to `registry.npmjs.org`, so update checks keep working either way.
+
+Set `CYCLING_COACH_NO_UPDATE_CHECK=1` to disable the automatic background checks (both the startup check and the daily re-check). The operator-initiated `/update` and `/whatsnew` commands still query the endpoint — those are explicit requests, not background checks (and `/whatsnew` also reaches the GitHub Releases API for release notes). In managed container deploys, `/update` does not run npm; image hosts update by redeploying the container image.
 
 ### First-time setup
 

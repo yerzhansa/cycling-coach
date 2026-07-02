@@ -417,6 +417,12 @@ export async function runBinary(
 
     if (!process.env.CYCLING_COACH_NO_UPDATE_CHECK) {
       notifyUpdate(bot, config.dataDir, binary).catch(() => {});
+      // A long-running deployment would otherwise never learn about a new
+      // release until it restarts; notifyUpdate dedupes per version so the
+      // re-check broadcasts at most once per release. unref() so the timer
+      // never holds the process open.
+      const DAY_MS = 24 * 60 * 60 * 1000;
+      setInterval(() => void notifyUpdate(bot, config.dataDir, binary), DAY_MS).unref?.();
     }
   } else {
     console.log(`${binary.displayName} (CLI mode). Type your message:`);

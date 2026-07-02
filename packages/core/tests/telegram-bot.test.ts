@@ -88,6 +88,48 @@ describe("notifyUpdate — broadcast filtering (L3)", () => {
     expect(calledIds).not.toContain("99999");
   });
 
+  // The daily re-check calls notifyUpdate on a timer; the last-notified-version
+  // guard must make a second firing for the same version a no-op so athletes get
+  // at most one broadcast per release.
+  it("does not re-broadcast an already-notified version on a second firing (idempotent)", async () => {
+    seedSession("11111");
+    saveAllowedSenders(dataDir, () => ({
+      ...defaultPairingState(),
+      dmPolicy: "allowlist",
+      allowFrom: ["11111"],
+      primaryOperator: "11111",
+    }));
+
+    // Keep the REAL getLastNotifiedVersion / setLastNotifiedVersion so the
+    // guard actually persists to (and reads back from) the temp data dir.
+    vi.doMock("../src/updater.js", async () => {
+      const real = await vi.importActual<typeof import("../src/updater.js")>(
+        "../src/updater.js",
+      );
+      return {
+        ...real,
+        checkForUpdate: vi.fn(async () => ({
+          current: "2026.5.5",
+          latest: "2026.5.10",
+          updateAvailable: true,
+        })),
+        getKnownTelegramChatIds: vi.fn(() => ["11111"]),
+      };
+    });
+
+    const sendMessage = vi.fn(async (_chatId: string, _message: string) => undefined);
+    const fakeBot = { api: { sendMessage } } as unknown as Parameters<
+      typeof import("../src/channels/telegram.js")["notifyUpdate"]
+    >[0];
+
+    const { notifyUpdate } = await import("../src/channels/telegram.js");
+    await notifyUpdate(fakeBot, dataDir, cyclingBinary);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+
+    await notifyUpdate(fakeBot, dataDir, cyclingBinary);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("broadcasts to all known chats when CYCLING_COACH_DM_POLICY=open (env-var-only escape)", async () => {
     seedSession("11111");
     seedSession("99999");
