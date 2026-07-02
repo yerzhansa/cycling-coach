@@ -213,8 +213,10 @@ export type { Config } from "./config.js";
 
 // ─── Updater ──────────────────────────────────────────────────────────
 export {
+  buildCheckUrl,
   checkForUpdate,
   getCurrentVersion,
+  getInstanceId,
   getKnownTelegramChatIds,
   getLastNotifiedVersion,
   isManagedDeploy,

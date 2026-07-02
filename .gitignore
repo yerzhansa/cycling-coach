@@ -2,6 +2,7 @@ node_modules/
 .pnpm-store/
 dist/
 docs/
+workers/
 .env
 *.tgz
 .DS_Store

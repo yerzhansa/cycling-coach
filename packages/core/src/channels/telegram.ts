@@ -352,7 +352,7 @@ export function createTelegramBot(
   bot.command("whatsnew", async (ctx) => {
     await ctx.reply("Fetching release notes...");
     try {
-      const info = await checkForUpdate(binary.binaryName);
+      const info = await checkForUpdate(binary.binaryName, dataDir);
       if (!info) {
         await ctx.reply("Couldn't reach npm to check the latest version. Try again later.");
         return;
@@ -374,7 +374,7 @@ export function createTelegramBot(
     await ctx.reply("Checking for updates...");
     let latest: string | undefined;
     try {
-      const info = await checkForUpdate(binary.binaryName);
+      const info = await checkForUpdate(binary.binaryName, dataDir);
       if (!info) {
         await ctx.reply("Could not check for updates. Try again later.");
         return;
@@ -806,7 +806,7 @@ function htmlChunkToPlainText(chunk: string): string {
 
 export async function notifyUpdate(bot: Bot, dataDir: string, binary: BinaryConfig): Promise<void> {
   try {
-    const info = await checkForUpdate(binary.binaryName);
+    const info = await checkForUpdate(binary.binaryName, dataDir);
     if (!info?.updateAvailable) return;
 
     if (getLastNotifiedVersion(dataDir) === info.latest) return;

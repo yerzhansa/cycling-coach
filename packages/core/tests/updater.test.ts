@@ -1,7 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
+  buildCheckUrl,
   buildSelfUpdateCommand,
   checkForUpdate,
+  getCurrentVersion,
+  getInstanceId,
   isManagedDeploy,
   isUpdateAvailable,
 } from "../src/updater.js";
@@ -90,9 +96,94 @@ describe("isManagedDeploy", () => {
   });
 });
 
+describe("buildCheckUrl", () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "cc-updater-url-"));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+  });
+
+  it("builds the ping URL with exactly bin, version, channel, instance when a dataDir is given (production)", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const url = new URL(buildCheckUrl("cycling-coach", dataDir));
+    expect(`${url.origin}${url.pathname}`).toBe("https://ping.enduragent.icu/v1/check");
+    expect([...url.searchParams.keys()].sort()).toEqual(["bin", "channel", "instance", "version"]);
+    expect(url.searchParams.get("bin")).toBe("cycling-coach");
+    expect(url.searchParams.get("version")).toBe(getCurrentVersion("cycling-coach"));
+    expect(url.searchParams.get("channel")).toBe("npm");
+    expect(url.searchParams.get("instance")).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("omits the instance param when no dataDir is given (production)", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const url = new URL(buildCheckUrl("cycling-coach"));
+    expect(url.searchParams.has("instance")).toBe(false);
+    expect([...url.searchParams.keys()].sort()).toEqual(["bin", "channel", "version"]);
+  });
+
+  it("channel is docker under CYCLING_COACH_MANAGED_DEPLOY=1 (production)", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CYCLING_COACH_MANAGED_DEPLOY", "1");
+    expect(new URL(buildCheckUrl("cycling-coach")).searchParams.get("channel")).toBe("docker");
+  });
+
+  it("returns the plain npm registry URL under NODE_ENV=development", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    expect(buildCheckUrl("cycling-coach", dataDir)).toBe(
+      "https://registry.npmjs.org/cycling-coach/latest",
+    );
+  });
+
+  it("returns the plain npm registry URL under NODE_ENV=test", () => {
+    vi.stubEnv("NODE_ENV", "test");
+    expect(buildCheckUrl("cycling-coach", dataDir)).toBe(
+      "https://registry.npmjs.org/cycling-coach/latest",
+    );
+  });
+});
+
+describe("getInstanceId", () => {
+  let base: string;
+
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), "cc-instance-id-"));
+  });
+
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it("returns the same UUID across calls, creating the dir if missing", () => {
+    const dir = join(base, "not-yet-created");
+    expect(existsSync(dir)).toBe(false);
+    const first = getInstanceId(dir);
+    expect(first).toMatch(/^[0-9a-f-]{36}$/);
+    expect(existsSync(join(dir, "instance-id"))).toBe(true);
+    expect(getInstanceId(dir)).toBe(first);
+  });
+
+  it("returns a fresh valid UUID without throwing when the dir is unwritable", () => {
+    const filePath = join(base, "a-file");
+    writeFileSync(filePath, "x");
+    // A path whose parent is a regular file cannot be created → mkdirSync throws.
+    const unwritable = join(filePath, "nested");
+    let id = "";
+    expect(() => {
+      id = getInstanceId(unwritable);
+    }).not.toThrow();
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});
+
 describe("checkForUpdate", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   // The CYCLING_COACH_NO_UPDATE_CHECK opt-out gates only the automatic
@@ -112,5 +203,51 @@ describe("checkForUpdate", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it("falls back to the npm registry when the ping endpoint fails (production)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const urls: string[] = [];
+    const fetchMock = vi.fn(async (input: string) => {
+      urls.push(input);
+      if (urls.length === 1) throw new Error("ping endpoint down");
+      return { ok: true, json: async () => ({ version: "2026.5.10" }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const info = await checkForUpdate("cycling-coach");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(urls[0]).toContain("ping.enduragent.icu");
+    expect(urls[1]).toBe("https://registry.npmjs.org/cycling-coach/latest");
+    expect(info?.latest).toBe("2026.5.10");
+  });
+
+  it("returns null (never throws) when both hosts fail (production)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const fetchMock = vi.fn(async () => {
+      throw new Error("network down");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const info = await checkForUpdate("cycling-coach");
+    expect(info).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  // vitest sets NODE_ENV=test globally, so no ping.enduragent.icu URL is
+  // ever constructed and the primary (npm) failure does NOT retry the same host.
+  it("never constructs a ping.enduragent.icu URL under NODE_ENV=test", async () => {
+    expect(process.env.NODE_ENV).toBe("test");
+    expect(buildCheckUrl("cycling-coach", "/tmp/does-not-matter")).not.toContain(
+      "ping.enduragent.icu",
+    );
+    const urls: string[] = [];
+    const fetchMock = vi.fn(async (input: string) => {
+      urls.push(input);
+      throw new Error("offline");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const info = await checkForUpdate("cycling-coach", "/tmp/does-not-matter");
+    expect(info).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(urls.every((u) => !u.includes("ping.enduragent.icu"))).toBe(true);
   });
 });
