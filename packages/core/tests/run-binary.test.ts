@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { APICallError } from "@ai-sdk/provider";
 import type {
   BinaryConfig,
   CoreDeps,
@@ -150,5 +151,53 @@ describe("runBinary CLI routing", () => {
     await expect(runBinary(stubRunningSport, stubRunningBinary)).rejects.toThrow("__exit_1");
 
     expect(errSpy.mock.calls.some((c) => String(c[0]).includes("Unknown command: bogus"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatCliReply — shared classified copy for the CLI reply position
+// ---------------------------------------------------------------------------
+
+describe("formatCliReply", () => {
+  function apiError(statusCode: number, retryAfterSec?: number): APICallError {
+    return new APICallError({
+      message: "api error",
+      url: "https://example.invalid/api",
+      requestBodyValues: {},
+      statusCode,
+      responseHeaders:
+        retryAfterSec === undefined ? undefined : { "retry-after": String(retryAfterSec) },
+    });
+  }
+
+  it("on a 429 returns the friendly wait copy (no stack)", async () => {
+    const { formatCliReply } = await import("../src/run-binary.js");
+    const reply = formatCliReply(apiError(429, 30));
+    expect(reply).toBe("Rate limited — please try again in ~30 seconds.");
+    expect(reply).not.toContain("APICallError");
+    expect(reply).not.toContain("\n");
+  });
+
+  it("on a provider-auth error returns the provider-neutral one-liner (no payload)", async () => {
+    const { formatCliReply } = await import("../src/run-binary.js");
+    const reply = formatCliReply(apiError(401));
+    expect(reply).toBe("The model provider rejected the API key — check your provider credentials.");
+    expect(reply).not.toContain("Anthropic");
+    expect(reply).not.toContain("example.invalid");
+  });
+
+  it("on a provider-down error returns the one-line classified copy", async () => {
+    const { formatCliReply } = await import("../src/run-binary.js");
+    expect(formatCliReply(apiError(503))).toBe(
+      "The model provider is having trouble — try again in a few minutes.",
+    );
+  });
+
+  it("on an unknown error returns the single-line apology with no raw message", async () => {
+    const { formatCliReply } = await import("../src/run-binary.js");
+    const reply = formatCliReply(new Error("SENSITIVE provider payload at /secret/path"));
+    expect(reply).toBe("Sorry, something went wrong. Please try again.");
+    expect(reply).not.toContain("SENSITIVE");
+    expect(reply).not.toContain("/secret/path");
   });
 });

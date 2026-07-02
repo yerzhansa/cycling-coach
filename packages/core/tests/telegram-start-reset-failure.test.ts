@@ -26,10 +26,11 @@ const RESET_CAVEAT =
 
 async function buildStartHandler(resetSession: ReturnType<typeof vi.fn>) {
   const bot = {
-    api: { sendMessage: vi.fn(), setMyCommands: vi.fn(async () => true) },
+    api: { sendMessage: vi.fn(), setMyCommands: vi.fn(async () => true), config: { use: vi.fn() } },
     use: vi.fn(),
     command: vi.fn(),
     on: vi.fn(),
+    catch: vi.fn(),
   };
   vi.doMock("grammy", () => ({
     Bot: function FakeBot() {

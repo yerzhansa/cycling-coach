@@ -88,16 +88,19 @@ function warnOpenPolicyServe(warned: Set<string>, fromId: number | undefined): v
 export function createAuthMiddleware(opts: CreateAuthMiddlewareOpts): MiddlewareFn<Context> {
   const openPolicyWarned = new Set<string>();
   return async (ctx, next) => {
+    // Auth decision (allowlist load, evaluateAccess, pairing-challenge reply) is
+    // the only logic guarded here, and it fails CLOSED. next() runs OUTSIDE the
+    // guard so a downstream handler throw propagates to bot.catch instead of
+    // being mislabeled a security error and silently dropped.
+    let granted = false;
     try {
       const allowed = loadAllowedSenders(opts.dataDir);
       const decision = evaluateAccess(ctx, allowed);
       if (decision.allow) {
         if (decision.viaOpenPolicy) warnOpenPolicyServe(openPolicyWarned, ctx.from?.id);
-        await next();
-        return;
-      }
-      // Drop. Optionally reply with pairing-challenge (rate-limited per-sender).
-      if (decision.pairingChallenge) {
+        granted = true;
+      } else if (decision.pairingChallenge) {
+        // Drop. Optionally reply with pairing-challenge (rate-limited per-sender).
         const senderId = decision.pairingChallenge;
         const now = Date.now();
         const last = opts.challengeRateLimit.get(senderId) ?? 0;
@@ -115,6 +118,8 @@ export function createAuthMiddleware(opts: CreateAuthMiddlewareOpts): Middleware
       console.error(
         `[security] middleware error: ${err instanceof Error ? err.message : String(err)}`,
       );
+      return;
     }
+    if (granted) await next();
   };
 }

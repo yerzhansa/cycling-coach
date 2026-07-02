@@ -99,7 +99,7 @@ describe("evaluateAccess — allowlist matching", () => {
 });
 
 describe("buildPairingChallenge — HTML body", () => {
-  it("includes sender's user-ID, owner CLI command, and 'ask the bot owner' fallback (S5)", () => {
+  it("includes sender's user-ID, owner CLI command, and 'ask the bot owner' fallback", () => {
     const html = buildPairingChallenge("99999", "Stranger", "cycling-coach");
     expect(html).toContain("99999");
     expect(html).toContain("cycling-coach add-sender 99999");
@@ -221,7 +221,7 @@ describe("createAuthMiddleware — gating", () => {
     expect(ctx.reply).not.toHaveBeenCalled();
   });
 
-  it("rate-limit (H2): same sender messaging twice within window → only one reply", async () => {
+  it("rate-limit: same sender messaging twice within window → only one reply", async () => {
     const map = new Map<string, number>();
     const mw = createAuthMiddleware({
       dataDir,
@@ -377,5 +377,93 @@ describe("createAuthMiddleware — gating", () => {
     expect(next).not.toHaveBeenCalled();
     expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("[security] middleware error"));
     errSpy.mockRestore();
+  });
+
+  // ── next() runs OUTSIDE the auth guard ─────────────────────────────
+  it("a downstream next() throw propagates and is NOT logged as a security error", async () => {
+    saveAllowedSenders(dataDir, () => ({
+      ...defaultPairingState(),
+      dmPolicy: "allowlist",
+      allowFrom: ["12345"],
+      primaryOperator: "12345",
+    }));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const mw = createAuthMiddleware({
+      dataDir,
+      binaryName: "cycling-coach",
+      challengeRateLimit: new Map(),
+      challengeMinIntervalMs: 60_000,
+    });
+    const ctx = makeMwCtx({ chatType: "private", fromId: 12345 });
+    const next = vi.fn(async () => {
+      throw new Error("downstream handler boom");
+    });
+    await expect(mw(ctx, next)).rejects.toThrow("downstream handler boom");
+    const securityLogs = errSpy.mock.calls.filter((c) =>
+      String(c[0]).includes("[security] middleware error"),
+    );
+    expect(securityLogs.length).toBe(0);
+    errSpy.mockRestore();
+  });
+
+  it("an allowlist-load throw is caught fail-closed (logged, no next(), no rethrow)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // A throwing challengeRateLimit.get forces a throw on the pairing path,
+    // exercising the guarded auth-logic catch (default-pairing dataDir).
+    const throwingMap = new Proxy(new Map<string, number>(), {
+      get(target, prop) {
+        if (prop === "get") {
+          return () => {
+            throw new Error("synthetic auth boom");
+          };
+        }
+        return Reflect.get(target, prop);
+      },
+    }) as Map<string, number>;
+    const mw = createAuthMiddleware({
+      dataDir,
+      binaryName: "cycling-coach",
+      challengeRateLimit: throwingMap,
+      challengeMinIntervalMs: 60_000,
+    });
+    const ctx = makeMwCtx({ chatType: "private", fromId: 99999 });
+    const next = vi.fn(async () => undefined);
+    await expect(mw(ctx, next)).resolves.toBeUndefined();
+    expect(next).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("[security] middleware error"));
+    errSpy.mockRestore();
+  });
+
+  it("a granted (allowlisted) sender runs next() exactly once", async () => {
+    saveAllowedSenders(dataDir, () => ({
+      ...defaultPairingState(),
+      dmPolicy: "allowlist",
+      allowFrom: ["12345"],
+      primaryOperator: "12345",
+    }));
+    const mw = createAuthMiddleware({
+      dataDir,
+      binaryName: "cycling-coach",
+      challengeRateLimit: new Map(),
+      challengeMinIntervalMs: 60_000,
+    });
+    const ctx = makeMwCtx({ chatType: "private", fromId: 12345 });
+    const next = vi.fn(async () => undefined);
+    await mw(ctx, next);
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it("a non-allowlisted pairing sender gets the challenge and next() is NOT called", async () => {
+    const mw = createAuthMiddleware({
+      dataDir,
+      binaryName: "cycling-coach",
+      challengeRateLimit: new Map(),
+      challengeMinIntervalMs: 60_000,
+    });
+    const ctx = makeMwCtx({ chatType: "private", fromId: 99999, fromFirstName: "Stranger" });
+    const next = vi.fn(async () => undefined);
+    await mw(ctx, next);
+    expect(ctx.reply).toHaveBeenCalledTimes(1);
+    expect(next).not.toHaveBeenCalled();
   });
 });
