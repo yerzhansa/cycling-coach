@@ -1,5 +1,33 @@
 # cycling-coach
 
+## 2026.7.2
+
+### Patch Changes
+
+- af3186e: User-facing: Coach replies now get a bounded model-call deadline and one safe retry for plain timeouts instead of hanging indefinitely.
+  User-facing: Training plans are no longer at risk of being duplicated when a request times out or context overflows.
+  User-facing: Long chat turns are now bounded so they can't run roughly twice the intended time.
+
+  Bound owned LLM calls with an abort deadline and guard timeout retries from replaying committed tool writes.
+
+  When a turn has already committed a memory or plan write and then fails (overflow/timeout), it now returns the canned "couldn't finish" message instead of self-healing via replay — deliberately preventing a re-run of the non-idempotent write. The committed write is preserved; only the in-turn answer is sacrificed.
+
+- 33aa8bc: User-facing: Telegram now retries failed message delivery, threads replies to your message, and shows clearer error messages; the CLI no longer prints raw error objects.
+
+  Splits generation from delivery in the Telegram turn so a post-generation delivery failure is no longer shown generation copy, installs a bounded API-level retry transformer, adds a process-local resend cache (send "resend" to re-emit the last answer), threads final replies to the inbound message, moves the auth `next()` outside its guarded block so downstream handler errors are no longer mislabeled as security errors, registers a last-resort `bot.catch`, and routes both the Telegram channel and the CLI through one shared error classifier.
+
+- 2dfb2e3: User-facing: Coach replies now get more time to finish on complex requests before timing out.
+
+  Raise the owned model-call deadlines and the per-turn wall-clock so a legitimately-slow reasoning turn is not cut off prematurely: flush/compact 3->5 min, chat 5->10 min, per-turn wall-clock 5->10 min. The chat per-call deadline is clipped by the turn's remaining wall-clock budget, so raising the chat cap is only effective alongside the matching wall-clock raise.
+
+- 1dcce7b: User-facing: The bot now shows a typing indicator while it works on your message, so a long reply no longer looks like it went silent.
+
+  Starts a best-effort heartbeat that re-emits Telegram's native "typing" chat action every 4s for the duration of the generation phase in the shared turn skeleton, then stops it in a `finally` around generation (never around delivery). Each pulse is isolated: a rejected or throwing pulse is logged at debug and can never affect the turn or its reply, and the interval is unref'd so a pending pulse cannot hold the process open during shutdown or an `/update` drain.
+
+- abcbefd: User-facing: Long-running deployments now check for updates daily, not only at restart.
+
+  Route the existing startup version check through an update endpoint that returns the latest published version and records an anonymous per-instance count. A daily re-check runs alongside the startup check so long-running deployments learn about new releases without a restart; both automatic checks respect `CYCLING_COACH_NO_UPDATE_CHECK`. Dev/test and any endpoint outage fall back to `registry.npmjs.org`, so update checks and notifications keep working.
+
 ## 2026.6.30
 
 ### Patch Changes
