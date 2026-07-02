@@ -50,7 +50,7 @@ const GENERIC_TRANSPORT_APOLOGY = "Sorry, something went wrong. Please try again
 // How often to re-emit Telegram's native "typing" indicator while a turn is in
 // flight. Telegram auto-clears the indicator ~5s after each sendChatAction, so we
 // refresh faster than that to keep it continuous without flicker.
-const TYPING_HEARTBEAT_MS = 4_000;
+export const TYPING_HEARTBEAT_MS = 4_000;
 
 function drainBounded(drain: () => Promise<void>, timeoutMs: number): Promise<void> {
   return Promise.race([
@@ -70,8 +70,21 @@ export function startTypingHeartbeat(
   intervalMs: number,
   onError: (err: unknown) => void,
 ): () => void {
+  // Skip a beat while the previous pulse is still unsettled: under a Telegram
+  // flood a pulse can be parked inside the API retry layer, and firing a fresh
+  // one every interval regardless would pile parked pulses up and roughly double
+  // request volume against an already-throttled API. The flag is cleared in a
+  // finally so a rejected pulse cannot wedge the guard permanently.
+  let inFlight = false;
   const beat = () => {
-    void Promise.resolve().then(pulse).catch(onError);
+    if (inFlight) return;
+    inFlight = true;
+    void Promise.resolve()
+      .then(pulse)
+      .catch(onError)
+      .finally(() => {
+        inFlight = false;
+      });
   };
   beat();
   const timer = setInterval(beat, intervalMs);

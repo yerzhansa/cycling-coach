@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { APICallError } from "@ai-sdk/provider";
 import { cyclingBinary } from "./helpers/cycling-binary-fixture.js";
-import { startTypingHeartbeat } from "../src/channels/telegram.js";
+import { startTypingHeartbeat, TYPING_HEARTBEAT_MS } from "../src/channels/telegram.js";
 
 let dataDir: string;
 
@@ -450,10 +450,6 @@ describe("retry transformer / classified errors / delivery split", () => {
 });
 
 describe("typing-indicator heartbeat", () => {
-  // Mirrors the un-exported TYPING_HEARTBEAT_MS in telegram.ts. The <= 5s
-  // assertion below keeps the heartbeat under Telegram's ~5s typing auto-clear window.
-  const HEARTBEAT_MS = 4_000;
-
   describe("in-flight pulses (integration)", () => {
     beforeEach(() => {
       vi.useFakeTimers();
@@ -482,10 +478,10 @@ describe("typing-indicator heartbeat", () => {
       expect(afterImmediate).toBeGreaterThanOrEqual(1);
 
       // One interval → at least one more pulse; and a second interval → another.
-      await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
-      await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
+      await vi.advanceTimersByTimeAsync(TYPING_HEARTBEAT_MS);
+      await vi.advanceTimersByTimeAsync(TYPING_HEARTBEAT_MS);
       expect(ctx.replyWithChatAction.mock.calls.length).toBeGreaterThanOrEqual(afterImmediate + 2);
-      expect(HEARTBEAT_MS).toBeLessThanOrEqual(5_000);
+      expect(TYPING_HEARTBEAT_MS).toBeLessThanOrEqual(5_000);
 
       // Let the turn finish so no fake interval leaks past the test.
       resolveChat("done");
@@ -504,14 +500,14 @@ describe("typing-indicator heartbeat", () => {
       const ctx = makeCtx({ message: { text: "how's my form?" } });
 
       await getMessageText(bot)(ctx);
-      await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
+      await vi.advanceTimersByTimeAsync(TYPING_HEARTBEAT_MS);
 
       resolveChat("the answer body");
       await drainPending();
       expect(someReply(ctx, "the answer body")).toBe(true);
 
       const frozen = ctx.replyWithChatAction.mock.calls.length;
-      await vi.advanceTimersByTimeAsync(HEARTBEAT_MS * 5);
+      await vi.advanceTimersByTimeAsync(TYPING_HEARTBEAT_MS * 5);
       expect(ctx.replyWithChatAction.mock.calls.length).toBe(frozen);
     });
 
@@ -526,7 +522,7 @@ describe("typing-indicator heartbeat", () => {
       expect(someReply(ctx, "Rate limited — please try again in ~30 seconds.")).toBe(true);
 
       const frozen = ctx.replyWithChatAction.mock.calls.length;
-      await vi.advanceTimersByTimeAsync(HEARTBEAT_MS * 5);
+      await vi.advanceTimersByTimeAsync(TYPING_HEARTBEAT_MS * 5);
       expect(ctx.replyWithChatAction.mock.calls.length).toBe(frozen);
     });
 
@@ -572,7 +568,7 @@ describe("typing-indicator heartbeat", () => {
       vi.stubGlobal("setInterval", setIntervalSpy);
       vi.stubGlobal("clearInterval", clearIntervalSpy);
       try {
-        const stop = startTypingHeartbeat(async () => undefined, HEARTBEAT_MS, () => {});
+        const stop = startTypingHeartbeat(async () => undefined, TYPING_HEARTBEAT_MS, () => {});
         expect(setIntervalSpy).toHaveBeenCalledTimes(1);
         expect(unref).toHaveBeenCalledTimes(1);
         expect(clearIntervalSpy).not.toHaveBeenCalled();
@@ -582,6 +578,39 @@ describe("typing-indicator heartbeat", () => {
         expect(clearIntervalSpy).toHaveBeenCalledWith(fakeTimer);
       } finally {
         vi.unstubAllGlobals();
+      }
+    });
+
+    it("skips beats while the previous pulse is still unsettled, then resumes once it settles", async () => {
+      vi.useFakeTimers();
+      try {
+        let settle!: () => void;
+        const pulse = vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              settle = resolve;
+            }),
+        );
+        const stop = startTypingHeartbeat(pulse, 10_000, () => {});
+
+        // The immediate beat fires exactly one pulse, which stays pending.
+        await vi.advanceTimersByTimeAsync(0);
+        expect(pulse).toHaveBeenCalledTimes(1);
+
+        // Several intervals elapse while that pulse is parked — every tick is
+        // skipped by the in-flight guard, so still only the one pulse.
+        await vi.advanceTimersByTimeAsync(10_000 * 3);
+        expect(pulse).toHaveBeenCalledTimes(1);
+
+        // Settle the parked pulse; the guard releases and the next tick beats.
+        settle();
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(pulse).toHaveBeenCalledTimes(2);
+
+        stop();
+      } finally {
+        vi.useRealTimers();
       }
     });
   });
