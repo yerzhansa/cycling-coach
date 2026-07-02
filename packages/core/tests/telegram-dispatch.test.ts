@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { APICallError } from "@ai-sdk/provider";
 import { cyclingBinary } from "./helpers/cycling-binary-fixture.js";
+import { startTypingHeartbeat, TYPING_HEARTBEAT_MS } from "../src/channels/telegram.js";
 
 let dataDir: string;
 
@@ -121,6 +122,7 @@ interface FakeCtx {
   message: { text: string; message_id?: number };
   reply: ReturnType<typeof vi.fn>;
   replyWithDocument: ReturnType<typeof vi.fn>;
+  replyWithChatAction: ReturnType<typeof vi.fn>;
 }
 
 function makeCtx(overrides?: Partial<FakeCtx>): FakeCtx {
@@ -130,6 +132,7 @@ function makeCtx(overrides?: Partial<FakeCtx>): FakeCtx {
     message: { text: "hi" },
     reply: vi.fn(async () => undefined),
     replyWithDocument: vi.fn(async () => undefined),
+    replyWithChatAction: vi.fn(async () => true),
     ...overrides,
   };
 }
@@ -443,6 +446,173 @@ describe("retry transformer / classified errors / delivery split", () => {
     await expect(
       handler({ error: new Error("boom"), ctx: { chat: { id: 1 }, reply: throwingReply } }),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("typing-indicator heartbeat", () => {
+  describe("in-flight pulses (integration)", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("pulses 'typing' immediately and again each interval while agent.chat is in flight", async () => {
+      const { bot, agent, drainPending } = await buildBot();
+      agent.hasSession.mockReturnValue(true);
+      let resolveChat!: (v: string) => void;
+      agent.chat.mockReturnValue(
+        new Promise<string>((r) => {
+          resolveChat = r;
+        }),
+      );
+      const ctx = makeCtx({ message: { text: "how's my form?" } });
+
+      await getMessageText(bot)(ctx);
+
+      // Flush the immediate pulse microtask (fires before any interval elapses).
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ctx.replyWithChatAction).toHaveBeenCalledWith("typing");
+      const afterImmediate = ctx.replyWithChatAction.mock.calls.length;
+      expect(afterImmediate).toBeGreaterThanOrEqual(1);
+
+      // One interval → at least one more pulse; and a second interval → another.
+      await vi.advanceTimersByTimeAsync(TYPING_HEARTBEAT_MS);
+      await vi.advanceTimersByTimeAsync(TYPING_HEARTBEAT_MS);
+      expect(ctx.replyWithChatAction.mock.calls.length).toBeGreaterThanOrEqual(afterImmediate + 2);
+      expect(TYPING_HEARTBEAT_MS).toBeLessThanOrEqual(5_000);
+
+      // Let the turn finish so no fake interval leaks past the test.
+      resolveChat("done");
+      await drainPending();
+    });
+
+    it("stops the interval on normal completion — no further pulses", async () => {
+      const { bot, agent, drainPending } = await buildBot();
+      agent.hasSession.mockReturnValue(true);
+      let resolveChat!: (v: string) => void;
+      agent.chat.mockReturnValue(
+        new Promise<string>((r) => {
+          resolveChat = r;
+        }),
+      );
+      const ctx = makeCtx({ message: { text: "how's my form?" } });
+
+      await getMessageText(bot)(ctx);
+      await vi.advanceTimersByTimeAsync(TYPING_HEARTBEAT_MS);
+
+      resolveChat("the answer body");
+      await drainPending();
+      expect(someReply(ctx, "the answer body")).toBe(true);
+
+      const frozen = ctx.replyWithChatAction.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(TYPING_HEARTBEAT_MS * 5);
+      expect(ctx.replyWithChatAction.mock.calls.length).toBe(frozen);
+    });
+
+    it("stops the interval on a generation error, and still fires the classified reply", async () => {
+      const { bot, agent, drainPending } = await buildBot();
+      agent.hasSession.mockReturnValue(true);
+      agent.chat.mockRejectedValue(rateLimitError(30));
+      const ctx = makeCtx({ message: { text: "plan my week" } });
+
+      await getMessageText(bot)(ctx);
+      await drainPending();
+      expect(someReply(ctx, "Rate limited — please try again in ~30 seconds.")).toBe(true);
+
+      const frozen = ctx.replyWithChatAction.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(TYPING_HEARTBEAT_MS * 5);
+      expect(ctx.replyWithChatAction.mock.calls.length).toBe(frozen);
+    });
+
+    it("a pulse that rejects on every call never affects the turn's reply path", async () => {
+      const { bot, agent, drainPending } = await buildBot();
+      agent.hasSession.mockReturnValue(true);
+      agent.chat.mockResolvedValue("the delivered answer");
+      const ctx = makeCtx({ message: { text: "how's my form?" } });
+      ctx.replyWithChatAction.mockRejectedValue(new Error("chat action failed"));
+
+      await getMessageText(bot)(ctx);
+      await drainPending();
+
+      // The reply still lands unchanged despite every pulse rejecting.
+      expect(someReply(ctx, "the delivered answer")).toBe(true);
+      const htmlReply = ctx.reply.mock.calls.find(
+        (c: unknown[]) => (c[1] as { parse_mode?: string } | undefined)?.parse_mode === "HTML",
+      );
+      expect(htmlReply).toBeDefined();
+    });
+  });
+
+  describe("startTypingHeartbeat (unit)", () => {
+    it("a rejecting pulse routes to onError and never throws to the caller", async () => {
+      const onError = vi.fn();
+      const stop = startTypingHeartbeat(
+        () => Promise.reject(new Error("pulse boom")),
+        10_000,
+        onError,
+      );
+      // Drain all pending microtasks (a rejected thenable adoption spans several
+      // ticks) so the immediate best-effort pulse settles into .catch(onError).
+      await new Promise((r) => setTimeout(r, 0));
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(() => stop()).not.toThrow();
+    });
+
+    it("unrefs the interval on start and clears exactly that timer on stop", () => {
+      const unref = vi.fn();
+      const fakeTimer = { unref };
+      const setIntervalSpy = vi.fn(() => fakeTimer);
+      const clearIntervalSpy = vi.fn();
+      vi.stubGlobal("setInterval", setIntervalSpy);
+      vi.stubGlobal("clearInterval", clearIntervalSpy);
+      try {
+        const stop = startTypingHeartbeat(async () => undefined, TYPING_HEARTBEAT_MS, () => {});
+        expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+        expect(unref).toHaveBeenCalledTimes(1);
+        expect(clearIntervalSpy).not.toHaveBeenCalled();
+
+        stop();
+        expect(clearIntervalSpy).toHaveBeenCalledTimes(1);
+        expect(clearIntervalSpy).toHaveBeenCalledWith(fakeTimer);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("skips beats while the previous pulse is still unsettled, then resumes once it settles", async () => {
+      vi.useFakeTimers();
+      try {
+        let settle!: () => void;
+        const pulse = vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              settle = resolve;
+            }),
+        );
+        const stop = startTypingHeartbeat(pulse, 10_000, () => {});
+
+        // The immediate beat fires exactly one pulse, which stays pending.
+        await vi.advanceTimersByTimeAsync(0);
+        expect(pulse).toHaveBeenCalledTimes(1);
+
+        // Several intervals elapse while that pulse is parked — every tick is
+        // skipped by the in-flight guard, so still only the one pulse.
+        await vi.advanceTimersByTimeAsync(10_000 * 3);
+        expect(pulse).toHaveBeenCalledTimes(1);
+
+        // Settle the parked pulse; the guard releases and the next tick beats.
+        settle();
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(pulse).toHaveBeenCalledTimes(2);
+
+        stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
 

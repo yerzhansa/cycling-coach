@@ -47,11 +47,49 @@ const DELIVERY_FAILURE_HINT = `I generated the answer, but Telegram had trouble 
 // must not be dressed in provider-specific vocabulary.
 const GENERIC_TRANSPORT_APOLOGY = "Sorry, something went wrong. Please try again.";
 
+// How often to re-emit Telegram's native "typing" indicator while a turn is in
+// flight. Telegram auto-clears the indicator ~5s after each sendChatAction, so we
+// refresh faster than that to keep it continuous without flicker.
+export const TYPING_HEARTBEAT_MS = 4_000;
+
 function drainBounded(drain: () => Promise<void>, timeoutMs: number): Promise<void> {
   return Promise.race([
     drain(),
     new Promise<void>((resolve) => setTimeout(resolve, timeoutMs).unref?.()),
   ]);
+}
+
+// Pulse Telegram's native "typing" indicator on an interval so a long turn never
+// leaves the athlete staring at silence (a turn can now run up to ~10 min). Fires
+// once immediately, then every intervalMs. Each pulse is best-effort: a rejected
+// (or throwing) pulse is routed to onError and can never affect the turn or its
+// reply. The interval is unref'd so a pending pulse cannot hold the process open
+// during shutdown / an /update drain. Returns a stop() that clears the interval.
+export function startTypingHeartbeat(
+  pulse: () => Promise<unknown>,
+  intervalMs: number,
+  onError: (err: unknown) => void,
+): () => void {
+  // Skip a beat while the previous pulse is still unsettled: under a Telegram
+  // flood a pulse can be parked inside the API retry layer, and firing a fresh
+  // one every interval regardless would pile parked pulses up and roughly double
+  // request volume against an already-throttled API. The flag is cleared in a
+  // finally so a rejected pulse cannot wedge the guard permanently.
+  let inFlight = false;
+  const beat = () => {
+    if (inFlight) return;
+    inFlight = true;
+    void Promise.resolve()
+      .then(pulse)
+      .catch(onError)
+      .finally(() => {
+        inFlight = false;
+      });
+  };
+  beat();
+  const timer = setInterval(beat, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
 }
 
 // ============================================================================
@@ -256,7 +294,10 @@ export function createTelegramBot(
   // vice versa. The only per-handler differences (genericReply text, log command
   // name, reply-to id) are passed in rather than re-templated.
   function runTurn(opts: {
-    ctx: { reply: (text: string, options?: Record<string, unknown>) => Promise<unknown> };
+    ctx: {
+      reply: (text: string, options?: Record<string, unknown>) => Promise<unknown>;
+      replyWithChatAction: (action: "typing") => Promise<unknown>;
+    };
     command: string;
     chatId: string;
     message: string;
@@ -265,6 +306,11 @@ export function createTelegramBot(
     replyToMessageId?: number;
   }): void {
     dispatch(async () => {
+      const stopHeartbeat = startTypingHeartbeat(
+        () => opts.ctx.replyWithChatAction("typing"),
+        TYPING_HEARTBEAT_MS,
+        () => log.debug("typing_heartbeat_failed", { command: opts.command, chatId: opts.chatId }),
+      );
       let response: string;
       try {
         response = await agent.chat(opts.chatId, opts.message, opts.deps);
@@ -273,6 +319,8 @@ export function createTelegramBot(
         const { kind, athleteMessage } = classifyAgentError(err);
         await opts.ctx.reply(kind === "unknown" ? opts.genericReply : athleteMessage);
         return;
+      } finally {
+        stopHeartbeat();
       }
       writeResend(opts.chatId, response);
       try {
