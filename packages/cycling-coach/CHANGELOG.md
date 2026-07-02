@@ -4,6 +4,14 @@
 
 ### Patch Changes
 
+- d52e710: User-facing: Fixed a startup crash that stopped the bot from launching on the latest release.
+
+  The published binary bundles workspace packages inline, which pulls in transitive CommonJS dependencies whose `require()` of Node builtins hit esbuild's ESM dynamic-require shim and threw at startup. A `createRequire` banner in the bundle gives that shim a real `require` to delegate to, so the builtins resolve normally.
+
+## 2026.7.2
+
+### Patch Changes
+
 - af3186e: User-facing: Coach replies now get a bounded model-call deadline and one safe retry for plain timeouts instead of hanging indefinitely.
   User-facing: Training plans are no longer at risk of being duplicated when a request times out or context overflows.
   User-facing: Long chat turns are now bounded so they can't run roughly twice the intended time.
