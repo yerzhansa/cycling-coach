@@ -29,6 +29,11 @@ import { createSubsystemLogger } from "../logging/index.js";
 // timeout.
 const UPDATE_DRAIN_TIMEOUT_MS = 10_000;
 
+// Debounce window for coalescing rapid free-form message fragments from one
+// chat into a single turn. Each new fragment resets the window; the buffered
+// turn fires this long after the LAST fragment.
+export const CHAT_COALESCE_MS = 1_500;
+
 // Process-local resend cache bounds. The cache holds full generated answers
 // (athlete content) so it is size- and time-bounded and never logged.
 const RESEND_TTL_MS = 30 * 60_000;
@@ -273,7 +278,26 @@ export function createTelegramBot(
     pending.add(task);
     void task.finally(() => pending.delete(task));
   };
-  const drainPending = (): Promise<void> => Promise.all(pending).then(() => undefined);
+  // Per-chat buffer of free-form fragments awaiting the coalesce window. Each
+  // entry rebinds the latest fragment's reply context so the flushed turn
+  // answers on a live ctx, and threads to the last fragment's message id.
+  interface ChatBuffer {
+    fragments: string[];
+    reply: (text: string, options?: Record<string, unknown>) => Promise<unknown>;
+    replyWithChatAction: (action: "typing") => Promise<unknown>;
+    replyToMessageId?: number;
+    timer: ReturnType<typeof setTimeout>;
+  }
+  const chatBuffers = new Map<number, ChatBuffer>();
+
+  // Flush buffered fragments FIRST (synchronously — flushing dispatches onto
+  // `pending`, so the Promise.all snapshot below includes the flushed turns),
+  // so shutdown and /update drains never drop buffered text and never wait on
+  // the debounce timer.
+  const drainPending = (): Promise<void> => {
+    for (const chatId of Array.from(chatBuffers.keys())) flushBufferedChat(chatId);
+    return Promise.all(pending).then(() => undefined);
+  };
 
   void bot.api.setMyCommands(buildCommandMenu(reference)).catch((err) => {
     log.error("set_commands_failed", err, {});
@@ -331,6 +355,74 @@ export function createTelegramBot(
       }
     });
   }
+
+  // Idempotent read-and-delete: no await between lookup and delete, so a
+  // concurrent flush (command middleware vs. drain vs. timer) can never
+  // double-dispatch the same buffered turn. Deps are resolved here, at flush
+  // time, so the coalesced turn sees fresh environment state.
+  function flushBufferedChat(chatId: number): void {
+    const buf = chatBuffers.get(chatId);
+    if (buf === undefined) return;
+    chatBuffers.delete(chatId);
+    clearTimeout(buf.timer);
+    runTurn({
+      ctx: { reply: buf.reply, replyWithChatAction: buf.replyWithChatAction },
+      command: "chat",
+      chatId: `telegram:${chatId}`,
+      message: buf.fragments.join("\n"),
+      deps: turnDeps(),
+      genericReply: "Sorry, something went wrong. Please try again.",
+      replyToMessageId: buf.replyToMessageId,
+    });
+  }
+
+  function bufferChatMessage(ctx: {
+    chat: { id: number };
+    message: { text: string; message_id?: number };
+    reply: (text: string, options?: Record<string, unknown>) => Promise<unknown>;
+    replyWithChatAction: (action: "typing") => Promise<unknown>;
+  }): void {
+    const text = ctx.message.text;
+    const chatId = ctx.chat.id;
+    if (text.startsWith("/")) {
+      // Unregistered-command fallthrough: never buffered. The turn runs
+      // immediately so a command can never be coalesced into free-form text.
+      runTurn({
+        ctx,
+        command: "chat",
+        chatId: `telegram:${chatId}`,
+        message: text,
+        deps: turnDeps(),
+        genericReply: "Sorry, something went wrong. Please try again.",
+        replyToMessageId: ctx.message.message_id,
+      });
+      return;
+    }
+    const existing = chatBuffers.get(chatId);
+    if (existing !== undefined) clearTimeout(existing.timer);
+    const fragments = existing?.fragments ?? [];
+    fragments.push(text);
+    const timer = setTimeout(() => flushBufferedChat(chatId), CHAT_COALESCE_MS);
+    timer.unref?.();
+    chatBuffers.set(chatId, {
+      fragments,
+      reply: (t, o) => ctx.reply(t, o),
+      replyWithChatAction: (a) => ctx.replyWithChatAction(a),
+      replyToMessageId: ctx.message.message_id,
+      timer,
+    });
+  }
+
+  // Flush middleware: any slash update flushes this chat's buffered text ahead
+  // of the command handler, so the buffered turn enqueues on the FIFO session
+  // lock before the command runs. Registered after auth (createSecuredBot) and
+  // before every bot.command below — do not move it below a command.
+  bot.use(async (ctx, next) => {
+    if (ctx.chat !== undefined && ctx.message?.text?.startsWith("/") === true) {
+      flushBufferedChat(ctx.chat.id);
+    }
+    await next();
+  });
 
   // ── Commands ────────────────────────────────────────────────────────────
 
@@ -553,16 +645,14 @@ export function createTelegramBot(
       }
     }
 
-    const deps = turnDeps();
-    runTurn({
-      ctx,
-      command: "chat",
-      chatId,
-      message: text,
-      deps,
-      genericReply: "Sorry, something went wrong. Please try again.",
-      replyToMessageId: ctx.message?.message_id,
-    });
+    // One best-effort typing action per fragment so the athlete sees activity
+    // during the debounce window; only the LLM turn is debounced, never the
+    // signal. Fire-and-forget: a failure can never reach the handler's failure
+    // path (the full typing heartbeat starts at flush inside runTurn).
+    void Promise.resolve()
+      .then(() => ctx.replyWithChatAction("typing"))
+      .catch(() => log.debug("typing_action_failed", { command: "chat", chatId }));
+    bufferChatMessage(ctx);
   });
 
   bot.catch(async (botError) => {
