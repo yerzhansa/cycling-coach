@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cyclingBinary } from "./helpers/cycling-binary-fixture.js";
+import { CHAT_COALESCE_MS } from "../src/channels/telegram.js";
 
 let dataDir: string;
 
@@ -219,9 +220,19 @@ describe("non-blocking dispatch", () => {
     const ctxB = makeCtx({ chat: { id: 333 }, message: { text: "second" } });
     agent.hasSession.mockReturnValue(true);
 
-    await getMessageText(bot)(ctxA);
-    await getMessageText(bot)(ctxB);
-    await drainPending();
+    // Advance past the coalesce window between sends so each message is its
+    // own turn (fragments inside the window are a single coalesced turn —
+    // covered in telegram-coalescing.test.ts).
+    vi.useFakeTimers();
+    try {
+      await getMessageText(bot)(ctxA);
+      await vi.advanceTimersByTimeAsync(CHAT_COALESCE_MS);
+      await getMessageText(bot)(ctxB);
+      await vi.advanceTimersByTimeAsync(CHAT_COALESCE_MS);
+      await drainPending();
+    } finally {
+      vi.useRealTimers();
+    }
 
     expect(agent.chat).toHaveBeenCalledWith("telegram:333", "first", undefined);
     expect(agent.chat).toHaveBeenCalledWith("telegram:333", "second", undefined);
