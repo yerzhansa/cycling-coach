@@ -5,7 +5,12 @@
 
 ## goals
 _updated: 1998-07-06
-- Target a century ride at the end of August 1998 (athlete, 1998-07-06)
+- Target event: Century ride (100 miles), end of August 1998 (athlete, 1998-07-06)
+
+## notes
+_updated: 1998-07-06
+- Week of ~1998-06-29: Completed three rides; Saturday long ride went well (athlete, 1998-07-06)
+- Wednesday hill repeats ~1998-07-02: Knee felt sore afterward; monitoring for recurrence (athlete, 1998-07-06)
 
 ## cycling-profile
 _updated: 1998-07-06
@@ -14,5 +19,6 @@ _updated: 1998-07-06
 
 ## cycling-history
 _updated: 1998-07-06
-- Week of 1998-06-29: completed three rides; Saturday long ride went well (athlete, 1998-07-06)
-- Wednesday hill repeats (approx. 1998-07-01): knee soreness reported after the session (athlete, 1998-07-06)
+- Week of ~1998-06-29: Completed three rides; Saturday long ride noted as going well (athlete, 1998-07-06)
+- 1998-07-02 (approx): Knee soreness reported after Wednesday hill repeats session (athlete, 1998-07-06)
+
