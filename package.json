@@ -25,6 +25,7 @@
     "snapshot:section-11": "tsx tools/snapshot-section-11.ts",
     "check-parity": "tsx tools/check-metric-parity.ts",
     "fuzz-parity": "tsx tools/fuzz-parity.ts",
+    "s8a": "tsx tools/s8a/run.ts",
     "coverage:reference": "tsx tools/measure-reference-coverage.ts",
     "usage:baseline": "tsx tools/usage-baseline.ts"
   },
@@ -32,6 +33,7 @@
     "@changesets/cli": "^2.27.0",
     "@enduragent/core": "workspace:*",
     "@enduragent/sport-cycling": "workspace:*",
+    "@sinonjs/fake-timers": "^15.4.0",
     "@types/node": "^25.6.0",
     "@vitest/coverage-v8": "^4.1.4",
     "intervals-icu-api": "0.1.2",

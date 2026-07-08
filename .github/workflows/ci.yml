@@ -24,6 +24,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm test
+      - run: pnpm s8a
+      - run: pnpm s8a --self-test
       - name: Coverage (measure-only, per-directory)
         run: pnpm test:coverage
       - name: Upload coverage report
