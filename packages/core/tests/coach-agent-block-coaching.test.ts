@@ -7,6 +7,7 @@ import { cyclingSport } from "@enduragent/sport-cycling";
 import type { Sport } from "../src/sport.js";
 import {
   SYSTEM_PROMPT_CACHE_BOUNDARY,
+  splitSystemPromptAtBoundary,
 } from "../src/agent/system-prompt.js";
 
 let tempHome: string;
@@ -106,6 +107,11 @@ describe("block_coaching consume side (degrade-and-disclose prompt block)", () =
     const blockIdx = prompt.indexOf(DISCLOSE_MARKER);
     expect(boundaryIdx).toBeGreaterThanOrEqual(0);
     expect(blockIdx).toBeGreaterThan(boundaryIdx);
+    // Block-level form: the degrade block renders INSIDE block 2, never the prefix.
+    const blocks = splitSystemPromptAtBoundary(prompt);
+    expect(blocks).toBeDefined();
+    expect(blocks!.volatile).toContain(DISCLOSE_MARKER);
+    expect(blocks!.prefix).not.toContain(DISCLOSE_MARKER);
   });
 
   it("no error_state.json ⇒ no degrade block; coach answers normally", async () => {

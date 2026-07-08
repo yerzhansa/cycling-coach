@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   staticRuleBlocks,
   buildSystemPrompt,
+  splitSystemPromptAtBoundary,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
   STEP_BUDGET_RULES,
 } from "../src/agent/system-prompt.js";
@@ -25,6 +26,10 @@ describe("step-budget disclosure block", () => {
     const [prefix, ...rest] = prompt.split(SYSTEM_PROMPT_CACHE_BOUNDARY);
     expect(rest.length).toBeGreaterThan(0);
     expect(prefix).toContain("# Tool-Call Budget");
+    const blocks = splitSystemPromptAtBoundary(prompt);
+    expect(blocks).toBeDefined();
+    expect(blocks!.prefix).toContain("# Tool-Call Budget");
+    expect(blocks!.volatile.startsWith("<!-- cache boundary:")).toBe(true);
   });
 
   it("discloses the ~10-call cap and the non-rollback warning", () => {
