@@ -28,7 +28,9 @@ import { splitHistoryByBudget, makeSummaryMessage } from "./history-limit.js";
 import {
   shouldCompact,
   computeHistoryTokenBudget,
+  effectiveEstimatorWindowTokens,
   isContextOverflowError,
+  isWindowExceededFinish,
   isTimeoutError,
   isRateLimitError,
   classifyFailure,
@@ -209,6 +211,12 @@ export class CoachAgent {
   private tz: string;
   private archiveDeferred = new Set<string>();
   private lastFlushMessageCount = new Map<string, number>();
+  // Per-chat provider usage anchor from the last successful turn: the real token
+  // count the model reported plus the message count it saw. Used only to make the
+  // next turn's preemptive budget check safer (see estimatePromptTokens); it is
+  // never a provider-truth substitute and is cleared whenever we compact so a
+  // stale anchor cannot force a redundant compaction on an already-small prompt.
+  private usageAnchor = new Map<string, { promptTokens: number; messageCount: number }>();
   // A committed tool write makes the turn non-replayable: the retry loop re-sends
   // the pre-turn messages, so a second generate could re-run the write. Keep it
   // in async-local turn state so concurrent chats cannot reset each other.
@@ -414,7 +422,9 @@ export class CoachAgent {
       caller: "compact" as const,
       mustPreserveTokens: this.sport.mustPreserveTokens,
       memory: createMemorySnapshot(this.memory),
-      contextWindowTokens: this.config.contextWindowTokens,
+      // Chunk sizing off the effective (capped) window so a 1M provider window
+      // does not scale summary chunks past the estimator ceiling.
+      contextWindowTokens: effectiveEstimatorWindowTokens(this.config.contextWindowTokens),
       budget,
     };
   }
@@ -499,6 +509,7 @@ export class CoachAgent {
           this.archiveDeferred.delete(chatId);
           this.chatStore.archiveAndReset(chatId);
           this.lastFlushMessageCount.delete(chatId);
+          this.usageAnchor.delete(chatId);
           history = [];
           archivedAt = new Date().toISOString();
         }
@@ -628,8 +639,21 @@ export class CoachAgent {
           turnBudget.chargeAttempt();
           turnBudget.checkDeadline();
 
-          // Preemptive: compact before sending if over budget
-          if (shouldCompact({ messages, systemPrompt: this.systemPrompt, contextWindowTokens: this.config.contextWindowTokens })) {
+          // Preemptive: compact before sending if over budget. The usage anchor
+          // (last turn's final prompt token count) makes the estimate safer for
+          // non-Latin text; slicing past the anchored message count yields the
+          // messages appended since, and estimatePromptTokens floors at the char
+          // estimate so a misaligned slice can never lower the estimate.
+          const anchor = this.usageAnchor.get(chatId);
+          if (
+            shouldCompact({
+              messages,
+              systemPrompt: this.systemPrompt,
+              contextWindowTokens: this.config.contextWindowTokens,
+              lastUsageTokens: anchor?.promptTokens,
+              messagesSinceUsageAnchor: anchor ? messages.slice(anchor.messageCount) : undefined,
+            })
+          ) {
             if (!flushedThisTurn) {
               flushedThisTurn = true;
               try {
@@ -641,6 +665,7 @@ export class CoachAgent {
             messages = await summarizeInStages({ messages, ...this.compactionParams(turnBudget) });
             compactions++;
             this.memory.reload();
+            this.usageAnchor.delete(chatId);
           }
 
           try {
@@ -658,6 +683,27 @@ export class CoachAgent {
               deadlineMs: turnBudget.remainingMs(),
             });
             const { text, finishReason } = result;
+
+            // A successful "length" finish whose prompt already filled the real
+            // provider window is a context overflow, not a long answer. Route it
+            // through the existing reactive overflow rescue (compact + retry) and
+            // never persist the truncated text — throw a normalized overflow so
+            // the catch block below handles it exactly like a thrown overflow.
+            // Plain output-length truncation (input below the window) falls
+            // through to recoverStepExhaustedText's existing empty-reply handling.
+            if (
+              isWindowExceededFinish({
+                finishReason,
+                usage: result.usage,
+                contextWindowTokens: this.config.contextWindowTokens,
+              })
+            ) {
+              const overflow = new Error(
+                "Provider reported the context window was exceeded on a successful finish",
+              );
+              overflow.name = "ContextOverflowError";
+              throw overflow;
+            }
 
             // Recovery runs only on this success path (before the catch below).
             const effectiveText = await this.recoverStepExhaustedText(
@@ -722,6 +768,18 @@ export class CoachAgent {
               compactions,
             });
 
+            // Anchor the next turn's budget check to the FINAL step's prompt
+            // token count — the context the model actually saw, system prompt
+            // included. Never the cross-step aggregate (totalUsage), which
+            // overstates a multi-step tool turn several-fold and would force
+            // needless compactions. messages.length is the prompt count the
+            // model saw; the next turn char-estimates only messages appended
+            // beyond it.
+            const anchorTokens = result.usage?.inputTokens;
+            if (typeof anchorTokens === "number" && Number.isFinite(anchorTokens)) {
+              this.usageAnchor.set(chatId, { promptTokens: anchorTokens, messageCount: messages.length });
+            }
+
             // Prefix the one-time post-reset notice onto the first reply after
             // an automatic archive. Not persisted to history — it is a channel
             // disclosure, not conversation content.
@@ -772,6 +830,7 @@ export class CoachAgent {
                 messages = await summarizeInStages({ messages, ...this.compactionParams(turnBudget) });
                 compactions++;
                 this.memory.reload();
+                this.usageAnchor.delete(chatId);
               } catch (rescueErr) {
                 this.log.warn("Compaction rescue failed; rethrowing the original turn error", rescueErr);
                 if (err instanceof Error && err.cause === undefined) {
@@ -790,6 +849,7 @@ export class CoachAgent {
                   messages = await summarizeInStages({ messages, ...this.compactionParams(turnBudget) });
                   compactions++;
                   this.memory.reload();
+                  this.usageAnchor.delete(chatId);
                 } catch (rescueErr) {
                   this.log.warn("Compaction rescue failed; rethrowing the original turn error", rescueErr);
                   if (err instanceof Error && err.cause === undefined) {
@@ -930,6 +990,7 @@ export class CoachAgent {
       this.archiveDeferred.delete(chatId);
       this.chatStore.archiveAndReset(chatId);
       this.lastFlushMessageCount.delete(chatId);
+      this.usageAnchor.delete(chatId);
       return { memoryFlushed };
     });
   }
