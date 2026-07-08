@@ -1,6 +1,6 @@
 import { Bot, InputFile } from "grammy";
 import { autoRetry } from "@grammyjs/auto-retry";
-import type { CoachAgent } from "../agent/coach-agent.js";
+import type { CoachEngineSeam } from "../agent/coach-engine.js";
 import type { BinaryConfig } from "../binary.js";
 import { classifyAgentError } from "../agent/error-classify.js";
 import {
@@ -218,7 +218,7 @@ export interface TelegramBotHandle {
 
 export function createTelegramBot(
   token: string,
-  agent: CoachAgent,
+  agent: CoachEngineSeam,
   binary: BinaryConfig,
   dataDir: string,
   reference?: ReferenceServices,

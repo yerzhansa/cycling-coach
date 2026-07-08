@@ -341,13 +341,13 @@ export async function runBinary(
   }
 
   const bootStart = Date.now();
-  const { CoachAgent } = await import("./agent/coach-agent.js");
-  const agent = new CoachAgent(sport, config);
+  const { createCoachEngine } = await import("./agent/coach-engine.js");
+  const engine = createCoachEngine(sport, config);
 
   // Init order: Memory (above) → startup hook → Reference bootstrap → Telegram.
   // Reference's internal init sequence is pinned inside `bootstrapReference`
   // per ADR-0011 (two-phase scheduler — no timer until first runSync resolves).
-  await runStartupHook(agent.getMemory(), hooks.onStartup);
+  await runStartupHook(engine.getMemory(), hooks.onStartup);
 
   const { bootstrapReference } = await import("./reference/runtime.js");
   console.log("syncing training data from intervals.icu…");
@@ -383,7 +383,7 @@ export async function runBinary(
     const { createTelegramBot, notifyUpdate } = await import("./channels/telegram.js");
     const { bot, drainPending } = createTelegramBot(
       config.telegram.botToken,
-      agent,
+      engine,
       binary,
       config.dataDir,
       reference.services,
@@ -459,7 +459,7 @@ export async function runBinary(
       }
 
       try {
-        const response = await agent.chat("cli", input);
+        const response = await engine.chat("cli", input);
         console.log("\n" + response + "\n");
       } catch (err) {
         // Full detail (stack, provider payload) → stderr; a friendly classified

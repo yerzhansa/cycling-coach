@@ -105,6 +105,8 @@ export type { IntervalsClient } from "./intervals.js";
 
 // ─── Agent ────────────────────────────────────────────────────────────
 export { CoachAgent } from "./agent/coach-agent.js";
+export { createCoachEngine } from "./agent/coach-engine.js";
+export type { CoachEngineSeam, LocalCoachEngine } from "./agent/coach-engine.js";
 export {
   TurnBudgetExceededError,
   MAX_TURN_MODEL_CALLS,
