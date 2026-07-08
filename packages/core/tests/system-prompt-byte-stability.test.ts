@@ -68,3 +68,24 @@ describe("write/read round-trip preserves prefix bytes", () => {
     expect(second).toBe(first);
   });
 });
+
+describe("adversarial H2-bearing content stays byte-stable", () => {
+  it("demotes an embedded H2 and rebuilds byte-identically", () => {
+    const m = new Memory(dataDir);
+    m.writeSection("Goals", "Lift FTP\n## Phantom\nsplit attempt");
+    const a = buildSystemPrompt(persona, m);
+    const b = buildSystemPrompt(persona, m);
+    expect(a).toBe(b);
+    expect(a).toContain("### Phantom");
+    expect(a).not.toContain("\n## Phantom");
+  });
+
+  it("is byte-stable across a re-write of the read-back body", () => {
+    const m = new Memory(dataDir);
+    m.writeSection("Goals", "Lift FTP\n## Phantom\nsplit attempt");
+    const before = buildSystemPrompt(persona, m);
+    m.writeSection("Goals", m.readSection("Goals")!);
+    const after = buildSystemPrompt(persona, m);
+    expect(after).toBe(before);
+  });
+});
