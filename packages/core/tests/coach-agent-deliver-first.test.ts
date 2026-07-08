@@ -4,6 +4,7 @@ import {
   rmSync,
   mkdirSync,
   readFileSync,
+  writeFileSync,
   existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -99,7 +100,10 @@ describe("coach-agent deliver-first persistence", () => {
     );
     resetNotice = __resetPersistenceNoticeState;
     resetNotice();
-    vi.spyOn(ChatStore.prototype, "appendTurn").mockImplementation(() => {
+    // The user line is appended before generation and the assistant line after;
+    // both go through appendMessage now. Throwing on it exercises deliver-first
+    // on the reply-persist path (the disk-full note rides the assistant append).
+    vi.spyOn(ChatStore.prototype, "appendMessage").mockImplementation(() => {
       throw errored("ENOSPC");
     });
     vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -119,7 +123,7 @@ describe("coach-agent deliver-first persistence", () => {
     );
     resetNotice = __resetPersistenceNoticeState;
     resetNotice();
-    vi.spyOn(ChatStore.prototype, "appendTurn").mockImplementation(() => {
+    vi.spyOn(ChatStore.prototype, "appendMessage").mockImplementation(() => {
       throw errored("EACCES");
     });
     vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -146,5 +150,72 @@ describe("coach-agent deliver-first persistence", () => {
       .filter((l) => l.length > 0);
     expect(lines.some((l) => l.includes('"role":"user"'))).toBe(true);
     expect(lines.some((l) => l.includes('"role":"assistant"'))).toBe(true);
+  });
+
+  it("leaves the athlete message and a failure marker in history when the turn throws", async () => {
+    const complete = vi.fn(async (params: { system?: string }) => {
+      const sys = params.system ?? "";
+      if (sys.includes(FLUSH_MARKER)) return mkAssistant("facts noted");
+      if (sys.length === 0) return mkAssistant("summary");
+      throw new Error("provider exploded");
+    });
+    const { agent, __resetPersistenceNoticeState } = await setupAgent(complete);
+    resetNotice = __resetPersistenceNoticeState;
+    resetNotice();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await expect(agent.chat("fail-chat", "remember I hate hills")).rejects.toThrow();
+
+    const lines = readFileSync(sessionFile("fail-chat"), "utf-8")
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as { role: string; content: string });
+    expect(lines.some((l) => l.role === "user" && l.content === "remember I hate hills")).toBe(true);
+    expect(lines.some((l) => l.role === "system" && l.content.includes("did not complete"))).toBe(true);
+  });
+
+  it("prefixes the post-reset notice and shows the model a one-turn archive marker", async () => {
+    const POST_RESET_NOTICE =
+      "Started a fresh session - earlier conversation is archived, and I still have your key details in memory.";
+    const complete = happyComplete("here is the answer");
+    const { agent, __resetPersistenceNoticeState } = await setupAgent(complete);
+    resetNotice = __resetPersistenceNoticeState;
+    resetNotice();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // Seed a session last touched long before today's daily reset hour so the
+    // automatic daily reset fires (and is NOT deferred).
+    const oldTs = "1998-01-01T00:00:00.000Z";
+    writeFileSync(
+      sessionFile("reset-chat"),
+      JSON.stringify({ role: "user", content: "old q", ts: oldTs }) +
+        "\n" +
+        JSON.stringify({ role: "assistant", content: "old a", ts: oldTs }) +
+        "\n",
+      "utf-8",
+    );
+
+    const reply = await agent.chat("reset-chat", "how's my form?");
+
+    expect(reply.startsWith(POST_RESET_NOTICE)).toBe(true);
+    expect(reply).toContain("here is the answer");
+
+    const sawMarker = complete.mock.calls.some((call) => {
+      const params = call[0] as { messages?: Array<{ role: string; content: unknown }> };
+      return (
+        Array.isArray(params.messages) &&
+        params.messages.some(
+          (m) =>
+            m.role === "system" &&
+            typeof m.content === "string" &&
+            m.content.includes("Previous session archived at"),
+        )
+      );
+    });
+    expect(sawMarker).toBe(true);
+
+    // The prior transcript was archived (renamed away).
+    const archives = readFileSync(sessionFile("reset-chat"), "utf-8");
+    expect(archives).not.toContain("old q");
   });
 });

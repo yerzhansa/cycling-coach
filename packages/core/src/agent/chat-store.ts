@@ -15,6 +15,12 @@ import { messageText } from "./token-utils.js";
 
 const MS_PER_DAY = 86_400_000;
 
+// Recorded in history when a turn fails before producing a reply, so the
+// athlete's (durably persisted) message is visibly unanswered rather than
+// silently dangling.
+export const TURN_FAILURE_MARKER =
+  "[This turn did not complete — the message above was not answered.]";
+
 function parseArchiveTimestampMs(suffix: string): number | null {
   // archiveAndReset writes toISOString() with ":" replaced by "-"; reverse
   // only the time-part dashes before parsing.
@@ -157,18 +163,56 @@ export class ChatStore {
     const path = this.filePath(chatId);
     const tmpPath = `${path}.tmp`;
     const now = new Date().toISOString();
+
+    // Preserve the original timestamp of a message that survives the rewrite so
+    // freshness/idle math keeps working across a compaction. Timestamps are read
+    // back from the existing file by (role, content); a summary/system line is a
+    // freshly-generated artifact and always gets `now`. Build a per-key queue so
+    // duplicate lines each keep their own original stamp in order.
+    const tsByKey = new Map<string, string[]>();
+    if (existsSync(path)) {
+      for (const line of readFileSync(path, "utf-8").split("\n")) {
+        if (line.trim() === "") continue;
+        const entry = parseSessionLine(line);
+        if (entry === null || entry.role === "system") continue;
+        const key = `${entry.role}\n${entry.content}`;
+        const queue = tsByKey.get(key);
+        if (queue) queue.push(entry.ts);
+        else tsByKey.set(key, [entry.ts]);
+      }
+    }
+
     const content = messages
       .map((m) => {
-        const line: JsonlLine = {
-          role: m.role as JsonlLine["role"],
-          content: messageText(m),
-          ts: now,
-        };
+        const role = m.role as JsonlLine["role"];
+        const text = messageText(m);
+        let ts = now;
+        if (role !== "system") {
+          const queue = tsByKey.get(`${role}\n${text}`);
+          const preserved = queue?.shift();
+          if (preserved !== undefined) ts = preserved;
+        }
+        const line: JsonlLine = { role, content: text, ts };
         return JSON.stringify(line);
       })
       .join("\n") + "\n";
     writeFileSync(tmpPath, content, { encoding: "utf-8", mode: 0o600 });
     renameSync(tmpPath, path);
+  }
+
+  // Terminal failure marker: makes a turn that died before producing a reply
+  // visible in history instead of leaving a bare user line with no answer. The
+  // athlete's message stays durable (it was appended before generation); this
+  // records that the turn did not complete. No-op when no session file exists.
+  appendFailureMarker(chatId: string): void {
+    const path = this.filePath(chatId);
+    if (!existsSync(path)) return;
+    const line: JsonlLine = {
+      role: "system",
+      content: TURN_FAILURE_MARKER,
+      ts: new Date().toISOString(),
+    };
+    appendFileSync(path, JSON.stringify(line) + "\n", { encoding: "utf-8", mode: 0o600 });
   }
 
   archiveAndReset(chatId: string): void {

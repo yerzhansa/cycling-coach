@@ -242,7 +242,7 @@ describe("per-turn outcome line", () => {
     expect(lines[0].compactions).toBe(0);
   });
 
-  it("leaves the session JSONL byte-identical on a failed turn", async () => {
+  it("keeps the athlete message durable and marks the failed turn in history", async () => {
     const complete = vi.fn(async (params: { system?: string }) => {
       const sys = params.system ?? "";
       if (sys.includes(FLUSH_MARKER)) return mkAssistant("facts noted");
@@ -253,8 +253,6 @@ describe("per-turn outcome line", () => {
     vi.useFakeTimers();
     const agent = await setupAgent(complete);
 
-    const before = readSession("fail-chat");
-
     const p = agent.chat("fail-chat", "hello");
     const settled = p.then(
       () => undefined,
@@ -264,8 +262,16 @@ describe("per-turn outcome line", () => {
     await settled;
     vi.useRealTimers();
 
+    // The athlete message is appended before generation and survives the
+    // failure; a terminal failure marker records that the turn did not complete
+    // (instead of silently erasing the message).
     const after = readSession("fail-chat");
-    expect(after).toBe(before);
+    expect(after).not.toBeNull();
+    expect(after).toContain('"role":"user"');
+    expect(after).toContain("hello");
+    expect(after).toContain("did not complete");
+    // No assistant reply persisted for a failed turn.
+    expect(after).not.toContain('"role":"assistant"');
   });
 
   it("does not reject when the outcome sink throws", async () => {

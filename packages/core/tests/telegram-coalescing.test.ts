@@ -214,15 +214,18 @@ describe("inbound coalescing (fake timers)", () => {
     expect(agent.chat).toHaveBeenCalledTimes(1);
   });
 
-  it("registration order: auth use → flush middleware use → every command", async () => {
+  it("registration order: auth use → flush middleware use → update guard → every command", async () => {
     const { bot } = await buildBot();
-    expect(bot.use).toHaveBeenCalledTimes(2);
+    // auth (createSecuredBot) → flush middleware → update-offset dedupe guard.
+    expect(bot.use).toHaveBeenCalledTimes(3);
     const authOrder = bot.use.mock.invocationCallOrder[0];
     const flushOrder = bot.use.mock.invocationCallOrder[1];
+    const guardOrder = bot.use.mock.invocationCallOrder[2];
     expect(authOrder).toBeLessThan(flushOrder);
+    expect(flushOrder).toBeLessThan(guardOrder);
     expect(bot.command.mock.invocationCallOrder.length).toBeGreaterThan(0);
     for (const commandOrder of bot.command.mock.invocationCallOrder) {
-      expect(flushOrder).toBeLessThan(commandOrder);
+      expect(guardOrder).toBeLessThan(commandOrder);
     }
   });
 

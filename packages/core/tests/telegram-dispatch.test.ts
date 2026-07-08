@@ -21,6 +21,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.doUnmock("grammy");
   vi.doUnmock("../src/updater.js");
+  vi.doUnmock("../src/channels/telegram-update-offsets.js");
 });
 
 interface FakeBot {
@@ -784,6 +785,40 @@ describe("/update — ordering invariant", () => {
     const ctx = makeCtx();
     await getCommand(bot, "update")(ctx);
     expect(someReply(ctx, "Could not check for updates. Try again later.")).toBe(true);
+    expect(selfUpdate).not.toHaveBeenCalled();
+  });
+
+  it("self-update marker write failure → safe retry copy, does NOT stop or self-update", async () => {
+    const selfUpdate = vi.fn();
+    vi.doMock("../src/updater.js", async () => {
+      const real = await vi.importActual<typeof import("../src/updater.js")>("../src/updater.js");
+      return {
+        ...real,
+        checkForUpdate: vi.fn(async () => ({
+          current: "2026.5.5",
+          latest: "2026.5.10",
+          updateAvailable: true,
+        })),
+        selfUpdate,
+      };
+    });
+    vi.doMock("../src/channels/telegram-update-offsets.js", () => ({
+      TelegramUpdateOffsetStore: class {
+        shouldDispatch() {
+          return true;
+        }
+        recordSelfUpdate() {
+          throw new Error("marker write failed");
+        }
+      },
+    }));
+
+    const { bot } = await buildBot();
+    const ctx = makeCtx();
+    await getCommand(bot, "update")(ctx);
+
+    expect(someReply(ctx, "Couldn't safely prepare the update just now")).toBe(true);
+    expect(bot.stop).not.toHaveBeenCalled();
     expect(selfUpdate).not.toHaveBeenCalled();
   });
 });

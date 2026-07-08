@@ -51,7 +51,7 @@ Core's shared entry-point dispatcher. `runBinary(sport, binary, hooks?)` parses 
 Changesets-generated PR aggregating pending `.changeset/*.md` entries across packages into version bumps + CHANGELOG entries. Merging the Version PR triggers the publish job (which runs `pnpm exec changeset version`, `tools/bump-binaries-to-calver.ts` to override binary CalVer, then `pnpm publish -r`).
 
 **Session**:
-One user's chat state with one Binary, persisted to disk and locked against concurrent processes.
+One user's chat state with one Binary, persisted to disk and locked in-process per chat. The process model is one process per dataDir; there is no cross-process lock.
 
 **Channel**:
 A delivery surface (currently only Telegram); sport-agnostic.

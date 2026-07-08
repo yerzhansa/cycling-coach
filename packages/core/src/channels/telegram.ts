@@ -15,6 +15,7 @@ import {
 } from "../updater.js";
 import { buildWhatsNewMessage } from "../release-notes.js";
 import { createAuthMiddleware } from "./telegram-access.js";
+import { TelegramUpdateOffsetStore } from "./telegram-update-offsets.js";
 import { loadAllowedSenders, loadAllowedSendersWithSource } from "./allowed-senders.js";
 import { escapeHtmlText } from "./html-escape.js";
 import type { ReferenceServices } from "../reference/services.js";
@@ -51,6 +52,12 @@ const DELIVERY_FAILURE_HINT = `I generated the answer, but Telegram had trouble 
 // bot.catch — those are Telegram transport errors, not LLM/tool errors, so they
 // must not be dressed in provider-specific vocabulary.
 const GENERIC_TRANSPORT_APOLOGY = "Sorry, something went wrong. Please try again.";
+
+// Shown when /update can't durably record the self-update marker. Without that
+// marker a restart could re-trigger /update in a loop, so we decline to stop and
+// tell the athlete to retry rather than risk the loop.
+const SELF_UPDATE_MARKER_FAILURE =
+  "Couldn't safely prepare the update just now. Please try /update again in a moment.";
 
 // How often to re-emit Telegram's native "typing" indicator while a turn is in
 // flight. Telegram auto-clears the indicator ~5s after each sendChatAction, so we
@@ -232,6 +239,12 @@ export function createTelegramBot(
   const bot = createSecuredBot({ token, binary, dataDir });
   const log = createSubsystemLogger("telegram", dataDir);
   const greeted = new Set<number>();
+
+  // Durable update-offset store. Normal polling processes pending updates (so a
+  // message sent while the bot was down still arrives); the guard below dedupes
+  // anything a previous run already dispatched or acknowledged before a crash /
+  // self-update restart.
+  const offsets = new TelegramUpdateOffsetStore(dataDir, token);
 
   // Process-local per-chat cache of the last generated answer, so an athlete can
   // ask for it again after a Telegram delivery failure without re-running the LLM
@@ -424,6 +437,15 @@ export function createTelegramBot(
     await next();
   });
 
+  // Update-offset dedupe guard. Runs after the flush middleware and before every
+  // handler: an update already dispatched — or acknowledged before a crash /
+  // self-update restart — is skipped so its work never re-runs.
+  bot.use(async (ctx, next) => {
+    const updateId = ctx.update?.update_id;
+    if (typeof updateId === "number" && !offsets.shouldDispatch(updateId)) return;
+    await next();
+  });
+
   // ── Commands ────────────────────────────────────────────────────────────
 
   bot.command("start", async (ctx) => {
@@ -591,6 +613,24 @@ export function createTelegramBot(
         return;
       }
       latest = info.latest;
+      // Persist a durable self-update marker BEFORE stopping. It records the
+      // /update's own update id as dispatched so the restart doesn't re-trigger
+      // /update. If the marker can't be written we must NOT stop — a
+      // restart could otherwise loop on /update — so surface a safe retry copy.
+      try {
+        offsets.recordSelfUpdate({
+          updateId: typeof ctx.update?.update_id === "number" ? ctx.update.update_id : null,
+          chatId: ctx.chat.id,
+          ts: new Date().toISOString(),
+          targetVersion: info.latest,
+        });
+      } catch (markerErr) {
+        log.error("self_update_marker_failed", markerErr, {
+          chatId: `telegram:${ctx.chat.id}`,
+        });
+        await ctx.reply(SELF_UPDATE_MARKER_FAILURE);
+        return;
+      }
       await ctx.reply(`Updating ${info.current} → ${info.latest}...\nThe bot will stop after installation. Run \`${binary.binaryName}\` to start it again.`);
       // Stop polling first so Telegram commits the /update offset — otherwise
       // Telegram re-sends /update on next startup and we loop forever — then let

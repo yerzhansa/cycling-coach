@@ -399,7 +399,11 @@ export async function runBinary(
     // handler's clean exit(0). A genuine startup failure (bad token, pre-signal
     // crash) leaves shuttingDown false and still fatals.
     let shuttingDown = false;
-    bot.start({ drop_pending_updates: true }).catch(async (err) => {
+    // Normal startup does NOT drop pending updates: a message sent while the bot
+    // was down must still be delivered on restart. The durable update-offset
+    // guard inside createTelegramBot dedupes anything the previous run already
+    // handled. (Operator-capture startup keeps drop_pending_updates on purpose.)
+    bot.start().catch(async (err) => {
       if (shuttingDown) return;
       const { reportFatal } = await import("./process-guard.js");
       reportFatal(err, { dataDir: config.dataDir });

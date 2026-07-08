@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   evaluateSessionFreshness,
   resolveDailyResetAtMs,
+  shouldDeferDailyReset,
+  DAILY_RESET_DEFER_MS,
 } from "../src/agent/session-freshness.js";
 
 describe("evaluateSessionFreshness", () => {
@@ -110,5 +112,27 @@ describe("evaluateSessionFreshness", () => {
   it("resolveDailyResetAtMs falls back to yesterday's reset before the hour", () => {
     vi.setSystemTime(new Date("2026-06-11T02:00:00.000Z"));
     expect(resolveDailyResetAtMs(4, "UTC")).toBe(Date.UTC(2026, 5, 10, 4, 0, 0));
+  });
+});
+
+describe("shouldDeferDailyReset", () => {
+  const now = Date.parse("2026-06-11T04:05:00.000Z");
+
+  it("defers when the last exchange is within the grace window", () => {
+    const recent = new Date(now - (DAILY_RESET_DEFER_MS - 60_000)).toISOString();
+    expect(shouldDeferDailyReset(recent, now)).toBe(true);
+  });
+
+  it("does not defer once the last exchange is older than the grace window", () => {
+    const old = new Date(now - (DAILY_RESET_DEFER_MS + 60_000)).toISOString();
+    expect(shouldDeferDailyReset(old, now)).toBe(false);
+  });
+
+  it("never defers a malformed timestamp", () => {
+    expect(shouldDeferDailyReset("not-a-date", now)).toBe(false);
+  });
+
+  it("never defers when there is no history", () => {
+    expect(shouldDeferDailyReset(null, now)).toBe(false);
   });
 });
