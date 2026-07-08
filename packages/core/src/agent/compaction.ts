@@ -11,6 +11,7 @@ import {
 } from "./token-utils.js";
 import { makeSummaryMessage, SUMMARY_PREFIX } from "./history-limit.js";
 import type { LLM } from "../llm.js";
+import { truncateUtf16Safe } from "../text-truncate.js";
 import type { GenerateOpts } from "../llm-types.js";
 import type { TurnBudget } from "./turn-budget.js";
 
@@ -119,7 +120,7 @@ function formatTranscript(messages: ModelMessage[]): string {
 
 function capSummary(summary: string): string {
   if (summary.length <= MAX_SUMMARY_CHARS) return summary;
-  return summary.slice(0, MAX_SUMMARY_CHARS) + SUMMARY_TRUNCATED_MARKER;
+  return truncateUtf16Safe(summary, MAX_SUMMARY_CHARS) + SUMMARY_TRUNCATED_MARKER;
 }
 
 async function generateSummaryWithTimeout(

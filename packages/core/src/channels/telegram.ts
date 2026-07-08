@@ -24,6 +24,7 @@ import { formatSyncReply } from "../reference/sync/format-sync-reply.js";
 import { formatSnapshotRaw } from "../reference/sync/snapshot-debug.js";
 import { sendSnapshotOutput } from "../reference/sync/send-snapshot.js";
 import { createSubsystemLogger } from "../logging/index.js";
+import { truncateUtf16Safe } from "../text-truncate.js";
 
 // Upper bound on how long /update waits for in-flight turns to finish before
 // self-updating. A hung turn must never wedge the update, so the drain races a
@@ -911,8 +912,11 @@ function splitPreBlock(block: string, maxLen: number): string[] {
     }
     // Single row alone exceeds the budget — hard-split, wrap each piece.
     const sliceMax = Math.max(1, maxLen - PRE_OVERHEAD);
-    for (let k = 0; k < row.length; k += sliceMax) {
-      out.push(`${PRE_OPEN}${row.slice(k, k + sliceMax)}${PRE_CLOSE}`);
+    let k = 0;
+    while (k < row.length) {
+      const piece = truncateUtf16Safe(row.slice(k), sliceMax);
+      out.push(`${PRE_OPEN}${piece}${PRE_CLOSE}`);
+      k += piece.length;
     }
     current = "";
   }
@@ -973,7 +977,13 @@ function hardSplit(text: string, maxLen: number): string[] {
   while (text.length - start > maxLen) {
     let cut = start + maxLen;
     while (cut > start && !isSafeCut(text, start, cut)) cut--;
-    if (cut === start) cut = start + maxLen; // pathological: no safe boundary
+    if (cut === start) {
+      // Pathological: no safe boundary below maxLen. Take the raw slice, but
+      // still refuse to bisect a surrogate pair.
+      cut = start + maxLen;
+      const prev = text.charCodeAt(cut - 1);
+      if (prev >= 0xd800 && prev <= 0xdbff && cut - 1 > start) cut--;
+    }
     out.push(text.slice(start, cut));
     start = cut;
   }

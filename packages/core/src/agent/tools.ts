@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { MemorySectionSpec } from "../sport.js";
 import type { MemoryStore } from "../memory.js";
 import { isRealDateKey, parseDateKeyMs, MS_PER_DAY } from "../io/date-keys.js";
+import { truncateUtf16Safe } from "../text-truncate.js";
 
 function buildMemoryWriteDescription(sections: readonly MemorySectionSpec[]): string {
   const sectionList = sections.map((s) => `${s.name} (${s.description})`).join("; ");
@@ -95,7 +96,7 @@ export function createMemoryQueryTool(memory: MemoryStore) {
         .map((d) => `## ${d}\n${byDate.get(d)!.join("\n")}`);
       const result = [header, ...sections].join("\n\n");
       return result.length > MEMORY_QUERY_MAX_RESULT_CHARS
-        ? result.slice(0, MEMORY_QUERY_MAX_RESULT_CHARS) +
+        ? truncateUtf16Safe(result, MEMORY_QUERY_MAX_RESULT_CHARS) +
             "\n[truncated — narrow the date range or add a query term]"
         : result;
     },
