@@ -87,3 +87,24 @@ export function evaluateSessionFreshness(params: {
 
   return { fresh: true };
 }
+
+// Grace window: a daily reset is deferred for one turn when the last exchange is
+// this recent, so an athlete mid-conversation across the daily boundary doesn't
+// have their session archived out from under them.
+export const DAILY_RESET_DEFER_MS = 30 * 60_000;
+
+/**
+ * Whether a daily (not idle) reset should be deferred for this turn because the
+ * last exchange is still recent. Malformed timestamps are NEVER deferred (they
+ * signal a corrupt session that should reset); a null timestamp means no history
+ * to defer.
+ */
+export function shouldDeferDailyReset(
+  lastMessageTime: string | null,
+  now: number = Date.now(),
+): boolean {
+  if (!lastMessageTime) return false;
+  const ms = new Date(lastMessageTime).getTime();
+  if (Number.isNaN(ms)) return false;
+  return now - ms < DAILY_RESET_DEFER_MS;
+}

@@ -127,7 +127,9 @@ describe("reset-path flush guards", () => {
 
     const text = await agent.chat("stale-guard", "hello");
 
-    expect(text).toBe("fresh-start");
+    // A reset turn now prefixes the one-time post-reset notice before the reply.
+    expect(text.startsWith("Started a fresh session")).toBe(true);
+    expect(text).toContain("fresh-start");
     expect(complete).toHaveBeenCalledTimes(3);
     const archives = listArchives("stale-guard");
     expect(archives).toHaveLength(1);

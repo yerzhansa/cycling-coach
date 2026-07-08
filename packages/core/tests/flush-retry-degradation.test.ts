@@ -181,7 +181,10 @@ describe("flush retry and degradation", () => {
     seedSession("defer", STALE_FOUR);
 
     const t2 = await agent.chat("defer", "hello again");
-    expect(t2).toBe("turn-4");
+    // This turn archives (deferral is one-shot), so the reply carries the
+    // one-time post-reset notice prefix ahead of the model text.
+    expect(t2.startsWith("Started a fresh session")).toBe(true);
+    expect(t2).toContain("turn-4");
     const archives = listArchives("defer");
     expect(archives).toHaveLength(1);
     expect(readFileSync(join(dataDir, "sessions", archives[0]), "utf-8")).toContain("old-fact-1");
@@ -202,7 +205,9 @@ describe("flush retry and degradation", () => {
     seedSession("short", STALE_FOUR.slice(0, 2));
 
     const text = await agent.chat("short", "hello");
-    expect(text).toBe("turn-2");
+    // Archiving turn → reply prefixed with the one-time post-reset notice.
+    expect(text.startsWith("Started a fresh session")).toBe(true);
+    expect(text).toContain("turn-2");
     expect(listArchives("short")).toHaveLength(1);
     expect(eventsNamed(warnSpy, "memory_flush_archive_deferred")).toHaveLength(0);
   });

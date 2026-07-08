@@ -39,7 +39,7 @@ import {
 import { summarizeInStages, summarizeDroppedMessages } from "./compaction.js";
 import { runMemoryFlush, FLUSH_ZERO_WRITE_MIN_MESSAGES, shouldRunMemoryFlush } from "./memory-flush.js";
 import type { MemoryFlushOutcome } from "./memory-flush.js";
-import { evaluateSessionFreshness } from "./session-freshness.js";
+import { evaluateSessionFreshness, shouldDeferDailyReset } from "./session-freshness.js";
 import { LLM } from "../llm.js";
 import { appendUsageLine, usageFieldsFromResult } from "../usage-ledger.js";
 import { createMemorySnapshot } from "../memory/snapshot.js";
@@ -92,6 +92,19 @@ function isStepExhaustedEmpty(text: string, finishReason: FinishReason): boolean
 }
 
 const RECOVERY_PROMPT = "summarize what you did and what's left";
+
+// Prefixed once onto the first reply after an automatic session reset so the
+// athlete is told, in plain language, that the earlier conversation is archived
+// and their durable memory survives. Frozen copy — do not reword.
+const POST_RESET_NOTICE =
+  "Started a fresh session - earlier conversation is archived, and I still have your key details in memory.";
+
+// One-turn, model-visible system line injected after an automatic archive so the
+// model discloses the fresh session itself. Not relied on as the athlete-facing
+// disclosure (that is POST_RESET_NOTICE).
+function archiveMarker(archivedAt: string): string {
+  return `Previous session archived at ${archivedAt}. Briefly disclose this before answering.`;
+}
 
 const DISK_FULL_NOTE =
   "\n\n(Heads up: my disk is full, so I couldn't save this to our history — but your message went through. Please free up some space when you can.)";
@@ -441,14 +454,24 @@ export class CoachAgent {
       // Single file read: load history + last message time together
       let { messages: history, lastMessageTime } = this.chatStore.load(chatId);
 
-      const { fresh } = evaluateSessionFreshness({
+      const { fresh, reason } = evaluateSessionFreshness({
         lastMessageTime,
         dailyResetHour: this.config.session.dailyResetHour,
         idleMinutes: this.config.session.idleMinutes,
         tz: this.tz,
       });
 
-      if (!fresh) {
+      // Defer a daily reset for one turn when the last exchange is still recent,
+      // so an athlete mid-conversation across the daily boundary isn't archived
+      // out from under them. Malformed timestamps (reason "daily", unparseable)
+      // and idle resets are never deferred.
+      const deferDaily = !fresh && reason === "daily" && shouldDeferDailyReset(lastMessageTime);
+
+      // Set only when an automatic archive actually runs this turn — drives the
+      // one-turn model marker and the one-time post-reset athlete notice.
+      let archivedAt: string | undefined;
+
+      if (!fresh && !deferDaily) {
         // Flush memory before reset, then archive
         let outcome: MemoryFlushOutcome | null = null;
         if (history.length > 0 && !flushedThisTurn) {
@@ -477,6 +500,7 @@ export class CoachAgent {
           this.chatStore.archiveAndReset(chatId);
           this.lastFlushMessageCount.delete(chatId);
           history = [];
+          archivedAt = new Date().toISOString();
         }
       }
 
@@ -560,13 +584,32 @@ export class CoachAgent {
       // across the retry/compaction loop below.
       const userMessageWithTime = appendCurrentTimeLine(userMessage, this.tz);
 
+      // One-turn model-visible archive marker: after an automatic reset, tell
+      // the model to disclose the fresh session. Not persisted (it is rebuilt
+      // per turn and only emitted on the reset turn).
+      const archiveMarkerMsg: ModelMessage | undefined =
+        archivedAt !== undefined
+          ? { role: "system", content: archiveMarker(archivedAt) }
+          : undefined;
+
       // Build messages array with new user message
       let messages: ModelMessage[] = [
         ...(summaryMsg ? [summaryMsg] : []),
+        ...(archiveMarkerMsg ? [archiveMarkerMsg] : []),
         ...requeued,
         ...kept,
         { role: "user", content: userMessageWithTime },
       ];
+
+      // Make the athlete's message durable BEFORE generation so a process death
+      // mid-turn leaves it visible in history instead of erasing it. Deliver-
+      // first: a persistence failure here (full disk, permissions) must never
+      // block the turn, so swallow and continue — the reply still runs.
+      try {
+        this.chatStore.appendMessage(chatId, "user", userMessage);
+      } catch (persistErr) {
+        console.warn("Pre-generation user append failed; continuing turn", persistErr);
+      }
 
       let overflowAttempts = 0;
       let timeoutAttempts = 0;
@@ -634,11 +677,12 @@ export class CoachAgent {
             }));
             const assembledHash = computeAssembledHash(this.systemPrompt, messages);
 
-            // Append BOTH after success as one atomic write — JSONL unchanged
-            // on failure, no dangling user line on a partial write.
+            // The user line was appended before generation; append the assistant
+            // reply now. The empty-assistant guard inside appendMessage keeps a
+            // blank reply from polluting history.
             let persistenceNote = "";
             try {
-              this.chatStore.appendTurn(chatId, userMessage, effectiveText, {
+              this.chatStore.appendMessage(chatId, "assistant", effectiveText, {
                 templateHash,
                 assembledHash,
                 provider: this.config.llm.provider,
@@ -678,7 +722,11 @@ export class CoachAgent {
               compactions,
             });
 
-            return effectiveText + persistenceNote;
+            // Prefix the one-time post-reset notice onto the first reply after
+            // an automatic archive. Not persisted to history — it is a channel
+            // disclosure, not conversation content.
+            const resetPrefix = archivedAt !== undefined ? `${POST_RESET_NOTICE}\n\n` : "";
+            return resetPrefix + effectiveText + persistenceNote;
           } catch (err) {
             // The classified budget error is terminal: re-throw it before any
             // retry branch so a future reordering can never mistake it for one of
@@ -824,6 +872,14 @@ export class CoachAgent {
           }
         }
       } catch (terminalErr) {
+        // Record a terminal failure marker so the durably-appended user line is
+        // visibly unanswered rather than a bare dangling message. Best-effort:
+        // a marker write failure must never mask the original error.
+        try {
+          this.chatStore.appendFailureMarker(chatId);
+        } catch (markerErr) {
+          console.warn("Failed to append terminal failure marker", markerErr);
+        }
         // Single failure-emit point: every terminal throw out of the loop is one
         // failed turn, so the outcome line fires exactly once before the rethrow.
         this.emitTurnOutcome({
