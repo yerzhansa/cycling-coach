@@ -37,8 +37,6 @@ export interface MemorySectionSpec {
   name: string;
   /** Description shown to the LLM in section headers + memory_write tool docs. */
   description: string;
-  /** Optional Zod schema; when present, Core validates writes. */
-  schema?: z.ZodTypeAny;
 }
 
 // ─── Tool registration (ADR-0004) ──────────────────────────────────────
