@@ -11,6 +11,7 @@ import type { MemorySnapshot } from "../src/memory.js";
 import { summarizeInStages, summarizeDroppedMessages } from "../src/agent/compaction.js";
 
 const FLUSH_MARKER = "reviewing a conversation to extract and save important athlete";
+const COMPACTION_MARKER = "conversation-compaction summarizer";
 const FIVE_SECTION_SUMMARY = [
   "## Athlete Profile",
   "- FTP 247W, 72kg, training Mon/Wed/Fri",
@@ -120,11 +121,11 @@ describe("flush dedupe — at most one memory flush per chat() turn", () => {
     const complete = vi.fn(async (params: { system?: string }) => {
       const sys = params.system ?? "";
       if (sys.includes(FLUSH_MARKER)) return mkAssistant("facts noted");
-      if (sys.length === 0) return mkAssistant(FIVE_SECTION_SUMMARY); // compaction (prompt-only)
+      if (sys.includes(COMPACTION_MARKER)) return mkAssistant(FIVE_SECTION_SUMMARY); // compaction lane
       // Main turn: throw overflow twice to drive the retry loop, then recover.
       const mainTurns = complete.mock.calls.filter((c) => {
         const s = (c[0] as { system?: string } | undefined)?.system ?? "";
-        return s.length > 0 && !s.includes(FLUSH_MARKER);
+        return s.length > 0 && !s.includes(FLUSH_MARKER) && !s.includes(COMPACTION_MARKER);
       }).length;
       if (mainTurns <= 2) {
         throw new Error("Request exceeds the maximum context length of 272000 tokens");
@@ -145,7 +146,7 @@ describe("flush dedupe — at most one memory flush per chat() turn", () => {
     const complete = vi.fn(async (params: { system?: string }) => {
       const sys = params.system ?? "";
       if (sys.includes(FLUSH_MARKER)) return mkAssistant("facts noted");
-      if (sys.length === 0) return mkAssistant(FIVE_SECTION_SUMMARY);
+      if (sys.includes(COMPACTION_MARKER)) return mkAssistant(FIVE_SECTION_SUMMARY);
       return mkAssistant("fresh-day-reply");
     });
     vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -163,7 +164,7 @@ describe("flush dedupe — at most one memory flush per chat() turn", () => {
     const complete = vi.fn(async (params: { system?: string }) => {
       const sys = params.system ?? "";
       if (sys.includes(FLUSH_MARKER)) return mkAssistant("facts noted");
-      if (sys.length === 0) return mkAssistant(FIVE_SECTION_SUMMARY);
+      if (sys.includes(COMPACTION_MARKER)) return mkAssistant(FIVE_SECTION_SUMMARY);
       return mkAssistant("trim-reply");
     });
     vi.spyOn(console, "warn").mockImplementation(() => {});

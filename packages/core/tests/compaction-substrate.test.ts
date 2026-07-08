@@ -114,7 +114,7 @@ describe("summary capping through the trim pipeline", () => {
     });
 
     expect(unsummarized).toEqual([]);
-    expect(llm.capturedPrompts).toHaveLength(1);
+    expect(llm.capturedOpts).toHaveLength(1);
     expect(summary.length).toBe(4000 + "\n\n[Summary truncated]".length);
     expect(summary.endsWith("[Summary truncated]")).toBe(true);
     expect(summary).toContain("## Pending Questions");
@@ -152,8 +152,8 @@ describe("coach-stance round-trip (mechanical path)", () => {
       mustPreserveTokens: CYCLING_VOCABULARY,
       memory: EMPTY_SNAPSHOT,
     });
-    expect(llm2.capturedPrompts[0]).toContain("Existing summary of earlier context:");
-    expect(llm2.capturedPrompts[0]).toContain(STANCE_FACT);
+    expect(String(llm2.capturedMessages[0][0].content)).toContain("Existing summary of earlier context:");
+    expect(String(llm2.capturedMessages[0][0].content)).toContain(STANCE_FACT);
   });
 
   it("a stance fact in a leading summary survives the in-turn pipeline into the carried summary", async () => {
@@ -166,8 +166,8 @@ describe("coach-stance round-trip (mechanical path)", () => {
       recentToKeep: 2,
     });
 
-    expect(llm.capturedPrompts).toHaveLength(1);
-    expect(llm.capturedPrompts[0]).toContain(STANCE_FACT);
+    expect(llm.capturedOpts).toHaveLength(1);
+    expect(String(llm.capturedMessages[0][0].content)).toContain(STANCE_FACT);
     expect(result).toHaveLength(3);
     expect(result[0].role).toBe("system");
     expect(String(result[0].content)).toContain(STANCE_FACT);

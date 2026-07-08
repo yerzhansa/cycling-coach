@@ -6,6 +6,8 @@ import type {
   ToolSet,
 } from "ai";
 
+export type CallerRole = "chat" | "flush" | "compact" | "sync-triage" | "dream";
+
 export interface GenerateOpts {
   system?: string;
   messages?: ModelMessage[];
@@ -19,7 +21,7 @@ export interface GenerateOpts {
   deadlineMs?: number;
   /** Codex-only: forwarded to the codex bridge as its session id. The AI-SDK providers never read it. */
   cacheKey?: string;
-  caller?: "chat" | "flush" | "compact";
+  caller?: CallerRole;
 }
 
 export interface GenerateResult {

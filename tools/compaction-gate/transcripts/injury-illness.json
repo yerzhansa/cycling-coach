@@ -1,0 +1,119 @@
+{
+  "id": "injury-illness",
+  "sport": "static",
+  "mode": "dropped",
+  "previousSummary": "## Athlete Profile\n- Goal: city marathon on 1998-11-08\n- Ferritin 18 ng/ml flagged low in spring; iron supplementation started\n- Prior tibial stress reaction, 6 weeks off last year\n## Training Status\n- Base marathon build under way\n## Coach Stance\n- Volume: hold; intensity: hold - grounded in a clean early block\n## Discussion Context\n- Setting up the marathon build\n## Pending Questions\n- None outstanding",
+  "memorySections": {},
+  "mustPreserveTokens": [
+    "ferritin",
+    "physio"
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "I have come down with a head cold this week, took 2 days off running."
+    },
+    {
+      "role": "assistant",
+      "content": "Rest was the right call. Two days off for a head cold will not hurt your marathon build."
+    },
+    {
+      "role": "user",
+      "content": "My physio cleared my calf on Wednesday, so that is good news."
+    },
+    {
+      "role": "assistant",
+      "content": "Great to hear the physio cleared the calf on Wednesday."
+    },
+    {
+      "role": "user",
+      "content": "I cut my long run from 28k down to 20k because of the cold."
+    },
+    {
+      "role": "assistant",
+      "content": "Sensible. Dropping the long run from 28k to 20k while ill protects recovery."
+    },
+    {
+      "role": "user",
+      "content": "Sleep has been rough, only 5 to 6 hours a night while sick."
+    },
+    {
+      "role": "assistant",
+      "content": "Prioritize sleep as you recover; 5 to 6 hours is not enough for adaptation."
+    },
+    {
+      "role": "user",
+      "content": "Should I still do the tune-up race on 1998-09-20?"
+    },
+    {
+      "role": "assistant",
+      "content": "Let us see how the cold clears over the next few days before deciding."
+    },
+    {
+      "role": "user",
+      "content": "OK, I will keep you posted on how I feel."
+    },
+    {
+      "role": "assistant",
+      "content": "Please do. Keep hydration up and let the cold pass fully."
+    },
+    {
+      "role": "user",
+      "content": "One more thing, my ferritin was the concern earlier. Should I keep the iron going?"
+    },
+    {
+      "role": "assistant",
+      "content": "Yes, keep the iron supplementation consistent; we will recheck ferritin at your next blood panel."
+    },
+    {
+      "role": "user",
+      "content": "Will the missed sessions hurt my marathon prep?"
+    },
+    {
+      "role": "assistant",
+      "content": "A few easy days off this early will not derail the marathon build. Consistency over the full block matters more."
+    },
+    {
+      "role": "user",
+      "content": "Thanks, that is reassuring."
+    },
+    {
+      "role": "assistant",
+      "content": "Rest up, and message me once the head cold clears so we can slot the long run back in."
+    }
+  ],
+  "facts": [
+    {
+      "id": "F01",
+      "statement": "goal city marathon on 1998-11-08"
+    },
+    {
+      "id": "F02",
+      "statement": "ferritin 18 ng/ml flagged low in spring, iron supplementation started"
+    },
+    {
+      "id": "F03",
+      "statement": "prior tibial stress reaction, 6 weeks off last year"
+    },
+    {
+      "id": "F04",
+      "statement": "head cold this week, 2 days off running"
+    },
+    {
+      "id": "F05",
+      "statement": "physio cleared the calf on Wednesday"
+    },
+    {
+      "id": "F06",
+      "statement": "long run cut from 28k to 20k"
+    },
+    {
+      "id": "F07",
+      "statement": "sleep only 5 to 6 hours during illness"
+    },
+    {
+      "id": "F08",
+      "statement": "athlete asked whether to still do the tune-up race on 1998-09-20 (unanswered)"
+    }
+  ]
+}

@@ -1,0 +1,137 @@
+{
+  "id": "running-dense",
+  "sport": "static",
+  "mode": "stages",
+  "previousSummary": null,
+  "memorySections": {},
+  "mustPreserveTokens": [
+    "critical speed",
+    "4:15",
+    "Pegasus",
+    "achilles"
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "Ran my 10k time trial this morning: 42:30, which is about 4:15 per km."
+    },
+    {
+      "role": "assistant",
+      "content": "Strong run. 42:30 for 10k at 4:15 per km puts your critical speed estimate around 4:28 per km."
+    },
+    {
+      "role": "user",
+      "content": "Good to know. What pace should my easy runs be now?"
+    },
+    {
+      "role": "assistant",
+      "content": "Easy runs at 5:20 to 5:35 per km. Keep them genuinely easy."
+    },
+    {
+      "role": "user",
+      "content": "My goal is the city half marathon on 1998-10-04, hoping to run 1:32."
+    },
+    {
+      "role": "assistant",
+      "content": "A 1:32 needs about 4:22 per km. Reachable from today's shape with a solid 10 week build."
+    },
+    {
+      "role": "user",
+      "content": "My right achilles was sore for two weeks in May after I switched to zero-drop shoes."
+    },
+    {
+      "role": "assistant",
+      "content": "Noted, that achilles flare in May tied to the zero-drop switch."
+    },
+    {
+      "role": "user",
+      "content": "It settled once I went back to my Nike Pegasus shoes."
+    },
+    {
+      "role": "assistant",
+      "content": "Good. Keep long runs and the race in the Pegasus for this cycle, no shoe experiments."
+    },
+    {
+      "role": "user",
+      "content": "My calves cramped a little at 8k of the time trial too."
+    },
+    {
+      "role": "assistant",
+      "content": "Let us add calf conditioning twice a week to address that cramping at 8k."
+    },
+    {
+      "role": "user",
+      "content": "Weekly mileage is around 52km right now. How high should it go?"
+    },
+    {
+      "role": "assistant",
+      "content": "We will peak at 65km in week 7, then taper into the race."
+    },
+    {
+      "role": "user",
+      "content": "Which day for the long run? Saturdays I do an easy parkrun with my daughter."
+    },
+    {
+      "role": "assistant",
+      "content": "Sunday long runs then, and keep the Saturday parkrun easy."
+    },
+    {
+      "role": "user",
+      "content": "What does this weekend's long run look like?"
+    },
+    {
+      "role": "assistant",
+      "content": "16k on Sunday with the last 4k at 4:40 per km."
+    },
+    {
+      "role": "user",
+      "content": "Perfect, I will report back how the achilles feels after."
+    },
+    {
+      "role": "assistant",
+      "content": "Please do. Any flare in the achilles or calves and we adjust."
+    }
+  ],
+  "facts": [
+    {
+      "id": "F01",
+      "statement": "10k time trial 42:30"
+    },
+    {
+      "id": "F02",
+      "statement": "pace about 4:15 per km"
+    },
+    {
+      "id": "F03",
+      "statement": "city half marathon on 1998-10-04"
+    },
+    {
+      "id": "F04",
+      "statement": "target time 1:32"
+    },
+    {
+      "id": "F05",
+      "statement": "easy runs 5:20 to 5:35 per km"
+    },
+    {
+      "id": "F06",
+      "statement": "right achilles sore two weeks in May from zero-drop shoes, resolved on Pegasus"
+    },
+    {
+      "id": "F07",
+      "statement": "weekly mileage 52km now, peak 65km in week 7"
+    },
+    {
+      "id": "F08",
+      "statement": "calf cramping at 8k, calf conditioning twice a week"
+    },
+    {
+      "id": "F09",
+      "statement": "Sunday long runs, Saturday easy parkrun"
+    },
+    {
+      "id": "F10",
+      "statement": "16k long run with the last 4k at 4:40 per km"
+    }
+  ]
+}

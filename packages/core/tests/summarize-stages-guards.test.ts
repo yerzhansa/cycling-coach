@@ -89,7 +89,7 @@ describe("summarizeInStages guards", () => {
 
     expect(result[0].role).toBe("system");
     expect(String(result[0].content)).toContain("FTP 247W");
-    expect(spy.capturedPrompts.length).toBe(1);
+    expect(spy.capturedOpts.length).toBe(1);
 
     const chunkWarn = warnSpy.mock.calls.find(
       (call) => typeof call[0] === "string" && call[0].includes("Staged summarization chunk failed"),
@@ -133,7 +133,7 @@ describe("summarizeInStages guards", () => {
       contextWindowTokens: 30_000,
     });
 
-    expect(spy.capturedPrompts.length).toBe(2);
+    expect(spy.capturedOpts.length).toBe(2);
     expect(result[0].role).toBe("system");
     expect(String(result[0].content)).toContain("## Coach Stance");
     expect(String(result[0].content)).toContain("FTP 247W");

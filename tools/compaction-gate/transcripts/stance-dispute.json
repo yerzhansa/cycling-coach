@@ -1,0 +1,127 @@
+{
+  "id": "stance-dispute",
+  "sport": "static",
+  "mode": "stages",
+  "previousSummary": null,
+  "memorySections": {},
+  "mustPreserveTokens": [
+    "resting heart rate",
+    "3.5"
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "Quick update: my morning resting heart rate has been 52 to 54 all week. Weekday rides were all indoors on the trainer as usual."
+    },
+    {
+      "role": "assistant",
+      "content": "Thanks, a resting heart rate of 52 to 54 is a good baseline. Logged."
+    },
+    {
+      "role": "user",
+      "content": "Also, I think the weekend ride at 3 hours is too short. My mates ride 5 hours."
+    },
+    {
+      "role": "assistant",
+      "content": "I hear you. At 6 hours a week, a 5 hour ride is most of your training in one day."
+    },
+    {
+      "role": "user",
+      "content": "Still, I did 4.5 hours with them last month and felt fine."
+    },
+    {
+      "role": "assistant",
+      "content": "That 4.5 hour ride is real evidence you can handle the distance. My concern is the week around it."
+    },
+    {
+      "role": "user",
+      "content": "So what do you suggest?"
+    },
+    {
+      "role": "assistant",
+      "content": "Let us compromise: 3.5 hours this weekend at a strictly easy effort."
+    },
+    {
+      "role": "user",
+      "content": "Fine, 3.5 this weekend. But I want to revisit this next week."
+    },
+    {
+      "role": "assistant",
+      "content": "Agreed, we revisit the long-ride progression next week with your recovery data."
+    },
+    {
+      "role": "user",
+      "content": "What is the longer plan for the long ride?"
+    },
+    {
+      "role": "assistant",
+      "content": "Build progressively from 3 hours to 4 hours by week 6 if recovery stays clean: 3.5 this weekend, then step up from there."
+    },
+    {
+      "role": "user",
+      "content": "Remember my goal is my first 100-mile sportive in September."
+    },
+    {
+      "role": "assistant",
+      "content": "I have it: your first 100-mile sportive in September is the target."
+    },
+    {
+      "role": "user",
+      "content": "My current numbers are FTP 240W and I weigh 80kg, in case that changes anything."
+    },
+    {
+      "role": "assistant",
+      "content": "Noted, FTP 240W and 80kg. Endurance hours matter more than intensity for that goal right now."
+    },
+    {
+      "role": "user",
+      "content": "OK. I still feel 3.5 is conservative, but I will try it."
+    },
+    {
+      "role": "assistant",
+      "content": "Understood. We hold at 3.5 this weekend and reassess next week from your resting heart rate and how you pull up."
+    }
+  ],
+  "facts": [
+    {
+      "id": "F01",
+      "statement": "morning resting heart rate baseline 52 to 54"
+    },
+    {
+      "id": "F02",
+      "statement": "athlete disputes the long-ride length and wants about 5 hours"
+    },
+    {
+      "id": "F03",
+      "statement": "coach recommends progression to 4 hours by week 6"
+    },
+    {
+      "id": "F04",
+      "statement": "compromise of 3.5 hours easy this weekend"
+    },
+    {
+      "id": "F05",
+      "statement": "agreed to revisit the long-ride progression next week"
+    },
+    {
+      "id": "F06",
+      "statement": "FTP 240W"
+    },
+    {
+      "id": "F07",
+      "statement": "body weight 80kg"
+    },
+    {
+      "id": "F08",
+      "statement": "6 hours per week training budget"
+    },
+    {
+      "id": "F09",
+      "statement": "first 100-mile sportive in September"
+    },
+    {
+      "id": "F10",
+      "statement": "athlete cites a 4.5 hour ride last month as evidence"
+    }
+  ]
+}
