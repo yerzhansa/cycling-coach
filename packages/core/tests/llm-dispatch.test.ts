@@ -151,7 +151,13 @@ describe("LLM dispatch — AI SDK path forwards abort signals", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(LLM_CALL_DEADLINE_MS);
     expect(captured.abortSignal).toBe(timeoutController.signal);
     expect(captured.maxRetries).toBe(0);
-    expect(captured.messages).toEqual([{ role: "user", content: "hi" }]);
+    expect(captured.messages).toEqual([
+      {
+        role: "user",
+        content: "hi",
+        providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
+      },
+    ]);
   });
 
   it("passes the deadline signal on prompt-only calls too", async () => {

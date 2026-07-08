@@ -134,7 +134,7 @@ export {
   SYSTEM_PROMPT_CACHE_BOUNDARY,
   STEP_BUDGET_RULES,
 } from "./agent/system-prompt.js";
-export { computePromptLineage } from "./agent/prompt-lineage.js";
+export { computePromptLineage, PROMPT_LINEAGE_SCHEMA_VERSION } from "./agent/prompt-lineage.js";
 export type { PromptLineage, PromptLineageInput } from "./agent/prompt-lineage.js";
 export { withSessionLock } from "./agent/session-lock.js";
 export {

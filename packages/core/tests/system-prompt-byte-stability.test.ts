@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildSystemPrompt } from "../src/agent/system-prompt.js";
+import { buildSystemPrompt, splitSystemPromptAtBoundary } from "../src/agent/system-prompt.js";
 import { Memory } from "../src/memory/store.js";
 import type { SportPersona } from "../src/sport.js";
 
@@ -46,6 +46,32 @@ describe("consecutive builds are byte-identical", () => {
     const b = buildSystemPrompt(persona, m);
     expect(a).toBe(b);
     expect(a).toContain("# Athlete Context");
+  });
+});
+
+describe("block 2 is byte-stable across consecutive builds", () => {
+  it("splits to byte-identical prefix and volatile against fake memory", () => {
+    const a = buildSystemPrompt(persona, makeFakeMemory("FTP 247W, 72kg"));
+    const b = buildSystemPrompt(persona, makeFakeMemory("FTP 247W, 72kg"));
+    expect(splitSystemPromptAtBoundary(a)!.volatile).toBe(splitSystemPromptAtBoundary(b)!.volatile);
+    expect(splitSystemPromptAtBoundary(a)!.prefix).toBe(splitSystemPromptAtBoundary(b)!.prefix);
+  });
+
+  it("splits to byte-identical blocks after a real on-disk write + rebuild", () => {
+    const m = new Memory(dataDir);
+    m.writeSection("Goals", "Lift FTP to 280W by August");
+    const a = buildSystemPrompt(persona, m);
+    m.writeSection("Goals", "Lift FTP to 280W by August");
+    const b = buildSystemPrompt(persona, m);
+    expect(splitSystemPromptAtBoundary(a)!.volatile).toBe(splitSystemPromptAtBoundary(b)!.volatile);
+    expect(splitSystemPromptAtBoundary(a)!.prefix).toBe(splitSystemPromptAtBoundary(b)!.prefix);
+  });
+
+  it("a different context changes only block 2, never the prefix (sensitivity proof)", () => {
+    const a = buildSystemPrompt(persona, makeFakeMemory("FTP 250"));
+    const b = buildSystemPrompt(persona, makeFakeMemory("FTP 260"));
+    expect(splitSystemPromptAtBoundary(a)!.volatile).not.toBe(splitSystemPromptAtBoundary(b)!.volatile);
+    expect(splitSystemPromptAtBoundary(a)!.prefix).toBe(splitSystemPromptAtBoundary(b)!.prefix);
   });
 });
 

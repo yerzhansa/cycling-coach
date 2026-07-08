@@ -6,8 +6,9 @@ import { createDeepSeek } from "@ai-sdk/deepseek";
 import { createAlibaba } from "@ai-sdk/alibaba";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import type { LanguageModel } from "ai";
+import type { LanguageModel, ModelMessage } from "ai";
 
+import { splitSystemPromptAtBoundary } from "./agent/system-prompt.js";
 import { isPriced, priceUsage } from "./agent/codex/cost.js";
 
 import type { Config } from "./config.js";
@@ -101,24 +102,44 @@ export class LLM {
       throw new Error("AI SDK model not initialized");
     }
 
-    // The provider renders tools before system, so breakpointing the (only)
-    // stable system block caches tools + system together. Which providers need a
-    // breakpoint, and why the rest don't, lives on cacheBreakpointKey above.
+    // The provider renders tools before system, so breakpointing the FIRST
+    // system block caches tools + stable prefix together. Which providers need
+    // explicit breakpoints, and why the rest don't, lives on cacheBreakpointKey.
     const breakpointKey = this.breakpointKey;
-    const cachedSystem =
-      breakpointKey !== undefined && opts.system !== undefined
+    const ephemeral = (key: "anthropic" | "openrouter") => ({
+      [key]: { cacheControl: { type: "ephemeral" as const } },
+    });
+
+    let system:
+      | string
+      | Array<{ role: "system"; content: string; providerOptions: ReturnType<typeof ephemeral> }>
+      | undefined = opts.system;
+    if (breakpointKey !== undefined && opts.system !== undefined) {
+      const blocks = splitSystemPromptAtBoundary(opts.system);
+      system = blocks
         ? [
-            {
-              role: "system" as const,
-              content: opts.system,
-              providerOptions: { [breakpointKey]: { cacheControl: { type: "ephemeral" } } },
-            },
+            { role: "system" as const, content: blocks.prefix, providerOptions: ephemeral(breakpointKey) },
+            { role: "system" as const, content: blocks.volatile, providerOptions: ephemeral(breakpointKey) },
           ]
-        : undefined;
+        : [{ role: "system" as const, content: opts.system, providerOptions: ephemeral(breakpointKey) }];
+    }
+
+    // Message-level breakpoint on the last message so a multi-step tool turn
+    // does not re-pay the whole history every step. Stamped onto a shallow
+    // copy: the caller's array is reused across the retry/compaction loop and
+    // enters the lineage-hash basis, so it must never be mutated here.
+    let messages = opts.messages ?? [];
+    if (breakpointKey !== undefined && messages.length > 0) {
+      const last = messages[messages.length - 1];
+      messages = [
+        ...messages.slice(0, -1),
+        { ...last, providerOptions: { ...last.providerOptions, ...ephemeral(breakpointKey) } } as ModelMessage,
+      ];
+    }
 
     const base = {
       model: this.aiSdkModel,
-      system: cachedSystem ?? opts.system,
+      system,
       tools: opts.tools,
       stopWhen: opts.stopWhen,
       maxOutputTokens: opts.maxOutputTokens,
@@ -127,7 +148,7 @@ export class LLM {
     };
     const result = opts.prompt !== undefined
       ? await generateText({ ...base, prompt: opts.prompt })
-      : await generateText({ ...base, messages: opts.messages ?? [] });
+      : await generateText({ ...base, messages });
 
     return {
       text: result.text,

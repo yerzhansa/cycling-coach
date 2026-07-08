@@ -12,6 +12,7 @@ import {
 import { join } from "node:path";
 import type { ModelMessage } from "ai";
 import { messageText } from "./token-utils.js";
+import { PROMPT_LINEAGE_SCHEMA_VERSION } from "./prompt-lineage.js";
 
 const MS_PER_DAY = 86_400_000;
 
@@ -30,6 +31,7 @@ interface JsonlLine {
   assembledHash?: string;
   provider?: string;
   model?: string;
+  lineageVersion?: string;
 }
 
 const VALID_ROLES = new Set(["user", "assistant", "system"]);
@@ -45,7 +47,7 @@ function parseSessionLine(line: string): JsonlLine | null {
   const v = value as Record<string, unknown>;
   if (typeof v.role !== "string" || !VALID_ROLES.has(v.role)) return null;
   if (typeof v.content !== "string" || typeof v.ts !== "string") return null;
-  for (const k of ["templateHash", "assembledHash", "provider", "model"] as const) {
+  for (const k of ["templateHash", "assembledHash", "provider", "model", "lineageVersion"] as const) {
     if (k in v && typeof v[k] !== "string") return null;
   }
   return value as JsonlLine;
@@ -126,7 +128,10 @@ export class ChatStore {
       return;
     }
     const path = this.filePath(chatId);
-    const line: JsonlLine = { role, content, ts: new Date().toISOString(), ...lineage };
+    const line: JsonlLine =
+      lineage === undefined
+        ? { role, content, ts: new Date().toISOString() }
+        : { role, content, ts: new Date().toISOString(), ...lineage, lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION };
     appendFileSync(path, JSON.stringify(line) + "\n", { encoding: "utf-8", mode: 0o600 });
   }
 
@@ -146,7 +151,13 @@ export class ChatStore {
     const path = this.filePath(chatId);
     const ts = new Date().toISOString();
     const userLine: JsonlLine = { role: "user", content: userContent, ts };
-    const assistantLine: JsonlLine = { role: "assistant", content: assistantContent, ts, ...lineage };
+    const assistantLine: JsonlLine = {
+      role: "assistant",
+      content: assistantContent,
+      ts,
+      ...lineage,
+      lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
+    };
     // Both lines in one buffer and one write so the pair lands together or not
     // at all — a partial write can never leave a dangling user line.
     const buffer = JSON.stringify(userLine) + "\n" + JSON.stringify(assistantLine) + "\n";
