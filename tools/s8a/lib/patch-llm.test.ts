@@ -1,0 +1,306 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { assembledHash, sha256_16 } from "./hash.js";
+import {
+  patchForRecord,
+  patchForReplay,
+  type GenerateOptsLike,
+  type GenerateResultLike,
+  type LlmClassLike,
+} from "./patch-llm.js";
+import type { RecordedCall, S8aRecording } from "./types.js";
+
+// Minimal fake class with the same prototype-patching contract as the real
+// model seam: both this.llm and this.flushLlm resolve generate through the
+// class prototype, and the instance carries a private-ish config.
+function makeFakeLlmClass(tempDir: string) {
+  class FakeLLM {
+    config = { llm: { provider: "anthropic", model: "test-model" }, dataDir: tempDir };
+    async generate(_opts: GenerateOptsLike): Promise<GenerateResultLike> {
+      return {
+        text: "live-reply",
+        toolCalls: [],
+        finishReason: "stop",
+        usage: {},
+        totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        steps: 1,
+      };
+    }
+  }
+  return FakeLLM;
+}
+
+function recordedCall(overrides: Partial<RecordedCall> & { ordinal: number }): RecordedCall {
+  const system = "the system prompt";
+  const messages = [{ role: "user", content: "hello" }];
+  return {
+    caller: "chat",
+    turn: { chatId: "c1", turnIndex: 0 },
+    request: {
+      shape: "messages",
+      caller: "chat",
+      system,
+      systemSha256_16: sha256_16(system),
+      templateHash: "aaaaaaaaaaaaaaaa",
+      assembledHash: assembledHash(system, messages),
+      messages,
+      toolNames: [],
+      maxSteps: 10,
+      cacheKey: "cccccccccccccccc",
+    },
+    toolExecutions: [],
+    result: {
+      text: "recorded-reply",
+      toolCalls: [],
+      finishReason: "stop",
+      usage: {},
+      totalUsage: {
+        inputTokens: 100,
+        outputTokens: 20,
+        totalTokens: 120,
+        inputTokenDetails: { cacheReadTokens: 40, cacheWriteTokens: 7 },
+      },
+      steps: 2,
+    },
+    events: null,
+    ...overrides,
+  };
+}
+
+function recording(calls: RecordedCall[]): S8aRecording {
+  return {
+    s8aRecordingVersion: 1,
+    scenario: "patch-llm-test",
+    recordedAt: "1998-07-06T09:00:00.000Z",
+    provider: "anthropic",
+    model: "test-model",
+    lineage: { templateHash: "aaaaaaaaaaaaaaaa", lineageVersion: "unversioned" },
+    calls,
+  };
+}
+
+const chatOpts: GenerateOptsLike = {
+  system: "the system prompt",
+  messages: [{ role: "user", content: "hello" }],
+  maxSteps: 10,
+  cacheKey: "cccccccccccccccc",
+  caller: "chat",
+};
+
+describe("s8a replay engine", () => {
+  let tempDir: string;
+  afterEach(() => {
+    if (tempDir !== undefined) rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  function setup(calls: RecordedCall[]) {
+    tempDir = mkdtempSync(join(tmpdir(), "s8a-patch-test-"));
+    const FakeLLM = makeFakeLlmClass(tempDir);
+    const handle = patchForReplay(FakeLLM as unknown as LlmClassLike, recording(calls), "patch-llm-test");
+    return { FakeLLM, handle };
+  }
+
+  it("serves recorded results in cursor order", async () => {
+    const { FakeLLM, handle } = setup([recordedCall({ ordinal: 0 })]);
+    const result = await new FakeLLM().generate(chatOpts);
+    expect(result.text).toBe("recorded-reply");
+    handle.finalize();
+    handle.restore();
+    expect(handle.state.failures).toEqual([]);
+  });
+
+  it("fails A6 on an extra generate call", async () => {
+    const { FakeLLM, handle } = setup([]);
+    await expect(new FakeLLM().generate(chatOpts)).rejects.toThrow(/no recorded entry/);
+    handle.restore();
+    const a6 = handle.state.failures.filter((f) => f.assertId === "A6");
+    expect(a6).toHaveLength(1);
+    expect(a6[0].detail).toContain("extra generate call at ordinal 0");
+    expect(a6[0].diffFile).toBe("budget.diff");
+  });
+
+  it("fails A6 on a missing generate call (unconsumed entries)", () => {
+    const { handle } = setup([recordedCall({ ordinal: 0 })]);
+    handle.finalize();
+    handle.restore();
+    const a6 = handle.state.failures.filter((f) => f.assertId === "A6");
+    expect(a6).toHaveLength(1);
+    expect(a6[0].detail).toContain("missing generate call");
+  });
+
+  it("executes recorded tools against the live tool set and fails A2 on result mismatch", async () => {
+    const calls = [
+      recordedCall({
+        ordinal: 0,
+        request: {
+          ...recordedCall({ ordinal: 0 }).request,
+          toolNames: ["probe_tool"],
+        } as RecordedCall["request"],
+        toolExecutions: [
+          { seq: 0, toolName: "probe_tool", input: { q: 1 }, resultCanonical: { answer: 42 } },
+        ],
+      }),
+    ];
+    const { FakeLLM, handle } = setup(calls);
+    const seenInputs: unknown[] = [];
+    await new FakeLLM().generate({
+      ...chatOpts,
+      tools: {
+        probe_tool: {
+          execute: async (input: unknown) => {
+            seenInputs.push(input);
+            return { answer: 43 };
+          },
+        },
+      },
+    });
+    handle.restore();
+    expect(seenInputs).toEqual([{ q: 1 }]);
+    const a2 = handle.state.failures.filter((f) => f.assertId === "A2");
+    expect(a2).toHaveLength(1);
+    expect(a2[0].diffFile).toBe("tool-calls.diff");
+  });
+
+  it("fails A3 inline on request drift (cacheKey)", async () => {
+    const { FakeLLM, handle } = setup([recordedCall({ ordinal: 0 })]);
+    await new FakeLLM().generate({ ...chatOpts, cacheKey: "dddddddddddddddd" });
+    handle.restore();
+    const a3 = handle.state.failures.filter((f) => f.assertId === "A3");
+    expect(a3.some((f) => f.detail.includes("cacheKey"))).toBe(true);
+  });
+
+  it("records a PENDING (not an inline failure) for a chat-caller system mismatch", async () => {
+    const { FakeLLM, handle } = setup([recordedCall({ ordinal: 0 })]);
+    await new FakeLLM().generate({ ...chatOpts, system: "a different system prompt" });
+    handle.restore();
+    expect(handle.state.failures.filter((f) => f.assertId === "A1" || f.assertId === "A3")).toEqual([]);
+    expect(handle.state.pendings).toHaveLength(1);
+    expect(handle.state.pendings[0].assertId).toBe("A3");
+    expect(handle.state.pendings[0].recordedTemplateHash).toBe("aaaaaaaaaaaaaaaa");
+  });
+
+  it("fails a flush-caller system mismatch inline (no supersession path)", async () => {
+    const base = recordedCall({ ordinal: 0, caller: "flush" });
+    const req = { ...base.request, caller: "flush", cacheKey: null } as RecordedCall["request"];
+    if (req.shape === "messages") delete req.templateHash;
+    const { FakeLLM, handle } = setup([{ ...base, caller: "flush", request: req }]);
+    await new FakeLLM().generate({
+      ...chatOpts,
+      system: "a different system prompt",
+      cacheKey: undefined,
+      caller: "flush",
+    });
+    handle.restore();
+    expect(handle.state.pendings).toEqual([]);
+    const inline = handle.state.failures.filter((f) => f.assertId === "A3");
+    expect(inline).toHaveLength(1);
+    expect(inline[0].diffFile).toBe("system-prompt.diff");
+  });
+
+  it("reproduces the production-shaped generate ledger line with durationMs 0 and fixture usage", async () => {
+    const { FakeLLM, handle } = setup([recordedCall({ ordinal: 0 })]);
+    await new FakeLLM().generate(chatOpts);
+    handle.restore();
+    const lines = readFileSync(join(tempDir, "usage-ledger.jsonl"), "utf-8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      kind: "generate",
+      caller: "chat",
+      provider: "anthropic",
+      model: "test-model",
+      durationMs: 0,
+      steps: 2,
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 120,
+      cacheReadTokens: 40,
+      cacheWriteTokens: 7,
+      stopReason: "stop",
+    });
+  });
+
+  it("ignores a non-null events field (forward tolerance)", async () => {
+    const call = recordedCall({ ordinal: 0 });
+    (call as unknown as { events: unknown }).events = [{ type: "text_delta" }];
+    const { FakeLLM, handle } = setup([call]);
+    const result = await new FakeLLM().generate(chatOpts);
+    handle.finalize();
+    handle.restore();
+    expect(result.text).toBe("recorded-reply");
+    expect(handle.state.failures).toEqual([]);
+  });
+});
+
+describe("s8a record engine", () => {
+  it("captures request shape, tool executions, and result without mutating the caller's tools", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "s8a-record-test-"));
+    try {
+      class FakeLLM {
+        config = { llm: { provider: "anthropic", model: "test-model" }, dataDir: tempDir };
+        async generate(opts: GenerateOptsLike): Promise<GenerateResultLike> {
+          // Simulate the SDK executing a tool during the call.
+          await opts.tools?.probe_tool.execute?.({ q: 1 }, { toolCallId: "t1", messages: [] });
+          return {
+            text: "reply",
+            toolCalls: [],
+            finishReason: "stop",
+            usage: {},
+            totalUsage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+            steps: 1,
+          };
+        }
+      }
+      const tools = {
+        probe_tool: { execute: async () => ({ answer: 42 }) },
+      };
+      const originalExecute = tools.probe_tool.execute;
+      const handle = patchForRecord(FakeLLM as unknown as LlmClassLike);
+      handle.setCurrentTurn({ chatId: "c1", turnIndex: 0 });
+      await new FakeLLM().generate({ ...chatOpts, tools });
+      handle.restore();
+
+      expect(tools.probe_tool.execute).toBe(originalExecute);
+      expect(handle.calls).toHaveLength(1);
+      const call = handle.calls[0];
+      expect(call.turn).toEqual({ chatId: "c1", turnIndex: 0 });
+      expect(call.request.shape).toBe("messages");
+      if (call.request.shape === "messages") {
+        expect(call.request.toolNames).toEqual(["probe_tool"]);
+        expect(call.request.systemSha256_16).toBe(sha256_16("the system prompt"));
+      }
+      expect(call.toolExecutions).toEqual([
+        { seq: 0, toolName: "probe_tool", input: { q: 1 }, resultCanonical: { answer: 42 } },
+      ]);
+      expect(call.result.text).toBe("reply");
+      expect(call.events).toBeNull();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("captures compact calls as prompt-shaped requests", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "s8a-record-test-"));
+    try {
+      const FakeLLM = makeFakeLlmClass(tempDir);
+      const handle = patchForRecord(FakeLLM as unknown as LlmClassLike);
+      await new FakeLLM().generate({ prompt: "summarize this", maxOutputTokens: 512, caller: "compact" });
+      handle.restore();
+      const req = handle.calls[0].request;
+      expect(req.shape).toBe("prompt");
+      if (req.shape === "prompt") {
+        expect(req.prompt).toBe("summarize this");
+        expect(req.promptSha256_16).toBe(sha256_16("summarize this"));
+        expect(req.maxOutputTokens).toBe(512);
+        expect(req.cacheKey).toBeNull();
+      }
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
