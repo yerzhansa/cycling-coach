@@ -46,7 +46,7 @@ export function stableStringify(value: unknown): string {
 const MEMORY_READ_KEY_PREFIXES = ["memory_read ", "memory_query ", "plan_load "] as const;
 
 export function evictMemoryReadEntries(cache: Map<string, unknown>): void {
-  for (const key of [...cache.keys()]) {
+  for (const key of cache.keys()) {
     if (MEMORY_READ_KEY_PREFIXES.some((prefix) => key.startsWith(prefix))) {
       cache.delete(key);
     }

@@ -22,10 +22,7 @@ export const MEMORY_READ_FLUSH_DESCRIPTION =
 const MEMORY_READ_CHAT_DESCRIPTION =
   "Read the FULL athlete memory, today's notes, and plan state — including sections not shown in your Athlete Context (e.g. notes, equipment, history). Your Athlete Context already contains the always-injected sections; do not call this to re-read them unless you wrote memory this turn.";
 
-export function createMemoryReadTool(
-  memory: MemoryStore,
-  description: string = MEMORY_READ_FLUSH_DESCRIPTION,
-) {
+export function createMemoryReadTool(memory: MemoryStore, description: string) {
   return tool({
     description,
     inputSchema: zodSchema(z.object({})),

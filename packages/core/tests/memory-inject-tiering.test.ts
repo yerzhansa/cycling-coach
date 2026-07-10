@@ -32,14 +32,11 @@ function seed(): Memory {
 describe("getContext inject-tiering: excluded sections drop, orphans keep injecting", () => {
   it("includes only inject-flagged sections plus orphans; drops spec'd-but-excluded", () => {
     const m = seed();
-    const context = m.getContext({
-      injectSections: ["person"],
-      knownSections: ["person", "notes"],
-    });
+    const context = m.getContext({ excludeSections: ["notes"] });
     // Injected section present.
     expect(context).toContain("## person");
     expect(context).toContain("Name: Sam");
-    // Spec'd-but-excluded (in knownSections, not in injectSections) is dropped.
+    // Spec'd-but-excluded (inject === false → in the exclude set) is dropped.
     expect(context).not.toContain("## notes");
     expect(context).not.toContain("dislikes the trainer");
     // Orphan (in neither list) is kept — no silent visibility loss.
@@ -50,17 +47,6 @@ describe("getContext inject-tiering: excluded sections drop, orphans keep inject
     expect(context).toContain("felt strong on the climb");
     expect(context).toContain("## Current Plan");
     expect(context).toContain("raise FTP");
-  });
-
-  it("distinguishes a spec'd-but-excluded section from a true orphan", () => {
-    const m = seed();
-    const context = m.getContext({
-      injectSections: ["person"],
-      knownSections: ["person", "notes"],
-    });
-    // `notes` is spec'd + excluded → gone; `random-legacy` is an orphan → stays.
-    expect(context).not.toContain("dislikes the trainer");
-    expect(context).toContain("stale orphan body");
   });
 
   it("returns the full store when called with no opts (memory_read path)", () => {

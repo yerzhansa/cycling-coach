@@ -84,16 +84,12 @@ export interface MemoryStore {
 
   /**
    * Composed string Core feeds into the system prompt's Athlete Context.
-   * With no `opts`, returns the full store (the memory_read path). When
-   * `injectSections` is provided, the Athlete Memory part carries only those
-   * sections plus orphans (section names absent from `knownSections`);
-   * spec'd-but-excluded sections are dropped. Callers passing `injectSections`
-   * MUST also pass `knownSections`.
+   * With no `opts`, returns the full store (the memory_read path). Sections
+   * named in `excludeSections` (spec'd with `inject === false`) are dropped
+   * from the Athlete Memory part; orphan sections are never in the exclude
+   * set and always inject.
    */
-  getContext(opts?: {
-    injectSections?: readonly string[];
-    knownSections?: readonly string[];
-  }): string;
+  getContext(opts?: { excludeSections?: readonly string[] }): string;
 }
 
 export interface MemorySnapshot {

@@ -17,26 +17,19 @@ const SECTION_SPLIT = /(?=^## )/m;
 const markerOf = (section: string) => `## ${section}`;
 const bodyOf = (block: string) => block.slice(block.indexOf("\n") + 1);
 
-// Keep only the sections that should render into the system prompt: those in
-// `injectSections`, plus orphans (any section header whose name is absent from
-// `knownSections` — the FULL effective-spec list). A section that is spec'd but
-// deliberately excluded (present in `knownSections`, absent from
-// `injectSections`, e.g. `notes`) is dropped; a legacy orphan is kept
-// (conservative — no silent visibility loss). Non-header preamble is preserved.
-function filterInjectedSections(
-  memory: string,
-  injectSections: readonly string[],
-  knownSections: readonly string[],
-): string {
-  const injectSet = new Set(injectSections);
-  const knownSet = new Set(knownSections);
+// Drop the sections named in `excludeSections` (spec'd sections whose
+// `inject === false`, e.g. `notes`) from the rendered memory. Orphans — section
+// headers no spec declares — are never in the exclude set, so they inject
+// (conservative: no silent visibility loss). Non-header preamble is preserved.
+function dropExcludedSections(memory: string, excludeSections: readonly string[]): string {
+  const excludeSet = new Set(excludeSections);
   return memory
     .split(SECTION_SPLIT)
     .filter((block) => {
       if (!block.startsWith("## ")) return true;
       const nl = block.indexOf("\n");
       const name = block.slice(3, nl === -1 ? undefined : nl);
-      return !(knownSet.has(name) && !injectSet.has(name));
+      return !excludeSet.has(name);
     })
     .join("");
 }
@@ -310,16 +303,13 @@ export class Memory implements MemoryStore {
     // Explicit sync point for post-compaction and future caching.
   }
 
-  getContext(opts?: {
-    injectSections?: readonly string[];
-    knownSections?: readonly string[];
-  }): string {
+  getContext(opts?: { excludeSections?: readonly string[] }): string {
     const parts: string[] = [];
 
     const memory = this.readMemory();
     if (memory) {
-      const injectable = opts?.injectSections
-        ? filterInjectedSections(memory, opts.injectSections, opts.knownSections ?? [])
+      const injectable = opts?.excludeSections?.length
+        ? dropExcludedSections(memory, opts.excludeSections)
         : memory;
       if (injectable) parts.push("## Athlete Memory\n" + injectable);
     }

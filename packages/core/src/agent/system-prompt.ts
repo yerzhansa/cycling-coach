@@ -1,19 +1,11 @@
 import type { SportPersona } from "../sport.js";
 import type { Memory } from "../memory/store.js";
 import { LAYER_3_PROMPT_RULES } from "../reference/validation/layer3-prompt.js";
-import {
-  ATHLETE_CONTEXT_FENCE_OPEN,
-  ATHLETE_CONTEXT_FENCE_CLOSE,
-  wrapAthleteContextFence,
-} from "./prompt-fence.js";
+import { wrapAthleteContextFence } from "./prompt-fence.js";
 
 // ============================================================================
 // SYSTEM PROMPT BUILDER
 // ============================================================================
-
-// The fence tokens live in prompt-fence.ts (the wrapper neutralizes them); they
-// are re-exported here so the public import surface stays stable.
-export { ATHLETE_CONTEXT_FENCE_OPEN, ATHLETE_CONTEXT_FENCE_CLOSE };
 
 // Hard cap on the rendered Athlete Context block, passed to the fence wrapper's
 // maxChars. Matches the reference codebase's production memory-injection cap
@@ -202,14 +194,12 @@ export function buildSystemPrompt(
   memory: Memory,
   tz: string = "UTC",
   degradeBlock?: string,
-  opts?: { injectSections?: readonly string[]; knownSections?: readonly string[] },
+  opts?: { excludeSections?: readonly string[] },
 ): string {
   const skillsContent = Object.entries(persona.skills)
     .map(([name, content]) => `## Skill: ${name}\n\n${content}`)
     .join("\n\n---\n\n");
-  const context = opts?.injectSections
-    ? memory.getContext({ injectSections: opts.injectSections, knownSections: opts.knownSections })
-    : memory.getContext();
+  const context = memory.getContext(opts);
 
   // Static rule blocks form the cached prefix; the volatile Athlete Context and
   // time zone render after the boundary marker so a memory write never
