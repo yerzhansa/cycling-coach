@@ -22,7 +22,6 @@ const FIVE_SECTION_SUMMARY = [
 function stubMemory() {
   let note = "";
   return {
-    readDailyNotes: () => note,
     appendDailyNote: (n: string) => {
       note = note ? `${note}\n${n}` : n;
     },
@@ -65,41 +64,25 @@ describe("formatCompactionNote", () => {
 });
 
 describe("persistCompactionSummary", () => {
-  it("writes on first call and returns true", () => {
-    const mem = stubMemory();
-    expect(persistCompactionSummary(mem, FIVE_SECTION_SUMMARY)).toBe(true);
-    expect(mem.get()).toContain(COMPACTION_SUMMARY_MARKER);
-    expect(mem.get()).toContain("#### Coach Stance");
-  });
-
-  it("skips an identical summary on the same day and returns false", () => {
+  it("writes the marker block with demoted headings", () => {
     const mem = stubMemory();
     persistCompactionSummary(mem, FIVE_SECTION_SUMMARY);
-    const before = mem.get();
-    expect(persistCompactionSummary(mem, FIVE_SECTION_SUMMARY)).toBe(false);
-    expect(mem.get()).toBe(before);
-    expect(mem.get().split(COMPACTION_SUMMARY_MARKER).length - 1).toBe(1);
+    expect(mem.get()).toContain(COMPACTION_SUMMARY_MARKER);
+    expect(mem.get()).toContain("#### Coach Stance");
   });
 
   it("appends a distinct summary as a second block", () => {
     const mem = stubMemory();
     persistCompactionSummary(mem, FIVE_SECTION_SUMMARY);
-    expect(persistCompactionSummary(mem, "## Athlete Profile\n- FTP now 260W")).toBe(true);
+    persistCompactionSummary(mem, "## Athlete Profile\n- FTP now 260W");
     expect(mem.get().split(COMPACTION_SUMMARY_MARKER).length - 1).toBe(2);
   });
 
   it("writes nothing for an empty or whitespace-only summary", () => {
     const mem = stubMemory();
-    expect(persistCompactionSummary(mem, "")).toBe(false);
-    expect(persistCompactionSummary(mem, "   \n  ")).toBe(false);
+    persistCompactionSummary(mem, "");
+    persistCompactionSummary(mem, "   \n  ");
     expect(mem.get()).toBe("");
-  });
-
-  it("dedupes correctly even when the body itself contains the marker line", () => {
-    const mem = stubMemory();
-    const withMarker = `## Athlete Profile\n- note mentioning ${COMPACTION_SUMMARY_MARKER} inline`;
-    expect(persistCompactionSummary(mem, withMarker)).toBe(true);
-    expect(persistCompactionSummary(mem, withMarker)).toBe(false);
   });
 
   it("demotes an adversarial H2 heading so it cannot masquerade as a memory section", () => {

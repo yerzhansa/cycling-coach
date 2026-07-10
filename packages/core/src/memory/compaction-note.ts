@@ -11,12 +11,9 @@ export function formatCompactionNote(summary: string): string {
 }
 
 export function persistCompactionSummary(
-  memory: Pick<MemoryStore, "appendDailyNote" | "readDailyNotes">,
+  memory: Pick<MemoryStore, "appendDailyNote">,
   summary: string,
-): boolean {
-  if (summary.trim() === "") return false;
-  const block = formatCompactionNote(summary);
-  if (memory.readDailyNotes().includes(block)) return false;
-  memory.appendDailyNote(block);
-  return true;
+): void {
+  if (summary.trim() === "") return;
+  memory.appendDailyNote(formatCompactionNote(summary));
 }
