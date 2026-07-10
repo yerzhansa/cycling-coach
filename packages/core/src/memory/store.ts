@@ -17,6 +17,30 @@ const SECTION_SPLIT = /(?=^## )/m;
 const markerOf = (section: string) => `## ${section}`;
 const bodyOf = (block: string) => block.slice(block.indexOf("\n") + 1);
 
+// Keep only the sections that should render into the system prompt: those in
+// `injectSections`, plus orphans (any section header whose name is absent from
+// `knownSections` — the FULL effective-spec list). A section that is spec'd but
+// deliberately excluded (present in `knownSections`, absent from
+// `injectSections`, e.g. `notes`) is dropped; a legacy orphan is kept
+// (conservative — no silent visibility loss). Non-header preamble is preserved.
+function filterInjectedSections(
+  memory: string,
+  injectSections: readonly string[],
+  knownSections: readonly string[],
+): string {
+  const injectSet = new Set(injectSections);
+  const knownSet = new Set(knownSections);
+  return memory
+    .split(SECTION_SPLIT)
+    .filter((block) => {
+      if (!block.startsWith("## ")) return true;
+      const nl = block.indexOf("\n");
+      const name = block.slice(3, nl === -1 ? undefined : nl);
+      return !(knownSet.has(name) && !injectSet.has(name));
+    })
+    .join("");
+}
+
 const UPDATED_STAMP_PREFIX = "_updated: ";
 
 export const SECTION_SOFT_WARN_CHARS = 4000;
@@ -286,12 +310,18 @@ export class Memory implements MemoryStore {
     // Explicit sync point for post-compaction and future caching.
   }
 
-  getContext(): string {
+  getContext(opts?: {
+    injectSections?: readonly string[];
+    knownSections?: readonly string[];
+  }): string {
     const parts: string[] = [];
 
     const memory = this.readMemory();
     if (memory) {
-      parts.push("## Athlete Memory\n" + memory);
+      const injectable = opts?.injectSections
+        ? filterInjectedSections(memory, opts.injectSections, opts.knownSections ?? [])
+        : memory;
+      if (injectable) parts.push("## Athlete Memory\n" + injectable);
     }
 
     const daily = this.readDailyNotes();

@@ -3,7 +3,7 @@ import type { ModelMessage } from "ai";
 import { z } from "zod";
 import type { MemorySectionSpec } from "../sport.js";
 import type { MemoryStore } from "../memory.js";
-import { createMemoryReadTool } from "./tools.js";
+import { createMemoryReadTool, MEMORY_READ_FLUSH_DESCRIPTION } from "./tools.js";
 import type { LLM } from "../llm.js";
 import type { GenerateResult } from "../llm-types.js";
 import type { TurnBudget } from "./turn-budget.js";
@@ -34,6 +34,14 @@ export function shouldRunMemoryFlush(params: {
 export const FLUSH_ZERO_WRITE_MIN_MESSAGES = 4;
 export const FLUSH_SHRINK_MIN_CHARS = 200;
 export const FLUSH_SHRINK_RATIO = 0.7;
+
+// Prompt-layer target size for always-injected sections, used only by the flush
+// budget nudge (below) and the render-time cap math — it emits no event and
+// gates no write. This is a DIFFERENT number and layer from the store-level
+// `SECTION_SOFT_WARN_CHARS` (4000) in store.ts: that 4000 is a store-hygiene
+// backstop that warns on EVERY section write; this 1500 is the target size for
+// the small always-injected sections so the injected Athlete Context stays lean.
+export const MEMORY_SECTION_BUDGET_CHARS = 1500;
 
 export interface MemoryFlushOutcome {
   writes: number;
@@ -83,6 +91,13 @@ Dating discipline for durable facts:
   append "(re-confirm)" so it can be verified with the athlete.
 - Never write "_updated:" lines yourself; the system stamps each section's
   update date automatically.
+
+Keep each section under ~${MEMORY_SECTION_BUDGET_CHARS} characters. When a
+section would grow past that, do NOT let it balloon: move the dated or episodic
+detail (specific workouts, day-by-day observations, one-off events) out to
+today's daily notes (memory_write with type "daily") or to the event ledger
+(ledger_append), and keep only the current durable facts in the section itself.
+Nothing is dropped — the moved detail stays reachable through memory_query.
 
 Note (transitional, post-migration): if \`cycling-profile\` contains weight,
 age, or available training days, move them to \`person\`. If \`cycling-history\`
@@ -220,7 +235,7 @@ export async function runMemoryFlush(params: {
     memory_write: createFlushMemoryWriteTool(params.memory, params.memorySections, () => {
       writes++;
     }),
-    memory_read: createMemoryReadTool(params.memory),
+    memory_read: createMemoryReadTool(params.memory, MEMORY_READ_FLUSH_DESCRIPTION),
     ledger_append: createLedgerAppendTool(params.memory, () => {
       ledgerAppends++;
     }),

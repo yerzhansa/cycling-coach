@@ -39,10 +39,12 @@ const memorySections: readonly MemorySectionSpec[] = [
     description:
       "FTP (watts), max HR, resting HR, W/kg ratio, experience level. " +
       "Body data lives in `person`; this is cycling-specific physiology.",
+    inject: true,
   },
   {
     name: "cycling-equipment",
     description: "Bikes, trainer, power meter, head unit, indoor setup",
+    inject: false,
   },
   {
     name: "cycling-history",
@@ -50,6 +52,7 @@ const memorySections: readonly MemorySectionSpec[] = [
       "Cycling-specific injuries (knee, lower back, fit issues), FTP test history, " +
       "recovery patterns from rides, ride-related sleep/HRV trends. " +
       "Chronic conditions belong in `medical-history`, not here.",
+    inject: false,
   },
 ];
 

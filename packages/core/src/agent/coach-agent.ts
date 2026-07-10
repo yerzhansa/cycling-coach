@@ -23,6 +23,7 @@ import { buildSystemPrompt, staticRuleBlocks } from "./system-prompt.js";
 import { computeAssembledHash, computeTemplateHash, sha256_16 } from "./prompt-lineage.js";
 import { withSessionLock } from "./session-lock.js";
 import { capToolResult, TOOL_RESULT_SHARE } from "./tool-result-cap.js";
+import { markUntrustedResult } from "./prompt-fence.js";
 import { memoizeReadTool } from "./read-memoizer.js";
 import { splitHistoryByBudget, makeSummaryMessage } from "./history-limit.js";
 import {
@@ -183,7 +184,17 @@ function backoffWithSentinelError(
 
 function committedWriteSummary(name: string, result: unknown): string | undefined {
   if (result === null || typeof result !== "object") return undefined;
-  const out = result as { created?: unknown; deleted?: unknown; saved?: unknown; phases?: unknown };
+  // Tool results flow through markUntrustedResult, which wraps the payload as
+  // { untrusted_data, data }. wrapWriteTool composes OUTSIDE that wrapper, so
+  // the ack it inspects is enveloped — unwrap to the data payload before reading
+  // the write-ack shape.
+  const envelope = result as { untrusted_data?: unknown; data?: unknown };
+  const payload =
+    typeof envelope.untrusted_data === "string" && envelope.data !== undefined
+      ? envelope.data
+      : result;
+  if (payload === null || typeof payload !== "object") return undefined;
+  const out = payload as { created?: unknown; deleted?: unknown; saved?: unknown; phases?: unknown };
   if (out.created === true) return "created a workout on the calendar";
   if (out.deleted === true) return "deleted a scheduled workout";
   if (out.saved === true && name === "memory_write") return "saved athlete memory";
@@ -209,6 +220,11 @@ export class CoachAgent {
   private tools: ToolSet;
   private systemPrompt: string;
   private tz: string;
+  // Section-name lists derived once from getEffectiveSections(sport): the full
+  // list drives AC2's orphan rule; the inject subset drives which sections
+  // render into the Athlete Context. A section injects unless inject === false.
+  private readonly knownSectionNames: readonly string[];
+  private readonly injectSectionNames: readonly string[];
   private archiveDeferred = new Set<string>();
   private lastFlushMessageCount = new Map<string, number>();
   // Per-chat provider usage anchor from the last successful turn: the real token
@@ -273,6 +289,10 @@ export class CoachAgent {
       tz: this.tz,
       resolvedCs: () => this.resolvedCsStore.getStore() ?? null,
     };
+    const sections = getEffectiveSections(sport);
+    this.knownSectionNames = sections.map((s) => s.name);
+    this.injectSectionNames = sections.filter((s) => s.inject !== false).map((s) => s.name);
+
     const registrations = sport.tools(coreDeps);
     const maxResultTokens = Math.floor(this.config.contextWindowTokens * TOOL_RESULT_SHARE);
     this.tools = Object.fromEntries(
@@ -280,7 +300,10 @@ export class CoachAgent {
         r.name,
         memoizeReadTool(
           r.name,
-          this.wrapWriteTool(r.name, capToolResult(r.tool, { maxResultTokens })),
+          this.wrapWriteTool(
+            r.name,
+            capToolResult(markUntrustedResult(r.tool), { maxResultTokens }),
+          ),
           () => this.readToolCacheStore.getStore(),
         ),
       ]),
@@ -520,6 +543,7 @@ export class CoachAgent {
         this.memory,
         this.tz,
         this.buildDegradeBlock(),
+        { injectSections: this.injectSectionNames, knownSections: this.knownSectionNames },
       );
 
       const budget = computeHistoryTokenBudget({
