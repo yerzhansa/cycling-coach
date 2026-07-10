@@ -1,8 +1,10 @@
 import { readFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { z } from "zod";
 import type { MemoryStore, MemoryWriteSource } from "../memory.js";
 import { todayInTZ } from "../agent/user-time.js";
 import { atomicWriteFileSync } from "../io/atomic-write-file-sync.js";
+import { safeReadJson } from "../io/safe-read-json.js";
 import { eachDateKeyInRange } from "../io/date-keys.js";
 import { appendJournalEntry } from "./journal.js";
 import { appendLedgerEvent, LEDGER_FILENAME, type LedgerEventInput } from "./event-ledger.js";
@@ -18,6 +20,13 @@ const bodyOf = (block: string) => block.slice(block.indexOf("\n") + 1);
 const UPDATED_STAMP_PREFIX = "_updated: ";
 
 export const SECTION_SOFT_WARN_CHARS = 4000;
+
+// Loose passthrough: any JSON object passes with all keys intact; any non-object
+// top level fails → null. Mirrors the plan_save tool's input schema so anything
+// the tool can save, loadPlan accepts. A typed schema would null the entire plan
+// when one hand-edited field is mistyped; the per-field guards in getContext
+// handle mistypes gracefully instead.
+const PlanFileSchema = z.record(z.string(), z.unknown());
 
 // Embedded H2 lines would match SECTION_SPLIT and fragment the file into
 // phantom sections; demote them one level so section CONTENT can no longer
@@ -205,14 +214,6 @@ export class Memory implements MemoryStore {
     return outcomes;
   }
 
-  /** @deprecated Use writeSection instead */
-  appendMemory(entry: string): void {
-    const path = join(this.memoryDir, "MEMORY.md");
-    const existing = this.readMemory();
-    const updated = existing ? `${existing}\n${entry}` : entry;
-    atomicWriteFileSync(path, updated);
-  }
-
   // ── Daily notes ────────────────────────────────────────────────────────
 
   readDailyNotes(date?: string): string {
@@ -226,6 +227,12 @@ export class Memory implements MemoryStore {
     const d = date ?? todayInTZ(this.tz);
     const path = join(this.memoryDir, `${d}.md`);
     const existing = this.readDailyNotes(d);
+    if (existing && `\n${existing}\n`.includes(`\n${note}\n`)) {
+      console.warn(
+        JSON.stringify({ event: "daily_note_duplicate_skipped", date: d, noteChars: note.length }),
+      );
+      return;
+    }
     const updated = existing ? `${existing}\n${note}` : note;
     atomicWriteFileSync(path, updated);
   }
@@ -266,9 +273,10 @@ export class Memory implements MemoryStore {
   }
 
   loadPlan(): unknown | null {
-    const path = join(this.plansDir, "current-plan.json");
-    if (!existsSync(path)) return null;
-    return JSON.parse(readFileSync(path, "utf-8"));
+    return safeReadJson<Record<string, unknown>>(
+      join(this.plansDir, "current-plan.json"),
+      PlanFileSchema,
+    );
   }
 
   // ── Full context for system prompt ─────────────────────────────────────
@@ -292,16 +300,16 @@ export class Memory implements MemoryStore {
     }
 
     const plan = this.loadPlan();
-    if (plan) {
-      const p = plan as {
-        name?: string;
-        primaryGoal?: string;
-        totalWeeks?: number;
-        status?: string;
-      };
-      parts.push(
-        `## Current Plan\n- Name: ${p.name}\n- Goal: ${p.primaryGoal}\n- Duration: ${p.totalWeeks} weeks\n- Status: ${p.status}`,
-      );
+    if (plan !== null && typeof plan === "object") {
+      const p = plan as Record<string, unknown>;
+      const lines: string[] = [];
+      if (typeof p.name === "string") lines.push(`- Name: ${p.name}`);
+      if (typeof p.primaryGoal === "string") lines.push(`- Goal: ${p.primaryGoal}`);
+      if (typeof p.totalWeeks === "number" && Number.isFinite(p.totalWeeks)) {
+        lines.push(`- Duration: ${p.totalWeeks} weeks`);
+      }
+      if (typeof p.status === "string") lines.push(`- Status: ${p.status}`);
+      if (lines.length > 0) parts.push("## Current Plan\n" + lines.join("\n"));
     }
 
     return parts.join("\n\n");
