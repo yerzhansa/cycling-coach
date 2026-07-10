@@ -37,6 +37,8 @@ export interface MemorySectionSpec {
   name: string;
   /** Description shown to the LLM in section headers + memory_write tool docs. */
   description: string;
+  /** Always inject into the system prompt's Athlete Context. Omitted = true. */
+  inject?: boolean;
 }
 
 // ─── Tool registration (ADR-0004) ──────────────────────────────────────

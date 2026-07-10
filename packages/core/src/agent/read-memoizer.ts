@@ -38,6 +38,21 @@ export function stableStringify(value: unknown): string {
   return "{" + entries.join(",") + "}";
 }
 
+// The memory read tools serve snapshots of state that memory_write /
+// plan_save / build_plan_skeleton mutate mid-turn. After such a write commits,
+// their cached entries are stale — and the chat memory_read description
+// explicitly invites a re-read after a same-turn write — so the write boundary
+// evicts them rather than serving the pre-write snapshot as fresh.
+const MEMORY_READ_KEY_PREFIXES = ["memory_read ", "memory_query ", "plan_load "] as const;
+
+export function evictMemoryReadEntries(cache: Map<string, unknown>): void {
+  for (const key of cache.keys()) {
+    if (MEMORY_READ_KEY_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      cache.delete(key);
+    }
+  }
+}
+
 export function memoizeKey(toolName: string, args: unknown): string {
   // Used only as an in-memory Map key for the per-turn cache, so the raw
   // string is its own collision-free key — no hashing needed. The " "

@@ -8,6 +8,7 @@ import {
   runMemoryFlush,
   FLUSH_ZERO_WRITE_MIN_MESSAGES,
   FLUSH_SHRINK_MIN_CHARS,
+  MEMORY_SECTION_BUDGET_CHARS,
 } from "../src/agent/memory-flush.js";
 import { _resetOrphanWarnCacheForTesting } from "../src/memory/orphan-sections.js";
 import type { MemorySectionSpec } from "../src/sport.js";
@@ -259,6 +260,26 @@ describe("runMemoryFlush outcome detection", () => {
     const orphan = eventsNamed("memory_orphan_sections");
     expect(orphan).toHaveLength(1);
     expect(orphan[0].names).toEqual(["random-legacy"]);
+  });
+
+  it("flush toolset's memory_read carries the read-role description, not the chat nudge", async () => {
+    const memory = new Memory(dataDir);
+    const llm = createFakeLLM([""]);
+    await runMemoryFlush({ llm, messages: TRIVIAL, memory, memorySections: SECTIONS });
+    const tools = llm.capturedOpts[0].tools as ToolSet;
+    const desc = (tools.memory_read as { description?: string }).description ?? "";
+    expect(desc).toContain("read first to carry existing facts forward");
+    expect(desc).not.toContain("do not call this to re-read");
+  });
+
+  it("flush user prompt carries the section-budget nudge with the budget value", async () => {
+    const memory = new Memory(dataDir);
+    const llm = createFakeLLM([""]);
+    await runMemoryFlush({ llm, messages: TRIVIAL, memory, memorySections: SECTIONS });
+    const messages = llm.capturedOpts[0].messages ?? [];
+    const flushPrompt = String(messages[messages.length - 1]?.content ?? "");
+    expect(flushPrompt).toContain(`under ~${MEMORY_SECTION_BUDGET_CHARS} characters`);
+    expect(flushPrompt).toContain("do NOT let it balloon");
   });
 
   it("an LLM error still propagates and emits no detection events", async () => {

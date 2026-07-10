@@ -17,6 +17,23 @@ const SECTION_SPLIT = /(?=^## )/m;
 const markerOf = (section: string) => `## ${section}`;
 const bodyOf = (block: string) => block.slice(block.indexOf("\n") + 1);
 
+// Drop the sections named in `excludeSections` (spec'd sections whose
+// `inject === false`, e.g. `notes`) from the rendered memory. Orphans — section
+// headers no spec declares — are never in the exclude set, so they inject
+// (conservative: no silent visibility loss). Non-header preamble is preserved.
+function dropExcludedSections(memory: string, excludeSections: readonly string[]): string {
+  const excludeSet = new Set(excludeSections);
+  return memory
+    .split(SECTION_SPLIT)
+    .filter((block) => {
+      if (!block.startsWith("## ")) return true;
+      const nl = block.indexOf("\n");
+      const name = block.slice(3, nl === -1 ? undefined : nl);
+      return !excludeSet.has(name);
+    })
+    .join("");
+}
+
 const UPDATED_STAMP_PREFIX = "_updated: ";
 
 export const SECTION_SOFT_WARN_CHARS = 4000;
@@ -286,12 +303,15 @@ export class Memory implements MemoryStore {
     // Explicit sync point for post-compaction and future caching.
   }
 
-  getContext(): string {
+  getContext(opts?: { excludeSections?: readonly string[] }): string {
     const parts: string[] = [];
 
     const memory = this.readMemory();
     if (memory) {
-      parts.push("## Athlete Memory\n" + memory);
+      const injectable = opts?.excludeSections?.length
+        ? dropExcludedSections(memory, opts.excludeSections)
+        : memory;
+      if (injectable) parts.push("## Athlete Memory\n" + injectable);
     }
 
     const daily = this.readDailyNotes();

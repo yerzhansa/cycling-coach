@@ -2,11 +2,13 @@ import { describe, it, expect } from "vitest";
 import {
   buildSystemPrompt,
   staticRuleBlocks,
-  ATHLETE_CONTEXT_FENCE_OPEN,
-  ATHLETE_CONTEXT_FENCE_CLOSE,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
   LAYER_3_GROUNDING_ENABLED,
 } from "../src/agent/system-prompt.js";
+import {
+  ATHLETE_CONTEXT_FENCE_OPEN,
+  ATHLETE_CONTEXT_FENCE_CLOSE,
+} from "../src/agent/prompt-fence.js";
 import type { SportPersona } from "../src/sport.js";
 import type { Memory } from "../src/memory/store.js";
 

@@ -23,7 +23,8 @@ import { buildSystemPrompt, staticRuleBlocks } from "./system-prompt.js";
 import { computeAssembledHash, computeTemplateHash, sha256_16 } from "./prompt-lineage.js";
 import { withSessionLock } from "./session-lock.js";
 import { capToolResult, TOOL_RESULT_SHARE } from "./tool-result-cap.js";
-import { memoizeReadTool } from "./read-memoizer.js";
+import { markUntrustedResult } from "./prompt-fence.js";
+import { memoizeReadTool, evictMemoryReadEntries } from "./read-memoizer.js";
 import { splitHistoryByBudget, makeSummaryMessage } from "./history-limit.js";
 import {
   shouldCompact,
@@ -84,6 +85,19 @@ const REPLAY_UNSAFE_TOOL_NAMES = new Set([
   // plan_save — so a retry must not replay it. Recognized in committedWriteSummary.
   "build_plan_skeleton",
 ]);
+
+// The subset of write tools that mutate the state behind the memoized memory
+// read tools (memory_read / memory_query / plan_load); their execution evicts
+// those cache entries so a same-turn re-read sees the write.
+const MEMORY_MUTATING_TOOL_NAMES = new Set(["memory_write", "plan_save", "build_plan_skeleton"]);
+// Eviction runs inside wrapWriteTool, which early-returns for tools outside
+// REPLAY_UNSAFE_TOOL_NAMES — so a memory mutator outside that set would never
+// evict. Assert the subset relation at module load so the gap can't open silently.
+for (const name of MEMORY_MUTATING_TOOL_NAMES) {
+  if (!REPLAY_UNSAFE_TOOL_NAMES.has(name)) {
+    throw new Error(`memory-mutating tool "${name}" must be in REPLAY_UNSAFE_TOOL_NAMES`);
+  }
+}
 
 // A turn that spent its whole step budget on tool calls (or hit the output-token
 // cap) and never emitted final text. Kept a single named predicate so the future
@@ -182,6 +196,8 @@ function backoffWithSentinelError(
 }
 
 function committedWriteSummary(name: string, result: unknown): string | undefined {
+  // wrapWriteTool composes innermost (inside markUntrustedResult and the cap),
+  // so the ack inspected here is the tool's raw result.
   if (result === null || typeof result !== "object") return undefined;
   const out = result as { created?: unknown; deleted?: unknown; saved?: unknown; phases?: unknown };
   if (out.created === true) return "created a workout on the calendar";
@@ -209,6 +225,10 @@ export class CoachAgent {
   private tools: ToolSet;
   private systemPrompt: string;
   private tz: string;
+  // Derived once from getEffectiveSections(sport): the spec'd sections with
+  // inject === false, dropped from the Athlete Context. Orphan sections are
+  // never in this list, so they always inject.
+  private readonly excludedSectionNames: readonly string[];
   private archiveDeferred = new Set<string>();
   private lastFlushMessageCount = new Map<string, number>();
   // Per-chat provider usage anchor from the last successful turn: the real token
@@ -273,6 +293,9 @@ export class CoachAgent {
       tz: this.tz,
       resolvedCs: () => this.resolvedCsStore.getStore() ?? null,
     };
+    const sections = getEffectiveSections(sport);
+    this.excludedSectionNames = sections.filter((s) => s.inject === false).map((s) => s.name);
+
     const registrations = sport.tools(coreDeps);
     const maxResultTokens = Math.floor(this.config.contextWindowTokens * TOOL_RESULT_SHARE);
     this.tools = Object.fromEntries(
@@ -280,7 +303,9 @@ export class CoachAgent {
         r.name,
         memoizeReadTool(
           r.name,
-          this.wrapWriteTool(r.name, capToolResult(r.tool, { maxResultTokens })),
+          capToolResult(markUntrustedResult(this.wrapWriteTool(r.name, r.tool)), {
+            maxResultTokens,
+          }),
           () => this.readToolCacheStore.getStore(),
         ),
       ]),
@@ -293,6 +318,8 @@ export class CoachAgent {
   // tool executes — at the execution boundary, not from the generate result,
   // because result.toolCalls carries only the last agentic step and would miss
   // a write committed on an earlier step. Non-write tools pass through untouched.
+  // Composed innermost so it inspects the raw ack (before the untrusted-data
+  // envelope and the size cap can reshape it).
   private wrapWriteTool(name: string, tool: Tool): Tool {
     if (!REPLAY_UNSAFE_TOOL_NAMES.has(name)) return tool;
     const inner = tool.execute;
@@ -306,6 +333,13 @@ export class CoachAgent {
         if (record !== undefined && summary !== undefined) {
           record.writesCommitted++;
           record.lastWriteSummary = summary;
+        }
+        // Evict unconditionally (not just on a recognized summary): the write
+        // may have committed even when its result shape wasn't recognized, and
+        // a spurious eviction only costs one re-read.
+        if (MEMORY_MUTATING_TOOL_NAMES.has(name)) {
+          const cache = this.readToolCacheStore.getStore();
+          if (cache !== undefined) evictMemoryReadEntries(cache);
         }
         return result;
       },
@@ -520,6 +554,7 @@ export class CoachAgent {
         this.memory,
         this.tz,
         this.buildDegradeBlock(),
+        { excludeSections: this.excludedSectionNames },
       );
 
       const budget = computeHistoryTokenBudget({

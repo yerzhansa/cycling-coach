@@ -82,8 +82,14 @@ export interface MemoryStore {
   /** Sync point invoked after compaction or memory flush. */
   reload(): void;
 
-  /** Composed string Core feeds into the system prompt's Athlete Context. */
-  getContext(): string;
+  /**
+   * Composed string Core feeds into the system prompt's Athlete Context.
+   * With no `opts`, returns the full store (the memory_read path). Sections
+   * named in `excludeSections` (spec'd with `inject === false`) are dropped
+   * from the Athlete Memory part; orphan sections are never in the exclude
+   * set and always inject.
+   */
+  getContext(opts?: { excludeSections?: readonly string[] }): string;
 }
 
 export interface MemorySnapshot {

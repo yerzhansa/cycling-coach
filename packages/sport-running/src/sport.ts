@@ -38,16 +38,19 @@ const memorySections: readonly MemorySectionSpec[] = [
     description:
       "Critical speed (CS), threshold pace, max HR, resting HR, experience level. " +
       "Body data lives in `person`; this is running-specific physiology.",
+    inject: true,
   },
   {
     name: "running-equipment",
     description: "Shoes (model, mileage), GPS watch, treadmill, racing flats",
+    inject: false,
   },
   {
     name: "running-history",
     description:
       "Running-specific injuries (shin splints, IT band, plantar, calf, Achilles), CS/threshold " +
       "test history, recovery patterns from runs. Chronic conditions belong in `medical-history`, not here.",
+    inject: false,
   },
 ];
 

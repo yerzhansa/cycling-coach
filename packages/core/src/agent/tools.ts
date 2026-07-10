@@ -14,9 +14,17 @@ function buildMemoryWriteDescription(sections: readonly MemorySectionSpec[]): st
   );
 }
 
-export function createMemoryReadTool(memory: MemoryStore) {
+// Default is the flush-safe read-role copy; the chat toolset overrides it with a
+// dedupe nudge (the always-injected sections are already in the Athlete Context).
+export const MEMORY_READ_FLUSH_DESCRIPTION =
+  "Read current athlete memory before writing — sections are replaced whole, so read first to carry existing facts forward.";
+
+const MEMORY_READ_CHAT_DESCRIPTION =
+  "Read the FULL athlete memory, today's notes, and plan state — including sections not shown in your Athlete Context (e.g. notes, equipment, history). Your Athlete Context already contains the always-injected sections; do not call this to re-read them unless you wrote memory this turn.";
+
+export function createMemoryReadTool(memory: MemoryStore, description: string) {
   return tool({
-    description: "Read long-term athlete memory, today's notes, and current plan state",
+    description,
     inputSchema: zodSchema(z.object({})),
     execute: async () => memory.getContext() || "No athlete data stored yet.",
   });
@@ -116,7 +124,7 @@ export function createMemoryTools(
   }
   const sectionNames = sections.map((s) => s.name) as [string, ...string[]];
   return {
-    memory_read: createMemoryReadTool(memory),
+    memory_read: createMemoryReadTool(memory, MEMORY_READ_CHAT_DESCRIPTION),
     memory_query: createMemoryQueryTool(memory),
 
     memory_write: tool({
