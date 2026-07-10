@@ -1,3 +1,7 @@
+// trademark-lint:skip-file — this fixture-arbitrary helper names the forbidden
+// tokens in a comment describing realistic intervals.icu magnitude ranges; the
+// tokens are documentation of the value ranges, never new vocabulary. A whole-
+// file skip is the only mechanism (findHitsInTsFile honors skip-file only).
 // fc.option discipline: every `.optional()` schema field uses
 // `fc.option(arbitraryValue, { nil: undefined })`. This produces present-
 // key-with-`undefined`-value, NOT absent-key. Metric authors MUST use

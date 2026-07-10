@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { findTrademarkHits, type TrademarkHit } from "./check-trademarks.js";
+import { findTrademarkHits, main, type TrademarkHit } from "./check-trademarks.js";
 import { collectFiles } from "./lint-fs.js";
 
 let tempDir: string;
@@ -220,5 +220,24 @@ describe("findTrademarkHits — file selection", () => {
     const b = write("b.md", `Token: TSS\n`);
     const hits = findTrademarkHits([a, b]);
     expect(hits.map((h: TrademarkHit) => h.token).sort()).toEqual(["CTL", "TSS"]);
+  });
+});
+
+describe("main — wholesale package scope", () => {
+  it("catches a forbidden token under a packages/<x>/src/ path", () => {
+    write("packages/widget/src/label.ts", `export const label = "Athlete CTL trend";\n`);
+    const orig = console.error;
+    console.error = () => {};
+    try {
+      expect(main([join(tempDir, "packages")])).toBe(1);
+    } finally {
+      console.error = orig;
+    }
+  });
+
+  it("excludes CHANGELOG.md from the default scope even alongside scanned files", () => {
+    write("packages/widget/src/ok.ts", `export const tip = "Fitness rising";\n`);
+    write("packages/widget/CHANGELOG.md", `# Changelog\n\n- historical CTL / TSS release entry.\n`);
+    expect(main([join(tempDir, "packages")])).toBe(0);
   });
 });

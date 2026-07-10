@@ -2,7 +2,7 @@ import { parseArgs } from "node:util";
 import { createInterface as createReadlineInterface } from "node:readline";
 import { writeSync } from "node:fs";
 import type { Sport } from "./sport.js";
-import type { BinaryConfig } from "./binary.js";
+import { type BinaryConfig, binaryEnvVar } from "./binary.js";
 import type { Memory } from "./memory/store.js";
 import { CONFIG_DIR, envInt } from "./config.js";
 import { appendUsageLine } from "./usage-ledger.js";
@@ -58,7 +58,7 @@ function parseCommand(binary: BinaryConfig): { command: string | null; positiona
 // Readline-based confirmation for startup capture: renders a multi-line prompt
 // to make the bot username visually prominent, parses with decline-on-ambiguous
 // semantics, declines cleanly on SIGINT, and times out after
-// CYCLING_COACH_CAPTURE_CONFIRM_TIMEOUT_MS (default 5 min).
+// <BINARY>_CAPTURE_CONFIRM_TIMEOUT_MS (default 5 min).
 
 interface MakeReadlineConfirmOpts {
   timeoutMs: number;
@@ -145,8 +145,9 @@ async function runStartupCapture(
       `(Press Ctrl+C to skip — you can run \`${binary.binaryName} add-sender <id>\` later.)\n`,
   );
   const { captureAndPersistOperator } = await import("./channels/operator-capture.js");
-  const captureTimeoutMs = envInt("CYCLING_COACH_SETUP_CAPTURE_TIMEOUT_MS") ?? 60_000;
-  const confirmTimeoutMs = envInt("CYCLING_COACH_CAPTURE_CONFIRM_TIMEOUT_MS") ?? 300_000;
+  const captureTimeoutMs = envInt(binaryEnvVar(binary.binaryName, "SETUP_CAPTURE_TIMEOUT_MS")) ?? 60_000;
+  const confirmTimeoutMs =
+    envInt(binaryEnvVar(binary.binaryName, "CAPTURE_CONFIRM_TIMEOUT_MS")) ?? 300_000;
   const result = await captureAndPersistOperator({
     botToken,
     binary,
@@ -423,7 +424,7 @@ export async function runBinary(
     process.once("SIGTERM", onSignal);
     process.once("SIGINT", onSignal);
 
-    if (!process.env.CYCLING_COACH_NO_UPDATE_CHECK) {
+    if (!process.env[binaryEnvVar(binary.binaryName, "NO_UPDATE_CHECK")]) {
       notifyUpdate(bot, config.dataDir, binary).catch(() => {});
       // A long-running deployment would otherwise never learn about a new
       // release until it restarts; notifyUpdate dedupes per version so the

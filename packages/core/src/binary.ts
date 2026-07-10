@@ -20,3 +20,12 @@ export interface BinaryConfig {
   /** Env var name for data-dir override, e.g. "CYCLING_COACH_HOME". */
   homeEnvVar: string;
 }
+
+/**
+ * Derive a per-binary env-var name: "cycling-coach" + "NO_UPDATE_CHECK"
+ * -> "CYCLING_COACH_NO_UPDATE_CHECK". Same derivation getCoachHome uses for
+ * the `_HOME` override, so one binary's operators learn one prefix.
+ */
+export function binaryEnvVar(binaryName: string, suffix: string): string {
+  return `${binaryName.toUpperCase().replace(/-/g, "_")}_${suffix}`;
+}

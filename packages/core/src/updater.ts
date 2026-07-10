@@ -3,6 +3,7 @@ import { execSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { join } from "node:path";
+import { binaryEnvVar } from "./binary.js";
 import { enumerateTelegramSessions } from "./channels/telegram-sessions.js";
 
 export interface UpdateInfo {
@@ -14,8 +15,11 @@ export interface UpdateInfo {
 export const MANAGED_DEPLOY_UPDATE_NOTICE =
   "This deployment updates through its container image. If Railway image auto-updates are enabled, Railway redeploys the latest GHCR image during the configured maintenance window; otherwise redeploy the service from the latest image in Railway.";
 
-export function isManagedDeploy(env: Record<string, string | undefined> = process.env): boolean {
-  const value = env.CYCLING_COACH_MANAGED_DEPLOY?.trim().toLowerCase();
+export function isManagedDeploy(
+  binaryName: string,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const value = env[binaryEnvVar(binaryName, "MANAGED_DEPLOY")]?.trim().toLowerCase();
   return value === "1" || value === "true";
 }
 
@@ -122,7 +126,7 @@ export function buildCheckUrl(binaryName: string, dataDir?: string): string {
   const params = new URLSearchParams({
     bin: binaryName,
     version: getCurrentVersion(binaryName),
-    channel: isManagedDeploy() ? "docker" : "npm",
+    channel: isManagedDeploy(binaryName) ? "docker" : "npm",
   });
   if (dataDir) params.set("instance", getInstanceId(dataDir));
   return `${PING_ENDPOINT}?${params}`;

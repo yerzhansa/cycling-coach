@@ -1,0 +1,23 @@
+{
+  "name": "@enduragent/kernel-node",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Node host adapter for the pure kernel — node:sqlite / node:fs / WebCrypto drivers behind the kernel's ports (scaffold, no content yet).",
+  "type": "module",
+  "files": ["dist"],
+  "exports": {},
+  "scripts": {
+    "build": "tsup",
+    "check": "tsc --noEmit",
+    "test": "echo 'no tests yet (scaffold)'"
+  },
+  "dependencies": {
+    "@enduragent/kernel": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "tsup": "^8.4.0",
+    "typescript": "^6.0.2"
+  },
+  "license": "MIT"
+}

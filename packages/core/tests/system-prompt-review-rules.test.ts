@@ -1,3 +1,9 @@
+// trademark-lint:skip-file — this test pins the presence of the prompt's
+// forbidden-token glossary block, so it necessarily names those tokens as
+// string literals. A whole-file skip is the ONLY mechanism that works here:
+// the trademark tool honors line-level skip-line/skip-next-line directives for
+// .md files only; findHitsInTsFile honors the whole-file skip-file directive
+// alone. The tokens are asserted here, never introduced as new vocabulary.
 import { describe, it, expect } from "vitest";
 import {
   buildSystemPrompt,
