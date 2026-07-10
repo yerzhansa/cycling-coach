@@ -77,8 +77,12 @@ export interface CoreDeps {
    * whereas this is a runtime value re-resolved every turn — the adapter seam
    * can't carry it. Running-specific for now; generalize to a discriminated
    * anchor (e.g. swim CSS, cycling auto-FTP) under the rule of three.
+   *
+   * Takes the tool-execution options object the calling tool's `execute`
+   * received — the per-turn context rides those options; pass them through
+   * opaquely.
    */
-  resolvedCs?: () => ResolvedCs | null;
+  resolvedCs?: (options: unknown) => ResolvedCs | null;
 }
 
 // ─── Sport: the plug-point ─────────────────────────────────────────────

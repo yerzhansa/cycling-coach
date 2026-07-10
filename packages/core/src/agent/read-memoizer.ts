@@ -47,12 +47,13 @@ export function memoizeKey(toolName: string, args: unknown): string {
 }
 
 // A per-turn cache, supplied either directly (the unit-test path) or via a
-// resolver that reads the running turn's cache from async-context storage (the
-// agent path) so concurrent turns never share or clear each other's entries. A
-// resolver returning undefined means "no turn in scope" — the read runs unmemoized.
+// resolver that reads the running turn's cache from the tool-execution options
+// (the agent path) so concurrent turns never share or clear each other's
+// entries. A resolver returning undefined means "no turn in scope" — the read
+// runs unmemoized.
 export type ReadCacheSource =
   | Map<string, unknown>
-  | (() => Map<string, unknown> | undefined);
+  | ((options: unknown) => Map<string, unknown> | undefined);
 
 export function memoizeReadTool(name: string, tool: Tool, cache: ReadCacheSource): Tool {
   if (!READ_ONLY_TOOL_NAMES.has(name)) return tool;
@@ -62,7 +63,7 @@ export function memoizeReadTool(name: string, tool: Tool, cache: ReadCacheSource
   return {
     ...tool,
     execute: async (input: unknown, options: unknown) => {
-      const store = resolveCache();
+      const store = resolveCache(options);
       const run = () => (inner as (i: unknown, o: unknown) => unknown)(input, options);
       if (store === undefined) return run();
       const key = memoizeKey(name, input);

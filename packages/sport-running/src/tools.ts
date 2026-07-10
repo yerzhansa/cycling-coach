@@ -42,7 +42,7 @@ export function createRunningTools(
   _memory: MemoryStore,
   intervals: IntervalsClient | null,
   _tz: string = "UTC",
-  resolvedCs?: () => ResolvedCs | null,
+  resolvedCs?: (options: unknown) => ResolvedCs | null,
 ) {
   return {
     calculate_zones: tool({
@@ -97,8 +97,8 @@ export function createRunningTools(
         paceUnits?: "MINS_KM" | "MINS_MILE" | null;
         lowerFractionOverride?: number;
         csSource?: "platform" | "athlete_manual";
-      }) => {
-        const resolved = resolvedCs?.() ?? null;
+      }, options: unknown) => {
+        const resolved = resolvedCs?.(options) ?? null;
         // Explicit value (already band-checked by the input schema) outranks the
         // synced anchor (band-checked by resolveRunningCs); whichever we use is
         // therefore guaranteed in [CS_SANITY_MPS.min, max].
@@ -176,12 +176,12 @@ export function createRunningTools(
                 ),
               }),
             ),
-            execute: async (input: { date: string; workout: RunningWorkoutInput }) => {
+            execute: async (input: { date: string; workout: RunningWorkoutInput }, options: unknown) => {
               // The serializer stays pure: pass OUR resolved CS in so distance steps
               // with relative targets can derive their planned time.
               let serialized: ReturnType<typeof serializeRunningWorkout>;
               try {
-                serialized = serializeRunningWorkout(input.workout, resolvedCs?.()?.criticalSpeedMps);
+                serialized = serializeRunningWorkout(input.workout, resolvedCs?.(options)?.criticalSpeedMps);
               } catch (err) {
                 if (err instanceof InvalidWorkoutError) {
                   return { error: "invalid_workout", details: err.message };

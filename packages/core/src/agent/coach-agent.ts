@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { stepCountIs } from "ai";
@@ -25,6 +24,7 @@ import { computeAssembledHash, computeTemplateHash, sha256_16 } from "./prompt-l
 import { withSessionLock } from "./session-lock.js";
 import { capToolResult, TOOL_RESULT_SHARE } from "./tool-result-cap.js";
 import { memoizeReadTool } from "./read-memoizer.js";
+import { createTurnContext, getTurnContext } from "./turn-context.js";
 import { splitHistoryByBudget, makeSummaryMessage } from "./history-limit.js";
 import {
   shouldCompact,
@@ -136,11 +136,6 @@ interface TurnOutcome {
   compactions: number;
 }
 
-interface TurnWriteRecord {
-  writesCommitted: number;
-  lastWriteSummary?: string;
-}
-
 function classifyError(err: unknown): string {
   // TurnBudgetExceededError crosses a dynamic-import boundary in tests, so match
   // on the structural name rather than instanceof.
@@ -199,27 +194,6 @@ export class CoachAgent {
   private tz: string;
   private archiveDeferred = new Set<string>();
   private lastFlushMessageCount = new Map<string, number>();
-  // A committed tool write makes the turn non-replayable: the retry loop re-sends
-  // the pre-turn messages, so a second generate could re-run the write. Keep it
-  // in async-local turn state so concurrent chats cannot reset each other.
-  private readonly turnWritesStore = new AsyncLocalStorage<TurnWriteRecord>();
-  // Per-turn read memoizer cache. Held in async-context storage (mirroring
-  // resolvedCsStore below) rather than a shared instance field so that
-  // concurrent fire-and-forget turns each memoize into their OWN map and can
-  // neither read nor clear another turn's entries; chat() runs every turn
-  // inside a fresh map. The wrapped read tools (built once at construction)
-  // resolve the running turn's map lazily through this store.
-  private readonly readToolCacheStore = new AsyncLocalStorage<Map<string, unknown>>();
-  // Resolved primary anchor (running CS) for the in-flight turn. Held in
-  // async-context storage rather than a shared instance field so that
-  // fire-and-forget turns running concurrently (different chats, or rapid
-  // same-chat sends whose synchronous prologues interleave before each turn's
-  // lock body resumes) each read their OWN anchor — a shared field would let a
-  // later turn's value clobber an in-flight turn's and compute zones from the
-  // wrong athlete's critical speed. The getter (read lazily by sport tools via
-  // the `coreDeps.resolvedCs` closure) resolves against the running turn's
-  // context, so the tool set and cached template hash still never rebuild.
-  private readonly resolvedCsStore = new AsyncLocalStorage<ResolvedCs | null>();
   // The prompt-template hash is derived from constructor-stable inputs (soul,
   // skills, tool schemas, model, and the compile-time rule-block set), so it is
   // computed once on first use and reused for every turn of the process.
@@ -266,7 +240,7 @@ export class CoachAgent {
       memory: this.memory,
       secrets,
       tz: this.tz,
-      resolvedCs: () => this.resolvedCsStore.getStore() ?? null,
+      resolvedCs: (options: unknown) => getTurnContext(options)?.resolvedCs ?? null,
     };
     const registrations = sport.tools(coreDeps);
     const maxResultTokens = Math.floor(this.config.contextWindowTokens * TOOL_RESULT_SHARE);
@@ -276,7 +250,7 @@ export class CoachAgent {
         memoizeReadTool(
           r.name,
           this.wrapWriteTool(r.name, capToolResult(r.tool, { maxResultTokens })),
-          () => this.readToolCacheStore.getStore(),
+          (options: unknown) => getTurnContext(options)?.readToolCache,
         ),
       ]),
     ) as ToolSet;
@@ -297,7 +271,7 @@ export class CoachAgent {
       execute: async (input: unknown, options: unknown) => {
         const result = await (inner as (i: unknown, o: unknown) => unknown)(input, options);
         const summary = committedWriteSummary(name, result);
-        const record = this.turnWritesStore.getStore();
+        const record = getTurnContext(options)?.turnWrites;
         if (record !== undefined && summary !== undefined) {
           record.writesCommitted++;
           record.lastWriteSummary = summary;
@@ -437,16 +411,13 @@ export class CoachAgent {
     userMessage: string,
     turn?: { resolvedCs?: ResolvedCs | null },
   ): Promise<string> {
-    // Per-turn anchor, read lazily by sport tools through the coreDeps getter.
-    // Scoped to this turn's async context (not a shared field) so concurrent
-    // fire-and-forget turns never clobber each other's anchor. null when the
-    // channel supplies nothing (CLI path, no sync data).
-    const resolvedCs = turn?.resolvedCs ?? null;
-    const turnWrites: TurnWriteRecord = { writesCommitted: 0 };
-    return this.resolvedCsStore.run(resolvedCs, () =>
-      this.readToolCacheStore.run(new Map<string, unknown>(), () =>
-        this.turnWritesStore.run(turnWrites, () =>
-          withSessionLock(chatId, async () => {
+    // One explicit context per turn, created synchronously before the session
+    // lock is queued so rapid same-chat sends can never share turn state. Tool
+    // wrappers and sport tools reach it through the tool-execution options, so
+    // the tool set and cached template hash never rebuild. resolvedCs is null
+    // when the channel supplies nothing (CLI path, no sync data).
+    const ctx = createTurnContext(turn?.resolvedCs ?? null);
+    return withSessionLock(chatId, async () => {
       const turnStart = Date.now();
       const turnId = randomUUID();
       let compactions = 0;
@@ -625,6 +596,7 @@ export class CoachAgent {
               stopWhen: stepCountIs(10),
               maxSteps: 10,
               caller: "chat",
+              context: ctx,
               cacheKey,
               // Cap this call by the turn's remaining wall-clock budget so a retry
               // after an early timeout inherits only the time the turn has left.
@@ -702,7 +674,7 @@ export class CoachAgent {
             if (err instanceof TurnBudgetExceededError) throw err;
             // A committed tool write makes this turn non-replayable: retrying
             // would re-send the pre-turn messages and could re-run the write.
-            const committedWrites = this.turnWritesStore.getStore() ?? turnWrites;
+            const committedWrites = ctx.turnWrites;
             if (committedWrites.writesCommitted > 0) {
               console.warn(
                 JSON.stringify({
@@ -855,10 +827,7 @@ export class CoachAgent {
         });
         throw terminalErr;
       }
-      }),
-        ),
-      ),
-    );
+    });
   }
 
   hasSession(chatId: string): boolean {

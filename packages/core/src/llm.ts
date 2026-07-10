@@ -145,6 +145,7 @@ export class LLM {
       maxOutputTokens: opts.maxOutputTokens,
       maxRetries: 0,
       abortSignal: opts.signal,
+      experimental_context: opts.context,
     };
     const result = opts.prompt !== undefined
       ? await generateText({ ...base, prompt: opts.prompt })

@@ -36,6 +36,7 @@ export interface GenerateOptsLike {
   maxOutputTokens?: number;
   cacheKey?: string;
   caller?: "chat" | "flush" | "compact";
+  context?: unknown;
   [key: string]: unknown;
 }
 
@@ -442,6 +443,7 @@ async function executeRecordedTools(
       liveResult = await tool.execute(exec.input, {
         toolCallId: `s8a-replay-${ordinal}-${k}`,
         messages: [],
+        experimental_context: opts.context,
       });
     } catch (err) {
       fail(
