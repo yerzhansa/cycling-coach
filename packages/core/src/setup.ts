@@ -2,7 +2,7 @@ import { intro, outro, select, text, password, confirm, isCancel, cancel, log } 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, chmodSync } from "node:fs";
 import { stringify as toYaml } from "yaml";
-import type { BinaryConfig } from "./binary.js";
+import { type BinaryConfig, binaryEnvVar } from "./binary.js";
 import {
   CONFIG_DIR,
   CONFIG_FILE,
@@ -577,7 +577,7 @@ async function runOperatorCaptureStep(
   log.info(
     `Setup will register your Telegram account as the primary operator. Send your bot the pairing code shown below from your Telegram app within 60 seconds.`,
   );
-  const timeoutMs = envInt("CYCLING_COACH_SETUP_CAPTURE_TIMEOUT_MS") ?? 60_000;
+  const timeoutMs = envInt(binaryEnvVar(binary.binaryName, "SETUP_CAPTURE_TIMEOUT_MS")) ?? 60_000;
   const result = await captureAndPersistOperator({
     botToken,
     binary,

@@ -1,0 +1,19 @@
+{
+  "name": "@enduragent/kernel",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Pure compute kernel — portable TypeScript, no host bindings; all IO through injected ports (scaffold, no content yet).",
+  "type": "module",
+  "files": ["dist"],
+  "exports": {},
+  "scripts": {
+    "build": "tsup",
+    "check": "tsc --noEmit",
+    "test": "echo 'no tests yet (scaffold)'"
+  },
+  "devDependencies": {
+    "tsup": "^8.4.0",
+    "typescript": "^6.0.2"
+  },
+  "license": "MIT"
+}

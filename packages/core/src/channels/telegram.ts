@@ -481,7 +481,7 @@ export function createTelegramBot(
   });
 
   bot.command("update", async (ctx) => {
-    if (isManagedDeploy()) {
+    if (isManagedDeploy(binary.binaryName)) {
       await ctx.reply(MANAGED_DEPLOY_UPDATE_NOTICE);
       return;
     }
@@ -979,7 +979,7 @@ export async function notifyUpdate(bot: Bot, dataDir: string, binary: BinaryConf
     const knownChats = getKnownTelegramChatIds(dataDir);
     const chatIds =
       allowed.dmPolicy === "open" ? knownChats : knownChats.filter((id) => allowSet.has(id));
-    const updateInstruction = isManagedDeploy()
+    const updateInstruction = isManagedDeploy(binary.binaryName)
       ? `Send /whatsnew to see what changed. ${MANAGED_DEPLOY_UPDATE_NOTICE}`
       : "Send /whatsnew to see what changed, /update to install.";
     const message = `Update available: ${info.current} → ${info.latest}\n${updateInstruction}\n\nHelp shape what Cycling Coach builds next: please take 3 minutes to answer this short survey so the mobile app, 24/7 bot, Railway template, and setup/payment options are prioritized around what would actually help you: https://tally.so/r/b5Dv4g\n\nWant the bot running 24/7 without keeping your computer on? Deploy the Railway template: https://railway.com/deploy/cycling-coach`;

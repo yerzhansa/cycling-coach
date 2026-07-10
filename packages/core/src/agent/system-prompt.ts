@@ -1,3 +1,8 @@
+// trademark-lint:skip-file — the prompt's glossary rule block quotes the
+// forbidden tokens as forbidden vocabulary (a substitution table); line-level
+// directives cannot be used inside a template literal without changing the
+// assembled prompt bytes. Compensating controls: the replay gate's needle
+// asserts and system-prompt-review-rules.test.ts pin the block's presence.
 import type { SportPersona } from "../sport.js";
 import type { Memory } from "../memory/store.js";
 import { LAYER_3_PROMPT_RULES } from "../reference/validation/layer3-prompt.js";

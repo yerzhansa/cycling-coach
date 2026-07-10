@@ -84,15 +84,21 @@ describe("buildSelfUpdateCommand", () => {
 
 describe("isManagedDeploy", () => {
   it("treats 1 and true as managed deploy signals", () => {
-    expect(isManagedDeploy({ CYCLING_COACH_MANAGED_DEPLOY: "1" })).toBe(true);
-    expect(isManagedDeploy({ CYCLING_COACH_MANAGED_DEPLOY: "true" })).toBe(true);
-    expect(isManagedDeploy({ CYCLING_COACH_MANAGED_DEPLOY: " TRUE " })).toBe(true);
+    expect(isManagedDeploy("cycling-coach", { CYCLING_COACH_MANAGED_DEPLOY: "1" })).toBe(true);
+    expect(isManagedDeploy("cycling-coach", { CYCLING_COACH_MANAGED_DEPLOY: "true" })).toBe(true);
+    expect(isManagedDeploy("cycling-coach", { CYCLING_COACH_MANAGED_DEPLOY: " TRUE " })).toBe(true);
   });
 
   it("treats absent or non-true values as unmanaged installs", () => {
-    expect(isManagedDeploy({})).toBe(false);
-    expect(isManagedDeploy({ CYCLING_COACH_MANAGED_DEPLOY: "0" })).toBe(false);
-    expect(isManagedDeploy({ CYCLING_COACH_MANAGED_DEPLOY: "false" })).toBe(false);
+    expect(isManagedDeploy("cycling-coach", {})).toBe(false);
+    expect(isManagedDeploy("cycling-coach", { CYCLING_COACH_MANAGED_DEPLOY: "0" })).toBe(false);
+    expect(isManagedDeploy("cycling-coach", { CYCLING_COACH_MANAGED_DEPLOY: "false" })).toBe(false);
+  });
+
+  it("reads the per-binary env name, not a hardcoded prefix", () => {
+    expect(isManagedDeploy("running-coach", { RUNNING_COACH_MANAGED_DEPLOY: "1" })).toBe(true);
+    // A different binary's prefix must not leak across — the leakage is fixed, not aliased.
+    expect(isManagedDeploy("running-coach", { CYCLING_COACH_MANAGED_DEPLOY: "1" })).toBe(false);
   });
 });
 
