@@ -2,6 +2,7 @@ import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import type { MemorySectionSpec } from "../sport.js";
 import type { MemoryStore } from "../memory.js";
+import { PlanFileSchema } from "../memory/store.js";
 import { isRealDateKey, parseDateKeyMs, MS_PER_DAY } from "../io/date-keys.js";
 import { truncateUtf16Safe } from "../text-truncate.js";
 
@@ -149,7 +150,7 @@ export function createMemoryTools(
       description: "Save or update the current training plan",
       inputSchema: zodSchema(
         z.object({
-          plan: z.record(z.string(), z.unknown()).describe("The training plan object to save"),
+          plan: PlanFileSchema.describe("The training plan object to save"),
         }),
       ),
       execute: async (input: { plan: Record<string, unknown> }) => {

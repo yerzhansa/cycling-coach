@@ -14,6 +14,8 @@ import {
   ensureDataDirSecure,
 } from "./channels/allowed-senders.js";
 import { classifyAgentError } from "./agent/error-classify.js";
+import { warnOrphanSections } from "./memory/orphan-sections.js";
+import { getEffectiveSections } from "./memory/effective-sections.js";
 
 // Shared error classifier output as the CLI's athlete-facing reply, so the CLI
 // and the Telegram channel speak the same error vocabulary and never dump a raw
@@ -348,6 +350,11 @@ export async function runBinary(
   // Reference's internal init sequence is pinned inside `bootstrapReference`
   // per ADR-0011 (two-phase scheduler — no timer until first runSync resolves).
   await runStartupHook(agent.getMemory(), hooks.onStartup);
+
+  // After the startup hook so the legacy-section migration has already renamed
+  // profile/equipment/health → sport-prefixed names; scanning earlier would
+  // warn on names the migration removes on the very next boot statement.
+  warnOrphanSections(agent.getMemory(), getEffectiveSections(sport));
 
   const { bootstrapReference } = await import("./reference/runtime.js");
   console.log("syncing training data from intervals.icu…");

@@ -202,7 +202,7 @@ describe("startup-capture predicate (T3)", () => {
     vi.doMock("../src/agent/coach-agent.js", () => ({
       CoachAgent: class {
         constructor() {}
-        getMemory() { return {} as never; }
+        getMemory() { return { readMemory: () => "" } as never; }
         chat() { return Promise.resolve("ok"); }
         hasSession() { return false; }
         resetSession() { return Promise.resolve(); }
@@ -360,7 +360,7 @@ describe("startup-capture predicate (T3)", () => {
     vi.doMock("../src/agent/coach-agent.js", () => ({
       CoachAgent: class {
         constructor() {}
-        getMemory() { return {} as never; }
+        getMemory() { return { readMemory: () => "" } as never; }
       },
     }));
     const startSpy = vi.fn(async () => undefined);

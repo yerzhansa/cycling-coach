@@ -8,6 +8,7 @@ import type { LLM } from "../llm.js";
 import type { GenerateResult } from "../llm-types.js";
 import type { TurnBudget } from "./turn-budget.js";
 import { LEDGER_EVENT_KINDS, LEDGER_DATE_PATTERN, type LedgerEventKind } from "../memory/event-ledger.js";
+import { warnOrphanSections } from "../memory/orphan-sections.js";
 import { todayInTZ } from "./user-time.js";
 
 // ============================================================================
@@ -243,6 +244,7 @@ export async function runMemoryFlush(params: {
 
   params.memory.reload();
   scanForStuckChronic(params.memory);
+  warnOrphanSections(params.memory, params.memorySections);
 
   const shrunkSections: MemoryFlushOutcome["shrunkSections"] = [];
   for (const spec of params.memorySections) {
