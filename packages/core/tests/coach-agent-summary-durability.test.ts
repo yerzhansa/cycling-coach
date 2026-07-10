@@ -167,7 +167,7 @@ describe("compaction summary durability into daily notes", () => {
     expect(markerCount(note)).toBe(1);
   });
 
-  it("AC4: a persisted summary survives a session reset and is found via the dated read path", async () => {
+  it("a persisted summary survives a session reset and is found via the dated read path", async () => {
     let n = 0;
     const complete = vi.fn(async () => {
       n++;
@@ -189,7 +189,7 @@ describe("compaction summary durability into daily notes", () => {
     expect(recovered[0].text).toContain("#### Coach Stance");
   });
 
-  it("AC5: a daily-note write failure is swallowed and never fails the turn", async () => {
+  it("a daily-note write failure is swallowed and never fails the turn", async () => {
     let n = 0;
     const complete = vi.fn(async () => {
       n++;
