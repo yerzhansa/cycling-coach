@@ -47,21 +47,21 @@ describe("orphan-section scan", () => {
   it("warns once with names-only payload for a section outside the effective set", () => {
     writeFileSync(memoryFile, "## goals\nFTP 280W\n\n## random-legacy\nsecret body text\n");
     const memory = new Memory(dataDir);
-    const orphans = warnOrphanSections(memory, GOALS_ONLY);
+    warnOrphanSections(memory, GOALS_ONLY);
 
-    expect(orphans).toEqual(["random-legacy"]);
     const events = orphanEvents();
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ names: ["random-legacy"], count: 1 });
+    expect(events[0]).toMatchObject({ names: ["random-legacy"] });
     expect(JSON.stringify(events[0])).not.toContain("secret body text");
   });
 
   it("is silent on a second scan with the same orphans", () => {
     writeFileSync(memoryFile, "## random-legacy\nbody\n");
     const memory = new Memory(dataDir);
-    expect(warnOrphanSections(memory, GOALS_ONLY)).toEqual(["random-legacy"]);
+    warnOrphanSections(memory, GOALS_ONLY);
+    expect(orphanEvents()).toHaveLength(1);
     warnSpy.mockClear();
-    expect(warnOrphanSections(memory, GOALS_ONLY)).toEqual([]);
+    warnOrphanSections(memory, GOALS_ONLY);
     expect(orphanEvents()).toHaveLength(0);
   });
 
@@ -73,7 +73,7 @@ describe("orphan-section scan", () => {
 
     writeFileSync(memoryFile, "## random-legacy\nbody\n\n## stray2\nmore\n");
     const memory2 = new Memory(dataDir);
-    expect(warnOrphanSections(memory2, GOALS_ONLY)).toEqual(["stray2"]);
+    warnOrphanSections(memory2, GOALS_ONLY);
     const events = orphanEvents();
     expect(events).toHaveLength(1);
     expect(events[0].names).toEqual(["stray2"]);
@@ -82,13 +82,13 @@ describe("orphan-section scan", () => {
   it("never warns when every section is in the effective set", () => {
     writeFileSync(memoryFile, "## goals\nFTP 280W\n");
     const memory = new Memory(dataDir);
-    expect(warnOrphanSections(memory, GOALS_ONLY)).toEqual([]);
+    warnOrphanSections(memory, GOALS_ONLY);
     expect(orphanEvents()).toHaveLength(0);
   });
 
   it("never warns on empty or missing memory", () => {
     const memory = new Memory(dataDir);
-    expect(warnOrphanSections(memory, GOALS_ONLY)).toEqual([]);
+    warnOrphanSections(memory, GOALS_ONLY);
     expect(orphanEvents()).toHaveLength(0);
   });
 
@@ -100,5 +100,20 @@ describe("orphan-section scan", () => {
     const events = orphanEvents();
     expect(events).toHaveLength(1);
     expect((events[0].names as string[])[0]).toHaveLength(40);
+  });
+
+  it("never splits a surrogate pair when truncating an emoji-bearing name", () => {
+    // "x" + 30 two-unit emoji = 61 UTF-16 units; a raw cut at 40 would land
+    // between the halves of the 20th emoji.
+    const longName = `x${"\u{1F6B4}".repeat(30)}`;
+    writeFileSync(memoryFile, `## ${longName}\nbody\n`);
+    const memory = new Memory(dataDir);
+    warnOrphanSections(memory, GOALS_ONLY);
+    const events = orphanEvents();
+    expect(events).toHaveLength(1);
+    const logged = (events[0].names as string[])[0];
+    expect(logged).toHaveLength(39);
+    const last = logged.charCodeAt(logged.length - 1);
+    expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
   });
 });

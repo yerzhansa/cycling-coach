@@ -1,5 +1,6 @@
 import type { MemoryStore } from "../memory.js";
 import type { MemorySectionSpec } from "../sport.js";
+import { truncateUtf16Safe } from "../text-truncate.js";
 import { createMemorySnapshot } from "./snapshot.js";
 
 const WARNED = new Set<string>();
@@ -15,22 +16,20 @@ const MAX_LOGGED_NAME_CHARS = 40;
 export function warnOrphanSections(
   memory: MemoryStore,
   effectiveSections: readonly MemorySectionSpec[],
-): string[] {
+): void {
   const effective = new Set(effectiveSections.map((s) => s.name));
   const orphans = createMemorySnapshot(memory)
     .listSections()
     .filter((name) => !effective.has(name) && !WARNED.has(name));
-  if (orphans.length === 0) return [];
+  if (orphans.length === 0) return;
   for (const name of orphans) WARNED.add(name);
   console.warn(
     JSON.stringify({
       event: "memory_orphan_sections",
-      names: orphans.map((n) => n.slice(0, MAX_LOGGED_NAME_CHARS)),
-      count: orphans.length,
+      names: orphans.map((n) => truncateUtf16Safe(n, MAX_LOGGED_NAME_CHARS)),
       hint: "These sections are injected every turn but never flushed/curated; rename into a declared section or delete.",
     }),
   );
-  return orphans;
 }
 
 /** Test-only escape hatch — reset the warn cache between unit tests. */
