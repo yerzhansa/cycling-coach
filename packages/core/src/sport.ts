@@ -9,7 +9,7 @@ import type { SecretsResolver } from "./secrets/types.js";
 
 // ─── Identity ──────────────────────────────────────────────────────────
 /** Closed literal union — adding a sport requires a Core bump. Intentional. */
-export type SportId = "cycling" | "running" | "duathlon";
+export type SportId = "cycling" | "running" | "duathlon" | "swimming" | "triathlon";
 
 /** intervals.icu activity-type filter values. */
 export type IntervalsActivityType =
@@ -21,7 +21,12 @@ export type IntervalsActivityType =
   // route to the cycling adapter and reconcile with its sport-family counts.
   | "MountainBikeRide"
   | "GravelRide"
-  | "EBikeRide";
+  | "EBikeRide"
+  // Reserved: no sport's intervalsActivityTypes declares these yet, so they
+  // stay inert until one does.
+  | "Swim"
+  | "OpenWaterSwim"
+  | "VirtualRun";
 
 // ─── Shared kernel ─────────────────────────────────────────────────────
 /** Every sport's profile schema must extend this. */
