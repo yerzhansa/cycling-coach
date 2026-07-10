@@ -9,10 +9,12 @@
  */
 import type { LatestJson } from "./schemas/latest.js";
 
-// intervals.icu running-family activity types. Kept to the set the running sport
-// declares (Run, TrailRun); VirtualRun is intentionally excluded — not in core's
-// IntervalsActivityType union this wave. Shared by the resolver and the step-5
-// gate (validation/checks/step5-cs-source.ts) so the two cannot diverge.
+// intervals.icu running-family activity types. Kept to the set the running
+// sport declares (Run, TrailRun); VirtualRun is deliberately excluded — no
+// running sport declares it, and adding it here would change which
+// sportSettings rows feed CS resolution. Shared by the resolver and the
+// step-5 gate (validation/checks/step5-cs-source.ts) so the two cannot
+// diverge.
 export const RUN_FAMILY_TYPES = new Set<string>(["Run", "TrailRun"]);
 
 // Hard-refusal CS band in m/s: a value outside is unit-confused or corrupt, not a
