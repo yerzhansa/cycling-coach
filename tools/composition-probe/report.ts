@@ -98,9 +98,11 @@ function computeModelMetrics(
 
   const mixingLines = lines.filter(isMixing);
   const rawM1Numerator = mixingLines.length;
-  const overturnRows = spotCheckRows.filter(
-    (r) => r.model === slug && r.verdict === "OVERTURN" && isMixing(byId.get(r.scenarioId) ?? ({} as TranscriptLine)),
-  );
+  const overturnRows = spotCheckRows.filter((r) => {
+    if (r.model !== slug || r.verdict !== "OVERTURN") return false;
+    const line = byId.get(r.scenarioId);
+    return line !== undefined && isMixing(line);
+  });
   const adjustedM1Numerator = Math.max(0, rawM1Numerator - overturnRows.length);
 
   const singleSportBleedIds = mixingLines.filter((l) => !isIntegrated(l.scenarioId)).map((l) => l.scenarioId);
@@ -234,6 +236,15 @@ export function renderReport(input: ReportInput): string {
   const allLines = Object.values(input.transcripts).flat();
   if (allLines.some((l) => l.error)) {
     throw new ReportRefusal("a transcript line carries an error field; re-run that model before reporting.");
+  }
+
+  for (const row of input.spotCheckRows) {
+    const modelLines = input.transcripts[row.model] ?? [];
+    if (!modelLines.some((l) => l.scenarioId === row.scenarioId)) {
+      throw new ReportRefusal(
+        `spot-check row references (${row.scenarioId}, ${row.model}) with no matching transcript line.`,
+      );
+    }
   }
 
   const models = FLOOR_MODELS.map((m) =>

@@ -16,6 +16,16 @@ export interface TokensJson {
 
 const COUNT_TOKENS_URL = "https://api.anthropic.com/v1/messages/count_tokens";
 
+export class CountTokensHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: string,
+  ) {
+    super(`count_tokens returned ${status}`);
+    this.name = "CountTokensHttpError";
+  }
+}
+
 async function countTokens(systemText: string, includeTools: boolean, apiKey: string): Promise<number> {
   const body = {
     model: TOKEN_COUNT_MODEL,
@@ -34,7 +44,7 @@ async function countTokens(systemText: string, includeTools: boolean, apiKey: st
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`count_tokens returned ${res.status}: ${text}`);
+    throw new CountTokensHttpError(res.status, text);
   }
   const json = (await res.json()) as { input_tokens: number };
   return json.input_tokens;
@@ -45,9 +55,20 @@ function gitSha(): string {
 }
 
 export async function runTokensPhase(dir: string, apiKey: string): Promise<number> {
-  const { block1, fullSystem } = buildMockPrompt();
-  const stablePrefixTokens = await countTokens(block1, true, apiKey);
-  const wholePromptTokens = await countTokens(fullSystem, true, apiKey);
+  let stablePrefixTokens: number;
+  let wholePromptTokens: number;
+  try {
+    const { block1, fullSystem } = buildMockPrompt();
+    stablePrefixTokens = await countTokens(block1, true, apiKey);
+    wholePromptTokens = await countTokens(fullSystem, true, apiKey);
+  } catch (err) {
+    if (err instanceof CountTokensHttpError) {
+      console.error(`tokens: count_tokens returned a non-2xx response (HTTP ${err.status}) — this is a STOP condition; not falling back to estimation. Response body:`);
+      console.error(err.body);
+      return 2;
+    }
+    throw err;
+  }
   const out: TokensJson = {
     method: "anthropic count_tokens",
     model: TOKEN_COUNT_MODEL,

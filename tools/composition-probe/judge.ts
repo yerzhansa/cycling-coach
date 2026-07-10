@@ -1,4 +1,6 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
@@ -68,7 +70,7 @@ export async function runJudgePass(transcriptFile: string, apiKey: string): Prom
   const { LLM } = await import("../../packages/core/src/llm.js");
   const llm = new LLM({
     llm: { provider: "anthropic", model: JUDGE_MODEL_ID, apiKey, baseUrl: undefined },
-    dataDir: fileURLToPath(new URL(".", import.meta.url)),
+    dataDir: mkdtempSync(join(tmpdir(), "probe-judge-")),
   } as unknown as import("../../packages/core/src/config.js").Config);
 
   const judgeItemsById = new Map(ALL_SCENARIOS.map((s) => [s.id, s.judgeItems ?? []]));

@@ -64,6 +64,11 @@ const SLUG0 = FLOOR_MODELS[0].slug;
 const SLUG1 = FLOOR_MODELS[1].slug;
 const SLUG2 = FLOOR_MODELS[2].slug;
 
+const SPOT_CHECK_HEADER = "| scenarioId | model | flagSource | verdict | reason |\n|---|---|---|---|---|\n";
+export const ABORT_SPOT_CHECK_MD =
+  SPOT_CHECK_HEADER + `| c2-01 | ${SLUG0} | needle | OVERTURN | conversational mention only |\n`;
+export const EMPTY_SPOT_CHECK_MD = SPOT_CHECK_HEADER;
+
 function forbiddenLine(scenarioId: string, slug: string): TranscriptLine {
   return makeLine({
     scenarioId,

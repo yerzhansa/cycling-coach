@@ -1,7 +1,6 @@
 // trademark-lint:skip-file — this module is the redaction substitution table:
 // it must name the forbidden tokens as its match sources, exactly as the
-// trademark linter's own source does. scan.ts imports REDACTION_RULES from here
-// so the token list has a single home.
+// trademark linter's own source does. The token list has a single home here.
 
 export interface RedactionRule {
   readonly source: string;

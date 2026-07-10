@@ -4,9 +4,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SYSTEM_PROMPT_CACHE_BOUNDARY, ATHLETE_CONTEXT_FENCE_OPEN } from "../../packages/core/src/agent/system-prompt.js";
+import { cacheTokenDetails } from "../../packages/core/src/usage-ledger.js";
 
 import {
   FLOOR_MODELS,
+  JUDGED_TURNS_PER_MODEL,
   PROBE_FROZEN_NOW_ISO,
   STEP_LIMIT,
 } from "./constants.js";
@@ -20,6 +22,8 @@ import { scanProbeOutputs } from "./scan.js";
 import { renderReport, parseSpotCheck, ReportRefusal } from "./report.js";
 import { ALL_SCENARIOS } from "./scenarios/index.js";
 import {
+  ABORT_SPOT_CHECK_MD,
+  EMPTY_SPOT_CHECK_MD,
   NEEDLE_CLEAN_TEXT,
   NEEDLE_FORBIDDEN_SCENARIO,
   NEEDLE_FORBIDDEN_TEXT,
@@ -108,8 +112,10 @@ function runDryRun(): number {
 
   // CHECK 5 — report renderer
   const scratch = mkdtempSync(join(tmpdir(), "probe-dryrun-"));
-  const abortReport = renderReport(abortReportInput());
-  const reworkReport = renderReport(reworkReportInput());
+  const abortRows = parseSpotCheck(ABORT_SPOT_CHECK_MD);
+  const reworkRows = parseSpotCheck(EMPTY_SPOT_CHECK_MD);
+  const abortReport = renderReport({ ...abortReportInput(), spotCheckRows: abortRows });
+  const reworkReport = renderReport({ ...reworkReportInput(), spotCheckRows: reworkRows });
   writeFileSync(join(scratch, "abort-report.md"), abortReport, "utf-8");
   writeFileSync(join(scratch, "rework-report.md"), reworkReport, "utf-8");
   const sectionsOk = ["## M1", "## M2", "## M3", "## M4", "## Verdict"].every((s) => abortReport.includes(s));
@@ -179,7 +185,7 @@ async function subjectLine(
       usage: {
         inputTokens: res.usage?.inputTokens,
         outputTokens: res.usage?.outputTokens,
-        cacheReadTokens: undefined,
+        cacheReadTokens: cacheTokenDetails(res.totalUsage)?.cacheReadTokens,
       },
       durationMs: Date.now() - start,
       needleHits,
@@ -309,6 +315,16 @@ function runReportPhase(): number {
 
   const transcripts: Record<string, TranscriptLine[]> = {};
   for (const m of FLOOR_MODELS) transcripts[m.slug] = readTranscript(dir, m.slug);
+
+  for (const m of FLOOR_MODELS) {
+    const count = transcripts[m.slug].length;
+    if (count !== JUDGED_TURNS_PER_MODEL) {
+      console.error(
+        `report: refused — transcript ${m.slug}.jsonl has ${count} judged turns, expected ${JUDGED_TURNS_PER_MODEL}; re-run --phase=run --model=${m.model} for this model.`,
+      );
+      return 2;
+    }
+  }
 
   const tokens = JSON.parse(readFileSync(join(dir, "tokens.json"), "utf-8"));
   try {
