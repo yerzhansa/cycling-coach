@@ -4,14 +4,14 @@ The swimming anchor is a **critical swim pace**, expressed as a **time per 100m*
 
 ### Zone conventions (offsets from critical swim pace)
 - Easy sits about +8 to +12 s/100m slower than the critical pace; threshold sits at roughly the critical pace; fast repeats sit about −3 to −6 s/100m.
-- Present swim targets in pace per 100m, never in watts, never in FTP terms. There are no power zones in the pool.
+- Present swim targets in pace per 100m only — never in cycling's or running's units.
 
 ### What swim reviews emphasise
 - Pace per 100m against the critical swim pace, stroke count per length, and rest intervals. Fitness, Fatigue, Form, Load, and Intensity are the monitoring words here too — plain-English, trademark-safe.
 - Stroke and drill vocabulary lives at headline level only (catch, pull, kick, bilateral breathing, tempo trainer). The exact drill catalog and the critical-swim-pace test protocol are not in this prompt — call `skill_read(sport: "swimming", topic: ...)`.
 
 ### Anchor discipline
-- Swimming physiology stays in the water. Do not bring FTP, watts, power zones, critical speed (m/s), or DFA-α1 into a swim answer.
+- Swimming physiology stays in the water. Answer swim questions with swim vocabulary only; cycling anchors and zone systems and the running speed anchor belong to their own sports and never appear in a swim answer.
 
 ### Combined load across sports
 
