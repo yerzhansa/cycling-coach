@@ -4,6 +4,7 @@ import type { ApiError, IntervalsClient } from "intervals-icu-api";
 import type { IntervalsActivityType } from "../sport.js";
 import { todayInTZ } from "./user-time.js";
 import { downsampleStreams } from "./stream-downsample.js";
+import { isCoachOwnedEvent } from "./event-provenance.js";
 
 function toTypedError(error: ApiError): { error: string; status?: number; message?: string } {
   return {
@@ -22,6 +23,9 @@ type IntervalsEventRuntime = {
   name?: string | null;
   movingTime?: number | null;
   icuTrainingLoad?: number | null;
+  category?: string | null;
+  tags?: string[] | null;
+  externalId?: string | null;
 };
 
 /**
@@ -127,8 +131,11 @@ export function createPureCoreIntervalsTools(
       description:
         "Delete a scheduled workout from the intervals.icu calendar by event ID. " +
         "ALWAYS call intervals_list_events first, show the athlete the list, and " +
-        "confirm which workout to delete before calling this. Past workouts (before " +
-        "today) are protected — the tool refuses without calling the server.",
+        "confirm which workout to delete before calling this. Only deletes workouts " +
+        "this coach created (provenance-marked). Races, notes, plans, athlete-added " +
+        "workouts, and pre-marker coach workouts are refused — tell the athlete to " +
+        "remove those directly on intervals.icu. Past workouts (before today) are " +
+        "protected — the tool refuses without calling the server.",
       inputSchema: zodSchema(
         z.object({
           eventId: z.number().int().describe("Event ID from intervals_list_events"),
@@ -138,6 +145,19 @@ export function createPureCoreIntervalsTools(
         const fetched = await intervals.events.get(input.eventId);
         if (!fetched.ok) return toTypedError(fetched.error);
         const event = fetched.value as unknown as IntervalsEventRuntime;
+        if (event.category !== "WORKOUT") {
+          return {
+            error: "not_a_workout",
+            details: `Event ${input.eventId} is category ${event.category ?? "unknown"}, not a scheduled workout. Races, notes, plans, and other calendar entries cannot be deleted by the coach.`,
+          };
+        }
+        if (!isCoachOwnedEvent(event)) {
+          return {
+            error: "not_coach_created",
+            details:
+              "This workout was not created by this coach (no provenance marker) — it may be athlete-added, from another app, or created before provenance markers shipped. It will not be deleted; the athlete can remove it directly on intervals.icu.",
+          };
+        }
         const today = todayInTZ(tz);
         const eventDate = event.startDateLocal.slice(0, 10);
         if (eventDate < today) {
@@ -192,27 +212,41 @@ export function createCoreToolsWithSportConfig(
       description:
         "List scheduled calendar workouts on intervals.icu for a date range. " +
         "Use this BEFORE deleting so you can show the athlete the list (id, date, name) " +
-        "and ask which one to delete. Filters to WORKOUT category only.",
+        "and ask which one to delete. Filters to WORKOUT category only. Each row carries " +
+        "a coachCreated flag; only coach-created workouts can be deleted with " +
+        "intervals_delete_workout. Pass coachCreatedOnly: true to return only " +
+        "coach-created events.",
       inputSchema: zodSchema(
         z.object({
           oldest: z.string().describe("Oldest date (YYYY-MM-DD)"),
           newest: z.string().optional().describe("Newest date (YYYY-MM-DD)"),
+          coachCreatedOnly: z
+            .boolean()
+            .optional()
+            .describe("Return only events created by this coach"),
         }),
       ),
-      execute: async (input: { oldest: string; newest?: string }) => {
+      execute: async (input: { oldest: string; newest?: string; coachCreatedOnly?: boolean }) => {
         const result = await intervals.events.list({
           oldest: input.oldest,
           newest: input.newest ?? undefined,
           category: ["WORKOUT"],
         });
         if (!result.ok) return toTypedError(result.error);
-        return (result.value as unknown as IntervalsEventRuntime[]).map((e) => ({
+        const projected = (result.value as unknown as IntervalsEventRuntime[]).map((e) => ({
           id: e.id,
           startDateLocal: e.startDateLocal,
           name: e.name,
           movingTime: e.movingTime,
           icuTrainingLoad: e.icuTrainingLoad,
+          category: e.category,
+          externalId: e.externalId,
+          tags: e.tags,
+          coachCreated: isCoachOwnedEvent(e),
         }));
+        return input.coachCreatedOnly === true
+          ? projected.filter((row) => row.coachCreated)
+          : projected;
       },
     }),
   };

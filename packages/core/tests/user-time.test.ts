@@ -14,6 +14,7 @@ import { Memory } from "../src/memory/store.js";
 import { buildSystemPrompt } from "../src/agent/system-prompt.js";
 import { resolveDailyResetAtMs } from "../src/agent/session-freshness.js";
 import { createPureCoreIntervalsTools } from "../src/agent/intervals-tools.js";
+import { COACH_EVENT_TAG } from "../src/agent/event-provenance.js";
 import type { IntervalsClient } from "intervals-icu-api";
 
 // ────────────────────────────────────────────────────────────────────────
@@ -175,7 +176,12 @@ function makeFakeIntervals(eventDateLocal: string): IntervalsClient {
     events: {
       get: async (_id: number) => ({
         ok: true,
-        value: { id: _id, startDateLocal: eventDateLocal },
+        value: {
+          id: _id,
+          startDateLocal: eventDateLocal,
+          category: "WORKOUT",
+          tags: [COACH_EVENT_TAG],
+        },
       }),
       delete: async (id: number) => {
         deleteCalls.push(id);
