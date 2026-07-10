@@ -5,6 +5,7 @@ import {
   READ_ONLY_TOOL_NAMES,
   stableStringify,
   memoizeKey,
+  evictMemoryReadEntries,
 } from "../src/agent/read-memoizer.js";
 
 const EXPECTED_NAMES = [
@@ -116,5 +117,37 @@ describe("stableStringify and memoizeKey", () => {
   it("preserves array order", () => {
     expect(stableStringify([1, 2, 3])).toBe("[1,2,3]");
     expect(memoizeKey("t", [1, 2])).not.toBe(memoizeKey("t", [2, 1]));
+  });
+});
+
+describe("evictMemoryReadEntries", () => {
+  it("removes memory read entries and leaves other reads cached", () => {
+    const cache = new Map<string, unknown>([
+      [memoizeKey("memory_read", {}), "stale-memory"],
+      [memoizeKey("memory_query", { from: "2020-01-01", to: "2020-01-31" }), "stale-query"],
+      [memoizeKey("plan_load", {}), "stale-plan"],
+      [memoizeKey("intervals_fetch_athlete", {}), "still-valid"],
+    ]);
+    evictMemoryReadEntries(cache);
+    expect(cache.size).toBe(1);
+    expect(cache.has(memoizeKey("intervals_fetch_athlete", {}))).toBe(true);
+  });
+
+  it("a memoized memory_read re-executes after eviction", async () => {
+    const cache = new Map<string, unknown>();
+    let calls = 0;
+    const tool = {
+      description: "d",
+      execute: async () => {
+        calls++;
+        return `snapshot-${calls}`;
+      },
+    } as unknown as Tool;
+    const memoized = memoizeReadTool("memory_read", tool, cache);
+    const exec = memoized.execute as (i: unknown, o: unknown) => Promise<unknown>;
+    expect(await exec({}, {})).toBe("snapshot-1");
+    expect(await exec({}, {})).toBe("snapshot-1");
+    evictMemoryReadEntries(cache);
+    expect(await exec({}, {})).toBe("snapshot-2");
   });
 });

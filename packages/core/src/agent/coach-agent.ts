@@ -24,7 +24,7 @@ import { computeAssembledHash, computeTemplateHash, sha256_16 } from "./prompt-l
 import { withSessionLock } from "./session-lock.js";
 import { capToolResult, TOOL_RESULT_SHARE } from "./tool-result-cap.js";
 import { markUntrustedResult } from "./prompt-fence.js";
-import { memoizeReadTool } from "./read-memoizer.js";
+import { memoizeReadTool, evictMemoryReadEntries } from "./read-memoizer.js";
 import { splitHistoryByBudget, makeSummaryMessage } from "./history-limit.js";
 import {
   shouldCompact,
@@ -85,6 +85,11 @@ const REPLAY_UNSAFE_TOOL_NAMES = new Set([
   // plan_save — so a retry must not replay it. Recognized in committedWriteSummary.
   "build_plan_skeleton",
 ]);
+
+// The subset of write tools that mutate the state behind the memoized memory
+// read tools (memory_read / memory_query / plan_load); their execution evicts
+// those cache entries so a same-turn re-read sees the write.
+const MEMORY_MUTATING_TOOL_NAMES = new Set(["memory_write", "plan_save", "build_plan_skeleton"]);
 
 // A turn that spent its whole step budget on tool calls (or hit the output-token
 // cap) and never emitted final text. Kept a single named predicate so the future
@@ -221,8 +226,9 @@ export class CoachAgent {
   private systemPrompt: string;
   private tz: string;
   // Section-name lists derived once from getEffectiveSections(sport): the full
-  // list drives AC2's orphan rule; the inject subset drives which sections
-  // render into the Athlete Context. A section injects unless inject === false.
+  // list decides orphanhood (sections it doesn't name still inject); the inject
+  // subset drives which declared sections render into the Athlete Context. A
+  // section injects unless inject === false.
   private readonly knownSectionNames: readonly string[];
   private readonly injectSectionNames: readonly string[];
   private archiveDeferred = new Set<string>();
@@ -329,6 +335,13 @@ export class CoachAgent {
         if (record !== undefined && summary !== undefined) {
           record.writesCommitted++;
           record.lastWriteSummary = summary;
+        }
+        // Evict unconditionally (not just on a recognized summary): the write
+        // may have committed even when its result shape wasn't recognized, and
+        // a spurious eviction only costs one re-read.
+        if (MEMORY_MUTATING_TOOL_NAMES.has(name)) {
+          const cache = this.readToolCacheStore.getStore();
+          if (cache !== undefined) evictMemoryReadEntries(cache);
         }
         return result;
       },

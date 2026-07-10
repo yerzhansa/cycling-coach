@@ -169,7 +169,7 @@ These are Peaksware trademarks; do not surface the abbreviations in athlete-faci
 - No \`paired_event_id\`: skip the plan-compliance section silently.
 - Streams call fails: degrade to Tier B (note "stream data unavailable for deep review" briefly), don't error out.
 - Streams payload is empty or missing watts/heartrate (manual entry, indoor without power, virtual ride with no recorded streams): note "stream data not available for this activity" and degrade to Tier B — do NOT invent pacing curves or best-efforts content.
-- \`intervals_fetch_activities\` returns \`{ error: ... }\`: relay the error to the athlete in plain language; do not invent a review. Translate the raw \`error.kind\` to a friendly phrase: \`Unauthorized\` → "I don't have access to your intervals.icu account", \`RateLimit\` → "intervals.icu rate-limited me — try again in a minute", \`NotFound\` → "couldn't find that activity", \`Network\` / \`Timeout\` → "couldn't reach intervals.icu", anything else → "something went wrong fetching your data". Never surface the raw \`kind\` token.`;
+- \`intervals_fetch_activities\` returns a result whose \`data\` field is \`{ error: ... }\`: relay the error to the athlete in plain language; do not invent a review. Translate the raw \`error.kind\` to a friendly phrase: \`Unauthorized\` → "I don't have access to your intervals.icu account", \`RateLimit\` → "intervals.icu rate-limited me — try again in a minute", \`NotFound\` → "couldn't find that activity", \`Network\` / \`Timeout\` → "couldn't reach intervals.icu", anything else → "something went wrong fetching your data". Never surface the raw \`kind\` token.`;
 }
 
 export const STEP_BUDGET_RULES = `# Tool-Call Budget

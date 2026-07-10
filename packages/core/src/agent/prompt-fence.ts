@@ -5,8 +5,9 @@ import { truncateUtf16Safe } from "../text-truncate.js";
 // PROMPT DATA FENCE — untrusted-text sanitization and fenced wrapping
 // ============================================================================
 //
-// Pure functions with no memory/agent imports so #018's host-mediated
-// confirmation can reuse the same wrapper with its own labels and caps. The two
+// Pure functions with no memory/agent imports so future callers (e.g. a
+// host-mediated confirmation flow) can reuse the wrapper with their own labels
+// and caps. The two
 // fence constants live here (rather than in system-prompt.ts) so the wrapper can
 // neutralize them without importing the prompt builder — system-prompt.ts
 // re-exports them to keep the public surface stable.
@@ -54,7 +55,7 @@ export function sanitizeUntrustedText(value: string): string {
  * Sanitize `text`, cap it at `maxChars` (UTF-16-safe, never splitting a
  * surrogate pair), and wrap it between the fence tokens. On truncation the body
  * gains the visible in-fence notice line and a structured warn is emitted.
- * `maxChars` is a genuine parameter so #018 can pass its own cap.
+ * `maxChars` is a genuine parameter so other callers can pass their own cap.
  */
 export function wrapAthleteContextFence(params: { text: string; maxChars: number }): string {
   const sanitized = sanitizeUntrustedText(params.text);
@@ -76,7 +77,9 @@ function deepSanitize(value: unknown): unknown {
   if (typeof value === "string") return sanitizeUntrustedText(value);
   if (Array.isArray(value)) return value.map(deepSanitize);
   if (value !== null && typeof value === "object") {
-    const out: Record<string, unknown> = {};
+    // Null prototype: an own "__proto__" key (JSON.parse can create one) must
+    // become a plain property, not a setter call that silently drops the value.
+    const out: Record<string, unknown> = Object.create(null);
     for (const [key, inner] of Object.entries(value as Record<string, unknown>)) {
       out[key] = deepSanitize(inner);
     }

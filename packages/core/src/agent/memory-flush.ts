@@ -94,10 +94,10 @@ Dating discipline for durable facts:
 
 Keep each section under ~${MEMORY_SECTION_BUDGET_CHARS} characters. When a
 section would grow past that, do NOT let it balloon: move the dated or episodic
-detail (specific workouts, day-by-day observations, one-off events) out to
-today's daily notes (memory_write with type "daily") or to the event ledger
-(ledger_append), and keep only the current durable facts in the section itself.
-Nothing is dropped — the moved detail stays reachable through memory_query.
+detail (specific workouts, day-by-day observations, one-off events) out to the
+event ledger (ledger_append), and keep only the current durable facts in the
+section itself. Nothing is dropped — ledger entries stay reachable through
+memory_query.
 
 Note (transitional, post-migration): if \`cycling-profile\` contains weight,
 age, or available training days, move them to \`person\`. If \`cycling-history\`

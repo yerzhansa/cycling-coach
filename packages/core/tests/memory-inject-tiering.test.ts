@@ -29,7 +29,7 @@ function seed(): Memory {
   return m;
 }
 
-describe("getContext inject-tiering (AC2/AC3)", () => {
+describe("getContext inject-tiering: excluded sections drop, orphans keep injecting", () => {
   it("includes only inject-flagged sections plus orphans; drops spec'd-but-excluded", () => {
     const m = seed();
     const context = m.getContext({
@@ -73,7 +73,7 @@ describe("getContext inject-tiering (AC2/AC3)", () => {
   });
 });
 
-describe("effective-section inject flags (AC1)", () => {
+describe("effective-section inject flags: explicit on every core and sport section", () => {
   it("marks cycling-profile inject and equipment/history non-inject; core notes non-inject", () => {
     const sections = getEffectiveSections(cyclingSport);
     const byName = new Map(sections.map((s) => [s.name, s]));
@@ -89,7 +89,7 @@ describe("effective-section inject flags (AC1)", () => {
   });
 });
 
-describe("memory_read chat description (AC7)", () => {
+describe("memory_read chat description: full-memory nudge on the chat instance", () => {
   it("carries the dedupe nudge naming the non-injected sections", () => {
     const m = new Memory(dataDir);
     const tools = createMemoryTools(m, getEffectiveSections(cyclingSport));
