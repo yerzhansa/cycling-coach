@@ -26,6 +26,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: ^4.1.4
         version: 4.1.8(vitest@4.1.5)
+      ai:
+        specifier: ^6.0.158
+        version: 6.0.170(zod@4.4.1)
       intervals-icu-api:
         specifier: 0.1.2
         version: 0.1.2(typescript@6.0.3)

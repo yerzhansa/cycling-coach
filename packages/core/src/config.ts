@@ -27,6 +27,8 @@ export interface Config {
     authProfile?: string;
     /** Cheaper model for the memory flush; unset reuses the chat model. */
     flushModel?: string;
+    /** Cheaper model for conversation compaction; unset resolves per provider (see COMPACT_MODEL_DEFAULTS). */
+    compactModel?: string;
     /** Override base URL for OpenAI-compatible / direct providers. Empty = provider default. */
     baseUrl?: string;
   };
@@ -116,14 +118,23 @@ export const PROVIDER_BASE_URLS: Record<string, string> = {
   openrouter: "https://openrouter.ai/api/v1",
 };
 
+// Background-role (compaction) lane defaults. Only the two first-class slots
+// get a cheaper default; every other provider keeps the chat model so an
+// unconfigured setup never routes to a model its provider cannot serve.
+export const COMPACT_MODEL_DEFAULTS: Record<string, string> = {
+  anthropic: "claude-haiku-4-5-20251001",
+  openrouter: "deepseek/deepseek-v4-flash",
+};
+
+export function contextWindowForModel(model: string): number {
+  return CONTEXT_WINDOWS[model] ?? 200_000;
+}
+
 function resolveContextWindowTokens(model: string): number {
   const envTokens = parseInt(process.env.CONTEXT_WINDOW_TOKENS ?? "", 10);
   if (envTokens > 0) return envTokens;
 
-  const known = CONTEXT_WINDOWS[model];
-  if (known) return known;
-
-  return 200_000;
+  return contextWindowForModel(model);
 }
 
 // ============================================================================
@@ -263,6 +274,14 @@ export function loadConfig(): Config {
   const flushModel =
     env("LLM_FLUSH_MODEL") ?? (llmYaml.flush_model as string | undefined);
 
+  const compactModel =
+    provider === "openai-codex"
+      ? model
+      : (env("LLM_COMPACT_MODEL") ??
+         (llmYaml.compact_model as string | undefined) ??
+         COMPACT_MODEL_DEFAULTS[provider] ??
+         model);
+
   const baseUrl =
     env("LLM_BASE_URL") ??
     (llmYaml.base_url as string | undefined) ??
@@ -278,6 +297,7 @@ export function loadConfig(): Config {
           ? ((llmYaml.auth_profile as string | undefined) ?? "openai-codex")
           : undefined,
       flushModel,
+      compactModel,
       baseUrl,
     },
     intervals: {

@@ -1,7 +1,7 @@
 import { appendFileSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import type { GenerateResult } from "./llm-types.js";
+import type { CallerRole, GenerateResult } from "./llm-types.js";
 
 export const USAGE_LEDGER_FILE = "usage-ledger.jsonl";
 export const USAGE_LEDGER_MAX_BYTES = 10 * 1024 * 1024;
@@ -15,7 +15,7 @@ export interface UsageLedgerLine {
   // Populated on per-generation lines and on the whole-turn line; absent on the
   // boot line. On a turn line the token/cost figures are the final successful
   // generation's, not a sum across retry/compaction attempts.
-  caller?: "chat" | "flush" | "compact";
+  caller?: CallerRole;
   // Prompt-template lineage of the turn (computeTemplateHash). Present only on
   // kind:"turn" lines, where it makes a latency/usage sample self-attributable
   // to a prompt revision without a timestamp join against the chat-store JSONL.

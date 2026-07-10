@@ -3,6 +3,9 @@ import type { ModelMessage } from "ai";
 import type { MemorySnapshot } from "@enduragent/core";
 import {
   auditSummaryQuality,
+  buildCompactionSystemPrompt,
+  COMPACTION_PROMPT_MIN_CHARS,
+  resolveMustPreserveTokens,
   summarizeDroppedMessages,
   summarizeInStages,
 } from "../src/agent/compaction.js";
@@ -45,15 +48,22 @@ const EMPTY_SNAPSHOT: MemorySnapshot = {
   listSections: () => [],
 };
 
+const REQUIRED_HEADINGS = [
+  "## Athlete Profile",
+  "## Training Status",
+  "## Coach Stance",
+  "## Discussion Context",
+  "## Pending Questions",
+];
+
 // ─── Compaction smoke test ────────────────────────────────────────────
 //
-// After commit 5 the MUST-PRESERVE block is parameterized against
-// `sport.mustPreserveTokens`. The test passes the cycling vocabulary
-// directly so the assertions don't depend on cyclingSport's runtime
-// state.
+// Compaction calls carry a cacheable system + one user message: the
+// static instruction block (MUST-PRESERVE + sport tokens + section guide)
+// rides `opts.system`, and the per-chunk transcript rides the user message.
 
 describe("compaction (sport-parameterized)", () => {
-  it("summarizeDroppedMessages prompt carries MUST-PRESERVE + sport tokens + transcript data", async () => {
+  it("summarizeDroppedMessages carries MUST-PRESERVE + sport tokens in system and transcript data in the user message", async () => {
     const spy = createFakeLLM([VALID_FIVE_SECTION_SUMMARY], { repeatLast: true });
 
     await summarizeDroppedMessages({
@@ -63,27 +73,28 @@ describe("compaction (sport-parameterized)", () => {
       memory: EMPTY_SNAPSHOT,
     });
 
-    expect(spy.capturedPrompts.length).toBeGreaterThan(0);
-    const prompt = spy.capturedPrompts[0];
+    expect(spy.capturedOpts.length).toBeGreaterThan(0);
+    const system = spy.capturedOpts[0].system ?? "";
+    const userContent = String(spy.capturedMessages[0][0].content);
 
-    // Hard contract: every compaction prompt carries the MUST-PRESERVE
+    // Hard contract: every compaction system carries the MUST-PRESERVE
     // instruction.
-    expect(prompt).toContain("MUST PRESERVE");
+    expect(system).toContain("MUST PRESERVE");
 
     // Sport-vocabulary tokens flow through.
-    expect(prompt).toContain("FTP");
-    expect(prompt).toContain("W/kg");
-    expect(prompt).toContain("Coggan");
+    expect(system).toContain("FTP");
+    expect(system).toContain("W/kg");
+    expect(system).toContain("Coggan");
 
-    // Transcript data is included verbatim.
-    expect(prompt).toContain("247W");
-    expect(prompt).toContain("72kg");
+    // Transcript data is included verbatim in the user message.
+    expect(userContent).toContain("247W");
+    expect(userContent).toContain("72kg");
 
-    expect(prompt).toContain("## Coach Stance");
-    expect(prompt).toContain("stance per axis");
-    expect(prompt).toContain("currently disputing");
-    expect(prompt).toContain("illness or symptoms");
-    expect(prompt).toContain("agreed but not yet executed");
+    expect(system).toContain("## Coach Stance");
+    expect(system).toContain("stance per axis");
+    expect(system).toContain("currently disputing");
+    expect(system).toContain("illness or symptoms");
+    expect(system).toContain("agreed but not yet executed");
   });
 
   it("summarizeDroppedMessages with function-form tokens calls the function with the snapshot", async () => {
@@ -102,11 +113,11 @@ describe("compaction (sport-parameterized)", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]).toBe(EMPTY_SNAPSHOT);
-    expect(spy.capturedPrompts[0]).toContain("FTP 247W");
-    expect(spy.capturedPrompts[0]).toContain("DYNAMIC_TOKEN");
+    expect(spy.capturedOpts[0].system).toContain("FTP 247W");
+    expect(spy.capturedOpts[0].system).toContain("DYNAMIC_TOKEN");
   });
 
-  it("summarizeInStages prompt also carries the MUST-PRESERVE instruction and tokens", async () => {
+  it("summarizeInStages system also carries the MUST-PRESERVE instruction and tokens", async () => {
     const spy = createFakeLLM([VALID_FIVE_SECTION_SUMMARY], { repeatLast: true });
 
     await summarizeInStages({
@@ -117,15 +128,16 @@ describe("compaction (sport-parameterized)", () => {
       recentToKeep: 2,
     });
 
-    expect(spy.capturedPrompts.length).toBeGreaterThan(0);
-    expect(spy.capturedPrompts[0]).toContain("MUST PRESERVE");
-    expect(spy.capturedPrompts[0]).toContain("FTP");
+    expect(spy.capturedOpts.length).toBeGreaterThan(0);
+    const system = spy.capturedOpts[0].system ?? "";
+    expect(system).toContain("MUST PRESERVE");
+    expect(system).toContain("FTP");
 
-    expect(spy.capturedPrompts[0]).toContain("## Coach Stance");
-    expect(spy.capturedPrompts[0]).toContain("stance per axis");
-    expect(spy.capturedPrompts[0]).toContain("currently disputing");
-    expect(spy.capturedPrompts[0]).toContain("illness or symptoms");
-    expect(spy.capturedPrompts[0]).toContain("agreed but not yet executed");
+    expect(system).toContain("## Coach Stance");
+    expect(system).toContain("stance per axis");
+    expect(system).toContain("currently disputing");
+    expect(system).toContain("illness or symptoms");
+    expect(system).toContain("agreed but not yet executed");
   });
 
   it("auditSummaryQuality accepts a summary with all five required sections", () => {
@@ -157,6 +169,93 @@ describe("compaction (sport-parameterized)", () => {
     const audit = auditSummaryQuality(fourSection);
     expect(audit.ok).toBe(false);
     expect(audit.missing).toEqual(["## Coach Stance"]);
+  });
+});
+
+// ─── Cacheable system+messages call shape ─────────────────────────────
+
+describe("compaction call shape", () => {
+  it("every compaction call carries the pinned system, one user message, no prompt, and the compact caller", async () => {
+    const spy = createFakeLLM([VALID_FIVE_SECTION_SUMMARY], { repeatLast: true });
+    const expectedSystem = buildCompactionSystemPrompt(
+      resolveMustPreserveTokens(CYCLING_VOCABULARY, EMPTY_SNAPSHOT),
+    );
+
+    await summarizeInStages({
+      messages: REPRESENTATIVE_CONVERSATION,
+      llm: spy,
+      mustPreserveTokens: CYCLING_VOCABULARY,
+      memory: EMPTY_SNAPSHOT,
+      recentToKeep: 2,
+      caller: "compact",
+    });
+
+    expect(spy.capturedOpts.length).toBeGreaterThan(0);
+    for (const opts of spy.capturedOpts) {
+      expect(opts.prompt).toBeUndefined();
+      expect(opts.system).toBe(expectedSystem);
+      expect(opts.messages).toHaveLength(1);
+      expect(opts.messages?.[0].role).toBe("user");
+      expect(opts.caller).toBe("compact");
+    }
+  });
+
+  it("a pass that trips the finalize retry uses one byte-identical system across every call", async () => {
+    const spy = createFakeLLM(["just some unstructured text", VALID_FIVE_SECTION_SUMMARY]);
+
+    await summarizeInStages({
+      messages: REPRESENTATIVE_CONVERSATION,
+      llm: spy,
+      mustPreserveTokens: CYCLING_VOCABULARY,
+      memory: EMPTY_SNAPSHOT,
+      recentToKeep: 2,
+    });
+
+    expect(spy.capturedOpts.length).toBeGreaterThanOrEqual(2);
+    const systems = spy.capturedOpts.map((o) => o.system);
+    expect(new Set(systems).size).toBe(1);
+  });
+
+  it("prompt floor: the pinned system clears the cache minimum and carries every heading", () => {
+    const system = buildCompactionSystemPrompt(["FTP"]);
+    expect(system.length).toBeGreaterThanOrEqual(COMPACTION_PROMPT_MIN_CHARS);
+    for (const heading of REQUIRED_HEADINGS) {
+      expect(system).toContain(heading);
+    }
+  });
+
+  it("the stages user message is laid out with the summarize instruction, carried summary, then transcript", async () => {
+    const spy = createFakeLLM([VALID_FIVE_SECTION_SUMMARY]);
+    const carried = "## Athlete Profile\n- FTP 247W baseline established";
+
+    await summarizeInStages({
+      messages: REPRESENTATIVE_CONVERSATION,
+      llm: spy,
+      mustPreserveTokens: CYCLING_VOCABULARY,
+      memory: EMPTY_SNAPSHOT,
+      recentToKeep: 2,
+      previousSummary: carried,
+    });
+
+    const userContent = String(spy.capturedMessages[0][0].content);
+    expect(userContent.startsWith("Summarize the conversation below")).toBe(true);
+    expect(userContent.indexOf("Existing summary of earlier context:")).toBeLessThan(
+      userContent.indexOf("Messages to summarize:"),
+    );
+  });
+
+  it("the dropped user message opens with the incorporate instruction", async () => {
+    const spy = createFakeLLM([VALID_FIVE_SECTION_SUMMARY]);
+
+    await summarizeDroppedMessages({
+      dropped: REPRESENTATIVE_CONVERSATION,
+      llm: spy,
+      mustPreserveTokens: CYCLING_VOCABULARY,
+      memory: EMPTY_SNAPSHOT,
+    });
+
+    const userContent = String(spy.capturedMessages[0][0].content);
+    expect(userContent.startsWith("Incorporate the older conversation messages below")).toBe(true);
   });
 });
 
@@ -217,7 +316,7 @@ describe("summarizeDroppedMessages failure containment", () => {
     });
 
     expect(result).toEqual({ summary: "prior", unsummarized: [] });
-    expect(llm.capturedPrompts).toHaveLength(0);
+    expect(llm.capturedOpts).toHaveLength(0);
   });
 });
 
@@ -235,8 +334,8 @@ describe("shared audit post-step (cap-before-audit)", () => {
       recentToKeep: 2,
     });
 
-    expect(spy.capturedPrompts).toHaveLength(2);
-    expect(spy.capturedPrompts[1]).toContain("Restructure the following summary");
+    expect(spy.capturedOpts).toHaveLength(2);
+    expect(String(spy.capturedMessages[1][0].content)).toContain("Restructure the following summary");
     for (const opts of spy.capturedOpts) {
       expect(opts.maxOutputTokens).toBe(1000);
     }
@@ -256,7 +355,7 @@ describe("shared audit post-step (cap-before-audit)", () => {
       recentToKeep: 2,
     });
 
-    expect(spy.capturedPrompts).toHaveLength(2);
+    expect(spy.capturedOpts).toHaveLength(2);
     expect(result[0].content).toContain("still no sections");
     expect(result).toHaveLength(3);
   });
@@ -275,7 +374,7 @@ describe("shared audit post-step (cap-before-audit)", () => {
       memory: EMPTY_SNAPSHOT,
     });
 
-    expect(spy.capturedPrompts).toHaveLength(2);
+    expect(spy.capturedOpts).toHaveLength(2);
     expect(summary).toBe(VALID_FIVE_SECTION_SUMMARY);
     expect(unsummarized).toEqual([]);
   });
@@ -307,13 +406,13 @@ describe("shared audit post-step (cap-before-audit)", () => {
       recentToKeep: 2,
     });
 
-    const prompt = spy.capturedPrompts[0];
-    expect(prompt).toContain("Existing summary of earlier context:");
-    expect(prompt).toContain("FTP 247W baseline established");
-    expect(prompt).not.toContain(`system: ${SUMMARY_PREFIX}`);
+    const userContent = String(spy.capturedMessages[0][0].content);
+    expect(userContent).toContain("Existing summary of earlier context:");
+    expect(userContent).toContain("FTP 247W baseline established");
+    expect(userContent).not.toContain(`system: ${SUMMARY_PREFIX}`);
   });
 
-  it("both update prompts carry the PRESERVE-prior-summary rule", async () => {
+  it("both update flows carry the PRESERVE-prior-summary rule in the system", async () => {
     const spy = createFakeLLM([VALID_FIVE_SECTION_SUMMARY, VALID_FIVE_SECTION_SUMMARY]);
 
     await summarizeDroppedMessages({
@@ -331,7 +430,7 @@ describe("shared audit post-step (cap-before-audit)", () => {
       recentToKeep: 2,
     });
 
-    expect(spy.capturedPrompts[0]).toContain("PRESERVE every fact in it");
-    expect(spy.capturedPrompts[1]).toContain("PRESERVE every fact in it");
+    expect(spy.capturedOpts[0].system).toContain("PRESERVE every fact in it");
+    expect(spy.capturedOpts[1].system).toContain("PRESERVE every fact in it");
   });
 });

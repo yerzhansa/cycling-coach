@@ -1,0 +1,115 @@
+{
+  "id": "mixed-week",
+  "sport": "static",
+  "mode": "dropped",
+  "previousSummary": "## Athlete Profile\n- FTP 231W\n- Goal: gravel event in October\n## Training Status\n- Consistent base training\n## Coach Stance\n- Volume: hold; intensity: hold - grounded in a steady base\n## Discussion Context\n- Planning toward the gravel event\n## Pending Questions\n- None outstanding",
+  "memorySections": {},
+  "mustPreserveTokens": [
+    "Assioma",
+    "gravel"
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "I fitted new Assioma pedals this week."
+    },
+    {
+      "role": "assistant",
+      "content": "Nice upgrade. How do the Assioma numbers compare to your old meter?"
+    },
+    {
+      "role": "user",
+      "content": "They read about 5W higher than my old power meter."
+    },
+    {
+      "role": "assistant",
+      "content": "Good to know, the Assioma reads 5W higher, so I will adjust your targets up by that offset."
+    },
+    {
+      "role": "user",
+      "content": "I also moved my hard sessions to the mornings."
+    },
+    {
+      "role": "assistant",
+      "content": "Morning hard sessions work well when your sleep supports them."
+    },
+    {
+      "role": "user",
+      "content": "My partner's schedule means weekends are capped at 2.5 hours until September."
+    },
+    {
+      "role": "assistant",
+      "content": "Understood, weekends limited to 2.5 hours until September. I will keep long rides within that."
+    },
+    {
+      "role": "user",
+      "content": "So how should we structure the next few weeks?"
+    },
+    {
+      "role": "assistant",
+      "content": "Let us run a 3-week block and then reassess."
+    },
+    {
+      "role": "user",
+      "content": "Sounds good, a 3-week block then reassess."
+    },
+    {
+      "role": "assistant",
+      "content": "To track load and recovery, can you send me a weekly weight trend?"
+    },
+    {
+      "role": "user",
+      "content": "I will think about the best way to log that."
+    },
+    {
+      "role": "assistant",
+      "content": "No rush. Even a once-a-week figure helps."
+    },
+    {
+      "role": "user",
+      "content": "Anything else for the gravel event prep?"
+    },
+    {
+      "role": "assistant",
+      "content": "We will layer in longer endurance rides as the weekends open up after September, aiming at the gravel event."
+    },
+    {
+      "role": "user",
+      "content": "Great, thanks."
+    },
+    {
+      "role": "assistant",
+      "content": "Keep me posted on how the Assioma pedals feel over the first few rides."
+    }
+  ],
+  "facts": [
+    {
+      "id": "F01",
+      "statement": "FTP 231W"
+    },
+    {
+      "id": "F02",
+      "statement": "gravel event goal in October"
+    },
+    {
+      "id": "F03",
+      "statement": "new Assioma pedals read 5W higher than the old power meter"
+    },
+    {
+      "id": "F04",
+      "statement": "moved hard sessions to the mornings"
+    },
+    {
+      "id": "F05",
+      "statement": "weekends capped at 2.5 hours until September"
+    },
+    {
+      "id": "F06",
+      "statement": "agreed to a 3-week block then reassess"
+    },
+    {
+      "id": "F07",
+      "statement": "coach asked for a weekly weight trend (unanswered)"
+    }
+  ]
+}

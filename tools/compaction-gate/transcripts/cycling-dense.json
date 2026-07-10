@@ -1,0 +1,142 @@
+{
+  "id": "cycling-dense",
+  "sport": "cycling",
+  "mode": "stages",
+  "previousSummary": null,
+  "memorySections": {
+    "cycling-profile": "FTP 262W, max HR 188"
+  },
+  "mustPreserveTokens": null,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Did my threshold test this morning. 20 minutes at 276W, so my FTP is now 262W."
+    },
+    {
+      "role": "assistant",
+      "content": "Nice work. Logging FTP 262W from the 20 minute effort at 276W. That is a solid number to build from."
+    },
+    {
+      "role": "user",
+      "content": "It is up from 255W back in March, so I am pleased with the progress."
+    },
+    {
+      "role": "assistant",
+      "content": "A 7 watt gain since 255W in March is real progress. How did the effort pace out?"
+    },
+    {
+      "role": "user",
+      "content": "First few minutes too hot, faded slightly at the end. I also weighed in at 71kg today."
+    },
+    {
+      "role": "assistant",
+      "content": "Noted, 71kg. I will recalc your zones around FTP 262W. Anything on the calendar we are aiming at?"
+    },
+    {
+      "role": "user",
+      "content": "Yes, the Alpine Gran Fondo on 1998-08-15. It is 168km with 3400m of climbing and I want to finish under 7 hours."
+    },
+    {
+      "role": "assistant",
+      "content": "Great target. 168km and 3400m of climbing on 1998-08-15, under 7 hours. That course rewards steady climbing at sweet spot. What is your weekly availability?"
+    },
+    {
+      "role": "user",
+      "content": "I can train about 9 hours most weeks, and Tuesdays are always off for family."
+    },
+    {
+      "role": "assistant",
+      "content": "Understood, 9 hours a week with Tuesdays off. I will structure the plan around that."
+    },
+    {
+      "role": "user",
+      "content": "One caution: my left knee had patellar tendon trouble last autumn when I did three hard days in a row."
+    },
+    {
+      "role": "assistant",
+      "content": "Important. I will cap you at two consecutive hard days to protect that left knee, and watch anything you report."
+    },
+    {
+      "role": "user",
+      "content": "My indoor Kickr reads about 8W lower than my outdoor power meter, in case that is useful for targets."
+    },
+    {
+      "role": "assistant",
+      "content": "It does. I will add the 8W offset so your indoor Kickr targets line up with outdoor numbers."
+    },
+    {
+      "role": "user",
+      "content": "For structure, can we do a VO2max block and then a sweet spot build toward the Fondo?"
+    },
+    {
+      "role": "assistant",
+      "content": "Yes. Two weeks of VO2max work, then a sweet spot build into the Fondo. That fits the climbing demands."
+    },
+    {
+      "role": "user",
+      "content": "This week, what does the long ride look like?"
+    },
+    {
+      "role": "assistant",
+      "content": "Let us do a 4.5 hour long ride on Sunday at endurance pace, keeping Tuesday off as always."
+    },
+    {
+      "role": "user",
+      "content": "Sounds good. Should we retest FTP after the recovery week?"
+    },
+    {
+      "role": "assistant",
+      "content": "Good idea. We will retest FTP right after the recovery week to confirm the new number before the build."
+    }
+  ],
+  "facts": [
+    {
+      "id": "F01",
+      "statement": "FTP is 262W"
+    },
+    {
+      "id": "F02",
+      "statement": "body weight 71kg"
+    },
+    {
+      "id": "F03",
+      "statement": "goal event Alpine Gran Fondo on 1998-08-15, 168km with 3400m of climbing"
+    },
+    {
+      "id": "F04",
+      "statement": "target to finish under 7 hours"
+    },
+    {
+      "id": "F05",
+      "statement": "trains about 9 hours per week, Tuesdays always off"
+    },
+    {
+      "id": "F06",
+      "statement": "left knee patellar tendon trouble last autumn from three hard days in a row; cap two consecutive hard days"
+    },
+    {
+      "id": "F07",
+      "statement": "indoor Kickr reads about 8W lower than the outdoor power meter"
+    },
+    {
+      "id": "F08",
+      "statement": "20 minute test at 276W"
+    },
+    {
+      "id": "F09",
+      "statement": "previous FTP 255W in March"
+    },
+    {
+      "id": "F10",
+      "statement": "planned VO2max block then sweet spot build"
+    },
+    {
+      "id": "F11",
+      "statement": "long ride Sunday 4.5 hours"
+    },
+    {
+      "id": "F12",
+      "statement": "athlete asked to retest FTP after the recovery week"
+    }
+  ]
+}

@@ -9,6 +9,7 @@ import type { CoreDeps, Sport } from "../sport.js";
 import type { ResolvedCs } from "../reference/cs-resolution.js";
 import type { SecretsResolver } from "../secrets/types.js";
 import type { Config } from "../config.js";
+import { contextWindowForModel } from "../config.js";
 import { resolveSecretRef } from "../secrets/resolve.js";
 import { safeReadJson } from "../io/safe-read-json.js";
 import {
@@ -187,6 +188,8 @@ export class CoachAgent {
   private sport: Sport;
   private llm: LLM;
   private flushLlm: LLM;
+  private compactLlm: LLM;
+  private compactContextWindowTokens: number;
   private config: Config;
   private memory: Memory;
   private chatStore: ChatStore;
@@ -226,11 +229,24 @@ export class CoachAgent {
     this.sport = sport;
     this.config = config;
     this.llm = new LLM(config);
-    const { flushModel } = config.llm;
-    this.flushLlm =
-      flushModel !== undefined && flushModel !== config.llm.model
-        ? new LLM({ ...config, llm: { ...config.llm, model: flushModel } })
-        : this.llm;
+    // Per-role lanes share one LLM instance per distinct model, so adding a
+    // lane never needs pairwise equality checks against the existing ones.
+    const llmByModel = new Map<string, LLM>([[config.llm.model, this.llm]]);
+    const llmFor = (model: string): LLM => {
+      let lane = llmByModel.get(model);
+      if (lane === undefined) {
+        lane = new LLM({ ...config, llm: { ...config.llm, model } });
+        llmByModel.set(model, lane);
+      }
+      return lane;
+    };
+    this.flushLlm = llmFor(config.llm.flushModel ?? config.llm.model);
+    const compactModel = config.llm.compactModel ?? config.llm.model;
+    this.compactLlm = llmFor(compactModel);
+    this.compactContextWindowTokens =
+      compactModel === config.llm.model
+        ? config.contextWindowTokens
+        : contextWindowForModel(compactModel);
     this.tz = resolveUserTimezone(config.session.timezone);
     this.memory = new Memory(config.dataDir, this.tz);
     this.chatStore = new ChatStore(config.dataDir, config.session.resetArchiveRetentionDays);
@@ -397,11 +413,11 @@ export class CoachAgent {
 
   private compactionParams(budget?: Pick<TurnBudget, "chargeModelCall">) {
     return {
-      llm: this.llm,
+      llm: this.compactLlm,
       caller: "compact" as const,
       mustPreserveTokens: this.sport.mustPreserveTokens,
       memory: createMemorySnapshot(this.memory),
-      contextWindowTokens: this.config.contextWindowTokens,
+      contextWindowTokens: this.compactContextWindowTokens,
       budget,
     };
   }
