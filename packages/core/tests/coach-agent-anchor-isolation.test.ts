@@ -39,7 +39,7 @@ const sections: readonly MemorySectionSpec[] = [
 
 // A barrier that lets the test interleave the two in-flight turns: the first
 // tool to read its anchor parks on `gate`; the second tool reads ITS anchor and
-// then releases the gate. With AsyncLocalStorage each tool sees its own anchor;
+// then releases the gate. With per-turn context threading each tool sees its own anchor;
 // with a shared instance field the second chat()'s value would have overwritten
 // the first's before the first tool reads — which is exactly what this catches.
 function makeBarrier(): {
@@ -89,11 +89,11 @@ function makeStubRunningSport(): Sport {
           tool: tool({
             description: "Reads the per-turn resolved CS anchor.",
             inputSchema,
-            execute: async ({ label }: { label: string }) => {
+            execute: async ({ label }: { label: string }, options: unknown) => {
               // Read THIS turn's anchor first, then sync at the barrier so both
               // turns are in flight when each reads — a shared field would be
               // clobbered by the later turn before the earlier reads.
-              const anchor = deps.resolvedCs?.() ?? null;
+              const anchor = deps.resolvedCs?.(options) ?? null;
               await barrier.arrive();
               readAnchors[label] = anchor;
               return JSON.stringify(anchor);
@@ -141,7 +141,7 @@ async function setupAgent(complete: ReturnType<typeof vi.fn>) {
   return new CoachAgent(makeStubRunningSport(), baseAgentConfig(dataDir));
 }
 
-describe("per-turn anchor isolation (AsyncLocalStorage, not a shared field)", () => {
+describe("per-turn anchor isolation (turn context, not a shared field)", () => {
   it("two interleaved turns each read their OWN resolvedCs through the tool", async () => {
     barrier.reset();
     delete readAnchors.A;

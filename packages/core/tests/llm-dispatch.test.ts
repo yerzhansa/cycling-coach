@@ -55,6 +55,7 @@ type AiSdkCaptured = {
   maxRetries: number | undefined;
   prompt: string | undefined;
   messages: unknown;
+  experimentalContext: unknown;
   called: number;
 };
 
@@ -64,14 +65,16 @@ async function runAiSdk(opts: Parameters<import("../src/llm.js").LLM["generate"]
     maxRetries: undefined,
     prompt: undefined,
     messages: undefined,
+    experimentalContext: undefined,
     called: 0,
   };
   vi.doMock("ai", () => ({
-    generateText: vi.fn(async (o: { abortSignal?: AbortSignal; maxRetries?: number; prompt?: string; messages?: unknown }) => {
+    generateText: vi.fn(async (o: { abortSignal?: AbortSignal; maxRetries?: number; prompt?: string; messages?: unknown; experimental_context?: unknown }) => {
       captured.abortSignal = o.abortSignal;
       captured.maxRetries = o.maxRetries;
       captured.prompt = o.prompt;
       captured.messages = o.messages;
+      captured.experimentalContext = o.experimental_context;
       captured.called++;
       return MINIMAL_RESULT;
     }),
@@ -169,6 +172,17 @@ describe("LLM dispatch — AI SDK path forwards abort signals", () => {
     expect(captured.abortSignal).toBe(timeoutController.signal);
     expect(captured.prompt).toBe("summarize this");
     expect(captured.maxRetries).toBe(0);
+  });
+
+  it("forwards opts.context to generateText by identity as the experimental context", async () => {
+    const turnContext = { marker: "turn-context" };
+
+    const captured = await runAiSdk({
+      messages: [{ role: "user", content: "hi" }],
+      context: turnContext,
+    });
+
+    expect(captured.experimentalContext).toBe(turnContext);
   });
 });
 

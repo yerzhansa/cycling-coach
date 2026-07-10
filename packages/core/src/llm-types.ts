@@ -22,6 +22,11 @@ export interface GenerateOpts {
   /** Codex-only: forwarded to the codex bridge as its session id. The AI-SDK providers never read it. */
   cacheKey?: string;
   caller?: CallerRole;
+  /** Opaque per-call context delivered verbatim to tool execute options via
+   * the SDK's experimental context channel (the codex bridge mirrors the same
+   * key; `agent/turn-context.ts` owns the extraction). Never serialized into
+   * the request payload; providers ignore it. */
+  context?: unknown;
 }
 
 export interface GenerateResult {

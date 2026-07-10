@@ -154,6 +154,7 @@ async function executeToolCall(
   tools: ToolSet,
   messages: ModelMessage[],
   abortSignal?: AbortSignal,
+  context?: unknown,
 ): Promise<ToolResultPart> {
   const tool = tools[call.name];
   if (!tool || typeof tool.execute !== "function") {
@@ -173,6 +174,7 @@ async function executeToolCall(
       toolCallId: call.id,
       messages,
       abortSignal,
+      experimental_context: context,
     });
     return {
       type: "tool-result",
@@ -201,7 +203,7 @@ function errorResult(call: CodexToolCall, message: string): ToolResultPart {
 export async function codexGenerateText(
   opts: GenerateOpts & { modelId: string; profileName: string; stepLimit?: number },
 ): Promise<GenerateResult> {
-  const { system, messages, prompt, tools, modelId, profileName, stepLimit, cacheKey, signal } = opts;
+  const { system, messages, prompt, tools, modelId, profileName, stepLimit, cacheKey, signal, context } = opts;
 
   const initialMessages: ModelMessage[] = prompt
     ? [{ role: "user", content: prompt }]
@@ -266,7 +268,7 @@ export async function codexGenerateText(
     // Run tool calls in parallel to match AI SDK behavior; Promise.all preserves
     // order so the conversation stays aligned.
     const results = await Promise.all(
-      calls.map((call) => executeToolCall(call, tools, initialMessages, signal)),
+      calls.map((call) => executeToolCall(call, tools, initialMessages, signal, context)),
     );
     convo.push({ role: "tool", content: results } as ModelMessage);
   }
