@@ -115,7 +115,7 @@ describe("recomputeLineCostUsd", () => {
       line({ inputTokens: 10000, cacheReadTokens: 9000, cacheWriteTokens: 5000 }),
       noOverrides,
     );
-    expect(c).toBeGreaterThanOrEqual(0);
+    expect(c).toBeCloseTo((9000 * 0.3 + 5000 * 3.75) / 1_000_000, 10);
   });
   it("returns null for an unknown provider/model", () => {
     expect(recomputeLineCostUsd(line({ provider: "nope", model: "nope" }), noOverrides)).toBeNull();
