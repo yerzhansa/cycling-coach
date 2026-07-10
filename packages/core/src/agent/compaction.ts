@@ -336,7 +336,7 @@ export async function summarizeInStages(params: {
   contextWindowTokens?: number;
   caller?: GenerateOpts["caller"];
   budget?: ModelCallCharger;
-}): Promise<ModelMessage[]> {
+}): Promise<{ messages: ModelMessage[]; summary?: string }> {
   const { llm, mustPreserveTokens, memory, recentToKeep = 4, contextWindowTokens, caller, budget } = params;
 
   let messages = params.messages;
@@ -358,7 +358,7 @@ export async function summarizeInStages(params: {
   const recent = messages.slice(messages.length - keepCount);
 
   if (toSummarize.length === 0) {
-    return params.messages;
+    return { messages: params.messages };
   }
 
   const tokens = resolveTokens(mustPreserveTokens, memory);
@@ -391,7 +391,7 @@ export async function summarizeInStages(params: {
 
   if (summary === undefined) {
     console.warn("Staged summarization produced no summary; dropping oldest messages without one");
-    return [...recent];
+    return { messages: [...recent] };
   }
 
   const finalSummary = await finalizeSummary({
@@ -402,5 +402,5 @@ export async function summarizeInStages(params: {
     caller,
     budget,
   });
-  return [makeSummaryMessage(finalSummary), ...recent];
+  return { messages: [makeSummaryMessage(finalSummary), ...recent], summary: finalSummary };
 }
