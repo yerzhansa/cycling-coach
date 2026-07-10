@@ -120,6 +120,22 @@ describe("summarizeInStages guards", () => {
     expect(dropWarn).toBeDefined();
   });
 
+  it("returns the input unchanged with no summary when there is nothing to summarize", async () => {
+    const spy = createFakeLLM([]);
+    const short = REPRESENTATIVE_CONVERSATION.slice(-3);
+
+    const result = await summarizeInStages({
+      messages: short,
+      llm: spy,
+      mustPreserveTokens: CYCLING_VOCABULARY,
+      memory: EMPTY_SNAPSHOT,
+    });
+
+    expect(result.messages).toEqual(short);
+    expect(result.summary).toBeUndefined();
+    expect(spy.capturedPrompts.length).toBe(0);
+  });
+
   it("carries the last successful chunk summary across a failed chunk", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const spy = createFakeLLM([VALID_FIVE_SECTION_SUMMARY, { error: new Error("boom") }]);

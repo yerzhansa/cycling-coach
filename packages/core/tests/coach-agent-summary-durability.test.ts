@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
@@ -209,5 +209,7 @@ describe("compaction summary durability into daily notes", () => {
 
     expect(text).toBe("final-reply");
     expect(agent.getMemory().readDailyNotes()).not.toContain(COMPACTION_SUMMARY_MARKER);
+    const logged = readFileSync(join(dataDir, "logs", "log.jsonl"), "utf-8");
+    expect(logged).toContain("Failed to persist compaction summary to daily note");
   });
 });
