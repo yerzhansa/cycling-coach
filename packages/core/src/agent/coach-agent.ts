@@ -18,6 +18,7 @@ import {
   type LatestJson,
 } from "../reference/index.js";
 import { Memory } from "../memory/store.js";
+import { persistCompactionSummary } from "../memory/compaction-note.js";
 import { ChatStore } from "./chat-store.js";
 import { buildSystemPrompt, staticRuleBlocks } from "./system-prompt.js";
 import { computeAssembledHash, computeTemplateHash, sha256_16 } from "./prompt-lineage.js";
@@ -463,6 +464,14 @@ export class CoachAgent {
     };
   }
 
+  private persistSummaryToDailyNote(summary: string): void {
+    try {
+      persistCompactionSummary(this.memory, summary);
+    } catch (err) {
+      this.log.warn("Failed to persist compaction summary to daily note", err);
+    }
+  }
+
   private emitTurnOutcome(outcome: TurnOutcome): void {
     // An observability write must never break a turn: a failed outcome emit is
     // swallowed exactly like the usage-ledger and substrate writes.
@@ -588,6 +597,7 @@ export class CoachAgent {
             ...this.compactionParams(turnBudget),
           });
           compactions++;
+          this.persistSummaryToDailyNote(summary);
           summaryMsg = makeSummaryMessage(summary);
           requeued = unsummarized;
           if (flushed) {
@@ -663,6 +673,15 @@ export class CoachAgent {
       let rateLimitAttempts = 0;
       let serverErrorAttempts = 0;
 
+      const compactInTurn = async () => {
+        const compacted = await summarizeInStages({ messages, ...this.compactionParams(turnBudget) });
+        messages = compacted.messages;
+        if (compacted.summary) this.persistSummaryToDailyNote(compacted.summary);
+        compactions++;
+        this.memory.reload();
+        this.usageAnchor.delete(chatId);
+      };
+
       // Loop-invariant: the prompt cache key derives only from the chat id.
       const cacheKey = sha256_16(chatId);
 
@@ -697,10 +716,7 @@ export class CoachAgent {
                 this.log.warn("In-turn memory flush failed; compacting without flush", err);
               }
             }
-            messages = await summarizeInStages({ messages, ...this.compactionParams(turnBudget) });
-            compactions++;
-            this.memory.reload();
-            this.usageAnchor.delete(chatId);
+            await compactInTurn();
           }
 
           try {
@@ -862,10 +878,7 @@ export class CoachAgent {
                     this.log.warn("In-turn memory flush failed; compacting without flush", flushErr);
                   }
                 }
-                messages = await summarizeInStages({ messages, ...this.compactionParams(turnBudget) });
-                compactions++;
-                this.memory.reload();
-                this.usageAnchor.delete(chatId);
+                await compactInTurn();
               } catch (rescueErr) {
                 this.log.warn("Compaction rescue failed; rethrowing the original turn error", rescueErr);
                 if (err instanceof Error && err.cause === undefined) {
@@ -881,10 +894,7 @@ export class CoachAgent {
               if (ratio > TIMEOUT_COMPACTION_THRESHOLD) {
                 timeoutAttempts++;
                 try {
-                  messages = await summarizeInStages({ messages, ...this.compactionParams(turnBudget) });
-                  compactions++;
-                  this.memory.reload();
-                  this.usageAnchor.delete(chatId);
+                  await compactInTurn();
                 } catch (rescueErr) {
                   this.log.warn("Compaction rescue failed; rethrowing the original turn error", rescueErr);
                   if (err instanceof Error && err.cause === undefined) {

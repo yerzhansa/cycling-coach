@@ -240,9 +240,10 @@ describe("shared audit post-step (cap-before-audit)", () => {
     for (const opts of spy.capturedOpts) {
       expect(opts.maxOutputTokens).toBe(1000);
     }
-    expect(result[0].content).toContain("## Coach Stance");
-    expect(result[0].content).toContain("## Pending Questions");
-    expect(result).toHaveLength(3);
+    expect(result.messages[0].content).toContain("## Coach Stance");
+    expect(result.messages[0].content).toContain("## Pending Questions");
+    expect(result.messages).toHaveLength(3);
+    expect(result.summary).toContain("## Coach Stance");
   });
 
   it("staged summarization that stays sectionless degrades to the capped text instead of throwing", async () => {
@@ -257,8 +258,9 @@ describe("shared audit post-step (cap-before-audit)", () => {
     });
 
     expect(spy.capturedPrompts).toHaveLength(2);
-    expect(result[0].content).toContain("still no sections");
-    expect(result).toHaveLength(3);
+    expect(result.messages[0].content).toContain("still no sections");
+    expect(result.messages).toHaveLength(3);
+    expect(result.summary).toContain("still no sections");
   });
 
   it("audits the capped text, not the pre-cap text: tail-amputated sections trigger the retry", async () => {

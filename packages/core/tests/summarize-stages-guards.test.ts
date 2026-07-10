@@ -63,10 +63,10 @@ describe("summarizeInStages guards", () => {
     await vi.advanceTimersByTimeAsync(120_000);
     const result = await p;
 
-    expect(result[0].role).toBe("system");
-    expect(String(result[0].content)).toContain("FTP 247W");
-    expect(String(result[0].content)).toContain("## Coach Stance");
-    expect(result.length).toBe(5);
+    expect(result.messages[0].role).toBe("system");
+    expect(String(result.messages[0].content)).toContain("FTP 247W");
+    expect(String(result.messages[0].content)).toContain("## Coach Stance");
+    expect(result.messages.length).toBe(5);
 
     const chunkWarn = warnSpy.mock.calls.find(
       (call) => typeof call[0] === "string" && call[0].includes("Staged summarization chunk failed"),
@@ -87,8 +87,8 @@ describe("summarizeInStages guards", () => {
       previousSummary: VALID_FIVE_SECTION_SUMMARY,
     });
 
-    expect(result[0].role).toBe("system");
-    expect(String(result[0].content)).toContain("FTP 247W");
+    expect(result.messages[0].role).toBe("system");
+    expect(String(result.messages[0].content)).toContain("FTP 247W");
     expect(spy.capturedPrompts.length).toBe(1);
 
     const chunkWarn = warnSpy.mock.calls.find(
@@ -108,8 +108,9 @@ describe("summarizeInStages guards", () => {
       memory: EMPTY_SNAPSHOT,
     });
 
-    expect(result).toEqual(REPRESENTATIVE_CONVERSATION.slice(-4));
-    for (const msg of result) {
+    expect(result.messages).toEqual(REPRESENTATIVE_CONVERSATION.slice(-4));
+    expect(result.summary).toBeUndefined();
+    for (const msg of result.messages) {
       expect(String(msg.content).startsWith(SUMMARY_PREFIX)).toBe(false);
     }
 
@@ -117,6 +118,22 @@ describe("summarizeInStages guards", () => {
       (call) => typeof call[0] === "string" && call[0].includes("produced no summary"),
     );
     expect(dropWarn).toBeDefined();
+  });
+
+  it("returns the input unchanged with no summary when there is nothing to summarize", async () => {
+    const spy = createFakeLLM([]);
+    const short = REPRESENTATIVE_CONVERSATION.slice(-3);
+
+    const result = await summarizeInStages({
+      messages: short,
+      llm: spy,
+      mustPreserveTokens: CYCLING_VOCABULARY,
+      memory: EMPTY_SNAPSHOT,
+    });
+
+    expect(result.messages).toEqual(short);
+    expect(result.summary).toBeUndefined();
+    expect(spy.capturedPrompts.length).toBe(0);
   });
 
   it("carries the last successful chunk summary across a failed chunk", async () => {
@@ -134,9 +151,9 @@ describe("summarizeInStages guards", () => {
     });
 
     expect(spy.capturedPrompts.length).toBe(2);
-    expect(result[0].role).toBe("system");
-    expect(String(result[0].content)).toContain("## Coach Stance");
-    expect(String(result[0].content)).toContain("FTP 247W");
+    expect(result.messages[0].role).toBe("system");
+    expect(String(result.messages[0].content)).toContain("## Coach Stance");
+    expect(String(result.messages[0].content)).toContain("FTP 247W");
 
     const chunkWarns = warnSpy.mock.calls.filter(
       (call) => typeof call[0] === "string" && call[0].includes("Staged summarization chunk failed"),
@@ -155,9 +172,10 @@ describe("summarizeInStages guards", () => {
       memory: EMPTY_SNAPSHOT,
     });
 
-    expect(result[0].role).toBe("system");
-    expect(String(result[0].content)).toContain("## Athlete Profile");
-    expect(result.length).toBe(5);
+    expect(result.messages[0].role).toBe("system");
+    expect(String(result.messages[0].content)).toContain("## Athlete Profile");
+    expect(result.messages.length).toBe(5);
+    expect(result.summary).toContain("## Athlete Profile");
 
     const guardWarn = warnSpy.mock.calls.find(
       (call) =>
