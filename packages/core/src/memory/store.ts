@@ -17,6 +17,17 @@ const bodyOf = (block: string) => block.slice(block.indexOf("\n") + 1);
 
 const UPDATED_STAMP_PREFIX = "_updated: ";
 
+export const SECTION_SOFT_WARN_CHARS = 4000;
+
+// Embedded H2 lines would match SECTION_SPLIT and fragment the file into
+// phantom sections; demote them one level so section CONTENT can no longer
+// create section boundaries. (Section NAMES are a separate surface: markerOf
+// interpolates the name unsanitized, but both tool paths constrain it via
+// z.enum — out of scope here, which covers content-borne fragmentation only.)
+function demoteEmbeddedH2(content: string): string {
+  return content.replace(/^## /gm, "### ");
+}
+
 /**
  * Stamp a section body's first line with its write date. Idempotent: an
  * existing leading stamp (e.g. echoed back by the LLM from memory_read)
@@ -88,8 +99,14 @@ export class Memory implements MemoryStore {
     const path = join(this.memoryDir, "MEMORY.md");
     const existing = this.readMemory();
     const marker = markerOf(section);
-    const stamped = stampUpdated(content, todayInTZ(this.tz));
+    const stamped = stampUpdated(demoteEmbeddedH2(content), todayInTZ(this.tz));
     const newBlock = `${marker}\n${stamped}\n`;
+
+    if (stamped.length > SECTION_SOFT_WARN_CHARS) {
+      console.warn(
+        `memory: section "${section}" is ${stamped.length} chars (soft cap ${SECTION_SOFT_WARN_CHARS}) — consider splitting or pruning`,
+      );
+    }
 
     appendJournalEntry(this.memoryDir, {
       ts: new Date().toISOString(),
