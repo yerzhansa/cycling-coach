@@ -9,7 +9,8 @@
     "./ports": "./dist/ports.js",
     "./store/migrations": "./dist/store/migrations.js",
     "./store": "./dist/store.js",
-    "./archive": "./dist/archive/index.js"
+    "./archive": "./dist/archive/index.js",
+    "./store/export": "./dist/store/export/index.js"
   },
   "scripts": {
     "build": "tsup",

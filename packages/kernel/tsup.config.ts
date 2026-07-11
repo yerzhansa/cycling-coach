@@ -6,6 +6,7 @@ export default defineConfig({
     "store/migrations": "src/store/migrations/index.ts",
     store: "src/store/index.ts",
     "archive/index": "src/archive/index.ts",
+    "store/export/index": "src/store/export/index.ts",
   },
   loader: { ".sql": "text" },
   format: ["esm"],
