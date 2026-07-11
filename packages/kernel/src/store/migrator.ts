@@ -58,7 +58,7 @@ export async function runMigrations(
   migrations: readonly Migration[],
 ): Promise<MigrationResult> {
   const sorted = validateAndSort(migrations);
-  const appMaxVersion = sorted.length === 0 ? 0 : sorted[sorted.length - 1]!.version;
+  const appMaxVersion = sorted.at(-1)?.version ?? 0;
 
   const current = await store.getUserVersion();
   if (current > appMaxVersion) {
