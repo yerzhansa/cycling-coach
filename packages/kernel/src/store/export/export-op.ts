@@ -104,27 +104,28 @@ export async function importExport(
     { codec: deps.codec, crypto: deps.crypto },
     { passphrase: opts.passphrase },
   );
-  if (
-    document === null ||
-    typeof document !== "object" ||
-    (document as Record<string, unknown>).kind !== EXPORT_DOCUMENT_KIND ||
-    (document as Record<string, unknown>).formatVersion !== EXPORT_FORMAT_VERSION
-  ) {
+  if (document === null || typeof document !== "object") {
     throw new ExportFormatError("The export file is not a recognized enduragent export document.");
   }
-  const store = (document as Record<string, unknown>).store;
-  const archiveManifest = (document as Record<string, unknown>).archiveManifest;
+  const doc = document as Record<string, unknown>;
+  if (doc.kind !== EXPORT_DOCUMENT_KIND || doc.formatVersion !== EXPORT_FORMAT_VERSION) {
+    throw new ExportFormatError("The export file is not a recognized enduragent export document.");
+  }
+  const store = doc.store;
+  const archiveManifest = doc.archiveManifest;
+  if (store === null || typeof store !== "object") {
+    throw new ExportFormatError("The export file is not a recognized enduragent export document.");
+  }
+  const storeRecord = store as Record<string, unknown>;
   if (
-    store === null ||
-    typeof store !== "object" ||
-    typeof (store as Record<string, unknown>).authored !== "object" ||
-    (store as Record<string, unknown>).authored === null ||
+    typeof storeRecord.authored !== "object" ||
+    storeRecord.authored === null ||
     !Array.isArray(archiveManifest)
   ) {
     throw new ExportFormatError("The export file is not a recognized enduragent export document.");
   }
-  const storeUserVersion = (store as Record<string, unknown>).userVersion as number;
-  const authored = (store as Record<string, unknown>).authored as Record<string, readonly AuthoredRow[]>;
+  const storeUserVersion = storeRecord.userVersion as number;
+  const authored = storeRecord.authored as Record<string, readonly AuthoredRow[]>;
   if (storeUserVersion > deps.targetUserVersion) {
     throw new ExportSchemaMismatchError(
       "This backup was created by a newer version of the app; update before restoring.",

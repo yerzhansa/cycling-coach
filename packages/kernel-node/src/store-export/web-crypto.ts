@@ -7,6 +7,13 @@ export const webCryptoTextCodec: TextCodec = {
 };
 
 function toBufferSource(view: Uint8Array): Uint8Array<ArrayBuffer> {
+  if (
+    view.byteOffset === 0 &&
+    view.byteLength === view.buffer.byteLength &&
+    view.buffer instanceof ArrayBuffer
+  ) {
+    return view as Uint8Array<ArrayBuffer>;
+  }
   const copy = new Uint8Array(view.length);
   copy.set(view);
   return copy;
