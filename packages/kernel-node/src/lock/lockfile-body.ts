@@ -1,6 +1,6 @@
-import { link, open, unlink } from "node:fs/promises";
+import { link } from "node:fs/promises";
 import { readFileSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { writeTempThenPublish } from "./write-temp.js";
 
 export interface LockfileBody {
   readonly pid: number;
@@ -16,31 +16,9 @@ export interface LockfileBody {
 // unlinked and a fresh claim published.
 export async function claimLockfile(lockfilePath: string, body: LockfileBody): Promise<void> {
   const serialized = JSON.stringify(body, null, 2) + "\n";
-  const suffix = randomBytes(4).toString("hex");
-  const tempPath = `${lockfilePath}.tmp.${suffix}`;
-
-  let fh: Awaited<ReturnType<typeof open>> | null = null;
-  try {
-    fh = await open(tempPath, "w", 0o600);
-    await fh.writeFile(serialized, "utf-8");
-    await fh.sync();
-    await fh.close();
-    fh = null;
-    await link(tempPath, lockfilePath);
-  } finally {
-    if (fh !== null) {
-      try {
-        await fh.close();
-      } catch {
-        /* already in the error path */
-      }
-    }
-    try {
-      await unlink(tempPath);
-    } catch {
-      /* temp sibling may not exist */
-    }
-  }
+  await writeTempThenPublish(lockfilePath, serialized, (tempPath, targetPath) =>
+    link(tempPath, targetPath),
+  );
 }
 
 export function readLockfile(lockfilePath: string): LockfileBody | null {

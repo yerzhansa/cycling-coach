@@ -70,27 +70,26 @@ async function bestEffortUnlink(path: string): Promise<void> {
   }
 }
 
-function contentionAgainstBound(
+async function contentionAgainstBound(
   bodyPid: number | undefined,
   boundPort: number,
   portFilePath: string,
   probe: HealthzProbe,
-): Promise<PeerHealthyOutcome | never> {
-  return probe(boundPort).then((verdict) => {
-    if (verdict.kind === "healthy") {
-      return { status: "peer-healthy", port: boundPort, peerVersion: verdict.version };
-    }
-    if (verdict.kind === "unresponsive") {
-      throw new WriteLockContentionError(
-        `Another writer already holds this store (pid ${bodyPid ?? "unknown"}); stop that process or wait, then retry.`,
-        3,
-      );
-    }
+): Promise<PeerHealthyOutcome> {
+  const verdict = await probe(boundPort);
+  if (verdict.kind === "healthy") {
+    return { status: "peer-healthy", port: boundPort, peerVersion: verdict.version };
+  }
+  if (verdict.kind === "unresponsive") {
     throw new WriteLockContentionError(
-      `127.0.0.1:${boundPort} is held by a foreign process; change or remove the port file at ${portFilePath} and retry.`,
+      `Another writer already holds this store (pid ${bodyPid ?? "unknown"}); stop that process or wait, then retry.`,
       3,
     );
-  });
+  }
+  throw new WriteLockContentionError(
+    `127.0.0.1:${boundPort} is held by a foreign process; change or remove the port file at ${portFilePath} and retry.`,
+    3,
+  );
 }
 
 export async function acquireWriteLock(opts: AcquireWriteLockOptions): Promise<AcquireWriteLockResult> {
