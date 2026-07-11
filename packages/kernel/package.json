@@ -6,7 +6,8 @@
   "type": "module",
   "files": ["dist"],
   "exports": {
-    "./ports": "./dist/ports.js"
+    "./ports": "./dist/ports.js",
+    "./store/migrations": "./dist/store/migrations.js"
   },
   "scripts": {
     "build": "tsup",

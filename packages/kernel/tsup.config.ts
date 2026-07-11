@@ -1,7 +1,11 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: { ports: "src/ports/index.ts" },
+  entry: {
+    ports: "src/ports/index.ts",
+    "store/migrations": "src/store/migrations/index.ts",
+  },
+  loader: { ".sql": "text" },
   format: ["esm"],
   dts: true,
   sourcemap: true,
