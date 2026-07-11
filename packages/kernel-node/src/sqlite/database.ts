@@ -4,26 +4,25 @@
 // bundled build or (b) a measured >2x backfill regression; adopting it would require
 // a dual-ABI build step in the same change and is out of scope for this change.
 import { DatabaseSync } from "node:sqlite";
-import type { MigratorStore, Row, SqlStore, SqlValue } from "@enduragent/kernel/store";
+import type { MigratorStore, Row, SqlStore } from "@enduragent/kernel/store";
 
 export function openSqliteStorage(path: string): SqlStore & MigratorStore {
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
-  const bind = (params?: readonly SqlValue[]): SqlValue[] => (params ? [...params] : []);
   return {
     async exec(sql) {
       db.exec(sql);
     },
     async run(sql, params) {
-      db.prepare(sql).run(...bind(params));
+      db.prepare(sql).run(...(params ?? []));
     },
     async get(sql, params) {
-      const r = db.prepare(sql).get(...bind(params));
+      const r = db.prepare(sql).get(...(params ?? []));
       return r === undefined || r === null ? undefined : ({ ...r } as Row);
     },
     async all(sql, params) {
-      return db.prepare(sql).all(...bind(params)).map((r) => ({ ...r }) as Row);
+      return db.prepare(sql).all(...(params ?? [])).map((r) => ({ ...r }) as Row);
     },
     async close() {
       db.close();

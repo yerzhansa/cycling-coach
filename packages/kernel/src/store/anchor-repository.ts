@@ -1,22 +1,4 @@
-import type { AnchorHistoryRow, AnchorRepository, Row, SqlStore } from "./ports.js";
-
-function toAnchorHistoryRow(r: Row): AnchorHistoryRow {
-  return {
-    id: r.id as string,
-    sport: r.sport as string,
-    anchor_type: r.anchor_type as string,
-    value: r.value as number,
-    unit: r.unit as string,
-    valid_from: r.valid_from as number,
-    source: r.source as string,
-    confidence: r.confidence as string,
-    note: r.note as string | null,
-    provenance: r.provenance as string,
-    device_id: r.device_id as string | null,
-    hlc_physical_ms: r.hlc_physical_ms as number | null,
-    hlc_counter: r.hlc_counter as number | null,
-  };
-}
+import type { AnchorHistoryRow, AnchorRepository, SqlStore } from "./ports.js";
 
 export function createAnchorRepository(store: SqlStore): AnchorRepository {
   return {
@@ -55,7 +37,7 @@ export function createAnchorRepository(store: SqlStore): AnchorRepository {
         "SELECT * FROM anchor_history WHERE sport = ? AND anchor_type = ? AND valid_from <= ? ORDER BY valid_from DESC, CASE confidence WHEN 'manual' THEN 0 WHEN 'platform' THEN 1 WHEN 'fit' THEN 2 ELSE 3 END ASC LIMIT 1",
         [sport, anchorType, asOfEpochS],
       );
-      return r === undefined ? undefined : toAnchorHistoryRow(r);
+      return r === undefined ? undefined : (r as unknown as AnchorHistoryRow);
     },
   };
 }
