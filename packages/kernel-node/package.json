@@ -6,7 +6,8 @@
   "type": "module",
   "files": ["dist"],
   "exports": {
-    "./sqlite": "./dist/sqlite.js"
+    "./sqlite": "./dist/sqlite.js",
+    "./archive": "./dist/archive/index.js"
   },
   "engines": {
     "node": ">=24"
