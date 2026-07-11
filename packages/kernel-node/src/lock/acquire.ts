@@ -1,8 +1,8 @@
 import { createServer, type Server, type AddressInfo } from "node:net";
-import { closeSync, openSync, existsSync, mkdirSync, chmodSync, statSync, constants as fsConstants } from "node:fs";
+import { existsSync, mkdirSync, chmodSync, statSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { join } from "node:path";
-import { readLockfile, writeLockfile } from "./lockfile-body.js";
+import { claimLockfile, readLockfile } from "./lockfile-body.js";
 import { readPortFile, writePortFile } from "./port-file.js";
 import { defaultHealthzProbe, isPortBound, type HealthzProbe } from "./healthz-probe.js";
 
@@ -40,20 +40,6 @@ export type AcquireWriteLockResult = WriteLockHandle | PeerHealthyOutcome;
 
 export const LOCKFILE_NAME = "store-writer.lock" as const;
 export const PORT_FILE_NAME = "store-writer.port" as const;
-
-const CLAIM_FILL_GRACE_MS = 150;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
-function claimAgeMs(path: string): number | null {
-  try {
-    return Date.now() - statSync(path).mtimeMs;
-  } catch {
-    return null;
-  }
-}
 
 function ensureConfigDirSecure(configDir: string): void {
   if (existsSync(configDir)) {
@@ -123,19 +109,13 @@ export async function acquireWriteLock(opts: AcquireWriteLockOptions): Promise<A
   const actualPort = (server.address() as AddressInfo).port;
 
   const claimAndFill = async (): Promise<WriteLockHandle> => {
-    const fd = openSync(
-      lockfilePath,
-      fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY,
-      0o600,
-    );
-    closeSync(fd);
-    await writePortFile(portFilePath, actualPort);
-    await writeLockfile(lockfilePath, {
+    await claimLockfile(lockfilePath, {
       pid: process.pid,
       port: actualPort,
       version: opts.version,
       athleteHome: opts.athleteHome,
     });
+    await writePortFile(portFilePath, actualPort);
     return {
       status: "acquired",
       port: actualPort,
@@ -157,24 +137,20 @@ export async function acquireWriteLock(opts: AcquireWriteLockOptions): Promise<A
         await closeServer(server);
         throw err;
       }
-      let other = readLockfile(lockfilePath);
-      let otherPort = other?.port ?? readPortFile(portFilePath);
+      const other = readLockfile(lockfilePath);
+      const otherPort = other?.port ?? readPortFile(portFilePath);
       if (otherPort === null) {
-        await sleep(CLAIM_FILL_GRACE_MS);
-        other = readLockfile(lockfilePath);
-        otherPort = other?.port ?? readPortFile(portFilePath);
-        if (otherPort === null) {
-          const age = claimAgeMs(lockfilePath);
-          if (age !== null && age < CLAIM_FILL_GRACE_MS) {
-            await closeServer(server);
-            throw new WriteLockContentionError(
-              `Another writer won arbitration for this store; stop that process or wait, then retry.`,
-              3,
-            );
-          }
-        }
+        // Corruption backstop — no process ordering produces a claim without a
+        // readable port (claims are born with their body via claimLockfile).
+        // An unreadable claim is not proven stale, and no timer may prove it:
+        // never unlink, never wait.
+        await closeServer(server);
+        throw new WriteLockContentionError(
+          `The lockfile at ${lockfilePath} is unreadable; remove it and retry.`,
+          3,
+        );
       }
-      if (otherPort !== null && (await isPortBound(otherPort))) {
+      if (await isPortBound(otherPort)) {
         await closeServer(server);
         return contentionAgainstBound(other?.pid, otherPort, portFilePath, probe);
       }

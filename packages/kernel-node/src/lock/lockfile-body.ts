@@ -1,4 +1,4 @@
-import { open, rename, unlink } from "node:fs/promises";
+import { link, open, unlink } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 
@@ -9,7 +9,12 @@ export interface LockfileBody {
   readonly athleteHome: string;
 }
 
-export async function writeLockfile(lockfilePath: string, body: LockfileBody): Promise<void> {
+// claimLockfile IS the mutex: link(2) fails EEXIST iff the target exists — the
+// same kernel-atomic exclusive-create arbitration as O_CREAT|O_EXCL, but the
+// claim is born carrying its full body, so no observer can ever read an empty
+// or partial claim. A body is never rewritten in place: a stale claim is
+// unlinked and a fresh claim published.
+export async function claimLockfile(lockfilePath: string, body: LockfileBody): Promise<void> {
   const serialized = JSON.stringify(body, null, 2) + "\n";
   const suffix = randomBytes(4).toString("hex");
   const tempPath = `${lockfilePath}.tmp.${suffix}`;
@@ -21,8 +26,8 @@ export async function writeLockfile(lockfilePath: string, body: LockfileBody): P
     await fh.sync();
     await fh.close();
     fh = null;
-    await rename(tempPath, lockfilePath);
-  } catch (err) {
+    await link(tempPath, lockfilePath);
+  } finally {
     if (fh !== null) {
       try {
         await fh.close();
@@ -35,7 +40,6 @@ export async function writeLockfile(lockfilePath: string, body: LockfileBody): P
     } catch {
       /* temp sibling may not exist */
     }
-    throw err;
   }
 }
 

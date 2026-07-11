@@ -3,7 +3,7 @@
 // are proven by branch selection against an injected /healthz test double; the full
 // four-case matrix against a real daemon /healthz responder arms at W8.
 
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, type Server } from "node:net";
@@ -21,7 +21,7 @@ import {
   type AcquireWriteLockResult,
 } from "../src/lock/index.js";
 import { writePortFile, readPortFile } from "../src/lock/port-file.js";
-import { writeLockfile } from "../src/lock/lockfile-body.js";
+import { claimLockfile } from "../src/lock/lockfile-body.js";
 import { defaultHealthzProbe, classifyHealthzResponse } from "../src/lock/healthz-probe.js";
 
 const tempDirs: string[] = [];
@@ -149,7 +149,7 @@ describe("acquireWriteLock", () => {
     const configDir = freshDir();
     const { port } = await occupyPort();
     await writePortFile(join(configDir, PORT_FILE_NAME), port);
-    await writeLockfile(join(configDir, LOCKFILE_NAME), {
+    await claimLockfile(join(configDir, LOCKFILE_NAME), {
       pid: 777,
       port,
       version: "8.8.8",
@@ -172,7 +172,7 @@ describe("acquireWriteLock", () => {
     const configDir = freshDir();
     const freePort = await knownFreePort();
     await writePortFile(join(configDir, PORT_FILE_NAME), freePort);
-    await writeLockfile(join(configDir, LOCKFILE_NAME), {
+    await claimLockfile(join(configDir, LOCKFILE_NAME), {
       pid: process.pid,
       port: freePort,
       version: "0.0.1",
@@ -203,7 +203,7 @@ describe("acquireWriteLock", () => {
     const configDir = freshDir();
     const { port } = await occupyPort();
     await writePortFile(join(configDir, PORT_FILE_NAME), port);
-    await writeLockfile(join(configDir, LOCKFILE_NAME), {
+    await claimLockfile(join(configDir, LOCKFILE_NAME), {
       pid: 424242,
       port,
       version: "0.0.1",
@@ -287,23 +287,98 @@ describe("acquireWriteLock", () => {
     expect((caught as WriteLockContentionError).exitCode).toBe(3);
   });
 
-  it("(same-dir) two concurrent acquirers on one fresh configDir yield exactly one winner", async () => {
-    const configDir = freshDir();
+  it("(race) two concurrent acquirers on one fresh configDir yield exactly one winner, every time", async () => {
     const probe: HealthzProbe = async () => ({ kind: "unresponsive" });
-    const opts = { configDir, athleteHome: "/home/a", version: "1.0.0", probeHealthz: probe };
+    for (let i = 0; i < 25; i++) {
+      const configDir = freshDir();
+      const opts = { configDir, athleteHome: "/home/a", version: "1.0.0", probeHealthz: probe };
 
-    const settled = await Promise.allSettled([acquireWriteLock(opts), acquireWriteLock(opts)]);
+      const settled = await Promise.allSettled([acquireWriteLock(opts), acquireWriteLock(opts)]);
 
-    const winners = settled.filter(
-      (s): s is PromiseFulfilledResult<AcquireWriteLockResult> =>
-        s.status === "fulfilled" && s.value.status === "acquired",
+      const winners = settled.filter(
+        (s): s is PromiseFulfilledResult<AcquireWriteLockResult> =>
+          s.status === "fulfilled" && s.value.status === "acquired",
+      );
+      const losers = settled.filter((s): s is PromiseRejectedResult => s.status === "rejected");
+      expect(winners).toHaveLength(1);
+      expect(losers).toHaveLength(1);
+      expect(losers[0].reason).toBeInstanceOf(WriteLockContentionError);
+      expect((losers[0].reason as WriteLockContentionError).exitCode).toBe(3);
+      await trackHandle(winners[0].value).release();
+      heldHandles.length = 0;
+    }
+  });
+
+  it("(race, mid-fill) a live claim without a port file is never unlinked", async () => {
+    const configDir = freshDir();
+    const { port } = await occupyPort();
+    const lockfilePath = join(configDir, LOCKFILE_NAME);
+    await claimLockfile(lockfilePath, {
+      pid: 555001,
+      port,
+      version: "1.0.0",
+      athleteHome: "/home/a",
+    });
+    const lockBefore = readFileSync(lockfilePath, "utf-8");
+
+    const probe: HealthzProbe = async () => ({ kind: "unresponsive" });
+    let caught: unknown;
+    try {
+      await acquireWriteLock({ configDir, athleteHome: "/home/a", version: "1.0.0", probeHealthz: probe });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(WriteLockContentionError);
+    expect((caught as WriteLockContentionError).exitCode).toBe(3);
+    expect((caught as WriteLockContentionError).message).toContain("555001");
+    expect(readFileSync(lockfilePath, "utf-8")).toBe(lockBefore);
+    expect(readdirSync(configDir).filter((n) => n.includes(".tmp."))).toEqual([]);
+  });
+
+  it("(b-variant) a crash artifact claim naming a free port is reclaimed without probing", async () => {
+    const configDir = freshDir();
+    const freePort = await knownFreePort();
+    await claimLockfile(join(configDir, LOCKFILE_NAME), {
+      pid: 555002,
+      port: freePort,
+      version: "0.0.1",
+      athleteHome: "/home/a",
+    });
+
+    const throwingProbe: HealthzProbe = async () => {
+      throw new Error("probe must not be consulted for a free-port artifact");
+    };
+    const result = trackHandle(
+      await acquireWriteLock({
+        configDir,
+        athleteHome: "/home/a",
+        version: "1.0.0",
+        probeHealthz: throwingProbe,
+      }),
     );
-    const losers = settled.filter((s): s is PromiseRejectedResult => s.status === "rejected");
-    expect(winners).toHaveLength(1);
-    expect(losers).toHaveLength(1);
-    trackHandle(winners[0].value);
-    expect(losers[0].reason).toBeInstanceOf(WriteLockContentionError);
-    expect((losers[0].reason as WriteLockContentionError).exitCode).toBe(3);
+    expect(result.status).toBe("acquired");
+    const replaced = readLockfile(join(configDir, LOCKFILE_NAME));
+    expect(replaced?.pid).toBe(process.pid);
+    expect(replaced?.port).toBe(result.port);
+  });
+
+  it("(corrupt-claim) an unreadable claim refuses exit 3 naming the file, never unlinks it", async () => {
+    for (const garbage of ["", "not json {{{"]) {
+      const configDir = freshDir();
+      const lockfilePath = join(configDir, LOCKFILE_NAME);
+      writeFileSync(lockfilePath, garbage);
+
+      let caught: unknown;
+      try {
+        await acquireWriteLock({ configDir, athleteHome: "/home/a", version: "1.0.0" });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(WriteLockContentionError);
+      expect((caught as WriteLockContentionError).exitCode).toBe(3);
+      expect((caught as WriteLockContentionError).message).toContain(lockfilePath);
+      expect(readFileSync(lockfilePath, "utf-8")).toBe(garbage);
+    }
   });
 
   it("(default-probe) the real probe classifier resolves healthy/foreign/unresponsive", async () => {
