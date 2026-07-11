@@ -40,5 +40,15 @@ export default defineConfig({
         return null;
       },
     },
+    {
+      name: "raw-sql",
+      enforce: "pre",
+      transform(code, id) {
+        if (id.endsWith(".sql")) {
+          return { code: `export default ${JSON.stringify(code)};`, map: null };
+        }
+        return null;
+      },
+    },
   ],
 });
