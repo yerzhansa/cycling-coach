@@ -4,8 +4,10 @@ import type { CryptoPort, FileSystemPort } from "@enduragent/kernel/ports";
 import {
   artifactRelPath,
   canonicalJson,
+  quarantineReasonRelPath,
   quarantineRelPath,
   snapshotRelPath,
+  toHex,
   type ArchiveInstant,
   type ArchiveManager,
   type ArchiveWriteResult,
@@ -18,14 +20,6 @@ export interface ArchiveManagerDeps {
   readonly archiveRoot: string;
   readonly crypto: CryptoPort;
   readonly fs: FileSystemPort;
-}
-
-function toHex(bytes: Uint8Array): string {
-  let hex = "";
-  for (const byte of bytes) {
-    hex += byte.toString(16).padStart(2, "0");
-  }
-  return hex;
 }
 
 export function createArchiveManager(deps: ArchiveManagerDeps): ArchiveManager {
@@ -43,9 +37,22 @@ export function createArchiveManager(deps: ArchiveManagerDeps): ArchiveManager {
   // atomic temp->fsync->rename seam, so a mid-write kill leaves the old file or
   // nothing, never a truncated artifact. The manager holds no deletion path
   // over committed archive content.
-  async function writeDurable(full: string, bytes: Uint8Array): Promise<void> {
+  async function writeDurable(full: string, data: Uint8Array | string): Promise<void> {
     await fs.mkdir(dirname(full), { recursive: true });
-    await fs.writeFile(full, bytes);
+    await fs.writeFile(full, data);
+  }
+
+  async function commit(
+    address: string,
+    relPath: string,
+    bytes: Uint8Array,
+  ): Promise<ArchiveWriteResult> {
+    const full = join(archiveRoot, relPath);
+    if (await exists(full)) {
+      return { address, relPath, deduped: true };
+    }
+    await writeDurable(full, bytes);
+    return { address, relPath, deduped: false };
   }
 
   return {
@@ -55,26 +62,14 @@ export function createArchiveManager(deps: ArchiveManagerDeps): ArchiveManager {
       when: ArchiveInstant,
     ): Promise<ArchiveWriteResult> {
       const address = await addressOf(bytes);
-      const relPath = artifactRelPath(address, ext, when);
-      const full = join(archiveRoot, relPath);
-      if (await exists(full)) {
-        return { address, relPath, deduped: true };
-      }
-      await writeDurable(full, bytes);
-      return { address, relPath, deduped: false };
+      return commit(address, artifactRelPath(address, ext, when), bytes);
     },
 
     async writeSnapshot(payload: unknown, when: ArchiveInstant): Promise<ArchiveWriteResult> {
       const raw = Buffer.from(canonicalJson(payload), "utf8");
       const gz = gzipSync(raw, { level: ARCHIVE_GZIP_LEVEL });
       const address = await addressOf(gz);
-      const relPath = snapshotRelPath(address, when);
-      const full = join(archiveRoot, relPath);
-      if (await exists(full)) {
-        return { address, relPath, deduped: true };
-      }
-      await writeDurable(full, gz);
-      return { address, relPath, deduped: false };
+      return commit(address, snapshotRelPath(address, when), gz);
     },
 
     async quarantine(
@@ -83,17 +78,15 @@ export function createArchiveManager(deps: ArchiveManagerDeps): ArchiveManager {
       reason: string,
     ): Promise<ArchiveWriteResult> {
       const address = await addressOf(bytes);
-      const relPath = quarantineRelPath(address, ext);
-      const full = join(archiveRoot, relPath);
-      await fs.mkdir(dirname(full), { recursive: true });
-      const deduped = await exists(full);
-      if (!deduped) {
-        await fs.writeFile(full, bytes);
-      }
+      const result = await commit(address, quarantineRelPath(address, ext), bytes);
       // Durable reason sidecar: an unparseable payload is never silently
       // dropped — the why is persisted beside the bytes, not merely logged.
-      await fs.writeFile(`${full}.reason.txt`, reason);
-      return { address, relPath, deduped };
+      // First reason wins: committed archive-adjacent content is never rewritten.
+      const reasonFull = join(archiveRoot, quarantineReasonRelPath(address, ext));
+      if (!(await exists(reasonFull))) {
+        await writeDurable(reasonFull, reason);
+      }
+      return result;
     },
 
     async readArtifact(relPath: string): Promise<Uint8Array> {

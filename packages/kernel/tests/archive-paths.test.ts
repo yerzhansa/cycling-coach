@@ -5,9 +5,11 @@ import {
   InvalidArtifactExtensionError,
   InvalidContentAddressError,
   normalizeExt,
+  quarantineReasonRelPath,
   quarantineRelPath,
   shardFromInstant,
   snapshotRelPath,
+  toHex,
 } from "../src/archive/index.js";
 
 const ADDR = "a".repeat(64);
@@ -30,9 +32,13 @@ describe("shardFromInstant", () => {
   });
 
   it("derives from UTC, not local time", () => {
-    // 2021-01-01T00:30:00Z is 2020-12-31 in any negative-offset local zone.
-    const when = { epochSeconds: Date.UTC(2021, 0, 1, 0, 30, 0) / 1000 };
-    expect(shardFromInstant(when)).toEqual({ year: "2021", month: "01" });
+    // Both sides of the year boundary: 00:30Z catches negative-offset local
+    // zones, 23:30Z catches positive-offset ones — one of the two always
+    // discriminates UTC from local regardless of the host's offset sign.
+    const justAfter = { epochSeconds: Date.UTC(2021, 0, 1, 0, 30, 0) / 1000 };
+    expect(shardFromInstant(justAfter)).toEqual({ year: "2021", month: "01" });
+    const justBefore = { epochSeconds: Date.UTC(2020, 11, 31, 23, 30, 0) / 1000 };
+    expect(shardFromInstant(justBefore)).toEqual({ year: "2020", month: "12" });
   });
 });
 
@@ -80,6 +86,8 @@ describe("rel-path builders", () => {
     expect(artifactRelPath(ADDR, "fit", WHEN)).toBe(`2021/03/${ADDR}.fit`);
     expect(snapshotRelPath(ADDR, WHEN)).toBe(`2021/03/${ADDR}.json.gz`);
     expect(quarantineRelPath(ADDR, "fit")).toBe(`quarantine/${ADDR}.fit`);
+    expect(quarantineReasonRelPath(ADDR, "fit")).toBe(`quarantine/${ADDR}.fit.reason.txt`);
+    expect(toHex(new Uint8Array([0, 15, 255]))).toBe("000fff");
   });
 
   it("rejects a bad address in every builder", () => {

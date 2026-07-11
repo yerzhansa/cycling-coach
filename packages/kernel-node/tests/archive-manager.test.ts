@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
 import { open, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
@@ -128,14 +129,36 @@ describe("archive manager", () => {
     expect(yearDirs).toEqual([]);
   });
 
+  it("preserves the first quarantine reason — a re-quarantine never rewrites the sidecar", async () => {
+    const manager = makeManager();
+    const bytes = new Uint8Array([255, 0, 128]);
+    const first = await manager.quarantine(bytes, "bin", "original diagnosis");
+    const second = await manager.quarantine(bytes, "bin", "later different reason");
+
+    expect(second.deduped).toBe(true);
+    expect(second.relPath).toBe(first.relPath);
+    const full = join(archiveRoot, first.relPath);
+    expect(await readFile(`${full}.reason.txt`, "utf8")).toBe("original diagnosis");
+  });
+
   it("round-trips a snapshot through gzip and canonical JSON", async () => {
     const manager = makeManager();
     const payload = { b: 1, a: { d: 4, c: 3 }, list: [3, 1, 2] };
     const result = await manager.writeSnapshot(payload, WHEN);
 
     expect(result.relPath.endsWith(".json.gz")).toBe(true);
+    const onDisk = gunzipSync(await readFile(join(archiveRoot, result.relPath))).toString("utf8");
+    expect(onDisk).toBe(canonicalJson(payload));
     const readBack = await manager.readSnapshot(result.relPath);
     expect(canonicalJson(readBack)).toBe(canonicalJson(payload));
+  });
+
+  it("addresses key-order-insensitively — reordered keys hit the same snapshot", async () => {
+    const manager = makeManager();
+    const first = await manager.writeSnapshot({ b: 1, a: { d: 4, c: 3 } }, WHEN);
+    const second = await manager.writeSnapshot({ a: { c: 3, d: 4 }, b: 1 }, WHEN);
+    expect(second.address).toBe(first.address);
+    expect(second.deduped).toBe(true);
   });
 
   it("addresses the compressed bytes and dedups a repeated snapshot", async () => {
