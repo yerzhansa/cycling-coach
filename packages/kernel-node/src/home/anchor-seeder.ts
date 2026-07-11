@@ -59,11 +59,18 @@ export async function seedFtpHistory(opts: SeedFtpHistoryOptions): Promise<FtpSe
     );
     return report;
   };
+  const zeroReport = (source: FtpSeedReport["source"]): FtpSeedReport => ({
+    source,
+    entriesRead: 0,
+    inserted: 0,
+    deduped: 0,
+    skippedMalformed: 0,
+  });
 
   const filePath = join(opts.legacyCoachHome, LEGACY_DATA_SUBDIR, FTP_HISTORY_FILENAME);
 
   if (!existsSync(filePath)) {
-    return finish({ source: "absent", entriesRead: 0, inserted: 0, deduped: 0, skippedMalformed: 0 });
+    return finish(zeroReport("absent"));
   }
 
   let parsed;
@@ -71,12 +78,12 @@ export async function seedFtpHistory(opts: SeedFtpHistoryOptions): Promise<FtpSe
     const raw = readFileSync(filePath, "utf8");
     parsed = FtpHistoryJsonSchema.parse(JSON.parse(raw));
   } catch {
-    return finish({ source: "unreadable", entriesRead: 0, inserted: 0, deduped: 0, skippedMalformed: 0 });
+    return finish(zeroReport("unreadable"));
   }
 
   const entries = parsed.entries;
   if (entries.length === 0) {
-    return finish({ source: "empty", entriesRead: 0, inserted: 0, deduped: 0, skippedMalformed: 0 });
+    return finish(zeroReport("empty"));
   }
 
   let inserted = 0;

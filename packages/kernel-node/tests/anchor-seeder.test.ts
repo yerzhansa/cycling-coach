@@ -37,16 +37,14 @@ describe("seedFtpHistory", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  function writeHistory(contents: unknown): void {
-    const dataDir = join(home, "data");
-    mkdirSync(dataDir, { recursive: true });
-    writeFileSync(join(dataDir, "ftp_history.json"), JSON.stringify(contents), "utf8");
-  }
-
   function writeRaw(raw: string): void {
     const dataDir = join(home, "data");
     mkdirSync(dataDir, { recursive: true });
     writeFileSync(join(dataDir, "ftp_history.json"), raw, "utf8");
+  }
+
+  function writeHistory(contents: unknown): void {
+    writeRaw(JSON.stringify(contents));
   }
 
   it("(absent) no file → no-op", async () => {
