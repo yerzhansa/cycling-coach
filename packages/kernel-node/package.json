@@ -5,11 +5,16 @@
   "description": "Node host adapter for the pure kernel — node:sqlite / node:fs / WebCrypto drivers behind the kernel's ports (scaffold, no content yet).",
   "type": "module",
   "files": ["dist"],
-  "exports": {},
+  "exports": {
+    "./sqlite": "./dist/sqlite.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "build": "tsup",
     "check": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run"
   },
   "dependencies": {
     "@enduragent/kernel": "workspace:*"
