@@ -8,7 +8,8 @@
   "exports": {
     "./ports": "./dist/ports.js",
     "./store/migrations": "./dist/store/migrations.js",
-    "./store": "./dist/store.js"
+    "./store": "./dist/store.js",
+    "./archive": "./dist/archive/index.js"
   },
   "scripts": {
     "build": "tsup",

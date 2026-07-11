@@ -5,6 +5,7 @@ export default defineConfig({
     ports: "src/ports/index.ts",
     "store/migrations": "src/store/migrations/index.ts",
     store: "src/store/index.ts",
+    "archive/index": "src/archive/index.ts",
   },
   loader: { ".sql": "text" },
   format: ["esm"],
