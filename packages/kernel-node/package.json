@@ -9,7 +9,7 @@
   "scripts": {
     "build": "tsup",
     "check": "tsc --noEmit",
-    "test": "echo 'no tests yet (scaffold)'"
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@enduragent/kernel": "workspace:*"
@@ -17,7 +17,8 @@
   "devDependencies": {
     "@types/node": "^25.6.0",
     "tsup": "^8.4.0",
-    "typescript": "^6.0.2"
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
   },
   "license": "MIT"
 }
