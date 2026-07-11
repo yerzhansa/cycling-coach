@@ -9,7 +9,8 @@
     "./sqlite": "./dist/sqlite.js",
     "./archive": "./dist/archive/index.js",
     "./lock": "./dist/lock/index.js",
-    "./store-export": "./dist/store-export/index.js"
+    "./store-export": "./dist/store-export/index.js",
+    "./home": "./dist/home/index.js"
   },
   "engines": {
     "node": ">=24"
@@ -20,7 +21,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@enduragent/kernel": "workspace:*"
+    "@enduragent/kernel": "workspace:*",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
