@@ -15,6 +15,9 @@ import type {
   StorageRunResult,
 } from "../src/ports/index.js";
 
+const utf8Encoder = new TextEncoder();
+const utf8Decoder = new TextDecoder();
+
 class FakeFileSystem implements FileSystemPort {
   private readonly files = new Map<string, Uint8Array>();
   private readonly dirs = new Set<string>();
@@ -25,10 +28,10 @@ class FakeFileSystem implements FileSystemPort {
     return data;
   }
   async readTextFile(path: string): Promise<string> {
-    return new TextDecoder().decode(await this.readFile(path));
+    return utf8Decoder.decode(await this.readFile(path));
   }
   async writeFile(path: string, data: Uint8Array | string): Promise<void> {
-    this.files.set(path, typeof data === "string" ? new TextEncoder().encode(data) : data);
+    this.files.set(path, typeof data === "string" ? utf8Encoder.encode(data) : data);
   }
   async rename(from: string, to: string): Promise<void> {
     this.files.set(to, await this.readFile(from));
@@ -79,10 +82,8 @@ class CapturingLogger implements LoggerPort {
 }
 
 class FakeStorage implements StoragePort {
-  readonly execed: string[] = [];
   private userVersion = 0;
   async exec(sql: string): Promise<void> {
-    this.execed.push(sql);
     const match = /PRAGMA\s+user_version\s*=\s*(\d+)/i.exec(sql);
     if (match) this.userVersion = Number(match[1]);
   }
@@ -107,8 +108,8 @@ class FakeStorage implements StoragePort {
 }
 
 class StubCrypto implements CryptoPort {
-  async sha256(data: Uint8Array): Promise<Uint8Array> {
-    return new Uint8Array(32).fill(data.byteLength & 0xff);
+  async sha256(): Promise<Uint8Array> {
+    return new Uint8Array(32);
   }
   async randomBytes(length: number): Promise<Uint8Array> {
     return new Uint8Array(length);
@@ -129,7 +130,7 @@ class StubHttp implements HttpPort {
     return {
       status: 200,
       headers: { "x-echo": request.method },
-      body: new TextEncoder().encode(request.url),
+      body: utf8Encoder.encode(request.url),
     };
   }
 }
@@ -179,5 +180,7 @@ describe("kernel ports", () => {
     const http: HttpPort = new StubHttp();
     const res = await http.fetch({ method: "GET", url: "http://127.0.0.1/healthz" });
     expect(res.status).toBe(200);
+    expect(res.headers["x-echo"]).toBe("GET");
+    expect(utf8Decoder.decode(res.body)).toBe("http://127.0.0.1/healthz");
   });
 });
