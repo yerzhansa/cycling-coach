@@ -89,6 +89,78 @@ describe("intervals_create_workout provenance", () => {
   });
 });
 
+describe("intervals_create_workout payload (calendar-payload group)", () => {
+  it("posts Ride, WORKOUT, name, and serialized description without client-derived fields", async () => {
+    const { client, calls } = fakeIntervals({ ok: true, value: { id: 42 } });
+    const tool = createWorkoutTool(client)!;
+
+    await tool.execute({ date: tomorrowISODate(), workout: validWorkout }, {});
+
+    const payload = calls[0];
+    expect(payload.type).toBe("Ride");
+    expect(payload.category).toBe("WORKOUT");
+    expect(payload.name).toBe("Z2 Endurance 90min");
+    expect(typeof payload.description).toBe("string");
+    expect("moving_time" in payload).toBe(false);
+    expect("icu_training_load" in payload).toBe(false);
+  });
+
+  it("pushes a zone-ramp workout with translated percent bounds", async () => {
+    const { client, calls } = fakeIntervals({ ok: true, value: { id: 42 } });
+    const tool = createWorkoutTool(client)!;
+    const workout = {
+      name: "Zone ramp",
+      steps: [
+        {
+          type: "ramp" as const,
+          duration: { value: 10, unit: "minutes" as const },
+          power: { kind: "zone" as const, low: 1, high: 2 },
+        },
+      ],
+    };
+
+    await tool.execute({ date: tomorrowISODate(), workout }, {});
+
+    expect(calls[0].description).toContain("ramp 45-65%");
+  });
+
+  it("returns invalid_workout without calling events.create on a serialization failure", async () => {
+    const { client, calls } = fakeIntervals({ ok: true, value: { id: 42 } });
+    const tool = createWorkoutTool(client)!;
+    const workout = {
+      name: "Invalid ramp",
+      steps: [
+        {
+          type: "ramp" as const,
+          duration: { value: 10, unit: "minutes" as const },
+          power: { kind: "zone" as const, value: 2 },
+        },
+      ],
+    };
+
+    const result = await tool.execute({ date: tomorrowISODate(), workout }, {});
+
+    expect(result).toMatchObject({ error: "invalid_workout" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("surfaces the API error kind when events.create fails", async () => {
+    const { client, calls } = fakeIntervals({
+      ok: false,
+      error: { kind: "rate_limited" },
+    });
+    const tool = createWorkoutTool(client)!;
+
+    const result = await tool.execute(
+      { date: tomorrowISODate(), workout: validWorkout },
+      {},
+    );
+
+    expect(result).toEqual({ error: "rate_limited" });
+    expect(calls).toHaveLength(1);
+  });
+});
+
 describe("build_plan_skeleton purity", () => {
   it("returns a plan and never calls savePlan", async () => {
     const savePlan = vi.fn();
