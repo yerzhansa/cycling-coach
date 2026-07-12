@@ -201,3 +201,131 @@ describe("formatCliReply", () => {
     expect(reply).not.toContain("/secret/path");
   });
 });
+
+describe("_promptProposalConfirm", () => {
+  it.each(["y", "yes", " Y ", "YeS\n"])("confirms explicit yes answer %j", async (answer) => {
+    const confirm = vi.fn(async () => ({
+      status: "executed" as const,
+      summary: "Save the training plan",
+      result: { saved: true },
+    }));
+    const cancel = vi.fn();
+    const question = vi.fn((_prompt: string, cb: (value: string) => void) => cb(answer));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { _promptProposalConfirm } = await import("../src/run-binary.js");
+    await _promptProposalConfirm(
+      { question },
+      {
+        confirmations: {
+          peek: () => ({ nonce: "server-nonce", summary: "Save the training plan" }),
+          confirm,
+          cancel,
+        },
+      },
+    );
+    expect(question).toHaveBeenCalledWith(
+      "Confirm: Save the training plan? [y/N]: ",
+      expect.any(Function),
+    );
+    expect(confirm).toHaveBeenCalledWith("cli", "server-nonce");
+    expect(cancel).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith("Done — Save the training plan.");
+  });
+
+  it.each(["", "n", "no", "sure", "1"])("cancels non-explicit answer %j", async (answer) => {
+    const confirm = vi.fn();
+    const cancel = vi.fn(() => "canceled" as const);
+    const question = vi.fn((_prompt: string, cb: (value: string) => void) => cb(answer));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { _promptProposalConfirm } = await import("../src/run-binary.js");
+    await _promptProposalConfirm(
+      { question },
+      {
+        confirmations: {
+          peek: () => ({ nonce: "server-nonce", summary: "Delete workout" }),
+          confirm,
+          cancel,
+        },
+      },
+    );
+    expect(cancel).toHaveBeenCalledWith("cli", "server-nonce");
+    expect(confirm).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith("Canceled.");
+  });
+
+  it.each([
+    { answer: "y", confirmed: true },
+    { answer: "n", confirmed: false },
+  ])(
+    "routes the confirm answer $answer to the question callback, never the chat dispatcher",
+    async ({ answer, confirmed }) => {
+      let pendingQuestion: ((answer: string) => void) | undefined;
+      let lineListener: ((line: string) => void) | undefined;
+      const lineDispatch = vi.fn();
+      const emitLine = (line: string) => {
+        if (pendingQuestion !== undefined) {
+          const cb = pendingQuestion;
+          pendingQuestion = undefined;
+          cb(line);
+          return;
+        }
+        lineListener?.(line);
+      };
+      const rl = {
+        on(event: string, cb: (line: string) => void) {
+          if (event === "line") lineListener = cb;
+        },
+        question(_prompt: string, cb: (value: string) => void) {
+          pendingQuestion = cb;
+        },
+      };
+      rl.on("line", lineDispatch);
+      emitLine("hello coach");
+      expect(lineDispatch).toHaveBeenCalledWith("hello coach");
+      lineDispatch.mockClear();
+
+      const confirm = vi.fn(async () => ({
+        status: "executed" as const,
+        summary: "Delete workout",
+        result: { deleted: true },
+      }));
+      const cancel = vi.fn(() => "canceled" as const);
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      const { _promptProposalConfirm } = await import("../src/run-binary.js");
+      const pending = _promptProposalConfirm(rl, {
+        confirmations: {
+          peek: () => ({ nonce: "server-nonce", summary: "Delete workout" }),
+          confirm,
+          cancel,
+        },
+      });
+      emitLine(answer);
+      await pending;
+
+      expect(lineDispatch).not.toHaveBeenCalled();
+      if (confirmed) {
+        expect(confirm).toHaveBeenCalledWith("cli", "server-nonce");
+        expect(cancel).not.toHaveBeenCalled();
+      } else {
+        expect(cancel).toHaveBeenCalledWith("cli", "server-nonce");
+        expect(confirm).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("does nothing without a pending proposal", async () => {
+    const question = vi.fn();
+    const { _promptProposalConfirm } = await import("../src/run-binary.js");
+    await _promptProposalConfirm(
+      { question },
+      {
+        confirmations: {
+          peek: () => undefined,
+          confirm: vi.fn(),
+          cancel: vi.fn(),
+        },
+      },
+    );
+    expect(question).not.toHaveBeenCalled();
+  });
+});

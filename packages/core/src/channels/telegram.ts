@@ -363,6 +363,19 @@ export function createTelegramBot(
       writeResend(opts.chatId, response);
       try {
         await sendLongMessage(opts.ctx, response, opts.replyToMessageId);
+        const proposal = agent.confirmations.peek(opts.chatId);
+        if (proposal !== undefined) {
+          await opts.ctx.reply(proposal.summary, {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: "Confirm", callback_data: `cg:y:${proposal.nonce}` },
+                  { text: "Cancel", callback_data: `cg:n:${proposal.nonce}` },
+                ],
+              ],
+            },
+          });
+        }
       } catch (err) {
         log.error("delivery_failed", err, { command: opts.command, chatId: opts.chatId });
         await opts.ctx.reply(DELIVERY_FAILURE_HINT);
@@ -647,6 +660,39 @@ export function createTelegramBot(
         `Update failed. Please run \`npm install -g ${binary.binaryName}@${latest ?? "latest"} --ignore-scripts\` manually.`,
       );
     }
+  });
+
+  bot.on("callback_query:data", async (ctx) => {
+    const match = /^cg:(y|n):(.+)$/.exec(ctx.callbackQuery.data);
+    await ctx.answerCallbackQuery();
+    if (match === null || ctx.chat === undefined) return;
+    try {
+      await ctx.editMessageReplyMarkup();
+    } catch {
+      // Best-effort keyboard cleanup must not block resolution.
+    }
+    const choice = match[1];
+    const nonce = match[2] ?? "";
+    const chatId = `telegram:${ctx.chat.id}`;
+    dispatch(async () => {
+      if (choice === "n") {
+        const outcome = agent.confirmations.cancel(chatId, nonce);
+        await ctx.reply(
+          outcome === "canceled"
+            ? "Canceled — nothing was changed."
+            : "That proposal expired — ask me again and I'll re-propose.",
+        );
+        return;
+      }
+      const outcome = await agent.confirmations.confirm(chatId, nonce);
+      if (outcome.status === "executed") {
+        await ctx.reply(`Done — ${outcome.summary}.`);
+      } else if (outcome.status === "failed") {
+        await ctx.reply(`That didn't go through — ${outcome.message}`);
+      } else {
+        await ctx.reply("That proposal expired — ask me again and I'll re-propose.");
+      }
+    });
   });
 
   // ── Free-form chat ──────────────────────────────────────────────────────

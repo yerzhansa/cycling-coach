@@ -16,6 +16,7 @@ import {
 import { classifyAgentError } from "./agent/error-classify.js";
 import { warnOrphanSections } from "./memory/orphan-sections.js";
 import { getEffectiveSections } from "./memory/effective-sections.js";
+import type { ConfirmationGate } from "./agent/confirmation-gate.js";
 
 // Shared error classifier output as the CLI's athlete-facing reply, so the CLI
 // and the Telegram channel speak the same error vocabulary and never dump a raw
@@ -81,6 +82,35 @@ export function _parseConfirmAnswer(input: string): boolean {
   const trimmed = input.trim().toLowerCase();
   // Anything except an explicit y/yes (including bare Enter) → decline, no re-prompt.
   return trimmed === "y" || trimmed === "yes";
+}
+
+export async function _promptProposalConfirm(
+  rl: { question(prompt: string, cb: (answer: string) => void): void },
+  agent: { confirmations: Pick<ConfirmationGate, "peek" | "confirm" | "cancel"> },
+): Promise<void> {
+  const proposal = agent.confirmations.peek("cli");
+  if (proposal === undefined) return;
+  await new Promise<void>((resolve) => {
+    rl.question(`Confirm: ${proposal.summary}? [y/N]: `, (answer) => {
+      void (async () => {
+        if (!_parseConfirmAnswer(answer)) {
+          agent.confirmations.cancel("cli", proposal.nonce);
+          console.log("Canceled.");
+          resolve();
+          return;
+        }
+        const outcome = await agent.confirmations.confirm("cli", proposal.nonce);
+        if (outcome.status === "executed") {
+          console.log(`Done — ${outcome.summary}.`);
+        } else if (outcome.status === "failed") {
+          console.log(`That didn't go through — ${outcome.message}`);
+        } else {
+          console.log("That proposal expired — ask me again and I'll re-propose.");
+        }
+        resolve();
+      })();
+    });
+  });
 }
 
 export function makeReadlineConfirm(
@@ -472,6 +502,7 @@ export async function runBinary(
       try {
         const response = await agent.chat("cli", input);
         console.log("\n" + response + "\n");
+        await _promptProposalConfirm(rl, agent);
       } catch (err) {
         // Full detail (stack, provider payload) → stderr; a friendly classified
         // reply → stdout in the reply position. The raw err never lands as the
