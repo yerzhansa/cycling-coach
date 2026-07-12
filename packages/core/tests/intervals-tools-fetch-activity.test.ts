@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import type { IntervalsClient } from "intervals-icu-api";
-import { createPureCoreIntervalsTools } from "../src/agent/intervals-tools.js";
+import {
+  ACTIVITY_ID_RE,
+  createPureCoreIntervalsTools,
+} from "../src/agent/intervals-tools.js";
 
 type AnyResult = { ok: true; value: unknown } | { ok: false; error: { kind: string } };
 
@@ -36,7 +39,7 @@ describe("intervals_fetch_activity", () => {
     const tools = createPureCoreIntervalsTools(fake);
     const tool = tools.intervals_fetch_activity!;
 
-    const result = await tool.execute!({ activityId: 12345 }, {} as never);
+    const result = await tool.execute!({ activityId: "12345" }, {} as never);
 
     expect(result).toEqual(activity);
     expect(capture.calledWith).toBe("12345");
@@ -48,7 +51,7 @@ describe("intervals_fetch_activity", () => {
     const tools = createPureCoreIntervalsTools(fake);
     const tool = tools.intervals_fetch_activity!;
 
-    const result = await tool.execute!({ activityId: 99999 }, {} as never);
+    const result = await tool.execute!({ activityId: "99999" }, {} as never);
 
     expect(result).toEqual({ error: "not_found" });
   });
@@ -61,5 +64,19 @@ describe("intervals_fetch_activity", () => {
     expect(description).toMatch(/icu_intervals/);
     expect(description).toMatch(/analyzed/);
     expect(description).toMatch(/paired_event_id/);
+  });
+
+  it("passes an i-prefixed activity ID through verbatim", async () => {
+    const capture: { calledWith?: string } = {};
+    const fake = makeFakeIntervals({ ok: true, value: { id: "i9876543" } }, capture);
+    const tool = createPureCoreIntervalsTools(fake).intervals_fetch_activity!;
+
+    await tool.execute!({ activityId: "i9876543" }, {} as never);
+
+    expect(capture.calledWith).toBe("i9876543");
+  });
+
+  it.each(["abc", "12 34", "i"])("rejects invalid activity ID %s", (activityId) => {
+    expect(ACTIVITY_ID_RE.test(activityId)).toBe(false);
   });
 });

@@ -10,6 +10,7 @@ import {
 
 const EXPECTED_NAMES = [
   "assess_feasibility",
+  "build_plan_skeleton",
   "calculate_zones",
   "get_sample_week",
   "intervals_fetch_activities",
@@ -34,7 +35,6 @@ describe("READ_ONLY_TOOL_NAMES allowlist", () => {
 
   it("excludes every writer tool", () => {
     for (const writer of [
-      "build_plan_skeleton",
       "intervals_create_workout",
       "intervals_delete_workout",
       "memory_write",
@@ -76,7 +76,7 @@ describe("memoizeReadTool caching", () => {
 
   it("does not memoize a non-allowlisted writer tool", async () => {
     const inner = vi.fn(async () => ({ created: true }));
-    const wrapped = memoizeReadTool("build_plan_skeleton", makeTool(inner), new Map());
+    const wrapped = memoizeReadTool("plan_save", makeTool(inner), new Map());
     const exec = wrapped.execute as (i: unknown, o: unknown) => Promise<unknown>;
     await exec({ a: 1 }, {});
     await exec({ a: 1 }, {});

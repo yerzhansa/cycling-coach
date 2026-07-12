@@ -2,9 +2,9 @@ import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import type { MemorySectionSpec } from "../sport.js";
 import type { MemoryStore } from "../memory.js";
-import { PlanFileSchema } from "../memory/store.js";
 import { isRealDateKey, parseDateKeyMs, MS_PER_DAY } from "../io/date-keys.js";
 import { truncateUtf16Safe } from "../text-truncate.js";
+import { DATE_KEY_RE } from "./date-schema.js";
 
 function buildMemoryWriteDescription(sections: readonly MemorySectionSpec[]): string {
   const sectionList = sections.map((s) => `${s.name} (${s.description})`).join("; ");
@@ -13,6 +13,30 @@ function buildMemoryWriteDescription(sections: readonly MemorySectionSpec[]): st
     `Sections: ${sectionList}.`
   );
 }
+
+export function buildMemoryWriteInputSchema(sectionNames: [string, ...string[]]) {
+  return z.object({
+    type: z
+      .enum(["memory", "daily"])
+      .describe("'memory' for long-term facts, 'daily' for today's notes"),
+    section: z
+      .enum(sectionNames)
+      .optional()
+      .describe(
+        "Memory section to write to. REQUIRED when type='memory' — the write replaces the section content.",
+      ),
+    content: z.string().describe("The information to save"),
+  });
+}
+
+export const PlanSaveInputSchema = z
+  .object({
+    name: z.string(),
+    primaryGoal: z.string().optional(),
+    totalWeeks: z.number().int().positive().optional(),
+    status: z.string().optional(),
+  })
+  .passthrough();
 
 // Default is the flush-safe read-role copy; the chat toolset overrides it with a
 // dedupe nudge (the always-injected sections are already in the Athlete Context).
@@ -32,7 +56,6 @@ export function createMemoryReadTool(memory: MemoryStore, description: string) {
 
 const MEMORY_QUERY_MAX_RANGE_DAYS = 366;
 const MEMORY_QUERY_MAX_RESULT_CHARS = 20_000;
-const MEMORY_QUERY_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export function createMemoryQueryTool(memory: MemoryStore) {
   return tool({
@@ -44,11 +67,11 @@ export function createMemoryQueryTool(memory: MemoryStore) {
       z.object({
         from: z
           .string()
-          .regex(MEMORY_QUERY_DATE_RE)
+          .regex(DATE_KEY_RE)
           .describe("Start date (inclusive), YYYY-MM-DD"),
         to: z
           .string()
-          .regex(MEMORY_QUERY_DATE_RE)
+          .regex(DATE_KEY_RE)
           .describe("End date (inclusive), YYYY-MM-DD"),
         query: z
           .string()
@@ -129,24 +152,17 @@ export function createMemoryTools(
 
     memory_write: tool({
       description: buildMemoryWriteDescription(sections),
-      inputSchema: zodSchema(
-        z.object({
-          type: z
-            .enum(["memory", "daily"])
-            .describe("'memory' for long-term facts, 'daily' for today's notes"),
-          section: z
-            .enum(sectionNames)
-            .optional()
-            .describe(
-              "Memory section to write to (required when type='memory'). Replaces the section content.",
-            ),
-          content: z.string().describe("The information to save"),
-        }),
-      ),
+      inputSchema: zodSchema(buildMemoryWriteInputSchema(sectionNames)),
       execute: async (input: { type: "memory" | "daily"; section?: string; content: string }) => {
-        if (input.type === "memory") {
-          // "notes" is a CORE_SHARED_SECTIONS catch-all — safe default when the LLM forgets to pick a section.
-          memory.writeSection(input.section ?? "notes", input.content, "chat-tool");
+        if (input.type === "memory" && input.section === undefined) {
+          return {
+            error: "section_required",
+            details:
+              "type='memory' requires a section. Pick one of the listed sections, or use type='daily' for free-form notes.",
+          };
+        }
+        if (input.type === "memory" && input.section !== undefined) {
+          memory.writeSection(input.section, input.content, "chat-tool");
         } else {
           memory.appendDailyNote(input.content);
         }
@@ -158,7 +174,7 @@ export function createMemoryTools(
       description: "Save or update the current training plan",
       inputSchema: zodSchema(
         z.object({
-          plan: PlanFileSchema.describe("The training plan object to save"),
+          plan: PlanSaveInputSchema.describe("The training plan object to save"),
         }),
       ),
       execute: async (input: { plan: Record<string, unknown> }) => {

@@ -82,15 +82,12 @@ const REPLAY_UNSAFE_TOOL_NAMES = new Set([
   "intervals_delete_workout",
   "memory_write",
   "plan_save",
-  // Commits a plan via memory.savePlan — the same non-idempotent side effect as
-  // plan_save — so a retry must not replay it. Recognized in committedWriteSummary.
-  "build_plan_skeleton",
 ]);
 
 // The subset of write tools that mutate the state behind the memoized memory
 // read tools (memory_read / memory_query / plan_load); their execution evicts
 // those cache entries so a same-turn re-read sees the write.
-const MEMORY_MUTATING_TOOL_NAMES = new Set(["memory_write", "plan_save", "build_plan_skeleton"]);
+const MEMORY_MUTATING_TOOL_NAMES = new Set(["memory_write", "plan_save"]);
 // Eviction runs inside wrapWriteTool, which early-returns for tools outside
 // REPLAY_UNSAFE_TOOL_NAMES — so a memory mutator outside that set would never
 // evict. Assert the subset relation at module load so the gap can't open silently.
@@ -200,14 +197,11 @@ function committedWriteSummary(name: string, result: unknown): string | undefine
   // wrapWriteTool composes innermost (inside markUntrustedResult and the cap),
   // so the ack inspected here is the tool's raw result.
   if (result === null || typeof result !== "object") return undefined;
-  const out = result as { created?: unknown; deleted?: unknown; saved?: unknown; phases?: unknown };
+  const out = result as { created?: unknown; deleted?: unknown; saved?: unknown };
   if (out.created === true) return "created a workout on the calendar";
   if (out.deleted === true) return "deleted a scheduled workout";
   if (out.saved === true && name === "memory_write") return "saved athlete memory";
   if (out.saved === true && name === "plan_save") return "saved the training plan";
-  // build_plan_skeleton returns the saved plan itself (a phases-bearing object),
-  // not a {saved:true} ack, so recognize its success by the plan shape.
-  if (name === "build_plan_skeleton" && Array.isArray(out.phases)) return "built training plan";
   return undefined;
 }
 
