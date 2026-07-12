@@ -255,70 +255,116 @@ describe("serializeIntervalsWorkout — movingTime", () => {
   });
 });
 
-describe("serializeIntervalsWorkout — trainingLoad", () => {
-  it("computes load ≈ 40 for a pure Z2 60min ride", () => {
-    const input: IntervalsWorkoutInput = {
-      name: "Z2 60min",
+describe("serializeIntervalsWorkout — zone-ramp translation", () => {
+  it("translates a zone-kind ramp to percent-of-FTP band centers", () => {
+    const result = serializeIntervalsWorkout({
+      name: "Zone ramp",
+      steps: [
+        {
+          type: "ramp",
+          duration: { value: 10, unit: "minutes" },
+          power: { kind: "zone", low: 1, high: 2 },
+        },
+      ],
+    });
+
+    expect(result.description).toContain("- 10m ramp 45-65%");
+    expect(result.description).not.toMatch(/ramp Z/);
+    expect(result).toEqual({ description: "Main set\n- 10m ramp 45-65%", movingTime: 600 });
+  });
+
+  it("rounds the Z6 half-percent band center", () => {
+    const { description } = serializeIntervalsWorkout({
+      name: "High zone ramp",
+      steps: [
+        {
+          type: "ramp",
+          duration: { value: 1, unit: "minutes" },
+          power: { kind: "zone", low: 6, high: 7 },
+        },
+      ],
+    });
+
+    expect(description).toContain("ramp 136-160%");
+  });
+
+  it("emits equal bounds for an equal-zone ramp", () => {
+    const { description } = serializeIntervalsWorkout({
+      name: "Equal zone ramp",
+      steps: [
+        {
+          type: "ramp",
+          duration: { value: 5, unit: "minutes" },
+          power: { kind: "zone", low: 2, high: 2 },
+        },
+      ],
+    });
+
+    expect(description).toContain("ramp 65-65%");
+  });
+
+  it("leaves non-ramp zone ranges in Z form", () => {
+    const { description } = serializeIntervalsWorkout({
+      name: "Zone range",
       steps: [
         {
           type: "steady",
-          duration: { value: 60, unit: "minutes" },
-          power: { kind: "percent_ftp", value: 65 },
+          duration: { value: 30, unit: "minutes" },
+          power: { kind: "zone", low: 2, high: 3 },
         },
       ],
-    };
+    });
 
-    const { trainingLoad } = serializeIntervalsWorkout(input);
-    // 60min at 65% FTP: intensity=0.65, load = 3600 * 0.65^2 / 3600 * 100 = 42.25 → 42
-    expect(trainingLoad).toBe(42);
+    expect(description).toContain("- 30m Z2-Z3");
   });
 
-  it("returns undefined when any step uses watts and ftpWatts is missing", () => {
-    const input: IntervalsWorkoutInput = {
-      name: "Watts workout",
+  it("still rejects a zone ramp missing low/high", () => {
+    const input = {
+      name: "Missing bounds",
       steps: [
         {
-          type: "steady",
-          duration: { value: 60, unit: "minutes" },
-          power: { kind: "watts", value: 200 },
+          type: "ramp" as const,
+          duration: { value: 10, unit: "minutes" as const },
+          power: { kind: "zone" as const, value: 2 },
         },
       ],
     };
 
-    const { trainingLoad } = serializeIntervalsWorkout(input);
-    expect(trainingLoad).toBeUndefined();
+    expect(() => serializeIntervalsWorkout(input)).toThrow(InvalidWorkoutError);
+    expect(() => serializeIntervalsWorkout(input)).toThrow(
+      /ramp requires power\.low and power\.high/,
+    );
   });
 
-  it("computes load from watts when ftpWatts is provided", () => {
-    const input: IntervalsWorkoutInput = {
-      name: "Watts workout",
+  it("still rejects out-of-range zone bounds on a ramp", () => {
+    const input = {
+      name: "Invalid zone ramp",
       steps: [
         {
-          type: "steady",
-          duration: { value: 60, unit: "minutes" },
-          power: { kind: "watts", value: 200 },
+          type: "ramp" as const,
+          duration: { value: 10, unit: "minutes" as const },
+          power: { kind: "zone" as const, low: 1, high: 8 },
         },
       ],
     };
 
-    const { trainingLoad } = serializeIntervalsWorkout(input, 200);
-    // intensity = 200/200 = 1.0, load = 100
-    expect(trainingLoad).toBe(100);
+    expect(() => serializeIntervalsWorkout(input)).toThrow(InvalidWorkoutError);
+    expect(() => serializeIntervalsWorkout(input)).toThrow(/zone must be an integer/);
   });
 
-  it("returns undefined when no step has a power target", () => {
-    const input: IntervalsWorkoutInput = {
-      name: "Freeride",
+  it("still rejects an inverted zone ramp", () => {
+    const input = {
+      name: "Inverted zone ramp",
       steps: [
         {
-          type: "freeride",
-          duration: { value: 60, unit: "minutes" },
+          type: "ramp" as const,
+          duration: { value: 10, unit: "minutes" as const },
+          power: { kind: "zone" as const, low: 5, high: 1 },
         },
       ],
     };
 
-    const { trainingLoad } = serializeIntervalsWorkout(input);
-    expect(trainingLoad).toBeUndefined();
+    expect(() => serializeIntervalsWorkout(input)).toThrow(InvalidWorkoutError);
   });
 });
 

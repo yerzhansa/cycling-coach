@@ -197,8 +197,6 @@ export function createCyclingTools(
                 type: "Ride",
                 external_id: buildCoachExternalId(input.date, input.workout.name),
                 tags: [COACH_EVENT_TAG],
-                moving_time: serialized.movingTime,
-                icu_training_load: serialized.trainingLoad,
                 description: serialized.description,
               });
               if (!result.ok) return { error: result.error.kind };

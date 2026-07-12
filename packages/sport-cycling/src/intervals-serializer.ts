@@ -61,10 +61,6 @@ function toSeconds(d: DurationInput): number {
   return d.unit === "seconds" ? d.value : d.value * 60;
 }
 
-function mid(a: number | undefined, b: number | undefined): number | undefined {
-  return a !== undefined && b !== undefined ? (a + b) / 2 : undefined;
-}
-
 function formatDuration(d: DurationInput): string {
   const total = Math.round(toSeconds(d));
   if (total < 60) return `${total}s`;
@@ -110,7 +106,12 @@ function formatPower(p: PowerTarget, isRamp: boolean, path: string): string {
     if (p.kind === "zone") {
       assertZone(p.low!, `${path}.power.low`);
       assertZone(p.high!, `${path}.power.high`);
-      return `${prefix}Z${p.low}-Z${p.high}`;
+      if (isRamp) {
+        const lowPct = Math.round(ZONE_INTENSITY_MIDPOINTS[p.low!]! * 100);
+        const highPct = Math.round(ZONE_INTENSITY_MIDPOINTS[p.high!]! * 100);
+        return `${prefix}${lowPct}-${highPct}%`;
+      }
+      return `Z${p.low}-Z${p.high}`;
     }
     if (p.kind === "percent_ftp") return `${prefix}${p.low}-${p.high}%`;
     return `${prefix}${p.low}-${p.high}w`;
@@ -191,48 +192,6 @@ function walkSimpleSteps(
   for (const s of steps) go(s, 1);
 }
 
-function intensityFor(step: SimpleStep, ftpWatts: number | undefined): number | undefined {
-  if (!step.power) return 0;
-  const p = step.power;
-
-  if (p.kind === "zone") {
-    const z = p.value ?? mid(p.low, p.high);
-    if (z === undefined) return undefined;
-    const lo = ZONE_INTENSITY_MIDPOINTS[Math.floor(z)];
-    const hi = ZONE_INTENSITY_MIDPOINTS[Math.ceil(z)];
-    if (lo === undefined || hi === undefined) return undefined;
-    return (lo + hi) / 2;
-  }
-
-  if (p.kind === "percent_ftp") {
-    const pct = p.value ?? mid(p.low, p.high);
-    return pct === undefined ? undefined : pct / 100;
-  }
-
-  if (ftpWatts === undefined) return undefined;
-  const w = p.value ?? mid(p.low, p.high);
-  return w === undefined ? undefined : w / ftpWatts;
-}
-
-function computeLoad(steps: AnyStep[], ftpWatts: number | undefined): number | undefined {
-  let sum = 0;
-  let anyPower = false;
-  let wattsNoFtp = false;
-
-  walkSimpleSteps(steps, (step, multiplier) => {
-    const intensity = intensityFor(step, ftpWatts);
-    if (intensity === undefined) {
-      if (step.power?.kind === "watts") wattsNoFtp = true;
-      return;
-    }
-    if (intensity > 0) anyPower = true;
-    sum += toSeconds(step.duration) * multiplier * intensity * intensity;
-  });
-
-  if (wattsNoFtp || !anyPower) return undefined;
-  return Math.round((sum / 3600) * 100);
-}
-
 function totalSeconds(steps: AnyStep[]): number {
   let total = 0;
   walkSimpleSteps(steps, (step, multiplier) => {
@@ -243,8 +202,7 @@ function totalSeconds(steps: AnyStep[]): number {
 
 export function serializeIntervalsWorkout(
   input: IntervalsWorkoutInput,
-  ftpWatts?: number,
-): { description: string; movingTime: number; trainingLoad: number | undefined } {
+): { description: string; movingTime: number } {
   // Defense in depth: tool callers already pass a parsed object via zodSchema(),
   // but direct callers (tests, future library use) may not. Wrap ZodError so
   // both paths surface as InvalidWorkoutError to consumers.
@@ -278,6 +236,5 @@ export function serializeIntervalsWorkout(
   return {
     description: lines.join("\n"),
     movingTime: totalSeconds(checked.steps),
-    trainingLoad: computeLoad(checked.steps, ftpWatts),
   };
 }
