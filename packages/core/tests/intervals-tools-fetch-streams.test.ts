@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
+import { z } from "zod";
 import type { IntervalsClient } from "intervals-icu-api";
-import { createPureCoreIntervalsTools } from "../src/agent/intervals-tools.js";
+import {
+  ACTIVITY_ID_RE,
+  STREAM_TYPES,
+  createPureCoreIntervalsTools,
+} from "../src/agent/intervals-tools.js";
 
 type AnyResult = { ok: true; value: unknown } | { ok: false; error: { kind: string } };
 
@@ -33,7 +38,7 @@ describe("intervals_fetch_streams", () => {
     const tools = createPureCoreIntervalsTools(fake);
     const tool = tools.intervals_fetch_streams!;
 
-    await tool.execute!({ activityId: 12345 }, {} as never);
+    await tool.execute!({ activityId: "12345" }, {} as never);
 
     expect(capture.activityId).toBe("12345");
     expect(capture.types).toEqual(["watts", "heartrate", "cadence", "time", "altitude"]);
@@ -45,7 +50,7 @@ describe("intervals_fetch_streams", () => {
     const tools = createPureCoreIntervalsTools(fake);
     const tool = tools.intervals_fetch_streams!;
 
-    await tool.execute!({ activityId: 999, types: ["watts", "heartrate"] }, {} as never);
+    await tool.execute!({ activityId: "999", types: ["watts", "heartrate"] }, {} as never);
 
     expect(capture.types).toEqual(["watts", "heartrate"]);
   });
@@ -56,7 +61,7 @@ describe("intervals_fetch_streams", () => {
     const tools = createPureCoreIntervalsTools(fake);
     const tool = tools.intervals_fetch_streams!;
 
-    await tool.execute!({ activityId: 1, types: [] }, {} as never);
+    await tool.execute!({ activityId: "1", types: [] }, {} as never);
 
     expect(capture.types).toEqual(["watts", "heartrate", "cadence", "time", "altitude"]);
   });
@@ -67,7 +72,7 @@ describe("intervals_fetch_streams", () => {
     const tools = createPureCoreIntervalsTools(fake);
     const tool = tools.intervals_fetch_streams!;
 
-    const result = (await tool.execute!({ activityId: 1 }, {} as never)) as {
+    const result = (await tool.execute!({ activityId: "1" }, {} as never)) as {
       sampleCount: number;
       channels: Record<string, { max: number }>;
     };
@@ -81,7 +86,7 @@ describe("intervals_fetch_streams", () => {
     const tools = createPureCoreIntervalsTools(fake);
     const tool = tools.intervals_fetch_streams!;
 
-    const result = await tool.execute!({ activityId: 1 }, {} as never);
+    const result = await tool.execute!({ activityId: "1" }, {} as never);
 
     expect(result).toEqual({ error: "not_found" });
   });
@@ -92,5 +97,25 @@ describe("intervals_fetch_streams", () => {
     const description = (tools.intervals_fetch_streams as { description: string }).description;
     expect(description).toContain("EXPENSIVE");
     expect(description).toContain("ONLY call for Tier C");
+  });
+
+  it("passes an i-prefixed activity ID through verbatim", async () => {
+    const capture: { activityId?: string; types?: string[] } = {};
+    const fake = makeFakeIntervals({ ok: true, value: {} }, capture);
+    const tool = createPureCoreIntervalsTools(fake).intervals_fetch_streams!;
+
+    await tool.execute!({ activityId: "i9876543" }, {} as never);
+
+    expect(capture.activityId).toBe("i9876543");
+  });
+
+  it.each(["abc", "12 34", "i"])("rejects invalid activity ID %s", (activityId) => {
+    expect(ACTIVITY_ID_RE.test(activityId)).toBe(false);
+  });
+
+  it("accepts all stream types and rejects unknown values", () => {
+    const schema = z.array(z.enum(STREAM_TYPES));
+    expect(schema.safeParse([...STREAM_TYPES]).success).toBe(true);
+    expect(schema.safeParse(["bogus"]).success).toBe(false);
   });
 });

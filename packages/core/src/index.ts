@@ -180,6 +180,13 @@ export {
   createCoreToolsWithSportConfig,
 } from "./agent/intervals-tools.js";
 export {
+  DATE_KEY_RE,
+  dateKeySchema,
+  INTERVALS_LIST_MAX_RANGE_DAYS,
+  validateListRange,
+} from "./agent/date-schema.js";
+export { isRealDateKey } from "./io/date-keys.js";
+export {
   COACH_EVENT_TAG,
   COACH_EXTERNAL_ID_PREFIX,
   buildCoachExternalId,

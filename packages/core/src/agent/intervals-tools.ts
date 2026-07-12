@@ -1,10 +1,30 @@
 import { tool, zodSchema } from "ai";
+import type { Tool } from "ai";
 import { z } from "zod";
 import type { ApiError, IntervalsClient } from "intervals-icu-api";
 import type { IntervalsActivityType } from "../sport.js";
 import { todayInTZ } from "./user-time.js";
 import { downsampleStreams } from "./stream-downsample.js";
 import { isCoachOwnedEvent } from "./event-provenance.js";
+import {
+  dateKeySchema,
+  INTERVALS_LIST_MAX_RANGE_DAYS,
+  validateListRange,
+} from "./date-schema.js";
+
+export const ACTIVITY_ID_RE = /^i?\d+$/;
+export const STREAM_TYPES = [
+  "watts",
+  "heartrate",
+  "cadence",
+  "time",
+  "altitude",
+  "distance",
+  "lat",
+  "lng",
+  "temp",
+  "smooth_grade",
+] as const;
 
 function toTypedError(error: ApiError): { error: string; status?: number; message?: string } {
   return {
@@ -58,11 +78,17 @@ export function createPureCoreIntervalsTools(
         "Fetch wellness data from intervals.icu (fitness, fatigue, weight, HRV, resting HR, sleep). Form = fitness - fatigue.",
       inputSchema: zodSchema(
         z.object({
-          oldest: z.string().describe("Start date (YYYY-MM-DD)"),
-          newest: z.string().optional().describe("End date (YYYY-MM-DD)"),
+          oldest: dateKeySchema.describe("Start date (YYYY-MM-DD)"),
+          newest: dateKeySchema.optional().describe("End date (YYYY-MM-DD)"),
         }),
       ),
       execute: async (input: { oldest: string; newest?: string }) => {
+        const rangeError = validateListRange(
+          input.oldest,
+          input.newest,
+          INTERVALS_LIST_MAX_RANGE_DAYS,
+        );
+        if (rangeError) return rangeError;
         const result = await intervals.wellness.list({
           oldest: input.oldest,
           newest: input.newest ?? undefined,
@@ -82,11 +108,16 @@ export function createPureCoreIntervalsTools(
         "summary-only Tier A, use `intervals_fetch_activities`.",
       inputSchema: zodSchema(
         z.object({
-          activityId: z.number().int().describe("Activity ID from intervals_fetch_activities"),
+          activityId: z
+            .string()
+            .regex(ACTIVITY_ID_RE)
+            .describe(
+              "Activity ID from intervals_fetch_activities — numeric, or i-prefixed for intervals-native activities. Pass exactly as listed.",
+            ),
         }),
       ),
-      execute: async (input: { activityId: number }) => {
-        const result = await intervals.activities.get(String(input.activityId));
+      execute: async (input: { activityId: string }) => {
+        const result = await intervals.activities.get(input.activityId);
         if (!result.ok) return toTypedError(result.error);
         return result.value;
       },
@@ -105,27 +136,31 @@ export function createPureCoreIntervalsTools(
         "cadence, time, altitude.",
       inputSchema: zodSchema(
         z.object({
-          activityId: z.number().int().describe("Activity ID"),
+          activityId: z
+            .string()
+            .regex(ACTIVITY_ID_RE)
+            .describe(
+              "Activity ID from intervals_fetch_activities — numeric, or i-prefixed for intervals-native activities. Pass exactly as listed.",
+            ),
           types: z
-            .array(z.string())
+            .array(z.enum(STREAM_TYPES))
             .optional()
             .describe(
-              "Stream types to fetch. Defaults to ['watts','heartrate','cadence','time','altitude']. " +
-                "Other valid types: distance, lat, lng, temp, smooth_grade.",
+              "Stream types to fetch. Defaults to ['watts','heartrate','cadence','time','altitude'].",
             ),
         }),
       ),
-      execute: async (input: { activityId: number; types?: string[] }) => {
+      execute: async (input: { activityId: string; types?: (typeof STREAM_TYPES)[number][] }) => {
         // Treat empty array the same as omitted — defensively handle the LLM
         // calling with `types: []` "to play it safe" instead of dropping the field.
         const types = input.types?.length
           ? input.types
           : ["watts", "heartrate", "cadence", "time", "altitude"];
-        const result = await intervals.activities.getStreams(String(input.activityId), types);
+        const result = await intervals.activities.getStreams(input.activityId, types);
         if (!result.ok) return toTypedError(result.error);
         return downsampleStreams(result.value as Record<string, unknown> | unknown[]);
       },
-    }),
+    }) as Tool,
 
     intervals_delete_workout: tool({
       description:
@@ -194,11 +229,17 @@ export function createCoreToolsWithSportConfig(
         "Fetch recent activities from intervals.icu. Returns rides with load, intensity, duration, distance.",
       inputSchema: zodSchema(
         z.object({
-          oldest: z.string().describe("Oldest date (YYYY-MM-DD)"),
-          newest: z.string().optional().describe("Newest date (YYYY-MM-DD)"),
+          oldest: dateKeySchema.describe("Oldest date (YYYY-MM-DD)"),
+          newest: dateKeySchema.optional().describe("Newest date (YYYY-MM-DD)"),
         }),
       ),
       execute: async (input: { oldest: string; newest?: string }) => {
+        const rangeError = validateListRange(
+          input.oldest,
+          input.newest,
+          INTERVALS_LIST_MAX_RANGE_DAYS,
+        );
+        if (rangeError) return rangeError;
         const result = await intervals.activities.list({
           oldest: input.oldest,
           newest: input.newest ?? undefined,
@@ -218,8 +259,8 @@ export function createCoreToolsWithSportConfig(
         "coach-created events.",
       inputSchema: zodSchema(
         z.object({
-          oldest: z.string().describe("Oldest date (YYYY-MM-DD)"),
-          newest: z.string().optional().describe("Newest date (YYYY-MM-DD)"),
+          oldest: dateKeySchema.describe("Oldest date (YYYY-MM-DD)"),
+          newest: dateKeySchema.optional().describe("Newest date (YYYY-MM-DD)"),
           coachCreatedOnly: z
             .boolean()
             .optional()
@@ -227,6 +268,12 @@ export function createCoreToolsWithSportConfig(
         }),
       ),
       execute: async (input: { oldest: string; newest?: string; coachCreatedOnly?: boolean }) => {
+        const rangeError = validateListRange(
+          input.oldest,
+          input.newest,
+          INTERVALS_LIST_MAX_RANGE_DAYS,
+        );
+        if (rangeError) return rangeError;
         const result = await intervals.events.list({
           oldest: input.oldest,
           newest: input.newest ?? undefined,

@@ -38,11 +38,10 @@ const UPDATED_STAMP_PREFIX = "_updated: ";
 
 export const SECTION_SOFT_WARN_CHARS = 4000;
 
-// Loose passthrough: any JSON object passes with all keys intact; any non-object
-// top level fails → null. Shared with the plan_save tool's input schema so
-// anything the tool can save, loadPlan accepts — one constant, no drift. A typed
-// schema would null the entire plan when one hand-edited field is mistyped; the
-// per-field guards in getContext handle mistypes gracefully instead.
+// PlanFileSchema is the tolerant read-side loadPlan schema. The write side uses
+// PlanSaveInputSchema in agent/tools.ts (typed headline keys plus passthrough), so
+// anything saved still loads while malformed headline fields are rejected at the
+// tool boundary. Per-field guards in getContext handle hand-edited mistypes.
 export const PlanFileSchema = z.record(z.string(), z.unknown());
 
 // Embedded H2 lines would match SECTION_SPLIT and fragment the file into

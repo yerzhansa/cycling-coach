@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { http, HttpResponse } from "msw";
@@ -232,7 +232,7 @@ describe("tainted-by-writes refusal", () => {
     expect((dailyMemoryText().match(new RegExp(note, "g")) ?? []).length).toBe(1);
   });
 
-  it("a plan-skeleton build then a timeout refuses without replaying the plan save", async () => {
+  it("a plan-skeleton build then a timeout retries normally without saving a plan", async () => {
     let mainTurns = 0;
     const complete = vi.fn(async (params: { system?: string }) => {
       const sys = params.system ?? "";
@@ -258,25 +258,28 @@ describe("tainted-by-writes refusal", () => {
           stopReason: "toolUse",
         });
       }
-      const err = new Error("deadline exceeded");
-      err.name = "TimeoutError";
-      throw err;
+      if (mainTurns === 2) {
+        const err = new Error("deadline exceeded");
+        err.name = "TimeoutError";
+        throw err;
+      }
+      return mkAssistant({ text: "recovered after retry" });
     });
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const agent = await setupAgent(complete);
 
     const result = await agent.chat("taint-plan", "build me a training plan");
 
-    expect(result).toBe(TAINTED_BY_WRITES_MESSAGE);
-    expect(mainTurns).toBe(2);
-    // The plan committed exactly once and was never replayed on the retry.
+    expect(result).toBe("recovered after retry");
+    expect(result).not.toBe(TAINTED_BY_WRITES_MESSAGE);
+    expect(mainTurns).toBe(3);
     const journal = join(dataDir, "memory", "MEMORY.history.jsonl");
-    const planSaves = readFileSync(journal, "utf-8")
+    const planSaves = (existsSync(journal) ? readFileSync(journal, "utf-8") : "")
       .split("\n")
       .filter((line) => line.trim() !== "")
       .map((line) => JSON.parse(line) as { op?: string })
       .filter((entry) => entry.op === "save-plan");
-    expect(planSaves.length).toBe(1);
+    expect(planSaves.length).toBe(0);
   });
 
   it("keeps write taint scoped when different chats run concurrently", async () => {
