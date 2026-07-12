@@ -51,7 +51,7 @@ export const buildPlanSkeletonInputSchema = z.object({
 export const cyclingCreateWorkoutInputSchema = z.object({
   date: dateKeySchema.describe("Workout date (YYYY-MM-DD)"),
   workout: intervalsWorkoutInputSchema.describe(
-    "Structured workout: name + ordered steps. Top-level steps can be simple (warmup/steady/interval/ramp/recovery/rest/cooldown/freeride) or a set {type:'set', repeat, interval, recovery}. Durations use seconds or minutes only. Power targets: {kind:'percent_ftp'|'watts'|'zone', value} or {kind, low, high} for ranges. Ramps require low+high.",
+    "Structured workout: name + ordered steps — simple steps or repeat sets. Use value for a single power target, or low+high for ranges; ramps require low+high. Durations are seconds or minutes only.",
   ),
 });
 
@@ -165,10 +165,7 @@ export function createCyclingTools(
       ? {
           intervals_create_workout: tool({
             description:
-              "Create a structured workout on the intervals.icu calendar. Auto-syncs to Garmin/Wahoo. " +
-              "Supply the workout as structured steps — the tool serializes them into the intervals.icu " +
-              "native description syntax so the power chart renders. Put athlete-facing coaching narrative " +
-              "(feel, notes, hydration) in your chat reply, not in this tool. Past dates are refused — workouts can only be created for today or later.",
+              "Create a structured workout on the intervals.icu calendar (auto-syncs to Garmin/Wahoo). Supply structured steps — they serialize into intervals.icu's native syntax so the power chart renders. Put athlete-facing coaching narrative (feel, notes, hydration) in your chat reply, not in this tool. Past dates are refused — workouts can only be created for today or later.",
             inputSchema: zodSchema(cyclingCreateWorkoutInputSchema),
             execute: async (input: { date: string; workout: IntervalsWorkoutInput }) => {
               if (!isRealDateKey(input.date)) {

@@ -7,7 +7,7 @@ import { truncateUtf16Safe } from "../text-truncate.js";
 import { DATE_KEY_RE } from "./date-schema.js";
 
 function buildMemoryWriteDescription(sections: readonly MemorySectionSpec[]): string {
-  const sectionList = sections.map((s) => `${s.name} (${s.description})`).join("; ");
+  const sectionList = sections.map((s) => `${s.name} (${s.hint ?? s.description})`).join("; ");
   return (
     "Write to long-term memory (replaces section content) or daily notes. " +
     `Sections: ${sectionList}.`
