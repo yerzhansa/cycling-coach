@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { todayInTZ, type MemoryStore, type ResolvedCs } from "@enduragent/core";
+import { todayInTZ, type ResolvedCs } from "@enduragent/core";
 import { createRunningTools, runningCreateWorkoutInputSchema } from "../src/tools.js";
 
 // The Vercel AI SDK wraps execute; call it directly with a stub options arg
@@ -13,7 +13,7 @@ function execZones(input: Record<string, unknown>): Promise<{
   framing: string;
   clampApplied?: { requested: number; clamped: number };
 }> {
-  const tools = createRunningTools({} as MemoryStore, null, "UTC");
+  const tools = createRunningTools(null, "UTC");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (tools.calculate_zones as any).execute(input, {});
 }
@@ -65,7 +65,7 @@ function execZonesResolved(
   platformConfidence?: string;
   error?: string;
 }> {
-  const tools = createRunningTools({} as MemoryStore, null, "UTC", () => resolved);
+  const tools = createRunningTools(null, "UTC", () => resolved);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (tools.calculate_zones as any).execute(input, {});
 }
@@ -109,7 +109,7 @@ describe("calculate_zones CS auto-resolution", () => {
   });
 
   it("returns no_cs_anchor when no resolver is wired and no value supplied", async () => {
-    const tools = createRunningTools({} as MemoryStore, null, "UTC");
+    const tools = createRunningTools(null, "UTC");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const out = await (tools.calculate_zones as any).execute({}, {});
     expect(out.error).toBe("no_cs_anchor");
@@ -150,7 +150,6 @@ function createWorkoutTool(
   tz = "UTC",
 ) {
   const tools = createRunningTools(
-    {} as MemoryStore,
     intervals,
     tz,
     resolved === null ? undefined : () => resolved,
@@ -168,7 +167,7 @@ function tomorrowISODate(): string {
 
 describe("intervals_create_workout tool", () => {
   it("is absent when no intervals client is configured", () => {
-    const tools = createRunningTools({} as MemoryStore, null, "UTC");
+    const tools = createRunningTools(null, "UTC");
     expect("intervals_create_workout" in tools).toBe(false);
   });
 

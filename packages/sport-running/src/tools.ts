@@ -1,12 +1,10 @@
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
-import type { MemoryStore, ResolvedCs } from "@enduragent/core";
+import type { ResolvedCs } from "@enduragent/core";
 import {
-  COACH_EVENT_TAG,
-  buildCoachExternalId,
+  buildCoachEventProvenance,
   dateKeySchema,
-  isRealDateKey,
-  todayInTZ,
+  validateWorkoutCreationDate,
 } from "@enduragent/core";
 import type { IntervalsClient } from "intervals-icu-api";
 import {
@@ -53,7 +51,6 @@ function clampLowerFraction(requested: number): { value: number; clamped: boolea
 }
 
 export function createRunningTools(
-  _memory: MemoryStore,
   intervals: IntervalsClient | null,
   tz: string = "UTC",
   resolvedCs?: () => ResolvedCs | null,
@@ -155,19 +152,8 @@ export function createRunningTools(
               "Create a structured running workout on the intervals.icu calendar (auto-syncs to Garmin/Wahoo). Steps serialize into intervals.icu's native pace syntax; the server computes load against the athlete's threshold pace. Anchor pace targets on the critical-speed zones (kind:'zone' 1-6 or kind:'cs_fraction') — RPE-checked estimates, not lab-measured thresholds. If the athlete's critical speed is a manual/coach-entered override, prefer absolute kind:'pace' targets so the prescription matches the zone table you showed them. Prescribe strides as a duration-only step (or a relaxed-fast kind:'pace'), never a CS zone; do not invent a pace the resolved CS doesn't support. A distance step needs a pace target so its planned time can be derived. Put the RPE-check + provenance framing and coaching narrative in your chat reply — the calendar entry cannot carry it. Past dates are refused — workouts can only be created for today or later.",
             inputSchema: zodSchema(runningCreateWorkoutInputSchema),
             execute: async (input: { date: string; workout: RunningWorkoutInput }) => {
-              if (!isRealDateKey(input.date)) {
-                return {
-                  error: "invalid_date",
-                  details: `${input.date} is not a real calendar date. Use YYYY-MM-DD.`,
-                };
-              }
-              const today = todayInTZ(tz);
-              if (input.date < today) {
-                return {
-                  error: "past_date_refused",
-                  details: `Cannot create a workout dated ${input.date} — it's before today (${today}). Use today's date or later.`,
-                };
-              }
+              const dateError = validateWorkoutCreationDate(input.date, tz);
+              if (dateError) return dateError;
               // The serializer stays pure: pass OUR resolved CS in so distance steps
               // with relative targets can derive their planned time.
               let serialized: ReturnType<typeof serializeRunningWorkout>;
@@ -184,8 +170,7 @@ export function createRunningTools(
                 category: "WORKOUT",
                 name: input.workout.name,
                 type: "Run",
-                external_id: buildCoachExternalId(input.date, input.workout.name),
-                tags: [COACH_EVENT_TAG],
+                ...buildCoachEventProvenance(input.date, input.workout.name),
                 moving_time: serialized.movingTime,
                 // No icu_training_load — the server derives running Pace Load from the
                 // parsed steps against the athlete's own threshold pace.

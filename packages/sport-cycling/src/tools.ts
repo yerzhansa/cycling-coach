@@ -1,12 +1,10 @@
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
-import type { MemoryStore } from "@enduragent/core";
 import {
-  COACH_EVENT_TAG,
-  buildCoachExternalId,
+  buildCoachEventProvenance,
   dateKeySchema,
   isRealDateKey,
-  todayInTZ,
+  validateWorkoutCreationDate,
 } from "@enduragent/core";
 import type { IntervalsClient } from "intervals-icu-api";
 import {
@@ -63,7 +61,6 @@ export const cyclingCreateWorkoutInputSchema = z.object({
  * and `createCoreToolsWithSportConfig`.
  */
 export function createCyclingTools(
-  _memory: MemoryStore,
   intervals: IntervalsClient | null,
   tz: string = "UTC",
 ) {
@@ -168,19 +165,8 @@ export function createCyclingTools(
               "Create a structured workout on the intervals.icu calendar (auto-syncs to Garmin/Wahoo). Supply structured steps — they serialize into intervals.icu's native syntax so the power chart renders. Put athlete-facing coaching narrative (feel, notes, hydration) in your chat reply, not in this tool. Past dates are refused — workouts can only be created for today or later.",
             inputSchema: zodSchema(cyclingCreateWorkoutInputSchema),
             execute: async (input: { date: string; workout: IntervalsWorkoutInput }) => {
-              if (!isRealDateKey(input.date)) {
-                return {
-                  error: "invalid_date",
-                  details: `${input.date} is not a real calendar date. Use YYYY-MM-DD.`,
-                };
-              }
-              const today = todayInTZ(tz);
-              if (input.date < today) {
-                return {
-                  error: "past_date_refused",
-                  details: `Cannot create a workout dated ${input.date} — it's before today (${today}). Use today's date or later.`,
-                };
-              }
+              const dateError = validateWorkoutCreationDate(input.date, tz);
+              if (dateError) return dateError;
               let serialized: ReturnType<typeof serializeIntervalsWorkout>;
               try {
                 serialized = serializeIntervalsWorkout(input.workout);
@@ -195,8 +181,7 @@ export function createCyclingTools(
                 category: "WORKOUT",
                 name: input.workout.name,
                 type: "Ride",
-                external_id: buildCoachExternalId(input.date, input.workout.name),
-                tags: [COACH_EVENT_TAG],
+                ...buildCoachEventProvenance(input.date, input.workout.name),
                 description: serialized.description,
               });
               if (!result.ok) return { error: result.error.kind };

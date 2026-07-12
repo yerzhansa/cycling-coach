@@ -190,11 +190,13 @@ export {
   dateKeySchema,
   INTERVALS_LIST_MAX_RANGE_DAYS,
   validateListRange,
+  validateWorkoutCreationDate,
 } from "./agent/date-schema.js";
 export { isRealDateKey } from "./io/date-keys.js";
 export {
   COACH_EVENT_TAG,
   COACH_EXTERNAL_ID_PREFIX,
+  buildCoachEventProvenance,
   buildCoachExternalId,
   isCoachOwnedEvent,
 } from "./agent/event-provenance.js";

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { MemorySnapshot, MemoryStore } from "@enduragent/core";
+import type { MemorySnapshot } from "@enduragent/core";
 import { runningSport } from "../src/sport.js";
 import { runningReferenceAdapter } from "../src/reference/index.js";
 import { createRunningTools } from "../src/tools.js";
@@ -41,7 +41,7 @@ describe("runningSport contract", () => {
   });
 
   it("surfaces a calculate_zones tool", () => {
-    const tools = createRunningTools({} as MemoryStore, null, "UTC");
+    const tools = createRunningTools(null, "UTC");
     expect(Object.keys(tools)).toContain("calculate_zones");
   });
 });
