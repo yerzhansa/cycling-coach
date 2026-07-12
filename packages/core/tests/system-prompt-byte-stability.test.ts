@@ -2,7 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildSystemPrompt } from "../src/agent/system-prompt.js";
+import { createHash } from "node:crypto";
+import {
+  buildSystemPrompt,
+  CONFIRMATION_GATE_RULES,
+} from "../src/agent/system-prompt.js";
 import {
   ATHLETE_CONTEXT_FENCE_OPEN,
   ATHLETE_CONTEXT_FENCE_CLOSE,
@@ -46,6 +50,12 @@ afterEach(() => {
 });
 
 describe("consecutive builds are byte-identical", () => {
+  it("pins the confirmation rule block bytes", () => {
+    expect(createHash("sha256").update(CONFIRMATION_GATE_RULES).digest("hex")).toBe(
+      "ab1c5c932355aa134691c9ba39d93cd7f92016763477e0841dbac61e52985389",
+    );
+  });
+
   it("builds against the same fake-memory context byte-identically", () => {
     const a = buildSystemPrompt(persona, makeFakeMemory("FTP 247W, 72kg"));
     const b = buildSystemPrompt(persona, makeFakeMemory("FTP 247W, 72kg"));

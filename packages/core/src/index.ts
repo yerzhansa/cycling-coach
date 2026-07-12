@@ -113,6 +113,12 @@ export {
 } from "./agent/turn-budget.js";
 export type { BudgetExceededKind, TurnBudget } from "./agent/turn-budget.js";
 export { TAINTED_BY_WRITES_MESSAGE } from "./agent/coach-agent-copy.js";
+export {
+  ConfirmationGate,
+  GATED_TOOL_NAMES,
+  PROPOSAL_TTL_MS,
+} from "./agent/confirmation-gate.js";
+export type { ConfirmOutcome } from "./agent/confirmation-gate.js";
 export { capToolResult, TOOL_RESULT_SHARE } from "./agent/tool-result-cap.js";
 export {
   memoizeReadTool,

@@ -94,7 +94,7 @@ function dailyMemoryText(): string {
 }
 
 describe("tainted-by-writes refusal", () => {
-  it("a write on a non-final step then a brownout refuses without replaying the write", async () => {
+  it("a create proposal then a brownout retries normally without writing", async () => {
     const { server, createdWorkouts } = createMockIntervalsServer();
     server.listen({ onUnhandledRequest: "bypass" });
     try {
@@ -105,9 +105,6 @@ describe("tainted-by-writes refusal", () => {
         if (sys.includes(FLUSH_MARKER)) return mkAssistant({ text: "facts noted" });
         if (sys.length === 0) return mkAssistant({ text: "summary" });
         mainTurns++;
-        // Within attempt 1: step 1 emits the create tool-call (non-final), the
-        // bridge executes it (write commits via MSW), then step 2 throws — so
-        // the write lands on a non-final step that the final-step result misses.
         const ctx = params as { messages?: { role: string }[] };
         const hasToolResult = (ctx.messages ?? []).some((m) => m.role === "tool");
         if (mainTurns === 1 && !hasToolResult) {
@@ -129,25 +126,29 @@ describe("tainted-by-writes refusal", () => {
             stopReason: "toolUse",
           });
         }
-        // The step after the write throws a retryable error.
+        if (mainTurns >= 3) return mkAssistant({ text: "recovered after proposal" });
         secondMainAfterWrite = true;
         throw new Error("You have hit your rate limit. Try again later.");
       });
       vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.useFakeTimers();
       const agent = await setupAgent(complete);
 
-      const result = await agent.chat("taint", "create a threshold workout for tomorrow");
+      const chat = agent.chat("taint", "create a threshold workout for tomorrow");
+      await vi.advanceTimersByTimeAsync(60_000);
+      const result = await chat;
+      vi.useRealTimers();
 
-      expect(result).toBe(TAINTED_BY_WRITES_MESSAGE);
-      // The write committed exactly once and was never replayed on a retry.
-      expect(createdWorkouts.length).toBe(1);
+      expect(result).toBe("recovered after proposal");
+      expect(result).not.toBe(TAINTED_BY_WRITES_MESSAGE);
+      expect(createdWorkouts.length).toBe(0);
       expect(secondMainAfterWrite).toBe(true);
     } finally {
       server.close();
     }
   });
 
-  it("a write on a non-final step then a timeout refuses without replaying the write", async () => {
+  it("a create proposal then a timeout retries normally without writing", async () => {
     const { server, createdWorkouts } = createMockIntervalsServer();
     server.listen({ onUnhandledRequest: "bypass" });
     try {
@@ -179,6 +180,7 @@ describe("tainted-by-writes refusal", () => {
             stopReason: "toolUse",
           });
         }
+        if (mainTurns >= 3) return mkAssistant({ text: "recovered after proposal" });
         secondMainAfterWrite = true;
         const err = new Error("deadline exceeded");
         err.name = "TimeoutError";
@@ -189,10 +191,11 @@ describe("tainted-by-writes refusal", () => {
 
       const result = await agent.chat("taint-timeout", "create an endurance workout for tomorrow");
 
-      expect(result).toBe(TAINTED_BY_WRITES_MESSAGE);
-      expect(createdWorkouts.length).toBe(1);
+      expect(result).toBe("recovered after proposal");
+      expect(result).not.toBe(TAINTED_BY_WRITES_MESSAGE);
+      expect(createdWorkouts.length).toBe(0);
       expect(secondMainAfterWrite).toBe(true);
-      expect(mainTurns).toBe(2);
+      expect(mainTurns).toBe(3);
     } finally {
       server.close();
     }
@@ -344,7 +347,7 @@ describe("tainted-by-writes refusal", () => {
     expect((dailyMemoryText().match(new RegExp(note, "g")) ?? []).length).toBe(1);
   });
 
-  it("a delete on a turn that then errors also taints", async () => {
+  it("a delete proposal on a turn that then errors does not taint or delete", async () => {
     const { server, createdWorkouts, deletedEventIds } = createMockIntervalsServer();
     // Seed an upcoming workout so the delete tool's get-before-delete succeeds.
     createdWorkouts.push({
@@ -372,15 +375,21 @@ describe("tainted-by-writes refusal", () => {
             stopReason: "toolUse",
           });
         }
+        if (mainTurns >= 3) return mkAssistant({ text: "recovered after delete proposal" });
         throw new Error("You have hit your rate limit. Try again later.");
       });
       vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.useFakeTimers();
       const agent = await setupAgent(complete);
 
-      const result = await agent.chat("taint-del", "delete tomorrow's workout");
+      const chat = agent.chat("taint-del", "delete tomorrow's workout");
+      await vi.advanceTimersByTimeAsync(60_000);
+      const result = await chat;
+      vi.useRealTimers();
 
-      expect(result).toBe(TAINTED_BY_WRITES_MESSAGE);
-      expect(deletedEventIds).toEqual([7777]);
+      expect(result).toBe("recovered after delete proposal");
+      expect(result).not.toBe(TAINTED_BY_WRITES_MESSAGE);
+      expect(deletedEventIds).toEqual([]);
     } finally {
       server.close();
     }

@@ -277,7 +277,12 @@ describe("createTelegramBot — startup diagnostic + no security broadcast", () 
     }));
 
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const agent = { chat: vi.fn(), resetSession: vi.fn(), hasSession: vi.fn() };
+    const agent = {
+      chat: vi.fn(),
+      resetSession: vi.fn(),
+      hasSession: vi.fn(),
+      confirmations: { peek: vi.fn(), confirm: vi.fn(), cancel: vi.fn() },
+    };
 
     const { createTelegramBot } = await import("../src/channels/telegram.js");
     const result = createTelegramBot(
@@ -293,6 +298,7 @@ describe("createTelegramBot — startup diagnostic + no security broadcast", () 
     expect(sendMessage).not.toHaveBeenCalled();
     // Auth middleware is registered first.
     expect(use).toHaveBeenCalled();
+    expect(on).toHaveBeenCalledWith("callback_query:data", expect.any(Function));
     // Diagnostic stderr logging fired.
     expect(errSpy).toHaveBeenCalledWith(
       expect.stringMatching(/\[security\] Telegram allowlist: pairing mode/),

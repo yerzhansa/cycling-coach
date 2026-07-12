@@ -52,6 +52,11 @@ import { createSubsystemLogger, type SubsystemLogger } from "../logging/index.js
 import { retryWithBackoff } from "../concurrency/retry.js";
 import { createTurnBudget, TurnBudgetExceededError, type TurnBudget } from "./turn-budget.js";
 import { TAINTED_BY_WRITES_MESSAGE, STEP_LIMIT_TRUNCATION_MESSAGE } from "./coach-agent-copy.js";
+import {
+  ConfirmationGate,
+  createProposalSummarizers,
+  gateMutatingTool,
+} from "./confirmation-gate.js";
 
 const MAX_OVERFLOW_ATTEMPTS = 3;
 const MAX_TIMEOUT_ATTEMPTS = 2;
@@ -163,6 +168,7 @@ interface TurnOutcome {
 }
 
 interface TurnWriteRecord {
+  chatId: string;
   writesCommitted: number;
   lastWriteSummary?: string;
 }
@@ -210,6 +216,7 @@ function committedWriteSummary(name: string, result: unknown): string | undefine
 // ============================================================================
 
 export class CoachAgent {
+  readonly confirmations: ConfirmationGate;
   private sport: Sport;
   private llm: LLM;
   private flushLlm: LLM;
@@ -271,6 +278,7 @@ export class CoachAgent {
     this.memory = new Memory(config.dataDir, this.tz);
     this.chatStore = new ChatStore(config.dataDir, config.session.resetArchiveRetentionDays);
     this.log = createSubsystemLogger("agent", config.dataDir);
+    this.confirmations = new ConfirmationGate();
 
     const intervals = config.intervals.apiKey
       ? makeChatClient({
@@ -292,15 +300,29 @@ export class CoachAgent {
     this.excludedSectionNames = sections.filter((s) => s.inject === false).map((s) => s.name);
 
     const registrations = sport.tools(coreDeps);
+    const summarizers = createProposalSummarizers({ intervals, tz: this.tz });
+    const chatIdResolver = () => this.turnWritesStore.getStore()?.chatId;
     const maxResultTokens = Math.floor(this.config.contextWindowTokens * TOOL_RESULT_SHARE);
     this.tools = Object.fromEntries(
       registrations.map((r) => [
         r.name,
         memoizeReadTool(
           r.name,
-          capToolResult(markUntrustedResult(this.wrapWriteTool(r.name, r.tool)), {
-            maxResultTokens,
-          }),
+          capToolResult(
+            markUntrustedResult(
+              this.wrapWriteTool(
+                r.name,
+                gateMutatingTool(
+                  r.name,
+                  r.tool,
+                  this.confirmations,
+                  summarizers[r.name],
+                  chatIdResolver,
+                ),
+              ),
+            ),
+            { maxResultTokens },
+          ),
           () => this.readToolCacheStore.getStore(),
         ),
       ]),
@@ -486,7 +508,7 @@ export class CoachAgent {
     // fire-and-forget turns never clobber each other's anchor. null when the
     // channel supplies nothing (CLI path, no sync data).
     const resolvedCs = turn?.resolvedCs ?? null;
-    const turnWrites: TurnWriteRecord = { writesCommitted: 0 };
+    const turnWrites: TurnWriteRecord = { chatId, writesCommitted: 0 };
     return this.resolvedCsStore.run(resolvedCs, () =>
       this.readToolCacheStore.run(new Map<string, unknown>(), () =>
         this.turnWritesStore.run(turnWrites, () =>

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { computePromptLineage } from "../src/agent/prompt-lineage.js";
 import type { PromptLineageInput } from "../src/agent/prompt-lineage.js";
 import type { ModelMessage } from "ai";
+import { staticRuleBlocks } from "../src/agent/system-prompt.js";
 
 const baseMessages: ModelMessage[] = [
   { role: "user", content: "hi" },
@@ -19,6 +20,11 @@ const base: PromptLineageInput = {
 };
 
 describe("computePromptLineage", () => {
+  it("pins lineage after adding the confirmation rule block", () => {
+    const lineage = computePromptLineage({ ...base, ruleBlocks: staticRuleBlocks() });
+    expect(lineage.templateHash).toBe("8080d4d48f107c9d");
+  });
+
   it("is deterministic and produces sha256-16 hashes", () => {
     const a = computePromptLineage(base);
     const b = computePromptLineage(base);
