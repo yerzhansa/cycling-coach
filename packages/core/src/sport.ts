@@ -37,6 +37,8 @@ export interface MemorySectionSpec {
   name: string;
   /** Description shown to the LLM in section headers + memory_write tool docs. */
   description: string;
+  /** Short routing discriminator for the chat memory_write catalog. Omitted = full description is used. */
+  hint?: string;
   /** Always inject into the system prompt's Athlete Context. Omitted = true. */
   inject?: boolean;
 }
@@ -172,4 +174,3 @@ export function mergeSportSkills(
   }
   return merged;
 }
-
