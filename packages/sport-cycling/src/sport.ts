@@ -91,7 +91,7 @@ export const cyclingSport: Sport = {
       ...createMemoryTools(deps.memory, sections),
       ...createPureCoreIntervalsTools(deps.intervals, deps.tz),
       ...createCoreToolsWithSportConfig(deps.intervals, cyclingSport.intervalsActivityTypes),
-      ...createCyclingTools(deps.memory, deps.intervals, deps.tz),
+      ...createCyclingTools(deps.intervals, deps.tz),
     };
     return Object.entries(toolset).map(([name, t]) => ({
       name,

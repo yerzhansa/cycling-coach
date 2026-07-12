@@ -6,6 +6,29 @@ export const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 export const dateKeySchema = z.string().regex(DATE_KEY_RE);
 export const INTERVALS_LIST_MAX_RANGE_DAYS = 366;
 
+export function validateWorkoutCreationDate(
+  date: string,
+  tz: string,
+):
+  | { error: "invalid_date"; details: string }
+  | { error: "past_date_refused"; details: string }
+  | null {
+  if (!isRealDateKey(date)) {
+    return {
+      error: "invalid_date",
+      details: `${date} is not a real calendar date. Use YYYY-MM-DD.`,
+    };
+  }
+  const today = todayInTZ(tz);
+  if (date < today) {
+    return {
+      error: "past_date_refused",
+      details: `Cannot create a workout dated ${date} — it's before today (${today}). Use today's date or later.`,
+    };
+  }
+  return null;
+}
+
 export function validateListRange(
   oldest: string,
   newest: string | undefined,

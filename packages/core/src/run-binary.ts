@@ -16,7 +16,10 @@ import {
 import { classifyAgentError } from "./agent/error-classify.js";
 import { warnOrphanSections } from "./memory/orphan-sections.js";
 import { getEffectiveSections } from "./memory/effective-sections.js";
-import type { ConfirmationGate } from "./agent/confirmation-gate.js";
+import {
+  formatConfirmOutcome,
+  type ConfirmationGate,
+} from "./agent/confirmation-gate.js";
 
 // Shared error classifier output as the CLI's athlete-facing reply, so the CLI
 // and the Telegram channel speak the same error vocabulary and never dump a raw
@@ -100,13 +103,7 @@ export async function _promptProposalConfirm(
           return;
         }
         const outcome = await agent.confirmations.confirm("cli", proposal.nonce);
-        if (outcome.status === "executed") {
-          console.log(`Done — ${outcome.summary}.`);
-        } else if (outcome.status === "failed") {
-          console.log(`That didn't go through — ${outcome.message}`);
-        } else {
-          console.log("That proposal expired — ask me again and I'll re-propose.");
-        }
+        console.log(formatConfirmOutcome(outcome));
         resolve();
       })();
     });

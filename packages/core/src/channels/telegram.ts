@@ -25,6 +25,7 @@ import { formatSnapshotRaw } from "../reference/sync/snapshot-debug.js";
 import { sendSnapshotOutput } from "../reference/sync/send-snapshot.js";
 import { createSubsystemLogger } from "../logging/index.js";
 import { truncateUtf16Safe } from "../text-truncate.js";
+import { formatConfirmOutcome } from "../agent/confirmation-gate.js";
 
 // Upper bound on how long /update waits for in-flight turns to finish before
 // self-updating. A hung turn must never wedge the update, so the drain races a
@@ -685,13 +686,7 @@ export function createTelegramBot(
         return;
       }
       const outcome = await agent.confirmations.confirm(chatId, nonce);
-      if (outcome.status === "executed") {
-        await ctx.reply(`Done — ${outcome.summary}.`);
-      } else if (outcome.status === "failed") {
-        await ctx.reply(`That didn't go through — ${outcome.message}`);
-      } else {
-        await ctx.reply("That proposal expired — ask me again and I'll re-propose.");
-      }
+      await ctx.reply(formatConfirmOutcome(outcome));
     });
   });
 

@@ -15,6 +15,16 @@ export function buildCoachExternalId(date: string, name: string): string {
   return `${COACH_EXTERNAL_ID_PREFIX}${date}:${slugifyName(name)}`;
 }
 
+export function buildCoachEventProvenance(
+  date: string,
+  name: string,
+): { external_id: string; tags: string[] } {
+  return {
+    external_id: buildCoachExternalId(date, name),
+    tags: [COACH_EVENT_TAG],
+  };
+}
+
 export function isCoachOwnedEvent(event: {
   tags?: string[] | null;
   externalId?: string | null;

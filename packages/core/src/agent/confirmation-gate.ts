@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Tool } from "ai";
-import type { ApiError } from "intervals-icu-api";
 import type { IntervalsClient } from "../intervals.js";
-import { guardDeletableEvent, type IntervalsEventRuntime } from "./intervals-tools.js";
+import {
+  guardDeletableEvent,
+  toTypedError,
+  type IntervalsEventRuntime,
+} from "./intervals-tools.js";
 
 export const GATED_TOOL_NAMES: ReadonlySet<string> = new Set([
   "intervals_create_workout",
@@ -26,6 +29,12 @@ export type ConfirmOutcome =
   | { status: "mismatch" }
   | { status: "none" };
 
+export function formatConfirmOutcome(outcome: ConfirmOutcome): string {
+  if (outcome.status === "executed") return `Done — ${outcome.summary}.`;
+  if (outcome.status === "failed") return `That didn't go through — ${outcome.message}`;
+  return "That proposal expired — ask me again and I'll re-propose.";
+}
+
 export class ConfirmationGate {
   private readonly proposals = new Map<string, PendingProposal>();
 
@@ -40,23 +49,28 @@ export class ConfirmationGate {
     });
   }
 
-  peek(chatId: string): { nonce: string; summary: string } | undefined {
+  private lookup(chatId: string): {
+    proposal: PendingProposal | undefined;
+    expired: boolean;
+  } {
     const proposal = this.proposals.get(chatId);
-    if (proposal === undefined) return undefined;
+    if (proposal === undefined) return { proposal: undefined, expired: false };
     if (proposal.expiresAt <= this.now()) {
       this.proposals.delete(chatId);
-      return undefined;
+      return { proposal: undefined, expired: true };
     }
+    return { proposal, expired: false };
+  }
+
+  peek(chatId: string): { nonce: string; summary: string } | undefined {
+    const { proposal } = this.lookup(chatId);
+    if (proposal === undefined) return undefined;
     return { nonce: proposal.nonce, summary: proposal.summary };
   }
 
   async confirm(chatId: string, nonce: string): Promise<ConfirmOutcome> {
-    const proposal = this.proposals.get(chatId);
-    if (proposal === undefined) return { status: "none" };
-    if (proposal.expiresAt <= this.now()) {
-      this.proposals.delete(chatId);
-      return { status: "expired" };
-    }
+    const { proposal, expired } = this.lookup(chatId);
+    if (proposal === undefined) return { status: expired ? "expired" : "none" };
     if (proposal.nonce !== nonce) return { status: "mismatch" };
     this.proposals.delete(chatId);
     try {
@@ -71,12 +85,8 @@ export class ConfirmationGate {
   }
 
   cancel(chatId: string, nonce: string): "canceled" | "mismatch" | "none" {
-    const proposal = this.proposals.get(chatId);
+    const { proposal } = this.lookup(chatId);
     if (proposal === undefined) return "none";
-    if (proposal.expiresAt <= this.now()) {
-      this.proposals.delete(chatId);
-      return "none";
-    }
     if (proposal.nonce !== nonce) return "mismatch";
     this.proposals.delete(chatId);
     return "canceled";
@@ -86,17 +96,14 @@ export class ConfirmationGate {
 export type Summarized = { summary: string } | { block: unknown };
 export type ProposalSummarizer = (input: unknown) => Promise<Summarized>;
 
-function toTypedError(error: ApiError): { error: string; status?: number; message?: string } {
-  return {
-    error: error.kind,
-    ...("status" in error ? { status: error.status } : {}),
-    ...("message" in error ? { message: error.message } : {}),
-  };
+function objectField(value: unknown, key: string): unknown {
+  return value !== null && typeof value === "object"
+    ? (value as Record<string, unknown>)[key]
+    : undefined;
 }
 
 function stringField(value: unknown, key: string): string | undefined {
-  if (value === null || typeof value !== "object") return undefined;
-  const field = (value as Record<string, unknown>)[key];
+  const field = objectField(value, key);
   return typeof field === "string" && field.trim() !== "" ? field : undefined;
 }
 
@@ -108,10 +115,7 @@ export function createProposalSummarizers(opts: {
     intervals_create_workout: async (input) => {
       if (opts.intervals === null) return { block: { error: "intervals_not_configured" } };
       const date = stringField(input, "date");
-      const workout =
-        input !== null && typeof input === "object"
-          ? (input as Record<string, unknown>).workout
-          : undefined;
+      const workout = objectField(input, "workout");
       const name = stringField(workout, "name");
       return date !== undefined && name !== undefined
         ? { summary: `Create workout "${name}" on ${date}` }
@@ -119,10 +123,7 @@ export function createProposalSummarizers(opts: {
     },
     intervals_delete_workout: async (input) => {
       if (opts.intervals === null) return { block: { error: "intervals_not_configured" } };
-      const eventId =
-        input !== null && typeof input === "object"
-          ? (input as Record<string, unknown>).eventId
-          : undefined;
+      const eventId = objectField(input, "eventId");
       if (typeof eventId !== "number") return { block: { error: "invalid_event_id" } };
       const fetched = await opts.intervals.events.get(eventId);
       if (!fetched.ok) return { block: toTypedError(fetched.error) };
@@ -133,10 +134,7 @@ export function createProposalSummarizers(opts: {
       return { summary: `Delete workout "${event.name ?? "Unnamed workout"}" on ${date}` };
     },
     plan_save: async (input) => {
-      const plan =
-        input !== null && typeof input === "object"
-          ? (input as Record<string, unknown>).plan
-          : undefined;
+      const plan = objectField(input, "plan");
       const detail = stringField(plan, "name") ?? stringField(plan, "goal");
       return {
         summary:

@@ -26,7 +26,11 @@ export const STREAM_TYPES = [
   "smooth_grade",
 ] as const;
 
-function toTypedError(error: ApiError): { error: string; status?: number; message?: string } {
+export function toTypedError(error: ApiError): {
+  error: string;
+  status?: number;
+  message?: string;
+} {
   return {
     error: error.kind,
     ...("status" in error ? { status: error.status } : {}),
@@ -290,7 +294,9 @@ export function createCoreToolsWithSportConfig(
           category: ["WORKOUT"],
         });
         if (!result.ok) return toTypedError(result.error);
-        const projected = (result.value as unknown as IntervalsEventRuntime[]).map((e) => ({
+        const events = result.value as unknown as IntervalsEventRuntime[];
+        const source = input.coachCreatedOnly === true ? events.filter(isCoachOwnedEvent) : events;
+        return source.map((e) => ({
           id: e.id,
           startDateLocal: e.startDateLocal,
           name: e.name,
@@ -299,11 +305,8 @@ export function createCoreToolsWithSportConfig(
           category: e.category,
           externalId: e.externalId,
           tags: e.tags,
-          coachCreated: isCoachOwnedEvent(e),
+          coachCreated: input.coachCreatedOnly === true ? true : isCoachOwnedEvent(e),
         }));
-        return input.coachCreatedOnly === true
-          ? projected.filter((row) => row.coachCreated)
-          : projected;
       },
     }),
   };

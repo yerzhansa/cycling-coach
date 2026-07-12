@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { todayInTZ, type MemoryStore } from "@enduragent/core";
+import { todayInTZ } from "@enduragent/core";
 import {
   buildPlanSkeletonInputSchema,
   createCyclingTools,
@@ -26,7 +26,7 @@ function fakeIntervals(
 }
 
 function createWorkoutTool(intervals: unknown, tz = "UTC") {
-  const tools = createCyclingTools({} as MemoryStore, intervals as never, tz);
+  const tools = createCyclingTools(intervals as never, tz);
   return (tools as Record<string, unknown>).intervals_create_workout as
     | { execute: (input: unknown, opts: unknown) => Promise<Record<string, unknown>> }
     | undefined;
@@ -84,7 +84,7 @@ describe("intervals_create_workout provenance", () => {
   });
 
   it("tool absent when no intervals client configured", () => {
-    const tools = createCyclingTools({} as MemoryStore, null, "UTC");
+    const tools = createCyclingTools(null, "UTC");
     expect("intervals_create_workout" in tools).toBe(false);
   });
 });
@@ -164,7 +164,7 @@ describe("intervals_create_workout payload (calendar-payload group)", () => {
 describe("build_plan_skeleton purity", () => {
   it("returns a plan and never calls savePlan", async () => {
     const savePlan = vi.fn();
-    const tools = createCyclingTools({ savePlan } as unknown as MemoryStore, null, "UTC");
+    const tools = createCyclingTools(null, "UTC");
     const result = await tools.build_plan_skeleton.execute!(
       {
         experienceLevel: "intermediate",
@@ -182,7 +182,7 @@ describe("build_plan_skeleton purity", () => {
   });
 
   it("description discloses that nothing is saved", () => {
-    const tools = createCyclingTools({} as MemoryStore, null, "UTC");
+    const tools = createCyclingTools(null, "UTC");
     expect(tools.build_plan_skeleton.description).toContain("Does NOT save anything");
   });
 });
@@ -198,7 +198,7 @@ describe("build_plan_skeleton raceDate", () => {
   };
 
   it("builds a finite plan for a valid future date", async () => {
-    const tools = createCyclingTools({} as MemoryStore, null, "UTC");
+    const tools = createCyclingTools(null, "UTC");
     const result = (await tools.build_plan_skeleton.execute!(
       { ...baseInput, raceDate: futureISODate(84) },
       {} as never,
@@ -208,7 +208,7 @@ describe("build_plan_skeleton raceDate", () => {
   });
 
   it("refuses an impossible calendar date", async () => {
-    const tools = createCyclingTools({} as MemoryStore, null, "UTC");
+    const tools = createCyclingTools(null, "UTC");
     const result = await tools.build_plan_skeleton.execute!(
       { ...baseInput, raceDate: "2026-02-31" },
       {} as never,
