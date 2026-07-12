@@ -1,6 +1,7 @@
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import type { MemoryStore, ResolvedCs } from "@enduragent/core";
+import { COACH_EVENT_TAG, buildCoachExternalId } from "@enduragent/core";
 import type { IntervalsClient } from "intervals-icu-api";
 import {
   calculateRunningZones,
@@ -193,6 +194,8 @@ export function createRunningTools(
                 category: "WORKOUT",
                 name: input.workout.name,
                 type: "Run",
+                external_id: buildCoachExternalId(input.date, input.workout.name),
+                tags: [COACH_EVENT_TAG],
                 moving_time: serialized.movingTime,
                 // No icu_training_load — the server derives running Pace Load from the
                 // parsed steps against the athlete's own threshold pace.

@@ -180,6 +180,12 @@ export {
   createCoreToolsWithSportConfig,
 } from "./agent/intervals-tools.js";
 export {
+  COACH_EVENT_TAG,
+  COACH_EXTERNAL_ID_PREFIX,
+  buildCoachExternalId,
+  isCoachOwnedEvent,
+} from "./agent/event-provenance.js";
+export {
   appendCurrentTimeLine,
   buildCurrentTimeLine,
   formatTimeInTZ,

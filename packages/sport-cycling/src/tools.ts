@@ -1,6 +1,7 @@
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import type { MemoryStore } from "@enduragent/core";
+import { COACH_EVENT_TAG, buildCoachExternalId } from "@enduragent/core";
 import type { IntervalsClient } from "intervals-icu-api";
 import {
   calculateCyclingZones,
@@ -173,6 +174,8 @@ export function createCyclingTools(
                 category: "WORKOUT",
                 name: input.workout.name,
                 type: "Ride",
+                external_id: buildCoachExternalId(input.date, input.workout.name),
+                tags: [COACH_EVENT_TAG],
                 moving_time: serialized.movingTime,
                 icu_training_load: serialized.trainingLoad,
                 description: serialized.description,

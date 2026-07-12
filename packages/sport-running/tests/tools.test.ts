@@ -192,6 +192,8 @@ describe("intervals_create_workout tool", () => {
     expect(typeof payload.description).toBe("string");
     expect(payload.description).toContain("75% Pace");
     expect("icu_training_load" in payload).toBe(false);
+    expect(payload.external_id).toBe("cycling-coach:2026-06-21:easy-30");
+    expect(payload.tags).toEqual(["cycling-coach"]);
   });
 
   it("passes a manual-source resolved CS through and still serializes (DOM-1)", async () => {
