@@ -2,5 +2,86 @@
   "schema_version": 1,
   "hash_algorithm": "sha256",
   "policy_sha256": "61ebe73deb5992c3b8290773441b70ac807184183c07d4df0c51978f236f675a",
-  "files": []
+  "files": [
+    {
+      "path": "packages/kernel-node/tests/fixtures/ingest/brick-cycling.fit",
+      "sha256": "a6372c3d9a1f11448210981ca1d7fa36733469cd698094b0157223b6b6fcf7f3",
+      "bytes": 55545,
+      "kind": "fit",
+      "serial": 90403,
+      "qa_cell": "brick-cycling"
+    },
+    {
+      "path": "packages/kernel-node/tests/fixtures/ingest/brick-running.fit",
+      "sha256": "ac73622e92ea80de2eb41d8acebedece7cc78c2a31738f76bf6c1c28b1d930d3",
+      "bytes": 27339,
+      "kind": "fit",
+      "serial": 90404,
+      "qa_cell": "brick-running"
+    },
+    {
+      "path": "packages/kernel-node/tests/fixtures/ingest/dual-developer-index.fit",
+      "sha256": "89b281cdb877c86695ae38224cf543ea510dbeb0eda3d20486d391b075714c28",
+      "bytes": 2329,
+      "kind": "fit",
+      "serial": 90408,
+      "qa_cell": "dual-developer-index"
+    },
+    {
+      "path": "packages/kernel-node/tests/fixtures/ingest/duathlon-run-bike-run.fit",
+      "sha256": "7a4b73d4faf2439e76bccad23c341ff5092e43063a6ea28ded244614e64651f3",
+      "bytes": 598,
+      "kind": "fit",
+      "serial": 90402,
+      "qa_cell": "duathlon-run-bike-run"
+    },
+    {
+      "path": "packages/kernel-node/tests/fixtures/ingest/fallback-cycling.gpx",
+      "sha256": "b8e7efcfffb2844803245418911e334bc31e099ba059a121d976cabae7081c55",
+      "bytes": 1127,
+      "kind": "gpx",
+      "serial": null,
+      "qa_cell": "fallback-cycling-gpx"
+    },
+    {
+      "path": "packages/kernel-node/tests/fixtures/ingest/fallback-cycling.tcx",
+      "sha256": "7d15faaa2cb1278b68c511c9ab9ddaa714cb7d9253850ff856df2e210b67c2c5",
+      "bytes": 2155,
+      "kind": "tcx",
+      "serial": null,
+      "qa_cell": "fallback-cycling-tcx"
+    },
+    {
+      "path": "packages/kernel-node/tests/fixtures/ingest/multisport-missing-generic-transition.fit",
+      "sha256": "8bfce83998082bc5b0a1c54197f02232d6e47a1edfcae1ed391118d6d5bb0ac7",
+      "bytes": 686,
+      "kind": "fit",
+      "serial": 90405,
+      "qa_cell": "multisport-missing-generic-transition"
+    },
+    {
+      "path": "packages/kernel-node/tests/fixtures/ingest/pool-size-correction.fit",
+      "sha256": "08cfd1d658b29c6cf14e273f3503eab9426d62e5ec193eaddb4d78e696b7b17e",
+      "bytes": 595,
+      "kind": "fit",
+      "serial": 90407,
+      "qa_cell": "pool-size-correction"
+    },
+    {
+      "path": "packages/kernel-node/tests/fixtures/ingest/pool-swim-drill-lengths.fit",
+      "sha256": "f7f465853f409493a0532b1d57f75334dbfcf2eeca428c3c0019ea785f772c2f",
+      "bytes": 595,
+      "kind": "fit",
+      "serial": 90406,
+      "qa_cell": "pool-swim-drill-lengths"
+    },
+    {
+      "path": "packages/kernel-node/tests/fixtures/ingest/triathlon-multisport.fit",
+      "sha256": "bcaaea4ea68261cb76411669b4188fc928631bb1e0ced32efa9fe4040d6f208c",
+      "bytes": 814,
+      "kind": "fit",
+      "serial": 90401,
+      "qa_cell": "triathlon-multisport"
+    }
+  ]
 }
