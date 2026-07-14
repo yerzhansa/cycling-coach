@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Reference layer synthetic fixture" xmlns="http://www.topografix.com/GPX/1/1" xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1">
+  <trk>
+    <name>Synthetic cycling fallback</name>
+    <trkseg>
+      <trkpt lat="-46.000000" lon="-127.000000">
+        <ele>10</ele>
+        <time>1998-07-04T12:00:00Z</time>
+        <extensions><gpxtpx:TrackPointExtension><gpxtpx:hr>120</gpxtpx:hr><gpxtpx:cad>80</gpxtpx:cad></gpxtpx:TrackPointExtension></extensions>
+      </trkpt>
+      <trkpt lat="-46.000000" lon="-126.999871">
+        <ele>11</ele>
+        <time>1998-07-04T12:00:01Z</time>
+        <extensions><gpxtpx:TrackPointExtension><gpxtpx:hr>122</gpxtpx:hr><gpxtpx:cad>81</gpxtpx:cad></gpxtpx:TrackPointExtension></extensions>
+      </trkpt>
+      <trkpt lat="-46.000000" lon="-126.999742">
+        <ele>12</ele>
+        <time>1998-07-04T12:00:02Z</time>
+        <extensions><gpxtpx:TrackPointExtension><gpxtpx:hr>124</gpxtpx:hr><gpxtpx:cad>82</gpxtpx:cad></gpxtpx:TrackPointExtension></extensions>
+      </trkpt>
+    </trkseg>
+  </trk>
+</gpx>
