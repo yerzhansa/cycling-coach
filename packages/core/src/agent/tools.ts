@@ -5,6 +5,20 @@ import type { MemoryStore } from "../memory.js";
 import { isRealDateKey, parseDateKeyMs, MS_PER_DAY } from "../io/date-keys.js";
 import { truncateUtf16Safe } from "../text-truncate.js";
 import { DATE_KEY_RE } from "./date-schema.js";
+import { bindToolResult } from "./bound-tool-result.js";
+import { UNKNOWN_PROVENANCE } from "../provenance.js";
+
+function bindMemoryToolResult(
+  memory: MemoryStore,
+  name: string,
+  input: unknown,
+  result: unknown,
+  truncated?: boolean,
+): unknown {
+  const provenance =
+    memory.provenanceForToolRead?.(name, input, result, { truncated }) ?? UNKNOWN_PROVENANCE;
+  return bindToolResult(result, provenance);
+}
 
 function buildMemoryWriteDescription(sections: readonly MemorySectionSpec[]): string {
   const sectionList = sections.map((s) => `${s.name} (${s.hint ?? s.description})`).join("; ");
@@ -50,6 +64,7 @@ export function createMemoryReadTool(
   memory: MemoryStore,
   description: string,
   onRead?: (result: string) => void,
+  bindProvenance: boolean = false,
 ) {
   return tool({
     description,
@@ -57,7 +72,7 @@ export function createMemoryReadTool(
     execute: async () => {
       const result = memory.getContext() || "No athlete data stored yet.";
       onRead?.(result);
-      return result;
+      return bindProvenance ? bindMemoryToolResult(memory, "memory_read", {}, result) : result;
     },
   });
 }
@@ -65,7 +80,7 @@ export function createMemoryReadTool(
 const MEMORY_QUERY_MAX_RANGE_DAYS = 366;
 const MEMORY_QUERY_MAX_RESULT_CHARS = 20_000;
 
-export function createMemoryQueryTool(memory: MemoryStore) {
+export function createMemoryQueryTool(memory: MemoryStore, bindProvenance: boolean = false) {
   return tool({
     description:
       "Query dated athlete memory: daily notes and the event ledger over a date range. " +
@@ -135,10 +150,14 @@ export function createMemoryQueryTool(memory: MemoryStore) {
         .sort()
         .map((d) => `## ${d}\n${byDate.get(d)!.join("\n")}`);
       const result = [header, ...sections].join("\n\n");
-      return result.length > MEMORY_QUERY_MAX_RESULT_CHARS
+      const truncated = result.length > MEMORY_QUERY_MAX_RESULT_CHARS;
+      const visibleResult = truncated
         ? truncateUtf16Safe(result, MEMORY_QUERY_MAX_RESULT_CHARS) +
-            "\n[truncated — narrow the date range or add a query term]"
+          "\n[truncated — narrow the date range or add a query term]"
         : result;
+      return bindProvenance
+        ? bindMemoryToolResult(memory, "memory_query", input, visibleResult, truncated)
+        : visibleResult;
     },
   });
 }
@@ -146,6 +165,7 @@ export function createMemoryQueryTool(memory: MemoryStore) {
 export function createMemoryTools(
   memory: MemoryStore,
   sections: readonly MemorySectionSpec[],
+  opts?: { bindProvenance?: boolean },
 ) {
   if (sections.length === 0) {
     throw new Error(
@@ -154,9 +174,15 @@ export function createMemoryTools(
     );
   }
   const sectionNames = sections.map((s) => s.name) as [string, ...string[]];
+  const bindProvenance = opts?.bindProvenance === true;
   return {
-    memory_read: createMemoryReadTool(memory, MEMORY_READ_CHAT_DESCRIPTION),
-    memory_query: createMemoryQueryTool(memory),
+    memory_read: createMemoryReadTool(
+      memory,
+      MEMORY_READ_CHAT_DESCRIPTION,
+      undefined,
+      bindProvenance,
+    ),
+    memory_query: createMemoryQueryTool(memory, bindProvenance),
 
     memory_write: tool({
       description: buildMemoryWriteDescription(sections),
@@ -194,7 +220,10 @@ export function createMemoryTools(
     plan_load: tool({
       description: "Load the current active training plan",
       inputSchema: zodSchema(z.object({})),
-      execute: async () => memory.loadPlan() ?? { message: "No plan saved yet." },
+      execute: async () => {
+        const result = memory.loadPlan() ?? { message: "No plan saved yet." };
+        return bindProvenance ? bindMemoryToolResult(memory, "plan_load", {}, result) : result;
+      },
     }),
   };
 }

@@ -1,6 +1,6 @@
 import type { ModelMessage } from "ai";
 import type { MemorySnapshot } from "../memory.js";
-import type { SportMemoryShape } from "../sport.js";
+import type { DerivedPreserveTokens, SportMemoryShape } from "../sport.js";
 import {
   estimateTokens,
   estimateMessagesTokens,
@@ -15,6 +15,7 @@ import { truncateUtf16Safe } from "../text-truncate.js";
 import type { GenerateOpts } from "../llm-types.js";
 import type { TurnBudget } from "./turn-budget.js";
 import {
+  EMPTY_PROVENANCE,
   UNKNOWN_PROVENANCE,
   getMessageProvenance,
   provenanceOfMessages,
@@ -50,13 +51,16 @@ const REQUIRED_SUMMARY_SECTIONS = [
 function resolveTokens(
   spec: SportMemoryShape["mustPreserveTokens"],
   memory: MemorySnapshot,
-): readonly string[] {
-  if (typeof spec !== "function") return spec;
+): DerivedPreserveTokens {
+  if (typeof spec !== "function") return { tokens: spec, provenance: EMPTY_PROVENANCE };
   try {
-    return spec(memory);
+    const resolved = spec(memory);
+    return Array.isArray(resolved)
+      ? { tokens: resolved, provenance: EMPTY_PROVENANCE }
+      : (resolved as DerivedPreserveTokens);
   } catch (err) {
     console.warn("Sport.mustPreserveTokens function threw; using empty list", err);
-    return [];
+    return { tokens: [], provenance: EMPTY_PROVENANCE };
   }
 }
 
@@ -303,7 +307,7 @@ export async function summarizeDroppedMessages(params: {
     return { summary: previousSummary ?? "", unsummarized: [] };
   }
 
-  const tokens = resolveTokens(mustPreserveTokens, memory);
+  const { tokens, provenance: tokenProvenance } = resolveTokens(mustPreserveTokens, memory);
   const droppedPrompt = buildDroppedMessagesPrompt(tokens);
   const mustPreserveBlock = buildMustPreserveBlock(tokens);
 
@@ -312,8 +316,10 @@ export async function summarizeDroppedMessages(params: {
   if (chunks.length === 0) chunks.push(dropped);
 
   let summary: string | undefined;
-  let summaryProvenance =
-    previousSummary === undefined ? undefined : (previousSummaryProvenance ?? UNKNOWN_PROVENANCE);
+  let summaryProvenance = unionProvenance(
+    previousSummary === undefined ? undefined : (previousSummaryProvenance ?? UNKNOWN_PROVENANCE),
+    tokenProvenance,
+  );
   const unsummarized: ModelMessage[] = [];
   let lastError: unknown;
 
@@ -406,7 +412,8 @@ export async function summarizeInStages(params: {
     return { messages: params.messages };
   }
 
-  const tokens = resolveTokens(mustPreserveTokens, memory);
+  const { tokens, provenance: tokenProvenance } = resolveTokens(mustPreserveTokens, memory);
+  summaryProvenance = unionProvenance(summaryProvenance, tokenProvenance);
   const summarizePrompt = buildSummarizePrompt(tokens);
   const mustPreserveBlock = buildMustPreserveBlock(tokens);
 

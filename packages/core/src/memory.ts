@@ -28,6 +28,9 @@ export interface MemoryStore {
   /** Returns the named section's body, or null if file or section is absent. */
   readSection(section: string): string | null;
 
+  /** Source labels for the current contents of one durable memory section. */
+  provenanceForSection(section: string, content?: string): SourceProvenance;
+
   /**
    * Renames `from` section to `to`. Lossless:
    * - "renamed": `from` existed, `to` did not — header rewritten in place.
@@ -80,6 +83,14 @@ export interface MemoryStore {
   /** Loads the active training plan, or null if none. */
   loadPlan(): unknown | null;
 
+  /** Source labels bound to the exact visible result of a synchronous tool read. */
+  provenanceForToolRead?(
+    name: string,
+    input: unknown,
+    visibleResult?: unknown,
+    opts?: { truncated?: boolean },
+  ): SourceProvenance;
+
   /** Sync point invoked after compaction or memory flush. */
   reload(): void;
 
@@ -102,4 +113,7 @@ export interface MemorySnapshot {
 
   /** All section names visible in this snapshot. */
   listSections(): readonly string[];
+
+  /** Source labels attached to the frozen section contents. */
+  provenanceOf(sectionName: string): SourceProvenance;
 }

@@ -32,9 +32,14 @@ export type LedgerEventInput = Omit<LedgerEvent, "ts">;
 
 export const LEDGER_FILENAME = "events.jsonl";
 
-export function appendLedgerEvent(memoryDir: string, event: LedgerEventInput): string {
+export function appendLedgerEvent(
+  memoryDir: string,
+  event: LedgerEventInput,
+  beforeAppend?: (serialized: string) => void,
+): string {
   const line = ledgerEventSchema.parse({ ts: new Date().toISOString(), ...event });
   const serialized = JSON.stringify(line);
+  beforeAppend?.(serialized);
   appendFileSync(join(memoryDir, LEDGER_FILENAME), serialized + "\n", {
     encoding: "utf-8",
     mode: 0o600,

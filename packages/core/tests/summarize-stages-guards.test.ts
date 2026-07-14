@@ -38,6 +38,7 @@ const EMPTY_SNAPSHOT: MemorySnapshot = {
   read: () => null,
   has: () => false,
   listSections: () => [],
+  provenanceOf: () => ({ garmin: false, nonGarmin: false, unknown: false }),
 };
 
 const hangingLLM = { generate: () => new Promise<never>(() => {}) } as unknown as LLM;
@@ -69,7 +70,8 @@ describe("summarizeInStages guards", () => {
     expect(result.messages.length).toBe(5);
 
     const chunkWarn = warnSpy.mock.calls.find(
-      (call) => typeof call[0] === "string" && call[0].includes("Staged summarization chunk failed"),
+      (call) =>
+        typeof call[0] === "string" && call[0].includes("Staged summarization chunk failed"),
     );
     expect(chunkWarn).toBeDefined();
     expect(isTimeoutError(chunkWarn?.[1])).toBe(true);
@@ -92,7 +94,8 @@ describe("summarizeInStages guards", () => {
     expect(spy.capturedPrompts.length).toBe(1);
 
     const chunkWarn = warnSpy.mock.calls.find(
-      (call) => typeof call[0] === "string" && call[0].includes("Staged summarization chunk failed"),
+      (call) =>
+        typeof call[0] === "string" && call[0].includes("Staged summarization chunk failed"),
     );
     expect(chunkWarn).toBeDefined();
   });
@@ -156,7 +159,8 @@ describe("summarizeInStages guards", () => {
     expect(String(result.messages[0].content)).toContain("FTP 247W");
 
     const chunkWarns = warnSpy.mock.calls.filter(
-      (call) => typeof call[0] === "string" && call[0].includes("Staged summarization chunk failed"),
+      (call) =>
+        typeof call[0] === "string" && call[0].includes("Staged summarization chunk failed"),
     );
     expect(chunkWarns.length).toBe(1);
   });
@@ -180,7 +184,8 @@ describe("summarizeInStages guards", () => {
     const guardWarn = warnSpy.mock.calls.find(
       (call) =>
         typeof call[0] === "string" &&
-        (call[0].includes("Staged summarization chunk failed") || call[0].includes("produced no summary")),
+        (call[0].includes("Staged summarization chunk failed") ||
+          call[0].includes("produced no summary")),
     );
     expect(guardWarn).toBeUndefined();
   });
@@ -210,7 +215,9 @@ describe("summarizeInStages guards", () => {
     expect(isTimeoutError((err as Error & { cause?: unknown }).cause)).toBe(true);
 
     const chunkWarn = warnSpy.mock.calls.find(
-      (call) => typeof call[0] === "string" && call[0].includes("Dropped message summarization LLM call failed"),
+      (call) =>
+        typeof call[0] === "string" &&
+        call[0].includes("Dropped message summarization LLM call failed"),
     );
     expect(chunkWarn).toBeDefined();
   }, 10_000);

@@ -14,6 +14,7 @@ import { ProvenanceMetadata } from "./provenance-metadata.js";
 import {
   EMPTY_PROVENANCE,
   UNKNOWN_PROVENANCE,
+  contentDigest,
   unionProvenance,
   type SourceProvenance,
 } from "../provenance.js";
@@ -86,6 +87,11 @@ function stampUpdated(content: string, date: string): string {
     body = nl === -1 ? "" : body.slice(nl + 1);
   }
   return body === "" ? `${UPDATED_STAMP_PREFIX}${date}` : `${UPDATED_STAMP_PREFIX}${date}\n${body}`;
+}
+
+function hasLogicalSectionContent(stamped: string): boolean {
+  const nl = stamped.indexOf("\n");
+  return nl !== -1 && stamped.slice(nl + 1).trim() !== "";
 }
 
 type RenameOutcome = "renamed" | "noop" | "merged";
@@ -221,6 +227,14 @@ export class Memory implements MemoryStore {
       );
     }
 
+    this.provenance.write(
+      `memory:${section}`,
+      stamped.trimEnd(),
+      hasLogicalSectionContent(stamped)
+        ? this.resolvedWriteProvenance(provenance)
+        : EMPTY_PROVENANCE,
+    );
+
     appendJournalEntry(this.memoryDir, {
       ts: new Date().toISOString(),
       op: "write-section",
@@ -232,11 +246,6 @@ export class Memory implements MemoryStore {
 
     if (!existing) {
       atomicWriteFileSync(path, newBlock);
-      this.provenance.write(
-        `memory:${section}`,
-        stamped.trimEnd(),
-        this.resolvedWriteProvenance(provenance),
-      );
       return;
     }
 
@@ -250,11 +259,6 @@ export class Memory implements MemoryStore {
       // Append at end (preserves legacy content not covered by any known section)
       atomicWriteFileSync(path, existing.trimEnd() + "\n\n" + newBlock);
     }
-    this.provenance.write(
-      `memory:${section}`,
-      stamped.trimEnd(),
-      this.resolvedWriteProvenance(provenance),
-    );
   }
 
   readSection(section: string): string | null {
@@ -266,6 +270,14 @@ export class Memory implements MemoryStore {
     if (!block) return null;
     const body = bodyOf(block);
     return body.endsWith("\n") ? body.slice(0, -1) : body;
+  }
+
+  provenanceForSection(
+    section: string,
+    content = this.readSection(section) ?? "",
+  ): SourceProvenance {
+    if (content === "") return EMPTY_PROVENANCE;
+    return this.provenance.read(`memory:${section}`, content.trimEnd());
   }
 
   renameSection(
@@ -285,6 +297,7 @@ export class Memory implements MemoryStore {
     if (outcome === "noop") return outcome;
 
     const updated = parts.join("");
+    this.provenance.replaceMany(metadataEntries, metadataDeletes);
     appendJournalEntry(this.memoryDir, {
       ts: new Date().toISOString(),
       op: "rename-sections",
@@ -294,7 +307,6 @@ export class Memory implements MemoryStore {
       source,
     });
     atomicWriteFileSync(path, updated);
-    this.provenance.replaceMany(metadataEntries, metadataDeletes);
     return outcome;
   }
 
@@ -318,6 +330,7 @@ export class Memory implements MemoryStore {
 
     if (mutated) {
       const updated = parts.join("");
+      this.provenance.replaceMany(metadataEntries, metadataDeletes);
       appendJournalEntry(this.memoryDir, {
         ts: new Date().toISOString(),
         op: "rename-sections",
@@ -327,7 +340,6 @@ export class Memory implements MemoryStore {
         source,
       });
       atomicWriteFileSync(path, updated);
-      this.provenance.replaceMany(metadataEntries, metadataDeletes);
     }
     return outcomes;
   }
@@ -346,13 +358,41 @@ export class Memory implements MemoryStore {
     const path = join(this.memoryDir, `${d}.md`);
     const existing = this.readDailyNotes(d);
     if (existing && `\n${existing}\n`.includes(`\n${note}\n`)) {
+      const writtenProvenance = this.resolvedWriteProvenance(provenance);
+      const existingLines = existing.split("\n");
+      const noteLines = note.split("\n");
+      const matchingLineIndexes = new Set<number>();
+      for (let start = 0; start + noteLines.length <= existingLines.length; start++) {
+        if (noteLines.every((line, offset) => existingLines[start + offset] === line)) {
+          for (let offset = 0; offset < noteLines.length; offset++) {
+            matchingLineIndexes.add(start + offset);
+          }
+        }
+      }
+      this.provenance.writeMany([
+        {
+          key: `daily:${d}`,
+          content: existing,
+          provenance: unionProvenance(
+            this.provenance.read(`daily:${d}`, existing),
+            writtenProvenance,
+          ),
+        },
+        ...[...matchingLineIndexes].map((index) => ({
+          key: `daily-line:${d}:${index}`,
+          content: existingLines[index],
+          provenance: unionProvenance(
+            this.provenance.read(`daily-line:${d}:${index}`, existingLines[index]),
+            writtenProvenance,
+          ),
+        })),
+      ]);
       console.warn(
         JSON.stringify({ event: "daily_note_duplicate_skipped", date: d, noteChars: note.length }),
       );
       return;
     }
     const updated = existing ? `${existing}\n${note}` : note;
-    atomicWriteFileSync(path, updated);
     const writtenProvenance = this.resolvedWriteProvenance(provenance);
     const prior = existing ? this.provenance.read(`daily:${d}`, existing) : EMPTY_PROVENANCE;
     const metadataWrites: Array<{
@@ -375,6 +415,7 @@ export class Memory implements MemoryStore {
       });
     }
     this.provenance.writeMany(metadataWrites);
+    atomicWriteFileSync(path, updated);
   }
 
   readDailyNotesInRange(from: string, to: string): Array<{ date: string; text: string }> {
@@ -393,8 +434,13 @@ export class Memory implements MemoryStore {
   }
 
   appendEvent(event: LedgerEventInput, provenance?: SourceProvenance): void {
-    const line = appendLedgerEvent(this.memoryDir, event);
-    this.provenance.write(`ledger:${line}`, line, this.resolvedWriteProvenance(provenance));
+    appendLedgerEvent(this.memoryDir, event, (line) => {
+      this.provenance.write(
+        `ledger:${contentDigest(line)}`,
+        line,
+        this.resolvedWriteProvenance(provenance),
+      );
+    });
   }
 
   // ── Plans ──────────────────────────────────────────────────────────────
@@ -406,6 +452,7 @@ export class Memory implements MemoryStore {
   ): void {
     const path = join(this.plansDir, "current-plan.json");
     const newBody = JSON.stringify(plan, null, 2);
+    this.provenance.write("plan", newBody, this.resolvedWriteProvenance(provenance));
     appendJournalEntry(this.memoryDir, {
       ts: new Date().toISOString(),
       op: "save-plan",
@@ -415,7 +462,6 @@ export class Memory implements MemoryStore {
       source,
     });
     atomicWriteFileSync(path, newBody);
-    this.provenance.write("plan", newBody, this.resolvedWriteProvenance(provenance));
   }
 
   loadPlan(): unknown | null {
@@ -546,7 +592,12 @@ export class Memory implements MemoryStore {
     return { text, provenance };
   }
 
-  provenanceForToolRead(name: string, input: unknown, visibleResult?: unknown): SourceProvenance {
+  provenanceForToolRead(
+    name: string,
+    input: unknown,
+    visibleResult?: unknown,
+    opts?: { truncated?: boolean },
+  ): SourceProvenance {
     if (name === "memory_read") return this.getContextWithProvenance().provenance;
     if (name === "plan_load") {
       const path = join(this.plansDir, "current-plan.json");
@@ -567,8 +618,10 @@ export class Memory implements MemoryStore {
     const queryText = typeof record.query === "string" ? record.query : undefined;
     const query = queryText?.toLowerCase();
     const truncationMarker = "\n[truncated — narrow the date range or add a query term]";
-    const truncationIndex = visibleResult.lastIndexOf(truncationMarker);
-    const visibleDataChars = truncationIndex === -1 ? visibleResult.length : truncationIndex;
+    const truncated = opts?.truncated === true && visibleResult.endsWith(truncationMarker);
+    const visibleDataChars = truncated
+      ? visibleResult.length - truncationMarker.length
+      : visibleResult.length;
     const byDate = new Map<string, Array<{ text: string; provenance: SourceProvenance }>>();
     for (const { date, text } of this.readDailyNotesInRange(record.from, record.to)) {
       const fileMatches = this.provenance.matches(`daily:${date}`, text);
@@ -597,7 +650,7 @@ export class Memory implements MemoryStore {
           const bucket = byDate.get(parsed.date) ?? [];
           bucket.push({
             text: `event: ${line}`,
-            provenance: this.provenance.read(`ledger:${line}`, line),
+            provenance: this.provenance.read(`ledger:${contentDigest(line)}`, line),
           });
           byDate.set(parsed.date, bucket);
         }
@@ -615,7 +668,7 @@ export class Memory implements MemoryStore {
       const items = byDate.get(date)!;
       for (const [index, item] of items.entries()) {
         if (index > 0) rendered += "\n";
-        const visibleStart = sanitizeUntrustedText(rendered).length;
+        const visibleStart = rendered.length;
         rendered += item.text;
         if (visibleStart < visibleDataChars) {
           all = unionProvenance(all, item.provenance);

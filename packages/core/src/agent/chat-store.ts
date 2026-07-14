@@ -68,6 +68,14 @@ function parseSessionLine(line: string): JsonlLine | null {
   return value as JsonlLine;
 }
 
+function sameProvenance(left: SourceProvenance, right: SourceProvenance): boolean {
+  return (
+    left.garmin === right.garmin &&
+    left.nonGarmin === right.nonGarmin &&
+    left.unknown === right.unknown
+  );
+}
+
 export class ChatStore {
   private sessionsDir: string;
   private resetArchiveRetentionDays: number;
@@ -202,7 +210,8 @@ export class ChatStore {
     // freshness/idle math keeps working across a compaction. Timestamps are read
     // back from the existing file by (role, content); a summary/system line is a
     // freshly-generated artifact and always gets `now`. Build a per-key queue so
-    // duplicate lines each keep their own original stamp in order.
+    // duplicate lines keep the stamp whose source label matches the surviving
+    // message, falling back to occurrence order when the labels are identical.
     const preservedByKey = new Map<string, Array<{ ts: string; provenance?: SourceProvenance }>>();
     if (existsSync(path)) {
       for (const line of readFileSync(path, "utf-8").split("\n")) {
@@ -223,13 +232,18 @@ export class ChatStore {
           const role = m.role as JsonlLine["role"];
           const text = messageText(m);
           let ts = now;
-          let provenance = getMessageProvenance(m);
+          const provenance = getMessageProvenance(m);
           if (role !== "system") {
             const queue = preservedByKey.get(`${role}\n${text}`);
-            const preserved = queue?.shift();
+            const matchingIndex = queue?.findIndex((candidate) =>
+              sameProvenance(candidate.provenance ?? UNKNOWN_PROVENANCE, provenance),
+            );
+            const preserved =
+              queue !== undefined && matchingIndex !== undefined && matchingIndex >= 0
+                ? queue.splice(matchingIndex, 1)[0]
+                : queue?.shift();
             if (preserved !== undefined) {
               ts = preserved.ts;
-              provenance = preserved.provenance ?? provenance;
             }
           }
           const line: JsonlLine = {

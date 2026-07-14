@@ -63,7 +63,7 @@ export const runningSport: Sport = {
   skills: loadSkills(),
   sessionClusterGapMinutes: 30,
   memorySections,
-  mustPreserveTokens: (memory: MemorySnapshot): readonly string[] => {
+  mustPreserveTokens: (memory: MemorySnapshot) => {
     const tokens: string[] = [...RUNNING_VOCABULARY];
     const profile = memory.read("running-profile");
     if (profile) {
@@ -71,7 +71,10 @@ export const runningSport: Sport = {
       // "CS: 4.0 m/s", "critical speed 4.0 m/s". One decimal m/s value; first
       // match only (historical CS values aren't identity-defining).
       const match = profile.match(/\bCS\b[\s:,-]*(\d\.\d{1,2})\s*(?:m\/s)?\b/i);
-      if (match) tokens.push(`CS ${match[1]} m/s`);
+      if (match) {
+        tokens.push(`CS ${match[1]} m/s`);
+        return { tokens, provenance: memory.provenanceOf("running-profile") };
+      }
     }
     return tokens;
   },
@@ -83,7 +86,9 @@ export const runningSport: Sport = {
     // Pure-Core, intervals Core-with-sport-config, and the sport-specific
     // running tools.
     const toolset = {
-      ...createMemoryTools(deps.memory, sections),
+      ...createMemoryTools(deps.memory, sections, {
+        bindProvenance: deps.bindMemoryToolProvenance,
+      }),
       ...createPureCoreIntervalsTools(deps.intervals, deps.tz),
       ...createCoreToolsWithSportConfig(deps.intervals, runningSport.intervalsActivityTypes),
       ...createRunningTools(deps.intervals, deps.tz, deps.resolvedCs),

@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ChatStore } from "../src/agent/chat-store.js";
 import { makeSummaryMessage } from "../src/agent/history-limit.js";
-import { createMemoryQueryTool } from "../src/agent/tools.js";
+import { createMemoryQueryTool, createMemoryTools } from "../src/agent/tools.js";
+import {
+  boundToolResultProvenance,
+  unwrapBoundToolResult,
+} from "../src/agent/bound-tool-result.js";
 import { Memory } from "../src/memory/store.js";
 import { ProvenanceMetadata } from "../src/memory/provenance-metadata.js";
 import { contentDigest, getMessageProvenance, setMessageProvenance } from "../src/provenance.js";
@@ -43,6 +47,37 @@ describe("chat history provenance metadata", () => {
       const rewritten = store.load("chat").messages;
       expect(getMessageProvenance(rewritten[0])).toEqual(GARMIN);
       expect(getMessageProvenance(rewritten[1])).toEqual(GARMIN);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    [GARMIN, UNKNOWN],
+    [UNKNOWN, GARMIN],
+  ])("preserves the retained duplicate message provenance", (first, retained) => {
+    const dir = tempDir("cc-chat-duplicate-provenance-");
+    try {
+      const store = new ChatStore(dir);
+      const lineage = {
+        templateHash: "template",
+        assembledHash: "assembled",
+        provider: "test",
+        model: "test",
+      };
+      store.appendMessage("chat", "assistant", "Same answer.", {
+        ...lineage,
+        provenance: first,
+      });
+      store.appendMessage("chat", "assistant", "Same answer.", {
+        ...lineage,
+        provenance: retained,
+      });
+      const messages = store.load("chat").messages;
+
+      store.overwriteHistory("chat", [messages[1]]);
+
+      expect(getMessageProvenance(store.load("chat").messages[0])).toEqual(retained);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -137,16 +172,19 @@ describe("memory, daily-note, plan, and ledger digest binding", () => {
       const memoryDir = join(dir, "memory");
       mkdirSync(memoryDir, { recursive: true });
       writeFileSync(
-        join(memoryDir, ".source-provenance.json"),
-        JSON.stringify({
-          version: 1,
-          entries: {
-            nullish: null,
-            numeric: 42,
-            missing_digest: { provenance: GARMIN },
-            valid: { digest: contentDigest("valid content"), provenance: GARMIN },
-          },
-        }),
+        join(memoryDir, ".source-provenance.jsonl"),
+        [
+          JSON.stringify({ version: 1, op: "put", key: "nullish", digest: null }),
+          JSON.stringify({ version: 1, op: "put", key: "numeric", digest: 42 }),
+          JSON.stringify({ version: 1, op: "put", key: "missing_digest", provenance: GARMIN }),
+          JSON.stringify({
+            version: 1,
+            op: "put",
+            key: "valid",
+            digest: contentDigest("valid content"),
+            provenance: GARMIN,
+          }),
+        ].join("\n") + "\n",
       );
       const metadata = new ProvenanceMetadata(memoryDir);
 
@@ -156,6 +194,106 @@ describe("memory, daily-note, plan, and ledger digest binding", () => {
       }
       expect(metadata.read("valid", "valid content")).toEqual(GARMIN);
       expect(metadata.matches("valid", "valid content")).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("appends provenance updates without rewriting prior journal bytes", () => {
+    const dir = tempDir("cc-memory-provenance-journal-");
+    try {
+      const memoryDir = join(dir, "memory");
+      mkdirSync(memoryDir, { recursive: true });
+      const metadata = new ProvenanceMetadata(memoryDir);
+      const path = join(memoryDir, ".source-provenance.jsonl");
+
+      metadata.write("first", "one", GARMIN);
+      const firstWrite = readFileSync(path, "utf8");
+      metadata.write("second", "two", UNKNOWN);
+      const secondWrite = readFileSync(path, "utf8");
+
+      expect(secondWrite.startsWith(firstWrite)).toBe(true);
+      expect(secondWrite.length).toBeGreaterThan(firstWrite.length);
+      expect(metadata.read("first", "one")).toEqual(GARMIN);
+      expect(metadata.read("second", "two")).toEqual(UNKNOWN);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("isolates new records from a truncated journal tail", () => {
+    const dir = tempDir("cc-memory-truncated-provenance-");
+    try {
+      const memoryDir = join(dir, "memory");
+      mkdirSync(memoryDir, { recursive: true });
+      const path = join(memoryDir, ".source-provenance.jsonl");
+      writeFileSync(path, '{"version":1,"op":"put","key":"truncated"');
+      const metadata = new ProvenanceMetadata(memoryDir);
+
+      expect(metadata.read("truncated", "anything")).toEqual(UNKNOWN);
+      metadata.write("valid", "Garmin content", GARMIN);
+
+      expect(readFileSync(path, "utf8")).toContain(
+        `\n${JSON.stringify({
+          version: 1,
+          op: "put",
+          key: "valid",
+          digest: contentDigest("Garmin content"),
+          provenance: GARMIN,
+        })}\n`,
+      );
+      expect(new ProvenanceMetadata(memoryDir).read("valid", "Garmin content")).toEqual(GARMIN);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("binds memory and plan provenance before a later write can replace the data", async () => {
+    const dir = tempDir("cc-memory-bound-read-provenance-");
+    try {
+      const memory = new Memory(dir, "UTC");
+      memory.writeSection("person", "Garmin profile", "chat-tool", GARMIN);
+      memory.savePlan({ name: "Garmin plan" }, "chat-tool", GARMIN);
+      const tools = createMemoryTools(
+        memory,
+        [{ name: "person", description: "Athlete profile" }],
+        { bindProvenance: true },
+      );
+
+      const memoryRead = tools.memory_read.execute!({}, {} as never);
+      const planRead = tools.plan_load.execute!({}, {} as never);
+      memory.writeSection("person", "Replacement profile", "chat-tool", UNKNOWN);
+      memory.savePlan({ name: "Replacement plan" }, "chat-tool", UNKNOWN);
+
+      const [memoryResult, planResult] = await Promise.all([memoryRead, planRead]);
+      expect(String(unwrapBoundToolResult(memoryResult))).toContain("Garmin profile");
+      expect(unwrapBoundToolResult(planResult)).toEqual({ name: "Garmin plan" });
+      expect(boundToolResultProvenance(memoryResult)).toEqual(GARMIN);
+      expect(boundToolResultProvenance(planResult)).toEqual(GARMIN);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not mistake a stored truncation marker for an actual query cutoff", async () => {
+    const dir = tempDir("cc-memory-literal-truncation-marker-");
+    try {
+      const memory = new Memory(dir, "UTC");
+      memory.appendDailyNote(
+        "[truncated — narrow the date range or add a query term]",
+        "1998-05-09",
+        UNKNOWN,
+      );
+      memory.appendDailyNote("Garmin fact after the literal marker", "1998-05-09", GARMIN);
+      const query = createMemoryQueryTool(memory, true);
+
+      const result = await query.execute!(
+        { from: "1998-05-09", to: "1998-05-09" },
+        {} as never,
+      );
+
+      expect(String(unwrapBoundToolResult(result))).toContain("Garmin fact after");
+      expect(boundToolResultProvenance(result)?.garmin).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -173,6 +311,26 @@ describe("memory, daily-note, plan, and ledger digest binding", () => {
       const path = join(dir, "memory", "MEMORY.md");
       writeFileSync(path, readFileSync(path, "utf8").replace("250", "251"));
       expect(memory.getContextWithProvenance().provenance).toEqual(UNKNOWN);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not label a stamp-only memory section as Garmin-derived", () => {
+    const dir = tempDir("cc-memory-empty-provenance-");
+    try {
+      const memory = new Memory(dir, "UTC");
+      memory.runWithWriteProvenance(GARMIN, () =>
+        memory.writeSection("person", "", "chat-tool"),
+      );
+
+      expect(memory.readSection("person")).toMatch(/^_updated: /);
+      expect(memory.provenanceForSection("person")).toEqual({
+        garmin: false,
+        nonGarmin: false,
+        unknown: false,
+      });
+      expect(memory.getContextWithProvenance().provenance.garmin).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -201,12 +359,18 @@ describe("memory, daily-note, plan, and ledger digest binding", () => {
         unknown: false,
       });
 
-      const metadata = JSON.parse(
-        readFileSync(join(dir, "memory", ".source-provenance.json"), "utf8"),
-      ) as { entries: Record<string, unknown> };
-      expect(metadata.entries["memory:legacy-profile"]).toBeUndefined();
-      expect(metadata.entries["memory:profile"]).toBeUndefined();
-      expect(metadata.entries["memory:athlete-profile"]).toBeDefined();
+      const metadata = readFileSync(join(dir, "memory", ".source-provenance.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { op: string; key: string });
+      const activeKeys = new Set<string>();
+      for (const record of metadata) {
+        if (record.op === "delete") activeKeys.delete(record.key);
+        else activeKeys.add(record.key);
+      }
+      expect(activeKeys.has("memory:legacy-profile")).toBe(false);
+      expect(activeKeys.has("memory:profile")).toBe(false);
+      expect(activeKeys.has("memory:athlete-profile")).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -248,6 +412,111 @@ describe("memory, daily-note, plan, and ledger digest binding", () => {
     }
   });
 
+  it("unions new provenance when an exact daily note is deduplicated", async () => {
+    const dir = tempDir("cc-memory-daily-dedup-provenance-");
+    try {
+      const memory = new Memory(dir, "UTC");
+      memory.appendDailyNote("Recovered well", "1998-05-09", UNKNOWN);
+      memory.appendDailyNote("Recovered well", "1998-05-09", GARMIN);
+      const input = { from: "1998-05-09", to: "1998-05-09" };
+      const result = await memoryQueryResult(memory, input);
+
+      expect(readFileSync(join(dir, "memory", "1998-05-09.md"), "utf8")).toBe("Recovered well");
+      expect(memory.provenanceForToolRead("memory_query", input, result)).toEqual({
+        garmin: true,
+        nonGarmin: false,
+        unknown: true,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not commit primary artifacts when provenance metadata cannot be written", () => {
+    const scenarios = [
+      {
+        name: "section",
+        path: (dir: string) => join(dir, "memory", "MEMORY.md"),
+        write: (memory: Memory) => memory.writeSection("person", "FTP 250 W", "chat-tool", GARMIN),
+      },
+      {
+        name: "daily note",
+        path: (dir: string) => join(dir, "memory", "1998-05-09.md"),
+        write: (memory: Memory) => memory.appendDailyNote("Recovered well", "1998-05-09", GARMIN),
+      },
+      {
+        name: "ledger event",
+        path: (dir: string) => join(dir, "memory", "events.jsonl"),
+        write: (memory: Memory) =>
+          memory.appendEvent(
+            { date: "1998-05-09", kind: "decision", text: "Ride easy", source: "flush" },
+            GARMIN,
+          ),
+      },
+      {
+        name: "plan",
+        path: (dir: string) => join(dir, "plans", "current-plan.json"),
+        write: (memory: Memory) => memory.savePlan({ name: "Base" }, "chat-tool", GARMIN),
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const dir = tempDir(`cc-memory-sidecar-failure-${scenario.name.replace(" ", "-")}-`);
+      try {
+        const memory = new Memory(dir, "UTC");
+        mkdirSync(join(dir, "memory", ".source-provenance.jsonl"));
+
+        expect(() => scenario.write(memory)).toThrow();
+        expect(existsSync(scenario.path(dir))).toBe(false);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("keeps ledger dates and athlete text out of provenance keys", () => {
+    const dir = tempDir("cc-memory-ledger-private-metadata-");
+    try {
+      const memory = new Memory(dir, "UTC");
+      memory.appendEvent(
+        { date: "1998-05-09", kind: "illness", text: "Private symptom", source: "flush" },
+        GARMIN,
+      );
+
+      const sidecar = readFileSync(
+        join(dir, "memory", ".source-provenance.jsonl"),
+        "utf8",
+      );
+      expect(sidecar).not.toContain("1998-05-09");
+      expect(sidecar).not.toContain("Private symptom");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["single", "batch"])(
+    "leaves memory unchanged when a %s rename cannot persist provenance",
+    (kind) => {
+      const dir = tempDir(`cc-memory-rename-sidecar-failure-${kind}-`);
+      try {
+        const memory = new Memory(dir, "UTC");
+        const path = join(dir, "memory", "MEMORY.md");
+        const original = "## legacy-profile\nOriginal body\n";
+        writeFileSync(path, original);
+        mkdirSync(join(dir, "memory", ".source-provenance.jsonl"));
+
+        expect(() =>
+          kind === "single"
+            ? memory.renameSection("legacy-profile", "profile")
+            : memory.renameSections([["legacy-profile", "profile"]]),
+        ).toThrow();
+        expect(readFileSync(path, "utf8")).toBe(original);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("degrades daily-note, plan, and ledger mismatches independently", async () => {
     const dir = tempDir("cc-memory-artifacts-");
     try {
@@ -258,6 +527,11 @@ describe("memory, daily-note, plan, and ledger digest binding", () => {
         { date: "1998-05-09", kind: "decision", text: "Ride easy", source: "flush" },
         GARMIN,
       );
+      const sidecar = readFileSync(
+        join(dir, "memory", ".source-provenance.jsonl"),
+        "utf8",
+      );
+      expect(sidecar).not.toContain("Ride easy");
       const rideEasyInput = {
         from: "1998-05-09",
         to: "1998-05-09",
@@ -349,7 +623,33 @@ describe("memory, daily-note, plan, and ledger digest binding", () => {
       const result = await memoryQueryResult(memory, input);
 
       expect(result).toContain("[truncated");
-      expect(memory.provenanceForToolRead("memory_query", input, result)).toEqual(UNKNOWN);
+      expect(
+        memory.provenanceForToolRead("memory_query", input, result, { truncated: true }),
+      ).toEqual(UNKNOWN);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses raw offsets when sanitizable text precedes a truncated Garmin note", async () => {
+    const dir = tempDir("cc-memory-query-raw-cutoff-");
+    try {
+      const memory = new Memory(dir, "UTC");
+      memory.appendDailyNote(
+        "x".repeat(19_900) + "\u0000".repeat(2_000),
+        "1998-05-09",
+        UNKNOWN,
+      );
+      memory.appendDailyNote("Garmin note beyond the raw cap", "1998-05-10", GARMIN);
+      const query = createMemoryQueryTool(memory, true);
+
+      const result = await query.execute!(
+        { from: "1998-05-09", to: "1998-05-10" },
+        {} as never,
+      );
+
+      expect(String(unwrapBoundToolResult(result))).not.toContain("Garmin note beyond the raw cap");
+      expect(boundToolResultProvenance(result)).toEqual(UNKNOWN);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

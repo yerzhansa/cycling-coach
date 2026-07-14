@@ -6,6 +6,7 @@ import {
   provenanceForSourceBearingData,
   type SourceProvenance,
 } from "../provenance.js";
+import { boundToolResultProvenance } from "./bound-tool-result.js";
 
 function payloadOf(result: unknown): unknown {
   return isUntrustedEnvelope(result) ? result.data : result;
@@ -18,6 +19,8 @@ function isErrorOrCap(value: unknown): boolean {
 }
 
 export function provenanceFromToolResult(name: string, result: unknown): SourceProvenance {
+  const bound = boundToolResultProvenance(result);
+  if (bound !== undefined) return bound;
   const value = payloadOf(result);
   if (isErrorOrCap(value) || !isNonEmptyData(value)) return EMPTY_PROVENANCE;
   if (name === "intervals_fetch_activity" || name === "intervals_fetch_activities") {

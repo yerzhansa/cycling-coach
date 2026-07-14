@@ -3,6 +3,7 @@ import type { z } from "zod";
 import type { IntervalsClient } from "./intervals.js";
 import type { LLM } from "./llm.js";
 import type { MemorySnapshot, MemoryStore } from "./memory.js";
+import type { SourceProvenance } from "./provenance.js";
 import type { ResolvedCs } from "./reference/cs-resolution.js";
 import type { ReferenceSportAdapter } from "./reference/sport-adapter.js";
 import type { SecretsResolver } from "./secrets/types.js";
@@ -43,6 +44,13 @@ export interface MemorySectionSpec {
   inject?: boolean;
 }
 
+export interface DerivedPreserveTokens {
+  readonly tokens: readonly string[];
+  readonly provenance: SourceProvenance;
+}
+
+export type PreserveTokens = readonly string[] | DerivedPreserveTokens;
+
 // ─── Tool registration (ADR-0004) ──────────────────────────────────────
 export interface ToolRegistration {
   name: string;
@@ -62,6 +70,8 @@ export interface CoreDeps {
   intervals: IntervalsClient | null;
   memory: MemoryStore;
   secrets: SecretsResolver;
+  /** Enables host-private provenance binding on memory read results. */
+  bindMemoryToolProvenance?: boolean;
   /** Athlete IANA timezone, resolved by Core. Used so tools see the same
    * "today" the system prompt references. */
   tz: string;
@@ -109,12 +119,14 @@ export interface Sport {
    *   - a static array of literal tokens (e.g. ["FTP", "VDOT"]), OR
    *   - a function that derives tokens from the current memory state, for
    *     data-bound values like "FTP 247W" or specific bike models.
+   *     When a returned token contains memory-derived data, the function also
+   *     returns that section's provenance so compaction can preserve it.
    * Compaction calls the function (if provided) just before each compaction
    * pass, so the protected list reflects the athlete's current data.
    */
   readonly mustPreserveTokens:
     | readonly string[]
-    | ((memory: MemorySnapshot) => readonly string[]);
+    | ((memory: MemorySnapshot) => PreserveTokens);
 
   /** intervals.icu activity types this sport reads/writes. */
   readonly intervalsActivityTypes: readonly IntervalsActivityType[];

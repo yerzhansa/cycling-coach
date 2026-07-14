@@ -1,6 +1,15 @@
-import { existsSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  fdatasyncSync,
+  fstatSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  readSync,
+} from "node:fs";
 import { join } from "node:path";
-import { atomicWriteFileSync } from "../io/atomic-write-file-sync.js";
 import {
   UNKNOWN_PROVENANCE,
   contentDigest,
@@ -13,36 +22,62 @@ interface Entry {
   readonly provenance: SourceProvenance;
 }
 
-interface FileShape {
+interface PutRecord extends Entry {
   readonly version: 1;
-  readonly entries: Record<string, Entry>;
+  readonly op: "put";
+  readonly key: string;
 }
 
-function isEntry(value: unknown): value is Entry {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-  const entry = value as Record<string, unknown>;
-  return typeof entry.digest === "string" && isSourceProvenance(entry.provenance);
+interface DeleteRecord {
+  readonly version: 1;
+  readonly op: "delete";
+  readonly key: string;
+}
+
+type JournalRecord = PutRecord | DeleteRecord;
+
+function parseRecord(value: unknown): JournalRecord | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.version !== 1 || typeof record.key !== "string") return undefined;
+  if (record.op === "delete") return { version: 1, op: "delete", key: record.key };
+  if (
+    record.op === "put" &&
+    typeof record.digest === "string" &&
+    isSourceProvenance(record.provenance)
+  ) {
+    return {
+      version: 1,
+      op: "put",
+      key: record.key,
+      digest: record.digest,
+      provenance: record.provenance,
+    };
+  }
+  return undefined;
 }
 
 export class ProvenanceMetadata {
+  private readonly directoryPath: string;
   private readonly path: string;
-  private cached?: FileShape;
+  private cached?: Map<string, Entry>;
+  private directorySynced = false;
 
   constructor(memoryDir: string) {
-    this.path = join(memoryDir, ".source-provenance.json");
+    this.directoryPath = memoryDir;
+    this.path = join(memoryDir, ".source-provenance.jsonl");
   }
 
   read(key: string, content: string): SourceProvenance {
-    const entry: unknown = this.load().entries[key];
-    if (!isEntry(entry) || entry.digest !== contentDigest(content)) {
+    const entry = this.load().get(key);
+    if (entry === undefined || entry.digest !== contentDigest(content)) {
       return UNKNOWN_PROVENANCE;
     }
     return entry.provenance;
   }
 
   matches(key: string, content: string): boolean {
-    const entry: unknown = this.load().entries[key];
-    return isEntry(entry) && entry.digest === contentDigest(content);
+    return this.load().get(key)?.digest === contentDigest(content);
   }
 
   write(key: string, content: string, provenance: SourceProvenance): void {
@@ -67,45 +102,76 @@ export class ProvenanceMetadata {
     }[],
     deletedKeys: readonly string[],
   ): void {
-    const file = this.load();
-    for (const key of deletedKeys) delete file.entries[key];
-    for (const { key, content, provenance } of entries) {
-      file.entries[key] = { digest: contentDigest(content), provenance };
+    const records: JournalRecord[] = [
+      ...deletedKeys.map((key): DeleteRecord => ({ version: 1, op: "delete", key })),
+      ...entries.map(
+        ({ key, content, provenance }): PutRecord => ({
+          version: 1,
+          op: "put",
+          key,
+          digest: contentDigest(content),
+          provenance,
+        }),
+      ),
+    ];
+    if (records.length === 0) return;
+
+    const serialized = records.map((record) => JSON.stringify(record)).join("\n") + "\n";
+    const fd = openSync(this.path, "a+", 0o600);
+    try {
+      const size = fstatSync(fd).size;
+      const lastByte = Buffer.allocUnsafe(1);
+      const boundary =
+        size > 0 && readSync(fd, lastByte, 0, 1, size - 1) === 1 && lastByte[0] !== 0x0a
+          ? "\n"
+          : "";
+      appendFileSync(fd, boundary + serialized, { encoding: "utf8" });
+      fdatasyncSync(fd);
+      if (!this.directorySynced) {
+        const directoryFd = openSync(this.directoryPath, "r");
+        try {
+          fsyncSync(directoryFd);
+          this.directorySynced = true;
+        } finally {
+          closeSync(directoryFd);
+        }
+      }
+    } finally {
+      closeSync(fd);
     }
-    atomicWriteFileSync(this.path, JSON.stringify(file, null, 2) + "\n");
+
+    const cache = this.load();
+    for (const record of records) {
+      if (record.op === "delete") cache.delete(record.key);
+      else cache.set(record.key, { digest: record.digest, provenance: record.provenance });
+    }
   }
 
-  private load(): FileShape {
+  private load(): Map<string, Entry> {
     if (this.cached !== undefined) return this.cached;
+    const entries = new Map<string, Entry>();
     if (!existsSync(this.path)) {
-      this.cached = { version: 1, entries: {} };
-      return this.cached;
+      this.cached = entries;
+      return entries;
     }
     try {
-      const value = JSON.parse(readFileSync(this.path, "utf8")) as unknown;
-      if (value === null || typeof value !== "object" || Array.isArray(value)) {
-        this.cached = { version: 1, entries: {} };
-        return this.cached;
+      for (const line of readFileSync(this.path, "utf8").split("\n")) {
+        if (line === "") continue;
+        let value: unknown;
+        try {
+          value = JSON.parse(line) as unknown;
+        } catch {
+          continue;
+        }
+        const record = parseRecord(value);
+        if (record === undefined) continue;
+        if (record.op === "delete") entries.delete(record.key);
+        else entries.set(record.key, { digest: record.digest, provenance: record.provenance });
       }
-      const record = value as { version?: unknown; entries?: unknown };
-      if (record.version !== 1) {
-        this.cached = { version: 1, entries: {} };
-        return this.cached;
-      }
-      const entries = record.entries;
-      if (entries === null || typeof entries !== "object" || Array.isArray(entries)) {
-        this.cached = { version: 1, entries: {} };
-        return this.cached;
-      }
-      const validEntries: Record<string, Entry> = Object.create(null) as Record<string, Entry>;
-      for (const [key, entry] of Object.entries(entries)) {
-        if (isEntry(entry)) validEntries[key] = entry;
-      }
-      this.cached = { version: 1, entries: validEntries };
-      return this.cached;
     } catch {
-      this.cached = { version: 1, entries: {} };
-      return this.cached;
+      entries.clear();
     }
+    this.cached = entries;
+    return entries;
   }
 }

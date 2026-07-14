@@ -47,6 +47,7 @@ const EMPTY_SNAPSHOT: MemorySnapshot = {
   read: () => null,
   has: () => false,
   listSections: () => [],
+  provenanceOf: () => ({ garmin: false, nonGarmin: false, unknown: false }),
 };
 
 // ─── Compaction smoke test ────────────────────────────────────────────
@@ -249,6 +250,34 @@ describe("summarizeDroppedMessages failure containment", () => {
 });
 
 describe("staged summary provenance", () => {
+  it("carries memory-derived token provenance through dropped-message compaction", async () => {
+    const llm = createFakeLLM([VALID_FIVE_SECTION_SUMMARY]);
+
+    const result = await summarizeDroppedMessages({
+      dropped: REPRESENTATIVE_CONVERSATION,
+      llm,
+      mustPreserveTokens: () => ({ tokens: ["FTP 247W"], provenance: GARMIN }),
+      memory: EMPTY_SNAPSHOT,
+    });
+
+    expect(result.provenance?.garmin).toBe(true);
+  });
+
+  it("carries memory-derived token provenance through staged compaction", async () => {
+    const llm = createFakeLLM([VALID_FIVE_SECTION_SUMMARY]);
+
+    const result = await summarizeInStages({
+      messages: REPRESENTATIVE_CONVERSATION,
+      llm,
+      mustPreserveTokens: () => ({ tokens: ["FTP 247W"], provenance: GARMIN }),
+      memory: EMPTY_SNAPSHOT,
+      recentToKeep: 0,
+    });
+
+    expect(result.summaryProvenance?.garmin).toBe(true);
+    expect(getMessageProvenance(result.messages[0]).garmin).toBe(true);
+  });
+
   it("excludes a failed chunk from the summary message provenance", async () => {
     const failedGarmin = setMessageProvenance(
       { role: "user", content: "CHUNK-A " + "a".repeat(20_000) },

@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
-import type { Sport } from "../src/sport.js";
+import type { CoreDeps, Sport, ToolRegistration } from "../src/sport.js";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
 import { GARMIN_DATA_ATTRIBUTION } from "../src/agent/garmin-attribution.js";
+import { createMemoryTools } from "../src/agent/tools.js";
 
 let tempHome: string;
 let originalHome: string | undefined;
@@ -66,6 +67,28 @@ function activitySport(execute: (input: Record<string, unknown>) => Promise<unkn
   };
 }
 
+function activityAndPlanSport(
+  execute: (input: Record<string, unknown>) => Promise<unknown>,
+): Sport {
+  const sport: Sport = {
+    ...syntheticSport,
+    memorySections: [{ name: "test-profile", description: "Test profile" }],
+    tools: (deps: CoreDeps): readonly ToolRegistration[] => {
+      const memoryTools = createMemoryTools(deps.memory, sport.memorySections);
+      return [
+        ...activitySport(execute).tools(deps),
+        {
+          name: "plan_save",
+          description: "Save a plan.",
+          inputSchema: z.unknown(),
+          tool: memoryTools.plan_save,
+        },
+      ];
+    },
+  };
+  return sport;
+}
+
 async function setupAgent(
   complete: ReturnType<typeof vi.fn>,
   sport: Sport = syntheticSport,
@@ -92,12 +115,10 @@ async function setupAgent(
 
 let nextToolCallId = 1;
 
-function toolCall(args: Record<string, unknown> = {}) {
+function toolCall(args: Record<string, unknown> = {}, name = "intervals_fetch_activities") {
   return {
     ...assistant("", "toolUse"),
-    toolCalls: [
-      { id: `call-${nextToolCallId++}|item`, name: "intervals_fetch_activities", arguments: args },
-    ],
+    toolCalls: [{ id: `call-${nextToolCallId++}|item`, name, arguments: args }],
   };
 }
 
@@ -140,6 +161,18 @@ describe("CoachAgent selective Garmin attribution", () => {
     expect(await agent.chat("strip", "Hello")).toBe("General guidance.");
   });
 
+  it("delivers and persists a fallback when the model returns only the footer", async () => {
+    const agent = await setupAgent(
+      vi.fn(async () => assistant(` \n${GARMIN_DATA_ATTRIBUTION}\n `)),
+    );
+
+    const reply = await agent.chat("footer-only", "Hello");
+
+    expect(reply).toContain("ran out of steps");
+    expect(reply.trim()).not.toBe("");
+    expect(assistantHistory("footer-only")[0]?.content).toBe(reply);
+  });
+
   it("observes a memoized Garmin result on every delivery", async () => {
     const execute = vi.fn(async () => [{ id: "synthetic", source: "GARMIN_CONNECT" }]);
     let calls = 0;
@@ -169,7 +202,7 @@ describe("CoachAgent selective Garmin attribution", () => {
     expect(await agent.chat("capped", "Use the activity.")).toBe("Capped guidance.");
   });
 
-  it("does not carry Garmin evidence from a failed outer attempt", async () => {
+  it("does not carry Garmin evidence across a failed outer attempt", async () => {
     const execute = vi.fn(async () => [{ id: "synthetic", source: "GARMIN_CONNECT" }]);
     let calls = 0;
     const complete = vi.fn(async () => {
@@ -187,7 +220,28 @@ describe("CoachAgent selective Garmin attribution", () => {
     expect(await agent.chat("retry", "Coach me.")).toBe("Retried guidance.");
   });
 
-  it("does not carry hidden tool evidence into no-tools recovery", async () => {
+  it("attributes a retry only when that attempt reads the Garmin result again", async () => {
+    const execute = vi.fn(async () => [{ id: "synthetic", source: "GARMIN_CONNECT" }]);
+    let calls = 0;
+    const complete = vi.fn(async () => {
+      calls++;
+      if (calls === 1 || calls === 3) return toolCall();
+      if (calls === 2) {
+        const error = new Error("timed out");
+        error.name = "TimeoutError";
+        throw error;
+      }
+      return assistant("Retried with data.");
+    });
+    const agent = await setupAgent(complete, activitySport(execute));
+
+    expect(await agent.chat("retry-reread", "Coach me.")).toBe(
+      `Retried with data.\n\n${GARMIN_DATA_ATTRIBUTION}`,
+    );
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("does not carry hidden Garmin tool evidence into no-tools recovery", async () => {
     const execute = vi.fn(async () => [{ id: "synthetic", source: "GARMIN_CONNECT" }]);
     let calls = 0;
     const complete = vi.fn(async () => {
@@ -199,6 +253,29 @@ describe("CoachAgent selective Garmin attribution", () => {
     const agent = await setupAgent(complete, activitySport(execute));
 
     expect(await agent.chat("recovery", "Coach me.")).toBe("Recovered guidance.");
+  });
+
+  it("preserves Garmin provenance when a proposed plan is later confirmed", async () => {
+    const execute = vi.fn(async () => [{ id: "synthetic", source: "GARMIN_CONNECT" }]);
+    let calls = 0;
+    const complete = vi.fn(async () => {
+      calls++;
+      if (calls === 1) return toolCall();
+      if (calls === 2) return toolCall({ plan: { name: "Base" } }, "plan_save");
+      return assistant("Plan proposed.");
+    });
+    const agent = await setupAgent(complete, activityAndPlanSport(execute));
+
+    await agent.chat("confirmed-plan", "Use my activity and save a plan.");
+    const proposal = agent.confirmations.peek("confirmed-plan")!;
+    expect(await agent.confirmations.confirm("confirmed-plan", proposal.nonce)).toMatchObject({
+      status: "executed",
+    });
+    expect(agent.getMemory().provenanceForToolRead("plan_load", {})).toEqual({
+      garmin: true,
+      nonGarmin: false,
+      unknown: true,
+    });
   });
 
   it("persists assistant provenance and reuses it only while history survives", async () => {

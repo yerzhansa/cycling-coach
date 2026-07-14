@@ -2,8 +2,13 @@ import { describe, it, expect } from "vitest";
 import { createMemorySnapshot } from "../src/memory/snapshot.js";
 import type { MemoryStore } from "../src/memory.js";
 
-function stubStore(readMemory: () => string): MemoryStore {
-  return { readMemory } as unknown as MemoryStore;
+const EMPTY = { garmin: false, nonGarmin: false, unknown: false };
+
+function stubStore(
+  readMemory: () => string,
+  provenanceForSection: MemoryStore["provenanceForSection"] = () => EMPTY,
+): MemoryStore {
+  return { readMemory, provenanceForSection } as unknown as MemoryStore;
 }
 
 describe("createMemorySnapshot", () => {
@@ -59,5 +64,20 @@ describe("createMemorySnapshot", () => {
     expect(snap.read("A")).toBe("first");
     expect(snap.has("B")).toBe(false);
     expect(snap.listSections()).toEqual(["A"]);
+  });
+
+  it("freezes section provenance with the section contents", () => {
+    const garmin = { garmin: true, nonGarmin: false, unknown: false };
+    let current = garmin;
+    const snap = createMemorySnapshot(
+      stubStore(
+        () => "## Profile\nFTP 247W",
+        () => current,
+      ),
+    );
+    current = EMPTY;
+
+    expect(snap.provenanceOf("Profile")).toEqual(garmin);
+    expect(snap.provenanceOf("Missing")).toEqual(EMPTY);
   });
 });

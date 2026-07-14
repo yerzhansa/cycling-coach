@@ -1,5 +1,9 @@
 import type { Tool } from "ai";
 import { truncateUtf16Safe } from "../text-truncate.js";
+import {
+  carryBoundToolResultProvenance,
+  unwrapBoundToolResult,
+} from "./bound-tool-result.js";
 
 // ============================================================================
 // PROMPT DATA FENCE — untrusted-text sanitization and fenced wrapping
@@ -119,7 +123,10 @@ export function markUntrustedResult(tool: Tool): Tool {
     ...tool,
     execute: async (input: unknown, options: unknown) => {
       const result = await (inner as (i: unknown, o: unknown) => unknown)(input, options);
-      return { untrusted_data: UNTRUSTED_ENVELOPE_NOTE, data: deepSanitize(result) };
+      return carryBoundToolResultProvenance(result, {
+        untrusted_data: UNTRUSTED_ENVELOPE_NOTE,
+        data: deepSanitize(unwrapBoundToolResult(result)),
+      });
     },
   } as Tool;
 }

@@ -62,7 +62,7 @@ import {
   gateMutatingTool,
 } from "./confirmation-gate.js";
 import { renderGarminAttribution } from "./garmin-attribution.js";
-import { provenanceFromToolResult, toolResultIsVisibleData } from "./tool-provenance.js";
+import { provenanceFromToolResult } from "./tool-provenance.js";
 import {
   EMPTY_PROVENANCE,
   UNKNOWN_PROVENANCE,
@@ -317,6 +317,7 @@ export class CoachAgent {
       intervals,
       memory: this.memory,
       secrets,
+      bindMemoryToolProvenance: true,
       tz: this.tz,
       resolvedCs: () => this.resolvedCsStore.getStore() ?? null,
     };
@@ -328,7 +329,15 @@ export class CoachAgent {
     const chatIdResolver = () => this.turnWritesStore.getStore()?.chatId;
     const maxResultTokens = Math.floor(this.config.contextWindowTokens * TOOL_RESULT_SHARE);
     this.tools = Object.fromEntries(
-      registrations.map((r) => [
+      registrations.map((r) => {
+        const prepareConfirmedRun =
+          r.name === "plan_save"
+            ? (run: () => Promise<unknown>) => {
+                const provenance = this.turnProvenanceStore.getStore()?.value ?? UNKNOWN_PROVENANCE;
+                return () => this.memory.runWithWriteProvenance(provenance, run);
+              }
+            : undefined;
+        return [
         r.name,
         this.observeToolProvenance(
           r.name,
@@ -344,6 +353,7 @@ export class CoachAgent {
                     this.confirmations,
                     summarizers[r.name],
                     chatIdResolver,
+                      prepareConfirmedRun,
                   ),
                 ),
               ),
@@ -352,7 +362,8 @@ export class CoachAgent {
             () => this.readToolCacheStore.getStore(),
           ),
         ),
-      ]),
+        ] as const;
+      }),
     ) as ToolSet;
   }
 
@@ -369,18 +380,6 @@ export class CoachAgent {
       execute: async (input: unknown, options: unknown) => {
         const result = await (inner as (i: unknown, o: unknown) => unknown)(input, options);
         this.observe(provenanceFromToolResult(name, result));
-        if (
-          toolResultIsVisibleData(result) &&
-          (name === "memory_read" || name === "memory_query" || name === "plan_load")
-        ) {
-          this.observe(
-            this.memory.provenanceForToolRead(
-              name,
-              input,
-              isUntrustedEnvelope(result) ? result.data : result,
-            ),
-          );
-        }
         if (
           name === "calculate_zones" &&
           (() => {
@@ -611,7 +610,8 @@ export class CoachAgent {
       // so an athlete mid-conversation across the daily boundary isn't archived
       // out from under them. Malformed timestamps (reason "daily", unparseable)
       // and idle resets are never deferred.
-      const deferDaily = !fresh && reason === "daily" && shouldDeferDailyReset(lastMessageTime);
+              const deferDaily =
+                !fresh && reason === "daily" && shouldDeferDailyReset(lastMessageTime);
 
       // Set only when an automatic archive actually runs this turn — drives the
       // one-turn model marker and the one-time post-reset athlete notice.
@@ -668,7 +668,8 @@ export class CoachAgent {
         systemPrompt,
         budgetRatio: this.config.session.historyTokenBudgetRatio,
       });
-      const { kept, dropped, previousSummary, previousSummaryProvenance } = splitHistoryByBudget({
+              const { kept, dropped, previousSummary, previousSummaryProvenance } =
+                splitHistoryByBudget({
         messages: history,
         tokenBudget: budget,
       });
@@ -684,7 +685,10 @@ export class CoachAgent {
             await this.flushMemory(history, "trim", turnBudget);
           } catch (err) {
             flushed = false;
-            this.log.warn("Pre-compaction memory flush failed; keeping session file unchanged", err);
+                    this.log.warn(
+                      "Pre-compaction memory flush failed; keeping session file unchanged",
+                      err,
+                    );
           }
         }
         try {
@@ -696,7 +700,8 @@ export class CoachAgent {
           });
           compactions++;
           const summaryProvenance =
-            provenance ?? unionProvenance(previousSummaryProvenance, provenanceOfMessages(dropped));
+                    provenance ??
+                    unionProvenance(previousSummaryProvenance, provenanceOfMessages(dropped));
           this.persistSummaryToDailyNote(summary, summaryProvenance);
           summaryMsg = makeSummaryMessage(summary, summaryProvenance);
           requeued = unsummarized;
@@ -705,7 +710,10 @@ export class CoachAgent {
             this.chatStore.overwriteHistory(chatId, [summaryMsg, ...requeued, ...kept]);
           }
         } catch (err) {
-          this.log.warn("Dropped message summarization failed, continuing without summary", err);
+                  this.log.warn(
+                    "Dropped message summarization failed, continuing without summary",
+                    err,
+                  );
           if (previousSummary) {
             summaryMsg = makeSummaryMessage(
               previousSummary,
@@ -825,7 +833,9 @@ export class CoachAgent {
               systemPrompt,
               contextWindowTokens: this.config.contextWindowTokens,
               lastUsageTokens: anchor?.promptTokens,
-              messagesSinceUsageAnchor: anchor ? messages.slice(anchor.messageCount) : undefined,
+                        messagesSinceUsageAnchor: anchor
+                          ? messages.slice(anchor.messageCount)
+                          : undefined,
             })
           ) {
             if (!flushedThisTurn) {
@@ -833,7 +843,10 @@ export class CoachAgent {
               try {
                 await this.flushMemory(messages, "pre-compaction", turnBudget);
               } catch (err) {
-                this.log.warn("In-turn memory flush failed; compacting without flush", err);
+                          this.log.warn(
+                            "In-turn memory flush failed; compacting without flush",
+                            err,
+                          );
               }
             }
             await compactInTurn();
@@ -897,10 +910,14 @@ export class CoachAgent {
             } else if (recovered.attributionBasis === "none") {
               turnProvenance.value = EMPTY_PROVENANCE;
             }
-            const attributedText = renderGarminAttribution(
+                      let attributedText = renderGarminAttribution(
               recovered.text,
               turnProvenance.value,
             );
+                      if (attributedText.trim() === "") {
+                        attributedText = STEP_LIMIT_TRUNCATION_MESSAGE;
+                        turnProvenance.value = EMPTY_PROVENANCE;
+                      }
 
             const templateHash = (this.templateHash ??= computeTemplateHash({
               soul: this.sport.soul,
@@ -927,7 +944,10 @@ export class CoachAgent {
               // Deliver-first: a full disk or permission error must never
               // discard a reply the athlete already paid for. Swallow the
               // persistence throw, warn once, and still return the reply.
-              console.warn("Session persistence failed; delivering reply unsaved", persistErr);
+                        console.warn(
+                          "Session persistence failed; delivering reply unsaved",
+                          persistErr,
+                        );
               persistenceNote = noteForPersistenceFailure(persistErr);
             }
 
@@ -966,13 +986,17 @@ export class CoachAgent {
             // beyond it.
             const anchorTokens = result.usage?.inputTokens;
             if (typeof anchorTokens === "number" && Number.isFinite(anchorTokens)) {
-              this.usageAnchor.set(chatId, { promptTokens: anchorTokens, messageCount: messages.length });
+                        this.usageAnchor.set(chatId, {
+                          promptTokens: anchorTokens,
+                          messageCount: messages.length,
+                        });
             }
 
             // Prefix the one-time post-reset notice onto the first reply after
             // an automatic archive. Not persisted to history — it is a channel
             // disclosure, not conversation content.
-            const resetPrefix = archivedAt !== undefined ? `${POST_RESET_NOTICE}\n\n` : "";
+                      const resetPrefix =
+                        archivedAt !== undefined ? `${POST_RESET_NOTICE}\n\n` : "";
             return resetPrefix + attributedText + persistenceNote;
           } catch (err) {
             // The classified budget error is terminal: re-throw it before any
@@ -1013,12 +1037,18 @@ export class CoachAgent {
                   try {
                     await this.flushMemory(messages, "overflow-recovery", turnBudget);
                   } catch (flushErr) {
-                    this.log.warn("In-turn memory flush failed; compacting without flush", flushErr);
+                              this.log.warn(
+                                "In-turn memory flush failed; compacting without flush",
+                                flushErr,
+                              );
                   }
                 }
                 await compactInTurn();
               } catch (rescueErr) {
-                this.log.warn("Compaction rescue failed; rethrowing the original turn error", rescueErr);
+                          this.log.warn(
+                            "Compaction rescue failed; rethrowing the original turn error",
+                            rescueErr,
+                          );
                 if (err instanceof Error && err.cause === undefined) {
                   (err as Error & { cause?: unknown }).cause = rescueErr;
                 }
@@ -1028,13 +1058,17 @@ export class CoachAgent {
             }
             // Timeout with high context usage → compact + retry (no flush)
             if (isTimeoutError(err) && timeoutAttempts < MAX_TIMEOUT_ATTEMPTS) {
-              const ratio = estimateMessagesTokens(messages) / this.config.contextWindowTokens;
+                        const ratio =
+                          estimateMessagesTokens(messages) / this.config.contextWindowTokens;
               if (ratio > TIMEOUT_COMPACTION_THRESHOLD) {
                 timeoutAttempts++;
                 try {
                   await compactInTurn();
                 } catch (rescueErr) {
-                  this.log.warn("Compaction rescue failed; rethrowing the original turn error", rescueErr);
+                            this.log.warn(
+                              "Compaction rescue failed; rethrowing the original turn error",
+                              rescueErr,
+                            );
                   if (err instanceof Error && err.cause === undefined) {
                     (err as Error & { cause?: unknown }).cause = rescueErr;
                   }
@@ -1055,12 +1089,15 @@ export class CoachAgent {
               // The server hint (if any) is a lower bound; absent one, fall back to a
               // capped exponential. Either feeds the primitive as the Retry-After
               // floor so the 120s ceiling and the clamp note are honored bit-for-bit.
-              const requestedMs = retryAfterFloorMs(err)
-                ?? Math.min(
-                     RATE_LIMIT_FALLBACK_BASE_MS * RATE_LIMIT_FALLBACK_MULTIPLIER ** (attemptNo - 1),
+                        const requestedMs =
+                          retryAfterFloorMs(err) ??
+                          Math.min(
+                            RATE_LIMIT_FALLBACK_BASE_MS *
+                              RATE_LIMIT_FALLBACK_MULTIPLIER ** (attemptNo - 1),
                      RATE_LIMIT_FALLBACK_MAX_MS,
                    );
-              const clampNote = requestedMs > RATE_LIMIT_MAX_WAIT_MS
+                        const clampNote =
+                          requestedMs > RATE_LIMIT_MAX_WAIT_MS
                 ? ` (provider requested ${requestedMs}ms, clamped to ${RATE_LIMIT_MAX_WAIT_MS}ms)`
                 : "";
               await backoffWithSentinelError(err, {
@@ -1071,7 +1108,9 @@ export class CoachAgent {
                 retryAfterMs: () => requestedMs,
                 random: () => 0,
                 onRetry: ({ delayMs }) => {
-                  console.warn(`Rate limited (attempt ${attemptNo}/${MAX_RATE_LIMIT_ATTEMPTS}), waiting ${delayMs}ms${clampNote}`);
+                            console.warn(
+                              `Rate limited (attempt ${attemptNo}/${MAX_RATE_LIMIT_ATTEMPTS}), waiting ${delayMs}ms${clampNote}`,
+                            );
                 },
               });
               // The backoff sleep is the one place a turn can silently burn
@@ -1092,7 +1131,10 @@ export class CoachAgent {
             // errors are plain TypeErrors (not name="NetworkError") and whose SDK
             // does zero retries. (Unifying codex network retry with the AI-SDK
             // path is tracked as a follow-up.)
-            const alreadyRetriedNetwork = failure === "network" && err instanceof Error && err.name === "NetworkError";
+                      const alreadyRetriedNetwork =
+                        failure === "network" &&
+                        err instanceof Error &&
+                        err.name === "NetworkError";
             if (
               (failure === "server_error" || failure === "network") &&
               !alreadyRetriedNetwork &&
