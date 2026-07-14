@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import type { Sport } from "../src/sport.js";
+import { appendGarminAttribution } from "../src/agent/garmin-attribution.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -170,7 +171,7 @@ describe("flush retry and degradation", () => {
     seedSession("defer", STALE_FOUR);
 
     const t1 = await agent.chat("defer", "hello");
-    expect(t1).toBe("turn-2");
+    expect(t1).toBe(appendGarminAttribution("turn-2"));
     expect(listArchives("defer")).toHaveLength(0);
     expect(eventsNamed(warnSpy, "memory_flush_archive_deferred")).toHaveLength(1);
     expect(eventsNamed(warnSpy, "memory_flush_archive_deferred")[0].messageCount).toBe(4);
@@ -224,7 +225,7 @@ describe("flush retry and degradation", () => {
     const agent = await setupAgent(complete);
 
     const text = await agent.chat("overflow-degrade", "hello");
-    expect(text).toBe("recovered");
+    expect(text).toBe(appendGarminAttribution("recovered"));
     expect(complete).toHaveBeenCalledTimes(4);
 
     const failed = eventsNamed(warnSpy, "memory_flush_failed");

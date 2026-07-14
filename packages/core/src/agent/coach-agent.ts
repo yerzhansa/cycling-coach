@@ -57,6 +57,7 @@ import {
   createProposalSummarizers,
   gateMutatingTool,
 } from "./confirmation-gate.js";
+import { appendGarminAttribution } from "./garmin-attribution.js";
 
 const MAX_OVERFLOW_ATTEMPTS = 3;
 const MAX_TIMEOUT_ATTEMPTS = 2;
@@ -780,6 +781,7 @@ export class CoachAgent {
               cacheKey,
               turnBudget,
             );
+            const attributedText = appendGarminAttribution(effectiveText);
 
             const templateHash = (this.templateHash ??= computeTemplateHash({
               soul: this.sport.soul,
@@ -795,7 +797,7 @@ export class CoachAgent {
             // blank reply from polluting history.
             let persistenceNote = "";
             try {
-              this.chatStore.appendMessage(chatId, "assistant", effectiveText, {
+              this.chatStore.appendMessage(chatId, "assistant", attributedText, {
                 templateHash,
                 assembledHash,
                 provider: this.config.llm.provider,
@@ -851,7 +853,7 @@ export class CoachAgent {
             // an automatic archive. Not persisted to history — it is a channel
             // disclosure, not conversation content.
             const resetPrefix = archivedAt !== undefined ? `${POST_RESET_NOTICE}\n\n` : "";
-            return resetPrefix + effectiveText + persistenceNote;
+            return resetPrefix + attributedText + persistenceNote;
           } catch (err) {
             // The classified budget error is terminal: re-throw it before any
             // retry branch so a future reordering can never mistake it for one of

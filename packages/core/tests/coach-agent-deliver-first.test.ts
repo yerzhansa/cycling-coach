@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import type { Sport } from "../src/sport.js";
+import { appendGarminAttribution } from "../src/agent/garmin-attribution.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -83,6 +84,8 @@ function sessionFile(chatId: string): string {
 }
 
 const DISK_FULL_FRAGMENT = "disk is full";
+const DISK_FULL_NOTE =
+  "\n\n(Heads up: my disk is full, so I couldn't save this to our history — but your message went through. Please free up some space when you can.)";
 
 describe("coach-agent deliver-first persistence", () => {
   let resetNotice: () => void;
@@ -103,18 +106,24 @@ describe("coach-agent deliver-first persistence", () => {
     // The user line is appended before generation and the assistant line after;
     // both go through appendMessage now. Throwing on it exercises deliver-first
     // on the reply-persist path (the disk-full note rides the assistant append).
-    vi.spyOn(ChatStore.prototype, "appendMessage").mockImplementation(() => {
+    const appendSpy = vi.spyOn(ChatStore.prototype, "appendMessage").mockImplementation(() => {
       throw errored("ENOSPC");
     });
     vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const first = await agent.chat("disk-chat", "hello");
-    expect(first).toContain("here is your reply");
-    expect(first).toContain(DISK_FULL_FRAGMENT);
+    expect(first).toBe(appendGarminAttribution("here is your reply") + DISK_FULL_NOTE);
 
     const second = await agent.chat("disk-chat", "again");
-    expect(second).toContain("here is your reply");
-    expect(second).not.toContain(DISK_FULL_FRAGMENT);
+    expect(second).toBe(appendGarminAttribution("here is your reply"));
+    const attemptedAssistantCores = appendSpy.mock.calls
+      .filter((call) => call[1] === "assistant")
+      .map((call) => call[2]);
+    expect(attemptedAssistantCores).toEqual([
+      appendGarminAttribution("here is your reply"),
+      appendGarminAttribution("here is your reply"),
+    ]);
+    expect(attemptedAssistantCores.every((core) => !core.includes(DISK_FULL_FRAGMENT))).toBe(true);
   });
 
   it("delivers the reply on a non-ENOSPC append with no athlete note", async () => {
@@ -129,7 +138,7 @@ describe("coach-agent deliver-first persistence", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const text = await agent.chat("eacces-chat", "hello");
-    expect(text).toBe("eacces reply");
+    expect(text).toBe(appendGarminAttribution("eacces reply"));
     expect(text).not.toContain(DISK_FULL_FRAGMENT);
   });
 
@@ -141,15 +150,18 @@ describe("coach-agent deliver-first persistence", () => {
     resetNotice();
 
     const text = await agent.chat("happy-chat", "hello");
-    expect(text).toBe("persisted reply");
+    expect(text).toBe(appendGarminAttribution("persisted reply"));
     expect(text).not.toContain(DISK_FULL_FRAGMENT);
 
     expect(existsSync(sessionFile("happy-chat"))).toBe(true);
     const lines = readFileSync(sessionFile("happy-chat"), "utf-8")
       .split("\n")
-      .filter((l) => l.length > 0);
-    expect(lines.some((l) => l.includes('"role":"user"'))).toBe(true);
-    expect(lines.some((l) => l.includes('"role":"assistant"'))).toBe(true);
+      .filter((l) => l.length > 0)
+      .map((line) => JSON.parse(line) as { role: string; content: string });
+    expect(lines.some((line) => line.role === "user")).toBe(true);
+    expect(lines.filter((line) => line.role === "assistant").map((line) => line.content)).toEqual([
+      appendGarminAttribution("persisted reply"),
+    ]);
   });
 
   it("leaves the athlete message and a failure marker in history when the turn throws", async () => {
@@ -197,8 +209,9 @@ describe("coach-agent deliver-first persistence", () => {
 
     const reply = await agent.chat("reset-chat", "how's my form?");
 
-    expect(reply.startsWith(POST_RESET_NOTICE)).toBe(true);
-    expect(reply).toContain("here is the answer");
+    expect(reply).toBe(
+      `${POST_RESET_NOTICE}\n\n${appendGarminAttribution("here is the answer")}`,
+    );
 
     const sawMarker = complete.mock.calls.some((call) => {
       const params = call[0] as { messages?: Array<{ role: string; content: unknown }> };
@@ -215,7 +228,15 @@ describe("coach-agent deliver-first persistence", () => {
     expect(sawMarker).toBe(true);
 
     // The prior transcript was archived (renamed away).
-    const archives = readFileSync(sessionFile("reset-chat"), "utf-8");
-    expect(archives).not.toContain("old q");
+    const currentSession = readFileSync(sessionFile("reset-chat"), "utf-8");
+    expect(currentSession).not.toContain("old q");
+    const currentLines = currentSession
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { role: string; content: string });
+    expect(
+      currentLines.filter((line) => line.role === "assistant").map((line) => line.content),
+    ).toEqual([appendGarminAttribution("here is the answer")]);
+    expect(currentSession).not.toContain(POST_RESET_NOTICE);
   });
 });

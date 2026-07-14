@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import {
   buildSystemPrompt,
   CONFIRMATION_GATE_RULES,
+  GARMIN_ATTRIBUTION_RULES,
 } from "../src/agent/system-prompt.js";
 import {
   ATHLETE_CONTEXT_FENCE_OPEN,
@@ -53,6 +54,12 @@ describe("consecutive builds are byte-identical", () => {
   it("pins the confirmation rule block bytes", () => {
     expect(createHash("sha256").update(CONFIRMATION_GATE_RULES).digest("hex")).toBe(
       "ab1c5c932355aa134691c9ba39d93cd7f92016763477e0841dbac61e52985389",
+    );
+  });
+
+  it("pins the host-owned attribution rule block bytes", () => {
+    expect(createHash("sha256").update(GARMIN_ATTRIBUTION_RULES).digest("hex")).toBe(
+      "3e48867cee41daaf61855327c795b311dc663a3469ba09607b7fb2155103f731",
     );
   });
 

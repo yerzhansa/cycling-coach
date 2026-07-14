@@ -4,17 +4,21 @@ import {
   SNAPSHOT_DOCUMENT_THRESHOLD_CHUNKS,
 } from "../freshness.js";
 import type { LatestJson } from "../schemas/latest.js";
+import { GARMIN_DATA_ATTRIBUTION } from "../../agent/garmin-attribution.js";
 
 const TELEGRAM_MAX_CHUNK = 4096;
 // Each chunk is a code fence the Telegram HTML path renders as an escaped
 // <pre> block (the snapshot reply runs every chunk through markdownToTelegramHtml).
 const FENCE_OPEN = "```\n";
 const FENCE_CLOSE = "\n```";
+const ATTRIBUTION_PREFIX = `${GARMIN_DATA_ATTRIBUTION}\n\n`;
+const ATTRIBUTED_FENCE_PREFIX = `${ATTRIBUTION_PREFIX}${FENCE_OPEN}`;
 // Room the rendered `<pre>${escapeHtmlText(body)}</pre>` leaves for the body.
 // The trailing `-1` reserves the leading `\n` of FENCE_CLOSE: FENCE_RE captures
 // `slice + "\n"` as the fence body, so the restored <pre> carries one extra char
 // the `<pre></pre>` overhead alone doesn't account for.
-const RENDERED_BUDGET = TELEGRAM_MAX_CHUNK - "<pre></pre>".length - 1;
+const RENDERED_BUDGET =
+  TELEGRAM_MAX_CHUNK - ATTRIBUTION_PREFIX.length - "<pre></pre>".length - 1;
 
 const VALID_SECTIONS: readonly (keyof LatestJson)[] = [
   "athlete_profile",
@@ -119,10 +123,18 @@ function splitIntoChunks(body: string): readonly string[] {
     // Don't cut between the halves of a surrogate pair (but always make progress).
     if (j > i + 1 && j < body.length && isHighSurrogate(body.charCodeAt(j - 1))) j--;
     // A single char can never exceed the budget, so j always advances past i.
-    out.push(`${FENCE_OPEN}${body.slice(i, j)}${FENCE_CLOSE}`);
+    out.push(`${ATTRIBUTED_FENCE_PREFIX}${body.slice(i, j)}${FENCE_CLOSE}`);
     i = j;
   }
   return out;
+}
+
+export function snapshotChunkToTelegramHtml(chunk: string): string {
+  if (!chunk.startsWith(ATTRIBUTED_FENCE_PREFIX) || !chunk.endsWith(FENCE_CLOSE)) {
+    throw new Error("Invalid snapshot data chunk");
+  }
+  const body = chunk.slice(ATTRIBUTED_FENCE_PREFIX.length, -FENCE_CLOSE.length);
+  return `${escapeHtmlText(ATTRIBUTION_PREFIX)}<pre>${escapeHtmlText(`${body}\n`)}</pre>`;
 }
 
 function asDocument(body: string, chunks: readonly string[]): SnapshotOutput {

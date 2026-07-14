@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { formatSnapshotRaw } from "../src/reference/sync/snapshot-debug.js";
+import {
+  formatSnapshotRaw,
+  snapshotChunkToTelegramHtml,
+} from "../src/reference/sync/snapshot-debug.js";
 import { markdownToTelegramHtml, chunkHtml } from "../src/channels/telegram.js";
 import type { LatestJson } from "../src/reference/schemas/latest.js";
+import { GARMIN_DATA_ATTRIBUTION } from "../src/agent/garmin-attribution.js";
+
+const ATTRIBUTED_FENCE_PREFIX = `${GARMIN_DATA_ATTRIBUTION}\n\n\`\`\`\n`;
+const FENCE_SUFFIX = "\n```";
+
+function snapshotChunkBody(chunk: string): string {
+  return chunk.slice(ATTRIBUTED_FENCE_PREFIX.length, -FENCE_SUFFIX.length);
+}
 
 const tinyLatest: LatestJson = {
   metadata: {
@@ -22,9 +33,7 @@ describe("formatSnapshotRaw", () => {
     const out = formatSnapshotRaw(null);
     expect(out.kind).toBe("chunks");
     if (out.kind === "chunks") {
-      expect(out.chunks).toHaveLength(1);
-      expect(out.chunks[0]).toContain("Reference hasn't synced yet");
-      expect(out.chunks[0]).toContain("/sync");
+      expect(out.chunks).toEqual(["Reference hasn't synced yet — try `/sync` first."]);
     }
   });
 
@@ -35,11 +44,11 @@ describe("formatSnapshotRaw", () => {
       expect(out.chunks.length).toBeGreaterThanOrEqual(1);
       for (const chunk of out.chunks) {
         expect(chunk.length).toBeLessThanOrEqual(4096);
-        // Each chunk is a plain code fence the HTML path renders as an escaped
-        // <pre> block (no language tag, no legacy ```json wrapper).
-        expect(chunk.startsWith("```\n")).toBe(true);
+        // Every independently delivered data chunk is attributed before the
+        // plain code fence (no language tag, no legacy ```json wrapper).
+        expect(chunk.startsWith(ATTRIBUTED_FENCE_PREFIX)).toBe(true);
         expect(chunk.endsWith("\n```")).toBe(true);
-        expect(chunk.startsWith("```json")).toBe(false);
+        expect(chunk).not.toContain("```json");
       }
       // The serialized data should appear somewhere in the chunks.
       expect(out.chunks.join("")).toContain("\"id\": \"test\"");
@@ -62,6 +71,7 @@ describe("formatSnapshotRaw", () => {
     if (out.kind === "chunks") {
       expect(out.chunks.length).toBeGreaterThan(1);
       for (const chunk of out.chunks) {
+        expect(chunk.startsWith(ATTRIBUTED_FENCE_PREFIX)).toBe(true);
         const rendered = markdownToTelegramHtml(chunk);
         expect(rendered.length).toBeLessThanOrEqual(4096);
         expect(chunkHtml(rendered)).toHaveLength(1);
@@ -93,6 +103,7 @@ describe("formatSnapshotRaw", () => {
       );
       expect(maxRendered).toBe(4096);
       for (const chunk of out.chunks) {
+        expect(chunk.startsWith(ATTRIBUTED_FENCE_PREFIX)).toBe(true);
         const rendered = markdownToTelegramHtml(chunk);
         expect(rendered.length).toBeLessThanOrEqual(4096);
         expect(chunkHtml(rendered)).toHaveLength(1);
@@ -106,6 +117,7 @@ describe("formatSnapshotRaw", () => {
     if (out.kind === "chunks") {
       expect(out.chunks.join("")).toContain("\"sleep_hours\": 7.5");
       expect(out.chunks.join("")).not.toContain("\"athlete_profile\"");
+      expect(out.chunks.every((chunk) => chunk.startsWith(ATTRIBUTED_FENCE_PREFIX))).toBe(true);
     }
   });
 
@@ -114,6 +126,7 @@ describe("formatSnapshotRaw", () => {
     expect(out.kind).toBe("chunks");
     if (out.kind === "chunks") {
       expect(out.chunks.join("")).toContain("\"sleep_hours\": 7.5");
+      expect(out.chunks.every((chunk) => chunk.startsWith(ATTRIBUTED_FENCE_PREFIX))).toBe(true);
     }
   });
 
@@ -121,10 +134,9 @@ describe("formatSnapshotRaw", () => {
     const out = formatSnapshotRaw(tinyLatest, "garbage_section");
     expect(out.kind).toBe("chunks");
     if (out.kind === "chunks") {
-      expect(out.chunks).toHaveLength(1);
-      expect(out.chunks[0]).toContain("Unknown section");
-      expect(out.chunks[0]).toContain("athlete_profile");
-      expect(out.chunks[0]).toContain("wellness_data");
+      expect(out.chunks).toEqual([
+        "Unknown section: `garbage_section`.\n\nValid sections: athlete_profile, current_status, derived_metrics, recent_activities, planned_workouts, wellness_data, metadata.",
+      ]);
     }
   });
 
@@ -147,6 +159,8 @@ describe("formatSnapshotRaw", () => {
       expect(out.filename).toMatch(/^snapshot-.*\.json$/);
       const parsed = JSON.parse(out.buffer.toString("utf8"));
       expect(parsed.recent_activities).toHaveLength(200);
+      expect(out.buffer.toString("utf8")).not.toContain(GARMIN_DATA_ATTRIBUTION);
+      expect(out.chunks.every((chunk) => chunk.startsWith(ATTRIBUTED_FENCE_PREFIX))).toBe(true);
     }
   });
 
@@ -185,9 +199,37 @@ describe("formatSnapshotRaw", () => {
     expect(out.kind).toBe("document");
     if (out.kind === "document") {
       expect(out.filename).toMatch(/^snapshot-.*\.json$/);
-      // The serialized body still contains the offending substring — the fix
-      // is about routing, not sanitizing.
-      expect(out.buffer.toString("utf8")).toContain("```");
+      const serialized = out.buffer.toString("utf8");
+      expect(serialized).toContain("```");
+      const fallbackBodies = out.chunks.map(snapshotChunkBody);
+      expect(fallbackBodies.join("")).toBe(serialized);
+      for (const chunk of out.chunks) {
+        const rendered = snapshotChunkToTelegramHtml(chunk);
+        expect(rendered.match(/<pre>/g)).toHaveLength(1);
+        expect(rendered.match(/<\/pre>/g)).toHaveLength(1);
+        expect(rendered.length).toBeLessThanOrEqual(4096);
+      }
+    }
+  });
+
+  it("keeps dense Markdown fence data to a bounded number of HTML-native fallback chunks", () => {
+    const fenceDense: LatestJson = {
+      ...tinyLatest,
+      recent_activities: [{ id: 1, description: "`".repeat(30_000) }],
+    };
+
+    const out = formatSnapshotRaw(fenceDense);
+    expect(out.kind).toBe("document");
+    if (out.kind === "document") {
+      expect(out.chunks.length).toBeLessThanOrEqual(10);
+      expect(out.chunks.map(snapshotChunkBody).join(""))
+        .toBe(out.buffer.toString("utf8"));
+      for (const chunk of out.chunks) {
+        const rendered = snapshotChunkToTelegramHtml(chunk);
+        expect(rendered.length).toBeLessThanOrEqual(4096);
+        expect(rendered.match(/<pre>/g)).toHaveLength(1);
+        expect(rendered.match(/<\/pre>/g)).toHaveLength(1);
+      }
     }
   });
 

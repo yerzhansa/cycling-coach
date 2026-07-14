@@ -9,6 +9,7 @@ import { cyclingSport } from "@enduragent/sport-cycling";
 import type { Sport } from "../src/sport.js";
 import { TAINTED_BY_WRITES_MESSAGE } from "../src/agent/coach-agent-copy.js";
 import { COACH_EVENT_TAG } from "../src/agent/event-provenance.js";
+import { appendGarminAttribution } from "../src/agent/garmin-attribution.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -139,7 +140,7 @@ describe("tainted-by-writes refusal", () => {
       const result = await chat;
       vi.useRealTimers();
 
-      expect(result).toBe("recovered after proposal");
+      expect(result).toBe(appendGarminAttribution("recovered after proposal"));
       expect(result).not.toBe(TAINTED_BY_WRITES_MESSAGE);
       expect(createdWorkouts.length).toBe(0);
       expect(secondMainAfterWrite).toBe(true);
@@ -191,7 +192,7 @@ describe("tainted-by-writes refusal", () => {
 
       const result = await agent.chat("taint-timeout", "create an endurance workout for tomorrow");
 
-      expect(result).toBe("recovered after proposal");
+      expect(result).toBe(appendGarminAttribution("recovered after proposal"));
       expect(result).not.toBe(TAINTED_BY_WRITES_MESSAGE);
       expect(createdWorkouts.length).toBe(0);
       expect(secondMainAfterWrite).toBe(true);
@@ -273,7 +274,7 @@ describe("tainted-by-writes refusal", () => {
 
     const result = await agent.chat("taint-plan", "build me a training plan");
 
-    expect(result).toBe("recovered after retry");
+    expect(result).toBe(appendGarminAttribution("recovered after retry"));
     expect(result).not.toBe(TAINTED_BY_WRITES_MESSAGE);
     expect(mainTurns).toBe(3);
     const journal = join(dataDir, "memory", "MEMORY.history.jsonl");
@@ -340,7 +341,7 @@ describe("tainted-by-writes refusal", () => {
     releaseFirstAfterWrite();
     const firstResult = await firstResultPromise;
 
-    expect(secondResult).toBe("second ok");
+    expect(secondResult).toBe(appendGarminAttribution("second ok"));
     expect(firstResult).toBe(TAINTED_BY_WRITES_MESSAGE);
     expect(firstMainCalls).toBe(2);
     expect(secondMainCalls).toBe(1);
@@ -387,7 +388,7 @@ describe("tainted-by-writes refusal", () => {
       const result = await chat;
       vi.useRealTimers();
 
-      expect(result).toBe("recovered after delete proposal");
+      expect(result).toBe(appendGarminAttribution("recovered after delete proposal"));
       expect(result).not.toBe(TAINTED_BY_WRITES_MESSAGE);
       expect(deletedEventIds).toEqual([]);
     } finally {
@@ -414,7 +415,7 @@ describe("tainted-by-writes refusal", () => {
     const result = await chatPromise;
     vi.useRealTimers();
 
-    expect(result).toBe("recovered after retry");
+    expect(result).toBe(appendGarminAttribution("recovered after retry"));
     expect(result).not.toBe(TAINTED_BY_WRITES_MESSAGE);
     expect(mainTurns).toBe(2);
   });
@@ -469,7 +470,7 @@ describe("tainted-by-writes refusal", () => {
       vi.useRealTimers();
 
       expect(result).not.toBe(TAINTED_BY_WRITES_MESSAGE);
-      expect(result).toBe("recovered, nothing saved");
+      expect(result).toBe(appendGarminAttribution("recovered, nothing saved"));
       expect(createdWorkouts.length).toBe(0);
     } finally {
       server.close();

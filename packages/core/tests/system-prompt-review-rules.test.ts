@@ -11,6 +11,7 @@ import {
 } from "../src/agent/prompt-fence.js";
 import type { SportPersona } from "../src/sport.js";
 import type { Memory } from "../src/memory/store.js";
+import { GARMIN_DATA_ATTRIBUTION } from "../src/agent/garmin-attribution.js";
 
 function makeFakeMemory(context = ""): Memory {
   return {
@@ -54,15 +55,26 @@ describe("buildSystemPrompt — review + data-grounding placement", () => {
     expect(sections[0]).toContain("Cycling Coach");
     expect(sections[1]).toMatch(/^# Domain Knowledge/);
     expect(sections[2]).toMatch(/^# Untrusted Data Handling/);
-    expect(sections[3]).toMatch(/^# Recall Before Answering/);
-    expect(sections[4]).toMatch(/^# Voice & Register/);
-    expect(sections[5]).toMatch(/^# Workout Review/);
-    expect(sections[6]).toMatch(/^# Tool-Call Budget/);
-    expect(sections[7]).toContain("cache boundary:");
-    expect(sections[8]).toMatch(/^# Athlete Context/);
-    expect(sections[9]).toMatch(/^# Current Date & Time/);
-    expect(sections.length).toBe(10);
+    expect(sections[3]).toMatch(/^# Data Source Attribution/);
+    expect(sections[4]).toMatch(/^# Recall Before Answering/);
+    expect(sections[5]).toMatch(/^# Voice & Register/);
+    expect(sections[6]).toMatch(/^# Workout Review/);
+    expect(sections[7]).toMatch(/^# Tool-Call Budget/);
+    expect(sections[8]).toContain("cache boundary:");
+    expect(sections[9]).toMatch(/^# Athlete Context/);
+    expect(sections[10]).toMatch(/^# Current Date & Time/);
+    expect(sections.length).toBe(11);
     expect(prompt).toContain(SYSTEM_PROMPT_CACHE_BOUNDARY);
+  });
+
+  it("states that the host owns the Garmin footer and the model must not duplicate it", () => {
+    const prompt = buildSystemPrompt(persona, makeFakeMemory("ctx"));
+    const rule = prompt
+      .split("\n\n---\n\n")
+      .find((section) => section.startsWith("# Data Source Attribution"));
+    expect(rule).toContain("The host adds this exact footer");
+    expect(rule?.split("\n").filter((line) => line === GARMIN_DATA_ATTRIBUTION)).toHaveLength(1);
+    expect(rule).toContain("Do not add or duplicate that footer yourself.");
   });
 
   it("carries the cross-sport register-mirroring + name-your-basis voice block", () => {

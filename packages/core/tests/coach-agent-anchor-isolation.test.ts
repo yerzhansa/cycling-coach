@@ -12,6 +12,7 @@ import type {
   ToolRegistration,
 } from "../src/index.js";
 import type { ResolvedCs } from "../src/reference/cs-resolution.js";
+import { appendGarminAttribution } from "../src/agent/garmin-attribution.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -178,8 +179,8 @@ describe("per-turn anchor isolation (AsyncLocalStorage, not a shared field)", ()
       agent.chat("chat-B", "B: how's my pace?", { resolvedCs: anchorB }),
     ]);
 
-    expect(resA).toBe("done");
-    expect(resB).toBe("done");
+    expect(resA).toBe(appendGarminAttribution("done"));
+    expect(resB).toBe(appendGarminAttribution("done"));
 
     // Each turn's tool read ITS OWN anchor. If resolvedCs were a shared instance
     // field, the second chat() would have overwritten it before the first tool

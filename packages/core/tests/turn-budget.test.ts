@@ -12,6 +12,7 @@ import {
   MAX_TURN_GENERATE_ATTEMPTS,
   TURN_WALL_CLOCK_MS,
 } from "../src/agent/turn-budget.js";
+import { appendGarminAttribution } from "../src/agent/garmin-attribution.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -186,7 +187,7 @@ describe("per-turn budget through chat() (behavioral)", () => {
 
     const text = await agent.chat("happy", "hello");
 
-    expect(text).toBe("all good");
+    expect(text).toBe(appendGarminAttribution("all good"));
     expect(countMainTurns(complete)).toBe(1);
   });
 
@@ -223,7 +224,7 @@ describe("per-turn budget through chat() (behavioral)", () => {
     const text = await agent.chat("budget-deadline", "hello");
     nowSpy.mockRestore();
 
-    expect(text).toBe("done");
+    expect(text).toBe(appendGarminAttribution("done"));
     expect(mainCalls).toBe(2);
     expect(deadlines.length).toBe(2);
     // First call: full budget. Retry: only the ~200s the turn has left.

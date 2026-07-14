@@ -8,6 +8,7 @@ import type { Sport } from "../src/sport.js";
 import {
   SYSTEM_PROMPT_CACHE_BOUNDARY,
 } from "../src/agent/system-prompt.js";
+import { appendGarminAttribution } from "../src/agent/garmin-attribution.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -97,7 +98,7 @@ describe("block_coaching consume side (degrade-and-disclose prompt block)", () =
     const agent = await setupAgent(complete);
 
     const text = await agent.chat("blk-chat", "how's my training?");
-    expect(text).toBe("all good");
+    expect(text).toBe(appendGarminAttribution("all good"));
 
     const prompt = seen.at(-1) ?? "";
     expect(prompt).toContain(DISCLOSE_MARKER);
@@ -113,7 +114,7 @@ describe("block_coaching consume side (degrade-and-disclose prompt block)", () =
     const agent = await setupAgent(complete);
 
     const text = await agent.chat("clean-chat", "how's my training?");
-    expect(text).toBe("all good");
+    expect(text).toBe(appendGarminAttribution("all good"));
     expect(seen.at(-1) ?? "").not.toContain(DISCLOSE_MARKER);
   });
 
@@ -123,7 +124,7 @@ describe("block_coaching consume side (degrade-and-disclose prompt block)", () =
     const agent = await setupAgent(complete);
 
     const text = await agent.chat("warn-chat", "how's my training?");
-    expect(text).toBe("all good");
+    expect(text).toBe(appendGarminAttribution("all good"));
     expect(seen.at(-1) ?? "").not.toContain(DISCLOSE_MARKER);
   });
 
@@ -134,7 +135,7 @@ describe("block_coaching consume side (degrade-and-disclose prompt block)", () =
 
     // Required-red: a read that throws on bad JSON instead of safeReadJson breaks this.
     const text = await agent.chat("garbage-chat", "how's my training?");
-    expect(text).toBe("all good");
+    expect(text).toBe(appendGarminAttribution("all good"));
     expect(seen.at(-1) ?? "").not.toContain(DISCLOSE_MARKER);
   });
 });

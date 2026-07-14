@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import type { Sport } from "../src/sport.js";
+import { appendGarminAttribution } from "../src/agent/garmin-attribution.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -107,7 +108,7 @@ describe("provider error taxonomy", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     const text = await chatPromise;
 
-    expect(text).toBe("recovered-502");
+    expect(text).toBe(appendGarminAttribution("recovered-502"));
     expect(complete).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });
@@ -130,7 +131,7 @@ describe("provider error taxonomy", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     const text = await chatPromise;
 
-    expect(text).toBe("recovered-network");
+    expect(text).toBe(appendGarminAttribution("recovered-network"));
     expect(generateText).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });
@@ -158,7 +159,7 @@ describe("provider error taxonomy", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     const text = await chatPromise;
 
-    expect(text).toBe("recovered-codex-5xx");
+    expect(text).toBe(appendGarminAttribution("recovered-codex-5xx"));
     expect(complete).toHaveBeenCalledTimes(2);
     const rateLimitWarn = warnSpy.mock.calls
       .map((c) => String(c[0]))

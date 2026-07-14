@@ -556,8 +556,9 @@ export function createTelegramBot(
         try {
           await sendSnapshotOutput(output, {
             reply: (text) => sendLongMessage(ctx, text) as Promise<unknown>,
-            sendDocument: (buffer, filename) =>
-              ctx.replyWithDocument(new InputFile(buffer, filename)) as Promise<unknown>,
+            replyHtml: (html) => ctx.reply(html, { parse_mode: "HTML" }) as Promise<unknown>,
+            sendDocument: (buffer, filename, caption) =>
+              ctx.replyWithDocument(new InputFile(buffer, filename), { caption }) as Promise<unknown>,
           });
         } catch (err) {
           log.error("command_failed", err, { command: "snapshot", chatId: `telegram:${ctx.chat.id}` });

@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import type { Sport } from "../src/sport.js";
+import { appendGarminAttribution } from "../src/agent/garmin-attribution.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -121,7 +122,7 @@ describe("trim-path compaction guard", () => {
 
     const text = await agent.chat("trim-ok", "hello");
 
-    expect(text).toBe("final-reply");
+    expect(text).toBe(appendGarminAttribution("final-reply"));
     expect(complete).toHaveBeenCalledTimes(3);
 
     const archives = listPrecompact("trim-ok");
@@ -154,7 +155,7 @@ describe("trim-path compaction guard", () => {
 
     const text = await agent.chat("trim-flush-fail", "hello");
 
-    expect(text).toBe("final-reply");
+    expect(text).toBe(appendGarminAttribution("final-reply"));
     expect(complete).toHaveBeenCalledTimes(4);
     expect(listPrecompact("trim-flush-fail")).toHaveLength(0);
 
@@ -181,7 +182,7 @@ describe("trim-path compaction guard", () => {
 
     const text = await agent.chat("trim-summary-fail", "hello");
 
-    expect(text).toBe("final-reply");
+    expect(text).toBe(appendGarminAttribution("final-reply"));
     expect(listPrecompact("trim-summary-fail")).toHaveLength(0);
 
     const session = readFileSync(join(dataDir, "sessions", "trim-summary-fail.jsonl"), "utf-8");
