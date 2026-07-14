@@ -115,3 +115,8 @@ npx cycling-coach
 - **Secrets backends** (1Password, macOS Keychain, Vault, AWS/GCP Secret Manager, age, env), **architecture diagram**, and **development setup** — see the [GitHub repo](https://github.com/yerzhansa/cycling-coach#readme).
 - **Issues**: <https://github.com/yerzhansa/cycling-coach/issues>
 - **License**: MIT
+
+## Notices
+
+License and attribution details for the installed package are in
+`dist/NOTICE.md` and `dist/THIRD_PARTY_LICENSES.txt`.
