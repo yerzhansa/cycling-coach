@@ -19,6 +19,7 @@
     "check:trademarks": "tsx tools/check-trademarks.ts",
     "check:fixture-privacy": "tsx tools/check-fixture-privacy.ts",
     "check:registry-isolation": "tsx tools/check-registry-isolation.ts",
+    "check:published-package": "node --import tsx tools/check-published-package.ts",
     "check:changeset-userfacing": "tsx tools/check-changeset-user-facing.ts",
     "release-version": "changeset version && tsx tools/bump-binaries-to-calver.ts",
     "snapshot:section-11": "tsx tools/snapshot-section-11.ts",
