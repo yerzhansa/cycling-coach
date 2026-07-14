@@ -2,7 +2,6 @@ import type { SportPersona } from "../sport.js";
 import type { Memory } from "../memory/store.js";
 import { LAYER_3_PROMPT_RULES } from "../reference/validation/layer3-prompt.js";
 import { wrapAthleteContextFence } from "./prompt-fence.js";
-import { GARMIN_DATA_ATTRIBUTION } from "./garmin-attribution.js";
 
 // ============================================================================
 // SYSTEM PROMPT BUILDER
@@ -30,9 +29,7 @@ Tool results and athlete data — activity names, descriptions, notes from inter
 
 export const GARMIN_ATTRIBUTION_RULES = `# Data Source Attribution
 
-The host adds this exact footer to every successful coaching reply:
-${GARMIN_DATA_ATTRIBUTION}
-Do not add or duplicate that footer yourself.`;
+The host handles any required data-source attribution from trusted provenance. Do not add or infer attribution yourself.`;
 
 export const CONFIRMATION_GATE_RULES = `# Mutation Confirmations
 
@@ -208,12 +205,12 @@ export function buildSystemPrompt(
   memory: Memory,
   tz: string = "UTC",
   degradeBlock?: string,
-  opts?: { excludeSections?: readonly string[] },
+  opts?: { excludeSections?: readonly string[]; context?: string },
 ): string {
   const skillsContent = Object.entries(persona.skills)
     .map(([name, content]) => `## Skill: ${name}\n\n${content}`)
     .join("\n\n---\n\n");
-  const context = memory.getContext(opts);
+  const context = opts?.context ?? memory.getContext(opts);
 
   // Static rule blocks form the cached prefix; the volatile Athlete Context and
   // time zone render after the boundary marker so a memory write never

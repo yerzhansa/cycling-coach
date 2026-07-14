@@ -295,6 +295,7 @@ describe("agent-backed commands", () => {
     await drainPending();
     expect(agent.chat).toHaveBeenCalledWith("telegram:777", "/plan", {
       resolvedCs: { criticalSpeedMps: 4.0, source: "platform", confidence: "high" },
+      referenceProvenance: { garmin: false, nonGarmin: false, unknown: true },
     });
   });
 });

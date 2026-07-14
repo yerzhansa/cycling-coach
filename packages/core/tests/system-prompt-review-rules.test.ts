@@ -11,7 +11,6 @@ import {
 } from "../src/agent/prompt-fence.js";
 import type { SportPersona } from "../src/sport.js";
 import type { Memory } from "../src/memory/store.js";
-import { GARMIN_DATA_ATTRIBUTION } from "../src/agent/garmin-attribution.js";
 
 function makeFakeMemory(context = ""): Memory {
   return {
@@ -67,14 +66,13 @@ describe("buildSystemPrompt — review + data-grounding placement", () => {
     expect(prompt).toContain(SYSTEM_PROMPT_CACHE_BOUNDARY);
   });
 
-  it("states that the host owns the Garmin footer and the model must not duplicate it", () => {
+  it("states that the host owns data-source attribution", () => {
     const prompt = buildSystemPrompt(persona, makeFakeMemory("ctx"));
     const rule = prompt
       .split("\n\n---\n\n")
       .find((section) => section.startsWith("# Data Source Attribution"));
-    expect(rule).toContain("The host adds this exact footer");
-    expect(rule?.split("\n").filter((line) => line === GARMIN_DATA_ATTRIBUTION)).toHaveLength(1);
-    expect(rule).toContain("Do not add or duplicate that footer yourself.");
+    expect(rule).toContain("host handles any required data-source attribution");
+    expect(rule).toContain("Do not add or infer attribution yourself.");
   });
 
   it("carries the cross-sport register-mirroring + name-your-basis voice block", () => {

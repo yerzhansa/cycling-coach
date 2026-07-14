@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import type { Sport } from "../src/sport.js";
-import { appendGarminAttribution } from "../src/agent/garmin-attribution.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -160,12 +159,12 @@ describe("coach-agent empty-reply guards", () => {
 
     const reply = await agent.chat("window-exceeded-chat", "deep review please");
 
-    expect(reply).toBe(appendGarminAttribution("Full recovered answer after compaction."));
+    expect(reply).toBe("Full recovered answer after compaction.");
     expect(mainCalls).toBe(2); // window-exceeded finish forced a retry
     const assistants = assistantLines("window-exceeded-chat");
     expect(assistants).toHaveLength(1);
     expect(assistants[0].content).toBe(
-      appendGarminAttribution("Full recovered answer after compaction."),
+      "Full recovered answer after compaction.",
     );
     expect(assistants.some((l) => l.content.includes("truncated partial"))).toBe(false);
   });
@@ -180,9 +179,9 @@ describe("coach-agent empty-reply guards", () => {
     const { agent } = await setupAgent(complete);
 
     const reply = await agent.chat("normal-chat", "plan please");
-    expect(reply).toBe(appendGarminAttribution("Here is your plan."));
+    expect(reply).toBe("Here is your plan.");
     const assistants = assistantLines("normal-chat");
     expect(assistants).toHaveLength(1);
-    expect(assistants[0].content).toBe(appendGarminAttribution("Here is your plan."));
+    expect(assistants[0].content).toBe("Here is your plan.");
   });
 });

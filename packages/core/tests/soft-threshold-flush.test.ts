@@ -13,7 +13,6 @@ import { baseAgentConfig } from "./helpers/base-agent-config.js";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import type { Sport } from "../src/sport.js";
 import { shouldRunMemoryFlush } from "../src/agent/memory-flush.js";
-import { appendGarminAttribution } from "../src/agent/garmin-attribution.js";
 
 const FIVE_SECTION_SUMMARY = [
   "## Athlete Profile",
@@ -207,7 +206,7 @@ describe("soft-threshold flush in chat()", () => {
 
     const text = await agent.chat("soft", "hello");
 
-    expect(text).toBe(appendGarminAttribution("main-reply"));
+    expect(text).toBe("main-reply");
     expect(complete).toHaveBeenCalledTimes(2);
     const warnSpy = console.warn as unknown as ReturnType<typeof vi.fn>;
     expect(warnSpy.mock.calls.some((c) => String(c[0]).includes("flush failed"))).toBe(false);
@@ -245,7 +244,7 @@ describe("soft-threshold flush in chat()", () => {
 
     const text = await agent.chat("fail", "hello");
 
-    expect(text).toBe(appendGarminAttribution("ok-reply"));
+    expect(text).toBe("ok-reply");
     expect(
       warnSpy.mock.calls.some((c) => String(c[0]).includes("Soft-threshold memory flush failed")),
     ).toBe(true);
@@ -273,7 +272,7 @@ describe("soft-threshold flush in chat()", () => {
 
     const text = await agent.chat("trim", "hello");
 
-    expect(text).toBe(appendGarminAttribution("trim-reply"));
+    expect(text).toBe("trim-reply");
     expect(complete).toHaveBeenCalledTimes(3);
     const archives = readdirSync(join(dataDir, "sessions")).filter((f) =>
       f.startsWith("trim.jsonl.precompact."),

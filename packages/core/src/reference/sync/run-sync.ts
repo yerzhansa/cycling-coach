@@ -26,6 +26,7 @@ import {
 import type { AsyncMutex } from "../../concurrency/mutex.js";
 import type { Cooldown } from "../../concurrency/cooldown.js";
 import type { Clock } from "../../concurrency/clock.js";
+import type { LatestSourceProvenance } from "../source-provenance.js";
 
 /**
  * Re-exported from `error-state.ts` so the runtime opt and the on-disk
@@ -91,6 +92,7 @@ export interface FetchedReference {
     readonly recent_activities: readonly unknown[];
     readonly planned_workouts: readonly unknown[];
     readonly wellness_data: unknown;
+    readonly source_provenance?: LatestSourceProvenance;
   };
   readonly history: {
     readonly daily: readonly unknown[];

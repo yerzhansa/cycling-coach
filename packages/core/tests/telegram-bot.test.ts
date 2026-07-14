@@ -124,7 +124,7 @@ describe("createTelegramBot — Garmin attribution carriage", () => {
     expect(replies.filter((text) => text === attributedAnswer)).toHaveLength(2);
   });
 
-  it("passes the exact attribution as a raw-snapshot document caption", async () => {
+  it("omits a raw-snapshot document caption without confirmed Garmin data", async () => {
     const { commandHandlers } = installTelegramBotMock();
     const agent = {
       chat: vi.fn(),
@@ -172,7 +172,7 @@ describe("createTelegramBot — Garmin attribution carriage", () => {
     await commandHandlers.get("snapshot")!(ctx);
 
     expect(replyWithDocument).toHaveBeenCalledOnce();
-    expect(replyWithDocument.mock.calls[0]![1]).toEqual({ caption: GARMIN_DATA_ATTRIBUTION });
+    expect(replyWithDocument.mock.calls[0]![1]).toBeUndefined();
   });
 });
 

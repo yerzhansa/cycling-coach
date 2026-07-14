@@ -13,7 +13,6 @@ import type {
 } from "../src/index.js";
 
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
-import { appendGarminAttribution } from "../src/agent/garmin-attribution.js";
 
 // ---------------------------------------------------------------------------
 // Stub running-coach Sport — the load-bearing proof that Core is sport-agnostic.
@@ -104,7 +103,7 @@ describe("Core is sport-agnostic — CoachAgent constructs and chats with a non-
     const agent = new CoachAgent(stubRunningSport, baseAgentConfig(dataDir));
     const text = await agent.chat("running-test", "hi");
 
-    expect(text).toBe(appendGarminAttribution("ack from running-coach"));
+    expect(text).toBe("ack from running-coach");
     expect(complete).toHaveBeenCalledTimes(1);
   });
 });

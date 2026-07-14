@@ -1,13 +1,22 @@
 import { readFileSync, mkdirSync, existsSync } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { join } from "node:path";
 import { z } from "zod";
 import type { MemoryStore, MemoryWriteSource } from "../memory.js";
+import { sanitizeUntrustedText } from "../agent/prompt-fence.js";
 import { todayInTZ } from "../agent/user-time.js";
 import { atomicWriteFileSync } from "../io/atomic-write-file-sync.js";
 import { safeReadJson } from "../io/safe-read-json.js";
 import { eachDateKeyInRange } from "../io/date-keys.js";
 import { appendJournalEntry } from "./journal.js";
 import { appendLedgerEvent, LEDGER_FILENAME, type LedgerEventInput } from "./event-ledger.js";
+import { ProvenanceMetadata } from "./provenance-metadata.js";
+import {
+  EMPTY_PROVENANCE,
+  UNKNOWN_PROVENANCE,
+  unionProvenance,
+  type SourceProvenance,
+} from "../provenance.js";
 
 // ============================================================================
 // MEMORY SYSTEM
@@ -16,6 +25,18 @@ import { appendLedgerEvent, LEDGER_FILENAME, type LedgerEventInput } from "./eve
 const SECTION_SPLIT = /(?=^## )/m;
 const markerOf = (section: string) => `## ${section}`;
 const bodyOf = (block: string) => block.slice(block.indexOf("\n") + 1);
+const canonicalSectionBody = (block: string) => bodyOf(block).trimEnd();
+
+function sectionBodies(parts: readonly string[]): Map<string, string> {
+  const sections = new Map<string, string>();
+  for (const block of parts) {
+    if (!block.startsWith("## ")) continue;
+    const nl = block.indexOf("\n");
+    const name = block.slice(3, nl === -1 ? undefined : nl);
+    if (!sections.has(name)) sections.set(name, canonicalSectionBody(block));
+  }
+  return sections;
+}
 
 // Drop the sections named in `excludeSections` (spec'd sections whose
 // `inject === false`, e.g. `notes`) from the rendered memory. Orphans — section
@@ -64,9 +85,7 @@ function stampUpdated(content: string, date: string): string {
     const nl = body.indexOf("\n");
     body = nl === -1 ? "" : body.slice(nl + 1);
   }
-  return body === ""
-    ? `${UPDATED_STAMP_PREFIX}${date}`
-    : `${UPDATED_STAMP_PREFIX}${date}\n${body}`;
+  return body === "" ? `${UPDATED_STAMP_PREFIX}${date}` : `${UPDATED_STAMP_PREFIX}${date}\n${body}`;
 }
 
 type RenameOutcome = "renamed" | "noop" | "merged";
@@ -99,6 +118,8 @@ export class Memory implements MemoryStore {
   private memoryDir: string;
   private plansDir: string;
   private tz: string;
+  private provenance: ProvenanceMetadata;
+  private readonly writeProvenance = new AsyncLocalStorage<SourceProvenance>();
 
   constructor(dataDir: string, tz: string = "UTC") {
     this.memoryDir = join(dataDir, "memory");
@@ -106,6 +127,68 @@ export class Memory implements MemoryStore {
     this.tz = tz;
     mkdirSync(this.memoryDir, { recursive: true, mode: 0o700 });
     mkdirSync(this.plansDir, { recursive: true, mode: 0o700 });
+    this.provenance = new ProvenanceMetadata(this.memoryDir);
+  }
+
+  runWithWriteProvenance<T>(provenance: SourceProvenance, fn: () => T): T {
+    return this.writeProvenance.run(provenance, fn);
+  }
+
+  private resolvedWriteProvenance(provenance?: SourceProvenance): SourceProvenance {
+    return provenance ?? this.writeProvenance.getStore() ?? UNKNOWN_PROVENANCE;
+  }
+
+  private applySectionRenames(
+    parts: string[],
+    renames: ReadonlyArray<readonly [string, string]>,
+  ): {
+    outcomes: RenameOutcome[];
+    metadataEntries: Array<{
+      key: string;
+      content: string;
+      provenance: SourceProvenance;
+    }>;
+    metadataDeletes: string[];
+  } {
+    const initialBodies = sectionBodies(parts);
+    const provenanceBySection = new Map<string, SourceProvenance>();
+    for (const [name, body] of initialBodies) {
+      provenanceBySection.set(name, this.provenance.read(`memory:${name}`, body));
+    }
+
+    const outcomes: RenameOutcome[] = [];
+    const changedSections = new Set<string>();
+    for (const [from, to] of renames) {
+      const fromProvenance = provenanceBySection.get(from) ?? UNKNOWN_PROVENANCE;
+      const toProvenance = provenanceBySection.get(to);
+      const outcome = applyRename(parts, from, to);
+      outcomes.push(outcome);
+      if (outcome === "noop") continue;
+
+      changedSections.add(from);
+      changedSections.add(to);
+      provenanceBySection.delete(from);
+      provenanceBySection.set(
+        to,
+        outcome === "merged"
+          ? unionProvenance(toProvenance ?? UNKNOWN_PROVENANCE, fromProvenance)
+          : fromProvenance,
+      );
+    }
+
+    const finalBodies = sectionBodies(parts);
+    const metadataEntries = [...changedSections]
+      .filter((name) => finalBodies.has(name))
+      .map((name) => ({
+        key: `memory:${name}`,
+        content: finalBodies.get(name)!,
+        provenance: provenanceBySection.get(name) ?? UNKNOWN_PROVENANCE,
+      }));
+    return {
+      outcomes,
+      metadataEntries,
+      metadataDeletes: [...changedSections].map((name) => `memory:${name}`),
+    };
   }
 
   // ── Long-term memory ──────────────────────────────────────────────────
@@ -120,7 +203,12 @@ export class Memory implements MemoryStore {
     return readFileSync(path, "utf-8").replace(/\r\n/g, "\n");
   }
 
-  writeSection(section: string, content: string, source: MemoryWriteSource = "unattributed"): void {
+  writeSection(
+    section: string,
+    content: string,
+    source: MemoryWriteSource = "unattributed",
+    provenance?: SourceProvenance,
+  ): void {
     const path = join(this.memoryDir, "MEMORY.md");
     const existing = this.readMemory();
     const marker = markerOf(section);
@@ -144,6 +232,11 @@ export class Memory implements MemoryStore {
 
     if (!existing) {
       atomicWriteFileSync(path, newBlock);
+      this.provenance.write(
+        `memory:${section}`,
+        stamped.trimEnd(),
+        this.resolvedWriteProvenance(provenance),
+      );
       return;
     }
 
@@ -157,6 +250,11 @@ export class Memory implements MemoryStore {
       // Append at end (preserves legacy content not covered by any known section)
       atomicWriteFileSync(path, existing.trimEnd() + "\n\n" + newBlock);
     }
+    this.provenance.write(
+      `memory:${section}`,
+      stamped.trimEnd(),
+      this.resolvedWriteProvenance(provenance),
+    );
   }
 
   readSection(section: string): string | null {
@@ -170,13 +268,20 @@ export class Memory implements MemoryStore {
     return body.endsWith("\n") ? body.slice(0, -1) : body;
   }
 
-  renameSection(from: string, to: string, source: MemoryWriteSource = "unattributed"): RenameOutcome {
+  renameSection(
+    from: string,
+    to: string,
+    source: MemoryWriteSource = "unattributed",
+  ): RenameOutcome {
     const path = join(this.memoryDir, "MEMORY.md");
     const content = this.readMemory();
     if (!content) return "noop";
 
     const parts = content.split(SECTION_SPLIT);
-    const outcome = applyRename(parts, from, to);
+    const { outcomes, metadataEntries, metadataDeletes } = this.applySectionRenames(parts, [
+      [from, to],
+    ]);
+    const outcome = outcomes[0];
     if (outcome === "noop") return outcome;
 
     const updated = parts.join("");
@@ -189,6 +294,7 @@ export class Memory implements MemoryStore {
       source,
     });
     atomicWriteFileSync(path, updated);
+    this.provenance.replaceMany(metadataEntries, metadataDeletes);
     return outcome;
   }
 
@@ -207,13 +313,8 @@ export class Memory implements MemoryStore {
     if (!content) return renames.map(() => "noop" as const);
 
     const parts = content.split(SECTION_SPLIT);
-    const outcomes: RenameOutcome[] = [];
-    let mutated = false;
-    for (const [from, to] of renames) {
-      const outcome = applyRename(parts, from, to);
-      outcomes.push(outcome);
-      if (outcome !== "noop") mutated = true;
-    }
+    const { outcomes, metadataEntries, metadataDeletes } = this.applySectionRenames(parts, renames);
+    const mutated = outcomes.some((outcome) => outcome !== "noop");
 
     if (mutated) {
       const updated = parts.join("");
@@ -226,6 +327,7 @@ export class Memory implements MemoryStore {
         source,
       });
       atomicWriteFileSync(path, updated);
+      this.provenance.replaceMany(metadataEntries, metadataDeletes);
     }
     return outcomes;
   }
@@ -239,7 +341,7 @@ export class Memory implements MemoryStore {
     return readFileSync(path, "utf-8");
   }
 
-  appendDailyNote(note: string, date?: string): void {
+  appendDailyNote(note: string, date?: string, provenance?: SourceProvenance): void {
     const d = date ?? todayInTZ(this.tz);
     const path = join(this.memoryDir, `${d}.md`);
     const existing = this.readDailyNotes(d);
@@ -251,6 +353,28 @@ export class Memory implements MemoryStore {
     }
     const updated = existing ? `${existing}\n${note}` : note;
     atomicWriteFileSync(path, updated);
+    const writtenProvenance = this.resolvedWriteProvenance(provenance);
+    const prior = existing ? this.provenance.read(`daily:${d}`, existing) : EMPTY_PROVENANCE;
+    const metadataWrites: Array<{
+      key: string;
+      content: string;
+      provenance: SourceProvenance;
+    }> = [
+      {
+        key: `daily:${d}`,
+        content: updated,
+        provenance: unionProvenance(prior, writtenProvenance),
+      },
+    ];
+    const firstNewLine = existing ? existing.split("\n").length : 0;
+    for (const [offset, line] of note.split("\n").entries()) {
+      metadataWrites.push({
+        key: `daily-line:${d}:${firstNewLine + offset}`,
+        content: line,
+        provenance: writtenProvenance,
+      });
+    }
+    this.provenance.writeMany(metadataWrites);
   }
 
   readDailyNotesInRange(from: string, to: string): Array<{ date: string; text: string }> {
@@ -268,13 +392,18 @@ export class Memory implements MemoryStore {
     return readFileSync(path, "utf-8");
   }
 
-  appendEvent(event: LedgerEventInput): void {
-    appendLedgerEvent(this.memoryDir, event);
+  appendEvent(event: LedgerEventInput, provenance?: SourceProvenance): void {
+    const line = appendLedgerEvent(this.memoryDir, event);
+    this.provenance.write(`ledger:${line}`, line, this.resolvedWriteProvenance(provenance));
   }
 
   // ── Plans ──────────────────────────────────────────────────────────────
 
-  savePlan(plan: unknown, source: MemoryWriteSource = "unattributed"): void {
+  savePlan(
+    plan: unknown,
+    source: MemoryWriteSource = "unattributed",
+    provenance?: SourceProvenance,
+  ): void {
     const path = join(this.plansDir, "current-plan.json");
     const newBody = JSON.stringify(plan, null, 2);
     appendJournalEntry(this.memoryDir, {
@@ -286,6 +415,7 @@ export class Memory implements MemoryStore {
       source,
     });
     atomicWriteFileSync(path, newBody);
+    this.provenance.write("plan", newBody, this.resolvedWriteProvenance(provenance));
   }
 
   loadPlan(): unknown | null {
@@ -332,5 +462,166 @@ export class Memory implements MemoryStore {
     }
 
     return parts.join("\n\n");
+  }
+
+  getContextWithProvenance(opts?: { excludeSections?: readonly string[]; maxChars?: number }): {
+    text: string;
+    provenance: SourceProvenance;
+  } {
+    const text = this.getContext(opts);
+    if (!text) return { text, provenance: EMPTY_PROVENANCE };
+    let provenance = EMPTY_PROVENANCE;
+    const isVisibleAt = (rawIndex: number): boolean =>
+      rawIndex >= 0 &&
+      (opts?.maxChars === undefined ||
+        sanitizeUntrustedText(text.slice(0, rawIndex)).length < opts.maxChars);
+    const excluded = new Set(opts?.excludeSections ?? []);
+    const memory = this.readMemory();
+    if (memory) {
+      for (const block of memory.split(SECTION_SPLIT)) {
+        if (!block.startsWith("## ")) {
+          if (block.trim() !== "" && isVisibleAt(text.indexOf(block))) {
+            provenance = unionProvenance(provenance, UNKNOWN_PROVENANCE);
+          }
+          continue;
+        }
+        const nl = block.indexOf("\n");
+        const section = block.slice(3, nl === -1 ? undefined : nl);
+        if (excluded.has(section)) continue;
+        const canonicalBody = canonicalSectionBody(block);
+        const blockIndex = text.indexOf(block);
+        const bodyIndex = blockIndex < 0 ? -1 : blockIndex + block.indexOf("\n") + 1;
+        if (isVisibleAt(bodyIndex)) {
+          provenance = unionProvenance(
+            provenance,
+            this.provenance.read(`memory:${section}`, canonicalBody),
+          );
+        }
+      }
+    }
+    const daily = this.readDailyNotes();
+    if (daily) {
+      const marker = `## Today's Notes\n`;
+      const dailyIndex = text.indexOf(marker + daily);
+      const dailyBodyIndex = dailyIndex < 0 ? -1 : dailyIndex + marker.length;
+      if (isVisibleAt(dailyBodyIndex)) {
+        const date = todayInTZ(this.tz);
+        if (!this.provenance.matches(`daily:${date}`, daily)) {
+          provenance = unionProvenance(provenance, UNKNOWN_PROVENANCE);
+        } else {
+          let rawOffset = 0;
+          for (const [index, line] of daily.split("\n").entries()) {
+            if (!isVisibleAt(dailyBodyIndex + rawOffset)) break;
+            if (line.length > 0) {
+              provenance = unionProvenance(
+                provenance,
+                this.provenance.read(`daily-line:${date}:${index}`, line),
+              );
+            }
+            rawOffset += line.length + 1;
+          }
+        }
+      }
+    }
+    const planPath = join(this.plansDir, "current-plan.json");
+    const plan = this.loadPlan();
+    if (plan !== null && typeof plan === "object" && existsSync(planPath)) {
+      const p = plan as Record<string, unknown>;
+      const visible =
+        typeof p.name === "string" ||
+        typeof p.primaryGoal === "string" ||
+        (typeof p.totalWeeks === "number" && Number.isFinite(p.totalWeeks)) ||
+        typeof p.status === "string";
+      if (visible) {
+        const marker = "## Current Plan\n";
+        const planIndex = text.indexOf(marker);
+        if (isVisibleAt(planIndex < 0 ? -1 : planIndex + marker.length)) {
+          provenance = unionProvenance(
+            provenance,
+            this.provenance.read("plan", readFileSync(planPath, "utf8")),
+          );
+        }
+      }
+    }
+    return { text, provenance };
+  }
+
+  provenanceForToolRead(name: string, input: unknown, visibleResult?: unknown): SourceProvenance {
+    if (name === "memory_read") return this.getContextWithProvenance().provenance;
+    if (name === "plan_load") {
+      const path = join(this.plansDir, "current-plan.json");
+      return existsSync(path)
+        ? this.provenance.read("plan", readFileSync(path, "utf8"))
+        : EMPTY_PROVENANCE;
+    }
+    if (name !== "memory_query" || input === null || typeof input !== "object") {
+      return EMPTY_PROVENANCE;
+    }
+    const record = input as { from?: unknown; to?: unknown; query?: unknown };
+    if (typeof record.from !== "string" || typeof record.to !== "string") {
+      return EMPTY_PROVENANCE;
+    }
+    if (typeof visibleResult !== "string" || visibleResult.startsWith("Error:")) {
+      return EMPTY_PROVENANCE;
+    }
+    const queryText = typeof record.query === "string" ? record.query : undefined;
+    const query = queryText?.toLowerCase();
+    const truncationMarker = "\n[truncated — narrow the date range or add a query term]";
+    const truncationIndex = visibleResult.lastIndexOf(truncationMarker);
+    const visibleDataChars = truncationIndex === -1 ? visibleResult.length : truncationIndex;
+    const byDate = new Map<string, Array<{ text: string; provenance: SourceProvenance }>>();
+    for (const { date, text } of this.readDailyNotesInRange(record.from, record.to)) {
+      const fileMatches = this.provenance.matches(`daily:${date}`, text);
+      for (const [index, line] of text.split("\n").entries()) {
+        if (query !== undefined && !line.toLowerCase().includes(query)) continue;
+        const bucket = byDate.get(date) ?? [];
+        bucket.push({
+          text: line,
+          provenance: fileMatches
+            ? this.provenance.read(`daily-line:${date}:${index}`, line)
+            : UNKNOWN_PROVENANCE,
+        });
+        byDate.set(date, bucket);
+      }
+    }
+    for (const line of this.readEventsRaw().split("\n")) {
+      if (!line) continue;
+      try {
+        const parsed = JSON.parse(line) as { date?: unknown };
+        if (
+          typeof parsed.date === "string" &&
+          parsed.date >= record.from &&
+          parsed.date <= record.to &&
+          (query === undefined || line.toLowerCase().includes(query))
+        ) {
+          const bucket = byDate.get(parsed.date) ?? [];
+          bucket.push({
+            text: `event: ${line}`,
+            provenance: this.provenance.read(`ledger:${line}`, line),
+          });
+          byDate.set(parsed.date, bucket);
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    const header =
+      `Memory query ${record.from}..${record.to}` + (queryText ? ` matching "${queryText}"` : "");
+    let rendered = header;
+    let all = EMPTY_PROVENANCE;
+    for (const date of [...byDate.keys()].sort()) {
+      rendered += `\n\n## ${date}\n`;
+      const items = byDate.get(date)!;
+      for (const [index, item] of items.entries()) {
+        if (index > 0) rendered += "\n";
+        const visibleStart = sanitizeUntrustedText(rendered).length;
+        rendered += item.text;
+        if (visibleStart < visibleDataChars) {
+          all = unionProvenance(all, item.provenance);
+        }
+      }
+    }
+    return all;
   }
 }

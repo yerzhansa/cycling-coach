@@ -26,6 +26,7 @@ const documentOutput = (): SnapshotOutput => ({
   buffer: Buffer.from('{"big":"dump"}', "utf8"),
   filename: "snapshot-test.json",
   chunks: [snapshotChunk("chunk-fallback-1"), snapshotChunk("chunk-fallback-2")],
+  provenance: { garmin: true, nonGarmin: false, unknown: false },
 });
 
 const makeGrammyRateLimitError = (retryAfterSec: number): unknown => {
@@ -217,7 +218,7 @@ describe("sendSnapshotOutput", () => {
       expect(html.match(/<\/pre>/g)).toHaveLength(1);
     }
     const fallbackBody = output.chunks
-      .map((chunk) => chunk.slice(attributedChunk("```\n").length, -"\n```".length))
+      .map((chunk) => chunk.slice("```\n".length, -"\n```".length))
       .join("");
     expect(fallbackBody).toBe(output.buffer.toString("utf8"));
     expect(JSON.parse(fallbackBody)).toEqual(latest);

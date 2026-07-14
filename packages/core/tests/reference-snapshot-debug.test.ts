@@ -8,10 +8,12 @@ import type { LatestJson } from "../src/reference/schemas/latest.js";
 import { GARMIN_DATA_ATTRIBUTION } from "../src/agent/garmin-attribution.js";
 
 const ATTRIBUTED_FENCE_PREFIX = `${GARMIN_DATA_ATTRIBUTION}\n\n\`\`\`\n`;
+const FENCE_PREFIX = "```\n";
 const FENCE_SUFFIX = "\n```";
 
 function snapshotChunkBody(chunk: string): string {
-  return chunk.slice(ATTRIBUTED_FENCE_PREFIX.length, -FENCE_SUFFIX.length);
+  const prefix = chunk.startsWith(ATTRIBUTED_FENCE_PREFIX) ? ATTRIBUTED_FENCE_PREFIX : FENCE_PREFIX;
+  return chunk.slice(prefix.length, -FENCE_SUFFIX.length);
 }
 
 const tinyLatest: LatestJson = {
@@ -44,15 +46,13 @@ describe("formatSnapshotRaw", () => {
       expect(out.chunks.length).toBeGreaterThanOrEqual(1);
       for (const chunk of out.chunks) {
         expect(chunk.length).toBeLessThanOrEqual(4096);
-        // Every independently delivered data chunk is attributed before the
-        // plain code fence (no language tag, no legacy ```json wrapper).
-        expect(chunk.startsWith(ATTRIBUTED_FENCE_PREFIX)).toBe(true);
+        expect(chunk.startsWith(FENCE_PREFIX)).toBe(true);
         expect(chunk.endsWith("\n```")).toBe(true);
         expect(chunk).not.toContain("```json");
       }
       // The serialized data should appear somewhere in the chunks.
-      expect(out.chunks.join("")).toContain("\"id\": \"test\"");
-      expect(out.chunks.join("")).toContain("\"sleep_hours\": 7.5");
+      expect(out.chunks.join("")).toContain('"id": "test"');
+      expect(out.chunks.join("")).toContain('"sleep_hours": 7.5');
     }
   });
 
@@ -71,7 +71,7 @@ describe("formatSnapshotRaw", () => {
     if (out.kind === "chunks") {
       expect(out.chunks.length).toBeGreaterThan(1);
       for (const chunk of out.chunks) {
-        expect(chunk.startsWith(ATTRIBUTED_FENCE_PREFIX)).toBe(true);
+        expect(chunk.startsWith(FENCE_PREFIX)).toBe(true);
         const rendered = markdownToTelegramHtml(chunk);
         expect(rendered.length).toBeLessThanOrEqual(4096);
         expect(chunkHtml(rendered)).toHaveLength(1);
@@ -103,7 +103,7 @@ describe("formatSnapshotRaw", () => {
       );
       expect(maxRendered).toBe(4096);
       for (const chunk of out.chunks) {
-        expect(chunk.startsWith(ATTRIBUTED_FENCE_PREFIX)).toBe(true);
+        expect(chunk.startsWith(FENCE_PREFIX)).toBe(true);
         const rendered = markdownToTelegramHtml(chunk);
         expect(rendered.length).toBeLessThanOrEqual(4096);
         expect(chunkHtml(rendered)).toHaveLength(1);
@@ -115,9 +115,9 @@ describe("formatSnapshotRaw", () => {
     const out = formatSnapshotRaw(tinyLatest, "wellness_data");
     expect(out.kind).toBe("chunks");
     if (out.kind === "chunks") {
-      expect(out.chunks.join("")).toContain("\"sleep_hours\": 7.5");
-      expect(out.chunks.join("")).not.toContain("\"athlete_profile\"");
-      expect(out.chunks.every((chunk) => chunk.startsWith(ATTRIBUTED_FENCE_PREFIX))).toBe(true);
+      expect(out.chunks.join("")).toContain('"sleep_hours": 7.5');
+      expect(out.chunks.join("")).not.toContain('"athlete_profile"');
+      expect(out.chunks.every((chunk) => chunk.startsWith(FENCE_PREFIX))).toBe(true);
     }
   });
 
@@ -125,8 +125,8 @@ describe("formatSnapshotRaw", () => {
     const out = formatSnapshotRaw(tinyLatest, "Wellness_Data");
     expect(out.kind).toBe("chunks");
     if (out.kind === "chunks") {
-      expect(out.chunks.join("")).toContain("\"sleep_hours\": 7.5");
-      expect(out.chunks.every((chunk) => chunk.startsWith(ATTRIBUTED_FENCE_PREFIX))).toBe(true);
+      expect(out.chunks.join("")).toContain('"sleep_hours": 7.5');
+      expect(out.chunks.every((chunk) => chunk.startsWith(FENCE_PREFIX))).toBe(true);
     }
   });
 
@@ -160,7 +160,7 @@ describe("formatSnapshotRaw", () => {
       const parsed = JSON.parse(out.buffer.toString("utf8"));
       expect(parsed.recent_activities).toHaveLength(200);
       expect(out.buffer.toString("utf8")).not.toContain(GARMIN_DATA_ATTRIBUTION);
-      expect(out.chunks.every((chunk) => chunk.startsWith(ATTRIBUTED_FENCE_PREFIX))).toBe(true);
+      expect(out.chunks.every((chunk) => chunk.startsWith(FENCE_PREFIX))).toBe(true);
     }
   });
 
@@ -222,8 +222,7 @@ describe("formatSnapshotRaw", () => {
     expect(out.kind).toBe("document");
     if (out.kind === "document") {
       expect(out.chunks.length).toBeLessThanOrEqual(10);
-      expect(out.chunks.map(snapshotChunkBody).join(""))
-        .toBe(out.buffer.toString("utf8"));
+      expect(out.chunks.map(snapshotChunkBody).join("")).toBe(out.buffer.toString("utf8"));
       for (const chunk of out.chunks) {
         const rendered = snapshotChunkToTelegramHtml(chunk);
         expect(rendered.length).toBeLessThanOrEqual(4096);
@@ -242,5 +241,60 @@ describe("formatSnapshotRaw", () => {
 
     const out = formatSnapshotRaw(fenceBreaking, "athlete_profile");
     expect(out.kind).toBe("document");
+  });
+
+  it("attributes only sections whose rendered data confirms Garmin", () => {
+    const garminLatest: LatestJson = {
+      ...tinyLatest,
+      recent_activities: [{ id: 1, source: "GARMIN_CONNECT" }],
+      source_provenance: {
+        athlete_profile: { garmin: false, nonGarmin: false, unknown: true },
+        current_status: { garmin: false, nonGarmin: false, unknown: false },
+        derived_metrics: { garmin: true, nonGarmin: false, unknown: true },
+        recent_activities: { garmin: true, nonGarmin: false, unknown: false },
+        planned_workouts: { garmin: false, nonGarmin: false, unknown: false },
+        wellness_data: { garmin: false, nonGarmin: false, unknown: true },
+      },
+    };
+
+    const activities = formatSnapshotRaw(garminLatest, "recent_activities");
+    const wellness = formatSnapshotRaw(garminLatest, "wellness_data");
+    expect(activities.chunks.every((chunk) => chunk.startsWith(ATTRIBUTED_FENCE_PREFIX))).toBe(
+      true,
+    );
+    expect(wellness.chunks.every((chunk) => chunk.startsWith(FENCE_PREFIX))).toBe(true);
+  });
+
+  it("classifies visible activities instead of trusting inconsistent side metadata", () => {
+    const persistedGarmin = {
+      athlete_profile: { garmin: false, nonGarmin: false, unknown: false },
+      current_status: { garmin: false, nonGarmin: false, unknown: false },
+      derived_metrics: { garmin: false, nonGarmin: false, unknown: false },
+      recent_activities: { garmin: true, nonGarmin: false, unknown: false },
+      planned_workouts: { garmin: false, nonGarmin: false, unknown: false },
+      wellness_data: { garmin: false, nonGarmin: false, unknown: false },
+    };
+    const polar = formatSnapshotRaw(
+      {
+        ...tinyLatest,
+        recent_activities: [{ id: 1, source: "POLAR" }],
+        source_provenance: persistedGarmin,
+      },
+      "recent_activities",
+    );
+    const garmin = formatSnapshotRaw(
+      {
+        ...tinyLatest,
+        recent_activities: [{ id: 1, source: "GARMIN_CONNECT" }],
+        source_provenance: {
+          ...persistedGarmin,
+          recent_activities: { garmin: false, nonGarmin: false, unknown: true },
+        },
+      },
+      "recent_activities",
+    );
+
+    expect(polar.chunks.every((chunk) => chunk.startsWith(FENCE_PREFIX))).toBe(true);
+    expect(garmin.chunks.every((chunk) => chunk.startsWith(ATTRIBUTED_FENCE_PREFIX))).toBe(true);
   });
 });

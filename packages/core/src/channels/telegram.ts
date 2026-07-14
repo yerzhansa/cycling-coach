@@ -19,10 +19,11 @@ import { TelegramUpdateOffsetStore } from "./telegram-update-offsets.js";
 import { loadAllowedSenders, loadAllowedSendersWithSource } from "./allowed-senders.js";
 import { escapeHtmlText } from "./html-escape.js";
 import type { ReferenceServices } from "../reference/services.js";
-import { resolveRunningCs, type ResolvedCs } from "../reference/cs-resolution.js";
+import { resolveRunningCs } from "../reference/cs-resolution.js";
 import { formatSyncReply } from "../reference/sync/format-sync-reply.js";
 import { formatSnapshotRaw } from "../reference/sync/snapshot-debug.js";
 import { sendSnapshotOutput } from "../reference/sync/send-snapshot.js";
+import { provenanceForLatestSection } from "../reference/source-provenance.js";
 import { createSubsystemLogger } from "../logging/index.js";
 import { truncateUtf16Safe } from "../text-truncate.js";
 import { formatConfirmOutcome } from "../agent/confirmation-gate.js";
@@ -323,8 +324,15 @@ export function createTelegramBot(
   // guess. Returns undefined — leaving the tool on its LLM-supplied param — when no
   // reference sync is wired; resolveRunningCs itself returns null for cycling,
   // pre-sync, or a profile with no run-family row.
-  const turnDeps = (): { resolvedCs: ResolvedCs | null } | undefined =>
-    reference !== undefined ? { resolvedCs: resolveRunningCs(reference.loadLatest()) } : undefined;
+  const turnDeps = () => {
+    if (reference === undefined) return undefined;
+    const latest = reference.loadLatest();
+    return {
+      resolvedCs: resolveRunningCs(latest),
+      referenceProvenance:
+        latest === null ? undefined : provenanceForLatestSection(latest, "athlete_profile"),
+    };
+  };
 
   // Shared turn skeleton: every chat-bearing handler captures its deps/message
   // synchronously, then hands the LLM turn here to run on the fire-and-forget
@@ -558,7 +566,10 @@ export function createTelegramBot(
             reply: (text) => sendLongMessage(ctx, text) as Promise<unknown>,
             replyHtml: (html) => ctx.reply(html, { parse_mode: "HTML" }) as Promise<unknown>,
             sendDocument: (buffer, filename, caption) =>
-              ctx.replyWithDocument(new InputFile(buffer, filename), { caption }) as Promise<unknown>,
+              ctx.replyWithDocument(
+                new InputFile(buffer, filename),
+                caption === undefined ? undefined : { caption },
+              ) as Promise<unknown>,
           });
         } catch (err) {
           log.error("command_failed", err, { command: "snapshot", chatId: `telegram:${ctx.chat.id}` });

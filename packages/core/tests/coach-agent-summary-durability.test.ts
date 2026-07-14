@@ -6,7 +6,6 @@ import { baseAgentConfig } from "./helpers/base-agent-config.js";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import { COMPACTION_SUMMARY_MARKER } from "../src/memory/compaction-note.js";
 import type { Sport } from "../src/sport.js";
-import { appendGarminAttribution } from "../src/agent/garmin-attribution.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -120,7 +119,7 @@ describe("compaction summary durability into daily notes", () => {
 
     const text = await agent.chat("trim", "hello");
 
-    expect(text).toBe(appendGarminAttribution("final-reply"));
+    expect(text).toBe("final-reply");
     const note = agent.getMemory().readDailyNotes();
     expect(note).toContain(COMPACTION_SUMMARY_MARKER);
     expect(note).toContain("#### Coach Stance");
@@ -143,7 +142,7 @@ describe("compaction summary durability into daily notes", () => {
 
     const text = await agent.chat("overflow", "hello");
 
-    expect(text).toBe(appendGarminAttribution("final-reply"));
+    expect(text).toBe("final-reply");
     const note = agent.getMemory().readDailyNotes();
     expect(note).toContain(COMPACTION_SUMMARY_MARKER);
     expect(note).toContain("#### Coach Stance");
@@ -208,7 +207,7 @@ describe("compaction summary durability into daily notes", () => {
 
     const text = await agent.chat("ac5", "hello");
 
-    expect(text).toBe(appendGarminAttribution("final-reply"));
+    expect(text).toBe("final-reply");
     expect(agent.getMemory().readDailyNotes()).not.toContain(COMPACTION_SUMMARY_MARKER);
     const logged = readFileSync(join(dataDir, "logs", "log.jsonl"), "utf-8");
     expect(logged).toContain("Failed to persist compaction summary to daily note");

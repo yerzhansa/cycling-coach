@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import type { Sport } from "../src/sport.js";
-import { appendGarminAttribution } from "../src/agent/garmin-attribution.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -82,7 +81,7 @@ describe("retry loop on Codex path", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     const text = await chatPromise;
 
-    expect(text).toBe(appendGarminAttribution("recovered"));
+    expect(text).toBe("recovered");
     expect(complete).toHaveBeenCalledTimes(2);
 
     vi.useRealTimers();
@@ -126,7 +125,7 @@ describe("retry loop on Codex path", () => {
     const agent = await setupAgent(complete);
     const text = await agent.chat("test-chat-overflow", "hello");
 
-    expect(text).toBe(appendGarminAttribution("recovered-after-compaction"));
+    expect(text).toBe("recovered-after-compaction");
     // 1 overflow + 1 memory flush during compaction + 1 retry success = 3
     expect(complete).toHaveBeenCalledTimes(3);
   });
@@ -159,7 +158,7 @@ describe("rate-limit backoff clamp", () => {
     await vi.advanceTimersByTimeAsync(120_000);
     const text = await chatPromise;
 
-    expect(text).toBe(appendGarminAttribution("recovered-after-clamp"));
+    expect(text).toBe("recovered-after-clamp");
     expect(complete).toHaveBeenCalledTimes(2);
     const warnLine = warnSpy.mock.calls
       .map((c) => String(c[0]))
@@ -195,7 +194,7 @@ describe("rate-limit backoff clamp", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     const text = await chatPromise;
 
-    expect(text).toBe(appendGarminAttribution("recovered-5xx"));
+    expect(text).toBe("recovered-5xx");
     expect(complete).toHaveBeenCalledTimes(2);
     const rateLimitWarn = warnSpy.mock.calls
       .map((c) => String(c[0]))
@@ -229,7 +228,7 @@ describe("rate-limit backoff clamp", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     const text = await chatPromise;
 
-    expect(text).toBe(appendGarminAttribution("recovered-fast"));
+    expect(text).toBe("recovered-fast");
     expect(complete).toHaveBeenCalledTimes(2);
     const warnLine = warnSpy.mock.calls
       .map((c) => String(c[0]))

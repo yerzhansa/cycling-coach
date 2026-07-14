@@ -9,7 +9,6 @@ import type { Sport } from "../src/sport.js";
 import type { LLM, GenerateResult, GenerateOpts } from "../src/llm.js";
 import type { MemorySnapshot } from "../src/memory.js";
 import { summarizeInStages, summarizeDroppedMessages } from "../src/agent/compaction.js";
-import { appendGarminAttribution } from "../src/agent/garmin-attribution.js";
 
 const FLUSH_MARKER = "reviewing a conversation to extract and save important athlete";
 const FIVE_SECTION_SUMMARY = [
@@ -138,7 +137,7 @@ describe("flush dedupe — at most one memory flush per chat() turn", () => {
 
     const text = await agent.chat("storm", "hello");
 
-    expect(text).toBe(appendGarminAttribution("recovered"));
+    expect(text).toBe("recovered");
     expect(countFlushCalls(complete)).toBeLessThanOrEqual(1);
   });
 
@@ -156,7 +155,7 @@ describe("flush dedupe — at most one memory flush per chat() turn", () => {
 
     const text = await agent.chat("daily", "hello");
 
-    expect(text).toBe(appendGarminAttribution("fresh-day-reply"));
+    expect(text).toBe("fresh-day-reply");
     expect(countFlushCalls(complete)).toBeLessThanOrEqual(1);
   });
 
@@ -173,7 +172,7 @@ describe("flush dedupe — at most one memory flush per chat() turn", () => {
 
     const text = await agent.chat("trim", "hello");
 
-    expect(text).toBe(appendGarminAttribution("trim-reply"));
+    expect(text).toBe("trim-reply");
     expect(countFlushCalls(complete)).toBe(1);
   });
 });

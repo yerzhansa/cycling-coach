@@ -8,7 +8,6 @@ import type { Config } from "../src/config.js";
 import type { Sport } from "../src/sport.js";
 import type { UsageLedgerLine } from "../src/usage-ledger.js";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
-import { appendGarminAttribution } from "../src/agent/garmin-attribution.js";
 
 let dir: string;
 
@@ -463,7 +462,7 @@ describe("turn line — winning generation usage and cost", () => {
     const agent = await setupAgent(complete);
 
     const text = await agent.chat("turn-winner", "hello");
-    expect(text).toBe(appendGarminAttribution("recovered"));
+    expect(text).toBe("recovered");
 
     const turnLine = readLines(agentDataDir)
       .map((l) => JSON.parse(l) as UsageLedgerLine)

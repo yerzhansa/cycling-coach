@@ -12,7 +12,6 @@ import { join } from "node:path";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import type { Sport } from "../src/sport.js";
-import { appendGarminAttribution } from "../src/agent/garmin-attribution.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -119,7 +118,7 @@ describe("CoachAgent corrupt-session recovery", () => {
 
     const text = await agent.chat("corrupt-chat", "hello");
 
-    expect(text).toBe(appendGarminAttribution("recovered-reply"));
+    expect(text).toBe("recovered-reply");
     expect(complete).toHaveBeenCalledTimes(1);
     expect(listSidecars("corrupt-chat")).toHaveLength(1);
 

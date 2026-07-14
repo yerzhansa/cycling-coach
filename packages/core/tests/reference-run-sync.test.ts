@@ -1081,8 +1081,8 @@ describe("latest derived_metrics structured schema + version gate", () => {
     vi.restoreAllMocks();
   });
 
-  it("the current cache schema version is \"3\"", () => {
-    expect(LATEST_SCHEMA_VERSION).toBe("3");
+  it("the current cache schema version is \"4\"", () => {
+    expect(LATEST_SCHEMA_VERSION).toBe("4");
   });
 
   it("a sparse running derived_metrics map (power keys absent, others null) parses clean", () => {

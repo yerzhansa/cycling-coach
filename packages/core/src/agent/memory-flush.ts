@@ -9,6 +9,11 @@ import type { GenerateResult } from "../llm-types.js";
 import type { TurnBudget } from "./turn-budget.js";
 import { LEDGER_EVENT_KINDS, LEDGER_DATE_PATTERN, type LedgerEventKind } from "../memory/event-ledger.js";
 import { warnOrphanSections } from "../memory/orphan-sections.js";
+import {
+  provenanceOfMessages,
+  unionProvenance,
+  type SourceProvenance,
+} from "../provenance.js";
 import { todayInTZ } from "./user-time.js";
 
 // ============================================================================
@@ -125,6 +130,7 @@ Only write sections that have new or changed information.`;
 function createFlushMemoryWriteTool(
   memory: MemoryStore,
   sections: readonly MemorySectionSpec[],
+  provenance: () => SourceProvenance,
   onWrite: () => void,
 ) {
   const sectionNames = sections.map((s) => s.name) as [string, ...string[]];
@@ -137,14 +143,18 @@ function createFlushMemoryWriteTool(
       }),
     ),
     execute: async (input: { section: string; content: string }) => {
-      memory.writeSection(input.section, input.content, "flush");
+      memory.writeSection(input.section, input.content, "flush", provenance());
       onWrite();
       return { saved: true };
     },
   });
 }
 
-function createLedgerAppendTool(memory: MemoryStore, onAppend: () => void) {
+function createLedgerAppendTool(
+  memory: MemoryStore,
+  provenance: () => SourceProvenance,
+  onAppend: () => void,
+) {
   return tool({
     description:
       "Record a dated athlete event (decision, override, illness, experiment, outcome) in the permanent event ledger. Entries are appended, never replaced.",
@@ -162,7 +172,7 @@ function createLedgerAppendTool(memory: MemoryStore, onAppend: () => void) {
       }),
     ),
     execute: async (input: { date: string; kind: LedgerEventKind; text: string }) => {
-      memory.appendEvent({ ...input, source: "flush" });
+      memory.appendEvent({ ...input, source: "flush" }, provenance());
       onAppend();
       return { recorded: true };
     },
@@ -219,6 +229,7 @@ export async function runMemoryFlush(params: {
   memorySections: readonly MemorySectionSpec[];
   tz?: string;
   budget?: Pick<TurnBudget, "chargeModelCall">;
+  provenanceForMemoryRead?: (visibleResult: string) => SourceProvenance;
 }): Promise<MemoryFlushOutcome> {
   if (params.memorySections.length === 0) {
     throw new Error(
@@ -228,17 +239,36 @@ export async function runMemoryFlush(params: {
   }
   let writes = 0;
   let ledgerAppends = 0;
+  let visibleProvenance = provenanceOfMessages(params.messages);
   const beforeChars = new Map(
     params.memorySections.map((s) => [s.name, (params.memory.readSection(s.name) ?? "").length]),
   );
   const flushTools = {
-    memory_write: createFlushMemoryWriteTool(params.memory, params.memorySections, () => {
-      writes++;
-    }),
-    memory_read: createMemoryReadTool(params.memory, MEMORY_READ_FLUSH_DESCRIPTION),
-    ledger_append: createLedgerAppendTool(params.memory, () => {
-      ledgerAppends++;
-    }),
+    memory_write: createFlushMemoryWriteTool(
+      params.memory,
+      params.memorySections,
+      () => visibleProvenance,
+      () => {
+        writes++;
+      },
+    ),
+    memory_read: createMemoryReadTool(
+      params.memory,
+      MEMORY_READ_FLUSH_DESCRIPTION,
+      (visibleResult) => {
+        visibleProvenance = unionProvenance(
+          visibleProvenance,
+          params.provenanceForMemoryRead?.(visibleResult),
+        );
+      },
+    ),
+    ledger_append: createLedgerAppendTool(
+      params.memory,
+      () => visibleProvenance,
+      () => {
+        ledgerAppends++;
+      },
+    ),
   };
 
   params.budget?.chargeModelCall();

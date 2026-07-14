@@ -59,7 +59,7 @@ describe("consecutive builds are byte-identical", () => {
 
   it("pins the host-owned attribution rule block bytes", () => {
     expect(createHash("sha256").update(GARMIN_ATTRIBUTION_RULES).digest("hex")).toBe(
-      "3e48867cee41daaf61855327c795b311dc663a3469ba09607b7fb2155103f731",
+      "e08a63439e54e80bf0d5e15572b62b5bd9f2671133a162fa71c0751c5500a029",
     );
   });
 

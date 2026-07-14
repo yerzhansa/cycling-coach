@@ -1,8 +1,5 @@
 import { GrammyError } from "grammy";
-import {
-  snapshotChunkToTelegramHtml,
-  type SnapshotOutput,
-} from "./snapshot-debug.js";
+import { snapshotChunkToTelegramHtml, type SnapshotOutput } from "./snapshot-debug.js";
 import { retryWithBackoff } from "../../concurrency/retry.js";
 import { GARMIN_DATA_ATTRIBUTION } from "../../agent/garmin-attribution.js";
 
@@ -20,11 +17,7 @@ export interface SendOutcome {
 export interface SendDeps {
   readonly reply: (text: string) => Promise<unknown>;
   readonly replyHtml: (html: string) => Promise<unknown>;
-  readonly sendDocument?: (
-    buffer: Buffer,
-    filename: string,
-    caption: string,
-  ) => Promise<unknown>;
+  readonly sendDocument?: (buffer: Buffer, filename: string, caption?: string) => Promise<unknown>;
   /** Injectable for tests; defaults to a real timeout. */
   readonly sleep?: (ms: number) => Promise<void>;
 }
@@ -48,7 +41,11 @@ export async function sendSnapshotOutput(
   if (output.kind === "document") {
     if (deps.sendDocument !== undefined) {
       try {
-        await deps.sendDocument(output.buffer, output.filename, GARMIN_DATA_ATTRIBUTION);
+        await deps.sendDocument(
+          output.buffer,
+          output.filename,
+          output.provenance?.garmin === true ? GARMIN_DATA_ATTRIBUTION : undefined,
+        );
         return { sent: 1, total: 1, interrupted: false };
       } catch {
         // Fall through to chunked reply with the same retry semantics below.

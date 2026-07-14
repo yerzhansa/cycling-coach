@@ -11,7 +11,6 @@ import { join } from "node:path";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import type { Sport } from "../src/sport.js";
-import { appendGarminAttribution } from "../src/agent/garmin-attribution.js";
 
 // The rate-limit retry cap in coach-agent.ts (a module-local const there).
 const MAX_RATE_LIMIT_ATTEMPTS = 3;
@@ -115,7 +114,7 @@ describe("per-turn outcome line", () => {
     const agent = await setupAgent(complete);
 
     const text = await agent.chat("ok-chat", "hello");
-    expect(text).toBe(appendGarminAttribution("all good"));
+    expect(text).toBe("all good");
 
     const lines = readOutcomeLines();
     expect(lines).toHaveLength(1);
@@ -177,7 +176,7 @@ describe("per-turn outcome line", () => {
     const agent = await setupAgent(complete);
 
     const text = await agent.chat("recover-chat", "hello");
-    expect(text).toBe(appendGarminAttribution("recovered reply"));
+    expect(text).toBe("recovered reply");
 
     const lines = readOutcomeLines();
     expect(lines).toHaveLength(1);
@@ -205,7 +204,7 @@ describe("per-turn outcome line", () => {
 
     const text = await agent.chat("timeout-recover-chat", "hello");
 
-    expect(text).toBe(appendGarminAttribution("recovered timeout reply"));
+    expect(text).toBe("recovered timeout reply");
     expect(mainCalls).toBe(2);
     const lines = readOutcomeLines();
     expect(lines).toHaveLength(1);
@@ -303,7 +302,7 @@ describe("per-turn outcome line", () => {
     const agent = await setupAgent(complete);
 
     await expect(agent.chat("sink-chat", "hello")).resolves.toBe(
-      appendGarminAttribution("all good"),
+      "all good",
     );
   });
 });

@@ -12,7 +12,6 @@ import { join } from "node:path";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import type { Sport } from "../src/sport.js";
-import { appendGarminAttribution } from "../src/agent/garmin-attribution.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -112,16 +111,16 @@ describe("coach-agent deliver-first persistence", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const first = await agent.chat("disk-chat", "hello");
-    expect(first).toBe(appendGarminAttribution("here is your reply") + DISK_FULL_NOTE);
+    expect(first).toBe("here is your reply" + DISK_FULL_NOTE);
 
     const second = await agent.chat("disk-chat", "again");
-    expect(second).toBe(appendGarminAttribution("here is your reply"));
+    expect(second).toBe("here is your reply");
     const attemptedAssistantCores = appendSpy.mock.calls
       .filter((call) => call[1] === "assistant")
       .map((call) => call[2]);
     expect(attemptedAssistantCores).toEqual([
-      appendGarminAttribution("here is your reply"),
-      appendGarminAttribution("here is your reply"),
+      "here is your reply",
+      "here is your reply",
     ]);
     expect(attemptedAssistantCores.every((core) => !core.includes(DISK_FULL_FRAGMENT))).toBe(true);
   });
@@ -138,7 +137,7 @@ describe("coach-agent deliver-first persistence", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const text = await agent.chat("eacces-chat", "hello");
-    expect(text).toBe(appendGarminAttribution("eacces reply"));
+    expect(text).toBe("eacces reply");
     expect(text).not.toContain(DISK_FULL_FRAGMENT);
   });
 
@@ -150,7 +149,7 @@ describe("coach-agent deliver-first persistence", () => {
     resetNotice();
 
     const text = await agent.chat("happy-chat", "hello");
-    expect(text).toBe(appendGarminAttribution("persisted reply"));
+    expect(text).toBe("persisted reply");
     expect(text).not.toContain(DISK_FULL_FRAGMENT);
 
     expect(existsSync(sessionFile("happy-chat"))).toBe(true);
@@ -160,7 +159,7 @@ describe("coach-agent deliver-first persistence", () => {
       .map((line) => JSON.parse(line) as { role: string; content: string });
     expect(lines.some((line) => line.role === "user")).toBe(true);
     expect(lines.filter((line) => line.role === "assistant").map((line) => line.content)).toEqual([
-      appendGarminAttribution("persisted reply"),
+      "persisted reply",
     ]);
   });
 
@@ -210,7 +209,7 @@ describe("coach-agent deliver-first persistence", () => {
     const reply = await agent.chat("reset-chat", "how's my form?");
 
     expect(reply).toBe(
-      `${POST_RESET_NOTICE}\n\n${appendGarminAttribution("here is the answer")}`,
+      `${POST_RESET_NOTICE}\n\n${"here is the answer"}`,
     );
 
     const sawMarker = complete.mock.calls.some((call) => {
@@ -236,7 +235,7 @@ describe("coach-agent deliver-first persistence", () => {
       .map((line) => JSON.parse(line) as { role: string; content: string });
     expect(
       currentLines.filter((line) => line.role === "assistant").map((line) => line.content),
-    ).toEqual([appendGarminAttribution("here is the answer")]);
+    ).toEqual(["here is the answer"]);
     expect(currentSession).not.toContain(POST_RESET_NOTICE);
   });
 });

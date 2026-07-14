@@ -20,11 +20,11 @@ import {
 import { Memory } from "../memory/store.js";
 import { persistCompactionSummary } from "../memory/compaction-note.js";
 import { ChatStore } from "./chat-store.js";
-import { buildSystemPrompt, staticRuleBlocks } from "./system-prompt.js";
+import { buildSystemPrompt, staticRuleBlocks, ATHLETE_CONTEXT_MAX_CHARS } from "./system-prompt.js";
 import { computeAssembledHash, computeTemplateHash, sha256_16 } from "./prompt-lineage.js";
 import { withSessionLock } from "./session-lock.js";
 import { capToolResult, TOOL_RESULT_SHARE } from "./tool-result-cap.js";
-import { markUntrustedResult } from "./prompt-fence.js";
+import { isUntrustedEnvelope, markUntrustedResult } from "./prompt-fence.js";
 import { memoizeReadTool, evictMemoryReadEntries } from "./read-memoizer.js";
 import { splitHistoryByBudget, makeSummaryMessage } from "./history-limit.js";
 import {
@@ -41,7 +41,11 @@ import {
   TIMEOUT_COMPACTION_THRESHOLD,
 } from "./token-utils.js";
 import { summarizeInStages, summarizeDroppedMessages } from "./compaction.js";
-import { runMemoryFlush, FLUSH_ZERO_WRITE_MIN_MESSAGES, shouldRunMemoryFlush } from "./memory-flush.js";
+import {
+  runMemoryFlush,
+  FLUSH_ZERO_WRITE_MIN_MESSAGES,
+  shouldRunMemoryFlush,
+} from "./memory-flush.js";
 import type { MemoryFlushOutcome } from "./memory-flush.js";
 import { evaluateSessionFreshness, shouldDeferDailyReset } from "./session-freshness.js";
 import { LLM } from "../llm.js";
@@ -57,7 +61,16 @@ import {
   createProposalSummarizers,
   gateMutatingTool,
 } from "./confirmation-gate.js";
-import { appendGarminAttribution } from "./garmin-attribution.js";
+import { renderGarminAttribution } from "./garmin-attribution.js";
+import { provenanceFromToolResult, toolResultIsVisibleData } from "./tool-provenance.js";
+import {
+  EMPTY_PROVENANCE,
+  UNKNOWN_PROVENANCE,
+  provenanceOfMessages,
+  setMessageProvenance,
+  unionProvenance,
+  type SourceProvenance,
+} from "../provenance.js";
 
 const MAX_OVERFLOW_ATTEMPTS = 3;
 const MAX_TIMEOUT_ATTEMPTS = 2;
@@ -174,6 +187,15 @@ interface TurnWriteRecord {
   lastWriteSummary?: string;
 }
 
+interface TurnProvenanceRecord {
+  value: SourceProvenance;
+}
+
+interface RecoveredText {
+  text: string;
+  attributionBasis: "attempt" | "prompt" | "none";
+}
+
 function classifyError(err: unknown): string {
   // TurnBudgetExceededError crosses a dynamic-import boundary in tests, so match
   // on the structural name rather than instanceof.
@@ -226,7 +248,6 @@ export class CoachAgent {
   private chatStore: ChatStore;
   private log: SubsystemLogger;
   private tools: ToolSet;
-  private systemPrompt: string;
   private tz: string;
   // Derived once from getEffectiveSections(sport): the spec'd sections with
   // inject === false, dropped from the Athlete Context. Orphan sections are
@@ -251,6 +272,8 @@ export class CoachAgent {
   // inside a fresh map. The wrapped read tools (built once at construction)
   // resolve the running turn's map lazily through this store.
   private readonly readToolCacheStore = new AsyncLocalStorage<Map<string, unknown>>();
+  private readonly turnProvenanceStore = new AsyncLocalStorage<TurnProvenanceRecord>();
+  private readonly referenceProvenanceStore = new AsyncLocalStorage<SourceProvenance>();
   // Resolved primary anchor (running CS) for the in-flight turn. Held in
   // async-context storage rather than a shared instance field so that
   // fire-and-forget turns running concurrently (different chats, or rapid
@@ -307,29 +330,73 @@ export class CoachAgent {
     this.tools = Object.fromEntries(
       registrations.map((r) => [
         r.name,
-        memoizeReadTool(
+        this.observeToolProvenance(
           r.name,
-          capToolResult(
-            markUntrustedResult(
-              this.wrapWriteTool(
-                r.name,
-                gateMutatingTool(
+          memoizeReadTool(
+            r.name,
+            capToolResult(
+              markUntrustedResult(
+                this.wrapWriteTool(
                   r.name,
-                  r.tool,
-                  this.confirmations,
-                  summarizers[r.name],
-                  chatIdResolver,
+                  gateMutatingTool(
+                    r.name,
+                    r.tool,
+                    this.confirmations,
+                    summarizers[r.name],
+                    chatIdResolver,
+                  ),
                 ),
               ),
+              { maxResultTokens },
             ),
-            { maxResultTokens },
+            () => this.readToolCacheStore.getStore(),
           ),
-          () => this.readToolCacheStore.getStore(),
         ),
       ]),
     ) as ToolSet;
-    // systemPrompt is rebuilt at the top of every chat() call; no need to bake one here.
-    this.systemPrompt = "";
+  }
+
+  private observe(provenance: SourceProvenance): void {
+    const record = this.turnProvenanceStore.getStore();
+    if (record !== undefined) record.value = unionProvenance(record.value, provenance);
+  }
+
+  private observeToolProvenance(name: string, tool: Tool): Tool {
+    const inner = tool.execute;
+    if (typeof inner !== "function") return tool;
+    return {
+      ...tool,
+      execute: async (input: unknown, options: unknown) => {
+        const result = await (inner as (i: unknown, o: unknown) => unknown)(input, options);
+        this.observe(provenanceFromToolResult(name, result));
+        if (
+          toolResultIsVisibleData(result) &&
+          (name === "memory_read" || name === "memory_query" || name === "plan_load")
+        ) {
+          this.observe(
+            this.memory.provenanceForToolRead(
+              name,
+              input,
+              isUntrustedEnvelope(result) ? result.data : result,
+            ),
+          );
+        }
+        if (
+          name === "calculate_zones" &&
+          (() => {
+            const visible = isUntrustedEnvelope(result) ? result.data : result;
+            return (
+              visible !== null &&
+              typeof visible === "object" &&
+              (visible as { anchorOrigin?: unknown }).anchorOrigin === "auto-resolved"
+            );
+          })()
+        ) {
+          this.observe(this.referenceProvenanceStore.getStore() ?? EMPTY_PROVENANCE);
+        }
+        return result;
+      },
+    } as Tool;
   }
 
   // Agent-owned wrapper that records a committed tool write the moment its
@@ -345,7 +412,10 @@ export class CoachAgent {
     return {
       ...tool,
       execute: async (input: unknown, options: unknown) => {
-        const result = await (inner as (i: unknown, o: unknown) => unknown)(input, options);
+        const result = await this.memory.runWithWriteProvenance(
+          this.turnProvenanceStore.getStore()?.value ?? UNKNOWN_PROVENANCE,
+          () => (inner as (i: unknown, o: unknown) => unknown)(input, options),
+        );
         const summary = committedWriteSummary(name, result);
         const record = this.turnWritesStore.getStore();
         if (record !== undefined && summary !== undefined) {
@@ -381,10 +451,7 @@ export class CoachAgent {
 
     // Prefer the cache's last successful-sync stamp as the "last synced" anchor;
     // fall back to the failure timestamp when the cache is unavailable.
-    const latest = safeReadJson<LatestJson>(
-      join(referenceDir, "latest.json"),
-      LatestJsonSchema,
-    );
+    const latest = safeReadJson<LatestJson>(join(referenceDir, "latest.json"), LatestJsonSchema);
     const lastSynced = latest?.metadata?.last_updated ?? errorState.ts;
 
     return (
@@ -417,6 +484,8 @@ export class CoachAgent {
           memorySections: getEffectiveSections(this.sport),
           tz: this.tz,
           budget,
+          provenanceForMemoryRead: (visibleResult) =>
+            this.memory.provenanceForToolRead("memory_read", {}, visibleResult),
         });
       } catch (err) {
         lastError = err;
@@ -443,28 +512,33 @@ export class CoachAgent {
   private async recoverStepExhaustedText(
     text: string,
     finishReason: FinishReason,
+    systemPrompt: string,
     messages: ModelMessage[],
     cacheKey: string,
     turnBudget: TurnBudget,
-  ): Promise<string> {
-    if (!isStepExhaustedEmpty(text, finishReason)) return text;
+  ): Promise<RecoveredText> {
+    if (!isStepExhaustedEmpty(text, finishReason)) {
+      return { text, attributionBasis: "attempt" };
+    }
     // Charge OUTSIDE the recovery try/catch: a TurnBudgetExceededError is
     // terminal everywhere else in the turn loop, so it must propagate to the
     // outer terminal-budget handler, not degrade to the static floor.
     turnBudget.chargeModelCall();
     try {
       const recovery = await this.llm.generate({
-        system: this.systemPrompt,
+        system: systemPrompt,
         messages: [...messages, { role: "user", content: RECOVERY_PROMPT }],
         tools: undefined,
         caller: "chat",
         cacheKey,
         deadlineMs: turnBudget.remainingMs(),
       });
-      return recovery.text.trim() !== "" ? recovery.text : STEP_LIMIT_TRUNCATION_MESSAGE;
+      return recovery.text.trim() !== ""
+        ? { text: recovery.text, attributionBasis: "prompt" }
+        : { text: STEP_LIMIT_TRUNCATION_MESSAGE, attributionBasis: "none" };
     } catch (recoveryErr) {
       console.warn("Step-limit recovery completion failed; using truncation floor", recoveryErr);
-      return STEP_LIMIT_TRUNCATION_MESSAGE;
+      return { text: STEP_LIMIT_TRUNCATION_MESSAGE, attributionBasis: "none" };
     }
   }
 
@@ -481,9 +555,9 @@ export class CoachAgent {
     };
   }
 
-  private persistSummaryToDailyNote(summary: string): void {
+  private persistSummaryToDailyNote(summary: string, provenance: SourceProvenance): void {
     try {
-      persistCompactionSummary(this.memory, summary);
+      persistCompactionSummary(this.memory, summary, provenance);
     } catch (err) {
       this.log.warn("Failed to persist compaction summary to daily note", err);
     }
@@ -502,18 +576,20 @@ export class CoachAgent {
   async chat(
     chatId: string,
     userMessage: string,
-    turn?: { resolvedCs?: ResolvedCs | null },
+    turn?: { resolvedCs?: ResolvedCs | null; referenceProvenance?: SourceProvenance },
   ): Promise<string> {
     // Per-turn anchor, read lazily by sport tools through the coreDeps getter.
     // Scoped to this turn's async context (not a shared field) so concurrent
     // fire-and-forget turns never clobber each other's anchor. null when the
     // channel supplies nothing (CLI path, no sync data).
     const resolvedCs = turn?.resolvedCs ?? null;
+    const referenceProvenance = turn?.referenceProvenance ?? EMPTY_PROVENANCE;
     const turnWrites: TurnWriteRecord = { chatId, writesCommitted: 0 };
-    return this.resolvedCsStore.run(resolvedCs, () =>
-      this.readToolCacheStore.run(new Map<string, unknown>(), () =>
-        this.turnWritesStore.run(turnWrites, () =>
-          withSessionLock(chatId, async () => {
+    return this.referenceProvenanceStore.run(referenceProvenance, () =>
+      this.resolvedCsStore.run(resolvedCs, () =>
+        this.readToolCacheStore.run(new Map<string, unknown>(), () =>
+          this.turnWritesStore.run(turnWrites, () =>
+            withSessionLock(chatId, async () => {
       const turnStart = Date.now();
       const turnId = randomUUID();
       let compactions = 0;
@@ -575,20 +651,24 @@ export class CoachAgent {
         }
       }
 
-      this.systemPrompt = buildSystemPrompt(
+      const context = this.memory.getContextWithProvenance({
+        excludeSections: this.excludedSectionNames,
+        maxChars: ATHLETE_CONTEXT_MAX_CHARS,
+      });
+      const systemPrompt = buildSystemPrompt(
         this.sport,
         this.memory,
         this.tz,
         this.buildDegradeBlock(),
-        { excludeSections: this.excludedSectionNames },
+        { excludeSections: this.excludedSectionNames, context: context.text },
       );
 
       const budget = computeHistoryTokenBudget({
         contextWindowTokens: this.config.contextWindowTokens,
-        systemPrompt: this.systemPrompt,
+        systemPrompt,
         budgetRatio: this.config.session.historyTokenBudgetRatio,
       });
-      const { kept, dropped, previousSummary } = splitHistoryByBudget({
+      const { kept, dropped, previousSummary, previousSummaryProvenance } = splitHistoryByBudget({
         messages: history,
         tokenBudget: budget,
       });
@@ -608,14 +688,17 @@ export class CoachAgent {
           }
         }
         try {
-          const { summary, unsummarized } = await summarizeDroppedMessages({
+          const { summary, unsummarized, provenance } = await summarizeDroppedMessages({
             dropped,
             previousSummary,
+            previousSummaryProvenance,
             ...this.compactionParams(turnBudget),
           });
           compactions++;
-          this.persistSummaryToDailyNote(summary);
-          summaryMsg = makeSummaryMessage(summary);
+          const summaryProvenance =
+            provenance ?? unionProvenance(previousSummaryProvenance, provenanceOfMessages(dropped));
+          this.persistSummaryToDailyNote(summary, summaryProvenance);
+          summaryMsg = makeSummaryMessage(summary, summaryProvenance);
           requeued = unsummarized;
           if (flushed) {
             this.chatStore.archivePreCompact(chatId);
@@ -624,11 +707,17 @@ export class CoachAgent {
         } catch (err) {
           this.log.warn("Dropped message summarization failed, continuing without summary", err);
           if (previousSummary) {
-            summaryMsg = makeSummaryMessage(previousSummary);
+            summaryMsg = makeSummaryMessage(
+              previousSummary,
+              previousSummaryProvenance ?? UNKNOWN_PROVENANCE,
+            );
           }
         }
       } else if (previousSummary) {
-        summaryMsg = makeSummaryMessage(previousSummary);
+        summaryMsg = makeSummaryMessage(
+          previousSummary,
+          previousSummaryProvenance ?? UNKNOWN_PROVENANCE,
+        );
       }
 
       if (
@@ -666,13 +755,21 @@ export class CoachAgent {
           : undefined;
 
       // Build messages array with new user message
+      const userTurnMessage = setMessageProvenance(
+        { role: "user", content: userMessageWithTime },
+        UNKNOWN_PROVENANCE,
+      );
       let messages: ModelMessage[] = [
         ...(summaryMsg ? [summaryMsg] : []),
         ...(archiveMarkerMsg ? [archiveMarkerMsg] : []),
         ...requeued,
         ...kept,
-        { role: "user", content: userMessageWithTime },
+        userTurnMessage,
       ];
+
+      const turnProvenance: TurnProvenanceRecord = {
+        value: context.provenance,
+      };
 
       // Make the athlete's message durable BEFORE generation so a process death
       // mid-turn leaves it visible in history instead of erasing it. Deliver-
@@ -691,9 +788,14 @@ export class CoachAgent {
       let serverErrorAttempts = 0;
 
       const compactInTurn = async () => {
-        const compacted = await summarizeInStages({ messages, ...this.compactionParams(turnBudget) });
+        const compacted = await summarizeInStages({
+          messages,
+          ...this.compactionParams(turnBudget),
+        });
         messages = compacted.messages;
-        if (compacted.summary) this.persistSummaryToDailyNote(compacted.summary);
+        if (compacted.summary && compacted.summaryProvenance) {
+          this.persistSummaryToDailyNote(compacted.summary, compacted.summaryProvenance);
+        }
         compactions++;
         this.memory.reload();
         this.usageAnchor.delete(chatId);
@@ -702,6 +804,7 @@ export class CoachAgent {
       // Loop-invariant: the prompt cache key derives only from the chat id.
       const cacheKey = sha256_16(chatId);
 
+      return await this.turnProvenanceStore.run(turnProvenance, async () => {
       try {
         while (true) {
           // Between-attempt budget gates: the attempt charge and the wall-clock
@@ -719,7 +822,7 @@ export class CoachAgent {
           if (
             shouldCompact({
               messages,
-              systemPrompt: this.systemPrompt,
+              systemPrompt,
               contextWindowTokens: this.config.contextWindowTokens,
               lastUsageTokens: anchor?.promptTokens,
               messagesSinceUsageAnchor: anchor ? messages.slice(anchor.messageCount) : undefined,
@@ -738,8 +841,12 @@ export class CoachAgent {
 
           try {
             turnBudget.chargeModelCall();
+            turnProvenance.value = unionProvenance(
+              context.provenance,
+              provenanceOfMessages(messages),
+            );
             const result = await this.llm.generate({
-              system: this.systemPrompt,
+              system: systemPrompt,
               messages,
               tools: this.tools,
               stopWhen: stepCountIs(10),
@@ -774,14 +881,26 @@ export class CoachAgent {
             }
 
             // Recovery runs only on this success path (before the catch below).
-            const effectiveText = await this.recoverStepExhaustedText(
+            const recovered = await this.recoverStepExhaustedText(
               text,
               finishReason,
+              systemPrompt,
               messages,
               cacheKey,
               turnBudget,
             );
-            const attributedText = appendGarminAttribution(effectiveText);
+            if (recovered.attributionBasis === "prompt") {
+              turnProvenance.value = unionProvenance(
+                context.provenance,
+                provenanceOfMessages(messages),
+              );
+            } else if (recovered.attributionBasis === "none") {
+              turnProvenance.value = EMPTY_PROVENANCE;
+            }
+            const attributedText = renderGarminAttribution(
+              recovered.text,
+              turnProvenance.value,
+            );
 
             const templateHash = (this.templateHash ??= computeTemplateHash({
               soul: this.sport.soul,
@@ -790,7 +909,7 @@ export class CoachAgent {
               toolSchemas: this.tools,
               model: this.config.llm.model,
             }));
-            const assembledHash = computeAssembledHash(this.systemPrompt, messages);
+            const assembledHash = computeAssembledHash(systemPrompt, messages);
 
             // The user line was appended before generation; append the assistant
             // reply now. The empty-assistant guard inside appendMessage keeps a
@@ -802,6 +921,7 @@ export class CoachAgent {
                 assembledHash,
                 provider: this.config.llm.provider,
                 model: this.config.llm.model,
+                provenance: turnProvenance.value,
               });
             } catch (persistErr) {
               // Deliver-first: a full disk or permission error must never
@@ -1018,8 +1138,10 @@ export class CoachAgent {
         });
         throw terminalErr;
       }
+      });
       }),
         ),
+      ),
       ),
     );
   }

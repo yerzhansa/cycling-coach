@@ -12,6 +12,13 @@ import {
 import { join } from "node:path";
 import type { ModelMessage } from "ai";
 import { messageText } from "./token-utils.js";
+import {
+  UNKNOWN_PROVENANCE,
+  getMessageProvenance,
+  isSourceProvenance,
+  setMessageProvenance,
+  type SourceProvenance,
+} from "../provenance.js";
 
 const MS_PER_DAY = 86_400_000;
 
@@ -36,6 +43,7 @@ interface JsonlLine {
   assembledHash?: string;
   provider?: string;
   model?: string;
+  provenance?: SourceProvenance;
 }
 
 const VALID_ROLES = new Set(["user", "assistant", "system"]);
@@ -53,6 +61,9 @@ function parseSessionLine(line: string): JsonlLine | null {
   if (typeof v.content !== "string" || typeof v.ts !== "string") return null;
   for (const k of ["templateHash", "assembledHash", "provider", "model"] as const) {
     if (k in v && typeof v[k] !== "string") return null;
+  }
+  if ("provenance" in v && !isSourceProvenance(v.provenance)) {
+    return { ...v, provenance: undefined } as JsonlLine;
   }
   return value as JsonlLine;
 }
@@ -99,12 +110,18 @@ export class ChatStore {
       try {
         this.quarantineCorruptLines(chatId, good, corrupt);
       } catch (err) {
-        console.warn("Failed to quarantine corrupt session lines; continuing with parseable lines", err);
+        console.warn(
+          "Failed to quarantine corrupt session lines; continuing with parseable lines",
+          err,
+        );
       }
     }
 
-    const messages = parsed.map(
-      (p) => ({ role: p.role, content: p.content }) as ModelMessage,
+    const messages = parsed.map((p) =>
+      setMessageProvenance(
+        { role: p.role, content: p.content } as ModelMessage,
+        p.role === "user" ? UNKNOWN_PROVENANCE : (p.provenance ?? UNKNOWN_PROVENANCE),
+      ),
     );
 
     let lastMessageTime: string | null = null;
@@ -122,7 +139,13 @@ export class ChatStore {
     chatId: string,
     role: "user" | "assistant",
     content: string,
-    lineage?: { templateHash: string; assembledHash: string; provider: string; model: string },
+    lineage?: {
+      templateHash: string;
+      assembledHash: string;
+      provider: string;
+      model: string;
+      provenance?: SourceProvenance;
+    },
   ): void {
     // An empty assistant reply pollutes the next turn's loaded history. Skip it
     // and warn — never throw, so a deliver-first turn can't crash on a guarded
@@ -140,7 +163,13 @@ export class ChatStore {
     chatId: string,
     userContent: string,
     assistantContent: string,
-    lineage: { templateHash: string; assembledHash: string; provider: string; model: string },
+    lineage: {
+      templateHash: string;
+      assembledHash: string;
+      provider: string;
+      model: string;
+      provenance?: SourceProvenance;
+    },
   ): void {
     // Keep the atomic pair honest: an empty assistant reply must never persist,
     // and a lone user line with no reply is the same context pollution. Skip the
@@ -152,7 +181,12 @@ export class ChatStore {
     const path = this.filePath(chatId);
     const ts = new Date().toISOString();
     const userLine: JsonlLine = { role: "user", content: userContent, ts };
-    const assistantLine: JsonlLine = { role: "assistant", content: assistantContent, ts, ...lineage };
+    const assistantLine: JsonlLine = {
+      role: "assistant",
+      content: assistantContent,
+      ts,
+      ...lineage,
+    };
     // Both lines in one buffer and one write so the pair lands together or not
     // at all — a partial write can never leave a dangling user line.
     const buffer = JSON.stringify(userLine) + "\n" + JSON.stringify(assistantLine) + "\n";
@@ -169,33 +203,44 @@ export class ChatStore {
     // back from the existing file by (role, content); a summary/system line is a
     // freshly-generated artifact and always gets `now`. Build a per-key queue so
     // duplicate lines each keep their own original stamp in order.
-    const tsByKey = new Map<string, string[]>();
+    const preservedByKey = new Map<string, Array<{ ts: string; provenance?: SourceProvenance }>>();
     if (existsSync(path)) {
       for (const line of readFileSync(path, "utf-8").split("\n")) {
         if (line.trim() === "") continue;
         const entry = parseSessionLine(line);
         if (entry === null || entry.role === "system") continue;
         const key = `${entry.role}\n${entry.content}`;
-        const queue = tsByKey.get(key);
-        if (queue) queue.push(entry.ts);
-        else tsByKey.set(key, [entry.ts]);
+        const queue = preservedByKey.get(key);
+        const preserved = { ts: entry.ts, provenance: entry.provenance };
+        if (queue) queue.push(preserved);
+        else preservedByKey.set(key, [preserved]);
       }
     }
 
-    const content = messages
-      .map((m) => {
-        const role = m.role as JsonlLine["role"];
-        const text = messageText(m);
-        let ts = now;
-        if (role !== "system") {
-          const queue = tsByKey.get(`${role}\n${text}`);
-          const preserved = queue?.shift();
-          if (preserved !== undefined) ts = preserved;
-        }
-        const line: JsonlLine = { role, content: text, ts };
-        return JSON.stringify(line);
-      })
-      .join("\n") + "\n";
+    const content =
+      messages
+        .map((m) => {
+          const role = m.role as JsonlLine["role"];
+          const text = messageText(m);
+          let ts = now;
+          let provenance = getMessageProvenance(m);
+          if (role !== "system") {
+            const queue = preservedByKey.get(`${role}\n${text}`);
+            const preserved = queue?.shift();
+            if (preserved !== undefined) {
+              ts = preserved.ts;
+              provenance = preserved.provenance ?? provenance;
+            }
+          }
+          const line: JsonlLine = {
+            role,
+            content: text,
+            ts,
+            ...(role === "user" ? {} : { provenance }),
+          };
+          return JSON.stringify(line);
+        })
+        .join("\n") + "\n";
     writeFileSync(tmpPath, content, { encoding: "utf-8", mode: 0o600 });
     renameSync(tmpPath, path);
   }
