@@ -13,9 +13,11 @@ export { reportFatal } from "./process-guard.js";
 // ─── Sport contract ───────────────────────────────────────────────────
 export type {
   CoreDeps,
+  DerivedPreserveTokens,
   IntervalsActivityType,
   MemorySectionSpec,
   Person,
+  PreserveTokens,
   Sport,
   SportId,
   SportMemoryShape,

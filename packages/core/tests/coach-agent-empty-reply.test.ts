@@ -163,7 +163,9 @@ describe("coach-agent empty-reply guards", () => {
     expect(mainCalls).toBe(2); // window-exceeded finish forced a retry
     const assistants = assistantLines("window-exceeded-chat");
     expect(assistants).toHaveLength(1);
-    expect(assistants[0].content).toBe("Full recovered answer after compaction.");
+    expect(assistants[0].content).toBe(
+      "Full recovered answer after compaction.",
+    );
     expect(assistants.some((l) => l.content.includes("truncated partial"))).toBe(false);
   });
 

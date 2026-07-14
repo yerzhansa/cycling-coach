@@ -2,6 +2,8 @@
 
 AI cycling coaching agent. Bring your own LLM API key **or sign in with a ChatGPT Plus subscription**, connect [intervals.icu](https://intervals.icu) for real athlete data, chat via Telegram or CLI.
 
+Training data and coaching insights may include data from Garmin devices.
+
 ## Install
 
 Requires [Node.js](https://nodejs.org/) 22+.

@@ -144,6 +144,58 @@ describe("runMemoryFlush outcome detection", () => {
     expect(eventsNamed("memory_flush_zero_writes")).toHaveLength(0);
   });
 
+  it("preserves Garmin provenance when a flush reads and rewrites labeled memory", async () => {
+    const memory = new Memory(dataDir);
+    memory.writeSection("goals", "Garmin-derived goal", "chat-tool", {
+      garmin: true,
+      nonGarmin: false,
+      unknown: false,
+    });
+    const llm = drivenLLM([""], async (tools) => {
+      await tools.memory_read.execute!({}, {} as never);
+      await tools.memory_write.execute!(
+        { section: "goals", content: "Garmin-derived goal" },
+        {} as never,
+      );
+    });
+
+    await runMemoryFlush({
+      llm,
+      messages: TRIVIAL,
+      memory,
+      memorySections: SECTIONS,
+      provenanceForMemoryRead: (visibleResult) =>
+        memory.provenanceForToolRead("memory_read", {}, visibleResult),
+    });
+
+    expect(memory.getContextWithProvenance().provenance.garmin).toBe(true);
+  });
+
+  it("does not infer Garmin provenance when a flush writes without reading it", async () => {
+    const memory = new Memory(dataDir);
+    const llm = drivenLLM([""], async (tools) => {
+      await tools.memory_write.execute!(
+        { section: "goals", content: "GARMIN_CONNECT appears only as text" },
+        {} as never,
+      );
+    });
+
+    await runMemoryFlush({
+      llm,
+      messages: TRIVIAL,
+      memory,
+      memorySections: SECTIONS,
+      provenanceForMemoryRead: (visibleResult) =>
+        memory.provenanceForToolRead("memory_read", {}, visibleResult),
+    });
+
+    expect(memory.getContextWithProvenance().provenance).toEqual({
+      garmin: false,
+      nonGarmin: false,
+      unknown: true,
+    });
+  });
+
   it("warns with char counts only when a section shrinks past the ratio", async () => {
     const body = "hypertension; lisinopril 10mg; ".repeat(20);
     writeFileSync(memoryFile, `## medical-history\n${body}\n`, "utf-8");

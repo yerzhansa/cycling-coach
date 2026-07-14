@@ -65,7 +65,7 @@ export const cyclingSport: Sport = {
   skills: loadSkills(),
   sessionClusterGapMinutes: 30,
   memorySections,
-  mustPreserveTokens: (memory: MemorySnapshot): readonly string[] => {
+  mustPreserveTokens: (memory: MemorySnapshot) => {
     const tokens: string[] = [...CYCLING_VOCABULARY];
     const profile = memory.read("cycling-profile");
     if (profile) {
@@ -76,7 +76,10 @@ export const cyclingSport: Sport = {
       // only — historical FTPs aren't identity-defining and would balloon
       // false-positive surface.
       const match = profile.match(/\bFTP\b[\s:,-]*(\d{2,3})\s*[wW]?\b/);
-      if (match) tokens.push(`FTP ${match[1]}W`);
+      if (match) {
+        tokens.push(`FTP ${match[1]}W`);
+        return { tokens, provenance: memory.provenanceOf("cycling-profile") };
+      }
     }
     return tokens;
   },
@@ -88,7 +91,9 @@ export const cyclingSport: Sport = {
     // intervals Pure-Core, intervals Core-with-sport-config, and the
     // sport-specific cycling tools.
     const toolset = {
-      ...createMemoryTools(deps.memory, sections),
+      ...createMemoryTools(deps.memory, sections, {
+        bindProvenance: deps.bindMemoryToolProvenance,
+      }),
       ...createPureCoreIntervalsTools(deps.intervals, deps.tz),
       ...createCoreToolsWithSportConfig(deps.intervals, cyclingSport.intervalsActivityTypes),
       ...createCyclingTools(deps.intervals, deps.tz),

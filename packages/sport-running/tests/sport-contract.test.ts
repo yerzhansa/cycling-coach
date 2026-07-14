@@ -32,10 +32,12 @@ describe("runningSport contract", () => {
     const fakeMemory = {
       read: (section: string) =>
         section === "running-profile" ? "CS 4.0 m/s, shoes: Nova 12" : "",
+      provenanceOf: () => ({ garmin: false, nonGarmin: false, unknown: true }),
     } as unknown as MemorySnapshot;
     const preserve = runningSport.mustPreserveTokens;
     expect(typeof preserve).toBe("function");
-    const tokens = (preserve as (m: MemorySnapshot) => readonly string[])(fakeMemory);
+    const resolved = (preserve as Exclude<typeof preserve, readonly string[]>)(fakeMemory);
+    const tokens = "tokens" in resolved ? resolved.tokens : resolved;
     expect(tokens).toContain("CS 4.0 m/s");
     expect(tokens).toContain("critical speed");
   });

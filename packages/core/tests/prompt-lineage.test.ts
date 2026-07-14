@@ -20,9 +20,9 @@ const base: PromptLineageInput = {
 };
 
 describe("computePromptLineage", () => {
-  it("pins lineage after adding the confirmation rule block", () => {
+  it("pins lineage after adding the host-owned attribution rule block", () => {
     const lineage = computePromptLineage({ ...base, ruleBlocks: staticRuleBlocks() });
-    expect(lineage.templateHash).toBe("8080d4d48f107c9d");
+    expect(lineage.templateHash).toBe("8e3aa06c5556a89b");
   });
 
   it("is deterministic and produces sha256-16 hashes", () => {

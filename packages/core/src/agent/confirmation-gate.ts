@@ -151,6 +151,7 @@ export function gateMutatingTool(
   gate: ConfirmationGate,
   summarize: ProposalSummarizer | undefined,
   chatId: () => string | undefined,
+  prepareRun?: (run: () => Promise<unknown>) => () => Promise<unknown>,
 ): Tool {
   if (!GATED_TOOL_NAMES.has(name)) return tool;
   const inner = tool.execute;
@@ -164,9 +165,9 @@ export function gateMutatingTool(
       const summarized = await summarize(input);
       if ("block" in summarized) return summarized.block;
       const { summary } = summarized;
-      gate.propose(id, summary, () =>
-        (inner as (input: unknown, options: never) => Promise<unknown>)(input, {} as never),
-      );
+      const run = () =>
+        (inner as (input: unknown, options: never) => Promise<unknown>)(input, {} as never);
+      gate.propose(id, summary, prepareRun?.(run) ?? run);
       return { pendingConfirmation: true, summary };
     },
   } as Tool;

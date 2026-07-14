@@ -2,7 +2,15 @@ import { z } from "zod";
 
 // Bump this only when THIS file's shape changes — never in lockstep with
 // sibling schemas. See CONTRIBUTING.md "Reference schema-version policy."
-export const LATEST_SCHEMA_VERSION = "3";
+export const LATEST_SCHEMA_VERSION = "4";
+
+const SourceProvenanceSchema = z
+  .object({
+    garmin: z.boolean(),
+    nonGarmin: z.boolean(),
+    unknown: z.boolean(),
+  })
+  .strict();
 
 const DerivedMetricsSchema = z
   .object({
@@ -76,6 +84,18 @@ export const LatestJsonSchema = z
     recent_activities: z.array(z.unknown()),
     planned_workouts: z.array(z.unknown()),
     wellness_data: z.unknown(),
+    source_provenance: z
+      .object({
+        athlete_profile: SourceProvenanceSchema,
+        current_status: SourceProvenanceSchema,
+        derived_metrics: SourceProvenanceSchema,
+        recent_activities: SourceProvenanceSchema,
+        planned_workouts: SourceProvenanceSchema,
+        wellness_data: SourceProvenanceSchema,
+      })
+      .strict()
+      .optional()
+      .catch(undefined),
   })
   .strict();
 

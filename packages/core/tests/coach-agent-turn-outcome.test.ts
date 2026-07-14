@@ -301,6 +301,8 @@ describe("per-turn outcome line", () => {
     });
     const agent = await setupAgent(complete);
 
-    await expect(agent.chat("sink-chat", "hello")).resolves.toBe("all good");
+    await expect(agent.chat("sink-chat", "hello")).resolves.toBe(
+      "all good",
+    );
   });
 });

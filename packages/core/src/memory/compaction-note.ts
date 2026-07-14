@@ -1,4 +1,5 @@
 import type { MemoryStore } from "../memory.js";
+import type { SourceProvenance } from "../provenance.js";
 
 export const COMPACTION_SUMMARY_MARKER = "### Compaction summary";
 
@@ -13,7 +14,8 @@ export function formatCompactionNote(summary: string): string {
 export function persistCompactionSummary(
   memory: Pick<MemoryStore, "appendDailyNote">,
   summary: string,
+  provenance?: SourceProvenance,
 ): void {
   if (summary.trim() === "") return;
-  memory.appendDailyNote(formatCompactionNote(summary));
+  memory.appendDailyNote(formatCompactionNote(summary), undefined, provenance);
 }

@@ -1,4 +1,5 @@
 import type { MemorySnapshot, MemoryStore } from "../memory.js";
+import { EMPTY_PROVENANCE } from "../provenance.js";
 
 /**
  * Wraps a MemoryStore in a frozen-at-call-time read-only sectioned view.
@@ -11,6 +12,9 @@ import type { MemorySnapshot, MemoryStore } from "../memory.js";
  */
 export function createMemorySnapshot(store: MemoryStore): MemorySnapshot {
   const sections = parseSectionsFromMarkdown(store.readMemory());
+  const provenanceBySection = new Map(
+    [...sections].map(([name, body]) => [name, store.provenanceForSection(name, body)]),
+  );
   return {
     read(name: string): string | null {
       const body = sections.get(name);
@@ -22,6 +26,9 @@ export function createMemorySnapshot(store: MemoryStore): MemorySnapshot {
     },
     listSections(): readonly string[] {
       return Array.from(sections.keys());
+    },
+    provenanceOf(name: string) {
+      return provenanceBySection.get(name) ?? EMPTY_PROVENANCE;
     },
   };
 }

@@ -10,10 +10,7 @@ import {
   chunkMessagesByMaxTokens,
   computeAdaptiveChunkRatio,
 } from "../src/agent/compaction.js";
-import {
-  makeSummaryMessage,
-  splitHistoryByBudget,
-} from "../src/agent/history-limit.js";
+import { makeSummaryMessage, splitHistoryByBudget } from "../src/agent/history-limit.js";
 import { ChatStore } from "../src/agent/chat-store.js";
 import { createFakeLLM } from "./helpers/fake-llm.js";
 import { CYCLING_VOCABULARY } from "@enduragent/sport-cycling";
@@ -32,6 +29,7 @@ const EMPTY_SNAPSHOT: MemorySnapshot = {
   read: () => null,
   has: () => false,
   listSections: () => [],
+  provenanceOf: () => ({ garmin: false, nonGarmin: false, unknown: false }),
 };
 
 const CONVERSATION: ModelMessage[] = [

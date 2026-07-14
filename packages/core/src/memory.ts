@@ -8,24 +8,28 @@
  */
 
 import type { LedgerEventInput } from "./memory/event-ledger.js";
+import type { SourceProvenance } from "./provenance.js";
 
 /** Who performed a destructive memory write — recorded on every journal line. */
-export type MemoryWriteSource =
-  | "chat-tool"
-  | "flush"
-  | "sport-tool"
-  | "migration"
-  | "unattributed";
+export type MemoryWriteSource = "chat-tool" | "flush" | "sport-tool" | "migration" | "unattributed";
 
 export interface MemoryStore {
   /** Returns full MEMORY.md contents, or "" if absent. */
   readMemory(): string;
 
   /** Replaces the named section's content; appends if section is missing. */
-  writeSection(section: string, content: string, source?: MemoryWriteSource): void;
+  writeSection(
+    section: string,
+    content: string,
+    source?: MemoryWriteSource,
+    provenance?: SourceProvenance,
+  ): void;
 
   /** Returns the named section's body, or null if file or section is absent. */
   readSection(section: string): string | null;
+
+  /** Source labels for the current contents of one durable memory section. */
+  provenanceForSection(section: string, content?: string): SourceProvenance;
 
   /**
    * Renames `from` section to `to`. Lossless:
@@ -55,7 +59,7 @@ export interface MemoryStore {
   readDailyNotes(date?: string): string;
 
   /** Appends a note to today's daily-notes file. */
-  appendDailyNote(note: string, date?: string): void;
+  appendDailyNote(note: string, date?: string, provenance?: SourceProvenance): void;
 
   /**
    * Daily notes for every date in [from, to] (inclusive, YYYY-MM-DD), ascending,
@@ -71,13 +75,21 @@ export interface MemoryStore {
    * Appends one event to the append-only event ledger
    * (`memory/events.jsonl`). Entries are never rewritten or pruned.
    */
-  appendEvent(event: LedgerEventInput): void;
+  appendEvent(event: LedgerEventInput, provenance?: SourceProvenance): void;
 
   /** Persists the active training plan as JSON. */
-  savePlan(plan: unknown, source?: MemoryWriteSource): void;
+  savePlan(plan: unknown, source?: MemoryWriteSource, provenance?: SourceProvenance): void;
 
   /** Loads the active training plan, or null if none. */
   loadPlan(): unknown | null;
+
+  /** Source labels bound to the exact visible result of a synchronous tool read. */
+  provenanceForToolRead?(
+    name: string,
+    input: unknown,
+    visibleResult?: unknown,
+    opts?: { truncated?: boolean },
+  ): SourceProvenance;
 
   /** Sync point invoked after compaction or memory flush. */
   reload(): void;
@@ -101,4 +113,7 @@ export interface MemorySnapshot {
 
   /** All section names visible in this snapshot. */
   listSections(): readonly string[];
+
+  /** Source labels attached to the frozen section contents. */
+  provenanceOf(sectionName: string): SourceProvenance;
 }
