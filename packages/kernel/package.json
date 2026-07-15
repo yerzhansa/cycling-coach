@@ -19,6 +19,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@xmldom/xmldom": "0.9.10",
     "fflate": "0.8.3"
   },
   "devDependencies": {
