@@ -1,6 +1,8 @@
 export type SqlValue = string | number | bigint | Uint8Array | null;
 export type Row = Record<string, SqlValue>;
 
+import type { RepairFixer } from "../ingest/repair/types.js";
+
 /**
  * Low-level async SQL-exec port. The SQLite driver in kernel-node implements it
  * (wrapping the synchronous DatabaseSync in resolved promises, per the
@@ -86,4 +88,28 @@ export interface RawFileRepository {
 
 export interface SourceRecordRepository {
   upsert(row: SourceRecordRow): Promise<void>;
+}
+
+export interface RepairLogInsert {
+  readonly rawSha256: string;
+  readonly sessionKey: string;
+  readonly channel: string;
+  readonly fixer: RepairFixer;
+  readonly changedIndices: unknown;
+  readonly params: unknown;
+}
+
+export interface RepairLogRow {
+  readonly repair_key: string;
+  readonly raw_sha256: string;
+  readonly session_key: string;
+  readonly channel: string;
+  readonly fixer: RepairFixer;
+  readonly changed_count: number;
+  readonly changed_indices_json: string;
+  readonly params_json: string;
+}
+
+export interface RepairLogRepository {
+  insertOrAssertIdentical(input: RepairLogInsert): Promise<void>;
 }

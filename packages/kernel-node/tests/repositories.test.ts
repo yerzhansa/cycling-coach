@@ -68,6 +68,8 @@ function activityRows(rawSha256: string, localDateKey: number): ActivityRows {
     laps: [],
     swimLengths: [],
     streams: [],
+    repairLogs: [],
+    poolSessions: [],
   };
 }
 
@@ -160,7 +162,7 @@ describe("repository ports over real node:sqlite", () => {
       );
     }
 
-    await repo.replaceForRawFile("raw", rows);
+    await repo.replaceForRawFile("raw", rows, async () => {});
 
     const remaining = await store.all("SELECT snapshot_key FROM metric_snapshot ORDER BY snapshot_key");
     expect(remaining.map((row) => row.snapshot_key)).toEqual(["unrelated-date", "unrelated-session"]);
@@ -168,7 +170,7 @@ describe("repository ports over real node:sqlite", () => {
 
   it("invalidates old and incoming date snapshots when an activity date changes", async () => {
     const repo = createActivityRepository(store);
-    await repo.replaceForRawFile("raw", activityRows("raw", 19980101));
+    await repo.replaceForRawFile("raw", activityRows("raw", 19980101), async () => {});
     for (const [key, kind, id] of [
       ["session", "session", "session-raw"],
       ["old-date", "date", "19980101"],
@@ -182,7 +184,7 @@ describe("repository ports over real node:sqlite", () => {
       );
     }
 
-    await repo.replaceForRawFile("raw", activityRows("raw", 19980102));
+    await repo.replaceForRawFile("raw", activityRows("raw", 19980102), async () => {});
 
     const remaining = await store.all("SELECT snapshot_key FROM metric_snapshot ORDER BY snapshot_key");
     expect(remaining.map((row) => row.snapshot_key)).toEqual(["unrelated-date", "unrelated-session"]);

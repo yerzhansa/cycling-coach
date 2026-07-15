@@ -28,9 +28,9 @@ describe("migrator end-to-end over node:sqlite", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("applies 001_init.sql and advances user_version to 1", async () => {
+  it("applies the full migration list and advances user_version to 2", async () => {
     await runMigrations(store, MIGRATIONS);
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 1 });
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 2 });
 
     const tables = await store.all("SELECT name FROM sqlite_master WHERE type='table'");
     const names = new Set(tables.map((r) => r.name as string));
@@ -66,6 +66,15 @@ describe("migrator end-to-end over node:sqlite", () => {
     expect(dump).toContain("# anchor_history");
     expect(dump).toContain("anchor-e2e");
     expect(await dumpStore(store)).toBe(dump);
+  });
+
+  it("upgrades a version-1-on-disk store to version 2", async () => {
+    await runMigrations(store, [MIGRATIONS[0]!]);
+    expect(await store.get("PRAGMA user_version")).toEqual({user_version:1});
+    await runMigrations(store, MIGRATIONS);
+    expect(await store.get("PRAGMA user_version")).toEqual({user_version:2});
+    expect(await store.get("SELECT singleton,ingest_version FROM ingest_metadata")).toEqual({singleton:1,ingest_version:0});
+    expect(await store.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
   it("shares one real transaction for exec + version bump (atomic rollback)", async () => {

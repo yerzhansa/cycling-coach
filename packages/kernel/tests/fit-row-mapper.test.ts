@@ -44,7 +44,7 @@ describe("FIT row mapper",()=>{
     const sessions=[session(0,0,3,{sport:"swimming",subSport:"open_water",trigger:2}),session(1,3,5,{sport:"transition",trigger:2}),session(2,5,9,{sport:"cycling",trigger:2}),session(3,9,11,{sport:"transition",trigger:2}),session(4,11,14,{sport:"running",trigger:0})];
     const times=[0,1,2,3,4,5,6,7,8,9,10,11,12,14];const out=await map(decoded(sessions,times.map((t,i)=>record(i,t))));
     const timeRows=out.activity.streams.filter((s)=>s.channel==="time").sort((a,b)=>out.activity.sessions.findIndex((x)=>x.session_key===a.session_key)-out.activity.sessions.findIndex((x)=>x.session_key===b.session_key));
-    expect(timeRows.map((s)=>s.n)).toEqual([3,2,4,2,3]);expect(out.activity.sessions.filter((s)=>s.is_transition).map((s)=>s.session_seq)).toEqual([1,3]);
+    expect(timeRows.map((s)=>s.n)).toEqual([3,2,4,2,4]);expect(out.activity.sessions.filter((s)=>s.is_transition).map((s)=>s.session_seq)).toEqual([1,3]);
   });
   it("honors source-error precedence and does not sort records",async()=>{
     await expect(map(decoded([], [record(0,NaN)]))).rejects.toMatchObject({code:"missing_session"});
@@ -88,5 +88,34 @@ describe("FIT row mapper",()=>{
     await error(map(decoded([session(0,0,1,{sport:"bad",firstLapIndex:0,numLaps:null})],[])),"invalid_enum");
     await error(map(decoded([session(0,0,1)],[record(0,0,{timestamp:null}),record(1,2)])),"record_time_missing");
     await error(map(decoded([session(0,0,1),session(1,2,3)],[record(0,1.5),record(1,2.5)])),"record_unassigned");
+  });
+  it("derives baseline distances only for eligible pool sessions",async()=>{
+    const poolSession=session(0,1000,1002,{sport:"swimming",subSport:"lap_swimming",totalDistance:100,firstLapIndex:0,numLaps:1});
+    const poolLap=lap(0,{firstLengthIndex:0,numLengths:3,numActiveLengths:2});
+    const out=await map(decoded([poolSession],[],{laps:[poolLap],lengths:[length(0,{lengthType:"active"}),length(1,{lengthType:"idle"}),length(2,{lengthType:"active"})]}));
+    expect(out.activity.sessions[0]!.distance_m).toBe(100);
+    expect(out.activity.swimLengths.map((item)=>item.distance_m)).toEqual([50,0,50]);
+  });
+  it("leaves open-water, generic swimming, and cycling length distances null",async()=>{
+    for(const [sport,subSport] of [["swimming","open_water"],["swimming","generic"],["cycling","generic"]] as const){
+      const source=session(0,1000,1002,{sport,subSport,totalDistance:100,firstLapIndex:0,numLaps:1});
+      const out=await map(decoded([source],[],{laps:[lap(0,{firstLengthIndex:0,numLengths:3,numActiveLengths:2})],lengths:[length(0,{lengthType:"active"}),length(1,{lengthType:"idle"}),length(2,{lengthType:"active"})]}));
+      expect(out.activity.sessions[0]!.distance_m).toBe(100);
+      expect(out.activity.swimLengths.map((item)=>item.distance_m)).toEqual([null,null,null]);
+      expect(out.activity.poolSessions).toEqual([]);
+    }
+  });
+  it("keeps a no-length lap-swim session ineligible",async()=>{
+    const out=await map(decoded([session(0,1000,1002,{sport:"swimming",subSport:"lap_swimming",totalDistance:100,firstLapIndex:null,numLaps:0})],[]));
+    expect(out.activity.sessions[0]!.distance_m).toBe(100);
+    expect(out.activity.swimLengths).toEqual([]);
+    expect(out.activity.poolSessions).toEqual([]);
+  });
+  it("retains original pool inputs for transactional correction and emits no streams or logs for zero records",async()=>{
+    const source=session(0,1000,1002,{sport:"swimming",subSport:"lap_swimming",totalDistance:100,firstLapIndex:0,numLaps:1});
+    const out=await map(decoded([source],[],{laps:[lap(0,{firstLengthIndex:0,numLengths:3,numActiveLengths:2})],lengths:[length(0,{lengthType:"active"}),length(1,{lengthType:"idle"}),length(2,{lengthType:"active"})]}));
+    expect(out.activity.poolSessions).toEqual([{sessionKey:out.activity.sessions[0]!.session_key,sourceSessionDistanceM:100,lengths:out.activity.swimLengths.map((item,index)=>({lengthKey:item.length_key,lengthType:index===1?"idle":"active"}))}]);
+    expect(out.activity.streams).toEqual([]);
+    expect(out.activity.repairLogs).toEqual([]);
   });
 });

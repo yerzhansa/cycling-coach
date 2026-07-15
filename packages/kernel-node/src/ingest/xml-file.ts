@@ -31,6 +31,11 @@ export interface XmlFileQuarantined {
 
 export type XmlFileResult = XmlFileSuccess | XmlFileQuarantined;
 
+export function parseXmlBytes(bytes: Uint8Array, format: "tcx" | "gpx"): XmlParseReport {
+  const text = decode(bytes);
+  return text === null ? invalidUtf8(format) : format === "tcx" ? parseTcx(text) : parseGpx(text);
+}
+
 function invalidUtf8(format: XmlFormat): XmlParseReport & { readonly sessions: readonly []; readonly quarantine: XmlQuarantine } {
   const code: XmlQuarantineCode = "xml.invalid_utf8";
   return {
@@ -65,8 +70,7 @@ export async function parseXmlFile(
   format: "tcx" | "gpx",
   deps: XmlFileDeps,
 ): Promise<XmlFileResult> {
-  const text = decode(bytes);
-  const report = text === null ? invalidUtf8(format) : format === "tcx" ? parseTcx(text) : parseGpx(text);
+  const report = parseXmlBytes(bytes, format);
   if (report.quarantine !== null) {
     const failed = report as XmlParseReport & { readonly sessions: readonly []; readonly quarantine: XmlQuarantine };
     const archive = await deps.archive.quarantine(bytes, format, `${canonicalJson(failed.quarantine)}\n`);

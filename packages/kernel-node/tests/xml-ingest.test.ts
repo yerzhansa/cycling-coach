@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { canonicalJson, type ArchiveManager } from "@enduragent/kernel/archive";
 import { XML_QUARANTINE_CODES, XML_QUARANTINE_MESSAGE, type XmlQuarantineCode } from "@enduragent/kernel/ingest";
-import { parseXmlFile } from "../src/ingest/xml-file.js";
+import { parseXmlBytes, parseXmlFile } from "../src/ingest/xml-file.js";
 
 const encoder = new TextEncoder();
 const digest = "ab".repeat(32);
@@ -61,6 +61,18 @@ async function rejected(raw: string | Uint8Array, format: "tcx" | "gpx" = "tcx")
 }
 
 describe("XML byte ingest", () => {
+  it("shares exact byte/parser results through the pure no-archive seam", async () => {
+    for (const [format, source] of [["tcx", tcx(activity(lap("2000-01-01T00:00:00Z", point("2000-01-01T00:00:00Z"))))], ["gpx", gpx]] as const) {
+      const bytes = encoder.encode(source);
+      const pure = parseXmlBytes(bytes, format);
+      const probe = archiveProbe();
+      const wrapped = await parseXmlFile(bytes, format, { archive: probe.archive });
+      expect(wrapped.report).toEqual(pure);
+      expect(probe.events).toEqual([`write:${format}`]);
+    }
+    const invalid = parseXmlBytes(new Uint8Array([0xff]), "tcx");
+    expect(invalid.quarantine?.code).toBe("xml.invalid_utf8");
+  });
   it("archives valid UTF-8 BOM input before returning candidates", async () => {
     const fixture = new Uint8Array(readFileSync("packages/kernel-node/tests/fixtures/ingest/fallback-cycling.tcx"));
     const bytes = new Uint8Array(fixture.length + 3);

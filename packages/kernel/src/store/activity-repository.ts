@@ -1,17 +1,21 @@
 import { compareUtf8 } from "./derived-key.js";
+import type { RepairFixer } from "../ingest/repair/types.js";
+import type { PoolLengthDistanceInput } from "../ingest/pool-size-rescale.js";
 import type { SqlStore } from "./ports.js";
 
 export interface WorkoutRow { readonly workout_key: string; readonly start_utc: number; readonly tz_offset_s: number | null; readonly name: string | null; readonly notes: string | null; readonly is_multisport: number; readonly dedup_cluster_id: string; }
 export interface SessionRow { readonly session_key: string; readonly workout_key: string; readonly session_seq: number; readonly sport: string; readonly sub_sport: string | null; readonly start_utc: number; readonly tz_offset_s: number | null; readonly local_date_key: number; readonly elapsed_s: number | null; readonly timer_s: number | null; readonly moving_s: number | null; readonly distance_m: number | null; readonly is_transition: number; readonly summary_json: string | null; }
 export interface LapRow { readonly lap_key: string; readonly session_key: string; readonly lap_seq: number; readonly start_utc: number | null; readonly elapsed_s: number | null; readonly timer_s: number | null; readonly distance_m: number | null; readonly summary_json: string | null; }
-export interface SwimLengthRow { readonly length_key: string; readonly lap_key: string; readonly length_seq: number; readonly start_utc: number | null; readonly elapsed_s: number | null; readonly timer_s: number | null; readonly strokes: number | null; readonly stroke_type: string | null; readonly length_type: string | null; }
+export interface SwimLengthRow { readonly length_key: string; readonly lap_key: string; readonly length_seq: number; readonly start_utc: number | null; readonly elapsed_s: number | null; readonly timer_s: number | null; readonly strokes: number | null; readonly stroke_type: string | null; readonly length_type: string | null; readonly distance_m: number | null; }
 export interface StreamRow { readonly stream_key: string; readonly session_key: string; readonly channel: string; readonly encoding: "f64:raw:zdeflate:le"; readonly sample_rate: null; readonly n: number; readonly data: Uint8Array; }
-export interface ActivityRows { readonly workout: WorkoutRow; readonly sessions: readonly SessionRow[]; readonly laps: readonly LapRow[]; readonly swimLengths: readonly SwimLengthRow[]; readonly streams: readonly StreamRow[]; }
-export interface ActivityRepository { replaceForRawFile(rawSha256: string, rows: ActivityRows): Promise<void>; }
+export interface RepairLogFact { readonly sessionKey: string; readonly fixer: RepairFixer; readonly channel: string; readonly changedIndices: readonly number[]; readonly params: Readonly<Record<string, unknown>>; }
+export interface PoolSessionInput { readonly sessionKey: string; readonly sourceSessionDistanceM: number | null; readonly lengths: readonly PoolLengthDistanceInput[]; }
+export interface ActivityRows { readonly workout: WorkoutRow; readonly sessions: readonly SessionRow[]; readonly laps: readonly LapRow[]; readonly swimLengths: readonly SwimLengthRow[]; readonly streams: readonly StreamRow[]; readonly repairLogs: readonly RepairLogFact[]; readonly poolSessions: readonly PoolSessionInput[]; }
+export interface ActivityRepository { replaceForRawFile(rawSha256: string, rows: ActivityRows, afterParentsBeforeStreams: () => Promise<void>): Promise<void>; }
 
 export function createActivityRepository(store: SqlStore): ActivityRepository {
   return {
-    async replaceForRawFile(rawSha256, rows) {
+    async replaceForRawFile(rawSha256, rows, afterParentsBeforeStreams) {
       await store.run(
         `DELETE FROM metric_snapshot
 WHERE (
@@ -47,8 +51,9 @@ WHERE (scope_kind = 'session' AND scope_id = ?)
         await store.run("INSERT INTO lap (lap_key,session_key,lap_seq,start_utc,elapsed_s,timer_s,distance_m,summary_json) VALUES (?,?,?,?,?,?,?,?)", [l.lap_key,l.session_key,l.lap_seq,l.start_utc,l.elapsed_s,l.timer_s,l.distance_m,l.summary_json]);
       }
       for (const l of [...rows.swimLengths].sort((a,b) => compareUtf8(a.lap_key,b.lap_key) || a.length_seq-b.length_seq)) {
-        await store.run("INSERT INTO swim_length (length_key,lap_key,length_seq,start_utc,elapsed_s,timer_s,strokes,stroke_type,length_type) VALUES (?,?,?,?,?,?,?,?,?)", [l.length_key,l.lap_key,l.length_seq,l.start_utc,l.elapsed_s,l.timer_s,l.strokes,l.stroke_type,l.length_type]);
+        await store.run("INSERT INTO swim_length (length_key,lap_key,length_seq,start_utc,elapsed_s,timer_s,strokes,stroke_type,length_type,distance_m) VALUES (?,?,?,?,?,?,?,?,?,?)", [l.length_key,l.lap_key,l.length_seq,l.start_utc,l.elapsed_s,l.timer_s,l.strokes,l.stroke_type,l.length_type,l.distance_m]);
       }
+      await afterParentsBeforeStreams();
       for (const s of [...rows.streams].sort((a,b) => compareUtf8(a.session_key,b.session_key) || compareUtf8(a.channel,b.channel))) {
         await store.run("INSERT INTO stream (stream_key,session_key,channel,encoding,sample_rate,n,data) VALUES (?,?,?,?,?,?,?)", [s.stream_key,s.session_key,s.channel,s.encoding,s.sample_rate,s.n,s.data]);
       }
