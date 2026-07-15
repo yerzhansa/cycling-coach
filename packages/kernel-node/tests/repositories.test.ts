@@ -4,12 +4,14 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createAnchorRepository,
+  createActivityRepository,
   createRawFileRepository,
   createSourceRecordRepository,
   runMigrations,
   type AnchorHistoryRow,
   type MigratorStore,
   type RawFileRow,
+  RawFileInvariantError,
   type SourceRecordRow,
   type SqlStore,
 } from "@enduragent/kernel/store";
@@ -84,7 +86,7 @@ describe("repository ports over real node:sqlite", () => {
     });
   });
 
-  it("upserts raw_file idempotently by sha256", async () => {
+  it("inserts raw_file once and rejects same-address metadata drift", async () => {
     const repo = createRawFileRepository(store);
     const row: RawFileRow = {
       sha256: "abc",
@@ -96,10 +98,33 @@ describe("repository ports over real node:sqlite", () => {
       manufacturer: "garmin",
       product: "edge",
     };
-    await repo.upsert(row);
-    await repo.upsert({ ...row, bytes: 999 });
+    expect(await repo.upsert(row)).toBe(true);
+    expect(await repo.upsert(row)).toBe(false);
+    const changes: readonly [keyof RawFileRow, RawFileRow[keyof RawFileRow]][] = [
+      ["path", "/y.fit"], ["ext", "bin"], ["bytes", 999], ["file_id_serial", 2],
+      ["file_id_time_created_utc", 2000], ["manufacturer", "other"], ["product", "other"],
+    ];
+    for (const [key,value] of changes) {
+      await expect(repo.upsert({...row,[key]:value})).rejects.toBeInstanceOf(RawFileInvariantError);
+    }
     const count = await store.get("SELECT count(*) AS c FROM raw_file");
     expect(count?.c).toBe(1);
+  });
+
+  it("replaces affected activity snapshots and preserves unrelated snapshots", async () => {
+    const repo=createActivityRepository(store);
+    const rows={
+      workout:{workout_key:"wk",start_utc:1000,tz_offset_s:null,name:null,notes:null,is_multisport:0,dedup_cluster_id:"raw"},
+      sessions:[{session_key:"se",workout_key:"wk",session_seq:0,sport:"cycling",sub_sport:null,start_utc:1000,tz_offset_s:null,local_date_key:19980101,elapsed_s:null,timer_s:null,moving_s:null,distance_m:null,is_transition:0,summary_json:null}],
+      laps:[],swimLengths:[],streams:[],
+    } as const;
+    await repo.replaceForRawFile("raw",rows);
+    for(const [key,kind,id] of [["a","session","se"],["b","date","19980101"],["c","session","other"],["d","date","19980102"]] as const) {
+      await store.run("INSERT INTO metric_snapshot (snapshot_key,scope_kind,scope_id,metric_key,value_json,kernel_version,basis_version) VALUES (?,?,?,?,?,?,?)",[key,kind,id,"m","{}","k","b"]);
+    }
+    await repo.replaceForRawFile("raw",rows);
+    const remaining=await store.all("SELECT snapshot_key FROM metric_snapshot ORDER BY snapshot_key");
+    expect(remaining.map((r)=>r.snapshot_key)).toEqual(["c","d"]);
   });
 
   it("upserts source_record idempotently by (source, external_id)", async () => {

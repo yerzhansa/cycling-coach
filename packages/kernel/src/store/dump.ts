@@ -1,6 +1,8 @@
 import { canonicalRowJson } from "./canonical-json.js";
 import type { Row, SqlStore } from "./ports.js";
 
+export const DERIVED_TABLES = ["metric_snapshot", "mean_max_cache", "repair_log", "stream", "swim_length", "lap", "session", "workout"] as const;
+
 /** Every table in 001_init.sql, alphabetical, with its content-derived order key (DDL-SPEC §4/§8). */
 export const DUMP_TABLES: readonly { readonly table: string; readonly orderBy: string }[] = [
   { table: "anchor_history", orderBy: "id" },

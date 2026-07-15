@@ -63,7 +63,10 @@
       "esbuild",
       "msw",
       "protobufjs"
-    ]
+    ],
+    "patchedDependencies": {
+      "fit-file-parser@3.0.2": "patches/fit-file-parser@3.0.2.patch"
+    }
   },
   "license": "MIT",
   "repository": {

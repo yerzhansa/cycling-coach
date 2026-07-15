@@ -1,16 +1,10 @@
-import type {
-  RawFileRepository,
-  RawFileRow,
-  SourceRecordRepository,
-  SourceRecordRow,
-  SqlStore,
-} from "./ports.js";
+import { RawFileInvariantError, type RawFileColumn, type RawFileRepository, type RawFileRow, type SourceRecordRepository, type SourceRecordRow, type SqlStore } from "./ports.js";
 
 export function createRawFileRepository(store: SqlStore): RawFileRepository {
   return {
-    async upsert(row: RawFileRow): Promise<void> {
-      await store.run(
-        "INSERT INTO raw_file (sha256, path, ext, bytes, file_id_serial, file_id_time_created_utc, manufacturer, product) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+    async upsert(row: RawFileRow): Promise<boolean> {
+      const inserted = await store.get(
+        "INSERT INTO raw_file (sha256, path, ext, bytes, file_id_serial, file_id_time_created_utc, manufacturer, product) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING RETURNING sha256",
         [
           row.sha256,
           row.path,
@@ -22,6 +16,24 @@ export function createRawFileRepository(store: SqlStore): RawFileRepository {
           row.product,
         ],
       );
+      const selected = await store.get(
+        "SELECT sha256, path, ext, bytes, file_id_serial, file_id_time_created_utc, manufacturer, product FROM raw_file WHERE sha256=?",
+        [row.sha256],
+      );
+      const columns: readonly RawFileColumn[] = [
+        "sha256",
+        "path",
+        "ext",
+        "bytes",
+        "file_id_serial",
+        "file_id_time_created_utc",
+        "manufacturer",
+        "product",
+      ];
+      if (selected === undefined) throw new RawFileInvariantError(row.sha256, columns);
+      const mismatched = columns.filter((column) => selected[column] !== row[column]);
+      if (mismatched.length > 0) throw new RawFileInvariantError(row.sha256, mismatched);
+      return inserted !== undefined;
     },
   };
 }

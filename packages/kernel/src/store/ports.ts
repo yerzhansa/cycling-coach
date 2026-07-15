@@ -59,8 +59,29 @@ export interface AnchorRepository {
   readCurrent(sport: string, anchorType: string, asOfEpochS: number): Promise<AnchorHistoryRow | undefined>;
 }
 
+export type RawFileColumn =
+  | "sha256"
+  | "path"
+  | "ext"
+  | "bytes"
+  | "file_id_serial"
+  | "file_id_time_created_utc"
+  | "manufacturer"
+  | "product";
+
+export class RawFileInvariantError extends Error {
+  readonly sha256: string;
+  readonly mismatchedColumns: readonly RawFileColumn[];
+  constructor(sha256: string, mismatchedColumns: readonly RawFileColumn[]) {
+    super("raw file invariant mismatch");
+    this.name = "RawFileInvariantError";
+    this.sha256 = sha256;
+    this.mismatchedColumns = [...mismatchedColumns];
+  }
+}
+
 export interface RawFileRepository {
-  upsert(row: RawFileRow): Promise<void>;
+  upsert(row: RawFileRow): Promise<boolean>;
 }
 
 export interface SourceRecordRepository {
