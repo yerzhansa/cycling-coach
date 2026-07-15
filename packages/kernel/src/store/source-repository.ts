@@ -40,9 +40,9 @@ export function createRawFileRepository(store: SqlStore): RawFileRepository {
 
 export function createSourceRecordRepository(store: SqlStore): SourceRecordRepository {
   return {
-    async upsert(row: SourceRecordRow): Promise<void> {
-      await store.run(
-        "INSERT INTO source_record (id, workout_key, session_key, source, external_id, raw_sha256, quality_rank, payload_json) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+    async upsert(row: SourceRecordRow): Promise<boolean> {
+      const inserted = await store.get(
+        "INSERT INTO source_record (id,workout_key,session_key,source,external_id,raw_sha256,quality_rank,payload_json) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING RETURNING id",
         [
           row.id,
           row.workout_key,
@@ -54,6 +54,26 @@ export function createSourceRecordRepository(store: SqlStore): SourceRecordRepos
           row.payload_json,
         ],
       );
+      if (inserted !== undefined) return true;
+      const byId = await store.get(
+        "SELECT id, source, external_id, raw_sha256, quality_rank, payload_json FROM source_record WHERE id = ?",
+        [row.id],
+      );
+      const bySource = await store.get(
+        "SELECT id, source, external_id, raw_sha256, quality_rank, payload_json FROM source_record WHERE source = ? AND external_id = ?",
+        [row.source, row.external_id],
+      );
+      const exact = (selected: typeof byId): boolean => selected !== undefined
+        && selected.id === row.id
+        && selected.source === row.source
+        && selected.external_id === row.external_id
+        && selected.raw_sha256 === row.raw_sha256
+        && selected.quality_rank === row.quality_rank
+        && selected.payload_json === row.payload_json;
+      if (!exact(byId) || !exact(bySource) || byId!.id !== bySource!.id) {
+        throw new Error("source record invariant mismatch");
+      }
+      return false;
     },
   };
 }

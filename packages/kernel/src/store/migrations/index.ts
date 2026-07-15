@@ -1,5 +1,6 @@
 import init001 from "./001_init.sql";
 import sql from "./002_repair_log.sql";
+import dedup003 from "./003_dedup_confirmation.sql";
 
 export interface Migration {
   /** Ascending schema version this migration advances the store to. */
@@ -17,4 +18,5 @@ export interface Migration {
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "001_init", sql: init001 },
   {version:2,name:'002_repair_log',sql},
+  { version: 3, name: "003_dedup_confirmation", sql: dedup003 },
 ];

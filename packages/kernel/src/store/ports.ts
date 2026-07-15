@@ -87,7 +87,22 @@ export interface RawFileRepository {
 }
 
 export interface SourceRecordRepository {
-  upsert(row: SourceRecordRow): Promise<void>;
+  upsert(row: SourceRecordRow): Promise<boolean>;
+}
+
+export interface DedupConfirmationRow {
+  id: string;
+  member_a: string;
+  member_b: string;
+  verdict: "merge" | "distinct";
+  device_id: string;
+  hlc_physical_ms: number;
+  hlc_counter: number;
+}
+
+export interface DedupConfirmationRepository {
+  insertIfAbsent(row: DedupConfirmationRow): Promise<boolean>;
+  readAll(): Promise<readonly DedupConfirmationRow[]>;
 }
 
 export interface RepairLogInsert {

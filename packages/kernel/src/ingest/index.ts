@@ -10,3 +10,8 @@ export * from "./gpx.js";
 export * from "./xml-candidate.js";
 export * from "./quality-rank.js";
 export * from "./canonical-pick.js";
+export * from "./dedup.js";
+export * from "./brick-adjacency.js";
+export * from "./source-ledger.js";
+export * from "./import-report.js";
+export * from "./dedup-rekey.js";

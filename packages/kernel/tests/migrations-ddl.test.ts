@@ -25,7 +25,7 @@ const EXPECTED_TABLES = [
   "field_merge_override_overlay",
   "pool_size_correction_overlay",
 ];
-const EXPECTED_FULL_TABLES = [...EXPECTED_TABLES, "ingest_metadata", "repair_log"];
+const EXPECTED_FULL_TABLES = [...EXPECTED_TABLES, "ingest_metadata", "repair_log", "dedup_confirmation"];
 const MIGRATION_002 = `ALTER TABLE swim_length ADD COLUMN distance_m REAL;
 
 CREATE TABLE ingest_metadata (
@@ -46,6 +46,38 @@ CREATE TABLE repair_log (
   params_json TEXT NOT NULL,
   UNIQUE (raw_sha256, session_key, channel, fixer)
 ) STRICT;
+`;
+const MIGRATION_003 = `CREATE TABLE dedup_confirmation (
+  id TEXT PRIMARY KEY
+    CHECK (
+      length(id) = 26
+      AND id NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*'
+    ),
+  member_a TEXT NOT NULL
+    CHECK (length(member_a) = 64 AND member_a NOT GLOB '*[^0-9a-f]*'),
+  member_b TEXT NOT NULL
+    CHECK (length(member_b) = 64 AND member_b NOT GLOB '*[^0-9a-f]*'),
+  verdict TEXT NOT NULL CHECK (verdict IN ('merge','distinct')),
+  device_id TEXT NOT NULL
+    CHECK (
+      length(device_id) BETWEEN 1 AND 128
+      AND substr(device_id, 1, 1) GLOB '[A-Za-z0-9]'
+      AND device_id NOT GLOB '*[^A-Za-z0-9._:-]*'
+    ),
+  hlc_physical_ms INTEGER NOT NULL,
+  hlc_counter INTEGER NOT NULL,
+  CHECK (member_a < member_b)
+) STRICT;
+
+CREATE INDEX idx_dedup_confirmation_effective
+  ON dedup_confirmation (
+    member_a,
+    member_b,
+    hlc_physical_ms DESC,
+    hlc_counter DESC,
+    device_id DESC,
+    id DESC
+  );
 `;
 
 const EXPECTED_INDEXES = [
@@ -85,6 +117,7 @@ function openMigrated(): DatabaseSync {
 function openFull(): DatabaseSync {
   const next = openMigrated();
   next.exec(MIGRATIONS[1]!.sql);
+  next.exec(MIGRATIONS[2]!.sql);
   return next;
 }
 
@@ -95,7 +128,7 @@ afterEach(() => {
 
 describe("001_init migration", () => {
   it("wires the ordered migration list with real inlined SQL", () => {
-    expect(MIGRATIONS.map(({version,name})=>({version,name}))).toEqual([{version:1,name:"001_init"},{version:2,name:"002_repair_log"}]);
+    expect(MIGRATIONS.map(({version,name})=>({version,name}))).toEqual([{version:1,name:"001_init"},{version:2,name:"002_repair_log"},{version:3,name:"003_dedup_confirmation"}]);
     expect(typeof MIGRATIONS[0].sql).toBe("string");
     expect(MIGRATIONS[0].sql).toContain("CREATE TABLE athlete");
   });
@@ -198,11 +231,33 @@ describe("001_init migration", () => {
     expect(MIGRATIONS[1]!.sql).toBe(MIGRATION_002);
   });
 
-  it("applies 001 then 002 with exactly twenty-two tables and no foreign-key violations", () => {
+  it("preserves the exact migration 003 SQL string", () => {
+    expect(MIGRATIONS[2]!.sql).toBe(MIGRATION_003);
+  });
+
+  it("applies 001 through 003 with exactly twenty-three tables and no foreign-key violations", () => {
     db = openFull();
     const names = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as Array<{name:string}>).map((row)=>row.name).sort();
     expect(names).toEqual([...EXPECTED_FULL_TABLES].sort());
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+
+  it("creates strict append-only confirmation history with canonical ASCII pairs and descending effective index", () => {
+    db = openFull();
+    const tables = db.prepare("PRAGMA table_list").all() as Array<{name:string;strict:number}>;
+    expect(tables.find((row) => row.name === "dedup_confirmation")?.strict).toBe(1);
+    expect(db.prepare("PRAGMA foreign_key_list(dedup_confirmation)").all()).toEqual([]);
+    const a = "a".repeat(64), b = "b".repeat(64), id = "0".repeat(26);
+    db.prepare("INSERT INTO dedup_confirmation VALUES(?,?,?,?,?,?,?)").run(id, a, b, "merge", "device-1", 1, 0);
+    expect(() => db!.prepare("INSERT INTO dedup_confirmation VALUES(?,?,?,?,?,?,?)").run("1".repeat(26), b, a, "merge", "device-1", 1, 0)).toThrow();
+    expect(() => db!.prepare("INSERT INTO dedup_confirmation VALUES(?,?,?,?,?,?,?)").run("2".repeat(26), a, b, "unknown", "device-1", 1, 0)).toThrow();
+    for (const [index, character] of [String.fromCodePoint(0x10000), "\ue000"].entries()) {
+      expect(() => db!.prepare("INSERT INTO dedup_confirmation VALUES(?,?,?,?,?,?,?)").run(`${character}${String(index).repeat(25)}`, a, b, "merge", "device", 1, 0)).toThrow();
+      expect(() => db!.prepare("INSERT INTO dedup_confirmation VALUES(?,?,?,?,?,?,?)").run(String(index + 3).repeat(26), a, b, "merge", `device-${character}`, 1, 0)).toThrow();
+    }
+    const sql = (db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_dedup_confirmation_effective'").get() as {sql:string}).sql;
+    expect(sql).toContain("hlc_physical_ms DESC"); expect(sql).toContain("hlc_counter DESC");
+    expect(sql).toContain("device_id DESC"); expect(sql).toContain("id DESC");
   });
 
   it("adds nullable REAL distance_m to swim_length", () => {

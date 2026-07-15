@@ -81,6 +81,7 @@ export const PURE_AUTHORED_TABLES = [
   "stroke_correction_overlay",
   "field_merge_override_overlay",
   "pool_size_correction_overlay",
+  "dedup_confirmation",
 ] as const;
 
 /** Mixed source|authored tables — ONLY provenance='manual' rows are authored. */

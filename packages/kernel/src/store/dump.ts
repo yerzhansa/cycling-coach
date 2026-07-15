@@ -7,6 +7,7 @@ export const DERIVED_TABLES = ["metric_snapshot", "mean_max_cache", "repair_log"
 export const DUMP_TABLES = [
   { table: "anchor_history", orderBy: "id" },
   { table: "athlete", orderBy: "id" },
+  { table: "dedup_confirmation", orderBy: "id" },
   { table: "field_merge_override_overlay", orderBy: "id" },
   { table: "ingest_metadata", orderBy: "singleton" },
   { table: "intake_flags", orderBy: "id" },

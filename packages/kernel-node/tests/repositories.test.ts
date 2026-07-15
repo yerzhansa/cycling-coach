@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createAnchorRepository,
   createActivityRepository,
+  createDedupConfirmationRepository,
   createRawFileRepository,
   createSourceRecordRepository,
   runMigrations,
@@ -190,21 +191,57 @@ describe("repository ports over real node:sqlite", () => {
     expect(remaining.map((row) => row.snapshot_key)).toEqual(["unrelated-date", "unrelated-session"]);
   });
 
-  it("upserts source_record idempotently by (source, external_id)", async () => {
+  it("[PR05-REPO-001] observes source inserts and rejects both conflict-key mismatches", async () => {
     const repo = createSourceRecordRepository(store);
     const row: SourceRecordRow = {
       id: "sr-1",
       workout_key: null,
       session_key: null,
-      source: "intervals",
+      source: "intervals-icu",
       external_id: "ext-1",
       raw_sha256: null,
-      quality_rank: 1,
+      quality_rank: 300,
       payload_json: "{}",
     };
-    await repo.upsert(row);
-    await repo.upsert({ ...row, id: "sr-2", quality_rank: 5 });
+    expect(await repo.upsert(row)).toBe(true);
+    expect(await repo.upsert(row)).toBe(false);
+    await expect(repo.upsert({ ...row, id: "sr-2" })).rejects.toThrow("source record invariant mismatch");
+    await expect(repo.upsert({ ...row, source: "other", external_id: "other" })).rejects.toThrow("source record invariant mismatch");
     const count = await store.get("SELECT count(*) AS c FROM source_record");
     expect(count?.c).toBe(1);
+  });
+
+  it("[PR05-REPO-002] excludes mutable source attachments from immutable equality", async () => {
+    const repo = createSourceRecordRepository(store);
+    const row: SourceRecordRow = { id: "sr-1", workout_key: null, session_key: null, source: "intervals-icu",
+      external_id: "ext-1", raw_sha256: null, quality_rank: 300, payload_json: "{}" };
+    expect(await repo.upsert(row)).toBe(true);
+    await store.run("UPDATE source_record SET workout_key='w',session_key='s' WHERE id='sr-1'");
+    expect(await repo.upsert(row)).toBe(false);
+    await expect(repo.upsert({ ...row, payload_json: '{"changed":true}' })).rejects.toThrow();
+  });
+
+  it("[PR05-REPO-003] appends confirmations and reads effective tuple order", async () => {
+    const repo = createDedupConfirmationRepository(store), a = "a".repeat(64), b = "b".repeat(64);
+    const older = { id: "0".repeat(26), member_a: a, member_b: b, verdict: "merge" as const, device_id: "a", hlc_physical_ms: 1, hlc_counter: 0 };
+    const newer = { ...older, id: "1".repeat(26), verdict: "distinct" as const, device_id: "b", hlc_counter: 1 };
+    expect(await repo.insertIfAbsent(older)).toBe(true); expect(await repo.insertIfAbsent(older)).toBe(false);
+    expect(await repo.insertIfAbsent(newer)).toBe(true);
+    expect((await repo.readAll()).map((row) => row.id)).toEqual([newer.id, older.id]);
+  });
+
+  it("[PR05-REPO-004] rejects Unicode tie breakers in repository and real DDL", async () => {
+    const repo = createDedupConfirmationRepository(store), a = "a".repeat(64), b = "b".repeat(64);
+    for (const character of [String.fromCodePoint(0x10000), "\ue000"]) {
+      await expect(repo.insertIfAbsent({ id: `${character}${"0".repeat(25)}`, member_a: a, member_b: b,
+        verdict: "merge", device_id: "d", hlc_physical_ms: 1, hlc_counter: 0 })).rejects.toThrow();
+      await expect(repo.insertIfAbsent({ id: "2".repeat(26), member_a: a, member_b: b,
+        verdict: "merge", device_id: `d${character}`, hlc_physical_ms: 1, hlc_counter: 0 })).rejects.toThrow();
+      await expect(store.run("INSERT INTO dedup_confirmation VALUES(?,?,?,?,?,?,?)", [`${character}${"3".repeat(25)}`, a, b, "merge", "d", 1, 0])).rejects.toThrow();
+      await expect(store.run("INSERT INTO dedup_confirmation VALUES(?,?,?,?,?,?,?)", ["3".repeat(26), a, b, "merge", `d${character}`, 1, 0])).rejects.toThrow();
+    }
+    await repo.insertIfAbsent({ id: "4".repeat(26), member_a: a, member_b: b, verdict: "merge", device_id: "a", hlc_physical_ms: 1, hlc_counter: 0 });
+    await repo.insertIfAbsent({ id: "5".repeat(26), member_a: a, member_b: b, verdict: "merge", device_id: "z", hlc_physical_ms: 1, hlc_counter: 0 });
+    expect((await repo.readAll()).slice(0, 2).map((row) => row.device_id)).toEqual(["z", "a"]);
   });
 });
