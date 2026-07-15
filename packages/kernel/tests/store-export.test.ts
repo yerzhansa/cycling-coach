@@ -161,7 +161,7 @@ function makePresence(missingAddresses: readonly string[] = []): ArchivePresence
 }
 
 describe("store export op", () => {
-  it("(enumerate) exports exactly the 11 authored keys with correct manualOnly flags and no source/derived tables", async () => {
+  it("(enumerate) exports exactly the 12 authored keys with correct manualOnly flags and no source/derived tables", async () => {
     const data = populated();
     const { source, calls } = makeSource(data);
     const crypto = new FakeCrypto();
@@ -187,7 +187,7 @@ describe("store export op", () => {
     }
   });
 
-  it("(roundtrip-plain) plaintext round-trip restores all 11 tables", async () => {
+  it("(roundtrip-plain) plaintext round-trip restores all 12 tables", async () => {
     const data = populated();
     const { source } = makeSource(data);
     const crypto = new FakeCrypto();
@@ -200,7 +200,8 @@ describe("store export op", () => {
       { sink, presence: makePresence(), crypto, codec, targetUserVersion: 5 },
       { container: built.container },
     );
-    expect(imported.restored).toHaveLength(11);
+    expect(imported.restored).toHaveLength(12);
+    expect(imported.restored.find((row) => row.table === "dedup_confirmation")?.inserted).toBe(2);
     for (const t of PURE_AUTHORED_TABLES) {
       expect(imported.restored.find((r) => r.table === t)?.inserted).toBe(2);
     }
@@ -233,7 +234,8 @@ describe("store export op", () => {
       { sink, presence: makePresence(), crypto, codec, targetUserVersion: 5 },
       { container: built.container, passphrase: "correct horse" },
     );
-    expect(imported.restored).toHaveLength(11);
+    expect(imported.restored).toHaveLength(12);
+    expect(imported.restored.find((row) => row.table === "dedup_confirmation")?.inserted).toBe(2);
   });
 
   it("(missing-passphrase) encrypted container with no passphrase rejects", async () => {
@@ -297,7 +299,7 @@ describe("store export op", () => {
         { sink: makeSink(), presence: makePresence(), crypto, codec, targetUserVersion: 5 },
         { container: built.container },
       );
-      expect(imported.restored).toHaveLength(11);
+      expect(imported.restored).toHaveLength(12);
     }
   });
 

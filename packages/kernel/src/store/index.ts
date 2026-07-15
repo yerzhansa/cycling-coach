@@ -5,5 +5,6 @@ export * from "./dump.js";
 export * from "./anchor-repository.js";
 export * from "./source-repository.js";
 export * from "./repair-log-repository.js";
+export * from "./dedup-confirmation-repository.js";
 export * from "./activity-repository.js";
 export * from "./derived-key.js";

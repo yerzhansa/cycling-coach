@@ -1,8 +1,14 @@
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { canonicalJson, type ArchiveManager } from "@enduragent/kernel/archive";
 import { XML_QUARANTINE_CODES, XML_QUARANTINE_MESSAGE, type XmlQuarantineCode } from "@enduragent/kernel/ingest";
-import { parseXmlBytes, parseXmlFile } from "../src/ingest/xml-file.js";
+import { parseXmlBytes, parseXmlFile, prepareXmlFile } from "../src/ingest/xml-file.js";
+import type { CryptoPort } from "@enduragent/kernel/ports";
+
+const crypto: CryptoPort = { async sha256(data) { return new Uint8Array(createHash("sha256").update(data).digest()); },
+  async randomBytes() { throw new Error("unused"); }, async pbkdf2() { throw new Error("unused"); },
+  async aesGcmEncrypt() { throw new Error("unused"); }, async aesGcmDecrypt() { throw new Error("unused"); } };
 
 const encoder = new TextEncoder();
 const digest = "ab".repeat(32);
@@ -27,11 +33,12 @@ function archiveProbe(options: { writeFailure?: boolean; quarantineFailure?: boo
   const instants: number[] = [];
   let firstReason: string | null = null;
   const archive: ArchiveManager = {
-    async writeArtifact(_bytes, ext, when) {
+    async writeArtifact(bytes, ext, when) {
       events.push(`write:${ext}`);
       instants.push(when.epochSeconds);
       if (options.writeFailure) throw new Error("write failed");
-      return { address: digest, relPath: `2000/01/${digest}.${ext}`, deduped: false };
+      const address = createHash("sha256").update(bytes).digest("hex");
+      return { address, relPath: `2000/01/${address}.${ext}`, deduped: false };
     },
     async quarantine(_bytes, ext, reason) {
       events.push(`quarantine:${ext}`);
@@ -51,7 +58,7 @@ function archiveProbe(options: { writeFailure?: boolean; quarantineFailure?: boo
 async function rejected(raw: string | Uint8Array, format: "tcx" | "gpx" = "tcx") {
   const probe = archiveProbe();
   const bytes = typeof raw === "string" ? encoder.encode(raw) : raw;
-  const result = await parseXmlFile(bytes, format, { archive: probe.archive });
+  const result = await parseXmlFile(bytes, format, { archive: probe.archive, crypto });
   expect(result.status).toBe("quarantined");
   if (result.status !== "quarantined") throw new Error("expected quarantine");
   expect(result.candidates).toEqual([]);
@@ -61,12 +68,20 @@ async function rejected(raw: string | Uint8Array, format: "tcx" | "gpx" = "tcx")
 }
 
 describe("XML byte ingest", () => {
+  it("prepares without archive or SQL effects and the wrapper archives once", async () => {
+    const bytes = encoder.encode(tcx(activity(lap("2000-01-01T00:00:00Z", point("2000-01-01T00:00:00Z")))));
+    const probe = archiveProbe();
+    await expect(prepareXmlFile(bytes, "tcx", { crypto })).resolves.toMatchObject({ outcome: "prepared" });
+    expect(probe.events).toEqual([]);
+    await expect(parseXmlFile(bytes, "tcx", { archive: probe.archive, crypto })).resolves.toMatchObject({ status: "parsed" });
+    expect(probe.events).toEqual(["write:tcx"]);
+  });
   it("shares exact byte/parser results through the pure no-archive seam", async () => {
     for (const [format, source] of [["tcx", tcx(activity(lap("2000-01-01T00:00:00Z", point("2000-01-01T00:00:00Z"))))], ["gpx", gpx]] as const) {
       const bytes = encoder.encode(source);
       const pure = parseXmlBytes(bytes, format);
       const probe = archiveProbe();
-      const wrapped = await parseXmlFile(bytes, format, { archive: probe.archive });
+      const wrapped = await parseXmlFile(bytes, format, { archive: probe.archive, crypto });
       expect(wrapped.report).toEqual(pure);
       expect(probe.events).toEqual([`write:${format}`]);
     }
@@ -79,11 +94,12 @@ describe("XML byte ingest", () => {
     bytes.set([0xef, 0xbb, 0xbf]);
     bytes.set(fixture, 3);
     const probe = archiveProbe();
-    const result = await parseXmlFile(bytes, "tcx", { archive: probe.archive });
+    const result = await parseXmlFile(bytes, "tcx", { archive: probe.archive, crypto });
     expect(result.status).toBe("parsed");
     expect(probe.events).toEqual(["write:tcx"]);
     expect(probe.instants).toEqual([899553600]);
-    if (result.status === "parsed") expect(result.candidates[0]).toMatchObject({ id: `tcx:${digest}:0:0`, rank: 200 });
+    const expectedDigest = createHash("sha256").update(bytes).digest("hex");
+    if (result.status === "parsed") expect(result.candidates[0]).toMatchObject({ id: `tcx:${expectedDigest}:0:0`, rank: 200 });
   });
 
   it("rejects malformed UTF-8 and every UTF-16/32 signature", async () => {
@@ -102,7 +118,7 @@ describe("XML byte ingest", () => {
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
     ]) {
       const probe = archiveProbe();
-      await expect(parseXmlFile(encoder.encode(declaration + validBody), "tcx", { archive: probe.archive })).resolves.toMatchObject({ status: "parsed" });
+      await expect(parseXmlFile(encoder.encode(declaration + validBody), "tcx", { archive: probe.archive, crypto })).resolves.toMatchObject({ status: "parsed" });
     }
     expect((await rejected('<?xml version="1.0" encoding="UTF-16"?>' + validBody)).code).toBe("xml.invalid_utf8");
     expect((await rejected("<?xml?>" + validBody)).code).toBe("xml.parse");
@@ -159,8 +175,8 @@ describe("XML byte ingest", () => {
     const unique = "UNIQUE_BAD_TOKEN_839201";
     const raw = tcx(activity(lap("2000-01-01T00:00:00Z", point("2000-01-01T00:00:00Z", `<Position><LatitudeDegrees>${unique}</LatitudeDegrees><LongitudeDegrees>-127.123456</LongitudeDegrees></Position>`))));
     const probe = archiveProbe();
-    const first = await parseXmlFile(encoder.encode(raw), "tcx", { archive: probe.archive });
-    await parseXmlFile(encoder.encode(raw.replace(unique, "OTHER_BAD_TOKEN")), "tcx", { archive: probe.archive });
+    const first = await parseXmlFile(encoder.encode(raw), "tcx", { archive: probe.archive, crypto });
+    await parseXmlFile(encoder.encode(raw.replace(unique, "OTHER_BAD_TOKEN")), "tcx", { archive: probe.archive, crypto });
     expect(first.status).toBe("quarantined");
     expect(probe.reasons).toHaveLength(2);
     expect(probe.reasons[1]).toBe(probe.reasons[0]);
@@ -171,11 +187,11 @@ describe("XML byte ingest", () => {
 
   it("propagates archive failures and dispatches only by the supplied format", async () => {
     const validTcx = tcx(activity(lap("2000-01-01T00:00:00Z", point("2000-01-01T00:00:00Z"))));
-    await expect(parseXmlFile(encoder.encode(validTcx), "tcx", { archive: archiveProbe({ writeFailure: true }).archive })).rejects.toThrow("write failed");
-    await expect(parseXmlFile(encoder.encode("<bad>"), "tcx", { archive: archiveProbe({ quarantineFailure: true }).archive })).rejects.toThrow("quarantine failed");
+    await expect(parseXmlFile(encoder.encode(validTcx), "tcx", { archive: archiveProbe({ writeFailure: true }).archive, crypto })).rejects.toThrow("write failed");
+    await expect(parseXmlFile(encoder.encode("<bad>"), "tcx", { archive: archiveProbe({ quarantineFailure: true }).archive, crypto })).rejects.toThrow("quarantine failed");
     expect((await rejected(gpx, "tcx")).code).toBe("xml.namespace");
     const probe = archiveProbe();
-    const result = await parseXmlFile(encoder.encode(gpx), "gpx", { archive: probe.archive });
+    const result = await parseXmlFile(encoder.encode(gpx), "gpx", { archive: probe.archive, crypto });
     expect(result.status).toBe("parsed");
     expect(probe.instants).toEqual([946684800]);
   });
@@ -187,7 +203,7 @@ describe("XML byte ingest", () => {
     const earliest = activity(lap("1999-01-01T00:00:00Z", point("1999-01-01T00:00:00Z")));
     const activities = later + earliest + later.repeat(2_046);
     const probe = archiveProbe();
-    const result = await parseXmlFile(encoder.encode(tcx(activities)), "tcx", { archive: probe.archive });
+    const result = await parseXmlFile(encoder.encode(tcx(activities)), "tcx", { archive: probe.archive, crypto });
     expect(result.status).toBe("parsed");
     if (result.status !== "parsed") throw new Error("expected parse");
     expect(result.report.sessions).toHaveLength(2_048);

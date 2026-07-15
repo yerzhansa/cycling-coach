@@ -1,0 +1,180 @@
+import { sortKeys } from "../store/canonical-json.js";
+import type { SourceRecordRow } from "../store/ports.js";
+import type { Candidate, ConcernValue } from "./canonical-pick.js";
+import { QUALITY_RANK, assertQualityRank } from "./quality-rank.js";
+import type { DedupCandidateSummary } from "./dedup.js";
+
+export interface PlatformDedupInput {
+  readonly sport_family: string;
+  readonly is_transition: boolean;
+  readonly start_utc: number;
+  readonly duration_s: number;
+  readonly distance_m: number | null;
+}
+
+export interface PlatformImportArtifact {
+  readonly source: "intervals-icu";
+  readonly activity_id: string | number;
+  readonly activity: Readonly<Record<string, unknown>>;
+  readonly dedup: PlatformDedupInput;
+  readonly concerns: Readonly<Record<string, ConcernValue>>;
+  readonly raw_snapshot_address: string | null;
+  readonly raw_snapshot_rel_path: string | null;
+}
+
+export interface PlatformPresentation {
+  readonly row: SourceRecordRow;
+  readonly candidate: Candidate;
+  readonly summary: DedupCandidateSummary;
+}
+
+export type HashKey = (fields: readonly (string | number)[]) => Promise<string>;
+
+function canonical(value: unknown): string { return JSON.stringify(sortKeys(value)); }
+
+function externalId(value: unknown): string {
+  if (typeof value === "string") {
+    if (value.length === 0) throw new TypeError("platform activity id is empty");
+    return value;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value) || !Number.isSafeInteger(value) || Object.is(value, -0)) {
+    throw new TypeError("platform activity id is invalid");
+  }
+  return String(value);
+}
+
+function finiteNonnegative(value: unknown, name: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || Object.is(value, -0)) {
+    throw new TypeError(`platform ${name} is invalid`);
+  }
+  return value;
+}
+
+function validateInput(platform: PlatformImportArtifact): void {
+  if (platform.source !== "intervals-icu") throw new TypeError("unsupported platform source");
+  externalId(platform.activity_id);
+  if (platform.activity === null || typeof platform.activity !== "object" || Array.isArray(platform.activity)) {
+    throw new TypeError("platform activity is invalid");
+  }
+  if (typeof platform.dedup.sport_family !== "string" || platform.dedup.sport_family.length === 0
+      || typeof platform.dedup.is_transition !== "boolean") throw new TypeError("platform dedup shape is invalid");
+  finiteNonnegative(platform.dedup.start_utc, "start");
+  finiteNonnegative(platform.dedup.duration_s, "duration");
+  if (platform.dedup.distance_m !== null) finiteNonnegative(platform.dedup.distance_m, "distance");
+  if ((platform.raw_snapshot_address === null) !== (platform.raw_snapshot_rel_path === null)) {
+    throw new TypeError("platform snapshot identity is incomplete");
+  }
+  if (platform.raw_snapshot_address !== null && !/^[0-9a-f]{64}$/.test(platform.raw_snapshot_address)) {
+    throw new TypeError("platform snapshot address is invalid");
+  }
+  const concerns = platform.concerns;
+  if (concerns["session.sport"] !== platform.dedup.sport_family
+      || concerns["session.start_utc"] !== platform.dedup.start_utc
+      || concerns["session.elapsed_s"] !== platform.dedup.duration_s
+      || concerns["session.is_transition"] !== platform.dedup.is_transition) {
+    throw new TypeError("platform concerns disagree with dedup input");
+  }
+  if (!Object.hasOwn(concerns, "session.local_date_key") || !Object.hasOwn(concerns, "stream:time")) {
+    throw new TypeError("platform concerns are incomplete");
+  }
+  if (Object.hasOwn(concerns, "session.distance_m")) {
+    if (concerns["session.distance_m"] !== platform.dedup.distance_m) throw new TypeError("platform distance mismatch");
+  } else if (platform.dedup.distance_m !== null) throw new TypeError("platform distance concern is missing");
+  if (concerns["session.summary_json"] !== canonical(platform.activity)) throw new TypeError("platform summary is not canonical");
+}
+
+function payload(platform: PlatformImportArtifact): string {
+  return canonical({
+    activity: platform.activity,
+    concerns: platform.concerns,
+    dedup: {
+      distance_m: platform.dedup.distance_m,
+      duration_s: platform.dedup.duration_s,
+      is_transition: platform.dedup.is_transition,
+      sport_family: platform.dedup.sport_family,
+      start_utc: platform.dedup.start_utc,
+    },
+  });
+}
+
+export async function buildPlatformPresentation(platform: PlatformImportArtifact, hashKey: HashKey): Promise<PlatformPresentation> {
+  validateInput(platform);
+  const idValue = externalId(platform.activity_id);
+  const id = await hashKey(["source_record", "intervals-icu", idValue]);
+  if (!/^[0-9a-f]{64}$/.test(id)) throw new TypeError("source record key is invalid");
+  const quality = assertQualityRank(QUALITY_RANK.PLATFORM_API);
+  const row: SourceRecordRow = {
+    id,
+    workout_key: null,
+    session_key: null,
+    source: "intervals-icu",
+    external_id: idValue,
+    raw_sha256: platform.raw_snapshot_address,
+    quality_rank: quality,
+    payload_json: payload(platform),
+  };
+  const candidate: Candidate = {
+    id: `platform_api:${id}:0:0`,
+    origin: { kind: "platform", source: "intervals-icu", sourceRecordId: id, persistedQualityRank: row.quality_rank },
+    workoutOrdinal: 0,
+    sessionOrdinal: 0,
+    rank: assertQualityRank(row.quality_rank),
+    concerns: platform.concerns,
+  };
+  if (candidate.origin.kind !== "platform" || candidate.origin.persistedQualityRank !== QUALITY_RANK.PLATFORM_API
+      || candidate.rank !== QUALITY_RANK.PLATFORM_API) throw new Error("platform quality invariant mismatch");
+  const summary: DedupCandidateSummary = {
+    candidate_id: candidate.id,
+    member_id: id,
+    source_kind: "platform_api",
+    source_session_seq: 0,
+    sport_family: platform.dedup.sport_family,
+    is_transition: platform.dedup.is_transition,
+    start_utc: platform.dedup.start_utc,
+    duration_s: platform.dedup.duration_s,
+    distance_m: platform.dedup.distance_m,
+    file_id_manufacturer: null,
+    file_id_serial: null,
+    file_id_time_created_utc: null,
+  };
+  return { row, candidate, summary };
+}
+
+function parseEnvelope(value: string): { activity: Readonly<Record<string, unknown>>; concerns: Readonly<Record<string, ConcernValue>>; dedup: PlatformDedupInput } {
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); } catch { throw new Error("source record payload is invalid"); }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)
+      || Object.keys(parsed).join(",") !== "activity,concerns,dedup") throw new Error("source record envelope is invalid");
+  const envelope = parsed as Record<string, unknown>;
+  if (envelope.activity === null || typeof envelope.activity !== "object" || Array.isArray(envelope.activity)
+      || envelope.concerns === null || typeof envelope.concerns !== "object" || Array.isArray(envelope.concerns)
+      || envelope.dedup === null || typeof envelope.dedup !== "object" || Array.isArray(envelope.dedup)) {
+    throw new Error("source record envelope is invalid");
+  }
+  const dedup = envelope.dedup as Record<string, unknown>;
+  if (Object.keys(dedup).join(",") !== "distance_m,duration_s,is_transition,sport_family,start_utc") {
+    throw new Error("source record dedup envelope is invalid");
+  }
+  return { activity: envelope.activity as Readonly<Record<string, unknown>>,
+    concerns: envelope.concerns as Readonly<Record<string, ConcernValue>>, dedup: dedup as unknown as PlatformDedupInput };
+}
+
+export async function replayPlatformPresentation(row: SourceRecordRow, hashKey: HashKey): Promise<PlatformPresentation> {
+  if (row.source !== "intervals-icu" || row.quality_rank !== QUALITY_RANK.PLATFORM_API) throw new Error("unsupported source record");
+  const envelope = parseEnvelope(row.payload_json);
+  const platform: PlatformImportArtifact = {
+    source: "intervals-icu",
+    activity_id: row.external_id,
+    activity: envelope.activity,
+    concerns: envelope.concerns,
+    dedup: envelope.dedup,
+    raw_snapshot_address: row.raw_sha256,
+    raw_snapshot_rel_path: row.raw_sha256 === null ? null : "persisted",
+  };
+  const rebuilt = await buildPlatformPresentation(platform, hashKey);
+  if (rebuilt.row.id !== row.id || rebuilt.row.source !== row.source || rebuilt.row.external_id !== row.external_id
+      || rebuilt.row.raw_sha256 !== row.raw_sha256 || rebuilt.row.quality_rank !== row.quality_rank
+      || rebuilt.row.payload_json !== row.payload_json) throw new Error("source record immutable mismatch");
+  return { row: { ...rebuilt.row, workout_key: row.workout_key, session_key: row.session_key },
+    candidate: rebuilt.candidate, summary: rebuilt.summary };
+}

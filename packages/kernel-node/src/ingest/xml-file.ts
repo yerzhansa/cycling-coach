@@ -1,4 +1,4 @@
-import { canonicalJson, type ArchiveManager, type ArchiveWriteResult } from "@enduragent/kernel/archive";
+import { canonicalJson, toHex, type ArchiveManager, type ArchiveWriteResult } from "@enduragent/kernel/archive";
 import {
   XML_QUARANTINE_MESSAGE,
   parseGpx,
@@ -9,10 +9,15 @@ import {
   type XmlParseReport,
   type XmlQuarantine,
   type XmlQuarantineCode,
+  type PrepareFileResult,
+  type PreparedFile,
+  type DedupCandidateSummary,
 } from "@enduragent/kernel/ingest";
+import type { CryptoPort } from "@enduragent/kernel/ports";
 
 export interface XmlFileDeps {
   readonly archive: ArchiveManager;
+  readonly crypto: CryptoPort;
 }
 
 export interface XmlFileSuccess {
@@ -30,6 +35,8 @@ export interface XmlFileQuarantined {
 }
 
 export type XmlFileResult = XmlFileSuccess | XmlFileQuarantined;
+
+const preparedReports = new WeakMap<object, XmlParseReport>();
 
 export function parseXmlBytes(bytes: Uint8Array, format: "tcx" | "gpx"): XmlParseReport {
   const text = decode(bytes);
@@ -70,19 +77,69 @@ export async function parseXmlFile(
   format: "tcx" | "gpx",
   deps: XmlFileDeps,
 ): Promise<XmlFileResult> {
-  const report = parseXmlBytes(bytes, format);
-  if (report.quarantine !== null) {
+  const prepared = await prepareXmlFile(bytes, format, { crypto: deps.crypto });
+  const report = preparedReports.get(prepared as object);
+  if (!report) throw new Error("XML preparation report is missing");
+  if (prepared.outcome === "quarantined") {
     const failed = report as XmlParseReport & { readonly sessions: readonly []; readonly quarantine: XmlQuarantine };
     const archive = await deps.archive.quarantine(bytes, format, `${canonicalJson(failed.quarantine)}\n`);
     return { status: "quarantined", archive, candidates: [], report: failed };
   }
   const succeeded = report as XmlParseReport & { readonly quarantine: null };
+  const archive = await deps.archive.writeArtifact(bytes, format, prepared.value.archive_instant);
+  if (archive.address !== prepared.value.expected_address) throw new Error("archive address mismatch");
+  return { status: "parsed", archive, candidates: prepared.value.candidates, report: succeeded };
+}
+
+export async function prepareXmlFile(
+  bytes: Uint8Array,
+  format: "tcx" | "gpx",
+  deps: { readonly crypto: CryptoPort },
+): Promise<PrepareFileResult> {
+  const report = parseXmlBytes(bytes, format);
+  if (report.quarantine !== null) {
+    const result: PrepareFileResult = { outcome: "quarantined", quarantine: { code: report.quarantine.code, message: report.quarantine.message } };
+    preparedReports.set(result as object, report);
+    return result;
+  }
+  const succeeded = report as XmlParseReport & { readonly quarantine: null };
+  const address = toHex(await deps.crypto.sha256(bytes));
   let instant = succeeded.sessions[0]!.startUtc;
   for (let index = 1; index < succeeded.sessions.length; index += 1) {
     const startUtc = succeeded.sessions[index]!.startUtc;
     if (startUtc < instant) instant = startUtc;
   }
-  const archive = await deps.archive.writeArtifact(bytes, format, { epochSeconds: Math.floor(instant) });
-  const candidates = xmlSessionsToCandidates(succeeded, archive.address);
-  return { status: "parsed", archive, candidates, report: succeeded };
+  const candidates = xmlSessionsToCandidates(succeeded, address).map((candidate) => Object.hasOwn(candidate.concerns, "session.sport")
+    ? candidate : { ...candidate, concerns: { ...candidate.concerns, "session.sport": "unknown" } });
+  const summaries: DedupCandidateSummary[] = candidates.map((candidate, index) => {
+    const session = succeeded.sessions[index]!;
+    const time = session.channels.time!;
+    const duration = session.elapsedS ?? time.timestamps[time.timestamps.length - 1]! - time.timestamps[0]!;
+    return {
+      candidate_id: candidate.id,
+      member_id: address,
+      source_kind: format,
+      source_session_seq: session.sessionOrdinal,
+      sport_family: (candidate.concerns["session.sport"] as string),
+      is_transition: false,
+      start_utc: session.startUtc,
+      duration_s: duration,
+      distance_m: session.distanceM,
+      file_id_manufacturer: null,
+      file_id_serial: null,
+      file_id_time_created_utc: null,
+    };
+  });
+  const value: PreparedFile = {
+    expected_address: address,
+    archive_instant: { epochSeconds: Math.floor(instant) },
+    raw_file: { sha256: address, ext: format, bytes: bytes.byteLength, file_id_serial: null,
+      file_id_time_created_utc: null, manufacturer: null, product: null },
+    candidates,
+    summaries,
+    repair_events: [],
+  };
+  const result: PrepareFileResult = { outcome: "prepared", value };
+  preparedReports.set(result as object, report);
+  return result;
 }
