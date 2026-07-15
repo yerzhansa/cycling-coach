@@ -224,6 +224,25 @@ describe("findTrademarkHits — file selection", () => {
 });
 
 describe("main — wholesale package scope", () => {
+  it("covers the canonical kernel Reference path in the default scope", () => {
+    const path = "packages/kernel/src/reference/metrics/seed.ts";
+    write(path, `export const label = "Athlete CTL trend";\n`);
+    const originalCwd = process.cwd();
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (message?: unknown) => errors.push(String(message));
+    try {
+      process.chdir(tempDir);
+      expect(main([])).toBe(1);
+      expect(errors.join("\n")).toContain(path);
+      write(path, `export const label = "Athlete Load trend";\n`);
+      expect(main([])).toBe(0);
+    } finally {
+      process.chdir(originalCwd);
+      console.error = originalError;
+    }
+  });
+
   it("catches a forbidden token under a packages/<x>/src/ path", () => {
     write("packages/widget/src/label.ts", `export const label = "Athlete CTL trend";\n`);
     const orig = console.error;

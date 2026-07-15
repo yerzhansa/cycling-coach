@@ -41,7 +41,7 @@ import {
   HARNESS_CONTRACT,
 } from "./harness-contract.js";
 import { decideVerdict } from "./fuzz-parity-verdict";
-import type { MetricInput } from "../packages/core/src/reference/metrics/metric-input.js";
+import type { MetricInput } from "@enduragent/kernel/reference/metrics";
 
 const SECTION_11_REPO = process.env.SECTION_11_REPO ?? resolve(REPO_ROOT, "../section-11");
 const SYNC_PY_PATH = join(SECTION_11_REPO, "examples/sync.py");

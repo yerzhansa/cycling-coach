@@ -11,8 +11,8 @@ import {
   computeHasIntervals,
   formatBenchmarkPercentage,
   isBenchmarkExpected,
-} from "./compliance-and-body.js";
-import type { MetricInput } from "./metric-input.js";
+} from "../src/reference/metrics/compliance-and-body.js";
+import type { MetricInput } from "../src/reference/metrics/metric-input.js";
 
 interface SyntheticActivity {
   start_date_local: string;

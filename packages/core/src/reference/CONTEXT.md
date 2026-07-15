@@ -4,37 +4,24 @@ Reference is a port of the Reference layer's upstream protocol (MIT, v11.43). Se
 
 Reference is the **data + sport-aware adapter substrate** that grounds coaching in verified athlete numerics. Without Reference, the agent answered training questions from whatever fragments the LLM remembered + whatever live `intervals_fetch_*` call happened to fire that turn — a fragile composition that drifted across sessions and produced different numbers for the same question depending on what slipped through compaction. Reference replaces that with a curated `latest.json` snapshot injected into every system prompt, plus `reference_read_*` tools for the LLM to ask for derived metrics by name.
 
-Reference lives **inside core** at `packages/core/src/reference/` per ADR-0009 (defer library publishing until a real second consumer exists). The reverse path is mechanical when that consumer materializes — the directory and its sport-adapter contract type move out together.
+The Reference layer has a split home. Portable metrics, schemas, `cs-resolution.ts`, `errors.ts`, `freshness.ts`, `preserve-tokens.ts`, `trademark-policy.ts`, three portable validation modules, and concurrency primitives are canonical in `packages/kernel/src/`. Sync, audit, I/O, runtime, paths, sport adapters, services, validation gates, and old-path compatibility shims remain in `packages/core/src/reference/`.
 
 ## Submodule layout
 
 ```
 reference/
 ├── CONTEXT.md          (you are here)
-├── index.ts            (public barrel — wired into packages/core/src/index.ts)
-├── services.ts         (ReferenceServices — service-aggregate exposed to channels per ADR-0010)
-├── runtime.ts          (ReferenceRuntime + bootstrapReference — pins ADR-0011 two-phase init)
-├── sport-adapter.ts    (the per-sport seam type — ReferenceSportAdapter + DfaSummary + PowerCurveDeltaSummary)
-├── freshness.ts        (single-source-of-truth constants: freshness, retention, mutex/cooldown timings)
-├── paths.ts            (referenceDataDir(binaryName) — composes via getCoachHome)
-├── preserve-tokens.ts  (REFERENCE_PRESERVE_TOKENS — populated alongside the curator; sports spread)
-├── schemas/
-│   ├── index.ts        (public barrel — re-exports cache-index.ts + inputs.ts)
-│   ├── cache-index.ts  (cache-schemas-only barrel for the strict-schemas regression test; not a public-facing surface)
-│   ├── inputs.ts       (sport-agnostic forward-looking inputs — Activity, WellnessDay, WeeklyRollup, FtpHistoryPoint, PlannedEvent, IcuIntervalRep, ZoneTimes — consumed by the metric computers; z.looseObject() so real intervals.icu shape rides along)
-│   ├── latest.ts       (latest.json — curator's authoritative snapshot)
-│   ├── history.ts      (history.json — daily / weekly / monthly retention buckets)
-│   ├── intervals.ts    (intervals.json — per-rep workout segments)
-│   ├── routes.ts       (routes.json — recent route metadata)
-│   ├── ftp-history.ts  (ftp_history.json — FTP test + eFTP time series)
-│   ├── scheduler.ts    (.scheduler.json — last_sync_at / next_sync_at coordination state)
-│   └── error-state.ts  (error_state.json — Layer-1 sync gate failures, curator-visible)
-├── sync/               (runSync orchestrator, scheduler, /sync command)
-├── metrics/            (load / distribution / capability / compliance metric computers; re-export discipline doc at metrics/README.md)
-├── validation/         (Layer 1 sync gate, Layer 2 LLM-output validator)
-├── curator/            (latest.json curator + system-prompt injection)
-├── units/              (Quantity, formatQuantity, athlete preference plumbing)
-└── audit/              (audit log writer, size warnings)
+├── index.ts            (core compatibility/public composition; registry intentionally omitted)
+├── services.ts         (core-owned service aggregate)
+├── runtime.ts          (core-owned bootstrap and two-phase initialization)
+├── paths.ts            (core-owned athlete-home composition)
+├── sport-adapter*.ts   (core-owned sport seam, dispatcher, and invariants)
+├── sync/               (core-owned synchronization and scheduling)
+├── audit/              (core-owned audit parsing and writing)
+├── io/                 (core-owned Reference file reading)
+├── validation/         (core gates plus shims for portable validation modules)
+├── metrics/            (compatibility shims; canonical modules are in kernel)
+└── schemas/            (compatibility shims; canonical modules are in kernel)
 ```
 
 ## Tool naming convention
@@ -104,8 +91,8 @@ Reference exposes a `ReferenceServices` aggregate to downstream channels (Telegr
 - **Reference → `Sport.referenceAdapters?()`** — type-only seam. Sports without per-sport affordances simply omit the method.
 - **Reference → freshness constants** — every Reference window number lives in `freshness.ts`. Imported, never re-declared.
 - **Reference → I/O helpers** — every persisted-state read uses `safeReadJson` (now in `core/io/safe-read-json.ts`); every write uses `atomicWriteJson` (now in `core/io/atomic-write-json.ts`). Reference NEVER calls `JSON.parse(readFileSync(...))` or `writeFileSync(path, JSON.stringify(...))` directly.
-- **Reference → concurrency primitives** — `AsyncMutex`, `chainedSignal`, `Cooldown` live in `core/concurrency/` (per ADR-0011's "future horizontal layers reuse the shared primitives"). Reference imports them; Decision/Heartbeat/Coaching Loop will too.
+- **Reference → concurrency primitives** — `AsyncMutex`, `chainedSignal`, and `Cooldown` are canonical in `packages/kernel/src/concurrency/`; core consumers resolve them through the compatibility shims in `packages/core/src/concurrency/`.
 
 ## Out of scope (current revision)
 
-The placeholder directories `metrics/`, `validation/`, `curator/`, `units/`, `audit/` are reserved for upcoming work. Each ships its own focused PR.
+The kernel-owned `curator/`, `units/`, and `numerics/` directories remain empty placeholders in this revision; core has no tracked placeholder in those directories after relocation.

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { METRIC_REGISTRY } from "./registry.js";
+import { METRIC_REGISTRY } from "../src/reference/metrics/registry.js";
 
 // Inverse coverage. The parity gate warns when a snapshot on disk has no
 // METRIC_REGISTRY entry, but nothing asserts the other direction — that every
@@ -17,7 +17,13 @@ import { METRIC_REGISTRY } from "./registry.js";
 // capability.ts, compliance.ts, … — is picked up automatically. A hardcoded
 // module list would silently exempt the next file added, recreating the very
 // gap this test exists to close.
-const METRICS_DIR = dirname(fileURLToPath(import.meta.url));
+const METRICS_DIR = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "src",
+  "reference",
+  "metrics",
+);
 const COMPUTE_EXPORT_RE = /^export\s+(?:async\s+)?(?:function|const)\s+(compute[A-Z][A-Za-z0-9_]*)\b/gm;
 
 function exportedComputeFns(): Array<readonly [string, string]> {

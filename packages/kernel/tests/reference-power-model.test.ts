@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { FixtureShape, WellnessDay } from "../schemas/inputs.js";
-import type { MetricInput } from "./metric-input.js";
+import type { FixtureShape, WellnessDay } from "../src/reference/schemas/inputs.js";
+import type { MetricInput } from "../src/reference/metrics/metric-input.js";
 import {
   computeEftp,
   computePMax,
@@ -9,7 +9,7 @@ import {
   computeVo2max,
   computeWPrime,
   computeWPrimeKj,
-} from "./power-model.js";
+} from "../src/reference/metrics/power-model.js";
 
 const FROZEN_NOW = "2026-06-04T12:00:00";
 

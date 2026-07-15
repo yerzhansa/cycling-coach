@@ -29,6 +29,54 @@ function write(rel: string, contents: string): string {
 }
 
 describe("findRegistryReferences — code references (AST-walked)", () => {
+  it("flags one named import through the dedicated kernel subpath", () => {
+    const file = write(
+      "named.ts",
+      `import { METRIC_REGISTRY } from "@enduragent/kernel/reference/registry";\n`,
+    );
+    expect(findRegistryReferences([file])).toHaveLength(1);
+  });
+
+  it("flags one aliased import through the dedicated kernel subpath", () => {
+    const file = write(
+      "aliased.ts",
+      `import { METRIC_REGISTRY as registry } from "@enduragent/kernel/reference/registry";\n`,
+    );
+    expect(findRegistryReferences([file])).toHaveLength(1);
+  });
+
+  it("flags one namespace/string-key reach through the dedicated kernel subpath", () => {
+    const file = write(
+      "namespace.ts",
+      `import * as registry from "@enduragent/kernel/reference/registry";\nexport const value = registry["METRIC_REGISTRY"];\n`,
+    );
+    expect(findRegistryReferences([file])).toHaveLength(1);
+  });
+
+  it("flags one dynamic import through the dedicated kernel subpath", () => {
+    const file = write(
+      "dynamic.ts",
+      `export const registry = await import("@enduragent/kernel/reference/registry");\n`,
+    );
+    expect(findRegistryReferences([file])).toHaveLength(1);
+  });
+
+  it("flags one relative namespace/string-key reach to the canonical source", () => {
+    const file = write(
+      "packages/sport-x/src/adapter.ts",
+      `import * as registry from "../../kernel/src/reference/metrics/registry.js";\nexport const value = registry["METRIC_REGISTRY"];\n`,
+    );
+    expect(findRegistryReferences([file])).toHaveLength(1);
+  });
+
+  it("allows the grouped metrics facade", () => {
+    const file = write(
+      "metrics.ts",
+      `import * as metrics from "@enduragent/kernel/reference/metrics";\nexport const value = metrics;\n`,
+    );
+    expect(findRegistryReferences([file])).toHaveLength(0);
+  });
+
   it("flags a named import of the registry", () => {
     const file = write(
       "adapter.ts",

@@ -18,7 +18,7 @@ import { createAuthMiddleware } from "./telegram-access.js";
 import { loadAllowedSenders, loadAllowedSendersWithSource } from "./allowed-senders.js";
 import { escapeHtmlText } from "./html-escape.js";
 import type { ReferenceServices } from "../reference/services.js";
-import { resolveRunningCs, type ResolvedCs } from "../reference/cs-resolution.js";
+import { resolveRunningCs, type ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
 import { formatSyncReply } from "../reference/sync/format-sync-reply.js";
 import { formatSnapshotRaw } from "../reference/sync/snapshot-debug.js";
 import { sendSnapshotOutput } from "../reference/sync/send-snapshot.js";

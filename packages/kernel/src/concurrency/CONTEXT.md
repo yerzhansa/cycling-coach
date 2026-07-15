@@ -11,7 +11,7 @@ concurrency/
 └── clock.ts        (Clock interface — injectable now/setTimeout/clearTimeout for orchestrator outer-timeout determinism in tests)
 ```
 
-These were originally adapted from the Reference layer's upstream protocol (MIT — see [`NOTICE.md`](../../../../NOTICE.md) for full attribution) and lived inside the Reference layer. Promoted to `core/concurrency/` so future horizontal layers import from one canonical location instead of reaching across module boundaries into Reference.
+These primitives are canonical at `packages/kernel/src/concurrency/`. Core Reference consumers resolve them through compatibility shims, and future horizontal layers use the kernel concurrency subpath. Attribution remains in [`NOTICE.md`](../../../../NOTICE.md).
 
 ## Invariants
 

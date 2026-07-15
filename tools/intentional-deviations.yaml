@@ -10,6 +10,9 @@
 # by peer-reviewed sports-science literature captured under
 # docs/knowledge/research/. Architect intuition is not a justification.
 #
+# Host-binding modifications with no external-oracle counterpart are architecture,
+# not deviations. Record them in NOTICE.md; never add them to `deviations:`.
+#
 # Schema (v1):
 #
 #   schema_version: 1

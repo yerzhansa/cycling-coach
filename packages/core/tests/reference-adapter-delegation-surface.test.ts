@@ -10,22 +10,18 @@
  *   2. The registry key set is byte-identical to the recorded baseline — no new
  *      `capability.*` writer slipped in. Parity-green alone can't prove this: a
  *      redundant entry would ADD a passing case, not fail one.
- *   3. The registry itself is NOT reachable from the public barrel, so a sport
- *      package cannot acquire it without deep-importing core internals (the form
- *      the registry-isolation lint catches). Defense in depth for that lint.
+ *   3. The registry is absent from the grouped public facades used by sports.
  */
 
 import { describe, it, expect, expectTypeOf } from "vitest";
-import { execFileSync } from "node:child_process";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   computeDfaA1Profile,
   computePowerCurveDelta,
   type MetricInput,
 } from "@enduragent/core";
 import * as corePublicApi from "@enduragent/core";
-import { METRIC_REGISTRY } from "../src/reference/metrics/registry.js";
+import * as metricsPublicApi from "@enduragent/kernel/reference/metrics";
+import { METRIC_REGISTRY } from "@enduragent/kernel/reference/registry";
 
 const REGISTRY_KEYS_BASELINE = [
   "acwr",
@@ -89,21 +85,6 @@ describe("registry stays the sole writer of the capability metrics (OP1)", () =>
 
   it("does not leak the registry through the public barrel", () => {
     expect("METRIC_REGISTRY" in corePublicApi).toBe(false);
-  });
-
-  it("blocks deep package-specifier imports into core internals", () => {
-    // vitest resolves through Vite, which ignores Node's package `exports`
-    // field, so the boundary is asserted under Node's own loader via a child.
-    const corePkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-    const probe =
-      "import('@enduragent/core/dist/reference/metrics/registry.js')" +
-      ".then(() => process.stdout.write('RESOLVED'))" +
-      ".catch((err) => process.stdout.write(String(err?.code)));";
-    const reported = execFileSync(
-      process.execPath,
-      ["--input-type=module", "-e", probe],
-      { cwd: corePkgRoot, encoding: "utf8" },
-    );
-    expect(reported).toBe("ERR_PACKAGE_PATH_NOT_EXPORTED");
+    expect("METRIC_REGISTRY" in metricsPublicApi).toBe(false);
   });
 });

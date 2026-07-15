@@ -16,7 +16,7 @@ import {
   type ErrorState,
   LatestJsonSchema,
   type LatestJson,
-} from "../reference/index.js";
+} from "@enduragent/kernel/reference/schemas";
 import { Memory } from "../memory/store.js";
 import { ChatStore } from "./chat-store.js";
 import { buildSystemPrompt, staticRuleBlocks } from "./system-prompt.js";

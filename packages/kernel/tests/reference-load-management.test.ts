@@ -10,8 +10,8 @@ import {
   computeRecoveryIndex,
   computeStrain,
   computeStressTolerance,
-} from "./load-management.js";
-import type { MetricInput } from "./metric-input.js";
+} from "../src/reference/metrics/load-management.js";
+import type { MetricInput } from "../src/reference/metrics/metric-input.js";
 
 // The synthetic rows in this file are intentionally minimal — only the fields
 // each formula reads — so they don't satisfy the full parsed Activity /

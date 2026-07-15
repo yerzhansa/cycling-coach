@@ -10,13 +10,13 @@ import {
   computePowerCurveDelta,
   computeSustainabilityProfile,
   computeTidComparison,
-} from "./capability.js";
-import type { MetricInput } from "./metric-input.js";
+} from "../src/reference/metrics/capability.js";
+import type { MetricInput } from "../src/reference/metrics/metric-input.js";
 import type {
   ActivityStreams,
   PowerCurveData,
   SustainabilityFamilyCurves,
-} from "../schemas/inputs.js";
+} from "../src/reference/schemas/inputs.js";
 
 interface SyntheticActivity {
   id?: string | number;

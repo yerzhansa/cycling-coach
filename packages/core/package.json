@@ -24,6 +24,7 @@
     "@ai-sdk/openai-compatible": "^2.0.51",
     "@ai-sdk/provider": "^3.0.9",
     "@ai-sdk/provider-utils": "^4.0.24",
+    "@enduragent/kernel": "workspace:*",
     "@clack/prompts": "^1.2.0",
     "@grammyjs/auto-retry": "^2.0.2",
     "@openrouter/ai-sdk-provider": "^2.9.1",

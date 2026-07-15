@@ -2,7 +2,7 @@
   "name": "@enduragent/kernel",
   "version": "0.0.1",
   "private": true,
-  "description": "Pure compute kernel — portable TypeScript, no host bindings; all IO through injected ports (scaffold, no content yet).",
+  "description": "Portable compute, store, and Reference kernel; I/O flows through injected ports.",
   "type": "module",
   "files": ["dist"],
   "exports": {
@@ -11,7 +11,17 @@
     "./store": "./dist/store.js",
     "./archive": "./dist/archive/index.js",
     "./store/export": "./dist/store/export/index.js",
-    "./ingest": "./dist/ingest/index.js"
+    "./ingest": "./dist/ingest/index.js",
+    "./reference/metrics": "./dist/reference/metrics.js",
+    "./reference/registry": "./dist/reference/registry.js",
+    "./reference/schemas": "./dist/reference/schemas.js",
+    "./reference/validation": "./dist/reference/validation.js",
+    "./reference/cs-resolution": "./dist/reference/cs-resolution.js",
+    "./reference/freshness": "./dist/reference/freshness.js",
+    "./reference/preserve-tokens": "./dist/reference/preserve-tokens.js",
+    "./reference/errors": "./dist/reference/errors.js",
+    "./reference/trademark-policy": "./dist/reference/trademark-policy.js",
+    "./concurrency": "./dist/concurrency.js"
   },
   "scripts": {
     "build": "tsup",
@@ -20,7 +30,8 @@
   },
   "dependencies": {
     "@xmldom/xmldom": "0.9.10",
-    "fflate": "0.8.3"
+    "fflate": "0.8.3",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "fast-check": "^4.7.0",
