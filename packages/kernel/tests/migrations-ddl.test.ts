@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { MIGRATIONS } from "../src/store/migrations/index.js";
+import { DERIVED_TABLES } from "../src/store/dump.js";
 
 const EXPECTED_TABLES = [
   "athlete",
@@ -38,16 +39,6 @@ const EXPECTED_INDEXES = [
   "idx_metric_snapshot_metric",
   "idx_stroke_correction_target",
   "idx_pool_size_target",
-];
-
-const DERIVED_TABLES = [
-  "metric_snapshot",
-  "mean_max_cache",
-  "workout",
-  "session",
-  "lap",
-  "swim_length",
-  "stream",
 ];
 
 const RESERVED_DOMAIN_I_TABLES = [
@@ -129,7 +120,8 @@ describe("001_init migration", () => {
 
   it("carries no wall-clock column on any derived table (INV-2)", () => {
     db = openMigrated();
-    for (const table of DERIVED_TABLES) {
+    expect(DERIVED_TABLES.join(",")).toBe("metric_snapshot,mean_max_cache,repair_log,stream,swim_length,lap,session,workout");
+    for (const table of DERIVED_TABLES.filter((name) => EXPECTED_TABLES.includes(name))) {
       const cols = db
         .prepare(`PRAGMA table_info(${table});`)
         .all() as Array<{ name: string }>;

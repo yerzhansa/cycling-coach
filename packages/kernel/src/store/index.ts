@@ -4,3 +4,5 @@ export * from "./canonical-json.js";
 export * from "./dump.js";
 export * from "./anchor-repository.js";
 export * from "./source-repository.js";
+export * from "./activity-repository.js";
+export * from "./derived-key.js";

@@ -1,0 +1,188 @@
+diff --git a/dist/binary.js b/dist/binary.js
+index 556ced544885769304b7c880e90d5587580bb526..c2ac0d8201715cc74a10884c90ab3ca21f12af77 100644
+--- a/dist/binary.js
++++ b/dist/binary.js
+@@ -324,7 +324,10 @@ export function readRecord(blob, messageTypes, developerFields, startIndex, opti
+                 const size = blob[fDefIndex + 1];
+                 const devDataIndex = blob[fDefIndex + 2];
+                 const devDef = developerFields[devDataIndex][fieldNum];
+-                const baseType = devDef.fit_base_type_id;
++                const declaredBaseType = devDef.fit_base_type_id;
++                const baseType = FIT.types.fit_base_type[declaredBaseType] === undefined
++                    ? declaredBaseType | 128
++                    : declaredBaseType;
+                 const fDef = {
+                     type: FIT.types.fit_base_type[baseType],
+                     fDefNo: fieldNum,
+@@ -333,6 +336,7 @@ export function readRecord(blob, messageTypes, developerFields, startIndex, opti
+                     littleEndian: lEnd,
+                     baseTypeNo: baseType,
+                     name: devDef.field_name,
++                    units: devDef.units == null ? null : devDef.units,
+                     dataType: getFitMessageBaseType(baseType & 15),
+                     scale: devDef.scale || 1,
+                     offset: devDef.offset || 0,
+@@ -362,6 +366,22 @@ export function readRecord(blob, messageTypes, developerFields, startIndex, opti
+     let messageSize = 0;
+     let readDataFromIndex = startIndex + 1;
+     const fields = {};
++    const developerFieldOccurrences = [];
++    let developerFieldOccurrenceIndex = 0;
++    const stageDeveloperField = (fDef) => {
++        developerFieldOccurrences.push({
++            nativeMessageType: messageType.globalMessageNumber,
++            developer_data_index: fDef.developerDataIndex,
++            field_definition_number: fDef.fDefNo,
++            field_name: fDef.name,
++            units: fDef.units == null ? null : fDef.units,
++        });
++    };
++    const emitDeveloperField = (value) => {
++        const identity = developerFieldOccurrences[developerFieldOccurrenceIndex++];
++        fields.developer_fields = fields.developer_fields || [];
++        fields.developer_fields.push({ ...identity, value });
++    };
+     const message = getFitMessage(messageType.globalMessageNumber);
+     const rawFields = [];
+     for (let i = 0; i < messageType.fieldDefs.length; i++) {
+@@ -376,6 +396,9 @@ export function readRecord(blob, messageTypes, developerFields, startIndex, opti
+     for (const { fDef, data } of rawFields) {
+         const { field } = fDef.isDeveloperField ? { field: fDef.name } : message.getAttributes(fDef.fDefNo);
+         if (field !== 'unknown' && field !== '' && field !== undefined) {
++            if (fDef.isDeveloperField) {
++                stageDeveloperField(fDef);
++            }
+             fields[field] = data;
+         }
+     }
+@@ -385,7 +408,9 @@ export function readRecord(blob, messageTypes, developerFields, startIndex, opti
+             const { type } = fDef;
+             const scale = (_a = fDef.scale) !== null && _a !== void 0 ? _a : null;
+             const offset = (_b = fDef.offset) !== null && _b !== void 0 ? _b : 0;
+-            fields[fDef.name] = applyOptions(formatByType(data, type, scale, offset), field, options, fields);
++            const decodedValue = applyOptions(formatByType(data, type, scale, offset), field, options, fields);
++            emitDeveloperField(decodedValue);
++            fields[fDef.name] = decodedValue;
+         }
+         else {
+             const { field, type, scale, offset } = message.getAttributes(fDef.fDefNo);
+diff --git a/dist/cjs/binary.js b/dist/cjs/binary.js
+index 60206c115ad85959a02ca13a1eb50e839c384475..874e4daaf576788a62c92bc2814c9ab00eb22a7b 100644
+--- a/dist/cjs/binary.js
++++ b/dist/cjs/binary.js
+@@ -330,7 +330,10 @@ function readRecord(blob, messageTypes, developerFields, startIndex, options, st
+                 const size = blob[fDefIndex + 1];
+                 const devDataIndex = blob[fDefIndex + 2];
+                 const devDef = developerFields[devDataIndex][fieldNum];
+-                const baseType = devDef.fit_base_type_id;
++                const declaredBaseType = devDef.fit_base_type_id;
++                const baseType = fit_js_1.FIT.types.fit_base_type[declaredBaseType] === undefined
++                    ? declaredBaseType | 128
++                    : declaredBaseType;
+                 const fDef = {
+                     type: fit_js_1.FIT.types.fit_base_type[baseType],
+                     fDefNo: fieldNum,
+@@ -339,6 +342,7 @@ function readRecord(blob, messageTypes, developerFields, startIndex, options, st
+                     littleEndian: lEnd,
+                     baseTypeNo: baseType,
+                     name: devDef.field_name,
++                    units: devDef.units == null ? null : devDef.units,
+                     dataType: (0, messages_js_1.getFitMessageBaseType)(baseType & 15),
+                     scale: devDef.scale || 1,
+                     offset: devDef.offset || 0,
+@@ -368,6 +372,22 @@ function readRecord(blob, messageTypes, developerFields, startIndex, options, st
+     let messageSize = 0;
+     let readDataFromIndex = startIndex + 1;
+     const fields = {};
++    const developerFieldOccurrences = [];
++    let developerFieldOccurrenceIndex = 0;
++    const stageDeveloperField = (fDef) => {
++        developerFieldOccurrences.push({
++            nativeMessageType: messageType.globalMessageNumber,
++            developer_data_index: fDef.developerDataIndex,
++            field_definition_number: fDef.fDefNo,
++            field_name: fDef.name,
++            units: fDef.units == null ? null : fDef.units,
++        });
++    };
++    const emitDeveloperField = (value) => {
++        const identity = developerFieldOccurrences[developerFieldOccurrenceIndex++];
++        fields.developer_fields = fields.developer_fields || [];
++        fields.developer_fields.push({ ...identity, value });
++    };
+     const message = (0, messages_js_1.getFitMessage)(messageType.globalMessageNumber);
+     const rawFields = [];
+     for (let i = 0; i < messageType.fieldDefs.length; i++) {
+@@ -382,6 +402,9 @@ function readRecord(blob, messageTypes, developerFields, startIndex, options, st
+     for (const { fDef, data } of rawFields) {
+         const { field } = fDef.isDeveloperField ? { field: fDef.name } : message.getAttributes(fDef.fDefNo);
+         if (field !== 'unknown' && field !== '' && field !== undefined) {
++            if (fDef.isDeveloperField) {
++                stageDeveloperField(fDef);
++            }
+             fields[field] = data;
+         }
+     }
+@@ -391,7 +414,9 @@ function readRecord(blob, messageTypes, developerFields, startIndex, options, st
+             const { type } = fDef;
+             const scale = (_a = fDef.scale) !== null && _a !== void 0 ? _a : null;
+             const offset = (_b = fDef.offset) !== null && _b !== void 0 ? _b : 0;
+-            fields[fDef.name] = applyOptions(formatByType(data, type, scale, offset), field, options, fields);
++            const decodedValue = applyOptions(formatByType(data, type, scale, offset), field, options, fields);
++            emitDeveloperField(decodedValue);
++            fields[fDef.name] = decodedValue;
+         }
+         else {
+             const { field, type, scale, offset } = message.getAttributes(fDef.fDefNo);
+diff --git a/dist/cjs/fit-parser.js b/dist/cjs/fit-parser.js
+index 848331ed6fdf408ccb9d34c3e329c72e0a33bac4..57960ff6210488cc26b4b0bf5eace8b899477181 100644
+--- a/dist/cjs/fit-parser.js
++++ b/dist/cjs/fit-parser.js
+@@ -56,9 +56,8 @@ class FitParser {
+             const crcHeader = blob[12] + (blob[13] << 8);
+             const crcHeaderCalc = (0, binary_js_1.calculateCRC)(blob, 0, 12);
+             if (crcHeader !== crcHeaderCalc) {
+-                // callback('Header CRC mismatch', {});
+-                // TODO: fix Header CRC check
+                 if (!this.options.force) {
++                    callback('Header CRC mismatch', undefined);
+                     return;
+                 }
+             }
+@@ -70,9 +69,8 @@ class FitParser {
+         const crcFile = blob[crcStart] + (blob[crcStart + 1] << 8);
+         const crcFileCalc = (0, binary_js_1.calculateCRC)(blob, headerLength === 12 ? 0 : headerLength, crcStart);
+         if (crcFile !== crcFileCalc) {
+-            // callback('File CRC mismatch', {});
+-            // TODO: fix File CRC check
+             if (!this.options.force) {
++                callback('File CRC mismatch', undefined);
+                 return;
+             }
+         }
+diff --git a/dist/fit-parser.js b/dist/fit-parser.js
+index 373cc5dc6ac553f834202c3d62a3c5254c9e5201..49199e76f8571e0052f44b12ea173e99a1b2ce65 100644
+--- a/dist/fit-parser.js
++++ b/dist/fit-parser.js
+@@ -54,9 +54,8 @@ export default class FitParser {
+             const crcHeader = blob[12] + (blob[13] << 8);
+             const crcHeaderCalc = calculateCRC(blob, 0, 12);
+             if (crcHeader !== crcHeaderCalc) {
+-                // callback('Header CRC mismatch', {});
+-                // TODO: fix Header CRC check
+                 if (!this.options.force) {
++                    callback('Header CRC mismatch', undefined);
+                     return;
+                 }
+             }
+@@ -68,9 +67,8 @@ export default class FitParser {
+         const crcFile = blob[crcStart] + (blob[crcStart + 1] << 8);
+         const crcFileCalc = calculateCRC(blob, headerLength === 12 ? 0 : headerLength, crcStart);
+         if (crcFile !== crcFileCalc) {
+-            // callback('File CRC mismatch', {});
+-            // TODO: fix File CRC check
+             if (!this.options.force) {
++                callback('File CRC mismatch', undefined);
+                 return;
+             }
+         }
