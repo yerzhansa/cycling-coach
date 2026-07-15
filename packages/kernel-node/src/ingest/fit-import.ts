@@ -9,6 +9,8 @@ import {
 import type { CryptoPort } from "@enduragent/kernel/ports";
 import type { MigratorStore, SqlStore } from "@enduragent/kernel/store";
 import type { FitDecoder } from "./fit-decoder.js";
+import { ensureCurrentIngestVersion, type EnsureCurrentIngestVersionDependencies } from "./ingest-version.js";
+import { compareUnicodeCodePoints } from "@enduragent/kernel/ingest";
 
 export interface FitImportDependencies {
   readonly archive: ArchiveManager;
@@ -31,7 +33,12 @@ export interface QuarantinedFitResult {
 }
 export type FitImportResult = ImportedFitResult | QuarantinedFitResult;
 
-export async function importFitArtifact(bytes: Uint8Array, dependencies: FitImportDependencies): Promise<FitImportResult> {
+export interface FitBatchItem {
+  readonly inputPath: string;
+  readonly bytes: Uint8Array;
+}
+
+async function importFitArtifactAfterVersionCheck(bytes: Uint8Array, dependencies: FitImportDependencies): Promise<FitImportResult> {
   const rawSha256 = toHex(await dependencies.crypto.sha256(bytes));
   let mapped;
   try {
@@ -46,6 +53,26 @@ export async function importFitArtifact(bytes: Uint8Array, dependencies: FitImpo
   const archived = await dependencies.archive.writeArtifact(bytes,"fit",{epochSeconds:mapped.logicalArchiveEpochSeconds});
   if (archived.address !== rawSha256) throw new Error("archive address mismatch");
   const artifact = withArchivePath(mapped,archived.relPath);
-  const {rawInserted} = await dependencies.store.transaction(() => rebuildRawFileInTransaction(dependencies.store,artifact));
+  const {rawInserted} = await dependencies.store.transaction(() => rebuildRawFileInTransaction(dependencies.store,artifact,dependencies.crypto));
   return {kind:"imported",rawInserted,rawSha256,archivePath:archived.relPath,archiveDeduped:archived.deduped};
+}
+
+export async function importFitArtifact(
+  bytes: Uint8Array,
+  dependencies: FitImportDependencies & EnsureCurrentIngestVersionDependencies,
+): Promise<FitImportResult> {
+  await ensureCurrentIngestVersion(dependencies);
+  return importFitArtifactAfterVersionCheck(bytes, dependencies);
+}
+
+export async function importFitBatch(
+  items: readonly FitBatchItem[],
+  dependencies: FitImportDependencies & EnsureCurrentIngestVersionDependencies,
+): Promise<readonly FitImportResult[]> {
+  await ensureCurrentIngestVersion(dependencies);
+  const ordered = items.map((item) => ({ inputPath: item.inputPath, bytes: new Uint8Array(item.bytes) }))
+    .sort((left, right) => compareUnicodeCodePoints(left.inputPath, right.inputPath));
+  const results: FitImportResult[] = [];
+  for (const item of ordered) results.push(await importFitArtifactAfterVersionCheck(item.bytes, dependencies));
+  return results;
 }

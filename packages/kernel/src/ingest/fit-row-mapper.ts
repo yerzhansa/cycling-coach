@@ -3,6 +3,8 @@ import { H, compareUtf8, encodeUtf8Strict } from "../store/derived-key.js";
 import type { CryptoPort } from "../ports/crypto.js";
 import type { ActivityRows, LapRow, SessionRow, StreamRow, SwimLengthRow } from "../store/activity-repository.js";
 import { encodeStream } from "./stream-codec.js";
+import { rescalePoolDistances, type PoolLengthDistanceInput } from "./pool-size-rescale.js";
+import { runRepairChain } from "./repair/chain.js";
 import {
   FitSourceError,
   type DecodedDeveloperField,
@@ -303,9 +305,12 @@ export async function mapFitArtifact(input: MapFitArtifactInput): Promise<Mapped
   const workoutKey=await H(input.crypto,"workout",input.rawSha256);
   const sessionKeys=await Promise.all(d.sessions.map((_,i)=>H(input.crypto,"session",workoutKey,i)));
   const sessions: SessionRow[]=[]; const laps: LapRow[]=[]; const swimLengths: SwimLengthRow[]=[]; const streams: StreamRow[]=[];
+  const repairLogs: ActivityRows["repairLogs"][number][]=[];
+  const poolSessions: ActivityRows["poolSessions"][number][]=[];
   for(let i=0;i<d.sessions.length;i++) {
     const source=d.sessions[i], key=sessionKeys[i];
     sessions.push({ session_key:key,workout_key:workoutKey,session_seq:i,sport:sports[i],sub_sport:subSports[i],start_utc:source.startTime as number,tz_offset_s:tzOffset,local_date_key:localDate(source.startTime as number,tzOffset),elapsed_s:duration(source.totalElapsedTime),timer_s:duration(source.totalTimerTime),moving_s:duration(source.totalMovingTime),distance_m:distance(source.totalDistance),is_transition:sports[i]==="transition"?1:0,summary_json:canonicalSummary({developer_fields:sessionDevelopers[i].map(summaryEntry),trigger:triggers[i]}) });
+    const sessionLengthStart=swimLengths.length;
     const [lapStart,lapEnd]=sessionLapSlices[i];
     for(let g=lapStart;g<lapEnd;g++) {
       const sourceLap=d.laps[g], lapKey=await H(input.crypto,"lap",key,g);
@@ -313,8 +318,23 @@ export async function mapFitArtifact(input: MapFitArtifactInput): Promise<Mapped
       const [lengthStart,lengthEnd]=lapLengthSlices[g];
       for(let sourceIndex=lengthStart;sourceIndex<lengthEnd;sourceIndex++) {
         const sourceLength=d.lengths[sourceIndex], seq=sourceIndex-lengthStart;
-        swimLengths.push({length_key:await H(input.crypto,"swim_length",lapKey,seq),lap_key:lapKey,length_seq:seq,start_utc:sourceLength.startTime,elapsed_s:duration(sourceLength.totalElapsedTime),timer_s:duration(sourceLength.totalTimerTime),strokes:sourceLength.totalStrokes,stroke_type:strokes[sourceIndex],length_type:lengthTypes[sourceIndex]});
+        swimLengths.push({length_key:await H(input.crypto,"swim_length",lapKey,seq),lap_key:lapKey,length_seq:seq,start_utc:sourceLength.startTime,elapsed_s:duration(sourceLength.totalElapsedTime),timer_s:duration(sourceLength.totalTimerTime),strokes:sourceLength.totalStrokes,stroke_type:strokes[sourceIndex],length_type:lengthTypes[sourceIndex],distance_m:null});
       }
+    }
+    const ownedLengths=swimLengths.slice(sessionLengthStart);
+    if(sports[i]==="swimming"&&subSports[i]==="lap_swimming"&&ownedLengths.length>0){
+      const lengthInputs:PoolLengthDistanceInput[]=ownedLengths.map((length)=>{
+        if(length.length_type!=="active"&&length.length_type!=="idle") throw new FitSourceError("invalid_enum");
+        return {lengthKey:length.length_key,lengthType:length.length_type};
+      });
+      const scaled=rescalePoolDistances({sourceSessionDistanceM:distance(source.totalDistance),lengths:lengthInputs,correctedPoolLengthM:null});
+      sessions[i]={...sessions[i]!,distance_m:scaled.sessionDistanceM};
+      const byKey=new Map(scaled.lengths.map((length)=>[length.lengthKey,length.distanceM]));
+      for(let lengthIndex=sessionLengthStart;lengthIndex<swimLengths.length;lengthIndex++){
+        const length=swimLengths[lengthIndex]!;
+        swimLengths[lengthIndex]={...length,distance_m:byKey.get(length.length_key)??null};
+      }
+      poolSessions.push({sessionKey:key,sourceSessionDistanceM:distance(source.totalDistance),lengths:lengthInputs});
     }
     const indexes=assigned[i];
     if(indexes.length>0) {
@@ -327,9 +347,17 @@ export async function mapFitArtifact(input: MapFitArtifactInput): Promise<Mapped
         if(typeof entry.value!=="number") continue;
         let channel=values.get(entry.channel); if(!channel){channel=Array<number|null>(indexes.length).fill(null);values.set(entry.channel,channel);} channel[slot]=entry.value;
       }
-      for(const [channel,channelValues] of values) {
-        if(channel!=="time"&&channelValues.every((v)=>v===null)) continue;
-        if(channelValues.length!==indexes.length) throw new FitSourceError("stream_alignment_invalid");
+      const timeValues=values.get("time")!;
+      const repairChannels:Record<string,readonly (number|null)[]>={};
+      for(const [channel,channelValues] of values){
+        if(channel==="time"||channelValues.every((value)=>value===null)) continue;
+        repairChannels[channel]=channelValues;
+      }
+      const repaired=runRepairChain({time:timeValues as readonly number[],channels:repairChannels});
+      for(const log of repaired.logs) for(const change of log.changes) repairLogs.push({sessionKey:key,fixer:log.fixer,channel:change.channel,changedIndices:change.changedIndices,params:log.params});
+      const repairedValues=new Map<string,readonly (number|null)[]>([["time",repaired.stream.time],...Object.entries(repaired.stream.channels)]);
+      for(const [channel,channelValues] of repairedValues) {
+        if(channelValues.length!==repaired.stream.time.length) throw new FitSourceError("stream_alignment_invalid");
         const encoded=encodeStream(channel==="time"?"time":"value",channelValues);
         streams.push({stream_key:await H(input.crypto,"stream",key,channel),session_key:key,channel,encoding:encoded.encoding,sample_rate:null,n:encoded.n,data:encoded.data});
       }
@@ -346,7 +374,7 @@ export async function mapFitArtifact(input: MapFitArtifactInput): Promise<Mapped
   else if(typeof firstFile?.product==="string") { product=normalizeText(firstFile.product); if(!product) throw new FitSourceError("invalid_enum"); }
   else if(typeof firstFile?.product==="number") { if(!Number.isSafeInteger(firstFile.product)) throw new FitSourceError("invalid_enum"); product=firstFile.product.toString(); }
   const startUtc=Math.min(...d.sessions.map((s)=>s.startTime as number));
-  const activity:ActivityRows={workout:{workout_key:workoutKey,start_utc:startUtc,tz_offset_s:tzOffset,name:null,notes:null,is_multisport:d.sessions.length>1?1:0,dedup_cluster_id:input.rawSha256},sessions,laps,swimLengths,streams};
+  const activity:ActivityRows={workout:{workout_key:workoutKey,start_utc:startUtc,tz_offset_s:tzOffset,name:null,notes:null,is_multisport:d.sessions.length>1?1:0,dedup_cluster_id:input.rawSha256},sessions,laps,swimLengths,streams,repairLogs,poolSessions};
   const logicalArchiveEpochSeconds=firstFile?.timeCreated ?? Math.min(...d.sessions.map((s)=>s.startTime as number)) ?? Math.min(...d.records.map((r)=>r.timestamp as number)) ?? 0;
   return {rawFile:{sha256:input.rawSha256,path:input.archivePath,ext:"fit",bytes:input.rawByteLength,file_id_serial:firstFile?.serialNumber??null,file_id_time_created_utc:firstFile?.timeCreated??null,manufacturer,product},activity,logicalArchiveEpochSeconds};
 }
