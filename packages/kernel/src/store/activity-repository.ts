@@ -29,6 +29,14 @@ WHERE (
 )`,
         [rawSha256, rawSha256],
       );
+      for (const session of [...rows.sessions].sort((a, b) => a.session_seq - b.session_seq)) {
+        await store.run(
+          `DELETE FROM metric_snapshot
+WHERE (scope_kind = 'session' AND scope_id = ?)
+   OR (scope_kind = 'date' AND scope_id = ?)`,
+          [session.session_key, String(session.local_date_key)],
+        );
+      }
       await store.run("DELETE FROM workout WHERE dedup_cluster_id = ?", [rawSha256]);
       const w = rows.workout;
       await store.run("INSERT INTO workout (workout_key,start_utc,tz_offset_s,name,notes,is_multisport,dedup_cluster_id) VALUES (?,?,?,?,?,?,?)", [w.workout_key,w.start_utc,w.tz_offset_s,w.name,w.notes,w.is_multisport,w.dedup_cluster_id]);

@@ -8,6 +8,7 @@ import {
   createRawFileRepository,
   createSourceRecordRepository,
   runMigrations,
+  type ActivityRows,
   type AnchorHistoryRow,
   type MigratorStore,
   type RawFileRow,
@@ -34,6 +35,39 @@ function anchorRow(overrides: Partial<AnchorHistoryRow> = {}): AnchorHistoryRow 
     hlc_physical_ms: null,
     hlc_counter: null,
     ...overrides,
+  };
+}
+
+function activityRows(rawSha256: string, localDateKey: number): ActivityRows {
+  return {
+    workout: {
+      workout_key: `workout-${rawSha256}`,
+      start_utc: 1000,
+      tz_offset_s: null,
+      name: null,
+      notes: null,
+      is_multisport: 0,
+      dedup_cluster_id: rawSha256,
+    },
+    sessions: [{
+      session_key: `session-${rawSha256}`,
+      workout_key: `workout-${rawSha256}`,
+      session_seq: 0,
+      sport: "cycling",
+      sub_sport: null,
+      start_utc: 1000,
+      tz_offset_s: null,
+      local_date_key: localDateKey,
+      elapsed_s: null,
+      timer_s: null,
+      moving_s: null,
+      distance_m: null,
+      is_transition: 0,
+      summary_json: null,
+    }],
+    laps: [],
+    swimLengths: [],
+    streams: [],
   };
 }
 
@@ -111,20 +145,47 @@ describe("repository ports over real node:sqlite", () => {
     expect(count?.c).toBe(1);
   });
 
-  it("replaces affected activity snapshots and preserves unrelated snapshots", async () => {
-    const repo=createActivityRepository(store);
-    const rows={
-      workout:{workout_key:"wk",start_utc:1000,tz_offset_s:null,name:null,notes:null,is_multisport:0,dedup_cluster_id:"raw"},
-      sessions:[{session_key:"se",workout_key:"wk",session_seq:0,sport:"cycling",sub_sport:null,start_utc:1000,tz_offset_s:null,local_date_key:19980101,elapsed_s:null,timer_s:null,moving_s:null,distance_m:null,is_transition:0,summary_json:null}],
-      laps:[],swimLengths:[],streams:[],
-    } as const;
-    await repo.replaceForRawFile("raw",rows);
-    for(const [key,kind,id] of [["a","session","se"],["b","date","19980101"],["c","session","other"],["d","date","19980102"]] as const) {
-      await store.run("INSERT INTO metric_snapshot (snapshot_key,scope_kind,scope_id,metric_key,value_json,kernel_version,basis_version) VALUES (?,?,?,?,?,?,?)",[key,kind,id,"m","{}","k","b"]);
+  it("invalidates incoming activity snapshots on first import", async () => {
+    const repo = createActivityRepository(store);
+    const rows = activityRows("raw", 19980101);
+    for (const [key, kind, id] of [
+      ["incoming-session", "session", "session-raw"],
+      ["incoming-date", "date", "19980101"],
+      ["unrelated-session", "session", "other"],
+      ["unrelated-date", "date", "19980102"],
+    ] as const) {
+      await store.run(
+        "INSERT INTO metric_snapshot (snapshot_key,scope_kind,scope_id,metric_key,value_json,kernel_version,basis_version) VALUES (?,?,?,?,?,?,?)",
+        [key, kind, id, "m", "{}", "k", "b"],
+      );
     }
-    await repo.replaceForRawFile("raw",rows);
-    const remaining=await store.all("SELECT snapshot_key FROM metric_snapshot ORDER BY snapshot_key");
-    expect(remaining.map((r)=>r.snapshot_key)).toEqual(["c","d"]);
+
+    await repo.replaceForRawFile("raw", rows);
+
+    const remaining = await store.all("SELECT snapshot_key FROM metric_snapshot ORDER BY snapshot_key");
+    expect(remaining.map((row) => row.snapshot_key)).toEqual(["unrelated-date", "unrelated-session"]);
+  });
+
+  it("invalidates old and incoming date snapshots when an activity date changes", async () => {
+    const repo = createActivityRepository(store);
+    await repo.replaceForRawFile("raw", activityRows("raw", 19980101));
+    for (const [key, kind, id] of [
+      ["session", "session", "session-raw"],
+      ["old-date", "date", "19980101"],
+      ["incoming-date", "date", "19980102"],
+      ["unrelated-session", "session", "other"],
+      ["unrelated-date", "date", "19980103"],
+    ] as const) {
+      await store.run(
+        "INSERT INTO metric_snapshot (snapshot_key,scope_kind,scope_id,metric_key,value_json,kernel_version,basis_version) VALUES (?,?,?,?,?,?,?)",
+        [key, kind, id, "m", "{}", "k", "b"],
+      );
+    }
+
+    await repo.replaceForRawFile("raw", activityRows("raw", 19980102));
+
+    const remaining = await store.all("SELECT snapshot_key FROM metric_snapshot ORDER BY snapshot_key");
+    expect(remaining.map((row) => row.snapshot_key)).toEqual(["unrelated-date", "unrelated-session"]);
   });
 
   it("upserts source_record idempotently by (source, external_id)", async () => {
