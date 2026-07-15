@@ -41,8 +41,11 @@ SOFTWARE.
 
 ### Modifications introduced in this port
 
-The Reference submodule (`packages/core/src/reference/`) is not a verbatim
-copy; the following modifications were applied during the port:
+The portable Reference metrics, schemas, validation modules, top-level modules,
+and concurrency primitives are canonical in `packages/kernel/src/`; Reference
+sync, audit, I/O, runtime, paths, adapters, services, validation gates, and
+compatibility shims remain in `packages/core/src/reference/`. The following
+modifications were applied during the port:
 
 - **Trademark substitution.** Section-11 was authored against TrainingPeaks
   vocabulary. This codebase uses intervals.icu's plain-English alternatives
@@ -65,10 +68,13 @@ copy; the following modifications were applied during the port:
   refreshes with a 30 s acquire timeout, 2 min outer timeout, and 30 s
   per-chat cooldown. The orchestrator lives at
   `packages/core/src/reference/sync/run-sync.ts`; the underlying
-  primitives (`AsyncMutex`, `chainedSignal`, `Cooldown`) live in
-  `packages/core/src/concurrency/` and are reused unchanged by future
-  horizontal layers (Decision Layer, Heartbeat, Coaching Loop) per
-  ADR-0011.
+  primitives (`AsyncMutex`, `chainedSignal`, `Cooldown`) are canonical in
+  `packages/kernel/src/concurrency/` and are reused by future horizontal
+  layers per ADR-0011.
+- **Host-binding portability.** The response fingerprint used only for log
+  correlation is supplied by the Node host as a synchronous SHA-256 function;
+  the portable Reference layer retains no host import. This changes no metric
+  or training result.
 - **Three-layer validation.** Layer 1 sync gate (mechanical), Layer 2
   Zod-validated LLM output with one retry on citation mismatch, Layer 3
   prompt rules.

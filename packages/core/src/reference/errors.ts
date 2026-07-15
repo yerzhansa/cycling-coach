@@ -1,6 +1,1 @@
-export class ReferenceConfigError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ReferenceConfigError";
-  }
-}
+export * from "@enduragent/kernel/reference/errors";

@@ -22,15 +22,15 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
-import type { MetricInput } from "../packages/core/src/reference/metrics/metric-input.js";
+import type { MetricInput } from "@enduragent/kernel/reference/metrics";
 import {
   METRIC_REGISTRY,
   type MetricRegistryEntry,
-} from "../packages/core/src/reference/metrics/registry.js";
+} from "@enduragent/kernel/reference/registry";
 import {
   FixtureSchema,
   type FixtureShape,
-} from "../packages/core/src/reference/schemas/inputs.js";
+} from "@enduragent/kernel/reference/schemas";
 
 export type { MetricInput, MetricRegistryEntry };
 export { METRIC_REGISTRY };

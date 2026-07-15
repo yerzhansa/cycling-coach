@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { computeSeasonalContext } from "./seasonal-context.js";
-import type { MetricInput } from "./metric-input.js";
+import { computeSeasonalContext } from "../src/reference/metrics/seasonal-context.js";
+import type { MetricInput } from "../src/reference/metrics/metric-input.js";
 
 function inputFor(frozenNow: string): MetricInput {
   return { fixture: {} as MetricInput["fixture"], frozenNow };

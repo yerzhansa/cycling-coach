@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { FixtureShape, WellnessDay } from "../schemas/inputs.js";
-import { computeWeightSignal } from "./bodycomp.js";
-import type { MetricInput } from "./metric-input.js";
+import type { FixtureShape, WellnessDay } from "../src/reference/schemas/inputs.js";
+import { computeWeightSignal } from "../src/reference/metrics/bodycomp.js";
+import type { MetricInput } from "../src/reference/metrics/metric-input.js";
 
 const FROZEN_NOW = "2026-05-10T12:00:00";
 const TODAY = "2026-05-10";

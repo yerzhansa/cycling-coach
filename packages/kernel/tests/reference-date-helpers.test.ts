@@ -5,7 +5,7 @@ import {
   isoDateDaysBefore,
   isoToMs,
   parseIsoMs,
-} from "./date-helpers.js";
+} from "../src/reference/metrics/date-helpers.js";
 
 describe("isoToMs", () => {
   it("treats a date-only input as midnight UTC", () => {

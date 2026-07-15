@@ -5,7 +5,7 @@
 // asserts and system-prompt-review-rules.test.ts pin the block's presence.
 import type { SportPersona } from "../sport.js";
 import type { Memory } from "../memory/store.js";
-import { LAYER_3_PROMPT_RULES } from "../reference/validation/layer3-prompt.js";
+import { LAYER_3_PROMPT_RULES } from "@enduragent/kernel/reference/validation";
 
 // ============================================================================
 // SYSTEM PROMPT BUILDER

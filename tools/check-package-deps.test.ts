@@ -119,6 +119,45 @@ describe("R2 kernel-node adapter", () => {
     );
     expect(violationsFor(r2)).toBe(0);
   });
+
+  it("R2 passes an exact declared public owning-package self-subpath", () => {
+    writeJson("packages/kernel-node/package.json", {
+      name: "@enduragent/kernel-node",
+      private: true,
+      exports: { "./home": "./dist/home/index.js" },
+    });
+    write(
+      "packages/kernel-node/src/ok.ts",
+      `import { resolveAthleteHome } from "@enduragent/kernel-node/home";\nexport const x = resolveAthleteHome;\n`,
+    );
+    expect(violationsFor(r2)).toBe(0);
+  });
+
+  it("R2 flags the owning-package root self-import", () => {
+    writeJson("packages/kernel-node/package.json", {
+      name: "@enduragent/kernel-node",
+      private: true,
+      exports: { "./home": "./dist/home/index.js" },
+    });
+    write(
+      "packages/kernel-node/src/bad.ts",
+      `import { x } from "@enduragent/kernel-node";\nexport const y = x;\n`,
+    );
+    expect(violationsFor(r2)).toBe(1);
+  });
+
+  it("R2 flags an undeclared owning-package self-subpath", () => {
+    writeJson("packages/kernel-node/package.json", {
+      name: "@enduragent/kernel-node",
+      private: true,
+      exports: { "./home": "./dist/home/index.js" },
+    });
+    write(
+      "packages/kernel-node/src/bad.ts",
+      `import { x } from "@enduragent/kernel-node/home/internal";\nexport const y = x;\n`,
+    );
+    expect(violationsFor(r2)).toBe(1);
+  });
 });
 
 describe("R3 engine + core", () => {
@@ -150,6 +189,13 @@ describe("R3 engine + core", () => {
   it("R3 flags core importing @enduragent/kernel-node", () => {
     write("packages/core/src/bad.ts", `import { x } from "@enduragent/kernel-node";\nexport const y = x;\n`);
     expect(violationsFor(rCore)).toBe(1);
+  });
+
+  it("R3 passes core importing @enduragent/kernel but surfaces the transitional WARN", () => {
+    write("packages/core/src/shim.ts", `import { k } from "@enduragent/kernel";\nexport const y = k;\n`);
+    const result = runRulesAgainst(tempDir, [rCore]);
+    expect(result.violations).toHaveLength(0);
+    expect(result.warnEdges).toEqual([{ dir: "packages/core", target: "@enduragent/kernel" }]);
   });
 });
 
@@ -280,10 +326,11 @@ describe("real repository", () => {
     expect(main([])).toBe(0);
   });
 
-  it("surfaces exactly the five transitional sport edges at branch point (guards a vacuous pass)", () => {
+  it("surfaces exactly the six transitional edges at branch point (guards a vacuous pass)", () => {
     const result = runRulesAgainst(".", RULES);
     const edges = result.warnEdges.map((e) => `${e.dir} -> ${e.target}`);
     expect(edges).toEqual([
+      "packages/core -> @enduragent/kernel",
       "packages/sport-cycling -> @enduragent/core",
       "packages/sport-duathlon -> @enduragent/core",
       "packages/sport-duathlon -> @enduragent/sport-cycling",

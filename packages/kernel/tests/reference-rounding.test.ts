@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { roundHalfEven } from "./rounding.js";
+import { roundHalfEven } from "../src/reference/metrics/rounding.js";
 
 // Reference values are Python `round(x, n)` outputs, captured directly from
 // CPython. They are chosen to discriminate the two ways a naive

@@ -95,7 +95,7 @@ export const RULES: readonly PackageDepRule[] = [
     dir: "packages/core",
     srcOnly: true,
     allowedWorkspace: [],
-    transitionalWorkspace: ["@enduragent/engine"],
+    transitionalWorkspace: ["@enduragent/engine", "@enduragent/kernel"],
     forbidNode: false,
   },
   {
@@ -271,15 +271,23 @@ interface ManifestDep {
   readonly block: string;
 }
 
-function readManifestDeps(fsDir: string, ruleId: string): { deps: ManifestDep[]; present: boolean } {
+function readManifestDeps(
+  fsDir: string,
+  ruleId: string,
+): {
+  deps: ManifestDep[];
+  present: boolean;
+  packageName: string;
+  packageExports: Record<string, unknown>;
+} {
   const manifestPath = join(fsDir, "package.json");
   let raw: string;
   try {
     raw = readFileSync(manifestPath, "utf-8");
   } catch {
-    return { deps: [], present: false };
+    return { deps: [], present: false, packageName: "", packageExports: {} };
   }
-  const pkg = JSON.parse(raw) as Record<string, Record<string, string> | undefined>;
+  const pkg = JSON.parse(raw) as Record<string, unknown>;
   const blocks =
     ruleId === "R1"
       ? ["dependencies", "peerDependencies", "devDependencies"]
@@ -287,10 +295,19 @@ function readManifestDeps(fsDir: string, ruleId: string): { deps: ManifestDep[];
   const deps: ManifestDep[] = [];
   for (const block of blocks) {
     const entry = pkg[block];
-    if (!entry) continue;
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
     for (const name of Object.keys(entry)) deps.push({ name, block });
   }
-  return { deps, present: true };
+  const packageExports =
+    pkg.exports !== null && typeof pkg.exports === "object" && !Array.isArray(pkg.exports)
+      ? (pkg.exports as Record<string, unknown>)
+      : {};
+  return {
+    deps,
+    present: true,
+    packageName: typeof pkg.name === "string" ? pkg.name : "",
+    packageExports,
+  };
 }
 
 interface ConcreteDir {
@@ -343,6 +360,8 @@ export function runRulesAgainst(root: string, rules: readonly PackageDepRule[]):
       continue;
     }
     for (const { dir, fsDir } of concrete) {
+      const { deps, packageName, packageExports } = readManifestDeps(fsDir, rule.ruleId);
+
       // (1) AST import walk over the scan root.
       const scanRoot = rule.srcOnly ? join(fsDir, "src") : fsDir;
       const files: string[] = [];
@@ -366,6 +385,24 @@ export function runRulesAgainst(root: string, rules: readonly PackageDepRule[]):
             continue;
           }
           if (!spec.startsWith(WORKSPACE_SCOPE)) continue;
+          const isSelfReference = packageRoot(spec) === packageName;
+          if (isSelfReference) {
+            const exportKey = spec === packageName ? null : `.${spec.slice(packageName.length)}`;
+            const isDeclaredPublicSubpath =
+              exportKey !== null &&
+              Object.prototype.hasOwnProperty.call(packageExports, exportKey) &&
+              packageExports[exportKey] !== null;
+            if (isDeclaredPublicSubpath) continue;
+            violations.push({
+              file,
+              line: ref.line,
+              column: ref.column,
+              ruleId: rule.ruleId,
+              specifier: spec,
+              pkg: dir,
+            });
+            continue;
+          }
           const verdict = classifyWorkspace(spec, rule);
           if (verdict === "allowed") continue;
           if (verdict === "transitional") {
@@ -384,7 +421,6 @@ export function runRulesAgainst(root: string, rules: readonly PackageDepRule[]):
       }
 
       // (2) Manifest check over declared runtime dependency edges.
-      const { deps } = readManifestDeps(fsDir, rule.ruleId);
       const manifestFile = join(dir, "package.json");
       for (const { name } of deps) {
         if (!name.startsWith(WORKSPACE_SCOPE)) continue;

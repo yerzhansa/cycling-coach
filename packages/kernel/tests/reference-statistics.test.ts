@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { roundHalfEven } from "./rounding.js";
-import { mean, pythonSum, sampleStdev } from "./statistics.js";
+import { roundHalfEven } from "../src/reference/metrics/rounding.js";
+import { mean, pythonSum, sampleStdev } from "../src/reference/metrics/statistics.js";
 
 // Reference values are CPython 3.10 `statistics.mean` / `statistics.stdev`
 // outputs, captured directly (3.10 is the snapshot oracle). They are chosen

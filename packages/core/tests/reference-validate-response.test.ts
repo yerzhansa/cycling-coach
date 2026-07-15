@@ -3,8 +3,11 @@ import {
   validateRecommendation,
   parseMetaBlock,
   getByPath,
+  type ResponseHash,
 } from "../src/reference/validation/validate-response.js";
 import type { LatestJson } from "../src/reference/schemas/latest.js";
+
+const testHash: ResponseHash = () => "0123456789abcdef";
 
 function makeSnapshot(currentStatus: unknown): LatestJson {
   return {
@@ -143,7 +146,7 @@ describe("parseMetaBlock", () => {
   it("returns the single block when exactly one is present", () => {
     const meta = { citations: [], confidence: "high" };
     const response = `Some coaching prose.\n---meta---\n${JSON.stringify(meta)}`;
-    const parsed = parseMetaBlock(response);
+    const parsed = parseMetaBlock(response, testHash);
     expect(parsed).not.toBeNull();
     expect(parsed?.blockCount).toBe(1);
     expect(parsed?.metadataJson).toEqual(meta);
@@ -154,20 +157,21 @@ describe("parseMetaBlock", () => {
     const first = { which: "first" };
     const last = { which: "last" };
     const response = `prose\n---meta---\n${JSON.stringify(first)}\n---meta---\n${JSON.stringify(last)}`;
-    const parsed = parseMetaBlock(response);
+    const parsed = parseMetaBlock(response, testHash);
     expect(parsed?.metadataJson).toEqual(last);
     expect(parsed?.blockCount).toBe(2);
     expect(warn).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("0123456789abcdef"));
     warn.mockRestore();
   });
 
   it("returns null when there is no meta block", () => {
-    expect(parseMetaBlock("just prose, no delimiter")).toBeNull();
+    expect(parseMetaBlock("just prose, no delimiter", testHash)).toBeNull();
   });
 
   it("returns null when the block is malformed JSON", () => {
     const response = "prose\n---meta---\n{ not: valid json ]";
-    expect(parseMetaBlock(response)).toBeNull();
+    expect(parseMetaBlock(response, testHash)).toBeNull();
   });
 });
 

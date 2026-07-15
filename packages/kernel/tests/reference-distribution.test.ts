@@ -12,8 +12,8 @@ import {
   computeSeilerTid28dPrimary,
   computeSeilerTidPrimary,
   computeZoneDistribution7d,
-} from "./distribution.js";
-import type { MetricInput } from "./metric-input.js";
+} from "../src/reference/metrics/distribution.js";
+import type { MetricInput } from "../src/reference/metrics/metric-input.js";
 
 // The golden fixtures only exercise the power-zone and empty-window paths,
 // so these synthetic rows isolate the substrate branches the parity matrix
