@@ -10,6 +10,7 @@ import { DEFAULT_TIER3_THRESHOLDS, planDedup, type DedupCandidateSummary } from 
 import { encodeStream } from "./stream-codec.js";
 import { rescalePoolDistances } from "./pool-size-rescale.js";
 import { buildPlatformPresentation, replayPlatformPresentation, type PlatformPresentation } from "./source-ledger.js";
+import { FIT_INGEST_VERSION } from "./types.js";
 import type {
   ClusterReport,
   FileReport,
@@ -133,12 +134,11 @@ async function orphanReports(store: SqlStore, members: ReadonlySet<string>): Pro
 
 export async function importArtifactsWithReport(batch: ImportBatch, deps: ImportReportDeps): Promise<ImportReport> {
   if (batch.files.length + batch.platform_records.length === 0) throw new TypeError("import batch is empty");
-  if (deps.ingestVersion !== 2) throw new Error("ingest dependency version mismatch");
+  if (deps.ingestVersion !== FIT_INGEST_VERSION) throw new Error("ingest dependency version mismatch");
   const metadata = await deps.store.all("SELECT ingest_version FROM ingest_metadata WHERE singleton=1");
   if (metadata.length !== 1) throw new Error("ingest metadata invariant mismatch");
   const storedVersion = integer(metadata[0]!.ingest_version, "ingest version");
   if (storedVersion > deps.ingestVersion) throw new Error("store uses newer ingest semantics");
-  if (storedVersion !== 0 && storedVersion !== 1 && storedVersion !== 2) throw new Error("unsupported ingest version");
   const inputPaths = new Set<string>();
   for (const file of batch.files) {
     if (typeof file.input_path !== "string" || file.input_path.length === 0 || inputPaths.has(file.input_path)) throw new TypeError("duplicate or invalid input path");
@@ -325,7 +325,7 @@ ORDER BY id COLLATE BINARY ASC`)).map(sourceRow);
       && insertedRaw.get(address) === true })).sort((a, b) => compareText(a.address, b.address) || compareText(a.input_path, b.input_path));
   return {
     schema_version: 1,
-    ingest_version: 2,
+    ingest_version: deps.ingestVersion,
     effective: { tier3: DEFAULT_TIER3_THRESHOLDS, transition_window_s: DEFAULT_TRANSITION_WINDOW_S },
     files: reports,
     inserts: { raw_file: [...insertedRaw.values()].filter(Boolean).length, source_record: [...insertedSource.values()].filter(Boolean).length },

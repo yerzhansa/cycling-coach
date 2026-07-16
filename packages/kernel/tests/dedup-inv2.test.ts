@@ -122,7 +122,7 @@ function deps(store: MemoryStore, rawArchive: ReturnType<typeof archive>, materi
   const groups: Candidate[][] = [];
   return { groups, value: { archive: rawArchive, store, hashKey, prepareFile: async (artifact: ImportArtifact) => prepared(artifact),
     canonicalPick(group: Parameters<typeof canonicalPick>[0]) { groups.push([...group.candidates]); return canonicalPick(group); },
-    materializeClusterInTransaction: async () => { store.events.push("materialize"); await materialize(); }, ingestVersion: 2 as const } };
+    materializeClusterInTransaction: async () => { store.events.push("materialize"); await materialize(); }, ingestVersion: 3 as const } };
 }
 
 describe("global replan invariant", () => {
@@ -257,6 +257,6 @@ describe("global replan invariant", () => {
   it("[PR05-INV2-008] upgrades old metadata and reports the current code version", async () => {
     const store = new MemoryStore(); store.metadata = 0; const a = archive(), d = deps(store, a);
     const value = await importArtifactsWithReport({ files: [{ input_path: "a.fit", bytes: new Uint8Array([1]), ext: "fit" }], platform_records: [] }, d.value);
-    expect(value.ingest_version).toBe(2); expect(store.metadata).toBe(2);
+    expect(value.ingest_version).toBe(3); expect(store.metadata).toBe(3);
   });
 });

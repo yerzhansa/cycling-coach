@@ -11,7 +11,7 @@ let dir: string | undefined;
 afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = undefined; });
 
 describe("INV-2 ingest twice", () => {
-  it("keeps stream and repair rows identical with zero second-run inserts and metadata two", async () => {
+  it("keeps stream and repair rows identical with zero second-run inserts and metadata three", async () => {
     expect(DERIVED_TABLES.join(",")).toBe("metric_snapshot,mean_max_cache,repair_log,stream,swim_length,lap,session,workout");
     dir = mkdtempSync(join(tmpdir(), "fit-inv2-"));
     const store = openSqliteStorage(join(dir, "store.db"));
@@ -27,7 +27,7 @@ describe("INV-2 ingest twice", () => {
       expect(await store.all("SELECT * FROM stream ORDER BY stream_key")).toEqual(streams1);
       expect(await store.all("SELECT * FROM repair_log ORDER BY repair_key")).toEqual(logs1);
       expect(await dumpStore(store)).toBe(dump1);
-      expect(await store.get("SELECT singleton,ingest_version FROM ingest_metadata")).toEqual({ singleton: 1, ingest_version: 2 });
+      expect(await store.get("SELECT singleton,ingest_version FROM ingest_metadata")).toEqual({ singleton: 1, ingest_version: 3 });
       expect(logs1.length).toBeGreaterThan(0); expect(streams1.length).toBeGreaterThan(0);
     } finally { await store.close(); }
   });

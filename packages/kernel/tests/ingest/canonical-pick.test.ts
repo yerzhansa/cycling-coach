@@ -245,7 +245,9 @@ describe("canonical concern selection", () => {
       { ...ready(1), "stream:power": channel([1, 2], [1, -0]) },
       { ...ready(1), "stream:time": channel([1, 2], [1, 3]) },
       { ...ready(1), "stream:heart_rate": channel([1, 2], [0, 120]) },
+      { ...ready(1), "stream:heart_rate": channel([1, 2], [120.5, 121]) },
       { ...ready(1), "stream:cadence": channel([1, 2], [1.5, 2]) },
+      { ...ready(1), "stream:cadence": channel([1, 2], [1, 256]) },
       { ...ready(1), "stream:distance": channel([1, 2], [-1, 2]) },
       { ...ready(1), "stream:unknown": channel([1, 2], [1, 2]) },
       { ...ready(1), "stream:dev:idx-2:1:0:field": channel([1, 2], [1, 2]) },
@@ -254,6 +256,9 @@ describe("canonical concern selection", () => {
     for (const concerns of bad) error(() => canonicalPick(group([{ ...base, concerns }])), "canonical.concern_invalid");
     const validDeveloper = { ...ready(1), "stream:dev:idx-2:2:0:field%20name": channel([1, 2], [1, 2]) };
     expect(canonicalPick(group([{ ...base, concerns: validDeveloper }])).winners).toHaveLength(6);
+    const repairedChannels = { ...ready(1), "stream:heart_rate": channel([1, 2], [120.5, 121.5]), "stream:cadence": channel([1, 2], [1.5, 2.5]) };
+    const repairedFit = file("fit", digest("f"), repairedChannels);
+    expect(canonicalPick(group([repairedFit],{[repairedFit.id]:1})).winners).toHaveLength(7);
   });
 
   it("validates every platform-origin and rank near miss with the required precedence", () => {

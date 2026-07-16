@@ -86,7 +86,7 @@ function prepare(artifact: ImportArtifact): PrepareFileResult {
 
 function harness(store = new ReportStore(), rawArchive = archive()) {
   return { store, rawArchive, deps: { store, archive: rawArchive, hashKey, prepareFile: async (artifact: ImportArtifact) => prepare(artifact),
-    canonicalPick, materializeClusterInTransaction: async () => {}, ingestVersion: 2 as const } };
+    canonicalPick, materializeClusterInTransaction: async () => {}, ingestVersion: 3 as const } };
 }
 
 const file = (input_path: string, byte: number): ImportArtifact => ({ input_path, bytes: new Uint8Array([byte]), ext: "fit" });
@@ -168,7 +168,7 @@ describe("stable import report", () => {
     const { report } = await run([file("bad.fit", 0)]);
     const expected = `{
   "schema_version": 1,
-  "ingest_version": 2,
+  "ingest_version": 3,
   "effective": {
     "tier3": {
       "startSeconds": 120,
@@ -232,9 +232,9 @@ describe("stable import report", () => {
     ]);
     expect(report.inserts.raw_file).toBe(1);
   });
-  it("[PR05-REPORT-007] carries quarantine, defaults, and ingest version two", async () => {
+  it("[PR05-REPORT-007] carries quarantine, defaults, and ingest version three", async () => {
     const { report } = await run([file("bad.fit", 0)]);
-    expect(report).toMatchObject({ ingest_version: 2, effective: { tier3: DEFAULT_TIER3_THRESHOLDS,
+    expect(report).toMatchObject({ ingest_version: 3, effective: { tier3: DEFAULT_TIER3_THRESHOLDS,
       transition_window_s: DEFAULT_TRANSITION_WINDOW_S } });
     expect(report.files[0]).toMatchObject({ outcome: "quarantined", raw_file_inserted: false,
       quarantine: { code: "fit:decode_failed", message: "rejected" } });

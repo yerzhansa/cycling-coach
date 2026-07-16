@@ -299,7 +299,7 @@ function validChannelName(name: string): boolean {
   return embedded === undefined || (Number.isSafeInteger(Number(embedded)) && Number(embedded) === developerIndex && app === `idx-${embedded}`);
 }
 
-function validateChannel(value: unknown, name: string, candidateId: string): XmlChannel {
+function validateChannel(value: unknown, name: string, candidateId: string, allowInterpolatedSamples: boolean): XmlChannel {
   const channel = record(value, ["timestamps", "values"], "canonical.concern_invalid", candidateId);
   const timestamps = denseArray(channel.timestamps, "canonical.concern_invalid", candidateId);
   const values = denseArray(channel.values, "canonical.concern_invalid", candidateId);
@@ -315,14 +315,14 @@ function validateChannel(value: unknown, name: string, candidateId: string): Xml
     if (name === "lat" && entry !== null && ((entry as number) < -90 || (entry as number) > 90)) fail("canonical.concern_invalid", candidateId, `stream:${name}`);
     if (name === "lng" && entry !== null && ((entry as number) < -180 || (entry as number) > 180)) fail("canonical.concern_invalid", candidateId, `stream:${name}`);
     if (["distance", "speed", "power"].includes(name) && entry !== null && (entry as number) < 0) fail("canonical.concern_invalid", candidateId, `stream:${name}`);
-    if (name === "heart_rate" && entry !== null && (!Number.isInteger(entry) || (entry as number) < 1 || (entry as number) > 255)) fail("canonical.concern_invalid", candidateId, `stream:${name}`);
-    if (name === "cadence" && entry !== null && (!Number.isInteger(entry) || (entry as number) < 0 || (entry as number) > 255)) fail("canonical.concern_invalid", candidateId, `stream:${name}`);
+    if (name === "heart_rate" && entry !== null && ((!allowInterpolatedSamples && !Number.isInteger(entry)) || (entry as number) < 1 || (entry as number) > 255)) fail("canonical.concern_invalid", candidateId, `stream:${name}`);
+    if (name === "cadence" && entry !== null && ((!allowInterpolatedSamples && !Number.isInteger(entry)) || (entry as number) < 0 || (entry as number) > 255)) fail("canonical.concern_invalid", candidateId, `stream:${name}`);
   }
   if (!hasValue) fail("canonical.concern_invalid", candidateId, `stream:${name}`);
   return value as XmlChannel;
 }
 
-function validateConcerns(value: unknown, candidateId: string): Readonly<Record<string, ConcernValue>> {
+function validateConcerns(value: unknown, candidateId: string, allowInterpolatedSamples: boolean): Readonly<Record<string, ConcernValue>> {
   const concerns = record(value, null, "canonical.concern_invalid", candidateId);
   let lapSeqs = new Set<number>();
   if (Object.hasOwn(concerns, "lap[]")) {
@@ -338,7 +338,7 @@ function validateConcerns(value: unknown, candidateId: string): Readonly<Record<
     if (key.startsWith("stream:")) {
       const name = key.slice(7);
       if (!validChannelName(name)) fail("canonical.concern_invalid", candidateId, key);
-      validateChannel(entry, name, candidateId);
+      validateChannel(entry, name, candidateId, allowInterpolatedSamples);
       continue;
     }
     if (!SCALAR_KEYS.has(key)) fail("canonical.concern_invalid", candidateId, key);
@@ -384,7 +384,7 @@ function validateCandidate(value: unknown): Candidate {
   let rank: QualityRank;
   try { rank = assertQualityRank(candidate.rank as number); } catch { fail("canonical.rank_invalid", id); }
   if (rank! !== expectedRank) fail("canonical.rank_invalid", id);
-  validateConcerns(candidate.concerns, id);
+  validateConcerns(candidate.concerns, id, origin.kind === "file" && origin.format === "fit");
   return value as Candidate;
 }
 

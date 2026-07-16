@@ -115,8 +115,10 @@ function leftRightBalance(message: PatchedParserMessage): number | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== "object" || Array.isArray(value)) throw new FitSourceError("invalid_numeric");
   const keys = Object.keys(value).sort();
-  if (keys.join(",") !== "right,value") throw new FitSourceError("invalid_numeric");
+  const shape = keys.join(",");
+  if (shape !== "right,value" && shape !== "0,right,value") throw new FitSourceError("invalid_numeric");
   const record = value as Record<string, unknown>;
+  if (shape === "0,right,value" && record["0"] !== false) throw new FitSourceError("invalid_numeric");
   if (typeof record.right !== "boolean" || typeof record.value !== "number" || !Number.isFinite(record.value) || !Number.isInteger(record.value) || record.value < 0 || record.value > 127) {
     throw new FitSourceError("invalid_numeric");
   }

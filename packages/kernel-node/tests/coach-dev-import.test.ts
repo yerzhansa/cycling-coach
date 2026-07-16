@@ -81,7 +81,7 @@ const pair = {
 
 const fullReportFixture: ImportReport = {
   schema_version: 1,
-  ingest_version: 2,
+  ingest_version: 3,
   effective: {
     tier3: {
       startSeconds: 120,

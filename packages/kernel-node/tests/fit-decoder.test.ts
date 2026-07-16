@@ -30,10 +30,11 @@ describe("patched FIT decoder",()=>{
     expect(decoded.records[0].developerFields).toEqual([{...envelope,field_name:null,units:null},{...envelope,field_name:null,units:null},{...envelope,value:{a:2},field_name:null,units:null}]);
     await expect(decodeRoot({records:[{developer_fields:[{...envelope,value:undefined}]}]})).rejects.toMatchObject({code:"decode_failed"});
   });
-  it("extracts only the exact left-right mask object and distinguishes enhanced absence",async()=>{
+  it("extracts supported left-right mask objects and distinguishes enhanced absence",async()=>{
     const decoded=await decodeRoot({records:[{left_right_balance:{value:64,right:true},altitude:10,speed:4}]});
     expect(decoded.records[0]).toMatchObject({leftRightBalance:64,enhancedAltitude:null,altitude:10,enhancedSpeed:null,speed:4});
-    for(const bad of [64,{value:64},{value:64,right:1},{value:-1,right:false},{value:128,right:false},{value:1.5,right:false},{value:64,right:false,extra:0}]) {
+    expect((await decodeRoot({records:[{left_right_balance:{0:false,value:63,right:false}}]})).records[0].leftRightBalance).toBe(63);
+    for(const bad of [64,{value:64},{value:64,right:1},{value:-1,right:false},{value:128,right:false},{value:1.5,right:false},{0:0,value:64,right:false},{0:false,value:64,right:false,extra:0}]) {
       await expect(decodeRoot({records:[{left_right_balance:bad}]})).rejects.toMatchObject({code:"invalid_numeric"});
     }
     for(const key of ["enhanced_altitude","enhanced_speed"]) {

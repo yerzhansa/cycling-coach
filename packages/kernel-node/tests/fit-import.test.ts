@@ -28,7 +28,7 @@ describe("global file import runner", () => {
     expect(result.files[0]).toMatchObject({ outcome: "imported", raw_file_inserted: true });
     expect(result.inserts).toEqual({ raw_file: 1, source_record: 0 });
     expect((await store.get("SELECT count(*) c FROM source_record"))?.c).toBe(0);
-    expect((await store.get("SELECT ingest_version FROM ingest_metadata"))?.ingest_version).toBe(2);
+    expect((await store.get("SELECT ingest_version FROM ingest_metadata"))?.ingest_version).toBe(3);
   });
   it("sorts planning deterministically while retaining exact input paths", async () => {
     const inputPaths = [fixture("brick-running.fit"), fixture("brick-cycling.fit")];
@@ -63,7 +63,7 @@ describe("global file import runner", () => {
     await expect(importFilesWithReport({ inputPaths: [txt], archiveDir, store })).rejects.toThrow("unsupported input extension");
   });
   it("refuses a newer stored version before archive side effects", async () => {
-    await store.run("UPDATE ingest_metadata SET ingest_version=3");
+    await store.run("UPDATE ingest_metadata SET ingest_version=4");
     await expect(importFilesWithReport({ inputPaths: [fixture("brick-cycling.fit")], archiveDir, store })).rejects.toThrow("newer ingest semantics");
     expect(existsSync(archiveDir)).toBe(false);
   });

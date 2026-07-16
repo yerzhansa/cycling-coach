@@ -153,7 +153,7 @@ describe("real SQLite dedup ordering", () => {
         prepareFile: async (_artifact: ImportArtifact) => { throw new Error("unused"); },
         canonicalPick(group: Parameters<typeof canonicalPick>[0]) {
           origins.push(...group.candidates.map((candidate) => candidate.origin)); return canonicalPick(group);
-        }, materializeClusterInTransaction: createMaterializeClusterInTransaction(hashKey), ingestVersion: 2 as const };
+        }, materializeClusterInTransaction: createMaterializeClusterInTransaction(hashKey), ingestVersion: 3 as const };
       const first = await importArtifactsWithReport({ files: [], platform_records: [platform] }, deps);
       expect(first.inserts.source_record).toBe(1); expect(first.updates.relinked_source_records).toBe(1);
       expect(sourceInsertAttachments[0]).toEqual([null, null]);
@@ -165,15 +165,15 @@ describe("real SQLite dedup ordering", () => {
       expect(origins).toContainEqual(expect.objectContaining({ kind: "platform", persistedQualityRank: 300 }));
     } finally { await value.store.close(); }
   });
-  it("[PR05-SQL-007] proves zero and one upgrades, current two, and early refusal of three", async () => {
+  it("[PR05-SQL-007] proves zero through two upgrade, current three, and early refusal of four", async () => {
     const value = await fresh();
     try {
       const options = { inputPaths: [path("brick-cycling.fit")], archiveDir: value.archiveDir, store: value.store };
-      for (const version of [0, 1, 2]) {
+      for (const version of [0, 1, 2, 3]) {
         await value.store.run("UPDATE ingest_metadata SET ingest_version=?", [version]);
-        expect((await importFilesWithReport(options)).ingest_version).toBe(2);
+        expect((await importFilesWithReport(options)).ingest_version).toBe(3);
       }
-      await value.store.run("UPDATE ingest_metadata SET ingest_version=3");
+      await value.store.run("UPDATE ingest_metadata SET ingest_version=4");
       const count = (await value.store.get("SELECT count(*) c FROM raw_file"))?.c;
       await expect(importFilesWithReport(options)).rejects.toThrow("newer ingest semantics");
       expect((await value.store.get("SELECT count(*) c FROM raw_file"))?.c).toBe(count);
