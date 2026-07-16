@@ -96,7 +96,7 @@ export interface OrphanReport {
 
 export interface ImportReport {
   readonly schema_version: 1;
-  readonly ingest_version: 2;
+  readonly ingest_version: typeof FIT_INGEST_VERSION;
   readonly effective: {
     readonly tier3: {
       readonly startSeconds: 120;

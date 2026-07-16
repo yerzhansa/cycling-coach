@@ -46,6 +46,14 @@ describe("FIT row mapper",()=>{
     const timeRows=out.activity.streams.filter((s)=>s.channel==="time").sort((a,b)=>out.activity.sessions.findIndex((x)=>x.session_key===a.session_key)-out.activity.sessions.findIndex((x)=>x.session_key===b.session_key));
     expect(timeRows.map((s)=>s.n)).toEqual([3,2,4,2,4]);expect(out.activity.sessions.filter((s)=>s.is_transition).map((s)=>s.session_seq)).toEqual([1,3]);
   });
+  it("uses positive elapsed time for a single-session zero-width source range",async()=>{
+    const source=session(0,0,0,{totalElapsedTime:1.1});
+    await expect(map(decoded([source],[record(0,0),record(1,1),record(2,2)]))).resolves.toBeDefined();
+    await error(map(decoded([source],[record(0,0),record(1,3)])),"record_unassigned");
+    await error(map(decoded([source,session(1,2,3)],[record(0,.5),record(1,2)])),"record_unassigned");
+    const activity:DecodedActivity={timestamp:null,localTimestamp:null,numSessions:2,type:null,event:null,eventType:null};
+    await error(map(decoded([source],[record(0,0),record(1,1)],{activity})),"record_unassigned");
+  });
   it("honors source-error precedence and does not sort records",async()=>{
     await expect(map(decoded([], [record(0,NaN)]))).rejects.toMatchObject({code:"missing_session"});
     await expect(map(decoded([session(0,0,3,{sport:null,startTime:NaN})],[]))).rejects.toMatchObject({code:"invalid_date"});
@@ -76,7 +84,11 @@ describe("FIT row mapper",()=>{
     await error(map(decoded([session(0,0,1,{firstLapIndex:0,numLaps:null})],[])),"lap_slice_invalid");
     await expect(map(decoded([session(0,0,1,{firstLapIndex:null,numLaps:0})],[]))).resolves.toBeDefined();
     await error(map(decoded([session(0,0,1,{firstLapIndex:1,numLaps:0})],[])),"lap_slice_invalid");
-    await error(map(decoded([session(0,0,1,{firstLapIndex:null,numLaps:1})],[],{laps:[lap(0)]})),"lap_slice_invalid");
+    await expect(map(decoded([session(0,0,1,{firstLapIndex:null,numLaps:1})],[],{laps:[lap(0)]}))).resolves.toBeDefined();
+    await expect(map(decoded([session(0,0,1,{firstLapIndex:null,numLaps:null})],[],{laps:[lap(0)]}))).resolves.toBeDefined();
+    await error(map(decoded([session(0,0,1,{firstLapIndex:null,numLaps:2})],[],{laps:[lap(0)]})),"lap_slice_invalid");
+    await error(map(decoded([session(0,0,1,{firstLapIndex:null,numLaps:1}),session(1,2,3,{firstLapIndex:null,numLaps:1})],[],{laps:[lap(0),lap(1)]})),"lap_slice_invalid");
+    await error(map(decoded([session(0,0,1,{firstLapIndex:null,numLaps:1})],[],{activity:{timestamp:null,localTimestamp:null,numSessions:2,type:null,event:null,eventType:null},laps:[lap(0)]})),"lap_slice_invalid");
     await error(map(decoded([baseSession],[],{laps:[lap(0,{firstLengthIndex:0,numLengths:null})]})),"length_slice_invalid");
     await error(map(decoded([baseSession],[],{laps:[lap(0,{firstLengthIndex:null,numLengths:1})],lengths:[length(0)]})),"length_slice_invalid");
     await error(map(decoded([baseSession],[],{laps:[baseLap],lengths:[length(0,{lengthType:"idle"})]})),"active_length_count_mismatch");

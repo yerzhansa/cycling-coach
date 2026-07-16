@@ -258,13 +258,20 @@ export async function mapFitArtifact(input: MapFitArtifactInput): Promise<Mapped
   for (const s of d.sessions) if (s.startTime === null) throw new FitSourceError("missing_session_start");
   for (const s of d.sessions) if (s.timestamp === null) throw new FitSourceError("missing_session_end");
   for (let i=0;i<d.sessions.length;i++) if (d.sessions[i].sport === null || sports[i] === "") throw new FitSourceError("missing_session_sport");
+  const singleSessionShape=d.sessions.length===1&&(d.activity?.numSessions===null||d.activity?.numSessions===undefined||d.activity.numSessions===1);
+  // FIT timestamps are whole seconds while elapsed time may retain a fractional terminal second.
+  const sessionEnds=d.sessions.map((s)=>singleSessionShape&&s.timestamp===s.startTime&&s.totalElapsedTime!==null&&s.totalElapsedTime>0
+    ? (s.startTime as number)+Math.ceil(s.totalElapsedTime)
+    : s.timestamp as number);
   for (let i=0;i<d.sessions.length;i++) {
     const s=d.sessions[i];
-    if ((s.startTime as number) > (s.timestamp as number)) throw new FitSourceError("invalid_session_range");
-    if (i+1<d.sessions.length && (s.timestamp as number) > (d.sessions[i+1].startTime as number)) throw new FitSourceError("invalid_session_range");
+    if ((s.startTime as number) > sessionEnds[i]) throw new FitSourceError("invalid_session_range");
+    if (i+1<d.sessions.length && sessionEnds[i] > (d.sessions[i+1].startTime as number)) throw new FitSourceError("invalid_session_range");
   }
 
-  const sessionLapSlices = d.sessions.map((s) => validateSlice(s.firstLapIndex,s.numLaps,d.laps.length,"lap_slice_invalid"));
+  const sessionLapSlices = d.sessions.map((s) => singleSessionShape&&d.laps.length>0&&s.firstLapIndex===null&&(s.numLaps===null||s.numLaps===d.laps.length)
+    ? [0,d.laps.length] as const
+    : validateSlice(s.firstLapIndex,s.numLaps,d.laps.length,"lap_slice_invalid"));
   const lapOwners = Array<number>(d.laps.length).fill(0);
   for (const [start,end] of sessionLapSlices) for(let i=start;i<end;i++) lapOwners[i]++;
   if (lapOwners.some((n)=>n!==1)) throw new FitSourceError("lap_slice_invalid");
@@ -289,7 +296,7 @@ export async function mapFitArtifact(input: MapFitArtifactInput): Promise<Mapped
 
   if (d.records.some((r)=>r.timestamp===null)) throw new FitSourceError("record_time_missing");
   const recordOwners=d.records.map((r)=>d.sessions.map((s,i)=>{
-    const t=r.timestamp as number, start=s.startTime as number, end=s.timestamp as number;
+    const t=r.timestamp as number, start=s.startTime as number, end=sessionEnds[i];
     return t>=start && (i===d.sessions.length-1 ? t<=end : t<end);
   }).filter(Boolean).length);
   if(recordOwners.some((n)=>n===0)) throw new FitSourceError("record_unassigned");
@@ -297,7 +304,7 @@ export async function mapFitArtifact(input: MapFitArtifactInput): Promise<Mapped
   const assigned=d.sessions.map(()=>[] as number[]);
   for(let r=0;r<d.records.length;r++) {
     const t=d.records[r].timestamp as number;
-    const owner=d.sessions.findIndex((s,i)=>t>=(s.startTime as number)&&(i===d.sessions.length-1?t<=(s.timestamp as number):t<(s.timestamp as number)));
+    const owner=d.sessions.findIndex((s,i)=>t>=(s.startTime as number)&&(i===d.sessions.length-1?t<=sessionEnds[i]:t<sessionEnds[i]));
     assigned[owner].push(r);
   }
   for(const indexes of assigned) for(let i=1;i<indexes.length;i++) if((d.records[indexes[i]].timestamp as number)<=(d.records[indexes[i-1]].timestamp as number)) throw new FitSourceError("record_time_nonmonotonic");

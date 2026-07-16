@@ -4,6 +4,7 @@ import { mkdir, open, readFile, readdir, rename, stat, unlink } from "node:fs/pr
 import { createArchiveManager } from "../archive/manager.js";
 import {
   FitSourceError,
+  FIT_INGEST_VERSION,
   QUALITY_RANK,
   canonicalPick,
   createMaterializeClusterInTransaction,
@@ -210,6 +211,6 @@ export async function importFilesWithReport(options: ImportFilesOptions): Promis
     prepareFile: (artifact) => artifact.ext === "fit" ? prepareFit(artifact, crypto) : prepareXmlFile(artifact.bytes, artifact.ext, { crypto }),
     canonicalPick,
     materializeClusterInTransaction: createMaterializeClusterInTransaction(hashKey),
-    ingestVersion: 2,
+    ingestVersion: FIT_INGEST_VERSION,
   });
 }
