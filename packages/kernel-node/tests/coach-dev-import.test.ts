@@ -1,0 +1,860 @@
+import { spawn } from "node:child_process";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { ImportReport } from "@enduragent/kernel/ingest";
+import type { MigratorStore, SqlStore } from "@enduragent/kernel/store";
+import type { WriteLockHandle } from "@enduragent/kernel-node/lock";
+
+type RunCoachDev = typeof import("../src/cli/coach-dev.js").runCoachDev;
+type Dependencies = NonNullable<Parameters<RunCoachDev>[2]>;
+
+const USAGE = "Usage: coach-dev import --report <path>...\n";
+const USAGE_ERROR = 'usage_error: expected "import --report <path>..."\n' + USAGE;
+const WRITER_LOCK_STDERR =
+  "writer_lock_held: Another writer is active; stop it or wait, then retry.\n";
+const WRITER_LOCK_STDOUT = `${JSON.stringify(
+  {
+    schema_version: 1,
+    error: {
+      code: "writer_lock_held",
+      message: "Another writer is active; stop it or wait, then retry.",
+    },
+  },
+  null,
+  2,
+)}\n`;
+const IMPORT_FAILED_STDOUT = `${JSON.stringify(
+  {
+    schema_version: 1,
+    error: { code: "import_failed", message: "Import failed; see stderr." },
+  },
+  null,
+  2,
+)}\n`;
+const REPORT_KEYS = [
+  "schema_version",
+  "ingest_version",
+  "effective",
+  "files",
+  "inserts",
+  "updates",
+  "clusters",
+  "threshold_near_misses",
+  "overlap_watchlist",
+  "confirm_queue",
+  "applied_confirmations",
+  "brick_groups",
+  "orphaned_overlays",
+] as const;
+const DETERMINISTIC_KEYS = [
+  "schema_version",
+  "ingest_version",
+  "effective",
+  "clusters",
+  "threshold_near_misses",
+  "overlap_watchlist",
+  "confirm_queue",
+  "applied_confirmations",
+  "brick_groups",
+  "orphaned_overlays",
+] as const;
+
+const pair = {
+  member_a: "member-a",
+  member_b: "member-b",
+  candidate_a: "candidate-a",
+  candidate_b: "candidate-b",
+  serial_a: 1,
+  serial_b: 2,
+  start_delta_s: 121,
+  duration_ratio: 0.11,
+  duration_ratio_failed: false,
+  distance_ratio: null,
+  distance_ratio_state: "untested",
+  containment: false,
+  distance_untested: true,
+  reason: "tier3_threshold_near_miss",
+} as const;
+
+const fullReportFixture: ImportReport = {
+  schema_version: 1,
+  ingest_version: 2,
+  effective: {
+    tier3: {
+      startSeconds: 120,
+      durationPercent: 10,
+      distancePercent: 10,
+      containmentSlackSeconds: 120,
+      nearMissMultiplier: 2,
+    },
+    transition_window_s: 900,
+  },
+  files: [
+    {
+      input_path: "/synthetic/input.fit",
+      address: "a".repeat(64),
+      ext: "fit",
+      archive_deduped: false,
+      raw_file_inserted: true,
+      outcome: "imported",
+      quarantine: null,
+    },
+  ],
+  inserts: { raw_file: 1, source_record: 0 },
+  updates: { source_record: 0, relinked_source_records: 0 },
+  clusters: [
+    {
+      cluster_id: "member-a",
+      workout_key: "workout-a",
+      members: ["member-a", "member-b"],
+      edge_tiers: ["confirmation"],
+      canonical_sources: [
+        {
+          concern: "session.start_utc",
+          candidate_id: "candidate-a",
+          rank: 400,
+        },
+      ],
+    },
+  ],
+  threshold_near_misses: [pair],
+  overlap_watchlist: [
+    {
+      ...pair,
+      reason: "expanded_overlap_unmerged",
+      expanded_a: { start_utc: 400, end_utc: 1600 },
+      expanded_b: { start_utc: 521, end_utc: 1721 },
+    },
+  ],
+  confirm_queue: [{ ...pair, reason: "tier3_serial_confirmation_required" }],
+  applied_confirmations: [
+    {
+      id: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      member_a: "member-a",
+      member_b: "member-b",
+      verdict: "merge",
+      hlc_physical_ms: 1,
+      hlc_counter: 0,
+      device_id: "device-1",
+      result: "edge_authorized",
+      reason: "effective_merge_confirmation",
+    },
+  ],
+  brick_groups: [
+    {
+      members: ["member-a", "member-b"],
+      families: ["swimming", "cycling"],
+      gap_s: 30,
+      effective_transition_window_s: 900,
+    },
+  ],
+  orphaned_overlays: [
+    {
+      id: "overlay-1",
+      target_kind: "field_merge_override_overlay:session",
+      target_key: "missing-session",
+      reason: "target_missing_after_rekey",
+    },
+  ],
+};
+
+let runCoachDev: RunCoachDev;
+let acquireWriteLock: typeof import("@enduragent/kernel-node/lock").acquireWriteLock;
+let resolveAthleteHome: typeof import("@enduragent/kernel-node/home").resolveAthleteHome;
+let openSqliteStorage: typeof import("@enduragent/kernel-node/sqlite").openSqliteStorage;
+let dumpStore: typeof import("@enduragent/kernel/store").dumpStore;
+let MIGRATIONS: typeof import("@enduragent/kernel/store/migrations").MIGRATIONS;
+let WriteLockContentionError: typeof import("@enduragent/kernel-node/lock").WriteLockContentionError;
+let LOCKFILE_NAME: typeof import("@enduragent/kernel-node/lock").LOCKFILE_NAME;
+let PORT_FILE_NAME: typeof import("@enduragent/kernel-node/lock").PORT_FILE_NAME;
+
+const tempDirs = new Set<string>();
+let realHome: string | undefined;
+let firstReport: ImportReport | undefined;
+let firstDump: string | undefined;
+
+beforeAll(async () => {
+  const requiredDist = [
+    "packages/kernel/dist/store.js",
+    "packages/kernel/dist/store/migrations.js",
+    "packages/kernel-node/dist/home/index.js",
+    "packages/kernel-node/dist/lock/index.js",
+    "packages/kernel-node/dist/sqlite.js",
+    "packages/kernel-node/dist/ingest/index.js",
+  ];
+  try {
+    await Promise.all(requiredDist.map((path) => access(path)));
+  } catch {
+    throw new Error("required public dist precondition missing");
+  }
+
+  const [homeModule, lockModule, sqliteModule, storeModule, migrationModule] = await Promise.all([
+    import("@enduragent/kernel-node/home"),
+    import("@enduragent/kernel-node/lock"),
+    import("@enduragent/kernel-node/sqlite"),
+    import("@enduragent/kernel/store"),
+    import("@enduragent/kernel/store/migrations"),
+  ]);
+  resolveAthleteHome = homeModule.resolveAthleteHome;
+  acquireWriteLock = lockModule.acquireWriteLock;
+  WriteLockContentionError = lockModule.WriteLockContentionError;
+  LOCKFILE_NAME = lockModule.LOCKFILE_NAME;
+  PORT_FILE_NAME = lockModule.PORT_FILE_NAME;
+  openSqliteStorage = sqliteModule.openSqliteStorage;
+  dumpStore = storeModule.dumpStore;
+  MIGRATIONS = migrationModule.MIGRATIONS;
+  ({ runCoachDev } = await import("../src/cli/coach-dev.js"));
+});
+
+afterAll(async () => {
+  for (const path of tempDirs) {
+    await rm(path, { recursive: true, force: true });
+  }
+});
+
+async function freshHome(prefix: string): Promise<string> {
+  const path = await mkdtemp(join(tmpdir(), prefix));
+  tempDirs.add(path);
+  return path;
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function runChild(
+  home: string,
+  args: readonly string[],
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const env: NodeJS.ProcessEnv = { ...process.env, ENDURAGENT_HOME: home };
+  for (const name of Object.keys(env)) {
+    if (/API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH/i.test(name)) {
+      delete env[name];
+    }
+  }
+  delete env.NODE_NO_WARNINGS;
+  env.NODE_OPTIONS = "--disable-warning=ExperimentalWarning";
+
+  return new Promise((resolveResult, reject) => {
+    const child = spawn(
+      "pnpm",
+      ["exec", "tsx", "packages/kernel-node/src/cli/coach-dev.ts", ...args],
+      { cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (code, signal) => {
+      if (signal !== null) {
+        reject(new Error(`coach-dev child terminated by ${signal}`));
+        return;
+      }
+      resolveResult({ exitCode: code ?? 1, stdout, stderr });
+    });
+  });
+}
+
+type InjectedStage =
+  | "resolve"
+  | "acquire"
+  | "mkdir"
+  | "chmod"
+  | "open"
+  | "migrate"
+  | "import"
+  | "close"
+  | "release";
+
+interface InjectedOptions {
+  readonly fail?: Partial<Record<InjectedStage, unknown>>;
+  readonly home?: {
+    readonly root: string;
+    readonly storeDir: string;
+    readonly archiveDir: string;
+    readonly configDir: string;
+  };
+  readonly report?: ImportReport;
+}
+
+function injected(options: InjectedOptions = {}) {
+  const calls: string[] = [];
+  const home =
+    options.home ??
+    ({
+      root: "/synthetic/home",
+      storeDir: "/synthetic/home/store",
+      archiveDir: "/synthetic/home/archive",
+      configDir: "/synthetic/home/config",
+    } as const);
+  const fail = (stage: InjectedStage): void => {
+    if (Object.hasOwn(options.fail ?? {}, stage)) {
+      throw options.fail?.[stage];
+    }
+  };
+  const observed: {
+    mkdir?: readonly [string, unknown];
+    chmod?: readonly [string, number];
+    open?: string;
+    migrations?: unknown;
+    import?: {
+      readonly inputPaths: readonly string[];
+      readonly archiveDir: string;
+      readonly store: unknown;
+    };
+    lock?: unknown;
+  } = {};
+  const store = {
+    async exec() {},
+    async run() {},
+    async get() {
+      return undefined;
+    },
+    async all() {
+      return [];
+    },
+    async close() {
+      calls.push("close");
+      fail("close");
+    },
+    async getUserVersion() {
+      return 0;
+    },
+    async setUserVersion() {},
+    async transaction<T>(fn: () => Promise<T>) {
+      return fn();
+    },
+  } as SqlStore & MigratorStore;
+  const handle: WriteLockHandle = {
+    status: "acquired",
+    port: 1,
+    lockfilePath: "/synthetic/home/config/store-writer.lock",
+    portFilePath: "/synthetic/home/config/store-writer.port",
+    async release() {
+      calls.push("release");
+      fail("release");
+    },
+  };
+  const deps = {
+    resolveAthleteHome() {
+      calls.push("resolve");
+      fail("resolve");
+      return home;
+    },
+    async acquireWriteLock(value: unknown) {
+      calls.push("acquire");
+      observed.lock = value;
+      fail("acquire");
+      return handle;
+    },
+    async mkdir(path: string, mkdirOptions: unknown) {
+      calls.push("mkdir");
+      observed.mkdir = [path, mkdirOptions];
+      fail("mkdir");
+      return undefined;
+    },
+    async chmod(path: string, mode: number) {
+      calls.push("chmod");
+      observed.chmod = [path, mode];
+      fail("chmod");
+    },
+    openSqliteStorage(path: string) {
+      calls.push("open");
+      observed.open = path;
+      fail("open");
+      return store;
+    },
+    async runMigrations(_store: unknown, migrations: unknown) {
+      calls.push("migrate");
+      observed.migrations = migrations;
+      fail("migrate");
+      return { fromVersion: 0, toVersion: 3, applied: [1, 2, 3] };
+    },
+    async importFilesWithReport(value: {
+      readonly inputPaths: readonly string[];
+      readonly archiveDir: string;
+      readonly store: unknown;
+    }) {
+      calls.push("import");
+      observed.import = value;
+      fail("import");
+      return options.report ?? fullReportFixture;
+    },
+  } as Dependencies;
+  return { calls, deps, home, observed, store };
+}
+
+function expectUnexpected(result: Awaited<ReturnType<RunCoachDev>>, stage: string): void {
+  expect(result).toEqual({
+    exitCode: 1,
+    stdout: IMPORT_FAILED_STDOUT,
+    stderr: `import_failed: ${stage} failed\n`,
+  });
+}
+
+async function expectLockFilesAbsent(home: string): Promise<void> {
+  const configDir = join(home, "config");
+  expect(await exists(join(configDir, LOCKFILE_NAME))).toBe(false);
+  expect(await exists(join(configDir, PORT_FILE_NAME))).toBe(false);
+}
+
+describe("coach-dev import --report", () => {
+  it("help forms are no-write", async () => {
+    for (const argv of [["--help"], ["import", "--help"]]) {
+      const scenario = injected();
+      await expect(runCoachDev(argv, {}, scenario.deps)).resolves.toEqual({
+        exitCode: 0,
+        stdout: USAGE,
+        stderr: "",
+      });
+      expect(scenario.calls).toEqual([]);
+    }
+  });
+
+  it("usage errors are no-write", async () => {
+    const cases = [
+      [],
+      ["import"],
+      ["import", "input.fit"],
+      ["import", "--report"],
+      ["import", "--report", "input.fit", "--report"],
+      ["export", "--report", "input.fit"],
+      ["import", "--report", "-input.fit"],
+      ["import", "--report", ""],
+    ];
+    for (const argv of cases) {
+      const scenario = injected();
+      await expect(runCoachDev(argv, {}, scenario.deps)).resolves.toEqual({
+        exitCode: 2,
+        stdout: "",
+        stderr: USAGE_ERROR,
+      });
+      expect(scenario.calls).toEqual([]);
+    }
+  });
+
+  it("First real child import is non-vacuous", async () => {
+    realHome = await freshHome("coach-dev-real-");
+    const fixture = resolve("packages/kernel-node/tests/fixtures/ingest/triathlon-multisport.fit");
+    const child = await runChild(realHome, ["import", "--report", fixture]);
+    expect(child.exitCode).toBe(0);
+    expect(child.stderr).toBe("");
+    firstReport = JSON.parse(child.stdout) as ImportReport;
+    expect(Object.keys(firstReport)).toEqual(REPORT_KEYS);
+    expect(firstReport.files).toHaveLength(1);
+    expect(firstReport.files[0]).toMatchObject({
+      input_path: fixture,
+      ext: "fit",
+      archive_deduped: false,
+      raw_file_inserted: true,
+      outcome: "imported",
+      quarantine: null,
+    });
+    expect(firstReport.files[0]!.address).toMatch(/^[0-9a-f]{64}$/);
+    expect(firstReport.inserts).toEqual({ raw_file: 1, source_record: 0 });
+
+    const databasePath = join(realHome, "store", "store.db");
+    expect(await exists(databasePath)).toBe(true);
+    const store = openSqliteStorage(databasePath);
+    try {
+      expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 3 });
+      expect(await store.get("SELECT count(*) AS c FROM raw_file")).toEqual({ c: 1 });
+      expect(await store.get("SELECT count(*) AS c FROM source_record")).toEqual({ c: 0 });
+      expect(
+        Number((await store.get("SELECT count(*) AS c FROM workout"))?.c),
+      ).toBeGreaterThanOrEqual(1);
+      expect(
+        Number((await store.get("SELECT count(*) AS c FROM session"))?.c),
+      ).toBeGreaterThanOrEqual(1);
+      firstDump = await dumpStore(store);
+    } finally {
+      await store.close();
+    }
+    await expectLockFilesAbsent(realHome);
+  });
+
+  it("Second real child import is archive-deduped", async () => {
+    expect(realHome).toBeDefined();
+    expect(firstReport).toBeDefined();
+    expect(firstDump).toBeDefined();
+    const fixture = resolve("packages/kernel-node/tests/fixtures/ingest/triathlon-multisport.fit");
+    const child = await runChild(realHome!, ["import", "--report", fixture]);
+    expect(child.exitCode).toBe(0);
+    expect(child.stderr).toBe("");
+    const second = JSON.parse(child.stdout) as ImportReport;
+    expect(Object.keys(second)).toEqual(REPORT_KEYS);
+    expect(second.files).toHaveLength(1);
+    expect(second.files[0]).toMatchObject({
+      input_path: fixture,
+      address: firstReport!.files[0]!.address,
+      ext: "fit",
+      archive_deduped: true,
+      raw_file_inserted: false,
+      outcome: "imported",
+      quarantine: null,
+    });
+    expect(second.inserts).toEqual({ raw_file: 0, source_record: 0 });
+    expect(second.updates.source_record).toBe(0);
+    expect(second.files.every((file) => file.raw_file_inserted === false)).toBe(true);
+    for (const key of DETERMINISTIC_KEYS) {
+      expect(second[key]).toEqual(firstReport![key]);
+    }
+
+    const store = openSqliteStorage(join(realHome!, "store", "store.db"));
+    try {
+      expect(await dumpStore(store)).toBe(firstDump);
+    } finally {
+      await store.close();
+    }
+    await expectLockFilesAbsent(realHome!);
+  });
+
+  it("held-lock refuses safely", async () => {
+    const homePath = await freshHome("coach-dev-held-");
+    const home = resolveAthleteHome({ ENDURAGENT_HOME: homePath });
+    const result = await acquireWriteLock({
+      configDir: home.configDir,
+      athleteHome: home.root,
+      version: "test-parent",
+    });
+    expect(result.status).toBe("acquired");
+    if (result.status !== "acquired") throw new Error("expected acquired lock");
+    const foreignServer = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ service: "foreign", version: "test" }));
+    });
+    await new Promise<void>((resolveListen) => {
+      foreignServer.listen({ host: "127.0.0.1", port: 0 }, resolveListen);
+    });
+    const foreignAddress = foreignServer.address();
+    if (foreignAddress === null || typeof foreignAddress === "string") {
+      throw new Error("foreign holder did not bind a TCP port");
+    }
+    await writeFile(join(home.configDir, PORT_FILE_NAME), `${foreignAddress.port}\n`, {
+      mode: 0o600,
+    });
+    try {
+      const child = await runChild(homePath, [
+        "import",
+        "--report",
+        resolve("packages/kernel-node/tests/fixtures/ingest/triathlon-multisport.fit"),
+      ]);
+      expect(child).toEqual({
+        exitCode: 3,
+        stdout: WRITER_LOCK_STDOUT,
+        stderr: WRITER_LOCK_STDERR,
+      });
+      expect(await exists(home.storeDir)).toBe(false);
+      expect(await exists(join(home.storeDir, "store.db"))).toBe(false);
+    } finally {
+      await new Promise<void>((resolveClose, reject) => {
+        foreignServer.close((error) => (error ? reject(error) : resolveClose()));
+      });
+      await result.release();
+    }
+    await expectLockFilesAbsent(homePath);
+  }, 15_000);
+
+  it("healthy-peer refuses without ownership", async () => {
+    const homePath = await freshHome("coach-dev-peer-");
+    const home = resolveAthleteHome({ ENDURAGENT_HOME: homePath });
+    await mkdir(home.configDir, { recursive: true, mode: 0o700 });
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          service: "enduragent-store-writer",
+          version: "test-peer",
+        }),
+      );
+    });
+    await new Promise<void>((resolveListen) => {
+      server.listen({ host: "127.0.0.1", port: 0 }, resolveListen);
+    });
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("healthy peer did not bind a TCP port");
+    }
+    const lockPath = join(home.configDir, LOCKFILE_NAME);
+    const portPath = join(home.configDir, PORT_FILE_NAME);
+    const lockBytes = `${JSON.stringify(
+      {
+        pid: process.pid,
+        port: address.port,
+        version: "test-peer",
+        athleteHome: home.root,
+      },
+      null,
+      2,
+    )}\n`;
+    const portBytes = `${address.port}\n`;
+    await writeFile(lockPath, lockBytes, { mode: 0o600 });
+    await writeFile(portPath, portBytes, { mode: 0o600 });
+    try {
+      const child = await runChild(homePath, [
+        "import",
+        "--report",
+        resolve("packages/kernel-node/tests/fixtures/ingest/triathlon-multisport.fit"),
+      ]);
+      expect(child).toEqual({
+        exitCode: 3,
+        stdout: WRITER_LOCK_STDOUT,
+        stderr: WRITER_LOCK_STDERR,
+      });
+      expect(await readFile(lockPath, "utf8")).toBe(lockBytes);
+      expect(await readFile(portPath, "utf8")).toBe(portBytes);
+      expect(await exists(home.storeDir)).toBe(false);
+      expect(await exists(join(home.storeDir, "store.db"))).toBe(false);
+    } finally {
+      await new Promise<void>((resolveClose, reject) => {
+        server.close((error) => (error ? reject(error) : resolveClose()));
+      });
+    }
+  });
+
+  it("successful injected lifecycle and full report serialization", async () => {
+    const scenario = injected({ report: fullReportFixture });
+    const inputPaths = ["/synthetic/z.fit", "/synthetic/a.fit"];
+    const result = await runCoachDev(
+      ["import", "--report", ...inputPaths],
+      { ENDURAGENT_HOME: scenario.home.root },
+      scenario.deps,
+    );
+    expect(result).toEqual({
+      exitCode: 0,
+      stdout: `${JSON.stringify(fullReportFixture, null, 2)}\n`,
+      stderr: "",
+    });
+    expect(scenario.calls).toEqual([
+      "resolve",
+      "acquire",
+      "mkdir",
+      "chmod",
+      "open",
+      "migrate",
+      "import",
+      "close",
+      "release",
+    ]);
+    expect(scenario.observed.lock).toEqual({
+      configDir: scenario.home.configDir,
+      athleteHome: scenario.home.root,
+      version: "coach-dev-import/1",
+    });
+    expect(scenario.observed.mkdir).toEqual([
+      scenario.home.storeDir,
+      { recursive: true, mode: 0o700 },
+    ]);
+    expect(scenario.observed.chmod).toEqual([scenario.home.storeDir, 0o700]);
+    expect(scenario.observed.open).toBe(join(scenario.home.storeDir, "store.db"));
+    expect(scenario.observed.migrations).toBe(MIGRATIONS);
+    expect(scenario.observed.import).toEqual({
+      inputPaths,
+      archiveDir: scenario.home.archiveDir,
+      store: scenario.store,
+    });
+  });
+
+  it("pre-store failure table uses safe stage diagnostics", async () => {
+    const cases: readonly {
+      readonly stage: InjectedStage;
+      readonly diagnostic: string;
+      readonly calls: readonly string[];
+    }[] = [
+      { stage: "resolve", diagnostic: "resolve home", calls: ["resolve"] },
+      {
+        stage: "acquire",
+        diagnostic: "acquire lock",
+        calls: ["resolve", "acquire"],
+      },
+      {
+        stage: "mkdir",
+        diagnostic: "create store directory",
+        calls: ["resolve", "acquire", "mkdir", "release"],
+      },
+      {
+        stage: "chmod",
+        diagnostic: "secure store directory",
+        calls: ["resolve", "acquire", "mkdir", "chmod", "release"],
+      },
+      {
+        stage: "open",
+        diagnostic: "open store",
+        calls: ["resolve", "acquire", "mkdir", "chmod", "open", "release"],
+      },
+    ];
+    for (const entry of cases) {
+      const scenario = injected({
+        fail: { [entry.stage]: new Error(`private-${entry.stage}`) },
+      });
+      const result = await runCoachDev(
+        ["import", "--report", "/synthetic/input.fit"],
+        {},
+        scenario.deps,
+      );
+      expectUnexpected(result, entry.diagnostic);
+      expect(scenario.calls).toEqual(entry.calls);
+    }
+  });
+
+  it("migration and import failures clean up", async () => {
+    const cases: readonly {
+      readonly stage: "migrate" | "import";
+      readonly error: Error;
+      readonly diagnostic: string;
+      readonly calls: readonly string[];
+    }[] = [
+      {
+        stage: "migrate",
+        error: new Error("private migration failure"),
+        diagnostic: "run migrations",
+        calls: ["resolve", "acquire", "mkdir", "chmod", "open", "migrate", "close", "release"],
+      },
+      {
+        stage: "import",
+        error: new WriteLockContentionError("late private contention", 3),
+        diagnostic: "import files",
+        calls: [
+          "resolve",
+          "acquire",
+          "mkdir",
+          "chmod",
+          "open",
+          "migrate",
+          "import",
+          "close",
+          "release",
+        ],
+      },
+    ];
+    for (const entry of cases) {
+      const scenario = injected({ fail: { [entry.stage]: entry.error } });
+      const result = await runCoachDev(
+        ["import", "--report", "/synthetic/input.fit"],
+        {},
+        scenario.deps,
+      );
+      expectUnexpected(result, entry.diagnostic);
+      expect(scenario.calls).toEqual(entry.calls);
+    }
+  });
+
+  it("close failure still releases", async () => {
+    const scenario = injected({
+      fail: { close: new Error("private close failure") },
+    });
+    const result = await runCoachDev(
+      ["import", "--report", "/synthetic/input.fit"],
+      {},
+      scenario.deps,
+    );
+    expectUnexpected(result, "close store");
+    expect(scenario.calls).toEqual([
+      "resolve",
+      "acquire",
+      "mkdir",
+      "chmod",
+      "open",
+      "migrate",
+      "import",
+      "close",
+      "release",
+    ]);
+  });
+
+  it("release failure withholds success", async () => {
+    const scenario = injected({
+      fail: { release: new Error("private release failure") },
+    });
+    const result = await runCoachDev(
+      ["import", "--report", "/synthetic/input.fit"],
+      {},
+      scenario.deps,
+    );
+    expectUnexpected(result, "release lock");
+    expect(scenario.calls).toEqual([
+      "resolve",
+      "acquire",
+      "mkdir",
+      "chmod",
+      "open",
+      "migrate",
+      "import",
+      "close",
+      "release",
+    ]);
+  });
+
+  it("Privacy/precedence never forwards dependency errors", async () => {
+    const homePath = "/private/athlete-secret-home";
+    const inputPath = "/private/athlete-secret-input.fit";
+    const credential = "credential-secret-907";
+    const scenario = injected({
+      home: {
+        root: homePath,
+        storeDir: join(homePath, "store"),
+        archiveDir: join(homePath, "archive"),
+        configDir: join(homePath, "config"),
+      },
+      fail: {
+        import: new Error(
+          `${homePath} ${inputPath} ${credential} line one\r\nline two\nSOURCE_BYTES_907`,
+        ),
+        close: new Error("cleanup-close-secret-907"),
+        release: new Error("cleanup-release-secret-907"),
+      },
+    });
+    const result = await runCoachDev(
+      ["import", "--report", inputPath],
+      { API_KEY: credential },
+      scenario.deps,
+    );
+    expect(result).toEqual({
+      exitCode: 1,
+      stdout: IMPORT_FAILED_STDOUT,
+      stderr: "import_failed: import files failed\n",
+    });
+    expect(scenario.calls).toEqual([
+      "resolve",
+      "acquire",
+      "mkdir",
+      "chmod",
+      "open",
+      "migrate",
+      "import",
+      "close",
+      "release",
+    ]);
+    expect(result.stderr.match(/\n/g)).toHaveLength(1);
+    const output = result.stdout + result.stderr;
+    for (const privateValue of [
+      homePath,
+      inputPath,
+      credential,
+      "line one",
+      "line two",
+      "SOURCE_BYTES_907",
+      "cleanup-close-secret-907",
+      "cleanup-release-secret-907",
+      "Error:",
+      " at ",
+    ]) {
+      expect(output).not.toContain(privateValue);
+    }
+  });
+});
