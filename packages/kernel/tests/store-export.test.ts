@@ -84,7 +84,11 @@ interface Populated {
 
 function populated(userVersion = 3): Populated {
   const rows: Record<string, readonly AuthoredRow[]> = {};
-  for (const t of PURE_AUTHORED_TABLES) rows[t] = [{ id: `${t}-1`, v: 1 }, { id: `${t}-2`, v: 2 }];
+  for (const t of PURE_AUTHORED_TABLES)
+    rows[t] = [
+      { id: `${t}-1`, v: 1 },
+      { id: `${t}-2`, v: 2 },
+    ];
   for (const t of MIXED_AUTHORED_TABLES) rows[t] = [{ id: `${t}-m1`, provenance: "manual" }];
   const artifacts: ArchiveArtifact[] = [
     { address: "cc", relPath: "archive/2026/06/cc/cc.fit", bytes: 10, kind: "fit" },
@@ -147,7 +151,9 @@ function makeSink(): ImportSink & { stored: Map<string, Set<string>> } {
   return sink;
 }
 
-function makePresence(missingAddresses: readonly string[] = []): ArchivePresenceChecker & { queried: string[] } {
+function makePresence(
+  missingAddresses: readonly string[] = [],
+): ArchivePresenceChecker & { queried: string[] } {
   const missing = new Set(missingAddresses);
   const queried: string[] = [];
   const p: ArchivePresenceChecker & { queried: string[] } = {
@@ -165,10 +171,7 @@ describe("store export op", () => {
     const data = populated();
     const { source, calls } = makeSource(data);
     const crypto = new FakeCrypto();
-    const result = await buildExport(
-      { source, manifest: makeManifest(data), crypto, codec },
-      {},
-    );
+    const result = await buildExport({ source, manifest: makeManifest(data), crypto, codec }, {});
     const document = (await decodeContainer(result.container, { codec, crypto }, {})) as {
       store: { authored: Record<string, unknown[]> };
     };
@@ -182,8 +185,34 @@ describe("store export op", () => {
     for (const t of MIXED_AUTHORED_TABLES) {
       expect(calls.find((c) => c.table === t)?.manualOnly).toBe(true);
     }
-    for (const forbidden of ["workout", "session", "stream", "raw_file", "source_record", "metric_snapshot", "lap", "swim_length", "mean_max_cache"]) {
+    for (const forbidden of [
+      "workout",
+      "session",
+      "stream",
+      "raw_file",
+      "source_record",
+      "metric_snapshot",
+      "lap",
+      "swim_length",
+      "mean_max_cache",
+      "source_artifact",
+      "source_record_revision",
+      "source_record_current",
+      "source_watermark",
+      "sync_operation",
+    ]) {
       expect(keys).not.toContain(forbidden);
+    }
+    const portableTables = [...PURE_AUTHORED_TABLES, ...MIXED_AUTHORED_TABLES];
+    for (const excluded of [
+      "source_artifact",
+      "source_record_revision",
+      "source_record_current",
+      "source_watermark",
+      "sync_operation",
+    ]) {
+      expect(portableTables).not.toContain(excluded);
+      expect(calls.some(({ table }) => table === excluded)).toBe(false);
     }
   });
 
@@ -222,10 +251,10 @@ describe("store export op", () => {
     expect(built.encrypted).toBe(true);
     expect(built.container[9]).toBe(0x01);
     expect([...built.container.subarray(0, 8)]).toEqual([...CONTAINER_MAGIC]);
-    const iterations = new DataView(
-      built.container.buffer,
-      built.container.byteOffset,
-    ).getUint32(11, false);
+    const iterations = new DataView(built.container.buffer, built.container.byteOffset).getUint32(
+      11,
+      false,
+    );
     expect(iterations).toBe(PBKDF2_ITERATIONS);
     expect(built.container[15]).toBe(16);
     expect(built.container[33]).toBe(12);
@@ -261,7 +290,9 @@ describe("store export op", () => {
     bytes[8] = 1;
     bytes[9] = 0;
     const crypto = new FakeCrypto();
-    await expect(decodeContainer(bytes, { codec, crypto }, {})).rejects.toBeInstanceOf(ExportFormatError);
+    await expect(decodeContainer(bytes, { codec, crypto }, {})).rejects.toBeInstanceOf(
+      ExportFormatError,
+    );
   });
 
   it("(bad-version) byte 8 = 0x02 rejects with a version-2 message", async () => {
@@ -270,13 +301,22 @@ describe("store export op", () => {
     const bad = good.slice();
     bad[8] = 0x02;
     await expect(decodeContainer(bad, { codec, crypto }, {})).rejects.toThrow(/2/);
-    await expect(decodeContainer(bad, { codec, crypto }, {})).rejects.toBeInstanceOf(ExportFormatError);
+    await expect(decodeContainer(bad, { codec, crypto }, {})).rejects.toBeInstanceOf(
+      ExportFormatError,
+    );
   });
 
   it("(corrupt-json) plaintext non-JSON payload rejects", async () => {
     const crypto = new FakeCrypto();
-    const container = new Uint8Array([...CONTAINER_MAGIC, 0x01, 0x00, ...codec.encodeUtf8("{not json")]);
-    await expect(decodeContainer(container, { codec, crypto }, {})).rejects.toBeInstanceOf(ExportFormatError);
+    const container = new Uint8Array([
+      ...CONTAINER_MAGIC,
+      0x01,
+      0x00,
+      ...codec.encodeUtf8("{not json"),
+    ]);
+    await expect(decodeContainer(container, { codec, crypto }, {})).rejects.toBeInstanceOf(
+      ExportFormatError,
+    );
   });
 
   it("(schema-mismatch) newer store version refused; equal and older accepted", async () => {
@@ -335,7 +375,9 @@ describe("store export op", () => {
     );
     expect(imported.manifest.total).toBe(3);
     expect(imported.manifest.missing.map((a) => a.address).sort()).toEqual(["aa", "bb"]);
-    expect(imported.manifest.present + imported.manifest.missing.length).toBe(imported.manifest.total);
+    expect(imported.manifest.present + imported.manifest.missing.length).toBe(
+      imported.manifest.total,
+    );
   });
 
   it("(wrong-pass-fake) a different passphrase maps to ExportDecryptionError", async () => {

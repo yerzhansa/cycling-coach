@@ -1,7 +1,16 @@
 import { canonicalRowJson } from "./canonical-json.js";
 import type { Row, SqlStore } from "./ports.js";
 
-export const DERIVED_TABLES = ["metric_snapshot", "mean_max_cache", "repair_log", "stream", "swim_length", "lap", "session", "workout"] as const;
+export const DERIVED_TABLES = [
+  "metric_snapshot",
+  "mean_max_cache",
+  "repair_log",
+  "stream",
+  "swim_length",
+  "lap",
+  "session",
+  "workout",
+] as const;
 
 /** Every current store table, alphabetical, with its content-derived order key. */
 export const DUMP_TABLES = [
@@ -21,7 +30,11 @@ export const DUMP_TABLES = [
   { table: "repair_fixer_settings", orderBy: "fixer" },
   { table: "repair_log", orderBy: "repair_key" },
   { table: "session", orderBy: "session_key" },
+  { table: "source_artifact", orderBy: "artifact_key" },
   { table: "source_record", orderBy: "id" },
+  { table: "source_record_current", orderBy: "source_record_id" },
+  { table: "source_record_revision", orderBy: "revision_id" },
+  { table: "source_watermark", orderBy: "source, lane" },
   { table: "sport_settings", orderBy: "id" },
   { table: "stream", orderBy: "stream_key" },
   { table: "stroke_correction_overlay", orderBy: "id" },
