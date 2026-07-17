@@ -12,11 +12,12 @@ export class CoachStoreWriterError extends Error {
   readonly code: CoachStoreWriterErrorCode;
   readonly stage: CoachDevWriterFailureStage | null;
 
-  constructor(code: CoachStoreWriterErrorCode, stage: CoachDevWriterFailureStage | null) {
+  constructor(code: CoachStoreWriterErrorCode, stage: CoachDevWriterFailureStage | null, options?: ErrorOptions) {
     super(
       code === "writer-lock-held"
         ? "coach store writer is already active"
         : `coach store writer failed at ${stage}`,
+      options,
     );
     this.name = "CoachStoreWriterError";
     this.code = code;
@@ -52,5 +53,5 @@ export async function withCoachStoreWriter<T>(
   if (result.status === "writer-lock-held") {
     throw new CoachStoreWriterError("writer-lock-held", null);
   }
-  throw new CoachStoreWriterError("writer-failed", result.stage);
+  throw new CoachStoreWriterError("writer-failed", result.stage, result.cause === undefined ? undefined : { cause: result.cause });
 }

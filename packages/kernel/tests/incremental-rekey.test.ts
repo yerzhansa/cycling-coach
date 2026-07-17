@@ -172,6 +172,26 @@ archive_rel_path,archive_epoch_s FROM source_artifact`)).toEqual({ source: entry
     } finally { await value.store.close(); }
   });
 
+  it("accepts source evidence placement independent of the import placement through the full oracle", async () => {
+    const value = await harness();
+    try {
+      await importArtifactsIncrementally({ files: [file(1)], platform_records: [] }, value.deps);
+      await value.store.run("UPDATE ingest_metadata SET ingest_version=3");
+      const artifact = file(2), address = digest(artifact.bytes);
+      const entry = { source: "intervals-icu" as const, lane: "bulk-fit" as const, externalId: "synthetic-entry-oracle",
+        artifactKind: "raw_file" as const, archiveAddress: address,
+        archiveRelPath: `2024/11/${address}.fit`, archiveEpochSeconds: 1_730_603_881 };
+      value.counts.clear();
+      await expect(importArtifactsIncrementally({ files: [{ ...artifact, source_evidence: { container: null, entry } }],
+        platform_records: [] }, value.deps)).resolves.toBeDefined();
+      expect(value.counts.get(digest(file(1).bytes))).toBe(1);
+      expect(await value.store.get("SELECT archive_rel_path,archive_epoch_s FROM source_artifact WHERE archive_address=?", [address]))
+        .toEqual({ archive_rel_path: entry.archiveRelPath, archive_epoch_s: entry.archiveEpochSeconds });
+      expect(await value.store.get("SELECT path FROM raw_file WHERE sha256=?", [address])).toEqual({ path: `${address}.fit` });
+      expect(await value.store.get("SELECT ingest_version FROM ingest_metadata")).toEqual({ ingest_version: 4 });
+    } finally { await value.store.close(); }
+  });
+
   it("recomputes exactly the affected closure", async () => {
     const value = await harness();
     try {
