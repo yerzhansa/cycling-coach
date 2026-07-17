@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { canonicalPick, DEFAULT_TIER3_THRESHOLDS, DEFAULT_TRANSITION_WINDOW_S, importArtifactsWithReport,
-  serializeImportReport, type Candidate, type ImportArtifact, type PrepareFileResult } from "../src/ingest/index.js";
+  serializeImportReport, type Candidate, type ImportArtifact, type PrepareFileResult, type RepairFixerSettings } from "../src/ingest/index.js";
 import type { ArchiveManager } from "../src/archive/index.js";
 import type { DedupConfirmationRow, Row, SqlStore, SqlValue } from "../src/store/index.js";
 
@@ -35,6 +35,7 @@ class ReportStore implements SqlStore {
     if (sql.startsWith("SELECT singleton")) return [{ singleton: 1, ingest_version: this.metadata }];
     if (sql.includes("FROM raw_file") && sql.includes("ORDER BY sha256")) return [...this.raw.values()].sort((a, b) => String(a.sha256).localeCompare(String(b.sha256)));
     if (sql.includes("FROM dedup_confirmation")) return this.confirmations as unknown as Row[];
+    if (sql.includes("FROM repair_fixer_settings")) return [];
     if (sql.includes("FROM stroke_correction_overlay")) return this.strokeOverlays;
     if (sql.includes("FROM pool_size_correction_overlay")) return this.poolOverlays;
     if (sql.includes("FROM field_merge_override_overlay")) return this.fieldOverlays;
@@ -85,8 +86,9 @@ function prepare(artifact: ImportArtifact): PrepareFileResult {
 }
 
 function harness(store = new ReportStore(), rawArchive = archive()) {
-  return { store, rawArchive, deps: { store, archive: rawArchive, hashKey, prepareFile: async (artifact: ImportArtifact) => prepare(artifact),
-    canonicalPick, materializeClusterInTransaction: async () => {}, ingestVersion: 3 as const } };
+  return { store, rawArchive, deps: { store, archive: rawArchive, hashKey,
+    prepareFile: async (artifact: ImportArtifact, _repairSettings: RepairFixerSettings) => prepare(artifact),
+    canonicalPick, materializeClusterInTransaction: async () => {}, ingestVersion: 4 as const } };
 }
 
 const file = (input_path: string, byte: number): ImportArtifact => ({ input_path, bytes: new Uint8Array([byte]), ext: "fit" });
@@ -168,7 +170,7 @@ describe("stable import report", () => {
     const { report } = await run([file("bad.fit", 0)]);
     const expected = `{
   "schema_version": 1,
-  "ingest_version": 3,
+  "ingest_version": 4,
   "effective": {
     "tier3": {
       "startSeconds": 120,
@@ -232,9 +234,9 @@ describe("stable import report", () => {
     ]);
     expect(report.inserts.raw_file).toBe(1);
   });
-  it("[PR05-REPORT-007] carries quarantine, defaults, and ingest version three", async () => {
+  it("[PR05-REPORT-007] carries quarantine, defaults, and ingest version four", async () => {
     const { report } = await run([file("bad.fit", 0)]);
-    expect(report).toMatchObject({ ingest_version: 3, effective: { tier3: DEFAULT_TIER3_THRESHOLDS,
+    expect(report).toMatchObject({ ingest_version: 4, effective: { tier3: DEFAULT_TIER3_THRESHOLDS,
       transition_window_s: DEFAULT_TRANSITION_WINDOW_S } });
     expect(report.files[0]).toMatchObject({ outcome: "quarantined", raw_file_inserted: false,
       quarantine: { code: "fit:decode_failed", message: "rejected" } });

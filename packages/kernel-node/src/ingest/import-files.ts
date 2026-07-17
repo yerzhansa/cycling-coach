@@ -6,6 +6,7 @@ import {
   FitSourceError,
   FIT_INGEST_VERSION,
   QUALITY_RANK,
+  applyRepairFixerSettingWithRebuild,
   canonicalPick,
   createMaterializeClusterInTransaction,
   decodeStream,
@@ -16,10 +17,14 @@ import {
   type DedupCandidateSummary,
   type ImportArtifact,
   type ImportReport,
+  type ImportReportDeps,
   type LapConcern,
   type PrepareFileResult,
   type PreparedFile,
   type PreparedRepairEvent,
+  type RepairFixer,
+  type RepairFixerSettingChangeResult,
+  type RepairFixerSettings,
   type SwimLengthConcern,
 } from "@enduragent/kernel/ingest";
 import { H, sortKeys, type MigratorStore, type SqlStore } from "@enduragent/kernel/store";
@@ -29,6 +34,18 @@ import { prepareXmlFile } from "./xml-file.js";
 
 export interface ImportFilesOptions {
   readonly inputPaths: readonly string[];
+  readonly archiveDir: string;
+  readonly store: SqlStore & Pick<MigratorStore, "transaction">;
+}
+
+interface NodeImportCompositionOptions {
+  readonly archiveDir: string;
+  readonly store: SqlStore & Pick<MigratorStore, "transaction">;
+}
+
+export interface SetRepairFixerEnabledOptions {
+  readonly fixer: RepairFixer;
+  readonly enabled: boolean;
   readonly archiveDir: string;
   readonly store: SqlStore & Pick<MigratorStore, "transaction">;
 }
@@ -141,13 +158,24 @@ function concernsForSession(mapped: Awaited<ReturnType<typeof mapFitArtifact>>, 
   return concerns;
 }
 
-async function prepareFit(artifact: ImportArtifact, crypto: CryptoPort): Promise<PrepareFileResult> {
+async function prepareFit(
+  artifact: ImportArtifact,
+  crypto: CryptoPort,
+  repairSettings: RepairFixerSettings,
+): Promise<PrepareFileResult> {
   const digest = await crypto.sha256(artifact.bytes);
   const address = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   let mapped: Awaited<ReturnType<typeof mapFitArtifact>>;
   try {
     const decoded = await createFitDecoder().decode(artifact.bytes);
-    mapped = await mapFitArtifact({ crypto, rawSha256: address, rawByteLength: artifact.bytes.byteLength, archivePath: null, decoded });
+    mapped = await mapFitArtifact({
+      crypto,
+      rawSha256: address,
+      rawByteLength: artifact.bytes.byteLength,
+      archivePath: null,
+      decoded,
+      repairSettings,
+    });
   } catch (error) {
     if (!(error instanceof FitSourceError)) throw error;
     return { outcome: "quarantined", quarantine: { code: `fit:${error.code}`, message: error.message } };
@@ -187,6 +215,29 @@ async function prepareFit(artifact: ImportArtifact, crypto: CryptoPort): Promise
   return { outcome: "prepared", value };
 }
 
+function createImportReportDeps(
+  options: NodeImportCompositionOptions,
+): ImportReportDeps {
+  const crypto = nodeCrypto();
+  const fs = nodeFileSystem();
+  const archive = createArchiveManager({ archiveRoot: options.archiveDir, crypto, fs });
+  const hashKey = (fields: readonly (string | number)[]): Promise<string> => {
+    if (fields.length === 0) throw new TypeError("empty key tuple");
+    return H(crypto, ...(fields as [string | number, ...(string | number)[]]));
+  };
+  return {
+    archive,
+    store: options.store,
+    hashKey,
+    prepareFile: (artifact, repairSettings) => artifact.ext === "fit"
+      ? prepareFit(artifact, crypto, repairSettings)
+      : prepareXmlFile(artifact.bytes, artifact.ext, { crypto }),
+    canonicalPick,
+    materializeClusterInTransaction: createMaterializeClusterInTransaction(hashKey),
+    ingestVersion: FIT_INGEST_VERSION,
+  };
+}
+
 export async function importFilesWithReport(options: ImportFilesOptions): Promise<ImportReport> {
   if (options.inputPaths.length === 0) throw new TypeError("input path list is empty");
   const seen = new Set<string>();
@@ -198,19 +249,17 @@ export async function importFilesWithReport(options: ImportFilesOptions): Promis
     if (ext !== "fit" && ext !== "tcx" && ext !== "gpx") throw new TypeError("unsupported input extension");
     files.push({ input_path: inputPath, bytes: new Uint8Array(await readFile(inputPath)), ext });
   }
-  const crypto = nodeCrypto();
-  const archive = createArchiveManager({ archiveRoot: options.archiveDir, crypto, fs: nodeFileSystem() });
-  const hashKey = (fields: readonly (string | number)[]): Promise<string> => {
-    if (fields.length === 0) throw new TypeError("empty key tuple");
-    return H(crypto, ...(fields as [string | number, ...(string | number)[]]));
-  };
-  return importArtifactsWithReport({ files, platform_records: [] }, {
-    archive,
-    store: options.store,
-    hashKey,
-    prepareFile: (artifact) => artifact.ext === "fit" ? prepareFit(artifact, crypto) : prepareXmlFile(artifact.bytes, artifact.ext, { crypto }),
-    canonicalPick,
-    materializeClusterInTransaction: createMaterializeClusterInTransaction(hashKey),
-    ingestVersion: FIT_INGEST_VERSION,
-  });
+  return importArtifactsWithReport(
+    { files, platform_records: [] },
+    createImportReportDeps(options),
+  );
+}
+
+export function setRepairFixerEnabled(
+  options: SetRepairFixerEnabledOptions,
+): Promise<RepairFixerSettingChangeResult> {
+  return applyRepairFixerSettingWithRebuild(
+    { fixer: options.fixer, enabled: options.enabled },
+    createImportReportDeps(options),
+  );
 }

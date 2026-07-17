@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { canonicalPick, createMaterializeClusterInTransaction, importArtifactsWithReport, type ConcernValue,
-  type ImportArtifact, type PlatformImportArtifact } from "@enduragent/kernel/ingest";
+  type ImportArtifact, type PlatformImportArtifact, type RepairFixerSettings } from "@enduragent/kernel/ingest";
 import type { ArchiveManager } from "@enduragent/kernel/archive";
 import { dumpStore, runMigrations, sortKeys } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
@@ -150,10 +150,10 @@ describe("real SQLite dedup ordering", () => {
         return originalGet(sql, params);
       };
       const deps = { store: value.store, archive: unusedArchive, hashKey,
-        prepareFile: async (_artifact: ImportArtifact) => { throw new Error("unused"); },
+        prepareFile: async (_artifact: ImportArtifact, _repairSettings: RepairFixerSettings) => { throw new Error("unused"); },
         canonicalPick(group: Parameters<typeof canonicalPick>[0]) {
           origins.push(...group.candidates.map((candidate) => candidate.origin)); return canonicalPick(group);
-        }, materializeClusterInTransaction: createMaterializeClusterInTransaction(hashKey), ingestVersion: 3 as const };
+        }, materializeClusterInTransaction: createMaterializeClusterInTransaction(hashKey), ingestVersion: 4 as const };
       const first = await importArtifactsWithReport({ files: [], platform_records: [platform] }, deps);
       expect(first.inserts.source_record).toBe(1); expect(first.updates.relinked_source_records).toBe(1);
       expect(sourceInsertAttachments[0]).toEqual([null, null]);
@@ -165,15 +165,15 @@ describe("real SQLite dedup ordering", () => {
       expect(origins).toContainEqual(expect.objectContaining({ kind: "platform", persistedQualityRank: 300 }));
     } finally { await value.store.close(); }
   });
-  it("[PR05-SQL-007] proves zero through two upgrade, current three, and early refusal of four", async () => {
+  it("[PR05-SQL-007] proves zero through three upgrade, current four, and early refusal of five", async () => {
     const value = await fresh();
     try {
       const options = { inputPaths: [path("brick-cycling.fit")], archiveDir: value.archiveDir, store: value.store };
-      for (const version of [0, 1, 2, 3]) {
+      for (const version of [0, 1, 2, 3, 4]) {
         await value.store.run("UPDATE ingest_metadata SET ingest_version=?", [version]);
-        expect((await importFilesWithReport(options)).ingest_version).toBe(3);
+        expect((await importFilesWithReport(options)).ingest_version).toBe(4);
       }
-      await value.store.run("UPDATE ingest_metadata SET ingest_version=4");
+      await value.store.run("UPDATE ingest_metadata SET ingest_version=5");
       const count = (await value.store.get("SELECT count(*) c FROM raw_file"))?.c;
       await expect(importFilesWithReport(options)).rejects.toThrow("newer ingest semantics");
       expect((await value.store.get("SELECT count(*) c FROM raw_file"))?.c).toBe(count);

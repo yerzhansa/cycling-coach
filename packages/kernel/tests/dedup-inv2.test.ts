@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { canonicalPick, createMaterializeClusterInTransaction, decodeStream, importArtifactsWithReport, type Candidate,
-  type ConcernValue, type ImportArtifact, type PlatformImportArtifact, type PrepareFileResult } from "../src/ingest/index.js";
+  type ConcernValue, type ImportArtifact, type PlatformImportArtifact, type PreparedFile, type PrepareFileResult } from "../src/ingest/index.js";
 import type { ArchiveManager } from "../src/archive/index.js";
 import { DERIVED_TABLES, sortKeys, type DedupConfirmationRow, type Row, type SourceRecordRow, type SqlStore, type SqlValue } from "../src/store/index.js";
 
@@ -65,6 +65,7 @@ class MemoryStore implements SqlStore {
     if (sql.includes("FROM source_record") && sql.includes("ORDER BY id")) return [...this.source.values()] as unknown as Row[];
     if (sql.includes("FROM dedup_confirmation")) return this.confirmations as unknown as Row[];
     if (sql.includes("FROM sport_settings")) return [];
+    if (sql.includes("FROM repair_fixer_settings")) return [];
     if (sql.includes("FROM workout")) return [];
     if (sql.includes("FROM stroke_correction_overlay")) {
       if (this.failOrphans) throw new Error("orphan enumeration failed");
@@ -122,7 +123,7 @@ function deps(store: MemoryStore, rawArchive: ReturnType<typeof archive>, materi
   const groups: Candidate[][] = [];
   return { groups, value: { archive: rawArchive, store, hashKey, prepareFile: async (artifact: ImportArtifact) => prepared(artifact),
     canonicalPick(group: Parameters<typeof canonicalPick>[0]) { groups.push([...group.candidates]); return canonicalPick(group); },
-    materializeClusterInTransaction: async () => { store.events.push("materialize"); await materialize(); }, ingestVersion: 3 as const } };
+    materializeClusterInTransaction: async () => { store.events.push("materialize"); await materialize(); }, ingestVersion: 4 as const } };
 }
 
 describe("global replan invariant", () => {
@@ -182,13 +183,14 @@ describe("global replan invariant", () => {
       { id: "stroke", target_kind: "stroke_correction_overlay:swim_length", target_key: "missing-length", reason: "target_missing_after_rekey" },
     ]);
   });
-  it("[PR05-INV2-007] owns one outer transaction and passes atomic concerns to materialization", async () => {
+  it("[PR05-INV2-007] owns one outer transaction and passes atomic concerns to materialization with empty PreparedRepairEvent carry", async () => {
     const store = new MemoryStore(), a = archive(), d = deps(store, a);
     const materialize = createMaterializeClusterInTransaction(hashKey);
     const selectedTime = { timestamps: [1_000, 1_050, 1_100], values: [1_000, 1_050, 1_100] };
     const selectedPower = { timestamps: [1_000, 1_050, 1_100], values: [101, 202, 303] };
     const lowerTime = { timestamps: [1_001, 1_051, 1_101], values: [1_001, 1_051, 1_101] };
     const lowerPower = { timestamps: [1_001, 1_051, 1_101], values: [901, 902, 903] };
+    const preparedRepairEvents: PreparedFile["repair_events"][] = [];
     const competingPrepared = (artifact: ImportArtifact): PrepareFileResult => {
       const result = prepared(artifact);
       if (result.outcome !== "prepared") throw new Error("fixture preparation failed");
@@ -203,8 +205,10 @@ describe("global replan invariant", () => {
         concerns: { ...baseCandidate.concerns, "stream:time": selected ? selectedTime : lowerTime,
           "stream:power": selected ? selectedPower : lowerPower },
       };
-      return { outcome: "prepared", value: { ...result.value, candidates: [candidate], summaries: [{ ...baseSummary,
-        candidate_id: candidate.id, source_kind: artifact.ext }] } };
+      const value = { ...result.value, candidates: [candidate], summaries: [{ ...baseSummary,
+        candidate_id: candidate.id, source_kind: artifact.ext }] };
+      preparedRepairEvents.push(value.repair_events);
+      return { outcome: "prepared", value };
     };
     await importArtifactsWithReport({ files: [
       { input_path: "selected.fit", bytes: new Uint8Array([1]), ext: "fit" },
@@ -222,6 +226,8 @@ describe("global replan invariant", () => {
     expect(store.streamWrites.map(({ channel, n }) => ({ channel, n }))).toEqual([
       { channel: "time", n: 3 }, { channel: "power", n: 3 },
     ]);
+    expect(preparedRepairEvents).toEqual([[], []]);
+    expect(store.events.filter((event) => event === "insert:repair_log")).toEqual([]);
     const persisted = (channel: "time" | "power") => {
       const row = store.streamWrites.find((entry) => entry.channel === channel);
       if (!row) throw new Error(`missing persisted ${channel} stream`);
@@ -257,6 +263,6 @@ describe("global replan invariant", () => {
   it("[PR05-INV2-008] upgrades old metadata and reports the current code version", async () => {
     const store = new MemoryStore(); store.metadata = 0; const a = archive(), d = deps(store, a);
     const value = await importArtifactsWithReport({ files: [{ input_path: "a.fit", bytes: new Uint8Array([1]), ext: "fit" }], platform_records: [] }, d.value);
-    expect(value.ingest_version).toBe(3); expect(store.metadata).toBe(3);
+    expect(value.ingest_version).toBe(4); expect(store.metadata).toBe(4);
   });
 });

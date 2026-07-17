@@ -25,7 +25,7 @@ const EXPECTED_TABLES = [
   "field_merge_override_overlay",
   "pool_size_correction_overlay",
 ];
-const EXPECTED_FULL_TABLES = [...EXPECTED_TABLES, "ingest_metadata", "repair_log", "dedup_confirmation"];
+const EXPECTED_FULL_TABLES = [...EXPECTED_TABLES, "ingest_metadata", "repair_log", "dedup_confirmation", "repair_fixer_settings"];
 const MIGRATION_002 = `ALTER TABLE swim_length ADD COLUMN distance_m REAL;
 
 CREATE TABLE ingest_metadata (
@@ -79,6 +79,12 @@ CREATE INDEX idx_dedup_confirmation_effective
     id DESC
   );
 `;
+const MIGRATION_004 = `CREATE TABLE repair_fixer_settings (
+  fixer TEXT PRIMARY KEY
+    CHECK (fixer IN ('chronoBridge','summitGuard','pulseWeave')),
+  enabled INTEGER NOT NULL CHECK (enabled = 1)
+) STRICT;
+`;
 
 const EXPECTED_INDEXES = [
   "idx_anchor_history_current",
@@ -118,6 +124,7 @@ function openFull(): DatabaseSync {
   const next = openMigrated();
   next.exec(MIGRATIONS[1]!.sql);
   next.exec(MIGRATIONS[2]!.sql);
+  next.exec(MIGRATIONS[3]!.sql);
   return next;
 }
 
@@ -128,7 +135,7 @@ afterEach(() => {
 
 describe("001_init migration", () => {
   it("wires the ordered migration list with real inlined SQL", () => {
-    expect(MIGRATIONS.map(({version,name})=>({version,name}))).toEqual([{version:1,name:"001_init"},{version:2,name:"002_repair_log"},{version:3,name:"003_dedup_confirmation"}]);
+    expect(MIGRATIONS.map(({version,name})=>({version,name}))).toEqual([{version:1,name:"001_init"},{version:2,name:"002_repair_log"},{version:3,name:"003_dedup_confirmation"},{version:4,name:"004_repair_fixer_settings"}]);
     expect(typeof MIGRATIONS[0].sql).toBe("string");
     expect(MIGRATIONS[0].sql).toContain("CREATE TABLE athlete");
   });
@@ -235,11 +242,25 @@ describe("001_init migration", () => {
     expect(MIGRATIONS[2]!.sql).toBe(MIGRATION_003);
   });
 
-  it("applies 001 through 003 with exactly twenty-three tables and no foreign-key violations", () => {
+  it("applies 001 through 004 with exactly twenty-four tables and no foreign-key violations", () => {
     db = openFull();
     const names = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as Array<{name:string}>).map((row)=>row.name).sort();
     expect(names).toEqual([...EXPECTED_FULL_TABLES].sort());
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+
+  it("preserves migration 004 and creates strict sparse fixer settings with exact constraints", () => {
+    expect(MIGRATIONS[3]!.sql).toBe(MIGRATION_004);
+    db = openFull();
+    expect(db.prepare("SELECT fixer,enabled FROM repair_fixer_settings ORDER BY fixer").all()).toEqual([]);
+    expect(db.prepare("PRAGMA foreign_key_list(repair_fixer_settings)").all()).toEqual([]);
+    const tables = db.prepare("PRAGMA table_list").all() as Array<{name:string;strict:number}>;
+    expect(tables.find((row)=>row.name==="repair_fixer_settings")?.strict).toBe(1);
+    for (const fixer of ["chronoBridge","summitGuard","pulseWeave"]) {
+      expect(()=>db!.prepare("INSERT INTO repair_fixer_settings(fixer,enabled) VALUES(?,1)").run(fixer)).not.toThrow();
+    }
+    expect(()=>db!.prepare("INSERT INTO repair_fixer_settings(fixer,enabled) VALUES('unknown',1)").run()).toThrow();
+    expect(()=>db!.prepare("UPDATE repair_fixer_settings SET enabled=0 WHERE fixer='chronoBridge'").run()).toThrow();
   });
 
   it("creates strict append-only confirmation history with canonical ASCII pairs and descending effective index", () => {

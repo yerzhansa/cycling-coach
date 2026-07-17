@@ -17,6 +17,64 @@ export interface RepairStageResult {
 
 export type RepairFixer = "chronoBridge" | "summitGuard" | "pulseWeave";
 
+export const REPAIR_FIXERS = Object.freeze([
+  "chronoBridge",
+  "summitGuard",
+  "pulseWeave",
+] as const);
+
+export interface RepairFixerSettings {
+  readonly chronoBridge: boolean;
+  readonly summitGuard: boolean;
+  readonly pulseWeave: boolean;
+}
+
+export const DEFAULT_REPAIR_FIXER_SETTINGS: RepairFixerSettings = Object.freeze({
+  chronoBridge: false,
+  summitGuard: false,
+  pulseWeave: false,
+});
+
+export const ALL_REPAIR_FIXERS_ENABLED: RepairFixerSettings = Object.freeze({
+  chronoBridge: true,
+  summitGuard: true,
+  pulseWeave: true,
+});
+
+export function normalizeRepairFixerSettings(value: unknown): RepairFixerSettings {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("invalid repair fixer settings");
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError("invalid repair fixer settings");
+  }
+  const ownKeys = Reflect.ownKeys(value);
+  if (ownKeys.length !== REPAIR_FIXERS.length || ownKeys.some((key) => typeof key !== "string")
+    || REPAIR_FIXERS.some((fixer) => !Object.prototype.hasOwnProperty.call(value, fixer))) {
+    throw new TypeError("invalid repair fixer settings");
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const settings: Record<RepairFixer, boolean> = {
+    chronoBridge: false,
+    summitGuard: false,
+    pulseWeave: false,
+  };
+  for (const fixer of REPAIR_FIXERS) {
+    const descriptor = descriptors[fixer];
+    if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)
+      || typeof descriptor.value !== "boolean") {
+      throw new TypeError("invalid repair fixer settings");
+    }
+    settings[fixer] = descriptor.value;
+  }
+  return Object.freeze({
+    chronoBridge: settings.chronoBridge,
+    summitGuard: settings.summitGuard,
+    pulseWeave: settings.pulseWeave,
+  });
+}
+
 export interface RepairInvocationLog {
   readonly fixer: RepairFixer;
   readonly params: Readonly<Record<string, unknown>>;

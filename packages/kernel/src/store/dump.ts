@@ -18,6 +18,7 @@ export const DUMP_TABLES = [
   { table: "pool_size_correction_overlay", orderBy: "id" },
   { table: "race_goal", orderBy: "id" },
   { table: "raw_file", orderBy: "sha256" },
+  { table: "repair_fixer_settings", orderBy: "fixer" },
   { table: "repair_log", orderBy: "repair_key" },
   { table: "session", orderBy: "session_key" },
   { table: "source_record", orderBy: "id" },

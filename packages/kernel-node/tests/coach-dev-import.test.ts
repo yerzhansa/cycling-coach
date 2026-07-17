@@ -81,7 +81,7 @@ const pair = {
 
 const fullReportFixture: ImportReport = {
   schema_version: 1,
-  ingest_version: 3,
+  ingest_version: 4,
   effective: {
     tier3: {
       startSeconds: 120,
@@ -383,7 +383,7 @@ function injected(options: InjectedOptions = {}) {
       calls.push("migrate");
       observed.migrations = migrations;
       fail("migrate");
-      return { fromVersion: 0, toVersion: 3, applied: [1, 2, 3] };
+      return { fromVersion: 0, toVersion: 4, applied: [1, 2, 3, 4] };
     },
     async importFilesWithReport(value: {
       readonly inputPaths: readonly string[];
@@ -472,7 +472,7 @@ describe("coach-dev import --report", () => {
     expect(await exists(databasePath)).toBe(true);
     const store = openSqliteStorage(databasePath);
     try {
-      expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 3 });
+      expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 4 });
       expect(await store.get("SELECT count(*) AS c FROM raw_file")).toEqual({ c: 1 });
       expect(await store.get("SELECT count(*) AS c FROM source_record")).toEqual({ c: 0 });
       expect(

@@ -1,13 +1,16 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
+  ALL_REPAIR_FIXERS_ENABLED,
   CHRONO_BRIDGE_PARAMS,
+  DEFAULT_REPAIR_FIXER_SETTINGS,
   PULSE_WEAVE_PARAMS,
   REPAIR_CHAIN_SLOTS,
   SUMMIT_GUARD_PARAMS,
   averageFinite,
   chronoBridge,
   pulseWeave,
+  normalizeRepairFixerSettings,
   runRepairChain,
   summitGuard,
   summitGuardSweep,
@@ -24,6 +27,90 @@ const finitePresent = (stream: CanonicalRepairStream) =>
   stream.time.every(Number.isFinite) && Object.values(stream.channels).every((values) => values.every((value) => value === null || Number.isFinite(value)));
 
 describe("deterministic repair chain", () => {
+  it("defaults all fixers off and gates partial settings", () => {
+    const stream = {
+      time: [0, 1, 2, 3, 4, 5, 6],
+      channels: {
+        heart_rate: [100, 0, 0, 103, 104, 105, 106],
+        power: [100, 100, 100, 1000, 100, 100, 100],
+      },
+    };
+    const off = runRepairChain(stream);
+    expect(off).toEqual({ stream, logs: [] });
+    expect(off.stream).not.toBe(stream);
+    expect(off.stream.time).not.toBe(stream.time);
+    expect(off.stream.channels.power).not.toBe(stream.channels.power);
+    expect(DEFAULT_REPAIR_FIXER_SETTINGS).toEqual({
+      chronoBridge: false,
+      summitGuard: false,
+      pulseWeave: false,
+    });
+    for (const fixer of ["chronoBridge", "summitGuard", "pulseWeave"] as const) {
+      const result = runRepairChain(stream, {
+        chronoBridge: fixer === "chronoBridge",
+        summitGuard: fixer === "summitGuard",
+        pulseWeave: fixer === "pulseWeave",
+      });
+      expect(result.logs.map((log) => log.fixer)).toEqual([fixer]);
+    }
+  });
+
+  it("all-on matches the former composition byte for byte", () => {
+    const stream = {
+      time: [0, 3, 4, 5, 6, 7, 8, 9],
+      channels: {
+        heart_rate: [100, 130, 0, 0, 133, 134, 135, 136],
+        power: [100, 130, 100, 100, 1000, 100, 100, 100],
+      },
+    };
+    const chrono = chronoBridge(stream);
+    const summit = summitGuard(chrono.stream);
+    const pulse = pulseWeave(summit.stream);
+    expect(runRepairChain(stream, ALL_REPAIR_FIXERS_ENABLED)).toEqual({
+      stream: pulse.stream,
+      logs: [
+        { fixer: "chronoBridge", params: CHRONO_BRIDGE_PARAMS, changes: chrono.changes },
+        { fixer: "summitGuard", params: SUMMIT_GUARD_PARAMS, changes: summit.changes },
+        { fixer: "pulseWeave", params: PULSE_WEAVE_PARAMS, changes: pulse.changes },
+      ],
+    });
+  });
+
+  it("rejects exotic settings without invoking accessors", () => {
+    class Settings {
+      chronoBridge = false;
+      summitGuard = false;
+      pulseWeave = false;
+    }
+    const missing = { chronoBridge: false, summitGuard: false };
+    const extra = { ...DEFAULT_REPAIR_FIXER_SETTINGS, extra: false };
+    const symbolic = { ...DEFAULT_REPAIR_FIXER_SETTINGS, [Symbol("extra")]: false };
+    const nonEnumerable = { ...DEFAULT_REPAIR_FIXER_SETTINGS };
+    Object.defineProperty(nonEnumerable, "pulseWeave", { value: false, enumerable: false });
+    const wrong = { ...DEFAULT_REPAIR_FIXER_SETTINGS, pulseWeave: 0 };
+    let getterCalls = 0;
+    const accessor = { ...DEFAULT_REPAIR_FIXER_SETTINGS };
+    Object.defineProperty(accessor, "pulseWeave", {
+      enumerable: true,
+      get() { getterCalls += 1; return false; },
+    });
+    for (const invalid of [null, [], new Settings(), missing, extra, symbolic, nonEnumerable, wrong, accessor]) {
+      expect(() => normalizeRepairFixerSettings(invalid)).toThrow(new TypeError("invalid repair fixer settings"));
+    }
+    expect(getterCalls).toBe(0);
+    const accepted = Object.assign(Object.create(null) as Record<string, boolean>, {
+      chronoBridge: true,
+      summitGuard: false,
+      pulseWeave: true,
+    });
+    const normalized = normalizeRepairFixerSettings(accepted);
+    expect(Object.keys(normalized)).toEqual(["chronoBridge", "summitGuard", "pulseWeave"]);
+    expect(Object.getPrototypeOf(normalized)).toBe(Object.prototype);
+    expect(Object.isFrozen(normalized)).toBe(true);
+    expect(normalized).toEqual({ chronoBridge: true, summitGuard: false, pulseWeave: true });
+    expect(normalized).not.toBe(accepted);
+  });
+
   it("chronoBridge interpolates the pinned example and safely crosses maximum finite opposites", () => {
     expect(chronoBridge({ time: [0, 3], channels: { power: [100, 130], speed: [10, 13], heart_rate: [100, 103] } }).stream).toEqual({
       time: [0, 1, 2, 3], channels: { heart_rate: [100, 101, 102, 103], power: [100, 110, 120, 130], speed: [10, 11, 12, 13] },
@@ -199,10 +286,10 @@ describe("deterministic repair chain", () => {
   it("keeps the composed chain pure, finite, scalar-ordered, and deeply idempotent", { timeout: 30_000 }, () => {
     fc.assert(fc.property(canonicalRepairStreamArbitrary, (stream) => {
       const before = structuredClone(stream);
-      const once = runRepairChain(stream);
+      const once = runRepairChain(stream, ALL_REPAIR_FIXERS_ENABLED);
       expect(stream).toEqual(before);
       expect(finitePresent(once.stream)).toBe(true);
-      expect(runRepairChain(once.stream).stream).toEqual(once.stream);
+      expect(runRepairChain(once.stream, ALL_REPAIR_FIXERS_ENABLED).stream).toEqual(once.stream);
       expect(once.logs).toHaveLength(3);
       expect(once.logs[0]!.changes.map((change) => change.channel)).toEqual(["time", "cadence", "heart_rate", "power", "speed"]);
     }), { numRuns: 1000 });

@@ -28,9 +28,9 @@ describe("migrator end-to-end over node:sqlite", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("applies the full migration list and advances user_version to 3", async () => {
+  it("applies the full migration list and advances user_version to 4", async () => {
     await runMigrations(store, MIGRATIONS);
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 3 });
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 4 });
 
     const tables = await store.all("SELECT name FROM sqlite_master WHERE type='table'");
     const names = new Set(tables.map((r) => r.name as string));
@@ -39,10 +39,11 @@ describe("migrator end-to-end over node:sqlite", () => {
     }
 
     expect(await store.all("PRAGMA foreign_key_check")).toEqual([]);
+    expect(await store.all("SELECT fixer,enabled FROM repair_fixer_settings ORDER BY fixer")).toEqual([]);
     expect(await store.get("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_dedup_confirmation_effective'")).toEqual({ name: "idx_dedup_confirmation_effective" });
     expect(await store.get("PRAGMA journal_mode")).toEqual({ journal_mode: "wal" });
     await runMigrations(store, MIGRATIONS);
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 3 });
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 4 });
   });
 
   it("produces a deterministic INV-2 dump of a fixed state", async () => {
@@ -71,12 +72,13 @@ describe("migrator end-to-end over node:sqlite", () => {
     expect(await dumpStore(store)).toBe(dump);
   });
 
-  it("upgrades a version-1-on-disk store to version 3", async () => {
+  it("upgrades a version-1-on-disk store to version 4", async () => {
     await runMigrations(store, [MIGRATIONS[0]!]);
     expect(await store.get("PRAGMA user_version")).toEqual({user_version:1});
     await runMigrations(store, MIGRATIONS);
-    expect(await store.get("PRAGMA user_version")).toEqual({user_version:3});
+    expect(await store.get("PRAGMA user_version")).toEqual({user_version:4});
     expect(await store.get("SELECT singleton,ingest_version FROM ingest_metadata")).toEqual({singleton:1,ingest_version:0});
+    expect(await store.all("SELECT fixer,enabled FROM repair_fixer_settings ORDER BY fixer")).toEqual([]);
     expect(await store.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 

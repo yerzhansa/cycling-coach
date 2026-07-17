@@ -5,6 +5,7 @@ import type { CanonicalPickResult, Candidate, LogicalSessionGroup } from "./cano
 import type { DedupCandidateSummary, PairDiagnostic, OverlapDiagnostic, AppliedConfirmationReport } from "./dedup.js";
 import type { PlatformImportArtifact } from "./source-ledger.js";
 import type { BrickReport } from "./brick-adjacency.js";
+import type { RepairFixerSettings } from "./repair/types.js";
 import type { FIT_INGEST_VERSION } from "./types.js";
 
 export interface ImportArtifact {
@@ -59,7 +60,10 @@ export interface ImportReportDeps {
   readonly archive: ArchiveManager;
   readonly store: SqlStore & Pick<MigratorStore, "transaction">;
   readonly hashKey: (fields: readonly (string | number)[]) => Promise<string>;
-  readonly prepareFile: (artifact: ImportArtifact) => Promise<PrepareFileResult>;
+  readonly prepareFile: (
+    artifact: ImportArtifact,
+    repairSettings: RepairFixerSettings,
+  ) => Promise<PrepareFileResult>;
   readonly canonicalPick: (group: LogicalSessionGroup) => CanonicalPickResult;
   readonly materializeClusterInTransaction: (store: SqlStore, cluster: PlannedCluster) => Promise<void>;
   readonly ingestVersion: typeof FIT_INGEST_VERSION;

@@ -22,24 +22,24 @@ describe("global version and overlay recompute", () => {
     return () => count;
   }
 
-  it("upgrades stored versions zero through two to three through the global planner", async () => {
-    for (const version of [0, 1, 2]) {
+  it("upgrades stored versions zero through three to four through the global planner", async () => {
+    for (const version of [0, 1, 2, 3]) {
       await store.run("UPDATE ingest_metadata SET ingest_version=?", [version]);
       const result = await importFilesWithReport({ inputPaths: [path("brick-cycling.fit")], archiveDir, store });
-      expect(result.ingest_version).toBe(3);
-      expect((await store.get("SELECT ingest_version FROM ingest_metadata"))?.ingest_version).toBe(3);
+      expect(result.ingest_version).toBe(4);
+      expect((await store.get("SELECT ingest_version FROM ingest_metadata"))?.ingest_version).toBe(4);
     }
   });
-  it("keeps current version three while still globally replanning a nonempty batch", async () => {
+  it("keeps current version four while still globally replanning a nonempty batch", async () => {
     await importFilesWithReport({ inputPaths: [path("brick-cycling.fit")], archiveDir, store });
     const transactions = countTransactions();
     const result = await importFilesWithReport({ inputPaths: [path("brick-cycling.fit")], archiveDir, store });
-    expect(result.ingest_version).toBe(3);
+    expect(result.ingest_version).toBe(4);
     expect(transactions()).toBe(1);
-    expect((await store.get("SELECT ingest_version FROM ingest_metadata"))?.ingest_version).toBe(3);
+    expect((await store.get("SELECT ingest_version FROM ingest_metadata"))?.ingest_version).toBe(4);
   });
-  it("refuses version four before archive and SQL side effects", async () => {
-    await store.run("UPDATE ingest_metadata SET ingest_version=4");
+  it("refuses version five before archive and SQL side effects", async () => {
+    await store.run("UPDATE ingest_metadata SET ingest_version=5");
     await expect(importFilesWithReport({ inputPaths: [path("brick-cycling.fit")], archiveDir, store })).rejects.toThrow("newer ingest semantics");
     expect(existsSync(archiveDir)).toBe(false); expect((await store.get("SELECT count(*) c FROM raw_file"))?.c).toBe(0);
   });
