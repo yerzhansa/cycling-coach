@@ -1,7 +1,7 @@
 import type { ActivityRows } from "../store/activity-repository.js";
 import type { RawFileRow } from "../store/ports.js";
 
-export const FIT_INGEST_VERSION = 3 as const;
+export const FIT_INGEST_VERSION = 4 as const;
 
 export type FitSourceErrorCode =
   | "decode_failed"

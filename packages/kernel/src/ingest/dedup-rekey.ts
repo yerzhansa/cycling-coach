@@ -11,6 +11,13 @@ import { encodeStream } from "./stream-codec.js";
 import { rescalePoolDistances } from "./pool-size-rescale.js";
 import { buildPlatformPresentation, replayPlatformPresentation, type PlatformPresentation } from "./source-ledger.js";
 import { FIT_INGEST_VERSION } from "./types.js";
+import {
+  DEFAULT_REPAIR_FIXER_SETTINGS,
+  REPAIR_FIXERS,
+  normalizeRepairFixerSettings,
+  type RepairFixer,
+  type RepairFixerSettings,
+} from "./repair/types.js";
 import type {
   ClusterReport,
   FileReport,
@@ -62,6 +69,74 @@ function sourceRow(row: Row): SourceRecordRow {
     payload_json: string(row.payload_json, "source payload"),
   };
 }
+
+interface RepairFixerSettingsRow {
+  readonly fixer: RepairFixer;
+  readonly enabled: 1;
+}
+
+interface RepairFixerSettingsSnapshot {
+  readonly rows: readonly RepairFixerSettingsRow[];
+  readonly settings: RepairFixerSettings;
+  readonly canonicalRows: string;
+}
+
+async function readRepairFixerSettingsSnapshot(
+  store: SqlStore,
+): Promise<RepairFixerSettingsSnapshot> {
+  const selected = await store.all(`SELECT fixer, enabled
+FROM repair_fixer_settings
+ORDER BY fixer COLLATE BINARY ASC`);
+  if (selected.length > REPAIR_FIXERS.length) {
+    throw new TypeError("invalid repair fixer settings row");
+  }
+  const mutableSettings: Record<RepairFixer, boolean> = {
+    ...DEFAULT_REPAIR_FIXER_SETTINGS,
+  };
+  const seen = new Set<RepairFixer>();
+  const rows: RepairFixerSettingsRow[] = [];
+  for (const row of selected) {
+    const fixer = row.fixer;
+    if (typeof fixer !== "string" || !REPAIR_FIXERS.includes(fixer as RepairFixer)
+      || row.enabled !== 1 || seen.has(fixer as RepairFixer)) {
+      throw new TypeError("invalid repair fixer settings row");
+    }
+    const validFixer = fixer as RepairFixer;
+    seen.add(validFixer);
+    mutableSettings[validFixer] = true;
+    rows.push(Object.freeze({ fixer: validFixer, enabled: 1 }));
+  }
+  const frozenRows = Object.freeze(rows);
+  const settings = normalizeRepairFixerSettings(mutableSettings);
+  return Object.freeze({ rows: frozenRows, settings, canonicalRows: canonical(frozenRows) });
+}
+
+export async function readRepairFixerSettings(
+  store: SqlStore,
+): Promise<RepairFixerSettings> {
+  return (await readRepairFixerSettingsSnapshot(store)).settings;
+}
+
+export interface RepairFixerSettingChange {
+  readonly fixer: RepairFixer;
+  readonly enabled: boolean;
+}
+
+export interface RepairFixerSettingChangeResult {
+  readonly changed: boolean;
+  readonly rebuilt: boolean;
+  readonly from: boolean;
+  readonly to: boolean;
+  readonly ingest_version: typeof FIT_INGEST_VERSION;
+}
+
+type GlobalReplanRequest =
+  | { readonly kind: "import"; readonly batch: ImportBatch }
+  | { readonly kind: "repair-fixer-setting"; readonly change: RepairFixerSettingChange };
+
+type GlobalReplanResult =
+  | { readonly kind: "import"; readonly report: ImportReport }
+  | { readonly kind: "repair-fixer-setting"; readonly result: RepairFixerSettingChangeResult };
 
 function exactPrepared(left: PreparedFile, right: PreparedFile): boolean {
   return canonical({ ...left, archive_instant: left.archive_instant }) === canonical({ ...right, archive_instant: right.archive_instant });
@@ -132,13 +207,46 @@ async function orphanReports(store: SqlStore, members: ReadonlySet<string>): Pro
     || compareText(a.target_key, b.target_key) || compareText(a.id, b.id));
 }
 
-export async function importArtifactsWithReport(batch: ImportBatch, deps: ImportReportDeps): Promise<ImportReport> {
-  if (batch.files.length + batch.platform_records.length === 0) throw new TypeError("import batch is empty");
+async function runGlobalReplan(
+  request: GlobalReplanRequest,
+  deps: ImportReportDeps,
+): Promise<GlobalReplanResult> {
   if (deps.ingestVersion !== FIT_INGEST_VERSION) throw new Error("ingest dependency version mismatch");
   const metadata = await deps.store.all("SELECT ingest_version FROM ingest_metadata WHERE singleton=1");
   if (metadata.length !== 1) throw new Error("ingest metadata invariant mismatch");
   const storedVersion = integer(metadata[0]!.ingest_version, "ingest version");
   if (storedVersion > deps.ingestVersion) throw new Error("store uses newer ingest semantics");
+  const repairSnapshot = await readRepairFixerSettingsSnapshot(deps.store);
+  let targetSettings = repairSnapshot.settings;
+  let settingFrom: boolean | undefined;
+  let settingChanged = false;
+  if (request.kind === "repair-fixer-setting") {
+    if (!REPAIR_FIXERS.includes(request.change.fixer)) throw new TypeError("invalid repair fixer");
+    if (typeof request.change.enabled !== "boolean") {
+      throw new TypeError("repair fixer enabled must be boolean");
+    }
+    settingFrom = repairSnapshot.settings[request.change.fixer];
+    settingChanged = settingFrom !== request.change.enabled;
+    targetSettings = normalizeRepairFixerSettings({
+      ...repairSnapshot.settings,
+      [request.change.fixer]: request.change.enabled,
+    });
+    if (!settingChanged && storedVersion === FIT_INGEST_VERSION) {
+      return {
+        kind: "repair-fixer-setting",
+        result: {
+          changed: false,
+          rebuilt: false,
+          from: settingFrom,
+          to: settingFrom,
+          ingest_version: FIT_INGEST_VERSION,
+        },
+      };
+    }
+  }
+  const batch: ImportBatch = request.kind === "import"
+    ? request.batch
+    : { files: [], platform_records: [] };
   const inputPaths = new Set<string>();
   for (const file of batch.files) {
     if (typeof file.input_path !== "string" || file.input_path.length === 0 || inputPaths.has(file.input_path)) throw new TypeError("duplicate or invalid input path");
@@ -163,7 +271,7 @@ export async function importArtifactsWithReport(batch: ImportBatch, deps: Import
   const fileWork: FileWork[] = [];
   const incomingAddresses = new Map<string, PreparedAddress>();
   for (const file of files) {
-    const result = await deps.prepareFile(file);
+    const result = await deps.prepareFile(file, targetSettings);
     if (result.outcome === "quarantined") {
       const archived = await deps.archive.quarantine(file.bytes, file.ext, `${canonical(result.quarantine)}\n`);
       assertValidAddress(archived.address);
@@ -192,7 +300,10 @@ ORDER BY sha256 COLLATE BINARY ASC`)).map(rawRow);
   for (const row of persistedRawRows) {
     const bytes = await deps.archive.readArtifact(row.path!);
     if (bytes.byteLength !== row.bytes) throw new Error("persisted raw byte count mismatch");
-    const result = await deps.prepareFile({ input_path: row.path!, bytes, ext: row.ext as "fit" | "tcx" | "gpx" });
+    const result = await deps.prepareFile(
+      { input_path: row.path!, bytes, ext: row.ext as "fit" | "tcx" | "gpx" },
+      targetSettings,
+    );
     if (result.outcome !== "prepared") throw new Error("persisted raw artifact is quarantined");
     if (result.value.expected_address !== row.sha256 || canonical({ ...result.value.raw_file, path: row.path }) !== canonical(row)) {
       throw new Error("persisted raw artifact invariant mismatch");
@@ -240,6 +351,7 @@ ORDER BY id COLLATE BINARY ASC`)).map(sourceRow);
   const plannedSourceState = canonical(persistedSourceRows);
   const plannedConfirmationState = canonical(confirmations);
   const plannedSettingState = canonical(settingRows);
+  const plannedRepairSettingState = repairSnapshot.canonicalRows;
   const dedup = planDedup(candidates, summaries, confirmations);
   const bricks = planBrickAdjacency(dedup, settingRows);
   const sessionById = new Map(dedup.sessions.map((session) => [session.group.id, session]));
@@ -279,7 +391,6 @@ ORDER BY id COLLATE BINARY ASC`)).map(sourceRow);
   let orphans: OrphanReport[] = [];
   await deps.store.transaction(async () => {
     const current = await deps.store.all("SELECT ingest_version FROM ingest_metadata WHERE singleton=1");
-    if (current.length !== 1 || current[0]!.ingest_version !== storedVersion) throw new Error("ingest version changed during planning");
     const currentRawRows = (await deps.store.all(`SELECT sha256, path, ext, bytes, file_id_serial,
        file_id_time_created_utc, manufacturer, product
 FROM raw_file
@@ -292,9 +403,26 @@ ORDER BY id COLLATE BINARY ASC`)).map(sourceRow);
     const currentSettings = (await deps.store.all("SELECT sport, session_cluster_conventions_json FROM sport_settings ORDER BY sport COLLATE BINARY ASC"))
       .map((row): SportSettingInput => ({ sport: string(row.sport, "setting sport"),
         session_cluster_conventions_json: row.session_cluster_conventions_json === null ? null : string(row.session_cluster_conventions_json, "setting conventions") }));
-    if (canonical(currentRawRows) !== plannedRawState || canonical(currentSourceRows) !== plannedSourceState
-      || canonical(currentConfirmations) !== plannedConfirmationState || canonical(currentSettings) !== plannedSettingState) {
+    const currentRepairSettings = await readRepairFixerSettingsSnapshot(deps.store);
+    if (current.length !== 1 || current[0]!.ingest_version !== storedVersion
+      || canonical(currentRawRows) !== plannedRawState || canonical(currentSourceRows) !== plannedSourceState
+      || canonical(currentConfirmations) !== plannedConfirmationState || canonical(currentSettings) !== plannedSettingState
+      || currentRepairSettings.canonicalRows !== plannedRepairSettingState) {
       throw new Error("ingest inputs changed during planning");
+    }
+    if (request.kind === "repair-fixer-setting" && settingChanged) {
+      if (request.change.enabled) {
+        await deps.store.run(
+          "INSERT INTO repair_fixer_settings (fixer, enabled) VALUES (?, 1) ON CONFLICT(fixer) DO NOTHING",
+          [request.change.fixer],
+        );
+      } else {
+        await deps.store.run("DELETE FROM repair_fixer_settings WHERE fixer = ?", [request.change.fixer]);
+      }
+      const updatedRepairSettings = await readRepairFixerSettingsSnapshot(deps.store);
+      if (canonical(updatedRepairSettings.settings) !== canonical(targetSettings)) {
+        throw new Error("repair fixer settings update mismatch");
+      }
     }
     const rawRepository = createRawFileRepository(deps.store), sourceRepository = createSourceRecordRepository(deps.store);
     for (const entry of incomingRows) insertedRaw.set(entry.row.sha256, await rawRepository.upsert(entry.row));
@@ -315,6 +443,19 @@ ORDER BY id COLLATE BINARY ASC`)).map(sourceRow);
     orphans = await orphanReports(deps.store, members);
   });
 
+  if (request.kind === "repair-fixer-setting") {
+    return {
+      kind: "repair-fixer-setting",
+      result: {
+        changed: settingChanged,
+        rebuilt: true,
+        from: settingFrom!,
+        to: request.change.enabled,
+        ingest_version: FIT_INGEST_VERSION,
+      },
+    };
+  }
+
   const ownerByAddress = new Map<string, string>();
   for (const work of fileWork.filter((entry) => entry.report.outcome === "imported")) {
     const owner = ownerByAddress.get(work.address);
@@ -324,20 +465,42 @@ ORDER BY id COLLATE BINARY ASC`)).map(sourceRow);
     raw_file_inserted: report.outcome === "imported" && ownerByAddress.get(address) === report.input_path
       && insertedRaw.get(address) === true })).sort((a, b) => compareText(a.address, b.address) || compareText(a.input_path, b.input_path));
   return {
-    schema_version: 1,
-    ingest_version: deps.ingestVersion,
-    effective: { tier3: DEFAULT_TIER3_THRESHOLDS, transition_window_s: DEFAULT_TRANSITION_WINDOW_S },
-    files: reports,
-    inserts: { raw_file: [...insertedRaw.values()].filter(Boolean).length, source_record: [...insertedSource.values()].filter(Boolean).length },
-    updates: { source_record: 0, relinked_source_records: relinked },
-    clusters: clusterReports,
-    threshold_near_misses: dedup.threshold_near_misses,
-    overlap_watchlist: dedup.overlap_watchlist,
-    confirm_queue: dedup.confirm_queue,
-    applied_confirmations: dedup.applied_confirmations,
-    brick_groups: bricks.brick_groups,
-    orphaned_overlays: orphans,
+    kind: "import",
+    report: {
+      schema_version: 1,
+      ingest_version: deps.ingestVersion,
+      effective: { tier3: DEFAULT_TIER3_THRESHOLDS, transition_window_s: DEFAULT_TRANSITION_WINDOW_S },
+      files: reports,
+      inserts: { raw_file: [...insertedRaw.values()].filter(Boolean).length, source_record: [...insertedSource.values()].filter(Boolean).length },
+      updates: { source_record: 0, relinked_source_records: relinked },
+      clusters: clusterReports,
+      threshold_near_misses: dedup.threshold_near_misses,
+      overlap_watchlist: dedup.overlap_watchlist,
+      confirm_queue: dedup.confirm_queue,
+      applied_confirmations: dedup.applied_confirmations,
+      brick_groups: bricks.brick_groups,
+      orphaned_overlays: orphans,
+    },
   };
+}
+
+export async function importArtifactsWithReport(
+  batch: ImportBatch,
+  deps: ImportReportDeps,
+): Promise<ImportReport> {
+  if (batch.files.length + batch.platform_records.length === 0) throw new TypeError("import batch is empty");
+  const result = await runGlobalReplan({ kind: "import", batch }, deps);
+  if (result.kind !== "import") throw new Error("global replan result invariant mismatch");
+  return result.report;
+}
+
+export async function applyRepairFixerSettingWithRebuild(
+  change: RepairFixerSettingChange,
+  deps: ImportReportDeps,
+): Promise<RepairFixerSettingChangeResult> {
+  const result = await runGlobalReplan({ kind: "repair-fixer-setting", change }, deps);
+  if (result.kind !== "repair-fixer-setting") throw new Error("global replan result invariant mismatch");
+  return result.result;
 }
 
 function winnerMap(session: PlannedLogicalSession): Map<string, ConcernValue> {

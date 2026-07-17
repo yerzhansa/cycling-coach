@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { CryptoPort } from "../src/ports/crypto.js";
-import { FitSourceError, mapFitArtifact, type DecodedActivity, type DecodedFitFile, type DecodedLap, type DecodedLength, type DecodedRecord, type DecodedSession } from "../src/ingest/index.js";
+import { ALL_REPAIR_FIXERS_ENABLED, FitSourceError, mapFitArtifact, type DecodedActivity, type DecodedFitFile, type DecodedLap, type DecodedLength, type DecodedRecord, type DecodedSession, type RepairFixerSettings } from "../src/ingest/index.js";
 import { decodeStream } from "../src/ingest/stream-codec.js";
 
 const crypto:CryptoPort={async sha256(d){return new Uint8Array(createHash("sha256").update(d).digest())},async randomBytes(){throw new Error("unused")},async pbkdf2(){throw new Error("unused")},async aesGcmEncrypt(){throw new Error("unused")},async aesGcmDecrypt(){throw new Error("unused")}};
@@ -10,7 +10,7 @@ const record=(sourceIndex:number,timestamp:number,overrides:Partial<DecodedRecor
 const lap=(sourceIndex:number,overrides:Partial<DecodedLap>={}):DecodedLap=>({sourceIndex,startTime:1000,timestamp:1001,firstLengthIndex:null,numLengths:null,numActiveLengths:null,totalElapsedTime:1,totalTimerTime:1,totalDistance:25,developerFields:[],...overrides});
 const length=(sourceIndex:number,overrides:Partial<DecodedLength>={}):DecodedLength=>({sourceIndex,startTime:1000,timestamp:1001,totalElapsedTime:1,totalTimerTime:1,totalStrokes:10,swimStroke:"freestyle",lengthType:"active",...overrides});
 const decoded=(sessions:DecodedSession[],records:DecodedRecord[],overrides:Partial<DecodedFitFile>={}):DecodedFitFile=>({fileIds:[{serialNumber:1,timeCreated:900,manufacturer:"development",product:1,productName:null}],activity:null,sessions,laps:[],lengths:[],records,events:[],developerDataIds:[],...overrides});
-const map=(d:DecodedFitFile)=>mapFitArtifact({crypto,rawSha256:"01".repeat(32),rawByteLength:10,archivePath:null,decoded:d});
+const map=(d:DecodedFitFile,repairSettings?:RepairFixerSettings)=>mapFitArtifact({crypto,rawSha256:"01".repeat(32),rawByteLength:10,archivePath:null,decoded:d,repairSettings});
 const error=async(promise:Promise<unknown>,code:string)=>expect(promise).rejects.toMatchObject({code});
 
 describe("FIT row mapper",()=>{
@@ -44,7 +44,22 @@ describe("FIT row mapper",()=>{
     const sessions=[session(0,0,3,{sport:"swimming",subSport:"open_water",trigger:2}),session(1,3,5,{sport:"transition",trigger:2}),session(2,5,9,{sport:"cycling",trigger:2}),session(3,9,11,{sport:"transition",trigger:2}),session(4,11,14,{sport:"running",trigger:0})];
     const times=[0,1,2,3,4,5,6,7,8,9,10,11,12,14];const out=await map(decoded(sessions,times.map((t,i)=>record(i,t))));
     const timeRows=out.activity.streams.filter((s)=>s.channel==="time").sort((a,b)=>out.activity.sessions.findIndex((x)=>x.session_key===a.session_key)-out.activity.sessions.findIndex((x)=>x.session_key===b.session_key));
-    expect(timeRows.map((s)=>s.n)).toEqual([3,2,4,2,4]);expect(out.activity.sessions.filter((s)=>s.is_transition).map((s)=>s.session_seq)).toEqual([1,3]);
+    expect(timeRows.map((s)=>s.n)).toEqual([3,2,4,2,3]);expect(out.activity.sessions.filter((s)=>s.is_transition).map((s)=>s.session_seq)).toEqual([1,3]);
+  });
+  it("keeps repair-producing streams unchanged by default and repairs them when all fixers are on",async()=>{
+    const source=decoded([session(0,0,3,{totalElapsedTime:3})],[record(0,0,{power:100}),record(1,3,{power:130})]);
+    const off=await map(source);
+    const offTime=off.activity.streams.find((row)=>row.channel==="time")!;
+    const offPower=off.activity.streams.find((row)=>row.channel==="power")!;
+    expect(decodeStream({...offTime,kind:"time"})).toEqual([0,3]);
+    expect(decodeStream({...offPower,kind:"value"})).toEqual([100,130]);
+    expect(off.activity.repairLogs).toEqual([]);
+    const on=await map(source,ALL_REPAIR_FIXERS_ENABLED);
+    const onTime=on.activity.streams.find((row)=>row.channel==="time")!;
+    const onPower=on.activity.streams.find((row)=>row.channel==="power")!;
+    expect(decodeStream({...onTime,kind:"time"})).toEqual([0,1,2,3]);
+    expect(decodeStream({...onPower,kind:"value"})).toEqual([100,110,120,130]);
+    expect(on.activity.repairLogs.length).toBeGreaterThan(0);
   });
   it("uses positive elapsed time for a single-session zero-width source range",async()=>{
     const source=session(0,0,0,{totalElapsedTime:1.1});

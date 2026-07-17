@@ -5,6 +5,7 @@ import type { ActivityRows, LapRow, SessionRow, StreamRow, SwimLengthRow } from 
 import { encodeStream } from "./stream-codec.js";
 import { rescalePoolDistances, type PoolLengthDistanceInput } from "./pool-size-rescale.js";
 import { runRepairChain } from "./repair/chain.js";
+import type { RepairFixerSettings } from "./repair/types.js";
 import {
   FitSourceError,
   type DecodedDeveloperField,
@@ -20,6 +21,7 @@ export interface MapFitArtifactInput {
   readonly rawByteLength: number;
   readonly archivePath: string | null;
   readonly decoded: DecodedFitFile;
+  readonly repairSettings?: RepairFixerSettings;
 }
 
 const SPORT: Readonly<Record<number, string>> = Object.freeze({
@@ -360,7 +362,10 @@ export async function mapFitArtifact(input: MapFitArtifactInput): Promise<Mapped
         if(channel==="time"||channelValues.every((value)=>value===null)) continue;
         repairChannels[channel]=channelValues;
       }
-      const repaired=runRepairChain({time:timeValues as readonly number[],channels:repairChannels});
+      const repaired=runRepairChain(
+        {time:timeValues as readonly number[],channels:repairChannels},
+        input.repairSettings,
+      );
       for(const log of repaired.logs) for(const change of log.changes) repairLogs.push({sessionKey:key,fixer:log.fixer,channel:change.channel,changedIndices:change.changedIndices,params:log.params});
       const repairedValues=new Map<string,readonly (number|null)[]>([["time",repaired.stream.time],...Object.entries(repaired.stream.channels)]);
       for(const [channel,channelValues] of repairedValues) {
