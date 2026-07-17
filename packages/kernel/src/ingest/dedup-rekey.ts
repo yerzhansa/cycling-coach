@@ -2,14 +2,14 @@ import { assertValidAddress } from "../archive/paths.js";
 import { sortKeys } from "../store/canonical-json.js";
 import { createDedupConfirmationRepository } from "../store/dedup-confirmation-repository.js";
 import { deleteAllDerivedRowsInTransaction } from "./rebuild.js";
-import { createRawFileRepository, createSourceRecordRepository } from "../store/source-repository.js";
+import { createIntervalsSourceRepository, createRawFileRepository, createSourceRecordRepository } from "../store/source-repository.js";
 import type { RawFileRow, Row, SourceRecordRow, SqlStore } from "../store/ports.js";
 import type { Candidate, ConcernValue, LapConcern, SwimLengthConcern } from "./canonical-pick.js";
 import { DEFAULT_TRANSITION_WINDOW_S, planBrickAdjacency, type SportSettingInput } from "./brick-adjacency.js";
 import { DEFAULT_TIER3_THRESHOLDS, planDedup, type DedupCandidateSummary } from "./dedup.js";
 import { encodeStream } from "./stream-codec.js";
 import { rescalePoolDistances } from "./pool-size-rescale.js";
-import { buildPlatformPresentation, replayPlatformPresentation, type PlatformPresentation } from "./source-ledger.js";
+import { buildPlatformPresentation, parseEnvelope, replayPlatformPresentation, type PlatformPresentation } from "./source-ledger.js";
 import { FIT_INGEST_VERSION } from "./types.js";
 import {
   DEFAULT_REPAIR_FIXER_SETTINGS,
@@ -68,6 +68,73 @@ function sourceRow(row: Row): SourceRecordRow {
     quality_rank: integer(row.quality_rank, "source quality rank"),
     payload_json: string(row.payload_json, "source payload"),
   };
+}
+
+interface SelectedSourceRow extends SourceRecordRow {
+  readonly artifact_key: string | null;
+  readonly archive_rel_path: string | null;
+  readonly archive_epoch_s: number | null;
+}
+
+function selectedSourceRow(row: Row): SelectedSourceRow {
+  const source = sourceRow(row);
+  const artifactKey = row.artifact_key === null ? null : string(row.artifact_key, "source artifact key");
+  const archiveRelPath = row.archive_rel_path === null ? null : string(row.archive_rel_path, "source archive path");
+  const archiveEpoch = row.archive_epoch_s === null ? null : integer(row.archive_epoch_s, "source archive epoch");
+  if (artifactKey === null) {
+    if (archiveRelPath !== null || archiveEpoch !== null) throw new TypeError("invalid legacy source archive evidence");
+  } else if (archiveRelPath === null || archiveEpoch === null) throw new TypeError("incomplete source archive evidence");
+  return { ...source, artifact_key: artifactKey, archive_rel_path: archiveRelPath, archive_epoch_s: archiveEpoch };
+}
+
+const SELECTED_ACTIVITY_SOURCE_SQL = `SELECT
+  sr.id, sr.workout_key, sr.session_key, sr.source, sr.external_id,
+  r.raw_sha256, r.quality_rank, r.payload_json,
+  r.artifact_key, a.archive_rel_path, a.archive_epoch_s
+FROM source_record AS sr
+JOIN source_record_current AS c ON c.source_record_id = sr.id
+JOIN source_record_revision AS r
+  ON r.source_record_id = c.source_record_id AND r.revision_id = c.revision_id
+LEFT JOIN source_artifact AS a ON a.artifact_key = r.artifact_key
+WHERE sr.source = 'intervals-icu'
+  AND (a.lane = 'activities' OR r.artifact_key IS NULL)
+ORDER BY sr.id`;
+
+async function readSelectedSourceRows(store: SqlStore): Promise<SelectedSourceRow[]> {
+  return (await store.all(SELECTED_ACTIVITY_SOURCE_SQL)).map(selectedSourceRow);
+}
+
+function sourcePresentationRow(row: SelectedSourceRow): SourceRecordRow {
+  return {
+    id: row.id,
+    workout_key: row.workout_key,
+    session_key: row.session_key,
+    source: row.source,
+    external_id: row.external_id,
+    raw_sha256: row.raw_sha256,
+    quality_rank: row.quality_rank,
+    payload_json: row.payload_json,
+  };
+}
+
+async function readSourceRevisionState(store: SqlStore): Promise<readonly Row[]> {
+  return store.all(`SELECT
+  sr.id, sr.source, sr.external_id, sr.workout_key, sr.session_key,
+  c.revision_id AS current_revision_id,
+  r.revision_id, r.artifact_key, r.raw_sha256, r.quality_rank, r.payload_json,
+  a.lane AS artifact_lane, a.archive_address, a.archive_rel_path, a.archive_epoch_s
+FROM source_record AS sr
+LEFT JOIN source_record_current AS c ON c.source_record_id = sr.id
+LEFT JOIN source_record_revision AS r ON r.source_record_id = sr.id
+LEFT JOIN source_artifact AS a ON a.artifact_key = r.artifact_key
+WHERE sr.source = 'intervals-icu'
+ORDER BY sr.id COLLATE BINARY ASC, r.revision_id COLLATE BINARY ASC`);
+}
+
+function sameEnvelopeSemantics(left: string, right: string): boolean {
+  const a = parseEnvelope(left), b = parseEnvelope(right);
+  return canonical({ activity: a.activity, concerns: a.concerns, dedup: a.dedup })
+    === canonical({ activity: b.activity, concerns: b.concerns, dedup: b.dedup });
 }
 
 interface RepairFixerSettingsRow {
@@ -255,6 +322,11 @@ async function runGlobalReplan(
   }
 
   const incomingPlatforms = new Map<string, PlatformPresentation>();
+  const evidenceCount = batch.platform_records.filter((platform) => platform.sourceEvidence !== undefined).length;
+  const evidenceMode = evidenceCount > 0;
+  if (evidenceMode && evidenceCount !== batch.platform_records.length) {
+    throw new TypeError("mixed platform source evidence batch");
+  }
   for (const platform of batch.platform_records) {
     const presentation = await buildPlatformPresentation(platform, deps.hashKey);
     if (platform.raw_snapshot_address !== null) {
@@ -318,18 +390,39 @@ ORDER BY sha256 COLLATE BINARY ASC`)).map(rawRow);
     allAddresses.set(address, incoming);
   }
 
-  const persistedSourceRows = (await deps.store.all(`SELECT id, workout_key, session_key, source, external_id,
-       raw_sha256, quality_rank, payload_json
-FROM source_record
-ORDER BY id COLLATE BINARY ASC`)).map(sourceRow);
+  const persistedSourceRows = await readSelectedSourceRows(deps.store);
+  const revisionState = await readSourceRevisionState(deps.store);
+  for (const incoming of incomingPlatforms.values()) {
+    const collision = revisionState.find((row) => row.id === incoming.row.id
+      && (row.artifact_lane === "streams" || row.artifact_lane === "settings"));
+    if (collision !== undefined) throw new Error("generic landing external-id collision");
+  }
   const allPlatforms = new Map<string, PlatformPresentation>();
-  for (const row of persistedSourceRows) allPlatforms.set(row.id, await replayPlatformPresentation(row, deps.hashKey));
+  for (const row of persistedSourceRows) allPlatforms.set(row.id, await replayPlatformPresentation(sourcePresentationRow(row), deps.hashKey, {
+    archiveRelPath: row.archive_rel_path,
+    archiveEpochSeconds: row.archive_epoch_s,
+  }));
   for (const [id, incoming] of incomingPlatforms) {
     const prior = allPlatforms.get(id);
-    if (prior && canonical({ ...prior.row, workout_key: null, session_key: null }) !== canonical(incoming.row)) {
+    if (prior && evidenceMode) {
+      if (prior.row.raw_sha256 === incoming.row.raw_sha256) {
+        if (prior.row.quality_rank !== incoming.row.quality_rank
+          || !sameEnvelopeSemantics(prior.row.payload_json, incoming.row.payload_json)) {
+          throw new Error("activity landing disagrees with payload hash");
+        }
+        const priorEnvelope = parseEnvelope(prior.row.payload_json);
+        const selected = persistedSourceRows.find((row) => row.id === id)!;
+        if (priorEnvelope.version === 1 && selected.artifact_key !== null
+          && prior.row.payload_json !== incoming.row.payload_json) {
+          throw new Error("activity landing disagrees with payload hash");
+        }
+      }
+      allPlatforms.set(id, incoming);
+    } else if (prior && canonical({ ...prior.row, workout_key: null, session_key: null }) !== canonical(incoming.row)) {
       throw new Error("incoming platform source conflicts with persisted source");
+    } else {
+      allPlatforms.set(id, prior ?? incoming);
     }
-    allPlatforms.set(id, prior ?? incoming);
   }
 
   const candidates: Candidate[] = [];
@@ -348,7 +441,7 @@ ORDER BY id COLLATE BINARY ASC`)).map(sourceRow);
     .map((row): SportSettingInput => ({ sport: string(row.sport, "setting sport"),
       session_cluster_conventions_json: row.session_cluster_conventions_json === null ? null : string(row.session_cluster_conventions_json, "setting conventions") }));
   const plannedRawState = canonical(persistedRawRows);
-  const plannedSourceState = canonical(persistedSourceRows);
+  const plannedSourceState = canonical({ selected: persistedSourceRows, revisions: revisionState });
   const plannedConfirmationState = canonical(confirmations);
   const plannedSettingState = canonical(settingRows);
   const plannedRepairSettingState = repairSnapshot.canonicalRows;
@@ -387,7 +480,7 @@ ORDER BY id COLLATE BINARY ASC`)).map(sourceRow);
   const incomingRows = [...incomingAddresses.values()].sort((a, b) => compareText(a.row.sha256, b.row.sha256));
   const incomingSourceRows = [...incomingPlatforms.values()].sort((a, b) => compareText(a.row.id, b.row.id));
   const insertedRaw = new Map<string, boolean>(), insertedSource = new Map<string, boolean>();
-  let relinked = 0;
+  let relinked = 0, sourceUpdates = 0;
   let orphans: OrphanReport[] = [];
   await deps.store.transaction(async () => {
     const current = await deps.store.all("SELECT ingest_version FROM ingest_metadata WHERE singleton=1");
@@ -395,17 +488,16 @@ ORDER BY id COLLATE BINARY ASC`)).map(sourceRow);
        file_id_time_created_utc, manufacturer, product
 FROM raw_file
 ORDER BY sha256 COLLATE BINARY ASC`)).map(rawRow);
-    const currentSourceRows = (await deps.store.all(`SELECT id, workout_key, session_key, source, external_id,
-       raw_sha256, quality_rank, payload_json
-FROM source_record
-ORDER BY id COLLATE BINARY ASC`)).map(sourceRow);
+    const currentSourceRows = await readSelectedSourceRows(deps.store);
+    const currentRevisionState = await readSourceRevisionState(deps.store);
     const currentConfirmations = await createDedupConfirmationRepository(deps.store).readAll();
     const currentSettings = (await deps.store.all("SELECT sport, session_cluster_conventions_json FROM sport_settings ORDER BY sport COLLATE BINARY ASC"))
       .map((row): SportSettingInput => ({ sport: string(row.sport, "setting sport"),
         session_cluster_conventions_json: row.session_cluster_conventions_json === null ? null : string(row.session_cluster_conventions_json, "setting conventions") }));
     const currentRepairSettings = await readRepairFixerSettingsSnapshot(deps.store);
     if (current.length !== 1 || current[0]!.ingest_version !== storedVersion
-      || canonical(currentRawRows) !== plannedRawState || canonical(currentSourceRows) !== plannedSourceState
+      || canonical(currentRawRows) !== plannedRawState
+      || canonical({ selected: currentSourceRows, revisions: currentRevisionState }) !== plannedSourceState
       || canonical(currentConfirmations) !== plannedConfirmationState || canonical(currentSettings) !== plannedSettingState
       || currentRepairSettings.canonicalRows !== plannedRepairSettingState) {
       throw new Error("ingest inputs changed during planning");
@@ -425,8 +517,23 @@ ORDER BY id COLLATE BINARY ASC`)).map(sourceRow);
       }
     }
     const rawRepository = createRawFileRepository(deps.store), sourceRepository = createSourceRecordRepository(deps.store);
+    const intervalsRepository = createIntervalsSourceRepository(deps.store, deps.hashKey);
     for (const entry of incomingRows) insertedRaw.set(entry.row.sha256, await rawRepository.upsert(entry.row));
-    for (const entry of incomingSourceRows) insertedSource.set(entry.row.id, await sourceRepository.upsert(entry.row));
+    for (const entry of incomingSourceRows) {
+      const platform = batch.platform_records.find((value) => String(value.activity_id) === entry.row.external_id);
+      if (evidenceMode) {
+        const evidence = platform?.sourceEvidence;
+        if (evidence === undefined) throw new TypeError("platform source evidence is missing");
+        const recorded = await intervalsRepository.recordArtifact({ source: "intervals-icu", lane: "activities",
+          externalId: evidence.externalId, artifactKind: "snapshot", archiveAddress: evidence.archive.address,
+          archiveRelPath: evidence.archive.relPath, archiveEpochSeconds: evidence.archiveInstant.epochSeconds });
+        const revision = await intervalsRepository.applyActivityRevision({ sourceRow: entry.row, artifactKey: recorded.artifactKey });
+        insertedSource.set(entry.row.id, revision.kind === "inserted-current");
+        if (revision.selectorChanged && revision.kind !== "inserted-current") sourceUpdates += 1;
+      } else {
+        insertedSource.set(entry.row.id, await sourceRepository.upsert(entry.row));
+      }
+    }
     await deleteAllDerivedRowsInTransaction(deps.store);
     for (const cluster of planned) await deps.materializeClusterInTransaction(deps.store, cluster);
     for (const presentation of [...allPlatforms.values()].sort((a, b) => compareText(a.row.id, b.row.id))) {
@@ -472,7 +579,7 @@ ORDER BY id COLLATE BINARY ASC`)).map(sourceRow);
       effective: { tier3: DEFAULT_TIER3_THRESHOLDS, transition_window_s: DEFAULT_TRANSITION_WINDOW_S },
       files: reports,
       inserts: { raw_file: [...insertedRaw.values()].filter(Boolean).length, source_record: [...insertedSource.values()].filter(Boolean).length },
-      updates: { source_record: 0, relinked_source_records: relinked },
+      updates: { source_record: sourceUpdates, relinked_source_records: relinked },
       clusters: clusterReports,
       threshold_near_misses: dedup.threshold_near_misses,
       overlap_watchlist: dedup.overlap_watchlist,

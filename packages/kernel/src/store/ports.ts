@@ -90,6 +90,78 @@ export interface SourceRecordRepository {
   upsert(row: SourceRecordRow): Promise<boolean>;
 }
 
+export interface SourceArtifactDraft {
+  readonly source: "intervals-icu";
+  readonly lane: "activities" | "streams" | "wellness" | "settings" | "bulk-fit";
+  readonly externalId: string;
+  readonly artifactKind: "snapshot" | "raw_file";
+  readonly archiveAddress: string;
+  readonly archiveRelPath: string;
+  readonly archiveEpochSeconds: number;
+}
+
+export interface GenericLandingDraft {
+  readonly externalId: string;
+  readonly artifactKey: string;
+  readonly archiveAddress: string;
+  readonly endpoint: "streams" | "settings";
+  readonly normalizedPayloadJson: string;
+}
+
+export interface WellnessLandingRow {
+  readonly id: string;
+  readonly date_key: number;
+  readonly provenance: "sync";
+  readonly source: "intervals-icu";
+  readonly resting_hr: number | null;
+  readonly hrv: number | null;
+  readonly hrv_sdnn: number | null;
+  readonly sleep_s: number | null;
+  readonly sleep_score: number | null;
+  readonly weight_kg: number | null;
+  readonly soreness: number | null;
+  readonly fatigue: number | null;
+  readonly fields_json: string;
+  readonly device_id: null;
+  readonly hlc_physical_ms: null;
+  readonly hlc_counter: null;
+}
+
+export interface ZoneSetHistoryRow {
+  readonly id: string;
+  readonly sport: string;
+  readonly stream: "power" | "hr";
+  readonly anchor_ref: "ftp" | "lthr";
+  readonly boundaries_json: string;
+  readonly valid_from: number;
+  readonly source: "intervals-icu";
+  readonly provenance: "sync";
+  readonly device_id: null;
+  readonly hlc_physical_ms: null;
+  readonly hlc_counter: null;
+}
+
+export type ActivityRevisionResult =
+  | { readonly kind: "inserted-current"; readonly revisionId: string; readonly selectorChanged: true }
+  | { readonly kind: "exact-current"; readonly revisionId: string; readonly selectorChanged: false }
+  | { readonly kind: "reselected-current"; readonly revisionId: string; readonly selectorChanged: true }
+  | { readonly kind: "appended-current"; readonly revisionId: string; readonly selectorChanged: true }
+  | { readonly kind: "hydrated-current"; readonly revisionId: string; readonly selectorChanged: true };
+
+export interface ActivityRevisionDraft {
+  readonly sourceRow: SourceRecordRow;
+  readonly artifactKey: string;
+}
+
+export interface IntervalsSourceRepository {
+  recordArtifact(draft: SourceArtifactDraft): Promise<{ readonly artifactKey: string; readonly inserted: boolean }>;
+  recordGenericLanding(draft: GenericLandingDraft): Promise<boolean>;
+  applyActivityRevision(draft: ActivityRevisionDraft): Promise<ActivityRevisionResult>;
+  upsertWellness(row: WellnessLandingRow): Promise<"inserted" | "updated" | "unchanged" | "manual-wins">;
+  insertSyncedAnchor(row: AnchorHistoryRow): Promise<boolean>;
+  insertSyncedZone(row: ZoneSetHistoryRow): Promise<boolean>;
+}
+
 export interface DedupConfirmationRow {
   id: string;
   member_a: string;

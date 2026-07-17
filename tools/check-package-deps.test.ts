@@ -342,7 +342,7 @@ describe("real repository", () => {
   it("marks the absent end-state rows not-present (discovery is not vacuous)", () => {
     const result = runRulesAgainst(".", RULES);
     expect(result.notPresent).toContain("packages/engine");
-    expect(result.notPresent).toContain("packages/sync-*");
+    expect(result.notPresent).not.toContain("packages/sync-*");
     expect(result.scannedFileCount).toBeGreaterThan(0);
   });
 });

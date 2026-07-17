@@ -113,7 +113,7 @@ export interface ImportReport {
   };
   readonly files: readonly FileReport[];
   readonly inserts: { readonly raw_file: number; readonly source_record: number };
-  readonly updates: { readonly source_record: 0; readonly relinked_source_records: number };
+  readonly updates: { readonly source_record: number; readonly relinked_source_records: number };
   readonly clusters: readonly ClusterReport[];
   readonly threshold_near_misses: readonly PairDiagnostic[];
   readonly overlap_watchlist: readonly OverlapDiagnostic[];
