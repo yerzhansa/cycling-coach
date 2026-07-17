@@ -6,7 +6,7 @@
 import { mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer, type Server } from "node:net";
+import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
@@ -43,6 +43,20 @@ function trackHandle(r: AcquireWriteLockResult): WriteLockHandle {
   if (!isHandle(r)) throw new Error(`expected acquired, got ${r.status}`);
   heldHandles.push(r);
   return r;
+}
+
+async function resolvesWithin<T>(promise: Promise<T>, timeoutMs = 2_000): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error(`operation did not resolve within ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
 }
 
 function occupyPort(): Promise<{ port: number; server: Server }> {
@@ -143,6 +157,50 @@ describe("acquireWriteLock", () => {
     const rebind = await acquireWriteLock({ configDir, athleteHome: "/home/a", version: "1.0.0" });
     trackHandle(rebind);
     expect(rebind.status).toBe("acquired");
+  });
+
+  it("(release) resolves after a real contention probe", async () => {
+    const configDir = freshDir();
+    const holder = trackHandle(
+      await acquireWriteLock({ configDir, athleteHome: "/home/a", version: "1.0.0" }),
+    );
+
+    await expect(
+      acquireWriteLock({ configDir, athleteHome: "/home/a", version: "1.0.0" }),
+    ).rejects.toBeInstanceOf(WriteLockContentionError);
+
+    heldHandles.length = 0;
+    await expect(resolvesWithin(holder.release())).resolves.toBeUndefined();
+  });
+
+  it("(release) resolves while a connected peer socket is still open", async () => {
+    const configDir = freshDir();
+    const holder = trackHandle(
+      await acquireWriteLock({ configDir, athleteHome: "/home/a", version: "1.0.0" }),
+    );
+    const peer = await new Promise<Socket>((resolve, reject) => {
+      const socket = createConnection({ host: "127.0.0.1", port: holder.port });
+      const onError = (err: Error): void => reject(err);
+      socket.once("error", onError);
+      socket.once("connect", () => {
+        socket.off("error", onError);
+        resolve(socket);
+      });
+    });
+    const peerClosed = new Promise<void>((resolve) => peer.once("close", () => resolve()));
+    peer.on("error", () => {});
+
+    expect(peer.destroyed).toBe(false);
+    heldHandles.length = 0;
+    const release = holder.release();
+    try {
+      await expect(resolvesWithin(release)).resolves.toBeUndefined();
+      await expect(resolvesWithin(peerClosed)).resolves.toBeUndefined();
+      expect(peer.destroyed).toBe(true);
+    } finally {
+      peer.destroy();
+      await release;
+    }
   });
 
   it("(a) healthy peer returns peer-healthy without binding", async () => {
