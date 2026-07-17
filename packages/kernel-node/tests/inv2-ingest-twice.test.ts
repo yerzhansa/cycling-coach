@@ -13,7 +13,7 @@ afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = 
 
 describe("INV-2 ingest twice", () => {
   async function ingestTwice(allOn: boolean) {
-    expect(DERIVED_TABLES.join(",")).toBe("metric_snapshot,mean_max_cache,repair_log,stream,swim_length,lap,session,workout");
+    expect(DERIVED_TABLES.join(",")).toBe("metric_snapshot,mean_max_cache,ingest_cluster_state,ingest_dedup_session_state,ingest_dedup_pair_state,ingest_candidate_index,repair_log,stream,swim_length,lap,session,workout");
     dir = mkdtempSync(join(tmpdir(), "fit-inv2-"));
     const store = openSqliteStorage(join(dir, "store.db"));
     try {

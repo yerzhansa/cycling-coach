@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canonicalizeTable } from "../src/store/dump.js";
+import { canonicalizeTable, DERIVED_TABLES, DUMP_TABLES } from "../src/store/dump.js";
 import type { Row } from "../src/store/ports.js";
 
 describe("INV-2 canonical dump (armed with real ingest at W2)", () => {
@@ -66,5 +66,19 @@ describe("INV-2 canonical dump (armed with real ingest at W2)", () => {
     const row: Row = { data: new Uint8Array([1, 2, 3]) };
     const out = canonicalizeTable("raw_file", [row]);
     expect(out).toContain(`"data":["b","010203"]`);
+  });
+
+  it("includes every incremental cache while excluding checkpoint operations", () => {
+    const dumped = DUMP_TABLES.map(({ table }) => table);
+    expect(dumped).toEqual(expect.arrayContaining([
+      "ingest_candidate_index", "ingest_cluster_state", "ingest_dedup_pair_state",
+      "ingest_dedup_session_state", "ingest_incremental_state",
+    ]));
+    expect(dumped).not.toContain("source_watermark");
+    expect(dumped).not.toContain("sync_operation");
+    expect(DERIVED_TABLES).toEqual(expect.arrayContaining([
+      "ingest_candidate_index", "ingest_cluster_state", "ingest_dedup_pair_state", "ingest_dedup_session_state",
+    ]));
+    expect(DERIVED_TABLES).not.toContain("ingest_incremental_state");
   });
 });

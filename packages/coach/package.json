@@ -7,7 +7,9 @@
   "files": ["dist"],
   "exports": {
     "./runtime": "./dist/runtime.js",
-    "./sync": "./dist/sync.js"
+    "./sync": "./dist/sync.js",
+    "./backfill": "./dist/backfill.js",
+    "./backfill-benchmark": "./dist/backfill-benchmark.js"
   },
   "engines": {
     "node": ">=24"
@@ -15,11 +17,15 @@
   "scripts": {
     "build": "tsup",
     "check": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "backfill": "node dist/backfill-command.js",
+    "benchmark": "node dist/backfill-command.js --synthetic --conclusions-only"
   },
   "dependencies": {
+    "@enduragent/core": "workspace:*",
     "@enduragent/kernel": "workspace:*",
-    "@enduragent/kernel-node": "workspace:*"
+    "@enduragent/kernel-node": "workspace:*",
+    "@enduragent/sync-intervals-icu": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

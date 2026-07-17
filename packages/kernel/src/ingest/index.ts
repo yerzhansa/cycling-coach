@@ -15,3 +15,4 @@ export * from "./brick-adjacency.js";
 export * from "./source-ledger.js";
 export * from "./import-report.js";
 export * from "./dedup-rekey.js";
+export * from "./incremental-rekey.js";

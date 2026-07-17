@@ -118,16 +118,29 @@ function validateSlice(first: number | null, count: number | null, total: number
   return [first, first + count];
 }
 
+const APPLICATION_UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+// Parsers surface FIT application ids in two real shapes: the SDK's 16 raw
+// bytes, or the 36 ASCII bytes of the hyphenated UUID text (seen on real
+// Connect IQ files). Both normalize to the same 32-hex identity so the two
+// encodings of one app id can never split a dedup identity.
+function applicationIdentity(bytes: readonly number[]): string {
+  if (bytes.some((b) => !Number.isSafeInteger(b) || b < 0 || b > 255)) throw new FitSourceError("developer_identity_invalid");
+  if (bytes.length === 16) return bytes.map((b) => b.toString(16).padStart(2,"0")).join("");
+  if (bytes.length === 36) {
+    const text = String.fromCharCode(...bytes).toLowerCase();
+    if (!APPLICATION_UUID_TEXT.test(text)) throw new FitSourceError("developer_identity_invalid");
+    return text.replaceAll("-", "");
+  }
+  throw new FitSourceError("developer_identity_invalid");
+}
+
 function applicationIds(decoded: DecodedFitFile): Map<number, string> {
   const result = new Map<number, string>();
   for (const item of decoded.developerDataIds) {
     const index = item.developerDataIndex;
     if (!Number.isSafeInteger(index) || index < 0) throw new FitSourceError("developer_identity_invalid");
-    let id = `idx-${index}`;
-    if (item.applicationId !== null) {
-      if (item.applicationId.length !== 16 || item.applicationId.some((b) => !Number.isSafeInteger(b) || b < 0 || b > 255)) throw new FitSourceError("developer_identity_invalid");
-      id = item.applicationId.map((b) => b.toString(16).padStart(2,"0")).join("");
-    }
+    const id = item.applicationId === null ? `idx-${index}` : applicationIdentity(item.applicationId);
     const previous = result.get(index);
     if (previous !== undefined && previous !== id) throw new FitSourceError("developer_identity_conflict");
     result.set(index, id);
@@ -350,6 +363,9 @@ export async function mapFitArtifact(input: MapFitArtifactInput): Promise<Mapped
       const values=new Map<string,(number|null)[]>();
       values.set("time",indexes.map((x)=>d.records[x].timestamp));
       for(const [property,channel] of NATIVE_CHANNELS) values.set(channel,indexes.map((x)=>d.records[x][property] as number|null));
+      // Real straps record 0 bpm on sensor dropout; 0 is not a physiological
+      // reading, so it normalizes to null like an absent sample.
+      values.set("heart_rate",(values.get("heart_rate")??[]).map((entry)=>entry===0?null:entry));
       values.set("altitude",indexes.map((x)=>d.records[x].enhancedAltitude ?? d.records[x].altitude));
       values.set("speed",indexes.map((x)=>d.records[x].enhancedSpeed ?? d.records[x].speed));
       for(let slot=0;slot<indexes.length;slot++) for(const entry of recordDevelopers[indexes[slot]]) {

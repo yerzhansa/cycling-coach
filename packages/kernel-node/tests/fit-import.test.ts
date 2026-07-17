@@ -9,7 +9,7 @@ import { openSqliteStorage } from "../src/sqlite/index.js";
 
 const fixture = (name: string) => resolve(`packages/kernel-node/tests/fixtures/ingest/${name}`);
 
-describe("global file import runner", () => {
+describe("operational file import runner", () => {
   let dir: string, archiveDir: string, store: SqlStore & MigratorStore;
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), "global-import-")); archiveDir = join(dir, "archive");
@@ -23,12 +23,14 @@ describe("global file import runner", () => {
     expect(result.files[0]).toMatchObject({ outcome: "quarantined", raw_file_inserted: false });
     expect((await store.get("SELECT count(*) c FROM raw_file"))?.c).toBe(0);
   });
-  it("imports through one global planner and writes no file source_record", async () => {
+  it("imports through the incremental runtime and writes no file source_record", async () => {
     const result = await importFilesWithReport({ inputPaths: [fixture("triathlon-multisport.fit")], archiveDir, store });
     expect(result.files[0]).toMatchObject({ outcome: "imported", raw_file_inserted: true });
     expect(result.inserts).toEqual({ raw_file: 1, source_record: 0 });
     expect((await store.get("SELECT count(*) c FROM source_record"))?.c).toBe(0);
     expect((await store.get("SELECT ingest_version FROM ingest_metadata"))?.ingest_version).toBe(4);
+    expect(await store.get("SELECT initialized FROM ingest_incremental_state")).toEqual({ initialized: 1 });
+    expect(Number((await store.get("SELECT count(*) c FROM ingest_candidate_index"))?.c)).toBeGreaterThan(0);
   });
   it("sorts planning deterministically while retaining exact input paths", async () => {
     const inputPaths = [fixture("brick-running.fit"), fixture("brick-cycling.fit")];

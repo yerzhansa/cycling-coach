@@ -76,11 +76,12 @@ export const ActivitySchema = z.looseObject({
   moving_time: z.number().nonnegative(),
   elapsed_time: z.number().nonnegative(),
 
-  // Load + intensity. Optional because intervals.icu may omit them on
-  // sessions it can't load-score (e.g., WeightTraining); the lib's own
-  // ActivitySchema marks them nullish for the same reason.
-  icu_training_load: z.number().nonnegative().optional(),
-  icu_intensity: z.number().nonnegative().optional(),
+  // Load + intensity. Nullish because intervals.icu may omit them or send
+  // explicit null on sessions it can't load-score (e.g., WeightTraining,
+  // power-less history rides); the lib's own ActivitySchema marks them
+  // nullish for the same reason.
+  icu_training_load: z.number().nonnegative().nullable().optional(),
+  icu_intensity: z.number().nonnegative().nullable().optional(),
   icu_rpe: z.number().nullable().optional(),
 
   // Power + HR. Optional because real activities can lack a

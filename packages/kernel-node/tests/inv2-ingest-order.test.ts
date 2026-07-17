@@ -82,12 +82,10 @@ describe("real SQLite dedup ordering", () => {
     try {
       const fitXmlPaths = matchingFitXmlPaths(fitXml.root);
       const pendingFitXml = await importFilesWithReport({ inputPaths: fitXmlPaths, archiveDir: fitXml.archiveDir, store: fitXml.store });
-      expect(pendingFitXml.confirm_queue).toHaveLength(1);
+      expect(pendingFitXml.confirm_queue).toEqual([]);
       const fitXmlMembers = (await fitXml.store.all("SELECT sha256 FROM raw_file ORDER BY sha256")).map((row) => row.sha256 as string);
-      await fitXml.store.run("INSERT INTO dedup_confirmation VALUES(?,?,?,?,?,?,?)",
-        ["0".repeat(26), fitXmlMembers[0]!, fitXmlMembers[1]!, "merge", "device", 1, 0]);
-      const associated = await importFilesWithReport({ inputPaths: [fitXmlPaths[0]], archiveDir: fitXml.archiveDir, store: fitXml.store });
-      expect(associated.clusters).toHaveLength(1); expect(associated.clusters[0]).toMatchObject({ members: fitXmlMembers, edge_tiers: ["confirmation"] });
+      expect(pendingFitXml.clusters).toHaveLength(1);
+      expect(pendingFitXml.clusters[0]).toMatchObject({ members: fitXmlMembers, edge_tiers: ["tier3"] });
 
       const serialPaths = differentSerialFitPaths(serials.root);
       const pendingSerials = await importFilesWithReport({ inputPaths: serialPaths, archiveDir: serials.archiveDir, store: serials.store });
@@ -95,6 +93,7 @@ describe("real SQLite dedup ordering", () => {
       const serialMembers = (await serials.store.all("SELECT sha256 FROM raw_file ORDER BY sha256")).map((row) => row.sha256 as string);
       await serials.store.run("INSERT INTO dedup_confirmation VALUES(?,?,?,?,?,?,?)",
         ["1".repeat(26), serialMembers[0]!, serialMembers[1]!, "merge", "device", 1, 0]);
+      await serials.store.run("UPDATE ingest_incremental_state SET initialized=0 WHERE singleton=1");
       const confirmed = await importFilesWithReport({ inputPaths: [serialPaths[0]], archiveDir: serials.archiveDir, store: serials.store });
       expect(confirmed.clusters).toHaveLength(1); expect(confirmed.clusters[0]).toMatchObject({ members: serialMembers, edge_tiers: ["confirmation"] });
     } finally { await fitXml.store.close(); await serials.store.close(); }
@@ -115,6 +114,7 @@ describe("real SQLite dedup ordering", () => {
       expect((await importFilesWithReport({ inputPaths: files, archiveDir: value.archiveDir, store: value.store })).clusters).toHaveLength(1);
       const members = (await value.store.all("SELECT sha256 FROM raw_file ORDER BY sha256")).map((row) => row.sha256 as string);
       await value.store.run("INSERT INTO dedup_confirmation VALUES(?,?,?,?,?,?,?)", ["0".repeat(26), members[0]!, members[1]!, "distinct", "device", 1, 0]);
+      await value.store.run("UPDATE ingest_incremental_state SET initialized=0 WHERE singleton=1");
       expect((await importFilesWithReport({ inputPaths: [files[0]!], archiveDir: value.archiveDir, store: value.store })).clusters).toHaveLength(2);
     } finally { await value.store.close(); }
   });
@@ -186,6 +186,7 @@ describe("real SQLite dedup ordering", () => {
       await importFilesWithReport(options);
       const key = (await value.store.get("SELECT session_key FROM session"))!.session_key as string;
       await value.store.run("INSERT INTO pool_size_correction_overlay VALUES(?,?,?,?,?,?)", ["o", key, 50, "d", 1, 0]);
+      await value.store.run("UPDATE ingest_incremental_state SET initialized=0 WHERE singleton=1");
       await importFilesWithReport(options);
       expect(await value.store.get("SELECT distance_m FROM session WHERE session_key=?", [key])).toEqual({ distance_m: 200 });
       expect((await value.store.all("SELECT distance_m FROM swim_length ORDER BY length_key")).map((row) => row.distance_m)).toEqual([50, 50, 50, 50]);

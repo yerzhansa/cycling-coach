@@ -37,6 +37,11 @@ const EXPECTED_FULL_TABLES = [
   "source_record_current",
   "source_watermark",
   "sync_operation",
+  "ingest_incremental_state",
+  "ingest_candidate_index",
+  "ingest_dedup_pair_state",
+  "ingest_dedup_session_state",
+  "ingest_cluster_state",
 ];
 const MIGRATION_002 = `ALTER TABLE swim_length ADD COLUMN distance_m REAL;
 
@@ -138,6 +143,7 @@ function openFull(): DatabaseSync {
   next.exec(MIGRATIONS[2]!.sql);
   next.exec(MIGRATIONS[3]!.sql);
   next.exec(MIGRATIONS[4]!.sql);
+  next.exec(MIGRATIONS[5]!.sql);
   return next;
 }
 
@@ -154,6 +160,7 @@ describe("001_init migration", () => {
       { version: 3, name: "003_dedup_confirmation" },
       { version: 4, name: "004_repair_fixer_settings" },
       { version: 5, name: "005_sync_state" },
+      { version: 6, name: "006_incremental_ingest" },
     ]);
     expect(typeof MIGRATIONS[0].sql).toBe("string");
     expect(MIGRATIONS[0].sql).toContain("CREATE TABLE athlete");
@@ -202,7 +209,7 @@ describe("001_init migration", () => {
   it("carries no wall-clock column on any derived table (INV-2)", () => {
     db = openMigrated();
     expect(DERIVED_TABLES.join(",")).toBe(
-      "metric_snapshot,mean_max_cache,repair_log,stream,swim_length,lap,session,workout",
+      "metric_snapshot,mean_max_cache,ingest_cluster_state,ingest_dedup_session_state,ingest_dedup_pair_state,ingest_candidate_index,repair_log,stream,swim_length,lap,session,workout",
     );
     for (const table of DERIVED_TABLES.filter((name) => EXPECTED_TABLES.includes(name))) {
       const cols = db.prepare(`PRAGMA table_info(${table});`).all() as Array<{ name: string }>;
@@ -706,6 +713,11 @@ describe("001_init migration", () => {
       { table: "athlete", orderBy: "id" },
       { table: "dedup_confirmation", orderBy: "id" },
       { table: "field_merge_override_overlay", orderBy: "id" },
+      { table: "ingest_candidate_index", orderBy: "candidate_id" },
+      { table: "ingest_cluster_state", orderBy: "cluster_id" },
+      { table: "ingest_dedup_pair_state", orderBy: "candidate_a, candidate_b" },
+      { table: "ingest_dedup_session_state", orderBy: "session_group_id" },
+      { table: "ingest_incremental_state", orderBy: "singleton" },
       { table: "ingest_metadata", orderBy: "singleton" },
       { table: "intake_flags", orderBy: "id" },
       { table: "lap", orderBy: "lap_key" },
@@ -722,7 +734,6 @@ describe("001_init migration", () => {
       { table: "source_record", orderBy: "id" },
       { table: "source_record_current", orderBy: "source_record_id" },
       { table: "source_record_revision", orderBy: "revision_id" },
-      { table: "source_watermark", orderBy: "source, lane" },
       { table: "sport_settings", orderBy: "id" },
       { table: "stream", orderBy: "stream_key" },
       { table: "stroke_correction_overlay", orderBy: "id" },
@@ -731,7 +742,8 @@ describe("001_init migration", () => {
       { table: "workout", orderBy: "workout_key" },
       { table: "zone_set_history", orderBy: "id" },
     ]);
-    expect(DUMP_TABLES).toHaveLength(28);
+    expect(DUMP_TABLES).toHaveLength(32);
+    expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("source_watermark");
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("sync_operation");
     for (const table of [
       "source_artifact",
@@ -742,5 +754,18 @@ describe("001_init migration", () => {
     ]) {
       expect(DERIVED_TABLES).not.toContain(table);
     }
+  });
+
+  it("creates the exact strict incremental cache schema", () => {
+    db = openFull();
+    expect(createHash("sha256").update(MIGRATIONS[5]!.sql).digest("hex")).toBe(
+      "85cd423bdb7a12facbc061865035801f22c177388fe111a4e5979face9368574",
+    );
+    expect(db.prepare("SELECT singleton,initialized FROM ingest_incremental_state").get()).toEqual({ singleton: 1, initialized: 0 });
+    expect(() => db!.prepare("UPDATE ingest_incremental_state SET initialized=2").run()).toThrow();
+    expect(() => db!.prepare(`INSERT INTO ingest_candidate_index (
+candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,sport_family,is_transition,start_utc,duration_s,candidate_summary_json
+) VALUES ('c','raw_file','a','not-a-hash','fit',0,'cycling',0,0,0,'{}')`).run()).toThrow();
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 });

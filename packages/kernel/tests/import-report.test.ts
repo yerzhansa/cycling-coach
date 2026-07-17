@@ -101,6 +101,22 @@ function confirmation(id: string, leftByte: number, rightByte: number, verdict: 
 }
 
 describe("stable import report", () => {
+  it("runs the full-oracle transaction finalizer exactly once with unchanged report counts", async () => {
+    const value = harness();
+    const finalized: unknown[] = [];
+    const report = await importArtifactsWithReport({ files: [file("finalized.fit", 1)], platform_records: [] }, {
+      ...value.deps,
+      finalizeBatchInTransaction: async (_store, result) => { finalized.push(result); },
+    });
+    expect(finalized).toEqual([{
+      source_artifact_inserted: 0,
+      raw_file_inserted: 1,
+      source_record_inserted: 0,
+      source_record_updated: 0,
+      relinked_source_records: 0,
+    }]);
+    expect(report.inserts).toEqual({ raw_file: 1, source_record: 0 });
+  });
   it("[PR05-REPORT-001] exposes every declared key and stable reason vocabulary", async () => {
     const { report } = await run([file("a.fit", 1), file("b.fit", 2)]);
     const near = (await run([file("near-a.fit", 9), file("near-b.fit", 10)])).report;

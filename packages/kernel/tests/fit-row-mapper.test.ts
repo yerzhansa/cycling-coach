@@ -22,6 +22,24 @@ describe("FIT row mapper",()=>{
     const heart=out.activity.streams.find((s)=>s.channel==="heart_rate")!;expect(decodeStream({...heart,kind:"value"})).toEqual([120,null]);
     expect(out.activity.streams.some((s)=>s.channel.endsWith(":metric"))).toBe(true);
   });
+  it("normalizes zero heart-rate dropout samples to null",async()=>{
+    const out=await map(decoded([session(0,1000,1003)],[record(0,1000,{heartRate:0}),record(1,1001,{heartRate:142}),record(2,1002,{heartRate:0})]));
+    const heart=out.activity.streams.find((s)=>s.channel==="heart_rate")!;
+    expect(decodeStream({...heart,kind:"value"})).toEqual([null,142,null]);
+  });
+  it("normalizes 16-byte and 36-char-UUID application ids to one identity and rejects other shapes",async()=>{
+    const rawBytes=[0x5d,0x1a,0x2b,0x3c,0x4d,0x5e,0x6f,0x70,0x81,0x92,0xa3,0xb4,0xc5,0xd6,0xe7,0xf8];
+    const uuidText="5d1a2b3c-4d5e-6f70-8192-a3b4c5d6e7f8";
+    const uuidBytes=[...uuidText.toUpperCase()].map((c)=>c.charCodeAt(0));
+    const devRecord=record(0,1000,{developerFields:[{nativeMessageType:20,developer_data_index:0,field_definition_number:2,field_name:"Metric",units:"u",value:3.5}]});
+    const fromRaw=await map({...decoded([session(0,1000,1002)],[devRecord]),developerDataIds:[{developerDataIndex:0,applicationId:rawBytes}]});
+    const fromText=await map({...decoded([session(0,1000,1002)],[devRecord]),developerDataIds:[{developerDataIndex:0,applicationId:uuidBytes}]});
+    const channelOf=(out:Awaited<ReturnType<typeof map>>)=>out.activity.streams.find((s)=>s.channel.startsWith("dev:"))!.channel;
+    expect(channelOf(fromRaw)).toBe("dev:5d1a2b3c4d5e6f708192a3b4c5d6e7f8:0:2:metric");
+    expect(channelOf(fromText)).toBe(channelOf(fromRaw));
+    await error(map({...decoded([session(0,1000,1002)],[devRecord]),developerDataIds:[{developerDataIndex:0,applicationId:[...Array(36)].map(()=>65)}]}),"developer_identity_invalid");
+    await error(map({...decoded([session(0,1000,1002)],[devRecord]),developerDataIds:[{developerDataIndex:0,applicationId:rawBytes.slice(0,12)}]}),"developer_identity_invalid");
+  });
   it("maps every native record channel and prefers enhanced values",async()=>{
     const values:Partial<DecodedRecord>={positionLat:1,positionLong:2,distance:3,enhancedAltitude:4,altitude:40,enhancedSpeed:5,speed:50,heartRate:6,cadence:7,fractionalCadence:8,power:9,temperature:10,stanceTime:11,stanceTimeBalance:12,verticalOscillation:13,verticalRatio:14,stepLength:15,leftRightBalance:16,respirationRate:17};
     const out=await map(decoded([session(0,0,1)],[record(0,0,values)]));

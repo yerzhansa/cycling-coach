@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { canonicalPick, createMaterializeClusterInTransaction, decodeStream, importArtifactsWithReport, type Candidate,
+import { canonicalPick, createMaterializeClusterInTransaction, decodeStream, dedupPairStates, importArtifactsWithReport,
+  planDedup, planDedupFromPairStates, type Candidate,
   type ConcernValue, type ImportArtifact, type PlatformImportArtifact, type PreparedFile, type PrepareFileResult } from "../src/ingest/index.js";
 import type { ArchiveManager } from "../src/archive/index.js";
 import { DERIVED_TABLES, sortKeys, type DedupConfirmationRow, type Row, type SourceRecordRow, type SqlStore, type SqlValue } from "../src/store/index.js";
@@ -130,6 +131,15 @@ function deps(store: MemoryStore, rawArchive: ReturnType<typeof archive>, materi
 }
 
 describe("global replan invariant", () => {
+  it("hydrates the summary-only pair topology identically to the full oracle", () => {
+    const left = prepared({ input_path: "a.fit", bytes: new Uint8Array([1]), ext: "fit" });
+    const right = prepared({ input_path: "b.fit", bytes: new Uint8Array([2]), ext: "fit" });
+    if (left.outcome !== "prepared" || right.outcome !== "prepared") throw new Error("fixture preparation failed");
+    const candidates = [...left.value.candidates, ...right.value.candidates];
+    const summaries = [...left.value.summaries, ...right.value.summaries];
+    const oracle = planDedup(candidates, summaries, []);
+    expect(planDedupFromPairStates(candidates, summaries, [], dedupPairStates(oracle))).toEqual(oracle);
+  });
   it("[PR05-INV2-001] completes preparation and planning before writes", async () => {
     const store = new MemoryStore(), a = archive(), d = deps(store, a);
     await importArtifactsWithReport({ files: [{ input_path: "a.fit", bytes: new Uint8Array([1]), ext: "fit" }], platform_records: [] }, d.value);

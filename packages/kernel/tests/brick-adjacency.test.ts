@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planBrickAdjacency, planDedup, type Candidate, type DedupCandidateSummary } from "../src/ingest/index.js";
+import { planBrickAdjacency, planBrickAdjacencyFromTopology, planDedup, type Candidate, type DedupCandidateSummary } from "../src/ingest/index.js";
 import type { DedupConfirmationRow } from "../src/store/index.js";
 
 const member = (n: number) => n.toString(16).padStart(64, "0");
@@ -59,5 +59,10 @@ describe("brick adjacency", () => {
   it("[PR05-BRICK-008] preserves chronological report tuple orientation", () => {
     const result = bricks([item(9, "running", 0), item(1, "cycling", 200)]);
     expect(result.brick_groups[0]).toMatchObject({ members: [member(9), member(1)], families: ["running", "cycling"] });
+  });
+  it("keeps the lightweight topology adapter byte-equivalent to the public planner", () => {
+    const values = [item(1, "running", 0), item(2, "cycling", 200), item(3, "running", 400)];
+    const dedup = planDedup(values.map((value) => value.candidate), values.map((value) => value.summary), []);
+    expect(planBrickAdjacencyFromTopology(dedup, [])).toEqual(planBrickAdjacency(dedup, []));
   });
 });

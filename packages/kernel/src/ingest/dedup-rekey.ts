@@ -3,10 +3,10 @@ import { sortKeys } from "../store/canonical-json.js";
 import { createDedupConfirmationRepository } from "../store/dedup-confirmation-repository.js";
 import { deleteAllDerivedRowsInTransaction } from "./rebuild.js";
 import { createIntervalsSourceRepository, createRawFileRepository, createSourceRecordRepository } from "../store/source-repository.js";
-import type { RawFileRow, Row, SourceRecordRow, SqlStore } from "../store/ports.js";
+import type { DedupConfirmationRow, RawFileRow, Row, SourceRecordRow, SqlStore } from "../store/ports.js";
 import type { Candidate, ConcernValue, LapConcern, SwimLengthConcern } from "./canonical-pick.js";
 import { DEFAULT_TRANSITION_WINDOW_S, planBrickAdjacency, type SportSettingInput } from "./brick-adjacency.js";
-import { DEFAULT_TIER3_THRESHOLDS, planDedup, type DedupCandidateSummary } from "./dedup.js";
+import { DEFAULT_TIER3_THRESHOLDS, dedupPairStates, planDedup, type DedupCandidateSummary, type DedupPlan } from "./dedup.js";
 import { encodeStream } from "./stream-codec.js";
 import { rescalePoolDistances } from "./pool-size-rescale.js";
 import { buildPlatformPresentation, parseEnvelope, replayPlatformPresentation, type PlatformPresentation } from "./source-ledger.js";
@@ -70,7 +70,7 @@ function sourceRow(row: Row): SourceRecordRow {
   };
 }
 
-interface SelectedSourceRow extends SourceRecordRow {
+export interface SelectedSourceRow extends SourceRecordRow {
   readonly artifact_key: string | null;
   readonly archive_rel_path: string | null;
   readonly archive_epoch_s: number | null;
@@ -100,11 +100,11 @@ WHERE sr.source = 'intervals-icu'
   AND (a.lane = 'activities' OR r.artifact_key IS NULL)
 ORDER BY sr.id`;
 
-async function readSelectedSourceRows(store: SqlStore): Promise<SelectedSourceRow[]> {
+export async function readSelectedSourceRows(store: SqlStore): Promise<SelectedSourceRow[]> {
   return (await store.all(SELECTED_ACTIVITY_SOURCE_SQL)).map(selectedSourceRow);
 }
 
-function sourcePresentationRow(row: SelectedSourceRow): SourceRecordRow {
+export function sourcePresentationRow(row: SelectedSourceRow): SourceRecordRow {
   return {
     id: row.id,
     workout_key: row.workout_key,
@@ -117,7 +117,7 @@ function sourcePresentationRow(row: SelectedSourceRow): SourceRecordRow {
   };
 }
 
-async function readSourceRevisionState(store: SqlStore): Promise<readonly Row[]> {
+export async function readSourceRevisionState(store: SqlStore): Promise<readonly Row[]> {
   return store.all(`SELECT
   sr.id, sr.source, sr.external_id, sr.workout_key, sr.session_key,
   c.revision_id AS current_revision_id,
@@ -237,7 +237,7 @@ function repairEventsForSession(
   return result.sort((a, b) => compareText(a.channel, b.channel) || compareText(a.fixer, b.fixer));
 }
 
-async function orphanReports(store: SqlStore, members: ReadonlySet<string>): Promise<OrphanReport[]> {
+export async function orphanReports(store: SqlStore, members: ReadonlySet<string>): Promise<OrphanReport[]> {
   const result: OrphanReport[] = [];
   const current = new Map<string, Set<string>>();
   const inventories = [
@@ -274,10 +274,269 @@ async function orphanReports(store: SqlStore, members: ReadonlySet<string>): Pro
     || compareText(a.target_key, b.target_key) || compareText(a.id, b.id));
 }
 
+function artifactIdentity(candidate: Candidate): { readonly kind: "raw_file" | "source_record"; readonly id: string } {
+  return candidate.origin.kind === "file"
+    ? { kind: "raw_file", id: candidate.origin.rawSha256 }
+    : { kind: "source_record", id: candidate.origin.sourceRecordId };
+}
+
+export interface IncrementalCandidateCacheRow {
+  readonly candidate_id: string;
+  readonly artifact_kind: "raw_file" | "source_record";
+  readonly artifact_id: string;
+  readonly member_id: string;
+  readonly source_kind: DedupCandidateSummary["source_kind"];
+  readonly source_session_seq: number;
+  readonly sport_family: string;
+  readonly is_transition: 0 | 1;
+  readonly start_utc: number;
+  readonly duration_s: number;
+  readonly distance_m: number | null;
+  readonly file_id_manufacturer: string | null;
+  readonly file_id_serial: number | null;
+  readonly file_id_time_created_utc: number | null;
+  readonly candidate_summary_json: string;
+}
+
+export function incrementalCandidateCacheRow(candidate: Candidate, summary: DedupCandidateSummary): IncrementalCandidateCacheRow {
+  if (candidate.id !== summary.candidate_id) throw new Error("candidate cache identity mismatch");
+  const artifact = artifactIdentity(candidate);
+  return { candidate_id: summary.candidate_id, artifact_kind: artifact.kind, artifact_id: artifact.id,
+    member_id: summary.member_id, source_kind: summary.source_kind, source_session_seq: summary.source_session_seq,
+    sport_family: summary.sport_family, is_transition: summary.is_transition ? 1 : 0, start_utc: summary.start_utc,
+    duration_s: summary.duration_s, distance_m: summary.distance_m, file_id_manufacturer: summary.file_id_manufacturer,
+    file_id_serial: summary.file_id_serial, file_id_time_created_utc: summary.file_id_time_created_utc,
+    candidate_summary_json: canonical(summary) };
+}
+
+export interface IncrementalSessionCacheRow {
+  readonly session_group_id: string;
+  readonly topology_signature_json: string;
+  readonly candidate_ids_json: string;
+  readonly summaries_json: string;
+  readonly members_json: string;
+  readonly edge_tiers_json: string;
+}
+
+export function incrementalSessionCacheRows(dedup: DedupPlan): readonly IncrementalSessionCacheRow[] {
+  const summaryById = new Map(dedup.sessions.flatMap((session) => session.summaries)
+    .map((summary) => [summary.candidate_id, summary]));
+  return dedup.sessions.map((session) => {
+    const candidateIds = session.group.candidates.map((candidate) => candidate.id).sort(compareText);
+    return { session_group_id: session.group.id, topology_signature_json: sessionTopologySignature(session),
+      candidate_ids_json: canonical(candidateIds),
+      summaries_json: canonical(candidateIds.map((id) => summaryById.get(id)!)), members_json: canonical([...session.members]),
+      edge_tiers_json: canonical([...session.edge_tiers]) };
+  }).sort((a, b) => compareText(a.session_group_id, b.session_group_id));
+}
+
+function sessionTopologySignature(session: DedupPlan["sessions"][number]): string {
+  return canonical({
+    candidate_ids: session.group.candidates.map((candidate) => candidate.id).sort(compareText),
+    edge_tiers: [...session.edge_tiers],
+    members: [...session.members],
+    session_group_id: session.group.id,
+  });
+}
+
+export interface IncrementalClusterTopology {
+  readonly cluster_id: string;
+  readonly workout_key: string;
+  readonly topology_signature_json: string;
+  readonly cluster_report_json: string;
+  readonly session_group_ids: readonly string[];
+}
+
+export interface IncrementalClusterShape {
+  readonly cluster_id: string;
+  readonly workout_key: string;
+  readonly topology_signature_json: string;
+  readonly session_group_ids: readonly string[];
+  readonly candidate_ids: readonly string[];
+}
+
+export async function buildIncrementalClusterShapes(
+  dedup: DedupPlan,
+  bricks: ReturnType<typeof planBrickAdjacency>,
+  hashKey: ImportReportDeps["hashKey"],
+): Promise<readonly IncrementalClusterShape[]> {
+  const sessions = new Map(dedup.sessions.map((session) => [session.group.id, session]));
+  const shapes: IncrementalClusterShape[] = [];
+  for (const workout of bricks.workouts) {
+    const orderedSessions = workout.session_group_ids.map((id) => sessions.get(id)!).sort((left, right) => {
+      const [aStart, aId] = candidateStart(left), [bStart, bId] = candidateStart(right);
+      return aStart - bStart || compareText(aId, bId);
+    });
+    const clusterId = workout.members[0]!;
+    const workoutKey = await hashKey(["workout", clusterId]);
+    const topology = {
+      cluster_id: clusterId,
+      edge_tiers: [...workout.edge_tiers],
+      members: [...workout.members],
+      sessions: orderedSessions.map((session, session_seq) => ({
+        candidate_ids: session.group.candidates.map((candidate) => candidate.id).sort(compareText),
+        edge_tiers: [...session.edge_tiers],
+        members: [...session.members],
+        session_group_id: session.group.id,
+        session_seq,
+      })),
+      workout_key: workoutKey,
+    };
+    shapes.push({ cluster_id: clusterId, workout_key: workoutKey, topology_signature_json: canonical(topology),
+      session_group_ids: orderedSessions.map((session) => session.group.id),
+      candidate_ids: orderedSessions.flatMap((session) => session.group.candidates.map((candidate) => candidate.id)).sort(compareText) });
+  }
+  return shapes.sort((a, b) => compareText(a.cluster_id, b.cluster_id));
+}
+
+export function buildIncrementalClusterTopologies(
+  dedup: DedupPlan,
+  bricks: ReturnType<typeof planBrickAdjacency>,
+  clusterReports: readonly ClusterReport[],
+): readonly IncrementalClusterTopology[] {
+  const sessions = new Map(dedup.sessions.map((session) => [session.group.id, session]));
+  const reports = new Map(clusterReports.map((report) => [report.cluster_id, report]));
+  const result: IncrementalClusterTopology[] = [];
+  for (const workout of bricks.workouts) {
+    const orderedSessions = workout.session_group_ids.map((id) => sessions.get(id)!).sort((left, right) => {
+      const [aStart, aId] = candidateStart(left), [bStart, bId] = candidateStart(right);
+      return aStart - bStart || compareText(aId, bId);
+    });
+    const clusterId = workout.members[0]!;
+    const report = reports.get(clusterId);
+    if (report === undefined) continue;
+    const topology = {
+      cluster_id: clusterId,
+      edge_tiers: [...workout.edge_tiers],
+      members: [...workout.members],
+      sessions: orderedSessions.map((session, session_seq) => ({
+        candidate_ids: session.group.candidates.map((candidate) => candidate.id).sort(compareText),
+        edge_tiers: [...session.edge_tiers],
+        members: [...session.members],
+        session_group_id: session.group.id,
+        session_seq,
+      })),
+      workout_key: report.workout_key,
+    };
+    result.push({
+      cluster_id: clusterId,
+      workout_key: report.workout_key,
+      topology_signature_json: canonical(topology),
+      cluster_report_json: canonical(report),
+      session_group_ids: orderedSessions.map((session) => session.group.id),
+    });
+  }
+  return result.sort((a, b) => compareText(a.cluster_id, b.cluster_id));
+}
+
+export async function writeIncrementalCachesInTransaction(
+  store: SqlStore,
+  input: {
+    readonly candidates: readonly Candidate[];
+    readonly summaries: readonly DedupCandidateSummary[];
+    readonly dedup: DedupPlan;
+    readonly clusters: readonly IncrementalClusterTopology[];
+  },
+): Promise<void> {
+  const candidateById = new Map(input.candidates.map((candidate) => [candidate.id, candidate]));
+  const summaryById = new Map(input.summaries.map((summary) => [summary.candidate_id, summary]));
+  for (const summary of [...input.summaries].sort((a, b) => compareText(a.candidate_id, b.candidate_id))) {
+    const candidate = candidateById.get(summary.candidate_id);
+    if (candidate === undefined) throw new Error("candidate cache identity is absent");
+    const artifact = artifactIdentity(candidate);
+    await store.run(`INSERT INTO ingest_candidate_index (
+  candidate_id, artifact_kind, artifact_id, member_id, source_kind, source_session_seq,
+  sport_family, is_transition, start_utc, duration_s, distance_m,
+  file_id_manufacturer, file_id_serial, file_id_time_created_utc, candidate_summary_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      summary.candidate_id, artifact.kind, artifact.id, summary.member_id, summary.source_kind,
+      summary.source_session_seq, summary.sport_family, summary.is_transition ? 1 : 0,
+      summary.start_utc, summary.duration_s, summary.distance_m, summary.file_id_manufacturer,
+      summary.file_id_serial, summary.file_id_time_created_utc, canonical(summary),
+    ]);
+  }
+  for (const pair of dedupPairStates(input.dedup)) await store.run(`INSERT INTO ingest_dedup_pair_state (
+  candidate_a, candidate_b, edge_tier, threshold_near_miss_json, overlap_watchlist_json, confirm_queue_json
+) VALUES (?, ?, ?, ?, ?, ?)`, [pair.candidate_a, pair.candidate_b, pair.edge_tier,
+    pair.threshold_near_miss === null ? null : canonical(pair.threshold_near_miss),
+    pair.overlap_watchlist === null ? null : canonical(pair.overlap_watchlist),
+    pair.confirm_queue === null ? null : canonical(pair.confirm_queue)]);
+  for (const session of input.dedup.sessions) {
+    const candidateIds = session.group.candidates.map((candidate) => candidate.id).sort(compareText);
+    const summaries = candidateIds.map((id) => summaryById.get(id)!);
+    await store.run(`INSERT INTO ingest_dedup_session_state (
+  session_group_id, topology_signature_json, candidate_ids_json, summaries_json, members_json, edge_tiers_json
+) VALUES (?, ?, ?, ?, ?, ?)`, [session.group.id, sessionTopologySignature(session), canonical(candidateIds),
+      canonical(summaries), canonical([...session.members]), canonical([...session.edge_tiers])]);
+  }
+  for (const cluster of input.clusters) await store.run(`INSERT INTO ingest_cluster_state (
+  cluster_id, workout_key, topology_signature_json, cluster_report_json
+) VALUES (?, ?, ?, ?)`, [cluster.cluster_id, cluster.workout_key, cluster.topology_signature_json, cluster.cluster_report_json]);
+}
+
+export interface ClusterPlanningResult {
+  readonly dedup: DedupPlan;
+  readonly bricks: ReturnType<typeof planBrickAdjacency>;
+  readonly planned: readonly PlannedCluster[];
+  readonly clusterReports: readonly ClusterReport[];
+  readonly finalKeyByCandidate: ReadonlyMap<string, { readonly workout: string; readonly session: string }>;
+  readonly incrementalClusters: readonly IncrementalClusterTopology[];
+}
+
+export async function planClusters(
+  input: {
+    readonly candidates: readonly Candidate[];
+    readonly summaries: readonly DedupCandidateSummary[];
+    readonly confirmations: readonly DedupConfirmationRow[];
+    readonly settings: readonly SportSettingInput[];
+    readonly eventsByCandidate: ReadonlyMap<string, readonly PreparedRepairEvent[]>;
+    readonly materializeClusterIds?: ReadonlySet<string>;
+    readonly dedup?: DedupPlan;
+  },
+  deps: Pick<ImportReportDeps, "hashKey" | "canonicalPick">,
+): Promise<ClusterPlanningResult> {
+  const dedup = input.dedup ?? planDedup(input.candidates, input.summaries, input.confirmations);
+  const bricks = planBrickAdjacency(dedup, input.settings);
+  const sessionById = new Map(dedup.sessions.map((session) => [session.group.id, session]));
+  const planned: PlannedCluster[] = [];
+  const clusterReports: ClusterReport[] = [];
+  const finalKeyByCandidate = new Map<string, { workout: string; session: string }>();
+  for (const workout of bricks.workouts) {
+    const sessions = workout.session_group_ids.map((id) => sessionById.get(id)!).sort((left, right) => {
+      const [aStart, aId] = candidateStart(left), [bStart, bId] = candidateStart(right);
+      return aStart - bStart || compareText(aId, bId);
+    });
+    const clusterId = workout.members[0]!;
+    if (input.materializeClusterIds !== undefined && !input.materializeClusterIds.has(clusterId)) continue;
+    const workoutKey = await deps.hashKey(["workout", clusterId]);
+    const plannedSessions: PlannedLogicalSession[] = [];
+    const canonicalSources: ClusterReport["canonical_sources"][number][] = [];
+    for (let index = 0; index < sessions.length; index += 1) {
+      const session = sessions[index]!, pick = deps.canonicalPick(session.group);
+      if (pick.materialization.status !== "ready") throw new Error("logical session is not materializable");
+      const sessionKey = await deps.hashKey(["session", workoutKey, index]);
+      for (const candidate of session.group.candidates) finalKeyByCandidate.set(candidate.id, { workout: workoutKey, session: sessionKey });
+      for (const winner of pick.winners) canonicalSources.push({ concern: `${index}:${winner.concern}`, candidate_id: winner.candidateId, rank: winner.rank });
+      plannedSessions.push({ session_seq: index, group: session.group, pick,
+        repair_events: repairEventsForSession(pick, input.eventsByCandidate) });
+    }
+    planned.push({ cluster_id: clusterId, workout_key: workoutKey, sessions: plannedSessions });
+    clusterReports.push({ cluster_id: clusterId, workout_key: workoutKey, members: workout.members,
+      edge_tiers: workout.edge_tiers, canonical_sources: canonicalSources.sort((a, b) => compareText(a.concern, b.concern)
+        || compareText(a.candidate_id, b.candidate_id)) });
+  }
+  planned.sort((a, b) => compareText(a.cluster_id, b.cluster_id));
+  clusterReports.sort((a, b) => compareText(a.cluster_id, b.cluster_id));
+  return { dedup, bricks, planned, clusterReports, finalKeyByCandidate,
+    incrementalClusters: buildIncrementalClusterTopologies(dedup, bricks, clusterReports) };
+}
+
 async function runGlobalReplan(
   request: GlobalReplanRequest,
   deps: ImportReportDeps,
 ): Promise<GlobalReplanResult> {
+  const measure = <T>(phase: "archive-decode" | "topology" | "sqlite", work: () => Promise<T>): Promise<T> =>
+    deps.measurePhase === undefined ? work() : deps.measurePhase(phase, work);
   if (deps.ingestVersion !== FIT_INGEST_VERSION) throw new Error("ingest dependency version mismatch");
   const metadata = await deps.store.all("SELECT ingest_version FROM ingest_metadata WHERE singleton=1");
   if (metadata.length !== 1) throw new Error("ingest metadata invariant mismatch");
@@ -343,9 +602,10 @@ async function runGlobalReplan(
   const fileWork: FileWork[] = [];
   const incomingAddresses = new Map<string, PreparedAddress>();
   for (const file of files) {
-    const result = await deps.prepareFile(file, targetSettings);
+    const result = await measure("archive-decode", () => deps.prepareFile(file, targetSettings));
     if (result.outcome === "quarantined") {
-      const archived = await deps.archive.quarantine(file.bytes, file.ext, `${canonical(result.quarantine)}\n`);
+      const archived = await measure("archive-decode", () =>
+        deps.archive.quarantine(file.bytes, file.ext, `${canonical(result.quarantine)}\n`));
       assertValidAddress(archived.address);
       fileWork.push({ address: archived.address, report: { input_path: file.input_path, address: archived.address, ext: file.ext,
         archive_deduped: archived.deduped, raw_file_inserted: false, outcome: "quarantined", quarantine: result.quarantine } });
@@ -353,7 +613,8 @@ async function runGlobalReplan(
     }
     const prepared = result.value;
     assertValidAddress(prepared.expected_address);
-    const archived = await deps.archive.writeArtifact(file.bytes, file.ext, prepared.archive_instant);
+    const archived = await measure("archive-decode", () =>
+      deps.archive.writeArtifact(file.bytes, file.ext, prepared.archive_instant));
     if (archived.address !== prepared.expected_address) throw new Error("archive address mismatch");
     assertValidAddress(archived.address);
     const row: RawFileRow = { ...prepared.raw_file, path: archived.relPath };
@@ -370,12 +631,12 @@ FROM raw_file
 ORDER BY sha256 COLLATE BINARY ASC`)).map(rawRow);
   const allAddresses = new Map<string, PreparedAddress>();
   for (const row of persistedRawRows) {
-    const bytes = await deps.archive.readArtifact(row.path!);
+    const bytes = await measure("archive-decode", () => deps.archive.readArtifact(row.path!));
     if (bytes.byteLength !== row.bytes) throw new Error("persisted raw byte count mismatch");
-    const result = await deps.prepareFile(
+    const result = await measure("archive-decode", () => deps.prepareFile(
       { input_path: row.path!, bytes, ext: row.ext as "fit" | "tcx" | "gpx" },
       targetSettings,
-    );
+    ));
     if (result.outcome !== "prepared") throw new Error("persisted raw artifact is quarantined");
     if (result.value.expected_address !== row.sha256 || canonical({ ...result.value.raw_file, path: row.path }) !== canonical(row)) {
       throw new Error("persisted raw artifact invariant mismatch");
@@ -398,10 +659,11 @@ ORDER BY sha256 COLLATE BINARY ASC`)).map(rawRow);
     if (collision !== undefined) throw new Error("generic landing external-id collision");
   }
   const allPlatforms = new Map<string, PlatformPresentation>();
-  for (const row of persistedSourceRows) allPlatforms.set(row.id, await replayPlatformPresentation(sourcePresentationRow(row), deps.hashKey, {
-    archiveRelPath: row.archive_rel_path,
-    archiveEpochSeconds: row.archive_epoch_s,
-  }));
+  for (const row of persistedSourceRows) allPlatforms.set(row.id, await measure("archive-decode", () =>
+    replayPlatformPresentation(sourcePresentationRow(row), deps.hashKey, {
+      archiveRelPath: row.archive_rel_path,
+      archiveEpochSeconds: row.archive_epoch_s,
+    })));
   for (const [id, incoming] of incomingPlatforms) {
     const prior = allPlatforms.get(id);
     if (prior && evidenceMode) {
@@ -445,44 +707,16 @@ ORDER BY sha256 COLLATE BINARY ASC`)).map(rawRow);
   const plannedConfirmationState = canonical(confirmations);
   const plannedSettingState = canonical(settingRows);
   const plannedRepairSettingState = repairSnapshot.canonicalRows;
-  const dedup = planDedup(candidates, summaries, confirmations);
-  const bricks = planBrickAdjacency(dedup, settingRows);
-  const sessionById = new Map(dedup.sessions.map((session) => [session.group.id, session]));
-  const planned: PlannedCluster[] = [];
-  const clusterReports: ClusterReport[] = [];
-  const finalKeyByCandidate = new Map<string, { workout: string; session: string }>();
-  for (const workout of bricks.workouts) {
-    const sessions = workout.session_group_ids.map((id) => sessionById.get(id)!).sort((left, right) => {
-      const [aStart, aId] = candidateStart(left), [bStart, bId] = candidateStart(right);
-      return aStart - bStart || compareText(aId, bId);
-    });
-    const clusterId = workout.members[0]!;
-    const workoutKey = await deps.hashKey(["workout", clusterId]);
-    const plannedSessions: PlannedLogicalSession[] = [];
-    const canonicalSources: ClusterReport["canonical_sources"][number][] = [];
-    for (let index = 0; index < sessions.length; index += 1) {
-      const session = sessions[index]!, pick = deps.canonicalPick(session.group);
-      if (pick.materialization.status !== "ready") throw new Error("logical session is not materializable");
-      const sessionKey = await deps.hashKey(["session", workoutKey, index]);
-      for (const candidate of session.group.candidates) finalKeyByCandidate.set(candidate.id, { workout: workoutKey, session: sessionKey });
-      for (const winner of pick.winners) canonicalSources.push({ concern: `${index}:${winner.concern}`, candidate_id: winner.candidateId, rank: winner.rank });
-      plannedSessions.push({ session_seq: index, group: session.group, pick,
-        repair_events: repairEventsForSession(pick, eventsByCandidate) });
-    }
-    planned.push({ cluster_id: clusterId, workout_key: workoutKey, sessions: plannedSessions });
-    clusterReports.push({ cluster_id: clusterId, workout_key: workoutKey, members: workout.members,
-      edge_tiers: workout.edge_tiers, canonical_sources: canonicalSources.sort((a, b) => compareText(a.concern, b.concern)
-        || compareText(a.candidate_id, b.candidate_id)) });
-  }
-  planned.sort((a, b) => compareText(a.cluster_id, b.cluster_id));
-  clusterReports.sort((a, b) => compareText(a.cluster_id, b.cluster_id));
+  const clusterPlan = await measure("topology", () => planClusters({ candidates, summaries, confirmations,
+    settings: settingRows, eventsByCandidate }, deps));
+  const { dedup, bricks, planned, clusterReports, finalKeyByCandidate, incrementalClusters } = clusterPlan;
   const members = new Set(summaries.map((summary) => summary.member_id));
   const incomingRows = [...incomingAddresses.values()].sort((a, b) => compareText(a.row.sha256, b.row.sha256));
   const incomingSourceRows = [...incomingPlatforms.values()].sort((a, b) => compareText(a.row.id, b.row.id));
   const insertedRaw = new Map<string, boolean>(), insertedSource = new Map<string, boolean>();
-  let relinked = 0, sourceUpdates = 0;
+  let relinked = 0, sourceUpdates = 0, sourceArtifactInserted = 0;
   let orphans: OrphanReport[] = [];
-  await deps.store.transaction(async () => {
+  await measure("sqlite", () => deps.store.transaction(async () => {
     const current = await deps.store.all("SELECT ingest_version FROM ingest_metadata WHERE singleton=1");
     const currentRawRows = (await deps.store.all(`SELECT sha256, path, ext, bytes, file_id_serial,
        file_id_time_created_utc, manufacturer, product
@@ -518,7 +752,21 @@ ORDER BY sha256 COLLATE BINARY ASC`)).map(rawRow);
     }
     const rawRepository = createRawFileRepository(deps.store), sourceRepository = createSourceRecordRepository(deps.store);
     const intervalsRepository = createIntervalsSourceRepository(deps.store, deps.hashKey);
-    for (const entry of incomingRows) insertedRaw.set(entry.row.sha256, await rawRepository.upsert(entry.row));
+    for (const file of batch.files) if (file.source_evidence !== undefined) {
+      const evidence = file.source_evidence;
+      const work = fileWork.find((entry) => entry.report.input_path === file.input_path);
+      if (work === undefined || evidence.entry.archiveAddress !== work.address) throw new Error("bulk FIT source evidence mismatch");
+      for (const draft of evidence.container === null ? [evidence.entry] : [evidence.container, evidence.entry]) {
+        if (draft.source !== "intervals-icu" || draft.lane !== "bulk-fit" || draft.artifactKind !== "raw_file") {
+          throw new TypeError("invalid bulk FIT source evidence");
+        }
+        const recorded = await intervalsRepository.recordArtifact(draft);
+        if (recorded.inserted) sourceArtifactInserted += 1;
+      }
+    }
+    for (const entry of incomingRows) {
+      insertedRaw.set(entry.row.sha256, await rawRepository.upsert(entry.row));
+    }
     for (const entry of incomingSourceRows) {
       const platform = batch.platform_records.find((value) => String(value.activity_id) === entry.row.external_id);
       if (evidenceMode) {
@@ -527,6 +775,7 @@ ORDER BY sha256 COLLATE BINARY ASC`)).map(rawRow);
         const recorded = await intervalsRepository.recordArtifact({ source: "intervals-icu", lane: "activities",
           externalId: evidence.externalId, artifactKind: "snapshot", archiveAddress: evidence.archive.address,
           archiveRelPath: evidence.archive.relPath, archiveEpochSeconds: evidence.archiveInstant.epochSeconds });
+        if (recorded.inserted) sourceArtifactInserted += 1;
         const revision = await intervalsRepository.applyActivityRevision({ sourceRow: entry.row, artifactKey: recorded.artifactKey });
         insertedSource.set(entry.row.id, revision.kind === "inserted-current");
         if (revision.selectorChanged && revision.kind !== "inserted-current") sourceUpdates += 1;
@@ -545,10 +794,19 @@ ORDER BY sha256 COLLATE BINARY ASC`)).map(rawRow);
       if (!before || before.workout_key !== keys.workout || before.session_key !== keys.session) relinked += 1;
     }
     await deps.store.run("UPDATE ingest_metadata SET ingest_version=? WHERE singleton=1", [deps.ingestVersion]);
+    await writeIncrementalCachesInTransaction(deps.store, { candidates, summaries, dedup, clusters: incrementalClusters });
+    await deps.store.run("UPDATE ingest_incremental_state SET initialized=1 WHERE singleton=1");
     const final = await deps.store.all("SELECT singleton, ingest_version FROM ingest_metadata WHERE singleton=1");
     if (final.length !== 1 || final[0]!.singleton !== 1 || final[0]!.ingest_version !== deps.ingestVersion) throw new Error("ingest metadata update failed");
     orphans = await orphanReports(deps.store, members);
-  });
+    await deps.finalizeBatchInTransaction?.(deps.store, {
+      source_artifact_inserted: sourceArtifactInserted,
+      raw_file_inserted: [...insertedRaw.values()].filter(Boolean).length,
+      source_record_inserted: [...insertedSource.values()].filter(Boolean).length,
+      source_record_updated: sourceUpdates,
+      relinked_source_records: relinked,
+    });
+  }));
 
   if (request.kind === "repair-fixer-setting") {
     return {

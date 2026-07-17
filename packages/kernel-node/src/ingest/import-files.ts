@@ -10,7 +10,7 @@ import {
   canonicalPick,
   createMaterializeClusterInTransaction,
   decodeStream,
-  importArtifactsWithReport,
+  importArtifactsIncrementally,
   mapFitArtifact,
   type Candidate,
   type ConcernValue,
@@ -27,6 +27,7 @@ import {
   type RepairFixerSettings,
   type SwimLengthConcern,
 } from "@enduragent/kernel/ingest";
+import type { ArchiveManager } from "@enduragent/kernel/archive";
 import { H, sortKeys, type MigratorStore, type SqlStore } from "@enduragent/kernel/store";
 import type { CryptoPort, FileSystemPort } from "@enduragent/kernel/ports";
 import { createFitDecoder } from "./fit-decoder.js";
@@ -41,6 +42,14 @@ export interface ImportFilesOptions {
 interface NodeImportCompositionOptions {
   readonly archiveDir: string;
   readonly store: SqlStore & Pick<MigratorStore, "transaction">;
+}
+
+export interface NodeImportRuntime {
+  readonly archive: ArchiveManager;
+  importBatchWithReport(
+    batch: import("@enduragent/kernel/ingest").ImportBatch,
+    hooks?: Pick<ImportReportDeps, "finalizeBatchInTransaction" | "measurePhase">,
+  ): Promise<ImportReport>;
 }
 
 export interface SetRepairFixerEnabledOptions {
@@ -249,10 +258,24 @@ export async function importFilesWithReport(options: ImportFilesOptions): Promis
     if (ext !== "fit" && ext !== "tcx" && ext !== "gpx") throw new TypeError("unsupported input extension");
     files.push({ input_path: inputPath, bytes: new Uint8Array(await readFile(inputPath)), ext });
   }
-  return importArtifactsWithReport(
-    { files, platform_records: [] },
-    createImportReportDeps(options),
-  );
+  return createNodeImportRuntime(options).importBatchWithReport({ files, platform_records: [] });
+}
+
+export function createNodeImportRuntime(options: NodeImportCompositionOptions): NodeImportRuntime {
+  const deps = createImportReportDeps(options);
+  return Object.freeze({
+    archive: deps.archive,
+    importBatchWithReport(
+      batch: import("@enduragent/kernel/ingest").ImportBatch,
+      hooks?: Pick<ImportReportDeps, "finalizeBatchInTransaction" | "measurePhase">,
+    ) {
+      return importArtifactsIncrementally(batch, {
+        ...deps,
+        ...(hooks?.finalizeBatchInTransaction === undefined ? {} : { finalizeBatchInTransaction: hooks.finalizeBatchInTransaction }),
+        ...(hooks?.measurePhase === undefined ? {} : { measurePhase: hooks.measurePhase }),
+      });
+    },
+  });
 }
 
 export function setRepairFixerEnabled(

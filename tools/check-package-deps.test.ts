@@ -326,10 +326,11 @@ describe("real repository", () => {
     expect(main([])).toBe(0);
   });
 
-  it("surfaces exactly the six transitional edges at branch point (guards a vacuous pass)", () => {
+  it("surfaces exactly the seven transitional edges at branch point (guards a vacuous pass)", () => {
     const result = runRulesAgainst(".", RULES);
     const edges = result.warnEdges.map((e) => `${e.dir} -> ${e.target}`);
     expect(edges).toEqual([
+      "packages/coach -> @enduragent/core",
       "packages/core -> @enduragent/kernel",
       "packages/sport-cycling -> @enduragent/core",
       "packages/sport-duathlon -> @enduragent/core",
