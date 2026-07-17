@@ -16,7 +16,12 @@ describe("block_coaching write side (gate-reject mitigation)", () => {
   });
 
   afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 100,
+    });
     vi.restoreAllMocks();
   });
 
@@ -180,7 +185,10 @@ describe("block_coaching write side (gate-reject mitigation)", () => {
     const arrivedAtGate = new Promise<void>((resolve) => {
       signalArrived = resolve;
     });
-    const pendingWrites: Array<Promise<unknown>> = [];
+    let signalParkedWriteSettled!: () => void;
+    const parkedWriteSettled = new Promise<void>((resolve) => {
+      signalParkedWriteSettled = resolve;
+    });
     const writes: Array<{ path: string; value: unknown }> = [];
     let parkedFirst = false;
     const latchedWrite = vi.fn(
@@ -190,7 +198,8 @@ describe("block_coaching write side (gate-reject mitigation)", () => {
         opts?: { signal?: AbortSignal },
       ): Promise<void> => {
         writes.push({ path, value });
-        if (path.endsWith("error_state.json") && !parkedFirst) {
+        const isParkedWrite = path.endsWith("error_state.json") && !parkedFirst;
+        if (isParkedWrite) {
           parkedFirst = true;
           if (signalArrived !== null) {
             signalArrived();
@@ -200,9 +209,11 @@ describe("block_coaching write side (gate-reject mitigation)", () => {
         }
         // Forward the threaded opts so the released gate-reject write honours the
         // abort (rename-skip) exactly as production does.
-        const w = realAtomicWrite(path, value, opts);
-        pendingWrites.push(w);
-        await w;
+        try {
+          await realAtomicWrite(path, value, opts);
+        } finally {
+          if (isParkedWrite) signalParkedWriteSettled();
+        }
       },
     );
 
@@ -262,7 +273,7 @@ describe("block_coaching write side (gate-reject mitigation)", () => {
     // the already-landed timeout record on disk.
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     releaseGate();
-    await Promise.allSettled(pendingWrites);
+    await parkedWriteSettled;
     await Promise.resolve();
     await Promise.resolve();
     warnSpy.mockRestore();
