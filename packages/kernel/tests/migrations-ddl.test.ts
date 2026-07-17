@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { MIGRATIONS } from "../src/store/migrations/index.js";
 import { DERIVED_TABLES, DUMP_TABLES } from "../src/store/dump.js";
+import { MIXED_AUTHORED_TABLES, PURE_AUTHORED_TABLES } from "../src/store/export/ports.js";
 
 const EXPECTED_TABLES = [
   "athlete",
@@ -42,6 +43,7 @@ const EXPECTED_FULL_TABLES = [
   "ingest_dedup_pair_state",
   "ingest_dedup_session_state",
   "ingest_cluster_state",
+  "sync_failure",
 ];
 const MIGRATION_002 = `ALTER TABLE swim_length ADD COLUMN distance_m REAL;
 
@@ -144,6 +146,7 @@ function openFull(): DatabaseSync {
   next.exec(MIGRATIONS[3]!.sql);
   next.exec(MIGRATIONS[4]!.sql);
   next.exec(MIGRATIONS[5]!.sql);
+  next.exec(MIGRATIONS[6]!.sql);
   return next;
 }
 
@@ -161,6 +164,7 @@ describe("001_init migration", () => {
       { version: 4, name: "004_repair_fixer_settings" },
       { version: 5, name: "005_sync_state" },
       { version: 6, name: "006_incremental_ingest" },
+      { version: 7, name: "007_sync_failure" },
     ]);
     expect(typeof MIGRATIONS[0].sql).toBe("string");
     expect(MIGRATIONS[0].sql).toContain("CREATE TABLE athlete");
@@ -252,7 +256,7 @@ describe("001_init migration", () => {
     expect(MIGRATIONS[2]!.sql).toBe(MIGRATION_003);
   });
 
-  it("applies 001 through 005 with exactly twenty-nine tables and no foreign-key violations", () => {
+  it("applies 001 through 007 with exactly thirty-five tables and no foreign-key violations", () => {
     db = openFull();
     const names = (
       db
@@ -262,6 +266,7 @@ describe("001_init migration", () => {
       .map((row) => row.name)
       .sort();
     expect(names).toEqual([...EXPECTED_FULL_TABLES].sort());
+    expect(names).toHaveLength(35);
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
@@ -745,12 +750,14 @@ describe("001_init migration", () => {
     expect(DUMP_TABLES).toHaveLength(32);
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("source_watermark");
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("sync_operation");
+    expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("sync_failure");
     for (const table of [
       "source_artifact",
       "source_record_revision",
       "source_record_current",
       "source_watermark",
       "sync_operation",
+      "sync_failure",
     ]) {
       expect(DERIVED_TABLES).not.toContain(table);
     }
@@ -761,11 +768,35 @@ describe("001_init migration", () => {
     expect(createHash("sha256").update(MIGRATIONS[5]!.sql).digest("hex")).toBe(
       "85cd423bdb7a12facbc061865035801f22c177388fe111a4e5979face9368574",
     );
-    expect(db.prepare("SELECT singleton,initialized FROM ingest_incremental_state").get()).toEqual({ singleton: 1, initialized: 0 });
+    expect(db.prepare("SELECT singleton,initialized FROM ingest_incremental_state").get()).toEqual({
+      singleton: 1,
+      initialized: 0,
+    });
     expect(() => db!.prepare("UPDATE ingest_incremental_state SET initialized=2").run()).toThrow();
-    expect(() => db!.prepare(`INSERT INTO ingest_candidate_index (
+    expect(() =>
+      db!
+        .prepare(`INSERT INTO ingest_candidate_index (
 candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,sport_family,is_transition,start_utc,duration_s,candidate_summary_json
-) VALUES ('c','raw_file','a','not-a-hash','fit',0,'cycling',0,0,0,'{}')`).run()).toThrow();
+) VALUES ('c','raw_file','a','not-a-hash','fit',0,'cycling',0,0,0,'{}')`)
+        .run(),
+    ).toThrow();
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+
+  it("creates the exact strict operational sync failure schema", () => {
+    db = openFull();
+    expect(createHash("sha256").update(MIGRATIONS[6]!.sql).digest("hex")).toBe(
+      "064cefa015c772c3f642c35d253316905fa41f32ab87396bcaf585f25ead9eec",
+    );
+    const tables = db.prepare("PRAGMA table_list").all() as Array<{
+      name: string;
+      strict: number;
+    }>;
+    expect(tables.find((row) => row.name === "sync_failure")?.strict).toBe(1);
+    expect(db.prepare("PRAGMA foreign_key_list(sync_failure)").all()).toEqual([]);
+    expect(DUMP_TABLES).toHaveLength(32);
+    expect(DERIVED_TABLES).toHaveLength(12);
+    expect(PURE_AUTHORED_TABLES).not.toContain("sync_failure");
+    expect(MIXED_AUTHORED_TABLES).not.toContain("sync_failure");
   });
 });

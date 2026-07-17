@@ -347,10 +347,14 @@ export function planDedup(
     const effectiveRow = effective.get(key);
     const differing = accepted.filter((pair) => pair.left.source_kind === "fit"
       && pair.right.source_kind === "fit"
+      && pair.left.file_id_serial !== null
+      && pair.right.file_id_serial !== null
       && pair.left.file_id_serial !== pair.right.file_id_serial);
     for (const pair of accepted) {
       const needsTwoFitSerialConfirmation = pair.left.source_kind === "fit"
         && pair.right.source_kind === "fit"
+        && pair.left.file_id_serial !== null
+        && pair.right.file_id_serial !== null
         && pair.left.file_id_serial !== pair.right.file_id_serial;
       if (!needsTwoFitSerialConfirmation) {
         selected.push({ a: pair.left, b: pair.right, tier: "tier3", diagnostic: pair.eval.diagnostic });
@@ -633,9 +637,11 @@ export function evaluateIncrementalDedupPairs(
     }
     const effectiveRow = effective.get(key);
     const differing = accepted.filter((pair) => pair.left.source_kind === "fit" && pair.right.source_kind === "fit"
+      && pair.left.file_id_serial !== null && pair.right.file_id_serial !== null
       && pair.left.file_id_serial !== pair.right.file_id_serial);
     for (const pair of accepted) {
       const needsTwoFitSerialConfirmation = pair.left.source_kind === "fit" && pair.right.source_kind === "fit"
+        && pair.left.file_id_serial !== null && pair.right.file_id_serial !== null
         && pair.left.file_id_serial !== pair.right.file_id_serial;
       if (!needsTwoFitSerialConfirmation) selected.push({ a: pair.left, b: pair.right, tier: "tier3", diagnostic: pair.eval.diagnostic });
       else if (effectiveRow?.verdict === "merge") selected.push({ a: pair.left, b: pair.right, tier: "confirmation", diagnostic: pair.eval.diagnostic });
@@ -717,6 +723,7 @@ export function planDedupFromPairStates(
       expanded_b: { start_utc: b.start_utc - 600, end_utc: b.start_utc + b.duration_s + 600 },
     }))) throw new Error("dedup pair cache disagreement");
     const needsTwoFitSerialConfirmation = a.source_kind === "fit" && b.source_kind === "fit"
+      && a.file_id_serial !== null && b.file_id_serial !== null
       && a.file_id_serial !== b.file_id_serial;
     if (state.confirm_queue !== null && (!evaluation.strict || !needsTwoFitSerialConfirmation
       || effective.get(pairKey(a.member_id, b.member_id))?.verdict === "merge"

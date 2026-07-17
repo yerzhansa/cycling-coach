@@ -10,3 +10,4 @@ export * from "./activity-repository.js";
 export * from "./derived-key.js";
 export * from "./sync-source.js";
 export * from "./sync-state-repository.js";
+export * from "./sync-failure-repository.js";

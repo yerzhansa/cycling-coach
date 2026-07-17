@@ -86,6 +86,8 @@ Each subsystem's behavior under failure is a recorded fail-open / fail-closed de
 - **Sender-allowlist lock contention** → **CLOSED**. Access control is a security boundary; deny on uncertainty rather than admit an unverified sender.
 - **Secrets backend unavailable** → **CLOSED**. No credential ⇒ no upstream call; fail loudly rather than proceed with an empty/guessed secret.
 
+Per-source synchronization failures are authoritative in SQLite and project to the Reference layer's `data/error_state.json` compatibility signal after each committed source-state change and before the next source run. A blocking failure uses `block_coaching`; a warning uses `warn_only`; recovery clears only the successful source. Failure details come from a closed project-owned vocabulary and never include exception text, URLs, paths, credentials, or athlete payloads. `force_resync` remains schema-declared and unwired.
+
 ## Reference test substrate (property-based + golden fixtures)
 
 Property-based generators wrapping the Reference input schemas live at

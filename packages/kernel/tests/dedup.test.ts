@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_TIER3_THRESHOLDS,
+  dedupPairStates,
   planDedup,
+  planDedupFromPairStates,
   ratioDelta,
   type Candidate,
   type DedupCandidateSummary,
@@ -77,9 +79,17 @@ describe("dedup tiers", () => {
   });
   it("[PR05-GRAPH-002] queues different and present-absent serial pairs", () => {
     expect(plan([presentation(1), presentation(2, { file_id_serial: 8 })]).confirm_queue).toHaveLength(1);
-    expect(plan([presentation(1), presentation(2, { file_id_serial: null })]).confirm_queue).toHaveLength(1);
+    const presentAbsent = plan([presentation(1), presentation(2, { file_id_serial: null })]);
+    expect(presentAbsent.confirm_queue).toEqual([]);
+    expect(presentAbsent.sessions[0]!.edge_tiers).toEqual(["tier3"]);
   });
-  it("merges API plus FIT at Tier 3 without consulting serial confirmation", () => {
+  it("rehydrates a present-absent serial pair from cached pair states without disagreement", () => {
+    const values = [presentation(1), presentation(2, { file_id_serial: null })];
+    const oracle = plan(values);
+    expect(oracle.confirm_queue).toEqual([]);
+    expect(planDedupFromPairStates(values.map((value) => value.candidate), values.map((value) => value.summary), [], dedupPairStates(oracle))).toEqual(oracle);
+  });
+  it("API plus FIT with a present serial merges without confirmation", () => {
     const fit = presentation(1, { file_id_manufacturer: null, file_id_serial: 7 });
     const platformMember = member(2);
     const platformId = `platform_api:${platformMember}:0:0`;
@@ -91,10 +101,10 @@ describe("dedup tiers", () => {
         source_kind: "platform_api" as const, file_id_manufacturer: null, file_id_serial: null,
         file_id_time_created_utc: null },
     };
-    const result = plan([api, fit], [confirmation(api.summary.member_id, fit.summary.member_id, "distinct")]);
+    const result = plan([api, fit]);
     expect(result.confirm_queue).toEqual([]);
-    expect(result.sessions).toHaveLength(2);
-    expect(plan([api, fit]).sessions[0]!.edge_tiers).toEqual(["tier3"]);
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]!.edge_tiers).toEqual(["tier3"]);
   });
   it("[PR05-GRAPH-003] enforces a component-wide authored distinct verdict", () => {
     const a = presentation(1), b = presentation(2), c = presentation(3);

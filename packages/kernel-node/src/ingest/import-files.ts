@@ -1,6 +1,5 @@
-import { randomBytes as nodeRandomBytes } from "node:crypto";
-import { extname, dirname } from "node:path";
-import { mkdir, open, readFile, readdir, rename, stat, unlink } from "node:fs/promises";
+import { extname } from "node:path";
+import { readFile } from "node:fs/promises";
 import { createArchiveManager } from "../archive/manager.js";
 import {
   FitSourceError,
@@ -29,7 +28,8 @@ import {
 } from "@enduragent/kernel/ingest";
 import type { ArchiveManager } from "@enduragent/kernel/archive";
 import { H, sortKeys, type MigratorStore, type SqlStore } from "@enduragent/kernel/store";
-import type { CryptoPort, FileSystemPort } from "@enduragent/kernel/ports";
+import type { CryptoPort } from "@enduragent/kernel/ports";
+import { nodeFileSystem } from "../filesystem/index.js";
 import { createFitDecoder } from "./fit-decoder.js";
 import { prepareXmlFile } from "./xml-file.js";
 
@@ -39,7 +39,7 @@ export interface ImportFilesOptions {
   readonly store: SqlStore & Pick<MigratorStore, "transaction">;
 }
 
-interface NodeImportCompositionOptions {
+export interface NodeImportRuntimeOptions {
   readonly archiveDir: string;
   readonly store: SqlStore & Pick<MigratorStore, "transaction">;
 }
@@ -87,44 +87,6 @@ function nodeCrypto(): CryptoPort {
       return new Uint8Array(await subtle.decrypt({ name: "AES-GCM", iv: toBufferSource(params.nonce),
         additionalData: params.additionalData === undefined ? undefined : toBufferSource(params.additionalData) },
         await key(params.key, "decrypt"), toBufferSource(params.ciphertext)));
-    },
-  };
-}
-
-function nodeFileSystem(): FileSystemPort {
-  return {
-    async readFile(path) { return new Uint8Array(await readFile(path)); },
-    async readTextFile(path) { return readFile(path, "utf8"); },
-    async writeFile(path, data, options) {
-      const temporary = `${path}.tmp.${nodeRandomBytes(4).toString("hex")}`;
-      let handle: Awaited<ReturnType<typeof open>> | null = null;
-      try {
-        await mkdir(dirname(path), { recursive: true });
-        handle = await open(temporary, "w", options?.mode ?? 0o600);
-        await handle.writeFile(typeof data === "string" ? data : Buffer.from(data));
-        await handle.sync();
-        await handle.close(); handle = null;
-        await rename(temporary, path);
-      } catch (error) {
-        if (handle !== null) try { await handle.close(); } catch {}
-        try { await unlink(temporary); } catch {}
-        throw error;
-      }
-    },
-    async rename(from, to) { await rename(from, to); },
-    async mkdir(path, options) { await mkdir(path, { recursive: options?.recursive ?? false }); },
-    async list(path) {
-      return (await readdir(path, { withFileTypes: true })).map((entry) => ({ name: entry.name,
-        kind: entry.isFile() ? "file" as const : entry.isDirectory() ? "directory" as const : "other" as const }));
-    },
-    async stat(path) {
-      try {
-        const value = await stat(path);
-        return { kind: value.isFile() ? "file" : value.isDirectory() ? "directory" : "other", size: value.size, mtimeMs: value.mtimeMs };
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-        throw error;
-      }
     },
   };
 }
@@ -225,7 +187,7 @@ async function prepareFit(
 }
 
 function createImportReportDeps(
-  options: NodeImportCompositionOptions,
+  options: NodeImportRuntimeOptions,
 ): ImportReportDeps {
   const crypto = nodeCrypto();
   const fs = nodeFileSystem();
@@ -261,7 +223,23 @@ export async function importFilesWithReport(options: ImportFilesOptions): Promis
   return createNodeImportRuntime(options).importBatchWithReport({ files, platform_records: [] });
 }
 
-export function createNodeImportRuntime(options: NodeImportCompositionOptions): NodeImportRuntime {
+export function createNodeImportRuntime(options: NodeImportRuntimeOptions): NodeImportRuntime {
+  if (
+    options === null ||
+    typeof options !== "object" ||
+    typeof options.archiveDir !== "string" ||
+    options.archiveDir.length === 0 ||
+    options.store === null ||
+    typeof options.store !== "object" ||
+    typeof options.store.exec !== "function" ||
+    typeof options.store.run !== "function" ||
+    typeof options.store.get !== "function" ||
+    typeof options.store.all !== "function" ||
+    typeof options.store.close !== "function" ||
+    typeof options.store.transaction !== "function"
+  ) {
+    throw new TypeError("invalid node import runtime options");
+  }
   const deps = createImportReportDeps(options);
   return Object.freeze({
     archive: deps.archive,

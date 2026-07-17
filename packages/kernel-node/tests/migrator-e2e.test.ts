@@ -28,9 +28,9 @@ describe("migrator end-to-end over node:sqlite", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("applies the full migration list and advances user_version to 6", async () => {
+  it("applies the full migration list and advances user_version to 7", async () => {
     await runMigrations(store, MIGRATIONS);
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 6 });
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 7 });
 
     const tables = await store.all("SELECT name FROM sqlite_master WHERE type='table'");
     const names = new Set(tables.map((r) => r.name as string));
@@ -49,7 +49,7 @@ describe("migrator end-to-end over node:sqlite", () => {
     ).toEqual({ name: "idx_dedup_confirmation_effective" });
     expect(await store.get("PRAGMA journal_mode")).toEqual({ journal_mode: "wal" });
     await runMigrations(store, MIGRATIONS);
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 6 });
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 7 });
   });
 
   it("produces a deterministic INV-2 dump of a fixed state", async () => {
@@ -78,11 +78,11 @@ describe("migrator end-to-end over node:sqlite", () => {
     expect(await dumpStore(store)).toBe(dump);
   });
 
-  it("upgrades a version-1-on-disk store to version 6", async () => {
+  it("upgrades a version-1-on-disk store to version 7", async () => {
     await runMigrations(store, [MIGRATIONS[0]!]);
     expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 1 });
     await runMigrations(store, MIGRATIONS);
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 6 });
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 7 });
     expect(await store.get("SELECT singleton,ingest_version FROM ingest_metadata")).toEqual({
       singleton: 1,
       ingest_version: 0,
@@ -102,8 +102,8 @@ describe("migrator end-to-end over node:sqlite", () => {
     );
 
     const result = await runMigrations(store, MIGRATIONS);
-    expect(result).toEqual({ fromVersion: 4, toVersion: 6, applied: [5, 6] });
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 6 });
+    expect(result).toEqual({ fromVersion: 4, toVersion: 7, applied: [5, 6, 7] });
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 7 });
     expect(
       await store.get("SELECT revision_id,source_record_id FROM source_record_revision"),
     ).toEqual({
@@ -134,6 +134,36 @@ describe("migrator end-to-end over node:sqlite", () => {
     expect(objects).toEqual([]);
     const columns = await store.all("PRAGMA table_info(source_record)");
     expect(columns.some((row) => row.name === "artifact_key")).toBe(false);
+  });
+
+  it("rolls back an injected migration-007 failure to version 6 without a partial table", async () => {
+    await runMigrations(store, MIGRATIONS.slice(0, 6));
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 6 });
+    const broken007 = {
+      ...MIGRATIONS[6]!,
+      sql: `${MIGRATIONS[6]!.sql}\nINSERT INTO missing_table VALUES (1);`,
+    };
+    await expect(runMigrations(store, [...MIGRATIONS.slice(0, 6), broken007])).rejects.toThrow();
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 6 });
+    expect(
+      await store.get("SELECT name FROM sqlite_master WHERE type='table' AND name='sync_failure'"),
+    ).toBeUndefined();
+  });
+
+  it("upgrades a version-6 store to version 7 and reruns as a no-op", async () => {
+    await runMigrations(store, MIGRATIONS.slice(0, 6));
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 6 });
+    const result = await runMigrations(store, MIGRATIONS);
+    expect(result).toEqual({ fromVersion: 6, toVersion: 7, applied: [7] });
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 7 });
+    expect(
+      await store.get("SELECT name FROM sqlite_master WHERE type='table' AND name='sync_failure'"),
+    ).toEqual({ name: "sync_failure" });
+    await expect(runMigrations(store, MIGRATIONS)).resolves.toEqual({
+      fromVersion: 7,
+      toVersion: 7,
+      applied: [],
+    });
   });
 
   it("shares one real transaction for exec + version bump (atomic rollback)", async () => {

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -168,10 +169,19 @@ let acquireWriteLock: typeof import("@enduragent/kernel-node/lock").acquireWrite
 let resolveAthleteHome: typeof import("@enduragent/kernel-node/home").resolveAthleteHome;
 let openSqliteStorage: typeof import("@enduragent/kernel-node/sqlite").openSqliteStorage;
 let dumpStore: typeof import("@enduragent/kernel/store").dumpStore;
+let DUMP_TABLES: typeof import("@enduragent/kernel/store").DUMP_TABLES;
 let MIGRATIONS: typeof import("@enduragent/kernel/store/migrations").MIGRATIONS;
 let WriteLockContentionError: typeof import("@enduragent/kernel-node/lock").WriteLockContentionError;
 let LOCKFILE_NAME: typeof import("@enduragent/kernel-node/lock").LOCKFILE_NAME;
 let PORT_FILE_NAME: typeof import("@enduragent/kernel-node/lock").PORT_FILE_NAME;
+let runCoachSync: typeof import("../../coach/src/sync.js").runCoachSync;
+let createFileImportSource: typeof import("../../sync-file-import/src/index.js").createFileImportSource;
+let createNodeFileStructuralValidator: typeof import("@enduragent/kernel-node/filesystem").createNodeFileStructuralValidator;
+let ensurePrivateDirectory: typeof import("@enduragent/kernel-node/filesystem").ensurePrivateDirectory;
+let nodeFileSystem: typeof import("@enduragent/kernel-node/filesystem").nodeFileSystem;
+let removeFileIfPresent: typeof import("@enduragent/kernel-node/filesystem").removeFileIfPresent;
+let createNodeImportRuntime: typeof import("@enduragent/kernel-node/ingest").createNodeImportRuntime;
+let createArchiveManager: typeof import("@enduragent/kernel-node/archive").createArchiveManager;
 
 const tempDirs = new Set<string>();
 let realHome: string | undefined;
@@ -186,6 +196,7 @@ beforeAll(async () => {
     "packages/kernel-node/dist/lock/index.js",
     "packages/kernel-node/dist/sqlite.js",
     "packages/kernel-node/dist/ingest/index.js",
+    "packages/kernel-node/dist/filesystem/index.js",
   ];
   try {
     await Promise.all(requiredDist.map((path) => access(path)));
@@ -193,12 +204,28 @@ beforeAll(async () => {
     throw new Error("required public dist precondition missing");
   }
 
-  const [homeModule, lockModule, sqliteModule, storeModule, migrationModule] = await Promise.all([
+  const [
+    homeModule,
+    lockModule,
+    sqliteModule,
+    storeModule,
+    migrationModule,
+    coachModule,
+    fileSourceModule,
+    filesystemModule,
+    ingestModule,
+    archiveModule,
+  ] = await Promise.all([
     import("@enduragent/kernel-node/home"),
     import("@enduragent/kernel-node/lock"),
     import("@enduragent/kernel-node/sqlite"),
     import("@enduragent/kernel/store"),
     import("@enduragent/kernel/store/migrations"),
+    import("../../coach/src/sync.js"),
+    import("../../sync-file-import/src/index.js"),
+    import("@enduragent/kernel-node/filesystem"),
+    import("@enduragent/kernel-node/ingest"),
+    import("@enduragent/kernel-node/archive"),
   ]);
   resolveAthleteHome = homeModule.resolveAthleteHome;
   acquireWriteLock = lockModule.acquireWriteLock;
@@ -207,7 +234,16 @@ beforeAll(async () => {
   PORT_FILE_NAME = lockModule.PORT_FILE_NAME;
   openSqliteStorage = sqliteModule.openSqliteStorage;
   dumpStore = storeModule.dumpStore;
+  DUMP_TABLES = storeModule.DUMP_TABLES;
   MIGRATIONS = migrationModule.MIGRATIONS;
+  runCoachSync = coachModule.runCoachSync;
+  createFileImportSource = fileSourceModule.createFileImportSource;
+  createNodeFileStructuralValidator = filesystemModule.createNodeFileStructuralValidator;
+  ensurePrivateDirectory = filesystemModule.ensurePrivateDirectory;
+  nodeFileSystem = filesystemModule.nodeFileSystem;
+  removeFileIfPresent = filesystemModule.removeFileIfPresent;
+  createNodeImportRuntime = ingestModule.createNodeImportRuntime;
+  createArchiveManager = archiveModule.createArchiveManager;
   ({ runCoachDev, runCoachDevWriter } = await import("../src/cli/coach-dev.js"));
 });
 
@@ -474,7 +510,7 @@ describe("coach-dev import --report", () => {
     expect(await exists(databasePath)).toBe(true);
     const store = openSqliteStorage(databasePath);
     try {
-      expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 6 });
+      expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 7 });
       expect(await store.get("SELECT count(*) AS c FROM raw_file")).toEqual({ c: 1 });
       expect(await store.get("SELECT count(*) AS c FROM source_record")).toEqual({ c: 0 });
       expect(
@@ -930,4 +966,292 @@ describe("coach-dev import --report", () => {
       expect(output).not.toContain(privateValue);
     }
   });
+
+  it("hydrates one manual or quiescent watch burst from validated bytes through one governed writer call", async () => {
+    const fixtureNames = [
+      "brick-cycling.fit",
+      "fallback-cycling.tcx",
+      "fallback-cycling.gpx",
+    ] as const;
+    const crypto = {
+      async sha256(data: Uint8Array) {
+        return new Uint8Array(createHash("sha256").update(data).digest());
+      },
+      async randomBytes() {
+        throw new Error("unused");
+      },
+      async pbkdf2() {
+        throw new Error("unused");
+      },
+      async aesGcmEncrypt() {
+        throw new Error("unused");
+      },
+      async aesGcmDecrypt() {
+        throw new Error("unused");
+      },
+    } as Parameters<typeof createArchiveManager>[0]["crypto"];
+
+    for (const mode of ["manual", "watch"] as const) {
+      const root = await freshHome(`coach-hydration-${mode}-`);
+      const home = resolveAthleteHome({ ENDURAGENT_HOME: root });
+      const inputDir = join(root, "synthetic-inputs");
+      await mkdir(inputDir, { recursive: true });
+      const paths: string[] = [];
+      const expected = new Map<string, Uint8Array>();
+      for (const name of fixtureNames) {
+        const from = resolve(`packages/kernel-node/tests/fixtures/ingest/${name}`);
+        const to = join(inputDir, name);
+        await copyFile(from, to);
+        paths.push(to);
+        expected.set(to, new Uint8Array(await readFile(to)));
+      }
+
+      await ensurePrivateDirectory(home.storeDir);
+      const store = openSqliteStorage(join(home.storeDir, "store.db"));
+      const { runMigrations } = await import("@enduragent/kernel/store");
+      await runMigrations(store, MIGRATIONS);
+      const baseFs = nodeFileSystem();
+      let readCalls = 0;
+      const sourceFs = {
+        ...baseFs,
+        async readFile(path: string) {
+          readCalls += 1;
+          return baseFs.readFile(path);
+        },
+      };
+      let archived = 0;
+      const archive = createArchiveManager({ archiveRoot: home.archiveDir, crypto, fs: baseFs });
+      const validateBase = createNodeFileStructuralValidator();
+      const validated: string[] = [];
+      const source = createFileImportSource(
+        mode === "manual"
+          ? { manualPaths: paths, watchRoots: [] }
+          : { manualPaths: [], watchRoots: [inputDir] },
+        {
+          fs: sourceFs,
+          clock: {
+            setTimeout(callback, delayMs) {
+              return globalThis.setTimeout(callback, delayMs);
+            },
+            clearTimeout(handle) {
+              globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>);
+            },
+          },
+          crypto,
+          archive: {
+            async writeArtifact(bytes, ext, instant) {
+              const result = await archive.writeArtifact(bytes, ext, instant);
+              archived += 1;
+              return result;
+            },
+          },
+          async validate(input) {
+            await validateBase(input);
+            validated.push(input.ext);
+          },
+        },
+      );
+      let writerCalls = 0;
+      let writerActive = false;
+      let runtimeCalls = 0;
+      let importerCalls = 0;
+      let readsAtImport = -1;
+      const dependencies: Parameters<typeof runCoachSync>[1] = {
+        async withWriter(_env, operation) {
+          writerCalls += 1;
+          writerActive = true;
+          try {
+            return await operation({ home, store });
+          } finally {
+            writerActive = false;
+          }
+        },
+        async importFiles() {
+          throw new Error("manual path importer must not run");
+        },
+        fileSystem: baseFs,
+        ensurePrivateDirectory,
+        removeFileIfPresent,
+        nowEpochMs: () => 1_000,
+        createImportRuntime(options) {
+          expect(writerActive).toBe(true);
+          runtimeCalls += 1;
+          const runtime = createNodeImportRuntime(options);
+          return {
+            archive: runtime.archive,
+            async importBatchWithReport(batch) {
+              importerCalls += 1;
+              expect(archived).toBe(3);
+              readsAtImport = readCalls;
+              for (const file of batch.files) {
+                expect(file.bytes).toEqual(expected.get(file.input_path));
+              }
+              await Promise.all(paths.map((path) => rm(path)));
+              return runtime.importBatchWithReport(batch);
+            },
+          };
+        },
+      };
+      const controller = new AbortController();
+      const report = await runCoachSync(
+        {
+          env: {},
+          sources: [
+            {
+              source,
+              fileHydration: {
+                watermark: { source: "file-import", lane: "file-discovery", value: null },
+                budget: {
+                  signal: controller.signal,
+                  clock: { monotonicNow: () => performance.now() },
+                  deadlineMonotonicMs: performance.now() + 15_000,
+                  perRequestTimeoutMs: 1_000,
+                  maxRequests: 1,
+                  maxArtifacts: 10,
+                },
+              },
+            },
+          ],
+        },
+        dependencies,
+      );
+      expect(report.sources[0]).toMatchObject({ status: "completed", message: null });
+      expect(writerCalls).toBe(1);
+      expect(runtimeCalls).toBe(1);
+      expect(importerCalls).toBe(1);
+      expect(readCalls).toBe(readsAtImport);
+      expect(validated.sort()).toEqual(["fit", "gpx", "tcx"]);
+      await store.close();
+    }
+  }, 30_000);
+
+  it("file hydration failure is path-free and leaves canonical ingest state unchanged", async () => {
+    const root = await freshHome("coach-hydration-failure-");
+    const home = resolveAthleteHome({ ENDURAGENT_HOME: root });
+    const privatePath = join(root, "synthetic-private.fit");
+    await copyFile(
+      resolve("packages/kernel-node/tests/fixtures/ingest/brick-cycling.fit"),
+      privatePath,
+    );
+    await ensurePrivateDirectory(home.storeDir);
+    const store = openSqliteStorage(join(home.storeDir, "store.db"));
+    const { runMigrations } = await import("@enduragent/kernel/store");
+    await runMigrations(store, MIGRATIONS);
+    const baseFs = nodeFileSystem();
+    const crypto = {
+      async sha256(data: Uint8Array) {
+        return new Uint8Array(createHash("sha256").update(data).digest());
+      },
+      async randomBytes() {
+        throw new Error("unused");
+      },
+      async pbkdf2() {
+        throw new Error("unused");
+      },
+      async aesGcmEncrypt() {
+        throw new Error("unused");
+      },
+      async aesGcmDecrypt() {
+        throw new Error("unused");
+      },
+    } as Parameters<typeof createArchiveManager>[0]["crypto"];
+    const archive = createArchiveManager({ archiveRoot: home.archiveDir, crypto, fs: baseFs });
+    let validationCalls = 0;
+    const validate = createNodeFileStructuralValidator();
+    const source = createFileImportSource(
+      { manualPaths: [privatePath], watchRoots: [] },
+      {
+        fs: baseFs,
+        clock: {
+          setTimeout(callback, delayMs) {
+            return globalThis.setTimeout(callback, delayMs);
+          },
+          clearTimeout(handle) {
+            globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>);
+          },
+        },
+        crypto,
+        archive,
+        async validate(input) {
+          await validate(input);
+          validationCalls += 1;
+        },
+      },
+    );
+    const counts = async () =>
+      Object.fromEntries(
+        await Promise.all(
+          DUMP_TABLES.map(async ({ table }) => [
+            table,
+            Number((await store.get(`SELECT count(*) c FROM ${table}`))?.c),
+          ]),
+        ),
+      );
+    const beforeDump = await dumpStore(store);
+    const beforeCounts = await counts();
+    const report = await runCoachSync(
+      {
+        env: {},
+        sources: [
+          {
+            source,
+            fileHydration: {
+              watermark: { source: "file-import", lane: "file-discovery", value: null },
+              budget: {
+                signal: new AbortController().signal,
+                clock: { monotonicNow: () => performance.now() },
+                deadlineMonotonicMs: performance.now() + 10_000,
+                perRequestTimeoutMs: 1_000,
+                maxRequests: 1,
+                maxArtifacts: 1,
+              },
+            },
+          },
+        ],
+      },
+      {
+        async withWriter(_env, operation) {
+          return operation({ home, store });
+        },
+        async importFiles() {
+          throw new Error("unexpected manual import");
+        },
+        fileSystem: baseFs,
+        ensurePrivateDirectory,
+        removeFileIfPresent,
+        nowEpochMs: () => 1_000,
+        createImportRuntime() {
+          return {
+            async importBatchWithReport() {
+              await rm(privatePath);
+              throw new Error(`${privatePath}?token=synthetic-private`);
+            },
+          } as unknown as ReturnType<typeof createNodeImportRuntime>;
+        },
+      },
+    );
+    expect(validationCalls).toBe(1);
+    expect(report.sources).toEqual([
+      {
+        source_id: "file-import",
+        status: "failed",
+        severity: "block",
+        message: "source synchronization failed",
+      },
+    ]);
+    expect(await dumpStore(store)).toBe(beforeDump);
+    expect(await counts()).toEqual(beforeCounts);
+    expect(await store.all("SELECT source,severity,detail FROM sync_failure")).toEqual([
+      {
+        source: "file-import",
+        severity: "block",
+        detail: "source synchronization failed",
+      },
+    ]);
+    const publicValues = `${JSON.stringify(report)}${await readFile(join(home.root, "data", "error_state.json"), "utf8")}`;
+    expect(publicValues).not.toContain(root);
+    expect(publicValues).not.toContain("token=");
+    expect(publicValues).not.toContain("cause");
+    await store.close();
+  }, 15_000);
 });

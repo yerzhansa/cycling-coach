@@ -11,6 +11,7 @@
     "./lock": "./dist/lock/index.js",
     "./store-export": "./dist/store-export/index.js",
     "./home": "./dist/home/index.js",
+    "./filesystem": "./dist/filesystem/index.js",
     "./ingest": "./dist/ingest/index.js",
     "./coach-dev": "./dist/coach-dev.js"
   },
