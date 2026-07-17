@@ -1,4 +1,4 @@
-import { createServer, type Server, type AddressInfo } from "node:net";
+import { createServer, type Server, type Socket, type AddressInfo } from "node:net";
 import { existsSync, mkdirSync, chmodSync, statSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { join } from "node:path";
@@ -50,15 +50,22 @@ function ensureConfigDirSecure(configDir: string): void {
   }
 }
 
-function bindWriterSocket(): Promise<Server> {
-  return new Promise<Server>((resolve, reject) => {
-    const server = createServer();
+function bindWriterSocket(): Promise<{ server: Server; sockets: Set<Socket> }> {
+  return new Promise((resolve, reject) => {
+    const sockets = new Set<Socket>();
+    const server = createServer((socket) => {
+      sockets.add(socket);
+      socket.on("error", () => {});
+      socket.on("close", () => sockets.delete(socket));
+      socket.resume();
+    });
     server.on("error", reject);
-    server.listen({ host: "127.0.0.1", port: 0 }, () => resolve(server));
+    server.listen({ host: "127.0.0.1", port: 0 }, () => resolve({ server, sockets }));
   });
 }
 
-function closeServer(server: Server): Promise<void> {
+function closeServer(server: Server, sockets: Set<Socket>): Promise<void> {
+  for (const socket of sockets) socket.destroy();
   return new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
@@ -104,7 +111,7 @@ export async function acquireWriteLock(opts: AcquireWriteLockOptions): Promise<A
     return contentionAgainstBound(body?.pid, recordedPort, portFilePath, probe);
   }
 
-  const server = await bindWriterSocket();
+  const { server, sockets } = await bindWriterSocket();
   const actualPort = (server.address() as AddressInfo).port;
 
   const claimAndFill = async (): Promise<WriteLockHandle> => {
@@ -121,7 +128,7 @@ export async function acquireWriteLock(opts: AcquireWriteLockOptions): Promise<A
       lockfilePath,
       portFilePath,
       release: async (): Promise<void> => {
-        await closeServer(server);
+        await closeServer(server, sockets);
         await bestEffortUnlink(lockfilePath);
         await bestEffortUnlink(portFilePath);
       },
@@ -133,7 +140,7 @@ export async function acquireWriteLock(opts: AcquireWriteLockOptions): Promise<A
       return await claimAndFill();
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
-        await closeServer(server);
+        await closeServer(server, sockets);
         throw err;
       }
       const other = readLockfile(lockfilePath);
@@ -143,14 +150,14 @@ export async function acquireWriteLock(opts: AcquireWriteLockOptions): Promise<A
         // readable port (claims are born with their body via claimLockfile).
         // An unreadable claim is not proven stale, and no timer may prove it:
         // never unlink, never wait.
-        await closeServer(server);
+        await closeServer(server, sockets);
         throw new WriteLockContentionError(
           `The lockfile at ${lockfilePath} is unreadable; remove it and retry.`,
           3,
         );
       }
       if (await isPortBound(otherPort)) {
-        await closeServer(server);
+        await closeServer(server, sockets);
         return contentionAgainstBound(other?.pid, otherPort, portFilePath, probe);
       }
       await bestEffortUnlink(lockfilePath);
@@ -158,7 +165,7 @@ export async function acquireWriteLock(opts: AcquireWriteLockOptions): Promise<A
     }
   }
 
-  await closeServer(server);
+  await closeServer(server, sockets);
   throw new WriteLockContentionError(
     `Another writer won arbitration for this store; stop that process or wait, then retry.`,
     3,
