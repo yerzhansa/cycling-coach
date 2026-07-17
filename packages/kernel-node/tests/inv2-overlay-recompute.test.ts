@@ -34,7 +34,7 @@ describe("global version and overlay recompute", () => {
       expect((await store.get("SELECT ingest_version FROM ingest_metadata"))?.ingest_version).toBe(4);
     }
   });
-  it("keeps current version four while still globally replanning a nonempty batch", async () => {
+  it("keeps current version four through the operational incremental path", async () => {
     await importFilesWithReport({ inputPaths: [path("brick-cycling.fit")], archiveDir, store });
     const transactions = countTransactions();
     const result = await importFilesWithReport({ inputPaths: [path("brick-cycling.fit")], archiveDir, store });
@@ -47,7 +47,7 @@ describe("global version and overlay recompute", () => {
     await expect(importFilesWithReport({ inputPaths: [path("brick-cycling.fit")], archiveDir, store })).rejects.toThrow("newer ingest semantics");
     expect(existsSync(archiveDir)).toBe(false); expect((await store.get("SELECT count(*) c FROM raw_file"))?.c).toBe(0);
   });
-  it("retains and reapplies an effective pool correction at an unchanged final session key", async () => {
+  it("retains and reapplies an effective pool correction through the retained full oracle", async () => {
     const options = { inputPaths: [path("pool-size-correction.fit")], archiveDir, store };
     await importFilesWithReport(options);
     const sessionKey = (await store.get("SELECT session_key FROM session"))!.session_key as string;
@@ -59,10 +59,24 @@ describe("global version and overlay recompute", () => {
     await store.run("INSERT INTO pool_size_correction_overlay(id,target_session_key,corrected_pool_length_m,device_id,hlc_physical_ms,hlc_counter) VALUES(?,?,?,?,?,?)",
       ["overlay", sessionKey, 50, "device", 2, 1]);
     const overlay = await store.get("SELECT * FROM pool_size_correction_overlay");
+    await store.run("UPDATE ingest_incremental_state SET initialized=0 WHERE singleton=1");
     await importFilesWithReport(options);
     expect(await store.get("SELECT * FROM pool_size_correction_overlay")).toEqual(overlay);
     expect(await store.get("SELECT distance_m FROM session WHERE session_key=?", [sessionKey])).toEqual({ distance_m: 200 });
     expect((await store.all("SELECT distance_m FROM swim_length ORDER BY length_key")).map((row) => row.distance_m)).toEqual([50, 50, 50, 50]);
+  });
+  it("retains an authored overlay while incrementally materializing an unrelated cluster", async () => {
+    const options = { inputPaths: [path("pool-size-correction.fit")], archiveDir, store };
+    await importFilesWithReport(options);
+    const sessionKey = String((await store.get("SELECT session_key FROM session"))!.session_key);
+    await store.run("INSERT INTO pool_size_correction_overlay(id,target_session_key,corrected_pool_length_m,device_id,hlc_physical_ms,hlc_counter) VALUES(?,?,?,?,?,?)",
+      ["incremental-overlay", sessionKey, 50, "device", 2, 1]);
+    const overlay = await store.get("SELECT * FROM pool_size_correction_overlay WHERE id='incremental-overlay'");
+    const report = await importFilesWithReport({ inputPaths: [path("brick-cycling.fit")], archiveDir, store });
+    expect(report.clusters).toHaveLength(2);
+    expect(await store.get("SELECT distance_m FROM session WHERE session_key=?", [sessionKey])).toEqual({ distance_m: 100 });
+    expect(await store.get("SELECT * FROM pool_size_correction_overlay WHERE id='incremental-overlay'")).toEqual(overlay);
+    expect(report.orphaned_overlays).not.toContainEqual(expect.objectContaining({ id: "incremental-overlay" }));
   });
   it("revision preserves authored overlay at the unchanged session key", async () => {
     const values = new Map<string, unknown>();
@@ -104,7 +118,9 @@ describe("global version and overlay recompute", () => {
   });
   it("rolls back derived replacement when materialization fails", async () => {
     const options = { inputPaths: [path("brick-cycling.fit")], archiveDir, store };
-    await importFilesWithReport(options); const before = await dumpStore(store);
+    await importFilesWithReport(options);
+    await store.run("UPDATE ingest_incremental_state SET initialized=0 WHERE singleton=1");
+    const before = await dumpStore(store);
     const transactions = countTransactions();
     const original = store.run.bind(store); let failed = false;
     store.run = async (sql, params) => {

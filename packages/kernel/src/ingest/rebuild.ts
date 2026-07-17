@@ -106,5 +106,6 @@ export async function rebuildRawFile(store: SqlStore & Pick<MigratorStore, "tran
 }
 
 export async function deleteAllDerivedRowsInTransaction(store: SqlStore): Promise<void> {
+  await store.run("UPDATE ingest_incremental_state SET initialized=0 WHERE singleton=1");
   for (const table of DERIVED_TABLES) await store.exec(`DELETE FROM ${table}`);
 }

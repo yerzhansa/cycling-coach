@@ -73,12 +73,18 @@ importers:
 
   packages/coach:
     dependencies:
+      '@enduragent/core':
+        specifier: workspace:*
+        version: link:../core
       '@enduragent/kernel':
         specifier: workspace:*
         version: link:../kernel
       '@enduragent/kernel-node':
         specifier: workspace:*
         version: link:../kernel-node
+      '@enduragent/sync-intervals-icu':
+        specifier: workspace:*
+        version: link:../sync-intervals-icu
     devDependencies:
       '@types/node':
         specifier: ^25.6.0

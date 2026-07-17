@@ -124,6 +124,7 @@ export {
   type RunScopedHttpFactory,
   type RunScopedHttpFactoryArgs,
 } from "./sync/intervals-client-factory.js";
+export { normalizeStreams } from "./sync/fetch-live-bundle.js";
 
 // ─── Validation: recommendation metadata + audit log ──────────────────
 export {

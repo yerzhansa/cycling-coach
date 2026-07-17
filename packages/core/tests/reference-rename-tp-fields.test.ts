@@ -267,6 +267,21 @@ describe("parseRenamedActivity / parseRenamedWellnessRow — branded type gate",
     expect((activity as Record<string, unknown>).icu_atl).toBeUndefined();
   });
 
+  it("parseRenamedActivity accepts explicit null load and intensity on unscoreable sessions", () => {
+    const renamed = renameTpFieldsOnActivity({
+      id: 17654322,
+      start_date_local: "2019-04-15T07:00:00",
+      type: "Ride",
+      moving_time: 3600,
+      elapsed_time: 3700,
+      icu_training_load: null,
+      icu_intensity: null,
+    });
+    const activity = parseRenamedActivity(renamed);
+    expect(activity.icu_training_load).toBeNull();
+    expect(activity.icu_intensity).toBeNull();
+  });
+
   it("parseRenamedWellnessRow accepts the output of renameTpFieldsOnWellnessRow", () => {
     const renamed = renameTpFieldsOnWellnessRow({
       id: "2026-04-15",

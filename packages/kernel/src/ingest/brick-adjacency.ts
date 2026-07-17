@@ -92,7 +92,10 @@ class Sets {
   }
 }
 
-export function planBrickAdjacency(dedup: DedupPlan, settings: readonly SportSettingInput[]): BrickPlanResult {
+export type BrickTopologyInput = Pick<DedupPlan, "sessions" | "workouts" | "effective_distinct_pairs">;
+
+/** Lightweight cache/topology adapter used by incremental ingest. */
+export function planBrickAdjacencyFromTopology(dedup: BrickTopologyInput, settings: readonly SportSettingInput[]): BrickPlanResult {
   const windows = transitionWindows(settings);
   const sessions = dedup.sessions.map(sessionInfo).sort((a, b) => a.start - b.start || compareText(a.firstCandidate, b.firstCandidate));
   const workoutBySession = new Map<string, DedupWorkoutPlan>();
@@ -139,4 +142,8 @@ export function planBrickAdjacency(dedup: DedupPlan, settings: readonly SportSet
   }).sort((a, b) => compareText(a.members[0]!, b.members[0]!));
   reports.sort((a, b) => compareText(a.members[0], b.members[0]) || compareText(a.members[1], b.members[1]));
   return { workouts, brick_groups: reports };
+}
+
+export function planBrickAdjacency(dedup: DedupPlan, settings: readonly SportSettingInput[]): BrickPlanResult {
+  return planBrickAdjacencyFromTopology(dedup, settings);
 }

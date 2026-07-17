@@ -79,6 +79,23 @@ describe("dedup tiers", () => {
     expect(plan([presentation(1), presentation(2, { file_id_serial: 8 })]).confirm_queue).toHaveLength(1);
     expect(plan([presentation(1), presentation(2, { file_id_serial: null })]).confirm_queue).toHaveLength(1);
   });
+  it("merges API plus FIT at Tier 3 without consulting serial confirmation", () => {
+    const fit = presentation(1, { file_id_manufacturer: null, file_id_serial: 7 });
+    const platformMember = member(2);
+    const platformId = `platform_api:${platformMember}:0:0`;
+    const api = {
+      candidate: { id: platformId, origin: { kind: "platform" as const, source: "intervals-icu" as const,
+        sourceRecordId: platformMember, persistedQualityRank: 300 }, workoutOrdinal: 0, sessionOrdinal: 0,
+        rank: 300 as const, concerns: {} },
+      summary: { ...fit.summary, candidate_id: platformId, member_id: platformMember,
+        source_kind: "platform_api" as const, file_id_manufacturer: null, file_id_serial: null,
+        file_id_time_created_utc: null },
+    };
+    const result = plan([api, fit], [confirmation(api.summary.member_id, fit.summary.member_id, "distinct")]);
+    expect(result.confirm_queue).toEqual([]);
+    expect(result.sessions).toHaveLength(2);
+    expect(plan([api, fit]).sessions[0]!.edge_tiers).toEqual(["tier3"]);
+  });
   it("[PR05-GRAPH-003] enforces a component-wide authored distinct verdict", () => {
     const a = presentation(1), b = presentation(2), c = presentation(3);
     const result = plan([a, b, c], [confirmation(a.summary.member_id, c.summary.member_id, "distinct")]);

@@ -1,6 +1,6 @@
 import type { ArchiveInstant, ArchiveManager } from "../archive/types.js";
 import type { MigratorStore } from "../store/migrator.js";
-import type { RawFileRow, SqlStore } from "../store/ports.js";
+import type { RawFileRow, SourceArtifactDraft, SqlStore } from "../store/ports.js";
 import type { CanonicalPickResult, Candidate, LogicalSessionGroup } from "./canonical-pick.js";
 import type { DedupCandidateSummary, PairDiagnostic, OverlapDiagnostic, AppliedConfirmationReport } from "./dedup.js";
 import type { PlatformImportArtifact } from "./source-ledger.js";
@@ -12,6 +12,10 @@ export interface ImportArtifact {
   readonly input_path: string;
   readonly bytes: Uint8Array;
   readonly ext: "fit" | "tcx" | "gpx";
+  readonly source_evidence?: {
+    readonly container: SourceArtifactDraft | null;
+    readonly entry: SourceArtifactDraft;
+  };
 }
 
 export interface ImportBatch {
@@ -67,6 +71,20 @@ export interface ImportReportDeps {
   readonly canonicalPick: (group: LogicalSessionGroup) => CanonicalPickResult;
   readonly materializeClusterInTransaction: (store: SqlStore, cluster: PlannedCluster) => Promise<void>;
   readonly ingestVersion: typeof FIT_INGEST_VERSION;
+  readonly finalizeBatchInTransaction?: (
+    store: SqlStore,
+    result: {
+      readonly source_artifact_inserted: number;
+      readonly raw_file_inserted: number;
+      readonly source_record_inserted: number;
+      readonly source_record_updated: number;
+      readonly relinked_source_records: number;
+    },
+  ) => Promise<void>;
+  readonly measurePhase?: <T>(
+    phase: "archive-decode" | "topology" | "sqlite",
+    work: () => Promise<T>,
+  ) => Promise<T>;
 }
 
 export interface FileReport {

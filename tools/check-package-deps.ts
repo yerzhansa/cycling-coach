@@ -135,7 +135,7 @@ export const RULES: readonly PackageDepRule[] = [
     dir: "packages/coach",
     srcOnly: true,
     allowedWorkspace: COMPOSITION_ROOT_ALLOWED,
-    transitionalWorkspace: [],
+    transitionalWorkspace: ["@enduragent/core"],
     forbidNode: false,
   },
   {
