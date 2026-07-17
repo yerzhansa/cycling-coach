@@ -9,6 +9,7 @@ import type { MigratorStore, SqlStore } from "@enduragent/kernel/store";
 import type { WriteLockHandle } from "@enduragent/kernel-node/lock";
 
 type RunCoachDev = typeof import("../src/cli/coach-dev.js").runCoachDev;
+type RunCoachDevWriter = typeof import("../src/cli/coach-dev.js").runCoachDevWriter;
 type Dependencies = NonNullable<Parameters<RunCoachDev>[2]>;
 
 const USAGE = "Usage: coach-dev import --report <path>...\n";
@@ -162,6 +163,7 @@ const fullReportFixture: ImportReport = {
 };
 
 let runCoachDev: RunCoachDev;
+let runCoachDevWriter: RunCoachDevWriter;
 let acquireWriteLock: typeof import("@enduragent/kernel-node/lock").acquireWriteLock;
 let resolveAthleteHome: typeof import("@enduragent/kernel-node/home").resolveAthleteHome;
 let openSqliteStorage: typeof import("@enduragent/kernel-node/sqlite").openSqliteStorage;
@@ -206,7 +208,7 @@ beforeAll(async () => {
   openSqliteStorage = sqliteModule.openSqliteStorage;
   dumpStore = storeModule.dumpStore;
   MIGRATIONS = migrationModule.MIGRATIONS;
-  ({ runCoachDev } = await import("../src/cli/coach-dev.js"));
+  ({ runCoachDev, runCoachDevWriter } = await import("../src/cli/coach-dev.js"));
 });
 
 afterAll(async () => {
@@ -668,6 +670,77 @@ describe("coach-dev import --report", () => {
       archiveDir: scenario.home.archiveDir,
       store: scenario.store,
     });
+  });
+
+  it("shared writer lifecycle owns generic operation and cleanup", async () => {
+    const successful = injected();
+    const value = { result: "generic-operation-value" } as const;
+    let context: unknown;
+    const result = await runCoachDevWriter(
+      {
+        env: { ENDURAGENT_HOME: successful.home.root },
+        writerVersion: "generic-operation/1",
+        operation: async (received) => {
+          successful.calls.push("operation");
+          context = received;
+          return value;
+        },
+      },
+      successful.deps,
+    );
+    expect(result).toEqual({ status: "completed", value });
+    expect(context).toEqual({ home: successful.home, store: successful.store });
+    expect(successful.observed.lock).toEqual({
+      configDir: successful.home.configDir,
+      athleteHome: successful.home.root,
+      version: "generic-operation/1",
+    });
+    expect(successful.calls).toEqual([
+      "resolve",
+      "acquire",
+      "mkdir",
+      "chmod",
+      "open",
+      "migrate",
+      "operation",
+      "close",
+      "release",
+    ]);
+
+    const privateValues = ["private operation data", "private close data", "private release data"];
+    const failed = injected({
+      fail: {
+        close: new Error(privateValues[1]),
+        release: new Error(privateValues[2]),
+      },
+    });
+    const failure = await runCoachDevWriter(
+      {
+        env: {},
+        writerVersion: "generic-operation/1",
+        operation: async () => {
+          failed.calls.push("operation");
+          throw new Error(privateValues[0]);
+        },
+      },
+      failed.deps,
+    );
+    expect(failure).toEqual({ status: "failed", stage: "invoke operation" });
+    expect(failed.calls).toEqual([
+      "resolve",
+      "acquire",
+      "mkdir",
+      "chmod",
+      "open",
+      "migrate",
+      "operation",
+      "close",
+      "release",
+    ]);
+    const serialized = JSON.stringify(failure);
+    for (const privateValue of privateValues) {
+      expect(serialized).not.toContain(privateValue);
+    }
   });
 
   it("pre-store failure table uses safe stage diagnostics", async () => {
