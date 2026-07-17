@@ -762,6 +762,7 @@ describe("coach-dev import --report", () => {
       failed.deps,
     );
     expect(failure).toEqual({ status: "failed", stage: "invoke operation" });
+    expect(failure.status === "failed" && failure.cause instanceof Error && failure.cause.message).toBe(privateValues[0]);
     expect(failed.calls).toEqual([
       "resolve",
       "acquire",
@@ -776,6 +777,62 @@ describe("coach-dev import --report", () => {
     const serialized = JSON.stringify(failure);
     for (const privateValue of privateValues) {
       expect(serialized).not.toContain(privateValue);
+    }
+  });
+
+  it("treats a foreign-copy write lock contention error as writer-lock-held", async () => {
+    const foreign = new Error("write lock held by a healthy peer");
+    foreign.name = "WriteLockContentionError";
+    const scenario = injected({ fail: { acquire: foreign } });
+    const result = await runCoachDevWriter(
+      {
+        env: {},
+        writerVersion: "generic-operation/1",
+        operation: async () => {
+          scenario.calls.push("operation");
+          return null;
+        },
+      },
+      scenario.deps,
+    );
+    expect(result).toEqual({ status: "writer-lock-held" });
+    expect(scenario.calls).toEqual(["resolve", "acquire"]);
+  });
+
+  it("rejects a non-error lookalike named like the contention error", async () => {
+    const lookalike = { name: "WriteLockContentionError", message: "not an Error instance" };
+    const scenario = injected({ fail: { acquire: lookalike } });
+    const result = await runCoachDevWriter(
+      {
+        env: {},
+        writerVersion: "generic-operation/1",
+        operation: async () => null,
+      },
+      scenario.deps,
+    );
+    expect(result).toEqual({ status: "failed", stage: "acquire lock" });
+    expect(result.status === "failed" && result.cause).toBe(lookalike);
+  });
+
+  it("never serializes failure causes carrying enumerable private data", async () => {
+    const privateTexts = ["/private/athlete/home/store.db", "thrown-plain-object-secret", "thrown-string-secret"];
+    const fsLike = Object.assign(new Error("EACCES: permission denied"), { path: privateTexts[0], syscall: "open" });
+    for (const thrown of [fsLike, { detail: privateTexts[1] }, privateTexts[2]]) {
+      const scenario = injected();
+      const failure = await runCoachDevWriter(
+        {
+          env: {},
+          writerVersion: "generic-operation/1",
+          operation: async () => {
+            throw thrown;
+          },
+        },
+        scenario.deps,
+      );
+      expect(failure).toEqual({ status: "failed", stage: "invoke operation" });
+      expect(failure.status === "failed" && failure.cause).toBe(thrown);
+      const serialized = JSON.stringify(failure);
+      for (const text of privateTexts) expect(serialized).not.toContain(text);
     }
   });
 

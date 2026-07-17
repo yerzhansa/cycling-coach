@@ -60,7 +60,7 @@ export interface RunCoachDevWriterOptions<T> {
 export type CoachDevWriterResult<T> =
   | { readonly status: "completed"; readonly value: T }
   | { readonly status: "writer-lock-held" }
-  | { readonly status: "failed"; readonly stage: CoachDevWriterFailureStage };
+  | { readonly status: "failed"; readonly stage: CoachDevWriterFailureStage; readonly cause?: unknown };
 
 export type CoachDevWriterDependencies = typeof defaultWriterDeps;
 
@@ -118,6 +118,12 @@ function success(report: ImportReport): CliResult {
   };
 }
 
+function failedWriterResult<T>(stage: CoachDevWriterFailureStage, cause: unknown): CoachDevWriterResult<T> {
+  const result: { status: "failed"; stage: CoachDevWriterFailureStage; cause?: unknown } = { status: "failed", stage };
+  Object.defineProperty(result, "cause", { value: cause, enumerable: false, writable: false, configurable: true });
+  return result;
+}
+
 export async function runCoachDevWriter<T>(
   options: RunCoachDevWriterOptions<T>,
   deps: CoachDevWriterDependencies = defaultWriterDeps,
@@ -125,8 +131,8 @@ export async function runCoachDevWriter<T>(
   let home: AthleteHome;
   try {
     home = deps.resolveAthleteHome(options.env);
-  } catch {
-    return { status: "failed", stage: "resolve home" };
+  } catch (error) {
+    return failedWriterResult("resolve home", error);
   }
 
   let lockResult: Awaited<ReturnType<CoachDevWriterDependencies["acquireWriteLock"]>>;
@@ -137,13 +143,17 @@ export async function runCoachDevWriter<T>(
       version: options.writerVersion,
     });
   } catch (error) {
-    if (error instanceof WriteLockContentionError) return { status: "writer-lock-held" };
-    return { status: "failed", stage: "acquire lock" };
+    if (error instanceof WriteLockContentionError
+      || (error instanceof Error && error.name === "WriteLockContentionError")) {
+      return { status: "writer-lock-held" };
+    }
+    return failedWriterResult("acquire lock", error);
   }
 
   if (lockResult.status === "peer-healthy") return { status: "writer-lock-held" };
 
   let failureStage: CoachDevWriterFailureStage | undefined;
+  let failureCause: unknown;
   let value!: T;
   let store: ReturnType<CoachDevWriterDependencies["openSqliteStorage"]> | undefined;
 
@@ -151,59 +161,70 @@ export async function runCoachDevWriter<T>(
     try {
       try {
         await deps.mkdir(home.storeDir, { recursive: true, mode: 0o700 });
-      } catch {
+      } catch (error) {
         failureStage = "create store directory";
+        failureCause = error;
       }
 
       if (failureStage === undefined) {
         try {
           await deps.chmod(home.storeDir, 0o700);
-        } catch {
+        } catch (error) {
           failureStage = "secure store directory";
+          failureCause = error;
         }
       }
 
       if (failureStage === undefined) {
         try {
           store = deps.openSqliteStorage(join(home.storeDir, "store.db"));
-        } catch {
+        } catch (error) {
           failureStage = "open store";
+          failureCause = error;
         }
       }
 
       if (failureStage === undefined && store !== undefined) {
         try {
           await deps.runMigrations(store, MIGRATIONS);
-        } catch {
+        } catch (error) {
           failureStage = "run migrations";
+          failureCause = error;
         }
       }
 
       if (failureStage === undefined && store !== undefined) {
         try {
           value = await options.operation({ home, store });
-        } catch {
+        } catch (error) {
           failureStage = "invoke operation";
+          failureCause = error;
         }
       }
     } finally {
       if (store !== undefined) {
         try {
           await store.close();
-        } catch {
-          failureStage ??= "close store";
+        } catch (error) {
+          if (failureStage === undefined) {
+            failureStage = "close store";
+            failureCause = error;
+          }
         }
       }
     }
   } finally {
     try {
       await lockResult.release();
-    } catch {
-      failureStage ??= "release lock";
+    } catch (error) {
+      if (failureStage === undefined) {
+        failureStage = "release lock";
+        failureCause = error;
+      }
     }
   }
 
-  if (failureStage !== undefined) return { status: "failed", stage: failureStage };
+  if (failureStage !== undefined) return failedWriterResult(failureStage, failureCause);
   return { status: "completed", value };
 }
 

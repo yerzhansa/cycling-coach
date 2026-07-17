@@ -257,6 +257,24 @@ describe("coach sync composition", () => {
     }
   });
 
+  it("preserves the writer failure cause on the thrown error", async () => {
+    const operationFailure = new Error("private operation failure detail");
+    const failedWriter = async <T>(): Promise<CoachDevWriterResult<T>> => ({
+      status: "failed",
+      stage: "invoke operation",
+      cause: operationFailure,
+    });
+    let caught: unknown;
+    try {
+      await withCoachStoreWriter({}, async () => null, { runWriter: failedWriter });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(CoachStoreWriterError);
+    expect((caught as CoachStoreWriterError).cause).toBe(operationFailure);
+    expect(JSON.stringify(caught)).not.toContain("private operation failure detail");
+  });
+
   it("validates the complete request before acquiring the writer", async () => {
     let writerCalls = 0;
     let sourceCalls = 0;
