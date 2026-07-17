@@ -1,45 +1,68 @@
 import { chmod, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { resolveAthleteHome } from "@enduragent/kernel-node/home";
-import { acquireWriteLock, WriteLockContentionError } from "@enduragent/kernel-node/lock";
-import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
-import { importFilesWithReport } from "@enduragent/kernel-node/ingest";
 import type { ImportReport } from "@enduragent/kernel/ingest";
 import { runMigrations } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
+import { resolveAthleteHome } from "../home/index.js";
+import type { AthleteHome } from "../home/index.js";
+import { importFilesWithReport } from "../ingest/index.js";
+import { acquireWriteLock, WriteLockContentionError } from "../lock/index.js";
+import { openSqliteStorage } from "../sqlite/index.js";
 
 const USAGE = "Usage: coach-dev import --report <path>...\n";
-const WRITER_VERSION = "coach-dev-import/1";
-
 type CliResult = {
   readonly exitCode: 0 | 1 | 2 | 3;
   readonly stdout: string;
   readonly stderr: string;
 };
 
-const defaultDeps = {
+const defaultWriterDeps = {
   resolveAthleteHome,
   acquireWriteLock,
   mkdir,
   chmod,
   openSqliteStorage,
   runMigrations,
+};
+
+const defaultDeps = {
+  ...defaultWriterDeps,
   importFilesWithReport,
 };
 
 type CoachDevDependencies = typeof defaultDeps;
 
-type FailureStage =
+type FailureStage = Exclude<CoachDevWriterFailureStage, "invoke operation"> | "import files";
+
+export type CoachDevWriterFailureStage =
   | "resolve home"
   | "acquire lock"
   | "create store directory"
   | "secure store directory"
   | "open store"
   | "run migrations"
-  | "import files"
+  | "invoke operation"
   | "close store"
   | "release lock";
+
+export interface CoachDevWriterContext {
+  readonly home: AthleteHome;
+  readonly store: ReturnType<typeof openSqliteStorage>;
+}
+
+export interface RunCoachDevWriterOptions<T> {
+  readonly env: Record<string, string | undefined>;
+  readonly writerVersion: string;
+  readonly operation: (context: CoachDevWriterContext) => Promise<T>;
+}
+
+export type CoachDevWriterResult<T> =
+  | { readonly status: "completed"; readonly value: T }
+  | { readonly status: "writer-lock-held" }
+  | { readonly status: "failed"; readonly stage: CoachDevWriterFailureStage };
+
+export type CoachDevWriterDependencies = typeof defaultWriterDeps;
 
 function help(): CliResult {
   return { exitCode: 0, stdout: USAGE, stderr: "" };
@@ -95,52 +118,34 @@ function success(report: ImportReport): CliResult {
   };
 }
 
-export async function runCoachDev(
-  argv: readonly string[],
-  env: Record<string, string | undefined>,
-  deps: CoachDevDependencies = defaultDeps,
-): Promise<CliResult> {
-  if (
-    (argv.length === 1 && argv[0] === "--help") ||
-    (argv.length === 2 && argv[0] === "import" && argv[1] === "--help")
-  ) {
-    return help();
-  }
-
-  const inputPaths = argv.slice(2);
-  if (
-    argv[0] !== "import" ||
-    argv[1] !== "--report" ||
-    inputPaths.length === 0 ||
-    inputPaths.some((path) => path.length === 0 || path.startsWith("-"))
-  ) {
-    return usageError();
-  }
-
-  let home: ReturnType<CoachDevDependencies["resolveAthleteHome"]>;
+export async function runCoachDevWriter<T>(
+  options: RunCoachDevWriterOptions<T>,
+  deps: CoachDevWriterDependencies = defaultWriterDeps,
+): Promise<CoachDevWriterResult<T>> {
+  let home: AthleteHome;
   try {
-    home = deps.resolveAthleteHome(env);
+    home = deps.resolveAthleteHome(options.env);
   } catch {
-    return importFailed("resolve home");
+    return { status: "failed", stage: "resolve home" };
   }
 
-  let lockResult: Awaited<ReturnType<CoachDevDependencies["acquireWriteLock"]>>;
+  let lockResult: Awaited<ReturnType<CoachDevWriterDependencies["acquireWriteLock"]>>;
   try {
     lockResult = await deps.acquireWriteLock({
       configDir: home.configDir,
       athleteHome: home.root,
-      version: WRITER_VERSION,
+      version: options.writerVersion,
     });
   } catch (error) {
-    if (error instanceof WriteLockContentionError) return writerLockHeld();
-    return importFailed("acquire lock");
+    if (error instanceof WriteLockContentionError) return { status: "writer-lock-held" };
+    return { status: "failed", stage: "acquire lock" };
   }
 
-  if (lockResult.status === "peer-healthy") return writerLockHeld();
+  if (lockResult.status === "peer-healthy") return { status: "writer-lock-held" };
 
-  let failureStage: FailureStage | undefined;
-  let report: ImportReport | undefined;
-  let store: ReturnType<CoachDevDependencies["openSqliteStorage"]> | undefined;
+  let failureStage: CoachDevWriterFailureStage | undefined;
+  let value!: T;
+  let store: ReturnType<CoachDevWriterDependencies["openSqliteStorage"]> | undefined;
 
   try {
     try {
@@ -176,13 +181,9 @@ export async function runCoachDev(
 
       if (failureStage === undefined && store !== undefined) {
         try {
-          report = await deps.importFilesWithReport({
-            inputPaths,
-            archiveDir: home.archiveDir,
-            store,
-          });
+          value = await options.operation({ home, store });
         } catch {
-          failureStage = "import files";
+          failureStage = "invoke operation";
         }
       }
     } finally {
@@ -202,11 +203,50 @@ export async function runCoachDev(
     }
   }
 
-  if (failureStage !== undefined) return importFailed(failureStage);
-  return success(report!);
+  if (failureStage !== undefined) return { status: "failed", stage: failureStage };
+  return { status: "completed", value };
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]!).href) {
+export async function runCoachDev(
+  argv: readonly string[],
+  env: Record<string, string | undefined>,
+  deps: CoachDevDependencies = defaultDeps,
+): Promise<CliResult> {
+  if (
+    (argv.length === 1 && argv[0] === "--help") ||
+    (argv.length === 2 && argv[0] === "import" && argv[1] === "--help")
+  ) {
+    return help();
+  }
+
+  const inputPaths = argv.slice(2);
+  if (
+    argv[0] !== "import" ||
+    argv[1] !== "--report" ||
+    inputPaths.length === 0 ||
+    inputPaths.some((path) => path.length === 0 || path.startsWith("-"))
+  ) {
+    return usageError();
+  }
+
+  const result = await runCoachDevWriter(
+    {
+      env,
+      writerVersion: "coach-dev-import/1",
+      operation: ({ home, store }) =>
+        deps.importFilesWithReport({ inputPaths, archiveDir: home.archiveDir, store }),
+    },
+    deps,
+  );
+
+  if (result.status === "writer-lock-held") return writerLockHeld();
+  if (result.status === "failed") {
+    return importFailed(result.stage === "invoke operation" ? "import files" : result.stage);
+  }
+  return success(result.value);
+}
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const result = await runCoachDev(process.argv.slice(2), process.env);
   process.stdout.write(result.stdout);
   process.stderr.write(result.stderr);
