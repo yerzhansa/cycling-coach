@@ -1,8 +1,12 @@
 import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { dumpStore, runMigrations, type MigratorStore, type SqlStore } from "@enduragent/kernel/store";
+import { dumpStore, runMigrations, sortKeys, type MigratorStore, type SqlStore } from "@enduragent/kernel/store";
+import { canonicalJson, type ArchiveManager } from "@enduragent/kernel/archive";
+import { canonicalPick, createMaterializeClusterInTransaction, importArtifactsWithReport,
+  type ConcernValue, type PlatformImportArtifact } from "@enduragent/kernel/ingest";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import { importFilesWithReport } from "../src/ingest/import-files.js";
 import { openSqliteStorage } from "../src/sqlite/index.js";
@@ -59,6 +63,44 @@ describe("global version and overlay recompute", () => {
     expect(await store.get("SELECT * FROM pool_size_correction_overlay")).toEqual(overlay);
     expect(await store.get("SELECT distance_m FROM session WHERE session_key=?", [sessionKey])).toEqual({ distance_m: 200 });
     expect((await store.all("SELECT distance_m FROM swim_length ORDER BY length_key")).map((row) => row.distance_m)).toEqual([50, 50, 50, 50]);
+  });
+  it("revision preserves authored overlay at the unchanged session key", async () => {
+    const values = new Map<string, unknown>();
+    const archive: ArchiveManager = {
+      async writeSnapshot(value, when) {
+        const address = createHash("sha256").update(canonicalJson(value)).digest("hex"), relPath = `${when.epochSeconds}/${address}.json.gz`;
+        values.set(relPath, structuredClone(value)); return { address, relPath, deduped: false };
+      },
+      async readSnapshot(pathValue) { return structuredClone(values.get(pathValue)); },
+      async has(pathValue) { return values.has(pathValue); },
+      async writeArtifact() { throw new Error("unused"); }, async readArtifact() { throw new Error("unused"); },
+      async quarantine() { throw new Error("unused"); },
+    };
+    const hashKey = async (fields: readonly (string | number)[]) => createHash("sha256").update(fields.join("\u001f")).digest("hex");
+    const makePlatform = async (name: string): Promise<PlatformImportArtifact> => {
+      const activity = { id: "overlay-activity", name }, instant = { epochSeconds: 884_000_000 };
+      const archived = await archive.writeSnapshot(activity, instant);
+      const concerns: Record<string, ConcernValue> = { "session.sport": "cycling", "session.start_utc": instant.epochSeconds,
+        "session.local_date_key": 19980105, "session.elapsed_s": 100, "session.is_transition": false,
+        "session.summary_json": JSON.stringify(sortKeys(activity)), "stream:time": { timestamps: [884_000_000, 884_000_100], values: [884_000_000, 884_000_100] } };
+      return { source: "intervals-icu", activity_id: activity.id, activity, concerns,
+        dedup: { sport_family: "cycling", is_transition: false, start_utc: instant.epochSeconds, duration_s: 100, distance_m: null },
+        raw_snapshot_address: archived.address, raw_snapshot_rel_path: archived.relPath,
+        sourceEvidence: { source: "intervals-icu", lane: "activities", externalId: activity.id,
+          archiveInstant: instant, archive: archived, normalizedActivityJson: canonicalJson(activity) } };
+    };
+    const deps = { store, archive, hashKey, canonicalPick, prepareFile: async () => { throw new Error("unused"); },
+      materializeClusterInTransaction: createMaterializeClusterInTransaction(hashKey), ingestVersion: 4 as const };
+    await importArtifactsWithReport({ files: [], platform_records: [await makePlatform("first")] }, deps);
+    const sessionKey = String((await store.get("SELECT session_key FROM session"))!.session_key);
+    await store.run("INSERT INTO field_merge_override_overlay(id,target_table,target_key,field_name,override_value_json,device_id,hlc_physical_ms,hlc_counter) VALUES(?,?,?,?,?,?,?,?)",
+      ["authored-overlay", "session", sessionKey, "name", '"preferred"', "device", 1, 0]);
+    const before = await store.get("SELECT * FROM field_merge_override_overlay WHERE id='authored-overlay'");
+    const report = await importArtifactsWithReport({ files: [], platform_records: [await makePlatform("renamed")] }, deps);
+    expect((await store.get("SELECT session_key FROM session"))!.session_key).toBe(sessionKey);
+    expect(await store.get("SELECT * FROM field_merge_override_overlay WHERE id='authored-overlay'")).toEqual(before);
+    expect(report.orphaned_overlays).not.toContainEqual(expect.objectContaining({ id: "authored-overlay" }));
+    expect(report.updates.source_record).toBe(1);
   });
   it("rolls back derived replacement when materialization fails", async () => {
     const options = { inputPaths: [path("brick-cycling.fit")], archiveDir, store };

@@ -1,0 +1,24 @@
+{
+  "name": "@enduragent/sync-intervals-icu",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Archive-first intervals.icu source for the Reference layer.",
+  "type": "module",
+  "files": ["dist"],
+  "exports": { ".": "./dist/index.js" },
+  "scripts": {
+    "build": "tsup",
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@enduragent/kernel": "workspace:*",
+    "fflate": "0.8.3"
+  },
+  "devDependencies": {
+    "tsup": "^8.4.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
+  },
+  "license": "MIT"
+}

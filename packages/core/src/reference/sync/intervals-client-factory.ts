@@ -1,5 +1,13 @@
 import { IntervalsClient } from "intervals-icu-api";
+import type { HttpPort } from "@enduragent/kernel/ports";
 import { chainedSignal } from "../../concurrency/abort-budget.js";
+
+export interface RunScopedHttpFactoryArgs {
+  readonly outer: AbortSignal;
+  readonly perRequestTimeoutMs: number;
+}
+
+export type RunScopedHttpFactory = (args: RunScopedHttpFactoryArgs) => HttpPort;
 
 /**
  * Construct a fetch wrapper that injects a chained `AbortSignal` (orchestrator
@@ -19,6 +27,48 @@ export function wrapFetchWithSignal(opts: {
       ...init,
       signal: chainedSignal({ outer: opts.outer, perRequestMs: opts.perRequestMs }),
     });
+}
+
+export function makeIntervalsHttpFactory(options: {
+  readonly apiKey: string;
+  readonly baseFetch?: typeof globalThis.fetch;
+}): RunScopedHttpFactory {
+  if (typeof options.apiKey !== "string" || options.apiKey.length === 0) {
+    throw new TypeError("intervals.icu API key is required");
+  }
+  const authorization = `Basic ${btoa(`API_KEY:${options.apiKey}`)}`;
+  const baseFetch = options.baseFetch ?? globalThis.fetch;
+  return ({ outer, perRequestTimeoutMs }) => {
+    const fetch = wrapFetchWithSignal({ baseFetch, outer, perRequestMs: perRequestTimeoutMs });
+    return {
+      async fetch(request) {
+        const headers = new Headers(request.headers);
+        if (headers.has("authorization")) {
+          throw new TypeError("authorization header is managed by the intervals.icu adapter");
+        }
+        headers.set("authorization", authorization);
+        const response = await fetch(request.url, {
+          method: request.method,
+          headers,
+          body:
+            typeof request.body === "string"
+              ? request.body
+              : request.body === undefined
+                ? undefined
+                : new Uint8Array(request.body),
+        });
+        const responseHeaders: Record<string, string> = {};
+        response.headers.forEach((value, key) => {
+          responseHeaders[key.toLowerCase()] = value;
+        });
+        return {
+          status: response.status,
+          headers: responseHeaders,
+          body: new Uint8Array(await response.arrayBuffer()),
+        };
+      },
+    };
+  };
 }
 
 /**

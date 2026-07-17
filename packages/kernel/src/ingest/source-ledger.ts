@@ -1,4 +1,6 @@
 import { sortKeys } from "../store/canonical-json.js";
+import { canonicalJson } from "../archive/canonical.js";
+import type { ArchiveInstant, ArchiveWriteResult } from "../archive/types.js";
 import type { SourceRecordRow } from "../store/ports.js";
 import type { Candidate, ConcernValue } from "./canonical-pick.js";
 import { QUALITY_RANK, assertQualityRank } from "./quality-rank.js";
@@ -20,6 +22,14 @@ export interface PlatformImportArtifact {
   readonly concerns: Readonly<Record<string, ConcernValue>>;
   readonly raw_snapshot_address: string | null;
   readonly raw_snapshot_rel_path: string | null;
+  readonly sourceEvidence?: {
+    readonly source: "intervals-icu";
+    readonly lane: "activities";
+    readonly externalId: string;
+    readonly archiveInstant: ArchiveInstant;
+    readonly archive: ArchiveWriteResult;
+    readonly normalizedActivityJson: string;
+  };
 }
 
 export interface PlatformPresentation {
@@ -67,6 +77,19 @@ function validateInput(platform: PlatformImportArtifact): void {
   if (platform.raw_snapshot_address !== null && !/^[0-9a-f]{64}$/.test(platform.raw_snapshot_address)) {
     throw new TypeError("platform snapshot address is invalid");
   }
+  if (platform.sourceEvidence !== undefined) {
+    const evidence = platform.sourceEvidence;
+    if (evidence.source !== "intervals-icu" || evidence.lane !== "activities"
+      || evidence.externalId !== externalId(platform.activity_id)
+      || evidence.archive.address !== platform.raw_snapshot_address
+      || evidence.archive.relPath !== platform.raw_snapshot_rel_path
+      || typeof evidence.archive.relPath !== "string" || evidence.archive.relPath.length === 0
+      || typeof evidence.archiveInstant.epochSeconds !== "number"
+      || !Number.isSafeInteger(evidence.archiveInstant.epochSeconds) || evidence.archiveInstant.epochSeconds < 0
+      || evidence.normalizedActivityJson !== canonicalJson(platform.activity)) {
+      throw new TypeError("platform source evidence is invalid");
+    }
+  }
   const concerns = platform.concerns;
   if (concerns["session.sport"] !== platform.dedup.sport_family
       || concerns["session.start_utc"] !== platform.dedup.start_utc
@@ -84,7 +107,7 @@ function validateInput(platform: PlatformImportArtifact): void {
 }
 
 function payload(platform: PlatformImportArtifact): string {
-  return canonical({
+  const envelope = {
     activity: platform.activity,
     concerns: platform.concerns,
     dedup: {
@@ -94,7 +117,10 @@ function payload(platform: PlatformImportArtifact): string {
       sport_family: platform.dedup.sport_family,
       start_utc: platform.dedup.start_utc,
     },
-  });
+  };
+  return platform.sourceEvidence === undefined
+    ? canonical(envelope)
+    : canonicalJson({ ...envelope, schema_version: 1 });
 }
 
 export async function buildPlatformPresentation(platform: PlatformImportArtifact, hashKey: HashKey): Promise<PlatformPresentation> {
@@ -113,9 +139,17 @@ export async function buildPlatformPresentation(platform: PlatformImportArtifact
     quality_rank: quality,
     payload_json: payload(platform),
   };
+  const { candidate, summary } = candidateAndSummary(platform, row);
+  return { row, candidate, summary };
+}
+
+function candidateAndSummary(platform: PlatformImportArtifact, row: SourceRecordRow): {
+  readonly candidate: Candidate;
+  readonly summary: DedupCandidateSummary;
+} {
   const candidate: Candidate = {
-    id: `platform_api:${id}:0:0`,
-    origin: { kind: "platform", source: "intervals-icu", sourceRecordId: id, persistedQualityRank: row.quality_rank },
+    id: `platform_api:${row.id}:0:0`,
+    origin: { kind: "platform", source: "intervals-icu", sourceRecordId: row.id, persistedQualityRank: row.quality_rank },
     workoutOrdinal: 0,
     sessionOrdinal: 0,
     rank: assertQualityRank(row.quality_rank),
@@ -125,7 +159,7 @@ export async function buildPlatformPresentation(platform: PlatformImportArtifact
       || candidate.rank !== QUALITY_RANK.PLATFORM_API) throw new Error("platform quality invariant mismatch");
   const summary: DedupCandidateSummary = {
     candidate_id: candidate.id,
-    member_id: id,
+    member_id: row.id,
     source_kind: "platform_api",
     source_session_seq: 0,
     sport_family: platform.dedup.sport_family,
@@ -137,15 +171,18 @@ export async function buildPlatformPresentation(platform: PlatformImportArtifact
     file_id_serial: null,
     file_id_time_created_utc: null,
   };
-  return { row, candidate, summary };
+  return { candidate, summary };
 }
 
-function parseEnvelope(value: string): { activity: Readonly<Record<string, unknown>>; concerns: Readonly<Record<string, ConcernValue>>; dedup: PlatformDedupInput } {
+export function parseEnvelope(value: string): { readonly version: 0 | 1; activity: Readonly<Record<string, unknown>>; concerns: Readonly<Record<string, ConcernValue>>; dedup: PlatformDedupInput } {
   let parsed: unknown;
   try { parsed = JSON.parse(value); } catch { throw new Error("source record payload is invalid"); }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)
-      || Object.keys(parsed).join(",") !== "activity,concerns,dedup") throw new Error("source record envelope is invalid");
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("source record envelope is invalid");
   const envelope = parsed as Record<string, unknown>;
+  const keys = Object.keys(envelope).join(",");
+  const version = keys === "activity,concerns,dedup" ? 0
+    : keys === "activity,concerns,dedup,schema_version" && envelope.schema_version === 1 ? 1 : null;
+  if (version === null) throw new Error("source record envelope is invalid");
   if (envelope.activity === null || typeof envelope.activity !== "object" || Array.isArray(envelope.activity)
       || envelope.concerns === null || typeof envelope.concerns !== "object" || Array.isArray(envelope.concerns)
       || envelope.dedup === null || typeof envelope.dedup !== "object" || Array.isArray(envelope.dedup)) {
@@ -155,26 +192,41 @@ function parseEnvelope(value: string): { activity: Readonly<Record<string, unkno
   if (Object.keys(dedup).join(",") !== "distance_m,duration_s,is_transition,sport_family,start_utc") {
     throw new Error("source record dedup envelope is invalid");
   }
-  return { activity: envelope.activity as Readonly<Record<string, unknown>>,
+  return { version, activity: envelope.activity as Readonly<Record<string, unknown>>,
     concerns: envelope.concerns as Readonly<Record<string, ConcernValue>>, dedup: dedup as unknown as PlatformDedupInput };
 }
 
-export async function replayPlatformPresentation(row: SourceRecordRow, hashKey: HashKey): Promise<PlatformPresentation> {
+export interface ReplayPlatformEvidence {
+  readonly archiveRelPath: string | null;
+  readonly archiveEpochSeconds: number | null;
+}
+
+export async function replayPlatformPresentation(
+  row: SourceRecordRow,
+  hashKey: HashKey,
+  evidence: ReplayPlatformEvidence = { archiveRelPath: null, archiveEpochSeconds: null },
+): Promise<PlatformPresentation> {
   if (row.source !== "intervals-icu" || row.quality_rank !== QUALITY_RANK.PLATFORM_API) throw new Error("unsupported source record");
   const envelope = parseEnvelope(row.payload_json);
+  if ((evidence.archiveRelPath === null) !== (evidence.archiveEpochSeconds === null)
+    || (evidence.archiveRelPath !== null && evidence.archiveRelPath.length === 0)
+    || (evidence.archiveEpochSeconds !== null && (!Number.isSafeInteger(evidence.archiveEpochSeconds) || evidence.archiveEpochSeconds < 0))) {
+    throw new Error("source record archive evidence is invalid");
+  }
   const platform: PlatformImportArtifact = {
     source: "intervals-icu",
     activity_id: row.external_id,
     activity: envelope.activity,
     concerns: envelope.concerns,
     dedup: envelope.dedup,
-    raw_snapshot_address: row.raw_sha256,
-    raw_snapshot_rel_path: row.raw_sha256 === null ? null : "persisted",
+    raw_snapshot_address: null,
+    raw_snapshot_rel_path: null,
   };
-  const rebuilt = await buildPlatformPresentation(platform, hashKey);
-  if (rebuilt.row.id !== row.id || rebuilt.row.source !== row.source || rebuilt.row.external_id !== row.external_id
-      || rebuilt.row.raw_sha256 !== row.raw_sha256 || rebuilt.row.quality_rank !== row.quality_rank
-      || rebuilt.row.payload_json !== row.payload_json) throw new Error("source record immutable mismatch");
-  return { row: { ...rebuilt.row, workout_key: row.workout_key, session_key: row.session_key },
-    candidate: rebuilt.candidate, summary: rebuilt.summary };
+  validateInput(platform);
+  const expectedId = await hashKey(["source_record", "intervals-icu", row.external_id]);
+  if (expectedId !== row.id || (envelope.version === 1 && canonicalJson(JSON.parse(row.payload_json)) !== row.payload_json)) {
+    throw new Error("source record immutable mismatch");
+  }
+  const rebuilt = candidateAndSummary(platform, row);
+  return { row: { ...row }, candidate: rebuilt.candidate, summary: rebuilt.summary };
 }

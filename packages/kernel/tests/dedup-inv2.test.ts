@@ -62,7 +62,10 @@ class MemoryStore implements SqlStore {
     if (sql.startsWith("SELECT ingest_version")) return [{ ingest_version: this.metadata }];
     if (sql.startsWith("SELECT singleton")) return [{ singleton: 1, ingest_version: this.metadata }];
     if (sql.includes("FROM raw_file") && sql.includes("ORDER BY sha256")) return [...this.raw.values()].sort((a, b) => String(a.sha256).localeCompare(String(b.sha256)));
-    if (sql.includes("FROM source_record") && sql.includes("ORDER BY id")) return [...this.source.values()] as unknown as Row[];
+    if (sql.includes("FROM source_record AS sr") && sql.includes("source_record_current")) {
+      return [...this.source.values()].map((row) => ({ ...row, artifact_key: null, archive_rel_path: null, archive_epoch_s: null })) as unknown as Row[];
+    }
+    if (sql.includes("FROM source_record AS sr") && sql.includes("current_revision_id")) return [];
     if (sql.includes("FROM dedup_confirmation")) return this.confirmations as unknown as Row[];
     if (sql.includes("FROM sport_settings")) return [];
     if (sql.includes("FROM repair_fixer_settings")) return [];

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { buildPlatformPresentation, replayPlatformPresentation, type ConcernValue, type PlatformImportArtifact } from "../src/ingest/index.js";
+import { buildPlatformPresentation, parseEnvelope, replayPlatformPresentation, type ConcernValue, type PlatformImportArtifact } from "../src/ingest/index.js";
+import { canonicalJson } from "../src/archive/index.js";
 import { createSourceRecordRepository, sortKeys, type Row, type SourceRecordRow, type SqlStore } from "../src/store/index.js";
 
 const hashKey = async (fields: readonly (string | number)[]) => createHash("sha256").update(fields.join("\u001f")).digest("hex");
@@ -80,5 +81,20 @@ describe("platform source ledger", () => {
     const other = await buildPlatformPresentation(platform("other"), hashKey);
     store.rows.set(other.row.id, { ...other.row, external_id: built.row.external_id });
     await expect(repo.upsert({ ...built.row, id: other.row.id })).rejects.toThrow();
+  });
+  it("builds version-one evidence envelopes and validates archive identity", async () => {
+    const base = platform("evidence"), address = "a".repeat(64), relPath = `1998/01/${address}.json.gz`;
+    const value: PlatformImportArtifact = { ...base,
+      raw_snapshot_address: address, raw_snapshot_rel_path: relPath,
+      sourceEvidence: { source: "intervals-icu", lane: "activities", externalId: "evidence",
+        archiveInstant: { epochSeconds: 1_000 }, archive: { address, relPath, deduped: false },
+        normalizedActivityJson: canonicalJson(base.activity) } };
+    const built = await buildPlatformPresentation(value, hashKey);
+    expect(parseEnvelope(built.row.payload_json).version).toBe(1);
+    expect(built.row.payload_json).toBe(canonicalJson({ activity: value.activity, concerns: value.concerns,
+      dedup: { distance_m: 1_000, duration_s: 100, is_transition: false, sport_family: "cycling", start_utc: 1_000 },
+      schema_version: 1 }));
+    await expect(buildPlatformPresentation({ ...value, raw_snapshot_rel_path: "wrong" }, hashKey)).rejects.toThrow("source evidence");
+    expect(() => parseEnvelope('{"activity":{},"concerns":{},"dedup":{},"schema_version":2}')).toThrow("envelope");
   });
 });
