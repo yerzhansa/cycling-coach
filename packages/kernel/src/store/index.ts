@@ -8,3 +8,5 @@ export * from "./repair-log-repository.js";
 export * from "./dedup-confirmation-repository.js";
 export * from "./activity-repository.js";
 export * from "./derived-key.js";
+export * from "./sync-source.js";
+export * from "./sync-state-repository.js";
