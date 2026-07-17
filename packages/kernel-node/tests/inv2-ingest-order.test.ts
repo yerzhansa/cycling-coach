@@ -8,7 +8,7 @@ import { canonicalPick, createMaterializeClusterInTransaction, importArtifactsWi
 import type { ArchiveManager } from "@enduragent/kernel/archive";
 import { dumpStore, runMigrations, sortKeys } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
-import { importFilesWithReport } from "../src/ingest/import-files.js";
+import { createNodeImportRuntime, importFilesWithReport } from "../src/ingest/import-files.js";
 import { openSqliteStorage } from "../src/sqlite/index.js";
 
 const roots = new Set<string>();
@@ -66,6 +66,20 @@ function differentSerialFitPaths(root: string): readonly [string, string] {
 }
 const hashKey = async (fields: readonly (string | number)[]) => createHash("sha256").update(fields.join("\u001f")).digest("hex");
 
+function matchingPlatformArtifact(): PlatformImportArtifact {
+  const start = Date.parse("1998-07-04T20:53:20Z") / 1_000;
+  const activity = { id: "synthetic-api-presentation", start, duration: 2_400, distance: 23_990 };
+  const concerns: Record<string, ConcernValue> = {
+    "session.sport": "cycling", "session.start_utc": start, "session.local_date_key": 19980704,
+    "session.elapsed_s": 2_400, "session.distance_m": 23_990, "session.is_transition": false,
+    "session.summary_json": JSON.stringify(sortKeys(activity)),
+    "stream:time": { timestamps: [start, start + 2_400], values: [start, start + 2_400] },
+  };
+  return { source: "intervals-icu", activity_id: "synthetic-api-presentation", activity,
+    dedup: { sport_family: "cycling", is_transition: false, start_utc: start, duration_s: 2_400, distance_m: 23_990 },
+    concerns, raw_snapshot_address: null, raw_snapshot_rel_path: null };
+}
+
 describe("real SQLite dedup ordering", () => {
   it("[PR05-SQL-001] makes forward and reverse paths converge to identical state", async () => {
     const left = await fresh(), right = await fresh();
@@ -97,6 +111,34 @@ describe("real SQLite dedup ordering", () => {
       const confirmed = await importFilesWithReport({ inputPaths: [serialPaths[0]], archiveDir: serials.archiveDir, store: serials.store });
       expect(confirmed.clusters).toHaveLength(1); expect(confirmed.clusters[0]).toMatchObject({ members: serialMembers, edge_tiers: ["confirmation"] });
     } finally { await fitXml.store.close(); await serials.store.close(); }
+  });
+  it("SQL API plus FIT with a present serial merges without confirmation", async () => {
+    const apiFirst = await fresh(), fitFirst = await fresh();
+    try {
+      const fitPath = path("brick-cycling.fit"), platform = matchingPlatformArtifact();
+      const leftRuntime = createNodeImportRuntime({ archiveDir: apiFirst.archiveDir, store: apiFirst.store });
+      await leftRuntime.importBatchWithReport({ files: [], platform_records: [platform] });
+      const left = await importFilesWithReport({ inputPaths: [fitPath], archiveDir: apiFirst.archiveDir, store: apiFirst.store });
+      await importFilesWithReport({ inputPaths: [fitPath], archiveDir: fitFirst.archiveDir, store: fitFirst.store });
+      const rightRuntime = createNodeImportRuntime({ archiveDir: fitFirst.archiveDir, store: fitFirst.store });
+      const right = await rightRuntime.importBatchWithReport({ files: [], platform_records: [platform] });
+      for (const [value, report] of [[apiFirst, left], [fitFirst, right]] as const) {
+        expect(report.confirm_queue).toEqual([]); expect(report.clusters).toHaveLength(1);
+        expect(report.clusters[0]).toMatchObject({ edge_tiers: ["tier3"] });
+        expect(report.clusters[0]!.members).toHaveLength(2);
+        expect(new Set(report.clusters[0]!.canonical_sources.map((source) => source.rank))).toEqual(new Set([400]));
+        expect(await value.store.get("SELECT count(*) c FROM source_record")).toEqual({ c: 1 });
+        expect(await value.store.get("SELECT count(*) c FROM workout")).toEqual({ c: 1 });
+        expect(await value.store.get("SELECT count(*) c FROM session")).toEqual({ c: 1 });
+      }
+      expect(await dumpStore(apiFirst.store)).toBe(await dumpStore(fitFirst.store));
+      const before = await dumpStore(apiFirst.store);
+      const replayApi = await leftRuntime.importBatchWithReport({ files: [], platform_records: [platform] });
+      const replayFit = await importFilesWithReport({ inputPaths: [fitPath], archiveDir: apiFirst.archiveDir, store: apiFirst.store });
+      expect(replayApi.inserts).toEqual({ raw_file: 0, source_record: 0 });
+      expect(replayFit.inserts).toEqual({ raw_file: 0, source_record: 0 });
+      expect(await dumpStore(apiFirst.store)).toBe(before);
+    } finally { await apiFirst.store.close(); await fitFirst.store.close(); }
   });
   it("[PR05-SQL-003] replans the full archive when a matching file arrives later", async () => {
     const value = await fresh();
