@@ -16,6 +16,15 @@
 // `SYNC_OPERATION_TIMEOUT_MS` budget.
 
 import { snakeCaseKeys } from "intervals-icu-api";
+import {
+  REFERENCE_CAPTURE_STREAM_LIMIT,
+  REFERENCE_CAPTURE_STREAM_TYPES,
+  REFERENCE_CAPTURE_STREAM_WINDOW_DAYS,
+  REFERENCE_CAPTURE_WINDOW_DAYS,
+  createReferenceCapturePlan,
+  selectReferenceCaptureStreamIds,
+  type ReferenceCapturePlan,
+} from "@enduragent/kernel/reference/capture";
 
 import {
   AthleteSchema,
@@ -39,13 +48,13 @@ import type { ReferenceBundle } from "./fixture-bridge.js";
 
 /** Trailing window pulled for metric computation (covers the widest metric
  *  window — the 42-day sustainability look-back — with margin). */
-export const FETCH_WINDOW_DAYS = 84;
+export const FETCH_WINDOW_DAYS = REFERENCE_CAPTURE_WINDOW_DAYS;
 /** Only fetch per-activity streams for rides this recent. DFA-α1's trailing
  *  aggregate reads the last few sufficient sessions, so a short window keeps
  *  the request count bounded without starving the metric. */
-export const STREAM_WINDOW_DAYS = 21;
+export const STREAM_WINDOW_DAYS = REFERENCE_CAPTURE_STREAM_WINDOW_DAYS;
 /** Hard cap on per-activity stream fetches per sync, regardless of window. */
-export const MAX_STREAM_ACTIVITIES = 12;
+export const MAX_STREAM_ACTIVITIES = REFERENCE_CAPTURE_STREAM_LIMIT;
 const STREAM_THROTTLE_MS = 250;
 /** Wall-clock budget for the whole stream phase. Streams are best-effort, so we
  *  stop fetching once this elapses rather than letting a slow account push the
@@ -56,17 +65,7 @@ const STREAM_PHASE_BUDGET_MS = 60_000;
 /** Per-second channels requested per activity. `dfa_a1` + `artifacts` are the
  *  HRV channels the DFA-α1 block reads; `watts`/`heartrate` feed the per-session
  *  capability blocks. `time` is requested for alignment and rides through. */
-export const STREAM_TYPES: readonly string[] = [
-  "time",
-  "watts",
-  "heartrate",
-  "dfa_a1",
-  "artifacts",
-];
-
-/** DFA-α1 is upstream-validated for cycling only; stream fetches target these
- *  types (the cycling adapter's `activityTypes`). */
-const STREAM_SPORT_TYPES: ReadonlySet<string> = new Set(["Ride", "VirtualRide"]);
+export const STREAM_TYPES: readonly string[] = REFERENCE_CAPTURE_STREAM_TYPES;
 
 /** Cycling sport types whose `sportInfo.eftp` seeds the FTP history series. */
 const CYCLING_TYPES: ReadonlySet<string> = new Set([
@@ -123,24 +122,6 @@ export interface LiveFetchResult {
   readonly fetchErrors?: readonly FetchEndpointError[];
 }
 
-function ymd(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
-// Zone-less local-time ISO (YYYY-MM-DDThh:mm:ss). The metric date-window math
-// compares this anchor's date prefix against activity `start_date_local` values,
-// which intervals.icu emits in the athlete's local time with no zone. A UTC
-// `toISOString()` here would shift the anchor's calendar date near midnight and
-// drop/include a day's activities at the window edge; the naive-local form
-// mirrors the oracle's `datetime.now()` convention so the windows line up.
-function naiveLocalIso(date: Date): string {
-  const p = (n: number): string => String(n).padStart(2, "0");
-  return (
-    `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}` +
-    `T${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`
-  );
-}
-
 // intervals.icu's streams endpoint returns an array of channel objects
 // (`[{type, data}, …]`); the lib also camelCases response keys (so `dfa_a1`
 // becomes `dfaA1` on the object form). Normalize both into the channel-keyed
@@ -164,10 +145,6 @@ export function normalizeStreams(value: unknown): unknown {
     return snakeCaseKeys(value);
   }
   return value;
-}
-
-function isCyclingStreamType(type: unknown): boolean {
-  return typeof type === "string" && STREAM_SPORT_TYPES.has(type);
 }
 
 /** Sparse cycling FTP series from per-day `sportInfo.eftp` — one point per
@@ -249,10 +226,9 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
   const { client, signal, now } = deps;
   const log = deps.log ?? ((m: string) => console.warn(m));
   const throttleMs = deps.throttleMs ?? STREAM_THROTTLE_MS;
-  const frozenNow = naiveLocalIso(now);
-
-  const newest = ymd(now);
-  const oldest = ymd(new Date(now.getTime() - FETCH_WINDOW_DAYS * 24 * 60 * 60 * 1000));
+  const plan = createReferenceCapturePlan(now);
+  const frozenNow = plan.frozenNow;
+  const { oldest, newest } = plan.window;
 
   const fetchErrors: FetchEndpointError[] = [];
 
@@ -313,7 +289,7 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
   // ADR-0012 defense-in-depth: no TP-trademarked key may survive rename.
   assertNoTpKeysRemain({ activities, wellness });
 
-  const streams = await fetchStreams(client, activities, signal, now, throttleMs, log);
+  const streams = await fetchStreams(client, activities, signal, plan, throttleMs, log);
 
   const ftpHistory = deriveFtpHistory(wellness);
   const athlete = extractAthleteSettings(athleteProfile);
@@ -347,34 +323,16 @@ async function fetchStreams(
   client: BundleFetchClient,
   activities: readonly Activity[],
   signal: AbortSignal,
-  now: Date,
+  plan: ReferenceCapturePlan,
   throttleMs: number,
   log: (msg: string) => void,
 ): Promise<Record<string, ActivityStreams>> {
-  const streamCutoffMs = now.getTime() - STREAM_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-  const seen = new Set<string>();
-  const candidates = activities
-    .filter((a) => isCyclingStreamType(a.type) && typeof a.start_date_local === "string")
-    .filter((a) => {
-      const ms = Date.parse(a.start_date_local);
-      return Number.isFinite(ms) && ms >= streamCutoffMs;
-    })
-    .sort((a, b) => Date.parse(b.start_date_local) - Date.parse(a.start_date_local))
-    .filter((a) => {
-      // Collapse duplicate ids (the sort keeps the newest first), so a repeated
-      // id can't double-fetch or mis-join the DFA profile.
-      const id = String(a.id);
-      if (seen.has(id)) return false;
-      seen.add(id);
-      return true;
-    })
-    .slice(0, MAX_STREAM_ACTIVITIES);
+  const candidates = selectReferenceCaptureStreamIds(activities, plan);
 
   const deadline = Date.now() + STREAM_PHASE_BUDGET_MS;
   const out: Record<string, ActivityStreams> = {};
-  for (const activity of candidates) {
+  for (const id of candidates) {
     if (signal.aborted || Date.now() > deadline) break;
-    const id = String(activity.id);
     let result: FetchResult<unknown>;
     try {
       result = await client.activities.getStreams(id, [...STREAM_TYPES]);

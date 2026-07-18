@@ -48,6 +48,7 @@ describe("intervals.icu landing mappings", () => {
       threshold_pace: 250, pace_units: "seconds", pace_zones: [300, 270] };
     const value = await mapSettingsLanding(raw);
     expect(value.externalId).toBe(canonicalJson([9, "synthetic-athlete", ["Run", "Ride"], "1998-01-05T09:00:00Z"]));
+    expect(value.sourceRecordExternalId).toBe(`settings:${value.externalId}`);
     expect(value.anchors).toContainEqual(expect.objectContaining({ sport: "cycling", anchor_type: "ftp", value: 250,
       unit: "W", source: "intervals-icu", provenance: "sync", confidence: "platform" }));
     expect(value.anchors).not.toContainEqual(expect.objectContaining({ sport: "run", anchor_type: "ftp" }));

@@ -17,6 +17,7 @@ export default defineConfig({
     "reference/preserve-tokens": "src/reference/preserve-tokens.ts",
     "reference/errors": "src/reference/errors.ts",
     "reference/trademark-policy": "src/reference/trademark-policy.ts",
+    "reference/capture": "src/reference/capture.ts",
     concurrency: "src/reference/entry/concurrency.ts",
   },
   loader: { ".sql": "text" },

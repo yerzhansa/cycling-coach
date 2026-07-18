@@ -13,6 +13,7 @@
     "./home": "./dist/home/index.js",
     "./filesystem": "./dist/filesystem/index.js",
     "./ingest": "./dist/ingest/index.js",
+    "./capture-manifest": "./dist/capture-manifest/index.js",
     "./coach-dev": "./dist/coach-dev.js"
   },
   "engines": {

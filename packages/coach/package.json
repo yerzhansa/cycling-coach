@@ -9,7 +9,8 @@
     "./runtime": "./dist/runtime.js",
     "./sync": "./dist/sync.js",
     "./backfill": "./dist/backfill.js",
-    "./backfill-benchmark": "./dist/backfill-benchmark.js"
+    "./backfill-benchmark": "./dist/backfill-benchmark.js",
+    "./capture": "./dist/capture.js"
   },
   "engines": {
     "node": ">=24"
@@ -19,7 +20,8 @@
     "check": "tsc --noEmit",
     "test": "vitest run",
     "backfill": "node dist/backfill-command.js",
-    "benchmark": "node dist/backfill-command.js --synthetic --conclusions-only"
+    "benchmark": "node dist/backfill-command.js --synthetic --conclusions-only",
+    "capture-reference": "node dist/capture-command.js"
   },
   "dependencies": {
     "@enduragent/core": "workspace:*",
