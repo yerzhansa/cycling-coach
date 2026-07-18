@@ -21,9 +21,7 @@ export function openReadonlySqliteStorage(path: string): SqlReadStore {
 }
 
 export function openSqliteStorage(path: string): SqlStore & MigratorStore {
-  const db = new DatabaseSync(path);
-  db.exec("PRAGMA journal_mode = WAL;");
-  db.exec("PRAGMA foreign_keys = ON;");
+  const db = new DatabaseSync(path, { enableForeignKeyConstraints: false });
   return {
     async exec(sql) {
       db.exec(sql);

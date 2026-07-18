@@ -1,6 +1,7 @@
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import type { ImportArtifact, ImportReport } from "@enduragent/kernel/ingest";
 import {
@@ -15,7 +16,11 @@ import {
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import { importFilesWithReport, type NodeImportRuntime } from "@enduragent/kernel-node/ingest";
-import { LOCKFILE_NAME, PORT_FILE_NAME } from "@enduragent/kernel-node/lock";
+import {
+  inertWriterProtocolListener,
+  LOCKFILE_NAME,
+  PORT_FILE_NAME,
+} from "@enduragent/kernel-node/lock";
 import {
   type CoachDevWriterFailureStage,
   type CoachDevWriterResult,
@@ -43,6 +48,19 @@ const capabilities = Object.freeze({
   wellness: false,
   plannedWorkoutPush: false,
   backfillDepth: Object.freeze({ kind: "none" as const }),
+});
+
+const hasLoopback = await new Promise<boolean>((resolve) => {
+  const server = createServer();
+  server.once("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EPERM") {
+      process.stderr.write("SKIP_MARKER loopback-listen EPERM coach-sync\n");
+    }
+    resolve(false);
+  });
+  server.listen({ host: "127.0.0.1", port: 0 }, () => {
+    server.close(() => resolve(true));
+  });
 });
 
 function syncSource(id: SourceId): SyncSource {
@@ -94,7 +112,11 @@ function syntheticStore(): CoachStoreWriterContext["store"] {
 }
 
 function syntheticContext(root?: string): CoachStoreWriterContext {
-  return { home: syntheticHome(root), store: syntheticStore() };
+  return {
+    home: syntheticHome(root),
+    store: syntheticStore(),
+    listener: inertWriterProtocolListener,
+  };
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -136,7 +158,7 @@ async function governedHarness(overrides: Partial<CoachSyncDependencies> = {}) {
   let ordinal = 1_000;
   const withWriter: CoachSyncDependencies["withWriter"] = async (_env, operation) => {
     events.push("writer");
-    return operation({ home, store });
+    return operation({ home, store, listener: inertWriterProtocolListener });
   };
   const dependencies = syncDependencies(withWriter, async () => importReport, {
     fileSystem: {
@@ -549,8 +571,8 @@ describe("coach sync composition", () => {
     expect(importCalls).toBe(0);
   });
 
-  it("real writer lifecycle migrates closes and releases an isolated store", async () => {
-    const root = await mkdtemp(join(tmpdir(), "coach-runtime-"));
+  it.runIf(hasLoopback)("real writer lifecycle migrates closes and releases an isolated store", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "coach-runtime-"));
     const home = syntheticHome(root);
     try {
       const value = await withCoachStoreWriter(
@@ -578,9 +600,10 @@ describe("coach sync composition", () => {
     }
   });
 
-  it("isolates concurrent writers for two athlete homes", async () => {
-    const leftRoot = await mkdtemp(join(tmpdir(), "coach-left-"));
-    const rightRoot = await mkdtemp(join(tmpdir(), "coach-right-"));
+  it.runIf(hasLoopback)("isolates concurrent writers for two athlete homes", async () => {
+    const temporaryRoot = await realpath(tmpdir());
+    const leftRoot = await mkdtemp(join(temporaryRoot, "coach-left-"));
+    const rightRoot = await mkdtemp(join(temporaryRoot, "coach-right-"));
     const leftHome = syntheticHome(leftRoot);
     const rightHome = syntheticHome(rightRoot);
     const seenHomes: string[] = [];
@@ -690,8 +713,13 @@ describe("coach sync composition", () => {
               source,
               async run(context) {
                 expect(Object.isFrozen(context)).toBe(true);
-                expect(context).toEqual({ home: harness.home, store: harness.store, source });
-              expect(Object.keys(context)).toEqual(["home", "store", "source"]);
+                expect(context).toEqual({
+                  home: harness.home,
+                  store: harness.store,
+                  listener: inertWriterProtocolListener,
+                  source,
+                });
+                expect(Object.keys(context)).toEqual(["home", "store", "listener", "source"]);
                 expect(JSON.parse(harness.projected.get(target)!)).toMatchObject({
                   detail: "intervals-icu: source temporarily unavailable",
                   mitigation: "warn_only",
@@ -894,7 +922,11 @@ describe("coach sync composition", () => {
     };
     let laterCalls = 0;
     const withWriter: CoachSyncDependencies["withWriter"] = async (_env, operation) =>
-      operation({ home: syntheticHome(), store });
+      operation({
+        home: syntheticHome(),
+        store,
+        listener: inertWriterProtocolListener,
+      });
     await expect(
       runCoachSync(
         {

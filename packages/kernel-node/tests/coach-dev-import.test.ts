@@ -1,13 +1,17 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
+import { createServer as createNetServer } from "node:net";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ImportReport } from "@enduragent/kernel/ingest";
 import type { MigratorStore, SqlStore } from "@enduragent/kernel/store";
-import type { WriteLockHandle } from "@enduragent/kernel-node/lock";
+import {
+  inertWriterProtocolListener,
+  type WriteLockHandle,
+} from "@enduragent/kernel-node/lock";
 
 type RunCoachDev = typeof import("../src/cli/coach-dev.js").runCoachDev;
 type RunCoachDevWriter = typeof import("../src/cli/coach-dev.js").runCoachDevWriter;
@@ -63,6 +67,19 @@ const DETERMINISTIC_KEYS = [
   "brick_groups",
   "orphaned_overlays",
 ] as const;
+
+const hasLoopback = await new Promise<boolean>((resolve) => {
+  const server = createNetServer();
+  server.once("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EPERM") {
+      process.stderr.write("SKIP_MARKER loopback-listen EPERM coach-dev-import\n");
+    }
+    resolve(false);
+  });
+  server.listen({ host: "127.0.0.1", port: 0 }, () => {
+    server.close(() => resolve(true));
+  });
+});
 
 const pair = {
   member_a: "member-a",
@@ -254,7 +271,7 @@ afterAll(async () => {
 });
 
 async function freshHome(prefix: string): Promise<string> {
-  const path = await mkdtemp(join(tmpdir(), prefix));
+  const path = await mkdtemp(join(await realpath(tmpdir()), prefix));
   tempDirs.add(path);
   return path;
 }
@@ -383,6 +400,7 @@ function injected(options: InjectedOptions = {}) {
     port: 1,
     lockfilePath: "/synthetic/home/config/store-writer.lock",
     portFilePath: "/synthetic/home/config/store-writer.port",
+    listener: inertWriterProtocolListener,
     async release() {
       calls.push("release");
       fail("release");
@@ -486,7 +504,7 @@ describe("coach-dev import --report", () => {
     }
   });
 
-  it("First real child import is non-vacuous", async () => {
+  it.runIf(hasLoopback)("First real child import is non-vacuous", async () => {
     realHome = await freshHome("coach-dev-real-");
     const fixture = resolve("packages/kernel-node/tests/fixtures/ingest/triathlon-multisport.fit");
     const child = await runChild(realHome, ["import", "--report", fixture]);
@@ -526,7 +544,7 @@ describe("coach-dev import --report", () => {
     await expectLockFilesAbsent(realHome);
   });
 
-  it("Second real child import is archive-deduped", async () => {
+  it.runIf(hasLoopback)("Second real child import is archive-deduped", async () => {
     expect(realHome).toBeDefined();
     expect(firstReport).toBeDefined();
     expect(firstDump).toBeDefined();
@@ -562,7 +580,7 @@ describe("coach-dev import --report", () => {
     await expectLockFilesAbsent(realHome!);
   });
 
-  it("held-lock refuses safely", async () => {
+  it.runIf(hasLoopback)("held-lock refuses safely", async () => {
     const homePath = await freshHome("coach-dev-held-");
     const home = resolveAthleteHome({ ENDURAGENT_HOME: homePath });
     const result = await acquireWriteLock({
@@ -608,7 +626,7 @@ describe("coach-dev import --report", () => {
     await expectLockFilesAbsent(homePath);
   }, 15_000);
 
-  it("healthy-peer refuses without ownership", async () => {
+  it.runIf(hasLoopback)("healthy-peer refuses without ownership", async () => {
     const homePath = await freshHome("coach-dev-peer-");
     const home = resolveAthleteHome({ ENDURAGENT_HOME: homePath });
     await mkdir(home.configDir, { recursive: true, mode: 0o700 });
@@ -725,7 +743,11 @@ describe("coach-dev import --report", () => {
       successful.deps,
     );
     expect(result).toEqual({ status: "completed", value });
-    expect(context).toEqual({ home: successful.home, store: successful.store });
+    expect(context).toEqual({
+      home: successful.home,
+      store: successful.store,
+      listener: inertWriterProtocolListener,
+    });
     expect(successful.observed.lock).toEqual({
       configDir: successful.home.configDir,
       athleteHome: successful.home.root,
@@ -1184,7 +1206,7 @@ describe("coach-dev import --report", () => {
           writerCalls += 1;
           writerActive = true;
           try {
-            return await operation({ home, store });
+            return await operation({ home, store, listener: inertWriterProtocolListener });
           } finally {
             writerActive = false;
           }
@@ -1334,7 +1356,7 @@ describe("coach-dev import --report", () => {
       },
       {
         async withWriter(_env, operation) {
-          return operation({ home, store });
+          return operation({ home, store, listener: inertWriterProtocolListener });
         },
         async importFiles() {
           throw new Error("unexpected manual import");

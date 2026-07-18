@@ -13,6 +13,11 @@ import type { AthleteHome } from "@enduragent/kernel-node/home";
 import { join } from "node:path";
 import { runReferenceCapture } from "./capture.js";
 import { createLocalBundleProducer } from "./local-bundle-producer.js";
+import {
+  createWallClockScheduler,
+  type WallClockScheduler,
+  type WallClockSchedulerDependencies,
+} from "./daemon/scheduler.js";
 
 export const STORE_REFRESH_INTERVAL_MS = 21_600_000;
 export const STORE_REQUEST_LIMIT = 64 as const;
@@ -33,8 +38,7 @@ export interface StoreRuntimeDependencies {
   readonly produce?: (manifest: ReferenceCaptureManifest) => Promise<ProducedLocalBundle>;
   readonly now?: () => Date;
   readonly monotonicNow?: () => number;
-  readonly setInterval?: typeof globalThis.setInterval;
-  readonly clearInterval?: typeof globalThis.clearInterval;
+  readonly schedulerDependencies?: Partial<WallClockSchedulerDependencies>;
 }
 
 export interface StoreRuntimeOptions {
@@ -48,27 +52,38 @@ export interface StoreRuntimeOptions {
 export class StoreRuntime {
   readonly athleteData: AthleteDataReader;
   private readonly dependencies: Required<Pick<StoreRuntimeDependencies,
-    "capture" | "produce" | "now" | "monotonicNow" | "setInterval" | "clearInterval">>;
+    "capture" | "produce" | "now" | "monotonicNow">>;
+  private readonly scheduler: WallClockScheduler;
   private snapshotValue: ProducedLocalBundle | undefined;
   private activeLedger: PhysicalRequestLedger | undefined;
   private activeController: AbortController | undefined;
-  private timer: ReturnType<typeof setInterval> | undefined;
   private activeWindow: Promise<StoreWindowResult> | undefined;
   private closed = false;
 
   constructor(private readonly options: StoreRuntimeOptions) {
     const dependencies = options.dependencies ?? {};
+    const now = dependencies.now ?? (() => new Date());
+    const schedulerDependencies = dependencies.schedulerDependencies ?? {};
     this.dependencies = {
       capture: dependencies.capture ?? runReferenceCapture,
       produce: dependencies.produce ?? ((manifest) => createLocalBundleProducer({
         storePath: join(options.home.storeDir, "store.db"),
         archiveRoot: options.home.archiveDir,
       }).produce(manifest)),
-      now: dependencies.now ?? (() => new Date()),
+      now,
       monotonicNow: dependencies.monotonicNow ?? (() => performance.now()),
-      setInterval: dependencies.setInterval ?? globalThis.setInterval,
-      clearInterval: dependencies.clearInterval ?? globalThis.clearInterval,
     };
+    this.scheduler = createWallClockScheduler({
+      cadenceMs: STORE_REFRESH_INTERVAL_MS,
+      run: async () => {
+        await this.runWindow();
+      },
+      dependencies: {
+        nowEpochMs: schedulerDependencies.nowEpochMs ?? (() => now().getTime()),
+        setTimeout: schedulerDependencies.setTimeout ?? globalThis.setTimeout,
+        clearTimeout: schedulerDependencies.clearTimeout ?? globalThis.clearTimeout,
+      },
+    });
     this.athleteData = createStoreAthleteDataReader({
       snapshot: () => this.snapshotValue,
       clockNow: () => this.dependencies.now().getTime(),
@@ -85,12 +100,8 @@ export class StoreRuntime {
   }
 
   startScheduler(): void {
-    if (this.closed || this.timer !== undefined) return;
-    this.timer = this.dependencies.setInterval(() => {
-      if (this.activeWindow !== undefined) return;
-      void this.runWindow().catch(() => {});
-    }, STORE_REFRESH_INTERVAL_MS);
-    this.timer.unref?.();
+    if (this.closed) return;
+    this.scheduler.start();
   }
 
   runWindow(): Promise<StoreWindowResult> {
@@ -155,11 +166,8 @@ export class StoreRuntime {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    if (this.timer !== undefined) {
-      this.dependencies.clearInterval(this.timer);
-      this.timer = undefined;
-    }
     this.activeController?.abort(new Error("Store runtime closed."));
+    await this.scheduler.close();
     try { await this.activeWindow; } catch {}
   }
 }

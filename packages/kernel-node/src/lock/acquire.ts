@@ -1,7 +1,14 @@
+import {
+  createServer as createHttpServer,
+  type IncomingMessage,
+  type Server as HttpServer,
+  type ServerResponse,
+} from "node:http";
 import { createServer, type Server, type Socket, type AddressInfo } from "node:net";
 import { existsSync, mkdirSync, chmodSync, statSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { join } from "node:path";
+import type { Duplex } from "node:stream";
 import { claimLockfile, readLockfile } from "./lockfile-body.js";
 import { readPortFile, writePortFile } from "./port-file.js";
 import { defaultHealthzProbe, isPortBound, type HealthzProbe } from "./healthz-probe.js";
@@ -40,11 +47,37 @@ export interface AcquireWriteLockOptions {
   readonly probeHealthz?: HealthzProbe;
 }
 
+export interface WriterProtocolHandlers {
+  readonly request: (request: IncomingMessage, response: ServerResponse) => void;
+  readonly upgrade: (request: IncomingMessage, socket: Duplex, head: Buffer) => void;
+}
+
+export interface WriterProtocolBinding {
+  readonly port: number;
+  close(): Promise<void>;
+}
+
+export interface WriterProtocolListener {
+  bind(handlers: WriterProtocolHandlers): Promise<WriterProtocolBinding>;
+}
+
+const inertWriterProtocolBinding: WriterProtocolBinding = Object.freeze({
+  port: 0,
+  async close() {},
+});
+
+export const inertWriterProtocolListener: WriterProtocolListener = Object.freeze({
+  async bind() {
+    return inertWriterProtocolBinding;
+  },
+});
+
 export interface WriteLockHandle {
   readonly status: "acquired";
   readonly port: number;
   readonly lockfilePath: string;
   readonly portFilePath: string;
+  readonly listener: WriterProtocolListener;
   release(): Promise<void>;
 }
 
@@ -88,6 +121,77 @@ function closeServer(server: Server, sockets: Set<Socket>): Promise<void> {
   return new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
+interface OwnedProtocolServer {
+  readonly server: HttpServer;
+  readonly sockets: Set<Socket>;
+  readonly binding: WriterProtocolBinding;
+  forceClose(): Promise<void>;
+}
+
+function createProtocolServer(
+  handlers: WriterProtocolHandlers,
+): Promise<{ readonly server: HttpServer; readonly sockets: Set<Socket>; readonly port: number }> {
+  return new Promise((resolve, reject) => {
+    const sockets = new Set<Socket>();
+    const server = createHttpServer(handlers.request);
+    const onError = (error: Error): void => reject(error);
+    server.once("error", onError);
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.on("error", () => {});
+      socket.on("close", () => sockets.delete(socket));
+    });
+    server.on("upgrade", handlers.upgrade);
+    server.listen({ host: "127.0.0.1", port: 0 }, () => {
+      server.off("error", onError);
+      resolve({ server, sockets, port: (server.address() as AddressInfo).port });
+    });
+  });
+}
+
+function ownProtocolServer(
+  server: HttpServer,
+  sockets: Set<Socket>,
+  port: number,
+): OwnedProtocolServer {
+  let closePromise: Promise<void> | undefined;
+  let force = false;
+  const close = (): Promise<void> => {
+    closePromise ??= new Promise<void>((resolve, reject) => {
+      let callbackSettled = false;
+      let callbackError: Error | undefined;
+      const settle = (): void => {
+        if (!callbackSettled || sockets.size !== 0) return;
+        if (callbackError === undefined) resolve();
+        else reject(callbackError);
+      };
+      for (const socket of sockets) socket.once("close", settle);
+      server.close((error) => {
+        callbackSettled = true;
+        callbackError = error;
+        settle();
+      });
+      server.closeAllConnections();
+      if (force) {
+        for (const socket of sockets) socket.destroy();
+      }
+      settle();
+    });
+    return closePromise;
+  };
+  const binding: WriterProtocolBinding = { port, close };
+  return {
+    server,
+    sockets,
+    binding,
+    forceClose() {
+      force = true;
+      for (const socket of sockets) socket.destroy();
+      return close();
+    },
+  };
+}
+
 async function bestEffortUnlink(path: string): Promise<void> {
   try {
     await unlink(path);
@@ -125,7 +229,9 @@ async function contentionAgainstBound(
   );
 }
 
-export async function acquireWriteLock(opts: AcquireWriteLockOptions): Promise<AcquireWriteLockResult> {
+export async function acquireWriteLock(
+  opts: AcquireWriteLockOptions,
+): Promise<AcquireWriteLockResult> {
   const probe = opts.probeHealthz ?? defaultHealthzProbe;
   ensureConfigDirSecure(opts.configDir);
   const lockfilePath = join(opts.configDir, LOCKFILE_NAME);
@@ -139,6 +245,40 @@ export async function acquireWriteLock(opts: AcquireWriteLockOptions): Promise<A
 
   const { server, sockets } = await bindWriterSocket();
   const actualPort = (server.address() as AddressInfo).port;
+  let released = false;
+  let listenerUsed = false;
+  let protocol: OwnedProtocolServer | undefined;
+  let bindingPromise: Promise<WriterProtocolBinding> | undefined;
+  let releasePromise: Promise<void> | undefined;
+
+  const listener: WriterProtocolListener = {
+    async bind(handlers): Promise<WriterProtocolBinding> {
+      if (released) throw new Error("writer protocol listener is released");
+      if (listenerUsed) throw new Error("writer protocol listener is already bound");
+      listenerUsed = true;
+      bindingPromise = (async () => {
+        const created = await createProtocolServer(handlers);
+        const owned = ownProtocolServer(created.server, created.sockets, created.port);
+        protocol = owned;
+        if (released) {
+          await owned.forceClose();
+          throw new Error("writer protocol listener is released");
+        }
+        try {
+          await writePortFile(portFilePath, created.port);
+        } catch (error) {
+          await owned.forceClose().catch(() => {});
+          throw error;
+        }
+        if (released) {
+          await owned.forceClose();
+          throw new Error("writer protocol listener is released");
+        }
+        return owned.binding;
+      })();
+      return bindingPromise;
+    },
+  };
 
   const claimAndFill = async (): Promise<WriteLockHandle> => {
     await claimLockfile(lockfilePath, {
@@ -153,10 +293,31 @@ export async function acquireWriteLock(opts: AcquireWriteLockOptions): Promise<A
       port: actualPort,
       lockfilePath,
       portFilePath,
-      release: async (): Promise<void> => {
-        await closeServer(server, sockets);
-        await bestEffortUnlink(lockfilePath);
-        await bestEffortUnlink(portFilePath);
+      listener,
+      release(): Promise<void> {
+        releasePromise ??= (async () => {
+          released = true;
+          let failure: unknown;
+          let protocolClose = protocol?.forceClose();
+          try {
+            await bindingPromise;
+          } catch {}
+          try {
+            protocolClose ??= protocol?.forceClose();
+            await protocolClose;
+          } catch (error) {
+            failure = error;
+          }
+          try {
+            await closeServer(server, sockets);
+          } catch (error) {
+            failure ??= error;
+          }
+          await bestEffortUnlink(lockfilePath);
+          await bestEffortUnlink(portFilePath);
+          if (failure !== undefined) throw failure;
+        })();
+        return releasePromise;
       },
     };
   };

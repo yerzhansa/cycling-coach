@@ -6,12 +6,13 @@ import { describe, expect, it } from "vitest";
 const coachRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 describe("coach package handoff", () => {
-  it("preserves the dispatch package surface and adds only local-runner", async () => {
+  it("preserves the dispatch package surface and adds serve", async () => {
     const packageJson = JSON.parse(
       await readFile(join(coachRoot, "package.json"), "utf8"),
     ) as {
       exports: Record<string, string>;
       scripts: Record<string, string>;
+      bin: Record<string, string>;
     };
     expect(packageJson.exports).toEqual({
       "./runtime": "./dist/runtime.js",
@@ -22,8 +23,10 @@ describe("coach package handoff", () => {
       "./local-bundle-producer": "./dist/local-bundle-producer.js",
       "./store-runtime": "./dist/store-runtime.js",
       "./local-runner": "./dist/local-runner.js",
+      "./serve": "./dist/serve.js",
       "./enduragent": "./dist/enduragent.js",
     });
+    expect(packageJson.bin).toEqual({ enduragent: "./dist/enduragent.js" });
     expect(packageJson.scripts).toEqual({
       build: "tsup",
       check: "tsc --noEmit",
@@ -51,6 +54,7 @@ describe("coach package handoff", () => {
       "store-gate-command",
       "season-review-command",
       "local-runner",
+      "serve",
       "enduragent",
     ];
     for (const entry of entries) {

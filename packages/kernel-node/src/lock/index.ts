@@ -1,5 +1,6 @@
 export {
   acquireWriteLock,
+  inertWriterProtocolListener,
   WriteLockContentionError,
   LOCKFILE_NAME,
   PORT_FILE_NAME,
@@ -10,6 +11,9 @@ export type {
   WriteLockHandle,
   PeerHealthyOutcome,
   WriterContentionDiagnostic,
+  WriterProtocolHandlers,
+  WriterProtocolBinding,
+  WriterProtocolListener,
 } from "./acquire.js";
 export type { LockfileBody } from "./lockfile-body.js";
 export { readLockfile } from "./lockfile-body.js";

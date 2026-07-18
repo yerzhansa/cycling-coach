@@ -16,6 +16,7 @@ import { createPhysicalRequestLedger, runMigrations } from "@enduragent/kernel/s
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import type { CyclingFtpAnchorResolver } from "@enduragent/kernel/anchors";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
+import { inertWriterProtocolListener } from "@enduragent/kernel-node/lock";
 import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import {
   createLocalCoachComposition,
@@ -158,6 +159,7 @@ function missingResolver(): CyclingFtpAnchorResolver {
 function fakeContext(home: AthleteHome): CoachStoreWriterContext {
   return {
     home,
+    listener: inertWriterProtocolListener,
     store: {
       async exec() {},
       async run() {},
@@ -320,7 +322,7 @@ describe("local coach composition", () => {
         resetSession: async () => ({ memoryFlushed: true }),
       }),
       now: () => 1_752_796_800_000,
-    }, { home, store });
+    }, { home, store, listener: inertWriterProtocolListener });
     await expect(lifecycle.engine.chat({ chatId: "x", message: "status" }))
       .resolves.toEqual({ text: "anchored" });
     expect(chatRequest?.turn?.resolvedCs).toMatchObject({ kind: "ftp", watts: 275 });

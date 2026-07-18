@@ -290,7 +290,7 @@ export async function runCoachSync(
   }
 
   const dependencies = deps ?? defaultDependencies;
-  return dependencies.withWriter(options.env, async ({ home, store }) => {
+  return dependencies.withWriter(options.env, async ({ home, store, listener }) => {
     const repository = createSyncFailureRepository(store);
     const target = join(home.root, "data", "error_state.json");
     const project = async (): Promise<void> => {
@@ -314,7 +314,7 @@ export async function runCoachSync(
       let sourceFailed = false;
       try {
         if ("run" in binding && binding.run !== undefined) {
-          await binding.run(Object.freeze({ home, store, source: binding.source }));
+          await binding.run(Object.freeze({ home, store, listener, source: binding.source }));
         } else {
           nodeRuntime ??= dependencies.createImportRuntime({ archiveDir: home.archiveDir, store });
           await runFileHydration(binding as CoachFileSourceBinding, nodeRuntime);

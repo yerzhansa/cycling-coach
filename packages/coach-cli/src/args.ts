@@ -1,9 +1,10 @@
 export type CoachCliInvocation =
   | { readonly kind: "repl" }
   | { readonly kind: "version" }
+  | { readonly kind: "serve" }
   | {
       readonly kind: "usage";
-      readonly message: "Usage: enduragent [version]";
+      readonly message: "Usage: enduragent [version|serve]";
     };
 
 export function parseCoachCliInvocation(argv: readonly string[]): CoachCliInvocation {
@@ -11,5 +12,6 @@ export function parseCoachCliInvocation(argv: readonly string[]): CoachCliInvoca
   if (argv.length === 1 && (argv[0] === "version" || argv[0] === "--version")) {
     return { kind: "version" };
   }
-  return { kind: "usage", message: "Usage: enduragent [version]" };
+  if (argv.length === 1 && argv[0] === "serve") return { kind: "serve" };
+  return { kind: "usage", message: "Usage: enduragent [version|serve]" };
 }

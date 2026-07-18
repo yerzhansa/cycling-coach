@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,7 +10,7 @@ describe("openSqliteStorage adapter", () => {
   let store: SqlStore & MigratorStore;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "kn-"));
+    dir = mkdtempSync(join(realpathSync(tmpdir()), "kn-"));
     store = openSqliteStorage(join(dir, "store.db"));
   });
 
@@ -19,11 +19,11 @@ describe("openSqliteStorage adapter", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("opens with WAL journal mode and foreign_keys enabled", async () => {
+  it("opens without changing SQLite journal or foreign-key defaults", async () => {
     const jm = await store.get("PRAGMA journal_mode");
-    expect(jm).toEqual({ journal_mode: "wal" });
+    expect(jm).toEqual({ journal_mode: "delete" });
     const fk = await store.get("PRAGMA foreign_keys");
-    expect(fk).toEqual({ foreign_keys: 1 });
+    expect(fk).toEqual({ foreign_keys: 0 });
   });
 
   it("round-trips TEXT, REAL, and BLOB values through run/get/all", async () => {
