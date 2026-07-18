@@ -1,1 +1,1 @@
-export { openSqliteStorage } from "./database.js";
+export { openReadonlySqliteStorage, openSqliteStorage } from "./database.js";

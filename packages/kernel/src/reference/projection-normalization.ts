@@ -1,0 +1,153 @@
+import { canonicalJson } from "../archive/canonical.js";
+import {
+  ActivitySchema,
+  WellnessDaySchema,
+  type Activity,
+  type FtpHistoryPoint,
+  type WellnessDay,
+} from "./schemas/inputs.js";
+import { TP_DENYLIST_FIELDS } from "./trademark-policy.js";
+
+export interface NormalizedWellnessFields {
+  fitness?: number | null;
+  fatigue?: number | null;
+  fitnessContribution?: number | null;
+  fatigueContribution?: number | null;
+  weeklyFitnessChange?: number | null;
+}
+
+export interface NormalizedActivityFields {
+  fitnessAtEnd?: number | null;
+  fatigueAtEnd?: number | null;
+}
+
+declare const __renamedBrand: unique symbol;
+export type RenamedActivityRow = Record<string, unknown> & NormalizedActivityFields
+  & { readonly [__renamedBrand]: "activity" };
+export type RenamedWellnessRow = Record<string, unknown> & NormalizedWellnessFields
+  & { readonly [__renamedBrand]: "wellness" };
+export interface RenameSummary { skippedNonNumeric: Record<string, number> }
+
+const WELLNESS_TP_TO_PLAIN: ReadonlyArray<readonly [string, keyof NormalizedWellnessFields]> = [
+  ["ctl", "fitness"], ["atl", "fatigue"], ["ctlLoad", "fitnessContribution"],
+  ["atlLoad", "fatigueContribution"], ["rampRate", "weeklyFitnessChange"],
+];
+const ACTIVITY_TP_TO_PLAIN: ReadonlyArray<readonly [string, keyof NormalizedActivityFields]> = [
+  ["icu_ctl", "fitnessAtEnd"], ["icu_atl", "fatigueAtEnd"],
+];
+
+function applyKeyRename(
+  raw: Record<string, unknown>,
+  mapping: ReadonlyArray<readonly [string, string]>,
+  sourceKeys: ReadonlySet<string>,
+  summary: RenameSummary | undefined,
+): Record<string, unknown> {
+  for (const [source, target] of mapping) if (source in raw && target in raw) {
+    const targetValue = raw[target];
+    if (targetValue !== null && targetValue !== undefined) {
+      throw new Error(
+        `renameTpFields: collision — input has both source '${source}' and target '${target}' with a non-null value.`
+        + " The anti-corruption layer would silently overwrite real data. Update reference/sync/rename-tp-fields.ts.",
+      );
+    }
+  }
+  const output: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) if (!sourceKeys.has(key)) output[key] = value;
+  for (const [source, target] of mapping) {
+    if (!(source in raw)) continue;
+    const value = raw[source];
+    if (typeof value === "number" || value === null) output[target] = value;
+    else if (value !== undefined && summary !== undefined) {
+      summary.skippedNonNumeric[source] = (summary.skippedNonNumeric[source] ?? 0) + 1;
+    }
+  }
+  return output;
+}
+
+export function renameTpFieldsOnWellnessRow(raw: Record<string, unknown>, summary?: RenameSummary): RenamedWellnessRow {
+  return applyKeyRename(raw, WELLNESS_TP_TO_PLAIN, new Set(WELLNESS_TP_TO_PLAIN.map(([key]) => key)), summary) as RenamedWellnessRow;
+}
+
+export function renameTpFieldsOnActivity(raw: Record<string, unknown>, summary?: RenameSummary): RenamedActivityRow {
+  return applyKeyRename(raw, ACTIVITY_TP_TO_PLAIN, new Set(ACTIVITY_TP_TO_PLAIN.map(([key]) => key)), summary) as RenamedActivityRow;
+}
+
+export function parseRenamedActivity(row: RenamedActivityRow): Activity { return ActivitySchema.parse(row); }
+export function parseRenamedWellnessRow(row: RenamedWellnessRow): WellnessDay { return WellnessDaySchema.parse(row); }
+
+const DENYLIST = new Set<string>(TP_DENYLIST_FIELDS);
+export function assertNoTpKeysRemain(value: unknown, path = ""): void {
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) assertNoTpKeysRemain(value[index], `${path}[${index}]`);
+    return;
+  }
+  if (value !== null && typeof value === "object") for (const [key, child] of Object.entries(value)) {
+    const childPath = path === "" ? key : `${path}.${key}`;
+    if (DENYLIST.has(key)) {
+      throw new Error(`assertNoTpKeysRemain: TP-trademarked key surviving rename at ${childPath}`
+        + " — update reference/sync/rename-tp-fields.ts");
+    }
+    assertNoTpKeysRemain(child, childPath);
+  }
+}
+
+function normalizeStreamKey(key: string): string {
+  return key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+}
+
+export function normalizeStreams(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const output: Record<string, unknown> = {};
+    for (const entry of value) if (entry !== null && typeof entry === "object"
+      && typeof (entry as Record<string, unknown>).type === "string"
+      && Array.isArray((entry as Record<string, unknown>).data)) {
+      output[(entry as Record<string, unknown>).type as string] = (entry as Record<string, unknown>).data;
+    }
+    return output;
+  }
+  if (value !== null && typeof value === "object") {
+    const output: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+      const normalized = normalizeStreamKey(key);
+      if (Object.hasOwn(output, normalized) && !Object.is(output[normalized], item)) {
+        throw new TypeError("stream key normalization collision");
+      }
+      output[normalized] = item;
+    }
+    return output;
+  }
+  return value;
+}
+
+const CYCLING_TYPES = new Set([
+  "Ride", "VirtualRide", "GravelRide", "MountainBikeRide", "EBikeRide",
+  "EMountainBikeRide", "TrackRide", "Cyclocross", "Handcycle",
+]);
+
+export function deriveFtpHistory(wellness: readonly WellnessDay[]): FtpHistoryPoint[] {
+  const points: FtpHistoryPoint[] = [];
+  let lastFtp: number | null = null;
+  const sorted = [...wellness].sort((left, right) => String(left.id).localeCompare(String(right.id)));
+  for (const day of sorted) {
+    const sportInfo = (day as { sportInfo?: Array<Record<string, unknown>> | null }).sportInfo ?? [];
+    let cyclingEftp: number | null = null;
+    for (const item of sportInfo) if (typeof item.type === "string" && CYCLING_TYPES.has(item.type)
+      && typeof item.eftp === "number" && Number.isFinite(item.eftp)) {
+      cyclingEftp = Math.round(item.eftp);
+      break;
+    }
+    if (cyclingEftp === null || cyclingEftp === lastFtp) continue;
+    points.push({ date: String(day.id), ftp: cyclingEftp, source: "estimate" });
+    lastFtp = cyclingEftp;
+  }
+  return points;
+}
+
+export function compareCanonicalUtf8(left: unknown, right: unknown): number {
+  const a = new TextEncoder().encode(canonicalJson(left));
+  const b = new TextEncoder().encode(canonicalJson(right));
+  for (let i = 0; i < Math.min(a.length, b.length); i += 1) {
+    if (a[i] !== b[i]) return a[i]! < b[i]! ? -1 : 1;
+  }
+  return a.length < b.length ? -1 : a.length > b.length ? 1 : 0;
+}

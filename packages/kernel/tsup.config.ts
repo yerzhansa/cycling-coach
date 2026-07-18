@@ -18,6 +18,7 @@ export default defineConfig({
     "reference/errors": "src/reference/errors.ts",
     "reference/trademark-policy": "src/reference/trademark-policy.ts",
     "reference/capture": "src/reference/capture.ts",
+    "reference/local-bundle": "src/reference/entry/local-bundle.ts",
     concurrency: "src/reference/entry/concurrency.ts",
   },
   loader: { ".sql": "text" },

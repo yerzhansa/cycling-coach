@@ -1,13 +1,15 @@
 import { setTimeout as setTimeoutPromise } from "node:timers/promises";
 import {
-  assertNoTpKeysRemain,
   makeIntervalsHttpFactory,
+} from "@enduragent/core";
+import {
+  assertNoTpKeysRemain,
   normalizeStreams,
   parseRenamedActivity,
   parseRenamedWellnessRow,
   renameTpFieldsOnActivity,
   renameTpFieldsOnWellnessRow,
-} from "@enduragent/core";
+} from "@enduragent/kernel/reference/local-bundle";
 import type { ArchiveInstant, ArchiveManager, ArchiveWriteResult } from "@enduragent/kernel/archive";
 import type { ImportArtifact, ImportReport, ImportReportDeps, PairDiagnostic, PlatformImportArtifact } from "@enduragent/kernel/ingest";
 import { createSyncStateRepository, dumpStore, type SourceArtifactDraft, type SqlStore, type SyncBudget } from "@enduragent/kernel/store";

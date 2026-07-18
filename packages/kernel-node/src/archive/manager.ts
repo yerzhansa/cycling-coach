@@ -1,6 +1,7 @@
 import { dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import type { CryptoPort, FileSystemPort } from "@enduragent/kernel/ports";
+import type { VerifiedSnapshotReader } from "@enduragent/kernel/reference/local-bundle";
 import {
   artifactRelPath,
   canonicalJson,
@@ -20,6 +21,27 @@ export interface ArchiveManagerDeps {
   readonly archiveRoot: string;
   readonly crypto: CryptoPort;
   readonly fs: FileSystemPort;
+}
+
+export function createVerifiedSnapshotReader(deps: ArchiveManagerDeps): VerifiedSnapshotReader {
+  return {
+    async readVerifiedSnapshot(ref) {
+      let compressed: Uint8Array;
+      let address: string;
+      try {
+        compressed = await deps.fs.readFile(join(deps.archiveRoot, ref.rel_path));
+        address = toHex(await deps.crypto.sha256(compressed));
+      } catch {
+        throw new TypeError("archive snapshot read failed");
+      }
+      if (address !== ref.address) throw new TypeError("archive snapshot address mismatch");
+      try {
+        return JSON.parse(gunzipSync(compressed).toString("utf8"));
+      } catch {
+        throw new TypeError("archive snapshot is invalid");
+      }
+    },
+  };
 }
 
 export function createArchiveManager(deps: ArchiveManagerDeps): ArchiveManager {
