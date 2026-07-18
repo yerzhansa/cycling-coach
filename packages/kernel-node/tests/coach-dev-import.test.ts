@@ -780,7 +780,53 @@ describe("coach-dev import --report", () => {
     }
   });
 
-  it("treats a foreign-copy write lock contention error as writer-lock-held", async () => {
+  it("runs the pre-open hook under the writer before store effects and releases on failure", async () => {
+    const successful = injected();
+    await expect(runCoachDevWriter({
+      env: {},
+      writerVersion: "generic-operation/1",
+      beforeStoreOpen: async (home) => {
+        expect(home).toBe(successful.home);
+        successful.calls.push("pre-open");
+      },
+      operation: async () => {
+        successful.calls.push("operation");
+        return "done";
+      },
+    }, successful.deps)).resolves.toEqual({ status: "completed", value: "done" });
+    expect(successful.calls).toEqual([
+      "resolve",
+      "acquire",
+      "pre-open",
+      "mkdir",
+      "chmod",
+      "open",
+      "migrate",
+      "operation",
+      "close",
+      "release",
+    ]);
+
+    const failure = { kind: "pre-open" };
+    const failed = injected();
+    const result = await runCoachDevWriter({
+      env: {},
+      writerVersion: "generic-operation/1",
+      beforeStoreOpen: async () => {
+        failed.calls.push("pre-open");
+        throw failure;
+      },
+      operation: async () => {
+        failed.calls.push("operation");
+        return null;
+      },
+    }, failed.deps);
+    expect(result).toEqual({ status: "failed", stage: "run pre-open operation" });
+    expect(result.status === "failed" && result.cause).toBe(failure);
+    expect(failed.calls).toEqual(["resolve", "acquire", "pre-open", "release"]);
+  });
+
+  it("requires typed diagnostics from a foreign-copy contention error", async () => {
     const foreign = new Error("write lock held by a healthy peer");
     foreign.name = "WriteLockContentionError";
     const scenario = injected({ fail: { acquire: foreign } });
@@ -795,8 +841,28 @@ describe("coach-dev import --report", () => {
       },
       scenario.deps,
     );
-    expect(result).toEqual({ status: "writer-lock-held" });
+    expect(result).toEqual({ status: "failed", stage: "acquire lock" });
+    expect(result.status === "failed" && result.cause).toBe(foreign);
     expect(scenario.calls).toEqual(["resolve", "acquire"]);
+
+    const typedForeign = new Error("foreign process") as Error & {
+      contention: { kind: "foreign"; port: number; portFile: string };
+    };
+    typedForeign.name = "WriteLockContentionError";
+    typedForeign.contention = {
+      kind: "foreign",
+      port: 4567,
+      portFile: "synthetic/config/store-writer.port",
+    };
+    const typedScenario = injected({ fail: { acquire: typedForeign } });
+    await expect(runCoachDevWriter({
+      env: {},
+      writerVersion: "generic-operation/1",
+      operation: async () => null,
+    }, typedScenario.deps)).resolves.toEqual({
+      status: "writer-lock-held",
+      contention: typedForeign.contention,
+    });
   });
 
   it("rejects a non-error lookalike named like the contention error", async () => {

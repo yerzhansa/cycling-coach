@@ -6,12 +6,30 @@ import { claimLockfile, readLockfile } from "./lockfile-body.js";
 import { readPortFile, writePortFile } from "./port-file.js";
 import { defaultHealthzProbe, isPortBound, type HealthzProbe } from "./healthz-probe.js";
 
+export type WriterContentionDiagnostic =
+  | {
+      readonly kind: "holder";
+      readonly pid: number | null;
+      readonly port: number;
+    }
+  | {
+      readonly kind: "foreign";
+      readonly port: number;
+      readonly portFile: string;
+    };
+
 export class WriteLockContentionError extends Error {
   readonly exitCode: number;
-  constructor(message: string, exitCode: number) {
+  readonly contention: WriterContentionDiagnostic | null;
+  constructor(
+    message: string,
+    exitCode: number,
+    contention: WriterContentionDiagnostic | null = null,
+  ) {
     super(message);
     this.name = "WriteLockContentionError";
     this.exitCode = exitCode;
+    this.contention = contention;
   }
 }
 
@@ -32,6 +50,7 @@ export interface WriteLockHandle {
 
 export interface PeerHealthyOutcome {
   readonly status: "peer-healthy";
+  readonly pid: number | null;
   readonly port: number;
   readonly peerVersion: string;
 }
@@ -85,17 +104,24 @@ async function contentionAgainstBound(
 ): Promise<PeerHealthyOutcome> {
   const verdict = await probe(boundPort);
   if (verdict.kind === "healthy") {
-    return { status: "peer-healthy", port: boundPort, peerVersion: verdict.version };
+    return {
+      status: "peer-healthy",
+      pid: bodyPid ?? null,
+      port: boundPort,
+      peerVersion: verdict.version,
+    };
   }
   if (verdict.kind === "unresponsive") {
     throw new WriteLockContentionError(
       `Another writer already holds this store (pid ${bodyPid ?? "unknown"}); stop that process or wait, then retry.`,
       3,
+      { kind: "holder", pid: bodyPid ?? null, port: boundPort },
     );
   }
   throw new WriteLockContentionError(
     `127.0.0.1:${boundPort} is held by a foreign process; change or remove the port file at ${portFilePath} and retry.`,
     3,
+    { kind: "foreign", port: boundPort, portFile: portFilePath },
   );
 }
 
