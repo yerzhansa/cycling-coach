@@ -104,6 +104,9 @@ importers:
         specifier: ^2.8.3
         version: 2.8.3
     devDependencies:
+      '@enduragent/coach-client':
+        specifier: workspace:*
+        version: link:../coach-client
       '@types/node':
         specifier: ^25.6.0
         version: 25.6.0
@@ -122,6 +125,9 @@ importers:
 
   packages/coach-cli:
     dependencies:
+      '@enduragent/coach-client':
+        specifier: workspace:*
+        version: link:../coach-client
       '@enduragent/coach-contract':
         specifier: workspace:*
         version: link:../coach-contract

@@ -19,6 +19,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@enduragent/coach-client": "workspace:*",
     "@enduragent/coach-contract": "workspace:*"
   },
   "devDependencies": {

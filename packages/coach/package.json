@@ -47,6 +47,7 @@
     "yaml": "^2.8.3"
   },
   "devDependencies": {
+    "@enduragent/coach-client": "workspace:*",
     "@types/node": "^25.6.0",
     "@types/ws": "^8.18.1",
     "tsup": "^8.4.0",

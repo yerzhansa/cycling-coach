@@ -142,7 +142,10 @@ describe("cycling prescription posture", () => {
   it("keeps the posture once in the stable prompt prefix below the token ceiling", () => {
     const emptyMemory = { getContext: () => "" } as Parameters<typeof buildSystemPrompt>[1];
     const prompt = buildSystemPrompt(cyclingSport, emptyMemory);
-    const { prefix, volatile } = splitSystemPromptAtBoundary(prompt);
+    const blocks = splitSystemPromptAtBoundary(prompt);
+    expect(blocks).toBeDefined();
+    if (blocks === undefined) throw new TypeError("missing system prompt cache boundary");
+    const { prefix, volatile } = blocks;
     expect(prefix.match(/## Skill: cycling-prescription-posture/g)).toHaveLength(1);
     expect(volatile.match(/## Skill: cycling-prescription-posture/g)).toBeNull();
     expect(estimateTokens(prompt)).toBeLessThan(13_000);
