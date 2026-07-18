@@ -103,8 +103,7 @@ function settingCandidate(row: Readonly<Record<string, unknown>>): SettingCandid
     || row.types.some((type) => typeof type !== "string" || type.length === 0)
     || typeof row.updated !== "string" || row.updated.length === 0) throw new ProjectionError();
   const updatedMs = Date.parse(row.updated);
-  if (!Number.isFinite(updatedMs) || updatedMs < 0 || updatedMs % 1_000 !== 0
-    || !Number.isSafeInteger(updatedMs / 1_000)) throw new ProjectionError();
+  if (!Number.isFinite(updatedMs) || updatedMs < 0 || !Number.isSafeInteger(updatedMs)) throw new ProjectionError();
   return { row, id: row.id, athleteId: row.athlete_id, updatedMs };
 }
 

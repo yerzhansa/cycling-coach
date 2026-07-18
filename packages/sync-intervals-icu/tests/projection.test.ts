@@ -56,9 +56,9 @@ function record(
     snapshot, store_evidence: { artifact_key: artifactKey, current_revision: currentRevision } };
 }
 
-function fixture(): Fixture {
+function fixture(rows: typeof settingsRows = settingsRows): Fixture {
   const endpointRefs = [ref(1), ref(2), ref(3), ref(40)];
-  const settingRecords = settingsRows.map((row, index) => record(index, 0, index, settingExternal(row), ref(10 + index),
+  const settingRecords = rows.map((row, index) => record(index, 0, index, settingExternal(row), ref(10 + index),
     hex(200 + index), revision(300 + index)));
   const activityRecords = [
     record(0, 1, 0, "a", ref(20), hex(220), revision(320)),
@@ -101,7 +101,7 @@ function fixture(): Fixture {
   });
   const values = new Map<string, unknown>();
   for (const endpoint of manifest.endpoints) values.set(endpoint.snapshot.address, { verified: endpoint.ordinal });
-  manifest.records.settings.forEach((item, index) => values.set(item.snapshot.address, settingsRows[index]));
+  manifest.records.settings.forEach((item, index) => values.set(item.snapshot.address, rows[index]));
   manifest.records.activities.forEach((item, index) => values.set(item.snapshot.address, activityRows[index]));
   manifest.records.wellness.forEach((item, index) => values.set(item.snapshot.address, wellnessRows[index]));
   values.set(manifest.records.streams[0]!.snapshot.address, { time: [0, 1], dfaA1: [0.8, 0.7] });
@@ -133,7 +133,7 @@ function fixture(): Fixture {
   }));
   const evidence: LocalBundleSelectedEvidence = {
     activities: [...activityEvidence].reverse(),
-    settings: generic(manifest.records.settings, settingsRows, "settings").reverse(),
+    settings: generic(manifest.records.settings, rows, "settings").reverse(),
     wellness: [...wellnessEvidence, { ...wellnessEvidence[0]!, artifact_key: hex(999), external_id: "1998-06-04" }].reverse(),
     streams: generic(manifest.records.streams, [{ time: [0, 1], dfa_a1: [0.8, 0.7] }], "streams"),
   };
@@ -208,6 +208,17 @@ describe("local bundle projection", () => {
       await expect(decodeLocalBundleProjection(input.manifest, input.evidence, input.reader)).rejects.toThrow("settings source evidence mismatch");
     });
   }
+
+  it("selects the greatest millisecond instant in settings supersession", async () => {
+    const rows = [
+      { id: 1, athlete_id: "synthetic", types: ["a"], updated: "1998-06-04T00:00:00.500Z" },
+      { id: 1, athlete_id: "synthetic", types: ["b"], updated: "1998-06-04T00:00:00.000Z" },
+    ];
+    const input = fixture(rows);
+    const bundle = await decodeLocalBundleProjection(input.manifest, input.evidence, input.reader);
+    expect(bundle.athlete!.sportSettings.map((row) => ({ id: row.id, types: row.types })))
+      .toEqual([{ id: 1, types: ["a"] }]);
+  });
 
   it("reports invalid setting candidates as PROJECTION_FAILED", async () => {
     const input = fixture();
