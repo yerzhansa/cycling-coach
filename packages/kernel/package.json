@@ -21,6 +21,7 @@
     "./reference/preserve-tokens": "./dist/reference/preserve-tokens.js",
     "./reference/errors": "./dist/reference/errors.js",
     "./reference/trademark-policy": "./dist/reference/trademark-policy.js",
+    "./reference/capture": "./dist/reference/capture.js",
     "./concurrency": "./dist/concurrency.js"
   },
   "scripts": {

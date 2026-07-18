@@ -2,6 +2,11 @@ import type { ArchiveManager } from "@enduragent/kernel/archive";
 import type { PlatformImportArtifact } from "@enduragent/kernel/ingest";
 import type { ClockPort, HttpPort } from "@enduragent/kernel/ports";
 import type {
+  DerivedCaptureMembers,
+  ReferenceCaptureEndpointPayload,
+  ReferenceCapturePlan,
+} from "@enduragent/kernel/reference/capture";
+import type {
   AnchorHistoryRow,
   WellnessLandingRow,
   ZoneSetHistoryRow,
@@ -75,4 +80,55 @@ export interface IntervalsIcuSource extends SyncSource {
   readonly id: "intervals-icu";
   readonly capabilities: typeof INTERVALS_ICU_CAPABILITIES;
   pull(watermark: SourceWatermark, budget: SyncBudget): AsyncIterable<IntervalsIcuArtifact>;
+}
+
+export interface IntervalsIcuCaptureSource extends IntervalsIcuSource {
+  captureReference(now: Date, budget: SyncBudget): Promise<ReferenceCaptureBatch>;
+  deriveReferenceCaptureMembers(
+    plan: ReferenceCapturePlan,
+    endpointPayloads: readonly ReferenceCaptureEndpointPayload[],
+  ): Promise<DerivedCaptureMembers>;
+}
+
+export interface ReferenceCaptureEndpoint extends ReferenceCaptureEndpointPayload {
+  readonly archiveInstant: { readonly epochSeconds: number };
+  readonly archive: { readonly address: string; readonly relPath: string; readonly deduped: boolean };
+}
+
+interface ReferenceCaptureRecordBase {
+  readonly endpointOrdinal: number;
+  readonly payloadIndex: number | null;
+  readonly externalId: string;
+  readonly payload: unknown;
+  readonly archiveInstant: { readonly epochSeconds: number };
+  readonly archive: { readonly address: string; readonly relPath: string; readonly deduped: boolean };
+}
+
+export interface ReferenceCaptureSettingsRecord extends ReferenceCaptureRecordBase {
+  readonly landing: { readonly kind: "settings"; readonly sourceRecordExternalId: string; readonly normalizedPayloadJson: string; readonly anchors: readonly AnchorHistoryRow[]; readonly zones: readonly ZoneSetHistoryRow[] };
+}
+
+export interface ReferenceCaptureActivityRecord extends ReferenceCaptureRecordBase {
+  readonly landing: { readonly kind: "activity"; readonly platform: PlatformImportArtifact };
+}
+
+export interface ReferenceCaptureWellnessRecord extends ReferenceCaptureRecordBase {
+  readonly landing: { readonly kind: "wellness"; readonly row: WellnessLandingRow };
+}
+
+export interface ReferenceCaptureStreamRecord extends ReferenceCaptureRecordBase {
+  readonly landing: { readonly kind: "streams"; readonly sourceRecordExternalId: string; readonly normalizedPayloadJson: string };
+}
+
+export interface ReferenceCaptureBatch {
+  readonly plan: ReferenceCapturePlan;
+  readonly endpoints: readonly ReferenceCaptureEndpoint[];
+  readonly records: {
+    readonly settings: readonly ReferenceCaptureSettingsRecord[];
+    readonly activities: readonly ReferenceCaptureActivityRecord[];
+    readonly wellness: readonly ReferenceCaptureWellnessRecord[];
+    readonly streams: readonly ReferenceCaptureStreamRecord[];
+  };
+  readonly selected_stream_ids: readonly string[];
+  readonly captured_stream_ids: readonly string[];
 }

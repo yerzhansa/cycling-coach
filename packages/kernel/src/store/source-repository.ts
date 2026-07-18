@@ -83,6 +83,7 @@ export function createSourceRecordRepository(store: SqlStore): SourceRecordRepos
 
 type HashKey = (fields: readonly (string | number)[]) => Promise<string>;
 const HEX = /^[0-9a-f]{64}$/;
+const SNAPSHOT_PATH = /^[0-9]{4}\/[0-9]{2}\/[0-9a-f]{64}\.json\.gz$/;
 
 function nonempty(value: unknown, name: string): asserts value is string {
   if (typeof value !== "string" || value.length === 0) throw new TypeError(`${name} is invalid`);
@@ -90,6 +91,11 @@ function nonempty(value: unknown, name: string): asserts value is string {
 
 function address(value: unknown, name: string): asserts value is string {
   if (typeof value !== "string" || !HEX.test(value)) throw new TypeError(`${name} is invalid`);
+}
+
+function snapshotPath(value: unknown, expectedAddress: string, name: string): asserts value is string {
+  if (typeof value !== "string" || !SNAPSHOT_PATH.test(value)
+    || value.split("/").at(-1) !== `${expectedAddress}.json.gz`) throw new TypeError(`${name} is invalid`);
 }
 
 function epoch(value: unknown, name: string): asserts value is number {
@@ -381,5 +387,82 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING RETURNING id`, [row.id, ro
     return inserted !== undefined;
   }
 
-  return { recordArtifact, recordGenericLanding, applyActivityRevision, upsertWellness, insertSyncedAnchor, insertSyncedZone };
+  async function readCurrentCaptureEvidence(
+    lane: "activities" | "settings" | "streams",
+    externalId: string,
+  ): Promise<{ artifactKey: string; archiveAddress: string; archiveRelPath: string; sourceRecordId: string; revisionId: string }> {
+    if (!["activities", "settings", "streams"].includes(lane)) throw new TypeError("capture evidence lane is invalid");
+    nonempty(externalId, "capture evidence external id");
+    const rows = await store.all(`SELECT
+  a.artifact_key, a.archive_address, a.archive_rel_path,
+  r.source_record_id, r.revision_id
+FROM source_record_current AS c
+JOIN source_record_revision AS r
+  ON r.source_record_id = c.source_record_id AND r.revision_id = c.revision_id
+JOIN source_record AS sr ON sr.id = r.source_record_id
+JOIN source_artifact AS a ON a.artifact_key = r.artifact_key
+WHERE sr.source = 'intervals-icu' AND sr.external_id = ?
+  AND a.source = 'intervals-icu' AND a.lane = ? AND a.external_id = ?`, [externalId, lane, externalId]);
+    if (rows.length !== 1) throw new Error("current capture evidence is absent or ambiguous");
+    const row = rows[0]!;
+    address(row.artifact_key, "capture artifact key");
+    address(row.archive_address, "capture archive address");
+    snapshotPath(row.archive_rel_path, row.archive_address, "capture archive path");
+    address(row.source_record_id, "capture source record id");
+    address(row.revision_id, "capture revision id");
+    return { artifactKey: row.artifact_key, archiveAddress: row.archive_address,
+      archiveRelPath: row.archive_rel_path, sourceRecordId: row.source_record_id, revisionId: row.revision_id };
+  }
+
+  async function assertPinnedCaptureEvidence(input: {
+    lane: "activities" | "settings" | "streams" | "wellness";
+    externalId: string;
+    artifactKey: string;
+    archiveAddress: string;
+    archiveRelPath: string;
+    currentRevision: { sourceRecordId: string; revisionId: string } | null;
+  }): Promise<void> {
+    if (input === null || typeof input !== "object"
+      || !["activities", "settings", "streams", "wellness"].includes(input.lane)) {
+      throw new TypeError("pinned capture evidence is invalid");
+    }
+    nonempty(input.externalId, "pinned capture external id");
+    address(input.artifactKey, "pinned capture artifact key");
+    address(input.archiveAddress, "pinned capture archive address");
+    snapshotPath(input.archiveRelPath, input.archiveAddress, "pinned capture archive path");
+    const artifact = await store.get(`SELECT artifact_key, source, lane, external_id, artifact_kind,
+       archive_address, archive_rel_path
+FROM source_artifact WHERE artifact_key = ?`, [input.artifactKey]);
+    exactRow(artifact, { artifact_key: input.artifactKey, source: "intervals-icu", lane: input.lane,
+      external_id: input.externalId, artifact_kind: "snapshot", archive_address: input.archiveAddress,
+      archive_rel_path: input.archiveRelPath }, "pinned capture artifact mismatch");
+    if (input.lane === "wellness") {
+      if (input.currentRevision !== null) throw new TypeError("wellness capture revision must be null");
+      const attached = await store.get("SELECT id FROM source_record WHERE artifact_key = ?", [input.artifactKey]);
+      if (attached !== undefined) throw new Error("wellness capture artifact has a source record");
+      return;
+    }
+    if (input.currentRevision === null) throw new TypeError("pinned capture revision is absent");
+    address(input.currentRevision.sourceRecordId, "pinned source record id");
+    address(input.currentRevision.revisionId, "pinned revision id");
+    const revision = await store.get(`SELECT
+  r.source_record_id, r.revision_id, r.artifact_key,
+  sr.source, sr.external_id,
+  a.source AS artifact_source, a.lane, a.external_id AS artifact_external_id,
+  a.artifact_kind, a.archive_address, a.archive_rel_path
+FROM source_record_revision AS r
+JOIN source_record AS sr ON sr.id = r.source_record_id
+JOIN source_artifact AS a ON a.artifact_key = r.artifact_key
+WHERE r.source_record_id = ? AND r.revision_id = ?`,
+    [input.currentRevision.sourceRecordId, input.currentRevision.revisionId]);
+    exactRow(revision, { source_record_id: input.currentRevision.sourceRecordId,
+      revision_id: input.currentRevision.revisionId, artifact_key: input.artifactKey,
+      source: "intervals-icu", external_id: input.externalId, artifact_source: "intervals-icu",
+      lane: input.lane, artifact_external_id: input.externalId, artifact_kind: "snapshot",
+      archive_address: input.archiveAddress, archive_rel_path: input.archiveRelPath },
+    "pinned capture revision mismatch");
+  }
+
+  return { recordArtifact, recordGenericLanding, applyActivityRevision, upsertWellness, insertSyncedAnchor,
+    insertSyncedZone, readCurrentCaptureEvidence, assertPinnedCaptureEvidence };
 }

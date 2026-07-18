@@ -160,6 +160,24 @@ export interface IntervalsSourceRepository {
   upsertWellness(row: WellnessLandingRow): Promise<"inserted" | "updated" | "unchanged" | "manual-wins">;
   insertSyncedAnchor(row: AnchorHistoryRow): Promise<boolean>;
   insertSyncedZone(row: ZoneSetHistoryRow): Promise<boolean>;
+  readCurrentCaptureEvidence(
+    lane: "activities" | "settings" | "streams",
+    externalId: string,
+  ): Promise<{
+    readonly artifactKey: string;
+    readonly archiveAddress: string;
+    readonly archiveRelPath: string;
+    readonly sourceRecordId: string;
+    readonly revisionId: string;
+  }>;
+  assertPinnedCaptureEvidence(input: {
+    readonly lane: "activities" | "settings" | "streams" | "wellness";
+    readonly externalId: string;
+    readonly artifactKey: string;
+    readonly archiveAddress: string;
+    readonly archiveRelPath: string;
+    readonly currentRevision: { readonly sourceRecordId: string; readonly revisionId: string } | null;
+  }): Promise<void>;
 }
 
 export interface DedupConfirmationRow {

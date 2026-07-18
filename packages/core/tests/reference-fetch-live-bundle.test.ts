@@ -126,6 +126,16 @@ describe("fetchLiveBundle", () => {
     expect(res.bundle.activities).toHaveLength(activities.length);
   });
 
+  it("preserves encounter order for equal stream instants instead of external-ID order", async () => {
+    const instant = daysAgo(1);
+    const { client, streamCalls } = fakeClient({ activities: [
+      camelActivity({ id: 90, startDateLocal: instant }),
+      camelActivity({ id: 10, startDateLocal: instant }),
+    ] });
+    await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0 });
+    expect(streamCalls).toEqual(["90", "10"]);
+  });
+
   it("is best-effort: a failed stream fetch is skipped, others kept", async () => {
     const activities = [
       camelActivity({ id: 1, startDateLocal: daysAgo(1) }),

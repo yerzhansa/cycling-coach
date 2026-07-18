@@ -59,7 +59,7 @@ export interface SetRepairFixerEnabledOptions {
   readonly store: SqlStore & Pick<MigratorStore, "transaction">;
 }
 
-function nodeCrypto(): CryptoPort {
+export function createNodeCrypto(): CryptoPort {
   const subtle = globalThis.crypto.subtle;
   const toBufferSource = (view: Uint8Array): Uint8Array<ArrayBuffer> => {
     if (view.byteOffset === 0 && view.byteLength === view.buffer.byteLength && view.buffer instanceof ArrayBuffer) {
@@ -189,7 +189,7 @@ async function prepareFit(
 function createImportReportDeps(
   options: NodeImportRuntimeOptions,
 ): ImportReportDeps {
-  const crypto = nodeCrypto();
+  const crypto = createNodeCrypto();
   const fs = nodeFileSystem();
   const archive = createArchiveManager({ archiveRoot: options.archiveDir, crypto, fs });
   const hashKey = (fields: readonly (string | number)[]): Promise<string> => {
