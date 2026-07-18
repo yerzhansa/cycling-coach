@@ -2,6 +2,7 @@ import { stepCountIs } from "ai";
 import type { FinishReason, ModelMessage, Tool, ToolSet } from "ai";
 import { retryWithBackoff } from "@enduragent/kernel/concurrency";
 import type { ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
+import type { TurnEvent, TurnEventHandler } from "@enduragent/coach-contract";
 import type {
   ChatStorePort,
   EngineConfig,
@@ -129,10 +130,12 @@ interface TurnOutcome {
   compactions: number;
 }
 
+type ClassifiedTurnFailure = ReturnType<EngineHostPorts["classifyFailure"]> | "budget";
+
 function classifyError(
   err: unknown,
   classifyFailure: EngineHostPorts["classifyFailure"],
-): string {
+): ClassifiedTurnFailure {
   // TurnBudgetExceededError crosses a dynamic-import boundary in tests, so match
   // on the structural name rather than instanceof.
   if (err instanceof Error && err.name === "TurnBudgetExceededError") return "budget";
@@ -350,6 +353,7 @@ export class CoachAgent {
     messages: ModelMessage[],
     cacheKey: string,
     turnBudget: TurnBudget,
+    onTextDelta: (delta: string) => void,
   ): Promise<string> {
     if (!isStepExhaustedEmpty(text, finishReason)) return text;
     // Charge OUTSIDE the recovery try/catch: a TurnBudgetExceededError is
@@ -364,6 +368,7 @@ export class CoachAgent {
         caller: "chat",
         cacheKey,
         deadlineMs: turnBudget.remainingMs(),
+        onTextDelta,
       });
       return recovery.text.trim() !== "" ? recovery.text : STEP_LIMIT_TRUNCATION_MESSAGE;
     } catch (recoveryErr) {
@@ -397,6 +402,7 @@ export class CoachAgent {
     chatId: string,
     userMessage: string,
     turn?: { resolvedCs?: ResolvedCs | null },
+    onEvent?: TurnEventHandler,
   ): Promise<string> {
     // One explicit context per turn, created synchronously before the session
     // lock is queued so rapid same-chat sends can never share turn state. Tool
@@ -407,6 +413,13 @@ export class CoachAgent {
     return withSessionLock(chatId, async () => {
       const turnStart = this.ports.now();
       const turnId = this.ports.randomId();
+      const emitEvent = (event: TurnEvent): void => {
+        try {
+          onEvent?.(event);
+        } catch {
+          return;
+        }
+      };
       let compactions = 0;
       const turnBudget = createTurnBudget(this.ports.now);
       // One flush per turn: the latch flips on entry (before the await
@@ -547,6 +560,7 @@ export class CoachAgent {
       let plainTimeoutAttempts = 0;
       let rateLimitAttempts = 0;
       let serverErrorAttempts = 0;
+      let classifiedTerminalFailure: ClassifiedTurnFailure | undefined;
 
       // Loop-invariant: the prompt cache key derives only from the chat id.
       const cacheKey = sha256_16(chatId);
@@ -574,6 +588,13 @@ export class CoachAgent {
             this.memory.reload();
           }
 
+          let attemptObservedText = false;
+          classifiedTerminalFailure = undefined;
+          const onAttemptTextDelta = (delta: string): void => {
+            attemptObservedText = true;
+            emitEvent({ type: "text_delta", turnId, delta });
+          };
+
           try {
             turnBudget.chargeModelCall();
             const result = await this.llm.generate({
@@ -588,6 +609,7 @@ export class CoachAgent {
               // Cap this call by the turn's remaining wall-clock budget so a retry
               // after an early timeout inherits only the time the turn has left.
               deadlineMs: turnBudget.remainingMs(),
+              onTextDelta: onAttemptTextDelta,
             });
             const { text, finishReason } = result;
 
@@ -598,6 +620,7 @@ export class CoachAgent {
               messages,
               cacheKey,
               turnBudget,
+              onAttemptTextDelta,
             );
 
             const templateHash = (this.templateHash ??= computeTemplateHash({
@@ -654,7 +677,9 @@ export class CoachAgent {
               compactions,
             });
 
-            return effectiveText + persistenceNote;
+            const responseText = effectiveText + persistenceNote;
+            emitEvent({ type: "final-text", turnId, text: responseText });
+            return responseText;
           } catch (err) {
             // The classified budget error is terminal: re-throw it before any
             // retry branch so a future reordering can never mistake it for one of
@@ -664,6 +689,7 @@ export class CoachAgent {
             // would re-send the pre-turn messages and could re-run the write.
             const committedWrites = ctx.turnWrites;
             if (committedWrites.writesCommitted > 0) {
+              const failure = classifyError(err, this.ports.classifyFailure);
               console.warn(
                 JSON.stringify({
                   event: "turn_failed_after_write",
@@ -676,17 +702,32 @@ export class CoachAgent {
                 turnId,
                 chatId,
                 ok: false,
-                error_class: classifyError(err, this.ports.classifyFailure),
+                error_class: failure,
                 overflowAttempts,
                 timeoutAttempts,
                 rateLimitAttempts,
                 duration_ms: this.ports.now() - turnStart,
                 compactions,
               });
+              emitEvent(
+                this.createErrorEvent({
+                  failure,
+                  turnId,
+                  chatId,
+                  overflowAttempts,
+                  timeoutAttempts,
+                  rateLimitAttempts,
+                  durationMs: this.ports.now() - turnStart,
+                  compactions,
+                }),
+              );
+              emitEvent({ type: "final-text", turnId, text: TAINTED_BY_WRITES_MESSAGE });
               return TAINTED_BY_WRITES_MESSAGE;
             }
+            if (attemptObservedText) throw err;
+            const failure = this.ports.classifyFailure(err);
             // Reactive: context overflow → flush + compact + retry
-            if (this.ports.classifyFailure(err) === "overflow" && overflowAttempts < MAX_OVERFLOW_ATTEMPTS) {
+            if (failure === "overflow" && overflowAttempts < MAX_OVERFLOW_ATTEMPTS) {
               overflowAttempts++;
               try {
                 if (!flushedThisTurn) {
@@ -705,12 +746,13 @@ export class CoachAgent {
                 if (err instanceof Error && err.cause === undefined) {
                   (err as Error & { cause?: unknown }).cause = rescueErr;
                 }
+                classifiedTerminalFailure = failure;
                 throw err;
               }
               continue;
             }
             // Timeout with high context usage → compact + retry (no flush)
-            if (this.ports.classifyFailure(err) === "timeout" && timeoutAttempts < MAX_TIMEOUT_ATTEMPTS) {
+            if (failure === "timeout" && timeoutAttempts < MAX_TIMEOUT_ATTEMPTS) {
               const ratio = estimateMessagesTokens(messages) / this.config.contextWindowTokens;
               if (ratio > TIMEOUT_COMPACTION_THRESHOLD) {
                 timeoutAttempts++;
@@ -723,6 +765,7 @@ export class CoachAgent {
                   if (err instanceof Error && err.cause === undefined) {
                     (err as Error & { cause?: unknown }).cause = rescueErr;
                   }
+                  classifiedTerminalFailure = failure;
                   throw err;
                 }
                 continue;
@@ -734,7 +777,7 @@ export class CoachAgent {
               }
             }
             // Rate limit → backoff (respect retry-after) + retry
-            if (this.ports.classifyFailure(err) === "rate_limit" && rateLimitAttempts < MAX_RATE_LIMIT_ATTEMPTS) {
+            if (failure === "rate_limit" && rateLimitAttempts < MAX_RATE_LIMIT_ATTEMPTS) {
               rateLimitAttempts++;
               const attemptNo = rateLimitAttempts;
               // The server hint (if any) is a lower bound; absent one, fall back to a
@@ -769,7 +812,6 @@ export class CoachAgent {
             // The residual class: only fires when overflow/timeout/rate_limit did
             // not match, so a single 502 or connection blip no longer kills the
             // turn on attempt 1 and discards paid multi-step tool work.
-            const failure = this.ports.classifyFailure(err);
             // A codex network throw is surfaced as a single attempt and tagged
             // NetworkError by the bridge's normalizeError. We deliberately cap the
             // codex network class at zero outer retries to keep it at exactly one
@@ -796,26 +838,95 @@ export class CoachAgent {
               continue;
             }
             // Rate limit retries exhausted → throw to caller (skip compaction — API is rate limited)
+            classifiedTerminalFailure = failure;
             throw err;
           }
         }
       } catch (terminalErr) {
+        const failure =
+          classifiedTerminalFailure ?? classifyError(terminalErr, this.ports.classifyFailure);
         // Single failure-emit point: every terminal throw out of the loop is one
         // failed turn, so the outcome line fires exactly once before the rethrow.
         this.emitTurnOutcome({
           turnId,
           chatId,
           ok: false,
-          error_class: classifyError(terminalErr, this.ports.classifyFailure),
+          error_class: failure,
           overflowAttempts,
           timeoutAttempts,
           rateLimitAttempts,
           duration_ms: this.ports.now() - turnStart,
           compactions,
         });
+        emitEvent(
+          this.createErrorEvent({
+            failure,
+            turnId,
+            chatId,
+            overflowAttempts,
+            timeoutAttempts,
+            rateLimitAttempts,
+            durationMs: this.ports.now() - turnStart,
+            compactions,
+          }),
+        );
         throw terminalErr;
       }
     });
+  }
+
+  private createErrorEvent(input: {
+    failure: ClassifiedTurnFailure;
+    turnId: string;
+    chatId: string;
+    overflowAttempts: number;
+    timeoutAttempts: number;
+    rateLimitAttempts: number;
+    durationMs: number;
+    compactions: number;
+  }): Extract<TurnEvent, { type: "error" }> {
+    const failure = input.failure;
+    const errorClass =
+      failure === "budget" ||
+      failure === "overflow" ||
+      failure === "timeout" ||
+      failure === "rate_limit"
+        ? failure
+        : "unknown";
+    const presentation =
+      failure === "rate_limit"
+        ? {
+            kind: "rate_limit" as const,
+            athleteMessage: "Rate limited — please try again shortly.",
+          }
+        : failure === "auth"
+          ? {
+              kind: "provider-auth" as const,
+              athleteMessage:
+                "The model provider rejected the API key — check your provider credentials.",
+            }
+          : failure === "server_error" || failure === "network" || failure === "timeout"
+            ? {
+                kind: "provider-down" as const,
+                athleteMessage:
+                  "The model provider is having trouble — try again in a few minutes.",
+              }
+            : {
+                kind: "unknown" as const,
+                athleteMessage: "Sorry, something went wrong. Please try again.",
+              };
+    return {
+      type: "error",
+      turnId: input.turnId,
+      chatId: input.chatId,
+      error_class: errorClass,
+      ...presentation,
+      overflowAttempts: input.overflowAttempts,
+      timeoutAttempts: input.timeoutAttempts,
+      rateLimitAttempts: input.rateLimitAttempts,
+      duration_ms: input.durationMs,
+      compactions: input.compactions,
+    };
   }
 
   hasSession(chatId: string): boolean {

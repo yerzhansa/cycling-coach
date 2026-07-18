@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { APICallError } from "@ai-sdk/provider";
 import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,13 +46,13 @@ async function setupCodexAgent(complete: ReturnType<typeof vi.fn>) {
   return new CoachAgent(cyclingSport as unknown as Sport, baseAgentConfig(dataDir));
 }
 
-// Drives the AI-SDK path (anthropic provider): the `ai` generateText call is
+// Drives the AI-SDK path (anthropic provider): the `ai` streamText call is
 // mocked. Network errors on this path are plain (not name="NetworkError"), so the
 // outer loop retries them — unlike the codex path.
-async function setupAiSdkAgent(generateText: ReturnType<typeof vi.fn>) {
+async function setupAiSdkAgent(streamText: ReturnType<typeof vi.fn>) {
   vi.doMock("ai", async () => {
     const actual = await vi.importActual<typeof import("ai")>("ai");
-    return { ...actual, generateText };
+    return { ...actual, streamText };
   });
   const { CoachAgent } = await import("../src/agent/coach-agent.js");
   const ports = baseAgentConfig(dataDir);
@@ -77,23 +76,34 @@ function mkAssistant(text: string) {
 }
 
 function aiSdkResult(text: string) {
+  const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   return {
-    text,
-    toolCalls: [],
-    finishReason: "stop",
-    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-    totalUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-    steps: [{}],
+    fullStream: (async function* () {
+      if (text !== "") yield { type: "text-delta", id: "text-1", text };
+      yield { type: "finish", finishReason: "stop", rawFinishReason: "stop", totalUsage: usage };
+    })(),
+    text: Promise.resolve(text),
+    toolCalls: Promise.resolve([]),
+    finishReason: Promise.resolve("stop"),
+    usage: Promise.resolve(usage),
+    totalUsage: Promise.resolve(usage),
+    steps: Promise.resolve([{}]),
   };
 }
 
-function apiError(statusCode: number): APICallError {
-  return new APICallError({
-    message: "server error",
-    url: "https://chatgpt.com/backend-api",
-    requestBodyValues: {},
-    statusCode,
-  });
+function failingAiSdkResult(error: unknown) {
+  return {
+    ...aiSdkResult(""),
+    fullStream: {
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => {
+            throw error;
+          },
+        };
+      },
+    },
+  };
 }
 
 describe("provider error taxonomy", () => {
@@ -101,7 +111,7 @@ describe("provider error taxonomy", () => {
     let n = 0;
     const complete = vi.fn(async () => {
       n++;
-      if (n === 1) throw apiError(502);
+      if (n === 1) throw Object.assign(new Error("server error"), { name: "ServerError" });
       return mkAssistant("recovered-502");
     });
 
@@ -118,24 +128,25 @@ describe("provider error taxonomy", () => {
 
   it("recovers an AI-SDK network error (ECONNREFUSED on .cause) in two attempts", async () => {
     let n = 0;
-    const generateText = vi.fn(async () => {
+    const streamText = vi.fn((_request: { maxRetries?: number }) => {
       n++;
       if (n === 1) {
         const e = new TypeError("fetch failed");
         (e as Error & { cause?: unknown }).cause = { code: "ECONNREFUSED" };
-        throw e;
+        return failingAiSdkResult(e);
       }
       return aiSdkResult("recovered-network");
     });
 
     vi.useFakeTimers();
-    const agent = await setupAiSdkAgent(generateText);
+    const agent = await setupAiSdkAgent(streamText);
     const chatPromise = agent.chat("taxonomy-network", "hello");
     await vi.advanceTimersByTimeAsync(10_000);
     const text = await chatPromise;
 
     expect(text).toBe("recovered-network");
-    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(streamText).toHaveBeenCalledTimes(2);
+    expect(streamText.mock.calls.every(([request]) => request.maxRetries === 0)).toBe(true);
     vi.useRealTimers();
   });
 

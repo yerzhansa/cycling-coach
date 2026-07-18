@@ -145,6 +145,62 @@ describe("coach engine adapter", () => {
     await expect(malformed.chat({ chatId: "x", message: "x" })).rejects.toThrow();
   });
 
+  it("validates every text_delta before advisory delivery and latches malformed deltas", async () => {
+    const received: TurnEvent[] = [];
+    const valid = createCoachEngineAdapter({
+      backend: backend({
+        chat: async (_request, onEvent) => {
+          onEvent?.({ type: "text_delta", turnId: "turn-1", delta: "one" });
+          onEvent?.({ type: "text_delta", turnId: "turn-1", delta: " two" });
+          return { text: "one two" };
+        },
+      }),
+      getAthleteState: async () => state,
+      cyclingFtpAnchorResolver: resolver().value,
+      now: () => 0,
+    });
+    await expect(
+      valid.chat({ chatId: "x", message: "x" }, (event) => received.push(event)),
+    ).resolves.toEqual({ text: "one two" });
+    expect(received).toEqual([
+      { type: "text_delta", turnId: "turn-1", delta: "one" },
+      { type: "text_delta", turnId: "turn-1", delta: " two" },
+    ]);
+
+    const malformedDelta = {
+      type: "text_delta",
+      turnId: "turn-1",
+      delta: 1,
+      extra: true,
+    } as unknown as TurnEvent;
+    const malformed = createCoachEngineAdapter({
+      backend: backend({
+        chat: async (_request, onEvent) => {
+          expect(() => onEvent?.(malformedDelta)).not.toThrow();
+          return { text: "ok" };
+        },
+      }),
+      getAthleteState: async () => state,
+      cyclingFtpAnchorResolver: resolver().value,
+      now: () => 0,
+    });
+    await expect(malformed.chat({ chatId: "x", message: "x" })).rejects.toThrow();
+
+    const backendError = new Error("backend wins");
+    const precedence = createCoachEngineAdapter({
+      backend: backend({
+        chat: async (_request, onEvent) => {
+          onEvent?.(malformedDelta);
+          throw backendError;
+        },
+      }),
+      getAthleteState: async () => state,
+      cyclingFtpAnchorResolver: resolver().value,
+      now: () => 0,
+    });
+    await expect(precedence.chat({ chatId: "x", message: "x" })).rejects.toBe(backendError);
+  });
+
   it("strictly validates reset requests and responses", async () => {
     const resetSession = vi.fn<CoachEngine["resetSession"]>(async () => ({ memoryFlushed: true }));
     const engine = createCoachEngineAdapter({

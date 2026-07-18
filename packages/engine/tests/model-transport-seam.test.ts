@@ -43,13 +43,34 @@ function result(text: string) {
   };
 }
 
+function streamed(text: string) {
+  const completed = result(text);
+  return {
+    fullStream: (async function* () {
+      yield { type: "text-delta", id: "text-1", text };
+      yield {
+        type: "finish",
+        finishReason: completed.finishReason,
+        rawFinishReason: completed.finishReason,
+        totalUsage: completed.totalUsage,
+      };
+    })(),
+    text: Promise.resolve(completed.text),
+    toolCalls: Promise.resolve(completed.toolCalls),
+    finishReason: Promise.resolve(completed.finishReason),
+    usage: Promise.resolve(completed.usage),
+    totalUsage: Promise.resolve(completed.totalUsage),
+    steps: Promise.resolve([{}]),
+  };
+}
+
 async function loadLlm(
   decorator: ModelTransportDecorator,
-  generateText: ReturnType<typeof vi.fn>,
+  streamText: ReturnType<typeof vi.fn>,
 ): Promise<{ llm: import("../src/llm.js").LLM; usage: UsageLedgerLine[] }> {
   vi.doMock("ai", async () => {
     const actual = await vi.importActual<typeof import("ai")>("ai");
-    return { ...actual, generateText };
+    return { ...actual, streamText };
   });
   const { LLM } = await import("../src/llm.js");
   const usage: UsageLedgerLine[] = [];
@@ -74,7 +95,7 @@ afterEach(() => {
 
 describe("model transport decorator", () => {
   it("record mode delegates exactly once through the canonical request", async () => {
-    const sdkGenerate = vi.fn(async () => ({ ...result("recorded"), steps: [{}] }));
+    const sdkGenerate = vi.fn(() => streamed("recorded"));
     let delegated = 0;
     const decorator: ModelTransportDecorator = (next) => ({
       generate: async (request) => {
@@ -92,7 +113,7 @@ describe("model transport decorator", () => {
   });
 
   it("replay mode delegates zero times while the outer path appends one usage line", async () => {
-    const sdkGenerate = vi.fn(async () => ({ ...result("unexpected"), steps: [{}] }));
+    const sdkGenerate = vi.fn(() => streamed("unexpected"));
     const replay = result("replayed");
     const decorator: ModelTransportDecorator = () => ({
       generate: async () => replay,

@@ -77,6 +77,18 @@ async function runAiSdk(opts: Parameters<import("../src/llm.js").LLM["generate"]
       captured.called++;
       return MINIMAL_RESULT;
     }),
+    streamText: vi.fn((o: { abortSignal?: AbortSignal; maxRetries?: number; prompt?: string; messages?: unknown; experimental_context?: unknown }) => {
+      captured.abortSignal = o.abortSignal;
+      captured.maxRetries = o.maxRetries;
+      captured.prompt = o.prompt;
+      captured.messages = o.messages;
+      captured.experimentalContext = o.experimental_context;
+      captured.called++;
+      return streamedResult([
+        { type: "text-delta", id: "text-1", text: "ok" },
+        { type: "finish", finishReason: "stop", rawFinishReason: "stop", totalUsage: {} },
+      ], { text: "ok", steps: [] });
+    }),
     stepCountIs: vi.fn((count: number) => ({ type: "step-count", count })),
   }));
   vi.doMock("@ai-sdk/anthropic", () => ({
@@ -307,5 +319,198 @@ describe("LLM generate — timeout reclassification gated on our timer + abort s
     });
     const caught = await generateThrowing(wrapped);
     expect((caught as Error).name).toBe("TimeoutError");
+  });
+});
+
+function streamedResult(
+  parts: unknown[],
+  overrides: Partial<{
+    text: string;
+    toolCalls: unknown[];
+    finishReason: "stop";
+    usage: Record<string, number>;
+    totalUsage: Record<string, number>;
+    steps: unknown[];
+  }> = {},
+) {
+  const usage = overrides.usage ?? { inputTokens: 2, outputTokens: 1, totalTokens: 3 };
+  const totalUsage = overrides.totalUsage ?? {
+    inputTokens: 20,
+    outputTokens: 10,
+    totalTokens: 30,
+  };
+  return {
+    fullStream: (async function* () {
+      for (const part of parts) yield part;
+    })(),
+    text: Promise.resolve(overrides.text ?? "complete"),
+    toolCalls: Promise.resolve(overrides.toolCalls ?? []),
+    finishReason: Promise.resolve(overrides.finishReason ?? "stop"),
+    usage: Promise.resolve(usage),
+    totalUsage: Promise.resolve(totalUsage),
+    steps: Promise.resolve(overrides.steps ?? [{}, {}]),
+  };
+}
+
+async function loadStreamingLlm(parts: unknown[]) {
+  const generateText = vi.fn(async (_request: { maxRetries?: number }) => MINIMAL_RESULT);
+  const streamText = vi.fn((_request: { maxRetries?: number }) => streamedResult(parts));
+  vi.doMock("ai", () => ({
+    generateText,
+    streamText,
+    stepCountIs: vi.fn((count: number) => ({ type: "step-count", count })),
+  }));
+  vi.doMock("@ai-sdk/anthropic", () => ({
+    createAnthropic: () => () => ({ provider: "anthropic-stub" }),
+  }));
+  const { LLM } = await import("../src/llm.js");
+  return { llm: new LLM(anthropicConfig(), llmTestPorts()), generateText, streamText };
+}
+
+describe("LLM dispatch — streaming roles and part mapping", () => {
+  it("routes chat to streamText and background roles to generateText", async () => {
+    const { llm, generateText, streamText } = await loadStreamingLlm([
+      { type: "text-delta", id: "text-1", text: "complete" },
+      { type: "finish", finishReason: "stop", rawFinishReason: "stop", totalUsage: {} },
+    ]);
+    const chatDeltas: string[] = [];
+    await llm.generate({
+      messages: [{ role: "user", content: "chat" }],
+      caller: "chat",
+      onTextDelta: (delta) => chatDeltas.push(delta),
+    });
+    expect(chatDeltas).toEqual(["complete"]);
+    expect(streamText).toHaveBeenCalledOnce();
+    expect(generateText).not.toHaveBeenCalled();
+    expect(streamText.mock.calls[0][0].maxRetries).toBe(0);
+
+    for (const caller of ["flush", "compact", "sync-triage", "dream"] as const) {
+      const onTextDelta = vi.fn();
+      const onStreamActivity = vi.fn();
+      await llm.generate({
+        prompt: "background",
+        caller,
+        onTextDelta,
+        onStreamActivity,
+      });
+      expect(onTextDelta).not.toHaveBeenCalled();
+      expect(onStreamActivity).not.toHaveBeenCalled();
+    }
+    expect(generateText).toHaveBeenCalledTimes(4);
+    expect(streamText).toHaveBeenCalledOnce();
+    expect(generateText.mock.calls.every(([request]) => request.maxRetries === 0)).toBe(true);
+  });
+
+  it("maps every AI SDK stream part", async () => {
+    const providerError = new Error("provider stream error");
+    const activities: unknown[] = [];
+    const deltas: string[] = [];
+    const { llm } = await loadStreamingLlm([
+      { type: "start" },
+      { type: "text-delta", id: "text-1", text: "one" },
+      { type: "text-delta", id: "text-1", text: "" },
+      { type: "tool-call", toolCallId: "tool-1", toolName: "probe", input: {} },
+      { type: "tool-call", toolCallId: "tool-1", toolName: "probe", input: {} },
+      { type: "tool-result", toolCallId: "tool-1", toolName: "probe", input: {}, output: {} },
+      { type: "tool-error", toolCallId: "tool-2", toolName: "probe", input: {}, error: providerError },
+      { type: "tool-output-denied", toolCallId: "tool-3", toolName: "probe" },
+      { type: "finish", finishReason: "stop", rawFinishReason: "stop", totalUsage: {} },
+    ]);
+    const result = await llm.generate({
+      messages: [{ role: "user", content: "chat" }],
+      caller: "chat",
+      onTextDelta: (delta) => deltas.push(delta),
+      onStreamActivity: (activity) => activities.push(activity),
+    });
+    expect(deltas).toEqual(["one"]);
+    expect(activities).toEqual([
+      { type: "activity" },
+      { type: "activity" },
+      { type: "tool_start", toolCallId: "tool-1" },
+      { type: "tool_start", toolCallId: "tool-1" },
+      { type: "tool_end", toolCallId: "tool-1" },
+      { type: "tool_end", toolCallId: "tool-2" },
+      { type: "tool_end", toolCallId: "tool-3" },
+    ]);
+    expect(result).toMatchObject({ text: "complete", steps: 2, totalUsage: { totalTokens: 30 } });
+  });
+
+  it("normalizes yielded aborts and preserves yielded provider errors", async () => {
+    const providerError = new Error("provider stream error");
+    const first = await loadStreamingLlm([{ type: "error", error: providerError }]);
+    await expect(
+      first.llm.generate({ messages: [], caller: "chat" }),
+    ).rejects.toBe(providerError);
+
+    vi.resetModules();
+    const second = await loadStreamingLlm([{ type: "abort", reason: "provider stopped" }]);
+    await expect(second.llm.generate({ messages: [], caller: "chat" })).rejects.toMatchObject({
+      name: "AbortError",
+      message: "provider stopped",
+    });
+  });
+});
+
+describe("LLM dispatch — chat stream watchdog", () => {
+  it.each(["ttftMs", "interChunkMs"] as const)(
+    "validates chatStreamTimeouts.%s synchronously",
+    async (field) => {
+      const { LLM } = await import("../src/llm.js");
+      for (const invalid of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+        expect(
+          () =>
+            new LLM(anthropicConfig(), {
+              ...llmTestPorts(),
+              chatStreamTimeouts: { ttftMs: 1, interChunkMs: 1, [field]: invalid },
+            }),
+        ).toThrow(`chatStreamTimeouts.${field}`);
+      }
+      expect(
+        () =>
+          new LLM(anthropicConfig(), {
+            ...llmTestPorts(),
+            chatStreamTimeouts: { ttftMs: 1, interChunkMs: 1 },
+          }),
+      ).not.toThrow();
+    },
+  );
+
+  it.each([
+    { expectedCode: "CHAT_TTFT_TIMEOUT", emitText: false },
+    { expectedCode: "CHAT_INTER_CHUNK_TIMEOUT", emitText: true },
+  ] as const)("surfaces $expectedCode", async ({ expectedCode, emitText }) => {
+    vi.useFakeTimers();
+    const streamText = vi.fn((request: { abortSignal?: AbortSignal }) => ({
+      ...streamedResult([]),
+      fullStream: (async function* () {
+        if (emitText) yield { type: "text-delta", id: "text-1", text: "partial" };
+        await new Promise<void>((_resolve, reject) => {
+          request.abortSignal?.addEventListener("abort", () => {
+            reject(new DOMException("aborted", "AbortError"));
+          });
+        });
+      })(),
+    }));
+    vi.doMock("ai", () => ({
+      generateText: vi.fn(),
+      streamText,
+      stepCountIs: vi.fn((count: number) => ({ type: "step-count", count })),
+    }));
+    vi.doMock("@ai-sdk/anthropic", () => ({
+      createAnthropic: () => () => ({ provider: "anthropic-stub" }),
+    }));
+    const { LLM } = await import("../src/llm.js");
+    const llm = new LLM(anthropicConfig(), {
+      ...llmTestPorts(),
+      chatStreamTimeouts: { ttftMs: 10, interChunkMs: 20 },
+    });
+    const pending = llm.generate({ messages: [], caller: "chat" });
+    const rejection = expect(pending).rejects.toMatchObject({
+      name: "TimeoutError",
+      code: expectedCode,
+    });
+    await vi.advanceTimersByTimeAsync(emitText ? 20 : 10);
+    await rejection;
+    vi.useRealTimers();
   });
 });

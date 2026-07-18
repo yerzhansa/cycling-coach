@@ -2,6 +2,9 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import * as engine from "../src/index.js";
+import type { ChatStreamTimeouts } from "../src/index.js";
+
+const timeoutTypeProof: ChatStreamTimeouts = { ttftMs: 1, interChunkMs: 1 };
 
 describe("engine public export surface", () => {
   it("keeps only the root and sport package subpaths", () => {
@@ -14,6 +17,8 @@ describe("engine public export surface", () => {
 
   it("exports only the canonical factory and the authorized JWT account helper at runtime", () => {
     expect(Object.keys(engine).sort()).toEqual(["createCoachEngine", "extractAccountId"]);
+    expect(timeoutTypeProof).toEqual({ ttftMs: 1, interChunkMs: 1 });
+    expect("DEFAULT_CHAT_STREAM_TIMEOUTS" in engine).toBe(false);
   });
 
   it("retains the Core test helper only as a pure re-export", () => {

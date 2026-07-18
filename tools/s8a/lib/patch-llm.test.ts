@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ModelTransport,
   ModelTransportDecorator,
@@ -232,15 +232,38 @@ describe("s8a replay engine", () => {
     expect(result.text).toBe("recorded-reply");
   });
 
-  it("ignores a non-null events field (forward tolerance)", async () => {
+  it("replays recorded text deltas in order and accepts legacy null", async () => {
     const call = recordedCall({ ordinal: 0 });
-    (call as unknown as { events: unknown }).events = [{ type: "text_delta" }];
-    const { FakeLLM, handle } = setup([call]);
-    const result = await new FakeLLM().generate(chatOpts);
+    call.events = [
+      { type: "text_delta", delta: "one" },
+      { type: "text_delta", delta: " two" },
+    ];
+    const { FakeLLM, handle } = setup([call, recordedCall({ ordinal: 1 })]);
+    const deltas: string[] = [];
+    const result = await new FakeLLM().generate({
+      ...chatOpts,
+      onTextDelta: (delta) => deltas.push(delta),
+    });
+    await new FakeLLM().generate(chatOpts);
     handle.finalize();
     handle.restore();
     expect(result.text).toBe("recorded-reply");
+    expect(deltas).toEqual(["one", " two"]);
     expect(handle.state.failures).toEqual([]);
+  });
+
+  it("rejects malformed recorded text deltas before delivery", async () => {
+    const call = recordedCall({ ordinal: 0 });
+    (call as unknown as { events: unknown }).events = [
+      { type: "text_delta", delta: "one", extra: true },
+    ];
+    const { FakeLLM, handle } = setup([call]);
+    const observer = vi.fn();
+    await expect(
+      new FakeLLM().generate({ ...chatOpts, onTextDelta: observer }),
+    ).rejects.toThrow(/malformed text_delta/);
+    expect(observer).not.toHaveBeenCalled();
+    handle.restore();
   });
 });
 
@@ -253,6 +276,8 @@ describe("s8a record engine", () => {
           const opts = request.options as GenerateOptsLike;
           // Simulate the SDK executing a tool during the call.
           await opts.tools?.probe_tool.execute?.({ q: 1 }, { toolCallId: "t1", messages: [] });
+          request.options.onTextDelta?.("one");
+          request.options.onTextDelta?.(" two");
           return {
             text: "reply",
             toolCalls: [],
@@ -298,7 +323,10 @@ describe("s8a record engine", () => {
         { seq: 0, toolName: "probe_tool", input: { q: 1 }, resultCanonical: { answer: 42 } },
       ]);
       expect(call.result.text).toBe("reply");
-      expect(call.events).toBeNull();
+      expect(call.events).toEqual([
+        { type: "text_delta", delta: "one" },
+        { type: "text_delta", delta: " two" },
+      ]);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -319,8 +347,23 @@ describe("s8a record engine", () => {
         expect(req.maxOutputTokens).toBe(512);
         expect(req.cacheKey).toBeNull();
       }
+      expect(handle.calls[0].events).toBeNull();
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it.each(["sync-triage", "dream"] as const)(
+    "rejects unsupported %s callers before delegation or recording",
+    async (caller) => {
+      const next = { generate: vi.fn() } satisfies ModelTransport;
+      const handle = patchForRecord();
+      const FakeLLM = makeFakeLlmClass(handle.modelTransportDecorator, next);
+      await expect(new FakeLLM().generate({ ...chatOpts, caller })).rejects.toThrow(
+        `unsupported Tier-R caller: ${caller}`,
+      );
+      expect(next.generate).not.toHaveBeenCalled();
+      expect(handle.calls).toEqual([]);
+    },
+  );
 });

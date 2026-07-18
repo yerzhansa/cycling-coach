@@ -1,4 +1,4 @@
-import { generateText } from "ai";
+import { generateText, streamText } from "ai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
@@ -15,14 +15,21 @@ import type {
   EngineConfig,
   EngineHostPorts,
   ModelTransport,
+  ChatStreamTimeouts,
 } from "./host-ports.js";
 import { codexGenerateText } from "./agent/codex-bridge.js";
 import type { GenerateOpts, GenerateResult } from "./llm-types.js";
 import { cacheTokenDetails, usageFieldsFromResult } from "./llm-types.js";
+import type { ModelStreamActivity } from "./sport.js";
 
 export type { GenerateOpts, GenerateResult } from "./llm-types.js";
 export const LLM_CALL_DEADLINE_MS = 300_000;
 export const CHAT_LLM_CALL_DEADLINE_MS = 600_000;
+
+const DEFAULT_CHAT_STREAM_TIMEOUTS: ChatStreamTimeouts = {
+  ttftMs: 30_000,
+  interChunkMs: 30_000,
+};
 
 const PROVIDER_BASE_URLS: Record<string, string> = {
   deepseek: "https://api.deepseek.com/v1",
@@ -35,7 +42,12 @@ const PROVIDER_BASE_URLS: Record<string, string> = {
 
 type LLMHostPorts = Pick<
   EngineHostPorts,
-  "usage" | "now" | "getAccessToken" | "classifyFailure" | "modelTransportDecorator"
+  | "usage"
+  | "now"
+  | "getAccessToken"
+  | "classifyFailure"
+  | "modelTransportDecorator"
+  | "chatStreamTimeouts"
 >;
 
 // ============================================================================
@@ -73,6 +85,7 @@ export class LLM {
   // Instance-constant for the same reason: the cache-breakpoint decision depends
   // only on provider + model, so resolve it once rather than per dispatch().
   private breakpointKey: "anthropic" | "openrouter" | undefined;
+  private chatStreamTimeouts: ChatStreamTimeouts;
 
   constructor(config: EngineConfig, ports: LLMHostPorts) {
     this.config = config;
@@ -80,6 +93,9 @@ export class LLM {
     this.aiSdkModel = config.llm.provider === "openai-codex" ? null : buildAiSdkModel(config);
     this.priced = isPriced(config.llm.provider, config.llm.model);
     this.breakpointKey = cacheBreakpointKey(config.llm.provider, config.llm.model);
+    this.chatStreamTimeouts = validateChatStreamTimeouts(
+      ports.chatStreamTimeouts ?? DEFAULT_CHAT_STREAM_TIMEOUTS,
+    );
     const canonical: ModelTransport = {
       generate: (request) => this.dispatch(request.options),
     };
@@ -95,21 +111,51 @@ export class LLM {
       deadlineMsForCaller(opts.caller),
       opts.deadlineMs ?? Number.POSITIVE_INFINITY,
     );
-    const { signal, deadline } = withLLMDeadline(opts.signal, deadlineMs);
+    const { signal: deadlineSignal, deadline } = withLLMDeadline(opts.signal, deadlineMs);
+    const watchdog =
+      opts.caller === "chat" && this.config.llm.provider !== "openai-codex"
+        ? createChatStreamWatchdog(this.chatStreamTimeouts)
+        : undefined;
+    const signal =
+      watchdog === undefined
+        ? deadlineSignal
+        : AbortSignal.any([deadlineSignal, watchdog.signal]);
+    const handleTextDelta = (delta: string): void => {
+      watchdog?.textDelta(delta);
+      try {
+        opts.onTextDelta?.(delta);
+      } catch {}
+    };
+    const handleStreamActivity = (activity: ModelStreamActivity): void => {
+      watchdog?.activity(activity);
+      try {
+        opts.onStreamActivity?.(activity);
+      } catch {}
+    };
     let result: GenerateResult;
     try {
       result = await this.transport.generate({
         provider: this.config.llm.provider,
         model: this.config.llm.model,
-        options: { ...opts, signal },
+        options: {
+          ...opts,
+          signal,
+          onTextDelta: handleTextDelta,
+          onStreamActivity: handleStreamActivity,
+        },
       });
     } catch (err) {
+      if (watchdog?.error !== undefined && isAbortError(err, watchdog.signal)) {
+        throw watchdog.error;
+      }
       // Relabel to TimeoutError only when OUR per-call timer fired AND the error
       // is abort-shaped: a 5xx/429/network thrown while the timer happens to be
       // aborted must keep its own class, and an outer caller cancellation that
       // never tripped our timer is not our deadline.
       if (deadline.aborted && isAbortError(err, deadline)) throw toTimeoutError(err);
       throw err;
+    } finally {
+      watchdog?.clear();
     }
     const durationMs = this.ports.now() - start;
     this.recordGenerate(opts, result, durationMs);
@@ -118,7 +164,7 @@ export class LLM {
 
   private async dispatch(opts: GenerateOpts): Promise<GenerateResult> {
     if (this.config.llm.provider === "openai-codex") {
-      return await codexGenerateText(
+      const result = await codexGenerateText(
         {
           ...opts,
           modelId: this.config.llm.model,
@@ -130,6 +176,10 @@ export class LLM {
           classifyFailure: this.ports.classifyFailure,
         },
       );
+      if (opts.caller === "chat" && result.text !== "") {
+        notifyTextDelta(opts.onTextDelta, result.text);
+      }
+      return result;
     }
 
     if (!this.aiSdkModel) {
@@ -181,6 +231,67 @@ export class LLM {
       abortSignal: opts.signal,
       experimental_context: opts.context,
     };
+    if (opts.caller === "chat") {
+      const result = opts.prompt !== undefined
+        ? streamText({ ...base, prompt: opts.prompt })
+        : streamText({ ...base, messages });
+      for await (const part of result.fullStream) {
+        switch (part.type) {
+          case "text-delta":
+            if (part.text === "") {
+              notifyStreamActivity(opts.onStreamActivity, { type: "activity" });
+            } else {
+              notifyTextDelta(opts.onTextDelta, part.text);
+            }
+            break;
+          case "tool-call":
+            notifyStreamActivity(opts.onStreamActivity, {
+              type: "tool_start",
+              toolCallId: part.toolCallId,
+            });
+            break;
+          case "tool-result":
+          case "tool-error":
+          case "tool-output-denied":
+            notifyStreamActivity(opts.onStreamActivity, {
+              type: "tool_end",
+              toolCallId: part.toolCallId,
+            });
+            break;
+          case "finish":
+            break;
+          case "error":
+            throw part.error;
+          case "abort":
+            throw new DOMException(part.reason ?? "Model stream aborted", "AbortError");
+          default:
+            notifyStreamActivity(opts.onStreamActivity, { type: "activity" });
+        }
+      }
+      const [text, toolCalls, finishReason, usage, totalUsage, steps] = await Promise.all([
+        result.text,
+        result.toolCalls,
+        result.finishReason,
+        result.usage,
+        result.totalUsage,
+        result.steps,
+      ]);
+      return {
+        text,
+        toolCalls: toolCalls as GenerateResult["toolCalls"],
+        finishReason,
+        usage,
+        totalUsage,
+        steps: steps.length,
+        cost: priceAiSdkUsage(
+          this.config.llm.provider,
+          this.config.llm.model,
+          this.priced,
+          totalUsage,
+        ),
+      };
+    }
+
     const result = opts.prompt !== undefined
       ? await generateText({ ...base, prompt: opts.prompt })
       : await generateText({ ...base, messages });
@@ -209,6 +320,102 @@ export class LLM {
       stopReason: result.finishReason,
     });
   }
+}
+
+class ChatStreamTimeoutError extends Error {
+  readonly code: "CHAT_TTFT_TIMEOUT" | "CHAT_INTER_CHUNK_TIMEOUT";
+
+  constructor(code: "CHAT_TTFT_TIMEOUT" | "CHAT_INTER_CHUNK_TIMEOUT") {
+    super(code);
+    this.name = "TimeoutError";
+    this.code = code;
+  }
+}
+
+interface ChatStreamWatchdog {
+  readonly signal: AbortSignal;
+  readonly error: ChatStreamTimeoutError | undefined;
+  textDelta(delta: string): void;
+  activity(activity: ModelStreamActivity): void;
+  clear(): void;
+}
+
+function createChatStreamWatchdog(timeouts: ChatStreamTimeouts): ChatStreamWatchdog {
+  const controller = new AbortController();
+  const activeToolIds = new Set<string>();
+  let observedText = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let error: ChatStreamTimeoutError | undefined;
+
+  const disarm = (): void => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+  };
+  const arm = (): void => {
+    disarm();
+    if (activeToolIds.size > 0 || controller.signal.aborted) return;
+    const delayMs = observedText ? timeouts.interChunkMs : timeouts.ttftMs;
+    timer = setTimeout(() => {
+      error = new ChatStreamTimeoutError(
+        observedText ? "CHAT_INTER_CHUNK_TIMEOUT" : "CHAT_TTFT_TIMEOUT",
+      );
+      controller.abort(error);
+    }, delayMs);
+  };
+
+  arm();
+  return {
+    signal: controller.signal,
+    get error() {
+      return error;
+    },
+    textDelta(delta) {
+      if (delta === "") {
+        arm();
+        return;
+      }
+      observedText = true;
+      arm();
+    },
+    activity(activity) {
+      if (activity.type === "tool_start") {
+        activeToolIds.add(activity.toolCallId);
+        disarm();
+        return;
+      }
+      if (activity.type === "tool_end" && activeToolIds.delete(activity.toolCallId)) {
+        if (activeToolIds.size === 0) arm();
+        return;
+      }
+      arm();
+    },
+    clear: disarm,
+  };
+}
+
+function validateChatStreamTimeouts(timeouts: ChatStreamTimeouts): ChatStreamTimeouts {
+  for (const field of ["ttftMs", "interChunkMs"] as const) {
+    const value = timeouts[field];
+    if (!Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
+      throw new TypeError(`chatStreamTimeouts.${field} must be a finite positive integer`);
+    }
+  }
+  return timeouts;
+}
+
+function notifyTextDelta(observer: GenerateOpts["onTextDelta"], delta: string): void {
+  try {
+    observer?.(delta);
+  } catch {}
+}
+
+function notifyStreamActivity(
+  observer: GenerateOpts["onStreamActivity"],
+  activity: ModelStreamActivity,
+): void {
+  try {
+    observer?.(activity);
+  } catch {}
 }
 
 // The AI SDK reports token usage but no cost, so derive it from the vendored
