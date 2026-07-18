@@ -58,6 +58,7 @@ function harness(
   options: {
     readonly token?: Promise<{ readonly path: string; readonly value: string }>;
     readonly bind?: Promise<WriterProtocolBinding>;
+    readonly shutdownRequested?: Promise<void>;
     readonly onCreateRpc?: () => void;
   } = {},
 ) {
@@ -95,7 +96,11 @@ function harness(
   const createRpcServer = vi.fn(() => {
     trace.push("rpc-created");
     options.onCreateRpc?.();
-    return { handleUpgrade: vi.fn(), close: rpcClose };
+    return {
+      handleUpgrade: vi.fn(),
+      shutdownRequested: options.shutdownRequested ?? new Promise<void>(() => {}),
+      close: rpcClose,
+    };
   });
   const createHealthzHandler = vi.fn(() => {
     trace.push("health-handler-created");
@@ -105,6 +110,7 @@ function harness(
     ensureToken,
     createRpcServer,
     createHealthzHandler,
+    createHealthState: () => ({ healthy: true, setHealthy: vi.fn() }),
   } as unknown as CoachServeDependencies;
   return {
     input: { lifecycle, home, appVersion: "0.1.0", signal: new AbortController().signal },
@@ -195,6 +201,20 @@ describe("runCoachServe", () => {
     bind.resolve(test.binding);
     await expect(result).resolves.toBe(EXIT_SUCCESS);
     expect(test.rpcClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns from the local operation only after the upgrade response flush signal", async () => {
+    const shutdown = deferred<void>();
+    const test = harness({ shutdownRequested: shutdown.promise });
+    const result = runCoachServe(test.input, test.dependencies);
+    await vi.waitFor(() => expect(test.handlers()).toBeDefined());
+    shutdown.resolve();
+    await expect(result).resolves.toBe(EXIT_SUCCESS);
+    expect(test.trace.slice(-3)).toEqual([
+      "protocol-stop",
+      "rpc-drained",
+      "protocol-closed",
+    ]);
   });
 
   it("rethrows bind failure only after closing the constructed RPC server", async () => {

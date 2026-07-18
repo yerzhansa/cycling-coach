@@ -1,10 +1,26 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { PROTOCOL_VERSION, type DaemonOwner } from "@enduragent/coach-contract";
 import { HEALTHZ_SERVICE_MARKER } from "@enduragent/kernel-node/lock";
 
 export interface HealthzHandlerInput {
   readonly appVersion: string;
-  readonly owner: DaemonOwner;
+  readonly state?: DaemonHealthState;
+}
+
+export interface DaemonHealthState {
+  readonly healthy: boolean;
+  setHealthy(healthy: boolean): void;
+}
+
+export function createDaemonHealthState(): DaemonHealthState {
+  let healthy = true;
+  return {
+    get healthy() {
+      return healthy;
+    },
+    setHealthy(value) {
+      healthy = value;
+    },
+  };
 }
 
 export function createHealthzRequestHandler(
@@ -13,13 +29,18 @@ export function createHealthzRequestHandler(
   const body = `${JSON.stringify({
     service: HEALTHZ_SERVICE_MARKER,
     version: input.appVersion,
-    protocolVersion: PROTOCOL_VERSION,
-    owner: input.owner,
   })}\n`;
   return (request, response) => {
     if (request.method !== "GET" || request.url !== "/healthz") {
       response.statusCode = 404;
       response.end();
+      return;
+    }
+    if (input.state?.healthy === false) {
+      response.statusCode = 503;
+      response.setHeader("content-type", "application/json; charset=utf-8");
+      response.setHeader("cache-control", "no-store");
+      response.end(`${JSON.stringify({ status: "unavailable" })}\n`);
       return;
     }
     response.statusCode = 200;

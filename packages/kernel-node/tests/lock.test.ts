@@ -3,7 +3,15 @@
 // are proven by branch selection against an injected /healthz test double; the full
 // four-case matrix against a real daemon /healthz responder arms at W8.
 
-import { mkdtempSync, realpathSync, rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
@@ -218,6 +226,26 @@ describe.skipIf(!hasLoopback)("acquireWriteLock", () => {
       peer.destroy();
       await release;
     }
+  });
+
+  it("release preserves successor replacement metadata with different inodes", async () => {
+    const configDir = freshDir();
+    const holder = trackHandle(
+      await acquireWriteLock({ configDir, athleteHome: "/home/a", version: "1.0.0" }),
+    );
+    const lockfilePath = join(configDir, LOCKFILE_NAME);
+    const portFilePath = join(configDir, PORT_FILE_NAME);
+    renameSync(lockfilePath, `${lockfilePath}.incumbent`);
+    renameSync(portFilePath, `${portFilePath}.incumbent`);
+    const successorLock = "successor-lock\n";
+    const successorPort = "41000\n";
+    writeFileSync(lockfilePath, successorLock, { mode: 0o600 });
+    writeFileSync(portFilePath, successorPort, { mode: 0o600 });
+
+    heldHandles.length = 0;
+    await holder.release();
+    expect(readFileSync(lockfilePath, "utf8")).toBe(successorLock);
+    expect(readFileSync(portFilePath, "utf8")).toBe(successorPort);
   });
 
   it("binds health and upgrades on a separate published protocol socket", async () => {
