@@ -222,7 +222,7 @@ describe("acquireWriteLock", () => {
       version: "1.0.0",
       probeHealthz: probe,
     });
-    expect(result).toEqual({ status: "peer-healthy", port, peerVersion: "9.9.9" });
+    expect(result).toEqual({ status: "peer-healthy", pid: 777, port, peerVersion: "9.9.9" });
     expect(readFileSync(join(configDir, LOCKFILE_NAME), "utf-8")).toBe(lockBefore);
   });
 
@@ -278,6 +278,11 @@ describe("acquireWriteLock", () => {
     expect(caught).toBeInstanceOf(WriteLockContentionError);
     expect((caught as WriteLockContentionError).exitCode).toBe(3);
     expect((caught as WriteLockContentionError).message).toContain("424242");
+    expect((caught as WriteLockContentionError).contention).toEqual({
+      kind: "holder",
+      pid: 424242,
+      port,
+    });
   });
 
   it("(d) foreign process refuses exit 3 naming the port file", async () => {
@@ -296,6 +301,11 @@ describe("acquireWriteLock", () => {
     expect(caught).toBeInstanceOf(WriteLockContentionError);
     expect((caught as WriteLockContentionError).exitCode).toBe(3);
     expect((caught as WriteLockContentionError).message).toContain(portFilePath);
+    expect((caught as WriteLockContentionError).contention).toEqual({
+      kind: "foreign",
+      port,
+      portFile: portFilePath,
+    });
   });
 
   it("(RO-open) read-only open works beside the write-lock holder over WAL", async () => {
@@ -460,5 +470,11 @@ describe("acquireWriteLock", () => {
       kind: "foreign",
     });
     expect(classifyHealthzResponse(200, "not-json-garbage")).toEqual({ kind: "foreign" });
+  });
+
+  it("keeps the two-argument contention constructor compatible", () => {
+    const error = new WriteLockContentionError("synthetic contention", 3);
+    expect(error.exitCode).toBe(3);
+    expect(error.contention).toBeNull();
   });
 });

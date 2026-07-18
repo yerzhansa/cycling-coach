@@ -37,15 +37,9 @@ export interface EngineHostAdapterOverrides {
   readonly onToolsAssembled?: (names: readonly string[]) => void;
 }
 
-export function createEngineHostAdapter(input: {
-  readonly config: Config;
-  readonly stateReader: AthleteStateReaderPort;
-  readonly overrides?: EngineHostAdapterOverrides;
-}): { readonly ports: EngineHostPorts; readonly memory: Memory } {
-  const { config } = input;
-  const overrides = input.overrides ?? {};
+export function engineConfigFromConfig(config: Config): EngineConfig {
   const compactModel = config.llm.compactModel ?? config.llm.model;
-  const engineConfig: EngineConfig = Object.freeze({
+  return Object.freeze({
     dataSource: config.dataSource,
     llm: Object.freeze({ ...config.llm }),
     session: Object.freeze({ ...config.session }),
@@ -54,6 +48,16 @@ export function createEngineHostAdapter(input: {
       ? config.contextWindowTokens
       : contextWindowForModel(compactModel),
   });
+}
+
+export function createEngineHostAdapter(input: {
+  readonly config: Config;
+  readonly stateReader: AthleteStateReaderPort;
+  readonly overrides?: EngineHostAdapterOverrides;
+}): { readonly ports: EngineHostPorts; readonly memory: Memory } {
+  const { config } = input;
+  const overrides = input.overrides ?? {};
+  const engineConfig = engineConfigFromConfig(config);
   const memory = new Memory(config.dataDir, config.session.timezone || "UTC");
   const chatStore = new ChatStore(config.dataDir, config.session.resetArchiveRetentionDays);
   const legacyClient = config.intervals.apiKey

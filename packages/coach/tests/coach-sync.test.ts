@@ -26,6 +26,7 @@ import {
   CoachStoreWriterError,
   withCoachStoreWriter,
   type CoachStoreWriterContext,
+  type CoachStoreWriterPlan,
 } from "../src/runtime.js";
 import {
   runCoachSync,
@@ -59,6 +60,16 @@ function syntheticHome(root = "synthetic-root"): AthleteHome {
     archiveDir: join(root, "archive"),
     configDir: join(root, "config"),
   };
+}
+
+function writerOperation<T>(
+  operationOrPlan:
+    | ((context: CoachStoreWriterContext) => Promise<T>)
+    | CoachStoreWriterPlan<T>,
+): (context: CoachStoreWriterContext) => Promise<T> {
+  return typeof operationOrPlan === "function"
+    ? operationOrPlan
+    : operationOrPlan.operation;
 }
 
 function syntheticStore(): CoachStoreWriterContext["store"] {
@@ -217,16 +228,19 @@ describe("coach sync composition", () => {
   it("runtime maps contention and every lifecycle failure without private error data", async () => {
     const privateValue = "private dependency data";
     const operation = async () => privateValue;
+    const contention = { kind: "holder" as const, pid: 123, port: 4567 };
     const contentionWriter = async <T>(): Promise<CoachDevWriterResult<T>> => ({
       status: "writer-lock-held",
+      contention,
     });
     await expect(
       withCoachStoreWriter({}, operation, { runWriter: contentionWriter }),
-    ).rejects.toEqual(new CoachStoreWriterError("writer-lock-held", null));
+    ).rejects.toEqual(new CoachStoreWriterError("writer-lock-held", null, undefined, contention));
 
     const stages: readonly CoachDevWriterFailureStage[] = [
       "resolve home",
       "acquire lock",
+      "run pre-open operation",
       "create store directory",
       "secure store directory",
       "open store",
@@ -275,6 +289,31 @@ describe("coach sync composition", () => {
     expect(JSON.stringify(caught)).not.toContain("private operation failure detail");
   });
 
+  it("forwards the pre-open plan and preserves the cause constructor position", async () => {
+    const context = syntheticContext();
+    const trace: string[] = [];
+    const runWriter = async <T>(
+      options: RunCoachDevWriterOptions<T>,
+    ): Promise<CoachDevWriterResult<T>> => {
+      await options.beforeStoreOpen?.(context.home);
+      return { status: "completed", value: await options.operation(context) };
+    };
+    await expect(withCoachStoreWriter({}, {
+      beforeStoreOpen: async (home) => {
+        expect(home).toBe(context.home);
+        trace.push("before");
+      },
+      operation: async (received) => {
+        expect(received).toBe(context);
+        trace.push("operation");
+        return "done";
+      },
+    }, { runWriter })).resolves.toBe("done");
+    expect(trace).toEqual(["before", "operation"]);
+    const cause = new Error("private");
+    expect(new CoachStoreWriterError("writer-failed", "open store", { cause }).cause).toBe(cause);
+  });
+
   it("validates the complete request before acquiring the writer", async () => {
     let writerCalls = 0;
     let sourceCalls = 0;
@@ -282,10 +321,12 @@ describe("coach sync composition", () => {
     const context = syntheticContext();
     const withWriter: typeof withCoachStoreWriter = async <T>(
       _env: Record<string, string | undefined>,
-      operation: (value: CoachStoreWriterContext) => Promise<T>,
+      operationOrPlan:
+        | ((value: CoachStoreWriterContext) => Promise<T>)
+        | CoachStoreWriterPlan<T>,
     ): Promise<T> => {
       writerCalls += 1;
-      return operation(context);
+      return writerOperation(operationOrPlan)(context);
     };
     const importFiles: typeof importFilesWithReport = async () => {
       importCalls += 1;
@@ -384,8 +425,10 @@ describe("coach sync composition", () => {
     let maximumRunning = 0;
     const withWriter: typeof withCoachStoreWriter = async <T>(
       _env: Record<string, string | undefined>,
-      operation: (value: CoachStoreWriterContext) => Promise<T>,
-    ): Promise<T> => operation(context);
+      operationOrPlan:
+        | ((value: CoachStoreWriterContext) => Promise<T>)
+        | CoachStoreWriterPlan<T>,
+    ): Promise<T> => writerOperation(operationOrPlan)(context);
     const importFiles: typeof importFilesWithReport = async () => importReport;
     const binding = (id: SourceId, shouldFail: boolean): CoachSourceBinding => ({
       source: syncSource(id),
@@ -442,8 +485,10 @@ describe("coach sync composition", () => {
     let importCalls = 0;
     const withWriter: typeof withCoachStoreWriter = async <T>(
       _env: Record<string, string | undefined>,
-      operation: (value: CoachStoreWriterContext) => Promise<T>,
-    ): Promise<T> => operation(context);
+      operationOrPlan:
+        | ((value: CoachStoreWriterContext) => Promise<T>)
+        | CoachStoreWriterPlan<T>,
+    ): Promise<T> => writerOperation(operationOrPlan)(context);
     const importFiles: typeof importFilesWithReport = async (options) => {
       importCalls += 1;
       order.push("import");
@@ -485,8 +530,10 @@ describe("coach sync composition", () => {
     let importCalls = 0;
     const withWriter: typeof withCoachStoreWriter = async <T>(
       _env: Record<string, string | undefined>,
-      operation: (value: CoachStoreWriterContext) => Promise<T>,
-    ): Promise<T> => operation(context);
+      operationOrPlan:
+        | ((value: CoachStoreWriterContext) => Promise<T>)
+        | CoachStoreWriterPlan<T>,
+    ): Promise<T> => writerOperation(operationOrPlan)(context);
     const importFiles: typeof importFilesWithReport = async () => {
       importCalls += 1;
       return importReport;

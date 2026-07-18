@@ -16,6 +16,7 @@ export default defineConfig({
     "soak-record": "src/soak-record.ts",
     "store-gate-command": "src/store-gate-command.ts",
     "season-review-command": "src/season-review-command.ts",
+    "local-runner": "src/local-runner.ts",
   },
   format: ["esm"],
   dts: true,

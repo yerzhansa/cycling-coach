@@ -7,7 +7,11 @@ import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import { resolveAthleteHome } from "../home/index.js";
 import type { AthleteHome } from "../home/index.js";
 import { importFilesWithReport } from "../ingest/index.js";
-import { acquireWriteLock, WriteLockContentionError } from "../lock/index.js";
+import {
+  acquireWriteLock,
+  WriteLockContentionError,
+  type WriterContentionDiagnostic,
+} from "../lock/index.js";
 import { openSqliteStorage } from "../sqlite/index.js";
 
 const USAGE = "Usage: coach-dev import --report <path>...\n";
@@ -38,6 +42,7 @@ type FailureStage = Exclude<CoachDevWriterFailureStage, "invoke operation"> | "i
 export type CoachDevWriterFailureStage =
   | "resolve home"
   | "acquire lock"
+  | "run pre-open operation"
   | "create store directory"
   | "secure store directory"
   | "open store"
@@ -54,12 +59,13 @@ export interface CoachDevWriterContext {
 export interface RunCoachDevWriterOptions<T> {
   readonly env: Record<string, string | undefined>;
   readonly writerVersion: string;
+  readonly beforeStoreOpen?: (home: AthleteHome) => Promise<void>;
   readonly operation: (context: CoachDevWriterContext) => Promise<T>;
 }
 
 export type CoachDevWriterResult<T> =
   | { readonly status: "completed"; readonly value: T }
-  | { readonly status: "writer-lock-held" }
+  | { readonly status: "writer-lock-held"; readonly contention: WriterContentionDiagnostic }
   | { readonly status: "failed"; readonly stage: CoachDevWriterFailureStage; readonly cause?: unknown };
 
 export type CoachDevWriterDependencies = typeof defaultWriterDeps;
@@ -143,14 +149,30 @@ export async function runCoachDevWriter<T>(
       version: options.writerVersion,
     });
   } catch (error) {
-    if (error instanceof WriteLockContentionError
-      || (error instanceof Error && error.name === "WriteLockContentionError")) {
-      return { status: "writer-lock-held" };
+    if (error instanceof WriteLockContentionError) {
+      if (error.contention !== null) {
+        return { status: "writer-lock-held", contention: error.contention };
+      }
+      return failedWriterResult("acquire lock", error);
+    }
+    if (error instanceof Error && error.name === "WriteLockContentionError") {
+      const contention = (error as Error & {
+        readonly contention?: WriterContentionDiagnostic | null;
+      }).contention;
+      if (contention !== undefined && contention !== null) {
+        return { status: "writer-lock-held", contention };
+      }
+      return failedWriterResult("acquire lock", error);
     }
     return failedWriterResult("acquire lock", error);
   }
 
-  if (lockResult.status === "peer-healthy") return { status: "writer-lock-held" };
+  if (lockResult.status === "peer-healthy") {
+    return {
+      status: "writer-lock-held",
+      contention: { kind: "holder", pid: lockResult.pid, port: lockResult.port },
+    };
+  }
 
   let failureStage: CoachDevWriterFailureStage | undefined;
   let failureCause: unknown;
@@ -160,7 +182,18 @@ export async function runCoachDevWriter<T>(
   try {
     try {
       try {
-        await deps.mkdir(home.storeDir, { recursive: true, mode: 0o700 });
+        if (options.beforeStoreOpen !== undefined) {
+          try {
+            await options.beforeStoreOpen(home);
+          } catch (error) {
+            failureStage = "run pre-open operation";
+            failureCause = error;
+          }
+        }
+
+        if (failureStage === undefined) {
+          await deps.mkdir(home.storeDir, { recursive: true, mode: 0o700 });
+        }
       } catch (error) {
         failureStage = "create store directory";
         failureCause = error;

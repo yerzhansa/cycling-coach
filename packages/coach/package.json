@@ -12,7 +12,8 @@
     "./backfill-benchmark": "./dist/backfill-benchmark.js",
     "./capture": "./dist/capture.js",
     "./local-bundle-producer": "./dist/local-bundle-producer.js",
-    "./store-runtime": "./dist/store-runtime.js"
+    "./store-runtime": "./dist/store-runtime.js",
+    "./local-runner": "./dist/local-runner.js"
   },
   "engines": {
     "node": ">=24"
@@ -29,7 +30,9 @@
     "season-review": "node dist/season-review-command.js"
   },
   "dependencies": {
+    "@enduragent/coach-contract": "workspace:*",
     "@enduragent/core": "workspace:*",
+    "@enduragent/engine": "workspace:*",
     "@enduragent/kernel": "workspace:*",
     "@enduragent/kernel-node": "workspace:*",
     "@enduragent/sync-intervals-icu": "workspace:*",

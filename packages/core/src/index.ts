@@ -41,6 +41,7 @@ export * from "./reference/index.js";
 export { bootstrapReference } from "./reference/runtime.js";
 export type { BootstrapReferenceDeps, ReferenceRuntime } from "./reference/runtime.js";
 export { wrapFetchWithSignal } from "./reference/sync/intervals-client-factory.js";
+export { makeChatClient } from "./reference/sync/intervals-client-factory.js";
 
 export { appendUsageLine, USAGE_LEDGER_FILE, USAGE_LEDGER_MAX_BYTES } from "./usage-ledger.js";
 
@@ -113,6 +114,8 @@ export type {
   LocalCoachEngine,
 } from "./agent/coach-engine.js";
 export { ChatStore } from "./agent/chat-store.js";
+export { engineConfigFromConfig } from "./agent/engine-host-adapter.js";
+export { classifyFailure, extractRetryAfterMs } from "./agent/token-utils.js";
 
 // ─── Auth ─────────────────────────────────────────────────────────────
 export {
@@ -123,6 +126,7 @@ export {
 } from "./auth/profiles.js";
 export type { OAuthCredential } from "./auth/profiles.js";
 export { runCodexLogin } from "./auth/openai-codex-login.js";
+export { refreshCodexToken } from "./agent/codex/oauth.js";
 
 // ─── Channels ─────────────────────────────────────────────────────────
 export { createTelegramBot, notifyUpdate } from "./channels/telegram.js";

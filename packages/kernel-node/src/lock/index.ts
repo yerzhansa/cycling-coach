@@ -9,6 +9,7 @@ export type {
   AcquireWriteLockResult,
   WriteLockHandle,
   PeerHealthyOutcome,
+  WriterContentionDiagnostic,
 } from "./acquire.js";
 export type { LockfileBody } from "./lockfile-body.js";
 export { readLockfile } from "./lockfile-body.js";

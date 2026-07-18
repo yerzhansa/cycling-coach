@@ -73,9 +73,15 @@ importers:
 
   packages/coach:
     dependencies:
+      '@enduragent/coach-contract':
+        specifier: workspace:*
+        version: link:../coach-contract
       '@enduragent/core':
         specifier: workspace:*
         version: link:../core
+      '@enduragent/engine':
+        specifier: workspace:*
+        version: link:../engine
       '@enduragent/kernel':
         specifier: workspace:*
         version: link:../kernel

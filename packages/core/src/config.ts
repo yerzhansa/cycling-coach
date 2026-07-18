@@ -68,14 +68,19 @@ export interface Config {
 export const CONFIG_DIR = getCoachHome("cycling-coach");
 export const CONFIG_FILE = join(CONFIG_DIR, "config.yaml");
 
-export function readConfigYaml(): Record<string, unknown> {
-  if (!existsSync(CONFIG_FILE)) return {};
-  const raw = readFileSync(CONFIG_FILE, "utf-8");
+function readConfigYamlFrom(configDir: string): Record<string, unknown> {
+  const configFile = join(configDir, "config.yaml");
+  if (!existsSync(configFile)) return {};
+  const raw = readFileSync(configFile, "utf-8");
   try {
     return (parseYaml(raw) as Record<string, unknown>) ?? {};
   } catch {
     return {};
   }
+}
+
+export function readConfigYaml(): Record<string, unknown> {
+  return readConfigYamlFrom(CONFIG_DIR);
 }
 
 // ============================================================================
@@ -192,8 +197,8 @@ function assignFieldByPath(cfg: Config, path: SecretFieldPath, value: string): v
   else if (path === "telegram.bot_token") cfg.telegram.botToken = value;
 }
 
-export function loadConfig(): Config {
-  const yaml = readConfigYaml();
+export function loadConfig(configDir: string = CONFIG_DIR): Config {
+  const yaml = readConfigYamlFrom(configDir);
   const dataSource = resolveDataSource(yaml.data_source);
   const llmYaml = (yaml.llm as Record<string, unknown>) ?? {};
   const intervalsYaml = (yaml.intervals as Record<string, unknown>) ?? {};
@@ -338,7 +343,7 @@ export function loadConfig(): Config {
         env("COACH_TZ") ?? (sessionYaml.timezone as string | undefined) ?? "",
     },
     contextWindowTokens: resolveContextWindowTokens(model),
-    dataDir: (yaml.data_dir as string) ?? CONFIG_DIR,
+    dataDir: (yaml.data_dir as string) ?? configDir,
   };
 
   if (pending.size > 0) {
