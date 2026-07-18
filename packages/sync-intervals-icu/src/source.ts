@@ -10,6 +10,10 @@ import {
   type ReferenceCaptureEndpointPayload,
   type ReferenceCapturePlan,
 } from "@enduragent/kernel/reference/capture";
+import {
+  assertProjectionEvidenceEqual,
+  parseCanonicalProjectionValue,
+} from "@enduragent/kernel/reference/local-bundle";
 import type { SourceCheckpoint, SourceLane, SourceWatermark, SyncBudget } from "@enduragent/kernel/store";
 import { activityIdentity, mapActivityLanding, mapSettingsLanding, mapWellnessLanding, normalizeStreamLanding } from "./landing.js";
 import { advanceWindow, compactCursor, compareBinary, parseCivilDate, parseCursor, type CursorRange, type RangeCursor } from "./cursor.js";
@@ -242,15 +246,19 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
         if (yielded >= budget.maxArtifacts) break;
         const instant = rowInstant(settingEpoch(entry.row));
         const archive = await options.archive.writeSnapshot(entry.row, instant);
-        const landingCopy = structuredClone(entry.row);
-        options.acl.assertClean(landingCopy);
-        const landing = await mapSettingsLanding(landingCopy);
-        if (landing.externalId !== entry.externalId) throw new TypeError("sport setting identity changed during normalization");
+        const normalizedSetting = structuredClone(entry.row);
+        options.acl.assertClean(normalizedSetting);
+        const mappedSetting = await mapSettingsLanding(normalizedSetting);
+        assertProjectionEvidenceEqual(
+          parseCanonicalProjectionValue(mappedSetting.normalizedPayloadJson, "settings"),
+          normalizedSetting, "settings",
+        );
+        if (mappedSetting.externalId !== entry.externalId) throw new TypeError("sport setting identity changed during normalization");
         beforeYield();
         yield { kind: "snapshot", source: "intervals-icu", lane: "settings",
-          externalId: landing.sourceRecordExternalId, archiveInstant: instant, archive, payload: entry.row,
-          landing: { kind: "settings", sourceRecordExternalId: landing.sourceRecordExternalId,
-            normalizedPayloadJson: landing.normalizedPayloadJson, anchors: landing.anchors, zones: landing.zones } };
+          externalId: mappedSetting.sourceRecordExternalId, archiveInstant: instant, archive, payload: entry.row,
+          landing: { kind: "settings", sourceRecordExternalId: mappedSetting.sourceRecordExternalId,
+            normalizedPayloadJson: mappedSetting.normalizedPayloadJson, anchors: mappedSetting.anchors, zones: mappedSetting.zones } };
         processed += 1; processedKey = entry.key;
       }
       const next = remaining.length === processed ? { ...cursor, last_key: null, complete: true }
@@ -283,12 +291,17 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
         const normalized = options.acl.streams(landingCopy);
         options.acl.assertClean(normalized);
         const streamLanding = normalizeStreamLanding(normalized);
+        const normalizedPayloadJson = canonicalJson(streamLanding);
+        assertProjectionEvidenceEqual(
+          parseCanonicalProjectionValue(normalizedPayloadJson, "streams"),
+          streamLanding, "streams",
+        );
         const externalId = `streams:${activity.externalId}`;
         beforeYield();
         yield { kind: "snapshot", source: "intervals-icu", lane: "streams", externalId,
           archiveInstant: instant, archive, payload: transport,
           landing: { kind: "streams", sourceRecordExternalId: externalId,
-            normalizedPayloadJson: canonicalJson(streamLanding) } };
+            normalizedPayloadJson } };
         processed += 1; processedKey = activity.key;
       }
       yield* yieldCheckpoint(nextCursor(cursor, range, remaining.length - processed, processedKey));
@@ -548,12 +561,16 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
     for (const member of members.settings) {
       const row = member.payload as Record<string, unknown>, archiveInstant = rowInstant(settingEpoch(row));
       const archive = await options.archive.writeSnapshot(row, archiveInstant);
-      const copy = structuredClone(row); options.acl.assertClean(copy);
-      const landing = await mapSettingsLanding(copy);
+      const normalizedSetting = structuredClone(row); options.acl.assertClean(normalizedSetting);
+      const mappedSetting = await mapSettingsLanding(normalizedSetting);
+      assertProjectionEvidenceEqual(
+        parseCanonicalProjectionValue(mappedSetting.normalizedPayloadJson, "settings"),
+        normalizedSetting, "settings",
+      );
       settings.push({ endpointOrdinal: member.endpoint_ordinal, payloadIndex: member.payload_index,
         externalId: member.external_id, payload: row, archiveInstant, archive,
-        landing: { kind: "settings", sourceRecordExternalId: landing.sourceRecordExternalId,
-          normalizedPayloadJson: landing.normalizedPayloadJson, anchors: landing.anchors, zones: landing.zones } });
+        landing: { kind: "settings", sourceRecordExternalId: mappedSetting.sourceRecordExternalId,
+          normalizedPayloadJson: mappedSetting.normalizedPayloadJson, anchors: mappedSetting.anchors, zones: mappedSetting.zones } });
     }
     const activities: ReferenceCaptureActivityRecord[] = [];
     for (const member of members.activities) {
@@ -577,10 +594,16 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
     for (let index = 0; index < members.streams.length; index += 1) {
       const member = members.streams[index]!, endpoint = endpoints[3 + index]!;
       const normalized = options.acl.streams(structuredClone(member.payload)); options.acl.assertClean(normalized);
+      const streamLanding = normalizeStreamLanding(normalized);
+      const normalizedPayloadJson = canonicalJson(streamLanding);
+      assertProjectionEvidenceEqual(
+        parseCanonicalProjectionValue(normalizedPayloadJson, "streams"),
+        streamLanding, "streams",
+      );
       streams.push({ endpointOrdinal: member.endpoint_ordinal, payloadIndex: null, externalId: member.external_id,
         payload: member.payload, archiveInstant: endpoint.archiveInstant, archive: endpoint.archive,
         landing: { kind: "streams", sourceRecordExternalId: member.external_id,
-          normalizedPayloadJson: canonicalJson(normalizeStreamLanding(normalized)) } });
+          normalizedPayloadJson } });
     }
     return Object.freeze({ plan, endpoints: Object.freeze(endpoints), records: Object.freeze({
       settings: Object.freeze(settings), activities: Object.freeze(activities),

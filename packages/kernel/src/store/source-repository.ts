@@ -1,5 +1,6 @@
 import { canonicalJson } from "../archive/canonical.js";
 import { QUALITY_RANK } from "../ingest/quality-rank.js";
+import { parseCanonicalProjectionValue } from "../ingest/source-ledger.js";
 import { createAnchorRepository } from "./anchor-repository.js";
 import { RawFileInvariantError, type ActivityRevisionDraft, type ActivityRevisionResult, type AnchorHistoryRow, type GenericLandingDraft, type IntervalsSourceRepository, type RawFileColumn, type RawFileRepository, type RawFileRow, type Row, type SourceArtifactDraft, type SourceRecordRepository, type SourceRecordRow, type SqlStore, type WellnessLandingRow, type ZoneSetHistoryRow } from "./ports.js";
 
@@ -108,6 +109,25 @@ function assertCanonicalJson(value: string, name: string): unknown {
   try { parsed = JSON.parse(value); } catch { throw new TypeError(`${name} is invalid`); }
   if (canonicalJson(parsed) !== value) throw new TypeError(`${name} is not canonical`);
   return parsed;
+}
+
+export interface GenericLandingEnvelope {
+  readonly endpoint: "streams" | "settings";
+  readonly landing: Readonly<Record<string, unknown>>;
+  readonly schema_version: 1;
+}
+
+export function parseGenericLandingEnvelope(
+  payloadJson: string,
+  endpoint: "streams" | "settings",
+): GenericLandingEnvelope {
+  const parsed = parseCanonicalProjectionValue(payloadJson, endpoint);
+  if (Object.keys(parsed).sort().join(",") !== "endpoint,landing,schema_version"
+    || parsed.endpoint !== endpoint || parsed.schema_version !== 1
+    || parsed.landing === null || typeof parsed.landing !== "object" || Array.isArray(parsed.landing)) {
+    throw new TypeError(`${endpoint} source evidence is invalid`);
+  }
+  return parsed as unknown as GenericLandingEnvelope;
 }
 
 function exactRow(selected: Row | undefined, expected: Readonly<Record<string, unknown>>, message: string): void {
@@ -228,6 +248,7 @@ RETURNING id`, [row.id, row.workout_key, row.session_key, row.source, row.extern
     const sourceRecordId = await hashKey(["source_record", "intervals-icu", draft.externalId]);
     address(sourceRecordId, "generic source record id");
     const payloadJson = canonicalJson({ endpoint: draft.endpoint, landing, schema_version: 1 });
+    parseGenericLandingEnvelope(payloadJson, draft.endpoint);
     const row: SourceRecordRow = { id: sourceRecordId, workout_key: null, session_key: null, source: "intervals-icu",
       external_id: draft.externalId, raw_sha256: draft.archiveAddress, quality_rank: QUALITY_RANK.PLATFORM_API,
       payload_json: payloadJson };

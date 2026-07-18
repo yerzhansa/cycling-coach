@@ -40,6 +40,49 @@ export interface PlatformPresentation {
 
 export type HashKey = (fields: readonly (string | number)[]) => Promise<string>;
 
+export interface ActivityLandingEnvelope {
+  readonly activity: Readonly<Record<string, unknown>>;
+  readonly concerns: Readonly<Record<string, unknown>>;
+  readonly dedup: Readonly<Record<string, unknown>>;
+  readonly schema_version: 1;
+}
+
+function plainObject(value: unknown): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function parseCanonicalProjectionValue(
+  payloadJson: string,
+  label: "activity" | "streams" | "settings",
+): Readonly<Record<string, unknown>> {
+  let parsed: unknown;
+  try { parsed = JSON.parse(payloadJson); } catch { throw new TypeError(`${label} source evidence is invalid`); }
+  if (!plainObject(parsed) || canonicalJson(parsed) !== payloadJson) {
+    throw new TypeError(`${label} source evidence is invalid`);
+  }
+  return parsed;
+}
+
+export function parseActivityLandingEnvelope(payloadJson: string): ActivityLandingEnvelope {
+  const parsed = parseCanonicalProjectionValue(payloadJson, "activity");
+  if (Object.keys(parsed).sort().join(",") !== "activity,concerns,dedup,schema_version"
+    || parsed.schema_version !== 1 || !plainObject(parsed.activity)
+    || !plainObject(parsed.concerns) || !plainObject(parsed.dedup)) {
+    throw new TypeError("activity source evidence is invalid");
+  }
+  return parsed as unknown as ActivityLandingEnvelope;
+}
+
+export function assertProjectionEvidenceEqual(
+  persisted: unknown,
+  decoded: unknown,
+  label: "activity" | "streams" | "settings",
+): void {
+  if (canonicalJson(persisted) !== canonicalJson(decoded)) {
+    throw new TypeError(`${label} source evidence mismatch`);
+  }
+}
+
 function canonical(value: unknown): string { return JSON.stringify(sortKeys(value)); }
 
 function externalId(value: unknown): string {
@@ -85,10 +128,13 @@ function validateInput(platform: PlatformImportArtifact): void {
       || evidence.archive.relPath !== platform.raw_snapshot_rel_path
       || typeof evidence.archive.relPath !== "string" || evidence.archive.relPath.length === 0
       || typeof evidence.archiveInstant.epochSeconds !== "number"
-      || !Number.isSafeInteger(evidence.archiveInstant.epochSeconds) || evidence.archiveInstant.epochSeconds < 0
-      || evidence.normalizedActivityJson !== canonicalJson(platform.activity)) {
+      || !Number.isSafeInteger(evidence.archiveInstant.epochSeconds) || evidence.archiveInstant.epochSeconds < 0) {
       throw new TypeError("platform source evidence is invalid");
     }
+    assertProjectionEvidenceEqual(
+      parseCanonicalProjectionValue(evidence.normalizedActivityJson, "activity"),
+      platform.activity, "activity",
+    );
   }
   const concerns = platform.concerns;
   if (concerns["session.sport"] !== platform.dedup.sport_family
@@ -118,9 +164,11 @@ function payload(platform: PlatformImportArtifact): string {
       start_utc: platform.dedup.start_utc,
     },
   };
-  return platform.sourceEvidence === undefined
+  const payloadJson = platform.sourceEvidence === undefined
     ? canonical(envelope)
     : canonicalJson({ ...envelope, schema_version: 1 });
+  if (platform.sourceEvidence !== undefined) parseActivityLandingEnvelope(payloadJson);
+  return payloadJson;
 }
 
 export async function buildPlatformPresentation(platform: PlatformImportArtifact, hashKey: HashKey): Promise<PlatformPresentation> {

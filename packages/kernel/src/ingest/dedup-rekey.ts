@@ -3,7 +3,7 @@ import { sortKeys } from "../store/canonical-json.js";
 import { createDedupConfirmationRepository } from "../store/dedup-confirmation-repository.js";
 import { deleteAllDerivedRowsInTransaction } from "./rebuild.js";
 import { createIntervalsSourceRepository, createRawFileRepository, createSourceRecordRepository } from "../store/source-repository.js";
-import type { DedupConfirmationRow, RawFileRow, Row, SourceRecordRow, SqlStore } from "../store/ports.js";
+import type { DedupConfirmationRow, RawFileRow, Row, SourceRecordRow, SqlReadStore, SqlStore } from "../store/ports.js";
 import type { Candidate, ConcernValue, LapConcern, SwimLengthConcern } from "./canonical-pick.js";
 import { DEFAULT_TRANSITION_WINDOW_S, planBrickAdjacency, type SportSettingInput } from "./brick-adjacency.js";
 import { DEFAULT_TIER3_THRESHOLDS, dedupPairStates, planDedup, type DedupCandidateSummary, type DedupPlan } from "./dedup.js";
@@ -71,7 +71,9 @@ function sourceRow(row: Row): SourceRecordRow {
 }
 
 export interface SelectedSourceRow extends SourceRecordRow {
+  readonly revision_id: string;
   readonly artifact_key: string | null;
+  readonly archive_address: string | null;
   readonly archive_rel_path: string | null;
   readonly archive_epoch_s: number | null;
 }
@@ -79,29 +81,111 @@ export interface SelectedSourceRow extends SourceRecordRow {
 function selectedSourceRow(row: Row): SelectedSourceRow {
   const source = sourceRow(row);
   const artifactKey = row.artifact_key === null ? null : string(row.artifact_key, "source artifact key");
+  const revisionId = artifactKey === null && (row.revision_id === undefined || row.revision_id === null)
+    ? source.id
+    : string(row.revision_id, "source revision id");
+  const archiveAddress = row.archive_address === undefined || row.archive_address === null
+    ? null : string(row.archive_address, "source archive address");
   const archiveRelPath = row.archive_rel_path === null ? null : string(row.archive_rel_path, "source archive path");
   const archiveEpoch = row.archive_epoch_s === null ? null : integer(row.archive_epoch_s, "source archive epoch");
   if (artifactKey === null) {
-    if (archiveRelPath !== null || archiveEpoch !== null) throw new TypeError("invalid legacy source archive evidence");
-  } else if (archiveRelPath === null || archiveEpoch === null) throw new TypeError("incomplete source archive evidence");
-  return { ...source, artifact_key: artifactKey, archive_rel_path: archiveRelPath, archive_epoch_s: archiveEpoch };
+    if (archiveAddress !== null || archiveRelPath !== null || archiveEpoch !== null) throw new TypeError("invalid legacy source archive evidence");
+  } else if (archiveAddress === null || archiveRelPath === null || archiveEpoch === null) throw new TypeError("incomplete source archive evidence");
+  return { ...source, revision_id: revisionId, artifact_key: artifactKey, archive_address: archiveAddress,
+    archive_rel_path: archiveRelPath, archive_epoch_s: archiveEpoch };
 }
 
 const SELECTED_ACTIVITY_SOURCE_SQL = `SELECT
   sr.id, sr.workout_key, sr.session_key, sr.source, sr.external_id,
-  r.raw_sha256, r.quality_rank, r.payload_json,
-  r.artifact_key, a.archive_rel_path, a.archive_epoch_s
+  c.revision_id, r.raw_sha256, r.quality_rank, r.payload_json,
+  r.artifact_key, a.archive_address, a.archive_rel_path, a.archive_epoch_s
 FROM source_record AS sr
 JOIN source_record_current AS c ON c.source_record_id = sr.id
 JOIN source_record_revision AS r
   ON r.source_record_id = c.source_record_id AND r.revision_id = c.revision_id
 LEFT JOIN source_artifact AS a ON a.artifact_key = r.artifact_key
-WHERE sr.source = 'intervals-icu'
-  AND (a.lane = 'activities' OR r.artifact_key IS NULL)
+WHERE sr.source = ? AND (a.lane = ? OR r.artifact_key IS NULL)
 ORDER BY sr.id`;
 
-export async function readSelectedSourceRows(store: SqlStore): Promise<SelectedSourceRow[]> {
-  return (await store.all(SELECTED_ACTIVITY_SOURCE_SQL)).map(selectedSourceRow);
+export async function readSelectedSourceRows(
+  store: Pick<SqlReadStore, "get" | "all">,
+  selection: { source: string; lane: "activities" } = { source: "intervals-icu", lane: "activities" },
+): Promise<SelectedSourceRow[]> {
+  return (await store.all(SELECTED_ACTIVITY_SOURCE_SQL, [selection.source, selection.lane])).map(selectedSourceRow);
+}
+
+export interface SelectedGenericRow {
+  readonly source_record_id: string;
+  readonly external_id: string;
+  readonly revision_id: string;
+  readonly payload_json: string;
+  readonly artifact_key: string;
+  readonly archive_address: string;
+  readonly archive_rel_path: string;
+  readonly archive_epoch_s: number;
+}
+
+export interface SourceArtifactRow {
+  readonly artifact_key: string;
+  readonly source: string;
+  readonly lane: "wellness";
+  readonly external_id: string;
+  readonly archive_address: string;
+  readonly archive_rel_path: string;
+  readonly archive_epoch_s: number;
+}
+
+function selectedGenericRow(row: Row): SelectedGenericRow {
+  return {
+    source_record_id: string(row.source_record_id, "generic source record id"),
+    external_id: string(row.external_id, "generic external id"),
+    revision_id: string(row.revision_id, "generic revision id"),
+    payload_json: string(row.payload_json, "generic payload"),
+    artifact_key: string(row.artifact_key, "generic artifact key"),
+    archive_address: string(row.archive_address, "generic archive address"),
+    archive_rel_path: string(row.archive_rel_path, "generic archive path"),
+    archive_epoch_s: integer(row.archive_epoch_s, "generic archive epoch"),
+  };
+}
+
+export async function readSelectedGenericRows(
+  store: Pick<SqlReadStore, "get" | "all">,
+  selection: { source: string; lane: "streams" | "settings" },
+): Promise<SelectedGenericRow[]> {
+  const rows = await store.all(`SELECT sr.id AS source_record_id, sr.external_id,
+       c.revision_id, r.payload_json, r.artifact_key,
+       a.archive_address, a.archive_rel_path, a.archive_epoch_s
+FROM source_record AS sr
+JOIN source_record_current AS c ON c.source_record_id = sr.id
+JOIN source_record_revision AS r
+  ON r.source_record_id = c.source_record_id AND r.revision_id = c.revision_id
+JOIN source_artifact AS a ON a.artifact_key = r.artifact_key
+WHERE sr.source = ? AND a.lane = ?
+ORDER BY sr.id`, [selection.source, selection.lane]);
+  return rows.map(selectedGenericRow);
+}
+
+export async function readSourceArtifactRows(
+  store: Pick<SqlReadStore, "get" | "all">,
+  selection: { source: string; lane: "wellness" },
+): Promise<SourceArtifactRow[]> {
+  const rows = await store.all(`SELECT artifact_key, source, lane, external_id, archive_address,
+       archive_rel_path, archive_epoch_s
+FROM source_artifact
+WHERE source = ? AND lane = ?
+ORDER BY artifact_key`, [selection.source, selection.lane]);
+  return rows.map((row) => {
+    if (row.lane !== "wellness") throw new TypeError("source artifact lane is invalid");
+    return {
+      artifact_key: string(row.artifact_key, "source artifact key"),
+      source: string(row.source, "source artifact source"),
+      lane: row.lane,
+      external_id: string(row.external_id, "source artifact external id"),
+      archive_address: string(row.archive_address, "source artifact address"),
+      archive_rel_path: string(row.archive_rel_path, "source artifact path"),
+      archive_epoch_s: integer(row.archive_epoch_s, "source artifact epoch"),
+    };
+  });
 }
 
 export function sourcePresentationRow(row: SelectedSourceRow): SourceRecordRow {

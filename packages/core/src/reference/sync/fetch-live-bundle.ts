@@ -25,6 +25,17 @@ import {
   selectReferenceCaptureStreamIds,
   type ReferenceCapturePlan,
 } from "@enduragent/kernel/reference/capture";
+import {
+  assertNoTpKeysRemain,
+  deriveFtpHistory,
+  normalizeStreams,
+  parseRenamedActivity,
+  parseRenamedWellnessRow,
+  renameTpFieldsOnActivity,
+  renameTpFieldsOnWellnessRow,
+  type ReferenceBundle,
+  type RenameSummary,
+} from "@enduragent/kernel/reference/local-bundle";
 
 import {
   AthleteSchema,
@@ -32,19 +43,11 @@ import {
   type Activity,
   type ActivityStreams,
   type AthleteSettings,
-  type FtpHistoryPoint,
   type WellnessDay,
 } from "../schemas/inputs.js";
-import {
-  assertNoTpKeysRemain,
-  parseRenamedActivity,
-  parseRenamedWellnessRow,
-  renameTpFieldsOnActivity,
-  renameTpFieldsOnWellnessRow,
-  type RenameSummary,
-} from "./rename-tp-fields.js";
 import { LATEST_RETENTION_DAYS } from "../freshness.js";
-import type { ReferenceBundle } from "./fixture-bridge.js";
+
+export { deriveFtpHistory, normalizeStreams } from "@enduragent/kernel/reference/local-bundle";
 
 /** Trailing window pulled for metric computation (covers the widest metric
  *  window — the 42-day sustainability look-back — with margin). */
@@ -66,19 +69,6 @@ const STREAM_PHASE_BUDGET_MS = 60_000;
  *  HRV channels the DFA-α1 block reads; `watts`/`heartrate` feed the per-session
  *  capability blocks. `time` is requested for alignment and rides through. */
 export const STREAM_TYPES: readonly string[] = REFERENCE_CAPTURE_STREAM_TYPES;
-
-/** Cycling sport types whose `sportInfo.eftp` seeds the FTP history series. */
-const CYCLING_TYPES: ReadonlySet<string> = new Set([
-  "Ride",
-  "VirtualRide",
-  "GravelRide",
-  "MountainBikeRide",
-  "EBikeRide",
-  "EMountainBikeRide",
-  "TrackRide",
-  "Cyclocross",
-  "Handcycle",
-]);
 
 type FetchResult<T> = { ok: true; value: T } | { ok: false; error: unknown };
 
@@ -126,58 +116,6 @@ export interface LiveFetchResult {
 // (`[{type, data}, …]`); the lib also camelCases response keys (so `dfa_a1`
 // becomes `dfaA1` on the object form). Normalize both into the channel-keyed
 // shape the metrics + ActivityStreamsSchema consume (`{dfa_a1, watts, …}`).
-export function normalizeStreams(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    const out: Record<string, unknown> = {};
-    for (const el of value) {
-      if (
-        el !== null &&
-        typeof el === "object" &&
-        typeof (el as Record<string, unknown>).type === "string" &&
-        Array.isArray((el as Record<string, unknown>).data)
-      ) {
-        out[(el as Record<string, unknown>).type as string] = (el as Record<string, unknown>).data;
-      }
-    }
-    return out;
-  }
-  if (value !== null && typeof value === "object") {
-    return snakeCaseKeys(value);
-  }
-  return value;
-}
-
-/** Sparse cycling FTP series from per-day `sportInfo.eftp` — one point per
- *  change. intervals.icu has no public FTP-history endpoint, so the series is
- *  synthesized from wellness sportInfo exactly as the fixture builder does. */
-export function deriveFtpHistory(
-  wellness: readonly WellnessDay[],
-): FtpHistoryPoint[] {
-  const points: FtpHistoryPoint[] = [];
-  let lastFtp: number | null = null;
-  const sorted = [...wellness].sort((a, b) => String(a.id).localeCompare(String(b.id)));
-  for (const day of sorted) {
-    const sportInfo =
-      (day as { sportInfo?: Array<Record<string, unknown>> | null }).sportInfo ?? [];
-    let cyclingEftp: number | null = null;
-    for (const si of sportInfo) {
-      if (
-        typeof si.type === "string" &&
-        CYCLING_TYPES.has(si.type) &&
-        typeof si.eftp === "number" &&
-        Number.isFinite(si.eftp)
-      ) {
-        cyclingEftp = Math.round(si.eftp);
-        break;
-      }
-    }
-    if (cyclingEftp === null || cyclingEftp === lastFtp) continue;
-    points.push({ date: String(day.id), ftp: cyclingEftp, source: "estimate" });
-    lastFtp = cyclingEftp;
-  }
-  return points;
-}
-
 function extractAthleteSettings(profile: unknown): AthleteSettings | undefined {
   if (typeof profile !== "object" || profile === null) return undefined;
   const sportSettings = (profile as Record<string, unknown>).sportSettings;

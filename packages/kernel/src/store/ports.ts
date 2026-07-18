@@ -16,6 +16,12 @@ export interface SqlStore {
   close(): Promise<void>;
 }
 
+export interface SqlReadStore {
+  get(sql: string, params?: readonly SqlValue[]): Promise<Row | undefined>;
+  all(sql: string, params?: readonly SqlValue[]): Promise<Row[]>;
+  close(): Promise<void>;
+}
+
 export interface AnchorHistoryRow {
   id: string;
   sport: string;

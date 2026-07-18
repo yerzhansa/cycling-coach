@@ -22,6 +22,7 @@
     "./reference/errors": "./dist/reference/errors.js",
     "./reference/trademark-policy": "./dist/reference/trademark-policy.js",
     "./reference/capture": "./dist/reference/capture.js",
+    "./reference/local-bundle": "./dist/reference/local-bundle.js",
     "./concurrency": "./dist/concurrency.js"
   },
   "scripts": {

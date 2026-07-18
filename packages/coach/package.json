@@ -10,7 +10,8 @@
     "./sync": "./dist/sync.js",
     "./backfill": "./dist/backfill.js",
     "./backfill-benchmark": "./dist/backfill-benchmark.js",
-    "./capture": "./dist/capture.js"
+    "./capture": "./dist/capture.js",
+    "./local-bundle-producer": "./dist/local-bundle-producer.js"
   },
   "engines": {
     "node": ">=24"
