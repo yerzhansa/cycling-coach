@@ -190,6 +190,7 @@ describe("setup merge", () => {
     seedConfig({
       llm: { provider: "anthropic", model: "claude-sonnet-4-6", api_key: "sk-ant-keep" },
       data_dir: "/custom/dir",
+      data_source: "future-source",
       session: { idleMinutes: 15 },
     });
 
@@ -215,6 +216,7 @@ describe("setup merge", () => {
 
     const merged = parseYaml(readFileSync(CONFIG(), "utf-8")) as Record<string, any>;
     expect(merged.data_dir).toBe("/custom/dir");
+    expect(merged.data_source).toBe("future-source");
     expect(merged.session).toEqual({ idleMinutes: 15 });
   });
 });

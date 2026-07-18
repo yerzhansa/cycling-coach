@@ -19,6 +19,7 @@ describe("config — session defaults", () => {
   it("resolves all four session defaults with an empty config", async () => {
     const { loadConfig } = await import("../src/config.js");
     const cfg = loadConfig();
+    expect(cfg.dataSource).toBe("platform");
     expect(cfg.session.dailyResetHour).toBe(4);
     expect(cfg.session.idleMinutes).toBe(0);
     expect(cfg.session.historyTokenBudgetRatio).toBe(0.3);

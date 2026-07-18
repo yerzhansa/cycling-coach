@@ -56,6 +56,7 @@ const COMPOSITION_ROOT_ALLOWED: readonly string[] = [
   "@enduragent/kernel",
   "@enduragent/kernel-node",
   "@enduragent/sync-*",
+  "@enduragent/sport-*",
 ];
 
 const LEGACY_BINARY_ALLOWED: readonly string[] = ["@enduragent/core", "@enduragent/sport-*"];

@@ -10,6 +10,13 @@ import type { SecretsResolver } from "../secrets/types.js";
 import type { Config } from "../config.js";
 import { contextWindowForModel } from "../config.js";
 import { resolveSecretRef } from "../secrets/resolve.js";
+import {
+  createMissingPlatformCalendarMutations,
+  createPlatformAthleteDataReader,
+  createPlatformCalendarMutations,
+  type AthleteDataReader,
+  type PlatformCalendarMutations,
+} from "../athlete-data.js";
 import { safeReadJson } from "../io/safe-read-json.js";
 import {
   ErrorStateSchema,
@@ -199,7 +206,13 @@ export class CoachAgent {
   // computed once on first use and reused for every turn of the process.
   private templateHash?: string;
 
-  constructor(sport: Sport, config: Config) {
+  constructor(sport: Sport, config: Config, selected: {
+    athleteData?: AthleteDataReader;
+    calendarMutations?: PlatformCalendarMutations;
+  } = {}) {
+    if (config.dataSource === "store" && selected.athleteData === undefined) {
+      throw new TypeError("Store data source requires an athlete data reader.");
+    }
     this.sport = sport;
     this.config = config;
     this.llm = new LLM(config);
@@ -232,11 +245,20 @@ export class CoachAgent {
           athleteId: config.intervals.athleteId,
         })
       : null;
+    const athleteData = config.dataSource === "store"
+      ? selected.athleteData
+      : (intervals === null ? undefined : createPlatformAthleteDataReader(intervals));
+    const calendarMutations = selected.calendarMutations
+      ?? (intervals === null
+        ? createMissingPlatformCalendarMutations()
+        : createPlatformCalendarMutations(intervals));
 
     const secrets: SecretsResolver = { resolve: resolveSecretRef };
     const coreDeps: CoreDeps = {
       llm: this.llm,
       intervals,
+      athleteData,
+      calendarMutations,
       memory: this.memory,
       secrets,
       tz: this.tz,
@@ -289,6 +311,7 @@ export class CoachAgent {
    * a chat turn, so `safeReadJson` returning null yields no block.
    */
   private buildDegradeBlock(): string | undefined {
+    if (this.config.dataSource === "store") return undefined;
     const referenceDir = join(this.config.dataDir, "data");
     const errorState = safeReadJson<ErrorState>(
       join(referenceDir, "error_state.json"),

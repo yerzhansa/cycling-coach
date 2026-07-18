@@ -16,6 +16,7 @@ import type {
   SnapshotSourceArtifact,
   SourceCheckpoint,
   SourceWatermark,
+  PhysicalRequestLedger,
   SyncBudget,
   SyncSource,
 } from "@enduragent/kernel/store";
@@ -52,6 +53,7 @@ export interface IntervalsIcuSourceOptions {
   readonly acl: IntervalsLandingAcl;
   readonly wallClock: Pick<ClockPort, "now">;
   readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
+  readonly attemptLedger?: PhysicalRequestLedger;
 }
 
 export type IntervalsIcuArtifact =

@@ -4,7 +4,9 @@ import { writeSync } from "node:fs";
 import type { Sport } from "./sport.js";
 import { type BinaryConfig, binaryEnvVar } from "./binary.js";
 import type { Memory } from "./memory/store.js";
-import { CONFIG_DIR, envInt } from "./config.js";
+import { CONFIG_DIR, envInt, type Config } from "./config.js";
+import type { AthleteDataReader, PlatformCalendarMutations } from "./athlete-data.js";
+import type { ReferenceRuntime } from "./reference/runtime.js";
 import { appendUsageLine } from "./usage-ledger.js";
 import {
   addSender,
@@ -22,7 +24,15 @@ export function formatCliReply(err: unknown): string {
   return classifyAgentError(err).athleteMessage;
 }
 
+export interface PreparedCoachComposition {
+  athleteData?: AthleteDataReader;
+  calendarMutations?: PlatformCalendarMutations;
+  reference?: ReferenceRuntime;
+  close?: () => Promise<void>;
+}
+
 export interface RunBinaryHooks {
+  prepare?: (input:{config:Config;sport:Sport})=>Promise<PreparedCoachComposition>;
   /** Called once per process at startup, after Memory exists, before any chat handler is reachable. */
   onStartup?: (memory: Memory) => void | Promise<void>;
 }
@@ -232,6 +242,9 @@ interface BotShutdownDeps {
   exit: (code: number) => void;
   drainTimeoutMs?: number;
   log?: (line: string) => void;
+  stopTimer?: () => void | Promise<void>;
+  closeReference?: () => void | Promise<void>;
+  closePrepared?: () => Promise<void>;
 }
 
 // Builds the SIGTERM/SIGINT handler that brings the bot down cleanly: halt new
@@ -257,6 +270,9 @@ export function makeBotShutdown(deps: BotShutdownDeps): () => Promise<void> {
         deps.drainPending(),
         new Promise<void>((resolve) => setTimeout(resolve, drainTimeoutMs).unref?.()),
       ]);
+      await deps.stopTimer?.();
+      await deps.closeReference?.();
+      await deps.closePrepared?.();
       deps.markCleanShutdown({ dataDir: deps.dataDir });
     } catch (err) {
       console.error(
@@ -342,8 +358,12 @@ export async function runBinary(
   }
 
   const bootStart = Date.now();
+  const prepared = await hooks.prepare?.({ config, sport }) ?? {};
   const { createCoachEngine } = await import("./agent/coach-engine.js");
-  const engine = createCoachEngine(sport, config);
+  const engine = createCoachEngine(sport, config, {
+    athleteData: prepared.athleteData,
+    calendarMutations: prepared.calendarMutations,
+  });
 
   // Init order: Memory (above) → startup hook → Reference bootstrap → Telegram.
   // Reference's internal init sequence is pinned inside `bootstrapReference`
@@ -352,11 +372,18 @@ export async function runBinary(
 
   const { bootstrapReference } = await import("./reference/runtime.js");
   console.log("syncing training data from intervals.icu…");
-  const reference = await bootstrapReference({
-    dataDir: config.dataDir,
-    intervals: config.intervals,
-    sport,
-  });
+  const reference = prepared.reference ?? await bootstrapReference({
+      dataDir: config.dataDir,
+      intervals: config.intervals,
+      sport,
+    });
+  let runtimeClosed = false;
+  const closeRuntime = async (): Promise<void> => {
+    if (runtimeClosed) return;
+    runtimeClosed = true;
+    reference.scheduler.stop();
+    await prepared.close?.();
+  };
 
   appendUsageLine(config.dataDir, {
     ts: Date.now(),
@@ -413,6 +440,7 @@ export async function runBinary(
     const shutdownBot = makeBotShutdown({
       stop: () => bot.stop(),
       drainPending,
+      closePrepared: closeRuntime,
       dataDir: config.dataDir,
       markCleanShutdown,
       exit: (code) => process.exit(code),
@@ -443,8 +471,7 @@ export async function runBinary(
     });
 
     rl.on("close", () => {
-      reference.scheduler.stop();
-      process.exit(0);
+      void closeRuntime().finally(() => process.exit(0));
     });
 
     rl.prompt();

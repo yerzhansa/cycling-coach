@@ -4,6 +4,7 @@
  */
 export function baseAgentConfig(dataDir: string) {
   return {
+    dataSource: "platform" as const,
     llm: {
       provider: "openai-codex" as const,
       model: "gpt-5.4",

@@ -82,6 +82,9 @@ importers:
       '@enduragent/kernel-node':
         specifier: workspace:*
         version: link:../kernel-node
+      '@enduragent/sport-cycling':
+        specifier: workspace:*
+        version: link:../sport-cycling
       '@enduragent/sync-intervals-icu':
         specifier: workspace:*
         version: link:../sync-intervals-icu

@@ -65,6 +65,7 @@ function snapshotMemory(sections: Record<string, string>): MemorySnapshot {
 
 function makeConfig(model: string, apiKey: string, dataDir: string): Config {
   return {
+    dataSource: "platform",
     llm: { provider: "anthropic", model, apiKey },
     intervals: { apiKey: "", athleteId: "0" },
     telegram: { botToken: "" },

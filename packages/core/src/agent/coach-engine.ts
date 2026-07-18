@@ -3,6 +3,7 @@ import type { Sport } from "../sport.js";
 import type { Memory } from "../memory/store.js";
 import type { ResolvedCs } from "../reference/cs-resolution.js";
 import { CoachAgent } from "./coach-agent.js";
+import type { AthleteDataReader, PlatformCalendarMutations } from "../athlete-data.js";
 
 /**
  * The subset of the agent's public surface the in-process channels consume.
@@ -34,8 +35,13 @@ export interface LocalCoachEngine extends CoachEngineSeam {
  * every method forwards verbatim, so reverting to direct CoachAgent
  * construction is a mechanical substitution.
  */
-export function createCoachEngine(sport: Sport, config: Config): LocalCoachEngine {
-  const agent = new CoachAgent(sport, config);
+export function createCoachEngine(sport: Sport, config: Config, deps: {
+  athleteData?: AthleteDataReader;
+  calendarMutations?: PlatformCalendarMutations;
+} = {}): LocalCoachEngine {
+  const agent = deps.athleteData === undefined && deps.calendarMutations === undefined
+    ? new CoachAgent(sport, config)
+    : new CoachAgent(sport, config, deps);
   return {
     chat: (chatId: string, userMessage: string, turn?: { resolvedCs?: ResolvedCs | null }) =>
       agent.chat(chatId, userMessage, turn),

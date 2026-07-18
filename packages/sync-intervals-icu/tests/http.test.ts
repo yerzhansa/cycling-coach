@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HttpPort, HttpResponse } from "@enduragent/kernel/ports";
-import type { SyncBudget } from "@enduragent/kernel/store";
+import { createPhysicalRequestLedger, type PhysicalRequestLedger, type SyncBudget } from "@enduragent/kernel/store";
 import { makeIntervalsHttpFactory } from "../../core/src/reference/sync/intervals-client-factory.js";
 import { createRequester, IntervalsHttpError, SyncBudgetExceededError } from "../src/index.js";
 
@@ -11,14 +11,15 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function harness(http: HttpPort, options: { deadline?: number; maxRequests?: number } = {}) {
+function harness(http: HttpPort, options: { deadline?: number; maxRequests?: number; ledger?: PhysicalRequestLedger } = {}) {
   let now = 0;
   const sleeps: number[] = [];
   const budget: SyncBudget = { signal: new AbortController().signal, clock: { monotonicNow: () => now },
     deadlineMonotonicMs: options.deadline ?? 1_000_000, perRequestTimeoutMs: 30_000,
     maxRequests: options.maxRequests ?? 10, maxArtifacts: 10 };
   const requester = createRequester({ http, budget, minRequestIntervalMs: 500,
-    wallClock: { now: () => Date.UTC(1998, 0, 1) }, sleep: async (ms) => { sleeps.push(ms); now += ms; } });
+    wallClock: { now: () => Date.UTC(1998, 0, 1) }, sleep: async (ms) => { sleeps.push(ms); now += ms; },
+    attemptLedger: options.ledger });
   return { requester, budget, sleeps, now: () => now };
 }
 
@@ -105,5 +106,19 @@ describe("intervals.icu request policy", () => {
     await expect(value.requester.request("settings", { method: "POST", url: "https://intervals.icu/api/v1/test" }))
       .rejects.toEqual(expect.objectContaining<Partial<IntervalsHttpError>>({ status: 401, retryAfterMs: null }));
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("charges every physical retry and rejects bulk FIT before fetch on the gate path", async () => {
+    const ledger = createPhysicalRequestLedger({ storeLimit: 64, legacyLimit: 15, totalLimit: 79 });
+    let attempts = 0;
+    const value = harness({ fetch: async () => ++attempts === 1 ? response(503) : response(200) }, { ledger });
+    await value.requester.request("activities", { method: "GET", url: "https://intervals.icu/api/v1/test" });
+    expect(ledger.snapshot()).toMatchObject({ storeRequests: 2, totalRequests: 2,
+      byTag: { "store:activities": 2 } });
+    const fetch = vi.fn(async () => response(200));
+    const bulk = harness({ fetch }, { ledger });
+    await expect(bulk.requester.request("bulk-fit", { method: "POST", url: "https://intervals.icu/api/v1/test" }))
+      .rejects.toBeInstanceOf(SyncBudgetExceededError);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

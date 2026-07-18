@@ -6,6 +6,7 @@ const MINIMAL_RESULT = { text: "ok", toolCalls: [], finishReason: "stop", usage:
 
 function codexConfig(): Config {
   return {
+    dataSource: "platform",
     llm: { provider: "openai-codex", model: "gpt-5.4", apiKey: "", authProfile: "openai-codex" },
     intervals: { apiKey: "", athleteId: "0" },
     telegram: { botToken: "" },
@@ -17,6 +18,7 @@ function codexConfig(): Config {
 
 function anthropicConfig(): Config {
   return {
+    dataSource: "platform",
     llm: { provider: "anthropic", model: "claude-test", apiKey: "test-key" },
     intervals: { apiKey: "", athleteId: "0" },
     telegram: { botToken: "" },

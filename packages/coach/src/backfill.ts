@@ -12,7 +12,7 @@ import {
 } from "@enduragent/kernel/reference/local-bundle";
 import type { ArchiveInstant, ArchiveManager, ArchiveWriteResult } from "@enduragent/kernel/archive";
 import type { ImportArtifact, ImportReport, ImportReportDeps, PairDiagnostic, PlatformImportArtifact } from "@enduragent/kernel/ingest";
-import { createSyncStateRepository, dumpStore, type SourceArtifactDraft, type SqlStore, type SyncBudget } from "@enduragent/kernel/store";
+import { createSyncStateRepository, dumpStore, type PhysicalRequestLedger, type SourceArtifactDraft, type SqlStore, type SyncBudget } from "@enduragent/kernel/store";
 import { createNodeImportRuntime, type NodeImportRuntime } from "@enduragent/kernel-node/ingest";
 import {
   createIntervalsIcuSource,
@@ -39,6 +39,7 @@ export function createIntervalsBackfillSource(options: {
   readonly clock: BackfillClock;
   readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
   readonly baseFetch?: typeof globalThis.fetch;
+  readonly attemptLedger?: PhysicalRequestLedger;
 }): IntervalsIcuSource {
   const acl: IntervalsLandingAcl = Object.freeze({
     activity(row: Record<string, unknown>) {
@@ -69,6 +70,7 @@ export function createIntervalsBackfillSource(options: {
     acl,
     wallClock: options.clock,
     sleep: options.sleep,
+    ...(options.attemptLedger === undefined ? {} : { attemptLedger: options.attemptLedger }),
   });
 }
 

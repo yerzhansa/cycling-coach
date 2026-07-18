@@ -6,6 +6,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../src/agent/system-prompt.js";
 
 function anthropicConfig(): Config {
   return {
+    dataSource: "platform",
     llm: { provider: "anthropic", model: "claude-sonnet-4-6", apiKey: "test-key" },
     intervals: { apiKey: "", athleteId: "0" },
     telegram: { botToken: "" },
@@ -17,6 +18,7 @@ function anthropicConfig(): Config {
 
 function codexConfig(): Config {
   return {
+    dataSource: "platform",
     llm: { provider: "openai-codex", model: "gpt-5.4", apiKey: "", authProfile: "openai-codex" },
     intervals: { apiKey: "", athleteId: "0" },
     telegram: { botToken: "" },
@@ -28,6 +30,7 @@ function codexConfig(): Config {
 
 function aiSdkConfig(provider: "openai" | "google", model: string): Config {
   return {
+    dataSource: "platform",
     llm: { provider, model, apiKey: "test-key" },
     intervals: { apiKey: "", athleteId: "0" },
     telegram: { botToken: "" },
@@ -39,6 +42,7 @@ function aiSdkConfig(provider: "openai" | "google", model: string): Config {
 
 function openrouterConfig(model: string): Config {
   return {
+    dataSource: "platform",
     llm: { provider: "openrouter", model, apiKey: "test-key" },
     intervals: { apiKey: "", athleteId: "0" },
     telegram: { botToken: "" },
