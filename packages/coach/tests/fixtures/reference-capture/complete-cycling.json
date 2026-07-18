@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "capture_id": "00000000-0000-4000-8000-000000000001",
+  "frozen_now": "1998-06-04T12:00:00",
+  "athlete": {
+    "id": "synthetic-athlete"
+  },
+  "activities": [
+    {
+      "id": "ride-zeta",
+      "start_date": "1998-06-03T08:00:00Z",
+      "start_date_local": "1998-06-03T08:00:00",
+      "type": "Ride",
+      "moving_time": 3600,
+      "elapsed_time": 3660,
+      "distance": 32000,
+      "icu_training_load": 72,
+      "icu_intensity": 82,
+      "average_watts": 205,
+      "average_heartrate": 146,
+      "icu_zone_times": [
+        { "id": "Z1", "secs": 900 },
+        { "id": "Z2", "secs": 2100 },
+        { "id": "Z3", "secs": 600 }
+      ]
+    },
+    {
+      "id": "ride-alpha",
+      "start_date": "1998-06-02T09:00:00Z",
+      "start_date_local": "1998-06-02T09:00:00",
+      "type": "VirtualRide",
+      "moving_time": 2700,
+      "elapsed_time": 2700,
+      "distance": 24500,
+      "icu_training_load": 72,
+      "icu_intensity": 88,
+      "average_watts": 218,
+      "average_heartrate": 151,
+      "icu_zone_times": [
+        { "id": "Z1", "secs": 600 },
+        { "id": "Z2", "secs": 1200 },
+        { "id": "Z3", "secs": 900 }
+      ]
+    }
+  ],
+  "wellness": [
+    {
+      "id": "1998-06-03",
+      "weight": 71.2,
+      "restingHR": 48,
+      "hrv": 62,
+      "sleepSecs": 27900,
+      "sleepQuality": 4,
+      "sportInfo": [
+        { "type": "Ride", "eftp": 244.6 }
+      ]
+    }
+  ],
+  "settings_revisions": [
+    {
+      "id": 7,
+      "athlete_id": "synthetic-athlete",
+      "types": ["Ride"],
+      "updated": "1998-05-20T10:00:00Z",
+      "ftp": 230,
+      "indoor_ftp": 225,
+      "lthr": 168
+    },
+    {
+      "id": 7,
+      "athlete_id": "synthetic-athlete",
+      "types": ["Ride"],
+      "updated": "1998-06-01T10:00:00Z",
+      "ftp": 245,
+      "indoor_ftp": 240,
+      "lthr": 170
+    }
+  ],
+  "streams": {
+    "ride-zeta": {
+      "time": [0, 60, 120],
+      "watts": [190, 220, 205],
+      "heartrate": [138, 151, 149]
+    },
+    "ride-alpha": {
+      "time": [0, 60, 120],
+      "watts": [210, 235, 225],
+      "heartrate": [145, 156, 153]
+    }
+  }
+}

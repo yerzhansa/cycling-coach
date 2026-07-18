@@ -22,7 +22,8 @@
     "test": "vitest run",
     "backfill": "node dist/backfill-command.js",
     "benchmark": "node dist/backfill-command.js --synthetic --conclusions-only",
-    "capture-reference": "node dist/capture-command.js"
+    "capture-reference": "node dist/capture-command.js",
+    "capture-once": "node dist/reference-capture-command.js"
   },
   "dependencies": {
     "@enduragent/core": "workspace:*",

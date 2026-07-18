@@ -9,6 +9,7 @@ export default defineConfig({
     "backfill-command": "src/backfill-command.ts",
     capture: "src/capture.ts",
     "capture-command": "src/capture-command.ts",
+    "reference-capture-command": "src/reference-capture-command.ts",
     "local-bundle-producer": "src/local-bundle-producer.ts",
   },
   format: ["esm"],
