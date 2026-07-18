@@ -15,6 +15,7 @@ export default defineConfig({
     "local-bot": "src/local-bot.ts",
     "soak-record": "src/soak-record.ts",
     "store-gate-command": "src/store-gate-command.ts",
+    "season-review-command": "src/season-review-command.ts",
   },
   format: ["esm"],
   dts: true,
