@@ -14,6 +14,7 @@ import {
   intervalsWorkoutInputSchema,
   InvalidWorkoutError,
 } from "./index.js";
+import { CYCLING_PRESCRIPTION_CAPABILITY } from "./prescription-posture.js";
 import type {
   AthleteProfile,
   ExperienceLevel,
@@ -53,7 +54,8 @@ export function createCyclingTools(
 
     build_plan_skeleton: tool({
       description:
-        "Build a periodized training plan skeleton from athlete profile. Returns phases, volume targets, zone tables, and testing protocols.",
+        CYCLING_PRESCRIPTION_CAPABILITY.toolSelectionRule +
+        " Build a periodized training plan skeleton from athlete profile. Returns phases, volume targets, zone tables, and testing protocols.",
       inputSchema: zodSchema(
         z.object({
           experienceLevel: z.enum(["beginner", "intermediate", "advanced", "elite"]),
@@ -122,7 +124,9 @@ export function createCyclingTools(
     }),
 
     get_sample_week: tool({
-      description: "Get a sample training week for a given volume tier and schedule type",
+      description:
+        CYCLING_PRESCRIPTION_CAPABILITY.toolSelectionRule +
+        " Get a sample training week for a given volume tier and schedule type",
       inputSchema: zodSchema(
         z.object({
           volumeTier: z.enum(["low", "medium", "high"]),
@@ -152,7 +156,8 @@ export function createCyclingTools(
       ? {
           intervals_create_workout: tool({
             description:
-              "Create a structured workout on the intervals.icu calendar. Auto-syncs to Garmin/Wahoo. " +
+              CYCLING_PRESCRIPTION_CAPABILITY.toolSelectionRule +
+              " Create a structured workout on the intervals.icu calendar. Auto-syncs to Garmin/Wahoo. " +
               "Supply the workout as structured steps — the tool serializes them into the intervals.icu " +
               "native description syntax so the power chart renders. Put athlete-facing coaching narrative " +
               "(feel, notes, hydration) in your chat reply, not in this tool.",

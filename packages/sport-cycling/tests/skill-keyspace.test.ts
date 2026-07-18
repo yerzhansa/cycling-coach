@@ -9,12 +9,13 @@ const fakeMemory = { getContext: () => "" } as unknown as MemoryStorePort;
 describe("cycling skill keyspace", () => {
   it("prefixes every cycling skill key with cycling-", () => {
     const keys = Object.keys(cyclingSport.skills);
-    expect(keys.length).toBe(7);
+    expect(keys.length).toBe(8);
     expect(keys.every((k) => k.startsWith("cycling-"))).toBe(true);
     expect(keys.slice().sort()).toEqual(
       [
         "cycling-intervals-icu",
         "cycling-periodization",
+        "cycling-prescription-posture",
         "cycling-race-prep",
         "cycling-recovery",
         "cycling-review",
@@ -52,6 +53,6 @@ describe("cycling skill keyspace", () => {
     expect(() => {
       merged = mergeSportSkills(cyclingSport.skills, { "running-periodization": "RP" });
     }).not.toThrow();
-    expect(Object.keys(merged).length).toBe(8);
+    expect(Object.keys(merged).length).toBe(9);
   });
 });
