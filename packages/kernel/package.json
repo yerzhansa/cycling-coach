@@ -6,6 +6,7 @@
   "type": "module",
   "files": ["dist"],
   "exports": {
+    "./anchors": "./dist/anchors.js",
     "./ports": "./dist/ports.js",
     "./store/migrations": "./dist/store/migrations.js",
     "./store": "./dist/store.js",
