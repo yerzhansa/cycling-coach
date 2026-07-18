@@ -2,6 +2,7 @@ import { defineConfig } from "tsup";
 
 export default defineConfig({
   entry: {
+    anchors: "src/anchors/index.ts",
     ports: "src/ports/index.ts",
     "store/migrations": "src/store/migrations/index.ts",
     store: "src/store/index.ts",

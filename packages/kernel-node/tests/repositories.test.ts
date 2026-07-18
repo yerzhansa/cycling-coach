@@ -108,18 +108,28 @@ describe("repository ports over real node:sqlite", () => {
       expect(asOf2?.value).toBe(260);
     });
 
-    it("applies confidence precedence for same valid_from (manual > platform)", async () => {
+    it("applies confidence precedence for same valid_from (manual > platform > fit)", async () => {
       const repo = createAnchorRepository(store);
       await repo.insertIfAbsent(
-        anchorRow({ id: "plat", valid_from: 1000, value: 240, confidence: "platform", provenance: "sync", source: "connector" }),
+        anchorRow({ id: "fit", valid_from: 1000, value: 230, confidence: "fit", provenance: "sync", source: "fit" }),
       );
+      const fit = await repo.readCurrent("cycling", "ftp", 1500);
+      expect(fit?.confidence).toBe("fit");
+      expect(fit?.value).toBe(230);
+      await store.run(
+        "INSERT INTO anchor_history (id, sport, anchor_type, value, unit, valid_from, source, confidence, note, provenance, device_id, hlc_physical_ms, hlc_counter) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        ["plat", "cycling", "ftp", 240, "W", 1000, "connector", "platform", null, "sync", null, null, null],
+      );
+      const platform = await repo.readCurrent("cycling", "ftp", 1500);
+      expect(platform?.confidence).toBe("platform");
+      expect(platform?.value).toBe(240);
       await store.run(
         "INSERT INTO anchor_history (id, sport, anchor_type, value, unit, valid_from, source, confidence, note, provenance, device_id, hlc_physical_ms, hlc_counter) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         ["man", "cycling", "ftp", 250, "W", 1000, "manual", "manual", null, "manual", null, null, null],
       );
-      const current = await repo.readCurrent("cycling", "ftp", 1500);
-      expect(current?.confidence).toBe("manual");
-      expect(current?.value).toBe(250);
+      const manual = await repo.readCurrent("cycling", "ftp", 1500);
+      expect(manual?.confidence).toBe("manual");
+      expect(manual?.value).toBe(250);
     });
   });
 
