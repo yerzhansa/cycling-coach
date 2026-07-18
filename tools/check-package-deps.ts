@@ -46,6 +46,7 @@ export interface PackageDepRule {
   readonly srcOnly: boolean;
   readonly allowedWorkspace: readonly string[];
   readonly allowedManifestWorkspace?: readonly string[];
+  readonly allowedExternal?: readonly string[];
   readonly transitionalWorkspace: readonly string[];
   readonly forbidNode: boolean;
 }
@@ -121,9 +122,18 @@ export const RULES: readonly PackageDepRule[] = [
     ruleId: "R6",
     dir: "packages/coach-cli",
     srcOnly: true,
-    allowedWorkspace: ["@enduragent/coach-contract"],
+    allowedWorkspace: ["@enduragent/coach-contract", "@enduragent/coach-client"],
     transitionalWorkspace: [],
     forbidNode: false,
+  },
+  {
+    ruleId: "R6",
+    dir: "packages/coach-client",
+    srcOnly: true,
+    allowedWorkspace: ["@enduragent/coach-contract"],
+    transitionalWorkspace: [],
+    allowedExternal: [],
+    forbidNode: true,
   },
   {
     ruleId: "R6",
@@ -400,15 +410,31 @@ export function runRulesAgainst(root: string, rules: readonly PackageDepRule[]):
             }
             continue;
           }
-          if (!spec.startsWith(WORKSPACE_SCOPE)) continue;
-          const isSelfReference = packageRoot(spec) === packageName;
-          if (isSelfReference) {
-            const exportKey = spec === packageName ? null : `.${spec.slice(packageName.length)}`;
-            const isDeclaredPublicSubpath =
-              exportKey !== null &&
-              Object.prototype.hasOwnProperty.call(packageExports, exportKey) &&
-              packageExports[exportKey] !== null;
-            if (isDeclaredPublicSubpath) continue;
+          if (spec.startsWith(WORKSPACE_SCOPE)) {
+            const isSelfReference = packageRoot(spec) === packageName;
+            if (isSelfReference) {
+              const exportKey = spec === packageName ? null : `.${spec.slice(packageName.length)}`;
+              const isDeclaredPublicSubpath =
+                exportKey !== null &&
+                Object.prototype.hasOwnProperty.call(packageExports, exportKey) &&
+                packageExports[exportKey] !== null;
+              if (isDeclaredPublicSubpath) continue;
+              violations.push({
+                file,
+                line: ref.line,
+                column: ref.column,
+                ruleId: rule.ruleId,
+                specifier: spec,
+                pkg: dir,
+              });
+              continue;
+            }
+            const verdict = classifySourceWorkspace(spec, rule);
+            if (verdict === "allowed") continue;
+            if (verdict === "transitional") {
+              recordWarn(dir, packageRoot(spec));
+              continue;
+            }
             violations.push({
               file,
               line: ref.line,
@@ -419,10 +445,11 @@ export function runRulesAgainst(root: string, rules: readonly PackageDepRule[]):
             });
             continue;
           }
-          const verdict = classifySourceWorkspace(spec, rule);
-          if (verdict === "allowed") continue;
-          if (verdict === "transitional") {
-            recordWarn(dir, packageRoot(spec));
+          if (spec.startsWith("./") || spec.startsWith("../")) continue;
+          if (
+            rule.allowedExternal === undefined ||
+            rule.allowedExternal.some((entry) => matchesEntry(spec, entry))
+          ) {
             continue;
           }
           violations.push({
@@ -439,13 +466,27 @@ export function runRulesAgainst(root: string, rules: readonly PackageDepRule[]):
       // (2) Manifest check over declared runtime dependency edges.
       const manifestFile = join(dir, "package.json");
       for (const { name } of deps) {
-        if (!name.startsWith(WORKSPACE_SCOPE)) continue;
-        const verdict = classifyManifestWorkspace(name, rule);
-        if (verdict === "allowed") continue;
-        if (verdict === "transitional") {
-          recordWarn(dir, packageRoot(name));
+        if (name.startsWith(WORKSPACE_SCOPE)) {
+          const verdict = classifyManifestWorkspace(name, rule);
+          if (verdict === "allowed") continue;
+          if (verdict === "transitional") {
+            recordWarn(dir, packageRoot(name));
+            continue;
+          }
+          violations.push({
+            file: manifestFile,
+            line: 1,
+            column: 1,
+            ruleId: rule.ruleId,
+            specifier: name,
+            pkg: dir,
+          });
           continue;
         }
+        if (
+          rule.allowedExternal === undefined ||
+          rule.allowedExternal.some((entry) => matchesEntry(name, entry))
+        ) continue;
         violations.push({
           file: manifestFile,
           line: 1,

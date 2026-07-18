@@ -17,6 +17,7 @@ export const AgentErrorKindSchema = z.enum([
   "provider-down",
   "intervals",
   "unknown",
+  "detached",
 ]);
 export type AgentErrorKind = z.infer<typeof AgentErrorKindSchema>;
 
