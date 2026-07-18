@@ -42,6 +42,11 @@ export interface RecordedToolExecution {
   resultCanonical: unknown; // stable-serialized tool result
 }
 
+export interface RecordedTextDeltaEvent {
+  readonly type: "text_delta";
+  readonly delta: string;
+}
+
 /** The recorded request is a discriminated union: compact-caller calls are
  *  prompt-shaped, and flush calls carry no cacheKey — a messages-only schema
  *  cannot round-trip the trim/compaction scenario. */
@@ -88,7 +93,7 @@ export interface RecordedCall {
     steps: number;
     cost?: unknown;
   };
-  events: null; // RESERVED for a future streaming-capture producer; nothing emits it today. Replay tolerates non-null.
+  events: RecordedTextDeltaEvent[] | null;
 }
 
 export interface S8aRecording {

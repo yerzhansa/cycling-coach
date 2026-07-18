@@ -236,6 +236,11 @@ export interface ModelTransport {
 
 export type ModelTransportDecorator = (next: ModelTransport) => ModelTransport;
 
+export interface ChatStreamTimeouts {
+  readonly ttftMs: number;
+  readonly interChunkMs: number;
+}
+
 export interface AthleteStateReaderPort {
   getAthleteState(): Promise<AthleteState>;
 }
@@ -265,6 +270,7 @@ export interface EngineHostPorts {
   readonly extractRetryAfterMs: (error: unknown) => number | null;
   readonly now: () => number;
   readonly randomId: () => string;
+  readonly chatStreamTimeouts?: ChatStreamTimeouts;
   readonly modelTransportDecorator?: ModelTransportDecorator;
   readonly onToolsAssembled?: (names: readonly string[]) => void;
 }

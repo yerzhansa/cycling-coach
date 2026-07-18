@@ -6,6 +6,7 @@ import type { Sport } from "./sport.js";
 import type { ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
 
 export type { CoachEngine } from "@enduragent/coach-contract";
+export type { ChatStreamTimeouts } from "./host-ports.js";
 export type {
   AthleteDataReaderPort,
   AthleteReadResult,
@@ -48,11 +49,12 @@ export interface CreateCoachEngineInput {
 export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
   const agent = new CoachAgent(input.sport, input.ports);
   return {
-    chat: async (request) => ({
+    chat: async (request, onEvent) => ({
       text: await agent.chat(
         request.chatId,
         request.message,
         request.turn as { resolvedCs?: ResolvedCs | null } | undefined,
+        onEvent,
       ),
     }),
     resetSession: (request) => agent.resetSession(request.chatId),

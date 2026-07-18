@@ -206,14 +206,37 @@ describe("appendUsageLine", () => {
 });
 
 describe("LLM.generate — AI-SDK path", () => {
+  function streamed(stub: Record<string, unknown>) {
+    return {
+      fullStream: (async function* () {
+        if (typeof stub.text === "string" && stub.text !== "") {
+          yield { type: "text-delta", id: "text-1", text: stub.text };
+        }
+        yield {
+          type: "finish",
+          finishReason: stub.finishReason,
+          rawFinishReason: stub.finishReason,
+          totalUsage: stub.totalUsage,
+        };
+      })(),
+      text: Promise.resolve(stub.text),
+      toolCalls: Promise.resolve(stub.toolCalls),
+      finishReason: Promise.resolve(stub.finishReason),
+      usage: Promise.resolve(stub.usage),
+      totalUsage: Promise.resolve(stub.totalUsage),
+      steps: Promise.resolve(stub.steps),
+    };
+  }
+
   async function loadLLMWithGenerateText(stub: Record<string, unknown>) {
     const generateText = vi.fn(async () => stub);
+    const streamText = vi.fn(() => streamed(stub));
     vi.doMock("ai", async () => {
       const actual = await vi.importActual<typeof import("ai")>("ai");
-      return { ...actual, generateText };
+      return { ...actual, generateText, streamText };
     });
     const { LLM } = await import("../../engine/src/llm.js");
-    return { LLM, generateText };
+    return { LLM, generateText, streamText };
   }
 
   it("returns whole-turn totalUsage and the step count from the SDK result", async () => {

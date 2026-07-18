@@ -12,6 +12,7 @@ import type {
   PendingHashMismatch,
   RecordedCall,
   RecordedRequest,
+  RecordedTextDeltaEvent,
   RecordedToolExecution,
   S8aRecording,
 } from "./types.js";
@@ -29,8 +30,9 @@ export interface GenerateOptsLike {
   maxSteps?: number;
   maxOutputTokens?: number;
   cacheKey?: string;
-  caller?: "chat" | "flush" | "compact";
+  caller?: "chat" | "flush" | "compact" | "sync-triage" | "dream";
   context?: unknown;
+  onTextDelta?: (delta: string) => void;
   [key: string]: unknown;
 }
 
@@ -75,8 +77,10 @@ export function patchForRecord(): RecordHandle {
   const modelTransportDecorator: ModelTransportDecorator = (next) => ({
     generate: async (request) => {
     const opts = request.options as GenerateOptsLike;
+    assertSupportedCaller(opts.caller);
     const callOrdinal = ordinal++;
     const executions: RecordedToolExecution[] = [];
+    const events: RecordedTextDeltaEvent[] = [];
     let seq = 0;
 
     // Wrap a COPY of each tool so the agent's own tool objects are never
@@ -107,10 +111,23 @@ export function patchForRecord(): RecordHandle {
       tools = wrapped;
     }
 
+    const originalOnTextDelta = request.options.onTextDelta;
+    const wrappedOnTextDelta = (delta: string): void => {
+      events.push({ type: "text_delta", delta });
+      try {
+        originalOnTextDelta?.(delta);
+      } catch {}
+    };
     const result = await next.generate({
       ...request,
-      options: { ...request.options, tools: tools as ModelTransportRequest["options"]["tools"] },
+      options: {
+        ...request.options,
+        tools: tools as ModelTransportRequest["options"]["tools"],
+        onTextDelta: wrappedOnTextDelta,
+      },
     });
+    const recordedEvents = opts.caller === "chat" || opts.caller === undefined ? events : null;
+    assertRecordedTextDeltaEvents(recordedEvents);
     calls.push({
       ordinal: callOrdinal,
       caller: opts.caller ?? "chat",
@@ -126,7 +143,7 @@ export function patchForRecord(): RecordHandle {
         steps: result.steps ?? 0,
         ...(result.cost !== undefined ? { cost: JSON.parse(JSON.stringify(result.cost)) } : {}),
       },
-      events: null,
+      events: recordedEvents,
     });
     return result;
     },
@@ -208,6 +225,7 @@ export function patchForReplay(
   const modelTransportDecorator: ModelTransportDecorator = () => ({
     generate: async (request) => {
     const opts = request.options as GenerateOptsLike;
+    assertSupportedCaller(opts.caller);
     const entry = recording.calls[state.cursor];
     const ordinal = state.cursor;
     state.cursor++;
@@ -225,6 +243,13 @@ export function patchForReplay(
 
     assertRequest(entry, opts, ordinal, currentTurn, state, fail);
     await executeRecordedTools(entry, opts, ordinal, fail);
+
+    assertRecordedTextDeltaEvents(entry.events);
+    for (const event of entry.events ?? []) {
+      try {
+        request.options.onTextDelta?.(event.delta);
+      } catch {}
+    }
 
     return entry.result as unknown as GenerateResult;
     },
@@ -250,6 +275,34 @@ export function patchForReplay(
     },
     restore: () => undefined,
   };
+}
+
+function assertSupportedCaller(
+  caller: GenerateOptsLike["caller"],
+): asserts caller is "chat" | "flush" | "compact" | undefined {
+  if (caller === "sync-triage" || caller === "dream") {
+    throw new S8aDriftError(`unsupported Tier-R caller: ${caller}`);
+  }
+}
+
+function assertRecordedTextDeltaEvents(
+  events: unknown,
+): asserts events is RecordedTextDeltaEvent[] | null {
+  if (events === null) return;
+  if (!Array.isArray(events)) {
+    throw new S8aDriftError("recorded events must be null or a text_delta array");
+  }
+  for (const event of events) {
+    if (
+      typeof event !== "object" ||
+      event === null ||
+      Object.keys(event).length !== 2 ||
+      (event as { type?: unknown }).type !== "text_delta" ||
+      typeof (event as { delta?: unknown }).delta !== "string"
+    ) {
+      throw new S8aDriftError("recorded events contain a malformed text_delta entry");
+    }
+  }
 }
 
 function callerCounts(calls: RecordedCall[]): string {

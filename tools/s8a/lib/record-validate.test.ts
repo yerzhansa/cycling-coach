@@ -58,6 +58,22 @@ describe("record validation", () => {
     expect(validateRecording(input())).toEqual([]);
   });
 
+  it("accepts strict text_delta arrays and rejects malformed entries", () => {
+    const valid = chatCall({ ordinal: 0 });
+    valid.events = [{ type: "text_delta", delta: "hello" }];
+    expect(validateRecording(input({ calls: [valid] }))).toEqual([]);
+
+    const malformed = chatCall({ ordinal: 0 });
+    (malformed as unknown as { events: unknown }).events = [
+      { type: "text_delta", delta: "hello", extra: true },
+    ];
+    expect(
+      validateRecording(input({ calls: [malformed] })).some((value) =>
+        value.includes("malformed text_delta"),
+      ),
+    ).toBe(true);
+  });
+
   it("rejects an implicit dataset section touched by a captured execution", () => {
     const violations = validateRecording(
       input({

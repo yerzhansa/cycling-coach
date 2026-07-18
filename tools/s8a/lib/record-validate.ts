@@ -29,6 +29,25 @@ export function validateRecording(input: RecordValidationInput): string[] {
   const { scenario, calls, replies, artifacts, deletedEventIds } = input;
   const violations: string[] = [];
 
+  for (const call of calls) {
+    if (call.events === null) continue;
+    if (!Array.isArray(call.events)) {
+      violations.push(`call ${call.ordinal} events must be null or a text_delta array`);
+      continue;
+    }
+    for (const event of call.events as unknown[]) {
+      if (
+        typeof event !== "object" ||
+        event === null ||
+        Object.keys(event).length !== 2 ||
+        (event as { type?: unknown }).type !== "text_delta" ||
+        typeof (event as { delta?: unknown }).delta !== "string"
+      ) {
+        violations.push(`call ${call.ordinal} contains a malformed text_delta event`);
+      }
+    }
+  }
+
   // Implicit-dataset-section guard.
   for (const call of calls) {
     for (const exec of call.toolExecutions) {

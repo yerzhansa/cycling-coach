@@ -98,7 +98,14 @@ export interface GenerateOptions {
   cacheKey?: string;
   caller?: CallerRole;
   context?: unknown;
+  onTextDelta?: (delta: string) => void;
+  onStreamActivity?: (activity: ModelStreamActivity) => void;
 }
+
+export type ModelStreamActivity =
+  | { readonly type: "activity" }
+  | { readonly type: "tool_start"; readonly toolCallId: string }
+  | { readonly type: "tool_end"; readonly toolCallId: string };
 
 export interface GenerateResult {
   text: string;
