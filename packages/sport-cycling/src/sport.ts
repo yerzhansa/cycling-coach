@@ -12,6 +12,7 @@ import {
   type ToolRegistration,
 } from "@enduragent/engine/sport";
 import soul from "../SOUL.md";
+import { CYCLING_PRESCRIPTION_CAPABILITY } from "./prescription-posture.js";
 import { skills as skillEntries } from "./skills.generated.js";
 import { createCyclingTools } from "./tools.js";
 import { cyclingReferenceAdapter } from "./reference/index.js";
@@ -22,6 +23,8 @@ function loadSkills(): Record<string, string> {
     skillEntries.map(({ name, content }) => [`cycling-${name}`, content]),
   );
 }
+
+const cyclingSkills = loadSkills();
 
 export const CYCLING_VOCABULARY: readonly string[] = [
   "FTP",
@@ -53,10 +56,11 @@ const memorySections: readonly MemorySectionSpec[] = [
   },
 ];
 
-export const cyclingSport: Sport = {
+export const cyclingSport = {
   id: "cycling",
   soul,
-  skills: loadSkills(),
+  skills: cyclingSkills,
+  prescriptionCapability: CYCLING_PRESCRIPTION_CAPABILITY,
   sessionClusterGapMinutes: 30,
   memorySections,
   mustPreserveTokens: (memory: MemorySnapshot): readonly string[] => {
@@ -99,4 +103,6 @@ export const cyclingSport: Sport = {
   // Fresh array per call so composing sports can spread it without sharing a
   // mutable reference.
   referenceAdapters: (): readonly ReferenceSportAdapter[] => [cyclingReferenceAdapter],
+} satisfies Sport & {
+  readonly prescriptionCapability: typeof CYCLING_PRESCRIPTION_CAPABILITY;
 };
