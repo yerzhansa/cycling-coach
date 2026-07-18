@@ -50,6 +50,8 @@ const rEngine = ruleForDir("packages/engine");
 const rCore = ruleForDir("packages/core");
 const r4 = ruleForDir("packages/sport-*");
 const r5 = ruleForDir("packages/sync-*");
+const rCoachCli = ruleForDir("packages/coach-cli");
+const rCoachClient = ruleForDir("packages/coach-client");
 const rRenderer = ruleForDir("apps/desktop-renderer");
 const rCoach = ruleForDir("packages/coach");
 const rBin = ruleForDir("packages/cycling-coach");
@@ -256,6 +258,80 @@ describe("R6 desktop renderer", () => {
   });
 });
 
+describe("R6 coach client", () => {
+  it("allows only globals, relative modules, and the contract in source and runtime manifest", () => {
+    write(
+      "packages/coach-client/src/ok.ts",
+      `import type { CoachEngine } from "@enduragent/coach-contract";\nimport { local } from "./local.js";\nexport const socket: WebSocket | null = null;\nexport const signal: AbortSignal | null = null;\nexport const timer = setTimeout;\nexport const value: CoachEngine | null = local;\n`,
+    );
+    write("packages/coach-client/src/local.ts", `export const local = null;\n`);
+    writeJson("packages/coach-client/package.json", {
+      name: "@enduragent/coach-client",
+      private: true,
+      dependencies: { "@enduragent/coach-contract": "workspace:*" },
+    });
+    expect(violationsFor(rCoachClient)).toBe(0);
+  });
+
+  it.each([
+    [`import value from "ws";\nexport { value };\n`, "ws"],
+    [`import type { Config } from 'other-external';\nexport const value: Config | null = null;\n`, "other-external"],
+    [`import 'ws';\n`, "ws"],
+    [`export { value } from 'other-external';\n`, "other-external"],
+    [`export const value = import("ws");\n`, "ws"],
+    [`declare const require: (name: string) => unknown;\nexport const value = require('other-external');\n`, "other-external"],
+    [`import { readFileSync } from "node:fs";\nexport { readFileSync };\n`, "node:fs"],
+    [`import fs from 'fs';\nexport { fs };\n`, "fs"],
+  ])("rejects closed source import form for %s", (source, specifier) => {
+    write("packages/coach-client/src/bad.ts", source);
+    writeJson("packages/coach-client/package.json", {
+      name: "@enduragent/coach-client",
+      private: true,
+    });
+    const result = runRulesAgainst(tempDir, [rCoachClient]);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]!.specifier).toBe(specifier);
+  });
+
+  it("rejects an external runtime manifest dependency", () => {
+    write("packages/coach-client/src/ok.ts", `export const value = 1;\n`);
+    writeJson("packages/coach-client/package.json", {
+      name: "@enduragent/coach-client",
+      private: true,
+      dependencies: {
+        "@enduragent/coach-contract": "workspace:*",
+        ws: "^8.20.0",
+      },
+    });
+    const result = runRulesAgainst(tempDir, [rCoachClient]);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]!.specifier).toBe("ws");
+  });
+});
+
+describe("R6 coach CLI", () => {
+  it("allows contract and client while rejecting engine, kernel, and coach", () => {
+    write(
+      "packages/coach-cli/src/ok.ts",
+      `import { contract } from "@enduragent/coach-contract";\nimport { client } from "@enduragent/coach-client";\nexport const value = contract ?? client;\n`,
+    );
+    writeJson("packages/coach-cli/package.json", {
+      name: "@enduragent/coach-cli",
+      private: true,
+      dependencies: {
+        "@enduragent/coach-contract": "workspace:*",
+        "@enduragent/coach-client": "workspace:*",
+      },
+    });
+    expect(violationsFor(rCoachCli)).toBe(0);
+
+    for (const specifier of ["@enduragent/engine", "@enduragent/kernel", "@enduragent/coach"]) {
+      write("packages/coach-cli/src/bad.ts", `import value from "${specifier}";\nexport { value };\n`);
+      expect(runRulesAgainst(tempDir, [rCoachCli]).violations.some((violation) => violation.specifier === specifier)).toBe(true);
+    }
+  });
+});
+
 describe("R7 private-package check", () => {
   it("R7 flags an @enduragent package without private:true", () => {
     writeJson("packages/leaky/package.json", { name: "@enduragent/leaky" });
@@ -343,6 +419,7 @@ describe("real repository", () => {
   it("activates engine without making end-state discovery vacuous", () => {
     const result = runRulesAgainst(".", RULES);
     expect(result.notPresent).not.toContain("packages/engine");
+    expect(result.notPresent).not.toContain("packages/coach-client");
     expect(result.notPresent).not.toContain("packages/sync-*");
     expect(result.scannedFileCount).toBeGreaterThan(0);
   });

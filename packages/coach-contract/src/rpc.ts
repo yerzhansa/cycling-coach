@@ -1,0 +1,260 @@
+import { z } from "zod";
+import { AthleteStateSchema } from "./athlete-state.js";
+import {
+  ChatRequestSchema,
+  ChatResponseSchema,
+  HasSessionRequestSchema,
+  HasSessionResponseSchema,
+  ResetSessionRequestSchema,
+  ResetSessionResponseSchema,
+  type CoachEngine,
+} from "./engine.js";
+import { TurnEventSchema } from "./turn-event.js";
+
+export const JsonValueSchema = z.json();
+export type JsonValue = z.infer<typeof JsonValueSchema>;
+
+export const JsonRpcIdSchema = z.union([
+  z.string().min(1),
+  z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+]);
+export type JsonRpcId = z.infer<typeof JsonRpcIdSchema>;
+
+export const JsonRpcErrorObjectSchema = z
+  .object({
+    code: z.number().int(),
+    message: z.string(),
+    data: JsonValueSchema.optional(),
+  })
+  .strict();
+export type JsonRpcErrorObject = z.infer<typeof JsonRpcErrorObjectSchema>;
+
+export const JsonRpcRequestEnvelopeSchema = z
+  .object({
+    jsonrpc: z.literal("2.0"),
+    id: JsonRpcIdSchema,
+    method: z.string().min(1),
+    params: JsonValueSchema,
+  })
+  .strict();
+export type JsonRpcRequestEnvelope = z.infer<typeof JsonRpcRequestEnvelopeSchema>;
+
+export const JsonRpcSuccessResponseEnvelopeSchema = z
+  .object({
+    jsonrpc: z.literal("2.0"),
+    id: JsonRpcIdSchema,
+    result: JsonValueSchema,
+  })
+  .strict();
+export type JsonRpcSuccessResponseEnvelope = z.infer<typeof JsonRpcSuccessResponseEnvelopeSchema>;
+
+export const JsonRpcErrorResponseEnvelopeSchema = z
+  .object({
+    jsonrpc: z.literal("2.0"),
+    id: JsonRpcIdSchema,
+    error: JsonRpcErrorObjectSchema,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.error.code === -32700) {
+      context.addIssue({
+        code: "custom",
+        path: ["error", "code"],
+        message: "parse error must use an unrecoverable null id",
+      });
+    }
+  });
+export type JsonRpcErrorResponseEnvelope = z.infer<typeof JsonRpcErrorResponseEnvelopeSchema>;
+
+export const JsonRpcProtocolErrorCodeSchema = z.union([z.literal(-32700), z.literal(-32600)]);
+export type JsonRpcProtocolErrorCode = z.infer<typeof JsonRpcProtocolErrorCodeSchema>;
+
+export const JsonRpcProtocolErrorObjectSchema = JsonRpcErrorObjectSchema.extend({
+  code: JsonRpcProtocolErrorCodeSchema,
+}).strict();
+export type JsonRpcProtocolErrorObject = z.infer<typeof JsonRpcProtocolErrorObjectSchema>;
+
+export const JsonRpcProtocolErrorResponseEnvelopeSchema = z
+  .object({
+    jsonrpc: z.literal("2.0"),
+    id: z.null(),
+    error: JsonRpcProtocolErrorObjectSchema,
+  })
+  .strict();
+export type JsonRpcProtocolErrorResponseEnvelope = z.infer<
+  typeof JsonRpcProtocolErrorResponseEnvelopeSchema
+>;
+
+export const JsonRpcResponseEnvelopeSchema = z.union([
+  JsonRpcSuccessResponseEnvelopeSchema,
+  JsonRpcErrorResponseEnvelopeSchema,
+  JsonRpcProtocolErrorResponseEnvelopeSchema,
+]);
+export type JsonRpcResponseEnvelope = z.infer<typeof JsonRpcResponseEnvelopeSchema>;
+
+export const JsonRpcNotificationEnvelopeSchema = z
+  .object({
+    jsonrpc: z.literal("2.0"),
+    method: z.string().min(1),
+    params: JsonValueSchema,
+  })
+  .strict();
+export type JsonRpcNotificationEnvelope = z.infer<typeof JsonRpcNotificationEnvelopeSchema>;
+
+export const COACH_RPC_METHOD_NAMES = [
+  "chat",
+  "resetSession",
+  "hasSession",
+  "getAthleteState",
+] as const satisfies readonly (keyof CoachEngine)[];
+
+export const CoachRpcMethodNameSchema = z.enum(COACH_RPC_METHOD_NAMES);
+export type CoachRpcMethodName = z.infer<typeof CoachRpcMethodNameSchema>;
+
+export const COACH_TURN_EVENT_NOTIFICATION_METHOD = "coach.turnEvent" as const;
+
+export const ChatRpcParamsSchema = ChatRequestSchema.superRefine((value, context) => {
+  if (!JsonValueSchema.safeParse(value).success) {
+    context.addIssue({
+      code: "custom",
+      message: "chat params must contain only JSON values",
+    });
+  }
+});
+export type ChatRpcParams = z.infer<typeof ChatRpcParamsSchema>;
+
+export const EmptyRpcParamsSchema = z.object({}).strict();
+export type EmptyRpcParams = z.infer<typeof EmptyRpcParamsSchema>;
+
+export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("chat"),
+      params: ChatRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("resetSession"),
+      params: ResetSessionRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("hasSession"),
+      params: HasSessionRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("getAthleteState"),
+      params: EmptyRpcParamsSchema,
+    })
+    .strict(),
+]);
+export type CoachRpcRequestEnvelope = z.infer<typeof CoachRpcRequestEnvelopeSchema>;
+
+export const CoachTurnEventNotificationEnvelopeSchema = z
+  .object({
+    jsonrpc: z.literal("2.0"),
+    method: z.literal(COACH_TURN_EVENT_NOTIFICATION_METHOD),
+    params: z
+      .object({
+        requestId: JsonRpcIdSchema,
+        requestMethod: z.literal("chat"),
+        turnId: z.string().min(1),
+        event: TurnEventSchema,
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.params.turnId !== value.params.event.turnId) {
+      context.addIssue({
+        code: "custom",
+        path: ["params", "turnId"],
+        message: "notification turnId must equal event.turnId",
+      });
+    }
+  });
+export type CoachTurnEventNotificationEnvelope = z.infer<
+  typeof CoachTurnEventNotificationEnvelopeSchema
+>;
+
+export const CoachRpcEnvelopeSchema = z.union([
+  CoachRpcRequestEnvelopeSchema,
+  JsonRpcResponseEnvelopeSchema,
+  CoachTurnEventNotificationEnvelopeSchema,
+]);
+export type CoachRpcEnvelope = z.infer<typeof CoachRpcEnvelopeSchema>;
+
+export function parseCoachRpcEnvelope(text: string): CoachRpcEnvelope {
+  return CoachRpcEnvelopeSchema.parse(JSON.parse(text));
+}
+
+export function serializeCoachRpcEnvelope(value: unknown): string {
+  const parsed = CoachRpcEnvelopeSchema.parse(value);
+  JsonValueSchema.parse(parsed);
+  return JSON.stringify(parsed);
+}
+
+export type CoachRpcMethodRegistryShape = {
+  readonly [K in keyof CoachEngine]: {
+    readonly wireName: K;
+    readonly requestSchema: z.ZodType;
+    readonly responseSchema: z.ZodType;
+    readonly eventSchema: z.ZodType;
+  };
+};
+
+export const NoRpcEventSchema = z.never();
+export type NoRpcEvent = z.infer<typeof NoRpcEventSchema>;
+
+export const COACH_RPC_METHOD_REGISTRY = {
+  chat: {
+    wireName: "chat",
+    requestSchema: ChatRpcParamsSchema,
+    responseSchema: ChatResponseSchema,
+    eventSchema: TurnEventSchema,
+  },
+  resetSession: {
+    wireName: "resetSession",
+    requestSchema: ResetSessionRequestSchema,
+    responseSchema: ResetSessionResponseSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  hasSession: {
+    wireName: "hasSession",
+    requestSchema: HasSessionRequestSchema,
+    responseSchema: HasSessionResponseSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  getAthleteState: {
+    wireName: "getAthleteState",
+    requestSchema: EmptyRpcParamsSchema,
+    responseSchema: AthleteStateSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+} as const satisfies CoachRpcMethodRegistryShape;
+
+export type CoachRpcRequest<K extends CoachRpcMethodName> = z.input<
+  (typeof COACH_RPC_METHOD_REGISTRY)[K]["requestSchema"]
+>;
+export type CoachRpcResponse<K extends CoachRpcMethodName> = z.output<
+  (typeof COACH_RPC_METHOD_REGISTRY)[K]["responseSchema"]
+>;
+export type CoachRpcEvent<K extends CoachRpcMethodName> = z.output<
+  (typeof COACH_RPC_METHOD_REGISTRY)[K]["eventSchema"]
+>;
+
+type Assert<T extends true> = T;
+type IsNever<T> = [T] extends [never] ? true : false;
+type NonChatEventsAreNever = Assert<IsNever<CoachRpcEvent<Exclude<CoachRpcMethodName, "chat">>>>;
