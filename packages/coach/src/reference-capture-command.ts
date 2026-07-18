@@ -45,6 +45,7 @@ import {
   parseCanonicalProjectionValue,
   parseRenamedActivity,
   parseRenamedWellnessRow,
+  projectCyclingReferenceBundle,
   renameTpFieldsOnActivity,
   renameTpFieldsOnWellnessRow,
   type ReferenceBundle,
@@ -790,8 +791,9 @@ export async function runReferenceCaptureCommand(
   const payloadSet = new CapturedReferencePayloadSet(manifest);
   const inputFs = dependencies.inputFileSystem ?? nodeFileSystem();
   const reader = createVerifiedSnapshotReader({ archiveRoot: input.archive_root, crypto: createNodeCrypto(), fs: inputFs });
+  const bundleProjection = projectCyclingReferenceBundle;
   let direct: ReturnType<typeof buildFixtureShape>;
-  try { direct = buildFixtureShape(await payloadSet.directBundle(reader)); }
+  try { direct = buildFixtureShape(bundleProjection(await payloadSet.directBundle(reader))); }
   catch (error) { return environment(error instanceof EnvironmentFailure ? error.code : "PROJECTION_FAILED"); }
 
   let scratch: string | undefined;
@@ -823,7 +825,7 @@ export async function runReferenceCaptureCommand(
       try {
         const produced = dependencies.produceLocalBundle === undefined
           ? await (await import(new URL("./local-bundle-producer.js", import.meta.url).href))
-            .createLocalBundleProducer(destination).produce(manifest)
+            .createLocalBundleProducer({ ...destination, bundleProjection }).produce(manifest)
           : await dependencies.produceLocalBundle(destination, manifest);
         if (produced.captureId !== manifest.capture_id || produced.frozenNow !== manifest.plan.frozenNow) {
           throw new TypeError("local bundle identity changed");
