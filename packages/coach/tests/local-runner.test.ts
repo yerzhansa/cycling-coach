@@ -6,6 +6,7 @@ import type { AthleteState, CoachEngine } from "@enduragent/coach-contract";
 import type { Config } from "@enduragent/core";
 import type { EngineConfig } from "@enduragent/engine";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
+import { inertWriterProtocolListener } from "@enduragent/kernel-node/lock";
 import type { CoachStoreWriterContext, CoachStoreWriterPlan } from "../src/runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -40,7 +41,7 @@ vi.mock("@enduragent/core", async (importOriginal) => ({
 }));
 
 import { CoachStoreWriterError } from "../src/runtime.js";
-import { withLocalCoach } from "../src/local-runner.js";
+import { withLocalCoach, type LocalCoachLifecycle } from "../src/local-runner.js";
 
 const state: AthleteState = {
   schemaVersion: "3",
@@ -126,7 +127,7 @@ function notNeeded() {
   };
 }
 
-function input(operation: (lifecycle: { engine: CoachEngine; close(): Promise<void> }) => Promise<unknown>) {
+function input(operation: (lifecycle: LocalCoachLifecycle) => Promise<unknown>) {
   return {
     env: { SYNTHETIC: "1" },
     home: selectedHome,
@@ -138,7 +139,11 @@ function input(operation: (lifecycle: { engine: CoachEngine; close(): Promise<vo
 
 beforeEach(async () => {
   selectedHome = await freshHome();
-  context = { home: selectedHome, store: store() };
+  context = {
+    home: selectedHome,
+    store: store(),
+    listener: inertWriterProtocolListener,
+  };
   trace = [];
   closeImplementation = async () => { trace.push("lifecycle-close"); };
   mocks.withWriter.mockReset();
@@ -184,7 +189,8 @@ afterEach(async () => {
 describe("local coach runner", () => {
   it("runs the exact successful lock, migration, store, engine, operation, and cleanup order", async () => {
     trace.push("resolve-supplied-home");
-    await expect(withLocalCoach(input(async () => {
+    await expect(withLocalCoach(input(async (lifecycle) => {
+      expect(lifecycle.listener).toBe(inertWriterProtocolListener);
       trace.push("operation");
       return "done";
     }))).resolves.toEqual({ status: "completed", value: "done" });

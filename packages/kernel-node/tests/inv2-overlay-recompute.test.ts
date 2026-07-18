@@ -151,6 +151,7 @@ describe("global version and overlay recompute", () => {
     store = openSqliteStorage(databasePath);
     await runMigrations(store, MIGRATIONS);
     const competing = openSqliteStorage(databasePath);
+    await runMigrations(competing, MIGRATIONS);
     try {
       await importFilesWithReport({ inputPaths: [path("brick-cycling.fit")], archiveDir, store });
       let reached!: () => void;

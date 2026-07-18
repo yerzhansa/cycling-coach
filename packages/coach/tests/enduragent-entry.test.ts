@@ -1,6 +1,8 @@
-import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:net";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -8,11 +10,15 @@ import {
   EXIT_DAEMON_UNAVAILABLE,
   EXIT_SUCCESS,
   EXIT_USAGE,
+  EXIT_VERSION_MISMATCH,
   type AthleteState,
   type CoachEngine,
 } from "@enduragent/coach-contract";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
-import { PORT_FILE_NAME } from "@enduragent/kernel-node/lock";
+import { inertWriterProtocolListener, PORT_FILE_NAME } from "@enduragent/kernel-node/lock";
+import { StoreNewerThanAppError } from "@enduragent/kernel/store";
+import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
+import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import {
   runEnduragent,
   type EnduragentDependencies,
@@ -110,6 +116,19 @@ let scratch: string;
 let home: AthleteHome;
 let env: Record<string, string | undefined>;
 
+const hasLoopback = await new Promise<boolean>((resolve) => {
+  const server = createServer();
+  server.once("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EPERM") {
+      process.stderr.write("SKIP_MARKER loopback-listen EPERM enduragent-entry\n");
+    }
+    resolve(false);
+  });
+  server.listen({ host: "127.0.0.1", port: 0 }, () => {
+    server.close(() => resolve(true));
+  });
+});
+
 beforeEach(async () => {
   scratch = await mkdtemp(join(await realpath(tmpdir()), "enduragent-entry-"));
   roots.push(scratch);
@@ -201,7 +220,7 @@ describe("enduragent executable composition", () => {
       ),
     ).resolves.toBe(EXIT_USAGE);
     expect(io.stdout.read()).toBe("");
-    expect(io.stderr.read()).toBe("Usage: enduragent [version]\n");
+    expect(io.stderr.read()).toBe("Usage: enduragent [version|serve]\n");
     expect(homeCalls).toBe(0);
     expect(runnerCalls).toBe(0);
   });
@@ -342,6 +361,7 @@ describe("enduragent executable composition", () => {
     });
     const lifecycle = {
       engine: mocked.engine,
+      listener: inertWriterProtocolListener,
       close: async () => {
         trace.push("lifecycle-close");
       },
@@ -392,6 +412,124 @@ describe("enduragent executable composition", () => {
     ] as const) {
       expect(trace.indexOf(earlier)).toBeLessThan(trace.indexOf(later));
     }
+  });
+
+  it("routes serve through one local runner with the shared migration inputs", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const mocked = mockEngine();
+    let captured: WithLocalCoachInput<unknown> | undefined;
+    let packageReads = 0;
+    const io = terminal(new PassThrough(), true);
+    await expect(runEnduragent(
+      {
+        argv: ["serve"],
+        env,
+        terminal: io.value,
+        signal: controller.signal,
+      },
+      {
+        resolveAthleteHome: () => home,
+        readPackageVersion: async () => {
+          packageReads += 1;
+          return "0.1.0-synthetic";
+        },
+        withLocalCoach: async <T>(input: WithLocalCoachInput<T>) => {
+          captured = input as unknown as WithLocalCoachInput<unknown>;
+          const value = await input.operation({
+            engine: mocked.engine,
+            listener: inertWriterProtocolListener,
+            async close() {},
+          });
+          return { status: "completed", value };
+        },
+      },
+    )).resolves.toBe(EXIT_SUCCESS);
+    expect(packageReads).toBe(1);
+    expect(captured).toMatchObject({
+      env,
+      home,
+      sourceRoot: env.CYCLING_COACH_HOME,
+      action: { kind: "resume", isTTY: true },
+    });
+    expect(io.stdout.read()).toBe("");
+    expect(io.stderr.read()).toBe("");
+  });
+
+  it.each([
+    { argv: [] as readonly string[] },
+    { argv: ["serve"] as readonly string[] },
+  ])("maps the exact typed newer-store cause to exit 5 for $argv", async ({ argv }) => {
+    const newer = new StoreNewerThanAppError(3, 2);
+    const failure = new CoachStoreWriterError(
+      "writer-failed",
+      "run migrations",
+      { cause: newer },
+    );
+    const io = terminal();
+    await expect(runEnduragent(
+      {
+        argv,
+        env,
+        terminal: io.value,
+        signal: new AbortController().signal,
+      },
+      {
+        resolveAthleteHome: () => home,
+        withLocalCoach: async () => {
+          throw failure;
+        },
+        readPackageVersion: async () => "0.1.0-synthetic",
+      },
+    )).resolves.toBe(EXIT_VERSION_MISMATCH);
+    expect(io.stdout.read()).toBe("");
+    expect(io.stderr.read()).toBe(
+      "Enduragent cannot start: this athlete store was created by a newer app version. Update Enduragent and retry.\n",
+    );
+  });
+
+  it.runIf(hasLoopback)("preserves a real newer store and releases the writer after serve exits 5", async () => {
+    await mkdir(home.storeDir, { recursive: true, mode: 0o700 });
+    const databasePath = join(home.storeDir, "store.db");
+    const maximum = MIGRATIONS.at(-1)!.version;
+    const seed = openSqliteStorage(databasePath);
+    await seed.setUserVersion(maximum + 1);
+    await seed.close();
+    const beforeNames = (await readdir(home.storeDir)).sort();
+    const beforeHash = createHash("sha256").update(await readFile(databasePath)).digest("hex");
+    const io = terminal();
+
+    await expect(runEnduragent(
+      {
+        argv: ["serve"],
+        env,
+        terminal: io.value,
+        signal: new AbortController().signal,
+      },
+      {
+        resolveAthleteHome: () => home,
+        readPackageVersion: async () => "0.1.0-synthetic",
+        withLocalCoach: async <T>(): Promise<LocalCoachRunResult<T>> => {
+          await withCoachStoreWriter(env, async () => {
+            throw new Error("operation must not run for a newer store");
+          });
+          throw new Error("newer store unexpectedly opened");
+        },
+      },
+    )).resolves.toBe(EXIT_VERSION_MISMATCH);
+    expect(io.stdout.read()).toBe("");
+    expect(io.stderr.read()).toBe(
+      "Enduragent cannot start: this athlete store was created by a newer app version. Update Enduragent and retry.\n",
+    );
+    expect((await readdir(home.storeDir)).sort()).toEqual(beforeNames);
+    expect(createHash("sha256").update(await readFile(databasePath)).digest("hex")).toBe(beforeHash);
+    await expect(readFile(join(home.configDir, PORT_FILE_NAME), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readFile(join(home.configDir, "store-writer.lock"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(home.configDir, "daemon.token"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("uses typed writer errors and redacts every other startup failure", async () => {
@@ -468,44 +606,46 @@ describe("enduragent executable composition", () => {
   });
 
   it("reports real contention and drains an in-flight turn before release", async () => {
-    const writerAcquired = deferred<void>();
-    const releaseWriter = deferred<void>();
-    const holdingWriter = withCoachStoreWriter(env, async () => {
-      writerAcquired.resolve(undefined);
-      await releaseWriter.promise;
-    });
-    await Promise.race([
-      writerAcquired.promise,
-      holdingWriter.then(() => Promise.reject(new Error("writer ended early"))),
-    ]);
-    try {
-      const port = Number.parseInt(
-        await readFile(join(home.configDir, PORT_FILE_NAME), "utf8"),
-        10,
-      );
-      const io = terminal();
-      await expect(
-        runEnduragent(
-          {
-            argv: [],
-            env,
-            terminal: io.value,
-            signal: new AbortController().signal,
-          },
-          {
-            resolveAthleteHome: () => home,
-            withLocalCoach,
-            readPackageVersion: async () => "unused",
-          },
-        ),
-      ).resolves.toBe(EXIT_DAEMON_UNAVAILABLE);
-      expect(io.stdout.read()).toBe("");
-      expect(io.stderr.read()).toBe(
-        `Enduragent cannot start: another writer holds this athlete home (pid ${process.pid}, port ${port}). Stop it or wait, then retry.\n`,
-      );
-    } finally {
-      releaseWriter.resolve(undefined);
-      await holdingWriter;
+    if (hasLoopback) {
+      const writerAcquired = deferred<void>();
+      const releaseWriter = deferred<void>();
+      const holdingWriter = withCoachStoreWriter(env, async () => {
+        writerAcquired.resolve(undefined);
+        await releaseWriter.promise;
+      });
+      await Promise.race([
+        writerAcquired.promise,
+        holdingWriter.then(() => Promise.reject(new Error("writer ended early"))),
+      ]);
+      try {
+        const port = Number.parseInt(
+          await readFile(join(home.configDir, PORT_FILE_NAME), "utf8"),
+          10,
+        );
+        const io = terminal();
+        await expect(
+          runEnduragent(
+            {
+              argv: [],
+              env,
+              terminal: io.value,
+              signal: new AbortController().signal,
+            },
+            {
+              resolveAthleteHome: () => home,
+              withLocalCoach,
+              readPackageVersion: async () => "unused",
+            },
+          ),
+        ).resolves.toBe(EXIT_DAEMON_UNAVAILABLE);
+        expect(io.stdout.read()).toBe("");
+        expect(io.stderr.read()).toBe(
+          `Enduragent cannot start: another writer holds this athlete home (pid ${process.pid}, port ${port}). Stop it or wait, then retry.\n`,
+        );
+      } finally {
+        releaseWriter.resolve(undefined);
+        await holdingWriter;
+      }
     }
 
     const trace: string[] = [];
@@ -523,6 +663,7 @@ describe("enduragent executable composition", () => {
     ): Promise<LocalCoachRunResult<T>> => {
       const lifecycle = {
         engine: mocked.engine,
+        listener: inertWriterProtocolListener,
         close: async () => {
           trace.push("lifecycle-close");
         },

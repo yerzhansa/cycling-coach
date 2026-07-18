@@ -62,7 +62,7 @@ describe("StoreRuntime", () => {
   it("owns one unref'd six-hour timer, skips overlap, and closes once", async () => {
     const root = await mkdtemp(join(await realpath(tmpdir()), "store-runtime-timer-")); roots.push(root);
     const unref = vi.fn(), clear = vi.fn(); let delay = 0;
-    const handle = { unref } as unknown as ReturnType<typeof setInterval>;
+    const handle = { unref } as unknown as ReturnType<typeof setTimeout>;
     let release!: () => void;
     const reference = { scheduler: { stop: vi.fn() }, services: {},
       runScheduledOnce: vi.fn(async () => ({ kind: "ran", lastSyncAt: "", refreshed: [] })) } as unknown as ReferenceRuntime;
@@ -70,8 +70,11 @@ describe("StoreRuntime", () => {
       archiveDir: join(root, "archive"), configDir: join(root, "config") }, reference,
       dependencies: { capture: vi.fn(() => new Promise<ReferenceCaptureManifest>((resolve) => { release = () => resolve(manifest); })),
         produce: vi.fn(async () => produced), now: () => new Date("1998-07-18T12:00:00.000Z"), monotonicNow: () => 1,
-        setInterval: ((_: () => void, ms: number) => { delay = ms; return handle; }) as typeof setInterval,
-        clearInterval: clear as unknown as typeof clearInterval } });
+        schedulerDependencies: {
+          nowEpochMs: () => new Date("1998-07-18T12:00:00.000Z").getTime(),
+          setTimeout: ((_: () => void, ms: number) => { delay = ms; return handle; }) as typeof setTimeout,
+          clearTimeout: clear as unknown as typeof clearTimeout,
+        } } });
     runtime.startScheduler(); runtime.startScheduler();
     expect(delay).toBe(STORE_REFRESH_INTERVAL_MS); expect(unref).toHaveBeenCalledTimes(1);
     const first = runtime.runWindow(), second = runtime.runWindow(); expect(first).toBe(second);
@@ -81,7 +84,7 @@ describe("StoreRuntime", () => {
 
   it("cancels an active window when closed and rejects later windows", async () => {
     const root = await mkdtemp(join(await realpath(tmpdir()), "store-runtime-close-")); roots.push(root);
-    const handle = { unref: vi.fn() } as unknown as ReturnType<typeof setInterval>;
+    const handle = { unref: vi.fn() } as unknown as ReturnType<typeof setTimeout>;
     let signal!: AbortSignal;
     const reference = { scheduler: { stop: vi.fn() }, services: {},
       runScheduledOnce: vi.fn(async () => ({ kind: "ran", lastSyncAt: "", refreshed: [] })) } as unknown as ReferenceRuntime;
@@ -93,8 +96,11 @@ describe("StoreRuntime", () => {
           signal.addEventListener("abort", () => reject(signal.reason), { once: true });
         });
       }), produce: vi.fn(async () => produced), now: () => new Date("1998-07-18T12:00:00.000Z"), monotonicNow: () => 1,
-        setInterval: vi.fn(() => handle) as unknown as typeof setInterval,
-        clearInterval: vi.fn() as unknown as typeof clearInterval } });
+        schedulerDependencies: {
+          nowEpochMs: () => new Date("1998-07-18T12:00:00.000Z").getTime(),
+          setTimeout: vi.fn(() => handle) as unknown as typeof setTimeout,
+          clearTimeout: vi.fn() as unknown as typeof clearTimeout,
+        } } });
     const window = runtime.runWindow();
     const rejectedWindow = expect(window).rejects.toThrow("Store runtime closed.");
     const close = runtime.close();

@@ -4,6 +4,7 @@ import {
 } from "@enduragent/core";
 import type { CoachEngine } from "@enduragent/coach-contract";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
+import type { WriterProtocolListener } from "@enduragent/kernel-node/lock";
 import {
   createLocalCoachComposition,
   type LocalCoachComposition,
@@ -18,6 +19,7 @@ import { withCoachStoreWriter } from "./runtime.js";
 
 export interface LocalCoachLifecycle {
   readonly engine: CoachEngine;
+  readonly listener: WriterProtocolListener;
   close(): Promise<void>;
 }
 
@@ -132,8 +134,16 @@ export async function withLocalCoach<T>(
             config,
             engineConfig: readiness.config,
           });
+          const publishedLifecycle = lifecycle;
           try {
-            outcome = { kind: "fulfilled", value: await input.operation(lifecycle) };
+            outcome = {
+              kind: "fulfilled",
+              value: await input.operation({
+                engine: publishedLifecycle.engine,
+                listener: context.listener,
+                close: () => publishedLifecycle.close(),
+              }),
+            };
           } catch (error) {
             operationOutcome = { kind: "rejected", error };
             outcome = operationOutcome;

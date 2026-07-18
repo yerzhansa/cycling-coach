@@ -1,4 +1,6 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -7,6 +9,7 @@ import {
   createAnchorRepository,
   dumpStore,
   runMigrations,
+  StoreNewerThanAppError,
   type AnchorHistoryRow,
   type MigratorStore,
   type SqlStore,
@@ -19,7 +22,7 @@ describe("migrator end-to-end over node:sqlite", () => {
   let store: SqlStore & MigratorStore;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "kn-"));
+    dir = mkdtempSync(join(realpathSync(tmpdir()), "kn-"));
     store = openSqliteStorage(join(dir, "store.db"));
   });
 
@@ -48,6 +51,7 @@ describe("migrator end-to-end over node:sqlite", () => {
       ),
     ).toEqual({ name: "idx_dedup_confirmation_effective" });
     expect(await store.get("PRAGMA journal_mode")).toEqual({ journal_mode: "wal" });
+    expect(await store.get("PRAGMA foreign_keys")).toEqual({ foreign_keys: 1 });
     await runMigrations(store, MIGRATIONS);
     expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 7 });
   });
@@ -181,5 +185,30 @@ describe("migrator end-to-end over node:sqlite", () => {
     const names = new Set(tables.map((r) => r.name as string));
     expect(names.has("first_ok")).toBe(true);
     expect(names.has("second_partial")).toBe(false);
+  });
+
+  it("refuses a newer store without changing bytes or creating sidecars", async () => {
+    const path = join(dir, "newer.db");
+    const maximum = MIGRATIONS.at(-1)!.version;
+    const seed = openSqliteStorage(path);
+    await seed.setUserVersion(maximum + 1);
+    await seed.close();
+    const beforeNames = (await readdir(dir)).sort();
+    const beforeHash = createHash("sha256").update(await readFile(path)).digest("hex");
+
+    const refused = openSqliteStorage(path);
+    const error = await runMigrations(refused, MIGRATIONS).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(StoreNewerThanAppError);
+    expect(error).toMatchObject({
+      storeVersion: maximum + 1,
+      appMaxVersion: maximum,
+      message: "store is newer than this app",
+    });
+    await refused.close();
+
+    expect((await readdir(dir)).sort()).toEqual(beforeNames);
+    expect(createHash("sha256").update(await readFile(path)).digest("hex")).toBe(beforeHash);
+    expect(beforeNames).not.toContain("newer.db-wal");
+    expect(beforeNames).not.toContain("newer.db-shm");
   });
 });

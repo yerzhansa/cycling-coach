@@ -100,10 +100,17 @@ describe("coach CLI contract", () => {
     expect(parseCoachCliInvocation([])).toEqual({ kind: "repl" });
     expect(parseCoachCliInvocation(["version"])).toEqual({ kind: "version" });
     expect(parseCoachCliInvocation(["--version"])).toEqual({ kind: "version" });
-    for (const argv of [["unknown"], ["version", "extra"], ["--version", "extra"], [""]]) {
+    expect(parseCoachCliInvocation(["serve"])).toEqual({ kind: "serve" });
+    for (const argv of [
+      ["unknown"],
+      ["version", "extra"],
+      ["--version", "extra"],
+      ["serve", "extra"],
+      [""],
+    ]) {
       expect(parseCoachCliInvocation(argv)).toEqual({
         kind: "usage",
-        message: "Usage: enduragent [version]",
+        message: "Usage: enduragent [version|serve]",
       });
     }
   });

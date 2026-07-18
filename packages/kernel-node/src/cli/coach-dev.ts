@@ -10,6 +10,7 @@ import { importFilesWithReport } from "../ingest/index.js";
 import {
   acquireWriteLock,
   WriteLockContentionError,
+  type WriterProtocolListener,
   type WriterContentionDiagnostic,
 } from "../lock/index.js";
 import { openSqliteStorage } from "../sqlite/index.js";
@@ -54,6 +55,7 @@ export type CoachDevWriterFailureStage =
 export interface CoachDevWriterContext {
   readonly home: AthleteHome;
   readonly store: ReturnType<typeof openSqliteStorage>;
+  readonly listener: WriterProtocolListener;
 }
 
 export interface RunCoachDevWriterOptions<T> {
@@ -228,7 +230,7 @@ export async function runCoachDevWriter<T>(
 
       if (failureStage === undefined && store !== undefined) {
         try {
-          value = await options.operation({ home, store });
+          value = await options.operation({ home, store, listener: lockResult.listener });
         } catch (error) {
           failureStage = "invoke operation";
           failureCause = error;

@@ -9,6 +9,7 @@ import {
   EXIT_NOT_CONFIGURED,
   EXIT_SUCCESS,
   EXIT_USAGE,
+  EXIT_VERSION_MISMATCH,
   type ExitCode,
 } from "@enduragent/coach-contract";
 import {
@@ -17,12 +18,14 @@ import {
   type CoachCliTerminal,
 } from "@enduragent/coach-cli";
 import { expandTilde, resolveAthleteHome, type AthleteHome } from "@enduragent/kernel-node/home";
+import { StoreNewerThanAppError } from "@enduragent/kernel/store";
 import {
   withLocalCoach,
   type LocalCoachRunResult,
   type WithLocalCoachInput,
 } from "./local-runner.js";
 import { CoachStoreWriterError } from "./runtime.js";
+import { runCoachServe } from "./serve.js";
 
 export interface RunEnduragentInput {
   readonly argv: readonly string[];
@@ -64,6 +67,12 @@ function resolveLegacySourceRoot(env: Record<string, string | undefined>): strin
   return join(homedir(), ".cycling-coach");
 }
 
+function storeNewerThanApp(error: unknown): StoreNewerThanAppError | null {
+  if (!(error instanceof CoachStoreWriterError)) return null;
+  if (error.code !== "writer-failed" || error.stage !== "run migrations") return null;
+  return error.cause instanceof StoreNewerThanAppError ? error.cause : null;
+}
+
 export async function runEnduragent(
   input: RunEnduragentInput,
   dependencies?: EnduragentDependencies,
@@ -82,6 +91,8 @@ export async function runEnduragent(
       return EXIT_SUCCESS;
     }
 
+    const appVersion =
+      invocation.kind === "serve" ? await resolvedDependencies.readPackageVersion() : undefined;
     const home = resolvedDependencies.resolveAthleteHome(input.env);
     const sourceRoot = resolveLegacySourceRoot(input.env);
     const result = await resolvedDependencies.withLocalCoach({
@@ -90,11 +101,18 @@ export async function runEnduragent(
       sourceRoot,
       action: { kind: "resume", isTTY: input.terminal.isTTY },
       operation: async (lifecycle) =>
-        runCoachRepl({
-          engine: lifecycle.engine,
-          terminal: input.terminal,
-          signal: input.signal,
-        }),
+        invocation.kind === "serve"
+          ? runCoachServe({
+              lifecycle,
+              home,
+              appVersion: appVersion!,
+              signal: input.signal,
+            })
+          : runCoachRepl({
+              engine: lifecycle.engine,
+              terminal: input.terminal,
+              signal: input.signal,
+            }),
     });
 
     if (result.status === "completed") return result.value;
@@ -117,6 +135,12 @@ export async function runEnduragent(
     );
     return result.result.exitCode;
   } catch (error) {
+    if (storeNewerThanApp(error) !== null) {
+      input.terminal.stderr.write(
+        "Enduragent cannot start: this athlete store was created by a newer app version. Update Enduragent and retry.\n",
+      );
+      return EXIT_VERSION_MISMATCH;
+    }
     if (
       error instanceof CoachStoreWriterError &&
       error.code === "writer-lock-held" &&

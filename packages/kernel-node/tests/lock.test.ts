@@ -3,11 +3,15 @@
 // are proven by branch selection against an injected /healthz test double; the full
 // four-case matrix against a real daemon /healthz responder arms at W8.
 
-import { mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
-import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
+import {
+  createServer as createHttpServer,
+  get as httpGet,
+  type Server as HttpServer,
+} from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -30,10 +34,23 @@ const netServers: Server[] = [];
 const httpServers: HttpServer[] = [];
 
 function freshDir(prefix = "lock-"): string {
-  const d = mkdtempSync(join(tmpdir(), prefix));
+  const d = mkdtempSync(join(realpathSync(tmpdir()), prefix));
   tempDirs.push(d);
   return d;
 }
+
+const hasLoopback = await new Promise<boolean>((resolve) => {
+  const server = createServer();
+  server.once("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EPERM") {
+      process.stderr.write("SKIP_MARKER loopback-listen EPERM lock.test\n");
+    }
+    resolve(false);
+  });
+  server.listen({ host: "127.0.0.1", port: 0 }, () => {
+    server.close(() => resolve(true));
+  });
+});
 
 function isHandle(r: AcquireWriteLockResult): r is WriteLockHandle {
   return r.status === "acquired";
@@ -117,7 +134,7 @@ afterEach(async () => {
   }
 });
 
-describe("acquireWriteLock", () => {
+describe.skipIf(!hasLoopback)("acquireWriteLock", () => {
   it("(bind) port-bind singleton is authoritative", async () => {
     const configDir = freshDir();
     const result = trackHandle(
@@ -201,6 +218,65 @@ describe("acquireWriteLock", () => {
       peer.destroy();
       await release;
     }
+  });
+
+  it("binds health and upgrades on a separate published protocol socket", async () => {
+    const configDir = freshDir();
+    const holder = trackHandle(
+      await acquireWriteLock({ configDir, athleteHome: "/home/a", version: "1.0.0" }),
+    );
+    const initialPort = readPortFile(join(configDir, PORT_FILE_NAME));
+    expect(initialPort).toBe(holder.port);
+
+    const binding = await holder.listener.bind({
+      request(_request, response) {
+        response.statusCode = 200;
+        response.end("ready\n");
+      },
+      upgrade(_request, socket) {
+        socket.destroy();
+      },
+    });
+    expect(binding.port).not.toBe(holder.port);
+    expect(readPortFile(join(configDir, PORT_FILE_NAME))).toBe(binding.port);
+    await expect(new Promise<string>((resolve, reject) => {
+      httpGet(`http://127.0.0.1:${binding.port}/healthz`, (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => { body += chunk; });
+        response.on("end", () => resolve(body));
+      }).once("error", reject);
+    })).resolves.toBe("ready\n");
+
+    const raw = createConnection({ host: "127.0.0.1", port: holder.port });
+    await new Promise<void>((resolve, reject) => {
+      raw.once("error", reject);
+      raw.once("connect", () => {
+        raw.write("GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        const timer = setTimeout(() => {
+          raw.destroy();
+          resolve();
+        }, 50);
+        raw.once("data", () => {
+          clearTimeout(timer);
+          reject(new Error("raw authority socket emitted protocol bytes"));
+        });
+      });
+    });
+
+    await expect(holder.listener.bind({
+      request() {},
+      upgrade() {},
+    })).rejects.toThrow("already bound");
+    await binding.close();
+    await expect(new Promise<void>((resolve, reject) => {
+      const socket = createConnection({ host: "127.0.0.1", port: holder.port });
+      socket.once("error", reject);
+      socket.once("connect", () => {
+        socket.destroy();
+        resolve();
+      });
+    })).resolves.toBeUndefined();
   });
 
   it("(a) healthy peer returns peer-healthy without binding", async () => {
