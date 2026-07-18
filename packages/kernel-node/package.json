@@ -14,6 +14,7 @@
     "./filesystem": "./dist/filesystem/index.js",
     "./ingest": "./dist/ingest/index.js",
     "./capture-manifest": "./dist/capture-manifest/index.js",
+    "./service": "./dist/service/index.js",
     "./coach-dev": "./dist/coach-dev.js"
   },
   "engines": {

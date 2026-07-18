@@ -1,0 +1,31 @@
+export {
+  LAUNCHD_ENV_MODE,
+  LAUNCHD_PLIST_MODE,
+  LAUNCHD_STATE_DIR_MODE,
+  LAUNCHD_THROTTLE_INTERVAL_SECONDS,
+  LAUNCHD_WRAPPER_MODE,
+  LaunchdServiceCommandError,
+  LaunchdServiceNotInstalledError,
+  UnsupportedLaunchdPlatformError,
+  buildLaunchdServicePlist,
+  canonicalizeAthleteHome,
+  createLaunchdServiceIdentity,
+  deriveLaunchdServiceLabel,
+  installLaunchdService,
+  readLaunchdServiceStatus,
+  resolveLaunchdServicePaths,
+  restartLaunchdService,
+  restartLaunchdServiceForUpgrade,
+  resumeLaunchdService,
+  resumeLaunchdServiceAfterEphemeral,
+  uninstallLaunchdService,
+} from "./launchd-plist.js";
+
+export type {
+  LaunchdCommandResult,
+  LaunchdDesignatedSuccessorInput,
+  LaunchdServiceDependencies,
+  LaunchdServiceIdentity,
+  LaunchdServicePaths,
+  LaunchdServiceStatus,
+} from "./launchd-plist.js";
