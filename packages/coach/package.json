@@ -5,6 +5,9 @@
   "description": "Private Node composition root for governed Reference layer sync orchestration.",
   "type": "module",
   "files": ["dist"],
+  "bin": {
+    "enduragent": "./dist/enduragent.js"
+  },
   "exports": {
     "./runtime": "./dist/runtime.js",
     "./sync": "./dist/sync.js",
@@ -13,7 +16,8 @@
     "./capture": "./dist/capture.js",
     "./local-bundle-producer": "./dist/local-bundle-producer.js",
     "./store-runtime": "./dist/store-runtime.js",
-    "./local-runner": "./dist/local-runner.js"
+    "./local-runner": "./dist/local-runner.js",
+    "./enduragent": "./dist/enduragent.js"
   },
   "engines": {
     "node": ">=24"
@@ -30,6 +34,7 @@
     "season-review": "node dist/season-review-command.js"
   },
   "dependencies": {
+    "@enduragent/coach-cli": "workspace:*",
     "@enduragent/coach-contract": "workspace:*",
     "@enduragent/core": "workspace:*",
     "@enduragent/engine": "workspace:*",
