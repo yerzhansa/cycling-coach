@@ -212,8 +212,38 @@ function unavailable(error: unknown): error is CoachRemoteError {
   return error instanceof CoachRemoteError && error.failure.kind === "unavailable";
 }
 
+export interface BoundedConnectDependencies {
+  readonly connect: () => Promise<CoachVerbTransport>;
+  readonly delay: (ms: number) => Promise<void>;
+  readonly monotonicNow: () => number;
+}
+
+export interface ServiceAwareRemoteTransportDependencies extends RemoteTransportDependencies {
+  readonly resumeService?: () => Promise<"resumed" | "not-installed">;
+}
+
+export async function connectWithBoundedRetry(
+  dependencies: BoundedConnectDependencies,
+): Promise<CoachVerbTransport> {
+  const startedAt = dependencies.monotonicNow();
+  let nextDelayMs = 50;
+  while (true) {
+    try {
+      return await dependencies.connect();
+    } catch (error) {
+      if (!unavailable(error)) throw error;
+    }
+    const beforeDelay = dependencies.monotonicNow() - startedAt;
+    if (beforeDelay >= 5_000) throw new CoachRemoteError({ kind: "unavailable" });
+    await dependencies.delay(Math.min(nextDelayMs, 5_000 - beforeDelay));
+    const afterDelay = dependencies.monotonicNow() - startedAt;
+    if (afterDelay >= 5_000) throw new CoachRemoteError({ kind: "unavailable" });
+    nextDelayMs = Math.min(nextDelayMs * 2, 200);
+  }
+}
+
 export async function connectRemoteCoachTransport(
-  dependencies: RemoteTransportDependencies,
+  dependencies: ServiceAwareRemoteTransportDependencies,
 ): Promise<CoachVerbTransport> {
   try {
     return await dependencies.connect();
@@ -221,26 +251,20 @@ export async function connectRemoteCoachTransport(
     if (!unavailable(error)) throw error;
   }
   const registration = await dependencies.serviceRegistrationState();
-  if (registration !== "absent") throw new CoachRemoteError({ kind: "unavailable" });
-  const child = await dependencies.startEphemeralDaemon();
-  const startedAt = dependencies.monotonicNow();
-  let nextDelayMs = 50;
-  try {
-    while (true) {
-      const beforeDelay = dependencies.monotonicNow() - startedAt;
-      if (beforeDelay >= 5_000) throw new CoachRemoteError({ kind: "unavailable" });
-      await dependencies.delay(Math.min(nextDelayMs, 5_000 - beforeDelay));
-      const afterDelay = dependencies.monotonicNow() - startedAt;
-      if (afterDelay >= 5_000) throw new CoachRemoteError({ kind: "unavailable" });
-      try {
-        const transport = await dependencies.connect();
-        child.detachAfterHealthy();
-        return transport;
-      } catch (error) {
-        if (!unavailable(error)) throw error;
-      }
-      nextDelayMs = Math.min(nextDelayMs * 2, 200);
+  if (registration === "unknown") throw new CoachRemoteError({ kind: "unavailable" });
+  if (registration === "present") {
+    if (dependencies.resumeService === undefined) {
+      throw new CoachRemoteError({ kind: "unavailable" });
     }
+    const resumed = await dependencies.resumeService();
+    if (resumed !== "resumed") throw new CoachRemoteError({ kind: "unavailable" });
+    return connectWithBoundedRetry(dependencies);
+  }
+  const child = await dependencies.startEphemeralDaemon();
+  try {
+    const transport = await connectWithBoundedRetry(dependencies);
+    child.detachAfterHealthy();
+    return transport;
   } catch (error) {
     await child.disposeAfterFailedStart();
     throw error;

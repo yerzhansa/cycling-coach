@@ -31,6 +31,10 @@ export type CoachCliInvocation =
   | { readonly kind: "version" }
   | { readonly kind: "serve" }
   | {
+      readonly kind: "daemon";
+      readonly action: "install" | "status" | "restart";
+    }
+  | {
       readonly kind: "usage";
       readonly message: "Usage: enduragent [version|serve]";
     }
@@ -158,6 +162,13 @@ export function parseCoachCliInvocation(argv: readonly string[]): CoachCliInvoca
     return { kind: "version" };
   }
   if (argv.length === 1 && argv[0] === "serve") return { kind: "serve" };
+  if (
+    argv.length === 2 &&
+    argv[0] === "daemon" &&
+    (argv[1] === "install" || argv[1] === "status" || argv[1] === "restart")
+  ) {
+    return { kind: "daemon", action: argv[1] };
+  }
   const root = argv[0]!;
   if (!new Set(["ask", "state", "analyze", "plan", "wellness"]).has(root)) {
     return { kind: "usage", message: "Usage: enduragent [version|serve]" };
