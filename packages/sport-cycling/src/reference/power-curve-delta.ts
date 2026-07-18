@@ -1,5 +1,5 @@
-import type { MetricInput, PowerCurveDeltaSummary } from "@enduragent/core";
-import { computePowerCurveDelta } from "@enduragent/core";
+import type { PowerCurveDeltaSummary } from "@enduragent/engine/sport";
+import { computePowerCurveDelta, type MetricInput } from "@enduragent/kernel/reference/metrics";
 
 // A mean shift within ±1.0% reads as no meaningful trend. The band keeps tiny
 // noise from presenting as a directional change to the athlete.

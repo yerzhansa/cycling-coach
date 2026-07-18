@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createCoachEngine } from "../src/agent/coach-engine.js";
-import { baseAgentConfig } from "./helpers/base-agent-config.js";
+import { baseAgentConfig } from "../../engine/tests/helpers/base-agent-config.js";
 
 const sport = {
   id: "cycling", soul: "", skills: {}, sessionClusterGapMinutes: 30, memorySections: [],

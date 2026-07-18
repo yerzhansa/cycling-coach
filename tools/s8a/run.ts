@@ -176,7 +176,7 @@ function spawnScenarioChild(params: {
     delete env.HISTORY_TOKEN_BUDGET_RATIO;
   }
 
-  const result = spawnSync(join(REPO_ROOT, "node_modules", ".bin", "tsx"), childArgs, {
+  const result = spawnSync(process.execPath, ["--import", "tsx", ...childArgs], {
     cwd: REPO_ROOT,
     env,
     encoding: "utf-8",

@@ -1,5 +1,5 @@
-import type { DfaSummary, MetricInput } from "@enduragent/core";
-import { computeDfaA1Profile } from "@enduragent/core";
+import type { DfaSummary } from "@enduragent/engine/sport";
+import { computeDfaA1Profile, type MetricInput } from "@enduragent/kernel/reference/metrics";
 
 /**
  * Project the parity-green DFA a1 profile down to the thin athlete-facing

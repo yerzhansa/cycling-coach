@@ -1,7 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type {
+  ModelTransport,
+  ModelTransportDecorator,
+  ModelTransportRequest,
+} from "@enduragent/engine";
 
 import { assembledHash, sha256_16 } from "./hash.js";
 import {
@@ -9,25 +14,45 @@ import {
   patchForReplay,
   type GenerateOptsLike,
   type GenerateResultLike,
-  type LlmClassLike,
 } from "./patch-llm.js";
 import type { RecordedCall, S8aRecording } from "./types.js";
 
 // Minimal fake class with the same prototype-patching contract as the real
 // model seam: both this.llm and this.flushLlm resolve generate through the
 // class prototype, and the instance carries a private-ish config.
-function makeFakeLlmClass(tempDir: string) {
+function makeFakeLlmClass(
+  decorator: ModelTransportDecorator,
+  next: ModelTransport = {
+    generate: async () => ({
+      text: "live-reply",
+      toolCalls: [],
+      finishReason: "stop",
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+        inputTokenDetails: { noCacheTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        outputTokenDetails: { textTokens: 5, reasoningTokens: 0 },
+      },
+      totalUsage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+        inputTokenDetails: { noCacheTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        outputTokenDetails: { textTokens: 5, reasoningTokens: 0 },
+      },
+      steps: 1,
+    }),
+  },
+) {
+  const transport = decorator(next);
   class FakeLLM {
-    config = { llm: { provider: "anthropic", model: "test-model" }, dataDir: tempDir };
-    async generate(_opts: GenerateOptsLike): Promise<GenerateResultLike> {
-      return {
-        text: "live-reply",
-        toolCalls: [],
-        finishReason: "stop",
-        usage: {},
-        totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
-        steps: 1,
-      };
+    async generate(opts: GenerateOptsLike): Promise<GenerateResultLike> {
+      return transport.generate({
+        provider: "anthropic",
+        model: "test-model",
+        options: opts as ModelTransportRequest["options"],
+      }) as Promise<GenerateResultLike>;
     }
   }
   return FakeLLM;
@@ -98,8 +123,8 @@ describe("s8a replay engine", () => {
 
   function setup(calls: RecordedCall[]) {
     tempDir = mkdtempSync(join(tmpdir(), "s8a-patch-test-"));
-    const FakeLLM = makeFakeLlmClass(tempDir);
-    const handle = patchForReplay(FakeLLM as unknown as LlmClassLike, recording(calls), "patch-llm-test");
+    const handle = patchForReplay(recording(calls), "patch-llm-test");
+    const FakeLLM = makeFakeLlmClass(handle.modelTransportDecorator);
     return { FakeLLM, handle };
   }
 
@@ -200,29 +225,11 @@ describe("s8a replay engine", () => {
     expect(inline[0].diffFile).toBe("system-prompt.diff");
   });
 
-  it("reproduces the production-shaped generate ledger line with durationMs 0 and fixture usage", async () => {
+  it("returns replay data without delegating to the canonical transport", async () => {
     const { FakeLLM, handle } = setup([recordedCall({ ordinal: 0 })]);
-    await new FakeLLM().generate(chatOpts);
+    const result = await new FakeLLM().generate(chatOpts);
     handle.restore();
-    const lines = readFileSync(join(tempDir, "usage-ledger.jsonl"), "utf-8")
-      .trim()
-      .split("\n")
-      .map((l) => JSON.parse(l));
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatchObject({
-      kind: "generate",
-      caller: "chat",
-      provider: "anthropic",
-      model: "test-model",
-      durationMs: 0,
-      steps: 2,
-      inputTokens: 100,
-      outputTokens: 20,
-      totalTokens: 120,
-      cacheReadTokens: 40,
-      cacheWriteTokens: 7,
-      stopReason: "stop",
-    });
+    expect(result.text).toBe("recorded-reply");
   });
 
   it("ignores a non-null events field (forward tolerance)", async () => {
@@ -241,26 +248,39 @@ describe("s8a record engine", () => {
   it("captures request shape, tool executions, and result without mutating the caller's tools", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "s8a-record-test-"));
     try {
-      class FakeLLM {
-        config = { llm: { provider: "anthropic", model: "test-model" }, dataDir: tempDir };
-        async generate(opts: GenerateOptsLike): Promise<GenerateResultLike> {
+      const next: ModelTransport = {
+        generate: async (request) => {
+          const opts = request.options as GenerateOptsLike;
           // Simulate the SDK executing a tool during the call.
           await opts.tools?.probe_tool.execute?.({ q: 1 }, { toolCallId: "t1", messages: [] });
           return {
             text: "reply",
             toolCalls: [],
             finishReason: "stop",
-            usage: {},
-            totalUsage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+            usage: {
+              inputTokens: 1,
+              outputTokens: 2,
+              totalTokens: 3,
+              inputTokenDetails: { noCacheTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+              outputTokenDetails: { textTokens: 2, reasoningTokens: 0 },
+            },
+            totalUsage: {
+              inputTokens: 1,
+              outputTokens: 2,
+              totalTokens: 3,
+              inputTokenDetails: { noCacheTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+              outputTokenDetails: { textTokens: 2, reasoningTokens: 0 },
+            },
             steps: 1,
           };
-        }
-      }
+        },
+      };
       const tools = {
         probe_tool: { execute: async () => ({ answer: 42 }) },
       };
       const originalExecute = tools.probe_tool.execute;
-      const handle = patchForRecord(FakeLLM as unknown as LlmClassLike);
+      const handle = patchForRecord();
+      const FakeLLM = makeFakeLlmClass(handle.modelTransportDecorator, next);
       handle.setCurrentTurn({ chatId: "c1", turnIndex: 0 });
       await new FakeLLM().generate({ ...chatOpts, tools });
       handle.restore();
@@ -287,8 +307,8 @@ describe("s8a record engine", () => {
   it("captures compact calls as prompt-shaped requests", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "s8a-record-test-"));
     try {
-      const FakeLLM = makeFakeLlmClass(tempDir);
-      const handle = patchForRecord(FakeLLM as unknown as LlmClassLike);
+      const handle = patchForRecord();
+      const FakeLLM = makeFakeLlmClass(handle.modelTransportDecorator);
       await new FakeLLM().generate({ prompt: "summarize this", maxOutputTokens: 512, caller: "compact" });
       handle.restore();
       const req = handle.calls[0].request;

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 
-import { extractAccountId } from "./jwt.js";
+import { extractAccountId } from "@enduragent/engine";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";

@@ -5,10 +5,10 @@ import { join } from "node:path";
 import type { ModelMessage } from "ai";
 import { Memory } from "../src/memory/store.js";
 import { ChatStore } from "../src/agent/chat-store.js";
-import { runMemoryFlush } from "../src/agent/memory-flush.js";
+import { runMemoryFlush } from "../../engine/src/agent/memory-flush.js";
 import { ledgerEventSchema } from "../src/memory/event-ledger.js";
-import type { GenerateOpts, GenerateResult } from "../src/llm-types.js";
-import type { LLM } from "../src/llm.js";
+import type { GenerateOpts, GenerateResult } from "../../engine/src/llm-types.js";
+import type { LLM } from "../../engine/src/llm.js";
 import type { MemorySectionSpec } from "../src/sport.js";
 
 const SECTIONS: readonly MemorySectionSpec[] = [
@@ -150,7 +150,6 @@ describe("Memory.appendEvent", () => {
     expect(readFileSync(eventsPathOf(dataDir), "utf-8")).toBe(snapshot);
   });
 });
-
 describe("runMemoryFlush ledger integration", () => {
   let dataDir: string;
 

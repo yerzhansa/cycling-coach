@@ -1,5 +1,8 @@
-import { appendFileSync } from "node:fs";
-import { join } from "node:path";
+import type {
+  ModelTransportDecorator,
+  ModelTransportRequest,
+} from "@enduragent/engine";
+import type { GenerateResult } from "@enduragent/engine/sport";
 
 import { canonicalJson, stableSerialize } from "./canonical.js";
 import { jsonDiff, textDiff } from "./diff.js";
@@ -12,15 +15,6 @@ import type {
   RecordedToolExecution,
   S8aRecording,
 } from "./types.js";
-
-// The seam is LLM.prototype.generate. The class object is passed in by the
-// caller (the child imports it from the bare package so the patch hits the
-// same class the agent's internals use); unit tests pass a fake same-shaped class.
-export interface LlmClassLike {
-  prototype: {
-    generate(opts: GenerateOptsLike): Promise<GenerateResultLike>;
-  };
-}
 
 export interface ToolLike {
   execute?: (input: unknown, options: unknown) => unknown;
@@ -51,12 +45,6 @@ export interface GenerateResultLike {
   [key: string]: unknown;
 }
 
-// TypeScript privacy is compile-time only: the instance's config is read at
-// runtime through this cast.
-interface ConfigBearing {
-  config: { llm: { provider: string; model: string }; dataDir: string };
-}
-
 export type TurnRef = { chatId: string; turnIndex: number } | null;
 
 /** Thrown into agent code when the recording has no entry for a live generate
@@ -74,20 +62,19 @@ export class S8aDriftError extends Error {
 
 export interface RecordHandle {
   calls: RecordedCall[];
+  modelTransportDecorator: ModelTransportDecorator;
   setCurrentTurn(turn: TurnRef): void;
   restore(): void;
 }
 
-export function patchForRecord(target: LlmClassLike): RecordHandle {
-  const original = target.prototype.generate;
+export function patchForRecord(): RecordHandle {
   const calls: RecordedCall[] = [];
   let currentTurn: TurnRef = null;
   let ordinal = 0;
 
-  target.prototype.generate = async function (
-    this: unknown,
-    opts: GenerateOptsLike,
-  ): Promise<GenerateResultLike> {
+  const modelTransportDecorator: ModelTransportDecorator = (next) => ({
+    generate: async (request) => {
+    const opts = request.options as GenerateOptsLike;
     const callOrdinal = ordinal++;
     const executions: RecordedToolExecution[] = [];
     let seq = 0;
@@ -120,7 +107,10 @@ export function patchForRecord(target: LlmClassLike): RecordHandle {
       tools = wrapped;
     }
 
-    const result = await original.call(this, { ...opts, tools });
+    const result = await next.generate({
+      ...request,
+      options: { ...request.options, tools: tools as ModelTransportRequest["options"]["tools"] },
+    });
     calls.push({
       ordinal: callOrdinal,
       caller: opts.caller ?? "chat",
@@ -139,16 +129,16 @@ export function patchForRecord(target: LlmClassLike): RecordHandle {
       events: null,
     });
     return result;
-  };
+    },
+  });
 
   return {
     calls,
+    modelTransportDecorator,
     setCurrentTurn: (turn) => {
       currentTurn = turn;
     },
-    restore: () => {
-      target.prototype.generate = original;
-    },
+    restore: () => undefined,
   };
 }
 
@@ -192,6 +182,7 @@ export interface ReplayState {
 
 export interface ReplayHandle {
   state: ReplayState;
+  modelTransportDecorator: ModelTransportDecorator;
   setCurrentTurn(turn: TurnRef): void;
   /** Leftover-cursor A6 check — call after all turns completed. */
   finalize(): void;
@@ -199,11 +190,9 @@ export interface ReplayHandle {
 }
 
 export function patchForReplay(
-  target: LlmClassLike,
   recording: S8aRecording,
   scenarioId: string,
 ): ReplayHandle {
-  const original = target.prototype.generate;
   const state: ReplayState = { cursor: 0, failures: [], pendings: [] };
   let currentTurn: TurnRef = null;
 
@@ -216,10 +205,9 @@ export function patchForReplay(
     state.failures.push({ assertId, scenario: scenarioId, detail, diffFile, diffContent });
   };
 
-  target.prototype.generate = async function (
-    this: unknown,
-    opts: GenerateOptsLike,
-  ): Promise<GenerateResultLike> {
+  const modelTransportDecorator: ModelTransportDecorator = () => ({
+    generate: async (request) => {
+    const opts = request.options as GenerateOptsLike;
     const entry = recording.calls[state.cursor];
     const ordinal = state.cursor;
     state.cursor++;
@@ -237,13 +225,14 @@ export function patchForReplay(
 
     assertRequest(entry, opts, ordinal, currentTurn, state, fail);
     await executeRecordedTools(entry, opts, ordinal, fail);
-    reproduceLedgerLine(this as ConfigBearing, opts, entry);
 
-    return entry.result as GenerateResultLike;
-  };
+    return entry.result as unknown as GenerateResult;
+    },
+  });
 
   return {
     state,
+    modelTransportDecorator,
     setCurrentTurn: (turn) => {
       currentTurn = turn;
     },
@@ -259,9 +248,7 @@ export function patchForReplay(
         );
       }
     },
-    restore: () => {
-      target.prototype.generate = original;
-    },
+    restore: () => undefined,
   };
 }
 
@@ -468,43 +455,4 @@ async function executeRecordedTools(
       );
     }
   }
-}
-
-function reproduceLedgerLine(
-  instance: ConfigBearing,
-  opts: GenerateOptsLike,
-  entry: RecordedCall,
-): void {
-  const cfg = instance.config;
-  const totalUsage = entry.result.totalUsage as
-    | {
-        inputTokens?: number;
-        outputTokens?: number;
-        totalTokens?: number;
-        inputTokenDetails?: { cacheReadTokens?: number; cacheWriteTokens?: number };
-      }
-    | null
-    | undefined;
-  const details = totalUsage?.inputTokenDetails;
-  const line = {
-    ts: Date.now(),
-    kind: "generate",
-    caller: opts.caller,
-    provider: cfg.llm.provider,
-    model: cfg.llm.model,
-    // Matches the frozen-clock baseline: Date.now() never advances, so the
-    // production line would carry 0 too. Written as a literal, never computed.
-    durationMs: 0,
-    steps: entry.result.steps,
-    inputTokens: totalUsage?.inputTokens,
-    outputTokens: totalUsage?.outputTokens,
-    totalTokens: totalUsage?.totalTokens,
-    cacheReadTokens: details?.cacheReadTokens,
-    cacheWriteTokens: details?.cacheWriteTokens,
-    cost: entry.result.cost,
-    stopReason: entry.result.finishReason,
-  };
-  appendFileSync(join(cfg.dataDir, "usage-ledger.jsonl"), JSON.stringify(line) + "\n", {
-    encoding: "utf-8",
-  });
 }

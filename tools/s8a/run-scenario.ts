@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { CoachAgent, LLM, loadConfig } from "@enduragent/core";
+import { createCoachEngine, loadConfig } from "@enduragent/core";
 import { cyclingSport } from "@enduragent/sport-cycling";
 
 import {
@@ -24,7 +24,6 @@ import { startIntervalsMock, type IntervalsMockHandle } from "./lib/msw.js";
 import {
   patchForRecord,
   patchForReplay,
-  type LlmClassLike,
   type RecordHandle,
   type ReplayHandle,
 } from "./lib/patch-llm.js";
@@ -124,23 +123,6 @@ async function main(): Promise<void> {
     }
   }
 
-  const agent = new CoachAgent(cyclingSport, config);
-
-  // Fail fast when the intervals tools are absent: a missing INTERVALS_API_KEY
-  // in the spawn env silently changes the tool set AND the templateHash, which
-  // would otherwise surface as confusing multi-assert drift.
-  const toolSet = (agent as unknown as { tools: Record<string, unknown> }).tools;
-  const mustHave = new Set([
-    "intervals_fetch_athlete",
-    "intervals_fetch_wellness",
-    ...(scenario.recordExpectations?.tools ?? []),
-  ]);
-  for (const name of mustHave) {
-    if (!(name in toolSet)) {
-      harnessError(`intervals tools absent: ${name} not in the constructed tool set — check spawn env`);
-    }
-  }
-
   const registry: SupersessionEntry[] | null = args.noSupersessions
     ? null
     : loadSupersessions(join(HERE, "supersessions.jsonl"));
@@ -148,9 +130,27 @@ async function main(): Promise<void> {
   let recordHandle: RecordHandle | null = null;
   let replayHandle: ReplayHandle | null = null;
   if (args.mode === "record") {
-    recordHandle = patchForRecord(LLM as unknown as LlmClassLike);
+    recordHandle = patchForRecord();
   } else {
-    replayHandle = patchForReplay(LLM as unknown as LlmClassLike, recording!, scenario.id);
+    replayHandle = patchForReplay(recording!, scenario.id);
+  }
+  let toolNames: readonly string[] = [];
+  const agent = createCoachEngine(cyclingSport, config, {
+    modelTransportDecorator:
+      recordHandle?.modelTransportDecorator ?? replayHandle!.modelTransportDecorator,
+    onToolsAssembled: (names) => {
+      toolNames = names;
+    },
+  });
+  const mustHave = new Set([
+    "intervals_fetch_athlete",
+    "intervals_fetch_wellness",
+    ...(scenario.recordExpectations?.tools ?? []),
+  ]);
+  for (const name of mustHave) {
+    if (!toolNames.includes(name)) {
+      harnessError(`intervals tools absent: ${name} not in the constructed tool set — check spawn env`);
+    }
   }
 
   const replies: string[] = [];

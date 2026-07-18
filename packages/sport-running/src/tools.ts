@@ -1,6 +1,7 @@
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
-import type { MemoryStore, ResolvedCs } from "@enduragent/core";
+import type { MemoryStorePort as MemoryStore } from "@enduragent/engine/sport";
+import type { ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
 import type { IntervalsClient } from "intervals-icu-api";
 import {
   calculateRunningZones,

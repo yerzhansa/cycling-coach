@@ -1,186 +1,29 @@
-import type { Tool } from "ai";
-import type { z } from "zod";
-import type { IntervalsClient } from "./intervals.js";
-import type { LLM } from "./llm.js";
-import type { MemorySnapshot, MemoryStore } from "./memory.js";
-import type { ResolvedCs } from "./reference/cs-resolution.js";
-import type { ReferenceSportAdapter } from "./reference/sport-adapter.js";
-import type { SecretsResolver } from "./secrets/types.js";
-import type { AthleteDataReader, PlatformCalendarMutations } from "./athlete-data.js";
-
-// ─── Identity ──────────────────────────────────────────────────────────
-/** Closed literal union — adding a sport requires a Core bump. Intentional. */
-export type SportId = "cycling" | "running" | "duathlon" | "swimming" | "triathlon";
-
-/** intervals.icu activity-type filter values. */
-export type IntervalsActivityType =
-  | "Ride"
-  | "Run"
-  | "VirtualRide"
-  | "TrailRun"
-  // The cycling-family rides the registry already counts as cycling, so they
-  // route to the cycling adapter and reconcile with its sport-family counts.
-  | "MountainBikeRide"
-  | "GravelRide"
-  | "EBikeRide"
-  // Reserved: no sport's intervalsActivityTypes declares these yet, so they
-  // stay inert until one does.
-  | "Swim"
-  | "OpenWaterSwim"
-  | "VirtualRun";
-
-// ─── Shared kernel ─────────────────────────────────────────────────────
-/** Every sport's profile schema must extend this. */
-export interface Person {
-  weight: number;
-  age: number;
-  availableDays: number;
-}
-
-// ─── Memory section spec (ADR-0003) ────────────────────────────────────
-export interface MemorySectionSpec {
-  /** Bare for Core (`person`, `goals`); sport-prefixed for sports (`cycling-profile`). */
-  name: string;
-  /** Description shown to the LLM in section headers + memory_write tool docs. */
-  description: string;
-  /** Optional Zod schema; when present, Core validates writes. */
-  schema?: z.ZodTypeAny;
-}
-
-// ─── Tool registration (ADR-0004) ──────────────────────────────────────
-export interface ToolRegistration {
-  name: string;
-  description: string;
-  inputSchema: z.ZodTypeAny;
-  tool: Tool;
-}
-
-// ─── Runtime services Core provides to tool factories ──────────────────
-/**
- * `intervals` is nullable because intervals.icu is BYOK-optional — users
- * without an intervals API key still run the agent. Sport.tools() filters
- * intervals-bound tools when null.
- */
-export interface CoreDeps {
-  llm: LLM;
-  intervals: IntervalsClient | null;
-  athleteData?: AthleteDataReader;
-  calendarMutations?: PlatformCalendarMutations;
-  memory: MemoryStore;
-  secrets: SecretsResolver;
-  /** Athlete IANA timezone, resolved by Core. Used so tools see the same
-   * "today" the system prompt references. */
-  tz: string;
-  /**
-   * Per-turn getter for the resolved primary anchor (running critical speed),
-   * sourced from the latest synced reference data just before the turn. A getter
-   * (not a value) because tools are built once at construction while the anchor
-   * changes per turn — reading it lazily keeps the tool SCHEMA, and thus the
-   * prompt-template hash, stable. Returns `null` when no sync data / no run-family
-   * row / a non-running sport / the CLI path; sports that don't anchor on CS
-   * ignore it.
-   *
-   * Why this rides `CoreDeps` rather than the ADR-0010 Reference adapter: the
-   * adapter is built once at boot (declarative metadata + pure compute hooks),
-   * whereas this is a runtime value re-resolved every turn — the adapter seam
-   * can't carry it. Running-specific for now; generalize to a discriminated
-   * anchor (e.g. swim CSS, cycling auto-FTP) under the rule of three.
-   *
-   * Takes the tool-execution options object the calling tool's `execute`
-   * received — the per-turn context rides those options; pass them through
-   * opaquely.
-   */
-  resolvedCs?: (options: unknown) => ResolvedCs | null;
-}
-
-// ─── Sport: the plug-point ─────────────────────────────────────────────
-export interface Sport {
-  readonly id: SportId;
-
-  /** Soul prompt — coaching identity, voice, principles. */
-  readonly soul: string;
-
-  /** Skill prompts indexed by skill name (e.g. "build_plan", "assess_workout"). */
-  readonly skills: Readonly<Record<string, string>>;
-
-  /**
-   * The within-N-minutes window for clustering activities into one training
-   * session during a review. An operational grouping convention (coaching
-   * judgment about when two efforts count as one session), NOT a physiological
-   * constant.
-   */
-  readonly sessionClusterGapMinutes: number;
-
-  /** Sport-prefixed memory sections. Core auto-merges shared sections at runtime. */
-  readonly memorySections: readonly MemorySectionSpec[];
-
-  /**
-   * Phrases the LLM must never drop during compaction. Either:
-   *   - a static array of literal tokens (e.g. ["FTP", "VDOT"]), OR
-   *   - a function that derives tokens from the current memory state, for
-   *     data-bound values like "FTP 247W" or specific bike models.
-   * Compaction calls the function (if provided) just before each compaction
-   * pass, so the protected list reflects the athlete's current data.
-   */
-  readonly mustPreserveTokens:
-    | readonly string[]
-    | ((memory: MemorySnapshot) => readonly string[]);
-
-  /** intervals.icu activity types this sport reads/writes. */
-  readonly intervalsActivityTypes: readonly IntervalsActivityType[];
-
-  /** Zod schema for the athlete profile. Drives validation AND wizard prompts. */
-  readonly athleteProfileSchema: z.ZodTypeAny;
-
-  /** The one and only method: tools need runtime services. */
-  tools(deps: CoreDeps): readonly ToolRegistration[];
-
-  /**
-   * Optional Reference-layer adapters for this sport. Returns a `readonly`
-   * array so composing sports (duathlon, per ADR-0002) can spread upstream
-   * sports' adapters: `() => [...cycling.referenceAdapters!(),
-   * ...running.referenceAdapters!()]`.
-   *
-   * Validation lives in Reference's startup dispatcher, NOT in `Sport`:
-   * disjoint coverage (no two adapters claim the same `IntervalsActivityType`)
-   * and subset coverage (union of `activityTypes` ⊆ `intervalsActivityTypes`)
-   * throw at boot before any traffic. Sports without per-sport Reference
-   * affordances simply omit this method — the dispatcher treats absence as
-   * "fall back to declarative defaults." See ADR-0010 for the canonical
-   * pattern this method instances.
-   */
-  referenceAdapters?(): readonly ReferenceSportAdapter[];
-}
-
-// ─── Consumer-narrowed slices (interface segregation via Pick) ─────────
-/** Slice consumed by the system-prompt builder. */
-export type SportPersona = Pick<Sport, "soul" | "skills" | "sessionClusterGapMinutes">;
-
-/** Slice consumed by the memory store factory and the compaction module. */
-export type SportMemoryShape = Pick<Sport, "memorySections" | "mustPreserveTokens">;
-
-/**
- * Composes multiple sports' skill records into one, throwing on any colliding
- * key. The bare-spread alternative silently drops the earlier sport's skill;
- * a skill block is large enough that a silent loss is worse than a hard failure
- * at boot. Sports keep their keys sport-prefixed (e.g. `cycling-periodization`)
- * so collisions are structurally unreachable; this guard is the backstop if a
- * prefix is ever forgotten.
- */
-export function mergeSportSkills(
-  ...records: ReadonlyArray<Readonly<Record<string, string>>>
-): Record<string, string> {
-  const merged: Record<string, string> = {};
-  for (const record of records) {
-    for (const [key, value] of Object.entries(record)) {
-      if (key in merged) {
-        throw new Error(
-          `Duplicate skill key "${key}" while composing sports. ` +
-            `Skill keys must be sport-prefixed (e.g. "cycling-${key}") to compose.`,
-        );
-      }
-      merged[key] = value;
-    }
-  }
-  return merged;
-}
+export type {
+  AthleteDataReaderPort as AthleteDataReader,
+  AthleteReadResult,
+  CalendarEventForDelete,
+  CoreDeps,
+  IntervalsActivityType,
+  MemorySectionSpec,
+  MemorySnapshot,
+  MemoryStorePort as MemoryStore,
+  MemoryWriteSource,
+  PlatformCalendarMutationsPort as PlatformCalendarMutations,
+  ReferenceSportAdapter,
+  Sport,
+  SportId,
+  SportMemoryShape,
+  SportPersona,
+  StoredDataFreshness,
+  ToolRegistration,
+} from "@enduragent/engine/sport";
+export {
+  createCoreToolsWithSportConfig,
+  createMemoryQueryTool,
+  createMemoryReadTool,
+  createMemorySnapshot,
+  createMemoryTools,
+  createPureCoreIntervalsTools,
+  getEffectiveSections,
+  mergeSportSkills,
+} from "@enduragent/engine/sport";

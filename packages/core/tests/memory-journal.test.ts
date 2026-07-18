@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Memory } from "../src/memory/store.js";
 import { JOURNAL_FILENAME } from "../src/memory/journal.js";
-import { createMemoryTools } from "../src/agent/tools.js";
-import { runMemoryFlush } from "../src/agent/memory-flush.js";
-import { createFakeLLM } from "./helpers/fake-llm.js";
+import { createMemoryTools } from "../../engine/src/sport/memory-tools.js";
+import { runMemoryFlush } from "../../engine/src/agent/memory-flush.js";
+import { createFakeLLM } from "../../engine/tests/helpers/fake-llm.js";
 
 const journalPathOf = (dataDir: string) => join(dataDir, "memory", JOURNAL_FILENAME);
 

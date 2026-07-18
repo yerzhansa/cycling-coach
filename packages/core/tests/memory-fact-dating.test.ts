@@ -3,10 +3,10 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Memory } from "../src/memory/store.js";
-import { createMemorySnapshot } from "../src/memory/snapshot.js";
+import { createMemorySnapshot } from "../../engine/src/sport/memory-snapshot.js";
 import { JOURNAL_FILENAME } from "../src/memory/journal.js";
-import { runMemoryFlush } from "../src/agent/memory-flush.js";
-import { createFakeLLM } from "./helpers/fake-llm.js";
+import { runMemoryFlush } from "../../engine/src/agent/memory-flush.js";
+import { createFakeLLM } from "../../engine/tests/helpers/fake-llm.js";
 
 let dataDir: string;
 
@@ -15,7 +15,6 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-06-11T08:00:00.000Z"));
 });
-
 afterEach(() => {
   vi.useRealTimers();
   rmSync(dataDir, { recursive: true, force: true });

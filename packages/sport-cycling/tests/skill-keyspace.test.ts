@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { buildSystemPrompt, mergeSportSkills } from "@enduragent/core";
-import type { Memory, SportPersona } from "@enduragent/core";
+import { mergeSportSkills } from "@enduragent/engine/sport";
+import type { MemoryStorePort, SportPersona } from "@enduragent/engine/sport";
+import { buildSystemPrompt } from "../../engine/src/agent/system-prompt.js";
 import { cyclingSport } from "../src/sport.js";
 
-const fakeMemory = { getContext: () => "" } as unknown as Memory;
+const fakeMemory = { getContext: () => "" } as unknown as MemoryStorePort;
 
 describe("cycling skill keyspace", () => {
   it("prefixes every cycling skill key with cycling-", () => {

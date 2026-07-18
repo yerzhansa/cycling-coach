@@ -20,7 +20,8 @@
     "codegen": "tsx ../../tools/generate-sport-skills.ts $PWD"
   },
   "dependencies": {
-    "@enduragent/core": "workspace:*",
+    "@enduragent/engine": "workspace:*",
+    "@enduragent/kernel": "workspace:*",
     "intervals-icu-api": "^0.1.2",
     "ai": "^6.0.158",
     "zod": "^4.3.6"

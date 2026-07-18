@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, it, expect } from "vitest";
 
 import type { UsageLedgerLine } from "../packages/core/src/usage-ledger.js";
-import type { ModelCost } from "../packages/core/src/agent/codex/cost.js";
+import type { ModelCost } from "../packages/engine/src/agent/codex/cost.js";
 import {
   parseCli,
   parsePriceFlag,

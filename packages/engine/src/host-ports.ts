@@ -1,6 +1,8 @@
 import type { AthleteState } from "@enduragent/coach-contract";
 import type { ModelMessage } from "ai";
 import type { IntervalsClient } from "intervals-icu-api";
+import type { GenerateOptions, GenerateResult } from "./sport.js";
+import type { LedgerEventInput } from "./sport/ledger-event.js";
 
 export type EngineDataSource = "platform" | "store";
 
@@ -31,9 +33,11 @@ export interface EngineConfig {
     readonly historyTokenBudgetRatio: number;
     readonly idleMinutes: number;
     readonly dailyResetHour: number;
+    readonly resetArchiveRetentionDays: number;
     readonly timezone: string;
   };
   readonly contextWindowTokens: number;
+  readonly compactContextWindowTokens: number;
 }
 
 export type MemoryWriteSource =
@@ -42,20 +46,6 @@ export type MemoryWriteSource =
   | "sport-tool"
   | "migration"
   | "unattributed";
-
-export type LedgerEventKind =
-  | "decision"
-  | "override"
-  | "illness"
-  | "experiment"
-  | "outcome";
-
-export interface LedgerEventInput {
-  readonly date: string;
-  readonly kind: LedgerEventKind;
-  readonly text: string;
-  readonly source: "flush";
-}
 
 export interface MemoryStorePort {
   readMemory(): string;
@@ -92,6 +82,7 @@ export interface ChatLineage {
   readonly assembledHash: string;
   readonly provider: string;
   readonly model: string;
+  readonly lineageVersion: string;
 }
 
 export interface ChatStorePort {
@@ -223,8 +214,40 @@ export interface UsagePort {
   append(line: UsageLedgerLine): void;
 }
 
+export type FailureReason =
+  | "overflow"
+  | "timeout"
+  | "rate_limit"
+  | "server_error"
+  | "network"
+  | "auth"
+  | "invalid_request"
+  | "unknown";
+
+export interface ModelTransportRequest {
+  readonly provider: EngineLlmProvider;
+  readonly model: string;
+  readonly options: GenerateOptions;
+}
+
+export interface ModelTransport {
+  generate(request: ModelTransportRequest): Promise<GenerateResult>;
+}
+
+export type ModelTransportDecorator = (next: ModelTransport) => ModelTransport;
+
 export interface AthleteStateReaderPort {
   getAthleteState(): Promise<AthleteState>;
+}
+
+export interface ReferenceStateSnapshot {
+  readonly errorState: {
+    readonly mitigation?: string;
+    readonly ts: string;
+  } | null;
+  readonly latest: {
+    readonly metadata?: { readonly last_updated?: string };
+  } | null;
 }
 
 export interface EngineHostPorts {
@@ -236,4 +259,12 @@ export interface EngineHostPorts {
   readonly logger: LoggerPort;
   readonly usage: UsagePort;
   readonly stateReader: AthleteStateReaderPort;
+  readonly readReferenceState: () => ReferenceStateSnapshot;
+  readonly getAccessToken: (profileName: string, signal?: AbortSignal) => Promise<string>;
+  readonly classifyFailure: (error: unknown) => FailureReason;
+  readonly extractRetryAfterMs: (error: unknown) => number | null;
+  readonly now: () => number;
+  readonly randomId: () => string;
+  readonly modelTransportDecorator?: ModelTransportDecorator;
+  readonly onToolsAssembled?: (names: readonly string[]) => void;
 }

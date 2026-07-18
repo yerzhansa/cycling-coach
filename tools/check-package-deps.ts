@@ -45,6 +45,7 @@ export interface PackageDepRule {
   readonly dir: string;
   readonly srcOnly: boolean;
   readonly allowedWorkspace: readonly string[];
+  readonly allowedManifestWorkspace?: readonly string[];
   readonly transitionalWorkspace: readonly string[];
   readonly forbidNode: boolean;
 }
@@ -104,7 +105,8 @@ export const RULES: readonly PackageDepRule[] = [
     dir: "packages/sport-*",
     srcOnly: true,
     allowedWorkspace: ["@enduragent/kernel", "@enduragent/engine/sport"],
-    transitionalWorkspace: ["@enduragent/core", "@enduragent/sport-*"],
+    allowedManifestWorkspace: ["@enduragent/kernel", "@enduragent/engine"],
+    transitionalWorkspace: [],
     forbidNode: false,
   },
   {
@@ -227,9 +229,22 @@ export function matchesEntry(spec: string, entry: string): boolean {
   return spec === entry || spec.startsWith(entry + "/");
 }
 
-function classifyWorkspace(spec: string, rule: PackageDepRule): "allowed" | "transitional" | "violation" {
+function classifySourceWorkspace(
+  spec: string,
+  rule: PackageDepRule,
+): "allowed" | "transitional" | "violation" {
   if (rule.allowedWorkspace.some((e) => matchesEntry(spec, e))) return "allowed";
   if (rule.transitionalWorkspace.some((e) => matchesEntry(spec, e))) return "transitional";
+  return "violation";
+}
+
+function classifyManifestWorkspace(
+  name: string,
+  rule: PackageDepRule,
+): "allowed" | "transitional" | "violation" {
+  const allowed = rule.allowedManifestWorkspace ?? rule.allowedWorkspace;
+  if (allowed.some((entry) => matchesEntry(name, entry))) return "allowed";
+  if (rule.transitionalWorkspace.some((entry) => matchesEntry(name, entry))) return "transitional";
   return "violation";
 }
 
@@ -404,7 +419,7 @@ export function runRulesAgainst(root: string, rules: readonly PackageDepRule[]):
             });
             continue;
           }
-          const verdict = classifyWorkspace(spec, rule);
+          const verdict = classifySourceWorkspace(spec, rule);
           if (verdict === "allowed") continue;
           if (verdict === "transitional") {
             recordWarn(dir, packageRoot(spec));
@@ -425,7 +440,7 @@ export function runRulesAgainst(root: string, rules: readonly PackageDepRule[]):
       const manifestFile = join(dir, "package.json");
       for (const { name } of deps) {
         if (!name.startsWith(WORKSPACE_SCOPE)) continue;
-        const verdict = classifyWorkspace(name, rule);
+        const verdict = classifyManifestWorkspace(name, rule);
         if (verdict === "allowed") continue;
         if (verdict === "transitional") {
           recordWarn(dir, packageRoot(name));
