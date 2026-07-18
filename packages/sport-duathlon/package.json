@@ -15,9 +15,6 @@
     "test": "echo 'no tests yet (alpha)'"
   },
   "dependencies": {
-    "@enduragent/core": "workspace:*",
-    "@enduragent/sport-cycling": "workspace:*",
-    "@enduragent/sport-running": "workspace:*",
     "zod": "^4.3.6"
   },
   "devDependencies": {

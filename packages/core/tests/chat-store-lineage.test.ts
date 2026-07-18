@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { ChatStore } from "../src/agent/chat-store.js";
-import { PROMPT_LINEAGE_SCHEMA_VERSION } from "../src/agent/prompt-lineage.js";
+import { PROMPT_LINEAGE_SCHEMA_VERSION } from "../../engine/src/agent/prompt-lineage.js";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,6 +33,7 @@ describe("ChatStore lineage", () => {
       assembledHash: "fedcba9876543210",
       provider: "anthropic",
       model: "claude-x",
+      lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
     });
     const [line] = readLines("c1");
     expect(line.role).toBe("assistant");
@@ -51,6 +52,7 @@ describe("ChatStore lineage", () => {
       assembledHash: "fedcba9876543210",
       provider: "anthropic",
       model: "claude-x",
+      lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
     });
     const [userLine, assistantLine] = readLines("c1");
     expect(userLine.role).toBe("user");
@@ -77,6 +79,7 @@ describe("ChatStore lineage", () => {
       assembledHash: "fedcba9876543210",
       provider: "anthropic",
       model: "claude-x",
+      lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
     });
     const { messages } = store.load("c1");
     expect(messages).toHaveLength(2);

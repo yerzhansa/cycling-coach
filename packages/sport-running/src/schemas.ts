@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CS_MIN_MPS, CS_MAX_MPS } from "@enduragent/core";
+import { CS_MIN_MPS, CS_MAX_MPS } from "@enduragent/kernel/reference/cs-resolution";
 
 // ============================================================================
 // SHARED ENUMS

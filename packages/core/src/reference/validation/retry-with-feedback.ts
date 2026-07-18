@@ -10,7 +10,7 @@
  */
 import { createHash } from "node:crypto";
 
-import type { LLM } from "../../llm.js";
+import type { LanguageModelPort } from "@enduragent/engine/sport";
 import type { LatestJson } from "../schemas/latest.js";
 import {
   validateRecommendation,
@@ -44,7 +44,7 @@ function parseMetadata(metadata: unknown): RecommendationMetadata | null {
 }
 
 export async function validateAndRetry(
-  llm: Pick<LLM, "generate">,
+  llm: LanguageModelPort,
   _originalUserPrompt: string,
   response: string,
   metadata: unknown,

@@ -1,12 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import type { MemorySectionSpec, Sport, SportId } from "@enduragent/engine/sport";
 import {
-  CORE_SHARED_SECTIONS,
   getEffectiveSections,
   _resetWarnCacheForTesting,
-  type MemorySectionSpec,
-  type Sport,
-  type SportId,
-} from "@enduragent/core";
+} from "../../engine/src/sport/effective-sections.js";
+import { CORE_SHARED_SECTIONS } from "../../engine/src/sport/shared-sections.js";
 
 function makeSport(id: SportId, sections: readonly MemorySectionSpec[]): Sport {
   return {

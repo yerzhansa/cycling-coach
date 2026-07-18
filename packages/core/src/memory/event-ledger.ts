@@ -1,20 +1,23 @@
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import {
+  LEDGER_DATE_PATTERN,
+  LEDGER_EVENT_KINDS,
+  LEDGER_EVENT_SOURCES,
+  type LedgerEventInput,
+} from "@enduragent/engine/sport";
 
-export const LEDGER_EVENT_KINDS = [
-  "decision",
-  "override",
-  "illness",
-  "experiment",
-  "outcome",
-] as const;
-export type LedgerEventKind = (typeof LEDGER_EVENT_KINDS)[number];
-
-export const LEDGER_EVENT_SOURCES = ["flush"] as const;
-export type LedgerEventSource = (typeof LEDGER_EVENT_SOURCES)[number];
-
-export const LEDGER_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+export {
+  LEDGER_DATE_PATTERN,
+  LEDGER_EVENT_KINDS,
+  LEDGER_EVENT_SOURCES,
+};
+export type {
+  LedgerEventInput,
+  LedgerEventKind,
+  LedgerEventSource,
+} from "@enduragent/engine/sport";
 
 // Append-only invariant: lines are never rewritten or pruned, and the
 // parse-before-append below guarantees every committed line satisfies
@@ -28,8 +31,6 @@ export const ledgerEventSchema = z.object({
 });
 
 export type LedgerEvent = z.infer<typeof ledgerEventSchema>;
-export type LedgerEventInput = Omit<LedgerEvent, "ts">;
-
 export const LEDGER_FILENAME = "events.jsonl";
 
 export function appendLedgerEvent(memoryDir: string, event: LedgerEventInput): void {

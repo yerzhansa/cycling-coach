@@ -9,7 +9,7 @@ import {
   formatStoreFreshness,
   type PlatformCalendarMutations,
 } from "../src/athlete-data.js";
-import { createCoreToolsWithSportConfig, createPureCoreIntervalsTools } from "../src/agent/intervals-tools.js";
+import { createCoreToolsWithSportConfig, createPureCoreIntervalsTools } from "../../engine/src/sport/platform-tools.js";
 
 function produced(frozenNow = "1998-07-18T12:00:00.000Z"): ProducedLocalBundle {
   return {
@@ -92,12 +92,13 @@ describe("store athlete reader", () => {
     } as unknown as IntervalsClient;
     const signature = (tools: Record<string, { description?: string; inputSchema?: unknown } | undefined>): string =>
       JSON.stringify(Object.entries(tools).map(([name, tool]) => [name, tool?.description, tool?.inputSchema]));
-    const directPure = createPureCoreIntervalsTools(client, "UTC");
-    const selectedPure = createPureCoreIntervalsTools(client, "UTC",
-      createPlatformAthleteDataReader(client), createPlatformCalendarMutations(client));
+    const athleteData = createPlatformAthleteDataReader(client);
+    const calendarMutations = createPlatformCalendarMutations(client);
+    const directPure = createPureCoreIntervalsTools(client, "UTC", athleteData, calendarMutations);
+    const selectedPure = createPureCoreIntervalsTools(null, "UTC", athleteData, calendarMutations);
     expect(signature(selectedPure)).toBe(signature(directPure));
-    expect(signature(createCoreToolsWithSportConfig(client, ["Ride"], createPlatformAthleteDataReader(client))))
-      .toBe(signature(createCoreToolsWithSportConfig(client, ["Ride"])));
+    expect(signature(createCoreToolsWithSportConfig(client, ["Ride"], athleteData)))
+      .toBe(signature(createCoreToolsWithSportConfig(null, ["Ride"], athleteData)));
   });
 
   it("applies strict dates only at store execution and rejects reversed ranges", async () => {

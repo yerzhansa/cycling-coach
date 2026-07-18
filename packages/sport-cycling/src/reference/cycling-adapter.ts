@@ -1,4 +1,4 @@
-import type { ReferenceSportAdapter } from "@enduragent/core";
+import type { ReferenceSportAdapter } from "@enduragent/engine/sport";
 
 // Frozen tuple so callers get element identity; equals the cycling
 // sustainability-anchor durations the Reference layer's capability metrics use.

@@ -1,4 +1,4 @@
-import type { ReferenceSportAdapter } from "@enduragent/core";
+import type { ReferenceSportAdapter } from "@enduragent/engine/sport";
 
 // Declarative-only adapter: pace-based zones and decoupling, no Activity-shaped
 // compute hooks yet. The running speed-duration curve and DFA validation are

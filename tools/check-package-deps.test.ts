@@ -205,7 +205,12 @@ describe("R4 sport packages", () => {
     expect(violationsFor(r4)).toBe(1);
   });
 
-  it("R4 passes a sport importing @enduragent/engine/sport (the blessed subpath)", () => {
+  it("R4 passes an engine owner manifest with a sport-subpath source import", () => {
+    writeJson("packages/sport-x/package.json", {
+      name: "@enduragent/sport-x",
+      private: true,
+      dependencies: { "@enduragent/engine": "workspace:*" },
+    });
     write(
       "packages/sport-x/src/ok.ts",
       `import { e } from "@enduragent/engine/sport";\nexport const y = e;\n`,
@@ -218,11 +223,9 @@ describe("R4 sport packages", () => {
     expect(violationsFor(r4)).toBe(1);
   });
 
-  it("R4 passes a sport importing @enduragent/core and surfaces the transitional WARN", () => {
-    write("packages/sport-x/src/ok.ts", `import { c } from "@enduragent/core";\nexport const y = c;\n`);
-    const result = runRulesAgainst(tempDir, [r4]);
-    expect(result.violations).toHaveLength(0);
-    expect(result.warnEdges).toContainEqual({ dir: "packages/sport-x", target: "@enduragent/core" });
+  it("R4 flags a sport importing @enduragent/core", () => {
+    write("packages/sport-x/src/bad.ts", `import { c } from "@enduragent/core";\nexport const y = c;\n`);
+    expect(violationsFor(r4)).toBe(1);
   });
 });
 
@@ -326,18 +329,15 @@ describe("real repository", () => {
     expect(main([])).toBe(0);
   });
 
-  it("surfaces exactly the seven transitional edges at branch point (guards a vacuous pass)", () => {
+  it("surfaces exactly the remaining transitional edges", () => {
     const result = runRulesAgainst(".", RULES);
     const edges = result.warnEdges.map((e) => `${e.dir} -> ${e.target}`);
     expect(edges).toEqual([
       "packages/coach -> @enduragent/core",
+      "packages/core -> @enduragent/engine",
       "packages/core -> @enduragent/kernel",
-      "packages/sport-cycling -> @enduragent/core",
-      "packages/sport-duathlon -> @enduragent/core",
-      "packages/sport-duathlon -> @enduragent/sport-cycling",
-      "packages/sport-duathlon -> @enduragent/sport-running",
-      "packages/sport-running -> @enduragent/core",
     ]);
+    expect(result.warnEdges.filter((edge) => edge.dir.startsWith("packages/sport-"))).toEqual([]);
   });
 
   it("activates engine without making end-state discovery vacuous", () => {

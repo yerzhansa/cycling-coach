@@ -15,14 +15,22 @@ export type {
   CoreDeps,
   IntervalsActivityType,
   MemorySectionSpec,
-  Person,
   Sport,
   SportId,
   SportMemoryShape,
   SportPersona,
   ToolRegistration,
 } from "./sport.js";
-export { mergeSportSkills } from "./sport.js";
+export {
+  createCoreToolsWithSportConfig,
+  createMemoryQueryTool,
+  createMemoryReadTool,
+  createMemorySnapshot,
+  createMemoryTools,
+  createPureCoreIntervalsTools,
+  getEffectiveSections,
+  mergeSportSkills,
+} from "./sport.js";
 
 // ─── Reference layer (see NOTICE.md for upstream attribution) ────────
 // Per-sport seam types, freshness/timing constants, path resolver, I/O
@@ -34,11 +42,7 @@ export { bootstrapReference } from "./reference/runtime.js";
 export type { BootstrapReferenceDeps, ReferenceRuntime } from "./reference/runtime.js";
 export { wrapFetchWithSignal } from "./reference/sync/intervals-client-factory.js";
 
-// ─── LLM ──────────────────────────────────────────────────────────────
-export { LLM } from "./llm.js";
-export type { GenerateOpts, GenerateResult } from "./llm-types.js";
 export { appendUsageLine, USAGE_LEDGER_FILE, USAGE_LEDGER_MAX_BYTES } from "./usage-ledger.js";
-export type { UsageLedgerLine } from "./usage-ledger.js";
 
 // ─── Logging substrate ────────────────────────────────────────────────
 export {
@@ -54,12 +58,6 @@ export type { LogLine, LogLevel, SubsystemLogger, Subsystem } from "./logging/in
 export type { MemorySnapshot, MemoryStore, MemoryWriteSource } from "./memory.js";
 export { Memory } from "./memory/store.js";
 export type { MemoryJournalEntry } from "./memory/journal.js";
-export { createMemorySnapshot } from "./memory/snapshot.js";
-export { CORE_SHARED_SECTIONS } from "./memory/shared-sections.js";
-export {
-  getEffectiveSections,
-  _resetWarnCacheForTesting,
-} from "./memory/effective-sections.js";
 
 // ─── Secrets ──────────────────────────────────────────────────────────
 export type {
@@ -109,89 +107,12 @@ export type { IntervalsClient } from "./intervals.js";
 // ─── Agent ────────────────────────────────────────────────────────────
 export { CoachAgent } from "./agent/coach-agent.js";
 export { createCoachEngine } from "./agent/coach-engine.js";
-export type { CoachEngineSeam, LocalCoachEngine } from "./agent/coach-engine.js";
-export {
-  TurnBudgetExceededError,
-  MAX_TURN_MODEL_CALLS,
-  MAX_TURN_GENERATE_ATTEMPTS,
-  TURN_WALL_CLOCK_MS,
-} from "./agent/turn-budget.js";
-export type { BudgetExceededKind, TurnBudget } from "./agent/turn-budget.js";
-export { TAINTED_BY_WRITES_MESSAGE } from "./agent/coach-agent-copy.js";
-export { capToolResult, TOOL_RESULT_SHARE } from "./agent/tool-result-cap.js";
-export {
-  memoizeReadTool,
-  READ_ONLY_TOOL_NAMES,
-  stableStringify,
-  memoizeKey,
-} from "./agent/read-memoizer.js";
-export {
-  downsampleStreams,
-  STREAM_BIN_SECONDS,
-  STREAM_RESULT_TARGET_TOKENS,
-} from "./agent/stream-downsample.js";
-export type { DownsampledStreams } from "./agent/stream-downsample.js";
+export type {
+  CoachEngineSeam,
+  LegacyEngineOverrides,
+  LocalCoachEngine,
+} from "./agent/coach-engine.js";
 export { ChatStore } from "./agent/chat-store.js";
-export {
-  buildSystemPrompt,
-  SYSTEM_PROMPT_CACHE_BOUNDARY,
-  STEP_BUDGET_RULES,
-} from "./agent/system-prompt.js";
-export { computePromptLineage, PROMPT_LINEAGE_SCHEMA_VERSION } from "./agent/prompt-lineage.js";
-export type { PromptLineage, PromptLineageInput } from "./agent/prompt-lineage.js";
-export { withSessionLock } from "./agent/session-lock.js";
-export {
-  splitHistoryByBudget,
-  makeSummaryMessage,
-  SUMMARY_PREFIX,
-} from "./agent/history-limit.js";
-export {
-  CHARS_PER_TOKEN,
-  MIN_PROMPT_BUDGET_TOKENS,
-  RESERVE_TOKENS,
-  SAFETY_MARGIN,
-  SUMMARIZATION_OVERHEAD_TOKENS,
-  TIMEOUT_COMPACTION_THRESHOLD,
-  computeHistoryTokenBudget,
-  estimateMessagesTokens,
-  estimateTokens,
-  extractRetryAfterMs,
-  isContextOverflowError,
-  isRateLimitError,
-  isTimeoutError,
-  messageText,
-  shouldCompact,
-} from "./agent/token-utils.js";
-export {
-  auditSummaryQuality,
-  chunkMessagesByMaxTokens,
-  computeAdaptiveChunkRatio,
-  summarizeDroppedMessages,
-  summarizeInStages,
-} from "./agent/compaction.js";
-export { runMemoryFlush } from "./agent/memory-flush.js";
-export type { MemoryFlushOutcome } from "./agent/memory-flush.js";
-export {
-  evaluateSessionFreshness,
-  resolveDailyResetAtMs,
-} from "./agent/session-freshness.js";
-export {
-  createMemoryQueryTool,
-  createMemoryReadTool,
-  createMemoryTools,
-} from "./agent/tools.js";
-export {
-  createPureCoreIntervalsTools,
-  createCoreToolsWithSportConfig,
-} from "./agent/intervals-tools.js";
-export {
-  appendCurrentTimeLine,
-  buildCurrentTimeLine,
-  formatTimeInTZ,
-  isValidTimezone,
-  resolveUserTimezone,
-  todayInTZ,
-} from "./agent/user-time.js";
 
 // ─── Auth ─────────────────────────────────────────────────────────────
 export {

@@ -1,0 +1,53 @@
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { ModelMessage } from "ai";
+import { createMemoryTools } from "../src/sport/memory-tools.js";
+import { runMemoryFlush } from "../src/agent/memory-flush.js";
+import { Memory } from "../../core/src/memory/store.js";
+import { createFakeLLM } from "./helpers/fake-llm.js";
+
+// Both consumers convert the section list into a non-empty Zod enum
+// (`z.enum([...] as [string, ...string[]])`). An empty list crashes Zod
+// with an opaque message; the explicit guard surfaces a real diagnostic.
+
+describe("createMemoryTools — empty-section guard", () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "cc-guard-"));
+  });
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("throws a clear error when sections is empty", () => {
+    const memory = new Memory(dataDir);
+    expect(() => createMemoryTools(memory, [])).toThrow(/at least one MemorySectionSpec/);
+  });
+});
+
+describe("runMemoryFlush — empty-section guard", () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "cc-guard-"));
+  });
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("throws a clear error when memorySections is empty", async () => {
+    const memory = new Memory(dataDir);
+    await expect(
+      runMemoryFlush({
+        llm: createFakeLLM(),
+        messages: [] as ModelMessage[],
+        memory,
+        memorySections: [],
+      }),
+    ).rejects.toThrow(/at least one memory section/);
+  });
+});
+

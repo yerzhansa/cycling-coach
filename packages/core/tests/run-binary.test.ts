@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { APICallError } from "@ai-sdk/provider";
+import type { ModelTransportDecorator } from "@enduragent/engine";
 import type {
   BinaryConfig,
   CoreDeps,
@@ -12,7 +13,7 @@ import type {
   ToolRegistration,
 } from "../src/index.js";
 
-import { baseAgentConfig } from "./helpers/base-agent-config.js";
+import { baseAgentConfig } from "../../engine/tests/helpers/base-agent-config.js";
 
 // ---------------------------------------------------------------------------
 // Stub running-coach Sport — the load-bearing proof that Core is sport-agnostic.
@@ -85,22 +86,28 @@ describe("Core is sport-agnostic — CoachAgent constructs and chats with a non-
       stopReason: "stop" as const,
     }));
 
-    vi.doMock("../src/agent/codex/responses.js", () => ({
-      codexResponses: complete,
-    }));
-    vi.doMock("../src/agent/codex/oauth.js", () => ({
-      refreshCodexToken: vi.fn(),
-      loginCodex: vi.fn(),
-    }));
-    vi.doMock("../src/auth/profiles.js", () => ({
-      getFreshToken: vi.fn(async () => "token"),
-      loadProfile: vi.fn(),
-      saveProfile: vi.fn(),
-      RefreshTokenReusedError: class extends Error {},
-    }));
-
     const { CoachAgent } = await import("../src/agent/coach-agent.js");
-    const agent = new CoachAgent(stubRunningSport, baseAgentConfig(dataDir));
+    const decorator: ModelTransportDecorator = () => ({
+      generate: async () => {
+        const result = await complete();
+        return {
+          text: result.text,
+          toolCalls: [],
+          finishReason: "stop",
+          usage: {
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            inputTokenDetails: { noCacheTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+            outputTokenDetails: { textTokens: 0, reasoningTokens: 0 },
+          },
+          steps: 1,
+        };
+      },
+    });
+    const agent = new CoachAgent(stubRunningSport, baseAgentConfig(dataDir), {
+      modelTransportDecorator: decorator,
+    });
     const text = await agent.chat("running-test", "hi");
 
     expect(text).toBe("ack from running-coach");

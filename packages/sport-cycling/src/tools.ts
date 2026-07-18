@@ -1,12 +1,9 @@
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
-import {
-  PlatformApiError,
-  PlatformCredentialsRequiredError,
-  createPlatformCalendarMutations,
-  type MemoryStore,
-  type PlatformCalendarMutations,
-} from "@enduragent/core";
+import type {
+  MemoryStorePort as MemoryStore,
+  PlatformCalendarMutationsPort as PlatformCalendarMutations,
+} from "@enduragent/engine/sport";
 import type { IntervalsClient } from "intervals-icu-api";
 import {
   calculateCyclingZones,
@@ -32,7 +29,7 @@ const daysEnum = z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
  * Pure-Sport cycling tools per ADR-0004 — sport-specific math (FTP zones,
  * periodized plan-skeleton) + the cycling-flavored intervals.icu workout
  * creator (hardcoded `type: "Ride"`). Pure-Core and Core-with-sport-config
- * intervals tools live in `@enduragent/core`'s `createPureCoreIntervalsTools`
+ * intervals tools live in the engine's `createPureCoreIntervalsTools`
  * and `createCoreToolsWithSportConfig`.
  */
 export function createCyclingTools(
@@ -41,8 +38,8 @@ export function createCyclingTools(
   tz: string = "UTC",
   calendarMutations?: PlatformCalendarMutations,
 ) {
-  const selectedMutations = calendarMutations
-    ?? (intervals === null ? undefined : createPlatformCalendarMutations(intervals));
+  void intervals;
+  const selectedMutations = calendarMutations;
   return {
     calculate_zones: tool({
       description: "Calculate power-zone watt ranges from FTP watts (7-zone numbering)",
@@ -189,10 +186,13 @@ export function createCyclingTools(
                 });
                 return { created: true, event };
               } catch (error) {
-                if (error instanceof PlatformCredentialsRequiredError) {
+                if ((error as { name?: unknown })?.name === "PlatformCredentialsRequiredError") {
                   return { error: "platform_credentials_required", message: "Calendar changes need platform credentials." };
                 }
-                if (error instanceof PlatformApiError) return { error: error.apiError.kind };
+                const candidate = error as { name?: unknown; apiError?: { kind?: unknown } };
+                if (candidate?.name === "PlatformApiError" && typeof candidate.apiError?.kind === "string") {
+                  return { error: candidate.apiError.kind };
+                }
                 throw error;
               }
             },

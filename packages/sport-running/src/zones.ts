@@ -7,7 +7,7 @@
 // convention. CS and all band speeds are SI metres-per-second — intervals.icu
 // stores threshold_pace in m/s and uses pace_units only as a display preference.
 
-import { CS_MIN_MPS, CS_MAX_MPS } from "@enduragent/core";
+import { CS_MIN_MPS, CS_MAX_MPS } from "@enduragent/kernel/reference/cs-resolution";
 
 export interface RunningZoneDisplay {
   label: string;

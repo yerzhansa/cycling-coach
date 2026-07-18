@@ -3,7 +3,6 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import type { CoachEngine as ContractCoachEngine } from "@enduragent/coach-contract";
 import type {
   CoachEngine,
-  CoachEngineFactory,
   CreateCoachEngineInput,
   EngineHostPorts,
 } from "@enduragent/engine";
@@ -32,14 +31,15 @@ describe("engine scaffold", () => {
     });
   });
 
-  it("exports no runtime behavior", async () => {
-    expect(Object.keys(await import("@enduragent/engine"))).toEqual([]);
-    expect(Object.keys(await import("@enduragent/engine/sport"))).toEqual([]);
+  it("exports only the canonical factory and authorized account-id helper at runtime", async () => {
+    expect(Object.keys(await import("@enduragent/engine")).sort()).toEqual([
+      "createCoachEngine",
+      "extractAccountId",
+    ]);
   });
 
   it("reuses the contract and pins the injected factory input", () => {
     expectTypeOf<CoachEngine>().toEqualTypeOf<ContractCoachEngine>();
-    expectTypeOf<CoachEngineFactory>().toBeFunction();
     expectTypeOf<CreateCoachEngineInput>().toEqualTypeOf<{
       readonly sport: Sport;
       readonly ports: EngineHostPorts;

@@ -45,7 +45,7 @@ afterEach(() => {
   appendFileSyncSpy.mockClear();
 });
 
-const LINEAGE = { templateHash: "t", assembledHash: "h", provider: "p", model: "m" };
+const LINEAGE = { templateHash: "t", assembledHash: "h", provider: "p", model: "m", lineageVersion: "1" };
 
 function listArchives(chatId: string): string[] {
   return readdirSync(sessionsDir)

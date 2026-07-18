@@ -4,6 +4,7 @@ import type { Memory } from "../memory/store.js";
 import type { ResolvedCs } from "../reference/cs-resolution.js";
 import { CoachAgent } from "./coach-agent.js";
 import type { AthleteDataReader, PlatformCalendarMutations } from "../athlete-data.js";
+import type { ModelTransportDecorator } from "@enduragent/engine";
 
 /**
  * The subset of the agent's public surface the in-process channels consume.
@@ -35,11 +36,19 @@ export interface LocalCoachEngine extends CoachEngineSeam {
  * every method forwards verbatim, so reverting to direct CoachAgent
  * construction is a mechanical substitution.
  */
-export function createCoachEngine(sport: Sport, config: Config, deps: {
-  athleteData?: AthleteDataReader;
-  calendarMutations?: PlatformCalendarMutations;
-} = {}): LocalCoachEngine {
-  const agent = deps.athleteData === undefined && deps.calendarMutations === undefined
+export interface LegacyEngineOverrides {
+  readonly athleteData?: AthleteDataReader;
+  readonly calendarMutations?: PlatformCalendarMutations;
+  readonly modelTransportDecorator?: ModelTransportDecorator;
+  readonly onToolsAssembled?: (names: readonly string[]) => void;
+}
+
+export function createCoachEngine(
+  sport: Sport,
+  config: Config,
+  deps?: LegacyEngineOverrides,
+): LocalCoachEngine {
+  const agent = deps === undefined
     ? new CoachAgent(sport, config)
     : new CoachAgent(sport, config, deps);
   return {

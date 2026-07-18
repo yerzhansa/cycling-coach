@@ -21,6 +21,7 @@
     "@enduragent/sport-running": "workspace:*"
   },
   "devDependencies": {
+    "@enduragent/engine": "workspace:*",
     "@types/node": "^25.6.0",
     "tsup": "^8.4.0",
     "typescript": "^6.0.2",

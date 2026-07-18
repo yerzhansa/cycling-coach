@@ -10,7 +10,7 @@ import {
   type ReferenceSportAdapter,
   type Sport,
   type ToolRegistration,
-} from "@enduragent/core";
+} from "@enduragent/engine/sport";
 import soul from "../SOUL.md";
 import { skills as skillEntries } from "./skills.generated.js";
 import { createCyclingTools } from "./tools.js";

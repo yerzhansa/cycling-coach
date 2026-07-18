@@ -1,26 +1,20 @@
 import type { ApiError, IntervalsClient } from "intervals-icu-api";
 import type { ProducedLocalBundle } from "@enduragent/kernel/reference/local-bundle";
+import type {
+  AthleteDataReaderPort as AthleteDataReader,
+  AthleteReadResult,
+  CalendarEventForDelete,
+  PlatformCalendarMutationsPort as PlatformCalendarMutations,
+  StoredDataFreshness,
+} from "@enduragent/engine/sport";
 
-export interface StoredDataFreshness { capturedAt: string; ageMs: number; label: string }
-export type AthleteReadResult<T> =
-  | { ok: true; value: T; freshness?: StoredDataFreshness }
-  | { ok: false; error: "not_found" | "store_read_unavailable" |
-      "invalid_snapshot" | "invalid_input"; message: string };
-export interface AthleteDataReader {
-  getAthlete(): Promise<AthleteReadResult<unknown>>;
-  listWellness(input:{start:string;end?:string}):Promise<AthleteReadResult<unknown[]>>;
-  listActivities(input:{start:string;end?:string}):Promise<AthleteReadResult<unknown[]>>;
-  getActivity(input:{id:string}):Promise<AthleteReadResult<unknown>>;
-  getStreams(input:{id:string;keys:readonly string[]}):Promise<AthleteReadResult<unknown>>;
-  listCalendar(input:{start:string;end?:string}):Promise<AthleteReadResult<unknown[]>>;
-  freshness(): StoredDataFreshness | undefined;
-}
-export interface CalendarEventForDelete { id:number; startDateLocal:string }
-export interface PlatformCalendarMutations {
-  createEvent(input:unknown):Promise<unknown>;
-  readEventForDelete(input:{eventId:number}):Promise<CalendarEventForDelete>;
-  deleteEvent(input:{eventId:number}):Promise<unknown>;
-}
+export type {
+  AthleteDataReader,
+  AthleteReadResult,
+  CalendarEventForDelete,
+  PlatformCalendarMutations,
+  StoredDataFreshness,
+};
 
 export class PlatformApiError extends Error {
   readonly apiError: ApiError;

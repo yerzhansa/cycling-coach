@@ -6,17 +6,18 @@ import type { ModelMessage } from "ai";
 
 import type { Config } from "../../packages/core/src/config.js";
 import { COMPACT_MODEL_DEFAULTS, contextWindowForModel } from "../../packages/core/src/config.js";
-import { LLM } from "../../packages/core/src/llm.js";
+import { LLM } from "../../packages/engine/src/llm.js";
+import { createEngineHostAdapter } from "../../packages/core/src/agent/engine-host-adapter.js";
+import { legacyStateReader } from "../../packages/core/src/agent/legacy-athlete-state-reader.js";
 import { USAGE_LEDGER_FILE, type UsageLedgerLine } from "../../packages/core/src/usage-ledger.js";
-import type { MemorySnapshot } from "../../packages/core/src/memory.js";
-import type { SportMemoryShape } from "../../packages/core/src/sport.js";
+import type { MemorySnapshot, SportMemoryShape } from "@enduragent/engine/sport";
 import {
   formatTranscript,
   resolveMustPreserveTokens,
   summarizeDroppedMessages,
   summarizeInStages,
-} from "../../packages/core/src/agent/compaction.js";
-import { SUMMARY_PREFIX } from "../../packages/core/src/agent/history-limit.js";
+} from "../../packages/engine/src/agent/compaction.js";
+import { SUMMARY_PREFIX } from "../../packages/engine/src/agent/history-limit.js";
 import { parseLedger } from "../usage-baseline.js";
 // The built package, not src: sport.ts imports SOUL.md via tsup's text loader,
 // which tsx cannot resolve; the dist bundle carries the text inlined.
@@ -168,8 +169,16 @@ async function main(): Promise<void> {
 
   const compactModel = COMPACT_MODEL_DEFAULTS.anthropic;
   const tempDir = mkdtempSync(join(tmpdir(), "compaction-gate-"));
-  const compactLlm = new LLM(makeConfig(compactModel, apiKey, tempDir));
-  const judgeLlm = new LLM(makeConfig(JUDGE_MODEL_ID, apiKey, tempDir));
+  const compactHost = createEngineHostAdapter({
+    config: makeConfig(compactModel, apiKey, tempDir),
+    stateReader: legacyStateReader,
+  }).ports;
+  const judgeHost = createEngineHostAdapter({
+    config: makeConfig(JUDGE_MODEL_ID, apiKey, tempDir),
+    stateReader: legacyStateReader,
+  }).ports;
+  const compactLlm = new LLM(compactHost.config, compactHost);
+  const judgeLlm = new LLM(judgeHost.config, judgeHost);
   const compactWindow = contextWindowForModel(compactModel);
 
   const transcriptsDir = join(dirname(fileURLToPath(import.meta.url)), "transcripts");

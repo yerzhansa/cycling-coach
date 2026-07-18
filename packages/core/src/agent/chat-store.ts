@@ -11,8 +11,8 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type { ModelMessage } from "ai";
-import { messageText } from "./token-utils.js";
-import { PROMPT_LINEAGE_SCHEMA_VERSION } from "./prompt-lineage.js";
+import type { ChatLineage, ChatStorePort } from "@enduragent/engine";
+import { messageText } from "@enduragent/engine/sport";
 
 const MS_PER_DAY = 86_400_000;
 
@@ -53,7 +53,7 @@ function parseSessionLine(line: string): JsonlLine | null {
   return value as JsonlLine;
 }
 
-export class ChatStore {
+export class ChatStore implements ChatStorePort {
   private sessionsDir: string;
   private resetArchiveRetentionDays: number;
 
@@ -118,7 +118,7 @@ export class ChatStore {
     chatId: string,
     role: "user" | "assistant",
     content: string,
-    lineage?: { templateHash: string; assembledHash: string; provider: string; model: string },
+    lineage?: ChatLineage,
   ): void {
     // An empty assistant reply pollutes the next turn's loaded history. Skip it
     // and warn — never throw, so a deliver-first turn can't crash on a guarded
@@ -131,7 +131,7 @@ export class ChatStore {
     const line: JsonlLine =
       lineage === undefined
         ? { role, content, ts: new Date().toISOString() }
-        : { role, content, ts: new Date().toISOString(), ...lineage, lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION };
+        : { role, content, ts: new Date().toISOString(), ...lineage };
     appendFileSync(path, JSON.stringify(line) + "\n", { encoding: "utf-8", mode: 0o600 });
   }
 
@@ -139,7 +139,7 @@ export class ChatStore {
     chatId: string,
     userContent: string,
     assistantContent: string,
-    lineage: { templateHash: string; assembledHash: string; provider: string; model: string },
+    lineage: ChatLineage,
   ): void {
     // Keep the atomic pair honest: an empty assistant reply must never persist,
     // and a lone user line with no reply is the same context pollution. Skip the
@@ -156,7 +156,6 @@ export class ChatStore {
       content: assistantContent,
       ts,
       ...lineage,
-      lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
     };
     // Both lines in one buffer and one write so the pair lands together or not
     // at all — a partial write can never leave a dangling user line.
@@ -236,3 +235,5 @@ export class ChatStore {
     }
   }
 }
+
+ChatStore.prototype satisfies ChatStorePort;
