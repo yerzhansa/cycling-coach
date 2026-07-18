@@ -9,7 +9,7 @@ import {
   type RecordRef,
   type ReferenceCaptureManifest,
 } from "@enduragent/kernel/reference/capture";
-import { H, createIntervalsSourceRepository, type SourceArtifactDraft, type SyncBudget } from "@enduragent/kernel/store";
+import { H, createIntervalsSourceRepository, type PhysicalRequestLedger, type SourceArtifactDraft, type SyncBudget } from "@enduragent/kernel/store";
 import {
   loadReferenceCaptureSidecars,
   readVerifiedReferenceSnapshot,
@@ -45,6 +45,7 @@ export interface RunReferenceCaptureOptions {
   readonly replacesCaptureId?: string;
   readonly budget?: SyncBudget;
   readonly baseFetch?: typeof globalThis.fetch;
+  readonly attemptLedger?: PhysicalRequestLedger;
 }
 
 export interface RunReferenceCaptureDependencies {
@@ -107,10 +108,17 @@ export async function runReferenceCapture(
   return withCoachStoreWriter(options.env, async ({ home, store }) => {
     const crypto = createNodeCrypto();
     const node = createNodeImportRuntime({ archiveDir: home.archiveDir, store });
-    const source = createIntervalsBackfillSource({ apiKey: options.apiKey, athleteId: options.athleteId,
-      historyNewestDate: now.toISOString().slice(0, 10), minRequestIntervalMs: DEFAULT_REQUEST_INTERVAL_MS,
-      archive: node.archive, clock: { now: () => now.getTime(), monotonicNow }, sleep,
-      ...(options.baseFetch === undefined ? {} : { baseFetch: options.baseFetch }) }) as IntervalsIcuCaptureSource;
+    const source = createIntervalsBackfillSource({
+      apiKey: options.apiKey,
+      athleteId: options.athleteId,
+      historyNewestDate: now.toISOString().slice(0, 10),
+      minRequestIntervalMs: DEFAULT_REQUEST_INTERVAL_MS,
+      archive: node.archive,
+      clock: { now: () => now.getTime(), monotonicNow },
+      sleep,
+      ...(options.baseFetch === undefined ? {} : { baseFetch: options.baseFetch }),
+      ...(options.attemptLedger === undefined ? {} : { attemptLedger: options.attemptLedger }),
+    }) as IntervalsIcuCaptureSource;
     let batch: ReferenceCaptureBatch;
     try { batch = await source.captureReference(now, budget); }
     catch (error) { throw new ReferenceCaptureRunError("capture", { cause: error }); }

@@ -190,6 +190,7 @@ describe("startup-capture predicate (T3)", () => {
       return {
         ...real,
         loadConfig: () => ({
+          dataSource: "platform" as const,
           llm: { provider: "anthropic", model: "x", apiKey: "sk-x" },
           telegram: { botToken: opts.botToken },
           intervals: { apiKey: "x", athleteId: "x" },
@@ -349,6 +350,7 @@ describe("startup-capture predicate (T3)", () => {
       return {
         ...real,
         loadConfig: () => ({
+          dataSource: "platform" as const,
           llm: { provider: "anthropic", model: "x", apiKey: "sk-x" },
           telegram: { botToken: "TOKEN" },
           intervals: { apiKey: "x", athleteId: "x" },

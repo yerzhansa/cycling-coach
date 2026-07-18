@@ -13,6 +13,7 @@ import {
 import type { ReferenceSportAdapter } from "../sport-adapter.js";
 import type { IntervalsActivityType } from "../../sport.js";
 import type { DerivedMetricsMeta } from "../schemas/latest.js";
+import type { PhysicalRequestLedger } from "@enduragent/kernel/store";
 
 /**
  * Resolve, in a single scan of `runs`, the watts-fence decision plus the
@@ -96,6 +97,7 @@ export function makeProductionFetcher(deps: {
   athleteId?: string;
   adapters: readonly ReferenceSportAdapter[];
   sportTypes: readonly IntervalsActivityType[];
+  attemptLedgerForRun?: () => PhysicalRequestLedger;
 }): (signal: AbortSignal) => Promise<FetchedReference> {
   return async (signal) => {
     const client = makeAbortableClient({
@@ -103,6 +105,7 @@ export function makeProductionFetcher(deps: {
       athleteId: deps.athleteId,
       signal,
       perRequestMs: PER_REQUEST_TIMEOUT_MS,
+      attemptLedger: deps.attemptLedgerForRun?.(),
     });
     return await fetchOnce(client, signal, deps.adapters, deps.sportTypes);
   };

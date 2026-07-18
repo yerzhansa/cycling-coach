@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { canonicalJson, type ArchiveManager } from "@enduragent/kernel/archive";
 import type { HttpPort, HttpResponse } from "@enduragent/kernel/ports";
-import type { SourceWatermark, SyncBudget } from "@enduragent/kernel/store";
+import {
+  createPhysicalRequestLedger,
+  type PhysicalRequestLedger,
+  type SourceWatermark,
+  type SyncBudget,
+} from "@enduragent/kernel/store";
 import { compactCursor, createIntervalsIcuSource, INTERVALS_ICU_CAPABILITIES } from "../src/index.js";
 
 const json = (value: unknown): HttpResponse => ({ status: 200, headers: { "content-type": "application/json; charset=utf-8" },
@@ -28,7 +33,8 @@ function budget(maxArtifacts = 100, maxRequests = 100): SyncBudget {
     perRequestTimeoutMs: 30_000, maxRequests, maxArtifacts };
 }
 
-function source(http: HttpPort, options: { oldest?: string; newest?: string; archive?: ArchiveManager; log?: string[] } = {}) {
+function source(http: HttpPort, options: { oldest?: string; newest?: string; archive?: ArchiveManager;
+  log?: string[]; attemptLedger?: PhysicalRequestLedger } = {}) {
   const log = options.log ?? [];
   return createIntervalsIcuSource({ athleteId: "synthetic-athlete", historyOldestDate: options.oldest ?? "1998-01-01",
     historyNewestDate: options.newest ?? "1998-12-31", minRequestIntervalMs: 250,
@@ -38,7 +44,7 @@ function source(http: HttpPort, options: { oldest?: string; newest?: string; arc
       streams(value) { log.push("acl:streams"); return Array.isArray(value)
         ? Object.fromEntries(value.map((entry) => [(entry as { type: string }).type, (entry as { data: unknown }).data])) : value as Record<string, unknown>; },
       assertClean() {},
-    } });
+    }, ...(options.attemptLedger === undefined ? {} : { attemptLedger: options.attemptLedger }) });
 }
 
 async function collect(iterable: AsyncIterable<unknown>): Promise<unknown[]> {
@@ -109,5 +115,17 @@ describe("intervals.icu full-history source", () => {
     const result = await collect(source({ fetch }).pull(watermark("activities"), budget(1, 1)));
     expect(result.map((entry) => (entry as { kind: string }).kind)).toEqual(["snapshot", "checkpoint"]);
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("charges the injected physical-attempt ledger at the actual source request", async () => {
+    const attemptLedger = createPhysicalRequestLedger({ storeLimit: 64, legacyLimit: 15, totalLimit: 79 });
+    await collect(source({ fetch: async () => json([]) }, { attemptLedger })
+      .pull(watermark("activities"), budget()));
+    expect(attemptLedger.snapshot()).toMatchObject({
+      storeRequests: 1,
+      legacyRequests: 0,
+      totalRequests: 1,
+      byTag: { "store:activities": 1 },
+    });
   });
 });

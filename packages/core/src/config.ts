@@ -9,7 +9,16 @@ import { resolveSecretRef } from "./secrets/resolve.js";
 // TYPES
 // ============================================================================
 
+export const DATA_SOURCES = ["platform", "store"] as const;
+export type DataSource = (typeof DATA_SOURCES)[number];
+export function resolveDataSource(value: unknown): DataSource {
+  if (value === undefined) return "platform";
+  if (value === "platform" || value === "store") return value;
+  throw new TypeError('Config field data_source must be "platform" or "store".');
+}
+
 export interface Config {
+  dataSource: DataSource;
   llm: {
     provider:
       | "anthropic"
@@ -185,6 +194,7 @@ function assignFieldByPath(cfg: Config, path: SecretFieldPath, value: string): v
 
 export function loadConfig(): Config {
   const yaml = readConfigYaml();
+  const dataSource = resolveDataSource(yaml.data_source);
   const llmYaml = (yaml.llm as Record<string, unknown>) ?? {};
   const intervalsYaml = (yaml.intervals as Record<string, unknown>) ?? {};
   const telegramYaml = (yaml.telegram as Record<string, unknown>) ?? {};
@@ -288,6 +298,7 @@ export function loadConfig(): Config {
     PROVIDER_BASE_URLS[provider];
 
   const config: Config = {
+    dataSource,
     llm: {
       provider,
       model,

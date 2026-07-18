@@ -44,6 +44,7 @@ function ledgerLine(overrides: Partial<UsageLedgerLine> = {}): UsageLedgerLine {
 
 function anthropicConfig(dataDir: string): Config {
   return {
+    dataSource: "platform",
     llm: { provider: "anthropic", model: "claude-test", apiKey: "sk-test" },
     intervals: { apiKey: "", athleteId: "0" },
     telegram: { botToken: "" },
@@ -55,6 +56,7 @@ function anthropicConfig(dataDir: string): Config {
 
 function codexConfig(dataDir: string): Config {
   return {
+    dataSource: "platform",
     llm: { provider: "openai-codex", model: "gpt-5.4", apiKey: "", authProfile: "openai-codex" },
     intervals: { apiKey: "", athleteId: "0" },
     telegram: { botToken: "" },

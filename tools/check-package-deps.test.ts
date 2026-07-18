@@ -266,10 +266,10 @@ describe("R7 private-package check", () => {
 });
 
 describe("R8 composition root", () => {
-  it("R8 passes the composition root importing kernel-node + engine + sync (the meet is legal here)", () => {
+  it("R8 passes the composition root importing kernel-node + engine + sync + sport (the meet is legal here)", () => {
     write(
       "packages/coach/src/ok.ts",
-      `import { a } from "@enduragent/kernel-node";\nimport { b } from "@enduragent/engine";\nimport { c } from "@enduragent/sync-intervals-icu";\nexport const y = a ?? b ?? c;\n`,
+      `import { a } from "@enduragent/kernel-node";\nimport { b } from "@enduragent/engine";\nimport { c } from "@enduragent/sync-intervals-icu";\nimport { d } from "@enduragent/sport-cycling";\nexport const y = a ?? b ?? c ?? d;\n`,
     );
     expect(violationsFor(rCoach)).toBe(0);
   });

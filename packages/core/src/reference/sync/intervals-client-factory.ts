@@ -1,5 +1,6 @@
 import { IntervalsClient } from "intervals-icu-api";
 import type { HttpPort } from "@enduragent/kernel/ports";
+import type { PhysicalRequestLedger } from "@enduragent/kernel/store";
 import { chainedSignal } from "../../concurrency/abort-budget.js";
 
 export interface RunScopedHttpFactoryArgs {
@@ -21,12 +22,15 @@ export function wrapFetchWithSignal(opts: {
   baseFetch: typeof globalThis.fetch;
   outer: AbortSignal;
   perRequestMs: number;
+  attemptLedger?: PhysicalRequestLedger;
 }): typeof globalThis.fetch {
-  return (input, init) =>
-    opts.baseFetch(input, {
+  return async (input, init) => {
+    opts.attemptLedger?.charge("legacy", "legacy:reference");
+    return await opts.baseFetch(input, {
       ...init,
       signal: chainedSignal({ outer: opts.outer, perRequestMs: opts.perRequestMs }),
     });
+  };
 }
 
 export function makeIntervalsHttpFactory(options: {
@@ -87,6 +91,7 @@ export function makeAbortableClient(opts: {
   athleteId?: string;
   signal: AbortSignal;
   perRequestMs: number;
+  attemptLedger?: PhysicalRequestLedger;
 }): IntervalsClient {
   return new IntervalsClient({
     apiKey: opts.apiKey,
@@ -95,6 +100,7 @@ export function makeAbortableClient(opts: {
       baseFetch: globalThis.fetch,
       outer: opts.signal,
       perRequestMs: opts.perRequestMs,
+      attemptLedger: opts.attemptLedger,
     }),
     retry: { maxAttempts: 1 },
   });

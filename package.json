@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "tsx --env-file=.env packages/cycling-coach/src/index.ts",
     "setup": "tsx --env-file=.env packages/cycling-coach/src/index.ts setup",
+    "dogfood:store": "pnpm --filter @enduragent/coach dogfood:store",
     "build": "pnpm -r build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",

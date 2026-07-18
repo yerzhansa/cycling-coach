@@ -6,6 +6,7 @@ import type { MemorySnapshot, MemoryStore } from "./memory.js";
 import type { ResolvedCs } from "./reference/cs-resolution.js";
 import type { ReferenceSportAdapter } from "./reference/sport-adapter.js";
 import type { SecretsResolver } from "./secrets/types.js";
+import type { AthleteDataReader, PlatformCalendarMutations } from "./athlete-data.js";
 
 // ─── Identity ──────────────────────────────────────────────────────────
 /** Closed literal union — adding a sport requires a Core bump. Intentional. */
@@ -63,6 +64,8 @@ export interface ToolRegistration {
 export interface CoreDeps {
   llm: LLM;
   intervals: IntervalsClient | null;
+  athleteData?: AthleteDataReader;
+  calendarMutations?: PlatformCalendarMutations;
   memory: MemoryStore;
   secrets: SecretsResolver;
   /** Athlete IANA timezone, resolved by Core. Used so tools see the same
@@ -181,4 +184,3 @@ export function mergeSportSkills(
   }
   return merged;
 }
-

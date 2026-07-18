@@ -168,6 +168,7 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
       minRequestIntervalMs: options.minRequestIntervalMs,
       wallClock: options.wallClock,
       sleep: options.sleep,
+      attemptLedger: options.attemptLedger,
     });
     let yielded = 0;
     const beforeYield = (): void => {
@@ -491,6 +492,7 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
       minRequestIntervalMs: options.minRequestIntervalMs,
       wallClock: { now: () => plan.capture_epoch_ms },
       sleep: options.sleep,
+      attemptLedger: options.attemptLedger,
     });
     if (!requester.canRequest(3)) throw new SyncBudgetExceededError();
     const required: ReferenceCaptureEndpointPayload[] = [

@@ -44,6 +44,100 @@ export interface SyncBudget {
   readonly maxArtifacts: number;
 }
 
+export type RefreshRequestTag =
+  | "store:activities"
+  | "store:wellness"
+  | "store:settings"
+  | "store:streams"
+  | "legacy:reference";
+
+export interface PhysicalRequestCounts {
+  readonly storeRequests: number;
+  readonly legacyRequests: number;
+  readonly totalRequests: number;
+  readonly byTag: Readonly<Record<RefreshRequestTag, number>>;
+}
+
+export interface PhysicalRequestLedger {
+  charge(path: "store" | "legacy", tag: RefreshRequestTag): void;
+  snapshot(): PhysicalRequestCounts;
+}
+
+export class PhysicalRequestLimitError extends Error {
+  constructor(message = "shared physical request ceiling exceeded") {
+    super(message);
+    this.name = "PhysicalRequestLimitError";
+  }
+}
+
+const REFRESH_REQUEST_TAGS = Object.freeze([
+  "store:activities",
+  "store:wellness",
+  "store:settings",
+  "store:streams",
+  "legacy:reference",
+] as const satisfies readonly RefreshRequestTag[]);
+
+export function createPhysicalRequestLedger(input: {
+  storeLimit: 64;
+  legacyLimit: 15;
+  totalLimit: 79;
+}): PhysicalRequestLedger {
+  if (
+    input === null
+    || typeof input !== "object"
+    || input.storeLimit !== 64
+    || input.legacyLimit !== 15
+    || input.totalLimit !== 79
+  ) {
+    throw new TypeError("invalid physical request limits");
+  }
+  const limits = Object.freeze({
+    store: input.storeLimit,
+    legacy: input.legacyLimit,
+    total: input.totalLimit,
+  });
+  const byTag: Record<RefreshRequestTag, number> = {
+    "store:activities": 0,
+    "store:wellness": 0,
+    "store:settings": 0,
+    "store:streams": 0,
+    "legacy:reference": 0,
+  };
+  let storeRequests = 0;
+  let legacyRequests = 0;
+  let totalRequests = 0;
+
+  return Object.freeze({
+    charge(path: "store" | "legacy", tag: RefreshRequestTag): void {
+      if (
+        (path !== "store" && path !== "legacy")
+        || !REFRESH_REQUEST_TAGS.includes(tag)
+        || (path === "store" && !tag.startsWith("store:"))
+        || (path === "legacy" && tag !== "legacy:reference")
+      ) {
+        throw new TypeError("invalid physical request charge");
+      }
+      const pathCount = path === "store" ? storeRequests : legacyRequests;
+      if (pathCount >= limits[path] || totalRequests >= limits.total) {
+        throw new PhysicalRequestLimitError();
+      }
+      if (path === "store") storeRequests += 1;
+      else legacyRequests += 1;
+      totalRequests += 1;
+      byTag[tag] += 1;
+    },
+    snapshot(): PhysicalRequestCounts {
+      return Object.freeze({
+        storeRequests,
+        legacyRequests,
+        totalRequests,
+        byTag: Object.freeze({ ...byTag }),
+      });
+    },
+  });
+}
+
 export interface SnapshotSourceArtifact {
   readonly kind: "snapshot";
   readonly source: SourceId;

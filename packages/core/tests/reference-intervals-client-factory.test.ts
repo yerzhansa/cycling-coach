@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { IntervalsClient } from "intervals-icu-api";
+import { createPhysicalRequestLedger, PhysicalRequestLimitError } from "@enduragent/kernel/store";
 import {
   makeAbortableClient,
   makeChatClient,
@@ -88,6 +89,17 @@ describe("wrapFetchWithSignal", () => {
 
     expect(captured!.aborted).toBe(true);
     expect(outer.signal.aborted).toBe(false);
+  });
+
+  it("charges the shared legacy ceiling immediately before the physical fetch", async () => {
+    const ledger = createPhysicalRequestLedger({ storeLimit: 64, legacyLimit: 15, totalLimit: 79 });
+    const baseFetch = vi.fn(async () => new Response("ok"));
+    const wrapped = wrapFetchWithSignal({ baseFetch, outer: new AbortController().signal,
+      perRequestMs: 30_000, attemptLedger: ledger });
+    for (let index = 0; index < 15; index += 1) await wrapped(`https://example.test/${index}`);
+    await expect(wrapped("https://example.test/rejected")).rejects.toBeInstanceOf(PhysicalRequestLimitError);
+    expect(baseFetch).toHaveBeenCalledTimes(15);
+    expect(ledger.snapshot()).toMatchObject({ legacyRequests: 15, totalRequests: 15 });
   });
 });
 

@@ -1,6 +1,12 @@
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
-import type { MemoryStore } from "@enduragent/core";
+import {
+  PlatformApiError,
+  PlatformCredentialsRequiredError,
+  createPlatformCalendarMutations,
+  type MemoryStore,
+  type PlatformCalendarMutations,
+} from "@enduragent/core";
 import type { IntervalsClient } from "intervals-icu-api";
 import {
   calculateCyclingZones,
@@ -33,7 +39,10 @@ export function createCyclingTools(
   memory: MemoryStore,
   intervals: IntervalsClient | null,
   tz: string = "UTC",
+  calendarMutations?: PlatformCalendarMutations,
 ) {
+  const selectedMutations = calendarMutations
+    ?? (intervals === null ? undefined : createPlatformCalendarMutations(intervals));
   return {
     calculate_zones: tool({
       description: "Calculate power-zone watt ranges from FTP watts (7-zone numbering)",
@@ -142,7 +151,7 @@ export function createCyclingTools(
         ),
     }),
 
-    ...(intervals
+    ...(selectedMutations
       ? {
           intervals_create_workout: tool({
             description:
@@ -168,17 +177,24 @@ export function createCyclingTools(
                 }
                 throw err;
               }
-              const result = await intervals.events.create({
-                start_date_local: `${input.date}T00:00:00`,
-                category: "WORKOUT",
-                name: input.workout.name,
-                type: "Ride",
-                moving_time: serialized.movingTime,
-                icu_training_load: serialized.trainingLoad,
-                description: serialized.description,
-              });
-              if (!result.ok) return { error: result.error.kind };
-              return { created: true, event: result.value };
+              try {
+                const event = await selectedMutations.createEvent({
+                  start_date_local: `${input.date}T00:00:00`,
+                  category: "WORKOUT",
+                  name: input.workout.name,
+                  type: "Ride",
+                  moving_time: serialized.movingTime,
+                  icu_training_load: serialized.trainingLoad,
+                  description: serialized.description,
+                });
+                return { created: true, event };
+              } catch (error) {
+                if (error instanceof PlatformCredentialsRequiredError) {
+                  return { error: "platform_credentials_required", message: "Calendar changes need platform credentials." };
+                }
+                if (error instanceof PlatformApiError) return { error: error.apiError.kind };
+                throw error;
+              }
             },
           }),
         }

@@ -4,6 +4,16 @@ import type { ApiError, IntervalsClient } from "intervals-icu-api";
 import type { IntervalsActivityType } from "../sport.js";
 import { todayInTZ } from "./user-time.js";
 import { downsampleStreams } from "./stream-downsample.js";
+import {
+  formatStoreFreshness,
+  createPlatformAthleteDataReader,
+  createPlatformCalendarMutations,
+  PlatformApiError,
+  PlatformCredentialsRequiredError,
+  type AthleteDataReader,
+  type AthleteReadResult,
+  type PlatformCalendarMutations,
+} from "../athlete-data.js";
 
 function toTypedError(error: ApiError): { error: string; status?: number; message?: string } {
   return {
@@ -12,6 +22,25 @@ function toTypedError(error: ApiError): { error: string; status?: number; messag
     ...("message" in error ? { message: error.message } : {}),
   };
 }
+
+function readResult<T>(result: AthleteReadResult<T>): T | { error: string; message: string }
+  | { data: T; freshness: string } {
+  if (!result.ok) return { error: result.error, message: result.message };
+  if (result.freshness !== undefined) {
+    return { data: result.value, freshness: formatStoreFreshness(result.freshness) };
+  }
+  return result.value;
+}
+
+function platformFailure(error: unknown): ReturnType<typeof toTypedError> {
+  if (error instanceof PlatformApiError) return toTypedError(error.apiError);
+  throw error;
+}
+
+const CREDENTIALS_REQUIRED = Object.freeze({
+  error: "platform_credentials_required",
+  message: "Calendar changes need platform credentials.",
+});
 
 // intervals-icu-api's TypeScript types declare snake_case fields, but the runtime
 // runs `camelCaseKeys` over every parsed response. So the types lie: at runtime we
@@ -35,21 +64,24 @@ type IntervalsEventRuntime = {
 export function createPureCoreIntervalsTools(
   intervals: IntervalsClient | null,
   tz: string = "UTC",
+  athleteData?: AthleteDataReader,
+  calendarMutations?: PlatformCalendarMutations,
 ) {
-  if (!intervals) return {};
+  const selectedReader = athleteData ?? (intervals === null ? undefined : createPlatformAthleteDataReader(intervals));
+  const selectedMutations = calendarMutations ?? (intervals === null ? undefined : createPlatformCalendarMutations(intervals));
+  if (!selectedReader && !selectedMutations) return {};
   return {
-    intervals_fetch_athlete: tool({
+    ...(selectedReader ? { intervals_fetch_athlete: tool({
       description:
         "Fetch athlete profile from intervals.icu (FTP, weight, max HR, sport settings, zones)",
       inputSchema: zodSchema(z.object({})),
       execute: async () => {
-        const result = await intervals.athlete.get();
-        if (!result.ok) return toTypedError(result.error);
-        return result.value;
+        try { return readResult(await selectedReader.getAthlete()); }
+        catch (error) { return platformFailure(error); }
       },
-    }),
+    }) } : {}),
 
-    intervals_fetch_wellness: tool({
+    ...(selectedReader ? { intervals_fetch_wellness: tool({
       description:
         "Fetch wellness data from intervals.icu (fitness, fatigue, weight, HRV, resting HR, sleep). Form = fitness - fatigue.",
       inputSchema: zodSchema(
@@ -59,16 +91,15 @@ export function createPureCoreIntervalsTools(
         }),
       ),
       execute: async (input: { oldest: string; newest?: string }) => {
-        const result = await intervals.wellness.list({
-          oldest: input.oldest,
-          newest: input.newest ?? undefined,
-        });
-        if (!result.ok) return toTypedError(result.error);
-        return result.value;
+        try { return readResult(await selectedReader.listWellness({
+          start: input.oldest,
+          ...(input.newest === undefined ? {} : { end: input.newest }),
+        })); }
+        catch (error) { return platformFailure(error); }
       },
-    }),
+    }) } : {}),
 
-    intervals_fetch_activity: tool({
+    ...(selectedReader ? { intervals_fetch_activity: tool({
       description:
         "Fetch a single activity from intervals.icu by ID. Returns the full Activity " +
         "object including per-rep `icu_intervals` (lap/interval splits with avg power, " +
@@ -82,13 +113,12 @@ export function createPureCoreIntervalsTools(
         }),
       ),
       execute: async (input: { activityId: number }) => {
-        const result = await intervals.activities.get(String(input.activityId));
-        if (!result.ok) return toTypedError(result.error);
-        return result.value;
+        try { return readResult(await selectedReader.getActivity({ id: String(input.activityId) })); }
+        catch (error) { return platformFailure(error); }
       },
-    }),
+    }) } : {}),
 
-    intervals_fetch_streams: tool({
+    ...(selectedReader ? { intervals_fetch_streams: tool({
       description:
         "Fetch raw time-series streams for an activity (watts, heartrate, cadence, " +
         "time, altitude, distance, lat, lng). Returns a downsampled object: each " +
@@ -117,13 +147,17 @@ export function createPureCoreIntervalsTools(
         const types = input.types?.length
           ? input.types
           : ["watts", "heartrate", "cadence", "time", "altitude"];
-        const result = await intervals.activities.getStreams(String(input.activityId), types);
-        if (!result.ok) return toTypedError(result.error);
-        return downsampleStreams(result.value as Record<string, unknown> | unknown[]);
+        try {
+          const result = await selectedReader.getStreams({ id: String(input.activityId), keys: types });
+          if (!result.ok) return readResult(result);
+          const value = downsampleStreams(result.value as Record<string, unknown> | unknown[]);
+          return result.freshness === undefined ? value
+            : { data: value, freshness: formatStoreFreshness(result.freshness) };
+        } catch (error) { return platformFailure(error); }
       },
-    }),
+    }) } : {}),
 
-    intervals_delete_workout: tool({
+    ...(selectedMutations ? { intervals_delete_workout: tool({
       description:
         "Delete a scheduled workout from the intervals.icu calendar by event ID. " +
         "ALWAYS call intervals_list_events first, show the athlete the list, and " +
@@ -135,22 +169,24 @@ export function createPureCoreIntervalsTools(
         }),
       ),
       execute: async (input: { eventId: number }) => {
-        const fetched = await intervals.events.get(input.eventId);
-        if (!fetched.ok) return toTypedError(fetched.error);
-        const event = fetched.value as unknown as IntervalsEventRuntime;
-        const today = todayInTZ(tz);
-        const eventDate = event.startDateLocal.slice(0, 10);
-        if (eventDate < today) {
-          return {
-            error: "past_workout_protected",
-            details: `Cannot delete workout dated ${eventDate} — it's before today (${today}).`,
-          };
+        try {
+          const event = await selectedMutations.readEventForDelete({ eventId: input.eventId });
+          const today = todayInTZ(tz);
+          const eventDate = event.startDateLocal.slice(0, 10);
+          if (eventDate < today) {
+            return {
+              error: "past_workout_protected",
+              details: `Cannot delete workout dated ${eventDate} — it's before today (${today}).`,
+            };
+          }
+          await selectedMutations.deleteEvent({ eventId: input.eventId });
+          return { deleted: true };
+        } catch (error) {
+          if (error instanceof PlatformCredentialsRequiredError) return CREDENTIALS_REQUIRED;
+          return platformFailure(error);
         }
-        const result = await intervals.events.delete(input.eventId);
-        if (!result.ok) return toTypedError(result.error);
-        return { deleted: true };
       },
-    }),
+    }) } : {}),
   };
 }
 
@@ -161,8 +197,10 @@ export function createPureCoreIntervalsTools(
 export function createCoreToolsWithSportConfig(
   intervals: IntervalsClient | null,
   activityTypes: readonly IntervalsActivityType[],
+  athleteData?: AthleteDataReader,
 ) {
-  if (!intervals) return {};
+  const selectedReader = athleteData ?? (intervals === null ? undefined : createPlatformAthleteDataReader(intervals));
+  if (!selectedReader) return {};
   // The activityTypes array is reserved for future filtering of the API responses
   // (e.g., when intervals.icu adds a server-side filter); today we keep the same
   // list/fetch shape and let the LLM disambiguate via descriptions. Embedding
@@ -179,12 +217,11 @@ export function createCoreToolsWithSportConfig(
         }),
       ),
       execute: async (input: { oldest: string; newest?: string }) => {
-        const result = await intervals.activities.list({
-          oldest: input.oldest,
-          newest: input.newest ?? undefined,
-        });
-        if (!result.ok) return toTypedError(result.error);
-        return result.value;
+        try { return readResult(await selectedReader.listActivities({
+          start: input.oldest,
+          ...(input.newest === undefined ? {} : { end: input.newest }),
+        })); }
+        catch (error) { return platformFailure(error); }
       },
     }),
 
@@ -200,19 +237,20 @@ export function createCoreToolsWithSportConfig(
         }),
       ),
       execute: async (input: { oldest: string; newest?: string }) => {
-        const result = await intervals.events.list({
-          oldest: input.oldest,
-          newest: input.newest ?? undefined,
-          category: ["WORKOUT"],
-        });
-        if (!result.ok) return toTypedError(result.error);
-        return (result.value as unknown as IntervalsEventRuntime[]).map((e) => ({
-          id: e.id,
-          startDateLocal: e.startDateLocal,
-          name: e.name,
-          movingTime: e.movingTime,
-          icuTrainingLoad: e.icuTrainingLoad,
-        }));
+        try {
+          const result = await selectedReader.listCalendar({ start: input.oldest,
+            ...(input.newest === undefined ? {} : { end: input.newest }) });
+          if (!result.ok) return readResult(result);
+          const value = (result.value as IntervalsEventRuntime[]).map((e) => ({
+            id: e.id,
+            startDateLocal: e.startDateLocal,
+            name: e.name,
+            movingTime: e.movingTime,
+            icuTrainingLoad: e.icuTrainingLoad,
+          }));
+          return result.freshness === undefined ? value
+            : { data: value, freshness: formatStoreFreshness(result.freshness) };
+        } catch (error) { return platformFailure(error); }
       },
     }),
   };

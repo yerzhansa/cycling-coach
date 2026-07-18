@@ -7,7 +7,7 @@ export { runSetup } from "./setup.js";
 
 // ─── Binary entry point ───────────────────────────────────────────────
 export { runBinary } from "./run-binary.js";
-export type { RunBinaryHooks } from "./run-binary.js";
+export type { PreparedCoachComposition, RunBinaryHooks } from "./run-binary.js";
 export { reportFatal } from "./process-guard.js";
 
 // ─── Sport contract ───────────────────────────────────────────────────
@@ -30,6 +30,9 @@ export { mergeSportSkills } from "./sport.js";
 // constants, REFERENCE_PRESERVE_TOKENS, and downstream submodules
 // (sync, metrics, validation, curator, units, audit) as they come online.
 export * from "./reference/index.js";
+export { bootstrapReference } from "./reference/runtime.js";
+export type { BootstrapReferenceDeps, ReferenceRuntime } from "./reference/runtime.js";
+export { wrapFetchWithSignal } from "./reference/sync/intervals-client-factory.js";
 
 // ─── LLM ──────────────────────────────────────────────────────────────
 export { LLM } from "./llm.js";
@@ -212,6 +215,29 @@ export {
   resolveConfigSecrets,
 } from "./config.js";
 export type { Config } from "./config.js";
+export { DATA_SOURCES, resolveDataSource } from "./config.js";
+export type { DataSource } from "./config.js";
+export {
+  createPlatformAthleteDataReader,
+  createPlatformCalendarMutations,
+  createMissingPlatformCalendarMutations,
+  createStoreAthleteDataReader,
+  formatStoreFreshness,
+  isRealCivilDate,
+  PlatformApiError,
+  PlatformCredentialsRequiredError,
+} from "./athlete-data.js";
+export type {
+  AthleteDataReader,
+  AthleteReadResult,
+  CalendarEventForDelete,
+  PlatformCalendarMutations,
+  StoredDataFreshness,
+} from "./athlete-data.js";
+export {
+  loadAllowedSendersWithSource,
+  SENDER_ID_RE,
+} from "./channels/allowed-senders.js";
 
 // ─── Updater ──────────────────────────────────────────────────────────
 export {

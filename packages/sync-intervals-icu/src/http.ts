@@ -1,6 +1,6 @@
 import { retryAfterMsFromHeaders, retryWithBackoff } from "@enduragent/kernel/concurrency";
 import type { ClockPort, HttpPort, HttpRequest, HttpResponse } from "@enduragent/kernel/ports";
-import type { SyncBudget } from "@enduragent/kernel/store";
+import type { PhysicalRequestLedger, SyncBudget } from "@enduragent/kernel/store";
 
 export const REQUEST_ATTEMPTS = 4;
 export const REQUEST_BACKOFF_BASE_MS = 1_000;
@@ -56,6 +56,7 @@ export function createRequester(options: {
   readonly minRequestIntervalMs: number;
   readonly wallClock: Pick<ClockPort, "now">;
   readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
+  readonly attemptLedger?: PhysicalRequestLedger;
 }): IntervalsRequester {
   validateBudget(options.budget);
   if (!Number.isSafeInteger(options.minRequestIntervalMs) || options.minRequestIntervalMs < MIN_CONFIGURED_INTERVAL_MS) {
@@ -95,8 +96,14 @@ export function createRequester(options: {
           }
         }
         if (used >= options.budget.maxRequests) throw new SyncBudgetExceededError();
-        lastAttemptStart = monotonicNow();
+        const attemptStart = monotonicNow();
+        if (endpoint === "bulk-fit" || endpoint === "fit-file") {
+          if (options.attemptLedger !== undefined) throw new SyncBudgetExceededError();
+        } else {
+          options.attemptLedger?.charge("store", `store:${endpoint}`);
+        }
         used += 1;
+        lastAttemptStart = attemptStart;
         const response = await options.http.fetch(request);
         if (response.status >= 200 && response.status < 300) return response;
         throw new IntervalsHttpError(endpoint, response.status,
