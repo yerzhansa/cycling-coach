@@ -17,6 +17,7 @@ export default defineConfig({
     "store-gate-command": "src/store-gate-command.ts",
     "season-review-command": "src/season-review-command.ts",
     "local-runner": "src/local-runner.ts",
+    enduragent: "src/enduragent.ts",
   },
   format: ["esm"],
   dts: true,

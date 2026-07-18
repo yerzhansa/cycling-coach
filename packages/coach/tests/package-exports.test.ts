@@ -22,6 +22,7 @@ describe("coach package handoff", () => {
       "./local-bundle-producer": "./dist/local-bundle-producer.js",
       "./store-runtime": "./dist/store-runtime.js",
       "./local-runner": "./dist/local-runner.js",
+      "./enduragent": "./dist/enduragent.js",
     });
     expect(packageJson.scripts).toEqual({
       build: "tsup",
@@ -50,6 +51,7 @@ describe("coach package handoff", () => {
       "store-gate-command",
       "season-review-command",
       "local-runner",
+      "enduragent",
     ];
     for (const entry of entries) {
       await expect(access(join(coachRoot, "dist", `${entry}.js`))).resolves.toBeUndefined();
