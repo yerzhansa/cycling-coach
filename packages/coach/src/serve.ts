@@ -1,6 +1,13 @@
-import { EXIT_SUCCESS, type ExitCode } from "@enduragent/coach-contract";
+import {
+  EXIT_SUCCESS,
+  type DaemonOwner,
+  type ExitCode,
+} from "@enduragent/coach-contract";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
-import { createHealthzRequestHandler } from "./daemon/healthz-server.js";
+import {
+  createDaemonHealthState,
+  createHealthzRequestHandler,
+} from "./daemon/healthz-server.js";
 import { createCoachRpcServer, ensureDaemonToken } from "./daemon/rpc-server.js";
 import type { LocalCoachLifecycle } from "./local-runner.js";
 
@@ -9,18 +16,21 @@ export interface RunCoachServeInput {
   readonly home: AthleteHome;
   readonly appVersion: string;
   readonly signal: AbortSignal;
+  readonly owner?: DaemonOwner;
 }
 
 export interface CoachServeDependencies {
   readonly ensureToken: typeof ensureDaemonToken;
   readonly createRpcServer: typeof createCoachRpcServer;
   readonly createHealthzHandler: typeof createHealthzRequestHandler;
+  readonly createHealthState: typeof createDaemonHealthState;
 }
 
 const defaultDependencies: CoachServeDependencies = {
   ensureToken: ensureDaemonToken,
   createRpcServer: createCoachRpcServer,
   createHealthzHandler: createHealthzRequestHandler,
+  createHealthState: createDaemonHealthState,
 };
 
 export async function runCoachServe(
@@ -44,10 +54,12 @@ export async function runCoachServe(
     if (aborted) return EXIT_SUCCESS;
     const token = await dependencies.ensureToken(input.home.configDir);
     if (aborted) return EXIT_SUCCESS;
+    const healthState = dependencies.createHealthState();
     const rpc = dependencies.createRpcServer({
       engine: input.lifecycle.engine,
       token: token.value,
-      owner: "unmanaged-foreground",
+      owner: input.owner ?? "unmanaged-foreground",
+      healthState,
     });
     if (aborted) {
       await rpc.close();
@@ -58,7 +70,7 @@ export async function runCoachServe(
       binding = await input.lifecycle.listener.bind({
         request: dependencies.createHealthzHandler({
           appVersion: input.appVersion,
-          owner: "unmanaged-foreground",
+          state: healthState,
         }),
         upgrade: rpc.handleUpgrade,
       });
@@ -66,7 +78,7 @@ export async function runCoachServe(
       await rpc.close().catch(() => {});
       throw error;
     }
-    if (!aborted) await abortPromise;
+    if (!aborted) await Promise.race([abortPromise, rpc.shutdownRequested]);
     let bindingClose: Promise<void>;
     try {
       bindingClose = binding.close();

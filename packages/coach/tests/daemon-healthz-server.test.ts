@@ -1,7 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
-import { PROTOCOL_VERSION } from "@enduragent/coach-contract";
-import { createHealthzRequestHandler } from "../src/daemon/healthz-server.js";
+import {
+  createDaemonHealthState,
+  createHealthzRequestHandler,
+} from "../src/daemon/healthz-server.js";
 
 function responseCapture() {
   const headers = new Map<string, string>();
@@ -24,7 +26,6 @@ describe("healthz request handler", () => {
   it("returns the exact healthy body and headers only for GET /healthz", () => {
     const handler = createHealthzRequestHandler({
       appVersion: "0.1.0-synthetic",
-      owner: "unmanaged-foreground",
     });
     const capture = responseCapture();
     handler({ method: "GET", url: "/healthz" } as IncomingMessage, capture.response);
@@ -38,10 +39,20 @@ describe("healthz request handler", () => {
       `${JSON.stringify({
         service: "enduragent-store-writer",
         version: "0.1.0-synthetic",
-        protocolVersion: PROTOCOL_VERSION,
-        owner: "unmanaged-foreground",
       })}\n`,
     );
+  });
+
+  it("omits the healthy marker and version while draining", () => {
+    const state = createDaemonHealthState();
+    const handler = createHealthzRequestHandler({ appVersion: "synthetic", state });
+    state.setHealthy(false);
+    const capture = responseCapture();
+    handler({ method: "GET", url: "/healthz" } as IncomingMessage, capture.response);
+    expect(capture.response.statusCode).toBe(503);
+    expect(capture.body()).toBe(`${JSON.stringify({ status: "unavailable" })}\n`);
+    expect(capture.body()).not.toContain("enduragent-store-writer");
+    expect(capture.body()).not.toContain("synthetic");
   });
 
   it.each([
@@ -51,7 +62,6 @@ describe("healthz request handler", () => {
   ])("returns an empty 404 for %s %s", (method, url) => {
     const handler = createHealthzRequestHandler({
       appVersion: "synthetic",
-      owner: "unmanaged-foreground",
     });
     const capture = responseCapture();
     const end = vi.spyOn(capture.response, "end");

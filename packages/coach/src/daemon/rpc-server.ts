@@ -24,6 +24,15 @@ import {
 } from "@enduragent/coach-contract";
 import type { WriterProtocolHandlers } from "@enduragent/kernel-node/lock";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
+import type { DaemonHealthState } from "./healthz-server.js";
+import {
+  DetachedSessionRequestError,
+  createSessionRequestQueue,
+} from "./session-queue.js";
+import {
+  HANDOFF_CAPABILITY_BYTES,
+  type MonotonicTimer,
+} from "./upgrade-fence.js";
 
 const AUTH_TIMEOUT_MS = 1_000;
 const MAX_PAYLOAD_BYTES = 1_048_576;
@@ -36,6 +45,29 @@ const NOT_FOUND_RESPONSE =
   "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
 const UNAVAILABLE_RESPONSE =
   "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+
+export const UPGRADE_DRAIN_TIMEOUT_MS = 30_000 as const;
+
+export type UpgradeDrainOutcome =
+  | { readonly status: "accepted" }
+  | { readonly status: "timeout" };
+
+export interface UpgradeDrainCoordinator {
+  shutdownForUpgrade(input: {
+    readonly connectionId: string;
+    readonly targetProtocolVersion: number;
+    readonly handoffCapability: string;
+    readonly deadlineMs: number;
+    readonly timer: MonotonicTimer;
+  }): Promise<UpgradeDrainOutcome>;
+}
+
+export interface UpgradeReservation {
+  readonly connectionId: string;
+  readonly targetProtocolVersion: number;
+  readonly handoffCapabilityBytes: Buffer;
+  readonly state: "reserved" | "shutdown-consumed";
+}
 
 export interface DaemonToken {
   readonly path: string;
@@ -111,10 +143,13 @@ export interface CoachRpcServerInput {
   readonly engine: CoachEngine;
   readonly token: string;
   readonly owner: DaemonOwner;
+  readonly healthState?: DaemonHealthState;
+  readonly timer?: MonotonicTimer;
 }
 
 export interface CoachRpcServer {
   readonly handleUpgrade: WriterProtocolHandlers["upgrade"];
+  readonly shutdownRequested: Promise<void>;
   close(): Promise<void>;
 }
 
@@ -127,6 +162,8 @@ interface ClientState {
   readonly resolveDetached: () => void;
   readonly closedPromise: Promise<void>;
   readonly resolveClosed: () => void;
+  readonly detachController: AbortController;
+  readonly connectionId: string;
   sendTail: Promise<void>;
   authTimer: ReturnType<typeof setTimeout> | undefined;
   authenticated: boolean;
@@ -134,7 +171,7 @@ interface ClientState {
   closed: boolean;
 }
 
-function createClientState(ws: WebSocket): ClientState {
+function createClientState(ws: WebSocket, connectionId: string): ClientState {
   let resolveDetached!: () => void;
   let resolveClosed!: () => void;
   const detachedPromise = new Promise<void>((resolve) => {
@@ -152,6 +189,8 @@ function createClientState(ws: WebSocket): ClientState {
     resolveDetached,
     closedPromise,
     resolveClosed,
+    detachController: new AbortController(),
+    connectionId,
     sendTail: Promise.resolve(),
     authTimer: undefined,
     authenticated: false,
@@ -169,6 +208,7 @@ function clearAuthTimer(state: ClientState): void {
 function detach(state: ClientState, closeCode?: number, reason?: string): void {
   if (!state.detached) {
     state.detached = true;
+    state.detachController.abort();
     state.resolveDetached();
     for (const resolve of state.pendingSendResolvers) resolve();
     state.pendingSendResolvers.clear();
@@ -234,6 +274,12 @@ function ordinaryError(id: JsonRpcId, code: number, message: string): string {
   );
 }
 
+function ordinarySuccess(id: JsonRpcId, result: unknown): string {
+  return serializeCoachRpcEnvelope(
+    JsonRpcSuccessResponseEnvelopeSchema.parse({ jsonrpc: "2.0", id, result }),
+  );
+}
+
 function recoveredId(value: unknown): JsonRpcId | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   if (!Object.prototype.hasOwnProperty.call(value, "id")) return undefined;
@@ -262,6 +308,52 @@ function sameToken(received: string, expected: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
+function productionTimer(): MonotonicTimer {
+  return {
+    nowMs: () => performance.now(),
+    schedule(delayMs, callback) {
+      const handle = setTimeout(callback, Math.max(0, delayMs));
+      handle.unref?.();
+      return { cancel: () => clearTimeout(handle) };
+    },
+  };
+}
+
+function canonicalCapability(value: unknown): Buffer | undefined {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(value)) return undefined;
+  const decoded = Buffer.from(value, "base64url");
+  if (
+    decoded.length !== HANDOFF_CAPABILITY_BYTES
+    || decoded.toString("base64url") !== value
+  ) {
+    return undefined;
+  }
+  return decoded;
+}
+
+function controlParams(value: unknown): {
+  readonly targetProtocolVersion: number;
+  readonly handoffCapability: string;
+} | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  if (
+    keys.length !== 2
+    || keys[0] !== "handoffCapability"
+    || keys[1] !== "targetProtocolVersion"
+    || !Number.isSafeInteger(record.targetProtocolVersion)
+    || (record.targetProtocolVersion as number) < 0
+    || typeof record.handoffCapability !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    targetProtocolVersion: record.targetProtocolVersion as number,
+    handoffCapability: record.handoffCapability,
+  };
+}
+
 function refuseUpgrade(
   socket: Parameters<WriterProtocolHandlers["upgrade"]>[1],
   response: string,
@@ -273,8 +365,56 @@ function refuseUpgrade(
 export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer {
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES });
   const clients = new Set<ClientState>();
+  const sessionQueue = createSessionRequestQueue();
+  const coachingTasks = new Set<Promise<void>>();
+  const timer = input.timer ?? productionTimer();
   let closing = false;
+  let acceptingCoaching = true;
   let closePromise: Promise<void> | undefined;
+  let reservation: UpgradeReservation | undefined;
+  let connectionSequence = 0;
+  let resolveShutdownRequested!: () => void;
+  const shutdownRequested = new Promise<void>((resolve) => {
+    resolveShutdownRequested = resolve;
+  });
+
+  const clearReservation = (): void => {
+    reservation?.handoffCapabilityBytes.fill(0);
+    reservation = undefined;
+  };
+
+  const awaitDrain = (
+    deadlineMs: number,
+    state: ClientState,
+  ): Promise<UpgradeDrainOutcome | { readonly status: "connection-closed" }> => {
+    const tasks = [...coachingTasks];
+    if (tasks.length === 0) {
+      return Promise.resolve(
+        state.detached ? { status: "connection-closed" } : { status: "accepted" },
+      );
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      const deadline = timer.schedule(Math.max(0, deadlineMs - timer.nowMs()), () => {
+        if (settled) return;
+        settled = true;
+        deadline.cancel();
+        resolve({ status: "timeout" });
+      });
+      void Promise.all(tasks).then(() => {
+        if (settled) return;
+        settled = true;
+        deadline.cancel();
+        resolve({ status: "accepted" });
+      });
+      void state.detachedPromise.then(() => {
+        if (settled) return;
+        settled = true;
+        deadline.cancel();
+        resolve({ status: "connection-closed" });
+      });
+    });
+  };
 
   const handleRequest = (state: ClientState, data: RawData, isBinary: boolean): void => {
     if (closing) {
@@ -303,6 +443,102 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
       );
       return;
     }
+    if (
+      generic.data.method === "daemon.reserveUpgrade"
+      || generic.data.method === "daemon.shutdownForUpgrade"
+    ) {
+      const params = controlParams(generic.data.params);
+      if (params === undefined) {
+        void enqueueSerialized(state, ordinaryError(generic.data.id, -32602, "Invalid params"));
+        return;
+      }
+      if (generic.data.method === "daemon.reserveUpgrade") {
+        const capability = canonicalCapability(params.handoffCapability);
+        if (
+          reservation !== undefined
+          || capability === undefined
+          || params.targetProtocolVersion <= PROTOCOL_VERSION
+          || input.owner === "unmanaged-foreground"
+        ) {
+          void enqueueSerialized(
+            state,
+            ordinaryError(generic.data.id, -32_003, "handoff-reservation-refused"),
+          );
+          return;
+        }
+        reservation = {
+          connectionId: state.connectionId,
+          targetProtocolVersion: params.targetProtocolVersion,
+          handoffCapabilityBytes: Buffer.from(capability),
+          state: "reserved",
+        };
+        capability.fill(0);
+        void enqueueSerialized(
+          state,
+          ordinarySuccess(generic.data.id, { status: "reserved" }),
+        );
+        return;
+      }
+      const capability = canonicalCapability(params.handoffCapability);
+      const activeReservation = reservation;
+      if (
+        capability === undefined
+        || activeReservation === undefined
+        || activeReservation.state !== "reserved"
+        || activeReservation.connectionId !== state.connectionId
+        || activeReservation.targetProtocolVersion !== params.targetProtocolVersion
+        || capability.length !== activeReservation.handoffCapabilityBytes.length
+        || !timingSafeEqual(capability, activeReservation.handoffCapabilityBytes)
+      ) {
+        capability?.fill(0);
+        void enqueueSerialized(
+          state,
+          ordinaryError(generic.data.id, -32_003, "handoff-reservation-refused"),
+        );
+        return;
+      }
+      capability.fill(0);
+      reservation = { ...activeReservation, state: "shutdown-consumed" };
+      acceptingCoaching = false;
+      input.healthState?.setHealthy(false);
+      const task = (async () => {
+        const outcome = await awaitDrain(
+          timer.nowMs() + UPGRADE_DRAIN_TIMEOUT_MS,
+          state,
+        );
+        if (outcome.status !== "accepted") {
+          acceptingCoaching = true;
+          input.healthState?.setHealthy(true);
+          clearReservation();
+          if (outcome.status === "timeout") {
+            await enqueueSerialized(
+              state,
+              ordinaryError(generic.data.id, -32_004, "upgrade-drain-timeout"),
+            );
+          }
+          return;
+        }
+        await enqueueSerialized(
+          state,
+          ordinarySuccess(generic.data.id, { status: "accepted" }),
+        );
+        if (state.detached) {
+          acceptingCoaching = true;
+          input.healthState?.setHealthy(true);
+          clearReservation();
+          return;
+        }
+        clearReservation();
+        resolveShutdownRequested();
+      })();
+      state.requestTasks.add(task);
+      void task.finally(() => state.requestTasks.delete(task)).catch(() => {});
+      return;
+    }
+    if (!acceptingCoaching) {
+      void enqueueSerialized(state, ordinaryError(generic.data.id, -32_005, "daemon-upgrading"));
+      return;
+    }
     if (!methodExists(generic.data.method)) {
       void enqueueSerialized(state, ordinaryError(generic.data.id, -32601, "Method not found"));
       return;
@@ -323,6 +559,7 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
     const task = (async () => {
       let invocationFailed = false;
       let eventFailed = false;
+      let deliveryDetached = false;
       let result: unknown;
       try {
         switch (registry.wireName) {
@@ -331,27 +568,32 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
               const request = COACH_RPC_METHOD_REGISTRY.chat.requestSchema.parse(
                 generic.data.params,
               );
-              result = await input.engine.chat(request, (event) => {
-                if (eventFailed) return;
-                try {
-                  const parsedEvent = COACH_RPC_METHOD_REGISTRY.chat.eventSchema.parse(event);
-                  const notification = CoachTurnEventNotificationEnvelopeSchema.parse({
-                    jsonrpc: "2.0",
-                    method: "coach.turnEvent",
-                    params: {
-                      requestId: generic.data.id,
-                      requestMethod: "chat",
-                      turnId: parsedEvent.turnId,
-                      event: parsedEvent,
-                    },
-                  });
-                  void enqueueSerialized(state, serializeCoachRpcEnvelope(notification));
-                } catch {
-                  eventFailed = true;
-                }
+              result = await sessionQueue.run({
+                key: request.chatId,
+                signal: state.detachController.signal,
+                run: () => input.engine.chat(request, (event) => {
+                  if (eventFailed) return;
+                  try {
+                    const parsedEvent = COACH_RPC_METHOD_REGISTRY.chat.eventSchema.parse(event);
+                    const notification = CoachTurnEventNotificationEnvelopeSchema.parse({
+                      jsonrpc: "2.0",
+                      method: "coach.turnEvent",
+                      params: {
+                        requestId: generic.data.id,
+                        requestMethod: "chat",
+                        turnId: parsedEvent.turnId,
+                        event: parsedEvent,
+                      },
+                    });
+                    void enqueueSerialized(state, serializeCoachRpcEnvelope(notification));
+                  } catch {
+                    eventFailed = true;
+                  }
+                }),
               });
-            } catch {
-              invocationFailed = true;
+            } catch (error) {
+              if (error instanceof DetachedSessionRequestError) deliveryDetached = true;
+              else invocationFailed = true;
             }
             break;
           case "resetSession":
@@ -383,6 +625,7 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
             }
             break;
         }
+        if (deliveryDetached) return;
         let terminal: string;
         if (invocationFailed || eventFailed) {
           terminal = ordinaryError(generic.data.id, -32603, "Internal error");
@@ -410,15 +653,26 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
       }
     })();
     state.requestTasks.add(task);
-    void task.finally(() => state.requestTasks.delete(task)).catch(() => {});
+    coachingTasks.add(task);
+    void task.finally(() => {
+      state.requestTasks.delete(task);
+      coachingTasks.delete(task);
+    }).catch(() => {});
   };
 
   const acceptClient = (ws: WebSocket): void => {
-    const state = createClientState(ws);
+    connectionSequence += 1;
+    const state = createClientState(ws, `connection-${connectionSequence}`);
     clients.add(state);
     ws.on("close", () => {
       clearAuthTimer(state);
       detach(state);
+      if (
+        reservation?.connectionId === state.connectionId
+        && reservation.state === "reserved"
+      ) {
+        clearReservation();
+      }
       state.closed = true;
       state.resolveClosed();
       void Promise.all(state.requestTasks)
@@ -514,9 +768,12 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
 
   return {
     handleUpgrade,
+    shutdownRequested,
     close() {
       closePromise ??= (async () => {
         closing = true;
+        acceptingCoaching = false;
+        input.healthState?.setHealthy(false);
         for (const state of clients) {
           clearAuthTimer(state);
           if (!state.authenticated) {
@@ -540,6 +797,7 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
             else reject(error);
           });
         });
+        clearReservation();
         clients.clear();
       })();
       return closePromise;

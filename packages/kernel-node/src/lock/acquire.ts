@@ -6,7 +6,7 @@ import {
 } from "node:http";
 import { createServer, type Server, type Socket, type AddressInfo } from "node:net";
 import { existsSync, mkdirSync, chmodSync, statSync } from "node:fs";
-import { unlink } from "node:fs/promises";
+import { lstat, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
 import { claimLockfile, readLockfile } from "./lockfile-body.js";
@@ -192,12 +192,51 @@ function ownProtocolServer(
   };
 }
 
-async function bestEffortUnlink(path: string): Promise<void> {
+interface FileIdentity {
+  readonly dev: number;
+  readonly ino: number;
+}
+
+let staleSequence = 0;
+
+async function fileIdentity(path: string): Promise<FileIdentity | undefined> {
+  try {
+    const metadata = await lstat(path);
+    return { dev: metadata.dev, ino: metadata.ino };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function sameIdentity(left: FileIdentity | undefined, right: FileIdentity): boolean {
+  return left?.dev === right.dev && left.ino === right.ino;
+}
+
+async function unlinkOwned(path: string, owned: FileIdentity | undefined): Promise<boolean> {
+  if (owned === undefined || !sameIdentity(await fileIdentity(path), owned)) return false;
   try {
     await unlink(path);
-  } catch {
-    /* already gone */
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
+  return true;
+}
+
+async function reclaimStale(path: string, stale: FileIdentity | undefined): Promise<boolean> {
+  if (stale === undefined || !sameIdentity(await fileIdentity(path), stale)) return false;
+  staleSequence += 1;
+  const stalePath = `${path}.stale.${process.pid}.${staleSequence}`;
+  try {
+    await rename(path, stalePath);
+  } catch (error) {
+    if (["ENOENT", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+      return false;
+    }
+    throw error;
+  }
+  await unlinkOwned(stalePath, stale);
+  return true;
 }
 
 async function contentionAgainstBound(
@@ -250,6 +289,8 @@ export async function acquireWriteLock(
   let protocol: OwnedProtocolServer | undefined;
   let bindingPromise: Promise<WriterProtocolBinding> | undefined;
   let releasePromise: Promise<void> | undefined;
+  let ownedLockfile: FileIdentity | undefined;
+  let ownedPortFile: FileIdentity | undefined;
 
   const listener: WriterProtocolListener = {
     async bind(handlers): Promise<WriterProtocolBinding> {
@@ -266,6 +307,7 @@ export async function acquireWriteLock(
         }
         try {
           await writePortFile(portFilePath, created.port);
+          ownedPortFile = await fileIdentity(portFilePath);
         } catch (error) {
           await owned.forceClose().catch(() => {});
           throw error;
@@ -287,7 +329,9 @@ export async function acquireWriteLock(
       version: opts.version,
       athleteHome: opts.athleteHome,
     });
+    ownedLockfile = await fileIdentity(lockfilePath);
     await writePortFile(portFilePath, actualPort);
+    ownedPortFile = await fileIdentity(portFilePath);
     return {
       status: "acquired",
       port: actualPort,
@@ -313,8 +357,8 @@ export async function acquireWriteLock(
           } catch (error) {
             failure ??= error;
           }
-          await bestEffortUnlink(lockfilePath);
-          await bestEffortUnlink(portFilePath);
+          await unlinkOwned(lockfilePath, ownedLockfile);
+          await unlinkOwned(portFilePath, ownedPortFile);
           if (failure !== undefined) throw failure;
         })();
         return releasePromise;
@@ -330,6 +374,8 @@ export async function acquireWriteLock(
         await closeServer(server, sockets);
         throw err;
       }
+      const staleLockfile = await fileIdentity(lockfilePath);
+      const stalePortFile = await fileIdentity(portFilePath);
       const other = readLockfile(lockfilePath);
       const otherPort = other?.port ?? readPortFile(portFilePath);
       if (otherPort === null) {
@@ -347,8 +393,8 @@ export async function acquireWriteLock(
         await closeServer(server, sockets);
         return contentionAgainstBound(other?.pid, otherPort, portFilePath, probe);
       }
-      await bestEffortUnlink(lockfilePath);
-      await bestEffortUnlink(portFilePath);
+      if (!(await reclaimStale(lockfilePath, staleLockfile))) continue;
+      await reclaimStale(portFilePath, stalePortFile);
     }
   }
 

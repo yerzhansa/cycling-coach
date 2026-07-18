@@ -26,6 +26,11 @@ import {
   type CoachEngine,
 } from "@enduragent/coach-contract";
 import { createCoachRpcServer, ensureDaemonToken } from "../src/daemon/rpc-server.js";
+import { createDaemonHealthState } from "../src/daemon/healthz-server.js";
+import type {
+  MonotonicTimer,
+  ScheduledMonotonicTimer,
+} from "../src/daemon/upgrade-fence.js";
 
 const roots: string[] = [];
 
@@ -78,6 +83,53 @@ function request(url: string, headers: IncomingMessage["headers"] = {}): Incomin
 
 async function turn(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  resolve(value: T): void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+class FakeTimer implements MonotonicTimer {
+  private now = 0;
+  private readonly callbacks = new Set<{
+    readonly deadline: number;
+    readonly callback: () => void;
+    cancelled: boolean;
+  }>();
+
+  nowMs(): number {
+    return this.now;
+  }
+
+  schedule(delayMs: number, callback: () => void): ScheduledMonotonicTimer {
+    const scheduled = { deadline: this.now + delayMs, callback, cancelled: false };
+    this.callbacks.add(scheduled);
+    return {
+      cancel: () => {
+        scheduled.cancelled = true;
+        this.callbacks.delete(scheduled);
+      },
+    };
+  }
+
+  advance(ms: number): void {
+    this.now += ms;
+    for (const scheduled of this.callbacks) {
+      if (!scheduled.cancelled && scheduled.deadline <= this.now) {
+        this.callbacks.delete(scheduled);
+        scheduled.callback();
+      }
+    }
+  }
 }
 
 describe("daemon token", () => {
@@ -392,5 +444,201 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       expect(chat).not.toHaveBeenCalled();
       await client.close();
     }
+  });
+});
+
+describe.skipIf(!hasLoopback)("authenticated upgrade control", () => {
+  it("binds one reservation to the authenticated connection and consumes it once", async () => {
+    const token = "x".repeat(43);
+    const healthState = createDaemonHealthState();
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      token,
+      owner: "service-managed",
+      healthState,
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+    const handoffCapability = Buffer.alloc(32, 3).toString("base64url");
+    client.ws.send(JSON.stringify({
+      jsonrpc: "2.0",
+      id: "reserve",
+      method: "daemon.reserveUpgrade",
+      params: { targetProtocolVersion: PROTOCOL_VERSION + 1, handoffCapability },
+    }));
+    expect(JSON.parse(await client.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "reserve",
+      result: { status: "reserved" },
+    });
+    client.ws.send(JSON.stringify({
+      jsonrpc: "2.0",
+      id: "second",
+      method: "daemon.reserveUpgrade",
+      params: { targetProtocolVersion: PROTOCOL_VERSION + 1, handoffCapability },
+    }));
+    expect(JSON.parse(await client.frames.next())).toMatchObject({
+      id: "second",
+      error: { code: -32_003, message: "handoff-reservation-refused" },
+    });
+    client.ws.send(JSON.stringify({
+      jsonrpc: "2.0",
+      id: "shutdown",
+      method: "daemon.shutdownForUpgrade",
+      params: { targetProtocolVersion: PROTOCOL_VERSION + 1, handoffCapability },
+    }));
+    expect(JSON.parse(await client.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "shutdown",
+      result: { status: "accepted" },
+    });
+    await expect(rpc.shutdownRequested).resolves.toBeUndefined();
+    expect(healthState.healthy).toBe(false);
+    client.ws.send(JSON.stringify({
+      jsonrpc: "2.0",
+      id: "replay",
+      method: "daemon.shutdownForUpgrade",
+      params: { targetProtocolVersion: PROTOCOL_VERSION + 1, handoffCapability },
+    }));
+    expect(JSON.parse(await client.frames.next())).toMatchObject({
+      id: "replay",
+      error: { code: -32_003, message: "handoff-reservation-refused" },
+    });
+    await client.close();
+  });
+
+  it("drains a running and queued same-key pair before flushing shutdown acceptance", async () => {
+    const token = "x".repeat(43);
+    const first = deferred<{ text: string }>();
+    const second = deferred<{ text: string }>();
+    let call = 0;
+    const healthState = createDaemonHealthState();
+    const rpc = createCoachRpcServer({
+      token,
+      owner: "ephemeral-client-started",
+      healthState,
+      engine: engine({
+        chat: () => {
+          call += 1;
+          return call === 1 ? first.promise : second.promise;
+        },
+      }),
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+    for (const id of ["chat-1", "chat-2"]) {
+      client.ws.send(JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        method: "chat",
+        params: { chatId: "same", message: id },
+      }));
+    }
+    await vi.waitFor(() => expect(call).toBe(1));
+    const handoffCapability = Buffer.alloc(32, 4).toString("base64url");
+    client.ws.send(JSON.stringify({
+      jsonrpc: "2.0",
+      id: "reserve",
+      method: "daemon.reserveUpgrade",
+      params: { targetProtocolVersion: PROTOCOL_VERSION + 1, handoffCapability },
+    }));
+    expect(JSON.parse(await client.frames.next())).toMatchObject({
+      id: "reserve",
+      result: { status: "reserved" },
+    });
+    client.ws.send(JSON.stringify({
+      jsonrpc: "2.0",
+      id: "shutdown",
+      method: "daemon.shutdownForUpgrade",
+      params: { targetProtocolVersion: PROTOCOL_VERSION + 1, handoffCapability },
+    }));
+    await vi.waitFor(() => expect(healthState.healthy).toBe(false));
+    client.ws.send(JSON.stringify({
+      jsonrpc: "2.0",
+      id: "post-close",
+      method: "getAthleteState",
+      params: {},
+    }));
+    expect(JSON.parse(await client.frames.next())).toMatchObject({
+      id: "post-close",
+      error: { code: -32_005, message: "daemon-upgrading" },
+    });
+    first.resolve({ text: "first" });
+    expect(JSON.parse(await client.frames.next())).toMatchObject({ id: "chat-1" });
+    await vi.waitFor(() => expect(call).toBe(2));
+    second.resolve({ text: "second" });
+    const terminal = [
+      JSON.parse(await client.frames.next()),
+      JSON.parse(await client.frames.next()),
+    ];
+    expect(terminal).toContainEqual({
+      jsonrpc: "2.0",
+      id: "chat-2",
+      result: { text: "second" },
+    });
+    expect(terminal).toContainEqual({
+      jsonrpc: "2.0",
+      id: "shutdown",
+      result: { status: "accepted" },
+    });
+    await client.close();
+  });
+
+  it("restores intake and healthy state after the monotonic drain deadline", async () => {
+    const token = "x".repeat(43);
+    const work = deferred<{ text: string }>();
+    const timer = new FakeTimer();
+    const healthState = createDaemonHealthState();
+    const chat = vi.fn(() => work.promise);
+    const rpc = createCoachRpcServer({
+      token,
+      owner: "service-managed",
+      healthState,
+      timer,
+      engine: engine({ chat }),
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+    client.ws.send(JSON.stringify({
+      jsonrpc: "2.0",
+      id: "running",
+      method: "chat",
+      params: { chatId: "same", message: "running" },
+    }));
+    await vi.waitFor(() => expect(chat).toHaveBeenCalledTimes(1));
+    const handoffCapability = Buffer.alloc(32, 5).toString("base64url");
+    client.ws.send(JSON.stringify({
+      jsonrpc: "2.0",
+      id: "reserve",
+      method: "daemon.reserveUpgrade",
+      params: { targetProtocolVersion: PROTOCOL_VERSION + 1, handoffCapability },
+    }));
+    await client.frames.next();
+    client.ws.send(JSON.stringify({
+      jsonrpc: "2.0",
+      id: "shutdown",
+      method: "daemon.shutdownForUpgrade",
+      params: { targetProtocolVersion: PROTOCOL_VERSION + 1, handoffCapability },
+    }));
+    await vi.waitFor(() => expect(healthState.healthy).toBe(false));
+    timer.advance(30_000);
+    expect(JSON.parse(await client.frames.next())).toMatchObject({
+      id: "shutdown",
+      error: { code: -32_004, message: "upgrade-drain-timeout" },
+    });
+    expect(healthState.healthy).toBe(true);
+    client.ws.send(JSON.stringify({
+      jsonrpc: "2.0",
+      id: "read-after-timeout",
+      method: "getAthleteState",
+      params: {},
+    }));
+    expect(JSON.parse(await client.frames.next())).toMatchObject({ id: "read-after-timeout" });
+    work.resolve({ text: "done" });
+    expect(JSON.parse(await client.frames.next())).toMatchObject({ id: "running" });
+    await client.close();
   });
 });
