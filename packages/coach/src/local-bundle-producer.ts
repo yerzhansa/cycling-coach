@@ -6,10 +6,12 @@ import {
 } from "@enduragent/kernel/ingest";
 import type { ReferenceCaptureManifest } from "@enduragent/kernel/reference/capture";
 import {
+  IDENTITY_REFERENCE_BUNDLE_PROJECTION,
   KEEP_ALL_ACTIVITIES,
   type ActivityProjectionFilter,
   type LocalBundleProducer,
   type ProducedLocalBundle,
+  type ReferenceBundleProjection,
   type VerifiedSnapshotReader,
 } from "@enduragent/kernel/reference/local-bundle";
 import type { SqlReadStore } from "@enduragent/kernel/store";
@@ -40,6 +42,7 @@ export interface LocalBundleProducerOptions {
   readonly storePath: string;
   readonly archiveRoot: string;
   readonly activityFilter?: ActivityProjectionFilter;
+  readonly bundleProjection?: ReferenceBundleProjection;
 }
 
 export interface LocalBundleProducerDependencies {
@@ -69,6 +72,7 @@ export function createLocalBundleProducer(
   const makeCrypto = dependencies.crypto ?? createNodeCrypto;
   const decode = dependencies.decode ?? decodeLocalBundleProjection;
   const activityFilter = options.activityFilter ?? KEEP_ALL_ACTIVITIES;
+  const bundleProjection = options.bundleProjection ?? IDENTITY_REFERENCE_BUNDLE_PROJECTION;
 
   return Object.freeze({
     async produce(manifest: ReferenceCaptureManifest): Promise<ProducedLocalBundle> {
@@ -85,7 +89,8 @@ export function createLocalBundleProducer(
           streams: await readSelectedGenericRows(store, { source: SOURCE, lane: "streams" }),
         };
         const bundle = await decode(manifest, selected, snapshots, activityFilter);
-        produced = { captureId: manifest.capture_id, frozenNow: manifest.plan.frozenNow, bundle };
+        produced = { captureId: manifest.capture_id, frozenNow: manifest.plan.frozenNow,
+          bundle: bundleProjection(bundle) };
       } catch {
         projectionFailed = true;
       }

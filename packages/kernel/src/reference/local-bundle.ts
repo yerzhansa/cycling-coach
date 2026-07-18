@@ -1,5 +1,6 @@
 import type { ReferenceCaptureManifest, SnapshotRef } from "./capture.js";
 import type { MetricInput } from "./metrics/metric-input.js";
+import { SPORT_FAMILIES } from "./metrics/sport-families.js";
 import {
   FixtureSchema,
   type Activity,
@@ -27,6 +28,35 @@ export interface ReferenceBundle {
   readonly ftpHistoryIndoor?: Readonly<Record<string, number>>;
   readonly ftpHistoryOutdoor?: Readonly<Record<string, number>>;
   readonly eftp?: number | null;
+}
+
+export type ReferenceBundleProjection = (bundle: ReferenceBundle) => ReferenceBundle;
+
+export const IDENTITY_REFERENCE_BUNDLE_PROJECTION: ReferenceBundleProjection = (bundle) => bundle;
+
+function isProjectedCyclingActivity(activity: ReferenceBundle["activities"][number]): boolean {
+  const type = activity.type;
+  return typeof type === "string"
+    && type !== "Transition"
+    && Object.hasOwn(SPORT_FAMILIES, type)
+    && SPORT_FAMILIES[type] === "cycling";
+}
+
+export function projectCyclingReferenceBundle(bundle: ReferenceBundle): ReferenceBundle {
+  const activities = bundle.activities.filter(isProjectedCyclingActivity);
+  const retainedActivityIds = new Set(activities.map((activity) => String(activity.id)));
+  let streams: Record<string, ActivityStreams> | undefined;
+  if (bundle.streams !== undefined) {
+    streams = {};
+    for (const [activityId, value] of Object.entries(bundle.streams)) {
+      if (retainedActivityIds.has(activityId)) streams[activityId] = value;
+    }
+  }
+  const hasNoOrphanStreams = Object.keys(streams ?? {}).every(
+    (activityId) => retainedActivityIds.has(activityId),
+  );
+  if (!hasNoOrphanStreams) throw new Error("cycling Reference projection produced an orphan stream");
+  return streams === undefined ? { ...bundle, activities } : { ...bundle, activities, streams };
 }
 
 export interface ProducedLocalBundle {

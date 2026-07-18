@@ -6,6 +6,7 @@ import { canonicalJson, type ArchiveWriteResult } from "@enduragent/kernel/archi
 import { buildPlatformPresentation } from "@enduragent/kernel/ingest";
 import {
   REFERENCE_CAPTURE_STREAM_TYPES,
+  selectReferenceCaptureStreamIds,
   serializeReferenceCaptureManifest,
   validateReferenceCaptureManifest,
   validateReferenceCapturePlan,
@@ -17,9 +18,11 @@ import { METRIC_REGISTRY } from "@enduragent/kernel/reference/registry";
 import { compareReferenceCapture } from "@enduragent/kernel/reference/capture-once";
 import {
   assertNoTpKeysRemain,
+  buildFixtureShape,
   normalizeStreams,
   parseRenamedActivity,
   parseRenamedWellnessRow,
+  projectCyclingReferenceBundle,
   renameTpFieldsOnActivity,
   renameTpFieldsOnWellnessRow,
   type ReferenceBundle,
@@ -114,12 +117,13 @@ async function createSyntheticCapture(value: SyntheticSeed): Promise<SyntheticCa
   const plan = validateReferenceCapturePlan({ capture_epoch_ms: captureEpoch, frozenNow: value.frozen_now,
     window: { oldest: "1998-03-12", newest: "1998-06-04" }, stream_cutoff_epoch_ms: captureEpoch - 21 * 86_400_000 });
   const activityIds = value.activities.map((activity) => String(activity.id));
+  const streamActivityIds = selectReferenceCaptureStreamIds(value.activities, plan);
   const profile = { ...value.athlete, sportSettings: value.settings_revisions };
   const endpointPayloads: unknown[] = [profile, value.activities, value.wellness,
-    ...activityIds.map((id) => value.streams[id])];
+    ...streamActivityIds.map((id) => value.streams[id])];
   const endpointEpochs = [Date.parse("1998-06-04T00:00:00Z") / 1_000,
     Date.parse("1998-03-12T00:00:00Z") / 1_000, Date.parse("1998-03-12T00:00:00Z") / 1_000,
-    ...value.activities.map((activity) => epoch(activity.start_date))];
+    ...streamActivityIds.map((id) => epoch(value.activities.find((activity) => String(activity.id) === id)!.start_date))];
   const endpointWrites: ArchiveWriteResult[] = [];
   for (let index = 0; index < endpointPayloads.length; index += 1) {
     endpointWrites.push(await archive.writeSnapshot(endpointPayloads[index], { epochSeconds: endpointEpochs[index]! }));
@@ -141,8 +145,8 @@ async function createSyntheticCapture(value: SyntheticSeed): Promise<SyntheticCa
     wellness.push({ raw, externalId: String(raw.id), archive: written, epoch: rowEpoch });
   }
   const streams = [] as { raw: Readonly<Record<string, unknown>>; externalId: string; archive: ArchiveWriteResult; epoch: number }[];
-  for (let index = 0; index < activityIds.length; index += 1) {
-    const id = activityIds[index]!, raw = value.streams[id]!, rowEpoch = epoch(value.activities[index]!.start_date);
+  for (const id of streamActivityIds) {
+    const raw = value.streams[id]!, rowEpoch = epoch(value.activities.find((activity) => String(activity.id) === id)!.start_date);
     const written = await archive.writeSnapshot(raw, { epochSeconds: rowEpoch });
     streams.push({ raw, externalId: `streams:${id}`, archive: written, epoch: rowEpoch });
   }
@@ -211,14 +215,14 @@ async function createSyntheticCapture(value: SyntheticSeed): Promise<SyntheticCa
     : ordinal === 2 ? { ordinal, lane: "wellness" as const, endpoint: "wellness" as const,
       request: { oldest: plan.window.oldest, newest: plan.window.newest, activity_id: null, stream_types: [], include_defaults: null }, snapshot: snapshot(written) }
     : { ordinal, lane: "streams" as const, endpoint: "activity-streams" as const,
-      request: { oldest: null, newest: null, activity_id: activityIds[ordinal - 3]!,
+      request: { oldest: null, newest: null, activity_id: streamActivityIds[ordinal - 3]!,
         stream_types: [...REFERENCE_CAPTURE_STREAM_TYPES], include_defaults: false as const }, snapshot: snapshot(written) });
   const manifest = validateReferenceCaptureManifest({ schema_version: 1, capture_id: value.capture_id, source: "external-oracle",
     plan, operation_ledger: { link_kind: "capture-id", capture_id: value.capture_id }, endpoints, records,
-    selected_stream_ids: activityIds, captured_stream_ids: activityIds,
+    selected_stream_ids: streamActivityIds, captured_stream_ids: streamActivityIds,
     deterministic_order: { endpoint_ordinals: endpoints.map((endpoint) => endpoint.ordinal),
       settings: records.settings.map((record) => record.external_id), activities: activityIds,
-      wellness: records.wellness.map((record) => record.external_id), streams: activityIds } });
+      wellness: records.wellness.map((record) => record.external_id), streams: streamActivityIds } });
   const manifestPath = join(root, "manifest.json"), inputPath = join(root, "input.json"), conclusionPath = join(root, "conclusion.json");
   await writeFile(manifestPath, serializeReferenceCaptureManifest(manifest), { mode: 0o600 });
   await writeFile(inputPath, `${canonicalJson({ schema_version: 1, manifest_path: manifestPath, archive_root: archiveRoot })}\n`, { mode: 0o600 });
@@ -237,6 +241,48 @@ afterEach(async () => {
 });
 
 describe.sequential("capture-once Reference layer gate", () => {
+  it("preserves manifest order and rejects asymmetric evidence drift", async () => {
+    const base = await seed();
+    const ride = { ...base.activities[0], id: "b", type: "Ride", icu_training_load: 72 };
+    const run = { ...base.activities[1], id: "a", type: "Run", icu_training_load: 72 };
+    const capture = await createSyntheticCapture(await seed({ activities: [ride, run],
+      streams: { b: base.streams["ride-zeta"]!, a: base.streams["ride-alpha"]! } }));
+    const result = await runReferenceCaptureCommand(args(capture));
+    expect(result.exitCode, result.line).toBe(0);
+    expect(result.conclusion!.direct_family_counts).toMatchObject({ activities: 1, streams: 1 });
+    expect(result.conclusion!.projected_family_counts).toMatchObject({ activities: 1, streams: 1 });
+
+    const commandSource = await readFile(new URL("../src/reference-capture-command.ts", import.meta.url), "utf8");
+    expect(commandSource).toMatch(/const bundleProjection = projectCyclingReferenceBundle/);
+    expect(commandSource).toMatch(/bundleProjection\(await payloadSet\.directBundle\(reader\)\)/);
+    expect(commandSource).toMatch(/createLocalBundleProducer\(\{ \.\.\.destination, bundleProjection \}\)/);
+    expect(projectCyclingReferenceBundle.name).toBe("projectCyclingReferenceBundle");
+
+    const activity = (id: string, type: string) => ({ id, type, start_date_local: "1998-06-03T08:00:00",
+      moving_time: 3_600, elapsed_time: 3_660, icu_training_load: 72 });
+    const fixture = (activities: readonly ReturnType<typeof activity>[], eftp: number | null | undefined = undefined) =>
+      buildFixtureShape({ activities, wellness: [], ftpHistory: [], ...(eftp === undefined ? {} : { eftp }) });
+    const frozenNow = "1998-06-04T12:00:00";
+    const rideFixture = fixture([activity("b", "Ride")]), runFixture = fixture([activity("b", "Run")]);
+    for (const [direct, projected] of [[rideFixture, runFixture], [runFixture, rideFixture]] as const) {
+      const comparison = compareReferenceCapture({ direct, projected, frozenNow });
+      expect(comparison.fixtureBytesEqual).toBe(false);
+      expect(comparison.fixtureMismatchFamilies).toEqual(["activities"]);
+    }
+    const nullEftp = fixture([activity("b", "Ride")], null), omittedEftp = fixture([activity("b", "Ride")]);
+    for (const [direct, projected] of [[nullEftp, omittedEftp], [omittedEftp, nullEftp]] as const) {
+      const comparison = compareReferenceCapture({ direct, projected, frozenNow });
+      expect(comparison.fixtureBytesEqual).toBe(false);
+      expect(comparison.fixtureMismatchFamilies).toEqual(["eftp"]);
+    }
+    const reverseOrder = fixture([activity("b", "Ride"), activity("a", "VirtualRide")]);
+    const forwardOrder = fixture([activity("a", "VirtualRide"), activity("b", "Ride")]);
+    expect(compareReferenceCapture({ direct: reverseOrder, projected: forwardOrder, frozenNow }))
+      .toMatchObject({ fixtureBytesEqual: false, fixtureMismatchFamilies: ["activities"] });
+    expect(compareReferenceCapture({ direct: reverseOrder, projected: reverseOrder, frozenNow }))
+      .toMatchObject({ fixtureBytesEqual: true, fixtureMismatchFamilies: [] });
+  });
+
   it("passes a complete synthetic capture without network or input writes", async () => {
     const capture = await createSyntheticCapture(await seed());
     const fs = nodeFileSystem();
