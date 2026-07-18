@@ -1,0 +1,37 @@
+{
+  "name": "@enduragent/engine",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Private coaching engine boundary and sport contract.",
+  "type": "module",
+  "files": ["dist"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./sport": {
+      "types": "./dist/sport.d.ts",
+      "import": "./dist/sport.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@enduragent/coach-contract": "workspace:*",
+    "@enduragent/kernel": "workspace:*",
+    "ai": "^6.0.158",
+    "intervals-icu-api": "^0.1.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "tsup": "^8.4.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
+  },
+  "license": "MIT"
+}
