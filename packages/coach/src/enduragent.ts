@@ -80,6 +80,7 @@ import {
   type LocalCoachRunResult,
   type WithLocalCoachInput,
 } from "./local-runner.js";
+import { serializeBoundaryError } from "./daemon/error-boundary.js";
 import { CoachStoreWriterError } from "./runtime.js";
 import { runCoachServe } from "./serve.js";
 
@@ -1166,7 +1167,7 @@ async function runPreparedVerb(
       action: { kind: "resume", isTTY: input.terminal.isTTY },
       operation: async (lifecycle) =>
         runWithOwnedTransport(
-          createLocalCoachVerbTransport(lifecycle.engine),
+          createLocalCoachVerbTransport(lifecycle.engine, serializeBoundaryError),
           request,
           invocation,
           input.terminal,

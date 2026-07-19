@@ -33,6 +33,7 @@ import {
   HANDOFF_CAPABILITY_BYTES,
   type MonotonicTimer,
 } from "./upgrade-fence.js";
+import { serializeBoundaryError } from "./error-boundary.js";
 
 const AUTH_TIMEOUT_MS = 1_000;
 const MAX_PAYLOAD_BYTES = 1_048_576;
@@ -270,6 +271,20 @@ function ordinaryError(id: JsonRpcId, code: number, message: string): string {
       jsonrpc: "2.0",
       id,
       error: { code, message },
+    }),
+  );
+}
+
+function internalError(id: JsonRpcId, error: unknown): string {
+  return serializeCoachRpcEnvelope(
+    JsonRpcErrorResponseEnvelopeSchema.parse({
+      jsonrpc: "2.0",
+      id,
+      error: {
+        code: -32603,
+        message: "Internal error",
+        data: serializeBoundaryError(error),
+      },
     }),
   );
 }
@@ -557,8 +572,8 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
     }
     state.activeIds.add(key);
     const task = (async () => {
-      let invocationFailed = false;
-      let eventFailed = false;
+      let invocationFailure: { readonly error: unknown } | undefined;
+      let eventFailure: { readonly error: unknown } | undefined;
       let deliveryDetached = false;
       let result: unknown;
       try {
@@ -572,7 +587,7 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                 key: request.chatId,
                 signal: state.detachController.signal,
                 run: () => input.engine.chat(request, (event) => {
-                  if (eventFailed) return;
+                  if (eventFailure !== undefined) return;
                   try {
                     const parsedEvent = COACH_RPC_METHOD_REGISTRY.chat.eventSchema.parse(event);
                     const notification = CoachTurnEventNotificationEnvelopeSchema.parse({
@@ -586,14 +601,14 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                       },
                     });
                     void enqueueSerialized(state, serializeCoachRpcEnvelope(notification));
-                  } catch {
-                    eventFailed = true;
+                  } catch (error) {
+                    eventFailure = { error };
                   }
                 }),
               });
             } catch (error) {
               if (error instanceof DetachedSessionRequestError) deliveryDetached = true;
-              else invocationFailed = true;
+              else invocationFailure = { error };
             }
             break;
           case "resetSession":
@@ -602,8 +617,8 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                 generic.data.params,
               );
               result = await input.engine.resetSession(request);
-            } catch {
-              invocationFailed = true;
+            } catch (error) {
+              invocationFailure = { error };
             }
             break;
           case "hasSession":
@@ -612,27 +627,28 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                 generic.data.params,
               );
               result = await input.engine.hasSession(request);
-            } catch {
-              invocationFailed = true;
+            } catch (error) {
+              invocationFailure = { error };
             }
             break;
           case "getAthleteState":
             try {
               COACH_RPC_METHOD_REGISTRY.getAthleteState.requestSchema.parse(generic.data.params);
               result = await input.engine.getAthleteState();
-            } catch {
-              invocationFailed = true;
+            } catch (error) {
+              invocationFailure = { error };
             }
             break;
         }
         if (deliveryDetached) return;
         let terminal: string;
-        if (invocationFailed || eventFailed) {
-          terminal = ordinaryError(generic.data.id, -32603, "Internal error");
+        const failure = invocationFailure ?? eventFailure;
+        if (failure !== undefined) {
+          terminal = internalError(generic.data.id, failure.error);
         } else {
           const response = registry.responseSchema.safeParse(result);
           if (!response.success) {
-            terminal = ordinaryError(generic.data.id, -32603, "Internal error");
+            terminal = internalError(generic.data.id, response.error);
           } else {
             try {
               terminal = serializeCoachRpcEnvelope(
@@ -642,8 +658,8 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                   result: response.data,
                 }),
               );
-            } catch {
-              terminal = ordinaryError(generic.data.id, -32603, "Internal error");
+            } catch (error) {
+              terminal = internalError(generic.data.id, error);
             }
           }
         }

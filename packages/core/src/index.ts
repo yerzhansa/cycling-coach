@@ -49,6 +49,8 @@ export { appendUsageLine, USAGE_LEDGER_FILE, USAGE_LEDGER_MAX_BYTES } from "./us
 export {
   createSubsystemLogger,
   createSubsystemLoggers,
+  redactObject,
+  REDACTION_SENTINEL,
   serializeError,
   LOG_LEVELS,
   normalizeLogLevel,
