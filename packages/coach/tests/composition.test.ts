@@ -162,15 +162,20 @@ function runtime(
   } = {},
 ): LocalStoreRuntime {
   const ledger = createPhysicalRequestLedger({ storeLimit: 64, legacyLimit: 15, totalLimit: 79 });
+  const runWindow =
+    options.runWindow ??
+    (async () => {
+      trace.push("run-window");
+      return { published: true, counts: ledger.snapshot(), legacySucceeded: true };
+    });
   return {
     athleteData: athleteData(),
     attemptLedgerForRun: () => ledger,
-    runWindow:
-      options.runWindow ??
-      (async () => {
-        trace.push("run-window");
-        return { published: true, counts: ledger.snapshot(), legacySucceeded: true };
-      }),
+    runWindow,
+    async runWindowAfter(work) {
+      await work(new AbortController().signal);
+      return runWindow();
+    },
     startScheduler() {
       trace.push("start-scheduler");
     },
@@ -595,6 +600,51 @@ describe("local coach composition", () => {
       apiKey: "placeholder",
       athleteId: "athlete-b",
     });
+    await lifecycle.close();
+  });
+
+  it("passes the live intervals authority and one deterministic UTC history date into sync", async () => {
+    const home = await freshHome();
+    const context = fakeContext(home);
+    const selectedRuntime = runtime();
+    const backfill = vi.fn(async () => ({ pages: 1, artifacts: 0, reports: [] }));
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => selectedRuntime,
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+        now: () => Date.parse("1998-07-18T23:59:59.000Z"),
+        operationsDependencies: { backfill },
+      },
+      context,
+      { apiKey: String.fromCharCode(111, 108, 100), athleteId: "stale-athlete" },
+    );
+    await lifecycle.operations.configureRuntime({
+      intervals: { api_key: String.fromCharCode(110, 101, 119), athlete_id: "live-athlete" },
+    });
+    await expect(lifecycle.operations.sync({})).resolves.toMatchObject({
+      published: true,
+      referenceSucceeded: true,
+    });
+    expect(backfill).toHaveBeenCalledTimes(1);
+    expect(backfill).toHaveBeenCalledWith({
+      home,
+      store: context.store,
+      apiKey: String.fromCharCode(110, 101, 119),
+      athleteId: "live-athlete",
+      historyNewestDate: "1998-07-18",
+      signal: expect.any(AbortSignal),
+    });
+    expect(backfill).not.toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: String.fromCharCode(111, 108, 100) }),
+    );
+    expect(JSON.stringify(backfill.mock.calls)).not.toContain("stale-athlete");
     await lifecycle.close();
   });
 

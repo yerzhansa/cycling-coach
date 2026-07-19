@@ -26,18 +26,24 @@ import {
   type AuthoredIdentity,
 } from "@enduragent/kernel-node/home";
 import { importFilesWithReport } from "@enduragent/kernel-node/ingest";
+import { runIntervalsBackfillInWriter } from "./backfill.js";
 import type { LocalStoreRuntime } from "./composition.js";
 import type { CoachStoreWriterContext } from "./runtime.js";
 
 export interface CreateCoachOperationsInput {
   readonly home: AthleteHome;
   readonly context: CoachStoreWriterContext;
-  readonly runtime: Pick<LocalStoreRuntime, "runWindow">;
+  readonly runtime: Pick<LocalStoreRuntime, "runWindowAfter">;
+  readonly intervalsCredentials: Readonly<{
+    read(): Promise<Readonly<{ apiKey: string; athleteId: string }>>;
+  }>;
+  readonly historyNewestDate: string;
   readonly applyRuntimeConfig: (request: ConfigureRuntimeRpcParams) => Promise<void>;
 }
 
 export interface CoachOperationsDependencies {
   readonly importFiles?: typeof importFilesWithReport;
+  readonly backfill?: typeof runIntervalsBackfillInWriter;
   readonly createIdentity?: (configDir: string) => AuthoredIdentity;
   readonly createIntakeRepository?: typeof createIntakeRepository;
 }
@@ -63,6 +69,7 @@ export function createCoachOperations(
   const identity = (dependencies.createIdentity ?? createAuthoredIdentity)(input.home.configDir);
   const intake = (dependencies.createIntakeRepository ?? createIntakeRepository)(store);
   const importFiles = dependencies.importFiles ?? importFilesWithReport;
+  const backfill = dependencies.backfill ?? runIntervalsBackfillInWriter;
   let tail = Promise.resolve();
 
   const enqueue = <T>(operation: () => Promise<T>): Promise<T> => {
@@ -113,7 +120,18 @@ export function createCoachOperations(
       SyncRpcParamsSchema.parse(request);
       return enqueue(async () => {
         deliver(onEvent, { phase: "started", completed: 0, total: 1 });
-        const window = await input.runtime.runWindow();
+        const window = await input.runtime.runWindowAfter(async (signal) => {
+          const credentials = await input.intervalsCredentials.read();
+          if (credentials.apiKey.length === 0) return;
+          await backfill({
+            home: input.home,
+            store: input.context.store,
+            apiKey: credentials.apiKey,
+            athleteId: credentials.athleteId === "" ? "0" : credentials.athleteId,
+            historyNewestDate: input.historyNewestDate,
+            signal,
+          });
+        });
         const result = SyncRpcResultSchema.parse({
           schemaVersion: 1,
           published: window.published,

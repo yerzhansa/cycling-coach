@@ -14,6 +14,7 @@ import type { ArchiveInstant, ArchiveManager, ArchiveWriteResult } from "@endura
 import type { ImportArtifact, ImportReport, ImportReportDeps, PairDiagnostic, PlatformImportArtifact } from "@enduragent/kernel/ingest";
 import { createSyncStateRepository, dumpStore, type PhysicalRequestLedger, type SourceArtifactDraft, type SqlStore, type SyncBudget } from "@enduragent/kernel/store";
 import { createNodeImportRuntime, type NodeImportRuntime } from "@enduragent/kernel-node/ingest";
+import type { AthleteHome } from "@enduragent/kernel-node/home";
 import {
   createIntervalsIcuSource,
   REQUEST_ATTEMPTS,
@@ -269,24 +270,39 @@ export interface RunIntervalsBackfillOptions {
   readonly onPageCommitted?: RunBackfillPagesOptions["onPageCommitted"];
 }
 
+export interface RunIntervalsBackfillInWriterOptions
+  extends Omit<RunIntervalsBackfillOptions, "env"> {
+  readonly home: AthleteHome;
+  readonly store: SqlStore & {
+    transaction<T>(work: () => Promise<T>): Promise<T>;
+  };
+}
+
 const productionClock: BackfillClock = Object.freeze({ now: () => Date.now(), monotonicNow: () => performance.now() });
 const sleepAbortably = (ms: number, signal: AbortSignal): Promise<void> =>
   setTimeoutPromise(ms, undefined, { signal }).then(() => undefined);
 
-export function runIntervalsBackfill(options: RunIntervalsBackfillOptions): Promise<BackfillRunResult> {
+export function runIntervalsBackfillInWriter(
+  options: RunIntervalsBackfillInWriterOptions,
+): Promise<BackfillRunResult> {
   const requestIntervalMs = configured(options.requestIntervalMs, DEFAULT_REQUEST_INTERVAL_MS, 250, 60_000, "request interval");
   const clock = options.clock ?? productionClock, sleep = options.sleep ?? sleepAbortably;
-  return withCoachStoreWriter(options.env, async ({ home, store }) => {
-    const node = createNodeImportRuntime({ archiveDir: home.archiveDir, store });
-    const source = createIntervalsBackfillSource({ apiKey: options.apiKey, athleteId: options.athleteId,
-      historyNewestDate: options.historyNewestDate, minRequestIntervalMs: requestIntervalMs, archive: node.archive,
-      clock, sleep, ...(options.baseFetch === undefined ? {} : { baseFetch: options.baseFetch }) });
-    return runBackfillPages({ store, node, source, clock,
-      ...(options.signal === undefined ? {} : { signal: options.signal }), ...(options.batchSize === undefined ? {} : { batchSize: options.batchSize }),
-      ...(options.perRequestTimeoutMs === undefined ? {} : { perRequestTimeoutMs: options.perRequestTimeoutMs }),
-      ...(options.backfillPageDeadlineMs === undefined ? {} : { backfillPageDeadlineMs: options.backfillPageDeadlineMs }),
-      ...(options.measurePhase === undefined ? {} : { measurePhase: options.measurePhase }),
-      ...(options.onPageCommitted === undefined ? {} : { onPageCommitted: options.onPageCommitted }) });
+  const node = createNodeImportRuntime({ archiveDir: options.home.archiveDir, store: options.store });
+  const source = createIntervalsBackfillSource({ apiKey: options.apiKey, athleteId: options.athleteId,
+    historyNewestDate: options.historyNewestDate, minRequestIntervalMs: requestIntervalMs, archive: node.archive,
+    clock, sleep, ...(options.baseFetch === undefined ? {} : { baseFetch: options.baseFetch }) });
+  return runBackfillPages({ store: options.store, node, source, clock,
+    ...(options.signal === undefined ? {} : { signal: options.signal }), ...(options.batchSize === undefined ? {} : { batchSize: options.batchSize }),
+    ...(options.perRequestTimeoutMs === undefined ? {} : { perRequestTimeoutMs: options.perRequestTimeoutMs }),
+    ...(options.backfillPageDeadlineMs === undefined ? {} : { backfillPageDeadlineMs: options.backfillPageDeadlineMs }),
+    ...(options.measurePhase === undefined ? {} : { measurePhase: options.measurePhase }),
+    ...(options.onPageCommitted === undefined ? {} : { onPageCommitted: options.onPageCommitted }) });
+}
+
+export function runIntervalsBackfill(options: RunIntervalsBackfillOptions): Promise<BackfillRunResult> {
+  const { env, ...inWriterOptions } = options;
+  return withCoachStoreWriter(env, ({ home, store }) => {
+    return runIntervalsBackfillInWriter({ ...inWriterOptions, home, store });
   });
 }
 

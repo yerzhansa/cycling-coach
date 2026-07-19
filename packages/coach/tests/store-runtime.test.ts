@@ -5,10 +5,16 @@ import type { Config, ReferenceRuntime } from "@enduragent/core";
 import type { ReferenceCaptureManifest } from "@enduragent/kernel/reference/capture";
 import type { ProducedLocalBundle } from "@enduragent/kernel/reference/local-bundle";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createStoreRuntime, STORE_REFRESH_INTERVAL_MS, type StoreRuntime } from "../src/store-runtime.js";
+import {
+  createStoreRuntime,
+  STORE_REFRESH_INTERVAL_MS,
+  type StoreRuntime,
+} from "../src/store-runtime.js";
 
 const roots: string[] = [];
-afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+afterEach(async () => {
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+});
 
 const config: Config = {
   dataSource: "store", llm: { provider: "openai-codex", model: "gpt-5.4", apiKey: "" },
@@ -16,28 +22,53 @@ const config: Config = {
   session: { historyTokenBudgetRatio: 0.3, idleMinutes: 0, dailyResetHour: 4,
     resetArchiveRetentionDays: 0, timezone: "UTC" }, contextWindowTokens: 1000, dataDir: "unused",
 };
-const manifest = { capture_id: "12345678-1234-4123-8123-123456789abc",
-  plan: { frozenNow: "1998-07-18T12:00:00.000Z" } } as ReferenceCaptureManifest;
-const produced: ProducedLocalBundle = { captureId: manifest.capture_id, frozenNow: manifest.plan.frozenNow,
-  bundle: { activities: [], wellness: [], ftpHistory: [], athlete: { sportSettings: [] } } };
+const manifest = {
+  capture_id: "12345678-1234-4123-8123-123456789abc",
+  plan: { frozenNow: "1998-07-18T12:00:00.000Z" },
+} as ReferenceCaptureManifest;
+const produced: ProducedLocalBundle = {
+  captureId: manifest.capture_id,
+  frozenNow: manifest.plan.frozenNow,
+  bundle: { activities: [], wellness: [], ftpHistory: [], athlete: { sportSettings: [] } },
+};
 
 async function makeRuntime(runtimeConfig: Config = config, readConfig?: () => Config) {
-  const root = await mkdtemp(join(await realpath(tmpdir()), "store-runtime-")); roots.push(root);
+  const root = await mkdtemp(join(await realpath(tmpdir()), "store-runtime-"));
+  roots.push(root);
   let runtime!: StoreRuntime;
-  const reference = { scheduler: { stop: vi.fn() }, services: {},
+  const reference = {
+    scheduler: { stop: vi.fn() },
+    services: {},
     runScheduledOnce: vi.fn(async () => {
       runtime.attemptLedgerForRun().charge("legacy", "legacy:reference");
       return { kind: "ran", lastSyncAt: "1998-07-18T12:00:00.000Z", refreshed: [] } as const;
-    }) } as unknown as ReferenceRuntime;
-  const capture = vi.fn(async (options: Parameters<typeof import("../src/capture.js").runReferenceCapture>[0]) => {
-    options.attemptLedger!.charge("store", "store:settings");
-    return manifest;
-  });
+    }),
+  } as unknown as ReferenceRuntime;
+  const capture = vi.fn(
+    async (options: Parameters<typeof import("../src/capture.js").runReferenceCapture>[0]) => {
+      options.attemptLedger!.charge("store", "store:settings");
+      return manifest;
+    },
+  );
   const produce = vi.fn(async () => produced);
-  runtime = createStoreRuntime({ env: {}, config: runtimeConfig, readConfig, home: { root, storeDir: join(root, "store"),
-    archiveDir: join(root, "archive"), configDir: join(root, "config") }, reference,
-    dependencies: { capture, produce,
-      now: () => new Date("1998-07-18T12:00:00.000Z"), monotonicNow: () => 1 } });
+  runtime = createStoreRuntime({
+    env: {},
+    config: runtimeConfig,
+    readConfig,
+    home: {
+      root,
+      storeDir: join(root, "store"),
+      archiveDir: join(root, "archive"),
+      configDir: join(root, "config"),
+    },
+    reference,
+    dependencies: {
+      capture,
+      produce,
+      now: () => new Date("1998-07-18T12:00:00.000Z"),
+      monotonicNow: () => 1,
+    },
+  });
   return { runtime, capture, produce, reference };
 }
 
@@ -153,6 +184,102 @@ describe("StoreRuntime", () => {
     await runtime.close();
     await runtime.close();
     expect(clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles an active window before exclusive work and coalesces refreshes behind it", async () => {
+    const { runtime, capture, reference } = await makeRuntime();
+    let releaseWindow!: () => void;
+    let captureCalls = 0;
+    capture.mockImplementation(async () => {
+      captureCalls += 1;
+      if (captureCalls === 1) {
+        await new Promise<void>((resolve) => {
+          releaseWindow = resolve;
+        });
+      }
+      return manifest;
+    });
+    const active = runtime.runWindow();
+    while (releaseWindow === undefined) await Promise.resolve();
+    let releaseWork!: () => void;
+    let markWorkStarted!: () => void;
+    const workStarted = new Promise<void>((resolve) => {
+      markWorkStarted = resolve;
+    });
+    const trace: string[] = [];
+    const after = runtime.runWindowAfter(async () => {
+      trace.push("work");
+      markWorkStarted();
+      await new Promise<void>((resolve) => {
+        releaseWork = resolve;
+      });
+    });
+    await Promise.resolve();
+    expect(trace).toEqual([]);
+    releaseWindow();
+    await active;
+    await workStarted;
+    const manual = runtime.runWindow();
+    expect(manual).toBe(after);
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(reference.runScheduledOnce).toHaveBeenCalledTimes(1);
+    releaseWork();
+    await expect(after).resolves.toMatchObject({ published: true });
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(reference.runScheduledOnce).toHaveBeenCalledTimes(2);
+    await runtime.close();
+  });
+
+  it("does not let failed work poison a later exclusive admission", async () => {
+    const { runtime, capture } = await makeRuntime();
+    await expect(
+      runtime.runWindowAfter(async () => {
+        throw new Error("synthetic work failure");
+      }),
+    ).rejects.toThrow("synthetic work failure");
+    expect(capture).not.toHaveBeenCalled();
+    await expect(runtime.runWindowAfter(async () => {})).resolves.toMatchObject({
+      published: true,
+    });
+    expect(capture).toHaveBeenCalledTimes(1);
+    await expect(runtime.runWindowAfter(null as never)).rejects.toThrow(
+      "Window work must be a function.",
+    );
+    await runtime.close();
+  });
+
+  it("aborts and drains pre-window work on close without starting the internal refresh", async () => {
+    const { runtime, capture, reference } = await makeRuntime();
+    let signal!: AbortSignal;
+    let settlements = 0;
+    const window = runtime.runWindowAfter(
+      (selectedSignal) =>
+        new Promise<void>((_, reject) => {
+          signal = selectedSignal;
+          selectedSignal.addEventListener(
+            "abort",
+            () => {
+              settlements += 1;
+              reject(selectedSignal.reason);
+            },
+            { once: true },
+          );
+        }),
+    );
+    while (signal === undefined) await Promise.resolve();
+    const rejectedWindow = expect(window).rejects.toThrow("Store runtime closed.");
+    const firstClose = runtime.close();
+    const secondClose = runtime.close();
+    expect(signal.aborted).toBe(true);
+    await expect(firstClose).resolves.toBeUndefined();
+    await expect(secondClose).resolves.toBeUndefined();
+    await rejectedWindow;
+    expect(settlements).toBe(1);
+    expect(capture).not.toHaveBeenCalled();
+    expect(reference.runScheduledOnce).not.toHaveBeenCalled();
+    await expect(runtime.runWindowAfter(async () => {})).rejects.toThrow(
+      "Store runtime is closed.",
+    );
   });
 
   it("cancels an active window when closed and rejects later windows", async () => {

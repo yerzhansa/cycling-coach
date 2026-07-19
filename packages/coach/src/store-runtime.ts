@@ -70,6 +70,7 @@ export class StoreRuntime {
   private snapshotValue: ProducedLocalBundle | undefined;
   private activeLedger: PhysicalRequestLedger | undefined;
   private activeController: AbortController | undefined;
+  private activeBeforeWindowController: AbortController | undefined;
   private activeWindow: Promise<StoreWindowResult> | undefined;
   private closed = false;
 
@@ -139,6 +140,55 @@ export class StoreRuntime {
     return task;
   }
 
+  runWindowAfter(work: (signal: AbortSignal) => Promise<void>): Promise<StoreWindowResult> {
+    if (typeof work !== "function")
+      return Promise.reject(new TypeError("Window work must be a function."));
+    if (this.closed) return Promise.reject(new Error("Store runtime is closed."));
+    if (this.activeWindow !== undefined) {
+      const active = this.activeWindow;
+      const task = active.then(
+        () => this.runBeforeWindow(work),
+        () => this.runBeforeWindow(work),
+      );
+      this.installActiveWindow(task);
+      return task;
+    }
+    const task = this.runBeforeWindow(work);
+    this.installActiveWindow(task);
+    return task;
+  }
+
+  private runBeforeWindow(
+    work: (signal: AbortSignal) => Promise<void>,
+  ): Promise<StoreWindowResult> {
+    if (this.closed) return Promise.reject(new Error("Store runtime is closed."));
+    const controller = new AbortController();
+    const task = Promise.resolve()
+      .then(() => work(controller.signal))
+      .then(() => {
+        if (controller.signal.aborted) throw controller.signal.reason;
+        return this.runWindowInternal();
+      });
+    this.activeBeforeWindowController = controller;
+    void task
+      .finally(() => {
+        if (this.activeBeforeWindowController === controller) {
+          this.activeBeforeWindowController = undefined;
+        }
+      })
+      .catch(() => {});
+    return task;
+  }
+
+  private installActiveWindow(task: Promise<StoreWindowResult>): void {
+    this.activeWindow = task;
+    void task
+      .finally(() => {
+        if (this.activeWindow === task) this.activeWindow = undefined;
+      })
+      .catch(() => {});
+  }
+
   private async runWindowInternal(): Promise<StoreWindowResult> {
     const ledger = createPhysicalRequestLedger({ storeLimit: 64, legacyLimit: 15, totalLimit: 79 });
     const controller = new AbortController();
@@ -202,6 +252,7 @@ export class StoreRuntime {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.activeBeforeWindowController?.abort(new Error("Store runtime closed."));
     this.activeController?.abort(new Error("Store runtime closed."));
     await this.scheduler.close();
     try {

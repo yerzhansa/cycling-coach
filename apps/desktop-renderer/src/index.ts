@@ -9,6 +9,7 @@ import type { TurnEvent } from "@enduragent/coach-contract";
 import { createOnboardingBridge } from "./onboarding/bridge.js";
 import { mountOnboarding } from "./onboarding/mount.js";
 import "./onboarding/onboarding.css";
+import { createFirstSyncController, type FirstSyncState } from "./first-sync.js";
 import { createChatTurn, reduceChatTurn, type ChatTurnState } from "./turn-state.js";
 
 const DESKTOP_CHAT_ID = "desktop" as const;
@@ -20,20 +21,7 @@ const drawer = document.querySelector<HTMLElement>(".drawer")!;
 const drawerToggle = document.querySelector<HTMLButtonElement>(".drawer-toggle")!;
 const drawerClose = document.querySelector<HTMLButtonElement>(".drawer-close")!;
 const topbar = document.querySelector<HTMLElement>(".topbar")!;
-
-const setup = document.createElement("button");
-setup.type = "button";
-setup.className = "setup-button";
-setup.textContent = "Setup";
-topbar.insertBefore(setup, topbar.lastElementChild);
-const onboarding = mountOnboarding({
-  document,
-  bridge: createOnboardingBridge(),
-  opener: setup,
-  onComplete: () => message.focus(),
-});
-setup.addEventListener("click", () => void onboarding.open());
-void onboarding.open();
+thread.closest("main")?.classList.add("desktop-shell");
 
 let connectionMaterialPromise: ReturnType<EnduragentAuth["getDaemonConnection"]> | undefined;
 let clientPromise: Promise<CoachClient> | undefined;
@@ -64,6 +52,101 @@ function coachClient(): Promise<CoachClient> {
   clientPromise ??= connectionMaterial().then((connection) => connectCoachClient(connection));
   return clientPromise;
 }
+
+let firstSyncElement: HTMLElement | undefined;
+let firstSyncController: ReturnType<typeof createFirstSyncController>;
+
+function renderFirstSync(state: FirstSyncState): void {
+  if (state.status === "idle") {
+    firstSyncElement?.remove();
+    firstSyncElement = undefined;
+    return;
+  }
+  const section = firstSyncElement ?? document.createElement("section");
+  section.className = "first-sync";
+  section.dataset.state = state.status;
+  section.setAttribute("aria-labelledby", "first-sync-title");
+  section.replaceChildren();
+  const mark = document.createElement("div");
+  mark.className = "first-sync__mark";
+  mark.setAttribute("aria-hidden", "true");
+  const body = document.createElement("div");
+  body.className = "first-sync__body";
+  const eyebrow = document.createElement("p");
+  eyebrow.className = "first-sync__eyebrow";
+  eyebrow.textContent = "Getting your coach ready";
+  const title = document.createElement("h2");
+  title.id = "first-sync-title";
+  const detail = document.createElement("p");
+  detail.className = "first-sync__detail";
+  if (state.status === "syncing") {
+    title.textContent = "Syncing your training history…";
+    detail.textContent =
+      "You can keep Enduragent open while rides, wellness, and calendar data are added.";
+    const track = document.createElement("div");
+    track.className = "first-sync__track";
+    track.setAttribute("role", "progressbar");
+    track.setAttribute("aria-label", "Syncing training history");
+    body.append(eyebrow, title, detail, track);
+  } else if (state.status === "ready") {
+    title.textContent = "Training history is ready";
+    detail.textContent = "Your coach is ready when you are.";
+    body.append(eyebrow, title, detail);
+  } else if (state.kind === "protocol") {
+    title.textContent = "Enduragent needs to reconnect safely";
+    detail.textContent = "Quit and reopen Enduragent.";
+    body.append(eyebrow, title, detail);
+  } else {
+    title.textContent = "We couldn’t finish syncing";
+    detail.textContent = "Your saved progress is safe.";
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "first-sync__retry";
+    retry.textContent = "Retry sync";
+    retry.addEventListener("click", () => {
+      retry.disabled = true;
+      void firstSyncController.retry();
+    });
+    body.append(eyebrow, title, detail, retry);
+  }
+  section.append(mark, body);
+  if (firstSyncElement === undefined) thread.append(section);
+  firstSyncElement = section;
+}
+
+firstSyncController = createFirstSyncController({
+  async callSync(options) {
+    try {
+      const client = await coachClient();
+      return await client.call("sync", {}, options);
+    } catch (error) {
+      if (!(error instanceof CoachClientProtocolError)) {
+        clientPromise = undefined;
+        connectionMaterialPromise = undefined;
+      }
+      throw error;
+    }
+  },
+  focusComposer() {
+    message.focus();
+  },
+  render: renderFirstSync,
+});
+
+const setup = document.createElement("button");
+setup.type = "button";
+setup.className = "setup-button";
+setup.textContent = "Setup";
+topbar.insertBefore(setup, topbar.lastElementChild);
+const onboarding = mountOnboarding({
+  document,
+  bridge: createOnboardingBridge(),
+  opener: setup,
+  onComplete: (completion) => void firstSyncController.start(completion),
+});
+setup.addEventListener("click", () => void onboarding.open());
+window.addEventListener("pagehide", () => firstSyncController.dispose(), { once: true });
+void onboarding.open();
 
 function setDrawerOpen(open: boolean): void {
   drawer.classList.toggle("open", open);
@@ -98,7 +181,8 @@ function createTurnRow(
   if (includeUser) row.append(appendMessage("message user-message", state.userText));
   const assistant = appendMessage("message assistant-message", "");
   row.append(assistant);
-  thread.append(row);
+  if (firstSyncElement === undefined) thread.append(row);
+  else thread.insertBefore(row, firstSyncElement);
   row.scrollIntoView({ block: "end" });
   return { row, assistant };
 }
