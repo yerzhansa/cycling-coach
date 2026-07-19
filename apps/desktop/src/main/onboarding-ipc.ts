@@ -1,0 +1,157 @@
+import { extname, isAbsolute } from "node:path";
+import type { ConfigureRuntimeRpcParams, LlmProvider } from "@enduragent/coach-contract";
+import type { BrowserWindow, IpcMain, IpcMainInvokeEvent, OpenDialogOptions } from "electron";
+import {
+  DESKTOP_CREDENTIAL_SLOTS,
+  type CredentialSlotStatus,
+  type CredentialVault,
+  type CredentialWriteResult,
+  type DesktopCredentialSlot,
+} from "./credential-vault.js";
+
+export const DESKTOP_CREDENTIAL_STATUS_CHANNEL = "enduragent:onboarding:credential-status" as const;
+export const DESKTOP_CREDENTIAL_WRITE_CHANNEL = "enduragent:onboarding:credential-write" as const;
+export const DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL =
+  "enduragent:onboarding:choose-import-files" as const;
+
+export interface OnboardingDialogPort {
+  showOpenDialog(
+    window: BrowserWindow,
+    options: OpenDialogOptions,
+  ): Promise<{ readonly canceled: boolean; readonly filePaths: readonly string[] }>;
+}
+
+interface RegisterOnboardingIpcOptions {
+  readonly ipcMain: IpcMain;
+  readonly dialog: OnboardingDialogPort;
+  readonly window: BrowserWindow;
+  readonly vault: CredentialVault;
+  readonly isTrusted: (event: IpcMainInvokeEvent) => boolean;
+}
+
+const SUPPORTED_EXTENSIONS = new Set([".fit", ".tcx", ".gpx"]);
+
+const DEFAULT_MODEL_BY_SLOT: Readonly<
+  Record<Exclude<DesktopCredentialSlot, "intervals-icu">, string>
+> = {
+  anthropic: "claude-sonnet-4-6",
+  openrouter: "deepseek/deepseek-v4-flash",
+  openai: "gpt-5.5",
+  google: "gemini-3.5-flash",
+  deepseek: "deepseek-v4-flash",
+  qwen: "qwen3.5-plus",
+  minimax: "MiniMax-M2.7",
+  kimi: "kimi-k2.6",
+  zai: "glm-4.7",
+};
+
+export function runtimeConfigurationForCredential(
+  slot: DesktopCredentialSlot,
+  value: string,
+): ConfigureRuntimeRpcParams {
+  if (slot === "intervals-icu") {
+    return { intervals: { api_key: value, athlete_id: "0" } };
+  }
+  return {
+    llm: {
+      provider: slot satisfies LlmProvider,
+      model: DEFAULT_MODEL_BY_SLOT[slot],
+      api_key: value,
+    },
+  };
+}
+
+function isSlot(value: unknown): value is DesktopCredentialSlot {
+  return (
+    typeof value === "string" && (DESKTOP_CREDENTIAL_SLOTS as readonly string[]).includes(value)
+  );
+}
+
+function parseWriteInput(value: unknown): {
+  readonly slot: DesktopCredentialSlot;
+  readonly value: string;
+} {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError();
+  const input = value as Record<string, unknown>;
+  if (
+    Object.keys(input).length !== 2 ||
+    !Object.hasOwn(input, "slot") ||
+    !Object.hasOwn(input, "value") ||
+    !isSlot(input.slot) ||
+    typeof input.value !== "string"
+  ) {
+    throw new TypeError();
+  }
+  return { slot: input.slot, value: input.value };
+}
+
+function minimizeStatuses(value: readonly CredentialSlotStatus[]): readonly CredentialSlotStatus[] {
+  return value.map((entry) => ({
+    slot: entry.slot,
+    state: entry.state,
+    runtimeReady: entry.runtimeReady,
+  }));
+}
+
+function minimizeWrite(value: CredentialWriteResult): CredentialWriteResult {
+  if (value.status === "configured") {
+    return { slot: value.slot, status: "configured", runtimeReady: true };
+  }
+  return { slot: value.slot, status: "refused", reason: value.reason };
+}
+
+export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): () => void {
+  const requireTrusted = (event: IpcMainInvokeEvent): void => {
+    if (!options.isTrusted(event)) throw new TypeError();
+  };
+  options.ipcMain.handle(DESKTOP_CREDENTIAL_STATUS_CHANNEL, async (event, ...args) => {
+    requireTrusted(event);
+    if (args.length !== 0) throw new TypeError();
+    try {
+      await options.vault.reapplyConfigured();
+      return minimizeStatuses(await options.vault.credentialStatuses());
+    } catch {
+      return DESKTOP_CREDENTIAL_SLOTS.map((slot) => ({
+        slot,
+        state: "re-prompt" as const,
+        runtimeReady: false,
+      }));
+    }
+  });
+  options.ipcMain.handle(DESKTOP_CREDENTIAL_WRITE_CHANNEL, async (event, ...args) => {
+    requireTrusted(event);
+    if (args.length !== 1) throw new TypeError();
+    const input = parseWriteInput(args[0]);
+    try {
+      return minimizeWrite(await options.vault.writeCredential(input));
+    } catch {
+      return { slot: input.slot, status: "refused", reason: "storage-failed" };
+    }
+  });
+  options.ipcMain.handle(DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL, async (event, ...args) => {
+    requireTrusted(event);
+    if (args.length !== 0) throw new TypeError();
+    let result: Awaited<ReturnType<OnboardingDialogPort["showOpenDialog"]>>;
+    try {
+      result = await options.dialog.showOpenDialog(options.window, {
+        properties: ["openFile", "multiSelections"],
+        filters: [{ name: "Ride files", extensions: ["fit", "tcx", "gpx"] }],
+      });
+    } catch {
+      return [];
+    }
+    if (result.canceled) return [];
+    return result.filePaths.filter(
+      (path) =>
+        typeof path === "string" &&
+        path.length <= 4_096 &&
+        isAbsolute(path) &&
+        SUPPORTED_EXTENSIONS.has(extname(path).toLowerCase()),
+    );
+  });
+  return () => {
+    options.ipcMain.removeHandler(DESKTOP_CREDENTIAL_STATUS_CHANNEL);
+    options.ipcMain.removeHandler(DESKTOP_CREDENTIAL_WRITE_CHANNEL);
+    options.ipcMain.removeHandler(DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL);
+  };
+}

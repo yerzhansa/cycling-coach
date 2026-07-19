@@ -1,8 +1,19 @@
 import { writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, ipcMain, session, utilityProcess } from "electron";
+import { connectCoachClient } from "@enduragent/coach-client";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  safeStorage,
+  session,
+  utilityProcess,
+} from "electron";
 import { DESKTOP_CONNECTION_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
+import { CREDENTIAL_DIRECTORY_NAME, createCredentialVault } from "./credential-vault.js";
+import { registerOnboardingIpc, runtimeConfigurationForCredential } from "./onboarding-ipc.js";
 import {
   desktopWindowOptions,
   hardenDesktopWindow,
@@ -51,6 +62,7 @@ async function runDesktop(): Promise<void> {
   let quitting = false;
   let protocolInstalled = false;
   let connectionHandlerInstalled = false;
+  let disposeOnboarding: (() => void) | undefined;
   let shutdownPromise: Promise<void> | undefined;
   const shutdown = (): Promise<void> => {
     shutdownPromise ??= (async () => {
@@ -59,6 +71,8 @@ async function runDesktop(): Promise<void> {
         ipcMain.removeHandler(DESKTOP_CONNECTION_CHANNEL);
         connectionHandlerInstalled = false;
       }
+      disposeOnboarding?.();
+      disposeOnboarding = undefined;
       if (protocolInstalled) {
         session.defaultSession.protocol.unhandle(DESKTOP_SCHEME);
         protocolInstalled = false;
@@ -84,6 +98,26 @@ async function runDesktop(): Promise<void> {
       return;
     }
     const daemonPort = Number(new URL(resolution.url).port);
+    const vault = createCredentialVault({
+      root: join(app.getPath("userData"), CREDENTIAL_DIRECTORY_NAME),
+      encryption: safeStorage,
+      async applyCredential(slot, value) {
+        const client = await connectCoachClient({ url: resolution.url, token: resolution.token });
+        try {
+          const request = runtimeConfigurationForCredential(slot, value);
+          const result = await client.call("configureRuntime", request);
+          if (
+            (request.llm !== undefined && !result.applied.llm) ||
+            (request.intervals !== undefined && !result.applied.intervals)
+          ) {
+            throw new TypeError();
+          }
+        } finally {
+          await client.close();
+        }
+      },
+    });
+    await vault.reapplyConfigured();
     await installDesktopProtocol({
       session: session.defaultSession,
       daemonPort,
@@ -106,6 +140,13 @@ async function runDesktop(): Promise<void> {
       return { url: resolution.url, token: resolution.token };
     });
     connectionHandlerInstalled = true;
+    disposeOnboarding = registerOnboardingIpc({
+      ipcMain,
+      dialog,
+      window,
+      vault,
+      isTrusted: (event) => isTrustedConnectionRequest(event, window),
+    });
     window.once("ready-to-show", () => window?.show());
     window.once("closed", () => {
       window = undefined;
@@ -130,9 +171,11 @@ async function runDesktop(): Promise<void> {
       while (document.documentElement.dataset.rpc === undefined && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
+      const credentialStatuses = await window.enduragentAuth.credentialStatuses();
       return {
         url: location.href,
-        bridgeKeys: Object.keys(window.enduragentAuth ?? {}),
+        bridgeKeys: Object.keys(window.enduragentAuth ?? {}).sort(),
+        credentialStatuses,
         noNodeGlobals: ["process", "require", "Buffer", "global", "module"].every((key) => typeof window[key] === "undefined"),
         rpcConnected: document.documentElement.dataset.rpc === "connected",
         blockedOffPort: blocked,
@@ -159,6 +202,14 @@ async function runDesktop(): Promise<void> {
         rpcConnected: rendererResult.rpcConnected,
         blockedOffPort: rendererResult.blockedOffPort,
         drawerPresent: rendererResult.drawerPresent,
+        credentialStatuses: rendererResult.credentialStatuses,
+        credentialStatusesMetadataOnly:
+          Array.isArray(rendererResult.credentialStatuses) &&
+          rendererResult.credentialStatuses.every((entry: Record<string, unknown>) => {
+            const keys = Object.keys(entry).sort();
+            return JSON.stringify(keys) === JSON.stringify(["runtimeReady", "slot", "state"]);
+          }) &&
+          !JSON.stringify(rendererResult.credentialStatuses).includes(resolution.token),
         tokenAbsentInRendererSurfaces:
           !JSON.stringify(rendererResult.rendererSurfaces).includes(resolution.token) &&
           !consoleMessages.some((entry) => entry.includes(resolution.token)) &&

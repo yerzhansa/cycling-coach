@@ -11,10 +11,12 @@
     "package:dir": "electron-vite build && electron-builder --dir",
     "smoke:runtime": "node scripts/electron-smoke.mjs runtime",
     "smoke:security": "node scripts/electron-smoke.mjs security",
+    "test:safe-storage-packaged": "node scripts/test-safe-storage-packaged.mjs",
     "test": "vitest run"
   },
   "dependencies": {
     "@enduragent/coach": "workspace:*",
+    "@enduragent/coach-client": "workspace:*",
     "@enduragent/coach-contract": "workspace:*"
   },
   "devDependencies": {

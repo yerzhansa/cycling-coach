@@ -1,0 +1,147 @@
+import type { CoachClient } from "@enduragent/coach-client";
+import { CoachClientDisconnectedError, connectCoachClient } from "@enduragent/coach-client";
+import {
+  ImportFilesRpcParamsSchema,
+  SaveIntakeRpcParamsSchema,
+  type CoachOperationProgressNotificationEnvelope,
+  type ImportFilesRpcResult,
+  type SaveIntakeRpcParams,
+} from "@enduragent/coach-contract";
+import { SUPPORTED_IMPORT_EXTENSIONS, type DesktopCredentialSlot } from "./constants.js";
+import type { CredentialSlotStatus } from "./machine.js";
+
+export type CredentialWriteResult =
+  | {
+      readonly slot: DesktopCredentialSlot;
+      readonly status: "configured";
+      readonly runtimeReady: true;
+    }
+  | {
+      readonly slot: DesktopCredentialSlot;
+      readonly status: "refused";
+      readonly reason:
+        | "invalid-input"
+        | "encryption-unavailable"
+        | "unsafe-backend"
+        | "storage-failed"
+        | "runtime-unavailable";
+    };
+
+export interface OnboardingBridge {
+  credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
+  writeCredential(input: {
+    readonly slot: DesktopCredentialSlot;
+    readonly value: string;
+  }): Promise<CredentialWriteResult>;
+  chooseImportFiles(): Promise<readonly string[]>;
+  onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
+  importFiles(
+    paths: readonly string[],
+    onProgress: (event: CoachOperationProgressNotificationEnvelope) => void,
+  ): Promise<ImportFilesRpcResult>;
+  saveIntake(input: SaveIntakeRpcParams): Promise<void>;
+}
+
+export interface DesktopOnboardingAuth {
+  getDaemonConnection(): Promise<{
+    readonly url: `ws://127.0.0.1:${number}/rpc`;
+    readonly token: string;
+  }>;
+  credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
+  writeCredential(input: {
+    readonly slot: DesktopCredentialSlot;
+    readonly value: string;
+  }): Promise<CredentialWriteResult>;
+  chooseImportFiles(): Promise<readonly string[]>;
+  onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
+}
+
+function extension(path: string): string {
+  const slash = path.lastIndexOf("/");
+  const dot = path.lastIndexOf(".");
+  return dot > slash ? path.slice(dot).toLowerCase() : "";
+}
+
+export function validateImportPaths(paths: readonly string[]): readonly string[] {
+  const normalized = [...paths];
+  if (
+    normalized.some(
+      (path) =>
+        typeof path !== "string" ||
+        !path.startsWith("/") ||
+        path.includes("\0") ||
+        !(SUPPORTED_IMPORT_EXTENSIONS as readonly string[]).includes(extension(path)),
+    )
+  ) {
+    throw new TypeError();
+  }
+  return ImportFilesRpcParamsSchema.parse({ paths: normalized }).paths;
+}
+
+export function createOnboardingBridge(
+  auth: DesktopOnboardingAuth = (
+    window as unknown as Window & { readonly enduragentAuth: DesktopOnboardingAuth }
+  ).enduragentAuth,
+  connect: typeof connectCoachClient = connectCoachClient,
+): OnboardingBridge {
+  let clientPromise: Promise<CoachClient> | undefined;
+  const client = (): Promise<CoachClient> => {
+    if (clientPromise !== undefined) return clientPromise;
+    const pending = auth
+      .getDaemonConnection()
+      .then((connection) => {
+        const url = new URL(connection.url);
+        if (
+          url.protocol !== "ws:" ||
+          url.hostname !== "127.0.0.1" ||
+          url.port === "" ||
+          !/^\d+$/u.test(url.port) ||
+          url.pathname !== "/rpc" ||
+          url.username !== "" ||
+          url.password !== "" ||
+          url.search !== "" ||
+          url.hash !== "" ||
+          !/^[A-Za-z0-9_-]{43}$/u.test(connection.token)
+        ) {
+          throw new TypeError();
+        }
+        return connect(connection);
+      })
+      .catch((error: unknown) => {
+        if (clientPromise === pending) clientPromise = undefined;
+        throw error;
+      });
+    clientPromise = pending;
+    return pending;
+  };
+  return {
+    credentialStatuses: () => auth.credentialStatuses() as Promise<readonly CredentialSlotStatus[]>,
+    writeCredential: (input) => auth.writeCredential(input) as Promise<CredentialWriteResult>,
+    chooseImportFiles: () => auth.chooseImportFiles(),
+    onDroppedImportFiles: (listener) => auth.onDroppedImportFiles(listener),
+    async importFiles(paths, onProgress) {
+      const parsedPaths = validateImportPaths(paths);
+      const connected = await client();
+      try {
+        return await connected.call(
+          "importFiles",
+          { paths: [...parsedPaths] },
+          { onNotificationEnvelope: onProgress },
+        );
+      } catch (error) {
+        if (error instanceof CoachClientDisconnectedError) clientPromise = undefined;
+        throw error;
+      }
+    },
+    async saveIntake(input) {
+      const connected = await client();
+      try {
+        const result = await connected.call("saveIntake", SaveIntakeRpcParamsSchema.parse(input));
+        if (!result.saved) throw new TypeError();
+      } catch (error) {
+        if (error instanceof CoachClientDisconnectedError) clientPromise = undefined;
+        throw error;
+      }
+    },
+  };
+}

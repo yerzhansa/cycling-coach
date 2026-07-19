@@ -83,6 +83,9 @@ importers:
       '@enduragent/coach':
         specifier: workspace:*
         version: link:../../packages/coach
+      '@enduragent/coach-client':
+        specifier: workspace:*
+        version: link:../../packages/coach-client
       '@enduragent/coach-contract':
         specifier: workspace:*
         version: link:../../packages/coach-contract
