@@ -15,6 +15,7 @@ import {
   HANDOFF_RESERVED_MESSAGE,
   UPGRADE_FENCE_FRAME_MAX_BYTES,
   UPGRADE_FENCE_IO_TIMEOUT_MS,
+  UPGRADE_FENCE_SOCKET_NAME,
   acquireUpgradeFence,
   admitStartupThroughUpgradeFence,
   type MonotonicTimer,
@@ -116,6 +117,14 @@ async function unixSocketAvailable(): Promise<boolean> {
 const hasUnixSockets = await unixSocketAvailable();
 
 describe.skipIf(!hasUnixSockets)("upgrade fence", () => {
+  it.skipIf(process.platform !== "darwin")("reports an unusably long socket path", async () => {
+    const dir = join(await configDir(), "a".repeat(104));
+    expect(Buffer.byteLength(join(dir, UPGRADE_FENCE_SOCKET_NAME))).toBeGreaterThan(104);
+    await expect(admitStartupThroughUpgradeFence({ configDir: dir })).rejects.toThrow(
+      "upgrade fence socket path is too long for a Unix socket on this platform",
+    );
+  });
+
   it("refuses ordinary and wrong callers, admits one designated capability, and rejects replay", async () => {
     const dir = await configDir();
     const acquired = await acquireUpgradeFence({

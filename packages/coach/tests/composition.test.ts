@@ -90,11 +90,14 @@ async function freshHome(): Promise<AthleteHome> {
   return home;
 }
 
-function config(home: AthleteHome): Config {
+function config(
+  home: AthleteHome,
+  intervals: Config["intervals"] = { apiKey: "", athleteId: "synthetic" },
+): Config {
   return {
     dataSource: "store",
     llm: { provider: "anthropic", model: "synthetic", apiKey: "" },
-    intervals: { apiKey: "", athleteId: "synthetic" },
+    intervals,
     telegram: { botToken: "" },
     session: {
       historyTokenBudgetRatio: 0.3,
@@ -179,8 +182,9 @@ async function compose(
   home: AthleteHome,
   dependencies: LocalCoachCompositionDependencies,
   context = fakeContext(home),
+  intervals?: Config["intervals"],
 ) {
-  const coreConfig = config(home);
+  const coreConfig = config(home, intervals);
   return createLocalCoachComposition({
     env: { ENDURAGENT_HOME: home.root },
     home,
@@ -245,7 +249,7 @@ describe("local coach composition", () => {
       createBackend: () => backend(),
       createRepository: () => ({ insertIfAbsent: async () => false, readCurrent: async () => undefined }),
       createResolver: () => missingResolver(),
-    }, context);
+    }, context, { apiKey: "dummy", athleteId: "synthetic" });
     expect(capture).toHaveBeenCalledTimes(1);
     expect(nestedWriterAcquisition).not.toHaveBeenCalled();
     await lifecycle.close();

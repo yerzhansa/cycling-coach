@@ -390,6 +390,11 @@ export async function admitStartupThroughUpgradeFence(input: {
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "ENOENT") return { status: "clear" };
+      if (code === "EINVAL" || code === "ENAMETOOLONG") {
+        throw new Error(
+          `Enduragent cannot start: upgrade fence socket path is too long for a Unix socket on this platform: ${socketPath}`,
+        );
+      }
       if (code !== "ECONNREFUSED") return reserved();
       const observed = await identity(socketPath);
       if (observed === undefined) return { status: "clear" };

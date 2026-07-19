@@ -21,7 +21,7 @@ const manifest = { capture_id: "12345678-1234-4123-8123-123456789abc",
 const produced: ProducedLocalBundle = { captureId: manifest.capture_id, frozenNow: manifest.plan.frozenNow,
   bundle: { activities: [], wellness: [], ftpHistory: [], athlete: { sportSettings: [] } } };
 
-async function makeRuntime() {
+async function makeRuntime(runtimeConfig: Config = config) {
   const root = await mkdtemp(join(await realpath(tmpdir()), "store-runtime-")); roots.push(root);
   let runtime!: StoreRuntime;
   const reference = { scheduler: { stop: vi.fn() }, services: {},
@@ -33,11 +33,12 @@ async function makeRuntime() {
     options.attemptLedger!.charge("store", "store:settings");
     return manifest;
   });
-  runtime = createStoreRuntime({ env: {}, config, home: { root, storeDir: join(root, "store"),
+  const produce = vi.fn(async () => produced);
+  runtime = createStoreRuntime({ env: {}, config: runtimeConfig, home: { root, storeDir: join(root, "store"),
     archiveDir: join(root, "archive"), configDir: join(root, "config") }, reference,
-    dependencies: { capture, produce: vi.fn(async () => produced),
+    dependencies: { capture, produce,
       now: () => new Date("1998-07-18T12:00:00.000Z"), monotonicNow: () => 1 } });
-  return { runtime, capture, reference };
+  return { runtime, capture, produce, reference };
 }
 
 describe("StoreRuntime", () => {
@@ -47,6 +48,24 @@ describe("StoreRuntime", () => {
     expect(result.counts).toMatchObject({ storeRequests: 1, legacyRequests: 1, totalRequests: 2 });
     expect(reference.runScheduledOnce).toHaveBeenCalledTimes(1);
     expect(runtime.currentSnapshot()).toBe(produced);
+    await runtime.close();
+  });
+
+  it("runs the legacy lane without capture when the intervals.icu API key is empty", async () => {
+    const { runtime, capture, produce, reference } = await makeRuntime({
+      ...config,
+      intervals: { ...config.intervals, apiKey: "" },
+    });
+    const result = await runtime.runWindow();
+    expect(result).toMatchObject({
+      published: false,
+      counts: { storeRequests: 0, legacyRequests: 1, totalRequests: 1 },
+      legacySucceeded: true,
+    });
+    expect(capture).not.toHaveBeenCalled();
+    expect(produce).not.toHaveBeenCalled();
+    expect(reference.runScheduledOnce).toHaveBeenCalledTimes(1);
+    expect(runtime.currentSnapshot()).toBeUndefined();
     await runtime.close();
   });
 
