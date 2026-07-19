@@ -4,7 +4,7 @@ import { parseCoachCliInvocation } from "../src/args.js";
 const verbUsage = {
   kind: "verb-usage",
   message:
-    "Usage: enduragent <ask|state|analyze|plan week|wellness set> [--json|--stream-json] [--session <key>|--fresh] [--local]",
+    "Usage: enduragent <ask|state|analyze|import|plan week|sync|wellness set> [--json|--stream-json] [--session <key>|--fresh] [--local]",
 } as const;
 
 describe("scriptable CLI arguments", () => {
@@ -13,12 +13,14 @@ describe("scriptable CLI arguments", () => {
     expect(parseCoachCliInvocation(["version"])).toEqual({ kind: "version" });
     expect(parseCoachCliInvocation(["--version"])).toEqual({ kind: "version" });
     expect(parseCoachCliInvocation(["serve"])).toEqual({ kind: "serve" });
-    for (const argv of [["unknown"], ["import"], ["sync"], ["serve", "--json"]]) {
+    for (const argv of [["unknown"], ["serve", "--json"]]) {
       expect(parseCoachCliInvocation(argv)).toEqual({
         kind: "usage",
         message: "Usage: enduragent [version|serve]",
       });
     }
+    expect(parseCoachCliInvocation(["import"])).toEqual(verbUsage);
+    expect(parseCoachCliInvocation(["sync", "anything"])).toEqual(verbUsage);
   });
 
   it("parses every verb and permits flags around operands", () => {
@@ -57,6 +59,20 @@ describe("scriptable CLI arguments", () => {
       kind: "verb",
       verb: { name: "plan-week" },
       outputMode: "json",
+      session: { kind: "default" },
+      local: false,
+    });
+    expect(parseCoachCliInvocation(["import", "a.fit", "b.tcx", "c.gpx", "--json"])).toEqual({
+      kind: "verb",
+      verb: { name: "import", paths: ["a.fit", "b.tcx", "c.gpx"] },
+      outputMode: "json",
+      session: { kind: "default" },
+      local: false,
+    });
+    expect(parseCoachCliInvocation(["sync", "--stream-json"])).toEqual({
+      kind: "verb",
+      verb: { name: "sync" },
+      outputMode: "stream-json",
       session: { kind: "default" },
       local: false,
     });
@@ -111,6 +127,13 @@ describe("scriptable CLI arguments", () => {
       session: { kind: "default" },
       local: false,
     });
+    expect(parseCoachCliInvocation(["import", "--", "--dash.fit"])).toEqual({
+      kind: "verb",
+      verb: { name: "import", paths: ["--dash.fit"] },
+      outputMode: "text",
+      session: { kind: "default" },
+      local: false,
+    });
   });
 
   it("rejects duplicate, exclusive, missing, and unknown flags", () => {
@@ -144,6 +167,14 @@ describe("scriptable CLI arguments", () => {
       ["wellness", "set", "1sleep=good"],
       ["wellness", "set", "sleep="],
       ["wellness", "set", "sleep=good", "sleep=bad"],
+      ["import", "a.fit", "a.fit"],
+      ["import", "-"],
+      ["import", "a.fit", "--local"],
+      ["import", "a.fit", "--fresh"],
+      ["import", "a.fit", "--session", "a"],
+      ["sync", "--local"],
+      ["sync", "--fresh"],
+      ["sync", "--session", "a"],
     ];
     for (const argv of rows) expect(parseCoachCliInvocation(argv)).toEqual(verbUsage);
   });

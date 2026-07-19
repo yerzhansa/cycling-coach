@@ -12,10 +12,10 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
-    "lint": "oxlint packages/",
-    "fmt": "oxfmt packages/",
-    "fmt:check": "oxfmt --check packages/",
-    "check": "pnpm -r build && pnpm -r check && pnpm check:types && oxlint packages/ && pnpm check:trademarks && pnpm check:fixture-privacy && pnpm check:registry-isolation && pnpm check:changeset-userfacing && pnpm check:contract-deps && pnpm check:package-deps && pnpm check:kernel-discipline",
+    "lint": "oxlint packages/ apps/",
+    "fmt": "oxfmt packages/ apps/",
+    "fmt:check": "oxfmt --check packages/ apps/",
+    "check": "pnpm -r build && pnpm -r check && pnpm check:types && oxlint packages/ apps/ && pnpm check:trademarks && pnpm check:fixture-privacy && pnpm check:registry-isolation && pnpm check:changeset-userfacing && pnpm check:contract-deps && pnpm check:package-deps && pnpm check:kernel-discipline",
     "check:types": "tsc -p tsconfig.check.json",
     "check:trademarks": "tsx tools/check-trademarks.ts",
     "check:fixture-privacy": "tsx tools/check-fixture-privacy.ts",
@@ -62,10 +62,12 @@
   "packageManager": "pnpm@10.6.3+sha512.bb45e34d50a9a76e858a95837301bfb6bd6d35aea2c5d52094fa497a467c43f5c440103ce2511e9e0a2f89c3d6071baac3358fc68ac6fb75e2ceb3d2736065e6",
   "pnpm": {
     "overrides": {
-      "@ai-sdk/provider-utils": "^4.0.30"
+      "@ai-sdk/provider-utils": "^4.0.30",
+      "@noble/hashes": "1.8.0"
     },
     "onlyBuiltDependencies": [
       "@google/genai",
+      "electron",
       "esbuild",
       "msw",
       "protobufjs"

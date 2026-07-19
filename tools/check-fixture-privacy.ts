@@ -364,6 +364,7 @@ const POLICY_PATH = fileURLToPath(new URL("./synthetic-fixture-policy.ts", impor
 // `.changeset` here.
 export const DEFAULT_SCAN_PATHS: readonly string[] = [
   "packages",
+  "apps",
   "tools",
   ".changeset",
   "README.md",

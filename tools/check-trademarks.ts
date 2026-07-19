@@ -183,10 +183,7 @@ function findHitsInMdFile(file: string): TrademarkHit[] {
   if (isSkippedFile(source)) return [];
   // Strip fenced code blocks (```...```). Replace with same-length whitespace
   // so line/column offsets stay correct for the surviving prose.
-  const stripped = source.replace(
-    /```[\s\S]*?```/g,
-    (block) => block.replace(/[^\n]/g, " "),
-  );
+  const stripped = source.replace(/```[\s\S]*?```/g, (block) => block.replace(/[^\n]/g, " "));
 
   const skippedLines = computeMdSkippedLines(source);
 
@@ -251,7 +248,7 @@ function formatHit(hit: TrademarkHit): string {
  * directive that exempts a single legitimate token line (e.g. a surviving
  * substitution table). `CHANGELOG.md` files are excluded in-tool (see `main`).
  */
-const DEFAULT_SCAN_PATHS: readonly string[] = ["packages", "tools"];
+const DEFAULT_SCAN_PATHS: readonly string[] = ["packages", "apps", "tools"];
 
 export function main(argv: readonly string[]): number {
   const args = nonFlagArgs(argv);

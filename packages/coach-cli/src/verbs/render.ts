@@ -1,8 +1,8 @@
 import {
-  CoachTurnEventNotificationEnvelopeSchema,
+  CoachRpcNotificationEnvelopeSchema,
   JsonRpcResponseEnvelopeSchema,
   serializeCoachRpcEnvelope,
-  type CoachTurnEventNotificationEnvelope,
+  type CoachRpcNotificationEnvelope,
   type JsonRpcResponseEnvelope,
 } from "@enduragent/coach-contract";
 import type { CoachClientTerminalEnvelope } from "@enduragent/coach-client";
@@ -11,7 +11,7 @@ import type { CoachCliTerminal } from "../repl.js";
 import type { CoachVerbMethodName } from "./types.js";
 
 export interface CoachVerbRenderer {
-  readonly onNotificationEnvelope: (envelope: CoachTurnEventNotificationEnvelope) => void;
+  readonly onNotificationEnvelope: (envelope: CoachRpcNotificationEnvelope) => void;
   readonly onTerminalEnvelope: (envelope: CoachClientTerminalEnvelope) => void;
   readonly observedTerminal: () => CoachClientTerminalEnvelope | undefined;
   renderSuccess(method: CoachVerbMethodName, envelope: JsonRpcResponseEnvelope): void;
@@ -25,7 +25,7 @@ export function createCoachVerbRenderer(
   return {
     onNotificationEnvelope(envelope) {
       if (outputMode !== "stream-json") return;
-      const parsed = CoachTurnEventNotificationEnvelopeSchema.parse(envelope);
+      const parsed = CoachRpcNotificationEnvelopeSchema.parse(envelope);
       terminal.stdout.write(`${serializeCoachRpcEnvelope(parsed)}\n`);
     },
     onTerminalEnvelope(envelope) {
@@ -47,6 +47,28 @@ export function createCoachVerbRenderer(
       if (method === "chat") {
         const result = envelope.result as { readonly text: string };
         terminal.stdout.write(`${result.text}\n`);
+        return;
+      }
+      if (method === "importFiles") {
+        const result = envelope.result as {
+          readonly files: {
+            readonly total: number;
+            readonly imported: number;
+            readonly quarantined: number;
+          };
+        };
+        terminal.stdout.write(
+          `Imported ${result.files.imported} of ${result.files.total} files (${result.files.quarantined} quarantined).\n`,
+        );
+        return;
+      }
+      if (method === "sync") {
+        const result = envelope.result as { readonly published: boolean };
+        terminal.stdout.write(
+          result.published
+            ? "Training data refreshed.\n"
+            : "Training data checked; no new snapshot was published.\n",
+        );
         return;
       }
       terminal.stdout.write(`${JSON.stringify(envelope.result, null, 2)}\n`);

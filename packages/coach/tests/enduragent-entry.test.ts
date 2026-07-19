@@ -14,6 +14,7 @@ import {
   JsonRpcSuccessResponseEnvelopeSchema,
   type AthleteState,
   type CoachEngine,
+  type CoachOperations,
 } from "@enduragent/coach-contract";
 import {
   CoachRemoteError,
@@ -50,6 +51,25 @@ const state: AthleteState = {
   recentActivities: [],
   plannedWorkouts: [],
   wellness: {},
+};
+
+const operations: CoachOperations = {
+  importFiles: async ({ paths }) => ({
+    schemaVersion: 1,
+    files: { total: paths.length, imported: paths.length, quarantined: 0 },
+    changes: {
+      rawFilesInserted: 0,
+      sourceRecordsInserted: 0,
+      sourceRecordsUpdated: 0,
+      relinkedSourceRecords: 0,
+    },
+  }),
+  sync: async () => ({
+    schemaVersion: 1,
+    published: false,
+    referenceSucceeded: true,
+    requests: { store: 0, reference: 0, total: 0 },
+  }),
 };
 
 interface Deferred<T> {
@@ -390,6 +410,7 @@ describe("enduragent executable composition", () => {
     });
     const lifecycle = {
       engine: mocked.engine,
+      operations,
       listener: inertWriterProtocolListener,
       close: async () => {
         trace.push("lifecycle-close");
@@ -468,6 +489,7 @@ describe("enduragent executable composition", () => {
             captured = input as unknown as WithLocalCoachInput<unknown>;
             const value = await input.operation({
               engine: mocked.engine,
+              operations,
               listener: inertWriterProtocolListener,
               async close() {},
             });
@@ -707,6 +729,7 @@ describe("enduragent executable composition", () => {
     ): Promise<LocalCoachRunResult<T>> => {
       const lifecycle = {
         engine: mocked.engine,
+        operations,
         listener: inertWriterProtocolListener,
         close: async () => {
           trace.push("lifecycle-close");
@@ -810,6 +833,7 @@ describe("enduragent executable composition", () => {
               status: "completed",
               value: await input.operation({
                 engine: mocked.engine,
+                operations,
                 listener: inertWriterProtocolListener,
                 async close() {},
               }),
@@ -1058,7 +1082,7 @@ describe("enduragent executable composition", () => {
         createFreshId: undefined,
         exitCode: EXIT_USAGE,
         stderr:
-          "Usage: enduragent <ask|state|analyze|plan week|wellness set> [--json|--stream-json] [--session <key>|--fresh] [--local]\n",
+          "Usage: enduragent <ask|state|analyze|import|plan week|sync|wellness set> [--json|--stream-json] [--session <key>|--fresh] [--local]\n",
       },
       {
         argv: ["ask", "hello", "--fresh"],
@@ -1180,7 +1204,7 @@ describe("enduragent executable composition", () => {
       expect(connectRemoteTransport).not.toHaveBeenCalled();
       expect(io.stdout.read()).toBe("");
       expect(io.stderr.read()).toBe(
-        "Usage: enduragent <ask|state|analyze|plan week|wellness set> [--json|--stream-json] [--session <key>|--fresh] [--local]\n",
+        "Usage: enduragent <ask|state|analyze|import|plan week|sync|wellness set> [--json|--stream-json] [--session <key>|--fresh] [--local]\n",
       );
     }
   });

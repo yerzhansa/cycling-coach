@@ -5,6 +5,7 @@ export const DaemonOwnerSchema = z.enum([
   "service-managed",
   "ephemeral-client-started",
   "unmanaged-foreground",
+  "app-supervised",
 ]);
 export type DaemonOwner = z.infer<typeof DaemonOwnerSchema>;
 

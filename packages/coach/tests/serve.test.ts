@@ -1,6 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
-import { EXIT_SUCCESS, type AthleteState, type CoachEngine } from "@enduragent/coach-contract";
+import {
+  EXIT_SUCCESS,
+  type AthleteState,
+  type CoachEngine,
+  type CoachOperations,
+} from "@enduragent/coach-contract";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import type {
   WriterProtocolBinding,
@@ -47,6 +52,25 @@ const engine: CoachEngine = {
   getAthleteState: async () => state,
 };
 
+const operations: CoachOperations = {
+  importFiles: async ({ paths }) => ({
+    schemaVersion: 1,
+    files: { total: paths.length, imported: paths.length, quarantined: 0 },
+    changes: {
+      rawFilesInserted: 0,
+      sourceRecordsInserted: 0,
+      sourceRecordsUpdated: 0,
+      relinkedSourceRecords: 0,
+    },
+  }),
+  sync: async () => ({
+    schemaVersion: 1,
+    published: false,
+    referenceSucceeded: true,
+    requests: { store: 0, reference: 0, total: 0 },
+  }),
+};
+
 const home: AthleteHome = {
   root: "/synthetic/athlete",
   storeDir: "/synthetic/athlete/store",
@@ -81,6 +105,7 @@ function harness(
   };
   const lifecycle: LocalCoachLifecycle = {
     engine,
+    operations,
     listener,
     async close() {
       trace.push("lifecycle-close");
@@ -210,11 +235,7 @@ describe("runCoachServe", () => {
     await vi.waitFor(() => expect(test.handlers()).toBeDefined());
     shutdown.resolve();
     await expect(result).resolves.toBe(EXIT_SUCCESS);
-    expect(test.trace.slice(-3)).toEqual([
-      "protocol-stop",
-      "rpc-drained",
-      "protocol-closed",
-    ]);
+    expect(test.trace.slice(-3)).toEqual(["protocol-stop", "rpc-drained", "protocol-closed"]);
   });
 
   it("rethrows bind failure only after closing the constructed RPC server", async () => {

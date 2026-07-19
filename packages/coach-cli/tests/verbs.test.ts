@@ -112,6 +112,7 @@ function deliveringTransport(input: {
     kind: "remote",
     async request(command) {
       for (const envelope of input.notifications ?? []) {
+        if (command.method !== "chat") throw new TypeError("unexpected chat notification");
         command.onNotificationEnvelope(envelope);
       }
       command.onTerminalEnvelope(input.terminal);
@@ -171,6 +172,7 @@ describe("verb dispatch", () => {
         chatId: "cli:RaceA",
         stdinText: row.stdinText,
         signal,
+        callerCwd: "/synthetic/caller",
       });
       expect(created).toMatchObject({ method: row.method, params: row.params, signal });
       expect(created.params as Record<string, unknown>).not.toHaveProperty("turn");
@@ -181,8 +183,39 @@ describe("verb dispatch", () => {
         chatId: undefined,
         stdinText: undefined,
         signal,
+        callerCwd: "/synthetic/caller",
       }),
     ).toMatchObject({ method: "getAthleteState", params: {}, signal });
+    expect(
+      createCoachVerbRequest({
+        verb: { name: "import", paths: ["ride.fit", "--dash.tcx"] },
+        chatId: undefined,
+        stdinText: undefined,
+        signal,
+        callerCwd: "/synthetic/caller",
+      }),
+    ).toMatchObject({
+      method: "importFiles",
+      params: { paths: ["/synthetic/caller/ride.fit", "/synthetic/caller/--dash.tcx"] },
+    });
+    expect(
+      createCoachVerbRequest({
+        verb: { name: "sync" },
+        chatId: undefined,
+        stdinText: undefined,
+        signal,
+        callerCwd: "/synthetic/caller",
+      }),
+    ).toMatchObject({ method: "sync", params: {} });
+    expect(() =>
+      createCoachVerbRequest({
+        verb: { name: "import", paths: ["a/../ride.fit", "ride.fit"] },
+        chatId: undefined,
+        stdinText: undefined,
+        signal,
+        callerCwd: "/synthetic/caller",
+      }),
+    ).toThrow();
   });
 });
 
@@ -228,6 +261,66 @@ describe("verb rendering", () => {
     ).resolves.toBe(EXIT_SUCCESS);
     expect(io.stdout.read()).toBe('{"text":"answer"}\n');
     expect(io.stderr.read()).toBe("");
+  });
+
+  it("renders operational text and JSON results exactly", async () => {
+    const signal = new AbortController().signal;
+    const importRequest = createCoachVerbRequest({
+      verb: { name: "import", paths: ["ride.fit"] },
+      chatId: undefined,
+      stdinText: undefined,
+      signal,
+      callerCwd: "/synthetic/caller",
+    });
+    const importResult = {
+      schemaVersion: 1,
+      files: { total: 1, imported: 1, quarantined: 0 },
+      changes: {
+        rawFilesInserted: 1,
+        sourceRecordsInserted: 1,
+        sourceRecordsUpdated: 0,
+        relinkedSourceRecords: 0,
+      },
+    };
+    const importIo = terminal();
+    await expect(
+      runCoachVerb({
+        request: importRequest,
+        outputMode: "text",
+        terminal: importIo.value,
+        transport: deliveringTransport({ terminal: success(importResult) }),
+      }),
+    ).resolves.toBe(EXIT_SUCCESS);
+    expect(importIo.stdout.read()).toBe("Imported 1 of 1 files (0 quarantined).\n");
+    for (const [published, expected] of [
+      [true, "Training data refreshed.\n"],
+      [false, "Training data checked; no new snapshot was published.\n"],
+    ] as const) {
+      const syncIo = terminal();
+      const syncRequest = createCoachVerbRequest({
+        verb: { name: "sync" },
+        chatId: undefined,
+        stdinText: undefined,
+        signal,
+        callerCwd: "/synthetic/caller",
+      });
+      await expect(
+        runCoachVerb({
+          request: syncRequest,
+          outputMode: "text",
+          terminal: syncIo.value,
+          transport: deliveringTransport({
+            terminal: success({
+              schemaVersion: 1,
+              published,
+              referenceSucceeded: true,
+              requests: { store: 0, reference: 0, total: 0 },
+            }),
+          }),
+        }),
+      ).resolves.toBe(EXIT_SUCCESS);
+      expect(syncIo.stdout.read()).toBe(expected);
+    }
   });
 
   it("renders notification and terminal envelopes verbatim in order", async () => {

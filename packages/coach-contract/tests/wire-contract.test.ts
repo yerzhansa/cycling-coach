@@ -5,14 +5,21 @@ import {
   COACH_RPC_METHOD_NAMES,
   COACH_RPC_METHOD_REGISTRY,
   COACH_TURN_EVENT_NOTIFICATION_METHOD,
+  COACH_OPERATION_PROGRESS_NOTIFICATION_METHOD,
   ChatResponseSchema,
   ChatRpcParamsSchema,
   ClientHandshakeFrameSchema,
   CoachRpcEnvelopeSchema,
   CoachRpcRequestEnvelopeSchema,
+  CoachOperationProgressNotificationEnvelopeSchema,
   CoachTurnEventNotificationEnvelopeSchema,
   DaemonOwnerSchema,
   EmptyRpcParamsSchema,
+  ImportFilesRpcParamsSchema,
+  ImportFilesRpcResultSchema,
+  OperationProgressEventSchema,
+  SyncRpcParamsSchema,
+  SyncRpcResultSchema,
   HasSessionRequestSchema,
   HasSessionResponseSchema,
   JsonRpcErrorResponseEnvelopeSchema,
@@ -31,7 +38,7 @@ import {
   createVersionMismatchServerHandshakeFrame,
   parseCoachRpcEnvelope,
   serializeCoachRpcEnvelope,
-  type CoachEngine,
+  type CoachRpcService,
   type CoachRpcEnvelope,
 } from "../src/index.js";
 
@@ -49,6 +56,16 @@ const notification = {
     requestMethod: "chat",
     turnId: "turn-1",
     event: turnEvent,
+  },
+} as const;
+
+const progressNotification = {
+  jsonrpc: "2.0",
+  method: COACH_OPERATION_PROGRESS_NOTIFICATION_METHOD,
+  params: {
+    requestId: 5,
+    requestMethod: "importFiles",
+    event: { phase: "started", completed: 0, total: 1 },
   },
 } as const;
 
@@ -70,6 +87,7 @@ describe("JSON-RPC envelopes", () => {
       { jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } },
       { jsonrpc: "2.0", id: null, error: { code: -32600, message: "invalid request" } },
       notification,
+      progressNotification,
     ];
     for (const value of values) expect(roundTrip(value)).toEqual(value);
   });
@@ -132,12 +150,14 @@ describe("JSON-RPC envelopes", () => {
 });
 
 describe("coach request and event projection", () => {
-  it("admits exactly the four strict method requests", () => {
+  it("admits exactly the six strict method requests", () => {
     const requests = [
       { jsonrpc: "2.0", id: 1, method: "chat", params: { chatId: "chat-1", message: "hello" } },
       { jsonrpc: "2.0", id: 2, method: "resetSession", params: { chatId: "chat-1" } },
       { jsonrpc: "2.0", id: 3, method: "hasSession", params: { chatId: "chat-1" } },
       { jsonrpc: "2.0", id: 4, method: "getAthleteState", params: {} },
+      { jsonrpc: "2.0", id: 5, method: "importFiles", params: { paths: ["/synthetic/ride.fit"] } },
+      { jsonrpc: "2.0", id: 6, method: "sync", params: {} },
     ];
     for (const request of requests)
       expect(CoachRpcRequestEnvelopeSchema.parse(request)).toEqual(request);
@@ -195,8 +215,65 @@ describe("coach request and event projection", () => {
     ).toBe(false);
   });
 
+  it("validates operational paths, balanced results, and progress", () => {
+    expect(ImportFilesRpcParamsSchema.parse({ paths: ["/synthetic/ride.fit"] })).toEqual({
+      paths: ["/synthetic/ride.fit"],
+    });
+    for (const paths of [
+      ["ride.fit"],
+      ["/synthetic/a.fit", "/synthetic/a.fit"],
+      [],
+      ["/synthetic/\0.fit"],
+    ]) {
+      expect(ImportFilesRpcParamsSchema.safeParse({ paths }).success).toBe(false);
+    }
+    const importResult = {
+      schemaVersion: 1,
+      files: { total: 2, imported: 1, quarantined: 1 },
+      changes: {
+        rawFilesInserted: 1,
+        sourceRecordsInserted: 1,
+        sourceRecordsUpdated: 0,
+        relinkedSourceRecords: 0,
+      },
+    } as const;
+    expect(ImportFilesRpcResultSchema.parse(importResult)).toEqual(importResult);
+    expect(
+      ImportFilesRpcResultSchema.safeParse({
+        ...importResult,
+        files: { ...importResult.files, total: 3 },
+      }).success,
+    ).toBe(false);
+    const syncResult = {
+      schemaVersion: 1,
+      published: true,
+      referenceSucceeded: true,
+      requests: { store: 2, reference: 1, total: 3 },
+    } as const;
+    expect(SyncRpcResultSchema.parse(syncResult)).toEqual(syncResult);
+    expect(
+      SyncRpcResultSchema.safeParse({
+        ...syncResult,
+        requests: { ...syncResult.requests, total: 4 },
+      }).success,
+    ).toBe(false);
+    expect(
+      OperationProgressEventSchema.parse({ phase: "started", completed: 0, total: 1 }),
+    ).toEqual({ phase: "started", completed: 0, total: 1 });
+    expect(
+      OperationProgressEventSchema.parse({ phase: "completed", completed: 1, total: 1 }),
+    ).toEqual({ phase: "completed", completed: 1, total: 1 });
+    expect(
+      OperationProgressEventSchema.safeParse({ phase: "completed", completed: 0, total: 1 })
+        .success,
+    ).toBe(false);
+    expect(CoachOperationProgressNotificationEnvelopeSchema.parse(progressNotification)).toEqual(
+      progressNotification,
+    );
+  });
+
   it("keeps the method registry exhaustive and schema-identical", async () => {
-    const fake: CoachEngine = {
+    const fake: CoachRpcService = {
       chat: async () => ({ text: "ok" }),
       resetSession: async () => ({ memoryFlushed: true }),
       hasSession: async () => ({ hasSession: false }),
@@ -214,6 +291,22 @@ describe("coach request and event projection", () => {
           plannedWorkouts: [],
           wellness: {},
         }),
+      importFiles: async ({ paths }) => ({
+        schemaVersion: 1,
+        files: { total: paths.length, imported: paths.length, quarantined: 0 },
+        changes: {
+          rawFilesInserted: 0,
+          sourceRecordsInserted: 0,
+          sourceRecordsUpdated: 0,
+          relinkedSourceRecords: 0,
+        },
+      }),
+      sync: async () => ({
+        schemaVersion: 1,
+        published: false,
+        referenceSucceeded: true,
+        requests: { store: 0, reference: 0, total: 0 },
+      }),
     };
     expect(Object.keys(COACH_RPC_METHOD_REGISTRY)).toEqual(Object.keys(fake));
     expect(COACH_RPC_METHOD_NAMES).toEqual(Object.keys(fake));
@@ -241,6 +334,18 @@ describe("coach request and event projection", () => {
       responseSchema: AthleteStateSchema,
       eventSchema: NoRpcEventSchema,
     });
+    expect(COACH_RPC_METHOD_REGISTRY.importFiles).toEqual({
+      wireName: "importFiles",
+      requestSchema: ImportFilesRpcParamsSchema,
+      responseSchema: ImportFilesRpcResultSchema,
+      eventSchema: OperationProgressEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.sync).toEqual({
+      wireName: "sync",
+      requestSchema: SyncRpcParamsSchema,
+      responseSchema: SyncRpcResultSchema,
+      eventSchema: OperationProgressEventSchema,
+    });
     for (const method of ["resetSession", "hasSession", "getAthleteState"] as const) {
       expect(COACH_RPC_METHOD_REGISTRY[method].eventSchema.safeParse(undefined).success).toBe(
         false,
@@ -257,7 +362,7 @@ describe("handshake", () => {
   it("round trips client, accepted, and both mismatch directions", () => {
     const client = createClientHandshakeFrame("synthetic-test-token");
     expect(ClientHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(client)))).toEqual(client);
-    const accepted = createAcceptedServerHandshakeFrame("service-managed", 1);
+    const accepted = createAcceptedServerHandshakeFrame("service-managed", 2);
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual(
       accepted,
     );
@@ -311,13 +416,6 @@ describe("handshake", () => {
         status: "accepted",
         clientProtocolVersion: 1,
         serverProtocolVersion: 1,
-        owner: "app-supervised",
-      },
-      {
-        type: "handshake",
-        status: "accepted",
-        clientProtocolVersion: 1,
-        serverProtocolVersion: 1,
         owner: "service-managed",
         extra: true,
       },
@@ -331,6 +429,7 @@ describe("handshake", () => {
       "service-managed",
       "ephemeral-client-started",
       "unmanaged-foreground",
+      "app-supervised",
     ]);
     expect(compareProtocolVersions(1, 2)).toBe("client-older");
     expect(compareProtocolVersions(2, 2)).toBe("equal");
@@ -355,7 +454,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("keeps protocol version one", () => {
-    expect(PROTOCOL_VERSION).toBe(1);
+  it("uses protocol version two", () => {
+    expect(PROTOCOL_VERSION).toBe(2);
   });
 });

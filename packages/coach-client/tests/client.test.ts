@@ -135,19 +135,28 @@ describe("connection and transport", () => {
   it("uses the Node global, sends the token frame first, and accepts a verbatim browser factory", async () => {
     const firstFrame = deferred<Record<string, unknown>>();
     const urls: Array<string | undefined> = [];
-    const url = await startServer((socket, requestUrl) => {
-      urls.push(requestUrl);
-      socket.once("message", (data) => {
-        const frame = JSON.parse(data.toString()) as Record<string, unknown>;
-        firstFrame.resolve(frame);
-        socket.send(JSON.stringify(createAcceptedServerHandshakeFrame("service-managed", 1)));
+    let url: string;
+    try {
+      url = await startServer((socket, requestUrl) => {
+        urls.push(requestUrl);
+        socket.once("message", (data) => {
+          const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+          firstFrame.resolve(frame);
+          socket.send(
+            JSON.stringify(createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION)),
+          );
+        });
       });
-    });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+      process.stderr.write("SKIP_MARKER loopback-listen EPERM coach-client\n");
+      return;
+    }
     const client = await connectCoachClient({ url, token });
     expect(await firstFrame.promise).toEqual({
       type: "handshake",
       token,
-      clientProtocolVersion: 1,
+      clientProtocolVersion: PROTOCOL_VERSION,
     });
     expect(urls).toEqual(["/"]);
     expect(client.handshake.owner).toBe("service-managed");
@@ -158,7 +167,9 @@ describe("connection and transport", () => {
     expect(resolveCoachWebSocketFactory(factory)).toBe(factory);
     socket.sendHook = () =>
       socket.emitMessage(
-        JSON.stringify(createAcceptedServerHandshakeFrame("unmanaged-foreground", 1)),
+        JSON.stringify(
+          createAcceptedServerHandshakeFrame("unmanaged-foreground", PROTOCOL_VERSION),
+        ),
       );
     const browserConnection = connectCoachClient({
       url: "ws://127.0.0.1:49153",
@@ -355,9 +366,9 @@ describe("handshake failures", () => {
         JSON.stringify({
           type: "handshake",
           status: "accepted",
-          clientProtocolVersion: 1,
-          serverProtocolVersion: 1,
-          owner: "app-supervised",
+          clientProtocolVersion: 2,
+          serverProtocolVersion: 2,
+          owner: "unknown-owner",
         }),
       );
     if (kind === "invalid-accepted")
@@ -397,8 +408,8 @@ describe("handshake failures", () => {
   });
 
   it.each([
-    [1, 2, "client-older", "ephemeral-client-started"],
-    [1, 0, "client-newer", "unmanaged-foreground"],
+    [2, 3, "client-older", "ephemeral-client-started"],
+    [2, 1, "client-newer", "unmanaged-foreground"],
   ] as const)(
     "exposes a trusted mismatch %s/%s",
     async (clientVersion, serverVersion, direction, owner) => {
@@ -455,6 +466,22 @@ describe("RPC receive and observers", () => {
           plannedWorkouts: [],
           wellness: {},
         },
+        importFiles: {
+          schemaVersion: 1,
+          files: { total: 1, imported: 1, quarantined: 0 },
+          changes: {
+            rawFilesInserted: 1,
+            sourceRecordsInserted: 1,
+            sourceRecordsUpdated: 0,
+            relinkedSourceRecords: 0,
+          },
+        },
+        sync: {
+          schemaVersion: 1,
+          published: true,
+          referenceSucceeded: true,
+          requests: { store: 1, reference: 1, total: 2 },
+        },
       };
       socket.emitMessage(
         serializeCoachRpcEnvelope({
@@ -474,12 +501,18 @@ describe("RPC receive and observers", () => {
       hasSession: true,
     });
     await expect(client.call("getAthleteState", {})).resolves.toMatchObject({ schemaVersion: "1" });
-    expect(received.map((value) => (value as { id: number }).id)).toEqual([1, 2, 3, 4]);
+    await expect(
+      client.call("importFiles", { paths: ["/synthetic/ride.fit"] }),
+    ).resolves.toMatchObject({ schemaVersion: 1 });
+    await expect(client.call("sync", {})).resolves.toMatchObject({ schemaVersion: 1 });
+    expect(received.map((value) => (value as { id: number }).id)).toEqual([1, 2, 3, 4, 5, 6]);
     expect(received.map((value) => (value as { method: string }).method)).toEqual([
       "chat",
       "resetSession",
       "hasSession",
       "getAthleteState",
+      "importFiles",
+      "sync",
     ]);
     socket.closeSynchronously = true;
     await client.close();
@@ -648,6 +681,74 @@ describe("RPC receive and observers", () => {
     await client.close();
   });
 
+  it("correlates operational progress before terminal and fails closed on malformed progress", async () => {
+    const { socket, connecting } = acceptedSocket();
+    const client = await connecting;
+    socket.sendHook = () => {};
+    const order: string[] = [];
+    const operation = client.call(
+      "sync",
+      {},
+      {
+        onNotificationEnvelope: (envelope) => order.push(`envelope:${envelope.params.event.phase}`),
+        onEvent: (event) => order.push(`event:${event.phase}`),
+        onTerminalEnvelope: () => order.push("terminal"),
+      },
+    );
+    for (const event of [
+      { phase: "started", completed: 0, total: 1 },
+      { phase: "completed", completed: 1, total: 1 },
+    ] as const) {
+      socket.emitMessage(
+        serializeCoachRpcEnvelope({
+          jsonrpc: "2.0",
+          method: "coach.operationProgress",
+          params: { requestId: 1, requestMethod: "sync", event },
+        }),
+      );
+    }
+    socket.emitMessage(
+      serializeCoachRpcEnvelope({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {
+          schemaVersion: 1,
+          published: false,
+          referenceSucceeded: true,
+          requests: { store: 0, reference: 0, total: 0 },
+        },
+      }),
+    );
+    await operation;
+    expect(order).toEqual([
+      "envelope:started",
+      "event:started",
+      "envelope:completed",
+      "event:completed",
+      "terminal",
+    ]);
+
+    const observed = vi.fn();
+    const malformed = client.call(
+      "importFiles",
+      { paths: ["/synthetic/ride.fit"] },
+      { onEvent: observed },
+    );
+    socket.emitMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "coach.operationProgress",
+        params: {
+          requestId: 2,
+          requestMethod: "importFiles",
+          event: { phase: "completed", completed: 0, total: 1 },
+        },
+      }),
+    );
+    await expect(malformed).rejects.toBeInstanceOf(CoachClientProtocolError);
+    expect(observed).not.toHaveBeenCalled();
+  });
+
   it.each([-32700, -32600] as const)(
     "treats null-id protocol error %s as connection-wide",
     async (code) => {
@@ -788,7 +889,7 @@ describe("disconnect, close, and send bounds", () => {
       const frame = JSON.parse(text) as { type?: string; id?: number };
       if (frame.type === "handshake")
         socket.emitMessage(
-          JSON.stringify(createAcceptedServerHandshakeFrame("service-managed", 1)),
+          JSON.stringify(createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION)),
         );
       else if (frame.id !== undefined)
         socket.emitMessage(

@@ -1,0 +1,23 @@
+{
+  "name": "@enduragent/desktop-renderer",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@enduragent/coach-client": "workspace:*",
+    "@enduragent/coach-contract": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.2",
+    "vite": "7.3.6",
+    "vitest": "^4.1.4"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

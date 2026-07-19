@@ -38,18 +38,11 @@ function renderRemoteFailure(failure: CoachRemoteFailure, input: RunCoachVerbInp
 export async function runCoachVerb(input: RunCoachVerbInput): Promise<ExitCode> {
   const renderer = createCoachVerbRenderer(input.outputMode, input.terminal);
   try {
-    const request =
-      input.request.method === "chat"
-        ? {
-            ...input.request,
-            onNotificationEnvelope: renderer.onNotificationEnvelope,
-            onTerminalEnvelope: renderer.onTerminalEnvelope,
-          }
-        : {
-            ...input.request,
-            onNotificationEnvelope: renderer.onNotificationEnvelope,
-            onTerminalEnvelope: renderer.onTerminalEnvelope,
-          };
+    const request = {
+      ...input.request,
+      onNotificationEnvelope: renderer.onNotificationEnvelope,
+      onTerminalEnvelope: renderer.onTerminalEnvelope,
+    };
     const returnedTerminal = await input.transport.request(request);
     const observedTerminal = renderer.observedTerminal();
     if (observedTerminal === undefined || returnedTerminal !== observedTerminal) {

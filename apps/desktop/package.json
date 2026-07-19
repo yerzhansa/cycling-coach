@@ -1,0 +1,33 @@
+{
+  "name": "@enduragent/desktop",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "check": "tsc --noEmit",
+    "package:dir": "electron-vite build && electron-builder --dir",
+    "smoke:runtime": "node scripts/electron-smoke.mjs runtime",
+    "smoke:security": "node scripts/electron-smoke.mjs security",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@enduragent/coach": "workspace:*",
+    "@enduragent/coach-contract": "workspace:*"
+  },
+  "devDependencies": {
+    "@enduragent/desktop-renderer": "workspace:*",
+    "@types/node": "^25.6.0",
+    "electron": "43.1.1",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
+    "typescript": "^6.0.2",
+    "vite": "7.3.6",
+    "vitest": "^4.1.4"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

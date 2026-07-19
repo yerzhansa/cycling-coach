@@ -121,6 +121,17 @@ describe("service-aware arbitration", () => {
       kind: "compatible-healthy",
       peer: { pid: 7, port: 43_210, peerVersion: "0.1.0" },
       serverProtocolVersion: PROTOCOL_VERSION,
+      authenticated: {
+        peer,
+        coordinates: { port: peer.port, token: "x".repeat(43) },
+        handshake: {
+          type: "handshake",
+          status: "accepted",
+          clientProtocolVersion: PROTOCOL_VERSION,
+          serverProtocolVersion: PROTOCOL_VERSION,
+          owner: "service-managed",
+        },
+      },
     });
     expect(handshake).toHaveBeenCalledWith({
       port: peer.port,
@@ -184,6 +195,18 @@ describe("service-aware arbitration", () => {
     ).resolves.toEqual({
       kind: "version-mismatch",
       failure: { kind: "version-mismatch", direction: "client-older" },
+      authenticated: {
+        peer,
+        coordinates: { port: peer.port, token: "y".repeat(43) },
+        handshake: {
+          type: "handshake",
+          status: "version-mismatch",
+          clientProtocolVersion: PROTOCOL_VERSION,
+          serverProtocolVersion: PROTOCOL_VERSION + 1,
+          direction: "client-older",
+          owner: "service-managed",
+        },
+      },
     });
   });
 });

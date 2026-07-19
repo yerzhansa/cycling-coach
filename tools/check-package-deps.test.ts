@@ -53,6 +53,7 @@ const r5 = ruleForDir("packages/sync-*");
 const rCoachCli = ruleForDir("packages/coach-cli");
 const rCoachClient = ruleForDir("packages/coach-client");
 const rRenderer = ruleForDir("apps/desktop-renderer");
+const rDesktop = ruleForDir("apps/desktop");
 const rCoach = ruleForDir("packages/coach");
 const rBin = ruleForDir("packages/cycling-coach");
 
@@ -84,7 +85,10 @@ describe("R1 kernel purity", () => {
   });
 
   it("R1 flags a workspace import (kernel imports nothing)", () => {
-    write("packages/kernel/src/bad.ts", `import { z } from "@enduragent/core";\nexport const x = z;\n`);
+    write(
+      "packages/kernel/src/bad.ts",
+      `import { z } from "@enduragent/core";\nexport const x = z;\n`,
+    );
     expect(violationsFor(r1)).toBe(1);
   });
 
@@ -110,7 +114,10 @@ describe("R1 kernel purity", () => {
 
 describe("R2 kernel-node adapter", () => {
   it("R2 flags importing @enduragent/core", () => {
-    write("packages/kernel-node/src/bad.ts", `import { z } from "@enduragent/core";\nexport const x = z;\n`);
+    write(
+      "packages/kernel-node/src/bad.ts",
+      `import { z } from "@enduragent/core";\nexport const x = z;\n`,
+    );
     expect(violationsFor(r2)).toBe(1);
   });
 
@@ -164,12 +171,18 @@ describe("R2 kernel-node adapter", () => {
 
 describe("R3 engine + core", () => {
   it("R3 flags the engine importing @enduragent/kernel-node", () => {
-    write("packages/engine/src/bad.ts", `import { x } from "@enduragent/kernel-node";\nexport const y = x;\n`);
+    write(
+      "packages/engine/src/bad.ts",
+      `import { x } from "@enduragent/kernel-node";\nexport const y = x;\n`,
+    );
     expect(violationsFor(rEngine)).toBe(1);
   });
 
   it("R3 flags the engine importing @enduragent/core", () => {
-    write("packages/engine/src/bad.ts", `import { x } from "@enduragent/core";\nexport const y = x;\n`);
+    write(
+      "packages/engine/src/bad.ts",
+      `import { x } from "@enduragent/core";\nexport const y = x;\n`,
+    );
     expect(violationsFor(rEngine)).toBe(1);
   });
 
@@ -182,19 +195,28 @@ describe("R3 engine + core", () => {
   });
 
   it("R3 passes core importing @enduragent/engine but surfaces the transitional WARN", () => {
-    write("packages/core/src/shim.ts", `import { e } from "@enduragent/engine";\nexport const y = e;\n`);
+    write(
+      "packages/core/src/shim.ts",
+      `import { e } from "@enduragent/engine";\nexport const y = e;\n`,
+    );
     const result = runRulesAgainst(tempDir, [rCore]);
     expect(result.violations).toHaveLength(0);
     expect(result.warnEdges).toContainEqual({ dir: "packages/core", target: "@enduragent/engine" });
   });
 
   it("R3 flags core importing @enduragent/kernel-node", () => {
-    write("packages/core/src/bad.ts", `import { x } from "@enduragent/kernel-node";\nexport const y = x;\n`);
+    write(
+      "packages/core/src/bad.ts",
+      `import { x } from "@enduragent/kernel-node";\nexport const y = x;\n`,
+    );
     expect(violationsFor(rCore)).toBe(1);
   });
 
   it("R3 passes core importing @enduragent/kernel but surfaces the transitional WARN", () => {
-    write("packages/core/src/shim.ts", `import { k } from "@enduragent/kernel";\nexport const y = k;\n`);
+    write(
+      "packages/core/src/shim.ts",
+      `import { k } from "@enduragent/kernel";\nexport const y = k;\n`,
+    );
     const result = runRulesAgainst(tempDir, [rCore]);
     expect(result.violations).toHaveLength(0);
     expect(result.warnEdges).toEqual([{ dir: "packages/core", target: "@enduragent/kernel" }]);
@@ -203,7 +225,10 @@ describe("R3 engine + core", () => {
 
 describe("R4 sport packages", () => {
   it("R4 flags a sport importing @enduragent/engine (root, not the subpath)", () => {
-    write("packages/sport-x/src/bad.ts", `import { e } from "@enduragent/engine";\nexport const y = e;\n`);
+    write(
+      "packages/sport-x/src/bad.ts",
+      `import { e } from "@enduragent/engine";\nexport const y = e;\n`,
+    );
     expect(violationsFor(r4)).toBe(1);
   });
 
@@ -221,31 +246,46 @@ describe("R4 sport packages", () => {
   });
 
   it("R4 flags a sport importing @enduragent/kernel-node (the R8 wall)", () => {
-    write("packages/sport-x/src/bad.ts", `import { x } from "@enduragent/kernel-node";\nexport const y = x;\n`);
+    write(
+      "packages/sport-x/src/bad.ts",
+      `import { x } from "@enduragent/kernel-node";\nexport const y = x;\n`,
+    );
     expect(violationsFor(r4)).toBe(1);
   });
 
   it("R4 flags a sport importing @enduragent/core", () => {
-    write("packages/sport-x/src/bad.ts", `import { c } from "@enduragent/core";\nexport const y = c;\n`);
+    write(
+      "packages/sport-x/src/bad.ts",
+      `import { c } from "@enduragent/core";\nexport const y = c;\n`,
+    );
     expect(violationsFor(r4)).toBe(1);
   });
 });
 
 describe("R5 sync packages", () => {
   it("R5 flags a sync package importing @enduragent/core", () => {
-    write("packages/sync-x/src/bad.ts", `import { c } from "@enduragent/core";\nexport const y = c;\n`);
+    write(
+      "packages/sync-x/src/bad.ts",
+      `import { c } from "@enduragent/core";\nexport const y = c;\n`,
+    );
     expect(violationsFor(r5)).toBe(1);
   });
 
   it("R5 passes a sync package importing @enduragent/kernel", () => {
-    write("packages/sync-x/src/ok.ts", `import { k } from "@enduragent/kernel";\nexport const y = k;\n`);
+    write(
+      "packages/sync-x/src/ok.ts",
+      `import { k } from "@enduragent/kernel";\nexport const y = k;\n`,
+    );
     expect(violationsFor(r5)).toBe(0);
   });
 });
 
 describe("R6 desktop renderer", () => {
   it("R6 flags the renderer importing @enduragent/engine", () => {
-    write("apps/desktop-renderer/src/bad.ts", `import { e } from "@enduragent/engine";\nexport const y = e;\n`);
+    write(
+      "apps/desktop-renderer/src/bad.ts",
+      `import { e } from "@enduragent/engine";\nexport const y = e;\n`,
+    );
     expect(violationsFor(rRenderer)).toBe(1);
   });
 
@@ -255,6 +295,45 @@ describe("R6 desktop renderer", () => {
       `import { a } from "@enduragent/coach-contract";\nexport const y = a;\n`,
     );
     expect(violationsFor(rRenderer)).toBe(0);
+  });
+
+  it("R6 passes coach-client and rejects Node and external imports", () => {
+    write(
+      "apps/desktop-renderer/src/client.ts",
+      `import { connectCoachClient } from "@enduragent/coach-client";\nexport const client = connectCoachClient;\n`,
+    );
+    expect(violationsFor(rRenderer)).toBe(0);
+    write(
+      "apps/desktop-renderer/src/node.ts",
+      `import fs from "node:fs";\nexport const value = fs;\n`,
+    );
+    write("apps/desktop-renderer/src/external.ts", `import value from "zod";\nexport { value };\n`);
+    expect(violationsFor(rRenderer)).toBe(2);
+  });
+});
+
+describe("R8 desktop app", () => {
+  it("allows only coach and coach-contract workspace edges", () => {
+    write(
+      "apps/desktop/src/ok.ts",
+      `import { run } from "@enduragent/coach";\nimport { PROTOCOL_VERSION } from "@enduragent/coach-contract";\nexport const value = [run, PROTOCOL_VERSION];\n`,
+    );
+    expect(violationsFor(rDesktop)).toBe(0);
+    for (const [index, dependency] of [
+      "@enduragent/coach-client",
+      "@enduragent/core",
+      "@enduragent/engine",
+      "@enduragent/kernel",
+      "@enduragent/kernel-node",
+      "@enduragent/sport-cycling",
+      "@enduragent/sync-intervals",
+    ].entries()) {
+      write(
+        `apps/desktop/src/bad-${index}.ts`,
+        `import value from "${dependency}";\nexport { value };\n`,
+      );
+    }
+    expect(violationsFor(rDesktop)).toBe(7);
   });
 });
 
@@ -275,11 +354,17 @@ describe("R6 coach client", () => {
 
   it.each([
     [`import value from "ws";\nexport { value };\n`, "ws"],
-    [`import type { Config } from 'other-external';\nexport const value: Config | null = null;\n`, "other-external"],
+    [
+      `import type { Config } from 'other-external';\nexport const value: Config | null = null;\n`,
+      "other-external",
+    ],
     [`import 'ws';\n`, "ws"],
     [`export { value } from 'other-external';\n`, "other-external"],
     [`export const value = import("ws");\n`, "ws"],
-    [`declare const require: (name: string) => unknown;\nexport const value = require('other-external');\n`, "other-external"],
+    [
+      `declare const require: (name: string) => unknown;\nexport const value = require('other-external');\n`,
+      "other-external",
+    ],
     [`import { readFileSync } from "node:fs";\nexport { readFileSync };\n`, "node:fs"],
     [`import fs from 'fs';\nexport { fs };\n`, "fs"],
   ])("rejects closed source import form for %s", (source, specifier) => {
@@ -326,8 +411,15 @@ describe("R6 coach CLI", () => {
     expect(violationsFor(rCoachCli)).toBe(0);
 
     for (const specifier of ["@enduragent/engine", "@enduragent/kernel", "@enduragent/coach"]) {
-      write("packages/coach-cli/src/bad.ts", `import value from "${specifier}";\nexport { value };\n`);
-      expect(runRulesAgainst(tempDir, [rCoachCli]).violations.some((violation) => violation.specifier === specifier)).toBe(true);
+      write(
+        "packages/coach-cli/src/bad.ts",
+        `import value from "${specifier}";\nexport { value };\n`,
+      );
+      expect(
+        runRulesAgainst(tempDir, [rCoachCli]).violations.some(
+          (violation) => violation.specifier === specifier,
+        ),
+      ).toBe(true);
     }
   });
 });
@@ -364,12 +456,18 @@ describe("R-BIN legacy binaries", () => {
   });
 
   it("R-BIN flags importing @enduragent/kernel-node (the new graph is walled off)", () => {
-    write("packages/cycling-coach/src/bad.ts", `import { x } from "@enduragent/kernel-node";\nexport const y = x;\n`);
+    write(
+      "packages/cycling-coach/src/bad.ts",
+      `import { x } from "@enduragent/kernel-node";\nexport const y = x;\n`,
+    );
     expect(violationsFor(rBin)).toBe(1);
   });
 
   it("R-BIN flags importing @enduragent/engine", () => {
-    write("packages/cycling-coach/src/bad.ts", `import { e } from "@enduragent/engine";\nexport const y = e;\n`);
+    write(
+      "packages/cycling-coach/src/bad.ts",
+      `import { e } from "@enduragent/engine";\nexport const y = e;\n`,
+    );
     expect(violationsFor(rBin)).toBe(1);
   });
 });

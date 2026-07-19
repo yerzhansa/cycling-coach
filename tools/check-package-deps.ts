@@ -61,6 +61,8 @@ const COMPOSITION_ROOT_ALLOWED: readonly string[] = [
   "@enduragent/sport-*",
 ];
 
+const DESKTOP_APP_ALLOWED: readonly string[] = ["@enduragent/coach", "@enduragent/coach-contract"];
+
 const LEGACY_BINARY_ALLOWED: readonly string[] = ["@enduragent/core", "@enduragent/sport-*"];
 
 /**
@@ -139,9 +141,10 @@ export const RULES: readonly PackageDepRule[] = [
     ruleId: "R6",
     dir: "apps/desktop-renderer",
     srcOnly: true,
-    allowedWorkspace: ["@enduragent/coach-contract"],
+    allowedWorkspace: ["@enduragent/coach-contract", "@enduragent/coach-client"],
     transitionalWorkspace: [],
-    forbidNode: false,
+    allowedExternal: [],
+    forbidNode: true,
   },
   {
     ruleId: "R8",
@@ -155,7 +158,7 @@ export const RULES: readonly PackageDepRule[] = [
     ruleId: "R8",
     dir: "apps/desktop",
     srcOnly: true,
-    allowedWorkspace: COMPOSITION_ROOT_ALLOWED,
+    allowedWorkspace: DESKTOP_APP_ALLOWED,
     transitionalWorkspace: [],
     forbidNode: false,
   },

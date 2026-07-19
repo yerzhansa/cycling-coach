@@ -21,11 +21,30 @@ import {
   serializeCoachRpcEnvelope,
   type AthleteState,
   type CoachEngine,
+  type CoachOperations,
   type TurnEvent,
 } from "@enduragent/coach-contract";
 import { createCoachRpcServer, type CoachRpcServer } from "../src/daemon/rpc-server.js";
 
 const token = "s".repeat(43);
+const operations: CoachOperations = {
+  importFiles: async ({ paths }) => ({
+    schemaVersion: 1,
+    files: { total: paths.length, imported: paths.length, quarantined: 0 },
+    changes: {
+      rawFilesInserted: paths.length,
+      sourceRecordsInserted: paths.length,
+      sourceRecordsUpdated: 0,
+      relinkedSourceRecords: 0,
+    },
+  }),
+  sync: async () => ({
+    schemaVersion: 1,
+    published: true,
+    referenceSucceeded: true,
+    requests: { store: 1, reference: 1, total: 2 },
+  }),
+};
 const state: AthleteState = {
   schemaVersion: "3",
   lastUpdated: "2000-01-01T00:00:00.000Z",
@@ -91,7 +110,7 @@ interface RunningRpc {
 }
 
 async function startRpc(engine: CoachEngine): Promise<RunningRpc> {
-  const rpc = createCoachRpcServer({ engine, token, owner: "unmanaged-foreground" });
+  const rpc = createCoachRpcServer({ engine, operations, token, owner: "unmanaged-foreground" });
   const server = createServer();
   const disconnectWaiters: Array<() => void> = [];
   server.on("connection", (socket) => {
@@ -190,6 +209,7 @@ describe.skipIf(!hasLoopback)("CLI verbs over real RPC framing", () => {
           chatId: row.verb.name === "state" ? undefined : "cli:RaceA",
           stdinText: undefined,
           signal: new AbortController().signal,
+          callerCwd: "/synthetic/caller",
         });
         await expect(
           runCoachVerb({
@@ -239,6 +259,7 @@ describe.skipIf(!hasLoopback)("CLI verbs over real RPC framing", () => {
             chatId: undefined,
             stdinText: undefined,
             signal: new AbortController().signal,
+            callerCwd: "/synthetic/caller",
           }),
           outputMode: "json",
           terminal: { stdout: stdout.stream, stderr: stderr.stream },

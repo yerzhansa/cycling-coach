@@ -1,0 +1,12 @@
+appId: icu.enduragent.desktop
+productName: Enduragent
+asar: true
+directories:
+  output: dist
+files:
+  - out/**
+  - package.json
+mac:
+  target:
+    - target: dir
+      arch: [arm64]

@@ -1298,6 +1298,21 @@ describe("CLI and scope", () => {
       process.chdir(original);
     }
     expect(DEFAULT_SCAN_PATHS).toContain(".changeset");
+    expect(DEFAULT_SCAN_PATHS).toContain("apps");
+  });
+
+  it("[main-defaults] scans app sources for identifier leaks", () => {
+    writeEmptyManifest();
+    write("apps/desktop-renderer/src/leak.ts", `export const id = "i987654321";\n`);
+    const original = process.cwd();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      process.chdir(tempDir);
+      expect(main([])).toBe(1);
+    } finally {
+      process.chdir(original);
+    }
+    expect(error.mock.calls.flat().join(" ")).toContain("apps/desktop-renderer/src/leak.ts");
   });
 
   it("[scope-separation] explicit prose input cannot hide unconditional binary inventory", () => {

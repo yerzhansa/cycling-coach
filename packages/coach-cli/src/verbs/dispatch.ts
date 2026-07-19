@@ -1,4 +1,6 @@
 import type { CoachCliVerb } from "../args.js";
+import { ImportFilesRpcParamsSchema } from "@enduragent/coach-contract";
+import { resolve } from "node:path";
 import type { CoachVerbRequest } from "./types.js";
 
 interface CreateCoachVerbRequestInput {
@@ -6,13 +8,14 @@ interface CreateCoachVerbRequestInput {
   readonly chatId: string | undefined;
   readonly stdinText: string | undefined;
   readonly signal: AbortSignal;
+  readonly callerCwd: string;
 }
 
-const ignoreNotification: CoachVerbRequest["onNotificationEnvelope"] = () => {};
+const ignoreNotification = () => {};
 const ignoreTerminal: CoachVerbRequest["onTerminalEnvelope"] = () => {};
 
 function chatMessage(
-  verb: Exclude<CoachCliVerb, { readonly name: "state" }>,
+  verb: Exclude<CoachCliVerb, { readonly name: "state" | "import" | "sync" }>,
   stdinText?: string,
 ): string {
   switch (verb.name) {
@@ -33,6 +36,26 @@ export function createCoachVerbRequest(input: CreateCoachVerbRequestInput): Coac
   if (input.verb.name === "state") {
     return {
       method: "getAthleteState",
+      params: {},
+      signal: input.signal,
+      onNotificationEnvelope: ignoreNotification,
+      onTerminalEnvelope: ignoreTerminal,
+    };
+  }
+  if (input.verb.name === "import") {
+    return {
+      method: "importFiles",
+      params: ImportFilesRpcParamsSchema.parse({
+        paths: input.verb.paths.map((path) => resolve(input.callerCwd, path)),
+      }),
+      signal: input.signal,
+      onNotificationEnvelope: ignoreNotification,
+      onTerminalEnvelope: ignoreTerminal,
+    };
+  }
+  if (input.verb.name === "sync") {
+    return {
+      method: "sync",
       params: {},
       signal: input.signal,
       onNotificationEnvelope: ignoreNotification,

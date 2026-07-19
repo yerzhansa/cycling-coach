@@ -74,10 +74,12 @@ describe.skipIf(!hasLoopback)("production peer observations", () => {
     if (healthy.status !== "acquired") return;
     const healthyBinding = await healthy.listener.bind({
       request: (_request, response) => {
-        response.end(`${JSON.stringify({
-          service: "enduragent-store-writer",
-          version: "0.1.0",
-        })}\n`);
+        response.end(
+          `${JSON.stringify({
+            service: "enduragent-store-writer",
+            version: "0.1.0",
+          })}\n`,
+        );
       },
       upgrade: (_request, socket) => socket.destroy(),
     });
@@ -138,6 +140,24 @@ describe.skipIf(!hasLoopback)("production peer observations", () => {
     const rpc = createCoachRpcServer({
       token,
       owner: "service-managed",
+      operations: {
+        importFiles: async ({ paths }) => ({
+          schemaVersion: 1,
+          files: { total: paths.length, imported: paths.length, quarantined: 0 },
+          changes: {
+            rawFilesInserted: 0,
+            sourceRecordsInserted: 0,
+            sourceRecordsUpdated: 0,
+            relinkedSourceRecords: 0,
+          },
+        }),
+        sync: async () => ({
+          schemaVersion: 1,
+          published: false,
+          referenceSucceeded: true,
+          requests: { store: 0, reference: 0, total: 0 },
+        }),
+      },
       engine: {
         chat: async () => ({ text: "ok" }),
         resetSession: async () => ({ memoryFlushed: true }),
@@ -161,32 +181,40 @@ describe.skipIf(!hasLoopback)("production peer observations", () => {
       request: (_request, response) => response.end(),
       upgrade: rpc.handleUpgrade,
     });
-    await expect(observePeerHandshake({
-      port: binding.port,
-      token,
-      clientProtocolVersion: PROTOCOL_VERSION,
-    })).resolves.toMatchObject({ status: "accepted", owner: "service-managed" });
-    await expect(observePeerHandshake({
-      port: binding.port,
-      token,
-      clientProtocolVersion: PROTOCOL_VERSION + 1,
-    })).resolves.toMatchObject({ status: "version-mismatch", direction: "client-newer" });
+    await expect(
+      observePeerHandshake({
+        port: binding.port,
+        token,
+        clientProtocolVersion: PROTOCOL_VERSION,
+      }),
+    ).resolves.toMatchObject({ status: "accepted", owner: "service-managed" });
+    await expect(
+      observePeerHandshake({
+        port: binding.port,
+        token,
+        clientProtocolVersion: PROTOCOL_VERSION + 1,
+      }),
+    ).resolves.toMatchObject({ status: "version-mismatch", direction: "client-newer" });
     const control = await openAuthenticatedDaemonControl({
       port: binding.port,
       token,
       incumbentProtocolVersion: PROTOCOL_VERSION,
       expectedOwner: "service-managed",
     });
-    await expect(control.reserveUpgrade({
-      targetProtocolVersion: PROTOCOL_VERSION + 1,
-      handoffCapability: Buffer.alloc(32, 6).toString("base64url"),
-    })).resolves.toEqual({ status: "reserved" });
+    await expect(
+      control.reserveUpgrade({
+        targetProtocolVersion: PROTOCOL_VERSION + 1,
+        handoffCapability: Buffer.alloc(32, 6).toString("base64url"),
+      }),
+    ).resolves.toEqual({ status: "reserved" });
     await control.close();
-    await expect(observePeerHandshake({
-      port: binding.port,
-      token: "wrong",
-      clientProtocolVersion: PROTOCOL_VERSION,
-    })).rejects.toThrow("daemon handshake failed");
+    await expect(
+      observePeerHandshake({
+        port: binding.port,
+        token: "wrong",
+        clientProtocolVersion: PROTOCOL_VERSION,
+      }),
+    ).rejects.toThrow("daemon handshake failed");
     await rpc.close();
     await binding.close();
     await lock.release();
@@ -207,9 +235,10 @@ function resolverHarness(owner: DaemonOwner, clientVersion: number, serverVersio
     port: 41_002,
     peerVersion: "new",
   } as const;
-  const handshake = clientVersion === serverVersion
-    ? createAcceptedServerHandshakeFrame(owner, clientVersion, serverVersion)
-    : createVersionMismatchServerHandshakeFrame(owner, clientVersion, serverVersion);
+  const handshake =
+    clientVersion === serverVersion
+      ? createAcceptedServerHandshakeFrame(owner, clientVersion, serverVersion)
+      : createVersionMismatchServerHandshakeFrame(owner, clientVersion, serverVersion);
   const publishedHandshake = createAcceptedServerHandshakeFrame(
     owner,
     clientVersion,
@@ -233,9 +262,10 @@ function resolverHarness(owner: DaemonOwner, clientVersion: number, serverVersio
     shutdownForUpgrade: vi.fn(async () => ({ status: "accepted" as const })),
     close: vi.fn(async () => {}),
   };
-  const acquireFence = vi.fn<ResolveSecondStarterDependencies["acquireUpgradeFence"]>(
-    async () => ({ status: "acquired", handle: fence }),
-  );
+  const acquireFence = vi.fn<ResolveSecondStarterDependencies["acquireUpgradeFence"]>(async () => ({
+    status: "acquired",
+    handle: fence,
+  }));
   const dependencies = {
     observePeerHandshake: vi.fn(async () => handshake),
     openUpgradeControl: vi.fn(async () => control),
@@ -250,21 +280,33 @@ function resolverHarness(owner: DaemonOwner, clientVersion: number, serverVersio
       handshake: publishedHandshake,
     })),
   } satisfies ResolveSecondStarterDependencies;
-  return { selectedHome, peer, publishedPeer, handshake, dependencies, fence, control, serviceUpgrade };
+  return {
+    selectedHome,
+    peer,
+    publishedPeer,
+    handshake,
+    dependencies,
+    fence,
+    control,
+    serviceUpgrade,
+  };
 }
 
 describe("second starter resolution", () => {
   it("defers daemon starters and attaches client races for compatible peers", async () => {
     for (const caller of ["serve", "service", "cli-auto-start", "local"] as const) {
       const test = resolverHarness("service-managed", PROTOCOL_VERSION, PROTOCOL_VERSION);
-      const result = await resolveSecondStarter({
-        caller,
-        home: test.selectedHome,
-        clientProtocolVersion: PROTOCOL_VERSION,
-        clientAppVersion: "new",
-        bearerToken: "token",
-        peer: test.peer,
-      }, test.dependencies);
+      const result = await resolveSecondStarter(
+        {
+          caller,
+          home: test.selectedHome,
+          clientProtocolVersion: PROTOCOL_VERSION,
+          clientAppVersion: "new",
+          bearerToken: "token",
+          peer: test.peer,
+        },
+        test.dependencies,
+      );
       if (caller === "serve" || caller === "service") {
         expect(result).toEqual({
           status: "defer",
@@ -281,14 +323,17 @@ describe("second starter resolution", () => {
 
   it("returns exit 5 for a lower client and never restarts downward", async () => {
     const test = resolverHarness("service-managed", PROTOCOL_VERSION, PROTOCOL_VERSION + 1);
-    const result = await resolveSecondStarter({
-      caller: "cli-auto-start",
-      home: test.selectedHome,
-      clientProtocolVersion: PROTOCOL_VERSION,
-      clientAppVersion: "old",
-      bearerToken: "token",
-      peer: test.peer,
-    }, test.dependencies);
+    const result = await resolveSecondStarter(
+      {
+        caller: "cli-auto-start",
+        home: test.selectedHome,
+        clientProtocolVersion: PROTOCOL_VERSION,
+        clientAppVersion: "old",
+        bearerToken: "token",
+        peer: test.peer,
+      },
+      test.dependencies,
+    );
     expect(result).toEqual({
       status: "refuse",
       exitCode: EXIT_VERSION_MISMATCH,
@@ -301,14 +346,17 @@ describe("second starter resolution", () => {
 
   it("refuses an authenticated unmanaged owner with exit 3 and zero takeover", async () => {
     const test = resolverHarness("unmanaged-foreground", PROTOCOL_VERSION + 1, PROTOCOL_VERSION);
-    const result = await resolveSecondStarter({
-      caller: "local",
-      home: test.selectedHome,
-      clientProtocolVersion: PROTOCOL_VERSION + 1,
-      clientAppVersion: "new",
-      bearerToken: "token",
-      peer: test.peer,
-    }, test.dependencies);
+    const result = await resolveSecondStarter(
+      {
+        caller: "local",
+        home: test.selectedHome,
+        clientProtocolVersion: PROTOCOL_VERSION + 1,
+        clientAppVersion: "new",
+        bearerToken: "token",
+        peer: test.peer,
+      },
+      test.dependencies,
+    );
     expect(result).toEqual({
       status: "refuse",
       exitCode: 3,
@@ -320,14 +368,17 @@ describe("second starter resolution", () => {
 
   it("performs one fenced upward restart and attaches to the new port", async () => {
     const test = resolverHarness("service-managed", PROTOCOL_VERSION + 1, PROTOCOL_VERSION);
-    const result = await resolveSecondStarter({
-      caller: "cli-auto-start",
-      home: test.selectedHome,
-      clientProtocolVersion: PROTOCOL_VERSION + 1,
-      clientAppVersion: "new",
-      bearerToken: "token",
-      peer: test.peer,
-    }, test.dependencies);
+    const result = await resolveSecondStarter(
+      {
+        caller: "cli-auto-start",
+        home: test.selectedHome,
+        clientProtocolVersion: PROTOCOL_VERSION + 1,
+        clientAppVersion: "new",
+        bearerToken: "token",
+        peer: test.peer,
+      },
+      test.dependencies,
+    );
     expect(result).toMatchObject({ status: "attach", port: test.publishedPeer.port });
     expect(test.control.reserveUpgrade).toHaveBeenCalledTimes(1);
     expect(test.control.shutdownForUpgrade).toHaveBeenCalledTimes(1);
@@ -342,14 +393,17 @@ describe("second starter resolution", () => {
       PROTOCOL_VERSION,
     );
     test.serviceUpgrade.isInstalled.mockResolvedValue(false);
-    const result = await resolveSecondStarter({
-      caller: "serve",
-      home: test.selectedHome,
-      clientProtocolVersion: PROTOCOL_VERSION + 1,
-      clientAppVersion: "new",
-      bearerToken: "token",
-      peer: test.peer,
-    }, test.dependencies);
+    const result = await resolveSecondStarter(
+      {
+        caller: "serve",
+        home: test.selectedHome,
+        clientProtocolVersion: PROTOCOL_VERSION + 1,
+        clientAppVersion: "new",
+        bearerToken: "token",
+        peer: test.peer,
+      },
+      test.dependencies,
+    );
     expect(result).toMatchObject({
       status: "become-successor",
       handoffCapability: test.fence.handoffCapability,
@@ -364,26 +418,32 @@ describe("second starter resolution", () => {
       exitCode: 3,
       message: HANDOFF_RESERVED_MESSAGE,
     });
-    const reservedResult = await resolveSecondStarter({
-      caller: "serve",
-      home: reserved.selectedHome,
-      clientProtocolVersion: PROTOCOL_VERSION + 1,
-      clientAppVersion: "new",
-      bearerToken: "token",
-      peer: reserved.peer,
-    }, reserved.dependencies);
+    const reservedResult = await resolveSecondStarter(
+      {
+        caller: "serve",
+        home: reserved.selectedHome,
+        clientProtocolVersion: PROTOCOL_VERSION + 1,
+        clientAppVersion: "new",
+        bearerToken: "token",
+        peer: reserved.peer,
+      },
+      reserved.dependencies,
+    );
     expect(reservedResult).toMatchObject({ stderr: HANDOFF_RESERVED_MESSAGE });
 
     const failed = resolverHarness("service-managed", PROTOCOL_VERSION + 1, PROTOCOL_VERSION);
     failed.serviceUpgrade.restartInstalledService.mockRejectedValue(new Error("secret"));
-    const failedResult = await resolveSecondStarter({
-      caller: "service",
-      home: failed.selectedHome,
-      clientProtocolVersion: PROTOCOL_VERSION + 1,
-      clientAppVersion: "new",
-      bearerToken: "token",
-      peer: failed.peer,
-    }, failed.dependencies);
+    const failedResult = await resolveSecondStarter(
+      {
+        caller: "service",
+        home: failed.selectedHome,
+        clientProtocolVersion: PROTOCOL_VERSION + 1,
+        clientAppVersion: "new",
+        bearerToken: "token",
+        peer: failed.peer,
+      },
+      failed.dependencies,
+    );
     expect(failedResult).toMatchObject({ stderr: UPGRADE_SUCCESSOR_FAILED_MESSAGE });
   });
 });
