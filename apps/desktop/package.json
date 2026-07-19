@@ -11,6 +11,7 @@
     "package:dir": "electron-vite build && electron-builder --dir",
     "smoke:runtime": "node scripts/electron-smoke.mjs runtime",
     "smoke:security": "node scripts/electron-smoke.mjs security",
+    "accept:residency": "node ./scripts/accept-residency.mjs",
     "test:safe-storage-packaged": "node scripts/test-safe-storage-packaged.mjs",
     "test": "vitest run"
   },

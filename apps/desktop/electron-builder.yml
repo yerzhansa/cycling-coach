@@ -6,6 +6,11 @@ directories:
 files:
   - out/**
   - package.json
+  - from: resources
+    to: resources
+    filter:
+      - trayTemplate.png
+      - trayTemplate@2x.png
 mac:
   target:
     - target: dir

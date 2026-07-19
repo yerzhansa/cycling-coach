@@ -14,6 +14,7 @@ import {
 import { DESKTOP_CONNECTION_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
 import { CREDENTIAL_DIRECTORY_NAME, createCredentialVault } from "./credential-vault.js";
 import { registerOnboardingIpc, runtimeConfigurationForCredential } from "./onboarding-ipc.js";
+import { createDesktopResidency, type DesktopResidency } from "./residency.js";
 import {
   desktopWindowOptions,
   hardenDesktopWindow,
@@ -48,6 +49,14 @@ async function runRuntimeSmoke(): Promise<void> {
 }
 
 async function runDesktop(): Promise<void> {
+  let residency: DesktopResidency | undefined;
+  app.on("second-instance", () => {
+    void residency?.showMainWindow();
+  });
+  app.on("activate", () => {
+    void residency?.showMainWindow();
+  });
+  app.on("window-all-closed", () => {});
   await app.whenReady();
   const controller = new AbortController();
   const supervisor = new DesktopDaemonSupervisor(
@@ -82,6 +91,7 @@ async function runDesktop(): Promise<void> {
     return shutdownPromise;
   };
   app.on("before-quit", (event) => {
+    residency?.close();
     if (quitting) return;
     event.preventDefault();
     quitting = true;
@@ -127,34 +137,83 @@ async function runDesktop(): Promise<void> {
         : { developmentUrl: process.env.ELECTRON_RENDERER_URL }),
     });
     protocolInstalled = true;
-    let window: BrowserWindow | undefined = new BrowserWindow(desktopWindowOptions(preloadEntry));
     const consoleMessages: string[] = [];
-    window.webContents.on("console-message", (_event, _level, consoleMessage) => {
-      consoleMessages.push(consoleMessage);
-    });
-    hardenDesktopWindow(window);
+    let window: BrowserWindow | null = null;
+    let windowCreation: Promise<BrowserWindow> | undefined;
+    const mainWindow = {
+      current: (): BrowserWindow | null =>
+        window !== null && !window.isDestroyed() ? window : null,
+      show: (): Promise<BrowserWindow> => {
+        if (windowCreation !== undefined) return windowCreation;
+        const current = mainWindow.current();
+        if (current !== null) {
+          if (current.isMinimized()) current.restore();
+          current.show();
+          current.focus();
+          return Promise.resolve(current);
+        }
+        windowCreation = (async () => {
+          const created = new BrowserWindow(desktopWindowOptions(preloadEntry));
+          window = created;
+          created.webContents.on("console-message", (_event, _level, consoleMessage) => {
+            consoleMessages.push(consoleMessage);
+          });
+          hardenDesktopWindow(created);
+          disposeOnboarding?.();
+          disposeOnboarding = registerOnboardingIpc({
+            ipcMain,
+            dialog,
+            window: created,
+            vault,
+            isTrusted: (event) =>
+              isTrustedConnectionRequest(event, mainWindow.current() ?? undefined),
+          });
+          created.once("ready-to-show", () => {
+            if (!created.isDestroyed()) created.show();
+          });
+          created.once("closed", () => {
+            if (window === created) {
+              window = null;
+              disposeOnboarding?.();
+              disposeOnboarding = undefined;
+            }
+          });
+          await created.loadURL(DESKTOP_RENDERER_URL);
+          if (created.isMinimized()) created.restore();
+          created.show();
+          created.focus();
+          return created;
+        })().finally(() => {
+          windowCreation = undefined;
+        });
+        return windowCreation;
+      },
+    };
     ipcMain.handle(DESKTOP_CONNECTION_CHANNEL, (event) => {
-      if (!isTrustedConnectionRequest(event, window)) {
+      if (!isTrustedConnectionRequest(event, mainWindow.current() ?? undefined)) {
         throw new Error("untrusted desktop connection request");
       }
       return { url: resolution.url, token: resolution.token };
     });
     connectionHandlerInstalled = true;
-    disposeOnboarding = registerOnboardingIpc({
-      ipcMain,
-      dialog,
-      window,
-      vault,
-      isTrusted: (event) => isTrustedConnectionRequest(event, window),
+    const trayPopoverUrl =
+      process.env.ELECTRON_RENDERER_URL === undefined
+        ? "enduragent://app/tray.html"
+        : new URL("/tray.html", process.env.ELECTRON_RENDERER_URL).toString();
+    residency = createDesktopResidency({
+      app,
+      mainWindow,
+      trayIconPath: join(app.getAppPath(), "resources", "trayTemplate.png"),
+      trayPopoverUrl,
+      reportFailure(operation) {
+        process.stderr.write(`desktop-residency-failure ${operation}\n`);
+      },
     });
-    window.once("ready-to-show", () => window?.show());
-    window.once("closed", () => {
-      window = undefined;
-    });
-    await window.loadURL(DESKTOP_RENDERER_URL);
+    const initialWindow = await mainWindow.show();
+    await residency.start();
 
     if (process.argv.includes("--desktop-security-smoke")) {
-      const rendererResult = await window.webContents.executeJavaScript(`(async () => {
+      const rendererResult = await initialWindow.webContents.executeJavaScript(`(async () => {
       const blockedPort = ${daemonPort === 65_535 ? daemonPort - 1 : daemonPort + 1};
       const blocked = await new Promise((resolve) => {
         let violation = false;
@@ -187,7 +246,7 @@ async function runDesktop(): Promise<void> {
         }
       };
     })()`);
-      const screenshot = (await window.webContents.capturePage()).toPNG();
+      const screenshot = (await initialWindow.webContents.capturePage()).toPNG();
       const outputArgument = process.argv.find((value) =>
         value.startsWith("--desktop-security-output="),
       );
@@ -229,8 +288,13 @@ async function runDesktop(): Promise<void> {
   }
 }
 
-if (process.argv.includes("--desktop-runtime-smoke")) {
-  void runRuntimeSmoke().catch(() => app.exit(1));
+const primaryInstance = app.requestSingleInstanceLock();
+
+if (!primaryInstance) {
+  app.exit(0);
 } else {
-  void runDesktop().catch(() => app.exit(1));
+  const runPrimaryDesktop = process.argv.includes("--desktop-runtime-smoke")
+    ? runRuntimeSmoke
+    : runDesktop;
+  void runPrimaryDesktop().catch(() => app.exit(1));
 }
