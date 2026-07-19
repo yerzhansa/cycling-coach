@@ -21,6 +21,7 @@ import {
   type CoachEngine,
   type CoachOperations,
   type CoachRpcMethodName,
+  type CoachSelfTestOperations,
   type DaemonOwner,
   type GetSpendSummaryRpcParams,
   type JsonRpcId,
@@ -141,6 +142,7 @@ export interface CoachRpcServerInput {
   readonly engine: CoachEngine;
   readonly operations: CoachOperations;
   readonly spend: SpendRpcHandlers;
+  readonly selfTestOperations: CoachSelfTestOperations;
   readonly token: string;
   readonly owner: DaemonOwner;
   readonly healthState?: DaemonHealthState;
@@ -751,6 +753,31 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                 generic.data.params,
               );
               result = await input.spend.setDailySpendCap(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "selfTest":
+            try {
+              COACH_RPC_METHOD_REGISTRY.selfTest.requestSchema.parse(generic.data.params);
+              result = await input.selfTestOperations.selfTest((event) => {
+                if (eventFailure !== undefined) return;
+                try {
+                  const parsedEvent = COACH_RPC_METHOD_REGISTRY.selfTest.eventSchema.parse(event);
+                  const notification = CoachOperationProgressNotificationEnvelopeSchema.parse({
+                    jsonrpc: "2.0",
+                    method: "coach.operationProgress",
+                    params: {
+                      requestId: generic.data.id,
+                      requestMethod: "selfTest",
+                      event: parsedEvent,
+                    },
+                  });
+                  void enqueueSerialized(state, serializeCoachRpcEnvelope(notification));
+                } catch (error) {
+                  eventFailure = { error };
+                }
+              });
             } catch (error) {
               invocationFailure = { error };
             }

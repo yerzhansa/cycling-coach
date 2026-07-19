@@ -341,6 +341,14 @@ export async function launchDesktopFixture(input: {
     engine,
     operations,
     spend,
+    selfTestOperations: {
+      selfTest: async () => ({
+        schemaVersion: 1,
+        type: "self-test-terminal",
+        ok: false,
+        error: { code: "RUNNER_ERROR", message: "packaged self-test failed" },
+      }),
+    },
     token: input.token,
     owner: "unmanaged-foreground",
   });

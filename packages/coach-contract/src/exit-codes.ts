@@ -16,5 +16,6 @@ export const EXIT_DAEMON_UNAVAILABLE = 3;
 export const EXIT_NOT_CONFIGURED = 4;
 /** Client and engine disagree on PROTOCOL_VERSION. */
 export const EXIT_VERSION_MISMATCH = 5;
+export const EXIT_CHECKSUM_MISMATCH = 7;
 
-export type ExitCode = 0 | 1 | 2 | 3 | 4 | 5;
+export type ExitCode = 0 | 1 | 2 | 3 | 4 | 5 | 7;

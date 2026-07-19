@@ -110,7 +110,7 @@ describe("coach CLI contract", () => {
     ]) {
       expect(parseCoachCliInvocation(argv)).toEqual({
         kind: "usage",
-        message: "Usage: enduragent [version|serve]",
+        message: "Usage: enduragent [version|serve|self-test]",
       });
     }
   });

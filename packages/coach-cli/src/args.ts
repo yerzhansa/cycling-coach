@@ -32,13 +32,14 @@ export type CoachCliInvocation =
   | { readonly kind: "repl" }
   | { readonly kind: "version" }
   | { readonly kind: "serve" }
+  | { readonly kind: "self-test" }
   | {
       readonly kind: "daemon";
       readonly action: "install" | "status" | "restart";
     }
   | {
       readonly kind: "usage";
-      readonly message: "Usage: enduragent [version|serve]";
+      readonly message: "Usage: enduragent [version|serve|self-test]";
     }
   | CoachCliVerbInvocation
   | {
@@ -182,6 +183,10 @@ export function parseCoachCliInvocation(argv: readonly string[]): CoachCliInvoca
     return { kind: "version" };
   }
   if (argv.length === 1 && argv[0] === "serve") return { kind: "serve" };
+  if (argv.length === 1 && argv[0] === "self-test") return { kind: "self-test" };
+  if (argv[0] === "self-test") {
+    return { kind: "usage", message: "Usage: enduragent [version|serve|self-test]" };
+  }
   if (
     argv.length === 2 &&
     argv[0] === "daemon" &&
@@ -191,7 +196,7 @@ export function parseCoachCliInvocation(argv: readonly string[]): CoachCliInvoca
   }
   const root = argv[0]!;
   if (!new Set(["ask", "state", "analyze", "import", "plan", "sync", "wellness"]).has(root)) {
-    return { kind: "usage", message: "Usage: enduragent [version|serve]" };
+    return { kind: "usage", message: "Usage: enduragent [version|serve|self-test]" };
   }
   const scanned = scanVerbArguments(argv.slice(1));
   if (scanned === undefined) return { kind: "verb-usage", message: VERB_USAGE };

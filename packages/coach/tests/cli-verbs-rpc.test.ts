@@ -122,6 +122,14 @@ async function startRpc(engine: CoachEngine): Promise<RunningRpc> {
       getSpendSummary: () => Promise.reject(new Error("Spend handler is not used.")),
       setDailySpendCap: () => Promise.reject(new Error("Spend handler is not used.")),
     },
+    selfTestOperations: {
+      selfTest: async () => ({
+        schemaVersion: 1,
+        type: "self-test-terminal",
+        ok: false,
+        error: { code: "RUNNER_ERROR", message: "packaged self-test failed" },
+      }),
+    },
     token,
     owner: "unmanaged-foreground",
   });

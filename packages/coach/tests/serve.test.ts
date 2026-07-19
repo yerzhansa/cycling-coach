@@ -205,6 +205,11 @@ describe("runCoachServe", () => {
     expect(test.handlers()?.upgrade).toBe(
       test.createRpcServer.mock.results[0]?.value.handleUpgrade,
     );
+    expect(test.createRpcServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        selfTestOperations: { selfTest: expect.any(Function) },
+      }),
+    );
     controller.abort();
     await expect(result).resolves.toBe(EXIT_SUCCESS);
     expect(test.trace).toEqual([

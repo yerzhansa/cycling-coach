@@ -140,6 +140,14 @@ describe.skipIf(!hasLoopback)("production peer observations", () => {
     const rpc = createCoachRpcServer({
       token,
       owner: "service-managed",
+      selfTestOperations: {
+        selfTest: async () => ({
+          schemaVersion: 1,
+          type: "self-test-terminal",
+          ok: false,
+          error: { code: "RUNNER_ERROR", message: "packaged self-test failed" },
+        }),
+      },
       operations: {
         importFiles: async ({ paths }) => ({
           schemaVersion: 1,

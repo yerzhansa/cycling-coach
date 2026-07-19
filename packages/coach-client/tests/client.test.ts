@@ -552,6 +552,12 @@ describe("RPC receive and observers", () => {
           cacheSavingsComplete: true,
           routes: [],
         },
+        selfTest: {
+          schemaVersion: 1,
+          type: "self-test-terminal",
+          ok: false,
+          error: { code: "RUNNER_ERROR", message: "packaged self-test failed" },
+        },
       };
       socket.emitMessage(
         serializeCoachRpcEnvelope({
@@ -858,6 +864,46 @@ describe("RPC receive and observers", () => {
     );
     await expect(malformed).rejects.toBeInstanceOf(CoachClientProtocolError);
     expect(observed).not.toHaveBeenCalled();
+  });
+
+  it("calls selfTest through the generic registry with validated progress and result", async () => {
+    const { socket, connecting } = acceptedSocket();
+    const client = await connecting;
+    socket.sendHook = () => {};
+    const events: unknown[] = [];
+    const operation = client.call("selfTest", {}, { onEvent: (event) => events.push(event) });
+    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "selfTest",
+      params: {},
+    });
+    for (const event of [
+      { phase: "started", completed: 0, total: 1 },
+      { phase: "completed", completed: 1, total: 1 },
+    ] as const) {
+      socket.emitMessage(
+        serializeCoachRpcEnvelope({
+          jsonrpc: "2.0",
+          method: "coach.operationProgress",
+          params: { requestId: 1, requestMethod: "selfTest", event },
+        }),
+      );
+    }
+    const result = {
+      schemaVersion: 1,
+      type: "self-test-terminal",
+      ok: false,
+      error: { code: "RUNNER_ERROR", message: "packaged self-test failed" },
+    } as const;
+    socket.emitMessage(serializeCoachRpcEnvelope({ jsonrpc: "2.0", id: 1, result }));
+    await expect(operation).resolves.toEqual(result);
+    expect(events).toEqual([
+      { phase: "started", completed: 0, total: 1 },
+      { phase: "completed", completed: 1, total: 1 },
+    ]);
+    socket.closeSynchronously = true;
+    await client.close();
   });
 
   it.each([-32700, -32600] as const)(

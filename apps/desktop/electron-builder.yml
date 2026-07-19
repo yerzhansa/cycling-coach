@@ -11,6 +11,11 @@ files:
     filter:
       - trayTemplate.png
       - trayTemplate@2x.png
+  - from: dist/self-test-asar
+    to: .
+extraResources:
+  - from: dist/extra-resources
+    to: .
 mac:
   target:
     - target: dir

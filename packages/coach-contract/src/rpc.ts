@@ -16,6 +16,11 @@ import {
   SpendSummarySchema,
   type SpendOperations,
 } from "./spend.js";
+import {
+  SelfTestRpcParamsSchema,
+  SelfTestRpcResultSchema,
+  type SelfTestRpcResult,
+} from "./self-test.js";
 
 export const JsonValueSchema = z.json();
 export type JsonValue = z.infer<typeof JsonValueSchema>;
@@ -120,6 +125,7 @@ export const COACH_RPC_METHOD_NAMES = [
   "setUnitsPreference",
   "getSpendSummary",
   "setDailySpendCap",
+  "selfTest",
 ] as const satisfies readonly (keyof CoachRpcService)[];
 
 export const CoachRpcMethodNameSchema = z.enum(COACH_RPC_METHOD_NAMES);
@@ -370,7 +376,11 @@ export interface CoachOperations {
   setUnitsPreference?(request: SetUnitsPreferenceRpcParams): Promise<SetUnitsPreferenceRpcResult>;
 }
 
-export type CoachRpcService = CoachEngine & CoachOperations & SpendOperations;
+export interface CoachSelfTestOperations {
+  selfTest(onEvent?: (event: OperationProgressEvent) => void): Promise<SelfTestRpcResult>;
+}
+
+export type CoachRpcService = CoachEngine & CoachOperations & SpendOperations & CoachSelfTestOperations;
 
 export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
   z
@@ -469,6 +479,14 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       params: SetDailySpendCapRpcParamsSchema,
     })
     .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("selfTest"),
+      params: SelfTestRpcParamsSchema,
+    })
+    .strict(),
 ]);
 export type CoachRpcRequestEnvelope = z.infer<typeof CoachRpcRequestEnvelopeSchema>;
 
@@ -508,7 +526,7 @@ export const CoachOperationProgressNotificationEnvelopeSchema = z
     params: z
       .object({
         requestId: JsonRpcIdSchema,
-        requestMethod: z.enum(["importFiles", "sync"]),
+        requestMethod: z.enum(["importFiles", "sync", "selfTest"]),
         event: OperationProgressEventSchema,
       })
       .strict(),
@@ -626,6 +644,12 @@ export const COACH_RPC_METHOD_REGISTRY = {
     responseSchema: SpendSummarySchema,
     eventSchema: NoRpcEventSchema,
   },
+  selfTest: {
+    wireName: "selfTest",
+    requestSchema: SelfTestRpcParamsSchema,
+    responseSchema: SelfTestRpcResultSchema,
+    eventSchema: OperationProgressEventSchema,
+  },
 } as const satisfies CoachRpcMethodRegistryShape;
 
 export type CoachRpcRequest<K extends CoachRpcMethodName> = z.input<
@@ -640,6 +664,6 @@ export type CoachRpcEvent<K extends CoachRpcMethodName> = z.output<
 
 export type CoachRpcNotification<K extends CoachRpcMethodName> = K extends "chat"
   ? CoachTurnEventNotificationEnvelope
-  : K extends "importFiles" | "sync"
+  : K extends "importFiles" | "sync" | "selfTest"
     ? CoachOperationProgressNotificationEnvelope
     : never;

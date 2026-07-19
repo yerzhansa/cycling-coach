@@ -16,11 +16,24 @@ describe("scriptable CLI arguments", () => {
     for (const argv of [["unknown"], ["serve", "--json"]]) {
       expect(parseCoachCliInvocation(argv)).toEqual({
         kind: "usage",
-        message: "Usage: enduragent [version|serve]",
+        message: "Usage: enduragent [version|serve|self-test]",
       });
     }
     expect(parseCoachCliInvocation(["import"])).toEqual(verbUsage);
     expect(parseCoachCliInvocation(["sync", "anything"])).toEqual(verbUsage);
+  });
+
+  it("parses only the exact self-test invocation", () => {
+    expect(parseCoachCliInvocation(["self-test"])).toEqual({ kind: "self-test" });
+    for (const argv of [
+      ["self-test", "--json"],
+      ["self-test", "extra"],
+    ]) {
+      expect(parseCoachCliInvocation(argv)).toEqual({
+        kind: "usage",
+        message: "Usage: enduragent [version|serve|self-test]",
+      });
+    }
   });
 
   it("parses every verb and permits flags around operands", () => {

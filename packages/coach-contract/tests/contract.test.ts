@@ -7,6 +7,7 @@ import {
   EXIT_DAEMON_UNAVAILABLE,
   EXIT_NOT_CONFIGURED,
   EXIT_VERSION_MISMATCH,
+  EXIT_CHECKSUM_MISMATCH,
   PROTOCOL_VERSION,
   TurnEventSchema,
   AthleteStateSchema,
@@ -71,19 +72,20 @@ function cloneState(): Record<string, unknown> {
 }
 
 describe("exit codes", () => {
-  it("the six constants equal 0..5 exactly", () => {
+  it("keeps 0 through 5 and assigns only checksum mismatch to 7", () => {
     expect(EXIT_SUCCESS).toBe(0);
     expect(EXIT_AGENT_ERROR).toBe(1);
     expect(EXIT_USAGE).toBe(2);
     expect(EXIT_DAEMON_UNAVAILABLE).toBe(3);
     expect(EXIT_NOT_CONFIGURED).toBe(4);
     expect(EXIT_VERSION_MISMATCH).toBe(5);
+    expect(EXIT_CHECKSUM_MISMATCH).toBe(7);
   });
 });
 
 describe("protocol version", () => {
-  it("is 3", () => {
-    expect(PROTOCOL_VERSION).toBe(3);
+  it("is 4", () => {
+    expect(PROTOCOL_VERSION).toBe(4);
   });
 });
 
