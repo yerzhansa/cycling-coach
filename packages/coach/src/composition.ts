@@ -355,7 +355,6 @@ export async function createLocalCoachComposition(
         : dependencies.createRuntime(runtimeOptions);
     await runtime.runWindow();
     runtime.startScheduler();
-    const stateReader = createPersistedAthleteStateSource({ dataDir: input.home.root });
     const memory = new Memory(input.home.root, input.config.session.timezone);
     const chatStore = new ChatStore(
       input.home.root,
@@ -369,6 +368,10 @@ export async function createLocalCoachComposition(
     const cyclingFtpAnchorResolver = (
       dependencies.createResolver ?? createCyclingFtpAnchorResolver
     )(repository);
+    const stateReader = createPersistedAthleteStateSource({
+      dataDir: input.home.root,
+      cyclingFtpAnchorResolver,
+    });
     const buildEngine = (config: Config): CoachEngine => {
       const projectedConfig = engineConfigFromConfig(config);
       const legacyClient =

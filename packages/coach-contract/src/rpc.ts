@@ -110,6 +110,8 @@ export const COACH_RPC_METHOD_NAMES = [
   "sync",
   "saveIntake",
   "configureRuntime",
+  "getUnitsPreference",
+  "setUnitsPreference",
 ] as const satisfies readonly (keyof CoachRpcService)[];
 
 export const CoachRpcMethodNameSchema = z.enum(COACH_RPC_METHOD_NAMES);
@@ -295,6 +297,28 @@ export const ConfigureRuntimeRpcResultSchema = z
   .strict();
 export type ConfigureRuntimeRpcResult = z.infer<typeof ConfigureRuntimeRpcResultSchema>;
 
+export const UnitsPreferenceSchema = z.enum(["metric", "imperial"]);
+export type UnitsPreference = z.infer<typeof UnitsPreferenceSchema>;
+
+export const GetUnitsPreferenceRpcParamsSchema = EmptyRpcParamsSchema;
+export type GetUnitsPreferenceRpcParams = z.infer<typeof GetUnitsPreferenceRpcParamsSchema>;
+export const GetUnitsPreferenceRpcResultSchema = z
+  .object({
+    value: UnitsPreferenceSchema,
+    source: z.enum(["cycling", "athlete", "default"]),
+  })
+  .strict();
+export type GetUnitsPreferenceRpcResult = z.infer<typeof GetUnitsPreferenceRpcResultSchema>;
+
+export const SetUnitsPreferenceRpcParamsSchema = z
+  .object({ value: UnitsPreferenceSchema })
+  .strict();
+export type SetUnitsPreferenceRpcParams = z.infer<typeof SetUnitsPreferenceRpcParamsSchema>;
+export const SetUnitsPreferenceRpcResultSchema = z
+  .object({ value: UnitsPreferenceSchema, source: z.literal("cycling") })
+  .strict();
+export type SetUnitsPreferenceRpcResult = z.infer<typeof SetUnitsPreferenceRpcResultSchema>;
+
 export const OperationProgressEventSchema = z
   .object({
     phase: z.enum(["started", "completed"]),
@@ -334,6 +358,8 @@ export interface CoachOperations {
   ): Promise<SyncRpcResult>;
   saveIntake(request: SaveIntakeRpcParams): Promise<SaveIntakeRpcResult>;
   configureRuntime(request: ConfigureRuntimeRpcParams): Promise<ConfigureRuntimeRpcResult>;
+  getUnitsPreference?(request: GetUnitsPreferenceRpcParams): Promise<GetUnitsPreferenceRpcResult>;
+  setUnitsPreference?(request: SetUnitsPreferenceRpcParams): Promise<SetUnitsPreferenceRpcResult>;
 }
 
 export type CoachRpcService = CoachEngine & CoachOperations;
@@ -401,6 +427,22 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("configureRuntime"),
       params: ConfigureRuntimeRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("getUnitsPreference"),
+      params: GetUnitsPreferenceRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("setUnitsPreference"),
+      params: SetUnitsPreferenceRpcParamsSchema,
     })
     .strict(),
 ]);
@@ -534,6 +576,18 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "configureRuntime",
     requestSchema: ConfigureRuntimeRpcParamsSchema,
     responseSchema: ConfigureRuntimeRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  getUnitsPreference: {
+    wireName: "getUnitsPreference",
+    requestSchema: GetUnitsPreferenceRpcParamsSchema,
+    responseSchema: GetUnitsPreferenceRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  setUnitsPreference: {
+    wireName: "setUnitsPreference",
+    requestSchema: SetUnitsPreferenceRpcParamsSchema,
+    responseSchema: SetUnitsPreferenceRpcResultSchema,
     eventSchema: NoRpcEventSchema,
   },
 } as const satisfies CoachRpcMethodRegistryShape;

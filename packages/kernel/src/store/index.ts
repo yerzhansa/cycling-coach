@@ -12,3 +12,4 @@ export * from "./derived-key.js";
 export * from "./sync-source.js";
 export * from "./sync-state-repository.js";
 export * from "./sync-failure-repository.js";
+export * from "./units-preference-repository.js";

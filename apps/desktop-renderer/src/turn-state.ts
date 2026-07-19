@@ -1,72 +1,193 @@
 import type { TurnEvent } from "@enduragent/coach-contract";
 
-export type AssistantDeliveryState =
-  | { readonly status: "streaming"; readonly text: string }
-  | { readonly status: "completed"; readonly text: string }
-  | { readonly status: "aborted"; readonly text: string; readonly retryable: true }
-  | { readonly status: "failed"; readonly message: string };
+export const DESKTOP_CHAT_ID = "desktop" as const;
 
-export interface ChatTurnState {
-  readonly userText: string;
-  readonly assistant: AssistantDeliveryState;
+export type ChatStatus = "idle" | "streaming" | "interrupted";
+
+export interface ChatErrorView {
+  readonly kind: Extract<TurnEvent, { type: "error" }>["kind"];
+  readonly athleteMessage: string;
 }
 
-export type ChatTurnAction =
-  | { readonly type: "event"; readonly event: TurnEvent }
-  | { readonly type: "success"; readonly text: string }
-  | { readonly type: "abort" }
-  | { readonly type: "protocol-failure" }
-  | { readonly type: "remote-failure" };
-
-export function createChatTurn(userText: string): ChatTurnState {
-  if (!/\S/u.test(userText)) throw new TypeError("chat text is empty");
-  return { userText, assistant: { status: "streaming", text: "" } };
+export interface ActiveTurn {
+  readonly requestKey: number;
+  readonly turnId: string | null;
+  readonly userMessage: string;
+  readonly assistantMessageId: string;
+  readonly draft: string;
+  readonly finalText: string | null;
+  readonly error: ChatErrorView | null;
 }
 
-export function reduceChatTurn(state: ChatTurnState, action: ChatTurnAction): ChatTurnState {
-  if (action.type === "event") {
-    if (state.assistant.status !== "streaming") return state;
-    if (action.event.type === "error") {
-      return { ...state, assistant: { status: "failed", message: action.event.athleteMessage } };
+export interface ChatTranscriptMessage {
+  readonly id: string;
+  readonly role: "athlete" | "coach";
+  readonly text: string;
+  readonly delivery: "complete" | "streaming" | "interrupted";
+}
+
+export interface ChatState {
+  readonly status: ChatStatus;
+  readonly messages: readonly ChatTranscriptMessage[];
+  readonly activeTurn: ActiveTurn | null;
+  readonly progress: string | null;
+}
+
+export const EMPTY_CHAT_STATE: ChatState = {
+  status: "idle",
+  messages: [],
+  activeTurn: null,
+  progress: null,
+};
+
+export type ChatAction =
+  | {
+      readonly type: "submit";
+      readonly requestKey: number;
+      readonly userMessage: string;
+      readonly userMessageId: string;
+      readonly assistantMessageId: string;
+      readonly includeUser: boolean;
     }
-    if (action.event.type === "text_delta") {
+  | { readonly type: "bind-turn"; readonly requestKey: number; readonly turnId: string }
+  | { readonly type: "event"; readonly requestKey: number; readonly event: TurnEvent }
+  | { readonly type: "complete"; readonly requestKey: number }
+  | { readonly type: "interrupt"; readonly requestKey: number; readonly copy: string }
+  | { readonly type: "fail"; readonly requestKey: number; readonly copy: string };
+
+function current(state: ChatState, requestKey: number): ActiveTurn | null {
+  return state.activeTurn?.requestKey === requestKey ? state.activeTurn : null;
+}
+
+function updateAssistant(
+  state: ChatState,
+  activeTurn: ActiveTurn,
+  text: string,
+  delivery: ChatTranscriptMessage["delivery"],
+): readonly ChatTranscriptMessage[] {
+  return state.messages.map((message) =>
+    message.id === activeTurn.assistantMessageId ? { ...message, text, delivery } : message,
+  );
+}
+
+function assertNever(value: never): never {
+  throw new TypeError(`Unhandled chat action: ${String(value)}`);
+}
+
+export function reduceChatState(state: ChatState, action: ChatAction): ChatState {
+  switch (action.type) {
+    case "submit": {
+      if (state.status === "streaming") return state;
+      const assistant: ChatTranscriptMessage = {
+        id: action.assistantMessageId,
+        role: "coach",
+        text: "",
+        delivery: "streaming",
+      };
+      const messages = action.includeUser
+        ? [
+            ...state.messages,
+            {
+              id: action.userMessageId,
+              role: "athlete" as const,
+              text: action.userMessage,
+              delivery: "complete" as const,
+            },
+            assistant,
+          ]
+        : [...state.messages, assistant];
       return {
-        ...state,
-        assistant: { status: "streaming", text: state.assistant.text + action.event.delta },
+        status: "streaming",
+        messages,
+        progress: null,
+        activeTurn: {
+          requestKey: action.requestKey,
+          turnId: null,
+          userMessage: action.userMessage,
+          assistantMessageId: action.assistantMessageId,
+          draft: "",
+          finalText: null,
+          error: null,
+        },
       };
     }
-    if (action.event.type === "final-text") {
-      return { ...state, assistant: { status: "streaming", text: action.event.text } };
+    case "bind-turn": {
+      const active = current(state, action.requestKey);
+      return active === null
+        ? state
+        : { ...state, activeTurn: { ...active, turnId: action.turnId } };
     }
-    return state;
+    case "event": {
+      const active = current(state, action.requestKey);
+      if (active === null || state.status !== "streaming") return state;
+      switch (action.event.type) {
+        case "turn-start":
+          return state;
+        case "text_delta": {
+          const draft = active.draft + action.event.delta;
+          const next = { ...active, draft };
+          return {
+            ...state,
+            activeTurn: next,
+            messages: updateAssistant(state, next, draft, "streaming"),
+          };
+        }
+        case "final-text": {
+          const next = { ...active, draft: action.event.text, finalText: action.event.text };
+          return {
+            ...state,
+            activeTurn: next,
+            messages: updateAssistant(state, next, action.event.text, "streaming"),
+          };
+        }
+        case "error":
+          return {
+            ...state,
+            activeTurn: {
+              ...active,
+              error: { kind: action.event.kind, athleteMessage: action.event.athleteMessage },
+            },
+          };
+        case "tool-start":
+        case "tool-end":
+        case "step-text":
+          return { ...state, progress: "Checking your training data…" };
+        default:
+          return assertNever(action.event);
+      }
+    }
+    case "complete": {
+      const active = current(state, action.requestKey);
+      if (active === null || active.finalText === null) return state;
+      return {
+        ...state,
+        status: "idle",
+        progress: null,
+        messages: updateAssistant(state, active, active.finalText, "complete"),
+      };
+    }
+    case "interrupt": {
+      const active = current(state, action.requestKey);
+      if (active === null) return state;
+      return {
+        ...state,
+        status: "interrupted",
+        progress: action.copy,
+        messages: updateAssistant(state, active, active.draft, "interrupted"),
+      };
+    }
+    case "fail": {
+      const active = current(state, action.requestKey);
+      if (active === null) return state;
+      const text = active.draft.length > 0 ? active.draft : action.copy;
+      return {
+        ...state,
+        status: "idle",
+        progress: active.error === null ? action.copy : null,
+        messages: updateAssistant(state, active, text, "complete"),
+      };
+    }
+    default:
+      return assertNever(action);
   }
-  if (action.type === "success") {
-    if (state.assistant.status !== "streaming") return state;
-    const currentText = state.assistant.text;
-    return {
-      ...state,
-      assistant: {
-        status: "completed",
-        text: currentText.length === 0 ? action.text : currentText,
-      },
-    };
-  }
-  if (action.type === "abort") {
-    if (state.assistant.status !== "streaming") return state;
-    return {
-      ...state,
-      assistant: { status: "aborted", text: state.assistant.text, retryable: true },
-    };
-  }
-  if (state.assistant.status === "completed" || state.assistant.status === "aborted") return state;
-  return {
-    ...state,
-    assistant: {
-      status: "failed",
-      message:
-        action.type === "protocol-failure"
-          ? "The coaching connection returned an invalid response."
-          : "Your coach could not complete this response.",
-    },
-  };
 }

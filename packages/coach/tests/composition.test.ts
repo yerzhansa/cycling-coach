@@ -46,6 +46,13 @@ const state: AthleteState = {
   recentActivities: [{ id: "activity-1" }],
   plannedWorkouts: [{ id: "workout-1" }],
   wellness: { restingHr: 45 },
+  trainingContext: {
+    anchorZones: { kind: "unknown", reason: "missing-anchor" },
+    cyclingLoad: { kind: "unknown", reason: "no-platform-load" },
+    plan: { kind: "unknown", reason: "no-plan" },
+    adherence: { kind: "unknown", reason: "insufficient-data" },
+    wellnessTrend: { kind: "unknown", reason: "no-wellness" },
+  },
 };
 
 function latest() {

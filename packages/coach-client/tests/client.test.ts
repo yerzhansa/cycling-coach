@@ -484,6 +484,8 @@ describe("RPC receive and observers", () => {
         },
         saveIntake: { schemaVersion: 1, saved: true },
         configureRuntime: { schemaVersion: 1, applied: { llm: true, intervals: false } },
+        getUnitsPreference: { value: "metric", source: "default" },
+        setUnitsPreference: { value: "imperial", source: "cycling" },
       };
       socket.emitMessage(
         serializeCoachRpcEnvelope({
@@ -532,6 +534,19 @@ describe("RPC receive and observers", () => {
       "sync",
       "saveIntake",
       "configureRuntime",
+    ]);
+    await expect(client.call("getUnitsPreference", {})).resolves.toEqual({
+      value: "metric",
+      source: "default",
+    });
+    await expect(client.call("setUnitsPreference", { value: "imperial" })).resolves.toEqual({
+      value: "imperial",
+      source: "cycling",
+    });
+    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([9, 10]);
+    expect(received.slice(-2).map((value) => (value as { method: string }).method)).toEqual([
+      "getUnitsPreference",
+      "setUnitsPreference",
     ]);
     socket.closeSynchronously = true;
     await client.close();

@@ -700,6 +700,32 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
               invocationFailure = { error };
             }
             break;
+          case "getUnitsPreference":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.getUnitsPreference.requestSchema.parse(
+                generic.data.params,
+              );
+              if (input.operations.getUnitsPreference === undefined) {
+                throw new TypeError("Units preference operation is unavailable.");
+              }
+              result = await input.operations.getUnitsPreference(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "setUnitsPreference":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.setUnitsPreference.requestSchema.parse(
+                generic.data.params,
+              );
+              if (input.operations.setUnitsPreference === undefined) {
+                throw new TypeError("Units preference operation is unavailable.");
+              }
+              result = await input.operations.setUnitsPreference(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
         }
         if (deliveryDetached) return;
         let terminal: string;

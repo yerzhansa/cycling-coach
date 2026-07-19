@@ -41,8 +41,7 @@ export function composeProvenance(runs: readonly AdapterRun[]): {
   meta: Omit<DerivedMetricsMeta, "analysisBasis"> | undefined;
 } {
   if (runs.length === 0) return { omitPowerFamily: false, meta: undefined };
-  const covering =
-    runs.find((r) => r.adapter.zoneBasis === "power")?.adapter ?? runs[0].adapter;
+  const covering = runs.find((r) => r.adapter.zoneBasis === "power")?.adapter ?? runs[0].adapter;
   const omitPowerFamily = covering.zoneBasis !== "power";
   const firstType = covering.activityTypes[0];
   const sportFamily = firstType !== undefined ? familyOf(firstType, "other") : "other";
@@ -117,17 +116,16 @@ async function fetchOnce(
   adapters: readonly ReferenceSportAdapter[],
   sportTypes: readonly IntervalsActivityType[],
 ): Promise<FetchedReference> {
-  const live = await fetchLiveBundle({ client, signal, now: new Date() });
+  const live = await fetchLiveBundle({ client, signal, now: new Date(), sportTypes });
   const runs: readonly AdapterRun[] = runAdaptersForActivities(
     adapters,
     sportTypes,
     live.bundle.activities,
   );
   const { omitPowerFamily, meta: baseMeta } = composeProvenance(runs);
-  const derivedMetrics = computeDerivedMetrics(
-    buildMetricInput(live.bundle, live.frozenNow),
-    { omitPowerFamily },
-  );
+  const derivedMetrics = computeDerivedMetrics(buildMetricInput(live.bundle, live.frozenNow), {
+    omitPowerFamily,
+  });
   // analysisBasis is a compute OUTPUT (read off the registry's emitted
   // zone_distribution_7d), so it joins the runs-derivable meta only after
   // compute. baseMeta is undefined exactly for an empty-coverage bundle.
@@ -144,15 +142,13 @@ async function fetchOnce(
       // key-union deepCompare runs over the map only, so the tag must stay out.
       ...(meta ? { derived_metrics_meta: meta } : {}),
       recent_activities: live.recentActivities,
-      planned_workouts: [],
+      planned_workouts: live.plannedWorkouts,
       wellness_data: live.wellnessData,
     },
     history: { daily: [], weekly: [], monthly: [] },
     intervals: { by_activity: {} },
     routes: { routes: [] },
     ftp_history: { entries: [] },
-    ...(live.fetchErrors && live.fetchErrors.length > 0
-      ? { fetch_errors: live.fetchErrors }
-      : {}),
+    ...(live.fetchErrors && live.fetchErrors.length > 0 ? { fetch_errors: live.fetchErrors } : {}),
   };
 }

@@ -196,7 +196,8 @@ export const PlannedEventSchema = z.looseObject({
   id: z.number(),
   category: z.string(), // "WORKOUT", "RACE", etc.
   start_date_local: z.string(),
-  name: z.string().optional(),
+  name: z.string().nullable().optional(),
+  type: z.string().nullable().optional(),
 });
 export type PlannedEvent = z.infer<typeof PlannedEventSchema>;
 
@@ -240,9 +241,7 @@ export const SustainabilityFamilyCurvesSchema = z.looseObject({
   power: z.record(z.string(), PowerCurveDataSchema),
   hr: z.record(z.string(), HrCurveDataSchema),
 });
-export type SustainabilityFamilyCurves = z.infer<
-  typeof SustainabilityFamilyCurvesSchema
->;
+export type SustainabilityFamilyCurves = z.infer<typeof SustainabilityFamilyCurvesSchema>;
 
 /** Per-second activity stream channels, keyed by `String(activity.id)`. The
  *  dfa-profile path joins this record back to the activities array (both
@@ -345,9 +344,7 @@ export const FixtureSchema = z
       .record(
         z.string(),
         z.looseObject({
-          intervals: z
-            .array(z.looseObject({ type: z.string() }))
-            .optional(),
+          intervals: z.array(z.looseObject({ type: z.string() })).optional(),
         }),
       )
       .optional(),
@@ -362,9 +359,7 @@ export const FixtureSchema = z
     // snapshots byte-for-byte.
     power_curves: PowerCurveDataSchema.optional(),
     hr_curves: HrCurveDataSchema.optional(),
-    sustainability_curves: z
-      .record(z.string(), SustainabilityFamilyCurvesSchema)
-      .optional(),
+    sustainability_curves: z.record(z.string(), SustainabilityFamilyCurvesSchema).optional(),
     streams: z.record(z.string(), ActivityStreamsSchema).optional(),
     athlete: AthleteSchema.optional(),
   })

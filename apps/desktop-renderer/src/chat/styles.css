@@ -1,0 +1,113 @@
+.chat-transcript {
+  display: grid;
+  gap: 18px;
+}
+
+.chat-messages {
+  display: grid;
+  gap: 28px;
+}
+
+.chat-message {
+  display: grid;
+  gap: 7px;
+  max-width: 78%;
+}
+
+.chat-message--athlete {
+  justify-self: end;
+  padding: 13px 17px;
+  border-radius: var(--radius) var(--radius) 6px var(--radius);
+  background: var(--moss-soft);
+}
+
+.chat-message--coach {
+  justify-self: start;
+}
+
+.chat-message[data-delivery="interrupted"] {
+  color: var(--muted);
+}
+
+.chat-message__role,
+.chat-message__text,
+.chat-notice {
+  margin: 0;
+}
+
+.chat-message__role {
+  color: var(--faint);
+  font:
+    11px/1.2 SFMono-Regular,
+    ui-monospace,
+    monospace;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chat-message__text {
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-notice {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.chat-retry {
+  justify-self: start;
+  padding: 8px 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--moss-strong);
+  background: var(--surface-solid);
+  cursor: pointer;
+}
+
+.chat-composer__label {
+  display: block;
+  margin: 0 0 7px 14px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.chat-composer__controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  align-items: end;
+  gap: 8px;
+  padding: 9px 9px 9px 17px;
+  border: 1px solid var(--line-strong);
+  border-radius: calc(var(--radius) + 6px);
+  background: var(--surface-solid);
+  box-shadow: 0 12px 38px rgb(29 48 38 / 10%);
+}
+
+.chat-composer__controls textarea {
+  min-height: 40px;
+  max-height: 140px;
+  padding: 8px 0;
+  resize: none;
+  border: 0;
+  outline: 0;
+  color: var(--ink);
+  background: transparent;
+}
+
+.chat-composer__controls button {
+  width: 42px;
+  height: 42px;
+  border: 0;
+  border-radius: 50%;
+  color: white;
+  background: var(--moss);
+  cursor: pointer;
+}
+
+.chat-composer__controls button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}

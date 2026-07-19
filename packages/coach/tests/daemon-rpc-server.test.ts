@@ -76,6 +76,8 @@ const operations: CoachOperations = {
     schemaVersion: 1,
     applied: { llm: llm !== undefined, intervals: intervals !== undefined },
   }),
+  getUnitsPreference: async () => ({ value: "metric", source: "default" }),
+  setUnitsPreference: async ({ value }) => ({ value, source: "cycling" }),
 };
 
 function createCoachRpcServer(
@@ -446,6 +448,68 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     expect(JSON.stringify(response)).not.toContain("placeholder");
     expect(JSON.stringify(response)).not.toContain("athlete-a");
     expect(JSON.stringify(response)).not.toContain("model-a");
+    await client.close();
+  });
+
+  it("dispatches strict authenticated units reads and writes through the operations object", async () => {
+    const token = "x".repeat(43);
+    const getUnitsPreference = vi.fn(async () => ({
+      value: "metric" as const,
+      source: "athlete" as const,
+    }));
+    const setUnitsPreference = vi.fn(async ({ value }: { value: "metric" | "imperial" }) => ({
+      value,
+      source: "cycling" as const,
+    }));
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      operations: { ...operations, getUnitsPreference, setUnitsPreference },
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "units-read",
+        method: "getUnitsPreference",
+        params: {},
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "units-read",
+      result: { value: "metric", source: "athlete" },
+    });
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "units-write",
+        method: "setUnitsPreference",
+        params: { value: "imperial" },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "units-write",
+      result: { value: "imperial", source: "cycling" },
+    });
+    expect(getUnitsPreference).toHaveBeenCalledWith({});
+    expect(setUnitsPreference).toHaveBeenCalledWith({ value: "imperial" });
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "units-invalid",
+        method: "setUnitsPreference",
+        params: { value: "other" },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "units-invalid",
+      error: { code: -32602, message: "Invalid params" },
+    });
     await client.close();
   });
 

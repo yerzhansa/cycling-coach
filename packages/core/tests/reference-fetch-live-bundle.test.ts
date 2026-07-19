@@ -55,7 +55,11 @@ function wellnessRaw(over: Record<string, unknown> = {}): Record<string, unknown
   };
 }
 
-const STREAM_OK = { ok: true as const, value: { dfa_a1: [1, 0.8], heartrate: [140, 145], watts: [200, 210] } };
+const STREAM_OK = {
+  ok: true as const,
+  value: { dfa_a1: [1, 0.8], heartrate: [140, 145], watts: [200, 210] },
+};
+const EMPTY_EVENTS = { list: async () => ({ ok: true as const, value: [] }) };
 
 interface FakeOpts {
   activities?: Record<string, unknown>[];
@@ -63,10 +67,17 @@ interface FakeOpts {
   athlete?: unknown;
   streamFor?: (id: string) => { ok: true; value: unknown } | { ok: false; error: unknown };
   activitiesFail?: boolean;
+  events?: Record<string, unknown>[];
+  eventsFail?: boolean;
 }
 
-function fakeClient(opts: FakeOpts): { client: BundleFetchClient; streamCalls: string[] } {
+function fakeClient(opts: FakeOpts): {
+  client: BundleFetchClient;
+  streamCalls: string[];
+  eventCalls: Array<{ oldest: string; newest: string; category: string[] }>;
+} {
   const streamCalls: string[] = [];
+  const eventCalls: Array<{ oldest: string; newest: string; category: string[] }> = [];
   const client: BundleFetchClient = {
     athlete: { get: async () => ({ ok: true, value: opts.athlete ?? {} }) },
     activities: {
@@ -80,8 +91,16 @@ function fakeClient(opts: FakeOpts): { client: BundleFetchClient; streamCalls: s
       },
     },
     wellness: { list: async () => ({ ok: true, value: opts.wellness ?? [] }) },
+    events: {
+      list: async (query) => {
+        eventCalls.push(query);
+        return opts.eventsFail
+          ? { ok: false, error: "event failure" }
+          : { ok: true, value: opts.events ?? [] };
+      },
+    },
   };
-  return { client, streamCalls };
+  return { client, streamCalls, eventCalls };
 }
 
 describe("fetchLiveBundle", () => {
@@ -90,7 +109,12 @@ describe("fetchLiveBundle", () => {
       activities: [camelActivity({ id: 7 })],
       wellness: [wellnessRaw()],
     });
-    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0 });
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+    });
 
     const act = res.bundle.activities[0]! as Record<string, unknown>;
     expect(act.start_date_local).toBeTypeOf("string");
@@ -116,7 +140,12 @@ describe("fetchLiveBundle", () => {
       camelActivity({ id: 901, startDateLocal: daysAgo(40) }), // outside stream window
     ];
     const { client, streamCalls } = fakeClient({ activities });
-    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0 });
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+    });
 
     expect(streamCalls).toHaveLength(MAX_STREAM_ACTIVITIES);
     expect(streamCalls).not.toContain("900"); // run excluded
@@ -128,11 +157,18 @@ describe("fetchLiveBundle", () => {
 
   it("preserves encounter order for equal stream instants instead of external-ID order", async () => {
     const instant = daysAgo(1);
-    const { client, streamCalls } = fakeClient({ activities: [
-      camelActivity({ id: 90, startDateLocal: instant }),
-      camelActivity({ id: 10, startDateLocal: instant }),
-    ] });
-    await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0 });
+    const { client, streamCalls } = fakeClient({
+      activities: [
+        camelActivity({ id: 90, startDateLocal: instant }),
+        camelActivity({ id: 10, startDateLocal: instant }),
+      ],
+    });
+    await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+    });
     expect(streamCalls).toEqual(["90", "10"]);
   });
 
@@ -145,7 +181,13 @@ describe("fetchLiveBundle", () => {
       activities,
       streamFor: (id) => (id === "1" ? { ok: false, error: "no streams" } : STREAM_OK),
     });
-    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0, log: () => {} });
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+      log: () => {},
+    });
     expect(res.bundle.streams?.["1"]).toBeUndefined();
     expect(res.bundle.streams?.["2"]).toBeDefined();
   });
@@ -153,7 +195,9 @@ describe("fetchLiveBundle", () => {
   it("breaks the stream loop when the signal is already aborted", async () => {
     const ac = new AbortController();
     ac.abort();
-    const { client, streamCalls } = fakeClient({ activities: [camelActivity({ id: 1, startDateLocal: daysAgo(1) })] });
+    const { client, streamCalls } = fakeClient({
+      activities: [camelActivity({ id: 1, startDateLocal: daysAgo(1) })],
+    });
     const res = await fetchLiveBundle({ client, signal: ac.signal, now: NOW, throttleMs: 0 });
     expect(streamCalls).toHaveLength(0);
     expect(res.bundle.streams).toBeUndefined();
@@ -167,7 +211,12 @@ describe("fetchLiveBundle", () => {
         wellnessRaw({ id: "2026-05-20", sportInfo: [{ type: "Ride", eftp: 250 }] }), // change
       ],
     });
-    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0 });
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+    });
     expect(res.bundle.ftpHistory).toEqual([
       { date: "2026-05-01", ftp: 240, source: "estimate" },
       { date: "2026-05-20", ftp: 250, source: "estimate" },
@@ -181,7 +230,12 @@ describe("fetchLiveBundle", () => {
         camelActivity({ id: 2, startDateLocal: daysAgo(30) }), // outside 7d, inside 84d
       ],
     });
-    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0 });
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+    });
     expect(res.recentActivities).toHaveLength(1);
     expect(res.bundle.activities).toHaveLength(2);
   });
@@ -190,7 +244,12 @@ describe("fetchLiveBundle", () => {
     const { client } = fakeClient({
       athlete: { sportSettings: [{ types: ["Ride"], ftp: 250, indoor_ftp: 240, lthr: 165 }] },
     });
-    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0 });
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+    });
     expect(res.bundle.athlete?.sportSettings[0]?.ftp).toBe(250);
   });
 
@@ -199,6 +258,73 @@ describe("fetchLiveBundle", () => {
     await expect(
       fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0 }),
     ).rejects.toThrow(/activities\.list failed/);
+  });
+
+  it("fetches one bounded workout window and partitions only valid cycling rows", async () => {
+    const { client, eventCalls } = fakeClient({
+      events: [
+        {
+          id: 3,
+          category: "WORKOUT",
+          startDateLocal: "2026-06-08T08:00:00",
+          name: "Past",
+          type: "Ride",
+        },
+        {
+          id: 2,
+          category: "WORKOUT",
+          startDateLocal: "2026-06-09T09:00:00",
+          name: null,
+          type: "VirtualRide",
+        },
+        {
+          id: 1,
+          category: "WORKOUT",
+          startDateLocal: "2026-06-10T08:00:00",
+          name: "Future",
+          type: "Ride",
+        },
+        {
+          id: 4,
+          category: "WORKOUT",
+          startDateLocal: "2026-06-10T08:00:00",
+          name: "Run",
+          type: "Run",
+        },
+        { id: 5, category: "WORKOUT", startDateLocal: "2026-06-10T08:00:00", name: "Untyped" },
+        { category: "WORKOUT", startDateLocal: "2026-06-10T08:00:00", type: "Ride" },
+      ],
+    });
+    const result = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      sportTypes: ["Ride", "VirtualRide", "Run"],
+      throttleMs: 0,
+      log: () => {},
+    });
+    expect(eventCalls).toEqual([
+      { oldest: "2026-06-03", newest: "2026-07-07", category: ["WORKOUT"] },
+    ]);
+    expect(result.bundle.pastEvents?.map((event) => event.id)).toEqual([3, 2]);
+    expect(result.plannedWorkouts.map((event) => event.id)).toEqual([2, 1]);
+  });
+
+  it("records an event endpoint failure instead of publishing a false empty plan", async () => {
+    const { client } = fakeClient({ eventsFail: true });
+    const result = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      sportTypes: ["Ride"],
+      throttleMs: 0,
+      log: () => {},
+    });
+    expect(result.fetchErrors).toContainEqual({
+      endpoint: "events",
+      detail: expect.any(String),
+    });
+    expect(result.plannedWorkouts).toEqual([]);
   });
 });
 
@@ -218,7 +344,12 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
         ],
       }),
     });
-    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0 });
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+    });
     expect(res.bundle.streams?.["1"]?.dfa_a1).toEqual([1, 0.8]);
     expect(res.bundle.streams?.["1"]?.watts).toEqual([200, 210]);
   });
@@ -228,7 +359,12 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
       activities: [camelActivity({ id: 1, startDateLocal: daysAgo(1) })],
       streamFor: () => ({ ok: true, value: { dfaA1: [1, 0.8], watts: [200], heartrate: [140] } }),
     });
-    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0 });
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+    });
     expect(res.bundle.streams?.["1"]?.dfa_a1).toEqual([1, 0.8]);
   });
 
@@ -237,7 +373,13 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
       activities: [camelActivity({ id: 1, startDateLocal: daysAgo(1) })],
       streamFor: () => ({ ok: true, value: "garbage" }),
     });
-    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0, log: () => {} });
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+      log: () => {},
+    });
     expect(res.bundle.streams).toBeUndefined();
   });
 
@@ -245,7 +387,12 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
     const { client } = fakeClient({
       athlete: { sportSettings: [{ types: ["Ride"], ftp: 250, indoorFtp: 240, lthr: 165 }] },
     });
-    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0 });
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+    });
     expect(res.bundle.athlete?.sportSettings[0]?.indoor_ftp).toBe(240);
   });
 
@@ -253,10 +400,20 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
     const logs: string[] = [];
     const client: BundleFetchClient = {
       athlete: { get: async () => ({ ok: false, error: "unauthorized" }) },
-      activities: { list: async () => ({ ok: true, value: [] }), getStreams: async () => STREAM_OK },
+      activities: {
+        list: async () => ({ ok: true, value: [] }),
+        getStreams: async () => STREAM_OK,
+      },
       wellness: { list: async () => ({ ok: true, value: [] }) },
+      events: EMPTY_EVENTS,
     };
-    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0, log: (m) => logs.push(m) });
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+      log: (m) => logs.push(m),
+    });
     expect(res.bundle.athlete).toBeUndefined();
     expect(logs.some((l) => l.includes("athlete.get failed"))).toBe(true);
   });
@@ -270,8 +427,12 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
           error: { kind: "Http", status: 401, message: "synthetic unauthorized" } as never,
         }),
       },
-      activities: { list: async () => ({ ok: true, value: [] }), getStreams: async () => STREAM_OK },
+      activities: {
+        list: async () => ({ ok: true, value: [] }),
+        getStreams: async () => STREAM_OK,
+      },
       wellness: { list: async () => ({ ok: true, value: [] }) },
+      events: EMPTY_EVENTS,
     };
     const result = await fetchLiveBundle({
       client,
@@ -284,16 +445,28 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
     expect(logs[0]).toContain('"stack":');
     expect(logs[0]).toContain('"kind":"Http"');
     expect(logs[0]).not.toContain("[object Object]");
-    expect(result.fetchErrors?.[0]?.detail).toBe(logs[0]?.replace("Reference: athlete.get failed: ", ""));
+    expect(result.fetchErrors?.[0]?.detail).toBe(
+      logs[0]?.replace("Reference: athlete.get failed: ", ""),
+    );
   });
 
   it("records a fetchErrors entry naming the athlete endpoint when athlete.get fails (still a usable bundle)", async () => {
     const client: BundleFetchClient = {
       athlete: { get: async () => ({ ok: false, error: "unauthorized" }) },
-      activities: { list: async () => ({ ok: true, value: [] }), getStreams: async () => STREAM_OK },
+      activities: {
+        list: async () => ({ ok: true, value: [] }),
+        getStreams: async () => STREAM_OK,
+      },
       wellness: { list: async () => ({ ok: true, value: [] }) },
+      events: EMPTY_EVENTS,
     };
-    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0, log: () => {} });
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+      log: () => {},
+    });
     expect(res.fetchErrors).toBeDefined();
     expect(res.fetchErrors?.some((e) => e.endpoint === "athlete")).toBe(true);
     // Bundle is still well-typed: the athlete fallback is `{}`, no crash.
@@ -304,10 +477,20 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
     const logs: string[] = [];
     const client: BundleFetchClient = {
       athlete: { get: async () => ({ ok: true, value: {} }) },
-      activities: { list: async () => ({ ok: true, value: [] }), getStreams: async () => STREAM_OK },
+      activities: {
+        list: async () => ({ ok: true, value: [] }),
+        getStreams: async () => STREAM_OK,
+      },
       wellness: { list: async () => ({ ok: false, error: "timeout" }) },
+      events: EMPTY_EVENTS,
     };
-    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0, log: (m) => logs.push(m) });
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+      log: (m) => logs.push(m),
+    });
     expect(res.bundle.wellness).toEqual([]);
     expect(res.bundle.ftpHistory).toEqual([]);
     expect(logs.some((l) => l.includes("wellness.list failed"))).toBe(true);
@@ -316,10 +499,20 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
   it("records a fetchErrors entry naming the wellness endpoint when wellness.list fails (still a usable bundle)", async () => {
     const client: BundleFetchClient = {
       athlete: { get: async () => ({ ok: true, value: {} }) },
-      activities: { list: async () => ({ ok: true, value: [] }), getStreams: async () => STREAM_OK },
+      activities: {
+        list: async () => ({ ok: true, value: [] }),
+        getStreams: async () => STREAM_OK,
+      },
       wellness: { list: async () => ({ ok: false, error: "timeout" }) },
+      events: EMPTY_EVENTS,
     };
-    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0, log: () => {} });
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+      log: () => {},
+    });
     expect(res.fetchErrors).toBeDefined();
     expect(res.fetchErrors?.some((e) => e.endpoint === "wellness")).toBe(true);
     expect(res.bundle.wellness).toEqual([]);
@@ -327,7 +520,12 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
 
   it("omits fetchErrors entirely when every endpoint succeeds", async () => {
     const { client } = fakeClient({ activities: [], wellness: [], athlete: {} });
-    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0 });
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+    });
     expect(res.fetchErrors).toBeUndefined();
   });
 
@@ -335,10 +533,20 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
     const logs: string[] = [];
     const client: BundleFetchClient = {
       athlete: { get: async () => ({ ok: true, value: {} }) },
-      activities: { list: async () => ({ ok: true, value: { not: "an array" } as unknown as unknown[] }), getStreams: async () => STREAM_OK },
+      activities: {
+        list: async () => ({ ok: true, value: { not: "an array" } as unknown as unknown[] }),
+        getStreams: async () => STREAM_OK,
+      },
       wellness: { list: async () => ({ ok: true, value: [] }) },
+      events: EMPTY_EVENTS,
     };
-    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0, log: (m) => logs.push(m) });
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+      log: (m) => logs.push(m),
+    });
     expect(res.bundle.activities).toEqual([]);
     expect(logs.some((l) => l.includes("non-array"))).toBe(true);
   });
@@ -363,7 +571,12 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
 
   it("anchors frozenNow to naive local time (no UTC Z/offset suffix)", async () => {
     const { client } = fakeClient({ activities: [] });
-    const res = await fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0 });
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+    });
     expect(res.frozenNow).not.toMatch(/[Z+]/);
     expect(res.frozenNow).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/);
   });
@@ -379,7 +592,10 @@ describe("normalizeStreams", () => {
     ).toEqual({ dfa_a1: [1, 0.8], watts: [200] });
   });
   it("snake-cases a camelCased object body", () => {
-    expect(normalizeStreams({ dfaA1: [1], heartrate: [140] })).toEqual({ dfa_a1: [1], heartrate: [140] });
+    expect(normalizeStreams({ dfaA1: [1], heartrate: [140] })).toEqual({
+      dfa_a1: [1],
+      heartrate: [140],
+    });
   });
   it("passes a scalar through untouched", () => {
     expect(normalizeStreams("garbage")).toBe("garbage");
@@ -389,9 +605,27 @@ describe("normalizeStreams", () => {
 describe("deriveFtpHistory", () => {
   it("ignores non-cycling sportInfo and rounds eftp", () => {
     const wellness: WellnessDay[] = [
-      { id: "2026-05-01", weight: null, restingHR: null, hrv: null, sleepSecs: null, sleepQuality: null, sportInfo: [{ type: "Run", eftp: 300 }] } as WellnessDay,
-      { id: "2026-05-02", weight: null, restingHR: null, hrv: null, sleepSecs: null, sleepQuality: null, sportInfo: [{ type: "Ride", eftp: 249.6 }] } as WellnessDay,
+      {
+        id: "2026-05-01",
+        weight: null,
+        restingHR: null,
+        hrv: null,
+        sleepSecs: null,
+        sleepQuality: null,
+        sportInfo: [{ type: "Run", eftp: 300 }],
+      } as WellnessDay,
+      {
+        id: "2026-05-02",
+        weight: null,
+        restingHR: null,
+        hrv: null,
+        sleepSecs: null,
+        sleepQuality: null,
+        sportInfo: [{ type: "Ride", eftp: 249.6 }],
+      } as WellnessDay,
     ];
-    expect(deriveFtpHistory(wellness)).toEqual([{ date: "2026-05-02", ftp: 250, source: "estimate" }]);
+    expect(deriveFtpHistory(wellness)).toEqual([
+      { date: "2026-05-02", ftp: 250, source: "estimate" },
+    ]);
   });
 });

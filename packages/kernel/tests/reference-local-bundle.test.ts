@@ -18,10 +18,33 @@ import type { ActivityProjectionFilter, ReferenceBundle } from "../src/reference
 import { METRIC_REGISTRY } from "../src/reference/metrics/registry.js";
 
 const activities = [
-  { id: "b", start_date_local: "1998-06-05T08:00:00", type: "Ride", moving_time: 1, elapsed_time: 1, icu_training_load: 10 },
-  { id: "a", start_date_local: "1998-06-04T08:00:00", type: "Run", moving_time: 1, elapsed_time: 1, icu_training_load: 10 },
+  {
+    id: "b",
+    start_date_local: "1998-06-05T08:00:00",
+    type: "Ride",
+    moving_time: 1,
+    elapsed_time: 1,
+    icu_training_load: 10,
+  },
+  {
+    id: "a",
+    start_date_local: "1998-06-04T08:00:00",
+    type: "Run",
+    moving_time: 1,
+    elapsed_time: 1,
+    icu_training_load: 10,
+  },
 ] as const;
-const wellness = [{ id: "1998-06-04", weight: null, restingHR: null, hrv: null, sleepSecs: null, sleepQuality: null }];
+const wellness = [
+  {
+    id: "1998-06-04",
+    weight: null,
+    restingHR: null,
+    hrv: null,
+    sleepSecs: null,
+    sleepQuality: null,
+  },
+];
 
 function bundle(streams?: ReferenceBundle["streams"]): ReferenceBundle {
   return {
@@ -44,22 +67,36 @@ describe("kernel local bundle contracts", () => {
     expect(filtered.wellness).toBe(original.wellness);
     expect(filtered.ftpHistory).toBe(original.ftpHistory);
     expect(filtered.athlete).toBe(original.athlete);
-    expect(applyActivityProjectionFilter(bundle({}), KEEP_ALL_ACTIVITIES)).toHaveProperty("streams", {});
-    expect(applyActivityProjectionFilter(bundle(), KEEP_ALL_ACTIVITIES)).not.toHaveProperty("streams");
+    expect(applyActivityProjectionFilter(bundle({}), KEEP_ALL_ACTIVITIES)).toHaveProperty(
+      "streams",
+      {},
+    );
+    expect(applyActivityProjectionFilter(bundle(), KEEP_ALL_ACTIVITIES)).not.toHaveProperty(
+      "streams",
+    );
   });
 
   it("rejects orphan streams before returning a filtered bundle", () => {
-    expect(() => applyActivityProjectionFilter(bundle({ missing: { watts: [] } }), KEEP_ALL_ACTIVITIES))
-      .toThrowError(new TypeError("local bundle contains an orphan stream"));
+    expect(() =>
+      applyActivityProjectionFilter(bundle({ missing: { watts: [] } }), KEEP_ALL_ACTIVITIES),
+    ).toThrowError(new TypeError("local bundle contains an orphan stream"));
   });
 
   it("normalizes only top-level stream keys and fails closed on collisions", () => {
     const nested = { keepCamel: 1 };
-    expect(normalizeStreams({ dfaA1: [1], nestedValue: nested })).toEqual({ dfa_a1: [1], nested_value: nested });
-    expect(normalizeStreams([{ type: "dfa_a1", data: [1, null] }, { type: 3, data: [] }]))
-      .toEqual({ dfa_a1: [1, null] });
-    expect(() => normalizeStreams({ dfaA1: [1], dfa_a1: [1] }))
-      .toThrowError(new TypeError("stream key normalization collision"));
+    expect(normalizeStreams({ dfaA1: [1], nestedValue: nested })).toEqual({
+      dfa_a1: [1],
+      nested_value: nested,
+    });
+    expect(
+      normalizeStreams([
+        { type: "dfa_a1", data: [1, null] },
+        { type: 3, data: [] },
+      ]),
+    ).toEqual({ dfa_a1: [1, null] });
+    expect(() => normalizeStreams({ dfaA1: [1], dfa_a1: [1] })).toThrowError(
+      new TypeError("stream key normalization collision"),
+    );
     const shared = [1];
     expect(normalizeStreams({ dfaA1: shared, dfa_a1: shared })).toEqual({ dfa_a1: shared });
   });
@@ -76,22 +113,30 @@ describe("kernel local bundle contracts", () => {
     const activityJson = canonicalJson({ activity, concerns: {}, dedup: {}, schema_version: 1 });
     expect(parseActivityLandingEnvelope(activityJson).activity).toEqual(activity);
     expect(() => parseActivityLandingEnvelope(`${activityJson}\n`)).toThrow(TypeError);
-    expect(() => parseActivityLandingEnvelope(canonicalJson({ activity, concerns: {}, dedup: {}, extra: 1, schema_version: 1 })))
-      .toThrow(TypeError);
+    expect(() =>
+      parseActivityLandingEnvelope(
+        canonicalJson({ activity, concerns: {}, dedup: {}, extra: 1, schema_version: 1 }),
+      ),
+    ).toThrow(TypeError);
 
     for (const endpoint of ["streams", "settings"] as const) {
       const landing = { value: 1 };
       const envelope = canonicalJson({ endpoint, landing, schema_version: 1 });
       expect(parseGenericLandingEnvelope(envelope, endpoint).landing).toEqual(landing);
-      expect(() => parseGenericLandingEnvelope(envelope, endpoint === "streams" ? "settings" : "streams")).toThrow(TypeError);
+      expect(() =>
+        parseGenericLandingEnvelope(envelope, endpoint === "streams" ? "settings" : "streams"),
+      ).toThrow(TypeError);
     }
     expect(parseCanonicalProjectionValue(canonicalJson(activity), "activity")).toEqual(activity);
-    expect(() => assertProjectionEvidenceEqual({ value: 1 }, { value: 2 }, "activity"))
-      .toThrowError(new TypeError("activity source evidence mismatch"));
+    expect(() =>
+      assertProjectionEvidenceEqual({ value: 1 }, { value: 2 }, "activity"),
+    ).toThrowError(new TypeError("activity source evidence mismatch"));
   });
 
   it("keeps collision-safe rename behavior and omits unsupported fixture extensions", () => {
-    expect(() => renameTpFieldsOnActivity({ id: "a", icu_ctl: 1, fitnessAtEnd: 2 })).toThrow(/collision/);
+    expect(() => renameTpFieldsOnActivity({ id: "a", icu_ctl: 1, fitnessAtEnd: 2 })).toThrow(
+      /collision/,
+    );
     expect(() => assertNoTpKeysRemain({ nested: { ctl: 1 } })).toThrow(/nested\.ctl/);
     const fixture = buildFixtureShape(bundle({}));
     expect(fixture).not.toHaveProperty("power_curves");
@@ -101,9 +146,28 @@ describe("kernel local bundle contracts", () => {
     expect(fixture).not.toHaveProperty("intervals");
   });
 
+  it("carries validated trailing plan events into metric fixture input", () => {
+    const pastEvents = [
+      {
+        id: 10,
+        category: "WORKOUT",
+        start_date_local: "1998-06-04T08:00:00",
+        name: null,
+        type: "Ride",
+      },
+    ];
+    const fixture = buildFixtureShape({ ...bundle(), pastEvents });
+    expect(fixture.past_events).toEqual(pastEvents);
+    expect(fixture.activities).toEqual(activities);
+    expect(fixture.wellness).toEqual(wellness);
+  });
+
   it("preserves equal-Load encounter order for both primary-sport results", () => {
     const forward = buildMetricInput(bundle(), "1998-06-10T12:00:00");
-    const reverse = buildMetricInput({ ...bundle(), activities: [...activities].reverse() }, "1998-06-10T12:00:00");
+    const reverse = buildMetricInput(
+      { ...bundle(), activities: [...activities].reverse() },
+      "1998-06-10T12:00:00",
+    );
     for (const metric of ["seiler_tid_7d_primary", "seiler_tid_28d_primary"] as const) {
       const first = METRIC_REGISTRY[metric]!.compute(forward) as { sport: string };
       const second = METRIC_REGISTRY[metric]!.compute(reverse) as { sport: string };
