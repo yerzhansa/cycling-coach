@@ -56,6 +56,7 @@ import {
   type StoreRuntimeOptions,
 } from "./store-runtime.js";
 import { createCoachOperations } from "./operations.js";
+import type { CoachOperationsDependencies } from "./operations.js";
 
 interface OAuthCredential {
   readonly type: "oauth";
@@ -94,6 +95,7 @@ export interface LocalCoachCompositionDependencies {
   readonly modelTransportDecorator?: ModelTransportDecorator;
   readonly onToolsAssembled?: (names: readonly string[]) => void;
   readonly closeHostAdapters?: () => void | Promise<void>;
+  readonly operationsDependencies?: CoachOperationsDependencies;
 }
 
 export interface LocalReferenceRuntime {
@@ -105,6 +107,9 @@ export interface LocalStoreRuntime {
   readonly athleteData: StoreRuntime["athleteData"];
   attemptLedgerForRun(): ReturnType<StoreRuntime["attemptLedgerForRun"]>;
   runWindow(): ReturnType<StoreRuntime["runWindow"]>;
+  runWindowAfter(
+    work: (signal: AbortSignal) => Promise<void>,
+  ): ReturnType<StoreRuntime["runWindow"]>;
   startScheduler(): void;
   close(): Promise<void>;
 }
@@ -416,12 +421,23 @@ export async function createLocalCoachComposition(
         return replacement;
       });
     };
-    const operations = createCoachOperations({
-      home: input.home,
-      context: input.context,
-      runtime,
-      applyRuntimeConfig,
+    const liveIntervals = Object.freeze({
+      async read() {
+        return Object.freeze({ ...activeConfig.intervals });
+      },
     });
+    const options = Object.freeze({ liveIntervals });
+    const operations = createCoachOperations(
+      {
+        home: input.home,
+        context: input.context,
+        runtime,
+        intervalsCredentials: options.liveIntervals,
+        historyNewestDate: new Date(now()).toISOString().slice(0, 10),
+        applyRuntimeConfig,
+      },
+      dependencies.operationsDependencies,
+    );
     return {
       engine: reconfigurable.engine,
       operations,
