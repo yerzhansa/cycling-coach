@@ -86,7 +86,7 @@ describe("daemon command", () => {
     for (const argv of [["daemon"], ["daemon", "stop"], ["daemon", "status", "extra"]]) {
       expect(parseCoachCliInvocation(argv)).toEqual({
         kind: "usage",
-        message: "Usage: enduragent [version|serve]",
+        message: "Usage: enduragent [version|serve|self-test]",
       });
     }
   });

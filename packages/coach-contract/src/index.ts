@@ -5,4 +5,5 @@ export * from "./athlete-state.js";
 export * from "./engine.js";
 export * from "./rpc.js";
 export * from "./spend.js";
+export * from "./self-test.js";
 export * from "./handshake.js";

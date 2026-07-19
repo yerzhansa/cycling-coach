@@ -3,6 +3,7 @@ import type { AthleteHome } from "@enduragent/kernel-node/home";
 import { createDaemonHealthState, createHealthzRequestHandler } from "./daemon/healthz-server.js";
 import { createCoachRpcServer, ensureDaemonToken } from "./daemon/rpc-server.js";
 import type { LocalCoachLifecycle } from "./local-runner.js";
+import { createPackagedSelfTestOperation } from "./packaged-self-test.js";
 
 export interface RunCoachServeInput {
   readonly lifecycle: LocalCoachLifecycle;
@@ -56,6 +57,7 @@ export async function runCoachServe(
         getSpendSummary: () => spendMeter.getSpendSummary(),
         setDailySpendCap: ({ dailyCapUsd }) => spendMeter.setDailySpendCap(dailyCapUsd),
       },
+      selfTestOperations: { selfTest: createPackagedSelfTestOperation() },
       token: token.value,
       owner: input.owner ?? "unmanaged-foreground",
       healthState,

@@ -12,10 +12,12 @@ import {
   EXIT_USAGE,
   EXIT_VERSION_MISMATCH,
   JsonRpcSuccessResponseEnvelopeSchema,
+  SelfTestCommandTerminalSchema,
   type AthleteState,
   type CoachEngine,
   type CoachOperations,
 } from "@enduragent/coach-contract";
+import type { CoachClient, CoachClientCallOptions } from "@enduragent/coach-client";
 import {
   CoachRemoteError,
   type CoachVerbRequest,
@@ -284,9 +286,75 @@ describe("enduragent executable composition", () => {
       ),
     ).resolves.toBe(EXIT_USAGE);
     expect(io.stdout.read()).toBe("");
-    expect(io.stderr.read()).toBe("Usage: enduragent [version|serve]\n");
+    expect(io.stderr.read()).toBe("Usage: enduragent [version|serve|self-test]\n");
     expect(homeCalls).toBe(0);
     expect(runnerCalls).toBe(0);
+  });
+
+  it("runs self-test through the remote client before local composition", async () => {
+    const digest = "a".repeat(64);
+    const selfTestResult = {
+      schemaVersion: 1,
+      type: "self-test-terminal",
+      ok: true,
+      runtime: { node: "24.18.0", electron: "43.1.1", v8: "15.0" },
+      resources: {
+        algorithm: "sha256",
+        matrixSha256: digest,
+        insideAsarSha256: digest,
+        extraResourcesSha256: digest,
+        byteIdentical: true,
+      },
+      suites: {
+        parity: { cases: 2, passed: 2 },
+        differential: { cases: 3, passed: 3 },
+      },
+    } as const;
+    const call = vi.fn(
+      async (_method: string, _params: unknown, options?: CoachClientCallOptions<"selfTest">) => {
+        for (const event of [
+          { phase: "started", completed: 0, total: 1 },
+          { phase: "completed", completed: 1, total: 1 },
+        ] as const) {
+          options?.onNotificationEnvelope?.({
+            jsonrpc: "2.0",
+            method: "coach.operationProgress",
+            params: { requestId: 1, requestMethod: "selfTest", event },
+          });
+          options?.onEvent?.(event);
+        }
+        options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: selfTestResult });
+        return selfTestResult;
+      },
+    );
+    const close = vi.fn(async () => {});
+    const connectSelfTestClient = vi.fn(async () => ({ call, close }) as unknown as CoachClient);
+    const withLocalCoachDependency = vi.fn();
+    const io = terminal();
+    await expect(
+      runEnduragent(
+        {
+          argv: ["self-test"],
+          env,
+          terminal: io.value,
+          signal: new AbortController().signal,
+        },
+        {
+          resolveAthleteHome: () => home,
+          withLocalCoach: withLocalCoachDependency,
+          readPackageVersion: async () => "unused",
+          connectSelfTestClient,
+        },
+      ),
+    ).resolves.toBe(EXIT_SUCCESS);
+    const lines = io.stdout.read().trimEnd().split("\n");
+    expect(lines).toHaveLength(1);
+    expect(SelfTestCommandTerminalSchema.parse(JSON.parse(lines[0]!))).toEqual(selfTestResult);
+    expect(io.stderr.read()).toBe("");
+    expect(connectSelfTestClient).toHaveBeenCalledOnce();
+    expect(call).toHaveBeenCalledWith("selfTest", {}, expect.any(Object));
+    expect(close).toHaveBeenCalledOnce();
+    expect(withLocalCoachDependency).not.toHaveBeenCalled();
   });
 
   it("renders migration and readiness outcomes with unchanged exit codes", async () => {

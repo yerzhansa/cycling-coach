@@ -41,6 +41,9 @@ import {
   SetUnitsPreferenceRpcResultSchema,
   GetSpendSummaryRpcParamsSchema,
   SetDailySpendCapRpcParamsSchema,
+  SelfTestCommandTerminalSchema,
+  SelfTestRpcParamsSchema,
+  SelfTestRpcResultSchema,
   SpendSummarySchema,
   ServerHandshakeFrameSchema,
   TurnEventSchema,
@@ -180,7 +183,7 @@ const spendSummary = SpendSummarySchema.parse({
 });
 
 describe("coach request and event projection", () => {
-  it("admits exactly the twelve strict method requests", () => {
+  it("admits exactly the thirteen strict method requests", () => {
     const requests = [
       { jsonrpc: "2.0", id: 1, method: "chat", params: { chatId: "chat-1", message: "hello" } },
       { jsonrpc: "2.0", id: 2, method: "resetSession", params: { chatId: "chat-1" } },
@@ -221,6 +224,7 @@ describe("coach request and event projection", () => {
         method: "setDailySpendCap",
         params: { dailyCapUsd: 0.75 },
       },
+      { jsonrpc: "2.0", id: 13, method: "selfTest", params: {} },
     ];
     for (const request of requests) {
       expect(CoachRpcRequestEnvelopeSchema.parse(request)).toEqual(request);
@@ -441,6 +445,12 @@ describe("coach request and event projection", () => {
       setUnitsPreference: async ({ value }) => ({ value, source: "cycling" }),
       getSpendSummary: async () => spendSummary,
       setDailySpendCap: async () => spendSummary,
+      selfTest: async () => ({
+        schemaVersion: 1,
+        type: "self-test-terminal",
+        ok: false,
+        error: { code: "RUNNER_ERROR", message: "packaged self-test failed" },
+      }),
     };
     expect(Object.keys(COACH_RPC_METHOD_REGISTRY)).toEqual(Object.keys(fake));
     expect(COACH_RPC_METHOD_NAMES).toEqual(Object.keys(fake));
@@ -516,6 +526,12 @@ describe("coach request and event projection", () => {
       responseSchema: SpendSummarySchema,
       eventSchema: NoRpcEventSchema,
     });
+    expect(COACH_RPC_METHOD_REGISTRY.selfTest).toEqual({
+      wireName: "selfTest",
+      requestSchema: SelfTestRpcParamsSchema,
+      responseSchema: SelfTestRpcResultSchema,
+      eventSchema: OperationProgressEventSchema,
+    });
     for (const method of [
       "resetSession",
       "hasSession",
@@ -535,6 +551,48 @@ describe("coach request and event projection", () => {
     await expect(fake.chat({ chatId: "chat-1", message: "hello" })).resolves.toEqual({
       text: "ok",
     });
+  });
+
+  it("validates strict self-test terminals and rejects contradictory resource results", () => {
+    const digest = "a".repeat(64);
+    const success = {
+      schemaVersion: 1,
+      type: "self-test-terminal",
+      ok: true,
+      runtime: { node: "24.18.0", electron: "43.1.1", v8: "15.0" },
+      resources: {
+        algorithm: "sha256",
+        matrixSha256: digest,
+        insideAsarSha256: digest,
+        extraResourcesSha256: digest,
+        byteIdentical: true,
+      },
+      suites: {
+        parity: { cases: 2, passed: 2 },
+        differential: { cases: 3, passed: 3 },
+      },
+    } as const;
+    expect(SelfTestRpcResultSchema.parse(success)).toEqual(success);
+    for (const invalid of [
+      { ...success, extra: true },
+      { ...success, resources: { ...success.resources, matrixSha256: digest.toUpperCase() } },
+      { ...success, resources: { ...success.resources, extraResourcesSha256: "b".repeat(64) } },
+      { ...success, suites: { ...success.suites, parity: { cases: 2, passed: 1 } } },
+      { ...success, suites: { ...success.suites, differential: { cases: 0, passed: 0 } } },
+    ]) {
+      expect(SelfTestRpcResultSchema.safeParse(invalid).success).toBe(false);
+    }
+    const unavailable = {
+      schemaVersion: 1,
+      type: "self-test-terminal",
+      ok: false,
+      error: {
+        code: "DAEMON_UNAVAILABLE",
+        message: "Enduragent could not reach the local service.",
+      },
+    } as const;
+    expect(SelfTestRpcResultSchema.safeParse(unavailable).success).toBe(false);
+    expect(SelfTestCommandTerminalSchema.parse(unavailable)).toEqual(unavailable);
   });
 
   it("round trips strict units preference requests and results", () => {
@@ -599,12 +657,20 @@ describe("handshake", () => {
   it("round trips client, accepted, and both mismatch directions", () => {
     const client = createClientHandshakeFrame("synthetic-test-token");
     expect(ClientHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(client)))).toEqual(client);
-    const accepted = createAcceptedServerHandshakeFrame("service-managed", 3);
+    const accepted = createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION);
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual(
       accepted,
     );
-    const older = createVersionMismatchServerHandshakeFrame("ephemeral-client-started", 2, 3);
-    const newer = createVersionMismatchServerHandshakeFrame("unmanaged-foreground", 4, 3);
+    const older = createVersionMismatchServerHandshakeFrame(
+      "ephemeral-client-started",
+      PROTOCOL_VERSION - 1,
+      PROTOCOL_VERSION,
+    );
+    const newer = createVersionMismatchServerHandshakeFrame(
+      "unmanaged-foreground",
+      PROTOCOL_VERSION + 1,
+      PROTOCOL_VERSION,
+    );
     expect(ServerHandshakeFrameSchema.parse(older)).toEqual(older);
     expect(ServerHandshakeFrameSchema.parse(newer)).toEqual(newer);
   });
@@ -691,7 +757,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version three", () => {
-    expect(PROTOCOL_VERSION).toBe(3);
+  it("uses protocol version four", () => {
+    expect(PROTOCOL_VERSION).toBe(4);
   });
 });

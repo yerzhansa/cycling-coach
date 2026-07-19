@@ -24,6 +24,7 @@ import {
   CoachCliSessionStartError,
   CoachRemoteError,
   InvalidCoachCliSessionError,
+  connectCoachSelfTestClient,
   connectCoachVerbTransport,
   connectWithBoundedRetry,
   createCoachVerbRequest,
@@ -32,6 +33,7 @@ import {
   resolveCoachCliSession,
   runCoachRepl,
   runCoachDaemonCommand,
+  runCoachSelfTest,
   runCoachVerb,
   type CoachDaemonController,
   type CoachCliTerminal,
@@ -100,6 +102,10 @@ export interface EnduragentDependencies {
     home: AthleteHome,
     expectedPort?: number,
   ) => Promise<CoachVerbTransport>;
+  readonly connectSelfTestClient?: (
+    home: AthleteHome,
+    expectedPort?: number,
+  ) => ReturnType<typeof connectCoachSelfTestClient>;
   readonly serviceRegistrationState?: () => Promise<ServiceRegistrationState>;
   readonly startEphemeralDaemon?: (input: {
     readonly env: Record<string, string | undefined>;
@@ -383,6 +389,21 @@ const defaultDependencies: EnduragentDependencies = Object.freeze({
         throw new TypeError("daemon peer changed");
       }
       return await connectCoachVerbTransport({
+        url: `ws://127.0.0.1:${port}/rpc`,
+        token,
+      });
+    } catch (error) {
+      if (error instanceof CoachRemoteError) throw error;
+      throw new CoachRemoteError({ kind: "unavailable" });
+    }
+  },
+  connectSelfTestClient: async (home: AthleteHome, expectedPort?: number) => {
+    try {
+      const { port, token } = await readDaemonCoordinates(home);
+      if (expectedPort !== undefined && expectedPort !== port) {
+        throw new TypeError("daemon peer changed");
+      }
+      return await connectCoachSelfTestClient({
         url: `ws://127.0.0.1:${port}/rpc`,
         token,
       });
@@ -1536,6 +1557,47 @@ async function runPreparedVerb(
   }
 }
 
+async function runSelfTestInvocation(
+  input: RunEnduragentInput,
+  dependencies: EnduragentDependencies,
+): Promise<ExitCode> {
+  const home = canonicalHome(dependencies.resolveAthleteHome(input.env));
+  try {
+    const transport = await connectServiceAwareRemote({
+      home,
+      env: input.env,
+      dependencies: {
+        ...dependencies,
+        connectRemoteTransport: async (selectedHome, expectedPort) => {
+          const client = await dependencies.connectSelfTestClient!(selectedHome, expectedPort);
+          return {
+            kind: "remote",
+            request: async () => {
+              throw new CoachRemoteError({ kind: "agent" });
+            },
+            close: () => client.close(),
+            selfTestClient: client,
+          } as CoachVerbTransport & { readonly selfTestClient: typeof client };
+        },
+      },
+    });
+    const client = (
+      transport as CoachVerbTransport & {
+        readonly selfTestClient?: Awaited<ReturnType<typeof connectCoachSelfTestClient>>;
+      }
+    ).selfTestClient;
+    if (client === undefined) throw new CoachRemoteError({ kind: "agent" });
+    return runCoachSelfTest({ connect: async () => client, terminal: input.terminal });
+  } catch (error) {
+    return runCoachSelfTest({
+      connect: async () => {
+        throw error;
+      },
+      terminal: input.terminal,
+    });
+  }
+}
+
 async function runServeAsSuccessor(input: {
   readonly lifecycle: Parameters<typeof runCoachServe>[0]["lifecycle"];
   readonly home: AthleteHome;
@@ -1834,6 +1896,10 @@ export async function runEnduragent(
         runInput: input,
         dependencies: resolvedDependencies,
       });
+    }
+
+    if (invocation.kind === "self-test") {
+      return runSelfTestInvocation(input, resolvedDependencies);
     }
 
     if (invocation.kind === "verb") {

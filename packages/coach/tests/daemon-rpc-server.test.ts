@@ -104,13 +104,21 @@ const spend = {
 };
 
 function createCoachRpcServer(
-  input: Omit<CoachRpcServerInput, "operations" | "spend"> &
-    Partial<Pick<CoachRpcServerInput, "operations" | "spend">>,
+  input: Omit<CoachRpcServerInput, "operations" | "spend" | "selfTestOperations"> &
+    Partial<Pick<CoachRpcServerInput, "operations" | "spend" | "selfTestOperations">>,
 ) {
   return createCoachRpcServerProduction({
     ...input,
     operations: input.operations ?? operations,
     spend: input.spend ?? spend,
+    selfTestOperations: input.selfTestOperations ?? {
+      selfTest: async () => ({
+        schemaVersion: 1,
+        type: "self-test-terminal",
+        ok: false,
+        error: { code: "RUNNER_ERROR", message: "packaged self-test failed" },
+      }),
+    },
   });
 }
 
@@ -610,6 +618,67 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     await client.close();
   });
 
+  it("dispatches selfTest with request-correlated progress before one terminal", async () => {
+    const token = "x".repeat(43);
+    const selfTest = vi.fn(async (onEvent?: (event: unknown) => void) => {
+      onEvent?.({ phase: "started", completed: 0, total: 1 });
+      onEvent?.({ phase: "completed", completed: 1, total: 1 });
+      return {
+        schemaVersion: 1,
+        type: "self-test-terminal",
+        ok: false,
+        error: { code: "RUNNER_ERROR", message: "packaged self-test failed" },
+      } as const;
+    });
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      selfTestOperations: { selfTest },
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+    client.ws.send(
+      JSON.stringify({ jsonrpc: "2.0", id: "diagnostic", method: "selfTest", params: {} }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      method: "coach.operationProgress",
+      params: {
+        requestId: "diagnostic",
+        requestMethod: "selfTest",
+        event: { phase: "started", completed: 0, total: 1 },
+      },
+    });
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      method: "coach.operationProgress",
+      params: {
+        requestId: "diagnostic",
+        requestMethod: "selfTest",
+        event: { phase: "completed", completed: 1, total: 1 },
+      },
+    });
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "diagnostic",
+      result: { ok: false, error: { code: "RUNNER_ERROR" } },
+    });
+    expect(selfTest).toHaveBeenCalledOnce();
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "invalid-diagnostic",
+        method: "selfTest",
+        params: { extra: true },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "invalid-diagnostic",
+      error: { code: -32602, message: "Invalid params" },
+    });
+    expect(selfTest).toHaveBeenCalledOnce();
+    await client.close();
+  });
+
   it("uses authoritative protocol errors, recoverable ids, and method lookup order", async () => {
     const token = "x".repeat(43);
     const rpc = createCoachRpcServer({
@@ -699,8 +768,10 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     const token = "x".repeat(43);
     for (const clientProtocolVersion of [PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1]) {
       const chat = vi.fn(async () => ({ text: "unused" }));
+      const selfTest = vi.fn();
       const rpc = createCoachRpcServer({
         engine: engine({ chat }),
+        selfTestOperations: { selfTest },
         token,
         owner: "unmanaged-foreground",
       });
@@ -720,6 +791,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         direction: clientProtocolVersion < PROTOCOL_VERSION ? "client-older" : "client-newer",
       });
       expect(chat).not.toHaveBeenCalled();
+      expect(selfTest).not.toHaveBeenCalled();
       await client.close();
     }
   });

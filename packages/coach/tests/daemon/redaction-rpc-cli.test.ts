@@ -138,6 +138,14 @@ interface RunningRpc {
 async function startRpc(coachEngine: CoachEngine): Promise<RunningRpc> {
   const rpc = createCoachRpcServer({
     engine: coachEngine,
+    selfTestOperations: {
+      selfTest: async () => ({
+        schemaVersion: 1,
+        type: "self-test-terminal",
+        ok: false,
+        error: { code: "RUNNER_ERROR", message: "packaged self-test failed" },
+      }),
+    },
     operations: {
       importFiles: async ({ paths }) => ({
         schemaVersion: 1,
