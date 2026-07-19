@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    />
+    <title>Enduragent</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <link rel="stylesheet" href="/src/tray.css" />
+  </head>
+  <body>
+    <main class="hud" aria-label="Enduragent menu bar status">
+      <header class="window-bar">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <strong>Enduragent</strong>
+        <span class="status-dot" aria-label="Enduragent is running"></span>
+      </header>
+      <section class="glance" aria-labelledby="residency-heading">
+        <p class="eyebrow">Cycling coach</p>
+        <h1 id="residency-heading">Ready when you are</h1>
+        <div class="readiness-rail">
+          <article class="rail-card">
+            <span class="metric-label">Residency</span>
+            <strong>Running in the menu bar</strong>
+            <span class="rail-tag">active</span>
+          </article>
+          <article class="rail-card">
+            <span class="metric-label">Window</span>
+            <strong>Close it without quitting</strong>
+            <span class="rail-tag amber">macOS</span>
+          </article>
+        </div>
+        <p class="menu-hint">
+          Right-click the menu-bar icon to open Enduragent, change Open at Login, or quit.
+        </p>
+      </section>
+    </main>
+    <script type="module" src="/src/tray.ts"></script>
+  </body>
+</html>

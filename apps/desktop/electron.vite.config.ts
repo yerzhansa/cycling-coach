@@ -30,7 +30,10 @@ export default defineConfig({
       outDir: resolve(desktopRoot, "out/renderer"),
       emptyOutDir: true,
       rollupOptions: {
-        input: resolve(desktopRoot, "../desktop-renderer/index.html"),
+        input: {
+          index: resolve(desktopRoot, "../desktop-renderer/index.html"),
+          tray: resolve(desktopRoot, "../desktop-renderer/tray.html"),
+        },
       },
     },
   },
