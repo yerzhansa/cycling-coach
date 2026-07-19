@@ -44,6 +44,11 @@ const operations: CoachOperations = {
     referenceSucceeded: true,
     requests: { store: 1, reference: 1, total: 2 },
   }),
+  saveIntake: async () => ({ schemaVersion: 1, saved: true }),
+  configureRuntime: async ({ llm, intervals }) => ({
+    schemaVersion: 1,
+    applied: { llm: llm !== undefined, intervals: intervals !== undefined },
+  }),
 };
 const state: AthleteState = {
   schemaVersion: "3",

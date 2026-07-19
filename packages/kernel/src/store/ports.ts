@@ -64,7 +64,11 @@ export interface AnchorRepository {
   /** Insert iff no row exists for (sport, anchor_type, valid_from). Returns true if inserted. */
   insertIfAbsent(row: AnchorHistoryRow): Promise<boolean>;
   /** Effective-dated current row: max valid_from ≤ asOfEpochS, tie-broken by confidence precedence. */
-  readCurrent(sport: string, anchorType: string, asOfEpochS: number): Promise<AnchorHistoryRow | undefined>;
+  readCurrent(
+    sport: string,
+    anchorType: string,
+    asOfEpochS: number,
+  ): Promise<AnchorHistoryRow | undefined>;
 }
 
 export type RawFileColumn =
@@ -148,11 +152,27 @@ export interface ZoneSetHistoryRow {
 }
 
 export type ActivityRevisionResult =
-  | { readonly kind: "inserted-current"; readonly revisionId: string; readonly selectorChanged: true }
+  | {
+      readonly kind: "inserted-current";
+      readonly revisionId: string;
+      readonly selectorChanged: true;
+    }
   | { readonly kind: "exact-current"; readonly revisionId: string; readonly selectorChanged: false }
-  | { readonly kind: "reselected-current"; readonly revisionId: string; readonly selectorChanged: true }
-  | { readonly kind: "appended-current"; readonly revisionId: string; readonly selectorChanged: true }
-  | { readonly kind: "hydrated-current"; readonly revisionId: string; readonly selectorChanged: true };
+  | {
+      readonly kind: "reselected-current";
+      readonly revisionId: string;
+      readonly selectorChanged: true;
+    }
+  | {
+      readonly kind: "appended-current";
+      readonly revisionId: string;
+      readonly selectorChanged: true;
+    }
+  | {
+      readonly kind: "hydrated-current";
+      readonly revisionId: string;
+      readonly selectorChanged: true;
+    };
 
 export interface ActivityRevisionDraft {
   readonly sourceRow: SourceRecordRow;
@@ -160,10 +180,14 @@ export interface ActivityRevisionDraft {
 }
 
 export interface IntervalsSourceRepository {
-  recordArtifact(draft: SourceArtifactDraft): Promise<{ readonly artifactKey: string; readonly inserted: boolean }>;
+  recordArtifact(
+    draft: SourceArtifactDraft,
+  ): Promise<{ readonly artifactKey: string; readonly inserted: boolean }>;
   recordGenericLanding(draft: GenericLandingDraft): Promise<boolean>;
   applyActivityRevision(draft: ActivityRevisionDraft): Promise<ActivityRevisionResult>;
-  upsertWellness(row: WellnessLandingRow): Promise<"inserted" | "updated" | "unchanged" | "manual-wins">;
+  upsertWellness(
+    row: WellnessLandingRow,
+  ): Promise<"inserted" | "updated" | "unchanged" | "manual-wins">;
   insertSyncedAnchor(row: AnchorHistoryRow): Promise<boolean>;
   insertSyncedZone(row: ZoneSetHistoryRow): Promise<boolean>;
   readCurrentCaptureEvidence(
@@ -182,7 +206,10 @@ export interface IntervalsSourceRepository {
     readonly artifactKey: string;
     readonly archiveAddress: string;
     readonly archiveRelPath: string;
-    readonly currentRevision: { readonly sourceRecordId: string; readonly revisionId: string } | null;
+    readonly currentRevision: {
+      readonly sourceRecordId: string;
+      readonly revisionId: string;
+    } | null;
   }): Promise<void>;
 }
 
@@ -199,6 +226,24 @@ export interface DedupConfirmationRow {
 export interface DedupConfirmationRepository {
   insertIfAbsent(row: DedupConfirmationRow): Promise<boolean>;
   readAll(): Promise<readonly DedupConfirmationRow[]>;
+}
+
+export interface IntakeFlagsRow {
+  readonly id: string;
+  readonly swim_skill_floor: null;
+  readonly continuous_distance_capable: null;
+  readonly open_water_comfort: null;
+  readonly prior_bsi: boolean;
+  readonly clinician_cleared: boolean | null;
+  readonly injury_status: "none" | "managing" | "returning";
+  readonly device_id: string;
+  readonly hlc_physical_ms: number;
+  readonly hlc_counter: number;
+}
+
+export interface IntakeRepository {
+  replace(row: IntakeFlagsRow): Promise<void>;
+  read(): Promise<IntakeFlagsRow | undefined>;
 }
 
 export interface RepairLogInsert {

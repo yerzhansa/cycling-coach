@@ -71,6 +71,11 @@ const operations: CoachOperations = {
     referenceSucceeded: true,
     requests: { store: 1, reference: 1, total: 2 },
   }),
+  saveIntake: async () => ({ schemaVersion: 1, saved: true }),
+  configureRuntime: async ({ llm, intervals }) => ({
+    schemaVersion: 1,
+    applied: { llm: llm !== undefined, intervals: intervals !== undefined },
+  }),
 };
 
 function createCoachRpcServer(
@@ -380,6 +385,70 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     await client.close();
   });
 
+  it("dispatches authenticated intake and runtime operations without value echo", async () => {
+    const token = "x".repeat(43);
+    const saveIntake = vi.fn(async () => ({ schemaVersion: 1 as const, saved: true as const }));
+    const configureRuntime = vi.fn(async ({ llm, intervals }) => ({
+      schemaVersion: 1 as const,
+      applied: { llm: llm !== undefined, intervals: intervals !== undefined },
+    }));
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      operations: { ...operations, saveIntake, configureRuntime },
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+    const intake = {
+      swim_skill_floor: null,
+      continuous_distance_capable: null,
+      open_water_comfort: null,
+      prior_bsi: false,
+      clinician_cleared: null,
+      injury_status: "none",
+    } as const;
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "intake",
+        method: "saveIntake",
+        params: intake,
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "intake",
+      result: { schemaVersion: 1, saved: true },
+    });
+    expect(saveIntake).toHaveBeenCalledWith(intake);
+
+    const runtime = {
+      llm: { provider: "openrouter", model: "model-a", api_key: "placeholder" },
+      intervals: { api_key: "placeholder", athlete_id: "athlete-a" },
+    } as const;
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "runtime",
+        method: "configureRuntime",
+        params: runtime,
+      }),
+    );
+    const response = parseCoachRpcEnvelope(await client.frames.next());
+    expect(response).toEqual({
+      jsonrpc: "2.0",
+      id: "runtime",
+      result: { schemaVersion: 1, applied: { llm: true, intervals: true } },
+    });
+    expect(configureRuntime).toHaveBeenCalledWith(runtime);
+    expect(JSON.stringify(response)).not.toContain("placeholder");
+    expect(JSON.stringify(response)).not.toContain("athlete-a");
+    expect(JSON.stringify(response)).not.toContain("model-a");
+    await client.close();
+  });
+
   it("uses authoritative protocol errors, recoverable ids, and method lookup order", async () => {
     const token = "x".repeat(43);
     const rpc = createCoachRpcServer({
@@ -400,6 +469,23 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       [
         JSON.stringify({ jsonrpc: "2.0", id: "known", method: "chat", params: {} }),
         { id: "known", error: { code: -32602, message: "Invalid params" } },
+      ],
+      [
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "strict-intake",
+          method: "saveIntake",
+          params: {
+            swim_skill_floor: null,
+            continuous_distance_capable: null,
+            open_water_comfort: null,
+            prior_bsi: false,
+            clinician_cleared: null,
+            injury_status: "none",
+            extra: true,
+          },
+        }),
+        { id: "strict-intake", error: { code: -32602, message: "Invalid params" } },
       ],
       [
         JSON.stringify({ jsonrpc: "1.0", id: "recoverable", method: "chat", params: {} }),

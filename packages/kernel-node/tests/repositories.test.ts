@@ -6,6 +6,7 @@ import {
   createAnchorRepository,
   createActivityRepository,
   createDedupConfirmationRepository,
+  createIntakeRepository,
   createRawFileRepository,
   createSourceRecordRepository,
   runMigrations,
@@ -50,22 +51,24 @@ function activityRows(rawSha256: string, localDateKey: number): ActivityRows {
       is_multisport: 0,
       dedup_cluster_id: rawSha256,
     },
-    sessions: [{
-      session_key: `session-${rawSha256}`,
-      workout_key: `workout-${rawSha256}`,
-      session_seq: 0,
-      sport: "cycling",
-      sub_sport: null,
-      start_utc: 1000,
-      tz_offset_s: null,
-      local_date_key: localDateKey,
-      elapsed_s: null,
-      timer_s: null,
-      moving_s: null,
-      distance_m: null,
-      is_transition: 0,
-      summary_json: null,
-    }],
+    sessions: [
+      {
+        session_key: `session-${rawSha256}`,
+        workout_key: `workout-${rawSha256}`,
+        session_seq: 0,
+        sport: "cycling",
+        sub_sport: null,
+        start_utc: 1000,
+        tz_offset_s: null,
+        local_date_key: localDateKey,
+        elapsed_s: null,
+        timer_s: null,
+        moving_s: null,
+        distance_m: null,
+        is_transition: 0,
+        summary_json: null,
+      },
+    ],
     laps: [],
     swimLengths: [],
     streams: [],
@@ -111,21 +114,56 @@ describe("repository ports over real node:sqlite", () => {
     it("applies confidence precedence for same valid_from (manual > platform > fit)", async () => {
       const repo = createAnchorRepository(store);
       await repo.insertIfAbsent(
-        anchorRow({ id: "fit", valid_from: 1000, value: 230, confidence: "fit", provenance: "sync", source: "fit" }),
+        anchorRow({
+          id: "fit",
+          valid_from: 1000,
+          value: 230,
+          confidence: "fit",
+          provenance: "sync",
+          source: "fit",
+        }),
       );
       const fit = await repo.readCurrent("cycling", "ftp", 1500);
       expect(fit?.confidence).toBe("fit");
       expect(fit?.value).toBe(230);
       await store.run(
         "INSERT INTO anchor_history (id, sport, anchor_type, value, unit, valid_from, source, confidence, note, provenance, device_id, hlc_physical_ms, hlc_counter) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        ["plat", "cycling", "ftp", 240, "W", 1000, "connector", "platform", null, "sync", null, null, null],
+        [
+          "plat",
+          "cycling",
+          "ftp",
+          240,
+          "W",
+          1000,
+          "connector",
+          "platform",
+          null,
+          "sync",
+          null,
+          null,
+          null,
+        ],
       );
       const platform = await repo.readCurrent("cycling", "ftp", 1500);
       expect(platform?.confidence).toBe("platform");
       expect(platform?.value).toBe(240);
       await store.run(
         "INSERT INTO anchor_history (id, sport, anchor_type, value, unit, valid_from, source, confidence, note, provenance, device_id, hlc_physical_ms, hlc_counter) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        ["man", "cycling", "ftp", 250, "W", 1000, "manual", "manual", null, "manual", null, null, null],
+        [
+          "man",
+          "cycling",
+          "ftp",
+          250,
+          "W",
+          1000,
+          "manual",
+          "manual",
+          null,
+          "manual",
+          null,
+          null,
+          null,
+        ],
       );
       const manual = await repo.readCurrent("cycling", "ftp", 1500);
       expect(manual?.confidence).toBe("manual");
@@ -148,11 +186,18 @@ describe("repository ports over real node:sqlite", () => {
     expect(await repo.upsert(row)).toBe(true);
     expect(await repo.upsert(row)).toBe(false);
     const changes: readonly [keyof RawFileRow, RawFileRow[keyof RawFileRow]][] = [
-      ["path", "/y.fit"], ["ext", "bin"], ["bytes", 999], ["file_id_serial", 2],
-      ["file_id_time_created_utc", 2000], ["manufacturer", "other"], ["product", "other"],
+      ["path", "/y.fit"],
+      ["ext", "bin"],
+      ["bytes", 999],
+      ["file_id_serial", 2],
+      ["file_id_time_created_utc", 2000],
+      ["manufacturer", "other"],
+      ["product", "other"],
     ];
-    for (const [key,value] of changes) {
-      await expect(repo.upsert({...row,[key]:value})).rejects.toBeInstanceOf(RawFileInvariantError);
+    for (const [key, value] of changes) {
+      await expect(repo.upsert({ ...row, [key]: value })).rejects.toBeInstanceOf(
+        RawFileInvariantError,
+      );
     }
     const count = await store.get("SELECT count(*) AS c FROM raw_file");
     expect(count?.c).toBe(1);
@@ -175,8 +220,13 @@ describe("repository ports over real node:sqlite", () => {
 
     await repo.replaceForRawFile("raw", rows, async () => {});
 
-    const remaining = await store.all("SELECT snapshot_key FROM metric_snapshot ORDER BY snapshot_key");
-    expect(remaining.map((row) => row.snapshot_key)).toEqual(["unrelated-date", "unrelated-session"]);
+    const remaining = await store.all(
+      "SELECT snapshot_key FROM metric_snapshot ORDER BY snapshot_key",
+    );
+    expect(remaining.map((row) => row.snapshot_key)).toEqual([
+      "unrelated-date",
+      "unrelated-session",
+    ]);
   });
 
   it("invalidates old and incoming date snapshots when an activity date changes", async () => {
@@ -197,8 +247,13 @@ describe("repository ports over real node:sqlite", () => {
 
     await repo.replaceForRawFile("raw", activityRows("raw", 19980102), async () => {});
 
-    const remaining = await store.all("SELECT snapshot_key FROM metric_snapshot ORDER BY snapshot_key");
-    expect(remaining.map((row) => row.snapshot_key)).toEqual(["unrelated-date", "unrelated-session"]);
+    const remaining = await store.all(
+      "SELECT snapshot_key FROM metric_snapshot ORDER BY snapshot_key",
+    );
+    expect(remaining.map((row) => row.snapshot_key)).toEqual([
+      "unrelated-date",
+      "unrelated-session",
+    ]);
   });
 
   it("[PR05-REPO-001] observes source inserts and rejects both conflict-key mismatches", async () => {
@@ -215,16 +270,28 @@ describe("repository ports over real node:sqlite", () => {
     };
     expect(await repo.upsert(row)).toBe(true);
     expect(await repo.upsert(row)).toBe(false);
-    await expect(repo.upsert({ ...row, id: "sr-2" })).rejects.toThrow("source record invariant mismatch");
-    await expect(repo.upsert({ ...row, source: "other", external_id: "other" })).rejects.toThrow("source record invariant mismatch");
+    await expect(repo.upsert({ ...row, id: "sr-2" })).rejects.toThrow(
+      "source record invariant mismatch",
+    );
+    await expect(repo.upsert({ ...row, source: "other", external_id: "other" })).rejects.toThrow(
+      "source record invariant mismatch",
+    );
     const count = await store.get("SELECT count(*) AS c FROM source_record");
     expect(count?.c).toBe(1);
   });
 
   it("[PR05-REPO-002] excludes mutable source attachments from immutable equality", async () => {
     const repo = createSourceRecordRepository(store);
-    const row: SourceRecordRow = { id: "sr-1", workout_key: null, session_key: null, source: "intervals-icu",
-      external_id: "ext-1", raw_sha256: null, quality_rank: 300, payload_json: "{}" };
+    const row: SourceRecordRow = {
+      id: "sr-1",
+      workout_key: null,
+      session_key: null,
+      source: "intervals-icu",
+      external_id: "ext-1",
+      raw_sha256: null,
+      quality_rank: 300,
+      payload_json: "{}",
+    };
     expect(await repo.upsert(row)).toBe(true);
     await store.run("UPDATE source_record SET workout_key='w',session_key='s' WHERE id='sr-1'");
     expect(await repo.upsert(row)).toBe(false);
@@ -232,26 +299,132 @@ describe("repository ports over real node:sqlite", () => {
   });
 
   it("[PR05-REPO-003] appends confirmations and reads effective tuple order", async () => {
-    const repo = createDedupConfirmationRepository(store), a = "a".repeat(64), b = "b".repeat(64);
-    const older = { id: "0".repeat(26), member_a: a, member_b: b, verdict: "merge" as const, device_id: "a", hlc_physical_ms: 1, hlc_counter: 0 };
-    const newer = { ...older, id: "1".repeat(26), verdict: "distinct" as const, device_id: "b", hlc_counter: 1 };
-    expect(await repo.insertIfAbsent(older)).toBe(true); expect(await repo.insertIfAbsent(older)).toBe(false);
+    const repo = createDedupConfirmationRepository(store),
+      a = "a".repeat(64),
+      b = "b".repeat(64);
+    const older = {
+      id: "0".repeat(26),
+      member_a: a,
+      member_b: b,
+      verdict: "merge" as const,
+      device_id: "a",
+      hlc_physical_ms: 1,
+      hlc_counter: 0,
+    };
+    const newer = {
+      ...older,
+      id: "1".repeat(26),
+      verdict: "distinct" as const,
+      device_id: "b",
+      hlc_counter: 1,
+    };
+    expect(await repo.insertIfAbsent(older)).toBe(true);
+    expect(await repo.insertIfAbsent(older)).toBe(false);
     expect(await repo.insertIfAbsent(newer)).toBe(true);
     expect((await repo.readAll()).map((row) => row.id)).toEqual([newer.id, older.id]);
   });
 
   it("[PR05-REPO-004] rejects Unicode tie breakers in repository and real DDL", async () => {
-    const repo = createDedupConfirmationRepository(store), a = "a".repeat(64), b = "b".repeat(64);
+    const repo = createDedupConfirmationRepository(store),
+      a = "a".repeat(64),
+      b = "b".repeat(64);
     for (const character of [String.fromCodePoint(0x10000), "\ue000"]) {
-      await expect(repo.insertIfAbsent({ id: `${character}${"0".repeat(25)}`, member_a: a, member_b: b,
-        verdict: "merge", device_id: "d", hlc_physical_ms: 1, hlc_counter: 0 })).rejects.toThrow();
-      await expect(repo.insertIfAbsent({ id: "2".repeat(26), member_a: a, member_b: b,
-        verdict: "merge", device_id: `d${character}`, hlc_physical_ms: 1, hlc_counter: 0 })).rejects.toThrow();
-      await expect(store.run("INSERT INTO dedup_confirmation VALUES(?,?,?,?,?,?,?)", [`${character}${"3".repeat(25)}`, a, b, "merge", "d", 1, 0])).rejects.toThrow();
-      await expect(store.run("INSERT INTO dedup_confirmation VALUES(?,?,?,?,?,?,?)", ["3".repeat(26), a, b, "merge", `d${character}`, 1, 0])).rejects.toThrow();
+      await expect(
+        repo.insertIfAbsent({
+          id: `${character}${"0".repeat(25)}`,
+          member_a: a,
+          member_b: b,
+          verdict: "merge",
+          device_id: "d",
+          hlc_physical_ms: 1,
+          hlc_counter: 0,
+        }),
+      ).rejects.toThrow();
+      await expect(
+        repo.insertIfAbsent({
+          id: "2".repeat(26),
+          member_a: a,
+          member_b: b,
+          verdict: "merge",
+          device_id: `d${character}`,
+          hlc_physical_ms: 1,
+          hlc_counter: 0,
+        }),
+      ).rejects.toThrow();
+      await expect(
+        store.run("INSERT INTO dedup_confirmation VALUES(?,?,?,?,?,?,?)", [
+          `${character}${"3".repeat(25)}`,
+          a,
+          b,
+          "merge",
+          "d",
+          1,
+          0,
+        ]),
+      ).rejects.toThrow();
+      await expect(
+        store.run("INSERT INTO dedup_confirmation VALUES(?,?,?,?,?,?,?)", [
+          "3".repeat(26),
+          a,
+          b,
+          "merge",
+          `d${character}`,
+          1,
+          0,
+        ]),
+      ).rejects.toThrow();
     }
-    await repo.insertIfAbsent({ id: "4".repeat(26), member_a: a, member_b: b, verdict: "merge", device_id: "a", hlc_physical_ms: 1, hlc_counter: 0 });
-    await repo.insertIfAbsent({ id: "5".repeat(26), member_a: a, member_b: b, verdict: "merge", device_id: "z", hlc_physical_ms: 1, hlc_counter: 0 });
+    await repo.insertIfAbsent({
+      id: "4".repeat(26),
+      member_a: a,
+      member_b: b,
+      verdict: "merge",
+      device_id: "a",
+      hlc_physical_ms: 1,
+      hlc_counter: 0,
+    });
+    await repo.insertIfAbsent({
+      id: "5".repeat(26),
+      member_a: a,
+      member_b: b,
+      verdict: "merge",
+      device_id: "z",
+      hlc_physical_ms: 1,
+      hlc_counter: 0,
+    });
     expect((await repo.readAll()).slice(0, 2).map((row) => row.device_id)).toEqual(["z", "a"]);
+  });
+
+  it("replaces the authored intake row and validates its identity and conditional fields", async () => {
+    const repo = createIntakeRepository(store);
+    const first = {
+      id: "0".repeat(26),
+      swim_skill_floor: null,
+      continuous_distance_capable: null,
+      open_water_comfort: null,
+      prior_bsi: false,
+      clinician_cleared: null,
+      injury_status: "none" as const,
+      device_id: "device-a",
+      hlc_physical_ms: 100,
+      hlc_counter: 0,
+    };
+    const second = {
+      ...first,
+      id: "1".repeat(26),
+      prior_bsi: true,
+      clinician_cleared: true,
+      injury_status: "returning" as const,
+      hlc_counter: 1,
+    };
+    await repo.replace(first);
+    expect(await repo.read()).toEqual(first);
+    await repo.replace(second);
+    expect(await repo.read()).toEqual(second);
+    expect(await store.all("SELECT id FROM intake_flags")).toHaveLength(1);
+    await expect(repo.replace({ ...second, id: "invalid" })).rejects.toThrow("intake id");
+    await expect(repo.replace({ ...second, clinician_cleared: null })).rejects.toThrow(
+      "clinician clearance",
+    );
   });
 });

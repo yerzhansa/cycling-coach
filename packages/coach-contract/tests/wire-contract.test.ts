@@ -15,9 +15,13 @@ import {
   CoachTurnEventNotificationEnvelopeSchema,
   DaemonOwnerSchema,
   EmptyRpcParamsSchema,
+  ConfigureRuntimeRpcParamsSchema,
+  ConfigureRuntimeRpcResultSchema,
   ImportFilesRpcParamsSchema,
   ImportFilesRpcResultSchema,
   OperationProgressEventSchema,
+  SaveIntakeRpcParamsSchema,
+  SaveIntakeRpcResultSchema,
   SyncRpcParamsSchema,
   SyncRpcResultSchema,
   HasSessionRequestSchema,
@@ -26,6 +30,7 @@ import {
   JsonRpcProtocolErrorResponseEnvelopeSchema,
   JsonRpcResponseEnvelopeSchema,
   JsonRpcSuccessResponseEnvelopeSchema,
+  LlmProviderSchema,
   NoRpcEventSchema,
   PROTOCOL_VERSION,
   ResetSessionRequestSchema,
@@ -150,7 +155,7 @@ describe("JSON-RPC envelopes", () => {
 });
 
 describe("coach request and event projection", () => {
-  it("admits exactly the six strict method requests", () => {
+  it("admits exactly the eight strict method requests", () => {
     const requests = [
       { jsonrpc: "2.0", id: 1, method: "chat", params: { chatId: "chat-1", message: "hello" } },
       { jsonrpc: "2.0", id: 2, method: "resetSession", params: { chatId: "chat-1" } },
@@ -158,9 +163,30 @@ describe("coach request and event projection", () => {
       { jsonrpc: "2.0", id: 4, method: "getAthleteState", params: {} },
       { jsonrpc: "2.0", id: 5, method: "importFiles", params: { paths: ["/synthetic/ride.fit"] } },
       { jsonrpc: "2.0", id: 6, method: "sync", params: {} },
+      {
+        jsonrpc: "2.0",
+        id: 7,
+        method: "saveIntake",
+        params: {
+          swim_skill_floor: null,
+          continuous_distance_capable: null,
+          open_water_comfort: null,
+          prior_bsi: false,
+          clinician_cleared: null,
+          injury_status: "none",
+        },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 8,
+        method: "configureRuntime",
+        params: { llm: { provider: "anthropic", model: "model", api_key: "placeholder" } },
+      },
     ];
-    for (const request of requests)
+    for (const request of requests) {
       expect(CoachRpcRequestEnvelopeSchema.parse(request)).toEqual(request);
+      expect(roundTrip(request)).toEqual(request);
+    }
     expect(
       CoachRpcRequestEnvelopeSchema.safeParse({ jsonrpc: "2.0", id: 4, method: "getAthleteState" })
         .success,
@@ -272,6 +298,66 @@ describe("coach request and event projection", () => {
     );
   });
 
+  it("validates strict intake and runtime configuration round trips", () => {
+    const safeIntake = {
+      swim_skill_floor: null,
+      continuous_distance_capable: null,
+      open_water_comfort: null,
+      prior_bsi: false,
+      clinician_cleared: null,
+      injury_status: "none",
+    } as const;
+    const clearedIntake = {
+      ...safeIntake,
+      prior_bsi: true,
+      clinician_cleared: true,
+      injury_status: "returning",
+    } as const;
+    expect(SaveIntakeRpcParamsSchema.parse(safeIntake)).toEqual(safeIntake);
+    expect(SaveIntakeRpcParamsSchema.parse(clearedIntake)).toEqual(clearedIntake);
+    for (const invalid of [
+      { ...safeIntake, swim_skill_floor: "novice" },
+      { ...safeIntake, extra: true },
+      { ...safeIntake, clinician_cleared: true },
+      { ...clearedIntake, clinician_cleared: null },
+    ]) {
+      expect(SaveIntakeRpcParamsSchema.safeParse(invalid).success).toBe(false);
+    }
+    expect(SaveIntakeRpcResultSchema.parse({ schemaVersion: 1, saved: true })).toEqual({
+      schemaVersion: 1,
+      saved: true,
+    });
+
+    const llm = { provider: "openrouter", model: "model-a", api_key: "placeholder" } as const;
+    const intervals = { api_key: "placeholder", athlete_id: "athlete-a" } as const;
+    for (const params of [{ llm }, { intervals }, { llm, intervals }]) {
+      expect(ConfigureRuntimeRpcParamsSchema.parse(params)).toEqual(params);
+    }
+    for (const invalid of [
+      {},
+      { llm: { ...llm, extra: true } },
+      { intervals: { api_key: "", athlete_id: "athlete-a" } },
+      { llm, extra: true },
+    ]) {
+      expect(ConfigureRuntimeRpcParamsSchema.safeParse(invalid).success).toBe(false);
+    }
+    const result = { schemaVersion: 1, applied: { llm: true, intervals: false } } as const;
+    expect(ConfigureRuntimeRpcResultSchema.parse(result)).toEqual(result);
+    expect(JSON.stringify(result)).not.toContain("placeholder");
+    expect(LlmProviderSchema.options).toEqual([
+      "anthropic",
+      "openai",
+      "google",
+      "openai-codex",
+      "deepseek",
+      "qwen",
+      "minimax",
+      "kimi",
+      "zai",
+      "openrouter",
+    ]);
+  });
+
   it("keeps the method registry exhaustive and schema-identical", async () => {
     const fake: CoachRpcService = {
       chat: async () => ({ text: "ok" }),
@@ -306,6 +392,11 @@ describe("coach request and event projection", () => {
         published: false,
         referenceSucceeded: true,
         requests: { store: 0, reference: 0, total: 0 },
+      }),
+      saveIntake: async () => ({ schemaVersion: 1, saved: true }),
+      configureRuntime: async ({ llm, intervals }) => ({
+        schemaVersion: 1,
+        applied: { llm: llm !== undefined, intervals: intervals !== undefined },
       }),
     };
     expect(Object.keys(COACH_RPC_METHOD_REGISTRY)).toEqual(Object.keys(fake));
@@ -346,7 +437,25 @@ describe("coach request and event projection", () => {
       responseSchema: SyncRpcResultSchema,
       eventSchema: OperationProgressEventSchema,
     });
-    for (const method of ["resetSession", "hasSession", "getAthleteState"] as const) {
+    expect(COACH_RPC_METHOD_REGISTRY.saveIntake).toEqual({
+      wireName: "saveIntake",
+      requestSchema: SaveIntakeRpcParamsSchema,
+      responseSchema: SaveIntakeRpcResultSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.configureRuntime).toEqual({
+      wireName: "configureRuntime",
+      requestSchema: ConfigureRuntimeRpcParamsSchema,
+      responseSchema: ConfigureRuntimeRpcResultSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    for (const method of [
+      "resetSession",
+      "hasSession",
+      "getAthleteState",
+      "saveIntake",
+      "configureRuntime",
+    ] as const) {
       expect(COACH_RPC_METHOD_REGISTRY[method].eventSchema.safeParse(undefined).success).toBe(
         false,
       );
@@ -362,12 +471,12 @@ describe("handshake", () => {
   it("round trips client, accepted, and both mismatch directions", () => {
     const client = createClientHandshakeFrame("synthetic-test-token");
     expect(ClientHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(client)))).toEqual(client);
-    const accepted = createAcceptedServerHandshakeFrame("service-managed", 2);
+    const accepted = createAcceptedServerHandshakeFrame("service-managed", 3);
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual(
       accepted,
     );
-    const older = createVersionMismatchServerHandshakeFrame("ephemeral-client-started", 1, 2);
-    const newer = createVersionMismatchServerHandshakeFrame("unmanaged-foreground", 3, 2);
+    const older = createVersionMismatchServerHandshakeFrame("ephemeral-client-started", 2, 3);
+    const newer = createVersionMismatchServerHandshakeFrame("unmanaged-foreground", 4, 3);
     expect(ServerHandshakeFrameSchema.parse(older)).toEqual(older);
     expect(ServerHandshakeFrameSchema.parse(newer)).toEqual(newer);
   });
@@ -454,7 +563,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version two", () => {
-    expect(PROTOCOL_VERSION).toBe(2);
+  it("uses protocol version three", () => {
+    expect(PROTOCOL_VERSION).toBe(3);
   });
 });

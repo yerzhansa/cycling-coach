@@ -81,6 +81,11 @@ const operations: CoachOperations = {
     referenceSucceeded: true,
     requests: { store: 0, reference: 0, total: 0 },
   }),
+  saveIntake: async () => ({ schemaVersion: 1, saved: true }),
+  configureRuntime: async ({ llm, intervals }) => ({
+    schemaVersion: 1,
+    applied: { llm: llm !== undefined, intervals: intervals !== undefined },
+  }),
 };
 
 const config = {

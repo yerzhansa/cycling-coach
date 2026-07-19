@@ -408,8 +408,8 @@ describe("handshake failures", () => {
   });
 
   it.each([
-    [2, 3, "client-older", "ephemeral-client-started"],
-    [2, 1, "client-newer", "unmanaged-foreground"],
+    [PROTOCOL_VERSION, PROTOCOL_VERSION + 1, "client-older", "ephemeral-client-started"],
+    [PROTOCOL_VERSION, PROTOCOL_VERSION - 1, "client-newer", "unmanaged-foreground"],
   ] as const)(
     "exposes a trusted mismatch %s/%s",
     async (clientVersion, serverVersion, direction, owner) => {
@@ -482,6 +482,8 @@ describe("RPC receive and observers", () => {
           referenceSucceeded: true,
           requests: { store: 1, reference: 1, total: 2 },
         },
+        saveIntake: { schemaVersion: 1, saved: true },
+        configureRuntime: { schemaVersion: 1, applied: { llm: true, intervals: false } },
       };
       socket.emitMessage(
         serializeCoachRpcEnvelope({
@@ -505,7 +507,22 @@ describe("RPC receive and observers", () => {
       client.call("importFiles", { paths: ["/synthetic/ride.fit"] }),
     ).resolves.toMatchObject({ schemaVersion: 1 });
     await expect(client.call("sync", {})).resolves.toMatchObject({ schemaVersion: 1 });
-    expect(received.map((value) => (value as { id: number }).id)).toEqual([1, 2, 3, 4, 5, 6]);
+    await expect(
+      client.call("saveIntake", {
+        swim_skill_floor: null,
+        continuous_distance_capable: null,
+        open_water_comfort: null,
+        prior_bsi: false,
+        clinician_cleared: null,
+        injury_status: "none",
+      }),
+    ).resolves.toEqual({ schemaVersion: 1, saved: true });
+    await expect(
+      client.call("configureRuntime", {
+        llm: { provider: "anthropic", model: "synthetic", api_key: "synthetic" },
+      }),
+    ).resolves.toEqual({ schemaVersion: 1, applied: { llm: true, intervals: false } });
+    expect(received.map((value) => (value as { id: number }).id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(received.map((value) => (value as { method: string }).method)).toEqual([
       "chat",
       "resetSession",
@@ -513,6 +530,8 @@ describe("RPC receive and observers", () => {
       "getAthleteState",
       "importFiles",
       "sync",
+      "saveIntake",
+      "configureRuntime",
     ]);
     socket.closeSynchronously = true;
     await client.close();

@@ -680,6 +680,26 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
               invocationFailure = { error };
             }
             break;
+          case "saveIntake":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.saveIntake.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.operations.saveIntake(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "configureRuntime":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.configureRuntime.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.operations.configureRuntime(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
         }
         if (deliveryDetached) return;
         let terminal: string;

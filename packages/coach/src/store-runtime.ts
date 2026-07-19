@@ -45,6 +45,7 @@ export interface StoreRuntimeDependencies {
 export interface StoreRuntimeOptions {
   readonly env: Record<string, string | undefined>;
   readonly config: Config;
+  readonly readConfig?: () => Config;
   readonly home: AthleteHome;
   readonly reference: ReferenceRuntime;
   readonly writerContext?: CoachStoreWriterContext;
@@ -52,16 +53,19 @@ export interface StoreRuntimeOptions {
 }
 
 function sameHome(left: AthleteHome, right: AthleteHome): boolean {
-  return left.root === right.root
-    && left.storeDir === right.storeDir
-    && left.archiveDir === right.archiveDir
-    && left.configDir === right.configDir;
+  return (
+    left.root === right.root &&
+    left.storeDir === right.storeDir &&
+    left.archiveDir === right.archiveDir &&
+    left.configDir === right.configDir
+  );
 }
 
 export class StoreRuntime {
   readonly athleteData: AthleteDataReader;
-  private readonly dependencies: Required<Pick<StoreRuntimeDependencies,
-    "capture" | "produce" | "now" | "monotonicNow">>;
+  private readonly dependencies: Required<
+    Pick<StoreRuntimeDependencies, "capture" | "produce" | "now" | "monotonicNow">
+  >;
   private readonly scheduler: WallClockScheduler;
   private snapshotValue: ProducedLocalBundle | undefined;
   private activeLedger: PhysicalRequestLedger | undefined;
@@ -70,7 +74,10 @@ export class StoreRuntime {
   private closed = false;
 
   constructor(private readonly options: StoreRuntimeOptions) {
-    if (options.writerContext !== undefined && !sameHome(options.home, options.writerContext.home)) {
+    if (
+      options.writerContext !== undefined &&
+      !sameHome(options.home, options.writerContext.home)
+    ) {
       throw new TypeError("Writer home does not match the store runtime home.");
     }
     const dependencies = options.dependencies ?? {};
@@ -78,10 +85,13 @@ export class StoreRuntime {
     const schedulerDependencies = dependencies.schedulerDependencies ?? {};
     this.dependencies = {
       capture: dependencies.capture ?? runReferenceCapture,
-      produce: dependencies.produce ?? ((manifest) => createLocalBundleProducer({
-        storePath: join(options.home.storeDir, "store.db"),
-        archiveRoot: options.home.archiveDir,
-      }).produce(manifest)),
+      produce:
+        dependencies.produce ??
+        ((manifest) =>
+          createLocalBundleProducer({
+            storePath: join(options.home.storeDir, "store.db"),
+            archiveRoot: options.home.archiveDir,
+          }).produce(manifest)),
       now,
       monotonicNow: dependencies.monotonicNow ?? (() => performance.now()),
     };
@@ -121,9 +131,11 @@ export class StoreRuntime {
     if (this.activeWindow !== undefined) return this.activeWindow;
     const task = this.runWindowInternal();
     this.activeWindow = task;
-    void task.finally(() => {
-      if (this.activeWindow === task) this.activeWindow = undefined;
-    }).catch(() => {});
+    void task
+      .finally(() => {
+        if (this.activeWindow === task) this.activeWindow = undefined;
+      })
+      .catch(() => {});
     return task;
   }
 
@@ -143,23 +155,30 @@ export class StoreRuntime {
       maxArtifacts: STORE_MAX_ARTIFACTS,
     };
     try {
-      const capturePromise = this.options.config.intervals.apiKey.length === 0
-        ? Promise.resolve(undefined)
-        : this.dependencies.capture({
-            env: this.options.env,
-            ...(this.options.writerContext === undefined
-              ? {}
-              : { writerContext: this.options.writerContext }),
-            apiKey: this.options.config.intervals.apiKey,
-            athleteId: this.options.config.intervals.athleteId,
-            reviewedOn: now.toISOString().slice(0, 10),
-            reason: this.snapshotValue === undefined ? "initial" : "provider-refresh",
-            ...(this.snapshotValue === undefined ? {} : { replacesCaptureId: this.snapshotValue.captureId }),
-            budget,
-            attemptLedger: ledger,
-          });
+      const config = this.options.readConfig?.() ?? this.options.config;
+      const capturePromise =
+        config.intervals.apiKey.length === 0
+          ? Promise.resolve(undefined)
+          : this.dependencies.capture({
+              env: this.options.env,
+              ...(this.options.writerContext === undefined
+                ? {}
+                : { writerContext: this.options.writerContext }),
+              apiKey: config.intervals.apiKey,
+              athleteId: config.intervals.athleteId,
+              reviewedOn: now.toISOString().slice(0, 10),
+              reason: this.snapshotValue === undefined ? "initial" : "provider-refresh",
+              ...(this.snapshotValue === undefined
+                ? {}
+                : { replacesCaptureId: this.snapshotValue.captureId }),
+              budget,
+              attemptLedger: ledger,
+            });
       const legacyPromise = this.options.reference.runScheduledOnce();
-      const [captureResult, legacyResult] = await Promise.allSettled([capturePromise, legacyPromise]);
+      const [captureResult, legacyResult] = await Promise.allSettled([
+        capturePromise,
+        legacyPromise,
+      ]);
       let published = false;
       if (captureResult.status === "fulfilled" && captureResult.value !== undefined) {
         const produced = await this.dependencies.produce(captureResult.value);
@@ -171,8 +190,8 @@ export class StoreRuntime {
       return Object.freeze({
         published,
         counts,
-        legacySucceeded: legacyResult.status === "fulfilled"
-          && legacyResult.value.kind !== "failed",
+        legacySucceeded:
+          legacyResult.status === "fulfilled" && legacyResult.value.kind !== "failed",
       });
     } finally {
       if (this.activeLedger === ledger) this.activeLedger = undefined;
@@ -185,7 +204,9 @@ export class StoreRuntime {
     this.closed = true;
     this.activeController?.abort(new Error("Store runtime closed."));
     await this.scheduler.close();
-    try { await this.activeWindow; } catch {}
+    try {
+      await this.activeWindow;
+    } catch {}
   }
 }
 

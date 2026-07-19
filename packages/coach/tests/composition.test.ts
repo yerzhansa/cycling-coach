@@ -3,10 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AthleteState, CoachEngine } from "@enduragent/coach-contract";
-import {
-  engineConfigFromConfig,
-  type Config,
-} from "@enduragent/core";
+import { engineConfigFromConfig, type Config } from "@enduragent/core";
 import type {
   AthleteDataReaderPort,
   CreateCoachEngineInput,
@@ -80,13 +77,16 @@ async function freshHome(): Promise<AthleteHome> {
   await mkdir(join(root, "data"), { recursive: true });
   await mkdir(home.configDir, { recursive: true });
   await writeFile(join(root, "data", "latest.json"), JSON.stringify(latest()));
-  await writeFile(join(root, "data", "error_state.json"), JSON.stringify({
-    schema_version: "1",
-    step: "synthetic",
-    detail: "synthetic outage",
-    ts: "2026-07-18T01:00:00.000Z",
-    mitigation: "block_coaching",
-  }));
+  await writeFile(
+    join(root, "data", "error_state.json"),
+    JSON.stringify({
+      schema_version: "1",
+      step: "synthetic",
+      detail: "synthetic outage",
+      ts: "2026-07-18T01:00:00.000Z",
+      mitigation: "block_coaching",
+    }),
+  );
   return home;
 }
 
@@ -113,37 +113,72 @@ function config(
 
 function athleteData(): AthleteDataReaderPort {
   return {
-    async getAthlete() { return { ok: false, error: "not_found", message: "synthetic" }; },
-    async listWellness() { return { ok: true, value: [] }; },
-    async listActivities() { return { ok: true, value: [] }; },
-    async getActivity() { return { ok: false, error: "not_found", message: "synthetic" }; },
-    async getStreams() { return { ok: false, error: "not_found", message: "synthetic" }; },
-    async listCalendar() { return { ok: true, value: [] }; },
-    freshness() { return undefined; },
+    async getAthlete() {
+      return { ok: false, error: "not_found", message: "synthetic" };
+    },
+    async listWellness() {
+      return { ok: true, value: [] };
+    },
+    async listActivities() {
+      return { ok: true, value: [] };
+    },
+    async getActivity() {
+      return { ok: false, error: "not_found", message: "synthetic" };
+    },
+    async getStreams() {
+      return { ok: false, error: "not_found", message: "synthetic" };
+    },
+    async listCalendar() {
+      return { ok: true, value: [] };
+    },
+    freshness() {
+      return undefined;
+    },
   };
 }
 
 function reference(trace: string[] = []): LocalReferenceRuntime {
   return {
-    scheduler: { stop: () => { trace.push("reference-stop"); } },
-    async runScheduledOnce() { return { kind: "skipped", reason: "cooldown" }; },
+    scheduler: {
+      stop: () => {
+        trace.push("reference-stop");
+      },
+    },
+    async runScheduledOnce() {
+      return { kind: "skipped", reason: "cooldown" };
+    },
   };
 }
 
 function runtime(
   trace: string[] = [],
-  options: { runWindow?: () => Promise<{ published: boolean; counts: ReturnType<ReturnType<typeof createPhysicalRequestLedger>["snapshot"]>; legacySucceeded: boolean }>; close?: () => Promise<void> } = {},
+  options: {
+    runWindow?: () => Promise<{
+      published: boolean;
+      counts: ReturnType<ReturnType<typeof createPhysicalRequestLedger>["snapshot"]>;
+      legacySucceeded: boolean;
+    }>;
+    close?: () => Promise<void>;
+  } = {},
 ): LocalStoreRuntime {
   const ledger = createPhysicalRequestLedger({ storeLimit: 64, legacyLimit: 15, totalLimit: 79 });
   return {
     athleteData: athleteData(),
     attemptLedgerForRun: () => ledger,
-    runWindow: options.runWindow ?? (async () => {
-      trace.push("run-window");
-      return { published: true, counts: ledger.snapshot(), legacySucceeded: true };
-    }),
-    startScheduler() { trace.push("start-scheduler"); },
-    close: options.close ?? (async () => { trace.push("runtime-close"); }),
+    runWindow:
+      options.runWindow ??
+      (async () => {
+        trace.push("run-window");
+        return { published: true, counts: ledger.snapshot(), legacySucceeded: true };
+      }),
+    startScheduler() {
+      trace.push("start-scheduler");
+    },
+    close:
+      options.close ??
+      (async () => {
+        trace.push("runtime-close");
+      }),
   };
 }
 
@@ -168,12 +203,20 @@ function fakeContext(home: AthleteHome): CoachStoreWriterContext {
     store: {
       async exec() {},
       async run() {},
-      async get() { return undefined; },
-      async all() { return []; },
+      async get() {
+        return undefined;
+      },
+      async all() {
+        return [];
+      },
       async close() {},
-      async getUserVersion() { return 0; },
+      async getUserVersion() {
+        return 0;
+      },
       async setUserVersion() {},
-      async transaction<T>(operation: () => Promise<T>) { return operation(); },
+      async transaction<T>(operation: () => Promise<T>) {
+        return operation();
+      },
     },
   };
 }
@@ -185,13 +228,16 @@ async function compose(
   intervals?: Config["intervals"],
 ) {
   const coreConfig = config(home, intervals);
-  return createLocalCoachComposition({
-    env: { ENDURAGENT_HOME: home.root },
-    home,
-    context,
-    config: coreConfig,
-    engineConfig: engineConfigFromConfig(coreConfig),
-  }, dependencies);
+  return createLocalCoachComposition(
+    {
+      env: { ENDURAGENT_HOME: home.root },
+      home,
+      context,
+      config: coreConfig,
+      engineConfig: engineConfigFromConfig(coreConfig),
+    },
+    dependencies,
+  );
 }
 
 function generation(text: string) {
@@ -231,25 +277,33 @@ describe("local coach composition", () => {
       frozenNow: manifest.plan.frozenNow,
       bundle: { activities: [], wellness: [], ftpHistory: [] },
     };
-    const capture = vi.fn(async (
-      options: Parameters<typeof import("../src/capture.js").runReferenceCapture>[0],
-    ) => {
-      if (options.writerContext === undefined) nestedWriterAcquisition();
-      expect(options.writerContext).toBe(context);
-      return manifest;
-    });
-    const lifecycle = await compose(home, {
-      bootstrap: async () => reference(),
-      runtimeDependencies: {
-        capture,
-        produce: async () => produced,
-        now: () => new Date("1998-07-18T12:00:00.000Z"),
-        monotonicNow: () => 1,
+    const capture = vi.fn(
+      async (options: Parameters<typeof import("../src/capture.js").runReferenceCapture>[0]) => {
+        if (options.writerContext === undefined) nestedWriterAcquisition();
+        expect(options.writerContext).toBe(context);
+        return manifest;
       },
-      createBackend: () => backend(),
-      createRepository: () => ({ insertIfAbsent: async () => false, readCurrent: async () => undefined }),
-      createResolver: () => missingResolver(),
-    }, context, { apiKey: "dummy", athleteId: "synthetic" });
+    );
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        runtimeDependencies: {
+          capture,
+          produce: async () => produced,
+          now: () => new Date("1998-07-18T12:00:00.000Z"),
+          monotonicNow: () => 1,
+        },
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      context,
+      { apiKey: "dummy", athleteId: "synthetic" },
+    );
     expect(capture).toHaveBeenCalledTimes(1);
     expect(nestedWriterAcquisition).not.toHaveBeenCalled();
     await lifecycle.close();
@@ -310,14 +364,21 @@ describe("local coach composition", () => {
         received = input;
         return backend({ getAthleteState: () => input.ports.stateReader.getAthleteState() });
       },
-      createRepository: () => ({ insertIfAbsent: async () => false, readCurrent: async () => undefined }),
+      createRepository: () => ({
+        insertIfAbsent: async () => false,
+        readCurrent: async () => undefined,
+      }),
       createResolver: () => missingResolver(),
     });
     await expect(received!.ports.stateReader.getAthleteState()).resolves.toEqual(state);
     await expect(lifecycle.engine.getAthleteState()).resolves.toEqual(state);
     expect(received!.ports.platform.athleteData).toBe(selectedRuntime.athleteData);
-    expect(received!.ports.readReferenceState).not.toBe(received!.ports.stateReader.getAthleteState);
-    expect(received!.ports.readReferenceState().latest?.metadata?.last_updated).toBe(state.lastUpdated);
+    expect(received!.ports.readReferenceState).not.toBe(
+      received!.ports.stateReader.getAthleteState,
+    );
+    expect(received!.ports.readReferenceState().latest?.metadata?.last_updated).toBe(
+      state.lastUpdated,
+    );
     await lifecycle.close();
   });
 
@@ -327,18 +388,24 @@ describe("local coach composition", () => {
     const failure = { kind: "cold-start" };
     const trace: string[] = [];
     const createBackend = vi.fn<(input: CreateCoachEngineInput) => CoachEngine>(() => backend());
-    await expect(compose(home, {
-      bootstrap: async () => reference(trace),
-      createRuntime: () => runtime(trace, {
-        runWindow: async () => {
-          trace.push("run-window");
-          throw failure;
-        },
+    await expect(
+      compose(home, {
+        bootstrap: async () => reference(trace),
+        createRuntime: () =>
+          runtime(trace, {
+            runWindow: async () => {
+              trace.push("run-window");
+              throw failure;
+            },
+          }),
+        createBackend,
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
       }),
-      createBackend,
-      createRepository: () => ({ insertIfAbsent: async () => false, readCurrent: async () => undefined }),
-      createResolver: () => missingResolver(),
-    })).rejects.toBe(failure);
+    ).rejects.toBe(failure);
     expect(createBackend).not.toHaveBeenCalled();
     expect(trace).toEqual(["run-window", "reference-stop", "runtime-close"]);
   });
@@ -351,28 +418,52 @@ describe("local coach composition", () => {
     await runMigrations(store, MIGRATIONS);
     await store.run(
       "INSERT INTO anchor_history (id, sport, anchor_type, value, unit, valid_from, source, confidence, note, provenance, device_id, hlc_physical_ms, hlc_counter) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      ["anchor-1", "cycling", "ftp", 275, "W", 1_752_796_000, "synthetic", "manual", null, "manual", null, null, null],
+      [
+        "anchor-1",
+        "cycling",
+        "ftp",
+        275,
+        "W",
+        1_752_796_000,
+        "synthetic",
+        "manual",
+        null,
+        "manual",
+        null,
+        null,
+        null,
+      ],
     );
     let chatRequest: Parameters<CoachEngine["chat"]>[0] | undefined;
-    const lifecycle = await compose(home, {
-      bootstrap: async () => reference(),
-      createRuntime: () => runtime(),
-      createBackend: (input) => backend({
-        chat: async (request) => {
-          chatRequest = request;
-          return { text: "anchored" };
-        },
-        getAthleteState: () => input.ports.stateReader.getAthleteState(),
-        hasSession: async () => ({ hasSession: true }),
-        resetSession: async () => ({ memoryFlushed: true }),
-      }),
-      now: () => 1_752_796_800_000,
-    }, { home, store, listener: inertWriterProtocolListener });
-    await expect(lifecycle.engine.chat({ chatId: "x", message: "status" }))
-      .resolves.toEqual({ text: "anchored" });
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: (input) =>
+          backend({
+            chat: async (request) => {
+              chatRequest = request;
+              return { text: "anchored" };
+            },
+            getAthleteState: () => input.ports.stateReader.getAthleteState(),
+            hasSession: async () => ({ hasSession: true }),
+            resetSession: async () => ({ memoryFlushed: true }),
+          }),
+        now: () => 1_752_796_800_000,
+      },
+      { home, store, listener: inertWriterProtocolListener },
+    );
+    await expect(lifecycle.engine.chat({ chatId: "x", message: "status" })).resolves.toEqual({
+      text: "anchored",
+    });
     expect(chatRequest?.turn?.resolvedCs).toMatchObject({ kind: "ftp", watts: 275 });
-    await expect(lifecycle.engine.hasSession({ chatId: "x" })).resolves.toEqual({ hasSession: true });
-    await expect(lifecycle.engine.resetSession({ chatId: "x" })).resolves.toEqual({ memoryFlushed: true });
+    await expect(lifecycle.engine.hasSession({ chatId: "x" })).resolves.toEqual({
+      hasSession: true,
+    });
+    await expect(lifecycle.engine.resetSession({ chatId: "x" })).resolves.toEqual({
+      memoryFlushed: true,
+    });
     await expect(lifecycle.engine.getAthleteState()).resolves.toMatchObject({
       currentStatus: state.currentStatus,
       derivedMetrics: state.derivedMetrics,
@@ -387,8 +478,12 @@ describe("local coach composition", () => {
     let generateCalls = 0;
     let releaseFirst!: () => void;
     let markEntered!: () => void;
-    const entered = new Promise<void>((resolve) => { markEntered = resolve; });
-    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
     const decorator: ModelTransportDecorator = () => ({
       generate: async () => {
         generateCalls += 1;
@@ -402,25 +497,104 @@ describe("local coach composition", () => {
     const lifecycle = await compose(home, {
       bootstrap: async () => reference(),
       createRuntime: () => runtime(),
-      createRepository: () => ({ insertIfAbsent: async () => false, readCurrent: async () => undefined }),
+      createRepository: () => ({
+        insertIfAbsent: async () => false,
+        readCurrent: async () => undefined,
+      }),
       createResolver: () => missingResolver(),
       modelTransportDecorator: decorator,
     });
     const completion: string[] = [];
-    const first = lifecycle.engine.chat({ chatId: "same", message: "first" })
-      .then((value) => { completion.push("first"); return value; });
+    const first = lifecycle.engine.chat({ chatId: "same", message: "first" }).then((value) => {
+      completion.push("first");
+      return value;
+    });
     await entered;
-    const second = lifecycle.engine.chat({ chatId: "same", message: "second" })
-      .then((value) => { completion.push("second"); return value; });
+    const second = lifecycle.engine.chat({ chatId: "same", message: "second" }).then((value) => {
+      completion.push("second");
+      return value;
+    });
     await Promise.resolve();
     expect(generateCalls).toBe(1);
-    const other = lifecycle.engine.chat({ chatId: "other", message: "other" })
-      .then((value) => { completion.push("other"); return value; });
+    const other = lifecycle.engine.chat({ chatId: "other", message: "other" }).then((value) => {
+      completion.push("other");
+      return value;
+    });
     while (generateCalls < 2) await Promise.resolve();
     expect(generateCalls).toBe(2);
     releaseFirst();
     await Promise.all([first, second, other]);
     expect(completion.indexOf("first")).toBeLessThan(completion.indexOf("second"));
+    await lifecycle.close();
+  });
+
+  it("atomically supersedes the in-memory runtime overlay for later turns and store windows", async () => {
+    const home = await freshHome();
+    const received: CreateCoachEngineInput[] = [];
+    let runtimeOptions:
+      | Parameters<NonNullable<LocalCoachCompositionDependencies["createRuntime"]>>[0]
+      | undefined;
+    const lifecycle = await compose(home, {
+      bootstrap: async () => reference(),
+      createRuntime: (options) => {
+        runtimeOptions = options;
+        return runtime();
+      },
+      createBackend: (input) => {
+        received.push(input);
+        const selected = `${input.ports.config.llm.provider}:${input.ports.config.llm.model}`;
+        return backend({ chat: async () => ({ text: selected }) });
+      },
+      createRepository: () => ({
+        insertIfAbsent: async () => false,
+        readCurrent: async () => undefined,
+      }),
+      createResolver: () => missingResolver(),
+    });
+
+    await expect(lifecycle.engine.chat({ chatId: "runtime", message: "initial" })).resolves.toEqual(
+      {
+        text: "anthropic:synthetic",
+      },
+    );
+    await lifecycle.operations.configureRuntime({
+      llm: { provider: "openrouter", model: "model-first", api_key: "placeholder" },
+    });
+    await expect(
+      lifecycle.engine.chat({ chatId: "runtime", message: "after-first" }),
+    ).resolves.toEqual({
+      text: "openrouter:model-first",
+    });
+    await lifecycle.operations.configureRuntime({
+      intervals: { api_key: "placeholder", athlete_id: "athlete-a" },
+    });
+    await lifecycle.operations.configureRuntime({
+      llm: { provider: "google", model: "model-second", api_key: "placeholder" },
+      intervals: { api_key: "placeholder", athlete_id: "athlete-b" },
+    });
+    await expect(
+      lifecycle.engine.chat({ chatId: "runtime", message: "after-second" }),
+    ).resolves.toEqual({
+      text: "google:model-second",
+    });
+
+    expect(
+      received.map((input) => ({
+        provider: input.ports.config.llm.provider,
+        model: input.ports.config.llm.model,
+        apiKey: input.ports.config.llm.apiKey,
+        intervals: input.ports.platform.legacyClient === null,
+      })),
+    ).toEqual([
+      { provider: "anthropic", model: "synthetic", apiKey: "", intervals: true },
+      { provider: "openrouter", model: "model-first", apiKey: "placeholder", intervals: true },
+      { provider: "openrouter", model: "model-first", apiKey: "placeholder", intervals: false },
+      { provider: "google", model: "model-second", apiKey: "placeholder", intervals: false },
+    ]);
+    expect(runtimeOptions?.readConfig?.().intervals).toEqual({
+      apiKey: "placeholder",
+      athleteId: "athlete-b",
+    });
     await lifecycle.close();
   });
 
@@ -430,22 +604,30 @@ describe("local coach composition", () => {
     const hostFailure = { kind: "host-close" };
     let releaseClose!: () => void;
     let markCloseStarted!: () => void;
-    const closeGate = new Promise<void>((resolve) => { releaseClose = resolve; });
-    const closeStarted = new Promise<void>((resolve) => { markCloseStarted = resolve; });
+    const closeGate = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    const closeStarted = new Promise<void>((resolve) => {
+      markCloseStarted = resolve;
+    });
     let runtimeCloseCalls = 0;
     const lifecycle = await compose(home, {
       bootstrap: async () => reference(trace),
-      createRuntime: () => runtime(trace, {
-        close: async () => {
-          runtimeCloseCalls += 1;
-          trace.push("runtime-close-start");
-          markCloseStarted();
-          await closeGate;
-          trace.push("runtime-close-end");
-        },
-      }),
+      createRuntime: () =>
+        runtime(trace, {
+          close: async () => {
+            runtimeCloseCalls += 1;
+            trace.push("runtime-close-start");
+            markCloseStarted();
+            await closeGate;
+            trace.push("runtime-close-end");
+          },
+        }),
       createBackend: () => backend(),
-      createRepository: () => ({ insertIfAbsent: async () => false, readCurrent: async () => undefined }),
+      createRepository: () => ({
+        insertIfAbsent: async () => false,
+        readCurrent: async () => undefined,
+      }),
       createResolver: () => missingResolver(),
       closeHostAdapters: async () => {
         trace.push("host-close");
