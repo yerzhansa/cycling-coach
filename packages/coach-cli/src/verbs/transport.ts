@@ -6,6 +6,7 @@ import {
   JsonRpcSuccessResponseEnvelopeSchema,
   serializeCoachRpcEnvelope,
   type CoachEngine,
+  type JsonValue,
   type JsonRpcResponseEnvelope,
 } from "@enduragent/coach-contract";
 import {
@@ -147,17 +148,24 @@ function localSuccess(method: CoachVerbMethodName, result: unknown) {
   return envelope;
 }
 
-function localError() {
+function localError(data?: JsonValue) {
   const envelope = JsonRpcErrorResponseEnvelopeSchema.parse({
     jsonrpc: "2.0",
     id: 1,
-    error: { code: -32603, message: "Internal error" },
+    error: {
+      code: -32603,
+      message: "Internal error",
+      ...(data === undefined ? {} : { data }),
+    },
   });
   serializeCoachRpcEnvelope(envelope);
   return envelope;
 }
 
-export function createLocalCoachVerbTransport(engine: CoachEngine): CoachVerbTransport {
+export function createLocalCoachVerbTransport(
+  engine: CoachEngine,
+  serializeError?: (error: unknown) => JsonValue,
+): CoachVerbTransport {
   let admitted = false;
   const closed = Promise.resolve();
   return {
@@ -194,8 +202,8 @@ export function createLocalCoachVerbTransport(engine: CoachEngine): CoachVerbTra
             input.onNotificationEnvelope(notification);
           });
           envelope = localSuccess(input.method, result);
-        } catch {
-          envelope = localError();
+        } catch (error) {
+          envelope = localError(serializeError?.(error));
         }
         if (deliveryDetached) throw new CoachRemoteError({ kind: "detached" });
         input.onTerminalEnvelope(envelope);

@@ -412,7 +412,11 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
       jsonrpc: "2.0",
       id: "non-json-result",
-      error: { code: -32603, message: "Internal error" },
+      error: {
+        code: -32603,
+        message: "Internal error",
+        data: { name: "Error" },
+      },
     });
     await client.close();
   });
