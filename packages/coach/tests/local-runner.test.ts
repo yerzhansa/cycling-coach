@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AthleteState, CoachEngine } from "@enduragent/coach-contract";
+import type { AthleteState, CoachEngine, CoachOperations } from "@enduragent/coach-contract";
 import type { Config } from "@enduragent/core";
 import type { EngineConfig } from "@enduragent/engine";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
@@ -64,6 +64,25 @@ const engine: CoachEngine = {
   getAthleteState: async () => state,
 };
 
+const operations: CoachOperations = {
+  importFiles: async ({ paths }) => ({
+    schemaVersion: 1,
+    files: { total: paths.length, imported: paths.length, quarantined: 0 },
+    changes: {
+      rawFilesInserted: paths.length,
+      sourceRecordsInserted: paths.length,
+      sourceRecordsUpdated: 0,
+      relinkedSourceRecords: 0,
+    },
+  }),
+  sync: async () => ({
+    schemaVersion: 1,
+    published: true,
+    referenceSucceeded: true,
+    requests: { store: 0, reference: 0, total: 0 },
+  }),
+};
+
 const config = {
   dataSource: "store",
   llm: { provider: "anthropic", model: "synthetic", apiKey: "" },
@@ -109,12 +128,20 @@ function store(): CoachStoreWriterContext["store"] {
   return {
     async exec() {},
     async run() {},
-    async get() { return undefined; },
-    async all() { return []; },
+    async get() {
+      return undefined;
+    },
+    async all() {
+      return [];
+    },
     async close() {},
-    async getUserVersion() { return 0; },
+    async getUserVersion() {
+      return 0;
+    },
     async setUserVersion() {},
-    async transaction<T>(operation: () => Promise<T>) { return operation(); },
+    async transaction<T>(operation: () => Promise<T>) {
+      return operation();
+    },
   };
 }
 
@@ -145,7 +172,9 @@ beforeEach(async () => {
     listener: inertWriterProtocolListener,
   };
   trace = [];
-  closeImplementation = async () => { trace.push("lifecycle-close"); };
+  closeImplementation = async () => {
+    trace.push("lifecycle-close");
+  };
   mocks.withWriter.mockReset();
   mocks.migrate.mockReset();
   mocks.readiness.mockReset();
@@ -164,22 +193,21 @@ beforeEach(async () => {
   mocks.project.mockReturnValue(engineConfig);
   mocks.composition.mockImplementation(async () => {
     trace.push("engine-open");
-    return { engine, close: () => closeImplementation() };
+    return { engine, operations, close: () => closeImplementation() };
   });
-  mocks.withWriter.mockImplementation(async (
-    env: Record<string, string | undefined>,
-    plan: CoachStoreWriterPlan<unknown>,
-  ) => {
-    expect(env).toEqual({ SYNTHETIC: "1", ENDURAGENT_HOME: selectedHome.root });
-    trace.push("writer-acquired");
-    try {
-      await plan.beforeStoreOpen(selectedHome);
-      trace.push("store-open", "schema-migrations");
-      return await plan.operation(context);
-    } finally {
-      trace.push("store-close", "writer-release");
-    }
-  });
+  mocks.withWriter.mockImplementation(
+    async (env: Record<string, string | undefined>, plan: CoachStoreWriterPlan<unknown>) => {
+      expect(env).toEqual({ SYNTHETIC: "1", ENDURAGENT_HOME: selectedHome.root });
+      trace.push("writer-acquired");
+      try {
+        await plan.beforeStoreOpen(selectedHome);
+        trace.push("store-open", "schema-migrations");
+        return await plan.operation(context);
+      } finally {
+        trace.push("store-close", "writer-release");
+      }
+    },
+  );
 });
 
 afterEach(async () => {
@@ -189,11 +217,16 @@ afterEach(async () => {
 describe("local coach runner", () => {
   it("runs the exact successful lock, migration, store, engine, operation, and cleanup order", async () => {
     trace.push("resolve-supplied-home");
-    await expect(withLocalCoach(input(async (lifecycle) => {
-      expect(lifecycle.listener).toBe(inertWriterProtocolListener);
-      trace.push("operation");
-      return "done";
-    }))).resolves.toEqual({ status: "completed", value: "done" });
+    await expect(
+      withLocalCoach(
+        input(async (lifecycle) => {
+          expect(lifecycle.listener).toBe(inertWriterProtocolListener);
+          expect(lifecycle.operations).toBe(operations);
+          trace.push("operation");
+          return "done";
+        }),
+      ),
+    ).resolves.toEqual({ status: "completed", value: "done" });
     expect(trace).toEqual([
       "resolve-supplied-home",
       "writer-acquired",
@@ -244,21 +277,26 @@ describe("local coach runner", () => {
       });
       expect(trace).toEqual(["writer-acquired", "store-close", "writer-release"]);
     }
-    for (const opening of [notNeeded(), {
-      status: "done" as const,
-      exitCode: 0 as const,
-      journalPath: "synthetic-journal",
-      manifestDigest: "c".repeat(64),
-      completion: "complete" as const,
-      copiedIds: [],
-      skipVerifiedIds: [],
-      skippedConflictIds: [],
-      freezePoint: "synthetic-freeze",
-    }]) {
+    for (const opening of [
+      notNeeded(),
+      {
+        status: "done" as const,
+        exitCode: 0 as const,
+        journalPath: "synthetic-journal",
+        manifestDigest: "c".repeat(64),
+        completion: "complete" as const,
+        copiedIds: [],
+        skipVerifiedIds: [],
+        skippedConflictIds: [],
+        freezePoint: "synthetic-freeze",
+      },
+    ]) {
       trace.length = 0;
       mocks.migrate.mockResolvedValueOnce(opening);
-      await expect(withLocalCoach(input(async () => "done")))
-        .resolves.toEqual({ status: "completed", value: "done" });
+      await expect(withLocalCoach(input(async () => "done"))).resolves.toEqual({
+        status: "completed",
+        value: "done",
+      });
       expect(trace).toContain("store-open");
     }
   });
@@ -277,9 +315,8 @@ describe("local coach runner", () => {
   });
 
   it("characterizes structural home readiness and the optional Config directory parameter", async () => {
-    const actualReadiness = await vi.importActual<typeof import("../src/readiness.js")>(
-      "../src/readiness.js",
-    );
+    const actualReadiness =
+      await vi.importActual<typeof import("../src/readiness.js")>("../src/readiness.js");
     const actualCore = await vi.importActual<typeof import("@enduragent/core")>("@enduragent/core");
     mocks.loadConfig.mockImplementation(actualCore.loadConfig);
     mocks.project.mockImplementation(actualCore.engineConfigFromConfig);
@@ -294,14 +331,20 @@ describe("local coach runner", () => {
       status: "not-configured",
       configPath,
     });
-    await writeFile(configPath, "llm:\n  provider: openai-codex\ndata_dir: " + selectedHome.root + "\n");
+    await writeFile(
+      configPath,
+      "llm:\n  provider: openai-codex\ndata_dir: " + selectedHome.root + "\n",
+    );
     await expect(actualReadiness.checkHomeReadiness(selectedHome)).resolves.toEqual({
       status: "not-configured",
       configPath,
     });
-    await writeFile(join(selectedHome.configDir, "auth-profiles.json"), JSON.stringify({
-      "openai-codex": { type: "oauth" },
-    }));
+    await writeFile(
+      join(selectedHome.configDir, "auth-profiles.json"),
+      JSON.stringify({
+        "openai-codex": { type: "oauth" },
+      }),
+    );
     const ready = await actualReadiness.checkHomeReadiness(selectedHome);
     expect(ready.status).toBe("ready");
     expect(actualCore.loadConfig(selectedHome.configDir).dataDir).toBe(selectedHome.root);
@@ -310,10 +353,14 @@ describe("local coach runner", () => {
 
   it("rethrows the exact operation object only after lifecycle, store, and writer cleanup", async () => {
     const failure = { kind: "operation-failure" };
-    await expect(withLocalCoach(input(async () => {
-      trace.push("operation");
-      throw failure;
-    }))).rejects.toBe(failure);
+    await expect(
+      withLocalCoach(
+        input(async () => {
+          trace.push("operation");
+          throw failure;
+        }),
+      ),
+    ).rejects.toBe(failure);
     expect(trace.slice(-4)).toEqual([
       "operation",
       "lifecycle-close",
@@ -328,11 +375,17 @@ describe("local coach runner", () => {
       trace.push("lifecycle-close");
       throw { kind: "lifecycle-close" };
     };
-    await expect(withLocalCoach(input(async () => {
-      throw operationFailure;
-    }))).rejects.toBe(operationFailure);
+    await expect(
+      withLocalCoach(
+        input(async () => {
+          throw operationFailure;
+        }),
+      ),
+    ).rejects.toBe(operationFailure);
     const cleanupFailure = new CoachStoreWriterError("writer-failed", "invoke operation");
-    closeImplementation = async () => { throw cleanupFailure; };
+    closeImplementation = async () => {
+      throw cleanupFailure;
+    };
     await expect(withLocalCoach(input(async () => "done"))).rejects.toBe(cleanupFailure);
   });
 
@@ -345,12 +398,16 @@ describe("local coach runner", () => {
       closerCalls += 1;
       trace.push("lifecycle-close");
     };
-    mocks.composition.mockResolvedValue({ engine, close });
-    await expect(withLocalCoach(input(async (lifecycle) => {
-      await lifecycle.close();
-      await lifecycle.close();
-      return "done";
-    }))).resolves.toEqual({ status: "completed", value: "done" });
+    mocks.composition.mockResolvedValue({ engine, operations, close });
+    await expect(
+      withLocalCoach(
+        input(async (lifecycle) => {
+          await lifecycle.close();
+          await lifecycle.close();
+          return "done";
+        }),
+      ),
+    ).resolves.toEqual({ status: "completed", value: "done" });
     expect(closerCalls).toBe(1);
     expect(trace.at(-1)).toBe("writer-release");
   });

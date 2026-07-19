@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   ClientHandshakeFrameSchema,
   COACH_RPC_METHOD_REGISTRY,
+  CoachOperationProgressNotificationEnvelopeSchema,
   CoachRpcRequestEnvelopeSchema,
   CoachTurnEventNotificationEnvelopeSchema,
   JsonRpcErrorResponseEnvelopeSchema,
@@ -18,6 +19,7 @@ import {
   createVersionMismatchServerHandshakeFrame,
   serializeCoachRpcEnvelope,
   type CoachEngine,
+  type CoachOperations,
   type CoachRpcMethodName,
   type DaemonOwner,
   type JsonRpcId,
@@ -25,14 +27,8 @@ import {
 import type { WriterProtocolHandlers } from "@enduragent/kernel-node/lock";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import type { DaemonHealthState } from "./healthz-server.js";
-import {
-  DetachedSessionRequestError,
-  createSessionRequestQueue,
-} from "./session-queue.js";
-import {
-  HANDOFF_CAPABILITY_BYTES,
-  type MonotonicTimer,
-} from "./upgrade-fence.js";
+import { DetachedSessionRequestError, createSessionRequestQueue } from "./session-queue.js";
+import { HANDOFF_CAPABILITY_BYTES, type MonotonicTimer } from "./upgrade-fence.js";
 import { serializeBoundaryError } from "./error-boundary.js";
 
 const AUTH_TIMEOUT_MS = 1_000;
@@ -49,9 +45,7 @@ const UNAVAILABLE_RESPONSE =
 
 export const UPGRADE_DRAIN_TIMEOUT_MS = 30_000 as const;
 
-export type UpgradeDrainOutcome =
-  | { readonly status: "accepted" }
-  | { readonly status: "timeout" };
+export type UpgradeDrainOutcome = { readonly status: "accepted" } | { readonly status: "timeout" };
 
 export interface UpgradeDrainCoordinator {
   shutdownForUpgrade(input: {
@@ -142,6 +136,7 @@ export async function ensureDaemonToken(
 
 export interface CoachRpcServerInput {
   readonly engine: CoachEngine;
+  readonly operations: CoachOperations;
   readonly token: string;
   readonly owner: DaemonOwner;
   readonly healthState?: DaemonHealthState;
@@ -337,29 +332,28 @@ function productionTimer(): MonotonicTimer {
 function canonicalCapability(value: unknown): Buffer | undefined {
   if (typeof value !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(value)) return undefined;
   const decoded = Buffer.from(value, "base64url");
-  if (
-    decoded.length !== HANDOFF_CAPABILITY_BYTES
-    || decoded.toString("base64url") !== value
-  ) {
+  if (decoded.length !== HANDOFF_CAPABILITY_BYTES || decoded.toString("base64url") !== value) {
     return undefined;
   }
   return decoded;
 }
 
-function controlParams(value: unknown): {
-  readonly targetProtocolVersion: number;
-  readonly handoffCapability: string;
-} | undefined {
+function controlParams(value: unknown):
+  | {
+      readonly targetProtocolVersion: number;
+      readonly handoffCapability: string;
+    }
+  | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record).sort();
   if (
-    keys.length !== 2
-    || keys[0] !== "handoffCapability"
-    || keys[1] !== "targetProtocolVersion"
-    || !Number.isSafeInteger(record.targetProtocolVersion)
-    || (record.targetProtocolVersion as number) < 0
-    || typeof record.handoffCapability !== "string"
+    keys.length !== 2 ||
+    keys[0] !== "handoffCapability" ||
+    keys[1] !== "targetProtocolVersion" ||
+    !Number.isSafeInteger(record.targetProtocolVersion) ||
+    (record.targetProtocolVersion as number) < 0 ||
+    typeof record.handoffCapability !== "string"
   ) {
     return undefined;
   }
@@ -459,8 +453,8 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
       return;
     }
     if (
-      generic.data.method === "daemon.reserveUpgrade"
-      || generic.data.method === "daemon.shutdownForUpgrade"
+      generic.data.method === "daemon.reserveUpgrade" ||
+      generic.data.method === "daemon.shutdownForUpgrade"
     ) {
       const params = controlParams(generic.data.params);
       if (params === undefined) {
@@ -470,10 +464,10 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
       if (generic.data.method === "daemon.reserveUpgrade") {
         const capability = canonicalCapability(params.handoffCapability);
         if (
-          reservation !== undefined
-          || capability === undefined
-          || params.targetProtocolVersion <= PROTOCOL_VERSION
-          || input.owner === "unmanaged-foreground"
+          reservation !== undefined ||
+          capability === undefined ||
+          params.targetProtocolVersion <= PROTOCOL_VERSION ||
+          input.owner === "unmanaged-foreground"
         ) {
           void enqueueSerialized(
             state,
@@ -488,22 +482,19 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
           state: "reserved",
         };
         capability.fill(0);
-        void enqueueSerialized(
-          state,
-          ordinarySuccess(generic.data.id, { status: "reserved" }),
-        );
+        void enqueueSerialized(state, ordinarySuccess(generic.data.id, { status: "reserved" }));
         return;
       }
       const capability = canonicalCapability(params.handoffCapability);
       const activeReservation = reservation;
       if (
-        capability === undefined
-        || activeReservation === undefined
-        || activeReservation.state !== "reserved"
-        || activeReservation.connectionId !== state.connectionId
-        || activeReservation.targetProtocolVersion !== params.targetProtocolVersion
-        || capability.length !== activeReservation.handoffCapabilityBytes.length
-        || !timingSafeEqual(capability, activeReservation.handoffCapabilityBytes)
+        capability === undefined ||
+        activeReservation === undefined ||
+        activeReservation.state !== "reserved" ||
+        activeReservation.connectionId !== state.connectionId ||
+        activeReservation.targetProtocolVersion !== params.targetProtocolVersion ||
+        capability.length !== activeReservation.handoffCapabilityBytes.length ||
+        !timingSafeEqual(capability, activeReservation.handoffCapabilityBytes)
       ) {
         capability?.fill(0);
         void enqueueSerialized(
@@ -517,10 +508,7 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
       acceptingCoaching = false;
       input.healthState?.setHealthy(false);
       const task = (async () => {
-        const outcome = await awaitDrain(
-          timer.nowMs() + UPGRADE_DRAIN_TIMEOUT_MS,
-          state,
-        );
+        const outcome = await awaitDrain(timer.nowMs() + UPGRADE_DRAIN_TIMEOUT_MS, state);
         if (outcome.status !== "accepted") {
           acceptingCoaching = true;
           input.healthState?.setHealthy(true);
@@ -533,10 +521,7 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
           }
           return;
         }
-        await enqueueSerialized(
-          state,
-          ordinarySuccess(generic.data.id, { status: "accepted" }),
-        );
+        await enqueueSerialized(state, ordinarySuccess(generic.data.id, { status: "accepted" }));
         if (state.detached) {
           acceptingCoaching = true;
           input.healthState?.setHealthy(true);
@@ -586,25 +571,26 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
               result = await sessionQueue.run({
                 key: request.chatId,
                 signal: state.detachController.signal,
-                run: () => input.engine.chat(request, (event) => {
-                  if (eventFailure !== undefined) return;
-                  try {
-                    const parsedEvent = COACH_RPC_METHOD_REGISTRY.chat.eventSchema.parse(event);
-                    const notification = CoachTurnEventNotificationEnvelopeSchema.parse({
-                      jsonrpc: "2.0",
-                      method: "coach.turnEvent",
-                      params: {
-                        requestId: generic.data.id,
-                        requestMethod: "chat",
-                        turnId: parsedEvent.turnId,
-                        event: parsedEvent,
-                      },
-                    });
-                    void enqueueSerialized(state, serializeCoachRpcEnvelope(notification));
-                  } catch (error) {
-                    eventFailure = { error };
-                  }
-                }),
+                run: () =>
+                  input.engine.chat(request, (event) => {
+                    if (eventFailure !== undefined) return;
+                    try {
+                      const parsedEvent = COACH_RPC_METHOD_REGISTRY.chat.eventSchema.parse(event);
+                      const notification = CoachTurnEventNotificationEnvelopeSchema.parse({
+                        jsonrpc: "2.0",
+                        method: "coach.turnEvent",
+                        params: {
+                          requestId: generic.data.id,
+                          requestMethod: "chat",
+                          turnId: parsedEvent.turnId,
+                          event: parsedEvent,
+                        },
+                      });
+                      void enqueueSerialized(state, serializeCoachRpcEnvelope(notification));
+                    } catch (error) {
+                      eventFailure = { error };
+                    }
+                  }),
               });
             } catch (error) {
               if (error instanceof DetachedSessionRequestError) deliveryDetached = true;
@@ -635,6 +621,61 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
             try {
               COACH_RPC_METHOD_REGISTRY.getAthleteState.requestSchema.parse(generic.data.params);
               result = await input.engine.getAthleteState();
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "importFiles":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.importFiles.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.operations.importFiles(request, (event) => {
+                if (eventFailure !== undefined) return;
+                try {
+                  const parsedEvent =
+                    COACH_RPC_METHOD_REGISTRY.importFiles.eventSchema.parse(event);
+                  const notification = CoachOperationProgressNotificationEnvelopeSchema.parse({
+                    jsonrpc: "2.0",
+                    method: "coach.operationProgress",
+                    params: {
+                      requestId: generic.data.id,
+                      requestMethod: "importFiles",
+                      event: parsedEvent,
+                    },
+                  });
+                  void enqueueSerialized(state, serializeCoachRpcEnvelope(notification));
+                } catch (error) {
+                  eventFailure = { error };
+                }
+              });
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "sync":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.sync.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.operations.sync(request, (event) => {
+                if (eventFailure !== undefined) return;
+                try {
+                  const parsedEvent = COACH_RPC_METHOD_REGISTRY.sync.eventSchema.parse(event);
+                  const notification = CoachOperationProgressNotificationEnvelopeSchema.parse({
+                    jsonrpc: "2.0",
+                    method: "coach.operationProgress",
+                    params: {
+                      requestId: generic.data.id,
+                      requestMethod: "sync",
+                      event: parsedEvent,
+                    },
+                  });
+                  void enqueueSerialized(state, serializeCoachRpcEnvelope(notification));
+                } catch (error) {
+                  eventFailure = { error };
+                }
+              });
             } catch (error) {
               invocationFailure = { error };
             }
@@ -670,10 +711,12 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
     })();
     state.requestTasks.add(task);
     coachingTasks.add(task);
-    void task.finally(() => {
-      state.requestTasks.delete(task);
-      coachingTasks.delete(task);
-    }).catch(() => {});
+    void task
+      .finally(() => {
+        state.requestTasks.delete(task);
+        coachingTasks.delete(task);
+      })
+      .catch(() => {});
   };
 
   const acceptClient = (ws: WebSocket): void => {
@@ -683,10 +726,7 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
     ws.on("close", () => {
       clearAuthTimer(state);
       detach(state);
-      if (
-        reservation?.connectionId === state.connectionId
-        && reservation.state === "reserved"
-      ) {
+      if (reservation?.connectionId === state.connectionId && reservation.state === "reserved") {
         clearReservation();
       }
       state.closed = true;
@@ -752,7 +792,10 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
   };
 
   const handleUpgrade: WriterProtocolHandlers["upgrade"] = (request, socket, head) => {
-    if (Object.prototype.hasOwnProperty.call(request.headers, "origin")) {
+    if (
+      Object.prototype.hasOwnProperty.call(request.headers, "origin") &&
+      request.headers.origin !== "enduragent://app"
+    ) {
       refuseUpgrade(socket, FORBIDDEN_RESPONSE);
       return;
     }

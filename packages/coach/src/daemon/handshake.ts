@@ -23,10 +23,7 @@ import {
   type PeerHealthyOutcome,
 } from "@enduragent/kernel-node/lock";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
-import {
-  HANDOFF_RESERVED_MESSAGE,
-  acquireUpgradeFence,
-} from "./upgrade-fence.js";
+import { HANDOFF_RESERVED_MESSAGE, acquireUpgradeFence } from "./upgrade-fence.js";
 import type {
   MonotonicTimer,
   ScheduledMonotonicTimer,
@@ -34,21 +31,14 @@ import type {
 } from "./upgrade-fence.js";
 
 export { HANDOFF_RESERVED_MESSAGE } from "./upgrade-fence.js";
-export type {
-  MonotonicTimer,
-  ScheduledMonotonicTimer,
-} from "./upgrade-fence.js";
+export type { MonotonicTimer, ScheduledMonotonicTimer } from "./upgrade-fence.js";
 
 export const UPGRADE_CONTROL_TIMEOUT_MS = 5_000 as const;
 export const UPGRADE_WRITER_RELEASE_TIMEOUT_MS = 30_000 as const;
 export const UPGRADE_SUCCESSOR_PUBLISH_TIMEOUT_MS = 30_000 as const;
 export const UPGRADE_OBSERVATION_INTERVAL_MS = 25 as const;
 
-export type SecondStarterCaller =
-  | "serve"
-  | "service"
-  | "cli-auto-start"
-  | "local";
+export type SecondStarterCaller = "serve" | "service" | "cli-auto-start" | "desktop" | "local";
 
 export type StarterResolution =
   | {
@@ -256,10 +246,12 @@ function probeHealth(port: number): Promise<ReturnType<typeof classifyHealthzRes
         const chunks: Buffer[] = [];
         response.on("data", (chunk: Buffer) => chunks.push(chunk));
         response.on("end", () => {
-          finish(classifyHealthzResponse(
-            response.statusCode ?? 0,
-            Buffer.concat(chunks).toString("utf8"),
-          ));
+          finish(
+            classifyHealthzResponse(
+              response.statusCode ?? 0,
+              Buffer.concat(chunks).toString("utf8"),
+            ),
+          );
         });
         response.on("error", () => finish({ kind: "unresponsive" }));
       },
@@ -272,14 +264,12 @@ function probeHealth(port: number): Promise<ReturnType<typeof classifyHealthzRes
   });
 }
 
-export async function classifyPeerReadOnly(
-  home: AthleteHome,
-): Promise<ReadOnlyPeerClassification> {
+export async function classifyPeerReadOnly(home: AthleteHome): Promise<ReadOnlyPeerClassification> {
   const lockfilePath = join(home.configDir, LOCKFILE_NAME);
   const portFilePath = join(home.configDir, PORT_FILE_NAME);
   const body = readLockfile(lockfilePath);
   const publishedPort = await readPublishedPort(portFilePath);
-  if (publishedPort !== null && await portBound(publishedPort)) {
+  if (publishedPort !== null && (await portBound(publishedPort))) {
     if (body?.port === publishedPort) {
       return {
         status: "bound-unresponsive",
@@ -312,7 +302,7 @@ export async function classifyPeerReadOnly(
       stderr: holderMessage(body?.pid ?? null, publishedPort),
     };
   }
-  if (body !== null && await portBound(body.port)) {
+  if (body !== null && (await portBound(body.port))) {
     return {
       status: "bound-unresponsive",
       stdout: "",
@@ -436,10 +426,10 @@ export async function openAuthenticatedDaemonControl(
     timeoutMs,
   });
   if (
-    opened.frame.status !== "accepted"
-    || opened.frame.clientProtocolVersion !== input.incumbentProtocolVersion
-    || opened.frame.serverProtocolVersion !== input.incumbentProtocolVersion
-    || opened.frame.owner !== input.expectedOwner
+    opened.frame.status !== "accepted" ||
+    opened.frame.clientProtocolVersion !== input.incumbentProtocolVersion ||
+    opened.frame.serverProtocolVersion !== input.incumbentProtocolVersion ||
+    opened.frame.owner !== input.expectedOwner
   ) {
     opened.socket.close();
     throw new Error("daemon control authentication failed");
@@ -447,12 +437,15 @@ export async function openAuthenticatedDaemonControl(
   const socket = opened.socket;
   let sequence = 0;
   let closed = false;
-  const pending = new Map<number, {
-    readonly expectedStatus: "reserved" | "accepted";
-    readonly resolve: (value: { readonly status: "reserved" | "accepted" }) => void;
-    readonly reject: (error: unknown) => void;
-    readonly timer: ReturnType<typeof setTimeout>;
-  }>();
+  const pending = new Map<
+    number,
+    {
+      readonly expectedStatus: "reserved" | "accepted";
+      readonly resolve: (value: { readonly status: "reserved" | "accepted" }) => void;
+      readonly reject: (error: unknown) => void;
+      readonly timer: ReturnType<typeof setTimeout>;
+    }
+  >();
   const rejectPending = (): void => {
     for (const request of pending.values()) {
       clearTimeout(request.timer);
@@ -484,11 +477,11 @@ export async function openAuthenticatedDaemonControl(
     }
     const result = parsed.result;
     if (
-      result === null
-      || typeof result !== "object"
-      || Array.isArray(result)
-      || Object.keys(result).length !== 1
-      || (result as { readonly status?: unknown }).status !== request.expectedStatus
+      result === null ||
+      typeof result !== "object" ||
+      Array.isArray(result) ||
+      Object.keys(result).length !== 1 ||
+      (result as { readonly status?: unknown }).status !== request.expectedStatus
     ) {
       request.reject(new Error("invalid daemon control response"));
       return;
@@ -520,11 +513,14 @@ export async function openAuthenticatedDaemonControl(
     sequence += 1;
     const id = sequence;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        pending.delete(id);
-        reject(new Error("daemon control request timed out"));
-        socket.close();
-      }, method === "daemon.shutdownForUpgrade" ? UPGRADE_WRITER_RELEASE_TIMEOUT_MS : timeoutMs);
+      const timer = setTimeout(
+        () => {
+          pending.delete(id);
+          reject(new Error("daemon control request timed out"));
+          socket.close();
+        },
+        method === "daemon.shutdownForUpgrade" ? UPGRADE_WRITER_RELEASE_TIMEOUT_MS : timeoutMs,
+      );
       timer.unref?.();
       pending.set(id, { expectedStatus, resolve, reject, timer });
       try {
@@ -563,12 +559,14 @@ function samePeer(left: PeerHealthyOutcome, right: PeerHealthyOutcome): boolean 
 }
 
 function sameHandshake(left: ServerHandshakeFrame, right: ServerHandshakeFrame): boolean {
-  return left.status === right.status
-    && left.clientProtocolVersion === right.clientProtocolVersion
-    && left.serverProtocolVersion === right.serverProtocolVersion
-    && left.owner === right.owner
-    && (left.status !== "version-mismatch"
-      || (right.status === "version-mismatch" && left.direction === right.direction));
+  return (
+    left.status === right.status &&
+    left.clientProtocolVersion === right.clientProtocolVersion &&
+    left.serverProtocolVersion === right.serverProtocolVersion &&
+    left.owner === right.owner &&
+    (left.status !== "version-mismatch" ||
+      (right.status === "version-mismatch" && left.direction === right.direction))
+  );
 }
 
 function compatibleResolution(
@@ -587,8 +585,9 @@ function compatibleResolution(
 }
 
 function errorCode(error: unknown): number | undefined {
-  return typeof error === "object" && error !== null
-    && typeof (error as { readonly code?: unknown }).code === "number"
+  return typeof error === "object" &&
+    error !== null &&
+    typeof (error as { readonly code?: unknown }).code === "number"
     ? (error as { readonly code: number }).code
     : undefined;
 }
@@ -597,7 +596,8 @@ export async function resolveSecondStarter(
   input: ResolveSecondStarterInput,
   dependencies: ResolveSecondStarterDependencies,
 ): Promise<StarterResolution> {
-  if (input.clientAppVersion.length === 0) return refusal(EXIT_DAEMON_UNAVAILABLE, UNTRUSTED_PEER_MESSAGE);
+  if (input.clientAppVersion.length === 0)
+    return refusal(EXIT_DAEMON_UNAVAILABLE, UNTRUSTED_PEER_MESSAGE);
 
   const resolvePeer = async (
     peer: PeerHealthyOutcome,
@@ -605,11 +605,13 @@ export async function resolveSecondStarter(
   ): Promise<StarterResolution> => {
     let observed: ServerHandshakeFrame;
     try {
-      observed = ServerHandshakeFrameSchema.parse(await dependencies.observePeerHandshake({
-        port: peer.port,
-        token: input.bearerToken,
-        clientProtocolVersion: input.clientProtocolVersion,
-      }));
+      observed = ServerHandshakeFrameSchema.parse(
+        await dependencies.observePeerHandshake({
+          port: peer.port,
+          token: input.bearerToken,
+          clientProtocolVersion: input.clientProtocolVersion,
+        }),
+      );
     } catch {
       return refusal(EXIT_DAEMON_UNAVAILABLE, UNTRUSTED_PEER_MESSAGE);
     }
@@ -684,11 +686,13 @@ export async function resolveSecondStarter(
       if (immediate.status !== "peer-healthy" || !samePeer(immediate.peer, peer)) {
         return reclassify();
       }
-      repeated = ServerHandshakeFrameSchema.parse(await dependencies.observePeerHandshake({
-        port: immediate.peer.port,
-        token: input.bearerToken,
-        clientProtocolVersion: input.clientProtocolVersion,
-      }));
+      repeated = ServerHandshakeFrameSchema.parse(
+        await dependencies.observePeerHandshake({
+          port: immediate.peer.port,
+          token: input.bearerToken,
+          clientProtocolVersion: input.clientProtocolVersion,
+        }),
+      );
     } catch {
       return reclassify();
     }
@@ -753,17 +757,18 @@ export async function resolveSecondStarter(
       );
     }
 
-    let ephemeralServiceInstalled: boolean | undefined;
-    if (observed.owner === "ephemeral-client-started") {
+    let supervisorServiceInstalled: boolean | undefined;
+    if (observed.owner === "ephemeral-client-started" || observed.owner === "app-supervised") {
       try {
-        ephemeralServiceInstalled = await dependencies.serviceUpgrade.isInstalled(input.home);
+        supervisorServiceInstalled = await dependencies.serviceUpgrade.isInstalled(input.home);
       } catch {
         await fence.release();
         return refusal(EXIT_DAEMON_UNAVAILABLE, UPGRADE_SUCCESSOR_FAILED_MESSAGE);
       }
       if (
-        !ephemeralServiceInstalled
-        && (input.caller === "serve" || input.caller === "service")
+        observed.owner === "ephemeral-client-started" &&
+        !supervisorServiceInstalled &&
+        (input.caller === "serve" || input.caller === "service")
       ) {
         return { status: "become-successor", fence, handoffCapability };
       }
@@ -772,7 +777,12 @@ export async function resolveSecondStarter(
     try {
       if (observed.owner === "service-managed") {
         await dependencies.serviceUpgrade.restartInstalledService(successorInput);
-      } else if (ephemeralServiceInstalled === true) {
+      } else if (observed.owner === "app-supervised" && supervisorServiceInstalled === true) {
+        await dependencies.serviceUpgrade.restartInstalledService(successorInput);
+      } else if (
+        observed.owner === "ephemeral-client-started" &&
+        supervisorServiceInstalled === true
+      ) {
         await dependencies.serviceUpgrade.kickstartInstalledServiceAfterEphemeral(successorInput);
       } else {
         await dependencies.serviceUpgrade.startEphemeralSuccessor(successorInput);
@@ -795,15 +805,16 @@ export async function resolveSecondStarter(
     } catch {
       published = { status: "observation-invalid" };
     }
-    const publishedHandshake = published.status === "published"
-      ? ServerHandshakeFrameSchema.safeParse(published.handshake)
-      : undefined;
+    const publishedHandshake =
+      published.status === "published"
+        ? ServerHandshakeFrameSchema.safeParse(published.handshake)
+        : undefined;
     if (
-      published.status !== "published"
-      || publishedHandshake?.success !== true
-      || publishedHandshake.data.status !== "accepted"
-      || publishedHandshake.data.clientProtocolVersion !== input.clientProtocolVersion
-      || publishedHandshake.data.serverProtocolVersion !== input.clientProtocolVersion
+      published.status !== "published" ||
+      publishedHandshake?.success !== true ||
+      publishedHandshake.data.status !== "accepted" ||
+      publishedHandshake.data.clientProtocolVersion !== input.clientProtocolVersion ||
+      publishedHandshake.data.serverProtocolVersion !== input.clientProtocolVersion
     ) {
       await fence.release();
       return refusal(EXIT_DAEMON_UNAVAILABLE, UPGRADE_SUCCESSOR_FAILED_MESSAGE);

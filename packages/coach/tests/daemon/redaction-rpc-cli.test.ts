@@ -138,6 +138,24 @@ interface RunningRpc {
 async function startRpc(coachEngine: CoachEngine): Promise<RunningRpc> {
   const rpc = createCoachRpcServer({
     engine: coachEngine,
+    operations: {
+      importFiles: async ({ paths }) => ({
+        schemaVersion: 1,
+        files: { total: paths.length, imported: paths.length, quarantined: 0 },
+        changes: {
+          rawFilesInserted: 0,
+          sourceRecordsInserted: 0,
+          sourceRecordsUpdated: 0,
+          relinkedSourceRecords: 0,
+        },
+      }),
+      sync: async () => ({
+        schemaVersion: 1,
+        published: false,
+        referenceSucceeded: true,
+        requests: { store: 0, reference: 0, total: 0 },
+      }),
+    },
     token: AUTH_TOKEN,
     owner: "unmanaged-foreground",
   });

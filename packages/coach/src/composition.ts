@@ -38,12 +38,10 @@ import {
   type CyclingFtpAnchorResolver,
 } from "@enduragent/kernel/anchors";
 import { createAnchorRepository, type AnchorRepository } from "@enduragent/kernel/store";
-import {
-  ErrorStateSchema,
-  LatestJsonSchema,
-} from "@enduragent/kernel/reference/schemas";
+import { ErrorStateSchema, LatestJsonSchema } from "@enduragent/kernel/reference/schemas";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import type { CoachStoreWriterContext } from "./runtime.js";
+import type { CoachOperations } from "@enduragent/coach-contract";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import { createPersistedAthleteStateSource } from "./athlete-state-reader.js";
 import { createCoachEngineAdapter } from "./coach-engine-adapter.js";
@@ -53,6 +51,7 @@ import {
   type StoreRuntimeDependencies,
   type StoreRuntimeOptions,
 } from "./store-runtime.js";
+import { createCoachOperations } from "./operations.js";
 
 interface OAuthCredential {
   readonly type: "oauth";
@@ -65,6 +64,7 @@ interface OAuthCredential {
 
 export interface LocalCoachComposition {
   readonly engine: ReturnType<typeof createCoachEngineAdapter>;
+  readonly operations: CoachOperations;
   close(): Promise<void>;
 }
 
@@ -111,16 +111,21 @@ export type LocalStoreRuntimeOptions = Omit<StoreRuntimeOptions, "reference"> & 
 
 function readReferenceState(dataDir: string): ReferenceStateSnapshot {
   const referenceDir = join(dataDir, "data");
-  const read = <T>(path: string, parse: (value: unknown) => { success: boolean; data?: T }): T | null => {
+  const read = <T>(
+    path: string,
+    parse: (value: unknown) => { success: boolean; data?: T },
+  ): T | null => {
     try {
       const result = parse(JSON.parse(readFileSync(path, "utf8")) as unknown);
-      return result.success ? result.data ?? null : null;
+      return result.success ? (result.data ?? null) : null;
     } catch {
       return null;
     }
   };
   return {
-    errorState: read(join(referenceDir, "error_state.json"), (value) => ErrorStateSchema.safeParse(value)),
+    errorState: read(join(referenceDir, "error_state.json"), (value) =>
+      ErrorStateSchema.safeParse(value),
+    ),
     latest: read(join(referenceDir, "latest.json"), (value) => LatestJsonSchema.safeParse(value)),
   };
 }
@@ -139,10 +144,12 @@ function credential(value: unknown): OAuthCredential {
     throw new TypeError("OAuth profile is invalid.");
   }
   const candidate = value as Record<string, unknown>;
-  if (candidate.type !== "oauth"
-    || typeof candidate.access !== "string"
-    || typeof candidate.refresh !== "string"
-    || typeof candidate.expires !== "number") {
+  if (
+    candidate.type !== "oauth" ||
+    typeof candidate.access !== "string" ||
+    typeof candidate.refresh !== "string" ||
+    typeof candidate.expires !== "number"
+  ) {
     throw new TypeError("OAuth profile is invalid.");
   }
   return candidate as unknown as OAuthCredential;
@@ -162,7 +169,10 @@ function writeProfiles(path: string, profiles: Record<string, unknown>): void {
   }
 }
 
-function createAccessTokenReader(configDir: string, now: () => number): EngineHostPorts["getAccessToken"] {
+function createAccessTokenReader(
+  configDir: string,
+  now: () => number,
+): EngineHostPorts["getAccessToken"] {
   const path = join(configDir, "auth-profiles.json");
   const queues = new Map<string, Promise<string>>();
   const exclusive = async (profileName: string, signal?: AbortSignal): Promise<string> => {
@@ -199,10 +209,12 @@ function createAccessTokenReader(configDir: string, now: () => number): EngineHo
 }
 
 function sameHome(left: AthleteHome, right: AthleteHome): boolean {
-  return left.root === right.root
-    && left.storeDir === right.storeDir
-    && left.archiveDir === right.archiveDir
-    && left.configDir === right.configDir;
+  return (
+    left.root === right.root &&
+    left.storeDir === right.storeDir &&
+    left.archiveDir === right.archiveDir &&
+    left.configDir === right.configDir
+  );
 }
 
 export async function createLocalCoachComposition(
@@ -230,7 +242,8 @@ export async function createLocalCoachComposition(
       sport: cyclingSport,
       startScheduler: false,
       attemptLedgerForRun: () => {
-        if (runtime === undefined) throw new Error("Store runtime has not started its paired window.");
+        if (runtime === undefined)
+          throw new Error("Store runtime has not started its paired window.");
         return runtime.attemptLedgerForRun();
       },
     });
@@ -242,36 +255,36 @@ export async function createLocalCoachComposition(
       writerContext: input.context,
       dependencies: dependencies.runtimeDependencies,
     };
-    runtime = dependencies.createRuntime === undefined
-      ? createStoreRuntime({
-          ...runtimeOptions,
-          reference: reference as ReferenceRuntime,
-        })
-      : dependencies.createRuntime(runtimeOptions);
+    runtime =
+      dependencies.createRuntime === undefined
+        ? createStoreRuntime({
+            ...runtimeOptions,
+            reference: reference as ReferenceRuntime,
+          })
+        : dependencies.createRuntime(runtimeOptions);
     await runtime.runWindow();
     runtime.startScheduler();
     const stateReader = createPersistedAthleteStateSource({ dataDir: input.home.root });
-    const legacyClient = input.config.intervals.apiKey.length === 0
-      ? null
-      : makeChatClient({
-          apiKey: input.config.intervals.apiKey,
-          athleteId: input.config.intervals.athleteId,
-        });
+    const legacyClient =
+      input.config.intervals.apiKey.length === 0
+        ? null
+        : makeChatClient({
+            apiKey: input.config.intervals.apiKey,
+            athleteId: input.config.intervals.athleteId,
+          });
     const memory = new Memory(input.home.root, input.config.session.timezone);
     const ports: EngineHostPorts = {
       config: input.engineConfig,
       memory,
-      chatStore: new ChatStore(
-        input.home.root,
-        input.config.session.resetArchiveRetentionDays,
-      ),
+      chatStore: new ChatStore(input.home.root, input.config.session.resetArchiveRetentionDays),
       secrets: { resolve: resolveSecretRef },
       platform: {
         legacyClient,
         athleteData: runtime.athleteData,
-        calendarMutations: legacyClient === null
-          ? createMissingPlatformCalendarMutations()
-          : createPlatformCalendarMutations(legacyClient),
+        calendarMutations:
+          legacyClient === null
+            ? createMissingPlatformCalendarMutations()
+            : createPlatformCalendarMutations(legacyClient),
       },
       logger: createSubsystemLogger("agent", input.home.root),
       usage: { append: (line) => appendUsageLine(input.home.root, line) },
@@ -287,17 +300,22 @@ export async function createLocalCoachComposition(
     };
     const engineInput = { sport: cyclingSport, ports } satisfies CreateCoachEngineInput;
     const backend = (dependencies.createBackend ?? createCoachEngine)(engineInput);
-    const repository = (dependencies.createRepository ?? createAnchorRepository)(input.context.store);
-    const cyclingFtpAnchorResolver = (dependencies.createResolver
-      ?? createCyclingFtpAnchorResolver)(repository);
+    const repository = (dependencies.createRepository ?? createAnchorRepository)(
+      input.context.store,
+    );
+    const cyclingFtpAnchorResolver = (
+      dependencies.createResolver ?? createCyclingFtpAnchorResolver
+    )(repository);
     const engine = createCoachEngineAdapter({
       backend,
       getAthleteState: () => stateReader.getAthleteState(),
       cyclingFtpAnchorResolver,
       now,
     });
+    const operations = createCoachOperations({ home: input.home, context: input.context, runtime });
     return {
       engine,
+      operations,
       close() {
         closePromise ??= (async () => {
           let failure: { readonly error: unknown } | undefined;

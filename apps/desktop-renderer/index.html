@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Enduragent</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">enduragent</div>
+        <div class="spend-meter" aria-label="Today’s spend is not available yet">
+          Today’s spend <strong>—</strong>
+        </div>
+      </header>
+      <main class="conversation" aria-label="Coaching conversation">
+        <div class="thread" aria-live="polite"></div>
+      </main>
+      <div class="composer-wrap">
+        <form class="composer">
+          <label class="sr-only" for="message">Message your coach</label>
+          <textarea id="message" rows="1" placeholder="Message your coach…"></textarea>
+          <button type="submit" aria-label="Send message">↑</button>
+        </form>
+      </div>
+      <aside class="data-spine" aria-label="Training context drawer">
+        <button
+          type="button"
+          class="drawer-toggle"
+          aria-label="Open training context"
+          aria-expanded="false"
+        >
+          ▥
+        </button>
+      </aside>
+    </div>
+    <aside class="drawer" aria-hidden="true" aria-label="Training context">
+      <div class="drawer-heading">
+        <h2>Training context</h2>
+        <button type="button" class="drawer-close" aria-label="Close training context">×</button>
+      </div>
+      <p>Training context will appear here after setup and sync.</p>
+    </aside>
+    <script type="module" src="/src/index.ts"></script>
+  </body>
+</html>

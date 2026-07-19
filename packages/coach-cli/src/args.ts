@@ -12,7 +12,9 @@ export type CoachCliVerb =
     }
   | { readonly name: "state" }
   | { readonly name: "analyze"; readonly target: string }
+  | { readonly name: "import"; readonly paths: readonly string[] }
   | { readonly name: "plan-week" }
+  | { readonly name: "sync" }
   | {
       readonly name: "wellness-set";
       readonly entries: readonly { readonly key: string; readonly value: string }[];
@@ -41,11 +43,11 @@ export type CoachCliInvocation =
   | CoachCliVerbInvocation
   | {
       readonly kind: "verb-usage";
-      readonly message: "Usage: enduragent <ask|state|analyze|plan week|wellness set> [--json|--stream-json] [--session <key>|--fresh] [--local]";
+      readonly message: "Usage: enduragent <ask|state|analyze|import|plan week|sync|wellness set> [--json|--stream-json] [--session <key>|--fresh] [--local]";
     };
 
 const VERB_USAGE =
-  "Usage: enduragent <ask|state|analyze|plan week|wellness set> [--json|--stream-json] [--session <key>|--fresh] [--local]" as const;
+  "Usage: enduragent <ask|state|analyze|import|plan week|sync|wellness set> [--json|--stream-json] [--session <key>|--fresh] [--local]" as const;
 
 interface ScannedVerbArguments {
   readonly operands: readonly string[];
@@ -135,8 +137,26 @@ function parseVerb(root: string, scanned: ScannedVerbArguments): CoachCliVerb | 
       ? { name: "analyze", target: operands[0]! }
       : undefined;
   }
+  if (root === "import") {
+    if (
+      operands.length === 0 ||
+      operands.some((operand) => operand === "" || operand === "-") ||
+      new Set(operands).size !== operands.length ||
+      scanned.session.kind !== "default" ||
+      scanned.local
+    ) {
+      return undefined;
+    }
+    return { name: "import", paths: operands };
+  }
   if (root === "plan") {
     return operands.length === 1 && operands[0] === "week" ? { name: "plan-week" } : undefined;
+  }
+  if (root === "sync") {
+    if (operands.length !== 0 || scanned.session.kind !== "default" || scanned.local) {
+      return undefined;
+    }
+    return { name: "sync" };
   }
   if (root !== "wellness" || operands[0] !== "set" || operands.length < 2) {
     return undefined;
@@ -170,7 +190,7 @@ export function parseCoachCliInvocation(argv: readonly string[]): CoachCliInvoca
     return { kind: "daemon", action: argv[1] };
   }
   const root = argv[0]!;
-  if (!new Set(["ask", "state", "analyze", "plan", "wellness"]).has(root)) {
+  if (!new Set(["ask", "state", "analyze", "import", "plan", "sync", "wellness"]).has(root)) {
     return { kind: "usage", message: "Usage: enduragent [version|serve]" };
   }
   const scanned = scanVerbArguments(argv.slice(1));

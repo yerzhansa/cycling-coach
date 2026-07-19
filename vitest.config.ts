@@ -20,7 +20,7 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "json-summary"],
       reportsDirectory: "./coverage",
-      include: ["packages/*/src/**/*.ts"],
+      include: ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts"],
       exclude: [
         ...(coverageConfigDefaults.exclude ?? []),
         "**/*.test.ts",

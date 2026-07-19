@@ -1,6 +1,6 @@
 // trademark-lint:skip-file — this test file embeds the forbidden tokens in
 // synthetic fixtures and assertions; it would always flag itself otherwise.
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -111,7 +111,7 @@ describe("findTrademarkHits — Markdown files (regex)", () => {
     // language. The lint should not block PRs on those.
     const file = write(
       "code-block.md",
-      "# Title\n\n```ts\nconst IF = 1;\nconst note = \"CTL\"; // raw\n```\n\nNormal text without forbidden tokens.\n",
+      '# Title\n\n```ts\nconst IF = 1;\nconst note = "CTL"; // raw\n```\n\nNormal text without forbidden tokens.\n',
     );
     const hits = findTrademarkHits([file]);
     expect(hits).toHaveLength(0);
@@ -252,6 +252,19 @@ describe("main — wholesale package scope", () => {
     } finally {
       console.error = orig;
     }
+  });
+
+  it("covers apps in the default scan", () => {
+    write("apps/desktop-renderer/src/label.ts", `export const label = "Athlete CTL trend";\n`);
+    const original = process.cwd();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      process.chdir(tempDir);
+      expect(main([])).toBe(1);
+    } finally {
+      process.chdir(original);
+    }
+    expect(error.mock.calls.flat().join(" ")).toContain("apps/desktop-renderer/src/label.ts");
   });
 
   it("excludes CHANGELOG.md from the default scope even alongside scanned files", () => {

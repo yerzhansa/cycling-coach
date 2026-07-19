@@ -18,6 +18,7 @@ import {
   ServerHandshakeFrameSchema,
   type DaemonOwner,
   type ExitCode,
+  type ServerHandshakeFrame,
 } from "@enduragent/coach-contract";
 import {
   CoachCliSessionStartError,
@@ -42,7 +43,7 @@ import {
   type ServiceRegistrationState,
 } from "@enduragent/coach-cli";
 import { expandTilde, resolveAthleteHome, type AthleteHome } from "@enduragent/kernel-node/home";
-import { PORT_FILE_NAME } from "@enduragent/kernel-node/lock";
+import { PORT_FILE_NAME, type PeerHealthyOutcome } from "@enduragent/kernel-node/lock";
 import {
   canonicalizeAthleteHome,
   createLaunchdServiceIdentity,
@@ -137,6 +138,26 @@ export interface EnduragentDependencies {
 
 export type ServiceRegistrationClass = "absent" | "registered" | "unknown";
 
+export interface AppSupervisedChildHandle {
+  readonly pid: number;
+  readonly exited: Promise<{ readonly exitCode: number | null }>;
+  stop(): Promise<void>;
+}
+
+export interface StartAppSupervisedDaemonInput {
+  readonly home: AthleteHome;
+  readonly handoffCapability?: string;
+}
+
+export interface AuthenticatedDaemonObservation {
+  readonly peer: PeerHealthyOutcome;
+  readonly coordinates: {
+    readonly port: number;
+    readonly token: string;
+  };
+  readonly handshake: ServerHandshakeFrame;
+}
+
 export type DaemonStateObservation =
   | {
       readonly kind: "compatible-healthy";
@@ -146,6 +167,7 @@ export type DaemonStateObservation =
         readonly peerVersion: string;
       };
       readonly serverProtocolVersion: number;
+      readonly authenticated: AuthenticatedDaemonObservation;
     }
   | { readonly kind: "absent" }
   | { readonly kind: "bound-unresponsive" }
@@ -154,6 +176,7 @@ export type DaemonStateObservation =
   | {
       readonly kind: "version-mismatch";
       readonly failure: Extract<CoachRemoteFailure, { kind: "version-mismatch" }>;
+      readonly authenticated: AuthenticatedDaemonObservation;
     };
 
 export type PeerAvailabilityClass = DaemonStateObservation["kind"];
@@ -261,12 +284,14 @@ export async function observeDaemonState(
           peerVersion: classified.peer.peerVersion,
         },
         serverProtocolVersion: frame.serverProtocolVersion,
+        authenticated: { peer: classified.peer, coordinates, handshake: frame },
       };
     }
     if (frame.status === "version-mismatch") {
       return {
         kind: "version-mismatch",
         failure: { kind: "version-mismatch", direction: frame.direction },
+        authenticated: { peer: classified.peer, coordinates, handshake: frame },
       };
     }
     return { kind: "auth-invalid" };
@@ -498,7 +523,7 @@ function storeNewerThanApp(error: unknown): StoreNewerThanAppError | null {
 }
 
 const VERB_USAGE =
-  "Usage: enduragent <ask|state|analyze|plan week|wellness set> [--json|--stream-json] [--session <key>|--fresh] [--local]";
+  "Usage: enduragent <ask|state|analyze|import|plan week|sync|wellness set> [--json|--stream-json] [--session <key>|--fresh] [--local]";
 
 class InvalidVerbInputError extends Error {}
 
@@ -925,6 +950,22 @@ async function waitForCompatiblePeer(input: {
   return { status: "timeout" };
 }
 
+function createSecondStarterCoreDependencies(input: {
+  readonly dependencies: EnduragentDependencies;
+  readonly serviceUpgrade: ServiceUpgradePort;
+}): ResolveSecondStarterDependencies {
+  return {
+    observePeerHandshake,
+    openUpgradeControl: openAuthenticatedDaemonControl,
+    classifyPeerReadOnly,
+    acquireUpgradeFence,
+    serviceUpgrade: input.serviceUpgrade,
+    timer: productionMonotonicTimer(input.dependencies.monotonicNow!),
+    waitForWriterRelease,
+    waitForCompatiblePeer,
+  };
+}
+
 function createSecondStarterDependencies(input: {
   readonly home: AthleteHome;
   readonly executablePath: string;
@@ -948,16 +989,310 @@ function createSecondStarterDependencies(input: {
     },
     startEphemeral: input.dependencies.startEphemeralSuccessor!,
   });
-  return {
-    observePeerHandshake,
-    openUpgradeControl: openAuthenticatedDaemonControl,
-    classifyPeerReadOnly,
-    acquireUpgradeFence,
+  return createSecondStarterCoreDependencies({
+    dependencies: input.dependencies,
     serviceUpgrade,
-    timer: productionMonotonicTimer(input.dependencies.monotonicNow!),
-    waitForWriterRelease,
-    waitForCompatiblePeer,
+  });
+}
+
+export interface ResolveDesktopDaemonInput {
+  readonly env: Record<string, string | undefined>;
+  readonly executablePath: string;
+  readonly appVersion: string;
+  readonly signal: AbortSignal;
+  readonly startAppSupervisedDaemon: (
+    input: StartAppSupervisedDaemonInput,
+  ) => Promise<AppSupervisedChildHandle>;
+}
+
+export type DesktopDaemonDependencies = Required<
+  Pick<
+    EnduragentDependencies,
+    | "resolveAthleteHome"
+    | "readServiceStatus"
+    | "resumeService"
+    | "observeDaemonState"
+    | "resolveSecondStarter"
+    | "delay"
+    | "monotonicNow"
+  >
+>;
+
+export type DesktopDaemonResolution =
+  | {
+      readonly status: "connected";
+      readonly url: `ws://127.0.0.1:${number}/rpc`;
+      readonly token: string;
+      readonly owner: DaemonOwner;
+      readonly supervision: "attached" | "app-supervised";
+      close(): Promise<void>;
+    }
+  | {
+      readonly status: "refused";
+      readonly exitCode: 3 | 5;
+      readonly classification: "contention-family" | "version-mismatch";
+    };
+
+const desktopDaemonDependencies: DesktopDaemonDependencies = {
+  resolveAthleteHome: defaultDependencies.resolveAthleteHome,
+  readServiceStatus: defaultDependencies.readServiceStatus!,
+  resumeService: defaultDependencies.resumeService!,
+  observeDaemonState: defaultDependencies.observeDaemonState!,
+  resolveSecondStarter: defaultDependencies.resolveSecondStarter!,
+  delay: defaultDependencies.delay!,
+  monotonicNow: defaultDependencies.monotonicNow!,
+};
+
+function refusedDesktop(exitCode: 3 | 5): DesktopDaemonResolution {
+  return {
+    status: "refused",
+    exitCode,
+    classification: exitCode === EXIT_VERSION_MISMATCH ? "version-mismatch" : "contention-family",
   };
+}
+
+async function stopAppChild(child: AppSupervisedChildHandle | undefined): Promise<void> {
+  if (child === undefined) return;
+  await child.stop().catch(() => {});
+  await child.exited.catch(() => ({ exitCode: null }));
+}
+
+function connectedDesktop(
+  port: number,
+  token: string,
+  owner: DaemonOwner,
+  child?: AppSupervisedChildHandle,
+): DesktopDaemonResolution {
+  let closePromise: Promise<void> | undefined;
+  return {
+    status: "connected",
+    url: `ws://127.0.0.1:${port}/rpc`,
+    token,
+    owner,
+    supervision: child === undefined ? "attached" : "app-supervised",
+    close() {
+      closePromise ??= stopAppChild(child);
+      return closePromise;
+    },
+  };
+}
+
+async function waitForDesktopDaemon(input: {
+  readonly home: AthleteHome;
+  readonly signal: AbortSignal;
+  readonly dependencies: DesktopDaemonDependencies;
+}): Promise<DaemonStateObservation | undefined> {
+  const startedAt = input.dependencies.monotonicNow();
+  let nextDelayMs = 50;
+  while (!input.signal.aborted) {
+    let observation: DaemonStateObservation;
+    try {
+      observation = await input.dependencies.observeDaemonState({ home: input.home });
+    } catch {
+      observation = { kind: "auth-invalid" };
+    }
+    if (observation.kind !== "absent" && observation.kind !== "bound-unresponsive") {
+      return observation;
+    }
+    const elapsed = input.dependencies.monotonicNow() - startedAt;
+    if (elapsed >= 5_000) return observation;
+    await input.dependencies.delay(Math.min(nextDelayMs, 5_000 - elapsed));
+    nextDelayMs = Math.min(nextDelayMs * 2, 200);
+  }
+  return undefined;
+}
+
+function createDesktopSecondStarterBinding(input: {
+  readonly home: AthleteHome;
+  readonly executablePath: string;
+  readonly serviceStatus: LaunchdServiceStatus;
+  readonly previousChild?: AppSupervisedChildHandle;
+  readonly dependencies: DesktopDaemonDependencies;
+  readonly startAppSupervisedDaemon: ResolveDesktopDaemonInput["startAppSupervisedDaemon"];
+}): {
+  readonly dependencies: ResolveSecondStarterDependencies;
+  takeStartedAppChild(): AppSupervisedChildHandle | undefined;
+} {
+  const identity = createLaunchdServiceIdentity({
+    home: input.home,
+    executablePath: input.executablePath,
+  });
+  let startedChild: AppSupervisedChildHandle | undefined;
+  let taken = false;
+  let retirePromise: Promise<void> | undefined;
+  const retirePreviousChild = (): Promise<void> => {
+    retirePromise ??= stopAppChild(input.previousChild);
+    return retirePromise;
+  };
+  const serviceUpgrade = createServiceUpgradePort(input.home, {
+    readStatus: async () => input.serviceStatus,
+    restartInstalled: async (successor) => {
+      await retirePreviousChild();
+      await restartLaunchdServiceForUpgrade(identity, successor);
+    },
+    resumeAfterEphemeral: async (successor) => {
+      await retirePreviousChild();
+      await resumeLaunchdServiceAfterEphemeral(identity, successor);
+    },
+    startEphemeral: async (successor) => {
+      if (startedChild !== undefined || taken) throw new Error("app child already started");
+      await retirePreviousChild();
+      startedChild = await input.startAppSupervisedDaemon({
+        home: successor.home,
+        handoffCapability: successor.handoffCapability,
+      });
+    },
+  });
+  return {
+    dependencies: createSecondStarterCoreDependencies({
+      dependencies: {
+        ...defaultDependencies,
+        monotonicNow: input.dependencies.monotonicNow,
+      },
+      serviceUpgrade,
+    }),
+    takeStartedAppChild() {
+      if (taken) throw new Error("app child already taken");
+      taken = true;
+      const child = startedChild;
+      startedChild = undefined;
+      return child;
+    },
+  };
+}
+
+export async function resolveDesktopDaemon(
+  input: ResolveDesktopDaemonInput,
+  dependencies: DesktopDaemonDependencies = desktopDaemonDependencies,
+): Promise<DesktopDaemonResolution> {
+  if (!isAbsolute(input.executablePath) || input.appVersion.length === 0) {
+    throw new TypeError("invalid desktop daemon input");
+  }
+  const home = canonicalHome(dependencies.resolveAthleteHome(input.env));
+  let serviceStatus: LaunchdServiceStatus;
+  let registration: ServiceRegistrationClass;
+  try {
+    serviceStatus = await dependencies.readServiceStatus({
+      home,
+      executablePath: input.executablePath,
+    });
+    registration = serviceStatus.kind;
+  } catch {
+    return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+  }
+  let observation: DaemonStateObservation;
+  try {
+    observation = await dependencies.observeDaemonState({ home });
+  } catch {
+    return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+  }
+  let ownedChild: AppSupervisedChildHandle | undefined;
+
+  while (!input.signal.aborted) {
+    if (observation.kind === "compatible-healthy") {
+      return connectedDesktop(
+        observation.authenticated.coordinates.port,
+        observation.authenticated.coordinates.token,
+        observation.authenticated.handshake.owner,
+        ownedChild,
+      );
+    }
+    if (observation.kind === "version-mismatch") {
+      if (observation.failure.direction === "client-older") {
+        await stopAppChild(ownedChild);
+        return refusedDesktop(EXIT_VERSION_MISMATCH);
+      }
+      const binding = createDesktopSecondStarterBinding({
+        home,
+        executablePath: input.executablePath,
+        serviceStatus,
+        ...(ownedChild === undefined ? {} : { previousChild: ownedChild }),
+        dependencies,
+        startAppSupervisedDaemon: input.startAppSupervisedDaemon,
+      });
+      let starter: StarterResolution;
+      try {
+        starter = await dependencies.resolveSecondStarter(
+          {
+            caller: "desktop",
+            home,
+            clientProtocolVersion: PROTOCOL_VERSION,
+            clientAppVersion: input.appVersion,
+            bearerToken: observation.authenticated.coordinates.token,
+            peer: observation.authenticated.peer,
+          },
+          binding.dependencies,
+        );
+      } catch {
+        const startedChild = binding.takeStartedAppChild();
+        await stopAppChild(startedChild);
+        await stopAppChild(ownedChild);
+        return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+      }
+      const startedChild = binding.takeStartedAppChild();
+      if (startedChild !== undefined) {
+        await stopAppChild(ownedChild);
+        ownedChild = startedChild;
+      } else if (ownedChild !== undefined) {
+        await stopAppChild(ownedChild);
+        ownedChild = undefined;
+      }
+      if (starter.status === "attach") {
+        return connectedDesktop(
+          starter.port,
+          observation.authenticated.coordinates.token,
+          starter.handshake.owner,
+          ownedChild,
+        );
+      }
+      if (starter.status === "retry-startup") {
+        try {
+          observation = await dependencies.observeDaemonState({ home });
+        } catch {
+          await stopAppChild(ownedChild);
+          return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+        }
+        continue;
+      }
+      await stopAppChild(ownedChild);
+      ownedChild = undefined;
+      if (starter.status === "refuse") return refusedDesktop(starter.exitCode);
+      return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+    }
+
+    const decision = decideServiceAwareAutoStart({ registration, peer: observation.kind });
+    if (decision === "resume-service-then-attach") {
+      let resumed: "resumed" | "not-installed";
+      try {
+        resumed = await dependencies.resumeService({ home, executablePath: input.executablePath });
+      } catch {
+        return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+      }
+      if (resumed !== "resumed") return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+      const published = await waitForDesktopDaemon({ home, signal: input.signal, dependencies });
+      if (published === undefined) return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+      observation = published;
+      continue;
+    }
+    if (decision === "spawn-ephemeral") {
+      try {
+        ownedChild = await input.startAppSupervisedDaemon({ home });
+      } catch {
+        return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+      }
+      const published = await waitForDesktopDaemon({ home, signal: input.signal, dependencies });
+      if (published === undefined) {
+        await stopAppChild(ownedChild);
+        return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+      }
+      observation = published;
+      continue;
+    }
+    await stopAppChild(ownedChild);
+    return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+  }
+  await stopAppChild(ownedChild);
+  return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
 }
 
 async function prepareVerb(
@@ -973,7 +1308,9 @@ async function prepareVerb(
     stdinText = await readStdinText(input.terminal.input);
   }
   const chatId =
-    invocation.verb.name === "state"
+    invocation.verb.name === "state" ||
+    invocation.verb.name === "import" ||
+    invocation.verb.name === "sync"
       ? undefined
       : resolveCoachCliSession(invocation.session, dependencies.createFreshId).chatId;
   return createCoachVerbRequest({
@@ -981,6 +1318,7 @@ async function prepareVerb(
     chatId,
     stdinText,
     signal: input.signal,
+    callerCwd: process.cwd(),
   });
 }
 
@@ -1316,7 +1654,12 @@ async function runServeInvocation(input: {
       const { token: bearerToken } = coordinates;
       const resolution = await input.dependencies.resolveSecondStarter!(
         {
-          caller: input.invocationOwner === "service-managed" ? "service" : "serve",
+          caller:
+            input.invocationOwner === "service-managed"
+              ? "service"
+              : input.invocationOwner === "app-supervised"
+                ? "desktop"
+                : "serve",
           home: input.home,
           clientProtocolVersion: PROTOCOL_VERSION,
           clientAppVersion: input.appVersion,
@@ -1338,8 +1681,89 @@ async function runServeInvocation(input: {
         input.runInput.terminal.stderr.write(resolution.stderr);
         return resolution.exitCode;
       }
+      if (resolution.status === "attach" && input.invocationOwner === "app-supervised") {
+        return EXIT_SUCCESS;
+      }
       throw error;
     }
+  }
+}
+
+export interface RunAppSupervisedEnduragentInput {
+  readonly env: Record<string, string | undefined>;
+  readonly terminal: CoachCliTerminal;
+  readonly signal: AbortSignal;
+  readonly handoffCapability?: string;
+}
+
+function renderEnduragentFailure(
+  error: unknown,
+  terminal: Pick<CoachCliTerminal, "stderr">,
+): ExitCode {
+  if (storeNewerThanApp(error) !== null) {
+    terminal.stderr.write(
+      "Enduragent cannot start: this athlete store was created by a newer app version. Update Enduragent and retry.\n",
+    );
+    return EXIT_VERSION_MISMATCH;
+  }
+  if (
+    error instanceof CoachStoreWriterError &&
+    error.code === "writer-lock-held" &&
+    error.contention?.kind === "holder"
+  ) {
+    terminal.stderr.write(
+      `Enduragent cannot start: another writer holds this athlete home (pid ${error.contention.pid ?? "unknown"}, port ${error.contention.port}). Stop it or wait, then retry.\n`,
+    );
+    return EXIT_DAEMON_UNAVAILABLE;
+  }
+  if (
+    error instanceof CoachStoreWriterError &&
+    error.code === "writer-lock-held" &&
+    error.contention?.kind === "foreign"
+  ) {
+    terminal.stderr.write(
+      `Enduragent cannot start: 127.0.0.1:${error.contention.port} is held by a foreign process; change or remove the port file at ${error.contention.portFile}, then retry.\n`,
+    );
+    return EXIT_DAEMON_UNAVAILABLE;
+  }
+  terminal.stderr.write("Enduragent could not start.\n");
+  return EXIT_AGENT_ERROR;
+}
+
+export async function runAppSupervisedEnduragent(
+  input: RunAppSupervisedEnduragentInput,
+  dependencies?: EnduragentDependencies,
+): Promise<ExitCode> {
+  if (
+    input.handoffCapability !== undefined &&
+    !/^[A-Za-z0-9_-]{43}$/.test(input.handoffCapability)
+  ) {
+    return renderEnduragentFailure(new TypeError("invalid handoff capability"), input.terminal);
+  }
+  const resolvedDependencies: EnduragentDependencies = {
+    ...defaultDependencies,
+    ...dependencies,
+  };
+  try {
+    const home = canonicalHome(resolvedDependencies.resolveAthleteHome(input.env));
+    return await runServeInvocation({
+      invocationOwner: "app-supervised",
+      ...(input.handoffCapability === undefined
+        ? {}
+        : { starterCapability: input.handoffCapability }),
+      runInput: {
+        argv: [],
+        env: input.env,
+        terminal: input.terminal,
+        signal: input.signal,
+      },
+      home,
+      sourceRoot: resolveLegacySourceRoot(input.env),
+      appVersion: await resolvedDependencies.readPackageVersion(),
+      dependencies: resolvedDependencies,
+    });
+  } catch (error) {
+    return renderEnduragentFailure(error, input.terminal);
   }
 }
 
@@ -1471,34 +1895,7 @@ export async function runEnduragent(
 
     return result.status === "completed" ? result.value : renderLocalResult(result, input.terminal);
   } catch (error) {
-    if (storeNewerThanApp(error) !== null) {
-      input.terminal.stderr.write(
-        "Enduragent cannot start: this athlete store was created by a newer app version. Update Enduragent and retry.\n",
-      );
-      return EXIT_VERSION_MISMATCH;
-    }
-    if (
-      error instanceof CoachStoreWriterError &&
-      error.code === "writer-lock-held" &&
-      error.contention?.kind === "holder"
-    ) {
-      input.terminal.stderr.write(
-        `Enduragent cannot start: another writer holds this athlete home (pid ${error.contention.pid ?? "unknown"}, port ${error.contention.port}). Stop it or wait, then retry.\n`,
-      );
-      return EXIT_DAEMON_UNAVAILABLE;
-    }
-    if (
-      error instanceof CoachStoreWriterError &&
-      error.code === "writer-lock-held" &&
-      error.contention?.kind === "foreign"
-    ) {
-      input.terminal.stderr.write(
-        `Enduragent cannot start: 127.0.0.1:${error.contention.port} is held by a foreign process; change or remove the port file at ${error.contention.portFile}, then retry.\n`,
-      );
-      return EXIT_DAEMON_UNAVAILABLE;
-    }
-    input.terminal.stderr.write("Enduragent could not start.\n");
-    return EXIT_AGENT_ERROR;
+    return renderEnduragentFailure(error, input.terminal);
   }
 }
 

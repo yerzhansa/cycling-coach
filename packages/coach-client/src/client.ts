@@ -5,9 +5,10 @@ import {
   type AcceptedServerHandshakeFrame,
   type CoachRpcEvent,
   type CoachRpcMethodName,
+  type CoachRpcNotification,
+  type CoachRpcNotificationEnvelope,
   type CoachRpcRequest,
   type CoachRpcResponse,
-  type CoachTurnEventNotificationEnvelope,
   type JsonRpcId,
   type JsonRpcErrorResponseEnvelope,
   type JsonRpcSuccessResponseEnvelope,
@@ -45,7 +46,7 @@ export type CoachClientTerminalEnvelope =
 
 export interface CoachClientCallOptions<K extends CoachRpcMethodName> {
   readonly onEvent?: (event: CoachRpcEvent<K>) => void;
-  readonly onNotificationEnvelope?: (envelope: CoachTurnEventNotificationEnvelope) => void;
+  readonly onNotificationEnvelope?: (envelope: CoachRpcNotification<K>) => void;
   readonly onTerminalEnvelope?: (envelope: CoachClientTerminalEnvelope) => void;
 }
 
@@ -77,9 +78,7 @@ interface PendingCall {
   readonly resolve: (value: unknown) => void;
   readonly reject: (reason: unknown) => void;
   readonly onEvent: ((event: unknown) => void) | undefined;
-  readonly onNotificationEnvelope:
-    | ((envelope: CoachTurnEventNotificationEnvelope) => void)
-    | undefined;
+  readonly onNotificationEnvelope: ((envelope: CoachRpcNotificationEnvelope) => void) | undefined;
   readonly onTerminalEnvelope: ((envelope: CoachClientTerminalEnvelope) => void) | undefined;
 }
 
@@ -329,7 +328,9 @@ class CoachClientRuntime {
         resolve: resolve as (value: unknown) => void,
         reject,
         onEvent: options?.onEvent as ((event: unknown) => void) | undefined,
-        onNotificationEnvelope: options?.onNotificationEnvelope,
+        onNotificationEnvelope: options?.onNotificationEnvelope as
+          | ((envelope: CoachRpcNotificationEnvelope) => void)
+          | undefined,
         onTerminalEnvelope: options?.onTerminalEnvelope,
       });
     });
@@ -395,7 +396,7 @@ class CoachClientRuntime {
     resolve?.();
   }
 
-  private handleNotification(envelope: CoachTurnEventNotificationEnvelope): void {
+  private handleNotification(envelope: CoachRpcNotificationEnvelope): void {
     const pending = this.pending.get(envelope.params.requestId);
     if (pending === undefined || pending.method !== envelope.params.requestMethod) {
       this.failProtocol();

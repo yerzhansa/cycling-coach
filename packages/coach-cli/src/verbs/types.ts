@@ -1,7 +1,7 @@
 import type {
   CoachRpcMethodName,
+  CoachRpcNotification,
   CoachRpcRequest,
-  CoachTurnEventNotificationEnvelope,
   JsonRpcResponseEnvelope,
   ProtocolVersionDirection,
 } from "@enduragent/coach-contract";
@@ -9,14 +9,17 @@ import type { CoachClientTerminalEnvelope } from "@enduragent/coach-client";
 import type { CoachCliOutputMode } from "../args.js";
 import type { CoachCliTerminal } from "../repl.js";
 
-export type CoachVerbMethodName = Extract<CoachRpcMethodName, "chat" | "getAthleteState">;
+export type CoachVerbMethodName = Extract<
+  CoachRpcMethodName,
+  "chat" | "getAthleteState" | "importFiles" | "sync"
+>;
 
 export type CoachVerbRequest = {
   readonly [K in CoachVerbMethodName]: {
     readonly method: K;
     readonly params: CoachRpcRequest<K>;
     readonly signal: AbortSignal;
-    readonly onNotificationEnvelope: (envelope: CoachTurnEventNotificationEnvelope) => void;
+    readonly onNotificationEnvelope: (envelope: CoachRpcNotification<K>) => void;
     readonly onTerminalEnvelope: (envelope: CoachClientTerminalEnvelope) => void;
   };
 }[CoachVerbMethodName];

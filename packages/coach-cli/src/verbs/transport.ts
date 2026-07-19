@@ -82,17 +82,30 @@ function createRemoteTransport(client: CoachClient): CoachVerbTransport {
       }
       admitted = true;
       try {
-        const options = {
-          onNotificationEnvelope: input.onNotificationEnvelope,
-          onTerminalEnvelope: (envelope: CoachClientTerminalEnvelope) => {
-            observedTerminal = envelope;
-            input.onTerminalEnvelope(envelope);
-          },
+        const onTerminalEnvelope = (envelope: CoachClientTerminalEnvelope): void => {
+          observedTerminal = envelope;
+          input.onTerminalEnvelope(envelope);
         };
         if (input.method === "chat") {
-          await client.call("chat", input.params, options);
+          await client.call("chat", input.params, {
+            onNotificationEnvelope: input.onNotificationEnvelope,
+            onTerminalEnvelope,
+          });
+        } else if (input.method === "getAthleteState") {
+          await client.call("getAthleteState", input.params, {
+            onNotificationEnvelope: input.onNotificationEnvelope,
+            onTerminalEnvelope,
+          });
+        } else if (input.method === "importFiles") {
+          await client.call("importFiles", input.params, {
+            onNotificationEnvelope: input.onNotificationEnvelope,
+            onTerminalEnvelope,
+          });
         } else {
-          await client.call("getAthleteState", input.params, options);
+          await client.call("sync", input.params, {
+            onNotificationEnvelope: input.onNotificationEnvelope,
+            onTerminalEnvelope,
+          });
         }
       } catch (error) {
         if (observedTerminal !== undefined) return observedTerminal;
@@ -132,6 +145,9 @@ async function invokeLocal(
       COACH_RPC_METHOD_REGISTRY.getAthleteState.requestSchema.parse(input.params);
       return engine.getAthleteState();
     }
+    case "importFiles":
+    case "sync":
+      throw new TypeError("operational commands require the remote service");
     default:
       return assertNever(input);
   }

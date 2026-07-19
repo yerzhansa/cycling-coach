@@ -1,14 +1,8 @@
-import {
-  engineConfigFromConfig,
-  loadConfig,
-} from "@enduragent/core";
-import type { CoachEngine } from "@enduragent/coach-contract";
+import { engineConfigFromConfig, loadConfig } from "@enduragent/core";
+import type { CoachEngine, CoachOperations } from "@enduragent/coach-contract";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import type { WriterProtocolListener } from "@enduragent/kernel-node/lock";
-import {
-  createLocalCoachComposition,
-  type LocalCoachComposition,
-} from "./composition.js";
+import { createLocalCoachComposition, type LocalCoachComposition } from "./composition.js";
 import {
   migrateLegacyHomeUnderLock,
   type LegacyMigrationAction,
@@ -19,6 +13,7 @@ import { withCoachStoreWriter } from "./runtime.js";
 
 export interface LocalCoachLifecycle {
   readonly engine: CoachEngine;
+  readonly operations: CoachOperations;
   readonly listener: WriterProtocolListener;
   close(): Promise<void>;
 }
@@ -43,10 +38,7 @@ export interface WithLocalCoachInput<T> {
   readonly operation: (lifecycle: LocalCoachLifecycle) => Promise<T>;
 }
 
-type MigrationTerminalResult = Extract<
-  LegacyMigrationResult,
-  { status: "refused" | "discarded" }
->;
+type MigrationTerminalResult = Extract<LegacyMigrationResult, { status: "refused" | "discarded" }>;
 
 class MigrationTerminal extends Error {
   constructor(readonly result: MigrationTerminalResult) {
@@ -60,18 +52,22 @@ type WriterValue<T> =
   | { readonly kind: "rejected"; readonly error: unknown };
 
 function sameHome(left: AthleteHome, right: AthleteHome): boolean {
-  return left.root === right.root
-    && left.storeDir === right.storeDir
-    && left.archiveDir === right.archiveDir
-    && left.configDir === right.configDir;
+  return (
+    left.root === right.root &&
+    left.storeDir === right.storeDir &&
+    left.archiveDir === right.archiveDir &&
+    left.configDir === right.configDir
+  );
 }
 
 function migrationTerminal(error: unknown): MigrationTerminal | undefined {
   const visited = new Set<unknown>();
   let candidate = error;
-  while (candidate !== null
-    && (typeof candidate === "object" || typeof candidate === "function")
-    && !visited.has(candidate)) {
+  while (
+    candidate !== null &&
+    (typeof candidate === "object" || typeof candidate === "function") &&
+    !visited.has(candidate)
+  ) {
     if (candidate instanceof MigrationTerminal) return candidate;
     visited.add(candidate);
     candidate = (candidate as { readonly cause?: unknown }).cause;
@@ -122,9 +118,9 @@ export async function withLocalCoach<T>(
           throw new TypeError("Ready engine configuration changed before engine construction.");
         }
         let lifecycle: LocalCoachComposition | undefined;
-        let lifecycleCloseOutcome:
-          | { kind: "succeeded" }
-          | { kind: "failed"; error: unknown } = { kind: "succeeded" };
+        let lifecycleCloseOutcome: { kind: "succeeded" } | { kind: "failed"; error: unknown } = {
+          kind: "succeeded",
+        };
         let outcome: WriterValue<T>;
         try {
           lifecycle = await createLocalCoachComposition({
@@ -140,6 +136,7 @@ export async function withLocalCoach<T>(
               kind: "fulfilled",
               value: await input.operation({
                 engine: publishedLifecycle.engine,
+                operations: publishedLifecycle.operations,
                 listener: context.listener,
                 close: () => publishedLifecycle.close(),
               }),

@@ -75,8 +75,8 @@ describe("exit codes", () => {
 });
 
 describe("protocol version", () => {
-  it("is 1", () => {
-    expect(PROTOCOL_VERSION).toBe(1);
+  it("is 2", () => {
+    expect(PROTOCOL_VERSION).toBe(2);
   });
 });
 
@@ -169,9 +169,9 @@ describe("AthleteState", () => {
 
 describe("ChatRequest", () => {
   it("parses with and without turn, rejects unknown keys", () => {
-    expect(
-      ChatRequestSchema.safeParse({ chatId: "telegram:12345", message: "hi" }).success,
-    ).toBe(true);
+    expect(ChatRequestSchema.safeParse({ chatId: "telegram:12345", message: "hi" }).success).toBe(
+      true,
+    );
     expect(
       ChatRequestSchema.safeParse({
         chatId: "telegram:12345",
@@ -211,16 +211,14 @@ describe("responses", () => {
 
   it("ResetSessionResponse parses its valid sample and rejects an extra key", () => {
     expect(ResetSessionResponseSchema.safeParse({ memoryFlushed: true }).success).toBe(true);
-    expect(
-      ResetSessionResponseSchema.safeParse({ memoryFlushed: true, extra: 1 }).success,
-    ).toBe(false);
+    expect(ResetSessionResponseSchema.safeParse({ memoryFlushed: true, extra: 1 }).success).toBe(
+      false,
+    );
   });
 
   it("HasSessionResponse parses its valid sample and rejects an extra key", () => {
     expect(HasSessionResponseSchema.safeParse({ hasSession: false }).success).toBe(true);
-    expect(HasSessionResponseSchema.safeParse({ hasSession: false, extra: 1 }).success).toBe(
-      false,
-    );
+    expect(HasSessionResponseSchema.safeParse({ hasSession: false, extra: 1 }).success).toBe(false);
   });
 });
 

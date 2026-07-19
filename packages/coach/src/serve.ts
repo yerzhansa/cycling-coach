@@ -1,13 +1,6 @@
-import {
-  EXIT_SUCCESS,
-  type DaemonOwner,
-  type ExitCode,
-} from "@enduragent/coach-contract";
+import { EXIT_SUCCESS, type DaemonOwner, type ExitCode } from "@enduragent/coach-contract";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
-import {
-  createDaemonHealthState,
-  createHealthzRequestHandler,
-} from "./daemon/healthz-server.js";
+import { createDaemonHealthState, createHealthzRequestHandler } from "./daemon/healthz-server.js";
 import { createCoachRpcServer, ensureDaemonToken } from "./daemon/rpc-server.js";
 import type { LocalCoachLifecycle } from "./local-runner.js";
 
@@ -57,6 +50,7 @@ export async function runCoachServe(
     const healthState = dependencies.createHealthState();
     const rpc = dependencies.createRpcServer({
       engine: input.lifecycle.engine,
+      operations: input.lifecycle.operations,
       token: token.value,
       owner: input.owner ?? "unmanaged-foreground",
       healthState,

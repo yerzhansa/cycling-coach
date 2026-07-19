@@ -106,7 +106,9 @@ export const COACH_RPC_METHOD_NAMES = [
   "resetSession",
   "hasSession",
   "getAthleteState",
-] as const satisfies readonly (keyof CoachEngine)[];
+  "importFiles",
+  "sync",
+] as const satisfies readonly (keyof CoachRpcService)[];
 
 export const CoachRpcMethodNameSchema = z.enum(COACH_RPC_METHOD_NAMES);
 export type CoachRpcMethodName = z.infer<typeof CoachRpcMethodNameSchema>;
@@ -125,6 +127,122 @@ export type ChatRpcParams = z.infer<typeof ChatRpcParamsSchema>;
 
 export const EmptyRpcParamsSchema = z.object({}).strict();
 export type EmptyRpcParams = z.infer<typeof EmptyRpcParamsSchema>;
+
+export const AbsoluteImportPathSchema = z
+  .string()
+  .min(1)
+  .max(4_096)
+  .refine((value) => value.startsWith("/") && !value.includes("\0"), {
+    message: "import paths must be absolute",
+  });
+
+export const ImportFilesRpcParamsSchema = z
+  .object({
+    paths: z.array(AbsoluteImportPathSchema).min(1).max(256),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (new Set(value.paths).size !== value.paths.length) {
+      context.addIssue({ code: "custom", path: ["paths"], message: "paths must be unique" });
+    }
+  });
+export type ImportFilesRpcParams = z.infer<typeof ImportFilesRpcParamsSchema>;
+
+export const ImportFilesRpcResultSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    files: z
+      .object({
+        total: z.number().int().nonnegative(),
+        imported: z.number().int().nonnegative(),
+        quarantined: z.number().int().nonnegative(),
+      })
+      .strict(),
+    changes: z
+      .object({
+        rawFilesInserted: z.number().int().nonnegative(),
+        sourceRecordsInserted: z.number().int().nonnegative(),
+        sourceRecordsUpdated: z.number().int().nonnegative(),
+        relinkedSourceRecords: z.number().int().nonnegative(),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.files.imported + value.files.quarantined !== value.files.total) {
+      context.addIssue({ code: "custom", path: ["files"], message: "file counts must balance" });
+    }
+  });
+export type ImportFilesRpcResult = z.infer<typeof ImportFilesRpcResultSchema>;
+
+export const SyncRpcParamsSchema = EmptyRpcParamsSchema;
+export type SyncRpcParams = z.infer<typeof SyncRpcParamsSchema>;
+
+export const SyncRpcResultSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    published: z.boolean(),
+    referenceSucceeded: z.boolean(),
+    requests: z
+      .object({
+        store: z.number().int().nonnegative(),
+        reference: z.number().int().nonnegative(),
+        total: z.number().int().nonnegative(),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.requests.store + value.requests.reference !== value.requests.total) {
+      context.addIssue({
+        code: "custom",
+        path: ["requests"],
+        message: "request counts must balance",
+      });
+    }
+  });
+export type SyncRpcResult = z.infer<typeof SyncRpcResultSchema>;
+
+export const OperationProgressEventSchema = z
+  .object({
+    phase: z.enum(["started", "completed"]),
+    completed: z.number().int().nonnegative(),
+    total: z.number().int().positive(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.completed > value.total) {
+      context.addIssue({ code: "custom", path: ["completed"], message: "completed exceeds total" });
+    }
+    if (value.phase === "started" && value.completed !== 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["completed"],
+        message: "started progress begins at zero",
+      });
+    }
+    if (value.phase === "completed" && value.completed !== value.total) {
+      context.addIssue({
+        code: "custom",
+        path: ["completed"],
+        message: "completed progress reaches total",
+      });
+    }
+  });
+export type OperationProgressEvent = z.infer<typeof OperationProgressEventSchema>;
+
+export interface CoachOperations {
+  importFiles(
+    request: ImportFilesRpcParams,
+    onEvent?: (event: OperationProgressEvent) => void,
+  ): Promise<ImportFilesRpcResult>;
+  sync(
+    request: SyncRpcParams,
+    onEvent?: (event: OperationProgressEvent) => void,
+  ): Promise<SyncRpcResult>;
+}
+
+export type CoachRpcService = CoachEngine & CoachOperations;
 
 export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
   z
@@ -159,6 +277,22 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       params: EmptyRpcParamsSchema,
     })
     .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("importFiles"),
+      params: ImportFilesRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("sync"),
+      params: SyncRpcParamsSchema,
+    })
+    .strict(),
 ]);
 export type CoachRpcRequestEnvelope = z.infer<typeof CoachRpcRequestEnvelopeSchema>;
 
@@ -189,10 +323,35 @@ export type CoachTurnEventNotificationEnvelope = z.infer<
   typeof CoachTurnEventNotificationEnvelopeSchema
 >;
 
+export const COACH_OPERATION_PROGRESS_NOTIFICATION_METHOD = "coach.operationProgress" as const;
+
+export const CoachOperationProgressNotificationEnvelopeSchema = z
+  .object({
+    jsonrpc: z.literal("2.0"),
+    method: z.literal(COACH_OPERATION_PROGRESS_NOTIFICATION_METHOD),
+    params: z
+      .object({
+        requestId: JsonRpcIdSchema,
+        requestMethod: z.enum(["importFiles", "sync"]),
+        event: OperationProgressEventSchema,
+      })
+      .strict(),
+  })
+  .strict();
+export type CoachOperationProgressNotificationEnvelope = z.infer<
+  typeof CoachOperationProgressNotificationEnvelopeSchema
+>;
+
+export const CoachRpcNotificationEnvelopeSchema = z.union([
+  CoachTurnEventNotificationEnvelopeSchema,
+  CoachOperationProgressNotificationEnvelopeSchema,
+]);
+export type CoachRpcNotificationEnvelope = z.infer<typeof CoachRpcNotificationEnvelopeSchema>;
+
 export const CoachRpcEnvelopeSchema = z.union([
   CoachRpcRequestEnvelopeSchema,
   JsonRpcResponseEnvelopeSchema,
-  CoachTurnEventNotificationEnvelopeSchema,
+  CoachRpcNotificationEnvelopeSchema,
 ]);
 export type CoachRpcEnvelope = z.infer<typeof CoachRpcEnvelopeSchema>;
 
@@ -207,7 +366,7 @@ export function serializeCoachRpcEnvelope(value: unknown): string {
 }
 
 export type CoachRpcMethodRegistryShape = {
-  readonly [K in keyof CoachEngine]: {
+  readonly [K in keyof CoachRpcService]: {
     readonly wireName: K;
     readonly requestSchema: z.ZodType;
     readonly responseSchema: z.ZodType;
@@ -243,6 +402,18 @@ export const COACH_RPC_METHOD_REGISTRY = {
     responseSchema: AthleteStateSchema,
     eventSchema: NoRpcEventSchema,
   },
+  importFiles: {
+    wireName: "importFiles",
+    requestSchema: ImportFilesRpcParamsSchema,
+    responseSchema: ImportFilesRpcResultSchema,
+    eventSchema: OperationProgressEventSchema,
+  },
+  sync: {
+    wireName: "sync",
+    requestSchema: SyncRpcParamsSchema,
+    responseSchema: SyncRpcResultSchema,
+    eventSchema: OperationProgressEventSchema,
+  },
 } as const satisfies CoachRpcMethodRegistryShape;
 
 export type CoachRpcRequest<K extends CoachRpcMethodName> = z.input<
@@ -255,6 +426,8 @@ export type CoachRpcEvent<K extends CoachRpcMethodName> = z.output<
   (typeof COACH_RPC_METHOD_REGISTRY)[K]["eventSchema"]
 >;
 
-type Assert<T extends true> = T;
-type IsNever<T> = [T] extends [never] ? true : false;
-type NonChatEventsAreNever = Assert<IsNever<CoachRpcEvent<Exclude<CoachRpcMethodName, "chat">>>>;
+export type CoachRpcNotification<K extends CoachRpcMethodName> = K extends "chat"
+  ? CoachTurnEventNotificationEnvelope
+  : K extends "importFiles" | "sync"
+    ? CoachOperationProgressNotificationEnvelope
+    : never;

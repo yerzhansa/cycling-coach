@@ -15,6 +15,7 @@
   "include": [
     "tools/**/*.ts",
     "packages/*/tests/**/*.ts",
+    "apps/*/tests/**/*.ts",
     "packages/sport-cycling/src/markdown.d.ts",
     "packages/kernel/src/store/migrations/sql-assets.d.ts",
     "vitest.config.ts"
