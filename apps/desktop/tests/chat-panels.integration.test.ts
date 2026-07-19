@@ -195,7 +195,7 @@ afterEach(async () => {
   );
 });
 
-describe.skipIf(!hasLoopback)("desktop chat panels", () => {
+describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat panels", () => {
   it("streams chat, persists units, preserves focus, and fits desktop geometry", async () => {
     const { fixture, calls } = await launch({ width: 1440, height: 900, reducedMotion: false });
     const initial = await fixture.evaluate<{
