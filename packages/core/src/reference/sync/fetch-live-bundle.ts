@@ -37,6 +37,7 @@ import {
   type ReferenceBundle,
   type RenameSummary,
 } from "@enduragent/kernel/reference/local-bundle";
+import { PlannedEventSchema, type PlannedEvent } from "@enduragent/kernel/reference/schemas";
 
 import {
   AthleteSchema,
@@ -47,6 +48,7 @@ import {
   type WellnessDay,
 } from "../schemas/inputs.js";
 import { LATEST_RETENTION_DAYS } from "../freshness.js";
+import { familyOf } from "../sport-adapter-dispatcher.js";
 
 export { deriveFtpHistory, normalizeStreams } from "@enduragent/kernel/reference/local-bundle";
 
@@ -59,6 +61,8 @@ export const FETCH_WINDOW_DAYS = REFERENCE_CAPTURE_WINDOW_DAYS;
 export const STREAM_WINDOW_DAYS = REFERENCE_CAPTURE_STREAM_WINDOW_DAYS;
 /** Hard cap on per-activity stream fetches per sync, regardless of window. */
 export const MAX_STREAM_ACTIVITIES = REFERENCE_CAPTURE_STREAM_LIMIT;
+export const PAST_PLAN_WINDOW_DAYS = 7;
+export const FUTURE_PLAN_WINDOW_DAYS = 28;
 const STREAM_THROTTLE_MS = 250;
 /** Wall-clock budget for the whole stream phase. Streams are best-effort, so we
  *  stop fetching once this elapses rather than letting a slow account push the
@@ -84,6 +88,13 @@ export interface BundleFetchClient {
   readonly wellness: {
     list(query: { oldest?: string; newest?: string }): Promise<FetchResult<unknown[]>>;
   };
+  readonly events: {
+    list(query: {
+      oldest: string;
+      newest: string;
+      category: string[];
+    }): Promise<FetchResult<unknown[]>>;
+  };
 }
 
 /** One per-endpoint fetch failure: which source envelope returned an error and
@@ -101,6 +112,7 @@ export interface LiveFetchResult {
   readonly recentActivities: readonly Activity[];
   /** Renamed wellness rows for the `latest.wellness_data` cache. */
   readonly wellnessData: readonly WellnessDay[];
+  readonly plannedWorkouts: readonly PlannedEvent[];
   /** Full-window inputs for metric computation. */
   readonly bundle: ReferenceBundle;
   /** Sync wall-clock as an ISO string — the metric date-window anchor. */
@@ -131,6 +143,7 @@ interface LiveFetchDeps {
   readonly client: BundleFetchClient;
   readonly signal: AbortSignal;
   readonly now: Date;
+  readonly sportTypes?: readonly string[];
   /** Override the inter-request throttle (tests pass 0). */
   readonly throttleMs?: number;
   /** Sink for non-fatal warnings; defaults to console.warn. */
@@ -156,10 +169,17 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 function renderEndpointError(error: unknown): string {
-  const serializable = error !== null && typeof error === "object" && !(error instanceof Error)
-    ? Object.assign(new Error("Reference endpoint failed"), error)
-    : error;
+  const serializable =
+    error !== null && typeof error === "object" && !(error instanceof Error)
+      ? Object.assign(new Error("Reference endpoint failed"), error)
+      : error;
   return JSON.stringify(serializeError(serializable));
+}
+
+function shiftedDate(value: string, days: number): string {
+  const instant = new Date(`${value}T00:00:00.000Z`);
+  instant.setUTCDate(instant.getUTCDate() + days);
+  return instant.toISOString().slice(0, 10);
 }
 
 /**
@@ -175,6 +195,9 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
   const plan = createReferenceCapturePlan(now);
   const frozenNow = plan.frozenNow;
   const { oldest, newest } = plan.window;
+  const cyclingSportTypes = new Set(
+    (deps.sportTypes ?? []).filter((type) => familyOf(type, undefined) === "cycling"),
+  );
 
   const fetchErrors: FetchEndpointError[] = [];
 
@@ -212,6 +235,53 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
       ? (wellResult.value as Array<Record<string, unknown>>)
       : [];
 
+  const frozenDate = frozenNow.slice(0, 10);
+  const planOldest = shiftedDate(frozenDate, -(PAST_PLAN_WINDOW_DAYS - 1));
+  const planNewest = shiftedDate(frozenDate, FUTURE_PLAN_WINDOW_DAYS);
+  const eventResult = await client.events.list({
+    oldest: planOldest,
+    newest: planNewest,
+    category: ["WORKOUT"],
+  });
+  if (!eventResult.ok) {
+    const detail = renderEndpointError(eventResult.error);
+    log(`Reference: events.list failed: ${detail}`);
+    fetchErrors.push({ endpoint: "events", detail });
+  }
+  const plannedEvents: PlannedEvent[] = [];
+  if (eventResult.ok && Array.isArray(eventResult.value)) {
+    const rawEvents = snakeCaseKeys(eventResult.value) as Array<Record<string, unknown>>;
+    for (const row of rawEvents) {
+      const parsed = PlannedEventSchema.safeParse(row);
+      if (!parsed.success) {
+        log(`Reference: skipped malformed event row: ${parsed.error.message}`);
+        continue;
+      }
+      if (
+        parsed.data.category !== "WORKOUT" ||
+        parsed.data.type == null ||
+        !cyclingSportTypes.has(parsed.data.type)
+      ) {
+        continue;
+      }
+      plannedEvents.push(parsed.data);
+    }
+  } else if (eventResult.ok) {
+    log("Reference: events.list returned a non-array body; treating as empty");
+  }
+  plannedEvents.sort(
+    (left, right) =>
+      left.start_date_local.localeCompare(right.start_date_local) || left.id - right.id,
+  );
+  const pastEvents = plannedEvents.filter((event) => {
+    const date = event.start_date_local.slice(0, 10);
+    return date >= planOldest && date <= frozenDate;
+  });
+  const plannedWorkouts = plannedEvents.filter((event) => {
+    const date = event.start_date_local.slice(0, 10);
+    return date >= frozenDate && date <= planNewest;
+  });
+
   const actSummary: RenameSummary = { skippedNonNumeric: {} };
   const wellSummary: RenameSummary = { skippedNonNumeric: {} };
 
@@ -220,7 +290,9 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
     try {
       activities.push(parseRenamedActivity(renameTpFieldsOnActivity(row, actSummary)));
     } catch (err) {
-      log(`Reference: skipped malformed activity row: ${err instanceof Error ? err.message : String(err)}`);
+      log(
+        `Reference: skipped malformed activity row: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
   const wellness: WellnessDay[] = [];
@@ -228,7 +300,9 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
     try {
       wellness.push(parseRenamedWellnessRow(renameTpFieldsOnWellnessRow(row, wellSummary)));
     } catch (err) {
-      log(`Reference: skipped malformed wellness row: ${err instanceof Error ? err.message : String(err)}`);
+      log(
+        `Reference: skipped malformed wellness row: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
@@ -244,6 +318,7 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
     activities,
     wellness,
     ftpHistory,
+    pastEvents,
     ...(Object.keys(streams).length > 0 ? { streams } : {}),
     ...(athlete !== undefined ? { athlete } : {}),
   };
@@ -259,6 +334,7 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
     athleteProfile,
     recentActivities,
     wellnessData: wellness,
+    plannedWorkouts,
     bundle,
     frozenNow,
     ...(fetchErrors.length > 0 ? { fetchErrors } : {}),
@@ -283,7 +359,9 @@ async function fetchStreams(
     try {
       result = await client.activities.getStreams(id, [...STREAM_TYPES]);
     } catch (err) {
-      log(`Reference: streams fetch threw for an activity: ${err instanceof Error ? err.message : String(err)}`);
+      log(
+        `Reference: streams fetch threw for an activity: ${err instanceof Error ? err.message : String(err)}`,
+      );
       continue;
     }
     if (!result.ok) {

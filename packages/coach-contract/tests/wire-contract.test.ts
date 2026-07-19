@@ -17,6 +17,8 @@ import {
   EmptyRpcParamsSchema,
   ConfigureRuntimeRpcParamsSchema,
   ConfigureRuntimeRpcResultSchema,
+  GetUnitsPreferenceRpcParamsSchema,
+  GetUnitsPreferenceRpcResultSchema,
   ImportFilesRpcParamsSchema,
   ImportFilesRpcResultSchema,
   OperationProgressEventSchema,
@@ -35,8 +37,11 @@ import {
   PROTOCOL_VERSION,
   ResetSessionRequestSchema,
   ResetSessionResponseSchema,
+  SetUnitsPreferenceRpcParamsSchema,
+  SetUnitsPreferenceRpcResultSchema,
   ServerHandshakeFrameSchema,
   TurnEventSchema,
+  UNKNOWN_CYCLING_TRAINING_CONTEXT,
   compareProtocolVersions,
   createAcceptedServerHandshakeFrame,
   createClientHandshakeFrame,
@@ -155,7 +160,7 @@ describe("JSON-RPC envelopes", () => {
 });
 
 describe("coach request and event projection", () => {
-  it("admits exactly the eight strict method requests", () => {
+  it("admits exactly the ten strict method requests", () => {
     const requests = [
       { jsonrpc: "2.0", id: 1, method: "chat", params: { chatId: "chat-1", message: "hello" } },
       { jsonrpc: "2.0", id: 2, method: "resetSession", params: { chatId: "chat-1" } },
@@ -181,6 +186,13 @@ describe("coach request and event projection", () => {
         id: 8,
         method: "configureRuntime",
         params: { llm: { provider: "anthropic", model: "model", api_key: "placeholder" } },
+      },
+      { jsonrpc: "2.0", id: 9, method: "getUnitsPreference", params: {} },
+      {
+        jsonrpc: "2.0",
+        id: 10,
+        method: "setUnitsPreference",
+        params: { value: "imperial" },
       },
     ];
     for (const request of requests) {
@@ -398,6 +410,8 @@ describe("coach request and event projection", () => {
         schemaVersion: 1,
         applied: { llm: llm !== undefined, intervals: intervals !== undefined },
       }),
+      getUnitsPreference: async () => ({ value: "metric", source: "default" }),
+      setUnitsPreference: async ({ value }) => ({ value, source: "cycling" }),
     };
     expect(Object.keys(COACH_RPC_METHOD_REGISTRY)).toEqual(Object.keys(fake));
     expect(COACH_RPC_METHOD_NAMES).toEqual(Object.keys(fake));
@@ -449,12 +463,26 @@ describe("coach request and event projection", () => {
       responseSchema: ConfigureRuntimeRpcResultSchema,
       eventSchema: NoRpcEventSchema,
     });
+    expect(COACH_RPC_METHOD_REGISTRY.getUnitsPreference).toEqual({
+      wireName: "getUnitsPreference",
+      requestSchema: GetUnitsPreferenceRpcParamsSchema,
+      responseSchema: GetUnitsPreferenceRpcResultSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.setUnitsPreference).toEqual({
+      wireName: "setUnitsPreference",
+      requestSchema: SetUnitsPreferenceRpcParamsSchema,
+      responseSchema: SetUnitsPreferenceRpcResultSchema,
+      eventSchema: NoRpcEventSchema,
+    });
     for (const method of [
       "resetSession",
       "hasSession",
       "getAthleteState",
       "saveIntake",
       "configureRuntime",
+      "getUnitsPreference",
+      "setUnitsPreference",
     ] as const) {
       expect(COACH_RPC_METHOD_REGISTRY[method].eventSchema.safeParse(undefined).success).toBe(
         false,
@@ -464,6 +492,63 @@ describe("coach request and event projection", () => {
     await expect(fake.chat({ chatId: "chat-1", message: "hello" })).resolves.toEqual({
       text: "ok",
     });
+  });
+
+  it("round trips strict units preference requests and results", () => {
+    expect(
+      roundTrip({ jsonrpc: "2.0", id: 40, method: "getUnitsPreference", params: {} }),
+    ).toMatchObject({ method: "getUnitsPreference" });
+    expect(
+      roundTrip({
+        jsonrpc: "2.0",
+        id: 41,
+        method: "setUnitsPreference",
+        params: { value: "imperial" },
+      }),
+    ).toMatchObject({ method: "setUnitsPreference" });
+    expect(GetUnitsPreferenceRpcResultSchema.parse({ value: "metric", source: "athlete" })).toEqual(
+      { value: "metric", source: "athlete" },
+    );
+    expect(
+      SetUnitsPreferenceRpcResultSchema.parse({ value: "imperial", source: "cycling" }),
+    ).toEqual({ value: "imperial", source: "cycling" });
+    expect(
+      SetUnitsPreferenceRpcParamsSchema.safeParse({ value: "metric", extra: true }).success,
+    ).toBe(false);
+    expect(
+      GetUnitsPreferenceRpcResultSchema.safeParse({ value: "other", source: "default" }).success,
+    ).toBe(false);
+  });
+
+  it("round trips an athlete state result with persisted training context", () => {
+    const state = AthleteStateSchema.parse({
+      schemaVersion: "1",
+      lastUpdated: "2026-07-19T08:00:00.000Z",
+      freshness: "fresh",
+      degraded: false,
+      lastSynced: "2026-07-19T07:55:00.000Z",
+      athleteProfile: {},
+      currentStatus: {},
+      derivedMetrics: {},
+      recentActivities: [],
+      plannedWorkouts: [],
+      wellness: {},
+      trainingContext: UNKNOWN_CYCLING_TRAINING_CONTEXT,
+    });
+    expect(roundTrip({ jsonrpc: "2.0", id: 42, result: state })).toEqual({
+      jsonrpc: "2.0",
+      id: 42,
+      result: state,
+    });
+    expect(
+      AthleteStateSchema.safeParse({
+        ...state,
+        trainingContext: {
+          ...state.trainingContext,
+          currentTrainingStress: 72,
+        },
+      }).success,
+    ).toBe(false);
   });
 });
 

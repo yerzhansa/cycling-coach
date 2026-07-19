@@ -15,33 +15,12 @@
         </div>
       </header>
       <main class="conversation" aria-label="Coaching conversation">
-        <div class="thread" aria-live="polite"></div>
+        <div class="thread"></div>
       </main>
-      <div class="composer-wrap">
-        <form class="composer">
-          <label class="sr-only" for="message">Message your coach</label>
-          <textarea id="message" rows="1" placeholder="Message your coach…"></textarea>
-          <button type="submit" aria-label="Send message">↑</button>
-        </form>
-      </div>
-      <aside class="data-spine" aria-label="Training context drawer">
-        <button
-          type="button"
-          class="drawer-toggle"
-          aria-label="Open training context"
-          aria-expanded="false"
-        >
-          ▥
-        </button>
-      </aside>
+      <div class="composer-wrap"></div>
+      <aside class="data-spine" aria-label="Training data drawer"></aside>
     </div>
-    <aside class="drawer" aria-hidden="true" aria-label="Training context">
-      <div class="drawer-heading">
-        <h2>Training context</h2>
-        <button type="button" class="drawer-close" aria-label="Close training context">×</button>
-      </div>
-      <p>Training context will appear here after setup and sync.</p>
-    </aside>
+    <dialog id="training-context-drawer" class="drawer" aria-label="Training data"></dialog>
     <script type="module" src="/src/index.ts"></script>
   </body>
 </html>

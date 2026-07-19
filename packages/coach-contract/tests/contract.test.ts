@@ -10,6 +10,8 @@ import {
   PROTOCOL_VERSION,
   TurnEventSchema,
   AthleteStateSchema,
+  CyclingTrainingContextSchema,
+  UNKNOWN_CYCLING_TRAINING_CONTEXT,
   ChatRequestSchema,
   ChatResponseSchema,
   ResetSessionResponseSchema,
@@ -148,6 +150,76 @@ describe("AthleteState", () => {
     const state = cloneState();
     (state["derivedMetrics"] as Record<string, unknown>)["capability.dfa_a1_profile"] = {};
     expect(AthleteStateSchema.safeParse(state).success).toBe(false);
+  });
+
+  it("parses computed and unknown training-context envelopes strictly", () => {
+    const computed = {
+      anchorZones: {
+        kind: "computed",
+        asOf: "1998-07-06T09:00:00.000Z",
+        anchor: {
+          watts: 250,
+          validFrom: "1998-06-01",
+          source: "manual",
+          confidence: "manual",
+          ageDays: 35,
+          stalenessBand: "fresh",
+          stale: false,
+        },
+        zones: Array.from({ length: 6 }, (_, index) => ({
+          name: `Zone ${index + 1}`,
+          range: `${index + 1} W`,
+          overlaps: index === 3,
+        })),
+      },
+      cyclingLoad: {
+        kind: "computed",
+        asOf: "1998-07-06T09:00:00.000Z",
+        source: "intervals.icu",
+        windowDays: 7,
+        value: 120,
+        activityCount: 2,
+        missingLoadCount: 1,
+      },
+      plan: {
+        kind: "computed",
+        asOf: "1998-07-06T09:00:00.000Z",
+        items: [
+          { id: "1", date: "1998-07-07", name: null, category: "WORKOUT", workoutType: "Ride" },
+        ],
+      },
+      adherence: {
+        kind: "computed",
+        asOf: "1998-07-06T09:00:00.000Z",
+        ratio: 0.5,
+        plannedDays: 2,
+        completedDays: 3,
+        matchedDays: 1,
+      },
+      wellnessTrend: {
+        kind: "computed",
+        asOf: "1998-07-06T09:00:00.000Z",
+        windowDays: 7,
+        series: [
+          { metric: "hrv", unit: "ms", points: [{ date: "1998-07-06", value: 60 }] },
+          { metric: "sleep", unit: "seconds", points: [] },
+          { metric: "resting-hr", unit: "bpm", points: [] },
+        ],
+      },
+    } as const;
+    expect(CyclingTrainingContextSchema.parse(computed)).toEqual(computed);
+    expect(CyclingTrainingContextSchema.parse(UNKNOWN_CYCLING_TRAINING_CONTEXT)).toEqual(
+      UNKNOWN_CYCLING_TRAINING_CONTEXT,
+    );
+    expect(CyclingTrainingContextSchema.safeParse({ ...computed, extra: true }).success).toBe(
+      false,
+    );
+    expect(
+      CyclingTrainingContextSchema.safeParse({
+        ...computed,
+        adherence: { ...computed.adherence, ratio: 1.1 },
+      }).success,
+    ).toBe(false);
   });
 
   it("derivedMetricsMeta is strict", () => {

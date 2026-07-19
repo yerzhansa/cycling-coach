@@ -1,72 +1,65 @@
 import { describe, expect, it } from "vitest";
-import { createChatTurn, reduceChatTurn } from "../src/turn-state.js";
+import {
+  DESKTOP_CHAT_ID,
+  EMPTY_CHAT_STATE,
+  reduceChatState,
+  type ChatState,
+} from "../src/turn-state.js";
+
+function started(requestKey = 1): ChatState {
+  return reduceChatState(EMPTY_CHAT_STATE, {
+    type: "submit",
+    requestKey,
+    userMessage: "How should I train?",
+    userMessageId: "message-1",
+    assistantMessageId: "message-2",
+    includeUser: true,
+  });
+}
 
 describe("desktop turn state", () => {
-  it("streams, replaces final text, and completes only on terminal", () => {
-    let state = createChatTurn("How should I train?");
-    state = reduceChatTurn(state, {
-      type: "event",
-      event: { type: "text_delta", turnId: "turn-1", delta: "Part" },
-    });
-    state = reduceChatTurn(state, {
-      type: "event",
-      event: { type: "final-text", turnId: "turn-1", text: "Complete answer" },
-    });
-    expect(state.assistant).toEqual({ status: "streaming", text: "Complete answer" });
-    state = reduceChatTurn(state, { type: "success", text: "Complete answer" });
-    expect(state.assistant).toEqual({ status: "completed", text: "Complete answer" });
+  it("owns the one desktop conversation identity", () => {
+    expect(DESKTOP_CHAT_ID).toBe("desktop");
   });
 
-  it("preserves partial text as immutable aborted delivery", () => {
-    let state = createChatTurn("Continue");
-    state = reduceChatTurn(state, {
+  it("streams ordered deltas and replaces them with canonical final text", () => {
+    let state = started();
+    state = reduceChatState(state, {
       type: "event",
-      event: { type: "text_delta", turnId: "turn-1", delta: "Partial" },
+      requestKey: 1,
+      event: { type: "text_delta", turnId: "turn-1", delta: "Hel" },
     });
-    const aborted = reduceChatTurn(state, { type: "abort" });
-    expect(aborted.assistant).toEqual({ status: "aborted", text: "Partial", retryable: true });
-    expect(
-      reduceChatTurn(aborted, {
-        type: "event",
-        event: { type: "text_delta", turnId: "turn-1", delta: " late" },
-      }),
-    ).toBe(aborted);
-    expect(
-      reduceChatTurn(aborted, {
-        type: "event",
-        event: {
-          type: "error",
-          turnId: "turn-1",
-          chatId: "desktop",
-          error_class: "unknown",
-          kind: "unknown",
-          athleteMessage: "Late",
-          overflowAttempts: 0,
-          timeoutAttempts: 0,
-          rateLimitAttempts: 0,
-          duration_ms: 1,
-          compactions: 0,
-        },
-      }),
-    ).toBe(aborted);
-    expect(reduceChatTurn(aborted, { type: "success", text: "Late" })).toBe(aborted);
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 1,
+      event: { type: "text_delta", turnId: "turn-1", delta: "lo" },
+    });
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 1,
+      event: { type: "final-text", turnId: "turn-1", text: "Hello." },
+    });
+    state = reduceChatState(state, { type: "complete", requestKey: 1 });
+    expect(state.messages.at(-1)).toMatchObject({ text: "Hello.", delivery: "complete" });
   });
 
-  it("keeps protocol failure non-retryable and exposes athlete error copy", () => {
-    const protocol = reduceChatTurn(createChatTurn("Hello"), { type: "protocol-failure" });
-    expect(protocol.assistant).toEqual({
-      status: "failed",
-      message: "The coaching connection returned an invalid response.",
-    });
-    const athlete = reduceChatTurn(createChatTurn("Hello"), {
+  it("accepts optional start and retains safe contract error fields", () => {
+    let state = started();
+    state = reduceChatState(state, {
       type: "event",
+      requestKey: 1,
+      event: { type: "turn-start", turnId: "turn-1", chatId: "desktop" },
+    });
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 1,
       event: {
         type: "error",
         turnId: "turn-1",
         chatId: "desktop",
         error_class: "unknown",
-        kind: "unknown",
-        athleteMessage: "Please retry later.",
+        kind: "provider-down",
+        athleteMessage: "Please try later.",
         overflowAttempts: 0,
         timeoutAttempts: 0,
         rateLimitAttempts: 0,
@@ -74,6 +67,33 @@ describe("desktop turn state", () => {
         compactions: 0,
       },
     });
-    expect(athlete.assistant).toEqual({ status: "failed", message: "Please retry later." });
+    expect(state.activeTurn?.error).toEqual({
+      kind: "provider-down",
+      athleteMessage: "Please try later.",
+    });
+  });
+
+  it("ignores stale local request keys and preserves interrupted drafts", () => {
+    let state = started(4);
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 4,
+      event: { type: "text_delta", turnId: "turn-4", delta: "Partial" },
+    });
+    const stale = reduceChatState(state, {
+      type: "event",
+      requestKey: 3,
+      event: { type: "text_delta", turnId: "turn-3", delta: " hidden" },
+    });
+    expect(stale).toBe(state);
+    const interrupted = reduceChatState(state, {
+      type: "interrupt",
+      requestKey: 4,
+      copy: "Connection interrupted. Your partial response is preserved.",
+    });
+    expect(interrupted.messages.at(-1)).toMatchObject({
+      text: "Partial",
+      delivery: "interrupted",
+    });
   });
 });

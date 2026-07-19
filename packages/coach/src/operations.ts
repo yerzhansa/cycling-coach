@@ -1,25 +1,33 @@
 import {
   ConfigureRuntimeRpcParamsSchema,
   ConfigureRuntimeRpcResultSchema,
+  GetUnitsPreferenceRpcParamsSchema,
+  GetUnitsPreferenceRpcResultSchema,
   ImportFilesRpcParamsSchema,
   ImportFilesRpcResultSchema,
   OperationProgressEventSchema,
   SaveIntakeRpcParamsSchema,
   SaveIntakeRpcResultSchema,
+  SetUnitsPreferenceRpcParamsSchema,
+  SetUnitsPreferenceRpcResultSchema,
   SyncRpcParamsSchema,
   SyncRpcResultSchema,
   type ConfigureRuntimeRpcParams,
   type ConfigureRuntimeRpcResult,
+  type GetUnitsPreferenceRpcParams,
+  type GetUnitsPreferenceRpcResult,
   type CoachOperations,
   type ImportFilesRpcParams,
   type ImportFilesRpcResult,
   type OperationProgressEvent,
   type SaveIntakeRpcParams,
   type SaveIntakeRpcResult,
+  type SetUnitsPreferenceRpcParams,
+  type SetUnitsPreferenceRpcResult,
   type SyncRpcParams,
   type SyncRpcResult,
 } from "@enduragent/coach-contract";
-import { createIntakeRepository } from "@enduragent/kernel/store";
+import { createIntakeRepository, createUnitsPreferenceRepository } from "@enduragent/kernel/store";
 import {
   createAuthoredIdentity,
   type AthleteHome,
@@ -29,6 +37,7 @@ import { importFilesWithReport } from "@enduragent/kernel-node/ingest";
 import { runIntervalsBackfillInWriter } from "./backfill.js";
 import type { LocalStoreRuntime } from "./composition.js";
 import type { CoachStoreWriterContext } from "./runtime.js";
+import { createUnitsPreferenceService } from "./units-preference.js";
 
 export interface CreateCoachOperationsInput {
   readonly home: AthleteHome;
@@ -68,6 +77,7 @@ export function createCoachOperations(
   const archiveDir = input.home.archiveDir;
   const identity = (dependencies.createIdentity ?? createAuthoredIdentity)(input.home.configDir);
   const intake = (dependencies.createIntakeRepository ?? createIntakeRepository)(store);
+  const unitsPreference = createUnitsPreferenceService(createUnitsPreferenceRepository(store));
   const importFiles = dependencies.importFiles ?? importFilesWithReport;
   const backfill = dependencies.backfill ?? runIntervalsBackfillInWriter;
   let tail = Promise.resolve();
@@ -173,6 +183,18 @@ export function createCoachOperations(
           },
         });
       });
+    },
+    getUnitsPreference(request: GetUnitsPreferenceRpcParams): Promise<GetUnitsPreferenceRpcResult> {
+      GetUnitsPreferenceRpcParamsSchema.parse(request);
+      return enqueue(async () =>
+        GetUnitsPreferenceRpcResultSchema.parse(await unitsPreference.get()),
+      );
+    },
+    setUnitsPreference(request: SetUnitsPreferenceRpcParams): Promise<SetUnitsPreferenceRpcResult> {
+      const parsedRequest = SetUnitsPreferenceRpcParamsSchema.parse(request);
+      return enqueue(async () =>
+        SetUnitsPreferenceRpcResultSchema.parse(await unitsPreference.set(parsedRequest.value)),
+      );
     },
   };
 }

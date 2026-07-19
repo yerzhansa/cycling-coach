@@ -570,4 +570,73 @@ describe("coach operations", () => {
       expect(serializedResults).not.toContain(value);
     }
   });
+
+  it("serializes persisted units reads and writes through the same operation FIFO", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "coach-units-"));
+    const liveHome: AthleteHome = {
+      root,
+      storeDir: join(root, "store"),
+      archiveDir: join(root, "archive"),
+      configDir: join(root, "config"),
+    };
+    const store = openSqliteStorage(join(root, "coach.db"));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const order: string[] = [];
+    try {
+      await runMigrations(store, MIGRATIONS);
+      const operations = createCoachOperations({
+        home: liveHome,
+        context: {
+          home: liveHome,
+          store,
+          listener: {} as CoachStoreWriterContext["listener"],
+        },
+        runtime: {
+          async runWindowAfter(work) {
+            order.push("sync-start");
+            await gate;
+            await work(new AbortController().signal);
+            order.push("sync-end");
+            return {
+              published: true,
+              legacySucceeded: true,
+              counts: requestCounts(0, 0),
+            };
+          },
+        },
+        intervalsCredentials: intervalsCredentials(),
+        historyNewestDate: "1998-07-18",
+        applyRuntimeConfig: async () => {},
+      });
+      const sync = operations.sync({});
+      const write = operations.setUnitsPreference!({ value: "imperial" }).then((result) => {
+        order.push("write");
+        return result;
+      });
+      const read = operations.getUnitsPreference!({}).then((result) => {
+        order.push("read");
+        return result;
+      });
+      await Promise.resolve();
+      expect(order).toEqual(["sync-start"]);
+      release();
+      await expect(sync).resolves.toMatchObject({ schemaVersion: 1 });
+      await expect(write).resolves.toEqual({ value: "imperial", source: "cycling" });
+      await expect(read).resolves.toEqual({ value: "imperial", source: "cycling" });
+      expect(order).toEqual(["sync-start", "sync-end", "write", "read"]);
+      await expect(
+        store.get("SELECT preferred_units, device_id FROM sport_settings"),
+      ).resolves.toMatchObject({
+        preferred_units: "imperial",
+        device_id: expect.stringMatching(/^desktop:[0-9A-HJKMNP-TV-Z]{26}$/u),
+      });
+    } finally {
+      release();
+      await store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

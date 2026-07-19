@@ -3,6 +3,172 @@ import { z } from "zod";
 export const FreshnessSchema = z.enum(["fresh", "flag", "stale", "critical"]);
 export type Freshness = z.infer<typeof FreshnessSchema>;
 
+export const TrainingContextUnknownReasonSchema = z.enum([
+  "not-synced",
+  "missing-anchor",
+  "no-platform-load",
+  "no-plan",
+  "insufficient-data",
+  "no-wellness",
+]);
+
+export const CyclingAnchorSchema = z
+  .object({
+    watts: z.number().positive(),
+    validFrom: z.string().min(1),
+    source: z.string().min(1),
+    confidence: z.enum(["manual", "platform", "fit"]),
+    ageDays: z.number().nonnegative(),
+    stalenessBand: z.enum(["fresh", "aging", "stale", "very-stale"]),
+    stale: z.boolean(),
+  })
+  .strict();
+
+export const CyclingZoneRowSchema = z
+  .object({
+    name: z.string().min(1),
+    range: z.string().min(1),
+    overlaps: z.boolean(),
+  })
+  .strict();
+
+export const AnchorZonesPanelSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("computed"),
+      asOf: z.string().min(1),
+      anchor: CyclingAnchorSchema,
+      zones: z.array(CyclingZoneRowSchema).length(6),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("unknown"),
+      reason: z.enum(["not-synced", "missing-anchor"]),
+    })
+    .strict(),
+]);
+
+export const CyclingLoadPanelSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("computed"),
+      asOf: z.string().min(1),
+      source: z.literal("intervals.icu"),
+      windowDays: z.literal(7),
+      value: z.number().nonnegative(),
+      activityCount: z.number().int().nonnegative(),
+      missingLoadCount: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("unknown"),
+      reason: z.enum(["not-synced", "no-platform-load"]),
+    })
+    .strict(),
+]);
+
+export const PlanItemSchema = z
+  .object({
+    id: z.string().min(1),
+    date: z.string().min(1),
+    name: z.string().nullable(),
+    category: z.string().min(1),
+    workoutType: z.string().min(1),
+  })
+  .strict();
+
+export const PlanPanelSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("computed"),
+      asOf: z.string().min(1),
+      items: z.array(PlanItemSchema).max(7),
+    })
+    .strict(),
+  z.object({ kind: z.literal("unknown"), reason: z.enum(["not-synced", "no-plan"]) }).strict(),
+]);
+
+export const AdherencePanelSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("computed"),
+      asOf: z.string().min(1),
+      ratio: z.number().min(0).max(1),
+      plannedDays: z.number().int().nonnegative(),
+      completedDays: z.number().int().nonnegative(),
+      matchedDays: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("unknown"),
+      reason: z.enum(["not-synced", "no-plan", "insufficient-data"]),
+    })
+    .strict(),
+]);
+
+export const WellnessPointSchema = z
+  .object({ date: z.string().min(1), value: z.number() })
+  .strict();
+
+export const WellnessSeriesSchema = z
+  .object({
+    metric: z.enum(["hrv", "sleep", "resting-hr"]),
+    unit: z.enum(["ms", "seconds", "bpm"]),
+    points: z.array(WellnessPointSchema).max(7),
+  })
+  .strict();
+
+export const WellnessTrendPanelSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("computed"),
+      asOf: z.string().min(1),
+      windowDays: z.literal(7),
+      series: z.array(WellnessSeriesSchema).length(3),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("unknown"),
+      reason: z.enum(["not-synced", "no-wellness", "insufficient-data"]),
+    })
+    .strict(),
+]);
+
+export const CyclingTrainingContextSchema = z
+  .object({
+    anchorZones: AnchorZonesPanelSchema,
+    cyclingLoad: CyclingLoadPanelSchema,
+    plan: PlanPanelSchema,
+    adherence: AdherencePanelSchema,
+    wellnessTrend: WellnessTrendPanelSchema,
+  })
+  .strict();
+
+export type TrainingContextUnknownReason = z.infer<typeof TrainingContextUnknownReasonSchema>;
+export type CyclingAnchor = z.infer<typeof CyclingAnchorSchema>;
+export type CyclingZoneRow = z.infer<typeof CyclingZoneRowSchema>;
+export type AnchorZonesPanel = z.infer<typeof AnchorZonesPanelSchema>;
+export type CyclingLoadPanel = z.infer<typeof CyclingLoadPanelSchema>;
+export type PlanItem = z.infer<typeof PlanItemSchema>;
+export type PlanPanel = z.infer<typeof PlanPanelSchema>;
+export type AdherencePanel = z.infer<typeof AdherencePanelSchema>;
+export type WellnessPoint = z.infer<typeof WellnessPointSchema>;
+export type WellnessSeries = z.infer<typeof WellnessSeriesSchema>;
+export type WellnessTrendPanel = z.infer<typeof WellnessTrendPanelSchema>;
+export type CyclingTrainingContext = z.infer<typeof CyclingTrainingContextSchema>;
+
+export const UNKNOWN_CYCLING_TRAINING_CONTEXT: CyclingTrainingContext = {
+  anchorZones: { kind: "unknown", reason: "not-synced" },
+  cyclingLoad: { kind: "unknown", reason: "not-synced" },
+  plan: { kind: "unknown", reason: "not-synced" },
+  adherence: { kind: "unknown", reason: "not-synced" },
+  wellnessTrend: { kind: "unknown", reason: "not-synced" },
+};
+
 export const AthleteDerivedMetricsSchema = z
   .object({
     // Fenced from surface rendering: raw workload-ratio value must not
@@ -84,6 +250,7 @@ export const AthleteStateSchema = z
     recentActivities: z.array(z.unknown()),
     plannedWorkouts: z.array(z.unknown()),
     wellness: z.unknown(),
+    trainingContext: CyclingTrainingContextSchema.optional(),
   })
   .strict();
 export type AthleteState = z.infer<typeof AthleteStateSchema>;
