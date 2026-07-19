@@ -16,6 +16,7 @@ import { resolveAthleteHome } from "@enduragent/kernel-node/home";
 import { runEnduragent, type EnduragentDependencies } from "../src/enduragent.js";
 import type { WithLocalCoachInput } from "../src/local-runner.js";
 import { withCoachStoreWriter } from "../src/runtime.js";
+import type { SpendMeterService } from "../src/spend-meter.js";
 
 const API_KEY_SECRET = "F8_LOCAL_API_KEY_MUST_NOT_ESCAPE";
 const MESSAGE_SECRET = "F8_LOCAL_MESSAGE_MUST_NOT_ESCAPE";
@@ -39,6 +40,15 @@ const state: AthleteState = {
   recentActivities: [],
   plannedWorkouts: [],
   wellness: {},
+};
+
+const spendMeter: SpendMeterService = {
+  getSpendSummary: async () => {
+    throw new Error("unused spend meter");
+  },
+  setDailySpendCap: async () => {
+    throw new Error("unused spend meter");
+  },
 };
 
 afterEach(async () => {
@@ -152,6 +162,7 @@ describe.skipIf(!hasLoopback)("local CLI redaction boundary", () => {
               applied: { llm: llm !== undefined, intervals: intervals !== undefined },
             }),
           },
+          spendMeter,
           listener: context.listener,
           close: async () => {},
         }),

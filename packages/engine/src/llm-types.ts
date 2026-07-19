@@ -16,7 +16,13 @@ export function usageFieldsFromResult(
   result: GenerateResult,
 ): Pick<
   UsageLedgerLine,
-  "inputTokens" | "outputTokens" | "totalTokens" | "cacheReadTokens" | "cacheWriteTokens" | "cost"
+  | "inputTokens"
+  | "outputTokens"
+  | "totalTokens"
+  | "cacheReadTokens"
+  | "cacheWriteTokens"
+  | "providerReportedCostUsd"
+  | "cost"
 > {
   const usage = result.totalUsage;
   const details = cacheTokenDetails(usage);
@@ -26,6 +32,7 @@ export function usageFieldsFromResult(
     totalTokens: usage?.totalTokens,
     cacheReadTokens: details?.cacheReadTokens,
     cacheWriteTokens: details?.cacheWriteTokens,
+    providerReportedCostUsd: result.providerReportedCostUsd,
     cost: result.cost,
   };
 }

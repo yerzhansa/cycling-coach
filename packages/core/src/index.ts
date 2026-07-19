@@ -43,7 +43,14 @@ export type { BootstrapReferenceDeps, ReferenceRuntime } from "./reference/runti
 export { wrapFetchWithSignal } from "./reference/sync/intervals-client-factory.js";
 export { makeChatClient } from "./reference/sync/intervals-client-factory.js";
 
-export { appendUsageLine, USAGE_LEDGER_FILE, USAGE_LEDGER_MAX_BYTES } from "./usage-ledger.js";
+export {
+  appendUsageLine,
+  readUsageLedger,
+  USAGE_LEDGER_FILE,
+  USAGE_LEDGER_MAX_BYTES,
+  type UsageLedgerReadResult,
+} from "./usage-ledger.js";
+export { atomicWriteJson } from "./io/atomic-write-json.js";
 
 // ─── Logging substrate ────────────────────────────────────────────────
 export {
@@ -63,12 +70,7 @@ export { Memory } from "./memory/store.js";
 export type { MemoryJournalEntry } from "./memory/journal.js";
 
 // ─── Secrets ──────────────────────────────────────────────────────────
-export type {
-  EnvSecretRef,
-  ExecSecretRef,
-  SecretRef,
-  SecretsResolver,
-} from "./secrets/types.js";
+export type { EnvSecretRef, ExecSecretRef, SecretRef, SecretsResolver } from "./secrets/types.js";
 export { SecretResolutionError, isSecretRef } from "./secrets/types.js";
 export { resolveSecretRef, _resolveSecretRefWithOverrides } from "./secrets/resolve.js";
 export {
@@ -76,11 +78,7 @@ export {
   _detectBackendsWithOverrides,
   findInPath,
 } from "./secrets/backends/detect.js";
-export type {
-  BackendAvailability,
-  KeychainState,
-  OpState,
-} from "./secrets/backends/detect.js";
+export type { BackendAvailability, KeychainState, OpState } from "./secrets/backends/detect.js";
 export {
   KeychainUnsafeValueError,
   KeychainUnsupportedPlatformError,
@@ -161,10 +159,7 @@ export type {
   PlatformCalendarMutations,
   StoredDataFreshness,
 } from "./athlete-data.js";
-export {
-  loadAllowedSendersWithSource,
-  SENDER_ID_RE,
-} from "./channels/allowed-senders.js";
+export { loadAllowedSendersWithSource, SENDER_ID_RE } from "./channels/allowed-senders.js";
 
 // ─── Updater ──────────────────────────────────────────────────────────
 export {

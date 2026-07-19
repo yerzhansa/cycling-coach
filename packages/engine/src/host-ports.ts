@@ -40,12 +40,7 @@ export interface EngineConfig {
   readonly compactContextWindowTokens: number;
 }
 
-export type MemoryWriteSource =
-  | "chat-tool"
-  | "flush"
-  | "sport-tool"
-  | "migration"
-  | "unattributed";
+export type MemoryWriteSource = "chat-tool" | "flush" | "sport-tool" | "migration" | "unattributed";
 
 export interface MemoryStorePort {
   readMemory(): string;
@@ -126,33 +121,17 @@ export type AthleteReadResult<T> =
   | { readonly ok: true; readonly value: T; readonly freshness?: StoredDataFreshness }
   | {
       readonly ok: false;
-      readonly error:
-        | "not_found"
-        | "store_read_unavailable"
-        | "invalid_snapshot"
-        | "invalid_input";
+      readonly error: "not_found" | "store_read_unavailable" | "invalid_snapshot" | "invalid_input";
       readonly message: string;
     };
 
 export interface AthleteDataReaderPort {
   getAthlete(): Promise<AthleteReadResult<unknown>>;
-  listWellness(input: {
-    start: string;
-    end?: string;
-  }): Promise<AthleteReadResult<unknown[]>>;
-  listActivities(input: {
-    start: string;
-    end?: string;
-  }): Promise<AthleteReadResult<unknown[]>>;
+  listWellness(input: { start: string; end?: string }): Promise<AthleteReadResult<unknown[]>>;
+  listActivities(input: { start: string; end?: string }): Promise<AthleteReadResult<unknown[]>>;
   getActivity(input: { id: string }): Promise<AthleteReadResult<unknown>>;
-  getStreams(input: {
-    id: string;
-    keys: readonly string[];
-  }): Promise<AthleteReadResult<unknown>>;
-  listCalendar(input: {
-    start: string;
-    end?: string;
-  }): Promise<AthleteReadResult<unknown[]>>;
+  getStreams(input: { id: string; keys: readonly string[] }): Promise<AthleteReadResult<unknown>>;
+  listCalendar(input: { start: string; end?: string }): Promise<AthleteReadResult<unknown[]>>;
   freshness(): StoredDataFreshness | undefined;
 }
 
@@ -206,6 +185,7 @@ export interface UsageLedgerLine {
   readonly totalTokens?: number;
   readonly cacheReadTokens?: number;
   readonly cacheWriteTokens?: number;
+  readonly providerReportedCostUsd?: number;
   readonly cost?: UsageCost;
   readonly stopReason?: string;
 }

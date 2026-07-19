@@ -117,9 +117,7 @@ export class LLM {
         ? createChatStreamWatchdog(this.chatStreamTimeouts)
         : undefined;
     const signal =
-      watchdog === undefined
-        ? deadlineSignal
-        : AbortSignal.any([deadlineSignal, watchdog.signal]);
+      watchdog === undefined ? deadlineSignal : AbortSignal.any([deadlineSignal, watchdog.signal]);
     const handleTextDelta = (delta: string): void => {
       watchdog?.textDelta(delta);
       try {
@@ -202,10 +200,24 @@ export class LLM {
       const blocks = splitSystemPromptAtBoundary(opts.system);
       system = blocks
         ? [
-            { role: "system" as const, content: blocks.prefix, providerOptions: ephemeral(breakpointKey) },
-            { role: "system" as const, content: blocks.volatile, providerOptions: ephemeral(breakpointKey) },
+            {
+              role: "system" as const,
+              content: blocks.prefix,
+              providerOptions: ephemeral(breakpointKey),
+            },
+            {
+              role: "system" as const,
+              content: blocks.volatile,
+              providerOptions: ephemeral(breakpointKey),
+            },
           ]
-        : [{ role: "system" as const, content: opts.system, providerOptions: ephemeral(breakpointKey) }];
+        : [
+            {
+              role: "system" as const,
+              content: opts.system,
+              providerOptions: ephemeral(breakpointKey),
+            },
+          ];
     }
 
     // Message-level breakpoint on the last message so a multi-step tool turn
@@ -217,7 +229,10 @@ export class LLM {
       const last = messages[messages.length - 1];
       messages = [
         ...messages.slice(0, -1),
-        { ...last, providerOptions: { ...last.providerOptions, ...ephemeral(breakpointKey) } } as ModelMessage,
+        {
+          ...last,
+          providerOptions: { ...last.providerOptions, ...ephemeral(breakpointKey) },
+        } as ModelMessage,
       ];
     }
 
@@ -232,9 +247,10 @@ export class LLM {
       experimental_context: opts.context,
     };
     if (opts.caller === "chat") {
-      const result = opts.prompt !== undefined
-        ? streamText({ ...base, prompt: opts.prompt })
-        : streamText({ ...base, messages });
+      const result =
+        opts.prompt !== undefined
+          ? streamText({ ...base, prompt: opts.prompt })
+          : streamText({ ...base, messages });
       for await (const part of result.fullStream) {
         switch (part.type) {
           case "text-delta":
@@ -283,6 +299,10 @@ export class LLM {
         usage,
         totalUsage,
         steps: steps.length,
+        providerReportedCostUsd:
+          this.config.llm.provider === "openrouter"
+            ? providerReportedCostFromSteps(steps)
+            : undefined,
         cost: priceAiSdkUsage(
           this.config.llm.provider,
           this.config.llm.model,
@@ -292,9 +312,10 @@ export class LLM {
       };
     }
 
-    const result = opts.prompt !== undefined
-      ? await generateText({ ...base, prompt: opts.prompt })
-      : await generateText({ ...base, messages });
+    const result =
+      opts.prompt !== undefined
+        ? await generateText({ ...base, prompt: opts.prompt })
+        : await generateText({ ...base, messages });
 
     return {
       text: result.text,
@@ -303,7 +324,16 @@ export class LLM {
       usage: result.usage,
       totalUsage: result.totalUsage,
       steps: result.steps.length,
-      cost: priceAiSdkUsage(this.config.llm.provider, this.config.llm.model, this.priced, result.totalUsage),
+      providerReportedCostUsd:
+        this.config.llm.provider === "openrouter"
+          ? providerReportedCostFromSteps(result.steps)
+          : undefined,
+      cost: priceAiSdkUsage(
+        this.config.llm.provider,
+        this.config.llm.model,
+        this.priced,
+        result.totalUsage,
+      ),
     };
   }
 
@@ -416,6 +446,33 @@ function notifyStreamActivity(
   try {
     observer?.(activity);
   } catch {}
+}
+
+function providerReportedCostFromSteps(steps: readonly unknown[]): number | undefined {
+  if (steps.length === 0) return undefined;
+  let total = 0;
+  for (const step of steps) {
+    if (step === null || typeof step !== "object" || Array.isArray(step)) return undefined;
+    const providerMetadata = (step as { readonly providerMetadata?: unknown }).providerMetadata;
+    if (
+      providerMetadata === null ||
+      typeof providerMetadata !== "object" ||
+      Array.isArray(providerMetadata)
+    ) {
+      return undefined;
+    }
+    const openrouter = (providerMetadata as Record<string, unknown>).openrouter;
+    if (openrouter === null || typeof openrouter !== "object" || Array.isArray(openrouter)) {
+      return undefined;
+    }
+    const usage = (openrouter as Record<string, unknown>).usage;
+    if (usage === null || typeof usage !== "object" || Array.isArray(usage)) return undefined;
+    const cost = (usage as Record<string, unknown>).cost;
+    if (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0) return undefined;
+    total += cost;
+    if (!Number.isFinite(total)) return undefined;
+  }
+  return total;
 }
 
 // The AI SDK reports token usage but no cost, so derive it from the vendored
@@ -542,7 +599,7 @@ function buildAiSdkModel(config: EngineConfig): LanguageModel {
         apiKey: config.llm.apiKey,
         baseURL: config.llm.baseUrl,
       });
-      return openrouter.chat(config.llm.model);
+      return openrouter.chat(config.llm.model, { usage: { include: true } });
     }
     case "openai-codex":
       throw new Error("openai-codex is handled via the bridge, not AI SDK");

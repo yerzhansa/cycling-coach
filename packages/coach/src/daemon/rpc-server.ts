@@ -22,7 +22,10 @@ import {
   type CoachOperations,
   type CoachRpcMethodName,
   type DaemonOwner,
+  type GetSpendSummaryRpcParams,
   type JsonRpcId,
+  type SetDailySpendCapRpcParams,
+  type SpendSummary,
 } from "@enduragent/coach-contract";
 import type { WriterProtocolHandlers } from "@enduragent/kernel-node/lock";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
@@ -137,10 +140,16 @@ export async function ensureDaemonToken(
 export interface CoachRpcServerInput {
   readonly engine: CoachEngine;
   readonly operations: CoachOperations;
+  readonly spend: SpendRpcHandlers;
   readonly token: string;
   readonly owner: DaemonOwner;
   readonly healthState?: DaemonHealthState;
   readonly timer?: MonotonicTimer;
+}
+
+export interface SpendRpcHandlers {
+  readonly getSpendSummary: (params: GetSpendSummaryRpcParams) => Promise<SpendSummary>;
+  readonly setDailySpendCap: (params: SetDailySpendCapRpcParams) => Promise<SpendSummary>;
 }
 
 export interface CoachRpcServer {
@@ -722,6 +731,26 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                 throw new TypeError("Units preference operation is unavailable.");
               }
               result = await input.operations.setUnitsPreference(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "getSpendSummary":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.getSpendSummary.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.spend.getSpendSummary(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "setDailySpendCap":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.setDailySpendCap.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.spend.setDailySpendCap(request);
             } catch (error) {
               invocationFailure = { error };
             }

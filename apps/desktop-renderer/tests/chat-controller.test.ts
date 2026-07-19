@@ -71,9 +71,11 @@ function subject(
   first: CoachClient,
   reconnected: CoachClient = first,
   refreshImplementation: () => Promise<void> = async () => {},
+  spendRefreshImplementation: () => Promise<void> = async () => {},
 ) {
   const states: ChatState[] = [];
   const refresh = vi.fn(refreshImplementation);
+  const refreshSpend = vi.fn(spendRefreshImplementation);
   const provider: DesktopCoachClientProvider = {
     getClient: vi.fn(async () => first),
     reconnect: vi.fn(async () => reconnected),
@@ -83,11 +85,29 @@ function subject(
     clients: provider,
     view: { render: (state) => states.push(structuredClone(state)) },
     refreshTrainingContext: refresh,
+    refreshSpend,
   });
-  return { controller, provider, states, refresh };
+  return { controller, provider, states, refresh, refreshSpend };
 }
 
 describe("chat controller", () => {
+  it("does not wait for spend refresh before settling a completed chat", async () => {
+    const gate = new Promise<void>(() => {});
+    const fake = client(async (_request, options) => {
+      deliver(options, { type: "final-text", turnId: "turn-1", text: "Done" });
+      options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: { text: "Done" } });
+      return { text: "Done" };
+    });
+    const { controller, refreshSpend } = subject(
+      fake,
+      fake,
+      async () => {},
+      () => gate,
+    );
+    await expect(controller.submit("Continue")).resolves.toBeUndefined();
+    expect(refreshSpend).toHaveBeenCalledTimes(1);
+  });
+
   it("renders ordered deltas immediately and canonical final text once without turn-start", async () => {
     const fake = client(async (_request, options) => {
       deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Hel" });
@@ -96,7 +116,7 @@ describe("chat controller", () => {
       options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: { text: "Hello." } });
       return { text: "Hello." };
     });
-    const { controller, states, refresh } = subject(fake);
+    const { controller, states, refresh, refreshSpend } = subject(fake);
     await controller.submit("Original message ");
     expect(states.some((state) => state.messages.at(-1)?.text === "Hel")).toBe(true);
     expect(states.at(-1)?.messages.filter((message) => message.text === "Hello.")).toHaveLength(1);
@@ -105,6 +125,7 @@ describe("chat controller", () => {
       { chatId: "desktop", message: "Original message " },
     ]);
     expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refreshSpend).toHaveBeenCalledTimes(1);
   });
 
   it("preserves partial text and the contract athlete message without automatic retry", async () => {
@@ -220,6 +241,7 @@ describe("chat controller", () => {
       clients: provider,
       view: { render: (state) => states.push(structuredClone(state)) },
       refreshTrainingContext: vi.fn(async () => {}),
+      refreshSpend: vi.fn(async () => {}),
     });
     await controller.submit("Same message");
     await controller.retryInterrupted();
@@ -263,6 +285,7 @@ describe("chat controller", () => {
         refreshCalls += 1;
         if (refreshCalls === 1) await refreshGate;
       }),
+      refreshSpend: vi.fn(async () => {}),
     });
     const submission = controller.submit("Same message");
     await interruptedState;

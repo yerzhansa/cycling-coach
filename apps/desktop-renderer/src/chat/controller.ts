@@ -29,6 +29,7 @@ export function createChatController(input: {
   readonly clients: DesktopCoachClientProvider;
   readonly view: ChatView;
   readonly refreshTrainingContext: () => Promise<void>;
+  readonly refreshSpend: () => Promise<void>;
 }): ChatController {
   let state = EMPTY_CHAT_STATE;
   let sequence = 0;
@@ -178,6 +179,9 @@ export function createChatController(input: {
         }
       } finally {
         if (callStarted) {
+          try {
+            void input.refreshSpend().catch(() => {});
+          } catch {}
           try {
             await input.refreshTrainingContext();
           } catch {}

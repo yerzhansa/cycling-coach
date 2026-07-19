@@ -362,6 +362,10 @@ describe("local coach composition", () => {
     expect(received?.ports.platform.legacyClient).toBeNull();
     expect(received?.ports.platform.athleteData).toBe(selectedRuntime.athleteData);
     expect(received?.ports.config).toEqual(engineConfigFromConfig(config(home)));
+    await expect(lifecycle.spendMeter.getSpendSummary()).resolves.toMatchObject({
+      timezone: "UTC",
+      dailyCapUsd: 0.5,
+    });
     await lifecycle.close();
   });
 

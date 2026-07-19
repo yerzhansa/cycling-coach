@@ -1,4 +1,4 @@
-import { appendFileSync, renameSync, statSync } from "node:fs";
+import { appendFileSync, readFileSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import type { UsageLedgerLine } from "@enduragent/engine";
@@ -6,6 +6,41 @@ export type { UsageLedgerLine } from "@enduragent/engine";
 
 export const USAGE_LEDGER_FILE = "usage-ledger.jsonl";
 export const USAGE_LEDGER_MAX_BYTES = 10 * 1024 * 1024;
+
+export interface UsageLedgerReadResult {
+  readonly lines: readonly UsageLedgerLine[];
+  readonly malformedLineCount: number;
+}
+
+export function readUsageLedger(dataDir: string): UsageLedgerReadResult {
+  const livePath = join(dataDir, USAGE_LEDGER_FILE);
+  const lines: UsageLedgerLine[] = [];
+  let malformedLineCount = 0;
+  for (const path of [`${livePath}.1`, livePath]) {
+    let raw: string;
+    try {
+      raw = readFileSync(path, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") malformedLineCount += 1;
+      continue;
+    }
+    const records = raw.split("\n");
+    if (records.at(-1) === "") records.pop();
+    for (const record of records) {
+      try {
+        const value = JSON.parse(record) as unknown;
+        if (value === null || typeof value !== "object" || Array.isArray(value)) {
+          malformedLineCount += 1;
+        } else {
+          lines.push(value as UsageLedgerLine);
+        }
+      } catch {
+        malformedLineCount += 1;
+      }
+    }
+  }
+  return { lines, malformedLineCount };
+}
 
 export function appendUsageLine(dataDir: string, line: UsageLedgerLine): void {
   // Best-effort observability sink: a ledger write must never break a chat

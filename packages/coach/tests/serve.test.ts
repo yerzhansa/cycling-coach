@@ -5,6 +5,7 @@ import {
   type AthleteState,
   type CoachEngine,
   type CoachOperations,
+  type SpendSummary,
 } from "@enduragent/coach-contract";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import type {
@@ -76,6 +77,23 @@ const operations: CoachOperations = {
   }),
 };
 
+const spendSummary = {
+  localDate: "1998-07-06",
+  timezone: "UTC",
+  dailyCapUsd: 0.5,
+  knownSpendUsd: 0,
+  generationCount: 0,
+  pricedGenerationCount: 0,
+  unpricedGenerationCount: 0,
+  malformedLineCount: 0,
+  spendComplete: true,
+  capStatus: "below",
+  cacheReadTokens: 0,
+  knownCacheReadSavingsUsd: 0,
+  cacheSavingsComplete: true,
+  routes: [],
+} satisfies SpendSummary;
+
 const home: AthleteHome = {
   root: "/synthetic/athlete",
   storeDir: "/synthetic/athlete/store",
@@ -111,6 +129,10 @@ function harness(
   const lifecycle: LocalCoachLifecycle = {
     engine,
     operations,
+    spendMeter: {
+      getSpendSummary: vi.fn(async () => spendSummary),
+      setDailySpendCap: vi.fn(async () => spendSummary),
+    },
     listener,
     async close() {
       trace.push("lifecycle-close");

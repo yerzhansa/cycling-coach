@@ -2,6 +2,7 @@ import type { ChatView } from "./controller.js";
 
 export interface MountedChatView {
   readonly view: ChatView;
+  readonly noticeHost: HTMLElement;
   bind(input: { readonly onSubmit: (message: string) => void; readonly onRetry: () => void }): void;
   dispose(): void;
 }
@@ -32,6 +33,8 @@ export function mountChatView(input: {
   input.composerHost.replaceChildren();
   const form = document.createElement("form");
   form.className = "composer";
+  const noticeHost = document.createElement("div");
+  noticeHost.className = "chat-notice-host";
   const label = document.createElement("label");
   label.className = "chat-composer__label";
   label.htmlFor = "message";
@@ -47,7 +50,7 @@ export function mountChatView(input: {
   submit.textContent = "↑";
   controls.append(textarea, submit);
   form.append(label, controls);
-  input.composerHost.append(form);
+  input.composerHost.append(noticeHost, form);
 
   let handlers:
     | { readonly onSubmit: (message: string) => void; readonly onRetry: () => void }
@@ -74,6 +77,7 @@ export function mountChatView(input: {
   retry.addEventListener("click", onRetry);
 
   return {
+    noticeHost,
     view: {
       render(state) {
         if (disposed) return;
@@ -117,6 +121,7 @@ export function mountChatView(input: {
       form.removeEventListener("submit", onSubmit);
       textarea.removeEventListener("keydown", onKeydown);
       retry.removeEventListener("click", onRetry);
+      noticeHost.remove();
     },
   };
 }

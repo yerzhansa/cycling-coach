@@ -1,0 +1,143 @@
+.spend-meter {
+  position: relative;
+  min-width: 132px;
+}
+
+.spend-meter__details > summary {
+  display: grid;
+  gap: 5px;
+  min-width: 132px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.spend-meter__details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.spend-copy {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.spend-copy strong {
+  margin: 0;
+}
+
+.meter-track {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.meter-fill {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--moss);
+  transition: width 180ms ease;
+}
+
+.spend-meter[data-cap-status="reached"] .meter-fill {
+  background: var(--coral);
+}
+
+.spend-disclosure {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 12px);
+  right: 0;
+  width: 360px;
+  max-height: min(620px, calc(100vh - 84px));
+  padding: 18px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-solid);
+  box-shadow: 0 18px 50px color-mix(in srgb, var(--ink) 16%, transparent);
+}
+
+.spend-disclosure__day,
+.spend-route__heading {
+  margin: 0;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.spend-disclosure__messages p,
+.spend-route p {
+  margin: 6px 0 0;
+  line-height: 1.45;
+}
+
+.spend-route {
+  padding: 13px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.spend-route__caching,
+.spend-route__cache,
+.spend-disclosure__messages {
+  color: var(--muted);
+}
+
+.spend-cap-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  margin-top: 16px;
+}
+
+.spend-cap-editor label,
+.spend-cap-editor__error {
+  grid-column: 1 / -1;
+}
+
+.spend-cap-editor input,
+.spend-cap-editor button {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.spend-cap-editor__error {
+  margin: 0;
+  color: var(--coral);
+}
+
+.chat-notice-host:empty {
+  display: none;
+}
+
+#spend-cap-warning {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--coral);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--surface-soft);
+}
+
+@media (max-width: 720px) {
+  .spend-disclosure {
+    width: min(360px, calc(100vw - 28px));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meter-fill {
+    transition-duration: 0.01ms;
+  }
+}

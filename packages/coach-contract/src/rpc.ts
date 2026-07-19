@@ -10,6 +10,12 @@ import {
   type CoachEngine,
 } from "./engine.js";
 import { TurnEventSchema } from "./turn-event.js";
+import {
+  GetSpendSummaryRpcParamsSchema,
+  SetDailySpendCapRpcParamsSchema,
+  SpendSummarySchema,
+  type SpendOperations,
+} from "./spend.js";
 
 export const JsonValueSchema = z.json();
 export type JsonValue = z.infer<typeof JsonValueSchema>;
@@ -112,6 +118,8 @@ export const COACH_RPC_METHOD_NAMES = [
   "configureRuntime",
   "getUnitsPreference",
   "setUnitsPreference",
+  "getSpendSummary",
+  "setDailySpendCap",
 ] as const satisfies readonly (keyof CoachRpcService)[];
 
 export const CoachRpcMethodNameSchema = z.enum(COACH_RPC_METHOD_NAMES);
@@ -362,7 +370,7 @@ export interface CoachOperations {
   setUnitsPreference?(request: SetUnitsPreferenceRpcParams): Promise<SetUnitsPreferenceRpcResult>;
 }
 
-export type CoachRpcService = CoachEngine & CoachOperations;
+export type CoachRpcService = CoachEngine & CoachOperations & SpendOperations;
 
 export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
   z
@@ -443,6 +451,22 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("setUnitsPreference"),
       params: SetUnitsPreferenceRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("getSpendSummary"),
+      params: GetSpendSummaryRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("setDailySpendCap"),
+      params: SetDailySpendCapRpcParamsSchema,
     })
     .strict(),
 ]);
@@ -588,6 +612,18 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "setUnitsPreference",
     requestSchema: SetUnitsPreferenceRpcParamsSchema,
     responseSchema: SetUnitsPreferenceRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  getSpendSummary: {
+    wireName: "getSpendSummary",
+    requestSchema: GetSpendSummaryRpcParamsSchema,
+    responseSchema: SpendSummarySchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  setDailySpendCap: {
+    wireName: "setDailySpendCap",
+    requestSchema: SetDailySpendCapRpcParamsSchema,
+    responseSchema: SpendSummarySchema,
     eventSchema: NoRpcEventSchema,
   },
 } as const satisfies CoachRpcMethodRegistryShape;

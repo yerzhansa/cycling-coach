@@ -163,6 +163,10 @@ describe.skipIf(!hasLoopback)("production peer observations", () => {
           applied: { llm: llm !== undefined, intervals: intervals !== undefined },
         }),
       },
+      spend: {
+        getSpendSummary: () => Promise.reject(new Error("Spend handler is not used.")),
+        setDailySpendCap: () => Promise.reject(new Error("Spend handler is not used.")),
+      },
       engine: {
         chat: async () => ({ text: "ok" }),
         resetSession: async () => ({ memoryFlushed: true }),

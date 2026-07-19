@@ -33,8 +33,11 @@ describe("engine scaffold", () => {
 
   it("exports only the canonical factory and authorized account-id helper at runtime", async () => {
     expect(Object.keys(await import("@enduragent/engine")).sort()).toEqual([
+      "cacheReadSavingsUsd",
+      "classifySpendCaching",
       "createCoachEngine",
       "extractAccountId",
+      "priceInclusiveUsage",
     ]);
   });
 
