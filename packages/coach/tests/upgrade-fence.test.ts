@@ -35,6 +35,11 @@ async function configDir(): Promise<string> {
 
 class FakeTimer implements MonotonicTimer {
   private now = 0;
+  private scheduleCount = 0;
+  private readonly scheduleWaiters = new Set<{
+    readonly after: number;
+    readonly resolve: () => void;
+  }>();
   private readonly scheduled = new Set<{
     readonly at: number;
     readonly callback: () => void;
@@ -48,12 +53,28 @@ class FakeTimer implements MonotonicTimer {
   schedule(delayMs: number, callback: () => void): ScheduledMonotonicTimer {
     const item = { at: this.now + delayMs, callback, cancelled: false };
     this.scheduled.add(item);
+    this.scheduleCount += 1;
+    for (const waiter of this.scheduleWaiters) {
+      if (this.scheduleCount > waiter.after) {
+        this.scheduleWaiters.delete(waiter);
+        waiter.resolve();
+      }
+    }
     return {
       cancel: () => {
         item.cancelled = true;
         this.scheduled.delete(item);
       },
     };
+  }
+
+  waitForScheduleAfter(count: number): Promise<void> {
+    if (this.scheduleCount > count) return Promise.resolve();
+    return new Promise((resolve) => this.scheduleWaiters.add({ after: count, resolve }));
+  }
+
+  get totalSchedules(): number {
+    return this.scheduleCount;
   }
 
   advance(ms: number): void {
@@ -148,8 +169,9 @@ describe.skipIf(!hasUnixSockets)("upgrade fence", () => {
     );
     const incompleteBytes = Buffer.alloc(UPGRADE_FENCE_FRAME_MAX_BYTES - 1, "é");
     expect(incompleteBytes.length).toBe(UPGRADE_FENCE_FRAME_MAX_BYTES - 1);
+    const priorSchedules = timer.totalSchedules;
     const incomplete = rawAdmission(acquired.handle.socketPath, incompleteBytes);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await timer.waitForScheduleAfter(priorSchedules);
     timer.advance(UPGRADE_FENCE_IO_TIMEOUT_MS);
     await expect(incomplete).resolves.toBe(`${JSON.stringify({ status: "reserved" })}\n`);
     await acquired.handle.release();

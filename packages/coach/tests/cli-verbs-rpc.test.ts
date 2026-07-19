@@ -87,11 +87,16 @@ interface RunningRpc {
   readonly rpc: CoachRpcServer;
   readonly server: Server;
   readonly url: string;
+  nextClientDisconnect(): Promise<void>;
 }
 
 async function startRpc(engine: CoachEngine): Promise<RunningRpc> {
   const rpc = createCoachRpcServer({ engine, token, owner: "unmanaged-foreground" });
   const server = createServer();
+  const disconnectWaiters: Array<() => void> = [];
+  server.on("connection", (socket) => {
+    socket.once("close", () => disconnectWaiters.shift()?.());
+  });
   server.on("upgrade", rpc.handleUpgrade);
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -99,7 +104,12 @@ async function startRpc(engine: CoachEngine): Promise<RunningRpc> {
   });
   const address = server.address();
   if (address === null || typeof address === "string") throw new TypeError("missing test port");
-  return { rpc, server, url: `ws://127.0.0.1:${address.port}/rpc` };
+  return {
+    rpc,
+    server,
+    url: `ws://127.0.0.1:${address.port}/rpc`,
+    nextClientDisconnect: () => new Promise((resolve) => disconnectWaiters.push(resolve)),
+  };
 }
 
 async function closeServer(
@@ -286,8 +296,13 @@ describe.skipIf(!hasLoopback)("CLI verbs over real RPC framing", () => {
       const heldCall = held.call("chat", { chatId: "cli:cancel", message: "held" });
       await vi.waitFor(() => expect(entered).toContain("held"));
       const queuedCall = queued.call("chat", { chatId: "cli:cancel", message: "cancelled" });
+      const queuedRejection = expect(queuedCall).rejects.toBeInstanceOf(
+        CoachClientDisconnectedError,
+      );
+      const serverObservedDisconnect = running.nextClientDisconnect();
       await queued.close();
-      await expect(queuedCall).rejects.toBeInstanceOf(CoachClientDisconnectedError);
+      await queuedRejection;
+      await serverObservedDisconnect;
       heldGate.resolve({ text: "held" });
       await expect(heldCall).resolves.toEqual({ text: "held" });
       await Promise.resolve();

@@ -1,5 +1,5 @@
 import { randomBytes as cryptoRandomBytes, timingSafeEqual } from "node:crypto";
-import { chmod, lstat, mkdir, rename, unlink } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, rename, rmdir, unlink } from "node:fs/promises";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -260,7 +260,7 @@ export async function acquireUpgradeFence(
     }
     let consumed = false;
     const sockets = new Set<Socket>();
-    const server = createServer((socket) => {
+    const server = createServer({ allowHalfOpen: true }, (socket) => {
       sockets.add(socket);
       socket.once("close", () => sockets.delete(socket));
       socket.once("error", () => socket.destroy());
@@ -287,14 +287,40 @@ export async function acquireUpgradeFence(
         socket.end(`${JSON.stringify({ status })}\n`);
       }).catch(() => socket.end(`${JSON.stringify({ status: "reserved" })}\n`));
     });
+    const stagingDir = await mkdtemp(join(input.configDir, ".u"));
+    const stagingPath = join(stagingDir, "s");
+    let stagingIdentity: FileIdentity | undefined;
+    let ownedIdentity: FileIdentity | undefined;
+    let publicationError: unknown;
     try {
-      await listen(server, socketPath);
+      await listen(server, stagingPath);
+      stagingIdentity = await identity(stagingPath);
+      if (stagingIdentity === undefined) {
+        throw new Error("upgrade fence socket identity unavailable");
+      }
+      await link(stagingPath, socketPath);
+      if (!sameIdentity(await identity(socketPath), stagingIdentity)) {
+        throw new Error("upgrade fence socket identity unavailable");
+      }
+      await chmod(socketPath, 0o600);
+      ownedIdentity = stagingIdentity;
+      await unlinkIdentity(stagingPath, stagingIdentity);
+      await rmdir(stagingDir);
     } catch (error) {
       for (const socket of sockets) socket.destroy();
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "EADDRINUSE") {
+      await closeServer(server);
+      if (stagingIdentity !== undefined) {
+        await unlinkIdentity(socketPath, stagingIdentity);
+        await unlinkIdentity(stagingPath, stagingIdentity);
+      }
+      await rmdir(stagingDir);
+      publicationError = error;
+    }
+    if (publicationError !== undefined) {
+      const code = (publicationError as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") {
         capabilityBytes.fill(0);
-        throw error;
+        throw publicationError;
       }
       const observed = await identity(socketPath);
       if (observed === undefined) {
@@ -318,10 +344,7 @@ export async function acquireUpgradeFence(
       capabilityBytes.fill(0);
       continue;
     }
-    await chmod(socketPath, 0o600);
-    const ownedIdentity = await identity(socketPath);
     if (ownedIdentity === undefined) {
-      await closeServer(server);
       throw new Error("upgrade fence socket identity unavailable");
     }
     const handoffCapability = capabilityBytes.toString("base64url");

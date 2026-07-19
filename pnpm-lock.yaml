@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  '@ai-sdk/provider-utils': ^4.0.30
+
 patchedDependencies:
   fit-file-parser@3.0.2:
     hash: 355579765a4bbdcd08b22da684d697bdac747c0e1603fb410ecb822574876a9a
@@ -19,6 +22,9 @@ importers:
       '@enduragent/core':
         specifier: workspace:*
         version: link:packages/core
+      '@enduragent/engine':
+        specifier: workspace:*
+        version: link:packages/engine
       '@enduragent/kernel':
         specifier: workspace:*
         version: link:packages/kernel
@@ -253,8 +259,8 @@ importers:
         specifier: ^3.0.9
         version: 3.0.9
       '@ai-sdk/provider-utils':
-        specifier: ^4.0.24
-        version: 4.0.24(zod@4.4.1)
+        specifier: ^4.0.30
+        version: 4.0.30(zod@4.4.1)
       '@clack/prompts':
         specifier: ^1.2.0
         version: 1.3.0
@@ -330,7 +336,7 @@ importers:
         specifier: ^2.0.51
         version: 2.0.51(zod@4.4.1)
       '@ai-sdk/provider-utils':
-        specifier: ^4.0.24
+        specifier: ^4.0.30
         version: 4.0.30(zod@4.4.1)
       '@enduragent/coach-contract':
         specifier: workspace:*
@@ -351,6 +357,9 @@ importers:
         specifier: ^4.3.6
         version: 4.4.1
     devDependencies:
+      '@ai-sdk/provider':
+        specifier: ^3.0.10
+        version: 3.0.10
       '@types/node':
         specifier: ^25.6.0
         version: 25.6.0
@@ -601,12 +610,6 @@ packages:
 
   '@ai-sdk/openai@3.0.54':
     resolution: {integrity: sha512-j1qrNe/ebUKuE+fETzS+CVnczs11jQBR9y9M6aoKtJZAosg6SZnPC1Bb92e2u6yaSK+88TZoFhiY67uYphPitw==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      zod: ^3.25.76 || ^4.1.8
-
-  '@ai-sdk/provider-utils@4.0.24':
-    resolution: {integrity: sha512-oXIw1oLmuBILuvHgSj6w5LOV8oSnFRouPSv0MGkG9sRMeukZ9JnMF17kldaRQaRq8lSJIxo6aS3NzWlVmSb+4Q==}
     engines: {node: '>=18'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
@@ -2568,7 +2571,7 @@ snapshots:
   '@ai-sdk/anthropic@3.0.72(zod@4.4.1)':
     dependencies:
       '@ai-sdk/provider': 3.0.9
-      '@ai-sdk/provider-utils': 4.0.24(zod@4.4.1)
+      '@ai-sdk/provider-utils': 4.0.30(zod@4.4.1)
       zod: 4.4.1
 
   '@ai-sdk/deepseek@2.0.39(zod@4.4.1)':
@@ -2580,14 +2583,14 @@ snapshots:
   '@ai-sdk/gateway@3.0.105(zod@4.4.1)':
     dependencies:
       '@ai-sdk/provider': 3.0.9
-      '@ai-sdk/provider-utils': 4.0.24(zod@4.4.1)
+      '@ai-sdk/provider-utils': 4.0.30(zod@4.4.1)
       '@vercel/oidc': 3.2.0
       zod: 4.4.1
 
   '@ai-sdk/google@3.0.65(zod@4.4.1)':
     dependencies:
       '@ai-sdk/provider': 3.0.9
-      '@ai-sdk/provider-utils': 4.0.24(zod@4.4.1)
+      '@ai-sdk/provider-utils': 4.0.30(zod@4.4.1)
       zod: 4.4.1
 
   '@ai-sdk/openai-compatible@2.0.51(zod@4.4.1)':
@@ -2599,14 +2602,7 @@ snapshots:
   '@ai-sdk/openai@3.0.54(zod@4.4.1)':
     dependencies:
       '@ai-sdk/provider': 3.0.9
-      '@ai-sdk/provider-utils': 4.0.24(zod@4.4.1)
-      zod: 4.4.1
-
-  '@ai-sdk/provider-utils@4.0.24(zod@4.4.1)':
-    dependencies:
-      '@ai-sdk/provider': 3.0.9
-      '@standard-schema/spec': 1.1.0
-      eventsource-parser: 3.0.8
+      '@ai-sdk/provider-utils': 4.0.30(zod@4.4.1)
       zod: 4.4.1
 
   '@ai-sdk/provider-utils@4.0.30(zod@4.4.1)':
@@ -3373,7 +3369,7 @@ snapshots:
     dependencies:
       '@ai-sdk/gateway': 3.0.105(zod@4.4.1)
       '@ai-sdk/provider': 3.0.9
-      '@ai-sdk/provider-utils': 4.0.24(zod@4.4.1)
+      '@ai-sdk/provider-utils': 4.0.30(zod@4.4.1)
       '@opentelemetry/api': 1.9.0
       zod: 4.4.1
 

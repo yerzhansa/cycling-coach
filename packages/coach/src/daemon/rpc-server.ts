@@ -242,7 +242,7 @@ function enqueueSerialized(state: ClientState, serialized: string): Promise<void
       void state.detachedPromise.then(finish);
       try {
         state.ws.send(serialized, (error) => {
-          if (error !== undefined) detach(state, 1013, "backpressure");
+          if (error != null) detach(state, 1013, "backpressure");
           finish();
         });
       } catch {
