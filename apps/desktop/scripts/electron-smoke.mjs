@@ -224,7 +224,8 @@ async function security() {
         spoofOrigin: spoofed === expectedForbidden,
         wrongToken: wrongCode === 1008,
         observerOrder: JSON.stringify(observerOrder) === JSON.stringify(expectedOrder),
-        preloadBridge: JSON.stringify(ready.bridgeKeys) === JSON.stringify(["getDaemonConnection"]),
+        preloadBridge: JSON.stringify(ready.bridgeKeys) === JSON.stringify(["chooseImportFiles", "credentialStatuses", "getDaemonConnection", "onDroppedImportFiles", "writeCredential"]),
+        credentialMetadata: ready.credentialStatusesMetadataOnly === true,
       },
       url: ready.url,
       blockedOffPort: ready.blockedOffPort,
@@ -235,6 +236,7 @@ async function security() {
         !JSON.stringify(running.env).includes(token) &&
         !result.stdout.includes(token) &&
         !result.stderr.includes(token) &&
+        !JSON.stringify(ready.credentialStatuses).includes(token) &&
         !screenshotPath.includes(token),
     };
     if (Object.values(summary.passes).some((value) => value !== true) || summary.blockedOffPort !== true || summary.drawerPresent !== true || summary.tokenAbsent !== true || !existsSync(screenshotPath)) {

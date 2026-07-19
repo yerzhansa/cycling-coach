@@ -6,6 +6,9 @@ import {
   connectCoachClient,
 } from "@enduragent/coach-client";
 import type { TurnEvent } from "@enduragent/coach-contract";
+import { createOnboardingBridge } from "./onboarding/bridge.js";
+import { mountOnboarding } from "./onboarding/mount.js";
+import "./onboarding/onboarding.css";
 import { createChatTurn, reduceChatTurn, type ChatTurnState } from "./turn-state.js";
 
 const DESKTOP_CHAT_ID = "desktop" as const;
@@ -16,6 +19,21 @@ const submit = composer.querySelector<HTMLButtonElement>('button[type="submit"]'
 const drawer = document.querySelector<HTMLElement>(".drawer")!;
 const drawerToggle = document.querySelector<HTMLButtonElement>(".drawer-toggle")!;
 const drawerClose = document.querySelector<HTMLButtonElement>(".drawer-close")!;
+const topbar = document.querySelector<HTMLElement>(".topbar")!;
+
+const setup = document.createElement("button");
+setup.type = "button";
+setup.className = "setup-button";
+setup.textContent = "Setup";
+topbar.insertBefore(setup, topbar.lastElementChild);
+const onboarding = mountOnboarding({
+  document,
+  bridge: createOnboardingBridge(),
+  opener: setup,
+  onComplete: () => message.focus(),
+});
+setup.addEventListener("click", () => void onboarding.open());
+void onboarding.open();
 
 let connectionMaterialPromise: ReturnType<EnduragentAuth["getDaemonConnection"]> | undefined;
 let clientPromise: Promise<CoachClient> | undefined;
