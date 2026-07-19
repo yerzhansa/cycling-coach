@@ -143,23 +143,25 @@ export class StoreRuntime {
       maxArtifacts: STORE_MAX_ARTIFACTS,
     };
     try {
-      const capturePromise = this.dependencies.capture({
-        env: this.options.env,
-        ...(this.options.writerContext === undefined
-          ? {}
-          : { writerContext: this.options.writerContext }),
-        apiKey: this.options.config.intervals.apiKey,
-        athleteId: this.options.config.intervals.athleteId,
-        reviewedOn: now.toISOString().slice(0, 10),
-        reason: this.snapshotValue === undefined ? "initial" : "provider-refresh",
-        ...(this.snapshotValue === undefined ? {} : { replacesCaptureId: this.snapshotValue.captureId }),
-        budget,
-        attemptLedger: ledger,
-      });
+      const capturePromise = this.options.config.intervals.apiKey.length === 0
+        ? Promise.resolve(undefined)
+        : this.dependencies.capture({
+            env: this.options.env,
+            ...(this.options.writerContext === undefined
+              ? {}
+              : { writerContext: this.options.writerContext }),
+            apiKey: this.options.config.intervals.apiKey,
+            athleteId: this.options.config.intervals.athleteId,
+            reviewedOn: now.toISOString().slice(0, 10),
+            reason: this.snapshotValue === undefined ? "initial" : "provider-refresh",
+            ...(this.snapshotValue === undefined ? {} : { replacesCaptureId: this.snapshotValue.captureId }),
+            budget,
+            attemptLedger: ledger,
+          });
       const legacyPromise = this.options.reference.runScheduledOnce();
       const [captureResult, legacyResult] = await Promise.allSettled([capturePromise, legacyPromise]);
       let published = false;
-      if (captureResult.status === "fulfilled") {
+      if (captureResult.status === "fulfilled" && captureResult.value !== undefined) {
         const produced = await this.dependencies.produce(captureResult.value);
         this.snapshotValue = produced;
         published = true;
