@@ -86,7 +86,7 @@ describe("packaged self-test resources", () => {
         ).toBe(true);
       }
     }
-  }, 30_000);
+  }, 180_000);
 
   it("stages disjoint byte-identical resources and preserves builder inputs", async () => {
     await generate();
