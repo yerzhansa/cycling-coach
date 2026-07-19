@@ -16,6 +16,7 @@
 // `SYNC_OPERATION_TIMEOUT_MS` budget.
 
 import { snakeCaseKeys } from "intervals-icu-api";
+import { serializeError } from "../../logging/serialize-error.js";
 import {
   REFERENCE_CAPTURE_STREAM_LIMIT,
   REFERENCE_CAPTURE_STREAM_TYPES,
@@ -154,6 +155,13 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+function renderEndpointError(error: unknown): string {
+  const serializable = error !== null && typeof error === "object" && !(error instanceof Error)
+    ? Object.assign(new Error("Reference endpoint failed"), error)
+    : error;
+  return JSON.stringify(serializeError(serializable));
+}
+
 /**
  * Fetch + assemble the live Reference bundle. Throws only on a hard
  * precondition failure (activities list unreachable) or a surviving
@@ -172,7 +180,7 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
 
   const athleteResult = await client.athlete.get();
   if (!athleteResult.ok) {
-    const detail = String(athleteResult.error);
+    const detail = renderEndpointError(athleteResult.error);
     log(`Reference: athlete.get failed: ${detail}`);
     fetchErrors.push({ endpoint: "athlete", detail });
   }
@@ -180,7 +188,7 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
 
   const actResult = await client.activities.list({ oldest, newest });
   if (!actResult.ok) {
-    throw new Error(`activities.list failed: ${String(actResult.error)}`);
+    throw new Error(`activities.list failed: ${renderEndpointError(actResult.error)}`);
   }
   // The lib auto-camelCases activity responses; ActivitySchema requires
   // snake_case (start_date_local, icu_training_load, …). Reverse it here only —
@@ -195,7 +203,7 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
 
   const wellResult = await client.wellness.list({ oldest, newest });
   if (!wellResult.ok) {
-    const detail = String(wellResult.error);
+    const detail = renderEndpointError(wellResult.error);
     log(`Reference: wellness.list failed: ${detail}`);
     fetchErrors.push({ endpoint: "wellness", detail });
   }
@@ -279,7 +287,7 @@ async function fetchStreams(
       continue;
     }
     if (!result.ok) {
-      log(`Reference: streams fetch failed for an activity: ${String(result.error)}`);
+      log(`Reference: streams fetch failed for an activity: ${renderEndpointError(result.error)}`);
       continue;
     }
     const parsed = ActivityStreamsSchema.safeParse(normalizeStreams(result.value));

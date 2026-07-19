@@ -21,7 +21,10 @@ import {
 import { createNodeCrypto, createNodeImportRuntime } from "@enduragent/kernel-node/ingest";
 import { REQUEST_ATTEMPTS, type IntervalsIcuCaptureSource, type ReferenceCaptureBatch } from "@enduragent/sync-intervals-icu";
 import { createIntervalsBackfillSource, DEFAULT_PER_REQUEST_TIMEOUT_MS, DEFAULT_REQUEST_INTERVAL_MS } from "./backfill.js";
-import { withCoachStoreWriter } from "./runtime.js";
+import {
+  withCoachStoreWriter,
+  type CoachStoreWriterContext,
+} from "./runtime.js";
 
 export type ReferenceCaptureFailureCategory = "capture" | "persistence" | "validation";
 
@@ -38,6 +41,7 @@ class ReferenceCaptureValidationError extends Error {}
 
 export interface RunReferenceCaptureOptions {
   readonly env: Record<string, string | undefined>;
+  readonly writerContext?: CoachStoreWriterContext;
   readonly apiKey: string;
   readonly athleteId: string;
   readonly reviewedOn: string;
@@ -105,7 +109,7 @@ export async function runReferenceCapture(
     throw new ReferenceCaptureRunError("validation", { cause: error });
   }
 
-  return withCoachStoreWriter(options.env, async ({ home, store }) => {
+  const capture = async ({ home, store }: CoachStoreWriterContext): Promise<ReferenceCaptureManifest> => {
     const crypto = createNodeCrypto();
     const node = createNodeImportRuntime({ archiveDir: home.archiveDir, store });
     const source = createIntervalsBackfillSource({
@@ -240,7 +244,10 @@ export async function runReferenceCapture(
     } catch (error) {
       throw new ReferenceCaptureRunError(error instanceof ReferenceCaptureValidationError ? "validation" : "persistence", { cause: error });
     }
-  });
+  };
+  return options.writerContext === undefined
+    ? withCoachStoreWriter(options.env, capture)
+    : capture(options.writerContext);
 }
 
 export function referenceCaptureEvidenceSha256Input(manifest: ReferenceCaptureManifest): Uint8Array {

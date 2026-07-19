@@ -239,6 +239,7 @@ export async function createLocalCoachComposition(
       config: input.config,
       home: input.home,
       reference,
+      writerContext: input.context,
       dependencies: dependencies.runtimeDependencies,
     };
     runtime = dependencies.createRuntime === undefined

@@ -14,6 +14,8 @@ import type {
 } from "@enduragent/engine";
 import { createPhysicalRequestLedger, runMigrations } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
+import type { ReferenceCaptureManifest } from "@enduragent/kernel/reference/capture";
+import type { ProducedLocalBundle } from "@enduragent/kernel/reference/local-bundle";
 import type { CyclingFtpAnchorResolver } from "@enduragent/kernel/anchors";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import { inertWriterProtocolListener } from "@enduragent/kernel-node/lock";
@@ -210,6 +212,45 @@ afterEach(async () => {
 });
 
 describe("local coach composition", () => {
+  it("reuses the lifecycle writer in the first store window without nested acquisition", async () => {
+    const home = await freshHome();
+    const context = fakeContext(home);
+    const nestedWriterAcquisition = vi.fn(() => {
+      throw new Error("nested writer acquisition");
+    });
+    const manifest = {
+      capture_id: "12345678-1234-4123-8123-123456789abc",
+      plan: { frozenNow: "1998-07-18T12:00:00.000Z" },
+    } as ReferenceCaptureManifest;
+    const produced: ProducedLocalBundle = {
+      captureId: manifest.capture_id,
+      frozenNow: manifest.plan.frozenNow,
+      bundle: { activities: [], wellness: [], ftpHistory: [] },
+    };
+    const capture = vi.fn(async (
+      options: Parameters<typeof import("../src/capture.js").runReferenceCapture>[0],
+    ) => {
+      if (options.writerContext === undefined) nestedWriterAcquisition();
+      expect(options.writerContext).toBe(context);
+      return manifest;
+    });
+    const lifecycle = await compose(home, {
+      bootstrap: async () => reference(),
+      runtimeDependencies: {
+        capture,
+        produce: async () => produced,
+        now: () => new Date("1998-07-18T12:00:00.000Z"),
+        monotonicNow: () => 1,
+      },
+      createBackend: () => backend(),
+      createRepository: () => ({ insertIfAbsent: async () => false, readCurrent: async () => undefined }),
+      createResolver: () => missingResolver(),
+    }, context);
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(nestedWriterAcquisition).not.toHaveBeenCalled();
+    await lifecycle.close();
+  });
+
   it("constructs the complete object-shaped engine input from named host owners", async () => {
     const home = await freshHome();
     const selectedRuntime = runtime();

@@ -13,6 +13,7 @@ import type { AthleteHome } from "@enduragent/kernel-node/home";
 import { join } from "node:path";
 import { runReferenceCapture } from "./capture.js";
 import { createLocalBundleProducer } from "./local-bundle-producer.js";
+import type { CoachStoreWriterContext } from "./runtime.js";
 import {
   createWallClockScheduler,
   type WallClockScheduler,
@@ -46,7 +47,15 @@ export interface StoreRuntimeOptions {
   readonly config: Config;
   readonly home: AthleteHome;
   readonly reference: ReferenceRuntime;
+  readonly writerContext?: CoachStoreWriterContext;
   readonly dependencies?: StoreRuntimeDependencies;
+}
+
+function sameHome(left: AthleteHome, right: AthleteHome): boolean {
+  return left.root === right.root
+    && left.storeDir === right.storeDir
+    && left.archiveDir === right.archiveDir
+    && left.configDir === right.configDir;
 }
 
 export class StoreRuntime {
@@ -61,6 +70,9 @@ export class StoreRuntime {
   private closed = false;
 
   constructor(private readonly options: StoreRuntimeOptions) {
+    if (options.writerContext !== undefined && !sameHome(options.home, options.writerContext.home)) {
+      throw new TypeError("Writer home does not match the store runtime home.");
+    }
     const dependencies = options.dependencies ?? {};
     const now = dependencies.now ?? (() => new Date());
     const schedulerDependencies = dependencies.schedulerDependencies ?? {};
@@ -133,6 +145,9 @@ export class StoreRuntime {
     try {
       const capturePromise = this.dependencies.capture({
         env: this.options.env,
+        ...(this.options.writerContext === undefined
+          ? {}
+          : { writerContext: this.options.writerContext }),
         apiKey: this.options.config.intervals.apiKey,
         athleteId: this.options.config.intervals.athleteId,
         reviewedOn: now.toISOString().slice(0, 10),

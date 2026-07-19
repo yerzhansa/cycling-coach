@@ -261,6 +261,32 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
     expect(logs.some((l) => l.includes("athlete.get failed"))).toBe(true);
   });
 
+  it("serializes structured endpoint errors without Object stringification", async () => {
+    const logs: string[] = [];
+    const client: BundleFetchClient = {
+      athlete: {
+        get: async () => ({
+          ok: false,
+          error: { kind: "Http", status: 401, message: "synthetic unauthorized" } as never,
+        }),
+      },
+      activities: { list: async () => ({ ok: true, value: [] }), getStreams: async () => STREAM_OK },
+      wellness: { list: async () => ({ ok: true, value: [] }) },
+    };
+    const result = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+      log: (message) => logs.push(message),
+    });
+    expect(logs[0]).toContain('"message":"synthetic unauthorized"');
+    expect(logs[0]).toContain('"stack":');
+    expect(logs[0]).toContain('"kind":"Http"');
+    expect(logs[0]).not.toContain("[object Object]");
+    expect(result.fetchErrors?.[0]?.detail).toBe(logs[0]?.replace("Reference: athlete.get failed: ", ""));
+  });
+
   it("records a fetchErrors entry naming the athlete endpoint when athlete.get fails (still a usable bundle)", async () => {
     const client: BundleFetchClient = {
       athlete: { get: async () => ({ ok: false, error: "unauthorized" }) },
