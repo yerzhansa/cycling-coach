@@ -41,11 +41,7 @@ export type {
   SecretsPort,
   StoredDataFreshness,
 } from "./host-ports.js";
-export type {
-  LedgerEventInput,
-  LedgerEventKind,
-  LedgerEventSource,
-} from "./sport/ledger-event.js";
+export type { LedgerEventInput, LedgerEventKind, LedgerEventSource } from "./sport/ledger-event.js";
 export {
   LEDGER_DATE_PATTERN,
   LEDGER_EVENT_KINDS,
@@ -119,6 +115,7 @@ export interface GenerateResult {
   usage: LanguageModelUsage;
   totalUsage?: LanguageModelUsage;
   steps?: number;
+  providerReportedCostUsd?: number;
   cost?: UsageCost;
 }
 
@@ -166,9 +163,7 @@ export interface Sport {
   readonly skills: Readonly<Record<string, string>>;
   readonly sessionClusterGapMinutes: number;
   readonly memorySections: readonly MemorySectionSpec[];
-  readonly mustPreserveTokens:
-    | readonly string[]
-    | ((memory: MemorySnapshot) => readonly string[]);
+  readonly mustPreserveTokens: readonly string[] | ((memory: MemorySnapshot) => readonly string[]);
   readonly intervalsActivityTypes: readonly IntervalsActivityType[];
   readonly athleteProfileSchema: z.ZodTypeAny;
   tools(ports: SportRuntimePorts): readonly ToolRegistration[];
@@ -197,7 +192,12 @@ export function mergeSportSkills(
   return merged;
 }
 
-export { MS_PER_DAY, eachDateKeyInRange, isRealDateKey, parseDateKeyMs } from "./sport/date-keys.js";
+export {
+  MS_PER_DAY,
+  eachDateKeyInRange,
+  isRealDateKey,
+  parseDateKeyMs,
+} from "./sport/date-keys.js";
 export { getEffectiveSections } from "./sport/effective-sections.js";
 export { createMemorySnapshot } from "./sport/memory-snapshot.js";
 export { messageText } from "./sport/model-message.js";
@@ -210,4 +210,4 @@ export {
   createCoreToolsWithSportConfig,
   createPureCoreIntervalsTools,
 } from "./sport/platform-tools.js";
-export { todayInTZ } from "./sport/user-time.js";
+export { resolveUserTimezone, todayInTZ } from "./sport/user-time.js";

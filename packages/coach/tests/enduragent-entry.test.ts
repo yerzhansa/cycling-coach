@@ -38,6 +38,7 @@ import {
   type WithLocalCoachInput,
 } from "../src/local-runner.js";
 import { CoachStoreWriterError, withCoachStoreWriter } from "../src/runtime.js";
+import type { SpendMeterService } from "../src/spend-meter.js";
 
 const state: AthleteState = {
   schemaVersion: "3",
@@ -75,6 +76,15 @@ const operations: CoachOperations = {
     schemaVersion: 1,
     applied: { llm: llm !== undefined, intervals: intervals !== undefined },
   }),
+};
+
+const spendMeter: SpendMeterService = {
+  getSpendSummary: async () => {
+    throw new Error("unused spend meter");
+  },
+  setDailySpendCap: async () => {
+    throw new Error("unused spend meter");
+  },
 };
 
 interface Deferred<T> {
@@ -416,6 +426,7 @@ describe("enduragent executable composition", () => {
     const lifecycle = {
       engine: mocked.engine,
       operations,
+      spendMeter,
       listener: inertWriterProtocolListener,
       close: async () => {
         trace.push("lifecycle-close");
@@ -495,6 +506,7 @@ describe("enduragent executable composition", () => {
             const value = await input.operation({
               engine: mocked.engine,
               operations,
+              spendMeter,
               listener: inertWriterProtocolListener,
               async close() {},
             });
@@ -735,6 +747,7 @@ describe("enduragent executable composition", () => {
       const lifecycle = {
         engine: mocked.engine,
         operations,
+        spendMeter,
         listener: inertWriterProtocolListener,
         close: async () => {
           trace.push("lifecycle-close");
@@ -839,6 +852,7 @@ describe("enduragent executable composition", () => {
               value: await input.operation({
                 engine: mocked.engine,
                 operations,
+                spendMeter,
                 listener: inertWriterProtocolListener,
                 async close() {},
               }),

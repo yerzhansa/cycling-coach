@@ -39,6 +39,9 @@ import {
   ResetSessionResponseSchema,
   SetUnitsPreferenceRpcParamsSchema,
   SetUnitsPreferenceRpcResultSchema,
+  GetSpendSummaryRpcParamsSchema,
+  SetDailySpendCapRpcParamsSchema,
+  SpendSummarySchema,
   ServerHandshakeFrameSchema,
   TurnEventSchema,
   UNKNOWN_CYCLING_TRAINING_CONTEXT,
@@ -159,8 +162,25 @@ describe("JSON-RPC envelopes", () => {
   });
 });
 
+const spendSummary = SpendSummarySchema.parse({
+  localDate: "1998-07-06",
+  timezone: "UTC",
+  dailyCapUsd: 0.5,
+  knownSpendUsd: 0,
+  generationCount: 0,
+  pricedGenerationCount: 0,
+  unpricedGenerationCount: 0,
+  malformedLineCount: 0,
+  spendComplete: true,
+  capStatus: "below",
+  cacheReadTokens: 0,
+  knownCacheReadSavingsUsd: 0,
+  cacheSavingsComplete: true,
+  routes: [],
+});
+
 describe("coach request and event projection", () => {
-  it("admits exactly the ten strict method requests", () => {
+  it("admits exactly the twelve strict method requests", () => {
     const requests = [
       { jsonrpc: "2.0", id: 1, method: "chat", params: { chatId: "chat-1", message: "hello" } },
       { jsonrpc: "2.0", id: 2, method: "resetSession", params: { chatId: "chat-1" } },
@@ -193,6 +213,13 @@ describe("coach request and event projection", () => {
         id: 10,
         method: "setUnitsPreference",
         params: { value: "imperial" },
+      },
+      { jsonrpc: "2.0", id: 11, method: "getSpendSummary", params: {} },
+      {
+        jsonrpc: "2.0",
+        id: 12,
+        method: "setDailySpendCap",
+        params: { dailyCapUsd: 0.75 },
       },
     ];
     for (const request of requests) {
@@ -412,6 +439,8 @@ describe("coach request and event projection", () => {
       }),
       getUnitsPreference: async () => ({ value: "metric", source: "default" }),
       setUnitsPreference: async ({ value }) => ({ value, source: "cycling" }),
+      getSpendSummary: async () => spendSummary,
+      setDailySpendCap: async () => spendSummary,
     };
     expect(Object.keys(COACH_RPC_METHOD_REGISTRY)).toEqual(Object.keys(fake));
     expect(COACH_RPC_METHOD_NAMES).toEqual(Object.keys(fake));
@@ -475,6 +504,18 @@ describe("coach request and event projection", () => {
       responseSchema: SetUnitsPreferenceRpcResultSchema,
       eventSchema: NoRpcEventSchema,
     });
+    expect(COACH_RPC_METHOD_REGISTRY.getSpendSummary).toEqual({
+      wireName: "getSpendSummary",
+      requestSchema: GetSpendSummaryRpcParamsSchema,
+      responseSchema: SpendSummarySchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.setDailySpendCap).toEqual({
+      wireName: "setDailySpendCap",
+      requestSchema: SetDailySpendCapRpcParamsSchema,
+      responseSchema: SpendSummarySchema,
+      eventSchema: NoRpcEventSchema,
+    });
     for (const method of [
       "resetSession",
       "hasSession",
@@ -483,6 +524,8 @@ describe("coach request and event projection", () => {
       "configureRuntime",
       "getUnitsPreference",
       "setUnitsPreference",
+      "getSpendSummary",
+      "setDailySpendCap",
     ] as const) {
       expect(COACH_RPC_METHOD_REGISTRY[method].eventSchema.safeParse(undefined).success).toBe(
         false,

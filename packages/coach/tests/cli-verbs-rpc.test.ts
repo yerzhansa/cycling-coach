@@ -115,7 +115,16 @@ interface RunningRpc {
 }
 
 async function startRpc(engine: CoachEngine): Promise<RunningRpc> {
-  const rpc = createCoachRpcServer({ engine, operations, token, owner: "unmanaged-foreground" });
+  const rpc = createCoachRpcServer({
+    engine,
+    operations,
+    spend: {
+      getSpendSummary: () => Promise.reject(new Error("Spend handler is not used.")),
+      setDailySpendCap: () => Promise.reject(new Error("Spend handler is not used.")),
+    },
+    token,
+    owner: "unmanaged-foreground",
+  });
   const server = createServer();
   const disconnectWaiters: Array<() => void> = [];
   server.on("connection", (socket) => {

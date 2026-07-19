@@ -3,6 +3,7 @@ import type { CoachEngine, CoachOperations } from "@enduragent/coach-contract";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import type { WriterProtocolListener } from "@enduragent/kernel-node/lock";
 import { createLocalCoachComposition, type LocalCoachComposition } from "./composition.js";
+import type { SpendMeterService } from "./spend-meter.js";
 import {
   migrateLegacyHomeUnderLock,
   type LegacyMigrationAction,
@@ -14,6 +15,7 @@ import { withCoachStoreWriter } from "./runtime.js";
 export interface LocalCoachLifecycle {
   readonly engine: CoachEngine;
   readonly operations: CoachOperations;
+  readonly spendMeter: SpendMeterService;
   readonly listener: WriterProtocolListener;
   close(): Promise<void>;
 }
@@ -137,6 +139,7 @@ export async function withLocalCoach<T>(
               value: await input.operation({
                 engine: publishedLifecycle.engine,
                 operations: publishedLifecycle.operations,
+                spendMeter: publishedLifecycle.spendMeter,
                 listener: context.listener,
                 close: () => publishedLifecycle.close(),
               }),

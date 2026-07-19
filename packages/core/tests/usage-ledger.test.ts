@@ -10,7 +10,7 @@ import type { Sport } from "../src/sport.js";
 import type { UsageLedgerLine } from "../src/usage-ledger.js";
 import { baseAgentConfig } from "../../engine/tests/helpers/base-agent-config.js";
 import { classifyFailure } from "../src/agent/token-utils.js";
-import { appendUsageLine } from "../src/usage-ledger.js";
+import { appendUsageLine, readUsageLedger } from "../src/usage-ledger.js";
 import { usageFieldsFromResult } from "../../engine/src/llm-types.js";
 import { priceUsage } from "../../engine/src/agent/codex/cost.js";
 
@@ -202,6 +202,29 @@ describe("appendUsageLine", () => {
     const { appendUsageLine } = await import("../src/usage-ledger.js");
     const badDir = "/nonexistent/dir/that/cannot/be/created/\0bad";
     expect(() => appendUsageLine(badDir, ledgerLine())).not.toThrow();
+  });
+
+  it("reads rotated then live rows and preserves a final line without a newline", () => {
+    const rotated = ledgerLine({ ts: 10, model: "synthetic-old" });
+    const live = ledgerLine({ ts: 20, model: "synthetic-live" });
+    writeFileSync(join(dir, "usage-ledger.jsonl.1"), `${JSON.stringify(rotated)}\n`);
+    writeFileSync(join(dir, "usage-ledger.jsonl"), JSON.stringify(live));
+    expect(readUsageLedger(dir)).toEqual({
+      lines: [rotated, live],
+      malformedLineCount: 0,
+    });
+  });
+
+  it("treats missing files as empty and counts malformed JSON, non-objects, and read errors", () => {
+    expect(readUsageLedger(dir)).toEqual({ lines: [], malformedLineCount: 0 });
+    writeFileSync(
+      join(dir, "usage-ledger.jsonl.1"),
+      `${JSON.stringify(ledgerLine())}\nnot-json\nnull\n[]\n\n`,
+    );
+    mkdirSync(join(dir, "usage-ledger.jsonl"));
+    const result = readUsageLedger(dir);
+    expect(result.lines).toEqual([ledgerLine()]);
+    expect(result.malformedLineCount).toBe(5);
   });
 });
 

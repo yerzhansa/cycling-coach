@@ -6,6 +6,7 @@ import {
 import { SaveIntakeRpcParamsSchema } from "@enduragent/coach-contract";
 import "./chat/styles.css";
 import "./training-context/styles.css";
+import "./spend-meter/styles.css";
 import "./onboarding/onboarding.css";
 import { createChatController } from "./chat/controller.js";
 import { mountChatView } from "./chat/view.js";
@@ -15,6 +16,8 @@ import { validateImportPaths, type OnboardingBridge } from "./onboarding/bridge.
 import { mountOnboarding } from "./onboarding/mount.js";
 import { createTrainingContextController } from "./training-context/controller.js";
 import { mountTrainingContextView } from "./training-context/view.js";
+import { createSpendMeterController } from "./spend-meter/controller.js";
+import { createSpendMeterView } from "./spend-meter/view.js";
 
 function one<T extends Element>(selector: string, kind: { new (): T }): T {
   const matches = document.querySelectorAll(selector);
@@ -30,7 +33,7 @@ const composerHost = one(".composer-wrap", HTMLElement);
 const spine = one(".data-spine", HTMLElement);
 const drawer = one(".drawer", HTMLDialogElement);
 const topbar = one(".topbar", HTMLElement);
-one(".spend-meter", HTMLElement);
+const spendRoot = one(".spend-meter", HTMLElement);
 conversation.classList.add("desktop-shell");
 
 const clients = createDesktopCoachClientProvider();
@@ -45,11 +48,16 @@ const trainingContextController = createTrainingContextController({
   view: mountedTrainingContext.view,
 });
 const mountedChat = mountChatView({ conversation, thread, composerHost });
+const spendController = createSpendMeterController({
+  clients,
+  view: createSpendMeterView({ root: spendRoot, noticeHost: mountedChat.noticeHost }),
+});
 const message = one("#message", HTMLTextAreaElement);
 const chatController = createChatController({
   clients,
   view: mountedChat.view,
   refreshTrainingContext: () => trainingContextController.refresh(),
+  refreshSpend: () => spendController.refresh(),
 });
 mountedChat.bind({
   onSubmit: (message) => void chatController.submit(message),
@@ -209,6 +217,7 @@ const onboarding = mountOnboarding({
 setup.addEventListener("click", () => void onboarding.open());
 
 void trainingContextController.start();
+spendController.start();
 void onboarding.open();
 void clients.getClient().then(
   () => {
@@ -225,6 +234,7 @@ window.addEventListener(
     onboarding.dispose();
     firstSyncController.dispose();
     chatController.dispose();
+    spendController.dispose();
     mountedChat.dispose();
     trainingContextController.dispose();
     mountedTrainingContext.dispose();

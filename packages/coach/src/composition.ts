@@ -33,6 +33,7 @@ import {
   type ModelTransportDecorator,
   type ReferenceStateSnapshot,
 } from "@enduragent/engine";
+import { resolveUserTimezone } from "@enduragent/engine/sport";
 import {
   createCyclingFtpAnchorResolver,
   type CyclingFtpAnchorResolver,
@@ -57,6 +58,7 @@ import {
 } from "./store-runtime.js";
 import { createCoachOperations } from "./operations.js";
 import type { CoachOperationsDependencies } from "./operations.js";
+import { createSpendMeterService, type SpendMeterService } from "./spend-meter.js";
 
 interface OAuthCredential {
   readonly type: "oauth";
@@ -70,6 +72,7 @@ interface OAuthCredential {
 export interface LocalCoachComposition {
   readonly engine: CoachEngine;
   readonly operations: CoachOperations;
+  readonly spendMeter: SpendMeterService;
   close(): Promise<void>;
 }
 
@@ -321,6 +324,12 @@ export async function createLocalCoachComposition(
     throw new TypeError("Ready engine configuration does not match the selected athlete home.");
   }
   const now = dependencies.now ?? Date.now;
+  const spendMeter = createSpendMeterService({
+    dataDir: input.home.root,
+    configDir: input.home.configDir,
+    timezone: resolveUserTimezone(input.config.session.timezone),
+    now,
+  });
   let activeConfig = copyConfig(input.config);
   let runtime: LocalStoreRuntime | undefined;
   let reference: LocalReferenceRuntime | undefined;
@@ -444,6 +453,7 @@ export async function createLocalCoachComposition(
     return {
       engine: reconfigurable.engine,
       operations,
+      spendMeter,
       close() {
         closePromise ??= (async () => {
           let failure: { readonly error: unknown } | undefined;

@@ -25,6 +25,7 @@ import {
   type AthleteState,
   type CoachEngine,
   type CoachOperations,
+  type SpendSummary,
 } from "@enduragent/coach-contract";
 import {
   createCoachRpcServer as createCoachRpcServerProduction,
@@ -80,10 +81,37 @@ const operations: CoachOperations = {
   setUnitsPreference: async ({ value }) => ({ value, source: "cycling" }),
 };
 
+const spendSummary: SpendSummary = {
+  localDate: "1998-07-06",
+  timezone: "UTC",
+  dailyCapUsd: 0.5,
+  knownSpendUsd: 0,
+  generationCount: 0,
+  pricedGenerationCount: 0,
+  unpricedGenerationCount: 0,
+  malformedLineCount: 0,
+  spendComplete: true,
+  capStatus: "below",
+  cacheReadTokens: 0,
+  knownCacheReadSavingsUsd: 0,
+  cacheSavingsComplete: true,
+  routes: [],
+};
+
+const spend = {
+  getSpendSummary: async () => spendSummary,
+  setDailySpendCap: async () => spendSummary,
+};
+
 function createCoachRpcServer(
-  input: Omit<CoachRpcServerInput, "operations"> & Partial<Pick<CoachRpcServerInput, "operations">>,
+  input: Omit<CoachRpcServerInput, "operations" | "spend"> &
+    Partial<Pick<CoachRpcServerInput, "operations" | "spend">>,
 ) {
-  return createCoachRpcServerProduction({ ...input, operations: input.operations ?? operations });
+  return createCoachRpcServerProduction({
+    ...input,
+    operations: input.operations ?? operations,
+    spend: input.spend ?? spend,
+  });
 }
 
 function engine(overrides: Partial<CoachEngine> = {}): CoachEngine {
@@ -509,6 +537,75 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
       id: "units-invalid",
       error: { code: -32602, message: "Invalid params" },
+    });
+    await client.close();
+  });
+
+  it("dispatches strict spend reads and cap writes exactly once without notifications", async () => {
+    const token = "x".repeat(43);
+    const getSpendSummary = vi.fn(async () => spendSummary);
+    const setDailySpendCap = vi.fn(async ({ dailyCapUsd }: { dailyCapUsd: number }) => ({
+      ...spendSummary,
+      dailyCapUsd,
+    }));
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      spend: { getSpendSummary, setDailySpendCap },
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+    client.ws.send(
+      JSON.stringify({ jsonrpc: "2.0", id: "spend-read", method: "getSpendSummary", params: {} }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "spend-read",
+      result: spendSummary,
+    });
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "spend-write",
+        method: "setDailySpendCap",
+        params: { dailyCapUsd: 0.75 },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "spend-write",
+      result: { dailyCapUsd: 0.75 },
+    });
+    expect(getSpendSummary).toHaveBeenCalledOnce();
+    expect(setDailySpendCap).toHaveBeenCalledWith({ dailyCapUsd: 0.75 });
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "spend-invalid",
+        method: "setDailySpendCap",
+        params: { dailyCapUsd: 0 },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "spend-invalid",
+      error: { code: -32602, message: "Invalid params" },
+    });
+    getSpendSummary.mockResolvedValueOnce({
+      ...spendSummary,
+      knownSpendUsd: 1,
+    } as SpendSummary);
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "spend-invalid-result",
+        method: "getSpendSummary",
+        params: {},
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "spend-invalid-result",
+      error: { code: -32603, message: "Internal error" },
     });
     await client.close();
   });

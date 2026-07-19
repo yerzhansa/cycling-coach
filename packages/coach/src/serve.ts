@@ -47,10 +47,15 @@ export async function runCoachServe(
     if (aborted) return EXIT_SUCCESS;
     const token = await dependencies.ensureToken(input.home.configDir);
     if (aborted) return EXIT_SUCCESS;
+    const spendMeter = input.lifecycle.spendMeter;
     const healthState = dependencies.createHealthState();
     const rpc = dependencies.createRpcServer({
       engine: input.lifecycle.engine,
       operations: input.lifecycle.operations,
+      spend: {
+        getSpendSummary: () => spendMeter.getSpendSummary(),
+        setDailySpendCap: ({ dailyCapUsd }) => spendMeter.setDailySpendCap(dailyCapUsd),
+      },
       token: token.value,
       owner: input.owner ?? "unmanaged-foreground",
       healthState,

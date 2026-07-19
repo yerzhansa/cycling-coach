@@ -441,6 +441,40 @@ describe("handshake failures", () => {
 });
 
 describe("RPC receive and observers", () => {
+  it("rejects a contradictory spend response before typed delivery", async () => {
+    const { socket, connecting } = acceptedSocket();
+    const client = await connecting;
+    socket.closeSynchronously = true;
+    socket.sendHook = (text) => {
+      const request = JSON.parse(text) as { readonly id: number };
+      socket.emitMessage(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: request.id,
+          result: {
+            localDate: "1998-07-06",
+            timezone: "UTC",
+            dailyCapUsd: 0.5,
+            knownSpendUsd: 0.1,
+            generationCount: 0,
+            pricedGenerationCount: 0,
+            unpricedGenerationCount: 0,
+            malformedLineCount: 0,
+            spendComplete: true,
+            capStatus: "below",
+            cacheReadTokens: 0,
+            knownCacheReadSavingsUsd: 0,
+            cacheSavingsComplete: true,
+            routes: [],
+          },
+        }),
+      );
+    };
+    await expect(client.call("getSpendSummary", {})).rejects.toBeInstanceOf(
+      CoachClientProtocolError,
+    );
+  });
+
   it("exercises all methods with monotonic strict requests and parsed results", async () => {
     const received: unknown[] = [];
     const { socket, connecting } = acceptedSocket();
@@ -486,6 +520,38 @@ describe("RPC receive and observers", () => {
         configureRuntime: { schemaVersion: 1, applied: { llm: true, intervals: false } },
         getUnitsPreference: { value: "metric", source: "default" },
         setUnitsPreference: { value: "imperial", source: "cycling" },
+        getSpendSummary: {
+          localDate: "1998-07-06",
+          timezone: "UTC",
+          dailyCapUsd: 0.5,
+          knownSpendUsd: 0,
+          generationCount: 0,
+          pricedGenerationCount: 0,
+          unpricedGenerationCount: 0,
+          malformedLineCount: 0,
+          spendComplete: true,
+          capStatus: "below",
+          cacheReadTokens: 0,
+          knownCacheReadSavingsUsd: 0,
+          cacheSavingsComplete: true,
+          routes: [],
+        },
+        setDailySpendCap: {
+          localDate: "1998-07-06",
+          timezone: "UTC",
+          dailyCapUsd: 0.75,
+          knownSpendUsd: 0,
+          generationCount: 0,
+          pricedGenerationCount: 0,
+          unpricedGenerationCount: 0,
+          malformedLineCount: 0,
+          spendComplete: true,
+          capStatus: "below",
+          cacheReadTokens: 0,
+          knownCacheReadSavingsUsd: 0,
+          cacheSavingsComplete: true,
+          routes: [],
+        },
       };
       socket.emitMessage(
         serializeCoachRpcEnvelope({
@@ -547,6 +613,17 @@ describe("RPC receive and observers", () => {
     expect(received.slice(-2).map((value) => (value as { method: string }).method)).toEqual([
       "getUnitsPreference",
       "setUnitsPreference",
+    ]);
+    await expect(client.call("getSpendSummary", {})).resolves.toMatchObject({
+      dailyCapUsd: 0.5,
+    });
+    await expect(client.call("setDailySpendCap", { dailyCapUsd: 0.75 })).resolves.toMatchObject({
+      dailyCapUsd: 0.75,
+    });
+    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([11, 12]);
+    expect(received.slice(-2).map((value) => (value as { method: string }).method)).toEqual([
+      "getSpendSummary",
+      "setDailySpendCap",
     ]);
     socket.closeSynchronously = true;
     await client.close();

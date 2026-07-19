@@ -9,6 +9,7 @@ import { createRequire } from "node:module";
 import type {
   CoachEngine,
   CoachOperations,
+  SpendOperations,
   OperationProgressEvent,
   TurnEvent,
 } from "@enduragent/coach-contract";
@@ -324,9 +325,22 @@ export async function launchDesktopFixture(input: {
       };
     },
   };
+  const spend: SpendOperations = {
+    async getSpendSummary(request) {
+      return finalFrame(await invoke("getSpendSummary", request)) as Awaited<
+        ReturnType<SpendOperations["getSpendSummary"]>
+      >;
+    },
+    async setDailySpendCap(request) {
+      return finalFrame(await invoke("setDailySpendCap", request)) as Awaited<
+        ReturnType<SpendOperations["setDailySpendCap"]>
+      >;
+    },
+  };
   const rpc = createCoachRpcServer({
     engine,
     operations,
+    spend,
     token: input.token,
     owner: "unmanaged-foreground",
   });

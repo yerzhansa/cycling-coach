@@ -64,3 +64,9 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
 }
 
 export { extractAccountId };
+export {
+  cacheReadSavingsUsd,
+  classifySpendCaching,
+  priceInclusiveUsage,
+  type UsageTokenCounts,
+} from "./usage-cost.js";

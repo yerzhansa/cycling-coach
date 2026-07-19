@@ -17,6 +17,11 @@ import {
   ResetSessionResponseSchema,
   HasSessionResponseSchema,
   type CoachEngine,
+  CACHING_UNAVAILABLE_DISCLOSURE,
+  GetSpendSummaryRpcParamsSchema,
+  SetDailySpendCapRpcParamsSchema,
+  SpendRouteSummarySchema,
+  SpendSummarySchema,
 } from "../src/index.js";
 
 const TURN_ID = "b8b6c1a2-0000-4000-8000-000000000001";
@@ -79,6 +84,82 @@ describe("exit codes", () => {
 describe("protocol version", () => {
   it("is 3", () => {
     expect(PROTOCOL_VERSION).toBe(3);
+  });
+});
+
+describe("spend contract", () => {
+  const route = {
+    provider: "synthetic-provider",
+    model: "synthetic-model",
+    generationCount: 1,
+    pricedGenerationCount: 1,
+    unpricedGenerationCount: 0,
+    providerReportedGenerationCount: 1,
+    knownSpendUsd: 0.02,
+    cacheReadTokens: 10,
+    cacheReadSavingsUsd: 0.001,
+    caching: "provider-dependent",
+    disclosure: null,
+  } as const;
+  const summary = {
+    localDate: "1998-07-06",
+    timezone: "UTC",
+    dailyCapUsd: 0.5,
+    knownSpendUsd: 0.02,
+    generationCount: 1,
+    pricedGenerationCount: 1,
+    unpricedGenerationCount: 0,
+    malformedLineCount: 0,
+    spendComplete: true,
+    capStatus: "below",
+    cacheReadTokens: 10,
+    knownCacheReadSavingsUsd: 0.001,
+    cacheSavingsComplete: true,
+    routes: [route],
+  } as const;
+
+  it("validates strict requests, routes, summaries, and the exact disclosure", () => {
+    expect(GetSpendSummaryRpcParamsSchema.parse({})).toEqual({});
+    expect(GetSpendSummaryRpcParamsSchema.safeParse({ extra: true }).success).toBe(false);
+    expect(SetDailySpendCapRpcParamsSchema.parse({ dailyCapUsd: 0.5 })).toEqual({
+      dailyCapUsd: 0.5,
+    });
+    for (const dailyCapUsd of [0, -1, NaN, Infinity]) {
+      expect(SetDailySpendCapRpcParamsSchema.safeParse({ dailyCapUsd }).success).toBe(false);
+    }
+    expect(SpendRouteSummarySchema.parse(route)).toEqual(route);
+    expect(SpendSummarySchema.parse(summary)).toEqual(summary);
+    expect(
+      SpendRouteSummarySchema.parse({
+        ...route,
+        caching: "unavailable",
+        disclosure: CACHING_UNAVAILABLE_DISCLOSURE,
+      }).disclosure,
+    ).toBe("caching unavailable on this route");
+    expect(SpendRouteSummarySchema.safeParse({ ...route, extra: true }).success).toBe(false);
+  });
+
+  it("rejects contradictory route and aggregate invariants", () => {
+    expect(SpendRouteSummarySchema.safeParse({ ...route, pricedGenerationCount: 0 }).success).toBe(
+      false,
+    );
+    expect(
+      SpendRouteSummarySchema.safeParse({
+        ...route,
+        caching: "unavailable",
+        disclosure: null,
+      }).success,
+    ).toBe(false);
+    for (const invalid of [
+      { ...summary, knownSpendUsd: 0.03 },
+      { ...summary, cacheReadTokens: 11 },
+      { ...summary, knownCacheReadSavingsUsd: 0.002 },
+      { ...summary, cacheSavingsComplete: false },
+      { ...summary, spendComplete: false },
+      { ...summary, capStatus: "unknown" },
+    ]) {
+      expect(SpendSummarySchema.safeParse(invalid).success).toBe(false);
+    }
   });
 });
 

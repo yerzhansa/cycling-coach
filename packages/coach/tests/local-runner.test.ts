@@ -88,6 +88,11 @@ const operations: CoachOperations = {
   }),
 };
 
+const spendMeter = {
+  getSpendSummary: vi.fn(),
+  setDailySpendCap: vi.fn(),
+};
+
 const config = {
   dataSource: "store",
   llm: { provider: "anthropic", model: "synthetic", apiKey: "" },
@@ -198,7 +203,7 @@ beforeEach(async () => {
   mocks.project.mockReturnValue(engineConfig);
   mocks.composition.mockImplementation(async () => {
     trace.push("engine-open");
-    return { engine, operations, close: () => closeImplementation() };
+    return { engine, operations, spendMeter, close: () => closeImplementation() };
   });
   mocks.withWriter.mockImplementation(
     async (env: Record<string, string | undefined>, plan: CoachStoreWriterPlan<unknown>) => {
@@ -227,6 +232,7 @@ describe("local coach runner", () => {
         input(async (lifecycle) => {
           expect(lifecycle.listener).toBe(inertWriterProtocolListener);
           expect(lifecycle.operations).toBe(operations);
+          expect(lifecycle.spendMeter).toBe(spendMeter);
           trace.push("operation");
           return "done";
         }),
@@ -403,7 +409,7 @@ describe("local coach runner", () => {
       closerCalls += 1;
       trace.push("lifecycle-close");
     };
-    mocks.composition.mockResolvedValue({ engine, operations, close });
+    mocks.composition.mockResolvedValue({ engine, operations, spendMeter, close });
     await expect(
       withLocalCoach(
         input(async (lifecycle) => {

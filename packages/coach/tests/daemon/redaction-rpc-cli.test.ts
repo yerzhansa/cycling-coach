@@ -161,6 +161,10 @@ async function startRpc(coachEngine: CoachEngine): Promise<RunningRpc> {
         applied: { llm: llm !== undefined, intervals: intervals !== undefined },
       }),
     },
+    spend: {
+      getSpendSummary: () => Promise.reject(new Error("Spend handler is not used.")),
+      setDailySpendCap: () => Promise.reject(new Error("Spend handler is not used.")),
+    },
     token: AUTH_TOKEN,
     owner: "unmanaged-foreground",
   });

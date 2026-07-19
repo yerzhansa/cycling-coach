@@ -15,6 +15,7 @@ class FakeElement {
   id = "";
   rows = 0;
   htmlFor = "";
+  removed = false;
   scrollHeight = 0;
   scrollTop = 0;
   clientHeight = 0;
@@ -68,6 +69,10 @@ class FakeElement {
   requestSubmit(): void {
     this.dispatch("submit", { preventDefault() {} });
   }
+
+  remove(): void {
+    this.removed = true;
+  }
 }
 
 class FakeDocument {
@@ -101,6 +106,21 @@ beforeEach(() => {
 });
 
 describe("chat view", () => {
+  it("places one notice host immediately before the composer and removes it on dispose", () => {
+    const composerHost = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: new FakeElement("div") as never,
+      composerHost: composerHost as never,
+    });
+    const host = mounted.noticeHost as unknown as FakeElement;
+    expect(host.className).toBe("chat-notice-host");
+    expect(composerHost.children[0]).toBe(host);
+    expect(composerHost.children[1]?.className).toBe("composer");
+    mounted.dispose();
+    expect(host.removed).toBe(true);
+  });
+
   it("renders hostile HTML-shaped text literally in the polite log", () => {
     const conversation = new FakeElement("main");
     const thread = new FakeElement("div");

@@ -16,7 +16,13 @@ describe("engine public export surface", () => {
   });
 
   it("exports only the canonical factory and the authorized JWT account helper at runtime", () => {
-    expect(Object.keys(engine).sort()).toEqual(["createCoachEngine", "extractAccountId"]);
+    expect(Object.keys(engine).sort()).toEqual([
+      "cacheReadSavingsUsd",
+      "classifySpendCaching",
+      "createCoachEngine",
+      "extractAccountId",
+      "priceInclusiveUsage",
+    ]);
     expect(timeoutTypeProof).toEqual({ ttftMs: 1, interChunkMs: 1 });
     expect("DEFAULT_CHAT_STREAM_TIMEOUTS" in engine).toBe(false);
   });
