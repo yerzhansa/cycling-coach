@@ -41,7 +41,11 @@ import { createAnchorRepository, type AnchorRepository } from "@enduragent/kerne
 import { ErrorStateSchema, LatestJsonSchema } from "@enduragent/kernel/reference/schemas";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import type { CoachStoreWriterContext } from "./runtime.js";
-import type { CoachOperations } from "@enduragent/coach-contract";
+import type {
+  CoachEngine,
+  CoachOperations,
+  ConfigureRuntimeRpcParams,
+} from "@enduragent/coach-contract";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import { createPersistedAthleteStateSource } from "./athlete-state-reader.js";
 import { createCoachEngineAdapter } from "./coach-engine-adapter.js";
@@ -63,7 +67,7 @@ interface OAuthCredential {
 }
 
 export interface LocalCoachComposition {
-  readonly engine: ReturnType<typeof createCoachEngineAdapter>;
+  readonly engine: CoachEngine;
   readonly operations: CoachOperations;
   close(): Promise<void>;
 }
@@ -108,6 +112,86 @@ export interface LocalStoreRuntime {
 export type LocalStoreRuntimeOptions = Omit<StoreRuntimeOptions, "reference"> & {
   readonly reference: LocalReferenceRuntime;
 };
+
+function copyConfig(config: Config): Config {
+  return {
+    ...config,
+    llm: { ...config.llm },
+    intervals: { ...config.intervals },
+    telegram: { ...config.telegram },
+    session: { ...config.session },
+  };
+}
+
+function mergedRuntimeConfig(config: Config, request: ConfigureRuntimeRpcParams): Config {
+  const next = copyConfig(config);
+  if (request.llm !== undefined) {
+    next.llm = {
+      provider: request.llm.provider,
+      model: request.llm.model,
+      apiKey: request.llm.api_key,
+      authProfile: request.llm.provider === "openai-codex" ? "openai-codex" : undefined,
+    };
+  }
+  if (request.intervals !== undefined) {
+    next.intervals = {
+      apiKey: request.intervals.api_key,
+      athleteId: request.intervals.athlete_id,
+    };
+  }
+  return next;
+}
+
+function createReconfigurableEngine(initial: CoachEngine): {
+  readonly engine: CoachEngine;
+  replace(create: () => CoachEngine): Promise<void>;
+} {
+  let active = initial;
+  let admission = Promise.resolve();
+  let activeCalls = 0;
+  const drainWaiters = new Set<() => void>();
+
+  const run = async <T>(operation: (engine: CoachEngine) => Promise<T>): Promise<T> => {
+    await admission;
+    activeCalls += 1;
+    const selected = active;
+    try {
+      return await operation(selected);
+    } finally {
+      activeCalls -= 1;
+      if (activeCalls === 0) {
+        for (const resolve of drainWaiters) resolve();
+        drainWaiters.clear();
+      }
+    }
+  };
+
+  return {
+    engine: {
+      chat: (request, onEvent) => run((engine) => engine.chat(request, onEvent)),
+      resetSession: (request) => run((engine) => engine.resetSession(request)),
+      hasSession: (request) => run((engine) => engine.hasSession(request)),
+      getAthleteState: () => run((engine) => engine.getAthleteState()),
+    },
+    async replace(create) {
+      const previousAdmission = admission;
+      let release!: () => void;
+      const barrier = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      admission = previousAdmission.then(() => barrier);
+      await previousAdmission;
+      try {
+        if (activeCalls > 0) {
+          await new Promise<void>((resolve) => drainWaiters.add(resolve));
+        }
+        active = create();
+      } finally {
+        release();
+      }
+    },
+  };
+}
 
 function readReferenceState(dataDir: string): ReferenceStateSnapshot {
   const referenceDir = join(dataDir, "data");
@@ -232,6 +316,7 @@ export async function createLocalCoachComposition(
     throw new TypeError("Ready engine configuration does not match the selected athlete home.");
   }
   const now = dependencies.now ?? Date.now;
+  let activeConfig = copyConfig(input.config);
   let runtime: LocalStoreRuntime | undefined;
   let reference: LocalReferenceRuntime | undefined;
   let closePromise: Promise<void> | undefined;
@@ -249,7 +334,8 @@ export async function createLocalCoachComposition(
     });
     const runtimeOptions: LocalStoreRuntimeOptions = {
       env: input.env,
-      config: input.config,
+      config: activeConfig,
+      readConfig: () => activeConfig,
       home: input.home,
       reference,
       writerContext: input.context,
@@ -265,56 +351,79 @@ export async function createLocalCoachComposition(
     await runtime.runWindow();
     runtime.startScheduler();
     const stateReader = createPersistedAthleteStateSource({ dataDir: input.home.root });
-    const legacyClient =
-      input.config.intervals.apiKey.length === 0
-        ? null
-        : makeChatClient({
-            apiKey: input.config.intervals.apiKey,
-            athleteId: input.config.intervals.athleteId,
-          });
     const memory = new Memory(input.home.root, input.config.session.timezone);
-    const ports: EngineHostPorts = {
-      config: input.engineConfig,
-      memory,
-      chatStore: new ChatStore(input.home.root, input.config.session.resetArchiveRetentionDays),
-      secrets: { resolve: resolveSecretRef },
-      platform: {
-        legacyClient,
-        athleteData: runtime.athleteData,
-        calendarMutations:
-          legacyClient === null
-            ? createMissingPlatformCalendarMutations()
-            : createPlatformCalendarMutations(legacyClient),
-      },
-      logger: createSubsystemLogger("agent", input.home.root),
-      usage: { append: (line) => appendUsageLine(input.home.root, line) },
-      stateReader,
-      readReferenceState: () => readReferenceState(input.home.root),
-      getAccessToken: createAccessTokenReader(input.home.configDir, now),
-      classifyFailure,
-      extractRetryAfterMs,
-      now,
-      randomId: dependencies.randomId ?? randomUUID,
-      modelTransportDecorator: dependencies.modelTransportDecorator,
-      onToolsAssembled: dependencies.onToolsAssembled,
-    };
-    const engineInput = { sport: cyclingSport, ports } satisfies CreateCoachEngineInput;
-    const backend = (dependencies.createBackend ?? createCoachEngine)(engineInput);
+    const chatStore = new ChatStore(
+      input.home.root,
+      input.config.session.resetArchiveRetentionDays,
+    );
+    const logger = createSubsystemLogger("agent", input.home.root);
+    const getAccessToken = createAccessTokenReader(input.home.configDir, now);
     const repository = (dependencies.createRepository ?? createAnchorRepository)(
       input.context.store,
     );
     const cyclingFtpAnchorResolver = (
       dependencies.createResolver ?? createCyclingFtpAnchorResolver
     )(repository);
-    const engine = createCoachEngineAdapter({
-      backend,
-      getAthleteState: () => stateReader.getAthleteState(),
-      cyclingFtpAnchorResolver,
-      now,
+    const buildEngine = (config: Config): CoachEngine => {
+      const projectedConfig = engineConfigFromConfig(config);
+      const legacyClient =
+        config.intervals.apiKey.length === 0
+          ? null
+          : makeChatClient({
+              apiKey: config.intervals.apiKey,
+              athleteId: config.intervals.athleteId,
+            });
+      const ports: EngineHostPorts = {
+        config: projectedConfig,
+        memory,
+        chatStore,
+        secrets: { resolve: resolveSecretRef },
+        platform: {
+          legacyClient,
+          athleteData: runtime!.athleteData,
+          calendarMutations:
+            legacyClient === null
+              ? createMissingPlatformCalendarMutations()
+              : createPlatformCalendarMutations(legacyClient),
+        },
+        logger,
+        usage: { append: (line) => appendUsageLine(input.home.root, line) },
+        stateReader,
+        readReferenceState: () => readReferenceState(input.home.root),
+        getAccessToken,
+        classifyFailure,
+        extractRetryAfterMs,
+        now,
+        randomId: dependencies.randomId ?? randomUUID,
+        modelTransportDecorator: dependencies.modelTransportDecorator,
+        onToolsAssembled: dependencies.onToolsAssembled,
+      };
+      const engineInput = { sport: cyclingSport, ports } satisfies CreateCoachEngineInput;
+      const backend = (dependencies.createBackend ?? createCoachEngine)(engineInput);
+      return createCoachEngineAdapter({
+        backend,
+        getAthleteState: () => stateReader.getAthleteState(),
+        cyclingFtpAnchorResolver,
+        now,
+      });
+    };
+    const reconfigurable = createReconfigurableEngine(buildEngine(activeConfig));
+    const applyRuntimeConfig = async (request: ConfigureRuntimeRpcParams): Promise<void> => {
+      await reconfigurable.replace(() => {
+        const candidate = mergedRuntimeConfig(activeConfig, request);
+        const replacement = buildEngine(candidate);
+        activeConfig = candidate;
+        return replacement;
+      });
+    };
+    const operations = createCoachOperations({
+      home: input.home,
+      context: input.context,
+      runtime,
+      applyRuntimeConfig,
     });
-    const operations = createCoachOperations({ home: input.home, context: input.context, runtime });
     return {
-      engine,
+      engine: reconfigurable.engine,
       operations,
       close() {
         closePromise ??= (async () => {

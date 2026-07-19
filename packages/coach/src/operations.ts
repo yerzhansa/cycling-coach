@@ -1,17 +1,30 @@
 import {
+  ConfigureRuntimeRpcParamsSchema,
+  ConfigureRuntimeRpcResultSchema,
   ImportFilesRpcParamsSchema,
   ImportFilesRpcResultSchema,
   OperationProgressEventSchema,
+  SaveIntakeRpcParamsSchema,
+  SaveIntakeRpcResultSchema,
   SyncRpcParamsSchema,
   SyncRpcResultSchema,
+  type ConfigureRuntimeRpcParams,
+  type ConfigureRuntimeRpcResult,
   type CoachOperations,
   type ImportFilesRpcParams,
   type ImportFilesRpcResult,
   type OperationProgressEvent,
+  type SaveIntakeRpcParams,
+  type SaveIntakeRpcResult,
   type SyncRpcParams,
   type SyncRpcResult,
 } from "@enduragent/coach-contract";
-import type { AthleteHome } from "@enduragent/kernel-node/home";
+import { createIntakeRepository } from "@enduragent/kernel/store";
+import {
+  createAuthoredIdentity,
+  type AthleteHome,
+  type AuthoredIdentity,
+} from "@enduragent/kernel-node/home";
 import { importFilesWithReport } from "@enduragent/kernel-node/ingest";
 import type { LocalStoreRuntime } from "./composition.js";
 import type { CoachStoreWriterContext } from "./runtime.js";
@@ -20,10 +33,13 @@ export interface CreateCoachOperationsInput {
   readonly home: AthleteHome;
   readonly context: CoachStoreWriterContext;
   readonly runtime: Pick<LocalStoreRuntime, "runWindow">;
+  readonly applyRuntimeConfig: (request: ConfigureRuntimeRpcParams) => Promise<void>;
 }
 
 export interface CoachOperationsDependencies {
-  readonly importFiles: typeof importFilesWithReport;
+  readonly importFiles?: typeof importFilesWithReport;
+  readonly createIdentity?: (configDir: string) => AuthoredIdentity;
+  readonly createIntakeRepository?: typeof createIntakeRepository;
 }
 
 function sameHome(left: AthleteHome, right: AthleteHome): boolean {
@@ -37,13 +53,16 @@ function sameHome(left: AthleteHome, right: AthleteHome): boolean {
 
 export function createCoachOperations(
   input: CreateCoachOperationsInput,
-  dependencies: CoachOperationsDependencies = { importFiles: importFilesWithReport },
+  dependencies: CoachOperationsDependencies = {},
 ): CoachOperations {
   if (!sameHome(input.home, input.context.home)) {
     throw new TypeError("Writer home does not match the selected athlete home.");
   }
   const store = input.context.store;
   const archiveDir = input.home.archiveDir;
+  const identity = (dependencies.createIdentity ?? createAuthoredIdentity)(input.home.configDir);
+  const intake = (dependencies.createIntakeRepository ?? createIntakeRepository)(store);
+  const importFiles = dependencies.importFiles ?? importFilesWithReport;
   let tail = Promise.resolve();
 
   const enqueue = <T>(operation: () => Promise<T>): Promise<T> => {
@@ -71,7 +90,7 @@ export function createCoachOperations(
       const paths = [...parsedRequest.paths];
       return enqueue(async () => {
         deliver(onEvent, { phase: "started", completed: 0, total: paths.length });
-        const report = await dependencies.importFiles({ inputPaths: paths, archiveDir, store });
+        const report = await importFiles({ inputPaths: paths, archiveDir, store });
         const result = ImportFilesRpcResultSchema.parse({
           schemaVersion: 1,
           files: {
@@ -107,6 +126,34 @@ export function createCoachOperations(
         });
         deliver(onEvent, { phase: "completed", completed: 1, total: 1 });
         return result;
+      });
+    },
+    saveIntake(request: SaveIntakeRpcParams): Promise<SaveIntakeRpcResult> {
+      const parsedRequest = SaveIntakeRpcParamsSchema.parse(request);
+      return enqueue(async () => {
+        const deviceId = await identity.deviceId();
+        const stamp = identity.hlcStamp();
+        await intake.replace({
+          id: identity.newUlid(),
+          ...parsedRequest,
+          device_id: deviceId,
+          hlc_physical_ms: stamp.physicalMs,
+          hlc_counter: stamp.counter,
+        });
+        return SaveIntakeRpcResultSchema.parse({ schemaVersion: 1, saved: true });
+      });
+    },
+    configureRuntime(request: ConfigureRuntimeRpcParams): Promise<ConfigureRuntimeRpcResult> {
+      const parsedRequest = ConfigureRuntimeRpcParamsSchema.parse(request);
+      return enqueue(async () => {
+        await input.applyRuntimeConfig(parsedRequest);
+        return ConfigureRuntimeRpcResultSchema.parse({
+          schemaVersion: 1,
+          applied: {
+            llm: parsedRequest.llm !== undefined,
+            intervals: parsedRequest.intervals !== undefined,
+          },
+        });
       });
     },
   };

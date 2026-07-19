@@ -1,8 +1,4 @@
-export {
-  ATHLETE_HOME_ENV,
-  expandTilde,
-  resolveAthleteHome,
-} from "./resolve-athlete-home.js";
+export { ATHLETE_HOME_ENV, expandTilde, resolveAthleteHome } from "./resolve-athlete-home.js";
 export type { AthleteHome } from "./resolve-athlete-home.js";
 
 export {
@@ -25,3 +21,6 @@ export type {
   FtpSeedReport,
   SeedFtpHistoryOptions,
 } from "./anchor-seeder.js";
+
+export { createAuthoredIdentity } from "../store/authored-identity.js";
+export type { AuthoredIdentity, AuthoredIdentityDependencies } from "../store/authored-identity.js";

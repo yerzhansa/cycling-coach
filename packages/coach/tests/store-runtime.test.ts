@@ -21,7 +21,7 @@ const manifest = { capture_id: "12345678-1234-4123-8123-123456789abc",
 const produced: ProducedLocalBundle = { captureId: manifest.capture_id, frozenNow: manifest.plan.frozenNow,
   bundle: { activities: [], wellness: [], ftpHistory: [], athlete: { sportSettings: [] } } };
 
-async function makeRuntime(runtimeConfig: Config = config) {
+async function makeRuntime(runtimeConfig: Config = config, readConfig?: () => Config) {
   const root = await mkdtemp(join(await realpath(tmpdir()), "store-runtime-")); roots.push(root);
   let runtime!: StoreRuntime;
   const reference = { scheduler: { stop: vi.fn() }, services: {},
@@ -34,7 +34,7 @@ async function makeRuntime(runtimeConfig: Config = config) {
     return manifest;
   });
   const produce = vi.fn(async () => produced);
-  runtime = createStoreRuntime({ env: {}, config: runtimeConfig, home: { root, storeDir: join(root, "store"),
+  runtime = createStoreRuntime({ env: {}, config: runtimeConfig, readConfig, home: { root, storeDir: join(root, "store"),
     archiveDir: join(root, "archive"), configDir: join(root, "config") }, reference,
     dependencies: { capture, produce,
       now: () => new Date("1998-07-18T12:00:00.000Z"), monotonicNow: () => 1 } });
@@ -69,6 +69,26 @@ describe("StoreRuntime", () => {
     await runtime.close();
   });
 
+  it("reads an applied intervals overlay at the next store window", async () => {
+    let activeConfig: Config = {
+      ...config,
+      intervals: { apiKey: "", athleteId: "unconfigured" },
+    };
+    const { runtime, capture } = await makeRuntime(activeConfig, () => activeConfig);
+    await runtime.runWindow();
+    expect(capture).not.toHaveBeenCalled();
+    activeConfig = {
+      ...activeConfig,
+      intervals: { apiKey: "placeholder", athleteId: "new-athlete" },
+    };
+    await runtime.runWindow();
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(capture).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "placeholder", athleteId: "new-athlete" }),
+    );
+    await runtime.close();
+  });
+
   it("retains the prior complete snapshot after a later capture failure", async () => {
     const { runtime, capture } = await makeRuntime();
     await runtime.runWindow();
@@ -79,47 +99,101 @@ describe("StoreRuntime", () => {
   });
 
   it("owns one unref'd six-hour timer, skips overlap, and closes once", async () => {
-    const root = await mkdtemp(join(await realpath(tmpdir()), "store-runtime-timer-")); roots.push(root);
-    const unref = vi.fn(), clear = vi.fn(); let delay = 0;
+    const root = await mkdtemp(join(await realpath(tmpdir()), "store-runtime-timer-"));
+    roots.push(root);
+    const unref = vi.fn(),
+      clear = vi.fn();
+    let delay = 0;
     const handle = { unref } as unknown as ReturnType<typeof setTimeout>;
     let release!: () => void;
-    const reference = { scheduler: { stop: vi.fn() }, services: {},
-      runScheduledOnce: vi.fn(async () => ({ kind: "ran", lastSyncAt: "", refreshed: [] })) } as unknown as ReferenceRuntime;
-    const runtime = createStoreRuntime({ env: {}, config, home: { root, storeDir: join(root, "store"),
-      archiveDir: join(root, "archive"), configDir: join(root, "config") }, reference,
-      dependencies: { capture: vi.fn(() => new Promise<ReferenceCaptureManifest>((resolve) => { release = () => resolve(manifest); })),
-        produce: vi.fn(async () => produced), now: () => new Date("1998-07-18T12:00:00.000Z"), monotonicNow: () => 1,
+    const reference = {
+      scheduler: { stop: vi.fn() },
+      services: {},
+      runScheduledOnce: vi.fn(async () => ({ kind: "ran", lastSyncAt: "", refreshed: [] })),
+    } as unknown as ReferenceRuntime;
+    const runtime = createStoreRuntime({
+      env: {},
+      config,
+      home: {
+        root,
+        storeDir: join(root, "store"),
+        archiveDir: join(root, "archive"),
+        configDir: join(root, "config"),
+      },
+      reference,
+      dependencies: {
+        capture: vi.fn(
+          () =>
+            new Promise<ReferenceCaptureManifest>((resolve) => {
+              release = () => resolve(manifest);
+            }),
+        ),
+        produce: vi.fn(async () => produced),
+        now: () => new Date("1998-07-18T12:00:00.000Z"),
+        monotonicNow: () => 1,
         schedulerDependencies: {
           nowEpochMs: () => new Date("1998-07-18T12:00:00.000Z").getTime(),
-          setTimeout: ((_: () => void, ms: number) => { delay = ms; return handle; }) as typeof setTimeout,
+          setTimeout: ((_: () => void, ms: number) => {
+            delay = ms;
+            return handle;
+          }) as typeof setTimeout,
           clearTimeout: clear as unknown as typeof clearTimeout,
-        } } });
-    runtime.startScheduler(); runtime.startScheduler();
-    expect(delay).toBe(STORE_REFRESH_INTERVAL_MS); expect(unref).toHaveBeenCalledTimes(1);
-    const first = runtime.runWindow(), second = runtime.runWindow(); expect(first).toBe(second);
-    release(); await first; await runtime.close(); await runtime.close();
+        },
+      },
+    });
+    runtime.startScheduler();
+    runtime.startScheduler();
+    expect(delay).toBe(STORE_REFRESH_INTERVAL_MS);
+    expect(unref).toHaveBeenCalledTimes(1);
+    const first = runtime.runWindow(),
+      second = runtime.runWindow();
+    expect(first).toBe(second);
+    release();
+    await first;
+    await runtime.close();
+    await runtime.close();
     expect(clear).toHaveBeenCalledTimes(1);
   });
 
   it("cancels an active window when closed and rejects later windows", async () => {
-    const root = await mkdtemp(join(await realpath(tmpdir()), "store-runtime-close-")); roots.push(root);
+    const root = await mkdtemp(join(await realpath(tmpdir()), "store-runtime-close-"));
+    roots.push(root);
     const handle = { unref: vi.fn() } as unknown as ReturnType<typeof setTimeout>;
     let signal!: AbortSignal;
-    const reference = { scheduler: { stop: vi.fn() }, services: {},
-      runScheduledOnce: vi.fn(async () => ({ kind: "ran", lastSyncAt: "", refreshed: [] })) } as unknown as ReferenceRuntime;
-    const runtime = createStoreRuntime({ env: {}, config, home: { root, storeDir: join(root, "store"),
-      archiveDir: join(root, "archive"), configDir: join(root, "config") }, reference,
-      dependencies: { capture: vi.fn((options: Parameters<typeof import("../src/capture.js").runReferenceCapture>[0]) => {
-        signal = options.budget!.signal;
-        return new Promise<ReferenceCaptureManifest>((_, reject) => {
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-        });
-      }), produce: vi.fn(async () => produced), now: () => new Date("1998-07-18T12:00:00.000Z"), monotonicNow: () => 1,
+    const reference = {
+      scheduler: { stop: vi.fn() },
+      services: {},
+      runScheduledOnce: vi.fn(async () => ({ kind: "ran", lastSyncAt: "", refreshed: [] })),
+    } as unknown as ReferenceRuntime;
+    const runtime = createStoreRuntime({
+      env: {},
+      config,
+      home: {
+        root,
+        storeDir: join(root, "store"),
+        archiveDir: join(root, "archive"),
+        configDir: join(root, "config"),
+      },
+      reference,
+      dependencies: {
+        capture: vi.fn(
+          (options: Parameters<typeof import("../src/capture.js").runReferenceCapture>[0]) => {
+            signal = options.budget!.signal;
+            return new Promise<ReferenceCaptureManifest>((_, reject) => {
+              signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            });
+          },
+        ),
+        produce: vi.fn(async () => produced),
+        now: () => new Date("1998-07-18T12:00:00.000Z"),
+        monotonicNow: () => 1,
         schedulerDependencies: {
           nowEpochMs: () => new Date("1998-07-18T12:00:00.000Z").getTime(),
           setTimeout: vi.fn(() => handle) as unknown as typeof setTimeout,
           clearTimeout: vi.fn() as unknown as typeof clearTimeout,
-        } } });
+        },
+      },
+    });
     const window = runtime.runWindow();
     const rejectedWindow = expect(window).rejects.toThrow("Store runtime closed.");
     const close = runtime.close();

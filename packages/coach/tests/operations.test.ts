@@ -60,6 +60,7 @@ describe("coach operations", () => {
         home: liveHome,
         context: liveContext,
         runtime: { runWindow: vi.fn() },
+        applyRuntimeConfig: async () => {},
       });
       const paths = ["brick-cycling.fit", "fallback-cycling.tcx", "fallback-cycling.gpx"].map(
         (name) => resolve("packages/kernel-node/tests/fixtures/ingest", name),
@@ -82,6 +83,83 @@ describe("coach operations", () => {
     }
   });
 
+  it("idempotently replaces one daemon-authored intake row", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "coach-intake-"));
+    const liveHome: AthleteHome = {
+      root,
+      storeDir: join(root, "store"),
+      archiveDir: join(root, "archive"),
+      configDir: join(root, "config"),
+    };
+    const store = openSqliteStorage(join(root, "coach.db"));
+    try {
+      await runMigrations(store, MIGRATIONS);
+      const operations = createCoachOperations({
+        home: liveHome,
+        context: {
+          home: liveHome,
+          store,
+          listener: {} as CoachStoreWriterContext["listener"],
+        },
+        runtime: { runWindow: vi.fn() },
+        applyRuntimeConfig: async () => {},
+      });
+      await expect(
+        operations.saveIntake({
+          swim_skill_floor: null,
+          continuous_distance_capable: null,
+          open_water_comfort: null,
+          prior_bsi: false,
+          clinician_cleared: null,
+          injury_status: "none",
+        }),
+      ).resolves.toEqual({ schemaVersion: 1, saved: true });
+      const first = await store.get("SELECT * FROM intake_flags");
+      await operations.saveIntake({
+        swim_skill_floor: null,
+        continuous_distance_capable: null,
+        open_water_comfort: null,
+        prior_bsi: true,
+        clinician_cleared: false,
+        injury_status: "managing",
+      });
+      const second = await store.get("SELECT * FROM intake_flags");
+      expect(await store.all("SELECT id FROM intake_flags")).toHaveLength(1);
+      expect(second).toMatchObject({
+        prior_bsi: 1,
+        clinician_cleared: 0,
+        injury_status: "managing",
+        device_id: first?.device_id,
+      });
+      expect(second?.id).not.toBe(first?.id);
+      expect(Number(second?.hlc_counter)).toBeGreaterThanOrEqual(Number(first?.hlc_counter));
+      await expect(async () =>
+        operations.saveIntake({
+          swim_skill_floor: null,
+          continuous_distance_capable: null,
+          open_water_comfort: null,
+          prior_bsi: false,
+          clinician_cleared: null,
+          injury_status: "none",
+          extra: true,
+        } as never),
+      ).rejects.toThrow();
+      await expect(async () =>
+        operations.saveIntake({
+          swim_skill_floor: null,
+          continuous_distance_capable: null,
+          open_water_comfort: null,
+          prior_bsi: true,
+          clinician_cleared: null,
+          injury_status: "returning",
+        }),
+      ).rejects.toThrow();
+    } finally {
+      await store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("maps canonical import and sync reports with exact progress", async () => {
     const importFiles = vi.fn(async () => ({
       files: [{ outcome: "imported" }, { outcome: "quarantined" }],
@@ -98,7 +176,12 @@ describe("coach operations", () => {
       counts: requestCounts(2, 1),
     }));
     const operations = createCoachOperations(
-      { home, context: context(), runtime: { runWindow } },
+      {
+        home,
+        context: context(),
+        runtime: { runWindow },
+        applyRuntimeConfig: async () => {},
+      },
       { importFiles },
     );
     const importEvents: unknown[] = [];
@@ -159,7 +242,12 @@ describe("coach operations", () => {
       };
     });
     const operations = createCoachOperations(
-      { home, context: context(), runtime: { runWindow } },
+      {
+        home,
+        context: context(),
+        runtime: { runWindow },
+        applyRuntimeConfig: async () => {},
+      },
       { importFiles },
     );
     const first = operations.importFiles({ paths: ["/synthetic/a.fit"] });
@@ -170,5 +258,54 @@ describe("coach operations", () => {
     await expect(first).rejects.toThrow("synthetic failure");
     await expect(second).resolves.toMatchObject({ schemaVersion: 1 });
     expect(trace).toEqual(["import-start", "import-end", "sync"]);
+  });
+
+  it("applies llm-only, intervals-only, both, and superseding runtime requests without echo", async () => {
+    const applied: unknown[] = [];
+    const applyRuntimeConfig = vi.fn(async (request) => {
+      applied.push(request);
+    });
+    const operations = createCoachOperations({
+      home,
+      context: context(),
+      runtime: { runWindow: vi.fn() },
+      applyRuntimeConfig,
+    });
+    const llmFirst = {
+      llm: { provider: "anthropic" as const, model: "first", api_key: "placeholder" },
+    };
+    const intervalsOnly = {
+      intervals: { api_key: "placeholder", athlete_id: "athlete-a" },
+    };
+    const both = {
+      llm: { provider: "openrouter" as const, model: "second", api_key: "placeholder" },
+      intervals: { api_key: "placeholder", athlete_id: "athlete-b" },
+    };
+    const results = [
+      await operations.configureRuntime(llmFirst),
+      await operations.configureRuntime(intervalsOnly),
+      await operations.configureRuntime(both),
+      await operations.configureRuntime({
+        llm: { provider: "google", model: "third", api_key: "placeholder" },
+      }),
+    ];
+    expect(results).toEqual([
+      { schemaVersion: 1, applied: { llm: true, intervals: false } },
+      { schemaVersion: 1, applied: { llm: false, intervals: true } },
+      { schemaVersion: 1, applied: { llm: true, intervals: true } },
+      { schemaVersion: 1, applied: { llm: true, intervals: false } },
+    ]);
+    expect(applied).toEqual([
+      llmFirst,
+      intervalsOnly,
+      both,
+      {
+        llm: { provider: "google", model: "third", api_key: "placeholder" },
+      },
+    ]);
+    const serializedResults = JSON.stringify(results);
+    for (const value of ["first", "second", "third", "placeholder", "athlete"]) {
+      expect(serializedResults).not.toContain(value);
+    }
   });
 });

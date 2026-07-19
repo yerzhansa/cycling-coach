@@ -59,11 +59,11 @@ function healthy(
   owner: "service-managed" | "unmanaged-foreground" | "app-supervised",
 ): DaemonStateObservation {
   const peer = { status: "peer-healthy", pid: 12, port: 45_001, peerVersion: "0.1.0" } as const;
-  const handshake = createAcceptedServerHandshakeFrame(owner, 2);
+  const handshake = createAcceptedServerHandshakeFrame(owner, PROTOCOL_VERSION);
   return {
     kind: "compatible-healthy",
     peer,
-    serverProtocolVersion: 2,
+    serverProtocolVersion: PROTOCOL_VERSION,
     authenticated: { peer, coordinates: { port: peer.port, token }, handshake },
   };
 }

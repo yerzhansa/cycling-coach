@@ -108,6 +108,8 @@ export const COACH_RPC_METHOD_NAMES = [
   "getAthleteState",
   "importFiles",
   "sync",
+  "saveIntake",
+  "configureRuntime",
 ] as const satisfies readonly (keyof CoachRpcService)[];
 
 export const CoachRpcMethodNameSchema = z.enum(COACH_RPC_METHOD_NAMES);
@@ -203,6 +205,96 @@ export const SyncRpcResultSchema = z
   });
 export type SyncRpcResult = z.infer<typeof SyncRpcResultSchema>;
 
+export const InjuryStatusSchema = z.enum(["none", "managing", "returning"]);
+export type InjuryStatus = z.infer<typeof InjuryStatusSchema>;
+
+export const SaveIntakeRpcParamsSchema = z
+  .object({
+    swim_skill_floor: z.null(),
+    continuous_distance_capable: z.null(),
+    open_water_comfort: z.null(),
+    prior_bsi: z.boolean(),
+    clinician_cleared: z.boolean().nullable(),
+    injury_status: InjuryStatusSchema,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const needsClearance = value.prior_bsi || value.injury_status !== "none";
+    if (needsClearance === (value.clinician_cleared === null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["clinician_cleared"],
+        message: needsClearance
+          ? "clinician clearance is required"
+          : "clinician clearance must be null",
+      });
+    }
+  });
+export type SaveIntakeRpcParams = z.infer<typeof SaveIntakeRpcParamsSchema>;
+
+export const SaveIntakeRpcResultSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    saved: z.literal(true),
+  })
+  .strict();
+export type SaveIntakeRpcResult = z.infer<typeof SaveIntakeRpcResultSchema>;
+
+export const LlmProviderSchema = z.enum([
+  "anthropic",
+  "openai",
+  "google",
+  "openai-codex",
+  "deepseek",
+  "qwen",
+  "minimax",
+  "kimi",
+  "zai",
+  "openrouter",
+]);
+export type LlmProvider = z.infer<typeof LlmProviderSchema>;
+
+const RuntimeLlmSchema = z
+  .object({
+    provider: LlmProviderSchema,
+    model: z.string().min(1).max(512),
+    api_key: z.string().min(1).max(16_384),
+  })
+  .strict();
+
+const RuntimeIntervalsSchema = z
+  .object({
+    api_key: z.string().min(1).max(16_384),
+    athlete_id: z.string().min(1).max(512),
+  })
+  .strict();
+
+export const ConfigureRuntimeRpcParamsSchema = z
+  .object({
+    llm: RuntimeLlmSchema.optional(),
+    intervals: RuntimeIntervalsSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.llm === undefined && value.intervals === undefined) {
+      context.addIssue({ code: "custom", message: "at least one runtime slot is required" });
+    }
+  });
+export type ConfigureRuntimeRpcParams = z.infer<typeof ConfigureRuntimeRpcParamsSchema>;
+
+export const ConfigureRuntimeRpcResultSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    applied: z
+      .object({
+        llm: z.boolean(),
+        intervals: z.boolean(),
+      })
+      .strict(),
+  })
+  .strict();
+export type ConfigureRuntimeRpcResult = z.infer<typeof ConfigureRuntimeRpcResultSchema>;
+
 export const OperationProgressEventSchema = z
   .object({
     phase: z.enum(["started", "completed"]),
@@ -240,6 +332,8 @@ export interface CoachOperations {
     request: SyncRpcParams,
     onEvent?: (event: OperationProgressEvent) => void,
   ): Promise<SyncRpcResult>;
+  saveIntake(request: SaveIntakeRpcParams): Promise<SaveIntakeRpcResult>;
+  configureRuntime(request: ConfigureRuntimeRpcParams): Promise<ConfigureRuntimeRpcResult>;
 }
 
 export type CoachRpcService = CoachEngine & CoachOperations;
@@ -291,6 +385,22 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("sync"),
       params: SyncRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("saveIntake"),
+      params: SaveIntakeRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("configureRuntime"),
+      params: ConfigureRuntimeRpcParamsSchema,
     })
     .strict(),
 ]);
@@ -413,6 +523,18 @@ export const COACH_RPC_METHOD_REGISTRY = {
     requestSchema: SyncRpcParamsSchema,
     responseSchema: SyncRpcResultSchema,
     eventSchema: OperationProgressEventSchema,
+  },
+  saveIntake: {
+    wireName: "saveIntake",
+    requestSchema: SaveIntakeRpcParamsSchema,
+    responseSchema: SaveIntakeRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  configureRuntime: {
+    wireName: "configureRuntime",
+    requestSchema: ConfigureRuntimeRpcParamsSchema,
+    responseSchema: ConfigureRuntimeRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
   },
 } as const satisfies CoachRpcMethodRegistryShape;
 
