@@ -341,7 +341,7 @@ describe("launchd installation and wrapper", () => {
     expect(await readFile(outputPath, "utf8")).toBe(`${home.root}\nservice-managed\nserve\n`);
   });
 
-  it("delivers a one-use protected handoff and leaves no replay carrier", async () => {
+  it.skipIf(process.platform !== "darwin")("delivers a one-use protected handoff and leaves no replay carrier", async () => {
     const { root, identity, dependencies } = await fixture();
     const outputPath = join(root, "handoff-observed");
     await mkdir(join(root, "bin"), { recursive: true });
