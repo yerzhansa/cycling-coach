@@ -274,9 +274,17 @@ const RuntimeLlmSchema = z
   .object({
     provider: LlmProviderSchema,
     model: z.string().min(1).max(512),
-    api_key: z.string().min(1).max(16_384),
+    api_key: z.string().min(1).max(16_384).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (value.provider === "openai-codex" && value.api_key !== undefined) {
+      context.addIssue({ code: "custom", path: ["api_key"], message: "api_key must be absent" });
+    }
+    if (value.provider !== "openai-codex" && value.api_key === undefined) {
+      context.addIssue({ code: "custom", path: ["api_key"], message: "api_key is required" });
+    }
+  });
 
 const RuntimeIntervalsSchema = z
   .object({
@@ -380,7 +388,10 @@ export interface CoachSelfTestOperations {
   selfTest(onEvent?: (event: OperationProgressEvent) => void): Promise<SelfTestRpcResult>;
 }
 
-export type CoachRpcService = CoachEngine & CoachOperations & SpendOperations & CoachSelfTestOperations;
+export type CoachRpcService = CoachEngine &
+  CoachOperations &
+  SpendOperations &
+  CoachSelfTestOperations;
 
 export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
   z

@@ -38,6 +38,18 @@ export const DESKTOP_CREDENTIAL_SLOTS = [
 export type DesktopCredentialSlot = (typeof DESKTOP_CREDENTIAL_SLOTS)[number];
 export type ModelCredentialSlot = Exclude<DesktopCredentialSlot, "intervals-icu">;
 
+export const CHATGPT_LOGIN_REFUSAL_REASONS = [
+  "already-in-progress",
+  "callback-unavailable",
+  "timed-out",
+  "cancelled",
+  "exchange-failed",
+  "storage-failed",
+  "runtime-unavailable",
+] as const;
+
+export type ChatGptLoginRefusalReason = (typeof CHATGPT_LOGIN_REFUSAL_REASONS)[number];
+
 export const SUPPORTED_IMPORT_EXTENSIONS = [".fit", ".tcx", ".gpx"] as const;
 
 export const INTERVALS_GUIDANCE =

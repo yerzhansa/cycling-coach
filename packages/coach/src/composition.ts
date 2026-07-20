@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { parse as parseYaml, stringify as toYaml } from "yaml";
 import {
   ChatStore,
   Memory,
@@ -137,7 +138,7 @@ function mergedRuntimeConfig(config: Config, request: ConfigureRuntimeRpcParams)
     next.llm = {
       provider: request.llm.provider,
       model: request.llm.model,
-      apiKey: request.llm.api_key,
+      apiKey: request.llm.provider === "openai-codex" ? "" : (request.llm.api_key ?? ""),
       authProfile: request.llm.provider === "openai-codex" ? "openai-codex" : undefined,
     };
   }
@@ -148,6 +149,45 @@ function mergedRuntimeConfig(config: Config, request: ConfigureRuntimeRpcParams)
     };
   }
   return next;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function persistRuntimeConfig(configDir: string, request: ConfigureRuntimeRpcParams): void {
+  const path = join(configDir, "config.yaml");
+  const parsed = existsSync(path) ? (parseYaml(readFileSync(path, "utf8")) as unknown) : {};
+  if (!isRecord(parsed)) throw new TypeError("Runtime config must be a map.");
+  const next = { ...parsed };
+  if (request.llm !== undefined) {
+    const existing = isRecord(parsed.llm) ? parsed.llm : {};
+    const llm: Record<string, unknown> = {
+      ...(existing.provider === request.llm.provider ? existing : {}),
+      provider: request.llm.provider,
+      model: request.llm.model,
+    };
+    if (request.llm.provider === "openai-codex") llm.auth_profile = "openai-codex";
+    else delete llm.auth_profile;
+    next.llm = llm;
+  }
+  if (request.intervals !== undefined) {
+    next.intervals = {
+      ...(isRecord(parsed.intervals) ? parsed.intervals : {}),
+      athlete_id: request.intervals.athlete_id,
+    };
+  }
+  const temporaryPath = `${path}.tmp.${randomBytes(4).toString("hex")}`;
+  try {
+    writeFileSync(temporaryPath, toYaml(next), { mode: 0o600 });
+    chmodSync(temporaryPath, 0o600);
+    renameSync(temporaryPath, path);
+  } catch (error) {
+    try {
+      unlinkSync(temporaryPath);
+    } catch {}
+    throw error;
+  }
 }
 
 function createReconfigurableEngine(initial: CoachEngine): {
@@ -239,8 +279,13 @@ function credential(value: unknown): OAuthCredential {
   if (
     candidate.type !== "oauth" ||
     typeof candidate.access !== "string" ||
+    candidate.access.length === 0 ||
     typeof candidate.refresh !== "string" ||
-    typeof candidate.expires !== "number"
+    candidate.refresh.length === 0 ||
+    typeof candidate.expires !== "number" ||
+    !Number.isFinite(candidate.expires) ||
+    (candidate.accountId !== undefined && typeof candidate.accountId !== "string") ||
+    (candidate.email !== undefined && typeof candidate.email !== "string")
   ) {
     throw new TypeError("OAuth profile is invalid.");
   }
@@ -426,9 +471,14 @@ export async function createLocalCoachComposition(
     };
     const reconfigurable = createReconfigurableEngine(buildEngine(activeConfig));
     const applyRuntimeConfig = async (request: ConfigureRuntimeRpcParams): Promise<void> => {
+      const candidate = mergedRuntimeConfig(activeConfig, request);
+      if (request.llm?.provider === "openai-codex") {
+        const profiles = readProfiles(join(input.home.configDir, "auth-profiles.json"));
+        credential(profiles["openai-codex"]);
+      }
+      const replacement = buildEngine(candidate);
+      persistRuntimeConfig(input.home.configDir, request);
       await reconfigurable.replace(() => {
-        const candidate = mergedRuntimeConfig(activeConfig, request);
-        const replacement = buildEngine(candidate);
         activeConfig = candidate;
         return replacement;
       });

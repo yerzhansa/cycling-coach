@@ -313,14 +313,13 @@ describe("R6 desktop renderer", () => {
 });
 
 describe("R8 desktop app", () => {
-  it("allows only coach, coach-client, and coach-contract workspace edges", () => {
+  it("allows coach, coach-client, coach-contract, and core workspace edges", () => {
     write(
       "apps/desktop/src/ok.ts",
-      `import { run } from "@enduragent/coach";\nimport { connectCoachClient } from "@enduragent/coach-client";\nimport { PROTOCOL_VERSION } from "@enduragent/coach-contract";\nexport const value = [run, connectCoachClient, PROTOCOL_VERSION];\n`,
+      `import { run } from "@enduragent/coach";\nimport { connectCoachClient } from "@enduragent/coach-client";\nimport { PROTOCOL_VERSION } from "@enduragent/coach-contract";\nimport { loginCodex } from "@enduragent/core";\nexport const value = [run, connectCoachClient, PROTOCOL_VERSION, loginCodex];\n`,
     );
     expect(violationsFor(rDesktop)).toBe(0);
     for (const [index, dependency] of [
-      "@enduragent/core",
       "@enduragent/engine",
       "@enduragent/kernel",
       "@enduragent/kernel-node",
@@ -332,7 +331,7 @@ describe("R8 desktop app", () => {
         `import value from "${dependency}";\nexport { value };\n`,
       );
     }
-    expect(violationsFor(rDesktop)).toBe(6);
+    expect(violationsFor(rDesktop)).toBe(5);
   });
 });
 

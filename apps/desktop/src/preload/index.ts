@@ -3,6 +3,8 @@ import { DESKTOP_CONNECTION_CHANNEL } from "../main/constants.js";
 
 const DESKTOP_CREDENTIAL_STATUS_CHANNEL = "enduragent:onboarding:credential-status";
 const DESKTOP_CREDENTIAL_WRITE_CHANNEL = "enduragent:onboarding:credential-write";
+const DESKTOP_CHATGPT_STATUS_CHANNEL = "enduragent:onboarding:chatgpt-status";
+const DESKTOP_CHATGPT_LOGIN_CHANNEL = "enduragent:onboarding:chatgpt-login";
 const DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL = "enduragent:onboarding:choose-import-files";
 
 const SLOTS = new Set([
@@ -22,6 +24,15 @@ const REASONS = new Set([
   "invalid-input",
   "encryption-unavailable",
   "unsafe-backend",
+  "storage-failed",
+  "runtime-unavailable",
+]);
+const CHATGPT_REASONS = new Set([
+  "already-in-progress",
+  "callback-unavailable",
+  "timed-out",
+  "cancelled",
+  "exchange-failed",
   "storage-failed",
   "runtime-unavailable",
 ]);
@@ -76,6 +87,37 @@ function parseWriteResult(value: unknown): unknown {
   throw new TypeError();
 }
 
+function parseChatGptStatus(value: unknown): unknown {
+  if (
+    !record(value) ||
+    !exactKeys(value, ["state", "runtimeReady"]) ||
+    (value.state !== "configured" && value.state !== "absent") ||
+    typeof value.runtimeReady !== "boolean"
+  ) {
+    throw new TypeError();
+  }
+  return { state: value.state, runtimeReady: value.runtimeReady };
+}
+
+function parseChatGptLogin(value: unknown): unknown {
+  if (!record(value)) throw new TypeError();
+  if (
+    value.status === "configured" &&
+    exactKeys(value, ["status", "runtimeReady"]) &&
+    value.runtimeReady === true
+  ) {
+    return { status: "configured", runtimeReady: true };
+  }
+  if (
+    value.status === "refused" &&
+    exactKeys(value, ["status", "reason"]) &&
+    CHATGPT_REASONS.has(value.reason as string)
+  ) {
+    return { status: "refused", reason: value.reason };
+  }
+  throw new TypeError();
+}
+
 function parsePaths(value: unknown): readonly string[] {
   if (!Array.isArray(value) || value.length > 256) {
     throw new TypeError();
@@ -120,6 +162,10 @@ contextBridge.exposeInMainWorld(
       }
       return parseWriteResult(await ipcRenderer.invoke(DESKTOP_CREDENTIAL_WRITE_CHANNEL, input));
     },
+    chatgptStatus: async () =>
+      parseChatGptStatus(await ipcRenderer.invoke(DESKTOP_CHATGPT_STATUS_CHANNEL)),
+    chatgptLogin: async () =>
+      parseChatGptLogin(await ipcRenderer.invoke(DESKTOP_CHATGPT_LOGIN_CHANNEL)),
     chooseImportFiles: async () =>
       parsePaths(await ipcRenderer.invoke(DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL)),
     onDroppedImportFiles: (listener: unknown) => {

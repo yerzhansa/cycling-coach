@@ -1,5 +1,6 @@
+import { createServer } from "node:http";
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { refreshCodexToken, generatePKCE } from "../../src/agent/codex/oauth.js";
+import { loginCodex, refreshCodexToken, generatePKCE } from "../../src/agent/codex/oauth.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -152,5 +153,56 @@ describe("generatePKCE", () => {
     const { verifier, challenge } = await generatePKCE();
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
     expect(challenge).toBe(base64url(new Uint8Array(digest)));
+  });
+});
+
+describe("loginCodex", () => {
+  it("aborts the callback wait and releases the registered port", async () => {
+    const controller = new AbortController();
+    const pending = loginCodex({
+      signal: controller.signal,
+      onAuth: () => controller.abort(new DOMException("Cancelled", "AbortError")),
+      onPrompt: async () => "",
+    });
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+
+    const server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(1455, "127.0.0.1", resolve);
+    });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("completes the localhost callback and fake token exchange", async () => {
+    const nativeFetch = globalThis.fetch;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.startsWith("http://127.0.0.1:1455/")) return nativeFetch(input, init);
+      return new Response(
+        JSON.stringify({
+          access_token: TOKEN_WITH_ACCOUNT,
+          refresh_token: "obviously-fake-refresh",
+          expires_in: 3600,
+        }),
+        { status: 200 },
+      );
+    });
+    let callback: Promise<Response> | undefined;
+    const credentials = await loginCodex({
+      onAuth: ({ url }) => {
+        const state = new URL(url).searchParams.get("state");
+        callback = nativeFetch(
+          `http://127.0.0.1:1455/auth/callback?code=obviously-fake-code&state=${state}`,
+        );
+      },
+      onPrompt: async () => "",
+    });
+    await callback;
+    expect(credentials).toMatchObject({
+      access: TOKEN_WITH_ACCOUNT,
+      refresh: "obviously-fake-refresh",
+      accountId: "acct_x",
+    });
   });
 });

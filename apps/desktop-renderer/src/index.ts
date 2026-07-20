@@ -168,6 +168,8 @@ const onboardingClient = async () => {
 const onboardingBridge: OnboardingBridge = {
   credentialStatuses: () => window.enduragentAuth.credentialStatuses(),
   writeCredential: (value) => window.enduragentAuth.writeCredential(value),
+  chatGptStatus: () => window.enduragentAuth.chatgptStatus(),
+  chatGptLogin: () => window.enduragentAuth.chatgptLogin(),
   chooseImportFiles: () => window.enduragentAuth.chooseImportFiles(),
   onDroppedImportFiles: (listener) => window.enduragentAuth.onDroppedImportFiles(listener),
   async importFiles(paths, onProgress) {

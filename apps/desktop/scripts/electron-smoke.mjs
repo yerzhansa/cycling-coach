@@ -224,7 +224,7 @@ async function security() {
         spoofOrigin: spoofed === expectedForbidden,
         wrongToken: wrongCode === 1008,
         observerOrder: JSON.stringify(observerOrder) === JSON.stringify(expectedOrder),
-        preloadBridge: JSON.stringify(ready.bridgeKeys) === JSON.stringify(["chooseImportFiles", "credentialStatuses", "getDaemonConnection", "onDroppedImportFiles", "writeCredential"]),
+        preloadBridge: JSON.stringify(ready.bridgeKeys) === JSON.stringify(["chatgptLogin", "chatgptStatus", "chooseImportFiles", "credentialStatuses", "getDaemonConnection", "onDroppedImportFiles", "writeCredential"]),
         credentialMetadata: ready.credentialStatusesMetadataOnly === true,
       },
       url: ready.url,

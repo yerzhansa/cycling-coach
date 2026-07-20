@@ -22,7 +22,9 @@
   "dependencies": {
     "@enduragent/coach": "workspace:*",
     "@enduragent/coach-client": "workspace:*",
-    "@enduragent/coach-contract": "workspace:*"
+    "@enduragent/coach-contract": "workspace:*",
+    "@enduragent/core": "workspace:*",
+    "yaml": "^2.8.3"
   },
   "devDependencies": {
     "@enduragent/desktop-renderer": "workspace:*",

@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connectCoachClient } from "@enduragent/coach-client";
+import type { ConfigureRuntimeRpcParams } from "@enduragent/coach-contract";
 import {
   app,
   BrowserWindow,
@@ -9,11 +10,13 @@ import {
   ipcMain,
   safeStorage,
   session,
+  shell,
   utilityProcess,
 } from "electron";
+import { createChatGptAuth } from "./chatgpt-auth.js";
 import { DESKTOP_CONNECTION_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
 import { CREDENTIAL_DIRECTORY_NAME, createCredentialVault } from "./credential-vault.js";
-import { seedFirstRunConfig } from "./first-run-config.js";
+import { resolveDesktopAthleteHome, seedFirstRunConfig } from "./first-run-config.js";
 import { registerOnboardingIpc, runtimeConfigurationForCredential } from "./onboarding-ipc.js";
 import { createDesktopResidency, type DesktopResidency } from "./residency.js";
 import {
@@ -115,24 +118,32 @@ async function runDesktop(): Promise<void> {
       return;
     }
     const daemonPort = Number(new URL(resolution.url).port);
+    const applyRuntimeConfig = async (request: ConfigureRuntimeRpcParams): Promise<void> => {
+      const client = await connectCoachClient({ url: resolution.url, token: resolution.token });
+      try {
+        const result = await client.call("configureRuntime", request);
+        if (
+          (request.llm !== undefined && !result.applied.llm) ||
+          (request.intervals !== undefined && !result.applied.intervals)
+        ) {
+          throw new TypeError();
+        }
+      } finally {
+        await client.close();
+      }
+    };
     const vault = createCredentialVault({
       root: join(app.getPath("userData"), CREDENTIAL_DIRECTORY_NAME),
       encryption: safeStorage,
       async applyCredential(slot, value) {
-        const client = await connectCoachClient({ url: resolution.url, token: resolution.token });
-        try {
-          const request = runtimeConfigurationForCredential(slot, value);
-          const result = await client.call("configureRuntime", request);
-          if (
-            (request.llm !== undefined && !result.applied.llm) ||
-            (request.intervals !== undefined && !result.applied.intervals)
-          ) {
-            throw new TypeError();
-          }
-        } finally {
-          await client.close();
-        }
+        await applyRuntimeConfig(runtimeConfigurationForCredential(slot, value));
       },
+    });
+    const chatGptAuth = createChatGptAuth({
+      configDir: join(resolveDesktopAthleteHome(environment), "config"),
+      applyRuntimeConfig,
+      openExternal: (url) => shell.openExternal(url),
+      signal: controller.signal,
     });
     await vault.reapplyConfigured();
     await installDesktopProtocol({
@@ -172,6 +183,7 @@ async function runDesktop(): Promise<void> {
             dialog,
             window: created,
             vault,
+            chatGptAuth,
             isTrusted: (event) =>
               isTrustedConnectionRequest(event, mainWindow.current() ?? undefined),
           });

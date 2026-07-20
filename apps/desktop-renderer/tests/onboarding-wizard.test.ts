@@ -122,6 +122,32 @@ describe("desktop onboarding wizard", () => {
     expect(progress).toHaveBeenCalledTimes(1);
   });
 
+  it("passes ChatGPT status and login through without connecting the daemon", async () => {
+    const auth = {
+      getDaemonConnection: vi.fn(),
+      credentialStatuses: vi.fn(async () => []),
+      writeCredential: vi.fn(),
+      chatgptStatus: vi.fn(async () => ({ state: "configured" as const, runtimeReady: false })),
+      chatgptLogin: vi.fn(async () => ({
+        status: "configured" as const,
+        runtimeReady: true as const,
+      })),
+      chooseImportFiles: vi.fn(async () => []),
+      onDroppedImportFiles: vi.fn(() => vi.fn()),
+    } as unknown as DesktopOnboardingAuth;
+    const connect = vi.fn();
+    const bridge = createOnboardingBridge(auth, connect);
+    await expect(bridge.chatGptStatus()).resolves.toEqual({
+      state: "configured",
+      runtimeReady: false,
+    });
+    await expect(bridge.chatGptLogin()).resolves.toEqual({
+      status: "configured",
+      runtimeReady: true,
+    });
+    expect(connect).not.toHaveBeenCalled();
+  });
+
   it("retries connection resolution after a transient connection failure", async () => {
     const connection = {
       url: "ws://127.0.0.1:45001/rpc" as const,
@@ -174,6 +200,9 @@ describe("desktop onboarding wizard", () => {
     expect(mount).toContain('event.key === "Escape"');
     expect(mount).toContain('event.key !== "Tab"');
     expect(mount).toContain('setAttribute("aria-live", "polite")');
+    expect(mount).toContain("Sign in with ChatGPT");
+    expect(mount).toContain("Requires a paid ChatGPT plan. No API key needed.");
+    expect(mount).toContain("Finish signing in in your browser…");
     expect(styles).toContain("@media (max-width: 720px)");
     expect(styles).toContain("padding: 30px 24px");
     expect(styles).toContain("@media (prefers-reduced-motion: reduce)");

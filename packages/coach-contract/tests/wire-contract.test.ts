@@ -372,17 +372,26 @@ describe("coach request and event projection", () => {
     });
 
     const llm = { provider: "openrouter", model: "model-a", api_key: "placeholder" } as const;
+    const codex = { provider: "openai-codex", model: "model-codex" } as const;
     const intervals = { api_key: "placeholder", athlete_id: "athlete-a" } as const;
-    for (const params of [{ llm }, { intervals }, { llm, intervals }]) {
+    for (const params of [{ llm }, { llm: codex }, { intervals }, { llm, intervals }]) {
       expect(ConfigureRuntimeRpcParamsSchema.parse(params)).toEqual(params);
     }
     for (const invalid of [
       {},
       { llm: { ...llm, extra: true } },
+      { llm: { provider: "openai-codex", model: "model-codex", api_key: "placeholder" } },
       { intervals: { api_key: "", athlete_id: "athlete-a" } },
       { llm, extra: true },
     ]) {
       expect(ConfigureRuntimeRpcParamsSchema.safeParse(invalid).success).toBe(false);
+    }
+    for (const provider of LlmProviderSchema.options.filter(
+      (provider) => provider !== "openai-codex",
+    )) {
+      expect(
+        ConfigureRuntimeRpcParamsSchema.safeParse({ llm: { provider, model: "model-a" } }).success,
+      ).toBe(false);
     }
     const result = { schemaVersion: 1, applied: { llm: true, intervals: false } } as const;
     expect(ConfigureRuntimeRpcResultSchema.parse(result)).toEqual(result);
@@ -757,7 +766,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version four", () => {
-    expect(PROTOCOL_VERSION).toBe(4);
+  it("uses protocol version five", () => {
+    expect(PROTOCOL_VERSION).toBe(5);
   });
 });
