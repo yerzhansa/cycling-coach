@@ -161,14 +161,21 @@ function persistRuntimeConfig(configDir: string, request: ConfigureRuntimeRpcPar
   if (!isRecord(parsed)) throw new TypeError("Runtime config must be a map.");
   const next = { ...parsed };
   if (request.llm !== undefined) {
-    next.llm = {
+    const existing = isRecord(parsed.llm) ? parsed.llm : {};
+    const llm: Record<string, unknown> = {
+      ...(existing.provider === request.llm.provider ? existing : {}),
       provider: request.llm.provider,
       model: request.llm.model,
-      ...(request.llm.provider === "openai-codex" ? { auth_profile: "openai-codex" } : {}),
     };
+    if (request.llm.provider === "openai-codex") llm.auth_profile = "openai-codex";
+    else delete llm.auth_profile;
+    next.llm = llm;
   }
   if (request.intervals !== undefined) {
-    next.intervals = { athlete_id: request.intervals.athlete_id };
+    next.intervals = {
+      ...(isRecord(parsed.intervals) ? parsed.intervals : {}),
+      athlete_id: request.intervals.athlete_id,
+    };
   }
   const temporaryPath = `${path}.tmp.${randomBytes(4).toString("hex")}`;
   try {

@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parse as parseYaml, stringify as toYaml } from "yaml";
 import type { AthleteState, CoachEngine } from "@enduragent/coach-contract";
 import { engineConfigFromConfig, loadConfig, type Config } from "@enduragent/core";
 import type {
@@ -663,6 +664,174 @@ describe("local coach composition", () => {
       authProfile: "openai-codex",
     });
     await expect(checkHomeReadiness(home)).resolves.toMatchObject({ status: "ready" });
+    await lifecycle.close();
+  });
+
+  it("merges same-provider and intervals persistence without replacing retained fields", async () => {
+    const home = await freshHome();
+    await writeFile(
+      join(home.configDir, "config.yaml"),
+      toYaml({
+        retained_top_level: true,
+        llm: {
+          provider: "openrouter",
+          model: "previous-model",
+          auth_profile: "openai-codex",
+          api_key: "obviously-fake-persisted-llm-key",
+          base_url: "https://invalid.example.test/v1",
+          flush_model: "previous-flush-model",
+          compact_model: "previous-compact-model",
+          retained_llm_field: true,
+        },
+        intervals: {
+          athlete_id: "previous-athlete",
+          api_key: "obviously-fake-persisted-intervals-key",
+          retained_intervals_field: true,
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const lifecycle = await compose(home, {
+      bootstrap: async () => reference(),
+      createRuntime: () => runtime(),
+      createBackend: () => backend(),
+      createRepository: () => ({
+        insertIfAbsent: async () => false,
+        readCurrent: async () => undefined,
+      }),
+      createResolver: () => missingResolver(),
+    });
+    await lifecycle.operations.configureRuntime({
+      llm: {
+        provider: "openrouter",
+        model: "replacement-model",
+        api_key: "obviously-fake-request-llm-key",
+      },
+      intervals: {
+        athlete_id: "replacement-athlete",
+        api_key: "obviously-fake-request-intervals-key",
+      },
+    });
+    const persisted = parseYaml(
+      await readFile(join(home.configDir, "config.yaml"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(persisted).toEqual({
+      retained_top_level: true,
+      llm: {
+        provider: "openrouter",
+        model: "replacement-model",
+        api_key: "obviously-fake-persisted-llm-key",
+        base_url: "https://invalid.example.test/v1",
+        flush_model: "previous-flush-model",
+        compact_model: "previous-compact-model",
+        retained_llm_field: true,
+      },
+      intervals: {
+        athlete_id: "replacement-athlete",
+        api_key: "obviously-fake-persisted-intervals-key",
+        retained_intervals_field: true,
+      },
+    });
+    expect(JSON.stringify(persisted)).not.toContain("obviously-fake-request");
+    expect(loadConfig(home.configDir)).toMatchObject({
+      llm: {
+        provider: "openrouter",
+        model: "replacement-model",
+        apiKey: "obviously-fake-persisted-llm-key",
+        baseUrl: "https://invalid.example.test/v1",
+        flushModel: "previous-flush-model",
+        compactModel: "previous-compact-model",
+      },
+      intervals: {
+        athleteId: "replacement-athlete",
+        apiKey: "obviously-fake-persisted-intervals-key",
+      },
+    });
+    await lifecycle.close();
+  });
+
+  it("drops provider-scoped fields on switches and updates Codex auth profile ownership", async () => {
+    const home = await freshHome();
+    await writeFile(
+      join(home.configDir, "config.yaml"),
+      toYaml({
+        retained_top_level: true,
+        llm: {
+          provider: "openai-codex",
+          model: "previous-model",
+          auth_profile: "openai-codex",
+          api_key: "obviously-fake-stale-key",
+          base_url: "https://invalid.example.test/v1",
+          flush_model: "previous-flush-model",
+          compact_model: "previous-compact-model",
+          retained_llm_field: true,
+        },
+      }),
+      { mode: 0o600 },
+    );
+    await writeFile(
+      join(home.configDir, "auth-profiles.json"),
+      JSON.stringify({
+        "openai-codex": {
+          type: "oauth",
+          access: "obviously-fake-access",
+          refresh: "obviously-fake-refresh",
+          expires: 4_102_444_800_000,
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const lifecycle = await compose(home, {
+      bootstrap: async () => reference(),
+      createRuntime: () => runtime(),
+      createBackend: () => backend(),
+      createRepository: () => ({
+        insertIfAbsent: async () => false,
+        readCurrent: async () => undefined,
+      }),
+      createResolver: () => missingResolver(),
+    });
+    await lifecycle.operations.configureRuntime({
+      llm: {
+        provider: "google",
+        model: "replacement-model",
+        api_key: "obviously-fake-request-key",
+      },
+    });
+    let persisted = parseYaml(
+      await readFile(join(home.configDir, "config.yaml"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(persisted).toEqual({
+      retained_top_level: true,
+      llm: { provider: "google", model: "replacement-model" },
+    });
+    expect(loadConfig(home.configDir).llm).toMatchObject({
+      provider: "google",
+      model: "replacement-model",
+      apiKey: "",
+      authProfile: undefined,
+    });
+    await lifecycle.operations.configureRuntime({
+      llm: { provider: "openai-codex", model: "gpt-5.5" },
+    });
+    persisted = parseYaml(await readFile(join(home.configDir, "config.yaml"), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(persisted).toEqual({
+      retained_top_level: true,
+      llm: {
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        auth_profile: "openai-codex",
+      },
+    });
+    expect(loadConfig(home.configDir).llm).toMatchObject({
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      apiKey: "",
+      authProfile: "openai-codex",
+    });
     await lifecycle.close();
   });
 
