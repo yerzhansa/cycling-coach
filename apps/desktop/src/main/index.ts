@@ -13,6 +13,7 @@ import {
 } from "electron";
 import { DESKTOP_CONNECTION_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
 import { CREDENTIAL_DIRECTORY_NAME, createCredentialVault } from "./credential-vault.js";
+import { seedFirstRunConfig } from "./first-run-config.js";
 import { registerOnboardingIpc, runtimeConfigurationForCredential } from "./onboarding-ipc.js";
 import { createDesktopResidency, type DesktopResidency } from "./residency.js";
 import {
@@ -59,9 +60,15 @@ async function runDesktop(): Promise<void> {
   app.on("window-all-closed", () => {});
   await app.whenReady();
   const controller = new AbortController();
+  const environment = { ...process.env };
+  try {
+    await seedFirstRunConfig({ env: environment });
+  } catch {
+    process.stderr.write("desktop-first-run-config-failure seed\n");
+  }
   const supervisor = new DesktopDaemonSupervisor(
     {
-      env: { ...process.env },
+      env: environment,
       executablePath: process.execPath,
       appVersion: app.getVersion(),
       signal: controller.signal,
