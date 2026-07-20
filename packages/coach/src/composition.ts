@@ -382,7 +382,8 @@ export async function createLocalCoachComposition(
   try {
     reference = await (dependencies.bootstrap ?? bootstrapReference)({
       dataDir: input.home.root,
-      intervals: input.config.intervals,
+      intervals: activeConfig.intervals,
+      readIntervals: () => activeConfig.intervals,
       sport: cyclingSport,
       startScheduler: false,
       attemptLedgerForRun: () => {

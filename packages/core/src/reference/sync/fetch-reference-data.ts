@@ -92,16 +92,17 @@ export function readAnalysisBasis(
  * empty stubs — they are populated by their own retention pipeline, not here.
  */
 export function makeProductionFetcher(deps: {
-  apiKey: string;
-  athleteId?: string;
   adapters: readonly ReferenceSportAdapter[];
   sportTypes: readonly IntervalsActivityType[];
   attemptLedgerForRun?: () => PhysicalRequestLedger;
-}): (signal: AbortSignal) => Promise<FetchedReference> {
-  return async (signal) => {
+}): (
+  signal: AbortSignal,
+  intervals: { readonly apiKey: string; readonly athleteId?: string },
+) => Promise<FetchedReference> {
+  return async (signal, intervals) => {
     const client = makeAbortableClient({
-      apiKey: deps.apiKey,
-      athleteId: deps.athleteId,
+      apiKey: intervals.apiKey,
+      athleteId: intervals.athleteId,
       signal,
       perRequestMs: PER_REQUEST_TIMEOUT_MS,
       attemptLedger: deps.attemptLedgerForRun?.(),
