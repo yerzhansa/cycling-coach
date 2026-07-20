@@ -126,7 +126,8 @@ export {
 } from "./auth/profiles.js";
 export type { OAuthCredential } from "./auth/profiles.js";
 export { runCodexLogin } from "./auth/openai-codex-login.js";
-export { refreshCodexToken } from "./agent/codex/oauth.js";
+export { loginCodex, refreshCodexToken } from "./agent/codex/oauth.js";
+export type { CodexCredentials, CodexLoginOptions } from "./agent/codex/oauth.js";
 
 // ─── Channels ─────────────────────────────────────────────────────────
 export { createTelegramBot, notifyUpdate } from "./channels/telegram.js";

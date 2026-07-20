@@ -61,7 +61,12 @@ const COMPOSITION_ROOT_ALLOWED: readonly string[] = [
   "@enduragent/sport-*",
 ];
 
-const DESKTOP_APP_ALLOWED: readonly string[] = ["@enduragent/coach", "@enduragent/coach-client", "@enduragent/coach-contract"];
+const DESKTOP_APP_ALLOWED: readonly string[] = [
+  "@enduragent/coach",
+  "@enduragent/coach-client",
+  "@enduragent/coach-contract",
+  "@enduragent/core",
+];
 
 const LEGACY_BINARY_ALLOWED: readonly string[] = ["@enduragent/core", "@enduragent/sport-*"];
 

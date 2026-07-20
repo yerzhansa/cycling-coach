@@ -95,6 +95,40 @@
   gap: 14px;
 }
 
+.chatgpt-lane {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--moss-soft);
+}
+
+.chatgpt-lane-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chatgpt-lane p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.chatgpt-signin-button {
+  justify-self: start;
+}
+
+.chatgpt-login-state.configured {
+  color: var(--moss);
+}
+
+.chatgpt-login-state.refused {
+  color: #9a4937;
+}
+
 .credential-field {
   display: grid;
   gap: 7px;

@@ -1,6 +1,7 @@
 import { extname, isAbsolute } from "node:path";
 import type { ConfigureRuntimeRpcParams, LlmProvider } from "@enduragent/coach-contract";
 import type { BrowserWindow, IpcMain, IpcMainInvokeEvent, OpenDialogOptions } from "electron";
+import type { ChatGptAuthController } from "./chatgpt-auth.js";
 import {
   DESKTOP_CREDENTIAL_SLOTS,
   type CredentialSlotStatus,
@@ -11,6 +12,8 @@ import {
 
 export const DESKTOP_CREDENTIAL_STATUS_CHANNEL = "enduragent:onboarding:credential-status" as const;
 export const DESKTOP_CREDENTIAL_WRITE_CHANNEL = "enduragent:onboarding:credential-write" as const;
+export const DESKTOP_CHATGPT_STATUS_CHANNEL = "enduragent:onboarding:chatgpt-status" as const;
+export const DESKTOP_CHATGPT_LOGIN_CHANNEL = "enduragent:onboarding:chatgpt-login" as const;
 export const DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL =
   "enduragent:onboarding:choose-import-files" as const;
 
@@ -26,6 +29,7 @@ interface RegisterOnboardingIpcOptions {
   readonly dialog: OnboardingDialogPort;
   readonly window: BrowserWindow;
   readonly vault: CredentialVault;
+  readonly chatGptAuth: ChatGptAuthController;
   readonly isTrusted: (event: IpcMainInvokeEvent) => boolean;
 }
 
@@ -128,6 +132,16 @@ export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): ()
       return { slot: input.slot, status: "refused", reason: "storage-failed" };
     }
   });
+  options.ipcMain.handle(DESKTOP_CHATGPT_STATUS_CHANNEL, async (event, ...args) => {
+    requireTrusted(event);
+    if (args.length !== 0) throw new TypeError();
+    return options.chatGptAuth.status();
+  });
+  options.ipcMain.handle(DESKTOP_CHATGPT_LOGIN_CHANNEL, async (event, ...args) => {
+    requireTrusted(event);
+    if (args.length !== 0) throw new TypeError();
+    return options.chatGptAuth.login();
+  });
   options.ipcMain.handle(DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL, async (event, ...args) => {
     requireTrusted(event);
     if (args.length !== 0) throw new TypeError();
@@ -152,6 +166,8 @@ export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): ()
   return () => {
     options.ipcMain.removeHandler(DESKTOP_CREDENTIAL_STATUS_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CREDENTIAL_WRITE_CHANNEL);
+    options.ipcMain.removeHandler(DESKTOP_CHATGPT_STATUS_CHANNEL);
+    options.ipcMain.removeHandler(DESKTOP_CHATGPT_LOGIN_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL);
   };
 }

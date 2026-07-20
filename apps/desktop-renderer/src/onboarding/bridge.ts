@@ -8,7 +8,7 @@ import {
   type SaveIntakeRpcParams,
 } from "@enduragent/coach-contract";
 import { SUPPORTED_IMPORT_EXTENSIONS, type DesktopCredentialSlot } from "./constants.js";
-import type { CredentialSlotStatus } from "./machine.js";
+import type { ChatGptLoginResult, ChatGptStatus, CredentialSlotStatus } from "./machine.js";
 
 export type CredentialWriteResult =
   | {
@@ -33,6 +33,8 @@ export interface OnboardingBridge {
     readonly slot: DesktopCredentialSlot;
     readonly value: string;
   }): Promise<CredentialWriteResult>;
+  chatGptStatus(): Promise<ChatGptStatus>;
+  chatGptLogin(): Promise<ChatGptLoginResult>;
   chooseImportFiles(): Promise<readonly string[]>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
   importFiles(
@@ -52,6 +54,8 @@ export interface DesktopOnboardingAuth {
     readonly slot: DesktopCredentialSlot;
     readonly value: string;
   }): Promise<CredentialWriteResult>;
+  chatgptStatus(): Promise<ChatGptStatus>;
+  chatgptLogin(): Promise<ChatGptLoginResult>;
   chooseImportFiles(): Promise<readonly string[]>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
 }
@@ -117,6 +121,8 @@ export function createOnboardingBridge(
   return {
     credentialStatuses: () => auth.credentialStatuses() as Promise<readonly CredentialSlotStatus[]>,
     writeCredential: (input) => auth.writeCredential(input) as Promise<CredentialWriteResult>,
+    chatGptStatus: () => auth.chatgptStatus(),
+    chatGptLogin: () => auth.chatgptLogin(),
     chooseImportFiles: () => auth.chooseImportFiles(),
     onDroppedImportFiles: (listener) => auth.onDroppedImportFiles(listener),
     async importFiles(paths, onProgress) {

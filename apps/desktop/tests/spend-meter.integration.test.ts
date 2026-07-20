@@ -271,7 +271,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
     expect(narrow).toEqual({ visible: true, overflow: false });
   });
 
-  it("preserves the five-key bridge, training-data drawer, hardened renderer, and token containment", async () => {
+  it("preserves the nine-key bridge, training-data drawer, hardened renderer, and token containment", async () => {
     const { fixture } = await launch();
     const screenshotRoot = await mkdtemp(join(await realpath(tmpdir()), "spend-shot-"));
     scratch.push(screenshotRoot);
@@ -293,6 +293,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       };
     `);
     expect(state.bridgeKeys).toEqual([
+      "chatgptLogin",
+      "chatgptStatus",
       "chooseImportFiles",
       "credentialStatuses",
       "getDaemonConnection",

@@ -8,6 +8,8 @@ interface EnduragentAuth {
     readonly slot: DesktopCredentialSlot;
     readonly value: string;
   }): Promise<CredentialWriteResult>;
+  chatgptStatus(): Promise<ChatGptStatus>;
+  chatgptLogin(): Promise<ChatGptLoginResult>;
   chooseImportFiles(): Promise<readonly string[]>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
 }
@@ -31,6 +33,25 @@ interface CredentialSlotStatus {
   readonly state: CredentialState;
   readonly runtimeReady: boolean;
 }
+
+interface ChatGptStatus {
+  readonly state: "configured" | "absent";
+  readonly runtimeReady: boolean;
+}
+
+type ChatGptLoginResult =
+  | { readonly status: "configured"; readonly runtimeReady: true }
+  | {
+      readonly status: "refused";
+      readonly reason:
+        | "already-in-progress"
+        | "callback-unavailable"
+        | "timed-out"
+        | "cancelled"
+        | "exchange-failed"
+        | "storage-failed"
+        | "runtime-unavailable";
+    };
 
 type CredentialWriteResult =
   | {

@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AthleteState, CoachEngine } from "@enduragent/coach-contract";
-import { engineConfigFromConfig, type Config } from "@enduragent/core";
+import { engineConfigFromConfig, loadConfig, type Config } from "@enduragent/core";
 import type {
   AthleteDataReaderPort,
   CreateCoachEngineInput,
@@ -23,6 +23,7 @@ import {
   type LocalReferenceRuntime,
   type LocalStoreRuntime,
 } from "../src/composition.js";
+import { checkHomeReadiness } from "../src/readiness.js";
 import type { CoachStoreWriterContext } from "../src/runtime.js";
 
 const roots: string[] = [];
@@ -610,6 +611,90 @@ describe("local coach composition", () => {
     expect(runtimeOptions?.readConfig?.().intervals).toEqual({
       apiKey: "placeholder",
       athleteId: "athlete-b",
+    });
+    await lifecycle.close();
+  });
+
+  it("persists a keyless Codex selection that reloads as ready with a valid profile", async () => {
+    const home = await freshHome();
+    await writeFile(
+      join(home.configDir, "auth-profiles.json"),
+      JSON.stringify({
+        "openai-codex": {
+          type: "oauth",
+          access: "obviously-fake-access",
+          refresh: "obviously-fake-refresh",
+          expires: 4_102_444_800_000,
+          accountId: "obviously-fake-account",
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const received: CreateCoachEngineInput[] = [];
+    const lifecycle = await compose(home, {
+      bootstrap: async () => reference(),
+      createRuntime: () => runtime(),
+      createBackend: (input) => {
+        received.push(input);
+        return backend();
+      },
+      createRepository: () => ({
+        insertIfAbsent: async () => false,
+        readCurrent: async () => undefined,
+      }),
+      createResolver: () => missingResolver(),
+    });
+    await lifecycle.operations.configureRuntime({
+      llm: { provider: "openai-codex", model: "gpt-5.5" },
+    });
+    expect(received.at(-1)?.ports.config.llm).toMatchObject({
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      apiKey: "",
+      authProfile: "openai-codex",
+    });
+    const persisted = await readFile(join(home.configDir, "config.yaml"), "utf8");
+    expect(persisted).toContain("provider: openai-codex");
+    expect(persisted).not.toContain("api_key");
+    expect(loadConfig(home.configDir).llm).toMatchObject({
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      apiKey: "",
+      authProfile: "openai-codex",
+    });
+    await expect(checkHomeReadiness(home)).resolves.toMatchObject({ status: "ready" });
+    await lifecycle.close();
+  });
+
+  it("rejects a Codex runtime selection before replacement when its profile is invalid", async () => {
+    const home = await freshHome();
+    await writeFile(
+      join(home.configDir, "auth-profiles.json"),
+      JSON.stringify({ "openai-codex": { type: "oauth" } }),
+      { mode: 0o600 },
+    );
+    const received: CreateCoachEngineInput[] = [];
+    const lifecycle = await compose(home, {
+      bootstrap: async () => reference(),
+      createRuntime: () => runtime(),
+      createBackend: (input) => {
+        received.push(input);
+        return backend();
+      },
+      createRepository: () => ({
+        insertIfAbsent: async () => false,
+        readCurrent: async () => undefined,
+      }),
+      createResolver: () => missingResolver(),
+    });
+    await expect(
+      lifecycle.operations.configureRuntime({
+        llm: { provider: "openai-codex", model: "gpt-5.5" },
+      }),
+    ).rejects.toThrow("OAuth profile is invalid.");
+    expect(received).toHaveLength(1);
+    await expect(readFile(join(home.configDir, "config.yaml"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
     });
     await lifecycle.close();
   });

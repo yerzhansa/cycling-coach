@@ -17,12 +17,16 @@ import {
   previousStep,
   toDesktopIntakeFlags,
   withBusy,
+  withChatGptLoginResult,
+  withChatGptPending,
+  withChatGptStatus,
   withCredentialStatuses,
   withError,
   withImportProgress,
   withIntake,
   withSuccessfulImport,
   type CredentialSlotStatus,
+  type ChatGptStatus,
   type OnboardingCompletion,
   type OnboardingErrorCode,
   type OnboardingState,
@@ -67,13 +71,24 @@ export async function handoffCredential(
 }
 
 const ERROR_COPY: Readonly<Record<OnboardingErrorCode, string>> = {
-  "credential-required": "Add at least one model key to continue.",
+  "credential-required": "Sign in with ChatGPT or add at least one model key to continue.",
   "credential-save-failed": "That key could not be saved. Try entering it again.",
   "training-data-required": "Connect intervals.icu or import at least one ride file.",
   "import-failed": "Those ride files could not be imported. Try another selection.",
   "intake-incomplete": "Answer the required safety questions to continue.",
   "intake-save-failed": "Your answers could not be saved. Please try again.",
 };
+
+const CHATGPT_REFUSAL_COPY = {
+  "already-in-progress": "A ChatGPT sign-in is already in progress.",
+  "callback-unavailable":
+    "The local sign-in callback is unavailable. Close other sign-in flows and retry.",
+  "timed-out": "ChatGPT sign-in timed out. Retry when you are ready.",
+  cancelled: "ChatGPT sign-in was cancelled. You can retry.",
+  "exchange-failed": "ChatGPT sign-in could not be completed. Please retry.",
+  "storage-failed": "ChatGPT sign-in completed, but the profile could not be saved.",
+  "runtime-unavailable": "ChatGPT sign-in was saved, but the coach could not be configured.",
+} as const;
 
 function make<K extends keyof HTMLElementTagNameMap>(
   document: Document,
@@ -167,10 +182,13 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
   };
 
   const refreshStatuses = async (expectedVisit: number): Promise<void> => {
-    const statuses = await options.bridge.credentialStatuses();
+    const [statuses, chatGpt] = await Promise.all([
+      options.bridge.credentialStatuses(),
+      options.bridge.chatGptStatus(),
+    ]);
     if (visit !== expectedVisit || scrim === undefined) return;
     credentialStatuses = statuses;
-    state = withCredentialStatuses(state, statuses);
+    state = withChatGptStatus(withCredentialStatuses(state, statuses), chatGpt);
   };
 
   const savePasswordControls = async (
@@ -292,9 +310,93 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
         options.document,
         "p",
         "onboarding-copy",
-        "Your keys are encrypted by macOS and sent only to the local coaching service.",
+        "Sign in with ChatGPT or use an API key. API keys are encrypted by macOS and sent only to the local coaching service.",
       ),
     );
+    const chatGptLane = make(options.document, "section", "chatgpt-lane");
+    const chatGptHeading = make(options.document, "div", "chatgpt-lane-heading");
+    chatGptHeading.append(
+      make(options.document, "strong", undefined, "ChatGPT subscription"),
+      make(
+        options.document,
+        "span",
+        `credential-state ${state.chatGptState === "configured" ? "configured" : ""}`,
+        state.chatGptState === "configured" ? "Configured" : "No API key",
+      ),
+    );
+    chatGptLane.append(
+      chatGptHeading,
+      make(options.document, "p", undefined, "Requires a paid ChatGPT plan. No API key needed."),
+    );
+    if (state.chatGptState === "pending") {
+      const pending = make(
+        options.document,
+        "button",
+        "primary-button chatgpt-signin-button",
+        "Finish signing in in your browser…",
+      );
+      pending.type = "button";
+      pending.disabled = true;
+      chatGptLane.append(pending);
+    } else if (state.chatGptState === "configured" && state.chatGptRuntimeReady) {
+      chatGptLane.append(
+        make(options.document, "p", "chatgpt-login-state configured", "ChatGPT is ready."),
+      );
+    } else {
+      if (state.chatGptState === "refused" && state.chatGptRefusal !== null) {
+        const refusal = make(
+          options.document,
+          "p",
+          "chatgpt-login-state refused",
+          CHATGPT_REFUSAL_COPY[state.chatGptRefusal],
+        );
+        refusal.setAttribute("aria-live", "polite");
+        chatGptLane.append(refusal);
+      }
+      if (state.chatGptState === "configured") {
+        chatGptLane.append(
+          make(
+            options.document,
+            "p",
+            "chatgpt-login-state",
+            "Your ChatGPT sign-in is saved. Sign in again to activate it.",
+          ),
+        );
+      }
+      const login = make(
+        options.document,
+        "button",
+        "primary-button chatgpt-signin-button",
+        state.chatGptState === "absent" ? "Sign in with ChatGPT" : "Retry ChatGPT sign-in",
+      );
+      login.type = "button";
+      login.disabled = state.busy;
+      login.addEventListener("click", () => {
+        const loginVisit = visit;
+        state = withChatGptPending(state);
+        render();
+        void options.bridge.chatGptLogin().then(
+          (result) => {
+            if (visit !== loginVisit || scrim === undefined) return;
+            state = withChatGptLoginResult(state, result);
+            render();
+            focusCurrentTitle();
+          },
+          () => {
+            if (visit !== loginVisit || scrim === undefined) return;
+            state = withChatGptLoginResult(state, {
+              status: "refused",
+              reason: "exchange-failed",
+            });
+            render();
+            focusCurrentTitle();
+          },
+        );
+      });
+      chatGptLane.append(login);
+    }
+    body.append(chatGptLane);
+    body.append(make(options.document, "div", "source-divider", "or use an API key"));
     const primary = make(options.document, "div", "credential-list");
     for (const provider of PRIMARY_MODEL_CREDENTIAL_SLOTS) {
       const control = passwordControl(
@@ -658,15 +760,19 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
       const openVisit = ++visit;
       completed = false;
       let statuses: readonly CredentialSlotStatus[] = [];
-      try {
-        statuses = await options.bridge.credentialStatuses();
-      } catch {}
+      let restoredChatGptStatus: ChatGptStatus = { state: "absent", runtimeReady: false };
+      const restored = await Promise.allSettled([
+        options.bridge.credentialStatuses(),
+        options.bridge.chatGptStatus(),
+      ]);
+      if (restored[0].status === "fulfilled") statuses = restored[0].value;
+      if (restored[1].status === "fulfilled") restoredChatGptStatus = restored[1].value;
       if (disposed || visit !== openVisit || scrim !== undefined) {
         opening = false;
         return;
       }
       credentialStatuses = statuses;
-      state = createOnboardingState(statuses);
+      state = createOnboardingState(statuses, restoredChatGptStatus);
       scrim = make(options.document, "div", "onboarding-scrim");
       options.document.body.append(scrim);
       render();

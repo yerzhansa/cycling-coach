@@ -2,6 +2,8 @@ import type { IpcMainInvokeEvent } from "electron";
 import { describe, expect, it, vi } from "vitest";
 import {
   DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL,
+  DESKTOP_CHATGPT_LOGIN_CHANNEL,
+  DESKTOP_CHATGPT_STATUS_CHANNEL,
   DESKTOP_CREDENTIAL_STATUS_CHANNEL,
   DESKTOP_CREDENTIAL_WRITE_CHANNEL,
   registerOnboardingIpc,
@@ -34,17 +36,22 @@ function harness() {
       filePaths: ["/synthetic/ride.fit", "/synthetic/ride.txt", "relative.tcx"],
     })),
   };
+  const chatGptAuth = {
+    status: vi.fn(async () => ({ state: "configured" as const, runtimeReady: true })),
+    login: vi.fn(async () => ({ status: "configured" as const, runtimeReady: true as const })),
+  };
   const trustedEvent = {} as IpcMainInvokeEvent;
   const dispose = registerOnboardingIpc({
     ipcMain: ipcMain as never,
     dialog,
     window: {} as never,
     vault,
+    chatGptAuth,
     isTrusted: (event) => event === trustedEvent,
   });
   const invoke = (channel: string, event: IpcMainInvokeEvent, ...args: unknown[]) =>
     handlers.get(channel)!(event, ...args);
-  return { handlers, ipcMain, vault, dialog, trustedEvent, dispose, invoke };
+  return { handlers, ipcMain, vault, chatGptAuth, dialog, trustedEvent, dispose, invoke };
 }
 
 describe("desktop onboarding IPC", () => {
@@ -70,6 +77,8 @@ describe("desktop onboarding IPC", () => {
       [
         DESKTOP_CREDENTIAL_STATUS_CHANNEL,
         DESKTOP_CREDENTIAL_WRITE_CHANNEL,
+        DESKTOP_CHATGPT_STATUS_CHANNEL,
+        DESKTOP_CHATGPT_LOGIN_CHANNEL,
         DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL,
       ].sort(),
     );
@@ -80,6 +89,27 @@ describe("desktop onboarding IPC", () => {
     expect(
       JSON.stringify(await subject.invoke(DESKTOP_CREDENTIAL_STATUS_CHANNEL, subject.trustedEvent)),
     ).not.toContain("value");
+  });
+
+  it("gates strict ChatGPT status and login invokes", async () => {
+    const subject = harness();
+    await expect(
+      subject.invoke(DESKTOP_CHATGPT_STATUS_CHANNEL, subject.trustedEvent),
+    ).resolves.toEqual({ state: "configured", runtimeReady: true });
+    await expect(
+      subject.invoke(DESKTOP_CHATGPT_LOGIN_CHANNEL, subject.trustedEvent),
+    ).resolves.toEqual({ status: "configured", runtimeReady: true });
+    await expect(
+      subject.invoke(DESKTOP_CHATGPT_LOGIN_CHANNEL, {} as IpcMainInvokeEvent),
+    ).rejects.toBeInstanceOf(TypeError);
+    await expect(
+      subject.invoke(DESKTOP_CHATGPT_STATUS_CHANNEL, subject.trustedEvent, null),
+    ).rejects.toBeInstanceOf(TypeError);
+    await expect(
+      subject.invoke(DESKTOP_CHATGPT_LOGIN_CHANNEL, subject.trustedEvent, null),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(subject.chatGptAuth.status).toHaveBeenCalledOnce();
+    expect(subject.chatGptAuth.login).toHaveBeenCalledOnce();
   });
 
   it("validates trusted senders and exact credential inputs before dispatch", async () => {
@@ -146,10 +176,10 @@ describe("desktop onboarding IPC", () => {
     ).resolves.toEqual([]);
   });
 
-  it("disposes only its three handlers", () => {
+  it("disposes only its five handlers", () => {
     const subject = harness();
     subject.dispose();
     expect(subject.handlers.size).toBe(0);
-    expect(subject.ipcMain.removeHandler).toHaveBeenCalledTimes(3);
+    expect(subject.ipcMain.removeHandler).toHaveBeenCalledTimes(5);
   });
 });

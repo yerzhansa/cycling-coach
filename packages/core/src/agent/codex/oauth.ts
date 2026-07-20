@@ -28,6 +28,7 @@ export interface CodexLoginOptions {
   onProgress?: (message: string) => void;
   onManualCodeInput?: () => Promise<string>;
   originator?: string;
+  signal?: AbortSignal;
 }
 
 // ============================================================================
@@ -128,7 +129,7 @@ async function createAuthorizationFlow(
 }
 
 interface OAuthServerHandle {
-  close: () => void;
+  close: () => Promise<void>;
   cancelWait: () => void;
   waitForCode: () => Promise<{ code: string } | null>;
 }
@@ -176,7 +177,7 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerHandle> {
     server
       .listen(CALLBACK_PORT, CALLBACK_HOST, () => {
         resolve({
-          close: () => server.close(),
+          close: () => new Promise((resolveClose) => server.close(() => resolveClose())),
           cancelWait: () => settleWait?.(null),
           waitForCode: () => waitForCodePromise,
         });
@@ -189,7 +190,7 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerHandle> {
         );
         settleWait?.(null);
         resolve({
-          close: () => {
+          close: async () => {
             try {
               server.close();
             } catch {
@@ -215,6 +216,7 @@ async function exchangeAuthorizationCode(
   code: string,
   verifier: string,
   redirectUri: string = REDIRECT_URI,
+  signal?: AbortSignal,
 ): Promise<TokenResult> {
   const response = await fetch(TOKEN_URL, {
     method: "POST",
@@ -226,6 +228,7 @@ async function exchangeAuthorizationCode(
       code_verifier: verifier,
       redirect_uri: redirectUri,
     }),
+    signal,
   });
   if (!response.ok) {
     console.error("[codex-oauth] code->token failed:", response.status);
@@ -315,9 +318,12 @@ async function refreshAccessToken(
 // ============================================================================
 
 export async function loginCodex(options: CodexLoginOptions): Promise<CodexCredentials> {
+  options.signal?.throwIfAborted();
   const { verifier, state, url } = await createAuthorizationFlow(options.originator);
+  options.signal?.throwIfAborted();
   const server = await startLocalOAuthServer(state);
-  options.onAuth({ url, instructions: "A browser window should open. Complete login to finish." });
+  const abortWait = (): void => server.cancelWait();
+  options.signal?.addEventListener("abort", abortWait, { once: true });
 
   let code: string | undefined;
   const applyParsedInput = (input: string) => {
@@ -326,6 +332,11 @@ export async function loginCodex(options: CodexLoginOptions): Promise<CodexCrede
     code = parsed.code;
   };
   try {
+    options.signal?.throwIfAborted();
+    options.onAuth({
+      url,
+      instructions: "A browser window should open. Complete login to finish.",
+    });
     if (options.onManualCodeInput) {
       // Race the browser callback against manual paste — first to yield a code wins.
       let manualCode: string | undefined;
@@ -342,6 +353,7 @@ export async function loginCodex(options: CodexLoginOptions): Promise<CodexCrede
         });
 
       const result = await server.waitForCode();
+      options.signal?.throwIfAborted();
       if (manualError) throw manualError;
       if (result?.code) {
         code = result.code;
@@ -350,6 +362,7 @@ export async function loginCodex(options: CodexLoginOptions): Promise<CodexCrede
       }
       if (!code) {
         await manualPromise;
+        options.signal?.throwIfAborted();
         if (manualError) throw manualError;
         if (manualCode) {
           applyParsedInput(manualCode);
@@ -357,6 +370,7 @@ export async function loginCodex(options: CodexLoginOptions): Promise<CodexCrede
       }
     } else {
       const result = await server.waitForCode();
+      options.signal?.throwIfAborted();
       if (result?.code) code = result.code;
     }
 
@@ -369,7 +383,13 @@ export async function loginCodex(options: CodexLoginOptions): Promise<CodexCrede
 
     if (!code) throw new Error("Missing authorization code");
 
-    const tokenResult = await exchangeAuthorizationCode(code, verifier);
+    const tokenResult = await exchangeAuthorizationCode(
+      code,
+      verifier,
+      REDIRECT_URI,
+      options.signal,
+    );
+    options.signal?.throwIfAborted();
     if (tokenResult.type !== "success") throw new Error("Token exchange failed");
 
     const accountId = extractAccountId(tokenResult.access);
@@ -381,7 +401,8 @@ export async function loginCodex(options: CodexLoginOptions): Promise<CodexCrede
       accountId,
     };
   } finally {
-    server.close();
+    options.signal?.removeEventListener("abort", abortWait);
+    await server.close();
   }
 }
 

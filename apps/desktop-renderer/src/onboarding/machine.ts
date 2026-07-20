@@ -7,6 +7,7 @@ import {
   DESKTOP_CREDENTIAL_SLOTS,
   ONBOARDING_STEP_IDS,
   type DesktopCredentialSlot,
+  type ChatGptLoginRefusalReason,
   type OnboardingStepId,
 } from "./constants.js";
 
@@ -17,6 +18,15 @@ export interface CredentialSlotStatus {
   readonly state: CredentialState;
   readonly runtimeReady: boolean;
 }
+
+export interface ChatGptStatus {
+  readonly state: "configured" | "absent";
+  readonly runtimeReady: boolean;
+}
+
+export type ChatGptLoginResult =
+  | { readonly status: "configured"; readonly runtimeReady: true }
+  | { readonly status: "refused"; readonly reason: ChatGptLoginRefusalReason };
 
 export interface DesktopIntakeDraft {
   readonly priorBsi: boolean | null;
@@ -35,6 +45,9 @@ export type OnboardingErrorCode =
 export interface OnboardingState {
   readonly step: OnboardingStepId;
   readonly credentialStatus: Readonly<Record<DesktopCredentialSlot, CredentialState>>;
+  readonly chatGptState: "absent" | "pending" | "configured" | "refused";
+  readonly chatGptRuntimeReady: boolean;
+  readonly chatGptRefusal: ChatGptLoginRefusalReason | null;
   readonly acceptedImportPaths: readonly string[];
   readonly importProgress: CoachOperationProgressNotificationEnvelope | null;
   readonly intake: DesktopIntakeDraft;
@@ -57,6 +70,7 @@ function statusRecord<T>(initial: T): Record<DesktopCredentialSlot, T> {
 
 export function createOnboardingState(
   statuses: readonly CredentialSlotStatus[] = [],
+  chatGptStatus: ChatGptStatus = { state: "absent", runtimeReady: false },
 ): OnboardingState {
   const credentialStatus = statusRecord<CredentialState>("missing");
   for (const status of statuses) {
@@ -65,12 +79,57 @@ export function createOnboardingState(
   return {
     step: "coach-keys",
     credentialStatus,
+    chatGptState: chatGptStatus.state,
+    chatGptRuntimeReady: chatGptStatus.runtimeReady,
+    chatGptRefusal: null,
     acceptedImportPaths: [],
     importProgress: null,
     intake: { priorBsi: null, injuryStatus: null, clinicianCleared: null },
     busy: false,
     fixedError: null,
   };
+}
+
+export function withChatGptStatus(state: OnboardingState, status: ChatGptStatus): OnboardingState {
+  return {
+    ...state,
+    chatGptState: status.state,
+    chatGptRuntimeReady: status.runtimeReady,
+    chatGptRefusal: null,
+  };
+}
+
+export function withChatGptPending(state: OnboardingState): OnboardingState {
+  return {
+    ...state,
+    chatGptState: "pending",
+    chatGptRuntimeReady: false,
+    chatGptRefusal: null,
+    busy: true,
+    fixedError: null,
+  };
+}
+
+export function withChatGptLoginResult(
+  state: OnboardingState,
+  result: ChatGptLoginResult,
+): OnboardingState {
+  return result.status === "configured"
+    ? {
+        ...state,
+        chatGptState: "configured",
+        chatGptRuntimeReady: true,
+        chatGptRefusal: null,
+        busy: false,
+        fixedError: null,
+      }
+    : {
+        ...state,
+        chatGptState: "refused",
+        chatGptRuntimeReady: false,
+        chatGptRefusal: result.reason,
+        busy: false,
+      };
 }
 
 export function withCredentialStatuses(
@@ -85,8 +144,11 @@ export function withCredentialStatuses(
 }
 
 export function hasConfiguredModel(state: OnboardingState): boolean {
-  return DESKTOP_CREDENTIAL_SLOTS.some(
-    (slot) => slot !== "intervals-icu" && state.credentialStatus[slot] === "configured",
+  return (
+    state.chatGptState === "configured" ||
+    DESKTOP_CREDENTIAL_SLOTS.some(
+      (slot) => slot !== "intervals-icu" && state.credentialStatus[slot] === "configured",
+    )
   );
 }
 

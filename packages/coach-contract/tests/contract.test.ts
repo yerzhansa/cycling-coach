@@ -84,8 +84,8 @@ describe("exit codes", () => {
 });
 
 describe("protocol version", () => {
-  it("is 4", () => {
-    expect(PROTOCOL_VERSION).toBe(4);
+  it("is 5", () => {
+    expect(PROTOCOL_VERSION).toBe(5);
   });
 });
 

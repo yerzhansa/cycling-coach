@@ -6,6 +6,9 @@ import {
   previousStep,
   toDesktopIntakeFlags,
   withCredentialStatuses,
+  withChatGptLoginResult,
+  withChatGptPending,
+  withChatGptStatus,
   withIntake,
   withSuccessfulImport,
 } from "../src/onboarding/machine.js";
@@ -16,6 +19,9 @@ describe("desktop onboarding machine", () => {
     expect(Object.keys(state).sort()).toEqual([
       "acceptedImportPaths",
       "busy",
+      "chatGptRefusal",
+      "chatGptRuntimeReady",
+      "chatGptState",
       "credentialStatus",
       "fixedError",
       "importProgress",
@@ -45,6 +51,27 @@ describe("desktop onboarding machine", () => {
     state = withIntake(state, { priorBsi: false, injuryStatus: "none" });
     state = nextStep(state);
     expect(state.step).toBe("ready");
+  });
+
+  it("accepts a restored or newly configured ChatGPT lane and preserves refusals for retry", () => {
+    let state = createOnboardingState([], { state: "configured", runtimeReady: false });
+    expect(nextStep(state).step).toBe("training-data");
+    state = createOnboardingState();
+    state = withChatGptPending(state);
+    expect(state).toMatchObject({ chatGptState: "pending", busy: true });
+    state = withChatGptLoginResult(state, {
+      status: "refused",
+      reason: "callback-unavailable",
+    });
+    expect(state).toMatchObject({
+      chatGptState: "refused",
+      chatGptRefusal: "callback-unavailable",
+      busy: false,
+    });
+    state = withChatGptLoginResult(state, { status: "configured", runtimeReady: true });
+    expect(nextStep(state).step).toBe("training-data");
+    state = withChatGptStatus(state, { state: "absent", runtimeReady: false });
+    expect(state.chatGptState).toBe("absent");
   });
 
   it("preserves configured metadata and successful imports while moving back", () => {
