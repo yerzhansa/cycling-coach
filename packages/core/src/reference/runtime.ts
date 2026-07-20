@@ -35,9 +35,13 @@ export interface BootstrapReferenceDeps {
   /** Binary's per-coach data root (e.g., `~/.cycling-coach/`). */
   readonly dataDir: string;
   readonly intervals: { readonly apiKey: string; readonly athleteId?: string };
+  readonly readIntervals?: () => { readonly apiKey: string; readonly athleteId?: string };
   readonly sport: Sport;
   /** Inject a fetcher for tests. Defaults to `makeProductionFetcher`. */
-  readonly fetchReferenceData?: (signal: AbortSignal) => Promise<FetchedReference>;
+  readonly fetchReferenceData?: (
+    signal: AbortSignal,
+    intervals: { readonly apiKey: string; readonly athleteId?: string },
+  ) => Promise<FetchedReference>;
   readonly startScheduler?: boolean;
   readonly attemptLedgerForRun?: () => PhysicalRequestLedger;
 }
@@ -70,15 +74,16 @@ export async function bootstrapReference(
   const referenceDataPath = join(deps.dataDir, "data");
   mkdirSync(referenceDataPath, { recursive: true, mode: 0o700 });
 
+  const readIntervals = deps.readIntervals ?? (() => deps.intervals);
   const fetchReferenceData =
     deps.fetchReferenceData ??
     makeProductionFetcher({
-      apiKey: deps.intervals.apiKey,
-      athleteId: deps.intervals.athleteId,
       adapters,
       sportTypes: deps.sport.intervalsActivityTypes,
       attemptLedgerForRun: deps.attemptLedgerForRun,
     });
+  const fetchReferenceDataForRun = (signal: AbortSignal) =>
+    fetchReferenceData(signal, readIntervals());
 
   const mutex = new AsyncMutex();
   const cooldown = new Cooldown();
@@ -87,7 +92,7 @@ export async function bootstrapReference(
     mutex,
     cooldown,
     cooldownWindowMs: SYNC_COOLDOWN_MS,
-    fetchReferenceData,
+    fetchReferenceData: fetchReferenceDataForRun,
   });
   const scheduler = new Scheduler({
     dataDir: referenceDataPath,

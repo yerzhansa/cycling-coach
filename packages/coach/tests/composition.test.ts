@@ -616,6 +616,44 @@ describe("local coach composition", () => {
     await lifecycle.close();
   });
 
+  it("passes reference bootstrap a live intervals reader updated by runtime configuration", async () => {
+    const home = await freshHome();
+    let referenceOptions:
+      | Parameters<NonNullable<LocalCoachCompositionDependencies["bootstrap"]>>[0]
+      | undefined;
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async (options) => {
+          referenceOptions = options;
+          return reference();
+        },
+        createRuntime: () => runtime(),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      { apiKey: "", athleteId: "fake-initial-athlete" },
+    );
+
+    await lifecycle.operations.configureRuntime({
+      intervals: {
+        api_key: "placeholder",
+        athlete_id: "fake-configured-athlete",
+      },
+    });
+
+    expect(referenceOptions?.readIntervals?.()).toEqual({
+      apiKey: "placeholder",
+      athleteId: "fake-configured-athlete",
+    });
+    await lifecycle.close();
+  });
+
   it("persists a keyless Codex selection that reloads as ready with a valid profile", async () => {
     const home = await freshHome();
     await writeFile(
