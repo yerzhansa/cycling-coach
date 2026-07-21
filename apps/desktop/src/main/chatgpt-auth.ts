@@ -151,7 +151,6 @@ function classifyLoginFailure(
 export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAuthController {
   const runLogin = options.dependencies?.loginCodex ?? loginCodex;
   const storeProfile = options.dependencies?.writeProfile ?? writeChatGptProfile;
-  let runtimeReadyThisSession = false;
   let activeLogin: Promise<ChatGptLoginResult> | undefined;
 
   const performLogin = async (): Promise<ChatGptLoginResult> => {
@@ -192,7 +191,6 @@ export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAut
     } catch {
       return { status: "refused", reason: "runtime-unavailable" };
     }
-    runtimeReadyThisSession = true;
     return { status: "configured", runtimeReady: true };
   };
 
@@ -201,8 +199,7 @@ export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAut
       const configured = await hasChatGptProfile(options.configDir);
       return {
         state: configured ? "configured" : "absent",
-        runtimeReady:
-          configured && (runtimeReadyThisSession || (await configuredRuntime(options.configDir))),
+        runtimeReady: configured && (await configuredRuntime(options.configDir)),
       };
     },
     async login() {

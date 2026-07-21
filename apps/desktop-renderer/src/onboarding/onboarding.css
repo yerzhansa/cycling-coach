@@ -168,6 +168,10 @@
   color: #9a593f;
 }
 
+.credential-state.failed {
+  color: #9a593f;
+}
+
 .provider-hint {
   margin-left: 0;
   padding: 2px 7px;

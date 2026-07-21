@@ -4,6 +4,7 @@ interface EnduragentAuth {
     readonly token: string;
   }>;
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
+  retryFailedCredentials(): Promise<readonly CredentialSlotStatus[]>;
   writeCredential(input: {
     readonly slot: DesktopCredentialSlot;
     readonly value: string;
@@ -27,11 +28,12 @@ type DesktopCredentialSlot =
   | "intervals-icu";
 
 type CredentialState = "missing" | "configured" | "re-prompt";
+type CredentialRuntimeState = "active" | "stored-inactive" | "failed";
 
 interface CredentialSlotStatus {
   readonly slot: DesktopCredentialSlot;
   readonly state: CredentialState;
-  readonly runtimeReady: boolean;
+  readonly runtimeState: CredentialRuntimeState | null;
 }
 
 interface ChatGptStatus {

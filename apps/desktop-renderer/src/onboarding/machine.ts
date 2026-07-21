@@ -12,11 +12,12 @@ import {
 } from "./constants.js";
 
 export type CredentialState = "missing" | "configured" | "re-prompt";
+export type CredentialRuntimeState = "active" | "stored-inactive" | "failed";
 
 export interface CredentialSlotStatus {
   readonly slot: DesktopCredentialSlot;
   readonly state: CredentialState;
-  readonly runtimeReady: boolean;
+  readonly runtimeState: CredentialRuntimeState | null;
 }
 
 export interface ChatGptStatus {

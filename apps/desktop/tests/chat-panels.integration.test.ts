@@ -252,6 +252,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "credentialStatuses",
         "getDaemonConnection",
         "onDroppedImportFiles",
+        "retryFailedCredentials",
         "writeCredential",
       ],
       thread: true,

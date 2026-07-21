@@ -11,6 +11,7 @@ import {
 } from "./credential-vault.js";
 
 export const DESKTOP_CREDENTIAL_STATUS_CHANNEL = "enduragent:onboarding:credential-status" as const;
+export const DESKTOP_CREDENTIAL_RETRY_CHANNEL = "enduragent:onboarding:credential-retry" as const;
 export const DESKTOP_CREDENTIAL_WRITE_CHANNEL = "enduragent:onboarding:credential-write" as const;
 export const DESKTOP_CHATGPT_STATUS_CHANNEL = "enduragent:onboarding:chatgpt-status" as const;
 export const DESKTOP_CHATGPT_LOGIN_CHANNEL = "enduragent:onboarding:chatgpt-login" as const;
@@ -93,7 +94,7 @@ function minimizeStatuses(value: readonly CredentialSlotStatus[]): readonly Cred
   return value.map((entry) => ({
     slot: entry.slot,
     state: entry.state,
-    runtimeReady: entry.runtimeReady,
+    runtimeState: entry.runtimeState,
   }));
 }
 
@@ -118,9 +119,15 @@ export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): ()
       return DESKTOP_CREDENTIAL_SLOTS.map((slot) => ({
         slot,
         state: "re-prompt" as const,
-        runtimeReady: false,
+        runtimeState: null,
       }));
     }
+  });
+  options.ipcMain.handle(DESKTOP_CREDENTIAL_RETRY_CHANNEL, async (event, ...args) => {
+    requireTrusted(event);
+    if (args.length !== 0) throw new TypeError();
+    await options.vault.retryFailed();
+    return minimizeStatuses(await options.vault.credentialStatuses());
   });
   options.ipcMain.handle(DESKTOP_CREDENTIAL_WRITE_CHANNEL, async (event, ...args) => {
     requireTrusted(event);
@@ -165,6 +172,7 @@ export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): ()
   });
   return () => {
     options.ipcMain.removeHandler(DESKTOP_CREDENTIAL_STATUS_CHANNEL);
+    options.ipcMain.removeHandler(DESKTOP_CREDENTIAL_RETRY_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CREDENTIAL_WRITE_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CHATGPT_STATUS_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CHATGPT_LOGIN_CHANNEL);

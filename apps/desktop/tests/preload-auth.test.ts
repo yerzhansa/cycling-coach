@@ -18,6 +18,8 @@ vi.mock("electron", () => ({
 }));
 
 interface AuthBridge {
+  credentialStatuses(): Promise<unknown>;
+  retryFailedCredentials(): Promise<unknown>;
   chatgptStatus(): Promise<unknown>;
   chatgptLogin(): Promise<unknown>;
 }
@@ -34,6 +36,29 @@ beforeEach(() => {
 });
 
 describe("desktop preload ChatGPT auth", () => {
+  it("exposes closed credential runtime states and the retry command", async () => {
+    const statuses = [
+      { slot: "anthropic", state: "configured", runtimeState: "stored-inactive" },
+      { slot: "openrouter", state: "configured", runtimeState: "failed" },
+      { slot: "openai", state: "configured", runtimeState: "active" },
+      { slot: "google", state: "missing", runtimeState: null },
+      { slot: "deepseek", state: "missing", runtimeState: null },
+      { slot: "qwen", state: "missing", runtimeState: null },
+      { slot: "minimax", state: "missing", runtimeState: null },
+      { slot: "kimi", state: "missing", runtimeState: null },
+      { slot: "zai", state: "missing", runtimeState: null },
+      { slot: "intervals-icu", state: "missing", runtimeState: null },
+    ];
+    mocks.invoke.mockResolvedValueOnce(statuses).mockResolvedValueOnce(statuses);
+
+    await expect(bridge.credentialStatuses()).resolves.toEqual(statuses);
+    await expect(bridge.retryFailedCredentials()).resolves.toEqual(statuses);
+    expect(mocks.invoke.mock.calls.map(([channel]) => channel)).toEqual([
+      "enduragent:onboarding:credential-status",
+      "enduragent:onboarding:credential-retry",
+    ]);
+  });
+
   it("exposes strict status and configured results", async () => {
     mocks.invoke
       .mockResolvedValueOnce({ state: "configured", runtimeReady: false })
