@@ -44,6 +44,7 @@ const EXPECTED_FULL_TABLES = [
   "ingest_dedup_session_state",
   "ingest_cluster_state",
   "sync_failure",
+  "store_owner",
 ];
 const MIGRATION_002 = `ALTER TABLE swim_length ADD COLUMN distance_m REAL;
 
@@ -147,6 +148,7 @@ function openFull(): DatabaseSync {
   next.exec(MIGRATIONS[4]!.sql);
   next.exec(MIGRATIONS[5]!.sql);
   next.exec(MIGRATIONS[6]!.sql);
+  next.exec(MIGRATIONS[7]!.sql);
   return next;
 }
 
@@ -165,6 +167,7 @@ describe("001_init migration", () => {
       { version: 5, name: "005_sync_state" },
       { version: 6, name: "006_incremental_ingest" },
       { version: 7, name: "007_sync_failure" },
+      { version: 8, name: "008_store_owner" },
     ]);
     expect(typeof MIGRATIONS[0].sql).toBe("string");
     expect(MIGRATIONS[0].sql).toContain("CREATE TABLE athlete");
@@ -256,7 +259,7 @@ describe("001_init migration", () => {
     expect(MIGRATIONS[2]!.sql).toBe(MIGRATION_003);
   });
 
-  it("applies 001 through 007 with exactly thirty-five tables and no foreign-key violations", () => {
+  it("applies 001 through 008 with exactly thirty-six tables and no foreign-key violations", () => {
     db = openFull();
     const names = (
       db
@@ -266,7 +269,7 @@ describe("001_init migration", () => {
       .map((row) => row.name)
       .sort();
     expect(names).toEqual([...EXPECTED_FULL_TABLES].sort());
-    expect(names).toHaveLength(35);
+    expect(names).toHaveLength(36);
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
@@ -497,6 +500,8 @@ describe("001_init migration", () => {
         "source_record_current_no_delete",
         "sync_operation_no_update",
         "sync_operation_no_delete",
+        "store_owner_no_update",
+        "store_owner_no_delete",
       ]),
     );
 
@@ -751,6 +756,7 @@ describe("001_init migration", () => {
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("source_watermark");
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("sync_operation");
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("sync_failure");
+    expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("store_owner");
     for (const table of [
       "source_artifact",
       "source_record_revision",
@@ -758,6 +764,7 @@ describe("001_init migration", () => {
       "source_watermark",
       "sync_operation",
       "sync_failure",
+      "store_owner",
     ]) {
       expect(DERIVED_TABLES).not.toContain(table);
     }
@@ -798,5 +805,23 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     expect(DERIVED_TABLES).toHaveLength(12);
     expect(PURE_AUTHORED_TABLES).not.toContain("sync_failure");
     expect(MIXED_AUTHORED_TABLES).not.toContain("sync_failure");
+  });
+
+  it("creates one immutable store owner record", () => {
+    db = openFull();
+    expect(createHash("sha256").update(MIGRATIONS[7]!.sql).digest("hex")).toBe(
+      "eca323e5177cb64f126cb89919e39d4abfcf3999b3d57ceb7237e59b6b3675e5",
+    );
+    const columns = db.prepare("PRAGMA table_info(store_owner)").all();
+    expect(columns).toContainEqual(expect.objectContaining({ name: "singleton", pk: 1 }));
+    expect(columns).toContainEqual(expect.objectContaining({ name: "account_fingerprint", notnull: 1 }));
+    expect(() =>
+      db!
+        .prepare("INSERT INTO store_owner(singleton,account_fingerprint) VALUES(1,?)")
+        .run("a".repeat(64)),
+    ).not.toThrow();
+    expect(() => db!.prepare("INSERT INTO store_owner VALUES(2,?)").run("b".repeat(64))).toThrow();
+    expect(() => db!.prepare("UPDATE store_owner SET account_fingerprint=?").run("b".repeat(64))).toThrow();
+    expect(() => db!.prepare("DELETE FROM store_owner").run()).toThrow();
   });
 });

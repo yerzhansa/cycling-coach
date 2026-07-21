@@ -69,7 +69,8 @@ type CredentialWriteResult =
         | "encryption-unavailable"
         | "unsafe-backend"
         | "storage-failed"
-        | "runtime-unavailable";
+        | "runtime-unavailable"
+        | "training-account-mismatch";
     };
 
 interface Window {

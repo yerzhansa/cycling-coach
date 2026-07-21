@@ -13,8 +13,13 @@ import {
 import type { CredentialVault } from "../src/main/credential-vault.js";
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
+type OwnershipCheck = (
+  value: string,
+) => Promise<"unowned" | "matched" | "mismatch" | "unresolved" | "store-unavailable">;
 
-function harness() {
+function harness(
+  checkIntervalsCredentialOwner: OwnershipCheck = vi.fn(async () => "unresolved" as const),
+) {
   const handlers = new Map<string, Handler>();
   const ipcMain = {
     handle: vi.fn((channel: string, handler: Handler) => handlers.set(channel, handler)),
@@ -54,13 +59,77 @@ function harness() {
     vault,
     chatGptAuth,
     isTrusted: (event) => event === trustedEvent,
+    checkIntervalsCredentialOwner,
   });
   const invoke = (channel: string, event: IpcMainInvokeEvent, ...args: unknown[]) =>
     handlers.get(channel)!(event, ...args);
-  return { handlers, ipcMain, vault, chatGptAuth, dialog, trustedEvent, dispose, invoke };
+  return {
+    handlers,
+    ipcMain,
+    vault,
+    chatGptAuth,
+    dialog,
+    checkIntervalsCredentialOwner,
+    trustedEvent,
+    dispose,
+    invoke,
+  };
 }
 
 describe("desktop onboarding IPC", () => {
+  it("refuses an intervals.icu credential for a different training account", async () => {
+    const subject = harness(vi.fn(async () => "mismatch" as const));
+
+    await expect(
+      subject.invoke(DESKTOP_CREDENTIAL_WRITE_CHANNEL, subject.trustedEvent, {
+        slot: "intervals-icu",
+        value: "synthetic",
+      }),
+    ).resolves.toEqual({
+      slot: "intervals-icu",
+      status: "refused",
+      reason: "training-account-mismatch",
+    });
+    expect(subject.vault.writeCredential).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the same training account", "matched"],
+    ["a readable ownerless store", "unowned"],
+    ["an unresolved identity", "unresolved"],
+    ["an unavailable store", "store-unavailable"],
+  ] as const)("saves an intervals.icu credential for %s", async (_case, outcome) => {
+    const subject = harness(vi.fn(async () => outcome));
+
+    await expect(
+      subject.invoke(DESKTOP_CREDENTIAL_WRITE_CHANNEL, subject.trustedEvent, {
+        slot: "intervals-icu",
+        value: "synthetic",
+      }),
+    ).resolves.toEqual({
+      slot: "intervals-icu",
+      status: "configured",
+      runtimeReady: true,
+    });
+    expect(subject.vault.writeCredential).toHaveBeenCalledOnce();
+  });
+
+  it("saves an intervals.icu credential when the convenience check fails", async () => {
+    const subject = harness(
+      vi.fn(async () => {
+        throw new Error("check unavailable");
+      }),
+    );
+
+    await expect(
+      subject.invoke(DESKTOP_CREDENTIAL_WRITE_CHANNEL, subject.trustedEvent, {
+        slot: "intervals-icu",
+        value: "synthetic",
+      }),
+    ).resolves.toMatchObject({ status: "configured" });
+    expect(subject.vault.writeCredential).toHaveBeenCalledOnce();
+  });
+
   it("maps each credential slot to the landed runtime request", () => {
     expect(runtimeConfigurationForCredential("anthropic", "synthetic")).toEqual({
       llm: { provider: "anthropic", model: "claude-sonnet-4-6", api_key: "synthetic" },

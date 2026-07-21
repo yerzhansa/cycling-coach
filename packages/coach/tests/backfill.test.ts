@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createSyncStateRepository,
+  dumpStore,
   runMigrations,
   type SourceArtifact,
 } from "@enduragent/kernel/store";
@@ -13,6 +14,7 @@ import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import type { IntervalsIcuSource } from "@enduragent/sync-intervals-icu";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import {
+  checkIntervalsStoreOwnerAtPath,
   createIntervalsBackfillSource,
   runBackfillPages,
   runIntervalsBackfill,
@@ -82,6 +84,74 @@ describe("incremental backfill pages", () => {
         return pulls(watermark.value, call++);
       },
     } as IntervalsIcuSource;
+  }
+
+  function profileFetch(account: string): typeof globalThis.fetch {
+    return vi.fn(async (input) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      let body: unknown;
+      if (url.pathname === "/api/v1/athlete/0") {
+        body = {
+          sportSettings: [
+            { id: 1, athlete_id: account, types: ["Ride"], updated: "2010-01-01" },
+          ],
+        };
+      } else if (url.pathname.endsWith("/activities")) {
+        body = [];
+      } else {
+        throw new Error("unexpected request");
+      }
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+  }
+
+  function unresolvedProfileFetch(): typeof globalThis.fetch {
+    return vi.fn(async () =>
+      new Response(JSON.stringify({ sportSettings: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+  }
+
+  function athleteHome(root: string, storeDir = root): AthleteHome {
+    return {
+      root,
+      storeDir,
+      archiveDir: join(root, "archive"),
+      configDir: join(root, "config"),
+    };
+  }
+
+  async function syncInWriter(
+    value: Awaited<ReturnType<typeof fresh>>,
+    account: string,
+    apiKey = "synthetic",
+  ) {
+    const baseFetch = profileFetch(account);
+    const result = await runIntervalsBackfillInWriter({
+      home: athleteHome(value.root),
+      store: value.store,
+      apiKey,
+      athleteId: "0",
+      historyNewestDate: "1900-12-31",
+      clock,
+      sleep: async () => {},
+      baseFetch,
+    });
+    return { baseFetch, result };
+  }
+
+  async function storedSyncState(store: Awaited<ReturnType<typeof fresh>>["store"]) {
+    return {
+      dump: await dumpStore(store),
+      owner: await store.all("SELECT * FROM store_owner"),
+      watermarks: await store.all("SELECT * FROM source_watermark"),
+      operations: await store.all("SELECT * FROM sync_operation"),
+    };
   }
 
   it("commits each page checkpoint atomically and finishes with one terminal no-op", async () => {
@@ -312,6 +382,229 @@ describe("incremental backfill pages", () => {
     }
   });
 
+  it("claims the owner when the first sync creates the store and detects a different credential afterward", async () => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "backfill-first-sync-"));
+    roots.push(root);
+    const storePath = join(root, "store", "store.db");
+    const firstFetch = profileFetch("synthetic-athlete-first");
+    expect(existsSync(storePath)).toBe(false);
+
+    await runIntervalsBackfill({
+      env: { ENDURAGENT_HOME: root },
+      apiKey: "synthetic-first",
+      athleteId: "0",
+      historyNewestDate: "1900-12-31",
+      clock,
+      sleep: async () => {},
+      baseFetch: firstFetch,
+    });
+
+    expect(existsSync(storePath)).toBe(true);
+    const store = openSqliteStorage(storePath);
+    try {
+      expect(await store.get("SELECT count(*) AS count FROM store_owner")).toEqual({ count: 1 });
+    } finally {
+      await store.close();
+    }
+    expect(firstFetch).toHaveBeenCalledTimes(2);
+    const mismatchFetch = profileFetch("synthetic-athlete-other");
+    await expect(
+      checkIntervalsStoreOwnerAtPath(storePath, {
+        apiKey: "synthetic-other",
+        athleteId: "0",
+        historyNewestDate: "1900-12-31",
+        clock,
+        sleep: async () => {},
+        baseFetch: mismatchFetch,
+      }),
+    ).resolves.toBe("mismatch");
+    expect(mismatchFetch).toHaveBeenCalledOnce();
+  });
+
+  it("claims an upgraded store without re-walking or changing its existing history", async () => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "backfill-upgrade-"));
+    roots.push(root);
+    const home = athleteHome(root, join(root, "store"));
+    mkdirSync(home.storeDir, { recursive: true, mode: 0o700 });
+    const storePath = join(home.storeDir, "store.db");
+    const legacy = openSqliteStorage(storePath);
+    await runMigrations(legacy, MIGRATIONS.slice(0, 7));
+    await legacy.run(
+      "INSERT INTO workout(workout_key,start_utc,is_multisport,dedup_cluster_id) VALUES(?,?,0,?)",
+      ["synthetic-workout", 1_262_304_000, "synthetic-cluster"],
+    );
+    await legacy.run(
+      "INSERT INTO session(session_key,workout_key,session_seq,sport,start_utc,local_date_key,is_transition) VALUES(?,?,0,?,?,?,0)",
+      ["synthetic-session", "synthetic-workout", "cycling", 1_262_304_000, 20100101],
+    );
+    await legacy.transaction(async () => {
+      await createSyncStateRepository(legacy).recordCompletionInTransaction({
+        source: "intervals-icu",
+        lane: "bulk-fit",
+        watermarkBefore: null,
+        watermarkAfter: complete,
+        artifactsSeen: 0,
+        sourceChanges: 0,
+      });
+    });
+    const before = await dumpStore(legacy);
+    await legacy.close();
+    const baseFetch = profileFetch("synthetic-athlete-upgrade");
+
+    await runIntervalsBackfill({
+      env: { ENDURAGENT_HOME: root },
+      apiKey: "synthetic-upgrade",
+      athleteId: "0",
+      historyNewestDate: "2010-12-31",
+      clock,
+      sleep: async () => {},
+      baseFetch,
+    });
+
+    expect(baseFetch).toHaveBeenCalledOnce();
+    const upgraded = openSqliteStorage(storePath);
+    try {
+      expect(await upgraded.get("PRAGMA user_version")).toEqual({ user_version: 8 });
+      expect(await upgraded.get("SELECT count(*) AS count FROM store_owner")).toEqual({ count: 1 });
+      expect(await dumpStore(upgraded)).toBe(before);
+    } finally {
+      await upgraded.close();
+    }
+    await expect(
+      checkIntervalsStoreOwnerAtPath(storePath, {
+        apiKey: "synthetic-other",
+        athleteId: "0",
+        historyNewestDate: "2010-12-31",
+        clock,
+        sleep: async () => {},
+        baseFetch: profileFetch("synthetic-athlete-other"),
+      }),
+    ).resolves.toBe("mismatch");
+  });
+
+  it("refuses a different athlete before writing any sync state or training data", async () => {
+    const value = await fresh();
+    try {
+      await syncInWriter(value, "synthetic-athlete-owner", "synthetic-owner");
+      const before = await storedSyncState(value.store);
+
+      await expect(
+        syncInWriter(value, "synthetic-athlete-other", "synthetic-other"),
+      ).rejects.toThrow("training account mismatch");
+
+      expect(await storedSyncState(value.store)).toEqual(before);
+    } finally {
+      await value.store.close();
+    }
+  });
+
+  it("syncs the same athlete normally without re-walking completed history", async () => {
+    const value = await fresh();
+    try {
+      const first = await syncInWriter(value, "synthetic-athlete-owner");
+      const repeat = await syncInWriter(value, "synthetic-athlete-owner");
+
+      expect(repeat.result).toMatchObject({ pages: 2, artifacts: 0, reports: [] });
+      expect(first.baseFetch).toHaveBeenCalledTimes(2);
+      expect(repeat.baseFetch).toHaveBeenCalledOnce();
+      expect(await value.store.get("SELECT count(*) AS count FROM store_owner")).toEqual({
+        count: 1,
+      });
+    } finally {
+      await value.store.close();
+    }
+  });
+
+  it("keeps an ownerless store unclaimed during the save-time convenience check", async () => {
+    const value = await fresh();
+    const storePath = join(value.root, "store.db");
+    await value.store.close();
+    const baseFetch = profileFetch("synthetic-athlete-ownerless");
+
+    await expect(
+      checkIntervalsStoreOwnerAtPath(storePath, {
+        apiKey: "synthetic-ownerless",
+        athleteId: "0",
+        historyNewestDate: "1900-12-31",
+        clock,
+        sleep: async () => {},
+        baseFetch,
+      }),
+    ).resolves.toBe("unowned");
+    expect(baseFetch).not.toHaveBeenCalled();
+
+    const reopened = openSqliteStorage(storePath);
+    try {
+      expect(await reopened.get("SELECT count(*) AS count FROM store_owner")).toEqual({ count: 0 });
+    } finally {
+      await reopened.close();
+    }
+  });
+
+  it("skips identity resolution when the save-time store is unavailable", async () => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "backfill-save-check-"));
+    roots.push(root);
+    const storePath = join(root, "missing", "store.db");
+    const baseFetch = profileFetch("synthetic-athlete-resolved");
+
+    await expect(
+      checkIntervalsStoreOwnerAtPath(storePath, {
+        apiKey: "synthetic-resolved",
+        athleteId: "0",
+        historyNewestDate: "1900-12-31",
+        clock,
+        sleep: async () => {},
+        baseFetch,
+      }),
+    ).resolves.toBe("store-unavailable");
+    expect(baseFetch).not.toHaveBeenCalled();
+  });
+
+  it("allows save when an owned store identity cannot be resolved", async () => {
+    const value = await fresh();
+    try {
+      await syncInWriter(value, "synthetic-athlete-owner");
+      const baseFetch = unresolvedProfileFetch();
+      await expect(
+        checkIntervalsStoreOwnerAtPath(join(value.root, "store.db"), {
+          apiKey: "synthetic-unresolved",
+          athleteId: "0",
+          historyNewestDate: "1900-12-31",
+          clock,
+          sleep: async () => {},
+          baseFetch,
+        }),
+      ).resolves.toBe("unresolved");
+      expect(baseFetch).toHaveBeenCalledOnce();
+    } finally {
+      await value.store.close();
+    }
+  });
+
+  it("accepts a rotated credential for the same athlete at save time and sync time", async () => {
+    const value = await fresh();
+    try {
+      await syncInWriter(value, "synthetic-athlete-owner", "synthetic-old");
+      const saveFetch = profileFetch("synthetic-athlete-owner");
+      await expect(
+        checkIntervalsStoreOwnerAtPath(join(value.root, "store.db"), {
+          apiKey: "synthetic-new",
+          athleteId: "0",
+          historyNewestDate: "1900-12-31",
+          clock,
+          sleep: async () => {},
+          baseFetch: saveFetch,
+        }),
+      ).resolves.toBe("matched");
+      const sync = await syncInWriter(value, "synthetic-athlete-owner", "synthetic-new");
+      expect(sync.result).toMatchObject({ pages: 2, artifacts: 0 });
+      expect(saveFetch).toHaveBeenCalledOnce();
+      expect(sync.baseFetch).toHaveBeenCalledOnce();
+    } finally {
+      await value.store.close();
+    }
+  });
+
   it("keeps the public writer wrapper equivalent to the supplied-writer entry", async () => {
     const makeHome = async (): Promise<{
       home: AthleteHome;
@@ -344,9 +637,7 @@ describe("incremental backfill pages", () => {
     const wrapped = await makeHome();
     const directPages: unknown[] = [];
     const wrappedPages: unknown[] = [];
-    const baseFetch = vi.fn(async () => {
-      throw new Error("completed watermark performed a request");
-    });
+    const baseFetch = profileFetch("synthetic-athlete");
     const close = vi.spyOn(direct.store, "close");
     try {
       const directResult = await runIntervalsBackfillInWriter({
@@ -374,7 +665,7 @@ describe("incremental backfill pages", () => {
       expect(wrappedResult).toEqual(directResult);
       expect(wrappedPages).toEqual(directPages);
       expect(directResult).toMatchObject({ pages: 2, artifacts: 0, reports: [] });
-      expect(baseFetch).not.toHaveBeenCalled();
+      expect(baseFetch).toHaveBeenCalledTimes(2);
       expect(close).not.toHaveBeenCalled();
       await expect(
         direct.store.get("SELECT count(*) AS count FROM source_watermark"),
