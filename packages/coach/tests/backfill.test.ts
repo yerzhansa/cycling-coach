@@ -18,11 +18,13 @@ import {
   runIntervalsBackfill,
   runIntervalsBackfillInWriter,
 } from "../src/backfill.js";
+import { createCoachOperations } from "../src/operations.js";
+import type { CoachStoreWriterContext } from "../src/runtime.js";
 
 const complete = JSON.stringify({
   v: 1,
   cycle: 0,
-  window_start: "2010-01-01",
+  window_start: "2010-12-05",
   window_end: "2010-12-31",
   last_key: null,
   complete: true,
@@ -229,6 +231,85 @@ describe("incremental backfill pages", () => {
     });
     expect(created.id).toBe("intervals-icu");
     expect(created.capabilities.backfillDepth).toEqual({ kind: "full-history" });
+  });
+
+  it("issues a request after the UTC date advances within one operations process", async () => {
+    const value = await fresh();
+    const home: AthleteHome = {
+      root: value.root,
+      storeDir: join(value.root, "store"),
+      archiveDir: join(value.root, "archive"),
+      configDir: join(value.root, "config"),
+    };
+    const context: CoachStoreWriterContext = {
+      home,
+      store: value.store,
+      listener: {} as CoachStoreWriterContext["listener"],
+    };
+    let now = Date.UTC(1900, 0, 1);
+    const requests: string[] = [];
+    const baseFetch: typeof globalThis.fetch = vi.fn(async (input) => {
+      requests.push(input instanceof Request ? input.url : input.toString());
+      return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const rollingClock = { now: () => now, monotonicNow: () => 1_000 };
+    const operations = createCoachOperations(
+      {
+        home,
+        context,
+        runtime: {
+          async runWindowAfter(work) {
+            await work(new AbortController().signal);
+            return {
+              published: true,
+              legacySucceeded: true,
+              counts: {
+                storeRequests: 0,
+                legacyRequests: 0,
+                totalRequests: 0,
+                byTag: {
+                  "store:activities": 0,
+                  "store:wellness": 0,
+                  "store:settings": 0,
+                  "store:streams": 0,
+                  "legacy:reference": 0,
+                },
+              },
+            };
+          },
+        },
+        intervalsCredentials: {
+          read: async () => ({ apiKey: String.fromCharCode(116, 101, 115, 116), athleteId: "synthetic-athlete" }),
+        },
+        historyNewestDate: () => new Date(now).toISOString().slice(0, 10),
+        applyRuntimeConfig: async () => {},
+      },
+      {
+        backfill: (options) => runIntervalsBackfillInWriter({
+          ...options,
+          clock: rollingClock,
+          sleep: async () => {},
+          baseFetch,
+        }),
+      },
+    );
+    try {
+      await expect(operations.sync({})).resolves.toMatchObject({ schemaVersion: 1 });
+      await expect(createSyncStateRepository(value.store).readWatermark("intervals-icu", "bulk-fit")).resolves.toEqual({
+        source: "intervals-icu",
+        lane: "bulk-fit",
+        value: JSON.stringify({ v: 1, cycle: 0, window_start: "1900-01-01", window_end: "1900-01-01",
+          last_key: null, complete: true }),
+      });
+      now = Date.UTC(1900, 0, 2);
+      await expect(operations.sync({})).resolves.toMatchObject({ schemaVersion: 1 });
+
+      expect(requests).toHaveLength(2);
+      const reopened = new URL(requests[1]!);
+      expect([...reopened.searchParams]).toEqual([["oldest", "1900-01-01"], ["newest", "1900-01-02"]]);
+    } finally {
+      await value.store.close();
+    }
   });
 
   it("keeps the public writer wrapper equivalent to the supplied-writer entry", async () => {

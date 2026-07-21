@@ -46,7 +46,7 @@ export interface CreateCoachOperationsInput {
   readonly intervalsCredentials: Readonly<{
     read(): Promise<Readonly<{ apiKey: string; athleteId: string }>>;
   }>;
-  readonly historyNewestDate: string;
+  readonly historyNewestDate: () => string;
   readonly applyRuntimeConfig: (request: ConfigureRuntimeRpcParams) => Promise<void>;
 }
 
@@ -138,7 +138,7 @@ export function createCoachOperations(
             store: input.context.store,
             apiKey: credentials.apiKey,
             athleteId: credentials.athleteId === "" ? "0" : credentials.athleteId,
-            historyNewestDate: input.historyNewestDate,
+            historyNewestDate: input.historyNewestDate(),
             signal,
           });
         });

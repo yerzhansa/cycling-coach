@@ -62,7 +62,7 @@ function endpointUrl(path: string, params: readonly (readonly [string, string])[
 
 function rangeUrl(athleteId: string, endpoint: "activities" | "wellness", cursor: RangeCursor): string {
   return endpointUrl(`/api/v1/athlete/${encodeURIComponent(athleteId)}/${endpoint}`,
-    [["oldest", cursor.window_start], ["newest", cursor.window_end]]);
+    [["oldest", cursor.requestStart ?? cursor.window_start], ["newest", cursor.window_end]]);
 }
 
 interface ActivityIndexEntry extends ReturnType<typeof activityIdentity> {
@@ -192,7 +192,7 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
 
     if (lane === "activities" || lane === "wellness") {
       const transport = await fetchJson(requester, lane, { method: "GET", url: rangeUrl(athleteId, lane, cursor) });
-      await options.archive.writeSnapshot(transport, rowInstant(epochForDate(cursor.window_start)));
+      await options.archive.writeSnapshot(transport, rowInstant(epochForDate(cursor.requestStart ?? cursor.window_start)));
       if (!Array.isArray(transport)) throw new TypeError(`${lane} response is invalid`);
       const indexed = lane === "activities" ? [...activityIndex(transport)] : transport.map((entry) => {
         const row = objectRow(entry, "wellness row"), identity = wellnessIdentity(row);
@@ -269,7 +269,7 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
     }
 
     const activityTransport = await fetchJson(requester, "activities", { method: "GET", url: rangeUrl(athleteId, "activities", cursor) });
-    await options.archive.writeSnapshot(activityTransport, rowInstant(epochForDate(cursor.window_start)));
+    await options.archive.writeSnapshot(activityTransport, rowInstant(epochForDate(cursor.requestStart ?? cursor.window_start)));
     const allActivities = activityIndex(activityTransport);
     const remaining = allActivities.filter((entry) => cursor.last_key === null || compareBinary(entry.key, cursor.last_key) > 0);
     let processedKey = cursor.last_key, processed = 0;
