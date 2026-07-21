@@ -228,6 +228,28 @@ async function cleanDoneFixture(): Promise<{
   return { fixture, result };
 }
 
+async function verifiedFixture(): Promise<Fixture> {
+  const fixture = await makeFixture();
+  await seedPayload(fixture);
+  let stopped = false;
+  await expect(
+    migrate(fixture, {
+      checkpoint: (context) => {
+        if (
+          !stopped &&
+          context.checkpoint === "after-journal-rename" &&
+          context.journalState === "verified"
+        ) {
+          stopped = true;
+          throw new Error("stopped after verification");
+        }
+      },
+    }),
+  ).rejects.toThrow("stopped after verification");
+  expect((await journal(fixture)).state).toBe("verified");
+  return fixture;
+}
+
 describe("legacy home migration", () => {
   it("clean copy reaches done only after verification", async () => {
     const fixture = await makeFixture();
@@ -254,43 +276,64 @@ describe("legacy home migration", () => {
     });
   });
 
-  it("done rerun validates cutover without copying", async () => {
-    for (const kind of ["clean", "target", "change", "add", "delete"] as const) {
-      const { fixture } = await cleanDoneFixture();
-      const sourceBefore = await snapshotByteTree(fixture.source);
-      const journalBefore = await readFile(journalPath(fixture));
-      const targetBefore = await snapshotByteTree(fixture.target);
-      let restore: (() => Promise<void>) | undefined;
-      if (kind === "target") {
-        const path = join(fixture.target, "memory/MEMORY.md");
-        await writeFile(path, "tampered");
-        restore = async () => writeFile(path, "durable memory\n");
-      }
-      if (kind === "change") {
-        const path = join(fixture.source, "memory/MEMORY.md");
-        await writeFile(path, "changed");
-        restore = async () => writeFile(path, "durable memory\n");
-      }
-      if (kind === "add") {
-        const path = join(fixture.source, "new.txt");
-        await writeFile(path, "new");
-        restore = async () => unlink(path);
-      }
-      if (kind === "delete") {
-        const path = join(fixture.source, "memory/events.jsonl");
-        await unlink(path);
-        restore = async () => writeFile(path, '{"event":1}\n', { mode: 0o600 });
-      }
-      const result = await migrate(fixture);
-      if (kind === "clean")
-        expect(result).toMatchObject({ status: "done", copiedIds: [], skipVerifiedIds: [] });
-      else if (kind === "target") expectRefused(result, "verification-failed", 3);
-      else expectRefused(result, "legacy-mutated-after-cutover", 3);
-      expect(await readFile(journalPath(fixture))).toEqual(journalBefore);
-      if (kind !== "target") expect(await snapshotByteTree(fixture.target)).toBe(targetBefore);
-      await restore?.();
-      expect(await snapshotByteTree(fixture.source)).toBe(sourceBefore);
-    }
+  it("done rerun remains terminal after the legacy home changes", async () => {
+    const { fixture } = await cleanDoneFixture();
+    const journalBefore = await readFile(journalPath(fixture));
+    const targetBefore = await snapshotByteTree(fixture.target);
+    await writeFile(join(fixture.source, "memory/MEMORY.md"), "changed");
+    await writeFile(join(fixture.source, "new.txt"), "new");
+    await unlink(join(fixture.source, "memory/events.jsonl"));
+
+    await expect(migrate(fixture)).resolves.toMatchObject({
+      status: "done",
+      copiedIds: [],
+      skipVerifiedIds: [],
+    });
+    expect(await readFile(journalPath(fixture))).toEqual(journalBefore);
+    expect(await snapshotByteTree(fixture.target)).toBe(targetBefore);
+  });
+
+  it("done rerun remains terminal after the legacy home is removed", async () => {
+    const { fixture } = await cleanDoneFixture();
+    const journalBefore = await readFile(journalPath(fixture));
+    const targetBefore = await snapshotByteTree(fixture.target);
+    await rm(fixture.source, { recursive: true, force: true });
+
+    await expect(migrate(fixture)).resolves.toMatchObject({
+      status: "done",
+      copiedIds: [],
+      skipVerifiedIds: [],
+    });
+    expect(await readFile(journalPath(fixture))).toEqual(journalBefore);
+    expect(await snapshotByteTree(fixture.target)).toBe(targetBefore);
+  });
+
+  it("verified replay completes after the legacy home changes", async () => {
+    const fixture = await verifiedFixture();
+    await writeFile(join(fixture.source, "memory/MEMORY.md"), "changed");
+    await writeFile(join(fixture.source, "new.txt"), "new");
+    await unlink(join(fixture.source, "memory/events.jsonl"));
+
+    await expect(migrate(fixture)).resolves.toMatchObject({
+      status: "done",
+      completion: "complete",
+      copiedIds: [],
+      skipVerifiedIds: [],
+    });
+    expect((await journal(fixture)).state).toBe("done");
+  });
+
+  it("verified replay completes after the legacy home is removed", async () => {
+    const fixture = await verifiedFixture();
+    await rm(fixture.source, { recursive: true, force: true });
+
+    await expect(migrate(fixture)).resolves.toMatchObject({
+      status: "done",
+      completion: "complete",
+      copiedIds: [],
+      skipVerifiedIds: [],
+    });
+    expect((await journal(fixture)).state).toBe("done");
   });
 
   it("identical target collision is skip-verified", async () => {
@@ -812,18 +855,27 @@ describe("legacy home migration", () => {
     }
   });
 
+  it("migrates default-root history without inventing a missing source configuration", async () => {
+    const fixture = await makeFixture();
+    await unlink(join(fixture.source, "config.yaml"));
+    await write(fixture.source, "memory/MEMORY.md", "durable memory\n");
+
+    await preserving([fixture.source], async () => {
+      const result = await migrate(fixture);
+      expect(result).toMatchObject({ status: "done", completion: "complete" });
+      expect(await readFile(join(fixture.target, "memory/MEMORY.md"), "utf8")).toBe(
+        "durable memory\n",
+      );
+      expect(await exists(join(fixture.target, "config/config.yaml"))).toBe(false);
+      expect((await journal(fixture)).manifest.dataRoot).toBe(fixture.source);
+    });
+  });
+
   it("invalid source config is pre-plan", async () => {
-    const variants: Array<string | null> = [
-      null,
-      "bad: [",
-      "a: 1\na: 2\n",
-      "- list\n",
-      "*missing\n",
-    ];
+    const variants = ["bad: [", "a: 1\na: 2\n", "- list\n", "*missing\n"];
     for (const value of variants) {
       const fixture = await makeFixture();
-      if (value === null) await unlink(join(fixture.source, "config.yaml"));
-      else await write(fixture.source, "config.yaml", value);
+      await write(fixture.source, "config.yaml", value);
       const result = await migrate(fixture);
       expectRefused(result, "invalid-source-config", 4);
       expect(await exists(dirname(journalPath(fixture)))).toBe(false);
@@ -996,7 +1048,7 @@ describe("legacy home migration", () => {
     }
     const { fixture } = await cleanDoneFixture();
     await rm(fixture.source, { recursive: true });
-    expectRefused(await migrate(fixture), "legacy-mutated-after-cutover", 3);
+    expect(await migrate(fixture)).toMatchObject({ status: "done" });
   });
 
   it("post-preflight target race and verification failure are pinned", async () => {

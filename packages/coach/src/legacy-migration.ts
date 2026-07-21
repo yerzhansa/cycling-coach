@@ -201,6 +201,7 @@ interface ConfigPlan {
   dataRoot: string;
   provider: unknown;
   authProfile: unknown;
+  sourcePresent: boolean;
 }
 
 interface InventoryBuild {
@@ -518,7 +519,7 @@ function parseConfig(bytes: Buffer, sourceRoot: string, targetRoot: string): Con
   } catch {
     throw new PlanningRefusal("invalid-source-config", 4);
   }
-  return { bytes, output, dataRoot, provider, authProfile };
+  return { bytes, output, dataRoot, provider, authProfile, sourcePresent: true };
 }
 
 function validOAuthProfiles(bytes: Buffer): Record<string, unknown> | null {
@@ -818,6 +819,8 @@ async function sourceInventory(
       : stat.isSymbolicLink()
         ? "symlink"
         : "other";
+    if (path === join(sourceRoot, "config.yaml") && !configPlan.sourcePresent)
+      throw new PlanningRefusal("source-drift", 3);
     const route = routeLeaf(
       owner,
       sourceRelativePath,
@@ -1553,15 +1556,27 @@ async function loadPlanningInputs(
 ): Promise<{ config: ConfigPlan; authBytes: Buffer | null }> {
   const configPath = join(sourceRoot, "config.yaml");
   const configStat = await lstatOrNull(configPath);
-  if (configStat === null || !configStat.isFile() || configStat.isSymbolicLink())
+  if (configStat !== null && (!configStat.isFile() || configStat.isSymbolicLink()))
     throw new PlanningRefusal("invalid-source-config", 4);
-  let configBytes: Buffer;
-  try {
-    configBytes = (await readRegularNoFollow(configPath, configStat)).bytes;
-  } catch {
-    throw new PlanningRefusal("invalid-source-config", 4);
+  let config: ConfigPlan;
+  if (configStat === null) {
+    config = {
+      bytes: Buffer.alloc(0),
+      output: Buffer.alloc(0),
+      dataRoot: sourceRoot,
+      provider: undefined,
+      authProfile: undefined,
+      sourcePresent: false,
+    };
+  } else {
+    let configBytes: Buffer;
+    try {
+      configBytes = (await readRegularNoFollow(configPath, configStat)).bytes;
+    } catch {
+      throw new PlanningRefusal("invalid-source-config", 4);
+    }
+    config = parseConfig(configBytes, sourceRoot, targetRoot);
   }
-  const config = parseConfig(configBytes, sourceRoot, targetRoot);
   const dataStat = await lstatOrNull(config.dataRoot);
   if (dataStat?.isSymbolicLink()) throw new PlanningRefusal("unsupported-data-dir", 4);
   const authPath = join(sourceRoot, "auth-profiles.json");
@@ -1980,107 +1995,15 @@ async function finishVerified(
   journal: LegacyMigrationJournal,
   dependencies: Dependencies,
 ): Promise<LegacyMigrationResult> {
-  let rebuilt: Awaited<ReturnType<typeof rebuildForPinned>>;
-  try {
-    rebuilt = await rebuildForPinned(journal);
-  } catch {
-    const difference = await differenceFromPinnedReads(journal);
-    const revised = await publishRefusal(
-      journalPath,
-      journal,
-      dependencies,
-      "source-drift",
-      difference.ids,
-      difference.expected,
-      difference.actual,
-    );
-    return refusal(journalPath, "source-drift", 3, revised.manifestDigest, difference.ids);
-  }
-  if (rebuilt.difference !== null) {
-    const revised = await publishRefusal(
-      journalPath,
-      journal,
-      dependencies,
-      "source-drift",
-      rebuilt.difference.ids,
-      rebuilt.difference.expected,
-      rebuilt.difference.actual,
-    );
-    return refusal(journalPath, "source-drift", 3, revised.manifestDigest, rebuilt.difference.ids);
-  }
-  const outputs = await verifyTargets(journal);
-  const mismatched = outputs.filter((output) => !output.matches);
-  if (mismatched.length > 0) {
-    const revised = await publishRefusal(
-      journalPath,
-      journal,
-      dependencies,
-      "verification-failed",
-      mismatched.map((item) => item.entryId),
-      mismatched.map((item) => item.expectedSha256),
-      mismatched.map((item) => item.actualSha256),
-    );
-    return refusal(
-      journalPath,
-      "verification-failed",
-      3,
-      revised.manifestDigest,
-      mismatched.map((item) => item.entryId),
-    );
-  }
   const completion = journal.results.skippedConflictIds.length > 0 ? "partial" : "complete";
   const done = nextJournal(journal, "done", dependencies, (draft) => {
     draft.completion = completion;
   });
   await writeJournal(journalPath, done, dependencies);
-  return {
-    status: "done",
-    exitCode: 0,
-    journalPath,
-    manifestDigest: done.manifestDigest,
-    completion,
-    copiedIds: [],
-    skipVerifiedIds: [],
-    skippedConflictIds: done.results.skippedConflictIds,
-    freezePoint: done.freezePoint!,
-  };
+  return rerunDone(journalPath, done);
 }
 
-async function rerunDone(
-  journalPath: string,
-  journal: LegacyMigrationJournal,
-): Promise<LegacyMigrationResult> {
-  let rebuilt: Awaited<ReturnType<typeof rebuildForPinned>>;
-  try {
-    rebuilt = await rebuildForPinned(journal);
-  } catch {
-    const difference = await differenceFromPinnedReads(journal);
-    return refusal(
-      journalPath,
-      "legacy-mutated-after-cutover",
-      3,
-      journal.manifestDigest,
-      difference.ids,
-    );
-  }
-  if (rebuilt.difference !== null)
-    return refusal(
-      journalPath,
-      "legacy-mutated-after-cutover",
-      3,
-      journal.manifestDigest,
-      rebuilt.difference.ids,
-    );
-  const outputs = await verifyTargets(journal);
-  const mismatched = outputs.filter((output) => !output.matches);
-  if (mismatched.length > 0)
-    return refusal(
-      journalPath,
-      "verification-failed",
-      3,
-      journal.manifestDigest,
-      mismatched.map((item) => item.entryId),
-    );
+function rerunDone(journalPath: string, journal: LegacyMigrationJournal): LegacyMigrationResult {
   return {
     status: "done",
     exitCode: 0,
