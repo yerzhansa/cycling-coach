@@ -106,6 +106,7 @@ function response(value: unknown): readonly string[] {
 
 function makeScript(calls: ScriptRequest[]): DesktopFixtureScript {
   let units: "metric" | "imperial" = "metric";
+  let hasSession = false;
   return {
     onRequest(value) {
       const request = value as ScriptRequest;
@@ -119,6 +120,7 @@ function makeScript(calls: ScriptRequest[]): DesktopFixtureScript {
         return response({ value: units, source: "cycling" });
       }
       if (request.method === "chat") {
+        hasSession = true;
         return [
           JSON.stringify({ type: "text_delta", turnId: "turn-fixture", delta: "Hold " }),
           JSON.stringify({ type: "text_delta", turnId: "turn-fixture", delta: "steady" }),
@@ -126,8 +128,11 @@ function makeScript(calls: ScriptRequest[]): DesktopFixtureScript {
           JSON.stringify({ text: "Hold steady." }),
         ];
       }
-      if (request.method === "hasSession") return response({ hasSession: false });
-      if (request.method === "resetSession") return response({ memoryFlushed: true });
+      if (request.method === "hasSession") return response({ hasSession });
+      if (request.method === "resetSession") {
+        hasSession = false;
+        return response({ memoryFlushed: true });
+      }
       if (request.method === "sync") {
         return response({
           schemaVersion: 1,
@@ -262,6 +267,63 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       anchorValue: "300 W",
       wellnessValue: "65 ms",
     });
+    expect(calls.filter((call) => call.method === "hasSession")).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: "hasSession",
+        params: { chatId: "desktop" },
+      },
+    ]);
+    const reset = await fixture.evaluate<{
+      readonly enabledBefore: boolean;
+      readonly dialogOpen: boolean;
+      readonly transcriptEmpty: boolean;
+      readonly composerValue: string;
+      readonly composerDisabled: boolean;
+      readonly resetDisabled: boolean;
+      readonly focused: string | null;
+    }>(`
+      const opener = document.querySelector(".new-conversation-button");
+      const textarea = document.querySelector("#message");
+      const readyDeadline = Date.now() + 5000;
+      while ((opener.disabled || opener.getAttribute("aria-disabled") === "true" || textarea.disabled) && Date.now() < readyDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const enabledBefore = !opener.disabled && opener.getAttribute("aria-disabled") !== "true" && !textarea.disabled;
+      if (enabledBefore) opener.click();
+      const dialog = document.querySelector(".new-conversation-dialog");
+      const dialogOpen = dialog.open;
+      if (dialogOpen) dialog.querySelector(".new-conversation-dialog__confirm").click();
+      const resetDeadline = Date.now() + 5000;
+      while (dialog.open && Date.now() < resetDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      return {
+        enabledBefore,
+        dialogOpen,
+        transcriptEmpty: document.querySelectorAll(".chat-message").length === 0,
+        composerValue: textarea.value,
+        composerDisabled: textarea.disabled,
+        resetDisabled: opener.disabled,
+        focused: document.activeElement?.id ?? null,
+      };
+    `);
+    expect(reset).toEqual({
+      enabledBefore: true,
+      dialogOpen: true,
+      transcriptEmpty: true,
+      composerValue: "",
+      composerDisabled: false,
+      resetDisabled: true,
+      focused: "message",
+    });
+    expect(calls.filter((call) => call.method === "resetSession")).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: "resetSession",
+        params: { chatId: "desktop" },
+      },
+    ]);
     const drawer = await fixture.evaluate<{
       readonly open: boolean;
       readonly focused: string | null;
@@ -318,10 +380,14 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     ]);
     await fixture.setViewport(720, 800);
     expect(
-      await fixture.evaluate<boolean>(`
-      return document.documentElement.scrollWidth > document.documentElement.clientWidth;
+      await fixture.evaluate<{ readonly documentOverflow: boolean; readonly topbarFits: boolean }>(`
+      const topbar = document.querySelector(".topbar");
+      return {
+        documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        topbarFits: topbar.scrollWidth <= topbar.clientWidth,
+      };
     `),
-    ).toBe(false);
+    ).toEqual({ documentOverflow: false, topbarFits: true });
     const base = await realpath(process.platform === "darwin" ? "/tmp" : tmpdir());
     const screenshotRoot = await mkdtemp(join(base, "eap-shot-"));
     scratchPaths.push(screenshotRoot);

@@ -11,10 +11,14 @@ import type { CoachTurnEventNotificationEnvelope, TurnEvent } from "@enduragent/
 import {
   CHAT_CONNECTION_INTERRUPTED_COPY,
   CHAT_PROTOCOL_FAILURE_COPY,
+  NEW_CONVERSATION_MEMORY_WARNING_COPY,
+  NEW_CONVERSATION_SUCCESS_COPY,
+  NEW_CONVERSATION_UNCERTAIN_COPY,
+  type ChatViewControls,
   createChatController,
 } from "../src/chat/controller.js";
 import type { DesktopCoachClientProvider } from "../src/coach-client.js";
-import type { ChatState } from "../src/turn-state.js";
+import { EMPTY_CHAT_STATE, type ChatState } from "../src/turn-state.js";
 
 function envelope(event: TurnEvent, requestId = 1): CoachTurnEventNotificationEnvelope {
   return {
@@ -55,10 +59,24 @@ function client(
     request: { chatId: string; message: string },
     options: CoachClientCallOptions<"chat"> | undefined,
   ) => Promise<{ text: string }>,
+  sessions: {
+    readonly hasSession?: (request: { chatId: string }) => Promise<{ hasSession: boolean }>;
+    readonly resetSession?: (request: { chatId: string }) => Promise<{ memoryFlushed: boolean }>;
+  } = {},
 ): CoachClient {
   return {
     handshake: {} as CoachClient["handshake"],
     call: vi.fn((method, request, options) => {
+      if (method === "hasSession") {
+        return (sessions.hasSession ?? (async () => ({ hasSession: false })))(
+          request as { chatId: string },
+        ) as never;
+      }
+      if (method === "resetSession") {
+        return (sessions.resetSession ?? (async () => ({ memoryFlushed: true })))(
+          request as { chatId: string },
+        ) as never;
+      }
       if (method !== "chat") throw new TypeError();
       return implementation(
         request as { chatId: string; message: string },
@@ -76,6 +94,7 @@ function subject(
   spendRefreshImplementation: () => Promise<void> = async () => {},
 ) {
   const states: ChatState[] = [];
+  const controls: ChatViewControls[] = [];
   const refresh = vi.fn(refreshImplementation);
   const refreshSpend = vi.fn(spendRefreshImplementation);
   const provider: DesktopCoachClientProvider = {
@@ -85,11 +104,16 @@ function subject(
   };
   const controller = createChatController({
     clients: provider,
-    view: { render: (state) => states.push(structuredClone(state)) },
+    view: {
+      render: (state, nextControls) => {
+        states.push(structuredClone(state));
+        if (nextControls !== undefined) controls.push(structuredClone(nextControls));
+      },
+    },
     refreshTrainingContext: refresh,
     refreshSpend,
   });
-  return { controller, provider, states, refresh, refreshSpend };
+  return { controller, provider, states, controls, refresh, refreshSpend };
 }
 
 describe("chat controller", () => {
@@ -167,6 +191,7 @@ describe("chat controller", () => {
     await controller.submit("Original message ");
     expect(states.some((state) => state.messages.at(-1)?.text === "Hel")).toBe(true);
     expect(states.at(-1)?.messages.filter((message) => message.text === "Hello.")).toHaveLength(1);
+    expect(states.at(-1)?.session.presence).toBe("present");
     expect(vi.mocked(fake.call).mock.calls[0]?.slice(0, 2)).toEqual([
       "chat",
       { chatId: "desktop", message: "Original message " },
@@ -378,10 +403,117 @@ describe("chat controller", () => {
     await interruptedState;
     const retry = controller.retryInterrupted();
     const duplicate = controller.retryInterrupted();
+    expect(controller.openNewConversation()).toBe(false);
     release();
     await Promise.all([submission, retry, duplicate]);
     expect(provider.reconnect).toHaveBeenCalledTimes(1);
     expect(second.call).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps queued retries owned by the interrupted request when a newer pre-call disconnects", async () => {
+    let releaseFirstRefresh!: () => void;
+    const firstRefreshGate = new Promise<void>((resolve) => {
+      releaseFirstRefresh = resolve;
+    });
+    let resolveReconnect!: (value: CoachClient) => void;
+    const reconnectGate = new Promise<CoachClient>((resolve) => {
+      resolveReconnect = resolve;
+    });
+    const first = client(async (_request, options) => {
+      deliver(options, { type: "text_delta", turnId: "turn-a", delta: "Partial A" });
+      throw new CoachClientDisconnectedError(1006, "chat-a-disconnected");
+    });
+    const recovered = client(async (_request, options) => {
+      deliver(options, { type: "final-text", turnId: "turn-b-retry", text: "Recovered B" });
+      options?.onTerminalEnvelope?.({
+        jsonrpc: "2.0",
+        id: 3,
+        result: { text: "Recovered B" },
+      });
+      return { text: "Recovered B" };
+    });
+    let clientAcquisitions = 0;
+    const provider: DesktopCoachClientProvider = {
+      getClient: vi.fn(async () => {
+        clientAcquisitions += 1;
+        if (clientAcquisitions === 1) return first;
+        throw new CoachClientDisconnectedError(1006, "chat-b-pre-call-disconnected");
+      }),
+      reconnect: vi.fn(() => reconnectGate),
+      close: vi.fn(async () => {}),
+    };
+    const states: ChatState[] = [];
+    let renderCount = 0;
+    let releasedFirstRefresh = false;
+    let showSecondInterruption!: () => void;
+    const secondInterruption = new Promise<void>((resolve) => {
+      showSecondInterruption = resolve;
+    });
+    const refreshTrainingContext = vi.fn(async () => {
+      if (refreshTrainingContext.mock.calls.length === 1) await firstRefreshGate;
+    });
+    const refreshSpend = vi.fn(async () => {});
+    const controller = createChatController({
+      clients: provider,
+      view: {
+        render(state) {
+          states.push(structuredClone(state));
+          renderCount += 1;
+          if (
+            !releasedFirstRefresh &&
+            state.status === "interrupted" &&
+            state.activeTurn?.userMessage === "Chat B"
+          ) {
+            releasedFirstRefresh = true;
+            releaseFirstRefresh();
+            showSecondInterruption();
+          }
+        },
+      },
+      refreshTrainingContext,
+      refreshSpend,
+    });
+
+    const chatA = controller.submit("Chat A");
+    while (states.at(-1)?.status !== "interrupted") await Promise.resolve();
+    const retryA = controller.retryInterrupted();
+    const chatB = controller.submit("Chat B");
+    await secondInterruption;
+    const rendersAtSecondInterruption = renderCount;
+    const retryB = controller.retryInterrupted();
+    const duplicateB = controller.retryInterrupted();
+
+    expect(retryB).not.toBe(retryA);
+    expect(duplicateB).toBe(retryB);
+    await Promise.all([chatA, chatB, retryA]);
+    expect(provider.getClient).toHaveBeenCalledTimes(2);
+    expect(provider.reconnect).toHaveBeenCalledTimes(1);
+    expect(renderCount).toBe(rendersAtSecondInterruption + 5);
+    expect(first.call).toHaveBeenCalledTimes(1);
+    expect(recovered.call).not.toHaveBeenCalled();
+
+    resolveReconnect(recovered);
+    await Promise.all([retryB, duplicateB]);
+
+    expect(provider.getClient).toHaveBeenCalledTimes(2);
+    expect(provider.reconnect).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(first.call).mock.calls.map(([, request]) => request)).toEqual([
+      { chatId: "desktop", message: "Chat A" },
+    ]);
+    expect(vi.mocked(recovered.call).mock.calls.map(([, request]) => request)).toEqual([
+      { chatId: "desktop", message: "Chat B" },
+    ]);
+    expect(refreshTrainingContext).toHaveBeenCalledTimes(2);
+    expect(refreshSpend).toHaveBeenCalledTimes(2);
+    expect(
+      states.at(-1)?.messages.map(({ role, text, delivery }) => ({ role, text, delivery })),
+    ).toEqual([
+      { role: "athlete", text: "Chat A", delivery: "complete" },
+      { role: "coach", text: "Partial A", delivery: "interrupted" },
+      { role: "athlete", text: "Chat B", delivery: "complete" },
+      { role: "coach", text: "", delivery: "interrupted" },
+      { role: "coach", text: "Recovered B", delivery: "complete" },
+    ]);
   });
 
   it("allows one in-flight call and treats client protocol rejection as explicit-retry state", async () => {
@@ -409,5 +541,430 @@ describe("chat controller", () => {
     const { controller } = subject(fake);
     await controller.submit("  \n");
     expect(fake.call).not.toHaveBeenCalled();
+  });
+
+  it("starts one exact session probe and deduplicates repeated starts", async () => {
+    const fake = client(async () => ({ text: "unused" }), {
+      hasSession: async () => ({ hasSession: true }),
+    });
+    const { controller, states } = subject(fake);
+
+    const first = controller.start();
+    const duplicate = controller.start();
+
+    expect(duplicate).toBe(first);
+    await first;
+    expect(vi.mocked(fake.call).mock.calls).toEqual([["hasSession", { chatId: "desktop" }]]);
+    expect(states.at(-1)?.session.presence).toBe("present");
+  });
+
+  it("keeps reset unavailable after an absent probe and exposes no probe failure", async () => {
+    const absent = client(async () => ({ text: "unused" }));
+    const first = subject(absent);
+    await first.controller.start();
+    expect(first.states.at(-1)?.session.presence).toBe("absent");
+    expect(first.controls.at(-1)?.newConversationDisabled).toBe(true);
+    expect(first.controller.openNewConversation()).toBe(false);
+    expect(first.provider.reconnect).not.toHaveBeenCalled();
+
+    const failed = client(async () => ({ text: "unused" }), {
+      hasSession: async () => Promise.reject(new Error("private probe detail")),
+    });
+    const second = subject(failed);
+    await second.controller.start();
+    expect(second.states.at(-1)?.session).toEqual(EMPTY_CHAT_STATE.session);
+    expect(second.provider.reconnect).not.toHaveBeenCalled();
+    expect(vi.mocked(failed.call).mock.calls.filter(([method]) => method !== "hasSession")).toEqual(
+      [],
+    );
+  });
+
+  it("uses visible local content without promoting an absent session after pre-client failure", async () => {
+    const fake = client(async () => ({ text: "unused" }));
+    const { controller, provider, states, controls } = subject(fake);
+    await controller.start();
+
+    let rejectClient!: (reason?: unknown) => void;
+    const clientGate = new Promise<CoachClient>((_resolve, reject) => {
+      rejectClient = reject;
+    });
+    vi.mocked(provider.getClient).mockReturnValueOnce(clientGate);
+
+    const submission = controller.submit("Keep this visible");
+    expect(states.at(-1)?.session.presence).toBe("absent");
+    expect(states.at(-1)?.messages).toMatchObject([
+      { role: "athlete", text: "Keep this visible" },
+      { role: "coach", text: "" },
+    ]);
+    expect(controls.at(-1)?.newConversationDisabled).toBe(true);
+    expect(controller.openNewConversation()).toBe(false);
+
+    rejectClient(new Error("synthetic pre-client failure"));
+    await submission;
+
+    expect(states.at(-1)?.session.presence).toBe("absent");
+    expect(states.at(-1)?.messages).toMatchObject([
+      { role: "athlete", text: "Keep this visible", delivery: "complete" },
+      { role: "coach", text: "", delivery: "interrupted" },
+    ]);
+    expect(
+      controls.slice(-2).map(({ newConversationDisabled }) => newConversationDisabled),
+    ).toEqual([true, false]);
+    expect(controller.openNewConversation()).toBe(true);
+    expect(states.at(-1)?.session).toMatchObject({
+      presence: "absent",
+      resetPhase: "confirming",
+    });
+    expect(vi.mocked(fake.call).mock.calls.filter(([method]) => method === "chat")).toEqual([]);
+
+    await controller.confirmNewConversation();
+    expect(states.at(-1)?.messages).toEqual([]);
+    expect(states.at(-1)?.session).toMatchObject({
+      presence: "absent",
+      resetPhase: "idle",
+    });
+    expect(vi.mocked(fake.call).mock.calls.filter(([method]) => method === "resetSession")).toEqual(
+      [["resetSession", { chatId: "desktop" }]],
+    );
+  });
+
+  it("ignores a delayed false probe after a locally completed chat", async () => {
+    let resolveProbe!: (value: { hasSession: boolean }) => void;
+    const probe = new Promise<{ hasSession: boolean }>((resolve) => {
+      resolveProbe = resolve;
+    });
+    const fake = client(
+      async (_request, options) => {
+        deliver(options, { type: "final-text", turnId: "turn-1", text: "Done" });
+        options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: { text: "Done" } });
+        return { text: "Done" };
+      },
+      { hasSession: async () => probe },
+    );
+    const { controller, states } = subject(fake);
+
+    const starting = controller.start();
+    await controller.submit("Continue");
+    resolveProbe({ hasSession: false });
+    await starting;
+
+    expect(states.at(-1)?.session.presence).toBe("present");
+    expect(controller.openNewConversation()).toBe(true);
+  });
+
+  it("ignores a delayed true probe after a successful reset", async () => {
+    let resolveProbe!: (value: { hasSession: boolean }) => void;
+    const probe = new Promise<{ hasSession: boolean }>((resolve) => {
+      resolveProbe = resolve;
+    });
+    const fake = client(
+      async (_request, options) => {
+        deliver(options, { type: "final-text", turnId: "turn-1", text: "Done" });
+        options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: { text: "Done" } });
+        return { text: "Done" };
+      },
+      {
+        hasSession: async () => probe,
+        resetSession: async () => ({ memoryFlushed: true }),
+      },
+    );
+    const { controller, states } = subject(fake);
+
+    const starting = controller.start();
+    await controller.submit("Continue");
+    expect(controller.openNewConversation()).toBe(true);
+    await controller.confirmNewConversation();
+    resolveProbe({ hasSession: true });
+    await starting;
+
+    expect(states.at(-1)?.session.presence).toBe("absent");
+    expect(states.at(-1)?.messages).toEqual([]);
+    expect(controller.openNewConversation()).toBe(false);
+  });
+
+  it("rejects confirmation while chat streaming or terminal refresh is active", async () => {
+    let releaseChat!: () => void;
+    const chatGate = new Promise<void>((resolve) => {
+      releaseChat = resolve;
+    });
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const fake = client(async (_request, options) => {
+      await chatGate;
+      deliver(options, { type: "final-text", turnId: "turn-1", text: "Done" });
+      options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: { text: "Done" } });
+      return { text: "Done" };
+    });
+    const { controller, refresh } = subject(fake, fake, () => refreshGate);
+
+    const submission = controller.submit("Continue");
+    await Promise.resolve();
+    expect(controller.openNewConversation()).toBe(false);
+    releaseChat();
+    while (refresh.mock.calls.length === 0) await Promise.resolve();
+    expect(controller.openNewConversation()).toBe(false);
+    releaseRefresh();
+    await submission;
+    expect(controller.openNewConversation()).toBe(true);
+  });
+
+  it("keeps reset unavailable until every accepted chat cleanup settles", async () => {
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const fake = client(async (_request, options) => {
+      deliver(options, { type: "final-text", turnId: "turn-1", text: "Done" });
+      options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: { text: "Done" } });
+      return { text: "Done" };
+    });
+    const { controller, provider, states, controls, refresh } = subject(
+      fake,
+      fake,
+      () => refreshGate,
+    );
+
+    const chatA = controller.submit("Chat A");
+    while (refresh.mock.calls.length === 0) await Promise.resolve();
+    expect(states.at(-1)?.status).toBe("idle");
+
+    vi.mocked(provider.getClient).mockRejectedValueOnce(new Error("synthetic admission failure"));
+    const chatB = controller.submit("Chat B");
+    await chatB;
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(controls.at(-1)?.newConversationDisabled).toBe(true);
+    expect(controller.openNewConversation()).toBe(false);
+    expect(vi.mocked(fake.call).mock.calls.filter(([method]) => method === "resetSession")).toEqual(
+      [],
+    );
+
+    releaseRefresh();
+    await chatA;
+
+    expect(controls.at(-1)?.newConversationDisabled).toBe(false);
+    expect(controller.openNewConversation()).toBe(true);
+    expect(vi.mocked(fake.call).mock.calls.filter(([method]) => method === "resetSession")).toEqual(
+      [],
+    );
+  });
+
+  it("blocks submit and retry while confirmation is open, then cancel permits retry", async () => {
+    const interrupted = client(async (_request, options) => {
+      deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Partial" });
+      throw new CoachClientDisconnectedError(1006, "synthetic");
+    });
+    const recovered = client(async (_request, options) => {
+      deliver(options, { type: "final-text", turnId: "turn-2", text: "Recovered" });
+      options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 2, result: { text: "Recovered" } });
+      return { text: "Recovered" };
+    });
+    const { controller } = subject(interrupted, recovered);
+    await controller.submit("Original");
+    expect(controller.openNewConversation()).toBe(true);
+    vi.mocked(interrupted.call).mockClear();
+
+    await Promise.all([controller.submit("Blocked"), controller.retryInterrupted()]);
+    expect(interrupted.call).not.toHaveBeenCalled();
+    expect(recovered.call).not.toHaveBeenCalled();
+
+    controller.cancelNewConversation();
+    expect(controller.openNewConversation()).toBe(true);
+    controller.cancelNewConversation();
+    await controller.retryInterrupted();
+    expect(recovered.call).toHaveBeenCalledTimes(1);
+    expect(
+      vi.mocked(interrupted.call).mock.calls.filter(([method]) => method === "resetSession"),
+    ).toEqual([]);
+  });
+
+  it.each([
+    [true, NEW_CONVERSATION_SUCCESS_COPY],
+    [false, NEW_CONVERSATION_MEMORY_WARNING_COPY],
+  ] as const)(
+    "clears only after reset success when memoryFlushed is %s",
+    async (memoryFlushed, announcement) => {
+      let settleReset!: (value: { memoryFlushed: boolean }) => void;
+      const resetGate = new Promise<{ memoryFlushed: boolean }>((resolve) => {
+        settleReset = resolve;
+      });
+      const fake = client(
+        async (_request, options) => {
+          deliver(options, { type: "final-text", turnId: "turn-1", text: "Done" });
+          options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: { text: "Done" } });
+          return { text: "Done" };
+        },
+        { resetSession: async () => resetGate },
+      );
+      const { controller, states, refreshSpend } = subject(fake);
+      await controller.submit("Original");
+      const transcript = states.at(-1)?.messages;
+      refreshSpend.mockClear();
+      expect(controller.openNewConversation()).toBe(true);
+
+      const first = controller.confirmNewConversation();
+      const duplicate = controller.confirmNewConversation();
+      expect(duplicate).toBe(first);
+      await Promise.resolve();
+      expect(
+        vi.mocked(fake.call).mock.calls.filter(([method]) => method === "resetSession"),
+      ).toEqual([["resetSession", { chatId: "desktop" }]]);
+      expect(states.at(-1)?.messages).toEqual(transcript);
+      expect(states.at(-1)?.session.resetPhase).toBe("resetting");
+
+      settleReset({ memoryFlushed });
+      await first;
+      expect(states.at(-1)).toMatchObject({
+        status: "idle",
+        messages: [],
+        activeTurn: null,
+        progress: null,
+        session: {
+          presence: "absent",
+          resetPhase: "idle",
+          announcement,
+        },
+      });
+      expect(refreshSpend).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    new Error("private reset detail"),
+    new CoachClientCallTimeoutError("resetSession", 660_000),
+    new CoachClientDisconnectedError(1006, "synthetic"),
+    new CoachClientProtocolError(),
+  ])("preserves conversation and blocks a second reset after $name", async (failure) => {
+    const fake = client(
+      async (_request, options) => {
+        deliver(options, { type: "final-text", turnId: "turn-1", text: "Done" });
+        options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: { text: "Done" } });
+        return { text: "Done" };
+      },
+      { resetSession: async () => Promise.reject(failure) },
+    );
+    const { controller, states } = subject(fake);
+    await controller.submit("Original");
+    const before = structuredClone(states.at(-1)!);
+    expect(controller.openNewConversation()).toBe(true);
+    await controller.confirmNewConversation();
+
+    expect(states.at(-1)).toMatchObject({
+      status: before.status,
+      messages: before.messages,
+      activeTurn: before.activeTurn,
+      progress: before.progress,
+      session: {
+        presence: "present",
+        resetPhase: "uncertain",
+        announcement: NEW_CONVERSATION_UNCERTAIN_COPY,
+      },
+    });
+    expect(controller.openNewConversation()).toBe(false);
+    await controller.confirmNewConversation();
+    expect(
+      vi.mocked(fake.call).mock.calls.filter(([method]) => method === "resetSession"),
+    ).toHaveLength(1);
+    expect(
+      vi.mocked(fake.call).mock.calls.filter(([method]) => method === "hasSession"),
+    ).toHaveLength(0);
+  });
+
+  it("preserves interrupted retry ownership after an uncertain reset", async () => {
+    const interrupted = client(
+      async (_request, options) => {
+        deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Partial" });
+        throw new CoachClientDisconnectedError(1006, "synthetic");
+      },
+      { resetSession: async () => Promise.reject(new Error("uncertain")) },
+    );
+    const recovered = client(async (_request, options) => {
+      deliver(options, { type: "final-text", turnId: "turn-2", text: "Recovered" });
+      options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 2, result: { text: "Recovered" } });
+      return { text: "Recovered" };
+    });
+    const { controller, provider, states } = subject(interrupted, recovered);
+    await controller.submit("Original");
+    expect(controller.openNewConversation()).toBe(true);
+    await controller.confirmNewConversation();
+    await controller.retryInterrupted();
+
+    expect(provider.reconnect).toHaveBeenCalledTimes(1);
+    expect(states.at(-1)?.messages.at(-1)?.text).toBe("Recovered");
+  });
+
+  it("holds one reset pending while repeated confirm, submit, and retry dispatch no chat", async () => {
+    let settleReset!: (value: { memoryFlushed: boolean }) => void;
+    const resetGate = new Promise<{ memoryFlushed: boolean }>((resolve) => {
+      settleReset = resolve;
+    });
+    const fake = client(
+      async (_request, options) => {
+        deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Partial" });
+        throw new CoachClientDisconnectedError(1006, "synthetic");
+      },
+      { resetSession: async () => resetGate },
+    );
+    const { controller } = subject(fake);
+    await controller.submit("Original");
+    expect(controller.openNewConversation()).toBe(true);
+    vi.mocked(fake.call).mockClear();
+
+    const reset = controller.confirmNewConversation();
+    const duplicate = controller.confirmNewConversation();
+    await Promise.all([controller.submit("Blocked"), controller.retryInterrupted()]);
+    await Promise.resolve();
+
+    expect(duplicate).toBe(reset);
+    expect(vi.mocked(fake.call).mock.calls).toEqual([["resetSession", { chatId: "desktop" }]]);
+    settleReset({ memoryFlushed: true });
+    await reset;
+    expect(vi.mocked(fake.call).mock.calls.filter(([method]) => method === "chat")).toEqual([]);
+  });
+
+  it("fences late probe and reset settlements after dispose without refreshing spend", async () => {
+    let settleProbe!: (value: { hasSession: boolean }) => void;
+    let settleReset!: (value: { memoryFlushed: boolean }) => void;
+    const probeGate = new Promise<{ hasSession: boolean }>((resolve) => {
+      settleProbe = resolve;
+    });
+    const resetGate = new Promise<{ memoryFlushed: boolean }>((resolve) => {
+      settleReset = resolve;
+    });
+    const fake = client(
+      async (_request, options) => {
+        deliver(options, { type: "final-text", turnId: "turn-1", text: "Done" });
+        options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: { text: "Done" } });
+        return { text: "Done" };
+      },
+      {
+        hasSession: async () => probeGate,
+        resetSession: async () => resetGate,
+      },
+    );
+    const { controller, states, refreshSpend } = subject(fake);
+    const starting = controller.start();
+    await controller.submit("Original");
+    expect(controller.openNewConversation()).toBe(true);
+    refreshSpend.mockClear();
+    const resetting = controller.confirmNewConversation();
+    await Promise.resolve();
+    const renderCount = states.length;
+    controller.dispose();
+
+    settleProbe({ hasSession: true });
+    settleReset({ memoryFlushed: true });
+    await Promise.all([starting, resetting]);
+
+    expect(states).toHaveLength(renderCount);
+    expect(refreshSpend).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(fake.call).mock.calls.filter(([method]) => method === "hasSession"),
+    ).toHaveLength(1);
+    expect(
+      vi.mocked(fake.call).mock.calls.filter(([method]) => method === "resetSession"),
+    ).toHaveLength(1);
   });
 });
