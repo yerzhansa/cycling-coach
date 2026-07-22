@@ -10,6 +10,8 @@ import {
   type SelfTestRpcResult,
 } from "@enduragent/coach-contract";
 import {
+  CoachClientCallAbortedError,
+  CoachClientCallTimeoutError,
   CoachClientHandshakeError,
   CoachClientVersionMismatchError,
   type CoachClient,
@@ -166,6 +168,25 @@ describe("self-test command", () => {
     });
     expect(mismatch.exit).toBe(EXIT_VERSION_MISMATCH);
     expect(mismatch.terminal).toMatchObject({ error: { code: "VERSION_MISMATCH" } });
+  });
+
+  it.each([
+    new CoachClientCallTimeoutError("selfTest", 2 * 60_000),
+    new CoachClientCallAbortedError("selfTest"),
+  ])("maps $name to one fixed daemon-unavailable line", async (failure) => {
+    const close = vi.fn(async () => {});
+    const fake = {
+      call: vi.fn(async () => Promise.reject(failure)),
+      close,
+    } as unknown as CoachClient;
+
+    const outcome = await invoke(async () => fake);
+
+    expect(outcome.exit).toBe(EXIT_DAEMON_UNAVAILABLE);
+    expect(outcome.lines).toHaveLength(1);
+    expect(outcome.stderr).toBe("");
+    expect(outcome.terminal).toMatchObject({ error: { code: "DAEMON_UNAVAILABLE" } });
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it("turns malformed progress and a close failure after success into one fixed failure", async () => {

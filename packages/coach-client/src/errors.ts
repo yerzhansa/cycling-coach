@@ -1,4 +1,9 @@
-import type { DaemonOwner, JsonValue, ProtocolVersionDirection } from "@enduragent/coach-contract";
+import type {
+  CoachRpcMethodName,
+  DaemonOwner,
+  JsonValue,
+  ProtocolVersionDirection,
+} from "@enduragent/coach-contract";
 
 export class CoachClientTransportUnavailableError extends Error {
   constructor() {
@@ -46,6 +51,23 @@ export class CoachClientBackpressureError extends Error {
   constructor() {
     super("Coach client send queue is full");
     this.name = "CoachClientBackpressureError";
+  }
+}
+
+export class CoachClientCallTimeoutError extends Error {
+  constructor(
+    readonly method: CoachRpcMethodName,
+    readonly timeoutMs: number,
+  ) {
+    super("Coach client call timed out");
+    this.name = "CoachClientCallTimeoutError";
+  }
+}
+
+export class CoachClientCallAbortedError extends Error {
+  constructor(readonly method: CoachRpcMethodName) {
+    super("Coach client call aborted");
+    this.name = "CoachClientCallAbortedError";
   }
 }
 

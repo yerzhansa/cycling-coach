@@ -1,16 +1,20 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { WebSocketServer, type WebSocket as ServerWebSocket } from "ws";
 import {
+  COACH_RPC_METHOD_REGISTRY,
   PROTOCOL_VERSION,
   createAcceptedServerHandshakeFrame,
   createVersionMismatchServerHandshakeFrame,
   parseCoachRpcEnvelope,
   serializeCoachRpcEnvelope,
+  type CoachRpcMethodName,
   type CoachTurnEventNotificationEnvelope,
   type JsonRpcProtocolErrorResponseEnvelope,
 } from "@enduragent/coach-contract";
 import {
   CoachClientBackpressureError,
+  CoachClientCallAbortedError,
+  CoachClientCallTimeoutError,
   CoachClientDisconnectedError,
   CoachClientHandshakeError,
   CoachClientProtocolError,
@@ -21,10 +25,40 @@ import {
   resolveCoachWebSocketFactory,
   type CoachClient,
   type CoachClientCallOptions,
+  type CoachClientTerminalCause,
   type CoachClientTerminalEnvelope,
+  type ConnectCoachClientOptions,
 } from "../src/index.js";
 
 const token = "synthetic-test-token";
+
+const rpcDeadlineCases = [
+  ["chat", { chatId: "chat-1", message: "deadline" }, 660_000],
+  ["resetSession", { chatId: "chat-1" }, 660_000],
+  ["hasSession", { chatId: "chat-1" }, 30_000],
+  ["getAthleteState", {}, 30_000],
+  ["importFiles", { paths: ["/synthetic/ride.fit"] }, 3_600_000],
+  ["sync", {}, 86_400_000],
+  [
+    "saveIntake",
+    {
+      swim_skill_floor: null,
+      continuous_distance_capable: null,
+      open_water_comfort: null,
+      prior_bsi: false,
+      clinician_cleared: null,
+      injury_status: "none",
+    },
+    30_000,
+  ],
+  ["configureRuntime", { llm: { provider: "openai" } }, 30_000],
+  ["getRuntimeConfig", {}, 30_000],
+  ["getUnitsPreference", {}, 30_000],
+  ["setUnitsPreference", { value: "metric" }, 30_000],
+  ["getSpendSummary", {}, 30_000],
+  ["setDailySpendCap", { dailyCapUsd: 25 }, 30_000],
+  ["selfTest", {}, 120_000],
+] as const satisfies ReadonlyArray<readonly [CoachRpcMethodName, unknown, number]>;
 
 class ControllableSocket extends EventTarget {
   readyState = 0;
@@ -78,7 +112,10 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-function acceptedSocket(owner = "service-managed" as const): {
+function acceptedSocket(
+  owner = "service-managed" as const,
+  options: Pick<ConnectCoachClientOptions, "onTerminal"> = {},
+): {
   readonly socket: ControllableSocket;
   readonly connecting: Promise<CoachClient>;
 } {
@@ -95,6 +132,7 @@ function acceptedSocket(owner = "service-managed" as const): {
     url: "ws://127.0.0.1:49152",
     token,
     webSocketFactory: () => socket as unknown as WebSocket,
+    ...options,
   });
   socket.emitOpen();
   return { socket, connecting };
@@ -318,6 +356,33 @@ describe("connection and transport", () => {
 });
 
 describe("handshake failures", () => {
+  it("terminalizes a socket error delivered after handshake acceptance but before resolution", async () => {
+    const socket = new ControllableSocket();
+    const observer = vi.fn();
+    socket.sendHook = () => {
+      socket.emitMessage(
+        JSON.stringify(createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION)),
+      );
+      socket.emitError();
+    };
+    const connection = connectCoachClient({
+      url: "ws://127.0.0.1:49152",
+      token,
+      onTerminal: observer,
+      webSocketFactory: () => socket as unknown as WebSocket,
+    });
+    socket.emitOpen();
+
+    const client = await connection;
+    const cause = await client
+      .call("hasSession", { chatId: "chat-1" })
+      .catch((error: unknown) => error);
+
+    expect(cause).toBeInstanceOf(CoachClientDisconnectedError);
+    expect(observer).toHaveBeenCalledExactlyOnceWith(client, cause);
+    expect(socket.closeCalls).toHaveLength(1);
+  });
+
   it.each([
     {
       kind: "timeout",
@@ -1000,19 +1065,24 @@ describe("RPC receive and observers", () => {
     "not-json",
     new Uint8Array([1, 2]),
   ])("fails all pending work for violating frame", async (frame) => {
-    const { socket, connecting } = acceptedSocket();
+    const observer = vi.fn();
+    const { socket, connecting } = acceptedSocket("service-managed", { onTerminal: observer });
     const client = await connecting;
     socket.sendHook = () => {};
     const terminals = vi.fn();
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const firstRemove = vi.spyOn(firstController.signal, "removeEventListener");
+    const secondRemove = vi.spyOn(secondController.signal, "removeEventListener");
     const first = client.call(
       "chat",
       { chatId: "chat-1", message: "one" },
-      { onTerminalEnvelope: terminals },
+      { signal: firstController.signal, onTerminalEnvelope: terminals },
     );
     const second = client.call(
       "hasSession",
       { chatId: "chat-2" },
-      { onTerminalEnvelope: terminals },
+      { signal: secondController.signal, onTerminalEnvelope: terminals },
     );
     socket.emitMessage(frame);
     const [a, b] = await Promise.all([
@@ -1022,15 +1092,347 @@ describe("RPC receive and observers", () => {
     expect(a).toBeInstanceOf(CoachClientProtocolError);
     expect(b).toBe(a);
     expect(terminals).not.toHaveBeenCalled();
+    expect(observer).toHaveBeenCalledExactlyOnceWith(client, a);
+    expect(firstRemove).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(secondRemove).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(socket.closeCalls).toHaveLength(1);
     const closing = client.close();
     socket.emitClose(1002, "protocol");
     await closing;
+    firstController.abort();
+    secondController.abort();
+    expect(observer).toHaveBeenCalledTimes(1);
   });
+
+  it.each([false, true])(
+    "reserves a protocol close before a %s synchronous observer close",
+    async (closeSynchronously) => {
+      let observerClose: Promise<void> | undefined;
+      const observer = vi.fn((terminalClient: CoachClient) => {
+        observerClose = terminalClient.close();
+      });
+      const { socket, connecting } = acceptedSocket("service-managed", {
+        onTerminal: observer,
+      });
+      const client = await connecting;
+      socket.sendHook = () => {};
+      socket.closeSynchronously = closeSynchronously;
+      const call = client.call("hasSession", { chatId: "chat-1" }).catch((error: unknown) => error);
+
+      socket.emitMessage("not-json");
+
+      const cause = await call;
+      expect(cause).toBeInstanceOf(CoachClientProtocolError);
+      expect(observer).toHaveBeenCalledExactlyOnceWith(client, cause);
+      expect(socket.closeCalls).toEqual([{ code: 1002, reason: undefined }]);
+      await expect(client.call("hasSession", { chatId: "future" })).rejects.toBe(cause);
+      expect(observerClose).toBeDefined();
+      if (!closeSynchronously) socket.emitClose(1002, "protocol");
+      await observerClose;
+      expect(observer).toHaveBeenCalledTimes(1);
+      expect(socket.closeCalls).toEqual([{ code: 1002, reason: undefined }]);
+    },
+  );
 });
 
 describe("disconnect, close, and send bounds", () => {
-  it("fans an unexpected disconnect to every pending and future call", async () => {
+  it("rejects a pre-aborted call without sending or consuming an id", async () => {
     const { socket, connecting } = acceptedSocket();
+    const client = await connecting;
+    socket.sent.length = 0;
+    const controller = new AbortController();
+    controller.abort(new Error("private abort detail"));
+
+    const aborted = await client
+      .call("hasSession", { chatId: "chat-1" }, { signal: controller.signal })
+      .catch((error: unknown) => error);
+
+    expect(aborted).toBeInstanceOf(CoachClientCallAbortedError);
+    expect(aborted).toMatchObject({
+      name: "CoachClientCallAbortedError",
+      message: "Coach client call aborted",
+      method: "hasSession",
+    });
+    expect(String(aborted)).not.toContain("private abort detail");
+    expect(socket.sent).toEqual([]);
+
+    socket.sendHook = (text) => {
+      const request = JSON.parse(text) as { id: number };
+      socket.emitMessage(
+        JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { hasSession: true } }),
+      );
+    };
+    await expect(client.call("hasSession", { chatId: "chat-2" })).resolves.toEqual({
+      hasSession: true,
+    });
+    expect((JSON.parse(socket.sent[0]!) as { id: number }).id).toBe(1);
+    socket.closeSynchronously = true;
+    await client.close();
+  });
+
+  it("covers every registered method in the deadline cases", () => {
+    expect(rpcDeadlineCases.map(([method]) => method).sort()).toEqual(
+      Object.keys(COACH_RPC_METHOD_REGISTRY).sort(),
+    );
+  });
+
+  it.each(rpcDeadlineCases)(
+    "applies the absolute %s deadline at %sms",
+    async (method, params, timeoutMs) => {
+      vi.useFakeTimers();
+      const terminals: Array<{ client: CoachClient; cause: CoachClientTerminalCause }> = [];
+      const { socket, connecting } = acceptedSocket("service-managed", {
+        onTerminal: (client, cause) => terminals.push({ client, cause }),
+      });
+      const client = await connecting;
+      socket.sendHook = () => {};
+      let settled = false;
+      const call = client.call(method, params as never).then(
+        (result) => {
+          settled = true;
+          return result;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+      expect(settled).toBe(false);
+      expect(terminals).toEqual([]);
+      expect(socket.closeCalls).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+
+      const error = await call;
+      expect(error).toBeInstanceOf(CoachClientCallTimeoutError);
+      expect(error).toMatchObject({
+        name: "CoachClientCallTimeoutError",
+        message: "Coach client call timed out",
+        method,
+        timeoutMs,
+      });
+      expect(terminals).toEqual([{ client, cause: error }]);
+      expect(socket.closeCalls).toHaveLength(1);
+    },
+  );
+
+  it("lets a response just before the deadline win and times out at the exact boundary", async () => {
+    vi.useFakeTimers();
+    const before = acceptedSocket();
+    const beforeClient = await before.connecting;
+    before.socket.sendHook = () => {};
+    const winning = beforeClient.call("hasSession", { chatId: "chat-1" });
+    await vi.advanceTimersByTimeAsync(29_999);
+    before.socket.emitMessage(
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: { hasSession: true } }),
+    );
+    await expect(winning).resolves.toEqual({ hasSession: true });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(before.socket.closeCalls).toEqual([]);
+    before.socket.closeSynchronously = true;
+    await beforeClient.close();
+
+    const terminal = vi.fn();
+    const exact = acceptedSocket("service-managed", { onTerminal: terminal });
+    const exactClient = await exact.connecting;
+    exact.socket.sendHook = () => {};
+    const timedOut = exactClient
+      .call("hasSession", { chatId: "chat-2" })
+      .catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(30_000);
+    const timeout = await timedOut;
+    exact.socket.emitMessage(
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: { hasSession: true } }),
+    );
+    expect(timeout).toBeInstanceOf(CoachClientCallTimeoutError);
+    expect(terminal).toHaveBeenCalledExactlyOnceWith(exactClient, timeout);
+    expect(exact.socket.closeCalls).toHaveLength(1);
+  });
+
+  it("does not slide the self-test deadline when valid progress keeps arriving", async () => {
+    vi.useFakeTimers();
+    const { socket, connecting } = acceptedSocket();
+    const client = await connecting;
+    socket.sendHook = () => {};
+    const progress = vi.fn();
+    const call = client
+      .call("selfTest", {}, { onEvent: progress })
+      .catch((error: unknown) => error);
+    for (let elapsed = 30_000; elapsed < 120_000; elapsed += 30_000) {
+      await vi.advanceTimersByTimeAsync(30_000);
+      socket.emitMessage(
+        serializeCoachRpcEnvelope({
+          jsonrpc: "2.0",
+          method: "coach.operationProgress",
+          params: {
+            requestId: 1,
+            requestMethod: "selfTest",
+            event: { phase: "started", completed: 0, total: 1 },
+          },
+        }),
+      );
+    }
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(call).resolves.toBeInstanceOf(CoachClientCallTimeoutError);
+    expect(progress).toHaveBeenCalledTimes(3);
+    expect(socket.closeCalls).toHaveLength(1);
+  });
+
+  it("latches one mid-flight abort across pending and future calls without replay", async () => {
+    const observer = vi.fn(() => {
+      throw new Error("advisory");
+    });
+    const { socket, connecting } = acceptedSocket("service-managed", { onTerminal: observer });
+    const client = await connecting;
+    socket.sent.length = 0;
+    socket.sendHook = () => {};
+    const controller = new AbortController();
+    const secondController = new AbortController();
+    const firstRemove = vi.spyOn(controller.signal, "removeEventListener");
+    const secondRemove = vi.spyOn(secondController.signal, "removeEventListener");
+    const terminalEnvelope = vi.fn();
+    const first = client
+      .call(
+        "chat",
+        { chatId: "chat-1", message: "one" },
+        {
+          signal: controller.signal,
+          onTerminalEnvelope: terminalEnvelope,
+        },
+      )
+      .catch((error: unknown) => error);
+    const second = client
+      .call("hasSession", { chatId: "chat-2" }, { signal: secondController.signal })
+      .catch((error: unknown) => error);
+    controller.abort(new Error("private abort detail"));
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(a).toBeInstanceOf(CoachClientCallAbortedError);
+    expect(a).toMatchObject({ method: "chat", message: "Coach client call aborted" });
+    expect(String(a)).not.toContain("private abort detail");
+    expect(b).toBe(a);
+    await expect(client.call("hasSession", { chatId: "future" })).rejects.toBe(a);
+    expect(observer).toHaveBeenCalledExactlyOnceWith(client, a);
+    expect(terminalEnvelope).not.toHaveBeenCalled();
+    expect(firstRemove).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(secondRemove).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(socket.closeCalls).toHaveLength(1);
+    expect(socket.sent).toHaveLength(2);
+    socket.emitMessage(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { text: "late" } }));
+    expect(observer).toHaveBeenCalledTimes(1);
+    expect(socket.sent).toHaveLength(2);
+  });
+
+  it("clears queued sends and fans one timeout cause to all pending and future calls", async () => {
+    vi.useFakeTimers();
+    const observer = vi.fn();
+    const { socket, connecting } = acceptedSocket("service-managed", { onTerminal: observer });
+    const client = await connecting;
+    socket.sent.length = 0;
+    socket.bufferedAmount = 1_048_576;
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const firstRemove = vi.spyOn(firstController.signal, "removeEventListener");
+    const secondRemove = vi.spyOn(secondController.signal, "removeEventListener");
+    const first = client
+      .call("hasSession", { chatId: "chat-1" }, { signal: firstController.signal })
+      .catch((error: unknown) => error);
+    const second = client
+      .call(
+        "chat",
+        { chatId: "chat-2", message: "queued" },
+        {
+          signal: secondController.signal,
+        },
+      )
+      .catch((error: unknown) => error);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(a).toBeInstanceOf(CoachClientCallTimeoutError);
+    expect(a).toMatchObject({ method: "hasSession", timeoutMs: 30_000 });
+    expect(b).toBe(a);
+    await expect(client.call("hasSession", { chatId: "future" })).rejects.toBe(a);
+    expect(observer).toHaveBeenCalledExactlyOnceWith(client, a);
+    expect(firstRemove).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(secondRemove).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(socket.closeCalls).toHaveLength(1);
+    socket.bufferedAmount = 0;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(socket.sent).toEqual([]);
+    socket.emitMessage(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { hasSession: true } }));
+    expect(observer).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["success", "remote-error"] as const)(
+    "cleans the call deadline and abort listener before %s terminal observation",
+    async (kind) => {
+      vi.useFakeTimers();
+      const connectionTerminal = vi.fn();
+      const { socket, connecting } = acceptedSocket("service-managed", {
+        onTerminal: connectionTerminal,
+      });
+      const client = await connecting;
+      const controller = new AbortController();
+      const remove = vi.spyOn(controller.signal, "removeEventListener");
+      socket.sendHook = () => {};
+      const call = client
+        .call(
+          "hasSession",
+          { chatId: "chat-1" },
+          {
+            signal: controller.signal,
+            onTerminalEnvelope: () => controller.abort(),
+          },
+        )
+        .catch((error: unknown) => error);
+      socket.emitMessage(
+        JSON.stringify(
+          kind === "success"
+            ? { jsonrpc: "2.0", id: 1, result: { hasSession: true } }
+            : { jsonrpc: "2.0", id: 1, error: { code: -32600, message: "remote" } },
+        ),
+      );
+      const outcome = await call;
+      if (kind === "success") expect(outcome).toEqual({ hasSession: true });
+      else expect(outcome).toBeInstanceOf(CoachRpcRemoteError);
+      expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(connectionTerminal).not.toHaveBeenCalled();
+      expect(socket.closeCalls).toEqual([]);
+      socket.closeSynchronously = true;
+      await client.close();
+    },
+  );
+
+  it("uses one first cause for socket error and later close while cleaning call listeners", async () => {
+    const observer = vi.fn();
+    const { socket, connecting } = acceptedSocket("service-managed", { onTerminal: observer });
+    const client = await connecting;
+    const controller = new AbortController();
+    const remove = vi.spyOn(controller.signal, "removeEventListener");
+    socket.sendHook = () => {};
+    const call = client
+      .call("hasSession", { chatId: "chat-1" }, { signal: controller.signal })
+      .catch((error: unknown) => error);
+    socket.emitError();
+    const cause = await call;
+    socket.emitClose(1006, "later close");
+    controller.abort();
+
+    expect(cause).toBeInstanceOf(CoachClientDisconnectedError);
+    expect(cause).toMatchObject({ code: 1006, reason: "" });
+    expect(observer).toHaveBeenCalledExactlyOnceWith(client, cause);
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(socket.closeCalls).toHaveLength(1);
+    await expect(client.call("hasSession", { chatId: "future" })).rejects.toBe(cause);
+  });
+
+  it("fans an unexpected disconnect to every pending and future call", async () => {
+    const observer = vi.fn();
+    const { socket, connecting } = acceptedSocket("service-managed", { onTerminal: observer });
     const client = await connecting;
     socket.sendHook = () => {};
     const terminal = vi.fn();
@@ -1053,16 +1455,26 @@ describe("disconnect, close, and send bounds", () => {
     });
     expect(second).toBe(first);
     expect(terminal).not.toHaveBeenCalled();
+    expect(observer).toHaveBeenCalledExactlyOnceWith(client, first);
     await expect(client.call("hasSession", { chatId: "chat-1" })).rejects.toBe(first);
+    socket.emitError();
+    expect(observer).toHaveBeenCalledTimes(1);
     await client.close();
   });
 
   it("explicit close is idempotent, settles pending, and handles synchronous close", async () => {
-    const { socket, connecting } = acceptedSocket();
+    const observer = vi.fn();
+    const { socket, connecting } = acceptedSocket("service-managed", { onTerminal: observer });
     const client = await connecting;
     socket.sendHook = () => {};
     socket.closeSynchronously = true;
-    const pending = client.call("chat", { chatId: "chat-1", message: "one" });
+    const controller = new AbortController();
+    const remove = vi.spyOn(controller.signal, "removeEventListener");
+    const pending = client.call(
+      "chat",
+      { chatId: "chat-1", message: "one" },
+      { signal: controller.signal },
+    );
     const first = client.close(1000, "done");
     const second = client.close(1001, "ignored");
     expect(first).toBe(second);
@@ -1074,6 +1486,10 @@ describe("disconnect, close, and send bounds", () => {
     });
     await expect(first).resolves.toBeUndefined();
     expect(socket.closeCalls).toHaveLength(1);
+    expect(observer).toHaveBeenCalledExactlyOnceWith(client, error);
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+    controller.abort();
+    expect(observer).toHaveBeenCalledTimes(1);
   });
 
   it("resolves explicit close at its bounded timeout when no event arrives", async () => {
@@ -1167,6 +1583,9 @@ describe("disconnect, close, and send bounds", () => {
 
 describe("public observer types", () => {
   it("exports the generic observers and excludes null-id protocol terminals", () => {
+    expectTypeOf<CoachClientCallOptions<"chat">["signal"]>().toEqualTypeOf<
+      AbortSignal | undefined
+    >();
     expectTypeOf<CoachClientCallOptions<"chat">["onNotificationEnvelope"]>().toEqualTypeOf<
       ((envelope: CoachTurnEventNotificationEnvelope) => void) | undefined
     >();

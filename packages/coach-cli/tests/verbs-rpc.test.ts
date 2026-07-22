@@ -1,9 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CoachOperationProgressNotificationEnvelopeSchema,
   JsonRpcSuccessResponseEnvelopeSchema,
 } from "@enduragent/coach-contract";
-import type { CoachClient, CoachClientCallOptions } from "@enduragent/coach-client";
+import {
+  CoachClientCallAbortedError,
+  CoachClientCallTimeoutError,
+  type CoachClient,
+  type CoachClientCallOptions,
+} from "@enduragent/coach-client";
 
 const mocks = vi.hoisted(() => ({ connectCoachClient: vi.fn() }));
 
@@ -17,8 +22,11 @@ import {
   connectCoachVerbTransport,
   connectRemoteCoachTransport,
   connectWithBoundedRetry,
+  type CoachVerbRequest,
   type CoachVerbTransport,
 } from "../src/index.js";
+
+afterEach(() => mocks.connectCoachClient.mockReset());
 
 const transport: CoachVerbTransport = {
   kind: "remote",
@@ -78,6 +86,105 @@ describe("bounded remote connection", () => {
     expect(returned).toBe(terminal);
     await remote.close();
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["chat", { chatId: "chat-1", message: "hello" }],
+    ["getAthleteState", {}],
+    ["importFiles", { paths: ["/synthetic/ride.fit"] }],
+    ["sync", {}],
+  ] as const)("forwards the exact request signal for %s", async (method, params) => {
+    const terminal = JsonRpcSuccessResponseEnvelopeSchema.parse({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {},
+    });
+    const call = vi.fn(
+      async (
+        _method: string,
+        _params: unknown,
+        options?: Pick<CoachClientCallOptions<"sync">, "signal" | "onTerminalEnvelope">,
+      ) => {
+        options?.onTerminalEnvelope?.(terminal);
+        return {};
+      },
+    );
+    mocks.connectCoachClient.mockResolvedValue({
+      call,
+      close: vi.fn(async () => {}),
+    } as unknown as CoachClient);
+    const remote = await connectCoachVerbTransport({
+      url: "ws://127.0.0.1:43123/rpc",
+      token: "synthetic-token",
+    });
+    const controller = new AbortController();
+    const request = {
+      method,
+      params,
+      signal: controller.signal,
+      onNotificationEnvelope: vi.fn(),
+      onTerminalEnvelope: vi.fn(),
+    } as CoachVerbRequest;
+
+    await expect(remote.request(request)).resolves.toBe(terminal);
+
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(call.mock.calls[0]![0]).toBe(method);
+    expect(call.mock.calls[0]![2]?.signal).toBe(controller.signal);
+  });
+
+  it("detaches a pre-aborted request without calling the client or fabricating a terminal", async () => {
+    const call = vi.fn();
+    mocks.connectCoachClient.mockResolvedValue({
+      call,
+      close: vi.fn(async () => {}),
+    } as unknown as CoachClient);
+    const remote = await connectCoachVerbTransport({
+      url: "ws://127.0.0.1:43123/rpc",
+      token: "synthetic-token",
+    });
+    const controller = new AbortController();
+    controller.abort();
+    const terminal = vi.fn();
+
+    await expect(
+      remote.request({
+        method: "sync",
+        params: {},
+        signal: controller.signal,
+        onNotificationEnvelope: vi.fn(),
+        onTerminalEnvelope: terminal,
+      }),
+    ).rejects.toMatchObject({ failure: { kind: "detached" } });
+    expect(call).not.toHaveBeenCalled();
+    expect(terminal).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    new CoachClientCallAbortedError("sync"),
+    new CoachClientCallTimeoutError("sync", 24 * 60 * 60_000),
+  ])("maps $name after admission to detached without a terminal envelope", async (failure) => {
+    const call = vi.fn(async () => Promise.reject(failure));
+    mocks.connectCoachClient.mockResolvedValue({
+      call,
+      close: vi.fn(async () => {}),
+    } as unknown as CoachClient);
+    const remote = await connectCoachVerbTransport({
+      url: "ws://127.0.0.1:43123/rpc",
+      token: "synthetic-token",
+    });
+    const terminal = vi.fn();
+
+    await expect(
+      remote.request({
+        method: "sync",
+        params: {},
+        signal: new AbortController().signal,
+        onNotificationEnvelope: vi.fn(),
+        onTerminalEnvelope: terminal,
+      }),
+    ).rejects.toMatchObject({ failure: { kind: "detached" } });
+    expect(terminal).not.toHaveBeenCalled();
   });
 
   it("attempts immediately and pins 50/100/200 delays", async () => {

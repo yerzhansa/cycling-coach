@@ -15,6 +15,8 @@ import {
 } from "@enduragent/coach-contract";
 import {
   CoachClientBackpressureError,
+  CoachClientCallAbortedError,
+  CoachClientCallTimeoutError,
   CoachClientDisconnectedError,
   CoachClientHandshakeError,
   CoachClientProtocolError,
@@ -38,6 +40,7 @@ export interface ConnectCoachClientOptions {
   readonly lowWaterMarkBytes?: number;
   readonly maxQueuedSends?: number;
   readonly webSocketFactory?: CoachWebSocketFactory;
+  readonly onTerminal?: CoachClientTerminalObserver;
 }
 
 export type CoachClientTerminalEnvelope =
@@ -45,6 +48,7 @@ export type CoachClientTerminalEnvelope =
   | JsonRpcErrorResponseEnvelope;
 
 export interface CoachClientCallOptions<K extends CoachRpcMethodName> {
+  readonly signal?: AbortSignal;
   readonly onEvent?: (event: CoachRpcEvent<K>) => void;
   readonly onNotificationEnvelope?: (envelope: CoachRpcNotification<K>) => void;
   readonly onTerminalEnvelope?: (envelope: CoachClientTerminalEnvelope) => void;
@@ -60,6 +64,17 @@ export interface CoachClient {
   close(code?: number, reason?: string): Promise<void>;
 }
 
+export type CoachClientTerminalCause =
+  | CoachClientCallTimeoutError
+  | CoachClientCallAbortedError
+  | CoachClientProtocolError
+  | CoachClientDisconnectedError;
+
+export type CoachClientTerminalObserver = (
+  client: CoachClient,
+  cause: CoachClientTerminalCause,
+) => void;
+
 interface ValidatedOptions {
   readonly url: string;
   readonly token: string;
@@ -71,6 +86,7 @@ interface ValidatedOptions {
   readonly lowWaterMarkBytes: number;
   readonly maxQueuedSends: number;
   readonly webSocketFactory: CoachWebSocketFactory | undefined;
+  readonly onTerminal: CoachClientTerminalObserver | undefined;
 }
 
 interface PendingCall {
@@ -80,12 +96,32 @@ interface PendingCall {
   readonly onEvent: ((event: unknown) => void) | undefined;
   readonly onNotificationEnvelope: ((envelope: CoachRpcNotificationEnvelope) => void) | undefined;
   readonly onTerminalEnvelope: ((envelope: CoachClientTerminalEnvelope) => void) | undefined;
+  timer: ReturnType<typeof setTimeout> | undefined;
+  readonly signal: AbortSignal | undefined;
+  readonly onAbort: (() => void) | undefined;
 }
 
 interface OutboundFrame {
   readonly id: number;
   readonly text: string;
 }
+
+const COACH_RPC_CALL_TIMEOUT_MS: Record<CoachRpcMethodName, number> = {
+  chat: 11 * 60_000,
+  resetSession: 11 * 60_000,
+  hasSession: 30_000,
+  getAthleteState: 30_000,
+  importFiles: 60 * 60_000,
+  sync: 24 * 60 * 60_000,
+  saveIntake: 30_000,
+  configureRuntime: 30_000,
+  getRuntimeConfig: 30_000,
+  getUnitsPreference: 30_000,
+  setUnitsPreference: 30_000,
+  getSpendSummary: 30_000,
+  setDailySpendCap: 30_000,
+  selfTest: 2 * 60_000,
+};
 
 function positiveSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
@@ -147,6 +183,7 @@ function validateOptions(options: ConnectCoachClientOptions): ValidatedOptions {
     lowWaterMarkBytes,
     maxQueuedSends,
     webSocketFactory: options.webSocketFactory,
+    onTerminal: options.onTerminal,
   };
 }
 
@@ -227,8 +264,10 @@ class CoachClientRuntime {
   private sendPumpRunning = false;
   private sendWaitTimer: ReturnType<typeof setTimeout> | undefined;
   private sendWaitResolve: (() => void) | undefined;
-  private terminalCause: CoachClientProtocolError | CoachClientDisconnectedError | undefined;
+  private terminalCause: CoachClientTerminalCause | undefined;
+  private preActivationCause: CoachClientDisconnectedError | undefined;
   private handshakeBinding: CoachClientHandshakeBinding | undefined;
+  private publicClient: CoachClient | undefined;
   private ready = false;
   private closePromise: Promise<void> | undefined;
 
@@ -237,6 +276,7 @@ class CoachClientRuntime {
     private readonly options: ValidatedOptions,
   ) {
     socket.addEventListener("close", this.onSocketClose);
+    socket.addEventListener("error", this.onSocketError);
   }
 
   readonly handleRawFrame = (data: unknown): void => {
@@ -270,8 +310,7 @@ class CoachClientRuntime {
 
   activate(binding: CoachClientHandshakeBinding): CoachClient {
     this.handshakeBinding = binding;
-    this.ready = true;
-    return {
+    const client: CoachClient = {
       handshake: binding.accepted,
       call: <K extends CoachRpcMethodName>(
         method: K,
@@ -280,10 +319,15 @@ class CoachClientRuntime {
       ) => this.call(method, request, options),
       close: (code?: number, reason?: string) => this.close(code, reason),
     };
+    this.publicClient = client;
+    this.ready = true;
+    if (this.preActivationCause !== undefined) this.latchTerminal(this.preActivationCause);
+    return client;
   }
 
   disposeBeforeReady(): void {
     this.socket.removeEventListener("close", this.onSocketClose);
+    this.socket.removeEventListener("error", this.onSocketError);
   }
 
   private call<K extends CoachRpcMethodName>(
@@ -294,16 +338,11 @@ class CoachClientRuntime {
     if (this.terminalCause !== undefined) {
       return Promise.reject(this.terminalCause);
     }
-    if (this.sendPumpRunning && this.sendQueue.length - 1 >= this.options.maxQueuedSends) {
-      return Promise.reject(new CoachClientBackpressureError());
-    }
-    if (this.idsExhausted) {
-      return Promise.reject(this.failProtocol());
-    }
 
     let params: unknown;
     let text: string;
     const id = this.nextId;
+    const signal = options?.signal;
     try {
       params = COACH_RPC_METHOD_REGISTRY[method].requestSchema.parse(request);
       text = serializeCoachRpcEnvelope({
@@ -316,14 +355,29 @@ class CoachClientRuntime {
       return Promise.reject(new CoachClientProtocolError());
     }
 
+    if (signal?.aborted) {
+      return Promise.reject(new CoachClientCallAbortedError(method));
+    }
+    if (this.sendPumpRunning && this.sendQueue.length - 1 >= this.options.maxQueuedSends) {
+      return Promise.reject(new CoachClientBackpressureError());
+    }
+    if (this.idsExhausted) {
+      return Promise.reject(this.failProtocol());
+    }
+
     if (id === Number.MAX_SAFE_INTEGER) {
       this.idsExhausted = true;
     } else {
       this.nextId = id + 1;
     }
 
+    const timeoutMs = COACH_RPC_CALL_TIMEOUT_MS[method];
     const promise = new Promise<CoachRpcResponse<K>>((resolve, reject) => {
-      this.pending.set(id, {
+      const onAbort =
+        signal === undefined
+          ? undefined
+          : () => this.latchTerminal(new CoachClientCallAbortedError(method));
+      const pending: PendingCall = {
         method,
         resolve: resolve as (value: unknown) => void,
         reject,
@@ -332,7 +386,15 @@ class CoachClientRuntime {
           | ((envelope: CoachRpcNotificationEnvelope) => void)
           | undefined,
         onTerminalEnvelope: options?.onTerminalEnvelope,
-      });
+        timer: undefined,
+        signal,
+        onAbort,
+      };
+      this.pending.set(id, pending);
+      signal?.addEventListener("abort", onAbort!, { once: true });
+      pending.timer = setTimeout(() => {
+        this.latchTerminal(new CoachClientCallTimeoutError(method, timeoutMs));
+      }, timeoutMs);
     });
     this.sendQueue.push({ id, text });
     this.startSendPump();
@@ -438,7 +500,7 @@ class CoachClientRuntime {
         this.failProtocol();
         return;
       }
-      this.pending.delete(envelope.id);
+      this.claimPending(envelope.id, pending);
       const observer = pending.onTerminalEnvelope;
       try {
         observer?.(envelope);
@@ -452,7 +514,7 @@ class CoachClientRuntime {
       envelope.error.message,
       envelope.error.data,
     );
-    this.pending.delete(envelope.id);
+    this.claimPending(envelope.id, pending);
     const observer = pending.onTerminalEnvelope;
     try {
       observer?.(envelope);
@@ -467,12 +529,28 @@ class CoachClientRuntime {
         : new CoachClientProtocolError();
     }
     const error = new CoachClientProtocolError();
-    this.latchTerminal(error);
-    requestSocketClose(this.socket, 1002);
+    this.latchTerminal(error, 1002);
     return error;
   }
 
-  private latchTerminal(error: CoachClientProtocolError | CoachClientDisconnectedError): void {
+  private claimPending(id: JsonRpcId, pending: PendingCall): void {
+    this.pending.delete(id);
+    this.cleanupPending(pending);
+  }
+
+  private cleanupPending(pending: PendingCall): void {
+    if (pending.timer !== undefined) clearTimeout(pending.timer);
+    pending.timer = undefined;
+    if (pending.signal !== undefined && pending.onAbort !== undefined) {
+      pending.signal.removeEventListener("abort", pending.onAbort);
+    }
+  }
+
+  private latchTerminal(
+    error: CoachClientTerminalCause,
+    closeCode?: number,
+    closeReason?: string,
+  ): void {
     if (this.terminalCause !== undefined) return;
     this.terminalCause = error;
     this.ready = false;
@@ -480,51 +558,78 @@ class CoachClientRuntime {
     this.sendQueue.length = 0;
     this.handshakeBinding?.dispose();
     this.socket.removeEventListener("close", this.onSocketClose);
+    this.socket.removeEventListener("error", this.onSocketError);
     const pending = [...this.pending.values()];
     this.pending.clear();
-    for (const entry of pending) entry.reject(error);
+    for (const entry of pending) {
+      this.cleanupPending(entry);
+      entry.reject(error);
+    }
+    requestSocketClose(this.socket, closeCode, closeReason);
+    const client = this.publicClient;
+    if (client !== undefined) {
+      try {
+        this.options.onTerminal?.(client, error);
+      } catch {}
+    }
   }
 
   private readonly onSocketClose = (event: CloseEvent): void => {
-    if (!this.ready || this.terminalCause !== undefined) return;
-    this.latchTerminal(new CoachClientDisconnectedError(event.code, event.reason));
+    if (this.terminalCause !== undefined) return;
+    const error = new CoachClientDisconnectedError(event.code, event.reason);
+    if (!this.ready) {
+      this.preActivationCause ??= error;
+      return;
+    }
+    this.latchTerminal(error);
+  };
+
+  private readonly onSocketError = (): void => {
+    if (this.terminalCause !== undefined) return;
+    const error = new CoachClientDisconnectedError(1006, "");
+    if (!this.ready) {
+      this.preActivationCause ??= error;
+      return;
+    }
+    this.latchTerminal(error);
   };
 
   private close(code = 1000, reason = ""): Promise<void> {
     if (this.closePromise !== undefined) return this.closePromise;
-    this.closePromise = new Promise((resolve) => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      let settled = false;
-
-      const cleanup = (): void => {
-        if (timer !== undefined) clearTimeout(timer);
-        timer = undefined;
-        this.socket.removeEventListener("close", onClose);
-      };
-
-      const finish = (): void => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve();
-      };
-
-      const onClose = (): void => {
-        finish();
-      };
-
-      if (this.terminalCause === undefined) {
-        this.latchTerminal(new CoachClientDisconnectedError(code, reason));
-      }
-      this.socket.addEventListener("close", onClose);
-      timer = setTimeout(finish, this.options.closeTimeoutMs);
-      if (this.socket.readyState === 3) {
-        finish();
-        return;
-      }
-      requestSocketClose(this.socket, code, reason);
+    let resolveClose!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      resolveClose = resolve;
     });
-    return this.closePromise;
+    this.closePromise = promise;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+
+    const cleanup = (): void => {
+      if (timer !== undefined) clearTimeout(timer);
+      timer = undefined;
+      this.socket.removeEventListener("close", onClose);
+    };
+
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolveClose();
+    };
+
+    const onClose = (): void => {
+      finish();
+    };
+
+    this.socket.addEventListener("close", onClose);
+    timer = setTimeout(finish, this.options.closeTimeoutMs);
+    if (this.terminalCause === undefined) {
+      this.latchTerminal(new CoachClientDisconnectedError(code, reason), code, reason);
+    } else {
+      requestSocketClose(this.socket, code, reason);
+    }
+    if (this.socket.readyState === 3) finish();
+    return promise;
   }
 }
 
