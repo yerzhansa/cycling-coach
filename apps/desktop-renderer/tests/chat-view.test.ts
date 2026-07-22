@@ -1,9 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CoachClientCallOptions } from "@enduragent/coach-client";
+import type { TurnEvent } from "@enduragent/coach-contract";
+import { createChatController } from "../src/chat/controller.js";
 import { mountChatView } from "../src/chat/view.js";
 import { EMPTY_CHAT_STATE, reduceChatState, type ChatState } from "../src/turn-state.js";
 
+const mutationEvents: string[] = [];
+
+class FakeChildList extends Array<FakeElement> {
+  item(index: number): FakeElement | null {
+    return this[index] ?? null;
+  }
+}
+
 class FakeElement {
-  readonly children: FakeElement[] = [];
+  readonly children = new FakeChildList();
   readonly attributes = new Map<string, string>();
   readonly listeners = new Map<string, Set<(event: never) => void>>();
   readonly dataset: Record<string, string> = {};
@@ -22,6 +33,10 @@ class FakeElement {
   clientHeight = 0;
   textContentMutationCount = 0;
   replaceChildrenMutationCount = 0;
+  insertBeforeMutationCount = 0;
+  removeMutationCount = 0;
+  appendDataMutationCount = 0;
+  parentNode: FakeElement | null = null;
   private ownText = "";
 
   constructor(readonly tagName: string) {}
@@ -37,26 +52,45 @@ class FakeElement {
   set textContent(value: string) {
     this.textContentMutationCount += 1;
     this.ownText = value;
+    for (const child of this.children) child.parentNode = null;
     this.children.splice(0);
   }
 
   append(...nodes: Array<FakeElement | string>): void {
     for (const node of nodes) {
-      this.children.push(typeof node === "string" ? new FakeElement("#text") : node);
-      if (typeof node === "string") this.children.at(-1)!.textContent = node;
+      const child = typeof node === "string" ? new FakeElement("#text") : node;
+      if (typeof node === "string") child.textContent = node;
+      if (child.tagName === "#fragment") {
+        this.append(...child.children.splice(0));
+        continue;
+      }
+      child.parentNode?.detach(child);
+      child.parentNode = this;
+      this.children.push(child);
     }
   }
 
+  appendData(value: string): void {
+    this.appendDataMutationCount += 1;
+    this.ownText += value;
+  }
+
   insertBefore(node: FakeElement, reference: FakeElement | null): void {
+    this.insertBeforeMutationCount += 1;
+    node.parentNode?.detach(node);
     const index = reference === null ? -1 : this.children.indexOf(reference);
+    node.parentNode = this;
     if (index === -1) this.children.push(node);
     else this.children.splice(index, 0, node);
   }
 
   replaceChildren(...nodes: FakeElement[]): void {
     this.replaceChildrenMutationCount += 1;
+    mutationEvents.push(`${this.className || this.tagName}:replaceChildren`);
     this.ownText = "";
-    this.children.splice(0, this.children.length, ...nodes);
+    for (const child of this.children) child.parentNode = null;
+    this.children.splice(0);
+    this.append(...nodes);
   }
 
   setAttribute(name: string, value: string): void {
@@ -68,6 +102,7 @@ class FakeElement {
   }
 
   removeAttribute(name: string): void {
+    mutationEvents.push(`${this.className || this.tagName}:removeAttribute:${name}`);
     this.attributes.delete(name);
   }
 
@@ -105,6 +140,14 @@ class FakeElement {
 
   remove(): void {
     this.removed = true;
+    this.removeMutationCount += 1;
+    this.parentNode?.detach(this);
+  }
+
+  private detach(child: FakeElement): void {
+    const index = this.children.indexOf(child);
+    if (index !== -1) this.children.splice(index, 1);
+    child.parentNode = null;
   }
 }
 
@@ -113,6 +156,16 @@ class FakeDocument {
 
   createElement(name: string): FakeElement {
     return new FakeElement(name);
+  }
+
+  createTextNode(value: string): FakeElement {
+    const node = new FakeElement("#text");
+    node.textContent = value;
+    return node;
+  }
+
+  createDocumentFragment(): FakeElement {
+    return new FakeElement("#fragment");
   }
 }
 
@@ -151,6 +204,7 @@ function submittedState(): ChatState {
 const emptyState: ChatState = EMPTY_CHAT_STATE;
 
 beforeEach(() => {
+  mutationEvents.splice(0);
   Object.assign(globalThis, {
     document: new FakeDocument(),
     HTMLElement: FakeElement,
@@ -331,7 +385,12 @@ describe("chat view", () => {
       composerHost: new FakeElement("div") as never,
     });
     const failureCopy = "The coach couldn't respond. Please try again.";
-    const state = reduceChatState(submittedState(), {
+    const messages = find(thread, (node) => node.className === "chat-messages");
+    let state = submittedState();
+    mounted.view.render(state);
+    const athlete = messages.children[0]!;
+    const insertions = messages.insertBeforeMutationCount;
+    state = reduceChatState(state, {
       type: "fail",
       requestKey: 1,
       copy: failureCopy,
@@ -340,6 +399,10 @@ describe("chat view", () => {
     mounted.view.render(state);
 
     expect(occurrences(thread.textContent, failureCopy)).toBe(1);
+    expect(messages.children).toEqual([athlete]);
+    expect(messages.insertBeforeMutationCount).toBe(insertions);
+    expect(messages.textContentMutationCount).toBe(0);
+    expect(athlete.removeMutationCount).toBe(0);
     expect(findAll(thread, (node) => node.className.includes("chat-message--coach")).length).toBe(
       0,
     );
@@ -368,7 +431,7 @@ describe("chat view", () => {
     expect(find(thread, (node) => node.className === "chat-retry").hidden).toBe(false);
   });
 
-  it("mutates live transcript content only when its rendered semantics change", () => {
+  it("preserves keyed row identity while updating only changed streaming content", () => {
     const actionHost = new FakeElement("div");
     const thread = new FakeElement("div");
     const mounted = mountChatView({
@@ -386,26 +449,415 @@ describe("chat view", () => {
 
     let state = submittedState();
     mounted.view.render(state);
-    expect(messages.replaceChildrenMutationCount).toBe(1);
+    const athlete = messages.children[0]!;
+    const athleteText = find(athlete, (node) => node.className === "chat-message__text");
+    expect(messages.replaceChildrenMutationCount).toBe(0);
     expect(messages.textContent).toContain("How should I train?");
-    expect(notice.textContentMutationCount).toBe(0);
-
-    mounted.view.render({
-      ...state,
-      messages: state.messages.map((message) => ({ ...message, id: `${message.id}-clone` })),
-    });
-    expect(messages.replaceChildrenMutationCount).toBe(1);
     expect(notice.textContentMutationCount).toBe(0);
 
     state = reduceChatState(state, {
       type: "event",
       requestKey: 1,
-      event: { type: "text_delta", turnId: "turn-1", delta: "Partial coach draft" },
+      event: { type: "text_delta", turnId: "turn-1", delta: "Partial **coach" },
     });
     mounted.view.render(state);
-    expect(messages.replaceChildrenMutationCount).toBe(2);
-    expect(messages.textContent).toContain("Partial coach draft");
+    const coach = messages.children[1]!;
+    const coachText = find(coach, (node) => node.className === "chat-message__text");
+    const streamText = coachText.children[0]!;
+    const insertedRows = messages.insertBeforeMutationCount;
+    expect(messages.replaceChildrenMutationCount).toBe(0);
+    expect(messages.children[0]).toBe(athlete);
+    expect(find(athlete, (node) => node.className === "chat-message__text")).toBe(athleteText);
+    expect(messages.textContent).toContain("Partial **coach");
+    expect(findAll(coach, (node) => node.tagName === "strong")).toHaveLength(0);
+    expect(coach.attributes.get("aria-busy")).toBe("true");
     expect(notice.textContentMutationCount).toBe(0);
+
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 1,
+      event: { type: "text_delta", turnId: "turn-1", delta: " draft**" },
+    });
+    mounted.view.render(state, {
+      newConversationDisabled: true,
+      workBlocked: false,
+      appendDelta: {
+        messageId: "message-2",
+        previousTextLength: "Partial **coach".length,
+        nextTextLength: "Partial **coach draft**".length,
+        delta: " draft**",
+      },
+    });
+    expect(coachText.children[0]).toBe(streamText);
+    expect(streamText.appendDataMutationCount).toBe(1);
+    expect(coachText.textContent).toBe("Partial **coach draft**");
+    expect(findAll(coach, (node) => node.tagName === "strong")).toHaveLength(0);
+    expect(messages.insertBeforeMutationCount).toBe(insertedRows);
+    expect(athlete.removeMutationCount).toBe(0);
+    expect(coach.removeMutationCount).toBe(0);
+
+    mounted.view.render({
+      ...state,
+      progress: "Checking your training data…",
+      messages: state.messages.map((message) => ({ ...message })),
+    });
+    expect(messages.children[0]).toBe(athlete);
+    expect(messages.children[1]).toBe(coach);
+    expect(coachText.children[0]).toBe(streamText);
+    expect(messages.insertBeforeMutationCount).toBe(insertedRows);
+
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 1,
+      event: { type: "final-text", turnId: "turn-1", text: "Partial **coach draft**" },
+    });
+    mounted.view.render(state);
+    expect(messages.children[1]).toBe(coach);
+    expect(coachText.children[0]).toBe(streamText);
+    expect(coachText.replaceChildrenMutationCount).toBe(0);
+    expect(coach.attributes.get("aria-busy")).toBe("true");
+    expect(messages.insertBeforeMutationCount).toBe(insertedRows);
+
+    state = reduceChatState(state, { type: "complete", requestKey: 1 });
+    mounted.view.render(state);
+    expect(messages.children[0]).toBe(athlete);
+    expect(messages.children[1]).toBe(coach);
+    expect(coachText.replaceChildrenMutationCount).toBe(1);
+    expect(findAll(coach, (node) => node.tagName === "strong")[0]?.textContent).toBe("coach draft");
+    expect(coach.attributes.has("aria-busy")).toBe(false);
+    expect(coach.attributes.get("aria-atomic")).toBe("true");
+    expect(coach.attributes.has("aria-live")).toBe(false);
+    expect(athlete.attributes.get("aria-live")).toBe("off");
+    expect(messages.insertBeforeMutationCount).toBe(insertedRows);
+    expect(athlete.removeMutationCount).toBe(0);
+    expect(coach.removeMutationCount).toBe(0);
+
+    mounted.view.render(state, { newConversationDisabled: true, workBlocked: false });
+    expect(messages.children[0]).toBe(athlete);
+    expect(messages.children[1]).toBe(coach);
+    expect(coachText.replaceChildrenMutationCount).toBe(1);
+    expect(messages.insertBeforeMutationCount).toBe(insertedRows);
+  });
+
+  it("reconciles final coach content before clearing its busy state", () => {
+    const thread = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: thread as never,
+      composerHost: new FakeElement("div") as never,
+    });
+    let state = submittedState();
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 1,
+      event: { type: "text_delta", turnId: "turn-1", delta: "Draft" },
+    });
+    mounted.view.render(state);
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 1,
+      event: { type: "final-text", turnId: "turn-1", text: "Final **answer**" },
+    });
+    state = reduceChatState(state, { type: "complete", requestKey: 1 });
+    mutationEvents.splice(0);
+
+    mounted.view.render(state);
+
+    expect(mutationEvents.filter((event) => event.startsWith("chat-message"))).toEqual([
+      "chat-message__text:replaceChildren",
+      "chat-message chat-message--coach:removeAttribute:aria-busy",
+    ]);
+    const coach = find(thread, (node) => node.className.includes("chat-message--coach"));
+    expect(findAll(coach, (node) => node.tagName === "strong")[0]?.textContent).toBe("answer");
+  });
+
+  it("replaces a corrected final while busy and parses it only on completion", () => {
+    const thread = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: thread as never,
+      composerHost: new FakeElement("div") as never,
+    });
+    let state = submittedState();
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 1,
+      event: { type: "text_delta", turnId: "turn-1", delta: "Draft" },
+    });
+    mounted.view.render(state);
+    const messages = find(thread, (node) => node.className === "chat-messages");
+    const coach = messages.children[1]!;
+    const coachText = find(coach, (node) => node.className === "chat-message__text");
+    const draftNode = coachText.children[0]!;
+    const insertions = messages.insertBeforeMutationCount;
+
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 1,
+      event: { type: "final-text", turnId: "turn-1", text: "Corrected **answer**" },
+    });
+    mounted.view.render(state);
+
+    expect(coachText.children[0]).not.toBe(draftNode);
+    expect(coachText.textContent).toBe("Corrected **answer**");
+    expect(findAll(coach, (node) => node.tagName === "strong")).toHaveLength(0);
+    expect(coach.attributes.get("aria-busy")).toBe("true");
+    expect(messages.insertBeforeMutationCount).toBe(insertions);
+
+    state = reduceChatState(state, { type: "complete", requestKey: 1 });
+    mounted.view.render(state);
+
+    expect(findAll(coach, (node) => node.tagName === "strong")[0]?.textContent).toBe("answer");
+    expect(coach.attributes.has("aria-busy")).toBe(false);
+    expect(messages.insertBeforeMutationCount).toBe(insertions);
+    expect(coach.removeMutationCount).toBe(0);
+  });
+
+  it("keeps transcript rows stable when controller background cleanup releases a turn", async () => {
+    const thread = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: thread as never,
+      composerHost: new FakeElement("div") as never,
+    });
+    let releaseTrainingRefresh: (() => void) | undefined;
+    const trainingRefresh = new Promise<void>((resolve) => {
+      releaseTrainingRefresh = resolve;
+    });
+    const finalText = "Final **answer**";
+    const call = vi.fn(
+      async (
+        method: string,
+        _request: unknown,
+        options: CoachClientCallOptions<"chat"> | undefined,
+      ) => {
+        if (method !== "chat") throw new TypeError();
+        const deliver = (event: TurnEvent): void => {
+          options?.onNotificationEnvelope?.({
+            jsonrpc: "2.0",
+            method: "coach.turnEvent",
+            params: {
+              requestId: 1,
+              requestMethod: "chat",
+              turnId: event.turnId,
+              event,
+            },
+          });
+          options?.onEvent?.(event);
+        };
+        deliver({ type: "text_delta", turnId: "turn-1", delta: "Final **ans" });
+        deliver({ type: "text_delta", turnId: "turn-1", delta: "wer**" });
+        deliver({ type: "final-text", turnId: "turn-1", text: finalText });
+        options?.onTerminalEnvelope?.({
+          jsonrpc: "2.0",
+          id: 1,
+          result: { text: finalText },
+        });
+        return { text: finalText };
+      },
+    );
+    const fakeClient = { handshake: {}, call, close: vi.fn(async () => {}) };
+    const controller = createChatController({
+      clients: {
+        getClient: vi.fn(async () => fakeClient as never),
+        reconnect: vi.fn(async () => fakeClient as never),
+        close: vi.fn(async () => {}),
+      },
+      view: mounted.view,
+      refreshTrainingContext: () => trainingRefresh,
+      refreshSpend: async () => {},
+    });
+
+    const submission = controller.submit("How should I train?");
+    const messages = find(thread, (node) => node.className === "chat-messages");
+    await vi.waitFor(() => {
+      expect(messages.children).toHaveLength(2);
+      expect(messages.children[1]?.attributes.has("aria-busy")).toBe(false);
+    });
+    const athlete = messages.children[0]!;
+    const coach = messages.children[1]!;
+    const insertions = messages.insertBeforeMutationCount;
+    const athleteRemovals = athlete.removeMutationCount;
+    const coachRemovals = coach.removeMutationCount;
+    const coachText = find(coach, (node) => node.className === "chat-message__text");
+    const replacements = coachText.replaceChildrenMutationCount;
+
+    releaseTrainingRefresh?.();
+    await submission;
+    await Promise.resolve();
+
+    expect(messages.children[0]).toBe(athlete);
+    expect(messages.children[1]).toBe(coach);
+    expect(messages.insertBeforeMutationCount).toBe(insertions);
+    expect(athlete.removeMutationCount).toBe(athleteRemovals);
+    expect(coach.removeMutationCount).toBe(coachRemovals);
+    expect(coachText.replaceChildrenMutationCount).toBe(replacements);
+    expect(findAll(coach, (node) => node.tagName === "strong")[0]?.textContent).toBe("answer");
+  });
+
+  it("keeps one streaming text node across many controller-delivered tiny deltas", async () => {
+    const thread = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: thread as never,
+      composerHost: new FakeElement("div") as never,
+    });
+    let finishTurn: (() => void) | undefined;
+    const finishGate = new Promise<void>((resolve) => {
+      finishTurn = resolve;
+    });
+    let markStreamingDelivered: (() => void) | undefined;
+    const streamingDelivered = new Promise<void>((resolve) => {
+      markStreamingDelivered = resolve;
+    });
+    const finalText = `Line  one\n**steady** ${"x".repeat(256)}`;
+    const call = vi.fn(
+      async (
+        method: string,
+        _request: unknown,
+        options: CoachClientCallOptions<"chat"> | undefined,
+      ) => {
+        if (method !== "chat") throw new TypeError();
+        const deliver = (event: TurnEvent): void => {
+          options?.onNotificationEnvelope?.({
+            jsonrpc: "2.0",
+            method: "coach.turnEvent",
+            params: {
+              requestId: 1,
+              requestMethod: "chat",
+              turnId: event.turnId,
+              event,
+            },
+          });
+          options?.onEvent?.(event);
+        };
+        for (let index = 0; index < finalText.length; index += 1) {
+          deliver({ type: "text_delta", turnId: "turn-1", delta: finalText[index]! });
+        }
+        markStreamingDelivered?.();
+        await finishGate;
+        deliver({ type: "final-text", turnId: "turn-1", text: finalText });
+        options?.onTerminalEnvelope?.({
+          jsonrpc: "2.0",
+          id: 1,
+          result: { text: finalText },
+        });
+        return { text: finalText };
+      },
+    );
+    const fakeClient = { handshake: {}, call, close: vi.fn(async () => {}) };
+    const controller = createChatController({
+      clients: {
+        getClient: vi.fn(async () => fakeClient as never),
+        reconnect: vi.fn(async () => fakeClient as never),
+        close: vi.fn(async () => {}),
+      },
+      view: mounted.view,
+      refreshTrainingContext: async () => {},
+      refreshSpend: async () => {},
+    });
+
+    const submission = controller.submit("How should I train?");
+    await streamingDelivered;
+    const messages = find(thread, (node) => node.className === "chat-messages");
+    const athlete = messages.children[0]!;
+    const coach = messages.children[1]!;
+    const coachText = find(coach, (node) => node.className === "chat-message__text");
+    const streamNode = coachText.children[0]!;
+    const insertions = messages.insertBeforeMutationCount;
+
+    expect(coachText.children).toEqual([streamNode]);
+    expect(streamNode.textContent).toBe(finalText);
+    expect(streamNode.appendDataMutationCount).toBe(finalText.length - 1);
+    expect(coachText.replaceChildrenMutationCount).toBe(0);
+    expect(messages.insertBeforeMutationCount).toBe(2);
+    expect(athlete.removeMutationCount).toBe(0);
+    expect(coach.removeMutationCount).toBe(0);
+
+    finishTurn?.();
+    await submission;
+
+    expect(messages.children[0]).toBe(athlete);
+    expect(messages.children[1]).toBe(coach);
+    expect(messages.insertBeforeMutationCount).toBe(insertions);
+    expect(findAll(coach, (node) => node.tagName === "strong")[0]?.textContent).toBe("steady");
+  });
+
+  it("treats changed message ids as new row identities even when semantics match", () => {
+    const thread = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: thread as never,
+      composerHost: new FakeElement("div") as never,
+    });
+    const messages = find(thread, (node) => node.className === "chat-messages");
+    const state = submittedState();
+    mounted.view.render(state);
+    const original = messages.children[0]!;
+
+    mounted.view.render({
+      ...state,
+      messages: state.messages.map((message) => ({ ...message, id: `${message.id}-changed` })),
+    });
+
+    expect(messages.children[0]).not.toBe(original);
+    expect(original.removed).toBe(true);
+    expect(messages.textContent).toContain("How should I train?");
+    expect(messages.replaceChildrenMutationCount).toBe(0);
+  });
+
+  it("rejects duplicate message ids before mutating any transcript node", () => {
+    const thread = new FakeElement("div");
+    const actionHost = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: thread as never,
+      composerHost: new FakeElement("div") as never,
+      actionHost: actionHost as never,
+    });
+    const messages = find(thread, (node) => node.className === "chat-messages");
+    const state = submittedState();
+    mounted.view.render(state);
+    const athlete = messages.children[0]!;
+    const insertions = messages.insertBeforeMutationCount;
+    const opener = find(actionHost, (node) => node.className === "new-conversation-button");
+    const openerDisabled = opener.disabled;
+
+    expect(() =>
+      mounted.view.render({
+        ...state,
+        session: { ...state.session, presence: "present" },
+        messages: state.messages.map((message) => ({ ...message, id: "duplicate" })),
+      }),
+    ).toThrow("duplicate chat message id");
+
+    expect(messages.children).toEqual([athlete]);
+    expect(messages.insertBeforeMutationCount).toBe(insertions);
+    expect(messages.textContentMutationCount).toBe(0);
+    expect(athlete.removeMutationCount).toBe(0);
+    expect(opener.disabled).toBe(openerDisabled);
+  });
+
+  it("preserves interrupted history when retry adds a newly keyed coach row", () => {
+    const thread = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: thread as never,
+      composerHost: new FakeElement("div") as never,
+    });
+    const messages = find(thread, (node) => node.className === "chat-messages");
+    let state = submittedState();
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 1,
+      event: { type: "text_delta", turnId: "turn-1", delta: "**Preserved partial**" },
+    });
+    mounted.view.render(state);
+    const athlete = messages.children[0]!;
+    const interrupted = messages.children[1]!;
+    const insertionsBeforeInterruption = messages.insertBeforeMutationCount;
+    expect(interrupted.attributes.get("aria-busy")).toBe("true");
+    expect(findAll(interrupted, (node) => node.tagName === "strong")).toHaveLength(0);
 
     state = reduceChatState(state, {
       type: "interrupt",
@@ -413,58 +865,111 @@ describe("chat view", () => {
       copy: "Connection interrupted. Your partial response is preserved.",
     });
     mounted.view.render(state);
-    expect(messages.replaceChildrenMutationCount).toBe(3);
-    expect(notice.textContentMutationCount).toBe(1);
-    expect(notice.textContent).toBe("Connection interrupted. Your partial response is preserved.");
-    expect(find(thread, (node) => node.className === "chat-retry").hidden).toBe(false);
+    expect(interrupted.attributes.has("aria-busy")).toBe(false);
+    expect(findAll(interrupted, (node) => node.tagName === "strong")[0]?.textContent).toBe(
+      "Preserved partial",
+    );
+    expect(messages.insertBeforeMutationCount).toBe(insertionsBeforeInterruption);
+    expect(athlete.removeMutationCount).toBe(0);
+    expect(interrupted.removeMutationCount).toBe(0);
 
     state = reduceChatState(state, {
-      type: "interrupt",
-      requestKey: 1,
-      copy: "Connection interrupted again. Your partial response is preserved.",
+      type: "submit",
+      requestKey: 2,
+      userMessage: "How should I train?",
+      userMessageId: "unused-message",
+      assistantMessageId: "message-3",
+      includeUser: false,
+    });
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 2,
+      event: { type: "text_delta", turnId: "turn-2", delta: "Fresh retry" },
     });
     mounted.view.render(state);
-    expect(messages.replaceChildrenMutationCount).toBe(3);
-    expect(notice.textContentMutationCount).toBe(2);
-    expect(notice.textContent).toBe(
-      "Connection interrupted again. Your partial response is preserved.",
-    );
+
+    expect(messages.children).toHaveLength(3);
+    expect(messages.children[0]).toBe(athlete);
+    expect(messages.children[1]).toBe(interrupted);
+    expect(messages.children[2]).not.toBe(interrupted);
+    expect(messages.children[2]?.textContent).toContain("Fresh retry");
+    expect(interrupted.textContent).toContain("Preserved partial");
+    expect(messages.insertBeforeMutationCount).toBe(insertionsBeforeInterruption + 1);
+    expect(athlete.removeMutationCount).toBe(0);
+    expect(interrupted.removeMutationCount).toBe(0);
+  });
+
+  it("keeps rows stable through reset controls and clears the transcript exactly once on success", () => {
+    const thread = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: thread as never,
+      composerHost: new FakeElement("div") as never,
+      actionHost: new FakeElement("div") as never,
+    });
+    const messages = find(thread, (node) => node.className === "chat-messages");
+    let state = submittedState();
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 1,
+      event: { type: "final-text", turnId: "turn-1", text: "Ride easy." },
+    });
+    state = reduceChatState(state, { type: "complete", requestKey: 1 });
+    mounted.view.render(state);
+    const athlete = messages.children[0]!;
+    const coach = messages.children[1]!;
+    const insertions = messages.insertBeforeMutationCount;
+    const expectNoStructuralMutation = (): void => {
+      expect(messages.insertBeforeMutationCount).toBe(insertions);
+      expect(messages.textContentMutationCount).toBe(0);
+      expect(athlete.removeMutationCount).toBe(0);
+      expect(coach.removeMutationCount).toBe(0);
+    };
 
     let resetState = reduceChatState(state, { type: "open-new-conversation" });
     mounted.view.render(resetState);
+    expect(messages.children[0]).toBe(athlete);
+    expect(messages.children[1]).toBe(coach);
+    expectNoStructuralMutation();
+    resetState = reduceChatState(resetState, { type: "cancel-new-conversation" });
+    mounted.view.render(resetState);
+    expect(messages.children[0]).toBe(athlete);
+    expect(messages.children[1]).toBe(coach);
+    expectNoStructuralMutation();
+    resetState = reduceChatState(resetState, { type: "open-new-conversation" });
     resetState = reduceChatState(resetState, { type: "begin-reset" });
     mounted.view.render(resetState, { newConversationDisabled: true, workBlocked: true });
-    mounted.view.render(
-      {
-        ...resetState,
-        messages: resetState.messages.map((message) => ({ ...message })),
-      },
-      { newConversationDisabled: false, workBlocked: false },
-    );
-    expect(messages.replaceChildrenMutationCount).toBe(3);
-    expect(notice.textContentMutationCount).toBe(2);
+    expect(messages.children[0]).toBe(athlete);
+    expect(messages.children[1]).toBe(coach);
+    expectNoStructuralMutation();
+
+    const failedState = reduceChatState(resetState, {
+      type: "reset-failed",
+      announcement: "Reset could not be confirmed.",
+    });
+    mounted.view.render(failedState);
+    expect(messages.children[0]).toBe(athlete);
+    expect(messages.children[1]).toBe(coach);
+    expectNoStructuralMutation();
+
+    resetState = reduceChatState(state, { type: "open-new-conversation" });
+    resetState = reduceChatState(resetState, { type: "begin-reset" });
+    mounted.view.render(resetState);
+    expectNoStructuralMutation();
 
     const clearedState = reduceChatState(resetState, {
       type: "reset-succeeded",
       announcement: "New conversation started.",
     });
     mounted.view.render(clearedState);
-    expect(messages.replaceChildrenMutationCount).toBe(4);
+    expect(messages.textContentMutationCount).toBe(1);
     expect(messages.children).toHaveLength(0);
-    expect(notice.textContentMutationCount).toBe(3);
-    expect(notice.textContent).toBe("");
-
-    mounted.view.render({
-      ...state,
-      messages: state.messages.map((message) => ({ ...message })),
-      session: { ...clearedState.session, presence: "present", announcement: null },
-    });
-    expect(messages.replaceChildrenMutationCount).toBe(5);
-    expect(messages.textContent).toContain("Partial coach draft");
-    expect(notice.textContentMutationCount).toBe(4);
-    expect(notice.textContent).toBe(
-      "Connection interrupted again. Your partial response is preserved.",
-    );
+    expect(messages.insertBeforeMutationCount).toBe(insertions);
+    expect(athlete.removeMutationCount).toBe(0);
+    expect(coach.removeMutationCount).toBe(0);
+    mounted.view.render(clearedState, { newConversationDisabled: true, workBlocked: false });
+    expect(messages.textContentMutationCount).toBe(1);
+    expect(messages.replaceChildrenMutationCount).toBe(0);
   });
 
   it("places one notice host immediately before the composer and removes it on dispose", () => {
@@ -504,9 +1009,49 @@ describe("chat view", () => {
     });
     expect(thread.textContent).toContain('<img src=x onerror="globalThis.executed=true">');
     expect((globalThis as Record<string, unknown>).executed).toBeUndefined();
+    expect(findAll(thread, (node) => node.tagName === "img")).toHaveLength(0);
     const transcript = find(thread, (node) => node.className === "chat-transcript");
     expect(transcript.attributes.get("role")).toBe("log");
     expect(transcript.attributes.get("aria-live")).toBe("polite");
+    expect(transcript.attributes.get("aria-relevant")).toBe("additions text");
+    expect(transcript.attributes.get("aria-atomic")).toBe("false");
+  });
+
+  it("renders semantic Markdown only for coach rows", () => {
+    const thread = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: thread as never,
+      composerHost: new FakeElement("div") as never,
+    });
+    mounted.view.render({
+      ...emptyState,
+      messages: [
+        {
+          id: "message-1",
+          role: "athlete",
+          text: "**literal athlete**",
+          delivery: "complete",
+        },
+        {
+          id: "message-2",
+          role: "coach",
+          text: "**formatted coach** [guide](https://example.test/guide)",
+          delivery: "complete",
+        },
+      ],
+    });
+
+    const athlete = find(thread, (node) => node.className.includes("chat-message--athlete"));
+    const coach = find(thread, (node) => node.className.includes("chat-message--coach"));
+    expect(findAll(athlete, (node) => node.tagName === "strong")).toHaveLength(0);
+    expect(athlete.textContent).toContain("**literal athlete**");
+    expect(findAll(coach, (node) => node.tagName === "strong")[0]?.textContent).toBe(
+      "formatted coach",
+    );
+    expect(findAll(coach, (node) => node.tagName === "a")[0]?.attributes.get("target")).toBe(
+      "_blank",
+    );
   });
 
   it("keeps a visible label, submits original text, and disables while streaming", () => {
@@ -833,6 +1378,8 @@ describe("chat view", () => {
     });
     const button = find(actionHost, (node) => node.className === "new-conversation-button");
     const dialog = find(actionHost, (node) => node.tagName === "dialog");
+    const transcript = find(thread, (node) => node.className === "chat-transcript");
+    const form = find(composerHost, (node) => node.className === "composer");
     let state = reduceChatState(emptyState, { type: "session-probe", hasSession: true });
     state = reduceChatState(state, { type: "open-new-conversation" });
     mounted.view.render(state);
@@ -844,7 +1391,7 @@ describe("chat view", () => {
     expect(dialog.open).toBe(false);
     expect(dialog.removed).toBe(true);
     expect(button.removed).toBe(true);
-    expect(find(thread, (node) => node.className === "chat-transcript").removed).toBe(true);
-    expect(find(composerHost, (node) => node.className === "composer").removed).toBe(true);
+    expect(transcript.removed).toBe(true);
+    expect(form.removed).toBe(true);
   });
 });

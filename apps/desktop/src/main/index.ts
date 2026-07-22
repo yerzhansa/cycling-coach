@@ -15,6 +15,7 @@ import {
 } from "electron";
 import { createChatGptAuth, hasChatGptProfile } from "./chatgpt-auth.js";
 import { installDesktopConnectionIpc } from "./connection-ipc.js";
+import { installDesktopExternalLinkIpc } from "./external-link-ipc.js";
 import { DESKTOP_LIFECYCLE_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
 import {
   createConnectionRuntimeAuthority,
@@ -110,6 +111,7 @@ async function runDesktop(): Promise<void> {
   let quitting = false;
   let protocolInstalled = false;
   let disposeConnectionIpc: (() => void) | undefined;
+  let disposeExternalLinkIpc: (() => void) | undefined;
   let disposeOnboarding: (() => void) | undefined;
   let daemonLifecycle: DesktopDaemonLifecycle | undefined;
   let shutdownPromise: Promise<void> | undefined;
@@ -118,6 +120,8 @@ async function runDesktop(): Promise<void> {
       controller.abort();
       disposeConnectionIpc?.();
       disposeConnectionIpc = undefined;
+      disposeExternalLinkIpc?.();
+      disposeExternalLinkIpc = undefined;
       disposeOnboarding?.();
       disposeOnboarding = undefined;
       if (protocolInstalled) {
@@ -322,6 +326,11 @@ async function runDesktop(): Promise<void> {
       ipcMain,
       currentWindow: () => mainWindow.current() ?? undefined,
       runtime: daemonLifecycle,
+    });
+    disposeExternalLinkIpc = installDesktopExternalLinkIpc({
+      ipcMain,
+      currentWindow: () => mainWindow.current() ?? undefined,
+      openExternal: (url) => shell.openExternal(url),
     });
     residency = createDesktopResidency({
       app,

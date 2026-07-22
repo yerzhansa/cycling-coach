@@ -1,0 +1,2 @@
+export const COACH_RESPONSE_CODE_UNIT_LIMIT = 100_000;
+export const COACH_TURN_EVENT_LIMIT = 4_096;

@@ -136,8 +136,8 @@ export function desktopWindowOptions(preload: string): Electron.BrowserWindowCon
 }
 
 export function hardenDesktopWindow(window: BrowserWindow): void {
-  window.webContents.on("will-navigate", (event, url) => {
-    if (url !== DESKTOP_RENDERER_URL) event.preventDefault();
+  window.webContents.on("will-navigate", (event) => {
+    event.preventDefault();
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => {

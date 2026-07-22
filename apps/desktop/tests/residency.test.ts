@@ -79,7 +79,7 @@ vi.mock("electron", () => ({
   Tray: mocks.FakeTray,
   nativeImage: { createFromPath: vi.fn(() => mocks.image) },
   dialog: {},
-  ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
+  ipcMain: { handle: vi.fn(), on: vi.fn(), removeHandler: vi.fn(), removeListener: vi.fn() },
   safeStorage: {},
   session: { defaultSession: { protocol: { unhandle: vi.fn() } } },
   utilityProcess: { fork: vi.fn() },
