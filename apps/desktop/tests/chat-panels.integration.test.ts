@@ -121,11 +121,33 @@ function makeScript(calls: ScriptRequest[]): DesktopFixtureScript {
       }
       if (request.method === "chat") {
         hasSession = true;
+        const firstDelta = "## Today’s ride\n\nHold   **ste";
+        const finalText = `${firstDelta}ady**.
+
+<script>globalThis.hostile = true</script>
+
+| Segment | Prescription |
+| --- | --- |
+| Endurance | ${"steady".repeat(40)} |
+
+\`\`\`text
+${"nonwrapping".repeat(36)}
+\`\`\`
+
+[Guide](https://example.test/guide)`;
         return [
-          JSON.stringify({ type: "text_delta", turnId: "turn-fixture", delta: "Hold " }),
-          JSON.stringify({ type: "text_delta", turnId: "turn-fixture", delta: "steady" }),
-          JSON.stringify({ type: "final-text", turnId: "turn-fixture", text: "Hold steady." }),
-          JSON.stringify({ text: "Hold steady." }),
+          JSON.stringify({
+            type: "text_delta",
+            turnId: "turn-fixture",
+            delta: firstDelta,
+          }),
+          JSON.stringify({
+            type: "text_delta",
+            turnId: "turn-fixture",
+            delta: finalText.slice(firstDelta.length),
+          }),
+          JSON.stringify({ type: "final-text", turnId: "turn-fixture", text: finalText }),
+          JSON.stringify({ text: finalText }),
         ];
       }
       if (request.method === "hasSession") return response({ hasSession });
@@ -209,6 +231,24 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly thread: boolean;
       readonly partial: string;
       readonly final: string;
+      readonly athleteStable: boolean;
+      readonly coachStable: boolean;
+      readonly busyObserved: boolean;
+      readonly busyCleared: boolean;
+      readonly partialWhiteSpace: string | null;
+      readonly partialSourcePreserved: boolean;
+      readonly controlExercised: boolean;
+      readonly controlOnlyMutations: number;
+      readonly heading: string;
+      readonly strong: string;
+      readonly hostileTextVisible: boolean;
+      readonly hostileElementCount: number;
+      readonly link: {
+        readonly href: string | null;
+        readonly target: string | null;
+        readonly rel: string | null;
+        readonly referrerPolicy: string | null;
+      };
       readonly drawerStatus: string;
       readonly anchorValue: string;
       readonly wellnessValue: string;
@@ -217,25 +257,101 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       const thread = document.querySelectorAll(".thread").length === 1;
       const textarea = document.querySelector("#message");
       const observed = [];
-      const observer = new MutationObserver(() => {
+      let athleteRow;
+      let coachRow;
+      let athleteStable = true;
+      let coachStable = true;
+      let busyObserved = false;
+      let busyCleared = false;
+      let partialWhiteSpace = null;
+      let partialSourcePreserved = false;
+      const capturePartial = (candidate) => {
+        if (!candidate.includes("Hold   **ste") || candidate.includes("ady**")) return;
+        partialSourcePreserved =
+          candidate.startsWith("## Today’s ride") &&
+          candidate.includes(String.fromCharCode(10) + String.fromCharCode(10));
+        partialWhiteSpace = getComputedStyle(
+          document.querySelector(".chat-message--coach .chat-message__text"),
+        ).whiteSpace;
+      };
+      const observer = new MutationObserver((records) => {
+        for (const record of records) {
+          if (record.type === "characterData" && record.oldValue) {
+            observed.push(record.oldValue);
+            capturePartial(record.oldValue);
+          }
+          if (record.type === "attributes" && record.attributeName === "aria-busy" && record.oldValue === "true") {
+            busyObserved = true;
+          }
+        }
         const value = document.querySelector(".chat-message--coach .chat-message__text")?.textContent ?? "";
-        if (value.length > 0) observed.push(value);
+        if (value.length > 0) {
+          observed.push(value);
+          capturePartial(value);
+        }
+        const currentAthlete = document.querySelector(".chat-message--athlete");
+        const currentCoach = document.querySelector(".chat-message--coach");
+        if (currentAthlete && athleteRow && currentAthlete !== athleteRow) athleteStable = false;
+        if (currentCoach && coachRow && currentCoach !== coachRow) coachStable = false;
+        athleteRow ??= currentAthlete;
+        coachRow ??= currentCoach;
+        if (currentCoach?.getAttribute("aria-busy") === "true") busyObserved = true;
+        if (busyObserved && currentCoach && !currentCoach.hasAttribute("aria-busy")) busyCleared = true;
       });
       observer.observe(document.querySelector(".chat-messages"), {
+        attributes: true,
+        attributeOldValue: true,
+        attributeFilter: ["aria-busy"],
         childList: true,
         characterData: true,
+        characterDataOldValue: true,
         subtree: true,
       });
       textarea.value = "What should I ride?";
       textarea.closest("form").requestSubmit();
+      athleteRow ??= document.querySelector(".chat-message--athlete");
       const finalDeadline = Date.now() + 5000;
       let final = "";
-      while (final !== "Hold steady." && Date.now() < finalDeadline) {
+      while (Date.now() < finalDeadline) {
         await new Promise((resolve) => setTimeout(resolve, 5));
-        final = document.querySelector(".chat-message--coach .chat-message__text")?.textContent ?? "";
+        const currentCoach = document.querySelector(".chat-message--coach");
+        final = currentCoach?.querySelector(".chat-message__text")?.textContent ?? "";
+        if (
+          final.includes("<script>globalThis.hostile = true</script>") &&
+          final.includes("Guide") &&
+          !currentCoach?.hasAttribute("aria-busy")
+        ) break;
       }
+      await new Promise((resolve) => setTimeout(resolve, 0));
       observer.disconnect();
-      const partial = observed.find((value) => value === "Hold " || value === "Hold steady") ?? "";
+      const partial = observed.find(
+        (value) => value.includes("Hold   **ste") && !value.includes("ady**"),
+      ) ?? "";
+      const opener = document.querySelector(".new-conversation-button");
+      const controlDeadline = Date.now() + 5000;
+      while (
+        (opener.disabled || opener.getAttribute("aria-disabled") === "true") &&
+        Date.now() < controlDeadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const controlRecords = [];
+      const controlObserver = new MutationObserver((records) => controlRecords.push(...records));
+      controlObserver.observe(document.querySelector(".chat-messages"), {
+        attributes: true,
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+      const controlExercised = !opener.disabled && opener.getAttribute("aria-disabled") !== "true";
+      if (controlExercised) {
+        opener.click();
+        document.querySelector(".new-conversation-dialog button")?.click();
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      controlObserver.disconnect();
+      const coach = document.querySelector(".chat-message--coach");
+      const link = coach?.querySelector("a");
       const panels = [...document.querySelectorAll(".context-panel__body")];
       return {
         location: location.href,
@@ -243,6 +359,24 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         thread,
         partial,
         final,
+        athleteStable: athleteStable && athleteRow === document.querySelector(".chat-message--athlete"),
+        coachStable: coachStable && coachRow === coach,
+        busyObserved,
+        busyCleared,
+        partialWhiteSpace,
+        partialSourcePreserved,
+        controlExercised,
+        controlOnlyMutations: controlRecords.length,
+        heading: coach?.querySelector("h2")?.textContent ?? "",
+        strong: coach?.querySelector("strong")?.textContent ?? "",
+        hostileTextVisible: coach?.textContent.includes("<script>globalThis.hostile = true</script>") ?? false,
+        hostileElementCount: coach?.querySelectorAll("script, img").length ?? -1,
+        link: {
+          href: link?.getAttribute("href") ?? null,
+          target: link?.getAttribute("target") ?? null,
+          rel: link?.getAttribute("rel") ?? null,
+          referrerPolicy: link?.getAttribute("referrerpolicy") ?? null,
+        },
         drawerStatus: document.querySelector(".drawer-status")?.textContent ?? "missing",
         anchorValue: panels[0]?.querySelector(".context-panel__value")?.textContent ?? "",
         wellnessValue: panels[4]?.querySelector(".wellness-row__value")?.textContent ?? "",
@@ -261,8 +395,26 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "writeCredential",
       ],
       thread: true,
-      partial: expect.stringMatching(/^Hold (steady)?$/u),
-      final: "Hold steady.",
+      partial: "## Today’s ride\n\nHold   **ste",
+      final: expect.stringContaining("<script>globalThis.hostile = true</script>"),
+      athleteStable: true,
+      coachStable: true,
+      busyObserved: true,
+      busyCleared: true,
+      partialWhiteSpace: "pre-wrap",
+      partialSourcePreserved: true,
+      controlExercised: true,
+      controlOnlyMutations: 0,
+      heading: "Today’s ride",
+      strong: "steady",
+      hostileTextVisible: true,
+      hostileElementCount: 0,
+      link: {
+        href: "https://example.test/guide",
+        target: "_blank",
+        rel: "noopener noreferrer",
+        referrerPolicy: "no-referrer",
+      },
       drawerStatus: "",
       anchorValue: "300 W",
       wellnessValue: "65 ms",
@@ -274,6 +426,26 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         params: { chatId: "desktop" },
       },
     ]);
+    await fixture.setViewport(720, 800);
+    expect(
+      await fixture.evaluate<{
+        readonly documentOverflow: boolean;
+        readonly tableScrollsLocally: boolean;
+        readonly codeScrollsLocally: boolean;
+      }>(`
+        const tableScroll = document.querySelector(".chat-markdown__table-scroll");
+        const codeBlock = document.querySelector(".chat-message--coach pre");
+        return {
+          documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+          tableScrollsLocally: tableScroll.scrollWidth > tableScroll.clientWidth && getComputedStyle(tableScroll).overflowX === "auto",
+          codeScrollsLocally: codeBlock.scrollWidth > codeBlock.clientWidth && getComputedStyle(codeBlock).overflowX === "auto",
+        };
+      `),
+    ).toEqual({
+      documentOverflow: false,
+      tableScrollsLocally: true,
+      codeScrollsLocally: true,
+    });
     const reset = await fixture.evaluate<{
       readonly enabledBefore: boolean;
       readonly dialogOpen: boolean;
@@ -282,6 +454,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly composerDisabled: boolean;
       readonly resetDisabled: boolean;
       readonly focused: string | null;
+      readonly transcriptClearMutations: number;
     }>(`
       const opener = document.querySelector(".new-conversation-button");
       const textarea = document.querySelector("#message");
@@ -293,11 +466,16 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       if (enabledBefore) opener.click();
       const dialog = document.querySelector(".new-conversation-dialog");
       const dialogOpen = dialog.open;
+      const clearRecords = [];
+      const clearObserver = new MutationObserver((records) => clearRecords.push(...records));
+      clearObserver.observe(document.querySelector(".chat-messages"), { childList: true });
       if (dialogOpen) dialog.querySelector(".new-conversation-dialog__confirm").click();
       const resetDeadline = Date.now() + 5000;
       while (dialog.open && Date.now() < resetDeadline) {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      clearObserver.disconnect();
       return {
         enabledBefore,
         dialogOpen,
@@ -306,6 +484,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         composerDisabled: textarea.disabled,
         resetDisabled: opener.disabled,
         focused: document.activeElement?.id ?? null,
+        transcriptClearMutations: clearRecords.filter((record) => record.type === "childList").length,
       };
     `);
     expect(reset).toEqual({
@@ -316,6 +495,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       composerDisabled: false,
       resetDisabled: true,
       focused: "message",
+      transcriptClearMutations: 1,
     });
     expect(calls.filter((call) => call.method === "resetSession")).toEqual([
       {

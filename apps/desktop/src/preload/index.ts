@@ -1,5 +1,9 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import { DESKTOP_CONNECTION_CHANNEL, DESKTOP_LIFECYCLE_CHANNEL } from "../main/constants.js";
+import {
+  DESKTOP_CONNECTION_CHANNEL,
+  DESKTOP_LIFECYCLE_CHANNEL,
+  DESKTOP_OPEN_EXTERNAL_CHANNEL,
+} from "../main/constants.js";
 
 const DESKTOP_CREDENTIAL_STATUS_CHANNEL = "enduragent:onboarding:credential-status";
 const DESKTOP_CREDENTIAL_RETRY_CHANNEL = "enduragent:onboarding:credential-retry";
@@ -149,6 +153,20 @@ function parsePaths(value: unknown): readonly string[] {
 }
 
 let dropDisposer: (() => void) | undefined;
+
+window.addEventListener(
+  "click",
+  (event) => {
+    if (!event.isTrusted || event.defaultPrevented || event.button !== 0) return;
+    const anchor = event
+      .composedPath()
+      .find((candidate): candidate is HTMLAnchorElement => candidate instanceof HTMLAnchorElement);
+    if (anchor === undefined || anchor.target !== "_blank") return;
+    event.preventDefault();
+    ipcRenderer.send(DESKTOP_OPEN_EXTERNAL_CHANNEL, anchor.href);
+  },
+  true,
+);
 
 ipcRenderer.on(DESKTOP_LIFECYCLE_CHANNEL, (_event, value: unknown) => {
   if (

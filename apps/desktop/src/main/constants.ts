@@ -4,6 +4,7 @@ export const DESKTOP_RENDERER_ORIGIN = "enduragent://app" as const;
 export const DESKTOP_RENDERER_URL = "enduragent://app/index.html" as const;
 export const DESKTOP_CONNECTION_CHANNEL = "desktop:get-daemon-connection" as const;
 export const DESKTOP_LIFECYCLE_CHANNEL = "desktop:daemon-lifecycle" as const;
+export const DESKTOP_OPEN_EXTERNAL_CHANNEL = "desktop:open-external" as const;
 export const DESKTOP_WINDOW_WIDTH = 1_180 as const;
 export const DESKTOP_WINDOW_HEIGHT = 820 as const;
 export const DESKTOP_WINDOW_MIN_WIDTH = 760 as const;

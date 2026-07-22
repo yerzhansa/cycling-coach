@@ -11,6 +11,7 @@ import { net } from "electron";
 import {
   DESKTOP_CONNECTION_CHANNEL,
   DESKTOP_HOST,
+  DESKTOP_OPEN_EXTERNAL_CHANNEL,
   DESKTOP_RENDERER_ORIGIN,
   DESKTOP_RENDERER_URL,
   DESKTOP_SCHEME,
@@ -23,6 +24,7 @@ import {
 import {
   createDesktopRendererConsoleCapture,
   desktopWindowOptions,
+  hardenDesktopWindow,
   installDesktopProtocol,
   isTrustedConnectionRequest,
   resolveDesktopRendererSource,
@@ -119,12 +121,14 @@ describe("desktop security boundary", () => {
       DESKTOP_RENDERER_ORIGIN,
       DESKTOP_RENDERER_URL,
       DESKTOP_CONNECTION_CHANNEL,
+      DESKTOP_OPEN_EXTERNAL_CHANNEL,
     }).toEqual({
       DESKTOP_SCHEME: "enduragent",
       DESKTOP_HOST: "app",
       DESKTOP_RENDERER_ORIGIN: "enduragent://app",
       DESKTOP_RENDERER_URL: "enduragent://app/index.html",
       DESKTOP_CONNECTION_CHANNEL: "desktop:get-daemon-connection",
+      DESKTOP_OPEN_EXTERNAL_CHANNEL: "desktop:open-external",
     });
     expect({
       DESKTOP_WINDOW_WIDTH,
@@ -159,6 +163,47 @@ describe("desktop security boundary", () => {
         allowRunningInsecureContent: false,
       },
     });
+  });
+
+  it("always denies renderer navigation, new windows, and permissions", () => {
+    let navigate: ((event: { preventDefault(): void }, url: string) => void) | undefined;
+    let openHandler: ((details: { url: string }) => unknown) | undefined;
+    let permissionRequest:
+      | ((_contents: unknown, _permission: string, callback: (allowed: boolean) => void) => void)
+      | undefined;
+    let permissionCheck: (() => boolean) | undefined;
+    hardenDesktopWindow({
+      webContents: {
+        on: vi.fn((name: string, listener: typeof navigate) => {
+          if (name === "will-navigate") navigate = listener;
+        }),
+        setWindowOpenHandler: vi.fn((handler: typeof openHandler) => {
+          openHandler = handler;
+        }),
+        session: {
+          setPermissionRequestHandler: vi.fn((handler: typeof permissionRequest) => {
+            permissionRequest = handler;
+          }),
+          setPermissionCheckHandler: vi.fn((handler: typeof permissionCheck) => {
+            permissionCheck = handler;
+          }),
+        },
+      },
+    } as never);
+    const preventAppNavigation = vi.fn();
+    const preventExternalNavigation = vi.fn();
+    const permissionResult = vi.fn();
+
+    navigate?.({ preventDefault: preventAppNavigation }, DESKTOP_RENDERER_URL);
+    navigate?.({ preventDefault: preventExternalNavigation }, "https://example.test/guide");
+    permissionRequest?.({}, "notifications", permissionResult);
+
+    expect(preventAppNavigation).toHaveBeenCalledOnce();
+    expect(preventExternalNavigation).toHaveBeenCalledOnce();
+    expect(openHandler?.({ url: "https://example.test/guide" })).toEqual({ action: "deny" });
+    expect(openHandler?.({ url: "javascript:alert(1)" })).toEqual({ action: "deny" });
+    expect(permissionResult).toHaveBeenCalledWith(false);
+    expect(permissionCheck?.()).toBe(false);
   });
 
   it("does not register or retain renderer console messages when capture is disabled", () => {

@@ -11,6 +11,7 @@
 .chat-message {
   display: grid;
   gap: 7px;
+  min-width: 0;
   max-width: 78%;
 }
 
@@ -46,9 +47,115 @@
 }
 
 .chat-message__text {
+  min-width: 0;
   line-height: 1.6;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.chat-message__text > :first-child {
+  margin-top: 0;
+}
+
+.chat-message__text > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-message__text p,
+.chat-message__text ul,
+.chat-message__text ol,
+.chat-message__text pre,
+.chat-message__text .chat-markdown__table-scroll {
+  margin: 0.65em 0;
+}
+
+.chat-message__text h1,
+.chat-message__text h2,
+.chat-message__text h3,
+.chat-message__text h4,
+.chat-message__text h5,
+.chat-message__text h6 {
+  margin: 0.85em 0 0.35em;
+  color: inherit;
+  line-height: 1.25;
+}
+
+.chat-message__text h1 {
+  font-size: 1.35em;
+}
+
+.chat-message__text h2 {
+  font-size: 1.25em;
+}
+
+.chat-message__text h3,
+.chat-message__text h4,
+.chat-message__text h5,
+.chat-message__text h6 {
+  font-size: 1.1em;
+}
+
+.chat-message__text ul,
+.chat-message__text ol {
+  padding-inline-start: 1.5em;
+}
+
+.chat-message__text li + li {
+  margin-top: 0.2em;
+}
+
+.chat-message__text code {
+  padding: 0.12em 0.35em;
+  border-radius: 4px;
+  color: inherit;
+  background: color-mix(in srgb, currentColor 9%, transparent);
+  font-family: SFMono-Regular, ui-monospace, monospace;
+  font-size: 0.9em;
+}
+
+.chat-message__text pre {
+  max-width: 100%;
+  padding: 12px;
+  overflow-x: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+}
+
+.chat-message__text pre code {
+  padding: 0;
+  background: transparent;
+  overflow-wrap: normal;
+  white-space: pre;
+  word-break: normal;
+}
+
+.chat-message__text a {
+  color: inherit;
+  font-weight: 600;
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.16em;
+}
+
+.chat-markdown__table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.chat-message__text table {
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92em;
+}
+
+.chat-message__text th,
+.chat-message__text td {
+  padding: 0.45em 0.6em;
+  border: 1px solid var(--line-strong);
+  color: inherit;
+  text-align: start;
+  vertical-align: top;
+  white-space: nowrap;
 }
 
 .chat-notice {

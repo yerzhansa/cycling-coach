@@ -1,7 +1,16 @@
 import type { ChatView } from "./controller.js";
 import type { ChatTranscriptMessage } from "../turn-state.js";
+import { renderCoachMarkdown } from "./markdown.js";
 
-type RenderedMessage = Pick<ChatTranscriptMessage, "role" | "text" | "delivery">;
+interface RenderedMessage {
+  readonly article: HTMLElement;
+  readonly roleNode: HTMLElement;
+  readonly textNode: HTMLElement;
+  streamTextNode: Text | null;
+  role: ChatTranscriptMessage["role"];
+  text: string;
+  delivery: ChatTranscriptMessage["delivery"];
+}
 
 export interface MountedChatView {
   readonly view: ChatView;
@@ -57,6 +66,8 @@ export function mountChatView(input: {
   transcript.className = "chat-transcript";
   transcript.setAttribute("role", "log");
   transcript.setAttribute("aria-live", "polite");
+  transcript.setAttribute("aria-relevant", "additions text");
+  transcript.setAttribute("aria-atomic", "false");
   transcript.setAttribute("aria-label", "Coach conversation");
   const messages = document.createElement("div");
   messages.className = "chat-messages";
@@ -110,7 +121,7 @@ export function mountChatView(input: {
   let disposed = false;
   let renderedResetCount = 0;
   let renderedAnnouncement: string | null = null;
-  let renderedMessages: readonly RenderedMessage[] = [];
+  const renderedMessages = new Map<string, RenderedMessage>();
   let renderedNotice: string | null = null;
 
   const onSubmit = (event: SubmitEvent): void => {
@@ -152,6 +163,14 @@ export function mountChatView(input: {
     view: {
       render(state, controls) {
         if (disposed) return;
+        const messageIds = new Set(state.messages.map((message) => message.id));
+        if (messageIds.size !== state.messages.length) {
+          throw new TypeError("duplicate chat message id");
+        }
+        const nextMessages = state.messages.filter(
+          (message) => message.role === "athlete" || message.text.length > 0,
+        );
+        const nextIds = new Set(nextMessages.map((message) => message.id));
         const workBlocked =
           controls?.workBlocked ??
           (state.session.resetPhase === "confirming" || state.session.resetPhase === "resetting");
@@ -201,36 +220,105 @@ export function mountChatView(input: {
             input.conversation.scrollTop -
             input.conversation.clientHeight <=
           80;
-        const nextMessages = state.messages
-          .filter((message) => message.role === "athlete" || message.text.length > 0)
-          .map(({ role, text, delivery }) => ({ role, text, delivery }));
-        const messagesChanged =
-          nextMessages.length !== renderedMessages.length ||
-          nextMessages.some((message, index) => {
-            const rendered = renderedMessages[index];
-            return (
-              rendered === undefined ||
-              message.role !== rendered.role ||
-              message.text !== rendered.text ||
-              message.delivery !== rendered.delivery
-            );
+        if (nextMessages.length === 0 && renderedMessages.size > 0) {
+          messages.textContent = "";
+          renderedMessages.clear();
+        } else {
+          for (const [id, rendered] of renderedMessages) {
+            if (!nextIds.has(id)) {
+              rendered.article.remove();
+              renderedMessages.delete(id);
+            }
+          }
+          nextMessages.forEach((message, index) => {
+            let rendered = renderedMessages.get(message.id);
+            if (rendered === undefined) {
+              const article = document.createElement("article");
+              article.dataset.messageId = message.id;
+              const roleNode = document.createElement("p");
+              roleNode.className = "chat-message__role";
+              const textNode = document.createElement("div");
+              textNode.className = "chat-message__text";
+              article.append(roleNode, textNode);
+              rendered = {
+                article,
+                roleNode,
+                textNode,
+                streamTextNode: null,
+                role: message.role,
+                text: message.text,
+                delivery: message.delivery,
+              };
+              renderedMessages.set(message.id, rendered);
+              article.className = `chat-message chat-message--${message.role}`;
+              article.dataset.delivery = message.delivery;
+              roleNode.textContent = message.role === "athlete" ? "You" : "Coach";
+              if (message.role === "athlete") article.setAttribute("aria-live", "off");
+              article.setAttribute("aria-atomic", message.role === "coach" ? "true" : "false");
+              if (message.role === "coach" && message.delivery === "streaming") {
+                article.setAttribute("aria-busy", "true");
+              }
+              if (message.role === "coach" && message.delivery === "streaming") {
+                rendered.streamTextNode = document.createTextNode(message.text);
+                textNode.append(rendered.streamTextNode);
+              } else if (message.role === "coach") {
+                renderCoachMarkdown(textNode, message.text);
+              } else {
+                textNode.textContent = message.text;
+              }
+            } else {
+              const roleChanged = message.role !== rendered.role;
+              const wasBusy = rendered.role === "coach" && rendered.delivery === "streaming";
+              const isBusy = message.role === "coach" && message.delivery === "streaming";
+              if (!wasBusy && isBusy) rendered.article.setAttribute("aria-busy", "true");
+              if (roleChanged) {
+                rendered.article.className = `chat-message chat-message--${message.role}`;
+                rendered.roleNode.textContent = message.role === "athlete" ? "You" : "Coach";
+                if (message.role === "athlete") rendered.article.setAttribute("aria-live", "off");
+                else rendered.article.removeAttribute("aria-live");
+                rendered.article.setAttribute(
+                  "aria-atomic",
+                  message.role === "coach" ? "true" : "false",
+                );
+              }
+              if (message.delivery !== rendered.delivery) {
+                rendered.article.dataset.delivery = message.delivery;
+              }
+              if (roleChanged || message.text !== rendered.text || wasBusy !== isBusy) {
+                if (isBusy) {
+                  const appendDelta = controls?.appendDelta;
+                  if (
+                    !roleChanged &&
+                    rendered.streamTextNode !== null &&
+                    appendDelta?.messageId === message.id &&
+                    appendDelta.previousTextLength === rendered.text.length &&
+                    appendDelta.nextTextLength === message.text.length &&
+                    appendDelta.nextTextLength ===
+                      appendDelta.previousTextLength + appendDelta.delta.length
+                  ) {
+                    rendered.streamTextNode.appendData(appendDelta.delta);
+                  } else {
+                    rendered.streamTextNode = document.createTextNode(message.text);
+                    rendered.textNode.replaceChildren(rendered.streamTextNode);
+                  }
+                } else if (message.role === "coach") {
+                  renderCoachMarkdown(rendered.textNode, message.text);
+                  rendered.streamTextNode = null;
+                } else {
+                  rendered.textNode.textContent = message.text;
+                  rendered.streamTextNode = null;
+                }
+              }
+              if (wasBusy && !isBusy) rendered.article.removeAttribute("aria-busy");
+              rendered.role = message.role;
+              rendered.text = message.text;
+              rendered.delivery = message.delivery;
+            }
+            const currentAtIndex = messages.children.item(index);
+            if (currentAtIndex !== rendered.article) {
+              messages.insertBefore(rendered.article, currentAtIndex);
+            }
           });
-        if (messagesChanged) {
-          const rows = nextMessages.map((message) => {
-            const article = document.createElement("article");
-            article.className = `chat-message chat-message--${message.role}`;
-            article.dataset.delivery = message.delivery;
-            const role = document.createElement("p");
-            role.className = "chat-message__role";
-            role.textContent = message.role === "athlete" ? "You" : "Coach";
-            const text = document.createElement("p");
-            text.className = "chat-message__text";
-            text.textContent = message.text;
-            article.append(role, text);
-            return article;
-          });
-          messages.replaceChildren(...rows);
-          renderedMessages = nextMessages;
         }
         if (followsLatest) input.conversation.scrollTop = input.conversation.scrollHeight;
         const contractCopy = state.activeTurn?.error?.athleteMessage ?? null;

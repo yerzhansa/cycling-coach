@@ -1,20 +1,39 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   const exposed: Record<string, unknown> = {};
+  class FakeAnchor {
+    constructor(
+      readonly href: string,
+      readonly target = "_blank",
+    ) {}
+  }
+  let clickListener: ((event: Record<string, unknown>) => void) | undefined;
+  const fakeWindow = {
+    addEventListener: vi.fn((name: string, listener: typeof clickListener) => {
+      if (name === "click") clickListener = listener;
+    }),
+    dispatchEvent: vi.fn(),
+  };
   return {
     exposed,
+    FakeAnchor,
+    fakeWindow,
+    get clickListener() {
+      return clickListener;
+    },
     exposeInMainWorld: vi.fn((name: string, value: unknown) => {
       exposed[name] = value;
     }),
     invoke: vi.fn(),
     on: vi.fn(),
+    send: vi.fn(),
   };
 });
 
 vi.mock("electron", () => ({
   contextBridge: { exposeInMainWorld: mocks.exposeInMainWorld },
-  ipcRenderer: { invoke: mocks.invoke, on: mocks.on },
+  ipcRenderer: { invoke: mocks.invoke, on: mocks.on, send: mocks.send },
   webUtils: { getPathForFile: vi.fn() },
 }));
 
@@ -29,15 +48,23 @@ interface AuthBridge {
 let bridge: AuthBridge;
 
 beforeAll(async () => {
+  Object.assign(globalThis, {
+    window: mocks.fakeWindow,
+    HTMLAnchorElement: mocks.FakeAnchor,
+  });
   await import("../src/preload/index.js");
   bridge = mocks.exposed.enduragentAuth as AuthBridge;
 });
 
 beforeEach(() => {
   mocks.invoke.mockReset();
+  mocks.send.mockReset();
+  mocks.fakeWindow.dispatchEvent.mockReset();
+  Object.assign(globalThis, {
+    window: mocks.fakeWindow,
+    HTMLAnchorElement: mocks.FakeAnchor,
+  });
 });
-
-afterEach(() => vi.unstubAllGlobals());
 
 describe("desktop preload ChatGPT auth", () => {
   it("reuses the connection channel with a closed recovery request", async () => {
@@ -51,18 +78,92 @@ describe("desktop preload ChatGPT auth", () => {
   });
 
   it("forwards only closed lifecycle states to the renderer", () => {
-    const dispatchEvent = vi.fn();
-    vi.stubGlobal("window", { dispatchEvent });
     const listener = mocks.on.mock.calls.find(
       ([channel]) => channel === "desktop:daemon-lifecycle",
     )?.[1] as (_event: unknown, value: unknown) => void;
     listener(undefined, { status: "recovering", generation: 2 });
     listener(undefined, { status: "recovering", generation: 0 });
-    expect(dispatchEvent).toHaveBeenCalledTimes(1);
-    expect(dispatchEvent.mock.calls[0]![0]).toMatchObject({
+    expect(mocks.fakeWindow.dispatchEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.fakeWindow.dispatchEvent.mock.calls[0]![0]).toMatchObject({
       type: "enduragent-lifecycle",
       detail: { status: "recovering", generation: 2 },
     });
+  });
+
+  it("keeps the external-link sender private while preserving the exact public bridge", () => {
+    expect(Object.keys(mocks.exposed)).toEqual(["enduragentAuth"]);
+    expect(Object.keys(bridge).sort()).toEqual([
+      "chatgptLogin",
+      "chatgptStatus",
+      "chooseImportFiles",
+      "credentialStatuses",
+      "getDaemonConnection",
+      "onDroppedImportFiles",
+      "retryFailedCredentials",
+      "writeCredential",
+    ]);
+    expect(bridge).not.toHaveProperty("openExternal");
+  });
+
+  it("sends a nested trusted target-blank anchor activation over the private channel", () => {
+    const anchor = new mocks.FakeAnchor("https://example.test/guide");
+    const preventDefault = vi.fn();
+
+    mocks.clickListener?.({
+      isTrusted: true,
+      defaultPrevented: false,
+      button: 0,
+      composedPath: () => [{}, anchor],
+      preventDefault,
+    });
+
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(mocks.send).toHaveBeenCalledWith("desktop:open-external", "https://example.test/guide");
+    expect(mocks.fakeWindow.addEventListener).toHaveBeenCalledWith(
+      "click",
+      expect.any(Function),
+      true,
+    );
+  });
+
+  it("ignores synthetic, handled, non-primary, non-anchor, and non-blank clicks", () => {
+    const preventDefault = vi.fn();
+    const cases = [
+      {
+        isTrusted: false,
+        defaultPrevented: false,
+        button: 0,
+        composedPath: () => [new mocks.FakeAnchor("https://example.test/")],
+      },
+      {
+        isTrusted: true,
+        defaultPrevented: true,
+        button: 0,
+        composedPath: () => [new mocks.FakeAnchor("https://example.test/")],
+      },
+      {
+        isTrusted: true,
+        defaultPrevented: false,
+        button: 1,
+        composedPath: () => [new mocks.FakeAnchor("https://example.test/")],
+      },
+      {
+        isTrusted: true,
+        defaultPrevented: false,
+        button: 0,
+        composedPath: () => [{}],
+      },
+      {
+        isTrusted: true,
+        defaultPrevented: false,
+        button: 0,
+        composedPath: () => [new mocks.FakeAnchor("https://example.test/", "_self")],
+      },
+    ];
+    for (const event of cases) mocks.clickListener?.({ ...event, preventDefault });
+
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
   });
 
   it("exposes closed credential runtime states and the retry command", async () => {

@@ -14,6 +14,7 @@ import {
   reduceChatState,
   type ChatState,
 } from "../turn-state.js";
+import { COACH_RESPONSE_CODE_UNIT_LIMIT, COACH_TURN_EVENT_LIMIT } from "./limits.js";
 
 export const CHAT_CONNECTION_INTERRUPTED_COPY =
   "Connection interrupted. Your partial response is preserved.";
@@ -26,9 +27,17 @@ export const NEW_CONVERSATION_MEMORY_WARNING_COPY =
 export const NEW_CONVERSATION_UNCERTAIN_COPY =
   "We couldn’t confirm whether the new conversation started. Your visible conversation is preserved.";
 
+export interface ChatAppendDelta {
+  readonly messageId: string;
+  readonly previousTextLength: number;
+  readonly nextTextLength: number;
+  readonly delta: string;
+}
+
 export interface ChatViewControls {
   readonly newConversationDisabled: boolean;
   readonly workBlocked: boolean;
+  readonly appendDelta?: ChatAppendDelta;
 }
 
 export interface ChatView {
@@ -80,18 +89,22 @@ export function createChatController(input: {
     outstandingChatTasks.size === 0 &&
     queuedRetry === undefined &&
     resetTask === undefined;
-  const render = (): void => {
+  const render = (appendDelta?: ChatAppendDelta): void => {
     if (disposed) return;
     try {
       input.view.render(state, {
         newConversationDisabled: !canOpenNewConversation(),
         workBlocked: resetBlocksWork(),
+        ...(appendDelta === undefined ? {} : { appendDelta }),
       });
     } catch {}
   };
-  const reduce = (action: Parameters<typeof reduceChatState>[1]): void => {
+  const reduce = (
+    action: Parameters<typeof reduceChatState>[1],
+    appendDelta?: ChatAppendDelta,
+  ): void => {
     state = reduceChatState(state, action);
-    render();
+    render(appendDelta);
   };
 
   const run = (userMessage: string, includeUser: boolean, reconnect: boolean): Promise<void> => {
@@ -118,9 +131,12 @@ export function createChatController(input: {
       let terminal: CoachClientTerminalEnvelope | undefined;
       let terminalHadFinal = false;
       let protocolFault = false;
+      const callAbortController = new AbortController();
       const current = (): boolean => !disposed && state.activeTurn?.requestKey === requestKey;
       const failProtocol = (): void => {
+        if (protocolFault) return;
         protocolFault = true;
+        callAbortController.abort();
       };
 
       let client: CoachClient | undefined;
@@ -143,6 +159,7 @@ export function createChatController(input: {
           "chat",
           { chatId: DESKTOP_CHAT_ID, message: userMessage },
           {
+            signal: callAbortController.signal,
             onNotificationEnvelope(envelope) {
               if (!current() || protocolFault) return;
               if (
@@ -179,16 +196,42 @@ export function createChatController(input: {
                 failProtocol();
                 return;
               }
+              if (eventCount >= COACH_TURN_EVENT_LIMIT) {
+                failProtocol();
+                return;
+              }
+              eventCount += 1;
               if (event.type === "turn-start") {
-                if (eventCount !== 0 || startSeen || event.chatId !== DESKTOP_CHAT_ID) {
+                if (eventCount !== 1 || startSeen || event.chatId !== DESKTOP_CHAT_ID) {
                   failProtocol();
                   return;
                 }
                 startSeen = true;
               }
-              eventCount += 1;
+              let appendDelta: ChatAppendDelta | undefined;
+              if (event.type === "text_delta") {
+                const activeTurn = state.activeTurn;
+                if (activeTurn === null || activeTurn.requestKey !== requestKey) return;
+                const previousTextLength = activeTurn.draft.length;
+                if (event.delta.length > COACH_RESPONSE_CODE_UNIT_LIMIT - previousTextLength) {
+                  failProtocol();
+                  return;
+                }
+                appendDelta = {
+                  messageId: activeTurn.assistantMessageId,
+                  previousTextLength,
+                  nextTextLength: previousTextLength + event.delta.length,
+                  delta: event.delta,
+                };
+              } else if (
+                event.type === "final-text" &&
+                event.text.length > COACH_RESPONSE_CODE_UNIT_LIMIT
+              ) {
+                failProtocol();
+                return;
+              }
               if (event.type === "final-text") finalText = event.text;
-              reduce({ type: "event", requestKey, event });
+              reduce({ type: "event", requestKey, event }, appendDelta);
             },
             onTerminalEnvelope(envelope) {
               if (!current()) return;

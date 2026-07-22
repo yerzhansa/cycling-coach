@@ -17,6 +17,7 @@ import {
   type ChatViewControls,
   createChatController,
 } from "../src/chat/controller.js";
+import { COACH_RESPONSE_CODE_UNIT_LIMIT, COACH_TURN_EVENT_LIMIT } from "../src/chat/limits.js";
 import type { DesktopCoachClientProvider } from "../src/coach-client.js";
 import { EMPTY_CHAT_STATE, type ChatState } from "../src/turn-state.js";
 
@@ -52,6 +53,19 @@ function errorEvent(message = "Safe athlete message"): Extract<TurnEvent, { type
 function deliver(options: CoachClientCallOptions<"chat"> | undefined, event: TurnEvent): void {
   options?.onNotificationEnvelope?.(envelope(event));
   options?.onEvent?.(event);
+}
+
+function rejectWhenAborted(options: CoachClientCallOptions<"chat"> | undefined): Promise<never> {
+  return new Promise((_, reject) => {
+    const signal = options?.signal;
+    if (signal === undefined) {
+      reject(new TypeError("missing call abort signal"));
+      return;
+    }
+    const rejectAbort = (): void => reject(new CoachClientCallAbortedError("chat"));
+    if (signal.aborted) rejectAbort();
+    else signal.addEventListener("abort", rejectAbort, { once: true });
+  });
 }
 
 function client(
@@ -198,6 +212,147 @@ describe("chat controller", () => {
     ]);
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(refreshSpend).toHaveBeenCalledTimes(1);
+  });
+
+  it("admits cumulative text deltas at the exact response boundary", async () => {
+    const first = "🚴".repeat(30_000);
+    const second = "b".repeat(COACH_RESPONSE_CODE_UNIT_LIMIT - first.length);
+    let signal: AbortSignal | undefined;
+    const fake = client(async (_request, options) => {
+      signal = options?.signal;
+      deliver(options, { type: "text_delta", turnId: "turn-1", delta: first });
+      deliver(options, { type: "text_delta", turnId: "turn-1", delta: second });
+      deliver(options, { type: "final-text", turnId: "turn-1", text: "Done" });
+      options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: { text: "Done" } });
+      return { text: "Done" };
+    });
+    const { controller, states, controls } = subject(fake);
+
+    await controller.submit("Continue");
+
+    expect(
+      states.some((state) => state.activeTurn?.draft.length === COACH_RESPONSE_CODE_UNIT_LIMIT),
+    ).toBe(true);
+    expect(controls.filter((control) => control.appendDelta).at(-1)?.appendDelta).toEqual({
+      messageId: "message-3",
+      previousTextLength: first.length,
+      nextTextLength: COACH_RESPONSE_CODE_UNIT_LIMIT,
+      delta: second,
+    });
+    expect(states.at(-1)?.messages.at(-1)?.text).toBe("Done");
+    expect(signal?.aborted).toBe(false);
+  });
+
+  it("rejects one cumulative delta code unit over the response boundary", async () => {
+    const admitted = "a".repeat(COACH_RESPONSE_CODE_UNIT_LIMIT);
+    let signal: AbortSignal | undefined;
+    const fake = client(async (_request, options) => {
+      signal = options?.signal;
+      const aborted = rejectWhenAborted(options);
+      deliver(options, { type: "text_delta", turnId: "turn-1", delta: admitted });
+      deliver(options, { type: "text_delta", turnId: "turn-1", delta: "b" });
+      return aborted;
+    });
+    const { controller, states } = subject(fake);
+
+    await controller.submit("Continue");
+
+    expect(states.at(-1)).toMatchObject({
+      status: "interrupted",
+      progress: CHAT_PROTOCOL_FAILURE_COPY,
+    });
+    expect(states.at(-1)?.messages.at(-1)?.text).toBe(admitted);
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("admits final text at the exact response boundary", async () => {
+    const finalText = "🚴".repeat(COACH_RESPONSE_CODE_UNIT_LIMIT / 2);
+    let signal: AbortSignal | undefined;
+    const fake = client(async (_request, options) => {
+      signal = options?.signal;
+      deliver(options, { type: "final-text", turnId: "turn-1", text: finalText });
+      options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: { text: finalText } });
+      return { text: finalText };
+    });
+    const { controller, states } = subject(fake);
+
+    await controller.submit("Continue");
+
+    expect(states.at(-1)?.messages.at(-1)).toMatchObject({
+      text: finalText,
+      delivery: "complete",
+    });
+    expect(signal?.aborted).toBe(false);
+  });
+
+  it("rejects final text one code unit over the response boundary", async () => {
+    const oversized = `${"🚴".repeat(COACH_RESPONSE_CODE_UNIT_LIMIT / 2)}x`;
+    let signal: AbortSignal | undefined;
+    const fake = client(async (_request, options) => {
+      signal = options?.signal;
+      const aborted = rejectWhenAborted(options);
+      deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Preserved" });
+      deliver(options, { type: "final-text", turnId: "turn-1", text: oversized });
+      return aborted;
+    });
+    const { controller, states } = subject(fake);
+
+    await controller.submit("Continue");
+
+    expect(states.at(-1)).toMatchObject({
+      status: "interrupted",
+      progress: CHAT_PROTOCOL_FAILURE_COPY,
+    });
+    expect(states.at(-1)?.messages.at(-1)?.text).toBe("Preserved");
+    expect(states.some((state) => state.messages.at(-1)?.text === oversized)).toBe(false);
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("admits the final event at the exact turn-event boundary", async () => {
+    let signal: AbortSignal | undefined;
+    const fake = client(async (_request, options) => {
+      signal = options?.signal;
+      for (let index = 0; index < COACH_TURN_EVENT_LIMIT - 1; index += 1) {
+        deliver(options, { type: "step-text", turnId: "turn-1", text: "Checking" });
+      }
+      deliver(options, { type: "final-text", turnId: "turn-1", text: "Done" });
+      options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: { text: "Done" } });
+      return { text: "Done" };
+    });
+    const { controller, states } = subject(fake);
+
+    await controller.submit("Continue");
+
+    expect(states.at(-1)?.messages.at(-1)).toMatchObject({
+      text: "Done",
+      delivery: "complete",
+    });
+    expect(signal?.aborted).toBe(false);
+  });
+
+  it("rejects one turn event over the boundary and preserves admitted text", async () => {
+    let signal: AbortSignal | undefined;
+    const fake = client(async (_request, options) => {
+      signal = options?.signal;
+      const aborted = rejectWhenAborted(options);
+      deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Preserved" });
+      for (let index = 1; index < COACH_TURN_EVENT_LIMIT; index += 1) {
+        deliver(options, { type: "step-text", turnId: "turn-1", text: "Checking" });
+      }
+      deliver(options, { type: "final-text", turnId: "turn-1", text: "Rejected" });
+      return aborted;
+    });
+    const { controller, states } = subject(fake);
+
+    await controller.submit("Continue");
+
+    expect(states.at(-1)).toMatchObject({
+      status: "interrupted",
+      progress: CHAT_PROTOCOL_FAILURE_COPY,
+    });
+    expect(states.at(-1)?.messages.at(-1)?.text).toBe("Preserved");
+    expect(states.some((state) => state.messages.at(-1)?.text === "Rejected")).toBe(false);
+    expect(signal?.aborted).toBe(true);
   });
 
   it("preserves partial text and the contract athlete message without automatic retry", async () => {
