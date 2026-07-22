@@ -17,6 +17,8 @@ import {
   EmptyRpcParamsSchema,
   ConfigureRuntimeRpcParamsSchema,
   ConfigureRuntimeRpcResultSchema,
+  GetRuntimeConfigRpcParamsSchema,
+  GetRuntimeConfigRpcResultSchema,
   GetUnitsPreferenceRpcParamsSchema,
   GetUnitsPreferenceRpcResultSchema,
   ImportFilesRpcParamsSchema,
@@ -183,7 +185,7 @@ const spendSummary = SpendSummarySchema.parse({
 });
 
 describe("coach request and event projection", () => {
-  it("admits exactly the thirteen strict method requests", () => {
+  it("admits exactly the fourteen strict method requests", () => {
     const requests = [
       { jsonrpc: "2.0", id: 1, method: "chat", params: { chatId: "chat-1", message: "hello" } },
       { jsonrpc: "2.0", id: 2, method: "resetSession", params: { chatId: "chat-1" } },
@@ -208,23 +210,24 @@ describe("coach request and event projection", () => {
         jsonrpc: "2.0",
         id: 8,
         method: "configureRuntime",
-        params: { llm: { provider: "anthropic", model: "model", api_key: "placeholder" } },
+        params: { llm: { provider: "anthropic", api_key: "placeholder" } },
       },
-      { jsonrpc: "2.0", id: 9, method: "getUnitsPreference", params: {} },
+      { jsonrpc: "2.0", id: 9, method: "getRuntimeConfig", params: {} },
+      { jsonrpc: "2.0", id: 10, method: "getUnitsPreference", params: {} },
       {
         jsonrpc: "2.0",
-        id: 10,
+        id: 11,
         method: "setUnitsPreference",
         params: { value: "imperial" },
       },
-      { jsonrpc: "2.0", id: 11, method: "getSpendSummary", params: {} },
+      { jsonrpc: "2.0", id: 12, method: "getSpendSummary", params: {} },
       {
         jsonrpc: "2.0",
-        id: 12,
+        id: 13,
         method: "setDailySpendCap",
         params: { dailyCapUsd: 0.75 },
       },
-      { jsonrpc: "2.0", id: 13, method: "selfTest", params: {} },
+      { jsonrpc: "2.0", id: 14, method: "selfTest", params: {} },
     ];
     for (const request of requests) {
       expect(CoachRpcRequestEnvelopeSchema.parse(request)).toEqual(request);
@@ -371,31 +374,105 @@ describe("coach request and event projection", () => {
       saved: true,
     });
 
-    const llm = { provider: "openrouter", model: "model-a", api_key: "placeholder" } as const;
-    const codex = { provider: "openai-codex", model: "model-codex" } as const;
-    const intervals = { api_key: "placeholder", athlete_id: "athlete-a" } as const;
-    for (const params of [{ llm }, { llm: codex }, { intervals }, { llm, intervals }]) {
+    const llm = {
+      provider: "openrouter",
+      model: "model-a",
+      api_key: "placeholder",
+      base_url: "https://invalid.example.test/v1",
+      flush_model: "model-flush",
+      compact_model: null,
+    } as const;
+    const codex = { provider: "openai-codex" } as const;
+    const intervals = { api_key: "placeholder" } as const;
+    for (const params of [
+      { llm },
+      { llm: codex },
+      { llm: { model: "model-only" } },
+      { intervals },
+      { intervals: { athlete_id: "athlete-a" } },
+      { llm, intervals },
+    ]) {
       expect(ConfigureRuntimeRpcParamsSchema.parse(params)).toEqual(params);
     }
     for (const invalid of [
       {},
+      { llm: {} },
+      { intervals: {} },
       { llm: { ...llm, extra: true } },
-      { llm: { provider: "openai-codex", model: "model-codex", api_key: "placeholder" } },
-      { intervals: { api_key: "", athlete_id: "athlete-a" } },
+      { llm: { provider: "openai-codex", api_key: "placeholder" } },
+      { intervals: { api_key: "" } },
+      { intervals: { athlete_id: "" } },
       { llm, extra: true },
     ]) {
       expect(ConfigureRuntimeRpcParamsSchema.safeParse(invalid).success).toBe(false);
     }
-    for (const provider of LlmProviderSchema.options.filter(
-      (provider) => provider !== "openai-codex",
-    )) {
-      expect(
-        ConfigureRuntimeRpcParamsSchema.safeParse({ llm: { provider, model: "model-a" } }).success,
-      ).toBe(false);
-    }
     const result = { schemaVersion: 1, applied: { llm: true, intervals: false } } as const;
     expect(ConfigureRuntimeRpcResultSchema.parse(result)).toEqual(result);
+    expect(
+      ConfigureRuntimeRpcResultSchema.safeParse({ ...result, api_key: "placeholder" }).success,
+    ).toBe(false);
     expect(JSON.stringify(result)).not.toContain("placeholder");
+    const snapshot = {
+      schemaVersion: 1,
+      llm: {
+        provider: "openrouter",
+        model: "model-a",
+        credential_configured: true,
+      },
+      intervals: { athlete_id: "athlete-a" },
+      session: {
+        historyTokenBudgetRatio: 0.3,
+        idleMinutes: 0,
+        dailyResetHour: 4,
+        resetArchiveRetentionDays: 0,
+        timezone: "UTC",
+      },
+    } as const;
+    expect(GetRuntimeConfigRpcResultSchema.parse(snapshot)).toEqual(snapshot);
+    expect(
+      GetRuntimeConfigRpcResultSchema.parse({
+        ...snapshot,
+        llm: {
+          provider: "openrouter",
+          model: "model-a",
+          credential_configured: true,
+        },
+        intervals: { athlete_id: "" },
+      }),
+    ).toEqual({
+      ...snapshot,
+      llm: {
+        provider: "openrouter",
+        model: "model-a",
+        credential_configured: true,
+      },
+      intervals: { athlete_id: "" },
+    });
+    for (const malformed of [
+      { ...snapshot, api_key: "placeholder" },
+      { ...snapshot, llm: { ...snapshot.llm, api_key: "placeholder" } },
+      {
+        ...snapshot,
+        llm: {
+          provider: snapshot.llm.provider,
+          model: snapshot.llm.model,
+        },
+      },
+      { ...snapshot, llm: { ...snapshot.llm, credential_configured: "true" } },
+      { ...snapshot, intervals: { ...snapshot.intervals, api_key: "placeholder" } },
+      { ...snapshot, intervals: { athlete_id: "a".repeat(513) } },
+      { ...snapshot, session: { ...snapshot.session, dataDir: "/private" } },
+      { ...snapshot, llm: { provider: "openrouter" } },
+    ]) {
+      expect(GetRuntimeConfigRpcResultSchema.safeParse(malformed).success).toBe(false);
+    }
+    expect(
+      GetRuntimeConfigRpcResultSchema.safeParse({
+        ...snapshot,
+        llm: { ...snapshot.llm, base_url: "https://api.example.invalid/v1" },
+      }).success,
+    ).toBe(false);
+    expect(JSON.stringify(snapshot)).not.toContain("api_key");
     expect(LlmProviderSchema.options).toEqual([
       "anthropic",
       "openai",
@@ -449,6 +526,18 @@ describe("coach request and event projection", () => {
       configureRuntime: async ({ llm, intervals }) => ({
         schemaVersion: 1,
         applied: { llm: llm !== undefined, intervals: intervals !== undefined },
+      }),
+      getRuntimeConfig: async () => ({
+        schemaVersion: 1,
+        llm: { provider: "anthropic", model: "model", credential_configured: false },
+        intervals: { athlete_id: "athlete" },
+        session: {
+          historyTokenBudgetRatio: 0.3,
+          idleMinutes: 0,
+          dailyResetHour: 4,
+          resetArchiveRetentionDays: 0,
+          timezone: "UTC",
+        },
       }),
       getUnitsPreference: async () => ({ value: "metric", source: "default" }),
       setUnitsPreference: async ({ value }) => ({ value, source: "cycling" }),
@@ -511,6 +600,12 @@ describe("coach request and event projection", () => {
       responseSchema: ConfigureRuntimeRpcResultSchema,
       eventSchema: NoRpcEventSchema,
     });
+    expect(COACH_RPC_METHOD_REGISTRY.getRuntimeConfig).toEqual({
+      wireName: "getRuntimeConfig",
+      requestSchema: GetRuntimeConfigRpcParamsSchema,
+      responseSchema: GetRuntimeConfigRpcResultSchema,
+      eventSchema: NoRpcEventSchema,
+    });
     expect(COACH_RPC_METHOD_REGISTRY.getUnitsPreference).toEqual({
       wireName: "getUnitsPreference",
       requestSchema: GetUnitsPreferenceRpcParamsSchema,
@@ -547,6 +642,7 @@ describe("coach request and event projection", () => {
       "getAthleteState",
       "saveIntake",
       "configureRuntime",
+      "getRuntimeConfig",
       "getUnitsPreference",
       "setUnitsPreference",
       "getSpendSummary",
@@ -766,7 +862,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version five", () => {
-    expect(PROTOCOL_VERSION).toBe(5);
+  it("uses protocol version six", () => {
+    expect(PROTOCOL_VERSION).toBe(6);
   });
 });

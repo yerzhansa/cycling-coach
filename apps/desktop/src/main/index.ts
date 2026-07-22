@@ -2,7 +2,6 @@ import { writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connectCoachClient } from "@enduragent/coach-client";
-import type { ConfigureRuntimeRpcParams } from "@enduragent/coach-contract";
 import { checkIntervalsStoreOwnerAtPath } from "@enduragent/coach/backfill";
 import {
   app,
@@ -18,14 +17,14 @@ import { createChatGptAuth, hasChatGptProfile } from "./chatgpt-auth.js";
 import { installDesktopConnectionIpc } from "./connection-ipc.js";
 import { DESKTOP_LIFECYCLE_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
 import {
+  createConnectionRuntimeAuthority,
   createCredentialRuntimeApplication,
+  intervalsAthleteIdForOwnership,
   readSelectedLlmProvider,
+  type CredentialRuntimeApplication,
+  type RuntimeConfigurationAuthority,
 } from "./credential-runtime.js";
-import {
-  CREDENTIAL_DIRECTORY_NAME,
-  createCredentialVault,
-  type DesktopCredentialSlot,
-} from "./credential-vault.js";
+import { CREDENTIAL_DIRECTORY_NAME, createCredentialVault } from "./credential-vault.js";
 import {
   DesktopDaemonLifecycle,
   type DesktopDaemonConnection,
@@ -147,6 +146,12 @@ async function runDesktop(): Promise<void> {
     let windowCreation: Promise<BrowserWindow> | undefined;
     const currentWindow = (): BrowserWindow | null =>
       window !== null && !window.isDestroyed() ? window : null;
+    type RuntimeBinding = {
+      readonly authority: RuntimeConfigurationAuthority;
+      readonly credentials: CredentialRuntimeApplication;
+    };
+    let activeRuntimeBinding: RuntimeBinding | undefined;
+    const preparedRuntimeBindings = new Map<number, RuntimeBinding>();
     let reapplyCredentials = async (
       _connection: DesktopDaemonConnection,
       _signal: AbortSignal,
@@ -167,70 +172,72 @@ async function runDesktop(): Promise<void> {
       prepareReady: ({ connection, signal }) => reapplyCredentials(connection, signal),
       onTransition: publishLifecycle,
       onReady({ previous, current }) {
+        const prepared = preparedRuntimeBindings.get(current.generation);
+        if (prepared !== undefined) {
+          activeRuntimeBinding = prepared;
+          preparedRuntimeBindings.delete(current.generation);
+        }
         if (new URL(previous.url).port === new URL(current.url).port) return;
         const visibleWindow = currentWindow();
         if (visibleWindow === null) return;
         visibleWindow.webContents.reload();
       },
     });
-    const applyRuntimeConfigToConnection = async (
-      connection: Pick<DesktopDaemonConnection, "url" | "token">,
-      request: ConfigureRuntimeRpcParams,
-    ): Promise<void> => {
-      const { url, token } = connection;
-      const client = await connectCoachClient({ url, token });
-      try {
-        const result = await client.call("configureRuntime", request);
-        if (
-          (request.llm !== undefined && !result.applied.llm) ||
-          (request.intervals !== undefined && !result.applied.intervals)
-        ) {
-          throw new TypeError();
-        }
-      } finally {
-        await client.close();
-      }
-    };
-    const applyRuntimeConfig = (request: ConfigureRuntimeRpcParams): Promise<void> =>
-      applyRuntimeConfigToConnection(daemonLifecycle!.connection(), request);
     const configDir = join(resolveDesktopAthleteHome(environment), "config");
-    const selectedLlmProvider = async (storedCredentialSlots: readonly DesktopCredentialSlot[]) =>
-      readSelectedLlmProvider(configDir, {
-        chatGptProfilePresent: await hasChatGptProfile(configDir),
-        storedCredentialSlots,
-      });
-    const credentialRuntime = createCredentialRuntimeApplication({
-      configureRuntime: applyRuntimeConfig,
-      selectedLlmProvider,
+    const createRuntimeBinding = (
+      connection: Pick<DesktopDaemonConnection, "url" | "token">,
+    ): RuntimeBinding => {
+      const authority = createConnectionRuntimeAuthority(connection, connectCoachClient);
+      return {
+        authority,
+        credentials: createCredentialRuntimeApplication({
+          configureRuntime: authority.configureRuntime,
+          selectedLlmProvider: async (storedCredentialSlots) =>
+            readSelectedLlmProvider(await authority.getRuntimeConfig(), {
+              chatGptProfilePresent: await hasChatGptProfile(configDir),
+              storedCredentialSlots,
+            }),
+        }),
+      };
+    };
+    activeRuntimeBinding = createRuntimeBinding({
+      url: resolution.url,
+      token: resolution.token,
     });
     const credentialRoot = join(app.getPath("userData"), CREDENTIAL_DIRECTORY_NAME);
     const vault = createCredentialVault({
       root: credentialRoot,
       encryption: safeStorage,
       async applyCredential(slot, value) {
-        await credentialRuntime.applyExplicit(runtimeConfigurationForCredential(slot, value));
+        await activeRuntimeBinding!.credentials.applyExplicit(
+          runtimeConfigurationForCredential(slot, value),
+        );
       },
-      reapplyCredential: credentialRuntime.reapplyStoredCredential,
+      reapplyCredential: (slot, value, storedCredentialSlots) =>
+        activeRuntimeBinding!.credentials.reapplyStoredCredential(
+          slot,
+          value,
+          storedCredentialSlots,
+        ),
     });
     reapplyCredentials = async (connection, signal) => {
       if (signal.aborted) return;
-      const successorRuntime = createCredentialRuntimeApplication({
-        configureRuntime: (request) => applyRuntimeConfigToConnection(connection, request),
-        selectedLlmProvider,
-      });
+      const successor = createRuntimeBinding(connection);
       const successorVault = createCredentialVault({
         root: credentialRoot,
         encryption: safeStorage,
         async applyCredential(slot, value) {
-          await successorRuntime.applyExplicit(runtimeConfigurationForCredential(slot, value));
+          await successor.credentials.applyExplicit(runtimeConfigurationForCredential(slot, value));
         },
-        reapplyCredential: successorRuntime.reapplyStoredCredential,
+        reapplyCredential: successor.credentials.reapplyStoredCredential,
       });
       await successorVault.reapplyConfigured();
+      if (!signal.aborted) preparedRuntimeBindings.set(connection.generation, successor);
     };
     const chatGptAuth = createChatGptAuth({
       configDir,
-      applyRuntimeConfig: credentialRuntime.applyExplicit,
+      applyRuntimeConfig: (request) => activeRuntimeBinding!.credentials.applyExplicit(request),
+      getRuntimeConfig: () => activeRuntimeBinding!.authority.getRuntimeConfig(),
       openExternal: (url) => shell.openExternal(url),
       signal: controller.signal,
     });
@@ -271,17 +278,19 @@ async function runDesktop(): Promise<void> {
             window: created,
             vault,
             chatGptAuth,
-            checkIntervalsCredentialOwner: (value) =>
-              checkIntervalsStoreOwnerAtPath(
+            checkIntervalsCredentialOwner: async (value) => {
+              const snapshot = await activeRuntimeBinding!.authority.getRuntimeConfig();
+              return checkIntervalsStoreOwnerAtPath(
                 join(resolveDesktopAthleteHome(environment), "store", "store.db"),
                 {
                   apiKey: value,
-                  athleteId: "0",
+                  athleteId: intervalsAthleteIdForOwnership(snapshot),
                   historyNewestDate: "1970-01-01",
                   clock: { now: () => Date.now(), monotonicNow: () => performance.now() },
                   signal: controller.signal,
                 },
-              ),
+              );
+            },
             isTrusted: (event) =>
               isTrustedConnectionRequest(event, mainWindow.current() ?? undefined),
           });

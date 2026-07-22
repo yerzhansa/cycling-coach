@@ -39,31 +39,16 @@ interface RegisterOnboardingIpcOptions {
 
 const SUPPORTED_EXTENSIONS = new Set([".fit", ".tcx", ".gpx"]);
 
-const DEFAULT_MODEL_BY_SLOT: Readonly<
-  Record<Exclude<DesktopCredentialSlot, "intervals-icu">, string>
-> = {
-  anthropic: "claude-sonnet-4-6",
-  openrouter: "deepseek/deepseek-v4-flash",
-  openai: "gpt-5.5",
-  google: "gemini-3.5-flash",
-  deepseek: "deepseek-v4-flash",
-  qwen: "qwen3.5-plus",
-  minimax: "MiniMax-M2.7",
-  kimi: "kimi-k2.6",
-  zai: "glm-4.7",
-};
-
 export function runtimeConfigurationForCredential(
   slot: DesktopCredentialSlot,
   value: string,
 ): ConfigureRuntimeRpcParams {
   if (slot === "intervals-icu") {
-    return { intervals: { api_key: value, athlete_id: "0" } };
+    return { intervals: { api_key: value } };
   }
   return {
     llm: {
       provider: slot satisfies LlmProvider,
-      model: DEFAULT_MODEL_BY_SLOT[slot],
       api_key: value,
     },
   };

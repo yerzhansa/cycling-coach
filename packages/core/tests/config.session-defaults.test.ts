@@ -33,6 +33,13 @@ describe("config — session defaults", () => {
     expect(loadConfig().contextWindowTokens).toBe(1_000_000);
   });
 
+  it("loads Desktop's explicitly seeded blank athlete ID", async () => {
+    writeFileSync(CONFIG(), toYaml({ intervals: { athlete_id: "" } }), { mode: 0o600 });
+    const { loadConfig } = await import("../src/config.js");
+
+    expect(loadConfig().intervals.athleteId).toBe("");
+  });
+
   it("applies YAML overrides for the four session fields", async () => {
     writeFileSync(
       CONFIG(),

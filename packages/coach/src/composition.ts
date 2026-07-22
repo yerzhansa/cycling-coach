@@ -25,9 +25,11 @@ import {
   loadStoredProfileSnapshot,
   makeChatClient,
   refreshCodexToken,
+  resolveRuntimeConfig,
   resolveSecretRef,
   type Config,
   type ReferenceRuntime,
+  type RuntimeConfigPatch,
   type StoredProfile,
   type StoredProfileSnapshot,
 } from "@enduragent/core";
@@ -48,10 +50,11 @@ import { createAnchorRepository, type AnchorRepository } from "@enduragent/kerne
 import { ErrorStateSchema, LatestJsonSchema } from "@enduragent/kernel/reference/schemas";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import type { CoachStoreWriterContext } from "./runtime.js";
-import type {
-  CoachEngine,
-  CoachOperations,
-  ConfigureRuntimeRpcParams,
+import {
+  type CoachEngine,
+  type CoachOperations,
+  type ConfigureRuntimeRpcParams,
+  type GetRuntimeConfigRpcResult,
 } from "@enduragent/coach-contract";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import { createPersistedAthleteStateSource } from "./athlete-state-reader.js";
@@ -105,6 +108,7 @@ export interface LocalCoachCompositionDependencies {
   readonly onToolsAssembled?: (names: readonly string[]) => void;
   readonly closeHostAdapters?: () => void | Promise<void>;
   readonly operationsDependencies?: CoachOperationsDependencies;
+  readonly persistRuntimeConfig?: typeof persistRuntimeConfig;
 }
 
 export interface LocalReferenceRuntime {
@@ -137,49 +141,82 @@ function copyConfig(config: Config): Config {
   };
 }
 
+function runtimePatch(request: ConfigureRuntimeRpcParams): RuntimeConfigPatch {
+  return {
+    ...(request.llm === undefined
+      ? {}
+      : {
+          llm: {
+            provider: request.llm.provider,
+            model: request.llm.model,
+            apiKey: request.llm.api_key,
+            baseUrl: request.llm.base_url,
+            flushModel: request.llm.flush_model,
+            compactModel: request.llm.compact_model,
+          },
+        }),
+    ...(request.intervals === undefined
+      ? {}
+      : {
+          intervals: {
+            apiKey: request.intervals.api_key,
+            athleteId: request.intervals.athlete_id,
+          },
+        }),
+  };
+}
+
 function mergedRuntimeConfig(config: Config, request: ConfigureRuntimeRpcParams): Config {
-  const next = copyConfig(config);
-  if (request.llm !== undefined) {
-    next.llm = {
-      provider: request.llm.provider,
-      model: request.llm.model,
-      apiKey: request.llm.provider === "openai-codex" ? "" : (request.llm.api_key ?? ""),
-      authProfile: request.llm.provider === "openai-codex" ? "openai-codex" : undefined,
-    };
-  }
-  if (request.intervals !== undefined) {
-    next.intervals = {
-      apiKey: request.intervals.api_key,
-      athleteId: request.intervals.athlete_id,
-    };
-  }
-  return next;
+  return { ...config, ...resolveRuntimeConfig(runtimePatch(request), config) };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function persistRuntimeConfig(configDir: string, request: ConfigureRuntimeRpcParams): void {
+function assignOptionalField(
+  target: Record<string, unknown>,
+  field: string,
+  value: string | undefined,
+): void {
+  if (value === undefined) delete target[field];
+  else target[field] = value;
+}
+
+function persistRuntimeConfig(
+  configDir: string,
+  candidate: Config,
+  request: ConfigureRuntimeRpcParams,
+  previous: Config,
+): void {
   const path = join(configDir, "config.yaml");
   const parsed = existsSync(path) ? (parseYaml(readFileSync(path, "utf8")) as unknown) : {};
   if (!isRecord(parsed)) throw new TypeError("Runtime config must be a map.");
   const next = { ...parsed };
   if (request.llm !== undefined) {
-    const existing = isRecord(parsed.llm) ? parsed.llm : {};
+    const existing =
+      candidate.llm.provider === previous.llm.provider &&
+      isRecord(parsed.llm) &&
+      (parsed.llm.provider === undefined || parsed.llm.provider === candidate.llm.provider)
+        ? parsed.llm
+        : {};
     const llm: Record<string, unknown> = {
-      ...(existing.provider === request.llm.provider ? existing : {}),
-      provider: request.llm.provider,
-      model: request.llm.model,
+      ...existing,
+      provider: candidate.llm.provider,
+      model: candidate.llm.model,
     };
-    if (request.llm.provider === "openai-codex") llm.auth_profile = "openai-codex";
-    else delete llm.auth_profile;
+    if (candidate.llm.provider === "openai-codex") {
+      llm.auth_profile = candidate.llm.authProfile ?? "openai-codex";
+    } else delete llm.auth_profile;
+    assignOptionalField(llm, "base_url", candidate.llm.baseUrl);
+    assignOptionalField(llm, "flush_model", candidate.llm.flushModel);
+    assignOptionalField(llm, "compact_model", candidate.llm.compactModel);
     next.llm = llm;
   }
   if (request.intervals !== undefined) {
     next.intervals = {
       ...(isRecord(parsed.intervals) ? parsed.intervals : {}),
-      athlete_id: request.intervals.athlete_id,
+      athlete_id: candidate.intervals.athleteId,
     };
   }
   const temporaryPath = `${path}.tmp.${randomBytes(4).toString("hex")}`;
@@ -193,6 +230,34 @@ function persistRuntimeConfig(configDir: string, request: ConfigureRuntimeRpcPar
     } catch {}
     throw error;
   }
+}
+
+function runtimeCredentialConfigured(configDir: string, config: Config): boolean {
+  if (config.llm.provider !== "openai-codex") return config.llm.apiKey.length > 0;
+  try {
+    const snapshot = loadStoredProfileSnapshot(
+      join(configDir, "auth-profiles.json"),
+      config.llm.authProfile ?? "openai-codex",
+    );
+    if (snapshot === null) return false;
+    credential(snapshot.profile);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function runtimeConfigSnapshot(configDir: string, config: Config): GetRuntimeConfigRpcResult {
+  return {
+    schemaVersion: 1,
+    llm: {
+      provider: config.llm.provider,
+      model: config.llm.model,
+      credential_configured: runtimeCredentialConfigured(configDir, config),
+    },
+    intervals: { athlete_id: config.intervals.athleteId },
+    session: { ...config.session },
+  };
 }
 
 function createReconfigurableEngine(initial: CoachEngine): {
@@ -512,18 +577,19 @@ export async function createLocalCoachComposition(
       });
     };
     const reconfigurable = createReconfigurableEngine(buildEngine(activeConfig));
+    const persistConfig = dependencies.persistRuntimeConfig ?? persistRuntimeConfig;
     const applyRuntimeConfig = async (request: ConfigureRuntimeRpcParams): Promise<void> => {
       const candidate = mergedRuntimeConfig(activeConfig, request);
-      if (request.llm?.provider === "openai-codex") {
+      if (request.llm !== undefined && candidate.llm.provider === "openai-codex") {
         credential(
           loadStoredProfileSnapshot(
             join(input.home.configDir, "auth-profiles.json"),
-            "openai-codex",
+            candidate.llm.authProfile ?? "openai-codex",
           )?.profile,
         );
       }
       const replacement = buildEngine(candidate);
-      persistRuntimeConfig(input.home.configDir, request);
+      persistConfig(input.home.configDir, candidate, request, activeConfig);
       await reconfigurable.replace(() => {
         activeConfig = candidate;
         return replacement;
@@ -543,6 +609,7 @@ export async function createLocalCoachComposition(
         intervalsCredentials: options.liveIntervals,
         historyNewestDate: () => new Date(now()).toISOString().slice(0, 10),
         applyRuntimeConfig,
+        readRuntimeConfig: () => runtimeConfigSnapshot(input.home.configDir, activeConfig),
       },
       dependencies.operationsDependencies,
     );

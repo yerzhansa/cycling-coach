@@ -77,6 +77,22 @@ const operations: CoachOperations = {
     schemaVersion: 1,
     applied: { llm: llm !== undefined, intervals: intervals !== undefined },
   }),
+  getRuntimeConfig: async () => ({
+    schemaVersion: 1,
+    llm: {
+      provider: "anthropic",
+      model: "synthetic-model",
+      credential_configured: false,
+    },
+    intervals: { athlete_id: "synthetic-athlete" },
+    session: {
+      historyTokenBudgetRatio: 0.3,
+      idleMinutes: 0,
+      dailyResetHour: 4,
+      resetArchiveRetentionDays: 0,
+      timezone: "UTC",
+    },
+  }),
   getUnitsPreference: async () => ({ value: "metric", source: "default" }),
   setUnitsPreference: async ({ value }) => ({ value, source: "cycling" }),
 };
@@ -430,9 +446,26 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       schemaVersion: 1 as const,
       applied: { llm: llm !== undefined, intervals: intervals !== undefined },
     }));
+    const runtimeSnapshot = {
+      schemaVersion: 1 as const,
+      llm: {
+        provider: "openrouter" as const,
+        model: "model-a",
+        credential_configured: true,
+      },
+      intervals: { athlete_id: "athlete-a" },
+      session: {
+        historyTokenBudgetRatio: 0.3,
+        idleMinutes: 0,
+        dailyResetHour: 4,
+        resetArchiveRetentionDays: 0,
+        timezone: "UTC",
+      },
+    };
+    const getRuntimeConfig = vi.fn(async () => runtimeSnapshot);
     const rpc = createCoachRpcServer({
       engine: engine(),
-      operations: { ...operations, saveIntake, configureRuntime },
+      operations: { ...operations, saveIntake, configureRuntime, getRuntimeConfig },
       token,
       owner: "app-supervised",
     });
@@ -484,6 +517,24 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     expect(JSON.stringify(response)).not.toContain("placeholder");
     expect(JSON.stringify(response)).not.toContain("athlete-a");
     expect(JSON.stringify(response)).not.toContain("model-a");
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "runtime-read",
+        method: "getRuntimeConfig",
+        params: {},
+      }),
+    );
+    const snapshotResponse = parseCoachRpcEnvelope(await client.frames.next());
+    expect(snapshotResponse).toEqual({
+      jsonrpc: "2.0",
+      id: "runtime-read",
+      result: runtimeSnapshot,
+    });
+    expect(getRuntimeConfig).toHaveBeenCalledWith({});
+    expect(JSON.stringify(snapshotResponse)).not.toContain("api_key");
+    expect(JSON.stringify(snapshotResponse)).not.toContain("token");
+    expect(JSON.stringify(snapshotResponse)).not.toContain("path");
     await client.close();
   });
 

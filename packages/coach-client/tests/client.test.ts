@@ -441,6 +441,37 @@ describe("handshake failures", () => {
 });
 
 describe("RPC receive and observers", () => {
+  it("rejects a runtime snapshot without the strict credential evidence boolean", async () => {
+    const { socket, connecting } = acceptedSocket();
+    const client = await connecting;
+    socket.closeSynchronously = true;
+    socket.sendHook = (text) => {
+      const request = JSON.parse(text) as { readonly id: number };
+      socket.emitMessage(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: request.id,
+          result: {
+            schemaVersion: 1,
+            llm: { provider: "anthropic", model: "synthetic-model" },
+            intervals: { athlete_id: "" },
+            session: {
+              historyTokenBudgetRatio: 0.3,
+              idleMinutes: 0,
+              dailyResetHour: 4,
+              resetArchiveRetentionDays: 0,
+              timezone: "UTC",
+            },
+          },
+        }),
+      );
+    };
+
+    await expect(client.call("getRuntimeConfig", {})).rejects.toBeInstanceOf(
+      CoachClientProtocolError,
+    );
+  });
+
   it("rejects a contradictory spend response before typed delivery", async () => {
     const { socket, connecting } = acceptedSocket();
     const client = await connecting;
@@ -518,6 +549,22 @@ describe("RPC receive and observers", () => {
         },
         saveIntake: { schemaVersion: 1, saved: true },
         configureRuntime: { schemaVersion: 1, applied: { llm: true, intervals: false } },
+        getRuntimeConfig: {
+          schemaVersion: 1,
+          llm: {
+            provider: "anthropic",
+            model: "synthetic-model",
+            credential_configured: true,
+          },
+          intervals: { athlete_id: "synthetic-athlete" },
+          session: {
+            historyTokenBudgetRatio: 0.3,
+            idleMinutes: 0,
+            dailyResetHour: 4,
+            resetArchiveRetentionDays: 0,
+            timezone: "UTC",
+          },
+        },
         getUnitsPreference: { value: "metric", source: "default" },
         setUnitsPreference: { value: "imperial", source: "cycling" },
         getSpendSummary: {
@@ -596,7 +643,12 @@ describe("RPC receive and observers", () => {
         llm: { provider: "anthropic", model: "synthetic", api_key: "synthetic" },
       }),
     ).resolves.toEqual({ schemaVersion: 1, applied: { llm: true, intervals: false } });
-    expect(received.map((value) => (value as { id: number }).id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    await expect(client.call("getRuntimeConfig", {})).resolves.toMatchObject({
+      llm: { provider: "anthropic", model: "synthetic-model" },
+    });
+    expect(received.map((value) => (value as { id: number }).id)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8, 9,
+    ]);
     expect(received.map((value) => (value as { method: string }).method)).toEqual([
       "chat",
       "resetSession",
@@ -606,6 +658,7 @@ describe("RPC receive and observers", () => {
       "sync",
       "saveIntake",
       "configureRuntime",
+      "getRuntimeConfig",
     ]);
     await expect(client.call("getUnitsPreference", {})).resolves.toEqual({
       value: "metric",
@@ -615,7 +668,7 @@ describe("RPC receive and observers", () => {
       value: "imperial",
       source: "cycling",
     });
-    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([9, 10]);
+    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([10, 11]);
     expect(received.slice(-2).map((value) => (value as { method: string }).method)).toEqual([
       "getUnitsPreference",
       "setUnitsPreference",
@@ -626,7 +679,7 @@ describe("RPC receive and observers", () => {
     await expect(client.call("setDailySpendCap", { dailyCapUsd: 0.75 })).resolves.toMatchObject({
       dailyCapUsd: 0.75,
     });
-    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([11, 12]);
+    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([12, 13]);
     expect(received.slice(-2).map((value) => (value as { method: string }).method)).toEqual([
       "getSpendSummary",
       "setDailySpendCap",

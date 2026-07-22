@@ -9,12 +9,9 @@ import type {
   PlatformCalendarMutationsPort,
   ReferenceStateSnapshot,
 } from "@enduragent/engine";
-import {
-  ErrorStateSchema,
-  LatestJsonSchema,
-} from "@enduragent/kernel/reference/schemas";
+import { ErrorStateSchema, LatestJsonSchema } from "@enduragent/kernel/reference/schemas";
 import type { Config } from "../config.js";
-import { contextWindowForModel } from "../config.js";
+import { contextWindowForModel } from "../runtime-config.js";
 import {
   createMissingPlatformCalendarMutations,
   createPlatformAthleteDataReader,
@@ -44,9 +41,10 @@ export function engineConfigFromConfig(config: Config): EngineConfig {
     llm: Object.freeze({ ...config.llm }),
     session: Object.freeze({ ...config.session }),
     contextWindowTokens: config.contextWindowTokens,
-    compactContextWindowTokens: compactModel === config.llm.model
-      ? config.contextWindowTokens
-      : contextWindowForModel(compactModel),
+    compactContextWindowTokens:
+      compactModel === config.llm.model
+        ? config.contextWindowTokens
+        : contextWindowForModel(compactModel),
   });
 }
 
@@ -66,11 +64,15 @@ export function createEngineHostAdapter(input: {
         athleteId: config.intervals.athleteId,
       })
     : null;
-  const athleteData = config.dataSource === "store"
-    ? overrides.athleteData
-    : (legacyClient === null ? undefined : createPlatformAthleteDataReader(legacyClient));
-  const calendarMutations = overrides.calendarMutations
-    ?? (legacyClient === null
+  const athleteData =
+    config.dataSource === "store"
+      ? overrides.athleteData
+      : legacyClient === null
+        ? undefined
+        : createPlatformAthleteDataReader(legacyClient);
+  const calendarMutations =
+    overrides.calendarMutations ??
+    (legacyClient === null
       ? createMissingPlatformCalendarMutations()
       : createPlatformCalendarMutations(legacyClient));
   const referenceDir = join(config.dataDir, "data");

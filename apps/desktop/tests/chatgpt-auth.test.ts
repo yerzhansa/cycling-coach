@@ -2,8 +2,9 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/pr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { LlmProvider, RuntimeConfigSnapshot } from "@enduragent/coach-contract";
 import {
-  createChatGptAuth,
+  createChatGptAuth as createChatGptAuthSubject,
   hasChatGptProfile,
   writeChatGptProfile,
 } from "../src/main/chatgpt-auth.js";
@@ -23,6 +24,39 @@ function credentials() {
     expires: 4_102_444_800_000,
     accountId: "obviously-fake-account",
   };
+}
+
+function runtimeSnapshot(
+  provider: LlmProvider = "openai-codex",
+  credentialConfigured = provider === "openai-codex",
+): RuntimeConfigSnapshot {
+  return {
+    schemaVersion: 1,
+    llm: {
+      provider,
+      model: "custom-selected-model",
+      credential_configured: credentialConfigured,
+    },
+    intervals: { athlete_id: "custom-athlete" },
+    session: {
+      historyTokenBudgetRatio: 0.3,
+      idleMinutes: 0,
+      dailyResetHour: 4,
+      resetArchiveRetentionDays: 0,
+      timezone: "UTC",
+    },
+  };
+}
+
+function createChatGptAuth(
+  options: Omit<Parameters<typeof createChatGptAuthSubject>[0], "getRuntimeConfig"> & {
+    readonly getRuntimeConfig?: () => Promise<RuntimeConfigSnapshot>;
+  },
+) {
+  return createChatGptAuthSubject({
+    ...options,
+    getRuntimeConfig: options.getRuntimeConfig ?? (async () => runtimeSnapshot()),
+  });
 }
 
 function invalidUtf8ProfilesBytes(): Buffer {
@@ -119,6 +153,7 @@ describe("desktop ChatGPT auth", () => {
       configDir: directory,
       openExternal: async () => {},
       applyRuntimeConfig: async () => {},
+      getRuntimeConfig: async () => runtimeSnapshot("openai-codex", false),
     });
 
     await expect(hasChatGptProfile(directory)).resolves.toBe(false);
@@ -144,6 +179,7 @@ describe("desktop ChatGPT auth", () => {
       configDir: directory,
       openExternal: async () => {},
       applyRuntimeConfig: async () => {},
+      getRuntimeConfig: async () => runtimeSnapshot("openai-codex", false),
     });
 
     await expect(hasChatGptProfile(directory)).resolves.toBe(false);
@@ -276,13 +312,13 @@ describe("desktop ChatGPT auth", () => {
     });
     await expect(auth.login()).resolves.toEqual({ status: "configured", runtimeReady: true });
     expect(applyRuntimeConfig).toHaveBeenCalledWith({
-      llm: { provider: "openai-codex", model: "gpt-5.5" },
+      llm: { provider: "openai-codex" },
     });
     expect(order).toEqual(["browser", "storage", "runtime"]);
     await expect(auth.status()).resolves.toEqual({ state: "configured", runtimeReady: true });
   });
 
-  it("restores configured runtime readiness from the current YAML", async () => {
+  it("restores configured runtime readiness from the daemon snapshot", async () => {
     const directory = await configDir();
     await writeChatGptProfile(directory, credentials());
     await writeFile(
@@ -295,6 +331,34 @@ describe("desktop ChatGPT auth", () => {
       applyRuntimeConfig: async () => {},
     });
     await expect(auth.status()).resolves.toEqual({ state: "configured", runtimeReady: true });
+  });
+
+  it("reports a valid active custom profile from the daemon without a default local profile", async () => {
+    const directory = await configDir();
+    const auth = createChatGptAuth({
+      configDir: directory,
+      openExternal: async () => {},
+      applyRuntimeConfig: async () => {},
+      getRuntimeConfig: async () => runtimeSnapshot("openai-codex", true),
+    });
+
+    await expect(hasChatGptProfile(directory)).resolves.toBe(false);
+    await expect(auth.status()).resolves.toEqual({ state: "configured", runtimeReady: true });
+  });
+
+  it("falls back to local default-profile status when the daemon read is unavailable", async () => {
+    const directory = await configDir();
+    await writeChatGptProfile(directory, credentials());
+    const auth = createChatGptAuth({
+      configDir: directory,
+      openExternal: async () => {},
+      applyRuntimeConfig: async () => {},
+      getRuntimeConfig: async () => {
+        throw new TypeError("synthetic daemon unavailable");
+      },
+    });
+
+    await expect(auth.status()).resolves.toEqual({ state: "configured", runtimeReady: false });
   });
 
   it("refuses concurrent login and maps callback, storage, and runtime failures", async () => {
@@ -370,15 +434,18 @@ describe("desktop ChatGPT auth", () => {
 
   it("reports a saved ChatGPT profile as inactive after an API-key provider is selected", async () => {
     const directory = await configDir();
+    let provider: LlmProvider = "anthropic";
     const auth = createChatGptAuth({
       configDir: directory,
       openExternal: async () => {},
       applyRuntimeConfig: async (request) => {
+        provider = request.llm?.provider ?? provider;
         await writeFile(
           join(directory, "config.yaml"),
           `llm:\n  provider: ${request.llm?.provider}\n  model: ${request.llm?.model}\n`,
         );
       },
+      getRuntimeConfig: async () => runtimeSnapshot(provider),
       dependencies: { loginCodex: async () => credentials() },
     });
     await expect(auth.login()).resolves.toEqual({ status: "configured", runtimeReady: true });
@@ -388,6 +455,7 @@ describe("desktop ChatGPT auth", () => {
       join(directory, "config.yaml"),
       "llm:\n  provider: openrouter\n  model: deepseek/deepseek-v4-flash\n",
     );
+    provider = "openrouter";
 
     await expect(auth.status()).resolves.toEqual({ state: "configured", runtimeReady: false });
   });

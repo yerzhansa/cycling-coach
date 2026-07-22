@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   loadStoredProfileSnapshot,
@@ -7,11 +6,9 @@ import {
   type CodexCredentials,
   type CodexLoginOptions,
 } from "@enduragent/core";
-import type { ConfigureRuntimeRpcParams } from "@enduragent/coach-contract";
-import { parse as parseYaml } from "yaml";
+import type { ConfigureRuntimeRpcParams, RuntimeConfigSnapshot } from "@enduragent/coach-contract";
 
 export const CHATGPT_PROFILE_NAME = "openai-codex" as const;
-export const CHATGPT_MODEL = "gpt-5.5" as const;
 export const CHATGPT_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 
 export type ChatGptLoginRefusalReason =
@@ -45,6 +42,7 @@ interface ChatGptAuthDependencies {
 interface CreateChatGptAuthOptions {
   readonly configDir: string;
   readonly applyRuntimeConfig: (request: ConfigureRuntimeRpcParams) => Promise<void>;
+  readonly getRuntimeConfig: () => Promise<RuntimeConfigSnapshot>;
   readonly openExternal: (url: string) => Promise<void>;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
@@ -103,12 +101,14 @@ export async function writeChatGptProfile(
   });
 }
 
-async function configuredRuntime(configDir: string): Promise<boolean> {
+async function configuredRuntime(
+  getRuntimeConfig: () => Promise<RuntimeConfigSnapshot>,
+): Promise<boolean | undefined> {
   try {
-    const parsed = parseYaml(await readFile(join(configDir, "config.yaml"), "utf8")) as unknown;
-    return isRecord(parsed) && isRecord(parsed.llm) && parsed.llm.provider === CHATGPT_PROFILE_NAME;
+    const llm = (await getRuntimeConfig()).llm;
+    return llm.provider === CHATGPT_PROFILE_NAME && llm.credential_configured;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -162,7 +162,7 @@ export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAut
     }
     try {
       await options.applyRuntimeConfig({
-        llm: { provider: CHATGPT_PROFILE_NAME, model: CHATGPT_MODEL },
+        llm: { provider: CHATGPT_PROFILE_NAME },
       });
     } catch {
       return { status: "refused", reason: "runtime-unavailable" };
@@ -173,9 +173,10 @@ export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAut
   return {
     async status() {
       const configured = await hasChatGptProfile(options.configDir);
+      const runtimeReady = await configuredRuntime(options.getRuntimeConfig);
       return {
-        state: configured ? "configured" : "absent",
-        runtimeReady: configured && (await configuredRuntime(options.configDir)),
+        state: configured || runtimeReady === true ? "configured" : "absent",
+        runtimeReady: runtimeReady ?? false,
       };
     },
     async login() {

@@ -161,6 +161,22 @@ describe.skipIf(!hasLoopback)("local CLI redaction boundary", () => {
               schemaVersion: 1,
               applied: { llm: llm !== undefined, intervals: intervals !== undefined },
             }),
+            getRuntimeConfig: async () => ({
+              schemaVersion: 1,
+              llm: {
+                provider: "anthropic",
+                model: "synthetic-model",
+                credential_configured: false,
+              },
+              intervals: { athlete_id: "synthetic-athlete" },
+              session: {
+                historyTokenBudgetRatio: 0.3,
+                idleMinutes: 0,
+                dailyResetHour: 4,
+                resetArchiveRetentionDays: 0,
+                timezone: "UTC",
+              },
+            }),
           },
           spendMeter,
           listener: context.listener,

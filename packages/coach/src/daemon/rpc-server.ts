@@ -711,6 +711,16 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
               invocationFailure = { error };
             }
             break;
+          case "getRuntimeConfig":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.getRuntimeConfig.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.operations.getRuntimeConfig(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
           case "getUnitsPreference":
             try {
               const request = COACH_RPC_METHOD_REGISTRY.getUnitsPreference.requestSchema.parse(
