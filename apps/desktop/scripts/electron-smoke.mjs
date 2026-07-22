@@ -230,11 +230,10 @@ async function security() {
     );
     if (environment.outputDirectory !== undefined)
       await mkdir(environment.outputDirectory, { recursive: true });
-    const launchEnvironment = createSecuritySmokeLaunchEnvironment(
-      process.env,
-      environment,
-      process.platform,
-    );
+    const launchEnvironment = {
+      ...createSecuritySmokeLaunchEnvironment(process.env, environment, process.platform),
+      ...(mode === "packaged" ? { ELECTRON_RENDERER_URL: ":///synthetic-malformed-renderer" } : {}),
+    };
     running = await startElectron(
       "--desktop-security-smoke",
       launchEnvironment,
