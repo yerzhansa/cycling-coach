@@ -38,6 +38,7 @@ export interface DesktopIntakeDraft {
 export type OnboardingErrorCode =
   | "credential-required"
   | "credential-save-failed"
+  | "training-account-mismatch"
   | "training-data-required"
   | "import-failed"
   | "intake-incomplete"

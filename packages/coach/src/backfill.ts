@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { setTimeout as setTimeoutPromise } from "node:timers/promises";
 import {
   makeIntervalsHttpFactory,
@@ -15,6 +16,7 @@ import type { ImportArtifact, ImportReport, ImportReportDeps, PairDiagnostic, Pl
 import { createSyncStateRepository, dumpStore, type PhysicalRequestLedger, type SourceArtifactDraft, type SqlStore, type SyncBudget } from "@enduragent/kernel/store";
 import { createNodeImportRuntime, type NodeImportRuntime } from "@enduragent/kernel-node/ingest";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
+import { openReadonlySqliteStorage } from "@enduragent/kernel-node/sqlite";
 import {
   createIntervalsIcuSource,
   REQUEST_ATTEMPTS,
@@ -30,6 +32,175 @@ export const DEFAULT_PER_REQUEST_TIMEOUT_MS = 30_000;
 export const DEFAULT_BACKFILL_PAGE_DEADLINE_MS = 21_600_000;
 
 export interface BackfillClock { now(): number; monotonicNow(): number; }
+
+export interface StoreOwnerCheckOptions {
+  readonly apiKey: string;
+  readonly athleteId: string;
+  readonly historyNewestDate: string;
+  readonly clock: BackfillClock;
+  readonly sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  readonly signal?: AbortSignal;
+  readonly baseFetch?: typeof globalThis.fetch;
+  readonly budget?: SyncBudget;
+  readonly attemptLedger?: PhysicalRequestLedger;
+}
+
+export type StoreOwnerCheckResult =
+  | "unowned"
+  | "matched"
+  | "mismatch"
+  | "unresolved"
+  | "store-unavailable";
+
+const lookupArchiveResult: ArchiveWriteResult = Object.freeze({
+  address: "0".repeat(64),
+  relPath: "1970/01/lookup.json.gz",
+  deduped: true,
+});
+
+const lookupArchive: ArchiveManager = Object.freeze({
+  async writeArtifact() { return lookupArchiveResult; },
+  async writeSnapshot() { return lookupArchiveResult; },
+  async quarantine() { return lookupArchiveResult; },
+  async readArtifact() { throw new Error("lookup archive is write-only"); },
+  async readSnapshot() { throw new Error("lookup archive is write-only"); },
+  async has() { return false; },
+});
+
+const CLAIM_STORE_OWNER_SQL =
+  "INSERT INTO store_owner (singleton, account_fingerprint) VALUES (1, ?)";
+const STORE_OWNER_CHECK_BUSY_TIMEOUT_MS = 5_000;
+
+async function readStoreOwnerFingerprint(
+  store: Pick<SqlStore, "get">,
+): Promise<string | undefined> {
+  const current = await store.get(
+    "SELECT account_fingerprint FROM store_owner WHERE singleton = 1",
+  );
+  if (current === undefined) return undefined;
+  if (
+    Object.keys(current).join(",") !== "account_fingerprint" ||
+    typeof current.account_fingerprint !== "string" ||
+    !/^[0-9a-f]{64}$/.test(current.account_fingerprint)
+  ) {
+    throw new Error("invalid store owner row");
+  }
+  return current.account_fingerprint;
+}
+
+async function compareStoreOwner(
+  store: Pick<SqlStore, "get">,
+  accountFingerprint: string,
+): Promise<Extract<StoreOwnerCheckResult, "unowned" | "matched" | "mismatch">> {
+  if (!/^[0-9a-f]{64}$/.test(accountFingerprint)) {
+    throw new TypeError("invalid store owner fingerprint");
+  }
+  const current = await readStoreOwnerFingerprint(store);
+  if (current === undefined) return "unowned";
+  return current === accountFingerprint ? "matched" : "mismatch";
+}
+
+export async function resolveIntervalsStoreOwnerFingerprint(
+  options: StoreOwnerCheckOptions,
+): Promise<string | null> {
+  const controller = new AbortController();
+  const budget = options.budget ?? {
+    signal: options.signal ?? controller.signal,
+    clock: { monotonicNow: () => options.clock.monotonicNow() },
+    deadlineMonotonicMs: options.clock.monotonicNow() + 300_000,
+    perRequestTimeoutMs: DEFAULT_PER_REQUEST_TIMEOUT_MS,
+    maxRequests: REQUEST_ATTEMPTS,
+    maxArtifacts: 1_000,
+  };
+  const source = createIntervalsBackfillSource({
+    apiKey: options.apiKey,
+    athleteId: options.athleteId,
+    historyNewestDate: options.historyNewestDate,
+    minRequestIntervalMs: DEFAULT_REQUEST_INTERVAL_MS,
+    archive: lookupArchive,
+    clock: options.clock,
+    sleep: options.sleep ?? sleepAbortably,
+    ...(options.baseFetch === undefined ? {} : { baseFetch: options.baseFetch }),
+    ...(options.attemptLedger === undefined ? {} : { attemptLedger: options.attemptLedger }),
+  });
+  const resolved = new Set<string>();
+  for await (const artifact of source.pull(
+    { source: "intervals-icu", lane: "settings", value: null },
+    budget,
+  )) {
+    if (artifact.kind !== "snapshot" || artifact.lane !== "settings") continue;
+    const payload = artifact.payload;
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return null;
+    const value = (payload as Record<string, unknown>).athlete_id;
+    if (typeof value !== "string" || value.length === 0) return null;
+    resolved.add(value);
+  }
+  if (resolved.size !== 1) return null;
+  return createHash("sha256")
+    .update(JSON.stringify(["store-owner-v1", [...resolved][0]]))
+    .digest("hex");
+}
+
+async function enforceIntervalsStoreOwner(
+  store: SqlStore,
+  options: StoreOwnerCheckOptions,
+  resolveFingerprint: (
+    options: StoreOwnerCheckOptions,
+  ) => Promise<string | null> = resolveIntervalsStoreOwnerFingerprint,
+): Promise<"adopted" | "matched" | "unresolved"> {
+  let fingerprint: string | null;
+  try {
+    fingerprint = await resolveFingerprint(options);
+  } catch {
+    return "unresolved";
+  }
+  if (fingerprint === null) return "unresolved";
+  const ownership = await compareStoreOwner(store, fingerprint);
+  if (ownership === "mismatch") throw new Error("training account mismatch");
+  if (ownership === "matched") return "matched";
+  await store.run(CLAIM_STORE_OWNER_SQL, [fingerprint]);
+  return "adopted";
+}
+
+export async function checkIntervalsStoreOwnerAtPath(
+  storePath: string,
+  options: StoreOwnerCheckOptions,
+): Promise<StoreOwnerCheckResult> {
+  let store: ReturnType<typeof openReadonlySqliteStorage> | undefined;
+  try {
+    store = openReadonlySqliteStorage(storePath);
+    const timeout = await store.get(`PRAGMA busy_timeout = ${STORE_OWNER_CHECK_BUSY_TIMEOUT_MS}`);
+    if (timeout?.timeout !== STORE_OWNER_CHECK_BUSY_TIMEOUT_MS) {
+      throw new Error("store owner check timeout unavailable");
+    }
+    if ((await readStoreOwnerFingerprint(store)) === undefined) {
+      await store.close();
+      return "unowned";
+    }
+  } catch {
+    await store?.close().catch(() => undefined);
+    return "store-unavailable";
+  }
+  let fingerprint: string | null;
+  try {
+    fingerprint = await resolveIntervalsStoreOwnerFingerprint(options);
+  } catch {
+    await store.close().catch(() => undefined);
+    return "unresolved";
+  }
+  if (fingerprint === null) {
+    await store.close().catch(() => undefined);
+    return "unresolved";
+  }
+  try {
+    const ownership = await compareStoreOwner(store, fingerprint);
+    await store.close();
+    return ownership;
+  } catch {
+    await store?.close().catch(() => undefined);
+    return "store-unavailable";
+  }
+}
 
 export function createIntervalsBackfillSource(options: {
   readonly apiKey: string;
@@ -282,11 +453,20 @@ const productionClock: BackfillClock = Object.freeze({ now: () => Date.now(), mo
 const sleepAbortably = (ms: number, signal: AbortSignal): Promise<void> =>
   setTimeoutPromise(ms, undefined, { signal }).then(() => undefined);
 
-export function runIntervalsBackfillInWriter(
+export async function runIntervalsBackfillInWriter(
   options: RunIntervalsBackfillInWriterOptions,
 ): Promise<BackfillRunResult> {
   const requestIntervalMs = configured(options.requestIntervalMs, DEFAULT_REQUEST_INTERVAL_MS, 250, 60_000, "request interval");
   const clock = options.clock ?? productionClock, sleep = options.sleep ?? sleepAbortably;
+  await enforceIntervalsStoreOwner(options.store, {
+    apiKey: options.apiKey,
+    athleteId: options.athleteId,
+    historyNewestDate: options.historyNewestDate,
+    clock,
+    sleep,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.baseFetch === undefined ? {} : { baseFetch: options.baseFetch }),
+  });
   const node = createNodeImportRuntime({ archiveDir: options.home.archiveDir, store: options.store });
   const source = createIntervalsBackfillSource({ apiKey: options.apiKey, athleteId: options.athleteId,
     historyNewestDate: options.historyNewestDate, minRequestIntervalMs: requestIntervalMs, archive: node.archive,

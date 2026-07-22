@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connectCoachClient } from "@enduragent/coach-client";
 import type { ConfigureRuntimeRpcParams } from "@enduragent/coach-contract";
+import { checkIntervalsStoreOwnerAtPath } from "@enduragent/coach/backfill";
 import {
   app,
   BrowserWindow,
@@ -198,6 +199,17 @@ async function runDesktop(): Promise<void> {
             window: created,
             vault,
             chatGptAuth,
+            checkIntervalsCredentialOwner: (value) =>
+              checkIntervalsStoreOwnerAtPath(
+                join(resolveDesktopAthleteHome(environment), "store", "store.db"),
+                {
+                  apiKey: value,
+                  athleteId: "0",
+                  historyNewestDate: "1970-01-01",
+                  clock: { now: () => Date.now(), monotonicNow: () => performance.now() },
+                  signal: controller.signal,
+                },
+              ),
             isTrusted: (event) =>
               isTrustedConnectionRequest(event, mainWindow.current() ?? undefined),
           });

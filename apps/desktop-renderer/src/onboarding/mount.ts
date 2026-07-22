@@ -74,6 +74,8 @@ export async function handoffCredential(
 const ERROR_COPY: Readonly<Record<OnboardingErrorCode, string>> = {
   "credential-required": "Sign in with ChatGPT or add at least one model key to continue.",
   "credential-save-failed": "That key could not be saved. Try entering it again.",
+  "training-account-mismatch":
+    "That intervals.icu key belongs to a different athlete than the training history already stored. Switching accounts is not supported yet.",
   "training-data-required": "Connect intervals.icu or import at least one ride file.",
   "import-failed": "Those ride files could not be imported. Try another selection.",
   "intake-incomplete": "Answer the required safety questions to continue.",
@@ -190,25 +192,32 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
   const savePasswordControls = async (
     root: HTMLElement,
     expectedVisit: number,
-  ): Promise<boolean> => {
+  ): Promise<OnboardingErrorCode | null> => {
     const controls = Array.from(
       root.querySelectorAll<HTMLInputElement>('input[type="password"][data-slot]'),
     );
     let attempted = false;
-    let failed = false;
+    let failure: OnboardingErrorCode | null = null;
     for (const input of controls) {
-      if (visit !== expectedVisit || scrim === undefined) return false;
+      if (visit !== expectedVisit || scrim === undefined) return null;
       try {
         if (input.value.trim().length === 0) continue;
         attempted = true;
         let configured = false;
         await handoffCredential(input, async (value) => {
           const result = await options.bridge.writeCredential(value);
-          configured = result.status === "configured";
+          if (result.status === "configured") {
+            configured = true;
+          } else {
+            failure =
+              result.reason === "training-account-mismatch"
+                ? "training-account-mismatch"
+                : (failure ?? "credential-save-failed");
+          }
         });
-        if (!configured) failed = true;
+        if (!configured) failure ??= "credential-save-failed";
       } catch {
-        failed = true;
+        failure ??= "credential-save-failed";
       } finally {
         input.value = "";
       }
@@ -217,10 +226,10 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
       try {
         await refreshStatuses(expectedVisit);
       } catch {
-        failed = true;
+        failure ??= "credential-save-failed";
       }
     }
-    return !failed;
+    return failure;
   };
 
   const importStatusCopy = (): string => {
@@ -612,10 +621,10 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
     for (const button of dialog.querySelectorAll<HTMLButtonElement>("button"))
       button.disabled = true;
     if (state.step === "coach-keys") {
-      const saved = await savePasswordControls(dialog, submitVisit);
+      const saveError = await savePasswordControls(dialog, submitVisit);
       if (visit !== submitVisit || scrim === undefined) return;
       state = withBusy(state, false);
-      if (!saved) state = withError(state, "credential-save-failed");
+      if (saveError !== null) state = withError(state, saveError);
       else if (!hasConfiguredModel(state)) state = withError(state, "credential-required");
       else state = nextStep(state);
       render();
@@ -623,10 +632,10 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
       return;
     }
     if (state.step === "training-data") {
-      const saved = await savePasswordControls(dialog, submitVisit);
+      const saveError = await savePasswordControls(dialog, submitVisit);
       if (visit !== submitVisit || scrim === undefined) return;
       state = withBusy(state, false);
-      if (!saved) state = withError(state, "credential-save-failed");
+      if (saveError !== null) state = withError(state, saveError);
       else if (!hasTrainingData(state)) state = withError(state, "training-data-required");
       else state = nextStep(state);
       render();

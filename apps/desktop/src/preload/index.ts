@@ -28,6 +28,7 @@ const REASONS = new Set([
   "unsafe-backend",
   "storage-failed",
   "runtime-unavailable",
+  "training-account-mismatch",
 ]);
 const CHATGPT_REASONS = new Set([
   "already-in-progress",

@@ -32,6 +32,9 @@ interface RegisterOnboardingIpcOptions {
   readonly vault: CredentialVault;
   readonly chatGptAuth: ChatGptAuthController;
   readonly isTrusted: (event: IpcMainInvokeEvent) => boolean;
+  readonly checkIntervalsCredentialOwner: (
+    value: string,
+  ) => Promise<"unowned" | "matched" | "mismatch" | "unresolved" | "store-unavailable">;
 }
 
 const SUPPORTED_EXTENSIONS = new Set([".fit", ".tcx", ".gpx"]);
@@ -134,6 +137,18 @@ export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): ()
     if (args.length !== 1) throw new TypeError();
     const input = parseWriteInput(args[0]);
     try {
+      if (input.slot === "intervals-icu") {
+        const ownership = await options
+          .checkIntervalsCredentialOwner(input.value)
+          .catch(() => "check-unavailable" as const);
+        if (ownership === "mismatch") {
+          return {
+            slot: input.slot,
+            status: "refused",
+            reason: "training-account-mismatch",
+          };
+        }
+      }
       return minimizeWrite(await options.vault.writeCredential(input));
     } catch {
       return { slot: input.slot, status: "refused", reason: "storage-failed" };
