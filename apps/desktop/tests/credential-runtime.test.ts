@@ -98,6 +98,9 @@ function fakeVault(initialRuntime: CredentialRuntimeApplication) {
 
 async function pollCredentialStatuses(vault: CredentialVault): Promise<void> {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
+  const checkIntervalsCredentialOwner: Parameters<
+    typeof registerOnboardingIpc
+  >[0]["checkIntervalsCredentialOwner"] = vi.fn(async () => "unresolved" as const);
   const dispose = registerOnboardingIpc({
     ipcMain: {
       handle: (channel: string, handler: (...args: unknown[]) => unknown) => {
@@ -115,9 +118,11 @@ async function pollCredentialStatuses(vault: CredentialVault): Promise<void> {
       login: async () => ({ status: "refused", reason: "cancelled" }),
     },
     isTrusted: () => true,
+    checkIntervalsCredentialOwner,
   });
   try {
     await handlers.get(DESKTOP_CREDENTIAL_STATUS_CHANNEL)!({});
+    expect(checkIntervalsCredentialOwner).not.toHaveBeenCalled();
   } finally {
     dispose();
   }
