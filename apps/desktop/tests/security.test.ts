@@ -21,6 +21,7 @@ import {
   createDesktopContentSecurityPolicy,
 } from "../src/main/constants.js";
 import {
+  createDesktopRendererConsoleCapture,
   desktopWindowOptions,
   installDesktopProtocol,
   isTrustedConnectionRequest,
@@ -158,6 +159,64 @@ describe("desktop security boundary", () => {
         allowRunningInsecureContent: false,
       },
     });
+  });
+
+  it("does not register or retain renderer console messages when capture is disabled", () => {
+    const on = vi.fn();
+    const capture = createDesktopRendererConsoleCapture(false);
+
+    capture.attach({ on } as never);
+
+    expect(on).not.toHaveBeenCalled();
+    expect(capture.hasMessageContaining("synthetic-disabled-message")).toBe(false);
+  });
+
+  it("registers one listener and captures every renderer console message when enabled", () => {
+    let listener: ((event: unknown, level: number, message: string) => void) | undefined;
+    const on = vi.fn(
+      (event: string, installed: (event: unknown, level: number, message: string) => void) => {
+        if (event === "console-message") listener = installed;
+      },
+    );
+    const capture = createDesktopRendererConsoleCapture(true);
+
+    capture.attach({ on } as never);
+    listener?.({}, 1, "synthetic-first-message");
+    listener?.({}, 2, "synthetic-second-message");
+
+    expect(on).toHaveBeenCalledOnce();
+    expect(on).toHaveBeenCalledWith("console-message", expect.any(Function));
+    expect(capture.hasMessageContaining("synthetic-first-message")).toBe(true);
+    expect(capture.hasMessageContaining("synthetic-second-message")).toBe(true);
+  });
+
+  it("keeps renderer console capture state isolated between instances", () => {
+    let firstListener: ((event: unknown, level: number, message: string) => void) | undefined;
+    let secondListener: ((event: unknown, level: number, message: string) => void) | undefined;
+    const first = createDesktopRendererConsoleCapture(true);
+    const second = createDesktopRendererConsoleCapture(true);
+    first.attach({
+      on: vi.fn(
+        (_event: string, installed: (event: unknown, level: number, message: string) => void) => {
+          firstListener = installed;
+        },
+      ),
+    } as never);
+    second.attach({
+      on: vi.fn(
+        (_event: string, installed: (event: unknown, level: number, message: string) => void) => {
+          secondListener = installed;
+        },
+      ),
+    } as never);
+
+    firstListener?.({}, 1, "synthetic-first-capture");
+    secondListener?.({}, 1, "synthetic-second-capture");
+
+    expect(first.hasMessageContaining("synthetic-first-capture")).toBe(true);
+    expect(first.hasMessageContaining("synthetic-second-capture")).toBe(false);
+    expect(second.hasMessageContaining("synthetic-first-capture")).toBe(false);
+    expect(second.hasMessageContaining("synthetic-second-capture")).toBe(true);
   });
 
   it("emits an exact CSP pin from the current daemon port on every document load", async () => {

@@ -39,6 +39,7 @@ import {
 import { registerOnboardingIpc, runtimeConfigurationForCredential } from "./onboarding-ipc.js";
 import { createDesktopResidency, type DesktopResidency } from "./residency.js";
 import {
+  createDesktopRendererConsoleCapture,
   desktopWindowOptions,
   hardenDesktopWindow,
   installDesktopProtocol,
@@ -75,6 +76,8 @@ async function runRuntimeSmoke(): Promise<void> {
 }
 
 async function runDesktop(): Promise<void> {
+  const securitySmokeMode = process.argv.includes("--desktop-security-smoke");
+  const rendererConsoleCapture = createDesktopRendererConsoleCapture(securitySmokeMode);
   let residency: DesktopResidency | undefined;
   app.on("second-instance", () => {
     void residency?.showMainWindow();
@@ -255,7 +258,6 @@ async function runDesktop(): Promise<void> {
       rendererSource,
     });
     protocolInstalled = true;
-    const consoleMessages: string[] = [];
     const mainWindow = {
       current: currentWindow,
       show: (): Promise<BrowserWindow> => {
@@ -270,9 +272,7 @@ async function runDesktop(): Promise<void> {
         windowCreation = (async () => {
           const created = new BrowserWindow(desktopWindowOptions(preloadEntry));
           window = created;
-          created.webContents.on("console-message", (_event, _level, consoleMessage) => {
-            consoleMessages.push(consoleMessage);
-          });
+          rendererConsoleCapture.attach(created.webContents);
           hardenDesktopWindow(created);
           disposeOnboarding?.();
           disposeOnboarding = registerOnboardingIpc({
@@ -335,7 +335,7 @@ async function runDesktop(): Promise<void> {
     const initialWindow = await mainWindow.show();
     await residency.start();
 
-    if (process.argv.includes("--desktop-security-smoke")) {
+    if (securitySmokeMode) {
       const daemonPort = daemonLifecycle.currentPort();
       const rendererResult = await initialWindow.webContents.executeJavaScript(`(async () => {
       const blockedPort = ${daemonPort === 65_535 ? daemonPort - 1 : daemonPort + 1};
@@ -399,7 +399,7 @@ async function runDesktop(): Promise<void> {
           !JSON.stringify(rendererResult.rendererSurfaces).includes(
             daemonLifecycle.connection().token,
           ) &&
-          !consoleMessages.some((entry) => entry.includes(daemonLifecycle!.connection().token)) &&
+          !rendererConsoleCapture.hasMessageContaining(daemonLifecycle.connection().token) &&
           !screenshot.includes(daemonLifecycle.connection().token),
       };
       process.stdout.write(`DESKTOP_SECURITY_READY ${JSON.stringify(result)}\n`);

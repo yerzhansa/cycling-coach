@@ -1,7 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BrowserWindow, type IpcMainInvokeEvent, net, protocol, type Session } from "electron";
+import {
+  BrowserWindow,
+  type IpcMainInvokeEvent,
+  net,
+  protocol,
+  type Session,
+  type WebContents,
+} from "electron";
 import {
   DESKTOP_HOST,
   DESKTOP_RENDERER_URL,
@@ -137,6 +144,33 @@ export function hardenDesktopWindow(window: BrowserWindow): void {
     callback(false);
   });
   window.webContents.session.setPermissionCheckHandler(() => false);
+}
+
+export type DesktopRendererConsoleCapture = {
+  readonly attach: (webContents: Pick<WebContents, "on">) => void;
+  readonly hasMessageContaining: (value: string) => boolean;
+};
+
+export function createDesktopRendererConsoleCapture(
+  enabled: boolean,
+): DesktopRendererConsoleCapture {
+  if (!enabled) {
+    return {
+      attach: () => {},
+      hasMessageContaining: () => false,
+    };
+  }
+  const messages: string[] = [];
+  return {
+    attach(webContents) {
+      webContents.on("console-message", (_event, _level, message) => {
+        messages.push(message);
+      });
+    },
+    hasMessageContaining(value) {
+      return messages.some((message) => message.includes(value));
+    },
+  };
 }
 
 export function isTrustedConnectionRequest(
