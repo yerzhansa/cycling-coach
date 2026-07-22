@@ -36,11 +36,14 @@ const topbar = one(".topbar", HTMLElement);
 const spendRoot = one(".spend-meter", HTMLElement);
 conversation.classList.add("desktop-shell");
 
+const topbarActions = document.createElement("div");
+topbarActions.className = "topbar-actions";
+topbar.insertBefore(topbarActions, spendRoot);
 const connectionStatus = document.createElement("span");
 connectionStatus.className = "connection-status";
 connectionStatus.setAttribute("role", "status");
 connectionStatus.textContent = "Connecting…";
-topbar.insertBefore(connectionStatus, topbar.lastElementChild);
+topbarActions.append(connectionStatus, spendRoot);
 window.addEventListener("enduragent-lifecycle", (event) => {
   document.documentElement.dataset.rpc = event.detail.status;
   connectionStatus.textContent =
@@ -64,7 +67,12 @@ const trainingContextController = createTrainingContextController({
   clients,
   view: mountedTrainingContext.view,
 });
-const mountedChat = mountChatView({ conversation, thread, composerHost });
+const mountedChat = mountChatView({
+  conversation,
+  thread,
+  composerHost,
+  actionHost: topbarActions,
+});
 const spendController = createSpendMeterController({
   clients,
   view: createSpendMeterView({ root: spendRoot, noticeHost: mountedChat.noticeHost }),
@@ -79,6 +87,9 @@ const chatController = createChatController({
 mountedChat.bind({
   onSubmit: (message) => void chatController.submit(message),
   onRetry: () => void chatController.retryInterrupted(),
+  onOpenNewConversation: () => void chatController.openNewConversation(),
+  onCancelNewConversation: () => chatController.cancelNewConversation(),
+  onConfirmNewConversation: () => void chatController.confirmNewConversation(),
 });
 mountedTrainingContext.bind({
   onUnitsPreferenceChange: (value) => void trainingContextController.setUnitsPreference(value),
@@ -227,7 +238,7 @@ const setup = document.createElement("button");
 setup.type = "button";
 setup.className = "setup-button";
 setup.textContent = "Setup";
-topbar.insertBefore(setup, topbar.lastElementChild);
+topbarActions.insertBefore(setup, connectionStatus);
 const onboarding = mountOnboarding({
   document,
   bridge: onboardingBridge,
@@ -238,6 +249,7 @@ setup.addEventListener("click", () => void onboarding.open());
 
 void trainingContextController.start();
 spendController.start();
+void chatController.start();
 void onboarding.open();
 void clients.getClient().then(
   () => {

@@ -15,7 +15,7 @@
   --moss-soft: #e5eee8;
   --coral: #c96d58;
   --radius: 16px;
-  --focus: #7ba589;
+  --focus: #1e5a3d;
 }
 
 * {
@@ -64,10 +64,27 @@ input:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 18px;
+  min-width: 0;
   padding: 0 28px;
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--canvas) 88%, transparent);
   min-height: 54px;
+}
+
+.topbar-actions {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.connection-status {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .brand {
@@ -243,11 +260,27 @@ input:focus-visible {
     --moss-strong: #9cc8aa;
     --moss-soft: #263a2e;
     --coral: #df8a75;
-    --focus: #93b9a0;
+    --focus: #9cc8aa;
   }
 }
 
 @media (max-width: 760px) {
+  .topbar {
+    gap: 10px;
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .topbar-actions {
+    gap: 6px;
+  }
+
+  .new-conversation-button,
+  .setup-button {
+    padding-right: 9px;
+    padding-left: 9px;
+  }
+
   .thread {
     width: calc(100% - 32px);
   }
