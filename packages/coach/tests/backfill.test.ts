@@ -34,6 +34,10 @@ const complete = JSON.stringify({
 const clock = { now: () => 1_300_000_000_000, monotonicNow: () => 1_000 };
 
 describe("incremental backfill pages", () => {
+  type BackfillRequest = Readonly<{
+    endpoint: "profile" | "activities";
+    url: URL;
+  }>;
   const roots: string[] = [];
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -86,17 +90,24 @@ describe("incremental backfill pages", () => {
     } as IntervalsIcuSource;
   }
 
-  function profileFetch(account: string): typeof globalThis.fetch {
+  function profileFetch(
+    account: string,
+    requests: BackfillRequest[] = [],
+    athleteId = "0",
+  ): typeof globalThis.fetch {
     return vi.fn(async (input) => {
       const url = new URL(input instanceof Request ? input.url : input.toString());
+      const profilePath = `/api/v1/athlete/${encodeURIComponent(athleteId)}`;
       let body: unknown;
-      if (url.pathname === "/api/v1/athlete/0") {
+      if (url.pathname === profilePath) {
+        requests.push({ endpoint: "profile", url });
         body = {
           sportSettings: [
             { id: 1, athlete_id: account, types: ["Ride"], updated: "2010-01-01" },
           ],
         };
-      } else if (url.pathname.endsWith("/activities")) {
+      } else if (url.pathname === `${profilePath}/activities`) {
+        requests.push({ endpoint: "activities", url });
         body = [];
       } else {
         throw new Error("unexpected request");
@@ -108,13 +119,24 @@ describe("incremental backfill pages", () => {
     });
   }
 
-  function unresolvedProfileFetch(): typeof globalThis.fetch {
-    return vi.fn(async () =>
-      new Response(JSON.stringify({ sportSettings: [] }), {
+  function unresolvedProfileFetch(requests: BackfillRequest[] = []): typeof globalThis.fetch {
+    return vi.fn(async (input) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      let body: unknown;
+      if (url.pathname === "/api/v1/athlete/0") {
+        requests.push({ endpoint: "profile", url });
+        body = { sportSettings: [] };
+      } else if (url.pathname === "/api/v1/athlete/0/activities") {
+        requests.push({ endpoint: "activities", url });
+        body = [];
+      } else {
+        throw new Error("unexpected request");
+      }
+      return new Response(JSON.stringify(body), {
         status: 200,
         headers: { "content-type": "application/json" },
-      }),
-    );
+      });
+    });
   }
 
   function athleteHome(root: string, storeDir = root): AthleteHome {
@@ -136,6 +158,24 @@ describe("incremental backfill pages", () => {
       home: athleteHome(value.root),
       store: value.store,
       apiKey,
+      athleteId: "0",
+      historyNewestDate: "1900-12-31",
+      clock,
+      sleep: async () => {},
+      baseFetch,
+    });
+    return { baseFetch, result };
+  }
+
+  async function syncInWriterWithFetch(
+    value: Awaited<ReturnType<typeof fresh>>,
+    accountKey: string,
+    baseFetch: typeof globalThis.fetch,
+  ) {
+    const result = await runIntervalsBackfillInWriter({
+      home: athleteHome(value.root),
+      store: value.store,
+      apiKey: accountKey,
       athleteId: "0",
       historyNewestDate: "1900-12-31",
       clock,
@@ -317,11 +357,12 @@ describe("incremental backfill pages", () => {
       listener: {} as CoachStoreWriterContext["listener"],
     };
     let now = Date.UTC(1900, 0, 1);
-    const requests: string[] = [];
-    const baseFetch: typeof globalThis.fetch = vi.fn(async (input) => {
-      requests.push(input instanceof Request ? input.url : input.toString());
-      return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
-    });
+    const requests: BackfillRequest[] = [];
+    const baseFetch = profileFetch(
+      "synthetic-rollover-account",
+      requests,
+      "synthetic-athlete",
+    );
     const rollingClock = { now: () => now, monotonicNow: () => 1_000 };
     const operations = createCoachOperations(
       {
@@ -371,12 +412,36 @@ describe("incremental backfill pages", () => {
         value: JSON.stringify({ v: 1, cycle: 0, window_start: "1900-01-01", window_end: "1900-01-01",
           last_key: null, complete: true }),
       });
+      const ownerAfterFirstSync = await value.store.all("SELECT * FROM store_owner");
+      expect(ownerAfterFirstSync).toHaveLength(1);
       now = Date.UTC(1900, 0, 2);
       await expect(operations.sync({})).resolves.toMatchObject({ schemaVersion: 1 });
 
-      expect(requests).toHaveLength(2);
-      const reopened = new URL(requests[1]!);
-      expect([...reopened.searchParams]).toEqual([["oldest", "1900-01-01"], ["newest", "1900-01-02"]]);
+      expect(requests.map(({ endpoint }) => endpoint)).toEqual([
+        "profile",
+        "activities",
+        "profile",
+        "activities",
+      ]);
+      const profileRequests = requests.filter(({ endpoint }) => endpoint === "profile");
+      const activityRequests = requests.filter(({ endpoint }) => endpoint === "activities");
+      expect(profileRequests).toHaveLength(2);
+      expect(activityRequests).toHaveLength(2);
+      expect([...activityRequests[0]!.url.searchParams]).toEqual([
+        ["oldest", "1900-01-01"],
+        ["newest", "1900-01-01"],
+      ]);
+      expect([...activityRequests[1]!.url.searchParams]).toEqual([
+        ["oldest", "1900-01-01"],
+        ["newest", "1900-01-02"],
+      ]);
+      expect(await value.store.all("SELECT * FROM store_owner")).toEqual(ownerAfterFirstSync);
+      await expect(createSyncStateRepository(value.store).readWatermark("intervals-icu", "bulk-fit")).resolves.toEqual({
+        source: "intervals-icu",
+        lane: "bulk-fit",
+        value: JSON.stringify({ v: 1, cycle: 1, window_start: "1900-01-01", window_end: "1900-01-02",
+          last_key: null, complete: true }),
+      });
     } finally {
       await value.store.close();
     }
@@ -487,12 +552,33 @@ describe("incremental backfill pages", () => {
     try {
       await syncInWriter(value, "synthetic-athlete-owner", "synthetic-owner");
       const before = await storedSyncState(value.store);
+      const mismatchRequests: BackfillRequest[] = [];
+      const mismatchFetch = profileFetch("synthetic-athlete-other", mismatchRequests);
 
       await expect(
-        syncInWriter(value, "synthetic-athlete-other", "synthetic-other"),
+        syncInWriterWithFetch(value, "synthetic-other", mismatchFetch),
       ).rejects.toThrow("training account mismatch");
 
+      expect(mismatchRequests.filter(({ endpoint }) => endpoint === "profile")).toHaveLength(1);
+      expect(mismatchRequests.filter(({ endpoint }) => endpoint === "activities")).toHaveLength(0);
       expect(await storedSyncState(value.store)).toEqual(before);
+    } finally {
+      await value.store.close();
+    }
+  });
+
+  it("continues sync when profile sport settings cannot resolve an owner", async () => {
+    const value = await fresh();
+    const requests: BackfillRequest[] = [];
+    const baseFetch = unresolvedProfileFetch(requests);
+    try {
+      const sync = await syncInWriterWithFetch(value, "synthetic-unresolved", baseFetch);
+
+      expect(sync.result).toMatchObject({ pages: 2, artifacts: 0, reports: [] });
+      expect(requests.map(({ endpoint }) => endpoint)).toEqual(["profile", "activities"]);
+      expect(await value.store.get("SELECT count(*) AS count FROM store_owner")).toEqual({
+        count: 0,
+      });
     } finally {
       await value.store.close();
     }
