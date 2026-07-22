@@ -45,6 +45,7 @@ import {
   isTrustedConnectionRequest,
   registerDesktopScheme,
   rendererOutputRoot,
+  resolveDesktopRendererSource,
 } from "./security.js";
 import { DesktopDaemonSupervisor, isUtilityTerminalFrame } from "./supervisor.js";
 
@@ -85,6 +86,10 @@ async function runDesktop(): Promise<void> {
   await app.whenReady();
   const controller = new AbortController();
   const environment = { ...process.env };
+  const rendererSource = resolveDesktopRendererSource(
+    app.isPackaged,
+    environment.ELECTRON_RENDERER_URL,
+  );
   try {
     await seedFirstRunConfig({ env: environment });
   } catch {
@@ -247,9 +252,7 @@ async function runDesktop(): Promise<void> {
       session: session.defaultSession,
       currentDaemonPort: () => daemonLifecycle!.currentPort(),
       rendererRoot: rendererOutputRoot(),
-      ...(process.env.ELECTRON_RENDERER_URL === undefined
-        ? {}
-        : { developmentUrl: process.env.ELECTRON_RENDERER_URL }),
+      rendererSource,
     });
     protocolInstalled = true;
     const consoleMessages: string[] = [];
@@ -320,15 +323,11 @@ async function runDesktop(): Promise<void> {
       currentWindow: () => mainWindow.current() ?? undefined,
       runtime: daemonLifecycle,
     });
-    const trayPopoverUrl =
-      process.env.ELECTRON_RENDERER_URL === undefined
-        ? "enduragent://app/tray.html"
-        : new URL("/tray.html", process.env.ELECTRON_RENDERER_URL).toString();
     residency = createDesktopResidency({
       app,
       mainWindow,
       trayIconPath: join(app.getAppPath(), "resources", "trayTemplate.png"),
-      trayPopoverUrl,
+      trayPopoverUrl: rendererSource.trayPopoverUrl,
       reportFailure(operation) {
         process.stderr.write(`desktop-residency-failure ${operation}\n`);
       },

@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
   BrowserWindow: class {},
   net: { fetch: vi.fn() },
   protocol: { registerSchemesAsPrivileged: vi.fn() },
 }));
+
+import { net } from "electron";
 
 import {
   DESKTOP_CONNECTION_CHANNEL,
@@ -22,9 +24,93 @@ import {
   desktopWindowOptions,
   installDesktopProtocol,
   isTrustedConnectionRequest,
+  resolveDesktopRendererSource,
 } from "../src/main/security.js";
 
 describe("desktop security boundary", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["valid", "https://attacker.invalid/renderer"],
+    ["malformed", ":///synthetic-malformed-renderer"],
+  ])("uses bundled renderers when packaged and the override is %s", (_case, override) => {
+    expect(resolveDesktopRendererSource(true, override)).toEqual({
+      kind: "bundled",
+      trayPopoverUrl: "enduragent://app/tray.html",
+    });
+  });
+
+  it("uses bundled renderers during development without an override", () => {
+    expect(resolveDesktopRendererSource(false, undefined)).toEqual({
+      kind: "bundled",
+      trayPopoverUrl: "enduragent://app/tray.html",
+    });
+  });
+
+  it("uses the development proxy and tray path when an override is present", () => {
+    expect(
+      resolveDesktopRendererSource(
+        false,
+        "http://127.0.0.1:5173/renderer/index.html?source=synthetic",
+      ),
+    ).toEqual({
+      kind: "development",
+      developmentUrl: "http://127.0.0.1:5173/renderer/index.html?source=synthetic",
+      trayPopoverUrl: "http://127.0.0.1:5173/tray.html",
+    });
+  });
+
+  it("proxies development renderer requests through the resolved source", async () => {
+    let handler: ((request: Request) => Promise<Response>) | undefined;
+    const protocol = {
+      handle: vi.fn(async (_scheme: string, installed: (request: Request) => Promise<Response>) => {
+        handler = installed;
+      }),
+    };
+    vi.mocked(net.fetch).mockResolvedValueOnce(new Response("synthetic-proxied-renderer"));
+    await installDesktopProtocol({
+      session: { protocol } as never,
+      currentDaemonPort: () => 45_001,
+      rendererRoot: "/synthetic/renderer",
+      rendererSource: resolveDesktopRendererSource(false, "http://127.0.0.1:5173/root"),
+    });
+
+    const response = await handler!(
+      new Request("enduragent://app/assets/renderer.js?cache=synthetic"),
+    );
+
+    expect(net.fetch).toHaveBeenCalledOnce();
+    expect(net.fetch).toHaveBeenCalledWith(
+      "http://127.0.0.1:5173/assets/renderer.js?cache=synthetic",
+    );
+    expect(await response.text()).toBe("synthetic-proxied-renderer");
+  });
+
+  it("serves packaged renderer requests without fetching the override", async () => {
+    let handler: ((request: Request) => Promise<Response>) | undefined;
+    const protocol = {
+      handle: vi.fn(async (_scheme: string, installed: (request: Request) => Promise<Response>) => {
+        handler = installed;
+      }),
+    };
+    const rendererSource = resolveDesktopRendererSource(true, "https://attacker.invalid/renderer");
+    await installDesktopProtocol({
+      session: { protocol } as never,
+      currentDaemonPort: () => 45_001,
+      rendererRoot: "/synthetic/renderer",
+      rendererSource,
+    });
+
+    const response = await handler!(new Request("enduragent://app/missing.html"));
+
+    expect(rendererSource).not.toHaveProperty("developmentUrl");
+    expect(net.fetch).not.toHaveBeenCalled();
+    expect(response.status).toBe(404);
+  });
+
   it("pins the scheme, IPC, window, and assigned-port-only CSP constants", () => {
     expect({
       DESKTOP_SCHEME,
@@ -86,6 +172,7 @@ describe("desktop security boundary", () => {
       session: { protocol } as never,
       currentDaemonPort: () => port,
       rendererRoot: "/synthetic/renderer",
+      rendererSource: resolveDesktopRendererSource(false, undefined),
     });
     const first = await handler!(new Request("enduragent://app/missing.html"));
     port = 45_002;

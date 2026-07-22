@@ -50,11 +50,36 @@ function safeRendererPath(rendererRoot: string, pathname: string): string | unde
   return target.startsWith(rootPrefix) ? target : undefined;
 }
 
+export type DesktopRendererSource =
+  | {
+      readonly kind: "bundled";
+      readonly trayPopoverUrl: string;
+    }
+  | {
+      readonly kind: "development";
+      readonly developmentUrl: string;
+      readonly trayPopoverUrl: string;
+    };
+
+export function resolveDesktopRendererSource(
+  isPackaged: boolean,
+  developmentUrl: string | undefined,
+): DesktopRendererSource {
+  if (isPackaged || developmentUrl === undefined) {
+    return { kind: "bundled", trayPopoverUrl: "enduragent://app/tray.html" };
+  }
+  return {
+    kind: "development",
+    developmentUrl,
+    trayPopoverUrl: new URL("/tray.html", developmentUrl).toString(),
+  };
+}
+
 export async function installDesktopProtocol(input: {
   readonly session: Session;
   readonly currentDaemonPort: () => number;
   readonly rendererRoot: string;
-  readonly developmentUrl?: string;
+  readonly rendererSource: DesktopRendererSource;
 }): Promise<void> {
   const withCurrentPolicy = (response: Response): Response =>
     responseWithPolicy(response, createDesktopContentSecurityPolicy(input.currentDaemonPort()));
@@ -62,8 +87,8 @@ export async function installDesktopProtocol(input: {
     const requested = new URL(request.url);
     if (requested.host !== DESKTOP_HOST)
       return withCurrentPolicy(new Response(null, { status: 404 }));
-    if (input.developmentUrl !== undefined) {
-      const upstream = new URL(input.developmentUrl);
+    if (input.rendererSource.kind === "development") {
+      const upstream = new URL(input.rendererSource.developmentUrl);
       upstream.pathname = requested.pathname;
       upstream.search = requested.search;
       return withCurrentPolicy(await net.fetch(upstream.toString()));
