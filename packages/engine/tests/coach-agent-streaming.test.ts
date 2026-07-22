@@ -81,6 +81,27 @@ function engineWithTransport(input: {
 }
 
 describe("coach agent streaming", () => {
+  it("emits actionable reauthentication copy for a rejected sign-in refresh", async () => {
+    const failure = new Error("rejected");
+    const { engine } = engineWithTransport({
+      generate: async () => {
+        throw failure;
+      },
+      classifyFailure: () => "reauth",
+    });
+    const events: TurnEvent[] = [];
+
+    await expect(
+      engine.chat({ chatId: "reauth", message: "hello" }, (event) => events.push(event)),
+    ).rejects.toBe(failure);
+
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      kind: "provider-auth",
+      athleteMessage: "Your ChatGPT sign-in is no longer valid. Open Setup and sign in again.",
+    });
+  });
+
   it("emits ordered text_delta events before final-text", async () => {
     const { dataDir, engine } = engineWithTransport({
       generate: async (request) => {
@@ -92,9 +113,8 @@ describe("coach agent streaming", () => {
       },
     });
     const events: TurnEvent[] = [];
-    const response = await engine.chat(
-      { chatId: "stream-order", message: "hello" },
-      (event) => events.push(event),
+    const response = await engine.chat({ chatId: "stream-order", message: "hello" }, (event) =>
+      events.push(event),
     );
 
     expect(response).toEqual({ text: "Hello, athlete" });
@@ -158,6 +178,7 @@ describe("coach agent streaming", () => {
       "server_error",
       "network",
       "auth",
+      "reauth",
       "invalid_request",
       "unknown",
     ] as const)("does not retry %s after provider text", async (failure) => {

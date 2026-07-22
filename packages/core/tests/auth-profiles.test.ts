@@ -1,7 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, statSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
+import type { RefreshFailureReason } from "../src/auth/refresh-failure.js";
+import type { OAuthCredential } from "../src/auth/profiles.js";
 
 // Redirect $HOME so the profile file lands in a temp dir.
 let tempHome: string;
@@ -25,10 +37,52 @@ function profilesPath(): string {
   return join(homedir(), ".cycling-coach", "auth-profiles.json");
 }
 
+function invalidUtf8ProfilesBytes(): Buffer {
+  return Buffer.concat([
+    Buffer.from('{"openai-codex":{"type":"oauth","access":"invalid-', "utf8"),
+    Buffer.from([0xc3, 0x28]),
+    Buffer.from('","refresh":"invalid-refresh","expires":4102444800000}}', "utf8"),
+  ]);
+}
+
 async function loadModule() {
   const mod = await import("../src/auth/profiles.js");
   return mod;
 }
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve = (_value: T | PromiseLike<T>): void => {
+    throw new Error("Deferred promise was not initialized");
+  };
+  let reject = (_reason?: unknown): void => {
+    throw new Error("Deferred promise was not initialized");
+  };
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
+function refreshFailure(reason: RefreshFailureReason): Error & {
+  readonly refreshFailureReason: RefreshFailureReason;
+} {
+  return Object.assign(new Error("Synthetic refresh failure"), {
+    name: "TokenRefreshError",
+    refreshFailureReason: reason,
+  });
+}
+
+const nonReauthFailureReasons: ReadonlyArray<Exclude<RefreshFailureReason, "reauth">> = [
+  "server_error",
+  "network",
+  "rate_limit",
+  "unknown",
+];
 
 describe("auth/profiles", () => {
   it("loadProfile returns null when file is missing", async () => {
@@ -131,12 +185,132 @@ describe("auth/profiles", () => {
     expect(token).toBe("rotated");
   });
 
-  it("getFreshToken surfaces RefreshTokenReusedError only after a retry also fails", async () => {
+  it("getFreshToken preserves a newer profile when an ordinary refresh resolves stale", async () => {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+
+    const staleRefresh = {
+      access: "stale-access",
+      refresh: "stale-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "stale-account",
+    };
+    const pendingRefresh = createDeferred<typeof staleRefresh>();
+    const refreshMock = vi.fn().mockReturnValue(pendingRefresh.promise);
+    vi.doMock("../src/agent/codex/oauth.js", () => ({
+      refreshCodexToken: refreshMock,
+      loginCodex: vi.fn(),
+    }));
+
+    const { saveProfile, loadProfile, getFreshToken } = await loadModule();
+    const original: OAuthCredential = {
+      type: "oauth",
+      access: "original-access",
+      refresh: "original-refresh",
+      expires: Date.now() - 1_000,
+      accountId: "original-account",
+      email: "original@example.test",
+    };
+    const newer: OAuthCredential = {
+      type: "oauth",
+      access: "newer-access",
+      refresh: "newer-refresh",
+      expires: Date.now() + 7_200_000,
+      accountId: "original-account",
+      email: "original@example.test",
+    };
+    saveProfile("openai-codex", original);
+
+    const settled = getFreshToken("openai-codex");
+    await vi.waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(1));
+    saveProfile("openai-codex", newer);
+    const newerBytes = readFileSync(profilesPath(), "utf-8");
+    pendingRefresh.resolve(staleRefresh);
+
+    expect(await settled).toBe("newer-access");
+    expect(loadProfile("openai-codex")).toEqual(newer);
+    expect(readFileSync(profilesPath(), "utf-8")).toBe(newerBytes);
+    expect(refreshMock).toHaveBeenCalledWith("original-refresh", undefined);
+  });
+
+  it("getFreshToken does not resurrect a profile deleted during an ordinary refresh", async () => {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+
+    const staleRefresh = {
+      access: "stale-access",
+      refresh: "stale-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "stale-account",
+    };
+    const pendingRefresh = createDeferred<typeof staleRefresh>();
+    const refreshMock = vi.fn().mockReturnValue(pendingRefresh.promise);
+    vi.doMock("../src/agent/codex/oauth.js", () => ({
+      refreshCodexToken: refreshMock,
+      loginCodex: vi.fn(),
+    }));
+
+    const { saveProfile, loadProfile, getFreshToken } = await loadModule();
+    saveProfile("openai-codex", {
+      type: "oauth",
+      access: "original-access",
+      refresh: "original-refresh",
+      expires: Date.now() - 1_000,
+      accountId: "original-account",
+      email: "original@example.test",
+    });
+
+    const settled = getFreshToken("openai-codex");
+    await vi.waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(1));
+    unlinkSync(profilesPath());
+    pendingRefresh.resolve(staleRefresh);
+
+    await expect(settled).rejects.toThrow('No OAuth profile "openai-codex"');
+    expect(existsSync(profilesPath())).toBe(false);
+    expect(loadProfile("openai-codex")).toBeNull();
+    expect(refreshMock).toHaveBeenCalledWith("original-refresh", undefined);
+  });
+
+  it("getFreshToken stops before reauthentication confirmation when the profile was deleted", async () => {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+
+    const refreshMock = vi.fn().mockImplementationOnce(async () => {
+      unlinkSync(profilesPath());
+      throw refreshFailure("reauth");
+    });
+    vi.doMock("../src/agent/codex/oauth.js", () => ({
+      refreshCodexToken: refreshMock,
+      loginCodex: vi.fn(),
+    }));
+
+    const { saveProfile, getFreshToken } = await loadModule();
+    saveProfile("openai-codex", {
+      type: "oauth",
+      access: "original-access",
+      refresh: "original-refresh",
+      expires: Date.now() - 1_000,
+    });
+
+    vi.useFakeTimers();
+    const settled = getFreshToken("openai-codex").then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+    const error = await settled;
+
+    expect(error).toMatchObject({ message: expect.stringContaining("No OAuth profile") });
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(existsSync(profilesPath())).toBe(false);
+  });
+
+  it("getFreshToken surfaces RefreshTokenReusedError after two reauthentication failures", async () => {
     const { mkdirSync } = await import("node:fs");
     mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
 
     const refreshMock = vi.fn(async () => {
-      throw new Error("Failed to refresh OpenAI Codex token");
+      throw refreshFailure("reauth");
     });
     vi.doMock("../src/agent/codex/oauth.js", () => ({
       refreshCodexToken: refreshMock,
@@ -157,23 +331,297 @@ describe("auth/profiles", () => {
       (err: unknown) => err,
     );
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(await settled).toBeInstanceOf(RefreshTokenReusedError);
+    const error = await settled;
+    expect(error).toBeInstanceOf(RefreshTokenReusedError);
+    expect(error).toMatchObject({ refreshFailureReason: "reauth" });
     expect(refreshMock).toHaveBeenCalledTimes(2);
   });
 
-  it("getFreshToken recovers when a transient failure clears on retry", async () => {
+  it.each(nonReauthFailureReasons)(
+    "getFreshToken propagates a first %s failure without delay or retry",
+    async (reason) => {
+      const { mkdirSync } = await import("node:fs");
+      mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+
+      const firstFailure = refreshFailure(reason);
+      const refreshMock = vi.fn().mockRejectedValue(firstFailure);
+      vi.doMock("../src/agent/codex/oauth.js", () => ({
+        refreshCodexToken: refreshMock,
+        loginCodex: vi.fn(),
+      }));
+
+      const { saveProfile, getFreshToken } = await loadModule();
+      saveProfile("openai-codex", {
+        type: "oauth",
+        access: "old",
+        refresh: "synthetic-refresh",
+        expires: Date.now() - 1000,
+      });
+
+      vi.useFakeTimers();
+      const error = await getFreshToken("openai-codex").then(
+        () => null,
+        (failure: unknown) => failure,
+      );
+
+      expect(error).toBe(firstFailure);
+      expect(error).toMatchObject({ refreshFailureReason: reason });
+      expect(refreshMock).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it.each(nonReauthFailureReasons)(
+    "getFreshToken propagates a %s failure from reauthentication confirmation unchanged",
+    async (confirmationReason) => {
+      const { mkdirSync } = await import("node:fs");
+      mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+
+      const confirmationFailure = refreshFailure(confirmationReason);
+      const refreshMock = vi
+        .fn()
+        .mockRejectedValueOnce(refreshFailure("reauth"))
+        .mockRejectedValueOnce(confirmationFailure);
+      vi.doMock("../src/agent/codex/oauth.js", () => ({
+        refreshCodexToken: refreshMock,
+        loginCodex: vi.fn(),
+      }));
+
+      const { saveProfile, getFreshToken, RefreshTokenReusedError } = await loadModule();
+      saveProfile("openai-codex", {
+        type: "oauth",
+        access: "synthetic-access",
+        refresh: "synthetic-refresh",
+        expires: Date.now() - 1000,
+      });
+
+      vi.useFakeTimers();
+      const settled = getFreshToken("openai-codex").then(
+        () => null,
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(2_000);
+      const error = await settled;
+
+      expect(error).toBe(confirmationFailure);
+      expect(error).toMatchObject({ refreshFailureReason: confirmationReason });
+      expect(error).not.toBeInstanceOf(RefreshTokenReusedError);
+      expect(refreshMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("getFreshToken confirms reauthentication with the current disk token and preserves metadata", async () => {
     const { mkdirSync } = await import("node:fs");
     mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
 
+    const confirmationExpiry = Date.now() + 3_600_000;
     const refreshMock = vi
       .fn()
-      .mockRejectedValueOnce(new Error("Failed to refresh OpenAI Codex token"))
+      .mockImplementationOnce(async () => {
+        writeFileSync(
+          profilesPath(),
+          JSON.stringify({
+            "openai-codex": {
+              type: "oauth",
+              access: "disk-access",
+              refresh: "disk-refresh",
+              expires: 0,
+              accountId: "disk-account",
+              email: "disk@example.test",
+            },
+          }),
+        );
+        throw refreshFailure("reauth");
+      })
       .mockResolvedValueOnce({
-        access: "retry-access",
-        refresh: "retry-refresh",
-        expires: Date.now() + 3_600_000,
-        accountId: "acct",
+        access: "confirmed-access",
+        refresh: "confirmed-refresh",
+        expires: confirmationExpiry,
+        accountId: "confirmed-account",
       });
+    vi.doMock("../src/agent/codex/oauth.js", () => ({
+      refreshCodexToken: refreshMock,
+      loginCodex: vi.fn(),
+    }));
+
+    const { saveProfile, getFreshToken } = await loadModule();
+    saveProfile("openai-codex", {
+      type: "oauth",
+      access: "old",
+      refresh: "initial-refresh",
+      expires: Date.now() - 1000,
+      accountId: "initial-account",
+      email: "initial@example.test",
+    });
+
+    vi.useFakeTimers();
+    const settled = getFreshToken("openai-codex");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await settled).toBe("confirmed-access");
+    expect(refreshMock).toHaveBeenCalledTimes(2);
+    expect(refreshMock.mock.calls.map(([refreshToken]) => refreshToken)).toEqual([
+      "initial-refresh",
+      "disk-refresh",
+    ]);
+
+    const saved = JSON.parse(readFileSync(profilesPath(), "utf-8"));
+    expect(saved["openai-codex"]).toEqual({
+      type: "oauth",
+      access: "confirmed-access",
+      refresh: "confirmed-refresh",
+      expires: confirmationExpiry,
+      accountId: "confirmed-account",
+      email: "disk@example.test",
+    });
+  });
+
+  it("getFreshToken preserves a newer profile when reauthentication confirmation resolves stale", async () => {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+
+    const staleConfirmation = {
+      access: "stale-confirmed-access",
+      refresh: "stale-confirmed-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "stale-confirmed-account",
+    };
+    const pendingConfirmation = createDeferred<typeof staleConfirmation>();
+    const refreshMock = vi
+      .fn()
+      .mockRejectedValueOnce(refreshFailure("reauth"))
+      .mockReturnValueOnce(pendingConfirmation.promise);
+    vi.doMock("../src/agent/codex/oauth.js", () => ({
+      refreshCodexToken: refreshMock,
+      loginCodex: vi.fn(),
+    }));
+
+    const { saveProfile, loadProfile, getFreshToken } = await loadModule();
+    const original: OAuthCredential = {
+      type: "oauth",
+      access: "original-access",
+      refresh: "original-refresh",
+      expires: Date.now() - 1_000,
+      accountId: "original-account",
+      email: "original@example.test",
+    };
+    const newer: OAuthCredential = {
+      type: "oauth",
+      access: "newer-access",
+      refresh: "newer-refresh",
+      expires: Date.now() + 7_200_000,
+      accountId: "original-account",
+      email: "original@example.test",
+    };
+    saveProfile("openai-codex", original);
+
+    vi.useFakeTimers();
+    const settled = getFreshToken("openai-codex");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(refreshMock).toHaveBeenCalledTimes(2);
+    saveProfile("openai-codex", newer);
+    const newerBytes = readFileSync(profilesPath(), "utf-8");
+    pendingConfirmation.resolve(staleConfirmation);
+
+    expect(await settled).toBe("newer-access");
+    expect(loadProfile("openai-codex")).toEqual(newer);
+    expect(readFileSync(profilesPath(), "utf-8")).toBe(newerBytes);
+    expect(refreshMock.mock.calls.map(([refreshToken]) => refreshToken)).toEqual([
+      "original-refresh",
+      "original-refresh",
+    ]);
+  });
+
+  it("getFreshToken discards a confirmation response when the profile is deleted in flight", async () => {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+
+    const confirmation = createDeferred<{
+      access: string;
+      refresh: string;
+      expires: number;
+      accountId: string;
+    }>();
+    const refreshMock = vi
+      .fn()
+      .mockRejectedValueOnce(refreshFailure("reauth"))
+      .mockReturnValueOnce(confirmation.promise);
+    vi.doMock("../src/agent/codex/oauth.js", () => ({
+      refreshCodexToken: refreshMock,
+      loginCodex: vi.fn(),
+    }));
+
+    const { saveProfile, loadProfile, getFreshToken } = await loadModule();
+    saveProfile("openai-codex", {
+      type: "oauth",
+      access: "original-access",
+      refresh: "original-refresh",
+      expires: Date.now() - 1_000,
+    });
+
+    vi.useFakeTimers();
+    const settled = getFreshToken("openai-codex").then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(refreshMock).toHaveBeenCalledTimes(2);
+    unlinkSync(profilesPath());
+    confirmation.resolve({
+      access: "discarded-access",
+      refresh: "discarded-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "discarded-account",
+    });
+    const error = await settled;
+
+    expect(error).toMatchObject({ message: expect.stringContaining("No OAuth profile") });
+    expect(existsSync(profilesPath())).toBe(false);
+    expect(loadProfile("openai-codex")).toBeNull();
+  });
+
+  it("getFreshToken commits a successful rotation despite a late abort", async () => {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+    const controller = new AbortController();
+    const lateAbort = new DOMException("Cancelled after endpoint success", "AbortError");
+    const refreshMock = vi.fn().mockImplementationOnce(async () => {
+      controller.abort(lateAbort);
+      return {
+        access: "committed-access",
+        refresh: "committed-refresh",
+        expires: Date.now() + 3_600_000,
+        accountId: "committed-account",
+      };
+    });
+    vi.doMock("../src/agent/codex/oauth.js", () => ({
+      refreshCodexToken: refreshMock,
+      loginCodex: vi.fn(),
+    }));
+
+    const { saveProfile, loadProfile, getFreshToken } = await loadModule();
+    saveProfile("openai-codex", {
+      type: "oauth",
+      access: "original-access",
+      refresh: "original-refresh",
+      expires: Date.now() - 1_000,
+    });
+
+    await expect(getFreshToken("openai-codex", controller.signal)).resolves.toBe(
+      "committed-access",
+    );
+    expect(controller.signal.reason).toBe(lateAbort);
+    expect(loadProfile("openai-codex")).toMatchObject({
+      access: "committed-access",
+      refresh: "committed-refresh",
+    });
+  });
+
+  it("getFreshToken propagates an ordinary error without delay or retry", async () => {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+
+    const ordinaryFailure = new Error("Synthetic ordinary failure");
+    const refreshMock = vi.fn().mockRejectedValue(ordinaryFailure);
     vi.doMock("../src/agent/codex/oauth.js", () => ({
       refreshCodexToken: refreshMock,
       loginCodex: vi.fn(),
@@ -188,43 +636,86 @@ describe("auth/profiles", () => {
     });
 
     vi.useFakeTimers();
-    const settled = getFreshToken("openai-codex");
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(await settled).toBe("retry-access");
-    expect(refreshMock).toHaveBeenCalledTimes(2);
-
-    const saved = JSON.parse(readFileSync(profilesPath(), "utf-8"));
-    expect(saved["openai-codex"].refresh).toBe("retry-refresh");
+    const error = await getFreshToken("openai-codex").then(
+      () => null,
+      (failure: unknown) => failure,
+    );
+    expect(error).toBe(ordinaryFailure);
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("getFreshToken rethrows timeout-flavored errors untouched", async () => {
+  it("getFreshToken preserves an abort that happens before the retry wait", async () => {
     const { mkdirSync } = await import("node:fs");
     mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
 
-    const refreshMock = vi.fn(async () => {
-      throw new Error("Request timed out");
-    });
+    const pendingRefresh = createDeferred<never>();
+    const refreshMock = vi.fn().mockReturnValue(pendingRefresh.promise);
     vi.doMock("../src/agent/codex/oauth.js", () => ({
       refreshCodexToken: refreshMock,
       loginCodex: vi.fn(),
     }));
 
-    const { saveProfile, getFreshToken, RefreshTokenReusedError } = await loadModule();
+    const { saveProfile, getFreshToken } = await loadModule();
     saveProfile("openai-codex", {
       type: "oauth",
       access: "old",
-      refresh: "old-refresh",
+      refresh: "synthetic-refresh",
       expires: Date.now() - 1000,
     });
 
-    const err = await getFreshToken("openai-codex").then(
-      () => null,
-      (e: unknown) => e,
-    );
-    expect(err).toBeInstanceOf(Error);
-    expect(err).not.toBeInstanceOf(RefreshTokenReusedError);
-    expect((err as Error).message).toBe("Request timed out");
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const abortError = new DOMException("Cancelled before wait", "AbortError");
+    const settled = getFreshToken("openai-codex", controller.signal);
+    for (let turn = 0; turn < 10 && refreshMock.mock.calls.length === 0; turn += 1) {
+      await Promise.resolve();
+    }
     expect(refreshMock).toHaveBeenCalledTimes(1);
+    controller.abort(abortError);
+    pendingRefresh.reject(refreshFailure("reauth"));
+
+    await expect(settled).rejects.toBe(abortError);
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(refreshMock).toHaveBeenCalledWith("synthetic-refresh", controller.signal);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("getFreshToken aborts an active retry wait without a second refresh", async () => {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+
+    const refreshMock = vi.fn().mockRejectedValue(refreshFailure("reauth"));
+    vi.doMock("../src/agent/codex/oauth.js", () => ({
+      refreshCodexToken: refreshMock,
+      loginCodex: vi.fn(),
+    }));
+
+    const { saveProfile, getFreshToken } = await loadModule();
+    saveProfile("openai-codex", {
+      type: "oauth",
+      access: "old",
+      refresh: "synthetic-refresh",
+      expires: Date.now() - 1000,
+    });
+
+    vi.useFakeTimers();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const controller = new AbortController();
+    const abortError = new DOMException("Cancelled during wait", "AbortError");
+    const settled = getFreshToken("openai-codex", controller.signal);
+    for (let turn = 0; turn < 10 && vi.getTimerCount() !== 1; turn += 1) {
+      await Promise.resolve();
+    }
+    expect(vi.getTimerCount()).toBe(1);
+    expect(timeoutSpy).toHaveBeenCalledTimes(1);
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 2_000);
+    controller.abort(abortError);
+
+    await expect(settled).rejects.toBe(abortError);
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(refreshMock).toHaveBeenCalledWith("synthetic-refresh", controller.signal);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("concurrent getFreshToken calls perform a single refresh", async () => {
@@ -278,18 +769,74 @@ describe("auth/profiles", () => {
     expect(entries).toEqual(["auth-profiles.json"]);
 
     expect(statSync(profilesPath()).mode & 0o777).toBe(0o600);
-    expect(JSON.parse(readFileSync(profilesPath(), "utf-8"))["openai-codex"].access).toBe(
-      "second",
-    );
+    expect(JSON.parse(readFileSync(profilesPath(), "utf-8"))["openai-codex"].access).toBe("second");
     expect(loadProfile("openai-codex")?.access).toBe("second");
   });
 
-  it("survives a corrupt profiles file", async () => {
+  it("returns null without changing a corrupt profiles file", async () => {
     const { mkdirSync } = await import("node:fs");
     mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
     writeFileSync(profilesPath(), "not-json{{", { mode: 0o600 });
 
     const { loadProfile } = await loadModule();
     expect(loadProfile("openai-codex")).toBeNull();
+    expect(readFileSync(profilesPath(), "utf8")).toBe("not-json{{");
+  });
+
+  it("returns null without changing invalid UTF-8 profile bytes", async () => {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+    const originalBytes = invalidUtf8ProfilesBytes();
+    writeFileSync(profilesPath(), originalBytes, { mode: 0o600 });
+
+    const { loadProfile } = await loadModule();
+    expect(loadProfile("openai-codex")).toBeNull();
+    expect(readFileSync(profilesPath())).toEqual(originalBytes);
+  });
+
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "does not treat an unreadable profiles file as absent",
+    async () => {
+      const { mkdirSync } = await import("node:fs");
+      mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+      const originalBytes = JSON.stringify({
+        "openai-codex": {
+          type: "oauth",
+          access: "unreadable-access",
+          refresh: "unreadable-refresh",
+          expires: 4_102_444_800_000,
+        },
+      });
+      writeFileSync(profilesPath(), originalBytes, { mode: 0o600 });
+      chmodSync(profilesPath(), 0o000);
+      try {
+        const { loadProfile } = await loadModule();
+        expect(() => loadProfile("openai-codex")).toThrow();
+      } finally {
+        chmodSync(profilesPath(), 0o600);
+      }
+      expect(readFileSync(profilesPath(), "utf8")).toBe(originalBytes);
+      expect(existsSync(`${profilesPath()}.corrupt`)).toBe(false);
+    },
+  );
+
+  it("recovers invalid UTF-8 profile bytes after a completed login save", async () => {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+    const originalBytes = invalidUtf8ProfilesBytes();
+    writeFileSync(profilesPath(), originalBytes, { mode: 0o600 });
+
+    const { loadProfile, saveProfile } = await loadModule();
+    saveProfile("openai-codex", {
+      type: "oauth",
+      access: "replacement-access",
+      refresh: "replacement-refresh",
+      expires: 4_102_444_800_000,
+    });
+
+    expect(loadProfile("openai-codex")).toMatchObject({ access: "replacement-access" });
+    expect(readFileSync(`${profilesPath()}.corrupt`)).toEqual(originalBytes);
+    expect(statSync(`${profilesPath()}.corrupt`).mode & 0o777).toBe(0o600);
+    expect(statSync(profilesPath()).mode & 0o777).toBe(0o600);
   });
 });

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mountChatView } from "../src/chat/view.js";
-import type { ChatState } from "../src/turn-state.js";
+import { EMPTY_CHAT_STATE, reduceChatState, type ChatState } from "../src/turn-state.js";
 
 class FakeElement {
   readonly children: FakeElement[] = [];
@@ -91,6 +91,28 @@ function find(root: FakeElement, predicate: (node: FakeElement) => boolean): Fak
   throw new Error("Element not found");
 }
 
+function findAll(root: FakeElement, predicate: (node: FakeElement) => boolean): FakeElement[] {
+  return [
+    ...(predicate(root) ? [root] : []),
+    ...root.children.flatMap((child) => findAll(child, predicate)),
+  ];
+}
+
+function occurrences(value: string, part: string): number {
+  return value.split(part).length - 1;
+}
+
+function submittedState(): ChatState {
+  return reduceChatState(EMPTY_CHAT_STATE, {
+    type: "submit",
+    requestKey: 1,
+    userMessage: "How should I train?",
+    userMessageId: "message-1",
+    assistantMessageId: "message-2",
+    includeUser: true,
+  });
+}
+
 const emptyState: ChatState = {
   status: "idle",
   messages: [],
@@ -106,6 +128,216 @@ beforeEach(() => {
 });
 
 describe("chat view", () => {
+  it("renders the athlete row without an empty coach row while awaiting a response", () => {
+    const thread = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: thread as never,
+      composerHost: new FakeElement("div") as never,
+    });
+    const state = reduceChatState(EMPTY_CHAT_STATE, {
+      type: "submit",
+      requestKey: 1,
+      userMessage: "How should I train?",
+      userMessageId: "message-1",
+      assistantMessageId: "message-2",
+      includeUser: true,
+    });
+
+    mounted.view.render(state);
+
+    expect(findAll(thread, (node) => node.className.includes("chat-message--athlete")).length).toBe(
+      1,
+    );
+    expect(findAll(thread, (node) => node.className.includes("chat-message--coach")).length).toBe(
+      0,
+    );
+  });
+
+  it("renders no-draft reauthentication once as a notice and re-enables the composer", () => {
+    const thread = new FakeElement("div");
+    const composerHost = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: thread as never,
+      composerHost: composerHost as never,
+    });
+    const reauthenticationCopy =
+      "Your ChatGPT sign-in is no longer valid. Open Setup and sign in again.";
+    let state = reduceChatState(submittedState(), {
+      type: "event",
+      requestKey: 1,
+      event: {
+        type: "error",
+        turnId: "turn-1",
+        chatId: "desktop",
+        error_class: "unknown",
+        kind: "provider-auth",
+        athleteMessage: reauthenticationCopy,
+        overflowAttempts: 0,
+        timeoutAttempts: 0,
+        rateLimitAttempts: 0,
+        duration_ms: 1,
+        compactions: 0,
+      },
+    });
+    state = reduceChatState(state, {
+      type: "fail",
+      requestKey: 1,
+      copy: "The coach couldn't respond. Please try again.",
+    });
+
+    mounted.view.render(state);
+
+    expect(occurrences(thread.textContent, reauthenticationCopy)).toBe(1);
+    expect(thread.textContent).not.toContain("The coach couldn't respond");
+    expect(findAll(thread, (node) => node.className.includes("chat-message--coach")).length).toBe(
+      0,
+    );
+    expect(find(thread, (node) => node.className === "chat-retry").hidden).toBe(true);
+    expect(find(composerHost, (node) => node.tagName === "textarea").disabled).toBe(false);
+    expect(find(composerHost, (node) => node.tagName === "button").disabled).toBe(false);
+  });
+
+  it("renders a partial coach draft and the reauthentication notice once each", () => {
+    const thread = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: thread as never,
+      composerHost: new FakeElement("div") as never,
+    });
+    const reauthenticationCopy =
+      "Your ChatGPT sign-in is no longer valid. Open Setup and sign in again.";
+    let state = reduceChatState(submittedState(), {
+      type: "event",
+      requestKey: 1,
+      event: { type: "text_delta", turnId: "turn-1", delta: "Partial coach draft" },
+    });
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 1,
+      event: {
+        type: "error",
+        turnId: "turn-1",
+        chatId: "desktop",
+        error_class: "unknown",
+        kind: "provider-auth",
+        athleteMessage: reauthenticationCopy,
+        overflowAttempts: 0,
+        timeoutAttempts: 0,
+        rateLimitAttempts: 0,
+        duration_ms: 1,
+        compactions: 0,
+      },
+    });
+    state = reduceChatState(state, {
+      type: "fail",
+      requestKey: 1,
+      copy: "The coach couldn't respond. Please try again.",
+    });
+
+    mounted.view.render(state);
+
+    expect(occurrences(thread.textContent, "Partial coach draft")).toBe(1);
+    expect(occurrences(thread.textContent, reauthenticationCopy)).toBe(1);
+    expect(findAll(thread, (node) => node.className.includes("chat-message--coach")).length).toBe(
+      1,
+    );
+  });
+
+  it("renders canonical final text once after an error and leaves the contract notice", () => {
+    const thread = new FakeElement("div");
+    const composerHost = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: thread as never,
+      composerHost: composerHost as never,
+    });
+    const finalText = "Take an easy spin today.";
+    const contractNotice = "Your ChatGPT sign-in is no longer valid. Open Setup and sign in again.";
+    let state = reduceChatState(submittedState(), {
+      type: "event",
+      requestKey: 1,
+      event: {
+        type: "error",
+        turnId: "turn-1",
+        chatId: "desktop",
+        error_class: "unknown",
+        kind: "provider-auth",
+        athleteMessage: contractNotice,
+        overflowAttempts: 0,
+        timeoutAttempts: 0,
+        rateLimitAttempts: 0,
+        duration_ms: 1,
+        compactions: 0,
+      },
+    });
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 1,
+      event: { type: "final-text", turnId: "turn-1", text: finalText },
+    });
+    state = reduceChatState(state, { type: "complete", requestKey: 1 });
+
+    mounted.view.render(state);
+
+    const coachRows = findAll(thread, (node) => node.className.includes("chat-message--coach"));
+    expect(coachRows).toHaveLength(1);
+    expect(coachRows[0]?.textContent).toContain(finalText);
+    expect(coachRows[0]?.textContent.trim()).not.toBe("");
+    expect(occurrences(thread.textContent, finalText)).toBe(1);
+    expect(occurrences(thread.textContent, contractNotice)).toBe(1);
+    expect(thread.textContent).not.toContain("The coach couldn't respond");
+    expect(find(thread, (node) => node.className === "chat-retry").hidden).toBe(true);
+    expect(find(composerHost, (node) => node.tagName === "textarea").disabled).toBe(false);
+    expect(find(composerHost, (node) => node.tagName === "button").disabled).toBe(false);
+  });
+
+  it("renders generic failure copy once as a notice without an empty coach row", () => {
+    const thread = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: thread as never,
+      composerHost: new FakeElement("div") as never,
+    });
+    const failureCopy = "The coach couldn't respond. Please try again.";
+    const state = reduceChatState(submittedState(), {
+      type: "fail",
+      requestKey: 1,
+      copy: failureCopy,
+    });
+
+    mounted.view.render(state);
+
+    expect(occurrences(thread.textContent, failureCopy)).toBe(1);
+    expect(findAll(thread, (node) => node.className.includes("chat-message--coach")).length).toBe(
+      0,
+    );
+  });
+
+  it("renders an empty interruption notice and retry without an empty coach row", () => {
+    const thread = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: thread as never,
+      composerHost: new FakeElement("div") as never,
+    });
+    const interruptionCopy = "Connection interrupted. Your partial response is preserved.";
+    const state = reduceChatState(submittedState(), {
+      type: "interrupt",
+      requestKey: 1,
+      copy: interruptionCopy,
+    });
+
+    mounted.view.render(state);
+
+    expect(occurrences(thread.textContent, interruptionCopy)).toBe(1);
+    expect(findAll(thread, (node) => node.className.includes("chat-message--coach")).length).toBe(
+      0,
+    );
+    expect(find(thread, (node) => node.className === "chat-retry").hidden).toBe(false);
+  });
+
   it("places one notice host immediately before the composer and removes it on dispose", () => {
     const composerHost = new FakeElement("div");
     const mounted = mountChatView({

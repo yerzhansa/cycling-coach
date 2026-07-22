@@ -1,4 +1,5 @@
 import type { ApiError } from "intervals-icu-api";
+import { readRefreshFailureReason } from "../auth/refresh-failure.js";
 import {
   classifyFailure,
   extractRetryAfterMs,
@@ -13,10 +14,8 @@ export type AgentErrorKind =
   | "intervals"
   | "unknown";
 
-const PROVIDER_DOWN_MESSAGE =
-  "The model provider is having trouble — try again in a few minutes.";
-const INTERVALS_TRANSIENT_MESSAGE =
-  "Couldn't reach intervals.icu right now — try again shortly.";
+const PROVIDER_DOWN_MESSAGE = "The model provider is having trouble — try again in a few minutes.";
+const INTERVALS_TRANSIENT_MESSAGE = "Couldn't reach intervals.icu right now — try again shortly.";
 const INTERVALS_CREDENTIALS_MESSAGE =
   "intervals.icu rejected the request — check your intervals.icu connection or API key.";
 
@@ -63,10 +62,40 @@ function rateLimited(err: unknown): { kind: AgentErrorKind; athleteMessage: stri
   };
 }
 
+function assertNever(value: never): never {
+  throw new TypeError(`Unhandled failure reason: ${String(value)}`);
+}
+
 export function classifyAgentError(err: unknown): {
   kind: AgentErrorKind;
   athleteMessage: string;
 } {
+  const refreshFailureReason = readRefreshFailureReason(err);
+  switch (refreshFailureReason) {
+    case "reauth":
+      return {
+        kind: "provider-auth",
+        athleteMessage: "Your ChatGPT sign-in is no longer valid. Sign in again to continue.",
+      };
+    case "rate_limit":
+      return rateLimited(err);
+    case "server_error":
+    case "network":
+      return {
+        kind: "provider-down",
+        athleteMessage: PROVIDER_DOWN_MESSAGE,
+      };
+    case "unknown":
+      return {
+        kind: "unknown",
+        athleteMessage: "Sorry, something went wrong. Please try again.",
+      };
+    case null:
+      break;
+    default:
+      return assertNever(refreshFailureReason);
+  }
+
   if (isRateLimitError(err)) {
     return rateLimited(err);
   }
@@ -87,7 +116,15 @@ export function classifyAgentError(err: unknown): {
     };
   }
 
-  switch (classifyFailure(err)) {
+  const failure = classifyFailure(err);
+  switch (failure) {
+    case "reauth":
+      return {
+        kind: "provider-auth",
+        athleteMessage: "Your ChatGPT sign-in is no longer valid. Sign in again to continue.",
+      };
+    case "rate_limit":
+      return rateLimited(err);
     case "auth":
       return {
         kind: "provider-auth",
@@ -101,10 +138,14 @@ export function classifyAgentError(err: unknown): {
         kind: "provider-down",
         athleteMessage: PROVIDER_DOWN_MESSAGE,
       };
-    default:
+    case "overflow":
+    case "invalid_request":
+    case "unknown":
       return {
         kind: "unknown",
         athleteMessage: "Sorry, something went wrong. Please try again.",
       };
+    default:
+      return assertNever(failure);
   }
 }

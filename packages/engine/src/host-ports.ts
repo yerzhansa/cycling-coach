@@ -201,6 +201,7 @@ export type FailureReason =
   | "server_error"
   | "network"
   | "auth"
+  | "reauth"
   | "invalid_request"
   | "unknown";
 

@@ -157,7 +157,9 @@ describe("runBinary CLI routing", () => {
     const { runBinary } = await import("../src/run-binary.js");
     await expect(runBinary(stubRunningSport, stubRunningBinary)).rejects.toThrow("__exit_1");
 
-    expect(errSpy.mock.calls.some((c) => String(c[0]).includes("Unknown command: bogus"))).toBe(true);
+    expect(errSpy.mock.calls.some((c) => String(c[0]).includes("Unknown command: bogus"))).toBe(
+      true,
+    );
   });
 });
 
@@ -188,9 +190,25 @@ describe("formatCliReply", () => {
   it("on a provider-auth error returns the provider-neutral one-liner (no payload)", async () => {
     const { formatCliReply } = await import("../src/run-binary.js");
     const reply = formatCliReply(apiError(401));
-    expect(reply).toBe("The model provider rejected the API key — check your provider credentials.");
+    expect(reply).toBe(
+      "The model provider rejected the API key — check your provider credentials.",
+    );
     expect(reply).not.toContain("Anthropic");
     expect(reply).not.toContain("example.invalid");
+  });
+
+  it("on a refresh rejection returns the ChatGPT sign-in recovery path", async () => {
+    const { formatCliReply } = await import("../src/run-binary.js");
+    expect(formatCliReply({ refreshFailureReason: "reauth" })).toBe(
+      "Your ChatGPT sign-in is no longer valid. Sign in again to continue.",
+    );
+  });
+
+  it("on a structurally tagged refresh rate limit returns the wait copy", async () => {
+    const { formatCliReply } = await import("../src/run-binary.js");
+    expect(formatCliReply({ refreshFailureReason: "rate_limit", retryAfterMs: 2_000 })).toBe(
+      "Rate limited — please try again in ~2 seconds.",
+    );
   });
 
   it("on a provider-down error returns the one-line classified copy", async () => {

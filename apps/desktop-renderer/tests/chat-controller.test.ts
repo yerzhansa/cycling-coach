@@ -27,7 +27,7 @@ function envelope(event: TurnEvent, requestId = 1): CoachTurnEventNotificationEn
   };
 }
 
-function errorEvent(message = "Safe athlete message"): TurnEvent {
+function errorEvent(message = "Safe athlete message"): Extract<TurnEvent, { type: "error" }> {
   return {
     type: "error",
     turnId: "turn-1",
@@ -91,6 +91,51 @@ function subject(
 }
 
 describe("chat controller", () => {
+  it("renders the reauthentication copy instead of the generic failure copy", async () => {
+    const reauthenticationCopy =
+      "Your ChatGPT sign-in is no longer valid. Open Setup and sign in again.";
+    const fake = client(async (_request, options) => {
+      deliver(options, {
+        ...errorEvent(reauthenticationCopy),
+        kind: "provider-auth",
+      });
+      options?.onTerminalEnvelope?.({
+        jsonrpc: "2.0",
+        id: 1,
+        error: { code: -32603, message: "Internal error" },
+      });
+      throw new Error("remote detail");
+    });
+    const { controller, states } = subject(fake);
+
+    await controller.submit("Help");
+
+    expect(states.at(-1)?.messages.at(-1)?.text).toBe("");
+    expect(states.at(-1)?.activeTurn?.error?.athleteMessage).toBe(reauthenticationCopy);
+    expect(states.at(-1)?.progress).toBeNull();
+    expect(states.at(-1)?.status).toBe("idle");
+  });
+
+  it("keeps a transient provider failure retryable without reauthentication copy", async () => {
+    const transientCopy = "The model provider is having trouble — try again in a few minutes.";
+    const fake = client(async (_request, options) => {
+      deliver(options, errorEvent(transientCopy));
+      options?.onTerminalEnvelope?.({
+        jsonrpc: "2.0",
+        id: 1,
+        error: { code: -32603, message: "Internal error" },
+      });
+      throw new Error("remote detail");
+    });
+    const { controller, states } = subject(fake);
+
+    await controller.submit("Help");
+
+    expect(states.at(-1)?.messages.at(-1)?.text).toBe("");
+    expect(states.at(-1)?.activeTurn?.error?.athleteMessage).toBe(transientCopy);
+    expect(states.at(-1)?.activeTurn?.error?.athleteMessage).not.toContain("sign in again");
+  });
+
   it("does not wait for spend refresh before settling a completed chat", async () => {
     const gate = new Promise<void>(() => {});
     const fake = client(async (_request, options) => {

@@ -1,10 +1,17 @@
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 import type { AthleteState, CoachEngine } from "@enduragent/coach-contract";
-import { engineConfigFromConfig, loadConfig, type Config } from "@enduragent/core";
+import {
+  RefreshTokenReusedError,
+  engineConfigFromConfig,
+  loadConfig,
+  saveStoredProfile,
+  type Config,
+} from "@enduragent/core";
 import type {
   AthleteDataReaderPort,
   CreateCoachEngineInput,
@@ -270,9 +277,63 @@ function generation(text: string) {
   };
 }
 
+function codexAccessToken(accountId: string): string {
+  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+  const payload = Buffer.from(
+    JSON.stringify({
+      "https://api.openai.com/auth": { chatgpt_account_id: accountId },
+    }),
+  ).toString("base64url");
+  return `${header}.${payload}.synthetic-signature`;
+}
+
+function tokenResponse(access: string, refresh = "synthetic-rotated-refresh"): Response {
+  return new Response(
+    JSON.stringify({ access_token: access, refresh_token: refresh, expires_in: 3600 }),
+    { status: 200 },
+  );
+}
+
+async function writeExpiredOAuthProfile(home: AthleteHome): Promise<void> {
+  await writeFile(
+    join(home.configDir, "auth-profiles.json"),
+    JSON.stringify({
+      "openai-codex": {
+        type: "oauth",
+        access: "synthetic-expired-access",
+        refresh: "synthetic-refresh",
+        expires: 0,
+        accountId: "synthetic-account",
+      },
+    }),
+    { mode: 0o600 },
+  );
+}
+
+async function composeWithCapturedEngineInput(home: AthleteHome, now = 1_000) {
+  let engineInput: CreateCoachEngineInput | undefined;
+  const lifecycle = await compose(home, {
+    bootstrap: async () => reference(),
+    createRuntime: () => runtime(),
+    createBackend: (input) => {
+      engineInput = input;
+      return backend();
+    },
+    createRepository: () => ({
+      insertIfAbsent: async () => false,
+      readCurrent: async () => undefined,
+    }),
+    createResolver: () => missingResolver(),
+    now: () => now,
+  });
+  if (engineInput === undefined) throw new Error("Expected a captured engine input.");
+  return { engineInput, lifecycle };
+}
+
 afterEach(async () => {
   await Promise.all(stores.splice(0).map((store) => store.close().catch(() => {})));
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  vi.restoreAllMocks();
 });
 
 describe("local coach composition", () => {
@@ -368,6 +429,330 @@ describe("local coach composition", () => {
       timezone: "UTC",
       dailyCapUsd: 0.5,
     });
+    await lifecycle.close();
+  });
+
+  it("carries an explicit refresh rejection through the composed desktop ports", async () => {
+    const home = await freshHome();
+    await writeExpiredOAuthProfile(home);
+    const fetchStub = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() =>
+        Promise.resolve(new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 })),
+      );
+    let received: CreateCoachEngineInput | undefined;
+    const lifecycle = await compose(home, {
+      bootstrap: async () => reference(),
+      createRuntime: () => runtime(),
+      createBackend: (input) => {
+        received = input;
+        return backend();
+      },
+      createRepository: () => ({
+        insertIfAbsent: async () => false,
+        readCurrent: async () => undefined,
+      }),
+      createResolver: () => missingResolver(),
+      now: () => 1_000,
+    });
+
+    vi.useFakeTimers();
+    const settled = received!.ports.getAccessToken("openai-codex").then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+    const failure = await settled;
+
+    expect(failure).toBeInstanceOf(RefreshTokenReusedError);
+    expect(failure).toMatchObject({ refreshFailureReason: "reauth" });
+    expect(received!.ports.classifyFailure(failure)).toBe("reauth");
+    expect(fetchStub).toHaveBeenCalledTimes(2);
+    await lifecycle.close();
+  });
+
+  it("carries a server refresh failure through the composed desktop ports", async () => {
+    const home = await freshHome();
+    await writeExpiredOAuthProfile(home);
+    const fetchStub = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("", { status: 503 }));
+    let received: CreateCoachEngineInput | undefined;
+    const lifecycle = await compose(home, {
+      bootstrap: async () => reference(),
+      createRuntime: () => runtime(),
+      createBackend: (input) => {
+        received = input;
+        return backend();
+      },
+      createRepository: () => ({
+        insertIfAbsent: async () => false,
+        readCurrent: async () => undefined,
+      }),
+      createResolver: () => missingResolver(),
+      now: () => 1_000,
+    });
+
+    const failure = await received!.ports.getAccessToken("openai-codex").catch((error) => error);
+
+    expect(received!.ports.classifyFailure(failure)).toBe("server_error");
+    expect(failure).toMatchObject({ refreshFailureReason: "server_error" });
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    await lifecycle.close();
+  });
+
+  it("refreshes once while preserving queued readers, metadata, and a concurrent profile", async () => {
+    const home = await freshHome();
+    const profilesPath = join(home.configDir, "auth-profiles.json");
+    await writeFile(
+      profilesPath,
+      JSON.stringify({
+        "openai-codex": {
+          type: "oauth",
+          access: "synthetic-expired-access",
+          refresh: "synthetic-refresh",
+          expires: 0,
+          accountId: "synthetic-old-account",
+          email: "synthetic@example.test",
+          future: { nested: { generation: 1, retained: true } },
+        },
+        unrelated: { kind: "future-provider", retained: true },
+      }),
+      { mode: 0o600 },
+    );
+    const refreshedAccess = codexAccessToken("synthetic-new-account");
+    const fetchStub = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      saveStoredProfile(profilesPath, "concurrent-provider", {
+        kind: "concurrent-login",
+        retained: true,
+      });
+      return tokenResponse(refreshedAccess);
+    });
+    const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
+
+    await expect(
+      Promise.all([
+        engineInput.ports.getAccessToken("openai-codex"),
+        engineInput.ports.getAccessToken("openai-codex"),
+      ]),
+    ).resolves.toEqual([refreshedAccess, refreshedAccess]);
+
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(await readFile(profilesPath, "utf8"))).toMatchObject({
+      "openai-codex": {
+        type: "oauth",
+        access: refreshedAccess,
+        refresh: "synthetic-rotated-refresh",
+        accountId: "synthetic-new-account",
+        email: "synthetic@example.test",
+        future: { nested: { generation: 1, retained: true } },
+      },
+      unrelated: { kind: "future-provider", retained: true },
+      "concurrent-provider": { kind: "concurrent-login", retained: true },
+    });
+    await lifecycle.close();
+  });
+
+  it("retries a first reauthentication rejection with the current shared refresh token", async () => {
+    const home = await freshHome();
+    await writeExpiredOAuthProfile(home);
+    const profilesPath = join(home.configDir, "auth-profiles.json");
+    const refreshedAccess = codexAccessToken("synthetic-confirmed-account");
+    const requestBodies: string[] = [];
+    const fetchStub = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      requestBodies.push(String(init?.body));
+      if (requestBodies.length === 1) {
+        saveStoredProfile(profilesPath, "openai-codex", {
+          type: "oauth",
+          access: "synthetic-shared-access",
+          refresh: "synthetic-shared-refresh",
+          expires: 0,
+          accountId: "synthetic-shared-account",
+          future: { source: "concurrent-login" },
+        });
+        return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+      }
+      return tokenResponse(refreshedAccess, "synthetic-confirmed-refresh");
+    });
+    const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
+
+    vi.useFakeTimers();
+    const pending = engineInput.ports.getAccessToken("openai-codex");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(pending).resolves.toBe(refreshedAccess);
+
+    expect(fetchStub).toHaveBeenCalledTimes(2);
+    expect(requestBodies[0]).toContain("refresh_token=synthetic-refresh");
+    expect(requestBodies[1]).toContain("refresh_token=synthetic-shared-refresh");
+    expect(JSON.parse(await readFile(profilesPath, "utf8"))["openai-codex"]).toMatchObject({
+      access: refreshedAccess,
+      refresh: "synthetic-confirmed-refresh",
+      future: { source: "concurrent-login" },
+    });
+    await lifecycle.close();
+  });
+
+  it("does not retry or resurrect a profile deleted before reauthentication confirmation", async () => {
+    const home = await freshHome();
+    await writeExpiredOAuthProfile(home);
+    const profilesPath = join(home.configDir, "auth-profiles.json");
+    const fetchStub = vi.spyOn(globalThis, "fetch").mockImplementation(() => {
+      unlinkSync(profilesPath);
+      return Promise.resolve(
+        new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 }),
+      );
+    });
+    const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
+
+    vi.useFakeTimers();
+    const settled = engineInput.ports.getAccessToken("openai-codex").then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(settled).resolves.toMatchObject({ message: "OAuth profile is invalid." });
+
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    await expect(readFile(profilesPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await lifecycle.close();
+  });
+
+  it("does not resurrect a profile deleted during the confirmation request", async () => {
+    const home = await freshHome();
+    await writeExpiredOAuthProfile(home);
+    const profilesPath = join(home.configDir, "auth-profiles.json");
+    const fetchStub = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 }),
+      )
+      .mockImplementationOnce(() => {
+        unlinkSync(profilesPath);
+        return Promise.resolve(tokenResponse(codexAccessToken("synthetic-stale-confirmation")));
+      });
+    const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
+
+    vi.useFakeTimers();
+    const settled = engineInput.ports.getAccessToken("openai-codex").then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(settled).resolves.toMatchObject({ message: "OAuth profile is invalid." });
+
+    expect(fetchStub).toHaveBeenCalledTimes(2);
+    await expect(readFile(profilesPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await lifecycle.close();
+  });
+
+  it("aborts the reauthentication delay without a second request or commit", async () => {
+    const home = await freshHome();
+    await writeExpiredOAuthProfile(home);
+    const profilesPath = join(home.configDir, "auth-profiles.json");
+    const originalBytes = await readFile(profilesPath, "utf8");
+    const fetchStub = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 }));
+    const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
+    const controller = new AbortController();
+    const abortReason = new Error("synthetic caller abort");
+
+    vi.useFakeTimers();
+    const settled = engineInput.ports.getAccessToken("openai-codex", controller.signal).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    controller.abort(abortReason);
+
+    await expect(settled).resolves.toBe(abortReason);
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(await readFile(profilesPath, "utf8")).toBe(originalBytes);
+    expect(vi.getTimerCount()).toBe(0);
+    await lifecycle.close();
+  });
+
+  it("commits a successful token rotation despite a late abort", async () => {
+    const home = await freshHome();
+    await writeExpiredOAuthProfile(home);
+    const profilesPath = join(home.configDir, "auth-profiles.json");
+    const controller = new AbortController();
+    const abortReason = new DOMException("Cancelled after endpoint success", "AbortError");
+    const refreshedAccess = codexAccessToken("synthetic-late-abort-account");
+    const response = tokenResponse(refreshedAccess, "synthetic-late-abort-refresh");
+    const decodeResponse = response.json.bind(response);
+    vi.spyOn(response, "json").mockImplementation(async () => {
+      const body = await decodeResponse();
+      controller.abort(abortReason);
+      return body;
+    });
+    const fetchStub = vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
+    const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
+
+    await expect(engineInput.ports.getAccessToken("openai-codex", controller.signal)).resolves.toBe(
+      refreshedAccess,
+    );
+
+    expect(controller.signal.reason).toBe(abortReason);
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(await readFile(profilesPath, "utf8"))["openai-codex"]).toMatchObject({
+      access: refreshedAccess,
+      refresh: "synthetic-late-abort-refresh",
+      accountId: "synthetic-late-abort-account",
+    });
+    await lifecycle.close();
+  });
+
+  it("returns a concurrently replaced profile instead of overwriting the newer login", async () => {
+    const home = await freshHome();
+    await writeExpiredOAuthProfile(home);
+    const profilesPath = join(home.configDir, "auth-profiles.json");
+    const fetchStub = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      saveStoredProfile(profilesPath, "openai-codex", {
+        type: "oauth",
+        access: "synthetic-concurrent-access",
+        refresh: "synthetic-concurrent-refresh",
+        expires: 4_102_444_800_000,
+        accountId: "synthetic-concurrent-account",
+        email: "concurrent@example.test",
+      });
+      return tokenResponse(codexAccessToken("synthetic-stale-account"));
+    });
+    const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
+
+    await expect(engineInput.ports.getAccessToken("openai-codex")).resolves.toBe(
+      "synthetic-concurrent-access",
+    );
+
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(await readFile(profilesPath, "utf8"))["openai-codex"]).toEqual({
+      type: "oauth",
+      access: "synthetic-concurrent-access",
+      refresh: "synthetic-concurrent-refresh",
+      expires: 4_102_444_800_000,
+      accountId: "synthetic-concurrent-account",
+      email: "concurrent@example.test",
+    });
+    await lifecycle.close();
+  });
+
+  it("rejects without resurrecting a profile deleted during refresh", async () => {
+    const home = await freshHome();
+    await writeExpiredOAuthProfile(home);
+    const profilesPath = join(home.configDir, "auth-profiles.json");
+    const fetchStub = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      await rm(profilesPath);
+      return tokenResponse(codexAccessToken("synthetic-stale-account"));
+    });
+    const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
+
+    await expect(engineInput.ports.getAccessToken("openai-codex")).rejects.toThrow(
+      "OAuth profile is invalid.",
+    );
+
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    await expect(readFile(profilesPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     await lifecycle.close();
   });
 
