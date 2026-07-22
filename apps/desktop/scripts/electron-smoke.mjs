@@ -1,34 +1,47 @@
 import { spawn } from "node:child_process";
 import { connect } from "node:net";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connectCoachClient } from "../../../packages/coach-client/dist/index.js";
 import { createClientHandshakeFrame } from "../../../packages/coach-contract/dist/index.js";
+import {
+  cleanupSecuritySmokeEnvironment,
+  createElectronLaunchArguments,
+  createSecuritySmokeEnvironment,
+  createSecuritySmokeLaunchEnvironment,
+} from "../smoke/security-smoke-environment.mjs";
 
 const require = createRequire(import.meta.url);
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const command = process.argv[2];
-const options = Object.fromEntries(process.argv.slice(3).filter((value) => value.startsWith("--") && value.includes("=")).map((value) => {
-  const separator = value.indexOf("=");
-  return [value.slice(2, separator), value.slice(separator + 1)];
-}));
+const options = Object.fromEntries(
+  process.argv
+    .slice(3)
+    .filter((value) => value.startsWith("--") && value.includes("="))
+    .map((value) => {
+      const separator = value.indexOf("=");
+      return [value.slice(2, separator), value.slice(separator + 1)];
+    }),
+);
 const mode = options.mode ?? "development";
 
 async function packagedExecutable() {
   const root = join(desktopRoot, "dist");
   const entries = await readdir(root, { recursive: true });
-  const relative = entries.find((entry) => entry.endsWith("Enduragent.app/Contents/MacOS/Enduragent"));
+  const relative = entries.find((entry) =>
+    entry.endsWith("Enduragent.app/Contents/MacOS/Enduragent"),
+  );
   if (relative === undefined) throw new Error("packaged Enduragent executable not found");
   return join(root, relative);
 }
 
 async function startElectron(flag, env, extraArgs = []) {
   const executable = mode === "packaged" ? await packagedExecutable() : require("electron");
-  const args = mode === "packaged" ? [flag, ...extraArgs] : [desktopRoot, flag, ...extraArgs];
+  const args = createElectronLaunchArguments(mode, desktopRoot, flag, extraArgs);
   const child = spawn(executable, args, { env, stdio: ["pipe", "pipe", "pipe"] });
   let stdout = "";
   let stderr = "";
@@ -46,24 +59,30 @@ async function startElectron(flag, env, extraArgs = []) {
       for (const waiter of [...waiters]) waiter();
     }
   });
-  child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+  child.stderr.on("data", (chunk) => {
+    stderr += String(chunk);
+  });
   const exited = new Promise((resolveExit, reject) => {
     child.once("error", reject);
     child.once("exit", (code, signal) => resolveExit({ code, signal }));
   });
-  const waitForLine = (prefix) => new Promise((resolveLine, reject) => {
-    const deadline = setTimeout(() => reject(new Error(`timed out waiting for ${prefix}`)), 30_000);
-    const inspect = () => {
-      const line = lines.find((candidate) => candidate.startsWith(`${prefix} `));
-      if (line === undefined) return;
-      clearTimeout(deadline);
-      const index = waiters.indexOf(inspect);
-      if (index >= 0) waiters.splice(index, 1);
-      resolveLine(JSON.parse(line.slice(prefix.length + 1)));
-    };
-    waiters.push(inspect);
-    inspect();
-  });
+  const waitForLine = (prefix) =>
+    new Promise((resolveLine, reject) => {
+      const deadline = setTimeout(
+        () => reject(new Error(`timed out waiting for ${prefix}`)),
+        30_000,
+      );
+      const inspect = () => {
+        const line = lines.find((candidate) => candidate.startsWith(`${prefix} `));
+        if (line === undefined) return;
+        clearTimeout(deadline);
+        const index = waiters.indexOf(inspect);
+        if (index >= 0) waiters.splice(index, 1);
+        resolveLine(JSON.parse(line.slice(prefix.length + 1)));
+      };
+      waiters.push(inspect);
+      inspect();
+    });
   return {
     child,
     args,
@@ -78,7 +97,8 @@ async function launch(flag, env) {
   const running = await startElectron(flag, env);
   const result = await running.exited;
   const { stdout, stderr } = running.output();
-  if (result.code !== 0 || result.signal !== null) throw new Error(`Electron smoke failed: ${result.code}/${result.signal}\n${stderr}`);
+  if (result.code !== 0 || result.signal !== null)
+    throw new Error(`Electron smoke failed: ${result.code}/${result.signal}\n${stderr}`);
   return { stdout, stderr };
 }
 
@@ -90,9 +110,18 @@ function summaryLine(stdout, prefix) {
 }
 
 async function runtime() {
-  const result = await launch("--desktop-runtime-smoke", { ...process.env, FORCE_COLOR: undefined, CLICOLOR_FORCE: undefined });
+  const result = await launch("--desktop-runtime-smoke", {
+    ...process.env,
+    FORCE_COLOR: undefined,
+    CLICOLOR_FORCE: undefined,
+  });
   const summary = summaryLine(result.stdout, "DESKTOP_RUNTIME_SMOKE");
-  if (summary.electron !== "43.1.1" || summary.node !== "24.18.0" || summary.result !== "tempo threshold" || existsSync(summary.directory)) {
+  if (
+    summary.electron !== "43.1.1" ||
+    summary.node !== "24.18.0" ||
+    summary.result !== "tempo threshold" ||
+    existsSync(summary.directory)
+  ) {
     throw new Error("desktop runtime assertions failed");
   }
   process.stdout.write(`DESKTOP_RUNTIME_SMOKE ${JSON.stringify(summary)}\n`);
@@ -105,20 +134,24 @@ async function spoofOriginResponse(url) {
     let response = "";
     socket.setEncoding("ascii");
     socket.once("error", reject);
-    socket.on("data", (chunk) => { response += chunk; });
+    socket.on("data", (chunk) => {
+      response += chunk;
+    });
     socket.once("close", () => resolveResponse(response));
     socket.once("connect", () => {
-      socket.end([
-        "GET /rpc HTTP/1.1",
-        `Host: 127.0.0.1:${target.port}`,
-        "Upgrade: websocket",
-        "Connection: Upgrade",
-        "Sec-WebSocket-Key: c3ludGhldGljLXNtb2tl",
-        "Sec-WebSocket-Version: 13",
-        "Origin: https://spoof.invalid",
-        "",
-        "",
-      ].join("\r\n"));
+      socket.end(
+        [
+          "GET /rpc HTTP/1.1",
+          `Host: 127.0.0.1:${target.port}`,
+          "Upgrade: websocket",
+          "Connection: Upgrade",
+          "Sec-WebSocket-Key: c3ludGhldGljLXNtb2tl",
+          "Sec-WebSocket-Version: 13",
+          "Origin: https://spoof.invalid",
+          "",
+          "",
+        ].join("\r\n"),
+      );
     });
   });
 }
@@ -130,13 +163,21 @@ async function wrongTokenCloseCode(url) {
       socket.close();
       reject(new Error("wrong-token socket did not close"));
     }, 5_000);
-    socket.addEventListener("open", () => {
-      socket.send(JSON.stringify(createClientHandshakeFrame("w".repeat(43))));
-    }, { once: true });
-    socket.addEventListener("close", (event) => {
-      clearTimeout(timer);
-      resolveCode(event.code);
-    }, { once: true });
+    socket.addEventListener(
+      "open",
+      () => {
+        socket.send(JSON.stringify(createClientHandshakeFrame("w".repeat(43))));
+      },
+      { once: true },
+    );
+    socket.addEventListener(
+      "close",
+      (event) => {
+        clearTimeout(timer);
+        resolveCode(event.code);
+      },
+      { once: true },
+    );
   });
 }
 
@@ -144,11 +185,15 @@ async function operationalObserverOrder(url, token) {
   const client = await connectCoachClient({ url, token });
   const order = [];
   try {
-    await client.call("sync", {}, {
-      onNotificationEnvelope: (envelope) => order.push(`envelope:${envelope.params.event.phase}`),
-      onEvent: (event) => order.push(`event:${event.phase}`),
-      onTerminalEnvelope: () => order.push("terminal"),
-    });
+    await client.call(
+      "sync",
+      {},
+      {
+        onNotificationEnvelope: (envelope) => order.push(`envelope:${envelope.params.event.phase}`),
+        onEvent: (event) => order.push(`event:${event.phase}`),
+        onTerminalEnvelope: () => order.push("terminal"),
+      },
+    );
   } finally {
     await client.close();
   }
@@ -158,46 +203,47 @@ async function operationalObserverOrder(url, token) {
 async function security() {
   const base = await realpath(process.platform === "darwin" ? "/tmp" : tmpdir());
   const scratch = await mkdtemp(join(base, "eas-"));
-  const home = join(scratch, "athlete-home");
-  const configDir = join(home, "config");
-  const operatorHome = join(scratch, "operator-home");
+  const environment = createSecuritySmokeEnvironment(scratch, options.output);
   let running;
   try {
     await Promise.all([
-      mkdir(configDir, { recursive: true, mode: 0o700 }),
-      mkdir(operatorHome, { recursive: true, mode: 0o700 }),
+      mkdir(environment.configDirectory, { recursive: true, mode: 0o700 }),
+      mkdir(environment.operatorHome, { recursive: true, mode: 0o700 }),
+      mkdir(environment.electronUserData, { recursive: true, mode: 0o700 }),
     ]);
-    await writeFile(join(configDir, "config.yaml"), [
-      "data_source: store",
-      `data_dir: ${JSON.stringify(home)}`,
-      "llm:",
-      "  provider: anthropic",
-      "  model: synthetic",
-      "  api_key: synthetic",
-      "intervals:",
-      "  api_key: ''",
-      "  athlete_id: synthetic",
-      "session:",
-      "  timezone: UTC",
-      "",
-    ].join("\n"));
-    const screenshotPath = join(options.output ?? scratch, "desktop-security.png");
-    if (options.output !== undefined) await mkdir(options.output, { recursive: true });
-    const launchEnvironment = {
-      ...process.env,
-      HOME: operatorHome,
-      ENDURAGENT_HOME: home,
-      CYCLING_COACH_HOME: join(scratch, "legacy-home"),
-      FORCE_COLOR: undefined,
-      CLICOLOR_FORCE: undefined,
-    };
+    await writeFile(
+      join(environment.configDirectory, "config.yaml"),
+      [
+        "data_source: store",
+        `data_dir: ${JSON.stringify(environment.athleteHome)}`,
+        "llm:",
+        "  provider: anthropic",
+        "  model: synthetic",
+        "  api_key: synthetic",
+        "intervals:",
+        "  api_key: ''",
+        "  athlete_id: synthetic",
+        "session:",
+        "  timezone: UTC",
+        "",
+      ].join("\n"),
+    );
+    if (environment.outputDirectory !== undefined)
+      await mkdir(environment.outputDirectory, { recursive: true });
+    const launchEnvironment = createSecuritySmokeLaunchEnvironment(
+      process.env,
+      environment,
+      process.platform,
+    );
     running = await startElectron(
       "--desktop-security-smoke",
       launchEnvironment,
-      [`--desktop-security-output=${screenshotPath}`],
+      environment.extraArguments,
     );
     const ready = await running.waitForLine("DESKTOP_SECURITY_READY");
-    const token = (await readFile(join(configDir, "daemon.token"), "utf8")).trim();
+    const token = (
+      await readFile(join(environment.configDirectory, "daemon.token"), "utf8")
+    ).trim();
     const [spoofed, wrongCode, observerOrder] = await Promise.all([
       spoofOriginResponse(ready.rpcUrl),
       wrongTokenCloseCode(ready.rpcUrl),
@@ -209,7 +255,8 @@ async function security() {
     if (exit.code !== 0 || exit.signal !== null) {
       throw new Error(`Electron smoke failed: ${exit.code}/${exit.signal}\n${result.stderr}`);
     }
-    const expectedForbidden = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+    const expectedForbidden =
+      "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
     const expectedOrder = [
       "envelope:started",
       "event:started",
@@ -224,7 +271,18 @@ async function security() {
         spoofOrigin: spoofed === expectedForbidden,
         wrongToken: wrongCode === 1008,
         observerOrder: JSON.stringify(observerOrder) === JSON.stringify(expectedOrder),
-        preloadBridge: JSON.stringify(ready.bridgeKeys) === JSON.stringify(["chatgptLogin", "chatgptStatus", "chooseImportFiles", "credentialStatuses", "getDaemonConnection", "onDroppedImportFiles", "retryFailedCredentials", "writeCredential"]),
+        preloadBridge:
+          JSON.stringify(ready.bridgeKeys) ===
+          JSON.stringify([
+            "chatgptLogin",
+            "chatgptStatus",
+            "chooseImportFiles",
+            "credentialStatuses",
+            "getDaemonConnection",
+            "onDroppedImportFiles",
+            "retryFailedCredentials",
+            "writeCredential",
+          ]),
         credentialMetadata: ready.credentialStatusesMetadataOnly === true,
       },
       url: ready.url,
@@ -237,12 +295,22 @@ async function security() {
         !result.stdout.includes(token) &&
         !result.stderr.includes(token) &&
         !JSON.stringify(ready.credentialStatuses).includes(token) &&
-        !screenshotPath.includes(token),
+        !environment.screenshotPath.includes(token),
     };
-    if (Object.values(summary.passes).some((value) => value !== true) || summary.blockedOffPort !== true || summary.drawerPresent !== true || summary.tokenAbsent !== true || !existsSync(screenshotPath)) {
+    if (
+      Object.values(summary.passes).some((value) => value !== true) ||
+      summary.blockedOffPort !== true ||
+      summary.drawerPresent !== true ||
+      summary.tokenAbsent !== true ||
+      !existsSync(environment.screenshotPath)
+    ) {
       throw new Error("desktop security assertions failed");
     }
-    if (options.output !== undefined) await writeFile(join(options.output, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
+    if (environment.outputDirectory !== undefined)
+      await writeFile(
+        join(environment.outputDirectory, "summary.json"),
+        `${JSON.stringify(summary, null, 2)}\n`,
+      );
     process.stdout.write(`DESKTOP_SECURITY_SMOKE ${JSON.stringify(summary)}\n`);
   } finally {
     if (running !== undefined) {
@@ -253,7 +321,7 @@ async function security() {
       ]);
       if (!settled) running.child.kill();
     }
-    await rm(scratch, { recursive: true, force: true });
+    await cleanupSecuritySmokeEnvironment(environment);
   }
 }
 
