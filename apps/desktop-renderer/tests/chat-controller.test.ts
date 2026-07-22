@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  CoachClientCallAbortedError,
+  CoachClientCallTimeoutError,
   CoachClientDisconnectedError,
   CoachClientProtocolError,
   type CoachClient,
@@ -263,6 +265,46 @@ describe("chat controller", () => {
     expect(states.at(-1)?.messages.filter((message) => message.role === "athlete")).toHaveLength(1);
     expect(refresh).toHaveBeenCalledTimes(2);
   });
+
+  it.each([
+    new CoachClientCallTimeoutError("chat", 11 * 60_000),
+    new CoachClientCallAbortedError("chat"),
+  ])(
+    "preserves a draft after $name and makes one new call only on explicit retry",
+    async (failure) => {
+      const first = client(async (_request, options) => {
+        deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Partial" });
+        throw failure;
+      });
+      const second = client(async (_request, options) => {
+        deliver(options, { type: "final-text", turnId: "turn-2", text: "Recovered" });
+        options?.onTerminalEnvelope?.({
+          jsonrpc: "2.0",
+          id: 2,
+          result: { text: "Recovered" },
+        });
+        return { text: "Recovered" };
+      });
+      const { controller, provider, states } = subject(first, second);
+
+      await controller.submit("Same message");
+
+      expect(states.at(-1)?.status).toBe("interrupted");
+      expect(states.at(-1)?.progress).toBe(CHAT_CONNECTION_INTERRUPTED_COPY);
+      expect(states.at(-1)?.messages.at(-1)?.text).toBe("Partial");
+      expect(first.call).toHaveBeenCalledTimes(1);
+      expect(second.call).not.toHaveBeenCalled();
+      expect(provider.reconnect).not.toHaveBeenCalled();
+
+      await controller.retryInterrupted();
+
+      expect(second.call).toHaveBeenCalledTimes(1);
+      expect(states.at(-1)?.messages.filter((message) => message.role === "athlete")).toHaveLength(
+        1,
+      );
+      expect(states.at(-1)?.messages.at(-1)?.text).toBe("Recovered");
+    },
+  );
 
   it("reuses a shared recovered client when retrying a stale interrupted turn", async () => {
     let current: CoachClient;

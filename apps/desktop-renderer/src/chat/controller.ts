@@ -1,5 +1,10 @@
 import type { CoachClient, CoachClientTerminalEnvelope } from "@enduragent/coach-client";
-import { CoachClientDisconnectedError, CoachClientProtocolError } from "@enduragent/coach-client";
+import {
+  CoachClientCallAbortedError,
+  CoachClientCallTimeoutError,
+  CoachClientDisconnectedError,
+  CoachClientProtocolError,
+} from "@enduragent/coach-client";
 import type { CoachTurnEventNotificationEnvelope, TurnEvent } from "@enduragent/coach-contract";
 import type { DesktopCoachClientProvider } from "../coach-client.js";
 import {
@@ -171,7 +176,11 @@ export function createChatController(input: {
         if (protocolFault || error instanceof CoachClientProtocolError) {
           retryClient = client;
           reduce({ type: "interrupt", requestKey, copy: CHAT_PROTOCOL_FAILURE_COPY });
-        } else if (error instanceof CoachClientDisconnectedError) {
+        } else if (
+          error instanceof CoachClientDisconnectedError ||
+          error instanceof CoachClientCallTimeoutError ||
+          error instanceof CoachClientCallAbortedError
+        ) {
           retryClient = client;
           reduce({ type: "interrupt", requestKey, copy: CHAT_CONNECTION_INTERRUPTED_COPY });
         } else {

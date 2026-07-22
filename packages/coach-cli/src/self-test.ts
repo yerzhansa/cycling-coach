@@ -14,6 +14,8 @@ import {
 } from "@enduragent/coach-contract";
 import {
   CoachClientBackpressureError,
+  CoachClientCallAbortedError,
+  CoachClientCallTimeoutError,
   CoachClientDisconnectedError,
   CoachClientHandshakeError,
   CoachClientProtocolError,
@@ -84,6 +86,8 @@ function errorTerminal(error: unknown): SelfTestCommandTerminal {
     error instanceof CoachClientTransportUnavailableError ||
     error instanceof CoachClientHandshakeError ||
     error instanceof CoachClientDisconnectedError ||
+    error instanceof CoachClientCallTimeoutError ||
+    error instanceof CoachClientCallAbortedError ||
     error instanceof CoachClientBackpressureError ||
     (error instanceof CoachRemoteError && error.failure.kind === "unavailable")
   ) {

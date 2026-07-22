@@ -11,6 +11,8 @@ import {
 } from "@enduragent/coach-contract";
 import {
   CoachClientBackpressureError,
+  CoachClientCallAbortedError,
+  CoachClientCallTimeoutError,
   CoachClientDisconnectedError,
   CoachClientHandshakeError,
   CoachClientProtocolError,
@@ -40,6 +42,12 @@ function remoteFailure(error: unknown, admitted: boolean): CoachRemoteFailure {
     return { kind: "version-mismatch", direction: error.direction };
   }
   if (error instanceof CoachRpcRemoteError) return { kind: "agent" };
+  if (
+    error instanceof CoachClientCallAbortedError ||
+    error instanceof CoachClientCallTimeoutError
+  ) {
+    return { kind: "detached" };
+  }
   if (error instanceof CoachClientDisconnectedError) {
     return { kind: admitted ? "detached" : "unavailable" };
   }
@@ -53,11 +61,8 @@ function remoteFailure(error: unknown, admitted: boolean): CoachRemoteFailure {
 
 function createRemoteTransport(client: CoachClient): CoachVerbTransport {
   let admitted = false;
-  let currentAbortCleanup: (() => void) | undefined;
   let closePromise: Promise<void> | undefined;
   const close = (): Promise<void> => {
-    currentAbortCleanup?.();
-    currentAbortCleanup = undefined;
     const promise = closePromise ?? client.close();
     closePromise = promise;
     return promise;
@@ -69,17 +74,6 @@ function createRemoteTransport(client: CoachClient): CoachVerbTransport {
       if (admitted) throw new CoachRemoteError({ kind: "agent" });
       if (input.signal.aborted) throw new CoachRemoteError({ kind: "detached" });
       let observedTerminal: JsonRpcResponseEnvelope | undefined;
-      const onAbort = (): void => {
-        if (admitted) void close();
-      };
-      const cleanup = (): void => input.signal.removeEventListener("abort", onAbort);
-      currentAbortCleanup = cleanup;
-      input.signal.addEventListener("abort", onAbort, { once: true });
-      if (input.signal.aborted) {
-        cleanup();
-        currentAbortCleanup = undefined;
-        throw new CoachRemoteError({ kind: "detached" });
-      }
       admitted = true;
       try {
         const onTerminalEnvelope = (envelope: CoachClientTerminalEnvelope): void => {
@@ -88,21 +82,25 @@ function createRemoteTransport(client: CoachClient): CoachVerbTransport {
         };
         if (input.method === "chat") {
           await client.call("chat", input.params, {
+            signal: input.signal,
             onNotificationEnvelope: input.onNotificationEnvelope,
             onTerminalEnvelope,
           });
         } else if (input.method === "getAthleteState") {
           await client.call("getAthleteState", input.params, {
+            signal: input.signal,
             onNotificationEnvelope: input.onNotificationEnvelope,
             onTerminalEnvelope,
           });
         } else if (input.method === "importFiles") {
           await client.call("importFiles", input.params, {
+            signal: input.signal,
             onNotificationEnvelope: input.onNotificationEnvelope,
             onTerminalEnvelope,
           });
         } else {
           await client.call("sync", input.params, {
+            signal: input.signal,
             onNotificationEnvelope: input.onNotificationEnvelope,
             onTerminalEnvelope,
           });
@@ -110,9 +108,6 @@ function createRemoteTransport(client: CoachClient): CoachVerbTransport {
       } catch (error) {
         if (observedTerminal !== undefined) return observedTerminal;
         throw new CoachRemoteError(remoteFailure(error, admitted));
-      } finally {
-        cleanup();
-        if (currentAbortCleanup === cleanup) currentAbortCleanup = undefined;
       }
       if (observedTerminal === undefined) throw new CoachRemoteError({ kind: "agent" });
       return observedTerminal;
