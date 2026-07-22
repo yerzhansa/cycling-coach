@@ -33,7 +33,7 @@ describe("desktop onboarding machine", () => {
       fixedError: "credential-required",
     });
     state = withCredentialStatuses(state, [
-      { slot: "anthropic", state: "configured", runtimeReady: true },
+      { slot: "anthropic", state: "configured", runtimeState: "active" },
     ]);
     state = nextStep(state);
     expect(state.step).toBe("training-data");
@@ -76,8 +76,8 @@ describe("desktop onboarding machine", () => {
 
   it("preserves configured metadata and successful imports while moving back", () => {
     let state = createOnboardingState([
-      { slot: "openrouter", state: "configured", runtimeReady: true },
-      { slot: "intervals-icu", state: "configured", runtimeReady: true },
+      { slot: "openrouter", state: "configured", runtimeState: "active" },
+      { slot: "intervals-icu", state: "configured", runtimeState: "active" },
     ]);
     state = nextStep(state);
     state = withSuccessfulImport(state, ["/synthetic/ride.tcx"]);
@@ -92,7 +92,7 @@ describe("desktop onboarding machine", () => {
 
   it("accepts chooser and drop imports only while the training step is open and idle", () => {
     let state = createOnboardingState([
-      { slot: "anthropic", state: "configured", runtimeReady: true },
+      { slot: "anthropic", state: "configured", runtimeState: "active" },
     ]);
     state = nextStep(state);
     expect(canImportFiles(state, true)).toBe(true);

@@ -7,6 +7,7 @@ import {
   type ModelCredentialSlot,
 } from "./constants.js";
 import type { OnboardingBridge } from "./bridge.js";
+import { credentialPresentation } from "./credential-presentation.js";
 import {
   ONBOARDING_COMPLETION,
   canImportFiles,
@@ -120,6 +121,7 @@ function passwordControl(
   labelText: string,
   status: CredentialSlotStatus,
 ): HTMLElement {
+  const presentation = credentialPresentation(status);
   const field = make(document, "div", "credential-field");
   const label = make(document, "label", "credential-label");
   const id = `credential-${slot}`;
@@ -128,14 +130,8 @@ function passwordControl(
   const badge = make(
     document,
     "span",
-    `credential-state ${status.state}`,
-    status.state === "configured"
-      ? status.runtimeReady
-        ? "Configured"
-        : "Saved · Retry"
-      : status.state === "re-prompt"
-        ? "Enter again"
-        : "Not configured",
+    `credential-state ${presentation.className}`,
+    presentation.copy,
   );
   label.append(badge);
   const input = make(document, "input");
@@ -160,7 +156,7 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
     credentialStatuses.find((entry) => entry.slot === slot) ?? {
       slot,
       state: state.credentialStatus[slot],
-      runtimeReady: false,
+      runtimeState: null,
     };
 
   const clearPasswordInputs = (): void => {
@@ -315,13 +311,15 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
     );
     const chatGptLane = make(options.document, "section", "chatgpt-lane");
     const chatGptHeading = make(options.document, "div", "chatgpt-lane-heading");
+    const chatGptActive = state.chatGptState === "configured" && state.chatGptRuntimeReady;
+    const chatGptStored = state.chatGptState === "configured" && !state.chatGptRuntimeReady;
     chatGptHeading.append(
       make(options.document, "strong", undefined, "ChatGPT subscription"),
       make(
         options.document,
         "span",
-        `credential-state ${state.chatGptState === "configured" ? "configured" : ""}`,
-        state.chatGptState === "configured" ? "Configured" : "No API key",
+        `credential-state ${chatGptActive ? "configured" : chatGptStored ? "stored-inactive" : ""}`,
+        chatGptActive ? "Configured" : chatGptStored ? "Saved · Not in use" : "No API key",
       ),
     );
     chatGptLane.append(
@@ -376,9 +374,13 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
         state = withChatGptPending(state);
         render();
         void options.bridge.chatGptLogin().then(
-          (result) => {
+          async (result) => {
             if (visit !== loginVisit || scrim === undefined) return;
             state = withChatGptLoginResult(state, result);
+            if (result.status === "configured") {
+              await refreshStatuses(loginVisit).catch(() => undefined);
+            }
+            if (visit !== loginVisit || scrim === undefined) return;
             render();
             focusCurrentTitle();
           },
@@ -421,7 +423,7 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
     }
     advanced.append(advancedList);
     body.append(advanced);
-    if (credentialStatuses.some((entry) => entry.state === "configured" && !entry.runtimeReady)) {
+    if (credentialStatuses.some((entry) => credentialPresentation(entry).retryable)) {
       const retry = make(options.document, "button", "text-button", "Retry saved keys");
       retry.type = "button";
       retry.disabled = state.busy;
@@ -430,20 +432,22 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
         state = withBusy(state, true);
         render();
         focusCurrentTitle();
-        void refreshStatuses(retryVisit).then(
-          () => {
+        void options.bridge
+          .retryFailedCredentials()
+          .then(async () => {
+            if (visit !== retryVisit || scrim === undefined) return;
+            await refreshStatuses(retryVisit);
             if (visit !== retryVisit || scrim === undefined) return;
             state = withBusy(state, false);
             render();
             focusCurrentTitle();
-          },
-          () => {
+          })
+          .catch(() => {
             if (visit !== retryVisit || scrim === undefined) return;
             state = withError(state, "credential-save-failed");
             render();
             focusCurrentTitle();
-          },
-        );
+          });
       });
       body.append(retry);
     }

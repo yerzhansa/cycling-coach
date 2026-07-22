@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   chmod,
   lstat,
@@ -110,7 +111,7 @@ describe("desktop credential vault", () => {
     await expect(vault.credentialStatuses()).resolves.toContainEqual({
       slot: "anthropic",
       state: "configured",
-      runtimeReady: true,
+      runtimeState: "active",
     });
   });
 
@@ -214,20 +215,144 @@ describe("desktop credential vault", () => {
     corrupted[0] = corrupted[0]! ^ 0xff;
     await writeFile(join(root, "anthropic.bin"), corrupted, { mode: 0o600 });
     const statuses = await vault.credentialStatuses();
-    expect(statuses).toContainEqual({ slot: "anthropic", state: "re-prompt", runtimeReady: false });
+    expect(statuses).toContainEqual({ slot: "anthropic", state: "re-prompt", runtimeState: null });
     expect(statuses).toContainEqual({
       slot: "openrouter",
       state: "configured",
-      runtimeReady: true,
+      runtimeState: "active",
     });
-    expect(statuses).toContainEqual({ slot: "google", state: "configured", runtimeReady: false });
+    expect(statuses).toContainEqual({
+      slot: "google",
+      state: "configured",
+      runtimeState: "failed",
+    });
     failRuntime = false;
     await vault.reapplyConfigured();
     expect(await vault.credentialStatuses()).toContainEqual({
       slot: "google",
       state: "configured",
-      runtimeReady: true,
+      runtimeState: "active",
     });
     expect(applied).toContain("google");
+  });
+
+  it("routes passive replay separately from an explicit credential selection", async () => {
+    const root = await temporaryRoot();
+    const applyCredential = vi.fn(async () => {});
+    const reapplyCredential = vi.fn(async () => "stored-inactive" as const);
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      applyCredential,
+      reapplyCredential,
+    });
+    await vault.writeCredential({
+      slot: "anthropic",
+      value: String.fromCharCode(115, 121, 110, 116, 104, 101, 116, 105, 99),
+    });
+    expect(applyCredential).toHaveBeenCalledOnce();
+    expect(reapplyCredential).not.toHaveBeenCalled();
+
+    await vault.reapplyConfigured();
+
+    expect(reapplyCredential).toHaveBeenCalledOnce();
+    expect(await vault.credentialStatuses()).toContainEqual({
+      slot: "anthropic",
+      state: "configured",
+      runtimeState: "stored-inactive",
+    });
+  });
+
+  it("retries a failed credential through selection-aware replay", async () => {
+    const root = await temporaryRoot();
+    let runtimeAvailable = false;
+    const applyCredential = vi.fn(async () => {
+      if (!runtimeAvailable) throw new TypeError();
+    });
+    const reapplyCredential = vi.fn(async () => {
+      if (!runtimeAvailable) throw new TypeError();
+      return "active" as const;
+    });
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      applyCredential,
+      reapplyCredential,
+    });
+    await vault.writeCredential({ slot: "anthropic", value: randomUUID() });
+    await expect(vault.credentialStatuses()).resolves.toContainEqual({
+      slot: "anthropic",
+      state: "configured",
+      runtimeState: "failed",
+    });
+    await vault.reapplyConfigured();
+    await expect(vault.credentialStatuses()).resolves.toContainEqual({
+      slot: "anthropic",
+      state: "configured",
+      runtimeState: "failed",
+    });
+    runtimeAvailable = true;
+
+    await vault.retryFailed();
+
+    expect(reapplyCredential).toHaveBeenCalledTimes(2);
+    expect(applyCredential).toHaveBeenCalledOnce();
+    await expect(vault.credentialStatuses()).resolves.toContainEqual({
+      slot: "anthropic",
+      state: "configured",
+      runtimeState: "active",
+    });
+  });
+
+  it("refuses a stale failed retry after another provider becomes selected", async () => {
+    const root = await temporaryRoot();
+    let selectedProvider: "anthropic" | "openrouter" = "anthropic";
+    const applyCredential = vi.fn(async () => {
+      throw new TypeError();
+    });
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      applyCredential,
+      reapplyCredential: async (slot) => (slot === selectedProvider ? "active" : "stored-inactive"),
+    });
+    await vault.writeCredential({ slot: "anthropic", value: randomUUID() });
+    await expect(vault.credentialStatuses()).resolves.toContainEqual({
+      slot: "anthropic",
+      state: "configured",
+      runtimeState: "failed",
+    });
+
+    selectedProvider = "openrouter";
+    await vault.retryFailed();
+    expect(applyCredential).toHaveBeenCalledOnce();
+    await expect(vault.credentialStatuses()).resolves.toContainEqual({
+      slot: "anthropic",
+      state: "configured",
+      runtimeState: "stored-inactive",
+    });
+  });
+
+  it("reports a deliberately skipped stored credential as inactive without retrying it", async () => {
+    const root = await temporaryRoot();
+    const applyCredential = vi.fn(async () => {});
+    const reapplyCredential = vi.fn(async () => "stored-inactive" as const);
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      applyCredential,
+      reapplyCredential,
+    });
+    await vault.writeCredential({ slot: "anthropic", value: randomUUID() });
+
+    await vault.reapplyConfigured();
+
+    await expect(vault.credentialStatuses()).resolves.toContainEqual({
+      slot: "anthropic",
+      state: "configured",
+      runtimeState: "stored-inactive",
+    });
+    await vault.retryFailed();
+    expect(applyCredential).toHaveBeenCalledOnce();
   });
 });

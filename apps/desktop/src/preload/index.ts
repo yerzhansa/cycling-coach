@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { DESKTOP_CONNECTION_CHANNEL } from "../main/constants.js";
 
 const DESKTOP_CREDENTIAL_STATUS_CHANNEL = "enduragent:onboarding:credential-status";
+const DESKTOP_CREDENTIAL_RETRY_CHANNEL = "enduragent:onboarding:credential-retry";
 const DESKTOP_CREDENTIAL_WRITE_CHANNEL = "enduragent:onboarding:credential-write";
 const DESKTOP_CHATGPT_STATUS_CHANNEL = "enduragent:onboarding:chatgpt-status";
 const DESKTOP_CHATGPT_LOGIN_CHANNEL = "enduragent:onboarding:chatgpt-login";
@@ -20,6 +21,7 @@ const SLOTS = new Set([
   "intervals-icu",
 ]);
 const STATES = new Set(["missing", "configured", "re-prompt"]);
+const RUNTIME_STATES = new Set(["active", "stored-inactive", "failed"]);
 const REASONS = new Set([
   "invalid-input",
   "encryption-unavailable",
@@ -57,14 +59,16 @@ function parseStatuses(value: unknown): unknown {
   return value.map((entry) => {
     if (
       !record(entry) ||
-      !exactKeys(entry, ["slot", "state", "runtimeReady"]) ||
+      !exactKeys(entry, ["slot", "state", "runtimeState"]) ||
       !SLOTS.has(entry.slot as string) ||
       !STATES.has(entry.state as string) ||
-      typeof entry.runtimeReady !== "boolean"
+      (entry.state === "configured"
+        ? !RUNTIME_STATES.has(entry.runtimeState as string)
+        : entry.runtimeState !== null)
     ) {
       throw new TypeError();
     }
-    return { slot: entry.slot, state: entry.state, runtimeReady: entry.runtimeReady };
+    return { slot: entry.slot, state: entry.state, runtimeState: entry.runtimeState };
   });
 }
 
@@ -151,6 +155,8 @@ contextBridge.exposeInMainWorld(
     getDaemonConnection: () => ipcRenderer.invoke(DESKTOP_CONNECTION_CHANNEL),
     credentialStatuses: async () =>
       parseStatuses(await ipcRenderer.invoke(DESKTOP_CREDENTIAL_STATUS_CHANNEL)),
+    retryFailedCredentials: async () =>
+      parseStatuses(await ipcRenderer.invoke(DESKTOP_CREDENTIAL_RETRY_CHANNEL)),
     writeCredential: async (input: unknown) => {
       if (
         !record(input) ||

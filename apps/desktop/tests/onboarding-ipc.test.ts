@@ -4,6 +4,7 @@ import {
   DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL,
   DESKTOP_CHATGPT_LOGIN_CHANNEL,
   DESKTOP_CHATGPT_STATUS_CHANNEL,
+  DESKTOP_CREDENTIAL_RETRY_CHANNEL,
   DESKTOP_CREDENTIAL_STATUS_CHANNEL,
   DESKTOP_CREDENTIAL_WRITE_CHANNEL,
   registerOnboardingIpc,
@@ -26,9 +27,14 @@ function harness() {
       runtimeReady: true as const,
     })),
     credentialStatuses: vi.fn(async () => [
-      { slot: "anthropic" as const, state: "configured" as const, runtimeReady: true },
+      {
+        slot: "anthropic" as const,
+        state: "configured" as const,
+        runtimeState: "active" as const,
+      },
     ]),
     reapplyConfigured: vi.fn(async () => {}),
+    retryFailed: vi.fn(async () => {}),
   };
   const dialog = {
     showOpenDialog: vi.fn(async () => ({
@@ -76,6 +82,7 @@ describe("desktop onboarding IPC", () => {
     expect([...subject.handlers.keys()].sort()).toEqual(
       [
         DESKTOP_CREDENTIAL_STATUS_CHANNEL,
+        DESKTOP_CREDENTIAL_RETRY_CHANNEL,
         DESKTOP_CREDENTIAL_WRITE_CHANNEL,
         DESKTOP_CHATGPT_STATUS_CHANNEL,
         DESKTOP_CHATGPT_LOGIN_CHANNEL,
@@ -84,11 +91,24 @@ describe("desktop onboarding IPC", () => {
     );
     await expect(
       subject.invoke(DESKTOP_CREDENTIAL_STATUS_CHANNEL, subject.trustedEvent),
-    ).resolves.toEqual([{ slot: "anthropic", state: "configured", runtimeReady: true }]);
+    ).resolves.toEqual([{ slot: "anthropic", state: "configured", runtimeState: "active" }]);
     expect(subject.vault.reapplyConfigured).toHaveBeenCalledTimes(1);
     expect(
       JSON.stringify(await subject.invoke(DESKTOP_CREDENTIAL_STATUS_CHANNEL, subject.trustedEvent)),
     ).not.toContain("value");
+  });
+
+  it("retries only failed credentials through the explicit vault path", async () => {
+    const subject = harness();
+    vi.mocked(subject.vault.credentialStatuses).mockResolvedValueOnce([
+      { slot: "anthropic", state: "configured", runtimeState: "active" },
+    ]);
+
+    await expect(
+      subject.invoke(DESKTOP_CREDENTIAL_RETRY_CHANNEL, subject.trustedEvent),
+    ).resolves.toEqual([{ slot: "anthropic", state: "configured", runtimeState: "active" }]);
+    expect(subject.vault.retryFailed).toHaveBeenCalledOnce();
+    expect(subject.vault.reapplyConfigured).not.toHaveBeenCalled();
   });
 
   it("gates strict ChatGPT status and login invokes", async () => {
@@ -176,10 +196,10 @@ describe("desktop onboarding IPC", () => {
     ).resolves.toEqual([]);
   });
 
-  it("disposes only its five handlers", () => {
+  it("disposes only its six handlers", () => {
     const subject = harness();
     subject.dispose();
     expect(subject.handlers.size).toBe(0);
-    expect(subject.ipcMain.removeHandler).toHaveBeenCalledTimes(5);
+    expect(subject.ipcMain.removeHandler).toHaveBeenCalledTimes(6);
   });
 });

@@ -29,6 +29,7 @@ export type CredentialWriteResult =
 
 export interface OnboardingBridge {
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
+  retryFailedCredentials(): Promise<readonly CredentialSlotStatus[]>;
   writeCredential(input: {
     readonly slot: DesktopCredentialSlot;
     readonly value: string;
@@ -50,6 +51,7 @@ export interface DesktopOnboardingAuth {
     readonly token: string;
   }>;
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
+  retryFailedCredentials(): Promise<readonly CredentialSlotStatus[]>;
   writeCredential(input: {
     readonly slot: DesktopCredentialSlot;
     readonly value: string;
@@ -120,6 +122,8 @@ export function createOnboardingBridge(
   };
   return {
     credentialStatuses: () => auth.credentialStatuses() as Promise<readonly CredentialSlotStatus[]>,
+    retryFailedCredentials: () =>
+      auth.retryFailedCredentials() as Promise<readonly CredentialSlotStatus[]>,
     writeCredential: (input) => auth.writeCredential(input) as Promise<CredentialWriteResult>,
     chatGptStatus: () => auth.chatgptStatus(),
     chatGptLogin: () => auth.chatgptLogin(),

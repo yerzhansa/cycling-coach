@@ -13,8 +13,12 @@ import {
   shell,
   utilityProcess,
 } from "electron";
-import { createChatGptAuth } from "./chatgpt-auth.js";
+import { createChatGptAuth, hasChatGptProfile } from "./chatgpt-auth.js";
 import { DESKTOP_CONNECTION_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
+import {
+  createCredentialRuntimeApplication,
+  readSelectedLlmProvider,
+} from "./credential-runtime.js";
 import { CREDENTIAL_DIRECTORY_NAME, createCredentialVault } from "./credential-vault.js";
 import { resolveDesktopAthleteHome, seedFirstRunConfig } from "./first-run-config.js";
 import { registerOnboardingIpc, runtimeConfigurationForCredential } from "./onboarding-ipc.js";
@@ -132,16 +136,26 @@ async function runDesktop(): Promise<void> {
         await client.close();
       }
     };
+    const configDir = join(resolveDesktopAthleteHome(environment), "config");
+    const credentialRuntime = createCredentialRuntimeApplication({
+      configureRuntime: applyRuntimeConfig,
+      selectedLlmProvider: async (storedCredentialSlots) =>
+        readSelectedLlmProvider(configDir, {
+          chatGptProfilePresent: await hasChatGptProfile(configDir),
+          storedCredentialSlots,
+        }),
+    });
     const vault = createCredentialVault({
       root: join(app.getPath("userData"), CREDENTIAL_DIRECTORY_NAME),
       encryption: safeStorage,
       async applyCredential(slot, value) {
-        await applyRuntimeConfig(runtimeConfigurationForCredential(slot, value));
+        await credentialRuntime.applyExplicit(runtimeConfigurationForCredential(slot, value));
       },
+      reapplyCredential: credentialRuntime.reapplyStoredCredential,
     });
     const chatGptAuth = createChatGptAuth({
-      configDir: join(resolveDesktopAthleteHome(environment), "config"),
-      applyRuntimeConfig,
+      configDir,
+      applyRuntimeConfig: credentialRuntime.applyExplicit,
       openExternal: (url) => shell.openExternal(url),
       signal: controller.signal,
     });
@@ -285,7 +299,7 @@ async function runDesktop(): Promise<void> {
           Array.isArray(rendererResult.credentialStatuses) &&
           rendererResult.credentialStatuses.every((entry: Record<string, unknown>) => {
             const keys = Object.keys(entry).sort();
-            return JSON.stringify(keys) === JSON.stringify(["runtimeReady", "slot", "state"]);
+            return JSON.stringify(keys) === JSON.stringify(["runtimeState", "slot", "state"]);
           }) &&
           !JSON.stringify(rendererResult.credentialStatuses).includes(resolution.token),
         tokenAbsentInRendererSurfaces:

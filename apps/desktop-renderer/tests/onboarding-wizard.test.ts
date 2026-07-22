@@ -87,6 +87,13 @@ describe("desktop onboarding wizard", () => {
         token: "s".repeat(43),
       })),
       credentialStatuses: vi.fn(async () => []),
+      retryFailedCredentials: vi.fn(async () => [
+        {
+          slot: "anthropic" as const,
+          state: "configured" as const,
+          runtimeState: "active" as const,
+        },
+      ]),
       writeCredential: vi.fn(),
       chooseImportFiles: vi.fn(async () => []),
       onDroppedImportFiles: vi.fn(() => vi.fn()),
@@ -126,6 +133,13 @@ describe("desktop onboarding wizard", () => {
     const auth = {
       getDaemonConnection: vi.fn(),
       credentialStatuses: vi.fn(async () => []),
+      retryFailedCredentials: vi.fn(async () => [
+        {
+          slot: "anthropic" as const,
+          state: "configured" as const,
+          runtimeState: "active" as const,
+        },
+      ]),
       writeCredential: vi.fn(),
       chatgptStatus: vi.fn(async () => ({ state: "configured" as const, runtimeReady: false })),
       chatgptLogin: vi.fn(async () => ({
@@ -145,6 +159,9 @@ describe("desktop onboarding wizard", () => {
       status: "configured",
       runtimeReady: true,
     });
+    await expect(bridge.retryFailedCredentials()).resolves.toEqual([
+      { slot: "anthropic", state: "configured", runtimeState: "active" },
+    ]);
     expect(connect).not.toHaveBeenCalled();
   });
 

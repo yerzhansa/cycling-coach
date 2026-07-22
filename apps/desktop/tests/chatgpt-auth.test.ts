@@ -138,6 +138,10 @@ describe("desktop ChatGPT auth", () => {
     });
     const applyRuntimeConfig = vi.fn(async () => {
       order.push("runtime");
+      await writeFile(
+        join(directory, "config.yaml"),
+        "llm:\n  provider: openai-codex\n  model: gpt-5.5\n",
+      );
     });
     const auth = createChatGptAuth({
       configDir: directory,
@@ -245,5 +249,29 @@ describe("desktop ChatGPT auth", () => {
       status: "refused",
       reason: "runtime-unavailable",
     });
+  });
+
+  it("reports a saved ChatGPT profile as inactive after an API-key provider is selected", async () => {
+    const directory = await configDir();
+    const auth = createChatGptAuth({
+      configDir: directory,
+      openExternal: async () => {},
+      applyRuntimeConfig: async (request) => {
+        await writeFile(
+          join(directory, "config.yaml"),
+          `llm:\n  provider: ${request.llm?.provider}\n  model: ${request.llm?.model}\n`,
+        );
+      },
+      dependencies: { loginCodex: async () => credentials() },
+    });
+    await expect(auth.login()).resolves.toEqual({ status: "configured", runtimeReady: true });
+    await expect(auth.status()).resolves.toEqual({ state: "configured", runtimeReady: true });
+
+    await writeFile(
+      join(directory, "config.yaml"),
+      "llm:\n  provider: openrouter\n  model: deepseek/deepseek-v4-flash\n",
+    );
+
+    await expect(auth.status()).resolves.toEqual({ state: "configured", runtimeReady: false });
   });
 });

@@ -167,6 +167,7 @@ const onboardingClient = async () => {
 };
 const onboardingBridge: OnboardingBridge = {
   credentialStatuses: () => window.enduragentAuth.credentialStatuses(),
+  retryFailedCredentials: () => window.enduragentAuth.retryFailedCredentials(),
   writeCredential: (value) => window.enduragentAuth.writeCredential(value),
   chatGptStatus: () => window.enduragentAuth.chatgptStatus(),
   chatGptLogin: () => window.enduragentAuth.chatgptLogin(),

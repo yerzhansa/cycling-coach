@@ -17,11 +17,12 @@ export const DESKTOP_CREDENTIAL_SLOTS = [
 
 export type DesktopCredentialSlot = (typeof DESKTOP_CREDENTIAL_SLOTS)[number];
 export type CredentialState = "missing" | "configured" | "re-prompt";
+export type CredentialRuntimeState = "active" | "stored-inactive" | "failed";
 
 export interface CredentialSlotStatus {
   readonly slot: DesktopCredentialSlot;
   readonly state: CredentialState;
-  readonly runtimeReady: boolean;
+  readonly runtimeState: CredentialRuntimeState | null;
 }
 
 export type CredentialWriteResult =
@@ -60,12 +61,18 @@ export interface CredentialVault {
   }): Promise<CredentialWriteResult>;
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
   reapplyConfigured(): Promise<void>;
+  retryFailed(): Promise<void>;
 }
 
 interface CredentialVaultOptions {
   readonly root: string;
   readonly encryption: CredentialEncryptionPort;
   readonly applyCredential: (slot: DesktopCredentialSlot, value: string) => Promise<void>;
+  readonly reapplyCredential?: (
+    slot: DesktopCredentialSlot,
+    value: string,
+    storedCredentialSlots: readonly DesktopCredentialSlot[],
+  ) => Promise<Exclude<CredentialRuntimeState, "failed">>;
 }
 
 interface ReadCredential {
@@ -114,7 +121,7 @@ async function validTarget(path: string): Promise<boolean> {
 }
 
 export function createCredentialVault(options: CredentialVaultOptions): CredentialVault {
-  const runtimeReady = new Map<DesktopCredentialSlot, boolean>();
+  const runtimeState = new Map<DesktopCredentialSlot, CredentialRuntimeState>();
 
   const readSlot = async (slot: DesktopCredentialSlot): Promise<ReadCredential> => {
     const path = join(options.root, `${slot}.bin`);
@@ -164,12 +171,38 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
           entry.state === "configured" && entry.value !== undefined,
       )
       .sort((left, right) => left.modifiedAt - right.modifiedAt);
+    const storedCredentialSlots = entries.map((entry) => entry.slot);
     for (const entry of entries) {
       try {
-        await options.applyCredential(entry.slot, entry.value);
-        runtimeReady.set(entry.slot, true);
+        const replayed =
+          options.reapplyCredential === undefined
+            ? await options.applyCredential(entry.slot, entry.value).then(() => "active" as const)
+            : await options.reapplyCredential(entry.slot, entry.value, storedCredentialSlots);
+        runtimeState.set(entry.slot, replayed);
       } catch {
-        runtimeReady.set(entry.slot, false);
+        runtimeState.set(entry.slot, "failed");
+      }
+    }
+  };
+
+  const retryFailed = async (): Promise<void> => {
+    const configured = (await readAll())
+      .filter(
+        (entry): entry is ReadCredential & { readonly value: string } =>
+          entry.state === "configured" && entry.value !== undefined,
+      )
+      .sort((left, right) => left.modifiedAt - right.modifiedAt);
+    const storedCredentialSlots = configured.map((entry) => entry.slot);
+    const entries = configured.filter((entry) => runtimeState.get(entry.slot) === "failed");
+    for (const entry of entries) {
+      try {
+        const retried =
+          options.reapplyCredential === undefined
+            ? await options.applyCredential(entry.slot, entry.value).then(() => "active" as const)
+            : await options.reapplyCredential(entry.slot, entry.value, storedCredentialSlots);
+        runtimeState.set(entry.slot, retried);
+      } catch {
+        runtimeState.set(entry.slot, "failed");
       }
     }
   };
@@ -234,10 +267,10 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
       }
       try {
         await options.applyCredential(input.slot, value);
-        runtimeReady.set(input.slot, true);
+        runtimeState.set(input.slot, "active");
         return { slot: input.slot, status: "configured", runtimeReady: true };
       } catch {
-        runtimeReady.set(input.slot, false);
+        runtimeState.set(input.slot, "failed");
         return { slot: input.slot, status: "refused", reason: "runtime-unavailable" };
       }
     },
@@ -247,10 +280,12 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
       return entries.map((entry) => ({
         slot: entry.slot,
         state: entry.state,
-        runtimeReady: entry.state === "configured" && runtimeReady.get(entry.slot) === true,
+        runtimeState:
+          entry.state === "configured" ? (runtimeState.get(entry.slot) ?? "stored-inactive") : null,
       }));
     },
 
     reapplyConfigured,
+    retryFailed,
   };
 }
