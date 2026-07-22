@@ -121,6 +121,7 @@ export const COACH_RPC_METHOD_NAMES = [
   "sync",
   "saveIntake",
   "configureRuntime",
+  "getRuntimeConfig",
   "getUnitsPreference",
   "setUnitsPreference",
   "getSpendSummary",
@@ -270,28 +271,38 @@ export const LlmProviderSchema = z.enum([
 ]);
 export type LlmProvider = z.infer<typeof LlmProviderSchema>;
 
+const RuntimeOptionalStringSchema = z.string().min(1).max(512).nullable();
+
 const RuntimeLlmSchema = z
   .object({
-    provider: LlmProviderSchema,
-    model: z.string().min(1).max(512),
+    provider: LlmProviderSchema.optional(),
+    model: z.string().min(1).max(512).optional(),
     api_key: z.string().min(1).max(16_384).optional(),
+    base_url: z.string().min(1).max(4_096).nullable().optional(),
+    flush_model: RuntimeOptionalStringSchema.optional(),
+    compact_model: RuntimeOptionalStringSchema.optional(),
   })
   .strict()
   .superRefine((value, context) => {
     if (value.provider === "openai-codex" && value.api_key !== undefined) {
       context.addIssue({ code: "custom", path: ["api_key"], message: "api_key must be absent" });
     }
-    if (value.provider !== "openai-codex" && value.api_key === undefined) {
-      context.addIssue({ code: "custom", path: ["api_key"], message: "api_key is required" });
+    if (Object.keys(value).length === 0) {
+      context.addIssue({ code: "custom", message: "llm patch must not be empty" });
     }
   });
 
 const RuntimeIntervalsSchema = z
   .object({
-    api_key: z.string().min(1).max(16_384),
-    athlete_id: z.string().min(1).max(512),
+    api_key: z.string().min(1).max(16_384).optional(),
+    athlete_id: z.string().min(1).max(512).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (Object.keys(value).length === 0) {
+      context.addIssue({ code: "custom", message: "intervals patch must not be empty" });
+    }
+  });
 
 export const ConfigureRuntimeRpcParamsSchema = z
   .object({
@@ -318,6 +329,39 @@ export const ConfigureRuntimeRpcResultSchema = z
   })
   .strict();
 export type ConfigureRuntimeRpcResult = z.infer<typeof ConfigureRuntimeRpcResultSchema>;
+
+export const RuntimeConfigSnapshotSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    llm: z
+      .object({
+        provider: LlmProviderSchema,
+        model: z.string().min(1).max(512),
+        credential_configured: z.boolean(),
+      })
+      .strict(),
+    intervals: z
+      .object({
+        athlete_id: z.string().max(512),
+      })
+      .strict(),
+    session: z
+      .object({
+        historyTokenBudgetRatio: z.number().finite(),
+        idleMinutes: z.number().int(),
+        dailyResetHour: z.number().int(),
+        resetArchiveRetentionDays: z.number().int(),
+        timezone: z.string().max(512),
+      })
+      .strict(),
+  })
+  .strict();
+export type RuntimeConfigSnapshot = z.infer<typeof RuntimeConfigSnapshotSchema>;
+
+export const GetRuntimeConfigRpcParamsSchema = EmptyRpcParamsSchema;
+export type GetRuntimeConfigRpcParams = z.infer<typeof GetRuntimeConfigRpcParamsSchema>;
+export const GetRuntimeConfigRpcResultSchema = RuntimeConfigSnapshotSchema;
+export type GetRuntimeConfigRpcResult = z.infer<typeof GetRuntimeConfigRpcResultSchema>;
 
 export const UnitsPreferenceSchema = z.enum(["metric", "imperial"]);
 export type UnitsPreference = z.infer<typeof UnitsPreferenceSchema>;
@@ -380,6 +424,7 @@ export interface CoachOperations {
   ): Promise<SyncRpcResult>;
   saveIntake(request: SaveIntakeRpcParams): Promise<SaveIntakeRpcResult>;
   configureRuntime(request: ConfigureRuntimeRpcParams): Promise<ConfigureRuntimeRpcResult>;
+  getRuntimeConfig(request: GetRuntimeConfigRpcParams): Promise<GetRuntimeConfigRpcResult>;
   getUnitsPreference?(request: GetUnitsPreferenceRpcParams): Promise<GetUnitsPreferenceRpcResult>;
   setUnitsPreference?(request: SetUnitsPreferenceRpcParams): Promise<SetUnitsPreferenceRpcResult>;
 }
@@ -456,6 +501,14 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("configureRuntime"),
       params: ConfigureRuntimeRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("getRuntimeConfig"),
+      params: GetRuntimeConfigRpcParamsSchema,
     })
     .strict(),
   z
@@ -629,6 +682,12 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "configureRuntime",
     requestSchema: ConfigureRuntimeRpcParamsSchema,
     responseSchema: ConfigureRuntimeRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  getRuntimeConfig: {
+    wireName: "getRuntimeConfig",
+    requestSchema: GetRuntimeConfigRpcParamsSchema,
+    responseSchema: GetRuntimeConfigRpcResultSchema,
     eventSchema: NoRpcEventSchema,
   },
   getUnitsPreference: {

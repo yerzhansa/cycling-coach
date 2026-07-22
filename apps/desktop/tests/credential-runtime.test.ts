@@ -2,10 +2,16 @@ import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ConfigureRuntimeRpcParams, LlmProvider } from "@enduragent/coach-contract";
+import type {
+  ConfigureRuntimeRpcParams,
+  LlmProvider,
+  RuntimeConfigSnapshot,
+} from "@enduragent/coach-contract";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createConnectionRuntimeAuthority,
   createCredentialRuntimeApplication,
+  intervalsAthleteIdForOwnership,
   readSelectedLlmProvider,
   type CredentialRuntimeApplication,
 } from "../src/main/credential-runtime.js";
@@ -31,6 +37,26 @@ function encryption(): CredentialEncryptionPort {
   };
 }
 
+function runtimeSnapshot(
+  provider: LlmProvider,
+  model = "custom-selected-model",
+  credentialConfigured = false,
+  athleteId = "custom-athlete",
+): RuntimeConfigSnapshot {
+  return {
+    schemaVersion: 1,
+    llm: { provider, model, credential_configured: credentialConfigured },
+    intervals: { athlete_id: athleteId },
+    session: {
+      historyTokenBudgetRatio: 0.3,
+      idleMinutes: 0,
+      dailyResetHour: 4,
+      resetArchiveRetentionDays: 0,
+      timezone: "UTC",
+    },
+  };
+}
+
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -38,19 +64,24 @@ afterEach(async () => {
 function fakeDaemon(initialProvider: LlmProvider) {
   let persistedProvider = initialProvider;
   let activeProvider = initialProvider;
+  let persistedModel = "custom-selected-model";
+  let activeModel = persistedModel;
   let intervalsApplications = 0;
   const modelApplications: LlmProvider[] = [];
 
   return {
     launch(): CredentialRuntimeApplication {
       activeProvider = persistedProvider;
+      activeModel = persistedModel;
       return createCredentialRuntimeApplication({
         selectedLlmProvider: async () => persistedProvider,
         async configureRuntime(request: ConfigureRuntimeRpcParams) {
           if (request.llm !== undefined) {
-            activeProvider = request.llm.provider;
-            persistedProvider = request.llm.provider;
-            modelApplications.push(request.llm.provider);
+            activeProvider = request.llm.provider ?? activeProvider;
+            persistedProvider = activeProvider;
+            activeModel = request.llm.model ?? activeModel;
+            persistedModel = activeModel;
+            modelApplications.push(activeProvider);
           }
           if (request.intervals !== undefined) intervalsApplications += 1;
         },
@@ -58,6 +89,7 @@ function fakeDaemon(initialProvider: LlmProvider) {
     },
     activeProvider: () => activeProvider,
     persistedProvider: () => persistedProvider,
+    activeModel: () => activeModel,
     intervalsApplications: () => intervalsApplications,
     modelApplications: () => [...modelApplications],
     clearModelApplications: () => modelApplications.splice(0),
@@ -129,6 +161,35 @@ async function pollCredentialStatuses(vault: CredentialVault): Promise<void> {
 }
 
 describe("desktop credential runtime precedence", () => {
+  it("uses the current-account sentinel only for a blank ownership preflight", () => {
+    expect(intervalsAthleteIdForOwnership(runtimeSnapshot("anthropic", undefined, false, ""))).toBe(
+      "0",
+    );
+    expect(
+      intervalsAthleteIdForOwnership(
+        runtimeSnapshot("anthropic", undefined, false, "selected-athlete"),
+      ),
+    ).toBe("selected-athlete");
+  });
+
+  it("replays an intervals credential as the key-only canonical runtime patch", async () => {
+    const configureRuntime = vi.fn(async () => {});
+    const runtime = createCredentialRuntimeApplication({
+      selectedLlmProvider: async () => undefined,
+      configureRuntime,
+    });
+
+    await expect(
+      runtime.reapplyStoredCredential("intervals-icu", "obviously-fake-intervals-key", [
+        "intervals-icu",
+      ]),
+    ).resolves.toBe("active");
+
+    expect(configureRuntime).toHaveBeenCalledWith({
+      intervals: { api_key: "obviously-fake-intervals-key" },
+    });
+  });
+
   it("self-heals a stored provider after the first-run seed outlives a failed apply", async () => {
     const directory = await mkdtemp(join(tmpdir(), "enduragent-credential-runtime-"));
     roots.push(directory);
@@ -143,18 +204,18 @@ describe("desktop credential runtime precedence", () => {
     let activeProvider: LlmProvider = "anthropic";
     const launchRuntime = (): CredentialRuntimeApplication =>
       createCredentialRuntimeApplication({
-        selectedLlmProvider: (storedCredentialSlots) =>
-          readSelectedLlmProvider(configDir, {
+        selectedLlmProvider: async (storedCredentialSlots) =>
+          readSelectedLlmProvider(runtimeSnapshot(activeProvider), {
             chatGptProfilePresent: false,
             storedCredentialSlots,
           }),
         async configureRuntime(request) {
           if (!runtimeAvailable) throw new TypeError();
           if (request.llm === undefined) return;
-          activeProvider = request.llm.provider;
+          activeProvider = request.llm.provider ?? activeProvider;
           await writeFile(
             join(configDir, "config.yaml"),
-            `llm:\n  provider: ${request.llm.provider}\n  model: ${request.llm.model}\n`,
+            `llm:\n  provider: ${activeProvider}\n  model: custom-selected-model\n`,
           );
         },
       });
@@ -211,8 +272,8 @@ describe("desktop credential runtime precedence", () => {
     );
     const configureRuntime = vi.fn(async () => {});
     const runtime = createCredentialRuntimeApplication({
-      selectedLlmProvider: (storedCredentialSlots) =>
-        readSelectedLlmProvider(configDir, {
+      selectedLlmProvider: async (storedCredentialSlots) =>
+        readSelectedLlmProvider(runtimeSnapshot("openai-codex"), {
           chatGptProfilePresent: true,
           storedCredentialSlots,
         }),
@@ -236,6 +297,51 @@ describe("desktop credential runtime precedence", () => {
     });
   });
 
+  it.each([
+    ["externally configured provider", runtimeSnapshot("google", "external-model", true)],
+    ["custom active ChatGPT profile", runtimeSnapshot("openai-codex", "chat-model", true)],
+  ])(
+    "keeps an unrelated vault key inactive at boot for an authoritative %s",
+    async (_case, snapshot) => {
+      const directory = await mkdtemp(join(tmpdir(), "enduragent-credential-runtime-"));
+      roots.push(directory);
+      const vaultRoot = join(directory, "credentials-v1");
+      const initialVault = createCredentialVault({
+        root: vaultRoot,
+        encryption: encryption(),
+        applyCredential: async () => {},
+      });
+      await expect(
+        initialVault.writeCredential({ slot: "anthropic", value: randomUUID() }),
+      ).resolves.toMatchObject({ status: "configured" });
+      const configureRuntime = vi.fn(async () => {});
+      const runtime = createCredentialRuntimeApplication({
+        selectedLlmProvider: async (storedCredentialSlots) =>
+          readSelectedLlmProvider(snapshot, {
+            chatGptProfilePresent: false,
+            storedCredentialSlots,
+          }),
+        configureRuntime,
+      });
+      const relaunchedVault = createCredentialVault({
+        root: vaultRoot,
+        encryption: encryption(),
+        applyCredential: (slot, value) =>
+          runtime.applyExplicit(runtimeConfigurationForCredential(slot, value)),
+        reapplyCredential: runtime.reapplyStoredCredential,
+      });
+
+      await relaunchedVault.reapplyConfigured();
+
+      expect(configureRuntime).not.toHaveBeenCalled();
+      await expect(relaunchedVault.credentialStatuses()).resolves.toContainEqual({
+        slot: "anthropic",
+        state: "configured",
+        runtimeState: "stored-inactive",
+      });
+    },
+  );
+
   it("requires a profile or stored credential to corroborate the recorded provider", async () => {
     const directory = await mkdtemp(join(tmpdir(), "enduragent-credential-runtime-"));
     roots.push(directory);
@@ -244,35 +350,47 @@ describe("desktop credential runtime precedence", () => {
       "llm:\n  provider: openai-codex\n  model: gpt-5.5\n",
     );
 
-    await expect(
-      readSelectedLlmProvider(directory, {
+    expect(
+      readSelectedLlmProvider(runtimeSnapshot("openai-codex"), {
         chatGptProfilePresent: true,
         storedCredentialSlots: [],
       }),
-    ).resolves.toBe("openai-codex");
-    await expect(
-      readSelectedLlmProvider(directory, {
+    ).toBe("openai-codex");
+    expect(
+      readSelectedLlmProvider(runtimeSnapshot("openai-codex"), {
         chatGptProfilePresent: false,
         storedCredentialSlots: [],
       }),
-    ).resolves.toBeUndefined();
+    ).toBeUndefined();
 
     await writeFile(
       join(directory, "config.yaml"),
       "llm:\n  provider: anthropic\n  model: claude-sonnet-4-6\n",
     );
-    await expect(
-      readSelectedLlmProvider(directory, {
+    expect(
+      readSelectedLlmProvider(runtimeSnapshot("anthropic"), {
         chatGptProfilePresent: false,
         storedCredentialSlots: ["anthropic"],
       }),
-    ).resolves.toBe("anthropic");
-    await expect(
-      readSelectedLlmProvider(directory, {
+    ).toBe("anthropic");
+    expect(
+      readSelectedLlmProvider(runtimeSnapshot("anthropic"), {
         chatGptProfilePresent: false,
         storedCredentialSlots: [],
       }),
-    ).resolves.toBeUndefined();
+    ).toBeUndefined();
+    expect(
+      readSelectedLlmProvider(runtimeSnapshot("google", "external-model", true), {
+        chatGptProfilePresent: false,
+        storedCredentialSlots: ["anthropic"],
+      }),
+    ).toBe("google");
+    expect(
+      readSelectedLlmProvider(runtimeSnapshot("openai-codex", "chat-model", true), {
+        chatGptProfilePresent: false,
+        storedCredentialSlots: ["anthropic"],
+      }),
+    ).toBe("openai-codex");
   });
 
   it("serializes passive replay before a later explicit provider selection", async () => {
@@ -292,7 +410,7 @@ describe("desktop credential runtime precedence", () => {
           replayStarted();
           await replayGate;
         }
-        if (request.llm !== undefined) selectedProvider = request.llm.provider;
+        if (request.llm?.provider !== undefined) selectedProvider = request.llm.provider;
       },
     });
     const replay = runtime.reapplyStoredCredential("anthropic", randomUUID(), ["anthropic"]);
@@ -381,6 +499,7 @@ describe("desktop credential runtime precedence", () => {
     expect(daemon.activeProvider()).toBe("anthropic");
     expect(daemon.persistedProvider()).toBe("anthropic");
     expect(daemon.modelApplications()).toEqual(["anthropic"]);
+    expect(daemon.activeModel()).toBe("custom-selected-model");
   });
 
   it("self-heals an unrecorded explicit selection after runtime application recovers", async () => {
@@ -390,7 +509,7 @@ describe("desktop credential runtime precedence", () => {
       selectedLlmProvider: async () => selectedProvider,
       async configureRuntime(request) {
         if (!runtimeAvailable) throw new TypeError();
-        if (request.llm !== undefined) selectedProvider = request.llm.provider;
+        if (request.llm?.provider !== undefined) selectedProvider = request.llm.provider;
       },
     });
     const slot = "anthropic" as const;
@@ -413,7 +532,7 @@ describe("desktop credential runtime precedence", () => {
       selectedLlmProvider: async () => selectedProvider,
       async configureRuntime(request) {
         if (!runtimeAvailable) throw new TypeError();
-        if (request.llm !== undefined) selectedProvider = request.llm.provider;
+        if (request.llm?.provider !== undefined) selectedProvider = request.llm.provider;
       },
     });
     const slot = "anthropic" as const;
@@ -465,4 +584,87 @@ describe("desktop credential runtime precedence", () => {
     expect(daemon.persistedProvider()).toBe("openrouter");
     expect(daemon.modelApplications()).toEqual(["openrouter"]);
   });
+
+  it("binds successor reads and credential replay to the supplied connection", async () => {
+    const calls: string[] = [];
+    const connect = vi.fn(async (_options: { readonly url: string; readonly token: string }) => ({
+      handshake: {} as never,
+      async call(method: string) {
+        calls.push(method);
+        if (method === "getRuntimeConfig") return runtimeSnapshot("anthropic");
+        return { schemaVersion: 1, applied: { llm: true, intervals: false } };
+      },
+      async close() {},
+    }));
+    const successor = createConnectionRuntimeAuthority(
+      {
+        url: "ws://127.0.0.1:45002/rpc",
+        token: "obviously-fake-successor-token",
+      },
+      connect as never,
+    );
+
+    await expect(successor.getRuntimeConfig()).resolves.toEqual(runtimeSnapshot("anthropic"));
+    await successor.configureRuntime({
+      llm: { provider: "anthropic", api_key: "obviously-fake-successor-key" },
+    });
+
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(connect).toHaveBeenNthCalledWith(1, {
+      url: "ws://127.0.0.1:45002/rpc",
+      token: "obviously-fake-successor-token",
+    });
+    expect(connect).toHaveBeenNthCalledWith(2, {
+      url: "ws://127.0.0.1:45002/rpc",
+      token: "obviously-fake-successor-token",
+    });
+    expect(calls).toEqual(["getRuntimeConfig", "configureRuntime"]);
+  });
+
+  it.each([
+    ["externally configured provider", runtimeSnapshot("google", "external-model", true)],
+    ["custom active ChatGPT profile", runtimeSnapshot("openai-codex", "chat-model", true)],
+  ])(
+    "binds authoritative %s replay evidence to the successor without LLM reconfiguration",
+    async (_case, snapshot) => {
+      const calls: string[] = [];
+      const connect = vi.fn(async () => ({
+        handshake: {} as never,
+        async call(method: string) {
+          calls.push(method);
+          if (method === "getRuntimeConfig") return snapshot;
+          return { schemaVersion: 1, applied: { llm: true, intervals: false } };
+        },
+        async close() {},
+      }));
+      const successor = createConnectionRuntimeAuthority(
+        {
+          url: "ws://127.0.0.1:45003/rpc",
+          token: "obviously-fake-successor-token",
+        },
+        connect as never,
+      );
+      const configureRuntime = vi.fn(successor.configureRuntime);
+      const runtime = createCredentialRuntimeApplication({
+        selectedLlmProvider: async (storedCredentialSlots) =>
+          readSelectedLlmProvider(await successor.getRuntimeConfig(), {
+            chatGptProfilePresent: false,
+            storedCredentialSlots,
+          }),
+        configureRuntime,
+      });
+
+      await expect(
+        runtime.reapplyStoredCredential("anthropic", randomUUID(), ["anthropic"]),
+      ).resolves.toBe("stored-inactive");
+
+      expect(configureRuntime).not.toHaveBeenCalled();
+      expect(calls).toEqual(["getRuntimeConfig"]);
+      expect(connect).toHaveBeenCalledOnce();
+      expect(connect).toHaveBeenCalledWith({
+        url: "ws://127.0.0.1:45003/rpc",
+        token: "obviously-fake-successor-token",
+      });
+    },
+  );
 });

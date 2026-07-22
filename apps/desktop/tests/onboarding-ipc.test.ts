@@ -90,6 +90,7 @@ describe("desktop onboarding IPC", () => {
       status: "refused",
       reason: "training-account-mismatch",
     });
+    expect(subject.checkIntervalsCredentialOwner).toHaveBeenCalledWith("synthetic");
     expect(subject.vault.writeCredential).not.toHaveBeenCalled();
   });
 
@@ -132,17 +133,16 @@ describe("desktop onboarding IPC", () => {
 
   it("maps each credential slot to the landed runtime request", () => {
     expect(runtimeConfigurationForCredential("anthropic", "synthetic")).toEqual({
-      llm: { provider: "anthropic", model: "claude-sonnet-4-6", api_key: "synthetic" },
+      llm: { provider: "anthropic", api_key: "synthetic" },
     });
     expect(runtimeConfigurationForCredential("openrouter", "synthetic")).toEqual({
       llm: {
         provider: "openrouter",
-        model: "deepseek/deepseek-v4-flash",
         api_key: "synthetic",
       },
     });
     expect(runtimeConfigurationForCredential("intervals-icu", "synthetic")).toEqual({
-      intervals: { api_key: "synthetic", athlete_id: "0" },
+      intervals: { api_key: "synthetic" },
     });
   });
 

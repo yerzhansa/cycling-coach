@@ -1,0 +1,144 @@
+import { describe, expect, it } from "vitest";
+import { resolveRuntimeConfig } from "../src/runtime-config.js";
+
+describe("runtime configuration authority", () => {
+  it("preserves same-provider custom fields for a credential-only patch", () => {
+    const initial = resolveRuntimeConfig({
+      llm: {
+        provider: "openrouter",
+        model: "custom-chat-model",
+        apiKey: "obviously-fake-old-key",
+        baseUrl: "https://invalid.example.test/v1",
+        flushModel: "custom-flush-model",
+        compactModel: "custom-compact-model",
+      },
+      intervals: { athleteId: "athlete-custom" },
+    });
+
+    const next = resolveRuntimeConfig(
+      { llm: { provider: "openrouter", apiKey: "obviously-fake-new-key" } },
+      initial,
+    );
+
+    expect(next.llm).toEqual({
+      provider: "openrouter",
+      model: "custom-chat-model",
+      apiKey: "obviously-fake-new-key",
+      authProfile: undefined,
+      baseUrl: "https://invalid.example.test/v1",
+      flushModel: "custom-flush-model",
+      compactModel: "custom-compact-model",
+    });
+    expect(next.intervals).toEqual(initial.intervals);
+    expect(next.session).toEqual(initial.session);
+    expect(next.contextWindowTokens).toBe(initial.contextWindowTokens);
+  });
+
+  it("applies canonical defaults and recomputes context after a provider change", () => {
+    const initial = resolveRuntimeConfig({
+      llm: {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        apiKey: "obviously-fake-anthropic-key",
+        baseUrl: "https://invalid.example.test/anthropic",
+        flushModel: "custom-flush-model",
+        compactModel: "custom-compact-model",
+      },
+    });
+    expect(initial.contextWindowTokens).toBe(1_000_000);
+
+    const next = resolveRuntimeConfig(
+      { llm: { provider: "zai", apiKey: "obviously-fake-zai-key" } },
+      initial,
+    );
+
+    expect(next.llm).toEqual({
+      provider: "zai",
+      model: "glm-4.7",
+      apiKey: "obviously-fake-zai-key",
+      authProfile: undefined,
+      flushModel: undefined,
+      compactModel: "glm-4.7",
+      baseUrl: "https://api.z.ai/api/openai/v1",
+    });
+    expect(next.contextWindowTokens).toBe(200_000);
+  });
+
+  it("keeps ChatGPT compaction aligned at startup and after model changes", () => {
+    const initial = resolveRuntimeConfig(
+      {
+        llm: {
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          compactModel: "ignored-compact-model",
+        },
+      },
+      undefined,
+      { authProfile: "test-profile" },
+    );
+    expect(initial.llm.compactModel).toBe("gpt-5.5");
+    expect(initial.llm.authProfile).toBe("test-profile");
+
+    const next = resolveRuntimeConfig({ llm: { model: "gpt-5.4-mini" } }, initial);
+    expect(next.llm.compactModel).toBe("gpt-5.4-mini");
+    expect(next.llm.authProfile).toBe("test-profile");
+    expect(next.contextWindowTokens).toBe(400_000);
+  });
+
+  it("treats an explicit ChatGPT provider as a default-profile selection", () => {
+    const initial = resolveRuntimeConfig(
+      { llm: { provider: "openai-codex", model: "custom-model" } },
+      undefined,
+      { authProfile: "custom-profile" },
+    );
+
+    expect(initial.llm.authProfile).toBe("custom-profile");
+    expect(
+      resolveRuntimeConfig({ llm: { provider: "openai-codex" } }, initial).llm.authProfile,
+    ).toBe("openai-codex");
+    expect(resolveRuntimeConfig({ llm: { model: "new-model" } }, initial).llm.authProfile).toBe(
+      "custom-profile",
+    );
+  });
+
+  it("preserves the athlete ID for an intervals-key-only replay", () => {
+    const initial = resolveRuntimeConfig({
+      intervals: {
+        apiKey: "obviously-fake-old-intervals-key",
+        athleteId: "athlete-custom",
+      },
+    });
+
+    const next = resolveRuntimeConfig(
+      { intervals: { apiKey: "obviously-fake-new-intervals-key" } },
+      initial,
+    );
+
+    expect(next.intervals).toEqual({
+      apiKey: "obviously-fake-new-intervals-key",
+      athleteId: "athlete-custom",
+    });
+  });
+
+  it("accepts a seeded blank athlete ID at startup but rejects it as a live patch", () => {
+    const initial = resolveRuntimeConfig({ intervals: { athleteId: "" } });
+
+    expect(initial.intervals.athleteId).toBe("");
+    expect(
+      resolveRuntimeConfig({ intervals: { apiKey: "obviously-fake-intervals-key" } }, initial)
+        .intervals,
+    ).toEqual({ apiKey: "obviously-fake-intervals-key", athleteId: "0" });
+    expect(() => resolveRuntimeConfig({ intervals: { athleteId: "" } }, initial)).toThrow(
+      "intervals.athleteId",
+    );
+  });
+
+  it("rejects unknown fields and malformed values", () => {
+    expect(() => resolveRuntimeConfig({ unexpected: true } as never)).toThrow(
+      "Unknown runtime config field",
+    );
+    expect(() =>
+      resolveRuntimeConfig({ llm: { provider: "anthropic", unexpected: true } } as never),
+    ).toThrow("Unknown llm field");
+  });
+});

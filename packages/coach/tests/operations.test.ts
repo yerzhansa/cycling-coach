@@ -532,6 +532,18 @@ describe("coach operations", () => {
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
       applyRuntimeConfig,
+      readRuntimeConfig: () => ({
+        schemaVersion: 1,
+        llm: { provider: "google", model: "third", credential_configured: true },
+        intervals: { athlete_id: "athlete-b" },
+        session: {
+          historyTokenBudgetRatio: 0.3,
+          idleMinutes: 0,
+          dailyResetHour: 4,
+          resetArchiveRetentionDays: 0,
+          timezone: "UTC",
+        },
+      }),
     });
     const llmFirst = {
       llm: { provider: "anthropic" as const, model: "first", api_key: "placeholder" },
@@ -569,6 +581,18 @@ describe("coach operations", () => {
     for (const value of ["first", "second", "third", "placeholder", "athlete"]) {
       expect(serializedResults).not.toContain(value);
     }
+    await expect(operations.getRuntimeConfig({})).resolves.toEqual({
+      schemaVersion: 1,
+      llm: { provider: "google", model: "third", credential_configured: true },
+      intervals: { athlete_id: "athlete-b" },
+      session: {
+        historyTokenBudgetRatio: 0.3,
+        idleMinutes: 0,
+        dailyResetHour: 4,
+        resetArchiveRetentionDays: 0,
+        timezone: "UTC",
+      },
+    });
   });
 
   it("serializes persisted units reads and writes through the same operation FIFO", async () => {

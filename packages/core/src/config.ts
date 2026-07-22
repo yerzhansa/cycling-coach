@@ -4,6 +4,20 @@ import { parse as parseYaml } from "yaml";
 import { getCoachHome } from "./coach-home.js";
 import { SecretRef, isSecretRef, SecretResolutionError } from "./secrets/types.js";
 import { resolveSecretRef } from "./secrets/resolve.js";
+import {
+  resolveLlmProvider,
+  resolveRuntimeConfig,
+  type EffectiveRuntimeConfig,
+} from "./runtime-config.js";
+
+export {
+  COMPACT_MODEL_DEFAULTS,
+  DEFAULT_MODELS,
+  LLM_PROVIDERS,
+  PROVIDER_BASE_URLS,
+  contextWindowForModel,
+} from "./runtime-config.js";
+export type { LlmProvider } from "./runtime-config.js";
 
 // ============================================================================
 // TYPES
@@ -17,47 +31,11 @@ export function resolveDataSource(value: unknown): DataSource {
   throw new TypeError('Config field data_source must be "platform" or "store".');
 }
 
-export interface Config {
+export interface Config extends EffectiveRuntimeConfig {
   dataSource: DataSource;
-  llm: {
-    provider:
-      | "anthropic"
-      | "openai"
-      | "google"
-      | "openai-codex"
-      | "deepseek"
-      | "qwen"
-      | "minimax"
-      | "kimi"
-      | "zai"
-      | "openrouter";
-    model: string;
-    apiKey: string;
-    authProfile?: string;
-    /** Cheaper model for the memory flush; unset reuses the chat model. */
-    flushModel?: string;
-    /** Cheaper model for conversation compaction; unset resolves per provider (see COMPACT_MODEL_DEFAULTS). */
-    compactModel?: string;
-    /** Override base URL for OpenAI-compatible / direct providers. Empty = provider default. */
-    baseUrl?: string;
-  };
-  intervals: {
-    apiKey: string;
-    athleteId: string;
-  };
   telegram: {
     botToken: string;
   };
-  session: {
-    historyTokenBudgetRatio: number;
-    idleMinutes: number;
-    dailyResetHour: number;
-    /** Days to keep session reset archives; 0 = keep forever (pruning disabled). */
-    resetArchiveRetentionDays: number;
-    /** Athlete IANA timezone (e.g. "Europe/Berlin"). Empty = resolver picks host TZ. */
-    timezone: string;
-  };
-  contextWindowTokens: number;
   dataDir: string;
 }
 
@@ -81,74 +59,6 @@ function readConfigYamlFrom(configDir: string): Record<string, unknown> {
 
 export function readConfigYaml(): Record<string, unknown> {
   return readConfigYamlFrom(CONFIG_DIR);
-}
-
-// ============================================================================
-// CONTEXT WINDOW RESOLUTION
-// ============================================================================
-
-const CONTEXT_WINDOWS: Record<string, number> = {
-  "claude-sonnet-4-6": 1_000_000,
-  "claude-opus-4-8": 1_000_000,
-  "claude-haiku-4-5-20251001": 200_000,
-  "gpt-4o": 128_000,
-  "gpt-5.5": 1_050_000,
-  "gpt-5.4": 1_050_000,
-  "gpt-5.4-mini": 400_000,
-  "gpt-5.4-nano": 400_000,
-  "gemini-3.5-flash": 1_048_576,
-  "gemini-3.1-pro-preview": 1_048_576,
-  "gemini-3.1-flash-lite": 1_048_576,
-  "deepseek-v4-flash": 1_000_000,
-  "deepseek-v4-pro": 1_000_000,
-  "qwen3.5-plus": 1_000_000,
-  "qwen3-max": 262_144,
-  "MiniMax-M2.7": 204_800,
-  "MiniMax-M3": 1_000_000,
-  "kimi-k2.6": 262_144,
-  "kimi-k2.5": 262_144,
-  "glm-5.2": 1_000_000,
-  "glm-4.7": 200_000,
-  "glm-4.7-flashx": 200_000,
-  "deepseek/deepseek-v4-flash": 1_000_000,
-  "z-ai/glm-5.2": 1_000_000,
-  "qwen/qwen3.7-plus": 1_000_000,
-  "moonshotai/kimi-k2.6": 262_000,
-};
-
-// Per-provider default API host. OpenAI-compatible providers (minimax/kimi/zai)
-// REQUIRE a base URL; the direct providers and OpenRouter ship a package default
-// but accept an override for proxies / mainland endpoints. The built-in four
-// (anthropic/openai/google/openai-codex) have no entry, so their base URL stays
-// undefined unless the operator sets one. Single source of truth: loadConfig
-// resolves it, the setup wizard prompts with it, and llm.ts uses it as the
-// required-baseURL fallback for the OpenAI-compatible providers.
-export const PROVIDER_BASE_URLS: Record<string, string> = {
-  deepseek: "https://api.deepseek.com/v1",
-  qwen: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-  minimax: "https://api.minimax.io/v1",
-  kimi: "https://api.moonshot.ai/v1",
-  zai: "https://api.z.ai/api/openai/v1",
-  openrouter: "https://openrouter.ai/api/v1",
-};
-
-// Background-role (compaction) lane defaults. Only the two first-class slots
-// get a cheaper default; every other provider keeps the chat model so an
-// unconfigured setup never routes to a model its provider cannot serve.
-export const COMPACT_MODEL_DEFAULTS: Record<string, string> = {
-  anthropic: "claude-haiku-4-5-20251001",
-  openrouter: "deepseek/deepseek-v4-flash",
-};
-
-export function contextWindowForModel(model: string): number {
-  return CONTEXT_WINDOWS[model] ?? 200_000;
-}
-
-function resolveContextWindowTokens(model: string): number {
-  const envTokens = parseInt(process.env.CONTEXT_WINDOW_TOKENS ?? "", 10);
-  if (envTokens > 0) return envTokens;
-
-  return contextWindowForModel(model);
 }
 
 // ============================================================================
@@ -205,9 +115,9 @@ export function loadConfig(configDir: string = CONFIG_DIR): Config {
   const telegramYaml = (yaml.telegram as Record<string, unknown>) ?? {};
   const sessionYaml = (yaml.session as Record<string, unknown>) ?? {};
 
-  const provider = (env("LLM_PROVIDER") ??
-    (llmYaml.provider as string | undefined) ??
-    "anthropic") as Config["llm"]["provider"];
+  const provider = resolveLlmProvider(
+    env("LLM_PROVIDER") ?? (llmYaml.provider as string | undefined) ?? "anthropic",
+  );
 
   const llmApiKeyRaw = readSecretField(llmYaml.api_key, "llm.api_key");
   const intervalsApiKeyRaw = readSecretField(intervalsYaml.api_key, "intervals.api_key");
@@ -255,7 +165,9 @@ export function loadConfig(configDir: string = CONFIG_DIR): Config {
     provider === "openai-codex"
       ? ""
       : resolveWithPrecedence(
-          [envKeyForProvider[provider], "LLM_API_KEY"].filter((key): key is string => key !== undefined),
+          [envKeyForProvider[provider], "LLM_API_KEY"].filter(
+            (key): key is string => key !== undefined,
+          ),
           llmApiKeyRaw,
           "llm.api_key",
         );
@@ -270,79 +182,52 @@ export function loadConfig(configDir: string = CONFIG_DIR): Config {
     "telegram.bot_token",
   );
 
-  const defaultModelMap: Record<string, string> = {
-    anthropic: "claude-sonnet-4-6",
-    openai: "gpt-5.5",
-    google: "gemini-3.5-flash",
-    "openai-codex": "gpt-5.5",
-    deepseek: "deepseek-v4-flash",
-    qwen: "qwen3.5-plus",
-    minimax: "MiniMax-M2.7",
-    kimi: "kimi-k2.6",
-    zai: "glm-4.7",
-    openrouter: "deepseek/deepseek-v4-flash",
-  };
-
-  const model =
-    env("LLM_MODEL") ?? (llmYaml.model as string | undefined) ?? defaultModelMap[provider];
-
-  const flushModel =
-    env("LLM_FLUSH_MODEL") ?? (llmYaml.flush_model as string | undefined);
-
-  const compactModel =
-    provider === "openai-codex"
-      ? model
-      : (env("LLM_COMPACT_MODEL") ??
-         (llmYaml.compact_model as string | undefined) ??
-         COMPACT_MODEL_DEFAULTS[provider] ??
-         model);
-
-  const baseUrl =
-    env("LLM_BASE_URL") ??
-    (llmYaml.base_url as string | undefined) ??
-    PROVIDER_BASE_URLS[provider];
+  const contextWindowTokens = parseInt(env("CONTEXT_WINDOW_TOKENS") ?? "", 10);
+  const runtime = resolveRuntimeConfig(
+    {
+      llm: {
+        provider,
+        model: env("LLM_MODEL") ?? (llmYaml.model as string | undefined),
+        ...(provider === "openai-codex" ? {} : { apiKey }),
+        flushModel: env("LLM_FLUSH_MODEL") ?? (llmYaml.flush_model as string | undefined),
+        compactModel: env("LLM_COMPACT_MODEL") ?? (llmYaml.compact_model as string | undefined),
+        baseUrl: env("LLM_BASE_URL") ?? (llmYaml.base_url as string | undefined),
+      },
+      intervals: {
+        apiKey: intervalsApiKey,
+        athleteId: env("INTERVALS_ATHLETE_ID") ?? (intervalsYaml.athlete_id as string | undefined),
+      },
+      session: {
+        historyTokenBudgetRatio:
+          envFloat("HISTORY_TOKEN_BUDGET_RATIO") ??
+          (sessionYaml.historyTokenBudgetRatio as number | undefined),
+        idleMinutes:
+          envInt("SESSION_IDLE_MINUTES") ?? (sessionYaml.idleMinutes as number | undefined),
+        dailyResetHour:
+          envInt("SESSION_DAILY_RESET_HOUR") ?? (sessionYaml.dailyResetHour as number | undefined),
+        resetArchiveRetentionDays:
+          envInt("SESSION_RESET_ARCHIVE_RETENTION_DAYS") ??
+          (sessionYaml.resetArchiveRetentionDays as number | undefined),
+        timezone: env("COACH_TZ") ?? (sessionYaml.timezone as string | undefined),
+      },
+    },
+    undefined,
+    {
+      ...(Number.isFinite(contextWindowTokens) && contextWindowTokens > 0
+        ? { contextWindowTokens }
+        : {}),
+      ...(provider === "openai-codex" && typeof llmYaml.auth_profile === "string"
+        ? { authProfile: llmYaml.auth_profile }
+        : {}),
+    },
+  );
 
   const config: Config = {
+    ...runtime,
     dataSource,
-    llm: {
-      provider,
-      model,
-      apiKey,
-      authProfile:
-        provider === "openai-codex"
-          ? ((llmYaml.auth_profile as string | undefined) ?? "openai-codex")
-          : undefined,
-      flushModel,
-      compactModel,
-      baseUrl,
-    },
-    intervals: {
-      apiKey: intervalsApiKey,
-      athleteId:
-        env("INTERVALS_ATHLETE_ID") ??
-        (intervalsYaml.athlete_id as string | undefined) ??
-        "0",
-    },
     telegram: {
       botToken: telegramBotToken,
     },
-    session: {
-      historyTokenBudgetRatio:
-        envFloat("HISTORY_TOKEN_BUDGET_RATIO") ??
-        (sessionYaml.historyTokenBudgetRatio as number) ??
-        0.3,
-      idleMinutes:
-        envInt("SESSION_IDLE_MINUTES") ?? (sessionYaml.idleMinutes as number) ?? 0,
-      dailyResetHour:
-        envInt("SESSION_DAILY_RESET_HOUR") ?? (sessionYaml.dailyResetHour as number) ?? 4,
-      resetArchiveRetentionDays:
-        envInt("SESSION_RESET_ARCHIVE_RETENTION_DAYS") ??
-        (sessionYaml.resetArchiveRetentionDays as number) ??
-        0,
-      timezone:
-        env("COACH_TZ") ?? (sessionYaml.timezone as string | undefined) ?? "",
-    },
-    contextWindowTokens: resolveContextWindowTokens(model),
     dataDir: (yaml.data_dir as string) ?? configDir,
   };
 

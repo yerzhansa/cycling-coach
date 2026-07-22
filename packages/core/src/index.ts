@@ -157,6 +157,21 @@ export type { Config } from "./config.js";
 export { DATA_SOURCES, resolveDataSource } from "./config.js";
 export type { DataSource } from "./config.js";
 export {
+  COMPACT_MODEL_DEFAULTS,
+  DEFAULT_MODELS,
+  LLM_PROVIDERS,
+  PROVIDER_BASE_URLS,
+  contextWindowForModel,
+  resolveLlmProvider,
+  resolveRuntimeConfig,
+} from "./runtime-config.js";
+export type {
+  EffectiveRuntimeConfig,
+  LlmProvider,
+  RuntimeConfigPatch,
+  RuntimeConfigResolverOptions,
+} from "./runtime-config.js";
+export {
   createPlatformAthleteDataReader,
   createPlatformCalendarMutations,
   createMissingPlatformCalendarMutations,

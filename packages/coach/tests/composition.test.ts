@@ -247,8 +247,9 @@ async function compose(
   dependencies: LocalCoachCompositionDependencies,
   context = fakeContext(home),
   intervals?: Config["intervals"],
+  configOverride?: Config,
 ) {
-  const coreConfig = config(home, intervals);
+  const coreConfig = configOverride ?? config(home, intervals);
   return createLocalCoachComposition(
     {
       env: { ENDURAGENT_HOME: home.root },
@@ -1090,7 +1091,382 @@ describe("local coach composition", () => {
     await lifecycle.close();
   });
 
-  it("merges same-provider and intervals persistence without replacing retained fields", async () => {
+  it("activates the default Codex profile for an explicit same-provider selection", async () => {
+    const home = await freshHome();
+    await writeFile(
+      join(home.configDir, "auth-profiles.json"),
+      JSON.stringify({
+        "test-profile": {
+          type: "oauth",
+          access: "obviously-fake-custom-access",
+          refresh: "obviously-fake-custom-refresh",
+          expires: 4_102_444_800_000,
+        },
+        "openai-codex": {
+          type: "oauth",
+          access: "obviously-fake-default-access",
+          refresh: "obviously-fake-default-refresh",
+          expires: 4_102_444_800_000,
+        },
+      }),
+      { mode: 0o600 },
+    );
+    await writeFile(
+      join(home.configDir, "config.yaml"),
+      toYaml({
+        llm: {
+          provider: "openai-codex",
+          model: "custom-chat-model",
+          auth_profile: "test-profile",
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const initial: Config = {
+      ...config(home),
+      llm: {
+        provider: "openai-codex",
+        model: "custom-chat-model",
+        apiKey: "",
+        authProfile: "test-profile",
+        compactModel: "custom-chat-model",
+      },
+    };
+    expect(loadConfig(home.configDir).llm).toMatchObject({
+      provider: "openai-codex",
+      model: "custom-chat-model",
+      authProfile: "test-profile",
+    });
+    const received: CreateCoachEngineInput[] = [];
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: (input) => {
+          received.push(input);
+          return backend();
+        },
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      undefined,
+      initial,
+    );
+    expect(received[0]?.ports.config.llm.authProfile).toBe("test-profile");
+    await expect(received[0]?.ports.getAccessToken("test-profile")).resolves.toBe(
+      "obviously-fake-custom-access",
+    );
+
+    await lifecycle.operations.configureRuntime({ llm: { provider: "openai-codex" } });
+
+    expect(loadConfig(home.configDir).llm).toMatchObject({
+      provider: "openai-codex",
+      model: "custom-chat-model",
+      authProfile: "openai-codex",
+      compactModel: "custom-chat-model",
+    });
+    expect(received).toHaveLength(2);
+    expect(received.at(-1)?.ports.config.llm.authProfile).toBe("openai-codex");
+    await expect(received.at(-1)?.ports.getAccessToken("openai-codex")).resolves.toBe(
+      "obviously-fake-default-access",
+    );
+    expect(parseYaml(await readFile(join(home.configDir, "config.yaml"), "utf8"))).toMatchObject({
+      llm: { auth_profile: "openai-codex" },
+    });
+    const snapshot = await lifecycle.operations.getRuntimeConfig({});
+    expect(snapshot.llm).toEqual({
+      provider: "openai-codex",
+      model: "custom-chat-model",
+      credential_configured: true,
+    });
+    expect(JSON.stringify(snapshot)).not.toContain("test-profile");
+    expect(JSON.stringify(snapshot)).not.toContain(home.configDir);
+    expect(JSON.stringify(snapshot)).not.toContain("obviously-fake-default-access");
+    await rm(join(home.configDir, "auth-profiles.json"));
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      llm: { provider: "openai-codex", credential_configured: false },
+    });
+    await lifecycle.close();
+  });
+
+  it("preserves a custom Codex profile when a live LLM patch omits provider", async () => {
+    const home = await freshHome();
+    await writeFile(
+      join(home.configDir, "auth-profiles.json"),
+      JSON.stringify({
+        "test-profile": {
+          type: "oauth",
+          access: "obviously-fake-custom-access",
+          refresh: "obviously-fake-custom-refresh",
+          expires: 4_102_444_800_000,
+        },
+      }),
+      { mode: 0o600 },
+    );
+    await writeFile(
+      join(home.configDir, "config.yaml"),
+      toYaml({
+        llm: {
+          provider: "openai-codex",
+          model: "custom-chat-model",
+          auth_profile: "test-profile",
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const initial: Config = {
+      ...config(home),
+      llm: {
+        provider: "openai-codex",
+        model: "custom-chat-model",
+        apiKey: "",
+        authProfile: "test-profile",
+        compactModel: "custom-chat-model",
+      },
+    };
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      undefined,
+      initial,
+    );
+
+    await lifecycle.operations.configureRuntime({ llm: { model: "new-chat-model" } });
+
+    expect(loadConfig(home.configDir).llm).toMatchObject({
+      provider: "openai-codex",
+      model: "new-chat-model",
+      authProfile: "test-profile",
+      compactModel: "new-chat-model",
+    });
+    const snapshot = await lifecycle.operations.getRuntimeConfig({});
+    expect(snapshot.llm).toEqual({
+      provider: "openai-codex",
+      model: "new-chat-model",
+      credential_configured: true,
+    });
+    expect(JSON.stringify(snapshot)).not.toContain("test-profile");
+    await lifecycle.close();
+  });
+
+  it("preserves an implicit-provider YAML key across a model-only patch and reload", async () => {
+    const home = await freshHome();
+    await writeFile(
+      join(home.configDir, "config.yaml"),
+      toYaml({
+        data_source: "store",
+        data_dir: home.root,
+        llm: {
+          model: "old-model",
+          api_key: "obviously-fake-implicit-provider-key",
+          retained_llm_field: true,
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const initial = loadConfig(home.configDir);
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      undefined,
+      initial,
+    );
+
+    await lifecycle.operations.configureRuntime({ llm: { model: "new-model" } });
+
+    expect(parseYaml(await readFile(join(home.configDir, "config.yaml"), "utf8"))).toEqual({
+      data_source: "store",
+      data_dir: home.root,
+      llm: {
+        provider: "anthropic",
+        model: "new-model",
+        api_key: "obviously-fake-implicit-provider-key",
+        compact_model: "claude-haiku-4-5-20251001",
+        retained_llm_field: true,
+      },
+    });
+    expect(loadConfig(home.configDir).llm).toMatchObject({
+      provider: "anthropic",
+      model: "new-model",
+      apiKey: "obviously-fake-implicit-provider-key",
+    });
+    const snapshot = await lifecycle.operations.getRuntimeConfig({});
+    expect(snapshot.llm).toMatchObject({
+      provider: "anthropic",
+      model: "new-model",
+      credential_configured: true,
+    });
+    expect(JSON.stringify(snapshot)).not.toContain("obviously-fake-implicit-provider-key");
+    await lifecycle.close();
+  });
+
+  it("starts and snapshots the Desktop seeded blank athlete ID", async () => {
+    const home = await freshHome();
+    const initial = config(home, { apiKey: "", athleteId: "" });
+    let runtimeOptions:
+      | Parameters<NonNullable<LocalCoachCompositionDependencies["createRuntime"]>>[0]
+      | undefined;
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: (options) => {
+          runtimeOptions = options;
+          return runtime();
+        },
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      undefined,
+      initial,
+    );
+
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      llm: { credential_configured: false },
+      intervals: { athlete_id: "" },
+    });
+    expect(() =>
+      lifecycle.operations.configureRuntime({ intervals: { athlete_id: "" } } as never),
+    ).toThrow("Too small");
+
+    await lifecycle.operations.configureRuntime({
+      intervals: { api_key: "obviously-fake-intervals-key" },
+    });
+
+    expect(runtimeOptions?.readConfig?.().intervals).toEqual({
+      apiKey: "obviously-fake-intervals-key",
+      athleteId: "0",
+    });
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      intervals: { athlete_id: "0" },
+    });
+    expect(parseYaml(await readFile(join(home.configDir, "config.yaml"), "utf8"))).toMatchObject({
+      intervals: { athlete_id: "0" },
+    });
+    expect(loadConfig(home.configDir).intervals.athleteId).toBe("0");
+    await lifecycle.close();
+  });
+
+  it.each([
+    ["ordinary custom endpoint", "https://api.example.invalid/tenant/opaque-access-segment/v1"],
+    ["path-bearing opaque value", "opaque-endpoint/tenant/opaque-access-segment/v1"],
+  ])("omits a configured %s from runtime snapshots", async (_case, baseUrl) => {
+    const home = await freshHome();
+    const initial: Config = {
+      ...config(home),
+      llm: {
+        provider: "anthropic",
+        model: "synthetic",
+        apiKey: "",
+        baseUrl,
+      },
+    };
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      undefined,
+      initial,
+    );
+
+    const snapshot = await lifecycle.operations.getRuntimeConfig({});
+    expect(snapshot.llm).toEqual({
+      provider: "anthropic",
+      model: "synthetic",
+      credential_configured: false,
+    });
+    expect(JSON.stringify(snapshot)).not.toContain(baseUrl);
+    await lifecycle.close();
+  });
+
+  it.each([
+    ["newline", "https://api.example.invalid/v1\nobviously-fake-marker"],
+    ["tab", "https://api.example.invalid/v1\tobviously-fake-marker"],
+    ["leading whitespace", " https://api.example.invalid/obviously-fake-marker"],
+    ["trailing whitespace", "https://api.example.invalid/obviously-fake-marker "],
+    ["empty query", "https://api.example.invalid/obviously-fake-marker?"],
+    ["empty fragment", "https://api.example.invalid/obviously-fake-marker#"],
+    ["backslashes", "https:\\api.example.invalid\\obviously-fake-marker"],
+    ["host case normalization", "https://API.EXAMPLE.INVALID/obviously-fake-marker"],
+    ["default port normalization", "https://api.example.invalid:443/obviously-fake-marker"],
+    ["userinfo", "https://obviously-fake-marker:synthetic-pass@api.example.invalid/v1"],
+    ["query", "https://api.example.invalid/v1?signature=obviously-fake-marker"],
+    ["fragment", "https://api.example.invalid/v1#obviously-fake-marker"],
+    ["non-HTTP protocol", "ftp://api.example.invalid/obviously-fake-marker"],
+    ["invalid", "not-a-url-obviously-fake-marker"],
+  ])("omits a legacy %s base URL from runtime snapshots", async (_case, baseUrl) => {
+    const home = await freshHome();
+    const initial: Config = {
+      ...config(home),
+      llm: { provider: "anthropic", model: "synthetic", apiKey: "", baseUrl },
+    };
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      undefined,
+      initial,
+    );
+
+    const snapshot = await lifecycle.operations.getRuntimeConfig({});
+    expect(snapshot.llm).toEqual({
+      provider: "anthropic",
+      model: "synthetic",
+      credential_configured: false,
+    });
+    expect(JSON.stringify(snapshot)).not.toContain("obviously-fake-marker");
+    await lifecycle.close();
+  });
+
+  it("preserves custom same-provider settings and the athlete ID for credential-only patches", async () => {
     const home = await freshHome();
     await writeFile(
       join(home.configDir, "config.yaml"),
@@ -1114,24 +1490,54 @@ describe("local coach composition", () => {
       }),
       { mode: 0o600 },
     );
-    const lifecycle = await compose(home, {
-      bootstrap: async () => reference(),
-      createRuntime: () => runtime(),
-      createBackend: () => backend(),
-      createRepository: () => ({
-        insertIfAbsent: async () => false,
-        readCurrent: async () => undefined,
-      }),
-      createResolver: () => missingResolver(),
-    });
+    const received: CreateCoachEngineInput[] = [];
+    const initial: Config = {
+      ...config(home),
+      llm: {
+        provider: "openrouter",
+        model: "previous-model",
+        apiKey: "obviously-fake-active-llm-key",
+        baseUrl: "https://invalid.example.test/v1",
+        flushModel: "previous-flush-model",
+        compactModel: "previous-compact-model",
+      },
+      intervals: {
+        apiKey: "obviously-fake-active-intervals-key",
+        athleteId: "previous-athlete",
+      },
+      contextWindowTokens: 200_000,
+    };
+    let runtimeOptions:
+      | Parameters<NonNullable<LocalCoachCompositionDependencies["createRuntime"]>>[0]
+      | undefined;
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: (options) => {
+          runtimeOptions = options;
+          return runtime();
+        },
+        createBackend: (input) => {
+          received.push(input);
+          return backend();
+        },
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      undefined,
+      initial,
+    );
     await lifecycle.operations.configureRuntime({
       llm: {
         provider: "openrouter",
-        model: "replacement-model",
         api_key: "obviously-fake-request-llm-key",
       },
       intervals: {
-        athlete_id: "replacement-athlete",
         api_key: "obviously-fake-request-intervals-key",
       },
     });
@@ -1142,7 +1548,7 @@ describe("local coach composition", () => {
       retained_top_level: true,
       llm: {
         provider: "openrouter",
-        model: "replacement-model",
+        model: "previous-model",
         api_key: "obviously-fake-persisted-llm-key",
         base_url: "https://invalid.example.test/v1",
         flush_model: "previous-flush-model",
@@ -1150,7 +1556,7 @@ describe("local coach composition", () => {
         retained_llm_field: true,
       },
       intervals: {
-        athlete_id: "replacement-athlete",
+        athlete_id: "previous-athlete",
         api_key: "obviously-fake-persisted-intervals-key",
         retained_intervals_field: true,
       },
@@ -1159,15 +1565,110 @@ describe("local coach composition", () => {
     expect(loadConfig(home.configDir)).toMatchObject({
       llm: {
         provider: "openrouter",
-        model: "replacement-model",
+        model: "previous-model",
         apiKey: "obviously-fake-persisted-llm-key",
         baseUrl: "https://invalid.example.test/v1",
         flushModel: "previous-flush-model",
         compactModel: "previous-compact-model",
       },
       intervals: {
-        athleteId: "replacement-athlete",
+        athleteId: "previous-athlete",
         apiKey: "obviously-fake-persisted-intervals-key",
+      },
+    });
+    expect(received.at(-1)?.ports.config.llm).toMatchObject({
+      provider: "openrouter",
+      model: "previous-model",
+      apiKey: "obviously-fake-request-llm-key",
+      baseUrl: "https://invalid.example.test/v1",
+      flushModel: "previous-flush-model",
+      compactModel: "previous-compact-model",
+    });
+    expect(runtimeOptions?.readConfig?.()).toMatchObject({
+      llm: {
+        provider: "openrouter",
+        model: "previous-model",
+        baseUrl: "https://invalid.example.test/v1",
+        flushModel: "previous-flush-model",
+        compactModel: "previous-compact-model",
+      },
+      intervals: { athleteId: "previous-athlete" },
+    });
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toEqual({
+      schemaVersion: 1,
+      llm: {
+        provider: "openrouter",
+        model: "previous-model",
+        credential_configured: true,
+      },
+      intervals: { athlete_id: "previous-athlete" },
+      session: initial.session,
+    });
+    await lifecycle.close();
+  });
+
+  it("applies canonical defaults when switching from a one-million to a 200k context", async () => {
+    const home = await freshHome();
+    const received: CreateCoachEngineInput[] = [];
+    const initial: Config = {
+      ...config(home),
+      llm: {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        apiKey: "obviously-fake-anthropic-key",
+        baseUrl: "https://invalid.example.test/old",
+        flushModel: "old-flush-model",
+        compactModel: "old-compact-model",
+      },
+      contextWindowTokens: 1_000_000,
+    };
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: (input) => {
+          received.push(input);
+          return backend();
+        },
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      undefined,
+      initial,
+    );
+
+    await lifecycle.operations.configureRuntime({
+      llm: { provider: "zai", api_key: "obviously-fake-zai-key" },
+    });
+
+    expect(received.at(-1)?.ports.config).toMatchObject({
+      contextWindowTokens: 200_000,
+      llm: {
+        provider: "zai",
+        model: "glm-4.7",
+        apiKey: "obviously-fake-zai-key",
+        baseUrl: "https://api.z.ai/api/openai/v1",
+        flushModel: undefined,
+        compactModel: "glm-4.7",
+      },
+    });
+    expect(parseYaml(await readFile(join(home.configDir, "config.yaml"), "utf8"))).toEqual({
+      llm: {
+        provider: "zai",
+        model: "glm-4.7",
+        base_url: "https://api.z.ai/api/openai/v1",
+        compact_model: "glm-4.7",
+      },
+    });
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      llm: {
+        provider: "zai",
+        model: "glm-4.7",
       },
     });
     await lifecycle.close();
@@ -1226,7 +1727,11 @@ describe("local coach composition", () => {
     ) as Record<string, unknown>;
     expect(persisted).toEqual({
       retained_top_level: true,
-      llm: { provider: "google", model: "replacement-model" },
+      llm: {
+        provider: "google",
+        model: "replacement-model",
+        compact_model: "replacement-model",
+      },
     });
     expect(loadConfig(home.configDir).llm).toMatchObject({
       provider: "google",
@@ -1247,6 +1752,7 @@ describe("local coach composition", () => {
         provider: "openai-codex",
         model: "gpt-5.5",
         auth_profile: "openai-codex",
+        compact_model: "gpt-5.5",
       },
     });
     expect(loadConfig(home.configDir).llm).toMatchObject({
@@ -1290,6 +1796,62 @@ describe("local coach composition", () => {
     });
     await lifecycle.close();
   });
+
+  it.each(["build", "persist"] as const)(
+    "does not publish or overwrite YAML after a failed candidate %s",
+    async (failurePoint) => {
+      const home = await freshHome();
+      const originalYaml = toYaml({
+        retained_top_level: true,
+        llm: { provider: "anthropic", model: "synthetic" },
+      });
+      await writeFile(join(home.configDir, "config.yaml"), originalYaml, { mode: 0o600 });
+      let builds = 0;
+      const lifecycle = await compose(home, {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: (input) => {
+          builds += 1;
+          if (failurePoint === "build" && builds === 2) {
+            throw new Error("synthetic candidate build failure");
+          }
+          return backend({
+            chat: async () => ({ text: input.ports.config.llm.model }),
+          });
+        },
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+        ...(failurePoint === "persist"
+          ? {
+              persistRuntimeConfig: () => {
+                throw new Error("synthetic persistence failure");
+              },
+            }
+          : {}),
+      });
+
+      await expect(
+        lifecycle.operations.configureRuntime({
+          llm: { model: "candidate-model", api_key: "obviously-fake-candidate-key" },
+        }),
+      ).rejects.toThrow(
+        failurePoint === "build"
+          ? "synthetic candidate build failure"
+          : "synthetic persistence failure",
+      );
+      await expect(
+        lifecycle.engine.chat({ chatId: "atomic", message: "active model" }),
+      ).resolves.toEqual({ text: "synthetic" });
+      await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+        llm: { provider: "anthropic", model: "synthetic" },
+      });
+      expect(await readFile(join(home.configDir, "config.yaml"), "utf8")).toBe(originalYaml);
+      await lifecycle.close();
+    },
+  );
 
   it("passes the live intervals authority and one deterministic UTC history date into sync", async () => {
     const home = await freshHome();

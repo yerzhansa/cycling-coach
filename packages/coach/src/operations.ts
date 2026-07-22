@@ -1,6 +1,8 @@
 import {
   ConfigureRuntimeRpcParamsSchema,
   ConfigureRuntimeRpcResultSchema,
+  GetRuntimeConfigRpcParamsSchema,
+  GetRuntimeConfigRpcResultSchema,
   GetUnitsPreferenceRpcParamsSchema,
   GetUnitsPreferenceRpcResultSchema,
   ImportFilesRpcParamsSchema,
@@ -14,6 +16,8 @@ import {
   SyncRpcResultSchema,
   type ConfigureRuntimeRpcParams,
   type ConfigureRuntimeRpcResult,
+  type GetRuntimeConfigRpcParams,
+  type GetRuntimeConfigRpcResult,
   type GetUnitsPreferenceRpcParams,
   type GetUnitsPreferenceRpcResult,
   type CoachOperations,
@@ -48,6 +52,7 @@ export interface CreateCoachOperationsInput {
   }>;
   readonly historyNewestDate: () => string;
   readonly applyRuntimeConfig: (request: ConfigureRuntimeRpcParams) => Promise<void>;
+  readonly readRuntimeConfig?: () => GetRuntimeConfigRpcResult;
 }
 
 export interface CoachOperationsDependencies {
@@ -182,6 +187,15 @@ export function createCoachOperations(
             intervals: parsedRequest.intervals !== undefined,
           },
         });
+      });
+    },
+    getRuntimeConfig(request: GetRuntimeConfigRpcParams): Promise<GetRuntimeConfigRpcResult> {
+      GetRuntimeConfigRpcParamsSchema.parse(request);
+      return enqueue(async () => {
+        if (input.readRuntimeConfig === undefined) {
+          throw new TypeError("Runtime configuration read is unavailable.");
+        }
+        return GetRuntimeConfigRpcResultSchema.parse(input.readRuntimeConfig());
       });
     },
     getUnitsPreference(request: GetUnitsPreferenceRpcParams): Promise<GetUnitsPreferenceRpcResult> {

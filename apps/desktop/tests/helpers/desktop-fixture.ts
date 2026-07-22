@@ -312,6 +312,11 @@ export async function launchDesktopFixture(input: {
         ReturnType<CoachOperations["configureRuntime"]>
       >;
     },
+    async getRuntimeConfig(request) {
+      return finalFrame(await invoke("getRuntimeConfig", request)) as Awaited<
+        ReturnType<CoachOperations["getRuntimeConfig"]>
+      >;
+    },
     async getUnitsPreference(request) {
       return finalFrame(await invoke("getUnitsPreference", request)) as {
         value: "metric" | "imperial";

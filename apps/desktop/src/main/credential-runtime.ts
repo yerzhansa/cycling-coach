@@ -1,11 +1,9 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { connectCoachClient, type CoachClient } from "@enduragent/coach-client";
 import {
   type ConfigureRuntimeRpcParams,
   type LlmProvider,
-  LlmProviderSchema,
+  type RuntimeConfigSnapshot,
 } from "@enduragent/coach-contract";
-import { parse as parseYaml } from "yaml";
 import { CHATGPT_PROFILE_NAME } from "./chatgpt-auth.js";
 import type { CredentialRuntimeState, DesktopCredentialSlot } from "./credential-vault.js";
 import { runtimeConfigurationForCredential } from "./onboarding-ipc.js";
@@ -31,32 +29,53 @@ interface CredentialRuntimeApplicationOptions {
   readonly configureRuntime: (request: ConfigureRuntimeRpcParams) => Promise<void>;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+export interface RuntimeConfigurationAuthority {
+  configureRuntime(request: ConfigureRuntimeRpcParams): Promise<void>;
+  getRuntimeConfig(): Promise<RuntimeConfigSnapshot>;
 }
 
-export async function readSelectedLlmProvider(
-  configDir: string,
+export function intervalsAthleteIdForOwnership(snapshot: RuntimeConfigSnapshot): string {
+  return snapshot.intervals.athlete_id === "" ? "0" : snapshot.intervals.athlete_id;
+}
+
+export function readSelectedLlmProvider(
+  snapshot: RuntimeConfigSnapshot,
   evidence: LlmProviderSelectionEvidence,
-): Promise<LlmProvider | undefined> {
-  let source: string;
-  try {
-    source = await readFile(join(configDir, "config.yaml"), "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
-  const parsed = parseYaml(source) as unknown;
-  if (parsed === undefined || parsed === null) return undefined;
-  if (!isRecord(parsed)) throw new TypeError();
-  if (parsed.llm === undefined) return undefined;
-  if (!isRecord(parsed.llm)) throw new TypeError();
-  if (parsed.llm.provider === undefined) return undefined;
-  const provider = LlmProviderSchema.parse(parsed.llm.provider);
+): LlmProvider | undefined {
+  const provider = snapshot.llm.provider;
+  if (snapshot.llm.credential_configured) return provider;
   if (provider === CHATGPT_PROFILE_NAME) {
     return evidence.chatGptProfilePresent ? provider : undefined;
   }
   return evidence.storedCredentialSlots.includes(provider) ? provider : undefined;
+}
+
+export function createConnectionRuntimeAuthority(
+  connection: Readonly<{ url: `ws://127.0.0.1:${number}/rpc`; token: string }>,
+  connect: typeof connectCoachClient = connectCoachClient,
+): RuntimeConfigurationAuthority {
+  const call = async <T>(operation: (client: CoachClient) => Promise<T>): Promise<T> => {
+    const client = await connect({ url: connection.url, token: connection.token });
+    try {
+      return (await operation(client)) as T;
+    } finally {
+      await client.close();
+    }
+  };
+  return {
+    async configureRuntime(request) {
+      const result = await call((client) => client.call("configureRuntime", request));
+      if (
+        (request.llm !== undefined && !result.applied.llm) ||
+        (request.intervals !== undefined && !result.applied.intervals)
+      ) {
+        throw new TypeError();
+      }
+    },
+    getRuntimeConfig() {
+      return call((client) => client.call("getRuntimeConfig", {}));
+    },
+  };
 }
 
 export function createCredentialRuntimeApplication(
