@@ -52,33 +52,33 @@ function safeRendererPath(rendererRoot: string, pathname: string): string | unde
 
 export async function installDesktopProtocol(input: {
   readonly session: Session;
-  readonly daemonPort: number;
+  readonly currentDaemonPort: () => number;
   readonly rendererRoot: string;
   readonly developmentUrl?: string;
 }): Promise<void> {
-  const policy = createDesktopContentSecurityPolicy(input.daemonPort);
+  const withCurrentPolicy = (response: Response): Response =>
+    responseWithPolicy(response, createDesktopContentSecurityPolicy(input.currentDaemonPort()));
   await input.session.protocol.handle(DESKTOP_SCHEME, async (request) => {
     const requested = new URL(request.url);
     if (requested.host !== DESKTOP_HOST)
-      return responseWithPolicy(new Response(null, { status: 404 }), policy);
+      return withCurrentPolicy(new Response(null, { status: 404 }));
     if (input.developmentUrl !== undefined) {
       const upstream = new URL(input.developmentUrl);
       upstream.pathname = requested.pathname;
       upstream.search = requested.search;
-      return responseWithPolicy(await net.fetch(upstream.toString()), policy);
+      return withCurrentPolicy(await net.fetch(upstream.toString()));
     }
     const target = safeRendererPath(resolve(input.rendererRoot), requested.pathname);
-    if (target === undefined)
-      return responseWithPolicy(new Response(null, { status: 404 }), policy);
+    if (target === undefined) return withCurrentPolicy(new Response(null, { status: 404 }));
     try {
       const body = await readFile(target);
       const headers = new Headers();
       if (target.endsWith(".html")) headers.set("Content-Type", "text/html; charset=utf-8");
       if (target.endsWith(".js")) headers.set("Content-Type", "text/javascript; charset=utf-8");
       if (target.endsWith(".css")) headers.set("Content-Type", "text/css; charset=utf-8");
-      return responseWithPolicy(new Response(body, { status: 200, headers }), policy);
+      return withCurrentPolicy(new Response(body, { status: 200, headers }));
     } catch {
-      return responseWithPolicy(new Response(null, { status: 404 }), policy);
+      return withCurrentPolicy(new Response(null, { status: 404 }));
     }
   });
 }

@@ -147,7 +147,20 @@ export type ServiceRegistrationClass = "absent" | "registered" | "unknown";
 export interface AppSupervisedChildHandle {
   readonly pid: number;
   readonly exited: Promise<{ readonly exitCode: number | null }>;
+  isAlive(): boolean;
   stop(): Promise<void>;
+}
+
+export interface DesktopDaemonStartBudget {
+  remainingAttempts: number;
+  readonly deadline: number;
+}
+
+export class AppSupervisedDaemonStartError extends Error {
+  constructor(readonly cause: "spawn-failed" | "termination-failed") {
+    super(`app-supervised daemon ${cause}`);
+    this.name = "AppSupervisedDaemonStartError";
+  }
 }
 
 export interface StartAppSupervisedDaemonInput {
@@ -1024,6 +1037,8 @@ export interface ResolveDesktopDaemonInput {
   readonly startAppSupervisedDaemon: (
     input: StartAppSupervisedDaemonInput,
   ) => Promise<AppSupervisedChildHandle>;
+  readonly startBudget?: DesktopDaemonStartBudget;
+  readonly observationOnly?: boolean;
 }
 
 export type DesktopDaemonDependencies = Required<
@@ -1045,14 +1060,37 @@ export type DesktopDaemonResolution =
       readonly url: `ws://127.0.0.1:${number}/rpc`;
       readonly token: string;
       readonly owner: DaemonOwner;
-      readonly supervision: "attached" | "app-supervised";
+      readonly supervision: "attached";
+      close(): Promise<void>;
+    }
+  | {
+      readonly status: "connected";
+      readonly url: `ws://127.0.0.1:${number}/rpc`;
+      readonly token: string;
+      readonly owner: DaemonOwner;
+      readonly supervision: "app-supervised";
+      readonly exited: Promise<{ readonly exitCode: number | null }>;
+      isAlive(): boolean;
       close(): Promise<void>;
     }
   | {
       readonly status: "refused";
       readonly exitCode: 3 | 5;
-      readonly classification: "contention-family" | "version-mismatch";
+      readonly classification: "contention-family" | "version-mismatch" | "never-published";
+      readonly cause:
+        | "contention"
+        | "version-mismatch"
+        | "never-published"
+        | "unavailable"
+        | "cancelled"
+        | "termination-failed"
+        | "restart-exhausted";
+      readonly retryable: boolean;
     };
+
+const DESKTOP_DAEMON_PUBLICATION_WAIT_MS = 30_000;
+const DESKTOP_EPHEMERAL_START_ATTEMPTS = 3;
+const DESKTOP_EPHEMERAL_START_DEADLINE_MS = 90_000;
 
 const desktopDaemonDependencies: DesktopDaemonDependencies = {
   resolveAthleteHome: defaultDependencies.resolveAthleteHome,
@@ -1064,18 +1102,43 @@ const desktopDaemonDependencies: DesktopDaemonDependencies = {
   monotonicNow: defaultDependencies.monotonicNow!,
 };
 
-function refusedDesktop(exitCode: 3 | 5): DesktopDaemonResolution {
+function refusedDesktop(
+  exitCode: 3 | 5,
+  cause: Extract<DesktopDaemonResolution, { status: "refused" }>["cause"] = exitCode ===
+  EXIT_VERSION_MISMATCH
+    ? "version-mismatch"
+    : "contention",
+): DesktopDaemonResolution {
+  const classification =
+    cause === "version-mismatch"
+      ? "version-mismatch"
+      : cause === "never-published"
+        ? "never-published"
+        : "contention-family";
   return {
     status: "refused",
     exitCode,
-    classification: exitCode === EXIT_VERSION_MISMATCH ? "version-mismatch" : "contention-family",
+    classification,
+    cause,
+    retryable: cause !== "version-mismatch" && cause !== "termination-failed",
   };
 }
 
-async function stopAppChild(child: AppSupervisedChildHandle | undefined): Promise<void> {
-  if (child === undefined) return;
-  await child.stop().catch(() => {});
-  await child.exited.catch(() => ({ exitCode: null }));
+async function stopAppChild(child: AppSupervisedChildHandle | undefined): Promise<boolean> {
+  if (child === undefined) return true;
+  try {
+    await child.stop();
+    await child.exited;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+class AppChildTerminationError extends Error {}
+
+async function requireStoppedAppChild(child: AppSupervisedChildHandle | undefined): Promise<void> {
+  if (!(await stopAppChild(child))) throw new AppChildTerminationError();
 }
 
 function connectedDesktop(
@@ -1085,42 +1148,117 @@ function connectedDesktop(
   child?: AppSupervisedChildHandle,
 ): DesktopDaemonResolution {
   let closePromise: Promise<void> | undefined;
-  return {
-    status: "connected",
-    url: `ws://127.0.0.1:${port}/rpc`,
-    token,
-    owner,
-    supervision: child === undefined ? "attached" : "app-supervised",
-    close() {
-      closePromise ??= stopAppChild(child);
-      return closePromise;
-    },
+  const close = (): Promise<void> => {
+    closePromise ??= stopAppChild(child).then((stopped) => {
+      if (!stopped) throw new Error("app-supervised daemon termination failed");
+    });
+    return closePromise;
   };
+  return child === undefined
+    ? {
+        status: "connected",
+        url: `ws://127.0.0.1:${port}/rpc`,
+        token,
+        owner,
+        supervision: "attached",
+        close,
+      }
+    : {
+        status: "connected",
+        url: `ws://127.0.0.1:${port}/rpc`,
+        token,
+        owner,
+        supervision: "app-supervised",
+        exited: child.exited,
+        isAlive: child.isAlive,
+        close,
+      };
 }
+
+type DesktopPublicationOutcome =
+  | { readonly kind: "published"; readonly observation: DaemonStateObservation }
+  | { readonly kind: "child-exited" }
+  | { readonly kind: "cancelled" }
+  | { readonly kind: "deadline"; readonly observation: DaemonStateObservation };
 
 async function waitForDesktopDaemon(input: {
   readonly home: AthleteHome;
   readonly signal: AbortSignal;
   readonly dependencies: DesktopDaemonDependencies;
-}): Promise<DaemonStateObservation | undefined> {
+  readonly deadline: number;
+  readonly child?: AppSupervisedChildHandle;
+}): Promise<DesktopPublicationOutcome> {
   const startedAt = input.dependencies.monotonicNow();
+  const publicationDeadline = Math.min(
+    input.deadline,
+    startedAt + DESKTOP_DAEMON_PUBLICATION_WAIT_MS,
+  );
+  let abortListener: (() => void) | undefined;
+  const cancelled = new Promise<DesktopPublicationOutcome>((resolve) => {
+    if (input.signal.aborted) {
+      resolve({ kind: "cancelled" });
+      return;
+    }
+    abortListener = () => resolve({ kind: "cancelled" });
+    input.signal.addEventListener("abort", abortListener, { once: true });
+  });
+  const childExited = input.child?.exited.then<DesktopPublicationOutcome>(() => ({
+    kind: "child-exited",
+  }));
   let nextDelayMs = 50;
-  while (!input.signal.aborted) {
-    let observation: DaemonStateObservation;
-    try {
-      observation = await input.dependencies.observeDaemonState({ home: input.home });
-    } catch {
-      observation = { kind: "auth-invalid" };
+  let lastObservation: DaemonStateObservation = { kind: "absent" };
+  try {
+    while (!input.signal.aborted) {
+      const remainingBeforeObservation = publicationDeadline - input.dependencies.monotonicNow();
+      if (remainingBeforeObservation <= 0) {
+        return { kind: "deadline", observation: lastObservation };
+      }
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<DesktopPublicationOutcome>((resolve) => {
+        timeout = setTimeout(
+          () => resolve({ kind: "deadline", observation: lastObservation }),
+          remainingBeforeObservation,
+        );
+      });
+      const observationAttempt = input.dependencies
+        .observeDaemonState({ home: input.home })
+        .then<DesktopPublicationOutcome>((observation) => ({ kind: "published", observation }))
+        .catch<DesktopPublicationOutcome>(() => ({
+          kind: "published",
+          observation: { kind: "auth-invalid" },
+        }));
+      const outcome = await Promise.race(
+        [observationAttempt, childExited, cancelled, deadline].filter(
+          (value): value is Promise<DesktopPublicationOutcome> => value !== undefined,
+        ),
+      );
+      if (timeout !== undefined) clearTimeout(timeout);
+      if (outcome.kind !== "published") return outcome;
+      lastObservation = outcome.observation;
+      if (lastObservation.kind !== "absent" && lastObservation.kind !== "bound-unresponsive") {
+        return outcome;
+      }
+      const remainingMs = publicationDeadline - input.dependencies.monotonicNow();
+      if (remainingMs <= 0) return { kind: "deadline", observation: lastObservation };
+      const waitOutcome = await Promise.race(
+        [
+          childExited,
+          cancelled,
+          input.dependencies
+            .delay(Math.min(nextDelayMs, remainingMs))
+            .then<DesktopPublicationOutcome>(() => ({
+              kind: "published",
+              observation: lastObservation,
+            })),
+        ].filter((value): value is Promise<DesktopPublicationOutcome> => value !== undefined),
+      );
+      if (waitOutcome.kind !== "published") return waitOutcome;
+      nextDelayMs = Math.min(nextDelayMs * 2, 200);
     }
-    if (observation.kind !== "absent" && observation.kind !== "bound-unresponsive") {
-      return observation;
-    }
-    const elapsed = input.dependencies.monotonicNow() - startedAt;
-    if (elapsed >= 5_000) return observation;
-    await input.dependencies.delay(Math.min(nextDelayMs, 5_000 - elapsed));
-    nextDelayMs = Math.min(nextDelayMs * 2, 200);
+    return { kind: "cancelled" };
+  } finally {
+    if (abortListener !== undefined) input.signal.removeEventListener("abort", abortListener);
   }
-  return undefined;
 }
 
 function createDesktopSecondStarterBinding(input: {
@@ -1142,7 +1280,7 @@ function createDesktopSecondStarterBinding(input: {
   let taken = false;
   let retirePromise: Promise<void> | undefined;
   const retirePreviousChild = (): Promise<void> => {
-    retirePromise ??= stopAppChild(input.previousChild);
+    retirePromise ??= requireStoppedAppChild(input.previousChild);
     return retirePromise;
   };
   const serviceUpgrade = createServiceUpgradePort(input.home, {
@@ -1199,15 +1337,43 @@ export async function resolveDesktopDaemon(
     });
     registration = serviceStatus.kind;
   } catch {
-    return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+    return refusedDesktop(
+      EXIT_DAEMON_UNAVAILABLE,
+      input.signal.aborted ? "cancelled" : "unavailable",
+    );
   }
   let observation: DaemonStateObservation;
   try {
     observation = await dependencies.observeDaemonState({ home });
   } catch {
-    return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+    return refusedDesktop(
+      EXIT_DAEMON_UNAVAILABLE,
+      input.signal.aborted ? "cancelled" : "unavailable",
+    );
+  }
+  if (input.observationOnly) {
+    if (observation.kind === "compatible-healthy") {
+      return connectedDesktop(
+        observation.authenticated.coordinates.port,
+        observation.authenticated.coordinates.token,
+        observation.authenticated.handshake.owner,
+      );
+    }
+    if (observation.kind === "version-mismatch") {
+      return refusedDesktop(EXIT_VERSION_MISMATCH, "version-mismatch");
+    }
+    return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "unavailable");
   }
   let ownedChild: AppSupervisedChildHandle | undefined;
+  const startBudget =
+    input.startBudget ??
+    ({
+      remainingAttempts: DESKTOP_EPHEMERAL_START_ATTEMPTS,
+      deadline: dependencies.monotonicNow() + DESKTOP_EPHEMERAL_START_DEADLINE_MS,
+    } satisfies DesktopDaemonStartBudget);
+  const startsThisResolutionLimit =
+    input.startBudget === undefined ? DESKTOP_EPHEMERAL_START_ATTEMPTS : 1;
+  let startsThisResolution = 0;
 
   while (!input.signal.aborted) {
     if (observation.kind === "compatible-healthy") {
@@ -1220,8 +1386,10 @@ export async function resolveDesktopDaemon(
     }
     if (observation.kind === "version-mismatch") {
       if (observation.failure.direction === "client-older") {
-        await stopAppChild(ownedChild);
-        return refusedDesktop(EXIT_VERSION_MISMATCH);
+        if (!(await stopAppChild(ownedChild))) {
+          return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "termination-failed");
+        }
+        return refusedDesktop(EXIT_VERSION_MISMATCH, "version-mismatch");
       }
       const binding = createDesktopSecondStarterBinding({
         home,
@@ -1244,18 +1412,32 @@ export async function resolveDesktopDaemon(
           },
           binding.dependencies,
         );
-      } catch {
+      } catch (error) {
         const startedChild = binding.takeStartedAppChild();
-        await stopAppChild(startedChild);
-        await stopAppChild(ownedChild);
-        return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+        const stoppedStarted = await stopAppChild(startedChild);
+        const stoppedOwned = await stopAppChild(ownedChild);
+        return refusedDesktop(
+          EXIT_DAEMON_UNAVAILABLE,
+          error instanceof AppChildTerminationError ||
+            (error instanceof AppSupervisedDaemonStartError &&
+              error.cause === "termination-failed") ||
+            !stoppedStarted ||
+            !stoppedOwned
+            ? "termination-failed"
+            : "unavailable",
+        );
       }
       const startedChild = binding.takeStartedAppChild();
       if (startedChild !== undefined) {
-        await stopAppChild(ownedChild);
+        if (!(await stopAppChild(ownedChild))) {
+          await stopAppChild(startedChild);
+          return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "termination-failed");
+        }
         ownedChild = startedChild;
       } else if (ownedChild !== undefined) {
-        await stopAppChild(ownedChild);
+        if (!(await stopAppChild(ownedChild))) {
+          return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "termination-failed");
+        }
         ownedChild = undefined;
       }
       if (starter.status === "attach") {
@@ -1270,50 +1452,114 @@ export async function resolveDesktopDaemon(
         try {
           observation = await dependencies.observeDaemonState({ home });
         } catch {
-          await stopAppChild(ownedChild);
-          return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+          const stopped = await stopAppChild(ownedChild);
+          return refusedDesktop(
+            EXIT_DAEMON_UNAVAILABLE,
+            stopped ? "unavailable" : "termination-failed",
+          );
         }
         continue;
       }
-      await stopAppChild(ownedChild);
+      if (!(await stopAppChild(ownedChild))) {
+        return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "termination-failed");
+      }
       ownedChild = undefined;
-      if (starter.status === "refuse") return refusedDesktop(starter.exitCode);
-      return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+      if (starter.status === "refuse") {
+        return refusedDesktop(
+          starter.exitCode,
+          starter.exitCode === EXIT_VERSION_MISMATCH ? "version-mismatch" : "contention",
+        );
+      }
+      return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "unavailable");
     }
 
     const decision = decideServiceAwareAutoStart({ registration, peer: observation.kind });
     if (decision === "resume-service-then-attach") {
+      if (dependencies.monotonicNow() >= startBudget.deadline) {
+        return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "unavailable");
+      }
       let resumed: "resumed" | "not-installed";
       try {
         resumed = await dependencies.resumeService({ home, executablePath: input.executablePath });
       } catch {
-        return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+        return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "unavailable");
       }
-      if (resumed !== "resumed") return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
-      const published = await waitForDesktopDaemon({ home, signal: input.signal, dependencies });
-      if (published === undefined) return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
-      observation = published;
+      if (resumed !== "resumed") return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "unavailable");
+      const published = await waitForDesktopDaemon({
+        home,
+        signal: input.signal,
+        dependencies,
+        deadline: startBudget.deadline,
+      });
+      if (published.kind === "cancelled") {
+        return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "cancelled");
+      }
+      if (published.kind !== "published") {
+        return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "unavailable");
+      }
+      observation = published.observation;
       continue;
     }
     if (decision === "spawn-ephemeral") {
+      if (
+        startBudget.remainingAttempts <= 0 ||
+        startsThisResolution >= startsThisResolutionLimit ||
+        dependencies.monotonicNow() >= startBudget.deadline
+      ) {
+        if (!(await stopAppChild(ownedChild))) {
+          return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "termination-failed");
+        }
+        ownedChild = undefined;
+        return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "never-published");
+      }
+      if (!(await stopAppChild(ownedChild))) {
+        return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "termination-failed");
+      }
+      ownedChild = undefined;
+      startBudget.remainingAttempts -= 1;
+      startsThisResolution += 1;
       try {
         ownedChild = await input.startAppSupervisedDaemon({ home });
-      } catch {
-        return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+      } catch (error) {
+        return refusedDesktop(
+          EXIT_DAEMON_UNAVAILABLE,
+          error instanceof AppSupervisedDaemonStartError && error.cause === "termination-failed"
+            ? "termination-failed"
+            : "never-published",
+        );
       }
-      const published = await waitForDesktopDaemon({ home, signal: input.signal, dependencies });
-      if (published === undefined) {
-        await stopAppChild(ownedChild);
-        return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+      const published = await waitForDesktopDaemon({
+        home,
+        signal: input.signal,
+        dependencies,
+        deadline: startBudget.deadline,
+        child: ownedChild,
+      });
+      if (published.kind === "published") {
+        observation = published.observation;
+        continue;
       }
-      observation = published;
+      const stopped = await stopAppChild(ownedChild);
+      ownedChild = undefined;
+      if (!stopped) return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "termination-failed");
+      if (published.kind === "cancelled") {
+        return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "cancelled");
+      }
+      observation = published.kind === "deadline" ? published.observation : { kind: "absent" };
       continue;
     }
-    await stopAppChild(ownedChild);
-    return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+    if (!(await stopAppChild(ownedChild))) {
+      return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "termination-failed");
+    }
+    return refusedDesktop(
+      EXIT_DAEMON_UNAVAILABLE,
+      observation.kind === "foreign" ? "contention" : "unavailable",
+    );
   }
-  await stopAppChild(ownedChild);
-  return refusedDesktop(EXIT_DAEMON_UNAVAILABLE);
+  if (!(await stopAppChild(ownedChild))) {
+    return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "termination-failed");
+  }
+  return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "cancelled");
 }
 
 async function prepareVerb(

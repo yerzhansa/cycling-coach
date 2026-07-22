@@ -36,6 +36,23 @@ const topbar = one(".topbar", HTMLElement);
 const spendRoot = one(".spend-meter", HTMLElement);
 conversation.classList.add("desktop-shell");
 
+const connectionStatus = document.createElement("span");
+connectionStatus.className = "connection-status";
+connectionStatus.setAttribute("role", "status");
+connectionStatus.textContent = "Connecting…";
+topbar.insertBefore(connectionStatus, topbar.lastElementChild);
+window.addEventListener("enduragent-lifecycle", (event) => {
+  document.documentElement.dataset.rpc = event.detail.status;
+  connectionStatus.textContent =
+    event.detail.status === "ready"
+      ? "Connected"
+      : event.detail.status === "recovering"
+        ? "Reconnecting…"
+        : event.detail.status === "terminal"
+          ? "Connection unavailable"
+          : "Closing…";
+});
+
 const clients = createDesktopCoachClientProvider();
 const clientAfterFailure = async (failedClient: CoachClient | undefined) => {
   if (failedClient === undefined) return clients.reconnect();
@@ -225,9 +242,11 @@ void onboarding.open();
 void clients.getClient().then(
   () => {
     document.documentElement.dataset.rpc = "connected";
+    connectionStatus.textContent = "Connected";
   },
   () => {
     document.documentElement.dataset.rpc = "failed";
+    connectionStatus.textContent = "Connection unavailable";
   },
 );
 
