@@ -27,7 +27,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function setupAgent(complete: ReturnType<typeof vi.fn>) {
+async function setupAgent(
+  complete: ReturnType<typeof vi.fn>,
+  getAccessToken: (profileName: string, signal?: AbortSignal) => Promise<string> = async () =>
+    "token",
+) {
   vi.doMock("../src/agent/codex/responses.js", () => ({
     codexResponses: complete,
   }));
@@ -43,7 +47,10 @@ async function setupAgent(complete: ReturnType<typeof vi.fn>) {
   }));
 
   const { CoachAgent } = await import("../src/agent/coach-agent.js");
-  return new CoachAgent(cyclingSport as unknown as Sport, baseAgentConfig(dataDir));
+  return new CoachAgent(cyclingSport as unknown as Sport, {
+    ...baseAgentConfig(dataDir),
+    getAccessToken,
+  });
 }
 
 function mkAssistant(text: string, stopReason: "stop" | "length" = "stop") {
@@ -62,6 +69,28 @@ function mkAssistant(text: string, stopReason: "stop" | "length" = "stop") {
 }
 
 describe("retry loop on Codex path", () => {
+  it("retries a token-refresh network failure outside the bridge retry marker", async () => {
+    const complete = vi.fn(async () => mkAssistant("recovered-after-refresh-network"));
+    const refreshFailure = Object.assign(new Error("Synthetic refresh failure"), {
+      name: "TokenRefreshError",
+      refreshFailureReason: "network" as const,
+    });
+    const getAccessToken = vi
+      .fn<(profileName: string, signal?: AbortSignal) => Promise<string>>()
+      .mockRejectedValueOnce(refreshFailure)
+      .mockResolvedValueOnce("synthetic-access");
+    vi.useFakeTimers();
+    const agent = await setupAgent(complete, getAccessToken);
+
+    const chatPromise = agent.chat("refresh-network", "hello");
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await expect(chatPromise).resolves.toBe("recovered-after-refresh-network");
+    expect(refreshFailure.name).not.toBe("NetworkError");
+    expect(getAccessToken).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
   it("retries after a rate-limit error and then succeeds", async () => {
     let n = 0;
     const complete = vi.fn(async () => {

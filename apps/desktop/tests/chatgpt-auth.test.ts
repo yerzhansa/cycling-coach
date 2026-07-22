@@ -25,6 +25,14 @@ function credentials() {
   };
 }
 
+function invalidUtf8ProfilesBytes(): Buffer {
+  return Buffer.concat([
+    Buffer.from('{"openai-codex":{"type":"oauth","access":"invalid-', "utf8"),
+    Buffer.from([0xc3, 0x28]),
+    Buffer.from('","refresh":"invalid-refresh","expires":4102444800000}}', "utf8"),
+  ]);
+}
+
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -51,6 +59,45 @@ describe("desktop ChatGPT auth", () => {
     await expect(hasChatGptProfile(directory)).resolves.toBe(true);
   });
 
+  it("preserves unrelated profile fields and the Desktop credential shape", async () => {
+    const directory = await configDir();
+    const path = join(directory, "auth-profiles.json");
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      path,
+      JSON.stringify({
+        other: {
+          type: "oauth",
+          access: "obviously-fake-other-access",
+          future: { generation: 1 },
+        },
+      }),
+    );
+
+    const write = writeChatGptProfile(directory, {
+      ...credentials(),
+      accountId: "",
+      email: "synthetic@example.invalid",
+    });
+
+    expect(write).toBeInstanceOf(Promise);
+    await write;
+    const stored = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    expect(stored.other).toEqual({
+      type: "oauth",
+      access: "obviously-fake-other-access",
+      future: { generation: 1 },
+    });
+    expect(stored["openai-codex"]).toEqual({
+      type: "oauth",
+      access: "obviously-fake-access",
+      refresh: "obviously-fake-refresh",
+      expires: 4_102_444_800_000,
+      email: "synthetic@example.invalid",
+    });
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
+
   it("treats absent, corrupt, and invalid profiles as absent", async () => {
     const directory = await configDir();
     await expect(hasChatGptProfile(directory)).resolves.toBe(false);
@@ -64,6 +111,65 @@ describe("desktop ChatGPT auth", () => {
     await expect(hasChatGptProfile(directory)).resolves.toBe(false);
   });
 
+  it("reports invalid UTF-8 profile bytes as absent before login", async () => {
+    const directory = await configDir();
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, "auth-profiles.json"), invalidUtf8ProfilesBytes());
+    const auth = createChatGptAuth({
+      configDir: directory,
+      openExternal: async () => {},
+      applyRuntimeConfig: async () => {},
+    });
+
+    await expect(hasChatGptProfile(directory)).resolves.toBe(false);
+    await expect(auth.status()).resolves.toEqual({ state: "absent", runtimeReady: false });
+  });
+
+  it("reports a valid target with an invalid sibling profile as absent", async () => {
+    const directory = await configDir();
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      join(directory, "auth-profiles.json"),
+      JSON.stringify({
+        "openai-codex": {
+          type: "oauth",
+          access: "obviously-fake-access",
+          refresh: "obviously-fake-refresh",
+          expires: 4_102_444_800_000,
+        },
+        invalidSibling: "not-a-profile-map",
+      }),
+    );
+    const auth = createChatGptAuth({
+      configDir: directory,
+      openExternal: async () => {},
+      applyRuntimeConfig: async () => {},
+    });
+
+    await expect(hasChatGptProfile(directory)).resolves.toBe(false);
+    await expect(auth.status()).resolves.toEqual({ state: "absent", runtimeReady: false });
+  });
+
+  it("completes login by quarantining invalid UTF-8 profile bytes", async () => {
+    const directory = await configDir();
+    const path = join(directory, "auth-profiles.json");
+    const originalBytes = invalidUtf8ProfilesBytes();
+    await mkdir(directory, { recursive: true });
+    await writeFile(path, originalBytes, { mode: 0o600 });
+    const auth = createChatGptAuth({
+      configDir: directory,
+      openExternal: async () => {},
+      applyRuntimeConfig: async () => {},
+      dependencies: { loginCodex: async () => credentials() },
+    });
+
+    await expect(auth.login()).resolves.toEqual({ status: "configured", runtimeReady: true });
+    expect(await readFile(`${path}.corrupt`)).toEqual(originalBytes);
+    expect((await stat(`${path}.corrupt`)).mode & 0o777).toBe(0o600);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    await expect(hasChatGptProfile(directory)).resolves.toBe(true);
+  });
+
   it("does not replace an unreadable existing profile path", async () => {
     const directory = await configDir();
     const path = join(directory, "auth-profiles.json");
@@ -71,6 +177,17 @@ describe("desktop ChatGPT auth", () => {
     await expect(writeChatGptProfile(directory, credentials())).rejects.toBeDefined();
     expect((await stat(path)).isDirectory()).toBe(true);
     await expect(hasChatGptProfile(directory)).resolves.toBe(false);
+    const auth = createChatGptAuth({
+      configDir: directory,
+      openExternal: async () => {},
+      applyRuntimeConfig: async () => {},
+      dependencies: { loginCodex: async () => credentials() },
+    });
+    await expect(auth.login()).resolves.toEqual({
+      status: "refused",
+      reason: "storage-failed",
+    });
+    expect((await stat(path)).isDirectory()).toBe(true);
   });
 
   it("maps timeout, browser cancellation, and exchange failures", async () => {

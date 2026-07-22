@@ -307,6 +307,58 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
     return label;
   };
 
+  const startChatGptLogin = (): void => {
+    if (disposed || scrim === undefined || state.busy || state.chatGptState === "pending") {
+      return;
+    }
+    const loginVisit = visit;
+    state = withChatGptPending(state);
+    render();
+    void options.bridge.chatGptLogin().then(
+      async (result) => {
+        if (
+          disposed ||
+          visit !== loginVisit ||
+          scrim === undefined ||
+          state.chatGptState !== "pending"
+        ) {
+          return;
+        }
+        state = withChatGptLoginResult(state, result);
+        if (result.status === "configured") {
+          await refreshStatuses(loginVisit).catch(() => undefined);
+        }
+        if (disposed || visit !== loginVisit || scrim === undefined) return;
+        render();
+        focusCurrentTitle();
+      },
+      () => {
+        if (
+          disposed ||
+          visit !== loginVisit ||
+          scrim === undefined ||
+          state.chatGptState !== "pending"
+        ) {
+          return;
+        }
+        state = withChatGptLoginResult(state, {
+          status: "refused",
+          reason: "exchange-failed",
+        });
+        render();
+        focusCurrentTitle();
+      },
+    );
+  };
+
+  const chatGptLoginButton = (text: string): HTMLButtonElement => {
+    const button = make(options.document, "button", "primary-button chatgpt-signin-button", text);
+    button.type = "button";
+    button.disabled = state.busy;
+    button.addEventListener("click", startChatGptLogin);
+    return button;
+  };
+
   const renderCoachKeys = (body: HTMLElement): void => {
     body.append(
       make(options.document, "p", "onboarding-kicker", "Coach keys"),
@@ -348,6 +400,7 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
     } else if (state.chatGptState === "configured" && state.chatGptRuntimeReady) {
       chatGptLane.append(
         make(options.document, "p", "chatgpt-login-state configured", "ChatGPT is ready."),
+        chatGptLoginButton("Sign in again"),
       );
     } else {
       if (state.chatGptState === "refused" && state.chatGptRefusal !== null) {
@@ -370,40 +423,9 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
           ),
         );
       }
-      const login = make(
-        options.document,
-        "button",
-        "primary-button chatgpt-signin-button",
+      const login = chatGptLoginButton(
         state.chatGptState === "absent" ? "Sign in with ChatGPT" : "Retry ChatGPT sign-in",
       );
-      login.type = "button";
-      login.disabled = state.busy;
-      login.addEventListener("click", () => {
-        const loginVisit = visit;
-        state = withChatGptPending(state);
-        render();
-        void options.bridge.chatGptLogin().then(
-          async (result) => {
-            if (visit !== loginVisit || scrim === undefined) return;
-            state = withChatGptLoginResult(state, result);
-            if (result.status === "configured") {
-              await refreshStatuses(loginVisit).catch(() => undefined);
-            }
-            if (visit !== loginVisit || scrim === undefined) return;
-            render();
-            focusCurrentTitle();
-          },
-          () => {
-            if (visit !== loginVisit || scrim === undefined) return;
-            state = withChatGptLoginResult(state, {
-              status: "refused",
-              reason: "exchange-failed",
-            });
-            render();
-            focusCurrentTitle();
-          },
-        );
-      });
       chatGptLane.append(login);
     }
     body.append(chatGptLane);

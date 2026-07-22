@@ -31,7 +31,11 @@ import {
   TIMEOUT_COMPACTION_THRESHOLD,
 } from "./token-utils.js";
 import { summarizeInStages, summarizeDroppedMessages } from "./compaction.js";
-import { runMemoryFlush, FLUSH_ZERO_WRITE_MIN_MESSAGES, shouldRunMemoryFlush } from "./memory-flush.js";
+import {
+  runMemoryFlush,
+  FLUSH_ZERO_WRITE_MIN_MESSAGES,
+  shouldRunMemoryFlush,
+} from "./memory-flush.js";
 import type { MemoryFlushOutcome } from "./memory-flush.js";
 import { evaluateSessionFreshness } from "./session-freshness.js";
 import { LLM } from "../llm.js";
@@ -495,7 +499,10 @@ export class CoachAgent {
             await this.flushMemory(history, "trim", turnBudget);
           } catch (err) {
             flushed = false;
-            this.log.warn("Pre-compaction memory flush failed; keeping session file unchanged", err);
+            this.log.warn(
+              "Pre-compaction memory flush failed; keeping session file unchanged",
+              err,
+            );
           }
         }
         try {
@@ -574,7 +581,13 @@ export class CoachAgent {
           turnBudget.checkDeadline();
 
           // Preemptive: compact before sending if over budget
-          if (shouldCompact({ messages, systemPrompt: this.systemPrompt, contextWindowTokens: this.config.contextWindowTokens })) {
+          if (
+            shouldCompact({
+              messages,
+              systemPrompt: this.systemPrompt,
+              contextWindowTokens: this.config.contextWindowTokens,
+            })
+          ) {
             if (!flushedThisTurn) {
               flushedThisTurn = true;
               try {
@@ -735,14 +748,23 @@ export class CoachAgent {
                   try {
                     await this.flushMemory(messages, "overflow-recovery", turnBudget);
                   } catch (flushErr) {
-                    this.log.warn("In-turn memory flush failed; compacting without flush", flushErr);
+                    this.log.warn(
+                      "In-turn memory flush failed; compacting without flush",
+                      flushErr,
+                    );
                   }
                 }
-                messages = await summarizeInStages({ messages, ...this.compactionParams(turnBudget) });
+                messages = await summarizeInStages({
+                  messages,
+                  ...this.compactionParams(turnBudget),
+                });
                 compactions++;
                 this.memory.reload();
               } catch (rescueErr) {
-                this.log.warn("Compaction rescue failed; rethrowing the original turn error", rescueErr);
+                this.log.warn(
+                  "Compaction rescue failed; rethrowing the original turn error",
+                  rescueErr,
+                );
                 if (err instanceof Error && err.cause === undefined) {
                   (err as Error & { cause?: unknown }).cause = rescueErr;
                 }
@@ -757,11 +779,17 @@ export class CoachAgent {
               if (ratio > TIMEOUT_COMPACTION_THRESHOLD) {
                 timeoutAttempts++;
                 try {
-                  messages = await summarizeInStages({ messages, ...this.compactionParams(turnBudget) });
+                  messages = await summarizeInStages({
+                    messages,
+                    ...this.compactionParams(turnBudget),
+                  });
                   compactions++;
                   this.memory.reload();
                 } catch (rescueErr) {
-                  this.log.warn("Compaction rescue failed; rethrowing the original turn error", rescueErr);
+                  this.log.warn(
+                    "Compaction rescue failed; rethrowing the original turn error",
+                    rescueErr,
+                  );
                   if (err instanceof Error && err.cause === undefined) {
                     (err as Error & { cause?: unknown }).cause = rescueErr;
                   }
@@ -783,14 +811,16 @@ export class CoachAgent {
               // The server hint (if any) is a lower bound; absent one, fall back to a
               // capped exponential. Either feeds the primitive as the Retry-After
               // floor so the 120s ceiling and the clamp note are honored bit-for-bit.
-              const requestedMs = retryAfterFloorMs(err, this.ports.extractRetryAfterMs)
-                ?? Math.min(
-                     RATE_LIMIT_FALLBACK_BASE_MS * RATE_LIMIT_FALLBACK_MULTIPLIER ** (attemptNo - 1),
-                     RATE_LIMIT_FALLBACK_MAX_MS,
-                   );
-              const clampNote = requestedMs > RATE_LIMIT_MAX_WAIT_MS
-                ? ` (provider requested ${requestedMs}ms, clamped to ${RATE_LIMIT_MAX_WAIT_MS}ms)`
-                : "";
+              const requestedMs =
+                retryAfterFloorMs(err, this.ports.extractRetryAfterMs) ??
+                Math.min(
+                  RATE_LIMIT_FALLBACK_BASE_MS * RATE_LIMIT_FALLBACK_MULTIPLIER ** (attemptNo - 1),
+                  RATE_LIMIT_FALLBACK_MAX_MS,
+                );
+              const clampNote =
+                requestedMs > RATE_LIMIT_MAX_WAIT_MS
+                  ? ` (provider requested ${requestedMs}ms, clamped to ${RATE_LIMIT_MAX_WAIT_MS}ms)`
+                  : "";
               await backoffWithSentinelError(err, {
                 attempts: 2,
                 baseMs: requestedMs,
@@ -799,7 +829,9 @@ export class CoachAgent {
                 retryAfterMs: () => requestedMs,
                 random: () => 0,
                 onRetry: ({ delayMs }) => {
-                  console.warn(`Rate limited (attempt ${attemptNo}/${MAX_RATE_LIMIT_ATTEMPTS}), waiting ${delayMs}ms${clampNote}`);
+                  console.warn(
+                    `Rate limited (attempt ${attemptNo}/${MAX_RATE_LIMIT_ATTEMPTS}), waiting ${delayMs}ms${clampNote}`,
+                  );
                 },
               });
               // The backoff sleep is the one place a turn can silently burn
@@ -819,7 +851,8 @@ export class CoachAgent {
             // errors are plain TypeErrors (not name="NetworkError") and whose SDK
             // does zero retries. (Unifying codex network retry with the AI-SDK
             // path is tracked as a follow-up.)
-            const alreadyRetriedNetwork = failure === "network" && err instanceof Error && err.name === "NetworkError";
+            const alreadyRetriedNetwork =
+              failure === "network" && err instanceof Error && err.name === "NetworkError";
             if (
               (failure === "server_error" || failure === "network") &&
               !alreadyRetriedNetwork &&
@@ -899,22 +932,28 @@ export class CoachAgent {
             kind: "rate_limit" as const,
             athleteMessage: "Rate limited — please try again shortly.",
           }
-        : failure === "auth"
+        : failure === "reauth"
           ? {
               kind: "provider-auth" as const,
               athleteMessage:
-                "The model provider rejected the API key — check your provider credentials.",
+                "Your ChatGPT sign-in is no longer valid. Open Setup and sign in again.",
             }
-          : failure === "server_error" || failure === "network" || failure === "timeout"
+          : failure === "auth"
             ? {
-                kind: "provider-down" as const,
+                kind: "provider-auth" as const,
                 athleteMessage:
-                  "The model provider is having trouble — try again in a few minutes.",
+                  "The model provider rejected the API key — check your provider credentials.",
               }
-            : {
-                kind: "unknown" as const,
-                athleteMessage: "Sorry, something went wrong. Please try again.",
-              };
+            : failure === "server_error" || failure === "network" || failure === "timeout"
+              ? {
+                  kind: "provider-down" as const,
+                  athleteMessage:
+                    "The model provider is having trouble — try again in a few minutes.",
+                }
+              : {
+                  kind: "unknown" as const,
+                  athleteMessage: "Sorry, something went wrong. Please try again.",
+                };
     return {
       type: "error",
       turnId: input.turnId,

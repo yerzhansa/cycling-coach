@@ -14,6 +14,33 @@ function apiError(statusCode: number): APICallError {
 }
 
 describe("classifyAgentError", () => {
+  it("gives structurally tagged reauthentication an actionable sign-in path", () => {
+    const result = classifyAgentError(
+      Object.assign(new Error("rate limit"), {
+        refreshFailureReason: "reauth",
+        kind: "RateLimit",
+        retryAfterMs: 3_000,
+      }),
+    );
+
+    expect(result).toEqual({
+      kind: "provider-auth",
+      athleteMessage: "Your ChatGPT sign-in is no longer valid. Sign in again to continue.",
+    });
+  });
+
+  it("keeps a structurally tagged refresh rate limit in the rate-limit lane", () => {
+    const result = classifyAgentError({
+      refreshFailureReason: "rate_limit",
+      retryAfterMs: 3_000,
+    });
+
+    expect(result).toEqual({
+      kind: "rate_limit",
+      athleteMessage: "Rate limited — please try again in ~3 seconds.",
+    });
+  });
+
   it("classifies 401/403 as provider-auth with provider-neutral copy", () => {
     for (const status of [401, 403]) {
       const result = classifyAgentError(apiError(status));
@@ -26,7 +53,7 @@ describe("classifyAgentError", () => {
   });
 
   it("classifies 5xx as provider-down", () => {
-    for (const status of [500, 502, 503, 504, 529]) {
+    for (const status of [500, 501, 502, 503, 504, 529, 599]) {
       const result = classifyAgentError(apiError(status));
       expect(result.kind).toBe("provider-down");
       expect(result.athleteMessage).toBe(
@@ -52,9 +79,7 @@ describe("classifyAgentError", () => {
     const result = classifyAgentError(err);
     expect(result.kind).toBe("rate_limit");
     expect(result.athleteMessage).toContain(formatRateLimitWait(err));
-    expect(result.athleteMessage).toBe(
-      "Rate limited — please try again in about a minute.",
-    );
+    expect(result.athleteMessage).toBe("Rate limited — please try again in about a minute.");
   });
 
   it("classifies intervals Unauthorized/Forbidden as intervals with the credentials copy, NotFound as intervals transient", () => {

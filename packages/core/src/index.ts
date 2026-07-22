@@ -125,6 +125,19 @@ export {
   saveProfile,
 } from "./auth/profiles.js";
 export type { OAuthCredential } from "./auth/profiles.js";
+export {
+  compareAndSaveStoredProfile,
+  loadStoredProfileSnapshot,
+  recoverAndSaveStoredProfile,
+  saveStoredProfile,
+} from "./auth/profile-store.js";
+export type {
+  CompareAndSaveStoredProfileResult,
+  StoredProfile,
+  StoredProfileSnapshot,
+} from "./auth/profile-store.js";
+export { TokenRefreshError } from "./auth/refresh-failure.js";
+export type { RefreshFailure, RefreshFailureReason } from "./auth/refresh-failure.js";
 export { runCodexLogin } from "./auth/openai-codex-login.js";
 export { loginCodex, refreshCodexToken } from "./agent/codex/oauth.js";
 export type { CodexCredentials, CodexLoginOptions } from "./agent/codex/oauth.js";

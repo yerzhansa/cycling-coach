@@ -179,12 +179,11 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
     case "fail": {
       const active = current(state, action.requestKey);
       if (active === null) return state;
-      const text = active.draft.length > 0 ? active.draft : action.copy;
       return {
         ...state,
         status: "idle",
         progress: active.error === null ? action.copy : null,
-        messages: updateAssistant(state, active, text, "complete"),
+        messages: updateAssistant(state, active, active.draft, "interrupted"),
       };
     }
     default:

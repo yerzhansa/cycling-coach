@@ -1,7 +1,12 @@
-import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { loginCodex, type CodexCredentials, type CodexLoginOptions } from "@enduragent/core";
+import {
+  loadStoredProfileSnapshot,
+  loginCodex,
+  recoverAndSaveStoredProfile,
+  type CodexCredentials,
+  type CodexLoginOptions,
+} from "@enduragent/core";
 import type { ConfigureRuntimeRpcParams } from "@enduragent/coach-contract";
 import { parse as parseYaml } from "yaml";
 
@@ -72,25 +77,13 @@ function validProfile(value: unknown): boolean {
   );
 }
 
-async function readProfiles(configDir: string): Promise<Record<string, unknown>> {
-  let contents: string;
-  try {
-    contents = await readFile(join(configDir, "auth-profiles.json"), "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
-    throw error;
-  }
-  try {
-    const parsed = JSON.parse(contents) as unknown;
-    return isRecord(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
 export async function hasChatGptProfile(configDir: string): Promise<boolean> {
   try {
-    return validProfile((await readProfiles(configDir))[CHATGPT_PROFILE_NAME]);
+    const snapshot = loadStoredProfileSnapshot(
+      join(configDir, "auth-profiles.json"),
+      CHATGPT_PROFILE_NAME,
+    );
+    return snapshot !== null && validProfile(snapshot.profile);
   } catch {
     return false;
   }
@@ -100,31 +93,14 @@ export async function writeChatGptProfile(
   configDir: string,
   credentials: CodexCredentials,
 ): Promise<void> {
-  await mkdir(configDir, { recursive: true, mode: 0o700 });
-  const path = join(configDir, "auth-profiles.json");
-  const temporaryPath = join(configDir, `.auth-profiles.${randomUUID()}.tmp`);
-  const profiles = await readProfiles(configDir);
-  profiles[CHATGPT_PROFILE_NAME] = {
+  recoverAndSaveStoredProfile(join(configDir, "auth-profiles.json"), CHATGPT_PROFILE_NAME, {
     type: "oauth",
     access: credentials.access,
     refresh: credentials.refresh,
     expires: credentials.expires,
     ...(credentials.accountId.length > 0 ? { accountId: credentials.accountId } : {}),
     ...(credentials.email !== undefined ? { email: credentials.email } : {}),
-  };
-  try {
-    await writeFile(temporaryPath, JSON.stringify(profiles, null, 2), {
-      encoding: "utf8",
-      flag: "wx",
-      mode: 0o600,
-    });
-    await chmod(temporaryPath, 0o600);
-    await rename(temporaryPath, path);
-    await chmod(path, 0o600);
-  } catch (error) {
-    await rm(temporaryPath, { force: true }).catch(() => undefined);
-    throw error;
-  }
+  });
 }
 
 async function configuredRuntime(configDir: string): Promise<boolean> {

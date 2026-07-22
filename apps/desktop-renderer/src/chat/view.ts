@@ -86,19 +86,21 @@ export function mountChatView(input: {
             input.conversation.scrollTop -
             input.conversation.clientHeight <=
           80;
-        const rows = state.messages.map((message) => {
-          const article = document.createElement("article");
-          article.className = `chat-message chat-message--${message.role}`;
-          article.dataset.delivery = message.delivery;
-          const role = document.createElement("p");
-          role.className = "chat-message__role";
-          role.textContent = message.role === "athlete" ? "You" : "Coach";
-          const text = document.createElement("p");
-          text.className = "chat-message__text";
-          text.textContent = message.text;
-          article.append(role, text);
-          return article;
-        });
+        const rows = state.messages
+          .filter((message) => message.role === "athlete" || message.text.length > 0)
+          .map((message) => {
+            const article = document.createElement("article");
+            article.className = `chat-message chat-message--${message.role}`;
+            article.dataset.delivery = message.delivery;
+            const role = document.createElement("p");
+            role.className = "chat-message__role";
+            role.textContent = message.role === "athlete" ? "You" : "Coach";
+            const text = document.createElement("p");
+            text.className = "chat-message__text";
+            text.textContent = message.text;
+            article.append(role, text);
+            return article;
+          });
         messages.replaceChildren(...rows);
         if (followsLatest) input.conversation.scrollTop = input.conversation.scrollHeight;
         const contractCopy = state.activeTurn?.error?.athleteMessage ?? null;

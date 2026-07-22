@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 
 import { extractAccountId } from "@enduragent/engine";
+import { TokenRefreshError, type RefreshFailureReason } from "../../auth/refresh-failure.js";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";
@@ -210,7 +211,62 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerHandle> {
 
 type TokenResult =
   | { type: "success"; access: string; refresh: string; expires: number }
-  | { type: "failed" };
+  | {
+      type: "failed";
+      refreshFailureReason: RefreshFailureReason;
+      cause?: unknown;
+    };
+
+interface TokenResponse {
+  readonly access_token: string;
+  readonly refresh_token: string;
+  readonly expires_in: number;
+}
+
+function isTokenResponse(value: unknown): value is TokenResponse {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.access_token === "string" &&
+    candidate.access_token.length > 0 &&
+    typeof candidate.refresh_token === "string" &&
+    candidate.refresh_token.length > 0 &&
+    typeof candidate.expires_in === "number" &&
+    Number.isFinite(candidate.expires_in)
+  );
+}
+
+async function refreshFailureReason(response: Response): Promise<RefreshFailureReason> {
+  if (response.status === 429) return "rate_limit";
+  if (response.status >= 500 && response.status <= 599) return "server_error";
+  try {
+    const body = (await response.json()) as unknown;
+    if (body === null || typeof body !== "object" || Array.isArray(body)) return "unknown";
+    const error = (body as Record<string, unknown>).error;
+    const code =
+      typeof error === "string"
+        ? error
+        : error !== null && typeof error === "object" && !Array.isArray(error)
+          ? (error as Record<string, unknown>).code
+          : undefined;
+    return typeof code === "string" && REAUTH_REFRESH_CODES.has(code) ? "reauth" : "unknown";
+  } catch (error) {
+    if (isAbortShaped(error)) throw error;
+    return "unknown";
+  }
+}
+
+const REAUTH_REFRESH_CODES = new Set([
+  "invalid_grant",
+  "invalid_token",
+  "expired_token",
+  "revoked_token",
+  "token_expired",
+  "token_revoked",
+  "refresh_token_expired",
+  "refresh_token_revoked",
+  "refresh_token_reused",
+]);
 
 async function exchangeAuthorizationCode(
   code: string,
@@ -232,20 +288,12 @@ async function exchangeAuthorizationCode(
   });
   if (!response.ok) {
     console.error("[codex-oauth] code->token failed:", response.status);
-    return { type: "failed" };
+    return { type: "failed", refreshFailureReason: "unknown" };
   }
-  const json = (await response.json()) as {
-    access_token?: string;
-    refresh_token?: string;
-    expires_in?: number;
-  };
-  if (!json.access_token || !json.refresh_token || typeof json.expires_in !== "number") {
-    console.error("[codex-oauth] token response missing fields:", {
-      hasAccessToken: !!json.access_token,
-      hasRefreshToken: !!json.refresh_token,
-      hasExpiresIn: typeof json.expires_in === "number",
-    });
-    return { type: "failed" };
+  const json = (await response.json()) as unknown;
+  if (!isTokenResponse(json)) {
+    console.error("[codex-oauth] token response missing fields");
+    return { type: "failed", refreshFailureReason: "unknown" };
   }
   return {
     type: "success",
@@ -265,12 +313,13 @@ async function refreshAccessToken(
   refreshToken: string,
   signal?: AbortSignal,
 ): Promise<TokenResult> {
+  let response: Response;
   try {
     // The token endpoint should respond quickly; bound it with a short timeout
     // combined with the caller's deadline so a stall can't hang the turn.
     const timeout = AbortSignal.timeout(TOKEN_REFRESH_TIMEOUT_MS);
     const fetchSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
-    const response = await fetch(TOKEN_URL, {
+    response = await fetch(TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -280,37 +329,39 @@ async function refreshAccessToken(
       }),
       signal: fetchSignal,
     });
-    if (!response.ok) {
-      console.error("[codex-oauth] Token refresh failed:", response.status);
-      return { type: "failed" };
-    }
-    const json = (await response.json()) as {
-      access_token?: string;
-      refresh_token?: string;
-      expires_in?: number;
-    };
-    if (!json.access_token || !json.refresh_token || typeof json.expires_in !== "number") {
-      console.error("[codex-oauth] Token refresh response missing fields:", {
-        hasAccessToken: !!json.access_token,
-        hasRefreshToken: !!json.refresh_token,
-        hasExpiresIn: typeof json.expires_in === "number",
-      });
-      return { type: "failed" };
-    }
-    return {
-      type: "success",
-      access: json.access_token,
-      refresh: json.refresh_token,
-      expires: Date.now() + json.expires_in * 1000,
-    };
   } catch (error) {
     // A deadline or 30s-backstop abort is not a credential failure -- propagate it
     // with its real shape so the retry/deny path is skipped and the surfaced error
     // is the abort, not a misleading "re-run setup".
     if (isAbortShaped(error) || signal?.aborted) throw error;
-    console.error("[codex-oauth] Token refresh error:", error);
-    return { type: "failed" };
+    console.error("[codex-oauth] Token refresh error:", {
+      name: error instanceof Error ? error.name : typeof error,
+    });
+    return { type: "failed", refreshFailureReason: "network", cause: error };
   }
+  if (!response.ok) {
+    const reason = await refreshFailureReason(response);
+    console.error("[codex-oauth] Token refresh failed:", response.status);
+    return { type: "failed", refreshFailureReason: reason };
+  }
+  let json: unknown;
+  try {
+    json = (await response.json()) as unknown;
+  } catch (error) {
+    if (isAbortShaped(error)) throw error;
+    console.error("[codex-oauth] Token refresh response was malformed");
+    return { type: "failed", refreshFailureReason: "unknown" };
+  }
+  if (!isTokenResponse(json)) {
+    console.error("[codex-oauth] Token refresh response missing fields");
+    return { type: "failed", refreshFailureReason: "unknown" };
+  }
+  return {
+    type: "success",
+    access: json.access_token,
+    refresh: json.refresh_token,
+    expires: Date.now() + json.expires_in * 1000,
+  };
 }
 
 // ============================================================================
@@ -412,7 +463,7 @@ export async function refreshCodexToken(
 ): Promise<CodexCredentials> {
   const result = await refreshAccessToken(refreshToken, signal);
   if (result.type !== "success") {
-    throw new Error("Failed to refresh OpenAI Codex token");
+    throw new TokenRefreshError(result.refreshFailureReason, result.cause);
   }
   const accountId = extractAccountId(result.access);
   return {

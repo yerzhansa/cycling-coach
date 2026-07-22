@@ -1,4 +1,5 @@
 import { APICallError } from "@ai-sdk/provider";
+import { readRefreshFailureReason } from "../auth/refresh-failure.js";
 
 export function isContextOverflowError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -42,6 +43,7 @@ export type FailureReason =
   | "server_error"
   | "network"
   | "auth"
+  | "reauth"
   | "invalid_request"
   | "unknown";
 
@@ -49,7 +51,8 @@ const NETWORK_ERROR_CODES = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", 
 
 export function isServerError(err: unknown): boolean {
   if (APICallError.isInstance(err)) {
-    return [500, 502, 503, 504, 529].includes(err.statusCode ?? -1);
+    const statusCode = err.statusCode ?? -1;
+    return statusCode >= 500 && statusCode <= 599;
   }
   // A codex 5xx is normalized into a plain Error with this name so both
   // providers route the server-error class identically.
@@ -62,6 +65,7 @@ interface Caused {
 }
 
 export function isNetworkError(err: unknown): boolean {
+  if (err instanceof Error && err.name === "NetworkError") return true;
   // undici hides the conn code on the wrapped inner error, so chase the chain.
   let n = err as Caused | null | undefined;
   const seen = new Set<unknown>();
@@ -81,6 +85,8 @@ export function isInvalidRequestError(err: unknown): boolean {
 }
 
 export function classifyFailure(err: unknown): FailureReason {
+  const refreshFailureReason = readRefreshFailureReason(err);
+  if (refreshFailureReason !== null) return refreshFailureReason;
   if (isContextOverflowError(err)) return "overflow";
   if (isTimeoutError(err)) return "timeout";
   if (isRateLimitError(err)) return "rate_limit";
