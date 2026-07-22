@@ -1,12 +1,19 @@
 import { isAbsolute } from "node:path";
 import { utilityProcess, type UtilityProcess } from "electron";
 import {
+  AppSupervisedDaemonStartError,
   resolveDesktopDaemon,
   type AppSupervisedChildHandle,
+  type DesktopDaemonStartBudget,
   type DesktopDaemonResolution,
   type ResolveDesktopDaemonInput,
 } from "@enduragent/coach/enduragent";
-import { UTILITY_EXIT_TIMEOUT_MS } from "./constants.js";
+import type { DesktopDaemonRecoveryBudget } from "./daemon-lifecycle.js";
+import {
+  UTILITY_EXIT_TIMEOUT_MS,
+  UTILITY_FORCE_EXIT_TIMEOUT_MS,
+  UTILITY_SPAWN_TIMEOUT_MS,
+} from "./constants.js";
 
 export type UtilityStartFrame = {
   readonly type: "start";
@@ -85,22 +92,34 @@ export function createUtilityEnvironment(
   return environment;
 }
 
-function waitForSpawn(child: UtilityProcess): Promise<void> {
+function waitForSpawn(child: UtilityProcess, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => finish(new Error("utility process spawn deadline exceeded")),
+      UTILITY_SPAWN_TIMEOUT_MS,
+    );
     const cleanup = (): void => {
+      clearTimeout(timer);
       child.off("spawn", onSpawn);
       child.off("exit", onEarlyExit);
+      signal.removeEventListener("abort", onAbort);
+    };
+    const finish = (error?: Error): void => {
+      cleanup();
+      if (error === undefined) resolve();
+      else reject(error);
     };
     const onSpawn = (): void => {
-      cleanup();
-      resolve();
+      finish();
     };
     const onEarlyExit = (): void => {
-      cleanup();
-      reject(new Error("utility process exited before spawn"));
+      finish(new Error("utility process exited before spawn"));
     };
+    const onAbort = (): void => finish(new Error("utility process spawn cancelled"));
     child.once("spawn", onSpawn);
     child.once("exit", onEarlyExit);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
   });
 }
 
@@ -112,19 +131,77 @@ function waitWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T |
       settled = true;
       resolve(undefined);
     }, timeoutMs);
-    void promise.then((value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(value);
-    });
+    void promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(undefined);
+      },
+    );
   });
+}
+
+export async function terminateOwnedUtilityProcess(input: {
+  readonly child: Pick<UtilityProcess, "postMessage" | "kill">;
+  readonly pid: number;
+  readonly exited: Promise<{ readonly exitCode: number | null }>;
+  readonly hasExited: () => boolean;
+  readonly hardStop?: (pid: number) => void;
+}): Promise<void> {
+  if (input.hasExited()) return;
+  try {
+    input.child.postMessage({ type: "shutdown" } satisfies UtilityShutdownFrame);
+  } catch {}
+  if ((await waitWithTimeout(input.exited, UTILITY_EXIT_TIMEOUT_MS)) !== undefined) return;
+  input.child.kill();
+  if ((await waitWithTimeout(input.exited, UTILITY_FORCE_EXIT_TIMEOUT_MS)) !== undefined) return;
+  if (!Number.isSafeInteger(input.pid) || input.pid <= 0) {
+    throw new Error("utility process owned pid is invalid");
+  }
+  try {
+    (input.hardStop ?? ((pid) => process.kill(pid, "SIGKILL")))(input.pid);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+    throw error;
+  }
+  if ((await waitWithTimeout(input.exited, UTILITY_FORCE_EXIT_TIMEOUT_MS)) === undefined) {
+    throw new Error("utility process termination deadline exceeded");
+  }
+}
+
+async function terminateUnacknowledgedUtility(
+  child: UtilityProcess,
+  exited: Promise<{ readonly exitCode: number | null }>,
+): Promise<void> {
+  child.kill();
+  if ((await waitWithTimeout(exited, UTILITY_FORCE_EXIT_TIMEOUT_MS)) !== undefined) return;
+  const pid = child.pid;
+  if (pid === undefined || !Number.isSafeInteger(pid) || pid <= 0) {
+    throw new Error("unacknowledged utility process could not be reaped");
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+    throw error;
+  }
+  if ((await waitWithTimeout(exited, UTILITY_FORCE_EXIT_TIMEOUT_MS)) === undefined) {
+    throw new Error("unacknowledged utility process termination deadline exceeded");
+  }
 }
 
 export async function forkAppSupervisedDaemon(input: {
   readonly utilityEntry: string;
   readonly homeRoot: string;
   readonly handoffCapability?: string;
+  readonly signal?: AbortSignal;
 }): Promise<AppSupervisedChildHandle> {
   const start = {
     type: "start",
@@ -158,33 +235,37 @@ export async function forkAppSupervisedDaemon(input: {
     }
   });
   try {
-    await waitForSpawn(child);
+    await waitForSpawn(child, input.signal ?? new AbortController().signal);
     child.postMessage(start);
-  } catch (error) {
-    child.kill();
-    await exitedPromise;
-    throw error;
+  } catch {
+    try {
+      await terminateUnacknowledgedUtility(child, exitedPromise);
+    } catch {
+      throw new AppSupervisedDaemonStartError("termination-failed");
+    }
+    throw new AppSupervisedDaemonStartError("spawn-failed");
   }
   const pid = child.pid;
   if (pid === undefined || !Number.isSafeInteger(pid) || pid <= 0) {
-    child.kill();
-    await exitedPromise;
-    throw new Error("utility process did not publish a pid");
+    try {
+      await terminateUnacknowledgedUtility(child, exitedPromise);
+    } catch {
+      throw new AppSupervisedDaemonStartError("termination-failed");
+    }
+    throw new AppSupervisedDaemonStartError("spawn-failed");
   }
   let stopPromise: Promise<void> | undefined;
   return {
     pid,
     exited: exitedPromise,
+    isAlive: () => !exited,
     stop() {
-      stopPromise ??= (async () => {
-        if (!exited) {
-          child.postMessage({ type: "shutdown" } satisfies UtilityShutdownFrame);
-          if ((await waitWithTimeout(exitedPromise, UTILITY_EXIT_TIMEOUT_MS)) === undefined) {
-            child.kill();
-          }
-        }
-        await exitedPromise;
-      })();
+      stopPromise ??= terminateOwnedUtilityProcess({
+        child,
+        pid,
+        exited: exitedPromise,
+        hasExited: () => exited,
+      });
       return stopPromise;
     },
   };
@@ -192,6 +273,7 @@ export async function forkAppSupervisedDaemon(input: {
 
 export class DesktopDaemonSupervisor {
   private active: Promise<DesktopDaemonResolution> | undefined;
+  private closing = false;
 
   constructor(
     private readonly input: Omit<ResolveDesktopDaemonInput, "startAppSupervisedDaemon">,
@@ -201,22 +283,42 @@ export class DesktopDaemonSupervisor {
 
   resolve(): Promise<DesktopDaemonResolution> {
     if (this.active !== undefined) return this.active;
+    return this.beginResolve();
+  }
+
+  resolveForRecovery(budget: DesktopDaemonRecoveryBudget): Promise<DesktopDaemonResolution> {
+    this.active = undefined;
+    return this.beginResolve(budget);
+  }
+
+  reobserveAttached(budget: DesktopDaemonRecoveryBudget): Promise<DesktopDaemonResolution> {
+    this.active = undefined;
+    return this.beginResolve(budget, true);
+  }
+
+  private beginResolve(
+    startBudget?: DesktopDaemonStartBudget,
+    observationOnly = false,
+  ): Promise<DesktopDaemonResolution> {
     const generation = this.resolveDaemon({
       ...this.input,
+      ...(startBudget === undefined ? {} : { startBudget }),
+      ...(observationOnly ? { observationOnly: true } : {}),
       startAppSupervisedDaemon: ({ home, handoffCapability }) =>
         forkAppSupervisedDaemon({
           utilityEntry: this.utilityEntry,
           homeRoot: home.root,
+          signal: this.input.signal,
           ...(handoffCapability === undefined ? {} : { handoffCapability }),
         }),
     })
-      .then((resolution) => {
+      .then(async (resolution) => {
         if (resolution.status === "refused") {
           if (this.active === generation) this.active = undefined;
           return resolution;
         }
         let closePromise: Promise<void> | undefined;
-        return {
+        const wrapped = {
           ...resolution,
           close: () => {
             closePromise ??= resolution.close().finally(() => {
@@ -225,6 +327,17 @@ export class DesktopDaemonSupervisor {
             return closePromise;
           },
         };
+        if (this.closing) {
+          await wrapped.close().catch(() => {});
+          return {
+            status: "refused" as const,
+            exitCode: 3 as const,
+            classification: "contention-family" as const,
+            cause: "cancelled" as const,
+            retryable: true,
+          };
+        }
+        return wrapped;
       })
       .catch((error) => {
         if (this.active === generation) this.active = undefined;
@@ -235,9 +348,12 @@ export class DesktopDaemonSupervisor {
   }
 
   async close(): Promise<void> {
+    this.closing = true;
     const active = this.active;
     if (active === undefined) return;
-    const resolution = await active;
-    if (resolution.status === "connected") await resolution.close();
+    const closing = active.then(async (resolution) => {
+      if (resolution.status === "connected") await resolution.close();
+    });
+    await waitWithTimeout(closing, UTILITY_EXIT_TIMEOUT_MS + UTILITY_FORCE_EXIT_TIMEOUT_MS * 2);
   }
 }

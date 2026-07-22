@@ -15,13 +15,28 @@ import {
   utilityProcess,
 } from "electron";
 import { createChatGptAuth, hasChatGptProfile } from "./chatgpt-auth.js";
-import { DESKTOP_CONNECTION_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
+import { installDesktopConnectionIpc } from "./connection-ipc.js";
+import { DESKTOP_LIFECYCLE_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
 import {
   createCredentialRuntimeApplication,
   readSelectedLlmProvider,
 } from "./credential-runtime.js";
-import { CREDENTIAL_DIRECTORY_NAME, createCredentialVault } from "./credential-vault.js";
+import {
+  CREDENTIAL_DIRECTORY_NAME,
+  createCredentialVault,
+  type DesktopCredentialSlot,
+} from "./credential-vault.js";
+import {
+  DesktopDaemonLifecycle,
+  type DesktopDaemonConnection,
+  type DesktopDaemonLifecycleState,
+} from "./daemon-lifecycle.js";
 import { resolveDesktopAthleteHome, seedFirstRunConfig } from "./first-run-config.js";
+import {
+  lifecycleErrorCopy,
+  startupRefusalCopy,
+  unexpectedStartupCopy,
+} from "./lifecycle-messages.js";
 import { registerOnboardingIpc, runtimeConfigurationForCredential } from "./onboarding-ipc.js";
 import { createDesktopResidency, type DesktopResidency } from "./residency.js";
 import {
@@ -35,6 +50,8 @@ import {
 import { DesktopDaemonSupervisor, isUtilityTerminalFrame } from "./supervisor.js";
 
 registerDesktopScheme();
+
+let desktopIsClosing = false;
 
 const mainDirectory = dirname(fileURLToPath(import.meta.url));
 const utilityEntry = resolve(mainDirectory, "daemon-utility.js");
@@ -85,27 +102,27 @@ async function runDesktop(): Promise<void> {
   );
   let quitting = false;
   let protocolInstalled = false;
-  let connectionHandlerInstalled = false;
+  let disposeConnectionIpc: (() => void) | undefined;
   let disposeOnboarding: (() => void) | undefined;
+  let daemonLifecycle: DesktopDaemonLifecycle | undefined;
   let shutdownPromise: Promise<void> | undefined;
   const shutdown = (): Promise<void> => {
     shutdownPromise ??= (async () => {
       controller.abort();
-      if (connectionHandlerInstalled) {
-        ipcMain.removeHandler(DESKTOP_CONNECTION_CHANNEL);
-        connectionHandlerInstalled = false;
-      }
+      disposeConnectionIpc?.();
+      disposeConnectionIpc = undefined;
       disposeOnboarding?.();
       disposeOnboarding = undefined;
       if (protocolInstalled) {
         session.defaultSession.protocol.unhandle(DESKTOP_SCHEME);
         protocolInstalled = false;
       }
-      await supervisor.close();
+      await (daemonLifecycle?.close() ?? supervisor.close());
     })();
     return shutdownPromise;
   };
   app.on("before-quit", (event) => {
+    desktopIsClosing = true;
     residency?.close();
     if (quitting) return;
     event.preventDefault();
@@ -118,13 +135,50 @@ async function runDesktop(): Promise<void> {
   try {
     const resolution = await supervisor.resolve();
     if (resolution.status === "refused") {
+      if (!controller.signal.aborted && resolution.cause !== "cancelled") {
+        const copy = startupRefusalCopy(resolution.cause);
+        dialog.showErrorBox(copy.title, copy.content);
+      }
       await shutdown();
-      app.exit(resolution.exitCode);
+      if (!quitting) app.exit(resolution.exitCode);
       return;
     }
-    const daemonPort = Number(new URL(resolution.url).port);
-    const applyRuntimeConfig = async (request: ConfigureRuntimeRpcParams): Promise<void> => {
-      const client = await connectCoachClient({ url: resolution.url, token: resolution.token });
+    let window: BrowserWindow | null = null;
+    let windowCreation: Promise<BrowserWindow> | undefined;
+    const currentWindow = (): BrowserWindow | null =>
+      window !== null && !window.isDestroyed() ? window : null;
+    let reapplyCredentials = async (
+      _connection: DesktopDaemonConnection,
+      _signal: AbortSignal,
+    ): Promise<void> => {};
+    const publishLifecycle = (state: DesktopDaemonLifecycleState): void => {
+      const visibleWindow = currentWindow();
+      if (visibleWindow !== null && state.status !== "starting") {
+        visibleWindow.webContents.send(DESKTOP_LIFECYCLE_CHANNEL, {
+          status: state.status,
+          generation: state.generation,
+        });
+      }
+      const copy =
+        controller.signal.aborted || desktopIsClosing ? undefined : lifecycleErrorCopy(state);
+      if (copy !== undefined) dialog.showErrorBox(copy.title, copy.content);
+    };
+    daemonLifecycle = new DesktopDaemonLifecycle(supervisor, resolution, {
+      prepareReady: ({ connection, signal }) => reapplyCredentials(connection, signal),
+      onTransition: publishLifecycle,
+      onReady({ previous, current }) {
+        if (new URL(previous.url).port === new URL(current.url).port) return;
+        const visibleWindow = currentWindow();
+        if (visibleWindow === null) return;
+        visibleWindow.webContents.reload();
+      },
+    });
+    const applyRuntimeConfigToConnection = async (
+      connection: Pick<DesktopDaemonConnection, "url" | "token">,
+      request: ConfigureRuntimeRpcParams,
+    ): Promise<void> => {
+      const { url, token } = connection;
+      const client = await connectCoachClient({ url, token });
       try {
         const result = await client.call("configureRuntime", request);
         if (
@@ -137,33 +191,54 @@ async function runDesktop(): Promise<void> {
         await client.close();
       }
     };
+    const applyRuntimeConfig = (request: ConfigureRuntimeRpcParams): Promise<void> =>
+      applyRuntimeConfigToConnection(daemonLifecycle!.connection(), request);
     const configDir = join(resolveDesktopAthleteHome(environment), "config");
+    const selectedLlmProvider = async (storedCredentialSlots: readonly DesktopCredentialSlot[]) =>
+      readSelectedLlmProvider(configDir, {
+        chatGptProfilePresent: await hasChatGptProfile(configDir),
+        storedCredentialSlots,
+      });
     const credentialRuntime = createCredentialRuntimeApplication({
       configureRuntime: applyRuntimeConfig,
-      selectedLlmProvider: async (storedCredentialSlots) =>
-        readSelectedLlmProvider(configDir, {
-          chatGptProfilePresent: await hasChatGptProfile(configDir),
-          storedCredentialSlots,
-        }),
+      selectedLlmProvider,
     });
+    const credentialRoot = join(app.getPath("userData"), CREDENTIAL_DIRECTORY_NAME);
     const vault = createCredentialVault({
-      root: join(app.getPath("userData"), CREDENTIAL_DIRECTORY_NAME),
+      root: credentialRoot,
       encryption: safeStorage,
       async applyCredential(slot, value) {
         await credentialRuntime.applyExplicit(runtimeConfigurationForCredential(slot, value));
       },
       reapplyCredential: credentialRuntime.reapplyStoredCredential,
     });
+    reapplyCredentials = async (connection, signal) => {
+      if (signal.aborted) return;
+      const successorRuntime = createCredentialRuntimeApplication({
+        configureRuntime: (request) => applyRuntimeConfigToConnection(connection, request),
+        selectedLlmProvider,
+      });
+      const successorVault = createCredentialVault({
+        root: credentialRoot,
+        encryption: safeStorage,
+        async applyCredential(slot, value) {
+          await successorRuntime.applyExplicit(runtimeConfigurationForCredential(slot, value));
+        },
+        reapplyCredential: successorRuntime.reapplyStoredCredential,
+      });
+      await successorVault.reapplyConfigured();
+    };
     const chatGptAuth = createChatGptAuth({
       configDir,
       applyRuntimeConfig: credentialRuntime.applyExplicit,
       openExternal: (url) => shell.openExternal(url),
       signal: controller.signal,
     });
+    daemonLifecycle.start();
     await vault.reapplyConfigured();
     await installDesktopProtocol({
       session: session.defaultSession,
-      daemonPort,
+      currentDaemonPort: () => daemonLifecycle!.currentPort(),
       rendererRoot: rendererOutputRoot(),
       ...(process.env.ELECTRON_RENDERER_URL === undefined
         ? {}
@@ -171,11 +246,8 @@ async function runDesktop(): Promise<void> {
     });
     protocolInstalled = true;
     const consoleMessages: string[] = [];
-    let window: BrowserWindow | null = null;
-    let windowCreation: Promise<BrowserWindow> | undefined;
     const mainWindow = {
-      current: (): BrowserWindow | null =>
-        window !== null && !window.isDestroyed() ? window : null,
+      current: currentWindow,
       show: (): Promise<BrowserWindow> => {
         if (windowCreation !== undefined) return windowCreation;
         const current = mainWindow.current();
@@ -234,13 +306,11 @@ async function runDesktop(): Promise<void> {
         return windowCreation;
       },
     };
-    ipcMain.handle(DESKTOP_CONNECTION_CHANNEL, (event) => {
-      if (!isTrustedConnectionRequest(event, mainWindow.current() ?? undefined)) {
-        throw new Error("untrusted desktop connection request");
-      }
-      return { url: resolution.url, token: resolution.token };
+    disposeConnectionIpc = installDesktopConnectionIpc({
+      ipcMain,
+      currentWindow: () => mainWindow.current() ?? undefined,
+      runtime: daemonLifecycle,
     });
-    connectionHandlerInstalled = true;
     const trayPopoverUrl =
       process.env.ELECTRON_RENDERER_URL === undefined
         ? "enduragent://app/tray.html"
@@ -258,6 +328,7 @@ async function runDesktop(): Promise<void> {
     await residency.start();
 
     if (process.argv.includes("--desktop-security-smoke")) {
+      const daemonPort = daemonLifecycle.currentPort();
       const rendererResult = await initialWindow.webContents.executeJavaScript(`(async () => {
       const blockedPort = ${daemonPort === 65_535 ? daemonPort - 1 : daemonPort + 1};
       const blocked = await new Promise((resolve) => {
@@ -300,7 +371,7 @@ async function runDesktop(): Promise<void> {
       }
       const result = {
         url: rendererResult.url,
-        rpcUrl: resolution.url,
+        rpcUrl: daemonLifecycle.connection().url,
         bridgeKeys: rendererResult.bridgeKeys,
         noNodeGlobals: rendererResult.noNodeGlobals,
         rpcConnected: rendererResult.rpcConnected,
@@ -313,11 +384,15 @@ async function runDesktop(): Promise<void> {
             const keys = Object.keys(entry).sort();
             return JSON.stringify(keys) === JSON.stringify(["runtimeState", "slot", "state"]);
           }) &&
-          !JSON.stringify(rendererResult.credentialStatuses).includes(resolution.token),
+          !JSON.stringify(rendererResult.credentialStatuses).includes(
+            daemonLifecycle.connection().token,
+          ),
         tokenAbsentInRendererSurfaces:
-          !JSON.stringify(rendererResult.rendererSurfaces).includes(resolution.token) &&
-          !consoleMessages.some((entry) => entry.includes(resolution.token)) &&
-          !screenshot.includes(resolution.token),
+          !JSON.stringify(rendererResult.rendererSurfaces).includes(
+            daemonLifecycle.connection().token,
+          ) &&
+          !consoleMessages.some((entry) => entry.includes(daemonLifecycle!.connection().token)) &&
+          !screenshot.includes(daemonLifecycle.connection().token),
       };
       process.stdout.write(`DESKTOP_SECURITY_READY ${JSON.stringify(result)}\n`);
       await new Promise<void>((resolveRelease) => {
@@ -341,5 +416,10 @@ if (!primaryInstance) {
   const runPrimaryDesktop = process.argv.includes("--desktop-runtime-smoke")
     ? runRuntimeSmoke
     : runDesktop;
-  void runPrimaryDesktop().catch(() => app.exit(1));
+  void runPrimaryDesktop().catch(() => {
+    if (!desktopIsClosing) {
+      dialog.showErrorBox(unexpectedStartupCopy.title, unexpectedStartupCopy.content);
+    }
+    app.exit(1);
+  });
 }

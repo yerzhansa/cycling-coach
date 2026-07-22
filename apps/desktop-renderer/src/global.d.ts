@@ -1,7 +1,8 @@
 interface EnduragentAuth {
-  getDaemonConnection(): Promise<{
+  getDaemonConnection(failedGeneration?: number): Promise<{
     readonly url: `ws://127.0.0.1:${number}/rpc`;
     readonly token: string;
+    readonly generation: number;
   }>;
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
   retryFailedCredentials(): Promise<readonly CredentialSlotStatus[]>;
@@ -75,6 +76,13 @@ type CredentialWriteResult =
 
 interface Window {
   readonly enduragentAuth: EnduragentAuth;
+}
+
+interface WindowEventMap {
+  readonly "enduragent-lifecycle": CustomEvent<{
+    readonly status: "ready" | "recovering" | "terminal" | "closing";
+    readonly generation: number;
+  }>;
 }
 
 declare module "*.css" {}

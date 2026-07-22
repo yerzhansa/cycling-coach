@@ -7,6 +7,7 @@ import {
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import type { LaunchdServiceStatus } from "@enduragent/kernel-node/service";
 import {
+  AppSupervisedDaemonStartError,
   resolveDesktopDaemon,
   type AppSupervisedChildHandle,
   type DaemonStateObservation,
@@ -104,8 +105,17 @@ function dependencies(input: {
 }
 
 function child(): AppSupervisedChildHandle & { readonly stop: ReturnType<typeof vi.fn> } {
-  const stop = vi.fn(async () => {});
-  return { pid: 90, exited: Promise.resolve({ exitCode: 0 }), stop };
+  let alive = true;
+  let resolveExit!: (value: { readonly exitCode: number | null }) => void;
+  const exited = new Promise<{ readonly exitCode: number | null }>((resolve) => {
+    resolveExit = resolve;
+  });
+  const stop = vi.fn(async () => {
+    if (!alive) return;
+    alive = false;
+    resolveExit({ exitCode: 0 });
+  });
+  return { pid: 90, exited, isAlive: () => alive, stop };
 }
 
 describe("desktop daemon arbitration", () => {
@@ -177,14 +187,11 @@ describe("desktop daemon arbitration", () => {
     expect(owned.stop).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    ["registered auth failure", "registered", { kind: "auth-invalid" }, 3],
-    ["registered foreign peer", "registered", { kind: "foreign" }, 3],
-    ["registered bound peer", "registered", { kind: "bound-unresponsive" }, 3],
-    ["unregistered auth failure", "absent", { kind: "auth-invalid" }, 3],
-    ["client-older mismatch", "registered", mismatch("service-managed", "client-older"), 5],
-  ] as const)("refuses %s without spawning", async (_name, registration, observation, exitCode) => {
-    const start = vi.fn();
+  it("refuses a daemon that never publishes after three starts", async () => {
+    const children = Array.from({ length: 3 }, () => child());
+    const start = vi.fn(async () => children[start.mock.calls.length - 1]!);
+    const base = dependencies({ registration: "absent", observations: [{ kind: "absent" }] });
+    const readStatus = vi.fn(base.readServiceStatus);
     const result = await resolveDesktopDaemon(
       {
         env: {},
@@ -193,11 +200,198 @@ describe("desktop daemon arbitration", () => {
         signal: new AbortController().signal,
         startAppSupervisedDaemon: start,
       },
-      dependencies({ registration, observations: [observation] }),
+      { ...base, readServiceStatus: readStatus },
     );
-    expect(result).toMatchObject({ status: "refused", exitCode });
-    expect(start).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: "refused",
+      exitCode: 3,
+      classification: "never-published",
+    });
+    expect(start).toHaveBeenCalledTimes(3);
+    expect(readStatus).toHaveBeenCalledTimes(1);
+    expect(children.map(({ stop }) => stop.mock.calls.length)).toEqual([1, 1, 1]);
   });
+
+  it("preserves a utility termination failure as a nonretryable refusal", async () => {
+    const start = vi.fn(async () => {
+      throw new AppSupervisedDaemonStartError("termination-failed");
+    });
+    const result = await resolveDesktopDaemon(
+      {
+        env: {},
+        executablePath: "/Applications/Enduragent",
+        appVersion: "0.1.0",
+        signal: new AbortController().signal,
+        startAppSupervisedDaemon: start,
+      },
+      dependencies({ registration: "absent", observations: [{ kind: "absent" }] }),
+    );
+    expect(result).toMatchObject({
+      status: "refused",
+      cause: "termination-failed",
+      retryable: false,
+    });
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-observes without spawning or consuming the shared recovery budget", async () => {
+    const budget = { remainingAttempts: 3, deadline: 60_000 };
+    const start = vi.fn();
+    const result = await resolveDesktopDaemon(
+      {
+        env: {},
+        executablePath: "/Applications/Enduragent",
+        appVersion: "0.1.0",
+        signal: new AbortController().signal,
+        startAppSupervisedDaemon: start,
+        startBudget: budget,
+        observationOnly: true,
+      },
+      dependencies({ registration: "absent", observations: [{ kind: "absent" }] }),
+    );
+    expect(result).toMatchObject({ status: "refused", cause: "unavailable", retryable: true });
+    expect(start).not.toHaveBeenCalled();
+    expect(budget.remainingAttempts).toBe(3);
+  });
+
+  it("settles three immediate child exits without waiting for publication deadlines", async () => {
+    const children = Array.from({ length: 3 }, (_, index) => ({
+      pid: 100 + index,
+      exited: Promise.resolve({ exitCode: 1 }),
+      isAlive: () => false,
+      stop: vi.fn(async () => {}),
+    }));
+    const start = vi.fn(async () => children[start.mock.calls.length - 1]!);
+    const deps = dependencies({ registration: "absent", observations: [{ kind: "absent" }] });
+    const delay = vi.spyOn(deps, "delay");
+    const result = await resolveDesktopDaemon(
+      {
+        env: {},
+        executablePath: "/Applications/Enduragent",
+        appVersion: "0.1.0",
+        signal: new AbortController().signal,
+        startAppSupervisedDaemon: start,
+      },
+      deps,
+    );
+    expect(result).toMatchObject({ status: "refused", cause: "never-published" });
+    expect(start).toHaveBeenCalledTimes(3);
+    expect(delay).not.toHaveBeenCalled();
+    expect(children.every(({ stop }) => stop.mock.calls.length === 1)).toBe(true);
+  });
+
+  it("observes every child exit before starting its replacement", async () => {
+    const order: string[] = [];
+    const children = Array.from({ length: 3 }, (_, index) => {
+      const sequence = index + 1;
+      let resolveExit!: (value: { readonly exitCode: number | null }) => void;
+      const exited = new Promise<{ readonly exitCode: number | null }>((resolve) => {
+        resolveExit = resolve;
+      }).then((value) => {
+        order.push(`exit-${sequence}`);
+        return value;
+      });
+      const stop = vi.fn(async () => {
+        order.push(`stop-${sequence}`);
+        resolveExit({ exitCode: 0 });
+      });
+      return { pid: 90 + sequence, exited, isAlive: () => true, stop };
+    });
+    const start = vi.fn(async () => {
+      const sequence = start.mock.calls.length;
+      order.push(`start-${sequence}`);
+      return children[sequence - 1]!;
+    });
+    const result = await resolveDesktopDaemon(
+      {
+        env: {},
+        executablePath: "/Applications/Enduragent",
+        appVersion: "0.1.0",
+        signal: new AbortController().signal,
+        startAppSupervisedDaemon: start,
+      },
+      dependencies({ registration: "absent", observations: [{ kind: "absent" }] }),
+    );
+    expect(result).toMatchObject({ status: "refused", classification: "never-published" });
+    expect(order).toEqual([
+      "start-1",
+      "stop-1",
+      "exit-1",
+      "start-2",
+      "stop-2",
+      "exit-2",
+      "start-3",
+      "stop-3",
+      "exit-3",
+    ]);
+  });
+
+  it("allows a cold first start to publish after twenty-five seconds", async () => {
+    let now = 0;
+    let started = false;
+    const owned = child();
+    const start = vi.fn(async () => {
+      started = true;
+      return owned;
+    });
+    const base = dependencies({ registration: "absent", observations: [{ kind: "absent" }] });
+    const result = await resolveDesktopDaemon(
+      {
+        env: {},
+        executablePath: "/Applications/Enduragent",
+        appVersion: "0.1.0",
+        signal: new AbortController().signal,
+        startAppSupervisedDaemon: start,
+      },
+      {
+        ...base,
+        observeDaemonState: async () =>
+          started && now >= 25_000 ? healthy("app-supervised") : { kind: "absent" },
+        delay: async (ms) => {
+          now += ms;
+        },
+        monotonicNow: () => now,
+      },
+    );
+    expect(result).toMatchObject({ status: "connected", supervision: "app-supervised" });
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(now).toBeGreaterThanOrEqual(25_000);
+    expect(now).toBeLessThan(30_000);
+    if (result.status === "connected") await result.close();
+    expect(owned.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["registered auth failure", "registered", { kind: "auth-invalid" }, 3, "unavailable", true],
+    ["registered foreign peer", "registered", { kind: "foreign" }, 3, "contention", true],
+    ["registered bound peer", "registered", { kind: "bound-unresponsive" }, 3, "unavailable", true],
+    ["unregistered auth failure", "absent", { kind: "auth-invalid" }, 3, "unavailable", true],
+    [
+      "client-older mismatch",
+      "registered",
+      mismatch("service-managed", "client-older"),
+      5,
+      "version-mismatch",
+      false,
+    ],
+  ] as const)(
+    "refuses %s without spawning",
+    async (_name, registration, observation, exitCode, cause, retryable) => {
+      const start = vi.fn();
+      const result = await resolveDesktopDaemon(
+        {
+          env: {},
+          executablePath: "/Applications/Enduragent",
+          appVersion: "0.1.0",
+          signal: new AbortController().signal,
+          startAppSupervisedDaemon: start,
+        },
+        dependencies({ registration, observations: [observation] }),
+      );
+      expect(result).toMatchObject({ status: "refused", exitCode, cause, retryable });
+      expect(start).not.toHaveBeenCalled();
+    },
+  );
 
   it("fails closed for unknown registration without resume or spawn", async () => {
     const base = dependencies({ registration: "absent", observations: [{ kind: "absent" }] });
@@ -231,7 +425,7 @@ describe("desktop daemon arbitration", () => {
       },
       deps,
     );
-    expect(result).toMatchObject({ status: "refused", exitCode: 3 });
+    expect(result).toMatchObject({ status: "refused", exitCode: 3, cause: "unavailable" });
     expect(resume).not.toHaveBeenCalled();
     expect(start).not.toHaveBeenCalled();
   });
@@ -280,6 +474,44 @@ describe("desktop daemon arbitration", () => {
     expect(start).toHaveBeenCalledTimes(1);
     if (result.status === "connected") await result.close();
     expect(successor.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops client-newer handoff after an unconfirmed utility cleanup", async () => {
+    const successor = child();
+    const start = vi
+      .fn()
+      .mockRejectedValueOnce(new AppSupervisedDaemonStartError("termination-failed"))
+      .mockResolvedValue(successor);
+    const base = dependencies({
+      registration: "absent",
+      observations: [mismatch("app-supervised", "client-newer")],
+    });
+    const resolveSecondStarter = vi.fn(async (_input, binding) => {
+      await binding.serviceUpgrade.startEphemeralSuccessor({
+        home,
+        targetProtocolVersion: PROTOCOL_VERSION,
+        handoffCapability: "h".repeat(43),
+      });
+      throw new Error("unreachable");
+    });
+    const result = await resolveDesktopDaemon(
+      {
+        env: {},
+        executablePath: "/Applications/Enduragent",
+        appVersion: "0.1.0",
+        signal: new AbortController().signal,
+        startAppSupervisedDaemon: start,
+      },
+      { ...base, resolveSecondStarter },
+    );
+    expect(result).toMatchObject({
+      status: "refused",
+      cause: "termination-failed",
+      retryable: false,
+    });
+    expect(resolveSecondStarter).toHaveBeenCalledTimes(1);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(successor.stop).not.toHaveBeenCalled();
   });
 
   it("prefers registered service handoff for a client-newer app owner", async () => {
@@ -337,7 +569,7 @@ describe("desktop daemon arbitration", () => {
       },
       dependencies({ registration: "absent", observations: [{ kind: "absent" }] }),
     );
-    expect(result).toMatchObject({ status: "refused", exitCode: 3 });
+    expect(result).toMatchObject({ status: "refused", exitCode: 3, cause: "cancelled" });
     expect(owned.stop).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,0 +1,106 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("electron", () => ({
+  BrowserWindow: class {},
+  net: { fetch: vi.fn() },
+  protocol: { registerSchemesAsPrivileged: vi.fn() },
+}));
+
+import { installDesktopConnectionIpc } from "../src/main/connection-ipc.js";
+import { DESKTOP_CONNECTION_CHANNEL, DESKTOP_RENDERER_URL } from "../src/main/constants.js";
+
+type Handler = (event: unknown, request?: unknown) => unknown;
+
+function setup() {
+  const handlers = new Map<string, Handler>();
+  const ipcMain = {
+    handle: vi.fn((channel: string, handler: Handler) => handlers.set(channel, handler)),
+    removeHandler: vi.fn((channel: string) => handlers.delete(channel)),
+  };
+  const mainFrame = { url: DESKTOP_RENDERER_URL };
+  const webContents = { isDestroyed: () => false, mainFrame };
+  const window = { isDestroyed: () => false, webContents };
+  let connection: {
+    url: `ws://127.0.0.1:${number}/rpc`;
+    token: string;
+    generation: number;
+  } = {
+    url: "ws://127.0.0.1:45001/rpc" as const,
+    token: "s".repeat(43),
+    generation: 1,
+  };
+  const runtime = {
+    connection: vi.fn(() => connection),
+    recover: vi.fn(async (generation: number) => {
+      if (generation < connection.generation) return connection;
+      connection = {
+        url: "ws://127.0.0.1:45002/rpc" as const,
+        token: "t".repeat(43),
+        generation: 2,
+      };
+      return connection;
+    }),
+  };
+  const dispose = installDesktopConnectionIpc({
+    ipcMain: ipcMain as never,
+    currentWindow: () => window as never,
+    runtime,
+  });
+  const trusted = { sender: webContents, senderFrame: mainFrame };
+  return { dispose, handlers, ipcMain, runtime, trusted };
+}
+
+beforeEach(() => vi.clearAllMocks());
+
+describe("desktop connection IPC", () => {
+  it("reads current coordinates again after a successful recovery", async () => {
+    const { handlers, runtime, trusted } = setup();
+    const connection = handlers.get(DESKTOP_CONNECTION_CHANNEL)!;
+    expect(((await connection(trusted)) as { readonly url: string }).url).toBe(
+      "ws://127.0.0.1:45001/rpc",
+    );
+    expect(((await connection(trusted, { generation: 1 })) as { readonly url: string }).url).toBe(
+      "ws://127.0.0.1:45002/rpc",
+    );
+    expect(runtime.connection).toHaveBeenCalledTimes(1);
+    expect(runtime.recover).toHaveBeenCalledWith(1);
+    await expect(connection(trusted, { generation: 1 })).resolves.toMatchObject({ generation: 2 });
+  });
+
+  it("refuses untrusted connection and recovery requests", async () => {
+    const { handlers, runtime } = setup();
+    const untrusted = { sender: {}, senderFrame: { url: DESKTOP_RENDERER_URL } };
+    const connection = handlers.get(DESKTOP_CONNECTION_CHANNEL)!;
+    for (const request of [undefined, { generation: 1 }]) {
+      await expect(connection(untrusted, request)).rejects.toThrow(
+        "untrusted desktop connection request",
+      );
+    }
+    expect(runtime.connection).not.toHaveBeenCalled();
+    expect(runtime.recover).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed recovery requests before changing daemon state", async () => {
+    const { handlers, runtime, trusted } = setup();
+    const connection = handlers.get(DESKTOP_CONNECTION_CHANNEL)!;
+    for (const request of [
+      false,
+      {},
+      { generation: 0 },
+      { generation: 1.5 },
+      { generation: 1, extra: true },
+    ]) {
+      await expect(connection(trusted, request)).rejects.toThrow(
+        "invalid desktop connection request",
+      );
+    }
+    expect(runtime.recover).not.toHaveBeenCalled();
+  });
+
+  it("removes the trusted connection channel during shutdown", () => {
+    const { dispose, handlers, ipcMain } = setup();
+    dispose();
+    expect(handlers.size).toBe(0);
+    expect(ipcMain.removeHandler).toHaveBeenCalledWith(DESKTOP_CONNECTION_CHANNEL);
+  });
+});

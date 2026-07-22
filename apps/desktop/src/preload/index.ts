@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import { DESKTOP_CONNECTION_CHANNEL } from "../main/constants.js";
+import { DESKTOP_CONNECTION_CHANNEL, DESKTOP_LIFECYCLE_CHANNEL } from "../main/constants.js";
 
 const DESKTOP_CREDENTIAL_STATUS_CHANNEL = "enduragent:onboarding:credential-status";
 const DESKTOP_CREDENTIAL_RETRY_CHANNEL = "enduragent:onboarding:credential-retry";
@@ -150,10 +150,38 @@ function parsePaths(value: unknown): readonly string[] {
 
 let dropDisposer: (() => void) | undefined;
 
+ipcRenderer.on(DESKTOP_LIFECYCLE_CHANNEL, (_event, value: unknown) => {
+  if (
+    !record(value) ||
+    !exactKeys(value, ["generation", "status"]) ||
+    !["ready", "recovering", "terminal", "closing"].includes(value.status as string) ||
+    !Number.isSafeInteger(value.generation) ||
+    (value.generation as number) < 1
+  ) {
+    return;
+  }
+  window.dispatchEvent(
+    new CustomEvent("enduragent-lifecycle", {
+      detail: { status: value.status, generation: value.generation },
+    }),
+  );
+});
+
 contextBridge.exposeInMainWorld(
   "enduragentAuth",
   Object.freeze({
-    getDaemonConnection: () => ipcRenderer.invoke(DESKTOP_CONNECTION_CHANNEL),
+    getDaemonConnection: (failedGeneration?: number) => {
+      if (
+        failedGeneration !== undefined &&
+        (!Number.isSafeInteger(failedGeneration) || failedGeneration < 1)
+      ) {
+        throw new TypeError();
+      }
+      return ipcRenderer.invoke(
+        DESKTOP_CONNECTION_CHANNEL,
+        ...(failedGeneration === undefined ? [] : [{ generation: failedGeneration }]),
+      );
+    },
     credentialStatuses: async () =>
       parseStatuses(await ipcRenderer.invoke(DESKTOP_CREDENTIAL_STATUS_CHANNEL)),
     retryFailedCredentials: async () =>

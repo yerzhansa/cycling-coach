@@ -7,15 +7,28 @@ export interface DesktopCoachClientProvider {
   close(): Promise<void>;
 }
 
-function validateConnection(value: unknown): { readonly url: string; readonly token: string } {
+interface DesktopConnectionBridge {
+  getDaemonConnection(failedGeneration?: number): Promise<unknown>;
+}
+
+function validateConnection(value: unknown): {
+  readonly url: string;
+  readonly token: string;
+  readonly generation: number;
+} {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new CoachClientProtocolError();
   }
   const record = value as Record<string, unknown>;
-  if (Object.keys(record).sort().join(",") !== "token,url") {
+  if (Object.keys(record).sort().join(",") !== "generation,token,url") {
     throw new CoachClientProtocolError();
   }
-  if (typeof record.url !== "string" || typeof record.token !== "string") {
+  if (
+    typeof record.url !== "string" ||
+    typeof record.token !== "string" ||
+    !Number.isSafeInteger(record.generation) ||
+    (record.generation as number) < 1
+  ) {
     throw new CoachClientProtocolError();
   }
   let url: URL;
@@ -40,29 +53,35 @@ function validateConnection(value: unknown): { readonly url: string; readonly to
   ) {
     throw new CoachClientProtocolError();
   }
-  return record as { readonly url: string; readonly token: string };
+  return record as { readonly url: string; readonly token: string; readonly generation: number };
 }
 
-export function createDesktopCoachClientProvider(): DesktopCoachClientProvider {
+export function createDesktopCoachClientProvider(
+  connect: typeof connectCoachClient = connectCoachClient,
+): DesktopCoachClientProvider {
   let client: CoachClient | undefined;
   let connection: Promise<CoachClient> | undefined;
   let reconnection: Promise<CoachClient> | undefined;
   let closing: Promise<void> | undefined;
+  let generation: number | undefined;
 
-  const connectFresh = (): Promise<CoachClient> => {
-    if (client !== undefined) return Promise.resolve(client);
-    if (connection !== undefined) return connection;
-    const auth = (
+  const auth = (): DesktopConnectionBridge =>
+    (
       window as unknown as Window & {
-        readonly enduragentAuth: {
-          getDaemonConnection(): Promise<unknown>;
-        };
+        readonly enduragentAuth: DesktopConnectionBridge;
       }
     ).enduragentAuth;
-    const pending = auth
-      .getDaemonConnection()
+
+  const connectFresh = (failedGeneration?: number): Promise<CoachClient> => {
+    if (client !== undefined) return Promise.resolve(client);
+    if (connection !== undefined) return connection;
+    const pending = auth()
+      .getDaemonConnection(failedGeneration)
       .then(validateConnection)
-      .then((options) => connectCoachClient(options))
+      .then((options) => {
+        generation = options.generation;
+        return connect({ url: options.url, token: options.token });
+      })
       .then((connected) => {
         if (connection === pending) client = connected;
         return connected;
@@ -92,7 +111,7 @@ export function createDesktopCoachClientProvider(): DesktopCoachClientProvider {
           if (client === connected) client = undefined;
           if (connection === previousConnection) connection = undefined;
         })
-        .then(connectFresh)
+        .then(() => connectFresh(generation))
         .finally(() => {
           if (reconnection === pending) reconnection = undefined;
         });
@@ -108,6 +127,7 @@ export function createDesktopCoachClientProvider(): DesktopCoachClientProvider {
         .then(() => {
           client = undefined;
           connection = undefined;
+          generation = undefined;
         });
       closing = pending;
       return pending;

@@ -18,7 +18,11 @@ import {
   DESKTOP_WINDOW_WIDTH,
   createDesktopContentSecurityPolicy,
 } from "../src/main/constants.js";
-import { desktopWindowOptions, isTrustedConnectionRequest } from "../src/main/security.js";
+import {
+  desktopWindowOptions,
+  installDesktopProtocol,
+  isTrustedConnectionRequest,
+} from "../src/main/security.js";
 
 describe("desktop security boundary", () => {
   it("pins the scheme, IPC, window, and assigned-port-only CSP constants", () => {
@@ -68,6 +72,29 @@ describe("desktop security boundary", () => {
         allowRunningInsecureContent: false,
       },
     });
+  });
+
+  it("emits an exact CSP pin from the current daemon port on every document load", async () => {
+    let handler: ((request: Request) => Promise<Response>) | undefined;
+    const protocol = {
+      handle: vi.fn(async (_scheme: string, installed: (request: Request) => Promise<Response>) => {
+        handler = installed;
+      }),
+    };
+    let port = 45_001;
+    await installDesktopProtocol({
+      session: { protocol } as never,
+      currentDaemonPort: () => port,
+      rendererRoot: "/synthetic/renderer",
+    });
+    const first = await handler!(new Request("enduragent://app/missing.html"));
+    port = 45_002;
+    const second = await handler!(new Request("enduragent://app/missing.html"));
+    const firstPolicy = first.headers.get("Content-Security-Policy");
+    const secondPolicy = second.headers.get("Content-Security-Policy");
+    expect(firstPolicy).toContain("connect-src ws://127.0.0.1:45001;");
+    expect(secondPolicy).toContain("connect-src ws://127.0.0.1:45002;");
+    expect(secondPolicy).not.toContain("ws://127.0.0.1:*");
   });
 
   it("requires the live window, sender, main frame, and exact URL", () => {
