@@ -67,7 +67,7 @@ describe("coach operations", () => {
         context: liveContext,
         runtime: { runWindowAfter: vi.fn() },
         intervalsCredentials: intervalsCredentials(),
-        historyNewestDate: "1998-07-18",
+        historyNewestDate: () => "1998-07-18",
         applyRuntimeConfig: async () => {},
       });
       const paths = ["brick-cycling.fit", "fallback-cycling.tcx", "fallback-cycling.gpx"].map(
@@ -111,7 +111,7 @@ describe("coach operations", () => {
         },
         runtime: { runWindowAfter: vi.fn() },
         intervalsCredentials: intervalsCredentials(),
-        historyNewestDate: "1998-07-18",
+        historyNewestDate: () => "1998-07-18",
         applyRuntimeConfig: async () => {},
       });
       await expect(
@@ -194,7 +194,7 @@ describe("coach operations", () => {
         context: context(),
         runtime: { runWindowAfter },
         intervalsCredentials: intervalsCredentials(),
-        historyNewestDate: "1998-07-18",
+        historyNewestDate: () => "1998-07-18",
         applyRuntimeConfig: async () => {},
       },
       { importFiles },
@@ -263,7 +263,7 @@ describe("coach operations", () => {
         context: context(),
         runtime: { runWindowAfter },
         intervalsCredentials: intervalsCredentials(),
-        historyNewestDate: "1998-07-18",
+        historyNewestDate: () => "1998-07-18",
         applyRuntimeConfig: async () => {},
       },
       { importFiles },
@@ -310,7 +310,7 @@ describe("coach operations", () => {
         context: selectedContext,
         runtime: { runWindowAfter },
         intervalsCredentials: credentials,
-        historyNewestDate: "1998-07-18",
+        historyNewestDate: () => "1998-07-18",
         applyRuntimeConfig: async () => {},
       },
       { backfill },
@@ -390,7 +390,7 @@ describe("coach operations", () => {
           context: context(),
           runtime,
           intervalsCredentials: runtime.credentials,
-          historyNewestDate: "1998-07-18",
+          historyNewestDate: () => "1998-07-18",
           applyRuntimeConfig: async () => {},
         },
         { backfill },
@@ -445,7 +445,7 @@ describe("coach operations", () => {
           context: context(),
           runtime,
           intervalsCredentials: runtime.intervals,
-          historyNewestDate: "1998-07-18",
+          historyNewestDate: () => "1998-07-18",
           applyRuntimeConfig: async () => {},
         },
         { backfill },
@@ -503,7 +503,7 @@ describe("coach operations", () => {
           },
           runtime,
           intervalsCredentials: runtime.intervals,
-          historyNewestDate: "1998-07-18",
+          historyNewestDate: () => "1998-07-18",
           applyRuntimeConfig: async () => {},
         },
         { backfill },
@@ -530,7 +530,7 @@ describe("coach operations", () => {
       context: context(),
       runtime: { runWindowAfter: vi.fn() },
       intervalsCredentials: intervalsCredentials(),
-      historyNewestDate: "1998-07-18",
+      historyNewestDate: () => "1998-07-18",
       applyRuntimeConfig,
     });
     const llmFirst = {
@@ -608,7 +608,7 @@ describe("coach operations", () => {
           },
         },
         intervalsCredentials: intervalsCredentials(),
-        historyNewestDate: "1998-07-18",
+        historyNewestDate: () => "1998-07-18",
         applyRuntimeConfig: async () => {},
       });
       const sync = operations.sync({});

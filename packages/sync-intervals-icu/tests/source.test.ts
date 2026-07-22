@@ -8,7 +8,14 @@ import {
   type SourceWatermark,
   type SyncBudget,
 } from "@enduragent/kernel/store";
-import { compactCursor, createIntervalsIcuSource, INTERVALS_ICU_CAPABILITIES } from "../src/index.js";
+import {
+  advanceWindow,
+  compactCursor,
+  createIntervalsIcuSource,
+  initialCursor,
+  INTERVALS_ICU_CAPABILITIES,
+  parseCursor,
+} from "../src/index.js";
 
 const json = (value: unknown): HttpResponse => ({ status: 200, headers: { "content-type": "application/json; charset=utf-8" },
   body: new TextEncoder().encode(JSON.stringify(value)) });
@@ -82,6 +89,88 @@ describe("intervals.icu full-history source", () => {
     const terminal = compactCursor({ v: 1, cycle: 3, window_start: "1998-01-01", window_end: "1998-12-31", last_key: null, complete: true });
     const refreshed = await collect(value.pull(watermark("activities", terminal), budget(1)));
     expect(JSON.parse((refreshed.at(-1) as { watermark: { value: string } }).watermark.value).cycle).toBe(4);
+  });
+
+  it.each([
+    ["the next day", "1998-07-19", "1998-07-19"],
+    ["five days later", "1998-07-23", "1998-07-23"],
+    ["one year later", "1999-07-18", "1998-12-31"],
+  ])("reopens a completed bulk history cursor %s", (_label, newest, expectedEnd) => {
+    const producedRange = { oldest: "1998-01-01", newest: "1998-07-18" };
+    const completed = advanceWindow(initialCursor("bulk-fit", producedRange), producedRange);
+
+    expect(parseCursor(compactCursor(completed), "bulk-fit", { ...producedRange, newest })).toEqual({
+      v: 1,
+      cycle: 1,
+      window_start: "1998-01-01",
+      window_end: expectedEnd,
+      last_key: null,
+      complete: false,
+      requestStart: "1998-07-18",
+    });
+  });
+
+  it("re-fetches the completion day when reopening completed bulk history", async () => {
+    const requests: string[] = [];
+    const producedRange = { oldest: "1998-01-01", newest: "1998-07-18" };
+    const completed = advanceWindow(initialCursor("bulk-fit", producedRange), producedRange);
+    const value = source({ fetch: async (request) => {
+      requests.push(request.url);
+      return request.url.includes("/activities?")
+        ? json([activity("boundary_ride", "1998-07-18")])
+        : { status: 200, headers: { "content-type": "application/octet-stream" }, body: new Uint8Array([1]) };
+    } },
+      { ...producedRange, newest: "1998-07-23" });
+
+    const result = await collect(value.pull(watermark("bulk-fit", compactCursor(completed)), budget()));
+
+    expect(requests).toHaveLength(2);
+    const url = new URL(requests[0]!);
+    expect([...url.searchParams]).toEqual([["oldest", "1998-07-18"], ["newest", "1998-07-23"]]);
+    expect(result).toContainEqual(expect.objectContaining({ kind: "raw-file", externalId: "boundary_ride" }));
+    expect(JSON.parse((result.at(-1) as { watermark: { value: string } }).watermark.value)).toMatchObject({
+      cycle: 1,
+      window_start: "1998-01-01",
+      window_end: "1998-07-23",
+      complete: true,
+    });
+  });
+
+  it("expands an interrupted final window after the date advances", () => {
+    const interrupted = compactCursor({ v: 1, cycle: 0, window_start: "1998-01-01",
+      window_end: "1998-07-18", last_key: "1998-07-18T07:00:00Z\u001fboundary", complete: false });
+
+    expect(parseCursor(interrupted, "bulk-fit", { oldest: "1998-01-01", newest: "1998-07-23" })).toEqual({
+      v: 1,
+      cycle: 0,
+      window_start: "1998-01-01",
+      window_end: "1998-07-23",
+      last_key: "1998-07-18T07:00:00Z\u001fboundary",
+      complete: false,
+    });
+  });
+
+  it("rejects a completed bulk history cursor with an off-lattice start", () => {
+    const value = compactCursor({ v: 1, cycle: 0, window_start: "1998-01-02",
+      window_end: "1998-07-18", last_key: null, complete: true });
+
+    expect(() => parseCursor(value, "bulk-fit", { oldest: "1998-01-01", newest: "1998-07-19" })).toThrow(
+      "source cursor range is invalid",
+    );
+  });
+
+  it.each([
+    ["ends before its start", "1998-07-20", "1998-07-19", "1998-07-19"],
+    ["exceeds its 365-date window", "1998-01-01", "1999-01-01", "1999-01-02"],
+    ["starts before the legal range", "1997-12-31", "1998-07-18", "1998-07-19"],
+    ["ends after the legal range", "1998-07-18", "1998-07-20", "1998-07-19"],
+  ])("rejects a completed bulk history cursor that %s", (_label, windowStart, windowEnd, newest) => {
+    const value = compactCursor({ v: 1, cycle: 0, window_start: windowStart,
+      window_end: windowEnd, last_key: null, complete: true });
+
+    expect(() => parseCursor(value, "bulk-fit", { oldest: "1998-01-01", newest })).toThrow(
+      "source cursor range is invalid",
+    );
   });
 
   it("archives page and row before ACL and transport remains unchanged", async () => {

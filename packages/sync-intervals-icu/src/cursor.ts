@@ -7,6 +7,7 @@ export interface RangeCursor {
   readonly window_end: string;
   readonly last_key: string | null;
   readonly complete: boolean;
+  readonly requestStart?: string;
 }
 
 export type IndexCursor = RangeCursor;
@@ -18,6 +19,7 @@ export interface CursorRange {
 
 const DATE = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/;
 const CURSOR_KEYS = "v,cycle,window_start,window_end,last_key,complete";
+const DAY_MS = 86_400_000;
 
 export function parseCivilDate(value: unknown): string {
   if (typeof value !== "string") throw new TypeError("history date is invalid");
@@ -48,6 +50,11 @@ export function windowEnd(start: string, newest: string): string {
   return compareBinary(candidate, newest) < 0 ? candidate : newest;
 }
 
+function isWindowStart(start: string, oldest: string): boolean {
+  const offset = (Date.parse(`${start}T00:00:00.000Z`) - Date.parse(`${oldest}T00:00:00.000Z`)) / DAY_MS;
+  return Number.isSafeInteger(offset) && offset >= 0 && offset % 365 === 0;
+}
+
 export function initialCursor(lane: SourceLane, range: CursorRange, cycle = 0): RangeCursor {
   const start = lane === "settings" ? range.newest : range.oldest;
   return { v: 1, cycle, window_start: start,
@@ -73,15 +80,28 @@ export function parseCursor(value: string | null, lane: SourceLane, range: Curso
     throw new TypeError("source cursor is invalid");
   }
   const start = parseCivilDate(cursor.window_start), end = parseCivilDate(cursor.window_end);
-  const expectedStart = lane === "settings" ? range.newest : start;
-  const validWindow = start === expectedStart && end === (lane === "settings" ? range.newest : windowEnd(start, range.newest))
-    && compareBinary(start, range.oldest) >= 0 && compareBinary(end, range.newest) <= 0;
+  const currentWindow = lane === "settings" ? start === range.newest && end === range.newest
+    : end === windowEnd(start, range.newest);
+  const previousWindow = compareBinary(end, range.newest) < 0
+    && (lane === "settings" ? start === end
+      : compareBinary(start, end) <= 0 && end === windowEnd(start, end));
+  const validWindow = (currentWindow || previousWindow) && (lane === "settings" || isWindowStart(start, range.oldest))
+    && compareBinary(start, end) <= 0 && compareBinary(start, range.oldest) >= 0
+    && compareBinary(end, range.newest) <= 0;
   if (!validWindow || (cursor.complete === true && cursor.last_key !== null)) throw new TypeError("source cursor range is invalid");
   const result = { v: 1 as const, cycle: cursor.cycle as number, window_start: start, window_end: end,
     last_key: cursor.last_key as string | null, complete: cursor.complete as boolean };
-  if (!result.complete) return result;
-  if (lane === "bulk-fit") return result;
+  if (!result.complete) {
+    if (result.window_end === range.newest) return result;
+    if (lane === "settings") return { ...result, window_start: range.newest, window_end: range.newest };
+    return { ...result, window_end: windowEnd(result.window_start, range.newest) };
+  }
+  if (lane === "bulk-fit" && result.window_end === range.newest) return result;
   if (result.cycle === Number.MAX_SAFE_INTEGER) throw new TypeError("source cursor cycle is invalid");
+  if (lane === "bulk-fit") {
+    return { ...result, cycle: result.cycle + 1, window_end: windowEnd(result.window_start, range.newest),
+      last_key: null, complete: false, requestStart: result.window_end };
+  }
   return initialCursor(lane, range, result.cycle + 1);
 }
 

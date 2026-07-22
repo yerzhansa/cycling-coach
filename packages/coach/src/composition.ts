@@ -496,7 +496,7 @@ export async function createLocalCoachComposition(
         context: input.context,
         runtime,
         intervalsCredentials: options.liveIntervals,
-        historyNewestDate: new Date(now()).toISOString().slice(0, 10),
+        historyNewestDate: () => new Date(now()).toISOString().slice(0, 10),
         applyRuntimeConfig,
       },
       dependencies.operationsDependencies,
