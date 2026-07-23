@@ -9,9 +9,12 @@ interface EnduragentAuth {
   writeCredential(input: {
     readonly slot: DesktopCredentialSlot;
     readonly value: string;
+    readonly selection?: OnboardingLlmSelection;
   }): Promise<CredentialWriteResult>;
+  llmConfiguration(): Promise<OnboardingLlmConfiguration>;
+  applyLlmSelection(input: OnboardingLlmSelection): Promise<OnboardingLlmSelectionResult>;
   chatgptStatus(): Promise<ChatGptStatus>;
-  chatgptLogin(): Promise<ChatGptLoginResult>;
+  chatgptLogin(input: OnboardingLlmSelection): Promise<ChatGptLoginResult>;
   chooseImportFiles(): Promise<readonly string[]>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
   releaseNotes(): Promise<ReleaseNotesResult>;
@@ -54,6 +57,48 @@ type DesktopCredentialSlot =
   | "zai"
   | "intervals-icu";
 
+type LlmProvider = Exclude<DesktopCredentialSlot, "intervals-icu"> | "openai-codex";
+
+interface OnboardingLlmModelOption {
+  readonly value: string;
+  readonly label: string;
+  readonly hint?: string;
+}
+
+interface OnboardingLlmProviderConfiguration {
+  readonly provider: LlmProvider;
+  readonly defaultModel: string;
+  readonly models: readonly OnboardingLlmModelOption[];
+  readonly defaultBaseUrl?: string;
+}
+
+interface OnboardingLlmConfiguration {
+  readonly schemaVersion: 1;
+  readonly providers: readonly OnboardingLlmProviderConfiguration[];
+  readonly active: {
+    readonly provider: LlmProvider;
+    readonly model: string;
+  } | null;
+}
+
+type OnboardingLlmEndpointSelection =
+  | { readonly mode: "automatic" }
+  | { readonly mode: "default" }
+  | { readonly mode: "custom"; readonly value: string };
+
+interface OnboardingLlmSelection {
+  readonly provider: LlmProvider;
+  readonly model: string;
+  readonly endpoint: OnboardingLlmEndpointSelection;
+}
+
+type OnboardingLlmSelectionResult =
+  | { readonly status: "configured"; readonly runtimeReady: true }
+  | {
+      readonly status: "refused";
+      readonly reason: "invalid-input" | "credential-required" | "runtime-unavailable";
+    };
+
 type CredentialState = "missing" | "configured" | "re-prompt";
 type CredentialRuntimeState = "active" | "stored-inactive" | "failed";
 
@@ -86,7 +131,7 @@ type CredentialWriteResult =
   | {
       readonly slot: DesktopCredentialSlot;
       readonly status: "configured";
-      readonly runtimeReady: true;
+      readonly runtimeReady: boolean;
     }
   | {
       readonly slot: DesktopCredentialSlot;

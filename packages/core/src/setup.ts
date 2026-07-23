@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, chmodSy
 import { stringify as toYaml } from "yaml";
 import { type BinaryConfig, binaryEnvVar } from "./binary.js";
 import { CONFIG_DIR, CONFIG_FILE, envInt, readConfigYaml } from "./config.js";
-import { DEFAULT_MODELS, PROVIDER_BASE_URLS } from "./runtime-config.js";
+import { LLM_MODEL_CATALOGUE } from "./runtime-config.js";
 import { captureAndPersistOperator } from "./channels/operator-capture.js";
 import { loadAllowedSenders } from "./channels/allowed-senders.js";
 import { runCodexLogin } from "./auth/openai-codex-login.js";
@@ -48,18 +48,11 @@ import {
 // TYPES
 // ============================================================================
 
-const PROVIDERS = [
-  { value: "anthropic", label: "Anthropic (Claude)" },
-  { value: "openai", label: "OpenAI (GPT)" },
-  { value: "google", label: "Google (Gemini)" },
-  { value: "openai-codex", label: "OpenAI Codex (ChatGPT subscription)", hint: "experimental" },
-  { value: "deepseek", label: "DeepSeek" },
-  { value: "qwen", label: "Qwen (Alibaba Model Studio)" },
-  { value: "minimax", label: "MiniMax" },
-  { value: "kimi", label: "Kimi (Moonshot AI)" },
-  { value: "zai", label: "Z.AI (GLM)" },
-  { value: "openrouter", label: "OpenRouter", hint: "one key, many models" },
-];
+const PROVIDERS = LLM_MODEL_CATALOGUE.map(({ provider, label, hint }) => ({
+  value: provider,
+  label,
+  ...(hint === undefined ? {} : { hint }),
+}));
 
 const API_KEY_LABELS: Record<string, string> = {
   anthropic: "Anthropic API key",
@@ -71,59 +64,6 @@ const API_KEY_LABELS: Record<string, string> = {
   kimi: "Moonshot API key",
   zai: "Z.AI API key",
   openrouter: "OpenRouter API key",
-};
-
-const MODELS: Record<string, { value: string; label: string; hint?: string }[]> = {
-  anthropic: [
-    { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", hint: "recommended" },
-    { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5", hint: "fast & cheap" },
-    { value: "claude-opus-4-8", label: "Claude Opus 4.8", hint: "most capable" },
-  ],
-  openai: [
-    { value: "gpt-5.5", label: "GPT-5.5", hint: "recommended" },
-    { value: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "fast & cheap" },
-    { value: "gpt-5.4-nano", label: "GPT-5.4 Nano", hint: "cheapest" },
-  ],
-  google: [
-    { value: "gemini-3.5-flash", label: "Gemini 3.5 Flash", hint: "recommended" },
-    { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro", hint: "most capable" },
-    { value: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite", hint: "cheapest" },
-  ],
-  "openai-codex": [
-    { value: "gpt-5.5", label: "GPT-5.5", hint: "recommended" },
-    { value: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "faster" },
-  ],
-  deepseek: [
-    { value: "deepseek-v4-flash", label: "DeepSeek V4 Flash", hint: "recommended" },
-    { value: "deepseek-v4-pro", label: "DeepSeek V4 Pro", hint: "most capable" },
-  ],
-  qwen: [
-    { value: "qwen3.5-plus", label: "Qwen3.5 Plus", hint: "recommended" },
-    { value: "qwen3-max", label: "Qwen3 Max", hint: "most capable" },
-  ],
-  minimax: [
-    { value: "MiniMax-M2.7", label: "MiniMax M2.7", hint: "recommended" },
-    { value: "MiniMax-M3", label: "MiniMax M3", hint: "most capable" },
-  ],
-  kimi: [
-    { value: "kimi-k2.6", label: "Kimi K2.6", hint: "recommended" },
-    { value: "kimi-k2.5", label: "Kimi K2.5", hint: "cheaper" },
-  ],
-  zai: [
-    { value: "glm-4.7", label: "GLM-4.7", hint: "recommended" },
-    { value: "glm-5.2", label: "GLM-5.2", hint: "most capable" },
-    { value: "glm-4.7-flashx", label: "GLM-4.7 FlashX", hint: "cheapest" },
-  ],
-  openrouter: [
-    {
-      value: "deepseek/deepseek-v4-flash",
-      label: "DeepSeek V4 Flash (via OpenRouter)",
-      hint: "cheap",
-    },
-    { value: "z-ai/glm-5.2", label: "GLM-5.2 (via OpenRouter)", hint: "most capable" },
-    { value: "qwen/qwen3.7-plus", label: "Qwen3.7 Plus (via OpenRouter)" },
-    { value: "moonshotai/kimi-k2.6", label: "Kimi K2.6 (via OpenRouter)" },
-  ],
 };
 
 const CUSTOM_MODEL_SENTINEL = "__custom__";
@@ -319,20 +259,21 @@ async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<voi
   });
   handleCancel(providerResp, ctx, binary);
   const provider = providerResp as string;
+  const catalogue = LLM_MODEL_CATALOGUE.find((entry) => entry.provider === provider);
 
   // Model
   const sameProvider = provider === prevProvider;
-  const knownModel = MODELS[provider]?.some((m) => m.value === prevModel);
+  const knownModel = catalogue?.models.some((candidate) => candidate.value === prevModel);
   const initialModel =
     sameProvider && prevModel
       ? knownModel
         ? prevModel
         : CUSTOM_MODEL_SENTINEL
-      : DEFAULT_MODELS[provider as keyof typeof DEFAULT_MODELS];
+      : catalogue?.defaultModel;
   const modelResp = await select({
     message: "Model",
     options: [
-      ...(MODELS[provider] ?? []),
+      ...(catalogue?.models ?? []),
       { value: CUSTOM_MODEL_SENTINEL, label: "Other (type model name)" },
     ],
     initialValue: initialModel,
@@ -352,10 +293,10 @@ async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<voi
   }
 
   // Base URL — only for OpenAI-compatible / direct providers that declare a
-  // default. The built-in providers (anthropic/openai/google/openai-codex) have
-  // no PROVIDER_BASE_URLS entry, so their prompt order is unchanged.
+  // default. The built-in providers have no default endpoint, so their prompt
+  // order is unchanged.
   let baseUrl: string | undefined;
-  const defaultBaseUrl = PROVIDER_BASE_URLS[provider as keyof typeof PROVIDER_BASE_URLS];
+  const defaultBaseUrl = catalogue?.defaultBaseUrl;
   if (defaultBaseUrl) {
     const prevBaseUrl = getString(previous, "llm", "base_url");
     const baseUrlResp = await text({

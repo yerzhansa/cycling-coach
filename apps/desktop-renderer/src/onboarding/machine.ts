@@ -41,6 +41,10 @@ export type OnboardingErrorCode =
   | "runtime-unavailable"
   | "credential-status-unavailable"
   | "credential-reenter-required"
+  | "configuration-unavailable"
+  | "model-selection-required"
+  | "endpoint-invalid"
+  | "model-runtime-unavailable"
   | "training-account-mismatch"
   | "training-data-required"
   | "intake-incomplete"
@@ -175,10 +179,13 @@ export function toDesktopIntakeFlags(draft: DesktopIntakeDraft): SaveIntakeRpcPa
   });
 }
 
-export function nextStep(state: OnboardingState): OnboardingState {
+export function nextStep(
+  state: OnboardingState,
+  runtimeModelConfigured = hasConfiguredModel(state),
+): OnboardingState {
   const index = ONBOARDING_STEP_IDS.indexOf(state.step);
   if (index >= ONBOARDING_STEP_IDS.length - 1) return state;
-  if (state.step === "coach-keys" && !hasConfiguredModel(state)) {
+  if (state.step === "coach-keys" && !runtimeModelConfigured) {
     return { ...state, fixedError: "credential-required" };
   }
   if (state.step === "training-data" && !hasTrainingData(state)) {

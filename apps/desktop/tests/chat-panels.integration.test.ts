@@ -558,6 +558,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     expect(initial).toEqual({
       location: "enduragent://app/index.html",
       bridgeKeys: [
+        "applyLlmSelection",
         "chatgptLogin",
         "chatgptStatus",
         "checkForUpdates",
@@ -565,6 +566,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "credentialStatuses",
         "getDaemonConnection",
         "getUpdateState",
+        "llmConfiguration",
         "onDroppedImportFiles",
         "onUpdateState",
         "releaseNotes",

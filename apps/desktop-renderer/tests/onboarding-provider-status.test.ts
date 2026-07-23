@@ -65,8 +65,13 @@ class FakeElement {
     this.listeners.set(name, listeners);
   }
 
+  dispatch(name: string): void {
+    if (name === "click" && this.disabled) return;
+    for (const listener of this.listeners.get(name) ?? []) listener();
+  }
+
   click(): void {
-    for (const listener of this.listeners.get("click") ?? []) listener();
+    this.dispatch("click");
   }
 
   focus(): void {
@@ -130,6 +135,13 @@ function findByText(root: FakeElement, tagName: string, text: string): FakeEleme
   return node;
 }
 
+function selectProvider(root: FakeElement, provider: string): void {
+  const select = root.querySelector("#onboarding-llm-provider");
+  if (select === null) throw new Error("Provider select not found");
+  select.value = provider;
+  select.dispatch("change");
+}
+
 function providerLaneBadges(root: FakeElement): FakeElement[] {
   return descendants(root).filter(
     (node) =>
@@ -154,6 +166,23 @@ function createBridge(overrides: Partial<OnboardingBridge>): OnboardingBridge {
     credentialStatuses: vi.fn(async () => []),
     retryFailedCredentials: vi.fn(async () => []),
     writeCredential: vi.fn(),
+    llmConfiguration: vi.fn(async () => ({
+      schemaVersion: 1,
+      providers: [
+        {
+          provider: "anthropic",
+          defaultModel: "claude-sonnet-4-6",
+          models: [{ value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" }],
+        },
+        {
+          provider: "openai-codex",
+          defaultModel: "gpt-5.5",
+          models: [{ value: "gpt-5.5", label: "GPT-5.5" }],
+        },
+      ],
+      active: null,
+    })),
+    applyLlmSelection: vi.fn(async () => ({ status: "configured", runtimeReady: true })),
     chatGptStatus: vi.fn(async () => ({ state: "absent", runtimeReady: false })),
     chatGptLogin: vi.fn(async () => ({ status: "refused", reason: "cancelled" })),
     chooseImportFiles: vi.fn(async () => []),
@@ -240,6 +269,7 @@ describe("onboarding provider status", () => {
       onComplete: vi.fn(),
     });
     await controller.open();
+    selectProvider(document.body, "anthropic");
     const input = descendants(document.body).find((node) => node.dataset.slot === "anthropic");
     if (input === undefined) throw new Error("Element not found");
     input.value = randomUUID();
@@ -256,7 +286,7 @@ describe("onboarding provider status", () => {
     controller.dispose();
   });
 
-  it("shows only the API-key provider as active after retry succeeds", async () => {
+  it("shows only the selected API-key provider as active after Continue succeeds", async () => {
     const document = new FakeDocument();
     let selectedProvider: "anthropic" | "chatgpt" = "chatgpt";
     const credentialStatuses = vi.fn(async () => [
@@ -270,23 +300,27 @@ describe("onboarding provider status", () => {
       state: "configured" as const,
       runtimeReady: selectedProvider === "chatgpt",
     }));
-    const retryFailedCredentials = vi.fn(async () => {
+    const applyLlmSelection = vi.fn(async () => {
       selectedProvider = "anthropic";
-      return credentialStatuses();
+      return { status: "configured" as const, runtimeReady: true as const };
     });
     const controller = mountOnboarding({
       document: document as never,
-      bridge: createBridge({ credentialStatuses, chatGptStatus, retryFailedCredentials }),
+      bridge: createBridge({ credentialStatuses, chatGptStatus, applyLlmSelection }),
       opener: new FakeElement("button", document) as never,
       onComplete: vi.fn(),
     });
     await controller.open();
+    selectProvider(document.body, "anthropic");
 
-    findByText(document.body, "button", "Retry saved keys").click();
+    findByText(document.body, "button", "Continue").click();
 
     await vi.waitFor(() => {
-      expect(retryFailedCredentials).toHaveBeenCalledOnce();
+      expect(applyLlmSelection).toHaveBeenCalledOnce();
       expect(chatGptStatus).toHaveBeenCalledTimes(2);
+    });
+    findByText(document.body, "button", "Back").click();
+    await vi.waitFor(() => {
       expectOneActiveProvider(document.body);
     });
     expect(activeProviderLanes(document.body)[0]?.textContent).toBe("Configured");
@@ -297,36 +331,45 @@ describe("onboarding provider status", () => {
     controller.dispose();
   });
 
-  it("fails ChatGPT activity closed when its post-retry status is unavailable", async () => {
+  it("fails ChatGPT activity closed when its post-selection status is unavailable", async () => {
     const document = new FakeDocument();
-    const failedStatuses = [
-      { slot: "anthropic" as const, state: "configured" as const, runtimeState: "failed" as const },
-    ];
-    const activeStatuses = [
-      { slot: "anthropic" as const, state: "configured" as const, runtimeState: "active" as const },
-    ];
+    let selectedProvider: "anthropic" | "chatgpt" = "chatgpt";
     const chatGptStatus = vi
       .fn<OnboardingBridge["chatGptStatus"]>()
       .mockResolvedValueOnce({ state: "configured", runtimeReady: true })
       .mockRejectedValueOnce(new Error("private status failure"));
-    const retryFailedCredentials = vi.fn(async () => activeStatuses);
+    const credentialStatuses = vi.fn(async () => [
+      {
+        slot: "anthropic" as const,
+        state: "configured" as const,
+        runtimeState: selectedProvider === "anthropic" ? ("active" as const) : ("failed" as const),
+      },
+    ]);
+    const applyLlmSelection = vi.fn(async () => {
+      selectedProvider = "anthropic";
+      return { status: "configured" as const, runtimeReady: true as const };
+    });
     const controller = mountOnboarding({
       document: document as never,
       bridge: createBridge({
-        credentialStatuses: vi.fn(async () => failedStatuses),
+        credentialStatuses,
         chatGptStatus,
-        retryFailedCredentials,
+        applyLlmSelection,
       }),
       opener: new FakeElement("button", document) as never,
       onComplete: vi.fn(),
     });
     await controller.open();
+    selectProvider(document.body, "anthropic");
 
-    findByText(document.body, "button", "Retry saved keys").click();
+    findByText(document.body, "button", "Continue").click();
 
     await vi.waitFor(() => {
-      expect(retryFailedCredentials).toHaveBeenCalledOnce();
+      expect(applyLlmSelection).toHaveBeenCalledOnce();
       expect(chatGptStatus).toHaveBeenCalledTimes(2);
+    });
+    findByText(document.body, "button", "Back").click();
+    await vi.waitFor(() => {
       expectOneActiveProvider(document.body);
     });
     expect(activeProviderLanes(document.body)[0]?.textContent).toBe("Configured");

@@ -26,6 +26,14 @@ function credentials() {
   };
 }
 
+function selection(model = "gpt-5.5") {
+  return {
+    provider: "openai-codex" as const,
+    model,
+    endpoint: { mode: "automatic" as const },
+  };
+}
+
 function runtimeSnapshot(
   provider: LlmProvider = "openai-codex",
   credentialConfigured = provider === "openai-codex",
@@ -199,7 +207,10 @@ describe("desktop ChatGPT auth", () => {
       dependencies: { loginCodex: async () => credentials() },
     });
 
-    await expect(auth.login()).resolves.toEqual({ status: "configured", runtimeReady: true });
+    await expect(auth.login(selection())).resolves.toEqual({
+      status: "configured",
+      runtimeReady: true,
+    });
     expect(await readFile(`${path}.corrupt`)).toEqual(originalBytes);
     expect((await stat(`${path}.corrupt`)).mode & 0o777).toBe(0o600);
     expect((await stat(path)).mode & 0o777).toBe(0o600);
@@ -219,7 +230,7 @@ describe("desktop ChatGPT auth", () => {
       applyRuntimeConfig: async () => {},
       dependencies: { loginCodex: async () => credentials() },
     });
-    await expect(auth.login()).resolves.toEqual({
+    await expect(auth.login(selection())).resolves.toEqual({
       status: "refused",
       reason: "storage-failed",
     });
@@ -242,7 +253,10 @@ describe("desktop ChatGPT auth", () => {
           }),
       },
     });
-    await expect(timedOut.login()).resolves.toEqual({ status: "refused", reason: "timed-out" });
+    await expect(timedOut.login(selection())).resolves.toEqual({
+      status: "refused",
+      reason: "timed-out",
+    });
 
     const cancelled = createChatGptAuth({
       configDir: directory,
@@ -261,7 +275,10 @@ describe("desktop ChatGPT auth", () => {
         },
       },
     });
-    await expect(cancelled.login()).resolves.toEqual({ status: "refused", reason: "cancelled" });
+    await expect(cancelled.login(selection())).resolves.toEqual({
+      status: "refused",
+      reason: "cancelled",
+    });
 
     const exchange = createChatGptAuth({
       configDir: directory,
@@ -273,7 +290,7 @@ describe("desktop ChatGPT auth", () => {
         },
       },
     });
-    await expect(exchange.login()).resolves.toEqual({
+    await expect(exchange.login(selection())).resolves.toEqual({
       status: "refused",
       reason: "exchange-failed",
     });
@@ -301,7 +318,7 @@ describe("desktop ChatGPT auth", () => {
       },
     });
 
-    await expect(auth.login()).resolves.toEqual({
+    await expect(auth.login(selection())).resolves.toEqual({
       status: "refused",
       reason: "callback-unavailable",
     });
@@ -325,7 +342,10 @@ describe("desktop ChatGPT auth", () => {
       },
     });
 
-    await expect(auth.login()).resolves.toEqual({ status: "configured", runtimeReady: true });
+    await expect(auth.login(selection())).resolves.toEqual({
+      status: "configured",
+      runtimeReady: true,
+    });
     expect(openExternal).toHaveBeenCalledOnce();
   });
 
@@ -363,12 +383,70 @@ describe("desktop ChatGPT auth", () => {
         },
       },
     });
-    await expect(auth.login()).resolves.toEqual({ status: "configured", runtimeReady: true });
+    await expect(auth.login(selection())).resolves.toEqual({
+      status: "configured",
+      runtimeReady: true,
+    });
     expect(applyRuntimeConfig).toHaveBeenCalledWith({
-      llm: { provider: "openai-codex" },
+      llm: { provider: "openai-codex", model: "gpt-5.5" },
     });
     expect(order).toEqual(["browser", "storage", "runtime"]);
     await expect(auth.status()).resolves.toEqual({ state: "configured", runtimeReady: true });
+  });
+
+  it("activates a stored profile with the selected model without reauthenticating", async () => {
+    const directory = await configDir();
+    await writeChatGptProfile(directory, credentials());
+    const applyRuntimeConfig = vi.fn(async () => {});
+    const loginCodex = vi.fn(async () => credentials());
+    const auth = createChatGptAuth({
+      configDir: directory,
+      openExternal: async () => {},
+      applyRuntimeConfig,
+      dependencies: { loginCodex },
+    });
+
+    await expect(auth.activate(selection("athlete-custom-model"))).resolves.toEqual({
+      status: "configured",
+      runtimeReady: true,
+    });
+    expect(applyRuntimeConfig).toHaveBeenCalledWith({
+      llm: { provider: "openai-codex", model: "athlete-custom-model" },
+    });
+    expect(loginCodex).not.toHaveBeenCalled();
+  });
+
+  it("returns fixed stored-profile activation refusals", async () => {
+    const directory = await configDir();
+    const absent = createChatGptAuth({
+      configDir: directory,
+      openExternal: async () => {},
+      applyRuntimeConfig: async () => {},
+    });
+    await expect(absent.activate(selection())).resolves.toEqual({
+      status: "refused",
+      reason: "credential-required",
+    });
+    await expect(
+      absent.activate({
+        provider: "anthropic",
+        model: "model",
+        endpoint: { mode: "automatic" },
+      }),
+    ).resolves.toEqual({ status: "refused", reason: "invalid-input" });
+
+    await writeChatGptProfile(directory, credentials());
+    const unavailable = createChatGptAuth({
+      configDir: directory,
+      openExternal: async () => {},
+      applyRuntimeConfig: async () => {
+        throw new Error("private runtime detail");
+      },
+    });
+    await expect(unavailable.activate(selection())).resolves.toEqual({
+      status: "refused",
+      reason: "runtime-unavailable",
+    });
   });
 
   it("restores configured runtime readiness from the daemon snapshot", async () => {
@@ -431,8 +509,8 @@ describe("desktop ChatGPT auth", () => {
         },
       },
     });
-    const first = auth.login();
-    await expect(auth.login()).resolves.toEqual({
+    const first = auth.login(selection());
+    await expect(auth.login(selection())).resolves.toEqual({
       status: "refused",
       reason: "already-in-progress",
     });
@@ -450,7 +528,7 @@ describe("desktop ChatGPT auth", () => {
         },
       },
     });
-    await expect(callback.login()).resolves.toEqual({
+    await expect(callback.login(selection())).resolves.toEqual({
       status: "refused",
       reason: "callback-unavailable",
     });
@@ -466,7 +544,7 @@ describe("desktop ChatGPT auth", () => {
         },
       },
     });
-    await expect(storage.login()).resolves.toEqual({
+    await expect(storage.login(selection())).resolves.toEqual({
       status: "refused",
       reason: "storage-failed",
     });
@@ -479,7 +557,7 @@ describe("desktop ChatGPT auth", () => {
       },
       dependencies: { loginCodex: async () => credentials() },
     });
-    await expect(runtime.login()).resolves.toEqual({
+    await expect(runtime.login(selection())).resolves.toEqual({
       status: "refused",
       reason: "runtime-unavailable",
     });
@@ -501,7 +579,10 @@ describe("desktop ChatGPT auth", () => {
       getRuntimeConfig: async () => runtimeSnapshot(provider),
       dependencies: { loginCodex: async () => credentials() },
     });
-    await expect(auth.login()).resolves.toEqual({ status: "configured", runtimeReady: true });
+    await expect(auth.login(selection())).resolves.toEqual({
+      status: "configured",
+      runtimeReady: true,
+    });
     await expect(auth.status()).resolves.toEqual({ state: "configured", runtimeReady: true });
 
     await writeFile(

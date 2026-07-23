@@ -294,6 +294,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       };
     `);
     expect(state.bridgeKeys).toEqual([
+      "applyLlmSelection",
       "chatgptLogin",
       "chatgptStatus",
       "checkForUpdates",
@@ -301,6 +302,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       "credentialStatuses",
       "getDaemonConnection",
       "getUpdateState",
+      "llmConfiguration",
       "onDroppedImportFiles",
       "onUpdateState",
       "releaseNotes",

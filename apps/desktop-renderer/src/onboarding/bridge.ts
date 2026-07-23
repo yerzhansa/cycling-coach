@@ -5,6 +5,7 @@ import {
   SaveIntakeRpcParamsSchema,
   type CoachOperationProgressNotificationEnvelope,
   type ImportFilesRpcResult,
+  type LlmProvider,
   type SaveIntakeRpcParams,
 } from "@enduragent/coach-contract";
 import { SUPPORTED_IMPORT_EXTENSIONS, type DesktopCredentialSlot } from "./constants.js";
@@ -14,7 +15,7 @@ export type CredentialWriteResult =
   | {
       readonly slot: DesktopCredentialSlot;
       readonly status: "configured";
-      readonly runtimeReady: true;
+      readonly runtimeReady: boolean;
     }
   | {
       readonly slot: DesktopCredentialSlot;
@@ -28,15 +29,60 @@ export type CredentialWriteResult =
         | "training-account-mismatch";
     };
 
+export interface OnboardingLlmModelOption {
+  readonly value: string;
+  readonly label: string;
+  readonly hint?: string;
+}
+
+export interface OnboardingLlmProviderConfiguration {
+  readonly provider: LlmProvider;
+  readonly defaultModel: string;
+  readonly models: readonly OnboardingLlmModelOption[];
+  readonly defaultBaseUrl?: string;
+}
+
+export interface OnboardingLlmConfiguration {
+  readonly schemaVersion: 1;
+  readonly providers: readonly OnboardingLlmProviderConfiguration[];
+  readonly active: {
+    readonly provider: LlmProvider;
+    readonly model: string;
+  } | null;
+}
+
+export type OnboardingLlmEndpointSelection =
+  | { readonly mode: "automatic" }
+  | { readonly mode: "default" }
+  | { readonly mode: "custom"; readonly value: string };
+
+export interface OnboardingLlmSelection {
+  readonly provider: LlmProvider;
+  readonly model: string;
+  readonly endpoint: OnboardingLlmEndpointSelection;
+}
+
+export type OnboardingLlmSelectionResult =
+  | { readonly status: "configured"; readonly runtimeReady: true }
+  | {
+      readonly status: "refused";
+      readonly reason: "invalid-input" | "credential-required" | "runtime-unavailable";
+    };
+
+export interface OnboardingCredentialWriteInput {
+  readonly slot: DesktopCredentialSlot;
+  readonly value: string;
+  readonly selection?: OnboardingLlmSelection;
+}
+
 export interface OnboardingBridge {
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
   retryFailedCredentials(): Promise<readonly CredentialSlotStatus[]>;
-  writeCredential(input: {
-    readonly slot: DesktopCredentialSlot;
-    readonly value: string;
-  }): Promise<CredentialWriteResult>;
+  writeCredential(input: OnboardingCredentialWriteInput): Promise<CredentialWriteResult>;
+  llmConfiguration(): Promise<OnboardingLlmConfiguration>;
+  applyLlmSelection(input: OnboardingLlmSelection): Promise<OnboardingLlmSelectionResult>;
   chatGptStatus(): Promise<ChatGptStatus>;
-  chatGptLogin(): Promise<ChatGptLoginResult>;
+  chatGptLogin(input: OnboardingLlmSelection): Promise<ChatGptLoginResult>;
   chooseImportFiles(): Promise<readonly string[]>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
   importFiles(
@@ -53,12 +99,11 @@ export interface DesktopOnboardingAuth {
   }>;
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
   retryFailedCredentials(): Promise<readonly CredentialSlotStatus[]>;
-  writeCredential(input: {
-    readonly slot: DesktopCredentialSlot;
-    readonly value: string;
-  }): Promise<CredentialWriteResult>;
+  writeCredential(input: OnboardingCredentialWriteInput): Promise<CredentialWriteResult>;
+  llmConfiguration(): Promise<OnboardingLlmConfiguration>;
+  applyLlmSelection(input: OnboardingLlmSelection): Promise<OnboardingLlmSelectionResult>;
   chatgptStatus(): Promise<ChatGptStatus>;
-  chatgptLogin(): Promise<ChatGptLoginResult>;
+  chatgptLogin(input: OnboardingLlmSelection): Promise<ChatGptLoginResult>;
   chooseImportFiles(): Promise<readonly string[]>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
 }
@@ -126,8 +171,10 @@ export function createOnboardingBridge(
     retryFailedCredentials: () =>
       auth.retryFailedCredentials() as Promise<readonly CredentialSlotStatus[]>,
     writeCredential: (input) => auth.writeCredential(input) as Promise<CredentialWriteResult>,
+    llmConfiguration: () => auth.llmConfiguration(),
+    applyLlmSelection: (input) => auth.applyLlmSelection(input),
     chatGptStatus: () => auth.chatgptStatus(),
-    chatGptLogin: () => auth.chatgptLogin(),
+    chatGptLogin: (input) => auth.chatgptLogin(input),
     chooseImportFiles: () => auth.chooseImportFiles(),
     onDroppedImportFiles: (listener) => auth.onDroppedImportFiles(listener),
     async importFiles(paths, onProgress) {

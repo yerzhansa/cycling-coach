@@ -1,3 +1,5 @@
+import type { LlmProvider } from "@enduragent/coach-contract";
+
 export const ONBOARDING_STEP_IDS = [
   "coach-keys",
   "training-data",
@@ -37,6 +39,21 @@ export const DESKTOP_CREDENTIAL_SLOTS = [
 
 export type DesktopCredentialSlot = (typeof DESKTOP_CREDENTIAL_SLOTS)[number];
 export type ModelCredentialSlot = Exclude<DesktopCredentialSlot, "intervals-icu">;
+
+export const ONBOARDING_LLM_PROVIDER_LABELS = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  google: "Google",
+  "openai-codex": "ChatGPT subscription",
+  deepseek: "DeepSeek",
+  qwen: "Qwen",
+  minimax: "MiniMax",
+  kimi: "Kimi",
+  zai: "Z.AI",
+  openrouter: "OpenRouter",
+} as const satisfies Readonly<Record<LlmProvider, string>>;
+
+export const CUSTOM_MODEL_SELECTION = "__custom__" as const;
 
 export const CHATGPT_LOGIN_REFUSAL_REASONS = [
   "already-in-progress",

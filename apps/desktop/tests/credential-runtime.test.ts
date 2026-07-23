@@ -102,8 +102,13 @@ function fakeVault(initialRuntime: CredentialRuntimeApplication) {
   const port: CredentialVault = {
     async writeCredential(input) {
       slots.add(input.slot);
-      await runtime.applyExplicit(runtimeConfigurationForCredential(input.slot, randomUUID()));
+      await runtime.applyExplicit(
+        runtimeConfigurationForCredential(input.slot, randomUUID(), input.selection),
+      );
       return { slot: input.slot, status: "configured", runtimeReady: true };
+    },
+    async applyLlmSelection() {
+      return { status: "configured", runtimeReady: true };
     },
     async credentialStatuses() {
       return [...slots].map((slot) => ({
@@ -148,7 +153,10 @@ async function pollCredentialStatuses(vault: CredentialVault): Promise<void> {
     chatGptAuth: {
       status: async () => ({ state: "absent", runtimeReady: false }),
       login: async () => ({ status: "refused", reason: "cancelled" }),
+      activate: async () => ({ status: "refused", reason: "credential-required" }),
     },
+    getRuntimeConfig: async () => runtimeSnapshot("anthropic"),
+    applyExistingLlmSelection: async () => false,
     isTrusted: () => true,
     checkIntervalsCredentialOwner,
   });
@@ -424,6 +432,29 @@ describe("desktop credential runtime precedence", () => {
 
     expect(selectedProvider).toBe("openai-codex");
   });
+
+  it.each(["anthropic", "openai-codex"] as const)(
+    "edits an existing %s selection without resending the provider",
+    async (provider) => {
+      const configureRuntime = vi.fn(async () => {});
+      const runtime = createCredentialRuntimeApplication({
+        selectedLlmProvider: async () => provider,
+        configureRuntime,
+      });
+      const request = { llm: { model: "athlete-selected-model" } };
+
+      await expect(runtime.applyExistingLlmSelection(provider, request)).resolves.toBe(true);
+      await expect(
+        runtime.applyExistingLlmSelection(
+          provider === "anthropic" ? "openai-codex" : "anthropic",
+          request,
+        ),
+      ).resolves.toBe(false);
+
+      expect(configureRuntime).toHaveBeenCalledOnce();
+      expect(configureRuntime).toHaveBeenCalledWith(request);
+    },
+  );
 
   it("keeps a later ChatGPT selection when stored model credentials reapply at boot", async () => {
     const daemon = fakeDaemon("anthropic");

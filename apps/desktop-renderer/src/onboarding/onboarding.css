@@ -90,6 +90,55 @@
   line-height: 1.55;
 }
 
+.llm-selection {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 22px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.llm-selection h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.llm-selection-copy,
+.llm-endpoint-help,
+.llm-configuration-unavailable {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.llm-selection-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.llm-selection-field {
+  display: grid;
+  gap: 7px;
+}
+
+.llm-selection-label {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.llm-selection select,
+.llm-selection input {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  color: var(--ink);
+  background: var(--surface);
+}
+
 .credential-list {
   display: grid;
   gap: 14px;

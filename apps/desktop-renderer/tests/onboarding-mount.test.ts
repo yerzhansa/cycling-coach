@@ -1,9 +1,81 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import type { CredentialWriteResult, OnboardingBridge } from "../src/onboarding/bridge.js";
+import type {
+  CredentialWriteResult,
+  OnboardingBridge,
+  OnboardingLlmConfiguration,
+} from "../src/onboarding/bridge.js";
 import { mountOnboarding } from "../src/onboarding/mount.js";
 import type { ChatGptLoginResult } from "../src/onboarding/machine.js";
 import { createRideImportController } from "../src/ride-import.js";
+
+const TEST_LLM_CONFIGURATION: OnboardingLlmConfiguration = {
+  schemaVersion: 1,
+  providers: [
+    {
+      provider: "anthropic",
+      defaultModel: "claude-sonnet-4-6",
+      models: [{ value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" }],
+    },
+    {
+      provider: "openai-codex",
+      defaultModel: "gpt-5.5",
+      models: [{ value: "gpt-5.5", label: "GPT-5.5" }],
+    },
+    {
+      provider: "openrouter",
+      defaultModel: "deepseek/deepseek-v4-flash",
+      models: [
+        {
+          value: "deepseek/deepseek-v4-flash",
+          label: "DeepSeek V4 Flash",
+        },
+      ],
+      defaultBaseUrl: "https://openrouter.ai/api/v1",
+    },
+    {
+      provider: "openai",
+      defaultModel: "gpt-5.5",
+      models: [{ value: "gpt-5.5", label: "GPT-5.5" }],
+    },
+    {
+      provider: "google",
+      defaultModel: "gemini-3.5-flash",
+      models: [{ value: "gemini-3.5-flash", label: "Gemini 3.5 Flash" }],
+    },
+    {
+      provider: "deepseek",
+      defaultModel: "deepseek-v4-flash",
+      models: [{ value: "deepseek-v4-flash", label: "DeepSeek V4 Flash" }],
+      defaultBaseUrl: "https://api.deepseek.com/v1",
+    },
+    {
+      provider: "qwen",
+      defaultModel: "qwen3.5-plus",
+      models: [{ value: "qwen3.5-plus", label: "Qwen3.5 Plus" }],
+      defaultBaseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    },
+    {
+      provider: "minimax",
+      defaultModel: "MiniMax-M2.7",
+      models: [{ value: "MiniMax-M2.7", label: "MiniMax M2.7" }],
+      defaultBaseUrl: "https://api.minimax.io/v1",
+    },
+    {
+      provider: "kimi",
+      defaultModel: "kimi-k2.6",
+      models: [{ value: "kimi-k2.6", label: "Kimi K2.6" }],
+      defaultBaseUrl: "https://api.moonshot.ai/v1",
+    },
+    {
+      provider: "zai",
+      defaultModel: "glm-4.7",
+      models: [{ value: "glm-4.7", label: "GLM-4.7" }],
+      defaultBaseUrl: "https://api.z.ai/api/openai/v1",
+    },
+  ],
+  active: null,
+};
 
 class FakeElement {
   readonly children: FakeElement[] = [];
@@ -75,9 +147,9 @@ class FakeElement {
     this.listeners.get(name)?.delete(listener);
   }
 
-  dispatch(name: string): void {
-    if (name === "click" && this.disabled) return;
-    const event = { target: this, preventDefault() {} };
+  dispatch(name: string, overrides: Record<string, unknown> = {}): void {
+    if (this.disabled && ["click", "change", "input"].includes(name)) return;
+    const event = { target: this, preventDefault() {}, ...overrides };
     for (const listener of this.listeners.get(name) ?? []) listener(event);
   }
 
@@ -138,6 +210,8 @@ class FakeDocument {
 
 function bridge(login: () => Promise<ChatGptLoginResult>): OnboardingBridge & {
   readonly credentialStatuses: ReturnType<typeof vi.fn<OnboardingBridge["credentialStatuses"]>>;
+  readonly llmConfiguration: ReturnType<typeof vi.fn<OnboardingBridge["llmConfiguration"]>>;
+  readonly applyLlmSelection: ReturnType<typeof vi.fn<OnboardingBridge["applyLlmSelection"]>>;
   readonly chatGptStatus: ReturnType<typeof vi.fn<OnboardingBridge["chatGptStatus"]>>;
   readonly chatGptLogin: ReturnType<typeof vi.fn<OnboardingBridge["chatGptLogin"]>>;
   readonly importFiles: ReturnType<typeof vi.fn<OnboardingBridge["importFiles"]>>;
@@ -149,6 +223,13 @@ function bridge(login: () => Promise<ChatGptLoginResult>): OnboardingBridge & {
     runtimeReady: true,
   }));
   const chatGptLogin = vi.fn<OnboardingBridge["chatGptLogin"]>(login);
+  const llmConfiguration = vi.fn<OnboardingBridge["llmConfiguration"]>(
+    async () => TEST_LLM_CONFIGURATION,
+  );
+  const applyLlmSelection = vi.fn<OnboardingBridge["applyLlmSelection"]>(async () => ({
+    status: "configured",
+    runtimeReady: true,
+  }));
   const importFiles = vi.fn<OnboardingBridge["importFiles"]>(async () => ({
     schemaVersion: 2,
     files: { total: 0, imported: 0, quarantined: 0 },
@@ -169,6 +250,8 @@ function bridge(login: () => Promise<ChatGptLoginResult>): OnboardingBridge & {
       status: "configured",
       runtimeReady: true,
     })),
+    llmConfiguration,
+    applyLlmSelection,
     chatGptStatus,
     chatGptLogin,
     chooseImportFiles: vi.fn<OnboardingBridge["chooseImportFiles"]>(async () => []),
@@ -202,6 +285,18 @@ function passwordInputFor(document: FakeDocument, slot: string): FakeElement {
   return input;
 }
 
+function controlById(document: FakeDocument, id: string): FakeElement {
+  const control = document.body.querySelector(`#${id}`);
+  if (control === null) throw new Error(`Control not found: ${id}`);
+  return control;
+}
+
+function changeControl(document: FakeDocument, id: string, value: string): void {
+  const control = controlById(document, id);
+  control.value = value;
+  control.dispatch("change");
+}
+
 function radioInputFor(document: FakeDocument, name: string, copy: string): FakeElement {
   const input = document.body
     .querySelectorAll("input")
@@ -229,33 +324,39 @@ type CredentialWriteRefusalReason = Extract<
 const CREDENTIAL_REFUSAL_CASES = [
   {
     reason: "invalid-input",
+    fixedError: "invalid-input",
     copy: "That key was not accepted. Check it and enter it again.",
   },
   {
     reason: "encryption-unavailable",
+    fixedError: "encryption-unavailable",
     copy: "macOS encryption is unavailable. Make sure Keychain is available, then try again.",
   },
   {
     reason: "unsafe-backend",
+    fixedError: "unsafe-backend",
     copy: "The app cannot safely store that key with the current storage backend.",
   },
   {
     reason: "storage-failed",
+    fixedError: "storage-failed",
     copy: "The app could not confirm that key was saved securely. Check that secure storage is available and try again.",
   },
   {
     reason: "runtime-unavailable",
-    copy: "That key was saved, but it is not active yet. Choose Retry saved keys to activate it.",
+    fixedError: "model-runtime-unavailable",
+    copy: "Your provider choice is saved, but it is not active yet. Choose Continue to retry it.",
   },
 ] as const satisfies ReadonlyArray<{
   readonly reason: CredentialWriteRefusalReason;
+  readonly fixedError: CredentialWriteRefusalReason | "model-runtime-unavailable";
   readonly copy: string;
 }>;
 
 describe("mounted onboarding", () => {
   it.each(CREDENTIAL_REFUSAL_CASES)(
     "keeps the athlete on coach keys and explains $reason refusals",
-    async ({ reason, copy }) => {
+    async ({ reason, fixedError, copy }) => {
       const document = new FakeDocument();
       const baseBridge = bridge(async () => ({
         status: "configured",
@@ -289,7 +390,7 @@ describe("mounted onboarding", () => {
 
       buttonWithText(document, "Continue").dispatch("click");
 
-      await vi.waitFor(() => expect(controller.state().fixedError).toBe(reason));
+      await vi.waitFor(() => expect(controller.state().fixedError).toBe(fixedError));
       expect(document.body.querySelector("#onboarding-error")?.textContent).toBe(copy);
       expect(controller.state().step).toBe("coach-keys");
       expect(passwordInput.value).toBe("");
@@ -341,7 +442,7 @@ describe("mounted onboarding", () => {
     controller.dispose();
   });
 
-  it("offers one retry for a saved key that could not be activated", async () => {
+  it("retries a saved provider choice with Continue without rewriting the key", async () => {
     const document = new FakeDocument();
     const failedStatuses = [
       { slot: "anthropic", state: "configured", runtimeState: "failed" },
@@ -354,15 +455,13 @@ describe("mounted onboarding", () => {
       runtimeReady: true,
     }));
     baseBridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
-    baseBridge.credentialStatuses.mockResolvedValueOnce([]).mockResolvedValueOnce(failedStatuses);
-    const retry = deferred<readonly (typeof activeStatuses)[number][]>();
-    const retryFailedCredentials = vi.fn<OnboardingBridge["retryFailedCredentials"]>(
-      () => retry.promise,
-    );
+    baseBridge.credentialStatuses
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(failedStatuses)
+      .mockResolvedValueOnce(activeStatuses);
     let credentialWriteCount = 0;
     const onboardingBridge: OnboardingBridge = {
       ...baseBridge,
-      retryFailedCredentials,
       async writeCredential({ slot }) {
         credentialWriteCount += 1;
         return { slot, status: "refused", reason: "runtime-unavailable" };
@@ -381,62 +480,34 @@ describe("mounted onboarding", () => {
 
     buttonWithText(document, "Continue").dispatch("click");
 
-    await vi.waitFor(() => expect(controller.state().fixedError).toBe("runtime-unavailable"));
-    expect(document.body.textContent).toContain("That key was saved, but it is not active yet.");
-    expect(document.body.textContent).toContain("Choose Retry saved keys to activate it.");
-    expect(buttonWithText(document, "Retry saved keys").disabled).toBe(false);
-    expect(passwordInput.value).toBe("");
-    expect(baseBridge.credentialStatuses).toHaveBeenCalledTimes(2);
-
-    buttonWithText(document, "Continue").dispatch("click");
-
-    await vi.waitFor(() => expect(controller.state().busy).toBe(false));
-    expect(controller.state()).toMatchObject({
-      step: "coach-keys",
-      fixedError: "runtime-unavailable",
-    });
-    expect(credentialWriteCount).toBe(1);
-
-    const detachedPassword = passwordInputFor(document, "anthropic");
-    detachedPassword.value = randomUUID();
-    const retryButton = buttonWithText(document, "Retry saved keys");
-    retryButton.dispatch("click");
-    retryButton.dispatch("click");
-    buttonWithText(document, "Retry saved keys").dispatch("click");
-
-    expect(retryFailedCredentials).toHaveBeenCalledTimes(1);
-    expect(detachedPassword.value).toBe("");
-    expect(controller.state()).toMatchObject({ busy: true, fixedError: null });
-    expect(document.body.querySelector("#onboarding-error")?.textContent).toBe("");
-    expect(passwordInputFor(document, "anthropic").disabled).toBe(true);
-    expect(document.body.querySelector(".onboarding-action-status")?.textContent).toBe("Working…");
-    retry.resolve(activeStatuses);
-
-    await vi.waitFor(() => {
-      expect(baseBridge.credentialStatuses).toHaveBeenCalledTimes(2);
-      expect(controller.state()).toMatchObject({
-        step: "coach-keys",
-        busy: false,
-        fixedError: null,
-        credentialStatus: { anthropic: "configured" },
-      });
-      expect(
-        passwordInputFor(document, "anthropic").parent?.querySelector(".credential-state")
-          ?.textContent,
-      ).toBe("Configured");
-    });
+    await vi.waitFor(() => expect(controller.state().fixedError).toBe("model-runtime-unavailable"));
+    expect(document.body.textContent).toContain(
+      "Your provider choice is saved, but it is not active yet. Choose Continue to retry it.",
+    );
     expect(
       document.body
         .querySelectorAll("button")
         .some((button) => button.textContent === "Retry saved keys"),
     ).toBe(false);
+    expect(passwordInput.value).toBe("");
+    expect(baseBridge.credentialStatuses).toHaveBeenCalledTimes(2);
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => expect(controller.state().step).toBe("training-data"));
+    expect(baseBridge.applyLlmSelection).toHaveBeenCalledWith({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      endpoint: { mode: "automatic" },
+    });
+    expect(baseBridge.credentialStatuses).toHaveBeenCalledTimes(3);
     expect(credentialWriteCount).toBe(1);
-    expect(retryFailedCredentials).toHaveBeenCalledTimes(1);
+    expect(baseBridge.retryFailedCredentials).not.toHaveBeenCalled();
     expect(onComplete).not.toHaveBeenCalled();
     controller.dispose();
   });
 
-  it("keeps activation copy and retry available when retrying fails", async () => {
+  it("keeps Continue activation recovery available when applying the provider fails", async () => {
     const document = new FakeDocument();
     const failedStatuses = [
       { slot: "anthropic", state: "configured", runtimeState: "failed" },
@@ -449,7 +520,7 @@ describe("mounted onboarding", () => {
     baseBridge.credentialStatuses.mockResolvedValueOnce([]).mockResolvedValueOnce(failedStatuses);
     const onboardingBridge: OnboardingBridge = {
       ...baseBridge,
-      async retryFailedCredentials() {
+      async applyLlmSelection() {
         throw new Error("private daemon failure");
       },
       async writeCredential({ slot }) {
@@ -465,16 +536,21 @@ describe("mounted onboarding", () => {
     await controller.open();
     passwordInputFor(document, "anthropic").value = randomUUID();
     buttonWithText(document, "Continue").dispatch("click");
-    await vi.waitFor(() => expect(controller.state().fixedError).toBe("runtime-unavailable"));
+    await vi.waitFor(() => expect(controller.state().fixedError).toBe("model-runtime-unavailable"));
 
-    buttonWithText(document, "Retry saved keys").dispatch("click");
+    buttonWithText(document, "Continue").dispatch("click");
 
     await vi.waitFor(() => expect(controller.state().busy).toBe(false));
-    expect(controller.state().fixedError).toBe("runtime-unavailable");
+    expect(controller.state().fixedError).toBe("model-runtime-unavailable");
     expect(document.body.querySelector("#onboarding-error")?.textContent).toBe(
-      "That key was saved, but it is not active yet. Choose Retry saved keys to activate it.",
+      "Your provider choice is saved, but it is not active yet. Choose Continue to retry it.",
     );
-    expect(buttonWithText(document, "Retry saved keys").disabled).toBe(false);
+    expect(
+      document.body
+        .querySelectorAll("button")
+        .some((button) => button.textContent === "Retry saved keys"),
+    ).toBe(false);
+    expect(baseBridge.retryFailedCredentials).not.toHaveBeenCalled();
     expect(document.body.textContent).not.toContain("private daemon failure");
     controller.dispose();
   });
@@ -654,72 +730,410 @@ describe("mounted onboarding", () => {
     controller.dispose();
   });
 
-  it.each([
-    { runtimeState: "active", badge: "Configured" },
-    { runtimeState: "stored-inactive", badge: "Saved · Not in use" },
-  ] as const)("treats a $runtimeState post-write refresh as recovered", async (status) => {
+  it("writes the explicitly selected provider last and attaches its model choice", async () => {
     const document = new FakeDocument();
-    const baseBridge = bridge(async () => ({
-      status: "configured",
-      runtimeReady: true,
-    }));
+    const anthropicKey = randomUUID();
+    const openRouterKey = randomUUID();
+    const baseBridge = bridge(async () => ({ status: "refused", reason: "cancelled" }));
     baseBridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
     baseBridge.credentialStatuses
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        { slot: "anthropic", state: "configured", runtimeState: status.runtimeState },
-      ]);
-    let credentialWriteCount = 0;
-    const onboardingBridge: OnboardingBridge = {
-      ...baseBridge,
-      async writeCredential({ slot }) {
-        credentialWriteCount += 1;
-        return { slot, status: "refused", reason: "runtime-unavailable" };
-      },
-    };
+      .mockResolvedValueOnce([{ slot: "openrouter", state: "configured", runtimeState: "active" }]);
+    const writeCredential = vi.fn<OnboardingBridge["writeCredential"]>(
+      async ({ slot, selection }) => ({
+        slot,
+        status: "configured",
+        runtimeReady: selection !== undefined,
+      }),
+    );
     const controller = mountOnboarding({
       document: documentBoundary(document),
-      bridge: onboardingBridge,
+      bridge: { ...baseBridge, writeCredential },
       opener: elementBoundary(document.createElement("button")),
       onComplete: vi.fn(),
     });
     await controller.open();
-    passwordInputFor(document, "anthropic").value = randomUUID();
+    changeControl(document, "onboarding-llm-provider", "openrouter");
+    passwordInputFor(document, "anthropic").value = anthropicKey;
+    passwordInputFor(document, "openrouter").value = openRouterKey;
 
     buttonWithText(document, "Continue").dispatch("click");
 
     await vi.waitFor(() => expect(controller.state().step).toBe("training-data"));
-    expect(controller.state().fixedError).toBeNull();
-    expect(document.body.textContent).not.toContain(
-      "That key was saved, but it is not active yet.",
-    );
-    expect(
-      document.body
-        .querySelectorAll("button")
-        .some((button) => button.textContent === "Retry saved keys"),
-    ).toBe(false);
-    buttonWithText(document, "Back").dispatch("click");
-    expect(
-      passwordInputFor(document, "anthropic").parent?.querySelector(".credential-state")
-        ?.textContent,
-    ).toBe(status.badge);
-    expect(
-      document.body
-        .querySelectorAll("button")
-        .some((button) => button.textContent === "Retry saved keys"),
-    ).toBe(false);
-    expect(credentialWriteCount).toBe(1);
+    expect(writeCredential).toHaveBeenNthCalledWith(1, {
+      slot: "anthropic",
+      value: anthropicKey,
+    });
+    expect(writeCredential).toHaveBeenNthCalledWith(2, {
+      slot: "openrouter",
+      value: openRouterKey,
+      selection: {
+        provider: "openrouter",
+        model: "deepseek/deepseek-v4-flash",
+        endpoint: { mode: "automatic" },
+      },
+    });
+    expect(baseBridge.applyLlmSelection).not.toHaveBeenCalled();
     controller.dispose();
   });
 
-  it("keeps a later failed key retryable when an earlier key recovers", async () => {
+  it("applies a changed model for an active provider without a Desktop-owned key", async () => {
+    const document = new FakeDocument();
+    const baseBridge = bridge(async () => ({ status: "refused", reason: "cancelled" }));
+    baseBridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+    baseBridge.llmConfiguration.mockResolvedValue({
+      ...TEST_LLM_CONFIGURATION,
+      active: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    });
+    baseBridge.credentialStatuses.mockResolvedValue([]);
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: baseBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    changeControl(document, "onboarding-llm-model", "__custom__");
+    const customModel = controlById(document, "onboarding-custom-model");
+    customModel.value = "athlete-selected-model";
+    customModel.dispatch("input");
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => expect(controller.state().step).toBe("training-data"));
+    expect(baseBridge.writeCredential).not.toHaveBeenCalled();
+    expect(baseBridge.applyLlmSelection).toHaveBeenCalledWith({
+      provider: "anthropic",
+      model: "athlete-selected-model",
+      endpoint: { mode: "automatic" },
+    });
+    controller.dispose();
+  });
+
+  it("continues with an active ChatGPT profile without signing in again", async () => {
+    const document = new FakeDocument();
+    const baseBridge = bridge(async () => ({ status: "refused", reason: "cancelled" }));
+    baseBridge.llmConfiguration.mockResolvedValue({
+      ...TEST_LLM_CONFIGURATION,
+      active: { provider: "openai-codex", model: "custom-chat-model" },
+    });
+    baseBridge.chatGptStatus.mockResolvedValue({ state: "configured", runtimeReady: true });
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: baseBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => expect(controller.state().step).toBe("training-data"));
+    expect(baseBridge.chatGptLogin).not.toHaveBeenCalled();
+    expect(baseBridge.applyLlmSelection).toHaveBeenCalledWith({
+      provider: "openai-codex",
+      model: "custom-chat-model",
+      endpoint: { mode: "automatic" },
+    });
+    controller.dispose();
+  });
+
+  it("applies an endpoint change for an already-active provider without requiring the key again", async () => {
+    const document = new FakeDocument();
+    const baseBridge = bridge(async () => ({ status: "refused", reason: "cancelled" }));
+    baseBridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+    baseBridge.llmConfiguration.mockResolvedValue({
+      ...TEST_LLM_CONFIGURATION,
+      active: { provider: "openrouter", model: "deepseek/deepseek-v4-flash" },
+    });
+    baseBridge.credentialStatuses.mockResolvedValue([
+      { slot: "openrouter", state: "configured", runtimeState: "active" },
+    ]);
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: baseBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    changeControl(document, "onboarding-endpoint-mode", "custom");
+    const endpoint = controlById(document, "onboarding-custom-endpoint");
+    endpoint.value = "https://models.example.test/v1";
+    endpoint.dispatch("input");
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => expect(controller.state().step).toBe("training-data"));
+    expect(baseBridge.writeCredential).not.toHaveBeenCalled();
+    expect(baseBridge.applyLlmSelection).toHaveBeenCalledWith({
+      provider: "openrouter",
+      model: "deepseek/deepseek-v4-flash",
+      endpoint: { mode: "custom", value: "https://models.example.test/v1" },
+    });
+    controller.dispose();
+  });
+
+  it("freezes provider, model, and endpoint controls while applying a selection", async () => {
+    const document = new FakeDocument();
+    const pending = deferred<{
+      readonly status: "configured";
+      readonly runtimeReady: true;
+    }>();
+    let active = false;
+    const baseBridge = bridge(async () => ({ status: "refused", reason: "cancelled" }));
+    baseBridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+    baseBridge.credentialStatuses.mockImplementation(async () => [
+      {
+        slot: "openrouter",
+        state: "configured",
+        runtimeState: active ? "active" : "stored-inactive",
+      },
+    ]);
+    baseBridge.applyLlmSelection.mockImplementation(() => pending.promise);
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: baseBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    changeControl(document, "onboarding-llm-provider", "openrouter");
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => expect(baseBridge.applyLlmSelection).toHaveBeenCalledOnce());
+    const provider = controlById(document, "onboarding-llm-provider");
+    const model = controlById(document, "onboarding-llm-model");
+    const endpoint = controlById(document, "onboarding-endpoint-mode");
+    expect(provider.disabled).toBe(true);
+    expect(model.disabled).toBe(true);
+    expect(endpoint.disabled).toBe(true);
+
+    active = true;
+    pending.resolve({ status: "configured", runtimeReady: true });
+    await vi.waitFor(() => expect(controller.state().step).toBe("training-data"));
+    expect(baseBridge.applyLlmSelection).toHaveBeenCalledWith({
+      provider: "openrouter",
+      model: "deepseek/deepseek-v4-flash",
+      endpoint: { mode: "automatic" },
+    });
+    controller.dispose();
+  });
+
+  it("does not submit the wizard when Enter is handled by a selection control", async () => {
+    const document = new FakeDocument();
+    const baseBridge = bridge(async () => ({ status: "refused", reason: "cancelled" }));
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: baseBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    const provider = controlById(document, "onboarding-llm-provider");
+    const dialog = document.body.querySelector(".onboarding");
+    if (dialog === null) throw new Error("Dialog not found");
+    const preventDefault = vi.fn();
+
+    dialog.dispatch("keydown", { key: "Enter", target: provider, preventDefault });
+
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(baseBridge.applyLlmSelection).not.toHaveBeenCalled();
+    expect(controller.state().busy).toBe(false);
+    controller.dispose();
+  });
+
+  it("retains a custom model and endpoint through provider switches and activation retry", async () => {
+    const document = new FakeDocument();
+    const secret = randomUUID();
+    const selection = {
+      provider: "openrouter" as const,
+      model: "vendor/private-model",
+      endpoint: { mode: "custom" as const, value: "https://models.example.test/v1" },
+    };
+    const baseBridge = bridge(async () => ({ status: "refused", reason: "cancelled" }));
+    baseBridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+    baseBridge.credentialStatuses
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ slot: "openrouter", state: "configured", runtimeState: "failed" }])
+      .mockResolvedValueOnce([{ slot: "openrouter", state: "configured", runtimeState: "active" }]);
+    const writeCredential = vi.fn<OnboardingBridge["writeCredential"]>(async ({ slot }) => ({
+      slot,
+      status: "refused",
+      reason: "runtime-unavailable",
+    }));
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: { ...baseBridge, writeCredential },
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    changeControl(document, "onboarding-llm-provider", "openrouter");
+    changeControl(document, "onboarding-llm-model", "__custom__");
+    const customModel = controlById(document, "onboarding-custom-model");
+    customModel.value = selection.model;
+    customModel.dispatch("input");
+    changeControl(document, "onboarding-endpoint-mode", "custom");
+    const customEndpoint = controlById(document, "onboarding-custom-endpoint");
+    customEndpoint.value = selection.endpoint.value;
+    customEndpoint.dispatch("input");
+
+    changeControl(document, "onboarding-llm-provider", "anthropic");
+    changeControl(document, "onboarding-llm-provider", "openrouter");
+
+    expect(controlById(document, "onboarding-llm-model").value).toBe("__custom__");
+    expect(controlById(document, "onboarding-custom-model").value).toBe(selection.model);
+    expect(controlById(document, "onboarding-endpoint-mode").value).toBe("custom");
+    expect(controlById(document, "onboarding-custom-endpoint").value).toBe(
+      selection.endpoint.value,
+    );
+    passwordInputFor(document, "openrouter").value = secret;
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => expect(controller.state().fixedError).toBe("model-runtime-unavailable"));
+    expect(writeCredential).toHaveBeenCalledWith({
+      slot: "openrouter",
+      value: secret,
+      selection,
+    });
+    expect(passwordInputFor(document, "openrouter").value).toBe("");
+    expect(controlById(document, "onboarding-custom-model").value).toBe(selection.model);
+    expect(controlById(document, "onboarding-custom-endpoint").value).toBe(
+      selection.endpoint.value,
+    );
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => expect(controller.state().step).toBe("training-data"));
+    expect(baseBridge.applyLlmSelection).toHaveBeenCalledWith(selection);
+    expect(writeCredential).toHaveBeenCalledTimes(1);
+    controller.dispose();
+  });
+
+  it("blocks a non-loopback HTTP endpoint before invoking credential or runtime IPC", async () => {
+    const document = new FakeDocument();
+    const baseBridge = bridge(async () => ({ status: "refused", reason: "cancelled" }));
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: baseBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    changeControl(document, "onboarding-llm-provider", "openrouter");
+    changeControl(document, "onboarding-endpoint-mode", "custom");
+    const endpoint = controlById(document, "onboarding-custom-endpoint");
+    endpoint.value = "http://models.example.test/v1";
+    endpoint.dispatch("input");
+    passwordInputFor(document, "openrouter").value = randomUUID();
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => expect(controller.state().fixedError).toBe("endpoint-invalid"));
+    expect(baseBridge.writeCredential).not.toHaveBeenCalled();
+    expect(baseBridge.applyLlmSelection).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it("passes the selected model to ChatGPT sign-in", async () => {
+    const document = new FakeDocument();
+    const chatGptLogin = bridge(async () => ({ status: "refused", reason: "cancelled" }));
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: chatGptLogin,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    changeControl(document, "onboarding-llm-provider", "openai-codex");
+    changeControl(document, "onboarding-llm-model", "__custom__");
+    const customModel = controlById(document, "onboarding-custom-model");
+    customModel.value = "gpt-5.5-codex-max";
+    customModel.dispatch("input");
+
+    buttonWithText(document, "Sign in again").dispatch("click");
+
+    await vi.waitFor(() => expect(chatGptLogin.chatGptLogin).toHaveBeenCalledOnce());
+    expect(chatGptLogin.chatGptLogin).toHaveBeenCalledWith({
+      provider: "openai-codex",
+      model: "gpt-5.5-codex-max",
+      endpoint: { mode: "automatic" },
+    });
+    controller.dispose();
+  });
+
+  it.each([{ runtimeState: "active" }, { runtimeState: "stored-inactive" }] as const)(
+    "recovers a selected provider from $runtimeState only after it is active",
+    async (status) => {
+      const document = new FakeDocument();
+      const baseBridge = bridge(async () => ({
+        status: "configured",
+        runtimeReady: true,
+      }));
+      baseBridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+      baseBridge.credentialStatuses
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          { slot: "anthropic", state: "configured", runtimeState: status.runtimeState },
+        ])
+        .mockResolvedValueOnce([
+          { slot: "anthropic", state: "configured", runtimeState: "active" },
+        ]);
+      let credentialWriteCount = 0;
+      const onboardingBridge: OnboardingBridge = {
+        ...baseBridge,
+        async writeCredential({ slot }) {
+          credentialWriteCount += 1;
+          return { slot, status: "refused", reason: "runtime-unavailable" };
+        },
+      };
+      const controller = mountOnboarding({
+        document: documentBoundary(document),
+        bridge: onboardingBridge,
+        opener: elementBoundary(document.createElement("button")),
+        onComplete: vi.fn(),
+      });
+      await controller.open();
+      passwordInputFor(document, "anthropic").value = randomUUID();
+
+      buttonWithText(document, "Continue").dispatch("click");
+
+      await vi.waitFor(() => expect(controller.state().step).toBe("training-data"));
+      expect(controller.state().fixedError).toBeNull();
+      expect(document.body.textContent).not.toContain(
+        "That key was saved, but it is not active yet.",
+      );
+      expect(
+        document.body
+          .querySelectorAll("button")
+          .some((button) => button.textContent === "Retry saved keys"),
+      ).toBe(false);
+      buttonWithText(document, "Back").dispatch("click");
+      expect(
+        passwordInputFor(document, "anthropic").parent?.querySelector(".credential-state")
+          ?.textContent,
+      ).toBe("Configured");
+      expect(
+        document.body
+          .querySelectorAll("button")
+          .some((button) => button.textContent === "Retry saved keys"),
+      ).toBe(false);
+      expect(baseBridge.applyLlmSelection).toHaveBeenCalledOnce();
+      expect(credentialWriteCount).toBe(1);
+      controller.dispose();
+    },
+  );
+
+  it("uses Continue instead of credential retry when an unrelated saved key failed", async () => {
     const document = new FakeDocument();
     const baseBridge = bridge(async () => ({
       status: "configured",
       runtimeReady: true,
     }));
     baseBridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
-    baseBridge.credentialStatuses.mockResolvedValueOnce([]).mockResolvedValueOnce([
+    baseBridge.credentialStatuses.mockResolvedValueOnce([]).mockResolvedValue([
       { slot: "anthropic", state: "configured", runtimeState: "active" },
       { slot: "openrouter", state: "configured", runtimeState: "failed" },
     ]);
@@ -743,13 +1157,17 @@ describe("mounted onboarding", () => {
 
     buttonWithText(document, "Continue").dispatch("click");
 
-    await vi.waitFor(() => expect(controller.state().fixedError).toBe("runtime-unavailable"));
+    await vi.waitFor(() => expect(controller.state().fixedError).toBe("model-runtime-unavailable"));
     expect(controller.state().step).toBe("coach-keys");
     expect(
       document.body
         .querySelectorAll("button")
         .filter((button) => button.textContent === "Retry saved keys"),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => expect(controller.state().step).toBe("training-data"));
     expect(credentialWriteCount).toBe(2);
     controller.dispose();
   });
@@ -941,6 +1359,7 @@ describe("mounted onboarding", () => {
       onComplete: vi.fn(),
     });
     await controller.open();
+    changeControl(document, "onboarding-llm-provider", "anthropic");
     passwordInputFor(document, "anthropic").value = randomUUID();
 
     buttonWithText(document, "Continue").dispatch("click");
