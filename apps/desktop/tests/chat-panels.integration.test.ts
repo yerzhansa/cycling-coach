@@ -252,6 +252,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly drawerStatus: string;
       readonly anchorValue: string;
       readonly wellnessValue: string;
+      readonly documentOverflow: boolean;
     }>(`
       const bridgeKeys = Object.keys(window.enduragentAuth).sort();
       const thread = document.querySelectorAll(".thread").length === 1;
@@ -380,6 +381,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         drawerStatus: document.querySelector(".drawer-status")?.textContent ?? "missing",
         anchorValue: panels[0]?.querySelector(".context-panel__value")?.textContent ?? "",
         wellnessValue: panels[4]?.querySelector(".wellness-row__value")?.textContent ?? "",
+        documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
       };
     `);
     expect(initial).toEqual({
@@ -418,6 +420,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       drawerStatus: "",
       anchorValue: "300 W",
       wellnessValue: "65 ms",
+      documentOverflow: false,
     });
     expect(calls.filter((call) => call.method === "hasSession")).toEqual([
       {
@@ -426,26 +429,140 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         params: { chatId: "desktop" },
       },
     ]);
+    const quickActions = await fixture.evaluate<{
+      readonly groupLabel: string | null;
+      readonly labels: readonly string[];
+      readonly commands: readonly string[];
+      readonly terminalResponses: number;
+      readonly keyboardActivationDetail: number | null;
+      readonly keyboardShortcutResidentAfterTerminal: boolean;
+      readonly keyboardShortcutFocusedAfterTerminal: boolean;
+      readonly draft: string;
+      readonly documentOverflow: boolean;
+      readonly composerHeight: number;
+      readonly composerClearanceTracksHeight: boolean;
+      readonly finalTranscriptClearsComposer: boolean;
+    }>(`
+      const group = document.querySelector(".coaching-shortcuts");
+      const buttons = [...group.querySelectorAll(".coaching-shortcut")];
+      const keyboardShortcut = buttons.at(-1);
+      const textarea = document.querySelector("#message");
+      textarea.value = "  keep draft\\n";
+      let terminalResponses = 0;
+      let keyboardActivationDetail = null;
+      let keyboardShortcutResidentAfterTerminal = false;
+      let keyboardShortcutFocusedAfterTerminal = false;
+      keyboardShortcut.addEventListener("click", (event) => {
+        keyboardActivationDetail = event.detail;
+      }, { once: true });
+      for (const button of buttons) {
+        const readyDeadline = Date.now() + 5000;
+        while (button.disabled && Date.now() < readyDeadline) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        const coachCount = document.querySelectorAll(".chat-message--coach").length;
+        if (button === keyboardShortcut) button.focus();
+        button.click();
+        const terminalDeadline = Date.now() + 5000;
+        while (Date.now() < terminalDeadline) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          const coaches = [...document.querySelectorAll(".chat-message--coach")];
+          const latest = coaches.at(-1);
+          if (coaches.length === coachCount + 1 && latest && !latest.hasAttribute("aria-busy")) {
+            terminalResponses += 1;
+            if (button === keyboardShortcut) {
+              keyboardShortcutResidentAfterTerminal =
+                [...group.querySelectorAll(".coaching-shortcut")].at(-1) === keyboardShortcut;
+              keyboardShortcutFocusedAfterTerminal = document.activeElement === keyboardShortcut;
+            }
+            break;
+          }
+        }
+      }
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const conversation = document.querySelector(".conversation");
+      const composer = document.querySelector(".composer-wrap");
+      conversation.scrollTop = conversation.scrollHeight;
+      const composerRect = composer.getBoundingClientRect();
+      const finalTranscriptItem = [...document.querySelectorAll(".chat-message, .chat-notice, .chat-retry")]
+        .filter((node) => !node.hidden)
+        .at(-1);
+      const reservedBottom = Number.parseFloat(getComputedStyle(conversation).paddingBottom);
+      return {
+        groupLabel: group.getAttribute("aria-label"),
+        labels: buttons.map((button) => button.querySelector(".coaching-shortcut__label")?.textContent ?? ""),
+        commands: buttons.map((button) => button.querySelector(".coaching-shortcut__command")?.textContent ?? ""),
+        terminalResponses,
+        keyboardActivationDetail,
+        keyboardShortcutResidentAfterTerminal,
+        keyboardShortcutFocusedAfterTerminal,
+        draft: textarea.value,
+        documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        composerHeight: composerRect.height,
+        composerClearanceTracksHeight: Math.abs(reservedBottom - composerRect.height) < 1,
+        finalTranscriptClearsComposer:
+          finalTranscriptItem.getBoundingClientRect().bottom <= composerRect.top + 1,
+      };
+    `);
+    expect(quickActions).toEqual({
+      groupLabel: "Coaching shortcuts",
+      labels: ["Build a plan", "Today’s workout", "Training status", "Review last session"],
+      commands: ["/plan", "/workout", "/status", "/review"],
+      terminalResponses: 4,
+      keyboardActivationDetail: 0,
+      keyboardShortcutResidentAfterTerminal: true,
+      keyboardShortcutFocusedAfterTerminal: true,
+      draft: "  keep draft\n",
+      documentOverflow: false,
+      composerHeight: expect.any(Number),
+      composerClearanceTracksHeight: true,
+      finalTranscriptClearsComposer: true,
+    });
+    expect(quickActions.composerHeight).toBeGreaterThan(0);
     await fixture.setViewport(720, 800);
-    expect(
-      await fixture.evaluate<{
-        readonly documentOverflow: boolean;
-        readonly tableScrollsLocally: boolean;
-        readonly codeScrollsLocally: boolean;
-      }>(`
+    const compact = await fixture.evaluate<{
+      readonly documentOverflow: boolean;
+      readonly tableScrollsLocally: boolean;
+      readonly codeScrollsLocally: boolean;
+      readonly shortcutsWrapped: boolean;
+      readonly composerHeight: number;
+      readonly composerClearanceTracksHeight: boolean;
+      readonly finalTranscriptClearsComposer: boolean;
+    }>(`
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         const tableScroll = document.querySelector(".chat-markdown__table-scroll");
         const codeBlock = document.querySelector(".chat-message--coach pre");
+        const conversation = document.querySelector(".conversation");
+        const composer = document.querySelector(".composer-wrap");
+        const shortcutGroup = document.querySelector(".coaching-shortcuts");
+        const firstShortcut = shortcutGroup.querySelector(".coaching-shortcut");
+        conversation.scrollTop = conversation.scrollHeight;
+        const composerRect = composer.getBoundingClientRect();
+        const finalTranscriptItem = [...document.querySelectorAll(".chat-message, .chat-notice, .chat-retry")]
+          .filter((node) => !node.hidden)
+          .at(-1);
+        const reservedBottom = Number.parseFloat(getComputedStyle(conversation).paddingBottom);
         return {
           documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
           tableScrollsLocally: tableScroll.scrollWidth > tableScroll.clientWidth && getComputedStyle(tableScroll).overflowX === "auto",
           codeScrollsLocally: codeBlock.scrollWidth > codeBlock.clientWidth && getComputedStyle(codeBlock).overflowX === "auto",
+          shortcutsWrapped: shortcutGroup.getBoundingClientRect().height > firstShortcut.getBoundingClientRect().height,
+          composerHeight: composerRect.height,
+          composerClearanceTracksHeight: Math.abs(reservedBottom - composerRect.height) < 1,
+          finalTranscriptClearsComposer:
+            finalTranscriptItem.getBoundingClientRect().bottom <= composerRect.top + 1,
         };
-      `),
-    ).toEqual({
+      `);
+    expect(compact).toEqual({
       documentOverflow: false,
       tableScrollsLocally: true,
       codeScrollsLocally: true,
+      shortcutsWrapped: true,
+      composerHeight: expect.any(Number),
+      composerClearanceTracksHeight: true,
+      finalTranscriptClearsComposer: true,
     });
+    expect(compact.composerHeight).toBeGreaterThan(quickActions.composerHeight);
     const reset = await fixture.evaluate<{
       readonly enabledBefore: boolean;
       readonly dialogOpen: boolean;
@@ -553,6 +670,26 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         jsonrpc: "2.0",
         method: "chat",
         params: { chatId: "desktop", message: "What should I ride?" },
+      },
+      {
+        jsonrpc: "2.0",
+        method: "chat",
+        params: { chatId: "desktop", message: "/plan" },
+      },
+      {
+        jsonrpc: "2.0",
+        method: "chat",
+        params: { chatId: "desktop", message: "/workout" },
+      },
+      {
+        jsonrpc: "2.0",
+        method: "chat",
+        params: { chatId: "desktop", message: "/status" },
+      },
+      {
+        jsonrpc: "2.0",
+        method: "chat",
+        params: { chatId: "desktop", message: "/review" },
       },
     ]);
     expect(calls.filter((call) => call.method === "setUnitsPreference")).toEqual([

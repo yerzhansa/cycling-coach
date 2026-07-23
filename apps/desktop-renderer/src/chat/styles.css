@@ -1,3 +1,8 @@
+.conversation.desktop-shell {
+  grid-row: 2;
+  padding-bottom: var(--chat-composer-clearance, 150px);
+}
+
 .chat-transcript {
   display: grid;
   gap: 18px;
@@ -264,6 +269,51 @@
 
 .new-conversation-status:not(:empty) {
   padding: 0 14px 8px;
+}
+
+.coaching-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  margin: 0 0 10px;
+}
+
+.coaching-shortcut {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--moss-strong);
+  background: var(--surface-solid);
+  cursor: pointer;
+}
+
+.coaching-shortcut__label {
+  overflow-wrap: anywhere;
+}
+
+.coaching-shortcut__command {
+  color: var(--muted);
+  font:
+    11px/1.2 SFMono-Regular,
+    ui-monospace,
+    monospace;
+}
+
+.coaching-shortcut:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.coaching-shortcut:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 .chat-composer__label {

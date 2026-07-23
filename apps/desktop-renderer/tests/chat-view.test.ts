@@ -7,6 +7,27 @@ import { EMPTY_CHAT_STATE, reduceChatState, type ChatState } from "../src/turn-s
 
 const mutationEvents: string[] = [];
 
+class FakeStyle {
+  readonly properties = new Map<string, string>();
+  mutationCount = 0;
+
+  setProperty(name: string, value: string): void {
+    this.mutationCount += 1;
+    this.properties.set(name, value);
+  }
+
+  removeProperty(name: string): string {
+    this.mutationCount += 1;
+    const previous = this.properties.get(name) ?? "";
+    this.properties.delete(name);
+    return previous;
+  }
+
+  getPropertyValue(name: string): string {
+    return this.properties.get(name) ?? "";
+  }
+}
+
 class FakeChildList extends Array<FakeElement> {
   item(index: number): FakeElement | null {
     return this[index] ?? null;
@@ -18,6 +39,7 @@ class FakeElement {
   readonly attributes = new Map<string, string>();
   readonly listeners = new Map<string, Set<(event: never) => void>>();
   readonly dataset: Record<string, string> = {};
+  readonly style = new FakeStyle();
   className = "";
   hidden = false;
   disabled = false;
@@ -36,6 +58,8 @@ class FakeElement {
   insertBeforeMutationCount = 0;
   removeMutationCount = 0;
   appendDataMutationCount = 0;
+  focusCount = 0;
+  rectHeight = 0;
   parentNode: FakeElement | null = null;
   private ownText = "";
 
@@ -135,7 +159,14 @@ class FakeElement {
 
   focus(): void {
     if (this.disabled) return;
-    (globalThis.document as unknown as FakeDocument).activeElement = this;
+    this.focusCount += 1;
+    const fakeDocument = globalThis.document as unknown as FakeDocument;
+    fakeDocument.activeElement = this;
+    fakeDocument.dispatch("focusin", { target: this });
+  }
+
+  getBoundingClientRect(): { readonly height: number } {
+    return { height: this.rectHeight };
   }
 
   remove(): void {
@@ -152,6 +183,9 @@ class FakeElement {
 }
 
 class FakeDocument {
+  readonly body = new FakeElement("body");
+  readonly documentElement = new FakeElement("html");
+  readonly listeners = new Map<string, Set<(event: never) => void>>();
   activeElement: FakeElement | null = null;
 
   createElement(name: string): FakeElement {
@@ -166,6 +200,44 @@ class FakeDocument {
 
   createDocumentFragment(): FakeElement {
     return new FakeElement("#fragment");
+  }
+
+  addEventListener(name: string, listener: (event: never) => void): void {
+    const listeners = this.listeners.get(name) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(name, listeners);
+  }
+
+  removeEventListener(name: string, listener: (event: never) => void): void {
+    this.listeners.get(name)?.delete(listener);
+  }
+
+  dispatch(name: string, event: Record<string, unknown> = {}): void {
+    for (const listener of this.listeners.get(name) ?? []) listener(event as never);
+  }
+}
+
+class FakeResizeObserver {
+  static readonly instances: FakeResizeObserver[] = [];
+
+  readonly observed = new Set<unknown>();
+  disconnected = false;
+
+  constructor(private readonly callback: ResizeObserverCallback) {
+    FakeResizeObserver.instances.push(this);
+  }
+
+  observe(target: unknown): void {
+    this.observed.add(target);
+  }
+
+  disconnect(): void {
+    this.disconnected = true;
+    this.observed.clear();
+  }
+
+  notify(): void {
+    this.callback([], this as never);
   }
 }
 
@@ -205,9 +277,11 @@ const emptyState: ChatState = EMPTY_CHAT_STATE;
 
 beforeEach(() => {
   mutationEvents.splice(0);
+  FakeResizeObserver.instances.splice(0);
   Object.assign(globalThis, {
     document: new FakeDocument(),
     HTMLElement: FakeElement,
+    ResizeObserver: undefined,
   });
 });
 
@@ -280,7 +354,9 @@ describe("chat view", () => {
     );
     expect(find(thread, (node) => node.className === "chat-retry").hidden).toBe(true);
     expect(find(composerHost, (node) => node.tagName === "textarea").disabled).toBe(false);
-    expect(find(composerHost, (node) => node.tagName === "button").disabled).toBe(false);
+    expect(
+      find(composerHost, (node) => node.tagName === "button" && node.type === "submit").disabled,
+    ).toBe(false);
   });
 
   it("renders a partial coach draft and the reauthentication notice once each", () => {
@@ -374,7 +450,9 @@ describe("chat view", () => {
     expect(thread.textContent).not.toContain("The coach couldn't respond");
     expect(find(thread, (node) => node.className === "chat-retry").hidden).toBe(true);
     expect(find(composerHost, (node) => node.tagName === "textarea").disabled).toBe(false);
-    expect(find(composerHost, (node) => node.tagName === "button").disabled).toBe(false);
+    expect(
+      find(composerHost, (node) => node.tagName === "button" && node.type === "submit").disabled,
+    ).toBe(false);
   });
 
   it("renders generic failure copy once as a notice without an empty coach row", () => {
@@ -972,7 +1050,7 @@ describe("chat view", () => {
     expect(messages.replaceChildrenMutationCount).toBe(0);
   });
 
-  it("places one notice host immediately before the composer and removes it on dispose", () => {
+  it("places one notice host and one shortcut group before the composer", () => {
     const composerHost = new FakeElement("div");
     const mounted = mountChatView({
       conversation: new FakeElement("main") as never,
@@ -982,7 +1060,8 @@ describe("chat view", () => {
     const host = mounted.noticeHost as unknown as FakeElement;
     expect(host.className).toBe("chat-notice-host");
     expect(composerHost.children[0]).toBe(host);
-    expect(composerHost.children[1]?.className).toBe("composer");
+    expect(composerHost.children[1]?.className).toBe("coaching-shortcuts");
+    expect(composerHost.children[2]?.className).toBe("composer");
     mounted.dispose();
     expect(host.removed).toBe(true);
   });
@@ -1054,7 +1133,7 @@ describe("chat view", () => {
     );
   });
 
-  it("keeps a visible label, submits original text, and disables while streaming", () => {
+  it("keeps a visible label, submits manual text byte-for-byte, and disables while streaming", () => {
     const conversation = new FakeElement("main");
     const thread = new FakeElement("div");
     const composerHost = new FakeElement("div");
@@ -1077,11 +1156,427 @@ describe("chat view", () => {
     expect(label.textContent).toBe("Message your coach");
     textarea.value = "  Keep spacing  ";
     form.dispatch("submit", { preventDefault() {} });
-    expect(onSubmit).toHaveBeenCalledWith("  Keep spacing  ");
+    textarea.value = "\t/review deep\r\n";
+    form.dispatch("submit", { preventDefault() {} });
+    textarea.value = "  /unknown exact\n";
+    form.dispatch("submit", { preventDefault() {} });
+    expect(onSubmit.mock.calls.map(([message]) => message)).toEqual([
+      "  Keep spacing  ",
+      "\t/review deep\r\n",
+      "  /unknown exact\n",
+    ]);
     mounted.view.render({ ...emptyState, status: "streaming" });
-    const button = find(composerHost, (node) => node.tagName === "button");
+    const button = find(
+      composerHost,
+      (node) => node.tagName === "button" && node.type === "submit",
+    );
     expect(textarea.disabled).toBe(true);
     expect(button.disabled).toBe(true);
+  });
+
+  it("mounts four unique coaching shortcuts in exact order and preserves the draft", () => {
+    const composerHost = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: new FakeElement("div") as never,
+      composerHost: composerHost as never,
+    });
+    const onSubmit = vi.fn();
+    mounted.bind({
+      onSubmit,
+      onRetry: vi.fn(),
+      onOpenNewConversation: vi.fn(),
+      onCancelNewConversation: vi.fn(),
+      onConfirmNewConversation: vi.fn(),
+    });
+    mounted.view.render(emptyState);
+
+    const group = find(composerHost, (node) => node.className === "coaching-shortcuts");
+    const buttons = findAll(group, (node) => node.className === "coaching-shortcut");
+    const textarea = find(composerHost, (node) => node.tagName === "textarea");
+    const labels = buttons.map(
+      (button) => find(button, (node) => node.className === "coaching-shortcut__label").textContent,
+    );
+    const commands = buttons.map(
+      (button) =>
+        find(button, (node) => node.className === "coaching-shortcut__command").textContent,
+    );
+
+    expect(group.attributes.get("role")).toBe("group");
+    expect(group.attributes.get("aria-label")).toBe("Coaching shortcuts");
+    expect(buttons).toHaveLength(4);
+    expect(labels).toEqual([
+      "Build a plan",
+      "Today’s workout",
+      "Training status",
+      "Review last session",
+    ]);
+    expect(commands).toEqual(["/plan", "/workout", "/status", "/review"]);
+    expect(new Set(commands)).toHaveProperty("size", 4);
+    expect(buttons.map((button) => button.type)).toEqual(["button", "button", "button", "button"]);
+    expect(buttons.map((button) => button.attributes.get("aria-label"))).toEqual([
+      "Build a plan, /plan command",
+      "Today’s workout, /workout command",
+      "Training status, /status command",
+      "Review last session, /review command",
+    ]);
+
+    textarea.value = "  draft\r\nbyte-for-byte  ";
+    for (const button of buttons) button.dispatch("click");
+    expect(onSubmit.mock.calls.map(([message]) => message)).toEqual(commands);
+    expect(textarea.value).toBe("  draft\r\nbyte-for-byte  ");
+  });
+
+  it("guards every shortcut while streaming or resetting and re-enables them with the composer", () => {
+    const composerHost = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: new FakeElement("div") as never,
+      composerHost: composerHost as never,
+    });
+    const onSubmit = vi.fn();
+    mounted.bind({
+      onSubmit,
+      onRetry: vi.fn(),
+      onOpenNewConversation: vi.fn(),
+      onCancelNewConversation: vi.fn(),
+      onConfirmNewConversation: vi.fn(),
+    });
+    const buttons = findAll(
+      find(composerHost, (node) => node.className === "coaching-shortcuts"),
+      (node) => node.className === "coaching-shortcut",
+    );
+    const submit = find(
+      composerHost,
+      (node) => node.tagName === "button" && node.type === "submit",
+    );
+    const textarea = find(composerHost, (node) => node.tagName === "textarea");
+    const present = reduceChatState(emptyState, { type: "session-probe", hasSession: true });
+    const confirming = reduceChatState(present, { type: "open-new-conversation" });
+    const resetting = reduceChatState(confirming, { type: "begin-reset" });
+
+    mounted.view.render({ ...present, status: "streaming" });
+    expect([...buttons, submit, textarea].every((control) => control.disabled)).toBe(true);
+    for (const button of buttons) button.dispatch("click");
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    mounted.view.render(confirming);
+    expect(buttons.every((button) => button.disabled)).toBe(true);
+    for (const button of buttons) button.dispatch("click");
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    mounted.view.render(resetting);
+    expect(buttons.every((button) => button.disabled)).toBe(true);
+    for (const button of buttons) button.dispatch("click");
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    mounted.view.render(present);
+    expect([...buttons, submit, textarea].every((control) => !control.disabled)).toBe(true);
+    buttons[2]?.dispatch("click");
+    expect(onSubmit).toHaveBeenCalledOnce();
+    expect(onSubmit).toHaveBeenCalledWith("/status");
+  });
+
+  it("keeps shortcut nodes and their single listeners resident across repeated renders", () => {
+    const composerHost = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: new FakeElement("div") as never,
+      composerHost: composerHost as never,
+    });
+    const group = find(composerHost, (node) => node.className === "coaching-shortcuts");
+    const buttons = findAll(group, (node) => node.className === "coaching-shortcut");
+    const listeners = buttons.map((button) => [...(button.listeners.get("click") ?? [])][0]);
+
+    for (let index = 0; index < 8; index += 1) {
+      mounted.view.render({ ...emptyState, status: index % 2 === 0 ? "idle" : "streaming" });
+    }
+
+    expect(find(composerHost, (node) => node.className === "coaching-shortcuts")).toBe(group);
+    expect(findAll(composerHost, (node) => node.className === "coaching-shortcuts")).toHaveLength(
+      1,
+    );
+    expect(findAll(group, (node) => node.className === "coaching-shortcut")).toEqual(buttons);
+    expect(buttons.map((button) => button.listeners.get("click")?.size)).toEqual([1, 1, 1, 1]);
+    expect(buttons.map((button) => [...(button.listeners.get("click") ?? [])][0])).toEqual(
+      listeners,
+    );
+  });
+
+  it("restores keyboard-owned focus to the same shortcut after its turn unlocks", () => {
+    const fakeDocument = globalThis.document as unknown as FakeDocument;
+    const composerHost = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: new FakeElement("div") as never,
+      composerHost: composerHost as never,
+    });
+    mounted.bind({
+      onSubmit: () => mounted.view.render({ ...emptyState, status: "streaming" }),
+      onRetry: vi.fn(),
+      onOpenNewConversation: vi.fn(),
+      onCancelNewConversation: vi.fn(),
+      onConfirmNewConversation: vi.fn(),
+    });
+    mounted.view.render(emptyState);
+    const shortcut = find(
+      composerHost,
+      (node) => node.className === "coaching-shortcut" && node.textContent.includes("/workout"),
+    );
+
+    shortcut.focus();
+    shortcut.dispatch("click", { detail: 0 });
+    expect(shortcut.disabled).toBe(true);
+    fakeDocument.activeElement = fakeDocument.body;
+
+    mounted.view.render(emptyState);
+
+    expect(fakeDocument.activeElement).toBe(shortcut);
+    expect(shortcut.focusCount).toBe(2);
+  });
+
+  it("does not restore shortcut focus after pointer activation", () => {
+    const fakeDocument = globalThis.document as unknown as FakeDocument;
+    const composerHost = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: new FakeElement("div") as never,
+      composerHost: composerHost as never,
+    });
+    mounted.bind({
+      onSubmit: () => mounted.view.render({ ...emptyState, status: "streaming" }),
+      onRetry: vi.fn(),
+      onOpenNewConversation: vi.fn(),
+      onCancelNewConversation: vi.fn(),
+      onConfirmNewConversation: vi.fn(),
+    });
+    mounted.view.render(emptyState);
+    const shortcut = find(composerHost, (node) => node.className === "coaching-shortcut");
+
+    shortcut.focus();
+    shortcut.dispatch("click", { detail: 1 });
+    fakeDocument.activeElement = fakeDocument.body;
+    mounted.view.render(emptyState);
+
+    expect(fakeDocument.activeElement).toBe(fakeDocument.body);
+    expect(shortcut.focusCount).toBe(1);
+  });
+
+  it("abandons keyboard focus restoration when focus deliberately moves elsewhere", () => {
+    const fakeDocument = globalThis.document as unknown as FakeDocument;
+    const composerHost = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: new FakeElement("div") as never,
+      composerHost: composerHost as never,
+    });
+    mounted.bind({
+      onSubmit: () => mounted.view.render({ ...emptyState, status: "streaming" }),
+      onRetry: vi.fn(),
+      onOpenNewConversation: vi.fn(),
+      onCancelNewConversation: vi.fn(),
+      onConfirmNewConversation: vi.fn(),
+    });
+    mounted.view.render(emptyState);
+    const shortcut = find(composerHost, (node) => node.className === "coaching-shortcut");
+    const otherControl = new FakeElement("button");
+
+    shortcut.focus();
+    shortcut.dispatch("click", { detail: 0 });
+    fakeDocument.activeElement = fakeDocument.body;
+    otherControl.focus();
+    mounted.view.render(emptyState);
+
+    expect(fakeDocument.activeElement).toBe(otherControl);
+    expect(shortcut.focusCount).toBe(1);
+
+    shortcut.focus();
+    shortcut.dispatch("click", { detail: 0 });
+    fakeDocument.activeElement = fakeDocument.body;
+    otherControl.focus();
+    fakeDocument.activeElement = fakeDocument.body;
+    mounted.view.render(emptyState);
+
+    expect(fakeDocument.activeElement).toBe(fakeDocument.body);
+    expect(shortcut.focusCount).toBe(2);
+  });
+
+  it("abandons keyboard focus restoration when reset begins", () => {
+    const fakeDocument = globalThis.document as unknown as FakeDocument;
+    const composerHost = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: new FakeElement("div") as never,
+      composerHost: composerHost as never,
+    });
+    const present = reduceChatState(emptyState, { type: "session-probe", hasSession: true });
+    const confirming = reduceChatState(present, { type: "open-new-conversation" });
+    mounted.bind({
+      onSubmit: () => mounted.view.render({ ...present, status: "streaming" }),
+      onRetry: vi.fn(),
+      onOpenNewConversation: vi.fn(),
+      onCancelNewConversation: vi.fn(),
+      onConfirmNewConversation: vi.fn(),
+    });
+    mounted.view.render(present);
+    const shortcut = find(composerHost, (node) => node.className === "coaching-shortcut");
+
+    shortcut.focus();
+    shortcut.dispatch("click", { detail: 0 });
+    fakeDocument.activeElement = fakeDocument.body;
+    mounted.view.render(confirming);
+    mounted.view.render(present);
+
+    expect(fakeDocument.activeElement).not.toBe(shortcut);
+    expect(shortcut.focusCount).toBe(1);
+  });
+
+  it("does not restore shortcut focus after disposal", () => {
+    const fakeDocument = globalThis.document as unknown as FakeDocument;
+    const composerHost = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: new FakeElement("div") as never,
+      composerHost: composerHost as never,
+    });
+    mounted.bind({
+      onSubmit: () => mounted.view.render({ ...emptyState, status: "streaming" }),
+      onRetry: vi.fn(),
+      onOpenNewConversation: vi.fn(),
+      onCancelNewConversation: vi.fn(),
+      onConfirmNewConversation: vi.fn(),
+    });
+    mounted.view.render(emptyState);
+    const shortcut = find(composerHost, (node) => node.className === "coaching-shortcut");
+
+    shortcut.focus();
+    shortcut.dispatch("click", { detail: 0 });
+    fakeDocument.activeElement = fakeDocument.body;
+    mounted.dispose();
+    mounted.view.render(emptyState);
+
+    expect(fakeDocument.activeElement).toBe(fakeDocument.body);
+    expect(shortcut.focusCount).toBe(1);
+    expect(fakeDocument.listeners.get("focusin")?.size).toBe(0);
+  });
+
+  it("measures composer clearance, follows resize, and stops updates after disposal", () => {
+    Object.assign(globalThis, { ResizeObserver: FakeResizeObserver });
+    const conversation = new FakeElement("main");
+    const composerHost = new FakeElement("div");
+    composerHost.rectHeight = 148;
+
+    const mounted = mountChatView({
+      conversation: conversation as never,
+      thread: new FakeElement("div") as never,
+      composerHost: composerHost as never,
+    });
+    const observer = FakeResizeObserver.instances[0]!;
+
+    expect(FakeResizeObserver.instances).toHaveLength(1);
+    expect(observer.observed.has(composerHost)).toBe(true);
+    expect(conversation.style.getPropertyValue("--chat-composer-clearance")).toBe("148px");
+
+    composerHost.rectHeight = 226;
+    observer.notify();
+    expect(conversation.style.getPropertyValue("--chat-composer-clearance")).toBe("226px");
+
+    mounted.dispose();
+    expect(observer.disconnected).toBe(true);
+    expect(conversation.style.getPropertyValue("--chat-composer-clearance")).toBe("");
+    const mutationsAfterDisposal = conversation.style.mutationCount;
+
+    composerHost.rectHeight = 310;
+    observer.notify();
+    expect(conversation.style.mutationCount).toBe(mutationsAfterDisposal);
+    expect(conversation.style.getPropertyValue("--chat-composer-clearance")).toBe("");
+  });
+
+  it("admits one paid turn before rapid shortcut and Enter repetitions", async () => {
+    const composerHost = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: new FakeElement("div") as never,
+      composerHost: composerHost as never,
+    });
+    let releaseTurn: (() => void) | undefined;
+    const turnGate = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    const call = vi.fn(
+      async (
+        method: string,
+        _request: unknown,
+        options: CoachClientCallOptions<"chat"> | undefined,
+      ) => {
+        if (method !== "chat") throw new TypeError();
+        await turnGate;
+        const event: TurnEvent = { type: "final-text", turnId: "turn-1", text: "Ready." };
+        options?.onNotificationEnvelope?.({
+          jsonrpc: "2.0",
+          method: "coach.turnEvent",
+          params: {
+            requestId: 1,
+            requestMethod: "chat",
+            turnId: event.turnId,
+            event,
+          },
+        });
+        options?.onEvent?.(event);
+        options?.onTerminalEnvelope?.({
+          jsonrpc: "2.0",
+          id: 1,
+          result: { text: event.text },
+        });
+        return { text: event.text };
+      },
+    );
+    const fakeClient = { handshake: {}, call, close: vi.fn(async () => {}) };
+    const controller = createChatController({
+      clients: {
+        getClient: vi.fn(async () => fakeClient as never),
+        reconnect: vi.fn(async () => fakeClient as never),
+        close: vi.fn(async () => {}),
+      },
+      view: mounted.view,
+      refreshTrainingContext: async () => {},
+      refreshSpend: async () => {},
+    });
+    mounted.bind({
+      onSubmit: (message) => void controller.submit(message),
+      onRetry: vi.fn(),
+      onOpenNewConversation: vi.fn(),
+      onCancelNewConversation: vi.fn(),
+      onConfirmNewConversation: vi.fn(),
+    });
+    const shortcuts = findAll(
+      find(composerHost, (node) => node.className === "coaching-shortcuts"),
+      (node) => node.className === "coaching-shortcut",
+    );
+    const plan = shortcuts[0]!;
+    const textarea = find(composerHost, (node) => node.tagName === "textarea");
+    const submit = find(
+      composerHost,
+      (node) => node.tagName === "button" && node.type === "submit",
+    );
+    textarea.value = "keep this draft";
+
+    plan.dispatch("click");
+    expect(shortcuts.every((button) => button.disabled)).toBe(true);
+    expect(submit.disabled).toBe(true);
+    plan.dispatch("click");
+    textarea.dispatch("keydown", {
+      key: "Enter",
+      shiftKey: false,
+      preventDefault: vi.fn(),
+    });
+
+    await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
+    expect(call.mock.calls[0]?.[1]).toEqual({ chatId: "desktop", message: "/plan" });
+    expect(textarea.value).toBe("keep this draft");
+    releaseTurn?.();
+    await vi.waitFor(() => expect(plan.disabled).toBe(false));
+    expect(call).toHaveBeenCalledOnce();
   });
 
   it("shows the explicit retry control only for an interrupted turn", () => {
@@ -1358,7 +1853,7 @@ describe("chat view", () => {
     );
   });
 
-  it("removes new listeners and elements while safely closing an open dialog", () => {
+  it("removes shortcut listeners and detached controls stay inert after dispose", () => {
     const actionHost = new FakeElement("div");
     const thread = new FakeElement("div");
     const composerHost = new FakeElement("div");
@@ -1369,8 +1864,9 @@ describe("chat view", () => {
       actionHost: actionHost as never,
     });
     const onOpenNewConversation = vi.fn();
+    const onSubmit = vi.fn();
     mounted.bind({
-      onSubmit: vi.fn(),
+      onSubmit,
       onRetry: vi.fn(),
       onOpenNewConversation,
       onCancelNewConversation: vi.fn(),
@@ -1380,6 +1876,9 @@ describe("chat view", () => {
     const dialog = find(actionHost, (node) => node.tagName === "dialog");
     const transcript = find(thread, (node) => node.className === "chat-transcript");
     const form = find(composerHost, (node) => node.className === "composer");
+    const shortcutGroup = find(composerHost, (node) => node.className === "coaching-shortcuts");
+    const shortcut = find(shortcutGroup, (node) => node.className === "coaching-shortcut");
+    expect(shortcut.listeners.get("click")?.size).toBe(1);
     let state = reduceChatState(emptyState, { type: "session-probe", hasSession: true });
     state = reduceChatState(state, { type: "open-new-conversation" });
     mounted.view.render(state);
@@ -1387,7 +1886,12 @@ describe("chat view", () => {
 
     mounted.dispose();
     button.dispatch("click");
+    shortcut.dispatch("click");
     expect(onOpenNewConversation).not.toHaveBeenCalled();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(shortcut.listeners.get("click")?.size).toBe(0);
+    expect(shortcutGroup.removed).toBe(true);
+    expect(shortcutGroup.parentNode).toBeNull();
     expect(dialog.open).toBe(false);
     expect(dialog.removed).toBe(true);
     expect(button.removed).toBe(true);
