@@ -44,7 +44,7 @@ function runtimeSnapshot(
   athleteId = "custom-athlete",
 ): RuntimeConfigSnapshot {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     llm: { provider, model, credential_configured: credentialConfigured },
     intervals: { athlete_id: athleteId },
     session: {
@@ -53,6 +53,13 @@ function runtimeSnapshot(
       dailyResetHour: 4,
       resetArchiveRetentionDays: 0,
       timezone: "UTC",
+      managedByEnvironment: {
+        historyTokenBudgetRatio: false,
+        idleMinutes: false,
+        dailyResetHour: false,
+        resetArchiveRetentionDays: false,
+        timezone: false,
+      },
     },
   };
 }
@@ -623,7 +630,10 @@ describe("desktop credential runtime precedence", () => {
       async call(method: string) {
         calls.push(method);
         if (method === "getRuntimeConfig") return runtimeSnapshot("anthropic");
-        return { schemaVersion: 1, applied: { llm: true, intervals: false } };
+        return {
+          schemaVersion: 2,
+          applied: { llm: true, intervals: false, session: false },
+        };
       },
       async close() {},
     }));
@@ -664,7 +674,10 @@ describe("desktop credential runtime precedence", () => {
         async call(method: string) {
           calls.push(method);
           if (method === "getRuntimeConfig") return snapshot;
-          return { schemaVersion: 1, applied: { llm: true, intervals: false } };
+          return {
+            schemaVersion: 2,
+            applied: { llm: true, intervals: false, session: false },
+          };
         },
         async close() {},
       }));

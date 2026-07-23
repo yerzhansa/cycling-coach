@@ -310,14 +310,48 @@ const RuntimeIntervalsSchema = z
     }
   });
 
+function isValidTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const RuntimeHistoryTokenBudgetRatioSchema = z.number().finite().positive().max(1);
+const RuntimeNonnegativeSafeIntegerSchema = z
+  .number()
+  .int()
+  .nonnegative()
+  .max(Number.MAX_SAFE_INTEGER);
+const RuntimeDailyResetHourSchema = z.number().int().min(0).max(23);
+const RuntimeTimezoneSchema = z.string().trim().min(1).max(512).refine(isValidTimeZone);
+
+const RuntimeSessionSchema = z
+  .object({
+    historyTokenBudgetRatio: RuntimeHistoryTokenBudgetRatioSchema.optional(),
+    idleMinutes: RuntimeNonnegativeSafeIntegerSchema.optional(),
+    dailyResetHour: RuntimeDailyResetHourSchema.optional(),
+    resetArchiveRetentionDays: RuntimeNonnegativeSafeIntegerSchema.optional(),
+    timezone: RuntimeTimezoneSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (!Object.values(value).some((field) => field !== undefined)) {
+      context.addIssue({ code: "custom", message: "session patch must not be empty" });
+    }
+  });
+
 export const ConfigureRuntimeRpcParamsSchema = z
   .object({
     llm: RuntimeLlmSchema.optional(),
     intervals: RuntimeIntervalsSchema.optional(),
+    session: RuntimeSessionSchema.optional(),
   })
   .strict()
   .superRefine((value, context) => {
-    if (value.llm === undefined && value.intervals === undefined) {
+    if (value.llm === undefined && value.intervals === undefined && value.session === undefined) {
       context.addIssue({ code: "custom", message: "at least one runtime slot is required" });
     }
   });
@@ -325,11 +359,12 @@ export type ConfigureRuntimeRpcParams = z.infer<typeof ConfigureRuntimeRpcParams
 
 export const ConfigureRuntimeRpcResultSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     applied: z
       .object({
         llm: z.boolean(),
         intervals: z.boolean(),
+        session: z.boolean(),
       })
       .strict(),
   })
@@ -338,7 +373,7 @@ export type ConfigureRuntimeRpcResult = z.infer<typeof ConfigureRuntimeRpcResult
 
 export const RuntimeConfigSnapshotSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     llm: z
       .object({
         provider: LlmProviderSchema,
@@ -353,11 +388,20 @@ export const RuntimeConfigSnapshotSchema = z
       .strict(),
     session: z
       .object({
-        historyTokenBudgetRatio: z.number().finite(),
-        idleMinutes: z.number().int(),
-        dailyResetHour: z.number().int(),
-        resetArchiveRetentionDays: z.number().int(),
-        timezone: z.string().max(512),
+        historyTokenBudgetRatio: RuntimeHistoryTokenBudgetRatioSchema,
+        idleMinutes: RuntimeNonnegativeSafeIntegerSchema,
+        dailyResetHour: RuntimeDailyResetHourSchema,
+        resetArchiveRetentionDays: RuntimeNonnegativeSafeIntegerSchema,
+        timezone: RuntimeTimezoneSchema,
+        managedByEnvironment: z
+          .object({
+            historyTokenBudgetRatio: z.boolean(),
+            idleMinutes: z.boolean(),
+            dailyResetHour: z.boolean(),
+            resetArchiveRetentionDays: z.boolean(),
+            timezone: z.boolean(),
+          })
+          .strict(),
       })
       .strict(),
   })

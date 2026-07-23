@@ -238,10 +238,11 @@ export function createCoachOperations(
           signal.throwIfAborted();
           await input.applyRuntimeConfig(parsedRequest, signal);
           return ConfigureRuntimeRpcResultSchema.parse({
-            schemaVersion: 1,
+            schemaVersion: 2,
             applied: {
               llm: parsedRequest.llm !== undefined,
               intervals: parsedRequest.intervals !== undefined,
+              session: parsedRequest.session !== undefined,
             },
           });
         };

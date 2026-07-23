@@ -517,7 +517,7 @@ describe("RPC receive and observers", () => {
           jsonrpc: "2.0",
           id: request.id,
           result: {
-            schemaVersion: 1,
+            schemaVersion: 2,
             llm: { provider: "anthropic", model: "synthetic-model" },
             intervals: { athlete_id: "" },
             session: {
@@ -526,6 +526,13 @@ describe("RPC receive and observers", () => {
               dailyResetHour: 4,
               resetArchiveRetentionDays: 0,
               timezone: "UTC",
+              managedByEnvironment: {
+                historyTokenBudgetRatio: false,
+                idleMinutes: false,
+                dailyResetHour: false,
+                resetArchiveRetentionDays: false,
+                timezone: false,
+              },
             },
           },
         }),
@@ -614,9 +621,12 @@ describe("RPC receive and observers", () => {
           requests: { store: 1, reference: 1, total: 2 },
         },
         saveIntake: { schemaVersion: 1, saved: true },
-        configureRuntime: { schemaVersion: 1, applied: { llm: true, intervals: false } },
+        configureRuntime: {
+          schemaVersion: 2,
+          applied: { llm: true, intervals: false, session: false },
+        },
         getRuntimeConfig: {
-          schemaVersion: 1,
+          schemaVersion: 2,
           llm: {
             provider: "anthropic",
             model: "synthetic-model",
@@ -629,6 +639,13 @@ describe("RPC receive and observers", () => {
             dailyResetHour: 4,
             resetArchiveRetentionDays: 0,
             timezone: "UTC",
+            managedByEnvironment: {
+              historyTokenBudgetRatio: false,
+              idleMinutes: false,
+              dailyResetHour: false,
+              resetArchiveRetentionDays: false,
+              timezone: false,
+            },
           },
         },
         getUnitsPreference: { value: "metric", source: "default" },
@@ -708,7 +725,10 @@ describe("RPC receive and observers", () => {
       client.call("configureRuntime", {
         llm: { provider: "anthropic", model: "synthetic", api_key: "synthetic" },
       }),
-    ).resolves.toEqual({ schemaVersion: 1, applied: { llm: true, intervals: false } });
+    ).resolves.toEqual({
+      schemaVersion: 2,
+      applied: { llm: true, intervals: false, session: false },
+    });
     await expect(client.call("getRuntimeConfig", {})).resolves.toMatchObject({
       llm: { provider: "anthropic", model: "synthetic-model" },
     });

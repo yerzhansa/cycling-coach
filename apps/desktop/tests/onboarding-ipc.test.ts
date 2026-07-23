@@ -60,7 +60,7 @@ function harness(
     activate: vi.fn(async () => ({ status: "configured" as const, runtimeReady: true as const })),
   };
   const getRuntimeConfig = vi.fn(async () => ({
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     llm: {
       provider: "anthropic" as const,
       model: "athlete-selected-model",
@@ -73,6 +73,13 @@ function harness(
       dailyResetHour: 4,
       resetArchiveRetentionDays: 0,
       timezone: "UTC",
+      managedByEnvironment: {
+        historyTokenBudgetRatio: false,
+        idleMinutes: false,
+        dailyResetHour: false,
+        resetArchiveRetentionDays: false,
+        timezone: false,
+      },
     },
   }));
   const applyExistingLlmSelection = vi.fn(async () => false);

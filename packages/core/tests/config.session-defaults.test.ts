@@ -77,4 +77,75 @@ describe("config — session defaults", () => {
     const { loadConfig } = await import("../src/config.js");
     expect(loadConfig().session.timezone).toBe("Europe/Berlin");
   });
+
+  it("reports environment ownership with the same effective parsing used by loading", async () => {
+    const { sessionConfigEnvironmentOwnership } = await import("../src/config.js");
+
+    expect(sessionConfigEnvironmentOwnership({})).toEqual({
+      historyTokenBudgetRatio: false,
+      idleMinutes: false,
+      dailyResetHour: false,
+      resetArchiveRetentionDays: false,
+      timezone: false,
+    });
+    expect(
+      sessionConfigEnvironmentOwnership({
+        HISTORY_TOKEN_BUDGET_RATIO: "0.4 trailing",
+        SESSION_IDLE_MINUTES: "15 minutes",
+        SESSION_DAILY_RESET_HOUR: "invalid",
+        SESSION_RESET_ARCHIVE_RETENTION_DAYS: "",
+        COACH_TZ: "",
+      }),
+    ).toEqual({
+      historyTokenBudgetRatio: true,
+      idleMinutes: true,
+      dailyResetHour: false,
+      resetArchiveRetentionDays: false,
+      timezone: true,
+    });
+  });
+
+  it("uses only effectively parsed environment values ahead of YAML", async () => {
+    writeFileSync(
+      CONFIG(),
+      toYaml({
+        session: {
+          historyTokenBudgetRatio: 0.2,
+          idleMinutes: 5,
+          dailyResetHour: 7,
+          resetArchiveRetentionDays: 30,
+          timezone: "UTC",
+        },
+      }),
+      { mode: 0o600 },
+    );
+    process.env.HISTORY_TOKEN_BUDGET_RATIO = "0.4 trailing";
+    process.env.SESSION_IDLE_MINUTES = "15 minutes";
+    process.env.SESSION_DAILY_RESET_HOUR = "invalid";
+    process.env.SESSION_RESET_ARCHIVE_RETENTION_DAYS = "";
+    process.env.COACH_TZ = "Europe/Berlin";
+    const { loadConfig } = await import("../src/config.js");
+
+    expect(loadConfig().session).toEqual({
+      historyTokenBudgetRatio: 0.4,
+      idleMinutes: 15,
+      dailyResetHour: 7,
+      resetArchiveRetentionDays: 30,
+      timezone: "Europe/Berlin",
+    });
+  });
+
+  it("rejects invalid session values from startup YAML", async () => {
+    const { loadConfig } = await import("../src/config.js");
+    for (const session of [
+      { historyTokenBudgetRatio: 0 },
+      { idleMinutes: -1 },
+      { dailyResetHour: 24 },
+      { resetArchiveRetentionDays: -1 },
+      { timezone: "Not/A-Timezone" },
+    ]) {
+      writeFileSync(CONFIG(), toYaml({ session }), { mode: 0o600 });
+      expect(() => loadConfig()).toThrow();
+    }
+  });
 });

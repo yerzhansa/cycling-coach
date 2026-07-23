@@ -409,14 +409,40 @@ describe("coach request and event projection", () => {
       { llm: { model: "model-only" } },
       { intervals },
       { intervals: { athlete_id: "athlete-a" } },
+      {
+        session: {
+          historyTokenBudgetRatio: 0.4,
+          idleMinutes: 30,
+          dailyResetHour: 3,
+          resetArchiveRetentionDays: 14,
+          timezone: "America/Denver",
+        },
+      },
+      { session: { timezone: "  Europe/London  " } },
       { llm, intervals },
     ]) {
-      expect(ConfigureRuntimeRpcParamsSchema.parse(params)).toEqual(params);
+      const parsed = ConfigureRuntimeRpcParamsSchema.parse(params);
+      if (params.session?.timezone === "  Europe/London  ") {
+        expect(parsed).toEqual({ session: { timezone: "Europe/London" } });
+      } else {
+        expect(parsed).toEqual(params);
+      }
     }
     for (const invalid of [
       {},
       { llm: {} },
       { intervals: {} },
+      { session: {} },
+      { session: { timezone: undefined } },
+      { session: { historyTokenBudgetRatio: 0 } },
+      { session: { historyTokenBudgetRatio: 1.01 } },
+      { session: { idleMinutes: -1 } },
+      { session: { idleMinutes: Number.MAX_SAFE_INTEGER + 1 } },
+      { session: { dailyResetHour: 24 } },
+      { session: { resetArchiveRetentionDays: -1 } },
+      { session: { timezone: " " } },
+      { session: { timezone: "Not/A-Timezone" } },
+      { session: { timezone: "a".repeat(513) } },
       { llm: { ...llm, extra: true } },
       { llm: { provider: "openai-codex", api_key: "placeholder" } },
       { intervals: { api_key: "" } },
@@ -425,14 +451,17 @@ describe("coach request and event projection", () => {
     ]) {
       expect(ConfigureRuntimeRpcParamsSchema.safeParse(invalid).success).toBe(false);
     }
-    const result = { schemaVersion: 1, applied: { llm: true, intervals: false } } as const;
+    const result = {
+      schemaVersion: 2,
+      applied: { llm: true, intervals: false, session: false },
+    } as const;
     expect(ConfigureRuntimeRpcResultSchema.parse(result)).toEqual(result);
     expect(
       ConfigureRuntimeRpcResultSchema.safeParse({ ...result, api_key: "placeholder" }).success,
     ).toBe(false);
     expect(JSON.stringify(result)).not.toContain("placeholder");
     const snapshot = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       llm: {
         provider: "openrouter",
         model: "model-a",
@@ -445,6 +474,13 @@ describe("coach request and event projection", () => {
         dailyResetHour: 4,
         resetArchiveRetentionDays: 0,
         timezone: "UTC",
+        managedByEnvironment: {
+          historyTokenBudgetRatio: false,
+          idleMinutes: false,
+          dailyResetHour: false,
+          resetArchiveRetentionDays: false,
+          timezone: false,
+        },
       },
     } as const;
     expect(GetRuntimeConfigRpcResultSchema.parse(snapshot)).toEqual(snapshot);
@@ -480,6 +516,26 @@ describe("coach request and event projection", () => {
       { ...snapshot, llm: { ...snapshot.llm, credential_configured: "true" } },
       { ...snapshot, intervals: { ...snapshot.intervals, api_key: "placeholder" } },
       { ...snapshot, intervals: { athlete_id: "a".repeat(513) } },
+      {
+        ...snapshot,
+        session: {
+          historyTokenBudgetRatio: 0.3,
+          idleMinutes: 0,
+          dailyResetHour: 4,
+          resetArchiveRetentionDays: 0,
+          timezone: "UTC",
+        },
+      },
+      {
+        ...snapshot,
+        session: {
+          ...snapshot.session,
+          managedByEnvironment: {
+            ...snapshot.session.managedByEnvironment,
+            timezone: "false",
+          },
+        },
+      },
       { ...snapshot, session: { ...snapshot.session, dataDir: "/private" } },
       { ...snapshot, llm: { provider: "openrouter" } },
     ]) {
@@ -543,12 +599,16 @@ describe("coach request and event projection", () => {
         requests: { store: 0, reference: 0, total: 0 },
       }),
       saveIntake: async () => ({ schemaVersion: 1, saved: true }),
-      configureRuntime: async ({ llm, intervals }) => ({
-        schemaVersion: 1,
-        applied: { llm: llm !== undefined, intervals: intervals !== undefined },
+      configureRuntime: async ({ llm, intervals, session }) => ({
+        schemaVersion: 2,
+        applied: {
+          llm: llm !== undefined,
+          intervals: intervals !== undefined,
+          session: session !== undefined,
+        },
       }),
       getRuntimeConfig: async () => ({
-        schemaVersion: 1,
+        schemaVersion: 2,
         llm: { provider: "anthropic", model: "model", credential_configured: false },
         intervals: { athlete_id: "athlete" },
         session: {
@@ -557,6 +617,13 @@ describe("coach request and event projection", () => {
           dailyResetHour: 4,
           resetArchiveRetentionDays: 0,
           timezone: "UTC",
+          managedByEnvironment: {
+            historyTokenBudgetRatio: false,
+            idleMinutes: false,
+            dailyResetHour: false,
+            resetArchiveRetentionDays: false,
+            timezone: false,
+          },
         },
       }),
       getUnitsPreference: async () => ({ value: "metric", source: "default" }),
@@ -882,7 +949,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version seven", () => {
-    expect(PROTOCOL_VERSION).toBe(7);
+  it("uses protocol version eight", () => {
+    expect(PROTOCOL_VERSION).toBe(8);
   });
 });

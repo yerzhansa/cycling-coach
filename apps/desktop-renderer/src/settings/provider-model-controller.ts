@@ -144,6 +144,7 @@ export function createProviderModelSettingsController(input: {
   readonly apply: (selection: OnboardingLlmSelection) => Promise<OnboardingLlmSelectionResult>;
   readonly openSetup: () => void;
   readonly view: ProviderModelSettingsView;
+  readonly beginMutation?: () => (() => void) | null;
 }): ProviderModelSettingsController {
   let currentState: ProviderModelSettingsState = { status: "closed" };
   let generation = 0;
@@ -277,6 +278,8 @@ export function createProviderModelSettingsController(input: {
     if (form.draft === null || !form.dirty || form.validationError !== null) {
       return Promise.resolve();
     }
+    const releaseMutation = input.beginMutation === undefined ? () => {} : input.beginMutation();
+    if (releaseMutation === null) return Promise.resolve();
     const selection: OnboardingLlmSelection = {
       provider: form.draft.provider.provider,
       model: selectedModel(form.draft),
@@ -320,6 +323,7 @@ export function createProviderModelSettingsController(input: {
         },
       )
       .finally(() => {
+        releaseMutation();
         if (saveOperation === pending) saveOperation = undefined;
       });
     saveOperation = pending;
