@@ -139,13 +139,13 @@ The bot enforces a per-user-ID allowlist via `~/.cycling-coach/allowed-senders.j
 
 ## Versioning
 
-Calendar-based for npm-published binaries: `YYYY.M.D` (e.g., `2026.4.16` — first release of the day; `2026.4.16-1` — patch later the same day; `2026.4.17` — next day). Private workspace packages (`@enduragent/*`, stub binaries) use SemVer and are not published. See ADR-0007 and ADR-0009.
+Calendar-based for npm-published binaries: stable, SemVer-compatible `YYYY.MONTH.RELEASE-WITHIN-MONTH` (for example, `2026.7.0` is the first release in July UTC, followed by `2026.7.1`; August resets to `2026.8.0`). New releases increment the third component and never use a prerelease suffix. Historical `YYYY.M.P-N` versions remain accepted as release history but their successors use stable `P+1`. Private workspace packages (`@enduragent/*`, stub binaries) use SemVer and are not published. See ADR-0007 and ADR-0009.
 
 ## Releasing
 
-Changesets-driven and CI-automated. Contributors do **not** create tags or GitHub Releases by hand — those steps are wrong, and the tag namespace is `<package>@<version>` (e.g., `cycling-coach@2026.5.4`), not `vYYYY.M.D`.
+Changesets-driven and CI-automated. Contributors do **not** create tags or GitHub Releases by hand — those steps are wrong, and the tag namespace is `<package>@<version>` (e.g., `cycling-coach@2026.5.4`), not a `v`-prefixed CalVer tag.
 
-1. **Add a changeset to your PR.** Run `pnpm exec changeset`, pick the affected publishable package(s), describe the change in athlete-readable language. Commit the resulting `.changeset/<slug>.md`. A PR with a user-visible change but no changeset will skip release — this is intentional, not a bug.
+1. **Add a changeset to your PR.** Run `pnpm exec changeset`, pick the affected publishable package(s), describe the change in athlete-readable language. Commit the resulting `.changeset/<slug>.md`. A PR with a user-visible change but no changeset will skip release — this is intentional, not a bug. The required patch/minor/major choice is overridden by the CalVer policy for binary packages.
 
    For user-visible changes, add a `User-facing: <one-sentence description>` line at the top of the changeset body — see `.changeset/README.md` for the convention. The bot's `/whatsnew` command surfaces only those lines to athletes; engineering details, hashes, and infra-only changesets stay in `CHANGELOG.md` for git history but never reach users.
 2. **Merge your PR to `main`.** `version-pr.yml` opens (or updates) a bot-managed "Version Packages" PR aggregating all pending changesets.
@@ -156,4 +156,4 @@ Today only `cycling-coach` is `private: false`, so only `cycling-coach@<v>` is t
 
 **If a release fails partway** (e.g., a flaky smoke test), re-run `release.yml` via Actions → "Run workflow" with the existing tag as input. `workflow_dispatch` is a fallback for re-running on a tag that already exists — it does **not** create the tag, so don't use it before the version-PR-merge has pushed one.
 
-`tools/bump-binaries-to-calver.ts` runs after `changeset version` to override the SemVer bump for binary packages with today's CalVer (handles same-day re-releases by querying npm).
+`tools/bump-binaries-to-calver.ts` runs after `changeset version`. It reads the committed pre-Changesets version and all occupied npm versions, then overrides binary versions with the next stable release number for the current UTC month. It rewrites only the new matching changelog header; historical entries are immutable.
