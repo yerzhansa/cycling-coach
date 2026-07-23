@@ -1,9 +1,5 @@
-import { CoachClientDisconnectedError, CoachClientProtocolError } from "@enduragent/coach-client";
-import type {
-  CoachOperationProgressNotificationEnvelope,
-  SyncRpcResult,
-} from "@enduragent/coach-contract";
 import type { OnboardingCompletion } from "./onboarding/machine.js";
+import type { TrainingSyncCoordinator, TrainingSyncState } from "./training-sync.js";
 
 export type FirstSyncState =
   | { readonly status: "idle" }
@@ -15,12 +11,8 @@ export type FirstSyncState =
       readonly retryable: boolean;
     };
 
-export interface FirstSyncCallOptions {
-  readonly onNotificationEnvelope: (envelope: CoachOperationProgressNotificationEnvelope) => void;
-}
-
 export interface FirstSyncPorts {
-  callSync(options: FirstSyncCallOptions): Promise<SyncRpcResult>;
+  readonly coordinator: TrainingSyncCoordinator;
   focusComposer(): void;
   render(state: FirstSyncState): void;
 }
@@ -43,105 +35,70 @@ function validCompletion(value: unknown): value is OnboardingCompletion {
   );
 }
 
+function toFirstSyncState(state: TrainingSyncState): FirstSyncState {
+  if (state.status === "idle") return { status: "idle" };
+  if (state.status === "queued" || state.status === "running") return { status: "syncing" };
+  if (state.status === "succeeded") {
+    return state.kind === "published"
+      ? { status: "ready" }
+      : { status: "failed", kind: "operation", retryable: true };
+  }
+  return {
+    status: "failed",
+    kind:
+      state.kind === "protocol"
+        ? "protocol"
+        : state.kind === "indeterminate"
+          ? "disconnected"
+          : "operation",
+    retryable: state.retryable,
+  };
+}
+
+function sameState(left: FirstSyncState, right: FirstSyncState): boolean {
+  return (
+    left.status === right.status &&
+    (left.status !== "failed" ||
+      (right.status === "failed" && left.kind === right.kind && left.retryable === right.retryable))
+  );
+}
+
 export function createFirstSyncController(ports: FirstSyncPorts): FirstSyncController {
   let state: FirstSyncState = { status: "idle" };
-  let epoch = 0;
   let inFlight: Promise<void> | undefined;
   let disposed = false;
+  let activated = false;
+  let completed = false;
   let composerFocused = false;
+  let composerFocusOperation: number | undefined;
 
-  const render = (next: FirstSyncState): void => {
-    state = next;
-    ports.render(state);
+  const apply = (syncState: TrainingSyncState): void => {
+    if (disposed || !activated || completed) return;
+    const next = toFirstSyncState(syncState);
+    if (!sameState(state, next)) {
+      state = next;
+      ports.render(state);
+    }
+    if (
+      next.status === "ready" &&
+      syncState.status === "succeeded" &&
+      syncState.operation === composerFocusOperation &&
+      !composerFocused
+    ) {
+      composerFocused = true;
+      ports.focusComposer();
+    }
+    if (next.status === "ready") completed = true;
   };
+  const unsubscribe = ports.coordinator.subscribe(apply);
 
   const begin = (): Promise<void> => {
-    const selectedEpoch = ++epoch;
-    render({ status: "syncing" });
-    let progress = 0;
-    let requestId: string | number | undefined;
-    let protocolFault = false;
-    let settled = false;
-
-    const failProtocol = (): void => {
-      if (disposed || selectedEpoch !== epoch) return;
-      protocolFault = true;
-      if (settled) render({ status: "failed", kind: "protocol", retryable: false });
-    };
-
-    const task = (async () => {
-      let result: SyncRpcResult | undefined;
-      let failure: unknown;
-      try {
-        result = await ports.callSync({
-          onNotificationEnvelope(envelope) {
-            if (disposed || selectedEpoch !== epoch) return;
-            if (settled) {
-              failProtocol();
-              return;
-            }
-            if (
-              envelope.jsonrpc !== "2.0" ||
-              envelope.method !== "coach.operationProgress" ||
-              envelope.params.requestMethod !== "sync"
-            ) {
-              failProtocol();
-              return;
-            }
-            const event = envelope.params.event;
-            if (progress === 0) {
-              if (event.phase !== "started" || event.completed !== 0 || event.total !== 1) {
-                failProtocol();
-                return;
-              }
-              requestId = envelope.params.requestId;
-              progress = 1;
-              return;
-            }
-            if (
-              progress !== 1 ||
-              envelope.params.requestId !== requestId ||
-              event.phase !== "completed" ||
-              event.completed !== 1 ||
-              event.total !== 1
-            ) {
-              failProtocol();
-              return;
-            }
-            progress = 2;
-          },
-        });
-      } catch (error) {
-        failure = error;
-      }
-      if (disposed || selectedEpoch !== epoch) return;
-      settled = true;
-      if (protocolFault || failure instanceof CoachClientProtocolError) {
-        render({ status: "failed", kind: "protocol", retryable: false });
-        return;
-      }
-      if (failure !== undefined) {
-        render({
-          status: "failed",
-          kind: failure instanceof CoachClientDisconnectedError ? "disconnected" : "operation",
-          retryable: true,
-        });
-        return;
-      }
-      if (progress !== 2) {
-        render({ status: "failed", kind: "protocol", retryable: false });
-        return;
-      }
-      if (result?.published !== true || result.referenceSucceeded !== true) {
-        render({ status: "failed", kind: "operation", retryable: true });
-        return;
-      }
-      render({ status: "ready" });
-      if (!composerFocused) {
-        composerFocused = true;
-        ports.focusComposer();
-      }
-    })();
+    const previous = ports.coordinator.getState();
+    const joining = previous.status === "queued" || previous.status === "running";
+    const task = ports.coordinator.request();
+    const selected = ports.coordinator.getState();
+    if (!joining && selected.status !== "idle") composerFocusOperation = selected.operation;
+    apply(selected);
     inFlight = task;
     void task
       .finally(() => {
@@ -156,6 +113,8 @@ export function createFirstSyncController(ports: FirstSyncPorts): FirstSyncContr
       if (!validCompletion(completion)) return Promise.reject(new TypeError("Invalid completion."));
       if (disposed) return Promise.resolve();
       if (inFlight !== undefined) return inFlight;
+      activated = true;
+      completed = false;
       if (state.status === "idle" || state.status === "ready") return begin();
       return Promise.resolve();
     },
@@ -168,7 +127,8 @@ export function createFirstSyncController(ports: FirstSyncPorts): FirstSyncContr
     dispose() {
       if (disposed) return;
       disposed = true;
-      epoch += 1;
+      inFlight = undefined;
+      unsubscribe();
     },
   };
 }

@@ -12,13 +12,18 @@ import {
   formatUtcTimestamp,
   formatWholeNumber,
 } from "./format.js";
+import type { ManualSyncView, ManualSyncViewState } from "./manual-sync.js";
 
 export const TRAINING_CONTEXT_DRAWER_ID = "training-context-drawer";
 export const MAX_VISIBLE_PLAN_ITEMS = 7;
 
 export interface MountedTrainingContextView {
   readonly view: TrainingContextView;
-  bind(input: { readonly onUnitsPreferenceChange: (value: UnitsPreference) => void }): void;
+  readonly syncView: ManualSyncView;
+  bind(input: {
+    readonly onUnitsPreferenceChange: (value: UnitsPreference) => void;
+    readonly onSyncRequest: (kind: "keyboard" | "pointer") => void;
+  }): void;
   dispose(): void;
 }
 
@@ -257,7 +262,19 @@ export function mountTrainingContextView(input: {
   heading.textContent = "Training context";
   const metadata = document.createElement("div");
   metadata.className = "drawer-metadata";
-  headingWrap.append(heading, metadata);
+  const sync = document.createElement("div");
+  sync.className = "training-sync";
+  sync.dataset.state = "idle";
+  const syncButton = document.createElement("button");
+  syncButton.type = "button";
+  syncButton.className = "training-sync__button";
+  syncButton.textContent = "Sync now";
+  const syncStatus = paragraph("training-sync__status", "");
+  syncStatus.setAttribute("role", "status");
+  syncStatus.setAttribute("aria-live", "polite");
+  syncStatus.setAttribute("aria-atomic", "true");
+  sync.append(syncButton, syncStatus);
+  headingWrap.append(heading, metadata, sync);
   const close = document.createElement("button");
   close.type = "button";
   close.className = "drawer-close";
@@ -299,6 +316,7 @@ export function mountTrainingContextView(input: {
   input.drawer.append(header, status, ...panels.map((panel) => panel.root), units);
 
   let handler: ((value: UnitsPreference) => void) | undefined;
+  let syncHandler: ((kind: "keyboard" | "pointer") => void) | undefined;
   let disposed = false;
   const open = (): void => {
     if (disposed || input.drawer.open) return;
@@ -321,10 +339,15 @@ export function mountTrainingContextView(input: {
       handler?.(target.value as UnitsPreference);
     }
   };
+  const syncRequested = (event: Event): void => {
+    const detail = "detail" in event && typeof event.detail === "number" ? event.detail : 1;
+    syncHandler?.(detail === 0 ? "keyboard" : "pointer");
+  };
   opener.addEventListener("click", open);
   close.addEventListener("click", shut);
   input.drawer.addEventListener("cancel", cancel);
   units.addEventListener("change", unitsChanged);
+  syncButton.addEventListener("click", syncRequested);
 
   return {
     view: {
@@ -379,17 +402,45 @@ export function mountTrainingContextView(input: {
             : "";
       },
     },
+    syncView: {
+      render(state: ManualSyncViewState) {
+        if (disposed) return;
+        sync.dataset.state = state.tone;
+        syncButton.textContent = state.label;
+        syncButton.disabled = state.disabled;
+        if (state.busy) syncButton.setAttribute("aria-busy", "true");
+        else syncButton.removeAttribute("aria-busy");
+        syncStatus.textContent = state.message;
+      },
+      restoreKeyboardFocus() {
+        if (disposed || !input.drawer.open) return;
+        const owner = input.drawer.ownerDocument;
+        const active = owner.activeElement;
+        const focusWasLost =
+          active === null ||
+          active === owner.body ||
+          active === owner.documentElement ||
+          active === syncButton;
+        if (!focusWasLost) return;
+        const target = syncButton.disabled ? close : syncButton;
+        if (!target.isConnected || target.hidden || target.disabled) return;
+        target.focus();
+      },
+    },
     bind(next) {
       handler = next.onUnitsPreferenceChange;
+      syncHandler = next.onSyncRequest;
     },
     dispose() {
       if (disposed) return;
       disposed = true;
       handler = undefined;
+      syncHandler = undefined;
       opener.removeEventListener("click", open);
       close.removeEventListener("click", shut);
       input.drawer.removeEventListener("cancel", cancel);
       units.removeEventListener("change", unitsChanged);
+      syncButton.removeEventListener("click", syncRequested);
     },
   };
 }

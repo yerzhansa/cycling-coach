@@ -104,14 +104,19 @@ function response(value: unknown): readonly string[] {
   return [JSON.stringify(value)];
 }
 
-function makeScript(calls: ScriptRequest[]): DesktopFixtureScript {
+type SyncOutcome = "no-change" | "partial";
+
+function makeScript(calls: ScriptRequest[], syncOutcome: SyncOutcome): DesktopFixtureScript {
   let units: "metric" | "imperial" = "metric";
   let hasSession = false;
+  let lastSynced: string = athleteState.lastSynced;
   return {
     onRequest(value) {
       const request = value as ScriptRequest;
       calls.push(request);
-      if (request.method === "getAthleteState") return response(athleteState);
+      if (request.method === "getAthleteState") {
+        return response({ ...athleteState, lastSynced });
+      }
       if (request.method === "getUnitsPreference") {
         return response({ value: units, source: units === "metric" ? "default" : "cycling" });
       }
@@ -156,12 +161,18 @@ ${"nonwrapping".repeat(36)}
         return response({ memoryFlushed: true });
       }
       if (request.method === "sync") {
-        return response({
-          schemaVersion: 1,
-          published: false,
-          referenceSucceeded: true,
-          requests: { store: 0, reference: 0, total: 0 },
-        });
+        lastSynced = "2026-07-19T07:55:01.000Z";
+        const partial = syncOutcome === "partial";
+        return [
+          JSON.stringify({ phase: "started", completed: 0, total: 1 }),
+          JSON.stringify({ phase: "completed", completed: 1, total: 1 }),
+          JSON.stringify({
+            schemaVersion: 1,
+            published: partial,
+            referenceSucceeded: !partial,
+            requests: { store: 1, reference: 1, total: 2 },
+          }),
+        ];
       }
       if (request.method === "importFiles") {
         return response({
@@ -194,10 +205,11 @@ async function launch(input: {
   readonly width: number;
   readonly height: number;
   readonly reducedMotion: boolean;
+  readonly syncOutcome?: SyncOutcome;
 }): Promise<{ readonly fixture: RunningDesktopFixture; readonly calls: ScriptRequest[] }> {
   const calls: ScriptRequest[] = [];
   const fixture = await launchDesktopFixture({
-    script: makeScript(calls),
+    script: makeScript(calls, input.syncOutcome ?? "no-change"),
     token,
     width: input.width,
     height: input.height,
@@ -381,7 +393,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     ]);
   }, 30_000);
 
-  it("streams chat, persists units, preserves focus, and fits desktop geometry", async () => {
+  it("streams chat, proves no-change sync, preserves focus, and fits desktop geometry", async () => {
     const { fixture, calls } = await launch({ width: 1440, height: 900, reducedMotion: false });
     const initial = await fixture.evaluate<{
       readonly location: string;
@@ -788,6 +800,29 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly closedFocus: string | null;
       readonly overflow: boolean;
       readonly units: string;
+      readonly sync: {
+        readonly buttonResident: boolean;
+        readonly queued: string;
+        readonly runningObserved: boolean;
+        readonly terminal: string;
+        readonly label: string;
+        readonly atomicLiveRegion: boolean;
+        readonly busyQueued: boolean;
+        readonly busyCleared: boolean;
+        readonly keyboardFocusRestored: boolean;
+        readonly noChangeTerminalObservations: number;
+        readonly noChangeTerminalOnlyAfterRefresh: boolean;
+        readonly onlyLastSyncedChanged: boolean;
+        readonly trainingPanelsUnchanged: boolean;
+        readonly asOfUnchanged: boolean;
+        readonly asOfBefore: string;
+        readonly asOfAfter: string;
+        readonly lastSyncedBefore: string;
+        readonly lastSyncedAfter: string;
+        readonly statusWraps: boolean;
+        readonly buttonReachable: boolean;
+        readonly drawerOverflow: boolean;
+      };
     }>(`
       const opener = document.querySelector(".drawer-toggle");
       opener.click();
@@ -798,6 +833,81 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         label: drawer.getAttribute("aria-label"),
         order: [...drawer.querySelectorAll(".context-panel > h3")].map((node) => node.textContent),
         spineWidth: document.querySelector(".data-spine").getBoundingClientRect().width,
+      };
+      const syncButton = drawer.querySelector(".training-sync__button");
+      const syncStatus = drawer.querySelector(".training-sync__status");
+      const metadataText = () => [...drawer.querySelectorAll(".drawer-metadata__item")].map((node) => node.textContent ?? "");
+      const metadataChildrenText = () => [...drawer.querySelector(".drawer-metadata").children].map((node) => node.textContent ?? "");
+      const metadataBefore = metadataChildrenText();
+      const panelsBefore = [...drawer.querySelectorAll(".context-panel__body")].map((node) => node.textContent ?? "");
+      const asOfBefore = metadataText().find((value) => value.startsWith("As of ")) ?? "";
+      const lastSyncedBefore = metadataText().find((value) => value.startsWith("Last synced ")) ?? "";
+      const liveValues = [];
+      const noChangeCopy = "Local training-data processing completed.";
+      let noChangeTerminalObservations = 0;
+      let noChangeTerminalBeforeRefresh = false;
+      const liveObserver = new MutationObserver(() => {
+        const value = syncStatus.textContent ?? "";
+        liveValues.push(value);
+        if (value === noChangeCopy) {
+          noChangeTerminalObservations += 1;
+          const currentLastSynced = metadataText().find((item) => item.startsWith("Last synced ")) ?? "";
+          if (currentLastSynced === lastSyncedBefore) noChangeTerminalBeforeRefresh = true;
+        }
+      });
+      liveObserver.observe(syncStatus, { childList: true, characterData: true, subtree: true });
+      syncButton.focus();
+      syncButton.click();
+      const queued = syncStatus.textContent ?? "";
+      const busyQueued = syncButton.disabled && syncButton.getAttribute("aria-busy") === "true";
+      syncButton.click();
+      syncButton.blur();
+      const syncDeadline = Date.now() + 5000;
+      while (syncButton.disabled && Date.now() < syncDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      liveObserver.disconnect();
+      const asOfAfter = metadataText().find((value) => value.startsWith("As of ")) ?? "";
+      const lastSyncedAfter = metadataText().find((value) => value.startsWith("Last synced ")) ?? "";
+      const metadataAfter = metadataChildrenText();
+      const panelsAfter = [...drawer.querySelectorAll(".context-panel__body")].map((node) => node.textContent ?? "");
+      syncStatus.scrollIntoView({ block: "nearest" });
+      const syncButtonRect = syncButton.getBoundingClientRect();
+      const drawerRect = drawer.getBoundingClientRect();
+      const syncResult = {
+        buttonResident: syncButton === drawer.querySelector(".training-sync__button"),
+        queued,
+        runningObserved: liveValues.includes("Syncing training data…"),
+        terminal: syncStatus.textContent ?? "",
+        label: syncButton.textContent ?? "",
+        atomicLiveRegion:
+          syncStatus.getAttribute("role") === "status" &&
+          syncStatus.getAttribute("aria-live") === "polite" &&
+          syncStatus.getAttribute("aria-atomic") === "true",
+        busyQueued,
+        busyCleared: !syncButton.hasAttribute("aria-busy") && !syncButton.disabled,
+        keyboardFocusRestored: document.activeElement === syncButton,
+        noChangeTerminalObservations,
+        noChangeTerminalOnlyAfterRefresh:
+          noChangeTerminalObservations === 1 &&
+          !noChangeTerminalBeforeRefresh &&
+          lastSyncedAfter !== lastSyncedBefore,
+        onlyLastSyncedChanged:
+          metadataBefore.length === metadataAfter.length &&
+          metadataBefore.filter((value, index) => value !== metadataAfter[index]).length === 1 &&
+          metadataBefore.find((value) => value.startsWith("Last synced ")) === lastSyncedBefore &&
+          metadataAfter.find((value) => value.startsWith("Last synced ")) === lastSyncedAfter,
+        trainingPanelsUnchanged: JSON.stringify(panelsBefore) === JSON.stringify(panelsAfter),
+        asOfUnchanged: asOfBefore === asOfAfter,
+        asOfBefore,
+        asOfAfter,
+        lastSyncedBefore,
+        lastSyncedAfter,
+        statusWraps: syncStatus.scrollWidth <= syncStatus.clientWidth,
+        buttonReachable:
+          syncButtonRect.top >= drawerRect.top && syncButtonRect.bottom <= drawerRect.bottom,
+        drawerOverflow: drawer.scrollWidth > drawer.clientWidth,
       };
       const imperial = drawer.querySelector('input[value="imperial"]');
       imperial.click();
@@ -811,6 +921,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         closedFocus: document.activeElement?.getAttribute("aria-label") ?? null,
         overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
         units: imperial.checked ? imperial.value : "",
+        sync: syncResult,
       };
     `);
     expect(drawer).toEqual({
@@ -822,7 +933,38 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       closedFocus: "Open training data",
       overflow: false,
       units: "imperial",
+      sync: {
+        buttonResident: true,
+        queued: "Sync queued.",
+        runningObserved: true,
+        terminal: "Local training-data processing completed.",
+        label: "Sync again",
+        atomicLiveRegion: true,
+        busyQueued: true,
+        busyCleared: true,
+        keyboardFocusRestored: true,
+        noChangeTerminalObservations: 1,
+        noChangeTerminalOnlyAfterRefresh: true,
+        onlyLastSyncedChanged: true,
+        trainingPanelsUnchanged: true,
+        asOfUnchanged: true,
+        asOfBefore: "As of 2026-07-19",
+        asOfAfter: "As of 2026-07-19",
+        lastSyncedBefore: "Last synced 2026-07-19 07:55:00 UTC",
+        lastSyncedAfter: "Last synced 2026-07-19 07:55:01 UTC",
+        statusWraps: true,
+        buttonReachable: true,
+        drawerOverflow: false,
+      },
     });
+    const syncCallIndex = calls.findIndex((call) => call.method === "sync");
+    expect(syncCallIndex).toBeGreaterThan(-1);
+    expect(calls.filter((call) => call.method === "sync")).toEqual([
+      { jsonrpc: "2.0", method: "sync", params: {} },
+    ]);
+    expect(
+      calls.slice(syncCallIndex + 1).filter((call) => call.method === "getAthleteState"),
+    ).toHaveLength(1);
     expect(calls.filter((call) => call.method === "chat")).toEqual([
       {
         jsonrpc: "2.0",
@@ -854,15 +996,54 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       { jsonrpc: "2.0", method: "setUnitsPreference", params: { value: "imperial" } },
     ]);
     await fixture.setViewport(720, 800);
-    expect(
-      await fixture.evaluate<{ readonly documentOverflow: boolean; readonly topbarFits: boolean }>(`
+    const compactDrawerGeometry = await fixture.evaluate<{
+      readonly documentOverflow: boolean;
+      readonly topbarFits: boolean;
+      readonly drawerOpen: boolean;
+      readonly buttonResident: boolean;
+      readonly buttonReachable: boolean;
+      readonly noChangeStatus: boolean;
+      readonly statusFits: boolean;
+      readonly horizontalOverflow: boolean;
+    }>(`
+      const compactOpener = document.querySelector(".drawer-toggle");
+      compactOpener.click();
+      await new Promise((resolve) => setTimeout(resolve, 250));
       const topbar = document.querySelector(".topbar");
+      const compactDrawer = document.querySelector("#training-context-drawer");
+      const compactButton = compactDrawer.querySelector(".training-sync__button");
+      const compactStatus = compactDrawer.querySelector(".training-sync__status");
+      const compactRegion = compactDrawer.querySelector(".training-sync");
+      const drawerRect = compactDrawer.getBoundingClientRect();
+      const buttonRect = compactButton.getBoundingClientRect();
       return {
         documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
         topbarFits: topbar.scrollWidth <= topbar.clientWidth,
+        drawerOpen: compactDrawer.open,
+        buttonResident: compactDrawer.querySelectorAll(".training-sync__button").length === 1,
+        buttonReachable:
+          buttonRect.left >= drawerRect.left &&
+          buttonRect.right <= drawerRect.right &&
+          buttonRect.top >= drawerRect.top &&
+          buttonRect.bottom <= Math.min(drawerRect.bottom, window.innerHeight),
+        noChangeStatus: compactStatus.textContent === "Local training-data processing completed.",
+        statusFits: compactStatus.scrollWidth <= compactStatus.clientWidth,
+        horizontalOverflow:
+          compactDrawer.scrollWidth > compactDrawer.clientWidth ||
+          compactRegion.scrollWidth > compactRegion.clientWidth ||
+          compactStatus.scrollWidth > compactStatus.clientWidth,
       };
-    `),
-    ).toEqual({ documentOverflow: false, topbarFits: true });
+    `);
+    expect(compactDrawerGeometry).toEqual({
+      documentOverflow: false,
+      topbarFits: true,
+      drawerOpen: true,
+      buttonResident: true,
+      buttonReachable: true,
+      noChangeStatus: true,
+      statusFits: true,
+      horizontalOverflow: false,
+    });
     const base = await realpath(process.platform === "darwin" ? "/tmp" : tmpdir());
     const screenshotRoot = await mkdtemp(join(base, "eap-shot-"));
     scratchPaths.push(screenshotRoot);
@@ -874,6 +1055,85 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     for (const name of ["location", "console", "stdout", "stderr", "dom"] as const) {
       expect(fixture.readCapturedSurface(name)).not.toContain(token);
     }
+    expect(await fixture.close()).toEqual({ livePids: [], listenerCount: 0 });
+    fixtures.splice(fixtures.indexOf(fixture), 1);
+  }, 30_000);
+
+  it("keeps the long partial-sync status reachable and wrapped at 720×800", async () => {
+    const { fixture, calls } = await launch({
+      width: 720,
+      height: 800,
+      reducedMotion: false,
+      syncOutcome: "partial",
+    });
+    const compact = await fixture.evaluate<{
+      readonly drawerOpen: boolean;
+      readonly buttonResident: boolean;
+      readonly buttonReachable: boolean;
+      readonly terminal: string;
+      readonly label: string;
+      readonly statusWrapped: boolean;
+      readonly keyboardFocusRestored: boolean;
+      readonly horizontalOverflow: boolean;
+    }>(`
+      const opener = document.querySelector(".drawer-toggle");
+      opener.click();
+      const drawer = document.querySelector("#training-context-drawer");
+      const syncButton = drawer.querySelector(".training-sync__button");
+      const syncStatus = drawer.querySelector(".training-sync__status");
+      const syncRegion = drawer.querySelector(".training-sync");
+      syncButton.focus();
+      syncButton.click();
+      syncButton.blur();
+      const deadline = Date.now() + 5000;
+      while (syncButton.disabled && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      syncStatus.scrollIntoView({ block: "nearest" });
+      const drawerRect = drawer.getBoundingClientRect();
+      const buttonRect = syncButton.getBoundingClientRect();
+      const statusRect = syncStatus.getBoundingClientRect();
+      const lineHeight = Number.parseFloat(getComputedStyle(syncStatus).lineHeight);
+      return {
+        drawerOpen: drawer.open,
+        buttonResident: drawer.querySelectorAll(".training-sync__button").length === 1,
+        buttonReachable:
+          buttonRect.left >= drawerRect.left &&
+          buttonRect.right <= drawerRect.right &&
+          buttonRect.top >= drawerRect.top &&
+          buttonRect.bottom <= Math.min(drawerRect.bottom, window.innerHeight),
+        terminal: syncStatus.textContent ?? "",
+        label: syncButton.textContent ?? "",
+        statusWrapped:
+          statusRect.height >= lineHeight * 1.9 &&
+          syncStatus.scrollWidth <= syncStatus.clientWidth,
+        keyboardFocusRestored: document.activeElement === syncButton,
+        horizontalOverflow:
+          document.documentElement.scrollWidth > document.documentElement.clientWidth ||
+          drawer.scrollWidth > drawer.clientWidth ||
+          syncRegion.scrollWidth > syncRegion.clientWidth ||
+          syncStatus.scrollWidth > syncStatus.clientWidth,
+      };
+    `);
+    expect(compact).toEqual({
+      drawerOpen: true,
+      buttonResident: true,
+      buttonReachable: true,
+      terminal: "Training-data processing partially completed. Try again to finish.",
+      label: "Try again",
+      statusWrapped: true,
+      keyboardFocusRestored: true,
+      horizontalOverflow: false,
+    });
+    const syncCallIndex = calls.findIndex((call) => call.method === "sync");
+    expect(syncCallIndex).toBeGreaterThan(-1);
+    expect(calls.filter((call) => call.method === "sync")).toEqual([
+      { jsonrpc: "2.0", method: "sync", params: {} },
+    ]);
+    expect(
+      calls.slice(syncCallIndex + 1).filter((call) => call.method === "getAthleteState"),
+    ).toHaveLength(1);
     expect(await fixture.close()).toEqual({ livePids: [], listenerCount: 0 });
     fixtures.splice(fixtures.indexOf(fixture), 1);
   }, 30_000);

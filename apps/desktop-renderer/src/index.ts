@@ -15,7 +15,9 @@ import { createFirstSyncController, type FirstSyncState } from "./first-sync.js"
 import { validateImportPaths, type OnboardingBridge } from "./onboarding/bridge.js";
 import { mountOnboarding } from "./onboarding/mount.js";
 import { createTrainingContextController } from "./training-context/controller.js";
+import { createManualSyncController } from "./training-context/manual-sync.js";
 import { mountTrainingContextView } from "./training-context/view.js";
+import { createTrainingSyncCoordinator } from "./training-sync.js";
 import { createSpendMeterController } from "./spend-meter/controller.js";
 import { createSpendMeterView } from "./spend-meter/view.js";
 
@@ -67,6 +69,14 @@ const trainingContextController = createTrainingContextController({
   clients,
   view: mountedTrainingContext.view,
 });
+const trainingSyncCoordinator = createTrainingSyncCoordinator({
+  clients,
+  refreshTrainingContext: () => trainingContextController.refresh(),
+});
+const manualSyncController = createManualSyncController({
+  coordinator: trainingSyncCoordinator,
+  view: mountedTrainingContext.syncView,
+});
 const mountedChat = mountChatView({
   conversation,
   thread,
@@ -93,6 +103,7 @@ mountedChat.bind({
 });
 mountedTrainingContext.bind({
   onUnitsPreferenceChange: (value) => void trainingContextController.setUnitsPreference(value),
+  onSyncRequest: (kind) => void manualSyncController.activate(kind),
 });
 
 let firstSyncElement: HTMLElement | undefined;
@@ -134,7 +145,6 @@ function renderFirstSync(state: FirstSyncState): void {
     title.textContent = "Training history is ready";
     detail.textContent = "Your coach is ready when you are.";
     body.append(eyebrow, title, detail);
-    void trainingContextController.refresh();
   } else if (state.kind === "protocol") {
     title.textContent = "Enduragent needs to reconnect safely";
     detail.textContent = "Quit and reopen Enduragent.";
@@ -157,26 +167,8 @@ function renderFirstSync(state: FirstSyncState): void {
   firstSyncElement = section;
 }
 
-let syncNeedsReconnect = false;
-let syncFailedClient: CoachClient | undefined;
 firstSyncController = createFirstSyncController({
-  async callSync(options) {
-    let client: CoachClient | undefined;
-    try {
-      client = syncNeedsReconnect
-        ? await clientAfterFailure(syncFailedClient)
-        : await clients.getClient();
-      syncNeedsReconnect = false;
-      syncFailedClient = undefined;
-      return await client.call("sync", {}, options);
-    } catch (error) {
-      if (error instanceof CoachClientDisconnectedError) {
-        syncNeedsReconnect = true;
-        syncFailedClient = client;
-      }
-      throw error;
-    }
-  },
+  coordinator: trainingSyncCoordinator,
   focusComposer() {
     message.focus();
   },
@@ -267,6 +259,8 @@ window.addEventListener(
   () => {
     onboarding.dispose();
     firstSyncController.dispose();
+    manualSyncController.dispose();
+    trainingSyncCoordinator.dispose();
     chatController.dispose();
     spendController.dispose();
     mountedChat.dispose();
