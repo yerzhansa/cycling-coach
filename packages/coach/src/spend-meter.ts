@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
   CACHING_UNAVAILABLE_DISCLOSURE,
@@ -7,7 +7,12 @@ import {
   type SpendRouteSummary,
   type SpendSummary,
 } from "@enduragent/coach-contract";
-import { atomicWriteJson, readUsageLedger } from "@enduragent/core";
+import {
+  atomicWriteJson,
+  readUsageLedger as readUsageLedgerFromDisk,
+  USAGE_LEDGER_FILE,
+  type UsageLedgerReadResult,
+} from "@enduragent/core";
 import {
   cacheReadSavingsUsd,
   classifySpendCaching,
@@ -30,6 +35,7 @@ export interface CreateSpendMeterServiceInput {
   readonly configDir: string;
   readonly timezone: string;
   readonly now?: () => number;
+  readonly readUsageLedger?: (dataDir: string) => UsageLedgerReadResult;
 }
 
 const DailySpendCapSchema = z
@@ -52,14 +58,26 @@ interface MutableRoute {
   cacheSavingsAvailable: boolean;
 }
 
-function dateKey(timestamp: number, timezone: string): string | undefined {
+function createDateFormatter(timezone: string): Intl.DateTimeFormat | undefined {
   try {
-    const parts = new Intl.DateTimeFormat("en-US", {
+    return new Intl.DateTimeFormat("en-US", {
       timeZone: timezone,
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
-    }).formatToParts(new Date(timestamp));
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+function dateKey(
+  timestamp: number,
+  formatter: Intl.DateTimeFormat | undefined,
+): string | undefined {
+  try {
+    const parts = formatter?.formatToParts(new Date(timestamp));
+    if (parts === undefined) return undefined;
     const values = Object.fromEntries(
       parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]),
     );
@@ -70,6 +88,25 @@ function dateKey(timestamp: number, timezone: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function regularFileRevision(path: string): string | undefined {
+  try {
+    const state = statSync(path, { bigint: true });
+    if (!state.isFile()) return undefined;
+    return ["file", state.dev, state.ino, state.size, state.mtimeNs, state.ctimeNs].join(":");
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : undefined;
+  }
+}
+
+function usageLedgerRevision(dataDir: string): string | undefined {
+  const livePath = join(dataDir, USAGE_LEDGER_FILE);
+  const rotated = regularFileRevision(`${livePath}.1`);
+  if (rotated === undefined) return undefined;
+  const live = regularFileRevision(livePath);
+  if (live === undefined) return undefined;
+  return `${rotated}|${live}`;
 }
 
 function nonemptyString(value: unknown): value is string {
@@ -160,139 +197,190 @@ function routeSummary(route: MutableRoute): SpendRouteSummary {
   };
 }
 
-export function createSpendMeterService(input: CreateSpendMeterServiceInput): SpendMeterService {
-  const now = input.now ?? Date.now;
-  const capPath = join(input.configDir, DAILY_SPEND_CAP_FILE);
+interface LedgerAggregate {
+  readonly knownSpendUsd: number;
+  readonly generationCount: number;
+  readonly pricedGenerationCount: number;
+  readonly unpricedGenerationCount: number;
+  readonly malformedLineCount: number;
+  readonly spendComplete: boolean;
+  readonly cacheReadTokens: number;
+  readonly knownCacheReadSavingsUsd: number;
+  readonly cacheSavingsComplete: boolean;
+  readonly routes: readonly SpendRouteSummary[];
+}
 
-  const summarize = async (): Promise<SpendSummary> => {
-    const capturedNow = now();
-    const localDate = dateKey(capturedNow, input.timezone);
-    if (localDate === undefined) throw new TypeError("Spend date could not be resolved.");
-    const dailyCapUsd = readDailyCap(capPath);
-    const ledger = readUsageLedger(input.dataDir);
-    let malformedLineCount = ledger.malformedLineCount;
-    const routes = new Map<string, MutableRoute>();
+function aggregateLedger(
+  ledger: UsageLedgerReadResult,
+  localDate: string,
+  formatter: Intl.DateTimeFormat,
+): LedgerAggregate {
+  let malformedLineCount = ledger.malformedLineCount;
+  const routesByKey = new Map<string, MutableRoute>();
 
-    for (const rawLine of ledger.lines) {
-      const line = rawLine as UsageLedgerLine & Record<string, unknown>;
-      if (
-        !["generate", "turn", "boot"].includes(String(line.kind)) ||
-        typeof line.ts !== "number" ||
-        !Number.isFinite(line.ts) ||
-        !nonemptyString(line.provider) ||
-        !nonemptyString(line.model)
-      ) {
-        malformedLineCount += 1;
-        continue;
-      }
-      const lineDate = dateKey(line.ts, input.timezone);
-      if (lineDate === undefined) {
-        malformedLineCount += 1;
-        continue;
-      }
-      if (line.kind !== "generate" || lineDate !== localDate) continue;
+  for (const rawLine of ledger.lines) {
+    const line = rawLine as UsageLedgerLine & Record<string, unknown>;
+    if (
+      !["generate", "turn", "boot"].includes(String(line.kind)) ||
+      typeof line.ts !== "number" ||
+      !Number.isFinite(line.ts) ||
+      !nonemptyString(line.provider) ||
+      !nonemptyString(line.model)
+    ) {
+      malformedLineCount += 1;
+      continue;
+    }
+    const lineDate = dateKey(line.ts, formatter);
+    if (lineDate === undefined) {
+      malformedLineCount += 1;
+      continue;
+    }
+    if (line.kind !== "generate" || lineDate !== localDate) continue;
 
-      const key = JSON.stringify([line.provider, line.model]);
-      const route = routes.get(key) ?? {
-        provider: line.provider,
-        model: line.model,
-        generationCount: 0,
-        pricedGenerationCount: 0,
-        unpricedGenerationCount: 0,
-        providerReportedGenerationCount: 0,
-        knownSpendUsd: 0,
-        cacheReadTokens: 0,
-        cacheSavingsKnownUsd: 0,
-        cacheSavingsAvailable: true,
-      };
-      routes.set(key, route);
-      route.generationCount += 1;
+    const key = JSON.stringify([line.provider, line.model]);
+    const route = routesByKey.get(key) ?? {
+      provider: line.provider,
+      model: line.model,
+      generationCount: 0,
+      pricedGenerationCount: 0,
+      unpricedGenerationCount: 0,
+      providerReportedGenerationCount: 0,
+      knownSpendUsd: 0,
+      cacheReadTokens: 0,
+      cacheSavingsKnownUsd: 0,
+      cacheSavingsAvailable: true,
+    };
+    routesByKey.set(key, route);
+    route.generationCount += 1;
 
-      if (!selectedNumericFieldsValid(line)) {
-        malformedLineCount += 1;
-        route.unpricedGenerationCount += 1;
-        continue;
-      }
+    if (!selectedNumericFieldsValid(line)) {
+      malformedLineCount += 1;
+      route.unpricedGenerationCount += 1;
+      continue;
+    }
 
-      const cacheReadTokens = line.cacheReadTokens ?? 0;
-      const nextCacheReadTokens = route.cacheReadTokens + cacheReadTokens;
-      if (!Number.isSafeInteger(nextCacheReadTokens)) {
-        malformedLineCount += 1;
-        route.unpricedGenerationCount += 1;
+    const cacheReadTokens = line.cacheReadTokens ?? 0;
+    const nextCacheReadTokens = route.cacheReadTokens + cacheReadTokens;
+    if (!Number.isSafeInteger(nextCacheReadTokens)) {
+      malformedLineCount += 1;
+      route.unpricedGenerationCount += 1;
+      route.cacheSavingsAvailable = false;
+      continue;
+    }
+    route.cacheReadTokens = nextCacheReadTokens;
+    if (cacheReadTokens > 0) {
+      const savings = cacheReadSavingsUsd(line.provider, line.model, cacheReadTokens);
+      if (savings === null || !Number.isFinite(route.cacheSavingsKnownUsd + savings)) {
         route.cacheSavingsAvailable = false;
-        continue;
-      }
-      route.cacheReadTokens = nextCacheReadTokens;
-      if (cacheReadTokens > 0) {
-        const savings = cacheReadSavingsUsd(line.provider, line.model, cacheReadTokens);
-        if (savings === null || !Number.isFinite(route.cacheSavingsKnownUsd + savings)) {
-          route.cacheSavingsAvailable = false;
-        } else {
-          route.cacheSavingsKnownUsd += savings;
-        }
-      }
-
-      const providerReported = line.providerReportedCostUsd;
-      const catalogCost =
-        providerReported === undefined &&
-        line.inputTokens !== undefined &&
-        line.outputTokens !== undefined
-          ? priceInclusiveUsage(line.provider, line.model, {
-              inputTokens: catalogInputTokens(line) ?? line.inputTokens,
-              outputTokens: line.outputTokens,
-              cacheReadTokens,
-              cacheWriteTokens: line.cacheWriteTokens ?? 0,
-            })
-          : undefined;
-      const cost = providerReported ?? catalogCost?.total;
-      if (cost === undefined || !Number.isFinite(route.knownSpendUsd + cost)) {
-        route.unpricedGenerationCount += 1;
       } else {
-        route.knownSpendUsd += cost;
-        route.pricedGenerationCount += 1;
-        if (providerReported !== undefined) route.providerReportedGenerationCount += 1;
+        route.cacheSavingsKnownUsd += savings;
       }
     }
 
-    const sortedRoutes = [...routes.values()]
-      .sort(
-        (left, right) =>
-          left.provider.localeCompare(right.provider) || left.model.localeCompare(right.model),
-      )
-      .map(routeSummary);
-    const generationCount = sortedRoutes.reduce((sum, route) => sum + route.generationCount, 0);
-    const pricedGenerationCount = sortedRoutes.reduce(
-      (sum, route) => sum + route.pricedGenerationCount,
-      0,
-    );
-    const unpricedGenerationCount = sortedRoutes.reduce(
-      (sum, route) => sum + route.unpricedGenerationCount,
-      0,
-    );
-    const knownSpendUsd = sortedRoutes.reduce((sum, route) => sum + route.knownSpendUsd, 0);
-    const cacheReadTokens = sortedRoutes.reduce((sum, route) => sum + route.cacheReadTokens, 0);
-    const knownCacheReadSavingsUsd = sortedRoutes.reduce(
-      (sum, route) => sum + (route.cacheReadSavingsUsd ?? 0),
-      0,
-    );
-    const spendComplete = unpricedGenerationCount === 0 && malformedLineCount === 0;
-    const cacheSavingsComplete =
-      malformedLineCount === 0 && sortedRoutes.every((route) => route.cacheReadSavingsUsd !== null);
+    const providerReported = line.providerReportedCostUsd;
+    const catalogCost =
+      providerReported === undefined &&
+      line.inputTokens !== undefined &&
+      line.outputTokens !== undefined
+        ? priceInclusiveUsage(line.provider, line.model, {
+            inputTokens: catalogInputTokens(line) ?? line.inputTokens,
+            outputTokens: line.outputTokens,
+            cacheReadTokens,
+            cacheWriteTokens: line.cacheWriteTokens ?? 0,
+          })
+        : undefined;
+    const cost = providerReported ?? catalogCost?.total;
+    if (cost === undefined || !Number.isFinite(route.knownSpendUsd + cost)) {
+      route.unpricedGenerationCount += 1;
+    } else {
+      route.knownSpendUsd += cost;
+      route.pricedGenerationCount += 1;
+      if (providerReported !== undefined) route.providerReportedGenerationCount += 1;
+    }
+  }
+
+  const routes = [...routesByKey.values()]
+    .sort(
+      (left, right) =>
+        left.provider.localeCompare(right.provider) || left.model.localeCompare(right.model),
+    )
+    .map(routeSummary);
+  const generationCount = routes.reduce((sum, route) => sum + route.generationCount, 0);
+  const pricedGenerationCount = routes.reduce((sum, route) => sum + route.pricedGenerationCount, 0);
+  const unpricedGenerationCount = routes.reduce(
+    (sum, route) => sum + route.unpricedGenerationCount,
+    0,
+  );
+  const knownSpendUsd = routes.reduce((sum, route) => sum + route.knownSpendUsd, 0);
+  const cacheReadTokens = routes.reduce((sum, route) => sum + route.cacheReadTokens, 0);
+  const knownCacheReadSavingsUsd = routes.reduce(
+    (sum, route) => sum + (route.cacheReadSavingsUsd ?? 0),
+    0,
+  );
+  const spendComplete = unpricedGenerationCount === 0 && malformedLineCount === 0;
+  const cacheSavingsComplete =
+    malformedLineCount === 0 && routes.every((route) => route.cacheReadSavingsUsd !== null);
+  return {
+    knownSpendUsd,
+    generationCount,
+    pricedGenerationCount,
+    unpricedGenerationCount,
+    malformedLineCount,
+    spendComplete,
+    cacheReadTokens,
+    knownCacheReadSavingsUsd,
+    cacheSavingsComplete,
+    routes,
+  };
+}
+
+export function createSpendMeterService(input: CreateSpendMeterServiceInput): SpendMeterService {
+  const now = input.now ?? Date.now;
+  const capPath = join(input.configDir, DAILY_SPEND_CAP_FILE);
+  const readLedger = input.readUsageLedger ?? readUsageLedgerFromDisk;
+  const formatter = createDateFormatter(input.timezone);
+  let cache:
+    | {
+        readonly localDate: string;
+        readonly revision: string;
+        readonly aggregate: LedgerAggregate;
+      }
+    | undefined;
+
+  const summarize = async (): Promise<SpendSummary> => {
+    const capturedNow = now();
+    const localDate = dateKey(capturedNow, formatter);
+    if (localDate === undefined || formatter === undefined) {
+      throw new TypeError("Spend date could not be resolved.");
+    }
+    const dailyCapUsd = readDailyCap(capPath);
+    const revision = usageLedgerRevision(input.dataDir);
+    let aggregate =
+      revision !== undefined && cache?.localDate === localDate && cache.revision === revision
+        ? cache.aggregate
+        : undefined;
+    if (aggregate === undefined) {
+      aggregate = aggregateLedger(readLedger(input.dataDir), localDate, formatter);
+      const finalRevision = usageLedgerRevision(input.dataDir);
+      if (
+        revision !== undefined &&
+        finalRevision === revision &&
+        aggregate.malformedLineCount === 0
+      ) {
+        cache = { localDate, revision, aggregate };
+      }
+    }
     return SpendSummarySchema.parse({
       localDate,
       timezone: input.timezone,
       dailyCapUsd,
-      knownSpendUsd,
-      generationCount,
-      pricedGenerationCount,
-      unpricedGenerationCount,
-      malformedLineCount,
-      spendComplete,
-      capStatus: knownSpendUsd >= dailyCapUsd ? "reached" : spendComplete ? "below" : "unknown",
-      cacheReadTokens,
-      knownCacheReadSavingsUsd,
-      cacheSavingsComplete,
-      routes: sortedRoutes,
+      ...aggregate,
+      capStatus:
+        aggregate.knownSpendUsd >= dailyCapUsd
+          ? "reached"
+          : aggregate.spendComplete
+            ? "below"
+            : "unknown",
     });
   };
 
