@@ -150,6 +150,7 @@ export {
   CONFIG_DIR,
   CONFIG_FILE,
   loadConfig,
+  loadConfigFromYaml,
   readConfigYaml,
   resolveConfigSecrets,
 } from "./config.js";

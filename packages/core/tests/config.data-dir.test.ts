@@ -40,6 +40,18 @@ describe("config data directory", () => {
     expect(loadConfig(configDir, { defaultDataDir: athleteRoot }).dataDir).toBe(athleteRoot);
   });
 
+  it("loads an already parsed snapshot without reading the configuration file again", async () => {
+    const configDir = await freshDirectory("core-snapshot-config-");
+    const athleteRoot = await freshDirectory("core-snapshot-root-");
+    const { loadConfigFromYaml } = await import("../src/config.js");
+
+    expect(
+      loadConfigFromYaml({ data_source: "store" }, configDir, {
+        defaultDataDir: athleteRoot,
+      }),
+    ).toMatchObject({ dataSource: "store", dataDir: athleteRoot });
+  });
+
   it("preserves explicit YAML values and keeps null on its legacy fallback", async () => {
     const configDir = await freshDirectory("core-explicit-config-");
     const athleteRoot = await freshDirectory("core-explicit-root-");

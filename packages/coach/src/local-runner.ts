@@ -1,4 +1,3 @@
-import { engineConfigFromConfig, loadConfig } from "@enduragent/core";
 import type { CoachEngine, CoachOperations } from "@enduragent/coach-contract";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import type { WriterProtocolListener } from "@enduragent/kernel-node/lock";
@@ -9,7 +8,7 @@ import {
   type LegacyMigrationAction,
   type LegacyMigrationResult,
 } from "./legacy-migration.js";
-import { checkHomeReadiness } from "./readiness.js";
+import { checkHomeReadiness, type ReadinessFailure } from "./readiness.js";
 import { withCoachStoreWriter } from "./runtime.js";
 
 export interface LocalCoachLifecycle {
@@ -22,7 +21,7 @@ export interface LocalCoachLifecycle {
 
 export type LocalCoachRunResult<T> =
   | { readonly status: "completed"; readonly value: T }
-  | { readonly status: "not-configured"; readonly configPath: string }
+  | ReadinessFailure
   | {
       readonly status: "migration-refused";
       readonly result: Extract<LegacyMigrationResult, { status: "refused" }>;
@@ -49,7 +48,7 @@ class MigrationTerminal extends Error {
 }
 
 type WriterValue<T> =
-  | { readonly kind: "not-configured"; readonly configPath: string }
+  | { readonly kind: "readiness-failure"; readonly result: ReadinessFailure }
   | { readonly kind: "fulfilled"; readonly value: T }
   | { readonly kind: "rejected"; readonly error: unknown };
 
@@ -109,17 +108,11 @@ export async function withLocalCoach<T>(
       },
       operation: async (context): Promise<WriterValue<T>> => {
         const readiness = await checkHomeReadiness(context.home);
-        if (readiness.status === "not-configured") {
+        if (readiness.status !== "ready") {
           return {
-            kind: "not-configured",
-            configPath: readiness.configPath,
+            kind: "readiness-failure",
+            result: readiness,
           };
-        }
-        const config = loadConfig(context.home.configDir, {
-          defaultDataDir: context.home.root,
-        });
-        if (JSON.stringify(engineConfigFromConfig(config)) !== JSON.stringify(readiness.config)) {
-          throw new TypeError("Ready engine configuration changed before engine construction.");
         }
         let lifecycle: LocalCoachComposition | undefined;
         let lifecycleCloseOutcome: { kind: "succeeded" } | { kind: "failed"; error: unknown } = {
@@ -131,8 +124,8 @@ export async function withLocalCoach<T>(
             env: writerEnv,
             home: input.home,
             context,
-            config,
-            engineConfig: readiness.config,
+            config: readiness.config,
+            engineConfig: readiness.engineConfig,
           });
           const publishedLifecycle = lifecycle;
           try {
@@ -172,8 +165,6 @@ export async function withLocalCoach<T>(
     throw error;
   }
   if (writerValue.kind === "rejected") throw writerValue.error;
-  if (writerValue.kind === "not-configured") {
-    return { status: "not-configured", configPath: writerValue.configPath };
-  }
+  if (writerValue.kind === "readiness-failure") return writerValue.result;
   return { status: "completed", value: writerValue.value };
 }

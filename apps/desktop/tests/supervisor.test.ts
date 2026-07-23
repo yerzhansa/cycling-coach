@@ -87,7 +87,7 @@ describe("desktop main supervisor", () => {
     expect(resolveDaemon).toHaveBeenCalledTimes(2);
   });
 
-  it("starts over the closed control protocol and acknowledges terminal frames", async () => {
+  it("starts over the closed control protocol and acknowledges one exact terminal frame", async () => {
     const child = new FakeUtilityProcess();
     const fork = vi.mocked((await import("electron")).utilityProcess.fork);
     fork.mockReturnValue(child as never);
@@ -118,7 +118,123 @@ describe("desktop main supervisor", () => {
     expect(child.postMessage).toHaveBeenCalledWith({ type: "shutdown" });
     child.emit("exit", 0);
     await stopping;
+    await expect(handle.exited).resolves.toEqual({ exitCode: 0 });
     expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("ignores terminal frames received before posting the validated start frame", async () => {
+    const child = new FakeUtilityProcess();
+    const fork = vi.mocked((await import("electron")).utilityProcess.fork);
+    fork.mockReturnValue(child as never);
+    const started = forkAppSupervisedDaemon({
+      utilityEntry: "/synthetic/daemon-utility.js",
+      homeRoot: "/synthetic/athlete",
+    });
+
+    child.emit("message", { type: "terminal", exitCode: 1, readinessFailure: "unreadable" });
+    expect(child.postMessage).not.toHaveBeenCalledWith({ type: "terminal-ack" });
+    child.emit("spawn");
+    const handle = await started;
+    child.postMessage.mockClear();
+    child.emit("message", { type: "terminal", exitCode: 1, readinessFailure: "malformed" });
+    child.emit("exit", 1);
+
+    expect(child.postMessage).toHaveBeenCalledOnce();
+    expect(child.postMessage).toHaveBeenCalledWith({ type: "terminal-ack" });
+    await expect(handle.exited).resolves.toEqual({
+      exitCode: 1,
+      readinessFailure: "malformed",
+    });
+  });
+
+  it("lets the first valid terminal frame own the claim and ignores typed duplicates", async () => {
+    const child = new FakeUtilityProcess();
+    const fork = vi.mocked((await import("electron")).utilityProcess.fork);
+    fork.mockReturnValue(child as never);
+    const started = forkAppSupervisedDaemon({
+      utilityEntry: "/synthetic/daemon-utility.js",
+      homeRoot: "/synthetic/athlete",
+    });
+    child.emit("spawn");
+    const handle = await started;
+    child.postMessage.mockClear();
+
+    child.emit("message", { type: "terminal", exitCode: 1 });
+    child.emit("message", { type: "terminal", exitCode: 1, readinessFailure: "unreadable" });
+    child.emit("message", { type: "terminal", exitCode: 1, readinessFailure: "malformed" });
+    child.emit("exit", 1);
+
+    expect(child.postMessage).toHaveBeenCalledOnce();
+    expect(child.postMessage).toHaveBeenCalledWith({ type: "terminal-ack" });
+    await expect(handle.exited).resolves.toEqual({ exitCode: 1 });
+  });
+
+  it("exposes only the first typed terminal claim when its code exactly matches the exit", async () => {
+    const child = new FakeUtilityProcess();
+    const fork = vi.mocked((await import("electron")).utilityProcess.fork);
+    fork.mockReturnValue(child as never);
+    const started = forkAppSupervisedDaemon({
+      utilityEntry: "/synthetic/daemon-utility.js",
+      homeRoot: "/synthetic/athlete",
+    });
+    child.emit("spawn");
+    const handle = await started;
+    child.postMessage.mockClear();
+
+    child.emit("message", { type: "terminal", exitCode: 1, readinessFailure: "unreadable" });
+    child.emit("message", { type: "terminal", exitCode: 1, readinessFailure: "malformed" });
+    child.emit("exit", 1);
+
+    expect(child.postMessage).toHaveBeenCalledOnce();
+    await expect(handle.exited).resolves.toEqual({
+      exitCode: 1,
+      readinessFailure: "unreadable",
+    });
+  });
+
+  it.each([
+    ["a mismatched exit code", 0],
+    ["a signal exit", null],
+  ] as const)("does not expose terminal metadata for %s", async (_case, actualExit) => {
+    const child = new FakeUtilityProcess();
+    const fork = vi.mocked((await import("electron")).utilityProcess.fork);
+    fork.mockReturnValue(child as never);
+    const started = forkAppSupervisedDaemon({
+      utilityEntry: "/synthetic/daemon-utility.js",
+      homeRoot: "/synthetic/athlete",
+    });
+    child.emit("spawn");
+    const handle = await started;
+    child.postMessage.mockClear();
+
+    child.emit("message", { type: "terminal", exitCode: 1, readinessFailure: "unreadable" });
+    child.emit("exit", actualExit);
+
+    expect(child.postMessage).toHaveBeenCalledOnce();
+    await expect(handle.exited).resolves.toEqual({ exitCode: actualExit });
+  });
+
+  it("rejects invalid terminal metadata without acknowledgement or exit exposure", async () => {
+    const child = new FakeUtilityProcess();
+    const fork = vi.mocked((await import("electron")).utilityProcess.fork);
+    fork.mockReturnValue(child as never);
+    const started = forkAppSupervisedDaemon({
+      utilityEntry: "/synthetic/daemon-utility.js",
+      homeRoot: "/synthetic/athlete",
+    });
+    child.emit("spawn");
+    const handle = await started;
+    child.postMessage.mockClear();
+
+    child.emit("message", {
+      type: "terminal",
+      exitCode: 1,
+      readinessFailure: "malformed",
+      error: "synthetic-private-detail",
+    });
+    expect(child.postMessage).not.toHaveBeenCalled();
+    child.emit("exit", 1);
+    await expect(handle.exited).resolves.toEqual({ exitCode: 1 });
   });
 
   it("uses one bounded kill fallback and still waits for observed exit", async () => {

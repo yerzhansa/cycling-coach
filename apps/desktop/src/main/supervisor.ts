@@ -6,6 +6,7 @@ import {
   type AppSupervisedChildHandle,
   type DesktopDaemonStartBudget,
   type DesktopDaemonResolution,
+  type ReadinessFailureStatus,
   type ResolveDesktopDaemonInput,
 } from "@enduragent/coach/enduragent";
 import type { DesktopDaemonRecoveryBudget } from "./daemon-lifecycle.js";
@@ -14,6 +15,9 @@ import {
   UTILITY_FORCE_EXIT_TIMEOUT_MS,
   UTILITY_SPAWN_TIMEOUT_MS,
 } from "./constants.js";
+import type { UtilityTerminalFrame } from "../utility/protocol.js";
+
+export type { UtilityTerminalFrame } from "../utility/protocol.js";
 
 export type UtilityStartFrame = {
   readonly type: "start";
@@ -22,10 +26,10 @@ export type UtilityStartFrame = {
 };
 export type UtilityShutdownFrame = { readonly type: "shutdown" };
 export type UtilityTerminalAckFrame = { readonly type: "terminal-ack" };
-export type UtilityTerminalFrame = {
-  readonly type: "terminal";
-  readonly exitCode: number;
-};
+
+function isReadinessFailureStatus(value: unknown): value is ReadinessFailureStatus {
+  return value === "not-configured" || value === "unreadable" || value === "malformed";
+}
 
 export function isUtilityStartFrame(value: unknown): value is UtilityStartFrame {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
@@ -70,14 +74,23 @@ export function isUtilityTerminalAckFrame(value: unknown): value is UtilityTermi
 }
 
 export function isUtilityTerminalFrame(value: unknown): value is UtilityTerminalFrame {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  if (
+    record.type !== "terminal" ||
+    !Number.isSafeInteger(record.exitCode) ||
+    (record.exitCode as number) < 0
+  ) {
+    return false;
+  }
+  if (keys.length === 2) return keys[0] === "exitCode" && keys[1] === "type";
   return (
-    value !== null &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.keys(value).length === 2 &&
-    (value as { readonly type?: unknown }).type === "terminal" &&
-    Number.isSafeInteger((value as { readonly exitCode?: unknown }).exitCode) &&
-    (value as { readonly exitCode: number }).exitCode >= 0
+    keys.length === 3 &&
+    keys[0] === "exitCode" &&
+    keys[1] === "readinessFailure" &&
+    keys[2] === "type" &&
+    isReadinessFailureStatus(record.readinessFailure)
   );
 }
 
@@ -220,23 +233,41 @@ export async function forkAppSupervisedDaemon(input: {
   });
   let exitCode: number | null = null;
   let exited = false;
-  let resolveExited!: (value: { readonly exitCode: number | null }) => void;
-  const exitedPromise = new Promise<{ readonly exitCode: number | null }>((resolve) => {
+  let startPosted = false;
+  let terminalClaim: UtilityTerminalFrame | undefined;
+  let resolveExited!: (value: {
+    readonly exitCode: number | null;
+    readonly readinessFailure?: ReadinessFailureStatus;
+  }) => void;
+  const exitedPromise = new Promise<{
+    readonly exitCode: number | null;
+    readonly readinessFailure?: ReadinessFailureStatus;
+  }>((resolve) => {
     resolveExited = resolve;
   });
   child.once("exit", (code) => {
     exited = true;
     exitCode = Number.isInteger(code) ? code : null;
-    resolveExited({ exitCode });
+    const readinessFailure =
+      exitCode !== null &&
+      terminalClaim?.readinessFailure !== undefined &&
+      terminalClaim.exitCode === exitCode
+        ? terminalClaim.readinessFailure
+        : undefined;
+    resolveExited({
+      exitCode,
+      ...(readinessFailure === undefined ? {} : { readinessFailure }),
+    });
   });
   child.on("message", (message) => {
-    if (isUtilityTerminalFrame(message)) {
-      child.postMessage({ type: "terminal-ack" } satisfies UtilityTerminalAckFrame);
-    }
+    if (!startPosted || terminalClaim !== undefined || !isUtilityTerminalFrame(message)) return;
+    terminalClaim = message;
+    child.postMessage({ type: "terminal-ack" } satisfies UtilityTerminalAckFrame);
   });
   try {
     await waitForSpawn(child, input.signal ?? new AbortController().signal);
     child.postMessage(start);
+    startPosted = true;
   } catch {
     try {
       await terminateUnacknowledgedUtility(child, exitedPromise);

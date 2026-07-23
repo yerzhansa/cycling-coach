@@ -1,35 +1,96 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { engineConfigFromConfig, loadConfig } from "@enduragent/core";
+import {
+  engineConfigFromConfig,
+  loadConfigFromYaml,
+  type Config,
+  type LoadConfigOptions,
+} from "@enduragent/core";
 import type { EngineConfig } from "@enduragent/engine";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import { parse as parseYaml } from "yaml";
 
+export type ReadinessFailureStatus = "not-configured" | "unreadable" | "malformed";
+
+export type ReadinessFailure =
+  | { readonly status: "not-configured"; readonly configPath: string }
+  | { readonly status: "unreadable" }
+  | { readonly status: "malformed" };
+
 export type ReadinessResult =
-  | { status: "ready"; config: EngineConfig }
-  | { status: "not-configured"; configPath: string };
+  | {
+      readonly status: "ready";
+      readonly config: Config;
+      readonly engineConfig: EngineConfig;
+    }
+  | ReadinessFailure;
+
+export interface ReadinessDependencies {
+  readonly readConfigFile: (path: string, encoding: "utf8") => Promise<string>;
+  readonly loadConfig: (
+    yaml: Record<string, unknown>,
+    configDir: string,
+    options: LoadConfigOptions,
+  ) => Config;
+  readonly projectConfig: (config: Config) => EngineConfig;
+}
+
+const readinessDependencies: ReadinessDependencies = {
+  readConfigFile: readFile,
+  loadConfig: loadConfigFromYaml,
+  projectConfig: engineConfigFromConfig,
+};
 
 function isMap(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export async function checkHomeReadiness(home: AthleteHome): Promise<ReadinessResult> {
-  const configPath = join(home.configDir, "config.yaml");
+function isMissing(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    (error as { readonly code?: unknown }).code === "ENOENT"
+  );
+}
+
+function parseConfig(source: string): Record<string, unknown> | undefined {
   try {
-    const parsedYaml = parseYaml(await readFile(configPath, "utf8")) as unknown;
-    if (!isMap(parsedYaml)) return { status: "not-configured", configPath };
-    const config = loadConfig(home.configDir, { defaultDataDir: home.root });
-    const profileName = config.llm.authProfile;
-    if (profileName !== undefined) {
-      const profiles = JSON.parse(
-        await readFile(join(home.configDir, "auth-profiles.json"), "utf8"),
-      ) as unknown;
-      if (!isMap(profiles) || !Object.hasOwn(profiles, profileName)) {
-        return { status: "not-configured", configPath };
-      }
-    }
-    return { status: "ready", config: engineConfigFromConfig(config) };
+    const parsed = parseYaml(source) as unknown;
+    return isMap(parsed) ? parsed : undefined;
   } catch {
-    return { status: "not-configured", configPath };
+    return undefined;
+  }
+}
+
+export async function checkHomeReadiness(
+  home: AthleteHome,
+  dependencies: ReadinessDependencies = readinessDependencies,
+): Promise<ReadinessResult> {
+  const configPath = join(home.configDir, "config.yaml");
+  let initialSource: string;
+  try {
+    initialSource = await dependencies.readConfigFile(configPath, "utf8");
+  } catch (error) {
+    return isMissing(error) ? { status: "not-configured", configPath } : { status: "unreadable" };
+  }
+  if (parseConfig(initialSource) === undefined) return { status: "malformed" };
+
+  let source: string;
+  try {
+    source = await dependencies.readConfigFile(configPath, "utf8");
+  } catch {
+    return { status: "unreadable" };
+  }
+  const yaml = parseConfig(source);
+  if (yaml === undefined) return { status: "malformed" };
+  try {
+    const config = dependencies.loadConfig(yaml, home.configDir, {
+      defaultDataDir: home.root,
+    });
+    if (config.dataDir !== home.root) return { status: "malformed" };
+    const engineConfig = dependencies.projectConfig(config);
+    return { status: "ready", config, engineConfig };
+  } catch {
+    return { status: "malformed" };
   }
 }
