@@ -14,6 +14,7 @@ import { mountChatView } from "./chat/view.js";
 import { createDesktopCoachClientProvider } from "./coach-client.js";
 import { createFirstSyncController, type FirstSyncState } from "./first-sync.js";
 import { validateImportPaths, type OnboardingBridge } from "./onboarding/bridge.js";
+import { createOnboardingCompletionController } from "./onboarding/completion.js";
 import { mountOnboarding } from "./onboarding/mount.js";
 import { createTrainingContextController } from "./training-context/controller.js";
 import { createManualSyncController } from "./training-context/manual-sync.js";
@@ -240,15 +241,22 @@ const residentRideImport = mountResidentRideImport({
   before: connectionStatus,
   imports: rideImports,
 });
+const onboardingCompletion = createOnboardingCompletionController({
+  storage: () => window.localStorage,
+  onComplete: (completion) => void firstSyncController.start(completion),
+});
 const onboarding = mountOnboarding({
   document,
   bridge: onboardingBridge,
   rideImports,
   onRideImportPresentationChange: (presenting) => residentRideImport.setSuppressed(presenting),
   opener: setup,
-  onComplete: (completion) => void firstSyncController.start(completion),
+  onComplete: (completion) => onboardingCompletion.complete(completion),
 });
-setup.addEventListener("click", () => void onboarding.open());
+setup.addEventListener(
+  "click",
+  () => void onboardingCompletion.openManually(() => onboarding.open()),
+);
 const disposeDroppedRideImports = subscribeToDroppedRideImports({
   subscribe: onboardingBridge.onDroppedImportFiles,
   onboarding,
@@ -258,7 +266,7 @@ const disposeDroppedRideImports = subscribeToDroppedRideImports({
 void trainingContextController.start();
 spendController.start();
 void chatController.start();
-void onboarding.open();
+void onboardingCompletion.openOnStartup(() => onboarding.open());
 void clients.getClient().then(
   () => {
     document.documentElement.dataset.rpc = "connected";
