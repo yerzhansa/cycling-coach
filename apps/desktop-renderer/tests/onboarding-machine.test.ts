@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  canImportFiles,
   createOnboardingState,
   nextStep,
   previousStep,
@@ -10,21 +9,20 @@ import {
   withChatGptPending,
   withChatGptStatus,
   withIntake,
-  withSuccessfulImport,
+  withImportedRideFileCount,
 } from "../src/onboarding/machine.js";
 
 describe("desktop onboarding machine", () => {
   it("keeps the four ordered steps and exact guards", () => {
     let state = createOnboardingState();
     expect(Object.keys(state).sort()).toEqual([
-      "acceptedImportPaths",
       "busy",
       "chatGptRefusal",
       "chatGptRuntimeReady",
       "chatGptState",
       "credentialStatus",
       "fixedError",
-      "importProgress",
+      "importedRideFileCount",
       "intake",
       "step",
     ]);
@@ -41,7 +39,7 @@ describe("desktop onboarding machine", () => {
       step: "training-data",
       fixedError: "training-data-required",
     });
-    state = withSuccessfulImport(state, ["/synthetic/ride.fit"]);
+    state = withImportedRideFileCount(state, 1);
     state = nextStep(state);
     expect(state.step).toBe("safety-intake");
     expect(nextStep(state)).toMatchObject({
@@ -80,25 +78,21 @@ describe("desktop onboarding machine", () => {
       { slot: "intervals-icu", state: "configured", runtimeState: "active" },
     ]);
     state = nextStep(state);
-    state = withSuccessfulImport(state, ["/synthetic/ride.tcx"]);
+    state = withImportedRideFileCount(state, 1);
     state = nextStep(state);
     state = previousStep(state);
     state = previousStep(state);
     expect(state.step).toBe("coach-keys");
     expect(state.credentialStatus.openrouter).toBe("configured");
-    expect(state.acceptedImportPaths).toEqual(["/synthetic/ride.tcx"]);
+    expect(state.importedRideFileCount).toBe(1);
     expect("secret" in state).toBe(false);
   });
 
-  it("accepts chooser and drop imports only while the training step is open and idle", () => {
-    let state = createOnboardingState([
-      { slot: "anthropic", state: "configured", runtimeState: "active" },
-    ]);
-    state = nextStep(state);
-    expect(canImportFiles(state, true)).toBe(true);
-    expect(canImportFiles(state, false)).toBe(false);
-    expect(canImportFiles({ ...state, busy: true }, true)).toBe(false);
-    expect(canImportFiles(previousStep(state), true)).toBe(false);
+  it("preserves an earlier successful import when a later batch imports nothing", () => {
+    let state = withImportedRideFileCount(createOnboardingState(), 2);
+    state = withImportedRideFileCount(state, 0);
+    expect(state.importedRideFileCount).toBe(2);
+    expect(() => withImportedRideFileCount(state, -1)).toThrow(TypeError);
   });
 
   it("maps every cycling intake branch to the landed strict DTO", () => {

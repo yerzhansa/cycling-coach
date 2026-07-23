@@ -8,6 +8,7 @@ import "./chat/styles.css";
 import "./training-context/styles.css";
 import "./spend-meter/styles.css";
 import "./onboarding/onboarding.css";
+import "./ride-import.css";
 import { createChatController } from "./chat/controller.js";
 import { mountChatView } from "./chat/view.js";
 import { createDesktopCoachClientProvider } from "./coach-client.js";
@@ -20,6 +21,11 @@ import { mountTrainingContextView } from "./training-context/view.js";
 import { createTrainingSyncCoordinator } from "./training-sync.js";
 import { createSpendMeterController } from "./spend-meter/controller.js";
 import { createSpendMeterView } from "./spend-meter/view.js";
+import {
+  createRideImportController,
+  mountResidentRideImport,
+  subscribeToDroppedRideImports,
+} from "./ride-import.js";
 
 function one<T extends Element>(selector: string, kind: { new (): T }): T {
   const matches = document.querySelectorAll(selector);
@@ -231,13 +237,27 @@ setup.type = "button";
 setup.className = "setup-button";
 setup.textContent = "Setup";
 topbarActions.insertBefore(setup, connectionStatus);
+const rideImports = createRideImportController(onboardingBridge);
+const residentRideImport = mountResidentRideImport({
+  document,
+  actionHost: topbarActions,
+  before: connectionStatus,
+  imports: rideImports,
+});
 const onboarding = mountOnboarding({
   document,
   bridge: onboardingBridge,
+  rideImports,
+  onRideImportPresentationChange: (presenting) => residentRideImport.setSuppressed(presenting),
   opener: setup,
   onComplete: (completion) => void firstSyncController.start(completion),
 });
 setup.addEventListener("click", () => void onboarding.open());
+const disposeDroppedRideImports = subscribeToDroppedRideImports({
+  subscribe: onboardingBridge.onDroppedImportFiles,
+  onboarding,
+  resident: residentRideImport,
+});
 
 void trainingContextController.start();
 spendController.start();
@@ -257,7 +277,9 @@ void clients.getClient().then(
 window.addEventListener(
   "pagehide",
   () => {
+    disposeDroppedRideImports();
     onboarding.dispose();
+    residentRideImport.dispose();
     firstSyncController.dispose();
     manualSyncController.dispose();
     trainingSyncCoordinator.dispose();

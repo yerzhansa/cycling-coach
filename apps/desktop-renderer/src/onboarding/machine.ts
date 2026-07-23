@@ -1,8 +1,4 @@
-import {
-  SaveIntakeRpcParamsSchema,
-  type CoachOperationProgressNotificationEnvelope,
-  type SaveIntakeRpcParams,
-} from "@enduragent/coach-contract";
+import { SaveIntakeRpcParamsSchema, type SaveIntakeRpcParams } from "@enduragent/coach-contract";
 import {
   DESKTOP_CREDENTIAL_SLOTS,
   ONBOARDING_STEP_IDS,
@@ -40,7 +36,6 @@ export type OnboardingErrorCode =
   | "credential-save-failed"
   | "training-account-mismatch"
   | "training-data-required"
-  | "import-failed"
   | "intake-incomplete"
   | "intake-save-failed";
 
@@ -50,8 +45,7 @@ export interface OnboardingState {
   readonly chatGptState: "absent" | "pending" | "configured" | "refused";
   readonly chatGptRuntimeReady: boolean;
   readonly chatGptRefusal: ChatGptLoginRefusalReason | null;
-  readonly acceptedImportPaths: readonly string[];
-  readonly importProgress: CoachOperationProgressNotificationEnvelope | null;
+  readonly importedRideFileCount: number;
   readonly intake: DesktopIntakeDraft;
   readonly busy: boolean;
   readonly fixedError: OnboardingErrorCode | null;
@@ -84,8 +78,7 @@ export function createOnboardingState(
     chatGptState: chatGptStatus.state,
     chatGptRuntimeReady: chatGptStatus.runtimeReady,
     chatGptRefusal: null,
-    acceptedImportPaths: [],
-    importProgress: null,
+    importedRideFileCount: 0,
     intake: { priorBsi: null, injuryStatus: null, clinicianCleared: null },
     busy: false,
     fixedError: null,
@@ -156,12 +149,8 @@ export function hasConfiguredModel(state: OnboardingState): boolean {
 
 export function hasTrainingData(state: OnboardingState): boolean {
   return (
-    state.credentialStatus["intervals-icu"] === "configured" || state.acceptedImportPaths.length > 0
+    state.credentialStatus["intervals-icu"] === "configured" || state.importedRideFileCount > 0
   );
-}
-
-export function canImportFiles(state: OnboardingState, modalOpen: boolean): boolean {
-  return modalOpen && !state.busy && state.step === "training-data";
 }
 
 export function toDesktopIntakeFlags(draft: DesktopIntakeDraft): SaveIntakeRpcParams {
@@ -228,23 +217,16 @@ export function withError(
   return { ...state, busy: false, fixedError };
 }
 
-export function withImportProgress(
+export function withImportedRideFileCount(
   state: OnboardingState,
-  importProgress: CoachOperationProgressNotificationEnvelope,
+  importedRideFileCount: number,
 ): OnboardingState {
-  return { ...state, importProgress };
-}
-
-export function withSuccessfulImport(
-  state: OnboardingState,
-  paths: readonly string[],
-): OnboardingState {
+  if (!Number.isSafeInteger(importedRideFileCount) || importedRideFileCount < 0) {
+    throw new TypeError();
+  }
   return {
     ...state,
-    acceptedImportPaths: [...paths],
-    importProgress: null,
-    busy: false,
-    fixedError: null,
+    importedRideFileCount: Math.max(state.importedRideFileCount, importedRideFileCount),
   };
 }
 
