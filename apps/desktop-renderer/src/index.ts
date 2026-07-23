@@ -9,6 +9,7 @@ import "./training-context/styles.css";
 import "./spend-meter/styles.css";
 import "./release-notes/styles.css";
 import "./update/styles.css";
+import "./settings/styles.css";
 import "./onboarding/onboarding.css";
 import "./ride-import.css";
 import { createChatController } from "./chat/controller.js";
@@ -28,6 +29,8 @@ import { createReleaseNotesController } from "./release-notes/controller.js";
 import { createReleaseNotesView } from "./release-notes/view.js";
 import { createDesktopUpdateController } from "./update/controller.js";
 import { createDesktopUpdateView } from "./update/view.js";
+import { createProviderModelSettingsController } from "./settings/provider-model-controller.js";
+import { createProviderModelSettingsView } from "./settings/provider-model-view.js";
 import {
   createRideImportController,
   mountResidentRideImport,
@@ -282,6 +285,16 @@ setup.addEventListener(
   "click",
   () => void onboardingCompletion.openManually(() => onboarding.open()),
 );
+const providerModelSettingsController = createProviderModelSettingsController({
+  load: () => window.enduragentAuth.llmConfiguration(),
+  apply: (selection) => window.enduragentAuth.applyLlmSelection(selection),
+  openSetup: () => setup.click(),
+  view: createProviderModelSettingsView({
+    document,
+    actionHost: topbarActions,
+    before: setup,
+  }),
+});
 const disposeDroppedRideImports = subscribeToDroppedRideImports({
   subscribe: onboardingBridge.onDroppedImportFiles,
   onboarding,
@@ -308,6 +321,7 @@ window.addEventListener(
   () => {
     releaseNotesController.dispose();
     desktopUpdateController.dispose();
+    providerModelSettingsController.dispose();
     disposeDroppedRideImports();
     onboarding.dispose();
     residentRideImport.dispose();
