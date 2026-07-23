@@ -270,6 +270,29 @@ describe("desktop residency", () => {
     expect(events).toEqual([]);
   });
 
+  it("presents the initial window only after its renderer URL loads", async () => {
+    const source = await readFile(resolve(import.meta.dirname, "../src/main/index.ts"), "utf8");
+    const creationStart = source.indexOf("windowCreation = (async () => {");
+    const load = source.indexOf("await created.loadURL(DESKTOP_RENDERER_URL);", creationStart);
+    const restore = source.indexOf("if (created.isMinimized()) created.restore();", load);
+    const show = source.indexOf("created.show();", load);
+    const focus = source.indexOf("created.focus();", load);
+    const creationEnd = source.indexOf("})().finally(() => {", focus);
+    const initialShow = source.indexOf("const initialWindow = await mainWindow.show();");
+    const residencyStart = source.indexOf("await residency.start();", initialShow);
+
+    expect(source).not.toContain('created.once("ready-to-show"');
+    expect(creationStart).toBeGreaterThanOrEqual(0);
+    expect(load).toBeGreaterThan(creationStart);
+    expect(restore).toBeGreaterThan(load);
+    expect(show).toBeGreaterThan(restore);
+    expect(focus).toBeGreaterThan(show);
+    expect(creationEnd).toBeGreaterThan(focus);
+    expect(source.slice(load, creationEnd)).not.toMatch(/\bcatch\b/);
+    expect(initialShow).toBeGreaterThan(creationEnd);
+    expect(residencyStart).toBeGreaterThan(initialShow);
+  });
+
   it("keeps the production failure adapter closed and gates the loser before bootstrap", async () => {
     const source = await readFile(resolve(import.meta.dirname, "../src/main/index.ts"), "utf8");
     expect(source).toContain("desktop-residency-failure ${operation}\\n");
