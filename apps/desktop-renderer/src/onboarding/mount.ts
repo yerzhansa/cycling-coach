@@ -1,16 +1,25 @@
 import {
   ADVANCED_MODEL_CREDENTIAL_SLOTS,
+  CUSTOM_MODEL_SELECTION,
   INTERVALS_GUIDANCE,
+  ONBOARDING_LLM_PROVIDER_LABELS,
   ONBOARDING_STEP_IDS,
   PRIMARY_MODEL_CREDENTIAL_SLOTS,
   type DesktopCredentialSlot,
   type ModelCredentialSlot,
 } from "./constants.js";
-import type { CredentialWriteResult, OnboardingBridge } from "./bridge.js";
+import type {
+  CredentialWriteResult,
+  OnboardingBridge,
+  OnboardingCredentialWriteInput,
+  OnboardingLlmConfiguration,
+  OnboardingLlmEndpointSelection,
+  OnboardingLlmProviderConfiguration,
+  OnboardingLlmSelection,
+} from "./bridge.js";
 import { credentialPresentation } from "./credential-presentation.js";
 import {
   createOnboardingState,
-  hasConfiguredModel,
   hasTrainingData,
   nextStep,
   previousStep,
@@ -62,17 +71,19 @@ export interface TransientPasswordInput {
 
 export async function handoffCredential(
   input: TransientPasswordInput,
-  write: (value: {
-    readonly slot: DesktopCredentialSlot;
-    readonly value: string;
-  }) => Promise<unknown>,
+  write: (value: OnboardingCredentialWriteInput) => Promise<unknown>,
+  selection?: OnboardingLlmSelection,
 ): Promise<boolean> {
   let secret: string | undefined;
   try {
     secret = input.value;
     input.value = "";
     if (secret.trim().length === 0) return false;
-    await write({ slot: input.dataset.slot as DesktopCredentialSlot, value: secret });
+    await write({
+      slot: input.dataset.slot as DesktopCredentialSlot,
+      value: secret,
+      ...(selection === undefined ? {} : { selection }),
+    });
     return true;
   } finally {
     input.value = "";
@@ -94,6 +105,12 @@ const ERROR_COPY: Readonly<Record<OnboardingErrorCode, string>> = {
   "credential-status-unavailable":
     "That key was saved, but its status could not be refreshed. Close and reopen Setup to check again.",
   "credential-reenter-required": "That saved key could not be used. Enter it again to continue.",
+  "configuration-unavailable":
+    "Coach choices are unavailable right now. Close and reopen Setup to try again.",
+  "model-selection-required": "Choose a model or enter a custom model name.",
+  "endpoint-invalid": "Enter a valid HTTPS endpoint, or a loopback HTTP endpoint.",
+  "model-runtime-unavailable":
+    "Your provider choice is saved, but it is not active yet. Choose Continue to retry it.",
   "training-account-mismatch":
     "That intervals.icu key belongs to a different athlete than the training history already stored. Switching accounts is not supported yet.",
   "training-data-required": "Connect intervals.icu or import at least one ride file.",
@@ -148,7 +165,7 @@ function make<K extends keyof HTMLElementTagNameMap>(
 function focusableElements(root: HTMLElement): readonly HTMLElement[] {
   return Array.from(
     root.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
     ),
   ).filter((element) => {
     if (element.hasAttribute("hidden")) return false;
@@ -188,6 +205,129 @@ function passwordControl(
   return field;
 }
 
+interface LlmSelectionDraft {
+  provider: OnboardingLlmProviderConfiguration;
+  modelChoice: string;
+  customModel: string;
+  endpointMode: OnboardingLlmEndpointSelection["mode"];
+  customEndpoint: string;
+}
+
+function initialLlmDraft(
+  configuration: OnboardingLlmConfiguration,
+  statuses: readonly CredentialSlotStatus[],
+  chatGptStatus: ChatGptStatus,
+): LlmSelectionDraft | undefined {
+  const activeCredential = statuses.find(
+    (status) => status.slot !== "intervals-icu" && status.runtimeState === "active",
+  );
+  const preferredProvider =
+    configuration.active?.provider ??
+    activeCredential?.slot ??
+    (chatGptStatus.state === "configured" && chatGptStatus.runtimeReady
+      ? "openai-codex"
+      : undefined);
+  const provider =
+    configuration.providers.find((entry) => entry.provider === preferredProvider) ??
+    configuration.providers[0];
+  if (provider === undefined) return undefined;
+  const active = configuration.active;
+  const activeModel = active?.provider === provider.provider ? active.model : provider.defaultModel;
+  const knownModel = provider.models.some((model) => model.value === activeModel);
+  return {
+    provider,
+    modelChoice: knownModel ? activeModel : CUSTOM_MODEL_SELECTION,
+    customModel: knownModel ? "" : activeModel,
+    endpointMode: "automatic",
+    customEndpoint: "",
+  };
+}
+
+function hasControlCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function validCustomEndpoint(value: string): boolean {
+  if (
+    value.length === 0 ||
+    value.length > 4_096 ||
+    value.trim() !== value ||
+    hasControlCharacters(value)
+  ) {
+    return false;
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (
+    url.username !== "" ||
+    url.password !== "" ||
+    url.search !== "" ||
+    url.hash !== "" ||
+    url.href.includes("?") ||
+    url.href.includes("#") ||
+    (url.protocol !== "https:" && url.protocol !== "http:")
+  ) {
+    return false;
+  }
+  if (url.protocol === "https:") return true;
+  const hostname = url.hostname.toLowerCase();
+  if (hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "[::1]") {
+    return true;
+  }
+  const octets = hostname.split(".");
+  return (
+    octets.length === 4 &&
+    octets.every((octet) => /^(?:0|[1-9]\d{0,2})$/u.test(octet)) &&
+    Number(octets[0]) === 127 &&
+    octets.every((octet) => Number(octet) <= 255)
+  );
+}
+
+function llmSelectionFromDraft(
+  draft: LlmSelectionDraft | undefined,
+):
+  | { readonly selection: OnboardingLlmSelection; readonly error: null }
+  | { readonly selection: null; readonly error: OnboardingErrorCode } {
+  if (draft === undefined) return { selection: null, error: "configuration-unavailable" };
+  const model =
+    draft.modelChoice === CUSTOM_MODEL_SELECTION ? draft.customModel.trim() : draft.modelChoice;
+  if (
+    model.length === 0 ||
+    model.length > 512 ||
+    model.trim() !== model ||
+    hasControlCharacters(model)
+  ) {
+    return { selection: null, error: "model-selection-required" };
+  }
+  if (draft.provider.defaultBaseUrl === undefined && draft.endpointMode !== "automatic") {
+    return { selection: null, error: "endpoint-invalid" };
+  }
+  let endpoint: OnboardingLlmEndpointSelection;
+  if (draft.endpointMode === "custom") {
+    const value = draft.customEndpoint.trim();
+    if (!validCustomEndpoint(value)) return { selection: null, error: "endpoint-invalid" };
+    endpoint = { mode: "custom", value };
+  } else {
+    endpoint = { mode: draft.endpointMode };
+  }
+  return {
+    selection: {
+      provider: draft.provider.provider,
+      model,
+      endpoint,
+    },
+    error: null,
+  };
+}
+
 export function mountOnboarding(options: MountOnboardingOptions): OnboardingController {
   const rideImports = options.rideImports ?? createRideImportController(options.bridge);
   let state = createOnboardingState();
@@ -199,6 +339,14 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
   let opening = false;
   let visit = 0;
   let presentingRideImports = false;
+  let llmConfiguration: OnboardingLlmConfiguration | undefined;
+  let llmDraft: LlmSelectionDraft | undefined;
+  let llmDrafts: Record<string, LlmSelectionDraft> = {};
+
+  const setLlmDraft = (next: LlmSelectionDraft | undefined): void => {
+    llmDraft = next;
+    if (next !== undefined) llmDrafts[next.provider.provider] = next;
+  };
 
   const setRideImportPresentation = (presenting: boolean): void => {
     if (presentingRideImports === presenting) return;
@@ -212,6 +360,24 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
       state: state.credentialStatus[slot],
       runtimeState: null,
     };
+
+  const setFixedError = (fixedError: OnboardingErrorCode | null): void => {
+    state = { ...state, fixedError };
+    const error = scrim?.querySelector<HTMLElement>("#onboarding-error");
+    if (error !== null && error !== undefined) {
+      error.textContent = fixedError === null ? "" : ERROR_COPY[fixedError];
+    }
+  };
+
+  const selectedProviderIsReady = (): boolean => {
+    const provider = llmDraft?.provider.provider;
+    if (provider === undefined) return false;
+    if (llmConfiguration?.active?.provider === provider) return true;
+    if (provider === "openai-codex") {
+      return state.chatGptState === "configured" && state.chatGptRuntimeReady;
+    }
+    return status(provider).state === "configured" && status(provider).runtimeState === "active";
+  };
 
   const clearPasswordInputs = (): void => {
     for (const input of scrim?.querySelectorAll<HTMLInputElement>('input[type="password"]') ?? []) {
@@ -258,7 +424,11 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
   const savePasswordControls = async (
     root: HTMLElement,
     expectedVisit: number,
-  ): Promise<OnboardingErrorCode | null> => {
+    selection?: OnboardingLlmSelection,
+  ): Promise<{
+    readonly error: OnboardingErrorCode | null;
+    readonly selectedApplied: boolean;
+  } | null> => {
     const controls = Array.from(
       root.querySelectorAll<HTMLInputElement>('input[type="password"][data-slot]'),
       (input): TransientPasswordInput => {
@@ -268,7 +438,14 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
         return control;
       },
     );
+    const selectedSlot = selection?.provider === "openai-codex" ? undefined : selection?.provider;
+    controls.sort((left, right) => {
+      const leftSelected = left.dataset.slot === selectedSlot ? 1 : 0;
+      const rightSelected = right.dataset.slot === selectedSlot ? 1 : 0;
+      return leftSelected - rightSelected;
+    });
     let attempted = false;
+    let selectedApplied = false;
     const outcome: {
       failure: OnboardingErrorCode | null;
       nonRuntimeFailure: OnboardingErrorCode | null;
@@ -281,22 +458,28 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
         if (input.value.trim().length === 0) continue;
         attempted = true;
         let configured = false;
-        await handoffCredential(input, async (value) => {
-          const result = await options.bridge.writeCredential(value);
-          if (disposed || visit !== expectedVisit || scrim === undefined) return;
-          if (result.status === "configured") {
-            configured = true;
-          } else {
-            if (result.reason === "runtime-unavailable") {
-              runtimeUnavailableSlots.add(result.slot);
+        const appliesSelection = input.dataset.slot === selectedSlot;
+        await handoffCredential(
+          input,
+          async (value) => {
+            const result = await options.bridge.writeCredential(value);
+            if (disposed || visit !== expectedVisit || scrim === undefined) return;
+            if (result.status === "configured") {
+              configured = true;
+              if (appliesSelection && result.runtimeReady) selectedApplied = true;
+            } else {
+              if (result.reason === "runtime-unavailable") {
+                runtimeUnavailableSlots.add(result.slot);
+              }
+              const writeFailure = credentialWriteRefusalError(result.reason);
+              outcome.failure ??= writeFailure;
+              if (writeFailure !== "runtime-unavailable") {
+                outcome.nonRuntimeFailure ??= writeFailure;
+              }
             }
-            const writeFailure = credentialWriteRefusalError(result.reason);
-            outcome.failure ??= writeFailure;
-            if (writeFailure !== "runtime-unavailable") {
-              outcome.nonRuntimeFailure ??= writeFailure;
-            }
-          }
-        });
+          },
+          appliesSelection ? selection : undefined,
+        );
         if (disposed || visit !== expectedVisit || scrim === undefined) return null;
         if (!configured && outcome.failure === null) {
           outcome.failure = "credential-save-failed";
@@ -317,12 +500,17 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
       if (disposed || visit !== expectedVisit || scrim === undefined) return null;
     }
     if (statusRefreshFailed) {
-      return outcome.nonRuntimeFailure ?? "credential-status-unavailable";
+      return {
+        error: outcome.nonRuntimeFailure ?? "credential-status-unavailable",
+        selectedApplied,
+      };
     }
     if (runtimeUnavailableSlots.size === 0) {
-      return outcome.failure;
+      return { error: outcome.failure, selectedApplied };
     }
-    if (outcome.nonRuntimeFailure !== null) return outcome.nonRuntimeFailure;
+    if (outcome.nonRuntimeFailure !== null) {
+      return { error: outcome.nonRuntimeFailure, selectedApplied };
+    }
     const refreshedRuntimeStatuses = Array.from(runtimeUnavailableSlots, (slot) =>
       credentialStatuses.find((entry) => entry.slot === slot),
     );
@@ -332,12 +520,12 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
           status === undefined || status.state === "missing" || status.state === "re-prompt",
       )
     ) {
-      return "credential-reenter-required";
+      return { error: "credential-reenter-required", selectedApplied };
     }
     if (refreshedRuntimeStatuses.some((status) => status?.runtimeState === "failed")) {
-      return "runtime-unavailable";
+      return { error: "runtime-unavailable", selectedApplied };
     }
-    return null;
+    return { error: null, selectedApplied };
   };
 
   const importStatusCopy = (): string => {
@@ -397,14 +585,235 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
     return label;
   };
 
+  const renderLlmSelectionPanel = (panel: HTMLElement): void => {
+    panel.replaceChildren();
+    if (llmConfiguration === undefined || llmDraft === undefined) {
+      panel.append(
+        make(
+          options.document,
+          "p",
+          "llm-configuration-unavailable",
+          ERROR_COPY["configuration-unavailable"],
+        ),
+      );
+      return;
+    }
+
+    const providerField = make(options.document, "label", "llm-selection-field");
+    providerField.htmlFor = "onboarding-llm-provider";
+    providerField.append(
+      make(options.document, "span", "llm-selection-label", "Active coach provider"),
+    );
+    const providerSelect = make(options.document, "select");
+    providerSelect.id = "onboarding-llm-provider";
+    providerSelect.disabled = state.busy;
+    for (const provider of llmConfiguration.providers) {
+      const option = make(options.document, "option");
+      option.value = provider.provider;
+      option.textContent = ONBOARDING_LLM_PROVIDER_LABELS[provider.provider];
+      providerSelect.append(option);
+    }
+    providerSelect.value = llmDraft.provider.provider;
+    providerSelect.addEventListener("change", () => {
+      const provider = llmConfiguration?.providers.find(
+        (entry) => entry.provider === providerSelect.value,
+      );
+      if (provider === undefined) return;
+      setLlmDraft(
+        llmDrafts[provider.provider] ?? {
+          provider,
+          modelChoice: provider.defaultModel,
+          customModel: "",
+          endpointMode: "automatic",
+          customEndpoint: "",
+        },
+      );
+      setFixedError(null);
+      renderLlmSelectionPanel(panel);
+      panel.querySelector<HTMLSelectElement>("#onboarding-llm-provider")?.focus();
+    });
+    providerField.append(providerSelect);
+
+    const modelField = make(options.document, "label", "llm-selection-field");
+    modelField.htmlFor = "onboarding-llm-model";
+    modelField.append(make(options.document, "span", "llm-selection-label", "Model"));
+    const modelSelect = make(options.document, "select");
+    modelSelect.id = "onboarding-llm-model";
+    modelSelect.disabled = state.busy;
+    for (const model of llmDraft.provider.models) {
+      const option = make(options.document, "option");
+      option.value = model.value;
+      option.textContent =
+        model.hint === undefined ? model.label : `${model.label} · ${model.hint}`;
+      modelSelect.append(option);
+    }
+    const customOption = make(options.document, "option");
+    customOption.value = CUSTOM_MODEL_SELECTION;
+    customOption.textContent = "Other model…";
+    modelSelect.append(customOption);
+    modelSelect.value = llmDraft.modelChoice;
+    modelSelect.addEventListener("change", () => {
+      if (llmDraft === undefined) return;
+      setLlmDraft({
+        ...llmDraft,
+        modelChoice: modelSelect.value,
+        customModel: modelSelect.value === CUSTOM_MODEL_SELECTION ? llmDraft.customModel : "",
+      });
+      setFixedError(null);
+      renderLlmSelectionPanel(panel);
+      const target =
+        modelSelect.value === CUSTOM_MODEL_SELECTION
+          ? panel.querySelector<HTMLInputElement>("#onboarding-custom-model")
+          : panel.querySelector<HTMLSelectElement>("#onboarding-llm-model");
+      target?.focus();
+    });
+    modelField.append(modelSelect);
+
+    panel.append(providerField, modelField);
+
+    if (llmDraft.modelChoice === CUSTOM_MODEL_SELECTION) {
+      const customModelField = make(options.document, "label", "llm-selection-field");
+      customModelField.htmlFor = "onboarding-custom-model";
+      customModelField.append(
+        make(options.document, "span", "llm-selection-label", "Custom model name"),
+      );
+      const customModel = make(options.document, "input");
+      customModel.id = "onboarding-custom-model";
+      customModel.type = "text";
+      customModel.autocomplete = "off";
+      customModel.maxLength = 512;
+      customModel.value = llmDraft.customModel;
+      customModel.disabled = state.busy;
+      customModel.setAttribute("aria-describedby", "onboarding-error");
+      customModel.addEventListener("input", () => {
+        if (llmDraft === undefined) return;
+        setLlmDraft({ ...llmDraft, customModel: customModel.value });
+        setFixedError(null);
+      });
+      customModelField.append(customModel);
+      panel.append(customModelField);
+    }
+
+    if (llmDraft.provider.defaultBaseUrl !== undefined) {
+      const endpointField = make(options.document, "label", "llm-selection-field");
+      endpointField.htmlFor = "onboarding-endpoint-mode";
+      endpointField.append(make(options.document, "span", "llm-selection-label", "Endpoint"));
+      const endpointMode = make(options.document, "select");
+      endpointMode.id = "onboarding-endpoint-mode";
+      endpointMode.disabled = state.busy;
+      for (const [value, copy] of [
+        ["automatic", "Keep current, or use provider default"],
+        ["default", "Reset to provider default"],
+        ["custom", "Use a custom endpoint"],
+      ] as const) {
+        const option = make(options.document, "option");
+        option.value = value;
+        option.textContent = copy;
+        endpointMode.append(option);
+      }
+      endpointMode.value = llmDraft.endpointMode;
+      endpointMode.addEventListener("change", () => {
+        if (
+          llmDraft === undefined ||
+          !["automatic", "default", "custom"].includes(endpointMode.value)
+        ) {
+          return;
+        }
+        setLlmDraft({
+          ...llmDraft,
+          endpointMode: endpointMode.value as OnboardingLlmEndpointSelection["mode"],
+        });
+        setFixedError(null);
+        renderLlmSelectionPanel(panel);
+        const target =
+          endpointMode.value === "custom"
+            ? panel.querySelector<HTMLInputElement>("#onboarding-custom-endpoint")
+            : panel.querySelector<HTMLSelectElement>("#onboarding-endpoint-mode");
+        target?.focus();
+      });
+      endpointField.append(endpointMode);
+      panel.append(endpointField);
+
+      const endpointHelp = make(options.document, "p", "llm-endpoint-help");
+      endpointHelp.textContent = `Provider default: ${llmDraft.provider.defaultBaseUrl}`;
+      panel.append(endpointHelp);
+
+      if (llmDraft.endpointMode === "custom") {
+        const customEndpointField = make(options.document, "label", "llm-selection-field");
+        customEndpointField.htmlFor = "onboarding-custom-endpoint";
+        customEndpointField.append(
+          make(options.document, "span", "llm-selection-label", "Custom endpoint"),
+        );
+        const customEndpoint = make(options.document, "input");
+        customEndpoint.id = "onboarding-custom-endpoint";
+        customEndpoint.type = "url";
+        customEndpoint.autocomplete = "off";
+        customEndpoint.maxLength = 4_096;
+        customEndpoint.value = llmDraft.customEndpoint;
+        customEndpoint.disabled = state.busy;
+        customEndpoint.setAttribute("aria-describedby", "onboarding-error");
+        customEndpoint.addEventListener("input", () => {
+          if (llmDraft === undefined) return;
+          setLlmDraft({ ...llmDraft, customEndpoint: customEndpoint.value });
+          setFixedError(null);
+        });
+        customEndpointField.append(customEndpoint);
+        panel.append(customEndpointField);
+      }
+    }
+  };
+
+  const renderLlmSelection = (body: HTMLElement): void => {
+    const section = make(options.document, "section", "llm-selection");
+    section.setAttribute("aria-labelledby", "llm-selection-heading");
+    const heading = make(options.document, "h2", undefined, "Choose provider and model");
+    heading.id = "llm-selection-heading";
+    section.append(
+      heading,
+      make(
+        options.document,
+        "p",
+        "llm-selection-copy",
+        "Your selected provider becomes active when you continue. Other saved keys stay available but inactive.",
+      ),
+    );
+    const panel = make(options.document, "div", "llm-selection-panel");
+    renderLlmSelectionPanel(panel);
+    section.append(panel);
+    body.append(section);
+  };
+
   const startChatGptLogin = (): void => {
     if (disposed || scrim === undefined || state.busy || state.chatGptState === "pending") {
+      return;
+    }
+    if (llmDraft?.provider.provider !== "openai-codex") {
+      const chatGpt = llmConfiguration?.providers.find(
+        (provider) => provider.provider === "openai-codex",
+      );
+      if (chatGpt === undefined) {
+        setFixedError("configuration-unavailable");
+        return;
+      }
+      setLlmDraft(
+        llmDrafts[chatGpt.provider] ?? {
+          provider: chatGpt,
+          modelChoice: chatGpt.defaultModel,
+          customModel: "",
+          endpointMode: "automatic",
+          customEndpoint: "",
+        },
+      );
+    }
+    const parsedSelection = llmSelectionFromDraft(llmDraft);
+    if (parsedSelection.error !== null) {
+      setFixedError(parsedSelection.error);
       return;
     }
     const loginVisit = visit;
     state = withChatGptPending(state);
     render();
-    void options.bridge.chatGptLogin().then(
+    void options.bridge.chatGptLogin(parsedSelection.selection).then(
       async (result) => {
         if (
           disposed ||
@@ -450,7 +859,7 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
   };
 
   const currentStepOwnsCredentialSlot = (slot: DesktopCredentialSlot): boolean => {
-    if (state.step === "coach-keys") return slot !== "intervals-icu";
+    if (state.step === "coach-keys") return false;
     return state.step === "training-data" && slot === "intervals-icu";
   };
 
@@ -512,6 +921,7 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
         "ChatGPT sign-in is saved in a local profile file. API keys are encrypted by macOS. The local coaching service uses your choice to contact the provider.",
       ),
     );
+    renderLlmSelection(body);
     const chatGptLane = make(options.document, "section", "chatgpt-lane");
     const chatGptHeading = make(options.document, "div", "chatgpt-lane-heading");
     const chatGptActive = state.chatGptState === "configured" && state.chatGptRuntimeReady;
@@ -759,26 +1169,70 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
     state = withBusy(state, true);
     for (const button of dialog.querySelectorAll<HTMLButtonElement>("button"))
       button.disabled = true;
+    for (const input of dialog.querySelectorAll<HTMLInputElement>("input")) input.disabled = true;
+    for (const select of dialog.querySelectorAll<HTMLSelectElement>("select"))
+      select.disabled = true;
     const actionStatus = dialog.querySelector<HTMLElement>(".onboarding-action-status");
     if (actionStatus !== null) {
       actionStatus.textContent = "Working…";
       actionStatus.hidden = false;
     }
     if (state.step === "coach-keys") {
-      const saveError = await savePasswordControls(dialog, submitVisit);
+      const parsedSelection = llmSelectionFromDraft(llmDraft);
+      if (parsedSelection.error !== null) {
+        state = withError(state, parsedSelection.error);
+        render();
+        focusCurrentTitle();
+        return;
+      }
+      const saved = await savePasswordControls(dialog, submitVisit, parsedSelection.selection);
       if (visit !== submitVisit || scrim === undefined) return;
+      if (saved === null) return;
+      let saveError = saved.error;
+      if (saveError === "runtime-unavailable") saveError = "model-runtime-unavailable";
+      if (saveError === null && !saved.selectedApplied) {
+        try {
+          const applied = await options.bridge.applyLlmSelection(parsedSelection.selection);
+          if (visit !== submitVisit || scrim === undefined) return;
+          if (applied.status === "refused") {
+            saveError =
+              applied.reason === "credential-required"
+                ? "credential-required"
+                : applied.reason === "runtime-unavailable"
+                  ? "model-runtime-unavailable"
+                  : "invalid-input";
+          } else {
+            if (llmConfiguration !== undefined) {
+              llmConfiguration = {
+                ...llmConfiguration,
+                active: {
+                  provider: parsedSelection.selection.provider,
+                  model: parsedSelection.selection.model,
+                },
+              };
+            }
+            if (!(await refreshStatuses(submitVisit))) {
+              saveError = "credential-status-unavailable";
+            }
+          }
+        } catch {
+          if (visit !== submitVisit || scrim === undefined) return;
+          saveError = "model-runtime-unavailable";
+        }
+      }
       state = withBusy(state, false);
       if (saveError !== null) state = withError(state, saveError);
-      else if (currentStepHasRetryableCredential()) state = withError(state, "runtime-unavailable");
-      else if (!hasConfiguredModel(state)) state = withError(state, "credential-required");
-      else state = nextStep(state);
+      else if (!selectedProviderIsReady()) state = withError(state, "model-runtime-unavailable");
+      else state = nextStep(state, true);
       render();
       focusCurrentTitle();
       return;
     }
     if (state.step === "training-data") {
-      const saveError = await savePasswordControls(dialog, submitVisit);
+      const saved = await savePasswordControls(dialog, submitVisit);
       if (visit !== submitVisit || scrim === undefined) return;
+      if (saved === null) return;
+      const saveError = saved.error;
       state = withBusy(state, false);
       if (saveError !== null) state = withError(state, saveError);
       else if (currentStepHasRetryableCredential()) state = withError(state, "runtime-unavailable");
@@ -901,6 +1355,7 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
     footer.append(submit);
     dialog.append(header, body, footer);
     dialog.addEventListener("keydown", (event) => {
+      const targetTagName = (event.target as HTMLElement | null)?.tagName;
       if (event.key === "Escape") {
         event.preventDefault();
         close();
@@ -908,8 +1363,9 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
       }
       if (
         event.key === "Enter" &&
-        !(event.target instanceof HTMLButtonElement) &&
-        !(event.target instanceof HTMLElement && event.target.tagName === "SUMMARY")
+        targetTagName !== "BUTTON" &&
+        targetTagName !== "SUMMARY" &&
+        targetTagName !== "SELECT"
       ) {
         event.preventDefault();
         void submitCurrentStep(dialog);
@@ -952,15 +1408,24 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
       const restored = await Promise.allSettled([
         options.bridge.credentialStatuses(),
         options.bridge.chatGptStatus(),
+        options.bridge.llmConfiguration(),
       ]);
       if (restored[0].status === "fulfilled") statuses = restored[0].value;
       if (restored[1].status === "fulfilled") restoredChatGptStatus = restored[1].value;
+      llmConfiguration = restored[2].status === "fulfilled" ? restored[2].value : undefined;
+      llmDrafts = {};
+      setLlmDraft(
+        llmConfiguration === undefined
+          ? undefined
+          : initialLlmDraft(llmConfiguration, statuses, restoredChatGptStatus),
+      );
       if (disposed || visit !== openVisit || scrim !== undefined) {
         opening = false;
         return;
       }
       credentialStatuses = statuses;
       state = createOnboardingState(statuses, restoredChatGptStatus);
+      if (llmDraft === undefined) state = withError(state, "configuration-unavailable");
       state = withImportedRideFileCount(state, rideImports.importedFileCount());
       scrim = make(options.document, "div", "onboarding-scrim");
       options.document.body.append(scrim);

@@ -1,7 +1,15 @@
 import { extname, isAbsolute } from "node:path";
-import type { ConfigureRuntimeRpcParams, LlmProvider } from "@enduragent/coach-contract";
+import type {
+  ConfigureRuntimeRpcParams,
+  LlmProvider,
+  RuntimeConfigSnapshot,
+} from "@enduragent/coach-contract";
 import type { BrowserWindow, IpcMain, IpcMainInvokeEvent, OpenDialogOptions } from "electron";
-import type { ChatGptAuthController } from "./chatgpt-auth.js";
+import {
+  type ChatGptAuthController,
+  type ChatGptLoginResult,
+  type ChatGptStatus,
+} from "./chatgpt-auth.js";
 import {
   DESKTOP_CREDENTIAL_SLOTS,
   type CredentialSlotStatus,
@@ -9,10 +17,22 @@ import {
   type CredentialWriteResult,
   type DesktopCredentialSlot,
 } from "./credential-vault.js";
+import {
+  parseChatGptLlmSelection,
+  parseOnboardingLlmSelection,
+  publicLlmProviderConfiguration,
+  runtimeConfigurationForSelection,
+  type OnboardingLlmConfiguration,
+  type OnboardingLlmSelection,
+  type OnboardingLlmSelectionResult,
+} from "./llm-selection.js";
 
 export const DESKTOP_CREDENTIAL_STATUS_CHANNEL = "enduragent:onboarding:credential-status" as const;
 export const DESKTOP_CREDENTIAL_RETRY_CHANNEL = "enduragent:onboarding:credential-retry" as const;
 export const DESKTOP_CREDENTIAL_WRITE_CHANNEL = "enduragent:onboarding:credential-write" as const;
+export const DESKTOP_LLM_CONFIGURATION_CHANNEL = "enduragent:onboarding:llm-configuration" as const;
+export const DESKTOP_LLM_SELECTION_APPLY_CHANNEL =
+  "enduragent:onboarding:llm-selection-apply" as const;
 export const DESKTOP_CHATGPT_STATUS_CHANNEL = "enduragent:onboarding:chatgpt-status" as const;
 export const DESKTOP_CHATGPT_LOGIN_CHANNEL = "enduragent:onboarding:chatgpt-login" as const;
 export const DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL =
@@ -31,6 +51,8 @@ interface RegisterOnboardingIpcOptions {
   readonly window: BrowserWindow;
   readonly vault: CredentialVault;
   readonly chatGptAuth: ChatGptAuthController;
+  readonly getRuntimeConfig: () => Promise<RuntimeConfigSnapshot>;
+  readonly applyExistingLlmSelection: (selection: OnboardingLlmSelection) => Promise<boolean>;
   readonly isTrusted: (event: IpcMainInvokeEvent) => boolean;
   readonly checkIntervalsCredentialOwner: (
     value: string,
@@ -42,9 +64,16 @@ const SUPPORTED_EXTENSIONS = new Set([".fit", ".tcx", ".gpx"]);
 export function runtimeConfigurationForCredential(
   slot: DesktopCredentialSlot,
   value: string,
+  selection?: OnboardingLlmSelection,
 ): ConfigureRuntimeRpcParams {
   if (slot === "intervals-icu") {
+    if (selection !== undefined) throw new TypeError();
     return { intervals: { api_key: value } };
+  }
+  if (selection !== undefined) {
+    const parsed = parseOnboardingLlmSelection(selection);
+    if (parsed.provider !== slot) throw new TypeError();
+    return runtimeConfigurationForSelection(parsed, value);
   }
   return {
     llm: {
@@ -63,11 +92,13 @@ function isSlot(value: unknown): value is DesktopCredentialSlot {
 function parseWriteInput(value: unknown): {
   readonly slot: DesktopCredentialSlot;
   readonly value: string;
+  readonly selection?: OnboardingLlmSelection;
 } {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError();
   const input = value as Record<string, unknown>;
+  const hasSelection = Object.hasOwn(input, "selection");
   if (
-    Object.keys(input).length !== 2 ||
+    Object.keys(input).length !== (hasSelection ? 3 : 2) ||
     !Object.hasOwn(input, "slot") ||
     !Object.hasOwn(input, "value") ||
     !isSlot(input.slot) ||
@@ -75,7 +106,11 @@ function parseWriteInput(value: unknown): {
   ) {
     throw new TypeError();
   }
-  return { slot: input.slot, value: input.value };
+  if (!hasSelection) return { slot: input.slot, value: input.value };
+  if (input.slot === "intervals-icu") throw new TypeError();
+  const selection = parseOnboardingLlmSelection(input.selection);
+  if (selection.provider !== input.slot) throw new TypeError();
+  return { slot: input.slot, value: input.value, selection };
 }
 
 function minimizeStatuses(value: readonly CredentialSlotStatus[]): readonly CredentialSlotStatus[] {
@@ -88,9 +123,40 @@ function minimizeStatuses(value: readonly CredentialSlotStatus[]): readonly Cred
 
 function minimizeWrite(value: CredentialWriteResult): CredentialWriteResult {
   if (value.status === "configured") {
-    return { slot: value.slot, status: "configured", runtimeReady: true };
+    return { slot: value.slot, status: "configured", runtimeReady: value.runtimeReady };
   }
   return { slot: value.slot, status: "refused", reason: value.reason };
+}
+
+function minimizeSelection(value: OnboardingLlmSelectionResult): OnboardingLlmSelectionResult {
+  if (value.status === "configured") return { status: "configured", runtimeReady: true };
+  return { status: "refused", reason: value.reason };
+}
+
+function minimizeChatGptStatus(value: ChatGptStatus): ChatGptStatus {
+  return { state: value.state, runtimeReady: value.runtimeReady };
+}
+
+function minimizeChatGptLogin(value: ChatGptLoginResult): ChatGptLoginResult {
+  if (value.status === "configured") return { status: "configured", runtimeReady: true };
+  return { status: "refused", reason: value.reason };
+}
+
+async function llmConfiguration(
+  getRuntimeConfig: () => Promise<RuntimeConfigSnapshot>,
+): Promise<OnboardingLlmConfiguration> {
+  let active: OnboardingLlmConfiguration["active"] = null;
+  try {
+    const snapshot = await getRuntimeConfig();
+    if (snapshot.llm.credential_configured) {
+      active = { provider: snapshot.llm.provider, model: snapshot.llm.model };
+    }
+  } catch {}
+  return {
+    schemaVersion: 1,
+    providers: publicLlmProviderConfiguration(),
+    active,
+  };
 }
 
 export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): () => void {
@@ -133,20 +199,52 @@ export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): ()
           };
         }
       }
-      return minimizeWrite(await options.vault.writeCredential(input));
+      const stored =
+        input.slot !== "intervals-icu" && input.selection === undefined
+          ? await options.vault.writeCredential(input, { activate: false })
+          : await options.vault.writeCredential(input);
+      return minimizeWrite(stored);
     } catch {
       return { slot: input.slot, status: "refused", reason: "storage-failed" };
+    }
+  });
+  options.ipcMain.handle(DESKTOP_LLM_CONFIGURATION_CHANNEL, async (event, ...args) => {
+    requireTrusted(event);
+    if (args.length !== 0) throw new TypeError();
+    return llmConfiguration(options.getRuntimeConfig);
+  });
+  options.ipcMain.handle(DESKTOP_LLM_SELECTION_APPLY_CHANNEL, async (event, ...args) => {
+    requireTrusted(event);
+    if (args.length !== 1) throw new TypeError();
+    let selection: OnboardingLlmSelection;
+    try {
+      selection = parseOnboardingLlmSelection(args[0]);
+    } catch {
+      return { status: "refused", reason: "invalid-input" };
+    }
+    try {
+      if (await options.applyExistingLlmSelection(selection)) {
+        return { status: "configured", runtimeReady: true };
+      }
+      const result =
+        selection.provider === "openai-codex"
+          ? await options.chatGptAuth.activate(parseChatGptLlmSelection(selection))
+          : await options.vault.applyLlmSelection(selection);
+      return minimizeSelection(result);
+    } catch {
+      return { status: "refused", reason: "runtime-unavailable" };
     }
   });
   options.ipcMain.handle(DESKTOP_CHATGPT_STATUS_CHANNEL, async (event, ...args) => {
     requireTrusted(event);
     if (args.length !== 0) throw new TypeError();
-    return options.chatGptAuth.status();
+    return minimizeChatGptStatus(await options.chatGptAuth.status());
   });
   options.ipcMain.handle(DESKTOP_CHATGPT_LOGIN_CHANNEL, async (event, ...args) => {
     requireTrusted(event);
-    if (args.length !== 0) throw new TypeError();
-    return options.chatGptAuth.login();
+    if (args.length !== 1) throw new TypeError();
+    const selection = parseChatGptLlmSelection(args[0]);
+    return minimizeChatGptLogin(await options.chatGptAuth.login(selection));
   });
   options.ipcMain.handle(DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL, async (event, ...args) => {
     requireTrusted(event);
@@ -173,6 +271,8 @@ export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): ()
     options.ipcMain.removeHandler(DESKTOP_CREDENTIAL_STATUS_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CREDENTIAL_RETRY_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CREDENTIAL_WRITE_CHANNEL);
+    options.ipcMain.removeHandler(DESKTOP_LLM_CONFIGURATION_CHANNEL);
+    options.ipcMain.removeHandler(DESKTOP_LLM_SELECTION_APPLY_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CHATGPT_STATUS_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CHATGPT_LOGIN_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL);

@@ -273,6 +273,7 @@ async function security() {
         preloadBridge:
           JSON.stringify(ready.bridgeKeys) ===
           JSON.stringify([
+            "applyLlmSelection",
             "chatgptLogin",
             "chatgptStatus",
             "checkForUpdates",
@@ -280,6 +281,7 @@ async function security() {
             "credentialStatuses",
             "getDaemonConnection",
             "getUpdateState",
+            "llmConfiguration",
             "onDroppedImportFiles",
             "onUpdateState",
             "releaseNotes",

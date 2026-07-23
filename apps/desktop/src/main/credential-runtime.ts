@@ -15,6 +15,10 @@ export interface LlmProviderSelectionEvidence {
 
 export interface CredentialRuntimeApplication {
   applyExplicit(request: ConfigureRuntimeRpcParams): Promise<void>;
+  applyExistingLlmSelection(
+    provider: LlmProvider,
+    request: ConfigureRuntimeRpcParams,
+  ): Promise<boolean>;
   reapplyStoredCredential(
     slot: DesktopCredentialSlot,
     value: string,
@@ -95,6 +99,15 @@ export function createCredentialRuntimeApplication(
   return {
     applyExplicit(request) {
       return serialize(() => options.configureRuntime(request));
+    },
+    applyExistingLlmSelection(provider, request) {
+      return serialize(async () => {
+        if (request.llm === undefined || request.llm.provider !== undefined) throw new TypeError();
+        const selectedProvider = await options.selectedLlmProvider([]);
+        if (selectedProvider !== provider) return false;
+        await options.configureRuntime(request);
+        return true;
+      });
     },
     reapplyStoredCredential(slot, value, storedCredentialSlots) {
       return serialize(async () => {

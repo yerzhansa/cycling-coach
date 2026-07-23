@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { lstat, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  parseOnboardingLlmSelection,
+  type OnboardingLlmSelection,
+  type OnboardingLlmSelectionResult,
+} from "./llm-selection.js";
 
 export const DESKTOP_CREDENTIAL_SLOTS = [
   "anthropic",
@@ -30,7 +35,7 @@ export type CredentialWriteResult =
   | {
       readonly slot: DesktopCredentialSlot;
       readonly status: "configured";
-      readonly runtimeReady: true;
+      readonly runtimeReady: boolean;
     }
   | {
       readonly slot: DesktopCredentialSlot;
@@ -56,10 +61,17 @@ export interface CredentialEncryptionPort {
 }
 
 export interface CredentialVault {
-  writeCredential(input: {
-    readonly slot: DesktopCredentialSlot;
-    readonly value: string;
-  }): Promise<CredentialWriteResult>;
+  writeCredential(
+    input: {
+      readonly slot: DesktopCredentialSlot;
+      readonly value: string;
+      readonly selection?: OnboardingLlmSelection;
+    },
+    behavior?: {
+      readonly activate?: boolean;
+    },
+  ): Promise<CredentialWriteResult>;
+  applyLlmSelection(input: OnboardingLlmSelection): Promise<OnboardingLlmSelectionResult>;
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
   reapplyConfigured(): Promise<void>;
   retryFailed(): Promise<void>;
@@ -71,7 +83,11 @@ interface CredentialVaultOptions {
   readonly runtimeState?: CredentialRuntimeStateMap;
   readonly onRuntimeStateChange?: (slot: DesktopCredentialSlot) => void;
   readonly createRuntimePublicationGuard?: (slot: DesktopCredentialSlot) => () => boolean;
-  readonly applyCredential: (slot: DesktopCredentialSlot, value: string) => Promise<void>;
+  readonly applyCredential: (
+    slot: DesktopCredentialSlot,
+    value: string,
+    selection?: OnboardingLlmSelection,
+  ) => Promise<void>;
   readonly reapplyCredential?: (
     slot: DesktopCredentialSlot,
     value: string,
@@ -256,13 +272,24 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
   };
 
   return {
-    async writeCredential(input): Promise<CredentialWriteResult> {
+    async writeCredential(input, behavior): Promise<CredentialWriteResult> {
       if (!isCredentialSlot(input?.slot) || typeof input.value !== "string") {
         return {
           slot: isCredentialSlot(input?.slot) ? input.slot : "anthropic",
           status: "refused",
           reason: "invalid-input",
         };
+      }
+      let selection: OnboardingLlmSelection | undefined;
+      try {
+        if (input.selection !== undefined) {
+          selection = parseOnboardingLlmSelection(input.selection);
+          if (input.slot === "intervals-icu" || selection.provider !== input.slot) {
+            throw new TypeError();
+          }
+        }
+      } catch {
+        return { slot: input.slot, status: "refused", reason: "invalid-input" };
       }
       const value = input.value.trim();
       if (value.length === 0) {
@@ -314,15 +341,49 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
       } finally {
         encrypted?.fill(0);
       }
+      if (behavior?.activate === false) {
+        setRuntimeState(input.slot, "stored-inactive");
+        return { slot: input.slot, status: "configured", runtimeReady: false };
+      }
       try {
         const canPublish = options.createRuntimePublicationGuard?.(input.slot);
-        await options.applyCredential(input.slot, value);
+        if (selection === undefined) {
+          await options.applyCredential(input.slot, value);
+        } else {
+          await options.applyCredential(input.slot, value, selection);
+        }
         if (canPublish !== undefined && !canPublish()) throw new TypeError();
         setRuntimeState(input.slot, "active");
         return { slot: input.slot, status: "configured", runtimeReady: true };
       } catch {
         setRuntimeState(input.slot, "failed");
         return { slot: input.slot, status: "refused", reason: "runtime-unavailable" };
+      }
+    },
+
+    async applyLlmSelection(input): Promise<OnboardingLlmSelectionResult> {
+      let selection: OnboardingLlmSelection;
+      let slot: DesktopCredentialSlot;
+      try {
+        selection = parseOnboardingLlmSelection(input);
+        if (selection.provider === "openai-codex") throw new TypeError();
+        slot = selection.provider;
+      } catch {
+        return { status: "refused", reason: "invalid-input" };
+      }
+      const credential = await readSlot(slot);
+      if (credential.state !== "configured" || credential.value === undefined) {
+        return { status: "refused", reason: "credential-required" };
+      }
+      try {
+        const canPublish = options.createRuntimePublicationGuard?.(slot);
+        await options.applyCredential(slot, credential.value, selection);
+        if (canPublish !== undefined && !canPublish()) throw new TypeError();
+        setRuntimeState(slot, "active");
+        return { status: "configured", runtimeReady: true };
+      } catch {
+        setRuntimeState(slot, "failed");
+        return { status: "refused", reason: "runtime-unavailable" };
       }
     },
 

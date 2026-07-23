@@ -13,6 +13,8 @@ import {
 const DESKTOP_CREDENTIAL_STATUS_CHANNEL = "enduragent:onboarding:credential-status";
 const DESKTOP_CREDENTIAL_RETRY_CHANNEL = "enduragent:onboarding:credential-retry";
 const DESKTOP_CREDENTIAL_WRITE_CHANNEL = "enduragent:onboarding:credential-write";
+const DESKTOP_LLM_CONFIGURATION_CHANNEL = "enduragent:onboarding:llm-configuration";
+const DESKTOP_LLM_SELECTION_APPLY_CHANNEL = "enduragent:onboarding:llm-selection-apply";
 const DESKTOP_CHATGPT_STATUS_CHANNEL = "enduragent:onboarding:chatgpt-status";
 const DESKTOP_CHATGPT_LOGIN_CHANNEL = "enduragent:onboarding:chatgpt-login";
 const DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL = "enduragent:onboarding:choose-import-files";
@@ -28,6 +30,27 @@ const SLOTS = new Set([
   "kimi",
   "zai",
   "intervals-icu",
+]);
+const LLM_PROVIDER_ORDER = [
+  "anthropic",
+  "openai",
+  "google",
+  "openai-codex",
+  "deepseek",
+  "qwen",
+  "minimax",
+  "kimi",
+  "zai",
+  "openrouter",
+] as const;
+const LLM_PROVIDERS = new Set<string>(LLM_PROVIDER_ORDER);
+const DEFAULT_ENDPOINT_PROVIDERS = new Set([
+  "deepseek",
+  "qwen",
+  "minimax",
+  "kimi",
+  "zai",
+  "openrouter",
 ]);
 const STATES = new Set(["missing", "configured", "re-prompt"]);
 const RUNTIME_STATES = new Set(["active", "stored-inactive", "failed"]);
@@ -78,6 +101,123 @@ function safeString(value: unknown, maximumLength: number): value is string {
     if (code <= 0x1f || code === 0x7f) return false;
   }
   return true;
+}
+
+function normalizedSelectionText(value: unknown, maximumLength: number): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > maximumLength) {
+    throw new TypeError();
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) throw new TypeError();
+  }
+  const normalized = value.trim();
+  if (normalized.length === 0 || normalized.length > maximumLength) throw new TypeError();
+  return normalized;
+}
+
+function loopbackHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  if (normalized === "localhost" || normalized.endsWith(".localhost") || normalized === "[::1]") {
+    return true;
+  }
+  const octets = normalized.split(".");
+  return (
+    octets.length === 4 &&
+    octets.every((octet) => /^(?:0|[1-9]\d{0,2})$/.test(octet)) &&
+    Number(octets[0]) === 127 &&
+    octets.every((octet) => Number(octet) <= 255)
+  );
+}
+
+function normalizedEndpoint(value: unknown): string {
+  const normalized = normalizedSelectionText(value, 4_096);
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    throw new TypeError();
+  }
+  if (
+    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+    parsed.username.length > 0 ||
+    parsed.password.length > 0 ||
+    parsed.search.length > 0 ||
+    parsed.hash.length > 0 ||
+    parsed.href.includes("?") ||
+    parsed.href.includes("#") ||
+    parsed.hostname.length === 0 ||
+    (parsed.protocol === "http:" && !loopbackHost(parsed.hostname))
+  ) {
+    throw new TypeError();
+  }
+  return normalized;
+}
+
+type PreloadLlmSelection = {
+  readonly provider: (typeof LLM_PROVIDER_ORDER)[number];
+  readonly model: string;
+  readonly endpoint:
+    | { readonly mode: "automatic" }
+    | { readonly mode: "default" }
+    | { readonly mode: "custom"; readonly value: string };
+};
+
+function parseLlmSelection(value: unknown): PreloadLlmSelection {
+  if (!record(value) || !exactKeys(value, ["provider", "model", "endpoint"])) {
+    throw new TypeError();
+  }
+  if (typeof value.provider !== "string" || !LLM_PROVIDERS.has(value.provider)) {
+    throw new TypeError();
+  }
+  const provider = value.provider as PreloadLlmSelection["provider"];
+  const model = normalizedSelectionText(value.model, 512);
+  if (!record(value.endpoint) || typeof value.endpoint.mode !== "string") {
+    throw new TypeError();
+  }
+  let endpoint: PreloadLlmSelection["endpoint"];
+  if (value.endpoint.mode === "automatic" && exactKeys(value.endpoint, ["mode"])) {
+    endpoint = { mode: "automatic" };
+  } else if (value.endpoint.mode === "default" && exactKeys(value.endpoint, ["mode"])) {
+    endpoint = { mode: "default" };
+  } else if (value.endpoint.mode === "custom" && exactKeys(value.endpoint, ["mode", "value"])) {
+    endpoint = { mode: "custom", value: normalizedEndpoint(value.endpoint.value) };
+  } else {
+    throw new TypeError();
+  }
+  if (endpoint.mode !== "automatic" && !DEFAULT_ENDPOINT_PROVIDERS.has(provider)) {
+    throw new TypeError();
+  }
+  return { provider, model, endpoint };
+}
+
+function parseChatGptSelection(value: unknown): PreloadLlmSelection {
+  const selection = parseLlmSelection(value);
+  if (selection.provider !== "openai-codex" || selection.endpoint.mode !== "automatic") {
+    throw new TypeError();
+  }
+  return selection;
+}
+
+function parseCredentialWriteInput(value: unknown): {
+  readonly slot: string;
+  readonly value: string;
+  readonly selection?: PreloadLlmSelection;
+} {
+  if (!record(value)) throw new TypeError();
+  const hasSelection = Object.hasOwn(value, "selection");
+  if (
+    !exactKeys(value, hasSelection ? ["slot", "value", "selection"] : ["slot", "value"]) ||
+    !SLOTS.has(value.slot as string) ||
+    typeof value.value !== "string"
+  ) {
+    throw new TypeError();
+  }
+  if (!hasSelection) return { slot: value.slot as string, value: value.value };
+  if (value.slot === "intervals-icu") throw new TypeError();
+  const selection = parseLlmSelection(value.selection);
+  if (selection.provider !== value.slot) throw new TypeError();
+  return { slot: value.slot as string, value: value.value, selection };
 }
 
 function releaseVersion(value: unknown): value is string {
@@ -197,9 +337,9 @@ function parseWriteResult(value: unknown): unknown {
   if (
     value.status === "configured" &&
     exactKeys(value, ["slot", "status", "runtimeReady"]) &&
-    value.runtimeReady === true
+    typeof value.runtimeReady === "boolean"
   ) {
-    return { slot: value.slot, status: "configured", runtimeReady: true };
+    return { slot: value.slot, status: "configured", runtimeReady: value.runtimeReady };
   }
   if (
     value.status === "refused" &&
@@ -207,6 +347,111 @@ function parseWriteResult(value: unknown): unknown {
     REASONS.has(value.reason as string)
   ) {
     return { slot: value.slot, status: "refused", reason: value.reason };
+  }
+  throw new TypeError();
+}
+
+function parseLlmConfiguration(value: unknown): unknown {
+  if (
+    !record(value) ||
+    !exactKeys(value, ["schemaVersion", "providers", "active"]) ||
+    value.schemaVersion !== 1 ||
+    !Array.isArray(value.providers) ||
+    value.providers.length !== LLM_PROVIDER_ORDER.length
+  ) {
+    throw new TypeError();
+  }
+  const providers = value.providers.map((entry, index) => {
+    if (
+      !record(entry) ||
+      entry.provider !== LLM_PROVIDER_ORDER[index] ||
+      typeof entry.provider !== "string"
+    ) {
+      throw new TypeError();
+    }
+    const hasDefaultBaseUrl = DEFAULT_ENDPOINT_PROVIDERS.has(entry.provider);
+    if (
+      !exactKeys(
+        entry,
+        hasDefaultBaseUrl
+          ? ["provider", "defaultModel", "models", "defaultBaseUrl"]
+          : ["provider", "defaultModel", "models"],
+      ) ||
+      !safeString(entry.defaultModel, 512) ||
+      !Array.isArray(entry.models) ||
+      entry.models.length === 0 ||
+      entry.models.length > 100
+    ) {
+      throw new TypeError();
+    }
+    if (
+      hasDefaultBaseUrl &&
+      (typeof entry.defaultBaseUrl !== "string" ||
+        normalizedEndpoint(entry.defaultBaseUrl) !== entry.defaultBaseUrl)
+    ) {
+      throw new TypeError();
+    }
+    const models = entry.models.map((model) => {
+      if (!record(model)) throw new TypeError();
+      const hasHint = Object.hasOwn(model, "hint");
+      if (
+        !exactKeys(model, hasHint ? ["value", "label", "hint"] : ["value", "label"]) ||
+        !safeString(model.value, 512) ||
+        !safeString(model.label, 512) ||
+        (hasHint && !safeString(model.hint, 512))
+      ) {
+        throw new TypeError();
+      }
+      return {
+        value: model.value,
+        label: model.label,
+        ...(hasHint ? { hint: model.hint } : {}),
+      };
+    });
+    if (
+      new Set(models.map((model) => model.value)).size !== models.length ||
+      !models.some((model) => model.value === entry.defaultModel)
+    ) {
+      throw new TypeError();
+    }
+    return {
+      provider: entry.provider,
+      defaultModel: entry.defaultModel,
+      models,
+      ...(hasDefaultBaseUrl ? { defaultBaseUrl: entry.defaultBaseUrl } : {}),
+    };
+  });
+  let active: { readonly provider: string; readonly model: string } | null = null;
+  if (value.active !== null) {
+    if (
+      !record(value.active) ||
+      !exactKeys(value.active, ["provider", "model"]) ||
+      typeof value.active.provider !== "string" ||
+      !LLM_PROVIDERS.has(value.active.provider) ||
+      !safeString(value.active.model, 512)
+    ) {
+      throw new TypeError();
+    }
+    active = { provider: value.active.provider, model: value.active.model };
+  }
+  return { schemaVersion: 1, providers, active };
+}
+
+function parseLlmSelectionResult(value: unknown): unknown {
+  if (!record(value)) throw new TypeError();
+  if (
+    value.status === "configured" &&
+    exactKeys(value, ["status", "runtimeReady"]) &&
+    value.runtimeReady === true
+  ) {
+    return { status: "configured", runtimeReady: true };
+  }
+  if (
+    value.status === "refused" &&
+    exactKeys(value, ["status", "reason"]) &&
+    ["invalid-input", "credential-required", "runtime-unavailable"].includes(value.reason as string)
+  ) {
+    return { status: "refused", reason: value.reason };
   }
   throw new TypeError();
 }
@@ -335,20 +580,23 @@ contextBridge.exposeInMainWorld(
     retryFailedCredentials: async () =>
       parseStatuses(await ipcRenderer.invoke(DESKTOP_CREDENTIAL_RETRY_CHANNEL)),
     writeCredential: async (input: unknown) => {
-      if (
-        !record(input) ||
-        !exactKeys(input, ["slot", "value"]) ||
-        !SLOTS.has(input.slot as string) ||
-        typeof input.value !== "string"
-      ) {
-        throw new TypeError();
-      }
-      return parseWriteResult(await ipcRenderer.invoke(DESKTOP_CREDENTIAL_WRITE_CHANNEL, input));
+      const parsed = parseCredentialWriteInput(input);
+      return parseWriteResult(await ipcRenderer.invoke(DESKTOP_CREDENTIAL_WRITE_CHANNEL, parsed));
+    },
+    llmConfiguration: async () =>
+      parseLlmConfiguration(await ipcRenderer.invoke(DESKTOP_LLM_CONFIGURATION_CHANNEL)),
+    applyLlmSelection: async (input: unknown) => {
+      const selection = parseLlmSelection(input);
+      return parseLlmSelectionResult(
+        await ipcRenderer.invoke(DESKTOP_LLM_SELECTION_APPLY_CHANNEL, selection),
+      );
     },
     chatgptStatus: async () =>
       parseChatGptStatus(await ipcRenderer.invoke(DESKTOP_CHATGPT_STATUS_CHANNEL)),
-    chatgptLogin: async () =>
-      parseChatGptLogin(await ipcRenderer.invoke(DESKTOP_CHATGPT_LOGIN_CHANNEL)),
+    chatgptLogin: async (input: unknown) => {
+      const selection = parseChatGptSelection(input);
+      return parseChatGptLogin(await ipcRenderer.invoke(DESKTOP_CHATGPT_LOGIN_CHANNEL, selection));
+    },
     chooseImportFiles: async () =>
       parsePaths(await ipcRenderer.invoke(DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL)),
     releaseNotes: async () =>

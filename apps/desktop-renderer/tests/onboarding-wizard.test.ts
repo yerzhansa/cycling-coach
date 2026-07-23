@@ -152,14 +152,20 @@ describe("desktop onboarding wizard", () => {
     } as unknown as DesktopOnboardingAuth;
     const connect = vi.fn();
     const bridge = createOnboardingBridge(auth, connect);
+    const selection = {
+      provider: "openai-codex" as const,
+      model: "gpt-5.5",
+      endpoint: { mode: "automatic" as const },
+    };
     await expect(bridge.chatGptStatus()).resolves.toEqual({
       state: "configured",
       runtimeReady: false,
     });
-    await expect(bridge.chatGptLogin()).resolves.toEqual({
+    await expect(bridge.chatGptLogin(selection)).resolves.toEqual({
       status: "configured",
       runtimeReady: true,
     });
+    expect(auth.chatgptLogin).toHaveBeenCalledWith(selection);
     await expect(bridge.retryFailedCredentials()).resolves.toEqual([
       { slot: "anthropic", state: "configured", runtimeState: "active" },
     ]);

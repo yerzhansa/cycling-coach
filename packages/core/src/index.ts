@@ -160,6 +160,7 @@ export type { DataSource } from "./config.js";
 export {
   COMPACT_MODEL_DEFAULTS,
   DEFAULT_MODELS,
+  LLM_MODEL_CATALOGUE,
   LLM_PROVIDERS,
   PROVIDER_BASE_URLS,
   contextWindowForModel,
@@ -168,6 +169,8 @@ export {
 } from "./runtime-config.js";
 export type {
   EffectiveRuntimeConfig,
+  LlmModelCatalogueEntry,
+  LlmModelOption,
   LlmProvider,
   RuntimeConfigPatch,
   RuntimeConfigResolverOptions,

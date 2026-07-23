@@ -41,13 +41,62 @@ interface AuthBridge {
   getDaemonConnection(failedGeneration?: number): Promise<unknown>;
   credentialStatuses(): Promise<unknown>;
   retryFailedCredentials(): Promise<unknown>;
+  writeCredential(input: unknown): Promise<unknown>;
+  llmConfiguration(): Promise<unknown>;
+  applyLlmSelection(input: unknown): Promise<unknown>;
   releaseNotes(): Promise<unknown>;
   chatgptStatus(): Promise<unknown>;
-  chatgptLogin(): Promise<unknown>;
+  chatgptLogin(input: unknown): Promise<unknown>;
   getUpdateState(): Promise<unknown>;
   checkForUpdates(): Promise<unknown>;
   restartToUpdate(): Promise<unknown>;
   onUpdateState(listener: (state: unknown) => void): () => void;
+}
+
+const chatGptSelection = {
+  provider: "openai-codex",
+  model: "gpt-5.5",
+  endpoint: { mode: "automatic" },
+} as const;
+
+const providerOrder = [
+  "anthropic",
+  "openai",
+  "google",
+  "openai-codex",
+  "deepseek",
+  "qwen",
+  "minimax",
+  "kimi",
+  "zai",
+  "openrouter",
+] as const;
+
+const defaultEndpointProviders = new Set([
+  "deepseek",
+  "qwen",
+  "minimax",
+  "kimi",
+  "zai",
+  "openrouter",
+]);
+
+function llmConfiguration() {
+  return {
+    schemaVersion: 1,
+    providers: providerOrder.map((provider) => {
+      const defaultModel = `${provider}-default`;
+      return {
+        provider,
+        defaultModel,
+        models: [{ value: defaultModel, label: `${provider} default` }],
+        ...(defaultEndpointProviders.has(provider)
+          ? { defaultBaseUrl: `https://${provider}.example.invalid/v1` }
+          : {}),
+      };
+    }),
+    active: { provider: "anthropic", model: "athlete-custom-model" },
+  };
 }
 
 let bridge: AuthBridge;
@@ -99,12 +148,14 @@ describe("desktop preload ChatGPT auth", () => {
     expect(Object.keys(mocks.exposed)).toEqual(["enduragentAuth"]);
     expect(Object.keys(bridge).sort()).toEqual(
       [
+        "applyLlmSelection",
         "chatgptLogin",
         "chatgptStatus",
         "chooseImportFiles",
         "credentialStatuses",
         "getUpdateState",
         "getDaemonConnection",
+        "llmConfiguration",
         "checkForUpdates",
         "onDroppedImportFiles",
         "onUpdateState",
@@ -420,6 +471,182 @@ describe("desktop preload ChatGPT auth", () => {
     ]);
   });
 
+  it("copies the bounded model catalogue and active selection from its private channel", async () => {
+    const configuration = llmConfiguration();
+    mocks.invoke.mockResolvedValueOnce(configuration);
+
+    const copied = (await bridge.llmConfiguration()) as typeof configuration;
+
+    expect(copied).toEqual(configuration);
+    expect(copied).not.toBe(configuration);
+    expect(copied.providers).not.toBe(configuration.providers);
+    expect(copied.providers[0]?.models).not.toBe(configuration.providers[0]?.models);
+    expect(mocks.invoke).toHaveBeenCalledWith("enduragent:onboarding:llm-configuration");
+  });
+
+  it("normalizes strict selections and credential writes before invoking main", async () => {
+    mocks.invoke
+      .mockResolvedValueOnce({ status: "configured", runtimeReady: true })
+      .mockResolvedValueOnce({
+        slot: "openrouter",
+        status: "configured",
+        runtimeReady: true,
+      });
+    const selection = {
+      provider: "openrouter",
+      model: "  athlete-model  ",
+      endpoint: { mode: "custom", value: "  https://models.example.invalid/v1  " },
+    };
+
+    await expect(bridge.applyLlmSelection(selection)).resolves.toEqual({
+      status: "configured",
+      runtimeReady: true,
+    });
+    await expect(
+      bridge.writeCredential({
+        slot: "openrouter",
+        value: "obviously-fake-key",
+        selection,
+      }),
+    ).resolves.toMatchObject({ status: "configured" });
+    const normalized = {
+      provider: "openrouter",
+      model: "athlete-model",
+      endpoint: { mode: "custom", value: "https://models.example.invalid/v1" },
+    };
+    expect(mocks.invoke.mock.calls).toEqual([
+      ["enduragent:onboarding:llm-selection-apply", normalized],
+      [
+        "enduragent:onboarding:credential-write",
+        { slot: "openrouter", value: "obviously-fake-key", selection: normalized },
+      ],
+    ]);
+  });
+
+  it("accepts a securely stored inactive credential result", async () => {
+    mocks.invoke.mockResolvedValueOnce({
+      slot: "anthropic",
+      status: "configured",
+      runtimeReady: false,
+    });
+
+    await expect(
+      bridge.writeCredential({
+        slot: "anthropic",
+        value: "obviously-fake-key",
+      }),
+    ).resolves.toEqual({
+      slot: "anthropic",
+      status: "configured",
+      runtimeReady: false,
+    });
+  });
+
+  it("rejects malformed model and endpoint inputs before IPC", async () => {
+    const malformed = [
+      { provider: "anthropic", model: "", endpoint: { mode: "automatic" } },
+      { provider: "anthropic", model: "x".repeat(513), endpoint: { mode: "automatic" } },
+      { provider: "anthropic", model: "bad\u0000model", endpoint: { mode: "automatic" } },
+      { provider: "anthropic", model: "\tmodel", endpoint: { mode: "automatic" } },
+      { provider: "anthropic", model: "model", endpoint: { mode: "default" } },
+      {
+        provider: "openrouter",
+        model: "model",
+        endpoint: { mode: "custom", value: "http://models.example.invalid/v1" },
+      },
+      {
+        provider: "openrouter",
+        model: "model",
+        endpoint: { mode: "custom", value: "https://user:secret@example.invalid/v1" },
+      },
+      {
+        provider: "openrouter",
+        model: "model",
+        endpoint: { mode: "custom", value: "https://example.invalid/v1?secret=value" },
+      },
+      {
+        provider: "openrouter",
+        model: "model",
+        endpoint: { mode: "custom", value: "https://example.invalid/v1#" },
+      },
+      {
+        provider: "openrouter",
+        model: "model",
+        endpoint: { mode: "custom", value: "https://example.invalid/v1#secret" },
+      },
+      {
+        provider: "openrouter",
+        model: "model",
+        endpoint: { mode: "custom", value: `https://example.invalid/${"x".repeat(4_096)}` },
+      },
+      {
+        provider: "openrouter",
+        model: "model",
+        endpoint: { mode: "automatic", extra: true },
+      },
+    ];
+
+    for (const selection of malformed) {
+      await expect(bridge.applyLlmSelection(selection)).rejects.toBeInstanceOf(TypeError);
+    }
+    await expect(
+      bridge.writeCredential({
+        slot: "anthropic",
+        value: "obviously-fake-key",
+        selection: {
+          provider: "openrouter",
+          model: "model",
+          endpoint: { mode: "automatic" },
+        },
+      }),
+    ).rejects.toBeInstanceOf(TypeError);
+    await expect(
+      bridge.chatgptLogin({
+        provider: "anthropic",
+        model: "model",
+        endpoint: { mode: "automatic" },
+      }),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(mocks.invoke).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed privileged model responses without exposing extra fields", async () => {
+    const configuration = llmConfiguration();
+    const malformed = [
+      { ...configuration, secret: "private" },
+      {
+        ...configuration,
+        providers: configuration.providers.map((provider, index) =>
+          index === 0 ? { ...provider, rawBaseUrl: "https://private.invalid" } : provider,
+        ),
+      },
+      {
+        ...configuration,
+        providers: configuration.providers.map((provider, index) =>
+          index === 0 ? { ...provider, defaultModel: "not-in-models" } : provider,
+        ),
+      },
+      { ...configuration, active: { ...configuration.active, apiKey: "private" } },
+    ];
+    for (const value of malformed) {
+      mocks.invoke.mockResolvedValueOnce(value);
+      await expect(bridge.llmConfiguration()).rejects.toBeInstanceOf(TypeError);
+    }
+    for (const value of [
+      { status: "configured", runtimeReady: true, raw: "private" },
+      { status: "refused", reason: "storage-failed" },
+    ]) {
+      mocks.invoke.mockResolvedValueOnce(value);
+      await expect(
+        bridge.applyLlmSelection({
+          provider: "anthropic",
+          model: "model",
+          endpoint: { mode: "automatic" },
+        }),
+      ).rejects.toBeInstanceOf(TypeError);
+    }
+  });
+
   it("exposes strict status and configured results", async () => {
     mocks.invoke
       .mockResolvedValueOnce({ state: "configured", runtimeReady: false })
@@ -428,7 +655,7 @@ describe("desktop preload ChatGPT auth", () => {
       state: "configured",
       runtimeReady: false,
     });
-    await expect(bridge.chatgptLogin()).resolves.toEqual({
+    await expect(bridge.chatgptLogin(chatGptSelection)).resolves.toEqual({
       status: "configured",
       runtimeReady: true,
     });
@@ -440,7 +667,7 @@ describe("desktop preload ChatGPT auth", () => {
 
   it("accepts only closed refusal reasons and exact keys", async () => {
     mocks.invoke.mockResolvedValueOnce({ status: "refused", reason: "timed-out" });
-    await expect(bridge.chatgptLogin()).resolves.toEqual({
+    await expect(bridge.chatgptLogin(chatGptSelection)).resolves.toEqual({
       status: "refused",
       reason: "timed-out",
     });
@@ -453,7 +680,7 @@ describe("desktop preload ChatGPT auth", () => {
       mocks.invoke.mockResolvedValueOnce(value);
       const operation = Object.hasOwn(value, "state")
         ? bridge.chatgptStatus()
-        : bridge.chatgptLogin();
+        : bridge.chatgptLogin(chatGptSelection);
       await expect(operation).rejects.toBeInstanceOf(TypeError);
     }
   });

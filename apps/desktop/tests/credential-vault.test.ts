@@ -466,6 +466,177 @@ describe("desktop credential vault", () => {
     );
   });
 
+  it("stores an unrelated key without replacing the selected provider's custom endpoint", async () => {
+    const root = await temporaryRoot();
+    let selectedProvider = "openrouter";
+    let baseUrl: string | undefined = "https://private.models.example/v1";
+    const applyCredential = vi.fn(async (slot, _value, selection) => {
+      const providerChanged = selectedProvider !== slot;
+      selectedProvider = slot;
+      if (providerChanged) {
+        baseUrl = slot === "openrouter" ? "https://openrouter.ai/api/v1" : undefined;
+      }
+      if (selection?.endpoint.mode === "default") {
+        baseUrl = "https://openrouter.ai/api/v1";
+      } else if (selection?.endpoint.mode === "custom") {
+        baseUrl = selection.endpoint.value;
+      }
+    });
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      applyCredential,
+    });
+
+    await expect(
+      vault.writeCredential(
+        { slot: "anthropic", value: "stored-anthropic-secret" },
+        { activate: false },
+      ),
+    ).resolves.toEqual({
+      slot: "anthropic",
+      status: "configured",
+      runtimeReady: false,
+    });
+    await expect(
+      vault.writeCredential({
+        slot: "openrouter",
+        value: "selected-openrouter-secret",
+        selection: {
+          provider: "openrouter",
+          model: "deepseek/deepseek-v4-flash",
+          endpoint: { mode: "automatic" },
+        },
+      }),
+    ).resolves.toEqual({
+      slot: "openrouter",
+      status: "configured",
+      runtimeReady: true,
+    });
+
+    expect(applyCredential).toHaveBeenCalledOnce();
+    expect(selectedProvider).toBe("openrouter");
+    expect(baseUrl).toBe("https://private.models.example/v1");
+    await expect(vault.credentialStatuses()).resolves.toEqual(
+      expect.arrayContaining([
+        { slot: "anthropic", state: "configured", runtimeState: "stored-inactive" },
+        { slot: "openrouter", state: "configured", runtimeState: "active" },
+      ]),
+    );
+  });
+
+  it("applies a credential and matching selection through one guarded callback", async () => {
+    const root = await temporaryRoot();
+    const applyCredential = vi.fn(async () => {});
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      applyCredential,
+    });
+    const modelSelection = {
+      provider: "openrouter" as const,
+      model: "athlete-model",
+      endpoint: { mode: "default" as const },
+    };
+
+    await expect(
+      vault.writeCredential({
+        slot: "openrouter",
+        value: "  obviously-fake-key  ",
+        selection: modelSelection,
+      }),
+    ).resolves.toEqual({
+      slot: "openrouter",
+      status: "configured",
+      runtimeReady: true,
+    });
+    expect(applyCredential).toHaveBeenCalledOnce();
+    expect(applyCredential).toHaveBeenCalledWith(
+      "openrouter",
+      "obviously-fake-key",
+      modelSelection,
+    );
+  });
+
+  it("activates a stored key without returning it and supports a failed activation retry", async () => {
+    const root = await temporaryRoot();
+    let failSelection = false;
+    const applyCredential = vi.fn(async (_slot, _value, selected) => {
+      if (selected !== undefined && failSelection) throw new TypeError();
+    });
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      applyCredential,
+    });
+    await vault.writeCredential({
+      slot: "anthropic",
+      value: "stored-anthropic-secret",
+    });
+    await vault.writeCredential({
+      slot: "openrouter",
+      value: "stored-openrouter-secret",
+    });
+    const modelSelection = {
+      provider: "anthropic" as const,
+      model: "athlete-model",
+      endpoint: { mode: "automatic" as const },
+    };
+
+    failSelection = true;
+    const failed = await vault.applyLlmSelection(modelSelection);
+    expect(failed).toEqual({ status: "refused", reason: "runtime-unavailable" });
+    expect(JSON.stringify(failed)).not.toContain("stored-anthropic-secret");
+    await expect(vault.credentialStatuses()).resolves.toContainEqual({
+      slot: "anthropic",
+      state: "configured",
+      runtimeState: "failed",
+    });
+
+    failSelection = false;
+    await expect(vault.applyLlmSelection(modelSelection)).resolves.toEqual({
+      status: "configured",
+      runtimeReady: true,
+    });
+    await expect(vault.credentialStatuses()).resolves.toEqual(
+      expect.arrayContaining([
+        { slot: "anthropic", state: "configured", runtimeState: "active" },
+        { slot: "openrouter", state: "configured", runtimeState: "stored-inactive" },
+      ]),
+    );
+    expect(applyCredential).toHaveBeenLastCalledWith(
+      "anthropic",
+      "stored-anthropic-secret",
+      modelSelection,
+    );
+  });
+
+  it("requires a securely readable matching key before applying a selection", async () => {
+    const root = await temporaryRoot();
+    const applyCredential = vi.fn(async () => {});
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      applyCredential,
+    });
+
+    await expect(
+      vault.applyLlmSelection({
+        provider: "anthropic",
+        model: "model",
+        endpoint: { mode: "automatic" },
+      }),
+    ).resolves.toEqual({ status: "refused", reason: "credential-required" });
+    await expect(
+      vault.applyLlmSelection({
+        provider: "openai-codex",
+        model: "model",
+        endpoint: { mode: "automatic" },
+      }),
+    ).resolves.toEqual({ status: "refused", reason: "invalid-input" });
+    expect(applyCredential).not.toHaveBeenCalled();
+  });
+
   it("marks model credentials inactive when a profile becomes selected", () => {
     const runtimeState = new Map([
       ["anthropic" as const, "active" as const],

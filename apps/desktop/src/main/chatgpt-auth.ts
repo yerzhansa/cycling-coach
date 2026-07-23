@@ -7,6 +7,12 @@ import {
   type CodexLoginOptions,
 } from "@enduragent/core";
 import type { ConfigureRuntimeRpcParams, RuntimeConfigSnapshot } from "@enduragent/coach-contract";
+import {
+  parseChatGptLlmSelection,
+  runtimeConfigurationForSelection,
+  type OnboardingLlmSelection,
+  type OnboardingLlmSelectionResult,
+} from "./llm-selection.js";
 
 export const CHATGPT_PROFILE_NAME = "openai-codex" as const;
 export const CHATGPT_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
@@ -31,7 +37,8 @@ export type ChatGptLoginResult =
 
 export interface ChatGptAuthController {
   status(): Promise<ChatGptStatus>;
-  login(): Promise<ChatGptLoginResult>;
+  login(selection: OnboardingLlmSelection): Promise<ChatGptLoginResult>;
+  activate(selection: OnboardingLlmSelection): Promise<OnboardingLlmSelectionResult>;
 }
 
 interface ChatGptAuthDependencies {
@@ -129,7 +136,29 @@ export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAut
   const storeProfile = options.dependencies?.writeProfile ?? writeChatGptProfile;
   let activeLogin: Promise<ChatGptLoginResult> | undefined;
 
-  const performLogin = async (): Promise<ChatGptLoginResult> => {
+  const applySelection = async (
+    selection: OnboardingLlmSelection,
+  ): Promise<OnboardingLlmSelectionResult> => {
+    let parsed: ReturnType<typeof parseChatGptLlmSelection>;
+    try {
+      parsed = parseChatGptLlmSelection(selection);
+    } catch {
+      return { status: "refused", reason: "invalid-input" };
+    }
+    if (!(await hasChatGptProfile(options.configDir))) {
+      return { status: "refused", reason: "credential-required" };
+    }
+    try {
+      await options.applyRuntimeConfig(runtimeConfigurationForSelection(parsed));
+    } catch {
+      return { status: "refused", reason: "runtime-unavailable" };
+    }
+    return { status: "configured", runtimeReady: true };
+  };
+
+  const performLogin = async (
+    selection: ReturnType<typeof parseChatGptLlmSelection>,
+  ): Promise<ChatGptLoginResult> => {
     const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? CHATGPT_LOGIN_TIMEOUT_MS);
     const browserController = new AbortController();
     const signals = [timeoutSignal, browserController.signal];
@@ -162,9 +191,7 @@ export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAut
       return { status: "refused", reason: "storage-failed" };
     }
     try {
-      await options.applyRuntimeConfig({
-        llm: { provider: CHATGPT_PROFILE_NAME },
-      });
+      await options.applyRuntimeConfig(runtimeConfigurationForSelection(selection));
     } catch {
       return { status: "refused", reason: "runtime-unavailable" };
     }
@@ -180,11 +207,12 @@ export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAut
         runtimeReady: runtimeReady ?? false,
       };
     },
-    async login() {
+    async login(input) {
+      const selection = parseChatGptLlmSelection(input);
       if (activeLogin !== undefined) {
         return { status: "refused", reason: "already-in-progress" };
       }
-      const pending = performLogin();
+      const pending = performLogin(selection);
       activeLogin = pending;
       try {
         return await pending;
@@ -192,5 +220,6 @@ export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAut
         if (activeLogin === pending) activeLogin = undefined;
       }
     },
+    activate: applySelection,
   };
 }

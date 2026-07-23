@@ -215,8 +215,10 @@ const onboardingBridge: OnboardingBridge = {
   credentialStatuses: () => window.enduragentAuth.credentialStatuses(),
   retryFailedCredentials: () => window.enduragentAuth.retryFailedCredentials(),
   writeCredential: (value) => window.enduragentAuth.writeCredential(value),
+  llmConfiguration: () => window.enduragentAuth.llmConfiguration(),
+  applyLlmSelection: (value) => window.enduragentAuth.applyLlmSelection(value),
   chatGptStatus: () => window.enduragentAuth.chatgptStatus(),
-  chatGptLogin: () => window.enduragentAuth.chatgptLogin(),
+  chatGptLogin: (value) => window.enduragentAuth.chatgptLogin(value),
   chooseImportFiles: () => window.enduragentAuth.chooseImportFiles(),
   onDroppedImportFiles: (listener) => window.enduragentAuth.onDroppedImportFiles(listener),
   async importFiles(paths, onProgress) {

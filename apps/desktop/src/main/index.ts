@@ -46,6 +46,10 @@ import {
   startupRefusalCopy,
   unexpectedStartupCopy,
 } from "./lifecycle-messages.js";
+import {
+  runtimeConfigurationForExistingSelection,
+  type OnboardingLlmSelection,
+} from "./llm-selection.js";
 import { registerOnboardingIpc, runtimeConfigurationForCredential } from "./onboarding-ipc.js";
 import { installDesktopReleaseNotesIpc } from "./release-notes-ipc.js";
 import { createDesktopResidency, type DesktopResidency } from "./residency.js";
@@ -309,6 +313,21 @@ async function runDesktop(): Promise<void> {
       url: resolution.url,
       token: resolution.token,
     });
+    const readActiveRuntimeConfig = async () => {
+      const binding = activeRuntimeBinding;
+      const lifecycleState = daemonLifecycle?.snapshot();
+      if (binding === undefined || lifecycleState?.status !== "ready") throw new TypeError();
+      const snapshot = await binding.authority.getRuntimeConfig();
+      const currentLifecycleState = daemonLifecycle?.snapshot();
+      if (
+        activeRuntimeBinding !== binding ||
+        currentLifecycleState?.status !== "ready" ||
+        currentLifecycleState.generation !== lifecycleState.generation
+      ) {
+        throw new TypeError();
+      }
+      return snapshot;
+    };
     const credentialRoot = join(app.getPath("userData"), CREDENTIAL_DIRECTORY_NAME);
     const vault = createCredentialVault({
       root: credentialRoot,
@@ -330,24 +349,38 @@ async function runDesktop(): Promise<void> {
           return canPublish;
         };
       },
-      async applyCredential(slot, value) {
+      async applyCredential(slot, value, selection) {
         const binding = activeRuntimeBinding!;
-        if (daemonLifecycle?.snapshot().status !== "ready") throw new TypeError();
-        await binding.credentials.applyExplicit(runtimeConfigurationForCredential(slot, value));
-        if (activeRuntimeBinding !== binding || daemonLifecycle?.snapshot().status !== "ready") {
+        const lifecycleState = daemonLifecycle?.snapshot();
+        if (lifecycleState?.status !== "ready") throw new TypeError();
+        await binding.credentials.applyExplicit(
+          runtimeConfigurationForCredential(slot, value, selection),
+        );
+        const currentLifecycleState = daemonLifecycle?.snapshot();
+        if (
+          activeRuntimeBinding !== binding ||
+          currentLifecycleState?.status !== "ready" ||
+          currentLifecycleState.generation !== lifecycleState.generation
+        ) {
           if (slot !== "intervals-icu") failModelCredentialRuntimeStates();
           throw new TypeError();
         }
       },
       async reapplyCredential(slot, value, storedCredentialSlots) {
         const binding = activeRuntimeBinding!;
-        if (daemonLifecycle?.snapshot().status !== "ready") throw new TypeError();
+        const lifecycleState = daemonLifecycle?.snapshot();
+        if (lifecycleState?.status !== "ready") throw new TypeError();
         const status = await binding.credentials.reapplyStoredCredential(
           slot,
           value,
           storedCredentialSlots,
         );
-        if (activeRuntimeBinding !== binding || daemonLifecycle?.snapshot().status !== "ready") {
+        const currentLifecycleState = daemonLifecycle?.snapshot();
+        if (
+          activeRuntimeBinding !== binding ||
+          currentLifecycleState?.status !== "ready" ||
+          currentLifecycleState.generation !== lifecycleState.generation
+        ) {
           if (slot !== "intervals-icu") failModelCredentialRuntimeStates();
           throw new TypeError();
         }
@@ -386,9 +419,15 @@ async function runDesktop(): Promise<void> {
       configDir,
       async applyRuntimeConfig(request) {
         const binding = activeRuntimeBinding!;
-        if (daemonLifecycle?.snapshot().status !== "ready") throw new TypeError();
+        const lifecycleState = daemonLifecycle?.snapshot();
+        if (lifecycleState?.status !== "ready") throw new TypeError();
         await binding.credentials.applyExplicit(request);
-        if (activeRuntimeBinding !== binding || daemonLifecycle?.snapshot().status !== "ready") {
+        const currentLifecycleState = daemonLifecycle?.snapshot();
+        if (
+          activeRuntimeBinding !== binding ||
+          currentLifecycleState?.status !== "ready" ||
+          currentLifecycleState.generation !== lifecycleState.generation
+        ) {
           failModelCredentialRuntimeStates();
           throw new TypeError();
         }
@@ -398,7 +437,7 @@ async function runDesktop(): Promise<void> {
           markCredentialRuntimeChange,
         );
       },
-      getRuntimeConfig: () => activeRuntimeBinding!.authority.getRuntimeConfig(),
+      getRuntimeConfig: readActiveRuntimeConfig,
       openExternal: (url) => shell.openExternal(url),
       signal: controller.signal,
     });
@@ -434,6 +473,27 @@ async function runDesktop(): Promise<void> {
             window: created,
             vault,
             chatGptAuth,
+            getRuntimeConfig: readActiveRuntimeConfig,
+            applyExistingLlmSelection: async (selection: OnboardingLlmSelection) => {
+              const binding = activeRuntimeBinding;
+              const lifecycleState = daemonLifecycle?.snapshot();
+              if (binding === undefined || lifecycleState?.status !== "ready") {
+                throw new TypeError();
+              }
+              const applied = await binding.credentials.applyExistingLlmSelection(
+                selection.provider,
+                runtimeConfigurationForExistingSelection(selection),
+              );
+              const currentLifecycleState = daemonLifecycle?.snapshot();
+              if (
+                activeRuntimeBinding !== binding ||
+                currentLifecycleState?.status !== "ready" ||
+                currentLifecycleState.generation !== lifecycleState.generation
+              ) {
+                throw new TypeError();
+              }
+              return applied;
+            },
             checkIntervalsCredentialOwner: async (value) => {
               const snapshot = await activeRuntimeBinding!.authority.getRuntimeConfig();
               return checkIntervalsStoreOwnerAtPath(
