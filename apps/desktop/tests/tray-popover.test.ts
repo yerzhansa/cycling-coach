@@ -25,18 +25,26 @@ const electron = vi.hoisted(() => {
     });
     readonly loadURL = vi.fn(async () => {});
     readonly setPosition = vi.fn();
+    readonly show = vi.fn(() => {
+      this.visible = true;
+      this.focused = true;
+      this.emit("show");
+    });
     readonly showInactive = vi.fn(() => {
       this.visible = true;
+      this.focused = false;
       this.emit("show");
     });
     readonly hide = vi.fn(() => {
       this.visible = false;
+      this.focused = false;
       this.emit("hide");
     });
     readonly destroy = vi.fn(() => {
       this.destroyed = true;
     });
     private visible = false;
+    private focused = false;
     private destroyed = false;
     constructor(options: unknown) {
       super();
@@ -48,6 +56,11 @@ const electron = vi.hoisted(() => {
     }
     isDestroyed() {
       return this.destroyed;
+    }
+    loseFocus() {
+      if (!this.focused) return;
+      this.focused = false;
+      this.emit("blur");
     }
   }
   return {
@@ -136,7 +149,8 @@ describe("tray popover", () => {
     expect(navigation.preventDefault).toHaveBeenCalledOnce();
     popover.toggle();
     expect(electron.getDisplayMatching).toHaveBeenCalledWith(bounds);
-    expect(window.showInactive).toHaveBeenCalledOnce();
+    expect(window.show).toHaveBeenCalledOnce();
+    expect(window.showInactive).not.toHaveBeenCalled();
     popover.toggle();
     expect(window.hide).toHaveBeenCalledOnce();
   });
@@ -148,7 +162,7 @@ describe("tray popover", () => {
     });
     const window = electron.FakeBrowserWindow.instances[0]!;
     popover.toggle();
-    window.emit("blur");
+    window.loseFocus();
     expect(window.hide).toHaveBeenCalledOnce();
     popover.toggle();
     const closeEvent = { preventDefault: vi.fn() };

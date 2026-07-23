@@ -89,7 +89,7 @@ export function createTrayPopover(input: {
         workArea,
       });
       window.setPosition(position.x, position.y, false);
-      window.showInactive();
+      window.show();
     },
     hide,
     close() {
