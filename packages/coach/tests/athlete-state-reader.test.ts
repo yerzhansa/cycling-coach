@@ -6,6 +6,7 @@ import { AthleteStateSchema } from "@enduragent/coach-contract";
 import {
   ERROR_STATE_SCHEMA_VERSION,
   LATEST_SCHEMA_VERSION,
+  SCHEDULER_SCHEMA_VERSION,
 } from "@enduragent/kernel/reference/schemas";
 import {
   AthleteStateUnavailableError,
@@ -13,7 +14,20 @@ import {
 } from "../src/athlete-state-reader.js";
 import type { CyclingFtpAnchorResolver } from "@enduragent/kernel/anchors";
 
+const fsMocks = vi.hoisted(() => ({
+  readFile: vi.fn<typeof import("node:fs/promises").readFile>(),
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  fsMocks.readFile.mockImplementation(actual.readFile);
+  return { ...actual, readFile: fsMocks.readFile };
+});
+
 const roots: string[] = [];
+const T0 = "1998-07-17T23:59:58.000Z";
+const T1 = "1998-07-18T00:00:00.000Z";
+const T2 = "1998-07-18T06:00:01+06:00";
 
 async function home(): Promise<string> {
   const root = await mkdtemp(join(await realpath(tmpdir()), "coach-athlete-state-"));
@@ -22,11 +36,14 @@ async function home(): Promise<string> {
   return root;
 }
 
-function latest(freshness: "fresh" | "flag" | "stale" | "critical" = "fresh") {
+function latest(
+  freshness: "fresh" | "flag" | "stale" | "critical" = "fresh",
+  lastUpdated = "2026-07-18T00:00:00.000Z",
+) {
   return {
     metadata: {
       schema_version: LATEST_SCHEMA_VERSION,
-      last_updated: "2026-07-18T00:00:00.000Z",
+      last_updated: lastUpdated,
       freshness,
     },
     athlete_profile: { name: "Synthetic Athlete" },
@@ -46,6 +63,14 @@ function latest(freshness: "fresh" | "flag" | "stale" | "critical" = "fresh") {
     recent_activities: [{ id: "activity-1" }],
     planned_workouts: [{ id: "workout-1" }],
     wellness_data: { restingHr: 45 },
+  };
+}
+
+function schedulerState(lastSyncAt: string | null = T2) {
+  return {
+    schema_version: SCHEDULER_SCHEMA_VERSION,
+    last_sync_at: lastSyncAt,
+    next_sync_at: "1998-07-18T01:00:00.000Z",
   };
 }
 
@@ -72,20 +97,24 @@ function source(dataDir: string) {
 }
 
 afterEach(async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  fsMocks.readFile.mockReset();
+  fsMocks.readFile.mockImplementation(actual.readFile);
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 describe("persisted athlete state source", () => {
   it("maps every persisted field into a contract-valid state", async () => {
     const root = await home();
-    await writeJson(root, "latest.json", latest());
+    await writeJson(root, "latest.json", latest("fresh", T1));
     await writeJson(root, "error_state.json", errorState());
+    await writeJson(root, ".scheduler.json", schedulerState());
     const state = await source(root).getAthleteState();
     expect(AthleteStateSchema.parse(state)).toEqual(state);
     expect(state).toMatchObject({
       schemaVersion: LATEST_SCHEMA_VERSION,
-      lastUpdated: "2026-07-18T00:00:00.000Z",
-      lastSynced: "2026-07-18T00:00:00.000Z",
+      lastUpdated: T1,
+      lastSynced: T2,
       freshness: "fresh",
       degraded: false,
       athleteProfile: { name: "Synthetic Athlete" },
@@ -109,12 +138,159 @@ describe("persisted athlete state source", () => {
     const root = await home();
     await writeJson(root, "latest.json", latest("flag"));
     await writeJson(root, "error_state.json", errorState("block_coaching"));
+    await writeJson(root, ".scheduler.json", schedulerState(T0));
     const state = await source(root).getAthleteState();
     expect(state.degraded).toBe(true);
     expect(state.freshness).toBe("flag");
     expect(state.currentStatus).toEqual({ summary: "ready" });
     expect(state.plannedWorkouts).toEqual([{ id: "workout-1" }]);
-    expect(state.lastSynced).toBe(state.lastUpdated);
+    expect(state.lastSynced).toBe(T0);
+  });
+
+  it("retains a committed sync marker older than the latest data mutation", async () => {
+    const root = await home();
+    await writeJson(root, "latest.json", latest("fresh", T1));
+    await writeJson(root, ".scheduler.json", schedulerState(T0));
+    await expect(source(root).getAthleteState()).resolves.toMatchObject({
+      lastUpdated: T1,
+      lastSynced: T0,
+    });
+  });
+
+  it("keeps valid athlete state readable with null for every unusable scheduler state", async () => {
+    const variants: ReadonlyArray<{
+      readonly name: string;
+      readonly arrange: (root: string) => Promise<unknown>;
+    }> = [
+      { name: "missing", arrange: async () => {} },
+      {
+        name: "unreadable",
+        arrange: async (root) => mkdir(join(root, "data", ".scheduler.json")),
+      },
+      {
+        name: "malformed JSON",
+        arrange: async (root) => writeFile(join(root, "data", ".scheduler.json"), "{"),
+      },
+      {
+        name: "strict-schema-invalid",
+        arrange: async (root) =>
+          writeJson(root, ".scheduler.json", { ...schedulerState(), unexpected: true }),
+      },
+      {
+        name: "wrong-version",
+        arrange: async (root) =>
+          writeJson(root, ".scheduler.json", {
+            ...schedulerState(),
+            schema_version: "different",
+          }),
+      },
+      {
+        name: "null marker",
+        arrange: async (root) => writeJson(root, ".scheduler.json", schedulerState(null)),
+      },
+      {
+        name: "invalid timestamp",
+        arrange: async (root) =>
+          writeJson(root, ".scheduler.json", schedulerState("1998-02-30T12:00:00.000Z")),
+      },
+    ];
+    for (const variant of variants) {
+      const root = await home();
+      await writeJson(root, "latest.json", latest("fresh", T1));
+      await variant.arrange(root);
+      const state = await source(root).getAthleteState();
+      expect(AthleteStateSchema.parse(state), variant.name).toEqual(state);
+      expect(state, variant.name).toMatchObject({ lastUpdated: T1, lastSynced: null });
+    }
+  });
+
+  it("does not fabricate first-sync success from latest, error, schedule, or file times", async () => {
+    const root = await home();
+    await writeJson(root, "latest.json", latest("fresh", T1));
+    await writeJson(root, "error_state.json", errorState("block_coaching"));
+    const future = new Date("2098-01-01T00:00:00.000Z");
+    await utimes(join(root, "data", "latest.json"), future, future);
+    const state = await source(root).getAthleteState();
+    expect(state.lastUpdated).toBe(T1);
+    expect(state.lastSynced).toBeNull();
+  });
+
+  it("changes only lastSynced on the next read when only the commit marker changes", async () => {
+    const root = await home();
+    await writeJson(root, "latest.json", latest("fresh", T1));
+    await writeJson(root, ".scheduler.json", schedulerState(T0));
+    const reader = source(root);
+    const first = await reader.getAthleteState();
+    await writeJson(root, ".scheduler.json", schedulerState(T2));
+    const second = await reader.getAthleteState();
+    const { lastSynced: firstLastSynced, ...firstRest } = first;
+    const { lastSynced: secondLastSynced, ...secondRest } = second;
+    expect(firstLastSynced).toBe(T0);
+    expect(secondLastSynced).toBe(T2);
+    expect(secondRest).toEqual(firstRest);
+  });
+
+  it("settles the scheduler read before starting one read of each snapshot path", async () => {
+    const root = await home();
+    await writeJson(root, "latest.json", latest("fresh", T1));
+    await writeJson(root, "error_state.json", errorState());
+    const latestPath = join(root, "data", "latest.json");
+    const errorPath = join(root, "data", "error_state.json");
+    const schedulerPath = join(root, "data", ".scheduler.json");
+    const reads = new Map<string, number>();
+    const events: string[] = [];
+    let markerAvailable = false;
+    let rejectFirstSchedulerRead: (reason: unknown) => void = () => {
+      throw new Error("scheduler read did not start");
+    };
+    const firstSchedulerRead = new Promise<never>((_resolve, reject) => {
+      rejectFirstSchedulerRead = reject;
+    });
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    fsMocks.readFile.mockImplementation(async (path, options) => {
+      const persistedPath = path.toString();
+      reads.set(persistedPath, (reads.get(persistedPath) ?? 0) + 1);
+      events.push(`start:${persistedPath}`);
+      if (persistedPath !== schedulerPath) return actual.readFile(path, options);
+      if (!markerAvailable) return firstSchedulerRead;
+      return JSON.stringify(schedulerState(T2));
+    });
+
+    const reader = source(root);
+    const pendingFirst = reader.getAthleteState();
+    expect(events).toEqual([`start:${schedulerPath}`]);
+    expect(reads).toEqual(new Map([[schedulerPath, 1]]));
+
+    events.push(`settle:${schedulerPath}`);
+    rejectFirstSchedulerRead(new Error("synthetic missing marker"));
+    markerAvailable = true;
+    events.push(`available:${schedulerPath}`);
+    const first = await pendingFirst;
+    expect(first).toMatchObject({ lastUpdated: T1, lastSynced: null });
+    expect(events).toEqual([
+      `start:${schedulerPath}`,
+      `settle:${schedulerPath}`,
+      `available:${schedulerPath}`,
+      `start:${latestPath}`,
+      `start:${errorPath}`,
+    ]);
+    expect(reads).toEqual(
+      new Map([
+        [schedulerPath, 1],
+        [latestPath, 1],
+        [errorPath, 1],
+      ]),
+    );
+
+    const second = await reader.getAthleteState();
+    expect(second).toMatchObject({ lastUpdated: T1, lastSynced: T2 });
+    expect(reads).toEqual(
+      new Map([
+        [schedulerPath, 2],
+        [latestPath, 2],
+        [errorPath, 2],
+      ]),
+    );
   });
 
   it("fails open for every absent, malformed, invalid, or mismatched error sidecar", async () => {
@@ -163,6 +339,7 @@ describe("persisted athlete state source", () => {
     (variants[2] as ReturnType<typeof latest>).metadata.freshness = "invalid" as never;
     for (const variant of variants) {
       const root = await home();
+      await writeJson(root, ".scheduler.json", schedulerState());
       if (variant !== undefined) {
         await writeFile(
           join(root, "data", "latest.json"),
@@ -175,7 +352,7 @@ describe("persisted athlete state source", () => {
     }
   });
 
-  it("reads a single persisted pair per call without exposing file paths or schema issues", async () => {
+  it("reads a single persisted snapshot per call without exposing file paths or schema issues", async () => {
     const root = await home();
     const selected = latest();
     await writeJson(root, "latest.json", selected);
