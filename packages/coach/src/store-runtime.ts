@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 import type { Config, AthleteDataReader, ReferenceRuntime } from "@enduragent/core";
-import { createStoreAthleteDataReader } from "@enduragent/core";
+import { createStoreAthleteDataReader, createSubsystemLogger } from "@enduragent/core";
 import {
   createPhysicalRequestLedger,
   type PhysicalRequestCounts,
@@ -84,6 +84,7 @@ export class StoreRuntime {
     const dependencies = options.dependencies ?? {};
     const now = dependencies.now ?? (() => new Date());
     const schedulerDependencies = dependencies.schedulerDependencies ?? {};
+    const logger = createSubsystemLogger("sync", options.home.root);
     this.dependencies = {
       capture: dependencies.capture ?? runReferenceCapture,
       produce:
@@ -100,6 +101,9 @@ export class StoreRuntime {
       cadenceMs: STORE_REFRESH_INTERVAL_MS,
       run: async () => {
         await this.runWindow();
+      },
+      onError: (error) => {
+        logger.error("scheduled_store_refresh_failed", error);
       },
       dependencies: {
         nowEpochMs: schedulerDependencies.nowEpochMs ?? (() => now().getTime()),
