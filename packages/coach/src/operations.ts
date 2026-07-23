@@ -71,6 +71,18 @@ function sameHome(left: AthleteHome, right: AthleteHome): boolean {
   );
 }
 
+function createSerializedLane(): <T>(operation: () => Promise<T>) => Promise<T> {
+  let tail = Promise.resolve();
+  return <T>(operation: () => Promise<T>): Promise<T> => {
+    const task = tail.then(operation, operation);
+    tail = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
+  };
+}
+
 export function createCoachOperations(
   input: CreateCoachOperationsInput,
   dependencies: CoachOperationsDependencies = {},
@@ -85,16 +97,8 @@ export function createCoachOperations(
   const unitsPreference = createUnitsPreferenceService(createUnitsPreferenceRepository(store));
   const importFiles = dependencies.importFiles ?? importFilesWithReport;
   const backfill = dependencies.backfill ?? runIntervalsBackfillInWriter;
-  let tail = Promise.resolve();
-
-  const enqueue = <T>(operation: () => Promise<T>): Promise<T> => {
-    const task = tail.then(operation, operation);
-    tail = task.then(
-      () => undefined,
-      () => undefined,
-    );
-    return task;
-  };
+  const enqueueStoreOperation = createSerializedLane();
+  const enqueueRuntimeConfiguration = createSerializedLane();
 
   const deliver = (
     onEvent: ((event: OperationProgressEvent) => void) | undefined,
@@ -110,7 +114,7 @@ export function createCoachOperations(
     importFiles(request: ImportFilesRpcParams, onEvent): Promise<ImportFilesRpcResult> {
       const parsedRequest = ImportFilesRpcParamsSchema.parse(request);
       const paths = [...parsedRequest.paths];
-      return enqueue(async () => {
+      return enqueueStoreOperation(async () => {
         deliver(onEvent, { phase: "started", completed: 0, total: paths.length });
         const report = await importFiles({ inputPaths: paths, archiveDir, store });
         const result = ImportFilesRpcResultSchema.parse({
@@ -133,7 +137,7 @@ export function createCoachOperations(
     },
     sync(request: SyncRpcParams, onEvent): Promise<SyncRpcResult> {
       SyncRpcParamsSchema.parse(request);
-      return enqueue(async () => {
+      return enqueueStoreOperation(async () => {
         deliver(onEvent, { phase: "started", completed: 0, total: 1 });
         const window = await input.runtime.runWindowAfter(async (signal) => {
           const credentials = await input.intervalsCredentials.read();
@@ -163,7 +167,7 @@ export function createCoachOperations(
     },
     saveIntake(request: SaveIntakeRpcParams): Promise<SaveIntakeRpcResult> {
       const parsedRequest = SaveIntakeRpcParamsSchema.parse(request);
-      return enqueue(async () => {
+      return enqueueStoreOperation(async () => {
         const deviceId = await identity.deviceId();
         const stamp = identity.hlcStamp();
         await intake.replace({
@@ -178,20 +182,23 @@ export function createCoachOperations(
     },
     configureRuntime(request: ConfigureRuntimeRpcParams): Promise<ConfigureRuntimeRpcResult> {
       const parsedRequest = ConfigureRuntimeRpcParamsSchema.parse(request);
-      return enqueue(async () => {
-        await input.applyRuntimeConfig(parsedRequest);
-        return ConfigureRuntimeRpcResultSchema.parse({
-          schemaVersion: 1,
-          applied: {
-            llm: parsedRequest.llm !== undefined,
-            intervals: parsedRequest.intervals !== undefined,
-          },
-        });
+      return enqueueRuntimeConfiguration(async () => {
+        const apply = async (): Promise<ConfigureRuntimeRpcResult> => {
+          await input.applyRuntimeConfig(parsedRequest);
+          return ConfigureRuntimeRpcResultSchema.parse({
+            schemaVersion: 1,
+            applied: {
+              llm: parsedRequest.llm !== undefined,
+              intervals: parsedRequest.intervals !== undefined,
+            },
+          });
+        };
+        return parsedRequest.intervals === undefined ? apply() : enqueueStoreOperation(apply);
       });
     },
     getRuntimeConfig(request: GetRuntimeConfigRpcParams): Promise<GetRuntimeConfigRpcResult> {
       GetRuntimeConfigRpcParamsSchema.parse(request);
-      return enqueue(async () => {
+      return enqueueRuntimeConfiguration(async () => {
         if (input.readRuntimeConfig === undefined) {
           throw new TypeError("Runtime configuration read is unavailable.");
         }
@@ -200,13 +207,13 @@ export function createCoachOperations(
     },
     getUnitsPreference(request: GetUnitsPreferenceRpcParams): Promise<GetUnitsPreferenceRpcResult> {
       GetUnitsPreferenceRpcParamsSchema.parse(request);
-      return enqueue(async () =>
+      return enqueueStoreOperation(async () =>
         GetUnitsPreferenceRpcResultSchema.parse(await unitsPreference.get()),
       );
     },
     setUnitsPreference(request: SetUnitsPreferenceRpcParams): Promise<SetUnitsPreferenceRpcResult> {
       const parsedRequest = SetUnitsPreferenceRpcParamsSchema.parse(request);
-      return enqueue(async () =>
+      return enqueueStoreOperation(async () =>
         SetUnitsPreferenceRpcResultSchema.parse(await unitsPreference.set(parsedRequest.value)),
       );
     },
