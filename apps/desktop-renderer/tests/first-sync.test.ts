@@ -1,16 +1,26 @@
 import { readFile } from "node:fs/promises";
-import { CoachClientDisconnectedError, CoachClientProtocolError } from "@enduragent/coach-client";
+import type { CoachClient, CoachClientCallOptions } from "@enduragent/coach-client";
 import type {
   CoachOperationProgressNotificationEnvelope,
   SyncRpcResult,
 } from "@enduragent/coach-contract";
 import { describe, expect, it, vi, type Mock } from "vitest";
+import type { DesktopCoachClientProvider } from "../src/coach-client.js";
 import {
   createFirstSyncController,
-  type FirstSyncCallOptions,
   type FirstSyncPorts,
   type FirstSyncState,
 } from "../src/first-sync.js";
+import {
+  createManualSyncController,
+  type ManualSyncViewState,
+} from "../src/training-context/manual-sync.js";
+import {
+  createTrainingSyncCoordinator,
+  type TrainingSyncCoordinator,
+  type TrainingSyncState,
+  type TrainingSyncStateListener,
+} from "../src/training-sync.js";
 
 const completion = {
   providerConfigured: true,
@@ -25,52 +35,89 @@ const success: SyncRpcResult = {
   requests: { store: 1, reference: 1, total: 2 },
 };
 
-function envelope(
-  phase: "started" | "completed",
-  completed: number,
-  total = 1,
-  requestId = 1,
-): CoachOperationProgressNotificationEnvelope {
-  return {
-    jsonrpc: "2.0",
-    method: "coach.operationProgress",
-    params: { requestId, requestMethod: "sync", event: { phase, completed, total } },
-  };
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((accept) => {
+    resolve = accept;
+  });
+  return { promise, resolve };
 }
 
-function fakePorts(callSync: FirstSyncPorts["callSync"]): FirstSyncPorts & {
+class FakeCoordinator implements TrainingSyncCoordinator {
+  private state: TrainingSyncState = { status: "idle" };
+  private operation = 0;
+  private task: ReturnType<typeof deferred<void>> | undefined;
+  private readonly listeners = new Set<TrainingSyncStateListener>();
+  readonly requestCalls: number[] = [];
+
+  getState(): TrainingSyncState {
+    return this.state;
+  }
+
+  subscribe(listener: TrainingSyncStateListener): () => void {
+    this.listeners.add(listener);
+    listener(this.state);
+    return () => this.listeners.delete(listener);
+  }
+
+  request(): Promise<void> {
+    if (this.task !== undefined) return this.task.promise;
+    this.requestCalls.push(this.operation + 1);
+    this.operation += 1;
+    this.task = deferred<void>();
+    this.publish({ status: "queued", operation: this.operation });
+    return this.task.promise;
+  }
+
+  publish(state: TrainingSyncState): void {
+    this.state = state;
+    for (const listener of this.listeners) listener(state);
+  }
+
+  finish(state: TrainingSyncState): void {
+    this.publish(state);
+    const task = this.task;
+    this.task = undefined;
+    task?.resolve();
+  }
+
+  dispose(): void {
+    this.listeners.clear();
+    this.task = undefined;
+  }
+}
+
+function fakePorts(coordinator: TrainingSyncCoordinator): FirstSyncPorts & {
   readonly states: FirstSyncState[];
   readonly focusComposer: Mock<() => void>;
 } {
   const states: FirstSyncState[] = [];
   return {
+    coordinator,
     states,
-    callSync,
     focusComposer: vi.fn<() => void>(),
     render: (state) => states.push(state),
   };
 }
 
-function completedCall(result: SyncRpcResult = success): FirstSyncPorts["callSync"] {
-  return async (options) => {
-    options.onNotificationEnvelope(envelope("started", 0));
-    options.onNotificationEnvelope(envelope("completed", 1));
-    return result;
+function envelope(
+  phase: "started" | "completed",
+  completed: number,
+): CoachOperationProgressNotificationEnvelope {
+  return {
+    jsonrpc: "2.0",
+    method: "coach.operationProgress",
+    params: { requestId: 1, requestMethod: "sync", event: { phase, completed, total: 1 } },
   };
 }
 
 describe("first sync controller", () => {
-  it("strictly validates completion and starts one synchronous single-flight call", async () => {
-    let resolve!: (result: SyncRpcResult) => void;
-    let options!: FirstSyncCallOptions;
-    const callSync = vi.fn(
-      (selected: FirstSyncCallOptions) =>
-        new Promise<SyncRpcResult>((done) => {
-          options = selected;
-          resolve = done;
-        }),
-    );
-    const ports = fakePorts(callSync);
+  it("strictly validates completion and joins one synchronous coordinator flight", async () => {
+    const coordinator = new FakeCoordinator();
+    const ports = fakePorts(coordinator);
     const controller = createFirstSyncController(ports);
     for (const invalid of [
       {},
@@ -80,164 +127,277 @@ describe("first sync controller", () => {
     ]) {
       await expect(controller.start(invalid as never)).rejects.toBeInstanceOf(TypeError);
     }
-    expect(callSync).not.toHaveBeenCalled();
+    expect(coordinator.requestCalls).toHaveLength(0);
     const first = controller.start(completion);
     const second = controller.start(completion);
     expect(first).toBe(second);
+    expect(coordinator.requestCalls).toEqual([1]);
     expect(ports.states).toEqual([{ status: "syncing" }]);
-    expect(callSync).toHaveBeenCalledTimes(1);
-    options.onNotificationEnvelope(envelope("started", 0));
-    options.onNotificationEnvelope(envelope("completed", 1));
-    resolve(success);
-    await expect(first).resolves.toBeUndefined();
+    coordinator.publish({ status: "running", operation: 1 });
+    expect(ports.states).toEqual([{ status: "syncing" }]);
+    coordinator.finish({ status: "succeeded", operation: 1, kind: "published" });
+    await first;
     expect(ports.states.at(-1)).toEqual({ status: "ready" });
     expect(ports.focusComposer).toHaveBeenCalledTimes(1);
   });
 
   it.each([
-    ["reversed", [envelope("completed", 1), envelope("started", 0)]],
-    ["duplicate", [envelope("started", 0), envelope("started", 0)]],
-    ["wrong total", [envelope("started", 0, 2), envelope("completed", 1)]],
-    ["skipped", [envelope("started", 0)]],
-    ["cross request", [envelope("started", 0, 1, 1), envelope("completed", 1, 1, 2)]],
-  ])("latches %s progress as a protocol failure without observer throws", async (_name, events) => {
-    const ports = fakePorts(async (options) => {
-      for (const event of events) {
-        expect(() => options.onNotificationEnvelope(event)).not.toThrow();
-      }
-      return success;
-    });
+    [
+      { status: "succeeded", operation: 1, kind: "no-change" },
+      { status: "failed", kind: "operation", retryable: true },
+    ],
+    [
+      { status: "failed", operation: 1, kind: "partial", retryable: true },
+      { status: "failed", kind: "operation", retryable: true },
+    ],
+    [
+      { status: "failed", operation: 1, kind: "operation", retryable: true },
+      { status: "failed", kind: "operation", retryable: true },
+    ],
+    [
+      { status: "failed", operation: 1, kind: "indeterminate", retryable: true },
+      { status: "failed", kind: "disconnected", retryable: true },
+    ],
+    [
+      { status: "failed", operation: 1, kind: "protocol", retryable: false },
+      { status: "failed", kind: "protocol", retryable: false },
+    ],
+  ] as const)("preserves first-sync mapping for %o", async (terminal, expected) => {
+    const coordinator = new FakeCoordinator();
+    const ports = fakePorts(coordinator);
     const controller = createFirstSyncController(ports);
-    await controller.start(completion);
-    expect(ports.states.at(-1)).toEqual({
-      status: "failed",
-      kind: "protocol",
-      retryable: false,
-    });
+    const task = controller.start(completion);
+    coordinator.finish(terminal);
+    await task;
+    expect(ports.states.at(-1)).toEqual(expected);
     expect(ports.focusComposer).not.toHaveBeenCalled();
-    await controller.retry();
-    expect(ports.states).toHaveLength(2);
   });
 
-  it("turns a late current-epoch envelope into a non-retryable protocol failure", async () => {
-    let notify!: FirstSyncCallOptions["onNotificationEnvelope"];
-    const ports = fakePorts(async (options) => {
-      notify = options.onNotificationEnvelope;
-      notify(envelope("started", 0));
-      notify(envelope("completed", 1));
-      return success;
-    });
+  it("retries only a retryable shared outcome and focuses the composer once", async () => {
+    const coordinator = new FakeCoordinator();
+    const ports = fakePorts(coordinator);
     const controller = createFirstSyncController(ports);
-    await controller.start(completion);
-    expect(() => notify(envelope("completed", 1))).not.toThrow();
-    expect(ports.states.at(-1)).toEqual({
+    const first = controller.start(completion);
+    coordinator.finish({
       status: "failed",
-      kind: "protocol",
-      retryable: false,
+      operation: 1,
+      kind: "operation",
+      retryable: true,
     });
+    await first;
+    await controller.start(completion);
+    expect(coordinator.requestCalls).toEqual([1]);
+    const retry = controller.retry();
+    expect(coordinator.requestCalls).toEqual([1, 2]);
+    coordinator.finish({ status: "succeeded", operation: 2, kind: "published" });
+    await retry;
+    expect(coordinator.requestCalls).toEqual([1, 2]);
+    expect(ports.focusComposer).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    [false, false],
-    [false, true],
-    [true, false],
-  ])(
-    "maps published %s and Reference success %s to a retryable operation failure",
-    async (published, referenceSucceeded) => {
-      const ports = fakePorts(completedCall({ ...success, published, referenceSucceeded }));
-      await createFirstSyncController(ports).start(completion);
-      expect(ports.states.at(-1)).toEqual({
-        status: "failed",
-        kind: "operation",
-        retryable: true,
+  it.each(["owned", "joined"] as const)(
+    "quiesces a completed %s first-sync render and focus history during later manual syncs",
+    async (admission) => {
+      const coordinator = new FakeCoordinator();
+      const ports = fakePorts(coordinator);
+      const first = createFirstSyncController(ports);
+      const manualStates: ManualSyncViewState[] = [];
+      const manual = createManualSyncController({
+        coordinator,
+        view: { render: (state) => manualStates.push(state), restoreKeyboardFocus: vi.fn() },
       });
-      expect(ports.focusComposer).not.toHaveBeenCalled();
+      const joinedTask = admission === "joined" ? manual.activate("pointer") : undefined;
+      const firstTask = first.start(completion);
+      if (joinedTask !== undefined) expect(firstTask).toBe(joinedTask);
+      coordinator.finish({ status: "succeeded", operation: 1, kind: "published" });
+      await firstTask;
+      await Promise.resolve();
+      const renderedAtReady = [...ports.states];
+      const focusCallsAtReady = ports.focusComposer.mock.calls.length;
+
+      const laterManual = manual.activate("pointer");
+      coordinator.finish({ status: "succeeded", operation: 2, kind: "no-change" });
+      await laterManual;
+
+      expect(coordinator.requestCalls).toEqual([1, 2]);
+      expect(manualStates.at(-1)?.message).toBe("Local training-data processing completed.");
+      expect(ports.states).toEqual(renderedAtReady);
+      expect(ports.focusComposer).toHaveBeenCalledTimes(focusCallsAtReady);
+      manual.dispose();
+      first.dispose();
     },
   );
 
-  it.each([
-    [new Error("private operation failure"), "operation", true],
-    [new CoachClientDisconnectedError(1006, "private close reason"), "disconnected", true],
-    [new CoachClientProtocolError(), "protocol", false],
-  ] as const)("maps fixed failure state for %s", async (failure, kind, retryable) => {
-    const ports = fakePorts(async () => {
-      throw failure;
+  it("reactivates a completed first sync only for later onboarding without refocusing", async () => {
+    const coordinator = new FakeCoordinator();
+    const ports = fakePorts(coordinator);
+    const first = createFirstSyncController(ports);
+    const manual = createManualSyncController({
+      coordinator,
+      view: { render: vi.fn(), restoreKeyboardFocus: vi.fn() },
     });
-    await createFirstSyncController(ports).start(completion);
-    expect(ports.states.at(-1)).toEqual({ status: "failed", kind, retryable });
-    expect(JSON.stringify(ports.states)).not.toContain(failure.message);
-  });
 
-  it("retries once on a new epoch and ignores callbacks from the detached epoch", async () => {
-    const calls: FirstSyncCallOptions[] = [];
-    let resolveRetry!: (result: SyncRpcResult) => void;
-    const ports = fakePorts(
-      vi.fn(async (options) => {
-        calls.push(options);
-        if (calls.length === 1) throw new CoachClientDisconnectedError(1006, "detached");
-        return new Promise<SyncRpcResult>((resolve) => {
-          resolveRetry = resolve;
-        });
-      }),
-    );
-    const controller = createFirstSyncController(ports);
-    await controller.start(completion);
-    const retry = controller.retry();
-    expect(calls).toHaveLength(2);
-    calls[0]!.onNotificationEnvelope(envelope("started", 0));
-    calls[0]!.onNotificationEnvelope(envelope("completed", 1));
-    calls[1]!.onNotificationEnvelope(envelope("started", 0, 1, 2));
-    calls[1]!.onNotificationEnvelope(envelope("completed", 1, 1, 2));
-    resolveRetry(success);
-    await retry;
-    expect(ports.states.at(-1)).toEqual({ status: "ready" });
+    const initialSetup = first.start(completion);
+    coordinator.finish({ status: "succeeded", operation: 1, kind: "published" });
+    await initialSetup;
+    expect(ports.states).toEqual([{ status: "syncing" }, { status: "ready" }]);
+    const renderedAtReady = [...ports.states];
+
+    const laterManual = manual.activate("pointer");
+    coordinator.finish({ status: "succeeded", operation: 2, kind: "no-change" });
+    await laterManual;
+    expect(ports.states).toEqual(renderedAtReady);
     expect(ports.focusComposer).toHaveBeenCalledTimes(1);
-    expect(ports.callSync).toHaveBeenCalledTimes(2);
+
+    const laterSetup = first.start(completion);
+    expect(coordinator.requestCalls).toEqual([1, 2, 3]);
+    expect(ports.states).toEqual([...renderedAtReady, { status: "syncing" }]);
+    coordinator.finish({ status: "succeeded", operation: 3, kind: "published" });
+    await laterSetup;
+    expect(ports.states).toEqual([...renderedAtReady, { status: "syncing" }, { status: "ready" }]);
+    expect(ports.focusComposer).toHaveBeenCalledTimes(1);
+    manual.dispose();
+    first.dispose();
   });
 
-  it("makes pending callbacks and completion inert after disposal", async () => {
-    let options!: FirstSyncCallOptions;
-    let resolve!: (result: SyncRpcResult) => void;
-    const ports = fakePorts(
-      (selected) =>
-        new Promise<SyncRpcResult>((done) => {
-          options = selected;
-          resolve = done;
-        }),
-    );
+  it("makes shared state and completion inert after disposal", async () => {
+    const coordinator = new FakeCoordinator();
+    const ports = fakePorts(coordinator);
     const controller = createFirstSyncController(ports);
-    const call = controller.start(completion);
+    const task = controller.start(completion);
     controller.dispose();
-    options.onNotificationEnvelope(envelope("started", 0));
-    options.onNotificationEnvelope(envelope("completed", 1));
-    resolve(success);
-    await call;
+    coordinator.finish({ status: "succeeded", operation: 1, kind: "published" });
+    await task;
     await controller.retry();
     await controller.start(completion);
     expect(ports.states).toEqual([{ status: "syncing" }]);
     expect(ports.focusComposer).not.toHaveBeenCalled();
   });
 
-  it("rechecks sync after a later onboarding completion without refocusing twice", async () => {
-    const callSync = vi.fn(completedCall());
-    const ports = fakePorts(callSync);
-    const controller = createFirstSyncController(ports);
-    await controller.start(completion);
-    await controller.start(completion);
-    expect(callSync).toHaveBeenCalledTimes(2);
-    expect(ports.states).toEqual([
-      { status: "syncing" },
-      { status: "ready" },
-      { status: "syncing" },
-      { status: "ready" },
+  it("keeps the drawer coherent when first sync owns the active admission", async () => {
+    const coordinator = new FakeCoordinator();
+    const first = createFirstSyncController(fakePorts(coordinator));
+    const firstTask = first.start(completion);
+    const manualStates: ManualSyncViewState[] = [];
+    const manual = createManualSyncController({
+      coordinator,
+      view: { render: (state) => manualStates.push(state), restoreKeyboardFocus: vi.fn() },
+    });
+    await manual.activate("keyboard");
+    expect(coordinator.requestCalls).toEqual([1]);
+    expect(manualStates).toEqual([
+      {
+        label: "Sync now",
+        message: "Sync queued.",
+        disabled: true,
+        busy: true,
+        tone: "active",
+      },
     ]);
-    expect(ports.focusComposer).toHaveBeenCalledTimes(1);
+    coordinator.finish({ status: "succeeded", operation: 1, kind: "published" });
+    await firstTask;
+    expect(manualStates.at(-1)?.message).toBe("Training-data check completed.");
   });
 
-  it("keeps the controller free of chat or transcript ports and ships the exact status surface", async () => {
-    const ports = fakePorts(completedCall());
-    await createFirstSyncController(ports).start(completion);
-    expect(Object.keys(ports).sort()).toEqual(["callSync", "focusComposer", "render", "states"]);
+  it("restores focus only for the accepted keyboard activation", async () => {
+    const coordinator = new FakeCoordinator();
+    const restoreKeyboardFocus = vi.fn();
+    const manual = createManualSyncController({
+      coordinator,
+      view: { render: vi.fn(), restoreKeyboardFocus },
+    });
+    const keyboard = manual.activate("keyboard");
+    expect(manual.activate("pointer")).toBe(keyboard);
+    coordinator.finish({ status: "succeeded", operation: 1, kind: "published" });
+    await keyboard;
+    await Promise.resolve();
+    expect(restoreKeyboardFocus).toHaveBeenCalledTimes(1);
+
+    const pointer = manual.activate("pointer");
+    coordinator.finish({ status: "succeeded", operation: 2, kind: "published" });
+    await pointer;
+    await Promise.resolve();
+    expect(restoreKeyboardFocus).toHaveBeenCalledTimes(1);
+
+    const staleKeyboard = manual.activate("keyboard");
+    manual.dispose();
+    coordinator.finish({ status: "succeeded", operation: 3, kind: "published" });
+    await staleKeyboard;
+    expect(restoreKeyboardFocus).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one wire operation with manual sync and replays running state to late surfaces", async () => {
+    const callGate = deferred<SyncRpcResult>();
+    let options!: CoachClientCallOptions<"sync">;
+    const call = vi.fn(
+      async (_method: string, _params: unknown, selected?: CoachClientCallOptions<"sync">) => {
+        options = selected!;
+        return callGate.promise;
+      },
+    );
+    const client = {
+      handshake: {} as CoachClient["handshake"],
+      call: call as unknown as CoachClient["call"],
+      close: vi.fn(async () => {}),
+    } as CoachClient;
+    const clients: DesktopCoachClientProvider = {
+      getClient: vi.fn(async () => client),
+      reconnect: vi.fn(async () => client),
+      close: vi.fn(async () => {}),
+    };
+    const refreshTrainingContext = vi.fn(async () => {});
+    const coordinator = createTrainingSyncCoordinator({ clients, refreshTrainingContext });
+    const manualStates: ManualSyncViewState[] = [];
+    const manual = createManualSyncController({
+      coordinator,
+      view: {
+        render: (state) => manualStates.push(state),
+        restoreKeyboardFocus: vi.fn(),
+      },
+    });
+    const manualTask = manual.activate("pointer");
+    await Promise.resolve();
+    options.onNotificationEnvelope?.(envelope("started", 0));
+
+    const firstPorts = fakePorts(coordinator);
+    const first = createFirstSyncController(firstPorts);
+    const firstTask = first.start(completion);
+    expect(firstTask).toBe(manualTask);
+    expect(firstPorts.states).toEqual([{ status: "syncing" }]);
+    expect(manualStates.at(-1)?.message).toBe("Syncing training data…");
+    expect(call).toHaveBeenCalledTimes(1);
+
+    const lateStates: ManualSyncViewState[] = [];
+    const late = createManualSyncController({
+      coordinator,
+      view: { render: (state) => lateStates.push(state), restoreKeyboardFocus: vi.fn() },
+    });
+    expect(lateStates).toEqual([
+      {
+        label: "Sync now",
+        message: "Syncing training data…",
+        disabled: true,
+        busy: true,
+        tone: "active",
+      },
+    ]);
+    expect(call).toHaveBeenCalledTimes(1);
+
+    options.onNotificationEnvelope?.(envelope("completed", 1));
+    options.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: success });
+    callGate.resolve(success);
+    await Promise.all([manualTask, firstTask]);
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(refreshTrainingContext).toHaveBeenCalledTimes(1);
+    expect(firstPorts.states.at(-1)).toEqual({ status: "ready" });
+    expect(firstPorts.focusComposer).not.toHaveBeenCalled();
+    expect(lateStates.at(-1)?.message).toBe("Training-data check completed.");
+    late.dispose();
+    first.dispose();
+    manual.dispose();
+  });
+
+  it("keeps first sync free of a second wire tracker and ships the existing status surface", async () => {
     const [host, controller, styles] = await Promise.all([
       readFile(new URL("../src/index.ts", import.meta.url), "utf8"),
       readFile(new URL("../src/first-sync.ts", import.meta.url), "utf8"),
@@ -257,24 +417,10 @@ describe("first sync controller", () => {
     ]) {
       expect(host).toContain(copy);
     }
-    expect(host).toContain('section.className = "first-sync"');
-    expect(host).toContain("section.dataset.state = state.status");
-    expect(host).toContain('section.setAttribute("aria-labelledby", "first-sync-title")');
-    expect(host).toContain('track.setAttribute("role", "progressbar")');
-    expect(host).toContain('track.setAttribute("aria-label", "Syncing training history")');
-    expect(host).toContain(
-      "onComplete: (completion) => void firstSyncController.start(completion)",
-    );
-    expect(host).toContain("message.focus()");
-    expect(controller).not.toMatch(/chat|prompt|transcript|sessionStore/u);
+    expect(host).toContain("coordinator: trainingSyncCoordinator");
+    expect(host).not.toContain("syncNeedsReconnect");
+    expect(controller).not.toMatch(/onNotificationEnvelope|requestId|chat|transcript/u);
     expect(styles).toContain("width: min(680px, calc(100% - 48px))");
-    expect(styles).toContain("padding: 20px");
-    expect(styles).toContain("border-radius: 16px");
-    expect(styles).toContain("animation: first-sync-sweep 1.2s");
-    expect(styles).toContain("@media (max-width: 760px)");
-    expect(styles).toContain("width: calc(100% - 32px)");
     expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
-    expect(styles).toContain("animation: none");
-    expect(styles).toContain("width: 40%");
   });
 });

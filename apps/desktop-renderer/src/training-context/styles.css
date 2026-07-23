@@ -33,6 +33,7 @@
 
 .drawer {
   --attention: #b47a2c;
+  --sync-status-caution: #80520f;
   z-index: 4;
   margin: 0;
   padding: 26px;
@@ -55,6 +56,10 @@
   gap: 18px;
   padding-bottom: 22px;
   border-bottom: 1px solid var(--line);
+}
+
+.drawer-heading > div {
+  min-width: 0;
 }
 
 .drawer-heading h2 {
@@ -82,6 +87,55 @@
   align-items: center;
   gap: 7px;
   margin-top: 10px;
+}
+
+.training-sync {
+  display: grid;
+  justify-items: start;
+  gap: 9px;
+  min-width: 0;
+  margin-top: 14px;
+}
+
+.training-sync__button {
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid color-mix(in srgb, var(--moss) 45%, var(--line));
+  border-radius: 9px;
+  color: var(--moss-strong);
+  background: var(--surface-soft);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.training-sync__button:hover:not(:disabled) {
+  border-color: var(--moss);
+}
+
+.training-sync__button:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.training-sync__status {
+  max-width: 100%;
+  min-height: 1.45em;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.training-sync[data-state="success"] .training-sync__status {
+  color: var(--moss-strong);
+}
+
+.training-sync[data-state="partial"] .training-sync__status,
+.training-sync[data-state="failure"] .training-sync__status {
+  color: var(--sync-status-caution);
 }
 
 .drawer-metadata__item,
@@ -280,7 +334,14 @@
 @media (max-width: 720px) {
   .drawer {
     width: calc(100vw - 28px);
+    overflow-x: hidden;
     padding: 22px;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .drawer {
+    --sync-status-caution: #e4b66f;
   }
 }
 

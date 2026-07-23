@@ -14,6 +14,17 @@ import {
   formatUtcTimestamp,
   formatWholeNumber,
 } from "../src/training-context/format.js";
+import {
+  SYNC_INDETERMINATE_COPY,
+  SYNC_NO_CHANGE_COPY,
+  SYNC_OPERATION_FAILURE_COPY,
+  SYNC_PARTIAL_COPY,
+  SYNC_PROTOCOL_COPY,
+  SYNC_PUBLISHED_COPY,
+  SYNC_QUEUED_COPY,
+  SYNC_RUNNING_COPY,
+  toManualSyncViewState,
+} from "../src/training-context/manual-sync.js";
 import { mountTrainingContextView } from "../src/training-context/view.js";
 
 const context: CyclingTrainingContext = {
@@ -65,11 +76,19 @@ function providerWith(call: CoachClient["call"]): DesktopCoachClientProvider {
 class FakeElement {
   readonly children: FakeElement[] = [];
   readonly attributes = new Map<string, string>();
+  readonly dataset: Record<string, string> = {};
+  readonly listeners = new Map<string, Set<(event: Event) => void>>();
   className = "";
   open = false;
+  disabled = false;
+  hidden = false;
+  isConnected = true;
   private ownText = "";
 
-  constructor(readonly tagName: string) {}
+  constructor(
+    readonly tagName: string,
+    readonly ownerDocument: FakeDocument,
+  ) {}
 
   get textContent(): string {
     return this.ownText + this.children.map((child) => child.textContent).join("");
@@ -90,7 +109,8 @@ class FakeElement {
 
   append(...values: Array<FakeElement | string>): void {
     for (const value of values) {
-      const child = typeof value === "string" ? new FakeElement("#TEXT") : value;
+      const child =
+        typeof value === "string" ? new FakeElement("#TEXT", this.ownerDocument) : value;
       if (typeof value === "string") child.textContent = value;
       this.children.push(child);
     }
@@ -110,11 +130,28 @@ class FakeElement {
     return this.attributes.get(name) ?? null;
   }
 
-  addEventListener(_name: string, _listener: (event: Event) => void): void {}
+  removeAttribute(name: string): void {
+    this.attributes.delete(name);
+  }
 
-  removeEventListener(_name: string, _listener: (event: Event) => void): void {}
+  addEventListener(name: string, listener: (event: Event) => void): void {
+    const listeners = this.listeners.get(name) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(name, listeners);
+  }
 
-  focus(): void {}
+  removeEventListener(name: string, listener: (event: Event) => void): void {
+    this.listeners.get(name)?.delete(listener);
+  }
+
+  dispatch(name: string, event: Event): void {
+    for (const listener of this.listeners.get(name) ?? []) listener(event);
+  }
+
+  focus(): void {
+    if (this.disabled || this.hidden || !this.isConnected) return;
+    this.ownerDocument.activeElement = this;
+  }
 
   showModal(): void {
     this.open = true;
@@ -126,12 +163,23 @@ class FakeElement {
 }
 
 class FakeDocument {
+  readonly documentElement: FakeElement;
+  readonly body: FakeElement;
+  activeElement: FakeElement | null;
+
+  constructor() {
+    this.documentElement = new FakeElement("HTML", this);
+    this.body = new FakeElement("BODY", this);
+    this.documentElement.append(this.body);
+    this.activeElement = this.body;
+  }
+
   createElement(name: string): FakeElement {
-    return new FakeElement(name.toUpperCase());
+    return new FakeElement(name.toUpperCase(), this);
   }
 
   createTextNode(value: string): FakeElement {
-    const node = new FakeElement("#TEXT");
+    const node = new FakeElement("#TEXT", this);
     node.textContent = value;
     return node;
   }
@@ -144,6 +192,30 @@ function descendants(root: FakeElement): FakeElement[] {
 function elementsByTagName(root: FakeElement, tagName: string): FakeElement[] {
   const normalized = tagName.toUpperCase();
   return descendants(root).filter((element) => element.tagName === normalized);
+}
+
+function elementByClassName(root: FakeElement, className: string): FakeElement {
+  const matches = descendants(root).filter((element) => element.className === className);
+  expect(matches).toHaveLength(1);
+  return matches[0]!;
+}
+
+function contrastRatio(foreground: string, background: string): number {
+  const luminance = (hex: string): number => {
+    const channels = hex
+      .match(/[0-9a-f]{2}/giu)!
+      .map((channel) => Number.parseInt(channel, 16) / 255)
+      .map((channel) =>
+        channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4,
+      );
+    return 0.2126 * channels[0]! + 0.7152 * channels[1]! + 0.0722 * channels[2]!;
+  };
+  const foregroundLuminance = luminance(foreground);
+  const backgroundLuminance = luminance(background);
+  return (
+    (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) /
+    (Math.min(foregroundLuminance, backgroundLuminance) + 0.05)
+  );
 }
 
 function readyViewState(lastSynced: string): TrainingContextViewState {
@@ -583,6 +655,198 @@ describe("training context drawer contract", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("keeps one resident atomic sync region independent from training-context renders", () => {
+    const document = new FakeDocument();
+    vi.stubGlobal("document", document);
+
+    try {
+      const spine = document.createElement("aside");
+      const drawer = document.createElement("dialog");
+      const mounted = mountTrainingContextView({
+        spine: spine as unknown as HTMLElement,
+        drawer: drawer as unknown as HTMLDialogElement,
+      });
+      const button = elementByClassName(drawer, "training-sync__button");
+      const status = elementByClassName(drawer, "training-sync__status");
+      const syncRegion = elementByClassName(drawer, "training-sync");
+      const opener = elementByClassName(spine, "drawer-toggle");
+      const close = elementByClassName(drawer, "drawer-close");
+      const activations: string[] = [];
+      mounted.bind({
+        onUnitsPreferenceChange: () => {},
+        onSyncRequest: (kind) => activations.push(kind),
+      });
+
+      expect(button.textContent).toBe("Sync now");
+      expect(status.textContent).toBe("");
+      expect(status.getAttribute("role")).toBe("status");
+      expect(status.getAttribute("aria-live")).toBe("polite");
+      expect(status.getAttribute("aria-atomic")).toBe("true");
+      expect(syncRegion.dataset.state).toBe("idle");
+
+      button.dispatch("click", { detail: 0 } as unknown as Event);
+      button.dispatch("click", { detail: 1 } as unknown as Event);
+      expect(activations).toEqual(["keyboard", "pointer"]);
+
+      mounted.syncView.render(toManualSyncViewState({ status: "queued", operation: 1 }));
+      expect(button.textContent).toBe("Sync now");
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute("aria-busy")).toBe("true");
+      expect(status.textContent).toBe(SYNC_QUEUED_COPY);
+      mounted.view.render(readyViewState("1998-07-18T12:34:56.000Z"));
+      expect(elementByClassName(drawer, "training-sync__button")).toBe(button);
+      expect(elementByClassName(drawer, "training-sync__status")).toBe(status);
+      expect(status.textContent).toBe(SYNC_QUEUED_COPY);
+
+      const terminalStates = [
+        [{ status: "running", operation: 1 } as const, "Sync now", SYNC_RUNNING_COPY, true],
+        [
+          { status: "succeeded", operation: 1, kind: "published" } as const,
+          "Sync again",
+          SYNC_PUBLISHED_COPY,
+          false,
+        ],
+        [
+          { status: "succeeded", operation: 1, kind: "no-change" } as const,
+          "Sync again",
+          SYNC_NO_CHANGE_COPY,
+          false,
+        ],
+        [
+          {
+            status: "failed",
+            operation: 1,
+            kind: "partial",
+            retryable: true,
+          } as const,
+          "Try again",
+          SYNC_PARTIAL_COPY,
+          false,
+        ],
+        [
+          {
+            status: "failed",
+            operation: 1,
+            kind: "operation",
+            retryable: true,
+          } as const,
+          "Try again",
+          SYNC_OPERATION_FAILURE_COPY,
+          false,
+        ],
+        [
+          {
+            status: "failed",
+            operation: 1,
+            kind: "indeterminate",
+            retryable: true,
+          } as const,
+          "Try again",
+          SYNC_INDETERMINATE_COPY,
+          false,
+        ],
+        [
+          {
+            status: "failed",
+            operation: 1,
+            kind: "protocol",
+            retryable: false,
+          } as const,
+          "Sync unavailable",
+          SYNC_PROTOCOL_COPY,
+          true,
+        ],
+      ] as const;
+      for (const [state, label, copy, disabled] of terminalStates) {
+        mounted.syncView.render(toManualSyncViewState(state));
+        expect(button.textContent).toBe(label);
+        expect(status.textContent).toBe(copy);
+        expect(button.disabled).toBe(disabled);
+        expect(button.getAttribute("aria-busy")).toBe(state.status === "running" ? "true" : null);
+        expect(drawer.textContent).not.toContain("private-athlete-id");
+      }
+
+      opener.dispatch("click", {} as Event);
+      expect(drawer.open).toBe(true);
+      expect(document.activeElement).toBe(close);
+      mounted.syncView.render(
+        toManualSyncViewState({ status: "succeeded", operation: 1, kind: "no-change" }),
+      );
+      document.activeElement = document.body;
+      mounted.syncView.restoreKeyboardFocus();
+      expect(document.activeElement).toBe(button);
+      const elsewhere = document.createElement("button");
+      elsewhere.focus();
+      mounted.syncView.restoreKeyboardFocus();
+      expect(document.activeElement).toBe(elsewhere);
+      mounted.syncView.render(
+        toManualSyncViewState({
+          status: "failed",
+          operation: 1,
+          kind: "protocol",
+          retryable: false,
+        }),
+      );
+      expect(button.disabled).toBe(true);
+      document.activeElement = document.body;
+      button.focus();
+      expect(document.activeElement).toBe(document.body);
+      mounted.syncView.restoreKeyboardFocus();
+      expect(document.activeElement).toBe(close);
+      close.dispatch("click", {} as Event);
+      expect(drawer.open).toBe(false);
+      expect(document.activeElement).toBe(opener);
+      document.activeElement = document.body;
+      mounted.syncView.restoreKeyboardFocus();
+      expect(document.activeElement).toBe(document.body);
+      opener.dispatch("click", {} as Event);
+      expect(elementByClassName(drawer, "training-sync__button")).toBe(button);
+      mounted.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps fixed sync copy contract-honest and status contrast readable in both themes", async () => {
+    expect([
+      SYNC_PUBLISHED_COPY,
+      SYNC_NO_CHANGE_COPY,
+      SYNC_PARTIAL_COPY,
+      SYNC_OPERATION_FAILURE_COPY,
+    ]).toEqual([
+      "Training-data check completed.",
+      "Local training-data processing completed.",
+      "Training-data processing partially completed. Try again to finish.",
+      "We couldn’t complete the training-data check. Your existing data is still available.",
+    ]);
+    expect(
+      [SYNC_PUBLISHED_COPY, SYNC_NO_CHANGE_COPY, SYNC_PARTIAL_COPY].join(" ").toLowerCase(),
+    ).not.toMatch(/already up to date|refreshed|new data|saved/u);
+
+    const [drawerStyles, globalStyles] = await Promise.all([
+      readFile(new URL("../src/training-context/styles.css", import.meta.url), "utf8"),
+      readFile(new URL("../src/styles.css", import.meta.url), "utf8"),
+    ]);
+    expect(drawerStyles).toContain("--sync-status-caution: #80520f;");
+    expect(drawerStyles).toContain("--sync-status-caution: #e4b66f;");
+    expect(drawerStyles).toContain("color: var(--sync-status-caution);");
+    expect(globalStyles).toContain("--surface-solid: #ffffff;");
+    expect(globalStyles).toContain("--surface-solid: #202923;");
+    expect(contrastRatio("#80520f", "#ffffff")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#e4b66f", "#202923")).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("preserves the compact drawer width with horizontal overflow protection", async () => {
+    const styles = await readFile(
+      new URL("../src/training-context/styles.css", import.meta.url),
+      "utf8",
+    );
+    const compactDrawerStyles = styles.match(/@media \(max-width: 720px\) \{([\s\S]*?)\n\}/u)?.[1];
+    expect(compactDrawerStyles).toContain("width: calc(100vw - 28px);");
+    expect(compactDrawerStyles).not.toContain("max-width");
+    expect(compactDrawerStyles).toContain("overflow-x: hidden;");
   });
 
   it("keeps the panel surface free of excluded balance labels and local metric claims", async () => {
