@@ -333,20 +333,23 @@ describe("StoreRuntime", () => {
     const { runtime, capture } = await makeRuntime();
     let releaseWrite!: () => void;
     const trace: string[] = [];
-    const write = runtime.runActivityWrite(async () => {
-      trace.push("write:start");
-      await new Promise<void>((resolve) => {
-        releaseWrite = resolve;
-      });
-      trace.push("write:end");
-      return "written";
-    });
+    const write = runtime.runActivityWrite(
+      async () => {
+        trace.push("write:start");
+        await new Promise<void>((resolve) => {
+          releaseWrite = resolve;
+        });
+        trace.push("write:end");
+        return "written";
+      },
+      () => [],
+    );
     const windowAfterWrite = runtime.runWindow();
     expect(capture).not.toHaveBeenCalled();
     releaseWrite();
     await expect(write).resolves.toEqual({
       value: "written",
-      activityReadAvailable: true,
+      activityReadAvailable: false,
     });
     await windowAfterWrite;
     expect(capture).toHaveBeenCalledTimes(1);
@@ -361,17 +364,20 @@ describe("StoreRuntime", () => {
       return manifest;
     });
     const window = runtime.runWindow();
-    const writeAfterWindow = runtime.runActivityWrite(async () => {
-      trace.push("write:after-window");
-      return "second";
-    });
+    const writeAfterWindow = runtime.runActivityWrite(
+      async () => {
+        trace.push("write:after-window");
+        return "second";
+      },
+      () => [],
+    );
     await Promise.resolve();
     expect(trace).not.toContain("write:after-window");
     releaseWindow();
     await window;
     await expect(writeAfterWindow).resolves.toMatchObject({
       value: "second",
-      activityReadAvailable: true,
+      activityReadAvailable: false,
     });
     expect(trace).toEqual([
       "write:start",
@@ -433,6 +439,29 @@ describe("StoreRuntime", () => {
     await expect(runtime.runWindowAfter(async () => {})).rejects.toThrow(
       "Store runtime is closed.",
     );
+  });
+
+  it("aborts a completed activity write before publication attestation on close", async () => {
+    const readonlyStore = emptyReadonlyStore();
+    const { runtime } = await makeRuntime(config, undefined, readonlyStore);
+    let signal!: AbortSignal;
+    const write = runtime.runActivityWrite(
+      async (selectedSignal) => {
+        signal = selectedSignal;
+        await new Promise<void>((resolve) => {
+          selectedSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return "written";
+      },
+      () => ["a".repeat(64)],
+    );
+    while (signal === undefined) await Promise.resolve();
+    const rejectedWrite = expect(write).rejects.toThrow("Store runtime closed.");
+    const close = runtime.close();
+    expect(signal.aborted).toBe(true);
+    await rejectedWrite;
+    await expect(close).resolves.toBeUndefined();
+    expect(readonlyStore.all).not.toHaveBeenCalled();
   });
 
   it("cancels an active window when closed and rejects later windows", async () => {

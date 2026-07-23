@@ -38,6 +38,7 @@ import {
   type AuthoredIdentity,
 } from "@enduragent/kernel-node/home";
 import { importFilesWithReport } from "@enduragent/kernel-node/ingest";
+import type { ImportReport } from "@enduragent/kernel/ingest";
 import { runIntervalsBackfillInWriter } from "./backfill.js";
 import type { LocalStoreRuntime } from "./composition.js";
 import type { CoachStoreWriterContext } from "./runtime.js";
@@ -69,6 +70,29 @@ function sameHome(left: AthleteHome, right: AthleteHome): boolean {
     left.archiveDir === right.archiveDir &&
     left.configDir === right.configDir
   );
+}
+
+function importedWorkoutKeys(report: ImportReport): readonly string[] {
+  const importedAddresses = [
+    ...new Set(
+      report.files.filter((file) => file.outcome === "imported").map((file) => file.address),
+    ),
+  ].sort();
+  if (importedAddresses.length === 0) return [];
+  const importedAddressSet = new Set(importedAddresses);
+  const matchedAddresses = new Set<string>();
+  const workoutKeys = new Set<string>();
+  for (const cluster of report.clusters) {
+    for (const member of cluster.members) {
+      if (!importedAddressSet.has(member)) continue;
+      matchedAddresses.add(member);
+      workoutKeys.add(cluster.workout_key);
+    }
+  }
+  if (importedAddresses.some((address) => !matchedAddresses.has(address))) {
+    throw new Error("Imported file has no canonical workout.");
+  }
+  return [...workoutKeys].sort();
 }
 
 function createSerializedLane(): <T>(operation: () => Promise<T>) => Promise<T> {
@@ -117,7 +141,7 @@ export function createCoachOperations(
         .runActivityWrite(async () => {
           deliver(onEvent, { phase: "started", completed: 0, total: paths.length });
           return importFiles({ inputPaths: paths, archiveDir, store });
-        })
+        }, importedWorkoutKeys)
         .then(({ value: report, activityReadAvailable }) => {
           const result = ImportFilesRpcResultSchema.parse({
             schemaVersion: 2,

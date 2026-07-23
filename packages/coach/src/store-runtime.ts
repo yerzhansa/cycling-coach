@@ -31,6 +31,9 @@ export const TOTAL_REQUEST_LIMIT = 79 as const;
 export const STORE_MAX_ARTIFACTS = 1_000;
 export const STORE_REQUEST_TIMEOUT_MS = 30_000;
 export const STORE_WINDOW_DEADLINE_MS = 600_000;
+const CANONICAL_KEY = /^[0-9a-f]{64}$/;
+const PUBLICATION_PAGE_SIZE = 200;
+const PUBLICATION_DEADLINE_MS = 30_000;
 
 export interface StoreWindowResult {
   readonly published: boolean;
@@ -243,15 +246,106 @@ export class StoreRuntime {
     return createCanonicalActivityReader(this.readonlyStore);
   }
 
-  runActivityWrite<T>(work: (signal: AbortSignal) => Promise<T>): Promise<StoreWriteResult<T>> {
+  private async attestCanonicalActivities(
+    workoutKeys: readonly string[],
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    if (workoutKeys.length < 1 || workoutKeys.some((key) => !CANONICAL_KEY.test(key))) {
+      return false;
+    }
+    const uniqueWorkoutKeys = [...new Set(workoutKeys)];
+    if (uniqueWorkoutKeys.length !== workoutKeys.length) return false;
+    const reader = this.canonicalActivityReader();
+    const deadline = this.dependencies.monotonicNow() + PUBLICATION_DEADLINE_MS;
+    const withinBudget = (): boolean => {
+      signal.throwIfAborted();
+      return this.dependencies.monotonicNow() <= deadline;
+    };
+    let streamReadbackComplete = false;
+    for (const workoutKey of uniqueWorkoutKeys) {
+      if (!withinBudget()) return false;
+      const rows = await this.readonlyStore!.all(
+        `SELECT
+  s.session_key,
+  count(st.channel) AS stream_count,
+  count(CASE WHEN st.channel = 'time' THEN 1 END) AS time_count
+FROM session AS s
+LEFT JOIN stream AS st ON st.session_key = s.session_key
+WHERE s.workout_key = ?
+GROUP BY s.session_key, s.session_seq
+ORDER BY time_count DESC, stream_count DESC, s.session_seq ASC, s.session_key ASC
+LIMIT 1`,
+        [workoutKey],
+      );
+      if (!withinBudget() || rows.length !== 1) return false;
+      const row = rows[0]!;
+      if (typeof row.session_key !== "string" || !CANONICAL_KEY.test(row.session_key)) {
+        return false;
+      }
+      if (
+        typeof row.stream_count !== "number" ||
+        !Number.isSafeInteger(row.stream_count) ||
+        row.stream_count < 0 ||
+        typeof row.time_count !== "number" ||
+        !Number.isSafeInteger(row.time_count) ||
+        row.time_count < 0 ||
+        row.time_count > 1 ||
+        (row.stream_count === 0 && row.time_count !== 0) ||
+        (row.stream_count > 0 && row.time_count !== 1)
+      ) {
+        return false;
+      }
+      const detail = await reader.getActivity({ id: row.session_key });
+      if (!withinBudget() || detail === undefined || detail.workoutId !== workoutKey) return false;
+      let cursor: { readonly startEpochSeconds: number; readonly id: string } | undefined;
+      let listed = false;
+      while (!listed) {
+        if (!withinBudget()) return false;
+        const page = await reader.listActivities({
+          start: detail.localDate,
+          end: detail.localDate,
+          limit: PUBLICATION_PAGE_SIZE,
+          ...(cursor === undefined ? {} : { cursor }),
+        });
+        if (!withinBudget()) return false;
+        listed = page.activities.some(
+          (activity) => activity.id === detail.id && activity.workoutId === workoutKey,
+        );
+        if (listed) break;
+        if (page.nextCursor === null) return false;
+        cursor = page.nextCursor;
+      }
+      if (row.stream_count > 0 && !streamReadbackComplete) {
+        const readable = await reader.getStreams({ id: detail.id, channels: ["time"] });
+        if (
+          !withinBudget() ||
+          readable === undefined ||
+          readable.activityId !== detail.id ||
+          !Array.isArray(readable.channels.time) ||
+          readable.channels.time.length < 1
+        ) {
+          return false;
+        }
+        streamReadbackComplete = true;
+      }
+    }
+    return true;
+  }
+
+  runActivityWrite<T>(
+    work: (signal: AbortSignal) => Promise<T>,
+    workoutKeys: (value: T) => readonly string[],
+  ): Promise<StoreWriteResult<T>> {
     return this.runExclusive(async (signal) => {
       const value = await work(signal);
+      signal.throwIfAborted();
       let activityReadAvailable = false;
       try {
-        const date = this.dependencies.now().toISOString().slice(0, 10);
-        await this.canonicalActivities.listActivities({ start: date, end: date, limit: 1 });
-        activityReadAvailable = true;
-      } catch {}
+        activityReadAvailable = await this.attestCanonicalActivities(workoutKeys(value), signal);
+      } catch {
+        signal.throwIfAborted();
+      }
+      signal.throwIfAborted();
       return Object.freeze({ value, activityReadAvailable });
     });
   }
