@@ -1174,6 +1174,111 @@ describe("chat view", () => {
     expect(button.disabled).toBe(true);
   });
 
+  it("leaves an IME draft untouched until a later ordinary Enter submits the committed text", () => {
+    const fakeDocument = globalThis.document as unknown as FakeDocument;
+    const conversation = new FakeElement("main");
+    const thread = new FakeElement("div");
+    const composerHost = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: conversation as never,
+      thread: thread as never,
+      composerHost: composerHost as never,
+    });
+    const onSubmit = vi.fn();
+    mounted.bind({
+      onSubmit,
+      onRetry: vi.fn(),
+      onOpenNewConversation: vi.fn(),
+      onCancelNewConversation: vi.fn(),
+      onConfirmNewConversation: vi.fn(),
+    });
+    mounted.view.render({
+      ...emptyState,
+      messages: [
+        {
+          id: "message-1",
+          role: "coach",
+          text: "Previous guidance.",
+          delivery: "complete",
+        },
+      ],
+    });
+    const textarea = find(composerHost, (node) => node.tagName === "textarea");
+    const form = find(composerHost, (node) => node.tagName === "form");
+    const submit = find(
+      composerHost,
+      (node) => node.tagName === "button" && node.type === "submit",
+    );
+    const transcript = find(thread, (node) => node.className === "chat-transcript");
+    const resetStatus = find(composerHost, (node) => node.className === "new-conversation-status");
+    const requestSubmit = vi.spyOn(form, "requestSubmit");
+    const preventComposingDefault = vi.fn();
+    textarea.value = "回復走を";
+    textarea.focus();
+    const stateBefore = {
+      chatStatus: conversation.dataset.chatStatus,
+      textareaDisabled: textarea.disabled,
+      submitDisabled: submit.disabled,
+    };
+    const transcriptBefore = {
+      text: transcript.textContent,
+      mutations: transcript.textContentMutationCount,
+      ariaLive: transcript.getAttribute("aria-live"),
+    };
+    const liveRegionBefore = {
+      text: resetStatus.textContent,
+      mutations: resetStatus.textContentMutationCount,
+      ariaLive: resetStatus.getAttribute("aria-live"),
+    };
+    const mutationEventsBefore = [...mutationEvents];
+
+    textarea.dispatch("keydown", {
+      key: "Enter",
+      shiftKey: false,
+      isComposing: true,
+      preventDefault: preventComposingDefault,
+    });
+
+    expect(preventComposingDefault).not.toHaveBeenCalled();
+    expect(requestSubmit).not.toHaveBeenCalled();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("回復走を");
+    expect(fakeDocument.activeElement).toBe(textarea);
+    expect(textarea.focusCount).toBe(1);
+    expect({
+      chatStatus: conversation.dataset.chatStatus,
+      textareaDisabled: textarea.disabled,
+      submitDisabled: submit.disabled,
+    }).toEqual(stateBefore);
+    expect({
+      text: transcript.textContent,
+      mutations: transcript.textContentMutationCount,
+      ariaLive: transcript.getAttribute("aria-live"),
+    }).toEqual(transcriptBefore);
+    expect({
+      text: resetStatus.textContent,
+      mutations: resetStatus.textContentMutationCount,
+      ariaLive: resetStatus.getAttribute("aria-live"),
+    }).toEqual(liveRegionBefore);
+    expect(mutationEvents).toEqual(mutationEventsBefore);
+
+    const committedValue = "回復走を30分します。";
+    const preventSubmitDefault = vi.fn();
+    textarea.value = committedValue;
+    textarea.dispatch("keydown", {
+      key: "Enter",
+      shiftKey: false,
+      isComposing: false,
+      preventDefault: preventSubmitDefault,
+    });
+
+    expect(preventSubmitDefault).toHaveBeenCalledOnce();
+    expect(requestSubmit).toHaveBeenCalledOnce();
+    expect(onSubmit).toHaveBeenCalledOnce();
+    expect(onSubmit).toHaveBeenCalledWith(committedValue);
+    expect(textarea.value).toBe("");
+  });
+
   it("mounts four unique coaching shortcuts in exact order and preserves the draft", () => {
     const composerHost = new FakeElement("div");
     const mounted = mountChatView({
