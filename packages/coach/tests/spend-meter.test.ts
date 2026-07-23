@@ -1,7 +1,20 @@
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { appendFileSync } from "node:fs";
+import {
+  appendFile,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readUsageLedger } from "@enduragent/core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { priceInclusiveUsage, type UsageLedgerLine } from "@enduragent/engine";
 import {
   DAILY_SPEND_CAP_FILE,
@@ -107,6 +120,215 @@ describe("spend meter service", () => {
       caching: "provider-dependent",
       cacheReadSavingsUsd: 0,
     });
+  });
+
+  it("reuses a ledger aggregate while both retained files and the local date are unchanged", async () => {
+    await ledger("usage-ledger.jsonl", [line({ providerReportedCostUsd: 0.1 })]);
+    const readLedger = vi.fn(readUsageLedger);
+    const service = createSpendMeterService({
+      dataDir: root,
+      configDir,
+      timezone: "UTC",
+      now: () => Date.UTC(1998, 6, 6, 18),
+      readUsageLedger: readLedger,
+    });
+
+    const first = await service.getSpendSummary();
+    const second = await service.getSpendSummary();
+
+    expect(first).toEqual(second);
+    expect(readLedger).toHaveBeenCalledOnce();
+  });
+
+  it("invalidates the aggregate when the live ledger is appended", async () => {
+    await ledger("usage-ledger.jsonl", [line({ providerReportedCostUsd: 0.1 })]);
+    const readLedger = vi.fn(readUsageLedger);
+    const service = createSpendMeterService({
+      dataDir: root,
+      configDir,
+      timezone: "UTC",
+      now: () => Date.UTC(1998, 6, 6, 18),
+      readUsageLedger: readLedger,
+    });
+
+    expect(await service.getSpendSummary()).toMatchObject({
+      generationCount: 1,
+      knownSpendUsd: 0.1,
+    });
+    await appendFile(
+      join(root, "usage-ledger.jsonl"),
+      `${JSON.stringify(line({ providerReportedCostUsd: 0.2 }))}\n`,
+    );
+    const summary = await service.getSpendSummary();
+    expect(summary.generationCount).toBe(2);
+    expect(summary.knownSpendUsd).toBeCloseTo(0.3, 12);
+    expect(readLedger).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates across ledger rotation without counting the moved file twice", async () => {
+    const livePath = join(root, "usage-ledger.jsonl");
+    await ledger("usage-ledger.jsonl", [line({ providerReportedCostUsd: 0.1 })]);
+    const readLedger = vi.fn(readUsageLedger);
+    const service = createSpendMeterService({
+      dataDir: root,
+      configDir,
+      timezone: "UTC",
+      now: () => Date.UTC(1998, 6, 6, 18),
+      readUsageLedger: readLedger,
+    });
+
+    expect((await service.getSpendSummary()).generationCount).toBe(1);
+    await rename(livePath, `${livePath}.1`);
+    await ledger("usage-ledger.jsonl", [line({ providerReportedCostUsd: 0.2 })]);
+
+    const summary = await service.getSpendSummary();
+    expect(summary.generationCount).toBe(2);
+    expect(summary.knownSpendUsd).toBeCloseTo(0.3, 12);
+    expect(readLedger).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates a same-size atomic ledger replacement", async () => {
+    const livePath = join(root, "usage-ledger.jsonl");
+    const initial = `${JSON.stringify(line({ providerReportedCostUsd: 0.1 }))}\n`;
+    const replacement = `${JSON.stringify(line({ providerReportedCostUsd: 0.2 }))}\n`;
+    expect(Buffer.byteLength(replacement)).toBe(Buffer.byteLength(initial));
+    await writeFile(livePath, initial);
+    const readLedger = vi.fn(readUsageLedger);
+    const service = createSpendMeterService({
+      dataDir: root,
+      configDir,
+      timezone: "UTC",
+      now: () => Date.UTC(1998, 6, 6, 18),
+      readUsageLedger: readLedger,
+    });
+
+    expect((await service.getSpendSummary()).knownSpendUsd).toBe(0.1);
+    const replacementPath = join(root, "replacement-ledger");
+    await writeFile(replacementPath, replacement);
+    await rename(replacementPath, livePath);
+
+    expect((await service.getSpendSummary()).knownSpendUsd).toBe(0.2);
+    expect(readLedger).toHaveBeenCalledTimes(2);
+  });
+
+  it("recomputes an unchanged ledger after the athlete-local date rolls over", async () => {
+    await ledger("usage-ledger.jsonl", [
+      line({ ts: Date.UTC(1998, 6, 6, 12), providerReportedCostUsd: 0.1 }),
+      line({ ts: Date.UTC(1998, 6, 7, 12), providerReportedCostUsd: 0.2 }),
+    ]);
+    let currentNow = Date.UTC(1998, 6, 6, 18);
+    const readLedger = vi.fn(readUsageLedger);
+    const service = createSpendMeterService({
+      dataDir: root,
+      configDir,
+      timezone: "UTC",
+      now: () => currentNow,
+      readUsageLedger: readLedger,
+    });
+
+    expect(await service.getSpendSummary()).toMatchObject({
+      localDate: "1998-07-06",
+      knownSpendUsd: 0.1,
+    });
+    expect((await service.getSpendSummary()).knownSpendUsd).toBe(0.1);
+    currentNow = Date.UTC(1998, 6, 7, 18);
+    expect(await service.getSpendSummary()).toMatchObject({
+      localDate: "1998-07-07",
+      knownSpendUsd: 0.2,
+    });
+    expect(readLedger).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses the aggregate after a cap write while returning fresh cap status", async () => {
+    await ledger("usage-ledger.jsonl", [line({ providerReportedCostUsd: 0.3 })]);
+    const readLedger = vi.fn(readUsageLedger);
+    const service = createSpendMeterService({
+      dataDir: root,
+      configDir,
+      timezone: "UTC",
+      now: () => Date.UTC(1998, 6, 6, 18),
+      readUsageLedger: readLedger,
+    });
+
+    expect(await service.getSpendSummary()).toMatchObject({
+      dailyCapUsd: DEFAULT_DAILY_SPEND_CAP_USD,
+      capStatus: "below",
+    });
+    expect(await service.setDailySpendCap(0.2)).toMatchObject({
+      dailyCapUsd: 0.2,
+      knownSpendUsd: 0.3,
+      capStatus: "reached",
+    });
+    expect(readLedger).toHaveBeenCalledOnce();
+  });
+
+  it("does not cache aggregates for non-regular ledger paths", async () => {
+    await mkdir(join(root, "usage-ledger.jsonl"));
+    const readLedger = vi.fn(() => ({
+      lines: [line({ providerReportedCostUsd: 0.1 })],
+      malformedLineCount: 0,
+    }));
+    const service = createSpendMeterService({
+      dataDir: root,
+      configDir,
+      timezone: "UTC",
+      now: () => Date.UTC(1998, 6, 6, 18),
+      readUsageLedger: readLedger,
+    });
+
+    await service.getSpendSummary();
+    await service.getSpendSummary();
+
+    expect(readLedger).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retain an aggregate when a ledger revision changes during its scan", async () => {
+    const livePath = join(root, "usage-ledger.jsonl");
+    await ledger("usage-ledger.jsonl", [line({ providerReportedCostUsd: 0.1 })]);
+    const readLedger = vi.fn((dataDir: string) => {
+      const result = readUsageLedger(dataDir);
+      appendFileSync(livePath, `${JSON.stringify(line({ kind: "turn" }))}\n`);
+      return result;
+    });
+    const service = createSpendMeterService({
+      dataDir: root,
+      configDir,
+      timezone: "UTC",
+      now: () => Date.UTC(1998, 6, 6, 18),
+      readUsageLedger: readLedger,
+    });
+
+    await service.getSpendSummary();
+    await service.getSpendSummary();
+
+    expect(readLedger).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a stable ledger after a malformed read result", async () => {
+    await ledger("usage-ledger.jsonl", [line({ providerReportedCostUsd: 0.1 })]);
+    let readAttempts = 0;
+    const readLedger = vi.fn((dataDir: string) => {
+      readAttempts += 1;
+      return readAttempts === 1 ? { lines: [], malformedLineCount: 1 } : readUsageLedger(dataDir);
+    });
+    const service = createSpendMeterService({
+      dataDir: root,
+      configDir,
+      timezone: "UTC",
+      now: () => Date.UTC(1998, 6, 6, 18),
+      readUsageLedger: readLedger,
+    });
+
+    expect(await service.getSpendSummary()).toMatchObject({
+      generationCount: 0,
+      malformedLineCount: 1,
+    });
+    expect(await service.getSpendSummary()).toMatchObject({
+      generationCount: 1,
+      malformedLineCount: 0,
+      knownSpendUsd: 0.1,
+    });
+    expect(readLedger).toHaveBeenCalledTimes(2);
   });
 
   it("uses the athlete timezone boundary, including a daylight-saving zone, and captures now once", async () => {
