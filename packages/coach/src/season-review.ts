@@ -1,13 +1,21 @@
 import { createHash } from "node:crypto";
 import { canonicalJson } from "@enduragent/kernel/archive";
 
-export const SEASON_REVIEW_REQUEST = `Prepare a cycling season review from the complete training history available through the local store-backed tools.
+export const SEASON_REVIEW_REQUEST = `Prepare a cycling season review from the training history you can retrieve through the local store-backed tools.
 
 Structure the response as: Season arc; What changed; What to keep or change; Questions.
 
-Ground every athlete-specific statement in tool results. Treat Load, Intensity, Fitness, Fatigue, and Form as platform-supplied Reference layer values, not locally computed values. State when evidence is absent or stale. Give at least three distinct observations across at least two parts of the season, identify a trend and an exception or recovery block, and give at least two evidence-linked actions with a time, quantity, or decision condition.
+Use only tool results returned during this review, and do not imply that returned ranges or fields represent the complete store. Every athlete-specific numeric, temporal, comparative, causal, observational, action, or conclusion premise must immediately carry \`[Evidence: <tool-name>(<exact arguments>) — <exact returned date/field/value>]\`. Cite only results returned during this review. Do not make claims beyond their returned date ranges or fields. Omit unsupported specificity. Label any unsupported causal interpretation \`Hypothesis\` and name the missing context needed to test it. Do not use an uncited assumption as an evidence anchor.
 
-Ask two to four questions only about context absent from the store. Each question must say which coaching decision its answer would change. Do not ask for a fact already available in the store. Do not create, delete, or modify calendar items or training data.`;
+Treat Load, Intensity, Fitness, Fatigue, and Form as platform-supplied Reference layer values, not locally computed values. State when evidence is absent, stale, or ambiguous. Give at least three distinct evidence-backed observations across at least two parts of the season, identify an evidence-backed trend and an exception or recovery block, and give at least two actions with a time, quantity, or decision condition. Every action must cite the evidence-backed observation it responds to.
+
+Ask 2–4 question blocks only about context absent from the returned results. Each block must use these exact labels in this exact order:
+Evidence anchor: <observation> [Evidence: <tool-name>(<exact arguments>) — <exact returned date/field/value>]
+Missing context: <what the returned results do not establish>
+Question: <one question about that missing context>
+Decision changed: <the coaching decision its answer would change>
+
+Do not use an uncited assumption as an Evidence anchor. Do not ask for a fact already returned by a tool. Do not call mutating tools or create, delete, modify, write, or schedule calendar items, training data, or store state.`;
 
 export const SEASON_REVIEW_MODEL_SAMPLES = [
   "model-calibration-01",
