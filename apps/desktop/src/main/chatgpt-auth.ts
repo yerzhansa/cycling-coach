@@ -140,7 +140,8 @@ export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAut
       credentials = await runLogin({
         originator: "enduragent-desktop",
         signal,
-        onAuth: ({ url }) => {
+        onAuth: ({ url, callbackAvailable }) => {
+          if (callbackAvailable === false) return;
           void options.openExternal(url).catch(() => {
             browserController.abort(new ChatGptAuthFlowError("cancelled"));
           });
