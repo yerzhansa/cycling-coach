@@ -161,10 +161,41 @@ describe("desktop onboarding IPC", () => {
     await expect(
       subject.invoke(DESKTOP_CREDENTIAL_STATUS_CHANNEL, subject.trustedEvent),
     ).resolves.toEqual([{ slot: "anthropic", state: "configured", runtimeState: "active" }]);
-    expect(subject.vault.reapplyConfigured).toHaveBeenCalledTimes(1);
+    expect(subject.vault.reapplyConfigured).not.toHaveBeenCalled();
     expect(
       JSON.stringify(await subject.invoke(DESKTOP_CREDENTIAL_STATUS_CHANNEL, subject.trustedEvent)),
     ).not.toContain("value");
+  });
+
+  it("reads credential metadata without waiting for credential replay", async () => {
+    const subject = harness();
+    vi.mocked(subject.vault.reapplyConfigured).mockImplementation(
+      () => new Promise<void>(() => {}),
+    );
+
+    await expect(
+      subject.invoke(DESKTOP_CREDENTIAL_STATUS_CHANNEL, subject.trustedEvent),
+    ).resolves.toEqual([{ slot: "anthropic", state: "configured", runtimeState: "active" }]);
+    expect(subject.vault.credentialStatuses).toHaveBeenCalledOnce();
+    expect(subject.vault.reapplyConfigured).not.toHaveBeenCalled();
+  });
+
+  it("fails closed to re-entry metadata when stored status cannot be read", async () => {
+    const subject = harness();
+    vi.mocked(subject.vault.credentialStatuses).mockRejectedValueOnce(
+      new Error("private storage detail"),
+    );
+
+    const statuses = await subject.invoke(DESKTOP_CREDENTIAL_STATUS_CHANNEL, subject.trustedEvent);
+
+    expect(statuses).toHaveLength(10);
+    expect(statuses).toContainEqual({
+      slot: "anthropic",
+      state: "re-prompt",
+      runtimeState: null,
+    });
+    expect(JSON.stringify(statuses)).not.toContain("private storage detail");
+    expect(subject.vault.reapplyConfigured).not.toHaveBeenCalled();
   });
 
   it("retries only failed credentials through the explicit vault path", async () => {
