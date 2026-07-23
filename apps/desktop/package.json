@@ -13,6 +13,7 @@
     "stage:extra-resources": "node scripts/stage-extra-resources.mjs",
     "test:self-test-resources": "vitest run tests/self-test-resources.test.ts",
     "test:packaged-self-test": "node scripts/verify-packaged-self-test.mjs",
+    "verify:package-layout": "node scripts/verify-package-layout.mjs",
     "smoke:runtime": "node scripts/electron-smoke.mjs runtime",
     "smoke:security": "node scripts/electron-smoke.mjs security",
     "accept:residency": "node ./scripts/accept-residency.mjs",
@@ -28,6 +29,7 @@
     "yaml": "^2.8.3"
   },
   "devDependencies": {
+    "@electron/asar": "3.4.1",
     "@enduragent/desktop-renderer": "workspace:*",
     "@enduragent/kernel": "workspace:*",
     "@types/node": "^25.6.0",

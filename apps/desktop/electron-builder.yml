@@ -1,11 +1,19 @@
 appId: icu.enduragent.desktop
 productName: Enduragent
 asar: true
+electronLanguages:
+  - en
 directories:
   output: dist
 files:
   - out/**
   - package.json
+  - "!**/*.map"
+  - "!**/.env*"
+  - "!**/{test,tests,__tests__,fixture,fixtures,dev-fixture,dev-fixtures}/**"
+  - "!**/*.{test,spec}.{js,cjs,mjs,ts,cts,mts,jsx,tsx}"
+  - "!**/node_modules/vitest/**"
+  - "!**/node_modules/@vitest/**"
   - from: resources
     to: resources
     filter:
