@@ -10,7 +10,6 @@ import type { OnboardingBridge } from "./bridge.js";
 import { credentialPresentation } from "./credential-presentation.js";
 import {
   ONBOARDING_COMPLETION,
-  canImportFiles,
   createOnboardingState,
   hasConfiguredModel,
   hasTrainingData,
@@ -23,26 +22,35 @@ import {
   withChatGptStatus,
   withCredentialStatuses,
   withError,
-  withImportProgress,
+  withImportedRideFileCount,
   withIntake,
-  withSuccessfulImport,
   type CredentialSlotStatus,
   type ChatGptStatus,
   type OnboardingCompletion,
   type OnboardingErrorCode,
   type OnboardingState,
 } from "./machine.js";
+import {
+  createRideImportController,
+  rideImportStatusCopy,
+  type RideImportController,
+  type RideImportState,
+} from "../ride-import.js";
 
 export interface OnboardingController {
   open(): Promise<void>;
   close(): void;
   dispose(): void;
   state(): OnboardingState;
+  ownsDroppedImportFiles(): boolean;
+  importDroppedFiles(paths: readonly string[]): void;
 }
 
 interface MountOnboardingOptions {
   readonly document: Document;
   readonly bridge: OnboardingBridge;
+  readonly rideImports?: RideImportController;
+  readonly onRideImportPresentationChange?: (presenting: boolean) => void;
   readonly opener: HTMLElement;
   readonly onComplete: (completion: OnboardingCompletion) => void;
 }
@@ -77,7 +85,6 @@ const ERROR_COPY: Readonly<Record<OnboardingErrorCode, string>> = {
   "training-account-mismatch":
     "That intervals.icu key belongs to a different athlete than the training history already stored. Switching accounts is not supported yet.",
   "training-data-required": "Connect intervals.icu or import at least one ride file.",
-  "import-failed": "Those ride files could not be imported. Try another selection.",
   "intake-incomplete": "Answer the required safety questions to continue.",
   "intake-save-failed": "Your answers could not be saved. Please try again.",
 };
@@ -147,13 +154,23 @@ function passwordControl(
 }
 
 export function mountOnboarding(options: MountOnboardingOptions): OnboardingController {
+  const rideImports = options.rideImports ?? createRideImportController(options.bridge);
   let state = createOnboardingState();
+  let rideImportState: RideImportState = rideImports.state();
   let credentialStatuses: readonly CredentialSlotStatus[] = [];
   let scrim: HTMLElement | undefined;
   let completed = false;
   let disposed = false;
   let opening = false;
   let visit = 0;
+  let presentingRideImports = false;
+
+  const setRideImportPresentation = (presenting: boolean): void => {
+    if (presentingRideImports === presenting) return;
+    presentingRideImports = presenting;
+    options.onRideImportPresentationChange?.(presenting);
+  };
+
   const status = (slot: DesktopCredentialSlot): CredentialSlotStatus =>
     credentialStatuses.find((entry) => entry.slot === slot) ?? {
       slot,
@@ -176,6 +193,7 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
     clearPasswordInputs();
     scrim?.remove();
     scrim = undefined;
+    setRideImportPresentation(false);
     options.opener.focus();
   };
 
@@ -233,46 +251,28 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
   };
 
   const importStatusCopy = (): string => {
-    if (state.importProgress !== null) {
-      return state.importProgress.params.event.phase === "started"
-        ? "Import started."
-        : "Import completed.";
-    }
-    if (state.acceptedImportPaths.length === 0) return "";
-    return `${state.acceptedImportPaths.length} ride file${state.acceptedImportPaths.length === 1 ? "" : "s"} imported.`;
+    return rideImportStatusCopy(rideImportState);
   };
 
   const updateImportPresentation = (): void => {
     if (scrim === undefined) return;
+    const importBusy = state.step === "training-data" && rideImports.isBusy();
     for (const button of scrim.querySelectorAll<HTMLButtonElement>("button")) {
-      if (!button.classList.contains("onboarding-dismiss")) button.disabled = state.busy;
+      if (!button.classList.contains("onboarding-dismiss")) {
+        button.disabled = state.busy || importBusy;
+      }
     }
     const live = scrim.querySelector<HTMLElement>(".import-status");
-    if (live !== null) live.textContent = importStatusCopy();
+    if (live !== null) {
+      const copy = importStatusCopy();
+      live.textContent = copy;
+      live.hidden = copy.length === 0;
+      live.dataset.state = rideImportState.status;
+    }
     const error = scrim.querySelector<HTMLElement>("#onboarding-error");
     if (error !== null) {
       error.textContent = state.fixedError === null ? "" : ERROR_COPY[state.fixedError];
     }
-  };
-
-  const importPaths = async (paths: readonly string[], expectedVisit = visit): Promise<void> => {
-    if (visit !== expectedVisit || !canImportFiles(state, scrim !== undefined)) return;
-    state = withBusy(state, true);
-    updateImportPresentation();
-    try {
-      const result = await options.bridge.importFiles(paths, (envelope) => {
-        if (visit !== expectedVisit || scrim === undefined) return;
-        state = withImportProgress(state, envelope);
-        updateImportPresentation();
-      });
-      if (visit !== expectedVisit || scrim === undefined) return;
-      if (result.files.imported <= 0) throw new TypeError();
-      state = withSuccessfulImport(state, paths);
-    } catch {
-      if (visit !== expectedVisit || scrim === undefined) return;
-      state = withError(state, "import-failed");
-    }
-    updateImportPresentation();
   };
 
   const updateIntakeFromControl = (
@@ -509,29 +509,15 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
     body.append(divider);
     const chooser = make(options.document, "button", "drop-zone");
     chooser.type = "button";
-    chooser.disabled = state.busy;
+    chooser.disabled = state.busy || rideImports.isBusy();
     chooser.append(
       make(options.document, "strong", undefined, "Choose FIT, TCX, or GPX files"),
       make(options.document, "span", undefined, "You can also drop files here."),
     );
     chooser.addEventListener("click", () => {
-      const chooserVisit = visit;
-      void options.bridge.chooseImportFiles().then(
-        (paths) => {
-          if (paths.length > 0) void importPaths(paths, chooserVisit);
-        },
-        () => {
-          if (visit !== chooserVisit || scrim === undefined) return;
-          state = withError(state, "import-failed");
-          render();
-        },
-      );
+      void rideImports.chooseAndImport("onboarding");
     });
     body.append(chooser);
-    const live = make(options.document, "p", "import-status");
-    live.setAttribute("aria-live", "polite");
-    live.textContent = importStatusCopy();
-    body.append(live);
   };
 
   const renderSafetyIntake = (body: HTMLElement): void => {
@@ -637,7 +623,7 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
   };
 
   const submitCurrentStep = async (dialog: HTMLElement): Promise<void> => {
-    if (state.busy) return;
+    if (state.busy || (state.step === "training-data" && rideImports.isBusy())) return;
     const submitVisit = visit;
     state = withBusy(state, true);
     for (const button of dialog.querySelectorAll<HTMLButtonElement>("button"))
@@ -691,6 +677,7 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
       visit += 1;
       scrim?.remove();
       scrim = undefined;
+      setRideImportPresentation(false);
       options.onComplete(ONBOARDING_COMPLETION);
     }
   };
@@ -725,16 +712,25 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
       title.id = "onboarding-title";
       title.tabIndex = -1;
     }
+    const importStatus = make(options.document, "p", "import-status");
+    importStatus.setAttribute("role", "status");
+    importStatus.setAttribute("aria-live", "polite");
+    importStatus.setAttribute("aria-atomic", "true");
+    importStatus.textContent = importStatusCopy();
+    importStatus.hidden = importStatus.textContent.length === 0;
+    importStatus.dataset.state = rideImportState.status;
+    body.append(importStatus);
     const error = make(options.document, "p", "onboarding-error");
     error.id = "onboarding-error";
     error.setAttribute("aria-live", "polite");
     if (state.fixedError !== null) error.textContent = ERROR_COPY[state.fixedError];
     body.append(error);
     const footer = make(options.document, "footer", "onboarding-footer");
+    const importBusy = state.step === "training-data" && rideImports.isBusy();
     if (activeIndex > 0) {
       const back = make(options.document, "button", "secondary-button", "Back");
       back.type = "button";
-      back.disabled = state.busy;
+      back.disabled = state.busy || importBusy;
       back.addEventListener("click", () => {
         state = previousStep(state);
         render();
@@ -751,7 +747,7 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
       state.step === "ready" ? "Finish setup" : "Continue",
     );
     submit.type = "button";
-    submit.disabled = state.busy;
+    submit.disabled = state.busy || importBusy;
     submit.addEventListener("click", () => void submitCurrentStep(dialog));
     footer.append(submit);
     dialog.append(header, body, footer);
@@ -786,7 +782,15 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
     scrim.append(dialog);
   };
 
-  const disposeDrop = options.bridge.onDroppedImportFiles((paths) => void importPaths(paths));
+  const disposeImportState = rideImports.subscribe((next) => {
+    rideImportState = next;
+    if (next.status === "succeeded") {
+      state = withImportedRideFileCount(state, rideImports.importedFileCount());
+    } else if (next.status === "running" && next.owner === "onboarding") {
+      state = { ...state, fixedError: null };
+    }
+    updateImportPresentation();
+  });
 
   return {
     async open(): Promise<void> {
@@ -808,8 +812,10 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
       }
       credentialStatuses = statuses;
       state = createOnboardingState(statuses, restoredChatGptStatus);
+      state = withImportedRideFileCount(state, rideImports.importedFileCount());
       scrim = make(options.document, "div", "onboarding-scrim");
       options.document.body.append(scrim);
+      setRideImportPresentation(true);
       render();
       focusCurrentTitle();
       opening = false;
@@ -821,8 +827,22 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
       clearPasswordInputs();
       scrim?.remove();
       scrim = undefined;
-      disposeDrop();
+      setRideImportPresentation(false);
+      disposeImportState();
     },
     state: () => state,
+    ownsDroppedImportFiles: () =>
+      !disposed && scrim !== undefined && state.step === "training-data",
+    importDroppedFiles(paths) {
+      if (
+        !disposed &&
+        scrim !== undefined &&
+        state.step === "training-data" &&
+        !state.busy &&
+        !rideImports.isBusy()
+      ) {
+        void rideImports.importPaths("onboarding", paths);
+      }
+    },
   };
 }

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OnboardingBridge } from "../src/onboarding/bridge.js";
 import { mountOnboarding } from "../src/onboarding/mount.js";
 import type { ChatGptLoginResult } from "../src/onboarding/machine.js";
+import { createRideImportController } from "../src/ride-import.js";
 
 class FakeElement {
   readonly children: FakeElement[] = [];
@@ -138,6 +139,8 @@ function bridge(login: () => Promise<ChatGptLoginResult>): OnboardingBridge & {
   readonly credentialStatuses: ReturnType<typeof vi.fn<OnboardingBridge["credentialStatuses"]>>;
   readonly chatGptStatus: ReturnType<typeof vi.fn<OnboardingBridge["chatGptStatus"]>>;
   readonly chatGptLogin: ReturnType<typeof vi.fn<OnboardingBridge["chatGptLogin"]>>;
+  readonly importFiles: ReturnType<typeof vi.fn<OnboardingBridge["importFiles"]>>;
+  readonly onDroppedImportFiles: ReturnType<typeof vi.fn<OnboardingBridge["onDroppedImportFiles"]>>;
 } {
   const credentialStatuses = vi.fn<OnboardingBridge["credentialStatuses"]>(async () => []);
   const chatGptStatus = vi.fn<OnboardingBridge["chatGptStatus"]>(async () => ({
@@ -145,6 +148,17 @@ function bridge(login: () => Promise<ChatGptLoginResult>): OnboardingBridge & {
     runtimeReady: true,
   }));
   const chatGptLogin = vi.fn<OnboardingBridge["chatGptLogin"]>(login);
+  const importFiles = vi.fn<OnboardingBridge["importFiles"]>(async () => ({
+    schemaVersion: 1,
+    files: { total: 0, imported: 0, quarantined: 0 },
+    changes: {
+      rawFilesInserted: 0,
+      sourceRecordsInserted: 0,
+      sourceRecordsUpdated: 0,
+      relinkedSourceRecords: 0,
+    },
+  }));
+  const onDroppedImportFiles = vi.fn<OnboardingBridge["onDroppedImportFiles"]>(() => () => {});
   return {
     credentialStatuses,
     retryFailedCredentials: vi.fn<OnboardingBridge["retryFailedCredentials"]>(async () => []),
@@ -156,17 +170,8 @@ function bridge(login: () => Promise<ChatGptLoginResult>): OnboardingBridge & {
     chatGptStatus,
     chatGptLogin,
     chooseImportFiles: vi.fn<OnboardingBridge["chooseImportFiles"]>(async () => []),
-    onDroppedImportFiles: vi.fn<OnboardingBridge["onDroppedImportFiles"]>(() => () => {}),
-    importFiles: vi.fn<OnboardingBridge["importFiles"]>(async () => ({
-      schemaVersion: 1,
-      files: { total: 0, imported: 0, quarantined: 0 },
-      changes: {
-        rawFilesInserted: 0,
-        sourceRecordsInserted: 0,
-        sourceRecordsUpdated: 0,
-        relinkedSourceRecords: 0,
-      },
-    })),
+    onDroppedImportFiles,
+    importFiles,
     saveIntake: vi.fn<OnboardingBridge["saveIntake"]>(async () => {}),
   } satisfies OnboardingBridge;
 }
@@ -243,5 +248,149 @@ describe("mounted onboarding", () => {
       "ChatGPT sign-in timed out. Retry when you are ready.",
     );
     expect(buttonWithText(document, "Retry ChatGPT sign-in").disabled).toBe(false);
+  });
+
+  it("owns drops only on the training-data step and gates on returned imported counts", async () => {
+    const document = new FakeDocument();
+    const onboardingBridge = bridge(async () => ({
+      status: "configured",
+      runtimeReady: true,
+    }));
+    onboardingBridge.importFiles
+      .mockResolvedValueOnce({
+        schemaVersion: 1,
+        files: { total: 2, imported: 1, quarantined: 1 },
+        changes: {
+          rawFilesInserted: 1,
+          sourceRecordsInserted: 1,
+          sourceRecordsUpdated: 0,
+          relinkedSourceRecords: 0,
+        },
+      })
+      .mockResolvedValueOnce({
+        schemaVersion: 1,
+        files: { total: 2, imported: 0, quarantined: 2 },
+        changes: {
+          rawFilesInserted: 0,
+          sourceRecordsInserted: 0,
+          sourceRecordsUpdated: 0,
+          relinkedSourceRecords: 0,
+        },
+      });
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: onboardingBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    expect(controller.ownsDroppedImportFiles()).toBe(false);
+    expect(onboardingBridge.onDroppedImportFiles).not.toHaveBeenCalled();
+
+    buttonWithText(document, "Continue").dispatch("click");
+    await vi.waitFor(() => expect(controller.ownsDroppedImportFiles()).toBe(true));
+    controller.importDroppedFiles(["/synthetic/batch.fit"]);
+    await vi.waitFor(() => expect(onboardingBridge.importFiles).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(controller.state().importedRideFileCount).toBe(1));
+    expect(document.body.textContent).toContain(
+      "Local library import: 1 ride file imported. 1 ride file quarantined.",
+    );
+
+    controller.importDroppedFiles(["/synthetic/quarantined.fit"]);
+    await vi.waitFor(() => expect(onboardingBridge.importFiles).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(document.body.textContent).toContain(
+        "Local library import failed. 0 ride files imported. 2 ride files quarantined.",
+      ),
+    );
+    expect(controller.state().importedRideFileCount).toBe(1);
+    expect(document.body.textContent).not.toContain("Import completed");
+
+    buttonWithText(document, "Continue").dispatch("click");
+    await vi.waitFor(() => expect(controller.state().step).toBe("safety-intake"));
+    expect(controller.ownsDroppedImportFiles()).toBe(false);
+    controller.importDroppedFiles(["/synthetic/not-owned.fit"]);
+    expect(onboardingBridge.importFiles).toHaveBeenCalledTimes(2);
+    controller.close();
+    expect(controller.ownsDroppedImportFiles()).toBe(false);
+    controller.dispose();
+  });
+
+  it("does not start a dropped import while the training-data step is submitting", async () => {
+    const document = new FakeDocument();
+    const onboardingBridge = bridge(async () => ({
+      status: "configured",
+      runtimeReady: true,
+    }));
+    let resolveCredential!: (value: { status: "configured"; runtimeReady: true }) => void;
+    vi.mocked(onboardingBridge.writeCredential).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCredential = resolve;
+        }),
+    );
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: onboardingBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    buttonWithText(document, "Continue").dispatch("click");
+    await vi.waitFor(() => expect(controller.ownsDroppedImportFiles()).toBe(true));
+    const intervalsInput = document.body
+      .querySelectorAll('input[type="password"][data-slot]')
+      .find((input) => input.dataset.slot === "intervals-icu");
+    expect(intervalsInput).toBeDefined();
+    intervalsInput!.value = "synthetic-key";
+
+    buttonWithText(document, "Continue").dispatch("click");
+    await vi.waitFor(() => expect(onboardingBridge.writeCredential).toHaveBeenCalledOnce());
+    controller.importDroppedFiles(["/synthetic/during-submit.fit"]);
+    expect(onboardingBridge.importFiles).not.toHaveBeenCalled();
+
+    resolveCredential({ status: "configured", runtimeReady: true });
+    await vi.waitFor(() => expect(controller.state().busy).toBe(false));
+    controller.dispose();
+  });
+
+  it("presents resident-routed import outcomes while another onboarding step is open", async () => {
+    const document = new FakeDocument();
+    const onboardingBridge = bridge(async () => ({
+      status: "configured",
+      runtimeReady: true,
+    }));
+    onboardingBridge.importFiles.mockResolvedValue({
+      schemaVersion: 1,
+      files: { total: 2, imported: 1, quarantined: 1 },
+      changes: {
+        rawFilesInserted: 1,
+        sourceRecordsInserted: 1,
+        sourceRecordsUpdated: 0,
+        relinkedSourceRecords: 0,
+      },
+    });
+    const presentationChanges = vi.fn();
+    const imports = createRideImportController(onboardingBridge);
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: onboardingBridge,
+      rideImports: imports,
+      onRideImportPresentationChange: presentationChanges,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+
+    await controller.open();
+    expect(controller.state().step).toBe("coach-keys");
+    expect(presentationChanges).toHaveBeenLastCalledWith(true);
+    await imports.importPaths("resident", ["/synthetic/outside-training.fit"]);
+    expect(document.body.textContent).toContain(
+      "Local library import: 1 ride file imported. 1 ride file quarantined.",
+    );
+
+    controller.close();
+    expect(presentationChanges).toHaveBeenLastCalledWith(false);
+    controller.dispose();
   });
 });
