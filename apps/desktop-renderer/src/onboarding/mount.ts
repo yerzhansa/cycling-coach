@@ -367,7 +367,7 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
         options.document,
         "p",
         "onboarding-copy",
-        "Sign in with ChatGPT or use an API key. API keys are encrypted by macOS and sent only to the local coaching service.",
+        "ChatGPT sign-in is saved in a local profile file. API keys are encrypted by macOS. The local coaching service uses your choice to contact the provider.",
       ),
     );
     const chatGptLane = make(options.document, "section", "chatgpt-lane");
