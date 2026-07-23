@@ -301,9 +301,6 @@ async function runDesktop(): Promise<void> {
             isTrusted: (event) =>
               isTrustedConnectionRequest(event, mainWindow.current() ?? undefined),
           });
-          created.once("ready-to-show", () => {
-            if (!created.isDestroyed()) created.show();
-          });
           created.once("closed", () => {
             if (window === created) {
               window = null;
