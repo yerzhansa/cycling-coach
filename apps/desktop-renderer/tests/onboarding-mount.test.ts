@@ -201,6 +201,14 @@ function passwordInputFor(document: FakeDocument, slot: string): FakeElement {
   return input;
 }
 
+function radioInputFor(document: FakeDocument, name: string, copy: string): FakeElement {
+  const input = document.body
+    .querySelectorAll("input")
+    .find((candidate) => candidate.name === name && candidate.parent?.textContent === copy);
+  if (input === undefined) throw new Error(`Radio input not found: ${name} / ${copy}`);
+  return input;
+}
+
 function deferred<T>(): {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;
@@ -1133,6 +1141,84 @@ describe("mounted onboarding", () => {
     expect(controller.ownsDroppedImportFiles()).toBe(false);
     controller.dispose();
   });
+
+  it.each([
+    {
+      source: "file-only",
+      statuses: [],
+      importRide: true,
+      requiresProviderSync: false,
+      readyCopy: "Ride files saved to your local library",
+    },
+    {
+      source: "platform-only",
+      statuses: [{ slot: "intervals-icu", state: "configured", runtimeState: "active" }] as const,
+      importRide: false,
+      requiresProviderSync: true,
+      readyCopy: "Training data connected",
+    },
+    {
+      source: "mixed",
+      statuses: [{ slot: "intervals-icu", state: "configured", runtimeState: "active" }] as const,
+      importRide: true,
+      requiresProviderSync: true,
+      readyCopy: "Training data connected",
+    },
+  ] as const)(
+    "hands off the transient sync requirement for $source setup",
+    async ({ statuses, importRide, requiresProviderSync, readyCopy }) => {
+      const document = new FakeDocument();
+      const onboardingBridge = bridge(async () => ({
+        status: "configured",
+        runtimeReady: true,
+      }));
+      onboardingBridge.credentialStatuses.mockResolvedValue(statuses);
+      onboardingBridge.importFiles.mockResolvedValue({
+        schemaVersion: 1,
+        files: { total: 1, imported: 1, quarantined: 0 },
+        changes: {
+          rawFilesInserted: 1,
+          sourceRecordsInserted: 1,
+          sourceRecordsUpdated: 0,
+          relinkedSourceRecords: 0,
+        },
+      });
+      const onComplete = vi.fn();
+      const controller = mountOnboarding({
+        document: documentBoundary(document),
+        bridge: onboardingBridge,
+        opener: elementBoundary(document.createElement("button")),
+        onComplete,
+      });
+
+      await controller.open();
+      buttonWithText(document, "Continue").dispatch("click");
+      await vi.waitFor(() => expect(controller.state().step).toBe("training-data"));
+      if (importRide) {
+        controller.importDroppedFiles(["/synthetic/setup.fit"]);
+        await vi.waitFor(() => expect(controller.state().importedRideFileCount).toBe(1));
+      }
+      buttonWithText(document, "Continue").dispatch("click");
+      await vi.waitFor(() => expect(controller.state().step).toBe("safety-intake"));
+      radioInputFor(document, "prior-bsi", "No").dispatch("change");
+      radioInputFor(document, "injury-status", "No current injury").dispatch("change");
+      buttonWithText(document, "Continue").dispatch("click");
+      await vi.waitFor(() => expect(controller.state().step).toBe("ready"));
+      expect(
+        document.body.querySelector(".ready-preview")?.children.map((child) => child.textContent),
+      ).toEqual(["Keys secured", readyCopy, "Safety context saved"]);
+      buttonWithText(document, "Finish setup").dispatch("click");
+
+      await vi.waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
+      expect(onComplete).toHaveBeenCalledWith({
+        providerConfigured: true,
+        trainingDataConfigured: true,
+        intakeSaved: true,
+        requiresProviderSync,
+      });
+      controller.dispose();
+    },
+  );
 
   it("does not start a dropped import while the training-data step is submitting", async () => {
     const document = new FakeDocument();

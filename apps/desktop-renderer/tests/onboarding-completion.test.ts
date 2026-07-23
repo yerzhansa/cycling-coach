@@ -8,7 +8,10 @@ const completion = {
   providerConfigured: true,
   trainingDataConfigured: true,
   intakeSaved: true,
+  requiresProviderSync: true,
 } as const;
+
+const fileOnlyCompletion = { ...completion, requiresProviderSync: false } as const;
 
 function memoryStorage(
   entries: readonly (readonly [string, string])[] = [],
@@ -48,12 +51,12 @@ describe("onboarding completion", () => {
       onComplete: firstSync,
     });
 
-    firstWindow.complete(completion);
+    firstWindow.complete(fileOnlyCompletion);
 
     expect([...storage.entries]).toEqual([
       ["enduragent.desktop.onboarding", '{"version":1,"completed":true}'],
     ]);
-    expect(firstSync).toHaveBeenCalledWith(completion);
+    expect(firstSync).toHaveBeenCalledWith(fileOnlyCompletion);
 
     const openSetup = vi.fn(async () => {});
     const nextWindow = createOnboardingCompletionController({
