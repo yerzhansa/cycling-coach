@@ -12,6 +12,20 @@ interface RenderedMessage {
   delivery: ChatTranscriptMessage["delivery"];
 }
 
+interface PendingShortcutFocus {
+  readonly button: HTMLButtonElement;
+  observedTurnLock: boolean;
+}
+
+const COMPOSER_CLEARANCE_PROPERTY = "--chat-composer-clearance";
+
+const COACHING_SHORTCUTS = Object.freeze([
+  Object.freeze({ command: "/plan", label: "Build a plan" }),
+  Object.freeze({ command: "/workout", label: "Today’s workout" }),
+  Object.freeze({ command: "/status", label: "Training status" }),
+  Object.freeze({ command: "/review", label: "Review last session" }),
+]);
+
 export interface MountedChatView {
   readonly view: ChatView;
   readonly noticeHost: HTMLElement;
@@ -92,6 +106,25 @@ export function mountChatView(input: {
   resetStatus.setAttribute("role", "status");
   resetStatus.setAttribute("aria-live", "polite");
   noticeHost.append(resetStatus);
+  const shortcutGroup = document.createElement("div");
+  shortcutGroup.className = "coaching-shortcuts";
+  shortcutGroup.setAttribute("role", "group");
+  shortcutGroup.setAttribute("aria-label", "Coaching shortcuts");
+  const shortcutControls = COACHING_SHORTCUTS.map((shortcut) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "coaching-shortcut";
+    button.setAttribute("aria-label", `${shortcut.label}, ${shortcut.command} command`);
+    const buttonLabel = document.createElement("span");
+    buttonLabel.className = "coaching-shortcut__label";
+    buttonLabel.textContent = shortcut.label;
+    const command = document.createElement("span");
+    command.className = "coaching-shortcut__command";
+    command.textContent = shortcut.command;
+    button.append(buttonLabel, command);
+    shortcutGroup.append(button);
+    return { button, shortcut };
+  });
   const label = document.createElement("label");
   label.className = "chat-composer__label";
   label.htmlFor = "message";
@@ -107,7 +140,7 @@ export function mountChatView(input: {
   submit.textContent = "↑";
   controls.append(textarea, submit);
   form.append(label, controls);
-  input.composerHost.append(noticeHost, form);
+  input.composerHost.append(noticeHost, shortcutGroup, form);
 
   let handlers:
     | {
@@ -123,6 +156,19 @@ export function mountChatView(input: {
   let renderedAnnouncement: string | null = null;
   const renderedMessages = new Map<string, RenderedMessage>();
   let renderedNotice: string | null = null;
+  let pendingShortcutFocus: PendingShortcutFocus | undefined;
+
+  const updateComposerClearance = (): void => {
+    if (disposed) return;
+    const height = input.composerHost.getBoundingClientRect().height;
+    if (Number.isFinite(height) && height > 0) {
+      input.conversation.style.setProperty(COMPOSER_CLEARANCE_PROPERTY, `${height}px`);
+    }
+  };
+  updateComposerClearance();
+  const composerResizeObserver =
+    typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(updateComposerClearance);
+  composerResizeObserver?.observe(input.composerHost);
 
   const onSubmit = (event: SubmitEvent): void => {
     event.preventDefault();
@@ -150,6 +196,31 @@ export function mountChatView(input: {
     event.preventDefault();
     if (!cancelReset.disabled) handlers?.onCancelNewConversation();
   };
+  const onDocumentFocusIn = (event: FocusEvent): void => {
+    if (
+      pendingShortcutFocus !== undefined &&
+      event.target !== pendingShortcutFocus.button &&
+      event.target !== document.body &&
+      event.target !== document.documentElement
+    ) {
+      pendingShortcutFocus = undefined;
+    }
+  };
+  const shortcutListeners = shortcutControls.map(({ button, shortcut }) => {
+    const listener = (event: MouseEvent): void => {
+      if (disposed || button.disabled) return;
+      const onShortcutSubmit = handlers?.onSubmit;
+      if (onShortcutSubmit === undefined) return;
+      pendingShortcutFocus =
+        event.detail === 0 && document.activeElement === button
+          ? { button, observedTurnLock: false }
+          : undefined;
+      onShortcutSubmit(shortcut.command);
+    };
+    button.addEventListener("click", listener);
+    return { button, listener };
+  });
+  document.addEventListener("focusin", onDocumentFocusIn);
   form.addEventListener("submit", onSubmit);
   textarea.addEventListener("keydown", onKeydown);
   retry.addEventListener("click", onRetry);
@@ -190,11 +261,32 @@ export function mountChatView(input: {
         cancelReset.disabled = resetPending;
         confirmReset.disabled = resetPending;
         retry.disabled = workBlocked;
-        submit.disabled = state.status === "streaming" || workBlocked;
-        textarea.disabled = state.status === "streaming" || workBlocked;
+        const composerDisabled = state.status === "streaming" || workBlocked;
+        for (const { button } of shortcutControls) button.disabled = composerDisabled;
+        submit.disabled = composerDisabled;
+        textarea.disabled = composerDisabled;
         const dialogRequested =
           state.session.resetPhase === "confirming" || state.session.resetPhase === "resetting";
         const resetCompleted = state.session.resetCount !== renderedResetCount;
+        if (pendingShortcutFocus !== undefined) {
+          if (state.session.resetPhase !== "idle" || resetCompleted) {
+            pendingShortcutFocus = undefined;
+          } else if (composerDisabled) {
+            pendingShortcutFocus.observedTurnLock = true;
+          } else if (pendingShortcutFocus.observedTurnLock) {
+            const { button } = pendingShortcutFocus;
+            pendingShortcutFocus = undefined;
+            const activeElement = document.activeElement;
+            if (
+              activeElement !== button &&
+              (activeElement === null ||
+                activeElement === document.body ||
+                activeElement === document.documentElement)
+            ) {
+              button.focus();
+            }
+          }
+        }
         if (dialogRequested && !dialog.open) {
           dialog.showModal();
           cancelReset.focus();
@@ -339,6 +431,9 @@ export function mountChatView(input: {
       if (disposed) return;
       disposed = true;
       handlers = undefined;
+      pendingShortcutFocus = undefined;
+      composerResizeObserver?.disconnect();
+      input.conversation.style.removeProperty(COMPOSER_CLEARANCE_PROPERTY);
       form.removeEventListener("submit", onSubmit);
       textarea.removeEventListener("keydown", onKeydown);
       retry.removeEventListener("click", onRetry);
@@ -346,8 +441,13 @@ export function mountChatView(input: {
       cancelReset.removeEventListener("click", onCancelNewConversation);
       confirmReset.removeEventListener("click", onConfirmNewConversation);
       dialog.removeEventListener("cancel", onDialogCancel);
+      document.removeEventListener("focusin", onDocumentFocusIn);
+      for (const { button, listener } of shortcutListeners) {
+        button.removeEventListener("click", listener);
+      }
       if (dialog.open) dialog.close();
       transcript.remove();
+      shortcutGroup.remove();
       form.remove();
       noticeHost.remove();
       newConversation.remove();
