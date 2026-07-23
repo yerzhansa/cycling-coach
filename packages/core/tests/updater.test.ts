@@ -43,13 +43,20 @@ describe("isUpdateAvailable", () => {
     expect(isUpdateAvailable("2026.5.9", "2026.5.10")).toBe(false);
   });
 
-  it("CalVer same-day re-release suffix is treated as NEWER", () => {
-    // The project's CalVer scheme: 2026.5.3 → 2026.5.3-1 → 2026.5.3-2 ships
-    // suffix bumps as same-day re-releases that come AFTER the original.
-    // (This inverts standard semver, where -1 is a pre-release.)
+  it("orders stable successors within the same month", () => {
+    expect(isUpdateAvailable("2026.7.3", "2026.7.2")).toBe(true);
+    expect(isUpdateAvailable("2026.7.2", "2026.7.3")).toBe(false);
+  });
+
+  it("orders installed historical suffix releases for compatibility", () => {
     expect(isUpdateAvailable("2026.5.3-1", "2026.5.3")).toBe(true);
     expect(isUpdateAvailable("2026.5.3-2", "2026.5.3-1")).toBe(true);
     expect(isUpdateAvailable("2026.5.3", "2026.5.3-1")).toBe(false);
+  });
+
+  it("recognizes the stable successor to an installed historical suffix release", () => {
+    expect(isUpdateAvailable("2026.6.26", "2026.6.25-1")).toBe(true);
+    expect(isUpdateAvailable("2026.6.25-1", "2026.6.26")).toBe(false);
   });
 });
 
@@ -69,7 +76,7 @@ describe("buildSelfUpdateCommand", () => {
     expect(cmd).toContain("--registry=https://registry.npmjs.org");
   });
 
-  it("accepts a CalVer same-day re-release suffix", () => {
+  it("accepts an installed historical CalVer suffix", () => {
     expect(buildSelfUpdateCommand("cycling-coach", "2026.5.3-1")).toContain(
       "cycling-coach@2026.5.3-1",
     );

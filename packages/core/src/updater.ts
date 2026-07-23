@@ -24,14 +24,9 @@ export function isManagedDeploy(
 }
 
 /**
- * Parse a CalVer string `YYYY.M.D` (with optional same-day re-release suffix
- * `-N`) into a comparable 4-tuple. Returns null for unparseable input —
- * "unknown" (the getCurrentVersion fallback) or a malformed npm response.
- *
- * Note: this is NOT semver. The project's binaries use CalVer where `-N`
- * means "newer same-day re-release", whereas semver treats `-N` as an older
- * pre-release. Using `semver.gt` here would silently miss every same-day
- * patch notification.
+ * Parse stable `YYYY.M.P` CalVer into a comparable tuple. The optional fourth
+ * element exists only for compatibility with installed historical `-N`
+ * releases, where a suffix was ordered after its unsuffixed base.
  */
 function calverParts(v: string): [number, number, number, number] | null {
   const m = v.match(/^(\d+)\.(\d+)\.(\d+)(?:-(\d+))?$/);
