@@ -101,7 +101,6 @@ export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): ()
     requireTrusted(event);
     if (args.length !== 0) throw new TypeError();
     try {
-      await options.vault.reapplyConfigured();
       return minimizeStatuses(await options.vault.credentialStatuses());
     } catch {
       return DESKTOP_CREDENTIAL_SLOTS.map((slot) => ({

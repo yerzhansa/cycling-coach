@@ -17,6 +17,8 @@ import {
   CREDENTIAL_DIRECTORY_MODE,
   CREDENTIAL_FILE_MODE,
   createCredentialVault,
+  markUnselectedModelCredentialsInactive,
+  replaceCredentialRuntimeStates,
   type CredentialEncryptionPort,
 } from "../src/main/credential-vault.js";
 
@@ -304,6 +306,44 @@ describe("desktop credential vault", () => {
     });
   });
 
+  it("fails closed when runtime publication becomes stale after apply, replay, or retry", async () => {
+    const root = await temporaryRoot();
+    let current = true;
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      createRuntimePublicationGuard: () => () => current,
+      async applyCredential() {
+        current = false;
+      },
+      async reapplyCredential() {
+        current = false;
+        return "active";
+      },
+    });
+
+    await expect(
+      vault.writeCredential({ slot: "anthropic", value: randomUUID() }),
+    ).resolves.toMatchObject({
+      status: "refused",
+      reason: "runtime-unavailable",
+    });
+    current = true;
+    await vault.reapplyConfigured();
+    await expect(vault.credentialStatuses()).resolves.toContainEqual({
+      slot: "anthropic",
+      state: "configured",
+      runtimeState: "failed",
+    });
+    current = true;
+    await vault.retryFailed();
+    await expect(vault.credentialStatuses()).resolves.toContainEqual({
+      slot: "anthropic",
+      state: "configured",
+      runtimeState: "failed",
+    });
+  });
+
   it("refuses a stale failed retry after another provider becomes selected", async () => {
     const root = await temporaryRoot();
     let selectedProvider: "anthropic" | "openrouter" = "anthropic";
@@ -354,5 +394,93 @@ describe("desktop credential vault", () => {
     });
     await vault.retryFailed();
     expect(applyCredential).toHaveBeenCalledOnce();
+  });
+
+  it("publishes successor replay failures into the long-lived retry state", async () => {
+    const root = await temporaryRoot();
+    const runtimeState = new Map();
+    let applyCredentialCount = 0;
+    const applyCredential = async (): Promise<void> => {
+      applyCredentialCount += 1;
+    };
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      runtimeState,
+      applyCredential,
+    });
+    await vault.writeCredential({ slot: "anthropic", value: randomUUID() });
+
+    const successor = createCredentialVault({
+      root,
+      encryption: encryption(),
+      applyCredential: async () => {
+        throw new TypeError();
+      },
+    });
+    await successor.reapplyConfigured();
+    replaceCredentialRuntimeStates(runtimeState, await successor.credentialStatuses());
+
+    await expect(vault.credentialStatuses()).resolves.toContainEqual({
+      slot: "anthropic",
+      state: "configured",
+      runtimeState: "failed",
+    });
+    await vault.retryFailed();
+    expect(applyCredentialCount).toBe(2);
+    await expect(vault.credentialStatuses()).resolves.toContainEqual({
+      slot: "anthropic",
+      state: "configured",
+      runtimeState: "active",
+    });
+  });
+
+  it("marks a concurrently changed slot failed instead of publishing stale successor state", () => {
+    const runtimeState = new Map([["anthropic" as const, "active" as const]]);
+
+    replaceCredentialRuntimeStates(
+      runtimeState,
+      [{ slot: "anthropic", state: "configured", runtimeState: "active" }],
+      () => false,
+    );
+
+    expect(runtimeState.get("anthropic")).toBe("failed");
+  });
+
+  it("keeps only the selected model credential active", async () => {
+    const root = await temporaryRoot();
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      applyCredential: async () => {},
+    });
+
+    await vault.writeCredential({ slot: "anthropic", value: randomUUID() });
+    await vault.writeCredential({ slot: "openrouter", value: randomUUID() });
+
+    await expect(vault.credentialStatuses()).resolves.toEqual(
+      expect.arrayContaining([
+        { slot: "anthropic", state: "configured", runtimeState: "stored-inactive" },
+        { slot: "openrouter", state: "configured", runtimeState: "active" },
+      ]),
+    );
+  });
+
+  it("marks model credentials inactive when a profile becomes selected", () => {
+    const runtimeState = new Map([
+      ["anthropic" as const, "active" as const],
+      ["openrouter" as const, "failed" as const],
+      ["intervals-icu" as const, "active" as const],
+    ]);
+
+    markUnselectedModelCredentialsInactive(runtimeState, undefined);
+
+    expect(runtimeState).toEqual(
+      new Map([
+        ["anthropic", "stored-inactive"],
+        ["openrouter", "stored-inactive"],
+        ["intervals-icu", "active"],
+      ]),
+    );
   });
 });

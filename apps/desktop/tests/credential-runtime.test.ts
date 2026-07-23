@@ -462,7 +462,7 @@ describe("desktop credential runtime precedence", () => {
     expect(daemon.modelApplications()).toEqual([]);
   });
 
-  it("reapplies an unrelated service credential without changing the ChatGPT selection", async () => {
+  it("reads an unrelated service credential without changing the ChatGPT selection", async () => {
     const daemon = fakeDaemon("anthropic");
     let runtime = daemon.launch();
     const vault = fakeVault(runtime);
@@ -473,7 +473,7 @@ describe("desktop credential runtime precedence", () => {
     await vault.port.writeCredential({ slot: "intervals-icu", value: randomUUID() });
     await pollCredentialStatuses(vault.port);
     expect(daemon.activeProvider()).toBe("openai-codex");
-    expect(daemon.intervalsApplications()).toBe(2);
+    expect(daemon.intervalsApplications()).toBe(1);
     expect(daemon.modelApplications()).toEqual([]);
 
     runtime = daemon.launch();
@@ -481,7 +481,7 @@ describe("desktop credential runtime precedence", () => {
     daemon.clearModelApplications();
     await vault.port.reapplyConfigured();
     expect(daemon.activeProvider()).toBe("openai-codex");
-    expect(daemon.intervalsApplications()).toBe(3);
+    expect(daemon.intervalsApplications()).toBe(2);
     expect(daemon.modelApplications()).toEqual([]);
   });
 
@@ -574,7 +574,7 @@ describe("desktop credential runtime precedence", () => {
     await pollCredentialStatuses(vault.port);
     expect(daemon.activeProvider()).toBe("openrouter");
     expect(daemon.persistedProvider()).toBe("openrouter");
-    expect(daemon.modelApplications()).toEqual(["openrouter"]);
+    expect(daemon.modelApplications()).toEqual([]);
 
     runtime = daemon.launch();
     vault.use(runtime);

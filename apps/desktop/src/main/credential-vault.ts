@@ -18,6 +18,7 @@ export const DESKTOP_CREDENTIAL_SLOTS = [
 export type DesktopCredentialSlot = (typeof DESKTOP_CREDENTIAL_SLOTS)[number];
 export type CredentialState = "missing" | "configured" | "re-prompt";
 export type CredentialRuntimeState = "active" | "stored-inactive" | "failed";
+export type CredentialRuntimeStateMap = Map<DesktopCredentialSlot, CredentialRuntimeState>;
 
 export interface CredentialSlotStatus {
   readonly slot: DesktopCredentialSlot;
@@ -67,12 +68,47 @@ export interface CredentialVault {
 interface CredentialVaultOptions {
   readonly root: string;
   readonly encryption: CredentialEncryptionPort;
+  readonly runtimeState?: CredentialRuntimeStateMap;
+  readonly onRuntimeStateChange?: (slot: DesktopCredentialSlot) => void;
+  readonly createRuntimePublicationGuard?: (slot: DesktopCredentialSlot) => () => boolean;
   readonly applyCredential: (slot: DesktopCredentialSlot, value: string) => Promise<void>;
   readonly reapplyCredential?: (
     slot: DesktopCredentialSlot,
     value: string,
     storedCredentialSlots: readonly DesktopCredentialSlot[],
   ) => Promise<Exclude<CredentialRuntimeState, "failed">>;
+}
+
+export function replaceCredentialRuntimeStates(
+  target: CredentialRuntimeStateMap,
+  statuses: readonly CredentialSlotStatus[],
+  shouldReplace: (slot: DesktopCredentialSlot) => boolean = () => true,
+): void {
+  for (const status of statuses) {
+    if (!shouldReplace(status.slot)) {
+      target.set(status.slot, "failed");
+      continue;
+    }
+    if (status.state === "configured" && status.runtimeState !== null) {
+      target.set(status.slot, status.runtimeState);
+    } else {
+      target.delete(status.slot);
+    }
+  }
+}
+
+export function markUnselectedModelCredentialsInactive(
+  target: CredentialRuntimeStateMap,
+  selected: DesktopCredentialSlot | undefined,
+  onChange: (slot: DesktopCredentialSlot) => void = () => {},
+): void {
+  for (const slot of target.keys()) {
+    if (slot === "intervals-icu" || slot === selected || target.get(slot) === "stored-inactive") {
+      continue;
+    }
+    target.set(slot, "stored-inactive");
+    onChange(slot);
+  }
 }
 
 interface ReadCredential {
@@ -121,7 +157,15 @@ async function validTarget(path: string): Promise<boolean> {
 }
 
 export function createCredentialVault(options: CredentialVaultOptions): CredentialVault {
-  const runtimeState = new Map<DesktopCredentialSlot, CredentialRuntimeState>();
+  const runtimeState =
+    options.runtimeState ?? new Map<DesktopCredentialSlot, CredentialRuntimeState>();
+  const setRuntimeState = (slot: DesktopCredentialSlot, state: CredentialRuntimeState): void => {
+    if (state === "active" && slot !== "intervals-icu") {
+      markUnselectedModelCredentialsInactive(runtimeState, slot, options.onRuntimeStateChange);
+    }
+    runtimeState.set(slot, state);
+    options.onRuntimeStateChange?.(slot);
+  };
 
   const readSlot = async (slot: DesktopCredentialSlot): Promise<ReadCredential> => {
     const path = join(options.root, `${slot}.bin`);
@@ -174,13 +218,15 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
     const storedCredentialSlots = entries.map((entry) => entry.slot);
     for (const entry of entries) {
       try {
+        const canPublish = options.createRuntimePublicationGuard?.(entry.slot);
         const replayed =
           options.reapplyCredential === undefined
             ? await options.applyCredential(entry.slot, entry.value).then(() => "active" as const)
             : await options.reapplyCredential(entry.slot, entry.value, storedCredentialSlots);
-        runtimeState.set(entry.slot, replayed);
+        if (canPublish !== undefined && !canPublish()) throw new TypeError();
+        setRuntimeState(entry.slot, replayed);
       } catch {
-        runtimeState.set(entry.slot, "failed");
+        setRuntimeState(entry.slot, "failed");
       }
     }
   };
@@ -196,13 +242,15 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
     const entries = configured.filter((entry) => runtimeState.get(entry.slot) === "failed");
     for (const entry of entries) {
       try {
+        const canPublish = options.createRuntimePublicationGuard?.(entry.slot);
         const retried =
           options.reapplyCredential === undefined
             ? await options.applyCredential(entry.slot, entry.value).then(() => "active" as const)
             : await options.reapplyCredential(entry.slot, entry.value, storedCredentialSlots);
-        runtimeState.set(entry.slot, retried);
+        if (canPublish !== undefined && !canPublish()) throw new TypeError();
+        setRuntimeState(entry.slot, retried);
       } catch {
-        runtimeState.set(entry.slot, "failed");
+        setRuntimeState(entry.slot, "failed");
       }
     }
   };
@@ -249,6 +297,7 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
         await handle.close();
         handle = undefined;
         await rename(temporary, target);
+        setRuntimeState(input.slot, "failed");
         const directory = await open(options.root, "r");
         try {
           await directory.sync();
@@ -266,11 +315,13 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
         encrypted?.fill(0);
       }
       try {
+        const canPublish = options.createRuntimePublicationGuard?.(input.slot);
         await options.applyCredential(input.slot, value);
-        runtimeState.set(input.slot, "active");
+        if (canPublish !== undefined && !canPublish()) throw new TypeError();
+        setRuntimeState(input.slot, "active");
         return { slot: input.slot, status: "configured", runtimeReady: true };
       } catch {
-        runtimeState.set(input.slot, "failed");
+        setRuntimeState(input.slot, "failed");
         return { slot: input.slot, status: "refused", reason: "runtime-unavailable" };
       }
     },

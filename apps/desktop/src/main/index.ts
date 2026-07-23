@@ -25,7 +25,16 @@ import {
   type CredentialRuntimeApplication,
   type RuntimeConfigurationAuthority,
 } from "./credential-runtime.js";
-import { CREDENTIAL_DIRECTORY_NAME, createCredentialVault } from "./credential-vault.js";
+import {
+  CREDENTIAL_DIRECTORY_NAME,
+  createCredentialVault,
+  DESKTOP_CREDENTIAL_SLOTS,
+  markUnselectedModelCredentialsInactive,
+  replaceCredentialRuntimeStates,
+  type CredentialRuntimeState,
+  type CredentialSlotStatus,
+  type DesktopCredentialSlot,
+} from "./credential-vault.js";
 import {
   DesktopDaemonLifecycle,
   type DesktopDaemonConnection,
@@ -163,12 +172,64 @@ async function runDesktop(): Promise<void> {
       readonly credentials: CredentialRuntimeApplication;
     };
     let activeRuntimeBinding: RuntimeBinding | undefined;
-    const preparedRuntimeBindings = new Map<number, RuntimeBinding>();
+    const preparedRuntimeBindings = new Map<
+      number,
+      {
+        readonly binding: RuntimeBinding;
+        readonly statuses: readonly CredentialSlotStatus[];
+        readonly revisions: ReadonlyMap<DesktopCredentialSlot, number>;
+      }
+    >();
+    const credentialRuntimeState = new Map<DesktopCredentialSlot, CredentialRuntimeState>();
+    const credentialRuntimeRevisions = new Map<DesktopCredentialSlot, number>();
+    const markCredentialRuntimeChange = (slot: DesktopCredentialSlot): void => {
+      credentialRuntimeRevisions.set(slot, (credentialRuntimeRevisions.get(slot) ?? 0) + 1);
+    };
+    const failModelCredentialRuntimeStates = (): void => {
+      for (const slot of DESKTOP_CREDENTIAL_SLOTS) {
+        if (slot === "intervals-icu") continue;
+        credentialRuntimeState.set(slot, "failed");
+        markCredentialRuntimeChange(slot);
+      }
+    };
+    let recoveringCredentialRuntime:
+      | {
+          readonly states: ReadonlyMap<DesktopCredentialSlot, CredentialRuntimeState>;
+          readonly revisions: ReadonlyMap<DesktopCredentialSlot, number>;
+        }
+      | undefined;
     let reapplyCredentials = async (
       _connection: DesktopDaemonConnection,
       _signal: AbortSignal,
     ): Promise<void> => {};
     const publishLifecycle = (state: DesktopDaemonLifecycleState): void => {
+      if (state.status === "recovering" && recoveringCredentialRuntime === undefined) {
+        recoveringCredentialRuntime = {
+          states: new Map(credentialRuntimeState),
+          revisions: new Map(credentialRuntimeRevisions),
+        };
+        for (const slot of credentialRuntimeState.keys()) {
+          credentialRuntimeState.set(slot, "failed");
+        }
+      }
+      if (state.status === "ready" && recoveringCredentialRuntime !== undefined) {
+        for (const [slot, runtimeState] of recoveringCredentialRuntime.states) {
+          if (
+            (credentialRuntimeRevisions.get(slot) ?? 0) ===
+            (recoveringCredentialRuntime.revisions.get(slot) ?? 0)
+          ) {
+            credentialRuntimeState.set(slot, runtimeState);
+          }
+        }
+        recoveringCredentialRuntime = undefined;
+      }
+      if (state.status === "closing" || state.status === "terminal") {
+        for (const slot of credentialRuntimeState.keys()) {
+          credentialRuntimeState.set(slot, "failed");
+        }
+        recoveringCredentialRuntime = undefined;
+        preparedRuntimeBindings.clear();
+      }
       const visibleWindow = currentWindow();
       if (visibleWindow !== null && state.status !== "starting") {
         visibleWindow.webContents.send(DESKTOP_LIFECYCLE_CHANNEL, {
@@ -186,7 +247,13 @@ async function runDesktop(): Promise<void> {
       onReady({ previous, current }) {
         const prepared = preparedRuntimeBindings.get(current.generation);
         if (prepared !== undefined) {
-          activeRuntimeBinding = prepared;
+          activeRuntimeBinding = prepared.binding;
+          replaceCredentialRuntimeStates(
+            credentialRuntimeState,
+            prepared.statuses,
+            (slot) =>
+              (credentialRuntimeRevisions.get(slot) ?? 0) === (prepared.revisions.get(slot) ?? 0),
+          );
           preparedRuntimeBindings.delete(current.generation);
         }
         if (new URL(previous.url).port === new URL(current.url).port) return;
@@ -220,20 +287,50 @@ async function runDesktop(): Promise<void> {
     const vault = createCredentialVault({
       root: credentialRoot,
       encryption: safeStorage,
-      async applyCredential(slot, value) {
-        await activeRuntimeBinding!.credentials.applyExplicit(
-          runtimeConfigurationForCredential(slot, value),
-        );
+      runtimeState: credentialRuntimeState,
+      onRuntimeStateChange: markCredentialRuntimeChange,
+      createRuntimePublicationGuard(slot) {
+        const binding = activeRuntimeBinding;
+        const lifecycleState = daemonLifecycle?.snapshot();
+        return () => {
+          const currentLifecycleState = daemonLifecycle?.snapshot();
+          const canPublish =
+            binding !== undefined &&
+            activeRuntimeBinding === binding &&
+            lifecycleState?.status === "ready" &&
+            currentLifecycleState?.status === "ready" &&
+            lifecycleState.generation === currentLifecycleState.generation;
+          if (!canPublish && slot !== "intervals-icu") failModelCredentialRuntimeStates();
+          return canPublish;
+        };
       },
-      reapplyCredential: (slot, value, storedCredentialSlots) =>
-        activeRuntimeBinding!.credentials.reapplyStoredCredential(
+      async applyCredential(slot, value) {
+        const binding = activeRuntimeBinding!;
+        if (daemonLifecycle?.snapshot().status !== "ready") throw new TypeError();
+        await binding.credentials.applyExplicit(runtimeConfigurationForCredential(slot, value));
+        if (activeRuntimeBinding !== binding || daemonLifecycle?.snapshot().status !== "ready") {
+          if (slot !== "intervals-icu") failModelCredentialRuntimeStates();
+          throw new TypeError();
+        }
+      },
+      async reapplyCredential(slot, value, storedCredentialSlots) {
+        const binding = activeRuntimeBinding!;
+        if (daemonLifecycle?.snapshot().status !== "ready") throw new TypeError();
+        const status = await binding.credentials.reapplyStoredCredential(
           slot,
           value,
           storedCredentialSlots,
-        ),
+        );
+        if (activeRuntimeBinding !== binding || daemonLifecycle?.snapshot().status !== "ready") {
+          if (slot !== "intervals-icu") failModelCredentialRuntimeStates();
+          throw new TypeError();
+        }
+        return status;
+      },
     });
     reapplyCredentials = async (connection, signal) => {
       if (signal.aborted) return;
+      const revisions = new Map(credentialRuntimeRevisions);
       const successor = createRuntimeBinding(connection);
       const successorVault = createCredentialVault({
         root: credentialRoot,
@@ -244,11 +341,37 @@ async function runDesktop(): Promise<void> {
         reapplyCredential: successor.credentials.reapplyStoredCredential,
       });
       await successorVault.reapplyConfigured();
-      if (!signal.aborted) preparedRuntimeBindings.set(connection.generation, successor);
+      const successorStatuses = await successorVault.credentialStatuses();
+      const lifecycleState = daemonLifecycle?.snapshot();
+      if (
+        signal.aborted ||
+        lifecycleState?.status !== "recovering" ||
+        lifecycleState.generation + 1 !== connection.generation
+      ) {
+        return;
+      }
+      preparedRuntimeBindings.set(connection.generation, {
+        binding: successor,
+        statuses: successorStatuses,
+        revisions,
+      });
     };
     const chatGptAuth = createChatGptAuth({
       configDir,
-      applyRuntimeConfig: (request) => activeRuntimeBinding!.credentials.applyExplicit(request),
+      async applyRuntimeConfig(request) {
+        const binding = activeRuntimeBinding!;
+        if (daemonLifecycle?.snapshot().status !== "ready") throw new TypeError();
+        await binding.credentials.applyExplicit(request);
+        if (activeRuntimeBinding !== binding || daemonLifecycle?.snapshot().status !== "ready") {
+          failModelCredentialRuntimeStates();
+          throw new TypeError();
+        }
+        markUnselectedModelCredentialsInactive(
+          credentialRuntimeState,
+          undefined,
+          markCredentialRuntimeChange,
+        );
+      },
       getRuntimeConfig: () => activeRuntimeBinding!.authority.getRuntimeConfig(),
       openExternal: (url) => shell.openExternal(url),
       signal: controller.signal,
