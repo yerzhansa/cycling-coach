@@ -1007,6 +1007,10 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     const compactDrawerGeometry = await fixture.evaluate<{
       readonly documentOverflow: boolean;
       readonly topbarFits: boolean;
+      readonly settingsResident: boolean;
+      readonly settingsReachable: boolean;
+      readonly settingsAccessibleLabel: string;
+      readonly settingsCompactLabel: string;
       readonly drawerOpen: boolean;
       readonly buttonResident: boolean;
       readonly buttonReachable: boolean;
@@ -1018,15 +1022,26 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       compactOpener.click();
       await new Promise((resolve) => setTimeout(resolve, 250));
       const topbar = document.querySelector(".topbar");
+      const settings = document.querySelector(".provider-model-settings-button");
       const compactDrawer = document.querySelector("#training-context-drawer");
       const compactButton = compactDrawer.querySelector(".training-sync__button");
       const compactStatus = compactDrawer.querySelector(".training-sync__status");
       const compactRegion = compactDrawer.querySelector(".training-sync");
       const drawerRect = compactDrawer.getBoundingClientRect();
       const buttonRect = compactButton.getBoundingClientRect();
+      const topbarRect = topbar.getBoundingClientRect();
+      const settingsRect = settings.getBoundingClientRect();
       return {
         documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
         topbarFits: topbar.scrollWidth <= topbar.clientWidth,
+        settingsResident: topbar.contains(settings),
+        settingsReachable:
+          settingsRect.left >= topbarRect.left &&
+          settingsRect.right <= topbarRect.right &&
+          settingsRect.top >= topbarRect.top &&
+          settingsRect.bottom <= topbarRect.bottom,
+        settingsAccessibleLabel: settings.getAttribute("aria-label"),
+        settingsCompactLabel: getComputedStyle(settings, "::before").content.replace(/['"]/gu, ""),
         drawerOpen: compactDrawer.open,
         buttonResident: compactDrawer.querySelectorAll(".training-sync__button").length === 1,
         buttonReachable:
@@ -1045,6 +1060,10 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     expect(compactDrawerGeometry).toEqual({
       documentOverflow: false,
       topbarFits: true,
+      settingsResident: true,
+      settingsReachable: true,
+      settingsAccessibleLabel: "Coach settings",
+      settingsCompactLabel: "Coach",
       drawerOpen: true,
       buttonResident: true,
       buttonReachable: true,
