@@ -41,16 +41,14 @@ export interface DecodeStreamInput {
   readonly n: number;
   readonly kind: StreamKind;
   readonly data: Uint8Array;
+  readonly maxInflatedBytes?: number;
 }
 
 function validN(n: number): boolean {
   return Number.isSafeInteger(n) && n >= 1 && n <= 0xffffffff;
 }
 
-export function encodeStream(
-  kind: StreamKind,
-  values: readonly (number | null)[],
-): EncodedStream {
+export function encodeStream(kind: StreamKind, values: readonly (number | null)[]): EncodedStream {
   const n = values.length;
   if (!validN(n)) throw new StreamCodecError("invalid_n");
   for (const value of values) {
@@ -87,11 +85,27 @@ export function encodeStream(
 
 export function decodeStream(input: DecodeStreamInput): readonly (number | null)[] {
   if (input.encoding !== STREAM_ENCODING) throw new StreamCodecError("unsupported_encoding");
+  if (!validN(input.n)) throw new StreamCodecError("invalid_n");
+  const maxInflatedBytes = input.maxInflatedBytes;
+  if (
+    maxInflatedBytes !== undefined &&
+    (!Number.isSafeInteger(maxInflatedBytes) ||
+      maxInflatedBytes < 0 ||
+      maxInflatedBytes >= 0xffffffff)
+  ) {
+    throw new StreamCodecError("payload_length");
+  }
   let payload: Uint8Array;
   try {
-    payload = unzlibSync(input.data);
+    payload =
+      maxInflatedBytes === undefined
+        ? unzlibSync(input.data)
+        : unzlibSync(input.data, { out: new Uint8Array(maxInflatedBytes + 1) });
   } catch {
     throw new StreamCodecError("inflate_failed");
+  }
+  if (maxInflatedBytes !== undefined && payload.length > maxInflatedBytes) {
+    throw new StreamCodecError("payload_length");
   }
   if (payload.length < 16) throw new StreamCodecError("payload_length");
   if (payload[0] !== 0x53 || payload[1] !== 0x54 || payload[2] !== 0x52 || payload[3] !== 0x4d)
@@ -102,7 +116,7 @@ export function decodeStream(input: DecodeStreamInput): readonly (number | null)
   if (payload[7] !== 0) throw new StreamCodecError("bad_endian");
   const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
   const headerN = view.getUint32(8, true);
-  if (!validN(input.n) || !validN(headerN)) throw new StreamCodecError("invalid_n");
+  if (!validN(headerN)) throw new StreamCodecError("invalid_n");
   if (headerN !== input.n) throw new StreamCodecError("n_mismatch");
   const bitmapLength = view.getUint32(12, true);
   const expectedBitmapLength = Math.ceil(headerN / 8);
