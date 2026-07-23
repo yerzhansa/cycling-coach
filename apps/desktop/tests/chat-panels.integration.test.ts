@@ -223,22 +223,52 @@ afterEach(async () => {
 });
 
 describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat panels", () => {
-  it("streams chat, persists units, preserves focus, and fits desktop geometry", async () => {
+  it("preserves IME composition until committed Enter", async () => {
     const { fixture, calls } = await launch({ width: 1440, height: 900, reducedMotion: false });
+    const composingDraft = "回復走を";
     const composingEnter = await fixture.evaluate<{
       readonly isComposing: boolean;
       readonly dispatchResult: boolean;
       readonly defaultPrevented: boolean;
       readonly text: string;
       readonly focused: boolean;
-      readonly athleteRows: number;
+      readonly chatStateUnchanged: boolean;
       readonly transcriptUnchanged: boolean;
+      readonly liveRegionUnchanged: boolean;
+      readonly athleteRows: number;
+      readonly quickActionClicks: number;
     }>(`
       const textarea = document.querySelector("#message");
+      const submit = document.querySelector('.composer button[type="submit"]');
+      const conversation = document.querySelector(".conversation");
       const transcript = document.querySelector(".chat-transcript");
-      const transcriptText = transcript.textContent;
-      textarea.value = "回復走を";
+      const liveRegion = document.querySelector(".new-conversation-status");
+      const quickActions = [...document.querySelectorAll(".coaching-shortcut")];
+      let quickActionClicks = 0;
+      const recordQuickActionClick = () => {
+        quickActionClicks += 1;
+      };
+      for (const quickAction of quickActions) {
+        quickAction.addEventListener("click", recordQuickActionClick);
+      }
+      textarea.value = ${JSON.stringify(composingDraft)};
       textarea.focus();
+      const chatStateBefore = JSON.stringify({
+        status: conversation.dataset.chatStatus,
+        textareaDisabled: textarea.disabled,
+        submitDisabled: submit.disabled,
+      });
+      const transcriptBefore = JSON.stringify({
+        html: transcript.innerHTML,
+        ariaLive: transcript.getAttribute("aria-live"),
+        ariaRelevant: transcript.getAttribute("aria-relevant"),
+        ariaAtomic: transcript.getAttribute("aria-atomic"),
+      });
+      const liveRegionBefore = JSON.stringify({
+        html: liveRegion.innerHTML,
+        role: liveRegion.getAttribute("role"),
+        ariaLive: liveRegion.getAttribute("aria-live"),
+      });
       const event = new KeyboardEvent("keydown", {
         key: "Enter",
         isComposing: true,
@@ -247,35 +277,116 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       });
       const dispatchResult = textarea.dispatchEvent(event);
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      for (const quickAction of quickActions) {
+        quickAction.removeEventListener("click", recordQuickActionClick);
+      }
       return {
         isComposing: event.isComposing,
         dispatchResult,
         defaultPrevented: event.defaultPrevented,
         text: textarea.value,
         focused: document.activeElement === textarea,
+        chatStateUnchanged:
+          JSON.stringify({
+            status: conversation.dataset.chatStatus,
+            textareaDisabled: textarea.disabled,
+            submitDisabled: submit.disabled,
+          }) === chatStateBefore,
+        transcriptUnchanged:
+          JSON.stringify({
+            html: transcript.innerHTML,
+            ariaLive: transcript.getAttribute("aria-live"),
+            ariaRelevant: transcript.getAttribute("aria-relevant"),
+            ariaAtomic: transcript.getAttribute("aria-atomic"),
+          }) === transcriptBefore,
+        liveRegionUnchanged:
+          JSON.stringify({
+            html: liveRegion.innerHTML,
+            role: liveRegion.getAttribute("role"),
+            ariaLive: liveRegion.getAttribute("aria-live"),
+          }) === liveRegionBefore,
         athleteRows: document.querySelectorAll(".chat-message--athlete").length,
-        transcriptUnchanged: transcript.textContent === transcriptText,
+        quickActionClicks,
       };
     `);
     expect(composingEnter).toEqual({
       isComposing: true,
       dispatchResult: true,
       defaultPrevented: false,
-      text: "回復走を",
+      text: composingDraft,
       focused: true,
-      athleteRows: 0,
+      chatStateUnchanged: true,
       transcriptUnchanged: true,
+      liveRegionUnchanged: true,
+      athleteRows: 0,
+      quickActionClicks: 0,
     });
     expect(calls.filter((call) => call.method === "chat")).toHaveLength(0);
 
     const committedMessage = "回復走を30分します。";
+    const committedEnter = await fixture.evaluate<{
+      readonly isComposing: boolean;
+      readonly dispatchResult: boolean;
+      readonly defaultPrevented: boolean;
+      readonly athleteMessages: readonly string[];
+      readonly quickActionClicks: number;
+    }>(`
+      const textarea = document.querySelector("#message");
+      const quickActions = [...document.querySelectorAll(".coaching-shortcut")];
+      let quickActionClicks = 0;
+      const recordQuickActionClick = () => {
+        quickActionClicks += 1;
+      };
+      for (const quickAction of quickActions) {
+        quickAction.addEventListener("click", recordQuickActionClick);
+      }
+      textarea.value = ${JSON.stringify(committedMessage)};
+      const conversation = document.querySelector(".conversation");
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      });
+      const dispatchResult = textarea.dispatchEvent(event);
+      const deadline = Date.now() + 5000;
+      while (conversation.dataset.chatStatus === "streaming" && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      for (const quickAction of quickActions) {
+        quickAction.removeEventListener("click", recordQuickActionClick);
+      }
+      return {
+        isComposing: event.isComposing,
+        dispatchResult,
+        defaultPrevented: event.defaultPrevented,
+        athleteMessages: [...document.querySelectorAll(".chat-message--athlete")].map(
+          (row) => row.querySelector(".chat-message__text")?.textContent ?? "",
+        ),
+        quickActionClicks,
+      };
+    `);
+    expect(committedEnter).toEqual({
+      isComposing: false,
+      dispatchResult: false,
+      defaultPrevented: true,
+      athleteMessages: [committedMessage],
+      quickActionClicks: 0,
+    });
+    expect(calls.filter((call) => call.method === "chat")).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: "chat",
+        params: { chatId: "desktop", message: committedMessage },
+      },
+    ]);
+  }, 30_000);
+
+  it("streams chat, persists units, preserves focus, and fits desktop geometry", async () => {
+    const { fixture, calls } = await launch({ width: 1440, height: 900, reducedMotion: false });
     const initial = await fixture.evaluate<{
       readonly location: string;
       readonly bridgeKeys: readonly string[];
       readonly thread: boolean;
-      readonly submitIsComposing: boolean;
-      readonly submitDispatchResult: boolean;
-      readonly submitDefaultPrevented: boolean;
       readonly partial: string;
       readonly final: string;
       readonly athleteStable: boolean;
@@ -355,13 +466,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         characterDataOldValue: true,
         subtree: true,
       });
-      textarea.value = ${JSON.stringify(committedMessage)};
-      const submitEvent = new KeyboardEvent("keydown", {
-        key: "Enter",
-        bubbles: true,
-        cancelable: true,
-      });
-      const submitDispatchResult = textarea.dispatchEvent(submitEvent);
+      textarea.value = "What should I ride?";
+      textarea.closest("form").requestSubmit();
       athleteRow ??= document.querySelector(".chat-message--athlete");
       const finalDeadline = Date.now() + 5000;
       let final = "";
@@ -410,9 +516,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         location: location.href,
         bridgeKeys,
         thread,
-        submitIsComposing: submitEvent.isComposing,
-        submitDispatchResult,
-        submitDefaultPrevented: submitEvent.defaultPrevented,
         partial,
         final,
         athleteStable: athleteStable && athleteRow === document.querySelector(".chat-message--athlete"),
@@ -452,9 +555,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "writeCredential",
       ],
       thread: true,
-      submitIsComposing: false,
-      submitDispatchResult: false,
-      submitDefaultPrevented: true,
       partial: "## Today’s ride\n\nHold   **ste",
       final: expect.stringContaining("<script>globalThis.hostile = true</script>"),
       athleteStable: true,
@@ -480,13 +580,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       wellnessValue: "65 ms",
       documentOverflow: false,
     });
-    expect(calls.filter((call) => call.method === "chat")).toEqual([
-      {
-        jsonrpc: "2.0",
-        method: "chat",
-        params: { chatId: "desktop", message: committedMessage },
-      },
-    ]);
     expect(calls.filter((call) => call.method === "hasSession")).toEqual([
       {
         jsonrpc: "2.0",
@@ -734,7 +827,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       {
         jsonrpc: "2.0",
         method: "chat",
-        params: { chatId: "desktop", message: committedMessage },
+        params: { chatId: "desktop", message: "What should I ride?" },
       },
       {
         jsonrpc: "2.0",
