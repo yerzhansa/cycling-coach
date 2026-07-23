@@ -1,6 +1,11 @@
 import { createServer } from "node:http";
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { loginCodex, refreshCodexToken, generatePKCE } from "../../src/agent/codex/oauth.js";
+import {
+  loginCodex,
+  refreshCodexToken,
+  generatePKCE,
+  type CodexLoginOptions,
+} from "../../src/agent/codex/oauth.js";
 import { RefreshTokenReusedError } from "../../src/auth/profiles.js";
 import { classifyFailure } from "../../src/agent/token-utils.js";
 
@@ -318,6 +323,69 @@ describe("generatePKCE", () => {
 });
 
 describe("loginCodex", () => {
+  it("keeps manual-code login available when another callback listener owns the port", async () => {
+    const foreignServer = createServer((_request, response) => {
+      response.end("foreign listener");
+    });
+    await new Promise<void>((resolve, reject) => {
+      foreignServer.once("error", reject);
+      foreignServer.listen(1455, "127.0.0.1", () => {
+        foreignServer.off("error", reject);
+        resolve();
+      });
+    });
+
+    try {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            access_token: TOKEN_WITH_ACCOUNT,
+            refresh_token: "obviously-fake-port-collision-refresh",
+            expires_in: 3600,
+          }),
+          { status: 200 },
+        ),
+      );
+      let authorizationInfo: Parameters<CodexLoginOptions["onAuth"]>[0] | undefined;
+      const onPrompt = vi.fn(async () => "unexpected-prompt-input");
+
+      const credentials = await loginCodex({
+        onAuth: (info) => {
+          authorizationInfo = info;
+        },
+        onManualCodeInput: async () => "obviously-fake-port-collision-code",
+        onPrompt,
+      });
+
+      expect(authorizationInfo).toMatchObject({
+        url: expect.stringMatching(/^https:\/\/auth\.openai\.com\/oauth\/authorize\?/),
+        callbackAvailable: false,
+      });
+      expect(onPrompt).not.toHaveBeenCalled();
+      expect(credentials).toMatchObject({
+        access: TOKEN_WITH_ACCOUNT,
+        refresh: "obviously-fake-port-collision-refresh",
+        accountId: "acct_x",
+      });
+      expect(foreignServer.listening).toBe(true);
+      expect(errorSpy).toHaveBeenCalledOnce();
+      expect(errorSpy).toHaveBeenCalledWith(
+        "[codex-oauth] Failed to bind http://127.0.0.1:1455 (",
+        "EADDRINUSE",
+        ") Falling back to manual paste.",
+      );
+      const logged = errorSpy.mock.calls.flat().join(" ");
+      expect(logged).not.toContain("obviously-fake-port-collision-code");
+      expect(logged).not.toContain("obviously-fake-port-collision-refresh");
+      expect(logged).not.toContain(TOKEN_WITH_ACCOUNT);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        foreignServer.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("aborts the callback wait and releases the registered port", async () => {
     const controller = new AbortController();
     const pending = loginCodex({
@@ -351,7 +419,8 @@ describe("loginCodex", () => {
     });
     let callback: Promise<Response> | undefined;
     const credentials = await loginCodex({
-      onAuth: ({ url }) => {
+      onAuth: ({ url, callbackAvailable }) => {
+        expect(callbackAvailable).toBe(true);
         const state = new URL(url).searchParams.get("state");
         callback = nativeFetch(
           `http://127.0.0.1:1455/auth/callback?code=obviously-fake-code&state=${state}`,

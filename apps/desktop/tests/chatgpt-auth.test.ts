@@ -279,6 +279,56 @@ describe("desktop ChatGPT auth", () => {
     });
   });
 
+  it("does not open or abort the browser flow when the callback listener is unavailable", async () => {
+    const directory = await configDir();
+    const openExternal = vi.fn(async () => {});
+    let reachedPrompt = false;
+    const auth = createChatGptAuth({
+      configDir: directory,
+      openExternal,
+      applyRuntimeConfig: async () => {},
+      dependencies: {
+        loginCodex: async (options) => {
+          options.onAuth({
+            url: "https://auth.openai.com/obviously-fake",
+            callbackAvailable: false,
+          });
+          expect(options.signal?.aborted).toBe(false);
+          reachedPrompt = true;
+          await options.onPrompt({ message: "obviously-fake" });
+          return credentials();
+        },
+      },
+    });
+
+    await expect(auth.login()).resolves.toEqual({
+      status: "refused",
+      reason: "callback-unavailable",
+    });
+    expect(reachedPrompt).toBe(true);
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it("treats missing callback availability as available for compatibility", async () => {
+    const directory = await configDir();
+    const openExternal = vi.fn(async () => {});
+    const auth = createChatGptAuth({
+      configDir: directory,
+      openExternal,
+      applyRuntimeConfig: async () => {},
+      dependencies: {
+        loginCodex: async (options) => {
+          options.onAuth({ url: "https://auth.openai.com/obviously-fake" });
+          await vi.waitFor(() => expect(openExternal).toHaveBeenCalledOnce());
+          return credentials();
+        },
+      },
+    });
+
+    await expect(auth.login()).resolves.toEqual({ status: "configured", runtimeReady: true });
+    expect(openExternal).toHaveBeenCalledOnce();
+  });
+
   it("opens the browser, stores first, and applies a keyless Codex request", async () => {
     const directory = await configDir();
     const order: string[] = [];
@@ -304,7 +354,10 @@ describe("desktop ChatGPT auth", () => {
         writeProfile,
         loginCodex: async (options) => {
           expect(options.signal).toBeInstanceOf(AbortSignal);
-          options.onAuth({ url: "https://auth.openai.com/obviously-fake" });
+          options.onAuth({
+            url: "https://auth.openai.com/obviously-fake",
+            callbackAvailable: true,
+          });
           await vi.waitFor(() => expect(openExternal).toHaveBeenCalledOnce());
           return credentials();
         },

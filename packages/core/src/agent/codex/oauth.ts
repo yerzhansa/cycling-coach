@@ -24,7 +24,7 @@ export interface CodexCredentials {
 }
 
 export interface CodexLoginOptions {
-  onAuth: (info: { url: string; instructions?: string }) => void;
+  onAuth: (info: { url: string; instructions?: string; callbackAvailable?: boolean }) => void;
   onPrompt: (prompt: { message: string }) => Promise<string>;
   onProgress?: (message: string) => void;
   onManualCodeInput?: () => Promise<string>;
@@ -130,6 +130,7 @@ async function createAuthorizationFlow(
 }
 
 interface OAuthServerHandle {
+  callbackAvailable: boolean;
   close: () => Promise<void>;
   cancelWait: () => void;
   waitForCode: () => Promise<{ code: string } | null>;
@@ -178,6 +179,7 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerHandle> {
     server
       .listen(CALLBACK_PORT, CALLBACK_HOST, () => {
         resolve({
+          callbackAvailable: true,
           close: () => new Promise((resolveClose) => server.close(() => resolveClose())),
           cancelWait: () => settleWait?.(null),
           waitForCode: () => waitForCodePromise,
@@ -191,6 +193,7 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerHandle> {
         );
         settleWait?.(null);
         resolve({
+          callbackAvailable: false,
           close: async () => {
             try {
               server.close();
@@ -387,6 +390,7 @@ export async function loginCodex(options: CodexLoginOptions): Promise<CodexCrede
     options.onAuth({
       url,
       instructions: "A browser window should open. Complete login to finish.",
+      callbackAvailable: server.callbackAvailable,
     });
     if (options.onManualCodeInput) {
       // Race the browser callback against manual paste — first to yield a code wins.
