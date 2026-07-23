@@ -6,6 +6,7 @@ import { zodSchema } from "ai";
 import { z } from "zod";
 import type { EngineHostPorts } from "../src/host-ports.js";
 import { normalizeError } from "../src/agent/codex-bridge.js";
+import { usageFieldsFromResult } from "../src/llm-types.js";
 import {
   classifyFailure,
   isContextOverflowError,
@@ -52,17 +53,30 @@ async function loadBridgeWithMocks(opts: {
   };
 }
 
-function asstMsg(overrides: {
-  text?: string;
-  toolCalls?: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
-  usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number };
-  stopReason?: "stop" | "length" | "toolUse" | "error";
-} = {}) {
+function asstMsg(
+  overrides: {
+    text?: string;
+    toolCalls?: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
+    usage?: {
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+      totalTokens: number;
+    };
+    stopReason?: "stop" | "length" | "toolUse" | "error";
+  } = {},
+) {
   return {
     text: overrides.text ?? "hello",
     toolCalls: overrides.toolCalls ?? [],
-    usage:
-      overrides.usage ?? { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 },
+    usage: overrides.usage ?? {
+      input: 10,
+      output: 5,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 15,
+    },
     stopReason: overrides.stopReason ?? "stop",
   };
 }
@@ -83,7 +97,262 @@ describe("codex-bridge", () => {
     expect(result.finishReason).toBe("stop");
     expect(result.usage.inputTokens).toBe(10);
     expect(result.usage.outputTokens).toBe(5);
+    expect(result.usage.totalTokens).toBe(15);
+    expect(result.usage.inputTokenDetails).toEqual({
+      noCacheTokens: 10,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
     expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps cached input inclusively while preserving uncached input, cache details, totals, and cost", async () => {
+    const complete = vi.fn(async () =>
+      asstMsg({
+        usage: {
+          input: 2_000,
+          output: 0,
+          cacheRead: 28_000,
+          cacheWrite: 0,
+          totalTokens: 30_000,
+        },
+      }),
+    );
+    const { codexGenerateText } = await loadBridgeWithMocks({ complete });
+
+    const result = await codexGenerateText({
+      messages: [{ role: "user", content: "hi" }],
+      modelId: "gpt-5.2",
+      profileName: "openai-codex",
+    });
+
+    expect(result.usage).toMatchObject({
+      inputTokens: 30_000,
+      outputTokens: 0,
+      totalTokens: 30_000,
+      cachedInputTokens: 28_000,
+      inputTokenDetails: {
+        noCacheTokens: 2_000,
+        cacheReadTokens: 28_000,
+        cacheWriteTokens: 0,
+      },
+    });
+    expect(result.totalUsage).toEqual(result.usage);
+    expect(result.cost?.total).toBe(0.0084);
+  });
+
+  it("keeps an inclusive input sum exactly at Number.MAX_SAFE_INTEGER", async () => {
+    const complete = vi.fn(async () =>
+      asstMsg({
+        usage: {
+          input: Number.MAX_SAFE_INTEGER - 2,
+          output: 0,
+          cacheRead: 1,
+          cacheWrite: 1,
+          totalTokens: Number.MAX_SAFE_INTEGER,
+        },
+      }),
+    );
+    const { codexGenerateText } = await loadBridgeWithMocks({ complete });
+
+    const result = await codexGenerateText({
+      messages: [{ role: "user", content: "hi" }],
+      modelId: "gpt-5.2",
+      profileName: "openai-codex",
+    });
+
+    expect(result.usage.inputTokens).toBe(Number.MAX_SAFE_INTEGER);
+    expect(result.usage.inputTokenDetails).toEqual({
+      noCacheTokens: Number.MAX_SAFE_INTEGER - 2,
+      cacheReadTokens: 1,
+      cacheWriteTokens: 1,
+    });
+    expect(result.totalUsage?.inputTokens).toBe(Number.MAX_SAFE_INTEGER);
+    expect(result.cost).toBeDefined();
+  });
+
+  it("omits an inclusive input sum that exceeds Number.MAX_SAFE_INTEGER", async () => {
+    const complete = vi.fn(async () =>
+      asstMsg({
+        usage: {
+          input: Number.MAX_SAFE_INTEGER - 1,
+          output: 0,
+          cacheRead: 2,
+          cacheWrite: 0,
+          totalTokens: Number.MAX_SAFE_INTEGER,
+        },
+      }),
+    );
+    const { codexGenerateText } = await loadBridgeWithMocks({ complete });
+
+    const result = await codexGenerateText({
+      messages: [{ role: "user", content: "hi" }],
+      modelId: "gpt-5.2",
+      profileName: "openai-codex",
+    });
+
+    expect(result.usage.inputTokens).toBeUndefined();
+    expect(result.usage.inputTokenDetails).toEqual({
+      noCacheTokens: Number.MAX_SAFE_INTEGER - 1,
+      cacheReadTokens: 2,
+      cacheWriteTokens: 0,
+    });
+    expect(result.totalUsage).toBeUndefined();
+    expect(result.cost).toBeUndefined();
+  });
+
+  it("does not expose or persist negative uncached input when cached input exceeds provider input", async () => {
+    const complete = vi.fn(async () =>
+      asstMsg({
+        usage: {
+          input: -1,
+          output: 0,
+          cacheRead: 11,
+          cacheWrite: 0,
+          totalTokens: 10,
+        },
+      }),
+    );
+    const { codexGenerateText } = await loadBridgeWithMocks({ complete });
+
+    const result = await codexGenerateText({
+      messages: [{ role: "user", content: "hi" }],
+      modelId: "gpt-5.2",
+      profileName: "openai-codex",
+    });
+
+    expect(result.text).toBe("hello");
+    expect(result.usage.inputTokens).toBeUndefined();
+    expect(result.usage.inputTokenDetails).toEqual({
+      noCacheTokens: undefined,
+      cacheReadTokens: 11,
+      cacheWriteTokens: 0,
+    });
+    expect(result.totalUsage).toBeUndefined();
+    expect(result.cost).toBeUndefined();
+    expect(usageFieldsFromResult(result)).toMatchObject({
+      inputTokens: undefined,
+      outputTokens: undefined,
+      totalTokens: undefined,
+      cacheReadTokens: undefined,
+      cacheWriteTokens: undefined,
+      cost: undefined,
+    });
+  });
+
+  it("maps cached input for the final step and accumulated multi-step usage", async () => {
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(
+        asstMsg({
+          stopReason: "toolUse",
+          toolCalls: [{ id: "c1", name: "noop", arguments: {} }],
+          usage: {
+            input: 100,
+            output: 20,
+            cacheRead: 50,
+            cacheWrite: 10,
+            totalTokens: 180,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        asstMsg({
+          usage: {
+            input: 200,
+            output: 30,
+            cacheRead: 100,
+            cacheWrite: 20,
+            totalTokens: 350,
+          },
+        }),
+      );
+    const { codexGenerateText } = await loadBridgeWithMocks({ complete });
+
+    const result = await codexGenerateText({
+      messages: [{ role: "user", content: "hi" }],
+      tools: {} as never,
+      modelId: "gpt-5.2",
+      profileName: "openai-codex",
+    });
+
+    expect(result.steps).toBe(2);
+    expect(result.usage).toMatchObject({
+      inputTokens: 320,
+      outputTokens: 30,
+      totalTokens: 350,
+      cachedInputTokens: 100,
+      inputTokenDetails: {
+        noCacheTokens: 200,
+        cacheReadTokens: 100,
+        cacheWriteTokens: 20,
+      },
+    });
+    expect(result.totalUsage).toMatchObject({
+      inputTokens: 480,
+      outputTokens: 50,
+      totalTokens: 530,
+      cachedInputTokens: 150,
+      inputTokenDetails: {
+        noCacheTokens: 300,
+        cacheReadTokens: 150,
+        cacheWriteTokens: 30,
+      },
+    });
+  });
+
+  it("keeps the successful final step when whole-turn accumulation overflows", async () => {
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(
+        asstMsg({
+          text: "working",
+          stopReason: "toolUse",
+          toolCalls: [{ id: "c1", name: "noop", arguments: {} }],
+          usage: {
+            input: Number.MAX_SAFE_INTEGER - 10,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: Number.MAX_SAFE_INTEGER - 10,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        asstMsg({
+          text: "done",
+          usage: {
+            input: 11,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 11,
+          },
+        }),
+      );
+    const { codexGenerateText } = await loadBridgeWithMocks({ complete });
+
+    const result = await codexGenerateText({
+      messages: [{ role: "user", content: "hi" }],
+      tools: {} as never,
+      modelId: "gpt-5.2",
+      profileName: "openai-codex",
+    });
+
+    expect(result.text).toBe("done");
+    expect(result.steps).toBe(2);
+    expect(result.usage).toMatchObject({
+      inputTokens: 11,
+      outputTokens: 0,
+      totalTokens: 11,
+      inputTokenDetails: {
+        noCacheTokens: 11,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      },
+    });
+    expect(result.totalUsage).toBeUndefined();
+    expect(result.cost).toBeUndefined();
   });
 
   it("maps codex rate-limit errors so isRateLimitError() recognizes them", async () => {
@@ -175,7 +444,9 @@ describe("codex-bridge", () => {
 
   it("forwards opts.cacheKey as the request sessionId; omits it when absent", async () => {
     const completeWithKey = vi.fn(async () => asstMsg());
-    const { codexGenerateText: genWithKey } = await loadBridgeWithMocks({ complete: completeWithKey });
+    const { codexGenerateText: genWithKey } = await loadBridgeWithMocks({
+      complete: completeWithKey,
+    });
 
     await genWithKey({
       messages: [{ role: "user", content: "hi" }],
@@ -198,9 +469,7 @@ describe("codex-bridge", () => {
       profileName: "openai-codex",
     });
 
-    expect(completeNoKey).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: undefined }),
-    );
+    expect(completeNoKey).toHaveBeenCalledWith(expect.objectContaining({ sessionId: undefined }));
   });
 
   it("forwards opts.signal to the codex response request", async () => {
@@ -215,9 +484,7 @@ describe("codex-bridge", () => {
       signal,
     });
 
-    expect(complete).toHaveBeenCalledWith(
-      expect.objectContaining({ signal }),
-    );
+    expect(complete).toHaveBeenCalledWith(expect.objectContaining({ signal }));
   });
 
   it("surfaces finishReason=length so isContextOverflowError can catch it upstream via retry", async () => {
@@ -331,10 +598,12 @@ describe("codex-bridge", () => {
 
   it("forwards opts.signal to codex tool execution", async () => {
     let toolOptions: { abortSignal?: AbortSignal } | undefined;
-    const execute = vi.fn(async (_input: { minutes: number }, options: { abortSignal?: AbortSignal }) => {
-      toolOptions = options;
-      return "logged";
-    });
+    const execute = vi.fn(
+      async (_input: { minutes: number }, options: { abortSignal?: AbortSignal }) => {
+        toolOptions = options;
+        return "logged";
+      },
+    );
     const tools = {
       log_ride: {
         description: "log a ride",
@@ -414,7 +683,10 @@ describe("codex-bridge normalizeError", () => {
   });
 
   it("keeps a 429 as rate limit, not server error", () => {
-    const normalized = normalizeError(httpError(429, "quota exhausted (status=429)"), classifyFailure);
+    const normalized = normalizeError(
+      httpError(429, "quota exhausted (status=429)"),
+      classifyFailure,
+    );
     expect(isRateLimitError(normalized)).toBe(true);
     expect(isServerError(normalized)).toBe(false);
   });

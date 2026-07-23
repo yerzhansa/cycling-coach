@@ -84,6 +84,42 @@ function validProviderCost(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
+function safeTokenSum(...values: number[]): number | undefined {
+  let total = 0;
+  for (const value of values) {
+    if (!validToken(value)) return undefined;
+    total += value;
+    if (!Number.isSafeInteger(total)) return undefined;
+  }
+  return total;
+}
+
+function catalogInputTokens(line: UsageLedgerLine): number | undefined {
+  const inputTokens = line.inputTokens;
+  if (line.provider !== "openai-codex" || inputTokens === undefined) return inputTokens;
+
+  // Older Codex rows stored uncached input while retaining the provider's
+  // inclusive total. Only that exact identity can distinguish them safely
+  // from current rows without rewriting the ledger.
+  const { outputTokens, totalTokens, cacheReadTokens, cacheWriteTokens } = line;
+  if (
+    outputTokens === undefined ||
+    totalTokens === undefined ||
+    cacheReadTokens === undefined ||
+    cacheWriteTokens === undefined
+  ) {
+    return inputTokens;
+  }
+
+  const cachedInputTokens = safeTokenSum(cacheReadTokens, cacheWriteTokens);
+  if (cachedInputTokens === undefined || cachedInputTokens === 0) return inputTokens;
+
+  const legacyTotalTokens = safeTokenSum(inputTokens, cachedInputTokens, outputTokens);
+  if (legacyTotalTokens !== totalTokens) return inputTokens;
+
+  return safeTokenSum(inputTokens, cachedInputTokens) ?? inputTokens;
+}
+
 function readDailyCap(path: string): number {
   try {
     return DailySpendCapSchema.parse(JSON.parse(readFileSync(path, "utf8")) as unknown).dailyCapUsd;
@@ -202,7 +238,7 @@ export function createSpendMeterService(input: CreateSpendMeterServiceInput): Sp
         line.inputTokens !== undefined &&
         line.outputTokens !== undefined
           ? priceInclusiveUsage(line.provider, line.model, {
-              inputTokens: line.inputTokens,
+              inputTokens: catalogInputTokens(line) ?? line.inputTokens,
               outputTokens: line.outputTokens,
               cacheReadTokens,
               cacheWriteTokens: line.cacheWriteTokens ?? 0,
