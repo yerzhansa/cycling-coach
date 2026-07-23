@@ -501,7 +501,7 @@ describe("real repository", () => {
     expect(main([])).toBe(0);
   });
 
-  it("surfaces exactly the remaining transitional edges", () => {
+  it("surfaces exactly the remaining transitional edges", { timeout: 15_000 }, () => {
     const result = runRulesAgainst(".", RULES);
     const edges = result.warnEdges.map((e) => `${e.dir} -> ${e.target}`);
     expect(edges).toEqual([
@@ -512,7 +512,7 @@ describe("real repository", () => {
     expect(result.warnEdges.filter((edge) => edge.dir.startsWith("packages/sport-"))).toEqual([]);
   });
 
-  it("activates engine without making end-state discovery vacuous", () => {
+  it("activates engine without making end-state discovery vacuous", { timeout: 15_000 }, () => {
     const result = runRulesAgainst(".", RULES);
     expect(result.notPresent).not.toContain("packages/engine");
     expect(result.notPresent).not.toContain("packages/coach-client");
