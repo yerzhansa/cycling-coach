@@ -4,9 +4,9 @@ import review from "../skills/review.md";
 
 describe("cycling review guidance", () => {
   it("uses canonical workout grouping instead of provider-only grouping fields", () => {
-    expect(soul).toContain("`workoutId`");
-    expect(soul).toContain("`sessionSequence`");
-    expect(soul).toContain("do not assume");
+    expect(review).toContain("`workoutId`");
+    expect(review).toContain("`sessionSequence`");
+    expect(review).toContain("more than three ordered sport and transition activities");
     expect(soul).not.toContain("sub_type");
   });
 
