@@ -193,6 +193,34 @@ function buttonWithText(document: FakeDocument, text: string): FakeElement {
 }
 
 describe("mounted onboarding", () => {
+  it("discloses distinct credential storage without starting sign-in, writing, or advancing", async () => {
+    const document = new FakeDocument();
+    const onboardingBridge = bridge(async () => ({
+      status: "configured",
+      runtimeReady: true,
+    }));
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: onboardingBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    const stateBeforeReading = controller.state();
+
+    const disclosure = document.body.querySelector(".onboarding-copy");
+    expect(disclosure?.textContent).toContain("ChatGPT sign-in is saved in a local profile file.");
+    expect(disclosure?.textContent).toContain("API keys are encrypted by macOS.");
+    expect(disclosure?.textContent).toContain(
+      "The local coaching service uses your choice to contact the provider.",
+    );
+
+    expect(onboardingBridge.chatGptLogin).not.toHaveBeenCalled();
+    expect(onboardingBridge.writeCredential).not.toHaveBeenCalled();
+    expect(controller.state()).toEqual(stateBeforeReading);
+    expect(controller.state().step).toBe("coach-keys");
+  });
+
   it("runs configured ChatGPT sign-in again through pending to configured", async () => {
     const document = new FakeDocument();
     let resolveLogin!: (result: ChatGptLoginResult) => void;
