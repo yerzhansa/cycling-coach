@@ -13,25 +13,65 @@ const reader: AthleteDataReader = {
   listActivities: async () => ({ ok: true, value: [{ marker: "store" }] }),
   getActivity: async () => ({ ok: true, value: {} }),
   getStreams: async () => ({ ok: true, value: {} }),
-  listCalendar: async () => ({ ok: false, error: "store_read_unavailable",
-    message: "Calendar reads are not available from the local training store." }),
+  listCalendar: async () => ({
+    ok: false,
+    error: "store_read_unavailable",
+    message: "Calendar reads are not available from the local training store.",
+  }),
   freshness: () => undefined,
 };
 
 describe("cycling data-source tools", () => {
   it("routes the cycling activity registration through the selected reader", async () => {
-    const deps = { llm: {}, intervals: null, athleteData: reader,
-      calendarMutations: createMissingPlatformCalendarMutations(), memory: {}, secrets: {}, tz: "UTC" } as CoreDeps;
-    const registration = cyclingSport.tools(deps).find((item) => item.name === "intervals_fetch_activities")!;
-    await expect(registration.tool.execute!({ oldest: "1998-01-01" }, {} as never))
-      .resolves.toEqual([{ marker: "store" }]);
+    const deps = {
+      llm: {},
+      intervals: null,
+      athleteData: reader,
+      calendarMutations: createMissingPlatformCalendarMutations(),
+      memory: {},
+      secrets: {},
+      tz: "UTC",
+    } as CoreDeps;
+    const registration = cyclingSport
+      .tools(deps)
+      .find((item) => item.name === "intervals_fetch_activities")!;
+    expect(registration.description).toContain("recorded activity summaries");
+    expect(registration.description).toContain("bounded source-neutral");
+    expect(registration.description).toContain("other readers");
+    expect(registration.description).toContain("narrow the date range");
+    expect(registration.description).not.toContain("intervals.icu");
+    expect(registration.description).not.toContain("load, intensity");
+    await expect(
+      registration.tool.execute!({ oldest: "1998-01-01" }, {} as never),
+    ).resolves.toEqual([{ marker: "store" }]);
   });
 
   it("keeps create registered and returns the exact missing-credential error", async () => {
-    const tools = createCyclingTools({} as never, null, "UTC", createMissingPlatformCalendarMutations());
-    const result = await tools.intervals_create_workout!.execute!({ date: "1998-07-18",
-      workout: { name: "Synthetic", steps: [{ type: "steady", duration: { value: 5, unit: "minutes" },
-        power: { kind: "percent_ftp", value: 70 } }] } }, {} as never);
-    expect(result).toEqual({ error: "platform_credentials_required", message: "Calendar changes need platform credentials." });
+    const tools = createCyclingTools(
+      {} as never,
+      null,
+      "UTC",
+      createMissingPlatformCalendarMutations(),
+    );
+    const result = await tools.intervals_create_workout!.execute!(
+      {
+        date: "1998-07-18",
+        workout: {
+          name: "Synthetic",
+          steps: [
+            {
+              type: "steady",
+              duration: { value: 5, unit: "minutes" },
+              power: { kind: "percent_ftp", value: 70 },
+            },
+          ],
+        },
+      },
+      {} as never,
+    );
+    expect(result).toEqual({
+      error: "platform_credentials_required",
+      message: "Calendar changes need platform credentials.",
+    });
   });
 });

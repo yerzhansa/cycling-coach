@@ -1,1 +1,1 @@
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;

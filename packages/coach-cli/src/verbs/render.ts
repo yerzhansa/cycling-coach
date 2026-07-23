@@ -3,6 +3,7 @@ import {
   JsonRpcResponseEnvelopeSchema,
   serializeCoachRpcEnvelope,
   type CoachRpcNotificationEnvelope,
+  type ImportFilesRpcResult,
   type JsonRpcResponseEnvelope,
 } from "@enduragent/coach-contract";
 import type { CoachClientTerminalEnvelope } from "@enduragent/coach-client";
@@ -50,15 +51,13 @@ export function createCoachVerbRenderer(
         return;
       }
       if (method === "importFiles") {
-        const result = envelope.result as {
-          readonly files: {
-            readonly total: number;
-            readonly imported: number;
-            readonly quarantined: number;
-          };
-        };
+        const result = envelope.result as ImportFilesRpcResult;
+        const availability =
+          result.publication.status === "available"
+            ? "Coaching access to activities and streams is available."
+            : "Coaching access to activities and streams is temporarily unavailable; retry the import.";
         terminal.stdout.write(
-          `Imported ${result.files.imported} of ${result.files.total} files (${result.files.quarantined} quarantined).\n`,
+          `Local library import: ${result.files.imported} of ${result.files.total} files imported (${result.files.quarantined} quarantined). ${availability}\n`,
         );
         return;
       }

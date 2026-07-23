@@ -46,7 +46,7 @@ import { createUnitsPreferenceService } from "./units-preference.js";
 export interface CreateCoachOperationsInput {
   readonly home: AthleteHome;
   readonly context: CoachStoreWriterContext;
-  readonly runtime: Pick<LocalStoreRuntime, "runWindowAfter">;
+  readonly runtime: Pick<LocalStoreRuntime, "runWindowAfter" | "runExclusive" | "runActivityWrite">;
   readonly intervalsCredentials: Readonly<{
     read(): Promise<Readonly<{ apiKey: string; athleteId: string }>>;
   }>;
@@ -97,7 +97,6 @@ export function createCoachOperations(
   const unitsPreference = createUnitsPreferenceService(createUnitsPreferenceRepository(store));
   const importFiles = dependencies.importFiles ?? importFilesWithReport;
   const backfill = dependencies.backfill ?? runIntervalsBackfillInWriter;
-  const enqueueStoreOperation = createSerializedLane();
   const enqueueRuntimeConfiguration = createSerializedLane();
 
   const deliver = (
@@ -114,32 +113,39 @@ export function createCoachOperations(
     importFiles(request: ImportFilesRpcParams, onEvent): Promise<ImportFilesRpcResult> {
       const parsedRequest = ImportFilesRpcParamsSchema.parse(request);
       const paths = [...parsedRequest.paths];
-      return enqueueStoreOperation(async () => {
-        deliver(onEvent, { phase: "started", completed: 0, total: paths.length });
-        const report = await importFiles({ inputPaths: paths, archiveDir, store });
-        const result = ImportFilesRpcResultSchema.parse({
-          schemaVersion: 1,
-          files: {
-            total: report.files.length,
-            imported: report.files.filter((file) => file.outcome === "imported").length,
-            quarantined: report.files.filter((file) => file.outcome === "quarantined").length,
-          },
-          changes: {
-            rawFilesInserted: report.inserts.raw_file,
-            sourceRecordsInserted: report.inserts.source_record,
-            sourceRecordsUpdated: report.updates.source_record,
-            relinkedSourceRecords: report.updates.relinked_source_records,
-          },
+      return input.runtime
+        .runActivityWrite(async () => {
+          deliver(onEvent, { phase: "started", completed: 0, total: paths.length });
+          return importFiles({ inputPaths: paths, archiveDir, store });
+        })
+        .then(({ value: report, activityReadAvailable }) => {
+          const result = ImportFilesRpcResultSchema.parse({
+            schemaVersion: 2,
+            files: {
+              total: report.files.length,
+              imported: report.files.filter((file) => file.outcome === "imported").length,
+              quarantined: report.files.filter((file) => file.outcome === "quarantined").length,
+            },
+            changes: {
+              rawFilesInserted: report.inserts.raw_file,
+              sourceRecordsInserted: report.inserts.source_record,
+              sourceRecordsUpdated: report.updates.source_record,
+              relinkedSourceRecords: report.updates.relinked_source_records,
+            },
+            publication: {
+              scope: "activities-and-streams",
+              status: activityReadAvailable ? "available" : "retryable-failure",
+            },
+          });
+          deliver(onEvent, { phase: "completed", completed: paths.length, total: paths.length });
+          return result;
         });
-        deliver(onEvent, { phase: "completed", completed: paths.length, total: paths.length });
-        return result;
-      });
     },
     sync(request: SyncRpcParams, onEvent): Promise<SyncRpcResult> {
       SyncRpcParamsSchema.parse(request);
-      return enqueueStoreOperation(async () => {
-        deliver(onEvent, { phase: "started", completed: 0, total: 1 });
-        const window = await input.runtime.runWindowAfter(async (signal) => {
+      deliver(onEvent, { phase: "started", completed: 0, total: 1 });
+      return input.runtime
+        .runWindowAfter(async (signal) => {
           const credentials = await input.intervalsCredentials.read();
           if (credentials.apiKey.length === 0) return;
           await backfill({
@@ -150,24 +156,25 @@ export function createCoachOperations(
             historyNewestDate: input.historyNewestDate(),
             signal,
           });
+        })
+        .then((window) => {
+          const result = SyncRpcResultSchema.parse({
+            schemaVersion: 1,
+            published: window.published,
+            referenceSucceeded: window.legacySucceeded,
+            requests: {
+              store: window.counts.storeRequests,
+              reference: window.counts.legacyRequests,
+              total: window.counts.totalRequests,
+            },
+          });
+          deliver(onEvent, { phase: "completed", completed: 1, total: 1 });
+          return result;
         });
-        const result = SyncRpcResultSchema.parse({
-          schemaVersion: 1,
-          published: window.published,
-          referenceSucceeded: window.legacySucceeded,
-          requests: {
-            store: window.counts.storeRequests,
-            reference: window.counts.legacyRequests,
-            total: window.counts.totalRequests,
-          },
-        });
-        deliver(onEvent, { phase: "completed", completed: 1, total: 1 });
-        return result;
-      });
     },
     saveIntake(request: SaveIntakeRpcParams): Promise<SaveIntakeRpcResult> {
       const parsedRequest = SaveIntakeRpcParamsSchema.parse(request);
-      return enqueueStoreOperation(async () => {
+      return input.runtime.runExclusive(async () => {
         const deviceId = await identity.deviceId();
         const stamp = identity.hlcStamp();
         await intake.replace({
@@ -193,7 +200,7 @@ export function createCoachOperations(
             },
           });
         };
-        return parsedRequest.intervals === undefined ? apply() : enqueueStoreOperation(apply);
+        return parsedRequest.intervals === undefined ? apply() : input.runtime.runExclusive(apply);
       });
     },
     getRuntimeConfig(request: GetRuntimeConfigRpcParams): Promise<GetRuntimeConfigRpcResult> {
@@ -207,13 +214,13 @@ export function createCoachOperations(
     },
     getUnitsPreference(request: GetUnitsPreferenceRpcParams): Promise<GetUnitsPreferenceRpcResult> {
       GetUnitsPreferenceRpcParamsSchema.parse(request);
-      return enqueueStoreOperation(async () =>
+      return input.runtime.runExclusive(async () =>
         GetUnitsPreferenceRpcResultSchema.parse(await unitsPreference.get()),
       );
     },
     setUnitsPreference(request: SetUnitsPreferenceRpcParams): Promise<SetUnitsPreferenceRpcResult> {
       const parsedRequest = SetUnitsPreferenceRpcParamsSchema.parse(request);
-      return enqueueStoreOperation(async () =>
+      return input.runtime.runExclusive(async () =>
         SetUnitsPreferenceRpcResultSchema.parse(await unitsPreference.set(parsedRequest.value)),
       );
     },

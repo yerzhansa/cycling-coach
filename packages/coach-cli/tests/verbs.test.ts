@@ -272,26 +272,40 @@ describe("verb rendering", () => {
       signal,
       callerCwd: "/synthetic/caller",
     });
-    const importResult = {
-      schemaVersion: 1,
-      files: { total: 1, imported: 1, quarantined: 0 },
-      changes: {
-        rawFilesInserted: 1,
-        sourceRecordsInserted: 1,
-        sourceRecordsUpdated: 0,
-        relinkedSourceRecords: 0,
-      },
-    };
-    const importIo = terminal();
-    await expect(
-      runCoachVerb({
-        request: importRequest,
-        outputMode: "text",
-        terminal: importIo.value,
-        transport: deliveringTransport({ terminal: success(importResult) }),
-      }),
-    ).resolves.toBe(EXIT_SUCCESS);
-    expect(importIo.stdout.read()).toBe("Imported 1 of 1 files (0 quarantined).\n");
+    for (const [status, expected] of [
+      [
+        "available",
+        "Local library import: 1 of 1 files imported (0 quarantined). Coaching access to activities and streams is available.\n",
+      ],
+      [
+        "retryable-failure",
+        "Local library import: 1 of 1 files imported (0 quarantined). Coaching access to activities and streams is temporarily unavailable; retry the import.\n",
+      ],
+    ] as const) {
+      const importIo = terminal();
+      await expect(
+        runCoachVerb({
+          request: importRequest,
+          outputMode: "text",
+          terminal: importIo.value,
+          transport: deliveringTransport({
+            terminal: success({
+              schemaVersion: 2,
+              files: { total: 1, imported: 1, quarantined: 0 },
+              changes: {
+                rawFilesInserted: 1,
+                sourceRecordsInserted: 1,
+                sourceRecordsUpdated: 0,
+                relinkedSourceRecords: 0,
+              },
+              publication: { scope: "activities-and-streams", status },
+            }),
+          }),
+        }),
+      ).resolves.toBe(EXIT_SUCCESS);
+      expect(importIo.stdout.read()).toBe(expected);
+      expect(importIo.stdout.read()).not.toMatch(/\b(?:updated|published|internal)\b/iu);
+    }
     for (const [published, expected] of [
       [true, "Training data refreshed.\n"],
       [false, "Training data checked; no new snapshot was published.\n"],

@@ -597,7 +597,7 @@ describe("RPC receive and observers", () => {
           wellness: {},
         },
         importFiles: {
-          schemaVersion: 1,
+          schemaVersion: 2,
           files: { total: 1, imported: 1, quarantined: 0 },
           changes: {
             rawFilesInserted: 1,
@@ -605,6 +605,7 @@ describe("RPC receive and observers", () => {
             sourceRecordsUpdated: 0,
             relinkedSourceRecords: 0,
           },
+          publication: { scope: "activities-and-streams", status: "available" },
         },
         sync: {
           schemaVersion: 1,
@@ -691,7 +692,7 @@ describe("RPC receive and observers", () => {
     await expect(client.call("getAthleteState", {})).resolves.toMatchObject({ schemaVersion: "1" });
     await expect(
       client.call("importFiles", { paths: ["/synthetic/ride.fit"] }),
-    ).resolves.toMatchObject({ schemaVersion: 1 });
+    ).resolves.toMatchObject({ schemaVersion: 2 });
     await expect(client.call("sync", {})).resolves.toMatchObject({ schemaVersion: 1 });
     await expect(
       client.call("saveIntake", {

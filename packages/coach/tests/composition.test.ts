@@ -193,6 +193,16 @@ function runtime(
       trace.push("run-window");
       return { published: true, counts: ledger.snapshot(), legacySucceeded: true };
     });
+  let admission = Promise.resolve();
+  const runExclusive: LocalStoreRuntime["runExclusive"] = (work) => {
+    const run = () => work(new AbortController().signal);
+    const task = admission.then(run, run);
+    admission = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
+  };
   return {
     athleteData: athleteData(),
     attemptLedgerForRun: () => ledger,
@@ -200,6 +210,13 @@ function runtime(
     async runWindowAfter(work) {
       await work(new AbortController().signal);
       return runWindow();
+    },
+    runExclusive,
+    async runActivityWrite(work) {
+      return {
+        value: await runExclusive(work),
+        activityReadAvailable: true,
+      };
     },
     startScheduler() {
       trace.push("start-scheduler");

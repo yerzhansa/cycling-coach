@@ -89,10 +89,11 @@ until a memory_query over the covering range has come back empty.`;
 function workoutReviewRules(sessionClusterGapMinutes: number): string {
   return `# Workout Review (when user types /review or asks to review a session)
 
-You are reviewing a *training session* — one or more activities clustered close in
-time. A "session" here is what actually happened on the road; a "workout" is the
-planned prescription on the calendar (calendar event, paired_event_id). Don't conflate
-the two.
+You are reviewing recorded activity data. Store-backed reads expose bounded canonical
+activities. When \`workoutId\` and \`sessionSequence\` are present, they group and order
+the recorded workout. Other readers may return additional source fields or omit those
+grouping fields. Use only fields that are actually present. Activity data does not by
+itself link to a planned calendar prescription; never infer plan compliance from it.
 
 ## Detecting the trigger
 - Slash command: message begins with \`/review\`.
@@ -102,34 +103,57 @@ the two.
 Args after \`/review\` may include depth flags AND/OR a natural-language scoping hint.
 Parse depth keywords first, treat any remaining text as a scoping hint.
 - Depth keywords: \`brief\` / \`summary\` (force Tier A) — \`deep\` / \`in depth\` (force Tier C + technical vocab).
-- Scoping hint: e.g., "saturday", "yesterday", "the climbing one", "last week's race".
-- If the hint is ambiguous (multiple recent activities match), ask the athlete to clarify before proceeding.
+- Scoping hint: e.g., "saturday", "yesterday", "the cycling one", "last week's race".
+- If the bounded summary cannot resolve the hint, or multiple recent activities match,
+  ask the athlete to clarify before proceeding.
 
 ## Selecting the session
 1. Call \`intervals_fetch_activities\` for the last 7 days, newest first.
 2. If empty: reply "No activity in the last 7 days — want me to look further back?" and stop.
 3. If newest activity is older than 7 days: reply "Your last session was X days ago — want me to review that?" and stop until the athlete confirms.
-4. Otherwise: the most recent activity (and any activities clustered with it — those whose start times fall within ${sessionClusterGapMinutes} minutes of each other) form the session under review.
-5. If earlier same-day sessions exist, mention them briefly as load context — do not deep-review them.
-6. If activity \`analyzed\` is null/missing: open the review with "(analysis still in progress — using headline numbers)" and proceed with what the activity object exposes. Don't fabricate per-interval metrics that depend on full analysis.
+4. Otherwise: when \`workoutId\` is present, include every activity with that value and
+   order them by \`sessionSequence\` when present. If grouping fields are absent, use
+   start-time proximity within ${sessionClusterGapMinutes} minutes and state that the
+   grouping is an inference.
+5. If earlier same-day sessions exist, mention them briefly as duration/distance context —
+   do not deep-review them.
+6. The list result is a bounded summary. If nullable duration or distance fields are
+   missing, say the summary is incomplete and continue with what is present. Never
+   fabricate intensity, load, plan-compliance, or interval metrics.
 
-## Multi-activity sessions (1–3 activities clustered)
-A session may span 2–3 activities (e.g., a runner's warmup + intervals + cooldown FITs). Treat them as a single unit. For per-rep insight at Tier B+, fetch detail only on the activity matching the planned workout or with WORK intervals — warmup and cooldown FITs typically have no intervals worth reviewing. Never fetch detail on every FIT in the cluster.
+## Multi-activity and multisport sessions
+A recorded workout may contain any number of ordered sport and transition activities.
+Summarize every activity in the group and preserve \`sessionSequence\` when available.
+At Tier B+, detail may stay scoped to the requested sport's main non-transition
+activity, or one representative non-transition activity when no sport was requested.
+State which legs were not detailed, and never judge the whole workout or change the
+next session from one selected leg alone.
 
-## Depth — auto-scaled by activity type
-- **Tier A (~50 words)**: recovery / commute / unstructured Z2 endurance. Activity-summary fields only — call only \`intervals_fetch_activities\`. Headline numbers + form context + one-line takeaway. NO per-rep table.
-- **Tier B (~200 words)**: structured intervals (workout type matched, has WORK intervals). Call \`intervals_fetch_activity\` for \`icu_intervals\` per-rep splits. Per-rep insight in PROSE (not a table by default).
-- **Tier C (~500–600 words)**: races (\`race=true\` or \`sub_type=RACE\` — auto-upgrade) or any session with explicit \`deep\` / \`in depth\`. Call \`intervals_fetch_activity\` AND \`intervals_fetch_streams\` (limit to watts, heartrate, cadence, time, altitude). Pacing curve, fueling timeline, best-efforts, decoupling per quartile, HRR after final effort.
+## Depth — scaled by the request and available canonical data
+- **Tier A (~50 words)**: explicit \`brief\` / \`summary\`. Call only
+  \`intervals_fetch_activities\` and use only available summary fields. Store-backed
+  summaries may include sport/sub-sport, local date/start, duration, distance, and
+  recorded-workout grouping. One-line factual takeaway; no intensity, load, or
+  per-lap claims.
+- **Tier B (~200 words)**: default review. Call \`intervals_fetch_activity\` for the
+  selected activity's bounded summary and bounded \`laps\`. Laps support timing and
+  distance observations only; do not rename them as prescribed reps or invent targets.
+- **Tier C (~500–600 words)**: explicit \`deep\` / \`in depth\` only. Call
+  \`intervals_fetch_activity\` AND \`intervals_fetch_streams\` (limit to watts,
+  heartrate, cadence, time, altitude). The current stream shaper summarizes channels
+  independently and does not preserve trustworthy timestamp alignment. Use only
+  minimum, maximum, and mean as descriptive recorded observations. Do not infer
+  pacing, best-efforts by duration, quartile trends, decoupling, or HR recovery.
 
 Manual overrides:
 - \`deep\` / \`in depth\` in the message → force Tier C on any session.
 - \`brief\` / \`summary\` → force Tier A.
+- No depth flag → Tier B.
 
 ## Vocabulary — controlled by depth flag (no memory state)
 - Default \`/review\` (any tier without explicit override) → **mixed**: plain language by default; if a technical term is genuinely the takeaway, define in parens on first use within the message.
 - \`/review brief\` → **mixed** (depth flag controls tier only, vocab stays default).
 - \`/review deep\` → **technical**: use technical terms freely, no parens-explanations. The athlete who typed "deep" is asking for the deep version.
-- Race auto-upgrade to Tier C (no explicit \`deep\`) → **mixed** (system inference, not user request — keep default vocab).
 
 ## The 3-questions framework (mandatory output structure)
 Every review answers these three questions in order:
@@ -137,6 +161,15 @@ Every review answers these three questions in order:
 2. **What's one thing to fix or notice?** (One specific actionable item, or "nothing — this was clean".)
 3. **What does this mean for the next session?** (One recommendation.)
 Plus a 4th when concerning: **Is the bigger picture still on track?** (Form / wellness trends / streaks.)
+
+**Evidence-limit rule:** summary fields, lap timing/distance, and independently
+summarized stream statistics alone cannot establish session quality, recovery,
+readiness, or justify changing the next session. In that case, answer question 1 with
+the factual record and say there is not enough evidence to judge how it went; ask for
+the session goal plus RPE or reported feel. For question 2, name only a factual
+observation or the missing evidence. For question 3, do not alter the next session:
+keep the existing plan pending the athlete's feel or available wellness/context. Never
+say "nothing — this was clean" from those fields alone.
 
 **Filter rule:** every metric mentioned must answer one of those four questions. If a metric doesn't help answer "did it go well / fix this / next session / bigger picture", it doesn't appear.
 
@@ -155,7 +188,11 @@ The table is a two-column skeleton:
 | Metric | Value |
 |---|---|
 
-with one row per headline metric the sport reports. When per-rep interval data is present, follow the headline table with a per-rep table (one row per rep). The sport's review skill names which rows and columns fill these tables.
+with one row per available summary metric the sport reports. When bounded lap data is
+present, follow the headline table with a lap table (one row per lap). The sport's
+review skill names which rows and columns fill these tables. Show local time only when
+a timezone offset is present; otherwise label UTC or omit the time. Render nullable
+lap cells as unavailable.
 
 Keep it compact. The athlete asked for numbers — no prose around the table.
 
@@ -163,7 +200,7 @@ Keep it compact. The athlete asked for numbers — no prose around the table.
 - **Tier A and Tier B**: end the review with TWO lines:
     Reply 'show numbers' for the full breakdown.
     For a deeper analysis, type /review deep.
-- **Tier C** (forced via \`deep\` or auto-upgrade on race): end with ONE line:
+- **Tier C** (forced via \`deep\`): end with ONE line:
     Reply 'show numbers' for the full breakdown.
   (No \`/review deep\` line — the review is already deep.)
 - This footer is non-negotiable. It appears even on short Tier A reviews.
@@ -182,10 +219,18 @@ These are Peaksware trademarks; do not surface the abbreviations in athlete-faci
 
 ## Edge cases
 - Re-review same activity: just review again. Cost is low; the athlete may want a different angle.
-- No \`paired_event_id\`: skip the plan-compliance section silently.
+- Activity detail does not link to a planned calendar prescription. Skip plan-compliance
+  analysis unless the athlete supplies the plan separately.
 - Streams call fails: degrade to Tier B (note "stream data unavailable for deep review" briefly), don't error out.
 - Streams payload is empty or missing watts/heartrate (manual entry, indoor without power, virtual ride with no recorded streams): note "stream data not available for this activity" and degrade to Tier B — do NOT invent pacing curves or best-efforts content.
-- \`intervals_fetch_activities\` returns \`{ error: ... }\`: relay the error to the athlete in plain language; do not invent a review. Translate the raw \`error.kind\` to a friendly phrase: \`Unauthorized\` → "I don't have access to your intervals.icu account", \`RateLimit\` → "intervals.icu rate-limited me — try again in a minute", \`NotFound\` → "couldn't find that activity", \`Network\` / \`Timeout\` → "couldn't reach intervals.icu", anything else → "something went wrong fetching your data". Never surface the raw \`kind\` token.`;
+- An activity read returns \`{ error: ... }\`: relay it in plain language and do not invent
+  a review. \`store_read_unavailable\` → "your activity data is temporarily unavailable";
+  \`invalid_input\` → "that activity request was invalid"; \`not_found\` → "couldn't find
+  that activity"; \`Unauthorized\` → "I don't have access to your connected activity
+  account"; \`RateLimit\` → "the activity service rate-limited me — try again in a
+  minute"; \`Network\` / \`Timeout\` → "I couldn't reach the activity service";
+  anything else → "something went wrong fetching your activity data". Never surface
+  the raw error token.`;
 }
 
 export const STEP_BUDGET_RULES = `# Tool-Call Budget

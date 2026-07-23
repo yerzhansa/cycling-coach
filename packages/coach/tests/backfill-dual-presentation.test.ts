@@ -18,6 +18,7 @@ import {
 import { ActivitySchema } from "@enduragent/kernel/reference/schemas";
 import {
   H,
+  createCanonicalActivityReader,
   createIntervalsSourceRepository,
   dumpStore,
   runMigrations,
@@ -262,7 +263,10 @@ describe("dual-presentation audit", () => {
       expect(await store.get("SELECT count(*) AS n FROM source_record_current")).toEqual({ n: 6 });
       const selectors = await store.all("SELECT source_record_id, revision_id FROM source_record_current ORDER BY source_record_id");
 
-      const fixturePath = resolve("packages/kernel-node/tests/fixtures/ingest/triathlon-multisport.fit");
+      const fixturePath = resolve(
+        import.meta.dirname,
+        "../../kernel-node/tests/fixtures/ingest/triathlon-multisport.fit",
+      );
       const fitImportReport = await importFilesWithReport({ inputPaths: [fixturePath], archiveDir, store });
       expect(fitImportReport.inserts).toEqual({ raw_file: 1, source_record: 0 });
       expect(await store.get("SELECT count(*) AS n FROM raw_file")).toEqual({ n: 1 });
@@ -326,7 +330,9 @@ JOIN session AS s ON s.session_key = st.session_key WHERE s.start_utc < 10000000
 
   it("persists API activity, merges original FIT, and surfaces stable rerun near misses", async () => {
     const probe = await fresh("dual-probe"), target = await fresh("dual-target");
-    const bytes = new Uint8Array(readFileSync("packages/kernel-node/tests/fixtures/ingest/brick-cycling.fit"));
+    const bytes = new Uint8Array(readFileSync(
+      resolve(import.meta.dirname, "../../kernel-node/tests/fixtures/ingest/brick-cycling.fit"),
+    ));
     try {
       await probe.node.importBatchWithReport({ files: [{ input_path: "probe.fit", bytes, ext: "fit" }], platform_records: [] });
       const session = await probe.store.get("SELECT sport,start_utc,elapsed_s,distance_m FROM session");
@@ -363,6 +369,19 @@ JOIN session AS s ON s.session_key = st.session_key WHERE s.start_utc < 10000000
       expect(fit.artifacts).toBe(1);
       expect(await target.store.get("SELECT count(*) AS n FROM source_artifact WHERE lane='activities'")).toEqual({ n: 1 });
       expect(await target.store.get("SELECT count(*) AS n FROM workout")).toEqual({ n: 1 });
+      expect(await target.store.get("SELECT count(*) AS n FROM session")).toEqual({ n: 1 });
+      const selected = await target.store.get(
+        "SELECT local_date_key FROM session ORDER BY session_key LIMIT 1",
+      );
+      const compactDate = String(selected!.local_date_key).padStart(8, "0");
+      const localDate = `${compactDate.slice(0, 4)}-${compactDate.slice(4, 6)}-${compactDate.slice(6)}`;
+      const canonical = await createCanonicalActivityReader(target.store).listActivities({
+        start: localDate,
+        end: localDate,
+        limit: 200,
+      });
+      expect(canonical.activities).toHaveLength(1);
+      expect(canonical.nextCursor).toBeNull();
       const before = await dumpStore(target.store);
       const rerun = await target.node.importBatchWithReport({ files: [{ input_path: "archive:synthetic.fit", bytes, ext: "fit" }], platform_records: [] });
       const after = await dumpStore(target.store);

@@ -6,7 +6,7 @@ import { validateImportPaths } from "./onboarding/bridge.js";
 
 export type RideImportOwner = "onboarding" | "resident";
 
-type RideImportResult = ImportFilesRpcResult["files"];
+type RideImportResult = ImportFilesRpcResult;
 
 export type RideImportState =
   | {
@@ -114,13 +114,18 @@ export function createRideImportController(transport: RideImportTransport): Ride
           result: null,
         });
       });
-      if (result.files.imported <= 0) return fail(owner, result.files);
+      if (
+        result.files.imported <= 0 &&
+        !(result.files.total === 0 && result.publication.status === "available")
+      ) {
+        return fail(owner, result);
+      }
       importedFileCount += result.files.imported;
       publish({
         status: "succeeded",
         owner,
         progress: null,
-        result: result.files,
+        result,
       });
       return "succeeded";
     } catch {
@@ -173,11 +178,15 @@ export function rideImportStatusCopy(state: RideImportState): string {
   if (state.result === null) {
     return "Local library import failed. The result could not be confirmed; check the library before trying again.";
   }
-  const result = state.result;
-  const counts = `${rideFileCount(result.imported)} imported. ${rideFileCount(result.quarantined)} quarantined.`;
-  return state.status === "failed"
-    ? `Local library import failed. ${counts}`
-    : `Local library import: ${counts}`;
+  const counts = `${rideFileCount(state.result.files.imported)} imported. ${rideFileCount(state.result.files.quarantined)} quarantined.`;
+  if (state.status === "failed") {
+    return `Local library import failed. ${counts} No new ride files are available for coaching.`;
+  }
+  const availability =
+    state.result.publication.status === "available"
+      ? "Coaching access to activities and streams is available."
+      : "Coaching access to activities and streams is temporarily unavailable; retry the import.";
+  return `Local library import: ${counts} ${availability}`;
 }
 
 interface ResidentRideImportOptions {

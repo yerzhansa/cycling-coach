@@ -369,6 +369,15 @@ describe("incremental backfill pages", () => {
         home,
         context,
         runtime: {
+          async runExclusive(work) {
+            return work(new AbortController().signal);
+          },
+          async runActivityWrite(work) {
+            return {
+              value: await work(new AbortController().signal),
+              activityReadAvailable: true,
+            };
+          },
           async runWindowAfter(work) {
             await work(new AbortController().signal);
             return {
