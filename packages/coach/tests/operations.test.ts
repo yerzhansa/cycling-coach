@@ -45,6 +45,14 @@ function intervalsCredentials(apiKey = "", athleteId = "0") {
   };
 }
 
+function promiseGate(): { readonly promise: Promise<void>; release(): void } {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
 describe("coach operations", () => {
   it("imports synthetic activity files through the live store and deduplicates reruns", async () => {
     const root = await mkdtemp(join(await realpath(tmpdir()), "coach-operations-"));
@@ -232,7 +240,7 @@ describe("coach operations", () => {
     expect(runWindowAfter).toHaveBeenCalledTimes(1);
   });
 
-  it("serializes both methods in admission order and recovers after rejection", async () => {
+  it("serializes store operations in admission order and recovers after rejection", async () => {
     let release!: () => void;
     const latch = new Promise<void>((resolve) => {
       release = resolve;
@@ -518,6 +526,353 @@ describe("coach operations", () => {
       await store.close();
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("applies runtime configuration while a store sync is blocked", async () => {
+    const syncStarted = promiseGate();
+    const releaseSync = promiseGate();
+    const trace: string[] = [];
+    const operations = createCoachOperations({
+      home,
+      context: context(),
+      runtime: {
+        async runWindowAfter(work) {
+          trace.push("sync-start");
+          syncStarted.release();
+          await releaseSync.promise;
+          await work(new AbortController().signal);
+          trace.push("sync-end");
+          return {
+            published: true,
+            legacySucceeded: true,
+            counts: requestCounts(0, 0),
+          };
+        },
+      },
+      intervalsCredentials: intervalsCredentials(),
+      historyNewestDate: () => "1998-07-18",
+      applyRuntimeConfig: async () => {
+        trace.push("configure");
+      },
+    });
+
+    const sync = operations.sync({});
+    await syncStarted.promise;
+    await expect(
+      operations.configureRuntime({
+        llm: { provider: "openai", model: "model-a", api_key: "placeholder" },
+      }),
+    ).resolves.toEqual({
+      schemaVersion: 1,
+      applied: { llm: true, intervals: false },
+    });
+    expect(trace).toEqual(["sync-start", "configure"]);
+
+    releaseSync.release();
+    await expect(sync).resolves.toMatchObject({ schemaVersion: 1 });
+    expect(trace).toEqual(["sync-start", "configure", "sync-end"]);
+  });
+
+  it("reads runtime configuration while a store sync is blocked", async () => {
+    const syncStarted = promiseGate();
+    const releaseSync = promiseGate();
+    const trace: string[] = [];
+    const operations = createCoachOperations({
+      home,
+      context: context(),
+      runtime: {
+        async runWindowAfter(work) {
+          trace.push("sync-start");
+          syncStarted.release();
+          await releaseSync.promise;
+          await work(new AbortController().signal);
+          trace.push("sync-end");
+          return {
+            published: true,
+            legacySucceeded: true,
+            counts: requestCounts(0, 0),
+          };
+        },
+      },
+      intervalsCredentials: intervalsCredentials(),
+      historyNewestDate: () => "1998-07-18",
+      applyRuntimeConfig: async () => {},
+      readRuntimeConfig: () => {
+        trace.push("read");
+        return {
+          schemaVersion: 1,
+          llm: { provider: "openai", model: "model-a", credential_configured: true },
+          intervals: { athlete_id: "synthetic-athlete" },
+          session: {
+            historyTokenBudgetRatio: 0.3,
+            idleMinutes: 0,
+            dailyResetHour: 4,
+            resetArchiveRetentionDays: 0,
+            timezone: "UTC",
+          },
+        };
+      },
+    });
+
+    const sync = operations.sync({});
+    await syncStarted.promise;
+    await expect(operations.getRuntimeConfig({})).resolves.toMatchObject({
+      schemaVersion: 1,
+      llm: { model: "model-a" },
+    });
+    expect(trace).toEqual(["sync-start", "read"]);
+
+    releaseSync.release();
+    await expect(sync).resolves.toMatchObject({ schemaVersion: 1 });
+    expect(trace).toEqual(["sync-start", "read", "sync-end"]);
+  });
+
+  it("holds intervals configuration behind store sync without allowing later runtime operations to overtake", async () => {
+    const syncStarted = promiseGate();
+    const releaseSync = promiseGate();
+    const trace: string[] = [];
+    let activeModel = "initial";
+    const operations = createCoachOperations({
+      home,
+      context: context(),
+      runtime: {
+        async runWindowAfter(work) {
+          trace.push("sync-start");
+          syncStarted.release();
+          await releaseSync.promise;
+          await work(new AbortController().signal);
+          trace.push("sync-end");
+          return {
+            published: true,
+            legacySucceeded: true,
+            counts: requestCounts(0, 0),
+          };
+        },
+      },
+      intervalsCredentials: intervalsCredentials(),
+      historyNewestDate: () => "1998-07-18",
+      applyRuntimeConfig: async (request) => {
+        if (request.intervals !== undefined) trace.push("intervals");
+        if (request.llm !== undefined) {
+          const model = request.llm.model;
+          if (model === undefined) throw new Error("Expected a model patch.");
+          activeModel = model;
+          trace.push(`llm-${activeModel}`);
+        }
+      },
+      readRuntimeConfig: () => {
+        trace.push(`read-${activeModel}`);
+        return {
+          schemaVersion: 1,
+          llm: { provider: "openai", model: activeModel, credential_configured: true },
+          intervals: { athlete_id: "synthetic-athlete" },
+          session: {
+            historyTokenBudgetRatio: 0.3,
+            idleMinutes: 0,
+            dailyResetHour: 4,
+            resetArchiveRetentionDays: 0,
+            timezone: "UTC",
+          },
+        };
+      },
+    });
+
+    const sync = operations.sync({});
+    await syncStarted.promise;
+    let intervalsSettled = false;
+    const intervals = operations
+      .configureRuntime({
+        llm: { provider: "openai", model: "model-a", api_key: "placeholder-a" },
+        intervals: { api_key: "placeholder-intervals", athlete_id: "synthetic-athlete" },
+      })
+      .then((result) => {
+        intervalsSettled = true;
+        return result;
+      });
+    const laterLlm = operations.configureRuntime({
+      llm: { provider: "openai", model: "model-b", api_key: "placeholder-b" },
+    });
+    const laterRead = operations.getRuntimeConfig({});
+    await Promise.resolve();
+    expect(intervalsSettled).toBe(false);
+    expect(trace).toEqual(["sync-start"]);
+
+    releaseSync.release();
+    const [syncResult, intervalsResult, laterLlmResult, laterReadResult] = await Promise.all([
+      sync,
+      intervals,
+      laterLlm,
+      laterRead,
+    ]);
+    expect(syncResult).toMatchObject({ schemaVersion: 1 });
+    expect(intervalsResult).toEqual({
+      schemaVersion: 1,
+      applied: { llm: true, intervals: true },
+    });
+    expect(laterLlmResult).toEqual({
+      schemaVersion: 1,
+      applied: { llm: true, intervals: false },
+    });
+    expect(laterReadResult.llm.model).toBe("model-b");
+    expect(trace).toEqual([
+      "sync-start",
+      "sync-end",
+      "intervals",
+      "llm-model-a",
+      "llm-model-b",
+      "read-model-b",
+    ]);
+  });
+
+  it("serializes runtime configuration writes and reads in strict admission order", async () => {
+    const firstStarted = promiseGate();
+    const releaseFirst = promiseGate();
+    const trace: string[] = [];
+    let activeModel = "initial";
+    const operations = createCoachOperations({
+      home,
+      context: context(),
+      runtime: { runWindowAfter: vi.fn() },
+      intervalsCredentials: intervalsCredentials(),
+      historyNewestDate: () => "1998-07-18",
+      applyRuntimeConfig: async (request) => {
+        const model = request.llm?.model ?? "intervals-only";
+        trace.push(`configure-${model}-start`);
+        if (model === "model-a") {
+          firstStarted.release();
+          await releaseFirst.promise;
+        }
+        activeModel = model;
+        trace.push(`configure-${model}-end`);
+      },
+      readRuntimeConfig: () => {
+        trace.push(`read-${activeModel}`);
+        return {
+          schemaVersion: 1,
+          llm: { provider: "openai", model: activeModel, credential_configured: true },
+          intervals: { athlete_id: "synthetic-athlete" },
+          session: {
+            historyTokenBudgetRatio: 0.3,
+            idleMinutes: 0,
+            dailyResetHour: 4,
+            resetArchiveRetentionDays: 0,
+            timezone: "UTC",
+          },
+        };
+      },
+    });
+
+    const first = operations.configureRuntime({
+      llm: { provider: "openai", model: "model-a", api_key: "placeholder-a" },
+    });
+    await firstStarted.promise;
+    const second = operations.configureRuntime({
+      llm: { provider: "openai", model: "model-b", api_key: "placeholder-b" },
+    });
+    const read = operations.getRuntimeConfig({});
+    await Promise.resolve();
+    expect(trace).toEqual(["configure-model-a-start"]);
+
+    releaseFirst.release();
+    const [firstResult, secondResult, readResult] = await Promise.all([first, second, read]);
+    expect(firstResult).toEqual({
+      schemaVersion: 1,
+      applied: { llm: true, intervals: false },
+    });
+    expect(secondResult).toEqual({
+      schemaVersion: 1,
+      applied: { llm: true, intervals: false },
+    });
+    expect(readResult.llm.model).toBe("model-b");
+    expect(trace).toEqual([
+      "configure-model-a-start",
+      "configure-model-a-end",
+      "configure-model-b-start",
+      "configure-model-b-end",
+      "read-model-b",
+    ]);
+  });
+
+  it("continues both serialized lanes after an intervals configuration rejection", async () => {
+    const syncStarted = promiseGate();
+    const releaseSync = promiseGate();
+    const trace: string[] = [];
+    let syncAttempt = 0;
+    let activeModel = "initial";
+    const operations = createCoachOperations({
+      home,
+      context: context(),
+      runtime: {
+        async runWindowAfter(work) {
+          syncAttempt += 1;
+          trace.push(`sync-${syncAttempt}-start`);
+          if (syncAttempt === 1) {
+            syncStarted.release();
+            await releaseSync.promise;
+          }
+          await work(new AbortController().signal);
+          trace.push(`sync-${syncAttempt}-end`);
+          return {
+            published: true,
+            legacySucceeded: true,
+            counts: requestCounts(0, 0),
+          };
+        },
+      },
+      intervalsCredentials: intervalsCredentials(),
+      historyNewestDate: () => "1998-07-18",
+      applyRuntimeConfig: async (request) => {
+        if (request.intervals !== undefined) {
+          trace.push("intervals-reject");
+          throw new Error("synthetic configuration failure");
+        }
+        activeModel = request.llm?.model ?? activeModel;
+        trace.push(`llm-${activeModel}`);
+      },
+      readRuntimeConfig: () => ({
+        schemaVersion: 1,
+        llm: { provider: "openai", model: activeModel, credential_configured: true },
+        intervals: { athlete_id: "synthetic-athlete" },
+        session: {
+          historyTokenBudgetRatio: 0.3,
+          idleMinutes: 0,
+          dailyResetHour: 4,
+          resetArchiveRetentionDays: 0,
+          timezone: "UTC",
+        },
+      }),
+    });
+
+    const firstSync = operations.sync({});
+    await syncStarted.promise;
+    const intervals = operations.configureRuntime({
+      intervals: { api_key: "placeholder-intervals", athlete_id: "synthetic-athlete" },
+    });
+    const intervalsFailure = intervals.catch((error: unknown) => error);
+    await Promise.resolve();
+    const laterLlm = operations.configureRuntime({
+      llm: { provider: "openai", model: "model-b", api_key: "placeholder-b" },
+    });
+    const laterRead = operations.getRuntimeConfig({});
+    const nextSync = operations.sync({});
+    await Promise.resolve();
+    expect(trace).toEqual(["sync-1-start"]);
+
+    releaseSync.release();
+    await expect(firstSync).resolves.toMatchObject({ schemaVersion: 1 });
+    await expect(intervalsFailure).resolves.toEqual(
+      expect.objectContaining({ message: "synthetic configuration failure" }),
+    );
+    await expect(laterLlm).resolves.toEqual({
+      schemaVersion: 1,
+      applied: { llm: true, intervals: false },
+    });
+    await expect(laterRead).resolves.toMatchObject({ llm: { model: "model-b" } });
+    await expect(nextSync).resolves.toMatchObject({ schemaVersion: 1 });
+    expect(trace.slice(0, 3)).toEqual(["sync-1-start", "sync-1-end", "intervals-reject"]);
+    expect(trace.indexOf("llm-model-b")).toBeGreaterThan(trace.indexOf("intervals-reject"));
+    expect(trace.indexOf("sync-2-start")).toBeGreaterThan(trace.indexOf("intervals-reject"));
+    expect(trace.indexOf("sync-2-end")).toBeGreaterThan(trace.indexOf("sync-2-start"));
   });
 
   it("applies llm-only, intervals-only, both, and superseding runtime requests without echo", async () => {
