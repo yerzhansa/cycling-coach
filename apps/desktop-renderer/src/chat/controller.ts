@@ -21,6 +21,7 @@ export const CHAT_CONNECTION_INTERRUPTED_COPY =
 export const CHAT_PROTOCOL_FAILURE_COPY =
   "The coaching response could not be verified. Please try again.";
 export const CHAT_FAILURE_COPY = "The coach couldn't respond. Please try again.";
+export const CHAT_EMPTY_RESPONSE_COPY = "The coach returned an empty response. Please try again.";
 export const NEW_CONVERSATION_SUCCESS_COPY = "New conversation started.";
 export const NEW_CONVERSATION_MEMORY_WARNING_COPY =
   "New conversation started. Some recent details may not have been saved to coach memory.";
@@ -253,6 +254,11 @@ export function createChatController(input: {
           reduce({ type: "interrupt", requestKey, copy: CHAT_PROTOCOL_FAILURE_COPY });
           return;
         }
+        if (!/\S/u.test(finalText)) {
+          retryClient = client;
+          reduce({ type: "interrupt", requestKey, copy: CHAT_EMPTY_RESPONSE_COPY });
+          return;
+        }
         reduce({ type: "complete", requestKey });
       } catch (error) {
         if (!current()) return;
@@ -347,7 +353,7 @@ export function createChatController(input: {
           }
         });
       queuedRetry = { requestKey, promise: pending, token };
-      render();
+      reduce({ type: "retry-pending", requestKey });
       return pending;
     },
     openNewConversation() {

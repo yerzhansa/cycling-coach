@@ -1,6 +1,7 @@
 import type { TurnEvent } from "@enduragent/coach-contract";
 
 export const DESKTOP_CHAT_ID = "desktop" as const;
+export const CHAT_WORKING_COPY = "Coach is working…";
 
 export type ChatStatus = "idle" | "streaming" | "interrupted";
 export type SessionPresence = "unknown" | "absent" | "present";
@@ -69,6 +70,7 @@ export type ChatAction =
   | { readonly type: "event"; readonly requestKey: number; readonly event: TurnEvent }
   | { readonly type: "complete"; readonly requestKey: number }
   | { readonly type: "interrupt"; readonly requestKey: number; readonly copy: string }
+  | { readonly type: "retry-pending"; readonly requestKey: number }
   | { readonly type: "fail"; readonly requestKey: number; readonly copy: string }
   | { readonly type: "session-probe"; readonly hasSession: boolean }
   | { readonly type: "open-new-conversation" }
@@ -90,6 +92,14 @@ function updateAssistant(
   return state.messages.map((message) =>
     message.id === activeTurn.assistantMessageId ? { ...message, text, delivery } : message,
   );
+}
+
+function visibleDraft(draft: string): string {
+  return /\S/u.test(draft) ? draft : "";
+}
+
+function clearGenericProgress(progress: string | null, text: string): string | null {
+  return progress === CHAT_WORKING_COPY && /\S/u.test(text) ? null : progress;
 }
 
 function assertNever(value: never): never {
@@ -128,7 +138,7 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
       return {
         status: "streaming",
         messages,
-        progress: null,
+        progress: CHAT_WORKING_COPY,
         session: { ...state.session, announcement: null },
         activeTurn: {
           requestKey: action.requestKey,
@@ -158,16 +168,27 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
           const next = { ...active, draft };
           return {
             ...state,
+            progress: clearGenericProgress(state.progress, action.event.delta),
             activeTurn: next,
-            messages: updateAssistant(state, next, draft, "streaming"),
+            messages: /\S/u.test(draft)
+              ? updateAssistant(state, next, draft, "streaming")
+              : state.messages,
           };
         }
         case "final-text": {
-          const next = { ...active, draft: action.event.text, finalText: action.event.text };
+          const hasText = /\S/u.test(action.event.text);
+          const next = {
+            ...active,
+            draft: hasText ? action.event.text : active.draft,
+            finalText: action.event.text,
+          };
           return {
             ...state,
+            progress: clearGenericProgress(state.progress, action.event.text),
             activeTurn: next,
-            messages: updateAssistant(state, next, action.event.text, "streaming"),
+            messages: hasText
+              ? updateAssistant(state, next, action.event.text, "streaming")
+              : state.messages,
           };
         }
         case "error":
@@ -188,7 +209,8 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
     }
     case "complete": {
       const active = current(state, action.requestKey);
-      if (active === null || active.finalText === null) return state;
+      if (active === null || active.finalText === null || !/\S/u.test(active.finalText))
+        return state;
       return {
         ...state,
         status: "idle",
@@ -204,8 +226,18 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
         ...state,
         status: "interrupted",
         progress: action.copy,
-        messages: updateAssistant(state, active, active.draft, "interrupted"),
+        messages: updateAssistant(state, active, visibleDraft(active.draft), "interrupted"),
       };
+    }
+    case "retry-pending": {
+      const active = current(state, action.requestKey);
+      return active === null || state.status !== "interrupted"
+        ? state
+        : {
+            ...state,
+            progress: CHAT_WORKING_COPY,
+            activeTurn: { ...active, error: null },
+          };
     }
     case "fail": {
       const active = current(state, action.requestKey);
@@ -214,7 +246,7 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
         ...state,
         status: "idle",
         progress: active.error === null ? action.copy : null,
-        messages: updateAssistant(state, active, active.draft, "interrupted"),
+        messages: updateAssistant(state, active, visibleDraft(active.draft), "interrupted"),
       };
     }
     case "session-probe": {

@@ -10,6 +10,7 @@ import {
 import type { CoachTurnEventNotificationEnvelope, TurnEvent } from "@enduragent/coach-contract";
 import {
   CHAT_CONNECTION_INTERRUPTED_COPY,
+  CHAT_EMPTY_RESPONSE_COPY,
   CHAT_PROTOCOL_FAILURE_COPY,
   NEW_CONVERSATION_MEMORY_WARNING_COPY,
   NEW_CONVERSATION_SUCCESS_COPY,
@@ -19,7 +20,7 @@ import {
 } from "../src/chat/controller.js";
 import { COACH_RESPONSE_CODE_UNIT_LIMIT, COACH_TURN_EVENT_LIMIT } from "../src/chat/limits.js";
 import type { DesktopCoachClientProvider } from "../src/coach-client.js";
-import { EMPTY_CHAT_STATE, type ChatState } from "../src/turn-state.js";
+import { CHAT_WORKING_COPY, EMPTY_CHAT_STATE, type ChatState } from "../src/turn-state.js";
 
 function envelope(event: TurnEvent, requestId = 1): CoachTurnEventNotificationEnvelope {
   return {
@@ -191,6 +192,54 @@ describe("chat controller", () => {
     );
     await expect(controller.submit("Continue")).resolves.toBeUndefined();
     expect(refreshSpend).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes working feedback immediately for an accepted submit", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fake = client(async (_request, options) => {
+      await gate;
+      deliver(options, { type: "final-text", turnId: "turn-1", text: "Done" });
+      options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: { text: "Done" } });
+      return { text: "Done" };
+    });
+    const { controller, states } = subject(fake);
+
+    const submission = controller.submit("Continue");
+
+    expect(states.at(-1)).toMatchObject({
+      status: "streaming",
+      progress: CHAT_WORKING_COPY,
+      messages: [
+        { role: "athlete", text: "Continue" },
+        { role: "coach", text: "", delivery: "streaming" },
+      ],
+    });
+
+    release();
+    await submission;
+  });
+
+  it("clears only generic working feedback on the first substantive delta", async () => {
+    const fake = client(async (_request, options) => {
+      deliver(options, { type: "text_delta", turnId: "turn-1", delta: " \n" });
+      deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Ride easy." });
+      deliver(options, { type: "final-text", turnId: "turn-1", text: "Ride easy." });
+      options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: { text: "Ride easy." } });
+      return { text: "Ride easy." };
+    });
+    const { controller, states } = subject(fake);
+
+    await controller.submit("Continue");
+
+    const whitespace = states.find((state) => state.activeTurn?.draft === " \n");
+    expect(whitespace?.progress).toBe(CHAT_WORKING_COPY);
+    expect(whitespace?.messages.at(-1)?.text).toBe("");
+    const firstText = states.find((state) => state.activeTurn?.draft === " \nRide easy.");
+    expect(firstText?.progress).toBeNull();
+    expect(firstText?.messages.at(-1)?.text).toBe(" \nRide easy.");
   });
 
   it("renders ordered deltas immediately and canonical final text once without turn-start", async () => {
@@ -410,6 +459,44 @@ describe("chat controller", () => {
     },
   );
 
+  it.each([
+    { finalText: "", partial: "" },
+    { finalText: " \n\t", partial: "Preserved partial" },
+  ])(
+    "keeps a matching whitespace-only terminal retryable without completing %#",
+    async ({ finalText, partial }) => {
+      const fake = client(async (_request, options) => {
+        if (partial.length > 0) {
+          deliver(options, { type: "text_delta", turnId: "turn-1", delta: partial });
+        }
+        deliver(options, { type: "final-text", turnId: "turn-1", text: finalText });
+        options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: { text: finalText } });
+        return { text: finalText };
+      });
+      const { controller, states } = subject(fake);
+      await controller.start();
+
+      await controller.submit("Help");
+
+      expect(states.at(-1)).toMatchObject({
+        status: "interrupted",
+        progress: CHAT_EMPTY_RESPONSE_COPY,
+        session: { presence: "absent" },
+      });
+      expect(states.at(-1)?.messages).toMatchObject([
+        { role: "athlete", text: "Help", delivery: "complete" },
+        { role: "coach", text: partial, delivery: "interrupted" },
+      ]);
+      expect(
+        states.some(
+          (state) =>
+            state.messages.at(-1)?.delivery === "complete" &&
+            !/\S/u.test(state.messages.at(-1)?.text ?? ""),
+        ),
+      ).toBe(false);
+    },
+  );
+
   it("accepts one matching first turn-start and rejects a late start", async () => {
     const fake = client(async (_request, options) => {
       deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Draft" });
@@ -436,7 +523,10 @@ describe("chat controller", () => {
     const { controller, provider, states, refresh } = subject(first, second);
     await controller.submit("Same message");
     expect(states.at(-1)?.progress).toBe(CHAT_CONNECTION_INTERRUPTED_COPY);
-    await controller.retryInterrupted();
+    const retry = controller.retryInterrupted();
+    expect(states.at(-1)?.progress).toBe(CHAT_WORKING_COPY);
+    expect(states.at(-1)?.messages.filter((message) => message.role === "athlete")).toHaveLength(1);
+    await retry;
     expect(provider.reconnect).toHaveBeenCalledTimes(1);
     expect(vi.mocked(second.call).mock.calls[0]?.[1]).toEqual({
       chatId: "desktop",
@@ -541,10 +631,12 @@ describe("chat controller", () => {
       reconnect: vi.fn(async () => second),
       close: vi.fn(async () => {}),
     };
+    let latestState = EMPTY_CHAT_STATE;
     const controller = createChatController({
       clients: provider,
       view: {
         render(state) {
+          latestState = structuredClone(state);
           if (state.status === "interrupted") interrupted();
         },
       },
@@ -558,6 +650,8 @@ describe("chat controller", () => {
     await interruptedState;
     const retry = controller.retryInterrupted();
     const duplicate = controller.retryInterrupted();
+    expect(latestState.progress).toBe(CHAT_WORKING_COPY);
+    expect(latestState.messages.filter((message) => message.role === "athlete")).toHaveLength(1);
     expect(controller.openNewConversation()).toBe(false);
     release();
     await Promise.all([submission, retry, duplicate]);

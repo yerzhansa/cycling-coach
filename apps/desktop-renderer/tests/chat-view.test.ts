@@ -1,9 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CoachClientCallOptions } from "@enduragent/coach-client";
+import {
+  CoachClientDisconnectedError,
+  type CoachClientCallOptions,
+} from "@enduragent/coach-client";
 import type { TurnEvent } from "@enduragent/coach-contract";
-import { createChatController } from "../src/chat/controller.js";
+import {
+  CHAT_CONNECTION_INTERRUPTED_COPY,
+  CHAT_EMPTY_RESPONSE_COPY,
+  createChatController,
+} from "../src/chat/controller.js";
 import { mountChatView } from "../src/chat/view.js";
-import { EMPTY_CHAT_STATE, reduceChatState, type ChatState } from "../src/turn-state.js";
+import {
+  CHAT_WORKING_COPY,
+  EMPTY_CHAT_STATE,
+  reduceChatState,
+  type ChatState,
+} from "../src/turn-state.js";
 
 const mutationEvents: string[] = [];
 
@@ -286,7 +298,7 @@ beforeEach(() => {
 });
 
 describe("chat view", () => {
-  it("renders the athlete row without an empty coach row while awaiting a response", () => {
+  it("renders one working notice and the athlete row without an empty coach row", () => {
     const thread = new FakeElement("div");
     const mounted = mountChatView({
       conversation: new FakeElement("main") as never,
@@ -304,6 +316,8 @@ describe("chat view", () => {
 
     mounted.view.render(state);
 
+    expect(occurrences(thread.textContent, CHAT_WORKING_COPY)).toBe(1);
+    expect(findAll(thread, (node) => node.className === "chat-notice")).toHaveLength(1);
     expect(findAll(thread, (node) => node.className.includes("chat-message--athlete")).length).toBe(
       1,
     );
@@ -486,28 +500,35 @@ describe("chat view", () => {
     );
   });
 
-  it("renders an empty interruption notice and retry without an empty coach row", () => {
-    const thread = new FakeElement("div");
-    const mounted = mountChatView({
-      conversation: new FakeElement("main") as never,
-      thread: thread as never,
-      composerHost: new FakeElement("div") as never,
-    });
-    const interruptionCopy = "Connection interrupted. Your partial response is preserved.";
-    const state = reduceChatState(submittedState(), {
-      type: "interrupt",
-      requestKey: 1,
-      copy: interruptionCopy,
-    });
+  it.each(["", " \n\t"])(
+    "renders retryable recovery for a whitespace-only terminal %j without an empty coach row",
+    (finalText) => {
+      const thread = new FakeElement("div");
+      const mounted = mountChatView({
+        conversation: new FakeElement("main") as never,
+        thread: thread as never,
+        composerHost: new FakeElement("div") as never,
+      });
+      let state = reduceChatState(submittedState(), {
+        type: "event",
+        requestKey: 1,
+        event: { type: "final-text", turnId: "turn-1", text: finalText },
+      });
+      state = reduceChatState(state, {
+        type: "interrupt",
+        requestKey: 1,
+        copy: CHAT_EMPTY_RESPONSE_COPY,
+      });
 
-    mounted.view.render(state);
+      mounted.view.render(state);
 
-    expect(occurrences(thread.textContent, interruptionCopy)).toBe(1);
-    expect(findAll(thread, (node) => node.className.includes("chat-message--coach")).length).toBe(
-      0,
-    );
-    expect(find(thread, (node) => node.className === "chat-retry").hidden).toBe(false);
-  });
+      expect(occurrences(thread.textContent, CHAT_EMPTY_RESPONSE_COPY)).toBe(1);
+      expect(
+        findAll(thread, (node) => node.className.includes("chat-message--coach")),
+      ).toHaveLength(0);
+      expect(find(thread, (node) => node.className === "chat-retry").hidden).toBe(false);
+    },
+  );
 
   it("preserves keyed row identity while updating only changed streaming content", () => {
     const actionHost = new FakeElement("div");
@@ -531,7 +552,8 @@ describe("chat view", () => {
     const athleteText = find(athlete, (node) => node.className === "chat-message__text");
     expect(messages.replaceChildrenMutationCount).toBe(0);
     expect(messages.textContent).toContain("How should I train?");
-    expect(notice.textContentMutationCount).toBe(0);
+    expect(occurrences(thread.textContent, CHAT_WORKING_COPY)).toBe(1);
+    expect(notice.textContentMutationCount).toBe(1);
 
     state = reduceChatState(state, {
       type: "event",
@@ -549,7 +571,12 @@ describe("chat view", () => {
     expect(messages.textContent).toContain("Partial **coach");
     expect(findAll(coach, (node) => node.tagName === "strong")).toHaveLength(0);
     expect(coach.attributes.get("aria-busy")).toBe("true");
-    expect(notice.textContentMutationCount).toBe(0);
+    expect(notice.hidden).toBe(true);
+    expect(notice.textContent).toBe("");
+    expect(notice.textContentMutationCount).toBe(2);
+    expect(occurrences(thread.textContent, CHAT_WORKING_COPY)).toBe(0);
+    expect(messages.children[0]).toBe(athlete);
+    expect(athlete.removeMutationCount).toBe(0);
 
     state = reduceChatState(state, {
       type: "event",
@@ -773,6 +800,164 @@ describe("chat view", () => {
     expect(findAll(coach, (node) => node.tagName === "strong")[0]?.textContent).toBe("answer");
   });
 
+  it("replaces a queued interrupted contract error with one working announcement", async () => {
+    const thread = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: thread as never,
+      composerHost: new FakeElement("div") as never,
+    });
+    let releaseTrainingRefresh: (() => void) | undefined;
+    const trainingRefreshGate = new Promise<void>((resolve) => {
+      releaseTrainingRefresh = resolve;
+    });
+    let markTrainingRefreshStarted: (() => void) | undefined;
+    const trainingRefreshStarted = new Promise<void>((resolve) => {
+      markTrainingRefreshStarted = resolve;
+    });
+    const contractCopy = "The coaching provider is temporarily unavailable.";
+    const firstCall = vi.fn(
+      async (
+        method: string,
+        _request: unknown,
+        options: CoachClientCallOptions<"chat"> | undefined,
+      ) => {
+        if (method !== "chat") throw new TypeError();
+        const event: TurnEvent = {
+          type: "error",
+          turnId: "turn-1",
+          chatId: "desktop",
+          error_class: "unknown",
+          kind: "provider-down",
+          athleteMessage: contractCopy,
+          overflowAttempts: 0,
+          timeoutAttempts: 0,
+          rateLimitAttempts: 0,
+          duration_ms: 1,
+          compactions: 0,
+        };
+        options?.onNotificationEnvelope?.({
+          jsonrpc: "2.0",
+          method: "coach.turnEvent",
+          params: {
+            requestId: 1,
+            requestMethod: "chat",
+            turnId: event.turnId,
+            event,
+          },
+        });
+        options?.onEvent?.(event);
+        throw new CoachClientDisconnectedError(1006, "synthetic");
+      },
+    );
+    const secondCall = vi.fn(
+      async (
+        method: string,
+        _request: unknown,
+        options: CoachClientCallOptions<"chat"> | undefined,
+      ) => {
+        if (method !== "chat") throw new TypeError();
+        const event: TurnEvent = {
+          type: "final-text",
+          turnId: "turn-2",
+          text: "Recovered.",
+        };
+        options?.onNotificationEnvelope?.({
+          jsonrpc: "2.0",
+          method: "coach.turnEvent",
+          params: {
+            requestId: 2,
+            requestMethod: "chat",
+            turnId: event.turnId,
+            event,
+          },
+        });
+        options?.onEvent?.(event);
+        options?.onTerminalEnvelope?.({
+          jsonrpc: "2.0",
+          id: 2,
+          result: { text: event.text },
+        });
+        return { text: event.text };
+      },
+    );
+    const firstClient = { handshake: {}, call: firstCall, close: vi.fn(async () => {}) };
+    const secondClient = { handshake: {}, call: secondCall, close: vi.fn(async () => {}) };
+    const reconnect = vi.fn(async () => secondClient as never);
+    let refreshCalls = 0;
+    const controller = createChatController({
+      clients: {
+        getClient: vi.fn(async () => firstClient as never),
+        reconnect,
+        close: vi.fn(async () => {}),
+      },
+      view: mounted.view,
+      refreshTrainingContext: async () => {
+        refreshCalls += 1;
+        if (refreshCalls !== 1) return;
+        markTrainingRefreshStarted?.();
+        await trainingRefreshGate;
+      },
+      refreshSpend: async () => {},
+    });
+    const retries: Promise<void>[] = [];
+    mounted.bind({
+      onSubmit: (message) => void controller.submit(message),
+      onRetry: () => retries.push(controller.retryInterrupted()),
+      onOpenNewConversation: vi.fn(),
+      onCancelNewConversation: vi.fn(),
+      onConfirmNewConversation: vi.fn(),
+    });
+
+    const submission = controller.submit("How should I train?");
+    await trainingRefreshStarted;
+    const messages = find(thread, (node) => node.className === "chat-messages");
+    const athlete = messages.children[0]!;
+    const retry = find(thread, (node) => node.className === "chat-retry");
+
+    expect(occurrences(thread.textContent, contractCopy)).toBe(1);
+    expect(occurrences(thread.textContent, CHAT_CONNECTION_INTERRUPTED_COPY)).toBe(0);
+    expect(findAll(thread, (node) => node.className.includes("chat-message--athlete"))).toEqual([
+      athlete,
+    ]);
+    expect(secondCall).not.toHaveBeenCalled();
+
+    retry.dispatch("click");
+    retry.dispatch("click");
+
+    expect(retries).toHaveLength(2);
+    expect(retries[1]).toBe(retries[0]);
+    expect(occurrences(thread.textContent, contractCopy)).toBe(0);
+    expect(occurrences(thread.textContent, CHAT_WORKING_COPY)).toBe(1);
+    expect(find(thread, (node) => node.className === "chat-notice").textContent).toBe(
+      CHAT_WORKING_COPY,
+    );
+    expect(firstCall).toHaveBeenCalledOnce();
+    expect(secondCall).not.toHaveBeenCalled();
+    expect(messages.children[0]).toBe(athlete);
+    expect(athlete.removeMutationCount).toBe(0);
+
+    releaseTrainingRefresh?.();
+    await Promise.all([submission, ...retries]);
+
+    expect(reconnect).toHaveBeenCalledOnce();
+    expect(firstCall).toHaveBeenCalledOnce();
+    expect(secondCall).toHaveBeenCalledOnce();
+    expect(firstCall.mock.calls[0]?.[1]).toEqual({
+      chatId: "desktop",
+      message: "How should I train?",
+    });
+    expect(secondCall.mock.calls[0]?.[1]).toEqual({
+      chatId: "desktop",
+      message: "How should I train?",
+    });
+    expect(findAll(thread, (node) => node.className.includes("chat-message--athlete"))).toEqual([
+      athlete,
+    ]);
+    expect(messages.children[0]).toBe(athlete);
+    expect(athlete.removeMutationCount).toBe(0);
+  });
+
   it("keeps one streaming text node across many controller-delivered tiny deltas", async () => {
     const thread = new FakeElement("div");
     const mounted = mountChatView({
@@ -959,6 +1144,14 @@ describe("chat view", () => {
       assistantMessageId: "message-3",
       includeUser: false,
     });
+    mounted.view.render(state);
+
+    expect(occurrences(thread.textContent, CHAT_WORKING_COPY)).toBe(1);
+    expect(messages.children).toEqual([athlete, interrupted]);
+    expect(state.messages.filter((message) => message.role === "athlete")).toHaveLength(1);
+    expect(athlete.removeMutationCount).toBe(0);
+    expect(interrupted.removeMutationCount).toBe(0);
+
     state = reduceChatState(state, {
       type: "event",
       requestKey: 2,
