@@ -44,6 +44,10 @@ interface AuthBridge {
   releaseNotes(): Promise<unknown>;
   chatgptStatus(): Promise<unknown>;
   chatgptLogin(): Promise<unknown>;
+  getUpdateState(): Promise<unknown>;
+  checkForUpdates(): Promise<unknown>;
+  restartToUpdate(): Promise<unknown>;
+  onUpdateState(listener: (state: unknown) => void): () => void;
 }
 
 let bridge: AuthBridge;
@@ -93,18 +97,84 @@ describe("desktop preload ChatGPT auth", () => {
 
   it("keeps the external-link sender private while preserving the exact public bridge", () => {
     expect(Object.keys(mocks.exposed)).toEqual(["enduragentAuth"]);
-    expect(Object.keys(bridge).sort()).toEqual([
-      "chatgptLogin",
-      "chatgptStatus",
-      "chooseImportFiles",
-      "credentialStatuses",
-      "getDaemonConnection",
-      "onDroppedImportFiles",
-      "releaseNotes",
-      "retryFailedCredentials",
-      "writeCredential",
-    ]);
+    expect(Object.keys(bridge).sort()).toEqual(
+      [
+        "chatgptLogin",
+        "chatgptStatus",
+        "chooseImportFiles",
+        "credentialStatuses",
+        "getUpdateState",
+        "getDaemonConnection",
+        "checkForUpdates",
+        "onDroppedImportFiles",
+        "onUpdateState",
+        "releaseNotes",
+        "restartToUpdate",
+        "retryFailedCredentials",
+        "writeCredential",
+      ].sort(),
+    );
     expect(bridge).not.toHaveProperty("openExternal");
+  });
+
+  it("returns strict copied update states from zero-argument channels", async () => {
+    const downloaded = { status: "downloaded", version: "2026.7.23" };
+    mocks.invoke
+      .mockResolvedValueOnce({ status: "idle" })
+      .mockResolvedValueOnce(downloaded)
+      .mockResolvedValueOnce({ status: "installing", version: "2026.7.23" });
+
+    await expect(bridge.getUpdateState()).resolves.toEqual({ status: "idle" });
+    const copy = await bridge.checkForUpdates();
+    expect(copy).toEqual(downloaded);
+    expect(copy).not.toBe(downloaded);
+    await expect(bridge.restartToUpdate()).resolves.toEqual({
+      status: "installing",
+      version: "2026.7.23",
+    });
+    expect(mocks.invoke.mock.calls).toEqual([
+      ["desktop:update:get"],
+      ["desktop:update:check"],
+      ["desktop:update:restart"],
+    ]);
+  });
+
+  it("forwards only strict update events and supports idempotent listener disposal", () => {
+    const listener = vi.fn();
+    const dispose = bridge.onUpdateState(listener);
+    const onState = mocks.on.mock.calls.find(
+      ([channel]) => channel === "desktop:update:state",
+    )?.[1] as (_event: unknown, value: unknown) => void;
+    onState(undefined, { status: "downloaded", version: "2026.7.23" });
+    onState(undefined, {
+      status: "downloaded",
+      version: "2026.7.23",
+      downloadedFile: "/private/update.zip",
+    });
+    onState(undefined, { status: "failed", stage: "install" });
+    expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledWith({
+      status: "downloaded",
+      version: "2026.7.23",
+    });
+    dispose();
+    dispose();
+    onState(undefined, { status: "current" });
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
+  it("rejects malformed update state unions without exposing raw fields", async () => {
+    for (const value of [
+      null,
+      { status: "idle", extra: true },
+      { status: "downloading", version: "2026.7.23-beta.1" },
+      { status: "downloaded", version: " 2026.7.23" },
+      { status: "failed", stage: "install" },
+      { status: "failed", stage: "check", error: "Authorization: secret" },
+    ]) {
+      mocks.invoke.mockResolvedValueOnce(value);
+      await expect(bridge.getUpdateState()).rejects.toBeInstanceOf(TypeError);
+    }
   });
 
   it("returns closed copied release note results from the zero-argument channel", async () => {

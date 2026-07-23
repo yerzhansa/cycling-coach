@@ -60,6 +60,10 @@ import {
   resolveDesktopRendererSource,
 } from "./security.js";
 import { DesktopDaemonSupervisor, isUtilityTerminalFrame } from "./supervisor.js";
+import { createDesktopQuitCoordinator } from "./quit-coordinator.js";
+import { createDesktopUpdateController } from "./update-controller.js";
+import { isDesktopUpdateReleaseEligible } from "./update-eligibility.js";
+import { installDesktopUpdateIpc } from "./update-ipc.js";
 
 registerDesktopScheme();
 
@@ -118,14 +122,30 @@ async function runDesktop(): Promise<void> {
     },
     utilityEntry,
   );
-  let quitting = false;
+  let quitRequested = false;
   let protocolInstalled = false;
   let disposeConnectionIpc: (() => void) | undefined;
   let disposeExternalLinkIpc: (() => void) | undefined;
   let disposeReleaseNotesIpc: (() => void) | undefined;
+  let disposeUpdateIpc: (() => void) | undefined;
   let disposeOnboarding: (() => void) | undefined;
   let daemonLifecycle: DesktopDaemonLifecycle | undefined;
   let shutdownPromise: Promise<void> | undefined;
+  const updateController = createDesktopUpdateController({
+    releaseEligible: isDesktopUpdateReleaseEligible({
+      isPackaged: app.isPackaged,
+      platform: process.platform,
+      securitySmokeMode,
+      appPath: app.getAppPath(),
+      currentVersion: app.getVersion(),
+    }),
+    currentVersion: app.getVersion(),
+    loadUpdater: async () => {
+      const { autoUpdater } = await import("electron-updater");
+      return autoUpdater;
+    },
+    requestQuit: () => app.quit(),
+  });
   const shutdown = (): Promise<void> => {
     shutdownPromise ??= (async () => {
       controller.abort();
@@ -135,6 +155,9 @@ async function runDesktop(): Promise<void> {
       disposeExternalLinkIpc = undefined;
       disposeReleaseNotesIpc?.();
       disposeReleaseNotesIpc = undefined;
+      disposeUpdateIpc?.();
+      disposeUpdateIpc = undefined;
+      updateController.close();
       disposeOnboarding?.();
       disposeOnboarding = undefined;
       if (protocolInstalled) {
@@ -145,16 +168,15 @@ async function runDesktop(): Promise<void> {
     })();
     return shutdownPromise;
   };
+  const quitCoordinator = createDesktopQuitCoordinator({
+    drain: shutdown,
+    updateController,
+    exit: (code) => app.exit(code),
+  });
   app.on("before-quit", (event) => {
     desktopIsClosing = true;
     residency?.close();
-    if (quitting) return;
-    event.preventDefault();
-    quitting = true;
-    void shutdown().then(
-      () => app.exit(0),
-      () => app.exit(1),
-    );
+    if (quitCoordinator.beforeQuit(event) === "draining") quitRequested = true;
   });
   try {
     const resolution = await supervisor.resolve();
@@ -164,7 +186,7 @@ async function runDesktop(): Promise<void> {
         dialog.showErrorBox(copy.title, copy.content);
       }
       await shutdown();
-      if (!quitting) app.exit(resolution.exitCode);
+      if (!quitRequested) app.exit(resolution.exitCode);
       return;
     }
     let window: BrowserWindow | null = null;
@@ -460,6 +482,12 @@ async function runDesktop(): Promise<void> {
       ipcMain,
       currentWindow: () => mainWindow.current() ?? undefined,
     });
+    disposeUpdateIpc = installDesktopUpdateIpc({
+      ipcMain,
+      currentWindow: () => mainWindow.current() ?? undefined,
+      isTrusted: (event) => isTrustedConnectionRequest(event, mainWindow.current() ?? undefined),
+      controller: updateController,
+    });
     residency = createDesktopResidency({
       app,
       mainWindow,
@@ -471,6 +499,7 @@ async function runDesktop(): Promise<void> {
     });
     const initialWindow = await mainWindow.show();
     await residency.start();
+    void updateController.start();
 
     if (securitySmokeMode) {
       const daemonPort = daemonLifecycle.currentPort();

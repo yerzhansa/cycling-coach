@@ -77,6 +77,35 @@ function defaultDelay(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+function requireSettlementBefore<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(timeoutMessage));
+    }, timeoutMs);
+    void promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 function childIsAlive(resolution: ConnectedDesktopDaemon): boolean {
   if (resolution.supervision === "attached") return true;
   return resolution.isAlive();
@@ -348,12 +377,10 @@ export class DesktopDaemonLifecycle {
     this.controller.abort(new Error("desktop daemon lifecycle closing"));
     this.current = undefined;
     this.watchIdentity += 1;
-    const closing = this.resolver.close().catch(() => {});
-    await Promise.race([
-      closing,
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, CLOSE_TIMEOUT_MS);
-      }),
-    ]);
+    await requireSettlementBefore(
+      this.resolver.close(),
+      CLOSE_TIMEOUT_MS,
+      "desktop daemon lifecycle close deadline exceeded",
+    );
   }
 }

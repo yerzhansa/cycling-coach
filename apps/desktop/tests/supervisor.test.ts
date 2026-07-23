@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("electron", () => ({ utilityProcess: { fork: vi.fn() } }));
 
 import type { DesktopDaemonResolution } from "@enduragent/coach/enduragent";
+import { UTILITY_EXIT_TIMEOUT_MS, UTILITY_FORCE_EXIT_TIMEOUT_MS } from "../src/main/constants.js";
 import { DesktopDaemonLifecycle } from "../src/main/daemon-lifecycle.js";
 import {
   DesktopDaemonSupervisor,
@@ -22,10 +23,12 @@ class FakeUtilityProcess extends EventEmitter {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolveValue) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolveValue, rejectValue) => {
     resolve = resolveValue;
+    reject = rejectValue;
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
 }
 
 function connected(
@@ -85,6 +88,67 @@ describe("desktop main supervisor", () => {
     expect(close).toHaveBeenCalledTimes(1);
     await supervisor.resolve();
     expect(resolveDaemon).toHaveBeenCalledTimes(2);
+  });
+
+  it("propagates an active resolution close rejection", async () => {
+    const failure = new Error("synthetic close rejection");
+    const resolution: DesktopDaemonResolution = {
+      status: "connected",
+      url: "ws://127.0.0.1:45001/rpc",
+      token: "s".repeat(43),
+      owner: "app-supervised",
+      supervision: "app-supervised",
+      exited: new Promise(() => {}),
+      isAlive: () => true,
+      close: vi.fn(async () => {
+        throw failure;
+      }),
+    };
+    const supervisor = new DesktopDaemonSupervisor(
+      {
+        env: {},
+        executablePath: "/Applications/Enduragent",
+        appVersion: "2026.7.23",
+        signal: new AbortController().signal,
+      },
+      "/synthetic/daemon-utility.js",
+      vi.fn(async () => resolution),
+    );
+    await supervisor.resolve();
+
+    await expect(supervisor.close()).rejects.toBe(failure);
+  });
+
+  it("rejects a close that exceeds the bounded supervisor deadline", async () => {
+    vi.useFakeTimers();
+    const resolution: DesktopDaemonResolution = {
+      status: "connected",
+      url: "ws://127.0.0.1:45001/rpc",
+      token: "s".repeat(43),
+      owner: "app-supervised",
+      supervision: "app-supervised",
+      exited: new Promise(() => {}),
+      isAlive: () => true,
+      close: vi.fn(() => new Promise<void>(() => {})),
+    };
+    const supervisor = new DesktopDaemonSupervisor(
+      {
+        env: {},
+        executablePath: "/Applications/Enduragent",
+        appVersion: "2026.7.23",
+        signal: new AbortController().signal,
+      },
+      "/synthetic/daemon-utility.js",
+      vi.fn(async () => resolution),
+    );
+    await supervisor.resolve();
+    const closing = supervisor.close();
+    const rejected = expect(closing).rejects.toThrow(
+      "desktop daemon supervisor close deadline exceeded",
+    );
+
+    await vi.advanceTimersByTimeAsync(UTILITY_EXIT_TIMEOUT_MS + UTILITY_FORCE_EXIT_TIMEOUT_MS * 2);
+    await rejected;
   });
 
   it("starts over the closed control protocol and acknowledges one exact terminal frame", async () => {
@@ -391,6 +455,43 @@ describe("desktop main supervisor", () => {
     expect(supervisor.resolveForRecovery).not.toHaveBeenCalled();
     expect(onReady).not.toHaveBeenCalled();
     expect(onTransition).toHaveBeenLastCalledWith({ status: "closing", generation: 1 });
+  });
+
+  it("propagates a lifecycle resolver close rejection", async () => {
+    const failure = new Error("synthetic lifecycle close rejection");
+    const resolver = {
+      resolveForRecovery: vi.fn(),
+      reobserveAttached: vi.fn(),
+      close: vi.fn(async () => {
+        throw failure;
+      }),
+    };
+    const runtime = new DesktopDaemonLifecycle(
+      resolver,
+      connected(45_001, deferred<{ readonly exitCode: number | null }>()),
+    );
+
+    await expect(runtime.close()).rejects.toBe(failure);
+  });
+
+  it("rejects a lifecycle close that exceeds its bounded deadline", async () => {
+    vi.useFakeTimers();
+    const resolver = {
+      resolveForRecovery: vi.fn(),
+      reobserveAttached: vi.fn(),
+      close: vi.fn(() => new Promise<void>(() => {})),
+    };
+    const runtime = new DesktopDaemonLifecycle(
+      resolver,
+      connected(45_001, deferred<{ readonly exitCode: number | null }>()),
+    );
+    const closing = runtime.close();
+    const rejected = expect(closing).rejects.toThrow(
+      "desktop daemon lifecycle close deadline exceeded",
+    );
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rejected;
   });
 
   it("stops after three quick restart attempts when children keep dying", async () => {

@@ -8,6 +8,7 @@ import "./chat/styles.css";
 import "./training-context/styles.css";
 import "./spend-meter/styles.css";
 import "./release-notes/styles.css";
+import "./update/styles.css";
 import "./onboarding/onboarding.css";
 import "./ride-import.css";
 import { createChatController } from "./chat/controller.js";
@@ -25,6 +26,8 @@ import { createSpendMeterController } from "./spend-meter/controller.js";
 import { createSpendMeterView } from "./spend-meter/view.js";
 import { createReleaseNotesController } from "./release-notes/controller.js";
 import { createReleaseNotesView } from "./release-notes/view.js";
+import { createDesktopUpdateController } from "./update/controller.js";
+import { createDesktopUpdateView } from "./update/view.js";
 import {
   createRideImportController,
   mountResidentRideImport,
@@ -75,6 +78,15 @@ const releaseNotesController = createReleaseNotesController({
     before: connectionStatus,
   }),
 });
+const desktopUpdateController = createDesktopUpdateController({
+  bridge: window.enduragentAuth,
+  view: createDesktopUpdateView({
+    document,
+    actionHost: topbarActions,
+    before: connectionStatus,
+  }),
+});
+void desktopUpdateController.start();
 
 const clients = createDesktopCoachClientProvider();
 const clientAfterFailure = async (failedClient: CoachClient | undefined) => {
@@ -293,6 +305,7 @@ window.addEventListener(
   "pagehide",
   () => {
     releaseNotesController.dispose();
+    desktopUpdateController.dispose();
     disposeDroppedRideImports();
     onboarding.dispose();
     residentRideImport.dispose();

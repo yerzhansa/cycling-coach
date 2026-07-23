@@ -200,6 +200,7 @@ export {
   getKnownTelegramChatIds,
   getLastNotifiedVersion,
   isManagedDeploy,
+  isStableCalVer,
   isUpdateAvailable,
   MANAGED_DEPLOY_UPDATE_NOTICE,
   selfUpdate,

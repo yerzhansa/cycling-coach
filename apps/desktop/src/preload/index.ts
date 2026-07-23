@@ -4,6 +4,10 @@ import {
   DESKTOP_LIFECYCLE_CHANNEL,
   DESKTOP_OPEN_EXTERNAL_CHANNEL,
   DESKTOP_RELEASE_NOTES_CHANNEL,
+  DESKTOP_UPDATE_CHECK_CHANNEL,
+  DESKTOP_UPDATE_GET_CHANNEL,
+  DESKTOP_UPDATE_RESTART_CHANNEL,
+  DESKTOP_UPDATE_STATE_CHANNEL,
 } from "../main/constants.js";
 
 const DESKTOP_CREDENTIAL_STATUS_CHANNEL = "enduragent:onboarding:credential-status";
@@ -49,6 +53,7 @@ const RELEASES_URL = "https://github.com/yerzhansa/cycling-coach/releases";
 const RELEASE_NOTES_MAX_TOTAL_BYTES = 64 * 1024;
 const RELEASE_VERSION_RE =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const STABLE_VERSION_RE = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 const textEncoder = new TextEncoder();
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -127,6 +132,40 @@ function parseReleaseNotes(value: unknown): unknown {
     notes,
     releaseUrl: value.releaseUrl,
   };
+}
+
+type PreloadUpdateState =
+  | { readonly status: "disabled" | "idle" | "checking" | "current" }
+  | { readonly status: "downloading" | "downloaded" | "installing"; readonly version: string }
+  | { readonly status: "failed"; readonly stage: "check" | "download" };
+
+function parseUpdateState(value: unknown): PreloadUpdateState {
+  if (!record(value) || typeof value.status !== "string") throw new TypeError();
+  if (["disabled", "idle", "checking", "current"].includes(value.status)) {
+    if (!exactKeys(value, ["status"])) throw new TypeError();
+    return { status: value.status as "disabled" | "idle" | "checking" | "current" };
+  }
+  if (["downloading", "downloaded", "installing"].includes(value.status)) {
+    if (
+      !exactKeys(value, ["status", "version"]) ||
+      !safeString(value.version, 64) ||
+      !STABLE_VERSION_RE.test(value.version)
+    ) {
+      throw new TypeError();
+    }
+    return {
+      status: value.status as "downloading" | "downloaded" | "installing",
+      version: value.version,
+    };
+  }
+  if (
+    value.status !== "failed" ||
+    !exactKeys(value, ["status", "stage"]) ||
+    (value.stage !== "check" && value.stage !== "download")
+  ) {
+    throw new TypeError();
+  }
+  return { status: "failed", stage: value.stage };
 }
 
 function parseStatuses(value: unknown): unknown {
@@ -229,6 +268,7 @@ function parsePaths(value: unknown): readonly string[] {
 }
 
 let dropDisposer: (() => void) | undefined;
+const updateListeners = new Set<(state: PreloadUpdateState) => void>();
 
 window.addEventListener(
   "click",
@@ -259,6 +299,20 @@ ipcRenderer.on(DESKTOP_LIFECYCLE_CHANNEL, (_event, value: unknown) => {
       detail: { status: value.status, generation: value.generation },
     }),
   );
+});
+
+ipcRenderer.on(DESKTOP_UPDATE_STATE_CHANNEL, (_event, value: unknown) => {
+  let state: PreloadUpdateState;
+  try {
+    state = parseUpdateState(value);
+  } catch {
+    return;
+  }
+  for (const listener of updateListeners) {
+    try {
+      listener(parseUpdateState(state));
+    } catch {}
+  }
 });
 
 contextBridge.exposeInMainWorld(
@@ -299,6 +353,23 @@ contextBridge.exposeInMainWorld(
       parsePaths(await ipcRenderer.invoke(DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL)),
     releaseNotes: async () =>
       parseReleaseNotes(await ipcRenderer.invoke(DESKTOP_RELEASE_NOTES_CHANNEL)),
+    getUpdateState: async () =>
+      parseUpdateState(await ipcRenderer.invoke(DESKTOP_UPDATE_GET_CHANNEL)),
+    checkForUpdates: async () =>
+      parseUpdateState(await ipcRenderer.invoke(DESKTOP_UPDATE_CHECK_CHANNEL)),
+    restartToUpdate: async () =>
+      parseUpdateState(await ipcRenderer.invoke(DESKTOP_UPDATE_RESTART_CHANNEL)),
+    onUpdateState: (listener: unknown) => {
+      if (typeof listener !== "function") throw new TypeError();
+      const typedListener = listener as (state: PreloadUpdateState) => void;
+      updateListeners.add(typedListener);
+      let active = true;
+      return (): void => {
+        if (!active) return;
+        active = false;
+        updateListeners.delete(typedListener);
+      };
+    },
     onDroppedImportFiles: (listener: unknown) => {
       if (typeof listener !== "function" || dropDisposer !== undefined) throw new TypeError();
       const onDrop = (event: DragEvent): void => {

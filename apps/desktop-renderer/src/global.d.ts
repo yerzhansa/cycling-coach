@@ -15,7 +15,19 @@ interface EnduragentAuth {
   chooseImportFiles(): Promise<readonly string[]>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
   releaseNotes(): Promise<ReleaseNotesResult>;
+  getUpdateState(): Promise<DesktopUpdateState>;
+  checkForUpdates(): Promise<DesktopUpdateState>;
+  restartToUpdate(): Promise<DesktopUpdateState>;
+  onUpdateState(listener: (state: DesktopUpdateState) => void): () => void;
 }
+
+type DesktopUpdateState =
+  | { readonly status: "disabled" | "idle" | "checking" | "current" }
+  | {
+      readonly status: "downloading" | "downloaded" | "installing";
+      readonly version: string;
+    }
+  | { readonly status: "failed"; readonly stage: "check" | "download" };
 
 type ReleaseNotesResult =
   | {

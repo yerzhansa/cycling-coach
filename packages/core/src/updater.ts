@@ -23,15 +23,33 @@ export function isManagedDeploy(
   return value === "1" || value === "true";
 }
 
+const MAX_CALVER_LENGTH = 32;
+const STABLE_CALVER_PATTERN = /^([1-9]\d{3})\.([1-9]|1[0-2])\.(0|[1-9]\d*)$/;
+const COMPATIBLE_CALVER_PATTERN = /^([1-9]\d{3})\.([1-9]|1[0-2])\.(0|[1-9]\d*)(?:-(0|[1-9]\d*))?$/;
+
+export function isStableCalVer(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > MAX_CALVER_LENGTH) return false;
+  const match = STABLE_CALVER_PATTERN.exec(value);
+  if (match === null) return false;
+  const patch = Number(match[3]);
+  return Number.isSafeInteger(patch) && patch >= 0;
+}
+
 /**
  * Parse stable `YYYY.M.P` CalVer into a comparable tuple. The optional fourth
  * element exists only for compatibility with installed historical `-N`
  * releases, where a suffix was ordered after its unsuffixed base.
  */
 function calverParts(v: string): [number, number, number, number] | null {
-  const m = v.match(/^(\d+)\.(\d+)\.(\d+)(?:-(\d+))?$/);
-  if (!m) return null;
-  return [Number(m[1]), Number(m[2]), Number(m[3]), m[4] ? Number(m[4]) : 0];
+  if (v.length > MAX_CALVER_LENGTH) return null;
+  const match = COMPATIBLE_CALVER_PATTERN.exec(v);
+  if (match === null) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const patch = Number(match[3]);
+  const suffix = match[4] === undefined ? 0 : Number(match[4]);
+  if (![year, month, patch, suffix].every(Number.isSafeInteger)) return null;
+  return [year, month, patch, suffix];
 }
 
 /**
