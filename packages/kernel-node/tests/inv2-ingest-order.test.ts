@@ -6,7 +6,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { canonicalPick, createMaterializeClusterInTransaction, importArtifactsWithReport, type ConcernValue,
   type ImportArtifact, type PlatformImportArtifact, type RepairFixerSettings } from "@enduragent/kernel/ingest";
 import type { ArchiveManager } from "@enduragent/kernel/archive";
-import { dumpStore, runMigrations, sortKeys } from "@enduragent/kernel/store";
+import {
+  createCanonicalActivityReader,
+  dumpStore,
+  runMigrations,
+  sortKeys,
+  type SqlReadStore,
+} from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import { createNodeImportRuntime, importFilesWithReport } from "../src/ingest/import-files.js";
 import { openSqliteStorage } from "../src/sqlite/index.js";
@@ -80,6 +86,44 @@ function matchingPlatformArtifact(): PlatformImportArtifact {
     concerns, raw_snapshot_address: null, raw_snapshot_rel_path: null };
 }
 
+const streamChannelGroups = [
+  [
+    "time",
+    "lat",
+    "lng",
+    "distance",
+    "heart_rate",
+    "cadence",
+    "fractional_cadence",
+    "power",
+    "temperature",
+    "altitude",
+    "speed",
+    "stance_time",
+    "stance_time_balance",
+    "vertical_oscillation",
+    "vertical_ratio",
+    "step_length",
+  ],
+  ["left_right_balance", "respiration_rate"],
+] as const;
+
+async function serializedCanonicalReaderOutput(store: Pick<SqlReadStore, "all">): Promise<string> {
+  const reader = createCanonicalActivityReader(store);
+  const page = await reader.listActivities({ start: "1998-07-01", end: "1998-07-31", limit: 200 });
+  return JSON.stringify({
+    page,
+    activities: await Promise.all(
+      page.activities.map(async ({ id }) => ({
+        detail: await reader.getActivity({ id }),
+        streams: await Promise.all(
+          streamChannelGroups.map((channels) => reader.getStreams({ id, channels })),
+        ),
+      })),
+    ),
+  });
+}
+
 describe("real SQLite dedup ordering", () => {
   it("[PR05-SQL-001] makes forward and reverse paths converge to identical state", async () => {
     const left = await fresh(), right = await fresh();
@@ -88,6 +132,8 @@ describe("real SQLite dedup ordering", () => {
       const a = await importFilesWithReport({ inputPaths: files, archiveDir: left.archiveDir, store: left.store });
       const b = await importFilesWithReport({ inputPaths: [...files].reverse(), archiveDir: right.archiveDir, store: right.store });
       expect(await dumpStore(left.store)).toBe(await dumpStore(right.store));
+      expect(await serializedCanonicalReaderOutput(left.store))
+        .toBe(await serializedCanonicalReaderOutput(right.store));
       expect({ ...a, files: [] }).toEqual({ ...b, files: [] });
     } finally { await left.store.close(); await right.store.close(); }
   });
@@ -132,6 +178,8 @@ describe("real SQLite dedup ordering", () => {
         expect(await value.store.get("SELECT count(*) c FROM session")).toEqual({ c: 1 });
       }
       expect(await dumpStore(apiFirst.store)).toBe(await dumpStore(fitFirst.store));
+      expect(await serializedCanonicalReaderOutput(apiFirst.store))
+        .toBe(await serializedCanonicalReaderOutput(fitFirst.store));
       const before = await dumpStore(apiFirst.store);
       const replayApi = await leftRuntime.importBatchWithReport({ files: [], platform_records: [platform] });
       const replayFit = await importFilesWithReport({ inputPaths: [fitPath], archiveDir: apiFirst.archiveDir, store: apiFirst.store });

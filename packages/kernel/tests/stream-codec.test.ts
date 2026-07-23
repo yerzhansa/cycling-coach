@@ -68,4 +68,13 @@ describe("STRM v1 codec",()=>{
     const missingAndNonmonotonic=changed([1,2,1],p=>{p[16]&=~1;p.fill(0,17,25)});
     rejects(()=>decodeStream({...encodeStream("value",[1,2,1]),data:missingAndNonmonotonic,kind:"time"}),"time_missing");
   });
+  it("bounds optional inflate output while preserving the legacy unbounded call",()=>{
+    const good=encodeStream("value",[1]);
+    const expected=16+Math.ceil(good.n/8)+good.n*8;
+    expect(decodeStream({...good,kind:"value",maxInflatedBytes:expected})).toEqual([1]);
+    expect(decodeStream({...good,kind:"value"})).toEqual([1]);
+    const bomb=compressed(new Uint8Array(4_000_000));
+    rejects(()=>decodeStream({...good,data:bomb,kind:"value",maxInflatedBytes:expected}),"payload_length");
+    rejects(()=>decodeStream({...good,n:0,data:new Uint8Array([1]),kind:"value",maxInflatedBytes:expected}),"invalid_n");
+  });
 });
