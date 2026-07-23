@@ -1513,7 +1513,16 @@ describe("local coach composition", () => {
 
   it("guards a key-only change for canonical athlete zero", async () => {
     const home = await freshHome();
-    const assertRuntimeAthleteOwner = vi.fn(async () => {});
+    const assertRuntimeAthleteOwner = vi.fn(
+      async (
+        _store: Parameters<
+          NonNullable<LocalCoachCompositionDependencies["assertRuntimeAthleteOwner"]>
+        >[0],
+        _options: Parameters<
+          NonNullable<LocalCoachCompositionDependencies["assertRuntimeAthleteOwner"]>
+        >[1],
+      ) => {},
+    );
     const lifecycle = await compose(
       home,
       {
@@ -1556,11 +1565,13 @@ describe("local coach composition", () => {
       trace.push(`owner:${options.candidate.athleteId}`);
     });
     const createRuntime = vi.fn((options: LocalStoreRuntimeOptions) => {
+      if (options.readConfig === undefined) throw new Error("Expected live runtime configuration.");
+      const readConfig = options.readConfig;
       trace.push(`runtime:${options.config.intervals.athleteId}`);
       return {
         ...selectedRuntime,
         async runWindow() {
-          trace.push(`window:${options.readConfig().intervals.athleteId}`);
+          trace.push(`window:${readConfig().intervals.athleteId}`);
           return selectedRuntime.runWindow();
         },
       };

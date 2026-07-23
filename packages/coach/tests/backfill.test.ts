@@ -499,19 +499,21 @@ describe("incremental backfill pages", () => {
   it("claims an ownerless store from the current account before resolving the candidate", async () => {
     const value = await fresh();
     const fingerprint = "a".repeat(64);
-    const resolveFingerprint = vi.fn(async (options: { readonly apiKey: string }) => {
-      if (options.apiKey === "current-key") {
-        expect(await value.store.get("SELECT count(*) AS count FROM store_owner")).toEqual({
-          count: 0,
-        });
-      } else {
-        expect(options.apiKey).toBe("candidate-key");
-        expect(await value.store.get("SELECT account_fingerprint FROM store_owner")).toEqual({
-          account_fingerprint: fingerprint,
-        });
-      }
-      return fingerprint;
-    });
+    const resolveFingerprint = vi.fn(
+      async (options: { readonly apiKey: string; readonly athleteId: string }) => {
+        if (options.apiKey === "current-key") {
+          expect(await value.store.get("SELECT count(*) AS count FROM store_owner")).toEqual({
+            count: 0,
+          });
+        } else {
+          expect(options.apiKey).toBe("candidate-key");
+          expect(await value.store.get("SELECT account_fingerprint FROM store_owner")).toEqual({
+            account_fingerprint: fingerprint,
+          });
+        }
+        return fingerprint;
+      },
+    );
     try {
       await assertRuntimeAthleteOwner(
         value.store,
