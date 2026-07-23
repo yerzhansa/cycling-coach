@@ -257,7 +257,7 @@ describe("store athlete reader", () => {
         { oldest: "1998-07-01", newest: "1998-07-02" },
         {} as never,
       ),
-    ).resolves.toEqual([{ id: activityId, ...summary }]);
+    ).resolves.toEqual([summary]);
     await expect(
       pure.intervals_fetch_activity!.execute!({ activityId }, {} as never),
     ).resolves.toEqual({ ...summary, laps: [] });

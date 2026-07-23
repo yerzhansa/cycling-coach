@@ -460,7 +460,7 @@ describe("coach operations", () => {
       const refresh = vi.fn();
       const runtime = {
         credentials: intervalsCredentials(options.apiKey, options.athleteId),
-        async runWindowAfter(work: (signal: AbortSignal) => Promise<void>) {
+        ...operationRuntime(async (work: (signal: AbortSignal) => Promise<void>) => {
           await work(new AbortController().signal);
           refresh();
           return {
@@ -468,7 +468,7 @@ describe("coach operations", () => {
             legacySucceeded: true,
             counts: requestCounts(0, 0),
           };
-        },
+        }),
       };
       const operations = createCoachOperations(
         {
