@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { UsageLedgerLine } from "@enduragent/engine";
+import { priceInclusiveUsage, type UsageLedgerLine } from "@enduragent/engine";
 import {
   DAILY_SPEND_CAP_FILE,
   DEFAULT_DAILY_SPEND_CAP_USD,
@@ -209,6 +209,215 @@ describe("spend meter service", () => {
       malformedLineCount: 2,
       knownSpendUsd: 0,
       capStatus: "unknown",
+    });
+  });
+
+  it("prices mixed legacy and current Codex rows once and reaches the cap with cached input included", async () => {
+    const legacyLine = line({
+      provider: "openai-codex",
+      model: "gpt-5.2",
+      inputTokens: 2_000,
+      outputTokens: 0,
+      totalTokens: 30_000,
+      cacheReadTokens: 28_000,
+      cacheWriteTokens: 0,
+    });
+    const currentLine = line({
+      provider: "openai-codex",
+      model: "gpt-5.2",
+      inputTokens: 30_000,
+      outputTokens: 0,
+      totalTokens: 30_000,
+      cacheReadTokens: 28_000,
+      cacheWriteTokens: 0,
+    });
+    await ledger("usage-ledger.jsonl", [legacyLine]);
+    const service = createSpendMeterService({
+      dataDir: root,
+      configDir,
+      timezone: "UTC",
+      now: () => Date.UTC(1998, 6, 6, 18),
+    });
+
+    const ledgerPath = join(root, "usage-ledger.jsonl");
+    const persistedLegacyLine = await readFile(ledgerPath, "utf8");
+    const legacySummary = await service.getSpendSummary();
+    expect(legacySummary.knownSpendUsd).toBe(0.0084);
+    expect(await readFile(ledgerPath, "utf8")).toBe(persistedLegacyLine);
+
+    await ledger("usage-ledger.jsonl", [legacyLine, currentLine]);
+    const summary = await service.setDailySpendCap(0.015);
+
+    expect(summary).toMatchObject({
+      generationCount: 2,
+      pricedGenerationCount: 2,
+      unpricedGenerationCount: 0,
+      malformedLineCount: 0,
+      knownSpendUsd: 0.0168,
+      capStatus: "reached",
+      cacheReadTokens: 56_000,
+    });
+    expect(summary.routes).toHaveLength(1);
+    expect(summary.routes[0]).toMatchObject({
+      provider: "openai-codex",
+      model: "gpt-5.2",
+      generationCount: 2,
+      pricedGenerationCount: 2,
+      knownSpendUsd: 0.0168,
+    });
+  });
+
+  it("does not normalize ambiguous Codex rows or any non-Codex provider", async () => {
+    await ledger("usage-ledger.jsonl", [
+      line({
+        provider: "openai-codex",
+        model: "gpt-5.2",
+        inputTokens: 2_000,
+        outputTokens: 0,
+        totalTokens: 29_999,
+        cacheReadTokens: 28_000,
+        cacheWriteTokens: 0,
+      }),
+      line({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        inputTokens: 600,
+        outputTokens: 100,
+        totalTokens: 1_100,
+        cacheReadTokens: 400,
+        cacheWriteTokens: 100,
+      }),
+    ]);
+    const summary = await createSpendMeterService({
+      dataDir: root,
+      configDir,
+      timezone: "UTC",
+      now: () => Date.UTC(1998, 6, 6, 18),
+    }).getSpendSummary();
+
+    expect(summary.routes.map((route) => route.provider)).toEqual(["anthropic", "openai-codex"]);
+    expect(summary.routes[0].knownSpendUsd).toBeCloseTo(0.002295, 12);
+    expect(summary.routes[1].knownSpendUsd).toBe(0.0049);
+  });
+
+  it("rejects a truly non-finite token parsed from a raw ledger number", async () => {
+    const rawLine = JSON.stringify(
+      line({
+        provider: "openai-codex",
+        model: "gpt-5.2",
+        inputTokens: 1,
+        outputTokens: 0,
+        totalTokens: 1,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      }),
+    ).replace('"inputTokens":1,', '"inputTokens":1e400,');
+    await ledger("usage-ledger.jsonl", [rawLine]);
+
+    const summary = await createSpendMeterService({
+      dataDir: root,
+      configDir,
+      timezone: "UTC",
+      now: () => Date.UTC(1998, 6, 6, 18),
+    }).getSpendSummary();
+
+    expect(summary).toMatchObject({
+      generationCount: 1,
+      pricedGenerationCount: 0,
+      unpricedGenerationCount: 1,
+      malformedLineCount: 1,
+      knownSpendUsd: 0,
+      capStatus: "unknown",
+    });
+  });
+
+  it("normalizes an exact legacy identity at Number.MAX_SAFE_INTEGER once", async () => {
+    const legacyLine = line({
+      provider: "openai-codex",
+      model: "gpt-5.2",
+      inputTokens: Number.MAX_SAFE_INTEGER - 2,
+      outputTokens: 0,
+      totalTokens: Number.MAX_SAFE_INTEGER,
+      cacheReadTokens: 1,
+      cacheWriteTokens: 1,
+    });
+    await ledger("usage-ledger.jsonl", [legacyLine]);
+    const ledgerPath = join(root, "usage-ledger.jsonl");
+    const persistedLine = await readFile(ledgerPath, "utf8");
+    const service = createSpendMeterService({
+      dataDir: root,
+      configDir,
+      timezone: "UTC",
+      now: () => Date.UTC(1998, 6, 6, 18),
+    });
+    const expected = priceInclusiveUsage("openai-codex", "gpt-5.2", {
+      inputTokens: Number.MAX_SAFE_INTEGER,
+      outputTokens: 0,
+      cacheReadTokens: 1,
+      cacheWriteTokens: 1,
+    });
+    const unnormalized = priceInclusiveUsage("openai-codex", "gpt-5.2", {
+      inputTokens: Number.MAX_SAFE_INTEGER - 2,
+      outputTokens: 0,
+      cacheReadTokens: 1,
+      cacheWriteTokens: 1,
+    });
+
+    const first = await service.getSpendSummary();
+    const second = await service.getSpendSummary();
+
+    expect(expected).toBeDefined();
+    expect(expected?.total).not.toBe(unnormalized?.total);
+    expect(first).toMatchObject({
+      generationCount: 1,
+      pricedGenerationCount: 1,
+      unpricedGenerationCount: 0,
+      malformedLineCount: 0,
+      knownSpendUsd: expected?.total,
+    });
+    expect(second.knownSpendUsd).toBe(expected?.total);
+    expect(await readFile(ledgerPath, "utf8")).toBe(persistedLine);
+  });
+
+  it("does not guess a legacy identity when individually safe components overflow", async () => {
+    const ambiguousLine = line({
+      provider: "openai-codex",
+      model: "gpt-5.2",
+      inputTokens: 100,
+      outputTokens: Number.MAX_SAFE_INTEGER,
+      totalTokens: Number.MAX_SAFE_INTEGER,
+      cacheReadTokens: 50,
+      cacheWriteTokens: 0,
+    });
+    await ledger("usage-ledger.jsonl", [ambiguousLine]);
+    const expected = priceInclusiveUsage("openai-codex", "gpt-5.2", {
+      inputTokens: 100,
+      outputTokens: Number.MAX_SAFE_INTEGER,
+      cacheReadTokens: 50,
+      cacheWriteTokens: 0,
+    });
+    const guessed = priceInclusiveUsage("openai-codex", "gpt-5.2", {
+      inputTokens: 150,
+      outputTokens: Number.MAX_SAFE_INTEGER,
+      cacheReadTokens: 50,
+      cacheWriteTokens: 0,
+    });
+
+    const summary = await createSpendMeterService({
+      dataDir: root,
+      configDir,
+      timezone: "UTC",
+      now: () => Date.UTC(1998, 6, 6, 18),
+    }).getSpendSummary();
+
+    expect(expected).toBeDefined();
+    expect(expected?.total).not.toBe(guessed?.total);
+    expect(summary).toMatchObject({
+      generationCount: 1,
+      pricedGenerationCount: 1,
+      unpricedGenerationCount: 0,
+      malformedLineCount: 0,
+      knownSpendUsd: expected?.total,
     });
   });
 });

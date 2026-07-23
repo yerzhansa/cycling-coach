@@ -4,7 +4,12 @@ import type { FinishReason, LanguageModelUsage, ModelMessage, ToolSet } from "ai
 import type { FailureReason } from "../host-ports.js";
 import type { GenerateOpts, GenerateResult } from "../llm-types.js";
 import { codexResponses } from "./codex/responses.js";
-import type { CodexResponsesResult, CodexStopReason, CodexToolCall, CodexUsage } from "./codex/responses.js";
+import type {
+  CodexResponsesResult,
+  CodexStopReason,
+  CodexToolCall,
+  CodexUsage,
+} from "./codex/responses.js";
 import { PRICE_TABLE, priceUsage } from "./codex/cost.js";
 
 const DEFAULT_STEP_LIMIT = 10;
@@ -103,27 +108,51 @@ function emptyTokens(): CodexUsage {
   return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 };
 }
 
-function addTokens(acc: CodexUsage, u: CodexUsage): CodexUsage {
-  return {
-    input: acc.input + u.input,
-    output: acc.output + u.output,
-    cacheRead: acc.cacheRead + u.cacheRead,
-    cacheWrite: acc.cacheWrite + u.cacheWrite,
-    totalTokens: acc.totalTokens + u.totalTokens,
-  };
+function validToken(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function safeTokenSum(...values: number[]): number | undefined {
+  let total = 0;
+  for (const value of values) {
+    if (!validToken(value)) return undefined;
+    total += value;
+    if (!Number.isSafeInteger(total)) return undefined;
+  }
+  return total;
+}
+
+function addTokens(acc: CodexUsage | null, u: CodexUsage): CodexUsage | null {
+  if (acc === null) return null;
+  const input = safeTokenSum(acc.input, u.input);
+  const output = safeTokenSum(acc.output, u.output);
+  const cacheRead = safeTokenSum(acc.cacheRead, u.cacheRead);
+  const cacheWrite = safeTokenSum(acc.cacheWrite, u.cacheWrite);
+  const totalTokens = safeTokenSum(acc.totalTokens, u.totalTokens);
+  if (
+    input === undefined ||
+    output === undefined ||
+    cacheRead === undefined ||
+    cacheWrite === undefined ||
+    totalTokens === undefined ||
+    safeTokenSum(input, cacheRead, cacheWrite) === undefined
+  ) {
+    return null;
+  }
+  return { input, output, cacheRead, cacheWrite, totalTokens };
 }
 
 function mapUsage(u: CodexUsage): LanguageModelUsage {
   return {
-    inputTokens: u.input,
-    outputTokens: u.output,
-    totalTokens: u.totalTokens,
+    inputTokens: safeTokenSum(u.input, u.cacheRead, u.cacheWrite),
+    outputTokens: validToken(u.output) ? u.output : undefined,
+    totalTokens: validToken(u.totalTokens) ? u.totalTokens : undefined,
     reasoningTokens: undefined,
-    cachedInputTokens: u.cacheRead,
+    cachedInputTokens: validToken(u.cacheRead) ? u.cacheRead : undefined,
     inputTokenDetails: {
-      noCacheTokens: undefined,
-      cacheReadTokens: u.cacheRead,
-      cacheWriteTokens: u.cacheWrite,
+      noCacheTokens: validToken(u.input) ? u.input : undefined,
+      cacheReadTokens: validToken(u.cacheRead) ? u.cacheRead : undefined,
+      cacheWriteTokens: validToken(u.cacheWrite) ? u.cacheWrite : undefined,
     },
     outputTokenDetails: {
       reasoningTokens: undefined,
@@ -168,7 +197,10 @@ async function executeToolCall(
     schema: asSchema(tool.inputSchema),
   });
   if (!validation.success) {
-    return errorResult(call, `Invalid arguments for tool "${call.name}": ${validation.error.message}`);
+    return errorResult(
+      call,
+      `Invalid arguments for tool "${call.name}": ${validation.error.message}`,
+    );
   }
 
   try {
@@ -248,7 +280,7 @@ export async function codexGenerateText(
 
   const convo: ModelMessage[] = [...initialMessages];
   let lastResult: CodexResponsesResult | undefined;
-  let accumulated = emptyTokens();
+  let accumulated: CodexUsage | null = emptyTokens();
   let stepCount = 0;
 
   for (let step = 0; step < limit; step++) {
@@ -268,7 +300,10 @@ export async function codexGenerateText(
     }
 
     if (result.stopReason === "error") {
-      throw normalizeError(new Error(result.errorMessage ?? "Codex request failed"), classifyFailure);
+      throw normalizeError(
+        new Error(result.errorMessage ?? "Codex request failed"),
+        classifyFailure,
+      );
     }
 
     lastResult = result;
@@ -306,8 +341,11 @@ export async function codexGenerateText(
     toolCalls: toolCalls as GenerateResult["toolCalls"],
     finishReason: mapStopReason(lastResult.stopReason),
     usage: mapUsage(lastResult.usage),
-    totalUsage: mapUsage(accumulated),
+    totalUsage: accumulated === null ? undefined : mapUsage(accumulated),
     steps: stepCount,
-    cost: priceUsage("openai-codex", resolveCodexPriceId(modelId), accumulated),
+    cost:
+      accumulated === null
+        ? undefined
+        : priceUsage("openai-codex", resolveCodexPriceId(modelId), accumulated),
   };
 }
