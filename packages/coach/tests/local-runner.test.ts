@@ -263,6 +263,9 @@ describe("local coach runner", () => {
       "store-close",
       "writer-release",
     ]);
+    expect(mocks.loadConfig).toHaveBeenCalledExactlyOnceWith(selectedHome.configDir, {
+      defaultDataDir: selectedHome.root,
+    });
   });
 
   it("releases the writer after migration throws without opening later stages", async () => {
@@ -372,6 +375,27 @@ describe("local coach runner", () => {
     expect(ready.status).toBe("ready");
     expect(actualCore.loadConfig(selectedHome.configDir).dataDir).toBe(selectedHome.root);
     expect(actualCore.loadConfig.length).toBe(0);
+  });
+
+  it("loads an absent readiness data_dir against the selected athlete root", async () => {
+    const actualReadiness =
+      await vi.importActual<typeof import("../src/readiness.js")>("../src/readiness.js");
+    const actualCore = await vi.importActual<typeof import("@enduragent/core")>("@enduragent/core");
+    mocks.loadConfig.mockImplementation(actualCore.loadConfig);
+    mocks.project.mockImplementation(actualCore.engineConfigFromConfig);
+    await mkdir(selectedHome.configDir, { recursive: true });
+    await writeFile(
+      join(selectedHome.configDir, "config.yaml"),
+      "data_source: store\nllm:\n  provider: anthropic\n",
+      { mode: 0o600 },
+    );
+
+    await expect(actualReadiness.checkHomeReadiness(selectedHome)).resolves.toMatchObject({
+      status: "ready",
+    });
+    expect(mocks.loadConfig).toHaveBeenCalledExactlyOnceWith(selectedHome.configDir, {
+      defaultDataDir: selectedHome.root,
+    });
   });
 
   it("rethrows the exact operation object only after lifecycle, store, and writer cleanup", async () => {

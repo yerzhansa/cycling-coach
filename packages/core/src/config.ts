@@ -39,6 +39,10 @@ export interface Config extends EffectiveRuntimeConfig {
   dataDir: string;
 }
 
+export interface LoadConfigOptions {
+  defaultDataDir?: string;
+}
+
 // ============================================================================
 // CONFIG LOADING
 // ============================================================================
@@ -107,7 +111,10 @@ function assignFieldByPath(cfg: Config, path: SecretFieldPath, value: string): v
   else if (path === "telegram.bot_token") cfg.telegram.botToken = value;
 }
 
-export function loadConfig(configDir: string = CONFIG_DIR): Config {
+export function loadConfig(
+  configDir: string = CONFIG_DIR,
+  options: LoadConfigOptions = {},
+): Config {
   const yaml = readConfigYamlFrom(configDir);
   const dataSource = resolveDataSource(yaml.data_source);
   const llmYaml = (yaml.llm as Record<string, unknown>) ?? {};
@@ -228,7 +235,9 @@ export function loadConfig(configDir: string = CONFIG_DIR): Config {
     telegram: {
       botToken: telegramBotToken,
     },
-    dataDir: (yaml.data_dir as string) ?? configDir,
+    dataDir: Object.hasOwn(yaml, "data_dir")
+      ? ((yaml.data_dir as string) ?? configDir)
+      : (options.defaultDataDir ?? configDir),
   };
 
   if (pending.size > 0) {

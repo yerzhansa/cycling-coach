@@ -13,14 +13,12 @@ function isMap(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export async function checkHomeReadiness(
-  home: AthleteHome,
-): Promise<ReadinessResult> {
+export async function checkHomeReadiness(home: AthleteHome): Promise<ReadinessResult> {
   const configPath = join(home.configDir, "config.yaml");
   try {
     const parsedYaml = parseYaml(await readFile(configPath, "utf8")) as unknown;
     if (!isMap(parsedYaml)) return { status: "not-configured", configPath };
-    const config = loadConfig(home.configDir);
+    const config = loadConfig(home.configDir, { defaultDataDir: home.root });
     const profileName = config.llm.authProfile;
     if (profileName !== undefined) {
       const profiles = JSON.parse(
