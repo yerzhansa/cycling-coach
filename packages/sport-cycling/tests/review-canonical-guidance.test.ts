@@ -25,4 +25,11 @@ describe("cycling review guidance", () => {
     expect(review).not.toMatch(/^## (?:Decoupling|Best-efforts|Cycling fade patterns)/mu);
     expect(review).not.toMatch(/icu_intervals|paired_event_id|race=true|sub_type=RACE/);
   });
+
+  it("preserves cycling vocabulary without implying time-aligned stream analysis", () => {
+    expect(soul).toContain("FRC");
+    expect(soul).toContain("torque-effectiveness");
+    expect(soul).toContain("pedal-smoothness");
+    expect(soul).toMatch(/Do not calculate time-aligned metrics/);
+  });
 });
