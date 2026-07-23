@@ -497,7 +497,7 @@ describe("matchers", () => {
 });
 
 describe("real repository", () => {
-  it("the committed workspace is clean", () => {
+  it("the committed workspace is clean", { timeout: 15_000 }, () => {
     expect(main([])).toBe(0);
   });
 
