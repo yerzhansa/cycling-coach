@@ -28,6 +28,7 @@ import {
   refreshCodexToken,
   resolveRuntimeConfig,
   resolveSecretRef,
+  sessionConfigEnvironmentOwnership,
   type Config,
   type ReferenceRuntime,
   type RuntimeConfigPatch,
@@ -173,6 +174,7 @@ function runtimePatch(request: ConfigureRuntimeRpcParams): RuntimeConfigPatch {
             athleteId: request.intervals.athlete_id,
           },
         }),
+    ...(request.session === undefined ? {} : { session: { ...request.session } }),
   };
 }
 
@@ -268,6 +270,23 @@ function persistRuntimeConfig(
       athlete_id: candidate.intervals.athleteId,
     };
   }
+  if (request.session !== undefined) {
+    const session: Record<string, unknown> = {
+      ...(isRecord(parsed.session) ? parsed.session : {}),
+    };
+    for (const field of [
+      "historyTokenBudgetRatio",
+      "idleMinutes",
+      "dailyResetHour",
+      "resetArchiveRetentionDays",
+      "timezone",
+    ] as const) {
+      if (request.session[field] !== undefined) {
+        session[field] = candidate.session[field];
+      }
+    }
+    next.session = session;
+  }
   replacePrivateFile(path, toYaml(next));
 }
 
@@ -286,29 +305,47 @@ function runtimeCredentialConfigured(configDir: string, config: Config): boolean
   }
 }
 
-function runtimeConfigSnapshot(configDir: string, config: Config): GetRuntimeConfigRpcResult {
+function runtimeConfigSnapshot(
+  configDir: string,
+  config: Config,
+  environment: Readonly<Record<string, string | undefined>>,
+  timezone: string,
+): GetRuntimeConfigRpcResult {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     llm: {
       provider: config.llm.provider,
       model: config.llm.model,
       credential_configured: runtimeCredentialConfigured(configDir, config),
     },
     intervals: { athlete_id: config.intervals.athleteId },
-    session: { ...config.session },
+    session: {
+      ...config.session,
+      timezone,
+      managedByEnvironment: sessionConfigEnvironmentOwnership(environment),
+    },
   };
 }
 
-function createReconfigurableEngine(initial: CoachEngine): {
+interface RuntimeBundle {
   readonly engine: CoachEngine;
-  replace(create: () => CoachEngine | Promise<CoachEngine>): Promise<void>;
+  readonly memory: Memory;
+  readonly chatStore: ChatStore;
+  readonly spendMeter: SpendMeterService;
+  readonly timezone: string;
+}
+
+function createReconfigurableRuntimeBundle(initial: RuntimeBundle): {
+  readonly engine: CoachEngine;
+  readonly spendMeter: SpendMeterService;
+  replace(create: () => RuntimeBundle | Promise<RuntimeBundle>): Promise<void>;
 } {
   let active = initial;
   let admission = Promise.resolve();
   let activeCalls = 0;
   const drainWaiters = new Set<() => void>();
 
-  const run = async <T>(operation: (engine: CoachEngine) => Promise<T>): Promise<T> => {
+  const run = async <T>(operation: (bundle: RuntimeBundle) => Promise<T>): Promise<T> => {
     await admission;
     activeCalls += 1;
     const selected = active;
@@ -325,10 +362,15 @@ function createReconfigurableEngine(initial: CoachEngine): {
 
   return {
     engine: {
-      chat: (request, onEvent) => run((engine) => engine.chat(request, onEvent)),
-      resetSession: (request) => run((engine) => engine.resetSession(request)),
-      hasSession: (request) => run((engine) => engine.hasSession(request)),
-      getAthleteState: () => run((engine) => engine.getAthleteState()),
+      chat: (request, onEvent) => run((bundle) => bundle.engine.chat(request, onEvent)),
+      resetSession: (request) => run((bundle) => bundle.engine.resetSession(request)),
+      hasSession: (request) => run((bundle) => bundle.engine.hasSession(request)),
+      getAthleteState: () => run((bundle) => bundle.engine.getAthleteState()),
+    },
+    spendMeter: {
+      getSpendSummary: () => run((bundle) => bundle.spendMeter.getSpendSummary()),
+      setDailySpendCap: (dailyCapUsd) =>
+        run((bundle) => bundle.spendMeter.setDailySpendCap(dailyCapUsd)),
     },
     async replace(create) {
       const previousAdmission = admission;
@@ -540,12 +582,6 @@ export async function createLocalCoachComposition(
     );
     return approval ?? undefined;
   };
-  const spendMeter = createSpendMeterService({
-    dataDir: input.home.root,
-    configDir: input.home.configDir,
-    timezone: resolveUserTimezone(input.config.session.timezone),
-    now,
-  });
   let activeConfig = copyConfig(input.config);
   if (
     activeConfig.intervals.apiKey.length > 0 &&
@@ -598,11 +634,6 @@ export async function createLocalCoachComposition(
         : dependencies.createRuntime(runtimeOptions);
     await runtime.runWindow();
     runtime.startScheduler();
-    const memory = new Memory(input.home.root, input.config.session.timezone);
-    const chatStore = new ChatStore(
-      input.home.root,
-      input.config.session.resetArchiveRetentionDays,
-    );
     const logger = createSubsystemLogger("agent", input.home.root);
     const getAccessToken = createAccessTokenReader(input.home.configDir, now);
     const repository = (dependencies.createRepository ?? createAnchorRepository)(
@@ -615,8 +646,21 @@ export async function createLocalCoachComposition(
       dataDir: input.home.root,
       cyclingFtpAnchorResolver,
     });
-    const buildEngine = (config: Config): CoachEngine => {
-      const projectedConfig = engineConfigFromConfig(config);
+    const buildBundle = (config: Config): RuntimeBundle => {
+      const timezone = resolveUserTimezone(config.session.timezone);
+      const effectiveConfig =
+        timezone === config.session.timezone
+          ? config
+          : {
+              ...config,
+              session: { ...config.session, timezone },
+            };
+      const memory = new Memory(input.home.root, timezone);
+      const chatStore = new ChatStore(
+        input.home.root,
+        config.session.resetArchiveRetentionDays,
+      );
+      const projectedConfig = engineConfigFromConfig(effectiveConfig);
       const legacyClient =
         config.intervals.apiKey.length === 0
           ? null
@@ -651,20 +695,47 @@ export async function createLocalCoachComposition(
       };
       const engineInput = { sport: cyclingSport, ports } satisfies CreateCoachEngineInput;
       const backend = (dependencies.createBackend ?? createCoachEngine)(engineInput);
-      return createCoachEngineAdapter({
-        backend,
-        getAthleteState: () => stateReader.getAthleteState(),
-        cyclingFtpAnchorResolver,
-        now,
-      });
+      return {
+        memory,
+        chatStore,
+        timezone,
+        spendMeter: createSpendMeterService({
+          dataDir: input.home.root,
+          configDir: input.home.configDir,
+          timezone,
+          now,
+        }),
+        engine: createCoachEngineAdapter({
+          backend,
+          getAthleteState: () => stateReader.getAthleteState(),
+          cyclingFtpAnchorResolver,
+          now,
+        }),
+      };
     };
-    const reconfigurable = createReconfigurableEngine(buildEngine(activeConfig));
+    const initialBundle = buildBundle(activeConfig);
+    let activeTimezone = initialBundle.timezone;
+    const reconfigurable = createReconfigurableRuntimeBundle(initialBundle);
     const persistConfig = dependencies.persistRuntimeConfig ?? persistRuntimeConfig;
     const applyRuntimeConfig = async (
       request: ConfigureRuntimeRpcParams,
       signal: AbortSignal,
     ): Promise<void> => {
       signal.throwIfAborted();
+      if (request.session !== undefined) {
+        const ownership = sessionConfigEnvironmentOwnership(input.env);
+        for (const field of [
+          "historyTokenBudgetRatio",
+          "idleMinutes",
+          "dailyResetHour",
+          "resetArchiveRetentionDays",
+          "timezone",
+        ] as const) {
+          if (request.session[field] !== undefined && ownership[field]) {
+            throw new Error(`runtime session ${field} is controlled by the daemon environment`);
+          }
+        }
+      }
       const candidate = mergedRuntimeConfig(activeConfig, request);
       const activeAthleteId =
         activeConfig.intervals.athleteId.length === 0 ? "0" : activeConfig.intervals.athleteId;
@@ -704,7 +775,7 @@ export async function createLocalCoachComposition(
           )?.profile,
         );
       }
-      const replacement = buildEngine(candidate);
+      const replacement = buildBundle(candidate);
       signal.throwIfAborted();
       await reconfigurable.replace(async () => {
         signal.throwIfAborted();
@@ -729,6 +800,7 @@ export async function createLocalCoachComposition(
           throw error;
         }
         activeConfig = candidate;
+        activeTimezone = replacement.timezone;
         return replacement;
       });
       if (request.intervals !== undefined && candidate.intervals.apiKey.length > 0) {
@@ -749,14 +821,20 @@ export async function createLocalCoachComposition(
         intervalsCredentials: options.liveIntervals,
         historyNewestDate: () => new Date(now()).toISOString().slice(0, 10),
         applyRuntimeConfig,
-        readRuntimeConfig: () => runtimeConfigSnapshot(input.home.configDir, activeConfig),
+        readRuntimeConfig: () =>
+          runtimeConfigSnapshot(
+            input.home.configDir,
+            activeConfig,
+            input.env,
+            activeTimezone,
+          ),
       },
       dependencies.operationsDependencies,
     );
     return {
       engine: reconfigurable.engine,
       operations,
-      spendMeter,
+      spendMeter: reconfigurable.spendMeter,
       close() {
         closePromise ??= (async () => {
           let failure: { readonly error: unknown } | undefined;

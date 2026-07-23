@@ -141,4 +141,39 @@ describe("runtime configuration authority", () => {
       resolveRuntimeConfig({ llm: { provider: "anthropic", unexpected: true } } as never),
     ).toThrow("Unknown llm field");
   });
+
+  it("normalizes valid session values and rejects values the runtime snapshot cannot represent", () => {
+    expect(
+      resolveRuntimeConfig({
+        session: {
+          historyTokenBudgetRatio: 1,
+          idleMinutes: Number.MAX_SAFE_INTEGER,
+          dailyResetHour: 23,
+          resetArchiveRetentionDays: 0,
+          timezone: "  Europe/Berlin  ",
+        },
+      }).session,
+    ).toEqual({
+      historyTokenBudgetRatio: 1,
+      idleMinutes: Number.MAX_SAFE_INTEGER,
+      dailyResetHour: 23,
+      resetArchiveRetentionDays: 0,
+      timezone: "Europe/Berlin",
+    });
+    expect(resolveRuntimeConfig({ session: { timezone: "" } }).session.timezone).toBe("");
+
+    for (const session of [
+      { historyTokenBudgetRatio: 0 },
+      { historyTokenBudgetRatio: 1.01 },
+      { idleMinutes: -1 },
+      { idleMinutes: Number.MAX_SAFE_INTEGER + 1 },
+      { dailyResetHour: -1 },
+      { dailyResetHour: 24 },
+      { resetArchiveRetentionDays: -1 },
+      { resetArchiveRetentionDays: Number.MAX_SAFE_INTEGER + 1 },
+      { timezone: "Not/A-Timezone" },
+    ]) {
+      expect(() => resolveRuntimeConfig({ session })).toThrow();
+    }
+  });
 });

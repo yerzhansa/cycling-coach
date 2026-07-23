@@ -5,6 +5,7 @@ import type {
   ProviderModelSettingsView,
   ProviderModelValidationError,
 } from "./provider-model-controller.js";
+import { createResidentSettingsShell, type ResidentSettingsShell } from "./shell.js";
 
 const VALIDATION_COPY: Readonly<Record<ProviderModelValidationError, string>> = {
   "model-required": "Enter a model name.",
@@ -64,40 +65,32 @@ function modelLabel(form: ProviderModelFormState): string {
 
 export function createProviderModelSettingsView(input: {
   readonly document: Document;
-  readonly actionHost: HTMLElement;
+  readonly shell?: ResidentSettingsShell;
+  readonly actionHost?: HTMLElement;
   readonly before?: Node | null;
 }): ProviderModelSettingsView {
-  const opener = element(input.document, "button", "provider-model-settings-button", "Settings");
-  opener.type = "button";
-  opener.setAttribute("aria-label", "Coach settings");
-  opener.setAttribute("aria-haspopup", "dialog");
-  opener.setAttribute("aria-controls", "provider-model-settings-dialog");
-  opener.setAttribute("aria-expanded", "false");
+  if (input.shell === undefined && input.actionHost === undefined) {
+    throw new TypeError("Settings view requires a resident shell or action host.");
+  }
+  const ownsShell = input.shell === undefined;
+  const shell =
+    input.shell ??
+    createResidentSettingsShell({
+      document: input.document,
+      actionHost: input.actionHost!,
+      before: input.before,
+    });
 
-  const dialog = element(input.document, "dialog", "provider-model-settings-dialog");
-  dialog.id = "provider-model-settings-dialog";
-  dialog.setAttribute("aria-labelledby", "provider-model-settings-title");
-  dialog.setAttribute("aria-describedby", "provider-model-settings-intro");
-  dialog.setAttribute("aria-modal", "true");
-
-  const form = element(input.document, "form", "provider-model-settings");
-  const header = element(input.document, "header", "provider-model-settings__header");
-  const heading = element(input.document, "div");
-  const kicker = element(input.document, "p", "provider-model-settings__kicker", "Coach settings");
-  const title = element(input.document, "h2", undefined, "Provider and model");
-  title.id = "provider-model-settings-title";
+  const form = element(input.document, "form", "provider-model-settings__section");
+  form.noValidate = true;
+  const section = element(input.document, "fieldset", "settings-section");
+  const legend = element(input.document, "legend", "settings-section__legend", "Provider & model");
   const intro = element(
     input.document,
     "p",
-    "provider-model-settings__intro",
+    "settings-section__intro",
     "Choose which provider and model power your coaching conversations.",
   );
-  intro.id = "provider-model-settings-intro";
-  heading.append(kicker, title, intro);
-  const close = element(input.document, "button", "provider-model-settings__close", "Close");
-  close.type = "button";
-  close.setAttribute("aria-label", "Close coach settings");
-  header.append(heading, close);
 
   const current = element(input.document, "p", "provider-model-settings__current");
   const route = element(input.document, "div", "coach-route");
@@ -148,6 +141,7 @@ export function createProviderModelSettingsView(input: {
   const validation = element(input.document, "p", "provider-model-settings__validation");
   validation.id = "provider-model-settings-validation";
   validation.setAttribute("aria-live", "polite");
+  validation.setAttribute("aria-atomic", "true");
   fields.append(providerField, modelField, customField, validation);
 
   const feedback = element(input.document, "p", "provider-model-settings__feedback");
@@ -165,19 +159,24 @@ export function createProviderModelSettingsView(input: {
     "Open Setup",
   );
   openSetup.type = "button";
-  const cancel = element(input.document, "button", "provider-model-settings__cancel", "Cancel");
+  const cancel = element(input.document, "button", "provider-model-settings__cancel", "Close");
   cancel.type = "button";
-  const save = element(input.document, "button", "provider-model-settings__save", "Save changes");
+  const save = element(
+    input.document,
+    "button",
+    "provider-model-settings__save",
+    "Save coach route",
+  );
   save.type = "submit";
   actions.append(retry, openSetup, cancel, save);
-  form.append(header, current, route, fields, feedback, actions);
-  dialog.append(form);
-
-  input.actionHost.insertBefore(opener, input.before ?? null);
-  input.document.body.append(dialog);
+  section.append(legend, intro, current, route, fields, feedback, actions);
+  form.append(section);
+  shell.body.append(form);
 
   let disposed = false;
-  let saving = false;
+  let ownSaving = false;
+  let anyMutation = shell.mutationActive;
+  let lastState: Exclude<ProviderModelSettingsState, { readonly status: "closed" }> | undefined;
   let handlers:
     | {
         readonly onOpen: () => void;
@@ -191,36 +190,26 @@ export function createProviderModelSettingsView(input: {
       }
     | undefined;
 
-  const requestClose = (): void => {
-    if (!disposed && !saving) handlers?.onClose();
+  const applyInteractivity = (): void => {
+    const editable = lastState === undefined ? null : formState(lastState);
+    const busy = ownSaving || anyMutation;
+    const hasDraft = editable?.draft !== null && editable?.draft !== undefined;
+    provider.disabled = busy || editable === null;
+    model.disabled = busy || !hasDraft;
+    customModel.disabled = busy || !hasDraft;
+    retry.disabled = busy;
+    openSetup.disabled = busy;
+    cancel.disabled = busy;
+    const canSave =
+      editable !== null &&
+      editable.draft !== null &&
+      editable.dirty &&
+      editable.validationError === null;
+    save.disabled = busy || !canSave;
+    save.textContent = ownSaving ? "Saving…" : "Save coach route";
   };
-  const onOpen = (): void => {
-    if (!disposed) handlers?.onOpen();
-  };
-  const onCancel = (event: Event): void => {
-    event.preventDefault();
-    requestClose();
-  };
-  const onBackdropClick = (event: MouseEvent): void => {
-    if (event.target === dialog) requestClose();
-  };
-  const onKeyDown = (event: KeyboardEvent): void => {
-    if (event.key !== "Tab") return;
-    const focusable = [close, provider, model, customModel, retry, openSetup, cancel, save].filter(
-      (control) =>
-        !control.disabled && !control.hidden && (control !== customModel || !customField.hidden),
-    );
-    if (focusable.length === 0) return;
-    const first = focusable[0]!;
-    const last = focusable[focusable.length - 1]!;
-    if (event.shiftKey && input.document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && input.document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  };
+
+  const onCancel = (): void => shell.requestClose();
   const onSubmit = (event: SubmitEvent): void => {
     event.preventDefault();
     if (!save.disabled && !disposed) handlers?.onSave();
@@ -243,18 +232,27 @@ export function createProviderModelSettingsView(input: {
     if (!openSetup.disabled && !disposed) handlers?.onOpenSetup();
   };
 
-  opener.addEventListener("click", onOpen);
-  close.addEventListener("click", requestClose);
-  cancel.addEventListener("click", requestClose);
+  cancel.addEventListener("click", onCancel);
   retry.addEventListener("click", onRetry);
   openSetup.addEventListener("click", onOpenSetup);
   provider.addEventListener("change", onProviderChange);
   model.addEventListener("change", onModelChange);
   customModel.addEventListener("input", onCustomModelChange);
   form.addEventListener("submit", onSubmit);
-  dialog.addEventListener("cancel", onCancel);
-  dialog.addEventListener("click", onBackdropClick);
-  dialog.addEventListener("keydown", onKeyDown);
+
+  const unregisterFocusables = shell.registerFocusables(() => [
+    provider,
+    model,
+    customModel,
+    retry,
+    openSetup,
+    cancel,
+    save,
+  ]);
+  const unsubscribeMutation = shell.subscribeToMutation((active) => {
+    anyMutation = active;
+    applyInteractivity();
+  });
 
   const renderProviderOptions = (state: ProviderModelFormState): void => {
     const options: HTMLOptionElement[] = [];
@@ -298,38 +296,27 @@ export function createProviderModelSettingsView(input: {
     model.value = state.draft?.modelChoice ?? "";
   };
 
+  if (ownsShell) {
+    shell.bind({
+      onOpen: () => handlers?.onOpen(),
+      onClose: () => handlers?.onClose(),
+    });
+  }
+
   return {
     bind(nextHandlers) {
       handlers = nextHandlers;
     },
-    open() {
-      if (disposed || dialog.open) return;
-      dialog.showModal();
-      opener.setAttribute("aria-expanded", "true");
-      close.focus();
-    },
-    close() {
-      if (disposed) return;
-      if (dialog.open) dialog.close();
-      opener.setAttribute("aria-expanded", "false");
-      opener.focus();
-    },
+    open: () => shell.open(),
+    close: () => shell.close(),
     render(state) {
       if (disposed) return;
+      lastState = state;
       const editable = formState(state);
-      saving = state.status === "saving";
+      ownSaving = state.status === "saving";
+      shell.setSectionSaving("provider-model", ownSaving);
       const loading = state.status === "loading";
       const loadError = state.status === "error" && state.kind === "load";
-      opener.disabled = saving;
-      close.disabled = saving;
-      cancel.disabled = saving;
-      provider.disabled = saving || editable?.draft === null;
-      model.disabled = saving || editable?.draft === null;
-      customModel.disabled = saving;
-      retry.disabled = saving;
-      openSetup.disabled = saving;
-      if (loading || saving) dialog.setAttribute("aria-busy", "true");
-      else dialog.removeAttribute("aria-busy");
 
       current.hidden = editable === null;
       route.hidden = editable === null;
@@ -350,8 +337,6 @@ export function createProviderModelSettingsView(input: {
         renderProviderOptions(editable);
         renderModelOptions(editable);
         const hasDraft = editable.draft !== null;
-        provider.disabled = saving;
-        model.disabled = saving || !hasDraft;
         routeProvider.textContent = hasDraft
           ? providerLabel(editable.draft!.provider.provider)
           : "Not configured";
@@ -397,35 +382,26 @@ export function createProviderModelSettingsView(input: {
         feedback.textContent = "";
         feedback.hidden = true;
       }
-
-      const canSave =
-        editable !== null &&
-        editable.draft !== null &&
-        editable.dirty &&
-        editable.validationError === null;
-      save.disabled = saving || !canSave;
-      save.textContent = saving ? "Saving…" : "Save changes";
+      applyInteractivity();
     },
     dispose() {
       if (disposed) return;
       disposed = true;
-      saving = false;
+      ownSaving = false;
+      shell.setSectionSaving("provider-model", false);
       handlers = undefined;
-      opener.removeEventListener("click", onOpen);
-      close.removeEventListener("click", requestClose);
-      cancel.removeEventListener("click", requestClose);
+      lastState = undefined;
+      unsubscribeMutation();
+      unregisterFocusables();
+      cancel.removeEventListener("click", onCancel);
       retry.removeEventListener("click", onRetry);
       openSetup.removeEventListener("click", onOpenSetup);
       provider.removeEventListener("change", onProviderChange);
       model.removeEventListener("change", onModelChange);
       customModel.removeEventListener("input", onCustomModelChange);
       form.removeEventListener("submit", onSubmit);
-      dialog.removeEventListener("cancel", onCancel);
-      dialog.removeEventListener("click", onBackdropClick);
-      dialog.removeEventListener("keydown", onKeyDown);
-      if (dialog.open) dialog.close();
-      opener.remove();
-      dialog.remove();
+      form.remove();
+      if (ownsShell) shell.dispose();
     },
   };
 }

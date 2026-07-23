@@ -606,7 +606,7 @@ describe("coach operations", () => {
     }
   });
 
-  it("applies runtime configuration while a store sync is blocked", async () => {
+  it("applies session configuration through its FIFO without waiting for the store lane", async () => {
     const syncStarted = promiseGate();
     const releaseSync = promiseGate();
     const trace: string[] = [];
@@ -636,11 +636,11 @@ describe("coach operations", () => {
     await syncStarted.promise;
     await expect(
       operations.configureRuntime({
-        llm: { provider: "openai", model: "model-a", api_key: "placeholder" },
+        session: { dailyResetHour: 6, timezone: "Europe/Berlin" },
       }),
     ).resolves.toEqual({
-      schemaVersion: 1,
-      applied: { llm: true, intervals: false },
+      schemaVersion: 2,
+      applied: { llm: false, intervals: false, session: true },
     });
     expect(trace).toEqual(["sync-start", "configure"]);
 
@@ -674,7 +674,7 @@ describe("coach operations", () => {
       readRuntimeConfig: () => {
         trace.push("read");
         return {
-          schemaVersion: 1,
+          schemaVersion: 2,
           llm: { provider: "openai", model: "model-a", credential_configured: true },
           intervals: { athlete_id: "synthetic-athlete" },
           session: {
@@ -683,6 +683,13 @@ describe("coach operations", () => {
             dailyResetHour: 4,
             resetArchiveRetentionDays: 0,
             timezone: "UTC",
+            managedByEnvironment: {
+              historyTokenBudgetRatio: false,
+              idleMinutes: false,
+              dailyResetHour: false,
+              resetArchiveRetentionDays: false,
+              timezone: false,
+            },
           },
         };
       },
@@ -691,7 +698,7 @@ describe("coach operations", () => {
     const sync = operations.sync({});
     await syncStarted.promise;
     await expect(operations.getRuntimeConfig({})).resolves.toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       llm: { model: "model-a" },
     });
     expect(trace).toEqual(["sync-start", "read"]);
@@ -735,7 +742,7 @@ describe("coach operations", () => {
       readRuntimeConfig: () => {
         trace.push(`read-${activeModel}`);
         return {
-          schemaVersion: 1,
+          schemaVersion: 2,
           llm: { provider: "openai", model: activeModel, credential_configured: true },
           intervals: { athlete_id: "synthetic-athlete" },
           session: {
@@ -744,6 +751,13 @@ describe("coach operations", () => {
             dailyResetHour: 4,
             resetArchiveRetentionDays: 0,
             timezone: "UTC",
+            managedByEnvironment: {
+              historyTokenBudgetRatio: false,
+              idleMinutes: false,
+              dailyResetHour: false,
+              resetArchiveRetentionDays: false,
+              timezone: false,
+            },
           },
         };
       },
@@ -778,12 +792,12 @@ describe("coach operations", () => {
     ]);
     expect(syncResult).toMatchObject({ schemaVersion: 1 });
     expect(intervalsResult).toEqual({
-      schemaVersion: 1,
-      applied: { llm: true, intervals: true },
+      schemaVersion: 2,
+      applied: { llm: true, intervals: true, session: false },
     });
     expect(laterLlmResult).toEqual({
-      schemaVersion: 1,
-      applied: { llm: true, intervals: false },
+      schemaVersion: 2,
+      applied: { llm: true, intervals: false, session: false },
     });
     expect(laterReadResult.llm.model).toBe("model-b");
     expect(trace).toEqual([
@@ -866,7 +880,7 @@ describe("coach operations", () => {
       readRuntimeConfig: () => {
         trace.push(`read-${activeModel}`);
         return {
-          schemaVersion: 1,
+          schemaVersion: 2,
           llm: { provider: "openai", model: activeModel, credential_configured: true },
           intervals: { athlete_id: "synthetic-athlete" },
           session: {
@@ -875,6 +889,13 @@ describe("coach operations", () => {
             dailyResetHour: 4,
             resetArchiveRetentionDays: 0,
             timezone: "UTC",
+            managedByEnvironment: {
+              historyTokenBudgetRatio: false,
+              idleMinutes: false,
+              dailyResetHour: false,
+              resetArchiveRetentionDays: false,
+              timezone: false,
+            },
           },
         };
       },
@@ -894,12 +915,12 @@ describe("coach operations", () => {
     releaseFirst.release();
     const [firstResult, secondResult, readResult] = await Promise.all([first, second, read]);
     expect(firstResult).toEqual({
-      schemaVersion: 1,
-      applied: { llm: true, intervals: false },
+      schemaVersion: 2,
+      applied: { llm: true, intervals: false, session: false },
     });
     expect(secondResult).toEqual({
-      schemaVersion: 1,
-      applied: { llm: true, intervals: false },
+      schemaVersion: 2,
+      applied: { llm: true, intervals: false, session: false },
     });
     expect(readResult.llm.model).toBe("model-b");
     expect(trace).toEqual([
@@ -946,7 +967,7 @@ describe("coach operations", () => {
         trace.push(`llm-${activeModel}`);
       },
       readRuntimeConfig: () => ({
-        schemaVersion: 1,
+        schemaVersion: 2,
         llm: { provider: "openai", model: activeModel, credential_configured: true },
         intervals: { athlete_id: "synthetic-athlete" },
         session: {
@@ -955,6 +976,13 @@ describe("coach operations", () => {
           dailyResetHour: 4,
           resetArchiveRetentionDays: 0,
           timezone: "UTC",
+          managedByEnvironment: {
+            historyTokenBudgetRatio: false,
+            idleMinutes: false,
+            dailyResetHour: false,
+            resetArchiveRetentionDays: false,
+            timezone: false,
+          },
         },
       }),
     });
@@ -980,8 +1008,8 @@ describe("coach operations", () => {
       expect.objectContaining({ message: "synthetic configuration failure" }),
     );
     await expect(laterLlm).resolves.toEqual({
-      schemaVersion: 1,
-      applied: { llm: true, intervals: false },
+      schemaVersion: 2,
+      applied: { llm: true, intervals: false, session: false },
     });
     await expect(laterRead).resolves.toMatchObject({ llm: { model: "model-b" } });
     await expect(nextSync).resolves.toMatchObject({ schemaVersion: 1 });
@@ -1004,7 +1032,7 @@ describe("coach operations", () => {
       historyNewestDate: () => "1998-07-18",
       applyRuntimeConfig,
       readRuntimeConfig: () => ({
-        schemaVersion: 1,
+        schemaVersion: 2,
         llm: { provider: "google", model: "third", credential_configured: true },
         intervals: { athlete_id: "athlete-b" },
         session: {
@@ -1013,6 +1041,13 @@ describe("coach operations", () => {
           dailyResetHour: 4,
           resetArchiveRetentionDays: 0,
           timezone: "UTC",
+          managedByEnvironment: {
+            historyTokenBudgetRatio: false,
+            idleMinutes: false,
+            dailyResetHour: false,
+            resetArchiveRetentionDays: false,
+            timezone: false,
+          },
         },
       }),
     });
@@ -1035,10 +1070,10 @@ describe("coach operations", () => {
       }),
     ];
     expect(results).toEqual([
-      { schemaVersion: 1, applied: { llm: true, intervals: false } },
-      { schemaVersion: 1, applied: { llm: false, intervals: true } },
-      { schemaVersion: 1, applied: { llm: true, intervals: true } },
-      { schemaVersion: 1, applied: { llm: true, intervals: false } },
+      { schemaVersion: 2, applied: { llm: true, intervals: false, session: false } },
+      { schemaVersion: 2, applied: { llm: false, intervals: true, session: false } },
+      { schemaVersion: 2, applied: { llm: true, intervals: true, session: false } },
+      { schemaVersion: 2, applied: { llm: true, intervals: false, session: false } },
     ]);
     expect(applied).toEqual([
       llmFirst,
@@ -1053,7 +1088,7 @@ describe("coach operations", () => {
       expect(serializedResults).not.toContain(value);
     }
     await expect(operations.getRuntimeConfig({})).resolves.toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       llm: { provider: "google", model: "third", credential_configured: true },
       intervals: { athlete_id: "athlete-b" },
       session: {
@@ -1062,6 +1097,13 @@ describe("coach operations", () => {
         dailyResetHour: 4,
         resetArchiveRetentionDays: 0,
         timezone: "UTC",
+        managedByEnvironment: {
+          historyTokenBudgetRatio: false,
+          idleMinutes: false,
+          dailyResetHour: false,
+          resetArchiveRetentionDays: false,
+          timezone: false,
+        },
       },
     });
   });

@@ -167,7 +167,10 @@ function script(calls: ScriptRequest[], initial: "reached" | "complete") {
       }
       if (request.method === "saveIntake") return response({ schemaVersion: 1, saved: true });
       if (request.method === "configureRuntime") {
-        return response({ schemaVersion: 1, applied: { llm: true, intervals: true } });
+        return response({
+          schemaVersion: 2,
+          applied: { llm: true, intervals: true, session: false },
+        });
       }
       throw new TypeError(`unexpected fixture method ${request.method}`);
     },

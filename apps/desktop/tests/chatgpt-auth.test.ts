@@ -39,7 +39,7 @@ function runtimeSnapshot(
   credentialConfigured = provider === "openai-codex",
 ): RuntimeConfigSnapshot {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     llm: {
       provider,
       model: "custom-selected-model",
@@ -52,6 +52,13 @@ function runtimeSnapshot(
       dailyResetHour: 4,
       resetArchiveRetentionDays: 0,
       timezone: "UTC",
+      managedByEnvironment: {
+        historyTokenBudgetRatio: false,
+        idleMinutes: false,
+        dailyResetHour: false,
+        resetArchiveRetentionDays: false,
+        timezone: false,
+      },
     },
   };
 }

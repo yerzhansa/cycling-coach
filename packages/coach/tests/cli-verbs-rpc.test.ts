@@ -46,12 +46,16 @@ const operations: CoachOperations = {
     requests: { store: 1, reference: 1, total: 2 },
   }),
   saveIntake: async () => ({ schemaVersion: 1, saved: true }),
-  configureRuntime: async ({ llm, intervals }) => ({
-    schemaVersion: 1,
-    applied: { llm: llm !== undefined, intervals: intervals !== undefined },
+  configureRuntime: async ({ llm, intervals, session }) => ({
+    schemaVersion: 2,
+    applied: {
+      llm: llm !== undefined,
+      intervals: intervals !== undefined,
+      session: session !== undefined,
+    },
   }),
   getRuntimeConfig: async () => ({
-    schemaVersion: 1,
+    schemaVersion: 2,
     llm: { provider: "anthropic", model: "synthetic-model", credential_configured: false },
     intervals: { athlete_id: "synthetic-athlete" },
     session: {
@@ -60,6 +64,13 @@ const operations: CoachOperations = {
       dailyResetHour: 4,
       resetArchiveRetentionDays: 0,
       timezone: "UTC",
+      managedByEnvironment: {
+        historyTokenBudgetRatio: false,
+        idleMinutes: false,
+        dailyResetHour: false,
+        resetArchiveRetentionDays: false,
+        timezone: false,
+      },
     },
   }),
 };

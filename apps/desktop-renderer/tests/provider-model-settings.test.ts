@@ -10,10 +10,11 @@ import {
   createProviderModelSettingsController,
   type ProviderModelFormState,
   type ProviderModelSettingsController,
-  type ProviderModelSettingsState,
   type ProviderModelSettingsView,
 } from "../src/settings/provider-model-controller.js";
 import { createProviderModelSettingsView } from "../src/settings/provider-model-view.js";
+import { createResidentSettingsShell } from "../src/settings/shell.js";
+import { createSessionSettingsView } from "../src/settings/session-view.js";
 
 interface Deferred<T> {
   readonly promise: Promise<T>;
@@ -697,6 +698,12 @@ describe("provider and model settings view", () => {
       validationError: "model-required",
     });
     expect(custom.attributes.get("aria-invalid")).toBe("true");
+    const validation = find(
+      dialog,
+      (node) => node.id === "provider-model-settings-validation",
+    );
+    expect(validation.attributes.get("aria-live")).toBe("polite");
+    expect(validation.attributes.get("aria-atomic")).toBe("true");
 
     view.render({ ...readyState(), status: "saving" });
     const controls = descendants(dialog).filter((node) =>
@@ -735,5 +742,156 @@ describe("provider and model settings view", () => {
     expect(styles).toContain("@media (max-width: 440px)");
     expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
     expect(styles).toContain("animation: none");
+  });
+});
+
+describe("resident settings shell", () => {
+  it("hosts both independent forms, shares mutation state, and contains focus", () => {
+    const document = new FakeDocument();
+    const actionHost = new FakeElement("div", document);
+    document.body.append(actionHost);
+    const shell = createResidentSettingsShell({
+      document: document as never,
+      actionHost: actionHost as never,
+    });
+    const providerView = createProviderModelSettingsView({
+      document: document as never,
+      shell,
+    });
+    const sessionView = createSessionSettingsView({
+      document: document as never,
+      shell,
+    });
+    const onClose = vi.fn(() => shell.close());
+    shell.bind({ onOpen: vi.fn(), onClose });
+    providerView.render(readyState());
+    sessionView.render({
+      status: "ready",
+      effective: {
+        timezone: "UTC",
+        dailyResetHour: 4,
+        idleMinutes: 0,
+        resetArchiveRetentionDays: 0,
+        historyTokenBudgetRatio: 0.3,
+        managedByEnvironment: {
+          timezone: true,
+          dailyResetHour: false,
+          idleMinutes: false,
+          resetArchiveRetentionDays: false,
+          historyTokenBudgetRatio: false,
+        },
+      },
+      draft: {
+        timezone: "UTC",
+        dailyResetHour: "5",
+        idleMinutes: "0",
+        resetArchiveRetentionDays: "0",
+        historyTokenBudgetRatio: "30",
+      },
+      dirtyFields: new Set(["dailyResetHour"]),
+      validationErrors: {},
+    });
+
+    const opener = find(actionHost, (node) => node.className === "provider-model-settings-button");
+    opener.click();
+    const dialogs = descendants(document.body).filter((node) => node.tagName === "dialog");
+    expect(dialogs).toHaveLength(1);
+    const dialog = dialogs[0]!;
+    expect(dialog.textContent).toContain("Provider & model");
+    expect(dialog.textContent).toContain("Conversation & time");
+    expect(descendants(dialog).filter((node) => node.tagName === "fieldset")).toHaveLength(2);
+
+    const timezone = find(dialog, (node) => node.id === "session-settings-timezone");
+    const timezoneManaged = find(dialog, (node) => node.id === "session-settings-timezone-managed");
+    expect(timezone.disabled).toBe(true);
+    expect(timezoneManaged.hidden).toBe(false);
+    expect(timezoneManaged.textContent).toContain("Managed by an environment variable");
+    expect(timezone.attributes.get("aria-describedby")).toContain(
+      "session-settings-timezone-managed",
+    );
+    const sessionFeedback = find(dialog, (node) => node.className === "session-settings__feedback");
+    expect(sessionFeedback.attributes.get("aria-live")).toBe("polite");
+    expect(sessionFeedback.attributes.get("aria-atomic")).toBe("true");
+    const dailyResetError = find(
+      dialog,
+      (node) => node.id === "session-settings-dailyResetHour-error",
+    );
+    expect(dailyResetError.attributes.get("aria-live")).toBe("polite");
+    expect(dailyResetError.attributes.get("aria-atomic")).toBe("true");
+
+    sessionView.render({
+      status: "saving",
+      effective: {
+        timezone: "UTC",
+        dailyResetHour: 4,
+        idleMinutes: 0,
+        resetArchiveRetentionDays: 0,
+        historyTokenBudgetRatio: 0.3,
+        managedByEnvironment: {
+          timezone: true,
+          dailyResetHour: false,
+          idleMinutes: false,
+          resetArchiveRetentionDays: false,
+          historyTokenBudgetRatio: false,
+        },
+      },
+      draft: {
+        timezone: "UTC",
+        dailyResetHour: "5",
+        idleMinutes: "0",
+        resetArchiveRetentionDays: "0",
+        historyTokenBudgetRatio: "30",
+      },
+      dirtyFields: new Set(["dailyResetHour"]),
+      validationErrors: {},
+    });
+    const provider = find(dialog, (node) => node.id === "provider-model-settings-provider");
+    const close = find(dialog, (node) => node.className === "provider-model-settings__close");
+    expect(provider.disabled).toBe(true);
+    expect(close.disabled).toBe(true);
+    const preventDefault = vi.fn();
+    dialog.dispatch("cancel", { preventDefault });
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(dialog.open).toBe(true);
+
+    sessionView.render({
+      status: "ready",
+      effective: {
+        timezone: "UTC",
+        dailyResetHour: 5,
+        idleMinutes: 0,
+        resetArchiveRetentionDays: 0,
+        historyTokenBudgetRatio: 0.3,
+        managedByEnvironment: {
+          timezone: true,
+          dailyResetHour: false,
+          idleMinutes: false,
+          resetArchiveRetentionDays: false,
+          historyTokenBudgetRatio: false,
+        },
+      },
+      draft: {
+        timezone: "UTC",
+        dailyResetHour: "5",
+        idleMinutes: "0",
+        resetArchiveRetentionDays: "0",
+        historyTokenBudgetRatio: "30",
+      },
+      dirtyFields: new Set(),
+      validationErrors: {},
+    });
+    const sessionSave = find(dialog, (node) => node.className === "session-settings__save");
+    sessionSave.disabled = false;
+    sessionSave.focus();
+    dialog.dispatch("keydown", { key: "Tab", preventDefault });
+    expect(document.activeElement).toBe(close);
+    dialog.dispatch("cancel", { preventDefault });
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(opener);
+
+    sessionView.dispose();
+    providerView.dispose();
+    shell.dispose();
   });
 });

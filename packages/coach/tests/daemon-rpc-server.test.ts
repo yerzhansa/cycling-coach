@@ -74,12 +74,16 @@ const operations: CoachOperations = {
     requests: { store: 1, reference: 1, total: 2 },
   }),
   saveIntake: async () => ({ schemaVersion: 1, saved: true }),
-  configureRuntime: async ({ llm, intervals }) => ({
-    schemaVersion: 1,
-    applied: { llm: llm !== undefined, intervals: intervals !== undefined },
+  configureRuntime: async ({ llm, intervals, session }) => ({
+    schemaVersion: 2,
+    applied: {
+      llm: llm !== undefined,
+      intervals: intervals !== undefined,
+      session: session !== undefined,
+    },
   }),
   getRuntimeConfig: async () => ({
-    schemaVersion: 1,
+    schemaVersion: 2,
     llm: {
       provider: "anthropic",
       model: "synthetic-model",
@@ -92,6 +96,13 @@ const operations: CoachOperations = {
       dailyResetHour: 4,
       resetArchiveRetentionDays: 0,
       timezone: "UTC",
+      managedByEnvironment: {
+        historyTokenBudgetRatio: false,
+        idleMinutes: false,
+        dailyResetHour: false,
+        resetArchiveRetentionDays: false,
+        timezone: false,
+      },
     },
   }),
   getUnitsPreference: async () => ({ value: "metric", source: "default" }),
@@ -443,12 +454,16 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
   it("dispatches authenticated intake and runtime operations without value echo", async () => {
     const token = "x".repeat(43);
     const saveIntake = vi.fn(async () => ({ schemaVersion: 1 as const, saved: true as const }));
-    const configureRuntime = vi.fn(async ({ llm, intervals }) => ({
-      schemaVersion: 1 as const,
-      applied: { llm: llm !== undefined, intervals: intervals !== undefined },
+    const configureRuntime = vi.fn(async ({ llm, intervals, session }) => ({
+      schemaVersion: 2 as const,
+      applied: {
+        llm: llm !== undefined,
+        intervals: intervals !== undefined,
+        session: session !== undefined,
+      },
     }));
     const runtimeSnapshot = {
-      schemaVersion: 1 as const,
+      schemaVersion: 2 as const,
       llm: {
         provider: "openrouter" as const,
         model: "model-a",
@@ -461,6 +476,13 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         dailyResetHour: 4,
         resetArchiveRetentionDays: 0,
         timezone: "UTC",
+        managedByEnvironment: {
+          historyTokenBudgetRatio: false,
+          idleMinutes: false,
+          dailyResetHour: false,
+          resetArchiveRetentionDays: false,
+          timezone: false,
+        },
       },
     };
     const getRuntimeConfig = vi.fn(async () => runtimeSnapshot);
@@ -512,7 +534,10 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     expect(response).toEqual({
       jsonrpc: "2.0",
       id: "runtime",
-      result: { schemaVersion: 1, applied: { llm: true, intervals: true } },
+      result: {
+        schemaVersion: 2,
+        applied: { llm: true, intervals: true, session: false },
+      },
     });
     expect(configureRuntime).toHaveBeenCalledWith(runtime);
     expect(JSON.stringify(response)).not.toContain("placeholder");

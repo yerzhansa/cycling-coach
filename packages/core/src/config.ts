@@ -69,22 +69,82 @@ export function readConfigYaml(): Record<string, unknown> {
 // CONFIG LOADING
 // ============================================================================
 
-function env(key: string): string | undefined {
-  return process.env[key];
+type RuntimeEnvironment = Readonly<Record<string, string | undefined>>;
+
+function envFrom(environment: RuntimeEnvironment, key: string): string | undefined {
+  return environment[key];
 }
 
-export function envInt(key: string): number | undefined {
-  const v = process.env[key];
+function env(key: string): string | undefined {
+  return envFrom(process.env, key);
+}
+
+function envIntFrom(environment: RuntimeEnvironment, key: string): number | undefined {
+  const v = envFrom(environment, key);
   if (v === undefined) return undefined;
   const n = parseInt(v, 10);
   return Number.isFinite(n) ? n : undefined;
 }
 
-function envFloat(key: string): number | undefined {
-  const v = process.env[key];
+export function envInt(key: string): number | undefined {
+  return envIntFrom(process.env, key);
+}
+
+function envFloatFrom(environment: RuntimeEnvironment, key: string): number | undefined {
+  const v = envFrom(environment, key);
   if (v === undefined) return undefined;
   const n = parseFloat(v);
   return Number.isFinite(n) ? n : undefined;
+}
+
+export interface SessionConfigEnvironmentOwnership {
+  readonly historyTokenBudgetRatio: boolean;
+  readonly idleMinutes: boolean;
+  readonly dailyResetHour: boolean;
+  readonly resetArchiveRetentionDays: boolean;
+  readonly timezone: boolean;
+}
+
+interface SessionEnvironmentOverrides {
+  readonly ownership: SessionConfigEnvironmentOwnership;
+  readonly historyTokenBudgetRatio?: number;
+  readonly idleMinutes?: number;
+  readonly dailyResetHour?: number;
+  readonly resetArchiveRetentionDays?: number;
+  readonly timezone?: string;
+}
+
+function sessionEnvironmentOverrides(
+  environment: RuntimeEnvironment,
+): SessionEnvironmentOverrides {
+  const historyTokenBudgetRatio = envFloatFrom(environment, "HISTORY_TOKEN_BUDGET_RATIO");
+  const idleMinutes = envIntFrom(environment, "SESSION_IDLE_MINUTES");
+  const dailyResetHour = envIntFrom(environment, "SESSION_DAILY_RESET_HOUR");
+  const resetArchiveRetentionDays = envIntFrom(
+    environment,
+    "SESSION_RESET_ARCHIVE_RETENTION_DAYS",
+  );
+  const timezone = envFrom(environment, "COACH_TZ");
+  return {
+    historyTokenBudgetRatio,
+    idleMinutes,
+    dailyResetHour,
+    resetArchiveRetentionDays,
+    timezone,
+    ownership: {
+      historyTokenBudgetRatio: historyTokenBudgetRatio !== undefined,
+      idleMinutes: idleMinutes !== undefined,
+      dailyResetHour: dailyResetHour !== undefined,
+      resetArchiveRetentionDays: resetArchiveRetentionDays !== undefined,
+      timezone: timezone !== undefined,
+    },
+  };
+}
+
+export function sessionConfigEnvironmentOwnership(
+  environment: RuntimeEnvironment,
+): SessionConfigEnvironmentOwnership {
+  return sessionEnvironmentOverrides(environment).ownership;
 }
 
 // ============================================================================
@@ -129,6 +189,7 @@ export function loadConfigFromYaml(
   const intervalsYaml = (yaml.intervals as Record<string, unknown>) ?? {};
   const telegramYaml = (yaml.telegram as Record<string, unknown>) ?? {};
   const sessionYaml = (yaml.session as Record<string, unknown>) ?? {};
+  const sessionEnvironment = sessionEnvironmentOverrides(process.env);
 
   const provider = resolveLlmProvider(
     env("LLM_PROVIDER") ?? (llmYaml.provider as string | undefined) ?? "anthropic",
@@ -214,16 +275,17 @@ export function loadConfigFromYaml(
       },
       session: {
         historyTokenBudgetRatio:
-          envFloat("HISTORY_TOKEN_BUDGET_RATIO") ??
+          sessionEnvironment.historyTokenBudgetRatio ??
           (sessionYaml.historyTokenBudgetRatio as number | undefined),
         idleMinutes:
-          envInt("SESSION_IDLE_MINUTES") ?? (sessionYaml.idleMinutes as number | undefined),
+          sessionEnvironment.idleMinutes ?? (sessionYaml.idleMinutes as number | undefined),
         dailyResetHour:
-          envInt("SESSION_DAILY_RESET_HOUR") ?? (sessionYaml.dailyResetHour as number | undefined),
+          sessionEnvironment.dailyResetHour ??
+          (sessionYaml.dailyResetHour as number | undefined),
         resetArchiveRetentionDays:
-          envInt("SESSION_RESET_ARCHIVE_RETENTION_DAYS") ??
+          sessionEnvironment.resetArchiveRetentionDays ??
           (sessionYaml.resetArchiveRetentionDays as number | undefined),
-        timezone: env("COACH_TZ") ?? (sessionYaml.timezone as string | undefined),
+        timezone: sessionEnvironment.timezone ?? (sessionYaml.timezone as string | undefined),
       },
     },
     undefined,

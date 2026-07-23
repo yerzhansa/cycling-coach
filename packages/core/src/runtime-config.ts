@@ -293,6 +293,41 @@ function requireInteger(value: unknown, name: string): number {
   return parsed;
 }
 
+function requireHistoryTokenBudgetRatio(value: unknown): number {
+  const parsed = requireFiniteNumber(value, "session.historyTokenBudgetRatio");
+  if (parsed <= 0 || parsed > 1) {
+    throw new TypeError("session.historyTokenBudgetRatio must be greater than 0 and at most 1.");
+  }
+  return parsed;
+}
+
+function requireNonnegativeSafeInteger(value: unknown, name: string): number {
+  const parsed = requireInteger(value, name);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new TypeError(`${name} must be a non-negative safe integer.`);
+  }
+  return parsed;
+}
+
+function requireDailyResetHour(value: unknown): number {
+  const parsed = requireInteger(value, "session.dailyResetHour");
+  if (parsed < 0 || parsed > 23) {
+    throw new TypeError("session.dailyResetHour must be between 0 and 23.");
+  }
+  return parsed;
+}
+
+function requireTimezone(value: unknown): string {
+  const parsed = requireString(value, "session.timezone", true).trim();
+  if (parsed.length === 0) return "";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: parsed }).format();
+  } catch {
+    throw new TypeError("session.timezone must be a valid IANA timezone.");
+  }
+  return parsed;
+}
+
 export function resolveLlmProvider(value: unknown): LlmProvider {
   if (typeof value === "string" && (LLM_PROVIDERS as readonly string[]).includes(value)) {
     return value as LlmProvider;
@@ -404,19 +439,22 @@ export function resolveRuntimeConfig(
 
   const session = {
     historyTokenBudgetRatio: isSpecified(sessionPatch, "historyTokenBudgetRatio")
-      ? requireFiniteNumber(sessionPatch.historyTokenBudgetRatio, "session.historyTokenBudgetRatio")
+      ? requireHistoryTokenBudgetRatio(sessionPatch.historyTokenBudgetRatio)
       : (current?.session.historyTokenBudgetRatio ?? 0.3),
     idleMinutes: isSpecified(sessionPatch, "idleMinutes")
-      ? requireInteger(sessionPatch.idleMinutes, "session.idleMinutes")
+      ? requireNonnegativeSafeInteger(sessionPatch.idleMinutes, "session.idleMinutes")
       : (current?.session.idleMinutes ?? 0),
     dailyResetHour: isSpecified(sessionPatch, "dailyResetHour")
-      ? requireInteger(sessionPatch.dailyResetHour, "session.dailyResetHour")
+      ? requireDailyResetHour(sessionPatch.dailyResetHour)
       : (current?.session.dailyResetHour ?? 4),
     resetArchiveRetentionDays: isSpecified(sessionPatch, "resetArchiveRetentionDays")
-      ? requireInteger(sessionPatch.resetArchiveRetentionDays, "session.resetArchiveRetentionDays")
+      ? requireNonnegativeSafeInteger(
+          sessionPatch.resetArchiveRetentionDays,
+          "session.resetArchiveRetentionDays",
+        )
       : (current?.session.resetArchiveRetentionDays ?? 0),
     timezone: isSpecified(sessionPatch, "timezone")
-      ? requireString(sessionPatch.timezone, "session.timezone", true)
+      ? requireTimezone(sessionPatch.timezone)
       : (current?.session.timezone ?? ""),
   };
 

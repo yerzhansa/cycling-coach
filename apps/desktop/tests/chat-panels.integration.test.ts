@@ -189,7 +189,35 @@ ${"nonwrapping".repeat(36)}
       }
       if (request.method === "saveIntake") return response({ schemaVersion: 1, saved: true });
       if (request.method === "configureRuntime") {
-        return response({ schemaVersion: 1, applied: { llm: true, intervals: true } });
+        return response({
+          schemaVersion: 2,
+          applied: { llm: true, intervals: true, session: true },
+        });
+      }
+      if (request.method === "getRuntimeConfig") {
+        return response({
+          schemaVersion: 2,
+          llm: {
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            credential_configured: true,
+          },
+          intervals: { athlete_id: "0" },
+          session: {
+            historyTokenBudgetRatio: 0.3,
+            idleMinutes: 0,
+            dailyResetHour: 4,
+            resetArchiveRetentionDays: 0,
+            timezone: "UTC",
+            managedByEnvironment: {
+              historyTokenBudgetRatio: false,
+              idleMinutes: false,
+              dailyResetHour: false,
+              resetArchiveRetentionDays: false,
+              timezone: false,
+            },
+          },
+        });
       }
       throw new TypeError(`unexpected fixture method ${request.method}`);
     },
@@ -1071,6 +1099,77 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       statusFits: true,
       horizontalOverflow: false,
     });
+    const runtimeReadsBeforeSettings = calls.filter(
+      (call) => call.method === "getRuntimeConfig",
+    ).length;
+    const compactSettingsGeometry = await fixture.evaluate<{
+      readonly open: boolean;
+      readonly oneDialog: boolean;
+      readonly hasBothSections: boolean;
+      readonly horizontalOverflow: boolean;
+      readonly withinViewport: boolean;
+      readonly saveReachableAfterScroll: boolean;
+      readonly resetWarningVisible: boolean;
+      readonly retentionWarningVisible: boolean;
+    }>(`
+      document.querySelector(".drawer-toggle").click();
+      const settings = document.querySelector(".provider-model-settings-button");
+      settings.click();
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const dialog = document.querySelector("#provider-model-settings-dialog");
+      const sessionSave = dialog.querySelector(".session-settings__save");
+      const rect = dialog.getBoundingClientRect();
+      sessionSave.scrollIntoView({ block: "nearest" });
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const saveRect = sessionSave.getBoundingClientRect();
+      const copy = dialog.textContent;
+      return {
+        open: dialog.open,
+        oneDialog: document.querySelectorAll("#provider-model-settings-dialog").length === 1,
+        hasBothSections:
+          dialog.querySelectorAll("fieldset").length === 2 &&
+          copy.includes("Provider & model") &&
+          copy.includes("Conversation & time"),
+        horizontalOverflow:
+          dialog.scrollWidth > dialog.clientWidth ||
+          Array.from(dialog.querySelectorAll("form, fieldset")).some(
+            (node) => node.scrollWidth > node.clientWidth,
+          ),
+        withinViewport:
+          rect.left >= 0 &&
+          rect.right <= window.innerWidth &&
+          rect.top >= 0 &&
+          rect.bottom <= window.innerHeight,
+        saveReachableAfterScroll:
+          saveRect.left >= rect.left &&
+          saveRect.right <= rect.right &&
+          saveRect.top >= rect.top &&
+          saveRect.bottom <= Math.min(rect.bottom, window.innerHeight),
+        resetWarningVisible: copy.includes(
+          "may make your next message start a fresh conversation",
+        ),
+        retentionWarningVisible: copy.includes("changes apply only to future pruning"),
+      };
+    `);
+    expect(compactSettingsGeometry).toEqual({
+      open: true,
+      oneDialog: true,
+      hasBothSections: true,
+      horizontalOverflow: false,
+      withinViewport: true,
+      saveReachableAfterScroll: true,
+      resetWarningVisible: true,
+      retentionWarningVisible: true,
+    });
+    const runtimeReads = calls.filter((call) => call.method === "getRuntimeConfig");
+    expect(runtimeReads.length).toBeGreaterThan(runtimeReadsBeforeSettings);
+    expect(runtimeReads).toEqual(
+      runtimeReads.map(() => ({
+        jsonrpc: "2.0",
+        method: "getRuntimeConfig",
+        params: {},
+      })),
+    );
     const base = await realpath(process.platform === "darwin" ? "/tmp" : tmpdir());
     const screenshotRoot = await mkdtemp(join(base, "eap-shot-"));
     scratchPaths.push(screenshotRoot);

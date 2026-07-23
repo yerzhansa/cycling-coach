@@ -31,6 +31,9 @@ import { createDesktopUpdateController } from "./update/controller.js";
 import { createDesktopUpdateView } from "./update/view.js";
 import { createProviderModelSettingsController } from "./settings/provider-model-controller.js";
 import { createProviderModelSettingsView } from "./settings/provider-model-view.js";
+import { createResidentSettingsShell } from "./settings/shell.js";
+import { createSessionSettingsController } from "./settings/session-controller.js";
+import { createSessionSettingsView } from "./settings/session-view.js";
 import {
   createRideImportController,
   mountResidentRideImport,
@@ -285,15 +288,39 @@ setup.addEventListener(
   "click",
   () => void onboardingCompletion.openManually(() => onboarding.open()),
 );
+const settingsShell = createResidentSettingsShell({
+  document,
+  actionHost: topbarActions,
+  before: setup,
+});
+const sessionSettingsController = createSessionSettingsController({
+  clients,
+  beginMutation: () => settingsShell.beginMutation("session"),
+  view: createSessionSettingsView({ document, shell: settingsShell }),
+});
 const providerModelSettingsController = createProviderModelSettingsController({
   load: () => window.enduragentAuth.llmConfiguration(),
   apply: (selection) => window.enduragentAuth.applyLlmSelection(selection),
-  openSetup: () => setup.click(),
+  openSetup: () => {
+    sessionSettingsController.close();
+    setup.click();
+  },
+  beginMutation: () => settingsShell.beginMutation("provider-model"),
   view: createProviderModelSettingsView({
     document,
-    actionHost: topbarActions,
-    before: setup,
+    shell: settingsShell,
   }),
+});
+settingsShell.bind({
+  onOpen() {
+    void providerModelSettingsController.activate();
+    void sessionSettingsController.activate();
+  },
+  onClose() {
+    providerModelSettingsController.close();
+    sessionSettingsController.close();
+    settingsShell.close();
+  },
 });
 const disposeDroppedRideImports = subscribeToDroppedRideImports({
   subscribe: onboardingBridge.onDroppedImportFiles,
@@ -322,6 +349,8 @@ window.addEventListener(
     releaseNotesController.dispose();
     desktopUpdateController.dispose();
     providerModelSettingsController.dispose();
+    sessionSettingsController.dispose();
+    settingsShell.dispose();
     disposeDroppedRideImports();
     onboarding.dispose();
     residentRideImport.dispose();

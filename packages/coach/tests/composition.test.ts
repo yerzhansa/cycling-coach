@@ -1054,6 +1054,368 @@ describe("local coach composition", () => {
     await lifecycle.close();
   });
 
+  it("publishes engine, memory, session archive, and spend timezone as one drained bundle", async () => {
+    const home = await freshHome();
+    const received: CreateCoachEngineInput[] = [];
+    const selectedRuntime = runtime();
+    const runWindowAfter = vi.fn(selectedRuntime.runWindowAfter);
+    let enterOld!: () => void;
+    let releaseOld!: () => void;
+    const oldEntered = new Promise<void>((resolve) => {
+      enterOld = resolve;
+    });
+    const oldRelease = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    const lifecycle = await compose(home, {
+      bootstrap: async () => reference(),
+      createRuntime: () => ({ ...selectedRuntime, runWindowAfter }),
+      createBackend: (input) => {
+        received.push(input);
+        const generation = received.length;
+        return backend({
+          chat: async () => {
+            if (generation === 1) {
+              enterOld();
+              await oldRelease;
+            }
+            return { text: input.ports.config.session.timezone };
+          },
+        });
+      },
+      createRepository: () => ({
+        insertIfAbsent: async () => false,
+        readCurrent: async () => undefined,
+      }),
+      createResolver: () => missingResolver(),
+    });
+
+    const oldTurn = lifecycle.engine.chat({ chatId: "bundle", message: "hold old bundle" });
+    await oldEntered;
+    let configurationSettled = false;
+    const configuration = lifecycle.operations
+      .configureRuntime({
+        session: {
+          historyTokenBudgetRatio: 0.45,
+          idleMinutes: 25,
+          dailyResetHour: 6,
+          resetArchiveRetentionDays: 9,
+          timezone: "America/Los_Angeles",
+        },
+      })
+      .then((result) => {
+        configurationSettled = true;
+        return result;
+      });
+    for (let attempt = 0; attempt < 20 && received.length < 2; attempt += 1) {
+      await Promise.resolve();
+    }
+    expect(received).toHaveLength(2);
+
+    let spendSettled = false;
+    const postCommitSpend = lifecycle.spendMeter.getSpendSummary().then((summary) => {
+      spendSettled = true;
+      return summary;
+    });
+    await Promise.resolve();
+    expect(configurationSettled).toBe(false);
+    expect(spendSettled).toBe(false);
+    expect(runWindowAfter).not.toHaveBeenCalled();
+
+    releaseOld();
+    await expect(oldTurn).resolves.toEqual({ text: "UTC" });
+    await expect(configuration).resolves.toEqual({
+      schemaVersion: 2,
+      applied: { llm: false, intervals: false, session: true },
+    });
+    await expect(postCommitSpend).resolves.toMatchObject({
+      timezone: "America/Los_Angeles",
+    });
+    await expect(
+      lifecycle.engine.chat({ chatId: "bundle", message: "use new bundle" }),
+    ).resolves.toEqual({ text: "America/Los_Angeles" });
+
+    expect(received[1]?.ports.config.session).toEqual({
+      historyTokenBudgetRatio: 0.45,
+      idleMinutes: 25,
+      dailyResetHour: 6,
+      resetArchiveRetentionDays: 9,
+      timezone: "America/Los_Angeles",
+    });
+    expect(received[1]?.ports.memory).not.toBe(received[0]?.ports.memory);
+    expect(received[1]?.ports.chatStore).not.toBe(received[0]?.ports.chatStore);
+    expect(
+      (received[1]!.ports.memory as unknown as { readonly tz: string }).tz,
+    ).toBe("America/Los_Angeles");
+    expect(
+      (
+        received[1]!.ports.chatStore as unknown as {
+          readonly resetArchiveRetentionDays: number;
+        }
+      ).resetArchiveRetentionDays,
+    ).toBe(9);
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      schemaVersion: 2,
+      session: {
+        historyTokenBudgetRatio: 0.45,
+        idleMinutes: 25,
+        dailyResetHour: 6,
+        resetArchiveRetentionDays: 9,
+        timezone: "America/Los_Angeles",
+      },
+    });
+    await lifecycle.close();
+  });
+
+  it("resolves a blank configured timezone once for every active session consumer", async () => {
+    const home = await freshHome();
+    const received: CreateCoachEngineInput[] = [];
+    const initial = {
+      ...config(home),
+      session: { ...config(home).session, timezone: "" },
+    };
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: (input) => {
+          received.push(input);
+          return backend();
+        },
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      undefined,
+      initial,
+    );
+    const expectedTimezone =
+      Intl.DateTimeFormat().resolvedOptions().timeZone?.trim() || "UTC";
+
+    expect(received[0]?.ports.config.session.timezone).toBe(expectedTimezone);
+    expect(
+      (received[0]!.ports.memory as unknown as { readonly tz: string }).tz,
+    ).toBe(expectedTimezone);
+    await expect(lifecycle.spendMeter.getSpendSummary()).resolves.toMatchObject({
+      timezone: expectedTimezone,
+    });
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      session: { timezone: expectedTimezone },
+    });
+    await lifecycle.close();
+  });
+
+  it("persists only requested session keys, preserves unknown YAML, and reopens exact values", async () => {
+    const home = await freshHome();
+    await writeFile(
+      join(home.configDir, "config.yaml"),
+      toYaml({
+        data_source: "store",
+        data_dir: home.root,
+        retained_top_level: { future: true },
+        session: {
+          historyTokenBudgetRatio: 0.3,
+          idleMinutes: 0,
+          dailyResetHour: 4,
+          resetArchiveRetentionDays: 0,
+          timezone: "UTC",
+          retained_session_field: { future: true },
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const selectedRuntime = runtime();
+    const runWindowAfter = vi.fn(selectedRuntime.runWindowAfter);
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => ({ ...selectedRuntime, runWindowAfter }),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      undefined,
+      config(home),
+    );
+
+    await lifecycle.operations.configureRuntime({
+      session: { timezone: "Europe/Berlin" },
+    });
+    expect(parseYaml(await readFile(join(home.configDir, "config.yaml"), "utf8"))).toEqual({
+      data_source: "store",
+      data_dir: home.root,
+      retained_top_level: { future: true },
+      session: {
+        historyTokenBudgetRatio: 0.3,
+        idleMinutes: 0,
+        dailyResetHour: 4,
+        resetArchiveRetentionDays: 0,
+        timezone: "Europe/Berlin",
+        retained_session_field: { future: true },
+      },
+    });
+
+    await lifecycle.operations.configureRuntime({
+      session: {
+        historyTokenBudgetRatio: 0.55,
+        idleMinutes: 35,
+        dailyResetHour: 8,
+        resetArchiveRetentionDays: 21,
+      },
+    });
+    expect(loadConfig(home.configDir).session).toEqual({
+      historyTokenBudgetRatio: 0.55,
+      idleMinutes: 35,
+      dailyResetHour: 8,
+      resetArchiveRetentionDays: 21,
+      timezone: "Europe/Berlin",
+    });
+    expect(
+      (
+        parseYaml(await readFile(join(home.configDir, "config.yaml"), "utf8")) as {
+          session: Record<string, unknown>;
+        }
+      ).session.retained_session_field,
+    ).toEqual({ future: true });
+    expect(runWindowAfter).not.toHaveBeenCalled();
+    await lifecycle.close();
+  });
+
+  it.each([
+    {
+      field: "historyTokenBudgetRatio",
+      env: { HISTORY_TOKEN_BUDGET_RATIO: "0.7" },
+      patch: { historyTokenBudgetRatio: 0.4, timezone: "Europe/Berlin" },
+    },
+    {
+      field: "idleMinutes",
+      env: { SESSION_IDLE_MINUTES: "20" },
+      patch: { idleMinutes: 15, timezone: "Europe/Berlin" },
+    },
+    {
+      field: "dailyResetHour",
+      env: { SESSION_DAILY_RESET_HOUR: "5" },
+      patch: { dailyResetHour: 7, idleMinutes: 15 },
+    },
+    {
+      field: "resetArchiveRetentionDays",
+      env: { SESSION_RESET_ARCHIVE_RETENTION_DAYS: "30" },
+      patch: { resetArchiveRetentionDays: 14, idleMinutes: 15 },
+    },
+    {
+      field: "timezone",
+      env: { COACH_TZ: "UTC" },
+      patch: { timezone: "Europe/Berlin", idleMinutes: 15 },
+    },
+  ] as const)(
+    "rejects an atomic session patch when $field is environment-managed",
+    async ({ field, env, patch }) => {
+      const home = await freshHome();
+      const originalYaml = "sentinel: unchanged\n";
+      await writeFile(join(home.configDir, "config.yaml"), originalYaml, { mode: 0o600 });
+      const createBackend = vi.fn(() => backend());
+      const selectedRuntime = runtime();
+      const runWindowAfter = vi.fn(selectedRuntime.runWindowAfter);
+      const lifecycle = await compose(
+        home,
+        {
+          bootstrap: async () => reference(),
+          createRuntime: () => ({ ...selectedRuntime, runWindowAfter }),
+          createBackend,
+          createRepository: () => ({
+            insertIfAbsent: async () => false,
+            readCurrent: async () => undefined,
+          }),
+          createResolver: () => missingResolver(),
+        },
+        fakeContext(home),
+        undefined,
+        config(home),
+        { ENDURAGENT_HOME: home.root, ...env },
+      );
+      const before = await lifecycle.operations.getRuntimeConfig({});
+
+      await expect(
+        lifecycle.operations.configureRuntime({ session: patch }),
+      ).rejects.toThrow(`runtime session ${field} is controlled by the daemon environment`);
+      await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toEqual(before);
+      expect(before.session.managedByEnvironment[field]).toBe(true);
+      expect(createBackend).toHaveBeenCalledOnce();
+      expect(runWindowAfter).not.toHaveBeenCalled();
+      await expect(readFile(join(home.configDir, "config.yaml"), "utf8")).resolves.toBe(
+        originalYaml,
+      );
+      await lifecycle.close();
+    },
+  );
+
+  it("rolls back a session replacement that expires while the active bundle drains", async () => {
+    vi.useRealTimers();
+    const home = await freshHome();
+    let enterOld!: () => void;
+    let releaseOld!: () => void;
+    const oldEntered = new Promise<void>((resolve) => {
+      enterOld = resolve;
+    });
+    const oldRelease = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    let builds = 0;
+    const lifecycle = await compose(home, {
+      bootstrap: async () => reference(),
+      createRuntime: () => runtime(),
+      createBackend: (input) => {
+        builds += 1;
+        const generation = builds;
+        return backend({
+          chat: async () => {
+            if (generation === 1) {
+              enterOld();
+              await oldRelease;
+            }
+            return { text: input.ports.config.session.timezone };
+          },
+        });
+      },
+      createRepository: () => ({
+        insertIfAbsent: async () => false,
+        readCurrent: async () => undefined,
+      }),
+      createResolver: () => missingResolver(),
+      operationsDependencies: { runtimeConfigurationDeadlineMs: 5 },
+    });
+
+    const oldTurn = lifecycle.engine.chat({ chatId: "timeout", message: "hold" });
+    await oldEntered;
+    const expired = lifecycle.operations.configureRuntime({
+      session: { timezone: "Europe/Berlin" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    releaseOld();
+
+    await expect(oldTurn).resolves.toEqual({ text: "UTC" });
+    await expect(expired).rejects.toThrow();
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      session: { timezone: "UTC" },
+    });
+    await expect(readFile(join(home.configDir, "config.yaml"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      lifecycle.engine.chat({ chatId: "timeout", message: "still old" }),
+    ).resolves.toEqual({ text: "UTC" });
+    await lifecycle.close();
+  });
+
   it("passes reference bootstrap a live intervals reader updated by runtime configuration", async () => {
     const home = await freshHome();
     let referenceOptions:
@@ -2493,14 +2855,23 @@ describe("local coach composition", () => {
       intervals: { athleteId: "previous-athlete" },
     });
     await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       llm: {
         provider: "openrouter",
         model: "previous-model",
         credential_configured: true,
       },
       intervals: { athlete_id: "previous-athlete" },
-      session: initial.session,
+      session: {
+        ...initial.session,
+        managedByEnvironment: {
+          historyTokenBudgetRatio: false,
+          idleMinutes: false,
+          dailyResetHour: false,
+          resetArchiveRetentionDays: false,
+          timezone: false,
+        },
+      },
     });
     await lifecycle.close();
   });
