@@ -9,6 +9,26 @@ export interface DesktopErrorCopy {
 export function startupRefusalCopy(
   cause: Extract<DesktopDaemonResolution, { status: "refused" }>["cause"],
 ): DesktopErrorCopy {
+  if (cause === "not-configured") {
+    return {
+      title: "Enduragent isn’t configured",
+      content:
+        "The configuration file is missing. Run Enduragent setup or restore config.yaml, then reopen Enduragent.",
+    };
+  }
+  if (cause === "unreadable") {
+    return {
+      title: "Enduragent couldn’t read its configuration",
+      content:
+        "Check that config.yaml is a readable file and its folder is accessible, then reopen Enduragent.",
+    };
+  }
+  if (cause === "malformed") {
+    return {
+      title: "Enduragent couldn’t use its configuration",
+      content: "Correct or replace the invalid config.yaml file, then reopen Enduragent.",
+    };
+  }
   if (cause === "contention") {
     return {
       title: "Enduragent couldn’t connect to its background service",

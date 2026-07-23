@@ -116,6 +116,14 @@ export function loadConfig(
   options: LoadConfigOptions = {},
 ): Config {
   const yaml = readConfigYamlFrom(configDir);
+  return loadConfigFromYaml(yaml, configDir, options);
+}
+
+export function loadConfigFromYaml(
+  yaml: Record<string, unknown>,
+  configDir: string = CONFIG_DIR,
+  options: LoadConfigOptions = {},
+): Config {
   const dataSource = resolveDataSource(yaml.data_source);
   const llmYaml = (yaml.llm as Record<string, unknown>) ?? {};
   const intervalsYaml = (yaml.intervals as Record<string, unknown>) ?? {};

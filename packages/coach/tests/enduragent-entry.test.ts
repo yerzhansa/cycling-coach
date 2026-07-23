@@ -29,6 +29,7 @@ import { StoreNewerThanAppError } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import {
+  runAppSupervisedEnduragent,
   runEnduragent,
   type EnduragentDependencies,
   type RunEnduragentInput,
@@ -378,7 +379,7 @@ describe("enduragent executable composition", () => {
     const configPath = join(home.configDir, "config.yaml");
     const rows: ReadonlyArray<{
       readonly result: LocalCoachRunResult<never>;
-      readonly exitCode: 0 | 2 | 3 | 4;
+      readonly exitCode: 0 | 1 | 2 | 3 | 4;
       readonly stderr: string;
     }> = [
       {
@@ -445,6 +446,18 @@ describe("enduragent executable composition", () => {
         exitCode: 4,
         stderr: `Enduragent is not configured. Provision ${configPath} with provider credentials, then run: enduragent\n`,
       },
+      {
+        result: { status: "unreadable" },
+        exitCode: 1,
+        stderr:
+          "Enduragent cannot read the existing configuration. Check that config.yaml is a readable file, then retry.\n",
+      },
+      {
+        result: { status: "malformed" },
+        exitCode: 1,
+        stderr:
+          "Enduragent cannot use the existing configuration. Correct or replace config.yaml, then retry.\n",
+      },
     ];
 
     for (const row of rows) {
@@ -492,6 +505,35 @@ describe("enduragent executable composition", () => {
       expect(captured?.action).toEqual({ kind: "resume", isTTY: true });
     }
   });
+
+  it.each([
+    ["not-configured", 4],
+    ["unreadable", 1],
+    ["malformed", 1],
+  ] as const)(
+    "returns a safe typed app-supervised %s outcome while keeping the ordinary exit code",
+    async (status, exitCode) => {
+      const io = terminal();
+      const privateConfigPath = join(home.configDir, "synthetic-private-profile-token");
+      const result = await runAppSupervisedEnduragent(
+        {
+          env,
+          terminal: io.value,
+          signal: new AbortController().signal,
+        },
+        {
+          resolveAthleteHome: () => home,
+          withLocalCoach: async <T>(): Promise<LocalCoachRunResult<T>> =>
+            status === "not-configured" ? { status, configPath: privateConfigPath } : { status },
+          readPackageVersion: async () => "0.1.0-synthetic",
+        },
+      );
+
+      expect(result).toEqual({ exitCode, readinessFailure: status });
+      expect(JSON.stringify(result)).not.toContain("synthetic-private-profile-token");
+      expect(Object.keys(result).sort()).toEqual(["exitCode", "readinessFailure"]);
+    },
+  );
 
   it("preserves FIFO and lifecycle close ordering after physical EOF", async () => {
     const trace: string[] = [];

@@ -14,8 +14,6 @@ const mocks = vi.hoisted(() => ({
   migrate: vi.fn(),
   readiness: vi.fn(),
   composition: vi.fn(),
-  loadConfig: vi.fn(),
-  project: vi.fn(),
 }));
 
 vi.mock("../src/runtime.js", async (importOriginal) => ({
@@ -34,12 +32,6 @@ vi.mock("../src/composition.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/composition.js")>()),
   createLocalCoachComposition: mocks.composition,
 }));
-vi.mock("@enduragent/core", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@enduragent/core")>()),
-  loadConfig: mocks.loadConfig,
-  engineConfigFromConfig: mocks.project,
-}));
-
 import { CoachStoreWriterError } from "../src/runtime.js";
 import { withLocalCoach, type LocalCoachLifecycle } from "../src/local-runner.js";
 
@@ -134,6 +126,7 @@ let selectedHome: AthleteHome;
 let context: CoachStoreWriterContext;
 let trace: string[];
 let closeImplementation: () => Promise<void>;
+let readyConfig: Config;
 
 async function freshHome(): Promise<AthleteHome> {
   const root = await mkdtemp(join(await realpath(tmpdir()), "coach-local-runner-"));
@@ -201,18 +194,15 @@ beforeEach(async () => {
   mocks.migrate.mockReset();
   mocks.readiness.mockReset();
   mocks.composition.mockReset();
-  mocks.loadConfig.mockReset();
-  mocks.project.mockReset();
   mocks.migrate.mockImplementation(async () => {
     trace.push("legacy-migration");
     return notNeeded();
   });
+  readyConfig = { ...config, dataDir: selectedHome.root };
   mocks.readiness.mockImplementation(async () => {
     trace.push("readiness");
-    return { status: "ready", config: engineConfig };
+    return { status: "ready", config: readyConfig, engineConfig };
   });
-  mocks.loadConfig.mockReturnValue({ ...config, dataDir: selectedHome.root });
-  mocks.project.mockReturnValue(engineConfig);
   mocks.composition.mockImplementation(async () => {
     trace.push("engine-open");
     return { engine, operations, spendMeter, close: () => closeImplementation() };
@@ -263,9 +253,15 @@ describe("local coach runner", () => {
       "store-close",
       "writer-release",
     ]);
-    expect(mocks.loadConfig).toHaveBeenCalledExactlyOnceWith(selectedHome.configDir, {
-      defaultDataDir: selectedHome.root,
-    });
+    expect(mocks.composition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: readyConfig,
+        engineConfig,
+      }),
+    );
+    const compositionInput = mocks.composition.mock.calls[0]![0];
+    expect(compositionInput.config).toBe(readyConfig);
+    expect(compositionInput.engineConfig).toBe(engineConfig);
   });
 
   it("releases the writer after migration throws without opening later stages", async () => {
@@ -340,12 +336,23 @@ describe("local coach runner", () => {
     expect(trace.slice(-2)).toEqual(["store-close", "writer-release"]);
   });
 
+  it.each(["unreadable", "malformed"] as const)(
+    "returns %s only after releasing the writer without constructing the engine",
+    async (status) => {
+      mocks.readiness.mockResolvedValue({ status });
+      const operation = vi.fn(async () => "unused");
+
+      await expect(withLocalCoach(input(operation))).resolves.toEqual({ status });
+      expect(mocks.composition).not.toHaveBeenCalled();
+      expect(operation).not.toHaveBeenCalled();
+      expect(trace.slice(-2)).toEqual(["store-close", "writer-release"]);
+    },
+  );
+
   it("characterizes structural home readiness and the optional Config directory parameter", async () => {
     const actualReadiness =
       await vi.importActual<typeof import("../src/readiness.js")>("../src/readiness.js");
     const actualCore = await vi.importActual<typeof import("@enduragent/core")>("@enduragent/core");
-    mocks.loadConfig.mockImplementation(actualCore.loadConfig);
-    mocks.project.mockImplementation(actualCore.engineConfigFromConfig);
     await mkdir(selectedHome.configDir, { recursive: true });
     const configPath = join(selectedHome.configDir, "config.yaml");
     await expect(actualReadiness.checkHomeReadiness(selectedHome)).resolves.toEqual({
@@ -354,22 +361,11 @@ describe("local coach runner", () => {
     });
     await writeFile(configPath, "[");
     await expect(actualReadiness.checkHomeReadiness(selectedHome)).resolves.toEqual({
-      status: "not-configured",
-      configPath,
+      status: "malformed",
     });
     await writeFile(
       configPath,
       "llm:\n  provider: openai-codex\ndata_dir: " + selectedHome.root + "\n",
-    );
-    await expect(actualReadiness.checkHomeReadiness(selectedHome)).resolves.toEqual({
-      status: "not-configured",
-      configPath,
-    });
-    await writeFile(
-      join(selectedHome.configDir, "auth-profiles.json"),
-      JSON.stringify({
-        "openai-codex": { type: "oauth" },
-      }),
     );
     const ready = await actualReadiness.checkHomeReadiness(selectedHome);
     expect(ready.status).toBe("ready");
@@ -380,9 +376,6 @@ describe("local coach runner", () => {
   it("loads an absent readiness data_dir against the selected athlete root", async () => {
     const actualReadiness =
       await vi.importActual<typeof import("../src/readiness.js")>("../src/readiness.js");
-    const actualCore = await vi.importActual<typeof import("@enduragent/core")>("@enduragent/core");
-    mocks.loadConfig.mockImplementation(actualCore.loadConfig);
-    mocks.project.mockImplementation(actualCore.engineConfigFromConfig);
     await mkdir(selectedHome.configDir, { recursive: true });
     await writeFile(
       join(selectedHome.configDir, "config.yaml"),
@@ -390,12 +383,9 @@ describe("local coach runner", () => {
       { mode: 0o600 },
     );
 
-    await expect(actualReadiness.checkHomeReadiness(selectedHome)).resolves.toMatchObject({
-      status: "ready",
-    });
-    expect(mocks.loadConfig).toHaveBeenCalledExactlyOnceWith(selectedHome.configDir, {
-      defaultDataDir: selectedHome.root,
-    });
+    const readiness = await actualReadiness.checkHomeReadiness(selectedHome);
+    expect(readiness).toMatchObject({ status: "ready" });
+    if (readiness.status === "ready") expect(readiness.config.dataDir).toBe(selectedHome.root);
   });
 
   it("rethrows the exact operation object only after lifecycle, store, and writer cleanup", async () => {

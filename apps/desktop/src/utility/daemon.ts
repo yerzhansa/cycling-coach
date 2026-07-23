@@ -3,9 +3,13 @@ import { isAbsolute, join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { Readable, Writable } from "node:stream";
-import { EXIT_AGENT_ERROR } from "@enduragent/coach-contract";
-import { runAppSupervisedEnduragent } from "@enduragent/coach/enduragent";
+import { EXIT_AGENT_ERROR, type ExitCode } from "@enduragent/coach-contract";
+import {
+  runAppSupervisedEnduragent,
+  type AppSupervisedEnduragentResult,
+} from "@enduragent/coach/enduragent";
 import { UTILITY_TERMINAL_ACK_TIMEOUT_MS } from "../main/constants.js";
+import { createUtilityTerminalFrame } from "./protocol.js";
 
 const parentPort = process.parentPort;
 
@@ -49,7 +53,7 @@ function exactFrame(value: unknown, type: "shutdown" | "terminal-ack"): boolean 
   );
 }
 
-async function postTerminalAndWait(exitCode: number): Promise<void> {
+async function postTerminalAndWait(result: AppSupervisedEnduragentResult): Promise<void> {
   await new Promise<void>((resolve) => {
     let settled = false;
     const finish = (): void => {
@@ -64,11 +68,11 @@ async function postTerminalAndWait(exitCode: number): Promise<void> {
     };
     const timer = setTimeout(finish, UTILITY_TERMINAL_ACK_TIMEOUT_MS);
     parentPort.on("message", onMessage);
-    parentPort.postMessage({ type: "terminal", exitCode });
+    parentPort.postMessage(createUtilityTerminalFrame(result));
   });
 }
 
-async function runtimeSmoke(): Promise<number> {
+async function runtimeSmoke(): Promise<ExitCode> {
   const base = await realpath(tmpdir());
   const directory = await mkdtemp(join(base, "enduragent-desktop-runtime-"));
   try {
@@ -94,8 +98,8 @@ async function runtimeSmoke(): Promise<number> {
 
 async function run(): Promise<void> {
   if (process.argv.includes("--desktop-runtime-smoke")) {
-    const exitCode = await runtimeSmoke().catch(() => EXIT_AGENT_ERROR);
-    await postTerminalAndWait(exitCode);
+    const exitCode: ExitCode = await runtimeSmoke().catch(() => EXIT_AGENT_ERROR);
+    await postTerminalAndWait({ exitCode });
     process.exit(exitCode);
   }
   const controller = new AbortController();
@@ -120,7 +124,7 @@ async function run(): Promise<void> {
   };
   parentPort.on("message", onMessage);
   const frame = await firstFrame;
-  let exitCode = EXIT_AGENT_ERROR;
+  let result: AppSupervisedEnduragentResult = { exitCode: EXIT_AGENT_ERROR };
   if (frame !== undefined) {
     const env: Record<string, string | undefined> = {
       ...process.env,
@@ -134,7 +138,7 @@ async function run(): Promise<void> {
         callback();
       },
     });
-    exitCode = await runAppSupervisedEnduragent({
+    result = await runAppSupervisedEnduragent({
       env,
       terminal: {
         input: Readable.from([]),
@@ -152,11 +156,11 @@ async function run(): Promise<void> {
     finished = true;
   }
   parentPort.removeListener("message", onMessage);
-  await postTerminalAndWait(exitCode);
-  process.exit(exitCode);
+  await postTerminalAndWait(result);
+  process.exit(result.exitCode);
 }
 
 await run().catch(async () => {
-  await postTerminalAndWait(EXIT_AGENT_ERROR);
+  await postTerminalAndWait({ exitCode: EXIT_AGENT_ERROR });
   process.exit(EXIT_AGENT_ERROR);
 });

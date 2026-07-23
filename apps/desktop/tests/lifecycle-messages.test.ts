@@ -9,6 +9,21 @@ import {
 describe("desktop lifecycle messages", () => {
   it.each([
     [
+      "not-configured",
+      "Enduragent isn’t configured",
+      "The configuration file is missing. Run Enduragent setup or restore config.yaml, then reopen Enduragent.",
+    ],
+    [
+      "unreadable",
+      "Enduragent couldn’t read its configuration",
+      "Check that config.yaml is a readable file and its folder is accessible, then reopen Enduragent.",
+    ],
+    [
+      "malformed",
+      "Enduragent couldn’t use its configuration",
+      "Correct or replace the invalid config.yaml file, then reopen Enduragent.",
+    ],
+    [
       "contention",
       "Enduragent couldn’t connect to its background service",
       "Another Enduragent process is already running or stuck. Quit that process, then reopen Enduragent. If you can’t find it, log out and back in.",
@@ -28,12 +43,20 @@ describe("desktop lifecycle messages", () => {
   });
 
   it("keeps internal and sensitive details out of every refusal", () => {
-    const copies = ["contention", "version-mismatch", "never-published", "unavailable"].map(
-      (value) => startupRefusalCopy(value as Parameters<typeof startupRefusalCopy>[0]),
-    );
+    const copies = [
+      "not-configured",
+      "unreadable",
+      "malformed",
+      "contention",
+      "version-mismatch",
+      "never-published",
+      "unavailable",
+    ].map((value) => startupRefusalCopy(value as Parameters<typeof startupRefusalCopy>[0]));
     for (const copy of copies) {
       const visible = `${copy.title}\n${copy.content}`;
-      expect(visible).not.toMatch(/contention|version-mismatch|never-published|unavailable/u);
+      expect(visible).not.toMatch(
+        /not-configured|unreadable|malformed|contention|version-mismatch|never-published|unavailable/u,
+      );
       expect(visible).not.toMatch(/(?:ws|http)s?:\/\//u);
       expect(visible).not.toMatch(/[A-Za-z0-9_-]{43}/u);
       expect(visible).not.toMatch(/exit(?:\s+|-)?code/iu);
@@ -42,6 +65,9 @@ describe("desktop lifecycle messages", () => {
   });
 
   it.each([
+    ["not-configured", startupRefusalCopy("not-configured")],
+    ["unreadable", startupRefusalCopy("unreadable")],
+    ["malformed", startupRefusalCopy("malformed")],
     ["contention", startupRefusalCopy("contention")],
     ["version-mismatch", startupRefusalCopy("version-mismatch")],
     ["never-published", startupRefusalCopy("never-published")],

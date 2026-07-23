@@ -280,6 +280,51 @@ describe("desktop daemon arbitration", () => {
     expect(children.every(({ stop }) => stop.mock.calls.length === 1)).toBe(true);
   });
 
+  it.each([
+    ["not-configured", 4],
+    ["unreadable", 1],
+    ["malformed", 1],
+  ] as const)(
+    "immediately refuses typed %s without retrying or consuming the shared start budget",
+    async (readinessFailure, exitCode) => {
+      const budget = { remainingAttempts: 3, deadline: 60_000 };
+      const owned = {
+        pid: 100,
+        exited: Promise.resolve({ exitCode, readinessFailure }),
+        isAlive: () => false,
+        stop: vi.fn(async () => {}),
+      };
+      const start = vi.fn(async () => owned);
+      const deps = dependencies({ registration: "absent", observations: [{ kind: "absent" }] });
+      const delay = vi.spyOn(deps, "delay");
+
+      const result = await resolveDesktopDaemon(
+        {
+          env: {},
+          executablePath: "/Applications/Enduragent",
+          appVersion: "0.1.0",
+          signal: new AbortController().signal,
+          startAppSupervisedDaemon: start,
+          startBudget: budget,
+        },
+        deps,
+      );
+
+      expect(result).toEqual({
+        status: "refused",
+        exitCode,
+        classification: "configuration",
+        cause: readinessFailure,
+        retryable: false,
+      });
+      expect(start).toHaveBeenCalledOnce();
+      expect(owned.stop).toHaveBeenCalledOnce();
+      expect(delay).not.toHaveBeenCalled();
+      expect(budget.remainingAttempts).toBe(3);
+      expect(JSON.stringify(result)).not.toContain("synthetic-private");
+    },
+  );
+
   it("observes every child exit before starting its replacement", async () => {
     const order: string[] = [];
     const children = Array.from({ length: 3 }, (_, index) => {
@@ -474,6 +519,104 @@ describe("desktop daemon arbitration", () => {
     expect(start).toHaveBeenCalledTimes(1);
     if (result.status === "connected") await result.close();
     expect(successor.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["refuse", "retry", "throw"] as const)(
+    "preserves a typed client-newer handoff exit when second-starter resolution ends with %s",
+    async (outcome) => {
+      const budget = { remainingAttempts: 3, deadline: 60_000 };
+      const successor = {
+        pid: 101,
+        exited: Promise.resolve({ exitCode: 1, readinessFailure: "malformed" as const }),
+        isAlive: () => false,
+        stop: vi.fn(async () => {}),
+      };
+      const start = vi.fn(async () => successor);
+      const base = dependencies({
+        registration: "absent",
+        observations: [mismatch("app-supervised", "client-newer")],
+      });
+      const resolveSecondStarter = vi.fn(async (_input, binding) => {
+        await binding.serviceUpgrade.startEphemeralSuccessor({
+          home,
+          targetProtocolVersion: PROTOCOL_VERSION,
+          handoffCapability: "h".repeat(43),
+        });
+        if (outcome === "throw") throw new Error("synthetic handoff failure");
+        if (outcome === "retry") return { status: "retry-startup" as const };
+        return {
+          status: "refuse" as const,
+          exitCode: 3 as const,
+          stdout: "" as const,
+          stderr: "",
+        };
+      });
+
+      const result = await resolveDesktopDaemon(
+        {
+          env: {},
+          executablePath: "/Applications/Enduragent",
+          appVersion: "0.1.0",
+          signal: new AbortController().signal,
+          startAppSupervisedDaemon: start,
+          startBudget: budget,
+        },
+        { ...base, resolveSecondStarter },
+      );
+
+      expect(result).toEqual({
+        status: "refused",
+        exitCode: 1,
+        classification: "configuration",
+        cause: "malformed",
+        retryable: false,
+      });
+      expect(start).toHaveBeenCalledOnce();
+      expect(successor.stop).toHaveBeenCalledOnce();
+      expect(budget.remainingAttempts).toBe(3);
+      expect(JSON.stringify(result)).not.toContain("synthetic handoff failure");
+    },
+  );
+
+  it("keeps handoff cleanup failure ahead of an already typed successor exit", async () => {
+    const successor = {
+      pid: 101,
+      exited: Promise.resolve({ exitCode: 1, readinessFailure: "unreadable" as const }),
+      isAlive: () => false,
+      stop: vi.fn(async () => {
+        throw new Error("synthetic cleanup failure");
+      }),
+    };
+    const base = dependencies({
+      registration: "absent",
+      observations: [mismatch("app-supervised", "client-newer")],
+    });
+    const resolveSecondStarter = vi.fn(async (_input, binding) => {
+      await binding.serviceUpgrade.startEphemeralSuccessor({
+        home,
+        targetProtocolVersion: PROTOCOL_VERSION,
+        handoffCapability: "h".repeat(43),
+      });
+      throw new Error("synthetic handoff failure");
+    });
+
+    const result = await resolveDesktopDaemon(
+      {
+        env: {},
+        executablePath: "/Applications/Enduragent",
+        appVersion: "0.1.0",
+        signal: new AbortController().signal,
+        startAppSupervisedDaemon: vi.fn(async () => successor),
+      },
+      { ...base, resolveSecondStarter },
+    );
+
+    expect(result).toMatchObject({
+      status: "refused",
+      cause: "termination-failed",
+      retryable: false,
+    });
+    expect(successor.stop).toHaveBeenCalledOnce();
   });
 
   it("stops client-newer handoff after an unconfirmed utility cleanup", async () => {

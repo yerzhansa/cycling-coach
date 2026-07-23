@@ -75,8 +75,19 @@ function childExit(child: ChildProcessWithoutNullStreams): Promise<{
   });
 }
 
+async function expectPreservedFile(
+  path: string,
+  bytes: Buffer,
+  before: { readonly ino: number; readonly mode: number },
+): Promise<void> {
+  const current = await stat(path);
+  await expect(readFile(path)).resolves.toEqual(bytes);
+  expect(current.ino).toBe(before.ino);
+  expect(current.mode & 0o777).toBe(0o600);
+}
+
 describe.skipIf(!hasSockets)("first-run serve process", () => {
-  it("boots an existing config without data_dir through /healthz without clobbering it", async () => {
+  it("publishes /healthz from a blank OpenAI Codex config without clobbering existing files", async () => {
     const scratchRoot = process.platform === "darwin" ? "/private/tmp" : await realpath(tmpdir());
     const scratch = await mkdtemp(join(scratchRoot, "ea-serve-"));
     roots.push(scratch);
@@ -93,23 +104,23 @@ describe.skipIf(!hasSockets)("first-run serve process", () => {
       [
         "data_source: store",
         "llm:",
-        "  provider: anthropic",
-        "  model: synthetic",
-        "  api_key: synthetic",
-        "intervals:",
-        "  api_key: synthetic",
-        "  athlete_id: synthetic",
+        "  provider: openai-codex",
+        "  model: gpt-5.5",
+        "  auth_profile: synthetic-absent",
         "session:",
         "  timezone: UTC",
         "",
       ].join("\n"),
     );
     const configPath = join(configDir, "config.yaml");
+    const profilesBytes = Buffer.from("{}\n");
+    const profilesPath = join(configDir, "auth-profiles.json");
     await writeFile(configPath, configBytes, { mode: 0o600 });
+    await writeFile(profilesPath, profilesBytes, { mode: 0o600 });
     const configBeforeServe = await stat(configPath);
-    const configInodeBeforeServe = configBeforeServe.ino;
-    const configModeBeforeServe = configBeforeServe.mode & 0o777;
-    expect(configModeBeforeServe).toBe(0o600);
+    const profilesBeforeServe = await stat(profilesPath);
+    expect(configBeforeServe.mode & 0o777).toBe(0o600);
+    expect(profilesBeforeServe.mode & 0o777).toBe(0o600);
 
     const child = spawn(process.execPath, [binary, "serve"], {
       env: {
@@ -121,6 +132,20 @@ describe.skipIf(!hasSockets)("first-run serve process", () => {
         ENDURAGENT_HOME: home,
         CYCLING_COACH_HOME: join(scratch, "legacy-home"),
         NODE_OPTIONS: `--disable-warning=ExperimentalWarning --import=${fetchStub}`,
+        LLM_PROVIDER: undefined,
+        LLM_MODEL: undefined,
+        LLM_API_KEY: undefined,
+        ANTHROPIC_API_KEY: undefined,
+        OPENAI_API_KEY: undefined,
+        GOOGLE_GENERATIVE_AI_API_KEY: undefined,
+        DEEPSEEK_API_KEY: undefined,
+        ALIBABA_API_KEY: undefined,
+        MINIMAX_API_KEY: undefined,
+        MOONSHOT_API_KEY: undefined,
+        ZAI_API_KEY: undefined,
+        OPENROUTER_API_KEY: undefined,
+        INTERVALS_API_KEY: undefined,
+        TELEGRAM_BOT_TOKEN: undefined,
         FORCE_COLOR: undefined,
         CLICOLOR_FORCE: undefined,
       },
@@ -163,6 +188,8 @@ describe.skipIf(!hasSockets)("first-run serve process", () => {
       service: HEALTHZ_SERVICE_MARKER,
       version: "0.0.1",
     });
+    await expectPreservedFile(configPath, configBytes, configBeforeServe);
+    await expectPreservedFile(profilesPath, profilesBytes, profilesBeforeServe);
 
     child.kill("SIGTERM");
     const result = await Promise.race([
@@ -174,10 +201,8 @@ describe.skipIf(!hasSockets)("first-run serve process", () => {
     expect(result).toEqual({ code: 0, signal: null });
     expect(stdout).toBe("");
     expect(stderr).not.toContain("coach store writer is already active");
-    const configAfterServe = await stat(configPath);
-    await expect(readFile(configPath)).resolves.toEqual(configBytes);
-    expect(configAfterServe.ino).toBe(configInodeBeforeServe);
-    expect(configAfterServe.mode & 0o777).toBe(configModeBeforeServe);
+    await expectPreservedFile(configPath, configBytes, configBeforeServe);
+    await expectPreservedFile(profilesPath, profilesBytes, profilesBeforeServe);
     await expect(readFile(join(configDir, PORT_FILE_NAME), "utf8")).rejects.toMatchObject({
       code: "ENOENT",
     });

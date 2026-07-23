@@ -83,6 +83,8 @@ import {
   type LocalCoachRunResult,
   type WithLocalCoachInput,
 } from "./local-runner.js";
+import type { ReadinessFailureStatus } from "./readiness.js";
+export type { ReadinessFailureStatus } from "./readiness.js";
 import { serializeBoundaryError } from "./daemon/error-boundary.js";
 import { CoachStoreWriterError } from "./runtime.js";
 import { runCoachServe } from "./serve.js";
@@ -146,7 +148,10 @@ export type ServiceRegistrationClass = "absent" | "registered" | "unknown";
 
 export interface AppSupervisedChildHandle {
   readonly pid: number;
-  readonly exited: Promise<{ readonly exitCode: number | null }>;
+  readonly exited: Promise<{
+    readonly exitCode: number | null;
+    readonly readinessFailure?: ReadinessFailureStatus;
+  }>;
   isAlive(): boolean;
   stop(): Promise<void>;
 }
@@ -730,6 +735,18 @@ function renderLocalResult(
     );
     return EXIT_NOT_CONFIGURED;
   }
+  if (result.status === "unreadable") {
+    terminal.stderr.write(
+      "Enduragent cannot read the existing configuration. Check that config.yaml is a readable file, then retry.\n",
+    );
+    return EXIT_AGENT_ERROR;
+  }
+  if (result.status === "malformed") {
+    terminal.stderr.write(
+      "Enduragent cannot use the existing configuration. Correct or replace config.yaml, then retry.\n",
+    );
+    return EXIT_AGENT_ERROR;
+  }
   if (result.status === "migration-discarded") {
     terminal.stderr.write(
       `Enduragent migration plan ${result.result.manifestDigest} was discarded to ${result.result.archivePath}. Run enduragent again to replan.\n`,
@@ -1069,15 +1086,20 @@ export type DesktopDaemonResolution =
       readonly token: string;
       readonly owner: DaemonOwner;
       readonly supervision: "app-supervised";
-      readonly exited: Promise<{ readonly exitCode: number | null }>;
+      readonly exited: AppSupervisedChildHandle["exited"];
       isAlive(): boolean;
       close(): Promise<void>;
     }
   | {
       readonly status: "refused";
-      readonly exitCode: 3 | 5;
-      readonly classification: "contention-family" | "version-mismatch" | "never-published";
+      readonly exitCode: 1 | 3 | 4 | 5;
+      readonly classification:
+        | "configuration"
+        | "contention-family"
+        | "version-mismatch"
+        | "never-published";
       readonly cause:
+        | ReadinessFailureStatus
         | "contention"
         | "version-mismatch"
         | "never-published"
@@ -1103,42 +1125,69 @@ const desktopDaemonDependencies: DesktopDaemonDependencies = {
 };
 
 function refusedDesktop(
-  exitCode: 3 | 5,
+  exitCode: 1 | 3 | 4 | 5,
   cause: Extract<DesktopDaemonResolution, { status: "refused" }>["cause"] = exitCode ===
   EXIT_VERSION_MISMATCH
     ? "version-mismatch"
     : "contention",
 ): DesktopDaemonResolution {
   const classification =
-    cause === "version-mismatch"
-      ? "version-mismatch"
-      : cause === "never-published"
-        ? "never-published"
-        : "contention-family";
+    cause === "not-configured" || cause === "unreadable" || cause === "malformed"
+      ? "configuration"
+      : cause === "version-mismatch"
+        ? "version-mismatch"
+        : cause === "never-published"
+          ? "never-published"
+          : "contention-family";
   return {
     status: "refused",
     exitCode,
     classification,
     cause,
-    retryable: cause !== "version-mismatch" && cause !== "termination-failed",
+    retryable:
+      cause !== "not-configured" &&
+      cause !== "unreadable" &&
+      cause !== "malformed" &&
+      cause !== "version-mismatch" &&
+      cause !== "termination-failed",
   };
 }
 
-async function stopAppChild(child: AppSupervisedChildHandle | undefined): Promise<boolean> {
-  if (child === undefined) return true;
+type AppChildStopOutcome =
+  | { readonly status: "absent" }
+  | {
+      readonly status: "stopped";
+      readonly result: Awaited<AppSupervisedChildHandle["exited"]>;
+    }
+  | { readonly status: "failed" };
+
+async function stopAppChildAndObserve(
+  child: AppSupervisedChildHandle | undefined,
+): Promise<AppChildStopOutcome> {
+  if (child === undefined) return { status: "absent" };
   try {
     await child.stop();
-    await child.exited;
-    return true;
+    return { status: "stopped", result: await child.exited };
   } catch {
-    return false;
+    return { status: "failed" };
   }
+}
+
+async function stopAppChild(child: AppSupervisedChildHandle | undefined): Promise<boolean> {
+  return (await stopAppChildAndObserve(child)).status !== "failed";
 }
 
 class AppChildTerminationError extends Error {}
 
 async function requireStoppedAppChild(child: AppSupervisedChildHandle | undefined): Promise<void> {
   if (!(await stopAppChild(child))) throw new AppChildTerminationError();
+}
+
+function refusedDesktopReadiness(status: ReadinessFailureStatus): DesktopDaemonResolution {
+  return refusedDesktop(
+    status === "not-configured" ? EXIT_NOT_CONFIGURED : EXIT_AGENT_ERROR,
+    status,
+  );
 }
 
 function connectedDesktop(
@@ -1177,7 +1226,10 @@ function connectedDesktop(
 
 type DesktopPublicationOutcome =
   | { readonly kind: "published"; readonly observation: DaemonStateObservation }
-  | { readonly kind: "child-exited" }
+  | {
+      readonly kind: "child-exited";
+      readonly result: Awaited<AppSupervisedChildHandle["exited"]>;
+    }
   | { readonly kind: "cancelled" }
   | { readonly kind: "deadline"; readonly observation: DaemonStateObservation };
 
@@ -1202,8 +1254,9 @@ async function waitForDesktopDaemon(input: {
     abortListener = () => resolve({ kind: "cancelled" });
     input.signal.addEventListener("abort", abortListener, { once: true });
   });
-  const childExited = input.child?.exited.then<DesktopPublicationOutcome>(() => ({
+  const childExited = input.child?.exited.then<DesktopPublicationOutcome>((result) => ({
     kind: "child-exited",
+    result,
   }));
   let nextDelayMs = 50;
   let lastObservation: DaemonStateObservation = { kind: "absent" };
@@ -1414,18 +1467,24 @@ export async function resolveDesktopDaemon(
         );
       } catch (error) {
         const startedChild = binding.takeStartedAppChild();
-        const stoppedStarted = await stopAppChild(startedChild);
+        const stoppedStarted = await stopAppChildAndObserve(startedChild);
         const stoppedOwned = await stopAppChild(ownedChild);
-        return refusedDesktop(
-          EXIT_DAEMON_UNAVAILABLE,
+        if (
           error instanceof AppChildTerminationError ||
-            (error instanceof AppSupervisedDaemonStartError &&
-              error.cause === "termination-failed") ||
-            !stoppedStarted ||
-            !stoppedOwned
-            ? "termination-failed"
-            : "unavailable",
-        );
+          (error instanceof AppSupervisedDaemonStartError &&
+            error.cause === "termination-failed") ||
+          stoppedStarted.status === "failed" ||
+          !stoppedOwned
+        ) {
+          return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "termination-failed");
+        }
+        if (
+          stoppedStarted.status === "stopped" &&
+          stoppedStarted.result.readinessFailure !== undefined
+        ) {
+          return refusedDesktopReadiness(stoppedStarted.result.readinessFailure);
+        }
+        return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "unavailable");
       }
       const startedChild = binding.takeStartedAppChild();
       if (startedChild !== undefined) {
@@ -1449,6 +1508,16 @@ export async function resolveDesktopDaemon(
         );
       }
       if (starter.status === "retry-startup") {
+        if (startedChild !== undefined) {
+          const stopped = await stopAppChildAndObserve(ownedChild);
+          if (stopped.status === "failed") {
+            return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "termination-failed");
+          }
+          ownedChild = undefined;
+          if (stopped.status === "stopped" && stopped.result.readinessFailure !== undefined) {
+            return refusedDesktopReadiness(stopped.result.readinessFailure);
+          }
+        }
         try {
           observation = await dependencies.observeDaemonState({ home });
         } catch {
@@ -1460,10 +1529,18 @@ export async function resolveDesktopDaemon(
         }
         continue;
       }
-      if (!(await stopAppChild(ownedChild))) {
+      const stopped = await stopAppChildAndObserve(ownedChild);
+      if (stopped.status === "failed") {
         return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "termination-failed");
       }
       ownedChild = undefined;
+      if (
+        startedChild !== undefined &&
+        stopped.status === "stopped" &&
+        stopped.result.readinessFailure !== undefined
+      ) {
+        return refusedDesktopReadiness(stopped.result.readinessFailure);
+      }
       if (starter.status === "refuse") {
         return refusedDesktop(
           starter.exitCode,
@@ -1542,6 +1619,10 @@ export async function resolveDesktopDaemon(
       const stopped = await stopAppChild(ownedChild);
       ownedChild = undefined;
       if (!stopped) return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "termination-failed");
+      if (published.kind === "child-exited" && published.result.readinessFailure !== undefined) {
+        startBudget.remainingAttempts += 1;
+        return refusedDesktopReadiness(published.result.readinessFailure);
+      }
       if (published.kind === "cancelled") {
         return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "cancelled");
       }
@@ -1893,6 +1974,7 @@ async function runServeInvocation(input: {
   readonly sourceRoot: string;
   readonly appVersion: string;
   readonly dependencies: EnduragentDependencies;
+  readonly reportReadinessFailure?: (status: ReadinessFailureStatus) => void;
 }): Promise<ExitCode> {
   const admission =
     input.dependencies.withLocalCoach === defaultDependencies.withLocalCoach
@@ -1940,6 +2022,13 @@ async function runServeInvocation(input: {
       });
       if (result.status !== "completed" && successor !== undefined) {
         await successor.fence.release();
+      }
+      if (
+        result.status === "not-configured" ||
+        result.status === "unreadable" ||
+        result.status === "malformed"
+      ) {
+        input.reportReadinessFailure?.(result.status);
       }
       return result.status === "completed"
         ? result.value
@@ -2004,6 +2093,11 @@ export interface RunAppSupervisedEnduragentInput {
   readonly handoffCapability?: string;
 }
 
+export interface AppSupervisedEnduragentResult {
+  readonly exitCode: ExitCode;
+  readonly readinessFailure?: ReadinessFailureStatus;
+}
+
 function renderEnduragentFailure(
   error: unknown,
   terminal: Pick<CoachCliTerminal, "stderr">,
@@ -2041,12 +2135,17 @@ function renderEnduragentFailure(
 export async function runAppSupervisedEnduragent(
   input: RunAppSupervisedEnduragentInput,
   dependencies?: EnduragentDependencies,
-): Promise<ExitCode> {
+): Promise<AppSupervisedEnduragentResult> {
   if (
     input.handoffCapability !== undefined &&
     !/^[A-Za-z0-9_-]{43}$/.test(input.handoffCapability)
   ) {
-    return renderEnduragentFailure(new TypeError("invalid handoff capability"), input.terminal);
+    return {
+      exitCode: renderEnduragentFailure(
+        new TypeError("invalid handoff capability"),
+        input.terminal,
+      ),
+    };
   }
   const resolvedDependencies: EnduragentDependencies = {
     ...defaultDependencies,
@@ -2054,7 +2153,8 @@ export async function runAppSupervisedEnduragent(
   };
   try {
     const home = canonicalHome(resolvedDependencies.resolveAthleteHome(input.env));
-    return await runServeInvocation({
+    let readinessFailure: ReadinessFailureStatus | undefined;
+    const exitCode = await runServeInvocation({
       invocationOwner: "app-supervised",
       ...(input.handoffCapability === undefined
         ? {}
@@ -2069,9 +2169,16 @@ export async function runAppSupervisedEnduragent(
       sourceRoot: resolveLegacySourceRoot(input.env),
       appVersion: await resolvedDependencies.readPackageVersion(),
       dependencies: resolvedDependencies,
+      reportReadinessFailure: (status) => {
+        readinessFailure = status;
+      },
     });
+    return {
+      exitCode,
+      ...(readinessFailure === undefined ? {} : { readinessFailure }),
+    };
   } catch (error) {
-    return renderEnduragentFailure(error, input.terminal);
+    return { exitCode: renderEnduragentFailure(error, input.terminal) };
   }
 }
 
