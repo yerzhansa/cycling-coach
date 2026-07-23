@@ -25,6 +25,8 @@ const requiredFilePatterns = [
   "!**/.env*",
   "!**/{test,tests,__tests__,fixture,fixtures,dev-fixture,dev-fixtures}/**",
   "!**/*.{test,spec}.{js,cjs,mjs,ts,cts,mts,jsx,tsx}",
+  "!**/vitest.config.{js,cjs,mjs,ts,cts,mts}",
+  "!**/vitest.workspace.{js,cjs,mjs,ts,cts,mts}",
   "!**/node_modules/vitest/**",
   "!**/node_modules/@vitest/**",
 ];
@@ -159,6 +161,7 @@ function forbiddenPathReason(path) {
     return "test or fixture directory";
   }
   if (/(?:^|\.)(?:test|spec)\./u.test(base)) return "test or spec source";
+  if (/^vitest\.(?:config|workspace)\./u.test(base)) return "Vitest configuration";
   return undefined;
 }
 
@@ -216,6 +219,12 @@ export async function readBuilderAuthority(desktopRoot = canonicalDesktopRoot) {
     !Array.isArray(config.extraResources)
   ) {
     fail("invalid builder packaging authority", "electron-builder.yml");
+  }
+  if (
+    config.extraFiles !== undefined ||
+    (exactObject(config.mac) && config.mac.extraFiles !== undefined)
+  ) {
+    fail("alternate builder copy surfaces are forbidden", "electron-builder.yml");
   }
 
   const patternEntries = config.files.filter((entry) => typeof entry === "string");
@@ -484,11 +493,11 @@ async function validateResourceEnvelope(resourcesRoot, externalSource) {
     fail("undeclared package resource", "Contents/Resources");
   }
 
-  const iconStat = await safeLstat(
-    join(resourcesRoot, "electron.icns"),
-    "Contents/Resources/electron.icns",
-  );
-  assertRegularFile(iconStat, "Contents/Resources/electron.icns");
+  const iconPath = join(resourcesRoot, "electron.icns");
+  const iconLabel = "Contents/Resources/electron.icns";
+  const iconStat = await safeLstat(iconPath, iconLabel);
+  assertRegularFile(iconStat, iconLabel);
+  inspectContents(await safeReadFile(iconPath, iconLabel), iconLabel);
   await collectTree(join(resourcesRoot, "en.lproj"), "Contents/Resources/en.lproj", true);
 }
 

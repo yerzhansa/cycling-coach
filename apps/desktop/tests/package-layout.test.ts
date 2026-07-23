@@ -14,6 +14,8 @@ const exclusions = [
   "!**/.env*",
   "!**/{test,tests,__tests__,fixture,fixtures,dev-fixture,dev-fixtures}/**",
   "!**/*.{test,spec}.{js,cjs,mjs,ts,cts,mts,jsx,tsx}",
+  "!**/vitest.config.{js,cjs,mjs,ts,cts,mts}",
+  "!**/vitest.workspace.{js,cjs,mjs,ts,cts,mts}",
   "!**/node_modules/vitest/**",
   "!**/node_modules/@vitest/**",
 ];
@@ -193,6 +195,29 @@ describe("desktop package layout", () => {
     ).rejects.toThrow("builder file exclusions are incomplete");
   });
 
+  it.each([
+    [
+      "top-level extraFiles",
+      ["extraFiles:", "  - from: dist/extra-files", "    to: leaked.test.js", ""].join("\n"),
+    ],
+    [
+      "mac.extraFiles",
+      [
+        "mac:",
+        "  extraFiles:",
+        "    - from: dist/extra-files",
+        "      to: leaked.test.js",
+        "",
+      ].join("\n"),
+    ],
+  ])("rejects the alternate builder copy surface %s", async (_label, addition) => {
+    const fixture = await syntheticPackage();
+    await writeFile(join(fixture.desktop, "electron-builder.yml"), `${builderYaml()}${addition}`);
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+    ).rejects.toThrow("alternate builder copy surfaces are forbidden");
+  });
+
   it("validates the checked-in builder authority", async () => {
     await expect(readBuilderAuthority(desktopRoot)).resolves.toMatchObject({
       asarSourceRoot: join(desktopRoot, "dist/self-test-asar"),
@@ -229,6 +254,8 @@ describe("desktop package layout", () => {
     "dev-fixtures/data.json",
     "feature.test.js",
     "feature.spec.ts",
+    "node_modules/@enduragent/sport-cycling/vitest.config.ts",
+    "node_modules/@enduragent/sport-cycling/vitest.workspace.mts",
     "node_modules/vitest/index.js",
     "node_modules/@vitest/runner/index.js",
   ])("rejects forbidden ASAR path %s", async (path) => {
@@ -293,6 +320,17 @@ describe("desktop package layout", () => {
     await writeFile(nativeFile, "sentinel-intervals-api-key");
     await expect(
       verifyPackageLayout(unpackedFixture.app, { desktopRoot: unpackedFixture.desktop }),
+    ).rejects.toThrow("known plaintext secret marker");
+  });
+
+  it("scans the packaged icon for synthetic secret markers", async () => {
+    const fixture = await syntheticPackage();
+    await writeFile(
+      join(fixture.resources, "electron.icns"),
+      "sentinel-google-generative-ai-api-key",
+    );
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
     ).rejects.toThrow("known plaintext secret marker");
   });
 
