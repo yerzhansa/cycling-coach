@@ -407,8 +407,6 @@ describe("first sync controller", () => {
       "Getting your coach ready",
       "Syncing your training history…",
       "You can keep Enduragent open while rides, wellness, and calendar data are added.",
-      "Training history is ready",
-      "Your coach is ready when you are.",
       "We couldn’t finish syncing",
       "Your saved progress is safe.",
       "Retry sync",
@@ -417,6 +415,16 @@ describe("first sync controller", () => {
     ]) {
       expect(host).toContain(copy);
     }
+    expect(host).toContain(`if (state.status === "idle" || state.status === "ready") {
+    firstSyncElement?.remove();
+    firstSyncElement = undefined;
+    return;
+  }`);
+    expect(host).not.toContain("Training history is ready");
+    expect(host).not.toContain("Your coach is ready when you are.");
+    expect(host).toContain('section.setAttribute("aria-labelledby", "first-sync-title")');
+    expect(host).toContain('track.setAttribute("role", "progressbar")');
+    expect(host).toContain('track.setAttribute("aria-label", "Syncing training history")');
     expect(host).toContain("coordinator: trainingSyncCoordinator");
     expect(host).not.toContain("syncNeedsReconnect");
     expect(controller).not.toMatch(/onNotificationEnvelope|requestId|chat|transcript/u);

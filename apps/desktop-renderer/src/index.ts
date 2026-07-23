@@ -116,7 +116,7 @@ let firstSyncElement: HTMLElement | undefined;
 let firstSyncController: ReturnType<typeof createFirstSyncController>;
 
 function renderFirstSync(state: FirstSyncState): void {
-  if (state.status === "idle") {
+  if (state.status === "idle" || state.status === "ready") {
     firstSyncElement?.remove();
     firstSyncElement = undefined;
     return;
@@ -147,10 +147,6 @@ function renderFirstSync(state: FirstSyncState): void {
     track.setAttribute("role", "progressbar");
     track.setAttribute("aria-label", "Syncing training history");
     body.append(eyebrow, title, detail, track);
-  } else if (state.status === "ready") {
-    title.textContent = "Training history is ready";
-    detail.textContent = "Your coach is ready when you are.";
-    body.append(eyebrow, title, detail);
   } else if (state.kind === "protocol") {
     title.textContent = "Enduragent needs to reconnect safely";
     detail.textContent = "Quit and reopen Enduragent.";
