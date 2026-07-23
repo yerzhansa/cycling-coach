@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config, ReferenceRuntime } from "@enduragent/core";
@@ -126,6 +126,80 @@ describe("StoreRuntime", () => {
     capture.mockRejectedValueOnce(new Error("capture failed"));
     await expect(runtime.runWindow()).rejects.toThrow("capture failed");
     expect(runtime.currentSnapshot()).toBe(produced);
+    await runtime.close();
+  });
+
+  it("logs a redacted scheduled refresh failure, retains the snapshot, and reschedules", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "store-runtime-scheduled-error-"));
+    roots.push(root);
+    const scheduled: Array<() => void> = [];
+    let markRescheduled!: () => void;
+    const rescheduled = new Promise<void>((resolve) => {
+      markRescheduled = resolve;
+    });
+    const handle = { unref: vi.fn() } as unknown as ReturnType<typeof setTimeout>;
+    const reference = {
+      scheduler: { stop: vi.fn() },
+      services: {},
+      runScheduledOnce: vi.fn(async () => ({ kind: "ran", lastSyncAt: "", refreshed: [] })),
+    } as unknown as ReferenceRuntime;
+    const capture = vi
+      .fn<() => Promise<ReferenceCaptureManifest>>()
+      .mockResolvedValueOnce(manifest)
+      .mockRejectedValueOnce(
+        Object.assign(new Error("capture failed"), {
+          payload: { apiKey: "SECRET-API-KEY" },
+          authorization: "Bearer SECRET",
+        }),
+      );
+    const runtime = createStoreRuntime({
+      env: {},
+      config,
+      home: {
+        root,
+        storeDir: join(root, "store"),
+        archiveDir: join(root, "archive"),
+        configDir: join(root, "config"),
+      },
+      reference,
+      dependencies: {
+        capture,
+        produce: vi.fn(async () => produced),
+        now: () => new Date("1998-07-18T12:00:00.000Z"),
+        monotonicNow: () => 1,
+        schedulerDependencies: {
+          nowEpochMs: () => new Date("1998-07-18T12:00:00.000Z").getTime(),
+          setTimeout: vi.fn((callback: () => void) => {
+            scheduled.push(callback);
+            if (scheduled.length === 2) markRescheduled();
+            return handle;
+          }) as unknown as typeof setTimeout,
+          clearTimeout: vi.fn() as unknown as typeof clearTimeout,
+        },
+      },
+    });
+    await runtime.runWindow();
+    runtime.startScheduler();
+    scheduled[0]!();
+    await rescheduled;
+
+    const raw = await readFile(join(root, "logs", "log.jsonl"), "utf8");
+    const lines = raw.trim().split("\n");
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      level: "error",
+      component: "sync",
+      event: "scheduled_store_refresh_failed",
+      err: {
+        name: "Error",
+        message: "capture failed",
+        authorization: "[redacted]",
+      },
+    });
+    expect(raw).not.toContain("SECRET-API-KEY");
+    expect(raw).not.toContain("Bearer SECRET");
+    expect(runtime.currentSnapshot()).toBe(produced);
+    expect(scheduled).toHaveLength(2);
     await runtime.close();
   });
 
