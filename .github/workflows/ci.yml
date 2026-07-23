@@ -114,4 +114,5 @@ jobs:
       - name: Test Desktop IME composition
         run: pnpm --filter @enduragent/desktop exec vitest run tests/chat-panels.integration.test.ts --testNamePattern "preserves IME composition until committed Enter"
       - run: pnpm --filter @enduragent/desktop test:packaged-self-test
+      - run: pnpm --filter @enduragent/desktop verify:package-layout
       - run: pnpm --filter @enduragent/desktop run smoke:security -- --mode=packaged --output=/tmp/desktop-security-packaged
