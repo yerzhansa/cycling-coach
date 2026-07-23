@@ -6,7 +6,7 @@ import {
   type DesktopCredentialSlot,
   type ModelCredentialSlot,
 } from "./constants.js";
-import type { OnboardingBridge } from "./bridge.js";
+import type { CredentialWriteResult, OnboardingBridge } from "./bridge.js";
 import { credentialPresentation } from "./credential-presentation.js";
 import {
   ONBOARDING_COMPLETION,
@@ -70,6 +70,7 @@ export async function handoffCredential(
   let secret: string | undefined;
   try {
     secret = input.value;
+    input.value = "";
     if (secret.trim().length === 0) return false;
     await write({ slot: input.dataset.slot as DesktopCredentialSlot, value: secret });
     return true;
@@ -82,12 +83,44 @@ export async function handoffCredential(
 const ERROR_COPY: Readonly<Record<OnboardingErrorCode, string>> = {
   "credential-required": "Sign in with ChatGPT or add at least one model key to continue.",
   "credential-save-failed": "That key could not be saved. Try entering it again.",
+  "invalid-input": "That key was not accepted. Check it and enter it again.",
+  "encryption-unavailable":
+    "macOS encryption is unavailable. Make sure Keychain is available, then try again.",
+  "unsafe-backend": "The app cannot safely store that key with the current storage backend.",
+  "storage-failed":
+    "The app could not confirm that key was saved securely. Check that secure storage is available and try again.",
+  "runtime-unavailable":
+    "That key was saved, but it is not active yet. Choose Retry saved keys to activate it.",
+  "credential-status-unavailable":
+    "That key was saved, but its status could not be refreshed. Close and reopen Setup to check again.",
+  "credential-reenter-required": "That saved key could not be used. Enter it again to continue.",
   "training-account-mismatch":
     "That intervals.icu key belongs to a different athlete than the training history already stored. Switching accounts is not supported yet.",
   "training-data-required": "Connect intervals.icu or import at least one ride file.",
   "intake-incomplete": "Answer the required safety questions to continue.",
   "intake-save-failed": "Your answers could not be saved. Please try again.",
 };
+
+type CredentialWriteRefusalReason = Extract<
+  CredentialWriteResult,
+  { readonly status: "refused" }
+>["reason"];
+
+const CREDENTIAL_WRITE_REFUSAL_ERRORS = {
+  "invalid-input": "invalid-input",
+  "encryption-unavailable": "encryption-unavailable",
+  "unsafe-backend": "unsafe-backend",
+  "storage-failed": "storage-failed",
+  "runtime-unavailable": "runtime-unavailable",
+  "training-account-mismatch": "training-account-mismatch",
+} as const satisfies Readonly<Record<CredentialWriteRefusalReason, OnboardingErrorCode>>;
+
+function credentialWriteRefusalError(reason: unknown): OnboardingErrorCode {
+  if (typeof reason === "string" && Object.hasOwn(CREDENTIAL_WRITE_REFUSAL_ERRORS, reason)) {
+    return CREDENTIAL_WRITE_REFUSAL_ERRORS[reason as CredentialWriteRefusalReason];
+  }
+  return "credential-save-failed";
+}
 
 const CHATGPT_REFUSAL_COPY = {
   "already-in-progress": "A ChatGPT sign-in is already in progress.",
@@ -129,6 +162,7 @@ function passwordControl(
   slot: ModelCredentialSlot | "intervals-icu",
   labelText: string,
   status: CredentialSlotStatus,
+  disabled = false,
 ): HTMLElement {
   const presentation = credentialPresentation(status);
   const field = make(document, "div", "credential-field");
@@ -147,6 +181,7 @@ function passwordControl(
   input.id = id;
   input.type = "password";
   input.autocomplete = "off";
+  input.disabled = disabled;
   input.dataset.slot = slot;
   input.setAttribute("aria-describedby", "onboarding-error");
   field.append(label, input);
@@ -197,14 +232,27 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
     options.opener.focus();
   };
 
-  const refreshStatuses = async (expectedVisit: number): Promise<void> => {
-    const [statuses, chatGpt] = await Promise.all([
+  const refreshStatuses = async (expectedVisit: number): Promise<boolean> => {
+    const [statuses, chatGpt] = await Promise.allSettled([
       options.bridge.credentialStatuses(),
       options.bridge.chatGptStatus(),
     ]);
-    if (visit !== expectedVisit || scrim === undefined) return;
-    credentialStatuses = statuses;
-    state = withChatGptStatus(withCredentialStatuses(state, statuses), chatGpt);
+    if (visit !== expectedVisit || scrim === undefined) return false;
+    if (statuses.status === "fulfilled") {
+      credentialStatuses = statuses.value;
+      state = withCredentialStatuses(state, statuses.value);
+    }
+    if (chatGpt.status === "fulfilled") {
+      state = withChatGptStatus(state, chatGpt.value);
+    } else if (
+      statuses.status === "fulfilled" &&
+      statuses.value.some(
+        (status) => status.slot !== "intervals-icu" && status.runtimeState === "active",
+      )
+    ) {
+      state = { ...state, chatGptRuntimeReady: false };
+    }
+    return statuses.status === "fulfilled";
   };
 
   const savePasswordControls = async (
@@ -213,9 +261,20 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
   ): Promise<OnboardingErrorCode | null> => {
     const controls = Array.from(
       root.querySelectorAll<HTMLInputElement>('input[type="password"][data-slot]'),
+      (input): TransientPasswordInput => {
+        input.disabled = true;
+        const control = { value: input.value, dataset: { slot: input.dataset.slot } };
+        input.value = "";
+        return control;
+      },
     );
     let attempted = false;
-    let failure: OnboardingErrorCode | null = null;
+    const outcome: {
+      failure: OnboardingErrorCode | null;
+      nonRuntimeFailure: OnboardingErrorCode | null;
+    } = { failure: null, nonRuntimeFailure: null };
+    const runtimeUnavailableSlots = new Set<DesktopCredentialSlot>();
+    let statusRefreshFailed = false;
     for (const input of controls) {
       if (visit !== expectedVisit || scrim === undefined) return null;
       try {
@@ -224,30 +283,61 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
         let configured = false;
         await handoffCredential(input, async (value) => {
           const result = await options.bridge.writeCredential(value);
+          if (disposed || visit !== expectedVisit || scrim === undefined) return;
           if (result.status === "configured") {
             configured = true;
           } else {
-            failure =
-              result.reason === "training-account-mismatch"
-                ? "training-account-mismatch"
-                : (failure ?? "credential-save-failed");
+            if (result.reason === "runtime-unavailable") {
+              runtimeUnavailableSlots.add(result.slot);
+            }
+            const writeFailure = credentialWriteRefusalError(result.reason);
+            outcome.failure ??= writeFailure;
+            if (writeFailure !== "runtime-unavailable") {
+              outcome.nonRuntimeFailure ??= writeFailure;
+            }
           }
         });
-        if (!configured) failure ??= "credential-save-failed";
+        if (disposed || visit !== expectedVisit || scrim === undefined) return null;
+        if (!configured && outcome.failure === null) {
+          outcome.failure = "credential-save-failed";
+          outcome.nonRuntimeFailure ??= "credential-save-failed";
+        }
       } catch {
-        failure ??= "credential-save-failed";
+        outcome.failure ??= "credential-save-failed";
+        outcome.nonRuntimeFailure ??= "credential-save-failed";
       } finally {
         input.value = "";
       }
+      if (disposed || visit !== expectedVisit || scrim === undefined) return null;
     }
     if (attempted) {
-      try {
-        await refreshStatuses(expectedVisit);
-      } catch {
-        failure ??= "credential-save-failed";
+      if (!(await refreshStatuses(expectedVisit))) {
+        statusRefreshFailed = true;
       }
+      if (disposed || visit !== expectedVisit || scrim === undefined) return null;
     }
-    return failure;
+    if (statusRefreshFailed) {
+      return outcome.nonRuntimeFailure ?? "credential-status-unavailable";
+    }
+    if (runtimeUnavailableSlots.size === 0) {
+      return outcome.failure;
+    }
+    if (outcome.nonRuntimeFailure !== null) return outcome.nonRuntimeFailure;
+    const refreshedRuntimeStatuses = Array.from(runtimeUnavailableSlots, (slot) =>
+      credentialStatuses.find((entry) => entry.slot === slot),
+    );
+    if (
+      refreshedRuntimeStatuses.some(
+        (status) =>
+          status === undefined || status.state === "missing" || status.state === "re-prompt",
+      )
+    ) {
+      return "credential-reenter-required";
+    }
+    if (refreshedRuntimeStatuses.some((status) => status?.runtimeState === "failed")) {
+      return "runtime-unavailable";
+    }
+    return null;
   };
 
   const importStatusCopy = (): string => {
@@ -359,6 +449,58 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
     return button;
   };
 
+  const currentStepOwnsCredentialSlot = (slot: DesktopCredentialSlot): boolean => {
+    if (state.step === "coach-keys") return slot !== "intervals-icu";
+    return state.step === "training-data" && slot === "intervals-icu";
+  };
+
+  const currentStepHasRetryableCredential = (): boolean =>
+    credentialStatuses.some(
+      (entry) =>
+        currentStepOwnsCredentialSlot(entry.slot) && credentialPresentation(entry).retryable,
+    );
+
+  const renderCredentialRetry = (body: HTMLElement): void => {
+    if (!currentStepHasRetryableCredential()) return;
+
+    const retry = make(options.document, "button", "text-button", "Retry saved keys");
+    retry.type = "button";
+    retry.disabled = state.busy;
+    retry.addEventListener("click", () => {
+      if (disposed || scrim === undefined || state.busy) return;
+      const retryVisit = visit;
+      const retryStep = state.step;
+      state = withBusy(state, true);
+      render();
+      focusCurrentTitle();
+      void (async () => {
+        try {
+          const statuses = await options.bridge.retryFailedCredentials();
+          if (visit !== retryVisit || scrim === undefined) return;
+          let nextState = withCredentialStatuses(state, statuses);
+          if (retryStep === "coach-keys") {
+            try {
+              nextState = withChatGptStatus(nextState, await options.bridge.chatGptStatus());
+            } catch {
+              nextState = { ...nextState, chatGptRuntimeReady: false };
+            }
+          }
+          if (visit !== retryVisit || scrim === undefined) return;
+          credentialStatuses = statuses;
+          state = withBusy(nextState, false);
+          render();
+          focusCurrentTitle();
+        } catch {
+          if (visit !== retryVisit || scrim === undefined) return;
+          state = withError(state, "runtime-unavailable");
+          render();
+          focusCurrentTitle();
+        }
+      })();
+    });
+    body.append(retry);
+  };
+
   const renderCoachKeys = (body: HTMLElement): void => {
     body.append(
       make(options.document, "p", "onboarding-kicker", "Coach keys"),
@@ -437,6 +579,7 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
         provider.id,
         provider.label,
         status(provider.id),
+        state.busy,
       );
       control
         .querySelector("label")
@@ -449,39 +592,18 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
     const advancedList = make(options.document, "div", "credential-list");
     for (const provider of ADVANCED_MODEL_CREDENTIAL_SLOTS) {
       advancedList.append(
-        passwordControl(options.document, provider.id, provider.label, status(provider.id)),
+        passwordControl(
+          options.document,
+          provider.id,
+          provider.label,
+          status(provider.id),
+          state.busy,
+        ),
       );
     }
     advanced.append(advancedList);
     body.append(advanced);
-    if (credentialStatuses.some((entry) => credentialPresentation(entry).retryable)) {
-      const retry = make(options.document, "button", "text-button", "Retry saved keys");
-      retry.type = "button";
-      retry.disabled = state.busy;
-      retry.addEventListener("click", () => {
-        const retryVisit = visit;
-        state = withBusy(state, true);
-        render();
-        focusCurrentTitle();
-        void options.bridge
-          .retryFailedCredentials()
-          .then(async () => {
-            if (visit !== retryVisit || scrim === undefined) return;
-            await refreshStatuses(retryVisit);
-            if (visit !== retryVisit || scrim === undefined) return;
-            state = withBusy(state, false);
-            render();
-            focusCurrentTitle();
-          })
-          .catch(() => {
-            if (visit !== retryVisit || scrim === undefined) return;
-            state = withError(state, "credential-save-failed");
-            render();
-            focusCurrentTitle();
-          });
-      });
-      body.append(retry);
-    }
+    renderCredentialRetry(body);
   };
 
   const renderTrainingData = (body: HTMLElement): void => {
@@ -503,8 +625,10 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
         "intervals-icu",
         "intervals.icu API key",
         status("intervals-icu"),
+        state.busy,
       ),
     );
+    renderCredentialRetry(body);
     const divider = make(options.document, "div", "source-divider", "or import ride files");
     body.append(divider);
     const chooser = make(options.document, "button", "drop-zone");
@@ -628,11 +752,17 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
     state = withBusy(state, true);
     for (const button of dialog.querySelectorAll<HTMLButtonElement>("button"))
       button.disabled = true;
+    const actionStatus = dialog.querySelector<HTMLElement>(".onboarding-action-status");
+    if (actionStatus !== null) {
+      actionStatus.textContent = "Working…";
+      actionStatus.hidden = false;
+    }
     if (state.step === "coach-keys") {
       const saveError = await savePasswordControls(dialog, submitVisit);
       if (visit !== submitVisit || scrim === undefined) return;
       state = withBusy(state, false);
       if (saveError !== null) state = withError(state, saveError);
+      else if (currentStepHasRetryableCredential()) state = withError(state, "runtime-unavailable");
       else if (!hasConfiguredModel(state)) state = withError(state, "credential-required");
       else state = nextStep(state);
       render();
@@ -644,6 +774,7 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
       if (visit !== submitVisit || scrim === undefined) return;
       state = withBusy(state, false);
       if (saveError !== null) state = withError(state, saveError);
+      else if (currentStepHasRetryableCredential()) state = withError(state, "runtime-unavailable");
       else if (!hasTrainingData(state)) state = withError(state, "training-data-required");
       else state = nextStep(state);
       render();
@@ -684,6 +815,7 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
 
   const render = (): void => {
     if (scrim === undefined) return;
+    clearPasswordInputs();
     scrim.replaceChildren();
     const dialog = make(options.document, "section", "onboarding");
     dialog.setAttribute("role", "dialog");
@@ -725,6 +857,16 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
     error.setAttribute("aria-live", "polite");
     if (state.fixedError !== null) error.textContent = ERROR_COPY[state.fixedError];
     body.append(error);
+    const actionStatus = make(
+      options.document,
+      "p",
+      "onboarding-action-status",
+      state.busy ? "Working…" : "",
+    );
+    actionStatus.setAttribute("role", "status");
+    actionStatus.setAttribute("aria-live", "polite");
+    actionStatus.hidden = !state.busy;
+    body.append(actionStatus);
     const footer = make(options.document, "footer", "onboarding-footer");
     const importBusy = state.step === "training-data" && rideImports.isBusy();
     if (activeIndex > 0) {

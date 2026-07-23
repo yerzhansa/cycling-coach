@@ -34,6 +34,13 @@ export interface DesktopIntakeDraft {
 export type OnboardingErrorCode =
   | "credential-required"
   | "credential-save-failed"
+  | "invalid-input"
+  | "encryption-unavailable"
+  | "unsafe-backend"
+  | "storage-failed"
+  | "runtime-unavailable"
+  | "credential-status-unavailable"
+  | "credential-reenter-required"
   | "training-account-mismatch"
   | "training-data-required"
   | "intake-incomplete"

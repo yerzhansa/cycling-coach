@@ -297,6 +297,46 @@ describe("onboarding provider status", () => {
     controller.dispose();
   });
 
+  it("fails ChatGPT activity closed when its post-retry status is unavailable", async () => {
+    const document = new FakeDocument();
+    const failedStatuses = [
+      { slot: "anthropic" as const, state: "configured" as const, runtimeState: "failed" as const },
+    ];
+    const activeStatuses = [
+      { slot: "anthropic" as const, state: "configured" as const, runtimeState: "active" as const },
+    ];
+    const chatGptStatus = vi
+      .fn<OnboardingBridge["chatGptStatus"]>()
+      .mockResolvedValueOnce({ state: "configured", runtimeReady: true })
+      .mockRejectedValueOnce(new Error("private status failure"));
+    const retryFailedCredentials = vi.fn(async () => activeStatuses);
+    const controller = mountOnboarding({
+      document: document as never,
+      bridge: createBridge({
+        credentialStatuses: vi.fn(async () => failedStatuses),
+        chatGptStatus,
+        retryFailedCredentials,
+      }),
+      opener: new FakeElement("button", document) as never,
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+
+    findByText(document.body, "button", "Retry saved keys").click();
+
+    await vi.waitFor(() => {
+      expect(retryFailedCredentials).toHaveBeenCalledOnce();
+      expect(chatGptStatus).toHaveBeenCalledTimes(2);
+      expectOneActiveProvider(document.body);
+    });
+    expect(activeProviderLanes(document.body)[0]?.textContent).toBe("Configured");
+    expect(document.body.textContent).toContain(
+      "Your ChatGPT sign-in is saved. Sign in again to activate it.",
+    );
+    expect(document.body.textContent).not.toContain("private status failure");
+    controller.dispose();
+  });
+
   it("does not report a completed sign-in as refused when status refresh fails", async () => {
     const document = new FakeDocument();
     const credentialStatuses = vi
@@ -307,9 +347,13 @@ describe("onboarding provider status", () => {
       status: "configured" as const,
       runtimeReady: true as const,
     }));
+    const chatGptStatus = vi
+      .fn<OnboardingBridge["chatGptStatus"]>()
+      .mockResolvedValueOnce({ state: "absent", runtimeReady: false })
+      .mockResolvedValueOnce({ state: "configured", runtimeReady: true });
     const controller = mountOnboarding({
       document: document as never,
-      bridge: createBridge({ credentialStatuses, chatGptLogin }),
+      bridge: createBridge({ credentialStatuses, chatGptLogin, chatGptStatus }),
       opener: new FakeElement("button", document) as never,
       onComplete: vi.fn(),
     });

@@ -14,7 +14,7 @@ describe("onboarding renderer secret boundary", () => {
     ["anthropic", "synthetic-model-secret-sentinel"],
     ["intervals-icu", "synthetic-intervals-secret-sentinel"],
   ] as const) {
-    it(`releases the ${slot} password after the pending handoff settles`, async () => {
+    it(`releases the ${slot} password before the pending handoff settles`, async () => {
       const input = { value: sentinel, dataset: { slot } };
       const gate = deferred();
       let transient: { readonly slot: string; readonly value: string } | undefined;
@@ -27,7 +27,7 @@ describe("onboarding renderer secret boundary", () => {
         }
       };
       const pending = handoffCredential(input, write);
-      expect(input.value).toBe(sentinel);
+      expect(input.value).toBe("");
       expect(transient).toEqual({ slot, value: sentinel });
       gate.resolve();
       await pending;

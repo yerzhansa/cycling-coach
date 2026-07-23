@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { CredentialWriteResult, OnboardingBridge } from "../src/onboarding/bridge.js";
 import { mountOnboarding } from "../src/onboarding/mount.js";
@@ -192,7 +193,795 @@ function buttonWithText(document: FakeDocument, text: string): FakeElement {
   return button;
 }
 
+function passwordInputFor(document: FakeDocument, slot: string): FakeElement {
+  const input = document.body
+    .querySelectorAll('input[type="password"][data-slot]')
+    .find((candidate) => candidate.dataset.slot === slot);
+  if (input === undefined) throw new Error(`Password input not found: ${slot}`);
+  return input;
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
+type CredentialWriteRefusalReason = Extract<
+  CredentialWriteResult,
+  { readonly status: "refused" }
+>["reason"];
+
+const CREDENTIAL_REFUSAL_CASES = [
+  {
+    reason: "invalid-input",
+    copy: "That key was not accepted. Check it and enter it again.",
+  },
+  {
+    reason: "encryption-unavailable",
+    copy: "macOS encryption is unavailable. Make sure Keychain is available, then try again.",
+  },
+  {
+    reason: "unsafe-backend",
+    copy: "The app cannot safely store that key with the current storage backend.",
+  },
+  {
+    reason: "storage-failed",
+    copy: "The app could not confirm that key was saved securely. Check that secure storage is available and try again.",
+  },
+  {
+    reason: "runtime-unavailable",
+    copy: "That key was saved, but it is not active yet. Choose Retry saved keys to activate it.",
+  },
+] as const satisfies ReadonlyArray<{
+  readonly reason: CredentialWriteRefusalReason;
+  readonly copy: string;
+}>;
+
 describe("mounted onboarding", () => {
+  it.each(CREDENTIAL_REFUSAL_CASES)(
+    "keeps the athlete on coach keys and explains $reason refusals",
+    async ({ reason, copy }) => {
+      const document = new FakeDocument();
+      const baseBridge = bridge(async () => ({
+        status: "configured",
+        runtimeReady: true,
+      }));
+      if (reason === "runtime-unavailable") {
+        baseBridge.credentialStatuses
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([
+            { slot: "anthropic", state: "configured", runtimeState: "failed" },
+          ]);
+      }
+      let credentialWriteCount = 0;
+      const onboardingBridge: OnboardingBridge = {
+        ...baseBridge,
+        async writeCredential({ slot }) {
+          credentialWriteCount += 1;
+          return { slot, status: "refused", reason };
+        },
+      };
+      const onComplete = vi.fn();
+      const controller = mountOnboarding({
+        document: documentBoundary(document),
+        bridge: onboardingBridge,
+        opener: elementBoundary(document.createElement("button")),
+        onComplete,
+      });
+      await controller.open();
+      const passwordInput = passwordInputFor(document, "anthropic");
+      passwordInput.value = randomUUID();
+
+      buttonWithText(document, "Continue").dispatch("click");
+
+      await vi.waitFor(() => expect(controller.state().fixedError).toBe(reason));
+      expect(document.body.querySelector("#onboarding-error")?.textContent).toBe(copy);
+      expect(controller.state().step).toBe("coach-keys");
+      expect(passwordInput.value).toBe("");
+      expect(credentialWriteCount).toBe(1);
+      expect(baseBridge.credentialStatuses).toHaveBeenCalledTimes(2);
+      expect(onComplete).not.toHaveBeenCalled();
+      controller.dispose();
+    },
+  );
+
+  it("explains a training-account mismatch on the reachable intervals.icu path", async () => {
+    const document = new FakeDocument();
+    const baseBridge = bridge(async () => ({
+      status: "configured",
+      runtimeReady: true,
+    }));
+    baseBridge.credentialStatuses.mockResolvedValue([
+      { slot: "anthropic", state: "configured", runtimeState: "active" },
+    ]);
+    const onboardingBridge: OnboardingBridge = {
+      ...baseBridge,
+      async writeCredential({ slot }) {
+        return {
+          slot,
+          status: "refused",
+          reason: "training-account-mismatch",
+        };
+      },
+    };
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: onboardingBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    buttonWithText(document, "Continue").dispatch("click");
+    await vi.waitFor(() => expect(controller.state().step).toBe("training-data"));
+    passwordInputFor(document, "intervals-icu").value = randomUUID();
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => expect(controller.state().fixedError).toBe("training-account-mismatch"));
+    expect(document.body.querySelector("#onboarding-error")?.textContent).toBe(
+      "That intervals.icu key belongs to a different athlete than the training history already stored. Switching accounts is not supported yet.",
+    );
+    expect(controller.state().step).toBe("training-data");
+    expect(passwordInputFor(document, "intervals-icu").value).toBe("");
+    controller.dispose();
+  });
+
+  it("offers one retry for a saved key that could not be activated", async () => {
+    const document = new FakeDocument();
+    const failedStatuses = [
+      { slot: "anthropic", state: "configured", runtimeState: "failed" },
+    ] as const;
+    const activeStatuses = [
+      { slot: "anthropic", state: "configured", runtimeState: "active" },
+    ] as const;
+    const baseBridge = bridge(async () => ({
+      status: "configured",
+      runtimeReady: true,
+    }));
+    baseBridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+    baseBridge.credentialStatuses.mockResolvedValueOnce([]).mockResolvedValueOnce(failedStatuses);
+    const retry = deferred<readonly (typeof activeStatuses)[number][]>();
+    const retryFailedCredentials = vi.fn<OnboardingBridge["retryFailedCredentials"]>(
+      () => retry.promise,
+    );
+    let credentialWriteCount = 0;
+    const onboardingBridge: OnboardingBridge = {
+      ...baseBridge,
+      retryFailedCredentials,
+      async writeCredential({ slot }) {
+        credentialWriteCount += 1;
+        return { slot, status: "refused", reason: "runtime-unavailable" };
+      },
+    };
+    const onComplete = vi.fn();
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: onboardingBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete,
+    });
+    await controller.open();
+    const passwordInput = passwordInputFor(document, "anthropic");
+    passwordInput.value = randomUUID();
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => expect(controller.state().fixedError).toBe("runtime-unavailable"));
+    expect(document.body.textContent).toContain("That key was saved, but it is not active yet.");
+    expect(document.body.textContent).toContain("Choose Retry saved keys to activate it.");
+    expect(buttonWithText(document, "Retry saved keys").disabled).toBe(false);
+    expect(passwordInput.value).toBe("");
+    expect(baseBridge.credentialStatuses).toHaveBeenCalledTimes(2);
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => expect(controller.state().busy).toBe(false));
+    expect(controller.state()).toMatchObject({
+      step: "coach-keys",
+      fixedError: "runtime-unavailable",
+    });
+    expect(credentialWriteCount).toBe(1);
+
+    const detachedPassword = passwordInputFor(document, "anthropic");
+    detachedPassword.value = randomUUID();
+    const retryButton = buttonWithText(document, "Retry saved keys");
+    retryButton.dispatch("click");
+    retryButton.dispatch("click");
+    buttonWithText(document, "Retry saved keys").dispatch("click");
+
+    expect(retryFailedCredentials).toHaveBeenCalledTimes(1);
+    expect(detachedPassword.value).toBe("");
+    expect(controller.state()).toMatchObject({ busy: true, fixedError: null });
+    expect(document.body.querySelector("#onboarding-error")?.textContent).toBe("");
+    expect(passwordInputFor(document, "anthropic").disabled).toBe(true);
+    expect(document.body.querySelector(".onboarding-action-status")?.textContent).toBe("Working…");
+    retry.resolve(activeStatuses);
+
+    await vi.waitFor(() => {
+      expect(baseBridge.credentialStatuses).toHaveBeenCalledTimes(2);
+      expect(controller.state()).toMatchObject({
+        step: "coach-keys",
+        busy: false,
+        fixedError: null,
+        credentialStatus: { anthropic: "configured" },
+      });
+      expect(
+        passwordInputFor(document, "anthropic").parent?.querySelector(".credential-state")
+          ?.textContent,
+      ).toBe("Configured");
+    });
+    expect(
+      document.body
+        .querySelectorAll("button")
+        .some((button) => button.textContent === "Retry saved keys"),
+    ).toBe(false);
+    expect(credentialWriteCount).toBe(1);
+    expect(retryFailedCredentials).toHaveBeenCalledTimes(1);
+    expect(onComplete).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it("keeps activation copy and retry available when retrying fails", async () => {
+    const document = new FakeDocument();
+    const failedStatuses = [
+      { slot: "anthropic", state: "configured", runtimeState: "failed" },
+    ] as const;
+    const baseBridge = bridge(async () => ({
+      status: "configured",
+      runtimeReady: true,
+    }));
+    baseBridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+    baseBridge.credentialStatuses.mockResolvedValueOnce([]).mockResolvedValueOnce(failedStatuses);
+    const onboardingBridge: OnboardingBridge = {
+      ...baseBridge,
+      async retryFailedCredentials() {
+        throw new Error("private daemon failure");
+      },
+      async writeCredential({ slot }) {
+        return { slot, status: "refused", reason: "runtime-unavailable" };
+      },
+    };
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: onboardingBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    passwordInputFor(document, "anthropic").value = randomUUID();
+    buttonWithText(document, "Continue").dispatch("click");
+    await vi.waitFor(() => expect(controller.state().fixedError).toBe("runtime-unavailable"));
+
+    buttonWithText(document, "Retry saved keys").dispatch("click");
+
+    await vi.waitFor(() => expect(controller.state().busy).toBe(false));
+    expect(controller.state().fixedError).toBe("runtime-unavailable");
+    expect(document.body.querySelector("#onboarding-error")?.textContent).toBe(
+      "That key was saved, but it is not active yet. Choose Retry saved keys to activate it.",
+    );
+    expect(buttonWithText(document, "Retry saved keys").disabled).toBe(false);
+    expect(document.body.textContent).not.toContain("private daemon failure");
+    controller.dispose();
+  });
+
+  it("offers intervals.icu recovery on training data without leaving or rewriting", async () => {
+    const document = new FakeDocument();
+    const failedStatuses = [
+      { slot: "intervals-icu", state: "configured", runtimeState: "failed" },
+    ] as const;
+    const baseBridge = bridge(async () => ({
+      status: "configured",
+      runtimeReady: true,
+    }));
+    baseBridge.credentialStatuses.mockResolvedValueOnce([]).mockResolvedValue(failedStatuses);
+    const retryFailedCredentials = vi.fn<OnboardingBridge["retryFailedCredentials"]>(
+      async () => failedStatuses,
+    );
+    let credentialWriteCount = 0;
+    const onboardingBridge: OnboardingBridge = {
+      ...baseBridge,
+      retryFailedCredentials,
+      async writeCredential({ slot }) {
+        credentialWriteCount += 1;
+        return { slot, status: "refused", reason: "runtime-unavailable" };
+      },
+    };
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: onboardingBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    buttonWithText(document, "Continue").dispatch("click");
+    await vi.waitFor(() => expect(controller.state().step).toBe("training-data"));
+    const intervalsInput = passwordInputFor(document, "intervals-icu");
+    intervalsInput.value = randomUUID();
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => expect(controller.state().fixedError).toBe("runtime-unavailable"));
+    expect(controller.state().step).toBe("training-data");
+    expect(document.body.querySelector("#onboarding-error")?.textContent).toBe(
+      "That key was saved, but it is not active yet. Choose Retry saved keys to activate it.",
+    );
+    expect(
+      document.body
+        .querySelectorAll("button")
+        .filter((button) => button.textContent === "Retry saved keys"),
+    ).toHaveLength(1);
+    expect(intervalsInput.value).toBe("");
+
+    buttonWithText(document, "Back").dispatch("click");
+    expect(controller.state().step).toBe("coach-keys");
+    expect(
+      document.body
+        .querySelectorAll("button")
+        .filter((button) => button.textContent === "Retry saved keys"),
+    ).toHaveLength(0);
+    buttonWithText(document, "Continue").dispatch("click");
+    await vi.waitFor(() => expect(controller.state().step).toBe("training-data"));
+    expect(
+      document.body
+        .querySelectorAll("button")
+        .filter((button) => button.textContent === "Retry saved keys"),
+    ).toHaveLength(1);
+
+    buttonWithText(document, "Retry saved keys").dispatch("click");
+
+    await vi.waitFor(() => expect(retryFailedCredentials).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(controller.state().busy).toBe(false));
+    expect(controller.state().step).toBe("training-data");
+    expect(
+      document.body
+        .querySelectorAll("button")
+        .filter((button) => button.textContent === "Retry saved keys"),
+    ).toHaveLength(1);
+    expect(credentialWriteCount).toBe(1);
+    expect(retryFailedCredentials).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
+
+  it("does not leak a late runtime-unavailable write into a reopened visit", async () => {
+    const document = new FakeDocument();
+    const baseBridge = bridge(async () => ({
+      status: "configured",
+      runtimeReady: true,
+    }));
+    const pendingWrite = deferred<CredentialWriteResult>();
+    let credentialWriteCount = 0;
+    const onboardingBridge: OnboardingBridge = {
+      ...baseBridge,
+      writeCredential() {
+        credentialWriteCount += 1;
+        return pendingWrite.promise;
+      },
+    };
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: onboardingBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    passwordInputFor(document, "anthropic").value = randomUUID();
+    buttonWithText(document, "Continue").dispatch("click");
+    await vi.waitFor(() => expect(credentialWriteCount).toBe(1));
+
+    controller.close();
+    pendingWrite.resolve({
+      slot: "anthropic",
+      status: "refused",
+      reason: "runtime-unavailable",
+    });
+    await pendingWrite.promise;
+    await controller.open();
+
+    expect(controller.state()).toMatchObject({
+      step: "coach-keys",
+      busy: false,
+      fixedError: null,
+    });
+    expect(
+      document.body
+        .querySelectorAll("button")
+        .some((button) => button.textContent === "Retry saved keys"),
+    ).toBe(false);
+    expect(credentialWriteCount).toBe(1);
+    controller.dispose();
+  });
+
+  it("snapshots and clears every password before the first write settles", async () => {
+    const document = new FakeDocument();
+    const firstValue = randomUUID();
+    const secondValue = randomUUID();
+    const firstWrite = deferred<void>();
+    let firstValueMatched = false;
+    let secondValueMatched = false;
+    const baseBridge = bridge(async () => ({ status: "refused", reason: "cancelled" }));
+    baseBridge.writeCredential = async ({ slot, value }) => {
+      if (slot === "anthropic") {
+        firstValueMatched = value === firstValue;
+        await firstWrite.promise;
+      }
+      if (slot === "openrouter") secondValueMatched = value === secondValue;
+      return { slot, status: "configured", runtimeReady: true };
+    };
+    baseBridge.credentialStatuses
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ slot: "openrouter", state: "configured", runtimeState: "active" }]);
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: baseBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    const firstInput = passwordInputFor(document, "anthropic");
+    const secondInput = passwordInputFor(document, "openrouter");
+    firstInput.value = firstValue;
+    secondInput.value = secondValue;
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => expect(firstValueMatched).toBe(true));
+    expect(firstInput.disabled).toBe(true);
+    expect(secondInput.disabled).toBe(true);
+    expect(firstInput.value).toBe("");
+    expect(secondInput.value).toBe("");
+    expect(document.body.querySelector(".onboarding-action-status")?.textContent).toBe("Working…");
+    secondInput.value = randomUUID();
+    firstWrite.resolve();
+
+    await vi.waitFor(() => expect(controller.state().step).toBe("training-data"));
+    expect(secondValueMatched).toBe(true);
+    expect(secondInput.value).toBe("");
+    controller.dispose();
+  });
+
+  it.each([
+    { runtimeState: "active", badge: "Configured" },
+    { runtimeState: "stored-inactive", badge: "Saved · Not in use" },
+  ] as const)("treats a $runtimeState post-write refresh as recovered", async (status) => {
+    const document = new FakeDocument();
+    const baseBridge = bridge(async () => ({
+      status: "configured",
+      runtimeReady: true,
+    }));
+    baseBridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+    baseBridge.credentialStatuses
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { slot: "anthropic", state: "configured", runtimeState: status.runtimeState },
+      ]);
+    let credentialWriteCount = 0;
+    const onboardingBridge: OnboardingBridge = {
+      ...baseBridge,
+      async writeCredential({ slot }) {
+        credentialWriteCount += 1;
+        return { slot, status: "refused", reason: "runtime-unavailable" };
+      },
+    };
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: onboardingBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    passwordInputFor(document, "anthropic").value = randomUUID();
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => expect(controller.state().step).toBe("training-data"));
+    expect(controller.state().fixedError).toBeNull();
+    expect(document.body.textContent).not.toContain(
+      "That key was saved, but it is not active yet.",
+    );
+    expect(
+      document.body
+        .querySelectorAll("button")
+        .some((button) => button.textContent === "Retry saved keys"),
+    ).toBe(false);
+    buttonWithText(document, "Back").dispatch("click");
+    expect(
+      passwordInputFor(document, "anthropic").parent?.querySelector(".credential-state")
+        ?.textContent,
+    ).toBe(status.badge);
+    expect(
+      document.body
+        .querySelectorAll("button")
+        .some((button) => button.textContent === "Retry saved keys"),
+    ).toBe(false);
+    expect(credentialWriteCount).toBe(1);
+    controller.dispose();
+  });
+
+  it("keeps a later failed key retryable when an earlier key recovers", async () => {
+    const document = new FakeDocument();
+    const baseBridge = bridge(async () => ({
+      status: "configured",
+      runtimeReady: true,
+    }));
+    baseBridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+    baseBridge.credentialStatuses.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      { slot: "anthropic", state: "configured", runtimeState: "active" },
+      { slot: "openrouter", state: "configured", runtimeState: "failed" },
+    ]);
+    let credentialWriteCount = 0;
+    const onboardingBridge: OnboardingBridge = {
+      ...baseBridge,
+      async writeCredential({ slot }) {
+        credentialWriteCount += 1;
+        return { slot, status: "refused", reason: "runtime-unavailable" };
+      },
+    };
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: onboardingBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    passwordInputFor(document, "anthropic").value = randomUUID();
+    passwordInputFor(document, "openrouter").value = randomUUID();
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => expect(controller.state().fixedError).toBe("runtime-unavailable"));
+    expect(controller.state().step).toBe("coach-keys");
+    expect(
+      document.body
+        .querySelectorAll("button")
+        .filter((button) => button.textContent === "Retry saved keys"),
+    ).toHaveLength(1);
+    expect(credentialWriteCount).toBe(2);
+    controller.dispose();
+  });
+
+  it.each([
+    { refreshedState: "re-prompt", description: "must be re-entered" },
+    { refreshedState: "missing", description: "is reported missing" },
+    { refreshedState: null, description: "is absent" },
+  ] as const)("asks for the key again when the refreshed key $description", async (status) => {
+    const document = new FakeDocument();
+    const baseBridge = bridge(async () => ({
+      status: "configured",
+      runtimeReady: true,
+    }));
+    baseBridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+    baseBridge.credentialStatuses
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(
+        status.refreshedState === null
+          ? []
+          : [{ slot: "anthropic", state: status.refreshedState, runtimeState: null }],
+      );
+    const onboardingBridge: OnboardingBridge = {
+      ...baseBridge,
+      async writeCredential({ slot }) {
+        return { slot, status: "refused", reason: "runtime-unavailable" };
+      },
+    };
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: onboardingBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    passwordInputFor(document, "anthropic").value = randomUUID();
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => {
+      expect(controller.state()).toMatchObject({
+        fixedError: "credential-reenter-required",
+        credentialStatus: { anthropic: status.refreshedState ?? "missing" },
+      });
+    });
+    expect(document.body.querySelector("#onboarding-error")?.textContent).toBe(
+      "That saved key could not be used. Enter it again to continue.",
+    );
+    expect(
+      document.body
+        .querySelectorAll("button")
+        .some((button) => button.textContent === "Retry saved keys"),
+    ).toBe(false);
+    controller.dispose();
+  });
+
+  it.each([
+    {
+      state: "configured",
+      runtimeState: "stored-inactive",
+    },
+    {
+      state: "re-prompt",
+      runtimeState: null,
+    },
+  ] as const)("does not offer retry for an unrelated $state status", async (status) => {
+    const document = new FakeDocument();
+    const baseBridge = bridge(async () => ({
+      status: "configured",
+      runtimeReady: true,
+    }));
+    baseBridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+    baseBridge.credentialStatuses.mockResolvedValue([
+      { slot: "anthropic", state: status.state, runtimeState: status.runtimeState },
+    ]);
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: baseBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+
+    await controller.open();
+
+    expect(
+      document.body
+        .querySelectorAll("button")
+        .some((button) => button.textContent === "Retry saved keys"),
+    ).toBe(false);
+    controller.dispose();
+  });
+
+  it("uses fixed generic copy when a credential write throws", async () => {
+    const document = new FakeDocument();
+    const exceptionDetail = "write exception detail must stay private";
+    const baseBridge = bridge(async () => ({
+      status: "configured",
+      runtimeReady: true,
+    }));
+    const onboardingBridge: OnboardingBridge = {
+      ...baseBridge,
+      async writeCredential() {
+        throw new Error(exceptionDetail);
+      },
+    };
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: onboardingBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    const passwordInput = passwordInputFor(document, "anthropic");
+    passwordInput.value = randomUUID();
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => expect(controller.state().fixedError).toBe("credential-save-failed"));
+    expect(document.body.querySelector("#onboarding-error")?.textContent).toBe(
+      "That key could not be saved. Try entering it again.",
+    );
+    expect(document.body.textContent).not.toContain(exceptionDetail);
+    expect(controller.state().step).toBe("coach-keys");
+    expect(passwordInput.value).toBe("");
+    expect(baseBridge.credentialStatuses).toHaveBeenCalledTimes(2);
+    controller.dispose();
+  });
+
+  it("explains when a saved key's post-write status cannot be refreshed", async () => {
+    const document = new FakeDocument();
+    const exceptionDetail = "status exception detail must stay private";
+    const baseBridge = bridge(async () => ({
+      status: "configured",
+      runtimeReady: true,
+    }));
+    baseBridge.credentialStatuses
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error(exceptionDetail));
+    const onboardingBridge: OnboardingBridge = {
+      ...baseBridge,
+      async writeCredential({ slot }) {
+        return { slot, status: "refused", reason: "runtime-unavailable" };
+      },
+    };
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: onboardingBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    const passwordInput = passwordInputFor(document, "anthropic");
+    passwordInput.value = randomUUID();
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() =>
+      expect(controller.state().fixedError).toBe("credential-status-unavailable"),
+    );
+    expect(document.body.querySelector("#onboarding-error")?.textContent).toBe(
+      "That key was saved, but its status could not be refreshed. Close and reopen Setup to check again.",
+    );
+    expect(document.body.textContent).not.toContain(exceptionDetail);
+    expect(controller.state().step).toBe("coach-keys");
+    expect(passwordInput.value).toBe("");
+    expect(baseBridge.credentialStatuses).toHaveBeenCalledTimes(2);
+    controller.dispose();
+  });
+
+  it("accepts an active key when only the unrelated ChatGPT status refresh fails", async () => {
+    const document = new FakeDocument();
+    const exceptionDetail = "ChatGPT status detail must stay private";
+    const baseBridge = bridge(async () => ({ status: "refused", reason: "cancelled" }));
+    baseBridge.writeCredential = async ({ slot }) => ({
+      slot,
+      status: "configured",
+      runtimeReady: true,
+    });
+    baseBridge.credentialStatuses
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ slot: "anthropic", state: "configured", runtimeState: "active" }]);
+    baseBridge.chatGptStatus
+      .mockResolvedValueOnce({ state: "configured", runtimeReady: true })
+      .mockRejectedValueOnce(new Error(exceptionDetail));
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: baseBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete: vi.fn(),
+    });
+    await controller.open();
+    passwordInputFor(document, "anthropic").value = randomUUID();
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => expect(controller.state().step).toBe("training-data"));
+    expect(controller.state().fixedError).toBeNull();
+    expect(controller.state().chatGptRuntimeReady).toBe(false);
+    expect(document.body.textContent).not.toContain(exceptionDetail);
+    controller.dispose();
+  });
+
+  it("advances after a configured key write and refreshed active status", async () => {
+    const document = new FakeDocument();
+    const baseBridge = bridge(async () => ({
+      status: "configured",
+      runtimeReady: true,
+    }));
+    baseBridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+    baseBridge.credentialStatuses
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ slot: "anthropic", state: "configured", runtimeState: "active" }]);
+    let credentialWriteCount = 0;
+    const onboardingBridge: OnboardingBridge = {
+      ...baseBridge,
+      async writeCredential({ slot }) {
+        credentialWriteCount += 1;
+        return { slot, status: "configured", runtimeReady: true };
+      },
+    };
+    const onComplete = vi.fn();
+    const controller = mountOnboarding({
+      document: documentBoundary(document),
+      bridge: onboardingBridge,
+      opener: elementBoundary(document.createElement("button")),
+      onComplete,
+    });
+    await controller.open();
+    const passwordInput = passwordInputFor(document, "anthropic");
+    passwordInput.value = randomUUID();
+
+    buttonWithText(document, "Continue").dispatch("click");
+
+    await vi.waitFor(() => expect(controller.state().step).toBe("training-data"));
+    expect(passwordInput.value).toBe("");
+    expect(credentialWriteCount).toBe(1);
+    expect(baseBridge.credentialStatuses).toHaveBeenCalledTimes(2);
+    expect(onComplete).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
   it("discloses distinct credential storage without starting sign-in, writing, or advancing", async () => {
     const document = new FakeDocument();
     const onboardingBridge = bridge(async () => ({
@@ -255,6 +1044,7 @@ describe("mounted onboarding", () => {
       expect(document.body.textContent).toContain("ChatGPT is ready.");
     });
     expect(buttonWithText(document, "Sign in again").disabled).toBe(false);
+    expect(chatGptLogin.writeCredential).not.toHaveBeenCalled();
   });
 
   it("renders the existing refusal state after configured sign-in is refused", async () => {
@@ -346,17 +1136,19 @@ describe("mounted onboarding", () => {
 
   it("does not start a dropped import while the training-data step is submitting", async () => {
     const document = new FakeDocument();
-    const onboardingBridge = bridge(async () => ({
+    const baseBridge = bridge(async () => ({
       status: "configured",
       runtimeReady: true,
     }));
-    let resolveCredential!: (value: CredentialWriteResult) => void;
-    vi.mocked(onboardingBridge.writeCredential).mockImplementation(
-      () =>
-        new Promise<CredentialWriteResult>((resolve) => {
-          resolveCredential = resolve;
-        }),
-    );
+    const pendingWrite = deferred<CredentialWriteResult>();
+    let credentialWriteCount = 0;
+    const onboardingBridge: OnboardingBridge = {
+      ...baseBridge,
+      writeCredential() {
+        credentialWriteCount += 1;
+        return pendingWrite.promise;
+      },
+    };
     const controller = mountOnboarding({
       document: documentBoundary(document),
       bridge: onboardingBridge,
@@ -370,14 +1162,14 @@ describe("mounted onboarding", () => {
       .querySelectorAll('input[type="password"][data-slot]')
       .find((input) => input.dataset.slot === "intervals-icu");
     expect(intervalsInput).toBeDefined();
-    intervalsInput!.value = "synthetic-key";
+    intervalsInput!.value = randomUUID();
 
     buttonWithText(document, "Continue").dispatch("click");
-    await vi.waitFor(() => expect(onboardingBridge.writeCredential).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(credentialWriteCount).toBe(1));
     controller.importDroppedFiles(["/synthetic/during-submit.fit"]);
     expect(onboardingBridge.importFiles).not.toHaveBeenCalled();
 
-    resolveCredential({ slot: "intervals-icu", status: "configured", runtimeReady: true });
+    pendingWrite.resolve({ slot: "intervals-icu", status: "configured", runtimeReady: true });
     await vi.waitFor(() => expect(controller.state().busy).toBe(false));
     controller.dispose();
   });
