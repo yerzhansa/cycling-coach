@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 import {
   ChatStore,
@@ -58,6 +59,10 @@ import {
 } from "@enduragent/coach-contract";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import { createPersistedAthleteStateSource } from "./athlete-state-reader.js";
+import {
+  assertRuntimeAthleteOwner,
+  type RuntimeAthleteOwnerClaim,
+} from "./backfill.js";
 import { createCoachEngineAdapter } from "./coach-engine-adapter.js";
 import {
   createStoreRuntime,
@@ -109,6 +114,9 @@ export interface LocalCoachCompositionDependencies {
   readonly closeHostAdapters?: () => void | Promise<void>;
   readonly operationsDependencies?: CoachOperationsDependencies;
   readonly persistRuntimeConfig?: typeof persistRuntimeConfig;
+  readonly assertRuntimeAthleteOwner?: (
+    ...args: Parameters<typeof assertRuntimeAthleteOwner>
+  ) => Promise<RuntimeAthleteOwnerClaim | void>;
 }
 
 export interface LocalReferenceRuntime {
@@ -185,6 +193,45 @@ function assignOptionalField(
   else target[field] = value;
 }
 
+function replacePrivateFile(path: string, content: string | Uint8Array): void {
+  const temporaryPath = `${path}.tmp.${randomBytes(4).toString("hex")}`;
+  try {
+    writeFileSync(temporaryPath, content, { mode: 0o600 });
+    chmodSync(temporaryPath, 0o600);
+    renameSync(temporaryPath, path);
+  } catch (error) {
+    try {
+      unlinkSync(temporaryPath);
+    } catch {}
+    throw error;
+  }
+}
+
+interface RuntimeConfigFileSnapshot {
+  readonly content?: Buffer;
+}
+
+function captureRuntimeConfigFile(configDir: string): RuntimeConfigFileSnapshot {
+  const path = join(configDir, "config.yaml");
+  return existsSync(path) ? { content: readFileSync(path) } : {};
+}
+
+function restoreRuntimeConfigFile(
+  configDir: string,
+  snapshot: RuntimeConfigFileSnapshot,
+): void {
+  const path = join(configDir, "config.yaml");
+  if (snapshot.content !== undefined) {
+    replacePrivateFile(path, snapshot.content);
+    return;
+  }
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
 function persistRuntimeConfig(
   configDir: string,
   candidate: Config,
@@ -221,17 +268,7 @@ function persistRuntimeConfig(
       athlete_id: candidate.intervals.athleteId,
     };
   }
-  const temporaryPath = `${path}.tmp.${randomBytes(4).toString("hex")}`;
-  try {
-    writeFileSync(temporaryPath, toYaml(next), { mode: 0o600 });
-    chmodSync(temporaryPath, 0o600);
-    renameSync(temporaryPath, path);
-  } catch (error) {
-    try {
-      unlinkSync(temporaryPath);
-    } catch {}
-    throw error;
-  }
+  replacePrivateFile(path, toYaml(next));
 }
 
 function runtimeCredentialConfigured(configDir: string, config: Config): boolean {
@@ -264,7 +301,7 @@ function runtimeConfigSnapshot(configDir: string, config: Config): GetRuntimeCon
 
 function createReconfigurableEngine(initial: CoachEngine): {
   readonly engine: CoachEngine;
-  replace(create: () => CoachEngine): Promise<void>;
+  replace(create: () => CoachEngine | Promise<CoachEngine>): Promise<void>;
 } {
   let active = initial;
   let admission = Promise.resolve();
@@ -305,7 +342,7 @@ function createReconfigurableEngine(initial: CoachEngine): {
         if (activeCalls > 0) {
           await new Promise<void>((resolve) => drainWaiters.add(resolve));
         }
-        active = create();
+        active = await create();
       } finally {
         release();
       }
@@ -477,6 +514,32 @@ export async function createLocalCoachComposition(
     throw new TypeError("Ready engine configuration does not match the selected athlete home.");
   }
   const now = dependencies.now ?? Date.now;
+  const ownerClock = { now, monotonicNow: () => performance.now() };
+  const ownerLookup = (intervals: Config["intervals"]) => ({
+    apiKey: intervals.apiKey,
+    athleteId: intervals.athleteId.length === 0 ? "0" : intervals.athleteId,
+    historyNewestDate: new Date(now()).toISOString().slice(0, 10),
+    clock: ownerClock,
+  });
+  const assertIntervalsOwner = async (
+    current: Config["intervals"],
+    candidate: Config["intervals"],
+    signal: AbortSignal,
+    claimUnownedCandidateWithoutCurrent = false,
+  ): Promise<RuntimeAthleteOwnerClaim | undefined> => {
+    const approval = await (dependencies.assertRuntimeAthleteOwner ?? assertRuntimeAthleteOwner)(
+      input.context.store,
+      {
+        current: ownerLookup(current),
+        candidate: ownerLookup(candidate),
+        signal,
+        ...(claimUnownedCandidateWithoutCurrent
+          ? { claimUnownedCandidateWithoutCurrent: true }
+          : {}),
+      },
+    );
+    return approval ?? undefined;
+  };
   const spendMeter = createSpendMeterService({
     dataDir: input.home.root,
     configDir: input.home.configDir,
@@ -484,10 +547,27 @@ export async function createLocalCoachComposition(
     now,
   });
   let activeConfig = copyConfig(input.config);
+  if (
+    activeConfig.intervals.apiKey.length > 0 &&
+    activeConfig.intervals.athleteId.length === 0
+  ) {
+    activeConfig = {
+      ...activeConfig,
+      intervals: { ...activeConfig.intervals, athleteId: "0" },
+    };
+  }
   let runtime: LocalStoreRuntime | undefined;
   let reference: LocalReferenceRuntime | undefined;
   let closePromise: Promise<void> | undefined;
   try {
+    if (activeConfig.intervals.apiKey.length > 0) {
+      const startupOwnerClaim = await assertIntervalsOwner(
+        activeConfig.intervals,
+        activeConfig.intervals,
+        new AbortController().signal,
+      );
+      await startupOwnerClaim?.claim();
+    }
     reference = await (dependencies.bootstrap ?? bootstrapReference)({
       dataDir: input.home.root,
       intervals: activeConfig.intervals,
@@ -580,8 +660,42 @@ export async function createLocalCoachComposition(
     };
     const reconfigurable = createReconfigurableEngine(buildEngine(activeConfig));
     const persistConfig = dependencies.persistRuntimeConfig ?? persistRuntimeConfig;
-    const applyRuntimeConfig = async (request: ConfigureRuntimeRpcParams): Promise<void> => {
+    const applyRuntimeConfig = async (
+      request: ConfigureRuntimeRpcParams,
+      signal: AbortSignal,
+    ): Promise<void> => {
+      signal.throwIfAborted();
       const candidate = mergedRuntimeConfig(activeConfig, request);
+      const activeAthleteId =
+        activeConfig.intervals.athleteId.length === 0 ? "0" : activeConfig.intervals.athleteId;
+      const candidateAthleteId =
+        candidate.intervals.athleteId.length === 0 ? "0" : candidate.intervals.athleteId;
+      const athleteIdChanged =
+        request.intervals?.athlete_id !== undefined &&
+        candidateAthleteId !== activeAthleteId;
+      const apiKeyChanged =
+        request.intervals?.api_key !== undefined &&
+        candidate.intervals.apiKey !== activeConfig.intervals.apiKey;
+      let pendingOwnerClaim: RuntimeAthleteOwnerClaim | undefined;
+      if (athleteIdChanged || apiKeyChanged) {
+        if (athleteIdChanged && input.env.INTERVALS_ATHLETE_ID !== undefined) {
+          throw new Error("runtime athlete ID is controlled by the daemon environment");
+        }
+        if (
+          apiKeyChanged &&
+          input.env.INTERVALS_API_KEY !== undefined &&
+          input.env.INTERVALS_API_KEY !== ""
+        ) {
+          throw new Error("runtime intervals credential is controlled by the daemon environment");
+        }
+        pendingOwnerClaim = await assertIntervalsOwner(
+          activeConfig.intervals,
+          candidate.intervals,
+          signal,
+          activeConfig.intervals.apiKey.length === 0 &&
+            candidate.intervals.apiKey.length > 0,
+        );
+      }
       if (request.llm !== undefined && candidate.llm.provider === "openai-codex") {
         credential(
           loadStoredProfileSnapshot(
@@ -591,8 +705,29 @@ export async function createLocalCoachComposition(
         );
       }
       const replacement = buildEngine(candidate);
-      persistConfig(input.home.configDir, candidate, request, activeConfig);
-      await reconfigurable.replace(() => {
+      signal.throwIfAborted();
+      await reconfigurable.replace(async () => {
+        signal.throwIfAborted();
+        const previousConfigFile =
+          pendingOwnerClaim === undefined
+            ? undefined
+            : captureRuntimeConfigFile(input.home.configDir);
+        try {
+          persistConfig(input.home.configDir, candidate, request, activeConfig);
+          await pendingOwnerClaim?.claim();
+        } catch (error) {
+          if (previousConfigFile !== undefined) {
+            try {
+              restoreRuntimeConfigFile(input.home.configDir, previousConfigFile);
+            } catch (rollbackError) {
+              throw new AggregateError(
+                [error, rollbackError],
+                "Runtime account claim failed and configuration rollback was unsuccessful.",
+              );
+            }
+          }
+          throw error;
+        }
         activeConfig = candidate;
         return replacement;
       });

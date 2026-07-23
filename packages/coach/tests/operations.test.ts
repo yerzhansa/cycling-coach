@@ -796,6 +796,52 @@ describe("coach operations", () => {
     ]);
   });
 
+  it("expires an intervals configuration before delayed store admission without late mutation", async () => {
+    const syncStarted = promiseGate();
+    const releaseSync = promiseGate();
+    const applyRuntimeConfig = vi.fn(async () => {});
+    const operations = createCoachOperations(
+      {
+        home,
+        context: context(),
+        runtime: operationRuntime(async (work) => {
+          syncStarted.release();
+          await releaseSync.promise;
+          await work(new AbortController().signal);
+          return {
+            published: true,
+            legacySucceeded: true,
+            counts: requestCounts(0, 0),
+          };
+        }),
+        intervalsCredentials: intervalsCredentials(),
+        historyNewestDate: () => "1998-07-18",
+        applyRuntimeConfig,
+      },
+      { runtimeConfigurationDeadlineMs: 5 },
+    );
+
+    const sync = operations.sync({});
+    await syncStarted.promise;
+    const stale = operations
+      .configureRuntime({
+        intervals: { api_key: "placeholder-intervals", athlete_id: "synthetic-athlete" },
+      })
+      .catch((error: unknown) => error);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    releaseSync.release();
+
+    await expect(sync).resolves.toMatchObject({ schemaVersion: 1 });
+    expect(await stale).toBeInstanceOf(Error);
+    expect(applyRuntimeConfig).not.toHaveBeenCalled();
+    await expect(
+      operations.configureRuntime({
+        llm: { provider: "openai", model: "recovered-model", api_key: "placeholder" },
+      }),
+    ).resolves.toMatchObject({ applied: { llm: true, intervals: false } });
+    expect(applyRuntimeConfig).toHaveBeenCalledOnce();
+  });
+
   it("serializes runtime configuration writes and reads in strict admission order", async () => {
     const firstStarted = promiseGate();
     const releaseFirst = promiseGate();

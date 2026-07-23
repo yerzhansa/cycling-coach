@@ -45,6 +45,42 @@ export interface StoreOwnerCheckOptions {
   readonly attemptLedger?: PhysicalRequestLedger;
 }
 
+type RuntimeAthleteOwnerLookupOptions = Omit<StoreOwnerCheckOptions, "signal" | "budget">;
+
+export interface RuntimeAthleteOwnerGuardOptions {
+  readonly current: RuntimeAthleteOwnerLookupOptions;
+  readonly candidate: RuntimeAthleteOwnerLookupOptions;
+  readonly signal: AbortSignal;
+  readonly timeoutMs?: number;
+  readonly claimUnownedCandidateWithoutCurrent?: boolean;
+}
+
+export interface RuntimeAthleteOwnerClaim {
+  claim(): Promise<void>;
+}
+
+export type RuntimeAthleteOwnerRefusalReason =
+  | "current-credential-missing"
+  | "current-unresolved"
+  | "candidate-unresolved"
+  | "mismatch";
+
+export class RuntimeAthleteOwnerRefusal extends Error {
+  readonly reason: RuntimeAthleteOwnerRefusalReason;
+
+  constructor(reason: RuntimeAthleteOwnerRefusalReason) {
+    super(
+      reason === "mismatch"
+        ? "training account mismatch"
+        : reason === "current-credential-missing"
+          ? "active training credential is unavailable"
+          : "training account owner unresolved",
+    );
+    this.name = "RuntimeAthleteOwnerRefusal";
+    this.reason = reason;
+  }
+}
+
 export type StoreOwnerCheckResult =
   | "unowned"
   | "matched"
@@ -70,6 +106,8 @@ const lookupArchive: ArchiveManager = Object.freeze({
 const CLAIM_STORE_OWNER_SQL =
   "INSERT INTO store_owner (singleton, account_fingerprint) VALUES (1, ?)";
 const STORE_OWNER_CHECK_BUSY_TIMEOUT_MS = 5_000;
+const RUNTIME_ATHLETE_OWNER_TIMEOUT_MS = 20_000;
+const RUNTIME_ATHLETE_OWNER_REQUEST_TIMEOUT_MS = 8_000;
 
 async function readStoreOwnerFingerprint(
   store: Pick<SqlStore, "get">,
@@ -139,6 +177,113 @@ export async function resolveIntervalsStoreOwnerFingerprint(
   return createHash("sha256")
     .update(JSON.stringify(["store-owner-v1", [...resolved][0]]))
     .digest("hex");
+}
+
+export async function assertRuntimeAthleteOwner(
+  store: SqlStore,
+  options: RuntimeAthleteOwnerGuardOptions,
+  resolveFingerprint: (
+    options: StoreOwnerCheckOptions,
+  ) => Promise<string | null> = resolveIntervalsStoreOwnerFingerprint,
+): Promise<RuntimeAthleteOwnerClaim | undefined> {
+  const timeoutMs = options.timeoutMs ?? RUNTIME_ATHLETE_OWNER_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new TypeError("runtime athlete owner timeout is invalid");
+  }
+  const timeoutController = new AbortController();
+  const timeout = setTimeout(
+    () => timeoutController.abort(new Error("runtime athlete owner lookup timed out")),
+    timeoutMs,
+  );
+  timeout.unref();
+  const signal = AbortSignal.any([options.signal, timeoutController.signal]);
+  const budget: SyncBudget = {
+    signal,
+    clock: { monotonicNow: () => options.current.clock.monotonicNow() },
+    deadlineMonotonicMs: options.current.clock.monotonicNow() + timeoutMs,
+    perRequestTimeoutMs: Math.min(RUNTIME_ATHLETE_OWNER_REQUEST_TIMEOUT_MS, timeoutMs),
+    maxRequests: REQUEST_ATTEMPTS,
+    maxArtifacts: 1_000,
+  };
+  const resolveRequiredFingerprint = async (
+    selected: RuntimeAthleteOwnerLookupOptions,
+    reason: Extract<
+      RuntimeAthleteOwnerRefusalReason,
+      "current-unresolved" | "candidate-unresolved"
+    >,
+  ): Promise<string> => {
+    let fingerprint: string | null;
+    try {
+      signal.throwIfAborted();
+      fingerprint = await resolveFingerprint({ ...selected, signal, budget });
+      signal.throwIfAborted();
+    } catch {
+      throw new RuntimeAthleteOwnerRefusal(reason);
+    }
+    if (fingerprint === null) throw new RuntimeAthleteOwnerRefusal(reason);
+    return fingerprint;
+  };
+
+  try {
+    if ((await readStoreOwnerFingerprint(store)) === undefined) {
+      if (options.claimUnownedCandidateWithoutCurrent === true) {
+        const candidateFingerprint = await resolveRequiredFingerprint(
+          options.candidate,
+          "candidate-unresolved",
+        );
+        return Object.freeze({
+          async claim() {
+            try {
+              signal.throwIfAborted();
+            } catch {
+              throw new RuntimeAthleteOwnerRefusal("candidate-unresolved");
+            }
+            await store.run(CLAIM_STORE_OWNER_SQL, [candidateFingerprint]);
+          },
+        });
+      }
+      if (options.current.apiKey.length === 0) {
+        throw new RuntimeAthleteOwnerRefusal("current-credential-missing");
+      }
+      const currentFingerprint = await resolveRequiredFingerprint(
+        options.current,
+        "current-unresolved",
+      );
+      try {
+        signal.throwIfAborted();
+      } catch {
+        throw new RuntimeAthleteOwnerRefusal("current-unresolved");
+      }
+      await store.run(CLAIM_STORE_OWNER_SQL, [currentFingerprint]);
+      try {
+        signal.throwIfAborted();
+      } catch {
+        throw new RuntimeAthleteOwnerRefusal("current-unresolved");
+      }
+      if (
+        options.current.apiKey === options.candidate.apiKey &&
+        options.current.athleteId === options.candidate.athleteId
+      ) {
+        return;
+      }
+    }
+
+    const candidateFingerprint = await resolveRequiredFingerprint(
+      options.candidate,
+      "candidate-unresolved",
+    );
+    const ownership = await compareStoreOwner(store, candidateFingerprint);
+    try {
+      signal.throwIfAborted();
+    } catch {
+      throw new RuntimeAthleteOwnerRefusal("candidate-unresolved");
+    }
+    if (ownership !== "matched") {
+      throw new RuntimeAthleteOwnerRefusal("mismatch");
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function enforceIntervalsStoreOwner(
