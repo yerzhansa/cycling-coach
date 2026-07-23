@@ -224,9 +224,10 @@ export const AthleteDerivedMetricsSchema = z
 /**
  * Deterministic athlete-status DTO, derived from the persisted latest-data
  * model — never from a chat turn's free text. `degraded` means the last sync
- * was rejected with a blocking mitigation posture; `lastSynced` is the
- * last-successful-sync anchor (falls back to the failure timestamp when the
- * cache is unavailable) and is null only when neither exists.
+ * was rejected with a blocking mitigation posture. `lastUpdated` is the latest
+ * persisted data-mutation timestamp; `lastSynced` is exclusively the validated
+ * `.scheduler.json:last_sync_at` commit marker for the last successful Reference
+ * sync, or null when that marker is absent or invalid.
  */
 export const AthleteStateSchema = z
   .object({

@@ -11,8 +11,10 @@ import {
   formatDateLabel,
   formatPercentage,
   formatSleepDuration,
+  formatUtcTimestamp,
   formatWholeNumber,
 } from "../src/training-context/format.js";
+import { mountTrainingContextView } from "../src/training-context/view.js";
 
 const context: CyclingTrainingContext = {
   anchorZones: { kind: "unknown", reason: "missing-anchor" },
@@ -57,6 +59,155 @@ function providerWith(call: CoachClient["call"]): DesktopCoachClientProvider {
     getClient: vi.fn(async () => client),
     reconnect: vi.fn(async () => client),
     close: vi.fn(async () => {}),
+  };
+}
+
+class FakeElement {
+  readonly children: FakeElement[] = [];
+  readonly attributes = new Map<string, string>();
+  className = "";
+  open = false;
+  private ownText = "";
+
+  constructor(readonly tagName: string) {}
+
+  get textContent(): string {
+    return this.ownText + this.children.map((child) => child.textContent).join("");
+  }
+
+  set textContent(value: string) {
+    this.ownText = value;
+    this.children.splice(0);
+  }
+
+  get dateTime(): string {
+    return this.getAttribute("datetime") ?? "";
+  }
+
+  set dateTime(value: string) {
+    this.setAttribute("datetime", value);
+  }
+
+  append(...values: Array<FakeElement | string>): void {
+    for (const value of values) {
+      const child = typeof value === "string" ? new FakeElement("#TEXT") : value;
+      if (typeof value === "string") child.textContent = value;
+      this.children.push(child);
+    }
+  }
+
+  replaceChildren(...values: Array<FakeElement | string>): void {
+    this.ownText = "";
+    this.children.splice(0);
+    this.append(...values);
+  }
+
+  setAttribute(name: string, value: string): void {
+    this.attributes.set(name, value);
+  }
+
+  getAttribute(name: string): string | null {
+    return this.attributes.get(name) ?? null;
+  }
+
+  addEventListener(_name: string, _listener: (event: Event) => void): void {}
+
+  removeEventListener(_name: string, _listener: (event: Event) => void): void {}
+
+  focus(): void {}
+
+  showModal(): void {
+    this.open = true;
+  }
+
+  close(): void {
+    this.open = false;
+  }
+}
+
+class FakeDocument {
+  createElement(name: string): FakeElement {
+    return new FakeElement(name.toUpperCase());
+  }
+
+  createTextNode(value: string): FakeElement {
+    const node = new FakeElement("#TEXT");
+    node.textContent = value;
+    return node;
+  }
+}
+
+function descendants(root: FakeElement): FakeElement[] {
+  return root.children.flatMap((child) => [child, ...descendants(child)]);
+}
+
+function elementsByTagName(root: FakeElement, tagName: string): FakeElement[] {
+  const normalized = tagName.toUpperCase();
+  return descendants(root).filter((element) => element.tagName === normalized);
+}
+
+function readyViewState(lastSynced: string): TrainingContextViewState {
+  return {
+    status: "ready",
+    metadata: {
+      lastUpdated: "1998-07-18T23:58:01.000Z",
+      lastSynced,
+      freshness: "fresh",
+      degraded: false,
+    },
+    trainingContext: {
+      anchorZones: {
+        kind: "computed",
+        asOf: "1998-07-19T21:22:23.000Z",
+        anchor: {
+          watts: 250,
+          validFrom: "1998-06-01",
+          source: "manual",
+          confidence: "manual",
+          ageDays: 48,
+          stalenessBand: "aging",
+          stale: true,
+        },
+        zones: Array.from({ length: 6 }, (_, index) => ({
+          name: `Zone ${index + 1}`,
+          range: `${index + 1} W`,
+          overlaps: false,
+        })),
+      },
+      cyclingLoad: context.cyclingLoad,
+      plan: {
+        kind: "computed",
+        asOf: "1998-07-20T10:11:12.000Z",
+        items: [
+          {
+            id: "synthetic-plan-item",
+            date: "1998-07-20T10:11:12.000Z",
+            name: "Endurance ride",
+            category: "WORKOUT",
+            workoutType: "Ride",
+          },
+        ],
+      },
+      adherence: {
+        kind: "computed",
+        asOf: "1998-07-21T13:14:15.000Z",
+        ratio: 0.5,
+        plannedDays: 2,
+        completedDays: 3,
+        matchedDays: 1,
+      },
+      wellnessTrend: {
+        kind: "computed",
+        asOf: "1998-07-22T16:17:18.000Z",
+        windowDays: 7,
+        series: [
+          { metric: "hrv", unit: "ms", points: [] },
+          { metric: "sleep", unit: "seconds", points: [] },
+          { metric: "resting-hr", unit: "bpm", points: [] },
+        ],
+      },
+    },
+    unitsPreference: { status: "ready", value: "metric", source: "default" },
   };
 }
 
@@ -330,6 +481,18 @@ describe("training context display formatters", () => {
     expect(formatPercentage(0.756)).toBe("76%");
     expect(formatSleepDuration(27_901)).toBe("7h 45m");
   });
+
+  it("distinguishes same-day sync seconds while mutation labels remain date-only", () => {
+    expect(formatUtcTimestamp("1998-07-18T12:34:56.999Z")).toBe("1998-07-18 12:34:56 UTC");
+    expect(formatUtcTimestamp("1998-07-18T12:34:57.001Z")).toBe("1998-07-18 12:34:57 UTC");
+    expect(formatDateLabel("1998-07-18T12:34:57.001Z")).toBe("1998-07-18");
+  });
+
+  it("normalizes valid offsets to UTC and uses fixed copy for invalid sync times", () => {
+    expect(formatUtcTimestamp("1998-07-18T18:34:56+06:00")).toBe("1998-07-18 12:34:56 UTC");
+    expect(formatUtcTimestamp("not-an-instant")).toBe("Unknown sync time");
+    expect(formatUtcTimestamp("1998-02-30T12:34:56Z")).toBe("Unknown sync time");
+  });
 });
 
 describe("training context drawer contract", () => {
@@ -368,6 +531,58 @@ describe("training context drawer contract", () => {
     expect(source).toContain('setAttribute("aria-expanded", "true")');
     expect(source).toContain("close.focus()");
     expect(source).toContain("opener.focus()");
+  });
+
+  it("renders sync timestamps semantically while keeping date surfaces date-only", () => {
+    const document = new FakeDocument();
+    vi.stubGlobal("document", document);
+
+    try {
+      const spine = document.createElement("aside");
+      const drawer = document.createElement("dialog");
+      const mounted = mountTrainingContextView({
+        spine: spine as unknown as HTMLElement,
+        drawer: drawer as unknown as HTMLDialogElement,
+      });
+
+      mounted.view.render(readyViewState("1998-07-18T18:34:56+06:00"));
+
+      const validText = drawer.textContent;
+      const validSyncItem = elementsByTagName(drawer, "p").find((element) =>
+        element.textContent.startsWith("Last synced"),
+      );
+      expect(validSyncItem?.textContent).toBe("Last synced 1998-07-18 12:34:56 UTC");
+      const timeElements = elementsByTagName(drawer, "time");
+      expect(timeElements).toHaveLength(1);
+      expect(validSyncItem?.children).toContain(timeElements[0]);
+      expect(timeElements[0]?.getAttribute("datetime")).toBe("1998-07-18T12:34:56.000Z");
+      expect(timeElements[0]?.textContent).toBe("1998-07-18 12:34:56 UTC");
+      for (const dateOnlyText of [
+        "As of 1998-07-18",
+        "As of 1998-07-19 · manual · manual",
+        "1998-07-20 · Ride",
+        "3 completed days · As of 1998-07-21",
+        "As of 1998-07-22 · 7 mornings",
+      ]) {
+        expect(validText).toContain(dateOnlyText);
+      }
+      for (const hiddenClock of ["23:58:01", "21:22:23", "10:11:12", "13:14:15", "16:17:18"]) {
+        expect(validText).not.toContain(hiddenClock);
+      }
+
+      const invalidTimestamp = "private-invalid-sync-value";
+      mounted.view.render(readyViewState(invalidTimestamp));
+
+      const invalidSyncItem = elementsByTagName(drawer, "p").find((element) =>
+        element.textContent.startsWith("Last synced"),
+      );
+      expect(invalidSyncItem?.textContent).toBe("Last synced Unknown sync time");
+      expect(elementsByTagName(drawer, "time")).toHaveLength(0);
+      expect(drawer.textContent).not.toContain(invalidTimestamp);
+      mounted.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("keeps the panel surface free of excluded balance labels and local metric claims", async () => {

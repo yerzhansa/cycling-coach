@@ -21,6 +21,7 @@ import { createPhysicalRequestLedger, runMigrations } from "@enduragent/kernel/s
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import type { ReferenceCaptureManifest } from "@enduragent/kernel/reference/capture";
 import type { ProducedLocalBundle } from "@enduragent/kernel/reference/local-bundle";
+import { SCHEDULER_SCHEMA_VERSION } from "@enduragent/kernel/reference/schemas";
 import type { CyclingFtpAnchorResolver } from "@enduragent/kernel/anchors";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import { inertWriterProtocolListener } from "@enduragent/kernel-node/lock";
@@ -93,6 +94,14 @@ async function freshHome(): Promise<AthleteHome> {
   await mkdir(join(root, "data"), { recursive: true });
   await mkdir(home.configDir, { recursive: true });
   await writeFile(join(root, "data", "latest.json"), JSON.stringify(latest()));
+  await writeFile(
+    join(root, "data", ".scheduler.json"),
+    JSON.stringify({
+      schema_version: SCHEDULER_SCHEMA_VERSION,
+      last_sync_at: state.lastSynced,
+      next_sync_at: "2026-07-18T01:00:00.000Z",
+    }),
+  );
   await writeFile(
     join(root, "data", "error_state.json"),
     JSON.stringify({

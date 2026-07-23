@@ -9,6 +9,7 @@ import {
   formatDateLabel,
   formatPercentage,
   formatSleepDuration,
+  formatUtcTimestamp,
   formatWholeNumber,
 } from "./format.js";
 
@@ -342,12 +343,15 @@ export function mountTrainingContextView(input: {
             metadata.append(paragraph("drawer-metadata__item", "Data may be incomplete"));
           }
           if (state.metadata.lastSynced !== null) {
-            metadata.append(
-              paragraph(
-                "drawer-metadata__item",
-                `Last synced ${formatDateLabel(state.metadata.lastSynced)}`,
-              ),
-            );
+            const formatted = formatUtcTimestamp(state.metadata.lastSynced);
+            const item = paragraph("drawer-metadata__item", `Last synced ${formatted}`);
+            if (formatted !== "Unknown sync time") {
+              const time = document.createElement("time");
+              time.dateTime = new Date(state.metadata.lastSynced).toISOString();
+              time.textContent = formatted;
+              item.replaceChildren("Last synced ", time);
+            }
+            metadata.append(item);
           }
         }
         status.textContent =
