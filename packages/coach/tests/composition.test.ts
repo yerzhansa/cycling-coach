@@ -31,6 +31,7 @@ import {
   type LocalCoachCompositionDependencies,
   type LocalReferenceRuntime,
   type LocalStoreRuntime,
+  type LocalStoreRuntimeOptions,
 } from "../src/composition.js";
 import { checkHomeReadiness } from "../src/readiness.js";
 import type { CoachStoreWriterContext } from "../src/runtime.js";
@@ -274,17 +275,21 @@ async function compose(
   context = fakeContext(home),
   intervals?: Config["intervals"],
   configOverride?: Config,
+  env: Record<string, string | undefined> = { ENDURAGENT_HOME: home.root },
 ) {
   const coreConfig = configOverride ?? config(home, intervals);
   return createLocalCoachComposition(
     {
-      env: { ENDURAGENT_HOME: home.root },
+      env,
       home,
       context,
       config: coreConfig,
       engineConfig: engineConfigFromConfig(coreConfig),
     },
-    dependencies,
+    {
+      assertRuntimeAthleteOwner: async () => {},
+      ...dependencies,
+    },
   );
 }
 
@@ -1013,6 +1018,9 @@ describe("local coach composition", () => {
       text: "openrouter:model-first",
     });
     await lifecycle.operations.configureRuntime({
+      intervals: { api_key: "placeholder" },
+    });
+    await lifecycle.operations.configureRuntime({
       intervals: { api_key: "placeholder", athlete_id: "athlete-a" },
     });
     await lifecycle.operations.configureRuntime({
@@ -1035,6 +1043,7 @@ describe("local coach composition", () => {
     ).toEqual([
       { provider: "anthropic", model: "synthetic", apiKey: "", intervals: true },
       { provider: "openrouter", model: "model-first", apiKey: "placeholder", intervals: true },
+      { provider: "openrouter", model: "model-first", apiKey: "placeholder", intervals: false },
       { provider: "openrouter", model: "model-first", apiKey: "placeholder", intervals: false },
       { provider: "google", model: "model-second", apiKey: "placeholder", intervals: false },
     ]);
@@ -1066,7 +1075,7 @@ describe("local coach composition", () => {
         createResolver: () => missingResolver(),
       },
       fakeContext(home),
-      { apiKey: "", athleteId: "fake-initial-athlete" },
+      { apiKey: "current-key", athleteId: "fake-initial-athlete" },
     );
 
     await lifecycle.operations.configureRuntime({
@@ -1118,10 +1127,10 @@ describe("local coach composition", () => {
       },
       fakeContext(home),
       undefined,
-      config(home, { apiKey: "", athleteId: "" }),
+      config(home, { apiKey: "current-key", athleteId: "current-athlete" }),
     );
 
-    expect(windows).toEqual([{ apiKey: "", athleteId: "" }]);
+    expect(windows).toEqual([{ apiKey: "current-key", athleteId: "current-athlete" }]);
 
     await expect(
       lifecycle.operations.configureRuntime({
@@ -1137,9 +1146,592 @@ describe("local coach composition", () => {
       athleteId: "replayed-athlete",
     });
     expect(windows).toEqual([
-      { apiKey: "", athleteId: "" },
+      { apiKey: "current-key", athleteId: "current-athlete" },
       { apiKey: "obviously-fake-replayed-key", athleteId: "replayed-athlete" },
     ]);
+    await lifecycle.close();
+  });
+
+  it.each([
+    {
+      label: "a daemon athlete override",
+      activeApiKey: "current-key",
+      candidateApiKey: "candidate-key",
+      envAthleteId: "environment-athlete",
+      ownerFailure: undefined,
+      expectedOwnerChecks: 0,
+    },
+    {
+      label: "an empty daemon athlete override",
+      activeApiKey: "current-key",
+      candidateApiKey: "candidate-key",
+      envAthleteId: "",
+      ownerFailure: undefined,
+      expectedOwnerChecks: 0,
+    },
+    {
+      label: "a missing active credential",
+      activeApiKey: "",
+      candidateApiKey: undefined,
+      envAthleteId: undefined,
+      ownerFailure: "current-credential-missing",
+      expectedOwnerChecks: 1,
+    },
+    {
+      label: "an unresolved current owner",
+      activeApiKey: "current-key",
+      candidateApiKey: "candidate-key",
+      envAthleteId: undefined,
+      ownerFailure: "current-unresolved",
+      expectedOwnerChecks: 1,
+    },
+    {
+      label: "an unresolved candidate owner",
+      activeApiKey: "current-key",
+      candidateApiKey: "candidate-key",
+      envAthleteId: undefined,
+      ownerFailure: "candidate-unresolved",
+      expectedOwnerChecks: 1,
+    },
+    {
+      label: "a mismatched candidate owner",
+      activeApiKey: "current-key",
+      candidateApiKey: "candidate-key",
+      envAthleteId: undefined,
+      ownerFailure: "mismatch",
+      expectedOwnerChecks: 1,
+    },
+  ])(
+    "fails closed before runtime mutation for $label and keeps serialized lanes usable",
+    async ({
+      activeApiKey,
+      candidateApiKey,
+      envAthleteId,
+      ownerFailure,
+      expectedOwnerChecks,
+    }) => {
+      const home = await freshHome();
+      const initialYaml = "sentinel: unchanged\n";
+      await writeFile(join(home.configDir, "config.yaml"), initialYaml);
+      const selectedRuntime = runtime();
+      const runWindowAfter = vi.fn(selectedRuntime.runWindowAfter);
+      const createBackend = vi.fn(() => backend());
+      let remainingOwnerFailures = ownerFailure === undefined ? 0 : 1;
+      const assertRuntimeAthleteOwner = vi.fn(
+        async (
+          _store: Parameters<
+            NonNullable<LocalCoachCompositionDependencies["assertRuntimeAthleteOwner"]>
+          >[0],
+          options: Parameters<
+            NonNullable<LocalCoachCompositionDependencies["assertRuntimeAthleteOwner"]>
+          >[1],
+        ) => {
+          if (
+            ownerFailure !== undefined &&
+            remainingOwnerFailures > 0 &&
+            (options.current.apiKey !== options.candidate.apiKey ||
+              options.current.athleteId !== options.candidate.athleteId)
+          ) {
+            remainingOwnerFailures -= 1;
+            throw new Error(ownerFailure);
+          }
+        },
+      );
+      const lifecycle = await compose(
+        home,
+        {
+          bootstrap: async () => reference(),
+          createRuntime: () => ({ ...selectedRuntime, runWindowAfter }),
+          createBackend,
+          createRepository: () => ({
+            insertIfAbsent: async () => false,
+            readCurrent: async () => undefined,
+          }),
+          createResolver: () => missingResolver(),
+          assertRuntimeAthleteOwner,
+        },
+        fakeContext(home),
+        undefined,
+        config(home, { apiKey: activeApiKey, athleteId: "current-athlete" }),
+        {
+          ENDURAGENT_HOME: home.root,
+          ...(envAthleteId === undefined ? {} : { INTERVALS_ATHLETE_ID: envAthleteId }),
+        },
+      );
+      const ownerChecksBefore = assertRuntimeAthleteOwner.mock.calls.length;
+      const before = await lifecycle.operations.getRuntimeConfig({});
+
+      await expect(
+        lifecycle.operations.configureRuntime({
+          intervals: {
+            ...(candidateApiKey === undefined ? {} : { api_key: candidateApiKey }),
+            athlete_id: "candidate-athlete",
+          },
+        }),
+      ).rejects.toThrow();
+
+      await expect(readFile(join(home.configDir, "config.yaml"), "utf8")).resolves.toBe(
+        initialYaml,
+      );
+      await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toEqual(before);
+      expect(createBackend).toHaveBeenCalledTimes(1);
+      expect(runWindowAfter).not.toHaveBeenCalled();
+      expect(assertRuntimeAthleteOwner.mock.calls.length - ownerChecksBefore).toBe(
+        expectedOwnerChecks,
+      );
+      if (expectedOwnerChecks === 1) {
+        expect(assertRuntimeAthleteOwner).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            current: expect.objectContaining({
+              apiKey: activeApiKey,
+              athleteId: "current-athlete",
+            }),
+            candidate: expect.objectContaining({
+              apiKey: candidateApiKey ?? activeApiKey,
+              athleteId: "candidate-athlete",
+            }),
+          }),
+        );
+      }
+
+      await expect(
+        lifecycle.operations.configureRuntime({ llm: { model: "queue-recovered-model" } }),
+      ).resolves.toMatchObject({ applied: { llm: true, intervals: false } });
+      await expect(
+        lifecycle.operations.configureRuntime({ intervals: { api_key: "writer-recovered-key" } }),
+      ).resolves.toMatchObject({ applied: { llm: false, intervals: true } });
+      expect(createBackend).toHaveBeenCalledTimes(3);
+      expect(runWindowAfter).toHaveBeenCalledOnce();
+      await lifecycle.close();
+    },
+  );
+
+  it.each([
+    { envApiKey: "environment-key", rejected: true },
+    { envApiKey: "", rejected: false },
+  ])(
+    "treats daemon API-key environment value '$envApiKey' as effective authority: $rejected",
+    async ({ envApiKey, rejected }) => {
+      const home = await freshHome();
+      const selectedRuntime = runtime();
+      const runWindowAfter = vi.fn(selectedRuntime.runWindowAfter);
+      const createBackend = vi.fn(() => backend());
+      const assertRuntimeAthleteOwner = vi.fn(async () => {});
+      const lifecycle = await compose(
+        home,
+        {
+          bootstrap: async () => reference(),
+          createRuntime: () => ({ ...selectedRuntime, runWindowAfter }),
+          createBackend,
+          createRepository: () => ({
+            insertIfAbsent: async () => false,
+            readCurrent: async () => undefined,
+          }),
+          createResolver: () => missingResolver(),
+          assertRuntimeAthleteOwner,
+        },
+        fakeContext(home),
+        { apiKey: "current-key", athleteId: "0" },
+        undefined,
+        { ENDURAGENT_HOME: home.root, INTERVALS_API_KEY: envApiKey },
+      );
+      const ownerChecksBefore = assertRuntimeAthleteOwner.mock.calls.length;
+      const change = lifecycle.operations.configureRuntime({
+        intervals: { api_key: "candidate-key" },
+      });
+
+      if (rejected) {
+        await expect(change).rejects.toThrow(
+          "runtime intervals credential is controlled by the daemon environment",
+        );
+        expect(createBackend).toHaveBeenCalledTimes(1);
+        expect(runWindowAfter).not.toHaveBeenCalled();
+        expect(assertRuntimeAthleteOwner).toHaveBeenCalledTimes(ownerChecksBefore);
+      } else {
+        await expect(change).resolves.toMatchObject({ applied: { intervals: true } });
+        expect(createBackend).toHaveBeenCalledTimes(2);
+        expect(runWindowAfter).toHaveBeenCalledOnce();
+        expect(assertRuntimeAthleteOwner).toHaveBeenCalledTimes(ownerChecksBefore + 1);
+      }
+      await lifecycle.close();
+    },
+  );
+
+  it("guards a combined first credential and canonical athlete selection", async () => {
+    const home = await freshHome();
+    const assertRuntimeAthleteOwner = vi.fn(async () => {});
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+        assertRuntimeAthleteOwner,
+      },
+      fakeContext(home),
+      undefined,
+      config(home, { apiKey: "", athleteId: "" }),
+    );
+
+    await expect(
+      lifecycle.operations.configureRuntime({
+        intervals: { api_key: "candidate-key", athlete_id: "first-athlete" },
+      }),
+    ).resolves.toMatchObject({ applied: { intervals: true } });
+    expect(assertRuntimeAthleteOwner).toHaveBeenCalledOnce();
+    expect(assertRuntimeAthleteOwner).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        current: expect.objectContaining({ apiKey: "", athleteId: "0" }),
+        candidate: expect.objectContaining({
+          apiKey: "candidate-key",
+          athleteId: "first-athlete",
+        }),
+        claimUnownedCandidateWithoutCurrent: true,
+      }),
+    );
+    await lifecycle.close();
+  });
+
+  it.each(["oauth-validation", "persistence"] as const)(
+    "does not claim a first credential after downstream %s failure",
+    async (failurePoint) => {
+      const home = await freshHome();
+      if (failurePoint === "oauth-validation") {
+        await writeFile(
+          join(home.configDir, "auth-profiles.json"),
+          JSON.stringify({ "openai-codex": { type: "oauth" } }),
+          { mode: 0o600 },
+        );
+      }
+      const claim = vi.fn(async () => {});
+      const createBackend = vi.fn(() => backend());
+      const selectedRuntime = runtime();
+      const runWindowAfter = vi.fn(selectedRuntime.runWindowAfter);
+      const lifecycle = await compose(
+        home,
+        {
+          bootstrap: async () => reference(),
+          createRuntime: () => ({ ...selectedRuntime, runWindowAfter }),
+          createBackend,
+          createRepository: () => ({
+            insertIfAbsent: async () => false,
+            readCurrent: async () => undefined,
+          }),
+          createResolver: () => missingResolver(),
+          assertRuntimeAthleteOwner: async () => ({ claim }),
+          ...(failurePoint === "persistence"
+            ? {
+                persistRuntimeConfig: () => {
+                  throw new Error("synthetic persistence failure");
+                },
+              }
+            : {}),
+        },
+        fakeContext(home),
+        undefined,
+        config(home, { apiKey: "", athleteId: "" }),
+      );
+
+      await expect(
+        lifecycle.operations.configureRuntime({
+          intervals: { api_key: "candidate-key", athlete_id: "first-athlete" },
+          ...(failurePoint === "oauth-validation"
+            ? { llm: { provider: "openai-codex", model: "gpt-5.5" } }
+            : {}),
+        }),
+      ).rejects.toThrow(
+        failurePoint === "oauth-validation"
+          ? "OAuth profile is invalid."
+          : "synthetic persistence failure",
+      );
+      expect(claim).not.toHaveBeenCalled();
+      expect(createBackend).toHaveBeenCalledTimes(
+        failurePoint === "oauth-validation" ? 1 : 2,
+      );
+      expect(runWindowAfter).not.toHaveBeenCalled();
+      await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+        intervals: { athlete_id: "" },
+      });
+      await expect(readFile(join(home.configDir, "config.yaml"), "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await lifecycle.close();
+    },
+  );
+
+  it("restores runtime configuration when a deferred first-account claim fails", async () => {
+    const home = await freshHome();
+    const originalYaml = "sentinel: unchanged\n";
+    await writeFile(join(home.configDir, "config.yaml"), originalYaml, { mode: 0o600 });
+    const claim = vi.fn(async () => {
+      throw new Error("synthetic owner claim failure");
+    });
+    const createBackend = vi.fn(() => backend());
+    const selectedRuntime = runtime();
+    const runWindowAfter = vi.fn(selectedRuntime.runWindowAfter);
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => ({ ...selectedRuntime, runWindowAfter }),
+        createBackend,
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+        assertRuntimeAthleteOwner: async () => ({ claim }),
+      },
+      fakeContext(home),
+      undefined,
+      config(home, { apiKey: "", athleteId: "" }),
+    );
+
+    await expect(
+      lifecycle.operations.configureRuntime({
+        intervals: { api_key: "candidate-key", athlete_id: "first-athlete" },
+      }),
+    ).rejects.toThrow("synthetic owner claim failure");
+    expect(claim).toHaveBeenCalledOnce();
+    expect(createBackend).toHaveBeenCalledTimes(2);
+    expect(runWindowAfter).not.toHaveBeenCalled();
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      intervals: { athlete_id: "" },
+    });
+    await expect(readFile(join(home.configDir, "config.yaml"), "utf8")).resolves.toBe(
+      originalYaml,
+    );
+    await lifecycle.close();
+  });
+
+  it("guards a key-only change for canonical athlete zero", async () => {
+    const home = await freshHome();
+    const assertRuntimeAthleteOwner = vi.fn(
+      async (
+        _store: Parameters<
+          NonNullable<LocalCoachCompositionDependencies["assertRuntimeAthleteOwner"]>
+        >[0],
+        _options: Parameters<
+          NonNullable<LocalCoachCompositionDependencies["assertRuntimeAthleteOwner"]>
+        >[1],
+      ) => {},
+    );
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+        assertRuntimeAthleteOwner,
+      },
+      fakeContext(home),
+      undefined,
+      config(home, { apiKey: "current-key", athleteId: "" }),
+    );
+    const ownerChecksBefore = assertRuntimeAthleteOwner.mock.calls.length;
+
+    await expect(
+      lifecycle.operations.configureRuntime({
+        intervals: { api_key: "candidate-key" },
+      }),
+    ).resolves.toMatchObject({ applied: { intervals: true } });
+    expect(assertRuntimeAthleteOwner).toHaveBeenCalledTimes(ownerChecksBefore + 1);
+    expect(assertRuntimeAthleteOwner.mock.calls.at(-1)?.[1]).toEqual(
+      expect.objectContaining({
+        current: expect.objectContaining({ apiKey: "current-key", athleteId: "0" }),
+        candidate: expect.objectContaining({ apiKey: "candidate-key", athleteId: "0" }),
+      }),
+    );
+    await lifecycle.close();
+  });
+
+  it("validates and canonicalizes a configured account before the first provider window", async () => {
+    const home = await freshHome();
+    const trace: string[] = [];
+    const selectedRuntime = runtime();
+    const assertRuntimeAthleteOwner = vi.fn(async (_store, options) => {
+      trace.push(`owner:${options.candidate.athleteId}`);
+    });
+    const createRuntime = vi.fn((options: LocalStoreRuntimeOptions) => {
+      if (options.readConfig === undefined) throw new Error("Expected live runtime configuration.");
+      const readConfig = options.readConfig;
+      trace.push(`runtime:${options.config.intervals.athleteId}`);
+      return {
+        ...selectedRuntime,
+        async runWindow() {
+          trace.push(`window:${readConfig().intervals.athleteId}`);
+          return selectedRuntime.runWindow();
+        },
+      };
+    });
+
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime,
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+        assertRuntimeAthleteOwner,
+      },
+      fakeContext(home),
+      undefined,
+      config(home, { apiKey: "configured-key", athleteId: "" }),
+    );
+
+    expect(trace.slice(0, 3)).toEqual(["owner:0", "runtime:0", "window:0"]);
+    await lifecycle.close();
+  });
+
+  it("does not create a provider runtime after configured account ownership is refused", async () => {
+    const home = await freshHome();
+    const bootstrap = vi.fn(async () => reference());
+    const createRuntime = vi.fn(() => runtime());
+
+    await expect(
+      compose(
+        home,
+        {
+          bootstrap,
+          createRuntime,
+          createBackend: () => backend(),
+          createRepository: () => ({
+            insertIfAbsent: async () => false,
+            readCurrent: async () => undefined,
+          }),
+          createResolver: () => missingResolver(),
+          assertRuntimeAthleteOwner: async () => {
+            throw new Error("synthetic configured account mismatch");
+          },
+        },
+        fakeContext(home),
+        { apiKey: "configured-key", athleteId: "configured-athlete" },
+      ),
+    ).rejects.toThrow("synthetic configured account mismatch");
+    expect(bootstrap).not.toHaveBeenCalled();
+    expect(createRuntime).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve identity when the athlete ID is unchanged", async () => {
+    const home = await freshHome();
+    const assertRuntimeAthleteOwner = vi.fn(async () => {});
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+        assertRuntimeAthleteOwner,
+      },
+      fakeContext(home),
+      { apiKey: "current-key", athleteId: "current-athlete" },
+    );
+    const ownerChecksBefore = assertRuntimeAthleteOwner.mock.calls.length;
+
+    await expect(
+      lifecycle.operations.configureRuntime({
+        intervals: { api_key: "current-key", athlete_id: "current-athlete" },
+      }),
+    ).resolves.toMatchObject({ applied: { intervals: true } });
+    expect(assertRuntimeAthleteOwner).toHaveBeenCalledTimes(ownerChecksBefore);
+    await lifecycle.close();
+  });
+
+  it("applies an owner-approved athlete ID change before replacing and refreshing", async () => {
+    const home = await freshHome();
+    await writeFile(
+      join(home.configDir, "config.yaml"),
+      toYaml({
+        retained_root: true,
+        intervals: { athlete_id: "current-athlete", retained_intervals: true },
+      }),
+    );
+    const selectedRuntime = runtime();
+    const runWindowAfter = vi.fn(selectedRuntime.runWindowAfter);
+    const createBackend = vi.fn(() => backend());
+    const assertRuntimeAthleteOwner = vi.fn(async () => {});
+    let runtimeOptions:
+      | Parameters<NonNullable<LocalCoachCompositionDependencies["createRuntime"]>>[0]
+      | undefined;
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: (options) => {
+          runtimeOptions = options;
+          return { ...selectedRuntime, runWindowAfter };
+        },
+        createBackend,
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+        assertRuntimeAthleteOwner,
+      },
+      fakeContext(home),
+      { apiKey: "current-key", athleteId: "current-athlete" },
+    );
+
+    await expect(
+      lifecycle.operations.configureRuntime({
+        intervals: {
+          api_key: "candidate-key",
+          athlete_id: "candidate-athlete",
+        },
+      }),
+    ).resolves.toMatchObject({ applied: { intervals: true } });
+
+    expect(assertRuntimeAthleteOwner).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        current: expect.objectContaining({
+          apiKey: "current-key",
+          athleteId: "current-athlete",
+        }),
+        candidate: expect.objectContaining({
+          apiKey: "candidate-key",
+          athleteId: "candidate-athlete",
+        }),
+      }),
+    );
+    expect(parseYaml(await readFile(join(home.configDir, "config.yaml"), "utf8"))).toEqual({
+      retained_root: true,
+      intervals: {
+        athlete_id: "candidate-athlete",
+        retained_intervals: true,
+      },
+    });
+    expect(runtimeOptions?.readConfig?.().intervals).toEqual({
+      apiKey: "candidate-key",
+      athleteId: "candidate-athlete",
+    });
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      intervals: { athlete_id: "candidate-athlete" },
+    });
+    expect(createBackend).toHaveBeenCalledTimes(2);
+    expect(runWindowAfter).toHaveBeenCalledOnce();
     await lifecycle.close();
   });
 
@@ -1310,16 +1902,21 @@ describe("local coach composition", () => {
           rejectRefresh = reject;
         }),
     );
-    const lifecycle = await compose(home, {
-      bootstrap: async () => reference(),
-      createRuntime: () => ({ ...initial, runWindowAfter }),
-      createBackend: () => backend(),
-      createRepository: () => ({
-        insertIfAbsent: async () => false,
-        readCurrent: async () => undefined,
-      }),
-      createResolver: () => missingResolver(),
-    });
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => ({ ...initial, runWindowAfter }),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      { apiKey: "current-key", athleteId: "current-athlete" },
+    );
 
     await expect(
       lifecycle.operations.configureRuntime({

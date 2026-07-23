@@ -52,7 +52,10 @@ export interface CreateCoachOperationsInput {
     read(): Promise<Readonly<{ apiKey: string; athleteId: string }>>;
   }>;
   readonly historyNewestDate: () => string;
-  readonly applyRuntimeConfig: (request: ConfigureRuntimeRpcParams) => Promise<void>;
+  readonly applyRuntimeConfig: (
+    request: ConfigureRuntimeRpcParams,
+    signal: AbortSignal,
+  ) => Promise<void>;
   readonly readRuntimeConfig?: () => GetRuntimeConfigRpcResult;
 }
 
@@ -61,6 +64,7 @@ export interface CoachOperationsDependencies {
   readonly backfill?: typeof runIntervalsBackfillInWriter;
   readonly createIdentity?: (configDir: string) => AuthoredIdentity;
   readonly createIntakeRepository?: typeof createIntakeRepository;
+  readonly runtimeConfigurationDeadlineMs?: number;
 }
 
 function sameHome(left: AthleteHome, right: AthleteHome): boolean {
@@ -107,6 +111,9 @@ function createSerializedLane(): <T>(operation: () => Promise<T>) => Promise<T> 
   };
 }
 
+// Must stay below the client call timeout so queued work cannot mutate after its caller detaches.
+export const RUNTIME_CONFIGURATION_DEADLINE_MS = 25_000;
+
 export function createCoachOperations(
   input: CreateCoachOperationsInput,
   dependencies: CoachOperationsDependencies = {},
@@ -121,6 +128,14 @@ export function createCoachOperations(
   const unitsPreference = createUnitsPreferenceService(createUnitsPreferenceRepository(store));
   const importFiles = dependencies.importFiles ?? importFilesWithReport;
   const backfill = dependencies.backfill ?? runIntervalsBackfillInWriter;
+  const runtimeConfigurationDeadlineMs =
+    dependencies.runtimeConfigurationDeadlineMs ?? RUNTIME_CONFIGURATION_DEADLINE_MS;
+  if (
+    !Number.isSafeInteger(runtimeConfigurationDeadlineMs) ||
+    runtimeConfigurationDeadlineMs <= 0
+  ) {
+    throw new TypeError("Runtime configuration deadline is invalid.");
+  }
   const enqueueRuntimeConfiguration = createSerializedLane();
 
   const deliver = (
@@ -213,9 +228,15 @@ export function createCoachOperations(
     },
     configureRuntime(request: ConfigureRuntimeRpcParams): Promise<ConfigureRuntimeRpcResult> {
       const parsedRequest = ConfigureRuntimeRpcParamsSchema.parse(request);
+      const deadlineSignal = AbortSignal.timeout(runtimeConfigurationDeadlineMs);
       return enqueueRuntimeConfiguration(async () => {
-        const apply = async (): Promise<ConfigureRuntimeRpcResult> => {
-          await input.applyRuntimeConfig(parsedRequest);
+        const apply = async (admissionSignal?: AbortSignal): Promise<ConfigureRuntimeRpcResult> => {
+          const signal =
+            admissionSignal === undefined
+              ? deadlineSignal
+              : AbortSignal.any([deadlineSignal, admissionSignal]);
+          signal.throwIfAborted();
+          await input.applyRuntimeConfig(parsedRequest, signal);
           return ConfigureRuntimeRpcResultSchema.parse({
             schemaVersion: 1,
             applied: {

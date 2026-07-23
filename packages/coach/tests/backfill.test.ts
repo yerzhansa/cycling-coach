@@ -14,6 +14,7 @@ import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import type { IntervalsIcuSource } from "@enduragent/sync-intervals-icu";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import {
+  assertRuntimeAthleteOwner,
   checkIntervalsStoreOwnerAtPath,
   createIntervalsBackfillSource,
   runBackfillPages,
@@ -493,6 +494,361 @@ describe("incremental backfill pages", () => {
       }),
     ).resolves.toBe("mismatch");
     expect(mismatchFetch).toHaveBeenCalledOnce();
+  });
+
+  it("claims an ownerless store from the current account before resolving the candidate", async () => {
+    const value = await fresh();
+    const fingerprint = "a".repeat(64);
+    const resolveFingerprint = vi.fn(
+      async (options: { readonly apiKey: string; readonly athleteId: string }) => {
+        if (options.apiKey === "current-key") {
+          expect(await value.store.get("SELECT count(*) AS count FROM store_owner")).toEqual({
+            count: 0,
+          });
+        } else {
+          expect(options.apiKey).toBe("candidate-key");
+          expect(await value.store.get("SELECT account_fingerprint FROM store_owner")).toEqual({
+            account_fingerprint: fingerprint,
+          });
+        }
+        return fingerprint;
+      },
+    );
+    try {
+      await assertRuntimeAthleteOwner(
+        value.store,
+        {
+          current: {
+            apiKey: "current-key",
+            athleteId: "current-athlete",
+            historyNewestDate: "1900-12-31",
+            clock,
+          },
+          candidate: {
+            apiKey: "candidate-key",
+            athleteId: "candidate-athlete",
+            historyNewestDate: "1900-12-31",
+            clock,
+          },
+          signal: new AbortController().signal,
+        },
+        resolveFingerprint,
+      );
+
+      expect(resolveFingerprint.mock.calls.map(([options]) => options.athleteId)).toEqual([
+        "current-athlete",
+        "candidate-athlete",
+      ]);
+    } finally {
+      await value.store.close();
+    }
+  });
+
+  it("skips current-account lookup when the store already has an owner", async () => {
+    const value = await fresh();
+    const fingerprint = "a".repeat(64);
+    await value.store.run(
+      "INSERT INTO store_owner (singleton, account_fingerprint) VALUES (1, ?)",
+      [fingerprint],
+    );
+    const resolveFingerprint = vi.fn(async () => fingerprint);
+    try {
+      await assertRuntimeAthleteOwner(
+        value.store,
+        {
+          current: {
+            apiKey: "",
+            athleteId: "0",
+            historyNewestDate: "1900-12-31",
+            clock,
+          },
+          candidate: {
+            apiKey: "candidate-key",
+            athleteId: "0",
+            historyNewestDate: "1900-12-31",
+            clock,
+          },
+          signal: new AbortController().signal,
+        },
+        resolveFingerprint,
+      );
+
+      expect(resolveFingerprint).toHaveBeenCalledOnce();
+      expect(resolveFingerprint).toHaveBeenCalledWith(
+        expect.objectContaining({ apiKey: "candidate-key", athleteId: "0" }),
+      );
+    } finally {
+      await value.store.close();
+    }
+  });
+
+  it("defers and claims a resolved first credential when no current account exists", async () => {
+    const value = await fresh();
+    const fingerprint = "a".repeat(64);
+    const resolveFingerprint = vi.fn(async () => fingerprint);
+    try {
+      const pendingClaim = await assertRuntimeAthleteOwner(
+        value.store,
+        {
+          current: {
+            apiKey: "",
+            athleteId: "0",
+            historyNewestDate: "1900-12-31",
+            clock,
+          },
+          candidate: {
+            apiKey: "candidate-key",
+            athleteId: "0",
+            historyNewestDate: "1900-12-31",
+            clock,
+          },
+          signal: new AbortController().signal,
+          claimUnownedCandidateWithoutCurrent: true,
+        },
+        resolveFingerprint,
+      );
+
+      expect(resolveFingerprint).toHaveBeenCalledOnce();
+      expect(resolveFingerprint).toHaveBeenCalledWith(
+        expect.objectContaining({ apiKey: "candidate-key", athleteId: "0" }),
+      );
+      expect(await value.store.get("SELECT count(*) AS count FROM store_owner")).toEqual({
+        count: 0,
+      });
+      await pendingClaim?.claim();
+      expect(await value.store.get("SELECT account_fingerprint FROM store_owner")).toEqual({
+        account_fingerprint: fingerprint,
+      });
+    } finally {
+      await value.store.close();
+    }
+  });
+
+  it.each(["null", "rejection", "abort"] as const)(
+    "does not bind a first credential after candidate %s",
+    async (failure) => {
+      const value = await fresh();
+      const controller = new AbortController();
+      const resolveFingerprint = vi.fn(async () => {
+        if (failure === "null") return null;
+        if (failure === "rejection") throw new Error("synthetic candidate lookup failure");
+        controller.abort(new Error("synthetic admission close"));
+        return "a".repeat(64);
+      });
+      try {
+        await expect(
+          assertRuntimeAthleteOwner(
+            value.store,
+            {
+              current: {
+                apiKey: "",
+                athleteId: "0",
+                historyNewestDate: "1900-12-31",
+                clock,
+              },
+              candidate: {
+                apiKey: "candidate-key",
+                athleteId: "0",
+                historyNewestDate: "1900-12-31",
+                clock,
+              },
+              signal: controller.signal,
+              claimUnownedCandidateWithoutCurrent: true,
+            },
+            resolveFingerprint,
+          ),
+        ).rejects.toMatchObject({ reason: "candidate-unresolved" });
+        expect(await value.store.get("SELECT count(*) AS count FROM store_owner")).toEqual({
+          count: 0,
+        });
+      } finally {
+        await value.store.close();
+      }
+    },
+  );
+
+  it("refuses an unowned athlete change without a current credential", async () => {
+    const value = await fresh();
+    const resolveFingerprint = vi.fn(async () => "a".repeat(64));
+    try {
+      await expect(
+        assertRuntimeAthleteOwner(
+          value.store,
+          {
+            current: {
+              apiKey: "",
+              athleteId: "0",
+              historyNewestDate: "1900-12-31",
+              clock,
+            },
+            candidate: {
+              apiKey: "candidate-key",
+              athleteId: "candidate-athlete",
+              historyNewestDate: "1900-12-31",
+              clock,
+            },
+            signal: new AbortController().signal,
+          },
+          resolveFingerprint,
+        ),
+      ).rejects.toMatchObject({ reason: "current-credential-missing" });
+      expect(resolveFingerprint).not.toHaveBeenCalled();
+      expect(await value.store.get("SELECT count(*) AS count FROM store_owner")).toEqual({
+        count: 0,
+      });
+    } finally {
+      await value.store.close();
+    }
+  });
+
+  it("aborts a bounded owner lookup before claiming the store", async () => {
+    const value = await fresh();
+    const resolveFingerprint = vi.fn(
+      async (options: { readonly signal?: AbortSignal }): Promise<string> =>
+        await new Promise((_, reject) => {
+          options.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
+            once: true,
+          });
+        }),
+    );
+    try {
+      await expect(
+        assertRuntimeAthleteOwner(
+          value.store,
+          {
+            current: {
+              apiKey: "current-key",
+              athleteId: "current-athlete",
+              historyNewestDate: "1900-12-31",
+              clock: { now: clock.now, monotonicNow: () => performance.now() },
+            },
+            candidate: {
+              apiKey: "candidate-key",
+              athleteId: "candidate-athlete",
+              historyNewestDate: "1900-12-31",
+              clock: { now: clock.now, monotonicNow: () => performance.now() },
+            },
+            signal: new AbortController().signal,
+            timeoutMs: 5,
+          },
+          resolveFingerprint,
+        ),
+      ).rejects.toMatchObject({ reason: "current-unresolved" });
+      expect(await value.store.get("SELECT count(*) AS count FROM store_owner")).toEqual({
+        count: 0,
+      });
+    } finally {
+      await value.store.close();
+    }
+  });
+
+  it("distinguishes unresolved current and candidate ownership", async () => {
+    const currentUnresolved = await fresh();
+    try {
+      await expect(
+        assertRuntimeAthleteOwner(
+          currentUnresolved.store,
+          {
+            current: {
+              apiKey: "current-key",
+              athleteId: "current-athlete",
+              historyNewestDate: "1900-12-31",
+              clock,
+            },
+            candidate: {
+              apiKey: "candidate-key",
+              athleteId: "candidate-athlete",
+              historyNewestDate: "1900-12-31",
+              clock,
+            },
+            signal: new AbortController().signal,
+          },
+          async () => null,
+        ),
+      ).rejects.toMatchObject({ reason: "current-unresolved" });
+      expect(
+        await currentUnresolved.store.get("SELECT count(*) AS count FROM store_owner"),
+      ).toEqual({
+        count: 0,
+      });
+    } finally {
+      await currentUnresolved.store.close();
+    }
+
+    const candidateUnresolved = await fresh();
+    const fingerprint = "a".repeat(64);
+    const resolveFingerprint = vi
+      .fn()
+      .mockResolvedValueOnce(fingerprint)
+      .mockRejectedValueOnce(new Error("synthetic candidate lookup failure"));
+    try {
+      await expect(
+        assertRuntimeAthleteOwner(
+          candidateUnresolved.store,
+          {
+            current: {
+              apiKey: "current-key",
+              athleteId: "current-athlete",
+              historyNewestDate: "1900-12-31",
+              clock,
+            },
+            candidate: {
+              apiKey: "candidate-key",
+              athleteId: "candidate-athlete",
+              historyNewestDate: "1900-12-31",
+              clock,
+            },
+            signal: new AbortController().signal,
+          },
+          resolveFingerprint,
+        ),
+      ).rejects.toMatchObject({ reason: "candidate-unresolved" });
+      expect(
+        await candidateUnresolved.store.get("SELECT account_fingerprint FROM store_owner"),
+      ).toEqual({
+        account_fingerprint: fingerprint,
+      });
+    } finally {
+      await candidateUnresolved.store.close();
+    }
+  });
+
+  it("refuses a candidate whose resolved owner differs from the current owner", async () => {
+    const value = await fresh();
+    const currentFingerprint = "a".repeat(64);
+    const candidateFingerprint = "b".repeat(64);
+    const resolveFingerprint = vi
+      .fn()
+      .mockResolvedValueOnce(currentFingerprint)
+      .mockResolvedValueOnce(candidateFingerprint);
+    try {
+      await expect(
+        assertRuntimeAthleteOwner(
+          value.store,
+          {
+            current: {
+              apiKey: "current-key",
+              athleteId: "current-athlete",
+              historyNewestDate: "1900-12-31",
+              clock,
+            },
+            candidate: {
+              apiKey: "candidate-key",
+              athleteId: "candidate-athlete",
+              historyNewestDate: "1900-12-31",
+              clock,
+            },
+            signal: new AbortController().signal,
+          },
+          resolveFingerprint,
+        ),
+      ).rejects.toMatchObject({ reason: "mismatch" });
+      expect(await value.store.get("SELECT account_fingerprint FROM store_owner")).toEqual({
+        account_fingerprint: currentFingerprint,
+      });
+    } finally {
+      await value.store.close();
+    }
   });
 
   it("claims an upgraded store without re-walking or changing its existing history", async () => {
