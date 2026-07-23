@@ -3,6 +3,7 @@ import {
   createOnboardingState,
   nextStep,
   previousStep,
+  toOnboardingCompletion,
   toDesktopIntakeFlags,
   withCredentialStatuses,
   withChatGptLoginResult,
@@ -93,6 +94,24 @@ describe("desktop onboarding machine", () => {
     state = withImportedRideFileCount(state, 0);
     expect(state.importedRideFileCount).toBe(2);
     expect(() => withImportedRideFileCount(state, -1)).toThrow(TypeError);
+  });
+
+  it("derives provider sync only from the configured training platform", () => {
+    const fileOnly = withImportedRideFileCount(createOnboardingState(), 1);
+    expect(toOnboardingCompletion(fileOnly)).toEqual({
+      providerConfigured: true,
+      trainingDataConfigured: true,
+      intakeSaved: true,
+      requiresProviderSync: false,
+    });
+
+    const platformOnly = createOnboardingState([
+      { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+    ]);
+    expect(toOnboardingCompletion(platformOnly).requiresProviderSync).toBe(true);
+
+    const mixed = withImportedRideFileCount(platformOnly, 1);
+    expect(toOnboardingCompletion(mixed).requiresProviderSync).toBe(true);
   });
 
   it("maps every cycling intake branch to the landed strict DTO", () => {

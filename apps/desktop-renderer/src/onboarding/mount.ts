@@ -9,12 +9,12 @@ import {
 import type { CredentialWriteResult, OnboardingBridge } from "./bridge.js";
 import { credentialPresentation } from "./credential-presentation.js";
 import {
-  ONBOARDING_COMPLETION,
   createOnboardingState,
   hasConfiguredModel,
   hasTrainingData,
   nextStep,
   previousStep,
+  toOnboardingCompletion,
   toDesktopIntakeFlags,
   withBusy,
   withChatGptLoginResult,
@@ -740,7 +740,14 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
     const preview = make(options.document, "div", "ready-preview");
     preview.append(
       make(options.document, "span", undefined, "Keys secured"),
-      make(options.document, "span", undefined, "Training data connected"),
+      make(
+        options.document,
+        "span",
+        undefined,
+        state.credentialStatus["intervals-icu"] === "configured"
+          ? "Training data connected"
+          : "Ride files saved to your local library",
+      ),
       make(options.document, "span", undefined, "Safety context saved"),
     );
     body.append(preview);
@@ -809,7 +816,7 @@ export function mountOnboarding(options: MountOnboardingOptions): OnboardingCont
       scrim?.remove();
       scrim = undefined;
       setRideImportPresentation(false);
-      options.onComplete(ONBOARDING_COMPLETION);
+      options.onComplete(toOnboardingCompletion(state));
     }
   };
 

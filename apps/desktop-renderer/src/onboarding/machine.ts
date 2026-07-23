@@ -62,6 +62,7 @@ export interface OnboardingCompletion {
   readonly providerConfigured: true;
   readonly trainingDataConfigured: true;
   readonly intakeSaved: true;
+  readonly requiresProviderSync: boolean;
 }
 
 function statusRecord<T>(initial: T): Record<DesktopCredentialSlot, T> {
@@ -237,8 +238,11 @@ export function withImportedRideFileCount(
   };
 }
 
-export const ONBOARDING_COMPLETION: OnboardingCompletion = {
-  providerConfigured: true,
-  trainingDataConfigured: true,
-  intakeSaved: true,
-};
+export function toOnboardingCompletion(state: OnboardingState): OnboardingCompletion {
+  return {
+    providerConfigured: true,
+    trainingDataConfigured: true,
+    intakeSaved: true,
+    requiresProviderSync: state.credentialStatus["intervals-icu"] === "configured",
+  };
+}

@@ -26,7 +26,10 @@ const completion = {
   providerConfigured: true,
   trainingDataConfigured: true,
   intakeSaved: true,
+  requiresProviderSync: true,
 } as const;
+
+const fileOnlyCompletion = { ...completion, requiresProviderSync: false } as const;
 
 const success: SyncRpcResult = {
   schemaVersion: 1,
@@ -122,6 +125,12 @@ describe("first sync controller", () => {
     for (const invalid of [
       {},
       { ...completion, intakeSaved: false },
+      { ...completion, requiresProviderSync: "yes" },
+      {
+        providerConfigured: true,
+        trainingDataConfigured: true,
+        intakeSaved: true,
+      },
       { ...completion, extra: true },
       null,
     ]) {
@@ -139,6 +148,64 @@ describe("first sync controller", () => {
     await first;
     expect(ports.states.at(-1)).toEqual({ status: "ready" });
     expect(ports.focusComposer).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips provider sync for file-only completion and leaves retry inert", async () => {
+    const coordinator = new FakeCoordinator();
+    const ports = fakePorts(coordinator);
+    const controller = createFirstSyncController(ports);
+
+    await controller.start(fileOnlyCompletion);
+    await controller.retry();
+    await controller.start(fileOnlyCompletion);
+
+    expect(coordinator.requestCalls).toEqual([]);
+    expect(ports.states).toEqual([]);
+    expect(ports.focusComposer).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears a stale first-sync failure when file-only setup completes", async () => {
+    const coordinator = new FakeCoordinator();
+    const ports = fakePorts(coordinator);
+    const controller = createFirstSyncController(ports);
+    const providerSync = controller.start(completion);
+    coordinator.finish({
+      status: "failed",
+      operation: 1,
+      kind: "operation",
+      retryable: true,
+    });
+    await providerSync;
+
+    await controller.start(fileOnlyCompletion);
+    await controller.retry();
+
+    expect(coordinator.requestCalls).toEqual([1]);
+    expect(ports.states.at(-1)).toEqual({ status: "idle" });
+    expect(ports.focusComposer).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not join or cancel a concurrently running manual sync for file-only setup", async () => {
+    const coordinator = new FakeCoordinator();
+    const ports = fakePorts(coordinator);
+    const first = createFirstSyncController(ports);
+    const manual = createManualSyncController({
+      coordinator,
+      view: { render: vi.fn(), restoreKeyboardFocus: vi.fn() },
+    });
+
+    const manualTask = manual.activate("pointer");
+    await first.start(fileOnlyCompletion);
+
+    expect(coordinator.requestCalls).toEqual([1]);
+    expect(ports.states).toEqual([]);
+    expect(ports.focusComposer).toHaveBeenCalledTimes(1);
+    coordinator.finish({ status: "succeeded", operation: 1, kind: "no-change" });
+    await manualTask;
+    expect(ports.states).toEqual([]);
+
+    manual.dispose();
+    first.dispose();
   });
 
   it.each([
