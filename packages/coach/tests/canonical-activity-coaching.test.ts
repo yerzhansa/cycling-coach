@@ -268,7 +268,7 @@ FROM session`,
         value: { distanceMeters: platformDistance },
       });
       if (!immediate.detail.ok) throw new Error("mixed-source detail read failed");
-      const activityId = immediate.detail.value.id;
+      const activityId = (immediate.detail.value as { readonly id: string }).id;
       await expect(
         selected.runtime.athleteData.getStreams({ id: activityId, keys: ["time", "power"] }),
       ).resolves.toMatchObject({
