@@ -41,6 +41,7 @@ interface AuthBridge {
   getDaemonConnection(failedGeneration?: number): Promise<unknown>;
   credentialStatuses(): Promise<unknown>;
   retryFailedCredentials(): Promise<unknown>;
+  releaseNotes(): Promise<unknown>;
   chatgptStatus(): Promise<unknown>;
   chatgptLogin(): Promise<unknown>;
 }
@@ -99,10 +100,170 @@ describe("desktop preload ChatGPT auth", () => {
       "credentialStatuses",
       "getDaemonConnection",
       "onDroppedImportFiles",
+      "releaseNotes",
       "retryFailedCredentials",
       "writeCredential",
     ]);
     expect(bridge).not.toHaveProperty("openExternal");
+  });
+
+  it("returns closed copied release note results from the zero-argument channel", async () => {
+    const notes = ["Added release notes to the desktop."];
+    const available = {
+      status: "available",
+      version: "2026.7.23",
+      notes,
+      releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23",
+    };
+    mocks.invoke.mockResolvedValueOnce(available).mockResolvedValueOnce({
+      status: "unavailable",
+      version: null,
+      releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases",
+    });
+
+    const availableCopy = (await bridge.releaseNotes()) as typeof available;
+    expect(availableCopy).toEqual(available);
+    expect(availableCopy).not.toBe(available);
+    expect(availableCopy.notes).not.toBe(notes);
+    await expect(bridge.releaseNotes()).resolves.toEqual({
+      status: "unavailable",
+      version: null,
+      releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases",
+    });
+    expect(mocks.invoke.mock.calls).toEqual([
+      ["desktop:get-release-notes"],
+      ["desktop:get-release-notes"],
+    ]);
+  });
+
+  it("accepts a known unavailable version with only a canonical tag URL", async () => {
+    mocks.invoke.mockResolvedValueOnce({
+      status: "unavailable",
+      version: "2026.7.23",
+      releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23",
+    });
+
+    await expect(bridge.releaseNotes()).resolves.toEqual({
+      status: "unavailable",
+      version: "2026.7.23",
+      releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23",
+    });
+  });
+
+  it("rejects malformed release note unions, strings, counts, and totals", async () => {
+    const tagUrl =
+      "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23";
+    const malformed = [
+      null,
+      {
+        status: "available",
+        version: "2026.7.23",
+        notes: [],
+        releaseUrl: tagUrl,
+        extra: true,
+      },
+      {
+        status: "unavailable",
+        version: null,
+        notes: [],
+        releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases",
+      },
+      {
+        status: "available",
+        version: `v${"1".repeat(64)}`,
+        notes: [],
+        releaseUrl: tagUrl,
+      },
+      {
+        status: "available",
+        version: " 2026.7.23",
+        notes: [],
+        releaseUrl: tagUrl,
+      },
+      {
+        status: "available",
+        version: "latest",
+        notes: [],
+        releaseUrl: tagUrl,
+      },
+      {
+        status: "available",
+        version: "2026.7.23",
+        notes: ["unsafe\u0000note"],
+        releaseUrl: tagUrl,
+      },
+      {
+        status: "available",
+        version: "2026.7.23",
+        notes: Array.from({ length: 101 }, () => "note"),
+        releaseUrl: tagUrl,
+      },
+      {
+        status: "available",
+        version: "2026.7.23",
+        notes: ["x".repeat(2_001)],
+        releaseUrl: tagUrl,
+      },
+      {
+        status: "available",
+        version: "2026.7.23",
+        notes: Array.from({ length: 33 }, () => "x".repeat(2_000)),
+        releaseUrl: tagUrl,
+      },
+    ];
+
+    for (const value of malformed) {
+      mocks.invoke.mockResolvedValueOnce(value);
+      await expect(bridge.releaseNotes()).rejects.toBeInstanceOf(TypeError);
+    }
+  });
+
+  it("requires release URLs to match the result version exactly", async () => {
+    const values = [
+      {
+        status: "available",
+        version: "2026.7.23",
+        notes: [],
+        releaseUrl:
+          "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.22",
+      },
+      {
+        status: "unavailable",
+        version: "2026.7.23",
+        releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases",
+      },
+      {
+        status: "unavailable",
+        version: null,
+        releaseUrl:
+          "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23",
+      },
+    ];
+
+    for (const value of values) {
+      mocks.invoke.mockResolvedValueOnce(value);
+      await expect(bridge.releaseNotes()).rejects.toBeInstanceOf(TypeError);
+    }
+  });
+
+  it.each([
+    "http://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23",
+    "https://user:secret@github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23",
+    "https://github.com:444/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23",
+    "https://github.com/other/cycling-coach/releases/tag/cycling-coach@2026.7.23",
+    "https://github.com/yerzhansa/cycling-coach/releases/latest",
+    "https://github.com/yerzhansa/cycling-coach/releases/tag/",
+    "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23?token=secret",
+    "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23#notes",
+  ])("rejects a noncanonical or out-of-repository release URL: %s", async (releaseUrl) => {
+    mocks.invoke.mockResolvedValueOnce({
+      status: "available",
+      version: "2026.7.23",
+      notes: [],
+      releaseUrl,
+    });
+
+    await expect(bridge.releaseNotes()).rejects.toBeInstanceOf(TypeError);
   });
 
   it("sends a nested trusted target-blank anchor activation over the private channel", () => {

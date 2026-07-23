@@ -7,6 +7,7 @@ import { SaveIntakeRpcParamsSchema } from "@enduragent/coach-contract";
 import "./chat/styles.css";
 import "./training-context/styles.css";
 import "./spend-meter/styles.css";
+import "./release-notes/styles.css";
 import "./onboarding/onboarding.css";
 import "./ride-import.css";
 import { createChatController } from "./chat/controller.js";
@@ -22,6 +23,8 @@ import { mountTrainingContextView } from "./training-context/view.js";
 import { createTrainingSyncCoordinator } from "./training-sync.js";
 import { createSpendMeterController } from "./spend-meter/controller.js";
 import { createSpendMeterView } from "./spend-meter/view.js";
+import { createReleaseNotesController } from "./release-notes/controller.js";
+import { createReleaseNotesView } from "./release-notes/view.js";
 import {
   createRideImportController,
   mountResidentRideImport,
@@ -63,6 +66,14 @@ window.addEventListener("enduragent-lifecycle", (event) => {
         : event.detail.status === "terminal"
           ? "Connection unavailable"
           : "Closing…";
+});
+const releaseNotesController = createReleaseNotesController({
+  request: () => window.enduragentAuth.releaseNotes(),
+  view: createReleaseNotesView({
+    document,
+    actionHost: topbarActions,
+    before: connectionStatus,
+  }),
 });
 
 const clients = createDesktopCoachClientProvider();
@@ -281,6 +292,7 @@ void clients.getClient().then(
 window.addEventListener(
   "pagehide",
   () => {
+    releaseNotesController.dispose();
     disposeDroppedRideImports();
     onboarding.dispose();
     residentRideImport.dispose();

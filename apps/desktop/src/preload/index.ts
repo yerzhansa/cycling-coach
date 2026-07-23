@@ -3,6 +3,7 @@ import {
   DESKTOP_CONNECTION_CHANNEL,
   DESKTOP_LIFECYCLE_CHANNEL,
   DESKTOP_OPEN_EXTERNAL_CHANNEL,
+  DESKTOP_RELEASE_NOTES_CHANNEL,
 } from "../main/constants.js";
 
 const DESKTOP_CREDENTIAL_STATUS_CHANNEL = "enduragent:onboarding:credential-status";
@@ -44,6 +45,11 @@ const CHATGPT_REASONS = new Set([
   "runtime-unavailable",
 ]);
 const IMPORT_EXTENSIONS = new Set([".fit", ".tcx", ".gpx"]);
+const RELEASES_URL = "https://github.com/yerzhansa/cycling-coach/releases";
+const RELEASE_NOTES_MAX_TOTAL_BYTES = 64 * 1024;
+const RELEASE_VERSION_RE =
+  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const textEncoder = new TextEncoder();
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -51,6 +57,76 @@ function record(value: unknown): value is Record<string, unknown> {
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
+}
+
+function safeString(value: unknown, maximumLength: number): value is string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > maximumLength ||
+    value.trim() !== value
+  ) {
+    return false;
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return false;
+  }
+  return true;
+}
+
+function releaseVersion(value: unknown): value is string {
+  return safeString(value, 64) && RELEASE_VERSION_RE.test(value);
+}
+
+function releaseTagUrl(version: string): string {
+  return `${RELEASES_URL}/tag/cycling-coach@${encodeURIComponent(version)}`;
+}
+
+function parseReleaseNotes(value: unknown): unknown {
+  if (!record(value) || (value.status !== "available" && value.status !== "unavailable")) {
+    throw new TypeError();
+  }
+  if (value.status === "unavailable") {
+    if (
+      !exactKeys(value, ["status", "version", "releaseUrl"]) ||
+      (value.version !== null && !releaseVersion(value.version)) ||
+      typeof value.releaseUrl !== "string" ||
+      value.releaseUrl.length > 2_048 ||
+      value.releaseUrl !== (value.version === null ? RELEASES_URL : releaseTagUrl(value.version))
+    ) {
+      throw new TypeError();
+    }
+    return {
+      status: "unavailable",
+      version: value.version,
+      releaseUrl: value.releaseUrl,
+    };
+  }
+  if (
+    !exactKeys(value, ["status", "version", "notes", "releaseUrl"]) ||
+    !releaseVersion(value.version) ||
+    !Array.isArray(value.notes) ||
+    value.notes.length > 100 ||
+    typeof value.releaseUrl !== "string" ||
+    value.releaseUrl.length > 2_048 ||
+    value.releaseUrl !== releaseTagUrl(value.version)
+  ) {
+    throw new TypeError();
+  }
+  let totalBytes = 0;
+  const notes = value.notes.map((note) => {
+    if (!safeString(note, 2_000)) throw new TypeError();
+    totalBytes += textEncoder.encode(note).byteLength;
+    if (totalBytes > RELEASE_NOTES_MAX_TOTAL_BYTES) throw new TypeError();
+    return note;
+  });
+  return {
+    status: "available",
+    version: value.version,
+    notes,
+    releaseUrl: value.releaseUrl,
+  };
 }
 
 function parseStatuses(value: unknown): unknown {
@@ -221,6 +297,8 @@ contextBridge.exposeInMainWorld(
       parseChatGptLogin(await ipcRenderer.invoke(DESKTOP_CHATGPT_LOGIN_CHANNEL)),
     chooseImportFiles: async () =>
       parsePaths(await ipcRenderer.invoke(DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL)),
+    releaseNotes: async () =>
+      parseReleaseNotes(await ipcRenderer.invoke(DESKTOP_RELEASE_NOTES_CHANNEL)),
     onDroppedImportFiles: (listener: unknown) => {
       if (typeof listener !== "function" || dropDisposer !== undefined) throw new TypeError();
       const onDrop = (event: DragEvent): void => {

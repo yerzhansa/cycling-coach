@@ -14,7 +14,21 @@ interface EnduragentAuth {
   chatgptLogin(): Promise<ChatGptLoginResult>;
   chooseImportFiles(): Promise<readonly string[]>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
+  releaseNotes(): Promise<ReleaseNotesResult>;
 }
+
+type ReleaseNotesResult =
+  | {
+      readonly status: "available";
+      readonly version: string;
+      readonly notes: readonly string[];
+      readonly releaseUrl: string;
+    }
+  | {
+      readonly status: "unavailable";
+      readonly version: string | null;
+      readonly releaseUrl: string;
+    };
 
 type DesktopCredentialSlot =
   | "anthropic"

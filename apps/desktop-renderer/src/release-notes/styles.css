@@ -1,0 +1,119 @@
+.release-notes-button {
+  min-height: 34px;
+  padding: 0 12px;
+  white-space: nowrap;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--moss-strong);
+  background: var(--surface-solid);
+  cursor: pointer;
+}
+
+.release-notes-dialog {
+  width: min(440px, calc(100vw - 32px));
+  max-width: none;
+  max-height: min(620px, calc(100vh - 32px));
+  padding: 22px;
+  overflow-y: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  color: var(--ink);
+  background: var(--surface-solid);
+  box-shadow: 0 24px 70px color-mix(in srgb, var(--ink) 24%, transparent);
+}
+
+.release-notes-dialog::backdrop {
+  background: color-mix(in srgb, var(--ink) 35%, transparent);
+}
+
+.release-notes__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.release-notes__header h2,
+.release-notes__message {
+  margin: 0;
+}
+
+.release-notes__header h2 {
+  font-size: 20px;
+  line-height: 1.3;
+}
+
+.release-notes__close,
+.release-notes__retry,
+.release-notes__full-release {
+  min-height: 36px;
+  padding: 0 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--ink);
+  background: var(--surface-solid);
+  cursor: pointer;
+}
+
+.release-notes__full-release {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.release-notes__full-release:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.release-notes__full-release[hidden] {
+  display: none;
+}
+
+.release-notes__content {
+  margin-top: 18px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.release-notes__list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 24px;
+}
+
+.release-notes__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.release-notes__retry:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+@media (max-width: 760px) {
+  .topbar-actions {
+    gap: 5px;
+  }
+
+  .release-notes-button {
+    width: 38px;
+    min-width: 38px;
+    padding: 0;
+    overflow: hidden;
+    font-size: 0;
+  }
+
+  .release-notes-button::before {
+    font-size: 10px;
+    font-weight: 750;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    content: "New";
+  }
+}

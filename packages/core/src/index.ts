@@ -206,3 +206,12 @@ export {
   setLastNotifiedVersion,
 } from "./updater.js";
 export type { UpdateInfo } from "./updater.js";
+
+// ─── Release notes ───────────────────────────────────────────────────
+export { fetchLatestReleaseNotes } from "./release-notes.js";
+export type {
+  FetchLatestReleaseNotesOptions,
+  ReleaseNotesFetch,
+  ReleaseNotesResult,
+  RepoInfo,
+} from "./release-notes.js";

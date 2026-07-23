@@ -47,6 +47,7 @@ import {
   unexpectedStartupCopy,
 } from "./lifecycle-messages.js";
 import { registerOnboardingIpc, runtimeConfigurationForCredential } from "./onboarding-ipc.js";
+import { installDesktopReleaseNotesIpc } from "./release-notes-ipc.js";
 import { createDesktopResidency, type DesktopResidency } from "./residency.js";
 import {
   createDesktopRendererConsoleCapture,
@@ -121,6 +122,7 @@ async function runDesktop(): Promise<void> {
   let protocolInstalled = false;
   let disposeConnectionIpc: (() => void) | undefined;
   let disposeExternalLinkIpc: (() => void) | undefined;
+  let disposeReleaseNotesIpc: (() => void) | undefined;
   let disposeOnboarding: (() => void) | undefined;
   let daemonLifecycle: DesktopDaemonLifecycle | undefined;
   let shutdownPromise: Promise<void> | undefined;
@@ -131,6 +133,8 @@ async function runDesktop(): Promise<void> {
       disposeConnectionIpc = undefined;
       disposeExternalLinkIpc?.();
       disposeExternalLinkIpc = undefined;
+      disposeReleaseNotesIpc?.();
+      disposeReleaseNotesIpc = undefined;
       disposeOnboarding?.();
       disposeOnboarding = undefined;
       if (protocolInstalled) {
@@ -451,6 +455,10 @@ async function runDesktop(): Promise<void> {
       ipcMain,
       currentWindow: () => mainWindow.current() ?? undefined,
       openExternal: (url) => shell.openExternal(url),
+    });
+    disposeReleaseNotesIpc = installDesktopReleaseNotesIpc({
+      ipcMain,
+      currentWindow: () => mainWindow.current() ?? undefined,
     });
     residency = createDesktopResidency({
       app,

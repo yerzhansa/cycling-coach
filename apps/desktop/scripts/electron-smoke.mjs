@@ -279,6 +279,7 @@ async function security() {
             "credentialStatuses",
             "getDaemonConnection",
             "onDroppedImportFiles",
+            "releaseNotes",
             "retryFailedCredentials",
             "writeCredential",
           ]),
