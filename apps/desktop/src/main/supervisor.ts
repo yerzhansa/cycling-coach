@@ -161,6 +161,35 @@ function waitWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T |
   });
 }
 
+function requireSettlementBefore<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(timeoutMessage));
+    }, timeoutMs);
+    void promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 export async function terminateOwnedUtilityProcess(input: {
   readonly child: Pick<UtilityProcess, "postMessage" | "kill">;
   readonly pid: number;
@@ -359,7 +388,7 @@ export class DesktopDaemonSupervisor {
           },
         };
         if (this.closing) {
-          await wrapped.close().catch(() => {});
+          await wrapped.close();
           return {
             status: "refused" as const,
             exitCode: 3 as const,
@@ -385,6 +414,10 @@ export class DesktopDaemonSupervisor {
     const closing = active.then(async (resolution) => {
       if (resolution.status === "connected") await resolution.close();
     });
-    await waitWithTimeout(closing, UTILITY_EXIT_TIMEOUT_MS + UTILITY_FORCE_EXIT_TIMEOUT_MS * 2);
+    await requireSettlementBefore(
+      closing,
+      UTILITY_EXIT_TIMEOUT_MS + UTILITY_FORCE_EXIT_TIMEOUT_MS * 2,
+      "desktop daemon supervisor close deadline exceeded",
+    );
   }
 }

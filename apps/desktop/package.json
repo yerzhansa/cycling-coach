@@ -24,6 +24,7 @@
     "@enduragent/coach-client": "workspace:*",
     "@enduragent/coach-contract": "workspace:*",
     "@enduragent/core": "workspace:*",
+    "electron-updater": "6.6.2",
     "yaml": "^2.8.3"
   },
   "devDependencies": {

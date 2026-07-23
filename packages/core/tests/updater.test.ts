@@ -9,6 +9,7 @@ import {
   getCurrentVersion,
   getInstanceId,
   isManagedDeploy,
+  isStableCalVer,
   isUpdateAvailable,
 } from "../src/updater.js";
 
@@ -49,6 +50,7 @@ describe("isUpdateAvailable", () => {
   });
 
   it("orders installed historical suffix releases for compatibility", () => {
+    expect(isUpdateAvailable("2026.5.3-1", "2026.5.3-0")).toBe(true);
     expect(isUpdateAvailable("2026.5.3-1", "2026.5.3")).toBe(true);
     expect(isUpdateAvailable("2026.5.3-2", "2026.5.3-1")).toBe(true);
     expect(isUpdateAvailable("2026.5.3", "2026.5.3-1")).toBe(false);
@@ -57,6 +59,39 @@ describe("isUpdateAvailable", () => {
   it("recognizes the stable successor to an installed historical suffix release", () => {
     expect(isUpdateAvailable("2026.6.26", "2026.6.25-1")).toBe(true);
     expect(isUpdateAvailable("2026.6.25-1", "2026.6.26")).toBe(false);
+  });
+
+  it.each([
+    ["2026.0.1", "2026.1.1"],
+    ["2026.13.1", "2026.12.1"],
+    ["2026.7.9007199254740992", "2026.7.1"],
+    ["999.7.1", "2026.7.1"],
+    ["10000.7.1", "2026.7.1"],
+    ["0000.7.1", "2026.7.1"],
+  ])("rejects invalid or unsafe latest/current CalVer %s / %s", (latest, current) => {
+    expect(isUpdateAvailable(latest, current)).toBe(false);
+    expect(isUpdateAvailable(current, latest)).toBe(false);
+  });
+});
+
+describe("isStableCalVer", () => {
+  it.each(["2026.1.0", "2026.12.9007199254740991"])("accepts stable CalVer %s", (version) => {
+    expect(isStableCalVer(version)).toBe(true);
+  });
+
+  it.each([
+    "2026.0.1",
+    "2026.13.1",
+    "2026.7.9007199254740992",
+    "999.7.1",
+    "10000.7.1",
+    "0000.7.1",
+    "2026.07.1",
+    "2026.7.01",
+    "2026.7.1-1",
+    `2026.7.${"1".repeat(33)}`,
+  ])("rejects non-stable CalVer %s", (version) => {
+    expect(isStableCalVer(version)).toBe(false);
   });
 });
 
