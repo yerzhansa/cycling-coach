@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CHAT_WORKING_COPY,
   DESKTOP_CHAT_ID,
   EMPTY_CHAT_STATE,
   hasClearableConversation,
@@ -22,6 +23,84 @@ describe("desktop turn state", () => {
   it("owns the one desktop conversation identity", () => {
     expect(DESKTOP_CHAT_ID).toBe("desktop");
   });
+
+  it("starts with one generic working state and clears it on the first substantive text", () => {
+    let state = started();
+    expect(state.progress).toBe(CHAT_WORKING_COPY);
+    expect(state.messages).toMatchObject([
+      { id: "message-1", role: "athlete", text: "How should I train?" },
+      { id: "message-2", role: "coach", text: "", delivery: "streaming" },
+    ]);
+
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 1,
+      event: { type: "text_delta", turnId: "turn-1", delta: " \n" },
+    });
+    expect(state.progress).toBe(CHAT_WORKING_COPY);
+    expect(state.activeTurn?.draft).toBe(" \n");
+    expect(state.messages.at(-1)?.text).toBe("");
+
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 1,
+      event: { type: "text_delta", turnId: "turn-1", delta: "Ride easy." },
+    });
+    expect(state.progress).toBeNull();
+    expect(state.messages.at(-1)?.text).toBe(" \nRide easy.");
+  });
+
+  it("clears generic progress on final text but keeps replacement tool progress", () => {
+    const finalOnly = reduceChatState(started(), {
+      type: "event",
+      requestKey: 1,
+      event: { type: "final-text", turnId: "turn-1", text: "Ride easy." },
+    });
+    expect(finalOnly.progress).toBeNull();
+
+    let state = started();
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 1,
+      event: { type: "tool-start", turnId: "turn-1", toolName: "training_data" },
+    });
+    expect(state.progress).toBe("Checking your training data…");
+
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 1,
+      event: { type: "final-text", turnId: "turn-1", text: "Ride easy." },
+    });
+    expect(state.progress).toBe("Checking your training data…");
+  });
+
+  it.each(["", " \n\t"])(
+    "does not complete or expose a whitespace-only final text %j",
+    (finalText) => {
+      const absent = reduceChatState(EMPTY_CHAT_STATE, {
+        type: "session-probe",
+        hasSession: false,
+      });
+      let state = reduceChatState(absent, {
+        type: "submit",
+        requestKey: 1,
+        userMessage: "How should I train?",
+        userMessageId: "message-1",
+        assistantMessageId: "message-2",
+        includeUser: true,
+      });
+      state = reduceChatState(state, {
+        type: "event",
+        requestKey: 1,
+        event: { type: "final-text", turnId: "turn-1", text: finalText },
+      });
+
+      expect(state.activeTurn?.finalText).toBe(finalText);
+      expect(state.messages.at(-1)?.text).toBe("");
+      expect(reduceChatState(state, { type: "complete", requestKey: 1 })).toBe(state);
+      expect(state.session.presence).toBe("absent");
+    },
+  );
 
   it("streams ordered deltas and replaces them with canonical final text", () => {
     let state = started();
@@ -73,6 +152,39 @@ describe("desktop turn state", () => {
       kind: "provider-down",
       athleteMessage: "Please try later.",
     });
+  });
+
+  it("clears a contract error only for a matching interrupted retry", () => {
+    let state = reduceChatState(started(), {
+      type: "event",
+      requestKey: 1,
+      event: {
+        type: "error",
+        turnId: "turn-1",
+        chatId: "desktop",
+        error_class: "unknown",
+        kind: "provider-down",
+        athleteMessage: "Please try later.",
+        overflowAttempts: 0,
+        timeoutAttempts: 0,
+        rateLimitAttempts: 0,
+        duration_ms: 1,
+        compactions: 0,
+      },
+    });
+    expect(reduceChatState(state, { type: "retry-pending", requestKey: 1 })).toBe(state);
+
+    state = reduceChatState(state, {
+      type: "interrupt",
+      requestKey: 1,
+      copy: "Connection interrupted. Your partial response is preserved.",
+    });
+    expect(state.activeTurn?.error?.athleteMessage).toBe("Please try later.");
+    expect(reduceChatState(state, { type: "retry-pending", requestKey: 2 })).toBe(state);
+
+    const retrying = reduceChatState(state, { type: "retry-pending", requestKey: 1 });
+    expect(retrying.progress).toBe(CHAT_WORKING_COPY);
+    expect(retrying.activeTurn?.error).toBeNull();
   });
 
   it("ignores stale local request keys and preserves interrupted drafts", () => {
