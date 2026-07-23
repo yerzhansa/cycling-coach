@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OnboardingBridge } from "../src/onboarding/bridge.js";
+import type { CredentialWriteResult, OnboardingBridge } from "../src/onboarding/bridge.js";
 import { mountOnboarding } from "../src/onboarding/mount.js";
 import type { ChatGptLoginResult } from "../src/onboarding/machine.js";
 import { createRideImportController } from "../src/ride-import.js";
@@ -322,10 +322,10 @@ describe("mounted onboarding", () => {
       status: "configured",
       runtimeReady: true,
     }));
-    let resolveCredential!: (value: { status: "configured"; runtimeReady: true }) => void;
+    let resolveCredential!: (value: CredentialWriteResult) => void;
     vi.mocked(onboardingBridge.writeCredential).mockImplementation(
       () =>
-        new Promise((resolve) => {
+        new Promise<CredentialWriteResult>((resolve) => {
           resolveCredential = resolve;
         }),
     );
@@ -349,7 +349,7 @@ describe("mounted onboarding", () => {
     controller.importDroppedFiles(["/synthetic/during-submit.fit"]);
     expect(onboardingBridge.importFiles).not.toHaveBeenCalled();
 
-    resolveCredential({ status: "configured", runtimeReady: true });
+    resolveCredential({ slot: "intervals-icu", status: "configured", runtimeReady: true });
     await vi.waitFor(() => expect(controller.state().busy).toBe(false));
     controller.dispose();
   });

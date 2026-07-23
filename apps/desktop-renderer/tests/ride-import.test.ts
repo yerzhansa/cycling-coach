@@ -91,9 +91,9 @@ describe("ride import controller", () => {
     let finish!: (value: ImportFilesRpcResult) => void;
     const bridge = transport({
       chooseImportFiles: vi.fn(async () => ["/synthetic/second.fit"]),
-      importFiles: vi.fn(
+      importFiles: vi.fn<RideImportTransport["importFiles"]>(
         () =>
-          new Promise((resolve) => {
+          new Promise<ImportFilesRpcResult>((resolve) => {
             finish = resolve;
           }),
       ),
@@ -289,9 +289,9 @@ describe("resident ride import surface", () => {
     const actionHost = new FakeElement();
     let finish!: (value: ImportFilesRpcResult) => void;
     const bridge = transport({
-      importFiles: vi.fn(
+      importFiles: vi.fn<RideImportTransport["importFiles"]>(
         () =>
-          new Promise((resolve) => {
+          new Promise<ImportFilesRpcResult>((resolve) => {
             finish = resolve;
           }),
       ),
