@@ -6,6 +6,7 @@ import type { AthleteHome } from "@enduragent/kernel-node/home";
 import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import { runMigrations } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
+import type { LocalStoreRuntime } from "../src/composition.js";
 import type { CoachStoreWriterContext } from "../src/runtime.js";
 import { createCoachOperations } from "../src/operations.js";
 
@@ -53,6 +54,36 @@ function promiseGate(): { readonly promise: Promise<void>; release(): void } {
   return { promise, release };
 }
 
+function operationRuntime(
+  runWindowAfter: LocalStoreRuntime["runWindowAfter"] = async (work) => {
+    await work(new AbortController().signal);
+    return {
+      published: false,
+      legacySucceeded: true,
+      counts: requestCounts(0, 0),
+    };
+  },
+): Pick<LocalStoreRuntime, "runWindowAfter" | "runExclusive" | "runActivityWrite"> {
+  let tail = Promise.resolve();
+  const runExclusive: LocalStoreRuntime["runExclusive"] = (work) => {
+    const run = () => work(new AbortController().signal);
+    const task = tail.then(run, run);
+    tail = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
+  };
+  return {
+    runExclusive,
+    runActivityWrite: async (work) => ({
+      value: await runExclusive(work),
+      activityReadAvailable: true,
+    }),
+    runWindowAfter: (work) => runExclusive(() => runWindowAfter(work)),
+  };
+}
+
 describe("coach operations", () => {
   it("imports synthetic activity files through the live store and deduplicates reruns", async () => {
     const root = await mkdtemp(join(await realpath(tmpdir()), "coach-operations-"));
@@ -73,13 +104,13 @@ describe("coach operations", () => {
       const operations = createCoachOperations({
         home: liveHome,
         context: liveContext,
-        runtime: { runWindowAfter: vi.fn() },
+        runtime: operationRuntime(),
         intervalsCredentials: intervalsCredentials(),
         historyNewestDate: () => "1998-07-18",
         applyRuntimeConfig: async () => {},
       });
       const paths = ["brick-cycling.fit", "fallback-cycling.tcx", "fallback-cycling.gpx"].map(
-        (name) => resolve("packages/kernel-node/tests/fixtures/ingest", name),
+        (name) => resolve(import.meta.dirname, "../../kernel-node/tests/fixtures/ingest", name),
       );
       const first = await operations.importFiles({ paths });
       expect(first.files).toEqual({ total: 3, imported: 3, quarantined: 0 });
@@ -117,7 +148,7 @@ describe("coach operations", () => {
           store,
           listener: {} as CoachStoreWriterContext["listener"],
         },
-        runtime: { runWindowAfter: vi.fn() },
+        runtime: operationRuntime(),
         intervalsCredentials: intervalsCredentials(),
         historyNewestDate: () => "1998-07-18",
         applyRuntimeConfig: async () => {},
@@ -200,7 +231,7 @@ describe("coach operations", () => {
       {
         home,
         context: context(),
-        runtime: { runWindowAfter },
+        runtime: operationRuntime(runWindowAfter),
         intervalsCredentials: intervalsCredentials(),
         historyNewestDate: () => "1998-07-18",
         applyRuntimeConfig: async () => {},
@@ -213,13 +244,17 @@ describe("coach operations", () => {
         importEvents.push(event),
       ),
     ).resolves.toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       files: { total: 2, imported: 1, quarantined: 1 },
       changes: {
         rawFilesInserted: 1,
         sourceRecordsInserted: 2,
         sourceRecordsUpdated: 3,
         relinkedSourceRecords: 4,
+      },
+      publication: {
+        scope: "activities-and-streams",
+        status: "available",
       },
     });
     expect(importEvents).toEqual([
@@ -238,6 +273,49 @@ describe("coach operations", () => {
     });
     expect(importFiles).toHaveBeenCalledTimes(1);
     expect(runWindowAfter).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports retryable publication failure without rejecting a completed import", async () => {
+    const importFiles = vi.fn(async () => ({
+      files: [{ outcome: "imported" }],
+      inserts: { raw_file: 1, source_record: 1 },
+      updates: { source_record: 0, relinked_source_records: 0 },
+    })) as unknown as Parameters<typeof createCoachOperations>[1] extends infer D
+      ? D extends { importFiles: infer F }
+        ? F
+        : never
+      : never;
+    const base = operationRuntime();
+    const operations = createCoachOperations(
+      {
+        home,
+        context: context(),
+        runtime: {
+          ...base,
+          async runActivityWrite(work) {
+            return {
+              value: await base.runExclusive(work),
+              activityReadAvailable: false,
+            };
+          },
+        },
+        intervalsCredentials: intervalsCredentials(),
+        historyNewestDate: () => "1998-07-18",
+        applyRuntimeConfig: async () => {},
+      },
+      { importFiles },
+    );
+
+    await expect(
+      operations.importFiles({ paths: ["/synthetic/durable.fit"] }),
+    ).resolves.toMatchObject({
+      schemaVersion: 2,
+      changes: { rawFilesInserted: 1 },
+      publication: {
+        scope: "activities-and-streams",
+        status: "retryable-failure",
+      },
+    });
   });
 
   it("serializes store operations in admission order and recovers after rejection", async () => {
@@ -269,7 +347,7 @@ describe("coach operations", () => {
       {
         home,
         context: context(),
-        runtime: { runWindowAfter },
+        runtime: operationRuntime(runWindowAfter),
         intervalsCredentials: intervalsCredentials(),
         historyNewestDate: () => "1998-07-18",
         applyRuntimeConfig: async () => {},
@@ -316,7 +394,7 @@ describe("coach operations", () => {
       {
         home,
         context: selectedContext,
-        runtime: { runWindowAfter },
+        runtime: operationRuntime(runWindowAfter),
         intervalsCredentials: credentials,
         historyNewestDate: () => "1998-07-18",
         applyRuntimeConfig: async () => {},
@@ -436,7 +514,7 @@ describe("coach operations", () => {
           String.fromCharCode(116, 101, 115, 116),
           "synthetic-athlete",
         ),
-        async runWindowAfter(work: (signal: AbortSignal) => Promise<void>) {
+        ...operationRuntime(async (work: (signal: AbortSignal) => Promise<void>) => {
           await work(new AbortController().signal);
           refresh();
           if (failurePoint === "window") throw new Error("synthetic window failure");
@@ -445,7 +523,7 @@ describe("coach operations", () => {
             legacySucceeded: true,
             counts: requestCounts(0, 0),
           };
-        },
+        }),
       };
       const operations = createCoachOperations(
         {
@@ -492,14 +570,14 @@ describe("coach operations", () => {
           String.fromCharCode(116, 101, 115, 116),
           "synthetic-athlete",
         ),
-        async runWindowAfter(work: (signal: AbortSignal) => Promise<void>) {
+        ...operationRuntime(async (work: (signal: AbortSignal) => Promise<void>) => {
           await work(new AbortController().signal);
           return {
             published: true,
             legacySucceeded: true,
             counts: requestCounts(0, 0),
           };
-        },
+        }),
       };
       const operations = createCoachOperations(
         {
@@ -535,8 +613,7 @@ describe("coach operations", () => {
     const operations = createCoachOperations({
       home,
       context: context(),
-      runtime: {
-        async runWindowAfter(work) {
+      runtime: operationRuntime(async (work) => {
           trace.push("sync-start");
           syncStarted.release();
           await releaseSync.promise;
@@ -547,8 +624,7 @@ describe("coach operations", () => {
             legacySucceeded: true,
             counts: requestCounts(0, 0),
           };
-        },
-      },
+      }),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
       applyRuntimeConfig: async () => {
@@ -580,8 +656,7 @@ describe("coach operations", () => {
     const operations = createCoachOperations({
       home,
       context: context(),
-      runtime: {
-        async runWindowAfter(work) {
+      runtime: operationRuntime(async (work) => {
           trace.push("sync-start");
           syncStarted.release();
           await releaseSync.promise;
@@ -592,8 +667,7 @@ describe("coach operations", () => {
             legacySucceeded: true,
             counts: requestCounts(0, 0),
           };
-        },
-      },
+      }),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
       applyRuntimeConfig: async () => {},
@@ -635,8 +709,7 @@ describe("coach operations", () => {
     const operations = createCoachOperations({
       home,
       context: context(),
-      runtime: {
-        async runWindowAfter(work) {
+      runtime: operationRuntime(async (work) => {
           trace.push("sync-start");
           syncStarted.release();
           await releaseSync.promise;
@@ -647,8 +720,7 @@ describe("coach operations", () => {
             legacySucceeded: true,
             counts: requestCounts(0, 0),
           };
-        },
-      },
+      }),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
       applyRuntimeConfig: async (request) => {
@@ -732,7 +804,7 @@ describe("coach operations", () => {
     const operations = createCoachOperations({
       home,
       context: context(),
-      runtime: { runWindowAfter: vi.fn() },
+      runtime: operationRuntime(),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
       applyRuntimeConfig: async (request) => {
@@ -802,8 +874,7 @@ describe("coach operations", () => {
     const operations = createCoachOperations({
       home,
       context: context(),
-      runtime: {
-        async runWindowAfter(work) {
+      runtime: operationRuntime(async (work) => {
           syncAttempt += 1;
           trace.push(`sync-${syncAttempt}-start`);
           if (syncAttempt === 1) {
@@ -817,8 +888,7 @@ describe("coach operations", () => {
             legacySucceeded: true,
             counts: requestCounts(0, 0),
           };
-        },
-      },
+      }),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
       applyRuntimeConfig: async (request) => {
@@ -883,7 +953,7 @@ describe("coach operations", () => {
     const operations = createCoachOperations({
       home,
       context: context(),
-      runtime: { runWindowAfter: vi.fn() },
+      runtime: operationRuntime(),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
       applyRuntimeConfig,
@@ -973,8 +1043,7 @@ describe("coach operations", () => {
           store,
           listener: {} as CoachStoreWriterContext["listener"],
         },
-        runtime: {
-          async runWindowAfter(work) {
+        runtime: operationRuntime(async (work) => {
             order.push("sync-start");
             await gate;
             await work(new AbortController().signal);
@@ -984,8 +1053,7 @@ describe("coach operations", () => {
               legacySucceeded: true,
               counts: requestCounts(0, 0),
             };
-          },
-        },
+        }),
         intervalsCredentials: intervalsCredentials(),
         historyNewestDate: () => "1998-07-18",
         applyRuntimeConfig: async () => {},

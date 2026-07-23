@@ -169,7 +169,7 @@ export type ImportFilesRpcParams = z.infer<typeof ImportFilesRpcParamsSchema>;
 
 export const ImportFilesRpcResultSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     files: z
       .object({
         total: z.number().int().nonnegative(),
@@ -183,6 +183,12 @@ export const ImportFilesRpcResultSchema = z
         sourceRecordsInserted: z.number().int().nonnegative(),
         sourceRecordsUpdated: z.number().int().nonnegative(),
         relinkedSourceRecords: z.number().int().nonnegative(),
+      })
+      .strict(),
+    publication: z
+      .object({
+        scope: z.literal("activities-and-streams"),
+        status: z.enum(["available", "retryable-failure"]),
       })
       .strict(),
   })

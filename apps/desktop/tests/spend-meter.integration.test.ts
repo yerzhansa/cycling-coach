@@ -154,7 +154,7 @@ function script(calls: ScriptRequest[], initial: "reached" | "complete") {
       if (request.method === "resetSession") return response({ memoryFlushed: true });
       if (request.method === "importFiles") {
         return response({
-          schemaVersion: 1,
+          schemaVersion: 2,
           files: { total: 1, imported: 1, quarantined: 0 },
           changes: {
             rawFilesInserted: 1,
@@ -162,6 +162,7 @@ function script(calls: ScriptRequest[], initial: "reached" | "complete") {
             sourceRecordsUpdated: 0,
             relinkedSourceRecords: 0,
           },
+          publication: { scope: "activities-and-streams", status: "available" },
         });
       }
       if (request.method === "saveIntake") return response({ schemaVersion: 1, saved: true });

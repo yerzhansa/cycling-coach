@@ -16,15 +16,20 @@ function result(
   imported: number,
   quarantined: number,
   rawFilesInserted = imported,
+  publicationStatus: ImportFilesRpcResult["publication"]["status"] = "available",
 ): ImportFilesRpcResult {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     files: { total: imported + quarantined, imported, quarantined },
     changes: {
       rawFilesInserted,
       sourceRecordsInserted: imported,
       sourceRecordsUpdated: 0,
       relinkedSourceRecords: 0,
+    },
+    publication: {
+      scope: "activities-and-streams",
+      status: publicationStatus,
     },
   };
 }
@@ -133,7 +138,7 @@ describe("ride import controller", () => {
       "succeeded",
     );
     expect(rideImportStatusCopy(imports.state())).toBe(
-      "Local library import: 2 ride files imported. 1 ride file quarantined.",
+      "Local library import: 2 ride files imported. 1 ride file quarantined. Coaching access to activities and streams is available.",
     );
     expect(imports.importedFileCount()).toBe(2);
 
@@ -141,7 +146,7 @@ describe("ride import controller", () => {
       "succeeded",
     );
     expect(rideImportStatusCopy(imports.state())).toBe(
-      "Local library import: 1 ride file imported. 0 ride files quarantined.",
+      "Local library import: 1 ride file imported. 0 ride files quarantined. Coaching access to activities and streams is available.",
     );
     expect(imports.importedFileCount()).toBe(3);
 
@@ -158,10 +163,13 @@ describe("ride import controller", () => {
       status: "failed",
       owner: "resident",
       progress: null,
-      result: { total: 3, imported: 0, quarantined: 3 },
+      result: result(0, 3),
     });
     expect(rideImportStatusCopy(imports.state())).toBe(
-      "Local library import failed. 0 ride files imported. 3 ride files quarantined.",
+      "Local library import failed. 0 ride files imported. 3 ride files quarantined. No new ride files are available for coaching.",
+    );
+    expect(rideImportStatusCopy(imports.state())).not.toContain(
+      "Coaching access to activities and streams is available.",
     );
     expect(imports.importedFileCount()).toBe(3);
 
@@ -182,6 +190,50 @@ describe("ride import controller", () => {
     expect(
       states.filter((state) => state.status === "failed").every((state) => state.progress === null),
     ).toBe(true);
+  });
+
+  it("keeps durable ingestion across an idempotent publication retry", async () => {
+    const bridge = transport();
+    bridge.importFiles
+      .mockResolvedValueOnce(result(1, 0, 1, "retryable-failure"))
+      .mockResolvedValueOnce(result(0, 0, 0, "available"));
+    const imports = createRideImportController(bridge);
+
+    await expect(imports.importPaths("resident", ["/synthetic/retry.fit"])).resolves.toBe(
+      "succeeded",
+    );
+    expect(imports.importedFileCount()).toBe(1);
+    expect(imports.state()).toMatchObject({
+      status: "succeeded",
+      result: {
+        files: { total: 1, imported: 1, quarantined: 0 },
+        publication: {
+          scope: "activities-and-streams",
+          status: "retryable-failure",
+        },
+      },
+    });
+    expect(rideImportStatusCopy(imports.state())).toBe(
+      "Local library import: 1 ride file imported. 0 ride files quarantined. Coaching access to activities and streams is temporarily unavailable; retry the import.",
+    );
+
+    await expect(imports.importPaths("resident", ["/synthetic/retry.fit"])).resolves.toBe(
+      "succeeded",
+    );
+    expect(imports.importedFileCount()).toBe(1);
+    expect(imports.state()).toMatchObject({
+      status: "succeeded",
+      result: {
+        files: { total: 0, imported: 0, quarantined: 0 },
+        publication: {
+          scope: "activities-and-streams",
+          status: "available",
+        },
+      },
+    });
+    expect(rideImportStatusCopy(imports.state())).toBe(
+      "Local library import: 0 ride files imported. 0 ride files quarantined. Coaching access to activities and streams is available.",
+    );
   });
 });
 
@@ -275,7 +327,7 @@ describe("resident ride import surface", () => {
     await vi.waitFor(() => expect(status.dataset.state).toBe("succeeded"));
     expect(status.hidden).toBe(false);
     expect(status.textContent).toBe(
-      "Local library import: 2 ride files imported. 1 ride file quarantined.",
+      "Local library import: 2 ride files imported. 1 ride file quarantined. Coaching access to activities and streams is available.",
     );
     expect(status.textContent).not.toMatch(
       /\b(?:sync(?:ed)?|training history updated|coach updated|coach-readable)\b/iu,
@@ -315,7 +367,7 @@ describe("resident ride import surface", () => {
     finish(result(1, 0));
     await expect(attempt).resolves.toBe("succeeded");
     expect(status.textContent).toBe(
-      "Local library import: 1 ride file imported. 0 ride files quarantined.",
+      "Local library import: 1 ride file imported. 0 ride files quarantined. Coaching access to activities and streams is available.",
     );
     mounted.dispose();
   });

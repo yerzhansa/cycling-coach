@@ -23,8 +23,9 @@ function toTypedError(error: ApiError): { error: string; status?: number; messag
   };
 }
 
-function readResult<T>(result: AthleteReadResult<T>): T | { error: string; message: string }
-  | { data: T; freshness: string } {
+function readResult<T>(
+  result: AthleteReadResult<T>,
+): T | { error: string; message: string } | { data: T; freshness: string } {
   if (!result.ok) return { error: result.error, message: result.message };
   if (result.freshness !== undefined) {
     return { data: result.value, freshness: formatStoreFreshness(result.freshness) };
@@ -44,6 +45,11 @@ const CREDENTIALS_REQUIRED = Object.freeze({
   error: "platform_credentials_required",
   message: "Calendar changes need platform credentials.",
 });
+
+const ACTIVITY_ID_SCHEMA = z.union([
+  z.number().int().positive().refine(Number.isSafeInteger),
+  z.string().regex(/^[0-9a-f]{64}$/),
+]);
 
 // intervals-icu-api's TypeScript types declare snake_case fields, but the runtime
 // runs `camelCaseKeys` over every parsed response. So the types lie: at runtime we
@@ -75,124 +81,175 @@ export function createPureCoreIntervalsTools(
   const selectedMutations = calendarMutations;
   if (!selectedReader && !selectedMutations) return {};
   return {
-    ...(selectedReader ? { intervals_fetch_athlete: tool({
-      description:
-        "Fetch athlete profile from intervals.icu (FTP, weight, max HR, sport settings, zones)",
-      inputSchema: zodSchema(z.object({})),
-      execute: async () => {
-        try { return readResult(await selectedReader.getAthlete()); }
-        catch (error) { return platformFailure(error); }
-      },
-    }) } : {}),
-
-    ...(selectedReader ? { intervals_fetch_wellness: tool({
-      description:
-        "Fetch wellness data from intervals.icu (fitness, fatigue, weight, HRV, resting HR, sleep). Form = fitness - fatigue.",
-      inputSchema: zodSchema(
-        z.object({
-          oldest: z.string().describe("Start date (YYYY-MM-DD)"),
-          newest: z.string().optional().describe("End date (YYYY-MM-DD)"),
-        }),
-      ),
-      execute: async (input: { oldest: string; newest?: string }) => {
-        try { return readResult(await selectedReader.listWellness({
-          start: input.oldest,
-          ...(input.newest === undefined ? {} : { end: input.newest }),
-        })); }
-        catch (error) { return platformFailure(error); }
-      },
-    }) } : {}),
-
-    ...(selectedReader ? { intervals_fetch_activity: tool({
-      description:
-        "Fetch a single activity from intervals.icu by ID. Returns the full Activity " +
-        "object including per-rep `icu_intervals` (lap/interval splits with avg power, " +
-        "HR, time), `analyzed` flag (null while analysis still in progress), " +
-        "`paired_event_id` (link to planned workout), zone times, and the headline " +
-        "metrics from the list view. Use this for Tier B+ workout reviews; for " +
-        "summary-only Tier A, use `intervals_fetch_activities`.",
-      inputSchema: zodSchema(
-        z.object({
-          activityId: z.number().int().describe("Activity ID from intervals_fetch_activities"),
-        }),
-      ),
-      execute: async (input: { activityId: number }) => {
-        try { return readResult(await selectedReader.getActivity({ id: String(input.activityId) })); }
-        catch (error) { return platformFailure(error); }
-      },
-    }) } : {}),
-
-    ...(selectedReader ? { intervals_fetch_streams: tool({
-      description:
-        "Fetch raw time-series streams for an activity (watts, heartrate, cadence, " +
-        "time, altitude, distance, lat, lng). Returns a downsampled object: each " +
-        "requested type is binned to 10-second windows (one mean value per bin) with " +
-        "a per-channel min/max/mean stats header carrying the true peaks and averages " +
-        "over the full series. EXPENSIVE: a 3-hour ride is ~10,800 samples per " +
-        "type even before binning. ONLY call for Tier C deep reviews (races + explicit 'deep' override). " +
-        "For Tier A/B reviews, use `intervals_fetch_activities` and " +
-        "`intervals_fetch_activity` instead. Default types are watts, heartrate, " +
-        "cadence, time, altitude.",
-      inputSchema: zodSchema(
-        z.object({
-          activityId: z.number().int().describe("Activity ID"),
-          types: z
-            .array(z.string())
-            .optional()
-            .describe(
-              "Stream types to fetch. Defaults to ['watts','heartrate','cadence','time','altitude']. " +
-                "Other valid types: distance, lat, lng, temp, smooth_grade.",
-            ),
-        }),
-      ),
-      execute: async (input: { activityId: number; types?: string[] }) => {
-        // Treat empty array the same as omitted — defensively handle the LLM
-        // calling with `types: []` "to play it safe" instead of dropping the field.
-        const types = input.types?.length
-          ? input.types
-          : ["watts", "heartrate", "cadence", "time", "altitude"];
-        try {
-          const result = await selectedReader.getStreams({ id: String(input.activityId), keys: types });
-          if (!result.ok) return readResult(result);
-          const value = downsampleStreams(result.value as Record<string, unknown> | unknown[]);
-          return result.freshness === undefined ? value
-            : { data: value, freshness: formatStoreFreshness(result.freshness) };
-        } catch (error) { return platformFailure(error); }
-      },
-    }) } : {}),
-
-    ...(selectedMutations ? { intervals_delete_workout: tool({
-      description:
-        "Delete a scheduled workout from the intervals.icu calendar by event ID. " +
-        "ALWAYS call intervals_list_events first, show the athlete the list, and " +
-        "confirm which workout to delete before calling this. Past workouts (before " +
-        "today) are protected — the tool refuses without calling the server.",
-      inputSchema: zodSchema(
-        z.object({
-          eventId: z.number().int().describe("Event ID from intervals_list_events"),
-        }),
-      ),
-      execute: async (input: { eventId: number }) => {
-        try {
-          const event = await selectedMutations.readEventForDelete({ eventId: input.eventId });
-          const today = todayInTZ(tz);
-          const eventDate = event.startDateLocal.slice(0, 10);
-          if (eventDate < today) {
-            return {
-              error: "past_workout_protected",
-              details: `Cannot delete workout dated ${eventDate} — it's before today (${today}).`,
-            };
-          }
-          await selectedMutations.deleteEvent({ eventId: input.eventId });
-          return { deleted: true };
-        } catch (error) {
-          if ((error as { name?: unknown })?.name === "PlatformCredentialsRequiredError") {
-            return CREDENTIALS_REQUIRED;
-          }
-          return platformFailure(error);
+    ...(selectedReader
+      ? {
+          intervals_fetch_athlete: tool({
+            description:
+              "Fetch athlete profile from intervals.icu (FTP, weight, max HR, sport settings, zones)",
+            inputSchema: zodSchema(z.object({})),
+            execute: async () => {
+              try {
+                return readResult(await selectedReader.getAthlete());
+              } catch (error) {
+                return platformFailure(error);
+              }
+            },
+          }),
         }
-      },
-    }) } : {}),
+      : {}),
+
+    ...(selectedReader
+      ? {
+          intervals_fetch_wellness: tool({
+            description:
+              "Fetch wellness data from intervals.icu (fitness, fatigue, weight, HRV, resting HR, sleep). Form = fitness - fatigue.",
+            inputSchema: zodSchema(
+              z.object({
+                oldest: z.string().describe("Start date (YYYY-MM-DD)"),
+                newest: z.string().optional().describe("End date (YYYY-MM-DD)"),
+              }),
+            ),
+            execute: async (input: { oldest: string; newest?: string }) => {
+              try {
+                return readResult(
+                  await selectedReader.listWellness({
+                    start: input.oldest,
+                    ...(input.newest === undefined ? {} : { end: input.newest }),
+                  }),
+                );
+              } catch (error) {
+                return platformFailure(error);
+              }
+            },
+          }),
+        }
+      : {}),
+
+    ...(selectedReader
+      ? {
+          intervals_fetch_activity: tool({
+            description:
+              "Fetch one recorded activity by legacy or canonical ID. Store-backed results " +
+              "return a bounded source-neutral summary plus laps; other readers may include " +
+              "additional source fields. Use only fields actually returned. " +
+              "Use this for Tier B+ workout reviews; for " +
+              "summary-only Tier A, use `intervals_fetch_activities`.",
+            inputSchema: zodSchema(
+              z.object({
+                activityId: ACTIVITY_ID_SCHEMA.describe(
+                  "Positive integer legacy ID or lowercase 64-hex canonical ID from intervals_fetch_activities",
+                ),
+              }),
+            ),
+            execute: async (input: { activityId: number | string }) => {
+              try {
+                return readResult(
+                  await selectedReader.getActivity({ id: String(input.activityId) }),
+                );
+              } catch (error) {
+                return platformFailure(error);
+              }
+            },
+          }),
+        }
+      : {}),
+
+    ...(selectedReader
+      ? {
+          intervals_fetch_streams: tool({
+            description:
+              "Fetch time-series channels for an activity by legacy or canonical ID. " +
+              "Store-backed reads accept up to 16 unique public channels; platform-backed " +
+              "reads also accept provider-specific channels such as smooth_grade. " +
+              "Returns a downsampled object: each requested type is independently grouped into " +
+              "consecutive ten-sample averages, with " +
+              "a per-channel min/max/mean stats header carrying the true peaks and averages " +
+              "over the full series. Bins are not timestamp-aligned across channels; do not use " +
+              "them for pacing, duration-based efforts, decoupling, or HR-recovery claims. " +
+              "EXPENSIVE: a 3-hour ride may contain ~10,800 samples per type even before " +
+              "binning. ONLY call for Tier C deep reviews when the athlete explicitly requests deep analysis. " +
+              "For Tier A/B reviews, use `intervals_fetch_activities` and " +
+              "`intervals_fetch_activity` instead. Default types are watts, heartrate, " +
+              "cadence, time, altitude.",
+            inputSchema: zodSchema(
+              z.object({
+                activityId: ACTIVITY_ID_SCHEMA.describe(
+                  "Positive integer legacy ID or lowercase 64-hex canonical activity ID",
+                ),
+                types: z
+                  .array(z.string())
+                  .optional()
+                  .describe(
+                    "Defaults to ['watts','heartrate','cadence','time','altitude']. " +
+                      "Store-backed reads accept up to 16 unique public channels and aliases; " +
+                      "platform-backed reads may accept additional provider-specific channels.",
+                  ),
+              }),
+            ),
+            execute: async (input: { activityId: number | string; types?: string[] }) => {
+              // Treat empty array the same as omitted — defensively handle the LLM
+              // calling with `types: []` "to play it safe" instead of dropping the field.
+              const types = input.types?.length
+                ? input.types
+                : ["watts", "heartrate", "cadence", "time", "altitude"];
+              try {
+                const result = await selectedReader.getStreams({
+                  id: String(input.activityId),
+                  keys: types,
+                });
+                if (!result.ok) return readResult(result);
+                const value = downsampleStreams(
+                  result.value as Record<string, unknown> | unknown[],
+                );
+                return result.freshness === undefined
+                  ? value
+                  : { data: value, freshness: formatStoreFreshness(result.freshness) };
+              } catch (error) {
+                return platformFailure(error);
+              }
+            },
+          }),
+        }
+      : {}),
+
+    ...(selectedMutations
+      ? {
+          intervals_delete_workout: tool({
+            description:
+              "Delete a scheduled workout from the intervals.icu calendar by event ID. " +
+              "ALWAYS call intervals_list_events first, show the athlete the list, and " +
+              "confirm which workout to delete before calling this. Past workouts (before " +
+              "today) are protected — the tool refuses without calling the server.",
+            inputSchema: zodSchema(
+              z.object({
+                eventId: z.number().int().describe("Event ID from intervals_list_events"),
+              }),
+            ),
+            execute: async (input: { eventId: number }) => {
+              try {
+                const event = await selectedMutations.readEventForDelete({
+                  eventId: input.eventId,
+                });
+                const today = todayInTZ(tz);
+                const eventDate = event.startDateLocal.slice(0, 10);
+                if (eventDate < today) {
+                  return {
+                    error: "past_workout_protected",
+                    details: `Cannot delete workout dated ${eventDate} — it's before today (${today}).`,
+                  };
+                }
+                await selectedMutations.deleteEvent({ eventId: input.eventId });
+                return { deleted: true };
+              } catch (error) {
+                if ((error as { name?: unknown })?.name === "PlatformCredentialsRequiredError") {
+                  return CREDENTIALS_REQUIRED;
+                }
+                return platformFailure(error);
+              }
+            },
+          }),
+        }
+      : {}),
   };
 }
 
@@ -216,7 +273,10 @@ export function createCoreToolsWithSportConfig(
   return {
     intervals_fetch_activities: tool({
       description:
-        "Fetch recent activities from intervals.icu. Returns rides with load, intensity, duration, distance.",
+        "Fetch up to 200 recorded activity summaries for a date range. Store-backed " +
+        "results use positive integer or lowercase 64-hex IDs and a bounded source-neutral " +
+        "shape; other readers may include additional source fields. If more than 200 " +
+        "store-backed activities match, narrow the date range.",
       inputSchema: zodSchema(
         z.object({
           oldest: z.string().describe("Oldest date (YYYY-MM-DD)"),
@@ -224,11 +284,16 @@ export function createCoreToolsWithSportConfig(
         }),
       ),
       execute: async (input: { oldest: string; newest?: string }) => {
-        try { return readResult(await selectedReader.listActivities({
-          start: input.oldest,
-          ...(input.newest === undefined ? {} : { end: input.newest }),
-        })); }
-        catch (error) { return platformFailure(error); }
+        try {
+          return readResult(
+            await selectedReader.listActivities({
+              start: input.oldest,
+              ...(input.newest === undefined ? {} : { end: input.newest }),
+            }),
+          );
+        } catch (error) {
+          return platformFailure(error);
+        }
       },
     }),
 
@@ -245,8 +310,10 @@ export function createCoreToolsWithSportConfig(
       ),
       execute: async (input: { oldest: string; newest?: string }) => {
         try {
-          const result = await selectedReader.listCalendar({ start: input.oldest,
-            ...(input.newest === undefined ? {} : { end: input.newest }) });
+          const result = await selectedReader.listCalendar({
+            start: input.oldest,
+            ...(input.newest === undefined ? {} : { end: input.newest }),
+          });
           if (!result.ok) return readResult(result);
           const value = (result.value as IntervalsEventRuntime[]).map((e) => ({
             id: e.id,
@@ -255,9 +322,12 @@ export function createCoreToolsWithSportConfig(
             movingTime: e.movingTime,
             icuTrainingLoad: e.icuTrainingLoad,
           }));
-          return result.freshness === undefined ? value
+          return result.freshness === undefined
+            ? value
             : { data: value, freshness: formatStoreFreshness(result.freshness) };
-        } catch (error) { return platformFailure(error); }
+        } catch (error) {
+          return platformFailure(error);
+        }
       },
     }),
   };

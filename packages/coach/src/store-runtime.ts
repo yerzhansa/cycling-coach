@@ -2,14 +2,18 @@ import { performance } from "node:perf_hooks";
 import type { Config, AthleteDataReader, ReferenceRuntime } from "@enduragent/core";
 import { createStoreAthleteDataReader, createSubsystemLogger } from "@enduragent/core";
 import {
+  createCanonicalActivityReader,
   createPhysicalRequestLedger,
+  type CanonicalActivityReader,
   type PhysicalRequestCounts,
   type PhysicalRequestLedger,
+  type SqlReadStore,
   type SyncBudget,
 } from "@enduragent/kernel/store";
 import type { ReferenceCaptureManifest } from "@enduragent/kernel/reference/capture";
 import type { ProducedLocalBundle } from "@enduragent/kernel/reference/local-bundle";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
+import { openReadonlySqliteStorage } from "@enduragent/kernel-node/sqlite";
 import { join } from "node:path";
 import { runReferenceCapture } from "./capture.js";
 import { createLocalBundleProducer } from "./local-bundle-producer.js";
@@ -34,11 +38,17 @@ export interface StoreWindowResult {
   readonly legacySucceeded: boolean;
 }
 
+export interface StoreWriteResult<T> {
+  readonly value: T;
+  readonly activityReadAvailable: boolean;
+}
+
 export interface StoreRuntimeDependencies {
   readonly capture?: typeof runReferenceCapture;
   readonly produce?: (manifest: ReferenceCaptureManifest) => Promise<ProducedLocalBundle>;
   readonly now?: () => Date;
   readonly monotonicNow?: () => number;
+  readonly openReadonlyStore?: (path: string) => SqlReadStore;
   readonly schedulerDependencies?: Partial<WallClockSchedulerDependencies>;
 }
 
@@ -63,6 +73,10 @@ function sameHome(left: AthleteHome, right: AthleteHome): boolean {
 
 export class StoreRuntime {
   readonly athleteData: AthleteDataReader;
+  private readonly openReadonlyStore: (path: string) => SqlReadStore;
+  private readonly storePath: string;
+  private readonlyStore: SqlReadStore | undefined;
+  private readonly canonicalActivities: CanonicalActivityReader;
   private readonly dependencies: Required<
     Pick<StoreRuntimeDependencies, "capture" | "produce" | "now" | "monotonicNow">
   >;
@@ -72,6 +86,11 @@ export class StoreRuntime {
   private activeController: AbortController | undefined;
   private activeBeforeWindowController: AbortController | undefined;
   private activeWindow: Promise<StoreWindowResult> | undefined;
+  private admissionActive = false;
+  private readonly admissionQueue: Array<() => void> = [];
+  private readonly admissionDrainWaiters = new Set<() => void>();
+  private activeAdmissionController: AbortController | undefined;
+  private closePromise: Promise<void> | undefined;
   private closed = false;
 
   constructor(private readonly options: StoreRuntimeOptions) {
@@ -97,6 +116,16 @@ export class StoreRuntime {
       now,
       monotonicNow: dependencies.monotonicNow ?? (() => performance.now()),
     };
+    this.openReadonlyStore = dependencies.openReadonlyStore ?? openReadonlySqliteStorage;
+    this.storePath = join(options.home.storeDir, "store.db");
+    this.canonicalActivities = {
+      listActivities: (input) => this.canonicalActivityReader().listActivities(input),
+      getActivity: (input) => this.canonicalActivityReader().getActivity(input),
+      getStreams: (input) => this.canonicalActivityReader().getStreams(input),
+    };
+    try {
+      this.canonicalActivityReader();
+    } catch {}
     this.scheduler = createWallClockScheduler({
       cadenceMs: STORE_REFRESH_INTERVAL_MS,
       run: async () => {
@@ -113,6 +142,7 @@ export class StoreRuntime {
     });
     this.athleteData = createStoreAthleteDataReader({
       snapshot: () => this.snapshotValue,
+      canonicalActivities: this.canonicalActivities,
       clockNow: () => this.dependencies.now().getTime(),
     });
   }
@@ -134,13 +164,8 @@ export class StoreRuntime {
   runWindow(): Promise<StoreWindowResult> {
     if (this.closed) return Promise.reject(new Error("Store runtime is closed."));
     if (this.activeWindow !== undefined) return this.activeWindow;
-    const task = this.runWindowInternal();
-    this.activeWindow = task;
-    void task
-      .finally(() => {
-        if (this.activeWindow === task) this.activeWindow = undefined;
-      })
-      .catch(() => {});
+    const task = this.runExclusive(() => this.runWindowInternal());
+    this.installActiveWindow(task);
     return task;
   }
 
@@ -148,40 +173,87 @@ export class StoreRuntime {
     if (typeof work !== "function")
       return Promise.reject(new TypeError("Window work must be a function."));
     if (this.closed) return Promise.reject(new Error("Store runtime is closed."));
-    if (this.activeWindow !== undefined) {
-      const active = this.activeWindow;
-      const task = active.then(
-        () => this.runBeforeWindow(work),
-        () => this.runBeforeWindow(work),
-      );
-      this.installActiveWindow(task);
-      return task;
-    }
-    const task = this.runBeforeWindow(work);
+    const task = this.runExclusive(async (signal) => {
+      this.activeBeforeWindowController = this.activeAdmissionController;
+      try {
+        await work(signal);
+        signal.throwIfAborted();
+        return await this.runWindowInternal();
+      } finally {
+        this.activeBeforeWindowController = undefined;
+      }
+    });
     this.installActiveWindow(task);
     return task;
   }
 
-  private runBeforeWindow(
-    work: (signal: AbortSignal) => Promise<void>,
-  ): Promise<StoreWindowResult> {
+  runExclusive<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    if (typeof work !== "function") {
+      return Promise.reject(new TypeError("Exclusive work must be a function."));
+    }
     if (this.closed) return Promise.reject(new Error("Store runtime is closed."));
-    const controller = new AbortController();
-    const task = Promise.resolve()
-      .then(() => work(controller.signal))
-      .then(() => {
-        if (controller.signal.aborted) throw controller.signal.reason;
-        return this.runWindowInternal();
-      });
-    this.activeBeforeWindowController = controller;
-    void task
-      .finally(() => {
-        if (this.activeBeforeWindowController === controller) {
-          this.activeBeforeWindowController = undefined;
+    return new Promise<T>((resolve, reject) => {
+      const run = (): void => {
+        if (this.closed) {
+          reject(new Error("Store runtime is closed."));
+          this.advanceAdmission();
+          return;
         }
-      })
-      .catch(() => {});
-    return task;
+        this.admissionActive = true;
+        const controller = new AbortController();
+        this.activeAdmissionController = controller;
+        let task: Promise<T>;
+        try {
+          task = Promise.resolve(work(controller.signal));
+        } catch (error) {
+          task = Promise.reject(error);
+        }
+        void task.then(resolve, reject).finally(() => {
+          if (this.activeAdmissionController === controller) {
+            this.activeAdmissionController = undefined;
+          }
+          this.advanceAdmission();
+        });
+      };
+      if (this.admissionActive) this.admissionQueue.push(run);
+      else run();
+    });
+  }
+
+  private advanceAdmission(): void {
+    this.admissionActive = false;
+    const next = this.admissionQueue.shift();
+    if (next !== undefined) {
+      next();
+      return;
+    }
+    for (const resolve of this.admissionDrainWaiters) resolve();
+    this.admissionDrainWaiters.clear();
+  }
+
+  private drainAdmissions(): Promise<void> {
+    if (!this.admissionActive && this.admissionQueue.length === 0) return Promise.resolve();
+    return new Promise((resolve) => this.admissionDrainWaiters.add(resolve));
+  }
+
+  private canonicalActivityReader(): CanonicalActivityReader {
+    if (this.readonlyStore === undefined) {
+      this.readonlyStore = this.openReadonlyStore(this.storePath);
+    }
+    return createCanonicalActivityReader(this.readonlyStore);
+  }
+
+  runActivityWrite<T>(work: (signal: AbortSignal) => Promise<T>): Promise<StoreWriteResult<T>> {
+    return this.runExclusive(async (signal) => {
+      const value = await work(signal);
+      let activityReadAvailable = false;
+      try {
+        const date = this.dependencies.now().toISOString().slice(0, 10);
+        await this.canonicalActivities.listActivities({ start: date, end: date, limit: 1 });
+        activityReadAvailable = true;
+      } catch {}
+      return Object.freeze({ value, activityReadAvailable });
+    });
   }
 
   private installActiveWindow(task: Promise<StoreWindowResult>): void {
@@ -253,15 +325,32 @@ export class StoreRuntime {
     }
   }
 
-  async close(): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
-    this.activeBeforeWindowController?.abort(new Error("Store runtime closed."));
-    this.activeController?.abort(new Error("Store runtime closed."));
-    await this.scheduler.close();
-    try {
-      await this.activeWindow;
-    } catch {}
+  close(): Promise<void> {
+    this.closePromise ??= (async () => {
+      this.closed = true;
+      const reason = new Error("Store runtime closed.");
+      this.activeAdmissionController?.abort(reason);
+      this.activeBeforeWindowController?.abort(reason);
+      this.activeController?.abort(reason);
+      let failure: unknown;
+      try {
+        await this.scheduler.close();
+      } catch (error) {
+        failure = error;
+      }
+      try {
+        await this.drainAdmissions();
+      } catch (error) {
+        failure ??= error;
+      }
+      try {
+        await this.readonlyStore?.close();
+      } catch (error) {
+        failure ??= error;
+      }
+      if (failure !== undefined) throw failure;
+    })();
+    return this.closePromise;
   }
 }
 

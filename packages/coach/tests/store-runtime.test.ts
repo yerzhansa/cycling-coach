@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { Config, ReferenceRuntime } from "@enduragent/core";
 import type { ReferenceCaptureManifest } from "@enduragent/kernel/reference/capture";
 import type { ProducedLocalBundle } from "@enduragent/kernel/reference/local-bundle";
+import type { SqlReadStore } from "@enduragent/kernel/store";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createStoreRuntime,
@@ -17,10 +18,19 @@ afterEach(async () => {
 });
 
 const config: Config = {
-  dataSource: "store", llm: { provider: "openai-codex", model: "gpt-5.4", apiKey: "" },
-  intervals: { apiKey: "synthetic", athleteId: "synthetic-athlete" }, telegram: { botToken: "" },
-  session: { historyTokenBudgetRatio: 0.3, idleMinutes: 0, dailyResetHour: 4,
-    resetArchiveRetentionDays: 0, timezone: "UTC" }, contextWindowTokens: 1000, dataDir: "unused",
+  dataSource: "store",
+  llm: { provider: "openai-codex", model: "gpt-5.4", apiKey: "" },
+  intervals: { apiKey: "synthetic", athleteId: "synthetic-athlete" },
+  telegram: { botToken: "" },
+  session: {
+    historyTokenBudgetRatio: 0.3,
+    idleMinutes: 0,
+    dailyResetHour: 4,
+    resetArchiveRetentionDays: 0,
+    timezone: "UTC",
+  },
+  contextWindowTokens: 1000,
+  dataDir: "unused",
 };
 const manifest = {
   capture_id: "12345678-1234-4123-8123-123456789abc",
@@ -32,7 +42,19 @@ const produced: ProducedLocalBundle = {
   bundle: { activities: [], wellness: [], ftpHistory: [], athlete: { sportSettings: [] } },
 };
 
-async function makeRuntime(runtimeConfig: Config = config, readConfig?: () => Config) {
+function emptyReadonlyStore(): SqlReadStore {
+  return {
+    get: vi.fn(async () => undefined),
+    all: vi.fn(async () => []),
+    close: vi.fn(async () => {}),
+  };
+}
+
+async function makeRuntime(
+  runtimeConfig: Config = config,
+  readConfig?: () => Config,
+  readonlyStore: SqlReadStore = emptyReadonlyStore(),
+) {
   const root = await mkdtemp(join(await realpath(tmpdir()), "store-runtime-"));
   roots.push(root);
   let runtime!: StoreRuntime;
@@ -67,9 +89,10 @@ async function makeRuntime(runtimeConfig: Config = config, readConfig?: () => Co
       produce,
       now: () => new Date("1998-07-18T12:00:00.000Z"),
       monotonicNow: () => 1,
+      openReadonlyStore: () => readonlyStore,
     },
   });
-  return { runtime, capture, produce, reference };
+  return { runtime, capture, produce, reference, readonlyStore };
 }
 
 describe("StoreRuntime", () => {
@@ -167,6 +190,7 @@ describe("StoreRuntime", () => {
         produce: vi.fn(async () => produced),
         now: () => new Date("1998-07-18T12:00:00.000Z"),
         monotonicNow: () => 1,
+        openReadonlyStore: () => emptyReadonlyStore(),
         schedulerDependencies: {
           nowEpochMs: () => new Date("1998-07-18T12:00:00.000Z").getTime(),
           setTimeout: vi.fn((callback: () => void) => {
@@ -236,6 +260,7 @@ describe("StoreRuntime", () => {
         produce: vi.fn(async () => produced),
         now: () => new Date("1998-07-18T12:00:00.000Z"),
         monotonicNow: () => 1,
+        openReadonlyStore: () => emptyReadonlyStore(),
         schedulerDependencies: {
           nowEpochMs: () => new Date("1998-07-18T12:00:00.000Z").getTime(),
           setTimeout: ((_: () => void, ms: number) => {
@@ -301,6 +326,60 @@ describe("StoreRuntime", () => {
     await expect(after).resolves.toMatchObject({ published: true });
     expect(capture).toHaveBeenCalledTimes(2);
     expect(reference.runScheduledOnce).toHaveBeenCalledTimes(2);
+    await runtime.close();
+  });
+
+  it("admits writes and refresh windows through one FIFO in both orders", async () => {
+    const { runtime, capture } = await makeRuntime();
+    let releaseWrite!: () => void;
+    const trace: string[] = [];
+    const write = runtime.runActivityWrite(async () => {
+      trace.push("write:start");
+      await new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      trace.push("write:end");
+      return "written";
+    });
+    const windowAfterWrite = runtime.runWindow();
+    expect(capture).not.toHaveBeenCalled();
+    releaseWrite();
+    await expect(write).resolves.toEqual({
+      value: "written",
+      activityReadAvailable: true,
+    });
+    await windowAfterWrite;
+    expect(capture).toHaveBeenCalledTimes(1);
+
+    let releaseWindow!: () => void;
+    capture.mockImplementationOnce(async () => {
+      trace.push("window:start");
+      await new Promise<void>((resolve) => {
+        releaseWindow = resolve;
+      });
+      trace.push("window:end");
+      return manifest;
+    });
+    const window = runtime.runWindow();
+    const writeAfterWindow = runtime.runActivityWrite(async () => {
+      trace.push("write:after-window");
+      return "second";
+    });
+    await Promise.resolve();
+    expect(trace).not.toContain("write:after-window");
+    releaseWindow();
+    await window;
+    await expect(writeAfterWindow).resolves.toMatchObject({
+      value: "second",
+      activityReadAvailable: true,
+    });
+    expect(trace).toEqual([
+      "write:start",
+      "write:end",
+      "window:start",
+      "window:end",
+      "write:after-window",
+    ]);
     await runtime.close();
   });
 
@@ -388,6 +467,7 @@ describe("StoreRuntime", () => {
         produce: vi.fn(async () => produced),
         now: () => new Date("1998-07-18T12:00:00.000Z"),
         monotonicNow: () => 1,
+        openReadonlyStore: () => emptyReadonlyStore(),
         schedulerDependencies: {
           nowEpochMs: () => new Date("1998-07-18T12:00:00.000Z").getTime(),
           setTimeout: vi.fn(() => handle) as unknown as typeof setTimeout,
@@ -403,5 +483,26 @@ describe("StoreRuntime", () => {
     await rejectedWindow;
     expect(runtime.currentSnapshot()).toBeUndefined();
     await expect(runtime.runWindow()).rejects.toThrow("Store runtime is closed.");
+  });
+
+  it("shares close, aborts active work, rejects queued work, and closes the reader once", async () => {
+    const readonlyStore = emptyReadonlyStore();
+    const { runtime } = await makeRuntime(config, undefined, readonlyStore);
+    const active = runtime.runExclusive(
+      (signal) =>
+        new Promise<void>((_, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
+    );
+    const queued = runtime.runExclusive(async () => "queued");
+    const activeRejection = expect(active).rejects.toThrow("Store runtime closed.");
+    const queuedRejection = expect(queued).rejects.toThrow("Store runtime is closed.");
+    const first = runtime.close();
+    const second = runtime.close();
+    expect(first).toBe(second);
+    await expect(first).resolves.toBeUndefined();
+    await activeRejection;
+    await queuedRejection;
+    expect(readonlyStore.close).toHaveBeenCalledTimes(1);
   });
 });

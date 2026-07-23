@@ -1,5 +1,6 @@
 import type { ApiError, IntervalsClient } from "intervals-icu-api";
 import type { ProducedLocalBundle } from "@enduragent/kernel/reference/local-bundle";
+import type { CanonicalActivityReader } from "@enduragent/kernel/store";
 import type {
   AthleteDataReaderPort as AthleteDataReader,
   AthleteReadResult,
@@ -104,6 +105,37 @@ const INVALID_DATES = Object.freeze({
   message: "Dates must be real YYYY-MM-DD values with start on or before end.",
 });
 
+const CANONICAL_READ_UNAVAILABLE = Object.freeze({
+  ok: false as const,
+  error: "store_read_unavailable" as const,
+  message: "Canonical activity data is temporarily unavailable.",
+});
+
+const INVALID_ACTIVITY_READ = Object.freeze({
+  ok: false as const,
+  error: "invalid_input" as const,
+  message: "Activity read input is invalid.",
+});
+
+const ACTIVITY_RANGE_TOO_WIDE = Object.freeze({
+  ok: false as const,
+  error: "invalid_input" as const,
+  message: "More than 200 activities match this date range. Narrow the date range and try again.",
+});
+
+const STREAM_ALIASES = Object.freeze({
+  watts: "power",
+  heartrate: "heart_rate",
+  temp: "temperature",
+} as const);
+
+const PUBLIC_STREAM_KEYS = new Set([
+  "time", "lat", "lng", "distance", "altitude", "speed", "heart_rate", "cadence",
+  "fractional_cadence", "power", "temperature", "stance_time", "stance_time_balance",
+  "vertical_oscillation", "vertical_ratio", "step_length", "left_right_balance",
+  "respiration_rate",
+]);
+
 export function isRealCivilDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const [y, m, d] = value.split("-").map((part) => Number.parseInt(part, 10));
@@ -130,6 +162,7 @@ export function formatStoreFreshness(freshness: StoredDataFreshness): string {
 
 export function createStoreAthleteDataReader(input: {
   snapshot: () => ProducedLocalBundle | undefined;
+  canonicalActivities?: CanonicalActivityReader;
   clockNow?: () => number;
 }): AthleteDataReader {
   const clockNow = input.clockNow ?? Date.now;
@@ -155,6 +188,14 @@ export function createStoreAthleteDataReader(input: {
   const invalidExplicitRange = (candidate: { start: string; end?: string }): boolean =>
     !isRealCivilDate(candidate.start)
     || (candidate.end !== undefined && (!isRealCivilDate(candidate.end) || candidate.start > candidate.end));
+  const canonicalFailure = (error: unknown): AthleteReadResult<never> => {
+    const candidate = error as { name?: unknown; code?: unknown };
+    if (candidate?.name === "CanonicalActivityReadError" && candidate.code === "invalid_input") {
+      return INVALID_ACTIVITY_READ;
+    }
+    return CANONICAL_READ_UNAVAILABLE;
+  };
+  const canonical = input.canonicalActivities;
 
   return Object.freeze({
     async getAthlete() {
@@ -177,33 +218,55 @@ export function createStoreAthleteDataReader(input: {
     },
     async listActivities(candidate: { start: string; end?: string }) {
       if (invalidExplicitRange(candidate)) return INVALID_DATES;
-      const selected = current();
-      if (!("snapshot" in selected)) return selected;
-      const dates = range(selected.snapshot, candidate);
-      if (dates === undefined) return INVALID_DATES;
-      return { ok: true as const, value: selected.snapshot.bundle.activities.filter((row) => {
-        const date = row.start_date_local.slice(0, 10);
-        return date >= dates.start && date <= dates.end;
-      }), freshness: selected.freshness };
+      if (canonical === undefined) return CANONICAL_READ_UNAVAILABLE;
+      const end = candidate.end ?? new Date(clockNow()).toISOString().slice(0, 10);
+      if (!isRealCivilDate(end) || candidate.start > end) return INVALID_DATES;
+      try {
+        const page = await canonical.listActivities({ start: candidate.start, end, limit: 200 });
+        return page.nextCursor === null
+          ? { ok: true as const, value: [...page.activities] }
+          : ACTIVITY_RANGE_TOO_WIDE;
+      } catch (error) {
+        return canonicalFailure(error);
+      }
     },
     async getActivity(candidate: { id: string }) {
-      const selected = current();
-      if (!("snapshot" in selected)) return selected;
-      const value = selected.snapshot.bundle.activities.find((row) => String(row.id) === candidate.id);
-      return value === undefined
-        ? { ok: false as const, error: "not_found" as const, message: "Activity was not found in the local training store." }
-        : { ok: true as const, value, freshness: selected.freshness };
+      if (canonical === undefined) return CANONICAL_READ_UNAVAILABLE;
+      try {
+        const value = await canonical.getActivity({ id: candidate.id });
+        return value === undefined
+          ? { ok: false as const, error: "not_found" as const, message: "Activity was not found in the local training store." }
+          : { ok: true as const, value };
+      } catch (error) {
+        return canonicalFailure(error);
+      }
     },
     async getStreams(candidate: { id: string; keys: readonly string[] }) {
-      const selected = current();
-      if (!("snapshot" in selected)) return selected;
-      const streams = selected.snapshot.bundle.streams?.[candidate.id];
-      if (streams === undefined) {
-        return { ok: false as const, error: "not_found" as const, message: "Activity streams were not found in the local training store." };
+      if (canonical === undefined) return CANONICAL_READ_UNAVAILABLE;
+      if (candidate.keys.length < 1 || candidate.keys.length > 16) return INVALID_ACTIVITY_READ;
+      const aliases = new Map<string, string>();
+      const channels: string[] = [];
+      for (const key of candidate.keys) {
+        if (aliases.has(key) || key === "smooth_grade") return INVALID_ACTIVITY_READ;
+        const channel = STREAM_ALIASES[key as keyof typeof STREAM_ALIASES] ?? key;
+        if (!PUBLIC_STREAM_KEYS.has(channel) || channels.includes(channel)) return INVALID_ACTIVITY_READ;
+        aliases.set(key, channel);
+        channels.push(channel);
       }
-      const requested: Record<string, unknown> = {};
-      for (const key of candidate.keys) if (Object.hasOwn(streams, key)) requested[key] = streams[key];
-      return { ok: true as const, value: requested, freshness: selected.freshness };
+      try {
+        const value = await canonical.getStreams({ id: candidate.id, channels });
+        if (value === undefined) {
+          return { ok: false as const, error: "not_found" as const, message: "Activity streams were not found in the local training store." };
+        }
+        const requested: Record<string, readonly (number | null)[]> = {};
+        for (const [alias, channel] of aliases) {
+          const stream = value.channels[channel];
+          if (stream !== undefined) requested[alias] = stream;
+        }
+        return { ok: true as const, value: requested };
+      } catch (error) {
+        return canonicalFailure(error);
+      }
     },
     async listCalendar() {
       return { ok: false as const, error: "store_read_unavailable" as const,

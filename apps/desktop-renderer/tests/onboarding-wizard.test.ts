@@ -67,7 +67,7 @@ describe("desktop onboarding wizard", () => {
             },
           });
           return {
-            schemaVersion: 1,
+            schemaVersion: 2,
             files: { total: 1, imported: 1, quarantined: 0 },
             changes: {
               rawFilesInserted: 1,
@@ -75,6 +75,7 @@ describe("desktop onboarding wizard", () => {
               sourceRecordsUpdated: 0,
               relinkedSourceRecords: 0,
             },
+            publication: { scope: "activities-and-streams", status: "available" },
           };
         }
         return { schemaVersion: 1, saved: true };
@@ -184,7 +185,7 @@ describe("desktop onboarding wizard", () => {
     const client = {
       handshake: {},
       call: vi.fn(async () => ({
-        schemaVersion: 1,
+        schemaVersion: 2,
         files: { total: 1, imported: 1, quarantined: 0 },
         changes: {
           rawFilesInserted: 1,
@@ -192,6 +193,7 @@ describe("desktop onboarding wizard", () => {
           sourceRecordsUpdated: 0,
           relinkedSourceRecords: 0,
         },
+        publication: { scope: "activities-and-streams", status: "available" },
       })),
       close: vi.fn(),
     };

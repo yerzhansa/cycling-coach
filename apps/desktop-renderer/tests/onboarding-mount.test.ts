@@ -150,7 +150,7 @@ function bridge(login: () => Promise<ChatGptLoginResult>): OnboardingBridge & {
   }));
   const chatGptLogin = vi.fn<OnboardingBridge["chatGptLogin"]>(login);
   const importFiles = vi.fn<OnboardingBridge["importFiles"]>(async () => ({
-    schemaVersion: 1,
+    schemaVersion: 2,
     files: { total: 0, imported: 0, quarantined: 0 },
     changes: {
       rawFilesInserted: 0,
@@ -158,6 +158,7 @@ function bridge(login: () => Promise<ChatGptLoginResult>): OnboardingBridge & {
       sourceRecordsUpdated: 0,
       relinkedSourceRecords: 0,
     },
+    publication: { scope: "activities-and-streams", status: "available" },
   }));
   const onDroppedImportFiles = vi.fn<OnboardingBridge["onDroppedImportFiles"]>(() => () => {});
   return {
@@ -1084,7 +1085,7 @@ describe("mounted onboarding", () => {
     }));
     onboardingBridge.importFiles
       .mockResolvedValueOnce({
-        schemaVersion: 1,
+        schemaVersion: 2,
         files: { total: 2, imported: 1, quarantined: 1 },
         changes: {
           rawFilesInserted: 1,
@@ -1092,9 +1093,10 @@ describe("mounted onboarding", () => {
           sourceRecordsUpdated: 0,
           relinkedSourceRecords: 0,
         },
+        publication: { scope: "activities-and-streams", status: "available" },
       })
       .mockResolvedValueOnce({
-        schemaVersion: 1,
+        schemaVersion: 2,
         files: { total: 2, imported: 0, quarantined: 2 },
         changes: {
           rawFilesInserted: 0,
@@ -1102,6 +1104,7 @@ describe("mounted onboarding", () => {
           sourceRecordsUpdated: 0,
           relinkedSourceRecords: 0,
         },
+        publication: { scope: "activities-and-streams", status: "available" },
       });
     const controller = mountOnboarding({
       document: documentBoundary(document),
@@ -1119,14 +1122,14 @@ describe("mounted onboarding", () => {
     await vi.waitFor(() => expect(onboardingBridge.importFiles).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(controller.state().importedRideFileCount).toBe(1));
     expect(document.body.textContent).toContain(
-      "Local library import: 1 ride file imported. 1 ride file quarantined.",
+      "Local library import: 1 ride file imported. 1 ride file quarantined. Coaching access to activities and streams is available.",
     );
 
     controller.importDroppedFiles(["/synthetic/quarantined.fit"]);
     await vi.waitFor(() => expect(onboardingBridge.importFiles).toHaveBeenCalledTimes(2));
     await vi.waitFor(() =>
       expect(document.body.textContent).toContain(
-        "Local library import failed. 0 ride files imported. 2 ride files quarantined.",
+        "Local library import failed. 0 ride files imported. 2 ride files quarantined. No new ride files are available for coaching.",
       ),
     );
     expect(controller.state().importedRideFileCount).toBe(1);
@@ -1174,7 +1177,7 @@ describe("mounted onboarding", () => {
       }));
       onboardingBridge.credentialStatuses.mockResolvedValue(statuses);
       onboardingBridge.importFiles.mockResolvedValue({
-        schemaVersion: 1,
+        schemaVersion: 2,
         files: { total: 1, imported: 1, quarantined: 0 },
         changes: {
           rawFilesInserted: 1,
@@ -1182,6 +1185,7 @@ describe("mounted onboarding", () => {
           sourceRecordsUpdated: 0,
           relinkedSourceRecords: 0,
         },
+        publication: { scope: "activities-and-streams", status: "available" },
       });
       const onComplete = vi.fn();
       const controller = mountOnboarding({
@@ -1267,7 +1271,7 @@ describe("mounted onboarding", () => {
       runtimeReady: true,
     }));
     onboardingBridge.importFiles.mockResolvedValue({
-      schemaVersion: 1,
+      schemaVersion: 2,
       files: { total: 2, imported: 1, quarantined: 1 },
       changes: {
         rawFilesInserted: 1,
@@ -1275,6 +1279,7 @@ describe("mounted onboarding", () => {
         sourceRecordsUpdated: 0,
         relinkedSourceRecords: 0,
       },
+      publication: { scope: "activities-and-streams", status: "available" },
     });
     const presentationChanges = vi.fn();
     const imports = createRideImportController(onboardingBridge);
@@ -1292,7 +1297,7 @@ describe("mounted onboarding", () => {
     expect(presentationChanges).toHaveBeenLastCalledWith(true);
     await imports.importPaths("resident", ["/synthetic/outside-training.fit"]);
     expect(document.body.textContent).toContain(
-      "Local library import: 1 ride file imported. 1 ride file quarantined.",
+      "Local library import: 1 ride file imported. 1 ride file quarantined. Coaching access to activities and streams is available.",
     );
 
     controller.close();

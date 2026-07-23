@@ -300,7 +300,7 @@ describe("coach request and event projection", () => {
       expect(ImportFilesRpcParamsSchema.safeParse({ paths }).success).toBe(false);
     }
     const importResult = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       files: { total: 2, imported: 1, quarantined: 1 },
       changes: {
         rawFilesInserted: 1,
@@ -308,14 +308,33 @@ describe("coach request and event projection", () => {
         sourceRecordsUpdated: 0,
         relinkedSourceRecords: 0,
       },
+      publication: {
+        scope: "activities-and-streams",
+        status: "available",
+      },
     } as const;
     expect(ImportFilesRpcResultSchema.parse(importResult)).toEqual(importResult);
+    for (const invalid of [
+      { ...importResult, schemaVersion: 1 },
+      { ...importResult, files: { ...importResult.files, total: 3 } },
+      { ...importResult, files: { ...importResult.files, extra: true } },
+      { ...importResult, changes: { ...importResult.changes, extra: true } },
+      { ...importResult, publication: { ...importResult.publication, scope: "activities" } },
+      { ...importResult, publication: { ...importResult.publication, status: "failed" } },
+      { ...importResult, publication: { ...importResult.publication, extra: true } },
+      { ...importResult, publication: undefined },
+      { ...importResult, extra: true },
+    ]) {
+      expect(ImportFilesRpcResultSchema.safeParse(invalid).success).toBe(false);
+    }
     expect(
-      ImportFilesRpcResultSchema.safeParse({
+      ImportFilesRpcResultSchema.parse({
         ...importResult,
-        files: { ...importResult.files, total: 3 },
-      }).success,
-    ).toBe(false);
+        publication: { ...importResult.publication, status: "retryable-failure" },
+      }),
+    ).toMatchObject({
+      publication: { scope: "activities-and-streams", status: "retryable-failure" },
+    });
     const syncResult = {
       schemaVersion: 1,
       published: true,
@@ -507,7 +526,7 @@ describe("coach request and event projection", () => {
           wellness: {},
         }),
       importFiles: async ({ paths }) => ({
-        schemaVersion: 1,
+        schemaVersion: 2,
         files: { total: paths.length, imported: paths.length, quarantined: 0 },
         changes: {
           rawFilesInserted: 0,
@@ -515,6 +534,7 @@ describe("coach request and event projection", () => {
           sourceRecordsUpdated: 0,
           relinkedSourceRecords: 0,
         },
+        publication: { scope: "activities-and-streams", status: "available" },
       }),
       sync: async () => ({
         schemaVersion: 1,
@@ -862,7 +882,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version six", () => {
-    expect(PROTOCOL_VERSION).toBe(6);
+  it("uses protocol version seven", () => {
+    expect(PROTOCOL_VERSION).toBe(7);
   });
 });

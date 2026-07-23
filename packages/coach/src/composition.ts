@@ -123,6 +123,8 @@ export interface LocalStoreRuntime {
   runWindowAfter(
     work: (signal: AbortSignal) => Promise<void>,
   ): ReturnType<StoreRuntime["runWindow"]>;
+  runExclusive: StoreRuntime["runExclusive"];
+  runActivityWrite: StoreRuntime["runActivityWrite"];
   startScheduler(): void;
   close(): Promise<void>;
 }

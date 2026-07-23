@@ -57,7 +57,7 @@ const state: AthleteState = {
 
 const operations: CoachOperations = {
   importFiles: async ({ paths }) => ({
-    schemaVersion: 1,
+    schemaVersion: 2,
     files: { total: paths.length, imported: paths.length, quarantined: 0 },
     changes: {
       rawFilesInserted: paths.length,
@@ -65,6 +65,7 @@ const operations: CoachOperations = {
       sourceRecordsUpdated: 0,
       relinkedSourceRecords: 0,
     },
+    publication: { scope: "activities-and-streams", status: "available" },
   }),
   sync: async () => ({
     schemaVersion: 1,
