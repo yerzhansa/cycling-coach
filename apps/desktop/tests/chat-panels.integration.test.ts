@@ -225,10 +225,57 @@ afterEach(async () => {
 describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat panels", () => {
   it("streams chat, persists units, preserves focus, and fits desktop geometry", async () => {
     const { fixture, calls } = await launch({ width: 1440, height: 900, reducedMotion: false });
+    const composingEnter = await fixture.evaluate<{
+      readonly isComposing: boolean;
+      readonly dispatchResult: boolean;
+      readonly defaultPrevented: boolean;
+      readonly text: string;
+      readonly focused: boolean;
+      readonly athleteRows: number;
+      readonly transcriptUnchanged: boolean;
+    }>(`
+      const textarea = document.querySelector("#message");
+      const transcript = document.querySelector(".chat-transcript");
+      const transcriptText = transcript.textContent;
+      textarea.value = "回復走を";
+      textarea.focus();
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        isComposing: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      const dispatchResult = textarea.dispatchEvent(event);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return {
+        isComposing: event.isComposing,
+        dispatchResult,
+        defaultPrevented: event.defaultPrevented,
+        text: textarea.value,
+        focused: document.activeElement === textarea,
+        athleteRows: document.querySelectorAll(".chat-message--athlete").length,
+        transcriptUnchanged: transcript.textContent === transcriptText,
+      };
+    `);
+    expect(composingEnter).toEqual({
+      isComposing: true,
+      dispatchResult: true,
+      defaultPrevented: false,
+      text: "回復走を",
+      focused: true,
+      athleteRows: 0,
+      transcriptUnchanged: true,
+    });
+    expect(calls.filter((call) => call.method === "chat")).toHaveLength(0);
+
+    const committedMessage = "回復走を30分します。";
     const initial = await fixture.evaluate<{
       readonly location: string;
       readonly bridgeKeys: readonly string[];
       readonly thread: boolean;
+      readonly submitIsComposing: boolean;
+      readonly submitDispatchResult: boolean;
+      readonly submitDefaultPrevented: boolean;
       readonly partial: string;
       readonly final: string;
       readonly athleteStable: boolean;
@@ -308,8 +355,13 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         characterDataOldValue: true,
         subtree: true,
       });
-      textarea.value = "What should I ride?";
-      textarea.closest("form").requestSubmit();
+      textarea.value = ${JSON.stringify(committedMessage)};
+      const submitEvent = new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      });
+      const submitDispatchResult = textarea.dispatchEvent(submitEvent);
       athleteRow ??= document.querySelector(".chat-message--athlete");
       const finalDeadline = Date.now() + 5000;
       let final = "";
@@ -358,6 +410,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         location: location.href,
         bridgeKeys,
         thread,
+        submitIsComposing: submitEvent.isComposing,
+        submitDispatchResult,
+        submitDefaultPrevented: submitEvent.defaultPrevented,
         partial,
         final,
         athleteStable: athleteStable && athleteRow === document.querySelector(".chat-message--athlete"),
@@ -397,6 +452,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "writeCredential",
       ],
       thread: true,
+      submitIsComposing: false,
+      submitDispatchResult: false,
+      submitDefaultPrevented: true,
       partial: "## Today’s ride\n\nHold   **ste",
       final: expect.stringContaining("<script>globalThis.hostile = true</script>"),
       athleteStable: true,
@@ -422,6 +480,13 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       wellnessValue: "65 ms",
       documentOverflow: false,
     });
+    expect(calls.filter((call) => call.method === "chat")).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: "chat",
+        params: { chatId: "desktop", message: committedMessage },
+      },
+    ]);
     expect(calls.filter((call) => call.method === "hasSession")).toEqual([
       {
         jsonrpc: "2.0",
@@ -669,7 +734,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       {
         jsonrpc: "2.0",
         method: "chat",
-        params: { chatId: "desktop", message: "What should I ride?" },
+        params: { chatId: "desktop", message: committedMessage },
       },
       {
         jsonrpc: "2.0",

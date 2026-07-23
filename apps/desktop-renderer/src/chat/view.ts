@@ -179,7 +179,7 @@ export function mountChatView(input: {
     handlers?.onSubmit(value);
   };
   const onKeydown = (event: KeyboardEvent): void => {
-    if (event.key === "Enter" && !event.shiftKey) {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
       form.requestSubmit();
     }

@@ -109,5 +109,9 @@ jobs:
           cache: pnpm
       - run: test "$(uname -m)" = "arm64"
       - run: pnpm install --frozen-lockfile
+      - name: Build Desktop
+        run: pnpm --filter @enduragent/desktop build
+      - name: Test Desktop IME composition
+        run: pnpm --filter @enduragent/desktop exec vitest run tests/chat-panels.integration.test.ts
       - run: pnpm --filter @enduragent/desktop test:packaged-self-test
       - run: pnpm --filter @enduragent/desktop run smoke:security -- --mode=packaged --output=/tmp/desktop-security-packaged
