@@ -1066,6 +1066,264 @@ describe("local coach composition", () => {
     await lifecycle.close();
   });
 
+  it("refreshes the store once with newly applied intervals credentials", async () => {
+    const home = await freshHome();
+    const windows: Config["intervals"][] = [];
+    let runtimeOptions:
+      | Parameters<NonNullable<LocalCoachCompositionDependencies["createRuntime"]>>[0]
+      | undefined;
+    const counts = createPhysicalRequestLedger({
+      storeLimit: 64,
+      legacyLimit: 15,
+      totalLimit: 79,
+    }).snapshot();
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: (options) => {
+          runtimeOptions = options;
+          return runtime([], {
+            runWindow: async () => {
+              const current = options.readConfig?.();
+              if (current === undefined) throw new Error("Expected live runtime configuration.");
+              windows.push({ ...current.intervals });
+              return { published: true, counts, legacySucceeded: true };
+            },
+          });
+        },
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      undefined,
+      config(home, { apiKey: "", athleteId: "" }),
+    );
+
+    expect(windows).toEqual([{ apiKey: "", athleteId: "" }]);
+
+    await expect(
+      lifecycle.operations.configureRuntime({
+        intervals: {
+          api_key: "obviously-fake-replayed-key",
+          athlete_id: "replayed-athlete",
+        },
+      }),
+    ).resolves.toMatchObject({ applied: { intervals: true } });
+
+    expect(runtimeOptions?.readConfig?.().intervals).toEqual({
+      apiKey: "obviously-fake-replayed-key",
+      athleteId: "replayed-athlete",
+    });
+    expect(windows).toEqual([
+      { apiKey: "", athleteId: "" },
+      { apiKey: "obviously-fake-replayed-key", athleteId: "replayed-athlete" },
+    ]);
+    await lifecycle.close();
+  });
+
+  it("does not refresh the store after an LLM-only runtime patch", async () => {
+    const home = await freshHome();
+    const selectedRuntime = runtime();
+    const runWindow = vi.fn(selectedRuntime.runWindow);
+    const runWindowAfter = vi.fn(selectedRuntime.runWindowAfter);
+    const lifecycle = await compose(home, {
+      bootstrap: async () => reference(),
+      createRuntime: () => ({ ...selectedRuntime, runWindow, runWindowAfter }),
+      createBackend: () => backend(),
+      createRepository: () => ({
+        insertIfAbsent: async () => false,
+        readCurrent: async () => undefined,
+      }),
+      createResolver: () => missingResolver(),
+    });
+
+    expect(runWindow).toHaveBeenCalledTimes(1);
+    expect(runWindowAfter).not.toHaveBeenCalled();
+
+    await lifecycle.operations.configureRuntime({
+      llm: {
+        provider: "openrouter",
+        model: "replacement-model",
+        api_key: "obviously-fake-llm-key",
+      },
+    });
+
+    expect(runWindow).toHaveBeenCalledTimes(1);
+    expect(runWindowAfter).not.toHaveBeenCalled();
+    await lifecycle.close();
+  });
+
+  it("queues a new-credential store window behind an active old-credential window", async () => {
+    const home = await freshHome();
+    const windows: Config["intervals"][] = [];
+    let runtimeOptions:
+      | Parameters<NonNullable<LocalCoachCompositionDependencies["createRuntime"]>>[0]
+      | undefined;
+    let releaseOldWindow!: () => void;
+    const oldWindowGate = new Promise<void>((resolve) => {
+      releaseOldWindow = resolve;
+    });
+    let markOldWindowStarted!: () => void;
+    const oldWindowStarted = new Promise<void>((resolve) => {
+      markOldWindowStarted = resolve;
+    });
+    let markSuccessorStarted!: () => void;
+    const successorStarted = new Promise<void>((resolve) => {
+      markSuccessorStarted = resolve;
+    });
+    const counts = createPhysicalRequestLedger({
+      storeLimit: 64,
+      legacyLimit: 15,
+      totalLimit: 79,
+    }).snapshot();
+    const result = { published: true, counts, legacySucceeded: true };
+    let active: ReturnType<LocalStoreRuntime["runWindow"]> | undefined;
+    let windowCount = 0;
+    const launchWindow = (): ReturnType<LocalStoreRuntime["runWindow"]> => {
+      const current = runtimeOptions?.readConfig?.();
+      if (current === undefined) throw new Error("Expected live runtime configuration.");
+      windows.push({ ...current.intervals });
+      windowCount += 1;
+      const currentWindow = (async () => {
+        if (windowCount === 2) {
+          markOldWindowStarted();
+          await oldWindowGate;
+        }
+        if (windowCount === 3) markSuccessorStarted();
+        return result;
+      })();
+      active = currentWindow;
+      void currentWindow
+        .finally(() => {
+          if (active === currentWindow) active = undefined;
+        })
+        .catch(() => {});
+      return currentWindow;
+    };
+    const runWindow = vi.fn<LocalStoreRuntime["runWindow"]>(() => active ?? launchWindow());
+    const runWindowAfter = vi.fn<LocalStoreRuntime["runWindowAfter"]>(async (work) => {
+      const previous = active;
+      if (previous !== undefined) {
+        try {
+          await previous;
+        } catch {}
+      }
+      await work(new AbortController().signal);
+      return launchWindow();
+    });
+    const baseRuntime = runtime();
+    const selectedRuntime: LocalStoreRuntime = {
+      ...baseRuntime,
+      runWindow,
+      runWindowAfter,
+      async close() {
+        try {
+          await active;
+        } catch {}
+        await baseRuntime.close();
+      },
+    };
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: (options) => {
+          runtimeOptions = options;
+          return selectedRuntime;
+        },
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      undefined,
+      config(home, {
+        apiKey: "obviously-fake-old-key",
+        athleteId: "old-athlete",
+      }),
+    );
+    expect(windows).toEqual([{ apiKey: "obviously-fake-old-key", athleteId: "old-athlete" }]);
+
+    const oldWindow = selectedRuntime.runWindow();
+    await oldWindowStarted;
+    expect(windows).toEqual([
+      { apiKey: "obviously-fake-old-key", athleteId: "old-athlete" },
+      { apiKey: "obviously-fake-old-key", athleteId: "old-athlete" },
+    ]);
+
+    await expect(
+      lifecycle.operations.configureRuntime({
+        intervals: {
+          api_key: "obviously-fake-new-key",
+          athlete_id: "new-athlete",
+        },
+      }),
+    ).resolves.toMatchObject({ applied: { intervals: true } });
+    expect(runWindowAfter).toHaveBeenCalledTimes(1);
+    expect(windows).toHaveLength(2);
+
+    releaseOldWindow();
+    await oldWindow;
+    await successorStarted;
+
+    expect(windows).toEqual([
+      { apiKey: "obviously-fake-old-key", athleteId: "old-athlete" },
+      { apiKey: "obviously-fake-old-key", athleteId: "old-athlete" },
+      { apiKey: "obviously-fake-new-key", athleteId: "new-athlete" },
+    ]);
+    await lifecycle.close();
+  });
+
+  it("keeps runtime configuration successful when its background store refresh fails", async () => {
+    const home = await freshHome();
+    const failure = new Error("synthetic background capture failure");
+    let rejectRefresh!: (reason: unknown) => void;
+    const initial = runtime();
+    const runWindowAfter = vi.fn<LocalStoreRuntime["runWindowAfter"]>().mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          rejectRefresh = reject;
+        }),
+    );
+    const lifecycle = await compose(home, {
+      bootstrap: async () => reference(),
+      createRuntime: () => ({ ...initial, runWindowAfter }),
+      createBackend: () => backend(),
+      createRepository: () => ({
+        insertIfAbsent: async () => false,
+        readCurrent: async () => undefined,
+      }),
+      createResolver: () => missingResolver(),
+    });
+
+    await expect(
+      lifecycle.operations.configureRuntime({
+        intervals: {
+          api_key: "obviously-fake-replayed-key",
+          athlete_id: "replayed-athlete",
+        },
+      }),
+    ).resolves.toMatchObject({ applied: { intervals: true } });
+    expect(runWindowAfter).toHaveBeenCalledTimes(1);
+
+    rejectRefresh(failure);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      intervals: { athlete_id: "replayed-athlete" },
+    });
+    await lifecycle.close();
+  });
+
   it("persists a keyless Codex selection that reloads as ready with a valid profile", async () => {
     const home = await freshHome();
     await writeFile(

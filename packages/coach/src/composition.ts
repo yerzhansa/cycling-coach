@@ -594,6 +594,9 @@ export async function createLocalCoachComposition(
         activeConfig = candidate;
         return replacement;
       });
+      if (request.intervals !== undefined && candidate.intervals.apiKey.length > 0) {
+        void runtime!.runWindowAfter(() => Promise.resolve()).catch(() => {});
+      }
     };
     const liveIntervals = Object.freeze({
       async read() {
