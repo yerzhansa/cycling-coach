@@ -130,8 +130,25 @@ function conclusion(overrides: Partial<SeasonReviewConclusion> = {}): SeasonRevi
 
 describe("season review request and schemas", () => {
   it("exports the fixed request with exact bytes and no trailing newline", () => {
-    expect(SEASON_REVIEW_REQUEST).toBe("Prepare a cycling season review from the complete training history available through the local store-backed tools.\n\nStructure the response as: Season arc; What changed; What to keep or change; Questions.\n\nGround every athlete-specific statement in tool results. Treat Load, Intensity, Fitness, Fatigue, and Form as platform-supplied Reference layer values, not locally computed values. State when evidence is absent or stale. Give at least three distinct observations across at least two parts of the season, identify a trend and an exception or recovery block, and give at least two evidence-linked actions with a time, quantity, or decision condition.\n\nAsk two to four questions only about context absent from the store. Each question must say which coaching decision its answer would change. Do not ask for a fact already available in the store. Do not create, delete, or modify calendar items or training data.");
+    expect(SEASON_REVIEW_REQUEST).toBe("Prepare a cycling season review from the training history you can retrieve through the local store-backed tools.\n\nStructure the response as: Season arc; What changed; What to keep or change; Questions.\n\nUse only tool results returned during this review, and do not imply that returned ranges or fields represent the complete store. Every athlete-specific numeric, temporal, comparative, causal, observational, action, or conclusion premise must immediately carry `[Evidence: <tool-name>(<exact arguments>) — <exact returned date/field/value>]`. Cite only results returned during this review. Do not make claims beyond their returned date ranges or fields. Omit unsupported specificity. Label any unsupported causal interpretation `Hypothesis` and name the missing context needed to test it. Do not use an uncited assumption as an evidence anchor.\n\nTreat Load, Intensity, Fitness, Fatigue, and Form as platform-supplied Reference layer values, not locally computed values. State when evidence is absent, stale, or ambiguous. Give at least three distinct evidence-backed observations across at least two parts of the season, identify an evidence-backed trend and an exception or recovery block, and give at least two actions with a time, quantity, or decision condition. Every action must cite the evidence-backed observation it responds to.\n\nAsk 2–4 question blocks only about context absent from the returned results. Each block must use these exact labels in this exact order:\nEvidence anchor: <observation> [Evidence: <tool-name>(<exact arguments>) — <exact returned date/field/value>]\nMissing context: <what the returned results do not establish>\nQuestion: <one question about that missing context>\nDecision changed: <the coaching decision its answer would change>\n\nDo not use an uncited assumption as an Evidence anchor. Do not ask for a fact already returned by a tool. Do not call mutating tools or create, delete, modify, write, or schedule calendar items, training data, or store state.");
     expect(SEASON_REVIEW_REQUEST.endsWith("\n")).toBe(false);
+  });
+
+  it("pins evidence receipts, ordered question labels, causality, and bounded retrieval claims", () => {
+    expect(SEASON_REVIEW_REQUEST).toContain(
+      "[Evidence: <tool-name>(<exact arguments>) — <exact returned date/field/value>]",
+    );
+    expect(SEASON_REVIEW_REQUEST).toContain(
+      "Evidence anchor: <observation> [Evidence: <tool-name>(<exact arguments>) — <exact returned date/field/value>]\n" +
+      "Missing context: <what the returned results do not establish>\n" +
+      "Question: <one question about that missing context>\n" +
+      "Decision changed: <the coaching decision its answer would change>",
+    );
+    expect(SEASON_REVIEW_REQUEST).toContain(
+      "Label any unsupported causal interpretation `Hypothesis` and name the missing context needed to test it.",
+    );
+    expect(SEASON_REVIEW_REQUEST).toContain("training history you can retrieve");
+    expect(SEASON_REVIEW_REQUEST).not.toContain("complete training history");
   });
 
   it("keeps score schema strict and exact", () => {
@@ -297,6 +314,16 @@ describe("shared persisted predicates", () => {
     expect(() => validateSeasonReviewConclusion(conclusion({ grounding: "REWORK", overall: "KEEP", cost_totals: costs }))).toThrow();
     expect(validateSeasonReviewConclusion(conclusion({ grounding: "REWORK", overall: "REWORK", cost_totals: costs })))
       .toMatchObject({ grounding: "REWORK", overall: "REWORK" });
+  });
+
+  it("rejects real question-quality REWORK with overall KEEP and accepts overall REWORK", () => {
+    const realCost = unpricedCost(), costs = { calibration: unpricedCost(3), real: realCost, combined: unpricedCost(4) };
+    expect(() => validateSeasonReviewConclusion(conclusion({
+      question_quality: "REWORK", overall: "KEEP", cost_totals: costs,
+    }))).toThrow();
+    expect(validateSeasonReviewConclusion(conclusion({
+      question_quality: "REWORK", overall: "REWORK", cost_totals: costs,
+    }))).toMatchObject({ question_quality: "REWORK", overall: "REWORK" });
   });
 
   it("calibration order inversion is rejected", () => {
