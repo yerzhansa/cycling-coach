@@ -153,7 +153,7 @@ export {
   readConfigYaml,
   resolveConfigSecrets,
 } from "./config.js";
-export type { Config } from "./config.js";
+export type { Config, LoadConfigOptions } from "./config.js";
 export { DATA_SOURCES, resolveDataSource } from "./config.js";
 export type { DataSource } from "./config.js";
 export {

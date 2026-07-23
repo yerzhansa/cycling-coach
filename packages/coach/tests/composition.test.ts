@@ -347,6 +347,23 @@ afterEach(async () => {
 });
 
 describe("local coach composition", () => {
+  it("rejects configured data directories outside the selected athlete home", async () => {
+    const home = await freshHome();
+    const otherHome = await freshHome();
+    const dependencies: LocalCoachCompositionDependencies = {};
+
+    for (const dataDir of ["", "relative", home.configDir, otherHome.root]) {
+      await expect(
+        compose(home, dependencies, fakeContext(home), undefined, {
+          ...config(home),
+          dataDir,
+        }),
+      ).rejects.toThrowError(
+        new TypeError("Configured data directory does not match the selected athlete home."),
+      );
+    }
+  });
+
   it("reuses the lifecycle writer in the first store window without nested acquisition", async () => {
     const home = await freshHome();
     const context = fakeContext(home);

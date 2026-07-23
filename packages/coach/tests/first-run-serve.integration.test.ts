@@ -1,13 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createConnection, createServer } from "node:net";
-import {
-  mkdir,
-  mkdtemp,
-  readFile,
-  realpath,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,7 +58,7 @@ async function unixConnectAvailable(): Promise<boolean> {
   }
 }
 
-const hasSockets = await loopbackAvailable() && await unixConnectAvailable();
+const hasSockets = (await loopbackAvailable()) && (await unixConnectAvailable());
 
 afterEach(async () => {
   for (const child of children) child.kill("SIGKILL");
@@ -83,7 +76,7 @@ function childExit(child: ChildProcessWithoutNullStreams): Promise<{
 }
 
 describe.skipIf(!hasSockets)("first-run serve process", () => {
-  it("boots a fresh home through /healthz and shuts down cleanly", async () => {
+  it("boots an existing config without data_dir through /healthz without clobbering it", async () => {
     const scratchRoot = process.platform === "darwin" ? "/private/tmp" : await realpath(tmpdir());
     const scratch = await mkdtemp(join(scratchRoot, "ea-serve-"));
     roots.push(scratch);
@@ -96,20 +89,27 @@ describe.skipIf(!hasSockets)("first-run serve process", () => {
       mkdir(join(scratch, "cache"), { recursive: true }),
       mkdir(join(scratch, "tmp"), { recursive: true }),
     ]);
-    await writeFile(join(configDir, "config.yaml"), [
-      "data_source: store",
-      `data_dir: ${JSON.stringify(home)}`,
-      "llm:",
-      "  provider: anthropic",
-      "  model: synthetic",
-      "  api_key: synthetic",
-      "intervals:",
-      "  api_key: synthetic",
-      "  athlete_id: synthetic",
-      "session:",
-      "  timezone: UTC",
-      "",
-    ].join("\n"));
+    const configBytes = Buffer.from(
+      [
+        "data_source: store",
+        "llm:",
+        "  provider: anthropic",
+        "  model: synthetic",
+        "  api_key: synthetic",
+        "intervals:",
+        "  api_key: synthetic",
+        "  athlete_id: synthetic",
+        "session:",
+        "  timezone: UTC",
+        "",
+      ].join("\n"),
+    );
+    const configPath = join(configDir, "config.yaml");
+    await writeFile(configPath, configBytes, { mode: 0o600 });
+    const configBeforeServe = await stat(configPath);
+    const configInodeBeforeServe = configBeforeServe.ino;
+    const configModeBeforeServe = configBeforeServe.mode & 0o777;
+    expect(configModeBeforeServe).toBe(0o600);
 
     const child = spawn(process.execPath, [binary, "serve"], {
       env: {
@@ -130,14 +130,20 @@ describe.skipIf(!hasSockets)("first-run serve process", () => {
     const exited = childExit(child);
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += String(chunk); });
-    child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
 
     const deadline = Date.now() + 15_000;
     let health: Response | undefined;
     while (Date.now() < deadline && health === undefined) {
       if (child.exitCode !== null || child.signalCode !== null) {
-        throw new Error(`serve exited before healthz: ${child.exitCode}/${child.signalCode}\n${stdout}${stderr}`);
+        throw new Error(
+          `serve exited before healthz: ${child.exitCode}/${child.signalCode}\n${stdout}${stderr}`,
+        );
       }
       try {
         const port = Number((await readFile(join(configDir, PORT_FILE_NAME), "utf8")).trim());
@@ -168,7 +174,15 @@ describe.skipIf(!hasSockets)("first-run serve process", () => {
     expect(result).toEqual({ code: 0, signal: null });
     expect(stdout).toBe("");
     expect(stderr).not.toContain("coach store writer is already active");
-    await expect(readFile(join(configDir, PORT_FILE_NAME), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(readFile(join(configDir, LOCKFILE_NAME), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    const configAfterServe = await stat(configPath);
+    await expect(readFile(configPath)).resolves.toEqual(configBytes);
+    expect(configAfterServe.ino).toBe(configInodeBeforeServe);
+    expect(configAfterServe.mode & 0o777).toBe(configModeBeforeServe);
+    await expect(readFile(join(configDir, PORT_FILE_NAME), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readFile(join(configDir, LOCKFILE_NAME), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   }, 25_000);
 });

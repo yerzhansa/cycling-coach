@@ -115,7 +115,9 @@ export async function withLocalCoach<T>(
             configPath: readiness.configPath,
           };
         }
-        const config = loadConfig(context.home.configDir);
+        const config = loadConfig(context.home.configDir, {
+          defaultDataDir: context.home.root,
+        });
         if (JSON.stringify(engineConfigFromConfig(config)) !== JSON.stringify(readiness.config)) {
           throw new TypeError("Ready engine configuration changed before engine construction.");
         }
