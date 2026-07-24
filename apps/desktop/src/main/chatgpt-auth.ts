@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import {
+  deleteStoredProfile,
   loadStoredProfileSnapshot,
   loginCodex,
   recoverAndSaveStoredProfile,
@@ -35,21 +36,37 @@ export type ChatGptLoginResult =
   | { readonly status: "configured"; readonly runtimeReady: true }
   | { readonly status: "refused"; readonly reason: ChatGptLoginRefusalReason };
 
+export type ChatGptDeleteResult =
+  | { readonly status: "deleted"; readonly cleanupPending: false }
+  | {
+      readonly status: "refused";
+      readonly reason:
+        | "not-found"
+        | "storage-failed"
+        | "runtime-unavailable"
+        | "runtime-state-diverged";
+    };
+
 export interface ChatGptAuthController {
   status(): Promise<ChatGptStatus>;
   login(selection: OnboardingLlmSelection): Promise<ChatGptLoginResult>;
   activate(selection: OnboardingLlmSelection): Promise<OnboardingLlmSelectionResult>;
+  deleteCredential(): Promise<ChatGptDeleteResult>;
 }
 
 interface ChatGptAuthDependencies {
   readonly loginCodex?: (options: CodexLoginOptions) => Promise<CodexCredentials>;
   readonly writeProfile?: (configDir: string, credentials: CodexCredentials) => Promise<void>;
+  readonly deleteProfile?: (configDir: string) => void;
 }
 
 interface CreateChatGptAuthOptions {
   readonly configDir: string;
   readonly applyRuntimeConfig: (request: ConfigureRuntimeRpcParams) => Promise<void>;
   readonly getRuntimeConfig: () => Promise<RuntimeConfigSnapshot>;
+  readonly clearRuntimeCredential?: () => Promise<
+    "cleared" | "not-active" | "managed-by-environment"
+  >;
   readonly openExternal: (url: string) => Promise<void>;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
@@ -108,6 +125,10 @@ export async function writeChatGptProfile(
   });
 }
 
+export function deleteChatGptProfile(configDir: string): void {
+  deleteStoredProfile(join(configDir, "auth-profiles.json"), CHATGPT_PROFILE_NAME);
+}
+
 async function configuredRuntime(
   getRuntimeConfig: () => Promise<RuntimeConfigSnapshot>,
 ): Promise<boolean | undefined> {
@@ -134,6 +155,7 @@ function classifyLoginFailure(
 export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAuthController {
   const runLogin = options.dependencies?.loginCodex ?? loginCodex;
   const storeProfile = options.dependencies?.writeProfile ?? writeChatGptProfile;
+  const removeProfile = options.dependencies?.deleteProfile ?? deleteChatGptProfile;
   let activeLogin: Promise<ChatGptLoginResult> | undefined;
 
   const applySelection = async (
@@ -221,5 +243,42 @@ export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAut
       }
     },
     activate: applySelection,
+    async deleteCredential() {
+      const stored = await hasChatGptProfile(options.configDir);
+      const runtimeReady = await configuredRuntime(options.getRuntimeConfig);
+      if (!stored) {
+        return runtimeReady === true
+          ? { status: "refused", reason: "runtime-state-diverged" }
+          : { status: "refused", reason: "not-found" };
+      }
+      if (runtimeReady === undefined) {
+        return { status: "refused", reason: "runtime-unavailable" };
+      }
+      if (runtimeReady) {
+        if (options.clearRuntimeCredential === undefined) {
+          return { status: "refused", reason: "runtime-unavailable" };
+        }
+        try {
+          const cleared = await options.clearRuntimeCredential();
+          if (cleared === "not-active") {
+            removeProfile(options.configDir);
+          } else if (cleared !== "cleared") {
+            throw new TypeError();
+          }
+        } catch {
+          return { status: "refused", reason: "runtime-state-diverged" };
+        }
+      } else {
+        try {
+          removeProfile(options.configDir);
+        } catch {
+          return { status: "refused", reason: "storage-failed" };
+        }
+      }
+      if (await hasChatGptProfile(options.configDir)) {
+        return { status: "refused", reason: "runtime-state-diverged" };
+      }
+      return { status: "deleted", cleanupPending: false };
+    },
   };
 }

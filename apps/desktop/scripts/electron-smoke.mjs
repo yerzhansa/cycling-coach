@@ -279,6 +279,7 @@ async function security() {
             "checkForUpdates",
             "chooseImportFiles",
             "credentialStatuses",
+            "deleteCredential",
             "getDaemonConnection",
             "getUpdateState",
             "llmConfiguration",

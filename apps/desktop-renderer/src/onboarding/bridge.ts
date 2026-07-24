@@ -29,6 +29,25 @@ export type CredentialWriteResult =
         | "training-account-mismatch";
     };
 
+export type DesktopCredentialId = DesktopCredentialSlot | "openai-codex";
+
+export type CredentialDeleteResult =
+  | {
+      readonly credential: DesktopCredentialId;
+      readonly status: "deleted";
+      readonly cleanupPending: boolean;
+    }
+  | {
+      readonly credential: DesktopCredentialId;
+      readonly status: "refused";
+      readonly reason:
+        | "not-found"
+        | "managed-by-environment"
+        | "storage-failed"
+        | "runtime-unavailable"
+        | "runtime-state-diverged";
+    };
+
 export interface OnboardingLlmModelOption {
   readonly value: string;
   readonly label: string;

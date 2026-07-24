@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LlmProvider, RuntimeConfigSnapshot } from "@enduragent/coach-contract";
 import {
   createChatGptAuth as createChatGptAuthSubject,
+  deleteChatGptProfile,
   hasChatGptProfile,
   writeChatGptProfile,
 } from "../src/main/chatgpt-auth.js";
@@ -91,6 +92,94 @@ afterEach(async () => {
 });
 
 describe("desktop ChatGPT auth", () => {
+  it("deletes an inactive local profile without a runtime cutover", async () => {
+    const directory = await configDir();
+    await writeChatGptProfile(directory, credentials());
+    const clearRuntimeCredential = vi.fn(async () => "cleared" as const);
+    const auth = createChatGptAuth({
+      configDir: directory,
+      applyRuntimeConfig: vi.fn(async () => {}),
+      clearRuntimeCredential,
+      getRuntimeConfig: async () => runtimeSnapshot("anthropic", true),
+      openExternal: vi.fn(async () => {}),
+    });
+
+    await expect(auth.deleteCredential()).resolves.toEqual({
+      status: "deleted",
+      cleanupPending: false,
+    });
+
+    expect(clearRuntimeCredential).not.toHaveBeenCalled();
+    await expect(hasChatGptProfile(directory)).resolves.toBe(false);
+  });
+
+  it("deletes an active profile through the serialized runtime cutover", async () => {
+    const directory = await configDir();
+    await writeChatGptProfile(directory, credentials());
+    const clearRuntimeCredential = vi.fn(async () => {
+      deleteChatGptProfile(directory);
+      return "cleared" as const;
+    });
+    const auth = createChatGptAuth({
+      configDir: directory,
+      applyRuntimeConfig: vi.fn(async () => {}),
+      clearRuntimeCredential,
+      openExternal: vi.fn(async () => {}),
+    });
+
+    await expect(auth.deleteCredential()).resolves.toEqual({
+      status: "deleted",
+      cleanupPending: false,
+    });
+
+    expect(clearRuntimeCredential).toHaveBeenCalledOnce();
+    await expect(hasChatGptProfile(directory)).resolves.toBe(false);
+  });
+
+  it("fails closed and surfaces profile/runtime divergence during deletion", async () => {
+    const directory = await configDir();
+    await writeChatGptProfile(directory, credentials());
+    const unavailable = createChatGptAuth({
+      configDir: directory,
+      applyRuntimeConfig: vi.fn(async () => {}),
+      getRuntimeConfig: vi.fn(async () => {
+        throw new TypeError();
+      }),
+      openExternal: vi.fn(async () => {}),
+    });
+
+    await expect(unavailable.deleteCredential()).resolves.toEqual({
+      status: "refused",
+      reason: "runtime-unavailable",
+    });
+    await expect(hasChatGptProfile(directory)).resolves.toBe(true);
+
+    const ambiguous = createChatGptAuth({
+      configDir: directory,
+      applyRuntimeConfig: vi.fn(async () => {}),
+      clearRuntimeCredential: vi.fn(async () => {
+        throw new TypeError();
+      }),
+      openExternal: vi.fn(async () => {}),
+    });
+    await expect(ambiguous.deleteCredential()).resolves.toEqual({
+      status: "refused",
+      reason: "runtime-state-diverged",
+    });
+    await expect(hasChatGptProfile(directory)).resolves.toBe(true);
+
+    const divergent = createChatGptAuth({
+      configDir: directory,
+      applyRuntimeConfig: vi.fn(async () => {}),
+      clearRuntimeCredential: vi.fn(async () => "cleared" as const),
+      openExternal: vi.fn(async () => {}),
+    });
+    await expect(divergent.deleteCredential()).resolves.toEqual({
+      status: "refused",
+      reason: "runtime-state-diverged",
+    });
+  });
+
   it("atomically merges the profile with mode 0600 and validates its shape", async () => {
     const directory = await configDir();
     await writeChatGptProfile(directory, credentials());

@@ -34,6 +34,8 @@ export type CompareAndSaveStoredProfileResult =
   | { readonly status: "superseded"; readonly profile: StoredProfile }
   | { readonly status: "missing" };
 
+export type DeleteStoredProfileResult = { readonly status: "deleted" | "missing" };
+
 type ProfilesDocument = Record<string, StoredProfile>;
 
 interface RecoverableProfilesDocument {
@@ -216,6 +218,17 @@ export function recoverAndSaveStoredProfile(
     }
     recovered.profiles[name] = profile;
     writeProfiles(profilesPath, recovered.profiles);
+  });
+}
+
+export function deleteStoredProfile(profilesPath: string, name: string): DeleteStoredProfileResult {
+  mkdirSync(dirname(profilesPath), { recursive: true, mode: 0o700 });
+  return withInterprocessFileLockSync(lockPathFor(profilesPath), () => {
+    const profiles = readProfiles(profilesPath);
+    if (profileAt(profiles, name) === undefined) return { status: "missing" };
+    delete profiles[name];
+    writeProfiles(profilesPath, profiles);
+    return { status: "deleted" };
   });
 }
 

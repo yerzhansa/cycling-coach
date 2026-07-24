@@ -36,6 +36,8 @@ import { createAthleteSettingsView } from "./settings/athlete-view.js";
 import { createResidentSettingsShell } from "./settings/shell.js";
 import { createSessionSettingsController } from "./settings/session-controller.js";
 import { createSessionSettingsView } from "./settings/session-view.js";
+import { createCredentialSettingsController } from "./settings/credential-controller.js";
+import { createCredentialSettingsView } from "./settings/credential-view.js";
 import {
   createRideImportController,
   mountResidentRideImport,
@@ -299,6 +301,7 @@ const providerModelSettingsView = createProviderModelSettingsView({
   document,
   shell: settingsShell,
 });
+const credentialSettingsView = createCredentialSettingsView({ document, shell: settingsShell });
 const athleteSettingsView = createAthleteSettingsView({ document, shell: settingsShell });
 const sessionSettingsView = createSessionSettingsView({ document, shell: settingsShell });
 const sessionSettingsController = createSessionSettingsController({
@@ -306,10 +309,27 @@ const sessionSettingsController = createSessionSettingsController({
   beginMutation: () => settingsShell.beginMutation("session"),
   view: sessionSettingsView,
 });
+const credentialSettingsController = createCredentialSettingsController({
+  clients,
+  loadStatuses: () => window.enduragentAuth.credentialStatuses(),
+  loadChatGptStatus: () => window.enduragentAuth.chatgptStatus(),
+  deleteCredential: (value) => window.enduragentAuth.deleteCredential(value),
+  openSetup: () => {
+    providerModelSettingsController.close();
+    credentialSettingsController.close();
+    athleteSettingsController.close();
+    sessionSettingsController.close();
+    settingsShell.close();
+    setup.click();
+  },
+  beginMutation: () => settingsShell.beginMutation("credential"),
+  view: credentialSettingsView,
+});
 const athleteSettingsController = createAthleteSettingsController({
   clients,
   openSetup: () => {
     providerModelSettingsController.close();
+    credentialSettingsController.close();
     athleteSettingsController.close();
     sessionSettingsController.close();
     settingsShell.close();
@@ -323,6 +343,7 @@ const providerModelSettingsController = createProviderModelSettingsController({
   apply: (selection) => window.enduragentAuth.applyLlmSelection(selection),
   openSetup: () => {
     providerModelSettingsController.close();
+    credentialSettingsController.close();
     athleteSettingsController.close();
     sessionSettingsController.close();
     settingsShell.close();
@@ -334,11 +355,13 @@ const providerModelSettingsController = createProviderModelSettingsController({
 settingsShell.bind({
   onOpen() {
     void providerModelSettingsController.activate();
+    void credentialSettingsController.activate();
     void athleteSettingsController.activate();
     void sessionSettingsController.activate();
   },
   onClose() {
     providerModelSettingsController.close();
+    credentialSettingsController.close();
     athleteSettingsController.close();
     sessionSettingsController.close();
     settingsShell.close();
@@ -371,6 +394,7 @@ window.addEventListener(
     releaseNotesController.dispose();
     desktopUpdateController.dispose();
     providerModelSettingsController.dispose();
+    credentialSettingsController.dispose();
     athleteSettingsController.dispose();
     sessionSettingsController.dispose();
     settingsShell.dispose();

@@ -127,12 +127,14 @@ export {
 export type { OAuthCredential } from "./auth/profiles.js";
 export {
   compareAndSaveStoredProfile,
+  deleteStoredProfile,
   loadStoredProfileSnapshot,
   recoverAndSaveStoredProfile,
   saveStoredProfile,
 } from "./auth/profile-store.js";
 export type {
   CompareAndSaveStoredProfileResult,
+  DeleteStoredProfileResult,
   StoredProfile,
   StoredProfileSnapshot,
 } from "./auth/profile-store.js";
@@ -155,11 +157,7 @@ export {
   resolveConfigSecrets,
   sessionConfigEnvironmentOwnership,
 } from "./config.js";
-export type {
-  Config,
-  LoadConfigOptions,
-  SessionConfigEnvironmentOwnership,
-} from "./config.js";
+export type { Config, LoadConfigOptions, SessionConfigEnvironmentOwnership } from "./config.js";
 export { DATA_SOURCES, resolveDataSource } from "./config.js";
 export type { DataSource } from "./config.js";
 export {

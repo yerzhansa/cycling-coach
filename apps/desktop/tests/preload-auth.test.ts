@@ -40,6 +40,7 @@ vi.mock("electron", () => ({
 interface AuthBridge {
   getDaemonConnection(failedGeneration?: number): Promise<unknown>;
   credentialStatuses(): Promise<unknown>;
+  deleteCredential(input: unknown): Promise<unknown>;
   retryFailedCredentials(): Promise<unknown>;
   writeCredential(input: unknown): Promise<unknown>;
   llmConfiguration(): Promise<unknown>;
@@ -153,6 +154,7 @@ describe("desktop preload ChatGPT auth", () => {
         "chatgptStatus",
         "chooseImportFiles",
         "credentialStatuses",
+        "deleteCredential",
         "getUpdateState",
         "getDaemonConnection",
         "llmConfiguration",
@@ -469,6 +471,42 @@ describe("desktop preload ChatGPT auth", () => {
       "enduragent:onboarding:credential-status",
       "enduragent:onboarding:credential-retry",
     ]);
+  });
+
+  it("validates and copies deletion metadata without accepting widened shapes", async () => {
+    const result = {
+      credential: "anthropic",
+      status: "deleted",
+      cleanupPending: false,
+    };
+    mocks.invoke.mockResolvedValueOnce(result);
+
+    const copied = await bridge.deleteCredential({ credential: "anthropic" });
+
+    expect(copied).toEqual(result);
+    expect(copied).not.toBe(result);
+    expect(mocks.invoke).toHaveBeenCalledWith("enduragent:settings:credential-delete", {
+      credential: "anthropic",
+    });
+
+    for (const input of [
+      { credential: "unknown" },
+      { credential: "anthropic", extra: true },
+      "anthropic",
+    ]) {
+      await expect(bridge.deleteCredential(input)).rejects.toBeInstanceOf(TypeError);
+    }
+    expect(mocks.invoke).toHaveBeenCalledTimes(1);
+
+    mocks.invoke.mockResolvedValueOnce({
+      credential: "anthropic",
+      status: "deleted",
+      cleanupPending: false,
+      extra: true,
+    });
+    await expect(bridge.deleteCredential({ credential: "anthropic" })).rejects.toBeInstanceOf(
+      TypeError,
+    );
   });
 
   it("copies the bounded model catalogue and active selection from its private channel", async () => {
