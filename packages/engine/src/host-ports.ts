@@ -90,8 +90,28 @@ export interface ChatStorePort {
     lineage: ChatLineage,
   ): void;
   overwriteHistory(chatId: string, messages: ModelMessage[]): void;
-  archiveAndReset(chatId: string): void;
+  resetConversation(input: ConversationResetInput): void;
   archivePreCompact(chatId: string): void;
+}
+
+export type TranscriptConversationBoundaryReason = "explicit-reset" | "stale-reset";
+
+export interface ConversationResetInput {
+  readonly chatId: string;
+  readonly boundaryAt: string;
+  readonly reason: TranscriptConversationBoundaryReason;
+}
+
+export interface TranscriptCompletedTurnInput {
+  readonly chatId: string;
+  readonly turnId: string;
+  readonly completedAt: string;
+  readonly athleteText: string;
+  readonly coachText: string;
+}
+
+export interface TranscriptWriterPort {
+  appendCompletedTurn(input: TranscriptCompletedTurnInput): void;
 }
 
 export type ExecSecretRef = {
@@ -240,6 +260,7 @@ export interface EngineHostPorts {
   readonly config: EngineConfig;
   readonly memory: MemoryStorePort;
   readonly chatStore: ChatStorePort;
+  readonly transcriptWriter: TranscriptWriterPort;
   readonly secrets: SecretsPort;
   readonly platform: PlatformClientPort;
   readonly logger: LoggerPort;

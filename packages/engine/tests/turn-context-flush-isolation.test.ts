@@ -50,7 +50,7 @@ function mkAssistant(opts: {
 }) {
   const toolCalls = opts.toolCalls ?? [];
   return {
-    text: toolCalls.length > 0 ? "" : opts.text ?? "",
+    text: toolCalls.length > 0 ? "" : (opts.text ?? ""),
     toolCalls,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
     stopReason: opts.stopReason ?? "stop",
@@ -62,13 +62,13 @@ function mkAssistant(opts: {
 // stale-reset flush before its main generate.
 function seedStaleSession(chatId: string): void {
   const sessionsDir = join(dataDir, "sessions");
-  mkdirSync(sessionsDir, { recursive: true });
+  mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
   const ts = new Date(Date.now() - 2 * 86_400_000).toISOString();
   const lines = [
     JSON.stringify({ role: "user", content: "earlier question", ts }),
     JSON.stringify({ role: "assistant", content: "earlier answer", ts }),
   ].join("\n");
-  writeFileSync(join(sessionsDir, `${chatId}.jsonl`), lines + "\n");
+  writeFileSync(join(sessionsDir, `${chatId}.jsonl`), lines + "\n", { mode: 0o600 });
 }
 
 function makeStubRunningSport(): Sport {
@@ -294,4 +294,3 @@ describe("per-turn state does not bleed across a parked memory flush", () => {
     expect(aMainCalls).toBe(2);
   });
 });
-

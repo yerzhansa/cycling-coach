@@ -9,11 +9,13 @@ import { createEngineHostAdapter } from "../../core/src/agent/engine-host-adapte
 import { legacyStateReader } from "../../core/src/agent/legacy-athlete-state-reader.js";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import type { Sport } from "../src/sport.js";
+import type { TranscriptCompletedTurnInput } from "../src/host-ports.js";
 import { TAINTED_BY_WRITES_MESSAGE } from "../src/agent/coach-agent-copy.js";
 
 let tempHome: string;
 let origHome: string | undefined;
 let dataDir: string;
+const transcriptTurns: TranscriptCompletedTurnInput[] = [];
 
 beforeEach(() => {
   tempHome = mkdtempSync(join(tmpdir(), "cc-taint-"));
@@ -22,6 +24,7 @@ beforeEach(() => {
   dataDir = join(tempHome, ".cycling-coach");
   mkdirSync(dataDir, { recursive: true });
   mkdirSync(join(dataDir, "memory"), { recursive: true });
+  transcriptTurns.length = 0;
   vi.resetModules();
 });
 
@@ -37,7 +40,7 @@ function mkAssistant(opts: {
   stopReason?: "stop" | "toolUse";
 }) {
   return {
-    text: opts.toolCall ? "" : opts.text ?? "",
+    text: opts.toolCall ? "" : (opts.text ?? ""),
     toolCalls: opts.toolCall
       ? [{ id: opts.toolCall.id, name: opts.toolCall.name, arguments: opts.toolCall.arguments }]
       : [],
@@ -58,7 +61,13 @@ function intervalsConfig() {
     intervals: { apiKey: "test-key", athleteId: "i1" },
   };
   const ports = createEngineHostAdapter({ config, stateReader: legacyStateReader }).ports;
-  return { ...ports, getAccessToken: async () => "token" };
+  return {
+    ...ports,
+    getAccessToken: async () => "token",
+    transcriptWriter: {
+      appendCompletedTurn: (turn: TranscriptCompletedTurnInput) => transcriptTurns.push(turn),
+    },
+  };
 }
 
 async function setupAgent(complete: ReturnType<typeof vi.fn>) {
@@ -123,8 +132,16 @@ describe("tainted-by-writes refusal", () => {
                 workout: {
                   name: "Threshold 2x20",
                   steps: [
-                    { type: "warmup", duration: { value: 10, unit: "minutes" }, power: { kind: "percent_ftp", value: 50 } },
-                    { type: "steady", duration: { value: 20, unit: "minutes" }, power: { kind: "percent_ftp", value: 95 } },
+                    {
+                      type: "warmup",
+                      duration: { value: 10, unit: "minutes" },
+                      power: { kind: "percent_ftp", value: 50 },
+                    },
+                    {
+                      type: "steady",
+                      duration: { value: 20, unit: "minutes" },
+                      power: { kind: "percent_ftp", value: 95 },
+                    },
                   ],
                 },
               },
@@ -145,6 +162,12 @@ describe("tainted-by-writes refusal", () => {
       // The write committed exactly once and was never replayed on a retry.
       expect(createdWorkouts.length).toBe(1);
       expect(secondMainAfterWrite).toBe(true);
+      expect(transcriptTurns).toHaveLength(1);
+      expect(transcriptTurns[0]).toMatchObject({
+        chatId: "taint",
+        athleteText: "create a threshold workout for tomorrow",
+        coachText: TAINTED_BY_WRITES_MESSAGE,
+      });
     } finally {
       server.close();
     }
@@ -173,8 +196,16 @@ describe("tainted-by-writes refusal", () => {
                 workout: {
                   name: "Endurance 45",
                   steps: [
-                    { type: "warmup", duration: { value: 10, unit: "minutes" }, power: { kind: "percent_ftp", value: 50 } },
-                    { type: "steady", duration: { value: 35, unit: "minutes" }, power: { kind: "percent_ftp", value: 70 } },
+                    {
+                      type: "warmup",
+                      duration: { value: 10, unit: "minutes" },
+                      power: { kind: "percent_ftp", value: 50 },
+                    },
+                    {
+                      type: "steady",
+                      duration: { value: 35, unit: "minutes" },
+                      power: { kind: "percent_ftp", value: 70 },
+                    },
                   ],
                 },
               },
@@ -294,40 +325,42 @@ describe("tainted-by-writes refusal", () => {
     const firstPostWrite = new Promise<void>((resolve) => {
       markFirstPostWrite = resolve;
     });
-    const complete = vi.fn(async (params: { system?: string; messages?: { role: string; content?: unknown }[] }) => {
-      const sys = params.system ?? "";
-      if (sys.includes(FLUSH_MARKER)) return mkAssistant({ text: "facts noted" });
-      if (sys.length === 0) return mkAssistant({ text: "summary" });
+    const complete = vi.fn(
+      async (params: { system?: string; messages?: { role: string; content?: unknown }[] }) => {
+        const sys = params.system ?? "";
+        if (sys.includes(FLUSH_MARKER)) return mkAssistant({ text: "facts noted" });
+        if (sys.length === 0) return mkAssistant({ text: "summary" });
 
-      const messages = params.messages ?? [];
-      const transcript = JSON.stringify(messages);
-      const hasToolResult = messages.some((m) => m.role === "tool");
-      if (transcript.includes("first memory note")) {
-        firstMainCalls++;
-        if (!hasToolResult) {
-          return mkAssistant({
-            toolCall: {
-              id: "call-concurrent-memory",
-              name: "memory_write",
-              arguments: { type: "daily", content: note },
-            },
-            stopReason: "toolUse",
-          });
+        const messages = params.messages ?? [];
+        const transcript = JSON.stringify(messages);
+        const hasToolResult = messages.some((m) => m.role === "tool");
+        if (transcript.includes("first memory note")) {
+          firstMainCalls++;
+          if (!hasToolResult) {
+            return mkAssistant({
+              toolCall: {
+                id: "call-concurrent-memory",
+                name: "memory_write",
+                arguments: { type: "daily", content: note },
+              },
+              stopReason: "toolUse",
+            });
+          }
+          markFirstPostWrite();
+          await firstAfterWrite;
+          const err = new Error("deadline exceeded");
+          err.name = "TimeoutError";
+          throw err;
         }
-        markFirstPostWrite();
-        await firstAfterWrite;
-        const err = new Error("deadline exceeded");
-        err.name = "TimeoutError";
-        throw err;
-      }
 
-      if (transcript.includes("second normal turn")) {
-        secondMainCalls++;
-        return mkAssistant({ text: "second ok" });
-      }
+        if (transcript.includes("second normal turn")) {
+          secondMainCalls++;
+          return mkAssistant({ text: "second ok" });
+        }
 
-      throw new Error(`unexpected messages: ${transcript}`);
-    });
+        throw new Error(`unexpected messages: ${transcript}`);
+      },
+    );
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const agent = await setupAgent(complete);
 
@@ -367,7 +400,11 @@ describe("tainted-by-writes refusal", () => {
         const hasToolResult = (ctx.messages ?? []).some((m) => m.role === "tool");
         if (mainTurns === 1 && !hasToolResult) {
           return mkAssistant({
-            toolCall: { id: "call-d", name: "intervals_delete_workout", arguments: { eventId: 7777 } },
+            toolCall: {
+              id: "call-d",
+              name: "intervals_delete_workout",
+              arguments: { eventId: 7777 },
+            },
             stopReason: "toolUse",
           });
         }
@@ -438,7 +475,11 @@ describe("tainted-by-writes refusal", () => {
                 workout: {
                   name: "Threshold",
                   steps: [
-                    { type: "steady", duration: { value: 20, unit: "minutes" }, power: { kind: "percent_ftp", value: 90 } },
+                    {
+                      type: "steady",
+                      duration: { value: 20, unit: "minutes" },
+                      power: { kind: "percent_ftp", value: 90 },
+                    },
                   ],
                 },
               },

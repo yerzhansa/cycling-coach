@@ -18,24 +18,24 @@ export function llmTestPorts(): Pick<
 
 export function baseAgentConfig(dataDir: string): EngineHostPorts & Config {
   const config: Config = {
-      dataSource: "platform",
-      llm: {
-        provider: "openai-codex",
-        model: "gpt-5.4",
-        apiKey: "",
-        authProfile: "openai-codex",
-      },
-      intervals: { apiKey: "", athleteId: "0" },
-      telegram: { botToken: "" },
-      session: {
-        historyTokenBudgetRatio: 0.3,
-        idleMinutes: 0,
-        dailyResetHour: 4,
-        resetArchiveRetentionDays: 0,
-        timezone: "",
-      },
-      contextWindowTokens: 272_000,
-      dataDir,
+    dataSource: "platform",
+    llm: {
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      apiKey: "",
+      authProfile: "openai-codex",
+    },
+    intervals: { apiKey: "", athleteId: "0" },
+    telegram: { botToken: "" },
+    session: {
+      historyTokenBudgetRatio: 0.3,
+      idleMinutes: 0,
+      dailyResetHour: 4,
+      resetArchiveRetentionDays: 0,
+      timezone: "",
+    },
+    contextWindowTokens: 272_000,
+    dataDir,
   };
   const adapted = createEngineHostAdapter({
     config,
@@ -45,5 +45,8 @@ export function baseAgentConfig(dataDir: string): EngineHostPorts & Config {
     ...adapted.ports,
     ...config,
     getAccessToken: async () => "token",
+    transcriptWriter: {
+      appendCompletedTurn: () => undefined,
+    },
   };
 }

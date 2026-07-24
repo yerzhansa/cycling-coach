@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { Config } from "../src/config.js";
 import { createEngineHostAdapter } from "../src/agent/engine-host-adapter.js";
+import { ConversationStore } from "../src/agent/conversation-store.js";
 import type { RefreshFailureReason } from "../src/auth/refresh-failure.js";
 import {
   LegacyAthleteStateUnavailableError,
@@ -115,6 +116,18 @@ describe("engine host adapter", () => {
     expect(Object.isFrozen(ports.config)).toBe(true);
     expect(Object.isFrozen(ports.config.llm)).toBe(true);
     expect(Object.isFrozen(ports.config.session)).toBe(true);
+  });
+
+  it("exposes one stable Core-owned conversation coordinator for both ports", () => {
+    dataDir = mkdtempSync(join(tmpdir(), "engine-host-transcript-"));
+    const { ports, conversationStore } = createEngineHostAdapter({
+      config: config(dataDir),
+      stateReader: legacyStateReader,
+    });
+
+    expect(conversationStore).toBeInstanceOf(ConversationStore);
+    expect(ports.chatStore).toBe(conversationStore);
+    expect(ports.transcriptWriter).toBe(conversationStore);
   });
 
   it("wires the exact rejecting legacy athlete-state reader", async () => {

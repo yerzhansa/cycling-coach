@@ -9,6 +9,7 @@ import type {
   EngineHostPorts,
   LoggerPort,
   MemoryStorePort,
+  TranscriptCompletedTurnInput,
 } from "../host-ports.js";
 import type { Sport, SportRuntimePorts } from "../sport.js";
 import { getEffectiveSections } from "../sport/effective-sections.js";
@@ -144,6 +145,24 @@ function classifyError(
   // on the structural name rather than instanceof.
   if (err instanceof Error && err.name === "TurnBudgetExceededError") return "budget";
   return classifyFailure(err);
+}
+
+function transcriptWriteFailureReason(
+  error: unknown,
+): "record-too-large" | "storage-full" | "permission-denied" | "unsafe-target" | "write-failed" {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === "TRANSCRIPT_RECORD_TOO_LARGE") return "record-too-large";
+  if (code === "ENOSPC") return "storage-full";
+  if (code === "EACCES" || code === "EPERM") return "permission-denied";
+  if (
+    code === "ELOOP" ||
+    code === "EISDIR" ||
+    code === "ENOTDIR" ||
+    code === "TRANSCRIPT_UNSAFE_TARGET"
+  ) {
+    return "unsafe-target";
+  }
+  return "write-failed";
 }
 
 // Replays a pre-captured error to retryWithBackoff exactly once so it performs a
@@ -402,6 +421,21 @@ export class CoachAgent {
     }
   }
 
+  private recordCompletedTurn(input: TranscriptCompletedTurnInput): void {
+    try {
+      this.ports.transcriptWriter.appendCompletedTurn(input);
+    } catch (error) {
+      try {
+        this.log.warn("transcript_record_failed", undefined, {
+          operation: "turn-completed",
+          reason: transcriptWriteFailureReason(error),
+        });
+      } catch {
+        return;
+      }
+    }
+  }
+
   async chat(
     chatId: string,
     userMessage: string,
@@ -464,8 +498,12 @@ export class CoachAgent {
             }),
           );
         } else {
+          this.chatStore.resetConversation({
+            chatId,
+            boundaryAt: new Date(this.ports.now()).toISOString(),
+            reason: "stale-reset",
+          });
           this.archiveDeferred.delete(chatId);
-          this.chatStore.archiveAndReset(chatId);
           this.lastFlushMessageCount.delete(chatId);
           history = [];
         }
@@ -691,6 +729,13 @@ export class CoachAgent {
             });
 
             const responseText = effectiveText + persistenceNote;
+            this.recordCompletedTurn({
+              chatId,
+              turnId,
+              completedAt: new Date(this.ports.now()).toISOString(),
+              athleteText: userMessage,
+              coachText: responseText,
+            });
             emitEvent({ type: "final-text", turnId, text: responseText });
             return responseText;
           } catch (err) {
@@ -734,6 +779,13 @@ export class CoachAgent {
                   compactions,
                 }),
               );
+              this.recordCompletedTurn({
+                chatId,
+                turnId,
+                completedAt: new Date(this.ports.now()).toISOString(),
+                athleteText: userMessage,
+                coachText: TAINTED_BY_WRITES_MESSAGE,
+              });
               emitEvent({ type: "final-text", turnId, text: TAINTED_BY_WRITES_MESSAGE });
               return TAINTED_BY_WRITES_MESSAGE;
             }
@@ -994,8 +1046,12 @@ export class CoachAgent {
           this.log.warn("Pre-reset memory flush failed; archiving session anyway", err);
         }
       }
+      this.chatStore.resetConversation({
+        chatId,
+        boundaryAt: new Date(this.ports.now()).toISOString(),
+        reason: "explicit-reset",
+      });
       this.archiveDeferred.delete(chatId);
-      this.chatStore.archiveAndReset(chatId);
       this.lastFlushMessageCount.delete(chatId);
       return { memoryFlushed };
     });

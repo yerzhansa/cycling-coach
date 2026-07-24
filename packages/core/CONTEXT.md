@@ -70,7 +70,7 @@ The turn-invariant head of the system prompt — SOUL, the joined skill prompts,
 ## Example dialogue
 
 > **Dev:** "When the duathlete asks about FTP, does the duathlon **Sport** answer or delegate to cycling?"
-> **Domain expert:** "There's only one active **Sport** per **Agent**. Duathlon's `soul` and `tools` are *composed* from cycling and running at construction time. From Core's view, one **Sport** answers."
+> **Domain expert:** "There's only one active **Sport** per **Agent**. Duathlon's `soul` and `tools` are _composed_ from cycling and running at construction time. From Core's view, one **Sport** answers."
 
 ## Path resolution
 
@@ -82,6 +82,8 @@ Each subsystem's behavior under failure is a recorded fail-open / fail-closed de
 
 - **Coaching from stale/corrupt cache** → **CLOSED** (degrade-and-disclose). A HARD sync-gate rejection stamps `mitigation: "block_coaching"`; the chat turn reads it and declines to quote numbers from unvalidated data, telling the athlete the data is stale instead. The one row wired in code.
 - **Audit-write** (append throws) → **OPEN**. Audit is observability, not the reply path; never break coaching to record a log line.
+- **Completed-turn transcript capture** (append throws) → **OPEN**. Every serialized transcript JSONL record is capped at an inclusive 262,144 bytes. A delivered coaching reply is not withdrawn when its transcript append fails; the failure is recorded with fixed metadata only.
+- **Conversation reset / transcript-boundary consistency** → **CLOSED**. A reset is journaled before either durable store changes, recovers idempotently before later access, and blocks model-context or transcript access while recovery remains unresolved.
 - **`error_state.json` unreadable** (missing / unparseable / schema-invalid) → **OPEN** on the read. A broken error-state file must not brick chat — absent/unreadable yields no block, coach normally.
 - **Sender-allowlist lock contention** → **CLOSED**. Access control is a security boundary; deny on uncertainty rather than admit an unverified sender.
 - **Secrets backend unavailable** → **CLOSED**. No credential ⇒ no upstream call; fail loudly rather than proceed with an empty/guessed secret.

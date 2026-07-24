@@ -106,6 +106,31 @@ function jsonlCanonical(content: string): string {
 // A5 — ledger + session writes (two-way)
 // ---------------------------------------------------------------------------
 
+const DURABLE_RESET_ARCHIVE_PATTERN =
+  /^(sessions\/.+\.jsonl\.reset\.\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z)\.[a-f0-9]{64}$/;
+
+function artifactKey(relativePath: string): string {
+  return DURABLE_RESET_ARCHIVE_PATTERN.exec(relativePath)?.[1] ?? relativePath;
+}
+
+function collectLedgerAndSessionArtifacts(rootDir: string): Map<string, string[]> {
+  const artifacts = new Map<string, string[]>();
+  const add = (relativePath: string) => {
+    const key = artifactKey(relativePath);
+    const paths = artifacts.get(key) ?? [];
+    paths.push(relativePath);
+    artifacts.set(key, paths);
+  };
+
+  if (existsSync(join(rootDir, "usage-ledger.jsonl"))) add("usage-ledger.jsonl");
+  const sessionsDir = join(rootDir, "sessions");
+  if (existsSync(sessionsDir)) {
+    for (const name of readdirSync(sessionsDir)) add(join("sessions", name));
+  }
+  for (const paths of artifacts.values()) paths.sort();
+  return artifacts;
+}
+
 export function assertLedgerAndSessions(
   scenarioId: string,
   baselineDir: string,
@@ -115,47 +140,37 @@ export function assertLedgerAndSessions(
   const failures: FailureWithDiff[] = [];
   const sections: string[] = [];
 
-  const files = new Set<string>();
-  if (existsSync(join(baselineDir, "usage-ledger.jsonl")) || existsSync(join(homeDir, "usage-ledger.jsonl"))) {
-    files.add("usage-ledger.jsonl");
-  }
-  for (const dir of [join(baselineDir, "sessions"), join(homeDir, "sessions")]) {
-    if (!existsSync(dir)) continue;
-    for (const name of readdirSync(dir)) files.add(join("sessions", name));
-  }
+  const baselineArtifacts = collectLedgerAndSessionArtifacts(baselineDir);
+  const liveArtifacts = collectLedgerAndSessionArtifacts(homeDir);
+  const artifactKeys = new Set([...baselineArtifacts.keys(), ...liveArtifacts.keys()]);
 
-  for (const rel of [...files].sort()) {
-    const baselinePath = join(baselineDir, rel);
-    const livePath = join(homeDir, rel);
-    const inBaseline = existsSync(baselinePath);
-    const inLive = existsSync(livePath);
-    if (inBaseline !== inLive) {
-      const detail = `${rel}: ${inBaseline ? "present in baseline, missing live" : "present live, missing from baseline"}`;
-      sections.push(`--- ${detail} ---`);
-      failures.push({ assertId: "A5", scenario: scenarioId, detail, diffFile: DIFF_FILES.A5 });
-      continue;
-    }
-    const baselineLines = jsonlLines(readFileSync(baselinePath, "utf-8"));
-    const liveLines = jsonlLines(readFileSync(livePath, "utf-8"));
-    const max = Math.max(baselineLines.length, liveLines.length);
-    for (let i = 0; i < max; i++) {
-      const b = baselineLines[i];
-      const l = liveLines[i];
-      if (b === undefined || l === undefined) {
-        const detail = `${rel} line ${i + 1}: ${b === undefined ? "extra live line" : "missing live line"}`;
-        sections.push(`--- ${detail} ---\n${canonicalJson(b ?? l)}`);
+  for (const key of [...artifactKeys].sort()) {
+    const baselinePaths = baselineArtifacts.get(key) ?? [];
+    const livePaths = liveArtifacts.get(key) ?? [];
+    const count = Math.max(baselinePaths.length, livePaths.length);
+    for (let artifactIndex = 0; artifactIndex < count; artifactIndex++) {
+      const baselineRelativePath = baselinePaths[artifactIndex];
+      const liveRelativePath = livePaths[artifactIndex];
+      if (baselineRelativePath === undefined || liveRelativePath === undefined) {
+        const relativePath = baselineRelativePath ?? liveRelativePath ?? key;
+        const detail = `${relativePath}: ${
+          baselineRelativePath === undefined
+            ? "present live, missing from baseline"
+            : "present in baseline, missing live"
+        }`;
+        sections.push(`--- ${detail} ---`);
         failures.push({ assertId: "A5", scenario: scenarioId, detail, diffFile: DIFF_FILES.A5 });
         continue;
       }
-      const mismatch = compareLineWithExcuses(b, l, excuses);
-      if (mismatch !== null) {
-        const detail = `${rel} line ${i + 1}: field(s) differ: ${mismatch.join(", ")}`;
-        sections.push(
-          `--- ${detail} ---\n` +
-            textDiff("baseline line", canonicalJson(b), "live line", canonicalJson(l)),
-        );
-        failures.push({ assertId: "A5", scenario: scenarioId, detail, diffFile: DIFF_FILES.A5 });
-      }
+      compareJsonlArtifact(
+        scenarioId,
+        key,
+        join(baselineDir, baselineRelativePath),
+        join(homeDir, liveRelativePath),
+        excuses,
+        failures,
+        sections,
+      );
     }
   }
 
@@ -163,6 +178,39 @@ export function assertLedgerAndSessions(
     failures[0].diffContent = sections.join("\n");
   }
   return failures;
+}
+
+function compareJsonlArtifact(
+  scenarioId: string,
+  relativePath: string,
+  baselinePath: string,
+  livePath: string,
+  excuses: SupersessionEntry[],
+  failures: FailureWithDiff[],
+  sections: string[],
+): void {
+  const baselineLines = jsonlLines(readFileSync(baselinePath, "utf-8"));
+  const liveLines = jsonlLines(readFileSync(livePath, "utf-8"));
+  const max = Math.max(baselineLines.length, liveLines.length);
+  for (let i = 0; i < max; i++) {
+    const b = baselineLines[i];
+    const l = liveLines[i];
+    if (b === undefined || l === undefined) {
+      const detail = `${relativePath} line ${i + 1}: ${b === undefined ? "extra live line" : "missing live line"}`;
+      sections.push(`--- ${detail} ---\n${canonicalJson(b ?? l)}`);
+      failures.push({ assertId: "A5", scenario: scenarioId, detail, diffFile: DIFF_FILES.A5 });
+      continue;
+    }
+    const mismatch = compareLineWithExcuses(b, l, excuses);
+    if (mismatch !== null) {
+      const detail = `${relativePath} line ${i + 1}: field(s) differ: ${mismatch.join(", ")}`;
+      sections.push(
+        `--- ${detail} ---\n` +
+          textDiff("baseline line", canonicalJson(b), "live line", canonicalJson(l)),
+      );
+      failures.push({ assertId: "A5", scenario: scenarioId, detail, diffFile: DIFF_FILES.A5 });
+    }
+  }
 }
 
 function jsonlLines(content: string): Record<string, unknown>[] {
@@ -247,7 +295,12 @@ export function resolvePendings(
         scenario: "",
         detail: resolution.detail,
         diffFile: DIFF_FILES.A1,
-        diffContent: textDiff("recorded system", pending.recordedText, "live system", pending.liveText),
+        diffContent: textDiff(
+          "recorded system",
+          pending.recordedText,
+          "live system",
+          pending.liveText,
+        ),
       });
     }
   }
@@ -279,7 +332,10 @@ export function assertSessionLineagePairs(
       });
       continue;
     }
-    if (live.templateHash === recorded.templateHash && live.assembledHash === recorded.assembledHash) {
+    if (
+      live.templateHash === recorded.templateHash &&
+      live.assembledHash === recorded.assembledHash
+    ) {
       continue;
     }
     if (
@@ -316,7 +372,12 @@ export function assertNeedles(scenario: S8aScenario, replies: string[]): Failure
         failures.push({
           assertId: "A7",
           scenario: scenario.id,
-          detail: JSON.stringify({ needle: needleLabel(needle), kind: "forbidden", turn, matched: true }),
+          detail: JSON.stringify({
+            needle: needleLabel(needle),
+            kind: "forbidden",
+            turn,
+            matched: true,
+          }),
         });
       }
     });
@@ -328,7 +389,12 @@ export function assertNeedles(scenario: S8aScenario, replies: string[]): Failure
       failures.push({
         assertId: "A7",
         scenario: scenario.id,
-        detail: JSON.stringify({ needle: needleLabel(needle), kind: "required", turn: null, matched: false }),
+        detail: JSON.stringify({
+          needle: needleLabel(needle),
+          kind: "required",
+          turn: null,
+          matched: false,
+        }),
       });
     }
   }
