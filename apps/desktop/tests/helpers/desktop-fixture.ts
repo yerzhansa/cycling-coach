@@ -307,6 +307,11 @@ export async function launchDesktopFixture(input: {
         ReturnType<CoachOperations["saveIntake"]>
       >;
     },
+    async getTranscriptPage(request) {
+      return finalFrame(await invoke("getTranscriptPage", request)) as Awaited<
+        ReturnType<CoachOperations["getTranscriptPage"]>
+      >;
+    },
     async configureRuntime(request) {
       return finalFrame(await invoke("configureRuntime", request)) as Awaited<
         ReturnType<CoachOperations["configureRuntime"]>

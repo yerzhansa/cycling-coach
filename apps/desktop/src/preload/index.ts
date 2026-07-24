@@ -4,6 +4,7 @@ import {
   DESKTOP_LIFECYCLE_CHANNEL,
   DESKTOP_OPEN_EXTERNAL_CHANNEL,
   DESKTOP_RELEASE_NOTES_CHANNEL,
+  DESKTOP_TRANSCRIPT_PAGE_CHANNEL,
   DESKTOP_UPDATE_CHECK_CHANNEL,
   DESKTOP_UPDATE_GET_CHANNEL,
   DESKTOP_UPDATE_RESTART_CHANNEL,
@@ -83,6 +84,11 @@ const CHATGPT_REASONS = new Set([
 const IMPORT_EXTENSIONS = new Set([".fit", ".tcx", ".gpx"]);
 const RELEASES_URL = "https://github.com/yerzhansa/cycling-coach/releases";
 const RELEASE_NOTES_MAX_TOTAL_BYTES = 64 * 1024;
+const TRANSCRIPT_PAGE_MAX_TURNS = 50;
+const TRANSCRIPT_PAGE_MAX_RESPONSE_BYTES = 266_240;
+const TRANSCRIPT_CURSOR_LENGTH = 152;
+const TRANSCRIPT_CURSOR_PATTERN = /^[A-Za-z0-9_-]{152}$/;
+const BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const RELEASE_VERSION_RE =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const STABLE_VERSION_RE = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
@@ -94,6 +100,123 @@ function record(value: unknown): value is Record<string, unknown> {
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
+}
+
+function decodedBase64Url(value: string): Uint8Array | null {
+  let accumulator = 0;
+  let bits = 0;
+  const decoded: number[] = [];
+  for (const character of value) {
+    const digit = BASE64URL_ALPHABET.indexOf(character);
+    if (digit < 0) return null;
+    accumulator = (accumulator << 6) | digit;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      decoded.push((accumulator >> bits) & 0xff);
+      accumulator &= (1 << bits) - 1;
+    }
+  }
+  return bits === 0 ? Uint8Array.from(decoded) : null;
+}
+
+function safeCursorOffset(bytes: Uint8Array, offset: number): number | null {
+  let value = 0;
+  for (let index = offset; index < offset + 8; index += 1) {
+    value = value * 256 + bytes[index]!;
+    if (!Number.isSafeInteger(value)) return null;
+  }
+  return value;
+}
+
+function transcriptCursor(value: unknown): value is string {
+  if (
+    typeof value !== "string" ||
+    value.length !== TRANSCRIPT_CURSOR_LENGTH ||
+    !TRANSCRIPT_CURSOR_PATTERN.test(value)
+  ) {
+    return false;
+  }
+  const bytes = decodedBase64Url(value);
+  if (bytes === null || bytes.length !== 114 || bytes[0] !== 1) return false;
+  const fenceKind = bytes[1];
+  if (fenceKind !== 0 && fenceKind !== 1) return false;
+  if (fenceKind === 0 && bytes.slice(34, 66).some((byte) => byte !== 0)) return false;
+  const snapshotEnd = safeCursorOffset(bytes, 98);
+  const before = safeCursorOffset(bytes, 106);
+  return snapshotEnd !== null && before !== null && before <= snapshotEnd;
+}
+
+function parseTranscriptPageRequest(value: unknown): {
+  readonly cursor: string | null;
+  readonly limit: number;
+} {
+  if (
+    !record(value) ||
+    !exactKeys(value, ["cursor", "limit"]) ||
+    (value.cursor !== null && !transcriptCursor(value.cursor)) ||
+    !Number.isSafeInteger(value.limit) ||
+    (value.limit as number) < 1 ||
+    (value.limit as number) > TRANSCRIPT_PAGE_MAX_TURNS
+  ) {
+    throw new TypeError();
+  }
+  return { cursor: value.cursor as string | null, limit: value.limit as number };
+}
+
+function canonicalIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  try {
+    return new Date(value).toISOString() === value;
+  } catch {
+    return false;
+  }
+}
+
+function parseTranscriptPage(value: unknown): unknown {
+  if (
+    !record(value) ||
+    !exactKeys(value, ["schemaVersion", "status", "turns", "nextCursor"]) ||
+    value.schemaVersion !== 1 ||
+    (value.status !== "page" && value.status !== "restart-required") ||
+    !Array.isArray(value.turns) ||
+    value.turns.length > TRANSCRIPT_PAGE_MAX_TURNS ||
+    (value.nextCursor !== null && !transcriptCursor(value.nextCursor)) ||
+    textEncoder.encode(JSON.stringify(value)).byteLength > TRANSCRIPT_PAGE_MAX_RESPONSE_BYTES
+  ) {
+    throw new TypeError();
+  }
+  const turns = value.turns.map((turn) => {
+    if (
+      !record(turn) ||
+      !exactKeys(turn, ["turnId", "completedAt", "athleteText", "coachText"]) ||
+      typeof turn.turnId !== "string" ||
+      turn.turnId.length === 0 ||
+      !canonicalIsoTimestamp(turn.completedAt) ||
+      typeof turn.athleteText !== "string" ||
+      typeof turn.coachText !== "string"
+    ) {
+      throw new TypeError();
+    }
+    return {
+      turnId: turn.turnId,
+      completedAt: turn.completedAt,
+      athleteText: turn.athleteText,
+      coachText: turn.coachText,
+    };
+  });
+  if (value.status === "restart-required" && (turns.length !== 0 || value.nextCursor !== null)) {
+    throw new TypeError();
+  }
+  if (value.status === "page" && turns.length === 0 && value.nextCursor !== null) {
+    throw new TypeError();
+  }
+  return {
+    schemaVersion: 1,
+    status: value.status,
+    turns,
+    nextCursor: value.nextCursor,
+  };
 }
 
 function safeString(value: unknown, maximumLength: number): value is string {
@@ -623,6 +746,12 @@ contextBridge.exposeInMainWorld(
       return ipcRenderer.invoke(
         DESKTOP_CONNECTION_CHANNEL,
         ...(failedGeneration === undefined ? [] : [{ generation: failedGeneration }]),
+      );
+    },
+    getTranscriptPage: async (input: unknown) => {
+      const request = parseTranscriptPageRequest(input);
+      return parseTranscriptPage(
+        await ipcRenderer.invoke(DESKTOP_TRANSCRIPT_PAGE_CHANNEL, request),
       );
     },
     credentialStatuses: async () =>

@@ -106,6 +106,72 @@ afterEach(() => {
 });
 
 describe("ConversationStore reset transaction recovery", () => {
+  it("keeps transcript pagination read-only when a reset intent is pending", () => {
+    const dataDir = makeDataDir();
+    const chatId = "read-only-page";
+    const chat = new ChatStore(dataDir);
+    const transcript = new TranscriptStore(dataDir);
+    const store = new ConversationStore(chat, transcript);
+    store.appendCompletedTurn({
+      chatId,
+      turnId: "turn-1",
+      completedAt: "2026-07-22T00:00:00.000Z",
+      athleteText: "a",
+      coachText: "b",
+    });
+    const pending = resetIntent(chatId);
+    transcript.createResetIntent(pending);
+    const before = readFileSync(transcriptPath(dataDir, chatId));
+
+    const page = store.readCurrentConversationPage(chatId, { cursor: null, limit: 1 });
+
+    expect(page.turns.map((turn) => turn.turnId)).toEqual(["turn-1"]);
+    expect(transcript.readResetIntent(chatId)).toEqual(pending);
+    expect(readFileSync(transcriptPath(dataDir, chatId))).toEqual(before);
+    expect(boundaryCount(dataDir, chatId)).toBe(0);
+  });
+
+  it("fences a pagination cursor after the reset transaction completes", () => {
+    const dataDir = makeDataDir();
+    const chatId = "completed-reset-page";
+    const chat = new ChatStore(dataDir);
+    const transcript = new TranscriptStore(dataDir);
+    const store = new ConversationStore(chat, transcript, () => RESET_ID);
+    store.appendCompletedTurn({
+      chatId,
+      turnId: "turn-1",
+      completedAt: "2026-07-22T00:00:00.000Z",
+      athleteText: "a",
+      coachText: "b",
+    });
+    store.appendCompletedTurn({
+      chatId,
+      turnId: "turn-2",
+      completedAt: "2026-07-22T00:00:01.000Z",
+      athleteText: "c",
+      coachText: "d",
+    });
+    const page = store.readCurrentConversationPage(chatId, { cursor: null, limit: 1 });
+
+    store.resetConversation({
+      chatId,
+      boundaryAt: "2026-07-22T01:02:03.000Z",
+      reason: "explicit-reset",
+    });
+
+    expect(
+      store.readCurrentConversationPage(chatId, {
+        cursor: page.nextCursor,
+        limit: 1,
+      }),
+    ).toEqual({
+      schemaVersion: 1,
+      status: "restart-required",
+      turns: [],
+      nextCursor: null,
+    });
+  });
+
   it("recovers intent-only by ensuring one boundary and archiving the active session", () => {
     const dataDir = makeDataDir();
     const chat = new ChatStore(dataDir);

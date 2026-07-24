@@ -85,6 +85,34 @@ function operationRuntime(
 }
 
 describe("coach operations", () => {
+  it("validates transcript requests and responses around the read-only composition lane", async () => {
+    const readTranscriptPage = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      status: "page" as const,
+      turns: [],
+      nextCursor: null,
+    }));
+    const operations = createCoachOperations({
+      home,
+      context: context(),
+      runtime: operationRuntime(),
+      intervalsCredentials: intervalsCredentials(),
+      historyNewestDate: () => "1998-07-18",
+      readTranscriptPage,
+      applyRuntimeConfig: async () => {},
+    });
+
+    await expect(operations.getTranscriptPage({ cursor: null, limit: 25 })).resolves.toEqual({
+      schemaVersion: 1,
+      status: "page",
+      turns: [],
+      nextCursor: null,
+    });
+    expect(readTranscriptPage).toHaveBeenCalledWith({ cursor: null, limit: 25 });
+    expect(() => operations.getTranscriptPage({ cursor: null, limit: 51 } as never)).toThrow();
+    expect(readTranscriptPage).toHaveBeenCalledOnce();
+  });
+
   it("imports synthetic activity files through the live store and deduplicates reruns", async () => {
     const root = await mkdtemp(join(await realpath(tmpdir()), "coach-operations-"));
     const liveHome: AthleteHome = {

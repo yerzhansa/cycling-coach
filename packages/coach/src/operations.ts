@@ -3,6 +3,8 @@ import {
   ConfigureRuntimeRpcResultSchema,
   GetRuntimeConfigRpcParamsSchema,
   GetRuntimeConfigRpcResultSchema,
+  GetTranscriptPageRpcParamsSchema,
+  GetTranscriptPageRpcResultSchema,
   GetUnitsPreferenceRpcParamsSchema,
   GetUnitsPreferenceRpcResultSchema,
   ImportFilesRpcParamsSchema,
@@ -19,6 +21,8 @@ import {
   type ConfigureRuntimeRpcResult,
   type GetRuntimeConfigRpcParams,
   type GetRuntimeConfigRpcResult,
+  type GetTranscriptPageRpcParams,
+  type GetTranscriptPageRpcResult,
   type GetUnitsPreferenceRpcParams,
   type GetUnitsPreferenceRpcResult,
   type CoachOperations,
@@ -53,6 +57,9 @@ export interface CreateCoachOperationsInput {
     read(): Promise<Readonly<{ apiKey: string; athleteId: string }>>;
   }>;
   readonly historyNewestDate: () => string;
+  readonly readTranscriptPage?: (
+    request: GetTranscriptPageRpcParams,
+  ) => Promise<GetTranscriptPageRpcResult>;
   readonly applyRuntimeConfig: (
     request: ConfigureRuntimeRpcParams,
     signal: AbortSignal,
@@ -226,6 +233,15 @@ export function createCoachOperations(
         });
         return SaveIntakeRpcResultSchema.parse({ schemaVersion: 1, saved: true });
       });
+    },
+    getTranscriptPage(request: GetTranscriptPageRpcParams): Promise<GetTranscriptPageRpcResult> {
+      const parsedRequest = GetTranscriptPageRpcParamsSchema.parse(request);
+      if (input.readTranscriptPage === undefined) {
+        throw new TypeError("Transcript page read is unavailable.");
+      }
+      return input
+        .readTranscriptPage(parsedRequest)
+        .then((result) => GetTranscriptPageRpcResultSchema.parse(result));
     },
     configureRuntime(request: ConfigureRuntimeRpcParams): Promise<ConfigureRuntimeRpcResult> {
       const parsedRequest = ConfigureRuntimeRpcParamsSchema.parse(request);

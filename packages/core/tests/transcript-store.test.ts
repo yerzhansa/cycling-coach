@@ -20,6 +20,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES,
+  MAX_TRANSCRIPT_PAGE_TURNS,
   MAX_TRANSCRIPT_RECORD_BYTES,
   TranscriptRecordTooLargeError,
   TranscriptStore,
@@ -176,6 +178,152 @@ describe("TranscriptStore append and corruption handling", () => {
     ]);
   });
 
+  it("walks newest pages backward within only the latest trusted conversation", () => {
+    const dataDir = makeDataDir();
+    const chatId = "paginated-boundary";
+    const store = new TranscriptStore(dataDir);
+    store.appendCompletedTurn(turn(chatId, "turn-8"));
+    store.appendCompletedTurn(turn(chatId, "turn-9"));
+    store.ensureConversationBoundary(intent(chatId));
+    for (let index = 1; index <= 5; index += 1) {
+      store.appendCompletedTurn(turn(chatId, `turn-${index}`));
+    }
+
+    const newest = store.readCurrentConversationPage(chatId, { cursor: null, limit: 2 });
+    expect(newest.status).toBe("page");
+    expect(newest.turns.map((record) => record.turnId)).toEqual(["turn-4", "turn-5"]);
+    expect(newest.nextCursor).not.toBeNull();
+
+    const middle = store.readCurrentConversationPage(chatId, {
+      cursor: newest.nextCursor,
+      limit: 2,
+    });
+    expect(middle.turns.map((record) => record.turnId)).toEqual(["turn-2", "turn-3"]);
+    expect(middle.nextCursor).not.toBeNull();
+
+    const oldest = store.readCurrentConversationPage(chatId, {
+      cursor: middle.nextCursor,
+      limit: 2,
+    });
+    expect(oldest.turns.map((record) => record.turnId)).toEqual(["turn-1"]);
+    expect(oldest.nextCursor).toBeNull();
+  });
+
+  it("keeps a cursor snapshot stable while completed turns append concurrently", () => {
+    const dataDir = makeDataDir();
+    const chatId = "append-stability";
+    const store = new TranscriptStore(dataDir);
+    for (let index = 1; index <= 4; index += 1) {
+      store.appendCompletedTurn(turn(chatId, `turn-${index}`));
+    }
+
+    const newest = store.readCurrentConversationPage(chatId, { cursor: null, limit: 2 });
+    store.appendCompletedTurn(turn(chatId, "turn-5"));
+    const older = store.readCurrentConversationPage(chatId, {
+      cursor: newest.nextCursor,
+      limit: 2,
+    });
+    const refreshed = store.readCurrentConversationPage(chatId, { cursor: null, limit: 2 });
+
+    expect(older.turns.map((record) => record.turnId)).toEqual(["turn-1", "turn-2"]);
+    expect(older.nextCursor).toBeNull();
+    expect(refreshed.turns.map((record) => record.turnId)).toEqual(["turn-4", "turn-5"]);
+  });
+
+  it("returns a fixed restart signal when a completed boundary supersedes a cursor", () => {
+    const dataDir = makeDataDir();
+    const chatId = "reset-between-pages";
+    const store = new TranscriptStore(dataDir);
+    for (let index = 1; index <= 3; index += 1) {
+      store.appendCompletedTurn(turn(chatId, `turn-${index}`));
+    }
+    const first = store.readCurrentConversationPage(chatId, { cursor: null, limit: 1 });
+    store.ensureConversationBoundary(intent(chatId));
+    store.appendCompletedTurn(turn(chatId, "turn-4"));
+
+    expect(
+      store.readCurrentConversationPage(chatId, {
+        cursor: first.nextCursor,
+        limit: 1,
+      }),
+    ).toEqual({
+      schemaVersion: 1,
+      status: "restart-required",
+      turns: [],
+      nextCursor: null,
+    });
+  });
+
+  it("enforces turn and encoded response budgets without losing pagination progress", () => {
+    const dataDir = makeDataDir();
+    const chatId = "page-budgets";
+    const store = new TranscriptStore(dataDir);
+    for (let index = 1; index <= MAX_TRANSCRIPT_PAGE_TURNS + 5; index += 1) {
+      store.appendCompletedTurn(turn(chatId, `turn-${index}`));
+    }
+    expect(() =>
+      store.readCurrentConversationPage(chatId, {
+        cursor: null,
+        limit: MAX_TRANSCRIPT_PAGE_TURNS + 1,
+      }),
+    ).toThrow(TypeError);
+    const capped = store.readCurrentConversationPage(chatId, {
+      cursor: null,
+      limit: MAX_TRANSCRIPT_PAGE_TURNS,
+    });
+    expect(capped.turns).toHaveLength(MAX_TRANSCRIPT_PAGE_TURNS);
+    expect(capped.nextCursor).not.toBeNull();
+
+    const largeChatId = "page-byte-budget";
+    for (let index = 1; index <= 3; index += 1) {
+      store.appendCompletedTurn({
+        ...turnWithSerializedBytes(140_000, largeChatId),
+        turnId: `turn-${index}`,
+      });
+    }
+    const large = store.readCurrentConversationPage(largeChatId, {
+      cursor: null,
+      limit: MAX_TRANSCRIPT_PAGE_TURNS,
+    });
+    expect(Buffer.byteLength(JSON.stringify(large), "utf8")).toBeLessThanOrEqual(
+      MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES,
+    );
+    expect(large.turns).toHaveLength(1);
+    expect(large.nextCursor).not.toBeNull();
+    const remaining = store.readCurrentConversationPage(largeChatId, {
+      cursor: large.nextCursor,
+      limit: MAX_TRANSCRIPT_PAGE_TURNS,
+    });
+    expect(remaining.turns).toHaveLength(1);
+    expect(remaining.nextCursor).not.toBeNull();
+  });
+
+  it("applies fail-closed corruption recovery semantics to every pagination path", () => {
+    const dataDir = makeDataDir();
+    const chatId = "page-corruption";
+    const store = new TranscriptStore(dataDir);
+    const path = transcriptPath(dataDir, chatId);
+    store.appendCompletedTurn(turn(chatId, "turn-1"));
+    appendFileSync(path, Buffer.from([0xff, 0x0a]));
+    store.appendCompletedTurn(turn(chatId, "turn-2"));
+
+    expect(store.readCurrentConversationPage(chatId, { cursor: null, limit: 10 })).toEqual({
+      schemaVersion: 1,
+      status: "page",
+      turns: [],
+      nextCursor: null,
+    });
+
+    store.ensureConversationBoundary(intent(chatId));
+    store.appendCompletedTurn(turn(chatId, "turn-3"));
+    const recovered = store.readCurrentConversationPage(chatId, {
+      cursor: null,
+      limit: 10,
+    });
+    expect(recovered.turns.map((record) => record.turnId)).toEqual(["turn-3"]);
+    expect(recovered.nextCursor).toBeNull();
+  });
+
   it("accepts an exact 262,144-byte serialized Unicode and escaped record", () => {
     const dataDir = makeDataDir();
     const store = new TranscriptStore(dataDir);
@@ -188,6 +336,11 @@ describe("TranscriptStore append and corruption handling", () => {
     store.appendCompletedTurn(input);
 
     expect(readFileSync(transcriptPath(dataDir, input.chatId))).toEqual(bytes);
+    const page = store.readCurrentConversationPage(input.chatId, { cursor: null, limit: 1 });
+    expect(page.turns).toHaveLength(1);
+    expect(Buffer.byteLength(JSON.stringify(page), "utf8")).toBeLessThanOrEqual(
+      MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES,
+    );
   });
 
   it("rejects an exact 262,145-byte record before target access or mutation", () => {

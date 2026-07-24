@@ -158,6 +158,12 @@ describe.skipIf(!hasLoopback)("local CLI redaction boundary", () => {
               requests: { store: 0, reference: 0, total: 0 },
             }),
             saveIntake: async () => ({ schemaVersion: 1, saved: true }),
+            getTranscriptPage: async () => ({
+              schemaVersion: 1,
+              status: "page",
+              turns: [],
+              nextCursor: null,
+            }),
             configureRuntime: async ({ llm, intervals, session }) => ({
               schemaVersion: 3,
               status: "applied",

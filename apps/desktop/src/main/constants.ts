@@ -3,6 +3,7 @@ export const DESKTOP_HOST = "app" as const;
 export const DESKTOP_RENDERER_ORIGIN = "enduragent://app" as const;
 export const DESKTOP_RENDERER_URL = "enduragent://app/index.html" as const;
 export const DESKTOP_CONNECTION_CHANNEL = "desktop:get-daemon-connection" as const;
+export const DESKTOP_TRANSCRIPT_PAGE_CHANNEL = "desktop:get-transcript-page" as const;
 export const DESKTOP_RELEASE_NOTES_CHANNEL = "desktop:get-release-notes" as const;
 export const DESKTOP_UPDATE_GET_CHANNEL = "desktop:update:get" as const;
 export const DESKTOP_UPDATE_CHECK_CHANNEL = "desktop:update:check" as const;

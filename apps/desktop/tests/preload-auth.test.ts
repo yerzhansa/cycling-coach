@@ -39,6 +39,7 @@ vi.mock("electron", () => ({
 
 interface AuthBridge {
   getDaemonConnection(failedGeneration?: number): Promise<unknown>;
+  getTranscriptPage(input: unknown): Promise<unknown>;
   credentialStatuses(): Promise<unknown>;
   deleteCredential(input: unknown): Promise<unknown>;
   retryFailedCredentials(): Promise<unknown>;
@@ -52,6 +53,12 @@ interface AuthBridge {
   checkForUpdates(): Promise<unknown>;
   restartToUpdate(): Promise<unknown>;
   onUpdateState(listener: (state: unknown) => void): () => void;
+}
+
+function validTranscriptCursor(): string {
+  const bytes = Buffer.alloc(114);
+  bytes[0] = 1;
+  return bytes.toString("base64url");
 }
 
 const chatGptSelection = {
@@ -157,6 +164,7 @@ describe("desktop preload ChatGPT auth", () => {
         "deleteCredential",
         "getUpdateState",
         "getDaemonConnection",
+        "getTranscriptPage",
         "llmConfiguration",
         "checkForUpdates",
         "onDroppedImportFiles",
@@ -168,6 +176,81 @@ describe("desktop preload ChatGPT auth", () => {
       ].sort(),
     );
     expect(bridge).not.toHaveProperty("openExternal");
+  });
+
+  it("validates and copies strict bounded transcript pages", async () => {
+    const cursor = validTranscriptCursor();
+    const response = {
+      schemaVersion: 1,
+      status: "page",
+      turns: [
+        {
+          turnId: "turn-1",
+          completedAt: "1998-07-06T00:00:00.000Z",
+          athleteText: "a",
+          coachText: "b",
+        },
+      ],
+      nextCursor: cursor,
+    };
+    mocks.invoke.mockResolvedValueOnce(response);
+
+    const page = await bridge.getTranscriptPage({ cursor: null, limit: 25 });
+
+    expect(page).toEqual(response);
+    expect(page).not.toBe(response);
+    expect(mocks.invoke).toHaveBeenCalledWith("desktop:get-transcript-page", {
+      cursor: null,
+      limit: 25,
+    });
+  });
+
+  it("rejects malformed transcript requests before IPC and redacts malformed responses", async () => {
+    for (const request of [
+      null,
+      {},
+      { cursor: null, limit: 0 },
+      { cursor: null, limit: 51 },
+      { cursor: "a".repeat(152), limit: 10 },
+      { cursor: null, limit: 10, path: "/private/transcript" },
+    ]) {
+      await expect(bridge.getTranscriptPage(request)).rejects.toBeInstanceOf(TypeError);
+    }
+    expect(mocks.invoke).not.toHaveBeenCalled();
+
+    for (const response of [
+      {
+        schemaVersion: 1,
+        status: "restart-required",
+        turns: [],
+        nextCursor: validTranscriptCursor(),
+      },
+      {
+        schemaVersion: 1,
+        status: "page",
+        turns: [],
+        nextCursor: null,
+        transcriptPath: "/private/transcript",
+      },
+      {
+        schemaVersion: 1,
+        status: "page",
+        turns: [
+          {
+            turnId: "turn-1",
+            completedAt: "not-a-timestamp",
+            athleteText: "a",
+            coachText: "b",
+          },
+        ],
+        nextCursor: null,
+      },
+    ]) {
+      mocks.invoke.mockResolvedValueOnce(response);
+      await expect(bridge.getTranscriptPage({ cursor: null, limit: 10 })).rejects.toBeInstanceOf(
+        TypeError,
+      );
+    }
   });
 
   it("returns strict copied update states from zero-argument channels", async () => {

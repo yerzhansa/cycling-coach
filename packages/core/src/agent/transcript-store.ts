@@ -28,10 +28,16 @@ import type {
 const TRANSCRIPT_SCHEMA_VERSION = 1 as const;
 const RESET_INTENT_SCHEMA_VERSION = 1 as const;
 export const MAX_TRANSCRIPT_RECORD_BYTES = 262_144;
+export const MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES = MAX_TRANSCRIPT_RECORD_BYTES + 4_096;
+export const MAX_TRANSCRIPT_PAGE_TURNS = 50;
 const STRICT_UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 const RESET_ID_PATTERN = /^[a-f0-9]{64}$/;
 const INTENT_TARGET_PATTERN = /^([a-f0-9]{64})\.reset-intent\.json$/;
 const INTENT_TEMP_PATTERN = /^([a-f0-9]{64})\.([a-f0-9]{64})\.reset-intent\.tmp$/;
+const TRANSCRIPT_CURSOR_BYTES = 114;
+const TRANSCRIPT_CURSOR_LENGTH = 152;
+const TRANSCRIPT_CURSOR_PATTERN = /^[A-Za-z0-9_-]{152}$/;
+const TRANSCRIPT_CURSOR_VERSION = 1;
 
 type TranscriptWrite = (
   descriptor: number,
@@ -88,6 +94,54 @@ export interface ResetIntentRecord extends ConversationResetInput {
 }
 
 export type TranscriptRecord = TranscriptCompletedTurnRecord | TranscriptConversationBoundaryRecord;
+
+export interface TranscriptPageTurn {
+  readonly turnId: string;
+  readonly completedAt: string;
+  readonly athleteText: string;
+  readonly coachText: string;
+}
+
+export interface TranscriptPageRequest {
+  readonly cursor: string | null;
+  readonly limit: number;
+}
+
+export type TranscriptPageResult =
+  | {
+      readonly schemaVersion: 1;
+      readonly status: "page";
+      readonly turns: TranscriptPageTurn[];
+      readonly nextCursor: string | null;
+    }
+  | {
+      readonly schemaVersion: 1;
+      readonly status: "restart-required";
+      readonly turns: [];
+      readonly nextCursor: null;
+    };
+
+interface IndexedTranscriptTurn {
+  readonly record: TranscriptCompletedTurnRecord;
+  readonly start: number;
+  readonly end: number;
+}
+
+interface CurrentTranscriptWindow {
+  readonly trusted: boolean;
+  readonly fenceKind: 0 | 1;
+  readonly fence: Buffer;
+  readonly turns: readonly IndexedTranscriptTurn[];
+}
+
+interface DecodedTranscriptCursor {
+  readonly fenceKind: 0 | 1;
+  readonly chatDigest: Buffer;
+  readonly fence: Buffer;
+  readonly snapshotHash: Buffer;
+  readonly snapshotEnd: number;
+  readonly before: number;
+}
 
 export class UnsafeTranscriptTargetError extends Error {
   readonly code = "TRANSCRIPT_UNSAFE_TARGET";
@@ -316,6 +370,119 @@ function serializeTranscriptRecord(record: TranscriptRecord): Buffer {
   return bytes;
 }
 
+function parseCurrentWindow(contents: Buffer, chatId: string): CurrentTranscriptWindow {
+  let trusted = true;
+  let fenceKind: 0 | 1 = 0;
+  let fence = Buffer.alloc(32);
+  let turns: IndexedTranscriptTurn[] = [];
+  let lineStart = 0;
+  for (let index = 0; index < contents.length; index += 1) {
+    if (contents[index] !== 0x0a) continue;
+    const lineBytes = contents.subarray(lineStart, index);
+    const recordStart = lineStart;
+    lineStart = index + 1;
+    const record = lineBytes.length === 0 ? null : parseRecordBytes(lineBytes);
+    if (record === null || record.chatId !== chatId) {
+      trusted = false;
+      turns = [];
+      continue;
+    }
+    if (record.kind === "conversation-boundary") {
+      trusted = true;
+      fenceKind = 1;
+      fence = Buffer.from(record.resetId, "hex");
+      turns = [];
+    } else if (trusted) {
+      turns.push({ record, start: recordStart, end: lineStart });
+    }
+  }
+  if (lineStart !== contents.length) {
+    trusted = false;
+    turns = [];
+  }
+  return { trusted, fenceKind, fence, turns };
+}
+
+function decodeSafeOffset(bytes: Buffer, offset: number): number | null {
+  const value = bytes.readBigUInt64BE(offset);
+  return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : null;
+}
+
+function decodeTranscriptCursor(value: string): DecodedTranscriptCursor | null {
+  if (!TRANSCRIPT_CURSOR_PATTERN.test(value) || value.length !== TRANSCRIPT_CURSOR_LENGTH) {
+    return null;
+  }
+  const bytes = Buffer.from(value, "base64url");
+  if (
+    bytes.length !== TRANSCRIPT_CURSOR_BYTES ||
+    bytes.toString("base64url") !== value ||
+    bytes[0] !== TRANSCRIPT_CURSOR_VERSION ||
+    (bytes[1] !== 0 && bytes[1] !== 1)
+  ) {
+    return null;
+  }
+  const fenceKind = bytes[1] as 0 | 1;
+  const fence = Buffer.from(bytes.subarray(34, 66));
+  if (fenceKind === 0 && fence.some((byte) => byte !== 0)) return null;
+  const snapshotEnd = decodeSafeOffset(bytes, 98);
+  const before = decodeSafeOffset(bytes, 106);
+  if (snapshotEnd === null || before === null || before > snapshotEnd) return null;
+  return {
+    fenceKind,
+    chatDigest: Buffer.from(bytes.subarray(2, 34)),
+    fence,
+    snapshotHash: Buffer.from(bytes.subarray(66, 98)),
+    snapshotEnd,
+    before,
+  };
+}
+
+function encodeTranscriptCursor(input: DecodedTranscriptCursor): string {
+  const bytes = Buffer.alloc(TRANSCRIPT_CURSOR_BYTES);
+  bytes[0] = TRANSCRIPT_CURSOR_VERSION;
+  bytes[1] = input.fenceKind;
+  input.chatDigest.copy(bytes, 2);
+  input.fence.copy(bytes, 34);
+  input.snapshotHash.copy(bytes, 66);
+  bytes.writeBigUInt64BE(BigInt(input.snapshotEnd), 98);
+  bytes.writeBigUInt64BE(BigInt(input.before), 106);
+  return bytes.toString("base64url");
+}
+
+function transcriptPageTurn(record: TranscriptCompletedTurnRecord): TranscriptPageTurn {
+  return {
+    turnId: record.turnId,
+    completedAt: record.completedAt,
+    athleteText: record.athleteText,
+    coachText: record.coachText,
+  };
+}
+
+function restartRequiredPage(): TranscriptPageResult {
+  return {
+    schemaVersion: 1,
+    status: "restart-required",
+    turns: [],
+    nextCursor: null,
+  };
+}
+
+function pageResult(
+  turns: readonly IndexedTranscriptTurn[],
+  nextCursor: string | null,
+): TranscriptPageResult {
+  return {
+    schemaVersion: 1,
+    status: "page",
+    turns: turns.map(({ record }) => transcriptPageTurn(record)),
+    nextCursor,
+  };
+}
+
+function encodedPageBytes(result: TranscriptPageResult): number {
+  return Buffer.byteLength(JSON.stringify(result), "utf8");
+}
+
 export class TranscriptStore implements TranscriptWriterPort {
   private readonly transcriptsDir: string;
   private readonly directoryIdentity: FileIdentity;
@@ -377,31 +544,134 @@ export class TranscriptStore implements TranscriptWriterPort {
       const descriptor = this.openExistingFile(directoryDescriptor, path, constants.O_RDONLY, true);
       if (descriptor === null) return [];
       try {
-        const contents = readFileSync(descriptor);
-        let trusted = true;
-        let current: TranscriptCompletedTurnRecord[] = [];
-        let lineStart = 0;
-        for (let index = 0; index < contents.length; index += 1) {
-          if (contents[index] !== 0x0a) continue;
-          const lineBytes = contents.subarray(lineStart, index);
-          lineStart = index + 1;
-          const record = lineBytes.length === 0 ? null : parseRecordBytes(lineBytes);
-          if (record === null || record.chatId !== chatId) {
-            trusted = false;
-            current = [];
-            continue;
-          }
-          if (record.kind === "conversation-boundary") {
-            trusted = true;
-            current = [];
-          } else if (trusted) {
-            current.push(record);
-          }
-        }
-        if (lineStart !== contents.length) current = [];
+        const contents = this.readSnapshot(descriptor);
+        const window = parseCurrentWindow(contents, chatId);
         this.assertOpenedFileSafe(descriptor);
         this.assertDirectoryStable(directoryDescriptor);
-        return current;
+        return window.trusted ? window.turns.map(({ record }) => record) : [];
+      } finally {
+        closeSync(descriptor);
+      }
+    });
+  }
+
+  readCurrentConversationPage(
+    chatId: string,
+    request: TranscriptPageRequest,
+  ): TranscriptPageResult {
+    if (
+      typeof chatId !== "string" ||
+      request === null ||
+      typeof request !== "object" ||
+      Array.isArray(request) ||
+      Object.keys(request).length !== 2 ||
+      !Object.hasOwn(request, "cursor") ||
+      !Object.hasOwn(request, "limit") ||
+      (request.cursor !== null && decodeTranscriptCursor(request.cursor) === null) ||
+      !Number.isSafeInteger(request.limit) ||
+      request.limit < 1 ||
+      request.limit > MAX_TRANSCRIPT_PAGE_TURNS
+    ) {
+      throw new TypeError("Transcript page request is invalid.");
+    }
+    return this.withDirectory((directoryDescriptor) => {
+      const path = this.transcriptPath(chatId);
+      const descriptor = this.openExistingFile(directoryDescriptor, path, constants.O_RDONLY, true);
+      if (descriptor === null) {
+        return request.cursor === null ? pageResult([], null) : restartRequiredPage();
+      }
+      try {
+        const contents = this.readSnapshot(descriptor);
+        const current = parseCurrentWindow(contents, chatId);
+        const chatDigest = Buffer.from(this.chatDigest(chatId), "hex");
+        let snapshot = contents;
+        let snapshotWindow = current;
+        let cursor: DecodedTranscriptCursor;
+        if (request.cursor === null) {
+          if (!current.trusted) {
+            this.assertOpenedFileSafe(descriptor);
+            this.assertDirectoryStable(directoryDescriptor);
+            return pageResult([], null);
+          }
+          cursor = {
+            fenceKind: current.fenceKind,
+            chatDigest,
+            fence: current.fence,
+            snapshotHash: createHash("sha256").update(contents).digest(),
+            snapshotEnd: contents.length,
+            before: contents.length,
+          };
+        } else {
+          const decoded = decodeTranscriptCursor(request.cursor);
+          if (decoded === null || !decoded.chatDigest.equals(chatDigest)) {
+            throw new TypeError("Transcript page cursor is invalid.");
+          }
+          if (
+            !current.trusted ||
+            current.fenceKind !== decoded.fenceKind ||
+            !current.fence.equals(decoded.fence)
+          ) {
+            this.assertOpenedFileSafe(descriptor);
+            this.assertDirectoryStable(directoryDescriptor);
+            return restartRequiredPage();
+          }
+          if (decoded.snapshotEnd > contents.length) {
+            throw new TypeError("Transcript page cursor is invalid.");
+          }
+          snapshot = contents.subarray(0, decoded.snapshotEnd);
+          if (!createHash("sha256").update(snapshot).digest().equals(decoded.snapshotHash)) {
+            throw new TypeError("Transcript page cursor is invalid.");
+          }
+          snapshotWindow = parseCurrentWindow(snapshot, chatId);
+          if (
+            !snapshotWindow.trusted ||
+            snapshotWindow.fenceKind !== decoded.fenceKind ||
+            !snapshotWindow.fence.equals(decoded.fence)
+          ) {
+            throw new TypeError("Transcript page cursor is invalid.");
+          }
+          cursor = decoded;
+        }
+        const beforeIsValid =
+          cursor.before === cursor.snapshotEnd ||
+          snapshotWindow.turns.some((turn) => turn.start === cursor.before);
+        if (!beforeIsValid) throw new TypeError("Transcript page cursor is invalid.");
+        let index = snapshotWindow.turns.length - 1;
+        while (index >= 0 && snapshotWindow.turns[index]!.end > cursor.before) index -= 1;
+        let selected: readonly IndexedTranscriptTurn[] = [];
+        while (index >= 0 && selected.length < request.limit) {
+          const tentative = [snapshotWindow.turns[index]!, ...selected];
+          const hasMore = index > 0;
+          const nextCursor = hasMore
+            ? encodeTranscriptCursor({
+                ...cursor,
+                before: tentative[0]!.start,
+              })
+            : null;
+          const tentativeResult = pageResult(tentative, nextCursor);
+          if (encodedPageBytes(tentativeResult) > MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES) {
+            if (selected.length === 0) {
+              throw new Error("Transcript page record exceeds the response budget.");
+            }
+            break;
+          }
+          selected = tentative;
+          index -= 1;
+        }
+        const nextCursor =
+          index >= 0
+            ? encodeTranscriptCursor({
+                ...cursor,
+                before: selected[0]!.start,
+              })
+            : null;
+        const result = pageResult(selected, nextCursor);
+        if (encodedPageBytes(result) > MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES) {
+          throw new Error("Transcript page exceeds the response budget.");
+        }
+        this.assertOpenedFileSafe(descriptor);
+        this.assertDirectoryStable(directoryDescriptor);
+        return result;
       } finally {
         closeSync(descriptor);
       }
@@ -627,6 +897,19 @@ export class TranscriptStore implements TranscriptWriterPort {
         closeSync(descriptor);
       }
     });
+  }
+
+  private readSnapshot(descriptor: number): Buffer {
+    const size = fstatSync(descriptor).size;
+    if (!Number.isSafeInteger(size) || size < 0) throw new UnsafeTranscriptTargetError();
+    const contents = Buffer.allocUnsafe(size);
+    let offset = 0;
+    while (offset < size) {
+      const bytesRead = readSync(descriptor, contents, offset, size - offset, offset);
+      if (bytesRead <= 0) throw new Error("Transcript snapshot could not be read.");
+      offset += bytesRead;
+    }
+    return contents;
   }
 
   private openForAppend(
