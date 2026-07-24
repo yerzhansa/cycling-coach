@@ -614,16 +614,16 @@ describe("coach operations", () => {
       home,
       context: context(),
       runtime: operationRuntime(async (work) => {
-          trace.push("sync-start");
-          syncStarted.release();
-          await releaseSync.promise;
-          await work(new AbortController().signal);
-          trace.push("sync-end");
-          return {
-            published: true,
-            legacySucceeded: true,
-            counts: requestCounts(0, 0),
-          };
+        trace.push("sync-start");
+        syncStarted.release();
+        await releaseSync.promise;
+        await work(new AbortController().signal);
+        trace.push("sync-end");
+        return {
+          published: true,
+          legacySucceeded: true,
+          counts: requestCounts(0, 0),
+        };
       }),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
@@ -639,7 +639,8 @@ describe("coach operations", () => {
         session: { dailyResetHour: 6, timezone: "Europe/Berlin" },
       }),
     ).resolves.toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
+      status: "applied",
       applied: { llm: false, intervals: false, session: true },
     });
     expect(trace).toEqual(["sync-start", "configure"]);
@@ -649,6 +650,35 @@ describe("coach operations", () => {
     expect(trace).toEqual(["sync-start", "configure", "sync-end"]);
   });
 
+  it.each([
+    "credential-required",
+    "ownership-unavailable",
+    "training-account-mismatch",
+    "managed-by-environment",
+  ] as const)(
+    "returns a strict fixed %s runtime refusal without echoing request values",
+    async (reason) => {
+      const operations = createCoachOperations({
+        home,
+        context: context(),
+        runtime: operationRuntime(),
+        intervalsCredentials: intervalsCredentials(),
+        historyNewestDate: () => "1998-07-18",
+        applyRuntimeConfig: async () => reason,
+      });
+
+      const result = await operations.configureRuntime({
+        intervals: {
+          api_key: "obviously-fake-private-credential",
+          athlete_id: "private-candidate-athlete",
+        },
+      });
+
+      expect(result).toEqual({ schemaVersion: 3, status: "refused", reason });
+      expect(JSON.stringify(result)).not.toContain("private");
+    },
+  );
+
   it("reads runtime configuration while a store sync is blocked", async () => {
     const syncStarted = promiseGate();
     const releaseSync = promiseGate();
@@ -657,16 +687,16 @@ describe("coach operations", () => {
       home,
       context: context(),
       runtime: operationRuntime(async (work) => {
-          trace.push("sync-start");
-          syncStarted.release();
-          await releaseSync.promise;
-          await work(new AbortController().signal);
-          trace.push("sync-end");
-          return {
-            published: true,
-            legacySucceeded: true,
-            counts: requestCounts(0, 0),
-          };
+        trace.push("sync-start");
+        syncStarted.release();
+        await releaseSync.promise;
+        await work(new AbortController().signal);
+        trace.push("sync-end");
+        return {
+          published: true,
+          legacySucceeded: true,
+          counts: requestCounts(0, 0),
+        };
       }),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
@@ -674,9 +704,13 @@ describe("coach operations", () => {
       readRuntimeConfig: () => {
         trace.push("read");
         return {
-          schemaVersion: 2,
+          schemaVersion: 3,
           llm: { provider: "openai", model: "model-a", credential_configured: true },
-          intervals: { athlete_id: "synthetic-athlete" },
+          intervals: {
+            athlete_id: "synthetic-athlete",
+            credential_configured: true,
+            managedByEnvironment: { athleteId: false },
+          },
           session: {
             historyTokenBudgetRatio: 0.3,
             idleMinutes: 0,
@@ -698,7 +732,7 @@ describe("coach operations", () => {
     const sync = operations.sync({});
     await syncStarted.promise;
     await expect(operations.getRuntimeConfig({})).resolves.toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       llm: { model: "model-a" },
     });
     expect(trace).toEqual(["sync-start", "read"]);
@@ -717,16 +751,16 @@ describe("coach operations", () => {
       home,
       context: context(),
       runtime: operationRuntime(async (work) => {
-          trace.push("sync-start");
-          syncStarted.release();
-          await releaseSync.promise;
-          await work(new AbortController().signal);
-          trace.push("sync-end");
-          return {
-            published: true,
-            legacySucceeded: true,
-            counts: requestCounts(0, 0),
-          };
+        trace.push("sync-start");
+        syncStarted.release();
+        await releaseSync.promise;
+        await work(new AbortController().signal);
+        trace.push("sync-end");
+        return {
+          published: true,
+          legacySucceeded: true,
+          counts: requestCounts(0, 0),
+        };
       }),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
@@ -742,9 +776,13 @@ describe("coach operations", () => {
       readRuntimeConfig: () => {
         trace.push(`read-${activeModel}`);
         return {
-          schemaVersion: 2,
+          schemaVersion: 3,
           llm: { provider: "openai", model: activeModel, credential_configured: true },
-          intervals: { athlete_id: "synthetic-athlete" },
+          intervals: {
+            athlete_id: "synthetic-athlete",
+            credential_configured: true,
+            managedByEnvironment: { athleteId: false },
+          },
           session: {
             historyTokenBudgetRatio: 0.3,
             idleMinutes: 0,
@@ -792,11 +830,13 @@ describe("coach operations", () => {
     ]);
     expect(syncResult).toMatchObject({ schemaVersion: 1 });
     expect(intervalsResult).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
+      status: "applied",
       applied: { llm: true, intervals: true, session: false },
     });
     expect(laterLlmResult).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
+      status: "applied",
       applied: { llm: true, intervals: false, session: false },
     });
     expect(laterReadResult.llm.model).toBe("model-b");
@@ -880,9 +920,13 @@ describe("coach operations", () => {
       readRuntimeConfig: () => {
         trace.push(`read-${activeModel}`);
         return {
-          schemaVersion: 2,
+          schemaVersion: 3,
           llm: { provider: "openai", model: activeModel, credential_configured: true },
-          intervals: { athlete_id: "synthetic-athlete" },
+          intervals: {
+            athlete_id: "synthetic-athlete",
+            credential_configured: true,
+            managedByEnvironment: { athleteId: false },
+          },
           session: {
             historyTokenBudgetRatio: 0.3,
             idleMinutes: 0,
@@ -915,11 +959,13 @@ describe("coach operations", () => {
     releaseFirst.release();
     const [firstResult, secondResult, readResult] = await Promise.all([first, second, read]);
     expect(firstResult).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
+      status: "applied",
       applied: { llm: true, intervals: false, session: false },
     });
     expect(secondResult).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
+      status: "applied",
       applied: { llm: true, intervals: false, session: false },
     });
     expect(readResult.llm.model).toBe("model-b");
@@ -942,19 +988,19 @@ describe("coach operations", () => {
       home,
       context: context(),
       runtime: operationRuntime(async (work) => {
-          syncAttempt += 1;
-          trace.push(`sync-${syncAttempt}-start`);
-          if (syncAttempt === 1) {
-            syncStarted.release();
-            await releaseSync.promise;
-          }
-          await work(new AbortController().signal);
-          trace.push(`sync-${syncAttempt}-end`);
-          return {
-            published: true,
-            legacySucceeded: true,
-            counts: requestCounts(0, 0),
-          };
+        syncAttempt += 1;
+        trace.push(`sync-${syncAttempt}-start`);
+        if (syncAttempt === 1) {
+          syncStarted.release();
+          await releaseSync.promise;
+        }
+        await work(new AbortController().signal);
+        trace.push(`sync-${syncAttempt}-end`);
+        return {
+          published: true,
+          legacySucceeded: true,
+          counts: requestCounts(0, 0),
+        };
       }),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
@@ -967,9 +1013,13 @@ describe("coach operations", () => {
         trace.push(`llm-${activeModel}`);
       },
       readRuntimeConfig: () => ({
-        schemaVersion: 2,
+        schemaVersion: 3,
         llm: { provider: "openai", model: activeModel, credential_configured: true },
-        intervals: { athlete_id: "synthetic-athlete" },
+        intervals: {
+          athlete_id: "synthetic-athlete",
+          credential_configured: true,
+          managedByEnvironment: { athleteId: false },
+        },
         session: {
           historyTokenBudgetRatio: 0.3,
           idleMinutes: 0,
@@ -1008,7 +1058,8 @@ describe("coach operations", () => {
       expect.objectContaining({ message: "synthetic configuration failure" }),
     );
     await expect(laterLlm).resolves.toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
+      status: "applied",
       applied: { llm: true, intervals: false, session: false },
     });
     await expect(laterRead).resolves.toMatchObject({ llm: { model: "model-b" } });
@@ -1032,9 +1083,13 @@ describe("coach operations", () => {
       historyNewestDate: () => "1998-07-18",
       applyRuntimeConfig,
       readRuntimeConfig: () => ({
-        schemaVersion: 2,
+        schemaVersion: 3,
         llm: { provider: "google", model: "third", credential_configured: true },
-        intervals: { athlete_id: "athlete-b" },
+        intervals: {
+          athlete_id: "athlete-b",
+          credential_configured: true,
+          managedByEnvironment: { athleteId: false },
+        },
         session: {
           historyTokenBudgetRatio: 0.3,
           idleMinutes: 0,
@@ -1070,10 +1125,26 @@ describe("coach operations", () => {
       }),
     ];
     expect(results).toEqual([
-      { schemaVersion: 2, applied: { llm: true, intervals: false, session: false } },
-      { schemaVersion: 2, applied: { llm: false, intervals: true, session: false } },
-      { schemaVersion: 2, applied: { llm: true, intervals: true, session: false } },
-      { schemaVersion: 2, applied: { llm: true, intervals: false, session: false } },
+      {
+        schemaVersion: 3,
+        status: "applied",
+        applied: { llm: true, intervals: false, session: false },
+      },
+      {
+        schemaVersion: 3,
+        status: "applied",
+        applied: { llm: false, intervals: true, session: false },
+      },
+      {
+        schemaVersion: 3,
+        status: "applied",
+        applied: { llm: true, intervals: true, session: false },
+      },
+      {
+        schemaVersion: 3,
+        status: "applied",
+        applied: { llm: true, intervals: false, session: false },
+      },
     ]);
     expect(applied).toEqual([
       llmFirst,
@@ -1088,9 +1159,13 @@ describe("coach operations", () => {
       expect(serializedResults).not.toContain(value);
     }
     await expect(operations.getRuntimeConfig({})).resolves.toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       llm: { provider: "google", model: "third", credential_configured: true },
-      intervals: { athlete_id: "athlete-b" },
+      intervals: {
+        athlete_id: "athlete-b",
+        credential_configured: true,
+        managedByEnvironment: { athleteId: false },
+      },
       session: {
         historyTokenBudgetRatio: 0.3,
         idleMinutes: 0,
@@ -1132,15 +1207,15 @@ describe("coach operations", () => {
           listener: {} as CoachStoreWriterContext["listener"],
         },
         runtime: operationRuntime(async (work) => {
-            order.push("sync-start");
-            await gate;
-            await work(new AbortController().signal);
-            order.push("sync-end");
-            return {
-              published: true,
-              legacySucceeded: true,
-              counts: requestCounts(0, 0),
-            };
+          order.push("sync-start");
+          await gate;
+          await work(new AbortController().signal);
+          order.push("sync-end");
+          return {
+            published: true,
+            legacySucceeded: true,
+            counts: requestCounts(0, 0),
+          };
         }),
         intervalsCredentials: intervalsCredentials(),
         historyNewestDate: () => "1998-07-18",

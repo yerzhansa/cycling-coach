@@ -70,8 +70,11 @@ export function createConnectionRuntimeAuthority(
     async configureRuntime(request) {
       const result = await call((client) => client.call("configureRuntime", request));
       if (
+        !("status" in result) ||
+        result.status !== "applied" ||
         (request.llm !== undefined && !result.applied.llm) ||
-        (request.intervals !== undefined && !result.applied.intervals)
+        (request.intervals !== undefined && !result.applied.intervals) ||
+        (request.session !== undefined && !result.applied.session)
       ) {
         throw new TypeError();
       }

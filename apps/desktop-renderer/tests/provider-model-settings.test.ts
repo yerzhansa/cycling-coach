@@ -13,6 +13,7 @@ import {
   type ProviderModelSettingsView,
 } from "../src/settings/provider-model-controller.js";
 import { createProviderModelSettingsView } from "../src/settings/provider-model-view.js";
+import { createAthleteSettingsView } from "../src/settings/athlete-view.js";
 import { createResidentSettingsShell } from "../src/settings/shell.js";
 import { createSessionSettingsView } from "../src/settings/session-view.js";
 
@@ -698,10 +699,7 @@ describe("provider and model settings view", () => {
       validationError: "model-required",
     });
     expect(custom.attributes.get("aria-invalid")).toBe("true");
-    const validation = find(
-      dialog,
-      (node) => node.id === "provider-model-settings-validation",
-    );
+    const validation = find(dialog, (node) => node.id === "provider-model-settings-validation");
     expect(validation.attributes.get("aria-live")).toBe("polite");
     expect(validation.attributes.get("aria-atomic")).toBe("true");
 
@@ -746,7 +744,7 @@ describe("provider and model settings view", () => {
 });
 
 describe("resident settings shell", () => {
-  it("hosts both independent forms, shares mutation state, and contains focus", () => {
+  it("hosts three independent forms, shares mutation state, and contains focus", () => {
     const document = new FakeDocument();
     const actionHost = new FakeElement("div", document);
     document.body.append(actionHost);
@@ -754,7 +752,12 @@ describe("resident settings shell", () => {
       document: document as never,
       actionHost: actionHost as never,
     });
+    expect(document.body.textContent).toContain("review the currently connected training account");
     const providerView = createProviderModelSettingsView({
+      document: document as never,
+      shell,
+    });
+    const athleteView = createAthleteSettingsView({
       document: document as never,
       shell,
     });
@@ -765,6 +768,17 @@ describe("resident settings shell", () => {
     const onClose = vi.fn(() => shell.close());
     shell.bind({ onOpen: vi.fn(), onClose });
     providerView.render(readyState());
+    athleteView.render({
+      status: "ready",
+      effective: {
+        athlete_id: "current-athlete",
+        credential_configured: true,
+        managedByEnvironment: { athleteId: false },
+      },
+      draft: "candidate-athlete",
+      dirty: true,
+      validationError: null,
+    });
     sessionView.render({
       status: "ready",
       effective: {
@@ -798,8 +812,9 @@ describe("resident settings shell", () => {
     expect(dialogs).toHaveLength(1);
     const dialog = dialogs[0]!;
     expect(dialog.textContent).toContain("Provider & model");
+    expect(dialog.textContent).toContain("Training account");
     expect(dialog.textContent).toContain("Conversation & time");
-    expect(descendants(dialog).filter((node) => node.tagName === "fieldset")).toHaveLength(2);
+    expect(descendants(dialog).filter((node) => node.tagName === "fieldset")).toHaveLength(3);
 
     const timezone = find(dialog, (node) => node.id === "session-settings-timezone");
     const timezoneManaged = find(dialog, (node) => node.id === "session-settings-timezone-managed");
@@ -846,8 +861,10 @@ describe("resident settings shell", () => {
       validationErrors: {},
     });
     const provider = find(dialog, (node) => node.id === "provider-model-settings-provider");
+    const athlete = find(dialog, (node) => node.id === "athlete-settings-id");
     const close = find(dialog, (node) => node.className === "provider-model-settings__close");
     expect(provider.disabled).toBe(true);
+    expect(athlete.disabled).toBe(true);
     expect(close.disabled).toBe(true);
     const preventDefault = vi.fn();
     dialog.dispatch("cancel", { preventDefault });
@@ -891,6 +908,7 @@ describe("resident settings shell", () => {
     expect(document.activeElement).toBe(opener);
 
     sessionView.dispose();
+    athleteView.dispose();
     providerView.dispose();
     shell.dispose();
   });

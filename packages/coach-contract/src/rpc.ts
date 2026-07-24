@@ -357,23 +357,43 @@ export const ConfigureRuntimeRpcParamsSchema = z
   });
 export type ConfigureRuntimeRpcParams = z.infer<typeof ConfigureRuntimeRpcParamsSchema>;
 
-export const ConfigureRuntimeRpcResultSchema = z
-  .object({
-    schemaVersion: z.literal(2),
-    applied: z
-      .object({
-        llm: z.boolean(),
-        intervals: z.boolean(),
-        session: z.boolean(),
-      })
-      .strict(),
-  })
-  .strict();
+export const ConfigureRuntimeRpcRefusalReasonSchema = z.enum([
+  "credential-required",
+  "ownership-unavailable",
+  "training-account-mismatch",
+  "managed-by-environment",
+]);
+export type ConfigureRuntimeRpcRefusalReason = z.infer<
+  typeof ConfigureRuntimeRpcRefusalReasonSchema
+>;
+
+export const ConfigureRuntimeRpcResultSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      schemaVersion: z.literal(3),
+      status: z.literal("applied"),
+      applied: z
+        .object({
+          llm: z.boolean(),
+          intervals: z.boolean(),
+          session: z.boolean(),
+        })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      schemaVersion: z.literal(3),
+      status: z.literal("refused"),
+      reason: ConfigureRuntimeRpcRefusalReasonSchema,
+    })
+    .strict(),
+]);
 export type ConfigureRuntimeRpcResult = z.infer<typeof ConfigureRuntimeRpcResultSchema>;
 
 export const RuntimeConfigSnapshotSchema = z
   .object({
-    schemaVersion: z.literal(2),
+    schemaVersion: z.literal(3),
     llm: z
       .object({
         provider: LlmProviderSchema,
@@ -384,6 +404,12 @@ export const RuntimeConfigSnapshotSchema = z
     intervals: z
       .object({
         athlete_id: z.string().max(512),
+        credential_configured: z.boolean(),
+        managedByEnvironment: z
+          .object({
+            athleteId: z.boolean(),
+          })
+          .strict(),
       })
       .strict(),
     session: z

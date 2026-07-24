@@ -77,7 +77,8 @@ const operations: CoachOperations = {
   }),
   saveIntake: async () => ({ schemaVersion: 1, saved: true }),
   configureRuntime: async ({ llm, intervals, session }) => ({
-    schemaVersion: 2,
+    schemaVersion: 3,
+    status: "applied",
     applied: {
       llm: llm !== undefined,
       intervals: intervals !== undefined,
@@ -85,9 +86,13 @@ const operations: CoachOperations = {
     },
   }),
   getRuntimeConfig: async () => ({
-    schemaVersion: 2,
+    schemaVersion: 3,
     llm: { provider: "anthropic", model: "synthetic-model", credential_configured: false },
-    intervals: { athlete_id: "synthetic-athlete" },
+    intervals: {
+      athlete_id: "synthetic-athlete",
+      credential_configured: false,
+      managedByEnvironment: { athleteId: false },
+    },
     session: {
       historyTokenBudgetRatio: 0.3,
       idleMinutes: 0,

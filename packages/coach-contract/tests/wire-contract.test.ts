@@ -452,22 +452,44 @@ describe("coach request and event projection", () => {
       expect(ConfigureRuntimeRpcParamsSchema.safeParse(invalid).success).toBe(false);
     }
     const result = {
-      schemaVersion: 2,
+      schemaVersion: 3,
+      status: "applied",
       applied: { llm: true, intervals: false, session: false },
     } as const;
     expect(ConfigureRuntimeRpcResultSchema.parse(result)).toEqual(result);
     expect(
       ConfigureRuntimeRpcResultSchema.safeParse({ ...result, api_key: "placeholder" }).success,
     ).toBe(false);
+    for (const reason of [
+      "credential-required",
+      "ownership-unavailable",
+      "training-account-mismatch",
+      "managed-by-environment",
+    ] as const) {
+      const refused = { schemaVersion: 3, status: "refused", reason } as const;
+      expect(ConfigureRuntimeRpcResultSchema.parse(refused)).toEqual(refused);
+    }
+    expect(
+      ConfigureRuntimeRpcResultSchema.safeParse({
+        schemaVersion: 3,
+        status: "refused",
+        reason: "ownership-unavailable",
+        applied: { llm: false, intervals: false, session: false },
+      }).success,
+    ).toBe(false);
     expect(JSON.stringify(result)).not.toContain("placeholder");
     const snapshot = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       llm: {
         provider: "openrouter",
         model: "model-a",
         credential_configured: true,
       },
-      intervals: { athlete_id: "athlete-a" },
+      intervals: {
+        athlete_id: "athlete-a",
+        credential_configured: true,
+        managedByEnvironment: { athleteId: false },
+      },
       session: {
         historyTokenBudgetRatio: 0.3,
         idleMinutes: 0,
@@ -492,7 +514,11 @@ describe("coach request and event projection", () => {
           model: "model-a",
           credential_configured: true,
         },
-        intervals: { athlete_id: "" },
+        intervals: {
+          athlete_id: "",
+          credential_configured: false,
+          managedByEnvironment: { athleteId: true },
+        },
       }),
     ).toEqual({
       ...snapshot,
@@ -501,7 +527,11 @@ describe("coach request and event projection", () => {
         model: "model-a",
         credential_configured: true,
       },
-      intervals: { athlete_id: "" },
+      intervals: {
+        athlete_id: "",
+        credential_configured: false,
+        managedByEnvironment: { athleteId: true },
+      },
     });
     for (const malformed of [
       { ...snapshot, api_key: "placeholder" },
@@ -515,7 +545,21 @@ describe("coach request and event projection", () => {
       },
       { ...snapshot, llm: { ...snapshot.llm, credential_configured: "true" } },
       { ...snapshot, intervals: { ...snapshot.intervals, api_key: "placeholder" } },
-      { ...snapshot, intervals: { athlete_id: "a".repeat(513) } },
+      { ...snapshot, intervals: { ...snapshot.intervals, athlete_id: "a".repeat(513) } },
+      {
+        ...snapshot,
+        intervals: {
+          athlete_id: "athlete-a",
+          credential_configured: true,
+        },
+      },
+      {
+        ...snapshot,
+        intervals: {
+          ...snapshot.intervals,
+          managedByEnvironment: { athleteId: "false" },
+        },
+      },
       {
         ...snapshot,
         session: {
@@ -600,7 +644,8 @@ describe("coach request and event projection", () => {
       }),
       saveIntake: async () => ({ schemaVersion: 1, saved: true }),
       configureRuntime: async ({ llm, intervals, session }) => ({
-        schemaVersion: 2,
+        schemaVersion: 3,
+        status: "applied",
         applied: {
           llm: llm !== undefined,
           intervals: intervals !== undefined,
@@ -608,9 +653,13 @@ describe("coach request and event projection", () => {
         },
       }),
       getRuntimeConfig: async () => ({
-        schemaVersion: 2,
+        schemaVersion: 3,
         llm: { provider: "anthropic", model: "model", credential_configured: false },
-        intervals: { athlete_id: "athlete" },
+        intervals: {
+          athlete_id: "athlete",
+          credential_configured: false,
+          managedByEnvironment: { athleteId: false },
+        },
         session: {
           historyTokenBudgetRatio: 0.3,
           idleMinutes: 0,
@@ -949,7 +998,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version eight", () => {
-    expect(PROTOCOL_VERSION).toBe(8);
+  it("uses protocol version nine", () => {
+    expect(PROTOCOL_VERSION).toBe(9);
   });
 });

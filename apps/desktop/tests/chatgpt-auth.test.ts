@@ -39,13 +39,17 @@ function runtimeSnapshot(
   credentialConfigured = provider === "openai-codex",
 ): RuntimeConfigSnapshot {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     llm: {
       provider,
       model: "custom-selected-model",
       credential_configured: credentialConfigured,
     },
-    intervals: { athlete_id: "custom-athlete" },
+    intervals: {
+      athlete_id: "custom-athlete",
+      credential_configured: true,
+      managedByEnvironment: { athleteId: false },
+    },
     session: {
       historyTokenBudgetRatio: 0.3,
       idleMinutes: 0,

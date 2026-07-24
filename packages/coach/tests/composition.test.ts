@@ -33,6 +33,7 @@ import {
   type LocalStoreRuntime,
   type LocalStoreRuntimeOptions,
 } from "../src/composition.js";
+import { RuntimeAthleteOwnerRefusal } from "../src/backfill.js";
 import { checkHomeReadiness } from "../src/readiness.js";
 import type { CoachStoreWriterContext } from "../src/runtime.js";
 
@@ -1125,7 +1126,8 @@ describe("local coach composition", () => {
     releaseOld();
     await expect(oldTurn).resolves.toEqual({ text: "UTC" });
     await expect(configuration).resolves.toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
+      status: "applied",
       applied: { llm: false, intervals: false, session: true },
     });
     await expect(postCommitSpend).resolves.toMatchObject({
@@ -1144,9 +1146,9 @@ describe("local coach composition", () => {
     });
     expect(received[1]?.ports.memory).not.toBe(received[0]?.ports.memory);
     expect(received[1]?.ports.chatStore).not.toBe(received[0]?.ports.chatStore);
-    expect(
-      (received[1]!.ports.memory as unknown as { readonly tz: string }).tz,
-    ).toBe("America/Los_Angeles");
+    expect((received[1]!.ports.memory as unknown as { readonly tz: string }).tz).toBe(
+      "America/Los_Angeles",
+    );
     expect(
       (
         received[1]!.ports.chatStore as unknown as {
@@ -1155,7 +1157,7 @@ describe("local coach composition", () => {
       ).resetArchiveRetentionDays,
     ).toBe(9);
     await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       session: {
         historyTokenBudgetRatio: 0.45,
         idleMinutes: 25,
@@ -1193,13 +1195,12 @@ describe("local coach composition", () => {
       undefined,
       initial,
     );
-    const expectedTimezone =
-      Intl.DateTimeFormat().resolvedOptions().timeZone?.trim() || "UTC";
+    const expectedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone?.trim() || "UTC";
 
     expect(received[0]?.ports.config.session.timezone).toBe(expectedTimezone);
-    expect(
-      (received[0]!.ports.memory as unknown as { readonly tz: string }).tz,
-    ).toBe(expectedTimezone);
+    expect((received[0]!.ports.memory as unknown as { readonly tz: string }).tz).toBe(
+      expectedTimezone,
+    );
     await expect(lifecycle.spendMeter.getSpendSummary()).resolves.toMatchObject({
       timezone: expectedTimezone,
     });
@@ -1344,9 +1345,9 @@ describe("local coach composition", () => {
       );
       const before = await lifecycle.operations.getRuntimeConfig({});
 
-      await expect(
-        lifecycle.operations.configureRuntime({ session: patch }),
-      ).rejects.toThrow(`runtime session ${field} is controlled by the daemon environment`);
+      await expect(lifecycle.operations.configureRuntime({ session: patch })).rejects.toThrow(
+        `runtime session ${field} is controlled by the daemon environment`,
+      );
       await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toEqual(before);
       expect(before.session.managedByEnvironment[field]).toBe(true);
       expect(createBackend).toHaveBeenCalledOnce();
@@ -1501,7 +1502,7 @@ describe("local coach composition", () => {
           athlete_id: "replayed-athlete",
         },
       }),
-    ).resolves.toMatchObject({ applied: { intervals: true } });
+    ).resolves.toMatchObject({ status: "applied", applied: { intervals: true } });
 
     expect(runtimeOptions?.readConfig?.().intervals).toEqual({
       apiKey: "obviously-fake-replayed-key",
@@ -1521,6 +1522,7 @@ describe("local coach composition", () => {
       candidateApiKey: "candidate-key",
       envAthleteId: "environment-athlete",
       ownerFailure: undefined,
+      expectedReason: "managed-by-environment",
       expectedOwnerChecks: 0,
     },
     {
@@ -1529,6 +1531,7 @@ describe("local coach composition", () => {
       candidateApiKey: "candidate-key",
       envAthleteId: "",
       ownerFailure: undefined,
+      expectedReason: "managed-by-environment",
       expectedOwnerChecks: 0,
     },
     {
@@ -1537,6 +1540,7 @@ describe("local coach composition", () => {
       candidateApiKey: undefined,
       envAthleteId: undefined,
       ownerFailure: "current-credential-missing",
+      expectedReason: "credential-required",
       expectedOwnerChecks: 1,
     },
     {
@@ -1545,6 +1549,7 @@ describe("local coach composition", () => {
       candidateApiKey: "candidate-key",
       envAthleteId: undefined,
       ownerFailure: "current-unresolved",
+      expectedReason: "ownership-unavailable",
       expectedOwnerChecks: 1,
     },
     {
@@ -1553,6 +1558,7 @@ describe("local coach composition", () => {
       candidateApiKey: "candidate-key",
       envAthleteId: undefined,
       ownerFailure: "candidate-unresolved",
+      expectedReason: "ownership-unavailable",
       expectedOwnerChecks: 1,
     },
     {
@@ -1561,15 +1567,17 @@ describe("local coach composition", () => {
       candidateApiKey: "candidate-key",
       envAthleteId: undefined,
       ownerFailure: "mismatch",
+      expectedReason: "training-account-mismatch",
       expectedOwnerChecks: 1,
     },
-  ])(
+  ] as const)(
     "fails closed before runtime mutation for $label and keeps serialized lanes usable",
     async ({
       activeApiKey,
       candidateApiKey,
       envAthleteId,
       ownerFailure,
+      expectedReason,
       expectedOwnerChecks,
     }) => {
       const home = await freshHome();
@@ -1595,7 +1603,7 @@ describe("local coach composition", () => {
               options.current.athleteId !== options.candidate.athleteId)
           ) {
             remainingOwnerFailures -= 1;
-            throw new Error(ownerFailure);
+            throw new RuntimeAthleteOwnerRefusal(ownerFailure);
           }
         },
       );
@@ -1623,14 +1631,17 @@ describe("local coach composition", () => {
       const ownerChecksBefore = assertRuntimeAthleteOwner.mock.calls.length;
       const before = await lifecycle.operations.getRuntimeConfig({});
 
-      await expect(
-        lifecycle.operations.configureRuntime({
-          intervals: {
-            ...(candidateApiKey === undefined ? {} : { api_key: candidateApiKey }),
-            athlete_id: "candidate-athlete",
-          },
-        }),
-      ).rejects.toThrow();
+      const result = await lifecycle.operations.configureRuntime({
+        intervals: {
+          ...(candidateApiKey === undefined ? {} : { api_key: candidateApiKey }),
+          athlete_id: "candidate-athlete",
+        },
+      });
+      expect(result).toEqual({
+        schemaVersion: 3,
+        status: "refused",
+        reason: expectedReason,
+      });
 
       await expect(readFile(join(home.configDir, "config.yaml"), "utf8")).resolves.toBe(
         initialYaml,
@@ -1659,15 +1670,74 @@ describe("local coach composition", () => {
 
       await expect(
         lifecycle.operations.configureRuntime({ llm: { model: "queue-recovered-model" } }),
-      ).resolves.toMatchObject({ applied: { llm: true, intervals: false } });
+      ).resolves.toMatchObject({
+        status: "applied",
+        applied: { llm: true, intervals: false },
+      });
       await expect(
         lifecycle.operations.configureRuntime({ intervals: { api_key: "writer-recovered-key" } }),
-      ).resolves.toMatchObject({ applied: { llm: false, intervals: true } });
+      ).resolves.toMatchObject({
+        status: "applied",
+        applied: { llm: false, intervals: true },
+      });
       expect(createBackend).toHaveBeenCalledTimes(3);
       expect(runWindowAfter).toHaveBeenCalledOnce();
       await lifecycle.close();
     },
   );
+
+  it("refuses an environment-managed athlete field even when the requested value is unchanged", async () => {
+    const home = await freshHome();
+    const initialYaml = "sentinel: unchanged\n";
+    await writeFile(join(home.configDir, "config.yaml"), initialYaml);
+    const createBackend = vi.fn(() => backend());
+    const assertRuntimeAthleteOwner = vi.fn(async () => {});
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend,
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+        assertRuntimeAthleteOwner,
+      },
+      fakeContext(home),
+      undefined,
+      config(home, { apiKey: "current-key", athleteId: "environment-athlete" }),
+      {
+        ENDURAGENT_HOME: home.root,
+        COACH_TZ: "UTC",
+        INTERVALS_ATHLETE_ID: "environment-athlete",
+      },
+    );
+    const ownerChecksBefore = assertRuntimeAthleteOwner.mock.calls.length;
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      intervals: {
+        athlete_id: "environment-athlete",
+        credential_configured: true,
+        managedByEnvironment: { athleteId: true },
+      },
+    });
+
+    await expect(
+      lifecycle.operations.configureRuntime({
+        intervals: { athlete_id: "environment-athlete" },
+        session: { timezone: "Asia/Almaty" },
+      }),
+    ).resolves.toEqual({
+      schemaVersion: 3,
+      status: "refused",
+      reason: "managed-by-environment",
+    });
+    expect(assertRuntimeAthleteOwner).toHaveBeenCalledTimes(ownerChecksBefore);
+    expect(createBackend).toHaveBeenCalledOnce();
+    await expect(readFile(join(home.configDir, "config.yaml"), "utf8")).resolves.toBe(initialYaml);
+    await lifecycle.close();
+  });
 
   it.each([
     { envApiKey: "environment-key", rejected: true },
@@ -1711,7 +1781,10 @@ describe("local coach composition", () => {
         expect(runWindowAfter).not.toHaveBeenCalled();
         expect(assertRuntimeAthleteOwner).toHaveBeenCalledTimes(ownerChecksBefore);
       } else {
-        await expect(change).resolves.toMatchObject({ applied: { intervals: true } });
+        await expect(change).resolves.toMatchObject({
+          status: "applied",
+          applied: { intervals: true },
+        });
         expect(createBackend).toHaveBeenCalledTimes(2);
         expect(runWindowAfter).toHaveBeenCalledOnce();
         expect(assertRuntimeAthleteOwner).toHaveBeenCalledTimes(ownerChecksBefore + 1);
@@ -1745,7 +1818,7 @@ describe("local coach composition", () => {
       lifecycle.operations.configureRuntime({
         intervals: { api_key: "candidate-key", athlete_id: "first-athlete" },
       }),
-    ).resolves.toMatchObject({ applied: { intervals: true } });
+    ).resolves.toMatchObject({ status: "applied", applied: { intervals: true } });
     expect(assertRuntimeAthleteOwner).toHaveBeenCalledOnce();
     expect(assertRuntimeAthleteOwner).toHaveBeenCalledWith(
       expect.anything(),
@@ -1814,9 +1887,7 @@ describe("local coach composition", () => {
           : "synthetic persistence failure",
       );
       expect(claim).not.toHaveBeenCalled();
-      expect(createBackend).toHaveBeenCalledTimes(
-        failurePoint === "oauth-validation" ? 1 : 2,
-      );
+      expect(createBackend).toHaveBeenCalledTimes(failurePoint === "oauth-validation" ? 1 : 2);
       expect(runWindowAfter).not.toHaveBeenCalled();
       await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
         intervals: { athlete_id: "" },
@@ -1867,9 +1938,7 @@ describe("local coach composition", () => {
     await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
       intervals: { athlete_id: "" },
     });
-    await expect(readFile(join(home.configDir, "config.yaml"), "utf8")).resolves.toBe(
-      originalYaml,
-    );
+    await expect(readFile(join(home.configDir, "config.yaml"), "utf8")).resolves.toBe(originalYaml);
     await lifecycle.close();
   });
 
@@ -1908,7 +1977,7 @@ describe("local coach composition", () => {
       lifecycle.operations.configureRuntime({
         intervals: { api_key: "candidate-key" },
       }),
-    ).resolves.toMatchObject({ applied: { intervals: true } });
+    ).resolves.toMatchObject({ status: "applied", applied: { intervals: true } });
     expect(assertRuntimeAthleteOwner).toHaveBeenCalledTimes(ownerChecksBefore + 1);
     expect(assertRuntimeAthleteOwner.mock.calls.at(-1)?.[1]).toEqual(
       expect.objectContaining({
@@ -2015,7 +2084,7 @@ describe("local coach composition", () => {
       lifecycle.operations.configureRuntime({
         intervals: { api_key: "current-key", athlete_id: "current-athlete" },
       }),
-    ).resolves.toMatchObject({ applied: { intervals: true } });
+    ).resolves.toMatchObject({ status: "applied", applied: { intervals: true } });
     expect(assertRuntimeAthleteOwner).toHaveBeenCalledTimes(ownerChecksBefore);
     await lifecycle.close();
   });
@@ -2063,7 +2132,7 @@ describe("local coach composition", () => {
           athlete_id: "candidate-athlete",
         },
       }),
-    ).resolves.toMatchObject({ applied: { intervals: true } });
+    ).resolves.toMatchObject({ status: "applied", applied: { intervals: true } });
 
     expect(assertRuntimeAthleteOwner).toHaveBeenCalledWith(
       expect.anything(),
@@ -2237,7 +2306,7 @@ describe("local coach composition", () => {
           athlete_id: "new-athlete",
         },
       }),
-    ).resolves.toMatchObject({ applied: { intervals: true } });
+    ).resolves.toMatchObject({ status: "applied", applied: { intervals: true } });
     expect(runWindowAfter).toHaveBeenCalledTimes(1);
     expect(windows).toHaveLength(2);
 
@@ -2287,7 +2356,7 @@ describe("local coach composition", () => {
           athlete_id: "replayed-athlete",
         },
       }),
-    ).resolves.toMatchObject({ applied: { intervals: true } });
+    ).resolves.toMatchObject({ status: "applied", applied: { intervals: true } });
     expect(runWindowAfter).toHaveBeenCalledTimes(1);
 
     rejectRefresh(failure);
@@ -2613,7 +2682,11 @@ describe("local coach composition", () => {
 
     await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
       llm: { credential_configured: false },
-      intervals: { athlete_id: "" },
+      intervals: {
+        athlete_id: "",
+        credential_configured: false,
+        managedByEnvironment: { athleteId: false },
+      },
     });
     expect(() =>
       lifecycle.operations.configureRuntime({ intervals: { athlete_id: "" } } as never),
@@ -2628,7 +2701,11 @@ describe("local coach composition", () => {
       athleteId: "0",
     });
     await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
-      intervals: { athlete_id: "0" },
+      intervals: {
+        athlete_id: "0",
+        credential_configured: true,
+        managedByEnvironment: { athleteId: false },
+      },
     });
     expect(parseYaml(await readFile(join(home.configDir, "config.yaml"), "utf8"))).toMatchObject({
       intervals: { athlete_id: "0" },
@@ -2855,13 +2932,17 @@ describe("local coach composition", () => {
       intervals: { athleteId: "previous-athlete" },
     });
     await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       llm: {
         provider: "openrouter",
         model: "previous-model",
         credential_configured: true,
       },
-      intervals: { athlete_id: "previous-athlete" },
+      intervals: {
+        athlete_id: "previous-athlete",
+        credential_configured: true,
+        managedByEnvironment: { athleteId: false },
+      },
       session: {
         ...initial.session,
         managedByEnvironment: {

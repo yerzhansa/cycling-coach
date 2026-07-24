@@ -56,12 +56,14 @@ import {
   type CoachEngine,
   type CoachOperations,
   type ConfigureRuntimeRpcParams,
+  type ConfigureRuntimeRpcRefusalReason,
   type GetRuntimeConfigRpcResult,
 } from "@enduragent/coach-contract";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import { createPersistedAthleteStateSource } from "./athlete-state-reader.js";
 import {
   assertRuntimeAthleteOwner,
+  RuntimeAthleteOwnerRefusal,
   type RuntimeAthleteOwnerClaim,
 } from "./backfill.js";
 import { createCoachEngineAdapter } from "./coach-engine-adapter.js";
@@ -218,10 +220,7 @@ function captureRuntimeConfigFile(configDir: string): RuntimeConfigFileSnapshot 
   return existsSync(path) ? { content: readFileSync(path) } : {};
 }
 
-function restoreRuntimeConfigFile(
-  configDir: string,
-  snapshot: RuntimeConfigFileSnapshot,
-): void {
+function restoreRuntimeConfigFile(configDir: string, snapshot: RuntimeConfigFileSnapshot): void {
   const path = join(configDir, "config.yaml");
   if (snapshot.content !== undefined) {
     replacePrivateFile(path, snapshot.content);
@@ -312,13 +311,19 @@ function runtimeConfigSnapshot(
   timezone: string,
 ): GetRuntimeConfigRpcResult {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     llm: {
       provider: config.llm.provider,
       model: config.llm.model,
       credential_configured: runtimeCredentialConfigured(configDir, config),
     },
-    intervals: { athlete_id: config.intervals.athleteId },
+    intervals: {
+      athlete_id: config.intervals.athleteId,
+      credential_configured: config.intervals.apiKey.length > 0,
+      managedByEnvironment: {
+        athleteId: environment.INTERVALS_ATHLETE_ID !== undefined,
+      },
+    },
     session: {
       ...config.session,
       timezone,
@@ -583,10 +588,7 @@ export async function createLocalCoachComposition(
     return approval ?? undefined;
   };
   let activeConfig = copyConfig(input.config);
-  if (
-    activeConfig.intervals.apiKey.length > 0 &&
-    activeConfig.intervals.athleteId.length === 0
-  ) {
+  if (activeConfig.intervals.apiKey.length > 0 && activeConfig.intervals.athleteId.length === 0) {
     activeConfig = {
       ...activeConfig,
       intervals: { ...activeConfig.intervals, athleteId: "0" },
@@ -656,10 +658,7 @@ export async function createLocalCoachComposition(
               session: { ...config.session, timezone },
             };
       const memory = new Memory(input.home.root, timezone);
-      const chatStore = new ChatStore(
-        input.home.root,
-        config.session.resetArchiveRetentionDays,
-      );
+      const chatStore = new ChatStore(input.home.root, config.session.resetArchiveRetentionDays);
       const projectedConfig = engineConfigFromConfig(effectiveConfig);
       const legacyClient =
         config.intervals.apiKey.length === 0
@@ -720,8 +719,14 @@ export async function createLocalCoachComposition(
     const applyRuntimeConfig = async (
       request: ConfigureRuntimeRpcParams,
       signal: AbortSignal,
-    ): Promise<void> => {
+    ): Promise<ConfigureRuntimeRpcRefusalReason | void> => {
       signal.throwIfAborted();
+      if (
+        request.intervals?.athlete_id !== undefined &&
+        input.env.INTERVALS_ATHLETE_ID !== undefined
+      ) {
+        return "managed-by-environment";
+      }
       if (request.session !== undefined) {
         const ownership = sessionConfigEnvironmentOwnership(input.env);
         for (const field of [
@@ -742,16 +747,12 @@ export async function createLocalCoachComposition(
       const candidateAthleteId =
         candidate.intervals.athleteId.length === 0 ? "0" : candidate.intervals.athleteId;
       const athleteIdChanged =
-        request.intervals?.athlete_id !== undefined &&
-        candidateAthleteId !== activeAthleteId;
+        request.intervals?.athlete_id !== undefined && candidateAthleteId !== activeAthleteId;
       const apiKeyChanged =
         request.intervals?.api_key !== undefined &&
         candidate.intervals.apiKey !== activeConfig.intervals.apiKey;
       let pendingOwnerClaim: RuntimeAthleteOwnerClaim | undefined;
       if (athleteIdChanged || apiKeyChanged) {
-        if (athleteIdChanged && input.env.INTERVALS_ATHLETE_ID !== undefined) {
-          throw new Error("runtime athlete ID is controlled by the daemon environment");
-        }
         if (
           apiKeyChanged &&
           input.env.INTERVALS_API_KEY !== undefined &&
@@ -759,13 +760,19 @@ export async function createLocalCoachComposition(
         ) {
           throw new Error("runtime intervals credential is controlled by the daemon environment");
         }
-        pendingOwnerClaim = await assertIntervalsOwner(
-          activeConfig.intervals,
-          candidate.intervals,
-          signal,
-          activeConfig.intervals.apiKey.length === 0 &&
-            candidate.intervals.apiKey.length > 0,
-        );
+        try {
+          pendingOwnerClaim = await assertIntervalsOwner(
+            activeConfig.intervals,
+            candidate.intervals,
+            signal,
+            activeConfig.intervals.apiKey.length === 0 && candidate.intervals.apiKey.length > 0,
+          );
+        } catch (error) {
+          if (!(error instanceof RuntimeAthleteOwnerRefusal)) throw error;
+          if (error.reason === "current-credential-missing") return "credential-required";
+          if (error.reason === "mismatch") return "training-account-mismatch";
+          return "ownership-unavailable";
+        }
       }
       if (request.llm !== undefined && candidate.llm.provider === "openai-codex") {
         credential(
@@ -822,12 +829,7 @@ export async function createLocalCoachComposition(
         historyNewestDate: () => new Date(now()).toISOString().slice(0, 10),
         applyRuntimeConfig,
         readRuntimeConfig: () =>
-          runtimeConfigSnapshot(
-            input.home.configDir,
-            activeConfig,
-            input.env,
-            activeTimezone,
-          ),
+          runtimeConfigSnapshot(input.home.configDir, activeConfig, input.env, activeTimezone),
       },
       dependencies.operationsDependencies,
     );
