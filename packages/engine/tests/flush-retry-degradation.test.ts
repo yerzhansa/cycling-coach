@@ -1,12 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import {
-  mkdtempSync,
-  rmSync,
-  mkdirSync,
-  writeFileSync,
-  readFileSync,
-  readdirSync,
-} from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
@@ -49,7 +42,11 @@ async function setupAgent(complete: ReturnType<typeof vi.fn>) {
   }));
 
   const { CoachAgent } = await import("../src/agent/coach-agent.js");
-  return new CoachAgent(cyclingSport as unknown as Sport, baseAgentConfig(dataDir));
+  const ports = baseAgentConfig(dataDir);
+  return {
+    agent: new CoachAgent(cyclingSport as unknown as Sport, ports),
+    chatStore: ports.chatStore,
+  };
 }
 
 function mkAssistant(text: string, stopReason: "stop" | "length" = "stop") {
@@ -73,7 +70,7 @@ function seedSession(chatId: string, lines: Array<{ role: string; content: strin
   writeFileSync(
     join(sessionsDir, `${chatId}.jsonl`),
     lines.map((l) => JSON.stringify(l)).join("\n") + "\n",
-    "utf-8",
+    { encoding: "utf-8", mode: 0o600 },
   );
 }
 
@@ -117,7 +114,7 @@ describe("flush retry and degradation", () => {
       if (n === 1) throw new Error("boom");
       return mkAssistant("noted");
     });
-    const agent = await setupAgent(complete);
+    const { agent } = await setupAgent(complete);
     seedSession("retry-ok", STALE_FOUR.slice(0, 2));
 
     await expect(agent.resetSession("retry-ok")).resolves.toEqual({ memoryFlushed: true });
@@ -142,7 +139,7 @@ describe("flush retry and degradation", () => {
     const complete = vi.fn(async () => {
       throw new Error("boom");
     });
-    const agent = await setupAgent(complete);
+    const { agent } = await setupAgent(complete);
     seedSession("retry-dead", STALE_FOUR.slice(0, 2));
 
     await expect(agent.resetSession("retry-dead")).resolves.toEqual({ memoryFlushed: false });
@@ -166,12 +163,14 @@ describe("flush retry and degradation", () => {
       n++;
       return mkAssistant(`turn-${n}`);
     });
-    const agent = await setupAgent(complete);
+    const { agent, chatStore } = await setupAgent(complete);
+    const resetSpy = vi.spyOn(chatStore, "resetConversation");
     seedSession("defer", STALE_FOUR);
 
     const t1 = await agent.chat("defer", "hello");
     expect(t1).toBe("turn-2");
     expect(listArchives("defer")).toHaveLength(0);
+    expect(resetSpy).not.toHaveBeenCalled();
     expect(eventsNamed(warnSpy, "memory_flush_archive_deferred")).toHaveLength(1);
     expect(eventsNamed(warnSpy, "memory_flush_archive_deferred")[0].messageCount).toBe(4);
     const afterT1 = readFileSync(join(dataDir, "sessions", "defer.jsonl"), "utf-8");
@@ -184,6 +183,10 @@ describe("flush retry and degradation", () => {
     expect(t2).toBe("turn-4");
     const archives = listArchives("defer");
     expect(archives).toHaveLength(1);
+    expect(resetSpy).toHaveBeenCalledTimes(1);
+    expect(resetSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: "defer", reason: "stale-reset" }),
+    );
     expect(readFileSync(join(dataDir, "sessions", archives[0]), "utf-8")).toContain("old-fact-1");
     const afterT2 = readFileSync(join(dataDir, "sessions", "defer.jsonl"), "utf-8");
     expect(afterT2).toContain("hello again");
@@ -198,7 +201,7 @@ describe("flush retry and degradation", () => {
       n++;
       return mkAssistant(`turn-${n}`);
     });
-    const agent = await setupAgent(complete);
+    const { agent } = await setupAgent(complete);
     seedSession("short", STALE_FOUR.slice(0, 2));
 
     const text = await agent.chat("short", "hello");
@@ -216,7 +219,7 @@ describe("flush retry and degradation", () => {
       if (n <= 3) throw new Error("boom");
       return mkAssistant("recovered");
     });
-    const agent = await setupAgent(complete);
+    const { agent } = await setupAgent(complete);
 
     const text = await agent.chat("overflow-degrade", "hello");
     expect(text).toBe("recovered");

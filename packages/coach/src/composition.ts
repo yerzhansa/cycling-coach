@@ -11,13 +11,13 @@ import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 import {
-  ChatStore,
   Memory,
   RefreshTokenReusedError,
   appendUsageLine,
   bootstrapReference,
   classifyFailure,
   compareAndSaveStoredProfile,
+  createConversationStore,
   createMissingPlatformCalendarMutations,
   createPlatformCalendarMutations,
   createSubsystemLogger,
@@ -31,6 +31,7 @@ import {
   resolveSecretRef,
   sessionConfigEnvironmentOwnership,
   type Config,
+  type ConversationStorePort,
   type ReferenceRuntime,
   type RuntimeConfigPatch,
   type StoredProfile,
@@ -369,7 +370,7 @@ function runtimeConfigSnapshot(
 interface RuntimeBundle {
   readonly engine: CoachEngine;
   readonly memory: Memory;
-  readonly chatStore: ChatStore;
+  readonly chatStore: ConversationStorePort;
   readonly spendMeter: SpendMeterService;
   readonly timezone: string;
 }
@@ -692,7 +693,10 @@ export async function createLocalCoachComposition(
               session: { ...config.session, timezone },
             };
       const memory = new Memory(input.home.root, timezone);
-      const chatStore = new ChatStore(input.home.root, config.session.resetArchiveRetentionDays);
+      const conversationStore = createConversationStore(
+        input.home.root,
+        config.session.resetArchiveRetentionDays,
+      );
       const projectedConfig = engineConfigFromConfig(effectiveConfig);
       const legacyClient =
         config.intervals.apiKey.length === 0
@@ -704,7 +708,8 @@ export async function createLocalCoachComposition(
       const ports: EngineHostPorts = {
         config: projectedConfig,
         memory,
-        chatStore,
+        chatStore: conversationStore,
+        transcriptWriter: conversationStore,
         secrets: { resolve: resolveSecretRef },
         platform: {
           legacyClient,
@@ -730,7 +735,7 @@ export async function createLocalCoachComposition(
       const backend = (dependencies.createBackend ?? createCoachEngine)(engineInput);
       return {
         memory,
-        chatStore,
+        chatStore: conversationStore,
         timezone,
         spendMeter: createSpendMeterService({
           dataDir: input.home.root,

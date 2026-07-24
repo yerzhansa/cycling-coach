@@ -114,6 +114,15 @@ export type {
   LocalCoachEngine,
 } from "./agent/coach-engine.js";
 export { ChatStore } from "./agent/chat-store.js";
+export {
+  ConversationRecoveryError,
+  createConversationStore,
+  type ConversationStorePort,
+} from "./agent/conversation-store.js";
+export {
+  MAX_TRANSCRIPT_RECORD_BYTES,
+  UnsafeTranscriptTargetError,
+} from "./agent/transcript-store.js";
 export { engineConfigFromConfig } from "./agent/engine-host-adapter.js";
 export { classifyFailure, extractRetryAfterMs } from "./agent/token-utils.js";
 

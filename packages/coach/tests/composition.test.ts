@@ -471,6 +471,7 @@ describe("local coach composition", () => {
       "readReferenceState",
       "secrets",
       "stateReader",
+      "transcriptWriter",
       "usage",
     ]);
     expect(received?.ports.platform.legacyClient).toBeNull();
@@ -1049,6 +1050,13 @@ describe("local coach composition", () => {
       { provider: "openrouter", model: "model-first", apiKey: "placeholder", intervals: false },
       { provider: "google", model: "model-second", apiKey: "placeholder", intervals: false },
     ]);
+    expect(new Set(received.map((input) => input.ports.transcriptWriter)).size).toBe(
+      received.length,
+    );
+    expect(new Set(received.map((input) => input.ports.chatStore)).size).toBe(received.length);
+    expect(
+      received.every((input) => Object.is(input.ports.chatStore, input.ports.transcriptWriter)),
+    ).toBe(true);
     expect(runtimeOptions?.readConfig?.().intervals).toEqual({
       apiKey: "placeholder",
       athleteId: "athlete-b",
@@ -1153,9 +1161,9 @@ describe("local coach composition", () => {
     expect(
       (
         received[1]!.ports.chatStore as unknown as {
-          readonly resetArchiveRetentionDays: number;
+          readonly chatStore: { readonly resetArchiveRetentionDays: number };
         }
-      ).resetArchiveRetentionDays,
+      ).chatStore.resetArchiveRetentionDays,
     ).toBe(9);
     await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
       schemaVersion: 3,

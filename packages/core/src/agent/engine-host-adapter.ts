@@ -24,7 +24,7 @@ import { Memory } from "../memory/store.js";
 import { resolveSecretRef } from "../secrets/resolve.js";
 import { appendUsageLine } from "../usage-ledger.js";
 import { makeChatClient } from "../reference/sync/intervals-client-factory.js";
-import { ChatStore } from "./chat-store.js";
+import { createConversationStore, type ConversationStorePort } from "./conversation-store.js";
 import { classifyFailure, extractRetryAfterMs } from "./token-utils.js";
 
 export interface EngineHostAdapterOverrides {
@@ -52,12 +52,19 @@ export function createEngineHostAdapter(input: {
   readonly config: Config;
   readonly stateReader: AthleteStateReaderPort;
   readonly overrides?: EngineHostAdapterOverrides;
-}): { readonly ports: EngineHostPorts; readonly memory: Memory } {
+}): {
+  readonly ports: EngineHostPorts;
+  readonly memory: Memory;
+  readonly conversationStore: ConversationStorePort;
+} {
   const { config } = input;
   const overrides = input.overrides ?? {};
   const engineConfig = engineConfigFromConfig(config);
   const memory = new Memory(config.dataDir, config.session.timezone || "UTC");
-  const chatStore = new ChatStore(config.dataDir, config.session.resetArchiveRetentionDays);
+  const conversationStore = createConversationStore(
+    config.dataDir,
+    config.session.resetArchiveRetentionDays,
+  );
   const legacyClient = config.intervals.apiKey
     ? makeChatClient({
         apiKey: config.intervals.apiKey,
@@ -82,10 +89,12 @@ export function createEngineHostAdapter(input: {
   });
   return {
     memory,
+    conversationStore,
     ports: {
       config: engineConfig,
       memory,
-      chatStore,
+      chatStore: conversationStore,
+      transcriptWriter: conversationStore,
       secrets: { resolve: resolveSecretRef },
       platform: { legacyClient, athleteData, calendarMutations },
       logger: createSubsystemLogger("agent", config.dataDir),

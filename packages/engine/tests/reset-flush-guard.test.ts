@@ -1,12 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import {
-  mkdtempSync,
-  rmSync,
-  mkdirSync,
-  writeFileSync,
-  readFileSync,
-  readdirSync,
-} from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
@@ -75,7 +68,7 @@ function seedSession(chatId: string, lines: Array<{ role: string; content: strin
   writeFileSync(
     join(sessionsDir, `${chatId}.jsonl`),
     lines.map((l) => JSON.stringify(l)).join("\n") + "\n",
-    "utf-8",
+    { encoding: "utf-8", mode: 0o600 },
   );
 }
 

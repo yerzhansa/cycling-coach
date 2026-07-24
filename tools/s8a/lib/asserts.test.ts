@@ -122,16 +122,52 @@ describe("A4 memory compare", () => {
 
 describe("A5 two-way session compare", () => {
   it("flags a baseline session file missing live and vice versa", () => {
-    write(baselineDir, "sessions/c1.jsonl", '{"role":"user","content":"x","ts":"1998-07-06T09:00:00.000Z"}\n');
+    write(
+      baselineDir,
+      "sessions/c1.jsonl",
+      '{"role":"user","content":"x","ts":"1998-07-06T09:00:00.000Z"}\n',
+    );
     const missingLive = assertLedgerAndSessions("asserts-test", baselineDir, homeDir, []);
-    expect(missingLive.some((f) => f.assertId === "A5" && f.detail.includes("missing live"))).toBe(true);
+    expect(missingLive.some((f) => f.assertId === "A5" && f.detail.includes("missing live"))).toBe(
+      true,
+    );
 
-    write(homeDir, "sessions/c1.jsonl", '{"role":"user","content":"x","ts":"1998-07-06T09:00:00.000Z"}\n');
-    write(homeDir, "sessions/c2.jsonl", '{"role":"user","content":"y","ts":"1998-07-06T09:00:00.000Z"}\n');
+    write(
+      homeDir,
+      "sessions/c1.jsonl",
+      '{"role":"user","content":"x","ts":"1998-07-06T09:00:00.000Z"}\n',
+    );
+    write(
+      homeDir,
+      "sessions/c2.jsonl",
+      '{"role":"user","content":"y","ts":"1998-07-06T09:00:00.000Z"}\n',
+    );
     const missingBaseline = assertLedgerAndSessions("asserts-test", baselineDir, homeDir, []);
     expect(
-      missingBaseline.some((f) => f.assertId === "A5" && f.detail.includes("missing from baseline")),
+      missingBaseline.some(
+        (f) => f.assertId === "A5" && f.detail.includes("missing from baseline"),
+      ),
     ).toBe(true);
+  });
+
+  it("compares durable reset archives without pinning their random reset IDs", () => {
+    const legacyName = "sessions/c1.jsonl.reset.1998-07-06T09-00-00.000Z";
+    const durableName = `${legacyName}.${"a".repeat(64)}`;
+    const content =
+      '{"role":"user","content":"Synthetic archived turn","ts":"1998-07-06T08:00:00.000Z"}\n';
+    write(baselineDir, legacyName, content);
+    write(homeDir, durableName, content);
+
+    expect(assertLedgerAndSessions("asserts-test", baselineDir, homeDir, [])).toEqual([]);
+
+    write(
+      homeDir,
+      durableName,
+      '{"role":"user","content":"Changed archived turn","ts":"1998-07-06T08:00:00.000Z"}\n',
+    );
+    const failures = assertLedgerAndSessions("asserts-test", baselineDir, homeDir, []);
+    expect(failures).toHaveLength(1);
+    expect(failures[0].detail).toContain("field(s) differ: content");
   });
 });
 
@@ -161,17 +197,28 @@ describe("A1 session-line lineage pairs", () => {
           cacheKey: "k",
         },
         toolExecutions: [],
-        result: { text: "t", toolCalls: [], finishReason: "stop", usage: {}, totalUsage: {}, steps: 1 },
+        result: {
+          text: "t",
+          toolCalls: [],
+          finishReason: "stop",
+          usage: {},
+          totalUsage: {},
+          steps: 1,
+        },
         events: null,
       },
     ],
   };
 
   it("passes when the live pair matches and fails when it drifts", () => {
-    const good = new Map([["c1", [{ templateHash: "aaaaaaaaaaaaaaaa", assembledHash: "bbbbbbbbbbbbbbbb" }]]]);
+    const good = new Map([
+      ["c1", [{ templateHash: "aaaaaaaaaaaaaaaa", assembledHash: "bbbbbbbbbbbbbbbb" }]],
+    ]);
     expect(assertSessionLineagePairs("asserts-test", recording, good, [])).toEqual([]);
 
-    const drifted = new Map([["c1", [{ templateHash: "eeeeeeeeeeeeeeee", assembledHash: "bbbbbbbbbbbbbbbb" }]]]);
+    const drifted = new Map([
+      ["c1", [{ templateHash: "eeeeeeeeeeeeeeee", assembledHash: "bbbbbbbbbbbbbbbb" }]],
+    ]);
     const failures = assertSessionLineagePairs("asserts-test", recording, drifted, []);
     expect(failures).toHaveLength(1);
     expect(failures[0].assertId).toBe("A1");

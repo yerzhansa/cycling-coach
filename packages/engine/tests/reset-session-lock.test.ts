@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { TurnEvent } from "@enduragent/coach-contract";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import type { Sport } from "../src/sport.js";
@@ -17,7 +18,7 @@ beforeEach(() => {
   dataDir = join(tempHome, ".cycling-coach");
   mkdirSync(dataDir, { recursive: true });
   mkdirSync(join(dataDir, "memory"), { recursive: true });
-  mkdirSync(join(dataDir, "sessions"), { recursive: true });
+  mkdirSync(join(dataDir, "sessions"), { recursive: true, mode: 0o700 });
   vi.resetModules();
 });
 
@@ -43,10 +44,11 @@ async function setupAgent(complete: ReturnType<typeof vi.fn>) {
   }));
 
   const { CoachAgent } = await import("../src/agent/coach-agent.js");
-  const ports = baseAgentConfig(dataDir);
+  const ports = { ...baseAgentConfig(dataDir), now: () => 0 };
   return {
     agent: new CoachAgent(cyclingSport as unknown as Sport, ports),
     chatStore: ports.chatStore,
+    transcriptWriter: ports.transcriptWriter,
   };
 }
 
@@ -84,7 +86,7 @@ describe("resetSession runs under the per-chat session lock", () => {
   it("a reset cannot interleave with an in-flight same-chat turn", async () => {
     const { complete, reached, release } = gatedTransport();
     const { agent, chatStore } = await setupAgent(complete);
-    const archiveSpy = vi.spyOn(chatStore, "archiveAndReset");
+    const resetSpy = vi.spyOn(chatStore, "resetConversation");
 
     const turn = agent.chat("c1", "hello");
     await reached;
@@ -92,13 +94,17 @@ describe("resetSession runs under the per-chat session lock", () => {
 
     const reset = agent.resetSession("c1");
     await Promise.resolve();
-    expect(archiveSpy).not.toHaveBeenCalled();
+    expect(resetSpy).not.toHaveBeenCalled();
 
     release();
     await Promise.all([turn, reset]);
 
-    expect(archiveSpy).toHaveBeenCalledWith("c1");
-    expect(archiveSpy.mock.invocationCallOrder[0]).toBeGreaterThan(
+    expect(resetSpy).toHaveBeenCalledWith({
+      chatId: "c1",
+      boundaryAt: "1970-01-01T00:00:00.000Z",
+      reason: "explicit-reset",
+    });
+    expect(resetSpy.mock.invocationCallOrder[0]).toBeGreaterThan(
       complete.mock.invocationCallOrder[0],
     );
   });
@@ -106,14 +112,18 @@ describe("resetSession runs under the per-chat session lock", () => {
   it("a reset for a different chat is NOT blocked by an in-flight turn", async () => {
     const { complete, reached, release } = gatedTransport();
     const { agent, chatStore } = await setupAgent(complete);
-    const archiveSpy = vi.spyOn(chatStore, "archiveAndReset");
+    const resetSpy = vi.spyOn(chatStore, "resetConversation");
 
     const turn = agent.chat("c1", "hello");
     await reached;
     expect(complete).toHaveBeenCalledTimes(1);
 
     await expect(agent.resetSession("c2")).resolves.toEqual({ memoryFlushed: true });
-    expect(archiveSpy).toHaveBeenCalledWith("c2");
+    expect(resetSpy).toHaveBeenCalledWith({
+      chatId: "c2",
+      boundaryAt: "1970-01-01T00:00:00.000Z",
+      reason: "explicit-reset",
+    });
 
     release();
     await turn;
@@ -123,5 +133,41 @@ describe("resetSession runs under the per-chat session lock", () => {
     const complete = vi.fn(async () => mkAssistant("ok"));
     const { agent } = await setupAgent(complete);
     await expect(agent.resetSession("c3")).resolves.toEqual({ memoryFlushed: true });
+  });
+
+  it("propagates an explicit reset failure without generation or completed-turn delivery", async () => {
+    const complete = vi.fn(async () => mkAssistant("must not run"));
+    const { agent, chatStore } = await setupAgent(complete);
+    const failure = new Error("synthetic reset failure");
+    const resetSpy = vi.spyOn(chatStore, "resetConversation").mockImplementation(() => {
+      throw failure;
+    });
+
+    await expect(agent.resetSession("explicit-failure")).rejects.toBe(failure);
+    expect(resetSpy).toHaveBeenCalledTimes(1);
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it("stops a stale turn before generation, transcript capture, or final text when reset fails", async () => {
+    const complete = vi.fn(async () => mkAssistant("must not run"));
+    const { agent, chatStore, transcriptWriter } = await setupAgent(complete);
+    const failure = new Error("synthetic stale reset failure");
+    vi.spyOn(chatStore, "load").mockReturnValue({
+      messages: [],
+      lastMessageTime: "1969-12-31T00:00:00.000Z",
+    });
+    const resetSpy = vi.spyOn(chatStore, "resetConversation").mockImplementation(() => {
+      throw failure;
+    });
+    const completedSpy = vi.spyOn(transcriptWriter, "appendCompletedTurn");
+    const events: TurnEvent[] = [];
+
+    await expect(
+      agent.chat("stale-failure", "hello", undefined, (event) => events.push(event)),
+    ).rejects.toBe(failure);
+    expect(resetSpy).toHaveBeenCalledTimes(1);
+    expect(complete).not.toHaveBeenCalled();
+    expect(completedSpy).not.toHaveBeenCalled();
+    expect(events.some((event) => event.type === "final-text")).toBe(false);
   });
 });

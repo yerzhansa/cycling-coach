@@ -1,16 +1,22 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
+  chmodSync,
   existsSync,
+  linkSync,
+  lstatSync,
   mkdtempSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ChatStore } from "../src/agent/chat-store.js";
+import { archiveAndResetDurably, ChatStore } from "../src/agent/chat-store.js";
 
 // ESM module namespaces are non-configurable, so vi.spyOn cannot intercept a
 // named fs import. Mock the module up front: appendFileSync is a spy that
@@ -28,7 +34,10 @@ vi.mock("node:fs", async () => {
     if (throwState.shouldThrow) throwState.shouldThrow();
     return realAppend(path, data, opts as Parameters<typeof realAppend>[2]);
   });
-  return { ...actual, appendFileSync: (...args: [string, string, unknown?]) => appendFileSyncSpy(...args) };
+  return {
+    ...actual,
+    appendFileSync: (...args: [string, string, unknown?]) => appendFileSyncSpy(...args),
+  };
 });
 
 let dataDir: string;
@@ -45,7 +54,24 @@ afterEach(() => {
   appendFileSyncSpy.mockClear();
 });
 
-const LINEAGE = { templateHash: "t", assembledHash: "h", provider: "p", model: "m", lineageVersion: "1" };
+const LINEAGE = {
+  templateHash: "t",
+  assembledHash: "h",
+  provider: "p",
+  model: "m",
+  lineageVersion: "1",
+};
+const DURABLE_RESET = {
+  resetId: "d".repeat(64),
+  boundaryAt: "2026-07-22T01:02:03.000Z",
+};
+
+function durableArchivePath(chatId: string): string {
+  return join(
+    sessionsDir,
+    `${chatId}.jsonl.reset.${DURABLE_RESET.boundaryAt.replace(/:/g, "-")}.${DURABLE_RESET.resetId}`,
+  );
+}
 
 function listArchives(chatId: string): string[] {
   return readdirSync(sessionsDir)
@@ -87,6 +113,113 @@ describe("ChatStore — on-disk permissions", () => {
     store.overwriteHistory("123", [{ role: "assistant", content: "compacted" }]);
 
     expect(statSync(join(sessionsDir, "123.jsonl")).mode & 0o777).toBe(0o600);
+  });
+
+  it("refuses a pre-existing permissive sessions directory without repairing it", () => {
+    mkdirSync(sessionsDir, { mode: 0o755 });
+    chmodSync(sessionsDir, 0o755);
+
+    expect(() => new ChatStore(dataDir)).toThrow("Sessions directory is unsafe.");
+    expect(lstatSync(sessionsDir).mode & 0o7777).toBe(0o755);
+  });
+});
+
+describe("ChatStore durable reset — private race-checked targets", () => {
+  it("archives one exact 0600 session from an exact 0700 directory without changing bytes", () => {
+    const store = new ChatStore(dataDir);
+    store.appendTurn("safe", "synthetic user", "synthetic assistant", LINEAGE);
+    const active = join(sessionsDir, "safe.jsonl");
+    const before = readFileSync(active);
+
+    archiveAndResetDurably(store, "safe", DURABLE_RESET);
+
+    const archive = durableArchivePath("safe");
+    expect(existsSync(active)).toBe(false);
+    expect(readFileSync(archive)).toEqual(before);
+    expect(lstatSync(sessionsDir).mode & 0o7777).toBe(0o700);
+    expect(lstatSync(archive).mode & 0o7777).toBe(0o600);
+    expect(lstatSync(archive).nlink).toBe(1);
+  });
+
+  it("refuses a permissive active file without chmodding or archiving it", () => {
+    const store = new ChatStore(dataDir);
+    store.appendTurn("permissive", "synthetic user", "synthetic assistant", LINEAGE);
+    const active = join(sessionsDir, "permissive.jsonl");
+    const before = readFileSync(active);
+    chmodSync(active, 0o644);
+
+    expect(() => archiveAndResetDurably(store, "permissive", DURABLE_RESET)).toThrow(
+      "Active reset session target is unsafe.",
+    );
+    expect(readFileSync(active)).toEqual(before);
+    expect(lstatSync(active).mode & 0o7777).toBe(0o644);
+    expect(existsSync(durableArchivePath("permissive"))).toBe(false);
+  });
+
+  it("refuses symbolic and non-regular active reset targets", () => {
+    const store = new ChatStore(dataDir);
+    const outside = join(dataDir, "synthetic-outside.jsonl");
+    writeFileSync(outside, "synthetic outside\n", { mode: 0o600 });
+    symlinkSync(outside, join(sessionsDir, "symbolic.jsonl"));
+    mkdirSync(join(sessionsDir, "non-regular.jsonl"), { mode: 0o700 });
+
+    expect(() => archiveAndResetDurably(store, "symbolic", DURABLE_RESET)).toThrow(
+      "Active reset session target is unsafe.",
+    );
+    expect(() => archiveAndResetDurably(store, "non-regular", DURABLE_RESET)).toThrow(
+      "Active reset session target is unsafe.",
+    );
+    expect(readFileSync(outside, "utf8")).toBe("synthetic outside\n");
+    expect(lstatSync(join(sessionsDir, "symbolic.jsonl")).isSymbolicLink()).toBe(true);
+    expect(lstatSync(join(sessionsDir, "non-regular.jsonl")).isDirectory()).toBe(true);
+  });
+
+  it("refuses an unexpected active link count", () => {
+    const store = new ChatStore(dataDir);
+    const active = join(sessionsDir, "linked.jsonl");
+    writeFileSync(active, "synthetic linked session\n", { mode: 0o600 });
+    linkSync(active, join(dataDir, "synthetic-shared-session.jsonl"));
+
+    expect(() => archiveAndResetDurably(store, "linked", DURABLE_RESET)).toThrow(
+      "Active reset session target is unsafe.",
+    );
+    expect(lstatSync(active).nlink).toBe(2);
+    expect(existsSync(durableArchivePath("linked"))).toBe(false);
+  });
+
+  it("refuses a permissive completed archive without repairing it", () => {
+    const store = new ChatStore(dataDir);
+    const archive = durableArchivePath("archive-mode");
+    writeFileSync(archive, "synthetic archive\n", { mode: 0o644 });
+    chmodSync(archive, 0o644);
+
+    expect(() => archiveAndResetDurably(store, "archive-mode", DURABLE_RESET)).toThrow(
+      "Reset archive target is unsafe.",
+    );
+    expect(lstatSync(archive).mode & 0o7777).toBe(0o644);
+  });
+
+  it("rechecks sessions directory mode and identity before durable reset", () => {
+    const modeStore = new ChatStore(dataDir);
+    modeStore.appendTurn("mode-drift", "synthetic user", "synthetic assistant", LINEAGE);
+    chmodSync(sessionsDir, 0o755);
+
+    expect(() => archiveAndResetDurably(modeStore, "mode-drift", DURABLE_RESET)).toThrow(
+      "Sessions directory is unsafe.",
+    );
+    expect(existsSync(join(sessionsDir, "mode-drift.jsonl"))).toBe(true);
+
+    chmodSync(sessionsDir, 0o700);
+    const identityStore = new ChatStore(dataDir);
+    identityStore.appendTurn("identity-drift", "synthetic user", "synthetic assistant", LINEAGE);
+    renameSync(sessionsDir, `${sessionsDir}.original`);
+    mkdirSync(sessionsDir, { mode: 0o700 });
+
+    expect(() => archiveAndResetDurably(identityStore, "identity-drift", DURABLE_RESET)).toThrow(
+      "Sessions directory is unsafe.",
+    );
+    expect(existsSync(join(`${sessionsDir}.original`, "identity-drift.jsonl"))).toBe(true);
+    expect(readdirSync(sessionsDir)).toEqual([]);
   });
 });
 

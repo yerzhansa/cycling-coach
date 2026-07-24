@@ -1,21 +1,32 @@
-import { cpSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { S8aScenario } from "./types.js";
 
+function ensurePrivateDirectory(path: string): void {
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+  chmodSync(path, 0o700);
+}
+
+function writePrivateFile(path: string, content: string): void {
+  writeFileSync(path, content, { encoding: "utf-8", mode: 0o600 });
+  chmodSync(path, 0o600);
+}
+
 export function stageHome(tempHome: string, scenario: S8aScenario): void {
-  mkdirSync(join(tempHome, "memory"), { recursive: true });
-  mkdirSync(join(tempHome, "sessions"), { recursive: true });
+  ensurePrivateDirectory(tempHome);
+  ensurePrivateDirectory(join(tempHome, "memory"));
+  ensurePrivateDirectory(join(tempHome, "sessions"));
   const home = scenario.home;
   if (home === undefined) return;
   if (home.memoryMd !== undefined) {
-    writeFileSync(join(tempHome, "memory", "MEMORY.md"), home.memoryMd, "utf-8");
+    writePrivateFile(join(tempHome, "memory", "MEMORY.md"), home.memoryMd);
   }
   if (home.eventsJsonl !== undefined) {
-    writeFileSync(join(tempHome, "memory", "events.jsonl"), home.eventsJsonl, "utf-8");
+    writePrivateFile(join(tempHome, "memory", "events.jsonl"), home.eventsJsonl);
   }
   for (const [chatId, content] of Object.entries(home.sessions ?? {})) {
-    writeFileSync(join(tempHome, "sessions", `${chatId}.jsonl`), content, "utf-8");
+    writePrivateFile(join(tempHome, "sessions", `${chatId}.jsonl`), content);
   }
 }
 

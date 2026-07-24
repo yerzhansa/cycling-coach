@@ -3,6 +3,7 @@ import {
   mkdtempSync,
   rmSync,
   mkdirSync,
+  lstatSync,
   writeFileSync,
   readFileSync,
   readdirSync,
@@ -113,7 +114,11 @@ describe("CoachAgent corrupt-session recovery", () => {
     const complete = vi.fn(async () => mkAssistant("recovered-reply"));
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const agent = await setupAgent(complete);
-    const fresh = JSON.stringify({ role: "user", content: "earlier turn", ts: new Date().toISOString() });
+    const fresh = JSON.stringify({
+      role: "user",
+      content: "earlier turn",
+      ts: new Date().toISOString(),
+    });
     seedRaw("corrupt-chat", `${fresh}\n{"role":"assistant","content":"torn mid-wri`);
 
     const text = await agent.chat("corrupt-chat", "hello");
@@ -129,18 +134,24 @@ describe("CoachAgent corrupt-session recovery", () => {
     expect(session).not.toContain("torn mid-wri");
   });
 
-  it("resetSession archives even when the session read itself fails (load guard)", async () => {
+  it("resetSession fails closed when the active session target is non-regular", async () => {
     const complete = vi.fn();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const agent = await setupAgent(complete);
     mkdirSync(join(dataDir, "sessions", "unreadable.jsonl"), { recursive: true });
 
-    await expect(agent.resetSession("unreadable")).resolves.toEqual({ memoryFlushed: false });
+    await expect(agent.resetSession("unreadable")).rejects.toThrow(
+      "Active reset session target is unsafe.",
+    );
 
     expect(
       warnSpy.mock.calls.some((c) => String(c[0]).includes("Pre-reset session load failed")),
     ).toBe(true);
     expect(complete).not.toHaveBeenCalled();
-    expect(agent.hasSession("unreadable")).toBe(false);
+    expect(lstatSync(join(dataDir, "sessions", "unreadable.jsonl")).isDirectory()).toBe(true);
+    expect(listArchives("unreadable")).toHaveLength(0);
+    expect(() => agent.hasSession("unreadable")).toThrow(
+      "Conversation storage recovery could not be completed.",
+    );
   });
 });
