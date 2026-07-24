@@ -31,6 +31,8 @@ import { createDesktopUpdateController } from "./update/controller.js";
 import { createDesktopUpdateView } from "./update/view.js";
 import { createProviderModelSettingsController } from "./settings/provider-model-controller.js";
 import { createProviderModelSettingsView } from "./settings/provider-model-view.js";
+import { createAthleteSettingsController } from "./settings/athlete-controller.js";
+import { createAthleteSettingsView } from "./settings/athlete-view.js";
 import { createResidentSettingsShell } from "./settings/shell.js";
 import { createSessionSettingsController } from "./settings/session-controller.js";
 import { createSessionSettingsView } from "./settings/session-view.js";
@@ -293,31 +295,51 @@ const settingsShell = createResidentSettingsShell({
   actionHost: topbarActions,
   before: setup,
 });
+const providerModelSettingsView = createProviderModelSettingsView({
+  document,
+  shell: settingsShell,
+});
+const athleteSettingsView = createAthleteSettingsView({ document, shell: settingsShell });
+const sessionSettingsView = createSessionSettingsView({ document, shell: settingsShell });
 const sessionSettingsController = createSessionSettingsController({
   clients,
   beginMutation: () => settingsShell.beginMutation("session"),
-  view: createSessionSettingsView({ document, shell: settingsShell }),
+  view: sessionSettingsView,
+});
+const athleteSettingsController = createAthleteSettingsController({
+  clients,
+  openSetup: () => {
+    providerModelSettingsController.close();
+    athleteSettingsController.close();
+    sessionSettingsController.close();
+    settingsShell.close();
+    setup.click();
+  },
+  beginMutation: () => settingsShell.beginMutation("athlete"),
+  view: athleteSettingsView,
 });
 const providerModelSettingsController = createProviderModelSettingsController({
   load: () => window.enduragentAuth.llmConfiguration(),
   apply: (selection) => window.enduragentAuth.applyLlmSelection(selection),
   openSetup: () => {
+    providerModelSettingsController.close();
+    athleteSettingsController.close();
     sessionSettingsController.close();
+    settingsShell.close();
     setup.click();
   },
   beginMutation: () => settingsShell.beginMutation("provider-model"),
-  view: createProviderModelSettingsView({
-    document,
-    shell: settingsShell,
-  }),
+  view: providerModelSettingsView,
 });
 settingsShell.bind({
   onOpen() {
     void providerModelSettingsController.activate();
+    void athleteSettingsController.activate();
     void sessionSettingsController.activate();
   },
   onClose() {
     providerModelSettingsController.close();
+    athleteSettingsController.close();
     sessionSettingsController.close();
     settingsShell.close();
   },
@@ -349,6 +371,7 @@ window.addEventListener(
     releaseNotesController.dispose();
     desktopUpdateController.dispose();
     providerModelSettingsController.dispose();
+    athleteSettingsController.dispose();
     sessionSettingsController.dispose();
     settingsShell.dispose();
     disposeDroppedRideImports();

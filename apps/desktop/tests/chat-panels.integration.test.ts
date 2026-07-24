@@ -190,19 +190,24 @@ ${"nonwrapping".repeat(36)}
       if (request.method === "saveIntake") return response({ schemaVersion: 1, saved: true });
       if (request.method === "configureRuntime") {
         return response({
-          schemaVersion: 2,
+          schemaVersion: 3,
+          status: "applied",
           applied: { llm: true, intervals: true, session: true },
         });
       }
       if (request.method === "getRuntimeConfig") {
         return response({
-          schemaVersion: 2,
+          schemaVersion: 3,
           llm: {
             provider: "anthropic",
             model: "claude-sonnet-4-6",
             credential_configured: true,
           },
-          intervals: { athlete_id: "0" },
+          intervals: {
+            athlete_id: "0",
+            credential_configured: true,
+            managedByEnvironment: { athleteId: false },
+          },
           session: {
             historyTokenBudgetRatio: 0.3,
             idleMinutes: 0,
@@ -1105,7 +1110,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     const compactSettingsGeometry = await fixture.evaluate<{
       readonly open: boolean;
       readonly oneDialog: boolean;
-      readonly hasBothSections: boolean;
+      readonly hasThreeSections: boolean;
       readonly horizontalOverflow: boolean;
       readonly withinViewport: boolean;
       readonly saveReachableAfterScroll: boolean;
@@ -1126,9 +1131,10 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       return {
         open: dialog.open,
         oneDialog: document.querySelectorAll("#provider-model-settings-dialog").length === 1,
-        hasBothSections:
-          dialog.querySelectorAll("fieldset").length === 2 &&
+        hasThreeSections:
+          dialog.querySelectorAll("fieldset").length === 3 &&
           copy.includes("Provider & model") &&
+          copy.includes("Training account") &&
           copy.includes("Conversation & time"),
         horizontalOverflow:
           dialog.scrollWidth > dialog.clientWidth ||
@@ -1154,7 +1160,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     expect(compactSettingsGeometry).toEqual({
       open: true,
       oneDialog: true,
-      hasBothSections: true,
+      hasThreeSections: true,
       horizontalOverflow: false,
       withinViewport: true,
       saveReachableAfterScroll: true,

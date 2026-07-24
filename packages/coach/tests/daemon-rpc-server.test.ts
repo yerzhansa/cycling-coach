@@ -75,7 +75,8 @@ const operations: CoachOperations = {
   }),
   saveIntake: async () => ({ schemaVersion: 1, saved: true }),
   configureRuntime: async ({ llm, intervals, session }) => ({
-    schemaVersion: 2,
+    schemaVersion: 3,
+    status: "applied",
     applied: {
       llm: llm !== undefined,
       intervals: intervals !== undefined,
@@ -83,13 +84,17 @@ const operations: CoachOperations = {
     },
   }),
   getRuntimeConfig: async () => ({
-    schemaVersion: 2,
+    schemaVersion: 3,
     llm: {
       provider: "anthropic",
       model: "synthetic-model",
       credential_configured: false,
     },
-    intervals: { athlete_id: "synthetic-athlete" },
+    intervals: {
+      athlete_id: "synthetic-athlete",
+      credential_configured: false,
+      managedByEnvironment: { athleteId: false },
+    },
     session: {
       historyTokenBudgetRatio: 0.3,
       idleMinutes: 0,
@@ -455,7 +460,8 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     const token = "x".repeat(43);
     const saveIntake = vi.fn(async () => ({ schemaVersion: 1 as const, saved: true as const }));
     const configureRuntime = vi.fn(async ({ llm, intervals, session }) => ({
-      schemaVersion: 2 as const,
+      schemaVersion: 3 as const,
+      status: "applied" as const,
       applied: {
         llm: llm !== undefined,
         intervals: intervals !== undefined,
@@ -463,13 +469,17 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       },
     }));
     const runtimeSnapshot = {
-      schemaVersion: 2 as const,
+      schemaVersion: 3 as const,
       llm: {
         provider: "openrouter" as const,
         model: "model-a",
         credential_configured: true,
       },
-      intervals: { athlete_id: "athlete-a" },
+      intervals: {
+        athlete_id: "athlete-a",
+        credential_configured: true,
+        managedByEnvironment: { athleteId: false },
+      },
       session: {
         historyTokenBudgetRatio: 0.3,
         idleMinutes: 0,
@@ -535,7 +545,8 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       jsonrpc: "2.0",
       id: "runtime",
       result: {
-        schemaVersion: 2,
+        schemaVersion: 3,
+        status: "applied",
         applied: { llm: true, intervals: true, session: false },
       },
     });
@@ -561,6 +572,57 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     expect(JSON.stringify(snapshotResponse)).not.toContain("api_key");
     expect(JSON.stringify(snapshotResponse)).not.toContain("token");
     expect(JSON.stringify(snapshotResponse)).not.toContain("path");
+    await client.close();
+  });
+
+  it("delivers fixed runtime refusals without serializing submitted credentials or account IDs", async () => {
+    const token = "x".repeat(43);
+    const reasons = [
+      "credential-required",
+      "ownership-unavailable",
+      "training-account-mismatch",
+      "managed-by-environment",
+    ] as const;
+    let call = 0;
+    const configureRuntime = vi.fn(async () => ({
+      schemaVersion: 3 as const,
+      status: "refused" as const,
+      reason: reasons[call++]!,
+    }));
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      operations: { ...operations, configureRuntime },
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+
+    for (const [index, reason] of reasons.entries()) {
+      client.ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: `refusal-${index}`,
+          method: "configureRuntime",
+          params: {
+            intervals: {
+              api_key: `obviously-fake-private-key-${index}`,
+              athlete_id: `private-athlete-${index}`,
+            },
+          },
+        }),
+      );
+      const response = parseCoachRpcEnvelope(await client.frames.next());
+      expect(response).toEqual({
+        jsonrpc: "2.0",
+        id: `refusal-${index}`,
+        result: { schemaVersion: 3, status: "refused", reason },
+      });
+      expect(JSON.stringify(response)).not.toContain("private");
+    }
+
+    expect(configureRuntime).toHaveBeenCalledTimes(reasons.length);
     await client.close();
   });
 

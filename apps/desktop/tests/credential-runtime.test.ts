@@ -44,9 +44,13 @@ function runtimeSnapshot(
   athleteId = "custom-athlete",
 ): RuntimeConfigSnapshot {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     llm: { provider, model, credential_configured: credentialConfigured },
-    intervals: { athlete_id: athleteId },
+    intervals: {
+      athlete_id: athleteId,
+      credential_configured: true,
+      managedByEnvironment: { athleteId: false },
+    },
     session: {
       historyTokenBudgetRatio: 0.3,
       idleMinutes: 0,
@@ -631,7 +635,8 @@ describe("desktop credential runtime precedence", () => {
         calls.push(method);
         if (method === "getRuntimeConfig") return runtimeSnapshot("anthropic");
         return {
-          schemaVersion: 2,
+          schemaVersion: 3,
+          status: "applied",
           applied: { llm: true, intervals: false, session: false },
         };
       },
@@ -663,6 +668,59 @@ describe("desktop credential runtime precedence", () => {
   });
 
   it.each([
+    [
+      { llm: { model: "candidate-model" } },
+      {
+        schemaVersion: 3,
+        status: "applied",
+        applied: { llm: false, intervals: false, session: false },
+      },
+    ],
+    [
+      { intervals: { athlete_id: "candidate-athlete" } },
+      {
+        schemaVersion: 3,
+        status: "applied",
+        applied: { llm: false, intervals: false, session: false },
+      },
+    ],
+    [
+      { session: { idleMinutes: 30 } },
+      {
+        schemaVersion: 3,
+        status: "applied",
+        applied: { llm: false, intervals: false, session: false },
+      },
+    ],
+    [
+      { intervals: { athlete_id: "candidate-athlete" } },
+      {
+        schemaVersion: 3,
+        status: "refused",
+        reason: "training-account-mismatch",
+      },
+    ],
+  ] as const)(
+    "accepts only an applied result for every requested runtime slot",
+    async (request, result) => {
+      const connect = vi.fn(async () => ({
+        handshake: {} as never,
+        call: vi.fn(async () => result),
+        close: vi.fn(async () => {}),
+      }));
+      const authority = createConnectionRuntimeAuthority(
+        {
+          url: "ws://127.0.0.1:45004/rpc",
+          token: "obviously-fake-successor-token",
+        },
+        connect as never,
+      );
+
+      await expect(authority.configureRuntime(request)).rejects.toBeInstanceOf(TypeError);
+    },
+  );
+
+  it.each([
     ["externally configured provider", runtimeSnapshot("google", "external-model", true)],
     ["custom active ChatGPT profile", runtimeSnapshot("openai-codex", "chat-model", true)],
   ])(
@@ -675,7 +733,8 @@ describe("desktop credential runtime precedence", () => {
           calls.push(method);
           if (method === "getRuntimeConfig") return snapshot;
           return {
-            schemaVersion: 2,
+            schemaVersion: 3,
+            status: "applied",
             applied: { llm: true, intervals: false, session: false },
           };
         },

@@ -517,9 +517,13 @@ describe("RPC receive and observers", () => {
           jsonrpc: "2.0",
           id: request.id,
           result: {
-            schemaVersion: 2,
+            schemaVersion: 3,
             llm: { provider: "anthropic", model: "synthetic-model" },
-            intervals: { athlete_id: "" },
+            intervals: {
+              athlete_id: "",
+              credential_configured: false,
+              managedByEnvironment: { athleteId: false },
+            },
             session: {
               historyTokenBudgetRatio: 0.3,
               idleMinutes: 0,
@@ -622,17 +626,22 @@ describe("RPC receive and observers", () => {
         },
         saveIntake: { schemaVersion: 1, saved: true },
         configureRuntime: {
-          schemaVersion: 2,
+          schemaVersion: 3,
+          status: "applied",
           applied: { llm: true, intervals: false, session: false },
         },
         getRuntimeConfig: {
-          schemaVersion: 2,
+          schemaVersion: 3,
           llm: {
             provider: "anthropic",
             model: "synthetic-model",
             credential_configured: true,
           },
-          intervals: { athlete_id: "synthetic-athlete" },
+          intervals: {
+            athlete_id: "synthetic-athlete",
+            credential_configured: true,
+            managedByEnvironment: { athleteId: false },
+          },
           session: {
             historyTokenBudgetRatio: 0.3,
             idleMinutes: 0,
@@ -726,7 +735,8 @@ describe("RPC receive and observers", () => {
         llm: { provider: "anthropic", model: "synthetic", api_key: "synthetic" },
       }),
     ).resolves.toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
+      status: "applied",
       applied: { llm: true, intervals: false, session: false },
     });
     await expect(client.call("getRuntimeConfig", {})).resolves.toMatchObject({

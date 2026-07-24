@@ -46,6 +46,7 @@
 }
 
 .provider-model-settings__section,
+.athlete-settings,
 .session-settings {
   min-width: 0;
   margin: 0;
@@ -243,6 +244,7 @@
 
 .provider-model-settings__field select,
 .provider-model-settings__field input,
+.athlete-settings__field input,
 .session-settings__field input {
   width: 100%;
   min-width: 0;
@@ -257,6 +259,7 @@
 
 .provider-model-settings__field select:focus-visible,
 .provider-model-settings__field input:focus-visible,
+.athlete-settings__field input:focus-visible,
 .session-settings__field input:focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 2px;
@@ -264,6 +267,7 @@
 
 .provider-model-settings__field select:disabled,
 .provider-model-settings__field input:disabled,
+.athlete-settings__field input:disabled,
 .session-settings__field input:disabled {
   opacity: 0.6;
 }
@@ -300,6 +304,112 @@
   gap: 10px;
   align-items: center;
   margin-top: 16px;
+}
+
+.athlete-settings__field {
+  display: grid;
+  gap: 7px;
+  margin-top: 18px;
+}
+
+.athlete-settings__label {
+  font-size: 13px;
+  font-weight: 680;
+}
+
+.athlete-settings__help,
+.athlete-settings__managed,
+.athlete-settings__credential,
+.athlete-settings__validation,
+.athlete-settings__feedback {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.athlete-settings__help,
+.athlete-settings__feedback {
+  color: var(--muted);
+}
+
+.athlete-settings__managed {
+  color: var(--moss-strong);
+  font-weight: 650;
+}
+
+.athlete-settings__managed::before {
+  margin-right: 6px;
+  color: var(--coral);
+  content: "External";
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.athlete-settings__credential,
+.athlete-settings__validation {
+  color: var(--coral);
+}
+
+.athlete-settings__feedback {
+  min-height: 18px;
+  margin-top: 14px;
+}
+
+.athlete-settings__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.athlete-settings__retry,
+.athlete-settings__setup,
+.athlete-settings__save {
+  min-height: 38px;
+  padding: 0 15px;
+  white-space: nowrap;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.athlete-settings__retry {
+  margin-right: auto;
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  background: var(--surface-solid);
+}
+
+.athlete-settings__setup {
+  border: 1px solid var(--coral);
+  color: var(--ink);
+  background: var(--surface-solid);
+}
+
+.athlete-settings__save {
+  border: 1px solid var(--moss);
+  color: var(--surface-solid);
+  background: var(--moss);
+}
+
+.athlete-settings__retry:disabled,
+.athlete-settings__setup:disabled,
+.athlete-settings__save:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.athlete-settings__field[hidden],
+.athlete-settings__managed[hidden],
+.athlete-settings__credential[hidden],
+.athlete-settings__validation[hidden],
+.athlete-settings__feedback[hidden],
+.athlete-settings__retry[hidden],
+.athlete-settings__setup[hidden] {
+  display: none;
 }
 
 .provider-model-settings__cancel {

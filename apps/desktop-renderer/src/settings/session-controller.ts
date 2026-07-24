@@ -359,7 +359,9 @@ export function createSessionSettingsController(input: {
       .then(async () => {
         activeClient = await clientForOperation();
         const result = await activeClient.call("configureRuntime", { session: patch });
-        if (result.applied.session !== true) throw new CoachClientProtocolError();
+        if (result.status !== "applied" || result.applied.session !== true) {
+          throw new CoachClientProtocolError();
+        }
         return activeClient.call("getRuntimeConfig", {});
       })
       .then(

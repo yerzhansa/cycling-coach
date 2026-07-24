@@ -15,6 +15,7 @@ import {
   SyncRpcParamsSchema,
   SyncRpcResultSchema,
   type ConfigureRuntimeRpcParams,
+  type ConfigureRuntimeRpcRefusalReason,
   type ConfigureRuntimeRpcResult,
   type GetRuntimeConfigRpcParams,
   type GetRuntimeConfigRpcResult,
@@ -55,7 +56,7 @@ export interface CreateCoachOperationsInput {
   readonly applyRuntimeConfig: (
     request: ConfigureRuntimeRpcParams,
     signal: AbortSignal,
-  ) => Promise<void>;
+  ) => Promise<ConfigureRuntimeRpcRefusalReason | void>;
   readonly readRuntimeConfig?: () => GetRuntimeConfigRpcResult;
 }
 
@@ -236,9 +237,17 @@ export function createCoachOperations(
               ? deadlineSignal
               : AbortSignal.any([deadlineSignal, admissionSignal]);
           signal.throwIfAborted();
-          await input.applyRuntimeConfig(parsedRequest, signal);
+          const refusal = await input.applyRuntimeConfig(parsedRequest, signal);
+          if (refusal !== undefined) {
+            return ConfigureRuntimeRpcResultSchema.parse({
+              schemaVersion: 3,
+              status: "refused",
+              reason: refusal,
+            });
+          }
           return ConfigureRuntimeRpcResultSchema.parse({
-            schemaVersion: 2,
+            schemaVersion: 3,
+            status: "applied",
             applied: {
               llm: parsedRequest.llm !== undefined,
               intervals: parsedRequest.intervals !== undefined,

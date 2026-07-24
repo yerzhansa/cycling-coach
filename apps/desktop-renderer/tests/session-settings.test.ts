@@ -31,13 +31,17 @@ function snapshot(
   overrides: Partial<RuntimeConfigSnapshot["session"]> = {},
 ): RuntimeConfigSnapshot {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     llm: {
       provider: "anthropic",
       model: "claude-sonnet",
       credential_configured: true,
     },
-    intervals: { athlete_id: "0" },
+    intervals: {
+      athlete_id: "0",
+      credential_configured: true,
+      managedByEnvironment: { athleteId: false },
+    },
     session: {
       historyTokenBudgetRatio: 0.3,
       idleMinutes: 0,
@@ -106,7 +110,11 @@ function createSubject(input: {
     clientWith(async (method) => {
       if (method === "getRuntimeConfig") return snapshot();
       if (method === "configureRuntime") {
-        return { schemaVersion: 2, applied: { llm: false, intervals: false, session: true } };
+        return {
+          schemaVersion: 3,
+          status: "applied",
+          applied: { llm: false, intervals: false, session: true },
+        };
       }
       throw new Error(`Unexpected method ${method}`);
     });
@@ -210,7 +218,11 @@ describe("conversation and time settings controller", () => {
     const call = vi.fn(async (method: string, request: unknown) => {
       calls.push({ method, request });
       if (method === "configureRuntime") {
-        return { schemaVersion: 2, applied: { llm: false, intervals: false, session: true } };
+        return {
+          schemaVersion: 3,
+          status: "applied",
+          applied: { llm: false, intervals: false, session: true },
+        };
       }
       return calls.length === 1 ? snapshot() : snapshot({ idleMinutes: 45 });
     });
@@ -245,7 +257,11 @@ describe("conversation and time settings controller", () => {
   it("retains the draft when the daemon refuses to apply the session patch", async () => {
     const call = vi.fn(async (method: string) => {
       if (method === "getRuntimeConfig") return snapshot();
-      return { schemaVersion: 2, applied: { llm: false, intervals: false, session: false } };
+      return {
+        schemaVersion: 3,
+        status: "refused",
+        reason: "managed-by-environment",
+      };
     });
     const beginMutation = vi.fn(() => () => {});
     const { controller, subject } = createSubject({

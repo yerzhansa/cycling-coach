@@ -60,13 +60,17 @@ function harness(
     activate: vi.fn(async () => ({ status: "configured" as const, runtimeReady: true as const })),
   };
   const getRuntimeConfig = vi.fn(async () => ({
-    schemaVersion: 2 as const,
+    schemaVersion: 3 as const,
     llm: {
       provider: "anthropic" as const,
       model: "athlete-selected-model",
       credential_configured: true,
     },
-    intervals: { athlete_id: "synthetic-athlete" },
+    intervals: {
+      athlete_id: "synthetic-athlete",
+      credential_configured: true,
+      managedByEnvironment: { athleteId: false },
+    },
     session: {
       historyTokenBudgetRatio: 0.3,
       idleMinutes: 0,
