@@ -5,6 +5,10 @@ export interface BuilderAuthority {
 
 export interface PackageLayoutOptions {
   readonly desktopRoot?: string;
+  readonly release?: {
+    readonly version: string;
+    readonly feedUrl: string;
+  };
 }
 
 export function readBuilderAuthority(desktopRoot?: string): Promise<BuilderAuthority>;
