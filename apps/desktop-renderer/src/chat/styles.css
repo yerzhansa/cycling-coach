@@ -13,6 +13,19 @@
   gap: 28px;
 }
 
+.chat-history-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+}
+
+.chat-history-failure {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .chat-message {
   display: grid;
   gap: 7px;
@@ -168,7 +181,9 @@
   font-size: 13px;
 }
 
-.chat-retry {
+.chat-retry,
+.chat-history-load,
+.chat-history-retry {
   justify-self: start;
   padding: 8px 13px;
   border: 1px solid var(--line-strong);
@@ -190,7 +205,9 @@
 }
 
 .new-conversation-button:disabled,
-.chat-retry:disabled {
+.chat-retry:disabled,
+.chat-history-load:disabled,
+.chat-history-retry:disabled {
   cursor: default;
   opacity: 0.5;
 }

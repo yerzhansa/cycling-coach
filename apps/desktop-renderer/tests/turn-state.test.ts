@@ -154,6 +154,22 @@ describe("desktop turn state", () => {
     });
   });
 
+  it("binds both live row identities to the durable turn without changing row keys", () => {
+    const state = started();
+
+    const bound = reduceChatState(state, {
+      type: "bind-turn",
+      requestKey: 1,
+      turnId: "turn-1",
+    });
+
+    expect(bound.messages).toMatchObject([
+      { id: "message-1", turnId: "turn-1", role: "athlete" },
+      { id: "message-2", turnId: "turn-1", role: "coach" },
+    ]);
+    expect(bound.activeTurn?.turnId).toBe("turn-1");
+  });
+
   it("clears a contract error only for a matching interrupted retry", () => {
     let state = reduceChatState(started(), {
       type: "event",
