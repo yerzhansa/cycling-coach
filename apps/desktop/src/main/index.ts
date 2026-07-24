@@ -301,6 +301,7 @@ async function runDesktop(): Promise<void> {
         authority,
         credentials: createCredentialRuntimeApplication({
           configureRuntime: authority.configureRuntime,
+          clearRuntimeCredential: authority.clearCredential,
           selectedLlmProvider: async (storedCredentialSlots) =>
             readSelectedLlmProvider(await authority.getRuntimeConfig(), {
               chatGptProfilePresent: await hasChatGptProfile(configDir),
@@ -386,6 +387,22 @@ async function runDesktop(): Promise<void> {
         }
         return status;
       },
+      async clearCredential(slot) {
+        const binding = activeRuntimeBinding!;
+        const lifecycleState = daemonLifecycle?.snapshot();
+        if (lifecycleState?.status !== "ready") throw new TypeError();
+        const result = await binding.credentials.clearCredential(slot);
+        const currentLifecycleState = daemonLifecycle?.snapshot();
+        if (
+          activeRuntimeBinding !== binding ||
+          currentLifecycleState?.status !== "ready" ||
+          currentLifecycleState.generation !== lifecycleState.generation
+        ) {
+          if (slot !== "intervals-icu") failModelCredentialRuntimeStates();
+          throw new TypeError();
+        }
+        return result;
+      },
     });
     reapplyCredentials = async (connection, signal) => {
       if (signal.aborted) return;
@@ -436,6 +453,29 @@ async function runDesktop(): Promise<void> {
           undefined,
           markCredentialRuntimeChange,
         );
+      },
+      async clearRuntimeCredential() {
+        const binding = activeRuntimeBinding!;
+        const lifecycleState = daemonLifecycle?.snapshot();
+        if (lifecycleState?.status !== "ready") throw new TypeError();
+        const result = await binding.credentials.clearCredential("openai-codex");
+        const currentLifecycleState = daemonLifecycle?.snapshot();
+        if (
+          activeRuntimeBinding !== binding ||
+          currentLifecycleState?.status !== "ready" ||
+          currentLifecycleState.generation !== lifecycleState.generation
+        ) {
+          failModelCredentialRuntimeStates();
+          throw new TypeError();
+        }
+        if (result === "cleared") {
+          markUnselectedModelCredentialsInactive(
+            credentialRuntimeState,
+            undefined,
+            markCredentialRuntimeChange,
+          );
+        }
+        return result;
       },
       getRuntimeConfig: readActiveRuntimeConfig,
       openExternal: (url) => shell.openExternal(url),

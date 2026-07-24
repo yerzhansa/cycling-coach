@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   compareAndSaveStoredProfile,
+  deleteStoredProfile,
   loadStoredProfileSnapshot,
   recoverAndSaveStoredProfile,
   saveStoredProfile,
@@ -141,6 +142,18 @@ afterEach(async () => {
 });
 
 describe("profile store", () => {
+  it("atomically deletes one profile while preserving unrelated entries", () => {
+    const profilesPath = freshProfilesPath();
+    saveStoredProfile(profilesPath, "alpha", profile("alpha"));
+    saveStoredProfile(profilesPath, "beta", profile("beta"));
+
+    expect(deleteStoredProfile(profilesPath, "alpha")).toEqual({ status: "deleted" });
+    expect(deleteStoredProfile(profilesPath, "alpha")).toEqual({ status: "missing" });
+    expect(loadStoredProfileSnapshot(profilesPath, "alpha")).toBeNull();
+    expect(loadStoredProfileSnapshot(profilesPath, "beta")).not.toBeNull();
+    expect(statSync(profilesPath).mode & 0o777).toBe(0o600);
+  });
+
   it("saves synchronously under the sibling lock and preserves unrelated profiles", () => {
     const profilesPath = freshProfilesPath();
     saveStoredProfile(profilesPath, "alpha", profile("alpha"));

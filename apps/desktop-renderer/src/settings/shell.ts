@@ -68,7 +68,7 @@ export function createResidentSettingsShell(input: {
     input.document,
     "p",
     "provider-model-settings__intro",
-    "Choose the coach route and conversation rhythm, and review the currently connected training account.",
+    "Choose the coach route and conversation rhythm, manage local credentials, and review the currently connected training account.",
   );
   intro.id = "provider-model-settings-intro";
   heading.append(kicker, title, intro);

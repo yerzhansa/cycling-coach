@@ -117,6 +117,173 @@ describe("desktop credential vault", () => {
     });
   });
 
+  it("clears an active runtime credential before atomically deleting its vault entry", async () => {
+    const root = await temporaryRoot();
+    const clearCredential = vi.fn(async () => {
+      expect((await lstat(join(root, "anthropic.bin"))).isFile()).toBe(true);
+      return "cleared" as const;
+    });
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      applyCredential: vi.fn(async () => {}),
+      clearCredential,
+    });
+    await vault.writeCredential({ slot: "anthropic", value: randomUUID() });
+
+    await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+      slot: "anthropic",
+      status: "deleted",
+      cleanupPending: false,
+    });
+
+    expect(clearCredential).toHaveBeenCalledOnce();
+    await expect(lstat(join(root, "anthropic.bin"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(vault.credentialStatuses()).resolves.toContainEqual({
+      slot: "anthropic",
+      state: "missing",
+      runtimeState: null,
+    });
+  });
+
+  it("deletes a stored-inactive credential without replacing the active runtime", async () => {
+    const root = await temporaryRoot();
+    const clearCredential = vi.fn(async () => "cleared" as const);
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      applyCredential: vi.fn(async () => {}),
+      clearCredential,
+    });
+    await vault.writeCredential({ slot: "openrouter", value: randomUUID() }, { activate: false });
+
+    await expect(vault.deleteCredential("openrouter")).resolves.toMatchObject({
+      status: "deleted",
+      cleanupPending: false,
+    });
+
+    expect(clearCredential).not.toHaveBeenCalled();
+    await expect(vault.credentialStatuses()).resolves.toContainEqual({
+      slot: "openrouter",
+      state: "missing",
+      runtimeState: null,
+    });
+  });
+
+  it("refuses an environment-managed active deletion without mutating the vault", async () => {
+    const root = await temporaryRoot();
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      applyCredential: vi.fn(async () => {}),
+      clearCredential: vi.fn(async () => "managed-by-environment" as const),
+    });
+    await vault.writeCredential({ slot: "intervals-icu", value: randomUUID() });
+
+    await expect(vault.deleteCredential("intervals-icu")).resolves.toEqual({
+      slot: "intervals-icu",
+      status: "refused",
+      reason: "managed-by-environment",
+    });
+
+    expect((await lstat(join(root, "intervals-icu.bin"))).isFile()).toBe(true);
+  });
+
+  it("surfaces an ambiguous runtime clear without mutating the vault", async () => {
+    const root = await temporaryRoot();
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      applyCredential: vi.fn(async () => {}),
+      clearCredential: vi.fn(async () => {
+        throw new TypeError();
+      }),
+    });
+    await vault.writeCredential({ slot: "anthropic", value: randomUUID() });
+
+    await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+      slot: "anthropic",
+      status: "refused",
+      reason: "runtime-state-diverged",
+    });
+
+    expect((await lstat(join(root, "anthropic.bin"))).isFile()).toBe(true);
+    await expect(vault.credentialStatuses()).resolves.toContainEqual({
+      slot: "anthropic",
+      state: "configured",
+      runtimeState: "failed",
+    });
+  });
+
+  it("restores runtime after a retained vault delete failure and surfaces failed reconciliation", async () => {
+    const root = await temporaryRoot();
+    let applyCount = 0;
+    let restoreFails = false;
+    const applyCredential = vi.fn(async () => {
+      applyCount += 1;
+      if (restoreFails && applyCount > 1) throw new TypeError();
+    });
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      applyCredential,
+      clearCredential: vi.fn(async () => "cleared" as const),
+      renameCredentialFile: vi.fn(async () => {
+        throw new TypeError();
+      }) as never,
+    });
+    await vault.writeCredential({ slot: "anthropic", value: randomUUID() });
+
+    await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+      slot: "anthropic",
+      status: "refused",
+      reason: "storage-failed",
+    });
+    await expect(vault.credentialStatuses()).resolves.toContainEqual({
+      slot: "anthropic",
+      state: "configured",
+      runtimeState: "active",
+    });
+
+    restoreFails = true;
+    await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+      slot: "anthropic",
+      status: "refused",
+      reason: "runtime-state-diverged",
+    });
+    await expect(vault.credentialStatuses()).resolves.toContainEqual({
+      slot: "anthropic",
+      state: "configured",
+      runtimeState: "failed",
+    });
+  });
+
+  it("commits logical deletion while truthfully reporting pending tombstone cleanup", async () => {
+    const root = await temporaryRoot();
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      applyCredential: vi.fn(async () => {}),
+      removeCredentialFile: vi.fn(async () => {
+        throw new TypeError();
+      }) as never,
+    });
+    await vault.writeCredential({ slot: "openrouter", value: randomUUID() }, { activate: false });
+
+    await expect(vault.deleteCredential("openrouter")).resolves.toEqual({
+      slot: "openrouter",
+      status: "deleted",
+      cleanupPending: true,
+    });
+
+    expect((await readdir(root)).some((entry) => entry.endsWith(".deleted"))).toBe(true);
+    await expect(vault.credentialStatuses()).resolves.toContainEqual({
+      slot: "openrouter",
+      state: "missing",
+      runtimeState: null,
+    });
+  });
+
   it("fails closed for insecure directories and targets", async () => {
     const root = await temporaryRoot();
     await mkdir(root, { mode: 0o755 });

@@ -6,6 +6,7 @@ import type {
 } from "@enduragent/coach-contract";
 import type { BrowserWindow, IpcMain, IpcMainInvokeEvent, OpenDialogOptions } from "electron";
 import {
+  CHATGPT_PROFILE_NAME,
   type ChatGptAuthController,
   type ChatGptLoginResult,
   type ChatGptStatus,
@@ -13,6 +14,7 @@ import {
 import {
   DESKTOP_CREDENTIAL_SLOTS,
   type CredentialSlotStatus,
+  type CredentialDeleteResult,
   type CredentialVault,
   type CredentialWriteResult,
   type DesktopCredentialSlot,
@@ -30,6 +32,7 @@ import {
 export const DESKTOP_CREDENTIAL_STATUS_CHANNEL = "enduragent:onboarding:credential-status" as const;
 export const DESKTOP_CREDENTIAL_RETRY_CHANNEL = "enduragent:onboarding:credential-retry" as const;
 export const DESKTOP_CREDENTIAL_WRITE_CHANNEL = "enduragent:onboarding:credential-write" as const;
+export const DESKTOP_CREDENTIAL_DELETE_CHANNEL = "enduragent:settings:credential-delete" as const;
 export const DESKTOP_LLM_CONFIGURATION_CHANNEL = "enduragent:onboarding:llm-configuration" as const;
 export const DESKTOP_LLM_SELECTION_APPLY_CHANNEL =
   "enduragent:onboarding:llm-selection-apply" as const;
@@ -128,6 +131,50 @@ function minimizeWrite(value: CredentialWriteResult): CredentialWriteResult {
   return { slot: value.slot, status: "refused", reason: value.reason };
 }
 
+export type DesktopCredentialId = DesktopCredentialSlot | typeof CHATGPT_PROFILE_NAME;
+
+export type DesktopCredentialDeleteResult =
+  | {
+      readonly credential: DesktopCredentialId;
+      readonly status: "deleted";
+      readonly cleanupPending: boolean;
+    }
+  | {
+      readonly credential: DesktopCredentialId;
+      readonly status: "refused";
+      readonly reason:
+        | "not-found"
+        | "managed-by-environment"
+        | "storage-failed"
+        | "runtime-unavailable"
+        | "runtime-state-diverged";
+    };
+
+function parseDeleteInput(value: unknown): DesktopCredentialId {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.keys(value).length !== 1 ||
+    !Object.hasOwn(value, "credential")
+  ) {
+    throw new TypeError();
+  }
+  const credential = (value as Record<string, unknown>).credential;
+  if (credential === CHATGPT_PROFILE_NAME || isSlot(credential)) return credential;
+  throw new TypeError();
+}
+
+function minimizeDelete(
+  credential: DesktopCredentialId,
+  value: CredentialDeleteResult | Awaited<ReturnType<ChatGptAuthController["deleteCredential"]>>,
+): DesktopCredentialDeleteResult {
+  if (value.status === "deleted") {
+    return { credential, status: "deleted", cleanupPending: value.cleanupPending };
+  }
+  return { credential, status: "refused", reason: value.reason };
+}
+
 function minimizeSelection(value: OnboardingLlmSelectionResult): OnboardingLlmSelectionResult {
   if (value.status === "configured") return { status: "configured", runtimeReady: true };
   return { status: "refused", reason: value.reason };
@@ -208,6 +255,38 @@ export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): ()
       return { slot: input.slot, status: "refused", reason: "storage-failed" };
     }
   });
+  options.ipcMain.handle(DESKTOP_CREDENTIAL_DELETE_CHANNEL, async (event, ...args) => {
+    requireTrusted(event);
+    if (args.length !== 1) throw new TypeError();
+    const credential = parseDeleteInput(args[0]);
+    if (credential === CHATGPT_PROFILE_NAME) {
+      return minimizeDelete(credential, await options.chatGptAuth.deleteCredential());
+    }
+    const statuses = await options.vault.credentialStatuses();
+    const local = statuses.find((status) => status.slot === credential);
+    if (local?.state === "missing") {
+      let active = false;
+      try {
+        const snapshot = await options.getRuntimeConfig();
+        active =
+          credential === "intervals-icu"
+            ? snapshot.intervals.credential_configured
+            : snapshot.llm.provider === credential && snapshot.llm.credential_configured;
+      } catch {
+        return {
+          credential,
+          status: "refused",
+          reason: "runtime-unavailable",
+        };
+      }
+      return {
+        credential,
+        status: "refused",
+        reason: active ? "managed-by-environment" : "not-found",
+      };
+    }
+    return minimizeDelete(credential, await options.vault.deleteCredential(credential));
+  });
   options.ipcMain.handle(DESKTOP_LLM_CONFIGURATION_CHANNEL, async (event, ...args) => {
     requireTrusted(event);
     if (args.length !== 0) throw new TypeError();
@@ -271,6 +350,7 @@ export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): ()
     options.ipcMain.removeHandler(DESKTOP_CREDENTIAL_STATUS_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CREDENTIAL_RETRY_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CREDENTIAL_WRITE_CHANNEL);
+    options.ipcMain.removeHandler(DESKTOP_CREDENTIAL_DELETE_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_LLM_CONFIGURATION_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_LLM_SELECTION_APPLY_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CHATGPT_STATUS_CHANNEL);

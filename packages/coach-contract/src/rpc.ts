@@ -284,6 +284,7 @@ const RuntimeLlmSchema = z
     provider: LlmProviderSchema.optional(),
     model: z.string().min(1).max(512).optional(),
     api_key: z.string().min(1).max(16_384).optional(),
+    clear_credential: z.literal(true).optional(),
     base_url: z.string().min(1).max(4_096).nullable().optional(),
     flush_model: RuntimeOptionalStringSchema.optional(),
     compact_model: RuntimeOptionalStringSchema.optional(),
@@ -293,6 +294,22 @@ const RuntimeLlmSchema = z
     if (value.provider === "openai-codex" && value.api_key !== undefined) {
       context.addIssue({ code: "custom", path: ["api_key"], message: "api_key must be absent" });
     }
+    if (value.clear_credential === true) {
+      if (value.provider === undefined) {
+        context.addIssue({
+          code: "custom",
+          path: ["provider"],
+          message: "provider is required for credential deletion",
+        });
+      }
+      if (Object.keys(value).some((key) => key !== "provider" && key !== "clear_credential")) {
+        context.addIssue({
+          code: "custom",
+          path: ["clear_credential"],
+          message: "credential deletion must contain only provider and clear_credential",
+        });
+      }
+    }
     if (Object.keys(value).length === 0) {
       context.addIssue({ code: "custom", message: "llm patch must not be empty" });
     }
@@ -301,10 +318,18 @@ const RuntimeLlmSchema = z
 const RuntimeIntervalsSchema = z
   .object({
     api_key: z.string().min(1).max(16_384).optional(),
+    clear_credential: z.literal(true).optional(),
     athlete_id: z.string().min(1).max(512).optional(),
   })
   .strict()
   .superRefine((value, context) => {
+    if (value.clear_credential === true && Object.keys(value).length !== 1) {
+      context.addIssue({
+        code: "custom",
+        path: ["clear_credential"],
+        message: "clear_credential must be the only intervals patch field",
+      });
+    }
     if (Object.keys(value).length === 0) {
       context.addIssue({ code: "custom", message: "intervals patch must not be empty" });
     }
@@ -353,6 +378,15 @@ export const ConfigureRuntimeRpcParamsSchema = z
   .superRefine((value, context) => {
     if (value.llm === undefined && value.intervals === undefined && value.session === undefined) {
       context.addIssue({ code: "custom", message: "at least one runtime slot is required" });
+    }
+    if (
+      (value.llm?.clear_credential === true || value.intervals?.clear_credential === true) &&
+      Object.keys(value).length !== 1
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "credential deletion must be the only runtime patch",
+      });
     }
   });
 export type ConfigureRuntimeRpcParams = z.infer<typeof ConfigureRuntimeRpcParamsSchema>;

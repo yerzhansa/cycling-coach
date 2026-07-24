@@ -13,6 +13,7 @@ import {
   createCredentialRuntimeApplication,
   intervalsAthleteIdForOwnership,
   readSelectedLlmProvider,
+  runtimeConfigurationForCredentialDeletion,
   type CredentialRuntimeApplication,
 } from "../src/main/credential-runtime.js";
 import {
@@ -128,6 +129,10 @@ function fakeVault(initialRuntime: CredentialRuntimeApplication) {
         runtimeState: "stored-inactive" as const,
       }));
     },
+    async deleteCredential(slot) {
+      slots.delete(slot);
+      return { slot, status: "deleted", cleanupPending: false };
+    },
     async reapplyConfigured() {
       for (const slot of slots) {
         await runtime.reapplyStoredCredential(slot, randomUUID(), [...slots]);
@@ -165,6 +170,7 @@ async function pollCredentialStatuses(vault: CredentialVault): Promise<void> {
       status: async () => ({ state: "absent", runtimeReady: false }),
       login: async () => ({ status: "refused", reason: "cancelled" }),
       activate: async () => ({ status: "refused", reason: "credential-required" }),
+      deleteCredential: async () => ({ status: "refused", reason: "not-found" }),
     },
     getRuntimeConfig: async () => runtimeSnapshot("anthropic"),
     applyExistingLlmSelection: async () => false,
@@ -180,6 +186,54 @@ async function pollCredentialStatuses(vault: CredentialVault): Promise<void> {
 }
 
 describe("desktop credential runtime precedence", () => {
+  it("builds fixed credential-clear requests and preserves managed refusals", async () => {
+    expect(runtimeConfigurationForCredentialDeletion("anthropic")).toEqual({
+      llm: { provider: "anthropic", clear_credential: true },
+    });
+    expect(runtimeConfigurationForCredentialDeletion("openai-codex")).toEqual({
+      llm: { provider: "openai-codex", clear_credential: true },
+    });
+    expect(runtimeConfigurationForCredentialDeletion("intervals-icu")).toEqual({
+      intervals: { clear_credential: true },
+    });
+    const results = [
+      {
+        schemaVersion: 3,
+        status: "refused",
+        reason: "credential-required",
+      },
+      {
+        schemaVersion: 3,
+        status: "refused",
+        reason: "managed-by-environment",
+      },
+      {
+        schemaVersion: 3,
+        status: "applied",
+        applied: { llm: true, intervals: false, session: false },
+      },
+    ];
+    const call = vi.fn(async () => results.shift());
+    const authority = createConnectionRuntimeAuthority(
+      {
+        url: "ws://127.0.0.1:45005/rpc",
+        token: "x".repeat(43),
+      },
+      vi.fn(async () => ({
+        handshake: {} as never,
+        call,
+        close: vi.fn(async () => {}),
+      })) as never,
+    );
+
+    await expect(authority.clearCredential("anthropic")).resolves.toBe("not-active");
+    await expect(authority.clearCredential("anthropic")).resolves.toBe("managed-by-environment");
+    await expect(authority.clearCredential("anthropic")).resolves.toBe("cleared");
+    expect(call).toHaveBeenNthCalledWith(1, "configureRuntime", {
+      llm: { provider: "anthropic", clear_credential: true },
+    });
+  });
+
   it("uses the current-account sentinel only for a blank ownership preflight", () => {
     expect(intervalsAthleteIdForOwnership(runtimeSnapshot("anthropic", undefined, false, ""))).toBe(
       "0",

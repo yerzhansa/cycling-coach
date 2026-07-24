@@ -407,8 +407,10 @@ describe("coach request and event projection", () => {
       { llm },
       { llm: codex },
       { llm: { model: "model-only" } },
+      { llm: { provider: "anthropic", clear_credential: true } },
       { intervals },
       { intervals: { athlete_id: "athlete-a" } },
+      { intervals: { clear_credential: true } },
       {
         session: {
           historyTokenBudgetRatio: 0.4,
@@ -445,7 +447,18 @@ describe("coach request and event projection", () => {
       { session: { timezone: "a".repeat(513) } },
       { llm: { ...llm, extra: true } },
       { llm: { provider: "openai-codex", api_key: "placeholder" } },
+      { llm: { clear_credential: true } },
+      { llm: { provider: "anthropic", clear_credential: true, model: "model-a" } },
+      {
+        llm: { provider: "anthropic", clear_credential: true },
+        session: { timezone: "UTC" },
+      },
       { intervals: { api_key: "" } },
+      { intervals: { clear_credential: true, athlete_id: "athlete-a" } },
+      {
+        llm: { provider: "anthropic", clear_credential: true },
+        intervals: { clear_credential: true },
+      },
       { intervals: { athlete_id: "" } },
       { llm, extra: true },
     ]) {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
   parseOnboardingLlmSelection,
@@ -48,6 +48,23 @@ export type CredentialWriteResult =
         | "runtime-unavailable";
     };
 
+export type CredentialDeleteResult =
+  | {
+      readonly slot: DesktopCredentialSlot;
+      readonly status: "deleted";
+      readonly cleanupPending: boolean;
+    }
+  | {
+      readonly slot: DesktopCredentialSlot;
+      readonly status: "refused";
+      readonly reason:
+        | "not-found"
+        | "managed-by-environment"
+        | "storage-failed"
+        | "runtime-unavailable"
+        | "runtime-state-diverged";
+    };
+
 export const CREDENTIAL_DIRECTORY_NAME = "credentials-v1" as const;
 export const CREDENTIAL_DIRECTORY_MODE = 0o700;
 export const CREDENTIAL_FILE_MODE = 0o600;
@@ -73,6 +90,7 @@ export interface CredentialVault {
   ): Promise<CredentialWriteResult>;
   applyLlmSelection(input: OnboardingLlmSelection): Promise<OnboardingLlmSelectionResult>;
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
+  deleteCredential(slot: DesktopCredentialSlot): Promise<CredentialDeleteResult>;
   reapplyConfigured(): Promise<void>;
   retryFailed(): Promise<void>;
 }
@@ -93,6 +111,12 @@ interface CredentialVaultOptions {
     value: string,
     storedCredentialSlots: readonly DesktopCredentialSlot[],
   ) => Promise<Exclude<CredentialRuntimeState, "failed">>;
+  readonly clearCredential?: (
+    slot: DesktopCredentialSlot,
+  ) => Promise<"cleared" | "not-active" | "managed-by-environment">;
+  readonly renameCredentialFile?: typeof rename;
+  readonly removeCredentialFile?: typeof rm;
+  readonly syncCredentialDirectory?: (root: string) => Promise<void>;
 }
 
 export function replaceCredentialRuntimeStates(
@@ -182,6 +206,75 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
     runtimeState.set(slot, state);
     options.onRuntimeStateChange?.(slot);
   };
+  const clearRuntimeState = (slot: DesktopCredentialSlot): void => {
+    runtimeState.delete(slot);
+    options.onRuntimeStateChange?.(slot);
+  };
+  const syncCredentialDirectory =
+    options.syncCredentialDirectory ??
+    (async (root: string): Promise<void> => {
+      const directory = await open(root, "r");
+      try {
+        await directory.sync();
+      } finally {
+        await directory.close();
+      }
+    });
+  const renameCredentialFile = options.renameCredentialFile ?? rename;
+  const removeCredentialFile = options.removeCredentialFile ?? rm;
+
+  const removeStoredCredential = async (
+    slot: DesktopCredentialSlot,
+  ): Promise<"deleted" | "cleanup-pending" | "retained" | "uncertain"> => {
+    const target = join(options.root, `${slot}.bin`);
+    const tombstone = join(options.root, `.${slot}.${randomUUID()}.deleted`);
+    try {
+      await renameCredentialFile(target, tombstone);
+    } catch {
+      return "retained";
+    }
+    try {
+      await syncCredentialDirectory(options.root);
+    } catch {
+      try {
+        await renameCredentialFile(tombstone, target);
+        await syncCredentialDirectory(options.root);
+        return "retained";
+      } catch {
+        return "uncertain";
+      }
+    }
+    try {
+      await removeCredentialFile(tombstone, { force: true });
+      await syncCredentialDirectory(options.root);
+      return "deleted";
+    } catch {
+      return "cleanup-pending";
+    }
+  };
+  const cleanupDeletedCredentials = async (): Promise<void> => {
+    let cleaned = false;
+    let entries: readonly string[];
+    try {
+      entries = await readdir(options.root);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (
+        !DESKTOP_CREDENTIAL_SLOTS.some(
+          (slot) => entry.startsWith(`.${slot}.`) && entry.endsWith(".deleted"),
+        )
+      ) {
+        continue;
+      }
+      try {
+        await removeCredentialFile(join(options.root, entry), { force: true });
+        cleaned = true;
+      } catch {}
+    }
+    if (cleaned) await syncCredentialDirectory(options.root).catch(() => undefined);
+  };
 
   const readSlot = async (slot: DesktopCredentialSlot): Promise<ReadCredential> => {
     const path = join(options.root, `${slot}.bin`);
@@ -219,6 +312,7 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
   };
 
   const readAll = async (): Promise<readonly ReadCredential[]> => {
+    await cleanupDeletedCredentials();
     const entries: ReadCredential[] = [];
     for (const slot of DESKTOP_CREDENTIAL_SLOTS) entries.push(await readSlot(slot));
     return entries;
@@ -395,6 +489,59 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
         runtimeState:
           entry.state === "configured" ? (runtimeState.get(entry.slot) ?? "stored-inactive") : null,
       }));
+    },
+
+    async deleteCredential(slot): Promise<CredentialDeleteResult> {
+      if (!isCredentialSlot(slot)) {
+        return { slot: "anthropic", status: "refused", reason: "not-found" };
+      }
+      const credential = await readSlot(slot);
+      if (credential.state === "missing") {
+        return { slot, status: "refused", reason: "not-found" };
+      }
+      const runtimeStatus = runtimeState.get(slot);
+      const shouldClearRuntime = runtimeStatus === "active" || runtimeStatus === "failed";
+      let runtimeCleared = false;
+      if (shouldClearRuntime) {
+        if (options.clearCredential === undefined) {
+          return { slot, status: "refused", reason: "runtime-unavailable" };
+        }
+        try {
+          const cleared = await options.clearCredential(slot);
+          if (cleared === "managed-by-environment") {
+            return { slot, status: "refused", reason: "managed-by-environment" };
+          }
+          if (cleared !== "cleared" && cleared !== "not-active") throw new TypeError();
+          runtimeCleared = cleared === "cleared";
+        } catch {
+          setRuntimeState(slot, "failed");
+          return { slot, status: "refused", reason: "runtime-state-diverged" };
+        }
+      }
+      const removed = await removeStoredCredential(slot);
+      if (removed === "deleted" || removed === "cleanup-pending") {
+        clearRuntimeState(slot);
+        return {
+          slot,
+          status: "deleted",
+          cleanupPending: removed === "cleanup-pending",
+        };
+      }
+      if (runtimeCleared && credential.value !== undefined && removed === "retained") {
+        try {
+          await options.applyCredential(slot, credential.value);
+          setRuntimeState(slot, "active");
+          return { slot, status: "refused", reason: "storage-failed" };
+        } catch {
+          setRuntimeState(slot, "failed");
+          return { slot, status: "refused", reason: "runtime-state-diverged" };
+        }
+      }
+      if (runtimeCleared) {
+        setRuntimeState(slot, "failed");
+        return { slot, status: "refused", reason: "runtime-state-diverged" };
+      }
+      return { slot, status: "refused", reason: "storage-failed" };
     },
 
     reapplyConfigured,

@@ -8,6 +8,8 @@ import { CHATGPT_PROFILE_NAME } from "./chatgpt-auth.js";
 import type { CredentialRuntimeState, DesktopCredentialSlot } from "./credential-vault.js";
 import { runtimeConfigurationForCredential } from "./onboarding-ipc.js";
 
+export type DesktopManagedCredential = DesktopCredentialSlot | typeof CHATGPT_PROFILE_NAME;
+
 export interface LlmProviderSelectionEvidence {
   readonly chatGptProfilePresent: boolean;
   readonly storedCredentialSlots: readonly DesktopCredentialSlot[];
@@ -24,6 +26,9 @@ export interface CredentialRuntimeApplication {
     value: string,
     storedCredentialSlots: readonly DesktopCredentialSlot[],
   ): Promise<Exclude<CredentialRuntimeState, "failed">>;
+  clearCredential(
+    credential: DesktopManagedCredential,
+  ): Promise<"cleared" | "not-active" | "managed-by-environment">;
 }
 
 interface CredentialRuntimeApplicationOptions {
@@ -31,11 +36,25 @@ interface CredentialRuntimeApplicationOptions {
     storedCredentialSlots: readonly DesktopCredentialSlot[],
   ) => Promise<LlmProvider | undefined>;
   readonly configureRuntime: (request: ConfigureRuntimeRpcParams) => Promise<void>;
+  readonly clearRuntimeCredential?: (
+    credential: DesktopManagedCredential,
+  ) => Promise<"cleared" | "not-active" | "managed-by-environment">;
 }
 
 export interface RuntimeConfigurationAuthority {
   configureRuntime(request: ConfigureRuntimeRpcParams): Promise<void>;
+  clearCredential(
+    credential: DesktopManagedCredential,
+  ): Promise<"cleared" | "not-active" | "managed-by-environment">;
   getRuntimeConfig(): Promise<RuntimeConfigSnapshot>;
+}
+
+export function runtimeConfigurationForCredentialDeletion(
+  credential: DesktopManagedCredential,
+): ConfigureRuntimeRpcParams {
+  return credential === "intervals-icu"
+    ? { intervals: { clear_credential: true } }
+    : { llm: { provider: credential, clear_credential: true } };
 }
 
 export function intervalsAthleteIdForOwnership(snapshot: RuntimeConfigSnapshot): string {
@@ -79,6 +98,25 @@ export function createConnectionRuntimeAuthority(
         throw new TypeError();
       }
     },
+    async clearCredential(credential) {
+      const request = runtimeConfigurationForCredentialDeletion(credential);
+      const result = await call((client) => client.call("configureRuntime", request));
+      if ("status" in result && result.status === "refused") {
+        if (result.reason === "managed-by-environment") return "managed-by-environment";
+        if (result.reason === "credential-required") return "not-active";
+        throw new TypeError();
+      }
+      if (
+        !("status" in result) ||
+        result.status !== "applied" ||
+        result.applied.llm !== (request.llm !== undefined) ||
+        result.applied.intervals !== (request.intervals !== undefined) ||
+        result.applied.session
+      ) {
+        throw new TypeError();
+      }
+      return "cleared";
+    },
     getRuntimeConfig() {
       return call((client) => client.call("getRuntimeConfig", {}));
     },
@@ -121,6 +159,12 @@ export function createCredentialRuntimeApplication(
         }
         await options.configureRuntime(request);
         return "active";
+      });
+    },
+    clearCredential(credential) {
+      return serialize(() => {
+        if (options.clearRuntimeCredential === undefined) throw new TypeError();
+        return options.clearRuntimeCredential(credential);
       });
     },
   };

@@ -13,6 +13,7 @@ import {
 const DESKTOP_CREDENTIAL_STATUS_CHANNEL = "enduragent:onboarding:credential-status";
 const DESKTOP_CREDENTIAL_RETRY_CHANNEL = "enduragent:onboarding:credential-retry";
 const DESKTOP_CREDENTIAL_WRITE_CHANNEL = "enduragent:onboarding:credential-write";
+const DESKTOP_CREDENTIAL_DELETE_CHANNEL = "enduragent:settings:credential-delete";
 const DESKTOP_LLM_CONFIGURATION_CHANNEL = "enduragent:onboarding:llm-configuration";
 const DESKTOP_LLM_SELECTION_APPLY_CHANNEL = "enduragent:onboarding:llm-selection-apply";
 const DESKTOP_CHATGPT_STATUS_CHANNEL = "enduragent:onboarding:chatgpt-status";
@@ -31,6 +32,7 @@ const SLOTS = new Set([
   "zai",
   "intervals-icu",
 ]);
+const CREDENTIALS = new Set([...SLOTS, "openai-codex"]);
 const LLM_PROVIDER_ORDER = [
   "anthropic",
   "openai",
@@ -61,6 +63,13 @@ const REASONS = new Set([
   "storage-failed",
   "runtime-unavailable",
   "training-account-mismatch",
+]);
+const DELETE_REASONS = new Set([
+  "not-found",
+  "managed-by-environment",
+  "storage-failed",
+  "runtime-unavailable",
+  "runtime-state-diverged",
 ]);
 const CHATGPT_REASONS = new Set([
   "already-in-progress",
@@ -220,6 +229,18 @@ function parseCredentialWriteInput(value: unknown): {
   return { slot: value.slot as string, value: value.value, selection };
 }
 
+function parseCredentialDeleteInput(value: unknown): { readonly credential: string } {
+  if (
+    !record(value) ||
+    !exactKeys(value, ["credential"]) ||
+    typeof value.credential !== "string" ||
+    !CREDENTIALS.has(value.credential)
+  ) {
+    throw new TypeError();
+  }
+  return { credential: value.credential };
+}
+
 function releaseVersion(value: unknown): value is string {
   return safeString(value, 64) && RELEASE_VERSION_RE.test(value);
 }
@@ -347,6 +368,35 @@ function parseWriteResult(value: unknown): unknown {
     REASONS.has(value.reason as string)
   ) {
     return { slot: value.slot, status: "refused", reason: value.reason };
+  }
+  throw new TypeError();
+}
+
+function parseDeleteResult(value: unknown): unknown {
+  if (
+    !record(value) ||
+    typeof value.credential !== "string" ||
+    !CREDENTIALS.has(value.credential)
+  ) {
+    throw new TypeError();
+  }
+  if (
+    value.status === "deleted" &&
+    exactKeys(value, ["credential", "status", "cleanupPending"]) &&
+    typeof value.cleanupPending === "boolean"
+  ) {
+    return {
+      credential: value.credential,
+      status: "deleted",
+      cleanupPending: value.cleanupPending,
+    };
+  }
+  if (
+    value.status === "refused" &&
+    exactKeys(value, ["credential", "status", "reason"]) &&
+    DELETE_REASONS.has(value.reason as string)
+  ) {
+    return { credential: value.credential, status: "refused", reason: value.reason };
   }
   throw new TypeError();
 }
@@ -582,6 +632,10 @@ contextBridge.exposeInMainWorld(
     writeCredential: async (input: unknown) => {
       const parsed = parseCredentialWriteInput(input);
       return parseWriteResult(await ipcRenderer.invoke(DESKTOP_CREDENTIAL_WRITE_CHANNEL, parsed));
+    },
+    deleteCredential: async (input: unknown) => {
+      const parsed = parseCredentialDeleteInput(input);
+      return parseDeleteResult(await ipcRenderer.invoke(DESKTOP_CREDENTIAL_DELETE_CHANNEL, parsed));
     },
     llmConfiguration: async () =>
       parseLlmConfiguration(await ipcRenderer.invoke(DESKTOP_LLM_CONFIGURATION_CHANNEL)),

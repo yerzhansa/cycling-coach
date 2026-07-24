@@ -5,6 +5,7 @@ import {
   DESKTOP_CHATGPT_LOGIN_CHANNEL,
   DESKTOP_CHATGPT_STATUS_CHANNEL,
   DESKTOP_CREDENTIAL_RETRY_CHANNEL,
+  DESKTOP_CREDENTIAL_DELETE_CHANNEL,
   DESKTOP_CREDENTIAL_STATUS_CHANNEL,
   DESKTOP_CREDENTIAL_WRITE_CHANNEL,
   DESKTOP_LLM_CONFIGURATION_CHANNEL,
@@ -45,6 +46,11 @@ function harness(
         runtimeState: "active" as const,
       },
     ]),
+    deleteCredential: vi.fn(async (slot) => ({
+      slot,
+      status: "deleted" as const,
+      cleanupPending: false,
+    })),
     reapplyConfigured: vi.fn(async () => {}),
     retryFailed: vi.fn(async () => {}),
   };
@@ -58,6 +64,10 @@ function harness(
     status: vi.fn(async () => ({ state: "configured" as const, runtimeReady: true })),
     login: vi.fn(async () => ({ status: "configured" as const, runtimeReady: true as const })),
     activate: vi.fn(async () => ({ status: "configured" as const, runtimeReady: true as const })),
+    deleteCredential: vi.fn(async () => ({
+      status: "deleted" as const,
+      cleanupPending: false as const,
+    })),
   };
   const getRuntimeConfig = vi.fn(async () => ({
     schemaVersion: 3 as const,
@@ -259,6 +269,7 @@ describe("desktop onboarding IPC", () => {
         DESKTOP_CREDENTIAL_STATUS_CHANNEL,
         DESKTOP_CREDENTIAL_RETRY_CHANNEL,
         DESKTOP_CREDENTIAL_WRITE_CHANNEL,
+        DESKTOP_CREDENTIAL_DELETE_CHANNEL,
         DESKTOP_LLM_CONFIGURATION_CHANNEL,
         DESKTOP_LLM_SELECTION_APPLY_CHANNEL,
         DESKTOP_CHATGPT_STATUS_CHANNEL,
@@ -286,6 +297,59 @@ describe("desktop onboarding IPC", () => {
     ).resolves.toEqual([{ slot: "anthropic", state: "configured", runtimeState: "active" }]);
     expect(subject.vault.credentialStatuses).toHaveBeenCalledOnce();
     expect(subject.vault.reapplyConfigured).not.toHaveBeenCalled();
+  });
+
+  it("routes strict redacted credential deletion and refuses externally managed runtime state", async () => {
+    const subject = harness();
+
+    await expect(
+      subject.invoke(DESKTOP_CREDENTIAL_DELETE_CHANNEL, subject.trustedEvent, {
+        credential: "anthropic",
+      }),
+    ).resolves.toEqual({
+      credential: "anthropic",
+      status: "deleted",
+      cleanupPending: false,
+    });
+    expect(subject.vault.deleteCredential).toHaveBeenCalledWith("anthropic");
+
+    vi.mocked(subject.vault.credentialStatuses).mockResolvedValueOnce([
+      { slot: "anthropic", state: "missing", runtimeState: null },
+    ]);
+    await expect(
+      subject.invoke(DESKTOP_CREDENTIAL_DELETE_CHANNEL, subject.trustedEvent, {
+        credential: "anthropic",
+      }),
+    ).resolves.toEqual({
+      credential: "anthropic",
+      status: "refused",
+      reason: "managed-by-environment",
+    });
+
+    await expect(
+      subject.invoke(DESKTOP_CREDENTIAL_DELETE_CHANNEL, subject.trustedEvent, {
+        credential: "openai-codex",
+      }),
+    ).resolves.toEqual({
+      credential: "openai-codex",
+      status: "deleted",
+      cleanupPending: false,
+    });
+    expect(subject.chatGptAuth.deleteCredential).toHaveBeenCalledOnce();
+  });
+
+  it("rejects untrusted, widened, and unknown credential deletion inputs", async () => {
+    const subject = harness();
+    for (const [event, input] of [
+      [{} as IpcMainInvokeEvent, { credential: "anthropic" }],
+      [subject.trustedEvent, { credential: "unknown" }],
+      [subject.trustedEvent, { credential: "anthropic", extra: true }],
+    ] as const) {
+      await expect(
+        subject.invoke(DESKTOP_CREDENTIAL_DELETE_CHANNEL, event, input),
+      ).rejects.toBeInstanceOf(TypeError);
+    }
+    expect(subject.vault.deleteCredential).not.toHaveBeenCalled();
   });
 
   it("fails closed to re-entry metadata when stored status cannot be read", async () => {
@@ -640,10 +704,10 @@ describe("desktop onboarding IPC", () => {
     ).resolves.toEqual([]);
   });
 
-  it("disposes only its eight handlers", () => {
+  it("disposes only its nine handlers", () => {
     const subject = harness();
     subject.dispose();
     expect(subject.handlers.size).toBe(0);
-    expect(subject.ipcMain.removeHandler).toHaveBeenCalledTimes(8);
+    expect(subject.ipcMain.removeHandler).toHaveBeenCalledTimes(9);
   });
 });

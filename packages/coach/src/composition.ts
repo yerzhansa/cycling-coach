@@ -21,6 +21,7 @@ import {
   createMissingPlatformCalendarMutations,
   createPlatformCalendarMutations,
   createSubsystemLogger,
+  deleteStoredProfile,
   engineConfigFromConfig,
   extractRetryAfterMs,
   loadStoredProfileSnapshot,
@@ -154,7 +155,7 @@ function copyConfig(config: Config): Config {
   };
 }
 
-function runtimePatch(request: ConfigureRuntimeRpcParams): RuntimeConfigPatch {
+function runtimePatch(request: ConfigureRuntimeRpcParams, config: Config): RuntimeConfigPatch {
   return {
     ...(request.llm === undefined
       ? {}
@@ -162,7 +163,10 @@ function runtimePatch(request: ConfigureRuntimeRpcParams): RuntimeConfigPatch {
           llm: {
             provider: request.llm.provider,
             model: request.llm.model,
-            apiKey: request.llm.api_key,
+            apiKey:
+              request.llm.clear_credential === true && config.llm.provider !== "openai-codex"
+                ? ""
+                : request.llm.api_key,
             baseUrl: request.llm.base_url,
             flushModel: request.llm.flush_model,
             compactModel: request.llm.compact_model,
@@ -172,7 +176,7 @@ function runtimePatch(request: ConfigureRuntimeRpcParams): RuntimeConfigPatch {
       ? {}
       : {
           intervals: {
-            apiKey: request.intervals.api_key,
+            apiKey: request.intervals.clear_credential === true ? "" : request.intervals.api_key,
             athleteId: request.intervals.athlete_id,
           },
         }),
@@ -181,7 +185,37 @@ function runtimePatch(request: ConfigureRuntimeRpcParams): RuntimeConfigPatch {
 }
 
 function mergedRuntimeConfig(config: Config, request: ConfigureRuntimeRpcParams): Config {
-  return { ...config, ...resolveRuntimeConfig(runtimePatch(request), config) };
+  return { ...config, ...resolveRuntimeConfig(runtimePatch(request, config), config) };
+}
+
+const LLM_CREDENTIAL_ENVIRONMENT_KEYS = {
+  anthropic: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+  google: "GOOGLE_GENERATIVE_AI_API_KEY",
+  "openai-codex": undefined,
+  deepseek: "DEEPSEEK_API_KEY",
+  qwen: "ALIBABA_API_KEY",
+  minimax: "MINIMAX_API_KEY",
+  kimi: "MOONSHOT_API_KEY",
+  zai: "ZAI_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+} as const;
+
+function nonemptyEnvironmentValue(
+  environment: Readonly<Record<string, string | undefined>>,
+  key: string | undefined,
+): boolean {
+  return key !== undefined && environment[key] !== undefined && environment[key] !== "";
+}
+
+function llmCredentialManagedByEnvironment(
+  environment: Readonly<Record<string, string | undefined>>,
+  provider: Config["llm"]["provider"],
+): boolean {
+  return (
+    nonemptyEnvironmentValue(environment, LLM_CREDENTIAL_ENVIRONMENT_KEYS[provider]) ||
+    (provider !== "openai-codex" && nonemptyEnvironmentValue(environment, "LLM_API_KEY"))
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -722,6 +756,24 @@ export async function createLocalCoachComposition(
     ): Promise<ConfigureRuntimeRpcRefusalReason | void> => {
       signal.throwIfAborted();
       if (
+        request.llm?.clear_credential === true &&
+        request.llm.provider !== activeConfig.llm.provider
+      ) {
+        return "credential-required";
+      }
+      if (
+        request.llm?.clear_credential === true &&
+        llmCredentialManagedByEnvironment(input.env, activeConfig.llm.provider)
+      ) {
+        return "managed-by-environment";
+      }
+      if (
+        request.intervals?.clear_credential === true &&
+        nonemptyEnvironmentValue(input.env, "INTERVALS_API_KEY")
+      ) {
+        return "managed-by-environment";
+      }
+      if (
         request.intervals?.athlete_id !== undefined &&
         input.env.INTERVALS_ATHLETE_ID !== undefined
       ) {
@@ -749,10 +801,11 @@ export async function createLocalCoachComposition(
       const athleteIdChanged =
         request.intervals?.athlete_id !== undefined && candidateAthleteId !== activeAthleteId;
       const apiKeyChanged =
-        request.intervals?.api_key !== undefined &&
+        (request.intervals?.api_key !== undefined ||
+          request.intervals?.clear_credential === true) &&
         candidate.intervals.apiKey !== activeConfig.intervals.apiKey;
       let pendingOwnerClaim: RuntimeAthleteOwnerClaim | undefined;
-      if (athleteIdChanged || apiKeyChanged) {
+      if (athleteIdChanged || (apiKeyChanged && request.intervals?.clear_credential !== true)) {
         if (
           apiKeyChanged &&
           input.env.INTERVALS_API_KEY !== undefined &&
@@ -774,7 +827,11 @@ export async function createLocalCoachComposition(
           return "ownership-unavailable";
         }
       }
-      if (request.llm !== undefined && candidate.llm.provider === "openai-codex") {
+      if (
+        request.llm !== undefined &&
+        request.llm.clear_credential !== true &&
+        candidate.llm.provider === "openai-codex"
+      ) {
         credential(
           loadStoredProfileSnapshot(
             join(input.home.configDir, "auth-profiles.json"),
@@ -783,15 +840,20 @@ export async function createLocalCoachComposition(
         );
       }
       const replacement = buildBundle(candidate);
+      const chatGptProfileClear =
+        request.llm?.clear_credential === true && activeConfig.llm.provider === "openai-codex";
       signal.throwIfAborted();
       await reconfigurable.replace(async () => {
         signal.throwIfAborted();
         const previousConfigFile =
-          pendingOwnerClaim === undefined
+          pendingOwnerClaim === undefined && !chatGptProfileClear
             ? undefined
             : captureRuntimeConfigFile(input.home.configDir);
         try {
           persistConfig(input.home.configDir, candidate, request, activeConfig);
+          if (chatGptProfileClear) {
+            deleteStoredProfile(join(input.home.configDir, "auth-profiles.json"), "openai-codex");
+          }
           await pendingOwnerClaim?.claim();
         } catch (error) {
           if (previousConfigFile !== undefined) {

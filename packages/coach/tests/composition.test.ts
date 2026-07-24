@@ -9,6 +9,7 @@ import {
   RefreshTokenReusedError,
   engineConfigFromConfig,
   loadConfig,
+  loadStoredProfileSnapshot,
   saveStoredProfile,
   type Config,
 } from "@enduragent/core";
@@ -1165,6 +1166,262 @@ describe("local coach composition", () => {
         resetArchiveRetentionDays: 9,
         timezone: "America/Los_Angeles",
       },
+    });
+    await lifecycle.close();
+  });
+
+  it("drains the active turn before clearing an LLM credential and reports truthful readiness", async () => {
+    const home = await freshHome();
+    let buildCount = 0;
+    const readiness: boolean[] = [];
+    let enterOld!: () => void;
+    let releaseOld!: () => void;
+    const oldEntered = new Promise<void>((resolve) => {
+      enterOld = resolve;
+    });
+    const oldRelease = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    const initial: Config = {
+      ...config(home),
+      llm: { ...config(home).llm, apiKey: "synthetic" },
+    };
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: (input) => {
+          buildCount += 1;
+          const generation = buildCount;
+          readiness.push(input.ports.config.llm.apiKey.length > 0);
+          return backend({
+            chat: async () => {
+              if (generation === 1) {
+                enterOld();
+                await oldRelease;
+              }
+              return { text: String(input.ports.config.llm.apiKey.length > 0) };
+            },
+          });
+        },
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      undefined,
+      initial,
+    );
+
+    const oldTurn = lifecycle.engine.chat({ chatId: "credential", message: "hold" });
+    await oldEntered;
+    let deletionSettled = false;
+    const deletion = lifecycle.operations
+      .configureRuntime({ llm: { provider: "anthropic", clear_credential: true } })
+      .then((result) => {
+        deletionSettled = true;
+        return result;
+      });
+    for (let attempt = 0; attempt < 20 && buildCount < 2; attempt += 1) {
+      await Promise.resolve();
+    }
+    expect(readiness).toEqual([true, false]);
+    await Promise.resolve();
+    expect(deletionSettled).toBe(false);
+
+    releaseOld();
+    await expect(oldTurn).resolves.toEqual({ text: "true" });
+    await expect(deletion).resolves.toMatchObject({
+      status: "applied",
+      applied: { llm: true, intervals: false },
+    });
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      llm: { credential_configured: false },
+    });
+    await expect(
+      lifecycle.engine.chat({ chatId: "credential", message: "after" }),
+    ).resolves.toEqual({ text: "false" });
+    await lifecycle.close();
+  });
+
+  it("refuses to clear a different active LLM credential", async () => {
+    const home = await freshHome();
+    const initial: Config = {
+      ...config(home),
+      llm: { ...config(home).llm, apiKey: "synthetic" },
+    };
+    const createBackend = vi.fn(() => backend());
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend,
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      undefined,
+      initial,
+    );
+
+    await expect(
+      lifecycle.operations.configureRuntime({
+        llm: { provider: "openai", clear_credential: true },
+      }),
+    ).resolves.toEqual({
+      schemaVersion: 3,
+      status: "refused",
+      reason: "credential-required",
+    });
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      llm: { provider: "anthropic", credential_configured: true },
+    });
+    expect(createBackend).toHaveBeenCalledOnce();
+    await lifecycle.close();
+  });
+
+  it("clears the intervals credential without changing or reclaiming the training-store owner", async () => {
+    const home = await freshHome();
+    const assertOwner = vi.fn(async () => {});
+    const selectedRuntime = runtime();
+    const runWindowAfter = vi.fn(selectedRuntime.runWindowAfter);
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => ({ ...selectedRuntime, runWindowAfter }),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+        assertRuntimeAthleteOwner: assertOwner,
+      },
+      fakeContext(home),
+      { apiKey: "synthetic", athleteId: "fixed-athlete" },
+    );
+    const ownerChecksBefore = assertOwner.mock.calls.length;
+
+    await expect(
+      lifecycle.operations.configureRuntime({ intervals: { clear_credential: true } }),
+    ).resolves.toMatchObject({
+      status: "applied",
+      applied: { llm: false, intervals: true },
+    });
+
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      intervals: {
+        athlete_id: "fixed-athlete",
+        credential_configured: false,
+      },
+    });
+    expect(assertOwner).toHaveBeenCalledTimes(ownerChecksBefore);
+    expect(runWindowAfter).not.toHaveBeenCalled();
+    await lifecycle.close();
+  });
+
+  it.each([
+    {
+      request: { llm: { provider: "anthropic", clear_credential: true } },
+      env: { ANTHROPIC_API_KEY: "synthetic" },
+      slot: "llm",
+    },
+    {
+      request: { intervals: { clear_credential: true } },
+      env: { INTERVALS_API_KEY: "synthetic" },
+      slot: "intervals",
+    },
+  ] as const)("refuses environment-managed $slot credential deletion", async ({ request, env }) => {
+    const home = await freshHome();
+    const initial: Config = {
+      ...config(home, { apiKey: "synthetic", athleteId: "fixed-athlete" }),
+      llm: { ...config(home).llm, apiKey: "synthetic" },
+    };
+    const createBackend = vi.fn(() => backend());
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend,
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      undefined,
+      initial,
+      { ENDURAGENT_HOME: home.root, ...env },
+    );
+
+    await expect(lifecycle.operations.configureRuntime(request)).resolves.toEqual({
+      schemaVersion: 3,
+      status: "refused",
+      reason: "managed-by-environment",
+    });
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      [request.llm === undefined ? "intervals" : "llm"]: {
+        credential_configured: true,
+      },
+    });
+    expect(createBackend).toHaveBeenCalledOnce();
+    await lifecycle.close();
+  });
+
+  it("deletes an active ChatGPT profile inside the drained credential cutover", async () => {
+    const home = await freshHome();
+    saveStoredProfile(join(home.configDir, "auth-profiles.json"), "openai-codex", {
+      type: "oauth",
+      access: "synthetic",
+      refresh: "synthetic",
+      expires: 4_102_444_800_000,
+    });
+    const initial: Config = {
+      ...config(home),
+      llm: {
+        ...config(home).llm,
+        provider: "openai-codex",
+        apiKey: "",
+        authProfile: "openai-codex",
+      },
+    };
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      undefined,
+      initial,
+    );
+
+    await expect(
+      lifecycle.operations.configureRuntime({
+        llm: { provider: "openai-codex", clear_credential: true },
+      }),
+    ).resolves.toMatchObject({ status: "applied", applied: { llm: true } });
+    expect(
+      loadStoredProfileSnapshot(join(home.configDir, "auth-profiles.json"), "openai-codex"),
+    ).toBeNull();
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      llm: { provider: "openai-codex", credential_configured: false },
     });
     await lifecycle.close();
   });

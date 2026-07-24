@@ -11,6 +11,9 @@ interface EnduragentAuth {
     readonly value: string;
     readonly selection?: OnboardingLlmSelection;
   }): Promise<CredentialWriteResult>;
+  deleteCredential(input: {
+    readonly credential: DesktopCredentialId;
+  }): Promise<CredentialDeleteResult>;
   llmConfiguration(): Promise<OnboardingLlmConfiguration>;
   applyLlmSelection(input: OnboardingLlmSelection): Promise<OnboardingLlmSelectionResult>;
   chatgptStatus(): Promise<ChatGptStatus>;
@@ -56,6 +59,8 @@ type DesktopCredentialSlot =
   | "kimi"
   | "zai"
   | "intervals-icu";
+
+type DesktopCredentialId = DesktopCredentialSlot | "openai-codex";
 
 type LlmProvider = Exclude<DesktopCredentialSlot, "intervals-icu"> | "openai-codex";
 
@@ -143,6 +148,23 @@ type CredentialWriteResult =
         | "storage-failed"
         | "runtime-unavailable"
         | "training-account-mismatch";
+    };
+
+type CredentialDeleteResult =
+  | {
+      readonly credential: DesktopCredentialId;
+      readonly status: "deleted";
+      readonly cleanupPending: boolean;
+    }
+  | {
+      readonly credential: DesktopCredentialId;
+      readonly status: "refused";
+      readonly reason:
+        | "not-found"
+        | "managed-by-environment"
+        | "storage-failed"
+        | "runtime-unavailable"
+        | "runtime-state-diverged";
     };
 
 interface Window {

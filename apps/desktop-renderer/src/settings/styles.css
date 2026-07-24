@@ -46,6 +46,7 @@
 }
 
 .provider-model-settings__section,
+.credential-settings__section,
 .athlete-settings,
 .session-settings {
   min-width: 0;
@@ -546,6 +547,155 @@
   display: none;
 }
 
+.credential-settings__list {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.credential-settings__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-solid);
+}
+
+.credential-settings__identity {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.credential-settings__provider {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.credential-settings__kind,
+.credential-settings__runtime,
+.credential-settings__empty,
+.credential-settings__feedback,
+.credential-settings__confirmation-copy {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.credential-settings__runtime {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.credential-settings__runtime[data-state="active"] {
+  color: var(--moss-strong);
+  background: var(--moss-soft);
+}
+
+.credential-settings__runtime[data-state="failed"] {
+  color: var(--coral);
+}
+
+.credential-settings__delete,
+.credential-settings__retry,
+.credential-settings__setup,
+.credential-settings__cancel-delete,
+.credential-settings__confirm-delete {
+  min-height: 36px;
+  padding: 0 13px;
+  white-space: nowrap;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.credential-settings__delete,
+.credential-settings__retry,
+.credential-settings__cancel-delete {
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  background: var(--surface-solid);
+}
+
+.credential-settings__setup {
+  border: 1px solid var(--moss);
+  color: var(--surface-solid);
+  background: var(--moss);
+}
+
+.credential-settings__confirm-delete {
+  border: 1px solid var(--coral);
+  color: var(--surface-solid);
+  background: var(--coral);
+}
+
+.credential-settings__delete:disabled,
+.credential-settings__retry:disabled,
+.credential-settings__setup:disabled,
+.credential-settings__cancel-delete:disabled,
+.credential-settings__confirm-delete:disabled,
+.credential-settings__confirm-delete[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.credential-settings__confirmation {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.credential-settings__confirmation-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.credential-settings__confirmation-actions,
+.credential-settings__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.credential-settings__feedback {
+  min-height: 18px;
+  margin-top: 14px;
+}
+
+.credential-settings__empty {
+  margin-top: 18px;
+}
+
+.credential-settings__actions {
+  margin-top: 12px;
+}
+
+.credential-settings__retry {
+  margin-right: auto;
+}
+
+.credential-settings__list[hidden],
+.credential-settings__empty[hidden],
+.credential-settings__feedback[hidden],
+.credential-settings__retry[hidden],
+.credential-settings__setup[hidden] {
+  display: none;
+}
+
 @keyframes provider-model-settings-enter {
   from {
     opacity: 0;
@@ -594,6 +744,15 @@
 }
 
 @media (max-width: 560px) {
+  .credential-settings__item {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .credential-settings__delete {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+
   .session-settings__fields {
     grid-template-columns: minmax(0, 1fr);
   }
