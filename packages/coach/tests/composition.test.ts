@@ -481,6 +481,27 @@ describe("local coach composition", () => {
       timezone: "UTC",
       dailyCapUsd: 0.5,
     });
+    received!.ports.transcriptWriter.appendCompletedTurn({
+      chatId: "other",
+      turnId: "other-turn",
+      completedAt: "1998-07-06T00:00:00.000Z",
+      athleteText: "a",
+      coachText: "b",
+    });
+    received!.ports.transcriptWriter.appendCompletedTurn({
+      chatId: "desktop",
+      turnId: "desktop-turn",
+      completedAt: "1998-07-06T00:00:01.000Z",
+      athleteText: "c",
+      coachText: "d",
+    });
+    await expect(
+      lifecycle.operations.getTranscriptPage({ cursor: null, limit: 25 }),
+    ).resolves.toMatchObject({
+      status: "page",
+      turns: [{ turnId: "desktop-turn" }],
+      nextCursor: null,
+    });
     await lifecycle.close();
   });
 

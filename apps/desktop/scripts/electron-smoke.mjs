@@ -281,6 +281,7 @@ async function security() {
             "credentialStatuses",
             "deleteCredential",
             "getDaemonConnection",
+            "getTranscriptPage",
             "getUpdateState",
             "llmConfiguration",
             "onDroppedImportFiles",

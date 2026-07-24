@@ -4,6 +4,10 @@ interface EnduragentAuth {
     readonly token: string;
     readonly generation: number;
   }>;
+  getTranscriptPage(input: {
+    readonly cursor: string | null;
+    readonly limit: number;
+  }): Promise<DesktopTranscriptPage>;
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
   retryFailedCredentials(): Promise<readonly CredentialSlotStatus[]>;
   writeCredential(input: {
@@ -26,6 +30,27 @@ interface EnduragentAuth {
   restartToUpdate(): Promise<DesktopUpdateState>;
   onUpdateState(listener: (state: DesktopUpdateState) => void): () => void;
 }
+
+interface DesktopTranscriptTurn {
+  readonly turnId: string;
+  readonly completedAt: string;
+  readonly athleteText: string;
+  readonly coachText: string;
+}
+
+type DesktopTranscriptPage =
+  | {
+      readonly schemaVersion: 1;
+      readonly status: "page";
+      readonly turns: readonly DesktopTranscriptTurn[];
+      readonly nextCursor: string | null;
+    }
+  | {
+      readonly schemaVersion: 1;
+      readonly status: "restart-required";
+      readonly turns: readonly [];
+      readonly nextCursor: null;
+    };
 
 type DesktopUpdateState =
   | { readonly status: "disabled" | "idle" | "checking" | "current" }

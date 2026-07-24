@@ -68,6 +68,11 @@ import { createDesktopQuitCoordinator } from "./quit-coordinator.js";
 import { createDesktopUpdateController } from "./update-controller.js";
 import { isDesktopUpdateReleaseEligible } from "./update-eligibility.js";
 import { installDesktopUpdateIpc } from "./update-ipc.js";
+import {
+  createConnectionTranscriptReader,
+  installDesktopTranscriptIpc,
+  type DesktopTranscriptReader,
+} from "./transcript-ipc.js";
 
 registerDesktopScheme();
 
@@ -129,6 +134,7 @@ async function runDesktop(): Promise<void> {
   let quitRequested = false;
   let protocolInstalled = false;
   let disposeConnectionIpc: (() => void) | undefined;
+  let disposeTranscriptIpc: (() => void) | undefined;
   let disposeExternalLinkIpc: (() => void) | undefined;
   let disposeReleaseNotesIpc: (() => void) | undefined;
   let disposeUpdateIpc: (() => void) | undefined;
@@ -155,6 +161,8 @@ async function runDesktop(): Promise<void> {
       controller.abort();
       disposeConnectionIpc?.();
       disposeConnectionIpc = undefined;
+      disposeTranscriptIpc?.();
+      disposeTranscriptIpc = undefined;
       disposeExternalLinkIpc?.();
       disposeExternalLinkIpc = undefined;
       disposeReleaseNotesIpc?.();
@@ -200,6 +208,7 @@ async function runDesktop(): Promise<void> {
     type RuntimeBinding = {
       readonly authority: RuntimeConfigurationAuthority;
       readonly credentials: CredentialRuntimeApplication;
+      readonly transcript: DesktopTranscriptReader;
     };
     let activeRuntimeBinding: RuntimeBinding | undefined;
     const preparedRuntimeBindings = new Map<
@@ -299,6 +308,7 @@ async function runDesktop(): Promise<void> {
       const authority = createConnectionRuntimeAuthority(connection, connectCoachClient);
       return {
         authority,
+        transcript: createConnectionTranscriptReader(connection),
         credentials: createCredentialRuntimeApplication({
           configureRuntime: authority.configureRuntime,
           clearRuntimeCredential: authority.clearCredential,
@@ -328,6 +338,23 @@ async function runDesktop(): Promise<void> {
         throw new TypeError();
       }
       return snapshot;
+    };
+    const readActiveTranscriptPage = async (
+      request: Parameters<DesktopTranscriptReader["getTranscriptPage"]>[0],
+    ) => {
+      const binding = activeRuntimeBinding;
+      const lifecycleState = daemonLifecycle?.snapshot();
+      if (binding === undefined || lifecycleState?.status !== "ready") throw new TypeError();
+      const page = await binding.transcript.getTranscriptPage(request);
+      const currentLifecycleState = daemonLifecycle?.snapshot();
+      if (
+        activeRuntimeBinding !== binding ||
+        currentLifecycleState?.status !== "ready" ||
+        currentLifecycleState.generation !== lifecycleState.generation
+      ) {
+        throw new TypeError();
+      }
+      return page;
     };
     const credentialRoot = join(app.getPath("userData"), CREDENTIAL_DIRECTORY_NAME);
     const vault = createCredentialVault({
@@ -572,6 +599,11 @@ async function runDesktop(): Promise<void> {
       ipcMain,
       currentWindow: () => mainWindow.current() ?? undefined,
       runtime: daemonLifecycle,
+    });
+    disposeTranscriptIpc = installDesktopTranscriptIpc({
+      ipcMain,
+      currentWindow: () => mainWindow.current() ?? undefined,
+      readPage: readActiveTranscriptPage,
     });
     disposeExternalLinkIpc = installDesktopExternalLinkIpc({
       ipcMain,

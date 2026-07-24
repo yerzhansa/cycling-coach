@@ -13,10 +13,13 @@ import {
   TranscriptStore,
   type ResetIntentRecord,
   type TranscriptCompletedTurnRecord,
+  type TranscriptPageRequest,
+  type TranscriptPageResult,
 } from "./transcript-store.js";
 
 export interface ConversationStorePort extends ChatStorePort, TranscriptWriterPort {
   readCurrentConversation(chatId: string): TranscriptCompletedTurnRecord[];
+  readCurrentConversationPage(chatId: string, request: TranscriptPageRequest): TranscriptPageResult;
 }
 
 export function createConversationStore(
@@ -97,6 +100,10 @@ export class ConversationStore implements ConversationStorePort {
   readCurrentConversation(chatId: string) {
     this.recoverBeforeAccess(chatId);
     return this.transcriptStore.readCurrentConversation(chatId);
+  }
+
+  readCurrentConversationPage(chatId: string, request: TranscriptPageRequest) {
+    return this.transcriptStore.readCurrentConversationPage(chatId, request);
   }
 
   resetConversation(input: ConversationResetInput): void {

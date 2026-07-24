@@ -628,6 +628,16 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
               invocationFailure = { error };
             }
             break;
+          case "getTranscriptPage":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.getTranscriptPage.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.operations.getTranscriptPage(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
           case "getAthleteState":
             try {
               COACH_RPC_METHOD_REGISTRY.getAthleteState.requestSchema.parse(generic.data.params);

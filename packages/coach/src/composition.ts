@@ -59,6 +59,8 @@ import {
   type CoachOperations,
   type ConfigureRuntimeRpcParams,
   type ConfigureRuntimeRpcRefusalReason,
+  type GetTranscriptPageRpcParams,
+  type GetTranscriptPageRpcResult,
   type GetRuntimeConfigRpcResult,
 } from "@enduragent/coach-contract";
 import { cyclingSport } from "@enduragent/sport-cycling";
@@ -378,6 +380,9 @@ interface RuntimeBundle {
 function createReconfigurableRuntimeBundle(initial: RuntimeBundle): {
   readonly engine: CoachEngine;
   readonly spendMeter: SpendMeterService;
+  readonly getTranscriptPage: (
+    request: GetTranscriptPageRpcParams,
+  ) => Promise<GetTranscriptPageRpcResult>;
   replace(create: () => RuntimeBundle | Promise<RuntimeBundle>): Promise<void>;
 } {
   let active = initial;
@@ -412,6 +417,8 @@ function createReconfigurableRuntimeBundle(initial: RuntimeBundle): {
       setDailySpendCap: (dailyCapUsd) =>
         run((bundle) => bundle.spendMeter.setDailySpendCap(dailyCapUsd)),
     },
+    getTranscriptPage: (request) =>
+      run(async (bundle) => bundle.chatStore.readCurrentConversationPage("desktop", request)),
     async replace(create) {
       const previousAdmission = admission;
       let release!: () => void;
@@ -894,6 +901,7 @@ export async function createLocalCoachComposition(
         runtime,
         intervalsCredentials: options.liveIntervals,
         historyNewestDate: () => new Date(now()).toISOString().slice(0, 10),
+        readTranscriptPage: (request) => reconfigurable.getTranscriptPage(request),
         applyRuntimeConfig,
         readRuntimeConfig: () =>
           runtimeConfigSnapshot(input.home.configDir, activeConfig, input.env, activeTimezone),

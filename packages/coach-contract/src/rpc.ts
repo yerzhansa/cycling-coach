@@ -116,6 +116,7 @@ export const COACH_RPC_METHOD_NAMES = [
   "chat",
   "resetSession",
   "hasSession",
+  "getTranscriptPage",
   "getAthleteState",
   "importFiles",
   "sync",
@@ -146,6 +147,125 @@ export type ChatRpcParams = z.infer<typeof ChatRpcParamsSchema>;
 
 export const EmptyRpcParamsSchema = z.object({}).strict();
 export type EmptyRpcParams = z.infer<typeof EmptyRpcParamsSchema>;
+
+export const MAX_TRANSCRIPT_PAGE_TURNS = 50;
+export const MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES = 266_240;
+const TRANSCRIPT_CURSOR_LENGTH = 152;
+const TRANSCRIPT_CURSOR_PATTERN = /^[A-Za-z0-9_-]{152}$/;
+const BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const RPC_TEXT_ENCODER = new TextEncoder();
+
+function decodedBase64Url(value: string): Uint8Array | null {
+  let accumulator = 0;
+  let bits = 0;
+  const decoded: number[] = [];
+  for (const character of value) {
+    const digit = BASE64URL_ALPHABET.indexOf(character);
+    if (digit < 0) return null;
+    accumulator = (accumulator << 6) | digit;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      decoded.push((accumulator >> bits) & 0xff);
+      accumulator &= (1 << bits) - 1;
+    }
+  }
+  return bits === 0 ? Uint8Array.from(decoded) : null;
+}
+
+function safeCursorOffset(bytes: Uint8Array, offset: number): number | null {
+  let value = 0;
+  for (let index = offset; index < offset + 8; index += 1) {
+    value = value * 256 + bytes[index]!;
+    if (!Number.isSafeInteger(value)) return null;
+  }
+  return value;
+}
+
+function validTranscriptCursor(value: string): boolean {
+  if (value.length !== TRANSCRIPT_CURSOR_LENGTH || !TRANSCRIPT_CURSOR_PATTERN.test(value)) {
+    return false;
+  }
+  const bytes = decodedBase64Url(value);
+  if (bytes === null || bytes.length !== 114 || bytes[0] !== 1) return false;
+  const fenceKind = bytes[1];
+  if (fenceKind !== 0 && fenceKind !== 1) return false;
+  if (fenceKind === 0 && bytes.slice(34, 66).some((byte) => byte !== 0)) return false;
+  const snapshotEnd = safeCursorOffset(bytes, 98);
+  const before = safeCursorOffset(bytes, 106);
+  return snapshotEnd !== null && before !== null && before <= snapshotEnd;
+}
+
+export const TranscriptCursorSchema = z
+  .string()
+  .length(TRANSCRIPT_CURSOR_LENGTH)
+  .regex(TRANSCRIPT_CURSOR_PATTERN)
+  .refine(validTranscriptCursor);
+export type TranscriptCursor = z.infer<typeof TranscriptCursorSchema>;
+
+export const GetTranscriptPageRpcParamsSchema = z
+  .object({
+    cursor: TranscriptCursorSchema.nullable(),
+    limit: z.number().int().min(1).max(MAX_TRANSCRIPT_PAGE_TURNS),
+  })
+  .strict();
+export type GetTranscriptPageRpcParams = z.infer<typeof GetTranscriptPageRpcParamsSchema>;
+
+function canonicalTranscriptTimestamp(value: string): boolean {
+  try {
+    return new Date(value).toISOString() === value;
+  } catch {
+    return false;
+  }
+}
+
+export const TranscriptPageTurnSchema = z
+  .object({
+    turnId: z.string().min(1),
+    completedAt: z.string().refine(canonicalTranscriptTimestamp),
+    athleteText: z.string(),
+    coachText: z.string(),
+  })
+  .strict();
+export type TranscriptPageTurn = z.infer<typeof TranscriptPageTurnSchema>;
+
+const TranscriptPageResultSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    status: z.literal("page"),
+    turns: z.array(TranscriptPageTurnSchema).max(MAX_TRANSCRIPT_PAGE_TURNS),
+    nextCursor: TranscriptCursorSchema.nullable(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.turns.length === 0 && value.nextCursor !== null) {
+      context.addIssue({
+        code: "custom",
+        path: ["nextCursor"],
+        message: "empty transcript page cannot continue",
+      });
+    }
+  });
+
+const TranscriptRestartRequiredResultSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    status: z.literal("restart-required"),
+    turns: z.array(TranscriptPageTurnSchema).length(0),
+    nextCursor: z.null(),
+  })
+  .strict();
+
+export const GetTranscriptPageRpcResultSchema = z
+  .discriminatedUnion("status", [TranscriptPageResultSchema, TranscriptRestartRequiredResultSchema])
+  .superRefine((value, context) => {
+    if (
+      RPC_TEXT_ENCODER.encode(JSON.stringify(value)).byteLength > MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES
+    ) {
+      context.addIssue({ code: "custom", message: "transcript page exceeds response budget" });
+    }
+  });
+export type GetTranscriptPageRpcResult = z.infer<typeof GetTranscriptPageRpcResultSchema>;
 
 export const AbsoluteImportPathSchema = z
   .string()
@@ -533,6 +653,7 @@ export interface CoachOperations {
     onEvent?: (event: OperationProgressEvent) => void,
   ): Promise<SyncRpcResult>;
   saveIntake(request: SaveIntakeRpcParams): Promise<SaveIntakeRpcResult>;
+  getTranscriptPage(request: GetTranscriptPageRpcParams): Promise<GetTranscriptPageRpcResult>;
   configureRuntime(request: ConfigureRuntimeRpcParams): Promise<ConfigureRuntimeRpcResult>;
   getRuntimeConfig(request: GetRuntimeConfigRpcParams): Promise<GetRuntimeConfigRpcResult>;
   getUnitsPreference?(request: GetUnitsPreferenceRpcParams): Promise<GetUnitsPreferenceRpcResult>;
@@ -571,6 +692,14 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("hasSession"),
       params: HasSessionRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("getTranscriptPage"),
+      params: GetTranscriptPageRpcParamsSchema,
     })
     .strict(),
   z
@@ -762,6 +891,12 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "hasSession",
     requestSchema: HasSessionRequestSchema,
     responseSchema: HasSessionResponseSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  getTranscriptPage: {
+    wireName: "getTranscriptPage",
+    requestSchema: GetTranscriptPageRpcParamsSchema,
+    responseSchema: GetTranscriptPageRpcResultSchema,
     eventSchema: NoRpcEventSchema,
   },
   getAthleteState: {

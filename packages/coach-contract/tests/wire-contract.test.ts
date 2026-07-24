@@ -19,6 +19,8 @@ import {
   ConfigureRuntimeRpcResultSchema,
   GetRuntimeConfigRpcParamsSchema,
   GetRuntimeConfigRpcResultSchema,
+  GetTranscriptPageRpcParamsSchema,
+  GetTranscriptPageRpcResultSchema,
   GetUnitsPreferenceRpcParamsSchema,
   GetUnitsPreferenceRpcResultSchema,
   ImportFilesRpcParamsSchema,
@@ -86,6 +88,12 @@ const progressNotification = {
     event: { phase: "started", completed: 0, total: 1 },
   },
 } as const;
+
+function transcriptCursor(): string {
+  const bytes = Buffer.alloc(114);
+  bytes[0] = 1;
+  return bytes.toString("base64url");
+}
 
 function roundTrip(value: unknown): CoachRpcEnvelope {
   const serialized = serializeCoachRpcEnvelope(value);
@@ -185,7 +193,7 @@ const spendSummary = SpendSummarySchema.parse({
 });
 
 describe("coach request and event projection", () => {
-  it("admits exactly the fourteen strict method requests", () => {
+  it("admits exactly the fifteen strict method requests", () => {
     const requests = [
       { jsonrpc: "2.0", id: 1, method: "chat", params: { chatId: "chat-1", message: "hello" } },
       { jsonrpc: "2.0", id: 2, method: "resetSession", params: { chatId: "chat-1" } },
@@ -228,6 +236,12 @@ describe("coach request and event projection", () => {
         params: { dailyCapUsd: 0.75 },
       },
       { jsonrpc: "2.0", id: 14, method: "selfTest", params: {} },
+      {
+        jsonrpc: "2.0",
+        id: 15,
+        method: "getTranscriptPage",
+        params: { cursor: null, limit: 25 },
+      },
     ];
     for (const request of requests) {
       expect(CoachRpcRequestEnvelopeSchema.parse(request)).toEqual(request);
@@ -253,6 +267,54 @@ describe("coach request and event projection", () => {
         params: {},
       }).success,
     ).toBe(false);
+  });
+
+  it("enforces the exact bounded transcript page wire shape", () => {
+    const cursor = transcriptCursor();
+    expect(GetTranscriptPageRpcParamsSchema.parse({ cursor, limit: 50 })).toEqual({
+      cursor,
+      limit: 50,
+    });
+    expect(
+      GetTranscriptPageRpcResultSchema.parse({
+        schemaVersion: 1,
+        status: "page",
+        turns: [
+          {
+            turnId: "turn-1",
+            completedAt: "1998-07-06T00:00:00.000Z",
+            athleteText: "a",
+            coachText: "b",
+          },
+        ],
+        nextCursor: cursor,
+      }),
+    ).toMatchObject({ status: "page", nextCursor: cursor });
+    for (const request of [
+      { cursor: null, limit: 0 },
+      { cursor: null, limit: 51 },
+      { cursor: "a".repeat(152), limit: 25 },
+      { cursor: null, limit: 25, chatId: "other" },
+    ]) {
+      expect(GetTranscriptPageRpcParamsSchema.safeParse(request).success).toBe(false);
+    }
+    for (const result of [
+      {
+        schemaVersion: 1,
+        status: "restart-required",
+        turns: [],
+        nextCursor: cursor,
+      },
+      {
+        schemaVersion: 1,
+        status: "page",
+        turns: [],
+        nextCursor: null,
+        path: "/synthetic/private/transcript",
+      },
+    ]) {
+      expect(GetTranscriptPageRpcResultSchema.safeParse(result).success).toBe(false);
+    }
   });
 
   it("rejects every nested non-JSON resolvedCs value at every wire boundary", () => {
@@ -624,6 +686,12 @@ describe("coach request and event projection", () => {
       chat: async () => ({ text: "ok" }),
       resetSession: async () => ({ memoryFlushed: true }),
       hasSession: async () => ({ hasSession: false }),
+      getTranscriptPage: async () => ({
+        schemaVersion: 1,
+        status: "page",
+        turns: [],
+        nextCursor: null,
+      }),
       getAthleteState: async () =>
         AthleteStateSchema.parse({
           schemaVersion: "1",
@@ -719,6 +787,12 @@ describe("coach request and event projection", () => {
       responseSchema: HasSessionResponseSchema,
       eventSchema: NoRpcEventSchema,
     });
+    expect(COACH_RPC_METHOD_REGISTRY.getTranscriptPage).toEqual({
+      wireName: "getTranscriptPage",
+      requestSchema: GetTranscriptPageRpcParamsSchema,
+      responseSchema: GetTranscriptPageRpcResultSchema,
+      eventSchema: NoRpcEventSchema,
+    });
     expect(COACH_RPC_METHOD_REGISTRY.getAthleteState).toEqual({
       wireName: "getAthleteState",
       requestSchema: EmptyRpcParamsSchema,
@@ -788,6 +862,7 @@ describe("coach request and event projection", () => {
     for (const method of [
       "resetSession",
       "hasSession",
+      "getTranscriptPage",
       "getAthleteState",
       "saveIntake",
       "configureRuntime",
@@ -1011,7 +1086,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version nine", () => {
-    expect(PROTOCOL_VERSION).toBe(9);
+  it("uses protocol version ten", () => {
+    expect(PROTOCOL_VERSION).toBe(10);
   });
 });

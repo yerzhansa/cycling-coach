@@ -74,6 +74,12 @@ const operations: CoachOperations = {
     requests: { store: 1, reference: 1, total: 2 },
   }),
   saveIntake: async () => ({ schemaVersion: 1, saved: true }),
+  getTranscriptPage: async () => ({
+    schemaVersion: 1,
+    status: "page",
+    turns: [],
+    nextCursor: null,
+  }),
   configureRuntime: async ({ llm, intervals, session }) => ({
     schemaVersion: 3,
     status: "applied",
@@ -685,6 +691,70 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       id: "units-invalid",
       error: { code: -32602, message: "Invalid params" },
     });
+    await client.close();
+  });
+
+  it("dispatches bounded transcript reads and refuses malformed hydration requests", async () => {
+    const token = "x".repeat(43);
+    const getTranscriptPage = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      status: "page" as const,
+      turns: [
+        {
+          turnId: "turn-1",
+          completedAt: "1998-07-06T00:00:00.000Z",
+          athleteText: "a",
+          coachText: "b",
+        },
+      ],
+      nextCursor: null,
+    }));
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      operations: { ...operations, getTranscriptPage },
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "transcript-page",
+        method: "getTranscriptPage",
+        params: { cursor: null, limit: 25 },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "transcript-page",
+      result: await getTranscriptPage.mock.results[0]!.value,
+    });
+    expect(getTranscriptPage).toHaveBeenCalledWith({ cursor: null, limit: 25 });
+
+    for (const [index, params] of [
+      {},
+      { cursor: null, limit: 0 },
+      { cursor: null, limit: 51 },
+      { cursor: "a".repeat(152), limit: 25 },
+      { cursor: null, limit: 25, chatId: "other" },
+    ].entries()) {
+      client.ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: `transcript-invalid-${index}`,
+          method: "getTranscriptPage",
+          params,
+        }),
+      );
+      expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+        jsonrpc: "2.0",
+        id: `transcript-invalid-${index}`,
+        error: { code: -32602, message: "Invalid params" },
+      });
+    }
+    expect(getTranscriptPage).toHaveBeenCalledTimes(1);
     await client.close();
   });
 
