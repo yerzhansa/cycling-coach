@@ -2,8 +2,14 @@ import { createHash } from "node:crypto";
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { isAbsolute, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { extractFile, listPackage, statFile, uncache } from "@electron/asar";
 import { parse } from "yaml";
+import {
+  DESKTOP_UPDATER_CACHE_DIRECTORY,
+  requireGenericFeedUrl,
+  requireStableCalVer,
+} from "./macos-release-plan.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const canonicalDesktopRoot = resolve(scriptDirectory, "..");
@@ -33,6 +39,7 @@ const requiredFilePatterns = [
 const reservedResourceNames = new Set([
   "app.asar",
   "app.asar.unpacked",
+  "app-update.yml",
   "electron.icns",
   "en.lproj",
 ]);
@@ -65,6 +72,22 @@ const knownSecretMarkers = [
   "sentinel-my-llm-key",
   "synthetic-secret",
 ];
+const removedMainManifestKeys = new Set([
+  "dist",
+  "gitHead",
+  "build",
+  "jspm",
+  "ava",
+  "xo",
+  "nyc",
+  "eslintConfig",
+  "contributors",
+  "bundleDependencies",
+  "tags",
+  "scripts",
+  "keywords",
+  "devDependencies",
+]);
 
 class PackageLayoutError extends Error {
   constructor(message) {
@@ -447,7 +470,56 @@ function compareAsarStaging(expected, asar) {
   }
 }
 
-function validateRequiredAsarFiles(asar) {
+function parseManifest(bytes, label) {
+  let manifest;
+  try {
+    manifest = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    fail("packaged manifest is invalid", label);
+  }
+  if (!exactObject(manifest) || manifest.main !== "out/main/index.js") {
+    fail("packaged manifest has an invalid main entry", label);
+  }
+  return manifest;
+}
+
+function validateManifest(asar, sourceBytes, release) {
+  const packagedBytes = asar.get("package.json").bytes;
+  const source = parseManifest(sourceBytes, "package.json");
+  const packaged = parseManifest(packagedBytes, "app.asar/package.json");
+  if (Object.hasOwn(source, "enduragentDesktopRelease")) {
+    fail("source manifest contains a release marker", "package.json");
+  }
+  const expected = structuredClone(source);
+  if (release !== undefined) {
+    expected.version = release.version;
+    expected.enduragentDesktopRelease = true;
+  }
+  let transformed = release !== undefined;
+  for (const key of Object.keys(expected)) {
+    if (key.startsWith("_") || removedMainManifestKeys.has(key)) {
+      delete expected[key];
+      transformed = true;
+    }
+  }
+  if (
+    exactObject(expected.dependencies) &&
+    !Object.keys(expected.dependencies).some((key) => key.startsWith("babel")) &&
+    Object.hasOwn(expected, "babel")
+  ) {
+    delete expected.babel;
+    transformed = true;
+  }
+  const expectedBytes = transformed ? Buffer.from(JSON.stringify(expected, null, 2)) : sourceBytes;
+  if (!expectedBytes.equals(packagedBytes) || !isDeepStrictEqual(packaged, expected)) {
+    if (release === undefined) {
+      fail("ordinary packaged manifest differs from source", "app.asar/package.json");
+    }
+    fail("release packaged manifest has unexpected drift", "app.asar/package.json");
+  }
+}
+
+function validateRequiredAsarFiles(asar, sourceManifest, release) {
   for (const path of requiredAsarFiles) {
     const entry = asar.get(path);
     if (entry === undefined || entry.type !== "file" || entry.unpacked === true) {
@@ -460,16 +532,7 @@ function validateRequiredAsarFiles(asar) {
     }
   }
 
-  const manifestBytes = asar.get("package.json").bytes;
-  let manifest;
-  try {
-    manifest = JSON.parse(manifestBytes.toString("utf8"));
-  } catch {
-    fail("packaged manifest is invalid", "app.asar/package.json");
-  }
-  if (!exactObject(manifest) || manifest.main !== "out/main/index.js") {
-    fail("packaged manifest has an invalid main entry", "app.asar/package.json");
-  }
+  validateManifest(asar, sourceManifest, release);
 
   const matrix = asar.get("resources/self-test/matrix.json").bytes;
   const checksum = asar.get("resources/self-test/matrix.sha256").bytes;
@@ -479,7 +542,25 @@ function validateRequiredAsarFiles(asar) {
   }
 }
 
-async function validateResourceEnvelope(resourcesRoot, externalSource) {
+function validateAppUpdate(bytes, release) {
+  let update;
+  try {
+    update = parse(bytes.toString("utf8"));
+  } catch {
+    fail("invalid release app-update.yml", "Contents/Resources/app-update.yml");
+  }
+  const expected = {
+    provider: "generic",
+    url: release.feedUrl,
+    channel: "latest",
+    updaterCacheDirName: DESKTOP_UPDATER_CACHE_DIRECTORY,
+  };
+  if (!exactObject(update) || !isDeepStrictEqual(update, expected)) {
+    fail("invalid release app-update.yml", "Contents/Resources/app-update.yml");
+  }
+}
+
+async function validateResourceEnvelope(resourcesRoot, externalSource, release) {
   const names = (await safeReadDirectory(resourcesRoot, "Contents/Resources")).sort();
   const sourceTopLevel = new Set([...externalSource.keys()].map((path) => path.split("/")[0]));
   for (const name of sourceTopLevel) {
@@ -488,6 +569,7 @@ async function validateResourceEnvelope(resourcesRoot, externalSource) {
     }
   }
   const expected = new Set(["app.asar", "electron.icns", "en.lproj", ...sourceTopLevel]);
+  if (release !== undefined) expected.add("app-update.yml");
   if (names.includes("app.asar.unpacked")) expected.add("app.asar.unpacked");
   if (names.length !== expected.size || names.some((name) => !expected.has(name))) {
     fail("undeclared package resource", "Contents/Resources");
@@ -499,6 +581,15 @@ async function validateResourceEnvelope(resourcesRoot, externalSource) {
   assertRegularFile(iconStat, iconLabel);
   inspectContents(await safeReadFile(iconPath, iconLabel), iconLabel);
   await collectTree(join(resourcesRoot, "en.lproj"), "Contents/Resources/en.lproj", true);
+  if (release !== undefined) {
+    const updatePath = join(resourcesRoot, "app-update.yml");
+    const updateLabel = "Contents/Resources/app-update.yml";
+    const updateStat = await safeLstat(updatePath, updateLabel);
+    assertRegularFile(updateStat, updateLabel);
+    const updateBytes = await safeReadFile(updatePath, updateLabel);
+    inspectContents(updateBytes, updateLabel);
+    validateAppUpdate(updateBytes, release);
+  }
 }
 
 export async function verifyPackageLayout(application, options = {}) {
@@ -507,6 +598,21 @@ export async function verifyPackageLayout(application, options = {}) {
   }
   const desktopRoot = options.desktopRoot ?? canonicalDesktopRoot;
   if (!isAbsolute(desktopRoot)) fail("desktop root must be absolute");
+  let release;
+  if (options.release !== undefined) {
+    if (
+      !exactObject(options.release) ||
+      Object.keys(options.release).length !== 2 ||
+      !Object.hasOwn(options.release, "version") ||
+      !Object.hasOwn(options.release, "feedUrl")
+    ) {
+      fail("invalid release package-layout options");
+    }
+    release = {
+      version: requireStableCalVer(options.release.version),
+      feedUrl: requireGenericFeedUrl(options.release.feedUrl),
+    };
+  }
 
   try {
     const applicationStat = await safeLstat(application, "Enduragent.app");
@@ -519,17 +625,18 @@ export async function verifyPackageLayout(application, options = {}) {
     assertDirectory(resourcesStat, "Contents/Resources");
 
     const authority = await readBuilderAuthority(desktopRoot);
-    const [asarStaging, externalSource] = await Promise.all([
+    const [asarStaging, externalSource, sourceManifest] = await Promise.all([
       collectTree(authority.asarSourceRoot, "dist/ASAR-staging", false),
       collectTree(authority.externalSourceRoot, "dist/extra-resources", false),
+      safeReadFile(join(desktopRoot, "package.json"), "package.json"),
     ]);
-    await validateResourceEnvelope(resourcesRoot, externalSource);
+    await validateResourceEnvelope(resourcesRoot, externalSource, release);
 
     const archivePath = join(resourcesRoot, "app.asar");
     const archiveStat = await safeLstat(archivePath, "Contents/Resources/app.asar");
     assertRegularFile(archiveStat, "Contents/Resources/app.asar");
     const asar = collectAsar(archivePath);
-    validateRequiredAsarFiles(asar);
+    validateRequiredAsarFiles(asar, sourceManifest, release);
     compareAsarStaging(asarStaging, asar);
 
     const externalPackaged = new Map();

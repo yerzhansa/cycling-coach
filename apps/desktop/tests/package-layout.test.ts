@@ -9,6 +9,12 @@ import { readBuilderAuthority, verifyPackageLayout } from "../scripts/verify-pac
 
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const temporaryRoots: string[] = [];
+const sourceManifest = {
+  name: "@enduragent/desktop",
+  version: "0.0.1",
+  main: "out/main/index.js",
+};
+const sourceManifestBytes = Buffer.from(`${JSON.stringify(sourceManifest)}\n`);
 const exclusions = [
   "!**/*.map",
   "!**/.env*",
@@ -94,6 +100,7 @@ async function syntheticPackage(): Promise<SyntheticPackage> {
   ]);
   await Promise.all([
     writeFile(join(desktop, "electron-builder.yml"), builderYaml()),
+    writeFile(join(desktop, "package.json"), sourceManifestBytes),
     writeFile(join(resources, "electron.icns"), "synthetic icon"),
     writeFile(join(asarSource, "resources/self-test/matrix.json"), matrix),
     writeFile(join(asarSource, "resources/self-test/matrix.sha256"), matrixChecksum),
@@ -119,7 +126,7 @@ async function syntheticPackage(): Promise<SyntheticPackage> {
     writeArchive("out/preload/index.cjs"),
     writeArchive("out/renderer/index.html", "<!doctype html>\n"),
     writeArchive("out/renderer/tray.html", "<!doctype html>\n"),
-    writeArchive("package.json", '{"name":"synthetic","main":"out/main/index.js"}\n'),
+    writeArchive("package.json", sourceManifestBytes),
     writeArchive("resources/self-test/matrix.json", matrix),
     writeArchive("resources/self-test/matrix.sha256", matrixChecksum),
   ]);
@@ -148,6 +155,192 @@ describe("desktop package layout", () => {
     await expect(
       verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
     ).resolves.toBeUndefined();
+  });
+
+  it("keeps ordinary packages byte-exact and updater-inert", async () => {
+    const canonical = await syntheticPackage();
+    const authored = {
+      ...sourceManifest,
+      scripts: { test: "vitest run" },
+      devDependencies: { vitest: "4.1.4" },
+    };
+    await writeFile(join(canonical.desktop, "package.json"), `${JSON.stringify(authored)}\n`);
+    await canonical.writeArchive("package.json", JSON.stringify(sourceManifest, null, 2));
+    await canonical.rebuild();
+    await expect(
+      verifyPackageLayout(canonical.app, { desktopRoot: canonical.desktop }),
+    ).resolves.toBeUndefined();
+
+    const manifestDrift = await syntheticPackage();
+    await manifestDrift.writeArchive("package.json", JSON.stringify(sourceManifest, null, 2));
+    await manifestDrift.rebuild();
+    await expect(
+      verifyPackageLayout(manifestDrift.app, { desktopRoot: manifestDrift.desktop }),
+    ).rejects.toThrow("ordinary packaged manifest differs from source");
+
+    const marked = await syntheticPackage();
+    await marked.writeArchive(
+      "package.json",
+      `${JSON.stringify({ ...sourceManifest, enduragentDesktopRelease: true })}\n`,
+    );
+    await marked.rebuild();
+    await expect(verifyPackageLayout(marked.app, { desktopRoot: marked.desktop })).rejects.toThrow(
+      "ordinary packaged manifest differs from source",
+    );
+
+    const configured = await syntheticPackage();
+    await writeFile(
+      join(configured.resources, "app-update.yml"),
+      "provider: generic\nurl: https://updates.example.test/stable/\n",
+    );
+    await expect(
+      verifyPackageLayout(configured.app, { desktopRoot: configured.desktop }),
+    ).rejects.toThrow("undeclared package resource");
+  });
+
+  it("accepts only the exact release manifest and app-update overlay", async () => {
+    const version = "2026.7.2";
+    const feedUrl = "https://updates.example.test/stable/";
+    const fixture = await syntheticPackage();
+    await writeFile(
+      join(fixture.desktop, "package.json"),
+      `${JSON.stringify({
+        ...sourceManifest,
+        scripts: { test: "vitest run" },
+        devDependencies: { vitest: "4.1.4" },
+      })}\n`,
+    );
+    await fixture.writeArchive(
+      "package.json",
+      JSON.stringify(
+        {
+          ...sourceManifest,
+          version,
+          enduragentDesktopRelease: true,
+        },
+        null,
+        2,
+      ),
+    );
+    await fixture.rebuild();
+    await writeFile(
+      join(fixture.resources, "app-update.yml"),
+      [
+        "provider: generic",
+        `url: ${feedUrl}`,
+        "channel: latest",
+        "updaterCacheDirName: '@enduragentdesktop-updater'",
+        "",
+      ].join("\n"),
+    );
+    await expect(
+      verifyPackageLayout(fixture.app, {
+        desktopRoot: fixture.desktop,
+        release: { version, feedUrl },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects every third release manifest, updater, or resource difference", async () => {
+    const version = "2026.7.2";
+    const feedUrl = "https://updates.example.test/stable/";
+    const manifestDrift = await syntheticPackage();
+    await manifestDrift.writeArchive(
+      "package.json",
+      JSON.stringify(
+        {
+          ...sourceManifest,
+          version,
+          enduragentDesktopRelease: true,
+          unexpected: true,
+        },
+        null,
+        2,
+      ),
+    );
+    await manifestDrift.rebuild();
+    await writeFile(
+      join(manifestDrift.resources, "app-update.yml"),
+      [
+        "provider: generic",
+        `url: ${feedUrl}`,
+        "channel: latest",
+        "updaterCacheDirName: '@enduragentdesktop-updater'",
+        "",
+      ].join("\n"),
+    );
+    await expect(
+      verifyPackageLayout(manifestDrift.app, {
+        desktopRoot: manifestDrift.desktop,
+        release: { version, feedUrl },
+      }),
+    ).rejects.toThrow("release packaged manifest has unexpected drift");
+
+    const updaterDrift = await syntheticPackage();
+    await updaterDrift.writeArchive(
+      "package.json",
+      JSON.stringify(
+        {
+          ...sourceManifest,
+          version,
+          enduragentDesktopRelease: true,
+        },
+        null,
+        2,
+      ),
+    );
+    await updaterDrift.rebuild();
+    await writeFile(
+      join(updaterDrift.resources, "app-update.yml"),
+      [
+        "provider: generic",
+        "url: https://updates.example.test/other/",
+        "channel: latest",
+        "updaterCacheDirName: '@enduragentdesktop-updater'",
+        "unexpected: true",
+        "",
+      ].join("\n"),
+    );
+    await expect(
+      verifyPackageLayout(updaterDrift.app, {
+        desktopRoot: updaterDrift.desktop,
+        release: { version, feedUrl },
+      }),
+    ).rejects.toThrow("invalid release app-update.yml");
+
+    const resourceDrift = await syntheticPackage();
+    await resourceDrift.writeArchive(
+      "package.json",
+      JSON.stringify(
+        {
+          ...sourceManifest,
+          version,
+          enduragentDesktopRelease: true,
+        },
+        null,
+        2,
+      ),
+    );
+    await resourceDrift.rebuild();
+    await Promise.all([
+      writeFile(
+        join(resourceDrift.resources, "app-update.yml"),
+        [
+          "provider: generic",
+          `url: ${feedUrl}`,
+          "channel: latest",
+          "updaterCacheDirName: '@enduragentdesktop-updater'",
+          "",
+        ].join("\n"),
+      ),
+      writeFile(join(resourceDrift.resources, "stale-release.bin"), "stale\n"),
+    ]);
+    await expect(
+      verifyPackageLayout(resourceDrift.app, {
+        desktopRoot: resourceDrift.desktop,
+        release: { version, feedUrl },
+      }),
+    ).rejects.toThrow("undeclared package resource");
   });
 
   it("uses the YAML-declared disjoint staging roots as authority", async () => {
