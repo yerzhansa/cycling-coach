@@ -14,6 +14,14 @@ import {
   reduceChatState,
   type ChatState,
 } from "../turn-state.js";
+import {
+  createTranscriptHydrator,
+  emptyTranscriptHydration,
+  mergeHydratedMessages,
+  type TranscriptHydrationChange,
+  type TranscriptHydrationStatus,
+  type TranscriptPage,
+} from "./hydration.js";
 import { COACH_RESPONSE_CODE_UNIT_LIMIT, COACH_TURN_EVENT_LIMIT } from "./limits.js";
 
 export const CHAT_CONNECTION_INTERRUPTED_COPY =
@@ -39,6 +47,12 @@ export interface ChatViewControls {
   readonly newConversationDisabled: boolean;
   readonly workBlocked: boolean;
   readonly appendDelta?: ChatAppendDelta;
+  readonly hydration?: {
+    readonly status: TranscriptHydrationStatus;
+    readonly hasEarlier: boolean;
+    readonly revision: number;
+    readonly change: TranscriptHydrationChange;
+  };
 }
 
 export interface ChatView {
@@ -49,6 +63,8 @@ export interface ChatController {
   start(): Promise<void>;
   submit(message: string): Promise<void>;
   retryInterrupted(): Promise<void>;
+  loadEarlier(): Promise<void>;
+  retryHydration(): Promise<void>;
   openNewConversation(): boolean;
   cancelNewConversation(): void;
   confirmNewConversation(): Promise<void>;
@@ -66,10 +82,16 @@ export function createChatController(input: {
   readonly view: ChatView;
   readonly refreshTrainingContext: () => Promise<void>;
   readonly refreshSpend: () => Promise<void>;
+  readonly readTranscriptPage?: (request: {
+    readonly cursor: string | null;
+    readonly limit: number;
+  }) => Promise<TranscriptPage>;
 }): ChatController {
   let state = EMPTY_CHAT_STATE;
+  let hydration = emptyTranscriptHydration();
   let sequence = 0;
   let disposed = false;
+  let hydrationRenderSuppressed = false;
   let activeTask: Promise<void> | undefined;
   const outstandingChatTasks = new Set<Promise<void>>();
   let queuedRetry: QueuedRetry | undefined;
@@ -83,7 +105,7 @@ export function createChatController(input: {
     state.session.resetPhase === "confirming" || state.session.resetPhase === "resetting";
   const canOpenNewConversation = (): boolean =>
     !disposed &&
-    hasClearableConversation(state) &&
+    (hasClearableConversation(state) || hydration.turns.length > 0) &&
     state.session.resetPhase === "idle" &&
     state.status !== "streaming" &&
     activeTask === undefined &&
@@ -93,11 +115,22 @@ export function createChatController(input: {
   const render = (appendDelta?: ChatAppendDelta): void => {
     if (disposed) return;
     try {
-      input.view.render(state, {
-        newConversationDisabled: !canOpenNewConversation(),
-        workBlocked: resetBlocksWork(),
-        ...(appendDelta === undefined ? {} : { appendDelta }),
-      });
+      input.view.render(
+        hydration.turns.length === 0
+          ? state
+          : { ...state, messages: mergeHydratedMessages(hydration.turns, state.messages) },
+        {
+          newConversationDisabled: !canOpenNewConversation(),
+          workBlocked: resetBlocksWork(),
+          ...(appendDelta === undefined ? {} : { appendDelta }),
+          hydration: {
+            status: hydration.status,
+            hasEarlier: hydration.nextCursor !== null,
+            revision: hydration.revision,
+            change: hydration.change,
+          },
+        },
+      );
     } catch {}
   };
   const reduce = (
@@ -106,6 +139,33 @@ export function createChatController(input: {
   ): void => {
     state = reduceChatState(state, action);
     render(appendDelta);
+  };
+  const hydrator = createTranscriptHydrator({
+    readPage:
+      input.readTranscriptPage ??
+      (async () => ({
+        schemaVersion: 1,
+        status: "page",
+        turns: [],
+        nextCursor: null,
+      })),
+    onChange(next) {
+      hydration = next;
+      if (!hydrationRenderSuppressed) render();
+    },
+  });
+  const updateReset = (
+    hydrate: () => void,
+    action: Parameters<typeof reduceChatState>[1],
+  ): void => {
+    hydrationRenderSuppressed = true;
+    try {
+      hydrate();
+      state = reduceChatState(state, action);
+    } finally {
+      hydrationRenderSuppressed = false;
+    }
+    render();
   };
 
   const run = (userMessage: string, includeUser: boolean, reconnect: boolean): Promise<void> => {
@@ -302,6 +362,7 @@ export function createChatController(input: {
   render();
   return {
     start() {
+      void hydrator.start();
       if (probeTask !== undefined) return probeTask;
       const probeEpoch = epoch;
       const task = (async () => {
@@ -356,10 +417,20 @@ export function createChatController(input: {
       reduce({ type: "retry-pending", requestKey });
       return pending;
     },
+    loadEarlier() {
+      return hydrator.loadEarlier();
+    },
+    retryHydration() {
+      return hydrator.retry();
+    },
     openNewConversation() {
       if (!canOpenNewConversation()) return false;
       epoch += 1;
-      reduce({ type: "open-new-conversation" });
+      state = reduceChatState(state, {
+        type: "open-new-conversation",
+        hasHydratedHistory: hydration.turns.length > 0,
+      });
+      render();
       return true;
     },
     cancelNewConversation() {
@@ -369,7 +440,7 @@ export function createChatController(input: {
     confirmNewConversation() {
       if (resetTask !== undefined) return resetTask;
       if (disposed || state.session.resetPhase !== "confirming") return Promise.resolve();
-      reduce({ type: "begin-reset" });
+      updateReset(() => hydrator.beginReset(), { type: "begin-reset" });
       const resetEpoch = ++epoch;
       const task = (async () => {
         try {
@@ -379,7 +450,7 @@ export function createChatController(input: {
           sequence += 1;
           retryClient = undefined;
           queuedRetry = undefined;
-          reduce({
+          updateReset(() => hydrator.resetSucceeded(), {
             type: "reset-succeeded",
             announcement: result.memoryFlushed
               ? NEW_CONVERSATION_SUCCESS_COPY
@@ -387,7 +458,10 @@ export function createChatController(input: {
           });
         } catch {
           if (disposed || epoch !== resetEpoch) return;
-          reduce({ type: "reset-failed", announcement: NEW_CONVERSATION_UNCERTAIN_COPY });
+          updateReset(() => hydrator.resetFailed(), {
+            type: "reset-failed",
+            announcement: NEW_CONVERSATION_UNCERTAIN_COPY,
+          });
         } finally {
           if (!disposed && epoch === resetEpoch) {
             try {
@@ -407,6 +481,7 @@ export function createChatController(input: {
     },
     dispose() {
       disposed = true;
+      hydrator.dispose();
       epoch += 1;
       sequence += 1;
     },

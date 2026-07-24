@@ -23,6 +23,7 @@ export interface ActiveTurn {
   readonly requestKey: number;
   readonly turnId: string | null;
   readonly userMessage: string;
+  readonly userMessageId: string | null;
   readonly assistantMessageId: string;
   readonly draft: string;
   readonly finalText: string | null;
@@ -31,9 +32,11 @@ export interface ActiveTurn {
 
 export interface ChatTranscriptMessage {
   readonly id: string;
+  readonly turnId?: string;
   readonly role: "athlete" | "coach";
   readonly text: string;
   readonly delivery: "complete" | "streaming" | "interrupted";
+  readonly historical?: boolean;
 }
 
 export interface ChatState {
@@ -73,7 +76,7 @@ export type ChatAction =
   | { readonly type: "retry-pending"; readonly requestKey: number }
   | { readonly type: "fail"; readonly requestKey: number; readonly copy: string }
   | { readonly type: "session-probe"; readonly hasSession: boolean }
-  | { readonly type: "open-new-conversation" }
+  | { readonly type: "open-new-conversation"; readonly hasHydratedHistory?: boolean }
   | { readonly type: "cancel-new-conversation" }
   | { readonly type: "begin-reset" }
   | { readonly type: "reset-succeeded"; readonly announcement: string }
@@ -144,6 +147,7 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
           requestKey: action.requestKey,
           turnId: null,
           userMessage: action.userMessage,
+          userMessageId: action.includeUser ? action.userMessageId : null,
           assistantMessageId: action.assistantMessageId,
           draft: "",
           finalText: null,
@@ -155,7 +159,15 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
       const active = current(state, action.requestKey);
       return active === null
         ? state
-        : { ...state, activeTurn: { ...active, turnId: action.turnId } };
+        : {
+            ...state,
+            messages: state.messages.map((message) =>
+              message.id === active.userMessageId || message.id === active.assistantMessageId
+                ? { ...message, turnId: action.turnId }
+                : message,
+            ),
+            activeTurn: { ...active, turnId: action.turnId },
+          };
     }
     case "event": {
       const active = current(state, action.requestKey);
@@ -263,7 +275,7 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
       };
     }
     case "open-new-conversation":
-      return !hasClearableConversation(state) ||
+      return (!action.hasHydratedHistory && !hasClearableConversation(state)) ||
         state.session.resetPhase !== "idle" ||
         state.status === "streaming"
         ? state

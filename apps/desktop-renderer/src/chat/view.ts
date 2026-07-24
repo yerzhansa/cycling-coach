@@ -1,5 +1,6 @@
 import type { ChatView } from "./controller.js";
 import type { ChatTranscriptMessage } from "../turn-state.js";
+import { TRANSCRIPT_HYDRATION_FAILURE_COPY } from "./hydration.js";
 import { renderCoachMarkdown } from "./markdown.js";
 
 interface RenderedMessage {
@@ -10,6 +11,7 @@ interface RenderedMessage {
   role: ChatTranscriptMessage["role"];
   text: string;
   delivery: ChatTranscriptMessage["delivery"];
+  historical: boolean;
 }
 
 interface PendingShortcutFocus {
@@ -32,6 +34,8 @@ export interface MountedChatView {
   bind(input: {
     readonly onSubmit: (message: string) => void;
     readonly onRetry: () => void;
+    readonly onLoadEarlier?: () => void;
+    readonly onRetryHydration?: () => void;
     readonly onOpenNewConversation: () => void;
     readonly onCancelNewConversation: () => void;
     readonly onConfirmNewConversation: () => void;
@@ -85,6 +89,25 @@ export function mountChatView(input: {
   transcript.setAttribute("aria-label", "Coach conversation");
   const messages = document.createElement("div");
   messages.className = "chat-messages";
+  const historyControls = document.createElement("div");
+  historyControls.className = "chat-history-controls";
+  historyControls.setAttribute("aria-live", "off");
+  historyControls.hidden = true;
+  const loadEarlier = document.createElement("button");
+  loadEarlier.type = "button";
+  loadEarlier.className = "chat-history-load";
+  loadEarlier.textContent = "Load earlier messages";
+  loadEarlier.hidden = true;
+  const historyFailure = document.createElement("p");
+  historyFailure.className = "chat-history-failure";
+  historyFailure.textContent = TRANSCRIPT_HYDRATION_FAILURE_COPY;
+  historyFailure.hidden = true;
+  const retryHydration = document.createElement("button");
+  retryHydration.type = "button";
+  retryHydration.className = "chat-history-retry";
+  retryHydration.textContent = "Retry history";
+  retryHydration.hidden = true;
+  historyControls.append(loadEarlier, historyFailure, retryHydration);
   const notice = document.createElement("p");
   notice.className = "chat-notice";
   notice.hidden = true;
@@ -93,7 +116,7 @@ export function mountChatView(input: {
   retry.className = "chat-retry";
   retry.textContent = "Retry message";
   retry.hidden = true;
-  transcript.append(messages, notice, retry);
+  transcript.append(historyControls, messages, notice, retry);
   input.thread.append(transcript);
 
   input.composerHost.replaceChildren();
@@ -146,6 +169,8 @@ export function mountChatView(input: {
     | {
         readonly onSubmit: (message: string) => void;
         readonly onRetry: () => void;
+        readonly onLoadEarlier?: () => void;
+        readonly onRetryHydration?: () => void;
         readonly onOpenNewConversation: () => void;
         readonly onCancelNewConversation: () => void;
         readonly onConfirmNewConversation: () => void;
@@ -157,6 +182,10 @@ export function mountChatView(input: {
   const renderedMessages = new Map<string, RenderedMessage>();
   let renderedNotice: string | null = null;
   let pendingShortcutFocus: PendingShortcutFocus | undefined;
+  let renderedHydrationRevision = 0;
+  let hydrationStatus: "idle" | "loading" | "ready" | "failed" = "idle";
+  let hydrationHasEarlier = false;
+  let hydrationWorkBlocked = false;
 
   const updateComposerClearance = (): void => {
     if (disposed) return;
@@ -185,6 +214,25 @@ export function mountChatView(input: {
     }
   };
   const onRetry = (): void => handlers?.onRetry();
+  const onLoadEarlier = (): void => {
+    if (loadEarlier.disabled || loadEarlier.hidden) return;
+    handlers?.onLoadEarlier?.();
+  };
+  const onRetryHydration = (): void => {
+    if (retryHydration.disabled || retryHydration.hidden) return;
+    handlers?.onRetryHydration?.();
+  };
+  const onConversationScroll = (): void => {
+    if (
+      input.conversation.scrollTop <= 32 &&
+      hydrationHasEarlier &&
+      hydrationStatus !== "loading" &&
+      hydrationStatus !== "failed" &&
+      !hydrationWorkBlocked
+    ) {
+      handlers?.onLoadEarlier?.();
+    }
+  };
   const onOpenNewConversation = (): void => {
     if (newConversation.disabled || newConversation.getAttribute("aria-disabled") === "true")
       return;
@@ -224,6 +272,9 @@ export function mountChatView(input: {
   form.addEventListener("submit", onSubmit);
   textarea.addEventListener("keydown", onKeydown);
   retry.addEventListener("click", onRetry);
+  loadEarlier.addEventListener("click", onLoadEarlier);
+  retryHydration.addEventListener("click", onRetryHydration);
+  input.conversation.addEventListener("scroll", onConversationScroll);
   newConversation.addEventListener("click", onOpenNewConversation);
   cancelReset.addEventListener("click", onCancelNewConversation);
   confirmReset.addEventListener("click", onConfirmNewConversation);
@@ -261,6 +312,17 @@ export function mountChatView(input: {
         cancelReset.disabled = resetPending;
         confirmReset.disabled = resetPending;
         retry.disabled = workBlocked;
+        const hydrationControls = controls?.hydration;
+        hydrationStatus = hydrationControls?.status ?? "idle";
+        hydrationHasEarlier = hydrationControls?.hasEarlier ?? false;
+        hydrationWorkBlocked = workBlocked;
+        const hydrationFailed = hydrationStatus === "failed";
+        historyControls.hidden = !hydrationHasEarlier && !hydrationFailed;
+        loadEarlier.hidden = !hydrationHasEarlier || hydrationFailed;
+        loadEarlier.disabled = hydrationStatus === "loading" || workBlocked;
+        historyFailure.hidden = !hydrationFailed;
+        retryHydration.hidden = !hydrationFailed;
+        retryHydration.disabled = workBlocked;
         const composerDisabled = state.status === "streaming" || workBlocked;
         for (const { button } of shortcutControls) button.disabled = composerDisabled;
         submit.disabled = composerDisabled;
@@ -312,6 +374,11 @@ export function mountChatView(input: {
             input.conversation.scrollTop -
             input.conversation.clientHeight <=
           80;
+        const previousScrollHeight = input.conversation.scrollHeight;
+        const previousScrollTop = input.conversation.scrollTop;
+        const hydrationChanged =
+          hydrationControls !== undefined &&
+          hydrationControls.revision !== renderedHydrationRevision;
         if (nextMessages.length === 0 && renderedMessages.size > 0) {
           messages.textContent = "";
           renderedMessages.clear();
@@ -340,12 +407,15 @@ export function mountChatView(input: {
                 role: message.role,
                 text: message.text,
                 delivery: message.delivery,
+                historical: message.historical === true,
               };
               renderedMessages.set(message.id, rendered);
               article.className = `chat-message chat-message--${message.role}`;
               article.dataset.delivery = message.delivery;
               roleNode.textContent = message.role === "athlete" ? "You" : "Coach";
-              if (message.role === "athlete") article.setAttribute("aria-live", "off");
+              if (message.historical === true || message.role === "athlete") {
+                article.setAttribute("aria-live", "off");
+              }
               article.setAttribute("aria-atomic", message.role === "coach" ? "true" : "false");
               if (message.role === "coach" && message.delivery === "streaming") {
                 article.setAttribute("aria-busy", "true");
@@ -360,14 +430,16 @@ export function mountChatView(input: {
               }
             } else {
               const roleChanged = message.role !== rendered.role;
+              const historyChanged = (message.historical === true) !== rendered.historical;
               const wasBusy = rendered.role === "coach" && rendered.delivery === "streaming";
               const isBusy = message.role === "coach" && message.delivery === "streaming";
               if (!wasBusy && isBusy) rendered.article.setAttribute("aria-busy", "true");
-              if (roleChanged) {
+              if (roleChanged || historyChanged) {
                 rendered.article.className = `chat-message chat-message--${message.role}`;
                 rendered.roleNode.textContent = message.role === "athlete" ? "You" : "Coach";
-                if (message.role === "athlete") rendered.article.setAttribute("aria-live", "off");
-                else rendered.article.removeAttribute("aria-live");
+                if (message.historical === true || message.role === "athlete") {
+                  rendered.article.setAttribute("aria-live", "off");
+                } else rendered.article.removeAttribute("aria-live");
                 rendered.article.setAttribute(
                   "aria-atomic",
                   message.role === "coach" ? "true" : "false",
@@ -405,6 +477,7 @@ export function mountChatView(input: {
               rendered.role = message.role;
               rendered.text = message.text;
               rendered.delivery = message.delivery;
+              rendered.historical = message.historical === true;
             }
             const currentAtIndex = messages.children.item(index);
             if (currentAtIndex !== rendered.article) {
@@ -412,7 +485,17 @@ export function mountChatView(input: {
             }
           });
         }
-        if (followsLatest) input.conversation.scrollTop = input.conversation.scrollHeight;
+        if (hydrationChanged && hydrationControls.change === "initial") {
+          input.conversation.scrollTop = input.conversation.scrollHeight;
+        } else if (hydrationChanged && hydrationControls.change === "prepend") {
+          input.conversation.scrollTop =
+            previousScrollTop + Math.max(0, input.conversation.scrollHeight - previousScrollHeight);
+        } else if (followsLatest) {
+          input.conversation.scrollTop = input.conversation.scrollHeight;
+        }
+        if (hydrationControls !== undefined) {
+          renderedHydrationRevision = hydrationControls.revision;
+        }
         const contractCopy = state.activeTurn?.error?.athleteMessage ?? null;
         const visibleNotice = contractCopy ?? state.progress;
         notice.hidden = visibleNotice === null;
@@ -437,6 +520,9 @@ export function mountChatView(input: {
       form.removeEventListener("submit", onSubmit);
       textarea.removeEventListener("keydown", onKeydown);
       retry.removeEventListener("click", onRetry);
+      loadEarlier.removeEventListener("click", onLoadEarlier);
+      retryHydration.removeEventListener("click", onRetryHydration);
+      input.conversation.removeEventListener("scroll", onConversationScroll);
       newConversation.removeEventListener("click", onOpenNewConversation);
       cancelReset.removeEventListener("click", onCancelNewConversation);
       confirmReset.removeEventListener("click", onConfirmNewConversation);

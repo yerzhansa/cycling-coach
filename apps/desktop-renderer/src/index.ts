@@ -133,10 +133,13 @@ const chatController = createChatController({
   view: mountedChat.view,
   refreshTrainingContext: () => trainingContextController.refresh(),
   refreshSpend: () => spendController.refresh(),
+  readTranscriptPage: (request) => window.enduragentAuth.getTranscriptPage(request),
 });
 mountedChat.bind({
   onSubmit: (message) => void chatController.submit(message),
   onRetry: () => void chatController.retryInterrupted(),
+  onLoadEarlier: () => void chatController.loadEarlier(),
+  onRetryHydration: () => void chatController.retryHydration(),
   onOpenNewConversation: () => void chatController.openNewConversation(),
   onCancelNewConversation: () => chatController.cancelNewConversation(),
   onConfirmNewConversation: () => void chatController.confirmNewConversation(),

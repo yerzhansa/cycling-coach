@@ -9,6 +9,7 @@ import {
   CHAT_EMPTY_RESPONSE_COPY,
   createChatController,
 } from "../src/chat/controller.js";
+import { TRANSCRIPT_HYDRATION_FAILURE_COPY } from "../src/chat/hydration.js";
 import { mountChatView } from "../src/chat/view.js";
 import {
   CHAT_WORKING_COPY,
@@ -62,7 +63,8 @@ class FakeElement {
   htmlFor = "";
   removed = false;
   open = false;
-  scrollHeight = 0;
+  private currentScrollHeight = 0;
+  readonly scrollHeightSequence: number[] = [];
   scrollTop = 0;
   clientHeight = 0;
   textContentMutationCount = 0;
@@ -76,6 +78,14 @@ class FakeElement {
   private ownText = "";
 
   constructor(readonly tagName: string) {}
+
+  get scrollHeight(): number {
+    return this.scrollHeightSequence.shift() ?? this.currentScrollHeight;
+  }
+
+  set scrollHeight(value: number) {
+    this.currentScrollHeight = value;
+  }
 
   get firstChild(): FakeElement | null {
     return this.children[0] ?? null;
@@ -2149,6 +2159,243 @@ describe("chat view", () => {
     expect(status.textContent).toBe(
       "We couldn’t confirm whether the new conversation started. Your visible conversation is preserved.",
     );
+  });
+
+  it("offers accessible one-page history loading by button or upward scroll", () => {
+    const conversation = new FakeElement("main");
+    const thread = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: conversation as never,
+      thread: thread as never,
+      composerHost: new FakeElement("div") as never,
+    });
+    const onLoadEarlier = vi.fn();
+    mounted.bind({
+      onSubmit: vi.fn(),
+      onRetry: vi.fn(),
+      onLoadEarlier,
+      onRetryHydration: vi.fn(),
+      onOpenNewConversation: vi.fn(),
+      onCancelNewConversation: vi.fn(),
+      onConfirmNewConversation: vi.fn(),
+    });
+    mounted.view.render(emptyState, {
+      newConversationDisabled: false,
+      workBlocked: false,
+      hydration: {
+        status: "ready",
+        hasEarlier: true,
+        revision: 1,
+        change: "initial",
+      },
+    });
+
+    const controls = find(thread, (node) => node.className === "chat-history-controls");
+    const load = find(controls, (node) => node.className === "chat-history-load");
+    expect(controls.attributes.get("aria-live")).toBe("off");
+    expect(load.textContent).toBe("Load earlier messages");
+    expect(load.hidden).toBe(false);
+
+    load.dispatch("click");
+    conversation.scrollTop = 20;
+    conversation.dispatch("scroll");
+
+    expect(onLoadEarlier).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows fixed quiet hydration failure copy with a retry that never disables chat", () => {
+    const thread = new FakeElement("div");
+    const composerHost = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: thread as never,
+      composerHost: composerHost as never,
+    });
+    const onRetryHydration = vi.fn();
+    mounted.bind({
+      onSubmit: vi.fn(),
+      onRetry: vi.fn(),
+      onLoadEarlier: vi.fn(),
+      onRetryHydration,
+      onOpenNewConversation: vi.fn(),
+      onCancelNewConversation: vi.fn(),
+      onConfirmNewConversation: vi.fn(),
+    });
+    mounted.view.render(emptyState, {
+      newConversationDisabled: true,
+      workBlocked: false,
+      hydration: {
+        status: "failed",
+        hasEarlier: false,
+        revision: 0,
+        change: "none",
+      },
+    });
+
+    const failure = find(thread, (node) => node.className === "chat-history-failure");
+    const retryHistory = find(thread, (node) => node.className === "chat-history-retry");
+    const textarea = find(composerHost, (node) => node.tagName === "textarea");
+    const submit = find(
+      composerHost,
+      (node) => node.attributes.get("aria-label") === "Send message",
+    );
+    expect(failure.textContent).toBe(TRANSCRIPT_HYDRATION_FAILURE_COPY);
+    expect(failure.attributes.has("aria-live")).toBe(false);
+    expect(retryHistory.hidden).toBe(false);
+    expect(textarea.disabled).toBe(false);
+    expect(submit.disabled).toBe(false);
+
+    retryHistory.dispatch("click");
+    expect(onRetryHydration).toHaveBeenCalledOnce();
+  });
+
+  it("renders hydrated history silently with literal athlete text and bounded coach Markdown", () => {
+    const thread = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: new FakeElement("main") as never,
+      thread: thread as never,
+      composerHost: new FakeElement("div") as never,
+    });
+    mounted.view.render({
+      ...emptyState,
+      messages: [
+        {
+          id: "history:athlete:turn-1",
+          turnId: "turn-1",
+          role: "athlete",
+          text: "**literal athlete**",
+          delivery: "complete",
+          historical: true,
+        },
+        {
+          id: "history:coach:turn-1",
+          turnId: "turn-1",
+          role: "coach",
+          text: "**formatted coach**",
+          delivery: "complete",
+          historical: true,
+        },
+        {
+          id: "message-live",
+          role: "coach",
+          text: "New coach activity",
+          delivery: "complete",
+        },
+      ],
+    });
+
+    const historyRows = findAll(
+      thread,
+      (node) =>
+        node.className.startsWith("chat-message ") && node.attributes.get("aria-live") === "off",
+    );
+    const athlete = historyRows.find((node) => node.className.includes("--athlete"))!;
+    const coach = historyRows.find((node) => node.className.includes("--coach"))!;
+    const live = find(thread, (node) => node.dataset.messageId === "message-live");
+    expect(historyRows).toHaveLength(2);
+    expect(findAll(athlete, (node) => node.tagName === "strong")).toHaveLength(0);
+    expect(athlete.textContent).toContain("**literal athlete**");
+    expect(findAll(coach, (node) => node.tagName === "strong")[0]?.textContent).toBe(
+      "formatted coach",
+    );
+    expect(live.attributes.has("aria-live")).toBe(false);
+  });
+
+  it("keeps focus and newer row nodes stable while preserving scroll across a prepend", () => {
+    const conversation = new FakeElement("main");
+    conversation.clientHeight = 100;
+    const thread = new FakeElement("div");
+    const composerHost = new FakeElement("div");
+    const mounted = mountChatView({
+      conversation: conversation as never,
+      thread: thread as never,
+      composerHost: composerHost as never,
+    });
+    const textarea = find(composerHost, (node) => node.tagName === "textarea");
+    textarea.focus();
+    const newerMessages = [
+      {
+        id: "history:athlete:turn-2",
+        turnId: "turn-2",
+        role: "athlete" as const,
+        text: "Newer athlete",
+        delivery: "complete" as const,
+        historical: true,
+      },
+      {
+        id: "history:coach:turn-2",
+        turnId: "turn-2",
+        role: "coach" as const,
+        text: "Newer coach",
+        delivery: "complete" as const,
+        historical: true,
+      },
+    ];
+    conversation.scrollHeightSequence.push(300, 300, 300);
+    mounted.view.render(
+      { ...emptyState, messages: newerMessages },
+      {
+        newConversationDisabled: false,
+        workBlocked: false,
+        hydration: {
+          status: "ready",
+          hasEarlier: true,
+          revision: 1,
+          change: "initial",
+        },
+      },
+    );
+    const messages = find(thread, (node) => node.className === "chat-messages");
+    const newerAthlete = messages.children[0]!;
+    const newerCoach = messages.children[1]!;
+    const insertions = messages.insertBeforeMutationCount;
+    expect(conversation.scrollTop).toBe(300);
+    expect((globalThis.document as unknown as FakeDocument).activeElement).toBe(textarea);
+
+    conversation.scrollTop = 40;
+    conversation.scrollHeightSequence.push(300, 300, 460);
+    mounted.view.render(
+      {
+        ...emptyState,
+        messages: [
+          {
+            id: "history:athlete:turn-1",
+            turnId: "turn-1",
+            role: "athlete",
+            text: "Earlier athlete",
+            delivery: "complete",
+            historical: true,
+          },
+          {
+            id: "history:coach:turn-1",
+            turnId: "turn-1",
+            role: "coach",
+            text: "Earlier coach",
+            delivery: "complete",
+            historical: true,
+          },
+          ...newerMessages,
+        ],
+      },
+      {
+        newConversationDisabled: false,
+        workBlocked: false,
+        hydration: {
+          status: "ready",
+          hasEarlier: false,
+          revision: 2,
+          change: "prepend",
+        },
+      },
+    );
+
+    expect(messages.children[2]).toBe(newerAthlete);
+    expect(messages.children[3]).toBe(newerCoach);
+    expect(messages.insertBeforeMutationCount).toBe(insertions + 2);
+    expect(newerAthlete.removeMutationCount).toBe(0);
+    expect(newerCoach.removeMutationCount).toBe(0);
+    expect(conversation.scrollTop).toBe(200);
+    expect((globalThis.document as unknown as FakeDocument).activeElement).toBe(textarea);
   });
 
   it("removes shortcut listeners and detached controls stay inert after dispose", () => {

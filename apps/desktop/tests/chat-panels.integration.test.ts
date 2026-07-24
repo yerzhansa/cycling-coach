@@ -18,6 +18,9 @@ const hasLoopback = await new Promise<boolean>((resolveAvailability) => {
 });
 
 const token = "t".repeat(43);
+const transcriptCursorBytes = Buffer.alloc(114);
+transcriptCursorBytes[0] = 1;
+const transcriptCursor = transcriptCursorBytes.toString("base64url");
 const fixtures: RunningDesktopFixture[] = [];
 const scratchPaths: string[] = [];
 
@@ -106,7 +109,11 @@ function response(value: unknown): readonly string[] {
 
 type SyncOutcome = "no-change" | "partial";
 
-function makeScript(calls: ScriptRequest[], syncOutcome: SyncOutcome): DesktopFixtureScript {
+function makeScript(
+  calls: ScriptRequest[],
+  syncOutcome: SyncOutcome,
+  transcriptHistory: boolean,
+): DesktopFixtureScript {
   let units: "metric" | "imperial" = "metric";
   let hasSession = false;
   let lastSynced: string = athleteState.lastSynced;
@@ -156,6 +163,52 @@ ${"nonwrapping".repeat(36)}
         ];
       }
       if (request.method === "hasSession") return response({ hasSession });
+      if (request.method === "getTranscriptPage") {
+        if (!transcriptHistory) {
+          return response({
+            schemaVersion: 1,
+            status: "page",
+            turns: [],
+            nextCursor: null,
+          });
+        }
+        const cursor = (request.params as { readonly cursor: string | null }).cursor;
+        return response({
+          schemaVersion: 1,
+          status: "page",
+          turns:
+            cursor === null
+              ? [
+                  {
+                    turnId: "persisted-turn-3",
+                    completedAt: "2001-01-03T00:00:00.000Z",
+                    athleteText: "Persisted athlete 3",
+                    coachText: "**Persisted coach 3**",
+                  },
+                  {
+                    turnId: "persisted-turn-4",
+                    completedAt: "2001-01-04T00:00:00.000Z",
+                    athleteText: "Persisted athlete 4",
+                    coachText: "Persisted coach 4",
+                  },
+                ]
+              : [
+                  {
+                    turnId: "persisted-turn-1",
+                    completedAt: "2001-01-01T00:00:00.000Z",
+                    athleteText: "Persisted athlete 1",
+                    coachText: "Persisted coach 1",
+                  },
+                  {
+                    turnId: "persisted-turn-2",
+                    completedAt: "2001-01-02T00:00:00.000Z",
+                    athleteText: "Persisted athlete 2",
+                    coachText: "Persisted coach 2",
+                  },
+                ],
+          nextCursor: cursor === null ? transcriptCursor : null,
+        });
+      }
       if (request.method === "resetSession") {
         hasSession = false;
         return response({ memoryFlushed: true });
@@ -240,10 +293,11 @@ async function launch(input: {
   readonly height: number;
   readonly reducedMotion: boolean;
   readonly syncOutcome?: SyncOutcome;
+  readonly transcriptHistory?: boolean;
 }): Promise<{ readonly fixture: RunningDesktopFixture; readonly calls: ScriptRequest[] }> {
   const calls: ScriptRequest[] = [];
   const fixture = await launchDesktopFixture({
-    script: makeScript(calls, input.syncOutcome ?? "no-change"),
+    script: makeScript(calls, input.syncOutcome ?? "no-change", input.transcriptHistory ?? false),
     token,
     width: input.width,
     height: input.height,
@@ -269,6 +323,96 @@ afterEach(async () => {
 });
 
 describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat panels", () => {
+  it("hydrates persisted conversation pages without replay, focus loss, or row churn", async () => {
+    const { fixture, calls } = await launch({
+      width: 1440,
+      height: 900,
+      reducedMotion: false,
+      transcriptHistory: true,
+    });
+    const hydrated = await fixture.evaluate<{
+      readonly initialRows: number;
+      readonly allRows: number;
+      readonly initialAtNewest: boolean;
+      readonly newerRowsStable: boolean;
+      readonly anchorPreserved: boolean;
+      readonly focusPreserved: boolean;
+      readonly historySilent: boolean;
+      readonly athleteLiteral: boolean;
+      readonly coachMarkdown: boolean;
+      readonly loadEarlierHidden: boolean;
+    }>(`
+      const conversation = document.querySelector(".conversation");
+      const textarea = document.querySelector("#message");
+      const loadEarlier = document.querySelector(".chat-history-load");
+      const deadline = Date.now() + 5000;
+      while (
+        (document.querySelectorAll(".chat-message").length !== 4 || loadEarlier.hidden) &&
+        Date.now() < deadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const initialRows = [...document.querySelectorAll(".chat-message")];
+      const initialAtNewest =
+        conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight <= 1;
+      conversation.scrollTop = Math.max(0, initialRows[0].offsetTop - 40);
+      const anchorTop = initialRows[0].getBoundingClientRect().top;
+      textarea.focus();
+      loadEarlier.click();
+      while (
+        document.querySelectorAll(".chat-message").length !== 8 &&
+        Date.now() < deadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const allRows = [...document.querySelectorAll(".chat-message")];
+      return {
+        initialRows: initialRows.length,
+        allRows: allRows.length,
+        initialAtNewest,
+        newerRowsStable:
+          allRows[4] === initialRows[0] &&
+          allRows[5] === initialRows[1] &&
+          allRows[6] === initialRows[2] &&
+          allRows[7] === initialRows[3],
+        anchorPreserved: Math.abs(initialRows[0].getBoundingClientRect().top - anchorTop) <= 1,
+        focusPreserved: document.activeElement === textarea,
+        historySilent: allRows.every((row) => row.getAttribute("aria-live") === "off"),
+        athleteLiteral:
+          allRows[4].querySelectorAll("strong").length === 0 &&
+          allRows[4].querySelector(".chat-message__text").textContent === "Persisted athlete 3",
+        coachMarkdown:
+          allRows[5].querySelector("strong")?.textContent === "Persisted coach 3",
+        loadEarlierHidden: loadEarlier.hidden,
+      };
+    `);
+
+    expect(hydrated).toEqual({
+      initialRows: 4,
+      allRows: 8,
+      initialAtNewest: true,
+      newerRowsStable: true,
+      anchorPreserved: true,
+      focusPreserved: true,
+      historySilent: true,
+      athleteLiteral: true,
+      coachMarkdown: true,
+      loadEarlierHidden: true,
+    });
+    expect(calls.filter((call) => call.method === "getTranscriptPage")).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: "getTranscriptPage",
+        params: { cursor: null, limit: 25 },
+      },
+      {
+        jsonrpc: "2.0",
+        method: "getTranscriptPage",
+        params: { cursor: transcriptCursor, limit: 25 },
+      },
+    ]);
+  }, 30_000);
+
   it("preserves IME composition until committed Enter", async () => {
     const { fixture, calls } = await launch({ width: 1440, height: 900, reducedMotion: false });
     const composingDraft = "回復走を";
