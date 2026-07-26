@@ -22,7 +22,6 @@ import type {
   VolumeTier,
   DayOfWeek,
   RaceType,
-  IntervalsWorkoutInput,
 } from "./index.js";
 
 const daysEnum = z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
@@ -46,12 +45,27 @@ export const buildPlanSkeletonInputSchema = z.object({
   generalGoalTarget: z.string().optional(),
 });
 
-export const cyclingCreateWorkoutInputSchema = z.object({
-  date: dateKeySchema.describe("Workout date (YYYY-MM-DD)"),
-  workout: intervalsWorkoutInputSchema.describe(
-    "Structured workout: name + ordered steps — simple steps or repeat sets. Use value for a single power target, or low+high for ranges; ramps require low+high. Durations are seconds or minutes only.",
-  ),
-});
+export const cyclingCreateWorkoutInputSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("cycling"),
+    date: dateKeySchema.describe("Workout date (YYYY-MM-DD)"),
+    workout: intervalsWorkoutInputSchema.describe(
+      "Structured workout: name + ordered steps — simple steps or repeat sets. Use value for a single power target, or low+high for ranges; ramps require low+high. Durations are seconds or minutes only.",
+    ),
+  }),
+  z.object({
+    type: z.literal("strength"),
+    date: dateKeySchema.describe("Workout date (YYYY-MM-DD)"),
+    name: z.string().min(1).max(120).describe("Calendar card title, e.g. 'Lower body 45min'"),
+    description: z
+      .string()
+      .min(1)
+      .max(4000)
+      .describe("Free-text session — exercises, sets, reps, weight/RPE."),
+  }),
+]);
+
+export type CyclingCreateWorkoutInput = z.infer<typeof cyclingCreateWorkoutInputSchema>;
 
 /**
  * Pure-Sport cycling tools per ADR-0004 — sport-specific math (FTP zones,
@@ -162,11 +176,23 @@ export function createCyclingTools(
       ? {
           intervals_create_workout: tool({
             description:
-              "Create a structured workout on the intervals.icu calendar (auto-syncs to Garmin/Wahoo). Supply structured steps — they serialize into intervals.icu's native syntax so the power chart renders. Put athlete-facing coaching narrative (feel, notes, hydration) in your chat reply, not in this tool. Past dates are refused — workouts can only be created for today or later.",
+              "Create a workout on intervals.icu (auto-syncs to Garmin/Wahoo). type: \"cycling\" — structured steps render as a power chart; put coaching narrative (feel, notes) in your chat reply. type: \"strength\" — free-text description (exercises, sets, reps, weight/RPE) can itself carry the coaching narrative. Past dates refused.",
             inputSchema: zodSchema(cyclingCreateWorkoutInputSchema),
-            execute: async (input: { date: string; workout: IntervalsWorkoutInput }) => {
+            execute: async (input: CyclingCreateWorkoutInput) => {
               const dateError = validateWorkoutCreationDate(input.date, tz);
               if (dateError) return dateError;
+              if (input.type === "strength") {
+                const result = await intervals.events.create({
+                  start_date_local: `${input.date}T00:00:00`,
+                  category: "WORKOUT",
+                  name: input.name,
+                  type: "WeightTraining",
+                  ...buildCoachEventProvenance(input.date, input.name),
+                  description: input.description,
+                });
+                if (!result.ok) return { error: result.error.kind };
+                return { created: true, event: result.value };
+              }
               let serialized: ReturnType<typeof serializeIntervalsWorkout>;
               try {
                 serialized = serializeIntervalsWorkout(input.workout);

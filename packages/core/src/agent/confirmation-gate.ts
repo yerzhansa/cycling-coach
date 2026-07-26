@@ -115,11 +115,15 @@ export function createProposalSummarizers(opts: {
     intervals_create_workout: async (input) => {
       if (opts.intervals === null) return { block: { error: "intervals_not_configured" } };
       const date = stringField(input, "date");
-      const workout = objectField(input, "workout");
-      const name = stringField(workout, "name");
+      const type = stringField(input, "type");
+      const name =
+        type === "strength"
+          ? stringField(input, "name")
+          : stringField(objectField(input, "workout"), "name");
+      const label = type === "strength" ? "strength workout" : "workout";
       return date !== undefined && name !== undefined
-        ? { summary: `Create workout "${name}" on ${date}` }
-        : { summary: "Create a workout" };
+        ? { summary: `Create ${label} "${name}" on ${date}` }
+        : { summary: `Create a ${label}` };
     },
     intervals_delete_workout: async (input) => {
       if (opts.intervals === null) return { block: { error: "intervals_not_configured" } };

@@ -202,12 +202,26 @@ describe("proposal summarizers and guard reuse", () => {
     const summarizers = createProposalSummarizers({ intervals: client, tz: "UTC" });
     await expect(
       summarizers.intervals_create_workout!({
+        type: "cycling",
         date: "2030-04-05",
         workout: { name: "Tempo build" },
       }),
     ).resolves.toEqual({ summary: 'Create workout "Tempo build" on 2030-04-05' });
     await expect(summarizers.intervals_create_workout!({})).resolves.toEqual({
       summary: "Create a workout",
+    });
+    await expect(
+      summarizers.intervals_create_workout!({
+        type: "strength",
+        date: "2030-04-06",
+        name: "Lower body 45min",
+        description: "Squat, deadlift",
+      }),
+    ).resolves.toEqual({
+      summary: 'Create strength workout "Lower body 45min" on 2030-04-06',
+    });
+    await expect(summarizers.intervals_create_workout!({ type: "strength" })).resolves.toEqual({
+      summary: "Create a strength workout",
     });
     await expect(summarizers.plan_save!({ plan: {} })).resolves.toEqual({
       summary: "Save the training plan — replaces the current saved plan",

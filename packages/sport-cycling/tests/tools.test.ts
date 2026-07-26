@@ -61,7 +61,7 @@ describe("intervals_create_workout provenance", () => {
     const tool = createWorkoutTool(client)!;
     const date = tomorrowISODate();
 
-    const out = await tool.execute({ date, workout: validWorkout }, {});
+    const out = await tool.execute({ type: "cycling", date, workout: validWorkout }, {});
 
     expect(out).toEqual({ created: true, event: { id: 42 } });
     expect(calls).toHaveLength(1);
@@ -74,7 +74,7 @@ describe("intervals_create_workout provenance", () => {
     const { client, calls } = fakeIntervals({ ok: true, value: { id: 1 } });
     const tool = createWorkoutTool(client)!;
 
-    await tool.execute({ date: tomorrowISODate(), workout: validWorkout }, {});
+    await tool.execute({ type: "cycling", date: tomorrowISODate(), workout: validWorkout }, {});
 
     const payload = calls[0];
     expect(payload.type).toBe("Ride");
@@ -94,7 +94,7 @@ describe("intervals_create_workout payload (calendar-payload group)", () => {
     const { client, calls } = fakeIntervals({ ok: true, value: { id: 42 } });
     const tool = createWorkoutTool(client)!;
 
-    await tool.execute({ date: tomorrowISODate(), workout: validWorkout }, {});
+    await tool.execute({ type: "cycling", date: tomorrowISODate(), workout: validWorkout }, {});
 
     const payload = calls[0];
     expect(payload.type).toBe("Ride");
@@ -119,7 +119,7 @@ describe("intervals_create_workout payload (calendar-payload group)", () => {
       ],
     };
 
-    await tool.execute({ date: tomorrowISODate(), workout }, {});
+    await tool.execute({ type: "cycling", date: tomorrowISODate(), workout }, {});
 
     expect(calls[0].description).toContain("ramp 45-65%");
   });
@@ -138,7 +138,7 @@ describe("intervals_create_workout payload (calendar-payload group)", () => {
       ],
     };
 
-    const result = await tool.execute({ date: tomorrowISODate(), workout }, {});
+    const result = await tool.execute({ type: "cycling", date: tomorrowISODate(), workout }, {});
 
     expect(result).toMatchObject({ error: "invalid_workout" });
     expect(calls).toHaveLength(0);
@@ -152,7 +152,7 @@ describe("intervals_create_workout payload (calendar-payload group)", () => {
     const tool = createWorkoutTool(client)!;
 
     const result = await tool.execute(
-      { date: tomorrowISODate(), workout: validWorkout },
+      { type: "cycling", date: tomorrowISODate(), workout: validWorkout },
       {},
     );
 
@@ -228,10 +228,10 @@ describe("intervals_create_workout date guard", () => {
     const { client, calls } = fakeIntervals({ ok: true, value: { id: 42 } });
     const tool = createWorkoutTool(client)!;
     expect(
-      await tool.execute({ date: tomorrowISODate(), workout: validWorkout }, {}),
+      await tool.execute({ type: "cycling", date: tomorrowISODate(), workout: validWorkout }, {}),
     ).toMatchObject({ created: true });
     expect(
-      await tool.execute({ date: todayInTZ("UTC"), workout: validWorkout }, {}),
+      await tool.execute({ type: "cycling", date: todayInTZ("UTC"), workout: validWorkout }, {}),
     ).toMatchObject({ created: true });
     expect(calls).toHaveLength(2);
   });
@@ -239,7 +239,7 @@ describe("intervals_create_workout date guard", () => {
   it("refuses a past date without calling events.create", async () => {
     const { client, calls } = fakeIntervals({ ok: true, value: { id: 42 } });
     const result = await createWorkoutTool(client)!.execute(
-      { date: "2020-01-01", workout: validWorkout },
+      { type: "cycling", date: "2020-01-01", workout: validWorkout },
       {},
     );
     expect(result).toMatchObject({ error: "past_date_refused" });
@@ -251,14 +251,17 @@ describe("intervals_create_workout date guard", () => {
   it("refuses an impossible date and rejects non-YYYY-MM-DD schema input", async () => {
     const { client, calls } = fakeIntervals({ ok: true, value: { id: 42 } });
     const result = await createWorkoutTool(client)!.execute(
-      { date: "2026-02-31", workout: validWorkout },
+      { type: "cycling", date: "2026-02-31", workout: validWorkout },
       {},
     );
     expect(result).toMatchObject({ error: "invalid_date" });
     expect(calls).toHaveLength(0);
     expect(
-      cyclingCreateWorkoutInputSchema.safeParse({ date: "June 15", workout: validWorkout })
-        .success,
+      cyclingCreateWorkoutInputSchema.safeParse({
+        type: "cycling",
+        date: "June 15",
+        workout: validWorkout,
+      }).success,
     ).toBe(false);
   });
 
@@ -269,15 +272,85 @@ describe("intervals_create_workout date guard", () => {
 
     expect(
       await createWorkoutTool(midway.client, "Pacific/Midway")!.execute(
-        { date, workout: validWorkout },
+        { type: "cycling", date, workout: validWorkout },
         {},
       ),
     ).toMatchObject({ created: true });
     expect(
       await createWorkoutTool(kiritimati.client, "Pacific/Kiritimati")!.execute(
-        { date, workout: validWorkout },
+        { type: "cycling", date, workout: validWorkout },
         {},
       ),
     ).toMatchObject({ error: "past_date_refused" });
+  });
+});
+
+describe("intervals_create_workout strength variant", () => {
+  const strengthInput = {
+    type: "strength" as const,
+    name: "Lower body 45min",
+    description: [
+      "Warmup",
+      "- 5m cycling activation",
+      "",
+      "Main",
+      "- Back Squat: 4x6 @ 80kg, rest 2m",
+      "- Romanian Deadlift: 3x8 @ 60kg, rest 90s",
+      "",
+      "Cooldown",
+      "- 5m stretching",
+    ].join("\n"),
+  };
+
+  it("posts type WeightTraining with coach provenance", async () => {
+    const { client, calls } = fakeIntervals({ ok: true, value: { id: 7 } });
+    const tool = createWorkoutTool(client)!;
+    const date = tomorrowISODate();
+
+    const out = await tool.execute({ date, ...strengthInput }, {});
+
+    expect(out).toEqual({ created: true, event: { id: 7 } });
+    expect(calls).toHaveLength(1);
+    const payload = calls[0];
+    expect(payload.type).toBe("WeightTraining");
+    expect(payload.category).toBe("WORKOUT");
+    expect(payload.name).toBe("Lower body 45min");
+    expect(payload.description).toBe(strengthInput.description);
+    expect(payload.external_id).toBe(`cycling-coach:${date}:lower-body-45min`);
+    expect(payload.tags).toEqual(["cycling-coach"]);
+    expect(payload.start_date_local).toBe(`${date}T00:00:00`);
+  });
+
+  it("refuses a past date without calling events.create", async () => {
+    const { client, calls } = fakeIntervals({ ok: true, value: { id: 1 } });
+    const result = await createWorkoutTool(client)!.execute(
+      { date: "2020-01-01", ...strengthInput },
+      {},
+    );
+    expect(result).toMatchObject({ error: "past_date_refused" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses an impossible calendar date", async () => {
+    const { client, calls } = fakeIntervals({ ok: true, value: { id: 1 } });
+    const result = await createWorkoutTool(client)!.execute(
+      { date: "2026-02-31", ...strengthInput },
+      {},
+    );
+    expect(result).toMatchObject({ error: "invalid_date" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("surfaces the API error kind when events.create fails", async () => {
+    const { client, calls } = fakeIntervals({
+      ok: false,
+      error: { kind: "rate_limited" },
+    });
+    const result = await createWorkoutTool(client)!.execute(
+      { date: tomorrowISODate(), ...strengthInput },
+      {},
+    );
+    expect(result).toEqual({ error: "rate_limited" });
+    expect(calls).toHaveLength(1);
   });
 });
