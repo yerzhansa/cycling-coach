@@ -45,25 +45,61 @@ export const buildPlanSkeletonInputSchema = z.object({
   generalGoalTarget: z.string().optional(),
 });
 
-export const cyclingCreateWorkoutInputSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("cycling"),
+// Flat object rather than a discriminated union: OpenAI-compatible providers
+// (DeepSeek, OpenAI, Qwen, Kimi, …) require every tool's parameters to be a
+// top-level `type: "object"` JSON Schema and reject the root-level `anyOf` that
+// a discriminated union serializes to. Per-`type` field requirements are
+// enforced by the superRefine below instead of by the type-level union.
+export const cyclingCreateWorkoutInputSchema = z
+  .object({
+    type: z
+      .enum(["cycling", "strength"])
+      .describe('"cycling" for structured power steps, "strength" for a free-text session'),
     date: dateKeySchema.describe("Workout date (YYYY-MM-DD)"),
-    workout: intervalsWorkoutInputSchema.describe(
-      "Structured workout: name + ordered steps — simple steps or repeat sets. Use value for a single power target, or low+high for ranges; ramps require low+high. Durations are seconds or minutes only.",
-    ),
-  }),
-  z.object({
-    type: z.literal("strength"),
-    date: dateKeySchema.describe("Workout date (YYYY-MM-DD)"),
-    name: z.string().min(1).max(120).describe("Calendar card title, e.g. 'Lower body 45min'"),
+    workout: intervalsWorkoutInputSchema
+      .optional()
+      .describe(
+        'Required when type is "cycling". Structured workout: name + ordered steps — simple steps or repeat sets. Use value for a single power target, or low+high for ranges; ramps require low+high. Durations are seconds or minutes only.',
+      ),
+    name: z
+      .string()
+      .min(1)
+      .max(120)
+      .optional()
+      .describe('Required when type is "strength". Calendar card title, e.g. \'Lower body 45min\''),
     description: z
       .string()
       .min(1)
       .max(4000)
-      .describe("Free-text session — exercises, sets, reps, weight/RPE."),
-  }),
-]);
+      .optional()
+      .describe('Required when type is "strength". Free-text session — exercises, sets, reps, weight/RPE.'),
+  })
+  .superRefine((val, ctx) => {
+    if (val.type === "cycling") {
+      if (val.workout === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message: 'workout is required when type is "cycling"',
+          path: ["workout"],
+        });
+      }
+    } else {
+      if (val.name === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message: 'name is required when type is "strength"',
+          path: ["name"],
+        });
+      }
+      if (val.description === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message: 'description is required when type is "strength"',
+          path: ["description"],
+        });
+      }
+    }
+  });
 
 export type CyclingCreateWorkoutInput = z.infer<typeof cyclingCreateWorkoutInputSchema>;
 
@@ -182,6 +218,12 @@ export function createCyclingTools(
               const dateError = validateWorkoutCreationDate(input.date, tz);
               if (dateError) return dateError;
               if (input.type === "strength") {
+                if (input.name === undefined || input.description === undefined) {
+                  return {
+                    error: "invalid_workout",
+                    details: 'strength workout requires "name" and "description"',
+                  };
+                }
                 const result = await intervals.events.create({
                   start_date_local: `${input.date}T00:00:00`,
                   category: "WORKOUT",
@@ -192,6 +234,12 @@ export function createCyclingTools(
                 });
                 if (!result.ok) return { error: result.error.kind };
                 return { created: true, event: result.value };
+              }
+              if (input.workout === undefined) {
+                return {
+                  error: "invalid_workout",
+                  details: 'cycling workout requires "workout"',
+                };
               }
               let serialized: ReturnType<typeof serializeIntervalsWorkout>;
               try {
