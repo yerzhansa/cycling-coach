@@ -12,10 +12,14 @@ function MessageRow(props: { readonly message: ChatMessageView }): ReactElement 
   const message = props.message;
   const streaming = message.role === "coach" && message.delivery === "streaming";
   const silent = message.historical || message.role === "athlete";
+  const rowClassName =
+    message.role === "coach"
+      ? `chat-message chat-message--coach ${styles.prose}`
+      : "chat-message chat-message--athlete";
 
   return (
     <article
-      className={`chat-message chat-message--${message.role}`}
+      className={rowClassName}
       data-message-id={message.id}
       data-delivery={message.delivery}
       aria-live={silent ? "off" : undefined}

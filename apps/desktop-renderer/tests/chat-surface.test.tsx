@@ -1,13 +1,21 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useRef, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Shell } from "../src/app/Shell.js";
-import { EMPTY_CHAT_SURFACE, type ChatActions, type ChatSurfaceState } from "../src/state/chat-slice.js";
+import {
+  EMPTY_CHAT_SURFACE,
+  type ChatActions,
+  type ChatMessageView,
+  type ChatSurfaceState,
+} from "../src/state/chat-slice.js";
 import { resetChatStream } from "../src/state/chat-stream.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { ChatView } from "../src/ui/chat/ChatView.js";
 import { SLASH_COMMANDS } from "../src/ui/chat/commands.js";
+import transcriptStyles from "../src/ui/chat/Transcript.module.css";
 
 function stubActions(): ChatActions {
   return {
@@ -393,6 +401,59 @@ describe("chat surface", () => {
       });
       expect(screen.queryByRole("button", { name: "Retry sync" })).toBeNull();
       expect(screen.getByText("Quit and reopen Enduragent.")).toBeInTheDocument();
+    });
+  });
+
+  describe("coach prose", () => {
+    function message(patch: Partial<ChatMessageView> & { readonly id: string }): ChatMessageView {
+      return {
+        role: "coach",
+        delivery: "complete",
+        historical: false,
+        text: "Ride steady on Tuesday.",
+        ...patch,
+      };
+    }
+
+    it("sets the prose face on every coach turn and leaves athlete turns on the interface face", () => {
+      render(<Harness />);
+      setChat({
+        messages: [
+          message({ id: "a1", role: "athlete", text: "Plan my week" }),
+          message({ id: "c1", delivery: "streaming", text: "Ride " }),
+          message({ id: "c2" }),
+          message({ id: "c3", historical: true, text: "Nice work last week." }),
+        ],
+      });
+
+      for (const id of ["c1", "c2", "c3"]) {
+        const row = document.querySelector(`[data-message-id="${id}"]`);
+        expect(row?.classList.contains(transcriptStyles.prose)).toBe(true);
+      }
+      const athlete = document.querySelector('[data-message-id="a1"]');
+      expect(athlete?.classList.contains(transcriptStyles.prose)).toBe(false);
+      expect(athlete?.classList.contains("chat-message--athlete")).toBe(true);
+    });
+
+    it("keeps the prose face on the row so streaming text never reflows when the turn settles", () => {
+      render(<Harness />);
+      setChat({ messages: [message({ id: "c1", delivery: "streaming", text: "Ride " })] });
+      const row = document.querySelector('[data-message-id="c1"]');
+      const streamingClassName = row?.className;
+
+      setChat({ messages: [message({ id: "c1" })] });
+      expect(document.querySelector('[data-message-id="c1"]')).toBe(row);
+      expect(row?.className).toBe(streamingClassName);
+    });
+
+    it("declares the bundled prose face for the transcript row", async () => {
+      const sourceRoot = resolve(import.meta.dirname, "..", "src");
+      const [stylesheet, tokens] = await Promise.all([
+        readFile(resolve(sourceRoot, "ui/chat/Transcript.module.css"), "utf8"),
+        readFile(resolve(sourceRoot, "theme/tokens.css"), "utf8"),
+      ]);
+      expect(stylesheet).toMatch(/\.prose\s*\{[^}]*font:\s*16px\/1\.6\s+var\(--f-prose\);/u);
+      expect(tokens).toMatch(/--f-prose:\s*"Source Serif 4 Variable"/u);
     });
   });
 });
