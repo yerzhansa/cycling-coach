@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
@@ -113,6 +116,38 @@ describe("desktop security boundary", () => {
     expect(rendererSource).not.toHaveProperty("developmentUrl");
     expect(net.fetch).not.toHaveBeenCalled();
     expect(response.status).toBe(404);
+  });
+
+  it("maps bundled renderer asset extensions onto their content types", async () => {
+    const rendererRoot = await mkdtemp(join(tmpdir(), "enduragent-renderer-"));
+    await mkdir(join(rendererRoot, "assets"), { recursive: true });
+    await writeFile(join(rendererRoot, "index.html"), "<!doctype html>");
+    await writeFile(join(rendererRoot, "assets", "renderer.js"), "export {};");
+    await writeFile(join(rendererRoot, "assets", "renderer.css"), ":root{}");
+    await writeFile(join(rendererRoot, "assets", "coach-prose.woff2"), "synthetic-font");
+    await writeFile(join(rendererRoot, "assets", "trayTemplate.png"), "synthetic-image");
+    let handler: ((request: Request) => Promise<Response>) | undefined;
+    const protocol = {
+      handle: vi.fn(async (_scheme: string, installed: (request: Request) => Promise<Response>) => {
+        handler = installed;
+      }),
+    };
+    await installDesktopProtocol({
+      session: { protocol } as never,
+      currentDaemonPort: () => 45_001,
+      rendererRoot,
+      rendererSource: resolveDesktopRendererSource(true, undefined),
+    });
+
+    const contentType = async (pathname: string) =>
+      (await handler!(new Request(`enduragent://app${pathname}`))).headers.get("Content-Type");
+
+    expect(await contentType("/index.html")).toBe("text/html; charset=utf-8");
+    expect(await contentType("/assets/renderer.js")).toBe("text/javascript; charset=utf-8");
+    expect(await contentType("/assets/renderer.css")).toBe("text/css; charset=utf-8");
+    expect(await contentType("/assets/coach-prose.woff2")).toBe("font/woff2");
+    expect(await contentType("/assets/trayTemplate.png")).toBeNull();
+    await rm(rendererRoot, { recursive: true, force: true });
   });
 
   it("pins the scheme, IPC, window, and assigned-port-only CSP constants", () => {

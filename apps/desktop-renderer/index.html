@@ -4,23 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Enduragent</title>
-    <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
-    <div class="app-shell">
-      <header class="topbar">
-        <div class="brand">enduragent</div>
-        <div class="spend-meter" aria-label="Today’s spend is not available yet">
-          Today’s spend <strong>—</strong>
-        </div>
-      </header>
-      <main class="conversation" aria-label="Coaching conversation">
-        <div class="thread"></div>
-      </main>
-      <div class="composer-wrap"></div>
-      <aside class="data-spine" aria-label="Training data drawer"></aside>
-    </div>
-    <dialog id="training-context-drawer" class="drawer" aria-label="Training data"></dialog>
-    <script type="module" src="/src/index.ts"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -1,0 +1,72 @@
+.win {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.5 var(--f-ui);
+}
+
+.main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.main > .strip {
+  grid-column: 1;
+  grid-row: 1;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.main > .views {
+  display: flex;
+  flex-direction: column;
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
+  min-height: 0;
+}
+
+.main > .spineHost {
+  display: flex;
+  grid-column: 2;
+  grid-row: 1 / -1;
+  min-height: 0;
+}
+
+.spineHost > :global(.data-spine) {
+  flex: 1;
+}
+
+.chatRegion {
+  display: grid;
+  flex: 1;
+  grid-template-rows: 0 minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.chatRegion > :global(.conversation) {
+  grid-row: 2;
+}
+
+.away {
+  display: none;
+}
+
+.pending {
+  padding: 28px 32px;
+  color: var(--ink-3);
+}
+
+@media (max-width: 1100px) {
+  .win {
+    grid-template-columns: 208px minmax(0, 1fr);
+  }
+}

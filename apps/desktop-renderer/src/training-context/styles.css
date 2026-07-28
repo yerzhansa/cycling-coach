@@ -340,9 +340,13 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  .drawer {
+  :root:not([data-theme="light"]) .drawer {
     --sync-status-caution: #e4b66f;
   }
+}
+
+:root[data-theme="dark"] .drawer {
+  --sync-status-caution: #e4b66f;
 }
 
 @media (prefers-reduced-motion: reduce) {

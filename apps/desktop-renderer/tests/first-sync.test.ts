@@ -466,7 +466,7 @@ describe("first sync controller", () => {
 
   it("keeps first sync free of a second wire tracker and ships the existing status surface", async () => {
     const [host, controller, styles] = await Promise.all([
-      readFile(new URL("../src/index.ts", import.meta.url), "utf8"),
+      readFile(new URL("../src/legacy-boot.ts", import.meta.url), "utf8"),
       readFile(new URL("../src/first-sync.ts", import.meta.url), "utf8"),
       readFile(new URL("../src/styles.css", import.meta.url), "utf8"),
     ]);
@@ -483,10 +483,10 @@ describe("first sync controller", () => {
       expect(host).toContain(copy);
     }
     expect(host).toContain(`if (state.status === "idle" || state.status === "ready") {
-    firstSyncElement?.remove();
-    firstSyncElement = undefined;
-    return;
-  }`);
+      firstSyncElement?.remove();
+      firstSyncElement = undefined;
+      return;
+    }`);
     expect(host).not.toContain("Training history is ready");
     expect(host).not.toContain("Your coach is ready when you are.");
     expect(host).toContain('section.setAttribute("aria-labelledby", "first-sync-title")');

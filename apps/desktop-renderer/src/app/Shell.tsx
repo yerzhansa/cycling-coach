@@ -1,0 +1,70 @@
+import { Suspense, useEffect, useRef, type ReactElement } from "react";
+import type { LegacyHosts } from "../legacy-boot.js";
+import { useEnduragentStore } from "../state/store.js";
+import { Sidebar } from "../ui/sidebar/Sidebar.js";
+import styles from "./Shell.module.css";
+import { LEGACY_CHAT_REGION, VIEWS } from "./views.js";
+
+export function Shell(props: {
+  readonly onHostsReady: (hosts: LegacyHosts) => void;
+}): ReactElement {
+  const activeView = useEnduragentStore((state) => state.activeView);
+  const conversation = useRef<HTMLElement>(null);
+  const thread = useRef<HTMLDivElement>(null);
+  const composerHost = useRef<HTMLDivElement>(null);
+  const topbar = useRef<HTMLElement>(null);
+  const spendRoot = useRef<HTMLDivElement>(null);
+  const spine = useRef<HTMLElement>(null);
+  const drawer = useRef<HTMLDialogElement>(null);
+  const onHostsReady = props.onHostsReady;
+
+  useEffect(() => {
+    const hosts = {
+      conversation: conversation.current,
+      thread: thread.current,
+      composerHost: composerHost.current,
+      topbar: topbar.current,
+      spendRoot: spendRoot.current,
+      spine: spine.current,
+      drawer: drawer.current,
+    };
+    if (Object.values(hosts).some((host) => host === null)) return;
+    onHostsReady(hosts as LegacyHosts);
+  }, [onHostsReady]);
+
+  return (
+    <div className={styles.win}>
+      <Sidebar />
+      <div className={styles.main}>
+        <header className={`topbar ${styles.strip}`} ref={topbar}>
+          <div className="spend-meter" ref={spendRoot} />
+        </header>
+        <div className={styles.views}>
+          <div className={activeView === "chat" ? styles.chatRegion : styles.away}>
+            <main className="conversation" aria-label="Coaching conversation" ref={conversation}>
+              <div className="thread" ref={thread} />
+            </main>
+            <div className="composer-wrap" ref={composerHost} />
+          </div>
+          {VIEWS.filter((view) => view.id === activeView && view.page !== LEGACY_CHAT_REGION).map(
+            (view) => {
+              const Page = view.page as Exclude<typeof view.page, typeof LEGACY_CHAT_REGION>;
+              return (
+                <Suspense
+                  key={view.id}
+                  fallback={<p className={styles.pending}>Loading {view.label.toLowerCase()}…</p>}
+                >
+                  <Page />
+                </Suspense>
+              );
+            },
+          )}
+        </div>
+        <div className={styles.spineHost}>
+          <aside className="data-spine" aria-label="Training data drawer" ref={spine} />
+          <dialog className="drawer" aria-label="Training data" ref={drawer} />
+        </div>
+      </div>
+    </div>
+  );
+}
