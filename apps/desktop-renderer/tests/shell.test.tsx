@@ -56,9 +56,7 @@ describe("shell", () => {
 
     expect(onHostsReady).toHaveBeenCalledTimes(1);
     const hosts = onHostsReady.mock.calls[0][0];
-    expect(hosts.noticeHost.classList.contains("chat-notice-host__slot")).toBe(true);
     expect(hosts.topbar.classList.contains("topbar")).toBe(true);
-    expect(hosts.spendRoot.classList.contains("spend-meter")).toBe(true);
     expect(hosts.spine.classList.contains("data-spine")).toBe(true);
     expect(hosts.drawer).toBeInstanceOf(HTMLDialogElement);
     expect(hosts.drawer.getAttribute("aria-label")).toBe("Training data");
@@ -87,13 +85,13 @@ describe("shell", () => {
     const onHostsReady = vi.fn<(hosts: LegacyHosts) => void>();
     render(<Shell onHostsReady={onHostsReady} />);
     const thread = document.querySelector("div.thread");
-    const noticeHost = onHostsReady.mock.calls[0][0].noticeHost;
+    const noticeHost = document.querySelector("div.chat-notice-host");
 
     await user.click(screen.getByRole("button", { name: "Settings" }));
     await screen.findByRole("region", { name: "Settings" });
 
     expect(thread?.isConnected).toBe(true);
-    expect(noticeHost.isConnected).toBe(true);
+    expect(noticeHost?.isConnected).toBe(true);
     expect(document.querySelector("textarea#message")).not.toBeNull();
     expect(onHostsReady).toHaveBeenCalledTimes(1);
   });

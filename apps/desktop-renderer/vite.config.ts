@@ -2,11 +2,13 @@ import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { configDefaults } from "vitest/config";
+import { appVersionDefine } from "./app-version.mjs";
 
 const rendererRoot = import.meta.dirname;
 
 export default defineConfig({
   plugins: [react()],
+  define: appVersionDefine(),
   build: {
     outDir: "dist",
     emptyOutDir: true,

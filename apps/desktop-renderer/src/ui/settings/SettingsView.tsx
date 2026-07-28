@@ -1,36 +1,37 @@
-import type { ReactElement } from "react";
+import { useEffect, type ReactElement } from "react";
+import { settingsMutationActive } from "../../state/settings-slice.js";
+import { useEnduragentStore } from "../../state/store.js";
 import { Page } from "../shared/Page.js";
-import { AppearanceControl } from "./AppearanceControl.js";
-import { PalettePicker } from "./PalettePicker.js";
-import styles from "./SettingsView.module.css";
+import { ApplicationSection } from "./ApplicationSection.js";
+import { CoachSection } from "./CoachSection.js";
+import { ConversationSection } from "./ConversationSection.js";
+import { CredentialsSection } from "./CredentialsSection.js";
+import { PreferencesSection } from "./PreferencesSection.js";
+import { SpendSection } from "./SpendSection.js";
+import { TrainingAccountSection } from "./TrainingAccountSection.js";
 
 export function SettingsView(): ReactElement {
+  const ports = useEnduragentStore((store) => store.settingsPorts);
+  const busy = useEnduragentStore((store) => settingsMutationActive(store.settings));
+  const closeSettingsPanes = useEnduragentStore((store) => store.closeSettingsPanes);
+
+  useEffect(() => {
+    if (ports === null) return;
+    ports.panes.activate();
+    return () => {
+      closeSettingsPanes();
+    };
+  }, [closeSettingsPanes, ports]);
+
   return (
-    <Page title="Settings">
-      <div className={styles.heading}>Preferences</div>
-      <div className={styles.group}>
-        <div className={styles.row}>
-          <div className={styles.label}>
-            <div className={styles.rowTitle}>Appearance</div>
-            <div className={styles.rowDetail}>
-              System follows your macOS light and dark setting
-            </div>
-          </div>
-          <AppearanceControl />
-        </div>
-      </div>
-      <div className={styles.heading}>Palette</div>
-      <div className={styles.group}>
-        <div className={styles.row}>
-          <div className={styles.label}>
-            <div className={styles.rowTitle}>App palette</div>
-            <div className={styles.rowDetail}>
-              Changes both themes immediately · Patrol is the default
-            </div>
-          </div>
-        </div>
-        <PalettePicker />
-      </div>
+    <Page title="Settings" subtitle={busy ? "Saving…" : undefined} busy={busy}>
+      <CoachSection />
+      <CredentialsSection />
+      <TrainingAccountSection />
+      <ConversationSection />
+      <SpendSection />
+      <PreferencesSection />
+      <ApplicationSection />
     </Page>
   );
 }

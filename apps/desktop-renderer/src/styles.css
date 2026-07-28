@@ -93,16 +93,6 @@ input:focus-visible {
   letter-spacing: -0.02em;
 }
 
-.spend-meter {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.spend-meter strong {
-  margin-left: 8px;
-  color: var(--ink);
-}
-
 .conversation {
   grid-column: 1;
   overflow: auto;

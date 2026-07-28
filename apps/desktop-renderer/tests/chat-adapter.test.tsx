@@ -1,5 +1,5 @@
 import { act, render } from "@testing-library/react";
-import { useRef, type ReactElement } from "react";
+import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChatView, ChatViewControls } from "../src/chat/controller.js";
 import { mergeHydratedMessages } from "../src/chat/hydration.js";
@@ -291,10 +291,9 @@ function Probe(): null {
 }
 
 function Harness(): ReactElement {
-  const noticeHost = useRef<HTMLDivElement>(null);
   return (
     <>
-      <ChatSurface noticeHostRef={noticeHost} />
+      <ChatSurface />
       <Probe />
     </>
   );

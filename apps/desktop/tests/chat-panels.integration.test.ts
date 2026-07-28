@@ -1189,7 +1189,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly settingsResident: boolean;
       readonly settingsReachable: boolean;
       readonly settingsAccessibleLabel: string;
-      readonly settingsCompactLabel: string;
       readonly drawerOpen: boolean;
       readonly buttonResident: boolean;
       readonly buttonReachable: boolean;
@@ -1201,26 +1200,28 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       compactOpener.click();
       await new Promise((resolve) => setTimeout(resolve, 250));
       const topbar = document.querySelector(".topbar");
-      const settings = document.querySelector(".provider-model-settings-button");
+      const rail = document.querySelector('nav[aria-label="Main navigation"]');
+      const settings = Array.from(rail.querySelectorAll("button")).find(
+        (entry) => entry.textContent.includes("Settings"),
+      );
       const compactDrawer = document.querySelector("#training-context-drawer");
       const compactButton = compactDrawer.querySelector(".training-sync__button");
       const compactStatus = compactDrawer.querySelector(".training-sync__status");
       const compactRegion = compactDrawer.querySelector(".training-sync");
       const drawerRect = compactDrawer.getBoundingClientRect();
       const buttonRect = compactButton.getBoundingClientRect();
-      const topbarRect = topbar.getBoundingClientRect();
+      const railRect = rail.getBoundingClientRect();
       const settingsRect = settings.getBoundingClientRect();
       return {
         documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
         topbarFits: topbar.scrollWidth <= topbar.clientWidth,
-        settingsResident: topbar.contains(settings),
+        settingsResident: rail.contains(settings),
         settingsReachable:
-          settingsRect.left >= topbarRect.left &&
-          settingsRect.right <= topbarRect.right &&
-          settingsRect.top >= topbarRect.top &&
-          settingsRect.bottom <= topbarRect.bottom,
-        settingsAccessibleLabel: settings.getAttribute("aria-label"),
-        settingsCompactLabel: getComputedStyle(settings, "::before").content.replace(/['"]/gu, ""),
+          settingsRect.left >= railRect.left &&
+          settingsRect.right <= railRect.right &&
+          settingsRect.top >= railRect.top &&
+          settingsRect.bottom <= railRect.bottom,
+        settingsAccessibleLabel: settings.textContent.trim(),
         drawerOpen: compactDrawer.open,
         buttonResident: compactDrawer.querySelectorAll(".training-sync__button").length === 1,
         buttonReachable:
@@ -1241,8 +1242,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       topbarFits: true,
       settingsResident: true,
       settingsReachable: true,
-      settingsAccessibleLabel: "Coach settings",
-      settingsCompactLabel: "Coach",
+      settingsAccessibleLabel: "⚙Settings",
       drawerOpen: true,
       buttonResident: true,
       buttonReachable: true,
@@ -1255,8 +1255,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     ).length;
     const compactSettingsGeometry = await fixture.evaluate<{
       readonly open: boolean;
-      readonly oneDialog: boolean;
-      readonly hasThreeSections: boolean;
+      readonly onePage: boolean;
+      readonly hasEverySection: boolean;
       readonly horizontalOverflow: boolean;
       readonly withinViewport: boolean;
       readonly saveReachableAfterScroll: boolean;
@@ -1264,27 +1264,39 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly retentionWarningVisible: boolean;
     }>(`
       document.querySelector(".drawer-toggle").click();
-      const settings = document.querySelector(".provider-model-settings-button");
+      const settings = Array.from(
+        document.querySelectorAll('nav[aria-label="Main navigation"] button'),
+      ).find((entry) => entry.textContent.includes("Settings"));
       settings.click();
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      const dialog = document.querySelector("#provider-model-settings-dialog");
-      const sessionSave = dialog.querySelector(".session-settings__save");
-      const rect = dialog.getBoundingClientRect();
+      const deadline = Date.now() + 5000;
+      while (
+        !document.querySelector('section[aria-label="Conversation and time"] input') &&
+        Date.now() < deadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const page = document.querySelector('section[aria-label="Settings"]');
+      const sessionSave = Array.from(page.querySelectorAll("button")).find(
+        (entry) => entry.textContent === "Save conversation settings",
+      );
+      const rect = page.getBoundingClientRect();
       sessionSave.scrollIntoView({ block: "nearest" });
       await new Promise((resolve) => requestAnimationFrame(resolve));
       const saveRect = sessionSave.getBoundingClientRect();
-      const copy = dialog.textContent;
+      const copy = page.textContent;
       return {
-        open: dialog.open,
-        oneDialog: document.querySelectorAll("#provider-model-settings-dialog").length === 1,
-        hasThreeSections:
-          dialog.querySelectorAll("fieldset").length === 3 &&
-          copy.includes("Provider & model") &&
-          copy.includes("Training account") &&
-          copy.includes("Conversation & time"),
+        open: page.getAttribute("aria-hidden") === null,
+        onePage: document.querySelectorAll('section[aria-label="Settings"]').length === 1,
+        hasEverySection:
+          ["Coach", "Credentials", "Training account", "Conversation and time", "Spending", "Preferences", "Application"].every(
+            (label) => document.querySelectorAll('section[aria-label="' + label + '"]').length === 1,
+          ) &&
+          copy.includes("Coach route") &&
+          copy.includes("Athlete ID") &&
+          copy.includes("Daily reset hour"),
         horizontalOverflow:
-          dialog.scrollWidth > dialog.clientWidth ||
-          Array.from(dialog.querySelectorAll("form, fieldset")).some(
+          document.documentElement.scrollWidth > document.documentElement.clientWidth ||
+          Array.from(page.querySelectorAll("section, div")).some(
             (node) => node.scrollWidth > node.clientWidth,
           ),
         withinViewport:
@@ -1305,8 +1317,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     `);
     expect(compactSettingsGeometry).toEqual({
       open: true,
-      oneDialog: true,
-      hasThreeSections: true,
+      onePage: true,
+      hasEverySection: true,
       horizontalOverflow: false,
       withinViewport: true,
       saveReachableAfterScroll: true,

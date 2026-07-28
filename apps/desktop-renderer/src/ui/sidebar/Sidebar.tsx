@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactElement } from "react";
 import { VIEWS } from "../../app/views.js";
 import { registerNewConversationOpener } from "../../state/new-conversation-opener.js";
+import { settingsMutationActive } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
 import styles from "./Sidebar.module.css";
 
@@ -10,7 +11,9 @@ export function Sidebar(): ReactElement {
   const unavailable = useEnduragentStore((state) => state.chat.newConversationUnavailable);
   const resetPhase = useEnduragentStore((state) => state.chat.resetPhase);
   const actions = useEnduragentStore((state) => state.chatActions);
+  const settingsBusy = useEnduragentStore((state) => settingsMutationActive(state.settings));
   const opener = useRef<HTMLButtonElement>(null);
+  const navigationLocked = activeView === "settings" && settingsBusy;
 
   useEffect(() => {
     registerNewConversationOpener(opener.current);
@@ -29,7 +32,7 @@ export function Sidebar(): ReactElement {
           type="button"
           ref={opener}
           className={`${styles.newButton} new-conversation-button`}
-          disabled={actions === null || (unavailable && !focusableUncertain)}
+          disabled={navigationLocked || actions === null || (unavailable && !focusableUncertain)}
           aria-disabled={focusableUncertain ? "true" : undefined}
           onClick={() => {
             if (focusableUncertain) return;
@@ -50,6 +53,7 @@ export function Sidebar(): ReactElement {
             type="button"
             className={view.id === activeView ? `${styles.navItem} ${styles.on}` : styles.navItem}
             aria-current={view.id === activeView ? "page" : undefined}
+            disabled={navigationLocked && view.id !== activeView}
             onClick={() => {
               setActiveView(view.id);
             }}
@@ -66,6 +70,7 @@ export function Sidebar(): ReactElement {
         <button
           type="button"
           className={activeView === "chat" ? `${styles.histItem} ${styles.on}` : styles.histItem}
+          disabled={navigationLocked}
           onClick={() => {
             setActiveView("chat");
           }}

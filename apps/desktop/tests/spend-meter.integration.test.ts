@@ -184,6 +184,30 @@ function script(calls: ScriptRequest[], initial: "reached" | "complete") {
   };
 }
 
+const NAVIGATE = `
+  const navigate = async (label) => {
+    const button = Array.from(
+      document.querySelectorAll('nav[aria-label="Main navigation"] button'),
+    ).find((entry) => entry.textContent.includes(label));
+    button.click();
+    const deadline = Date.now() + 5000;
+    while (!document.querySelector('section[aria-label="' + label + '"]') && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  };
+  const openSpending = async (expected) => {
+    await navigate("Settings");
+    const deadline = Date.now() + 5000;
+    while (
+      document.querySelector("[data-spend-meter] strong")?.textContent !== expected &&
+      Date.now() < deadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    return document.querySelector("[data-spend-meter]");
+  };
+`;
+
 async function launch(initial: "reached" | "complete" = "reached") {
   const calls: ScriptRequest[] = [];
   const scripted = script(calls, initial);
@@ -198,7 +222,7 @@ async function launch(initial: "reached" | "complete" = "reached") {
   fixtures.push(fixture);
   await fixture.evaluate<void>(`
     const deadline = Date.now() + 10000;
-    while ((document.documentElement.dataset.rpc !== "connected" || document.querySelector(".spend-copy strong")?.textContent !== "$0.60+ / $0.50") && Date.now() < deadline) {
+    while (document.documentElement.dataset.rpc !== "connected" && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     document.querySelector(".onboarding")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -212,7 +236,7 @@ afterEach(async () => {
 });
 
 describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend meter", () => {
-  it("keeps the anchored rail visible at both viewport bands and never blocks reached-cap chat", async () => {
+  it("keeps the spending surface visible at both viewport bands and never blocks reached-cap chat", async () => {
     const { fixture, calls } = await launch();
     const desktop = await fixture.evaluate<{
       readonly visible: boolean;
@@ -224,19 +248,20 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       readonly submitDisabled: boolean;
       readonly final: string;
     }>(`
-      const details = document.querySelector(".spend-meter__details");
-      details.open = true;
+      ${NAVIGATE}
+      const spending = await openSpending("$0.60+ / $0.50");
+      const before = {
+        visible: spending.getBoundingClientRect().width >= 132,
+        trackHeight: spending.querySelector("progress").getBoundingClientRect().height,
+        disclosure: spending.textContent,
+        overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      };
+      await navigate("Chat");
       const textarea = document.querySelector("#message");
       const submit = textarea.closest("form").querySelector('button[type="submit"]');
-      const before = {
-        visible: document.querySelector(".spend-meter").getBoundingClientRect().width >= 132,
-        trackHeight: document.querySelector(".meter-track").getBoundingClientRect().height,
-        warning: document.querySelector("#spend-cap-warning").textContent,
-        disclosure: document.querySelector(".spend-disclosure").textContent,
-        overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
-        composerDisabled: textarea.disabled,
-        submitDisabled: submit.disabled,
-      };
+      const warning = document.querySelector("#spend-cap-warning").textContent;
+      const composerDisabled = textarea.disabled;
+      const submitDisabled = submit.disabled;
       textarea.value = "Can I keep chatting?";
       textarea.closest("form").requestSubmit();
       const deadline = Date.now() + 5000;
@@ -245,7 +270,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
         await new Promise((resolve) => setTimeout(resolve, 10));
         final = document.querySelector(".chat-message--coach .chat-message__text")?.textContent ?? "";
       }
-      return { ...before, final };
+      return { ...before, warning, composerDisabled, submitDisabled, final };
     `);
     expect(desktop.visible).toBe(true);
     expect(desktop.trackHeight).toBe(3);
@@ -268,13 +293,15 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       readonly visible: boolean;
       readonly overflow: boolean;
     }>(`
+      ${NAVIGATE}
+      await navigate("Settings");
       return {
-        visible: document.querySelector(".spend-meter").getBoundingClientRect().width >= 132,
+        visible: document.querySelector("[data-spend-meter]").getBoundingClientRect().width >= 132,
         overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
       };
     `);
     expect(narrow).toEqual({ visible: true, overflow: false });
-  });
+  }, 20_000);
 
   it("preserves the closed bridge, training-data drawer, hardened renderer, and token containment", async () => {
     const { fixture } = await launch();
@@ -341,12 +368,13 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       readonly warningHidden: boolean;
       readonly disclosure: string;
     }>(`
-      document.querySelector(".spend-meter__details").open = true;
+      ${NAVIGATE}
+      const spending = await openSpending("$0.14 / $0.50");
       return {
-        amount: document.querySelector(".spend-copy strong").textContent,
-        status: document.querySelector(".spend-meter").dataset.capStatus,
+        amount: spending.querySelector("strong").textContent,
+        status: spending.dataset.capStatus,
         warningHidden: document.querySelector("#spend-cap-warning").hidden,
-        disclosure: document.querySelector(".spend-disclosure").textContent,
+        disclosure: spending.textContent,
       };
     `);
     expect(complete).toMatchObject({
@@ -364,19 +392,22 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       readonly warningHidden: boolean;
       readonly disclosure: string;
     }>(`
+      const spending = document.querySelector("[data-spend-meter]");
       const cap = document.querySelector("#daily-spend-cap");
-      cap.value = "0.75";
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+      setter.call(cap, "0.75");
       cap.dispatchEvent(new Event("input", { bubbles: true }));
-      document.querySelector(".spend-cap-editor button").click();
+      Array.from(spending.querySelectorAll("button")).find((entry) => entry.textContent === "Save cap").click();
       const deadline = Date.now() + 5000;
-      while (document.querySelector(".spend-meter").dataset.capStatus !== "unknown" && Date.now() < deadline) {
+      while (document.querySelector("[data-spend-meter]").dataset.capStatus !== "unknown" && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
+      const current = document.querySelector("[data-spend-meter]");
       return {
-        amount: document.querySelector(".spend-copy strong").textContent,
-        status: document.querySelector(".spend-meter").dataset.capStatus,
+        amount: current.querySelector("strong").textContent,
+        status: current.dataset.capStatus,
         warningHidden: document.querySelector("#spend-cap-warning").hidden,
-        disclosure: document.querySelector(".spend-disclosure").textContent,
+        disclosure: current.textContent,
       };
     `);
     expect(saved).toMatchObject({
@@ -397,10 +428,10 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       textarea.value = "Refresh the spend display";
       textarea.closest("form").requestSubmit();
       const deadline = Date.now() + 5000;
-      while (!document.querySelector(".spend-disclosure").textContent.includes("Spend data may be out of date.") && Date.now() < deadline) {
+      while (!document.querySelector("[data-spend-meter]").textContent.includes("Spend data may be out of date.") && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
-      return document.querySelector(".spend-disclosure").textContent;
+      return document.querySelector("[data-spend-meter]").textContent;
     `);
     expect(stale).toContain("Spend data may be out of date.");
     expect(calls.filter((call) => call.method === "chat")).toHaveLength(1);

@@ -14,8 +14,13 @@ import {
   writeStoredPaletteId,
 } from "../theme/preferences.js";
 import { createChatSlice, type ChatSlice } from "./chat-slice.js";
+import {
+  createSettingsSlice,
+  settingsMutationActive,
+  type SettingsSlice,
+} from "./settings-slice.js";
 
-export interface EnduragentState extends ChatSlice {
+export interface EnduragentState extends ChatSlice, SettingsSlice {
   readonly activeView: ViewId;
   readonly paletteId: string;
   readonly appearance: Appearance;
@@ -39,12 +44,15 @@ function stamp(paletteId: string, appearance: Appearance): ResolvedTheme {
 
 export const useEnduragentStore = create<EnduragentState>((set, get, api) => ({
   ...createChatSlice(set, get, api),
+  ...createSettingsSlice(set, get, api),
   activeView: "chat",
   paletteId: readStoredPaletteId(),
   appearance: readStoredAppearance(),
   theme: resolveTheme(readStoredAppearance()),
   legacyReady: false,
   setActiveView(view) {
+    const current = get();
+    if (current.activeView === "settings" && settingsMutationActive(current.settings)) return;
     set({ activeView: view });
   },
   setPaletteId(paletteId) {

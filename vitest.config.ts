@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { configDefaults, coverageConfigDefaults, defineConfig } from "vitest/config";
+import { appVersionDefine } from "./apps/desktop-renderer/app-version.mjs";
 
 /**
  * Vite (which vitest is built on) doesn't natively handle `import x from "*.md"`
@@ -71,6 +72,7 @@ export default defineConfig({
       },
       {
         root: fileURLToPath(new URL("apps/desktop-renderer", import.meta.url)),
+        define: appVersionDefine(),
         test: {
           name: "renderer-dom",
           pool: "forks",
