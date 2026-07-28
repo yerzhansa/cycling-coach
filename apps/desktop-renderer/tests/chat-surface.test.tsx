@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useRef, type ReactElement } from "react";
+import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Shell } from "../src/app/Shell.js";
 import {
@@ -37,8 +37,7 @@ function setChat(patch: Partial<ChatSurfaceState>): void {
 }
 
 function Harness(): ReactElement {
-  const noticeHost = useRef<HTMLDivElement>(null);
-  return <ChatView noticeHostRef={noticeHost} />;
+  return <ChatView />;
 }
 
 function composer(): HTMLTextAreaElement {

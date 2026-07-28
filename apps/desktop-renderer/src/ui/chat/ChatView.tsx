@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, type ReactElement, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type ReactElement } from "react";
 import {
   CHAT_AUTO_LOAD_EARLIER_THRESHOLD,
   chatScrollAnchor,
@@ -8,13 +8,12 @@ import { Composer, type ComposerHandle } from "./Composer.js";
 import { FirstSyncCard } from "./FirstSyncCard.js";
 import { NewConversationDialog } from "./NewConversationDialog.js";
 import { QuickActions } from "./QuickActions.js";
+import { SpendNotice } from "./SpendNotice.js";
 import { Transcript } from "./Transcript.js";
 
 const COMPOSER_CLEARANCE_PROPERTY = "--chat-composer-clearance";
 
-export function ChatView(props: {
-  readonly noticeHostRef: RefObject<HTMLDivElement | null>;
-}): ReactElement {
+export function ChatView(): ReactElement {
   const conversation = useRef<HTMLElement>(null);
   const composerWrap = useRef<HTMLDivElement>(null);
   const composer = useRef<ComposerHandle>(null);
@@ -99,7 +98,7 @@ export function ChatView(props: {
           <p className="new-conversation-status" role="status" aria-live="polite">
             {announcement ?? ""}
           </p>
-          <div className="chat-notice-host__slot" ref={props.noticeHostRef} />
+          <SpendNotice />
         </div>
         <QuickActions />
         <Composer handle={composer} />

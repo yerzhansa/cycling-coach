@@ -8,10 +8,6 @@ import { flushSync } from "react-dom";
 import "./styles.css";
 import "./chat/styles.css";
 import "./training-context/styles.css";
-import "./spend-meter/styles.css";
-import "./release-notes/styles.css";
-import "./update/styles.css";
-import "./settings/styles.css";
 import "./onboarding/onboarding.css";
 import "./ride-import.css";
 import { createChatController } from "./chat/controller.js";
@@ -19,29 +15,33 @@ import { createDesktopCoachClientProvider } from "./coach-client.js";
 import { createFirstSyncController } from "./first-sync.js";
 import { createChatViewAdapter } from "./state/adapters/chat.js";
 import { createFirstSyncViewAdapter } from "./state/adapters/first-sync.js";
+import { createReleaseNotesSettingsAdapter } from "./state/adapters/release-notes.js";
+import {
+  createAthleteSettingsAdapter,
+  createConversationSettingsAdapter,
+  createCoachSettingsAdapter,
+  createCredentialSettingsAdapter,
+} from "./state/adapters/settings.js";
+import { createSpendSettingsAdapter } from "./state/adapters/spend.js";
+import { createUpdateSettingsAdapter } from "./state/adapters/update.js";
 import { useEnduragentStore } from "./state/store.js";
 import { validateImportPaths, type OnboardingBridge } from "./onboarding/bridge.js";
 import { createOnboardingCompletionController } from "./onboarding/completion.js";
 import { mountOnboarding } from "./onboarding/mount.js";
-import { createTrainingContextController } from "./training-context/controller.js";
+import {
+  createTrainingContextController,
+  type TrainingContextView,
+} from "./training-context/controller.js";
 import { createManualSyncController } from "./training-context/manual-sync.js";
 import { mountTrainingContextView } from "./training-context/view.js";
 import { createTrainingSyncCoordinator } from "./training-sync.js";
 import { createSpendMeterController } from "./spend-meter/controller.js";
-import { createSpendMeterView } from "./spend-meter/view.js";
 import { createReleaseNotesController } from "./release-notes/controller.js";
-import { createReleaseNotesView } from "./release-notes/view.js";
 import { createDesktopUpdateController } from "./update/controller.js";
-import { createDesktopUpdateView } from "./update/view.js";
 import { createProviderModelSettingsController } from "./settings/provider-model-controller.js";
-import { createProviderModelSettingsView } from "./settings/provider-model-view.js";
 import { createAthleteSettingsController } from "./settings/athlete-controller.js";
-import { createAthleteSettingsView } from "./settings/athlete-view.js";
-import { createResidentSettingsShell } from "./settings/shell.js";
 import { createSessionSettingsController } from "./settings/session-controller.js";
-import { createSessionSettingsView } from "./settings/session-view.js";
 import { createCredentialSettingsController } from "./settings/credential-controller.js";
-import { createCredentialSettingsView } from "./settings/credential-view.js";
 import {
   createRideImportController,
   mountResidentRideImport,
@@ -49,9 +49,7 @@ import {
 } from "./ride-import.js";
 
 export interface LegacyHosts {
-  readonly noticeHost: HTMLElement;
   readonly topbar: HTMLElement;
-  readonly spendRoot: HTMLElement;
   readonly spine: HTMLElement;
   readonly drawer: HTMLDialogElement;
 }
@@ -64,16 +62,17 @@ function focusComposer(): void {
 }
 
 export function bootLegacy(hosts: LegacyHosts): Disposer {
-  const { noticeHost, topbar, spendRoot, spine, drawer } = hosts;
+  const { topbar, spine, drawer } = hosts;
+  const store = useEnduragentStore;
 
   const topbarActions = document.createElement("div");
   topbarActions.className = "topbar-actions";
-  topbar.insertBefore(topbarActions, spendRoot);
+  topbar.append(topbarActions);
   const connectionStatus = document.createElement("span");
   connectionStatus.className = "connection-status";
   connectionStatus.setAttribute("role", "status");
   connectionStatus.textContent = "Connecting…";
-  topbarActions.append(connectionStatus, spendRoot);
+  topbarActions.append(connectionStatus);
   const onLifecycle = (event: WindowEventMap["enduragent-lifecycle"]): void => {
     document.documentElement.dataset.rpc = event.detail.status;
     connectionStatus.textContent =
@@ -86,21 +85,19 @@ export function bootLegacy(hosts: LegacyHosts): Disposer {
             : "Closing…";
   };
   window.addEventListener("enduragent-lifecycle", onLifecycle);
+  const releaseNotesAdapter = createReleaseNotesSettingsAdapter({
+    publish: (patch) => store.getState().patchSettings(patch),
+  });
   const releaseNotesController = createReleaseNotesController({
     request: () => window.enduragentAuth.releaseNotes(),
-    view: createReleaseNotesView({
-      document,
-      actionHost: topbarActions,
-      before: connectionStatus,
-    }),
+    view: releaseNotesAdapter.view,
+  });
+  const updateAdapter = createUpdateSettingsAdapter({
+    publish: (next) => store.getState().patchSettings({ update: next }),
   });
   const desktopUpdateController = createDesktopUpdateController({
     bridge: window.enduragentAuth,
-    view: createDesktopUpdateView({
-      document,
-      actionHost: topbarActions,
-      before: connectionStatus,
-    }),
+    view: updateAdapter.view,
   });
   void desktopUpdateController.start();
 
@@ -111,9 +108,23 @@ export function bootLegacy(hosts: LegacyHosts): Disposer {
     return current === failedClient ? clients.reconnect() : current;
   };
   const mountedTrainingContext = mountTrainingContextView({ spine, drawer });
+  const trainingContextView: TrainingContextView = {
+    render(state) {
+      mountedTrainingContext.view.render(state);
+      const current = store.getState().settings.units;
+      const next = state.unitsPreference;
+      if (
+        current.status !== next.status ||
+        current.value !== next.value ||
+        current.source !== next.source
+      ) {
+        store.getState().patchSettings({ units: next });
+      }
+    },
+  };
   const trainingContextController = createTrainingContextController({
     clients,
-    view: mountedTrainingContext.view,
+    view: trainingContextView,
   });
   const trainingSyncCoordinator = createTrainingSyncCoordinator({
     clients,
@@ -123,14 +134,18 @@ export function bootLegacy(hosts: LegacyHosts): Disposer {
     coordinator: trainingSyncCoordinator,
     view: mountedTrainingContext.syncView,
   });
+  const spendAdapter = createSpendSettingsAdapter({
+    read: () => store.getState().settings.spend,
+    publish: (next) => store.getState().patchSettings({ spend: next }),
+  });
   const spendController = createSpendMeterController({
     clients,
-    view: createSpendMeterView({ root: spendRoot, noticeHost }),
+    view: spendAdapter.view,
   });
   const chatAdapter = createChatViewAdapter({
     publish: (next) =>
       flushSync(() => {
-        useEnduragentStore.getState().setChatSurface(next);
+        store.getState().setChatSurface(next);
       }),
   });
   const chatController = createChatController({
@@ -149,10 +164,10 @@ export function bootLegacy(hosts: LegacyHosts): Disposer {
     coordinator: trainingSyncCoordinator,
     focusComposer,
     render: createFirstSyncViewAdapter({
-      publish: (next) => useEnduragentStore.getState().setFirstSync(next),
+      publish: (next) => store.getState().setFirstSync(next),
     }).render,
   });
-  useEnduragentStore.getState().bindChatActions({
+  store.getState().bindChatActions({
     submit: (message) => void chatController.submit(message),
     retry: () => void chatController.retryInterrupted(),
     loadEarlier: () => void chatController.loadEarlier(),
@@ -240,84 +255,81 @@ export function bootLegacy(hosts: LegacyHosts): Disposer {
     opener: setup,
     onComplete: (completion) => onboardingCompletion.complete(completion),
   });
-  setup.addEventListener(
-    "click",
-    () => void onboardingCompletion.openManually(() => onboarding.open()),
-  );
-  const settingsShell = createResidentSettingsShell({
-    document,
-    actionHost: topbarActions,
-    before: setup,
+  const openSetupFlow = (): void => {
+    void onboardingCompletion.openManually(() => onboarding.open());
+  };
+  setup.addEventListener("click", openSetupFlow);
+  const closePanes = (): void => {
+    providerModelSettingsController.close();
+    credentialSettingsController.close();
+    athleteSettingsController.close();
+    sessionSettingsController.close();
+  };
+  const openSetupFromSettings = (): void => {
+    closePanes();
+    store.getState().leaveSettings();
+    openSetupFlow();
+  };
+  const coachAdapter = createCoachSettingsAdapter({
+    publish: (state) => store.getState().patchSettings({ coach: state }),
   });
-  const providerModelSettingsView = createProviderModelSettingsView({
-    document,
-    shell: settingsShell,
+  const credentialAdapter = createCredentialSettingsAdapter({
+    publish: (state) => store.getState().patchSettings({ credentials: state }),
   });
-  const credentialSettingsView = createCredentialSettingsView({ document, shell: settingsShell });
-  const athleteSettingsView = createAthleteSettingsView({ document, shell: settingsShell });
-  const sessionSettingsView = createSessionSettingsView({ document, shell: settingsShell });
+  const athleteAdapter = createAthleteSettingsAdapter({
+    publish: (state) => store.getState().patchSettings({ athlete: state }),
+  });
+  const conversationAdapter = createConversationSettingsAdapter({
+    publish: (state) => store.getState().patchSettings({ conversation: state }),
+  });
   const sessionSettingsController = createSessionSettingsController({
     clients,
-    beginMutation: () => settingsShell.beginMutation("session"),
-    view: sessionSettingsView,
+    beginMutation: () => store.getState().beginSettingsMutation("session"),
+    view: conversationAdapter.view,
   });
   const credentialSettingsController = createCredentialSettingsController({
     clients,
     loadStatuses: () => window.enduragentAuth.credentialStatuses(),
     loadChatGptStatus: () => window.enduragentAuth.chatgptStatus(),
     deleteCredential: (value) => window.enduragentAuth.deleteCredential(value),
-    openSetup: () => {
-      providerModelSettingsController.close();
-      credentialSettingsController.close();
-      athleteSettingsController.close();
-      sessionSettingsController.close();
-      settingsShell.close();
-      setup.click();
-    },
-    beginMutation: () => settingsShell.beginMutation("credential"),
-    view: credentialSettingsView,
+    openSetup: openSetupFromSettings,
+    beginMutation: () => store.getState().beginSettingsMutation("credential"),
+    view: credentialAdapter.view,
   });
   const athleteSettingsController = createAthleteSettingsController({
     clients,
-    openSetup: () => {
-      providerModelSettingsController.close();
-      credentialSettingsController.close();
-      athleteSettingsController.close();
-      sessionSettingsController.close();
-      settingsShell.close();
-      setup.click();
-    },
-    beginMutation: () => settingsShell.beginMutation("athlete"),
-    view: athleteSettingsView,
+    openSetup: openSetupFromSettings,
+    beginMutation: () => store.getState().beginSettingsMutation("athlete"),
+    view: athleteAdapter.view,
   });
   const providerModelSettingsController = createProviderModelSettingsController({
     load: () => window.enduragentAuth.llmConfiguration(),
     apply: (selection) => window.enduragentAuth.applyLlmSelection(selection),
-    openSetup: () => {
-      providerModelSettingsController.close();
-      credentialSettingsController.close();
-      athleteSettingsController.close();
-      sessionSettingsController.close();
-      settingsShell.close();
-      setup.click();
-    },
-    beginMutation: () => settingsShell.beginMutation("provider-model"),
-    view: providerModelSettingsView,
+    openSetup: openSetupFromSettings,
+    beginMutation: () => store.getState().beginSettingsMutation("provider-model"),
+    view: coachAdapter.view,
   });
-  settingsShell.bind({
-    onOpen() {
-      void providerModelSettingsController.activate();
-      void credentialSettingsController.activate();
-      void athleteSettingsController.activate();
-      void sessionSettingsController.activate();
+  store.getState().bindSettingsPorts({
+    panes: {
+      activate() {
+        void providerModelSettingsController.activate();
+        void credentialSettingsController.activate();
+        void athleteSettingsController.activate();
+        void sessionSettingsController.activate();
+      },
+      close: closePanes,
     },
-    onClose() {
-      providerModelSettingsController.close();
-      credentialSettingsController.close();
-      athleteSettingsController.close();
-      sessionSettingsController.close();
-      settingsShell.close();
+    coach: coachAdapter.port,
+    credentials: credentialAdapter.port,
+    athlete: athleteAdapter.port,
+    conversation: conversationAdapter.port,
+    spend: spendAdapter.port,
+    update: updateAdapter.port,
+    releaseNotes: releaseNotesAdapter.port,
+    units: {
+      set: (value) => void trainingContextController.setUnitsPreference(value),
     },
+    openSetup: openSetupFromSettings,
   });
   const disposeDroppedRideImports = subscribeToDroppedRideImports({
     subscribe: onboardingBridge.onDroppedImportFiles,
@@ -344,7 +356,8 @@ export function bootLegacy(hosts: LegacyHosts): Disposer {
   const dispose = (): void => {
     if (disposed) return;
     disposed = true;
-    useEnduragentStore.getState().bindChatActions(null);
+    store.getState().bindChatActions(null);
+    store.getState().bindSettingsPorts(null);
     window.removeEventListener("enduragent-lifecycle", onLifecycle);
     window.removeEventListener("pagehide", dispose);
     releaseNotesController.dispose();
@@ -353,7 +366,6 @@ export function bootLegacy(hosts: LegacyHosts): Disposer {
     credentialSettingsController.dispose();
     athleteSettingsController.dispose();
     sessionSettingsController.dispose();
-    settingsShell.dispose();
     disposeDroppedRideImports();
     onboarding.dispose();
     residentRideImport.dispose();

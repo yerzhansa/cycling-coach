@@ -10,18 +10,14 @@ export function Shell(props: {
   readonly onHostsReady: (hosts: LegacyHosts) => void;
 }): ReactElement {
   const activeView = useEnduragentStore((state) => state.activeView);
-  const noticeHost = useRef<HTMLDivElement>(null);
   const topbar = useRef<HTMLElement>(null);
-  const spendRoot = useRef<HTMLDivElement>(null);
   const spine = useRef<HTMLElement>(null);
   const drawer = useRef<HTMLDialogElement>(null);
   const onHostsReady = props.onHostsReady;
 
   useEffect(() => {
     const hosts = {
-      noticeHost: noticeHost.current,
       topbar: topbar.current,
-      spendRoot: spendRoot.current,
       spine: spine.current,
       drawer: drawer.current,
     };
@@ -33,12 +29,10 @@ export function Shell(props: {
     <div className={styles.win}>
       <Sidebar />
       <div className={styles.main}>
-        <header className={`topbar ${styles.strip}`} ref={topbar}>
-          <div className="spend-meter" ref={spendRoot} />
-        </header>
+        <header className={`topbar ${styles.strip}`} ref={topbar} />
         <div className={styles.views}>
           <div className={activeView === "chat" ? styles.chatRegion : styles.away}>
-            <ChatView noticeHostRef={noticeHost} />
+            <ChatView />
           </div>
           {VIEWS.filter((view) => view.id === activeView && view.page !== REACT_CHAT_REGION).map(
             (view) => {
