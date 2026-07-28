@@ -97,6 +97,7 @@ const RATE_LIMIT_MAX_WAIT_MS = 120_000;
 const MAX_FLUSH_ATTEMPTS = 2;
 
 const REPLAY_UNSAFE_TOOL_NAMES = new Set([
+  "intervals_create_strength_workout",
   "intervals_create_workout",
   "intervals_delete_workout",
   "memory_write",

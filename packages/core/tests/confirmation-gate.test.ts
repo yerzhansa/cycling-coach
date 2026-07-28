@@ -209,6 +209,19 @@ describe("proposal summarizers and guard reuse", () => {
     await expect(summarizers.intervals_create_workout!({})).resolves.toEqual({
       summary: "Create a workout",
     });
+    await expect(
+      summarizers.intervals_create_strength_workout!({
+        date: "2030-04-06",
+        name: "Lower body 45min",
+      }),
+    ).resolves.toEqual({
+      summary: 'Create strength workout "Lower body 45min" on 2030-04-06',
+    });
+    await expect(
+      summarizers.intervals_create_strength_workout!({}),
+    ).resolves.toEqual({
+      summary: "Create a strength workout",
+    });
     await expect(summarizers.plan_save!({ plan: {} })).resolves.toEqual({
       summary: "Save the training plan — replaces the current saved plan",
     });
@@ -288,6 +301,7 @@ describe("proposal summarizers and guard reuse", () => {
 
   it("keeps gate and read allowlists exact and disjoint", () => {
     expect([...GATED_TOOL_NAMES].sort()).toEqual([
+      "intervals_create_strength_workout",
       "intervals_create_workout",
       "intervals_delete_workout",
       "plan_save",

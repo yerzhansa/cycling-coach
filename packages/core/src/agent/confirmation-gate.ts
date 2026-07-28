@@ -8,6 +8,7 @@ import {
 } from "./intervals-tools.js";
 
 export const GATED_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "intervals_create_strength_workout",
   "intervals_create_workout",
   "intervals_delete_workout",
   "plan_save",
@@ -120,6 +121,14 @@ export function createProposalSummarizers(opts: {
       return date !== undefined && name !== undefined
         ? { summary: `Create workout "${name}" on ${date}` }
         : { summary: "Create a workout" };
+    },
+    intervals_create_strength_workout: async (input) => {
+      if (opts.intervals === null) return { block: { error: "intervals_not_configured" } };
+      const name = stringField(input, "name");
+      const date = stringField(input, "date");
+      return name !== undefined && date !== undefined
+        ? { summary: `Create strength workout "${name}" on ${date}` }
+        : { summary: "Create a strength workout" };
     },
     intervals_delete_workout: async (input) => {
       if (opts.intervals === null) return { block: { error: "intervals_not_configured" } };

@@ -53,7 +53,7 @@ afterEach(() => {
 describe("consecutive builds are byte-identical", () => {
   it("pins the confirmation rule block bytes", () => {
     expect(createHash("sha256").update(CONFIRMATION_GATE_RULES).digest("hex")).toBe(
-      "ab1c5c932355aa134691c9ba39d93cd7f92016763477e0841dbac61e52985389",
+      "fb09a7b8dd325a557cdd403e842fd59b86221c26c60eb6f3f90d534564ab7727",
     );
   });
 

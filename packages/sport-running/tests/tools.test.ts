@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { asSchema } from "ai";
 import { todayInTZ, type ResolvedCs } from "@enduragent/core";
 import { createRunningTools, runningCreateWorkoutInputSchema } from "../src/tools.js";
 
@@ -316,5 +317,21 @@ describe("intervals_create_workout date guard", () => {
     expect(
       runningCreateWorkoutInputSchema.safeParse({ date: "June 15", workout }).success,
     ).toBe(false);
+  });
+});
+
+describe("tool schema portability", () => {
+  it("emits plain object schemas without root combinators", async () => {
+    const { client } = fakeIntervals({ ok: true, value: { id: 1 } });
+    const tools = createRunningTools(client as never, "UTC");
+    for (const registered of Object.values(tools)) {
+      const schema = (await Promise.resolve(
+        asSchema((registered as unknown as { inputSchema: never }).inputSchema).jsonSchema,
+      )) as Record<string, unknown>;
+      expect(schema.type).toBe("object");
+      expect(schema).not.toHaveProperty("anyOf");
+      expect(schema).not.toHaveProperty("oneOf");
+      expect(schema).not.toHaveProperty("allOf");
+    }
   });
 });

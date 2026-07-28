@@ -35,6 +35,7 @@ describe("READ_ONLY_TOOL_NAMES allowlist", () => {
 
   it("excludes every writer tool", () => {
     for (const writer of [
+      "intervals_create_strength_workout",
       "intervals_create_workout",
       "intervals_delete_workout",
       "memory_write",
