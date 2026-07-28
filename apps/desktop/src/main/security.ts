@@ -108,6 +108,7 @@ export async function installDesktopProtocol(input: {
       if (target.endsWith(".html")) headers.set("Content-Type", "text/html; charset=utf-8");
       if (target.endsWith(".js")) headers.set("Content-Type", "text/javascript; charset=utf-8");
       if (target.endsWith(".css")) headers.set("Content-Type", "text/css; charset=utf-8");
+      if (target.endsWith(".woff2")) headers.set("Content-Type", "font/woff2");
       return withCurrentPolicy(new Response(body, { status: 200, headers }));
     } catch {
       return withCurrentPolicy(new Response(null, { status: 404 }));
