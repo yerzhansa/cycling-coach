@@ -1,6 +1,11 @@
 import { create } from "zustand";
 import type { ViewId } from "../app/views.js";
-import { applyPalette, resolveTheme, type Appearance, type ResolvedTheme } from "../theme/applyPalette.js";
+import {
+  applyPalette,
+  resolveTheme,
+  type Appearance,
+  type ResolvedTheme,
+} from "../theme/applyPalette.js";
 import { paletteById } from "../theme/palettes.js";
 import {
   readStoredAppearance,
@@ -8,8 +13,9 @@ import {
   writeStoredAppearance,
   writeStoredPaletteId,
 } from "../theme/preferences.js";
+import { createChatSlice, type ChatSlice } from "./chat-slice.js";
 
-export interface EnduragentState {
+export interface EnduragentState extends ChatSlice {
   readonly activeView: ViewId;
   readonly paletteId: string;
   readonly appearance: Appearance;
@@ -31,7 +37,8 @@ function stamp(paletteId: string, appearance: Appearance): ResolvedTheme {
   });
 }
 
-export const useEnduragentStore = create<EnduragentState>((set, get) => ({
+export const useEnduragentStore = create<EnduragentState>((set, get, api) => ({
+  ...createChatSlice(set, get, api),
   activeView: "chat",
   paletteId: readStoredPaletteId(),
   appearance: readStoredAppearance(),

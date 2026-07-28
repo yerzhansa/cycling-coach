@@ -2,14 +2,14 @@ import { lazy, type ComponentType, type LazyExoticComponent } from "react";
 
 export type ViewId = "chat" | "training" | "settings";
 
-export const LEGACY_CHAT_REGION = "legacy-chat-region";
+export const REACT_CHAT_REGION = "react-chat-region";
 
 export interface ViewDefinition {
   readonly id: ViewId;
   readonly label: string;
   readonly glyph: string;
   readonly title: string;
-  readonly page: LazyExoticComponent<ComponentType> | typeof LEGACY_CHAT_REGION;
+  readonly page: LazyExoticComponent<ComponentType> | typeof REACT_CHAT_REGION;
 }
 
 export const VIEWS: readonly ViewDefinition[] = Object.freeze([
@@ -18,7 +18,7 @@ export const VIEWS: readonly ViewDefinition[] = Object.freeze([
     label: "Chat",
     glyph: "◆",
     title: "Chat",
-    page: LEGACY_CHAT_REGION,
+    page: REACT_CHAT_REGION,
   },
   {
     id: "training",
