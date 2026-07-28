@@ -70,39 +70,39 @@ const API_KEY_LABELS: Record<string, string> = {
 
 const MODELS: Record<string, { value: string; label: string; hint?: string }[]> = {
   anthropic: [
-    { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", hint: "recommended" },
+    { value: "claude-sonnet-5", label: "Claude Sonnet 5", hint: "recommended" },
     { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5", hint: "fast & cheap" },
-    { value: "claude-opus-4-8", label: "Claude Opus 4.8", hint: "most capable" },
+    { value: "claude-opus-5", label: "Claude Opus 5", hint: "most capable" },
   ],
   openai: [
-    { value: "gpt-5.5", label: "GPT-5.5", hint: "recommended" },
-    { value: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "fast & cheap" },
-    { value: "gpt-5.4-nano", label: "GPT-5.4 Nano", hint: "cheapest" },
+    { value: "gpt-5.6-sol", label: "GPT-5.6 Sol", hint: "recommended" },
+    { value: "gpt-5.6-terra", label: "GPT-5.6 Terra", hint: "balanced" },
+    { value: "gpt-5.6-luna", label: "GPT-5.6 Luna", hint: "cheapest" },
   ],
   google: [
-    { value: "gemini-3.5-flash", label: "Gemini 3.5 Flash", hint: "recommended" },
+    { value: "gemini-3.6-flash", label: "Gemini 3.6 Flash", hint: "recommended" },
     { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro", hint: "most capable" },
-    { value: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite", hint: "cheapest" },
+    { value: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash Lite", hint: "cheapest" },
   ],
   "openai-codex": [
-    { value: "gpt-5.5", label: "GPT-5.5", hint: "recommended" },
-    { value: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "faster" },
+    { value: "gpt-5.6-sol", label: "GPT-5.6 Sol", hint: "recommended" },
+    { value: "gpt-5.6-luna", label: "GPT-5.6 Luna", hint: "faster" },
   ],
   deepseek: [
     { value: "deepseek-v4-flash", label: "DeepSeek V4 Flash", hint: "recommended" },
     { value: "deepseek-v4-pro", label: "DeepSeek V4 Pro", hint: "most capable" },
   ],
   qwen: [
-    { value: "qwen3.5-plus", label: "Qwen3.5 Plus", hint: "recommended" },
-    { value: "qwen3-max", label: "Qwen3 Max", hint: "most capable" },
+    { value: "qwen3.7-plus", label: "Qwen3.7 Plus", hint: "recommended" },
+    { value: "qwen3.7-max", label: "Qwen3.7 Max", hint: "most capable" },
   ],
   minimax: [
-    { value: "MiniMax-M2.7", label: "MiniMax M2.7", hint: "recommended" },
-    { value: "MiniMax-M3", label: "MiniMax M3", hint: "most capable" },
+    { value: "MiniMax-M3", label: "MiniMax M3", hint: "recommended" },
+    { value: "MiniMax-M2.7", label: "MiniMax M2.7" },
   ],
   kimi: [
-    { value: "kimi-k2.6", label: "Kimi K2.6", hint: "recommended" },
-    { value: "kimi-k2.5", label: "Kimi K2.5", hint: "cheaper" },
+    { value: "kimi-k3", label: "Kimi K3", hint: "recommended" },
+    { value: "kimi-k2.6", label: "Kimi K2.6", hint: "cheaper" },
   ],
   zai: [
     { value: "glm-4.7", label: "GLM-4.7", hint: "recommended" },
@@ -113,7 +113,7 @@ const MODELS: Record<string, { value: string; label: string; hint?: string }[]> 
     { value: "deepseek/deepseek-v4-flash", label: "DeepSeek V4 Flash (via OpenRouter)", hint: "cheap" },
     { value: "z-ai/glm-5.2", label: "GLM-5.2 (via OpenRouter)", hint: "most capable" },
     { value: "qwen/qwen3.7-plus", label: "Qwen3.7 Plus (via OpenRouter)" },
-    { value: "moonshotai/kimi-k2.6", label: "Kimi K2.6 (via OpenRouter)" },
+    { value: "moonshotai/kimi-k3", label: "Kimi K3 (via OpenRouter)" },
   ],
 };
 
@@ -142,14 +142,14 @@ export type WizardCtx = {
 };
 
 const DEFAULT_MODELS: Record<string, string> = {
-  anthropic: "claude-sonnet-4-6",
-  openai: "gpt-5.5",
-  google: "gemini-3.5-flash",
-  "openai-codex": "gpt-5.5",
+  anthropic: "claude-sonnet-5",
+  openai: "gpt-5.6-sol",
+  google: "gemini-3.6-flash",
+  "openai-codex": "gpt-5.6-sol",
   deepseek: "deepseek-v4-flash",
-  qwen: "qwen3.5-plus",
-  minimax: "MiniMax-M2.7",
-  kimi: "kimi-k2.6",
+  qwen: "qwen3.7-plus",
+  minimax: "MiniMax-M3",
+  kimi: "kimi-k3",
   zai: "glm-4.7",
   openrouter: "deepseek/deepseek-v4-flash",
 };

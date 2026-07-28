@@ -72,23 +72,32 @@ export function readConfigYaml(): Record<string, unknown> {
 // ============================================================================
 
 const CONTEXT_WINDOWS: Record<string, number> = {
+  "claude-sonnet-5": 1_000_000,
+  "claude-opus-5": 1_000_000,
   "claude-sonnet-4-6": 1_000_000,
   "claude-opus-4-8": 1_000_000,
   "claude-haiku-4-5-20251001": 200_000,
   "gpt-4o": 128_000,
+  "gpt-5.6-sol": 1_050_000,
+  "gpt-5.6-terra": 1_050_000,
+  "gpt-5.6-luna": 1_050_000,
   "gpt-5.5": 1_050_000,
   "gpt-5.4": 1_050_000,
   "gpt-5.4-mini": 400_000,
   "gpt-5.4-nano": 400_000,
+  "gemini-3.6-flash": 1_048_576,
   "gemini-3.5-flash": 1_048_576,
+  "gemini-3.5-flash-lite": 1_048_576,
   "gemini-3.1-pro-preview": 1_048_576,
   "gemini-3.1-flash-lite": 1_048_576,
   "deepseek-v4-flash": 1_000_000,
   "deepseek-v4-pro": 1_000_000,
+  "qwen3.7-plus": 1_000_000,
   "qwen3.5-plus": 1_000_000,
   "qwen3-max": 262_144,
   "MiniMax-M2.7": 204_800,
   "MiniMax-M3": 1_000_000,
+  "kimi-k3": 1_000_000,
   "kimi-k2.6": 262_144,
   "kimi-k2.5": 262_144,
   "glm-5.2": 1_000_000,
@@ -97,6 +106,7 @@ const CONTEXT_WINDOWS: Record<string, number> = {
   "deepseek/deepseek-v4-flash": 1_000_000,
   "z-ai/glm-5.2": 1_000_000,
   "qwen/qwen3.7-plus": 1_000_000,
+  "moonshotai/kimi-k3": 1_000_000,
   "moonshotai/kimi-k2.6": 262_000,
 };
 
@@ -245,14 +255,14 @@ export function loadConfig(): Config {
   );
 
   const defaultModelMap: Record<string, string> = {
-    anthropic: "claude-sonnet-4-6",
-    openai: "gpt-5.5",
-    google: "gemini-3.5-flash",
-    "openai-codex": "gpt-5.5",
+    anthropic: "claude-sonnet-5",
+    openai: "gpt-5.6-sol",
+    google: "gemini-3.6-flash",
+    "openai-codex": "gpt-5.6-sol",
     deepseek: "deepseek-v4-flash",
-    qwen: "qwen3.5-plus",
-    minimax: "MiniMax-M2.7",
-    kimi: "kimi-k2.6",
+    qwen: "qwen3.7-plus",
+    minimax: "MiniMax-M3",
+    kimi: "kimi-k3",
     zai: "glm-4.7",
     openrouter: "deepseek/deepseek-v4-flash",
   };
