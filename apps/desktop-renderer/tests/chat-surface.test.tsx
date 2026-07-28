@@ -53,7 +53,7 @@ describe("chat surface", () => {
     actions = stubActions();
     useEnduragentStore.setState({
       activeView: "chat",
-      legacyReady: true,
+      runtimeReady: true,
       chat: EMPTY_CHAT_SURFACE,
       firstSync: { status: "idle" },
       chatActions: actions,

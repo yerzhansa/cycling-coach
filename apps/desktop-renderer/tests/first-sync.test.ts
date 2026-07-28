@@ -466,7 +466,7 @@ describe("first sync controller", () => {
 
   it("keeps first sync free of a second wire tracker and ships the existing status surface", async () => {
     const [host, card, controller, styles] = await Promise.all([
-      readFile(new URL("../src/legacy-boot.ts", import.meta.url), "utf8"),
+      readFile(new URL("../src/boot.ts", import.meta.url), "utf8"),
       readFile(new URL("../src/ui/chat/FirstSyncCard.tsx", import.meta.url), "utf8"),
       readFile(new URL("../src/first-sync.ts", import.meta.url), "utf8"),
       readFile(new URL("../src/styles.css", import.meta.url), "utf8"),
