@@ -1,17 +1,16 @@
 import { Suspense, useEffect, useRef, type ReactElement } from "react";
 import type { LegacyHosts } from "../legacy-boot.js";
 import { useEnduragentStore } from "../state/store.js";
+import { ChatView } from "../ui/chat/ChatView.js";
 import { Sidebar } from "../ui/sidebar/Sidebar.js";
 import styles from "./Shell.module.css";
-import { LEGACY_CHAT_REGION, VIEWS } from "./views.js";
+import { REACT_CHAT_REGION, VIEWS } from "./views.js";
 
 export function Shell(props: {
   readonly onHostsReady: (hosts: LegacyHosts) => void;
 }): ReactElement {
   const activeView = useEnduragentStore((state) => state.activeView);
-  const conversation = useRef<HTMLElement>(null);
-  const thread = useRef<HTMLDivElement>(null);
-  const composerHost = useRef<HTMLDivElement>(null);
+  const noticeHost = useRef<HTMLDivElement>(null);
   const topbar = useRef<HTMLElement>(null);
   const spendRoot = useRef<HTMLDivElement>(null);
   const spine = useRef<HTMLElement>(null);
@@ -20,9 +19,7 @@ export function Shell(props: {
 
   useEffect(() => {
     const hosts = {
-      conversation: conversation.current,
-      thread: thread.current,
-      composerHost: composerHost.current,
+      noticeHost: noticeHost.current,
       topbar: topbar.current,
       spendRoot: spendRoot.current,
       spine: spine.current,
@@ -41,14 +38,11 @@ export function Shell(props: {
         </header>
         <div className={styles.views}>
           <div className={activeView === "chat" ? styles.chatRegion : styles.away}>
-            <main className="conversation" aria-label="Coaching conversation" ref={conversation}>
-              <div className="thread" ref={thread} />
-            </main>
-            <div className="composer-wrap" ref={composerHost} />
+            <ChatView noticeHostRef={noticeHost} />
           </div>
-          {VIEWS.filter((view) => view.id === activeView && view.page !== LEGACY_CHAT_REGION).map(
+          {VIEWS.filter((view) => view.id === activeView && view.page !== REACT_CHAT_REGION).map(
             (view) => {
-              const Page = view.page as Exclude<typeof view.page, typeof LEGACY_CHAT_REGION>;
+              const Page = view.page as Exclude<typeof view.page, typeof REACT_CHAT_REGION>;
               return (
                 <Suspense
                   key={view.id}

@@ -4,6 +4,7 @@ import {
   type CoachClient,
 } from "@enduragent/coach-client";
 import { SaveIntakeRpcParamsSchema } from "@enduragent/coach-contract";
+import { flushSync } from "react-dom";
 import "./styles.css";
 import "./chat/styles.css";
 import "./training-context/styles.css";
@@ -14,9 +15,11 @@ import "./settings/styles.css";
 import "./onboarding/onboarding.css";
 import "./ride-import.css";
 import { createChatController } from "./chat/controller.js";
-import { mountChatView } from "./chat/view.js";
 import { createDesktopCoachClientProvider } from "./coach-client.js";
-import { createFirstSyncController, type FirstSyncState } from "./first-sync.js";
+import { createFirstSyncController } from "./first-sync.js";
+import { createChatViewAdapter } from "./state/adapters/chat.js";
+import { createFirstSyncViewAdapter } from "./state/adapters/first-sync.js";
+import { useEnduragentStore } from "./state/store.js";
 import { validateImportPaths, type OnboardingBridge } from "./onboarding/bridge.js";
 import { createOnboardingCompletionController } from "./onboarding/completion.js";
 import { mountOnboarding } from "./onboarding/mount.js";
@@ -46,9 +49,7 @@ import {
 } from "./ride-import.js";
 
 export interface LegacyHosts {
-  readonly conversation: HTMLElement;
-  readonly thread: HTMLElement;
-  readonly composerHost: HTMLElement;
+  readonly noticeHost: HTMLElement;
   readonly topbar: HTMLElement;
   readonly spendRoot: HTMLElement;
   readonly spine: HTMLElement;
@@ -57,17 +58,13 @@ export interface LegacyHosts {
 
 export type Disposer = () => void;
 
-function within<T extends Element>(root: ParentNode, selector: string, kind: { new (): T }): T {
-  const matches = root.querySelectorAll(selector);
-  if (matches.length !== 1 || !(matches[0] instanceof kind)) {
-    throw new TypeError(`Desktop shell host is invalid: ${selector}`);
-  }
-  return matches[0];
+function focusComposer(): void {
+  const composer = document.querySelector("#message");
+  if (composer instanceof HTMLTextAreaElement) composer.focus();
 }
 
 export function bootLegacy(hosts: LegacyHosts): Disposer {
-  const { conversation, thread, composerHost, topbar, spendRoot, spine, drawer } = hosts;
-  conversation.classList.add("desktop-shell");
+  const { noticeHost, topbar, spendRoot, spine, drawer } = hosts;
 
   const topbarActions = document.createElement("div");
   topbarActions.className = "topbar-actions";
@@ -126,101 +123,44 @@ export function bootLegacy(hosts: LegacyHosts): Disposer {
     coordinator: trainingSyncCoordinator,
     view: mountedTrainingContext.syncView,
   });
-  const mountedChat = mountChatView({
-    conversation,
-    thread,
-    composerHost,
-    actionHost: topbarActions,
-  });
   const spendController = createSpendMeterController({
     clients,
-    view: createSpendMeterView({ root: spendRoot, noticeHost: mountedChat.noticeHost }),
+    view: createSpendMeterView({ root: spendRoot, noticeHost }),
   });
-  const message = within(composerHost, "#message", HTMLTextAreaElement);
+  const chatAdapter = createChatViewAdapter({
+    publish: (next) =>
+      flushSync(() => {
+        useEnduragentStore.getState().setChatSurface(next);
+      }),
+  });
   const chatController = createChatController({
     clients,
-    view: mountedChat.view,
+    view: chatAdapter.view,
     refreshTrainingContext: () => trainingContextController.refresh(),
     refreshSpend: () => spendController.refresh(),
     readTranscriptPage: (request) => window.enduragentAuth.getTranscriptPage(request),
-  });
-  mountedChat.bind({
-    onSubmit: (message) => void chatController.submit(message),
-    onRetry: () => void chatController.retryInterrupted(),
-    onLoadEarlier: () => void chatController.loadEarlier(),
-    onRetryHydration: () => void chatController.retryHydration(),
-    onOpenNewConversation: () => void chatController.openNewConversation(),
-    onCancelNewConversation: () => chatController.cancelNewConversation(),
-    onConfirmNewConversation: () => void chatController.confirmNewConversation(),
   });
   mountedTrainingContext.bind({
     onUnitsPreferenceChange: (value) => void trainingContextController.setUnitsPreference(value),
     onSyncRequest: (kind) => void manualSyncController.activate(kind),
   });
 
-  let firstSyncElement: HTMLElement | undefined;
-  let firstSyncController: ReturnType<typeof createFirstSyncController>;
-
-  function renderFirstSync(state: FirstSyncState): void {
-    if (state.status === "idle" || state.status === "ready") {
-      firstSyncElement?.remove();
-      firstSyncElement = undefined;
-      return;
-    }
-    const section = firstSyncElement ?? document.createElement("section");
-    section.className = "first-sync";
-    section.dataset.state = state.status;
-    section.setAttribute("aria-labelledby", "first-sync-title");
-    section.replaceChildren();
-    const mark = document.createElement("div");
-    mark.className = "first-sync__mark";
-    mark.setAttribute("aria-hidden", "true");
-    const body = document.createElement("div");
-    body.className = "first-sync__body";
-    const eyebrow = document.createElement("p");
-    eyebrow.className = "first-sync__eyebrow";
-    eyebrow.textContent = "Getting your coach ready";
-    const title = document.createElement("h2");
-    title.id = "first-sync-title";
-    const detail = document.createElement("p");
-    detail.className = "first-sync__detail";
-    if (state.status === "syncing") {
-      title.textContent = "Syncing your training history…";
-      detail.textContent =
-        "You can keep Enduragent open while rides, wellness, and calendar data are added.";
-      const track = document.createElement("div");
-      track.className = "first-sync__track";
-      track.setAttribute("role", "progressbar");
-      track.setAttribute("aria-label", "Syncing training history");
-      body.append(eyebrow, title, detail, track);
-    } else if (state.kind === "protocol") {
-      title.textContent = "Enduragent needs to reconnect safely";
-      detail.textContent = "Quit and reopen Enduragent.";
-      body.append(eyebrow, title, detail);
-    } else {
-      title.textContent = "We couldn’t finish syncing";
-      detail.textContent = "Your saved progress is safe.";
-      const retry = document.createElement("button");
-      retry.type = "button";
-      retry.className = "first-sync__retry";
-      retry.textContent = "Retry sync";
-      retry.addEventListener("click", () => {
-        retry.disabled = true;
-        void firstSyncController.retry();
-      });
-      body.append(eyebrow, title, detail, retry);
-    }
-    section.append(mark, body);
-    if (firstSyncElement === undefined) thread.append(section);
-    firstSyncElement = section;
-  }
-
-  firstSyncController = createFirstSyncController({
+  const firstSyncController = createFirstSyncController({
     coordinator: trainingSyncCoordinator,
-    focusComposer() {
-      message.focus();
-    },
-    render: renderFirstSync,
+    focusComposer,
+    render: createFirstSyncViewAdapter({
+      publish: (next) => useEnduragentStore.getState().setFirstSync(next),
+    }).render,
+  });
+  useEnduragentStore.getState().bindChatActions({
+    submit: (message) => void chatController.submit(message),
+    retry: () => void chatController.retryInterrupted(),
+    loadEarlier: () => void chatController.loadEarlier(),
+    retryHydration: () => void chatController.retryHydration(),
+    openNewConversation: () => void chatController.openNewConversation(),
+    cancelNewConversation: () => chatController.cancelNewConversation(),
+    confirmNewConversation: () => void chatController.confirmNewConversation(),
+    retryFirstSync: () => void firstSyncController.retry(),
   });
 
   let onboardingNeedsReconnect = false;
@@ -404,6 +344,7 @@ export function bootLegacy(hosts: LegacyHosts): Disposer {
   const dispose = (): void => {
     if (disposed) return;
     disposed = true;
+    useEnduragentStore.getState().bindChatActions(null);
     window.removeEventListener("enduragent-lifecycle", onLifecycle);
     window.removeEventListener("pagehide", dispose);
     releaseNotesController.dispose();
@@ -421,7 +362,6 @@ export function bootLegacy(hosts: LegacyHosts): Disposer {
     trainingSyncCoordinator.dispose();
     chatController.dispose();
     spendController.dispose();
-    mountedChat.dispose();
     trainingContextController.dispose();
     mountedTrainingContext.dispose();
     void clients.close();

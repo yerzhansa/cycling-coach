@@ -14,11 +14,15 @@ if (!(container instanceof HTMLElement)) {
 }
 
 let legacy: Disposer | undefined;
+let booting = false;
 
 function onHostsReady(hosts: LegacyHosts): void {
-  if (legacy !== undefined) return;
-  legacy = bootLegacy(hosts);
-  useEnduragentStore.getState().markLegacyReady();
+  if (booting || legacy !== undefined) return;
+  booting = true;
+  queueMicrotask(() => {
+    legacy = bootLegacy(hosts);
+    useEnduragentStore.getState().markLegacyReady();
+  });
 }
 
 createRoot(container).render(<App onHostsReady={onHostsReady} />);

@@ -1,0 +1,8 @@
+.page {
+  display: contents;
+}
+
+.prose {
+  font: 16px/1.6 var(--f-prose);
+  letter-spacing: 0.002em;
+}
