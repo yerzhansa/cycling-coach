@@ -84,14 +84,18 @@ describe("shell", () => {
 
   it("keeps the chat surface mounted while another view is shown", async () => {
     const user = userEvent.setup();
-    render(<Shell onHostsReady={() => {}} />);
+    const onHostsReady = vi.fn<(hosts: LegacyHosts) => void>();
+    render(<Shell onHostsReady={onHostsReady} />);
     const thread = document.querySelector("div.thread");
+    const noticeHost = onHostsReady.mock.calls[0][0].noticeHost;
 
     await user.click(screen.getByRole("button", { name: "Settings" }));
     await screen.findByRole("region", { name: "Settings" });
 
     expect(thread?.isConnected).toBe(true);
+    expect(noticeHost.isConnected).toBe(true);
     expect(document.querySelector("textarea#message")).not.toBeNull();
+    expect(onHostsReady).toHaveBeenCalledTimes(1);
   });
 
   it("disables the new chat button until the chat controller is bound", () => {
