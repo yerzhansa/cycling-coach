@@ -246,7 +246,7 @@ input:focus-visible {
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --canvas: #141916;
     --surface: #1c231f;
     --surface-solid: #202923;
@@ -262,6 +262,23 @@ input:focus-visible {
     --coral: #df8a75;
     --focus: #9cc8aa;
   }
+}
+
+:root[data-theme="dark"] {
+  --canvas: #141916;
+  --surface: #1c231f;
+  --surface-solid: #202923;
+  --surface-soft: #18201b;
+  --ink: #edf3ef;
+  --muted: #9eaaa3;
+  --faint: #7f8c84;
+  --line: #303b35;
+  --line-strong: #46534c;
+  --moss: #79a889;
+  --moss-strong: #9cc8aa;
+  --moss-soft: #263a2e;
+  --coral: #df8a75;
+  --focus: #9cc8aa;
 }
 
 @media (max-width: 760px) {

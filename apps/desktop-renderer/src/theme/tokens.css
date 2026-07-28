@@ -49,7 +49,12 @@
   }
 }
 
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --bg: #0f1520;
   --rail: #0b101a;
   --surface: #161e2b;
