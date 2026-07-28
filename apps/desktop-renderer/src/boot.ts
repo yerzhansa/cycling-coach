@@ -5,10 +5,6 @@ import {
 } from "@enduragent/coach-client";
 import { SaveIntakeRpcParamsSchema } from "@enduragent/coach-contract";
 import { flushSync } from "react-dom";
-import "./styles.css";
-import "./chat/styles.css";
-import "./training-context/styles.css";
-import "./ride-import.css";
 import { createChatController } from "./chat/controller.js";
 import { createDesktopCoachClientProvider } from "./coach-client.js";
 import { createFirstSyncController } from "./first-sync.js";

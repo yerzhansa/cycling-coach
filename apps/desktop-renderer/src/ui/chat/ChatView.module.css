@@ -1,0 +1,47 @@
+.conversation {
+  grid-column: 1;
+  overflow: auto;
+  padding: 34px 0 var(--chat-composer-clearance, 150px);
+}
+
+.thread {
+  width: min(820px, calc(100% - 48px));
+  margin: 0 auto;
+}
+
+.composerWrap {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  grid-column: 1;
+  grid-row: 2;
+  align-self: end;
+  padding: 12px max(24px, calc((100% - 48px - 820px) / 2)) 18px;
+  background: linear-gradient(transparent, var(--bg) 28%);
+}
+
+.noticeHost:empty {
+  display: none;
+}
+
+.announcement {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.announcement:not(:empty) {
+  padding: 0 14px 8px;
+}
+
+@media (max-width: 760px) {
+  .thread {
+    width: calc(100% - 32px);
+  }
+
+  .composerWrap {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+}

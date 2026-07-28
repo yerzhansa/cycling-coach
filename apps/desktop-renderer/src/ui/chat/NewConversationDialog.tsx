@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, type ReactElement } from "react";
 import { focusNewConversationOpener } from "../../state/new-conversation-opener.js";
 import { useEnduragentStore } from "../../state/store.js";
+import styles from "./NewConversationDialog.module.css";
 
 const BASE_COPY =
   "Your visible conversation will be cleared. Your training data and saved coach memory will remain.";
@@ -44,7 +45,7 @@ export function NewConversationDialog(props: {
   return (
     <dialog
       ref={dialog}
-      className="new-conversation-dialog"
+      className={`${styles.dialog} new-conversation-dialog`}
       aria-labelledby="new-conversation-title"
       aria-describedby="new-conversation-description"
       aria-modal="true"
@@ -56,7 +57,7 @@ export function NewConversationDialog(props: {
     >
       <h2 id="new-conversation-title">Start a new conversation?</h2>
       <p id="new-conversation-description">{hasHydratedHistory ? HYDRATED_COPY : BASE_COPY}</p>
-      <div className="new-conversation-dialog__actions">
+      <div className={`${styles.actions} new-conversation-dialog__actions`}>
         <button
           type="button"
           ref={cancel}
@@ -69,7 +70,7 @@ export function NewConversationDialog(props: {
         </button>
         <button
           type="button"
-          className="new-conversation-dialog__confirm"
+          className={`${styles.confirm} new-conversation-dialog__confirm`}
           disabled={pending}
           onClick={() => {
             actions?.confirmNewConversation();

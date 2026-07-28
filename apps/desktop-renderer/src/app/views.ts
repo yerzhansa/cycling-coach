@@ -39,7 +39,3 @@ export const VIEWS: readonly ViewDefinition[] = Object.freeze([
     })),
   },
 ]);
-
-export function viewById(id: ViewId): ViewDefinition {
-  return VIEWS.find((view) => view.id === id) ?? VIEWS[0];
-}

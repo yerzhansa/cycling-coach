@@ -1,3 +1,49 @@
 .form {
   position: relative;
 }
+
+.label {
+  display: block;
+  margin: 0 0 7px 14px;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  align-items: end;
+  gap: 8px;
+  padding: 9px 9px 9px 17px;
+  border: 1px solid var(--line-2);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: 0 12px 38px color-mix(in srgb, var(--ink) 10%, transparent);
+}
+
+.controls textarea {
+  min-height: 40px;
+  max-height: 140px;
+  padding: 8px 0;
+  resize: none;
+  border: 0;
+  outline: 0;
+  color: var(--ink);
+  background: transparent;
+}
+
+.controls button {
+  width: 42px;
+  height: 42px;
+  border: 0;
+  border-radius: 50%;
+  color: var(--brand-ink);
+  background: var(--brand);
+  cursor: pointer;
+}
+
+.controls button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}

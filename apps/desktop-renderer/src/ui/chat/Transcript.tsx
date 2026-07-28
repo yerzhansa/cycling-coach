@@ -14,8 +14,8 @@ function MessageRow(props: { readonly message: ChatMessageView }): ReactElement 
   const silent = message.historical || message.role === "athlete";
   const rowClassName =
     message.role === "coach"
-      ? `chat-message chat-message--coach ${styles.prose}`
-      : "chat-message chat-message--athlete";
+      ? `${styles.row} ${styles.coach} chat-message chat-message--coach ${styles.prose}`
+      : `${styles.row} ${styles.athlete} chat-message chat-message--athlete`;
 
   return (
     <article
@@ -26,7 +26,9 @@ function MessageRow(props: { readonly message: ChatMessageView }): ReactElement 
       aria-atomic={message.role === "coach" ? "true" : "false"}
       aria-busy={streaming ? "true" : undefined}
     >
-      <p className="chat-message__role">{message.role === "athlete" ? "You" : "Coach"}</p>
+      <p className={`${styles.role} chat-message__role`}>
+        {message.role === "athlete" ? "You" : "Coach"}
+      </p>
       {message.role === "athlete" ? (
         <AthleteMessage text={message.text} />
       ) : streaming ? (
@@ -43,7 +45,7 @@ export function Transcript(): ReactElement {
 
   return (
     <section
-      className="chat-transcript"
+      className={`${styles.transcript} chat-transcript`}
       role="log"
       aria-live="polite"
       aria-relevant="additions text"
@@ -51,7 +53,7 @@ export function Transcript(): ReactElement {
       aria-label="Coach conversation"
     >
       <HistoryControls />
-      <div className="chat-messages">
+      <div className={`${styles.messages} chat-messages`}>
         {messages.length === 0 ? null : (
           <div className={styles.page}>
             {messages.map((message) => (

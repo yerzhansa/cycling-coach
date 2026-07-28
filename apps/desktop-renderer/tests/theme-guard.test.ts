@@ -7,6 +7,7 @@ const sourceRoot = resolve(import.meta.dirname, "..", "src");
 const DARK_MEDIA = /prefers-color-scheme:\s*dark/u;
 const SYSTEM_DARK_GUARD = ':not([data-theme="light"])';
 const EXPLICIT_DARK_GUARD = '[data-theme="dark"]';
+const RUNTIME_PROPERTIES = new Set(["--chat-composer-clearance"]);
 
 interface ParsedRule {
   readonly selector: string;
@@ -64,8 +65,7 @@ async function stylesheets(): Promise<readonly string[]> {
 describe("theme guards", () => {
   it("gates every system-dark custom property behind the explicit light override", async () => {
     const files = await stylesheets();
-    expect(files).toContain("styles.css");
-    expect(files).toContain("training-context/styles.css");
+    expect(files).toContain("theme/tokens.css");
 
     let guarded = 0;
     for (const file of files) {
@@ -77,7 +77,7 @@ describe("theme guards", () => {
         expect(`${file} ${rule.selector}`).toContain(SYSTEM_DARK_GUARD);
       }
     }
-    expect(guarded).toBeGreaterThanOrEqual(3);
+    expect(guarded).toBeGreaterThanOrEqual(1);
   });
 
   it("mirrors every system-dark custom property onto the stamped dark theme", async () => {
@@ -100,28 +100,7 @@ describe("theme guards", () => {
     }
   });
 
-  it("keeps the legacy surface ramp readable against the stamped palette ink", async () => {
-    const rules = parse(await readFile(resolve(sourceRoot, "styles.css"), "utf8"));
-    const stamped = rules.find(
-      (rule) => rule.media === undefined && rule.selector === ':root[data-theme="dark"]',
-    );
-    expect(stamped).toBeDefined();
-    for (const property of [
-      "--canvas",
-      "--surface",
-      "--surface-solid",
-      "--surface-soft",
-      "--muted",
-      "--faint",
-      "--line-strong",
-      "--focus",
-      "--moss",
-      "--moss-strong",
-      "--moss-soft",
-      "--coral",
-    ])
-      expect(stamped?.declarations.has(property)).toBe(true);
-
+  it("stamps the colour scheme for both explicit themes", async () => {
     const tokens = parse(await readFile(resolve(sourceRoot, "theme/tokens.css"), "utf8"));
     for (const [selector, scheme] of [
       [':root[data-theme="light"]', "light"],
@@ -135,15 +114,26 @@ describe("theme guards", () => {
             new RegExp(`color-scheme:\\s*${scheme}\\s*;`, "u").test(rule.raw),
         ),
       ).toBe(true);
+  });
 
-    const drawer = parse(await readFile(resolve(sourceRoot, "training-context/styles.css"), "utf8"));
-    expect(
-      drawer.some(
-        (rule) =>
-          rule.media === undefined &&
-          rule.selector.includes(EXPLICIT_DARK_GUARD) &&
-          rule.declarations.has("--sync-status-caution"),
+  it("resolves every referenced custom property from the theme vocabulary", async () => {
+    const tokens = parse(await readFile(resolve(sourceRoot, "theme/tokens.css"), "utf8"));
+    const declared = new Set(
+      tokens.flatMap((rule) =>
+        rule.selector.startsWith(":root") ? [...rule.declarations.keys()] : [],
       ),
-    ).toBe(true);
+    );
+    expect(declared.size).toBeGreaterThanOrEqual(20);
+
+    const undeclared: string[] = [];
+    for (const file of await stylesheets()) {
+      const source = await readFile(resolve(sourceRoot, file), "utf8");
+      for (const match of source.matchAll(/var\(\s*(--[\w-]+)/gu)) {
+        const property = match[1];
+        if (RUNTIME_PROPERTIES.has(property) || declared.has(property)) continue;
+        undeclared.push(`${file} ${property}`);
+      }
+    }
+    expect(undeclared).toEqual([]);
   });
 });

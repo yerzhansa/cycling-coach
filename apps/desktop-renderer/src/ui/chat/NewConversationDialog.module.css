@@ -1,0 +1,57 @@
+.dialog {
+  width: min(460px, calc(100vw - 32px));
+  max-width: none;
+  padding: 24px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: 0 24px 70px color-mix(in srgb, var(--ink) 24%, transparent);
+}
+
+.dialog::backdrop {
+  background: color-mix(in srgb, var(--ink) 35%, transparent);
+}
+
+.dialog h2,
+.dialog p {
+  margin: 0;
+}
+
+.dialog h2 {
+  font-size: 20px;
+}
+
+.dialog p {
+  margin-top: 10px;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.actions button {
+  min-height: 38px;
+  padding: 0 15px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  color: var(--ink);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.actions button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.actions .confirm {
+  border-color: var(--brand);
+  color: var(--brand-ink);
+  background: var(--brand);
+}

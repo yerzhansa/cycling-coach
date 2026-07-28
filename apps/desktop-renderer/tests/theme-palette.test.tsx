@@ -1,6 +1,9 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   applyPalette,
+  paletteCustomProperties,
   resolveTheme,
   type ResolvedTheme,
 } from "../src/theme/applyPalette.js";
@@ -56,11 +59,57 @@ describe("palette engine", () => {
         const applied = applyPalette({ root, palette, appearance: theme });
         expect(applied).toBe(theme);
         expect(root.getAttribute("data-theme")).toBe(theme);
-        for (const [property, value] of expectedProperties(palette.id, theme)) {
+        const expected = expectedProperties(palette.id, theme);
+        for (const [property, value] of expected) {
           expect(root.style.getPropertyValue(property)).toBe(value);
         }
+        expect([...root.style].sort()).toEqual([...expected.keys()].sort());
       }
     }
+  });
+
+  it("gives every palette a complete opaque ramp in both themes", () => {
+    const hex = /^#[0-9a-f]{6}$/u;
+    const invalid: string[] = [];
+    for (const palette of PALETTES) {
+      expect(palette.name.length).toBeGreaterThan(0);
+      for (const ramp of [palette.l, palette.d]) {
+        const entries = Object.entries(ramp);
+        expect(entries).toHaveLength(10);
+        for (const [key, value] of entries)
+          if (!hex.test(value)) invalid.push(`${palette.id}.${key}=${value}`);
+      }
+      expect(palette.l).not.toEqual(palette.d);
+    }
+    expect(invalid).toEqual([]);
+  });
+
+  it("replaces every stamped property when the palette changes", () => {
+    const root = document.createElement("div");
+    const stale: string[] = [];
+    for (const theme of ["light", "dark"] as const) {
+      for (const palette of PALETTES) {
+        applyPalette({ root, palette, appearance: theme });
+        for (const [property, value] of paletteCustomProperties(palette, theme))
+          if (root.style.getPropertyValue(property) !== value)
+            stale.push(`${palette.id} ${theme} ${property}`);
+      }
+    }
+    expect(stale).toEqual([]);
+  });
+
+  it("covers the whole colour vocabulary declared in the token sheet", async () => {
+    const tokens = await readFile(
+      resolve(import.meta.dirname, "..", "src", "theme", "tokens.css"),
+      "utf8",
+    );
+    const declared = [...tokens.slice(0, tokens.indexOf("}")).matchAll(/(--[\w-]+)\s*:/gu)]
+      .map((match) => match[1])
+      .filter((property) => !property.startsWith("--f-") && !property.startsWith("--r"));
+    const stamped = new Set(paletteCustomProperties(PALETTES[0], "light").keys());
+
+    expect(declared.length).toBeGreaterThan(0);
+    expect(declared.filter((property) => !stamped.has(property))).toEqual([]);
   });
 
   it("keeps the chart pair fixed across every palette", () => {

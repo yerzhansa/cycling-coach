@@ -1,0 +1,41 @@
+.group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  margin: 0 0 10px;
+}
+
+.shortcut {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  color: var(--brand);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.shortcut:focus-visible {
+  outline: 3px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.shortcut:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.label {
+  overflow-wrap: anywhere;
+}
+
+.command {
+  color: var(--ink-2);
+  font: 11px/1.2 var(--f-mono);
+}

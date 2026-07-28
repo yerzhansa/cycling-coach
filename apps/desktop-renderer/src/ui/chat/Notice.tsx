@@ -1,10 +1,11 @@
 import type { ReactElement } from "react";
 import { useEnduragentStore } from "../../state/store.js";
+import styles from "./Transcript.module.css";
 
 export function Notice(): ReactElement {
   const notice = useEnduragentStore((state) => state.chat.notice);
   return (
-    <p className="chat-notice" hidden={notice === null}>
+    <p className={`${styles.notice} chat-notice`} hidden={notice === null}>
       {notice ?? ""}
     </p>
   );
@@ -18,7 +19,7 @@ export function RetryBar(): ReactElement {
   return (
     <button
       type="button"
-      className="chat-retry"
+      className={`${styles.pill} chat-retry`}
       hidden={!interrupted}
       disabled={workBlocked}
       onClick={() => {

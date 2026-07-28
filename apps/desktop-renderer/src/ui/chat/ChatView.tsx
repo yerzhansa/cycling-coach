@@ -4,6 +4,7 @@ import {
   chatScrollAnchor,
 } from "../../state/chat-stream.js";
 import { useEnduragentStore } from "../../state/store.js";
+import styles from "./ChatView.module.css";
 import { Composer, type ComposerHandle } from "./Composer.js";
 import { FirstSyncCard } from "./FirstSyncCard.js";
 import { NewConversationDialog } from "./NewConversationDialog.js";
@@ -83,19 +84,23 @@ export function ChatView(): ReactElement {
   return (
     <>
       <main
-        className="conversation desktop-shell"
+        className={`${styles.conversation} conversation`}
         aria-label="Coaching conversation"
         data-chat-status={status}
         ref={conversation}
       >
-        <div className="thread">
+        <div className={`${styles.thread} thread`}>
           <Transcript />
           <FirstSyncCard />
         </div>
       </main>
-      <div className="composer-wrap" ref={composerWrap}>
-        <div className="chat-notice-host">
-          <p className="new-conversation-status" role="status" aria-live="polite">
+      <div className={`${styles.composerWrap} composer-wrap`} ref={composerWrap}>
+        <div className={`${styles.noticeHost} chat-notice-host`}>
+          <p
+            className={`${styles.announcement} new-conversation-status`}
+            role="status"
+            aria-live="polite"
+          >
             {announcement ?? ""}
           </p>
           <SpendNotice />

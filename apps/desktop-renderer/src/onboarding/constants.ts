@@ -38,7 +38,6 @@ export const DESKTOP_CREDENTIAL_SLOTS = [
 ] as const;
 
 export type DesktopCredentialSlot = (typeof DESKTOP_CREDENTIAL_SLOTS)[number];
-export type ModelCredentialSlot = Exclude<DesktopCredentialSlot, "intervals-icu">;
 
 export const ONBOARDING_LLM_PROVIDER_LABELS = {
   anthropic: "Anthropic",
