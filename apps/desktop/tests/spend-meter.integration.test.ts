@@ -303,7 +303,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
     expect(narrow).toEqual({ visible: true, overflow: false });
   }, 20_000);
 
-  it("preserves the closed bridge, training-data drawer, hardened renderer, and token containment", async () => {
+  it("preserves the closed bridge, sidebar sync chip, hardened renderer, and token containment", async () => {
     const { fixture } = await launch();
     const screenshotRoot = await mkdtemp(join(await realpath(tmpdir()), "spend-shot-"));
     scratch.push(screenshotRoot);
@@ -311,14 +311,14 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
     await fixture.screenshot(screenshot);
     const state = await fixture.evaluate<{
       readonly bridgeKeys: readonly string[];
-      readonly drawer: boolean;
+      readonly syncChip: boolean;
       readonly node: string;
       readonly location: string;
       readonly dom: string;
     }>(`
       return {
         bridgeKeys: Object.keys(window.enduragentAuth).sort(),
-        drawer: document.querySelectorAll('.drawer[aria-label="Training data"]').length === 1,
+        syncChip: document.querySelectorAll("button.sync-chip").length === 1,
         node: typeof process + ":" + typeof require,
         location: location.href,
         dom: document.documentElement.outerHTML,
@@ -343,7 +343,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       "retryFailedCredentials",
       "writeCredential",
     ]);
-    expect(state.drawer).toBe(true);
+    expect(state.syncChip).toBe(true);
     expect(state.node).toBe("undefined:undefined");
     expect(state.location).toBe("enduragent://app/index.html");
     for (const surface of [

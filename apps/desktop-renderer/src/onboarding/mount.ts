@@ -60,7 +60,7 @@ interface MountOnboardingOptions {
   readonly bridge: OnboardingBridge;
   readonly rideImports?: RideImportController;
   readonly onRideImportPresentationChange?: (presenting: boolean) => void;
-  readonly opener: HTMLElement;
+  readonly opener: Pick<HTMLElement, "focus">;
   readonly onComplete: (completion: OnboardingCompletion) => void;
 }
 

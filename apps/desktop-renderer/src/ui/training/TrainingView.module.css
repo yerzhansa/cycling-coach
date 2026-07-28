@@ -1,9 +1,257 @@
-.note {
-  margin: 0;
-  padding: 18px 20px;
+.status {
+  margin: 0 0 14px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.panel {
+  margin-bottom: 14px;
+  padding: 16px 18px;
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
-  color: var(--ink-2);
   background: var(--surface);
-  font: 16px/1.6 var(--f-prose);
+}
+
+.panel:last-child {
+  margin-bottom: 0;
+}
+
+.panelTitle {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.panelBody {
+  margin-top: 12px;
+  min-width: 0;
+}
+
+.subheading {
+  margin: 18px 0 0;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.value {
+  margin: 0 0 6px;
+  font: 600 34px/1 var(--f-dis);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.meta {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-2);
+  font: 11px/1.45 var(--f-mono);
+}
+
+.support {
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.empty {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  margin: 4px 0 8px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: var(--brand);
+  background: var(--brand-soft);
+  font: 600 10px/1 var(--f-mono);
+  text-transform: capitalize;
+}
+
+.badge[data-band="aging"],
+.badge[data-band="stale"],
+.badge[data-band="very-stale"] {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+
+.metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+}
+
+.metadata:empty {
+  display: none;
+}
+
+.metadata .badge {
+  margin: 0;
+}
+
+.syncRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: center;
+  margin-top: 14px;
+  min-width: 0;
+}
+
+.action {
+  flex: none;
+  min-height: 32px;
+  padding: 6px 13px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--surface-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.action:hover:not(:disabled) {
+  border-color: var(--ink-3);
+}
+
+.action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.syncMessage {
+  flex: 1 1 220px;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.syncRow[data-tone="success"] .syncMessage {
+  color: var(--ok);
+}
+
+.syncRow[data-tone="partial"] .syncMessage,
+.syncRow[data-tone="failure"] .syncMessage {
+  color: var(--warn);
+}
+
+.zones {
+  display: grid;
+  gap: 8px 16px;
+  margin: 10px 0 0;
+  font-size: 12.5px;
+}
+
+.zone {
+  display: flex;
+  gap: 16px;
+  align-items: baseline;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.zoneName {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.zoneName[data-overlaps="true"]::after {
+  color: var(--ink-3);
+  content: " · overlaps";
+}
+
+.zoneRange {
+  flex: none;
+  margin: 0;
+  font-family: var(--f-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.plan {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.planItem {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: var(--r);
+  background: var(--sunk);
+}
+
+.planItem strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 560;
+}
+
+.planItem span {
+  color: var(--ink-2);
+  font: 11px/1.4 var(--f-mono);
+}
+
+.wellness {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.wellnessRow {
+  display: grid;
+  grid-template-columns: 76px 78px minmax(60px, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  font-size: 12.5px;
+}
+
+.wellnessValue,
+.wellnessEmpty {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-2);
+  font-family: var(--f-mono);
+  font-size: 10.5px;
+}
+
+.sparkline {
+  width: 100%;
+  height: 30px;
+  overflow: visible;
+}
+
+.sparkline polyline {
+  fill: none;
+  stroke: var(--brand);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+@media (max-width: 760px) {
+  .wellnessRow {
+    grid-template-columns: 62px 70px minmax(50px, 1fr);
+  }
 }

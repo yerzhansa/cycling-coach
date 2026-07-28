@@ -295,7 +295,7 @@ async function security() {
       },
       url: ready.url,
       blockedOffPort: ready.blockedOffPort,
-      drawerPresent: ready.drawerPresent,
+      syncChipPresent: ready.syncChipPresent,
       tokenAbsent:
         ready.tokenAbsentInRendererSurfaces === true &&
         !JSON.stringify(running.args).includes(token) &&
@@ -308,7 +308,7 @@ async function security() {
     if (
       Object.values(summary.passes).some((value) => value !== true) ||
       summary.blockedOffPort !== true ||
-      summary.drawerPresent !== true ||
+      summary.syncChipPresent !== true ||
       summary.tokenAbsent !== true ||
       !existsSync(environment.screenshotPath)
     ) {

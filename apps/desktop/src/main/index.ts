@@ -660,7 +660,7 @@ async function runDesktop(): Promise<void> {
         noNodeGlobals: ["process", "require", "Buffer", "global", "module"].every((key) => typeof window[key] === "undefined"),
         rpcConnected: document.documentElement.dataset.rpc === "connected",
         blockedOffPort: blocked,
-        drawerPresent: document.querySelector('.drawer[aria-label="Training data"]') !== null,
+        syncChipPresent: document.querySelector("button.sync-chip") !== null,
         rendererSurfaces: {
           dom: document.documentElement.outerHTML,
           localStorage: Object.entries(localStorage),
@@ -682,7 +682,7 @@ async function runDesktop(): Promise<void> {
         noNodeGlobals: rendererResult.noNodeGlobals,
         rpcConnected: rendererResult.rpcConnected,
         blockedOffPort: rendererResult.blockedOffPort,
-        drawerPresent: rendererResult.drawerPresent,
+        syncChipPresent: rendererResult.syncChipPresent,
         credentialStatuses: rendererResult.credentialStatuses,
         credentialStatusesMetadataOnly:
           Array.isArray(rendererResult.credentialStatuses) &&
