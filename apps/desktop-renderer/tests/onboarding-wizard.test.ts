@@ -216,18 +216,19 @@ describe("desktop onboarding wizard", () => {
   });
 
   it("ships the exact dialog and responsive accessibility hooks", async () => {
-    const [mount, styles] = await Promise.all([
-      readFile(new URL("../src/onboarding/mount.ts", import.meta.url), "utf8"),
-      readFile(new URL("../src/onboarding/onboarding.css", import.meta.url), "utf8"),
+    const [wizard, coachKeys, styles] = await Promise.all([
+      readFile(new URL("../src/ui/onboarding/OnboardingWizard.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../src/ui/onboarding/CoachKeysStep.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../src/ui/onboarding/OnboardingWizard.module.css", import.meta.url), "utf8"),
     ]);
-    expect(mount).toContain('setAttribute("role", "dialog")');
-    expect(mount).toContain('setAttribute("aria-modal", "true")');
-    expect(mount).toContain('event.key === "Escape"');
-    expect(mount).toContain('event.key !== "Tab"');
-    expect(mount).toContain('setAttribute("aria-live", "polite")');
-    expect(mount).toContain("Sign in with ChatGPT");
-    expect(mount).toContain("Requires a paid ChatGPT plan. No API key needed.");
-    expect(mount).toContain("Finish signing in in your browser…");
+    expect(wizard).toContain('role="dialog"');
+    expect(wizard).toContain('aria-modal="true"');
+    expect(wizard).toContain('event.key === "Escape"');
+    expect(wizard).toContain('event.key !== "Tab"');
+    expect(wizard).toContain('aria-live="polite"');
+    expect(coachKeys).toContain("Sign in with ChatGPT");
+    expect(coachKeys).toContain("Requires a paid ChatGPT plan. No API key needed.");
+    expect(coachKeys).toContain("Finish signing in in your browser…");
     expect(styles).toContain("@media (max-width: 720px)");
     expect(styles).toContain("padding: 30px 24px");
     expect(styles).toContain("@media (prefers-reduced-motion: reduce)");

@@ -8,13 +8,13 @@ import { flushSync } from "react-dom";
 import "./styles.css";
 import "./chat/styles.css";
 import "./training-context/styles.css";
-import "./onboarding/onboarding.css";
 import "./ride-import.css";
 import { createChatController } from "./chat/controller.js";
 import { createDesktopCoachClientProvider } from "./coach-client.js";
 import { createFirstSyncController } from "./first-sync.js";
 import { createChatViewAdapter } from "./state/adapters/chat.js";
 import { createFirstSyncViewAdapter } from "./state/adapters/first-sync.js";
+import { createOnboardingViewAdapter } from "./state/adapters/onboarding.js";
 import { createReleaseNotesSettingsAdapter } from "./state/adapters/release-notes.js";
 import { createRideImportAdapter } from "./state/adapters/ride-import.js";
 import {
@@ -28,12 +28,13 @@ import { createManualSyncViewAdapter } from "./state/adapters/sync.js";
 import { createTrainingViewAdapter } from "./state/adapters/training.js";
 import { createUpdateSettingsAdapter } from "./state/adapters/update.js";
 import { observeConnectionLifecycle } from "./state/connection-slice.js";
+import { credentialDrafts } from "./state/credential-drafts.js";
 import { restoreManualSyncFocus } from "./state/manual-sync-focus.js";
 import { focusSetupOpener } from "./state/setup-opener.js";
 import { useEnduragentStore } from "./state/store.js";
 import { validateImportPaths, type OnboardingBridge } from "./onboarding/bridge.js";
 import { createOnboardingCompletionController } from "./onboarding/completion.js";
-import { mountOnboarding } from "./onboarding/mount.js";
+import { createOnboardingController } from "./onboarding/controller.js";
 import { createTrainingContextController } from "./training-context/controller.js";
 import { createManualSyncController } from "./training-context/manual-sync.js";
 import { createTrainingSyncCoordinator } from "./training-sync.js";
@@ -53,7 +54,7 @@ function focusComposer(): void {
   if (composer instanceof HTMLTextAreaElement) composer.focus();
 }
 
-export function bootLegacy(): Disposer {
+export function bootRenderer(): Disposer {
   const store = useEnduragentStore;
 
   const disposeLifecycle = observeConnectionLifecycle((status) => {
@@ -211,15 +212,20 @@ export function bootLegacy(): Disposer {
     storage: () => window.localStorage,
     onComplete: (completion) => void firstSyncController.start(completion),
   });
-  const onboarding = mountOnboarding({
-    document,
+  const onboardingAdapter = createOnboardingViewAdapter({
+    publish: (next) => store.getState().setOnboarding(next),
+  });
+  const onboarding = createOnboardingController({
     bridge: onboardingBridge,
+    credentials: credentialDrafts,
+    view: onboardingAdapter.view,
     rideImports,
     onRideImportPresentationChange: (presenting) =>
       store.getState().setRideImportSuppressed(presenting),
-    opener: { focus: focusSetupOpener },
+    focusOpener: focusSetupOpener,
     onComplete: (completion) => onboardingCompletion.complete(completion),
   });
+  store.getState().bindOnboardingActions(onboarding);
   const openSetupFlow = (): void => {
     void onboardingCompletion.openManually(() => onboarding.open());
   };
@@ -320,6 +326,7 @@ export function bootLegacy(): Disposer {
     store.getState().bindSettingsPorts(null);
     store.getState().bindSyncActions(null);
     store.getState().bindRideImportActions(null);
+    store.getState().bindOnboardingActions(null);
     disposeLifecycle();
     window.removeEventListener("pagehide", dispose);
     releaseNotesController.dispose();
@@ -330,6 +337,7 @@ export function bootLegacy(): Disposer {
     sessionSettingsController.dispose();
     disposeDroppedRideImports();
     onboarding.dispose();
+    onboardingAdapter.dispose();
     rideImportAdapter.dispose();
     firstSyncController.dispose();
     manualSyncController.dispose();

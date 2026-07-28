@@ -23,7 +23,7 @@ describe("shell", () => {
   beforeEach(() => {
     useEnduragentStore.setState({
       activeView: "chat",
-      legacyReady: true,
+      runtimeReady: true,
       chat: { ...EMPTY_CHAT_SURFACE, newConversationUnavailable: false },
       chatActions: stubActions(),
     });

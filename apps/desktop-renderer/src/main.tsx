@@ -3,7 +3,7 @@ import "@fontsource-variable/source-serif-4";
 import "@fontsource-variable/source-serif-4/wght-italic.css";
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App.js";
-import { bootLegacy, type Disposer } from "./legacy-boot.js";
+import { bootRenderer, type Disposer } from "./boot.js";
 import { bootTheme, useEnduragentStore } from "./state/store.js";
 
 bootTheme();
@@ -13,15 +13,15 @@ if (!(container instanceof HTMLElement)) {
   throw new TypeError("Desktop shell host is invalid: #root");
 }
 
-let legacy: Disposer | undefined;
+let runtime: Disposer | undefined;
 let booting = false;
 
 function onReady(): void {
-  if (booting || legacy !== undefined) return;
+  if (booting || runtime !== undefined) return;
   booting = true;
   queueMicrotask(() => {
-    legacy = bootLegacy();
-    useEnduragentStore.getState().markLegacyReady();
+    runtime = bootRenderer();
+    useEnduragentStore.getState().markRuntimeReady();
   });
 }
 

@@ -1,6 +1,7 @@
 import { Suspense, useEffect, type ReactElement } from "react";
 import { useEnduragentStore } from "../state/store.js";
 import { ChatView } from "../ui/chat/ChatView.js";
+import { OnboardingWizard } from "../ui/onboarding/OnboardingWizard.js";
 import { Sidebar } from "../ui/sidebar/Sidebar.js";
 import styles from "./Shell.module.css";
 import { REACT_CHAT_REGION, VIEWS } from "./views.js";
@@ -36,6 +37,7 @@ export function Shell(props: { readonly onReady: () => void }): ReactElement {
           )}
         </div>
       </div>
+      <OnboardingWizard />
     </div>
   );
 }

@@ -15,6 +15,7 @@ import {
 } from "../theme/preferences.js";
 import { createChatSlice, type ChatSlice } from "./chat-slice.js";
 import { createConnectionSlice, type ConnectionSlice } from "./connection-slice.js";
+import { createOnboardingSlice, type OnboardingSlice } from "./onboarding-slice.js";
 import { createRideImportSlice, type RideImportSlice } from "./ride-import-slice.js";
 import {
   createSettingsSlice,
@@ -30,17 +31,18 @@ export interface EnduragentState
     TrainingSlice,
     SyncSlice,
     ConnectionSlice,
-    RideImportSlice {
+    RideImportSlice,
+    OnboardingSlice {
   readonly activeView: ViewId;
   readonly paletteId: string;
   readonly appearance: Appearance;
   readonly theme: ResolvedTheme;
-  readonly legacyReady: boolean;
+  readonly runtimeReady: boolean;
   setActiveView: (view: ViewId) => void;
   setPaletteId: (paletteId: string) => void;
   setAppearance: (appearance: Appearance) => void;
   refreshTheme: () => void;
-  markLegacyReady: () => void;
+  markRuntimeReady: () => void;
 }
 
 function stamp(paletteId: string, appearance: Appearance): ResolvedTheme {
@@ -59,11 +61,12 @@ export const useEnduragentStore = create<EnduragentState>((set, get, api) => ({
   ...createSyncSlice(set, get, api),
   ...createConnectionSlice(set, get, api),
   ...createRideImportSlice(set, get, api),
+  ...createOnboardingSlice(set, get, api),
   activeView: "chat",
   paletteId: readStoredPaletteId(),
   appearance: readStoredAppearance(),
   theme: resolveTheme(readStoredAppearance()),
-  legacyReady: false,
+  runtimeReady: false,
   setActiveView(view) {
     const current = get();
     if (current.activeView === "settings" && settingsMutationActive(current.settings)) return;
@@ -81,8 +84,8 @@ export const useEnduragentStore = create<EnduragentState>((set, get, api) => ({
     const { paletteId, appearance } = get();
     set({ theme: stamp(paletteId, appearance) });
   },
-  markLegacyReady() {
-    set({ legacyReady: true });
+  markRuntimeReady() {
+    set({ runtimeReady: true });
   },
 }));
 
