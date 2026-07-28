@@ -1,0 +1,65 @@
+import { create } from "zustand";
+import type { ViewId } from "../app/views.js";
+import { applyPalette, resolveTheme, type Appearance, type ResolvedTheme } from "../theme/applyPalette.js";
+import { paletteById } from "../theme/palettes.js";
+import {
+  readStoredAppearance,
+  readStoredPaletteId,
+  writeStoredAppearance,
+  writeStoredPaletteId,
+} from "../theme/preferences.js";
+
+export interface EnduragentState {
+  readonly activeView: ViewId;
+  readonly paletteId: string;
+  readonly appearance: Appearance;
+  readonly theme: ResolvedTheme;
+  readonly legacyReady: boolean;
+  setActiveView: (view: ViewId) => void;
+  setPaletteId: (paletteId: string) => void;
+  setAppearance: (appearance: Appearance) => void;
+  refreshTheme: () => void;
+  markLegacyReady: () => void;
+}
+
+function stamp(paletteId: string, appearance: Appearance): ResolvedTheme {
+  if (typeof document === "undefined") return resolveTheme(appearance);
+  return applyPalette({
+    root: document.documentElement,
+    palette: paletteById(paletteId),
+    appearance,
+  });
+}
+
+export const useEnduragentStore = create<EnduragentState>((set, get) => ({
+  activeView: "chat",
+  paletteId: readStoredPaletteId(),
+  appearance: readStoredAppearance(),
+  theme: resolveTheme(readStoredAppearance()),
+  legacyReady: false,
+  setActiveView(view) {
+    set({ activeView: view });
+  },
+  setPaletteId(paletteId) {
+    writeStoredPaletteId(paletteId);
+    set({ paletteId, theme: stamp(paletteId, get().appearance) });
+  },
+  setAppearance(appearance) {
+    writeStoredAppearance(appearance);
+    set({ appearance, theme: stamp(get().paletteId, appearance) });
+  },
+  refreshTheme() {
+    const { paletteId, appearance } = get();
+    set({ theme: stamp(paletteId, appearance) });
+  },
+  markLegacyReady() {
+    set({ legacyReady: true });
+  },
+}));
+
+export function bootTheme(): ResolvedTheme {
+  const { paletteId, appearance } = useEnduragentStore.getState();
+  const theme = stamp(paletteId, appearance);
+  useEnduragentStore.setState({ theme });
+  return theme;
+}

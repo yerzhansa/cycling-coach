@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": [
+    "src/global.d.ts",
+    "tests/dom-setup.ts",
+    "tests/matchmedia.ts",
+    "tests/**/*.tsx"
+  ]
+}
