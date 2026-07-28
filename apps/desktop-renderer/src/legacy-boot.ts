@@ -16,6 +16,7 @@ import { createFirstSyncController } from "./first-sync.js";
 import { createChatViewAdapter } from "./state/adapters/chat.js";
 import { createFirstSyncViewAdapter } from "./state/adapters/first-sync.js";
 import { createReleaseNotesSettingsAdapter } from "./state/adapters/release-notes.js";
+import { createRideImportAdapter } from "./state/adapters/ride-import.js";
 import {
   createAthleteSettingsAdapter,
   createConversationSettingsAdapter,
@@ -23,17 +24,18 @@ import {
   createCredentialSettingsAdapter,
 } from "./state/adapters/settings.js";
 import { createSpendSettingsAdapter } from "./state/adapters/spend.js";
+import { createManualSyncViewAdapter } from "./state/adapters/sync.js";
+import { createTrainingViewAdapter } from "./state/adapters/training.js";
 import { createUpdateSettingsAdapter } from "./state/adapters/update.js";
+import { observeConnectionLifecycle } from "./state/connection-slice.js";
+import { restoreManualSyncFocus } from "./state/manual-sync-focus.js";
+import { focusSetupOpener } from "./state/setup-opener.js";
 import { useEnduragentStore } from "./state/store.js";
 import { validateImportPaths, type OnboardingBridge } from "./onboarding/bridge.js";
 import { createOnboardingCompletionController } from "./onboarding/completion.js";
 import { mountOnboarding } from "./onboarding/mount.js";
-import {
-  createTrainingContextController,
-  type TrainingContextView,
-} from "./training-context/controller.js";
+import { createTrainingContextController } from "./training-context/controller.js";
 import { createManualSyncController } from "./training-context/manual-sync.js";
-import { mountTrainingContextView } from "./training-context/view.js";
 import { createTrainingSyncCoordinator } from "./training-sync.js";
 import { createSpendMeterController } from "./spend-meter/controller.js";
 import { createReleaseNotesController } from "./release-notes/controller.js";
@@ -42,17 +44,7 @@ import { createProviderModelSettingsController } from "./settings/provider-model
 import { createAthleteSettingsController } from "./settings/athlete-controller.js";
 import { createSessionSettingsController } from "./settings/session-controller.js";
 import { createCredentialSettingsController } from "./settings/credential-controller.js";
-import {
-  createRideImportController,
-  mountResidentRideImport,
-  subscribeToDroppedRideImports,
-} from "./ride-import.js";
-
-export interface LegacyHosts {
-  readonly topbar: HTMLElement;
-  readonly spine: HTMLElement;
-  readonly drawer: HTMLDialogElement;
-}
+import { createRideImportController, subscribeToDroppedRideImports } from "./ride-import.js";
 
 export type Disposer = () => void;
 
@@ -61,30 +53,12 @@ function focusComposer(): void {
   if (composer instanceof HTMLTextAreaElement) composer.focus();
 }
 
-export function bootLegacy(hosts: LegacyHosts): Disposer {
-  const { topbar, spine, drawer } = hosts;
+export function bootLegacy(): Disposer {
   const store = useEnduragentStore;
 
-  const topbarActions = document.createElement("div");
-  topbarActions.className = "topbar-actions";
-  topbar.append(topbarActions);
-  const connectionStatus = document.createElement("span");
-  connectionStatus.className = "connection-status";
-  connectionStatus.setAttribute("role", "status");
-  connectionStatus.textContent = "Connecting…";
-  topbarActions.append(connectionStatus);
-  const onLifecycle = (event: WindowEventMap["enduragent-lifecycle"]): void => {
-    document.documentElement.dataset.rpc = event.detail.status;
-    connectionStatus.textContent =
-      event.detail.status === "ready"
-        ? "Connected"
-        : event.detail.status === "recovering"
-          ? "Reconnecting…"
-          : event.detail.status === "terminal"
-            ? "Connection unavailable"
-            : "Closing…";
-  };
-  window.addEventListener("enduragent-lifecycle", onLifecycle);
+  const disposeLifecycle = observeConnectionLifecycle((status) => {
+    store.getState().setConnection(status);
+  });
   const releaseNotesAdapter = createReleaseNotesSettingsAdapter({
     publish: (patch) => store.getState().patchSettings(patch),
   });
@@ -107,32 +81,32 @@ export function bootLegacy(hosts: LegacyHosts): Disposer {
     const current = await clients.getClient();
     return current === failedClient ? clients.reconnect() : current;
   };
-  const mountedTrainingContext = mountTrainingContextView({ spine, drawer });
-  const trainingContextView: TrainingContextView = {
-    render(state) {
-      mountedTrainingContext.view.render(state);
-      const current = store.getState().settings.units;
-      const next = state.unitsPreference;
-      if (
-        current.status !== next.status ||
-        current.value !== next.value ||
-        current.source !== next.source
-      ) {
-        store.getState().patchSettings({ units: next });
-      }
-    },
-  };
+  const trainingAdapter = createTrainingViewAdapter({
+    readUnits: () => store.getState().settings.units,
+    publish: (next) => store.getState().setTraining(next),
+    publishUnits: (units) => store.getState().patchSettings({ units }),
+  });
   const trainingContextController = createTrainingContextController({
     clients,
-    view: trainingContextView,
+    view: trainingAdapter.view,
   });
   const trainingSyncCoordinator = createTrainingSyncCoordinator({
     clients,
     refreshTrainingContext: () => trainingContextController.refresh(),
   });
+  const syncAdapter = createManualSyncViewAdapter({
+    publish: (next) =>
+      flushSync(() => {
+        store.getState().setSync(next);
+      }),
+    restoreFocus: restoreManualSyncFocus,
+  });
   const manualSyncController = createManualSyncController({
     coordinator: trainingSyncCoordinator,
-    view: mountedTrainingContext.syncView,
+    view: syncAdapter.view,
+  });
+  store.getState().bindSyncActions({
+    request: (kind) => void manualSyncController.activate(kind),
   });
   const spendAdapter = createSpendSettingsAdapter({
     read: () => store.getState().settings.spend,
@@ -154,10 +128,6 @@ export function bootLegacy(hosts: LegacyHosts): Disposer {
     refreshTrainingContext: () => trainingContextController.refresh(),
     refreshSpend: () => spendController.refresh(),
     readTranscriptPage: (request) => window.enduragentAuth.getTranscriptPage(request),
-  });
-  mountedTrainingContext.bind({
-    onUnitsPreferenceChange: (value) => void trainingContextController.setUnitsPreference(value),
-    onSyncRequest: (kind) => void manualSyncController.activate(kind),
   });
 
   const firstSyncController = createFirstSyncController({
@@ -231,18 +201,12 @@ export function bootLegacy(hosts: LegacyHosts): Disposer {
     },
   };
 
-  const setup = document.createElement("button");
-  setup.type = "button";
-  setup.className = "setup-button";
-  setup.textContent = "Setup";
-  topbarActions.insertBefore(setup, connectionStatus);
   const rideImports = createRideImportController(onboardingBridge);
-  const residentRideImport = mountResidentRideImport({
-    document,
-    actionHost: topbarActions,
-    before: connectionStatus,
+  const rideImportAdapter = createRideImportAdapter({
     imports: rideImports,
+    publish: (next) => store.getState().setRideImport(next),
   });
+  store.getState().bindRideImportActions(rideImportAdapter.port);
   const onboardingCompletion = createOnboardingCompletionController({
     storage: () => window.localStorage,
     onComplete: (completion) => void firstSyncController.start(completion),
@@ -251,14 +215,14 @@ export function bootLegacy(hosts: LegacyHosts): Disposer {
     document,
     bridge: onboardingBridge,
     rideImports,
-    onRideImportPresentationChange: (presenting) => residentRideImport.setSuppressed(presenting),
-    opener: setup,
+    onRideImportPresentationChange: (presenting) =>
+      store.getState().setRideImportSuppressed(presenting),
+    opener: { focus: focusSetupOpener },
     onComplete: (completion) => onboardingCompletion.complete(completion),
   });
   const openSetupFlow = (): void => {
     void onboardingCompletion.openManually(() => onboarding.open());
   };
-  setup.addEventListener("click", openSetupFlow);
   const closePanes = (): void => {
     providerModelSettingsController.close();
     credentialSettingsController.close();
@@ -334,7 +298,9 @@ export function bootLegacy(hosts: LegacyHosts): Disposer {
   const disposeDroppedRideImports = subscribeToDroppedRideImports({
     subscribe: onboardingBridge.onDroppedImportFiles,
     onboarding,
-    resident: residentRideImport,
+    resident: {
+      importDroppedFiles: (paths) => void rideImports.importPaths("resident", paths),
+    },
   });
 
   void trainingContextController.start();
@@ -342,14 +308,8 @@ export function bootLegacy(hosts: LegacyHosts): Disposer {
   void chatController.start();
   void onboardingCompletion.openOnStartup(() => onboarding.open());
   void clients.getClient().then(
-    () => {
-      document.documentElement.dataset.rpc = "connected";
-      connectionStatus.textContent = "Connected";
-    },
-    () => {
-      document.documentElement.dataset.rpc = "failed";
-      connectionStatus.textContent = "Connection unavailable";
-    },
+    () => store.getState().setConnection("connected"),
+    () => store.getState().setConnection("failed"),
   );
 
   let disposed = false;
@@ -358,7 +318,9 @@ export function bootLegacy(hosts: LegacyHosts): Disposer {
     disposed = true;
     store.getState().bindChatActions(null);
     store.getState().bindSettingsPorts(null);
-    window.removeEventListener("enduragent-lifecycle", onLifecycle);
+    store.getState().bindSyncActions(null);
+    store.getState().bindRideImportActions(null);
+    disposeLifecycle();
     window.removeEventListener("pagehide", dispose);
     releaseNotesController.dispose();
     desktopUpdateController.dispose();
@@ -368,14 +330,13 @@ export function bootLegacy(hosts: LegacyHosts): Disposer {
     sessionSettingsController.dispose();
     disposeDroppedRideImports();
     onboarding.dispose();
-    residentRideImport.dispose();
+    rideImportAdapter.dispose();
     firstSyncController.dispose();
     manualSyncController.dispose();
     trainingSyncCoordinator.dispose();
     chatController.dispose();
     spendController.dispose();
     trainingContextController.dispose();
-    mountedTrainingContext.dispose();
     void clients.close();
   };
   window.addEventListener("pagehide", dispose, { once: true });

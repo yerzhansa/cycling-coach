@@ -1,9 +1,13 @@
 import { useEffect, useRef, type ReactElement } from "react";
 import { VIEWS } from "../../app/views.js";
 import { registerNewConversationOpener } from "../../state/new-conversation-opener.js";
+import { registerSetupOpener } from "../../state/setup-opener.js";
 import { settingsMutationActive } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
+import { ConnectionStatus } from "./ConnectionStatus.js";
+import { HistoryList } from "./HistoryList.js";
 import styles from "./Sidebar.module.css";
+import { SyncChip } from "./SyncChip.js";
 
 export function Sidebar(): ReactElement {
   const activeView = useEnduragentStore((state) => state.activeView);
@@ -13,12 +17,15 @@ export function Sidebar(): ReactElement {
   const actions = useEnduragentStore((state) => state.chatActions);
   const settingsBusy = useEnduragentStore((state) => settingsMutationActive(state.settings));
   const opener = useRef<HTMLButtonElement>(null);
+  const settingsNav = useRef<HTMLButtonElement>(null);
   const navigationLocked = activeView === "settings" && settingsBusy;
 
   useEffect(() => {
     registerNewConversationOpener(opener.current);
+    registerSetupOpener(settingsNav.current);
     return () => {
       registerNewConversationOpener(null);
+      registerSetupOpener(null);
     };
   }, []);
 
@@ -51,6 +58,7 @@ export function Sidebar(): ReactElement {
           <button
             key={view.id}
             type="button"
+            ref={view.id === "settings" ? settingsNav : undefined}
             className={view.id === activeView ? `${styles.navItem} ${styles.on}` : styles.navItem}
             aria-current={view.id === activeView ? "page" : undefined}
             disabled={navigationLocked && view.id !== activeView}
@@ -66,24 +74,10 @@ export function Sidebar(): ReactElement {
         ))}
       </nav>
       <div className={styles.sec}>Conversations</div>
-      <div className={styles.hist}>
-        <button
-          type="button"
-          className={activeView === "chat" ? `${styles.histItem} ${styles.on}` : styles.histItem}
-          disabled={navigationLocked}
-          onClick={() => {
-            setActiveView("chat");
-          }}
-        >
-          <span className={styles.histTitle}>Current conversation</span>
-          <span className={styles.histWhen}>Live</span>
-        </button>
-      </div>
+      <HistoryList locked={navigationLocked} />
       <div className={styles.railFoot}>
-        <p className={styles.sync}>
-          <span className={styles.dot} aria-hidden="true" />
-          Sync status moves here with the training page
-        </p>
+        <SyncChip />
+        <ConnectionStatus />
       </div>
     </aside>
   );

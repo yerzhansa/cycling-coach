@@ -3,7 +3,7 @@ import "@fontsource-variable/source-serif-4";
 import "@fontsource-variable/source-serif-4/wght-italic.css";
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App.js";
-import { bootLegacy, type Disposer, type LegacyHosts } from "./legacy-boot.js";
+import { bootLegacy, type Disposer } from "./legacy-boot.js";
 import { bootTheme, useEnduragentStore } from "./state/store.js";
 
 bootTheme();
@@ -16,13 +16,13 @@ if (!(container instanceof HTMLElement)) {
 let legacy: Disposer | undefined;
 let booting = false;
 
-function onHostsReady(hosts: LegacyHosts): void {
+function onReady(): void {
   if (booting || legacy !== undefined) return;
   booting = true;
   queueMicrotask(() => {
-    legacy = bootLegacy(hosts);
+    legacy = bootLegacy();
     useEnduragentStore.getState().markLegacyReady();
   });
 }
 
-createRoot(container).render(<App onHostsReady={onHostsReady} />);
+createRoot(container).render(<App onReady={onReady} />);

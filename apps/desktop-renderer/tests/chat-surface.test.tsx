@@ -312,7 +312,7 @@ describe("chat surface", () => {
   describe("new conversation dialog", () => {
     it("walks the confirm flow and hands focus back to the composer", async () => {
       const user = userEvent.setup();
-      render(<Shell onHostsReady={() => {}} />);
+      render(<Shell onReady={() => {}} />);
       const dialog = document.querySelector(".new-conversation-dialog");
       if (!(dialog instanceof HTMLDialogElement)) throw new TypeError("dialog missing");
       expect(dialog.open).toBe(false);
@@ -341,7 +341,7 @@ describe("chat surface", () => {
       useEnduragentStore.setState({
         chat: { ...EMPTY_CHAT_SURFACE, newConversationUnavailable: false },
       });
-      render(<Shell onHostsReady={() => {}} />);
+      render(<Shell onReady={() => {}} />);
 
       setChat({ resetPhase: "confirming" });
       await user.click(screen.getByRole("button", { name: "Cancel" }));

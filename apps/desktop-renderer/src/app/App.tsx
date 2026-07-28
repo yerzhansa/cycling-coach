@@ -1,12 +1,9 @@
 import { useEffect, type ReactElement } from "react";
-import type { LegacyHosts } from "../legacy-boot.js";
 import { useEnduragentStore } from "../state/store.js";
 import { DARK_MEDIA_QUERY } from "../theme/applyPalette.js";
 import { Shell } from "./Shell.js";
 
-export function App(props: {
-  readonly onHostsReady: (hosts: LegacyHosts) => void;
-}): ReactElement {
+export function App(props: { readonly onReady: () => void }): ReactElement {
   const appearance = useEnduragentStore((state) => state.appearance);
   const refreshTheme = useEnduragentStore((state) => state.refreshTheme);
 
@@ -22,5 +19,5 @@ export function App(props: {
     };
   }, [appearance, refreshTheme]);
 
-  return <Shell onHostsReady={props.onHostsReady} />;
+  return <Shell onReady={props.onReady} />;
 }

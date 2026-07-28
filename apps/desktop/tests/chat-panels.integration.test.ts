@@ -103,6 +103,9 @@ const athleteState = {
   trainingContext,
 } as const;
 
+const tallTurn =
+  "Long ride notes that make the newest restored turn taller than the window. ".repeat(52);
+
 function response(value: unknown): readonly string[] {
   return [JSON.stringify(value)];
 }
@@ -188,7 +191,7 @@ ${"nonwrapping".repeat(36)}
                   {
                     turnId: "persisted-turn-4",
                     completedAt: "2001-01-04T00:00:00.000Z",
-                    athleteText: "Persisted athlete 4",
+                    athleteText: `Persisted athlete 4 ${tallTurn}`,
                     coachText: "Persisted coach 4",
                   },
                 ]
@@ -307,7 +310,9 @@ async function launch(input: {
   fixtures.push(fixture);
   await fixture.evaluate<void>(`
     const deadline = Date.now() + 10000;
-    while ((document.documentElement.dataset.rpc !== "connected" || document.querySelector(".drawer-status")?.textContent !== "") && Date.now() < deadline) {
+    await document.fonts.ready;
+    const chipStatus = () => document.querySelector(".sync-chip")?.dataset.status;
+    while ((document.documentElement.dataset.rpc !== "connected" || chipStatus() === undefined || chipStatus() === "loading") && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     document.querySelector(".onboarding")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -597,9 +602,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         readonly rel: string | null;
         readonly referrerPolicy: string | null;
       };
-      readonly drawerStatus: string;
-      readonly anchorValue: string;
-      readonly wellnessValue: string;
+      readonly syncChip: { readonly status: string; readonly text: string };
       readonly documentOverflow: boolean;
     }>(`
       const bridgeKeys = Object.keys(window.enduragentAuth).sort();
@@ -701,7 +704,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       controlObserver.disconnect();
       const coach = document.querySelector(".chat-message--coach");
       const link = coach?.querySelector("a");
-      const panels = [...document.querySelectorAll(".context-panel__body")];
+      const syncChip = document.querySelector(".sync-chip");
       return {
         location: location.href,
         bridgeKeys,
@@ -726,9 +729,10 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
           rel: link?.getAttribute("rel") ?? null,
           referrerPolicy: link?.getAttribute("referrerpolicy") ?? null,
         },
-        drawerStatus: document.querySelector(".drawer-status")?.textContent ?? "missing",
-        anchorValue: panels[0]?.querySelector(".context-panel__value")?.textContent ?? "",
-        wellnessValue: panels[4]?.querySelector(".wellness-row__value")?.textContent ?? "",
+        syncChip: {
+          status: syncChip?.dataset.status ?? "missing",
+          text: syncChip?.textContent ?? "missing",
+        },
         documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
       };
     `);
@@ -774,9 +778,10 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         rel: "noopener noreferrer",
         referrerPolicy: "no-referrer",
       },
-      drawerStatus: "",
-      anchorValue: "300 W",
-      wellnessValue: "65 ms",
+      syncChip: {
+        status: "synced",
+        text: "Synced2026-07-19 07:55:00 UTCSync now",
+      },
       documentOverflow: false,
     });
     expect(calls.filter((call) => call.method === "hasSession")).toEqual([
@@ -978,15 +983,15 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         params: { chatId: "desktop" },
       },
     ]);
-    const drawer = await fixture.evaluate<{
-      readonly open: boolean;
-      readonly focused: string | null;
-      readonly label: string | null;
+    const training = await fixture.evaluate<{
+      readonly current: string | null;
       readonly order: readonly string[];
-      readonly spineWidth: number;
-      readonly closedFocus: string | null;
-      readonly overflow: boolean;
-      readonly units: string;
+      readonly status: string;
+      readonly statusHidden: boolean;
+      readonly anchorValue: string;
+      readonly wellnessValue: string;
+      readonly pageOverflow: boolean;
+      readonly documentOverflow: boolean;
       readonly sync: {
         readonly buttonResident: boolean;
         readonly queued: string;
@@ -1006,27 +1011,39 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         readonly asOfAfter: string;
         readonly lastSyncedBefore: string;
         readonly lastSyncedAfter: string;
+        readonly chipStatus: string;
         readonly statusWraps: boolean;
         readonly buttonReachable: boolean;
-        readonly drawerOverflow: boolean;
       };
     }>(`
-      const opener = document.querySelector(".drawer-toggle");
-      opener.click();
-      const drawer = document.querySelector("#training-context-drawer");
+      const rail = document.querySelector('nav[aria-label="Main navigation"]');
+      const trainingNav = Array.from(rail.querySelectorAll("button")).find(
+        (entry) => entry.textContent.includes("Training"),
+      );
+      trainingNav.click();
+      const mountDeadline = Date.now() + 5000;
+      while (!document.querySelector('[data-panel="wellness"]') && Date.now() < mountDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const page = document.querySelector('section[aria-label="Training"]');
+      const panels = [...page.querySelectorAll("[data-panel]")];
+      const panel = (name) => panels.find((entry) => entry.dataset.panel === name);
+      const statusLine = page.querySelector(".training-status");
       const opened = {
-        open: drawer.open,
-        focused: document.activeElement?.getAttribute("aria-label") ?? null,
-        label: drawer.getAttribute("aria-label"),
-        order: [...drawer.querySelectorAll(".context-panel > h3")].map((node) => node.textContent),
-        spineWidth: document.querySelector(".data-spine").getBoundingClientRect().width,
+        current: trainingNav.getAttribute("aria-current"),
+        order: panels.map((entry) => entry.querySelector("h2").textContent),
+        status: statusLine.textContent,
+        statusHidden: statusLine.hidden,
+        anchorValue: panel("anchor").querySelector("p").textContent,
+        wellnessValue: panel("wellness").querySelector("span").textContent,
       };
-      const syncButton = drawer.querySelector(".training-sync__button");
-      const syncStatus = drawer.querySelector(".training-sync__status");
-      const metadataText = () => [...drawer.querySelectorAll(".drawer-metadata__item")].map((node) => node.textContent ?? "");
-      const metadataChildrenText = () => [...drawer.querySelector(".drawer-metadata").children].map((node) => node.textContent ?? "");
+      const dataPanels = ["anchor", "load", "plan", "adherence", "wellness"];
+      const syncButton = page.querySelector(".training-sync-action");
+      const syncStatus = page.querySelector(".training-sync-message");
+      const metadataText = () => [...page.querySelectorAll(".training-metadata-item")].map((node) => node.textContent ?? "");
+      const metadataChildrenText = () => [...page.querySelector(".training-metadata").children].map((node) => node.textContent ?? "");
       const metadataBefore = metadataChildrenText();
-      const panelsBefore = [...drawer.querySelectorAll(".context-panel__body")].map((node) => node.textContent ?? "");
+      const panelsBefore = dataPanels.map((name) => panel(name).textContent ?? "");
       const asOfBefore = metadataText().find((value) => value.startsWith("As of ")) ?? "";
       const lastSyncedBefore = metadataText().find((value) => value.startsWith("Last synced ")) ?? "";
       const liveValues = [];
@@ -1058,12 +1075,12 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       const asOfAfter = metadataText().find((value) => value.startsWith("As of ")) ?? "";
       const lastSyncedAfter = metadataText().find((value) => value.startsWith("Last synced ")) ?? "";
       const metadataAfter = metadataChildrenText();
-      const panelsAfter = [...drawer.querySelectorAll(".context-panel__body")].map((node) => node.textContent ?? "");
+      const panelsAfter = dataPanels.map((name) => panel(name).textContent ?? "");
       syncStatus.scrollIntoView({ block: "nearest" });
       const syncButtonRect = syncButton.getBoundingClientRect();
-      const drawerRect = drawer.getBoundingClientRect();
+      const pageRect = page.getBoundingClientRect();
       const syncResult = {
-        buttonResident: syncButton === drawer.querySelector(".training-sync__button"),
+        buttonResident: syncButton === page.querySelector(".training-sync-action"),
         queued,
         runningObserved: liveValues.includes("Syncing training data…"),
         terminal: syncStatus.textContent ?? "",
@@ -1091,35 +1108,37 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         asOfAfter,
         lastSyncedBefore,
         lastSyncedAfter,
+        chipStatus: document.querySelector(".sync-chip").dataset.status,
         statusWraps: syncStatus.scrollWidth <= syncStatus.clientWidth,
         buttonReachable:
-          syncButtonRect.top >= drawerRect.top && syncButtonRect.bottom <= drawerRect.bottom,
-        drawerOverflow: drawer.scrollWidth > drawer.clientWidth,
+          syncButtonRect.top >= pageRect.top && syncButtonRect.bottom <= pageRect.bottom,
       };
-      const imperial = drawer.querySelector('input[value="imperial"]');
-      imperial.click();
-      const unitsDeadline = Date.now() + 5000;
-      while ((!imperial.checked || imperial.disabled) && Date.now() < unitsDeadline) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-      drawer.querySelector(".drawer-close").click();
       return {
         ...opened,
-        closedFocus: document.activeElement?.getAttribute("aria-label") ?? null,
-        overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
-        units: imperial.checked ? imperial.value : "",
+        pageOverflow: Array.from(page.querySelectorAll("section, div, ol, dl")).some(
+          (node) => node.scrollWidth > node.clientWidth,
+        ),
+        documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
         sync: syncResult,
       };
     `);
-    expect(drawer).toEqual({
-      open: true,
-      focused: "Close training data",
-      label: "Training data",
-      order: ["Current cycling anchor", "Cycling Load", "Plan", "Adherence", "Wellness trend"],
-      spineWidth: 48,
-      closedFocus: "Open training data",
-      overflow: false,
-      units: "imperial",
+    expect(training).toEqual({
+      current: "page",
+      order: [
+        "Sync",
+        "Current cycling anchor",
+        "Cycling Load",
+        "Plan",
+        "Adherence",
+        "Wellness trend",
+        "Import ride files",
+      ],
+      status: "",
+      statusHidden: true,
+      anchorValue: "300 W",
+      wellnessValue: "65 ms",
+      pageOverflow: false,
+      documentOverflow: false,
       sync: {
         buttonResident: true,
         queued: "Sync queued.",
@@ -1139,11 +1158,44 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         asOfAfter: "As of 2026-07-19",
         lastSyncedBefore: "Last synced 2026-07-19 07:55:00 UTC",
         lastSyncedAfter: "Last synced 2026-07-19 07:55:01 UTC",
+        chipStatus: "synced",
         statusWraps: true,
         buttonReachable: true,
-        drawerOverflow: false,
       },
     });
+    const units = await fixture.evaluate<{
+      readonly pressed: string | null;
+      readonly enabled: boolean;
+    }>(`
+      const rail = document.querySelector('nav[aria-label="Main navigation"]');
+      Array.from(rail.querySelectorAll("button"))
+        .find((entry) => entry.textContent.includes("Settings"))
+        .click();
+      const mountDeadline = Date.now() + 5000;
+      while (!document.querySelector('[role="group"][aria-label="Display units"]') && Date.now() < mountDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const group = document.querySelector('[role="group"][aria-label="Display units"]');
+      const imperial = Array.from(group.querySelectorAll("button")).find(
+        (entry) => entry.textContent === "Imperial",
+      );
+      imperial.click();
+      const unitsDeadline = Date.now() + 5000;
+      while (imperial.getAttribute("aria-pressed") !== "true" && Date.now() < unitsDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const settled = Array.from(
+        document.querySelectorAll('[role="group"][aria-label="Display units"] button'),
+      ).find((entry) => entry.textContent === "Imperial");
+      Array.from(document.querySelectorAll('nav[aria-label="Main navigation"] button'))
+        .find((entry) => entry.textContent.includes("Chat"))
+        .click();
+      return {
+        pressed: settled.getAttribute("aria-pressed"),
+        enabled: !settled.disabled,
+      };
+    `);
+    expect(units).toEqual({ pressed: "true", enabled: true });
     const syncCallIndex = calls.findIndex((call) => call.method === "sync");
     expect(syncCallIndex).toBeGreaterThan(-1);
     expect(calls.filter((call) => call.method === "sync")).toEqual([
@@ -1183,38 +1235,43 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       { jsonrpc: "2.0", method: "setUnitsPreference", params: { value: "imperial" } },
     ]);
     await fixture.setViewport(720, 800);
-    const compactDrawerGeometry = await fixture.evaluate<{
+    const compactTrainingGeometry = await fixture.evaluate<{
       readonly documentOverflow: boolean;
-      readonly topbarFits: boolean;
       readonly settingsResident: boolean;
       readonly settingsReachable: boolean;
       readonly settingsAccessibleLabel: string;
-      readonly drawerOpen: boolean;
+      readonly chipReachable: boolean;
+      readonly trainingOpen: boolean;
       readonly buttonResident: boolean;
       readonly buttonReachable: boolean;
       readonly noChangeStatus: boolean;
       readonly statusFits: boolean;
       readonly horizontalOverflow: boolean;
     }>(`
-      const compactOpener = document.querySelector(".drawer-toggle");
-      compactOpener.click();
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      const topbar = document.querySelector(".topbar");
       const rail = document.querySelector('nav[aria-label="Main navigation"]');
+      Array.from(rail.querySelectorAll("button"))
+        .find((entry) => entry.textContent.includes("Training"))
+        .click();
+      const mountDeadline = Date.now() + 5000;
+      while (!document.querySelector('[data-panel="wellness"]') && Date.now() < mountDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
       const settings = Array.from(rail.querySelectorAll("button")).find(
         (entry) => entry.textContent.includes("Settings"),
       );
-      const compactDrawer = document.querySelector("#training-context-drawer");
-      const compactButton = compactDrawer.querySelector(".training-sync__button");
-      const compactStatus = compactDrawer.querySelector(".training-sync__status");
-      const compactRegion = compactDrawer.querySelector(".training-sync");
-      const drawerRect = compactDrawer.getBoundingClientRect();
+      const page = document.querySelector('section[aria-label="Training"]');
+      const compactButton = page.querySelector(".training-sync-action");
+      const compactStatus = page.querySelector(".training-sync-message");
+      const chip = document.querySelector(".sync-chip");
+      const pageRect = page.getBoundingClientRect();
       const buttonRect = compactButton.getBoundingClientRect();
       const railRect = rail.getBoundingClientRect();
       const settingsRect = settings.getBoundingClientRect();
+      const chipRect = chip.getBoundingClientRect();
+      compactButton.scrollIntoView({ block: "nearest" });
       return {
         documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
-        topbarFits: topbar.scrollWidth <= topbar.clientWidth,
         settingsResident: rail.contains(settings),
         settingsReachable:
           settingsRect.left >= railRect.left &&
@@ -1222,28 +1279,31 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
           settingsRect.top >= railRect.top &&
           settingsRect.bottom <= railRect.bottom,
         settingsAccessibleLabel: settings.textContent.trim(),
-        drawerOpen: compactDrawer.open,
-        buttonResident: compactDrawer.querySelectorAll(".training-sync__button").length === 1,
+        chipReachable:
+          chipRect.left >= 0 &&
+          chipRect.right <= window.innerWidth &&
+          chipRect.bottom <= window.innerHeight,
+        trainingOpen: page.getAttribute("aria-hidden") === null,
+        buttonResident: page.querySelectorAll(".training-sync-action").length === 1,
         buttonReachable:
-          buttonRect.left >= drawerRect.left &&
-          buttonRect.right <= drawerRect.right &&
-          buttonRect.top >= drawerRect.top &&
-          buttonRect.bottom <= Math.min(drawerRect.bottom, window.innerHeight),
+          buttonRect.left >= pageRect.left &&
+          buttonRect.right <= pageRect.right &&
+          buttonRect.top >= pageRect.top &&
+          buttonRect.bottom <= Math.min(pageRect.bottom, window.innerHeight),
         noChangeStatus: compactStatus.textContent === "Local training-data processing completed.",
         statusFits: compactStatus.scrollWidth <= compactStatus.clientWidth,
-        horizontalOverflow:
-          compactDrawer.scrollWidth > compactDrawer.clientWidth ||
-          compactRegion.scrollWidth > compactRegion.clientWidth ||
-          compactStatus.scrollWidth > compactStatus.clientWidth,
+        horizontalOverflow: Array.from(page.querySelectorAll("section, div, ol, dl, p")).some(
+          (node) => node.scrollWidth > node.clientWidth,
+        ),
       };
     `);
-    expect(compactDrawerGeometry).toEqual({
+    expect(compactTrainingGeometry).toEqual({
       documentOverflow: false,
-      topbarFits: true,
       settingsResident: true,
       settingsReachable: true,
       settingsAccessibleLabel: "⚙Settings",
-      drawerOpen: true,
+      chipReachable: true,
+      trainingOpen: true,
       buttonResident: true,
       buttonReachable: true,
       noChangeStatus: true,
@@ -1263,7 +1323,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly resetWarningVisible: boolean;
       readonly retentionWarningVisible: boolean;
     }>(`
-      document.querySelector(".drawer-toggle").click();
       const settings = Array.from(
         document.querySelectorAll('nav[aria-label="Main navigation"] button'),
       ).find((entry) => entry.textContent.includes("Settings"));
@@ -1357,21 +1416,26 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       syncOutcome: "partial",
     });
     const compact = await fixture.evaluate<{
-      readonly drawerOpen: boolean;
+      readonly trainingOpen: boolean;
       readonly buttonResident: boolean;
       readonly buttonReachable: boolean;
       readonly terminal: string;
       readonly label: string;
+      readonly chipStatus: string;
       readonly statusWrapped: boolean;
       readonly keyboardFocusRestored: boolean;
       readonly horizontalOverflow: boolean;
     }>(`
-      const opener = document.querySelector(".drawer-toggle");
-      opener.click();
-      const drawer = document.querySelector("#training-context-drawer");
-      const syncButton = drawer.querySelector(".training-sync__button");
-      const syncStatus = drawer.querySelector(".training-sync__status");
-      const syncRegion = drawer.querySelector(".training-sync");
+      Array.from(document.querySelectorAll('nav[aria-label="Main navigation"] button'))
+        .find((entry) => entry.textContent.includes("Training"))
+        .click();
+      const mountDeadline = Date.now() + 5000;
+      while (!document.querySelector(".training-sync-action") && Date.now() < mountDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const page = document.querySelector('section[aria-label="Training"]');
+      const syncButton = page.querySelector(".training-sync-action");
+      const syncStatus = page.querySelector(".training-sync-message");
       syncButton.focus();
       syncButton.click();
       syncButton.blur();
@@ -1381,37 +1445,39 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       }
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       syncStatus.scrollIntoView({ block: "nearest" });
-      const drawerRect = drawer.getBoundingClientRect();
+      const pageRect = page.getBoundingClientRect();
       const buttonRect = syncButton.getBoundingClientRect();
       const statusRect = syncStatus.getBoundingClientRect();
       const lineHeight = Number.parseFloat(getComputedStyle(syncStatus).lineHeight);
       return {
-        drawerOpen: drawer.open,
-        buttonResident: drawer.querySelectorAll(".training-sync__button").length === 1,
+        trainingOpen: page.getAttribute("aria-hidden") === null,
+        buttonResident: page.querySelectorAll(".training-sync-action").length === 1,
         buttonReachable:
-          buttonRect.left >= drawerRect.left &&
-          buttonRect.right <= drawerRect.right &&
-          buttonRect.top >= drawerRect.top &&
-          buttonRect.bottom <= Math.min(drawerRect.bottom, window.innerHeight),
+          buttonRect.left >= pageRect.left &&
+          buttonRect.right <= pageRect.right &&
+          buttonRect.top >= pageRect.top &&
+          buttonRect.bottom <= Math.min(pageRect.bottom, window.innerHeight),
         terminal: syncStatus.textContent ?? "",
         label: syncButton.textContent ?? "",
+        chipStatus: document.querySelector(".sync-chip").dataset.status,
         statusWrapped:
           statusRect.height >= lineHeight * 1.9 &&
           syncStatus.scrollWidth <= syncStatus.clientWidth,
         keyboardFocusRestored: document.activeElement === syncButton,
         horizontalOverflow:
           document.documentElement.scrollWidth > document.documentElement.clientWidth ||
-          drawer.scrollWidth > drawer.clientWidth ||
-          syncRegion.scrollWidth > syncRegion.clientWidth ||
-          syncStatus.scrollWidth > syncStatus.clientWidth,
+          Array.from(page.querySelectorAll("section, div, ol, dl, p")).some(
+            (node) => node.scrollWidth > node.clientWidth,
+          ),
       };
     `);
     expect(compact).toEqual({
-      drawerOpen: true,
+      trainingOpen: true,
       buttonResident: true,
       buttonReachable: true,
       terminal: "Training-data processing partially completed. Try again to finish.",
       label: "Try again",
+      chipStatus: "attention",
       statusWrapped: true,
       keyboardFocusRestored: true,
       horizontalOverflow: false,
@@ -1434,15 +1500,15 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       await fixture.evaluate<{
         readonly reduced: boolean;
         readonly overflow: boolean;
-        readonly spineWidth: number;
+        readonly railWidth: number;
       }>(`
       return {
         reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
         overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
-        spineWidth: document.querySelector(".data-spine").getBoundingClientRect().width,
+        railWidth: document.querySelector('nav[aria-label="Main navigation"]').closest("aside").getBoundingClientRect().width,
       };
     `),
-    ).toEqual({ reduced: true, overflow: false, spineWidth: 48 });
+    ).toEqual({ reduced: true, overflow: false, railWidth: 184 });
     expect(await fixture.close()).toEqual({ livePids: [], listenerCount: 0 });
     fixtures.splice(fixtures.indexOf(fixture), 1);
   }, 30_000);

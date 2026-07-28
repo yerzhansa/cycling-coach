@@ -1,35 +1,22 @@
-import { Suspense, useEffect, useRef, type ReactElement } from "react";
-import type { LegacyHosts } from "../legacy-boot.js";
+import { Suspense, useEffect, type ReactElement } from "react";
 import { useEnduragentStore } from "../state/store.js";
 import { ChatView } from "../ui/chat/ChatView.js";
 import { Sidebar } from "../ui/sidebar/Sidebar.js";
 import styles from "./Shell.module.css";
 import { REACT_CHAT_REGION, VIEWS } from "./views.js";
 
-export function Shell(props: {
-  readonly onHostsReady: (hosts: LegacyHosts) => void;
-}): ReactElement {
+export function Shell(props: { readonly onReady: () => void }): ReactElement {
   const activeView = useEnduragentStore((state) => state.activeView);
-  const topbar = useRef<HTMLElement>(null);
-  const spine = useRef<HTMLElement>(null);
-  const drawer = useRef<HTMLDialogElement>(null);
-  const onHostsReady = props.onHostsReady;
+  const onReady = props.onReady;
 
   useEffect(() => {
-    const hosts = {
-      topbar: topbar.current,
-      spine: spine.current,
-      drawer: drawer.current,
-    };
-    if (Object.values(hosts).some((host) => host === null)) return;
-    onHostsReady(hosts as LegacyHosts);
-  }, [onHostsReady]);
+    onReady();
+  }, [onReady]);
 
   return (
-    <div className={styles.win}>
+    <div className={styles.win} data-view={activeView}>
       <Sidebar />
       <div className={styles.main}>
-        <header className={`topbar ${styles.strip}`} ref={topbar} />
         <div className={styles.views}>
           <div className={activeView === "chat" ? styles.chatRegion : styles.away}>
             <ChatView />
@@ -47,10 +34,6 @@ export function Shell(props: {
               );
             },
           )}
-        </div>
-        <div className={styles.spineHost}>
-          <aside className="data-spine" aria-label="Training data drawer" ref={spine} />
-          <dialog className="drawer" aria-label="Training data" ref={drawer} />
         </div>
       </div>
     </div>
