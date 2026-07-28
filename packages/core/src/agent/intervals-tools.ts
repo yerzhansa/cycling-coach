@@ -5,11 +5,15 @@ import type { ApiError, IntervalsClient } from "intervals-icu-api";
 import type { IntervalsActivityType } from "../sport.js";
 import { todayInTZ } from "./user-time.js";
 import { downsampleStreams } from "./stream-downsample.js";
-import { isCoachOwnedEvent } from "./event-provenance.js";
+import {
+  buildCoachEventProvenance,
+  isCoachOwnedEvent,
+} from "./event-provenance.js";
 import {
   dateKeySchema,
   INTERVALS_LIST_MAX_RANGE_DAYS,
   validateListRange,
+  validateWorkoutCreationDate,
 } from "./date-schema.js";
 
 export const ACTIVITY_ID_RE = /^i?\d+$/;
@@ -194,6 +198,42 @@ export function createPureCoreIntervalsTools(
         return downsampleStreams(result.value as Record<string, unknown> | unknown[]);
       },
     }) as Tool,
+
+    intervals_create_strength_workout: tool({
+      description:
+        "Create a strength/gym session on the intervals.icu calendar (auto-syncs to Garmin/Wahoo). The free-text description carries the whole session — exercises, sets, reps, weight/RPE — and may include coaching notes. Past dates are refused — sessions can only be created for today or later.",
+      inputSchema: zodSchema(
+        z.object({
+          date: dateKeySchema.describe("Session date (YYYY-MM-DD)"),
+          name: z
+            .string()
+            .min(1)
+            .max(120)
+            .describe("Calendar card title, e.g. 'Lower body 45min'"),
+          description: z
+            .string()
+            .min(1)
+            .max(4000)
+            .describe(
+              "Free-text session content — exercises, sets, reps, weight/RPE.",
+            ),
+        }),
+      ),
+      execute: async (input: { date: string; name: string; description: string }) => {
+        const dateError = validateWorkoutCreationDate(input.date, tz);
+        if (dateError) return dateError;
+        const result = await intervals.events.create({
+          start_date_local: `${input.date}T00:00:00`,
+          category: "WORKOUT",
+          name: input.name,
+          type: "WeightTraining",
+          ...buildCoachEventProvenance(input.date, `strength ${input.name}`),
+          description: input.description,
+        });
+        if (!result.ok) return toTypedError(result.error);
+        return { created: true, event: result.value };
+      },
+    }),
 
     intervals_delete_workout: tool({
       description:

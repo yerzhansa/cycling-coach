@@ -9,6 +9,7 @@ import {
   createPureCoreIntervalsTools,
   createCoreToolsWithSportConfig,
 } from "../src/agent/intervals-tools.js";
+import { todayInTZ } from "../src/agent/user-time.js";
 import type { IntervalsClient } from "intervals-icu-api";
 
 type EventKnobs = {
@@ -86,6 +87,48 @@ async function runDelete(event: EventKnobs, tz = "UTC") {
   return { result, deleteCalls };
 }
 
+type StrengthCreateResult =
+  | { ok: true; value: { id: number } }
+  | {
+      ok: false;
+      error: { kind: string; status?: number; message?: string };
+    };
+
+function makeStrengthCreateFake(result: StrengthCreateResult): {
+  client: IntervalsClient;
+  createCalls: Record<string, unknown>[];
+} {
+  const createCalls: Record<string, unknown>[] = [];
+  const fake = {
+    events: {
+      create: async (payload: Record<string, unknown>) => {
+        createCalls.push(payload);
+        return result;
+      },
+    },
+  };
+  return {
+    client: fake as unknown as IntervalsClient,
+    createCalls,
+  };
+}
+
+async function runStrengthCreate(
+  client: IntervalsClient,
+  date: string,
+  tz = "UTC",
+) {
+  const tools = createPureCoreIntervalsTools(client, tz);
+  return tools.intervals_create_strength_workout!.execute!(
+    {
+      date,
+      name: "Lower body 45min",
+      description: "Back squat 3x5 @ RPE 7",
+    },
+    {} as never,
+  );
+}
+
 describe("event provenance helpers", () => {
   it("buildCoachExternalId formats prefix:date:slug", () => {
     expect(buildCoachExternalId("2026-05-01", "Threshold 3x10")).toBe(
@@ -127,6 +170,98 @@ describe("event provenance helpers", () => {
   it("rejects near-miss forgeries: tag 'cycling-coach-pro', externalId 'evil-cycling-coach:...'", () => {
     expect(isCoachOwnedEvent({ tags: ["cycling-coach-pro"] })).toBe(false);
     expect(isCoachOwnedEvent({ externalId: "evil-cycling-coach:2026-05-01:x" })).toBe(false);
+  });
+});
+
+describe("intervals_create_strength_workout", () => {
+  it("posts a provenance-marked WeightTraining workout and returns the event", async () => {
+    const event = { id: 42 };
+    const { client, createCalls } = makeStrengthCreateFake({
+      ok: true,
+      value: event,
+    });
+    const date = todayInTZ("UTC");
+
+    await expect(runStrengthCreate(client, date)).resolves.toEqual({
+      created: true,
+      event,
+    });
+    expect(createCalls).toEqual([
+      {
+        start_date_local: `${date}T00:00:00`,
+        category: "WORKOUT",
+        name: "Lower body 45min",
+        type: "WeightTraining",
+        external_id: `cycling-coach:${date}:strength-lower-body-45min`,
+        tags: ["cycling-coach"],
+        description: "Back squat 3x5 @ RPE 7",
+      },
+    ]);
+  });
+
+  it("refuses a past date without calling events.create", async () => {
+    const { client, createCalls } = makeStrengthCreateFake({
+      ok: true,
+      value: { id: 1 },
+    });
+
+    await expect(runStrengthCreate(client, "2020-01-01")).resolves.toMatchObject({
+      error: "past_date_refused",
+    });
+    expect(createCalls).toEqual([]);
+  });
+
+  it("refuses an impossible date without calling events.create", async () => {
+    const { client, createCalls } = makeStrengthCreateFake({
+      ok: true,
+      value: { id: 1 },
+    });
+
+    await expect(runStrengthCreate(client, "2026-02-31")).resolves.toMatchObject({
+      error: "invalid_date",
+    });
+    expect(createCalls).toEqual([]);
+  });
+
+  it("surfaces a typed API error after one events.create call", async () => {
+    const { client, createCalls } = makeStrengthCreateFake({
+      ok: false,
+      error: {
+        kind: "rate_limited",
+        status: 429,
+        message: "Slow down",
+      },
+    });
+
+    await expect(
+      runStrengthCreate(client, todayInTZ("UTC")),
+    ).resolves.toEqual({
+      error: "rate_limited",
+      status: 429,
+      message: "Slow down",
+    });
+    expect(createCalls).toHaveLength(1);
+  });
+
+  it("uses the constructor timezone for the today boundary", async () => {
+    const date = todayInTZ("Pacific/Midway");
+    const midway = makeStrengthCreateFake({
+      ok: true,
+      value: { id: 1 },
+    });
+    const kiritimati = makeStrengthCreateFake({
+      ok: true,
+      value: { id: 2 },
+    });
+
+    await expect(
+      runStrengthCreate(midway.client, date, "Pacific/Midway"),
+    ).resolves.toMatchObject({ created: true });
+    await expect(
+      runStrengthCreate(kiritimati.client, date, "Pacific/Kiritimati"),
+    ).resolves.toMatchObject({ error: "past_date_refused" });
+    expect(midway.createCalls).toHaveLength(1);
+    expect(kiritimati.createCalls).toEqual([]);
   });
 });
 

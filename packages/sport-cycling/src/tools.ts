@@ -162,7 +162,7 @@ export function createCyclingTools(
       ? {
           intervals_create_workout: tool({
             description:
-              "Create a structured workout on the intervals.icu calendar (auto-syncs to Garmin/Wahoo). Supply structured steps — they serialize into intervals.icu's native syntax so the power chart renders. Put athlete-facing coaching narrative (feel, notes, hydration) in your chat reply, not in this tool. Past dates are refused — workouts can only be created for today or later.",
+              "Create a structured workout on the intervals.icu calendar (auto-syncs to Garmin/Wahoo). Supply structured steps — they serialize into intervals.icu's native syntax so the power chart renders. Put athlete-facing coaching narrative (feel, notes, hydration) in your chat reply, not in this tool. Past dates are refused — workouts can only be created for today or later. For gym/strength sessions use intervals_create_strength_workout instead.",
             inputSchema: zodSchema(cyclingCreateWorkoutInputSchema),
             execute: async (input: { date: string; workout: IntervalsWorkoutInput }) => {
               const dateError = validateWorkoutCreationDate(input.date, tz);

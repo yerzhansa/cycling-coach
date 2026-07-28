@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { asSchema } from "ai";
 import { todayInTZ } from "@enduragent/core";
 import {
   buildPlanSkeletonInputSchema,
@@ -279,5 +280,21 @@ describe("intervals_create_workout date guard", () => {
         {},
       ),
     ).toMatchObject({ error: "past_date_refused" });
+  });
+});
+
+describe("tool schema portability", () => {
+  it("emits plain object schemas without root combinators", async () => {
+    const { client } = fakeIntervals({ ok: true, value: { id: 1 } });
+    const tools = createCyclingTools(client as never, "UTC");
+    for (const registered of Object.values(tools)) {
+      const schema = (await Promise.resolve(
+        asSchema((registered as unknown as { inputSchema: never }).inputSchema).jsonSchema,
+      )) as Record<string, unknown>;
+      expect(schema.type).toBe("object");
+      expect(schema).not.toHaveProperty("anyOf");
+      expect(schema).not.toHaveProperty("oneOf");
+      expect(schema).not.toHaveProperty("allOf");
+    }
   });
 });
