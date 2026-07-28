@@ -1,5 +1,16 @@
 # @enduragent/sport-running
 
+## 0.1.2
+
+### Patch Changes
+
+- e31ab52: Refactor shared workout-date validation, confirmation outcomes, proposal lookup, event provenance, and sport tool construction without changing behavior.
+- Updated dependencies [e31ab52]
+- Updated dependencies [1e40c2e]
+- Updated dependencies [49844fa]
+- Updated dependencies [03964f0]
+  - @enduragent/core@0.1.2
+
 ## 0.1.1
 
 ### Patch Changes
