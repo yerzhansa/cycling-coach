@@ -18,6 +18,8 @@ import {
 } from "../src/theme/preferences.js";
 import { setPrefersDark } from "./matchmedia.js";
 
+const RADIUS_TOKENS = new Set(["--r", "--r-lg"]);
+
 function expectedProperties(paletteId: string, theme: ResolvedTheme): Map<string, string> {
   const palette = paletteById(paletteId);
   const ramp = theme === "dark" ? palette.d : palette.l;
@@ -105,7 +107,7 @@ describe("palette engine", () => {
     );
     const declared = [...tokens.slice(0, tokens.indexOf("}")).matchAll(/(--[\w-]+)\s*:/gu)]
       .map((match) => match[1])
-      .filter((property) => !property.startsWith("--f-") && !property.startsWith("--r"));
+      .filter((property) => !property.startsWith("--f-") && !RADIUS_TOKENS.has(property));
     const stamped = new Set(paletteCustomProperties(PALETTES[0], "light").keys());
 
     expect(declared.length).toBeGreaterThan(0);

@@ -377,7 +377,11 @@ describe("settings mutation lock", () => {
     expect(screen.getByRole("region", { name: "Settings" })).toHaveAttribute("aria-busy", "true");
     expect(screen.getByRole("button", { name: "Save athlete ID" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: /Provider/u })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Open setup" })).toBeDisabled();
+    expect(
+      within(screen.getByRole("region", { name: "Application" })).getByRole("button", {
+        name: "Open setup",
+      }),
+    ).toBeDisabled();
 
     act(() => {
       useEnduragentStore.getState().setActiveView("chat");
@@ -503,7 +507,7 @@ describe("coach route", () => {
     expect(await screen.findByText("Coach settings saved.")).toBeInTheDocument();
   });
 
-  it("offers Open Setup when the provider needs a credential", async () => {
+  it("offers Open setup when the provider needs a credential", async () => {
     const user = userEvent.setup();
     const subject = await renderSettings({
       applyLlmSelection: async () => ({ status: "refused", reason: "credential-required" }),
@@ -512,7 +516,10 @@ describe("coach route", () => {
     await user.selectOptions(screen.getByRole("combobox", { name: /Provider/u }), "openrouter");
     await user.click(screen.getByRole("button", { name: "Save coach route" }));
 
-    const openSetup = await screen.findByRole("button", { name: "Open Setup" });
+    const openSetup = await within(screen.getByRole("region", { name: "Coach" })).findByRole(
+      "button",
+      { name: "Open setup" },
+    );
     await user.click(openSetup);
     expect(subject.openSetup).toHaveBeenCalledTimes(1);
   });

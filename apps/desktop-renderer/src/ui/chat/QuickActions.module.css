@@ -21,11 +21,6 @@
   cursor: pointer;
 }
 
-.shortcut:focus-visible {
-  outline: 3px solid var(--brand);
-  outline-offset: 2px;
-}
-
 .shortcut:disabled {
   cursor: default;
   opacity: 0.5;

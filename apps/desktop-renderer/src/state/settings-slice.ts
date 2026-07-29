@@ -9,7 +9,7 @@ import type { UnitsPreferenceViewState } from "../training-context/controller.js
 import type { DesktopUpdateState } from "../update/controller.js";
 import type { EnduragentState } from "./store.js";
 
-export interface SettingsPanesPort {
+interface SettingsPanesPort {
   activate(): void;
   close(): void;
 }
@@ -59,11 +59,11 @@ export interface ReleaseNotesSettingsPort {
   close(): void;
 }
 
-export interface UnitsSettingsPort {
+interface UnitsSettingsPort {
   set(value: UnitsPreference): void;
 }
 
-export interface SettingsPorts {
+interface SettingsPorts {
   readonly panes: SettingsPanesPort;
   readonly coach: CoachSettingsPort;
   readonly credentials: CredentialSettingsPort;
@@ -106,7 +106,7 @@ export type ReleaseNotesSurfaceState =
       readonly releaseUrl: string | null;
     };
 
-export interface SettingsSurfaceState {
+interface SettingsSurfaceState {
   readonly savingOwners: readonly string[];
   readonly coach: ProviderModelSettingsState;
   readonly credentials: CredentialSettingsState;
@@ -121,7 +121,7 @@ export interface SettingsSurfaceState {
 
 export const CLOSED_PANE = Object.freeze({ status: "closed" } as const);
 
-export const EMPTY_SPEND_SURFACE: SpendSurfaceState = Object.freeze({
+const EMPTY_SPEND_SURFACE: SpendSurfaceState = Object.freeze({
   status: "loading",
   summary: null,
   stale: false,
@@ -132,7 +132,7 @@ export const EMPTY_SPEND_SURFACE: SpendSurfaceState = Object.freeze({
   warning: null,
 });
 
-export const EMPTY_UPDATE_SURFACE: UpdateSurfaceState = Object.freeze({
+const EMPTY_UPDATE_SURFACE: UpdateSurfaceState = Object.freeze({
   state: Object.freeze({ status: "idle" as const }),
   actionDisabled: false,
 });

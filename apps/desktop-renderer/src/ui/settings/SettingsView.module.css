@@ -2,6 +2,7 @@
   margin: 26px 4px 8px;
   color: var(--ink-3);
   font-size: 11px;
+  font-weight: 400;
   letter-spacing: 0.07em;
   text-transform: uppercase;
 }
@@ -52,28 +53,6 @@
 
 .dangerTitle {
   color: var(--danger);
-}
-
-.status {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-}
-
-.dot {
-  flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--ok);
-}
-
-.dot[data-tone="warn"] {
-  background: var(--warn);
-}
-
-.dot[data-tone="danger"] {
-  background: var(--danger);
 }
 
 .button {

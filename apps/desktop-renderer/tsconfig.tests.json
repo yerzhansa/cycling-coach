@@ -3,10 +3,5 @@
   "compilerOptions": {
     "types": ["node"]
   },
-  "include": [
-    "src/global.d.ts",
-    "tests/dom-setup.ts",
-    "tests/matchmedia.ts",
-    "tests/**/*.tsx"
-  ]
+  "include": ["src/global.d.ts", "tests/**/*.ts", "tests/**/*.tsx"]
 }

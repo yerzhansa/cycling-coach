@@ -165,7 +165,7 @@ export function CredentialsSection(): ReactElement {
                   port?.openSetup();
                 }}
               >
-                Open Setup
+                Open setup
               </button>
             ) : null}
           </div>

@@ -2,15 +2,15 @@ import type { ReactElement } from "react";
 import { useEnduragentStore } from "../../state/store.js";
 import styles from "./Sidebar.module.css";
 
-export interface ConversationEntry {
+interface ConversationEntry {
   readonly id: string;
   readonly title: string;
   readonly when: string;
 }
 
-export const LIVE_CONVERSATION_ID = "desktop";
+const LIVE_CONVERSATION_ID = "desktop";
 
-export const SINGLE_CONVERSATION_NOTE = "Enduragent keeps one conversation on this Mac.";
+const SINGLE_CONVERSATION_NOTE = "Enduragent keeps one conversation on this Mac.";
 
 export function HistoryList(props: { readonly locked: boolean }): ReactElement {
   const activeView = useEnduragentStore((store) => store.activeView);

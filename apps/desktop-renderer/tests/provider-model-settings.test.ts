@@ -7,7 +7,6 @@ import type {
 import { CUSTOM_MODEL_SELECTION } from "../src/onboarding/constants.js";
 import {
   createProviderModelSettingsController,
-  type ProviderModelFormState,
   type ProviderModelSettingsController,
   type ProviderModelSettingsView,
 } from "../src/settings/provider-model-controller.js";

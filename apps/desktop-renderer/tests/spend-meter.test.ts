@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CoachClient } from "@enduragent/coach-client";
 import type { SpendSummary } from "@enduragent/coach-contract";
 import type { DesktopCoachClientProvider } from "../src/coach-client.js";

@@ -13,17 +13,6 @@ import {
   formatUtcTimestamp,
   formatWholeNumber,
 } from "../src/training-context/format.js";
-import {
-  SYNC_INDETERMINATE_COPY,
-  SYNC_NO_CHANGE_COPY,
-  SYNC_OPERATION_FAILURE_COPY,
-  SYNC_PARTIAL_COPY,
-  SYNC_PROTOCOL_COPY,
-  SYNC_PUBLISHED_COPY,
-  SYNC_QUEUED_COPY,
-  SYNC_RUNNING_COPY,
-  toManualSyncViewState,
-} from "../src/training-context/manual-sync.js";
 
 const context: CyclingTrainingContext = {
   anchorZones: { kind: "unknown", reason: "missing-anchor" },
