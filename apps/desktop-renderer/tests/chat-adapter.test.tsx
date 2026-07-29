@@ -90,7 +90,8 @@ describe("chat view adapter", () => {
       notice: CHAT_WORKING_COPY,
       interrupted: false,
       workBlocked: true,
-      composerDisabled: true,
+      sendDisabled: true,
+      inputDisabled: true,
       newConversationUnavailable: false,
       resetPhase: "idle",
       resetCount: 0,
@@ -112,11 +113,28 @@ describe("chat view adapter", () => {
     expect(published[0]).toMatchObject({
       workBlocked: false,
       newConversationUnavailable: true,
-      composerDisabled: true,
+      sendDisabled: true,
+      inputDisabled: false,
       hydrationStatus: "idle",
       hydrationHasEarlier: false,
       hydrationRevision: 0,
       hydrationChange: "none",
+    });
+  });
+
+  it("fully blocks input while a session reset is being confirmed", () => {
+    const published: ChatSurfaceState[] = [];
+    const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
+
+    adapter.view.render({
+      ...EMPTY_CHAT_STATE,
+      session: { ...EMPTY_CHAT_STATE.session, resetPhase: "confirming" },
+    });
+
+    expect(published[0]).toMatchObject({
+      workBlocked: true,
+      sendDisabled: true,
+      inputDisabled: true,
     });
   });
 

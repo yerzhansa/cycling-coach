@@ -128,6 +128,7 @@ describe("chat surface", () => {
 
       await user.click(composer());
       await user.keyboard("/rev");
+      setChat({ status: "streaming", sendDisabled: true });
       await user.click(screen.getByRole("option", { name: /\/review/u }));
 
       expect(composer()).toHaveValue("/review ");
@@ -206,9 +207,39 @@ describe("chat surface", () => {
       expect(actions.submit).toHaveBeenCalledWith("   ride");
     });
 
-    it("locks the composer and the quick actions while a turn is in flight", () => {
+    it("keeps the focused draft typeable but blocks sends while a turn streams", async () => {
+      const user = userEvent.setup();
       render(<Harness />);
-      setChat({ composerDisabled: true });
+      const textarea = composer();
+      await user.click(textarea);
+      await user.keyboard("Plan tomorrow");
+      setChat({ status: "streaming", sendDisabled: true, inputDisabled: false });
+
+      expect(textarea).toBeEnabled();
+      expect(textarea).toHaveFocus();
+      expect(textarea).toHaveValue("Plan tomorrow");
+      expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+      for (const button of screen.getAllByRole("button", { name: /command$/u })) {
+        expect(button).toBeDisabled();
+      }
+
+      await user.keyboard("{Enter}");
+
+      expect(actions.submit).not.toHaveBeenCalled();
+      expect(textarea).toHaveValue("Plan tomorrow");
+      expect(textarea).toHaveFocus();
+
+      setChat({ status: "idle", sendDisabled: false });
+
+      expect(textarea).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+      expect(textarea).toHaveValue("Plan tomorrow");
+      expect(textarea).toHaveFocus();
+    });
+
+    it("locks the composer and the quick actions while work is blocked", () => {
+      render(<Harness />);
+      setChat({ sendDisabled: true, inputDisabled: true });
 
       expect(composer()).toBeDisabled();
       expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
@@ -227,11 +258,11 @@ describe("chat surface", () => {
       });
       expect(actions.submit).toHaveBeenCalledWith("/status");
 
-      setChat({ composerDisabled: true });
+      setChat({ sendDisabled: true });
       act(() => {
         (document.activeElement as HTMLElement | null)?.blur();
       });
-      setChat({ composerDisabled: false });
+      setChat({ sendDisabled: false });
 
       await waitFor(() => {
         expect(document.activeElement).toBe(shortcut);

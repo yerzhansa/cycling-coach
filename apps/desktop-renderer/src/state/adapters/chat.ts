@@ -22,10 +22,7 @@ export interface ChatViewAdapter {
   readonly view: ChatView;
 }
 
-function isStreamingCoach(message: {
-  readonly role: string;
-  readonly delivery: string;
-}): boolean {
+function isStreamingCoach(message: { readonly role: string; readonly delivery: string }): boolean {
   return message.role === "coach" && message.delivery === "streaming";
 }
 
@@ -64,7 +61,8 @@ export function createChatViewAdapter(input: {
       notice: state.activeTurn?.error?.athleteMessage ?? state.progress,
       interrupted: state.status === "interrupted",
       workBlocked,
-      composerDisabled: state.status === "streaming" || workBlocked,
+      sendDisabled: state.status === "streaming" || workBlocked,
+      inputDisabled: workBlocked,
       newConversationUnavailable,
       resetPhase: state.session.resetPhase,
       resetCount: state.session.resetCount,
