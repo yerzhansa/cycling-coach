@@ -11,7 +11,6 @@
   "dependencies": {
     "@enduragent/coach-client": "workspace:*",
     "@enduragent/coach-contract": "workspace:*",
-    "@fontsource-variable/source-serif-4": "5.3.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "zustand": "5.0.14"

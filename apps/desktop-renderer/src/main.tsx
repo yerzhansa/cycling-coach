@@ -1,6 +1,4 @@
 import "./theme/tokens.css";
-import "@fontsource-variable/source-serif-4";
-import "@fontsource-variable/source-serif-4/wght-italic.css";
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App.js";
 import { bootRenderer, type Disposer } from "./boot.js";

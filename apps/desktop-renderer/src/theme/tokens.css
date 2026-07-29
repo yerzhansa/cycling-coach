@@ -22,7 +22,7 @@
   --r-lg: 14px;
   --f-ui: "SF Pro Text", -apple-system, system-ui, sans-serif;
   --f-dis: "SF Pro Display", -apple-system, system-ui, sans-serif;
-  --f-prose: "Source Serif 4 Variable", "Source Serif 4", Georgia, serif;
+  --f-prose: "SF Pro Text", -apple-system, system-ui, "Segoe UI", Helvetica, Arial, sans-serif;
   --f-mono: "SF Mono", ui-monospace, Menlo, monospace;
 }
 

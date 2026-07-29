@@ -612,14 +612,16 @@ describe("chat surface", () => {
       expect(row?.className).toBe(streamingClassName);
     });
 
-    it("declares the bundled prose face for the transcript row", async () => {
+    it("declares the system prose stack for the transcript row", async () => {
       const sourceRoot = resolve(import.meta.dirname, "..", "src");
       const [stylesheet, tokens] = await Promise.all([
         readFile(resolve(sourceRoot, "ui/chat/Transcript.module.css"), "utf8"),
         readFile(resolve(sourceRoot, "theme/tokens.css"), "utf8"),
       ]);
       expect(stylesheet).toMatch(/\.prose\s*\{[^}]*font:\s*16px\/1\.6\s+var\(--f-prose\);/u);
-      expect(tokens).toMatch(/--f-prose:\s*"Source Serif 4 Variable"/u);
+      expect(tokens).toMatch(
+        /--f-prose:\s*"SF Pro Text", -apple-system, system-ui, "Segoe UI", Helvetica, Arial, sans-serif;/u,
+      );
     });
   });
 });
