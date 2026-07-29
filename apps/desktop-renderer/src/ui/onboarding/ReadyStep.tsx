@@ -8,9 +8,9 @@ export function ReadyStep(props: { readonly surface: OnboardingSurfaceState }): 
   return (
     <>
       <p className={styles.kicker}>Ready</p>
-      <h1 id="onboarding-title" className={styles.title} tabIndex={-1}>
+      <h2 id="onboarding-title" className={styles.title} tabIndex={-1}>
         Your coach is ready
-      </h1>
+      </h2>
       <p className={`${styles.copy} onboarding-copy`}>
         Start with what you are training for, how the last week felt, or what you want help
         deciding.

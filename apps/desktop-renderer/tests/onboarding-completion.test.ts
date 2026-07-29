@@ -63,6 +63,7 @@ describe("onboarding completion", () => {
       storage: () => storage,
       onComplete: vi.fn(),
     });
+    expect(nextWindow.isCompleted()).toBe(true);
     await nextWindow.openOnStartup(openSetup);
 
     expect(openSetup).not.toHaveBeenCalled();

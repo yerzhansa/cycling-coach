@@ -40,9 +40,9 @@ export function SafetyIntakeStep(props: {
   return (
     <>
       <p className={styles.kicker}>Safety intake</p>
-      <h1 id="onboarding-title" className={styles.title} tabIndex={-1}>
+      <h2 id="onboarding-title" className={styles.title} tabIndex={-1}>
         A few safety checks
-      </h1>
+      </h2>
       <p className={`${styles.copy} onboarding-copy`}>
         These answers record context for your coach. They are not a diagnosis.
       </p>

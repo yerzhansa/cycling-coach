@@ -1,5 +1,5 @@
 import type { StateCreator } from "zustand";
-import type { OnboardingActions, OnboardingSurfaceState } from "../onboarding/controller.js";
+import type { OnboardingController, OnboardingSurfaceState } from "../onboarding/controller.js";
 import { createOnboardingState } from "../onboarding/machine.js";
 import { IDLE_RIDE_IMPORT } from "./ride-import-slice.js";
 import type { EnduragentState } from "./store.js";
@@ -16,9 +16,11 @@ export const CLOSED_ONBOARDING: OnboardingSurfaceState = Object.freeze({
 
 export interface OnboardingSlice {
   readonly onboarding: OnboardingSurfaceState;
-  readonly onboardingActions: OnboardingActions | null;
+  readonly onboardingActions: OnboardingController | null;
+  readonly onboardingStartupSettled: boolean;
   setOnboarding: (next: OnboardingSurfaceState) => void;
-  bindOnboardingActions: (actions: OnboardingActions | null) => void;
+  bindOnboardingActions: (actions: OnboardingController | null) => void;
+  setOnboardingStartupSettled: (settled: boolean) => void;
 }
 
 export const createOnboardingSlice: StateCreator<EnduragentState, [], [], OnboardingSlice> = (
@@ -26,10 +28,14 @@ export const createOnboardingSlice: StateCreator<EnduragentState, [], [], Onboar
 ) => ({
   onboarding: CLOSED_ONBOARDING,
   onboardingActions: null,
+  onboardingStartupSettled: false,
   setOnboarding(next) {
     set({ onboarding: next });
   },
   bindOnboardingActions(actions) {
     set({ onboardingActions: actions });
+  },
+  setOnboardingStartupSettled(settled) {
+    set({ onboardingStartupSettled: settled });
   },
 });

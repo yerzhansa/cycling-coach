@@ -12,6 +12,7 @@ import {
   type ChatSurfaceState,
 } from "../src/state/chat-slice.js";
 import { resetChatStream } from "../src/state/chat-stream.js";
+import { CLOSED_ONBOARDING } from "../src/state/onboarding-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { ChatView } from "../src/ui/chat/ChatView.js";
 import { SLASH_COMMANDS } from "../src/ui/chat/commands.js";
@@ -58,6 +59,7 @@ describe("chat surface", () => {
       chat: EMPTY_CHAT_SURFACE,
       firstSync: { status: "idle" },
       chatActions: actions,
+      onboarding: CLOSED_ONBOARDING,
     });
   });
 
@@ -66,6 +68,7 @@ describe("chat surface", () => {
       chat: EMPTY_CHAT_SURFACE,
       firstSync: { status: "idle" },
       chatActions: null,
+      onboarding: CLOSED_ONBOARDING,
     });
     resetChatStream();
   });
@@ -440,6 +443,10 @@ describe("chat surface", () => {
       setChat({ hydrationHasEarlier: true, hydrationStatus: "ready" });
       const conversation = document.querySelector(".conversation");
       if (!(conversation instanceof HTMLElement)) throw new TypeError("conversation missing");
+      Object.defineProperty(conversation, "offsetParent", {
+        configurable: true,
+        value: document.body,
+      });
 
       conversation.scrollTop = 0;
       act(() => {
@@ -452,6 +459,20 @@ describe("chat surface", () => {
         conversation.dispatchEvent(new Event("scroll"));
       });
       expect(actions.loadEarlier).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores scroll resets while the transcript is hidden", () => {
+      render(<Harness />);
+      setChat({ hydrationHasEarlier: true, hydrationStatus: "ready" });
+      const conversation = document.querySelector(".conversation");
+      if (!(conversation instanceof HTMLElement)) throw new TypeError("conversation missing");
+
+      conversation.scrollTop = 0;
+      act(() => {
+        conversation.dispatchEvent(new Event("scroll"));
+      });
+
+      expect(actions.loadEarlier).not.toHaveBeenCalled();
     });
   });
 

@@ -85,55 +85,51 @@ describe("mounted onboarding", () => {
     resetOnboardingStore();
   });
 
-  it("presents the modal dialog, its progress hooks, and restores focus on dismissal", async () => {
+  it("presents the setup page, its progress hooks, and dismisses through the controller", async () => {
     const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     const wizard = mountWizard({ bridge });
     await wizard.open();
 
-    const dialog = screen.getByRole("dialog");
-    expect(dialog).toHaveAttribute("aria-modal", "true");
-    expect(dialog).toHaveAttribute("aria-labelledby", "onboarding-title");
-    expect(dialog).toHaveClass("onboarding");
+    const page = screen.getByRole("region", { name: "Setup" });
+    expect(page).toHaveClass("onboarding");
+    expect(control("onboarding-title")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.querySelector(".onboarding-scrim")).toBeNull();
     expect(screen.getByLabelText("Step 1 of 4")).toBeInTheDocument();
     expect(document.activeElement).toBe(control("onboarding-title"));
 
     await user.click(button("Dismiss"));
 
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Setup" })).toBeNull();
     expect(wizard.focusOpener).toHaveBeenCalledTimes(1);
     wizard.controller.dispose();
   });
 
-  it("closes on Escape and restores focus to the opener", async () => {
+  it("does not close the setup page on Escape", async () => {
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     const wizard = mountWizard({ bridge });
     await wizard.open();
 
-    const dialog = screen.getByRole("dialog");
-    expect(fireEvent.keyDown(dialog, { key: "Escape" })).toBe(false);
+    const page = screen.getByRole("region", { name: "Setup" });
+    expect(fireEvent.keyDown(page, { key: "Escape" })).toBe(true);
 
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(wizard.focusOpener).toHaveBeenCalledTimes(1);
+    expect(page).toBeInTheDocument();
+    expect(wizard.focusOpener).not.toHaveBeenCalled();
     wizard.controller.dispose();
   });
 
-  it("traps Tab inside the dialog and skips collapsed advanced providers", async () => {
+  it("does not trap Tab inside the setup page", async () => {
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     const wizard = mountWizard({ bridge });
     await wizard.open();
 
-    const dialog = screen.getByRole("dialog");
-    const dismiss = button("Dismiss");
+    const page = screen.getByRole("region", { name: "Setup" });
     const submit = button("Continue");
     expect(passwordInput("openai").closest("details")?.hasAttribute("open")).toBe(false);
 
     submit.focus();
-    expect(fireEvent.keyDown(dialog, { key: "Tab" })).toBe(false);
-    expect(document.activeElement).toBe(dismiss);
-
-    dismiss.focus();
-    expect(fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true })).toBe(false);
+    expect(fireEvent.keyDown(page, { key: "Tab" })).toBe(true);
     expect(document.activeElement).toBe(submit);
     wizard.controller.dispose();
   });

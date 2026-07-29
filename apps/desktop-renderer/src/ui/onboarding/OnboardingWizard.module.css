@@ -1,46 +1,17 @@
-.scrim {
-  position: fixed;
-  z-index: 40;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: max(44px, env(safe-area-inset-top)) 18px 18px;
-  background: rgb(9 14 20 / 42%);
-  backdrop-filter: blur(9px);
-}
-
-.dialog {
-  width: min(510px, 100%);
-  max-height: 100%;
-  overflow: auto;
-  border: 1px solid var(--line-2);
-  border-radius: 22px;
-  color: var(--ink);
-  background: var(--surface);
-  box-shadow: 0 28px 80px rgb(9 20 30 / 24%);
-  animation: enter 180ms ease-out;
-}
-
-.header,
 .footer {
   display: flex;
   gap: 12px;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 24px;
-}
-
-.header {
-  border-bottom: 1px solid var(--line);
-}
-
-.footer {
+  margin-top: 10px;
+  padding: 18px 0;
   border-top: 1px solid var(--line);
 }
 
 .progress {
   display: flex;
   gap: 7px;
+  margin-bottom: 28px;
 }
 
 .progress span {
@@ -55,7 +26,18 @@
   background: var(--brand);
 }
 
-.dismiss,
+.dismiss {
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
 .textButton {
   padding: 0;
   border: 0;
@@ -73,7 +55,6 @@
 
 .body {
   min-height: 310px;
-  padding: 38px 42px 34px;
 }
 
 .kicker {
@@ -367,23 +348,8 @@
   opacity: 0.5;
 }
 
-@keyframes enter {
-  from {
-    opacity: 0;
-    transform: translateY(8px) scale(0.99);
-  }
-}
-
-@media (max-width: 720px) {
-  .body {
-    padding: 30px 24px;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .dialog,
   .progress span {
-    animation: none;
     transition: none;
   }
 }

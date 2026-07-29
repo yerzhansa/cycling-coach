@@ -86,9 +86,9 @@ export function CoachKeysStep(props: {
   return (
     <>
       <p className={styles.kicker}>Coach keys</p>
-      <h1 id="onboarding-title" className={styles.title} tabIndex={-1}>
+      <h2 id="onboarding-title" className={styles.title} tabIndex={-1}>
         Choose how your coach thinks
-      </h1>
+      </h2>
       <p className={`${styles.copy} onboarding-copy`}>
         ChatGPT sign-in is saved in a local profile file. API keys are encrypted by macOS. The local
         coaching service uses your choice to contact the provider.
