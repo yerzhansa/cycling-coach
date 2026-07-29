@@ -22,6 +22,10 @@ export function installMatchMedia(): void {
   });
 }
 
+export function matchMediaListenerCount(): number {
+  return listeners.size;
+}
+
 export function setPrefersDark(value: boolean): void {
   prefersDark = value;
   for (const listener of [...listeners]) listener();

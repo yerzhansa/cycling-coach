@@ -26,10 +26,11 @@ import {
 } from "../src/state/adapters/settings.js";
 import { createSpendSettingsAdapter } from "../src/state/adapters/spend.js";
 import { createUpdateSettingsAdapter } from "../src/state/adapters/update.js";
-import { EMPTY_SETTINGS_SURFACE } from "../src/state/settings-slice.js";
+import { CLOSED_PANE, EMPTY_SETTINGS_SURFACE } from "../src/state/settings-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import type { DesktopUpdateState } from "../src/update/controller.js";
 import { createDesktopUpdateController } from "../src/update/controller.js";
+import { CONVERSATION_FIELDS } from "../src/ui/settings/copy.js";
 import { SettingsView } from "../src/ui/settings/SettingsView.js";
 
 interface Deferred<T> {
@@ -439,6 +440,65 @@ describe("conversation settings", () => {
     expect(
       screen.getAllByText("Managed by an environment variable. Change it outside Enduragent."),
     ).not.toHaveLength(0);
+  });
+
+  it("warns the athlete about the session-lifecycle side effects", async () => {
+    await renderSettings();
+
+    const resetHour = CONVERSATION_FIELDS.find((field) => field.field === "dailyResetHour");
+    const retention = CONVERSATION_FIELDS.find(
+      (field) => field.field === "resetArchiveRetentionDays",
+    );
+    expect(resetHour?.help).toContain("may make your next message start a fresh conversation");
+    expect(retention?.help).toContain("changes apply only to future pruning");
+
+    expect(
+      screen.getByText(/may make your next message start a fresh conversation/u),
+    ).toHaveAttribute("id", "conversation-dailyResetHour-help");
+    expect(screen.getByText(/changes apply only to future pruning/u)).toHaveAttribute(
+      "id",
+      "conversation-resetArchiveRetentionDays-help",
+    );
+    expect(screen.getByLabelText("Daily reset hour")).toHaveAttribute(
+      "aria-describedby",
+      "conversation-dailyResetHour-help",
+    );
+    expect(screen.getByLabelText("Archive retention (days)")).toHaveAttribute(
+      "aria-describedby",
+      "conversation-resetArchiveRetentionDays-help",
+    );
+  });
+});
+
+describe("settings lifecycle", () => {
+  it("closes every pane and its controller when the athlete leaves settings", async () => {
+    harness = createHarness();
+    const view = render(<SettingsView />);
+    await screen.findByRole("button", { name: "Save coach route" });
+    await waitFor(() => {
+      expect(useEnduragentStore.getState().settings.conversation.status).toBe("ready");
+      expect(useEnduragentStore.getState().settings.coach.status).toBe("ready");
+      expect(useEnduragentStore.getState().settings.athlete.status).toBe("ready");
+      expect(useEnduragentStore.getState().settings.credentials.status).toBe("ready");
+    });
+    const loads = harness.calls.filter((call) => call.method === "getRuntimeConfig").length;
+    expect(loads).toBeGreaterThan(0);
+
+    view.unmount();
+
+    const settings = useEnduragentStore.getState().settings;
+    expect(settings.coach).toEqual(CLOSED_PANE);
+    expect(settings.credentials).toEqual(CLOSED_PANE);
+    expect(settings.athlete).toEqual(CLOSED_PANE);
+    expect(settings.conversation).toEqual(CLOSED_PANE);
+
+    render(<SettingsView />);
+    await waitFor(() => {
+      expect(useEnduragentStore.getState().settings.conversation.status).toBe("ready");
+    });
+    expect(
+      harness.calls.filter((call) => call.method === "getRuntimeConfig").length,
+    ).toBeGreaterThan(loads);
   });
 });
 

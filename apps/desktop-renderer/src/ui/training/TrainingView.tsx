@@ -5,9 +5,12 @@ import type {
   PlanPanel,
   WellnessTrendPanel,
 } from "@enduragent/coach-contract";
-import { useRef, type ReactElement, type ReactNode } from "react";
+import { useEffect, useRef, type ReactElement, type ReactNode } from "react";
 import { rideImportStatusCopy } from "../../ride-import.js";
-import { setManualSyncFocusTarget } from "../../state/manual-sync-focus.js";
+import {
+  setManualSyncFocusFallback,
+  setManualSyncFocusTarget,
+} from "../../state/manual-sync-focus.js";
 import { useEnduragentStore } from "../../state/store.js";
 import {
   formatDateLabel,
@@ -50,10 +53,18 @@ function SyncPanel(): ReactElement {
   const sync = useEnduragentStore((store) => store.sync);
   const actions = useEnduragentStore((store) => store.syncActions);
   const action = useRef<HTMLButtonElement>(null);
+  const message = useRef<HTMLParagraphElement>(null);
   const synced = metadata?.lastSynced ?? null;
   const syncedCopy = synced === null ? null : formatUtcTimestamp(synced);
   const syncedInstant =
     synced === null || syncedCopy === "Unknown sync time" ? null : new Date(synced).toISOString();
+
+  useEffect(() => {
+    setManualSyncFocusFallback(message.current);
+    return () => {
+      setManualSyncFocusFallback(null);
+    };
+  }, []);
 
   return (
     <Panel name="sync" title="Sync">
@@ -96,6 +107,8 @@ function SyncPanel(): ReactElement {
           {sync.label}
         </button>
         <p
+          ref={message}
+          tabIndex={-1}
           className={`${styles.syncMessage} training-sync-message`}
           role="status"
           aria-live="polite"

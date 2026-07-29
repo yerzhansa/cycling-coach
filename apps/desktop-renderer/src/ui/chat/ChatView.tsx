@@ -14,15 +14,25 @@ import { Transcript } from "./Transcript.js";
 
 const COMPOSER_CLEARANCE_PROPERTY = "--chat-composer-clearance";
 
+function FollowLatest(): null {
+  const surface = useEnduragentStore((state) => state.chat);
+  const appliedRevision = useRef(0);
+
+  useLayoutEffect(() => {
+    const hydrationChanged = surface.hydrationRevision !== appliedRevision.current;
+    appliedRevision.current = surface.hydrationRevision;
+    chatScrollAnchor.apply({ hydrationChanged, hydrationChange: surface.hydrationChange });
+  });
+
+  return null;
+}
+
 export function ChatView(): ReactElement {
   const conversation = useRef<HTMLElement>(null);
   const composerWrap = useRef<HTMLDivElement>(null);
   const composer = useRef<ComposerHandle>(null);
-  const appliedRevision = useRef(0);
   const status = useEnduragentStore((state) => state.chat.status);
   const announcement = useEnduragentStore((state) => state.chat.announcement);
-  const hydrationRevision = useEnduragentStore((state) => state.chat.hydrationRevision);
-  const hydrationChange = useEnduragentStore((state) => state.chat.hydrationChange);
   const hydrationStatus = useEnduragentStore((state) => state.chat.hydrationStatus);
   const hasEarlier = useEnduragentStore((state) => state.chat.hydrationHasEarlier);
   const workBlocked = useEnduragentStore((state) => state.chat.workBlocked);
@@ -75,12 +85,6 @@ export function ChatView(): ReactElement {
     };
   }, [actions, hasEarlier, hydrationStatus, workBlocked]);
 
-  useLayoutEffect(() => {
-    const hydrationChanged = hydrationRevision !== appliedRevision.current;
-    appliedRevision.current = hydrationRevision;
-    chatScrollAnchor.apply({ hydrationChanged, hydrationChange });
-  });
-
   return (
     <>
       <main
@@ -113,6 +117,7 @@ export function ChatView(): ReactElement {
           composer.current?.reset();
         }}
       />
+      <FollowLatest />
     </>
   );
 }

@@ -405,3 +405,120 @@ describe("streaming fast path", () => {
     expect(coachText()).toBe("Easy spin.");
   });
 });
+
+describe("follow-latest anchoring", () => {
+  const ROW_HEIGHT = 400;
+  const VIEWPORT = 200;
+
+  function conversation(): HTMLElement {
+    const element = document.querySelector('main[aria-label="Coaching conversation"]');
+    if (!(element instanceof HTMLElement)) throw new TypeError("conversation missing");
+    let scrollTop = 0;
+    Object.defineProperty(element, "clientHeight", { configurable: true, get: () => VIEWPORT });
+    Object.defineProperty(element, "scrollHeight", {
+      configurable: true,
+      get: () => VIEWPORT + element.querySelectorAll(".chat-message").length * ROW_HEIGHT,
+    });
+    Object.defineProperty(element, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (next: number) => {
+        scrollTop = next;
+      },
+    });
+    return element;
+  }
+
+  function changedKeys(left: ChatSurfaceState, right: ChatSurfaceState): string[] {
+    return Object.keys(right).filter(
+      (key) => left[key as keyof ChatSurfaceState] !== right[key as keyof ChatSurfaceState],
+    );
+  }
+
+  beforeEach(() => {
+    useEnduragentStore.setState({
+      activeView: "chat",
+      chat: EMPTY_CHAT_SURFACE,
+      firstSync: { status: "idle" },
+      chatActions: null,
+    });
+  });
+
+  afterEach(() => {
+    useEnduragentStore.setState({ chat: EMPTY_CHAT_SURFACE });
+    resetChatStream();
+  });
+
+  it("scrolls to the newest row on a publish that only changes the transcript", () => {
+    const published: ChatSurfaceState[] = [];
+    const adapter = createChatViewAdapter({
+      publish: (next) => {
+        published.push(next);
+        useEnduragentStore.getState().setChatSurface(next);
+      },
+    });
+    const send = (state: ChatState, next?: ChatViewControls): void => {
+      act(() => {
+        adapter.view.render(state, next);
+      });
+    };
+
+    render(<ChatSurface />);
+    const host = conversation();
+
+    let state = submitted("Plan my week");
+    send(state, controls());
+    expect(document.querySelectorAll(".chat-message")).toHaveLength(1);
+    expect(host.scrollTop).toBe(VIEWPORT + ROW_HEIGHT);
+
+    const first = delta(state, "Ride ");
+    state = first.state;
+    send(state, first.controls);
+
+    expect(published).toHaveLength(2);
+    expect(changedKeys(published[0], published[1])).toEqual(["messages", "notice"]);
+    expect(published[1].status).toBe("streaming");
+    expect(document.querySelectorAll(".chat-message")).toHaveLength(2);
+    expect(host.scrollTop).toBe(VIEWPORT + 2 * ROW_HEIGHT);
+  });
+
+  it("jumps to the newest message when history hydrates under a scrolled-up transcript", () => {
+    const adapter = createChatViewAdapter({
+      publish: (next) => useEnduragentStore.getState().setChatSurface(next),
+    });
+    const send = (state: ChatState, next?: ChatViewControls): void => {
+      act(() => {
+        adapter.view.render(state, next);
+      });
+    };
+
+    render(<ChatSurface />);
+    const host = conversation();
+    const live = submitted("Plan my week");
+    send(live, controls());
+
+    host.scrollTop = 0;
+    send(
+      {
+        ...live,
+        messages: mergeHydratedMessages(
+          [
+            {
+              turnId: "persisted-1",
+              completedAt: "2001-01-01T00:00:00.000Z",
+              athleteText: "Persisted athlete",
+              coachText: "Persisted coach",
+            },
+          ],
+          live.messages,
+        ),
+      },
+      controls({
+        hydration: { status: "ready", hasEarlier: false, revision: 2, change: "initial" },
+      }),
+    );
+
+    expect(document.querySelectorAll(".chat-message")).toHaveLength(3);
+    expect(host.scrollTop).toBe(VIEWPORT + 3 * ROW_HEIGHT);
+  });
+});

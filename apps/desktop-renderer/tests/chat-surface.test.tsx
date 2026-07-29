@@ -15,6 +15,7 @@ import { resetChatStream } from "../src/state/chat-stream.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { ChatView } from "../src/ui/chat/ChatView.js";
 import { SLASH_COMMANDS } from "../src/ui/chat/commands.js";
+import messageStyles from "../src/ui/chat/Message.module.css";
 import transcriptStyles from "../src/ui/chat/Transcript.module.css";
 
 function stubActions(): ChatActions {
@@ -235,6 +236,120 @@ describe("chat surface", () => {
       await waitFor(() => {
         expect(document.activeElement).toBe(shortcut);
       });
+    });
+  });
+
+  describe("transcript notice and retry", () => {
+    function notice(): HTMLElement {
+      const element = document.querySelector(".chat-notice");
+      if (!(element instanceof HTMLElement)) throw new TypeError("notice missing");
+      return element;
+    }
+
+    function retry(): HTMLButtonElement {
+      const element = document.querySelector(".chat-retry");
+      if (!(element instanceof HTMLButtonElement)) throw new TypeError("retry bar missing");
+      return element;
+    }
+
+    it("hides the notice until the coach reports progress or an error", () => {
+      render(<Harness />);
+      expect(notice().hidden).toBe(true);
+      expect(notice().textContent).toBe("");
+
+      setChat({ notice: "Coach is working…" });
+      expect(notice().hidden).toBe(false);
+      expect(notice()).toHaveTextContent("Coach is working…");
+
+      setChat({ notice: "The coach is unreachable right now." });
+      expect(notice()).toHaveTextContent("The coach is unreachable right now.");
+
+      setChat({ notice: null });
+      expect(notice().hidden).toBe(true);
+    });
+
+    it("offers the retry bar only on an interrupted turn and hands the click to the controller", async () => {
+      const user = userEvent.setup();
+      render(<Harness />);
+      expect(retry().hidden).toBe(true);
+
+      setChat({ interrupted: true });
+      expect(retry().hidden).toBe(false);
+      await user.click(retry());
+      expect(actions.retry).toHaveBeenCalledTimes(1);
+
+      setChat({ workBlocked: true });
+      expect(retry()).toBeDisabled();
+      await user.click(retry());
+      expect(actions.retry).toHaveBeenCalledTimes(1);
+
+      setChat({ workBlocked: false, interrupted: false });
+      expect(retry().hidden).toBe(true);
+    });
+
+    it("keeps the retry bar inert until the chat actions are bound", () => {
+      act(() => {
+        useEnduragentStore.setState({ chatActions: null });
+      });
+      render(<Harness />);
+      setChat({ interrupted: true });
+
+      act(() => {
+        retry().click();
+      });
+      expect(actions.retry).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("command chips", () => {
+    function messages(...texts: readonly string[]): readonly ChatMessageView[] {
+      return texts.map((text, index) => ({
+        id: `a${index}`,
+        role: "athlete" as const,
+        delivery: "complete" as const,
+        historical: false,
+        text,
+      }));
+    }
+
+    function chipped(): readonly (string | null)[] {
+      return [...document.querySelectorAll(".chat-message--athlete .chat-message__text")].map(
+        (node) => (node.classList.contains(messageStyles.command) ? "command" : null),
+      );
+    }
+
+    it("marks athlete turns that open with a known slash command", () => {
+      render(<Harness />);
+      setChat({
+        messages: messages(
+          "/status",
+          "  /WORKOUT tomorrow  ",
+          "/plan my week",
+          "what is /status",
+          "/synthetic-unknown",
+          "Plan my week",
+        ),
+      });
+
+      expect(chipped()).toEqual(["command", "command", "command", null, null, null]);
+    });
+
+    it("leaves the command face off coach turns", () => {
+      render(<Harness />);
+      setChat({
+        messages: [
+          {
+            id: "c1",
+            role: "coach",
+            delivery: "complete",
+            historical: false,
+            text: "/status is a command you can send me.",
+          },
+        ],
+      });
+
+      const coach = document.querySelector(".chat-message--coach .chat-message__text");
+      expect(coach?.classList.contains(messageStyles.command)).toBe(false);
     });
   });
 
