@@ -623,7 +623,7 @@ async function runDesktop(): Promise<void> {
     residency = createDesktopResidency({
       app,
       mainWindow,
-      trayIconPath: join(app.getAppPath(), "resources", "trayTemplate.png"),
+      trayIconPath: resolve(mainDirectory, "../../resources/trayTemplate.png"),
       trayPopoverUrl: rendererSource.trayPopoverUrl,
       reportFailure(operation) {
         process.stderr.write(`desktop-residency-failure ${operation}\n`);
@@ -722,7 +722,8 @@ if (!primaryInstance) {
   const runPrimaryDesktop = process.argv.includes("--desktop-runtime-smoke")
     ? runRuntimeSmoke
     : runDesktop;
-  void runPrimaryDesktop().catch(() => {
+  void runPrimaryDesktop().catch((error: unknown) => {
+    console.error("desktop startup failed", error);
     if (!desktopIsClosing) {
       dialog.showErrorBox(unexpectedStartupCopy.title, unexpectedStartupCopy.content);
     }

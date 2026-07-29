@@ -38,7 +38,9 @@ export interface DesktopResidencyInput {
   readonly mainWindow: MainWindowResidencyPort;
   readonly trayIconPath: string;
   readonly trayPopoverUrl: string;
-  readonly reportFailure: (operation: "read-login-item" | "set-login-item" | "show-window") => void;
+  readonly reportFailure: (
+    operation: "read-login-item" | "set-login-item" | "show-window" | "tray-start",
+  ) => void;
   readonly observe?: (event: DesktopResidencyEvent) => void;
 }
 
@@ -122,17 +124,21 @@ export function createDesktopResidency(input: DesktopResidencyInput): DesktopRes
   };
   const residency: DesktopResidency = {
     start() {
-      startPromise ??= Promise.resolve().then(() => {
-        if (closed || tray !== undefined) return;
-        const image = nativeImage.createFromPath(input.trayIconPath);
-        if (image.isEmpty()) throw new TypeError();
-        image.setTemplateImage(true);
-        tray = new Tray(image);
-        tray.setToolTip(TRAY_TOOLTIP);
-        tray.on("click", () => ensurePopover().toggle());
-        tray.on("right-click", showContextMenu);
-        input.observe?.({ type: "tray-created" });
-      });
+      startPromise ??= Promise.resolve()
+        .then(() => {
+          if (closed || tray !== undefined) return;
+          const image = nativeImage.createFromPath(input.trayIconPath);
+          if (image.isEmpty()) throw new TypeError();
+          image.setTemplateImage(true);
+          tray = new Tray(image);
+          tray.setToolTip(TRAY_TOOLTIP);
+          tray.on("click", () => ensurePopover().toggle());
+          tray.on("right-click", showContextMenu);
+          input.observe?.({ type: "tray-created" });
+        })
+        .catch(() => {
+          input.reportFailure("tray-start");
+        });
       return startPromise;
     },
     showMainWindow,
