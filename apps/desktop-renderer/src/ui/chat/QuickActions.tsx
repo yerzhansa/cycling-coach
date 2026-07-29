@@ -27,7 +27,7 @@ function reclaimable(button: HTMLButtonElement): boolean {
 }
 
 export function QuickActions(): ReactElement {
-  const disabled = useEnduragentStore((state) => state.chat.composerDisabled);
+  const disabled = useEnduragentStore((state) => state.chat.sendDisabled);
   const resetPhase = useEnduragentStore((state) => state.chat.resetPhase);
   const resetCount = useEnduragentStore((state) => state.chat.resetCount);
   const actions = useEnduragentStore((state) => state.chatActions);

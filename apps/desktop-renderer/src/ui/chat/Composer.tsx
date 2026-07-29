@@ -23,7 +23,8 @@ export function Composer(props: {
   const [draft, setDraft] = useState("");
   const [selected, setSelected] = useState(0);
   const [dismissed, setDismissed] = useState(false);
-  const disabled = useEnduragentStore((state) => state.chat.composerDisabled);
+  const sendDisabled = useEnduragentStore((state) => state.chat.sendDisabled);
+  const inputDisabled = useEnduragentStore((state) => state.chat.inputDisabled);
   const actions = useEnduragentStore((state) => state.chatActions);
 
   const matches = useMemo(() => filterSlashCommands(draft), [draft]);
@@ -49,7 +50,7 @@ export function Composer(props: {
 
   const submit = (): void => {
     const input = textarea.current;
-    if (input === null || disabled) return;
+    if (input === null || sendDisabled) return;
     const value = input.value;
     if (!/\S/u.test(value)) return;
     input.value = "";
@@ -121,7 +122,7 @@ export function Composer(props: {
           id="message"
           ref={textarea}
           rows={2}
-          disabled={disabled}
+          disabled={inputDisabled}
           onChange={(event) => {
             setDraft(event.currentTarget.value);
             setSelected(0);
@@ -132,7 +133,7 @@ export function Composer(props: {
             setDismissed(true);
           }}
         />
-        <button type="submit" aria-label="Send message" disabled={disabled}>
+        <button type="submit" aria-label="Send message" disabled={sendDisabled}>
           ↑
         </button>
       </div>

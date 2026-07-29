@@ -18,7 +18,8 @@ export interface ChatSurfaceState {
   readonly notice: string | null;
   readonly interrupted: boolean;
   readonly workBlocked: boolean;
-  readonly composerDisabled: boolean;
+  readonly sendDisabled: boolean;
+  readonly inputDisabled: boolean;
   readonly newConversationUnavailable: boolean;
   readonly resetPhase: SessionResetPhase;
   readonly resetCount: number;
@@ -47,7 +48,8 @@ export const EMPTY_CHAT_SURFACE: ChatSurfaceState = Object.freeze({
   notice: null,
   interrupted: false,
   workBlocked: false,
-  composerDisabled: false,
+  sendDisabled: false,
+  inputDisabled: false,
   newConversationUnavailable: true,
   resetPhase: "idle",
   resetCount: 0,
@@ -95,7 +97,8 @@ export function sameChatSurface(left: ChatSurfaceState, right: ChatSurfaceState)
     left.notice === right.notice &&
     left.interrupted === right.interrupted &&
     left.workBlocked === right.workBlocked &&
-    left.composerDisabled === right.composerDisabled &&
+    left.sendDisabled === right.sendDisabled &&
+    left.inputDisabled === right.inputDisabled &&
     left.newConversationUnavailable === right.newConversationUnavailable &&
     left.resetPhase === right.resetPhase &&
     left.resetCount === right.resetCount &&

@@ -250,7 +250,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       readonly warning: string;
       readonly disclosure: string;
       readonly overflow: boolean;
-      readonly composerDisabled: boolean;
+      readonly composerInputDisabled: boolean;
       readonly submitDisabled: boolean;
       readonly final: string;
     }>(`
@@ -266,7 +266,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       const textarea = document.querySelector("#message");
       const submit = textarea.closest("form").querySelector('button[type="submit"]');
       const warning = document.querySelector("#spend-cap-warning").textContent;
-      const composerDisabled = textarea.disabled;
+      const composerInputDisabled = textarea.disabled;
       const submitDisabled = submit.disabled;
       textarea.value = "Can I keep chatting?";
       textarea.closest("form").requestSubmit();
@@ -276,7 +276,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
         await new Promise((resolve) => setTimeout(resolve, 10));
         final = document.querySelector(".chat-message--coach .chat-message__text")?.textContent ?? "";
       }
-      return { ...before, warning, composerDisabled, submitDisabled, final };
+      return { ...before, warning, composerInputDisabled, submitDisabled, final };
     `);
     expect(desktop.visible).toBe(true);
     expect(desktop.trackHeight).toBe(3);
@@ -286,7 +286,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
     expect(desktop.disclosure).toContain("Some provider costs are unavailable");
     expect(desktop.disclosure).toContain("caching unavailable on this route");
     expect(desktop.overflow).toBe(false);
-    expect(desktop.composerDisabled).toBe(false);
+    expect(desktop.composerInputDisabled).toBe(false);
     expect(desktop.submitDisabled).toBe(false);
     expect(desktop.final).toBe("Keep riding.");
     expect(calls.filter((call) => call.method === "chat")).toHaveLength(1);

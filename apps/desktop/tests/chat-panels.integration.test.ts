@@ -590,6 +590,15 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly busyCleared: boolean;
       readonly partialWhiteSpace: string | null;
       readonly partialSourcePreserved: boolean;
+      readonly streamingInputEnabled: boolean;
+      readonly streamingSendBlocked: boolean;
+      readonly streamingQuickActionsBlocked: boolean;
+      readonly streamingEnterBlocked: boolean;
+      readonly streamingDraftPreserved: boolean;
+      readonly streamingFocusPreserved: boolean;
+      readonly settledSendEnabled: boolean;
+      readonly settledDraftPreserved: boolean;
+      readonly settledFocusPreserved: boolean;
       readonly controlExercised: boolean;
       readonly controlOnlyMutations: number;
       readonly heading: string;
@@ -661,6 +670,30 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       });
       textarea.value = "What should I ride?";
       textarea.closest("form").requestSubmit();
+      const submit = textarea.closest("form").querySelector('button[type="submit"]');
+      const quickActions = [...document.querySelectorAll(".coaching-shortcut")];
+      const streamingDeadline = Date.now() + 5000;
+      while (
+        document.querySelector(".conversation").dataset.chatStatus !== "streaming" &&
+        Date.now() < streamingDeadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      textarea.value = "How should I recover?";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      textarea.focus();
+      const streamingInputEnabled = !textarea.disabled;
+      const streamingSendBlocked = submit.disabled;
+      const streamingQuickActionsBlocked = quickActions.every((button) => button.disabled);
+      const streamingEnter = new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      });
+      textarea.dispatchEvent(streamingEnter);
+      const streamingEnterBlocked = streamingEnter.defaultPrevented;
+      const streamingDraftPreserved = textarea.value === "How should I recover?";
+      const streamingFocusPreserved = document.activeElement === textarea;
       athleteRow ??= document.querySelector(".chat-message--athlete");
       const finalDeadline = Date.now() + 5000;
       let final = "";
@@ -676,6 +709,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       }
       await new Promise((resolve) => setTimeout(resolve, 0));
       observer.disconnect();
+      const settledSendEnabled = !submit.disabled;
+      const settledDraftPreserved = textarea.value === "How should I recover?";
+      const settledFocusPreserved = document.activeElement === textarea;
       const partial = observed.find(
         (value) => value.includes("Hold   **ste") && !value.includes("ady**"),
       ) ?? "";
@@ -717,6 +753,15 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         busyCleared,
         partialWhiteSpace,
         partialSourcePreserved,
+        streamingInputEnabled,
+        streamingSendBlocked,
+        streamingQuickActionsBlocked,
+        streamingEnterBlocked,
+        streamingDraftPreserved,
+        streamingFocusPreserved,
+        settledSendEnabled,
+        settledDraftPreserved,
+        settledFocusPreserved,
         controlExercised,
         controlOnlyMutations: controlRecords.length,
         heading: coach?.querySelector("h2")?.textContent ?? "",
@@ -766,6 +811,15 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       busyCleared: true,
       partialWhiteSpace: "pre-wrap",
       partialSourcePreserved: true,
+      streamingInputEnabled: true,
+      streamingSendBlocked: true,
+      streamingQuickActionsBlocked: true,
+      streamingEnterBlocked: true,
+      streamingDraftPreserved: true,
+      streamingFocusPreserved: true,
+      settledSendEnabled: true,
+      settledDraftPreserved: true,
+      settledFocusPreserved: true,
       controlExercised: true,
       controlOnlyMutations: 0,
       heading: "Today’s ride",
@@ -930,7 +984,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly dialogOpen: boolean;
       readonly transcriptEmpty: boolean;
       readonly composerValue: string;
-      readonly composerDisabled: boolean;
+      readonly composerInputDisabled: boolean;
       readonly resetDisabled: boolean;
       readonly focused: string | null;
       readonly transcriptClearMutations: number;
@@ -960,7 +1014,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         dialogOpen,
         transcriptEmpty: document.querySelectorAll(".chat-message").length === 0,
         composerValue: textarea.value,
-        composerDisabled: textarea.disabled,
+        composerInputDisabled: textarea.disabled,
         resetDisabled: opener.disabled,
         focused: document.activeElement?.id ?? null,
         transcriptClearMutations: clearRecords.filter((record) => record.type === "childList").length,
@@ -971,7 +1025,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       dialogOpen: true,
       transcriptEmpty: true,
       composerValue: "",
-      composerDisabled: false,
+      composerInputDisabled: false,
       resetDisabled: true,
       focused: "message",
       transcriptClearMutations: 1,
