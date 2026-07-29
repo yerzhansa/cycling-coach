@@ -20,7 +20,6 @@ type StreamAction =
 
 export interface ChatViewAdapter {
   readonly view: ChatView;
-  reset(): void;
 }
 
 function isStreamingCoach(message: {
@@ -126,9 +125,6 @@ export function createChatViewAdapter(input: {
         published = next;
         input.publish(next);
       },
-    },
-    reset() {
-      published = EMPTY_CHAT_SURFACE;
     },
   };
 }

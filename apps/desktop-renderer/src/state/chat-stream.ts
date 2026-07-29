@@ -82,7 +82,6 @@ export const CHAT_ANCHOR_ROW_SELECTOR = ".chat-message";
 
 export interface ChatScrollAnchor {
   attach(element: HTMLElement | null): void;
-  element(): HTMLElement | null;
   capture(): void;
   apply(input: ChatScrollApply): void;
 }
@@ -103,9 +102,6 @@ export function createChatScrollAnchor(): ChatScrollAnchor {
     attach(element) {
       host = element;
       captured = null;
-    },
-    element() {
-      return host;
     },
     capture() {
       if (host === null) {

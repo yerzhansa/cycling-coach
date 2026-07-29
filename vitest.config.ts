@@ -32,12 +32,6 @@ const rawAssetPlugins = [
   },
 ];
 
-/**
- * Two projects, one environment each. The desktop renderer's React component
- * tests need a DOM; every other test in the workspace runs on plain Node and
- * must keep doing so, and vitest 4 removed the per-file `environmentMatchGlobs`
- * escape hatch that used to express that split in one project.
- */
 export default defineConfig({
   test: {
     // Pinned (not relying on vitest defaults): the parallel-safety contract —

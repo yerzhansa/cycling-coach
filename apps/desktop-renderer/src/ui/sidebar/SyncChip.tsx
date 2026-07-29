@@ -6,7 +6,7 @@ import type { ManualSyncViewState } from "../../training-context/manual-sync.js"
 import { formatUtcTimestamp } from "../../training-context/format.js";
 import styles from "./Sidebar.module.css";
 
-export type SyncChipStatus =
+type SyncChipStatus =
   | "loading"
   | "syncing"
   | "attention"
@@ -14,7 +14,7 @@ export type SyncChipStatus =
   | "never"
   | "unavailable";
 
-export function syncChipStatus(
+function syncChipStatus(
   training: TrainingContextViewState,
   sync: ManualSyncViewState,
 ): SyncChipStatus {

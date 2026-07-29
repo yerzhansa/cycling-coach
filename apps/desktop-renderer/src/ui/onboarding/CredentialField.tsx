@@ -5,7 +5,7 @@ import type { CredentialSlotStatus } from "../../onboarding/machine.js";
 import { registerCredentialDraft, releaseCredentialDraft } from "../../state/credential-drafts.js";
 import styles from "./OnboardingWizard.module.css";
 
-export function CredentialBadge(props: { readonly status: CredentialSlotStatus }): ReactElement {
+function CredentialBadge(props: { readonly status: CredentialSlotStatus }): ReactElement {
   const presentation = credentialPresentation(props.status);
   return (
     <span

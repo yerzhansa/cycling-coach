@@ -4,10 +4,7 @@ import {
   CoachClientProtocolError,
   type CoachClient,
 } from "@enduragent/coach-client";
-import type {
-  ConfigureRuntimeRpcRefusalReason,
-  RuntimeConfigSnapshot,
-} from "@enduragent/coach-contract";
+import type { RuntimeConfigSnapshot } from "@enduragent/coach-contract";
 import type { DesktopCoachClientProvider } from "../src/coach-client.js";
 import {
   createAthleteSettingsController,

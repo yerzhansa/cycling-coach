@@ -216,7 +216,7 @@ export function CoachSection(): ReactElement {
                 port?.openSetup();
               }}
             >
-              Open Setup
+              Open setup
             </button>
           ) : null}
           <button

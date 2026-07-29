@@ -10,7 +10,7 @@ export type ConnectionStatus =
   | "failed"
   | "closing";
 
-export type ConnectionTone = "pending" | "connected" | "recovering" | "unavailable";
+type ConnectionTone = "pending" | "connected" | "recovering" | "unavailable";
 
 const TONES: Readonly<Record<ConnectionStatus, ConnectionTone>> = {
   connecting: "pending",

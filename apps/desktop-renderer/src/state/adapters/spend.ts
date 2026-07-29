@@ -2,7 +2,7 @@ import type { SpendSummary } from "@enduragent/coach-contract";
 import type { SpendMeterView } from "../../spend-meter/controller.js";
 import type { SpendSettingsPort, SpendSurfaceState } from "../settings-slice.js";
 
-export const SPEND_CAP_REACHED_PREFIX = "You’ve reached today’s ";
+const SPEND_CAP_REACHED_PREFIX = "You’ve reached today’s ";
 
 export function currency(value: number, detail = false): string {
   if (value === 0) return "$0.00";
@@ -10,7 +10,7 @@ export function currency(value: number, detail = false): string {
   return `$${value.toFixed(2)}`;
 }
 
-export function capWarningCopy(summary: SpendSummary): string | null {
+function capWarningCopy(summary: SpendSummary): string | null {
   if (summary.capStatus !== "reached") return null;
   return `${SPEND_CAP_REACHED_PREFIX}${currency(summary.dailyCapUsd)} spend cap. You can keep chatting; this is a warning, not a block.`;
 }

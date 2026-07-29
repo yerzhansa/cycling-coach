@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 
 const DESKTOP_PACKAGE_JSON = resolve(import.meta.dirname, "../desktop/package.json");
 
-export function desktopAppVersion() {
+function desktopAppVersion() {
   try {
     const parsed = JSON.parse(readFileSync(DESKTOP_PACKAGE_JSON, "utf8"));
     return typeof parsed.version === "string" && parsed.version.length > 0

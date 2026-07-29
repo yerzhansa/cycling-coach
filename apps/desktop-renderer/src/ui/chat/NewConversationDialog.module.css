@@ -3,7 +3,7 @@
   max-width: none;
   padding: 24px;
   border: 1px solid var(--line-2);
-  border-radius: var(--r-lg);
+  border-radius: 16px;
   color: var(--ink);
   background: var(--surface);
   box-shadow: 0 24px 70px color-mix(in srgb, var(--ink) 24%, transparent);
