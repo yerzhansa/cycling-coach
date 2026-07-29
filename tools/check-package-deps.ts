@@ -148,7 +148,7 @@ export const RULES: readonly PackageDepRule[] = [
     srcOnly: true,
     allowedWorkspace: ["@enduragent/coach-contract", "@enduragent/coach-client"],
     transitionalWorkspace: [],
-    allowedExternal: ["react", "react-dom", "zustand", "@fontsource-variable/*"],
+    allowedExternal: ["react", "react-dom", "zustand"],
     forbidNode: true,
   },
   {
