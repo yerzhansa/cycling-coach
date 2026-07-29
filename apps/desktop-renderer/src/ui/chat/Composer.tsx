@@ -113,10 +113,10 @@ export function Composer(props: {
         onHighlight={setSelected}
         onAccept={accept}
       />
-      <label className="chat-composer__label" htmlFor="message">
+      <label className={`${styles.label} chat-composer__label`} htmlFor="message">
         Message your coach
       </label>
-      <div className="chat-composer__controls">
+      <div className={`${styles.controls} chat-composer__controls`}>
         <textarea
           id="message"
           ref={textarea}

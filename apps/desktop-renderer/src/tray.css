@@ -6,9 +6,9 @@ body {
   width: 420px;
   min-height: 246px;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--line-strong) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line-2) 88%, transparent);
   border-radius: 18px;
-  background: color-mix(in srgb, var(--surface-solid) 88%, transparent);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
   box-shadow: 0 18px 48px rgb(23 33 28 / 20%);
   color: var(--ink);
   backdrop-filter: blur(22px);
@@ -33,7 +33,7 @@ body {
   position: relative;
   width: 18px;
   height: 18px;
-  border: 1.5px solid var(--moss-strong);
+  border: 1.5px solid var(--brand);
   border-radius: 50%;
 }
 
@@ -43,7 +43,7 @@ body {
   bottom: 1px;
   width: 7px;
   height: 1.5px;
-  background: var(--moss-strong);
+  background: var(--brand);
   content: "";
 }
 
@@ -62,8 +62,8 @@ body {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--moss-strong);
-  box-shadow: 0 0 0 4px var(--moss-soft);
+  background: var(--brand);
+  box-shadow: 0 0 0 4px var(--brand-soft);
 }
 
 .glance {
@@ -82,7 +82,7 @@ body {
 
 .eyebrow {
   margin: 0;
-  color: var(--moss-strong);
+  color: var(--brand);
 }
 
 .glance h1 {
@@ -106,7 +106,7 @@ body {
   padding: 8px 11px;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: var(--surface-soft);
+  background: var(--surface-2);
 }
 
 .rail-card strong {
@@ -115,24 +115,24 @@ body {
 }
 
 .metric-label {
-  color: var(--muted);
+  color: var(--ink-2);
 }
 
 .rail-tag {
   padding: 3px 6px;
   border-radius: 999px;
-  background: var(--moss-soft);
-  color: var(--moss-strong);
+  background: var(--brand-soft);
+  color: var(--brand);
 }
 
 .rail-tag.amber {
-  background: color-mix(in srgb, var(--coral) 18%, var(--surface));
+  background: color-mix(in srgb, var(--warn) 18%, var(--surface));
   color: #7a3d2f;
 }
 
 .menu-hint {
   margin: 11px 2px 0;
-  color: var(--muted);
+  color: var(--ink-2);
   font-size: 11px;
   line-height: 1.35;
 }

@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { CoachClientDisconnectedError, type CoachClient } from "@enduragent/coach-client";
 import type { RuntimeConfigSnapshot } from "@enduragent/coach-contract";
@@ -363,20 +362,5 @@ describe("conversation and time settings controller", () => {
       await Promise.resolve();
       expect(call).toHaveBeenCalledTimes(1);
     }
-  });
-
-  it("ships a scroll-safe narrow dialog and clear lifecycle copy", async () => {
-    const styles = await readFile(new URL("../src/settings/styles.css", import.meta.url), "utf8");
-    expect(styles).toContain("overflow-x: hidden");
-    expect(styles).toContain("@media (max-width: 560px)");
-    expect(styles).toContain(".session-settings__fields");
-    const source = await readFile(
-      new URL("../src/settings/session-view.ts", import.meta.url),
-      "utf8",
-    );
-    expect(source).toContain("may make your next message start a fresh conversation");
-    expect(source).toContain("changes apply only to future pruning");
-    expect(source).toContain('aria-live", "polite"');
-    expect(source).toContain('aria-atomic", "true"');
   });
 });

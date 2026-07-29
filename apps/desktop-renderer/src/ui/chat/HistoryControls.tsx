@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { TRANSCRIPT_HYDRATION_FAILURE_COPY } from "../../chat/hydration.js";
 import { useEnduragentStore } from "../../state/store.js";
+import styles from "./Transcript.module.css";
 
 export function HistoryControls(): ReactElement {
   const status = useEnduragentStore((state) => state.chat.hydrationStatus);
@@ -13,10 +14,14 @@ export function HistoryControls(): ReactElement {
   const loadDisabled = status === "loading" || workBlocked;
 
   return (
-    <div className="chat-history-controls" aria-live="off" hidden={!hasEarlier && !failed}>
+    <div
+      className={`${styles.controls} chat-history-controls`}
+      aria-live="off"
+      hidden={!hasEarlier && !failed}
+    >
       <button
         type="button"
-        className="chat-history-load"
+        className={`${styles.pill} chat-history-load`}
         hidden={loadHidden}
         disabled={loadDisabled}
         onClick={() => {
@@ -26,12 +31,12 @@ export function HistoryControls(): ReactElement {
       >
         Load earlier messages
       </button>
-      <p className="chat-history-failure" hidden={!failed}>
+      <p className={`${styles.failure} chat-history-failure`} hidden={!failed}>
         {TRANSCRIPT_HYDRATION_FAILURE_COPY}
       </p>
       <button
         type="button"
-        className="chat-history-retry"
+        className={`${styles.pill} chat-history-retry`}
         hidden={!failed}
         disabled={workBlocked}
         onClick={() => {

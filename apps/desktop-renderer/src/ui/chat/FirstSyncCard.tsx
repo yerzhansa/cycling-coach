@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { useEnduragentStore } from "../../state/store.js";
+import styles from "./FirstSyncCard.module.css";
 
 export function FirstSyncCard(): ReactElement | null {
   const state = useEnduragentStore((store) => store.firstSync);
@@ -17,10 +18,14 @@ export function FirstSyncCard(): ReactElement | null {
   const unreachable = state.status === "failed" && state.kind === "protocol";
 
   return (
-    <section className="first-sync" data-state={status} aria-labelledby="first-sync-title">
-      <div className="first-sync__mark" aria-hidden="true" />
-      <div className="first-sync__body">
-        <p className="first-sync__eyebrow">Getting your coach ready</p>
+    <section
+      className={`${styles.card} first-sync`}
+      data-state={status}
+      aria-labelledby="first-sync-title"
+    >
+      <div className={`${styles.mark} first-sync__mark`} aria-hidden="true" />
+      <div className={`${styles.body} first-sync__body`}>
+        <p className={`${styles.eyebrow} first-sync__eyebrow`}>Getting your coach ready</p>
         <h2 id="first-sync-title">
           {syncing
             ? "Syncing your training history…"
@@ -28,7 +33,7 @@ export function FirstSyncCard(): ReactElement | null {
               ? "Enduragent needs to reconnect safely"
               : "We couldn’t finish syncing"}
         </h2>
-        <p className="first-sync__detail">
+        <p className={`${styles.detail} first-sync__detail`}>
           {syncing
             ? "You can keep Enduragent open while rides, wellness, and calendar data are added."
             : unreachable
@@ -37,7 +42,7 @@ export function FirstSyncCard(): ReactElement | null {
         </p>
         {syncing ? (
           <div
-            className="first-sync__track"
+            className={`${styles.track} first-sync__track`}
             role="progressbar"
             aria-label="Syncing training history"
           />
@@ -45,7 +50,7 @@ export function FirstSyncCard(): ReactElement | null {
         {!syncing && !unreachable ? (
           <button
             type="button"
-            className="first-sync__retry"
+            className={`${styles.retry} first-sync__retry`}
             disabled={retrying}
             onClick={() => {
               setRetrying(true);

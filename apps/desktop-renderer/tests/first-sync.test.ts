@@ -469,7 +469,7 @@ describe("first sync controller", () => {
       readFile(new URL("../src/boot.ts", import.meta.url), "utf8"),
       readFile(new URL("../src/ui/chat/FirstSyncCard.tsx", import.meta.url), "utf8"),
       readFile(new URL("../src/first-sync.ts", import.meta.url), "utf8"),
-      readFile(new URL("../src/styles.css", import.meta.url), "utf8"),
+      readFile(new URL("../src/ui/chat/FirstSyncCard.module.css", import.meta.url), "utf8"),
     ]);
     for (const copy of [
       "Getting your coach ready",

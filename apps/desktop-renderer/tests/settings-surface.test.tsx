@@ -604,4 +604,50 @@ describe("spending", () => {
       expect(useEnduragentStore.getState().settings.spend.warning).toBeNull();
     });
   });
+
+  it("keeps a cap edit in progress across a refresh and reconciles the committed cap", async () => {
+    const user = userEvent.setup();
+    const pending = [
+      spendSummary(),
+      spendSummary({ knownSpendUsd: 0.2 }),
+      spendSummary({ dailyCapUsd: 0.75 }),
+      spendSummary({ dailyCapUsd: 0.5 }),
+    ];
+    const subject = await renderSettings({
+      spend: async () => pending.shift() ?? spendSummary(),
+    });
+    act(() => {
+      subject.spendController.start();
+    });
+    await waitFor(() => {
+      expect(useEnduragentStore.getState().settings.spend.summary).not.toBeNull();
+    });
+
+    const cap = screen.getByLabelText("Daily cap (USD)") as HTMLInputElement;
+    expect(cap.value).toBe("0.5");
+    await user.clear(cap);
+    await user.type(cap, "0.75");
+    const draft = cap.value;
+    expect(Number(draft)).toBe(0.75);
+    expect(useEnduragentStore.getState().settings.spend.capDirty).toBe(true);
+
+    await act(async () => {
+      await subject.spendController.refresh();
+    });
+    expect(useEnduragentStore.getState().settings.spend.summary?.knownSpendUsd).toBe(0.2);
+    expect(cap.value).toBe(draft);
+    expect(useEnduragentStore.getState().settings.spend.capDirty).toBe(true);
+
+    await act(async () => {
+      await subject.spendController.refresh();
+    });
+    expect(Number(cap.value)).toBe(0.75);
+    expect(useEnduragentStore.getState().settings.spend.capDirty).toBe(false);
+
+    await act(async () => {
+      await subject.spendController.refresh();
+    });
+    expect(cap.value).toBe("0.5");
+    expect(useEnduragentStore.getState().settings.spend.capDirty).toBe(false);
+  });
 });

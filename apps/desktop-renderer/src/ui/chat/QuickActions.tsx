@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, type ReactElement } from "react";
 import { useEnduragentStore } from "../../state/store.js";
+import styles from "./QuickActions.module.css";
 
 const COACHING_SHORTCUTS = Object.freeze([
   Object.freeze({ command: "/plan", label: "Build a plan" }),
@@ -65,12 +66,16 @@ export function QuickActions(): ReactElement {
   });
 
   return (
-    <div className="coaching-shortcuts" role="group" aria-label="Coaching shortcuts">
+    <div
+      className={`${styles.group} coaching-shortcuts`}
+      role="group"
+      aria-label="Coaching shortcuts"
+    >
       {COACHING_SHORTCUTS.map((shortcut) => (
         <button
           key={shortcut.command}
           type="button"
-          className="coaching-shortcut"
+          className={`${styles.shortcut} coaching-shortcut`}
           aria-label={`${shortcut.label}, ${shortcut.command} command`}
           disabled={disabled}
           onClick={(event) => {
@@ -83,8 +88,8 @@ export function QuickActions(): ReactElement {
             actions.submit(shortcut.command);
           }}
         >
-          <span className="coaching-shortcut__label">{shortcut.label}</span>
-          <span className="coaching-shortcut__command">{shortcut.command}</span>
+          <span className={`${styles.label} coaching-shortcut__label`}>{shortcut.label}</span>
+          <span className={`${styles.command} coaching-shortcut__command`}>{shortcut.command}</span>
         </button>
       ))}
     </div>

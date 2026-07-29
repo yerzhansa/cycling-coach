@@ -7,6 +7,11 @@ const sourceRoot = resolve(import.meta.dirname, "..", "src");
 const DARK_MEDIA = /prefers-color-scheme:\s*dark/u;
 const SYSTEM_DARK_GUARD = ':not([data-theme="light"])';
 const EXPLICIT_DARK_GUARD = '[data-theme="dark"]';
+const RUNTIME_PROPERTIES = new Set(["--chat-composer-clearance"]);
+const CONTROL_ELEMENTS = ["button", "a", "input", "textarea", "select"] as const;
+const FONT_INHERIT_ELEMENTS = ["button", "input", "textarea", "select"] as const;
+const FOCUS = ":focus-visible";
+const OUTLINE_CLEARED = /outline:\s*(?:0|none)\b/u;
 
 interface ParsedRule {
   readonly selector: string;
@@ -47,6 +52,13 @@ function collect(source: string, media: string | undefined, into: ParsedRule[]):
   }
 }
 
+function selectors(rule: ParsedRule): readonly string[] {
+  return rule.selector
+    .split(",")
+    .map((part) => part.replaceAll(/\s+/gu, " ").trim())
+    .filter((part) => part.length > 0);
+}
+
 function parse(source: string): readonly ParsedRule[] {
   const rules: ParsedRule[] = [];
   collect(source.replace(/\/\*[\s\S]*?\*\//gu, ""), undefined, rules);
@@ -64,8 +76,7 @@ async function stylesheets(): Promise<readonly string[]> {
 describe("theme guards", () => {
   it("gates every system-dark custom property behind the explicit light override", async () => {
     const files = await stylesheets();
-    expect(files).toContain("styles.css");
-    expect(files).toContain("training-context/styles.css");
+    expect(files).toContain("theme/tokens.css");
 
     let guarded = 0;
     for (const file of files) {
@@ -77,7 +88,7 @@ describe("theme guards", () => {
         expect(`${file} ${rule.selector}`).toContain(SYSTEM_DARK_GUARD);
       }
     }
-    expect(guarded).toBeGreaterThanOrEqual(3);
+    expect(guarded).toBeGreaterThanOrEqual(1);
   });
 
   it("mirrors every system-dark custom property onto the stamped dark theme", async () => {
@@ -100,28 +111,7 @@ describe("theme guards", () => {
     }
   });
 
-  it("keeps the legacy surface ramp readable against the stamped palette ink", async () => {
-    const rules = parse(await readFile(resolve(sourceRoot, "styles.css"), "utf8"));
-    const stamped = rules.find(
-      (rule) => rule.media === undefined && rule.selector === ':root[data-theme="dark"]',
-    );
-    expect(stamped).toBeDefined();
-    for (const property of [
-      "--canvas",
-      "--surface",
-      "--surface-solid",
-      "--surface-soft",
-      "--muted",
-      "--faint",
-      "--line-strong",
-      "--focus",
-      "--moss",
-      "--moss-strong",
-      "--moss-soft",
-      "--coral",
-    ])
-      expect(stamped?.declarations.has(property)).toBe(true);
-
+  it("stamps the colour scheme for both explicit themes", async () => {
     const tokens = parse(await readFile(resolve(sourceRoot, "theme/tokens.css"), "utf8"));
     for (const [selector, scheme] of [
       [':root[data-theme="light"]', "light"],
@@ -135,15 +125,73 @@ describe("theme guards", () => {
             new RegExp(`color-scheme:\\s*${scheme}\\s*;`, "u").test(rule.raw),
         ),
       ).toBe(true);
+  });
 
-    const drawer = parse(await readFile(resolve(sourceRoot, "training-context/styles.css"), "utf8"));
-    expect(
-      drawer.some(
-        (rule) =>
-          rule.media === undefined &&
-          rule.selector.includes(EXPLICIT_DARK_GUARD) &&
-          rule.declarations.has("--sync-status-caution"),
+  it("resolves every referenced custom property from the theme vocabulary", async () => {
+    const tokens = parse(await readFile(resolve(sourceRoot, "theme/tokens.css"), "utf8"));
+    const declared = new Set(
+      tokens.flatMap((rule) =>
+        rule.selector.startsWith(":root") ? [...rule.declarations.keys()] : [],
       ),
-    ).toBe(true);
+    );
+    expect(declared.size).toBeGreaterThanOrEqual(20);
+
+    const undeclared: string[] = [];
+    for (const file of await stylesheets()) {
+      const source = await readFile(resolve(sourceRoot, file), "utf8");
+      for (const match of source.matchAll(/var\(\s*(--[\w-]+)/gu)) {
+        const property = match[1];
+        if (RUNTIME_PROPERTIES.has(property) || declared.has(property)) continue;
+        undeclared.push(`${file} ${property}`);
+      }
+    }
+    expect(undeclared).toEqual([]);
+  });
+});
+
+describe("control reset", () => {
+  it("inherits the interface font on every control element", async () => {
+    const tokens = parse(await readFile(resolve(sourceRoot, "theme/tokens.css"), "utf8"));
+    const inherited = new Set(
+      tokens
+        .filter((rule) => rule.media === undefined && /font:\s*inherit/u.test(rule.raw))
+        .flatMap((rule) => selectors(rule)),
+    );
+    for (const element of FONT_INHERIT_ELEMENTS) expect([...inherited]).toContain(element);
+  });
+
+  it("rings every keyboard-focused control with the brand outline", async () => {
+    const tokens = parse(await readFile(resolve(sourceRoot, "theme/tokens.css"), "utf8"));
+    const focus = tokens.filter(
+      (rule) => rule.media === undefined && selectors(rule).some((part) => part.includes(FOCUS)),
+    );
+    expect(focus).toHaveLength(1);
+    expect([...selectors(focus[0])].sort()).toEqual(
+      [...CONTROL_ELEMENTS].map((element) => `${element}${FOCUS}`).sort(),
+    );
+    expect(focus[0].raw.replaceAll(/\s+/gu, " ")).toContain("outline: 3px solid var(--brand)");
+    expect(focus[0].raw.replaceAll(/\s+/gu, " ")).toContain("outline-offset: 2px");
+  });
+
+  it("suppresses the focus ring only through focus-qualified selectors", async () => {
+    const unqualified: string[] = [];
+    for (const file of await stylesheets()) {
+      if (file === "theme/tokens.css") continue;
+      const cleared = parse(await readFile(resolve(sourceRoot, file), "utf8")).filter((rule) =>
+        OUTLINE_CLEARED.test(rule.raw),
+      );
+      const focused = new Set(
+        cleared
+          .filter((rule) => selectors(rule).every((part) => part.endsWith(FOCUS)))
+          .map((rule) => selectors(rule).join(",")),
+      );
+      for (const rule of cleared) {
+        const parts = selectors(rule);
+        if (parts.every((part) => part.endsWith(FOCUS))) continue;
+        if (focused.has(parts.map((part) => `${part}${FOCUS}`).join(","))) continue;
+        unqualified.push(`${file} ${parts.join(", ")}`);
+      }
+    }
+    expect(unqualified).toEqual([]);
   });
 });

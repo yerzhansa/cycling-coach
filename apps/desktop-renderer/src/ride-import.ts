@@ -189,66 +189,6 @@ export function rideImportStatusCopy(state: RideImportState): string {
   return `Local library import: ${counts} ${availability}`;
 }
 
-interface ResidentRideImportOptions {
-  readonly document: Document;
-  readonly actionHost: HTMLElement;
-  readonly before?: Node;
-  readonly imports: RideImportController;
-}
-
-export interface ResidentRideImport {
-  importDroppedFiles(paths: readonly string[]): void;
-  setSuppressed(suppressed: boolean): void;
-  dispose(): void;
-}
-
-export function mountResidentRideImport(options: ResidentRideImportOptions): ResidentRideImport {
-  const root = options.document.createElement("div");
-  root.className = "ride-import";
-  const button = options.document.createElement("button");
-  button.type = "button";
-  button.className = "ride-import__button";
-  button.textContent = "Import ride files";
-  button.setAttribute("aria-describedby", "resident-ride-import-status");
-  const status = options.document.createElement("p");
-  status.id = "resident-ride-import-status";
-  status.className = "ride-import__status";
-  status.setAttribute("role", "status");
-  status.setAttribute("aria-live", "polite");
-  status.setAttribute("aria-atomic", "true");
-  status.hidden = true;
-  root.append(button, status);
-  if (options.before === undefined) options.actionHost.append(root);
-  else options.actionHost.insertBefore(root, options.before);
-
-  let suppressed = false;
-  const render = (state: RideImportState): void => {
-    button.disabled = options.imports.isBusy();
-    const copy = suppressed ? "" : rideImportStatusCopy(state);
-    status.textContent = copy;
-    status.hidden = copy.length === 0;
-    status.dataset.state = suppressed ? "idle" : state.status;
-  };
-  const disposeState = options.imports.subscribe(render);
-  button.addEventListener("click", () => {
-    void options.imports.chooseAndImport("resident");
-  });
-
-  return {
-    importDroppedFiles(paths) {
-      void options.imports.importPaths("resident", paths);
-    },
-    setSuppressed(next) {
-      suppressed = next;
-      render(options.imports.state());
-    },
-    dispose() {
-      disposeState();
-      root.remove();
-    },
-  };
-}
-
 interface DroppedRideImportRouterOptions {
   readonly subscribe: (listener: (paths: readonly string[]) => void) => () => void;
   readonly onboarding: {
