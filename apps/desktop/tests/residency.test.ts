@@ -293,6 +293,26 @@ describe("desktop residency", () => {
     expect(residencyStart).toBeGreaterThan(initialShow);
   });
 
+  it("reports tray-start and keeps running when the tray icon cannot load", async () => {
+    const { residency, reportFailure, events } = setup();
+    mocks.image.isEmpty.mockReturnValue(true);
+    await expect(residency.start()).resolves.toBeUndefined();
+    expect(mocks.FakeTray.instances).toHaveLength(0);
+    expect(reportFailure).toHaveBeenCalledWith("tray-start");
+    expect(events).toEqual([]);
+    residency.close();
+    residency.quit();
+    expect(mocks.app.quit).toHaveBeenCalledOnce();
+  });
+
+  it("anchors the tray icon to the build output instead of the launch-dependent app path", async () => {
+    const source = await readFile(resolve(import.meta.dirname, "../src/main/index.ts"), "utf8");
+    expect(source).toContain(
+      'trayIconPath: resolve(mainDirectory, "../../resources/trayTemplate.png")',
+    );
+    expect(source).not.toContain('join(app.getAppPath(), "resources"');
+  });
+
   it("keeps the production failure adapter closed and gates the loser before bootstrap", async () => {
     const source = await readFile(resolve(import.meta.dirname, "../src/main/index.ts"), "utf8");
     expect(source).toContain("desktop-residency-failure ${operation}\\n");
