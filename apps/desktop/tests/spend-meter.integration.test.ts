@@ -185,15 +185,21 @@ function script(calls: ScriptRequest[], initial: "reached" | "complete") {
 }
 
 const NAVIGATE = `
+  const readySelector = (label) =>
+    label === "Chat"
+      ? '[data-view="chat"] main[aria-label="Coaching conversation"]'
+      : '[data-view="' + label.toLowerCase() + '"] section[aria-label="' + label + '"]';
   const navigate = async (label) => {
     const button = Array.from(
       document.querySelectorAll('nav[aria-label="Main navigation"] button'),
     ).find((entry) => entry.textContent.includes(label));
     button.click();
+    const selector = readySelector(label);
     const deadline = Date.now() + 5000;
-    while (!document.querySelector('section[aria-label="' + label + '"]') && Date.now() < deadline) {
+    while (!document.querySelector(selector) && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
+    if (!document.querySelector(selector)) throw new Error("navigation to " + label + " stalled");
   };
   const openSpending = async (expected) => {
     await navigate("Settings");
@@ -301,7 +307,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       };
     `);
     expect(narrow).toEqual({ visible: true, overflow: false });
-  }, 20_000);
+  });
 
   it("preserves the closed bridge, sidebar sync chip, hardened renderer, and token containment", async () => {
     const { fixture } = await launch();

@@ -7,6 +7,7 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RideImportState } from "../src/ride-import.js";
+import { restoreManualSyncFocus } from "../src/state/manual-sync-focus.js";
 import { IDLE_RIDE_IMPORT } from "../src/state/ride-import-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice.js";
@@ -336,6 +337,100 @@ describe("training page sync", () => {
     render(<TrainingView />);
 
     expect(screen.getByRole("button", { name: "Sync now" })).toBeDisabled();
+  });
+
+  it("returns keyboard focus to the sync action once a recoverable failure settles", () => {
+    useEnduragentStore.setState({ syncActions: { request: vi.fn() } });
+    render(<TrainingView />);
+
+    const action = screen.getByRole("button", { name: "Sync now" });
+    action.focus();
+    fireEvent.click(action);
+    update({ sync: toManualSyncViewState({ status: "running", operation: 1 }) });
+    act(() => {
+      (document.activeElement as HTMLElement | null)?.blur();
+    });
+    update({
+      sync: toManualSyncViewState({
+        status: "failed",
+        operation: 1,
+        kind: "operation",
+        retryable: true,
+      }),
+    });
+
+    act(() => {
+      restoreManualSyncFocus();
+    });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Try again" }));
+  });
+
+  it("holds keyboard focus on the sync status when the action becomes unavailable", () => {
+    useEnduragentStore.setState({ syncActions: { request: vi.fn() } });
+    render(<TrainingView />);
+
+    const action = screen.getByRole("button", { name: "Sync now" });
+    action.focus();
+    fireEvent.click(action);
+    act(() => {
+      action.blur();
+    });
+    update({
+      sync: toManualSyncViewState({
+        status: "failed",
+        operation: 1,
+        kind: "protocol",
+        retryable: false,
+      }),
+    });
+    expect(screen.getByRole("button", { name: "Sync unavailable" })).toBeDisabled();
+    expect(document.activeElement).toBe(document.body);
+
+    act(() => {
+      restoreManualSyncFocus();
+    });
+    const message = document.querySelector(".training-sync-message");
+    expect(message).toHaveAttribute("tabindex", "-1");
+    expect(document.activeElement).toBe(message);
+    expect(message).toHaveTextContent("Enduragent couldn’t verify the sync result.");
+  });
+
+  it("leaves focus alone after a pointer-activated sync", async () => {
+    const user = userEvent.setup();
+    useEnduragentStore.setState({ syncActions: { request: vi.fn() } });
+    render(<TrainingView />);
+
+    const action = screen.getByRole("button", { name: "Sync now" });
+    await user.click(action);
+    act(() => {
+      action.blur();
+    });
+    update({
+      sync: toManualSyncViewState({
+        status: "failed",
+        operation: 1,
+        kind: "protocol",
+        retryable: false,
+      }),
+    });
+
+    act(() => {
+      restoreManualSyncFocus();
+    });
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("drops the fallback target when the training page unmounts", () => {
+    useEnduragentStore.setState({ syncActions: { request: vi.fn() } });
+    const view = render(<TrainingView />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+    view.unmount();
+
+    act(() => {
+      restoreManualSyncFocus();
+    });
+    expect(document.activeElement).toBe(document.body);
   });
 });
 
