@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionStatus } from "../src/state/connection-slice.js";
 import { EMPTY_CHAT_SURFACE, type ChatActions } from "../src/state/chat-slice.js";
 import { restoreManualSyncFocus, setManualSyncFocusTarget } from "../src/state/manual-sync-focus.js";
-import { focusSetupOpener } from "../src/state/setup-opener.js";
+import { CLOSED_ONBOARDING } from "../src/state/onboarding-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice.js";
 import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice.js";
@@ -44,6 +44,8 @@ beforeEach(() => {
     training: EMPTY_TRAINING_SURFACE,
     sync: IDLE_MANUAL_SYNC,
     syncActions: null,
+    onboarding: CLOSED_ONBOARDING,
+    onboardingActions: null,
     connection: "connecting",
   });
 });
@@ -56,6 +58,8 @@ afterEach(() => {
     training: EMPTY_TRAINING_SURFACE,
     sync: IDLE_MANUAL_SYNC,
     syncActions: null,
+    onboarding: CLOSED_ONBOARDING,
+    onboardingActions: null,
     connection: "connecting",
   });
 });
@@ -176,11 +180,43 @@ describe("sidebar connection status", () => {
   });
 });
 
-describe("sidebar setup opener", () => {
-  it("hands setup focus back to the settings destination", () => {
+describe("sidebar setup navigation", () => {
+  it("opens Setup through the onboarding controller", async () => {
+    const user = userEvent.setup();
+    const open = vi.fn(async () => {});
+    useEnduragentStore.setState({ onboardingActions: { open } as never });
     render(<Sidebar />);
 
-    focusSetupOpener();
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: /Settings/u }));
+    await user.click(screen.getByRole("button", { name: "Setup" }));
+
+    expect(open).toHaveBeenCalledOnce();
+  });
+
+  it("highlights Setup from onboarding state and dismisses it before navigating away", async () => {
+    const user = userEvent.setup();
+    const dismiss = vi.fn(() => {
+      useEnduragentStore.getState().setOnboarding(CLOSED_ONBOARDING);
+    });
+    useEnduragentStore.setState({
+      activeView: "chat",
+      onboarding: { ...CLOSED_ONBOARDING, open: true },
+      onboardingActions: { dismiss } as never,
+    });
+    render(<Sidebar />);
+
+    expect(screen.getByRole("button", { name: "Setup" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(screen.getByRole("button", { name: "Chat" })).not.toHaveAttribute("aria-current");
+
+    await user.click(screen.getByRole("button", { name: "Training" }));
+
+    expect(dismiss).toHaveBeenCalledOnce();
+    expect(useEnduragentStore.getState().activeView).toBe("training");
+    expect(screen.getByRole("button", { name: "Training" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
   });
 });

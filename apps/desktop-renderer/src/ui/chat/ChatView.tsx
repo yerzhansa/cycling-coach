@@ -31,6 +31,8 @@ export function ChatView(): ReactElement {
   const conversation = useRef<HTMLElement>(null);
   const composerWrap = useRef<HTMLDivElement>(null);
   const composer = useRef<ComposerHandle>(null);
+  const activeView = useEnduragentStore((state) => state.activeView);
+  const onboardingOpen = useEnduragentStore((state) => state.onboarding.open);
   const status = useEnduragentStore((state) => state.chat.status);
   const announcement = useEnduragentStore((state) => state.chat.announcement);
   const hydrationStatus = useEnduragentStore((state) => state.chat.hydrationStatus);
@@ -44,6 +46,10 @@ export function ChatView(): ReactElement {
       chatScrollAnchor.attach(null);
     };
   }, []);
+
+  useLayoutEffect(() => {
+    if (activeView === "chat" && !onboardingOpen) chatScrollAnchor.reanchor();
+  }, [activeView, onboardingOpen]);
 
   useLayoutEffect(() => {
     const host = composerWrap.current;
@@ -69,6 +75,7 @@ export function ChatView(): ReactElement {
     const target = conversation.current;
     if (target === null) return;
     const onScroll = (): void => {
+      if (target.offsetParent === null) return;
       if (
         target.scrollTop <= CHAT_AUTO_LOAD_EARLIER_THRESHOLD &&
         hasEarlier &&

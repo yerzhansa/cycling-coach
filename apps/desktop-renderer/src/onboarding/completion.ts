@@ -9,6 +9,7 @@ export interface OnboardingCompletionStorage {
 }
 
 export interface OnboardingCompletionController {
+  isCompleted(): boolean;
   openOnStartup(openSetup: () => Promise<void>): Promise<void>;
   openManually(openSetup: () => Promise<void>): Promise<void>;
   complete(completion: OnboardingCompletion): void;
@@ -27,6 +28,7 @@ export function createOnboardingCompletionController(options: {
   };
 
   return {
+    isCompleted: completed,
     openOnStartup(openSetup) {
       return completed() ? Promise.resolve() : openSetup();
     },

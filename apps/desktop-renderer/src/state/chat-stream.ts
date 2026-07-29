@@ -84,6 +84,7 @@ export interface ChatScrollAnchor {
   attach(element: HTMLElement | null): void;
   capture(): void;
   apply(input: ChatScrollApply): void;
+  reanchor(): void;
 }
 
 interface ScrollMetrics {
@@ -97,11 +98,13 @@ interface ScrollMetrics {
 export function createChatScrollAnchor(): ChatScrollAnchor {
   let host: HTMLElement | null = null;
   let captured: ScrollMetrics | null = null;
+  let initialPending = false;
 
   return {
     attach(element) {
       host = element;
       captured = null;
+      initialPending = false;
     },
     capture() {
       if (host === null) {
@@ -124,6 +127,7 @@ export function createChatScrollAnchor(): ChatScrollAnchor {
       if (host === null || metrics === null) return;
       if (input.hydrationChanged && input.hydrationChange === "initial") {
         host.scrollTop = host.scrollHeight;
+        initialPending = host.clientHeight === 0 && host.scrollHeight === 0;
         return;
       }
       if (input.hydrationChanged && input.hydrationChange === "prepend") {
@@ -138,6 +142,11 @@ export function createChatScrollAnchor(): ChatScrollAnchor {
         metrics.scrollHeight - metrics.scrollTop - metrics.clientHeight <=
         CHAT_FOLLOW_LATEST_THRESHOLD;
       if (followsLatest) host.scrollTop = host.scrollHeight;
+    },
+    reanchor() {
+      if (host === null || !initialPending || host.scrollHeight === 0) return;
+      host.scrollTop = host.scrollHeight;
+      initialPending = false;
     },
   };
 }

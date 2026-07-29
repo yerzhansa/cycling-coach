@@ -215,22 +215,26 @@ describe("desktop onboarding wizard", () => {
     expect(connect).toHaveBeenCalledTimes(1);
   });
 
-  it("ships the exact dialog and responsive accessibility hooks", async () => {
+  it("ships the setup page and responsive accessibility hooks", async () => {
     const [wizard, coachKeys, styles] = await Promise.all([
       readFile(new URL("../src/ui/onboarding/OnboardingWizard.tsx", import.meta.url), "utf8"),
       readFile(new URL("../src/ui/onboarding/CoachKeysStep.tsx", import.meta.url), "utf8"),
       readFile(new URL("../src/ui/onboarding/OnboardingWizard.module.css", import.meta.url), "utf8"),
     ]);
-    expect(wizard).toContain('role="dialog"');
-    expect(wizard).toContain('aria-modal="true"');
-    expect(wizard).toContain('event.key === "Escape"');
-    expect(wizard).toContain('event.key !== "Tab"');
+    expect(wizard).toContain("<Page");
+    expect(wizard).toContain('title="Setup"');
+    expect(wizard).toContain('className="onboarding"');
+    expect(wizard).not.toContain('role="dialog"');
+    expect(wizard).not.toContain('aria-modal="true"');
+    expect(wizard).not.toContain('event.key === "Escape"');
+    expect(wizard).not.toContain('event.key !== "Tab"');
     expect(wizard).toContain('aria-live="polite"');
     expect(coachKeys).toContain("Sign in with ChatGPT");
     expect(coachKeys).toContain("Requires a paid ChatGPT plan. No API key needed.");
     expect(coachKeys).toContain("Finish signing in in your browser…");
-    expect(styles).toContain("@media (max-width: 720px)");
-    expect(styles).toContain("padding: 30px 24px");
+    expect(styles).not.toContain("border-radius: 22px");
+    expect(styles).not.toContain("width: min(680px");
     expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
+    expect(styles).not.toContain("backdrop-filter");
   });
 });

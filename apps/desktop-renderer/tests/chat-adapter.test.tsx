@@ -215,12 +215,21 @@ describe("chat scroll anchor", () => {
   function host(scrollHeight: number, clientHeight: number, scrollTop: number): HTMLElement {
     const element = document.createElement("div");
     let height = scrollHeight;
+    let viewportHeight = clientHeight;
     Object.defineProperty(element, "scrollHeight", { get: () => height, configurable: true });
-    Object.defineProperty(element, "clientHeight", { get: () => clientHeight, configurable: true });
+    Object.defineProperty(element, "clientHeight", {
+      get: () => viewportHeight,
+      configurable: true,
+    });
     element.scrollTop = scrollTop;
     Object.defineProperty(element, "grow", {
       value: (next: number) => {
         height = next;
+      },
+    });
+    Object.defineProperty(element, "resize", {
+      value: (next: number) => {
+        viewportHeight = next;
       },
     });
     return element;
@@ -228,6 +237,10 @@ describe("chat scroll anchor", () => {
 
   function grow(element: HTMLElement, next: number): void {
     (element as HTMLElement & { grow: (value: number) => void }).grow(next);
+  }
+
+  function resize(element: HTMLElement, next: number): void {
+    (element as HTMLElement & { resize: (value: number) => void }).resize(next);
   }
 
   it("follows the newest message when the athlete is already at the bottom", () => {
@@ -264,6 +277,39 @@ describe("chat scroll anchor", () => {
     anchor.apply({ hydrationChanged: true, hydrationChange: "initial" });
 
     expect(element.scrollTop).toBe(2000);
+  });
+
+  it("reanchors a hidden initial hydration after the host becomes visible", () => {
+    const anchor = createChatScrollAnchor();
+    const element = host(0, 0, 0);
+    anchor.attach(element);
+
+    anchor.capture();
+    anchor.apply({ hydrationChanged: true, hydrationChange: "initial" });
+    grow(element, 2000);
+    resize(element, 400);
+    anchor.reanchor();
+
+    expect(element.scrollTop).toBe(2000);
+
+    element.scrollTop = 600;
+    anchor.reanchor();
+
+    expect(element.scrollTop).toBe(600);
+  });
+
+  it("does not reanchor a visible initial hydration", () => {
+    const anchor = createChatScrollAnchor();
+    const element = host(1000, 400, 0);
+    anchor.attach(element);
+
+    anchor.capture();
+    anchor.apply({ hydrationChanged: true, hydrationChange: "initial" });
+    element.scrollTop = 300;
+    grow(element, 2000);
+    anchor.reanchor();
+
+    expect(element.scrollTop).toBe(300);
   });
 
   it("holds the anchor row in place when the layout above it shifts", () => {

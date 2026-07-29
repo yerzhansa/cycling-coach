@@ -22,9 +22,9 @@ export function TrainingDataStep(props: {
   return (
     <>
       <p className={styles.kicker}>Training data</p>
-      <h1 id="onboarding-title" className={styles.title} tabIndex={-1}>
+      <h2 id="onboarding-title" className={styles.title} tabIndex={-1}>
         Bring your riding history
-      </h1>
+      </h2>
       <p className={`${styles.copy} onboarding-copy`} aria-label={INTERVALS_GUIDANCE}>
         Connect your device platform to intervals.icu <strong>directly</strong>, not via Strava.
       </p>

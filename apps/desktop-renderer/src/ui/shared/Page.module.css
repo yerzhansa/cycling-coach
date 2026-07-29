@@ -26,6 +26,12 @@
   font-size: 12.5px;
 }
 
+.action {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+}
+
 .scroll {
   flex: 1;
   padding: 28px 0 40px;

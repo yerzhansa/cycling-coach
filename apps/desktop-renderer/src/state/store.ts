@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ViewId } from "../app/views.js";
+import type { StoredViewId } from "../app/views.js";
 import {
   applyPalette,
   resolveTheme,
@@ -33,12 +33,12 @@ export interface EnduragentState
     ConnectionSlice,
     RideImportSlice,
     OnboardingSlice {
-  readonly activeView: ViewId;
+  readonly activeView: StoredViewId;
   readonly paletteId: string;
   readonly appearance: Appearance;
   readonly theme: ResolvedTheme;
   readonly runtimeReady: boolean;
-  setActiveView: (view: ViewId) => void;
+  setActiveView: (view: StoredViewId) => void;
   setPaletteId: (paletteId: string) => void;
   setAppearance: (appearance: Appearance) => void;
   refreshTheme: () => void;

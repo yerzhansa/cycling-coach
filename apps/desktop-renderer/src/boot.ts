@@ -26,7 +26,6 @@ import { createUpdateSettingsAdapter } from "./state/adapters/update.js";
 import { observeConnectionLifecycle } from "./state/connection-slice.js";
 import { credentialDrafts } from "./state/credential-drafts.js";
 import { restoreManualSyncFocus } from "./state/manual-sync-focus.js";
-import { focusSetupOpener } from "./state/setup-opener.js";
 import { useEnduragentStore } from "./state/store.js";
 import { validateImportPaths, type OnboardingBridge } from "./onboarding/bridge.js";
 import { createOnboardingCompletionController } from "./onboarding/completion.js";
@@ -52,6 +51,7 @@ function focusComposer(): void {
 
 export function bootRenderer(): Disposer {
   const store = useEnduragentStore;
+  store.getState().setOnboardingStartupSettled(false);
 
   const disposeLifecycle = observeConnectionLifecycle((status) => {
     store.getState().setConnection(status);
@@ -218,7 +218,7 @@ export function bootRenderer(): Disposer {
     rideImports,
     onRideImportPresentationChange: (presenting) =>
       store.getState().setRideImportSuppressed(presenting),
-    focusOpener: focusSetupOpener,
+    focusOpener: () => {},
     onComplete: (completion) => onboardingCompletion.complete(completion),
   });
   store.getState().bindOnboardingActions(onboarding);
@@ -308,7 +308,13 @@ export function bootRenderer(): Disposer {
   void trainingContextController.start();
   spendController.start();
   void chatController.start();
-  void onboardingCompletion.openOnStartup(() => onboarding.open());
+  if (onboardingCompletion.isCompleted()) {
+    store.getState().setOnboardingStartupSettled(true);
+  } else {
+    void onboardingCompletion
+      .openOnStartup(() => onboarding.open())
+      .then(() => store.getState().setOnboardingStartupSettled(true));
+  }
   void clients.getClient().then(
     () => store.getState().setConnection("connected"),
     () => store.getState().setConnection("failed"),

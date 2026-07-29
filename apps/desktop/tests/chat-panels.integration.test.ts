@@ -315,7 +315,38 @@ async function launch(input: {
     while ((document.documentElement.dataset.rpc !== "connected" || chipStatus() === undefined || chipStatus() === "loading") && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    document.querySelector(".onboarding")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    const onboardingDeadline = Date.now() + 10000;
+    const onboardingState = () =>
+      document.querySelector("[data-onboarding]")?.getAttribute("data-onboarding") ?? null;
+    while (
+      (onboardingState() === null || onboardingState() === "pending") &&
+      Date.now() < onboardingDeadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    if (onboardingState() === null || onboardingState() === "pending") {
+      throw new Error("onboarding startup decision did not settle");
+    }
+    if (onboardingState() === "open") {
+      const dismissDeadline = Date.now() + 10000;
+      while (
+        document.querySelector(".onboarding-dismiss") === null &&
+        onboardingState() === "open" &&
+        Date.now() < dismissDeadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      if (onboardingState() === "open") {
+        const dismiss = document.querySelector(".onboarding-dismiss");
+        if (!(dismiss instanceof HTMLButtonElement)) throw new Error("setup dismiss did not mount");
+        dismiss.click();
+      }
+      const closedDeadline = Date.now() + 10000;
+      while (onboardingState() !== "closed" && Date.now() < closedDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      if (onboardingState() !== "closed") throw new Error("setup dismiss did not close onboarding");
+    }
   `);
   return { fixture, calls };
 }

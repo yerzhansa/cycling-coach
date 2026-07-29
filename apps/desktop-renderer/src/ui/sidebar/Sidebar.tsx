@@ -1,7 +1,6 @@
 import { useEffect, useRef, type ReactElement } from "react";
 import { VIEWS } from "../../app/views.js";
 import { registerNewConversationOpener } from "../../state/new-conversation-opener.js";
-import { registerSetupOpener } from "../../state/setup-opener.js";
 import { settingsMutationActive } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { ConnectionStatus } from "./ConnectionStatus.js";
@@ -15,17 +14,16 @@ export function Sidebar(): ReactElement {
   const unavailable = useEnduragentStore((state) => state.chat.newConversationUnavailable);
   const resetPhase = useEnduragentStore((state) => state.chat.resetPhase);
   const actions = useEnduragentStore((state) => state.chatActions);
+  const onboardingOpen = useEnduragentStore((state) => state.onboarding.open);
+  const onboardingActions = useEnduragentStore((state) => state.onboardingActions);
   const settingsBusy = useEnduragentStore((state) => settingsMutationActive(state.settings));
   const opener = useRef<HTMLButtonElement>(null);
-  const settingsNav = useRef<HTMLButtonElement>(null);
   const navigationLocked = activeView === "settings" && settingsBusy;
 
   useEffect(() => {
     registerNewConversationOpener(opener.current);
-    registerSetupOpener(settingsNav.current);
     return () => {
       registerNewConversationOpener(null);
-      registerSetupOpener(null);
     };
   }, []);
 
@@ -54,24 +52,35 @@ export function Sidebar(): ReactElement {
         </button>
       </div>
       <nav className={styles.nav} aria-label="Main navigation">
-        {VIEWS.map((view) => (
-          <button
-            key={view.id}
-            type="button"
-            ref={view.id === "settings" ? settingsNav : undefined}
-            className={view.id === activeView ? `${styles.navItem} ${styles.on}` : styles.navItem}
-            aria-current={view.id === activeView ? "page" : undefined}
-            disabled={navigationLocked && view.id !== activeView}
-            onClick={() => {
-              setActiveView(view.id);
-            }}
-          >
-            <span className={styles.glyph} aria-hidden="true">
-              {view.glyph}
-            </span>
-            {view.label}
-          </button>
-        ))}
+        {VIEWS.map((view) => {
+          const active =
+            view.id === "setup" ? onboardingOpen : view.id === activeView && !onboardingOpen;
+          return (
+            <button
+              key={view.id}
+              type="button"
+              className={active ? `${styles.navItem} ${styles.on}` : styles.navItem}
+              aria-current={active ? "page" : undefined}
+              disabled={
+                (navigationLocked && !onboardingOpen && view.id !== activeView) ||
+                (view.id === "setup" && onboardingActions === null)
+              }
+              onClick={() => {
+                if (view.id === "setup") {
+                  void onboardingActions?.open();
+                } else {
+                  if (onboardingOpen) onboardingActions?.dismiss();
+                  setActiveView(view.id);
+                }
+              }}
+            >
+              <span className={styles.glyph} aria-hidden="true">
+                {view.glyph}
+              </span>
+              {view.label}
+            </button>
+          );
+        })}
       </nav>
       <div className={styles.sec}>Conversations</div>
       <HistoryList locked={navigationLocked} />
