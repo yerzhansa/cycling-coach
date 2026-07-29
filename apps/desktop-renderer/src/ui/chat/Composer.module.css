@@ -33,6 +33,10 @@
   background: transparent;
 }
 
+.controls textarea:focus-visible {
+  outline: 0;
+}
+
 .controls button {
   width: 42px;
   height: 42px;

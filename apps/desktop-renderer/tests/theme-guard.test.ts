@@ -8,6 +8,10 @@ const DARK_MEDIA = /prefers-color-scheme:\s*dark/u;
 const SYSTEM_DARK_GUARD = ':not([data-theme="light"])';
 const EXPLICIT_DARK_GUARD = '[data-theme="dark"]';
 const RUNTIME_PROPERTIES = new Set(["--chat-composer-clearance"]);
+const CONTROL_ELEMENTS = ["button", "a", "input", "textarea", "select"] as const;
+const FONT_INHERIT_ELEMENTS = ["button", "input", "textarea", "select"] as const;
+const FOCUS = ":focus-visible";
+const OUTLINE_CLEARED = /outline:\s*(?:0|none)\b/u;
 
 interface ParsedRule {
   readonly selector: string;
@@ -46,6 +50,13 @@ function collect(source: string, media: string | undefined, into: ParsedRule[]):
     else into.push({ selector: prelude, media, raw: body, declarations: customProperties(body) });
     index = end;
   }
+}
+
+function selectors(rule: ParsedRule): readonly string[] {
+  return rule.selector
+    .split(",")
+    .map((part) => part.replaceAll(/\s+/gu, " ").trim())
+    .filter((part) => part.length > 0);
 }
 
 function parse(source: string): readonly ParsedRule[] {
@@ -135,5 +146,52 @@ describe("theme guards", () => {
       }
     }
     expect(undeclared).toEqual([]);
+  });
+});
+
+describe("control reset", () => {
+  it("inherits the interface font on every control element", async () => {
+    const tokens = parse(await readFile(resolve(sourceRoot, "theme/tokens.css"), "utf8"));
+    const inherited = new Set(
+      tokens
+        .filter((rule) => rule.media === undefined && /font:\s*inherit/u.test(rule.raw))
+        .flatMap((rule) => selectors(rule)),
+    );
+    for (const element of FONT_INHERIT_ELEMENTS) expect([...inherited]).toContain(element);
+  });
+
+  it("rings every keyboard-focused control with the brand outline", async () => {
+    const tokens = parse(await readFile(resolve(sourceRoot, "theme/tokens.css"), "utf8"));
+    const focus = tokens.filter(
+      (rule) => rule.media === undefined && selectors(rule).some((part) => part.includes(FOCUS)),
+    );
+    expect(focus).toHaveLength(1);
+    expect([...selectors(focus[0])].sort()).toEqual(
+      [...CONTROL_ELEMENTS].map((element) => `${element}${FOCUS}`).sort(),
+    );
+    expect(focus[0].raw.replaceAll(/\s+/gu, " ")).toContain("outline: 3px solid var(--brand)");
+    expect(focus[0].raw.replaceAll(/\s+/gu, " ")).toContain("outline-offset: 2px");
+  });
+
+  it("suppresses the focus ring only through focus-qualified selectors", async () => {
+    const unqualified: string[] = [];
+    for (const file of await stylesheets()) {
+      if (file === "theme/tokens.css") continue;
+      const cleared = parse(await readFile(resolve(sourceRoot, file), "utf8")).filter((rule) =>
+        OUTLINE_CLEARED.test(rule.raw),
+      );
+      const focused = new Set(
+        cleared
+          .filter((rule) => selectors(rule).every((part) => part.endsWith(FOCUS)))
+          .map((rule) => selectors(rule).join(",")),
+      );
+      for (const rule of cleared) {
+        const parts = selectors(rule);
+        if (parts.every((part) => part.endsWith(FOCUS))) continue;
+        if (focused.has(parts.map((part) => `${part}${FOCUS}`).join(","))) continue;
+        unqualified.push(`${file} ${parts.join(", ")}`);
+      }
+    }
+    expect(unqualified).toEqual([]);
   });
 });
