@@ -26,3 +26,17 @@ export function createDesktopContentSecurityPolicy(port: number): string {
   }
   return `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src ws://127.0.0.1:${port}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'`;
 }
+
+export function createDesktopDevelopmentContentSecurityPolicy(
+  port: number,
+  developmentUrl: string,
+): string {
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new TypeError("invalid daemon port");
+  }
+  const parsed = new URL(developmentUrl);
+  if (parsed.protocol !== "http:") throw new TypeError("invalid development url");
+  const devPort = parsed.port === "" ? "80" : parsed.port;
+  const devSources = `ws://127.0.0.1:${devPort} ws://localhost:${devPort} http://127.0.0.1:${devPort} http://localhost:${devPort}`;
+  return `default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ws://127.0.0.1:${port} ${devSources}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'`;
+}

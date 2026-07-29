@@ -18,6 +18,7 @@ import {
   DESKTOP_WINDOW_MIN_WIDTH,
   DESKTOP_WINDOW_WIDTH,
   createDesktopContentSecurityPolicy,
+  createDesktopDevelopmentContentSecurityPolicy,
 } from "./constants.js";
 
 export function registerDesktopScheme(): void {
@@ -89,7 +90,15 @@ export async function installDesktopProtocol(input: {
   readonly rendererSource: DesktopRendererSource;
 }): Promise<void> {
   const withCurrentPolicy = (response: Response): Response =>
-    responseWithPolicy(response, createDesktopContentSecurityPolicy(input.currentDaemonPort()));
+    responseWithPolicy(
+      response,
+      input.rendererSource.kind === "development"
+        ? createDesktopDevelopmentContentSecurityPolicy(
+            input.currentDaemonPort(),
+            input.rendererSource.developmentUrl,
+          )
+        : createDesktopContentSecurityPolicy(input.currentDaemonPort()),
+    );
   await input.session.protocol.handle(DESKTOP_SCHEME, async (request) => {
     const requested = new URL(request.url);
     if (requested.host !== DESKTOP_HOST)

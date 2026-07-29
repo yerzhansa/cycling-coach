@@ -30,6 +30,12 @@ export default defineConfig({
     root: resolve(desktopRoot, "../desktop-renderer"),
     plugins: [react()],
     define: appVersionDefine(),
+    server: {
+      host: "127.0.0.1",
+      port: 5173,
+      strictPort: true,
+      hmr: { protocol: "ws", host: "127.0.0.1", port: 5173 },
+    },
     build: {
       outDir: resolve(desktopRoot, "out/renderer"),
       emptyOutDir: true,
