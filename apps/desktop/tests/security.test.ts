@@ -24,6 +24,7 @@ import {
   DESKTOP_WINDOW_MIN_WIDTH,
   DESKTOP_WINDOW_WIDTH,
   createDesktopContentSecurityPolicy,
+  createDesktopDevelopmentContentSecurityPolicy,
 } from "../src/main/constants.js";
 import {
   createDesktopRendererConsoleCapture,
@@ -94,6 +95,9 @@ describe("desktop security boundary", () => {
       "http://127.0.0.1:5173/assets/renderer.js?cache=synthetic",
     );
     expect(await response.text()).toBe("synthetic-proxied-renderer");
+    expect(response.headers.get("Content-Security-Policy")).toBe(
+      createDesktopDevelopmentContentSecurityPolicy(45_001, "http://127.0.0.1:5173/root"),
+    );
   });
 
   it("serves packaged renderer requests without fetching the override", async () => {
@@ -182,6 +186,20 @@ describe("desktop security boundary", () => {
     expect(createDesktopContentSecurityPolicy(45_001)).toBe(
       "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src ws://127.0.0.1:45001; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
     );
+  });
+
+  it("relaxes only inline execution and dev-server connections in the development policy", () => {
+    expect(
+      createDesktopDevelopmentContentSecurityPolicy(45_001, "http://localhost:5173/"),
+    ).toBe(
+      "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ws://127.0.0.1:45001 ws://127.0.0.1:5173 ws://localhost:5173 http://127.0.0.1:5173 http://localhost:5173; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    );
+    expect(() =>
+      createDesktopDevelopmentContentSecurityPolicy(0, "http://localhost:5173/"),
+    ).toThrow(TypeError);
+    expect(() =>
+      createDesktopDevelopmentContentSecurityPolicy(45_001, "https://example.com/"),
+    ).toThrow(TypeError);
   });
 
   it("uses the exact hardened BrowserWindow preferences", () => {
