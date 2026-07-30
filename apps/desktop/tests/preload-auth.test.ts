@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -119,6 +120,17 @@ function llmConfiguration() {
   };
 }
 
+function pinnedSmokeBridgeKeys(): string[] {
+  const source = readFileSync(new URL("../scripts/electron-smoke.mjs", import.meta.url), "utf8");
+  const anchor = source.indexOf("JSON.stringify(ready.bridgeKeys) ===");
+  if (anchor === -1) throw new Error("electron-smoke bridge assertion missing");
+  const open = source.indexOf("JSON.stringify([", anchor);
+  if (open === -1) throw new Error("electron-smoke bridge literal missing");
+  const close = source.indexOf("])", open);
+  if (close === -1) throw new Error("electron-smoke bridge literal unterminated");
+  return [...source.slice(open, close).matchAll(/"([^"]+)"/g)].map((match) => match[1]!);
+}
+
 let bridge: AuthBridge;
 
 beforeAll(async () => {
@@ -190,6 +202,10 @@ describe("desktop preload ChatGPT auth", () => {
       ].sort(),
     );
     expect(bridge).not.toHaveProperty("openExternal");
+  });
+
+  it("keeps the release-gate smoke bridge list byte-equal to the sorted public bridge", () => {
+    expect(pinnedSmokeBridgeKeys()).toEqual(Object.keys(bridge).sort());
   });
 
   it("validates and copies strict bounded transcript pages", async () => {
