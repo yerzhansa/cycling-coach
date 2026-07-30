@@ -120,12 +120,15 @@ export {
   type ConversationStorePort,
 } from "./agent/conversation-store.js";
 export {
+  MAX_ARCHIVED_CONVERSATION_ENTRIES,
   MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES,
   MAX_TRANSCRIPT_PAGE_TURNS,
   MAX_TRANSCRIPT_RECORD_BYTES,
   UnsafeTranscriptTargetError,
 } from "./agent/transcript-store.js";
 export type {
+  ArchivedConversationList,
+  ArchivedConversationSummary,
   TranscriptPageRequest,
   TranscriptPageResult,
   TranscriptPageTurn,

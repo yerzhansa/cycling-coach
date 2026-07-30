@@ -82,6 +82,17 @@ const operations: CoachOperations = {
     turns: [],
     nextCursor: null,
   }),
+  listArchivedConversations: async () => ({
+    schemaVersion: 1,
+    conversations: [],
+    truncated: false,
+  }),
+  getArchivedTranscriptPage: async () => ({
+    schemaVersion: 1,
+    status: "page",
+    turns: [],
+    nextCursor: null,
+  }),
   configureRuntime: async ({ llm, intervals, session }) => ({
     schemaVersion: 3,
     status: "applied",

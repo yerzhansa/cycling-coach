@@ -11,6 +11,7 @@ import { archiveAndResetDurably, ChatStore } from "./chat-store.js";
 import {
   TranscriptBoundaryTargetUnchangedError,
   TranscriptStore,
+  type ArchivedConversationList,
   type ResetIntentRecord,
   type TranscriptCompletedTurnRecord,
   type TranscriptPageRequest,
@@ -20,6 +21,12 @@ import {
 export interface ConversationStorePort extends ChatStorePort, TranscriptWriterPort {
   readCurrentConversation(chatId: string): TranscriptCompletedTurnRecord[];
   readCurrentConversationPage(chatId: string, request: TranscriptPageRequest): TranscriptPageResult;
+  listArchivedConversations(chatId: string): ArchivedConversationList;
+  readArchivedConversationPage(
+    chatId: string,
+    boundaryRef: string,
+    request: TranscriptPageRequest,
+  ): TranscriptPageResult;
 }
 
 export function createConversationStore(
@@ -104,6 +111,18 @@ export class ConversationStore implements ConversationStorePort {
 
   readCurrentConversationPage(chatId: string, request: TranscriptPageRequest) {
     return this.transcriptStore.readCurrentConversationPage(chatId, request);
+  }
+
+  listArchivedConversations(chatId: string) {
+    return this.transcriptStore.listArchivedConversations(chatId);
+  }
+
+  readArchivedConversationPage(
+    chatId: string,
+    boundaryRef: string,
+    request: TranscriptPageRequest,
+  ) {
+    return this.transcriptStore.readArchivedConversationPage(chatId, boundaryRef, request);
   }
 
   resetConversation(input: ConversationResetInput): void {

@@ -38,6 +38,8 @@ const TRANSCRIPT_CURSOR_BYTES = 114;
 const TRANSCRIPT_CURSOR_LENGTH = 152;
 const TRANSCRIPT_CURSOR_PATTERN = /^[A-Za-z0-9_-]{152}$/;
 const TRANSCRIPT_CURSOR_VERSION = 1;
+const ARCHIVED_TRANSCRIPT_CURSOR_VERSION = 2;
+export const MAX_ARCHIVED_CONVERSATION_ENTRIES = 200;
 
 type TranscriptWrite = (
   descriptor: number,
@@ -121,6 +123,19 @@ export type TranscriptPageResult =
       readonly nextCursor: null;
     };
 
+export interface ArchivedConversationSummary {
+  readonly boundaryRef: string;
+  readonly boundaryAt: string;
+  readonly reason: TranscriptConversationBoundaryReason;
+  readonly turnCount: number;
+}
+
+export interface ArchivedConversationList {
+  readonly schemaVersion: 1;
+  readonly conversations: ArchivedConversationSummary[];
+  readonly truncated: boolean;
+}
+
 interface IndexedTranscriptTurn {
   readonly record: TranscriptCompletedTurnRecord;
   readonly start: number;
@@ -131,6 +146,12 @@ interface CurrentTranscriptWindow {
   readonly trusted: boolean;
   readonly fenceKind: 0 | 1;
   readonly fence: Buffer;
+  readonly turns: readonly IndexedTranscriptTurn[];
+}
+
+interface ArchivedTranscriptSegment {
+  readonly boundary: TranscriptConversationBoundaryRecord;
+  readonly boundaryEnd: number;
   readonly turns: readonly IndexedTranscriptTurn[];
 }
 
@@ -403,12 +424,48 @@ function parseCurrentWindow(contents: Buffer, chatId: string): CurrentTranscript
   return { trusted, fenceKind, fence, turns };
 }
 
+function parseArchivedSegments(contents: Buffer, chatId: string): ArchivedTranscriptSegment[] {
+  const segments: ArchivedTranscriptSegment[] = [];
+  let trusted = true;
+  let turns: IndexedTranscriptTurn[] = [];
+  let lineStart = 0;
+  for (let index = 0; index < contents.length; index += 1) {
+    if (contents[index] !== 0x0a) continue;
+    const lineBytes = contents.subarray(lineStart, index);
+    const recordStart = lineStart;
+    lineStart = index + 1;
+    const record = lineBytes.length === 0 ? null : parseRecordBytes(lineBytes);
+    if (record === null || record.chatId !== chatId) {
+      trusted = false;
+      turns = [];
+      continue;
+    }
+    if (record.kind === "conversation-boundary") {
+      segments.push({ boundary: record, boundaryEnd: lineStart, turns });
+      trusted = true;
+      turns = [];
+    } else if (trusted) {
+      turns.push({ record, start: recordStart, end: lineStart });
+    }
+  }
+  return segments;
+}
+
+function selectArchivedSegment(
+  segments: readonly ArchivedTranscriptSegment[],
+  boundaryRef: string,
+): ArchivedTranscriptSegment | null {
+  const matches = segments.filter((segment) => segment.boundary.resetId === boundaryRef);
+  if (matches.length > 1) throw new Error("Transcript contains duplicate reset boundaries.");
+  return matches[0] ?? null;
+}
+
 function decodeSafeOffset(bytes: Buffer, offset: number): number | null {
   const value = bytes.readBigUInt64BE(offset);
   return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : null;
 }
 
-function decodeTranscriptCursor(value: string): DecodedTranscriptCursor | null {
+function decodeCursorVersion(value: string, version: number): DecodedTranscriptCursor | null {
   if (!TRANSCRIPT_CURSOR_PATTERN.test(value) || value.length !== TRANSCRIPT_CURSOR_LENGTH) {
     return null;
   }
@@ -416,7 +473,7 @@ function decodeTranscriptCursor(value: string): DecodedTranscriptCursor | null {
   if (
     bytes.length !== TRANSCRIPT_CURSOR_BYTES ||
     bytes.toString("base64url") !== value ||
-    bytes[0] !== TRANSCRIPT_CURSOR_VERSION ||
+    bytes[0] !== version ||
     (bytes[1] !== 0 && bytes[1] !== 1)
   ) {
     return null;
@@ -437,9 +494,18 @@ function decodeTranscriptCursor(value: string): DecodedTranscriptCursor | null {
   };
 }
 
-function encodeTranscriptCursor(input: DecodedTranscriptCursor): string {
+function decodeTranscriptCursor(value: string): DecodedTranscriptCursor | null {
+  return decodeCursorVersion(value, TRANSCRIPT_CURSOR_VERSION);
+}
+
+function decodeArchivedTranscriptCursor(value: string): DecodedTranscriptCursor | null {
+  const decoded = decodeCursorVersion(value, ARCHIVED_TRANSCRIPT_CURSOR_VERSION);
+  return decoded === null || decoded.fenceKind !== 1 ? null : decoded;
+}
+
+function encodeCursorVersion(input: DecodedTranscriptCursor, version: number): string {
   const bytes = Buffer.alloc(TRANSCRIPT_CURSOR_BYTES);
-  bytes[0] = TRANSCRIPT_CURSOR_VERSION;
+  bytes[0] = version;
   bytes[1] = input.fenceKind;
   input.chatDigest.copy(bytes, 2);
   input.fence.copy(bytes, 34);
@@ -447,6 +513,14 @@ function encodeTranscriptCursor(input: DecodedTranscriptCursor): string {
   bytes.writeBigUInt64BE(BigInt(input.snapshotEnd), 98);
   bytes.writeBigUInt64BE(BigInt(input.before), 106);
   return bytes.toString("base64url");
+}
+
+function encodeTranscriptCursor(input: DecodedTranscriptCursor): string {
+  return encodeCursorVersion(input, TRANSCRIPT_CURSOR_VERSION);
+}
+
+function encodeArchivedTranscriptCursor(input: DecodedTranscriptCursor): string {
+  return encodeCursorVersion(input, ARCHIVED_TRANSCRIPT_CURSOR_VERSION);
 }
 
 function transcriptPageTurn(record: TranscriptCompletedTurnRecord): TranscriptPageTurn {
@@ -481,6 +555,60 @@ function pageResult(
 
 function encodedPageBytes(result: TranscriptPageResult): number {
   return Buffer.byteLength(JSON.stringify(result), "utf8");
+}
+
+function assertValidPageRequest(
+  request: TranscriptPageRequest,
+  decode: (value: string) => DecodedTranscriptCursor | null,
+): void {
+  if (
+    request === null ||
+    typeof request !== "object" ||
+    Array.isArray(request) ||
+    Object.keys(request).length !== 2 ||
+    !Object.hasOwn(request, "cursor") ||
+    !Object.hasOwn(request, "limit") ||
+    (request.cursor !== null && decode(request.cursor) === null) ||
+    !Number.isSafeInteger(request.limit) ||
+    request.limit < 1 ||
+    request.limit > MAX_TRANSCRIPT_PAGE_TURNS
+  ) {
+    throw new TypeError("Transcript page request is invalid.");
+  }
+}
+
+function backwardPage(
+  turns: readonly IndexedTranscriptTurn[],
+  cursor: DecodedTranscriptCursor,
+  limit: number,
+  encode: (cursor: DecodedTranscriptCursor) => string,
+): TranscriptPageResult {
+  const beforeIsValid =
+    cursor.before === cursor.snapshotEnd || turns.some((turn) => turn.start === cursor.before);
+  if (!beforeIsValid) throw new TypeError("Transcript page cursor is invalid.");
+  let index = turns.length - 1;
+  while (index >= 0 && turns[index]!.end > cursor.before) index -= 1;
+  let selected: readonly IndexedTranscriptTurn[] = [];
+  while (index >= 0 && selected.length < limit) {
+    const tentative = [turns[index]!, ...selected];
+    const hasMore = index > 0;
+    const nextCursor = hasMore ? encode({ ...cursor, before: tentative[0]!.start }) : null;
+    const tentativeResult = pageResult(tentative, nextCursor);
+    if (encodedPageBytes(tentativeResult) > MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES) {
+      if (selected.length === 0) {
+        throw new Error("Transcript page record exceeds the response budget.");
+      }
+      break;
+    }
+    selected = tentative;
+    index -= 1;
+  }
+  const nextCursor = index >= 0 ? encode({ ...cursor, before: selected[0]!.start }) : null;
+  const result = pageResult(selected, nextCursor);
+  if (encodedPageBytes(result) > MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES) {
+    throw new Error("Transcript page exceeds the response budget.");
+  }
+  return result;
 }
 
 export class TranscriptStore implements TranscriptWriterPort {
@@ -559,21 +687,8 @@ export class TranscriptStore implements TranscriptWriterPort {
     chatId: string,
     request: TranscriptPageRequest,
   ): TranscriptPageResult {
-    if (
-      typeof chatId !== "string" ||
-      request === null ||
-      typeof request !== "object" ||
-      Array.isArray(request) ||
-      Object.keys(request).length !== 2 ||
-      !Object.hasOwn(request, "cursor") ||
-      !Object.hasOwn(request, "limit") ||
-      (request.cursor !== null && decodeTranscriptCursor(request.cursor) === null) ||
-      !Number.isSafeInteger(request.limit) ||
-      request.limit < 1 ||
-      request.limit > MAX_TRANSCRIPT_PAGE_TURNS
-    ) {
-      throw new TypeError("Transcript page request is invalid.");
-    }
+    if (typeof chatId !== "string") throw new TypeError("Transcript page request is invalid.");
+    assertValidPageRequest(request, decodeTranscriptCursor);
     return this.withDirectory((directoryDescriptor) => {
       const path = this.transcriptPath(chatId);
       const descriptor = this.openExistingFile(directoryDescriptor, path, constants.O_RDONLY, true);
@@ -632,42 +747,132 @@ export class TranscriptStore implements TranscriptWriterPort {
           }
           cursor = decoded;
         }
-        const beforeIsValid =
-          cursor.before === cursor.snapshotEnd ||
-          snapshotWindow.turns.some((turn) => turn.start === cursor.before);
-        if (!beforeIsValid) throw new TypeError("Transcript page cursor is invalid.");
-        let index = snapshotWindow.turns.length - 1;
-        while (index >= 0 && snapshotWindow.turns[index]!.end > cursor.before) index -= 1;
-        let selected: readonly IndexedTranscriptTurn[] = [];
-        while (index >= 0 && selected.length < request.limit) {
-          const tentative = [snapshotWindow.turns[index]!, ...selected];
-          const hasMore = index > 0;
-          const nextCursor = hasMore
-            ? encodeTranscriptCursor({
-                ...cursor,
-                before: tentative[0]!.start,
-              })
-            : null;
-          const tentativeResult = pageResult(tentative, nextCursor);
-          if (encodedPageBytes(tentativeResult) > MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES) {
-            if (selected.length === 0) {
-              throw new Error("Transcript page record exceeds the response budget.");
-            }
-            break;
-          }
-          selected = tentative;
-          index -= 1;
+        const result = backwardPage(
+          snapshotWindow.turns,
+          cursor,
+          request.limit,
+          encodeTranscriptCursor,
+        );
+        this.assertOpenedFileSafe(descriptor);
+        this.assertDirectoryStable(directoryDescriptor);
+        return result;
+      } finally {
+        closeSync(descriptor);
+      }
+    });
+  }
+
+  listArchivedConversations(chatId: string): ArchivedConversationList {
+    if (typeof chatId !== "string") {
+      throw new TypeError("Archived conversation request is invalid.");
+    }
+    return this.withDirectory((directoryDescriptor): ArchivedConversationList => {
+      const path = this.transcriptPath(chatId);
+      const descriptor = this.openExistingFile(directoryDescriptor, path, constants.O_RDONLY, true);
+      if (descriptor === null) {
+        return { schemaVersion: 1, conversations: [], truncated: false };
+      }
+      try {
+        const contents = this.readSnapshot(descriptor);
+        const segments = parseArchivedSegments(contents, chatId);
+        const refs = new Set(segments.map((segment) => segment.boundary.resetId));
+        if (refs.size !== segments.length) {
+          throw new Error("Transcript contains duplicate reset boundaries.");
         }
-        const nextCursor =
-          index >= 0
-            ? encodeTranscriptCursor({
-                ...cursor,
-                before: selected[0]!.start,
-              })
-            : null;
-        const result = pageResult(selected, nextCursor);
-        if (encodedPageBytes(result) > MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES) {
-          throw new Error("Transcript page exceeds the response budget.");
+        this.assertOpenedFileSafe(descriptor);
+        this.assertDirectoryStable(directoryDescriptor);
+        const newestFirst = [...segments].reverse();
+        const selected = newestFirst.slice(0, MAX_ARCHIVED_CONVERSATION_ENTRIES);
+        return {
+          schemaVersion: 1,
+          conversations: selected.map((segment) => ({
+            boundaryRef: segment.boundary.resetId,
+            boundaryAt: segment.boundary.boundaryAt,
+            reason: segment.boundary.reason,
+            turnCount: segment.turns.length,
+          })),
+          truncated: newestFirst.length > selected.length,
+        };
+      } finally {
+        closeSync(descriptor);
+      }
+    });
+  }
+
+  readArchivedConversationPage(
+    chatId: string,
+    boundaryRef: string,
+    request: TranscriptPageRequest,
+  ): TranscriptPageResult {
+    if (
+      typeof chatId !== "string" ||
+      typeof boundaryRef !== "string" ||
+      !RESET_ID_PATTERN.test(boundaryRef)
+    ) {
+      throw new TypeError("Archived transcript page request is invalid.");
+    }
+    assertValidPageRequest(request, decodeArchivedTranscriptCursor);
+    return this.withDirectory((directoryDescriptor) => {
+      const path = this.transcriptPath(chatId);
+      const descriptor = this.openExistingFile(directoryDescriptor, path, constants.O_RDONLY, true);
+      if (descriptor === null) return restartRequiredPage();
+      try {
+        const contents = this.readSnapshot(descriptor);
+        const chatDigest = Buffer.from(this.chatDigest(chatId), "hex");
+        const fence = Buffer.from(boundaryRef, "hex");
+        let result: TranscriptPageResult;
+        if (request.cursor === null) {
+          const target = selectArchivedSegment(
+            parseArchivedSegments(contents, chatId),
+            boundaryRef,
+          );
+          if (target === null) {
+            this.assertOpenedFileSafe(descriptor);
+            this.assertDirectoryStable(directoryDescriptor);
+            return restartRequiredPage();
+          }
+          result = backwardPage(
+            target.turns,
+            {
+              fenceKind: 1,
+              chatDigest,
+              fence,
+              snapshotHash: createHash("sha256")
+                .update(contents.subarray(0, target.boundaryEnd))
+                .digest(),
+              snapshotEnd: target.boundaryEnd,
+              before: target.boundaryEnd,
+            },
+            request.limit,
+            encodeArchivedTranscriptCursor,
+          );
+        } else {
+          const decoded = decodeArchivedTranscriptCursor(request.cursor);
+          if (
+            decoded === null ||
+            !decoded.chatDigest.equals(chatDigest) ||
+            !decoded.fence.equals(fence) ||
+            decoded.snapshotEnd > contents.length
+          ) {
+            throw new TypeError("Transcript page cursor is invalid.");
+          }
+          const snapshot = contents.subarray(0, decoded.snapshotEnd);
+          if (!createHash("sha256").update(snapshot).digest().equals(decoded.snapshotHash)) {
+            throw new TypeError("Transcript page cursor is invalid.");
+          }
+          const target = selectArchivedSegment(
+            parseArchivedSegments(snapshot, chatId),
+            boundaryRef,
+          );
+          if (target === null || target.boundaryEnd !== decoded.snapshotEnd) {
+            throw new TypeError("Transcript page cursor is invalid.");
+          }
+          result = backwardPage(
+            target.turns,
+            decoded,
+            request.limit,
+            encodeArchivedTranscriptCursor,
+          );
         }
         this.assertOpenedFileSafe(descriptor);
         this.assertDirectoryStable(directoryDescriptor);

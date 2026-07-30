@@ -40,6 +40,8 @@ vi.mock("electron", () => ({
 interface AuthBridge {
   getDaemonConnection(failedGeneration?: number): Promise<unknown>;
   getTranscriptPage(input: unknown): Promise<unknown>;
+  listArchivedConversations(): Promise<unknown>;
+  getArchivedTranscriptPage(input: unknown): Promise<unknown>;
   credentialStatuses(): Promise<unknown>;
   deleteCredential(input: unknown): Promise<unknown>;
   retryFailedCredentials(): Promise<unknown>;
@@ -58,6 +60,16 @@ interface AuthBridge {
 function validTranscriptCursor(): string {
   const bytes = Buffer.alloc(114);
   bytes[0] = 1;
+  return bytes.toString("base64url");
+}
+
+const BOUNDARY_REF = "b".repeat(64);
+
+function validArchivedCursor(): string {
+  const bytes = Buffer.alloc(114);
+  bytes[0] = 2;
+  bytes[1] = 1;
+  bytes.fill(0xcd, 34, 66);
   return bytes.toString("base64url");
 }
 
@@ -165,6 +177,8 @@ describe("desktop preload ChatGPT auth", () => {
         "getUpdateState",
         "getDaemonConnection",
         "getTranscriptPage",
+        "listArchivedConversations",
+        "getArchivedTranscriptPage",
         "llmConfiguration",
         "checkForUpdates",
         "onDroppedImportFiles",
@@ -251,6 +265,108 @@ describe("desktop preload ChatGPT auth", () => {
         TypeError,
       );
     }
+  });
+
+  it("validates and copies archived conversation lists and archived pages", async () => {
+    const list = {
+      schemaVersion: 1,
+      conversations: [
+        {
+          boundaryRef: BOUNDARY_REF,
+          boundaryAt: "1998-07-06T00:00:00.000Z",
+          reason: "explicit-reset",
+          turnCount: 3,
+        },
+      ],
+      truncated: false,
+    };
+    const cursor = validArchivedCursor();
+    const archivedPage = {
+      schemaVersion: 1,
+      status: "page",
+      turns: [
+        {
+          turnId: "turn-1",
+          completedAt: "1998-07-06T00:00:00.000Z",
+          athleteText: "a",
+          coachText: "b",
+        },
+      ],
+      nextCursor: cursor,
+    };
+    mocks.invoke.mockResolvedValueOnce(list).mockResolvedValueOnce(archivedPage);
+
+    const listed = await bridge.listArchivedConversations();
+    expect(listed).toEqual(list);
+    expect(listed).not.toBe(list);
+    const paged = await bridge.getArchivedTranscriptPage({
+      boundaryRef: BOUNDARY_REF,
+      cursor,
+      limit: 25,
+    });
+    expect(paged).toEqual(archivedPage);
+    expect(mocks.invoke.mock.calls).toEqual([
+      ["desktop:list-archived-conversations"],
+      ["desktop:get-archived-transcript-page", { boundaryRef: BOUNDARY_REF, cursor, limit: 25 }],
+    ]);
+  });
+
+  it("rejects malformed archive requests before IPC and redacts malformed archive responses", async () => {
+    for (const request of [
+      null,
+      {},
+      { boundaryRef: BOUNDARY_REF, cursor: null, limit: 0 },
+      { boundaryRef: BOUNDARY_REF, cursor: null, limit: 51 },
+      { boundaryRef: BOUNDARY_REF.toUpperCase(), cursor: null, limit: 25 },
+      { boundaryRef: BOUNDARY_REF, cursor: validTranscriptCursor(), limit: 25 },
+      { cursor: null, limit: 25 },
+      { boundaryRef: BOUNDARY_REF, cursor: null, limit: 25, path: "/private/transcript" },
+    ]) {
+      await expect(bridge.getArchivedTranscriptPage(request)).rejects.toBeInstanceOf(TypeError);
+    }
+    expect(mocks.invoke).not.toHaveBeenCalled();
+
+    for (const response of [
+      { schemaVersion: 1, conversations: [], truncated: true },
+      {
+        schemaVersion: 1,
+        conversations: [
+          {
+            boundaryRef: BOUNDARY_REF,
+            boundaryAt: "1998-07-06T00:00:00.000Z",
+            reason: "idle-reset",
+            turnCount: 1,
+          },
+        ],
+        truncated: false,
+      },
+      {
+        schemaVersion: 1,
+        conversations: [
+          {
+            boundaryRef: BOUNDARY_REF,
+            boundaryAt: "1998-07-06T00:00:00.000Z",
+            reason: "explicit-reset",
+            turnCount: 1,
+          },
+        ],
+        truncated: false,
+        transcriptPath: "/private/transcript",
+      },
+    ]) {
+      mocks.invoke.mockResolvedValueOnce(response);
+      await expect(bridge.listArchivedConversations()).rejects.toBeInstanceOf(TypeError);
+    }
+
+    mocks.invoke.mockResolvedValueOnce({
+      schemaVersion: 1,
+      status: "page",
+      turns: [],
+      nextCursor: validTranscriptCursor(),
+    });
+    await expect(
+      bridge.getArchivedTranscriptPage({ boundaryRef: BOUNDARY_REF, cursor: null, limit: 25 }),
+    ).rejects.toBeInstanceOf(TypeError);
   });
 
   it("returns strict copied update states from zero-argument channels", async () => {

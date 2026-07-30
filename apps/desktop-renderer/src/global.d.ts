@@ -8,6 +8,12 @@ interface EnduragentAuth {
     readonly cursor: string | null;
     readonly limit: number;
   }): Promise<DesktopTranscriptPage>;
+  listArchivedConversations(): Promise<DesktopArchivedConversationList>;
+  getArchivedTranscriptPage(input: {
+    readonly boundaryRef: string;
+    readonly cursor: string | null;
+    readonly limit: number;
+  }): Promise<DesktopTranscriptPage>;
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
   retryFailedCredentials(): Promise<readonly CredentialSlotStatus[]>;
   writeCredential(input: {
@@ -36,6 +42,19 @@ interface DesktopTranscriptTurn {
   readonly completedAt: string;
   readonly athleteText: string;
   readonly coachText: string;
+}
+
+interface DesktopArchivedConversationSummary {
+  readonly boundaryRef: string;
+  readonly boundaryAt: string;
+  readonly reason: "explicit-reset" | "stale-reset";
+  readonly turnCount: number;
+}
+
+interface DesktopArchivedConversationList {
+  readonly schemaVersion: 1;
+  readonly conversations: readonly DesktopArchivedConversationSummary[];
+  readonly truncated: boolean;
 }
 
 type DesktopTranscriptPage =

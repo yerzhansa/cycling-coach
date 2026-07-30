@@ -117,6 +117,8 @@ export const COACH_RPC_METHOD_NAMES = [
   "resetSession",
   "hasSession",
   "getTranscriptPage",
+  "listArchivedConversations",
+  "getArchivedTranscriptPage",
   "getAthleteState",
   "importFiles",
   "sync",
@@ -150,8 +152,12 @@ export type EmptyRpcParams = z.infer<typeof EmptyRpcParamsSchema>;
 
 export const MAX_TRANSCRIPT_PAGE_TURNS = 50;
 export const MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES = 266_240;
+export const MAX_ARCHIVED_CONVERSATION_ENTRIES = 200;
 const TRANSCRIPT_CURSOR_LENGTH = 152;
 const TRANSCRIPT_CURSOR_PATTERN = /^[A-Za-z0-9_-]{152}$/;
+const TRANSCRIPT_CURSOR_VERSION = 1;
+const ARCHIVED_TRANSCRIPT_CURSOR_VERSION = 2;
+const BOUNDARY_REF_PATTERN = /^[a-f0-9]{64}$/;
 const BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const RPC_TEXT_ENCODER = new TextEncoder();
 
@@ -182,14 +188,15 @@ function safeCursorOffset(bytes: Uint8Array, offset: number): number | null {
   return value;
 }
 
-function validTranscriptCursor(value: string): boolean {
+function validCursorVersion(value: string, version: number, archived: boolean): boolean {
   if (value.length !== TRANSCRIPT_CURSOR_LENGTH || !TRANSCRIPT_CURSOR_PATTERN.test(value)) {
     return false;
   }
   const bytes = decodedBase64Url(value);
-  if (bytes === null || bytes.length !== 114 || bytes[0] !== 1) return false;
+  if (bytes === null || bytes.length !== 114 || bytes[0] !== version) return false;
   const fenceKind = bytes[1];
   if (fenceKind !== 0 && fenceKind !== 1) return false;
+  if (archived && fenceKind !== 1) return false;
   if (fenceKind === 0 && bytes.slice(34, 66).some((byte) => byte !== 0)) return false;
   const snapshotEnd = safeCursorOffset(bytes, 98);
   const before = safeCursorOffset(bytes, 106);
@@ -200,8 +207,23 @@ export const TranscriptCursorSchema = z
   .string()
   .length(TRANSCRIPT_CURSOR_LENGTH)
   .regex(TRANSCRIPT_CURSOR_PATTERN)
-  .refine(validTranscriptCursor);
+  .refine((value) => validCursorVersion(value, TRANSCRIPT_CURSOR_VERSION, false));
 export type TranscriptCursor = z.infer<typeof TranscriptCursorSchema>;
+
+export const ArchivedTranscriptCursorSchema = z
+  .string()
+  .length(TRANSCRIPT_CURSOR_LENGTH)
+  .regex(TRANSCRIPT_CURSOR_PATTERN)
+  .refine((value) => validCursorVersion(value, ARCHIVED_TRANSCRIPT_CURSOR_VERSION, true));
+export type ArchivedTranscriptCursor = z.infer<typeof ArchivedTranscriptCursorSchema>;
+
+export const ArchivedConversationBoundaryRefSchema = z
+  .string()
+  .length(64)
+  .regex(BOUNDARY_REF_PATTERN);
+export type ArchivedConversationBoundaryRef = z.infer<
+  typeof ArchivedConversationBoundaryRefSchema
+>;
 
 export const GetTranscriptPageRpcParamsSchema = z
   .object({
@@ -210,6 +232,17 @@ export const GetTranscriptPageRpcParamsSchema = z
   })
   .strict();
 export type GetTranscriptPageRpcParams = z.infer<typeof GetTranscriptPageRpcParamsSchema>;
+
+export const GetArchivedTranscriptPageRpcParamsSchema = z
+  .object({
+    boundaryRef: ArchivedConversationBoundaryRefSchema,
+    cursor: ArchivedTranscriptCursorSchema.nullable(),
+    limit: z.number().int().min(1).max(MAX_TRANSCRIPT_PAGE_TURNS),
+  })
+  .strict();
+export type GetArchivedTranscriptPageRpcParams = z.infer<
+  typeof GetArchivedTranscriptPageRpcParamsSchema
+>;
 
 function canonicalTranscriptTimestamp(value: string): boolean {
   try {
@@ -229,43 +262,99 @@ export const TranscriptPageTurnSchema = z
   .strict();
 export type TranscriptPageTurn = z.infer<typeof TranscriptPageTurnSchema>;
 
-const TranscriptPageResultSchema = z
+function transcriptPageResultSchema(cursorSchema: z.ZodType<string, string>) {
+  return z
+    .discriminatedUnion("status", [
+      z
+        .object({
+          schemaVersion: z.literal(1),
+          status: z.literal("page"),
+          turns: z.array(TranscriptPageTurnSchema).max(MAX_TRANSCRIPT_PAGE_TURNS),
+          nextCursor: cursorSchema.nullable(),
+        })
+        .strict()
+        .superRefine((value, context) => {
+          if (value.turns.length === 0 && value.nextCursor !== null) {
+            context.addIssue({
+              code: "custom",
+              path: ["nextCursor"],
+              message: "empty transcript page cannot continue",
+            });
+          }
+        }),
+      z
+        .object({
+          schemaVersion: z.literal(1),
+          status: z.literal("restart-required"),
+          turns: z.array(TranscriptPageTurnSchema).length(0),
+          nextCursor: z.null(),
+        })
+        .strict(),
+    ])
+    .superRefine((value, context) => {
+      if (
+        RPC_TEXT_ENCODER.encode(JSON.stringify(value)).byteLength >
+        MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES
+      ) {
+        context.addIssue({ code: "custom", message: "transcript page exceeds response budget" });
+      }
+    });
+}
+
+export const GetTranscriptPageRpcResultSchema = transcriptPageResultSchema(TranscriptCursorSchema);
+export type GetTranscriptPageRpcResult = z.infer<typeof GetTranscriptPageRpcResultSchema>;
+
+export const GetArchivedTranscriptPageRpcResultSchema = transcriptPageResultSchema(
+  ArchivedTranscriptCursorSchema,
+);
+export type GetArchivedTranscriptPageRpcResult = z.infer<
+  typeof GetArchivedTranscriptPageRpcResultSchema
+>;
+
+export const ArchivedConversationSummarySchema = z
+  .object({
+    boundaryRef: ArchivedConversationBoundaryRefSchema,
+    boundaryAt: z.string().refine(canonicalTranscriptTimestamp),
+    reason: z.enum(["explicit-reset", "stale-reset"]),
+    turnCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict();
+export type ArchivedConversationSummary = z.infer<typeof ArchivedConversationSummarySchema>;
+
+export const ListArchivedConversationsRpcParamsSchema = EmptyRpcParamsSchema;
+export type ListArchivedConversationsRpcParams = z.infer<
+  typeof ListArchivedConversationsRpcParamsSchema
+>;
+
+export const ListArchivedConversationsRpcResultSchema = z
   .object({
     schemaVersion: z.literal(1),
-    status: z.literal("page"),
-    turns: z.array(TranscriptPageTurnSchema).max(MAX_TRANSCRIPT_PAGE_TURNS),
-    nextCursor: TranscriptCursorSchema.nullable(),
+    conversations: z
+      .array(ArchivedConversationSummarySchema)
+      .max(MAX_ARCHIVED_CONVERSATION_ENTRIES),
+    truncated: z.boolean(),
   })
   .strict()
   .superRefine((value, context) => {
-    if (value.turns.length === 0 && value.nextCursor !== null) {
+    const refs = new Set(value.conversations.map((entry) => entry.boundaryRef));
+    if (refs.size !== value.conversations.length) {
       context.addIssue({
         code: "custom",
-        path: ["nextCursor"],
-        message: "empty transcript page cannot continue",
+        path: ["conversations"],
+        message: "boundary references must be unique",
+      });
+    }
+    if (value.truncated && value.conversations.length < MAX_ARCHIVED_CONVERSATION_ENTRIES) {
+      context.addIssue({
+        code: "custom",
+        path: ["truncated"],
+        message: "truncation requires a full page of conversations",
       });
     }
   });
-
-const TranscriptRestartRequiredResultSchema = z
-  .object({
-    schemaVersion: z.literal(1),
-    status: z.literal("restart-required"),
-    turns: z.array(TranscriptPageTurnSchema).length(0),
-    nextCursor: z.null(),
-  })
-  .strict();
-
-export const GetTranscriptPageRpcResultSchema = z
-  .discriminatedUnion("status", [TranscriptPageResultSchema, TranscriptRestartRequiredResultSchema])
-  .superRefine((value, context) => {
-    if (
-      RPC_TEXT_ENCODER.encode(JSON.stringify(value)).byteLength > MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES
-    ) {
-      context.addIssue({ code: "custom", message: "transcript page exceeds response budget" });
-    }
-  });
-export type GetTranscriptPageRpcResult = z.infer<typeof GetTranscriptPageRpcResultSchema>;
+export type ListArchivedConversationsRpcResult = z.infer<
+  typeof ListArchivedConversationsRpcResultSchema
+>;
 
 export const AbsoluteImportPathSchema = z
   .string()
@@ -654,6 +743,12 @@ export interface CoachOperations {
   ): Promise<SyncRpcResult>;
   saveIntake(request: SaveIntakeRpcParams): Promise<SaveIntakeRpcResult>;
   getTranscriptPage(request: GetTranscriptPageRpcParams): Promise<GetTranscriptPageRpcResult>;
+  listArchivedConversations(
+    request: ListArchivedConversationsRpcParams,
+  ): Promise<ListArchivedConversationsRpcResult>;
+  getArchivedTranscriptPage(
+    request: GetArchivedTranscriptPageRpcParams,
+  ): Promise<GetArchivedTranscriptPageRpcResult>;
   configureRuntime(request: ConfigureRuntimeRpcParams): Promise<ConfigureRuntimeRpcResult>;
   getRuntimeConfig(request: GetRuntimeConfigRpcParams): Promise<GetRuntimeConfigRpcResult>;
   getUnitsPreference?(request: GetUnitsPreferenceRpcParams): Promise<GetUnitsPreferenceRpcResult>;
@@ -700,6 +795,22 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("getTranscriptPage"),
       params: GetTranscriptPageRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("listArchivedConversations"),
+      params: ListArchivedConversationsRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("getArchivedTranscriptPage"),
+      params: GetArchivedTranscriptPageRpcParamsSchema,
     })
     .strict(),
   z
@@ -897,6 +1008,18 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "getTranscriptPage",
     requestSchema: GetTranscriptPageRpcParamsSchema,
     responseSchema: GetTranscriptPageRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  listArchivedConversations: {
+    wireName: "listArchivedConversations",
+    requestSchema: ListArchivedConversationsRpcParamsSchema,
+    responseSchema: ListArchivedConversationsRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  getArchivedTranscriptPage: {
+    wireName: "getArchivedTranscriptPage",
+    requestSchema: GetArchivedTranscriptPageRpcParamsSchema,
+    responseSchema: GetArchivedTranscriptPageRpcResultSchema,
     eventSchema: NoRpcEventSchema,
   },
   getAthleteState: {

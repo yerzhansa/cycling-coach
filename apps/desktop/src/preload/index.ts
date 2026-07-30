@@ -4,6 +4,8 @@ import {
   DESKTOP_LIFECYCLE_CHANNEL,
   DESKTOP_OPEN_EXTERNAL_CHANNEL,
   DESKTOP_RELEASE_NOTES_CHANNEL,
+  DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL,
+  DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL,
   DESKTOP_TRANSCRIPT_PAGE_CHANNEL,
   DESKTOP_UPDATE_CHECK_CHANNEL,
   DESKTOP_UPDATE_GET_CHANNEL,
@@ -88,6 +90,10 @@ const TRANSCRIPT_PAGE_MAX_TURNS = 50;
 const TRANSCRIPT_PAGE_MAX_RESPONSE_BYTES = 266_240;
 const TRANSCRIPT_CURSOR_LENGTH = 152;
 const TRANSCRIPT_CURSOR_PATTERN = /^[A-Za-z0-9_-]{152}$/;
+const TRANSCRIPT_CURSOR_VERSION = 1;
+const ARCHIVED_TRANSCRIPT_CURSOR_VERSION = 2;
+const ARCHIVED_CONVERSATIONS_MAX_ENTRIES = 200;
+const BOUNDARY_REF_PATTERN = /^[a-f0-9]{64}$/;
 const BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const RELEASE_VERSION_RE =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
@@ -129,7 +135,7 @@ function safeCursorOffset(bytes: Uint8Array, offset: number): number | null {
   return value;
 }
 
-function transcriptCursor(value: unknown): value is string {
+function cursorOfVersion(value: unknown, version: number, archived: boolean): value is string {
   if (
     typeof value !== "string" ||
     value.length !== TRANSCRIPT_CURSOR_LENGTH ||
@@ -138,13 +144,34 @@ function transcriptCursor(value: unknown): value is string {
     return false;
   }
   const bytes = decodedBase64Url(value);
-  if (bytes === null || bytes.length !== 114 || bytes[0] !== 1) return false;
+  if (bytes === null || bytes.length !== 114 || bytes[0] !== version) return false;
   const fenceKind = bytes[1];
   if (fenceKind !== 0 && fenceKind !== 1) return false;
+  if (archived && fenceKind !== 1) return false;
   if (fenceKind === 0 && bytes.slice(34, 66).some((byte) => byte !== 0)) return false;
   const snapshotEnd = safeCursorOffset(bytes, 98);
   const before = safeCursorOffset(bytes, 106);
   return snapshotEnd !== null && before !== null && before <= snapshotEnd;
+}
+
+function transcriptCursor(value: unknown): value is string {
+  return cursorOfVersion(value, TRANSCRIPT_CURSOR_VERSION, false);
+}
+
+function archivedTranscriptCursor(value: unknown): value is string {
+  return cursorOfVersion(value, ARCHIVED_TRANSCRIPT_CURSOR_VERSION, true);
+}
+
+function boundaryRef(value: unknown): value is string {
+  return typeof value === "string" && BOUNDARY_REF_PATTERN.test(value);
+}
+
+function boundedPageLimit(value: unknown): value is number {
+  return (
+    Number.isSafeInteger(value) &&
+    (value as number) >= 1 &&
+    (value as number) <= TRANSCRIPT_PAGE_MAX_TURNS
+  );
 }
 
 function parseTranscriptPageRequest(value: unknown): {
@@ -155,13 +182,32 @@ function parseTranscriptPageRequest(value: unknown): {
     !record(value) ||
     !exactKeys(value, ["cursor", "limit"]) ||
     (value.cursor !== null && !transcriptCursor(value.cursor)) ||
-    !Number.isSafeInteger(value.limit) ||
-    (value.limit as number) < 1 ||
-    (value.limit as number) > TRANSCRIPT_PAGE_MAX_TURNS
+    !boundedPageLimit(value.limit)
   ) {
     throw new TypeError();
   }
-  return { cursor: value.cursor as string | null, limit: value.limit as number };
+  return { cursor: value.cursor as string | null, limit: value.limit };
+}
+
+function parseArchivedPageRequest(value: unknown): {
+  readonly boundaryRef: string;
+  readonly cursor: string | null;
+  readonly limit: number;
+} {
+  if (
+    !record(value) ||
+    !exactKeys(value, ["boundaryRef", "cursor", "limit"]) ||
+    !boundaryRef(value.boundaryRef) ||
+    (value.cursor !== null && !archivedTranscriptCursor(value.cursor)) ||
+    !boundedPageLimit(value.limit)
+  ) {
+    throw new TypeError();
+  }
+  return {
+    boundaryRef: value.boundaryRef,
+    cursor: value.cursor as string | null,
+    limit: value.limit,
+  };
 }
 
 function canonicalIsoTimestamp(value: unknown): value is string {
@@ -173,7 +219,10 @@ function canonicalIsoTimestamp(value: unknown): value is string {
   }
 }
 
-function parseTranscriptPage(value: unknown): unknown {
+function parseTranscriptPage(
+  value: unknown,
+  cursor: (candidate: unknown) => candidate is string = transcriptCursor,
+): unknown {
   if (
     !record(value) ||
     !exactKeys(value, ["schemaVersion", "status", "turns", "nextCursor"]) ||
@@ -181,7 +230,7 @@ function parseTranscriptPage(value: unknown): unknown {
     (value.status !== "page" && value.status !== "restart-required") ||
     !Array.isArray(value.turns) ||
     value.turns.length > TRANSCRIPT_PAGE_MAX_TURNS ||
-    (value.nextCursor !== null && !transcriptCursor(value.nextCursor)) ||
+    (value.nextCursor !== null && !cursor(value.nextCursor)) ||
     textEncoder.encode(JSON.stringify(value)).byteLength > TRANSCRIPT_PAGE_MAX_RESPONSE_BYTES
   ) {
     throw new TypeError();
@@ -217,6 +266,43 @@ function parseTranscriptPage(value: unknown): unknown {
     turns,
     nextCursor: value.nextCursor,
   };
+}
+
+function parseArchivedConversations(value: unknown): unknown {
+  if (
+    !record(value) ||
+    !exactKeys(value, ["schemaVersion", "conversations", "truncated"]) ||
+    value.schemaVersion !== 1 ||
+    typeof value.truncated !== "boolean" ||
+    !Array.isArray(value.conversations) ||
+    value.conversations.length > ARCHIVED_CONVERSATIONS_MAX_ENTRIES ||
+    (value.truncated && value.conversations.length < ARCHIVED_CONVERSATIONS_MAX_ENTRIES)
+  ) {
+    throw new TypeError();
+  }
+  const conversations = value.conversations.map((entry) => {
+    if (
+      !record(entry) ||
+      !exactKeys(entry, ["boundaryRef", "boundaryAt", "reason", "turnCount"]) ||
+      !boundaryRef(entry.boundaryRef) ||
+      !canonicalIsoTimestamp(entry.boundaryAt) ||
+      (entry.reason !== "explicit-reset" && entry.reason !== "stale-reset") ||
+      !Number.isSafeInteger(entry.turnCount) ||
+      (entry.turnCount as number) < 0
+    ) {
+      throw new TypeError();
+    }
+    return {
+      boundaryRef: entry.boundaryRef,
+      boundaryAt: entry.boundaryAt,
+      reason: entry.reason,
+      turnCount: entry.turnCount as number,
+    };
+  });
+  if (new Set(conversations.map((entry) => entry.boundaryRef)).size !== conversations.length) {
+    throw new TypeError();
+  }
+  return { schemaVersion: 1, conversations, truncated: value.truncated };
 }
 
 function safeString(value: unknown, maximumLength: number): value is string {
@@ -752,6 +838,17 @@ contextBridge.exposeInMainWorld(
       const request = parseTranscriptPageRequest(input);
       return parseTranscriptPage(
         await ipcRenderer.invoke(DESKTOP_TRANSCRIPT_PAGE_CHANNEL, request),
+      );
+    },
+    listArchivedConversations: async () =>
+      parseArchivedConversations(
+        await ipcRenderer.invoke(DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL),
+      ),
+    getArchivedTranscriptPage: async (input: unknown) => {
+      const request = parseArchivedPageRequest(input);
+      return parseTranscriptPage(
+        await ipcRenderer.invoke(DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL, request),
+        archivedTranscriptCursor,
       );
     },
     credentialStatuses: async () =>

@@ -638,6 +638,28 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
               invocationFailure = { error };
             }
             break;
+          case "listArchivedConversations":
+            try {
+              const request =
+                COACH_RPC_METHOD_REGISTRY.listArchivedConversations.requestSchema.parse(
+                  generic.data.params,
+                );
+              result = await input.operations.listArchivedConversations(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "getArchivedTranscriptPage":
+            try {
+              const request =
+                COACH_RPC_METHOD_REGISTRY.getArchivedTranscriptPage.requestSchema.parse(
+                  generic.data.params,
+                );
+              result = await input.operations.getArchivedTranscriptPage(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
           case "getAthleteState":
             try {
               COACH_RPC_METHOD_REGISTRY.getAthleteState.requestSchema.parse(generic.data.params);

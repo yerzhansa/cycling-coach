@@ -1,10 +1,14 @@
 import {
   ConfigureRuntimeRpcParamsSchema,
   ConfigureRuntimeRpcResultSchema,
+  GetArchivedTranscriptPageRpcParamsSchema,
+  GetArchivedTranscriptPageRpcResultSchema,
   GetRuntimeConfigRpcParamsSchema,
   GetRuntimeConfigRpcResultSchema,
   GetTranscriptPageRpcParamsSchema,
   GetTranscriptPageRpcResultSchema,
+  ListArchivedConversationsRpcParamsSchema,
+  ListArchivedConversationsRpcResultSchema,
   GetUnitsPreferenceRpcParamsSchema,
   GetUnitsPreferenceRpcResultSchema,
   ImportFilesRpcParamsSchema,
@@ -19,10 +23,14 @@ import {
   type ConfigureRuntimeRpcParams,
   type ConfigureRuntimeRpcRefusalReason,
   type ConfigureRuntimeRpcResult,
+  type GetArchivedTranscriptPageRpcParams,
+  type GetArchivedTranscriptPageRpcResult,
   type GetRuntimeConfigRpcParams,
   type GetRuntimeConfigRpcResult,
   type GetTranscriptPageRpcParams,
   type GetTranscriptPageRpcResult,
+  type ListArchivedConversationsRpcParams,
+  type ListArchivedConversationsRpcResult,
   type GetUnitsPreferenceRpcParams,
   type GetUnitsPreferenceRpcResult,
   type CoachOperations,
@@ -60,6 +68,12 @@ export interface CreateCoachOperationsInput {
   readonly readTranscriptPage?: (
     request: GetTranscriptPageRpcParams,
   ) => Promise<GetTranscriptPageRpcResult>;
+  readonly readArchivedConversations?: (
+    request: ListArchivedConversationsRpcParams,
+  ) => Promise<ListArchivedConversationsRpcResult>;
+  readonly readArchivedTranscriptPage?: (
+    request: GetArchivedTranscriptPageRpcParams,
+  ) => Promise<GetArchivedTranscriptPageRpcResult>;
   readonly applyRuntimeConfig: (
     request: ConfigureRuntimeRpcParams,
     signal: AbortSignal,
@@ -242,6 +256,28 @@ export function createCoachOperations(
       return input
         .readTranscriptPage(parsedRequest)
         .then((result) => GetTranscriptPageRpcResultSchema.parse(result));
+    },
+    listArchivedConversations(
+      request: ListArchivedConversationsRpcParams,
+    ): Promise<ListArchivedConversationsRpcResult> {
+      const parsedRequest = ListArchivedConversationsRpcParamsSchema.parse(request);
+      if (input.readArchivedConversations === undefined) {
+        throw new TypeError("Archived conversation read is unavailable.");
+      }
+      return input
+        .readArchivedConversations(parsedRequest)
+        .then((result) => ListArchivedConversationsRpcResultSchema.parse(result));
+    },
+    getArchivedTranscriptPage(
+      request: GetArchivedTranscriptPageRpcParams,
+    ): Promise<GetArchivedTranscriptPageRpcResult> {
+      const parsedRequest = GetArchivedTranscriptPageRpcParamsSchema.parse(request);
+      if (input.readArchivedTranscriptPage === undefined) {
+        throw new TypeError("Archived transcript page read is unavailable.");
+      }
+      return input
+        .readArchivedTranscriptPage(parsedRequest)
+        .then((result) => GetArchivedTranscriptPageRpcResultSchema.parse(result));
     },
     configureRuntime(request: ConfigureRuntimeRpcParams): Promise<ConfigureRuntimeRpcResult> {
       const parsedRequest = ConfigureRuntimeRpcParamsSchema.parse(request);

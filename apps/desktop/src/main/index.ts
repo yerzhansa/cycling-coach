@@ -339,13 +339,13 @@ async function runDesktop(): Promise<void> {
       }
       return snapshot;
     };
-    const readActiveTranscriptPage = async (
-      request: Parameters<DesktopTranscriptReader["getTranscriptPage"]>[0],
-    ) => {
+    const readActiveTranscript = async <T>(
+      read: (reader: DesktopTranscriptReader) => Promise<T>,
+    ): Promise<T> => {
       const binding = activeRuntimeBinding;
       const lifecycleState = daemonLifecycle?.snapshot();
       if (binding === undefined || lifecycleState?.status !== "ready") throw new TypeError();
-      const page = await binding.transcript.getTranscriptPage(request);
+      const page = await read(binding.transcript);
       const currentLifecycleState = daemonLifecycle?.snapshot();
       if (
         activeRuntimeBinding !== binding ||
@@ -603,7 +603,12 @@ async function runDesktop(): Promise<void> {
     disposeTranscriptIpc = installDesktopTranscriptIpc({
       ipcMain,
       currentWindow: () => mainWindow.current() ?? undefined,
-      readPage: readActiveTranscriptPage,
+      readPage: (request) =>
+        readActiveTranscript((reader) => reader.getTranscriptPage(request)),
+      readArchivedConversations: (request) =>
+        readActiveTranscript((reader) => reader.listArchivedConversations(request)),
+      readArchivedPage: (request) =>
+        readActiveTranscript((reader) => reader.getArchivedTranscriptPage(request)),
     });
     disposeExternalLinkIpc = installDesktopExternalLinkIpc({
       ipcMain,
