@@ -3,8 +3,10 @@ import type { ChatState } from "../../turn-state.js";
 import {
   EMPTY_CHAT_SURFACE,
   sameChatMessages,
+  sameChatQueued,
   sameChatSurface,
   type ChatMessageView,
+  type ChatQueuedView,
   type ChatSurfaceState,
 } from "../chat-slice.js";
 import {
@@ -55,13 +57,19 @@ export function createChatViewAdapter(input: {
         state.session.resetPhase !== "idle" ||
         state.status === "streaming");
     const hydration = controls?.hydration;
+    const queued: readonly ChatQueuedView[] = state.queued.map((message) => ({
+      id: message.id,
+      text: message.text,
+      command: message.command,
+    }));
     return {
       messages: sameChatMessages(published.messages, messages) ? published.messages : messages,
+      queued: sameChatQueued(published.queued, queued) ? published.queued : queued,
       status: state.status,
       notice: state.activeTurn?.error?.athleteMessage ?? state.progress,
       interrupted: state.status === "interrupted",
       workBlocked,
-      sendDisabled: state.status === "streaming" || workBlocked,
+      sendDisabled: workBlocked,
       inputDisabled: workBlocked,
       newConversationUnavailable,
       resetPhase: state.session.resetPhase,

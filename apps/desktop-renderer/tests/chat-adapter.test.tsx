@@ -86,6 +86,7 @@ describe("chat view adapter", () => {
           text: "How is my form?",
         },
       ],
+      queued: [],
       status: "streaming",
       notice: CHAT_WORKING_COPY,
       interrupted: false,
@@ -113,7 +114,7 @@ describe("chat view adapter", () => {
     expect(published[0]).toMatchObject({
       workBlocked: false,
       newConversationUnavailable: true,
-      sendDisabled: true,
+      sendDisabled: false,
       inputDisabled: false,
       hydrationStatus: "idle",
       hydrationHasEarlier: false,
@@ -194,6 +195,48 @@ describe("chat view adapter", () => {
       ["history:coach:persisted-1", true],
       ["m1", false],
     ]);
+  });
+
+  it("keeps sending available while a turn streams and exposes the queue for the strip", () => {
+    const published: ChatSurfaceState[] = [];
+    const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
+    let state = submitted("Plan my week");
+    state = reduceChatState(state, { type: "enqueue", id: "queued-1", text: "And my long ride?" });
+    state = reduceChatState(state, { type: "enqueue", id: "queued-2", text: "/status" });
+
+    adapter.view.render(state, controls());
+
+    expect(published.at(-1)).toMatchObject({
+      status: "streaming",
+      sendDisabled: false,
+      inputDisabled: false,
+      queued: [
+        { id: "queued-1", text: "And my long ride?", command: false },
+        { id: "queued-2", text: "/status", command: true },
+      ],
+    });
+  });
+
+  it("republishes only when the queue itself changes", () => {
+    const published: ChatSurfaceState[] = [];
+    const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
+    const streaming = submitted("Plan my week");
+    const withQueue = reduceChatState(streaming, {
+      type: "enqueue",
+      id: "queued-1",
+      text: "And my long ride?",
+    });
+
+    adapter.view.render(withQueue, controls());
+    adapter.view.render(
+      { ...withQueue, queued: [{ id: "queued-1", text: "And my long ride?", command: false }] },
+      controls(),
+    );
+    expect(published).toHaveLength(1);
+
+    adapter.view.render(reduceChatState(withQueue, { type: "dequeue-group" }), controls());
+    expect(published).toHaveLength(2);
+    expect(published.at(-1)?.queued).toEqual([]);
   });
 
   it("rejects a transcript that repeats a message id", () => {

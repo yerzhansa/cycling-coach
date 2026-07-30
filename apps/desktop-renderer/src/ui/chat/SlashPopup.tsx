@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import type { SlashCommand } from "./commands.js";
+import type { SlashCommand } from "../../chat/commands.js";
 import styles from "./SlashPopup.module.css";
 
 export function SlashPopup(props: {

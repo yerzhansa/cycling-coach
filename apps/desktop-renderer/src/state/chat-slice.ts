@@ -12,8 +12,15 @@ export interface ChatMessageView {
   readonly text: string;
 }
 
+export interface ChatQueuedView {
+  readonly id: string;
+  readonly text: string;
+  readonly command: boolean;
+}
+
 export interface ChatSurfaceState {
   readonly messages: readonly ChatMessageView[];
+  readonly queued: readonly ChatQueuedView[];
   readonly status: ChatStatus;
   readonly notice: string | null;
   readonly interrupted: boolean;
@@ -33,6 +40,7 @@ export interface ChatSurfaceState {
 
 export interface ChatActions {
   submit(message: string): void;
+  removeQueued(id: string): void;
   retry(): void;
   loadEarlier(): void;
   retryHydration(): void;
@@ -44,6 +52,7 @@ export interface ChatActions {
 
 export const EMPTY_CHAT_SURFACE: ChatSurfaceState = Object.freeze({
   messages: Object.freeze([]),
+  queued: Object.freeze([]),
   status: "idle",
   notice: null,
   interrupted: false,
@@ -91,6 +100,23 @@ export function sameChatMessages(
   });
 }
 
+export function sameChatQueued(
+  left: readonly ChatQueuedView[],
+  right: readonly ChatQueuedView[],
+): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  return left.every((message, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      message.id === other.id &&
+      message.text === other.text &&
+      message.command === other.command
+    );
+  });
+}
+
 export function sameChatSurface(left: ChatSurfaceState, right: ChatSurfaceState): boolean {
   return (
     left.status === right.status &&
@@ -108,6 +134,7 @@ export function sameChatSurface(left: ChatSurfaceState, right: ChatSurfaceState)
     left.hydrationHasEarlier === right.hydrationHasEarlier &&
     left.hydrationRevision === right.hydrationRevision &&
     left.hydrationChange === right.hydrationChange &&
+    sameChatQueued(left.queued, right.queued) &&
     sameChatMessages(left.messages, right.messages)
   );
 }

@@ -11,6 +11,7 @@ import {
   DESKTOP_CHAT_ID,
   EMPTY_CHAT_STATE,
   hasClearableConversation,
+  nextDrainGroup,
   reduceChatState,
   type ChatState,
 } from "../turn-state.js";
@@ -62,6 +63,7 @@ export interface ChatView {
 export interface ChatController {
   start(): Promise<void>;
   submit(message: string): Promise<void>;
+  removeQueued(id: string): void;
   retryInterrupted(): Promise<void>;
   loadEarlier(): Promise<void>;
   retryHydration(): Promise<void>;
@@ -75,6 +77,11 @@ interface QueuedRetry {
   readonly requestKey: number;
   readonly promise: Promise<void>;
   readonly token: object;
+}
+
+interface ChatRun {
+  readonly task: Promise<void>;
+  completed(): boolean;
 }
 
 export function createChatController(input: {
@@ -100,7 +107,7 @@ export function createChatController(input: {
   let resetTask: Promise<void> | undefined;
   let epoch = 0;
 
-  const nextId = (prefix: "request" | "message"): string => `${prefix}-${++sequence}`;
+  const nextId = (prefix: "request" | "message" | "queued"): string => `${prefix}-${++sequence}`;
   const resetBlocksWork = (): boolean =>
     state.session.resetPhase === "confirming" || state.session.resetPhase === "resetting";
   const canOpenNewConversation = (): boolean =>
@@ -108,6 +115,7 @@ export function createChatController(input: {
     (hasClearableConversation(state) || hydration.turns.length > 0) &&
     state.session.resetPhase === "idle" &&
     state.status !== "streaming" &&
+    state.queued.length === 0 &&
     activeTask === undefined &&
     outstandingChatTasks.size === 0 &&
     queuedRetry === undefined &&
@@ -168,11 +176,12 @@ export function createChatController(input: {
     render();
   };
 
-  const run = (userMessage: string, includeUser: boolean, reconnect: boolean): Promise<void> => {
+  const run = (userMessage: string, includeUser: boolean, reconnect: boolean): ChatRun => {
     epoch += 1;
     const requestKey = Number(nextId("request").slice("request-".length));
     const userMessageId = nextId("message");
     const assistantMessageId = nextId("message");
+    let completed = false;
     reduce({
       type: "submit",
       requestKey,
@@ -320,6 +329,7 @@ export function createChatController(input: {
           return;
         }
         reduce({ type: "complete", requestKey });
+        completed = state.status === "idle" && state.activeTurn?.requestKey === requestKey;
       } catch (error) {
         if (!current()) return;
         if (protocolFault || error instanceof CoachClientProtocolError) {
@@ -356,7 +366,24 @@ export function createChatController(input: {
       }
       if (released) render();
     });
-    return task;
+    return { task, completed: () => completed };
+  };
+
+  const dispatch = (
+    userMessage: string,
+    includeUser: boolean,
+    reconnect: boolean,
+  ): Promise<void> => {
+    const chatRun = run(userMessage, includeUser, reconnect);
+    return chatRun.task.then(() => (chatRun.completed() ? drain() : undefined));
+  };
+
+  const drain = (): Promise<void> => {
+    if (disposed || resetBlocksWork() || state.status === "streaming") return Promise.resolve();
+    const group = nextDrainGroup(state);
+    if (group === null) return Promise.resolve();
+    reduce({ type: "dequeue-group" });
+    return dispatch(group.text, true, false);
   };
 
   render();
@@ -377,10 +404,22 @@ export function createChatController(input: {
       return task;
     },
     submit(message) {
-      if (!/\S/u.test(message) || disposed || state.status === "streaming" || resetBlocksWork()) {
+      if (!/\S/u.test(message) || disposed || resetBlocksWork()) {
         return activeTask ?? Promise.resolve();
       }
-      return run(message, true, false);
+      if (state.status === "streaming") {
+        reduce({ type: "enqueue", id: nextId("queued"), text: message });
+        return Promise.resolve();
+      }
+      if (state.queued.length > 0) {
+        reduce({ type: "enqueue", id: nextId("queued"), text: message });
+        return drain();
+      }
+      return dispatch(message, true, false);
+    },
+    removeQueued(id) {
+      if (disposed || resetBlocksWork()) return;
+      reduce({ type: "remove-queued", id });
     },
     retryInterrupted() {
       if (
@@ -393,7 +432,7 @@ export function createChatController(input: {
       }
       const { requestKey, userMessage } = state.activeTurn;
       if (queuedRetry?.requestKey === requestKey) return queuedRetry.promise;
-      if (activeTask === undefined) return run(userMessage, false, true);
+      if (activeTask === undefined) return dispatch(userMessage, false, true);
       const currentTask = activeTask;
       const token = {};
       const pending = currentTask
@@ -405,7 +444,7 @@ export function createChatController(input: {
           ) {
             return;
           }
-          return run(userMessage, false, true);
+          return dispatch(userMessage, false, true);
         })
         .finally(() => {
           if (queuedRetry?.token === token) {

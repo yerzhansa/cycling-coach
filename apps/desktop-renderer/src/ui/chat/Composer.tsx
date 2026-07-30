@@ -7,9 +7,9 @@ import {
   type ReactElement,
   type RefObject,
 } from "react";
+import { filterSlashCommands } from "../../chat/commands.js";
 import { useEnduragentStore } from "../../state/store.js";
 import styles from "./Composer.module.css";
-import { filterSlashCommands } from "./commands.js";
 import { SlashPopup } from "./SlashPopup.js";
 
 export interface ComposerHandle {

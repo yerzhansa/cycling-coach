@@ -14,6 +14,7 @@ import { Sidebar } from "../src/ui/sidebar/Sidebar.js";
 function stubActions(): ChatActions {
   return {
     submit: vi.fn(),
+    removeQueued: vi.fn(),
     retry: vi.fn(),
     loadEarlier: vi.fn(),
     retryHydration: vi.fn(),

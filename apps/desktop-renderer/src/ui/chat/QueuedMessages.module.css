@@ -1,0 +1,69 @@
+.host {
+  min-width: 0;
+  margin: 0 0 10px;
+}
+
+.caption {
+  margin: 0 0 6px 14px;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 6px 5px 14px;
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command {
+  font-family: var(--f-mono);
+  font-size: 12.5px;
+  letter-spacing: -0.01em;
+}
+
+.remove {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--ink-2);
+  background: transparent;
+  cursor: pointer;
+}
+
+.remove:hover:enabled {
+  color: var(--ink);
+  background: var(--sunk);
+}
+
+.remove:disabled {
+  cursor: default;
+  opacity: 0.45;
+}

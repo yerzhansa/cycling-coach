@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { isSlashCommandText } from "./commands.js";
+import { isSlashCommandText } from "../../chat/commands.js";
 import styles from "./Message.module.css";
 
 export function AthleteMessage(props: { readonly text: string }): ReactElement {

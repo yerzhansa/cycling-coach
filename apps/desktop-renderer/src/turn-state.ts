@@ -1,7 +1,9 @@
 import type { TurnEvent } from "@enduragent/coach-contract";
+import { isSlashCommandText } from "./chat/commands.js";
 
 export const DESKTOP_CHAT_ID = "desktop" as const;
 export const CHAT_WORKING_COPY = "Coach is working…";
+export const QUEUED_MESSAGE_SEPARATOR = "\n\n";
 
 export type ChatStatus = "idle" | "streaming" | "interrupted";
 export type SessionPresence = "unknown" | "absent" | "present";
@@ -39,11 +41,23 @@ export interface ChatTranscriptMessage {
   readonly historical?: boolean;
 }
 
+export interface QueuedMessage {
+  readonly id: string;
+  readonly text: string;
+  readonly command: boolean;
+}
+
+export interface ChatDrainGroup {
+  readonly size: number;
+  readonly text: string;
+}
+
 export interface ChatState {
   readonly status: ChatStatus;
   readonly messages: readonly ChatTranscriptMessage[];
   readonly activeTurn: ActiveTurn | null;
   readonly progress: string | null;
+  readonly queued: readonly QueuedMessage[];
   readonly session: ChatSessionState;
 }
 
@@ -52,6 +66,7 @@ export const EMPTY_CHAT_STATE: ChatState = {
   messages: [],
   activeTurn: null,
   progress: null,
+  queued: [],
   session: {
     presence: "unknown",
     resetPhase: "idle",
@@ -75,6 +90,9 @@ export type ChatAction =
   | { readonly type: "interrupt"; readonly requestKey: number; readonly copy: string }
   | { readonly type: "retry-pending"; readonly requestKey: number }
   | { readonly type: "fail"; readonly requestKey: number; readonly copy: string }
+  | { readonly type: "enqueue"; readonly id: string; readonly text: string }
+  | { readonly type: "remove-queued"; readonly id: string }
+  | { readonly type: "dequeue-group" }
   | { readonly type: "session-probe"; readonly hasSession: boolean }
   | { readonly type: "open-new-conversation"; readonly hasHydratedHistory?: boolean }
   | { readonly type: "cancel-new-conversation" }
@@ -107,6 +125,22 @@ function clearGenericProgress(progress: string | null, text: string): string | n
 
 function assertNever(value: never): never {
   throw new TypeError(`Unhandled chat action: ${String(value)}`);
+}
+
+export function nextDrainGroup(state: ChatState): ChatDrainGroup | null {
+  const head = state.queued[0];
+  if (head === undefined) return null;
+  let size = 1;
+  if (!head.command) {
+    while (state.queued[size]?.command === false) size += 1;
+  }
+  return {
+    size,
+    text: state.queued
+      .slice(0, size)
+      .map((message) => message.text)
+      .join(QUEUED_MESSAGE_SEPARATOR),
+  };
 }
 
 export function hasClearableConversation(state: ChatState): boolean {
@@ -142,6 +176,7 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
         status: "streaming",
         messages,
         progress: CHAT_WORKING_COPY,
+        queued: state.queued,
         session: { ...state.session, announcement: null },
         activeTurn: {
           requestKey: action.requestKey,
@@ -261,6 +296,26 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
         messages: updateAssistant(state, active, visibleDraft(active.draft), "interrupted"),
       };
     }
+    case "enqueue": {
+      if (!/\S/u.test(action.text) || state.queued.some((message) => message.id === action.id)) {
+        return state;
+      }
+      return {
+        ...state,
+        queued: [
+          ...state.queued,
+          { id: action.id, text: action.text, command: isSlashCommandText(action.text) },
+        ],
+      };
+    }
+    case "remove-queued": {
+      const queued = state.queued.filter((message) => message.id !== action.id);
+      return queued.length === state.queued.length ? state : { ...state, queued };
+    }
+    case "dequeue-group": {
+      const group = nextDrainGroup(state);
+      return group === null ? state : { ...state, queued: state.queued.slice(group.size) };
+    }
     case "session-probe": {
       if (state.session.resetPhase !== "idle") return state;
       if (!action.hasSession && state.session.presence === "present") {
@@ -277,7 +332,8 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
     case "open-new-conversation":
       return (!action.hasHydratedHistory && !hasClearableConversation(state)) ||
         state.session.resetPhase !== "idle" ||
-        state.status === "streaming"
+        state.status === "streaming" ||
+        state.queued.length > 0
         ? state
         : {
             ...state,
@@ -305,6 +361,7 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
             messages: [],
             activeTurn: null,
             progress: null,
+            queued: [],
             session: {
               presence: "absent",
               resetPhase: "idle",
