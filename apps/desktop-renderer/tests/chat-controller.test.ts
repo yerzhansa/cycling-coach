@@ -1359,6 +1359,79 @@ describe("chat controller", () => {
     expect(states.at(-1)?.queued).toEqual([]);
   });
 
+  it("holds the queue when a drain lands while a newer turn is already streaming", async () => {
+    const releaseCall: Record<number, () => void> = {};
+    const callGates: Record<number, Promise<void>> = {};
+    for (const turnNumber of [1, 2]) {
+      callGates[turnNumber] = new Promise<void>((resolve) => {
+        releaseCall[turnNumber] = resolve;
+      });
+    }
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    let refreshes = 0;
+    let turn = 0;
+    const fake = client(async (_request, options) => {
+      turn += 1;
+      const gate = callGates[turn];
+      if (gate !== undefined) await gate;
+      const text = `Reply ${turn}`;
+      deliver(options, { type: "final-text", turnId: `turn-${turn}`, text });
+      options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: turn, result: { text } });
+      return { text };
+    });
+    const { controller, states } = subject(fake, fake, () => {
+      refreshes += 1;
+      return refreshes === 1 ? refreshGate : Promise.resolve();
+    });
+
+    const submission = controller.submit("Original");
+    await controller.submit("Queued prose");
+    await controller.submit("/plan");
+
+    releaseCall[1]?.();
+    while (states.at(-1)?.status !== "idle") await Promise.resolve();
+
+    const late = controller.submit("Sent in the refresh window");
+    while (chatMessages(fake).length < 2) await Promise.resolve();
+
+    expect(states.at(-1)?.status).toBe("streaming");
+    expect(chatMessages(fake)).toEqual(["Original", "Queued prose"]);
+    expect(states.at(-1)?.queued).toMatchObject([
+      { text: "/plan" },
+      { text: "Sent in the refresh window" },
+    ]);
+
+    releaseRefresh();
+    await submission;
+
+    expect(chatMessages(fake)).toEqual(["Original", "Queued prose"]);
+    expect(states.at(-1)?.queued).toMatchObject([
+      { text: "/plan" },
+      { text: "Sent in the refresh window" },
+    ]);
+
+    releaseCall[2]?.();
+    await late;
+
+    expect(chatMessages(fake)).toEqual([
+      "Original",
+      "Queued prose",
+      "/plan",
+      "Sent in the refresh window",
+    ]);
+    expect(states.at(-1)?.queued).toEqual([]);
+    expect(states.at(-1)?.status).toBe("idle");
+    expect(
+      states
+        .at(-1)
+        ?.messages.filter((message) => message.role === "athlete")
+        .map((message) => message.text),
+    ).toEqual(["Original", "Queued prose", "/plan", "Sent in the refresh window"]);
+  });
+
   it("never drains a queued message after dispose", async () => {
     let release!: () => void;
     const refreshGate = new Promise<void>((resolve) => {

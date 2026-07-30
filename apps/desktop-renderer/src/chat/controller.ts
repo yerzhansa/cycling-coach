@@ -329,7 +329,7 @@ export function createChatController(input: {
           return;
         }
         reduce({ type: "complete", requestKey });
-        completed = true;
+        completed = state.status === "idle" && state.activeTurn?.requestKey === requestKey;
       } catch (error) {
         if (!current()) return;
         if (protocolFault || error instanceof CoachClientProtocolError) {
@@ -379,7 +379,7 @@ export function createChatController(input: {
   };
 
   const drain = (): Promise<void> => {
-    if (disposed || resetBlocksWork()) return Promise.resolve();
+    if (disposed || resetBlocksWork() || state.status === "streaming") return Promise.resolve();
     const group = nextDrainGroup(state);
     if (group === null) return Promise.resolve();
     reduce({ type: "dequeue-group" });
