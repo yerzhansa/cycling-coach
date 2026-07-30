@@ -76,7 +76,7 @@ export function createArchiveController(input: {
 }): ArchiveController {
   let state = EMPTY_ARCHIVE_SURFACE;
   let disposed = false;
-  let epoch = 0;
+  let readerEpoch = 0;
   let listTask: Promise<void> | undefined;
   let pageTask: Promise<void> | undefined;
   let nextCursor: string | null = null;
@@ -95,12 +95,11 @@ export function createArchiveController(input: {
   const loadList = (): Promise<void> => {
     if (disposed) return Promise.resolve();
     if (listTask !== undefined) return listTask;
-    const requestEpoch = epoch;
     publish({ ...state, listStatus: "loading" });
     const pending = (async () => {
       try {
         const listed = await input.listConversations();
-        if (disposed || epoch !== requestEpoch) return;
+        if (disposed) return;
         publish({
           ...state,
           listStatus: "ready",
@@ -108,7 +107,7 @@ export function createArchiveController(input: {
           truncated: listed.truncated,
         });
       } catch {
-        if (!disposed && epoch === requestEpoch) publish({ ...state, listStatus: "failed" });
+        if (!disposed) publish({ ...state, listStatus: "failed" });
       }
     })();
     listTask = pending;
@@ -121,14 +120,14 @@ export function createArchiveController(input: {
   const loadPage = (boundaryRef: string, cursor: string | null): Promise<void> => {
     if (disposed) return Promise.resolve();
     if (pageTask !== undefined) return pageTask;
-    const requestEpoch = epoch;
+    const requestEpoch = readerEpoch;
     const reading = state.reading;
     if (reading === null || reading.boundaryRef !== boundaryRef) return Promise.resolve();
     publishReading({ ...reading, status: "loading" });
     const pending = (async () => {
       try {
         const page = await input.readPage({ boundaryRef, cursor, limit: ARCHIVE_PAGE_LIMIT });
-        if (disposed || epoch !== requestEpoch) return;
+        if (disposed || readerEpoch !== requestEpoch) return;
         const current = state.reading;
         if (current === null || current.boundaryRef !== boundaryRef) return;
         if (page.status === "restart-required") {
@@ -154,7 +153,7 @@ export function createArchiveController(input: {
           hasEarlier: page.nextCursor !== null,
         });
       } catch {
-        if (disposed || epoch !== requestEpoch) return;
+        if (disposed || readerEpoch !== requestEpoch) return;
         const current = state.reading;
         if (current === null || current.boundaryRef !== boundaryRef) return;
         failedCursor = cursor;
@@ -175,7 +174,7 @@ export function createArchiveController(input: {
     },
     open(boundaryRef) {
       if (disposed) return Promise.resolve();
-      epoch += 1;
+      readerEpoch += 1;
       pageTask = undefined;
       nextCursor = null;
       failedCursor = undefined;
@@ -194,7 +193,7 @@ export function createArchiveController(input: {
     },
     close() {
       if (disposed || state.reading === null) return;
-      epoch += 1;
+      readerEpoch += 1;
       pageTask = undefined;
       nextCursor = null;
       failedCursor = undefined;
@@ -217,7 +216,7 @@ export function createArchiveController(input: {
     },
     dispose() {
       disposed = true;
-      epoch += 1;
+      readerEpoch += 1;
       listTask = undefined;
       pageTask = undefined;
     },

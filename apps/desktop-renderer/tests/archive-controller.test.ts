@@ -9,6 +9,7 @@ import type { TranscriptPage } from "../src/chat/hydration.js";
 
 const NEWER = "a".repeat(64);
 const OLDER = "b".repeat(64);
+const NEWEST = "c".repeat(64);
 
 function list(truncated = false): ArchivedConversationList {
   return {
@@ -28,6 +29,22 @@ function list(truncated = false): ArchivedConversationList {
       },
     ],
     truncated,
+  };
+}
+
+function refreshedList(): ArchivedConversationList {
+  return {
+    schemaVersion: 1,
+    conversations: [
+      {
+        boundaryRef: NEWEST,
+        boundaryAt: "1998-07-26T09:00:00.000Z",
+        reason: "explicit-reset",
+        turnCount: 5,
+      },
+      ...list().conversations,
+    ],
+    truncated: false,
   };
 }
 
@@ -106,6 +123,92 @@ describe("archive controller list", () => {
     await Promise.all([subject.controller.refresh(), subject.controller.refresh()]);
 
     expect(listConversations).toHaveBeenCalledOnce();
+  });
+
+  it("publishes a list load that resolves while a conversation is open", async () => {
+    let release!: (value: ArchivedConversationList) => void;
+    const deferred = new Promise<ArchivedConversationList>((resolve) => {
+      release = resolve;
+    });
+    const listConversations = vi
+      .fn<() => Promise<ArchivedConversationList>>()
+      .mockResolvedValueOnce(list())
+      .mockReturnValueOnce(deferred);
+    const subject = harness({ listConversations });
+
+    await subject.controller.refresh();
+    const pending = subject.controller.refresh();
+    await subject.controller.open(NEWER);
+    release(refreshedList());
+    await pending;
+
+    expect(subject.current().listStatus).toBe("ready");
+    expect(subject.current().conversations.map((entry) => entry.boundaryRef)).toEqual([
+      NEWEST,
+      NEWER,
+      OLDER,
+    ]);
+    expect(subject.current().reading).toMatchObject({ boundaryRef: NEWER, status: "ready" });
+  });
+
+  it("settles a list load that resolves after the reader opened and closed", async () => {
+    let release!: (value: ArchivedConversationList) => void;
+    const deferred = new Promise<ArchivedConversationList>((resolve) => {
+      release = resolve;
+    });
+    const listConversations = vi
+      .fn<() => Promise<ArchivedConversationList>>()
+      .mockResolvedValueOnce(list())
+      .mockReturnValueOnce(deferred);
+    const subject = harness({ listConversations });
+
+    await subject.controller.refresh();
+    const pending = subject.controller.refresh();
+    await subject.controller.open(NEWER);
+    subject.controller.close();
+    release(refreshedList());
+    await pending;
+
+    expect(subject.current().reading).toBeNull();
+    expect(subject.current().listStatus).toBe("ready");
+    expect(subject.current().conversations.map((entry) => entry.boundaryRef)).toEqual([
+      NEWEST,
+      NEWER,
+      OLDER,
+    ]);
+    expect(subject.states.map((state) => state.listStatus).at(-1)).toBe("ready");
+  });
+
+  it("surfaces a list failure that lands after the reader closed so retry is reachable", async () => {
+    let reject!: (reason: Error) => void;
+    const deferred = new Promise<ArchivedConversationList>((_resolve, fail) => {
+      reject = fail;
+    });
+    const listConversations = vi
+      .fn<() => Promise<ArchivedConversationList>>()
+      .mockResolvedValueOnce(list())
+      .mockReturnValueOnce(deferred)
+      .mockResolvedValueOnce(refreshedList());
+    const subject = harness({ listConversations });
+
+    await subject.controller.refresh();
+    const pending = subject.controller.refresh();
+    await subject.controller.open(NEWER);
+    subject.controller.close();
+    reject(new Error("unavailable"));
+    await pending;
+
+    expect(subject.current().listStatus).toBe("failed");
+
+    await subject.controller.retry();
+
+    expect(subject.current().listStatus).toBe("ready");
+    expect(subject.current().conversations.map((entry) => entry.boundaryRef)).toEqual([
+      NEWEST,
+      NEWER,
+      OLDER,
+    ]);
+    expect(listConversations).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -253,5 +356,34 @@ describe("archive controller reader", () => {
     await subject.controller.refresh();
     await subject.controller.open(NEWER);
     expect(subject.current().reading?.boundaryRef).toBe(OLDER);
+  });
+
+  it("ignores a page that resolves after the same boundary was closed and reopened", async () => {
+    let release!: (page: TranscriptPage) => void;
+    const first = new Promise<TranscriptPage>((resolve) => {
+      release = resolve;
+    });
+    const readPage = vi
+      .fn<
+        (request: {
+          readonly boundaryRef: string;
+          readonly cursor: string | null;
+          readonly limit: number;
+        }) => Promise<TranscriptPage>
+      >()
+      .mockReturnValueOnce(first)
+      .mockResolvedValueOnce(page(["turn-9"]));
+    const subject = harness({ readPage });
+
+    await subject.controller.refresh();
+    const pending = subject.controller.open(NEWER);
+    subject.controller.close();
+    const reopened = subject.controller.open(NEWER);
+    release(page(["turn-1"]));
+    await Promise.all([pending, reopened]);
+
+    expect(subject.current().reading).toMatchObject({ boundaryRef: NEWER, status: "ready" });
+    expect(subject.current().reading?.turns.map((turn) => turn.turnId)).toEqual(["turn-9"]);
+    expect(readPage).toHaveBeenCalledTimes(2);
   });
 });
