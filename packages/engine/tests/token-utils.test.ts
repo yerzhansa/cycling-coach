@@ -20,19 +20,27 @@ describe("estimateTokens", () => {
 });
 
 describe("messageText", () => {
-  it("returns string content verbatim and an empty string for part-array content", () => {
+  it("returns string content verbatim and concatenates text parts", () => {
     expect(messageText({ role: "user", content: "hello" })).toBe("hello");
-    expect(messageText({ role: "user", content: [{ type: "text", text: "hi" }] })).toBe("");
+    expect(
+      messageText({
+        role: "user",
+        content: [
+          { type: "text", text: "hi" },
+          { type: "text", text: " there" },
+        ],
+      }),
+    ).toBe("hi there");
   });
 });
 
 describe("estimateMessagesTokens", () => {
-  it("sums per-message estimates, with part-array messages contributing 0", () => {
+  it("sums per-message estimates, counting part-array message text", () => {
     expect(estimateMessagesTokens([msg(400), msg(400)])).toBe(240);
     expect(estimateMessagesTokens([
       msg(400),
       { role: "user", content: [{ type: "text", text: "x".repeat(400) }] },
-    ])).toBe(120);
+    ])).toBe(240);
   });
 });
 

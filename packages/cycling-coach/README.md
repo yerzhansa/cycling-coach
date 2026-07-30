@@ -2,6 +2,8 @@
 
 AI cycling coaching agent. Bring your own LLM API key **or sign in with a ChatGPT Plus subscription**, connect [intervals.icu](https://intervals.icu) for real athlete data, chat via Telegram or CLI.
 
+Training data and coaching insights may include data from Garmin devices.
+
 ## Install
 
 Requires [Node.js](https://nodejs.org/) 22+.
@@ -115,3 +117,8 @@ npx cycling-coach
 - **Secrets backends** (1Password, macOS Keychain, Vault, AWS/GCP Secret Manager, age, env), **architecture diagram**, and **development setup** — see the [GitHub repo](https://github.com/yerzhansa/cycling-coach#readme).
 - **Issues**: <https://github.com/yerzhansa/cycling-coach/issues>
 - **License**: MIT
+
+## Notices
+
+License and attribution details for the installed package are in
+`dist/NOTICE.md` and `dist/THIRD_PARTY_LICENSES.txt`.

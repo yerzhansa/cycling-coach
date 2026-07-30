@@ -3,28 +3,84 @@ import { z } from "zod";
 import type { MemorySectionSpec } from "../sport.js";
 import type { MemoryStorePort } from "../host-ports.js";
 import { isRealDateKey, parseDateKeyMs, MS_PER_DAY } from "./date-keys.js";
+import { truncateUtf16Safe } from "../text-truncate.js";
+import { DATE_KEY_RE } from "./date-schema.js";
+import { bindToolResult } from "./bound-tool-result.js";
+import { UNKNOWN_PROVENANCE } from "../provenance.js";
+
+function bindMemoryToolResult(
+  memory: MemoryStorePort,
+  name: string,
+  input: unknown,
+  result: unknown,
+  truncated?: boolean,
+): unknown {
+  const provenance =
+    memory.provenanceForToolRead?.(name, input, result, { truncated }) ?? UNKNOWN_PROVENANCE;
+  return bindToolResult(result, provenance);
+}
 
 function buildMemoryWriteDescription(sections: readonly MemorySectionSpec[]): string {
-  const sectionList = sections.map((s) => `${s.name} (${s.description})`).join("; ");
+  const sectionList = sections.map((s) => `${s.name} (${s.hint ?? s.description})`).join("; ");
   return (
     "Write to long-term memory (replaces section content) or daily notes. " +
     `Sections: ${sectionList}.`
   );
 }
 
-export function createMemoryReadTool(memory: MemoryStorePort) {
+export function buildMemoryWriteInputSchema(sectionNames: [string, ...string[]]) {
+  return z.object({
+    type: z
+      .enum(["memory", "daily"])
+      .describe("'memory' for long-term facts, 'daily' for today's notes"),
+    section: z
+      .enum(sectionNames)
+      .optional()
+      .describe(
+        "Memory section to write to. REQUIRED when type='memory' — the write replaces the section content.",
+      ),
+    content: z.string().describe("The information to save"),
+  });
+}
+
+export const PlanSaveInputSchema = z
+  .object({
+    name: z.string(),
+    primaryGoal: z.string().optional(),
+    totalWeeks: z.number().int().positive().optional(),
+    status: z.string().optional(),
+  })
+  .passthrough();
+
+// Default is the flush-safe read-role copy; the chat toolset overrides it with a
+// dedupe nudge (the always-injected sections are already in the Athlete Context).
+export const MEMORY_READ_FLUSH_DESCRIPTION =
+  "Read current athlete memory before writing — sections are replaced whole, so read first to carry existing facts forward.";
+
+const MEMORY_READ_CHAT_DESCRIPTION =
+  "Read the FULL athlete memory, today's notes, and plan state — including sections not shown in your Athlete Context (e.g. notes, equipment, history). Your Athlete Context already contains the always-injected sections; do not call this to re-read them unless you wrote memory this turn.";
+
+export function createMemoryReadTool(
+  memory: MemoryStorePort,
+  description: string,
+  onRead?: (result: string) => void,
+  bindProvenance: boolean = false,
+) {
   return tool({
-    description: "Read long-term athlete memory, today's notes, and current plan state",
+    description,
     inputSchema: zodSchema(z.object({})),
-    execute: async () => memory.getContext() || "No athlete data stored yet.",
+    execute: async () => {
+      const result = memory.getContext() || "No athlete data stored yet.";
+      onRead?.(result);
+      return bindProvenance ? bindMemoryToolResult(memory, "memory_read", {}, result) : result;
+    },
   });
 }
 
 const MEMORY_QUERY_MAX_RANGE_DAYS = 366;
 const MEMORY_QUERY_MAX_RESULT_CHARS = 20_000;
-const MEMORY_QUERY_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-export function createMemoryQueryTool(memory: MemoryStorePort) {
+export function createMemoryQueryTool(memory: MemoryStorePort, bindProvenance: boolean = false) {
   return tool({
     description:
       "Query dated athlete memory: daily notes and the event ledger over a date range. " +
@@ -34,11 +90,11 @@ export function createMemoryQueryTool(memory: MemoryStorePort) {
       z.object({
         from: z
           .string()
-          .regex(MEMORY_QUERY_DATE_RE)
+          .regex(DATE_KEY_RE)
           .describe("Start date (inclusive), YYYY-MM-DD"),
         to: z
           .string()
-          .regex(MEMORY_QUERY_DATE_RE)
+          .regex(DATE_KEY_RE)
           .describe("End date (inclusive), YYYY-MM-DD"),
         query: z
           .string()
@@ -94,10 +150,14 @@ export function createMemoryQueryTool(memory: MemoryStorePort) {
         .sort()
         .map((d) => `## ${d}\n${byDate.get(d)!.join("\n")}`);
       const result = [header, ...sections].join("\n\n");
-      return result.length > MEMORY_QUERY_MAX_RESULT_CHARS
-        ? result.slice(0, MEMORY_QUERY_MAX_RESULT_CHARS) +
-            "\n[truncated — narrow the date range or add a query term]"
+      const truncated = result.length > MEMORY_QUERY_MAX_RESULT_CHARS;
+      const visibleResult = truncated
+        ? truncateUtf16Safe(result, MEMORY_QUERY_MAX_RESULT_CHARS) +
+          "\n[truncated — narrow the date range or add a query term]"
         : result;
+      return bindProvenance
+        ? bindMemoryToolResult(memory, "memory_query", input, visibleResult, truncated)
+        : visibleResult;
     },
   });
 }
@@ -105,6 +165,7 @@ export function createMemoryQueryTool(memory: MemoryStorePort) {
 export function createMemoryTools(
   memory: MemoryStorePort,
   sections: readonly MemorySectionSpec[],
+  opts?: { bindProvenance?: boolean },
 ) {
   if (sections.length === 0) {
     throw new Error(
@@ -113,30 +174,29 @@ export function createMemoryTools(
     );
   }
   const sectionNames = sections.map((s) => s.name) as [string, ...string[]];
+  const bindProvenance = opts?.bindProvenance === true;
   return {
-    memory_read: createMemoryReadTool(memory),
-    memory_query: createMemoryQueryTool(memory),
+    memory_read: createMemoryReadTool(
+      memory,
+      MEMORY_READ_CHAT_DESCRIPTION,
+      undefined,
+      bindProvenance,
+    ),
+    memory_query: createMemoryQueryTool(memory, bindProvenance),
 
     memory_write: tool({
       description: buildMemoryWriteDescription(sections),
-      inputSchema: zodSchema(
-        z.object({
-          type: z
-            .enum(["memory", "daily"])
-            .describe("'memory' for long-term facts, 'daily' for today's notes"),
-          section: z
-            .enum(sectionNames)
-            .optional()
-            .describe(
-              "Memory section to write to (required when type='memory'). Replaces the section content.",
-            ),
-          content: z.string().describe("The information to save"),
-        }),
-      ),
+      inputSchema: zodSchema(buildMemoryWriteInputSchema(sectionNames)),
       execute: async (input: { type: "memory" | "daily"; section?: string; content: string }) => {
-        if (input.type === "memory") {
-          // "notes" is a CORE_SHARED_SECTIONS catch-all — safe default when the LLM forgets to pick a section.
-          memory.writeSection(input.section ?? "notes", input.content, "chat-tool");
+        if (input.type === "memory" && input.section === undefined) {
+          return {
+            error: "section_required",
+            details:
+              "type='memory' requires a section. Pick one of the listed sections, or use type='daily' for free-form notes.",
+          };
+        }
+        if (input.type === "memory" && input.section !== undefined) {
+          memory.writeSection(input.section, input.content, "chat-tool");
         } else {
           memory.appendDailyNote(input.content);
         }
@@ -148,7 +208,7 @@ export function createMemoryTools(
       description: "Save or update the current training plan",
       inputSchema: zodSchema(
         z.object({
-          plan: z.record(z.string(), z.unknown()).describe("The training plan object to save"),
+          plan: PlanSaveInputSchema.describe("The training plan object to save"),
         }),
       ),
       execute: async (input: { plan: Record<string, unknown> }) => {
@@ -160,7 +220,10 @@ export function createMemoryTools(
     plan_load: tool({
       description: "Load the current active training plan",
       inputSchema: zodSchema(z.object({})),
-      execute: async () => memory.loadPlan() ?? { message: "No plan saved yet." },
+      execute: async () => {
+        const result = memory.loadPlan() ?? { message: "No plan saved yet." };
+        return bindProvenance ? bindMemoryToolResult(memory, "plan_load", {}, result) : result;
+      },
     }),
   };
 }

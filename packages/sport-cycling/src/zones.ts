@@ -58,12 +58,10 @@ export const ZONE_DESCRIPTIONS: Record<string, string> = {
   "Z5 VO2max": "High intensity intervals, 3-8 minute efforts",
 };
 
-// Zone intensity midpoints as a fraction of FTP, keyed to the mainstream 7-zone
-// Coggan model intervals.icu resolves serialized targets against (Z4 Threshold,
-// Z5 VO2max, Z6 Anaerobic, Z7 Neuromuscular). Each index is the band-center of
-// the athlete's Z<n> band, so the calendar Load estimate for a `kind: "zone"`
-// target agrees with the band a rendered `Z<n>` step actually demands. Sweet
-// spot (88-94% FTP) is a named sub-range, accessed by percent, not a zone index.
+// Zone intensity midpoints as a fraction of FTP, codifying the band-center
+// semantics of the mainstream 7-zone model. The serializer uses these centers
+// to translate zone-kind ramps into percent-of-FTP bounds. Sweet spot (88-94%
+// FTP) is a named sub-range, accessed by percent, not a zone index.
 export const ZONE_INTENSITY_MIDPOINTS: Record<number, number> = {
   1: 0.45,
   2: 0.65,

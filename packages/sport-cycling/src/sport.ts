@@ -42,10 +42,14 @@ const memorySections: readonly MemorySectionSpec[] = [
     description:
       "FTP (watts), max HR, resting HR, W/kg ratio, experience level. " +
       "Body data lives in `person`; this is cycling-specific physiology.",
+    hint: "FTP, max/resting HR, W/kg, experience level",
+    inject: true,
   },
   {
     name: "cycling-equipment",
     description: "Bikes, trainer, power meter, head unit, indoor setup",
+    hint: "bikes, trainer, power meter, sensors",
+    inject: false,
   },
   {
     name: "cycling-history",
@@ -53,6 +57,8 @@ const memorySections: readonly MemorySectionSpec[] = [
       "Cycling-specific injuries (knee, lower back, fit issues), FTP test history, " +
       "recovery patterns from rides, ride-related sleep/HRV trends. " +
       "Chronic conditions belong in `medical-history`, not here.",
+    hint: "cycling injuries, FTP test history, ride recovery patterns",
+    inject: false,
   },
 ];
 
@@ -63,7 +69,7 @@ export const cyclingSport = {
   prescriptionCapability: CYCLING_PRESCRIPTION_CAPABILITY,
   sessionClusterGapMinutes: 30,
   memorySections,
-  mustPreserveTokens: (memory: MemorySnapshot): readonly string[] => {
+  mustPreserveTokens: (memory: MemorySnapshot) => {
     const tokens: string[] = [...CYCLING_VOCABULARY];
     const profile = memory.read("cycling-profile");
     if (profile) {
@@ -74,7 +80,10 @@ export const cyclingSport = {
       // only — historical FTPs aren't identity-defining and would balloon
       // false-positive surface.
       const match = profile.match(/\bFTP\b[\s:,-]*(\d{2,3})\s*[wW]?\b/);
-      if (match) tokens.push(`FTP ${match[1]}W`);
+      if (match) {
+        tokens.push(`FTP ${match[1]}W`);
+        return { tokens, provenance: memory.provenanceOf("cycling-profile") };
+      }
     }
     return tokens;
   },
@@ -86,7 +95,9 @@ export const cyclingSport = {
     // intervals Pure-Core, intervals Core-with-sport-config, and the
     // sport-specific cycling tools.
     const toolset = {
-      ...createMemoryTools(deps.memory, sections),
+      ...createMemoryTools(deps.memory, sections, {
+        bindProvenance: deps.bindMemoryToolProvenance,
+      }),
       ...createPureCoreIntervalsTools(deps.intervals, deps.tz, deps.athleteData, deps.calendarMutations),
       ...createCoreToolsWithSportConfig(deps.intervals, cyclingSport.intervalsActivityTypes, deps.athleteData),
       ...createCyclingTools(deps.memory, deps.intervals, deps.tz, deps.calendarMutations),

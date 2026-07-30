@@ -11,28 +11,40 @@ export const CORE_SHARED_SECTIONS: readonly MemorySectionSpec[] = [
     description:
       "Name, weight (kg), age, available training days per week. " +
       "Sport-specific physiology (FTP, VDOT, max HR) goes to the sport-prefixed profile section.",
+    hint: "name, weight, age, available training days",
+    inject: true,
   },
   {
     name: "schedule",
     description: "Weekly training availability, time windows, blackout days",
+    hint: "weekly availability, time windows, blackout days",
+    inject: true,
   },
   {
     name: "goals",
     description:
       "Target events, race dates, fitness targets, milestones " +
       "(e.g., 'sub-3:30 century in October', 'reach 280W FTP by Q3')",
+    hint: "target events, race dates, fitness targets",
+    inject: true,
   },
   {
     name: "preferences",
     description: "Coaching style, training environment, communication preferences",
+    hint: "coaching style, communication preferences",
+    inject: true,
   },
   {
     name: "notes",
     description: "Anything else important not covered by other sections",
+    hint: "anything not covered by other sections",
+    inject: false,
   },
   {
     name: "medical-history",
     description:
       "Chronic conditions, medications, long-term injuries — facts that persist across sports",
+    hint: "chronic conditions, medications, long-term injuries",
+    inject: true,
   },
 ];

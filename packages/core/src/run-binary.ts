@@ -16,6 +16,12 @@ import {
   ensureDataDirSecure,
 } from "./channels/allowed-senders.js";
 import { classifyAgentError } from "./agent/error-classify.js";
+import { warnOrphanSections } from "./memory/orphan-sections.js";
+import { getEffectiveSections } from "./sport.js";
+import {
+  formatConfirmOutcome,
+  type ConfirmationGate,
+} from "./agent/confirmation-gate.js";
 
 // Shared error classifier output as the CLI's athlete-facing reply, so the CLI
 // and the Telegram channel speak the same error vocabulary and never dump a raw
@@ -89,6 +95,29 @@ export function _parseConfirmAnswer(input: string): boolean {
   const trimmed = input.trim().toLowerCase();
   // Anything except an explicit y/yes (including bare Enter) → decline, no re-prompt.
   return trimmed === "y" || trimmed === "yes";
+}
+
+export async function _promptProposalConfirm(
+  rl: { question(prompt: string, cb: (answer: string) => void): void },
+  agent: { confirmations: Pick<ConfirmationGate, "peek" | "confirm" | "cancel"> },
+): Promise<void> {
+  const proposal = agent.confirmations.peek("cli");
+  if (proposal === undefined) return;
+  await new Promise<void>((resolve) => {
+    rl.question(`Confirm: ${proposal.summary}? [y/N]: `, (answer) => {
+      void (async () => {
+        if (!_parseConfirmAnswer(answer)) {
+          agent.confirmations.cancel("cli", proposal.nonce);
+          console.log("Canceled.");
+          resolve();
+          return;
+        }
+        const outcome = await agent.confirmations.confirm("cli", proposal.nonce);
+        console.log(formatConfirmOutcome(outcome));
+        resolve();
+      })();
+    });
+  });
 }
 
 export function makeReadlineConfirm(
@@ -370,6 +399,11 @@ export async function runBinary(
   // per ADR-0011 (two-phase scheduler — no timer until first runSync resolves).
   await runStartupHook(engine.getMemory(), hooks.onStartup);
 
+  // After the startup hook so the legacy-section migration has already renamed
+  // profile/equipment/health → sport-prefixed names; scanning earlier would
+  // warn on names the migration removes on the very next boot statement.
+  warnOrphanSections(engine.getMemory(), getEffectiveSections(sport));
+
   const { bootstrapReference } = await import("./reference/runtime.js");
   console.log("syncing training data from intervals.icu…");
   const reference = prepared.reference ?? await bootstrapReference({
@@ -427,7 +461,11 @@ export async function runBinary(
     // handler's clean exit(0). A genuine startup failure (bad token, pre-signal
     // crash) leaves shuttingDown false and still fatals.
     let shuttingDown = false;
-    bot.start({ drop_pending_updates: true }).catch(async (err) => {
+    // Normal startup does NOT drop pending updates: a message sent while the bot
+    // was down must still be delivered on restart. The durable update-offset
+    // guard inside createTelegramBot dedupes anything the previous run already
+    // handled. (Operator-capture startup keeps drop_pending_updates on purpose.)
+    bot.start().catch(async (err) => {
       if (shuttingDown) return;
       const { reportFatal } = await import("./process-guard.js");
       reportFatal(err, { dataDir: config.dataDir });
@@ -489,6 +527,7 @@ export async function runBinary(
       try {
         const response = await engine.chat("cli", input);
         console.log("\n" + response + "\n");
+        await _promptProposalConfirm(rl, engine);
       } catch (err) {
         // Full detail (stack, provider payload) → stderr; a friendly classified
         // reply → stdout in the reply position. The raw err never lands as the

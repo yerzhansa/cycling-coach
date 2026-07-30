@@ -203,7 +203,7 @@ describe("startup-capture predicate (T3)", () => {
     vi.doMock("../src/agent/coach-agent.js", () => ({
       CoachAgent: class {
         constructor() {}
-        getMemory() { return {} as never; }
+        getMemory() { return { readMemory: () => "" } as never; }
         chat() { return Promise.resolve("ok"); }
         hasSession() { return false; }
         resetSession() { return Promise.resolve(); }
@@ -362,7 +362,7 @@ describe("startup-capture predicate (T3)", () => {
     vi.doMock("../src/agent/coach-agent.js", () => ({
       CoachAgent: class {
         constructor() {}
-        getMemory() { return {} as never; }
+        getMemory() { return { readMemory: () => "" } as never; }
       },
     }));
     const startSpy = vi.fn(async () => undefined);
@@ -381,6 +381,8 @@ describe("startup-capture predicate (T3)", () => {
     await runBinary(stubSport as never, cyclingBinary);
     expect(captureFn).toHaveBeenCalledTimes(1);
     expect(startSpy).toHaveBeenCalledTimes(1); // bot started despite getme-failed
-    expect(startSpy).toHaveBeenCalledWith({ drop_pending_updates: true });
+    // Normal startup no longer drops pending updates (offline messages survive a
+    // restart); the update-offset guard dedupes replays instead.
+    expect(startSpy).toHaveBeenCalledWith();
   });
 });

@@ -8,6 +8,7 @@ import type { AthleteDataReader, PlatformCalendarMutations } from "../athlete-da
 import type { Config } from "../config.js";
 import type { Memory } from "../memory/store.js";
 import type { Sport } from "../sport.js";
+import { ConfirmationGate } from "./confirmation-gate.js";
 import { createEngineHostAdapter } from "./engine-host-adapter.js";
 import { legacyStateReader } from "./legacy-athlete-state-reader.js";
 
@@ -22,6 +23,7 @@ export class CoachAgent {
   private readonly engine;
   private readonly memory: Memory;
   private readonly chatStore: ChatStorePort;
+  readonly confirmations = new ConfirmationGate();
 
   constructor(sport: Sport, config: Config, overrides: LegacyAgentOverrides = {}) {
     const adapted = createEngineHostAdapter({

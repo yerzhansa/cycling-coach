@@ -61,6 +61,7 @@ function snapshotMemory(sections: Record<string, string>): MemorySnapshot {
     read: (name) => (typeof sections[name] === "string" && sections[name] !== "" ? sections[name] : null),
     has: (name) => typeof sections[name] === "string" && sections[name] !== "",
     listSections: () => Object.keys(sections),
+    provenanceOf: () => ({ garmin: false, nonGarmin: false, unknown: true }),
   };
 }
 

@@ -20,6 +20,16 @@ function makeSport(id: SportId, sections: readonly MemorySectionSpec[]): Sport {
   };
 }
 
+// MemorySectionSpec deliberately has no validation schema; a schema field is a
+// promise Core does not keep.
+const _rejectsSchemaField: MemorySectionSpec = {
+  name: "notes",
+  description: "misc",
+  // @ts-expect-error — 'schema' is not a member of MemorySectionSpec
+  schema: undefined,
+};
+void _rejectsSchemaField;
+
 describe("getEffectiveSections", () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
 

@@ -2,6 +2,7 @@ import type { Config } from "../config.js";
 import type { Sport } from "../sport.js";
 import type { Memory } from "../memory/store.js";
 import type { ResolvedCs } from "../reference/cs-resolution.js";
+import { ConfirmationGate } from "./confirmation-gate.js";
 import { CoachAgent } from "./coach-agent.js";
 import type { AthleteDataReader, PlatformCalendarMutations } from "../athlete-data.js";
 import type { ModelTransportDecorator } from "@enduragent/engine";
@@ -20,6 +21,7 @@ export interface CoachEngineSeam {
   ): Promise<string>;
   hasSession(chatId: string): boolean;
   resetSession(chatId: string): Promise<{ memoryFlushed: boolean }>;
+  confirmations: ConfirmationGate;
 }
 
 /**
@@ -56,6 +58,7 @@ export function createCoachEngine(
       agent.chat(chatId, userMessage, turn),
     hasSession: (chatId: string) => agent.hasSession(chatId),
     resetSession: (chatId: string) => agent.resetSession(chatId),
+    confirmations: agent.confirmations,
     getMemory: () => agent.getMemory(),
   };
 }

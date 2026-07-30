@@ -1,5 +1,25 @@
 # @enduragent/core
 
+## 0.1.2
+
+### Patch Changes
+
+- e31ab52: Refactor shared workout-date validation, confirmation outcomes, proposal lookup, event provenance, and sport tool construction without changing behavior.
+- 1e40c2e: User-facing: Saved memory no longer gets corrupted when a note contains markdown section headings.
+
+  Demote line-start `## ` headings to `### ` inside the single section-write
+  choke point so heading-bearing content can no longer fragment the section map,
+  shadow a real section, or leave orphan fragments across reads and replaces.
+  Export a 4000-char per-section soft cap that emits one structured warn (never
+  truncates) when a stamped body exceeds it.
+
+- 49844fa: Remove the unimplemented `schema` field from `MemorySectionSpec`. No code ever
+  read it; section-name validation at the memory_write seams (Zod enum of
+  declared section names) is the actual enforcement surface.
+- 03964f0: User-facing: Fixed a rare bug where an emoji sitting exactly at a length limit could be sliced in half, producing garbled text in long Telegram code blocks, compaction summaries, and memory query results.
+
+  All fixed-length string cuts now route through a shared `truncateUtf16Safe` helper that backs the cut off by one UTF-16 unit when it would bisect a surrogate pair. Fixed sites: `splitPreBlock`'s oversized-row fallback and `hardSplit`'s pathological fallback in the Telegram chunker, `capSummary` in compaction, and the `memory_query` result cap. (docs/issues #171)
+
 ## 0.1.1
 
 ### Patch Changes

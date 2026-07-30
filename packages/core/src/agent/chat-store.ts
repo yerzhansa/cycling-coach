@@ -21,8 +21,21 @@ import { join } from "node:path";
 import type { ModelMessage } from "ai";
 import type { ChatLineage } from "@enduragent/engine";
 import { messageText } from "@enduragent/engine/sport";
+import {
+  UNKNOWN_PROVENANCE,
+  getMessageProvenance,
+  isSourceProvenance,
+  setMessageProvenance,
+  type SourceProvenance,
+} from "../provenance.js";
 
 const MS_PER_DAY = 86_400_000;
+
+// Recorded in history when a turn fails before producing a reply, so the
+// athlete's (durably persisted) message is visibly unanswered rather than
+// silently dangling.
+export const TURN_FAILURE_MARKER =
+  "[This turn did not complete — the message above was not answered.]";
 
 interface FileIdentity {
   readonly dev: number | bigint;
@@ -93,6 +106,7 @@ interface JsonlLine {
   provider?: string;
   model?: string;
   lineageVersion?: string;
+  provenance?: SourceProvenance;
 }
 
 const VALID_ROLES = new Set(["user", "assistant", "system"]);
@@ -117,7 +131,18 @@ function parseSessionLine(line: string): JsonlLine | null {
   ] as const) {
     if (k in v && typeof v[k] !== "string") return null;
   }
+  if ("provenance" in v && !isSourceProvenance(v.provenance)) {
+    return { ...v, provenance: undefined } as JsonlLine;
+  }
   return value as JsonlLine;
+}
+
+function sameProvenance(left: SourceProvenance, right: SourceProvenance): boolean {
+  return (
+    left.garmin === right.garmin &&
+    left.nonGarmin === right.nonGarmin &&
+    left.unknown === right.unknown
+  );
 }
 
 export class ChatStore {
@@ -209,7 +234,12 @@ export class ChatStore {
       }
     }
 
-    const messages = parsed.map((p) => ({ role: p.role, content: p.content }) as ModelMessage);
+    const messages = parsed.map((p) =>
+      setMessageProvenance(
+        { role: p.role, content: p.content } as ModelMessage,
+        p.role === "user" ? UNKNOWN_PROVENANCE : (p.provenance ?? UNKNOWN_PROVENANCE),
+      ),
+    );
 
     let lastMessageTime: string | null = null;
     for (let i = parsed.length - 1; i >= 0; i--) {
@@ -226,7 +256,7 @@ export class ChatStore {
     chatId: string,
     role: "user" | "assistant",
     content: string,
-    lineage?: ChatLineage,
+    lineage?: ChatLineage & { provenance?: SourceProvenance },
   ): void {
     // An empty assistant reply pollutes the next turn's loaded history. Skip it
     // and warn — never throw, so a deliver-first turn can't crash on a guarded
@@ -247,7 +277,7 @@ export class ChatStore {
     chatId: string,
     userContent: string,
     assistantContent: string,
-    lineage: ChatLineage,
+    lineage: ChatLineage & { provenance?: SourceProvenance },
   ): void {
     // Keep the atomic pair honest: an empty assistant reply must never persist,
     // and a lone user line with no reply is the same context pollution. Skip the
@@ -275,19 +305,73 @@ export class ChatStore {
     const path = this.filePath(chatId);
     const tmpPath = `${path}.tmp`;
     const now = new Date().toISOString();
+
+    // Preserve the original timestamp of a message that survives the rewrite so
+    // freshness/idle math keeps working across a compaction. Timestamps are read
+    // back from the existing file by (role, content); a summary/system line is a
+    // freshly-generated artifact and always gets `now`. Build a per-key queue so
+    // duplicate lines keep the stamp whose source label matches the surviving
+    // message, falling back to occurrence order when the labels are identical.
+    const preservedByKey = new Map<string, Array<{ ts: string; provenance?: SourceProvenance }>>();
+    if (existsSync(path)) {
+      for (const line of readFileSync(path, "utf-8").split("\n")) {
+        if (line.trim() === "") continue;
+        const entry = parseSessionLine(line);
+        if (entry === null || entry.role === "system") continue;
+        const key = `${entry.role}\n${entry.content}`;
+        const queue = preservedByKey.get(key);
+        const preserved = { ts: entry.ts, provenance: entry.provenance };
+        if (queue) queue.push(preserved);
+        else preservedByKey.set(key, [preserved]);
+      }
+    }
+
     const content =
       messages
         .map((m) => {
+          const role = m.role as JsonlLine["role"];
+          const text = messageText(m);
+          let ts = now;
+          const provenance = getMessageProvenance(m);
+          if (role !== "system") {
+            const queue = preservedByKey.get(`${role}\n${text}`);
+            const matchingIndex = queue?.findIndex((candidate) =>
+              sameProvenance(candidate.provenance ?? UNKNOWN_PROVENANCE, provenance),
+            );
+            const preserved =
+              queue !== undefined && matchingIndex !== undefined && matchingIndex >= 0
+                ? queue.splice(matchingIndex, 1)[0]
+                : queue?.shift();
+            if (preserved !== undefined) {
+              ts = preserved.ts;
+            }
+          }
           const line: JsonlLine = {
-            role: m.role as JsonlLine["role"],
-            content: messageText(m),
-            ts: now,
+            role,
+            content: text,
+            ts,
+            ...(role === "user" ? {} : { provenance }),
           };
           return JSON.stringify(line);
         })
         .join("\n") + "\n";
     writeFileSync(tmpPath, content, { encoding: "utf-8", mode: 0o600 });
     renameSync(tmpPath, path);
+  }
+
+  // Terminal failure marker: makes a turn that died before producing a reply
+  // visible in history instead of leaving a bare user line with no answer. The
+  // athlete's message stays durable (it was appended before generation); this
+  // records that the turn did not complete. No-op when no session file exists.
+  appendFailureMarker(chatId: string): void {
+    const path = this.filePath(chatId);
+    if (!existsSync(path)) return;
+    const line: JsonlLine = {
+      role: "system",
+      content: TURN_FAILURE_MARKER,
+      ts: new Date().toISOString(),
+    };
+    appendFileSync(path, JSON.stringify(line) + "\n", { encoding: "utf-8", mode: 0o600 });
   }
 
   archiveAndReset(chatId: string): void {

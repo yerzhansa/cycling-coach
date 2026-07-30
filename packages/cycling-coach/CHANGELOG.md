@@ -1,5 +1,67 @@
 # cycling-coach
 
+## 2026.7.28
+
+### Minor Changes
+
+- 2a762ce: User-facing: Default and recommended LLM models upgraded to the newest generation — GPT-5.6 Sol (OpenAI and ChatGPT sign-in), Claude Sonnet 5, Gemini 3.6 Flash, Kimi K3, MiniMax M3, and Qwen3.7 Plus.
+
+  Refreshes the per-provider default model map, the setup wizard menus, and the context-window table for the July 2026 lineups (GPT-5.6 Sol/Terra/Luna, Claude Sonnet 5 / Opus 5 / Fable 5, Gemini 3.6 Flash + 3.5 Flash Lite, Kimi K3, MiniMax M3, Qwen3.7 Plus/Max). Extends the usage price table with the new models (including OpenRouter slugs), fills in the previously zero-priced GLM-5.x rows, and bumps the unknown-codex-model price fallback from gpt-5.4 to gpt-5.6-sol rates. Existing explicit model configs are unaffected — all previously catalogued IDs remain priced and resolvable.
+
+### Patch Changes
+
+- ea19abc: User-facing: Zone-based warmup ramps now render on the calendar power chart, and planned duration and Load for pushed workouts are derived by intervals.icu from the steps themselves.
+- 371402c: User-facing: Workouts the coach adds to your intervals.icu calendar are now marked as coach-created, and the coach will only delete its own scheduled workouts — races, notes, and workouts you added yourself are always refused.
+
+  Calendar create tools in both sport packages stamp an `external_id` and `tags` provenance marker on every event they push. The list projection surfaces `category`, `externalId`, `tags`, and a derived `coachCreated` flag, plus an opt-in `coachCreatedOnly` filter. The delete tool now refuses non-WORKOUT events (`not_a_workout`) and marker-less events (`not_coach_created`) before the destructive delete call, ahead of the existing past-date guard.
+
+- f512ba3: Ship package license, notice, and graph-derived third-party legal artifacts.
+- 8fe4c26: User-facing: Conversation summaries created during long sessions are now saved into the coach's dated memory notes, so they survive session resets and stay searchable later.
+- 6340b6a: User-facing: Coaching replies and raw training snapshots now include Garmin attribution only when their data has a confirmed Garmin source.
+- 55ac928: User-facing: Calendar changes and plan saves now ask for your confirmation first — the coach proposes, and you tap Confirm or Cancel (or answer y/N in the terminal) before anything is written.
+- 4ccdf20: User-facing: Chat requests to intervals.icu now time out after 30 seconds instead of hanging a coach turn indefinitely.
+
+  Route every intervals.icu client built by the factory (sync and chat) through one process-wide request bucket (10 requests/second, burst 30) so multiple clients can no longer burst past the intended combined pacing. Chat clients now get the same abortable per-request timeout wrapper as sync clients; the timeout covers queue wait plus the HTTP call, queued waits abort promptly, and lib-level retries stay disabled (`maxAttempts: 1`) on both paths.
+
+- 1e40c2e: User-facing: Saved memory no longer gets corrupted when a note contains markdown section headings.
+
+  Demote line-start `## ` headings to `### ` inside the single section-write
+  choke point so heading-bearing content can no longer fragment the section map,
+  shadow a real section, or leave orphan fragments across reads and replaces.
+  Export a 4000-char per-section soft cap that emits one structured warn (never
+  truncates) when a stamped body exceeds it.
+
+- bc1cd7c: User-facing: Long-term memory no longer crowds out conversation history — only your core profile is pinned into every reply, and the coach fetches the rest on demand.
+
+  Tier memory injection so only always-inject sections (person, goals, preferences, medical history, schedule, and the sport profile) render into the system prompt's athlete context; notes, equipment, and history stay on disk and remain reachable through the memory read tool. Add a prompt-layer section budget that nudges the flush pass to move dated detail into daily notes instead of growing a section, and hard-cap the rendered athlete context with a disclosed, warned truncation. Harden the athlete-data fence: a new reusable prompt-fence module neutralizes fence tokens and strips control/format characters, and every tool result is marked as untrusted data at a single choke point so stored or external text can never escape its fenced block.
+
+- ff98c56: User-facing: A corrupted or hand-edited plan file no longer breaks the chat — the coach simply continues without the plan summary.
+
+  [Engineering: loadPlan now goes through safeReadJson with a loose passthrough schema; plan summary omits missing fields instead of rendering "undefined"; orphan MEMORY.md sections emit a names-only structured warn at startup + post-flush; deprecated Memory.appendMemory deleted (zero callers, never on the interface); appendDailyNote skips exact-duplicate notes.]
+
+- ebfe55d: User-facing: Long chats that hit the model's context limit now compact and retry to produce a complete answer instead of returning a cut-off reply.
+
+  Harden context-overflow classification, token estimation, and effective-window caps. Context-overflow classification now recognizes structured provider signals (Codex-normalized `ContextOverflowError`, and 400 responses whose body carries a known overflow code or message) on top of the existing message fallbacks, without treating every 400 as overflow. A successful `length` finish whose prompt already filled the real provider window is routed through the existing compaction rescue rather than persisting the truncated text; plain output-length truncation keeps the earlier empty-reply recovery. Token estimation counts part-array/structured message content instead of dropping it to zero and can anchor budget math to the provider's reported token usage. History budget, preemptive compaction, and compaction chunk sizing use a 200,000-token effective estimator window (`min(providerWindow, 200k)`) so a million-token provider window no longer expands the planning target.
+
+- 13af149: User-facing: Coach can now schedule strength sessions on your intervals.icu calendar — free-text exercises, sets, reps, and RPE.
+- 4da026b: User-facing: Rapid messages sent within about 1.5 seconds of each other are now combined into a single reply, so a thought split across several messages gets one coherent answer instead of several partial ones.
+
+  Buffers free-form Telegram text per chat behind a 1.5s debounce window (each fragment resets the window) and joins fragments with newlines into one turn. A slash command flushes the chat's pending text first, then runs immediately, so commands are never coalesced into free-form text. Turn dependencies are resolved at flush time, the flushed turn threads to the last fragment's message id, each fragment fires one best-effort typing action during the window, and shutdown/update drains flush pending buffers synchronously without waiting on the debounce timer. Debounce timers are unref'd so a pending buffer never holds the process open.
+
+- 54f6f54: User-facing: Messages you send while the bot is offline are no longer dropped when it restarts, and when a new daily session starts the bot now tells you your earlier conversation is archived and your key details are still remembered.
+
+  Normal startup no longer drops pending updates; a durable, owner-only offset store (keyed by a short token fingerprint, never the raw token) dedupes anything a previous run already handled and stops `/update` from re-triggering itself after a self-update restart. Operator-capture startup still intentionally drops prior updates. A daily session reset is deferred for one turn when the last exchange is still recent (within 30 minutes), so a conversation that crosses the daily boundary isn't archived mid-thread; malformed timestamps and idle resets are never deferred. On an automatic reset the first reply is prefixed once with a plain-language notice and the model sees a one-turn archive marker so it discloses the fresh session. The athlete's message is now made durable before generation and a failed turn is recorded with a terminal marker, so a mid-turn crash no longer silently erases the message. Compaction now preserves surviving messages' original timestamps.
+
+- e5d8e32: User-facing: Sketching a training plan no longer silently saves it — the coach saves a plan only after you approve it.
+  User-facing: The coach now refuses to schedule a workout on a past date instead of creating an event it can't remove.
+
+  Tighten tool inputs for dates, activity IDs, streams, memory sections, and saved plans.
+
+- 403fb5e: Trim serialized tool descriptions and add per-sport payload size regression ceilings.
+- 03964f0: User-facing: Fixed a rare bug where an emoji sitting exactly at a length limit could be sliced in half, producing garbled text in long Telegram code blocks, compaction summaries, and memory query results.
+
+  All fixed-length string cuts now route through a shared `truncateUtf16Safe` helper that backs the cut off by one UTF-16 unit when it would bisect a surrogate pair. Fixed sites: `splitPreBlock`'s oversized-row fallback and `hardSplit`'s pathological fallback in the Telegram chunker, `capSummary` in compaction, and the `memory_query` result cap. (docs/issues #171)
+
 ## 2026.7.2
 
 ### Patch Changes

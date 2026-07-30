@@ -186,7 +186,6 @@ export function createCyclingTools(
                   name: input.workout.name,
                   type: "Ride",
                   moving_time: serialized.movingTime,
-                  icu_training_load: serialized.trainingLoad,
                   description: serialized.description,
                 });
                 return { created: true, event };

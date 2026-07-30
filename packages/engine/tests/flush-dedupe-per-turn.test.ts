@@ -93,10 +93,7 @@ function countFlushCalls(complete: ReturnType<typeof vi.fn>): number {
   return complete.mock.calls.filter((c) => isFlushCall(c)).length;
 }
 
-function seedSession(
-  chatId: string,
-  lines: Array<{ role: string; content: string; ts: string }>,
-) {
+function seedSession(chatId: string, lines: Array<{ role: string; content: string; ts: string }>) {
   const sessionsDir = join(dataDir, "sessions");
   mkdirSync(sessionsDir, { recursive: true });
   writeFileSync(
@@ -184,6 +181,7 @@ describe("compaction caller tag — the compact tag reaches llm.generate end-to-
     read: () => null,
     has: () => false,
     listSections: () => [],
+    provenanceOf: () => ({ garmin: false, nonGarmin: false, unknown: false }),
   };
 
   function makeLlmSpy() {

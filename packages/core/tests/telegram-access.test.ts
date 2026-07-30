@@ -219,6 +219,14 @@ describe("createAuthMiddleware — gating", () => {
     await mw(ctx, next);
     expect(next).not.toHaveBeenCalled();
     expect(ctx.reply).not.toHaveBeenCalled();
+
+    const callbackCtx = makeMwCtx({ chatType: "private", fromId: 99999 });
+    (callbackCtx as unknown as { callbackQuery: { data: string } }).callbackQuery = {
+      data: "cg:y:attacker-value",
+    };
+    const callbackNext = vi.fn(async () => undefined);
+    await mw(callbackCtx, callbackNext);
+    expect(callbackNext).not.toHaveBeenCalled();
   });
 
   it("rate-limit: same sender messaging twice within window → only one reply", async () => {

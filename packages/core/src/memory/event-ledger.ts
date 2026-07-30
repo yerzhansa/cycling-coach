@@ -33,10 +33,17 @@ export const ledgerEventSchema = z.object({
 export type LedgerEvent = z.infer<typeof ledgerEventSchema>;
 export const LEDGER_FILENAME = "events.jsonl";
 
-export function appendLedgerEvent(memoryDir: string, event: LedgerEventInput): void {
+export function appendLedgerEvent(
+  memoryDir: string,
+  event: LedgerEventInput,
+  beforeAppend?: (serialized: string) => void,
+): string {
   const line = ledgerEventSchema.parse({ ts: new Date().toISOString(), ...event });
-  appendFileSync(join(memoryDir, LEDGER_FILENAME), JSON.stringify(line) + "\n", {
+  const serialized = JSON.stringify(line);
+  beforeAppend?.(serialized);
+  appendFileSync(join(memoryDir, LEDGER_FILENAME), serialized + "\n", {
     encoding: "utf-8",
     mode: 0o600,
   });
+  return serialized;
 }

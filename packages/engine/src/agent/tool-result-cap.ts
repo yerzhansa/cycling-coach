@@ -1,5 +1,6 @@
 import type { Tool } from "ai";
 import { estimateTokens } from "./token-utils.js";
+import { isUntrustedEnvelope } from "./prompt-fence.js";
 
 export const TOOL_RESULT_SHARE = 0.5;
 
@@ -33,7 +34,11 @@ export function capToolResult(tool: Tool, opts: { maxResultTokens: number }): To
         typeof result === "string" ? result : (JSON.stringify(result) ?? "");
       const estimatedTokens = estimateTokens(serialized);
       if (estimatedTokens <= opts.maxResultTokens) return result;
-      const omittedSamples = omittedSampleCount(result);
+      // Size is measured on the full (possibly enveloped) result; sample
+      // counting wants the payload inside the untrusted-data envelope.
+      const omittedSamples = omittedSampleCount(
+        isUntrustedEnvelope(result) ? result.data : result,
+      );
       const capped: CappedResult = {
         truncated: true,
         notice:

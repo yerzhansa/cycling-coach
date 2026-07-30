@@ -38,6 +38,9 @@ The persistent compaction path. At session load, when history exceeds the token 
 **In-Turn Compaction**:
 The ephemeral compaction path (`summarizeInStages`). Reshapes only the in-memory message array, from three sites in the chat loop (preemptive over-budget, context-overflow recovery, timeout recovery); the session JSONL keeps the full history and the reshaped array is discarded at end of turn.
 
+**Compaction Summary Durability**:
+Every freshly generated compaction summary (all four sites: trim, preemptive, overflow recovery, timeout recovery) is also mirrored into the day's note under the fixed marker `### Compaction summary`, heading-demoted, with an exact-block duplicate-skip. This makes the summary recoverable via `memory_read` after a session reset destroys the live JSONL and its archives.
+
 **CoreDeps**:
 The runtime services Core supplies to a Sport's tool factory: `LLM`, `IntervalsClient`, `MemoryStore`, `SecretsResolver`.
 
@@ -51,7 +54,7 @@ Core's shared entry-point dispatcher. `runBinary(sport, binary, hooks?)` parses 
 Changesets-generated PR aggregating pending `.changeset/*.md` entries across packages into version bumps + CHANGELOG entries. Merging the Version PR triggers the publish job (which runs `pnpm exec changeset version`, `tools/bump-binaries-to-calver.ts` to override binary CalVer, then `pnpm publish -r`).
 
 **Session**:
-One user's chat state with one Binary, persisted to disk and locked against concurrent processes.
+One user's chat state with one Binary, persisted to disk and locked in-process per chat. The process model is one process per dataDir; there is no cross-process lock.
 
 **Channel**:
 A delivery surface (currently only Telegram); sport-agnostic.

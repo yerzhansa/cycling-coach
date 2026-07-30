@@ -9,6 +9,7 @@ import type {
 } from "ai";
 import type { Activity, IntervalsClient } from "intervals-icu-api";
 import type { z } from "zod";
+import type { SourceProvenance } from "./provenance.js";
 import type {
   AthleteDataReaderPort,
   AthleteReadResult,
@@ -68,10 +69,20 @@ export interface Person {
   availableDays: number;
 }
 
+export interface DerivedPreserveTokens {
+  readonly tokens: readonly string[];
+  readonly provenance: SourceProvenance;
+}
+
+export type PreserveTokens = readonly string[] | DerivedPreserveTokens;
+
 export interface MemorySectionSpec {
   name: string;
   description: string;
-  schema?: z.ZodTypeAny;
+  /** Short routing discriminator for the chat memory_write catalog. Omitted = full description is used. */
+  hint?: string;
+  /** Always inject into the system prompt's Athlete Context. Omitted = true. */
+  inject?: boolean;
 }
 
 export interface ToolRegistration {
@@ -130,6 +141,8 @@ export interface SportRuntimePorts {
   calendarMutations?: PlatformCalendarMutationsPort;
   memory: MemoryStorePort;
   secrets: SecretsPort;
+  /** Enables host-private provenance binding on memory read results. */
+  bindMemoryToolProvenance?: boolean;
   tz: string;
   resolvedCs?: (options: unknown) => ResolvedCs | null;
 }
@@ -163,7 +176,9 @@ export interface Sport {
   readonly skills: Readonly<Record<string, string>>;
   readonly sessionClusterGapMinutes: number;
   readonly memorySections: readonly MemorySectionSpec[];
-  readonly mustPreserveTokens: readonly string[] | ((memory: MemorySnapshot) => readonly string[]);
+  readonly mustPreserveTokens:
+    | readonly string[]
+    | ((memory: MemorySnapshot) => PreserveTokens);
   readonly intervalsActivityTypes: readonly IntervalsActivityType[];
   readonly athleteProfileSchema: z.ZodTypeAny;
   tools(ports: SportRuntimePorts): readonly ToolRegistration[];
@@ -202,10 +217,21 @@ export { getEffectiveSections } from "./sport/effective-sections.js";
 export { createMemorySnapshot } from "./sport/memory-snapshot.js";
 export { messageText } from "./sport/model-message.js";
 export {
+  MEMORY_READ_FLUSH_DESCRIPTION,
+  PlanSaveInputSchema,
+  buildMemoryWriteInputSchema,
   createMemoryQueryTool,
   createMemoryReadTool,
   createMemoryTools,
 } from "./sport/memory-tools.js";
+export {
+  COACH_EVENT_TAG,
+  COACH_EXTERNAL_ID_PREFIX,
+  buildCoachEventProvenance,
+  buildCoachExternalId,
+  isCoachOwnedEvent,
+} from "./sport/event-provenance.js";
+export type { SourceProvenance } from "./provenance.js";
 export {
   createCoreToolsWithSportConfig,
   createPureCoreIntervalsTools,

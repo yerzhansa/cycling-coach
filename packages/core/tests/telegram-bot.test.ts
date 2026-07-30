@@ -7,6 +7,7 @@ import {
   defaultPairingState,
   saveAllowedSenders,
 } from "../src/channels/allowed-senders.js";
+import { GARMIN_DATA_ATTRIBUTION } from "../src/agent/garmin-attribution.js";
 
 let dataDir: string;
 const ENV_KEYS = [
@@ -45,6 +46,135 @@ function seedSession(chatId: string): void {
     JSON.stringify({ role: "user", content: "x", ts: Date.now() }),
   );
 }
+
+function installTelegramBotMock() {
+  const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
+  const onHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
+  const bot = {
+    api: {
+      setMyCommands: vi.fn(async () => true),
+      config: { use: vi.fn() },
+    },
+    use: vi.fn(),
+    command: vi.fn((name: string, handler: (ctx: unknown) => Promise<void>) => {
+      commandHandlers.set(name, handler);
+    }),
+    on: vi.fn((name: string, handler: (ctx: unknown) => Promise<void>) => {
+      onHandlers.set(name, handler);
+    }),
+    catch: vi.fn(),
+  };
+  class FakeInputFile {
+    constructor(
+      readonly data: Buffer,
+      readonly filename: string,
+    ) {}
+  }
+  class FakeGrammyError extends Error {}
+  vi.doMock("grammy", () => ({
+    Bot: function FakeBot() {
+      return bot;
+    },
+    InputFile: FakeInputFile,
+    GrammyError: FakeGrammyError,
+  }));
+  return { bot, commandHandlers, onHandlers };
+}
+
+describe("createTelegramBot — Garmin attribution carriage", () => {
+  it("delivers /status attribution and resends the identical attributed answer", async () => {
+    const { commandHandlers, onHandlers } = installTelegramBotMock();
+    const attributedAnswer = `Fitness is steady.\n\n${GARMIN_DATA_ATTRIBUTION}`;
+    const agent = {
+      chat: vi.fn(async () => attributedAnswer),
+      resetSession: vi.fn(),
+      hasSession: vi.fn(() => true),
+      confirmations: { peek: vi.fn(), confirm: vi.fn(), cancel: vi.fn() },
+    };
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { createTelegramBot } = await import("../src/channels/telegram.js");
+    const handle = createTelegramBot(
+      "FAKE_TOKEN",
+      agent as unknown as Parameters<typeof createTelegramBot>[1],
+      cyclingBinary,
+      dataDir,
+    );
+    const replies: string[] = [];
+    const ctx = {
+      chat: { id: 73 },
+      message: { text: "/status", message_id: 10 },
+      reply: vi.fn(async (text: string) => {
+        replies.push(text);
+      }),
+      replyWithChatAction: vi.fn(async () => undefined),
+    };
+
+    await commandHandlers.get("status")!(ctx);
+    await handle.drainPending();
+
+    expect(agent.chat).toHaveBeenCalledWith("telegram:73", "/status", undefined);
+    expect(replies).toContain(attributedAnswer);
+
+    ctx.message = { text: "resend", message_id: 11 };
+    await onHandlers.get("message:text")!(ctx);
+    await handle.drainPending();
+
+    expect(agent.chat).toHaveBeenCalledOnce();
+    expect(replies.filter((text) => text === attributedAnswer)).toHaveLength(2);
+  });
+
+  it("omits a raw-snapshot document caption without confirmed Garmin data", async () => {
+    const { commandHandlers } = installTelegramBotMock();
+    const agent = {
+      chat: vi.fn(),
+      resetSession: vi.fn(),
+      hasSession: vi.fn(),
+      confirmations: { peek: vi.fn(), confirm: vi.fn(), cancel: vi.fn() },
+    };
+    const reference = {
+      runSync: vi.fn(),
+      maybeRefreshIfStale: vi.fn(async () => ({ kind: "fresh" as const })),
+      loadLatest: vi.fn(() => ({
+        metadata: {
+          schema_version: "1",
+          last_updated: "1999-04-03T10:00:00Z",
+          freshness: "fresh",
+        },
+        athlete_profile: { id: "synthetic-athlete" },
+        current_status: {},
+        derived_metrics: { padding: "x".repeat(70_000) },
+        recent_activities: [],
+        planned_workouts: [],
+        wellness_data: {},
+      })),
+    };
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { createTelegramBot } = await import("../src/channels/telegram.js");
+    createTelegramBot(
+      "FAKE_TOKEN",
+      agent as unknown as Parameters<typeof createTelegramBot>[1],
+      cyclingBinary,
+      dataDir,
+      reference as unknown as Parameters<typeof createTelegramBot>[4],
+    );
+    const replyWithDocument = vi.fn(
+      async (_file: unknown, _options?: { caption?: string }) => undefined,
+    );
+    const ctx = {
+      match: "raw",
+      chat: { id: 73 },
+      reply: vi.fn(async () => undefined),
+      replyWithDocument,
+    };
+
+    await commandHandlers.get("snapshot")!(ctx);
+
+    expect(replyWithDocument).toHaveBeenCalledOnce();
+    expect(replyWithDocument.mock.calls[0]![1]).toBeUndefined();
+  });
+});
 
 describe("notifyUpdate — broadcast filtering (L3)", () => {
   it("filters chat-ids to allowFrom subset (allowlist mode)", async () => {
@@ -277,7 +407,12 @@ describe("createTelegramBot — startup diagnostic + no security broadcast", () 
     }));
 
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const agent = { chat: vi.fn(), resetSession: vi.fn(), hasSession: vi.fn() };
+    const agent = {
+      chat: vi.fn(),
+      resetSession: vi.fn(),
+      hasSession: vi.fn(),
+      confirmations: { peek: vi.fn(), confirm: vi.fn(), cancel: vi.fn() },
+    };
 
     const { createTelegramBot } = await import("../src/channels/telegram.js");
     const result = createTelegramBot(
@@ -293,6 +428,7 @@ describe("createTelegramBot — startup diagnostic + no security broadcast", () 
     expect(sendMessage).not.toHaveBeenCalled();
     // Auth middleware is registered first.
     expect(use).toHaveBeenCalled();
+    expect(on).toHaveBeenCalledWith("callback_query:data", expect.any(Function));
     // Diagnostic stderr logging fired.
     expect(errSpy).toHaveBeenCalledWith(
       expect.stringMatching(/\[security\] Telegram allowlist: pairing mode/),

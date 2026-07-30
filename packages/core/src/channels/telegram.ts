@@ -15,6 +15,7 @@ import {
 } from "../updater.js";
 import { buildWhatsNewMessage } from "../release-notes.js";
 import { createAuthMiddleware } from "./telegram-access.js";
+import { TelegramUpdateOffsetStore } from "./telegram-update-offsets.js";
 import { loadAllowedSenders, loadAllowedSendersWithSource } from "./allowed-senders.js";
 import { escapeHtmlText } from "./html-escape.js";
 import type { ReferenceServices } from "../reference/services.js";
@@ -22,12 +23,20 @@ import { resolveRunningCs, type ResolvedCs } from "@enduragent/kernel/reference/
 import { formatSyncReply } from "../reference/sync/format-sync-reply.js";
 import { formatSnapshotRaw } from "../reference/sync/snapshot-debug.js";
 import { sendSnapshotOutput } from "../reference/sync/send-snapshot.js";
+import { provenanceForLatestSection } from "../reference/source-provenance.js";
 import { createSubsystemLogger } from "../logging/index.js";
+import { truncateUtf16Safe } from "../text-truncate.js";
+import { formatConfirmOutcome } from "../agent/confirmation-gate.js";
 
 // Upper bound on how long /update waits for in-flight turns to finish before
 // self-updating. A hung turn must never wedge the update, so the drain races a
 // timeout.
 const UPDATE_DRAIN_TIMEOUT_MS = 10_000;
+
+// Debounce window for coalescing rapid free-form message fragments from one
+// chat into a single turn. Each new fragment resets the window; the buffered
+// turn fires this long after the LAST fragment.
+export const CHAT_COALESCE_MS = 1_500;
 
 // Process-local resend cache bounds. The cache holds full generated answers
 // (athlete content) so it is size- and time-bounded and never logged.
@@ -46,6 +55,12 @@ const DELIVERY_FAILURE_HINT = `I generated the answer, but Telegram had trouble 
 // bot.catch — those are Telegram transport errors, not LLM/tool errors, so they
 // must not be dressed in provider-specific vocabulary.
 const GENERIC_TRANSPORT_APOLOGY = "Sorry, something went wrong. Please try again.";
+
+// Shown when /update can't durably record the self-update marker. Without that
+// marker a restart could re-trigger /update in a loop, so we decline to stop and
+// tell the athlete to retry rather than risk the loop.
+const SELF_UPDATE_MARKER_FAILURE =
+  "Couldn't safely prepare the update just now. Please try /update again in a moment.";
 
 // How often to re-emit Telegram's native "typing" indicator while a turn is in
 // flight. Telegram auto-clears the indicator ~5s after each sendChatAction, so we
@@ -228,6 +243,12 @@ export function createTelegramBot(
   const log = createSubsystemLogger("telegram", dataDir);
   const greeted = new Set<number>();
 
+  // Durable update-offset store. Normal polling processes pending updates (so a
+  // message sent while the bot was down still arrives); the guard below dedupes
+  // anything a previous run already dispatched or acknowledged before a crash /
+  // self-update restart.
+  const offsets = new TelegramUpdateOffsetStore(dataDir, token);
+
   // Process-local per-chat cache of the last generated answer, so an athlete can
   // ask for it again after a Telegram delivery failure without re-running the LLM
   // turn. Bounded + TTL'd; contents (athlete text) are never logged.
@@ -273,7 +294,26 @@ export function createTelegramBot(
     pending.add(task);
     void task.finally(() => pending.delete(task));
   };
-  const drainPending = (): Promise<void> => Promise.all(pending).then(() => undefined);
+  // Per-chat buffer of free-form fragments awaiting the coalesce window. Each
+  // entry rebinds the latest fragment's reply context so the flushed turn
+  // answers on a live ctx, and threads to the last fragment's message id.
+  interface ChatBuffer {
+    fragments: string[];
+    reply: (text: string, options?: Record<string, unknown>) => Promise<unknown>;
+    replyWithChatAction: (action: "typing") => Promise<unknown>;
+    replyToMessageId?: number;
+    timer: ReturnType<typeof setTimeout>;
+  }
+  const chatBuffers = new Map<number, ChatBuffer>();
+
+  // Flush buffered fragments FIRST (synchronously — flushing dispatches onto
+  // `pending`, so the Promise.all snapshot below includes the flushed turns),
+  // so shutdown and /update drains never drop buffered text and never wait on
+  // the debounce timer.
+  const drainPending = (): Promise<void> => {
+    for (const chatId of Array.from(chatBuffers.keys())) flushBufferedChat(chatId);
+    return Promise.all(pending).then(() => undefined);
+  };
 
   void bot.api.setMyCommands(buildCommandMenu(reference)).catch((err) => {
     log.error("set_commands_failed", err, {});
@@ -284,8 +324,15 @@ export function createTelegramBot(
   // guess. Returns undefined — leaving the tool on its LLM-supplied param — when no
   // reference sync is wired; resolveRunningCs itself returns null for cycling,
   // pre-sync, or a profile with no run-family row.
-  const turnDeps = (): { resolvedCs: ResolvedCs | null } | undefined =>
-    reference !== undefined ? { resolvedCs: resolveRunningCs(reference.loadLatest()) } : undefined;
+  const turnDeps = () => {
+    if (reference === undefined) return undefined;
+    const latest = reference.loadLatest();
+    return {
+      resolvedCs: resolveRunningCs(latest),
+      referenceProvenance:
+        latest === null ? undefined : provenanceForLatestSection(latest, "athlete_profile"),
+    };
+  };
 
   // Shared turn skeleton: every chat-bearing handler captures its deps/message
   // synchronously, then hands the LLM turn here to run on the fire-and-forget
@@ -325,12 +372,102 @@ export function createTelegramBot(
       writeResend(opts.chatId, response);
       try {
         await sendLongMessage(opts.ctx, response, opts.replyToMessageId);
+        const proposal = agent.confirmations.peek(opts.chatId);
+        if (proposal !== undefined) {
+          await opts.ctx.reply(proposal.summary, {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: "Confirm", callback_data: `cg:y:${proposal.nonce}` },
+                  { text: "Cancel", callback_data: `cg:n:${proposal.nonce}` },
+                ],
+              ],
+            },
+          });
+        }
       } catch (err) {
         log.error("delivery_failed", err, { command: opts.command, chatId: opts.chatId });
         await opts.ctx.reply(DELIVERY_FAILURE_HINT);
       }
     });
   }
+
+  // Idempotent read-and-delete: no await between lookup and delete, so a
+  // concurrent flush (command middleware vs. drain vs. timer) can never
+  // double-dispatch the same buffered turn. Deps are resolved here, at flush
+  // time, so the coalesced turn sees fresh environment state.
+  function flushBufferedChat(chatId: number): void {
+    const buf = chatBuffers.get(chatId);
+    if (buf === undefined) return;
+    chatBuffers.delete(chatId);
+    clearTimeout(buf.timer);
+    runTurn({
+      ctx: { reply: buf.reply, replyWithChatAction: buf.replyWithChatAction },
+      command: "chat",
+      chatId: `telegram:${chatId}`,
+      message: buf.fragments.join("\n"),
+      deps: turnDeps(),
+      genericReply: "Sorry, something went wrong. Please try again.",
+      replyToMessageId: buf.replyToMessageId,
+    });
+  }
+
+  function bufferChatMessage(ctx: {
+    chat: { id: number };
+    message: { text: string; message_id?: number };
+    reply: (text: string, options?: Record<string, unknown>) => Promise<unknown>;
+    replyWithChatAction: (action: "typing") => Promise<unknown>;
+  }): void {
+    const text = ctx.message.text;
+    const chatId = ctx.chat.id;
+    if (text.startsWith("/")) {
+      // Unregistered-command fallthrough: never buffered. The turn runs
+      // immediately so a command can never be coalesced into free-form text.
+      runTurn({
+        ctx,
+        command: "chat",
+        chatId: `telegram:${chatId}`,
+        message: text,
+        deps: turnDeps(),
+        genericReply: "Sorry, something went wrong. Please try again.",
+        replyToMessageId: ctx.message.message_id,
+      });
+      return;
+    }
+    const existing = chatBuffers.get(chatId);
+    if (existing !== undefined) clearTimeout(existing.timer);
+    const fragments = existing?.fragments ?? [];
+    fragments.push(text);
+    const timer = setTimeout(() => flushBufferedChat(chatId), CHAT_COALESCE_MS);
+    timer.unref?.();
+    chatBuffers.set(chatId, {
+      fragments,
+      reply: (t, o) => ctx.reply(t, o),
+      replyWithChatAction: (a) => ctx.replyWithChatAction(a),
+      replyToMessageId: ctx.message.message_id,
+      timer,
+    });
+  }
+
+  // Flush middleware: any slash update flushes this chat's buffered text ahead
+  // of the command handler, so the buffered turn enqueues on the FIFO session
+  // lock before the command runs. Registered after auth (createSecuredBot) and
+  // before every bot.command below — do not move it below a command.
+  bot.use(async (ctx, next) => {
+    if (ctx.chat !== undefined && ctx.message?.text?.startsWith("/") === true) {
+      flushBufferedChat(ctx.chat.id);
+    }
+    await next();
+  });
+
+  // Update-offset dedupe guard. Runs after the flush middleware and before every
+  // handler: an update already dispatched — or acknowledged before a crash /
+  // self-update restart — is skipped so its work never re-runs.
+  bot.use(async (ctx, next) => {
+    const updateId = ctx.update?.update_id;
+    if (typeof updateId === "number" && !offsets.shouldDispatch(updateId)) return;
+    await next();
+  });
 
   // ── Commands ────────────────────────────────────────────────────────────
 
@@ -427,8 +564,12 @@ export function createTelegramBot(
         try {
           await sendSnapshotOutput(output, {
             reply: (text) => sendLongMessage(ctx, text) as Promise<unknown>,
-            sendDocument: (buffer, filename) =>
-              ctx.replyWithDocument(new InputFile(buffer, filename)) as Promise<unknown>,
+            replyHtml: (html) => ctx.reply(html, { parse_mode: "HTML" }) as Promise<unknown>,
+            sendDocument: (buffer, filename, caption) =>
+              ctx.replyWithDocument(
+                new InputFile(buffer, filename),
+                caption === undefined ? undefined : { caption },
+              ) as Promise<unknown>,
           });
         } catch (err) {
           log.error("command_failed", err, { command: "snapshot", chatId: `telegram:${ctx.chat.id}` });
@@ -499,6 +640,24 @@ export function createTelegramBot(
         return;
       }
       latest = info.latest;
+      // Persist a durable self-update marker BEFORE stopping. It records the
+      // /update's own update id as dispatched so the restart doesn't re-trigger
+      // /update. If the marker can't be written we must NOT stop — a
+      // restart could otherwise loop on /update — so surface a safe retry copy.
+      try {
+        offsets.recordSelfUpdate({
+          updateId: typeof ctx.update?.update_id === "number" ? ctx.update.update_id : null,
+          chatId: ctx.chat.id,
+          ts: new Date().toISOString(),
+          targetVersion: info.latest,
+        });
+      } catch (markerErr) {
+        log.error("self_update_marker_failed", markerErr, {
+          chatId: `telegram:${ctx.chat.id}`,
+        });
+        await ctx.reply(SELF_UPDATE_MARKER_FAILURE);
+        return;
+      }
       await ctx.reply(`Updating ${info.current} → ${info.latest}...\nThe bot will stop after installation. Run \`${binary.binaryName}\` to start it again.`);
       // Stop polling first so Telegram commits the /update offset — otherwise
       // Telegram re-sends /update on next startup and we loop forever — then let
@@ -514,6 +673,33 @@ export function createTelegramBot(
         `Update failed. Please run \`npm install -g ${binary.binaryName}@${latest ?? "latest"} --ignore-scripts\` manually.`,
       );
     }
+  });
+
+  bot.on("callback_query:data", async (ctx) => {
+    const match = /^cg:(y|n):(.+)$/.exec(ctx.callbackQuery.data);
+    await ctx.answerCallbackQuery();
+    if (match === null || ctx.chat === undefined) return;
+    try {
+      await ctx.editMessageReplyMarkup();
+    } catch {
+      // Best-effort keyboard cleanup must not block resolution.
+    }
+    const choice = match[1];
+    const nonce = match[2] ?? "";
+    const chatId = `telegram:${ctx.chat.id}`;
+    dispatch(async () => {
+      if (choice === "n") {
+        const outcome = agent.confirmations.cancel(chatId, nonce);
+        await ctx.reply(
+          outcome === "canceled"
+            ? "Canceled — nothing was changed."
+            : "That proposal expired — ask me again and I'll re-propose.",
+        );
+        return;
+      }
+      const outcome = await agent.confirmations.confirm(chatId, nonce);
+      await ctx.reply(formatConfirmOutcome(outcome));
+    });
   });
 
   // ── Free-form chat ──────────────────────────────────────────────────────
@@ -553,16 +739,14 @@ export function createTelegramBot(
       }
     }
 
-    const deps = turnDeps();
-    runTurn({
-      ctx,
-      command: "chat",
-      chatId,
-      message: text,
-      deps,
-      genericReply: "Sorry, something went wrong. Please try again.",
-      replyToMessageId: ctx.message?.message_id,
-    });
+    // One best-effort typing action per fragment so the athlete sees activity
+    // during the debounce window; only the LLM turn is debounced, never the
+    // signal. Fire-and-forget: a failure can never reach the handler's failure
+    // path (the full typing heartbeat starts at flush inside runTurn).
+    void Promise.resolve()
+      .then(() => ctx.replyWithChatAction("typing"))
+      .catch(() => log.debug("typing_action_failed", { command: "chat", chatId }));
+    bufferChatMessage(ctx);
   });
 
   bot.catch(async (botError) => {
@@ -781,8 +965,11 @@ function splitPreBlock(block: string, maxLen: number): string[] {
     }
     // Single row alone exceeds the budget — hard-split, wrap each piece.
     const sliceMax = Math.max(1, maxLen - PRE_OVERHEAD);
-    for (let k = 0; k < row.length; k += sliceMax) {
-      out.push(`${PRE_OPEN}${row.slice(k, k + sliceMax)}${PRE_CLOSE}`);
+    let k = 0;
+    while (k < row.length) {
+      const piece = truncateUtf16Safe(row.slice(k), sliceMax);
+      out.push(`${PRE_OPEN}${piece}${PRE_CLOSE}`);
+      k += piece.length;
     }
     current = "";
   }
@@ -843,7 +1030,13 @@ function hardSplit(text: string, maxLen: number): string[] {
   while (text.length - start > maxLen) {
     let cut = start + maxLen;
     while (cut > start && !isSafeCut(text, start, cut)) cut--;
-    if (cut === start) cut = start + maxLen; // pathological: no safe boundary
+    if (cut === start) {
+      // Pathological: no safe boundary below maxLen. Take the raw slice, but
+      // still refuse to bisect a surrogate pair.
+      cut = start + maxLen;
+      const prev = text.charCodeAt(cut - 1);
+      if (prev >= 0xd800 && prev <= 0xdbff && cut - 1 > start) cut--;
+    }
     out.push(text.slice(start, cut));
     start = cut;
   }

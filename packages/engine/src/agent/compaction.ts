@@ -45,7 +45,8 @@ export function resolveMustPreserveTokens(
 ): readonly string[] {
   if (typeof spec !== "function") return spec;
   try {
-    return spec(memory);
+    const resolved = spec(memory);
+    return "tokens" in resolved ? resolved.tokens : resolved;
   } catch (err) {
     console.warn("Sport.mustPreserveTokens function threw; using empty list", err);
     return [];

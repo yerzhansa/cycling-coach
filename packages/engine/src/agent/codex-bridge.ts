@@ -163,10 +163,10 @@ function mapUsage(u: CodexUsage): LanguageModelUsage {
 }
 
 // Codex accepts model ids (e.g. "pro") that are not in the price catalog;
-// upstream fell back to the gpt-5.4 template for those, so price unknown codex
-// ids at gpt-5.4 rates rather than dropping to undefined.
+// upstream falls back to its default-model template for those, so price unknown
+// codex ids at gpt-5.6-sol rates rather than dropping to undefined.
 function resolveCodexPriceId(modelId: string): string {
-  return PRICE_TABLE["openai-codex"]?.[modelId] ? modelId : "gpt-5.4";
+  return PRICE_TABLE["openai-codex"]?.[modelId] ? modelId : "gpt-5.6-sol";
 }
 
 // ============================================================================

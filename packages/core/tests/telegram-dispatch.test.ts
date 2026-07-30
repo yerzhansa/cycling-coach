@@ -21,6 +21,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.doUnmock("grammy");
   vi.doUnmock("../src/updater.js");
+  vi.doUnmock("../src/channels/telegram-update-offsets.js");
 });
 
 interface FakeBot {
@@ -40,6 +41,11 @@ interface StubAgent {
   chat: ReturnType<typeof vi.fn>;
   hasSession: ReturnType<typeof vi.fn>;
   resetSession: ReturnType<typeof vi.fn>;
+  confirmations: {
+    peek: ReturnType<typeof vi.fn>;
+    confirm: ReturnType<typeof vi.fn>;
+    cancel: ReturnType<typeof vi.fn>;
+  };
 }
 
 interface StubReference {
@@ -82,6 +88,11 @@ async function buildBot(opts?: {
     chat: vi.fn(),
     hasSession: vi.fn(),
     resetSession: vi.fn(),
+    confirmations: {
+      peek: vi.fn(() => undefined),
+      confirm: vi.fn(),
+      cancel: vi.fn(),
+    },
   };
 
   const { createTelegramBot } = await import("../src/channels/telegram.js");
@@ -107,6 +118,12 @@ function getCommand(bot: FakeBot, name: string) {
 function getMessageText(bot: FakeBot) {
   const call = bot.on.mock.calls.find((c: unknown[]) => c[0] === "message:text");
   if (!call) throw new Error("message:text handler not registered");
+  return call[1] as (ctx: unknown) => Promise<void>;
+}
+
+function getCallbackQueryData(bot: FakeBot) {
+  const call = bot.on.mock.calls.find((c: unknown[]) => c[0] === "callback_query:data");
+  if (!call) throw new Error("callback_query:data handler not registered");
   return call[1] as (ctx: unknown) => Promise<void>;
 }
 
@@ -287,7 +304,105 @@ describe("agent-backed commands", () => {
     await drainPending();
     expect(agent.chat).toHaveBeenCalledWith("telegram:777", "/plan", {
       resolvedCs: { criticalSpeedMps: 4.0, source: "platform", confidence: "high" },
+      referenceProvenance: { garmin: false, nonGarmin: false, unknown: true },
     });
+  });
+});
+
+describe("confirmation callbacks", () => {
+  function callbackCtx(data: string) {
+    return {
+      chat: { id: 777 },
+      callbackQuery: { data },
+      answerCallbackQuery: vi.fn(async () => undefined),
+      editMessageReplyMarkup: vi.fn(async () => undefined),
+      reply: vi.fn(async () => undefined),
+    };
+  }
+
+  it("renders a proposal keyboard after the turn reply", async () => {
+    const { bot, agent, drainPending } = await buildBot();
+    agent.chat.mockResolvedValue("I proposed it.");
+    agent.confirmations.peek.mockReturnValue({ nonce: "server-nonce", summary: "Save plan" });
+    const ctx = makeCtx();
+    await getCommand(bot, "plan")(ctx);
+    await drainPending();
+    expect(ctx.reply).toHaveBeenCalledWith("Save plan", {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "Confirm", callback_data: "cg:y:server-nonce" },
+            { text: "Cancel", callback_data: "cg:n:server-nonce" },
+          ],
+        ],
+      },
+    });
+  });
+
+  it("acks then executes a matching confirmation", async () => {
+    const { bot, agent, drainPending } = await buildBot();
+    agent.confirmations.confirm.mockResolvedValue({
+      status: "executed",
+      summary: "Delete workout",
+      result: { deleted: true },
+    });
+    const ctx = callbackCtx("cg:y:server-nonce");
+    await getCallbackQueryData(bot)(ctx);
+    expect(ctx.answerCallbackQuery).toHaveBeenCalledTimes(1);
+    await drainPending();
+    expect(agent.confirmations.confirm).toHaveBeenCalledWith("telegram:777", "server-nonce");
+    expect(ctx.reply).toHaveBeenCalledWith("Done — Delete workout.");
+  });
+
+  it("cancels and maps unknown or expired proposals to safe copy", async () => {
+    const { bot, agent, drainPending } = await buildBot();
+    const handler = getCallbackQueryData(bot);
+    agent.confirmations.cancel.mockReturnValue("canceled");
+    const cancel = callbackCtx("cg:n:server-nonce");
+    await handler(cancel);
+    await drainPending();
+    expect(cancel.answerCallbackQuery).toHaveBeenCalledTimes(1);
+    expect(cancel.reply).toHaveBeenCalledWith("Canceled — nothing was changed.");
+
+    agent.confirmations.confirm.mockResolvedValue({ status: "expired" });
+    const expired = callbackCtx("cg:y:old");
+    await handler(expired);
+    await drainPending();
+    expect(expired.answerCallbackQuery).toHaveBeenCalledTimes(1);
+    expect(expired.reply).toHaveBeenCalledWith(
+      "That proposal expired — ask me again and I'll re-propose.",
+    );
+
+    const unknown = callbackCtx("other:data");
+    await handler(unknown);
+    expect(unknown.answerCallbackQuery).toHaveBeenCalledTimes(1);
+    expect(agent.confirmations.confirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces failed confirmations without exposing nonce mechanics", async () => {
+    const { bot, agent, drainPending } = await buildBot();
+    agent.confirmations.confirm.mockResolvedValue({
+      status: "failed",
+      summary: "Save plan",
+      message: "service unavailable",
+    });
+    const ctx = callbackCtx("cg:y:server-nonce");
+    await getCallbackQueryData(bot)(ctx);
+    await drainPending();
+    expect(ctx.reply).toHaveBeenCalledWith("That didn't go through — service unavailable");
+  });
+
+  it("inherits update-offset dedupe so a duplicate callback resolves once", async () => {
+    const { bot } = await buildBot();
+    const dedupe = bot.use.mock.calls.at(-1)?.[0] as
+      | ((ctx: unknown, next: () => Promise<void>) => Promise<void>)
+      | undefined;
+    expect(dedupe).toBeDefined();
+    const next = vi.fn(async () => undefined);
+    const ctx = { update: { update_id: 9001 } };
+    await dedupe!(ctx, next);
+    await dedupe!(ctx, next);
+    expect(next).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -825,6 +940,40 @@ describe("/update — ordering invariant", () => {
     const ctx = makeCtx();
     await getCommand(bot, "update")(ctx);
     expect(someReply(ctx, "Could not check for updates. Try again later.")).toBe(true);
+    expect(selfUpdate).not.toHaveBeenCalled();
+  });
+
+  it("self-update marker write failure → safe retry copy, does NOT stop or self-update", async () => {
+    const selfUpdate = vi.fn();
+    vi.doMock("../src/updater.js", async () => {
+      const real = await vi.importActual<typeof import("../src/updater.js")>("../src/updater.js");
+      return {
+        ...real,
+        checkForUpdate: vi.fn(async () => ({
+          current: "2026.5.5",
+          latest: "2026.5.10",
+          updateAvailable: true,
+        })),
+        selfUpdate,
+      };
+    });
+    vi.doMock("../src/channels/telegram-update-offsets.js", () => ({
+      TelegramUpdateOffsetStore: class {
+        shouldDispatch() {
+          return true;
+        }
+        recordSelfUpdate() {
+          throw new Error("marker write failed");
+        }
+      },
+    }));
+
+    const { bot } = await buildBot();
+    const ctx = makeCtx();
+    await getCommand(bot, "update")(ctx);
+
+    expect(someReply(ctx, "Couldn't safely prepare the update just now")).toBe(true);
+    expect(bot.stop).not.toHaveBeenCalled();
     expect(selfUpdate).not.toHaveBeenCalled();
   });
 });

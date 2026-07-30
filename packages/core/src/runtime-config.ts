@@ -14,14 +14,14 @@ export const LLM_PROVIDERS = [
 export type LlmProvider = (typeof LLM_PROVIDERS)[number];
 
 export const DEFAULT_MODELS = {
-  anthropic: "claude-sonnet-4-6",
-  openai: "gpt-5.5",
-  google: "gemini-3.5-flash",
-  "openai-codex": "gpt-5.5",
+  anthropic: "claude-sonnet-5",
+  openai: "gpt-5.6-sol",
+  google: "gemini-3.6-flash",
+  "openai-codex": "gpt-5.6-sol",
   deepseek: "deepseek-v4-flash",
-  qwen: "qwen3.5-plus",
-  minimax: "MiniMax-M2.7",
-  kimi: "kimi-k2.6",
+  qwen: "qwen3.7-plus",
+  minimax: "MiniMax-M3",
+  kimi: "kimi-k3",
   zai: "glm-4.7",
   openrouter: "deepseek/deepseek-v4-flash",
 } as const satisfies Record<LlmProvider, string>;
@@ -56,9 +56,9 @@ export const LLM_MODEL_CATALOGUE: readonly LlmModelCatalogueEntry[] = [
     label: "Anthropic (Claude)",
     defaultModel: DEFAULT_MODELS.anthropic,
     models: [
-      { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", hint: "recommended" },
+      { value: "claude-sonnet-5", label: "Claude Sonnet 5", hint: "recommended" },
       { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5", hint: "fast & cheap" },
-      { value: "claude-opus-4-8", label: "Claude Opus 4.8", hint: "most capable" },
+      { value: "claude-opus-5", label: "Claude Opus 5", hint: "most capable" },
     ],
   },
   {
@@ -66,9 +66,9 @@ export const LLM_MODEL_CATALOGUE: readonly LlmModelCatalogueEntry[] = [
     label: "OpenAI (GPT)",
     defaultModel: DEFAULT_MODELS.openai,
     models: [
-      { value: "gpt-5.5", label: "GPT-5.5", hint: "recommended" },
-      { value: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "fast & cheap" },
-      { value: "gpt-5.4-nano", label: "GPT-5.4 Nano", hint: "cheapest" },
+      { value: "gpt-5.6-sol", label: "GPT-5.6 Sol", hint: "recommended" },
+      { value: "gpt-5.6-terra", label: "GPT-5.6 Terra", hint: "balanced" },
+      { value: "gpt-5.6-luna", label: "GPT-5.6 Luna", hint: "cheapest" },
     ],
   },
   {
@@ -76,9 +76,9 @@ export const LLM_MODEL_CATALOGUE: readonly LlmModelCatalogueEntry[] = [
     label: "Google (Gemini)",
     defaultModel: DEFAULT_MODELS.google,
     models: [
-      { value: "gemini-3.5-flash", label: "Gemini 3.5 Flash", hint: "recommended" },
+      { value: "gemini-3.6-flash", label: "Gemini 3.6 Flash", hint: "recommended" },
       { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro", hint: "most capable" },
-      { value: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite", hint: "cheapest" },
+      { value: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash Lite", hint: "cheapest" },
     ],
   },
   {
@@ -87,8 +87,8 @@ export const LLM_MODEL_CATALOGUE: readonly LlmModelCatalogueEntry[] = [
     hint: "experimental",
     defaultModel: DEFAULT_MODELS["openai-codex"],
     models: [
-      { value: "gpt-5.5", label: "GPT-5.5", hint: "recommended" },
-      { value: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "faster" },
+      { value: "gpt-5.6-sol", label: "GPT-5.6 Sol", hint: "recommended" },
+      { value: "gpt-5.6-luna", label: "GPT-5.6 Luna", hint: "faster" },
     ],
   },
   {
@@ -107,8 +107,8 @@ export const LLM_MODEL_CATALOGUE: readonly LlmModelCatalogueEntry[] = [
     defaultModel: DEFAULT_MODELS.qwen,
     defaultBaseUrl: PROVIDER_BASE_URLS.qwen,
     models: [
-      { value: "qwen3.5-plus", label: "Qwen3.5 Plus", hint: "recommended" },
-      { value: "qwen3-max", label: "Qwen3 Max", hint: "most capable" },
+      { value: "qwen3.7-plus", label: "Qwen3.7 Plus", hint: "recommended" },
+      { value: "qwen3.7-max", label: "Qwen3.7 Max", hint: "most capable" },
     ],
   },
   {
@@ -117,8 +117,8 @@ export const LLM_MODEL_CATALOGUE: readonly LlmModelCatalogueEntry[] = [
     defaultModel: DEFAULT_MODELS.minimax,
     defaultBaseUrl: PROVIDER_BASE_URLS.minimax,
     models: [
-      { value: "MiniMax-M2.7", label: "MiniMax M2.7", hint: "recommended" },
-      { value: "MiniMax-M3", label: "MiniMax M3", hint: "most capable" },
+      { value: "MiniMax-M3", label: "MiniMax M3", hint: "recommended" },
+      { value: "MiniMax-M2.7", label: "MiniMax M2.7" },
     ],
   },
   {
@@ -127,8 +127,8 @@ export const LLM_MODEL_CATALOGUE: readonly LlmModelCatalogueEntry[] = [
     defaultModel: DEFAULT_MODELS.kimi,
     defaultBaseUrl: PROVIDER_BASE_URLS.kimi,
     models: [
-      { value: "kimi-k2.6", label: "Kimi K2.6", hint: "recommended" },
-      { value: "kimi-k2.5", label: "Kimi K2.5", hint: "cheaper" },
+      { value: "kimi-k3", label: "Kimi K3", hint: "recommended" },
+      { value: "kimi-k2.6", label: "Kimi K2.6", hint: "cheaper" },
     ],
   },
   {
@@ -156,7 +156,7 @@ export const LLM_MODEL_CATALOGUE: readonly LlmModelCatalogueEntry[] = [
       },
       { value: "z-ai/glm-5.2", label: "GLM-5.2 (via OpenRouter)", hint: "most capable" },
       { value: "qwen/qwen3.7-plus", label: "Qwen3.7 Plus (via OpenRouter)" },
-      { value: "moonshotai/kimi-k2.6", label: "Kimi K2.6 (via OpenRouter)" },
+      { value: "moonshotai/kimi-k3", label: "Kimi K3 (via OpenRouter)" },
     ],
   },
 ] as const;
@@ -167,23 +167,32 @@ export const COMPACT_MODEL_DEFAULTS = {
 } as const satisfies Partial<Record<LlmProvider, string>>;
 
 const CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
+  "claude-sonnet-5": 1_000_000,
+  "claude-opus-5": 1_000_000,
   "claude-sonnet-4-6": 1_000_000,
   "claude-opus-4-8": 1_000_000,
   "claude-haiku-4-5-20251001": 200_000,
   "gpt-4o": 128_000,
+  "gpt-5.6-sol": 1_050_000,
+  "gpt-5.6-terra": 1_050_000,
+  "gpt-5.6-luna": 1_050_000,
   "gpt-5.5": 1_050_000,
   "gpt-5.4": 1_050_000,
   "gpt-5.4-mini": 400_000,
   "gpt-5.4-nano": 400_000,
+  "gemini-3.6-flash": 1_048_576,
   "gemini-3.5-flash": 1_048_576,
+  "gemini-3.5-flash-lite": 1_048_576,
   "gemini-3.1-pro-preview": 1_048_576,
   "gemini-3.1-flash-lite": 1_048_576,
   "deepseek-v4-flash": 1_000_000,
   "deepseek-v4-pro": 1_000_000,
+  "qwen3.7-plus": 1_000_000,
   "qwen3.5-plus": 1_000_000,
   "qwen3-max": 262_144,
   "MiniMax-M2.7": 204_800,
   "MiniMax-M3": 1_000_000,
+  "kimi-k3": 1_000_000,
   "kimi-k2.6": 262_144,
   "kimi-k2.5": 262_144,
   "glm-5.2": 1_000_000,
@@ -192,6 +201,7 @@ const CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
   "deepseek/deepseek-v4-flash": 1_000_000,
   "z-ai/glm-5.2": 1_000_000,
   "qwen/qwen3.7-plus": 1_000_000,
+  "moonshotai/kimi-k3": 1_000_000,
   "moonshotai/kimi-k2.6": 262_000,
 };
 

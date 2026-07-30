@@ -27,6 +27,7 @@ COPY tools ./tools
 COPY packages/core ./packages/core
 COPY packages/sport-cycling ./packages/sport-cycling
 COPY packages/cycling-coach ./packages/cycling-coach
+COPY LICENSE NOTICE.md ./
 
 # Only build what cycling-coach needs (`...` = the package + all its deps in
 # topo order). Stubs aren't even copied into the image.

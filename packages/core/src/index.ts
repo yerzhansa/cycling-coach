@@ -13,8 +13,11 @@ export { reportFatal } from "./process-guard.js";
 // ─── Sport contract ───────────────────────────────────────────────────
 export type {
   CoreDeps,
+  DerivedPreserveTokens,
   IntervalsActivityType,
   MemorySectionSpec,
+  Person,
+  PreserveTokens,
   Sport,
   SportId,
   SportMemoryShape,
@@ -113,6 +116,12 @@ export type {
   LegacyEngineOverrides,
   LocalCoachEngine,
 } from "./agent/coach-engine.js";
+export {
+  ConfirmationGate,
+  GATED_TOOL_NAMES,
+  PROPOSAL_TTL_MS,
+} from "./agent/confirmation-gate.js";
+export type { ConfirmOutcome } from "./agent/confirmation-gate.js";
 export { ChatStore } from "./agent/chat-store.js";
 export {
   ConversationRecoveryError,
@@ -135,6 +144,20 @@ export type {
 } from "./agent/transcript-store.js";
 export { engineConfigFromConfig } from "./agent/engine-host-adapter.js";
 export { classifyFailure, extractRetryAfterMs } from "./agent/token-utils.js";
+export {
+  DATE_KEY_RE,
+  dateKeySchema,
+  INTERVALS_LIST_MAX_RANGE_DAYS,
+  validateListRange,
+  validateWorkoutCreationDate,
+} from "./agent/date-schema.js";
+export {
+  COACH_EVENT_TAG,
+  COACH_EXTERNAL_ID_PREFIX,
+  buildCoachEventProvenance,
+  buildCoachExternalId,
+  isCoachOwnedEvent,
+} from "./agent/event-provenance.js";
 
 // ─── Auth ─────────────────────────────────────────────────────────────
 export {

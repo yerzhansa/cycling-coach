@@ -3,11 +3,17 @@ import type { ModelMessage } from "ai";
 import { z } from "zod";
 import type { MemorySectionSpec } from "../sport.js";
 import type { MemoryStorePort } from "../host-ports.js";
-import { createMemoryReadTool } from "../sport/memory-tools.js";
+import { createMemoryReadTool, MEMORY_READ_FLUSH_DESCRIPTION } from "../sport/memory-tools.js";
 import type { LLM } from "../llm.js";
 import type { GenerateResult } from "../sport.js";
 import type { TurnBudget } from "./turn-budget.js";
 import { LEDGER_EVENT_KINDS, LEDGER_DATE_PATTERN, type LedgerEventKind } from "../sport/ledger-event.js";
+import { warnOrphanSections } from "../sport/orphan-sections.js";
+import {
+  provenanceOfMessages,
+  unionProvenance,
+  type SourceProvenance,
+} from "../provenance.js";
 import { todayInTZ } from "../sport/user-time.js";
 
 // ============================================================================
@@ -33,6 +39,14 @@ export function shouldRunMemoryFlush(params: {
 export const FLUSH_ZERO_WRITE_MIN_MESSAGES = 4;
 export const FLUSH_SHRINK_MIN_CHARS = 200;
 export const FLUSH_SHRINK_RATIO = 0.7;
+
+// Prompt-layer target size for always-injected sections, used only by the flush
+// budget nudge (below) and the render-time cap math — it emits no event and
+// gates no write. This is a DIFFERENT number and layer from the store-level
+// `SECTION_SOFT_WARN_CHARS` (4000) in store.ts: that 4000 is a store-hygiene
+// backstop that warns on EVERY section write; this 1500 is the target size for
+// the small always-injected sections so the injected Athlete Context stays lean.
+export const MEMORY_SECTION_BUDGET_CHARS = 1500;
 
 export interface MemoryFlushOutcome {
   writes: number;
@@ -83,6 +97,13 @@ Dating discipline for durable facts:
 - Never write "_updated:" lines yourself; the system stamps each section's
   update date automatically.
 
+Keep each section under ~${MEMORY_SECTION_BUDGET_CHARS} characters. When a
+section would grow past that, do NOT let it balloon: move the dated or episodic
+detail (specific workouts, day-by-day observations, one-off events) out to the
+event ledger (ledger_append), and keep only the current durable facts in the
+section itself. Nothing is dropped — ledger entries stay reachable through
+memory_query.
+
 Note (transitional, post-migration): if \`cycling-profile\` contains weight,
 age, or available training days, move them to \`person\`. If \`cycling-history\`
 contains chronic conditions or long-term medications (hypertension, lisinopril,
@@ -109,6 +130,7 @@ Only write sections that have new or changed information.`;
 function createFlushMemoryWriteTool(
   memory: MemoryStorePort,
   sections: readonly MemorySectionSpec[],
+  provenance: () => SourceProvenance,
   onWrite: () => void,
 ) {
   const sectionNames = sections.map((s) => s.name) as [string, ...string[]];
@@ -121,14 +143,18 @@ function createFlushMemoryWriteTool(
       }),
     ),
     execute: async (input: { section: string; content: string }) => {
-      memory.writeSection(input.section, input.content, "flush");
+      memory.writeSection(input.section, input.content, "flush", provenance());
       onWrite();
       return { saved: true };
     },
   });
 }
 
-function createLedgerAppendTool(memory: MemoryStorePort, onAppend: () => void) {
+function createLedgerAppendTool(
+  memory: MemoryStorePort,
+  provenance: () => SourceProvenance,
+  onAppend: () => void,
+) {
   return tool({
     description:
       "Record a dated athlete event (decision, override, illness, experiment, outcome) in the permanent event ledger. Entries are appended, never replaced.",
@@ -146,7 +172,7 @@ function createLedgerAppendTool(memory: MemoryStorePort, onAppend: () => void) {
       }),
     ),
     execute: async (input: { date: string; kind: LedgerEventKind; text: string }) => {
-      memory.appendEvent({ ...input, source: "flush" });
+      memory.appendEvent({ ...input, source: "flush" }, provenance());
       onAppend();
       return { recorded: true };
     },
@@ -203,6 +229,7 @@ export async function runMemoryFlush(params: {
   memorySections: readonly MemorySectionSpec[];
   tz?: string;
   budget?: Pick<TurnBudget, "chargeModelCall">;
+  provenanceForMemoryRead?: (visibleResult: string) => SourceProvenance;
 }): Promise<MemoryFlushOutcome> {
   if (params.memorySections.length === 0) {
     throw new Error(
@@ -212,17 +239,36 @@ export async function runMemoryFlush(params: {
   }
   let writes = 0;
   let ledgerAppends = 0;
+  let visibleProvenance = provenanceOfMessages(params.messages);
   const beforeChars = new Map(
     params.memorySections.map((s) => [s.name, (params.memory.readSection(s.name) ?? "").length]),
   );
   const flushTools = {
-    memory_write: createFlushMemoryWriteTool(params.memory, params.memorySections, () => {
-      writes++;
-    }),
-    memory_read: createMemoryReadTool(params.memory),
-    ledger_append: createLedgerAppendTool(params.memory, () => {
-      ledgerAppends++;
-    }),
+    memory_write: createFlushMemoryWriteTool(
+      params.memory,
+      params.memorySections,
+      () => visibleProvenance,
+      () => {
+        writes++;
+      },
+    ),
+    memory_read: createMemoryReadTool(
+      params.memory,
+      MEMORY_READ_FLUSH_DESCRIPTION,
+      (visibleResult) => {
+        visibleProvenance = unionProvenance(
+          visibleProvenance,
+          params.provenanceForMemoryRead?.(visibleResult),
+        );
+      },
+    ),
+    ledger_append: createLedgerAppendTool(
+      params.memory,
+      () => visibleProvenance,
+      () => {
+        ledgerAppends++;
+      },
+    ),
   };
 
   params.budget?.chargeModelCall();
@@ -243,6 +289,7 @@ export async function runMemoryFlush(params: {
 
   params.memory.reload();
   scanForStuckChronic(params.memory);
+  warnOrphanSections(params.memory, params.memorySections);
 
   const shrunkSections: MemoryFlushOutcome["shrunkSections"] = [];
   for (const spec of params.memorySections) {

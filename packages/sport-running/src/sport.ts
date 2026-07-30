@@ -38,16 +38,22 @@ const memorySections: readonly MemorySectionSpec[] = [
     description:
       "Critical speed (CS), threshold pace, max HR, resting HR, experience level. " +
       "Body data lives in `person`; this is running-specific physiology.",
+    hint: "critical speed, threshold pace, HRs, experience level",
+    inject: true,
   },
   {
     name: "running-equipment",
     description: "Shoes (model, mileage), GPS watch, treadmill, racing flats",
+    hint: "shoes, GPS watch, treadmill",
+    inject: false,
   },
   {
     name: "running-history",
     description:
       "Running-specific injuries (shin splints, IT band, plantar, calf, Achilles), CS/threshold " +
       "test history, recovery patterns from runs. Chronic conditions belong in `medical-history`, not here.",
+    hint: "running injuries, CS test history, run recovery patterns",
+    inject: false,
   },
 ];
 
@@ -57,7 +63,7 @@ export const runningSport: Sport = {
   skills: loadSkills(),
   sessionClusterGapMinutes: 30,
   memorySections,
-  mustPreserveTokens: (memory: MemorySnapshot): readonly string[] => {
+  mustPreserveTokens: (memory: MemorySnapshot) => {
     const tokens: string[] = [...RUNNING_VOCABULARY];
     const profile = memory.read("running-profile");
     if (profile) {
@@ -65,7 +71,10 @@ export const runningSport: Sport = {
       // "CS: 4.0 m/s", "critical speed 4.0 m/s". One decimal m/s value; first
       // match only (historical CS values aren't identity-defining).
       const match = profile.match(/\bCS\b[\s:,-]*(\d\.\d{1,2})\s*(?:m\/s)?\b/i);
-      if (match) tokens.push(`CS ${match[1]} m/s`);
+      if (match) {
+        tokens.push(`CS ${match[1]} m/s`);
+        return { tokens, provenance: memory.provenanceOf("running-profile") };
+      }
     }
     return tokens;
   },
@@ -77,7 +86,9 @@ export const runningSport: Sport = {
     // Pure-Core, intervals Core-with-sport-config, and the sport-specific
     // running tools.
     const toolset = {
-      ...createMemoryTools(deps.memory, sections),
+      ...createMemoryTools(deps.memory, sections, {
+        bindProvenance: deps.bindMemoryToolProvenance,
+      }),
       ...createPureCoreIntervalsTools(deps.intervals, deps.tz, deps.athleteData, deps.calendarMutations),
       ...createCoreToolsWithSportConfig(deps.intervals, runningSport.intervalsActivityTypes, deps.athleteData),
       ...createRunningTools(deps.memory, deps.intervals, deps.tz, deps.resolvedCs),

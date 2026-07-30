@@ -1,17 +1,49 @@
 import { APICallError } from "@ai-sdk/provider";
 import { readRefreshFailureReason } from "../auth/refresh-failure.js";
 
+const OVERFLOW_MESSAGE_PATTERNS = [
+  "context_length",
+  "context window",
+  "maximum context",
+  "token limit",
+  "too many tokens",
+  "content_too_large",
+  "prompt is too long",
+  "exceeds the maximum",
+  "input token count",
+] as const;
+
+// A single OpenAI-family structured code; other providers signal overflow only
+// in the message text, handled by the pattern list above.
+const OVERFLOW_ERROR_CODES = new Set(["context_length_exceeded"]);
+
+function matchesOverflowText(text: string): boolean {
+  const lower = text.toLowerCase();
+  return OVERFLOW_MESSAGE_PATTERNS.some((p) => lower.includes(p));
+}
+
+// A 400 is the only status that can carry a context-overflow invalid request;
+// a generic 400 must stay invalid_request, so read the structured body rather
+// than treating every 400 as overflow.
+function apiCallOverflowSignal(err: APICallError): boolean {
+  if (err.statusCode !== 400) return false;
+  const data = err.data as
+    | { error?: { code?: unknown; message?: unknown } }
+    | undefined;
+  const code = data?.error?.code;
+  if (typeof code === "string" && OVERFLOW_ERROR_CODES.has(code)) return true;
+  const bodyMessage = data?.error?.message;
+  if (typeof bodyMessage === "string" && matchesOverflowText(bodyMessage)) return true;
+  if (typeof err.responseBody === "string" && matchesOverflowText(err.responseBody)) return true;
+  return false;
+}
+
 export function isContextOverflowError(err: unknown): boolean {
+  // Codex-normalized overflow is authoritative (the bridge sets this name).
+  if (err instanceof Error && err.name === "ContextOverflowError") return true;
+  if (APICallError.isInstance(err) && apiCallOverflowSignal(err)) return true;
   if (!(err instanceof Error)) return false;
-  const msg = err.message.toLowerCase();
-  return (
-    msg.includes("context_length") ||
-    msg.includes("context window") ||
-    msg.includes("maximum context") ||
-    msg.includes("token limit") ||
-    msg.includes("too many tokens") ||
-    msg.includes("content_too_large")
-  );
+  return matchesOverflowText(err.message);
 }
 
 export function isTimeoutError(err: unknown): boolean {

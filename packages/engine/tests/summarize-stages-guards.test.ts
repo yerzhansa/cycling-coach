@@ -38,6 +38,7 @@ const EMPTY_SNAPSHOT: MemorySnapshot = {
   read: () => null,
   has: () => false,
   listSections: () => [],
+    provenanceOf: () => ({ garmin: false, nonGarmin: false, unknown: true }),
 };
 
 const hangingLLM = { generate: () => new Promise<never>(() => {}) } as unknown as LLM;

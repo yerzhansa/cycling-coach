@@ -8,7 +8,9 @@ import {
   runMemoryFlush,
   FLUSH_ZERO_WRITE_MIN_MESSAGES,
   FLUSH_SHRINK_MIN_CHARS,
+  MEMORY_SECTION_BUDGET_CHARS,
 } from "../src/agent/memory-flush.js";
+import { _resetOrphanWarnCacheForTesting } from "../src/sport/orphan-sections.js";
 import type { MemorySectionSpec } from "../src/sport.js";
 import type { GenerateOpts } from "../src/llm-types.js";
 import { createFakeLLM, type FakeLLM, type QueuedTurn } from "./helpers/fake-llm.js";
@@ -44,6 +46,7 @@ describe("runMemoryFlush outcome detection", () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    _resetOrphanWarnCacheForTesting();
     dataDir = mkdtempSync(join(tmpdir(), "cc-flushout-"));
     mkdirSync(join(dataDir, "memory"), { recursive: true });
     memoryFile = join(dataDir, "memory", "MEMORY.md");
@@ -139,6 +142,58 @@ describe("runMemoryFlush outcome detection", () => {
     });
     expect(outcome.writes).toBe(2);
     expect(eventsNamed("memory_flush_zero_writes")).toHaveLength(0);
+  });
+
+  it("preserves Garmin provenance when a flush reads and rewrites labeled memory", async () => {
+    const memory = new Memory(dataDir);
+    memory.writeSection("goals", "Garmin-derived goal", "chat-tool", {
+      garmin: true,
+      nonGarmin: false,
+      unknown: false,
+    });
+    const llm = drivenLLM([""], async (tools) => {
+      await tools.memory_read.execute!({}, {} as never);
+      await tools.memory_write.execute!(
+        { section: "goals", content: "Garmin-derived goal" },
+        {} as never,
+      );
+    });
+
+    await runMemoryFlush({
+      llm,
+      messages: TRIVIAL,
+      memory,
+      memorySections: SECTIONS,
+      provenanceForMemoryRead: (visibleResult) =>
+        memory.provenanceForToolRead("memory_read", {}, visibleResult),
+    });
+
+    expect(memory.getContextWithProvenance().provenance.garmin).toBe(true);
+  });
+
+  it("does not infer Garmin provenance when a flush writes without reading it", async () => {
+    const memory = new Memory(dataDir);
+    const llm = drivenLLM([""], async (tools) => {
+      await tools.memory_write.execute!(
+        { section: "goals", content: "GARMIN_CONNECT appears only as text" },
+        {} as never,
+      );
+    });
+
+    await runMemoryFlush({
+      llm,
+      messages: TRIVIAL,
+      memory,
+      memorySections: SECTIONS,
+      provenanceForMemoryRead: (visibleResult) =>
+        memory.provenanceForToolRead("memory_read", {}, visibleResult),
+    });
+
+    expect(memory.getContextWithProvenance().provenance).toEqual({
+      garmin: false,
+      nonGarmin: false,
+      unknown: true,
+    });
   });
 
   it("warns with char counts only when a section shrinks past the ratio", async () => {
@@ -243,6 +298,40 @@ describe("runMemoryFlush outcome detection", () => {
     expect(first.writes).toBe(1);
     expect(second.writes).toBe(1);
     expect(afterSecond).toBe(afterFirst);
+  });
+
+  it("warns about an orphan section after the post-flush reload", async () => {
+    writeFileSync(memoryFile, "## goals\nFTP 280W\n\n## random-legacy\nstale body\n", "utf-8");
+    const memory = new Memory(dataDir);
+    await runMemoryFlush({
+      llm: createFakeLLM([""]),
+      messages: NON_TRIVIAL,
+      memory,
+      memorySections: SECTIONS,
+    });
+    const orphan = eventsNamed("memory_orphan_sections");
+    expect(orphan).toHaveLength(1);
+    expect(orphan[0].names).toEqual(["random-legacy"]);
+  });
+
+  it("flush toolset's memory_read carries the read-role description, not the chat nudge", async () => {
+    const memory = new Memory(dataDir);
+    const llm = createFakeLLM([""]);
+    await runMemoryFlush({ llm, messages: TRIVIAL, memory, memorySections: SECTIONS });
+    const tools = llm.capturedOpts[0].tools as ToolSet;
+    const desc = (tools.memory_read as { description?: string }).description ?? "";
+    expect(desc).toContain("read first to carry existing facts forward");
+    expect(desc).not.toContain("do not call this to re-read");
+  });
+
+  it("flush user prompt carries the section-budget nudge with the budget value", async () => {
+    const memory = new Memory(dataDir);
+    const llm = createFakeLLM([""]);
+    await runMemoryFlush({ llm, messages: TRIVIAL, memory, memorySections: SECTIONS });
+    const messages = llm.capturedOpts[0].messages ?? [];
+    const flushPrompt = String(messages[messages.length - 1]?.content ?? "");
+    expect(flushPrompt).toContain(`under ~${MEMORY_SECTION_BUDGET_CHARS} characters`);
+    expect(flushPrompt).toContain("do NOT let it balloon");
   });
 
   it("an LLM error still propagates and emits no detection events", async () => {

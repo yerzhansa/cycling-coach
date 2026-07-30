@@ -28,8 +28,8 @@ describe("memory_query tool", () => {
   it("registers memory_query in createMemoryTools", () => {
     const tools = createMemoryTools(memory, SECTIONS);
     expect(Object.keys(tools)).toContain("memory_query");
-    expect(tools.memory_read.description).toBe(
-      "Read long-term athlete memory, today's notes, and current plan state",
+    expect(tools.memory_read.description).toContain(
+      "do not call this to re-read them unless you wrote memory this turn",
     );
   });
 

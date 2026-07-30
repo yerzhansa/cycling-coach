@@ -1,9 +1,22 @@
 import { defineConfig } from "tsup";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { generateLegalArtifacts } from "./build/legal-artifacts.js";
+
+const packageRoot = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(packageRoot, "../..");
 
 export default defineConfig({
   entry: ["src/index.ts"],
   format: ["esm"],
   sourcemap: true,
+  metafile: true,
+  esbuildOptions(options) {
+    options.absWorkingDir = repoRoot;
+    options.entryPoints = [resolve(packageRoot, "src/index.ts")];
+    options.outdir = resolve(packageRoot, "dist");
+    options.legalComments = "eof";
+  },
   clean: true,
   splitting: false,
   // Bundle @enduragent/* into the binary. The libs are private workspace
@@ -22,4 +35,5 @@ export default defineConfig({
       "const require = __createRequire(import.meta.url);",
     ].join("\n"),
   },
+  onSuccess: generateLegalArtifacts,
 });

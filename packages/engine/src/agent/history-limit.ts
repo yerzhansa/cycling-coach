@@ -1,6 +1,11 @@
 import type { ModelMessage } from "ai";
 import { estimateTokens, estimateMessagesTokens } from "./token-utils.js";
 import { messageText } from "../sport/model-message.js";
+import {
+  getMessageProvenance,
+  setMessageProvenance,
+  type SourceProvenance,
+} from "../provenance.js";
 
 export const SUMMARY_PREFIX = "[Previous conversation summary]";
 
@@ -8,6 +13,7 @@ export interface SplitResult {
   kept: ModelMessage[];
   dropped: ModelMessage[];
   previousSummary: string | undefined;
+  previousSummaryProvenance: SourceProvenance | undefined;
 }
 
 export function splitHistoryByBudget(params: {
@@ -17,11 +23,17 @@ export function splitHistoryByBudget(params: {
   const { messages, tokenBudget } = params;
 
   if (messages.length === 0) {
-    return { kept: [], dropped: [], previousSummary: undefined };
+    return {
+      kept: [],
+      dropped: [],
+      previousSummary: undefined,
+      previousSummaryProvenance: undefined,
+    };
   }
 
   // Extract existing summary from messages[0] if present
   let previousSummary: string | undefined;
+  let previousSummaryProvenance: SourceProvenance | undefined;
   let conversationMessages: ModelMessage[];
 
   const first = messages[0];
@@ -31,9 +43,11 @@ export function splitHistoryByBudget(params: {
     first.content.startsWith(SUMMARY_PREFIX)
   ) {
     previousSummary = first.content.slice(SUMMARY_PREFIX.length + 1); // skip prefix + newline
+    previousSummaryProvenance = getMessageProvenance(first);
     conversationMessages = messages.slice(1);
   } else {
     previousSummary = undefined;
+    previousSummaryProvenance = undefined;
     conversationMessages = messages;
   }
 
@@ -49,9 +63,15 @@ export function splitHistoryByBudget(params: {
   const dropped = conversationMessages.slice(0, startIdx);
   const kept = conversationMessages.slice(startIdx);
 
-  return { kept, dropped, previousSummary };
+  return { kept, dropped, previousSummary, previousSummaryProvenance };
 }
 
-export function makeSummaryMessage(summaryText: string): ModelMessage {
-  return { role: "system", content: `${SUMMARY_PREFIX}\n${summaryText}` };
+export function makeSummaryMessage(
+  summaryText: string,
+  provenance: SourceProvenance = { garmin: false, nonGarmin: false, unknown: true },
+): ModelMessage {
+  return setMessageProvenance(
+    { role: "system", content: `${SUMMARY_PREFIX}\n${summaryText}` },
+    provenance,
+  );
 }

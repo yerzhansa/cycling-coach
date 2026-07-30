@@ -14,6 +14,7 @@ import type { ReferenceSportAdapter } from "../sport-adapter.js";
 import type { IntervalsActivityType } from "../../sport.js";
 import type { DerivedMetricsMeta } from "../schemas/latest.js";
 import type { PhysicalRequestLedger } from "@enduragent/kernel/store";
+import { buildLatestSourceProvenance } from "../source-provenance.js";
 
 /**
  * Resolve, in a single scan of `runs`, the watts-fence decision plus the
@@ -145,6 +146,12 @@ async function fetchOnce(
       recent_activities: live.recentActivities,
       planned_workouts: live.plannedWorkouts,
       wellness_data: live.wellnessData,
+      source_provenance: buildLatestSourceProvenance({
+        bundle: live.bundle,
+        athleteProfile: live.athleteProfile,
+        recentActivities: live.recentActivities,
+        wellnessData: live.wellnessData,
+      }),
     },
     history: { daily: [], weekly: [], monthly: [] },
     intervals: { by_activity: {} },

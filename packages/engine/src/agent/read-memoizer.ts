@@ -3,12 +3,13 @@ import type { Tool } from "ai";
 // Membership requires the tool's `execute` to be side-effect-free: a memoized
 // hit returns the cached value WITHOUT re-invoking `execute`, so any tool that
 // mutates state on each call must stay off this set. The cautionary case is
-// `build_plan_skeleton` — it returns a value AND writes a plan via savePlan, so
-// memoizing it would silently skip the write on a duplicate call. This is a
+// `plan_save` — it returns {saved:true} AND writes a plan, so memoizing it would
+// silently skip the write on a duplicate call. This is a
 // positive, hand-audited allowlist, NOT the negation of the calendar-write set.
 export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   "calculate_zones",
   "assess_feasibility",
+  "build_plan_skeleton",
   "get_sample_week",
   "intervals_fetch_athlete",
   "intervals_fetch_wellness",
@@ -36,6 +37,21 @@ export function stableStringify(value: unknown): string {
     .sort()
     .map((key) => JSON.stringify(key) + ":" + stableStringify(record[key]));
   return "{" + entries.join(",") + "}";
+}
+
+// The memory read tools serve snapshots of state that memory_write / plan_save
+// mutate mid-turn. After such a write commits,
+// their cached entries are stale — and the chat memory_read description
+// explicitly invites a re-read after a same-turn write — so the write boundary
+// evicts them rather than serving the pre-write snapshot as fresh.
+const MEMORY_READ_KEY_PREFIXES = ["memory_read ", "memory_query ", "plan_load "] as const;
+
+export function evictMemoryReadEntries(cache: Map<string, unknown>): void {
+  for (const key of cache.keys()) {
+    if (MEMORY_READ_KEY_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      cache.delete(key);
+    }
+  }
 }
 
 export function memoizeKey(toolName: string, args: unknown): string {

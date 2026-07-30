@@ -3,6 +3,7 @@ import type { ModelMessage } from "ai";
 import type { IntervalsClient } from "intervals-icu-api";
 import type { GenerateOptions, GenerateResult } from "./sport.js";
 import type { LedgerEventInput } from "./sport/ledger-event.js";
+import type { SourceProvenance } from "./provenance.js";
 
 export type EngineDataSource = "platform" | "store";
 
@@ -44,8 +45,15 @@ export type MemoryWriteSource = "chat-tool" | "flush" | "sport-tool" | "migratio
 
 export interface MemoryStorePort {
   readMemory(): string;
-  writeSection(section: string, content: string, source?: MemoryWriteSource): void;
+  writeSection(
+    section: string,
+    content: string,
+    source?: MemoryWriteSource,
+    provenance?: SourceProvenance,
+  ): void;
   readSection(section: string): string | null;
+  /** Source labels for the current contents of one durable memory section. */
+  provenanceForSection?(section: string, content?: string): SourceProvenance;
   renameSection(
     from: string,
     to: string,
@@ -56,20 +64,29 @@ export interface MemoryStorePort {
     source?: MemoryWriteSource,
   ): Array<"renamed" | "noop" | "merged">;
   readDailyNotes(date?: string): string;
-  appendDailyNote(note: string, date?: string): void;
+  appendDailyNote(note: string, date?: string, provenance?: SourceProvenance): void;
   readDailyNotesInRange(from: string, to: string): Array<{ date: string; text: string }>;
   readEventsRaw(): string;
-  appendEvent(event: LedgerEventInput): void;
-  savePlan(plan: unknown, source?: MemoryWriteSource): void;
+  appendEvent(event: LedgerEventInput, provenance?: SourceProvenance): void;
+  savePlan(plan: unknown, source?: MemoryWriteSource, provenance?: SourceProvenance): void;
   loadPlan(): unknown | null;
+  /** Source labels bound to the exact visible result of a synchronous tool read. */
+  provenanceForToolRead?(
+    name: string,
+    input: unknown,
+    visibleResult?: unknown,
+    opts?: { truncated?: boolean },
+  ): SourceProvenance;
   reload(): void;
-  getContext(): string;
+  getContext(opts?: { excludeSections?: readonly string[] }): string;
 }
 
 export interface MemorySnapshot {
   read(sectionName: string): string | null;
   has(sectionName: string): boolean;
   listSections(): readonly string[];
+  /** Source labels attached to the frozen section contents. */
+  provenanceOf(sectionName: string): SourceProvenance;
 }
 
 export interface ChatLineage {

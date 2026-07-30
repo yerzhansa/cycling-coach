@@ -75,6 +75,7 @@ export const ActivitySchema = z.looseObject({
   type: z.string(), // "Ride", "VirtualRide", "Run", etc.
   moving_time: z.number().nonnegative(),
   elapsed_time: z.number().nonnegative(),
+  source: z.string().nullable().optional().catch(undefined),
 
   // Load + intensity. Nullish because intervals.icu may omit them or send
   // explicit null on sessions it can't load-score (e.g., WeightTraining,

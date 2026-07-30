@@ -68,6 +68,49 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
 }
 
 export { extractAccountId };
+export { makeSummaryMessage, splitHistoryByBudget, SUMMARY_PREFIX } from "./agent/history-limit.js";
+export { truncateUtf16Safe } from "./text-truncate.js";
+export { warnOrphanSections, _resetOrphanWarnCacheForTesting } from "./sport/orphan-sections.js";
+export { capToolResult, TOOL_RESULT_SHARE } from "./agent/tool-result-cap.js";
+export {
+  bindToolResult,
+  boundToolResultProvenance,
+  carryBoundToolResultProvenance,
+  unwrapBoundToolResult,
+} from "./sport/bound-tool-result.js";
+export {
+  DATE_KEY_RE,
+  INTERVALS_LIST_MAX_RANGE_DAYS,
+  dateKeySchema,
+  validateListRange,
+  validateWorkoutCreationDate,
+} from "./sport/date-schema.js";
+export {
+  ATHLETE_CONTEXT_FENCE_CLOSE,
+  ATHLETE_CONTEXT_FENCE_OPEN,
+  ATHLETE_CONTEXT_TRUNCATION_NOTICE,
+  FENCE_TOKEN_REPLACEMENT,
+  isUntrustedEnvelope,
+  markUntrustedResult,
+  sanitizeUntrustedText,
+  wrapAthleteContextFence,
+} from "./agent/prompt-fence.js";
+export {
+  EMPTY_PROVENANCE,
+  UNKNOWN_PROVENANCE,
+  classifyActivities,
+  classifyActivity,
+  classifyTrustedSource,
+  contentDigest,
+  getMessageProvenance,
+  isNonEmptyData,
+  isSourceProvenance,
+  provenanceForSourceBearingData,
+  provenanceOfMessages,
+  setMessageProvenance,
+  unionProvenance,
+  type SourceProvenance,
+} from "./provenance.js";
 export {
   cacheReadSavingsUsd,
   classifySpendCaching,

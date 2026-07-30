@@ -18,6 +18,7 @@ import type {
   CreateCoachEngineInput,
   ModelTransportDecorator,
 } from "@enduragent/engine";
+import { LATEST_SCHEMA_VERSION } from "@enduragent/kernel/reference/schemas";
 import { createPhysicalRequestLedger, runMigrations } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import type { ReferenceCaptureManifest } from "@enduragent/kernel/reference/capture";
@@ -42,7 +43,7 @@ const roots: string[] = [];
 const stores: CoachStoreWriterContext["store"][] = [];
 
 const state: AthleteState = {
-  schemaVersion: "3",
+  schemaVersion: LATEST_SCHEMA_VERSION,
   lastUpdated: "2026-07-18T00:00:00.000Z",
   freshness: "fresh",
   degraded: true,
@@ -71,7 +72,7 @@ const state: AthleteState = {
 function latest() {
   return {
     metadata: {
-      schema_version: "3",
+      schema_version: LATEST_SCHEMA_VERSION,
       last_updated: state.lastUpdated,
       freshness: state.freshness,
     },

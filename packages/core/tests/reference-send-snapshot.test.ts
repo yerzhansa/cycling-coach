@@ -1,7 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GrammyError } from "grammy";
 import { sendSnapshotOutput } from "../src/reference/sync/send-snapshot.js";
-import type { SnapshotOutput } from "../src/reference/sync/snapshot-debug.js";
+import {
+  formatSnapshotRaw,
+  snapshotChunkToTelegramHtml,
+  type SnapshotOutput,
+} from "../src/reference/sync/snapshot-debug.js";
+import { GARMIN_DATA_ATTRIBUTION } from "../src/agent/garmin-attribution.js";
+import type { LatestJson } from "../src/reference/schemas/latest.js";
+
+const attributedChunk = (body: string) => `${GARMIN_DATA_ATTRIBUTION}\n\n${body}`;
+const snapshotChunk = (body: string) => attributedChunk(`\`\`\`\n${body}\n\`\`\``);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -9,14 +18,15 @@ afterEach(() => {
 
 const chunkedOutput = (count: number): SnapshotOutput => ({
   kind: "chunks",
-  chunks: Array.from({ length: count }, (_, i) => `chunk-${i}`),
+  chunks: Array.from({ length: count }, (_, i) => attributedChunk(`chunk-${i}`)),
 });
 
 const documentOutput = (): SnapshotOutput => ({
   kind: "document",
   buffer: Buffer.from('{"big":"dump"}', "utf8"),
   filename: "snapshot-test.json",
-  chunks: ["chunk-fallback-1", "chunk-fallback-2"],
+  chunks: [snapshotChunk("chunk-fallback-1"), snapshotChunk("chunk-fallback-2")],
+  provenance: { garmin: true, nonGarmin: false, unknown: false },
 });
 
 const makeGrammyRateLimitError = (retryAfterSec: number): unknown => {
@@ -39,12 +49,16 @@ describe("sendSnapshotOutput", () => {
     const reply = vi.fn().mockResolvedValue(undefined);
     const sleep = vi.fn().mockResolvedValue(undefined);
 
-    const r = await sendSnapshotOutput(chunkedOutput(3), { reply, sleep });
+    const r = await sendSnapshotOutput(chunkedOutput(3), {
+      reply,
+      replyHtml: reply,
+      sleep,
+    });
 
     expect(reply).toHaveBeenCalledTimes(3);
-    expect(reply).toHaveBeenNthCalledWith(1, "chunk-0");
-    expect(reply).toHaveBeenNthCalledWith(2, "chunk-1");
-    expect(reply).toHaveBeenNthCalledWith(3, "chunk-2");
+    expect(reply).toHaveBeenNthCalledWith(1, attributedChunk("chunk-0"));
+    expect(reply).toHaveBeenNthCalledWith(2, attributedChunk("chunk-1"));
+    expect(reply).toHaveBeenNthCalledWith(3, attributedChunk("chunk-2"));
     expect(r).toEqual({ sent: 3, total: 3, interrupted: false });
     expect(sleep).not.toHaveBeenCalled();
   });
@@ -58,7 +72,11 @@ describe("sendSnapshotOutput", () => {
       .mockResolvedValueOnce(undefined); // chunk 2
     const sleep = vi.fn().mockResolvedValue(undefined);
 
-    const r = await sendSnapshotOutput(chunkedOutput(3), { reply, sleep });
+    const r = await sendSnapshotOutput(chunkedOutput(3), {
+      reply,
+      replyHtml: reply,
+      sleep,
+    });
 
     expect(reply).toHaveBeenCalledTimes(4);
     expect(sleep).toHaveBeenCalledTimes(1);
@@ -73,7 +91,11 @@ describe("sendSnapshotOutput", () => {
       .mockResolvedValue(undefined);
     const sleep = vi.fn().mockResolvedValue(undefined);
 
-    const r = await sendSnapshotOutput(chunkedOutput(1), { reply, sleep });
+    const r = await sendSnapshotOutput(chunkedOutput(1), {
+      reply,
+      replyHtml: reply,
+      sleep,
+    });
 
     expect(sleep).toHaveBeenCalledWith(1_000);
     expect(r).toEqual({ sent: 1, total: 1, interrupted: false });
@@ -89,7 +111,11 @@ describe("sendSnapshotOutput", () => {
       .mockResolvedValueOnce(undefined); // interrupted-message reply
     const sleep = vi.fn().mockResolvedValue(undefined);
 
-    const r = await sendSnapshotOutput(chunkedOutput(5), { reply, sleep });
+    const r = await sendSnapshotOutput(chunkedOutput(5), {
+      reply,
+      replyHtml: reply,
+      sleep,
+    });
 
     expect(r).toEqual({ sent: 2, total: 5, interrupted: true });
     expect(reply).toHaveBeenCalledTimes(5);
@@ -105,31 +131,97 @@ describe("sendSnapshotOutput", () => {
 
     const r = await sendSnapshotOutput(documentOutput(), {
       reply,
+      replyHtml: reply,
       sendDocument,
       sleep,
     });
 
     expect(sendDocument).toHaveBeenCalledOnce();
+    expect(sendDocument).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      "snapshot-test.json",
+      GARMIN_DATA_ATTRIBUTION,
+    );
+    const uploaded = sendDocument.mock.calls[0]![0] as Buffer;
+    expect(uploaded.toString("utf8")).toBe('{"big":"dump"}');
+    expect(JSON.parse(uploaded.toString("utf8"))).toEqual({ big: "dump" });
     expect(reply).not.toHaveBeenCalled();
     expect(r).toEqual({ sent: 1, total: 1, interrupted: false });
   });
 
   it("falls through to chunked-with-retry when sendDocument throws", async () => {
     const reply = vi.fn().mockResolvedValue(undefined);
+    const replyHtml = vi.fn().mockResolvedValue(undefined);
     const sendDocument = vi.fn().mockRejectedValue(new Error("upload denied"));
     const sleep = vi.fn().mockResolvedValue(undefined);
 
     const r = await sendSnapshotOutput(documentOutput(), {
       reply,
+      replyHtml,
       sendDocument,
       sleep,
     });
 
     expect(sendDocument).toHaveBeenCalledOnce();
-    expect(reply).toHaveBeenCalledTimes(2); // both fallback chunks
-    expect(reply).toHaveBeenNthCalledWith(1, "chunk-fallback-1");
-    expect(reply).toHaveBeenNthCalledWith(2, "chunk-fallback-2");
+    expect(reply).not.toHaveBeenCalled();
+    expect(replyHtml).toHaveBeenCalledTimes(2);
+    expect(replyHtml).toHaveBeenNthCalledWith(
+      1,
+      snapshotChunkToTelegramHtml(snapshotChunk("chunk-fallback-1")),
+    );
+    expect(replyHtml).toHaveBeenNthCalledWith(
+      2,
+      snapshotChunkToTelegramHtml(snapshotChunk("chunk-fallback-2")),
+    );
     expect(r).toEqual({ sent: 2, total: 2, interrupted: false });
+  });
+
+  it("preserves fence-containing JSON when document upload falls back to rendered chunks", async () => {
+    const latest = {
+      metadata: {
+        schema_version: "1",
+        last_updated: "1998-05-09T14:00:00Z",
+        freshness: "fresh",
+      },
+      athlete_profile: { id: "synthetic" },
+      current_status: {},
+      derived_metrics: {},
+      recent_activities: [{ id: 1, description: "before ``` middle ``` after" }],
+      planned_workouts: [],
+      wellness_data: {},
+    } as LatestJson;
+    const output = formatSnapshotRaw(latest);
+    expect(output.kind).toBe("document");
+    if (output.kind !== "document") return;
+    const rendered: string[] = [];
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const replyHtml = vi.fn(async (html: string) => {
+      rendered.push(html);
+    });
+
+    const result = await sendSnapshotOutput(output, {
+      reply,
+      replyHtml,
+      sendDocument: vi.fn().mockRejectedValue(new Error("upload denied")),
+      sleep: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(result).toEqual({
+      sent: output.chunks.length,
+      total: output.chunks.length,
+      interrupted: false,
+    });
+    expect(rendered).toHaveLength(output.chunks.length);
+    expect(reply).not.toHaveBeenCalled();
+    for (const html of rendered) {
+      expect(html.match(/<pre>/g)).toHaveLength(1);
+      expect(html.match(/<\/pre>/g)).toHaveLength(1);
+    }
+    const fallbackBody = output.chunks
+      .map((chunk) => chunk.slice("```\n".length, -"\n```".length))
+      .join("");
+    expect(fallbackBody).toBe(output.buffer.toString("utf8"));
+    expect(JSON.parse(fallbackBody)).toEqual(latest);
   });
 
   it("falls back to default backoff when retry_after is Infinity (would otherwise park ~25 days)", async () => {
@@ -139,7 +231,11 @@ describe("sendSnapshotOutput", () => {
       .mockResolvedValue(undefined);
     const sleep = vi.fn().mockResolvedValue(undefined);
 
-    const r = await sendSnapshotOutput(chunkedOutput(1), { reply, sleep });
+    const r = await sendSnapshotOutput(chunkedOutput(1), {
+      reply,
+      replyHtml: reply,
+      sleep,
+    });
 
     expect(sleep).toHaveBeenCalledWith(1_000); // default, not Infinity
     expect(r).toEqual({ sent: 1, total: 1, interrupted: false });
@@ -152,7 +248,7 @@ describe("sendSnapshotOutput", () => {
       .mockResolvedValue(undefined);
     const sleep = vi.fn().mockResolvedValue(undefined);
 
-    await sendSnapshotOutput(chunkedOutput(1), { reply, sleep });
+    await sendSnapshotOutput(chunkedOutput(1), { reply, replyHtml: reply, sleep });
 
     expect(sleep).toHaveBeenCalledWith(1_000);
   });
@@ -164,7 +260,7 @@ describe("sendSnapshotOutput", () => {
       .mockResolvedValue(undefined);
     const sleep = vi.fn().mockResolvedValue(undefined);
 
-    await sendSnapshotOutput(chunkedOutput(1), { reply, sleep });
+    await sendSnapshotOutput(chunkedOutput(1), { reply, replyHtml: reply, sleep });
 
     expect(sleep).toHaveBeenCalledWith(1_000);
   });
@@ -176,7 +272,7 @@ describe("sendSnapshotOutput", () => {
       .mockResolvedValue(undefined);
     const sleep = vi.fn().mockResolvedValue(undefined);
 
-    await sendSnapshotOutput(chunkedOutput(1), { reply, sleep });
+    await sendSnapshotOutput(chunkedOutput(1), { reply, replyHtml: reply, sleep });
 
     expect(sleep).toHaveBeenCalledWith(300_000);
   });

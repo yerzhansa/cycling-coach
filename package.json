@@ -20,6 +20,7 @@
     "check:trademarks": "tsx tools/check-trademarks.ts",
     "check:fixture-privacy": "tsx tools/check-fixture-privacy.ts",
     "check:registry-isolation": "tsx tools/check-registry-isolation.ts",
+    "check:published-package": "node --import tsx tools/check-published-package.ts",
     "check:changeset-userfacing": "tsx tools/check-changeset-user-facing.ts",
     "check:contract-deps": "tsx tools/check-contract-deps.ts",
     "check:package-deps": "tsx tools/check-package-deps.ts",

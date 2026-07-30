@@ -1,5 +1,17 @@
 # @enduragent/sport-duathlon
 
+## 0.0.6
+
+### Patch Changes
+
+- Updated dependencies [e31ab52]
+- Updated dependencies [1e40c2e]
+- Updated dependencies [49844fa]
+- Updated dependencies [03964f0]
+  - @enduragent/core@0.1.2
+  - @enduragent/sport-cycling@0.0.5
+  - @enduragent/sport-running@0.1.2
+
 ## 0.0.5
 
 ### Patch Changes

@@ -180,6 +180,7 @@ describe("migrateCyclingLegacySections", () => {
     const stub: MemoryStore = {
       readMemory: () => "",
       writeSection: () => {},
+      provenanceForSection: () => ({ garmin: false, nonGarmin: false, unknown: false }),
       readDailyNotes: () => "",
       appendDailyNote: () => {},
       readDailyNotesInRange: () => [],

@@ -46,6 +46,7 @@ const EMPTY_SNAPSHOT: MemorySnapshot = {
   read: () => null,
   has: () => false,
   listSections: () => [],
+    provenanceOf: () => ({ garmin: false, nonGarmin: false, unknown: true }),
 };
 
 const REQUIRED_HEADINGS = [

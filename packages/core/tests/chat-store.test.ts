@@ -16,7 +16,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { archiveAndResetDurably, ChatStore } from "../src/agent/chat-store.js";
+import { archiveAndResetDurably, ChatStore, TURN_FAILURE_MARKER } from "../src/agent/chat-store.js";
+import { makeSummaryMessage } from "@enduragent/engine";
 
 // ESM module namespaces are non-configurable, so vi.spyOn cannot intercept a
 // named fs import. Mock the module up front: appendFileSync is a spy that
@@ -438,5 +439,74 @@ describe("ChatStore — empty assistant guard", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     store.appendMessage("g3", "assistant", "");
     expect(assistantCount(store, "g3")).toBe(0);
+  });
+});
+
+describe("ChatStore.overwriteHistory — timestamp preservation", () => {
+  const OLD_TS = "1998-03-01T10:00:00.000Z";
+
+  function rawLines(chatId: string): Array<{ role: string; content: string; ts: string }> {
+    return readFileSync(join(sessionsDir, `${chatId}.jsonl`), "utf-8")
+      .split("\n")
+      .filter((l) => l.trim() !== "")
+      .map((l) => JSON.parse(l) as { role: string; content: string; ts: string });
+  }
+
+  it("keeps a surviving message's original ts and stamps summary lines fresh", () => {
+    const store = new ChatStore(dataDir);
+    writeFileSync(
+      join(sessionsDir, "ts.jsonl"),
+      JSON.stringify({ role: "user", content: "keep me", ts: OLD_TS }) +
+        "\n" +
+        JSON.stringify({ role: "assistant", content: "kept reply", ts: OLD_TS }) +
+        "\n",
+      "utf-8",
+    );
+
+    const before = Date.now();
+    store.overwriteHistory("ts", [
+      makeSummaryMessage("older stuff summarized"),
+      { role: "user", content: "keep me" },
+      { role: "assistant", content: "kept reply" },
+    ]);
+
+    const lines = rawLines("ts");
+    const summary = lines.find((l) => l.role === "system")!;
+    const user = lines.find((l) => l.role === "user")!;
+    const assistant = lines.find((l) => l.role === "assistant")!;
+    expect(user.ts).toBe(OLD_TS);
+    expect(assistant.ts).toBe(OLD_TS);
+    expect(Date.parse(summary.ts)).toBeGreaterThanOrEqual(before);
+  });
+
+  it("stamps a brand-new (non-surviving) message with a fresh ts", () => {
+    const store = new ChatStore(dataDir);
+    writeFileSync(
+      join(sessionsDir, "ts2.jsonl"),
+      JSON.stringify({ role: "user", content: "original", ts: OLD_TS }) + "\n",
+      "utf-8",
+    );
+    const before = Date.now();
+    store.overwriteHistory("ts2", [{ role: "assistant", content: "totally new" }]);
+    expect(Date.parse(rawLines("ts2")[0].ts)).toBeGreaterThanOrEqual(before);
+  });
+});
+
+describe("ChatStore.appendFailureMarker", () => {
+  it("appends a system failure marker after a durable user line", () => {
+    const store = new ChatStore(dataDir);
+    store.appendMessage("f1", "user", "remember I hate hills");
+    store.appendFailureMarker("f1");
+    const { messages } = store.load("f1");
+    expect(messages).toEqual([
+      { role: "user", content: "remember I hate hills" },
+      { role: "system", content: TURN_FAILURE_MARKER },
+    ]);
+  });
+
+  it("is a no-op when no session file exists", () => {
+    const store = new ChatStore(dataDir);
+    store.appendFailureMarker("ghost");
+    expect(existsSync(join(sessionsDir, "ghost.jsonl"))).toBe(false);
   });
 });

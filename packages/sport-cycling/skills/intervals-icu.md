@@ -117,10 +117,9 @@ Rules:
 - Zone targets accept integers 1–7 — the athlete's configured 7-zone bands (Z4 = Threshold,
   not sweet spot). `Z2` defaults to the power zone for Ride workouts. Use a zone integer only
   when `percent_ftp` is genuinely unavailable.
-- Ramps are most reliably expressed as `percent_ftp` ranges (e.g. `low: 55, high: 75`). Zone-based
-  ramps may not render — prefer `percent_ftp` for warmup ramps.
+- Ramps accept `percent_ftp`, `watts`, or `zone` bounds. Zone-kind ramps are translated at serialization to percent-of-FTP band centers (Z1→45%, Z2→65%, Z3→83%, Z4→98%, Z5→113%, Z6→136%, Z7→160% — e.g. `Z1-Z2` becomes `ramp 45-65%`), so the power chart always renders. Use explicit `percent_ftp` bounds when you want exact ramp endpoints.
 - Durations are time-only: `seconds` or `minutes`. Distance-based workouts are not supported here.
-- `moving_time` and `icu_training_load` are computed from the steps — do not pass them.
+- The tool sends only the date, name, and serialized step description — intervals.icu derives the planned duration and Load from the parsed steps. Never supply duration or Load estimates yourself.
 
 ### Example: Z2 endurance 90min
 
