@@ -4,6 +4,7 @@ import {
   DESKTOP_CHAT_ID,
   EMPTY_CHAT_STATE,
   hasClearableConversation,
+  nextDrainGroup,
   reduceChatState,
   type ChatState,
 } from "../src/turn-state.js";
@@ -17,6 +18,14 @@ function started(requestKey = 1): ChatState {
     assistantMessageId: "message-2",
     includeUser: true,
   });
+}
+
+function queued(state: ChatState, ...texts: readonly string[]): ChatState {
+  return texts.reduce(
+    (next, text, index) =>
+      reduceChatState(next, { type: "enqueue", id: `queued-${index + 1}`, text }),
+    state,
+  );
 }
 
 describe("desktop turn state", () => {
@@ -359,6 +368,7 @@ describe("desktop turn state", () => {
       messages: [],
       activeTurn: null,
       progress: null,
+      queued: [],
       session: {
         presence: "absent",
         resetPhase: "idle",
@@ -456,5 +466,104 @@ describe("desktop turn state", () => {
 
     expect(stale).toBe(state);
     expect(stale.messages).toEqual([]);
+  });
+});
+
+describe("desktop message queue", () => {
+  it("queues a message typed while the turn streams without touching the transcript", () => {
+    const streaming = started();
+    const state = queued(streaming, "And my long ride?");
+
+    expect(state.status).toBe("streaming");
+    expect(state.messages).toBe(streaming.messages);
+    expect(state.activeTurn).toBe(streaming.activeTurn);
+    expect(state.progress).toBe(streaming.progress);
+    expect(state.queued).toEqual([{ id: "queued-1", text: "And my long ride?", command: false }]);
+  });
+
+  it("marks a known slash command and leaves unknown slashes as free text", () => {
+    const state = queued(started(), "/plan", "  /WORKOUT tomorrow ", "/synthetic-unknown");
+
+    expect(state.queued.map((message) => message.command)).toEqual([true, true, false]);
+  });
+
+  it("refuses a blank enqueue and a repeated identifier", () => {
+    const state = queued(started(), "Keep this");
+
+    expect(reduceChatState(state, { type: "enqueue", id: "queued-9", text: " \n" })).toBe(state);
+    expect(reduceChatState(state, { type: "enqueue", id: "queued-1", text: "Other" })).toBe(state);
+  });
+
+  it("removes exactly one queued message by identifier", () => {
+    const state = queued(started(), "first", "second", "third");
+
+    const removed = reduceChatState(state, { type: "remove-queued", id: "queued-2" });
+    expect(removed.queued.map((message) => message.text)).toEqual(["first", "third"]);
+    expect(reduceChatState(removed, { type: "remove-queued", id: "queued-2" })).toBe(removed);
+  });
+
+  it("coalesces consecutive free text and gives each command its own drain group", () => {
+    let state = queued(started(), "one", "two", "/plan", "three", "four", "/status");
+
+    expect(nextDrainGroup(state)).toEqual({ size: 2, text: "one\n\ntwo" });
+    state = reduceChatState(state, { type: "dequeue-group" });
+    expect(nextDrainGroup(state)).toEqual({ size: 1, text: "/plan" });
+    state = reduceChatState(state, { type: "dequeue-group" });
+    expect(nextDrainGroup(state)).toEqual({ size: 2, text: "three\n\nfour" });
+    state = reduceChatState(state, { type: "dequeue-group" });
+    expect(nextDrainGroup(state)).toEqual({ size: 1, text: "/status" });
+    state = reduceChatState(state, { type: "dequeue-group" });
+
+    expect(state.queued).toEqual([]);
+    expect(nextDrainGroup(state)).toBeNull();
+    expect(reduceChatState(state, { type: "dequeue-group" })).toBe(state);
+  });
+
+  it("keeps the queue intact through a completed turn so the drain can pop it", () => {
+    let state = queued(started(), "Next question");
+    state = reduceChatState(state, {
+      type: "event",
+      requestKey: 1,
+      event: { type: "final-text", turnId: "turn-1", text: "Ride easy." },
+    });
+    const completed = reduceChatState(state, { type: "complete", requestKey: 1 });
+
+    expect(completed.status).toBe("idle");
+    expect(completed.queued).toBe(state.queued);
+    expect(nextDrainGroup(completed)).toEqual({ size: 1, text: "Next question" });
+  });
+
+  it.each([
+    { action: "interrupt", status: "interrupted" },
+    { action: "fail", status: "idle" },
+  ] as const)("holds the queue when a turn ends as $action", ({ action, status }) => {
+    const state = queued(started(), "Still waiting");
+
+    const held = reduceChatState(state, { type: action, requestKey: 1, copy: "Something broke" });
+
+    expect(held.status).toBe(status);
+    expect(held.queued).toBe(state.queued);
+  });
+
+  it("refuses to open a new conversation while messages are queued", () => {
+    const failed = reduceChatState(started(), { type: "fail", requestKey: 1, copy: "Failed" });
+    const state = queued(failed, "Queued");
+
+    expect(hasClearableConversation(state)).toBe(true);
+    expect(reduceChatState(state, { type: "open-new-conversation" })).toBe(state);
+  });
+
+  it("clears the queue when a reset succeeds", () => {
+    const resetting: ChatState = {
+      ...queued(started(), "Dropped by the reset"),
+      session: { ...EMPTY_CHAT_STATE.session, resetPhase: "resetting" },
+    };
+
+    const state = reduceChatState(resetting, {
+      type: "reset-succeeded",
+      announcement: "New conversation started.",
+    });
+
+    expect(state.queued).toEqual([]);
   });
 });

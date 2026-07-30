@@ -136,6 +136,7 @@ export function bootRenderer(): Disposer {
   });
   store.getState().bindChatActions({
     submit: (message) => void chatController.submit(message),
+    removeQueued: (id) => chatController.removeQueued(id),
     retry: () => void chatController.retryInterrupted(),
     loadEarlier: () => void chatController.loadEarlier(),
     retryHydration: () => void chatController.retryHydration(),

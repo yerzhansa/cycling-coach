@@ -622,10 +622,12 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly partialWhiteSpace: string | null;
       readonly partialSourcePreserved: boolean;
       readonly streamingInputEnabled: boolean;
-      readonly streamingSendBlocked: boolean;
-      readonly streamingQuickActionsBlocked: boolean;
-      readonly streamingEnterBlocked: boolean;
-      readonly streamingDraftPreserved: boolean;
+      readonly streamingSendEnabled: boolean;
+      readonly streamingQuickActionsEnabled: boolean;
+      readonly streamingEnterHandled: boolean;
+      readonly streamingDraftCleared: boolean;
+      readonly streamingQueued: readonly string[];
+      readonly streamingQueueCleared: boolean;
       readonly streamingFocusPreserved: boolean;
       readonly settledSendEnabled: boolean;
       readonly settledDraftPreserved: boolean;
@@ -714,17 +716,27 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
       textarea.focus();
       const streamingInputEnabled = !textarea.disabled;
-      const streamingSendBlocked = submit.disabled;
-      const streamingQuickActionsBlocked = quickActions.every((button) => button.disabled);
+      const streamingSendEnabled = !submit.disabled;
+      const streamingQuickActionsEnabled = quickActions.every((button) => !button.disabled);
       const streamingEnter = new KeyboardEvent("keydown", {
         key: "Enter",
         bubbles: true,
         cancelable: true,
       });
       textarea.dispatchEvent(streamingEnter);
-      const streamingEnterBlocked = streamingEnter.defaultPrevented;
-      const streamingDraftPreserved = textarea.value === "How should I recover?";
+      const streamingEnterHandled = streamingEnter.defaultPrevented;
+      const streamingDraftCleared = textarea.value === "";
       const streamingFocusPreserved = document.activeElement === textarea;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const streamingQueued = [...document.querySelectorAll(".chat-queue__text")].map(
+        (node) => node.textContent,
+      );
+      document.querySelector(".chat-queue__remove")?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const streamingQueueCleared = document.querySelector(".chat-queue") === null;
+      textarea.value = "How should I recover?";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      textarea.focus();
       athleteRow ??= document.querySelector(".chat-message--athlete");
       const finalDeadline = Date.now() + 5000;
       let final = "";
@@ -785,10 +797,12 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         partialWhiteSpace,
         partialSourcePreserved,
         streamingInputEnabled,
-        streamingSendBlocked,
-        streamingQuickActionsBlocked,
-        streamingEnterBlocked,
-        streamingDraftPreserved,
+        streamingSendEnabled,
+        streamingQuickActionsEnabled,
+        streamingEnterHandled,
+        streamingDraftCleared,
+        streamingQueued,
+        streamingQueueCleared,
         streamingFocusPreserved,
         settledSendEnabled,
         settledDraftPreserved,
@@ -843,10 +857,12 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       partialWhiteSpace: "pre-wrap",
       partialSourcePreserved: true,
       streamingInputEnabled: true,
-      streamingSendBlocked: true,
-      streamingQuickActionsBlocked: true,
-      streamingEnterBlocked: true,
-      streamingDraftPreserved: true,
+      streamingSendEnabled: true,
+      streamingQuickActionsEnabled: true,
+      streamingEnterHandled: true,
+      streamingDraftCleared: true,
+      streamingQueued: ["How should I recover?"],
+      streamingQueueCleared: true,
       streamingFocusPreserved: true,
       settledSendEnabled: true,
       settledDraftPreserved: true,

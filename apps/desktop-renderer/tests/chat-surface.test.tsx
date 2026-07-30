@@ -14,14 +14,16 @@ import {
 import { resetChatStream } from "../src/state/chat-stream.js";
 import { CLOSED_ONBOARDING } from "../src/state/onboarding-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
+import { SLASH_COMMANDS } from "../src/chat/commands.js";
 import { ChatView } from "../src/ui/chat/ChatView.js";
-import { SLASH_COMMANDS } from "../src/ui/chat/commands.js";
 import messageStyles from "../src/ui/chat/Message.module.css";
+import queueStyles from "../src/ui/chat/QueuedMessages.module.css";
 import transcriptStyles from "../src/ui/chat/Transcript.module.css";
 
 function stubActions(): ChatActions {
   return {
     submit: vi.fn(),
+    removeQueued: vi.fn(),
     retry: vi.fn(),
     loadEarlier: vi.fn(),
     retryHydration: vi.fn(),
@@ -210,33 +212,25 @@ describe("chat surface", () => {
       expect(actions.submit).toHaveBeenCalledWith("   ride");
     });
 
-    it("keeps the focused draft typeable but blocks sends while a turn streams", async () => {
+    it("keeps sending available while a turn streams so the message can queue", async () => {
       const user = userEvent.setup();
       render(<Harness />);
       const textarea = composer();
       await user.click(textarea);
       await user.keyboard("Plan tomorrow");
-      setChat({ status: "streaming", sendDisabled: true, inputDisabled: false });
+      setChat({ status: "streaming", sendDisabled: false, inputDisabled: false });
 
       expect(textarea).toBeEnabled();
       expect(textarea).toHaveFocus();
-      expect(textarea).toHaveValue("Plan tomorrow");
-      expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
       for (const button of screen.getAllByRole("button", { name: /command$/u })) {
-        expect(button).toBeDisabled();
+        expect(button).toBeEnabled();
       }
 
       await user.keyboard("{Enter}");
 
-      expect(actions.submit).not.toHaveBeenCalled();
-      expect(textarea).toHaveValue("Plan tomorrow");
-      expect(textarea).toHaveFocus();
-
-      setChat({ status: "idle", sendDisabled: false });
-
-      expect(textarea).toBeEnabled();
-      expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
-      expect(textarea).toHaveValue("Plan tomorrow");
+      expect(actions.submit).toHaveBeenCalledWith("Plan tomorrow");
+      expect(textarea).toHaveValue("");
       expect(textarea).toHaveFocus();
     });
 
@@ -270,6 +264,95 @@ describe("chat surface", () => {
       await waitFor(() => {
         expect(document.activeElement).toBe(shortcut);
       });
+    });
+  });
+
+  describe("queued messages", () => {
+    function strip(): HTMLElement | null {
+      const element = document.querySelector(".chat-queue");
+      return element instanceof HTMLElement ? element : null;
+    }
+
+    function texts(): readonly string[] {
+      return [...document.querySelectorAll(".chat-queue__text")].map(
+        (node) => node.textContent ?? "",
+      );
+    }
+
+    it("stays out of the way until a message is queued", () => {
+      render(<Harness />);
+      expect(strip()).toBeNull();
+
+      setChat({
+        queued: [{ id: "queued-1", text: "And my long ride?", command: false }],
+      });
+
+      expect(strip()).not.toBeNull();
+      expect(texts()).toEqual(["And my long ride?"]);
+      expect(document.querySelectorAll(".chat-message")).toHaveLength(0);
+    });
+
+    it("hands each remove button to the controller with its own message id", async () => {
+      const user = userEvent.setup();
+      render(<Harness />);
+      setChat({
+        queued: [
+          { id: "queued-1", text: "And my long ride?", command: false },
+          { id: "queued-2", text: "/status", command: true },
+        ],
+      });
+
+      expect(texts()).toEqual(["And my long ride?", "/status"]);
+      await user.click(screen.getByRole("button", { name: "Remove queued message 2" }));
+      expect(actions.removeQueued).toHaveBeenCalledWith("queued-2");
+
+      await user.click(screen.getByRole("button", { name: "Remove queued message 1" }));
+      expect(actions.removeQueued).toHaveBeenNthCalledWith(2, "queued-1");
+    });
+
+    it("gives a queued command the monospace face", () => {
+      render(<Harness />);
+      setChat({
+        queued: [
+          { id: "queued-1", text: "And my long ride?", command: false },
+          { id: "queued-2", text: "/status", command: true },
+        ],
+      });
+
+      expect(
+        [...document.querySelectorAll(".chat-queue__text")].map((node) =>
+          node.classList.contains(queueStyles.command),
+        ),
+      ).toEqual([false, true]);
+    });
+
+    it("locks removal while work is blocked", async () => {
+      const user = userEvent.setup();
+      render(<Harness />);
+      setChat({
+        queued: [{ id: "queued-1", text: "And my long ride?", command: false }],
+        workBlocked: true,
+      });
+
+      const remove = screen.getByRole("button", { name: "Remove queued message 1" });
+      expect(remove).toBeDisabled();
+      await user.click(remove);
+      expect(actions.removeQueued).not.toHaveBeenCalled();
+    });
+
+    it("keeps the strip inert until the chat actions are bound", () => {
+      act(() => {
+        useEnduragentStore.setState({ chatActions: null });
+      });
+      render(<Harness />);
+      setChat({ queued: [{ id: "queued-1", text: "And my long ride?", command: false }] });
+
+      const remove = screen.getByRole("button", { name: "Remove queued message 1" });
+      expect(remove).toBeDisabled();
+      act(() => {
+        remove.click();
+      });
+      expect(actions.removeQueued).not.toHaveBeenCalled();
     });
   });
 

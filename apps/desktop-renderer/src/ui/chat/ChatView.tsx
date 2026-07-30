@@ -8,6 +8,7 @@ import styles from "./ChatView.module.css";
 import { Composer, type ComposerHandle } from "./Composer.js";
 import { FirstSyncCard } from "./FirstSyncCard.js";
 import { NewConversationDialog } from "./NewConversationDialog.js";
+import { QueuedMessages } from "./QueuedMessages.js";
 import { QuickActions } from "./QuickActions.js";
 import { SpendNotice } from "./SpendNotice.js";
 import { Transcript } from "./Transcript.js";
@@ -117,6 +118,7 @@ export function ChatView(): ReactElement {
           <SpendNotice />
         </div>
         <QuickActions />
+        <QueuedMessages />
         <Composer handle={composer} />
       </div>
       <NewConversationDialog
