@@ -80,6 +80,17 @@ const operations: CoachOperations = {
     turns: [],
     nextCursor: null,
   }),
+  listArchivedConversations: async () => ({
+    schemaVersion: 1,
+    conversations: [],
+    truncated: false,
+  }),
+  getArchivedTranscriptPage: async () => ({
+    schemaVersion: 1,
+    status: "page",
+    turns: [],
+    nextCursor: null,
+  }),
   configureRuntime: async ({ llm, intervals, session }) => ({
     schemaVersion: 3,
     status: "applied",
@@ -755,6 +766,115 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       });
     }
     expect(getTranscriptPage).toHaveBeenCalledTimes(1);
+    await client.close();
+  });
+
+  it("dispatches archived conversation reads and refuses malformed archive requests", async () => {
+    const token = "x".repeat(43);
+    const boundaryRef = "b".repeat(64);
+    const listArchivedConversations = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      conversations: [
+        {
+          boundaryRef,
+          boundaryAt: "1998-07-06T00:00:00.000Z",
+          reason: "explicit-reset" as const,
+          turnCount: 2,
+        },
+      ],
+      truncated: false,
+    }));
+    const getArchivedTranscriptPage = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      status: "page" as const,
+      turns: [
+        {
+          turnId: "turn-1",
+          completedAt: "1998-07-06T00:00:00.000Z",
+          athleteText: "a",
+          coachText: "b",
+        },
+      ],
+      nextCursor: null,
+    }));
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      operations: { ...operations, listArchivedConversations, getArchivedTranscriptPage },
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "archive-list",
+        method: "listArchivedConversations",
+        params: {},
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "archive-list",
+      result: await listArchivedConversations.mock.results[0]!.value,
+    });
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "archive-page",
+        method: "getArchivedTranscriptPage",
+        params: { boundaryRef, cursor: null, limit: 25 },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "archive-page",
+      result: await getArchivedTranscriptPage.mock.results[0]!.value,
+    });
+    expect(getArchivedTranscriptPage).toHaveBeenCalledWith({
+      boundaryRef,
+      cursor: null,
+      limit: 25,
+    });
+
+    for (const [index, params] of [
+      {},
+      { boundaryRef, cursor: null, limit: 0 },
+      { boundaryRef, cursor: null, limit: 51 },
+      { boundaryRef: "z".repeat(64), cursor: null, limit: 25 },
+      { boundaryRef, cursor: "a".repeat(152), limit: 25 },
+      { boundaryRef, cursor: null, limit: 25, chatId: "other" },
+    ].entries()) {
+      client.ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: `archive-invalid-${index}`,
+          method: "getArchivedTranscriptPage",
+          params,
+        }),
+      );
+      expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+        jsonrpc: "2.0",
+        id: `archive-invalid-${index}`,
+        error: { code: -32602, message: "Invalid params" },
+      });
+    }
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "archive-list-invalid",
+        method: "listArchivedConversations",
+        params: { chatId: "other" },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "archive-list-invalid",
+      error: { code: -32602, message: "Invalid params" },
+    });
+    expect(listArchivedConversations).toHaveBeenCalledTimes(1);
+    expect(getArchivedTranscriptPage).toHaveBeenCalledTimes(1);
     await client.close();
   });
 

@@ -1,6 +1,6 @@
 import { lazy, type ComponentType, type LazyExoticComponent } from "react";
 
-export type ViewId = "chat" | "training" | "setup" | "settings";
+export type ViewId = "chat" | "archive" | "training" | "setup" | "settings";
 export type StoredViewId = Exclude<ViewId, "setup">;
 
 export const REACT_CHAT_REGION = "react-chat-region";
@@ -20,6 +20,15 @@ export const VIEWS: readonly ViewDefinition[] = Object.freeze([
     glyph: "◆",
     title: "Chat",
     page: REACT_CHAT_REGION,
+  },
+  {
+    id: "archive",
+    label: "Past chats",
+    glyph: "▤",
+    title: "Past chats",
+    page: lazy(async () => ({
+      default: (await import("../ui/archive/ArchiveView.js")).ArchiveView,
+    })),
   },
   {
     id: "training",

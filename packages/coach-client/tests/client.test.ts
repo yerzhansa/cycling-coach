@@ -37,6 +37,12 @@ const rpcDeadlineCases = [
   ["resetSession", { chatId: "chat-1" }, 660_000],
   ["hasSession", { chatId: "chat-1" }, 30_000],
   ["getTranscriptPage", { cursor: null, limit: 25 }, 30_000],
+  ["listArchivedConversations", {}, 30_000],
+  [
+    "getArchivedTranscriptPage",
+    { boundaryRef: "a".repeat(64), cursor: null, limit: 25 },
+    30_000,
+  ],
   ["getAthleteState", {}, 30_000],
   ["importFiles", { paths: ["/synthetic/ride.fit"] }, 3_600_000],
   ["sync", {}, 86_400_000],
@@ -601,6 +607,17 @@ describe("RPC receive and observers", () => {
           turns: [],
           nextCursor: null,
         },
+        listArchivedConversations: {
+          schemaVersion: 1,
+          conversations: [],
+          truncated: false,
+        },
+        getArchivedTranscriptPage: {
+          schemaVersion: 1,
+          status: "page",
+          turns: [],
+          nextCursor: null,
+        },
         getAthleteState: {
           schemaVersion: "1",
           lastUpdated: "2020-01-01T00:00:00.000Z",
@@ -728,6 +745,23 @@ describe("RPC receive and observers", () => {
       turns: [],
       nextCursor: null,
     });
+    await expect(client.call("listArchivedConversations", {})).resolves.toEqual({
+      schemaVersion: 1,
+      conversations: [],
+      truncated: false,
+    });
+    await expect(
+      client.call("getArchivedTranscriptPage", {
+        boundaryRef: "a".repeat(64),
+        cursor: null,
+        limit: 25,
+      }),
+    ).resolves.toEqual({
+      schemaVersion: 1,
+      status: "page",
+      turns: [],
+      nextCursor: null,
+    });
     await expect(client.call("getAthleteState", {})).resolves.toMatchObject({ schemaVersion: "1" });
     await expect(
       client.call("importFiles", { paths: ["/synthetic/ride.fit"] }),
@@ -756,13 +790,15 @@ describe("RPC receive and observers", () => {
       llm: { provider: "anthropic", model: "synthetic-model" },
     });
     expect(received.map((value) => (value as { id: number }).id)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
     ]);
     expect(received.map((value) => (value as { method: string }).method)).toEqual([
       "chat",
       "resetSession",
       "hasSession",
       "getTranscriptPage",
+      "listArchivedConversations",
+      "getArchivedTranscriptPage",
       "getAthleteState",
       "importFiles",
       "sync",
@@ -778,7 +814,7 @@ describe("RPC receive and observers", () => {
       value: "imperial",
       source: "cycling",
     });
-    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([11, 12]);
+    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([13, 14]);
     expect(received.slice(-2).map((value) => (value as { method: string }).method)).toEqual([
       "getUnitsPreference",
       "setUnitsPreference",
@@ -789,7 +825,7 @@ describe("RPC receive and observers", () => {
     await expect(client.call("setDailySpendCap", { dailyCapUsd: 0.75 })).resolves.toMatchObject({
       dailyCapUsd: 0.75,
     });
-    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([13, 14]);
+    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([15, 16]);
     expect(received.slice(-2).map((value) => (value as { method: string }).method)).toEqual([
       "getSpendSummary",
       "setDailySpendCap",

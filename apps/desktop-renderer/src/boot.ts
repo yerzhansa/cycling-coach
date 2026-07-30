@@ -5,9 +5,11 @@ import {
 } from "@enduragent/coach-client";
 import { SaveIntakeRpcParamsSchema } from "@enduragent/coach-contract";
 import { flushSync } from "react-dom";
+import { createArchiveController } from "./archive/controller.js";
 import { createChatController } from "./chat/controller.js";
 import { createDesktopCoachClientProvider } from "./coach-client.js";
 import { createFirstSyncController } from "./first-sync.js";
+import { createArchiveViewAdapter } from "./state/adapters/archive.js";
 import { createChatViewAdapter } from "./state/adapters/chat.js";
 import { createFirstSyncViewAdapter } from "./state/adapters/first-sync.js";
 import { createOnboardingViewAdapter } from "./state/adapters/onboarding.js";
@@ -125,6 +127,22 @@ export function bootRenderer(): Disposer {
     refreshTrainingContext: () => trainingContextController.refresh(),
     refreshSpend: () => spendController.refresh(),
     readTranscriptPage: (request) => window.enduragentAuth.getTranscriptPage(request),
+  });
+
+  const archiveAdapter = createArchiveViewAdapter({
+    publish: (next) => store.getState().setArchive(next),
+  });
+  const archiveController = createArchiveController({
+    listConversations: () => window.enduragentAuth.listArchivedConversations(),
+    readPage: (request) => window.enduragentAuth.getArchivedTranscriptPage(request),
+    view: archiveAdapter.view,
+  });
+  store.getState().bindArchiveActions({
+    refresh: () => void archiveController.refresh(),
+    open: (boundaryRef) => void archiveController.open(boundaryRef),
+    close: () => archiveController.close(),
+    loadEarlier: () => void archiveController.loadEarlier(),
+    retry: () => void archiveController.retry(),
   });
 
   const firstSyncController = createFirstSyncController({
@@ -326,6 +344,7 @@ export function bootRenderer(): Disposer {
     if (disposed) return;
     disposed = true;
     store.getState().bindChatActions(null);
+    store.getState().bindArchiveActions(null);
     store.getState().bindSettingsPorts(null);
     store.getState().bindSyncActions(null);
     store.getState().bindRideImportActions(null);
@@ -346,6 +365,7 @@ export function bootRenderer(): Disposer {
     manualSyncController.dispose();
     trainingSyncCoordinator.dispose();
     chatController.dispose();
+    archiveController.dispose();
     spendController.dispose();
     trainingContextController.dispose();
     void clients.close();

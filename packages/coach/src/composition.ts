@@ -59,8 +59,12 @@ import {
   type CoachOperations,
   type ConfigureRuntimeRpcParams,
   type ConfigureRuntimeRpcRefusalReason,
+  type GetArchivedTranscriptPageRpcParams,
+  type GetArchivedTranscriptPageRpcResult,
   type GetTranscriptPageRpcParams,
   type GetTranscriptPageRpcResult,
+  type ListArchivedConversationsRpcParams,
+  type ListArchivedConversationsRpcResult,
   type GetRuntimeConfigRpcResult,
 } from "@enduragent/coach-contract";
 import { cyclingSport } from "@enduragent/sport-cycling";
@@ -383,6 +387,12 @@ function createReconfigurableRuntimeBundle(initial: RuntimeBundle): {
   readonly getTranscriptPage: (
     request: GetTranscriptPageRpcParams,
   ) => Promise<GetTranscriptPageRpcResult>;
+  readonly listArchivedConversations: (
+    request: ListArchivedConversationsRpcParams,
+  ) => Promise<ListArchivedConversationsRpcResult>;
+  readonly getArchivedTranscriptPage: (
+    request: GetArchivedTranscriptPageRpcParams,
+  ) => Promise<GetArchivedTranscriptPageRpcResult>;
   replace(create: () => RuntimeBundle | Promise<RuntimeBundle>): Promise<void>;
 } {
   let active = initial;
@@ -419,6 +429,12 @@ function createReconfigurableRuntimeBundle(initial: RuntimeBundle): {
     },
     getTranscriptPage: (request) =>
       run(async (bundle) => bundle.chatStore.readCurrentConversationPage("desktop", request)),
+    listArchivedConversations: () =>
+      run(async (bundle) => bundle.chatStore.listArchivedConversations("desktop")),
+    getArchivedTranscriptPage: ({ boundaryRef, ...request }) =>
+      run(async (bundle) =>
+        bundle.chatStore.readArchivedConversationPage("desktop", boundaryRef, request),
+      ),
     async replace(create) {
       const previousAdmission = admission;
       let release!: () => void;
@@ -902,6 +918,9 @@ export async function createLocalCoachComposition(
         intervalsCredentials: options.liveIntervals,
         historyNewestDate: () => new Date(now()).toISOString().slice(0, 10),
         readTranscriptPage: (request) => reconfigurable.getTranscriptPage(request),
+        readArchivedConversations: (request) => reconfigurable.listArchivedConversations(request),
+        readArchivedTranscriptPage: (request) =>
+          reconfigurable.getArchivedTranscriptPage(request),
         applyRuntimeConfig,
         readRuntimeConfig: () =>
           runtimeConfigSnapshot(input.home.configDir, activeConfig, input.env, activeTimezone),

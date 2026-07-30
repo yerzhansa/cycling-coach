@@ -131,6 +131,66 @@ describe("ConversationStore reset transaction recovery", () => {
     expect(boundaryCount(dataDir, chatId)).toBe(0);
   });
 
+  it("surfaces the pre-reset conversation as an archived read after a completed reset", () => {
+    const dataDir = makeDataDir();
+    const chatId = "archived-after-reset";
+    const chat = new ChatStore(dataDir);
+    const transcript = new TranscriptStore(dataDir);
+    const store = new ConversationStore(chat, transcript, () => RESET_ID);
+    store.appendCompletedTurn({
+      chatId,
+      turnId: "turn-1",
+      completedAt: "2026-07-22T00:00:00.000Z",
+      athleteText: "a",
+      coachText: "b",
+    });
+    store.appendCompletedTurn({
+      chatId,
+      turnId: "turn-2",
+      completedAt: "2026-07-22T00:00:01.000Z",
+      athleteText: "c",
+      coachText: "d",
+    });
+
+    store.resetConversation({
+      chatId,
+      boundaryAt: "2026-07-22T01:02:03.000Z",
+      reason: "explicit-reset",
+    });
+    store.appendCompletedTurn({
+      chatId,
+      turnId: "turn-3",
+      completedAt: "2026-07-22T02:00:00.000Z",
+      athleteText: "e",
+      coachText: "f",
+    });
+    const before = readFileSync(transcriptPath(dataDir, chatId));
+
+    expect(store.listArchivedConversations(chatId)).toEqual({
+      schemaVersion: 1,
+      conversations: [
+        {
+          boundaryRef: RESET_ID,
+          boundaryAt: "2026-07-22T01:02:03.000Z",
+          reason: "explicit-reset",
+          turnCount: 2,
+        },
+      ],
+      truncated: false,
+    });
+    expect(
+      store
+        .readArchivedConversationPage(chatId, RESET_ID, { cursor: null, limit: 25 })
+        .turns.map((record) => record.turnId),
+    ).toEqual(["turn-1", "turn-2"]);
+    expect(
+      store
+        .readCurrentConversationPage(chatId, { cursor: null, limit: 25 })
+        .turns.map((record) => record.turnId),
+    ).toEqual(["turn-3"]);
+    expect(readFileSync(transcriptPath(dataDir, chatId))).toEqual(before);
+  });
+
   it("fences a pagination cursor after the reset transaction completes", () => {
     const dataDir = makeDataDir();
     const chatId = "completed-reset-page";

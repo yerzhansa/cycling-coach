@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  MAX_ARCHIVED_CONVERSATION_ENTRIES,
   MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES,
   MAX_TRANSCRIPT_PAGE_TURNS,
   MAX_TRANSCRIPT_RECORD_BYTES,
@@ -128,6 +129,246 @@ function corruptionCases(chatId: string): readonly (readonly [string, Buffer])[]
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe("TranscriptStore archived conversation reads", () => {
+  it("lists boundaries newest first with the turn count of each archived conversation", () => {
+    const dataDir = makeDataDir();
+    const chatId = "archive-list";
+    const store = new TranscriptStore(dataDir);
+    store.appendCompletedTurn(turn(chatId, "turn-1"));
+    store.appendCompletedTurn(turn(chatId, "turn-2"));
+    store.ensureConversationBoundary(intent(chatId, RESET_ID_A));
+    store.appendCompletedTurn(turn(chatId, "turn-3"));
+    store.ensureConversationBoundary(intent(chatId, RESET_ID_B, "stale-reset"));
+    store.appendCompletedTurn(turn(chatId, "turn-4"));
+
+    expect(store.listArchivedConversations(chatId)).toEqual({
+      schemaVersion: 1,
+      conversations: [
+        {
+          boundaryRef: RESET_ID_B,
+          boundaryAt: "2026-07-22T01:00:00.000Z",
+          reason: "stale-reset",
+          turnCount: 1,
+        },
+        {
+          boundaryRef: RESET_ID_A,
+          boundaryAt: "2026-07-22T01:00:00.000Z",
+          reason: "explicit-reset",
+          turnCount: 2,
+        },
+      ],
+      truncated: false,
+    });
+    expect(store.listArchivedConversations("missing")).toEqual({
+      schemaVersion: 1,
+      conversations: [],
+      truncated: false,
+    });
+    expect(existsSync(transcriptPath(dataDir, "missing"))).toBe(false);
+  });
+
+  it("caps the listed boundaries at the newest two hundred and reports truncation", () => {
+    const dataDir = makeDataDir();
+    const chatId = "archive-cap";
+    const store = new TranscriptStore(dataDir);
+    const total = MAX_ARCHIVED_CONVERSATION_ENTRIES + 2;
+    const boundaryRef = (index: number): string => index.toString(16).padStart(64, "0");
+    store.appendCompletedTurn(turn(chatId, "turn-1"));
+    const records: Buffer[] = [];
+    for (let index = 1; index <= total; index += 1) {
+      records.push(
+        Buffer.from(
+          `${JSON.stringify({ ...intent(chatId, boundaryRef(index)), kind: "conversation-boundary" })}\n`,
+        ),
+        serializedTurn(turn(chatId, `turn-${index}`)),
+      );
+    }
+    appendFileSync(transcriptPath(dataDir, chatId), Buffer.concat(records));
+
+    const listed = store.listArchivedConversations(chatId);
+
+    expect(listed.truncated).toBe(true);
+    expect(listed.conversations).toHaveLength(MAX_ARCHIVED_CONVERSATION_ENTRIES);
+    expect(listed.conversations[0]!.boundaryRef).toBe(boundaryRef(total));
+    expect(listed.conversations.at(-1)!.boundaryRef).toBe(
+      boundaryRef(total - MAX_ARCHIVED_CONVERSATION_ENTRIES + 1),
+    );
+    expect(
+      store
+        .readArchivedConversationPage(chatId, boundaryRef(total), { cursor: null, limit: 5 })
+        .turns.map((record) => record.turnId),
+    ).toEqual([`turn-${total - 1}`]);
+  });
+
+  it("pages one archived conversation backward without leaking neighbouring conversations", () => {
+    const dataDir = makeDataDir();
+    const chatId = "archive-page";
+    const store = new TranscriptStore(dataDir);
+    store.appendCompletedTurn(turn(chatId, "turn-0"));
+    store.ensureConversationBoundary(intent(chatId, RESET_ID_B));
+    for (let index = 1; index <= 3; index += 1) {
+      store.appendCompletedTurn(turn(chatId, `turn-${index}`));
+    }
+    store.ensureConversationBoundary(intent(chatId, RESET_ID_A));
+    store.appendCompletedTurn(turn(chatId, "turn-9"));
+
+    const newest = store.readArchivedConversationPage(chatId, RESET_ID_A, {
+      cursor: null,
+      limit: 2,
+    });
+    expect(newest.status).toBe("page");
+    expect(newest.turns.map((record) => record.turnId)).toEqual(["turn-2", "turn-3"]);
+    expect(newest.nextCursor).not.toBeNull();
+
+    const oldest = store.readArchivedConversationPage(chatId, RESET_ID_A, {
+      cursor: newest.nextCursor,
+      limit: 2,
+    });
+    expect(oldest.turns.map((record) => record.turnId)).toEqual(["turn-1"]);
+    expect(oldest.nextCursor).toBeNull();
+
+    expect(
+      store
+        .readArchivedConversationPage(chatId, RESET_ID_B, { cursor: null, limit: 10 })
+        .turns.map((record) => record.turnId),
+    ).toEqual(["turn-0"]);
+    expect(
+      store
+        .readCurrentConversationPage(chatId, { cursor: null, limit: 10 })
+        .turns.map((record) => record.turnId),
+    ).toEqual(["turn-9"]);
+  });
+
+  it("keeps an archived page immutable while the live conversation keeps appending", () => {
+    const dataDir = makeDataDir();
+    const chatId = "archive-immutable";
+    const store = new TranscriptStore(dataDir);
+    store.appendCompletedTurn(turn(chatId, "turn-1"));
+    store.appendCompletedTurn(turn(chatId, "turn-2"));
+    store.ensureConversationBoundary(intent(chatId, RESET_ID_A));
+    const newest = store.readArchivedConversationPage(chatId, RESET_ID_A, {
+      cursor: null,
+      limit: 1,
+    });
+    store.appendCompletedTurn(turn(chatId, "turn-3"));
+    store.ensureConversationBoundary(intent(chatId, RESET_ID_B));
+    store.appendCompletedTurn(turn(chatId, "turn-4"));
+
+    const older = store.readArchivedConversationPage(chatId, RESET_ID_A, {
+      cursor: newest.nextCursor,
+      limit: 1,
+    });
+
+    expect(newest.turns.map((record) => record.turnId)).toEqual(["turn-2"]);
+    expect(older.turns.map((record) => record.turnId)).toEqual(["turn-1"]);
+    expect(older.nextCursor).toBeNull();
+  });
+
+  it("refuses cursors minted for the live pager and boundary references from another chat", () => {
+    const dataDir = makeDataDir();
+    const chatId = "archive-cursor-namespace";
+    const store = new TranscriptStore(dataDir);
+    store.appendCompletedTurn(turn(chatId, "turn-1"));
+    store.appendCompletedTurn(turn(chatId, "turn-2"));
+    store.ensureConversationBoundary(intent(chatId, RESET_ID_A));
+    store.appendCompletedTurn(turn(chatId, "turn-3"));
+    store.appendCompletedTurn(turn(chatId, "turn-4"));
+    store.appendCompletedTurn(turn("other", "turn-1"));
+    store.appendCompletedTurn(turn("other", "turn-2"));
+    store.ensureConversationBoundary(intent("other", RESET_ID_B));
+
+    const live = store.readCurrentConversationPage(chatId, { cursor: null, limit: 1 });
+    const archived = store.readArchivedConversationPage(chatId, RESET_ID_A, {
+      cursor: null,
+      limit: 1,
+    });
+
+    expect(live.nextCursor).not.toBeNull();
+    expect(archived.nextCursor).not.toBeNull();
+    expect(() =>
+      store.readArchivedConversationPage(chatId, RESET_ID_A, { cursor: live.nextCursor, limit: 1 }),
+    ).toThrow(TypeError);
+    expect(() =>
+      store.readCurrentConversationPage(chatId, { cursor: archived.nextCursor, limit: 1 }),
+    ).toThrow(TypeError);
+    expect(() =>
+      store.readArchivedConversationPage("other", RESET_ID_B, {
+        cursor: archived.nextCursor,
+        limit: 1,
+      }),
+    ).toThrow(TypeError);
+    expect(() =>
+      store.readArchivedConversationPage(chatId, "z".repeat(64), { cursor: null, limit: 1 }),
+    ).toThrow(TypeError);
+    expect(() =>
+      store.readArchivedConversationPage(chatId, RESET_ID_A, { cursor: null, limit: 0 }),
+    ).toThrow(TypeError);
+  });
+
+  it("asks the reader to restart when the boundary reference is unknown or the file is gone", () => {
+    const dataDir = makeDataDir();
+    const chatId = "archive-restart";
+    const store = new TranscriptStore(dataDir);
+    store.appendCompletedTurn(turn(chatId, "turn-1"));
+
+    const restart = {
+      schemaVersion: 1,
+      status: "restart-required",
+      turns: [],
+      nextCursor: null,
+    };
+    expect(
+      store.readArchivedConversationPage(chatId, RESET_ID_A, { cursor: null, limit: 5 }),
+    ).toEqual(restart);
+    expect(
+      store.readArchivedConversationPage("missing", RESET_ID_A, { cursor: null, limit: 5 }),
+    ).toEqual(restart);
+    expect(existsSync(transcriptPath(dataDir, "missing"))).toBe(false);
+  });
+
+  it("reports a corrupted archived conversation as empty without touching its neighbours", () => {
+    const dataDir = makeDataDir();
+    const chatId = "archive-corruption";
+    const store = new TranscriptStore(dataDir);
+    const path = transcriptPath(dataDir, chatId);
+    store.appendCompletedTurn(turn(chatId, "turn-1"));
+    appendFileSync(path, Buffer.from([0xff, 0x0a]));
+    store.appendCompletedTurn(turn(chatId, "turn-2"));
+    store.ensureConversationBoundary(intent(chatId, RESET_ID_A));
+    store.appendCompletedTurn(turn(chatId, "turn-3"));
+    store.ensureConversationBoundary(intent(chatId, RESET_ID_B));
+
+    const listed = store.listArchivedConversations(chatId);
+
+    expect(listed.conversations.map((entry) => [entry.boundaryRef, entry.turnCount])).toEqual([
+      [RESET_ID_B, 1],
+      [RESET_ID_A, 0],
+    ]);
+    expect(
+      store.readArchivedConversationPage(chatId, RESET_ID_A, { cursor: null, limit: 5 }),
+    ).toEqual({ schemaVersion: 1, status: "page", turns: [], nextCursor: null });
+    expect(
+      store
+        .readArchivedConversationPage(chatId, RESET_ID_B, { cursor: null, limit: 5 })
+        .turns.map((record) => record.turnId),
+    ).toEqual(["turn-3"]);
+  });
+
+  it("keeps archived reads free of writes to the transcript target", () => {
+    const dataDir = makeDataDir();
+    const chatId = "archive-read-only";
+    const store = new TranscriptStore(dataDir);
+    store.appendCompletedTurn(turn(chatId, "turn-1"));
+    store.ensureConversationBoundary(intent(chatId, RESET_ID_A));
+    const before = readFileSync(transcriptPath(dataDir, chatId));
+
+    store.listArchivedConversations(chatId);
+    store.readArchivedConversationPage(chatId, RESET_ID_A, { cursor: null, limit: 5 });
+
+    expect(readFileSync(transcriptPath(dataDir, chatId))).toEqual(before);
+  });
 });
 
 describe("TranscriptStore append and corruption handling", () => {

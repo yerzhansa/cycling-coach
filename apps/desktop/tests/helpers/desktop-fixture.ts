@@ -312,6 +312,16 @@ export async function launchDesktopFixture(input: {
         ReturnType<CoachOperations["getTranscriptPage"]>
       >;
     },
+    async listArchivedConversations(request) {
+      return finalFrame(await invoke("listArchivedConversations", request)) as Awaited<
+        ReturnType<CoachOperations["listArchivedConversations"]>
+      >;
+    },
+    async getArchivedTranscriptPage(request) {
+      return finalFrame(await invoke("getArchivedTranscriptPage", request)) as Awaited<
+        ReturnType<CoachOperations["getArchivedTranscriptPage"]>
+      >;
+    },
     async configureRuntime(request) {
       return finalFrame(await invoke("configureRuntime", request)) as Awaited<
         ReturnType<CoachOperations["configureRuntime"]>

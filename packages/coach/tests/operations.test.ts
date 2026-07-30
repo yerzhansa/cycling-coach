@@ -113,6 +113,83 @@ describe("coach operations", () => {
     expect(readTranscriptPage).toHaveBeenCalledOnce();
   });
 
+  it("validates archived conversation requests and refuses an unwired archive lane", async () => {
+    const boundaryRef = "c".repeat(64);
+    const readArchivedConversations = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      conversations: [
+        {
+          boundaryRef,
+          boundaryAt: "1998-07-06T00:00:00.000Z",
+          reason: "explicit-reset" as const,
+          turnCount: 1,
+        },
+      ],
+      truncated: false,
+    }));
+    const readArchivedTranscriptPage = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      status: "page" as const,
+      turns: [],
+      nextCursor: null,
+    }));
+    const wiring = {
+      home,
+      context: context(),
+      runtime: operationRuntime(),
+      intervalsCredentials: intervalsCredentials(),
+      historyNewestDate: () => "1998-07-18",
+      applyRuntimeConfig: async () => {},
+    };
+    const operations = createCoachOperations({
+      ...wiring,
+      readArchivedConversations,
+      readArchivedTranscriptPage,
+    });
+
+    await expect(operations.listArchivedConversations({})).resolves.toEqual({
+      schemaVersion: 1,
+      conversations: [
+        {
+          boundaryRef,
+          boundaryAt: "1998-07-06T00:00:00.000Z",
+          reason: "explicit-reset",
+          turnCount: 1,
+        },
+      ],
+      truncated: false,
+    });
+    await expect(
+      operations.getArchivedTranscriptPage({ boundaryRef, cursor: null, limit: 25 }),
+    ).resolves.toEqual({
+      schemaVersion: 1,
+      status: "page",
+      turns: [],
+      nextCursor: null,
+    });
+    expect(readArchivedTranscriptPage).toHaveBeenCalledWith({
+      boundaryRef,
+      cursor: null,
+      limit: 25,
+    });
+    expect(() =>
+      operations.getArchivedTranscriptPage({
+        boundaryRef: "z".repeat(64),
+        cursor: null,
+        limit: 25,
+      } as never),
+    ).toThrow();
+    expect(() => operations.listArchivedConversations({ chatId: "other" } as never)).toThrow();
+    expect(readArchivedConversations).toHaveBeenCalledOnce();
+    expect(readArchivedTranscriptPage).toHaveBeenCalledOnce();
+
+    const unwired = createCoachOperations(wiring);
+    expect(() => unwired.listArchivedConversations({})).toThrow(TypeError);
+    expect(() =>
+      unwired.getArchivedTranscriptPage({ boundaryRef, cursor: null, limit: 25 }),
+    ).toThrow(TypeError);
+  });
+
   it("imports synthetic activity files through the live store and deduplicates reruns", async () => {
     const root = await mkdtemp(join(await realpath(tmpdir()), "coach-operations-"));
     const liveHome: AthleteHome = {

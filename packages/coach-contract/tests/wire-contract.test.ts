@@ -19,8 +19,12 @@ import {
   ConfigureRuntimeRpcResultSchema,
   GetRuntimeConfigRpcParamsSchema,
   GetRuntimeConfigRpcResultSchema,
+  GetArchivedTranscriptPageRpcParamsSchema,
+  GetArchivedTranscriptPageRpcResultSchema,
   GetTranscriptPageRpcParamsSchema,
   GetTranscriptPageRpcResultSchema,
+  ListArchivedConversationsRpcParamsSchema,
+  ListArchivedConversationsRpcResultSchema,
   GetUnitsPreferenceRpcParamsSchema,
   GetUnitsPreferenceRpcResultSchema,
   ImportFilesRpcParamsSchema,
@@ -92,6 +96,16 @@ const progressNotification = {
 function transcriptCursor(): string {
   const bytes = Buffer.alloc(114);
   bytes[0] = 1;
+  return bytes.toString("base64url");
+}
+
+const BOUNDARY_REF = "a".repeat(64);
+
+function archivedTranscriptCursor(): string {
+  const bytes = Buffer.alloc(114);
+  bytes[0] = 2;
+  bytes[1] = 1;
+  bytes.fill(0xab, 34, 66);
   return bytes.toString("base64url");
 }
 
@@ -193,7 +207,7 @@ const spendSummary = SpendSummarySchema.parse({
 });
 
 describe("coach request and event projection", () => {
-  it("admits exactly the fifteen strict method requests", () => {
+  it("admits exactly the seventeen strict method requests", () => {
     const requests = [
       { jsonrpc: "2.0", id: 1, method: "chat", params: { chatId: "chat-1", message: "hello" } },
       { jsonrpc: "2.0", id: 2, method: "resetSession", params: { chatId: "chat-1" } },
@@ -241,6 +255,13 @@ describe("coach request and event projection", () => {
         id: 15,
         method: "getTranscriptPage",
         params: { cursor: null, limit: 25 },
+      },
+      { jsonrpc: "2.0", id: 16, method: "listArchivedConversations", params: {} },
+      {
+        jsonrpc: "2.0",
+        id: 17,
+        method: "getArchivedTranscriptPage",
+        params: { boundaryRef: BOUNDARY_REF, cursor: null, limit: 25 },
       },
     ];
     for (const request of requests) {
@@ -315,6 +336,86 @@ describe("coach request and event projection", () => {
     ]) {
       expect(GetTranscriptPageRpcResultSchema.safeParse(result).success).toBe(false);
     }
+  });
+
+  it("keeps the archived conversation wire shape bounded and cursor-namespaced", () => {
+    const archived = archivedTranscriptCursor();
+    expect(
+      GetArchivedTranscriptPageRpcParamsSchema.parse({
+        boundaryRef: BOUNDARY_REF,
+        cursor: archived,
+        limit: 50,
+      }),
+    ).toEqual({ boundaryRef: BOUNDARY_REF, cursor: archived, limit: 50 });
+    expect(
+      GetArchivedTranscriptPageRpcResultSchema.parse({
+        schemaVersion: 1,
+        status: "page",
+        turns: [
+          {
+            turnId: "turn-1",
+            completedAt: "1998-07-06T00:00:00.000Z",
+            athleteText: "a",
+            coachText: "b",
+          },
+        ],
+        nextCursor: archived,
+      }),
+    ).toMatchObject({ status: "page", nextCursor: archived });
+    for (const request of [
+      { boundaryRef: BOUNDARY_REF, cursor: null, limit: 0 },
+      { boundaryRef: BOUNDARY_REF, cursor: null, limit: 51 },
+      { boundaryRef: BOUNDARY_REF.toUpperCase(), cursor: null, limit: 25 },
+      { boundaryRef: "a".repeat(63), cursor: null, limit: 25 },
+      { boundaryRef: BOUNDARY_REF, cursor: transcriptCursor(), limit: 25 },
+      { cursor: null, limit: 25 },
+      { boundaryRef: BOUNDARY_REF, cursor: null, limit: 25, chatId: "other" },
+    ]) {
+      expect(GetArchivedTranscriptPageRpcParamsSchema.safeParse(request).success).toBe(false);
+    }
+    expect(
+      GetArchivedTranscriptPageRpcResultSchema.safeParse({
+        schemaVersion: 1,
+        status: "page",
+        turns: [],
+        nextCursor: transcriptCursor(),
+      }).success,
+    ).toBe(false);
+    expect(
+      GetTranscriptPageRpcParamsSchema.safeParse({ cursor: archived, limit: 25 }).success,
+    ).toBe(false);
+
+    const summary = {
+      boundaryRef: BOUNDARY_REF,
+      boundaryAt: "1998-07-06T00:00:00.000Z",
+      reason: "explicit-reset",
+      turnCount: 4,
+    };
+    expect(ListArchivedConversationsRpcParamsSchema.parse({})).toEqual({});
+    expect(
+      ListArchivedConversationsRpcResultSchema.parse({
+        schemaVersion: 1,
+        conversations: [summary],
+        truncated: false,
+      }),
+    ).toEqual({ schemaVersion: 1, conversations: [summary], truncated: false });
+    for (const result of [
+      { schemaVersion: 1, conversations: [summary, summary], truncated: false },
+      { schemaVersion: 1, conversations: [summary], truncated: true },
+      { schemaVersion: 1, conversations: [{ ...summary, reason: "idle-reset" }], truncated: false },
+      {
+        schemaVersion: 1,
+        conversations: [{ ...summary, boundaryAt: "1998-07-06T00:00:00Z" }],
+        truncated: false,
+      },
+      { schemaVersion: 1, conversations: [{ ...summary, turnCount: -1 }], truncated: false },
+      { schemaVersion: 1, conversations: [summary], truncated: false, chatId: "desktop" },
+    ]) {
+      expect(ListArchivedConversationsRpcResultSchema.safeParse(result).success).toBe(false);
+    }
+    expect(ListArchivedConversationsRpcParamsSchema.safeParse({ chatId: "desktop" }).success).toBe(
+      false,
+    );
   });
 
   it("rejects every nested non-JSON resolvedCs value at every wire boundary", () => {
@@ -692,6 +793,17 @@ describe("coach request and event projection", () => {
         turns: [],
         nextCursor: null,
       }),
+      listArchivedConversations: async () => ({
+        schemaVersion: 1,
+        conversations: [],
+        truncated: false,
+      }),
+      getArchivedTranscriptPage: async () => ({
+        schemaVersion: 1,
+        status: "page",
+        turns: [],
+        nextCursor: null,
+      }),
       getAthleteState: async () =>
         AthleteStateSchema.parse({
           schemaVersion: "1",
@@ -793,6 +905,18 @@ describe("coach request and event projection", () => {
       responseSchema: GetTranscriptPageRpcResultSchema,
       eventSchema: NoRpcEventSchema,
     });
+    expect(COACH_RPC_METHOD_REGISTRY.listArchivedConversations).toEqual({
+      wireName: "listArchivedConversations",
+      requestSchema: ListArchivedConversationsRpcParamsSchema,
+      responseSchema: ListArchivedConversationsRpcResultSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.getArchivedTranscriptPage).toEqual({
+      wireName: "getArchivedTranscriptPage",
+      requestSchema: GetArchivedTranscriptPageRpcParamsSchema,
+      responseSchema: GetArchivedTranscriptPageRpcResultSchema,
+      eventSchema: NoRpcEventSchema,
+    });
     expect(COACH_RPC_METHOD_REGISTRY.getAthleteState).toEqual({
       wireName: "getAthleteState",
       requestSchema: EmptyRpcParamsSchema,
@@ -863,6 +987,8 @@ describe("coach request and event projection", () => {
       "resetSession",
       "hasSession",
       "getTranscriptPage",
+      "listArchivedConversations",
+      "getArchivedTranscriptPage",
       "getAthleteState",
       "saveIntake",
       "configureRuntime",
@@ -1086,7 +1212,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version ten", () => {
-    expect(PROTOCOL_VERSION).toBe(10);
+  it("uses protocol version eleven", () => {
+    expect(PROTOCOL_VERSION).toBe(11);
   });
 });

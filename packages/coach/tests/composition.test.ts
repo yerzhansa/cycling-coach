@@ -502,6 +502,23 @@ describe("local coach composition", () => {
       turns: [{ turnId: "desktop-turn" }],
       nextCursor: null,
     });
+    await expect(lifecycle.operations.listArchivedConversations({})).resolves.toEqual({
+      schemaVersion: 1,
+      conversations: [],
+      truncated: false,
+    });
+    await expect(
+      lifecycle.operations.getArchivedTranscriptPage({
+        boundaryRef: "d".repeat(64),
+        cursor: null,
+        limit: 25,
+      }),
+    ).resolves.toEqual({
+      schemaVersion: 1,
+      status: "restart-required",
+      turns: [],
+      nextCursor: null,
+    });
     await lifecycle.close();
   });
 

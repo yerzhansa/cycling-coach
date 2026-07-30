@@ -1,0 +1,256 @@
+import { act, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  EMPTY_ARCHIVE_SURFACE,
+  type ArchiveReadingState,
+  type ArchiveViewState,
+} from "../src/archive/controller.js";
+import { Shell } from "../src/app/Shell.js";
+import type { ArchiveActions } from "../src/state/archive-slice.js";
+import { EMPTY_CHAT_SURFACE, type ChatActions } from "../src/state/chat-slice.js";
+import { CLOSED_ONBOARDING } from "../src/state/onboarding-slice.js";
+import { useEnduragentStore } from "../src/state/store.js";
+import { ArchiveView } from "../src/ui/archive/ArchiveView.js";
+
+const NEWER = "a".repeat(64);
+const OLDER = "b".repeat(64);
+
+function archiveActions(): ArchiveActions {
+  return {
+    refresh: vi.fn(),
+    open: vi.fn(),
+    close: vi.fn(),
+    loadEarlier: vi.fn(),
+    retry: vi.fn(),
+  };
+}
+
+function chatActions(): ChatActions {
+  return {
+    submit: vi.fn(),
+    retry: vi.fn(),
+    loadEarlier: vi.fn(),
+    retryHydration: vi.fn(),
+    openNewConversation: vi.fn(),
+    cancelNewConversation: vi.fn(),
+    confirmNewConversation: vi.fn(),
+    retryFirstSync: vi.fn(),
+  };
+}
+
+const LISTED: ArchiveViewState = {
+  listStatus: "ready",
+  conversations: [
+    {
+      boundaryRef: NEWER,
+      boundaryAt: "1998-07-19T08:15:00.000Z",
+      reason: "explicit-reset",
+      turnCount: 3,
+    },
+    {
+      boundaryRef: OLDER,
+      boundaryAt: "1998-07-12T07:30:00.000Z",
+      reason: "stale-reset",
+      turnCount: 1,
+    },
+  ],
+  truncated: false,
+  reading: null,
+};
+
+function reading(patch: Partial<ArchiveReadingState> = {}): ArchiveViewState {
+  return {
+    ...LISTED,
+    reading: {
+      boundaryRef: NEWER,
+      boundaryAt: "1998-07-19T08:15:00.000Z",
+      status: "ready",
+      turns: [
+        {
+          turnId: "turn-1",
+          completedAt: "1998-07-19T07:00:00.000Z",
+          athleteText: "How did last week look?",
+          coachText: "**Solid** week.",
+        },
+      ],
+      hasEarlier: false,
+      ...patch,
+    },
+  };
+}
+
+function set(next: ArchiveViewState, actions: ArchiveActions): void {
+  act(() => {
+    useEnduragentStore.setState({ archive: next, archiveActions: actions });
+  });
+}
+
+beforeEach(() => {
+  useEnduragentStore.setState({
+    activeView: "chat",
+    runtimeReady: true,
+    archive: EMPTY_ARCHIVE_SURFACE,
+    archiveActions: null,
+    chat: { ...EMPTY_CHAT_SURFACE, newConversationUnavailable: false },
+    chatActions: chatActions(),
+    onboarding: CLOSED_ONBOARDING,
+    onboardingActions: null,
+    onboardingStartupSettled: true,
+  });
+});
+
+afterEach(() => {
+  useEnduragentStore.setState({
+    activeView: "chat",
+    archive: EMPTY_ARCHIVE_SURFACE,
+    archiveActions: null,
+    chat: EMPTY_CHAT_SURFACE,
+    chatActions: null,
+  });
+});
+
+describe("past chats list", () => {
+  it("requests the list once the controller is bound and opens an entry on click", async () => {
+    const user = userEvent.setup();
+    const actions = archiveActions();
+    useEnduragentStore.setState({ archive: LISTED, archiveActions: actions });
+    render(<ArchiveView />);
+
+    expect(actions.refresh).toHaveBeenCalledOnce();
+    const region = screen.getByRole("region", { name: "Past chats" });
+    const entries = region.querySelectorAll("button.archive-entry");
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toHaveTextContent("1998-07-19 08:15 UTC");
+    expect(entries[0]).toHaveTextContent("3 messages");
+    expect(entries[1]).toHaveTextContent("1 message");
+    expect(within(region).getByText("Past conversations are read-only.")).toBeInTheDocument();
+
+    await user.click(entries[0] as HTMLElement);
+    expect(actions.open).toHaveBeenNthCalledWith(1, NEWER);
+  });
+
+  it("stays inert until the controller binds and reports an empty archive", () => {
+    render(<ArchiveView />);
+
+    const region = screen.getByRole("region", { name: "Past chats" });
+    expect(region.querySelectorAll("button.archive-entry")).toHaveLength(0);
+    expect(region.querySelector("p.archive-status")).toHaveTextContent(
+      "Loading past conversations…",
+    );
+
+    set({ ...EMPTY_ARCHIVE_SURFACE, listStatus: "ready" }, archiveActions());
+    expect(region.querySelector("p.archive-empty")).not.toHaveAttribute("hidden");
+    expect(region.querySelector("p.archive-status")).toHaveAttribute("hidden");
+  });
+
+  it("surfaces a list failure with a retry that reaches the controller", async () => {
+    const user = userEvent.setup();
+    const actions = archiveActions();
+    render(<ArchiveView />);
+    set({ ...EMPTY_ARCHIVE_SURFACE, listStatus: "failed" }, actions);
+
+    const region = screen.getByRole("region", { name: "Past chats" });
+    expect(region.querySelector("p.archive-status")).toHaveTextContent(
+      "Past conversations are temporarily unavailable.",
+    );
+    await user.click(within(region).getByRole("button", { name: "Try again" }));
+    expect(actions.retry).toHaveBeenCalledOnce();
+  });
+
+  it("notes truncation only when older conversations are unlisted", () => {
+    const actions = archiveActions();
+    render(<ArchiveView />);
+    set(LISTED, actions);
+    const region = screen.getByRole("region", { name: "Past chats" });
+    expect(region.querySelector("p.archive-truncated")).toHaveAttribute("hidden");
+
+    set({ ...LISTED, truncated: true }, actions);
+    expect(region.querySelector("p.archive-truncated")).not.toHaveAttribute("hidden");
+  });
+});
+
+describe("past chats reader", () => {
+  it("renders a read-only transcript with back navigation and no composer", async () => {
+    const user = userEvent.setup();
+    const actions = archiveActions();
+    render(<ArchiveView />);
+    set(reading(), actions);
+
+    const region = screen.getByRole("region", { name: "Past chats" });
+    const thread = within(region).getByRole("region", { name: "Past conversation" });
+    expect(thread.querySelectorAll("article.archive-message")).toHaveLength(2);
+    expect(thread).toHaveTextContent("How did last week look?");
+    expect(thread.querySelector(".archive-message--coach strong")).toHaveTextContent("Solid");
+    expect(region.querySelector("textarea")).toBeNull();
+    expect(region.querySelector("button.archive-load-earlier")).toHaveAttribute("hidden");
+    expect(within(region).queryByRole("button", { name: "Send" })).toBeNull();
+    expect(within(region).queryByRole("button", { name: /Retry/u })).toBeNull();
+    expect(region.querySelectorAll("button.archive-entry")).toHaveLength(0);
+
+    await user.click(within(region).getByRole("button", { name: "All past chats" }));
+    expect(actions.close).toHaveBeenCalledOnce();
+    expect(actions.open).not.toHaveBeenCalled();
+  });
+
+  it("pages earlier messages and blocks the pill while a page is in flight", async () => {
+    const user = userEvent.setup();
+    const actions = archiveActions();
+    render(<ArchiveView />);
+    set(reading({ hasEarlier: true }), actions);
+
+    const region = screen.getByRole("region", { name: "Past chats" });
+    await user.click(within(region).getByRole("button", { name: "Load earlier messages" }));
+    expect(actions.loadEarlier).toHaveBeenCalledOnce();
+
+    set(reading({ hasEarlier: true, status: "loading" }), actions);
+    expect(region.querySelector("button.archive-load-earlier")).toBeDisabled();
+    expect(region.querySelector("p.archive-reading-status")).toHaveTextContent(
+      "Loading past conversations…",
+    );
+  });
+
+  it("offers retry after a page failure and refuses retry once unavailable", async () => {
+    const user = userEvent.setup();
+    const actions = archiveActions();
+    render(<ArchiveView />);
+    set(reading({ hasEarlier: true, status: "failed" }), actions);
+
+    const region = screen.getByRole("region", { name: "Past chats" });
+    expect(region.querySelector("p.archive-reading-status")).toHaveTextContent(
+      "This conversation is temporarily unavailable.",
+    );
+    expect(region.querySelector("button.archive-load-earlier")).toHaveAttribute("hidden");
+    await user.click(within(region).getByRole("button", { name: "Try again" }));
+    expect(actions.retry).toHaveBeenCalledOnce();
+
+    set(reading({ status: "unavailable", turns: [] }), actions);
+    expect(region.querySelector("p.archive-reading-status")).toHaveTextContent(
+      "This conversation is no longer available.",
+    );
+    expect(region.querySelector("button.archive-retry")).toHaveAttribute("hidden");
+  });
+});
+
+describe("past chats navigation", () => {
+  it("reaches the read-only surface from the sidebar without touching the chat view", async () => {
+    const user = userEvent.setup();
+    const actions = archiveActions();
+    useEnduragentStore.setState({ archive: LISTED, archiveActions: actions });
+    render(<Shell onReady={() => {}} />);
+
+    await user.click(screen.getByRole("button", { name: "Past chats" }));
+
+    expect(await screen.findByRole("region", { name: "Past chats" })).toBeInTheDocument();
+    expect(useEnduragentStore.getState().activeView).toBe("archive");
+    expect(document.querySelector('[data-view="archive"]')).not.toBeNull();
+    expect(document.querySelector("textarea#message")).not.toBeNull();
+    expect(useEnduragentStore.getState().chat).toEqual({
+      ...EMPTY_CHAT_SURFACE,
+      newConversationUnavailable: false,
+    });
+
+    await user.click(screen.getByRole("button", { name: "Chat" }));
+    expect(useEnduragentStore.getState().activeView).toBe("chat");
+  });
+});
