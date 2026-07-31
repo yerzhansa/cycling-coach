@@ -2,4 +2,4 @@
 "cycling-coach": patch
 ---
 
-User-facing: ChatGPT subscription spend and cap warnings now include cached input correctly.
+Count cached input tokens in the Desktop ChatGPT subscription spend total and cap warnings.

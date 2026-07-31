@@ -3,4 +3,4 @@
 "@enduragent/desktop-renderer": patch
 ---
 
-User-facing: Coach replies now render in the native system font.
+Render Desktop coach prose in the native system font, dropping the bundled Source Serif 4 webfont and its NOTICE entry.

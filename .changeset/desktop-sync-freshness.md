@@ -2,4 +2,4 @@
 "cycling-coach": patch
 ---
 
-User-facing: Desktop now separates the latest successful sync time from when training data last changed.
+Report the latest successful sync time separately from when training data last changed in Desktop.

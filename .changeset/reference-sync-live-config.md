@@ -3,4 +3,4 @@
 "@enduragent/desktop": patch
 ---
 
-User-facing: Fixed automatic training-data sync not picking up the intervals.icu key entered during onboarding.
+Read intervals.icu credentials live in Reference layer sync so automatic training-data sync picks up a key entered during Desktop onboarding.

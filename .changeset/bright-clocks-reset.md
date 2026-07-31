@@ -2,6 +2,4 @@
 "cycling-coach": patch
 ---
 
-User-facing: Added Desktop Settings for timezone and conversation reset behavior.
-
 Apply timezone, daily reset, idle reset, history budget, and future archive-retention changes through one redacted runtime lifecycle.

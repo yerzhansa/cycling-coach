@@ -5,4 +5,4 @@
 "@enduragent/desktop": patch
 ---
 
-User-facing: Desktop can now start from an existing configuration that omits `data_dir`.
+Let Desktop start from an existing configuration that omits `data_dir`.
