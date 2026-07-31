@@ -1,0 +1,48 @@
+{
+  "name": "@enduragent/engine",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Private coaching engine boundary and sport contract.",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./sport": {
+      "types": "./dist/sport.d.ts",
+      "import": "./dist/sport.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ai-sdk/alibaba": "^1.0.29",
+    "@ai-sdk/anthropic": "^3.0.69",
+    "@ai-sdk/deepseek": "^2.0.25",
+    "@ai-sdk/google": "^3.0.63",
+    "@ai-sdk/openai": "^3.0.52",
+    "@ai-sdk/openai-compatible": "^2.0.51",
+    "@ai-sdk/provider-utils": "^4.0.24",
+    "@enduragent/coach-contract": "workspace:*",
+    "@enduragent/kernel": "workspace:*",
+    "@openrouter/ai-sdk-provider": "^2.9.1",
+    "ai": "^6.0.158",
+    "intervals-icu-api": "^0.1.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@ai-sdk/provider": "^3.0.10",
+    "@types/node": "^25.6.0",
+    "tsup": "^8.4.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
+  },
+  "license": "MIT"
+}

@@ -135,6 +135,11 @@ The check runs on Telegram-mode startup and again every 24 hours (so a long-runn
 
 Set `CYCLING_COACH_NO_UPDATE_CHECK=1` to disable the automatic background checks (both the startup check and the daily re-check). The operator-initiated `/update` and `/whatsnew` commands still query the endpoint — those are explicit requests, not background checks (and `/whatsnew` also reaches the GitHub Releases API for release notes). In managed container deploys, `/update` does not run npm; image hosts update by redeploying the container image.
 
+Desktop does not fetch release notes in the background. Choosing **What’s new** explicitly contacts
+`registry.npmjs.org` for the latest published version and the GitHub Releases API for that exact
+version’s athlete-facing notes. Those requests send no installation identifier, credential,
+configuration, or athlete data.
+
 ### First-time setup
 
 The setup wizard prompts you to send `/start` from your Telegram account; the wizard captures your user ID and writes the allowlist file automatically — you never type your numeric ID.

@@ -3,11 +3,19 @@ name: Publish Docker image
 # First run creates the GHCR package. Before publishing the Railway marketplace
 # template, confirm the package visibility is Public in GitHub Packages.
 
+# The bot image and the desktop shell share one branch. Desktop-only surfaces
+# are excluded rather than bot-relevant ones allowlisted, so a new package in
+# the cycling-coach workspace closure keeps publishing instead of silently
+# dropping out of the release path.
 on:
   push:
     branches: [main]
     tags:
       - 'cycling-coach@*'
+    paths-ignore:
+      - 'apps/desktop/**'
+      - 'apps/desktop-renderer/**'
+      - 'packages/desktop-*/**'
   workflow_dispatch:
 
 permissions:

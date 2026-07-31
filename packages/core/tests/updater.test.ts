@@ -9,6 +9,7 @@ import {
   getCurrentVersion,
   getInstanceId,
   isManagedDeploy,
+  isStableCalVer,
   isUpdateAvailable,
 } from "../src/updater.js";
 
@@ -43,13 +44,54 @@ describe("isUpdateAvailable", () => {
     expect(isUpdateAvailable("2026.5.9", "2026.5.10")).toBe(false);
   });
 
-  it("CalVer same-day re-release suffix is treated as NEWER", () => {
-    // The project's CalVer scheme: 2026.5.3 → 2026.5.3-1 → 2026.5.3-2 ships
-    // suffix bumps as same-day re-releases that come AFTER the original.
-    // (This inverts standard semver, where -1 is a pre-release.)
+  it("orders stable successors within the same month", () => {
+    expect(isUpdateAvailable("2026.7.3", "2026.7.2")).toBe(true);
+    expect(isUpdateAvailable("2026.7.2", "2026.7.3")).toBe(false);
+  });
+
+  it("orders installed historical suffix releases for compatibility", () => {
+    expect(isUpdateAvailable("2026.5.3-1", "2026.5.3-0")).toBe(true);
     expect(isUpdateAvailable("2026.5.3-1", "2026.5.3")).toBe(true);
     expect(isUpdateAvailable("2026.5.3-2", "2026.5.3-1")).toBe(true);
     expect(isUpdateAvailable("2026.5.3", "2026.5.3-1")).toBe(false);
+  });
+
+  it("recognizes the stable successor to an installed historical suffix release", () => {
+    expect(isUpdateAvailable("2026.6.26", "2026.6.25-1")).toBe(true);
+    expect(isUpdateAvailable("2026.6.25-1", "2026.6.26")).toBe(false);
+  });
+
+  it.each([
+    ["2026.0.1", "2026.1.1"],
+    ["2026.13.1", "2026.12.1"],
+    ["2026.7.9007199254740992", "2026.7.1"],
+    ["999.7.1", "2026.7.1"],
+    ["10000.7.1", "2026.7.1"],
+    ["0000.7.1", "2026.7.1"],
+  ])("rejects invalid or unsafe latest/current CalVer %s / %s", (latest, current) => {
+    expect(isUpdateAvailable(latest, current)).toBe(false);
+    expect(isUpdateAvailable(current, latest)).toBe(false);
+  });
+});
+
+describe("isStableCalVer", () => {
+  it.each(["2026.1.0", "2026.12.9007199254740991"])("accepts stable CalVer %s", (version) => {
+    expect(isStableCalVer(version)).toBe(true);
+  });
+
+  it.each([
+    "2026.0.1",
+    "2026.13.1",
+    "2026.7.9007199254740992",
+    "999.7.1",
+    "10000.7.1",
+    "0000.7.1",
+    "2026.07.1",
+    "2026.7.01",
+    "2026.7.1-1",
+    `2026.7.${"1".repeat(33)}`,
+  ])("rejects non-stable CalVer %s", (version) => {
+    expect(isStableCalVer(version)).toBe(false);
   });
 });
 
@@ -69,7 +111,7 @@ describe("buildSelfUpdateCommand", () => {
     expect(cmd).toContain("--registry=https://registry.npmjs.org");
   });
 
-  it("accepts a CalVer same-day re-release suffix", () => {
+  it("accepts an installed historical CalVer suffix", () => {
     expect(buildSelfUpdateCommand("cycling-coach", "2026.5.3-1")).toContain(
       "cycling-coach@2026.5.3-1",
     );
@@ -84,15 +126,21 @@ describe("buildSelfUpdateCommand", () => {
 
 describe("isManagedDeploy", () => {
   it("treats 1 and true as managed deploy signals", () => {
-    expect(isManagedDeploy({ CYCLING_COACH_MANAGED_DEPLOY: "1" })).toBe(true);
-    expect(isManagedDeploy({ CYCLING_COACH_MANAGED_DEPLOY: "true" })).toBe(true);
-    expect(isManagedDeploy({ CYCLING_COACH_MANAGED_DEPLOY: " TRUE " })).toBe(true);
+    expect(isManagedDeploy("cycling-coach", { CYCLING_COACH_MANAGED_DEPLOY: "1" })).toBe(true);
+    expect(isManagedDeploy("cycling-coach", { CYCLING_COACH_MANAGED_DEPLOY: "true" })).toBe(true);
+    expect(isManagedDeploy("cycling-coach", { CYCLING_COACH_MANAGED_DEPLOY: " TRUE " })).toBe(true);
   });
 
   it("treats absent or non-true values as unmanaged installs", () => {
-    expect(isManagedDeploy({})).toBe(false);
-    expect(isManagedDeploy({ CYCLING_COACH_MANAGED_DEPLOY: "0" })).toBe(false);
-    expect(isManagedDeploy({ CYCLING_COACH_MANAGED_DEPLOY: "false" })).toBe(false);
+    expect(isManagedDeploy("cycling-coach", {})).toBe(false);
+    expect(isManagedDeploy("cycling-coach", { CYCLING_COACH_MANAGED_DEPLOY: "0" })).toBe(false);
+    expect(isManagedDeploy("cycling-coach", { CYCLING_COACH_MANAGED_DEPLOY: "false" })).toBe(false);
+  });
+
+  it("reads the per-binary env name, not a hardcoded prefix", () => {
+    expect(isManagedDeploy("running-coach", { RUNNING_COACH_MANAGED_DEPLOY: "1" })).toBe(true);
+    // A different binary's prefix must not leak across — the leakage is fixed, not aliased.
+    expect(isManagedDeploy("running-coach", { CYCLING_COACH_MANAGED_DEPLOY: "1" })).toBe(false);
   });
 });
 

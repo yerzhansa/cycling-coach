@@ -1,0 +1,58 @@
+{
+  "name": "@enduragent/coach",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Private Node composition root for governed Reference layer sync orchestration.",
+  "type": "module",
+  "files": ["dist"],
+  "bin": {
+    "enduragent": "./dist/enduragent.js"
+  },
+  "exports": {
+    "./runtime": "./dist/runtime.js",
+    "./sync": "./dist/sync.js",
+    "./backfill": "./dist/backfill.js",
+    "./backfill-benchmark": "./dist/backfill-benchmark.js",
+    "./capture": "./dist/capture.js",
+    "./local-bundle-producer": "./dist/local-bundle-producer.js",
+    "./store-runtime": "./dist/store-runtime.js",
+    "./local-runner": "./dist/local-runner.js",
+    "./serve": "./dist/serve.js",
+    "./enduragent": "./dist/enduragent.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsup",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "backfill": "node dist/backfill-command.js",
+    "benchmark": "node dist/backfill-command.js --synthetic --conclusions-only",
+    "capture-reference": "node dist/capture-command.js",
+    "capture-once": "node dist/reference-capture-command.js",
+    "dogfood:store": "node dist/local-bot.js",
+    "season-review": "node dist/season-review-command.js"
+  },
+  "dependencies": {
+    "@enduragent/coach-cli": "workspace:*",
+    "@enduragent/coach-contract": "workspace:*",
+    "@enduragent/core": "workspace:*",
+    "@enduragent/engine": "workspace:*",
+    "@enduragent/kernel": "workspace:*",
+    "@enduragent/kernel-node": "workspace:*",
+    "@enduragent/sync-intervals-icu": "workspace:*",
+    "@enduragent/sport-cycling": "workspace:*",
+    "ws": "^8.20.0",
+    "yaml": "^2.8.3"
+  },
+  "devDependencies": {
+    "@enduragent/coach-client": "workspace:*",
+    "@types/node": "^25.6.0",
+    "@types/ws": "^8.18.1",
+    "tsup": "^8.4.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
+  },
+  "license": "MIT"
+}

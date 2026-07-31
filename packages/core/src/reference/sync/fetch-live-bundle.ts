@@ -16,6 +16,28 @@
 // `SYNC_OPERATION_TIMEOUT_MS` budget.
 
 import { snakeCaseKeys } from "intervals-icu-api";
+import { serializeError } from "../../logging/serialize-error.js";
+import {
+  REFERENCE_CAPTURE_STREAM_LIMIT,
+  REFERENCE_CAPTURE_STREAM_TYPES,
+  REFERENCE_CAPTURE_STREAM_WINDOW_DAYS,
+  REFERENCE_CAPTURE_WINDOW_DAYS,
+  createReferenceCapturePlan,
+  selectReferenceCaptureStreamIds,
+  type ReferenceCapturePlan,
+} from "@enduragent/kernel/reference/capture";
+import {
+  assertNoTpKeysRemain,
+  deriveFtpHistory,
+  normalizeStreams,
+  parseRenamedActivity,
+  parseRenamedWellnessRow,
+  renameTpFieldsOnActivity,
+  renameTpFieldsOnWellnessRow,
+  type ReferenceBundle,
+  type RenameSummary,
+} from "@enduragent/kernel/reference/local-bundle";
+import { PlannedEventSchema, type PlannedEvent } from "@enduragent/kernel/reference/schemas";
 
 import {
   AthleteSchema,
@@ -23,29 +45,24 @@ import {
   type Activity,
   type ActivityStreams,
   type AthleteSettings,
-  type FtpHistoryPoint,
   type WellnessDay,
 } from "../schemas/inputs.js";
-import {
-  assertNoTpKeysRemain,
-  parseRenamedActivity,
-  parseRenamedWellnessRow,
-  renameTpFieldsOnActivity,
-  renameTpFieldsOnWellnessRow,
-  type RenameSummary,
-} from "./rename-tp-fields.js";
 import { LATEST_RETENTION_DAYS } from "../freshness.js";
-import type { ReferenceBundle } from "./fixture-bridge.js";
+import { familyOf } from "../sport-adapter-dispatcher.js";
+
+export { deriveFtpHistory, normalizeStreams } from "@enduragent/kernel/reference/local-bundle";
 
 /** Trailing window pulled for metric computation (covers the widest metric
  *  window — the 42-day sustainability look-back — with margin). */
-export const FETCH_WINDOW_DAYS = 84;
+export const FETCH_WINDOW_DAYS = REFERENCE_CAPTURE_WINDOW_DAYS;
 /** Only fetch per-activity streams for rides this recent. DFA-α1's trailing
  *  aggregate reads the last few sufficient sessions, so a short window keeps
  *  the request count bounded without starving the metric. */
-export const STREAM_WINDOW_DAYS = 21;
+export const STREAM_WINDOW_DAYS = REFERENCE_CAPTURE_STREAM_WINDOW_DAYS;
 /** Hard cap on per-activity stream fetches per sync, regardless of window. */
-export const MAX_STREAM_ACTIVITIES = 12;
+export const MAX_STREAM_ACTIVITIES = REFERENCE_CAPTURE_STREAM_LIMIT;
+export const PAST_PLAN_WINDOW_DAYS = 7;
+export const FUTURE_PLAN_WINDOW_DAYS = 28;
 const STREAM_THROTTLE_MS = 250;
 /** Wall-clock budget for the whole stream phase. Streams are best-effort, so we
  *  stop fetching once this elapses rather than letting a slow account push the
@@ -56,30 +73,7 @@ const STREAM_PHASE_BUDGET_MS = 60_000;
 /** Per-second channels requested per activity. `dfa_a1` + `artifacts` are the
  *  HRV channels the DFA-α1 block reads; `watts`/`heartrate` feed the per-session
  *  capability blocks. `time` is requested for alignment and rides through. */
-export const STREAM_TYPES: readonly string[] = [
-  "time",
-  "watts",
-  "heartrate",
-  "dfa_a1",
-  "artifacts",
-];
-
-/** DFA-α1 is upstream-validated for cycling only; stream fetches target these
- *  types (the cycling adapter's `activityTypes`). */
-const STREAM_SPORT_TYPES: ReadonlySet<string> = new Set(["Ride", "VirtualRide"]);
-
-/** Cycling sport types whose `sportInfo.eftp` seeds the FTP history series. */
-const CYCLING_TYPES: ReadonlySet<string> = new Set([
-  "Ride",
-  "VirtualRide",
-  "GravelRide",
-  "MountainBikeRide",
-  "EBikeRide",
-  "EMountainBikeRide",
-  "TrackRide",
-  "Cyclocross",
-  "Handcycle",
-]);
+export const STREAM_TYPES: readonly string[] = REFERENCE_CAPTURE_STREAM_TYPES;
 
 type FetchResult<T> = { ok: true; value: T } | { ok: false; error: unknown };
 
@@ -93,6 +87,13 @@ export interface BundleFetchClient {
   };
   readonly wellness: {
     list(query: { oldest?: string; newest?: string }): Promise<FetchResult<unknown[]>>;
+  };
+  readonly events: {
+    list(query: {
+      oldest: string;
+      newest: string;
+      category: string[];
+    }): Promise<FetchResult<unknown[]>>;
   };
 }
 
@@ -111,6 +112,7 @@ export interface LiveFetchResult {
   readonly recentActivities: readonly Activity[];
   /** Renamed wellness rows for the `latest.wellness_data` cache. */
   readonly wellnessData: readonly WellnessDay[];
+  readonly plannedWorkouts: readonly PlannedEvent[];
   /** Full-window inputs for metric computation. */
   readonly bundle: ReferenceBundle;
   /** Sync wall-clock as an ISO string — the metric date-window anchor. */
@@ -123,84 +125,10 @@ export interface LiveFetchResult {
   readonly fetchErrors?: readonly FetchEndpointError[];
 }
 
-function ymd(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
-// Zone-less local-time ISO (YYYY-MM-DDThh:mm:ss). The metric date-window math
-// compares this anchor's date prefix against activity `start_date_local` values,
-// which intervals.icu emits in the athlete's local time with no zone. A UTC
-// `toISOString()` here would shift the anchor's calendar date near midnight and
-// drop/include a day's activities at the window edge; the naive-local form
-// mirrors the oracle's `datetime.now()` convention so the windows line up.
-function naiveLocalIso(date: Date): string {
-  const p = (n: number): string => String(n).padStart(2, "0");
-  return (
-    `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}` +
-    `T${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`
-  );
-}
-
 // intervals.icu's streams endpoint returns an array of channel objects
 // (`[{type, data}, …]`); the lib also camelCases response keys (so `dfa_a1`
 // becomes `dfaA1` on the object form). Normalize both into the channel-keyed
 // shape the metrics + ActivityStreamsSchema consume (`{dfa_a1, watts, …}`).
-export function normalizeStreams(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    const out: Record<string, unknown> = {};
-    for (const el of value) {
-      if (
-        el !== null &&
-        typeof el === "object" &&
-        typeof (el as Record<string, unknown>).type === "string" &&
-        Array.isArray((el as Record<string, unknown>).data)
-      ) {
-        out[(el as Record<string, unknown>).type as string] = (el as Record<string, unknown>).data;
-      }
-    }
-    return out;
-  }
-  if (value !== null && typeof value === "object") {
-    return snakeCaseKeys(value);
-  }
-  return value;
-}
-
-function isCyclingStreamType(type: unknown): boolean {
-  return typeof type === "string" && STREAM_SPORT_TYPES.has(type);
-}
-
-/** Sparse cycling FTP series from per-day `sportInfo.eftp` — one point per
- *  change. intervals.icu has no public FTP-history endpoint, so the series is
- *  synthesized from wellness sportInfo exactly as the fixture builder does. */
-export function deriveFtpHistory(
-  wellness: readonly WellnessDay[],
-): FtpHistoryPoint[] {
-  const points: FtpHistoryPoint[] = [];
-  let lastFtp: number | null = null;
-  const sorted = [...wellness].sort((a, b) => String(a.id).localeCompare(String(b.id)));
-  for (const day of sorted) {
-    const sportInfo =
-      (day as { sportInfo?: Array<Record<string, unknown>> | null }).sportInfo ?? [];
-    let cyclingEftp: number | null = null;
-    for (const si of sportInfo) {
-      if (
-        typeof si.type === "string" &&
-        CYCLING_TYPES.has(si.type) &&
-        typeof si.eftp === "number" &&
-        Number.isFinite(si.eftp)
-      ) {
-        cyclingEftp = Math.round(si.eftp);
-        break;
-      }
-    }
-    if (cyclingEftp === null || cyclingEftp === lastFtp) continue;
-    points.push({ date: String(day.id), ftp: cyclingEftp, source: "estimate" });
-    lastFtp = cyclingEftp;
-  }
-  return points;
-}
-
 function extractAthleteSettings(profile: unknown): AthleteSettings | undefined {
   if (typeof profile !== "object" || profile === null) return undefined;
   const sportSettings = (profile as Record<string, unknown>).sportSettings;
@@ -215,6 +143,7 @@ interface LiveFetchDeps {
   readonly client: BundleFetchClient;
   readonly signal: AbortSignal;
   readonly now: Date;
+  readonly sportTypes?: readonly string[];
   /** Override the inter-request throttle (tests pass 0). */
   readonly throttleMs?: number;
   /** Sink for non-fatal warnings; defaults to console.warn. */
@@ -239,6 +168,20 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+function renderEndpointError(error: unknown): string {
+  const serializable =
+    error !== null && typeof error === "object" && !(error instanceof Error)
+      ? Object.assign(new Error("Reference endpoint failed"), error)
+      : error;
+  return JSON.stringify(serializeError(serializable));
+}
+
+function shiftedDate(value: string, days: number): string {
+  const instant = new Date(`${value}T00:00:00.000Z`);
+  instant.setUTCDate(instant.getUTCDate() + days);
+  return instant.toISOString().slice(0, 10);
+}
+
 /**
  * Fetch + assemble the live Reference bundle. Throws only on a hard
  * precondition failure (activities list unreachable) or a surviving
@@ -249,16 +192,18 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
   const { client, signal, now } = deps;
   const log = deps.log ?? ((m: string) => console.warn(m));
   const throttleMs = deps.throttleMs ?? STREAM_THROTTLE_MS;
-  const frozenNow = naiveLocalIso(now);
-
-  const newest = ymd(now);
-  const oldest = ymd(new Date(now.getTime() - FETCH_WINDOW_DAYS * 24 * 60 * 60 * 1000));
+  const plan = createReferenceCapturePlan(now);
+  const frozenNow = plan.frozenNow;
+  const { oldest, newest } = plan.window;
+  const cyclingSportTypes = new Set(
+    (deps.sportTypes ?? []).filter((type) => familyOf(type, undefined) === "cycling"),
+  );
 
   const fetchErrors: FetchEndpointError[] = [];
 
   const athleteResult = await client.athlete.get();
   if (!athleteResult.ok) {
-    const detail = String(athleteResult.error);
+    const detail = renderEndpointError(athleteResult.error);
     log(`Reference: athlete.get failed: ${detail}`);
     fetchErrors.push({ endpoint: "athlete", detail });
   }
@@ -266,7 +211,7 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
 
   const actResult = await client.activities.list({ oldest, newest });
   if (!actResult.ok) {
-    throw new Error(`activities.list failed: ${String(actResult.error)}`);
+    throw new Error(`activities.list failed: ${renderEndpointError(actResult.error)}`);
   }
   // The lib auto-camelCases activity responses; ActivitySchema requires
   // snake_case (start_date_local, icu_training_load, …). Reverse it here only —
@@ -281,7 +226,7 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
 
   const wellResult = await client.wellness.list({ oldest, newest });
   if (!wellResult.ok) {
-    const detail = String(wellResult.error);
+    const detail = renderEndpointError(wellResult.error);
     log(`Reference: wellness.list failed: ${detail}`);
     fetchErrors.push({ endpoint: "wellness", detail });
   }
@@ -289,6 +234,53 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
     wellResult.ok && Array.isArray(wellResult.value)
       ? (wellResult.value as Array<Record<string, unknown>>)
       : [];
+
+  const frozenDate = frozenNow.slice(0, 10);
+  const planOldest = shiftedDate(frozenDate, -(PAST_PLAN_WINDOW_DAYS - 1));
+  const planNewest = shiftedDate(frozenDate, FUTURE_PLAN_WINDOW_DAYS);
+  const eventResult = await client.events.list({
+    oldest: planOldest,
+    newest: planNewest,
+    category: ["WORKOUT"],
+  });
+  if (!eventResult.ok) {
+    const detail = renderEndpointError(eventResult.error);
+    log(`Reference: events.list failed: ${detail}`);
+    fetchErrors.push({ endpoint: "events", detail });
+  }
+  const plannedEvents: PlannedEvent[] = [];
+  if (eventResult.ok && Array.isArray(eventResult.value)) {
+    const rawEvents = snakeCaseKeys(eventResult.value) as Array<Record<string, unknown>>;
+    for (const row of rawEvents) {
+      const parsed = PlannedEventSchema.safeParse(row);
+      if (!parsed.success) {
+        log(`Reference: skipped malformed event row: ${parsed.error.message}`);
+        continue;
+      }
+      if (
+        parsed.data.category !== "WORKOUT" ||
+        parsed.data.type == null ||
+        !cyclingSportTypes.has(parsed.data.type)
+      ) {
+        continue;
+      }
+      plannedEvents.push(parsed.data);
+    }
+  } else if (eventResult.ok) {
+    log("Reference: events.list returned a non-array body; treating as empty");
+  }
+  plannedEvents.sort(
+    (left, right) =>
+      left.start_date_local.localeCompare(right.start_date_local) || left.id - right.id,
+  );
+  const pastEvents = plannedEvents.filter((event) => {
+    const date = event.start_date_local.slice(0, 10);
+    return date >= planOldest && date <= frozenDate;
+  });
+  const plannedWorkouts = plannedEvents.filter((event) => {
+    const date = event.start_date_local.slice(0, 10);
+    return date >= frozenDate && date <= planNewest;
+  });
 
   const actSummary: RenameSummary = { skippedNonNumeric: {} };
   const wellSummary: RenameSummary = { skippedNonNumeric: {} };
@@ -298,7 +290,9 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
     try {
       activities.push(parseRenamedActivity(renameTpFieldsOnActivity(row, actSummary)));
     } catch (err) {
-      log(`Reference: skipped malformed activity row: ${err instanceof Error ? err.message : String(err)}`);
+      log(
+        `Reference: skipped malformed activity row: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
   const wellness: WellnessDay[] = [];
@@ -306,14 +300,16 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
     try {
       wellness.push(parseRenamedWellnessRow(renameTpFieldsOnWellnessRow(row, wellSummary)));
     } catch (err) {
-      log(`Reference: skipped malformed wellness row: ${err instanceof Error ? err.message : String(err)}`);
+      log(
+        `Reference: skipped malformed wellness row: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
   // ADR-0012 defense-in-depth: no TP-trademarked key may survive rename.
   assertNoTpKeysRemain({ activities, wellness });
 
-  const streams = await fetchStreams(client, activities, signal, now, throttleMs, log);
+  const streams = await fetchStreams(client, activities, signal, plan, throttleMs, log);
 
   const ftpHistory = deriveFtpHistory(wellness);
   const athlete = extractAthleteSettings(athleteProfile);
@@ -322,6 +318,7 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
     activities,
     wellness,
     ftpHistory,
+    pastEvents,
     ...(Object.keys(streams).length > 0 ? { streams } : {}),
     ...(athlete !== undefined ? { athlete } : {}),
   };
@@ -337,6 +334,7 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
     athleteProfile,
     recentActivities,
     wellnessData: wellness,
+    plannedWorkouts,
     bundle,
     frozenNow,
     ...(fetchErrors.length > 0 ? { fetchErrors } : {}),
@@ -347,43 +345,27 @@ async function fetchStreams(
   client: BundleFetchClient,
   activities: readonly Activity[],
   signal: AbortSignal,
-  now: Date,
+  plan: ReferenceCapturePlan,
   throttleMs: number,
   log: (msg: string) => void,
 ): Promise<Record<string, ActivityStreams>> {
-  const streamCutoffMs = now.getTime() - STREAM_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-  const seen = new Set<string>();
-  const candidates = activities
-    .filter((a) => isCyclingStreamType(a.type) && typeof a.start_date_local === "string")
-    .filter((a) => {
-      const ms = Date.parse(a.start_date_local);
-      return Number.isFinite(ms) && ms >= streamCutoffMs;
-    })
-    .sort((a, b) => Date.parse(b.start_date_local) - Date.parse(a.start_date_local))
-    .filter((a) => {
-      // Collapse duplicate ids (the sort keeps the newest first), so a repeated
-      // id can't double-fetch or mis-join the DFA profile.
-      const id = String(a.id);
-      if (seen.has(id)) return false;
-      seen.add(id);
-      return true;
-    })
-    .slice(0, MAX_STREAM_ACTIVITIES);
+  const candidates = selectReferenceCaptureStreamIds(activities, plan);
 
   const deadline = Date.now() + STREAM_PHASE_BUDGET_MS;
   const out: Record<string, ActivityStreams> = {};
-  for (const activity of candidates) {
+  for (const id of candidates) {
     if (signal.aborted || Date.now() > deadline) break;
-    const id = String(activity.id);
     let result: FetchResult<unknown>;
     try {
       result = await client.activities.getStreams(id, [...STREAM_TYPES]);
     } catch (err) {
-      log(`Reference: streams fetch threw for an activity: ${err instanceof Error ? err.message : String(err)}`);
+      log(
+        `Reference: streams fetch threw for an activity: ${err instanceof Error ? err.message : String(err)}`,
+      );
       continue;
     }
     if (!result.ok) {
-      log(`Reference: streams fetch failed for an activity: ${String(result.error)}`);
+      log(`Reference: streams fetch failed for an activity: ${renderEndpointError(result.error)}`);
       continue;
     }
     const parsed = ActivityStreamsSchema.safeParse(normalizeStreams(result.value));

@@ -1,11 +1,12 @@
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
-import type { ResolvedCs } from "@enduragent/core";
+import type { MemoryStorePort as MemoryStore } from "@enduragent/engine/sport";
 import {
   buildCoachEventProvenance,
   dateKeySchema,
   validateWorkoutCreationDate,
-} from "@enduragent/core";
+} from "@enduragent/engine/sport";
+import type { ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
 import type { IntervalsClient } from "intervals-icu-api";
 import {
   calculateRunningZones,
@@ -41,7 +42,13 @@ const RPE_FRAMING =
 export const runningCreateWorkoutInputSchema = z.object({
   date: dateKeySchema.describe("Workout date (YYYY-MM-DD)"),
   workout: runningWorkoutInputSchema.describe(
-    "Structured workout: name + ordered steps — simple steps or repeat sets. Durations are time (seconds/minutes) or distance (meters/distance_km/distance_mi); a distance step needs a pace target. Pace targets: {kind, value} or {kind, low, high} for ranges; cs_fraction is a fraction of critical speed (1.0 = threshold); absolute 'pace' is M:SS strings, slower-first for ranges. Ramps require low+high.",
+    "Structured workout: name + ordered steps. Top-level steps can be simple " +
+      "(warmup/steady/tempo/threshold/interval/repetition/strides/ramp/recovery/rest/cooldown) " +
+      "or a set {type:'set', repeat, interval, recovery}. Durations use time (seconds/minutes) " +
+      "or distance (meters/distance_km/distance_mi); a distance step needs a pace target. Pace " +
+      "targets: {kind:'zone'|'cs_fraction'|'pace', value} or {kind, low, high} for ranges. " +
+      "cs_fraction is a fraction of critical speed (1.0 = threshold). Absolute 'pace' is M:SS " +
+      "strings, slower-first for ranges. Ramps require low+high.",
   ),
 });
 
@@ -51,14 +58,25 @@ function clampLowerFraction(requested: number): { value: number; clamped: boolea
 }
 
 export function createRunningTools(
+  _memory: MemoryStore,
   intervals: IntervalsClient | null,
   tz: string = "UTC",
-  resolvedCs?: () => ResolvedCs | null,
+  resolvedCs?: (options: unknown) => ResolvedCs | null,
 ) {
   return {
     calculate_zones: tool({
       description:
-        "Calculate 6 critical-speed-anchored running pace zones. When the athlete's critical speed is synced from intervals.icu, OMIT criticalSpeedMps — the synced anchor is used and its provenance reported; pass a value only to override it. Returns zones plus source/confidence fields — surface the RPE-checked-estimate framing to the athlete; never present these as lab-measured thresholds. If no critical speed is synced or supplied, the tool returns a no_cs_anchor error — ask the athlete for a recent CS/threshold test rather than guessing.",
+        "Calculate 6 critical-speed-anchored running pace zones. When the athlete's " +
+        "critical speed is synced from intervals.icu, OMIT criticalSpeedMps — the tool " +
+        "uses the synced anchor automatically and reports its provenance. Pass " +
+        "criticalSpeedMps (in m/s; intervals.icu stores threshold_pace in SI m/s, e.g. " +
+        "4.0 m/s ≈ 4:10/km) only to override the synced value — a coach-entered number " +
+        "or a hypothetical. An explicit value outranks the synced anchor; a manual " +
+        "lower-boundary override is clamped and the clamp is disclosed. Returns zones " +
+        "plus real source/confidence fields — surface the RPE-checked estimate framing " +
+        "to the athlete; never present these as lab-measured thresholds. If no critical " +
+        "speed is synced or supplied, the tool returns a no_cs_anchor error — ask the " +
+        "athlete for a recent CS / threshold test rather than guessing.",
       inputSchema: zodSchema(
         z.object({
           criticalSpeedMps: z
@@ -98,8 +116,8 @@ export function createRunningTools(
         paceUnits?: "MINS_KM" | "MINS_MILE" | null;
         lowerFractionOverride?: number;
         csSource?: "platform" | "athlete_manual";
-      }) => {
-        const resolved = resolvedCs?.() ?? null;
+      }, options: unknown) => {
+        const resolved = resolvedCs?.(options) ?? null;
         // Explicit value (already band-checked by the input schema) outranks the
         // synced anchor (band-checked by resolveRunningCs); whichever we use is
         // therefore guaranteed in [CS_SANITY_MPS.min, max].
@@ -149,16 +167,30 @@ export function createRunningTools(
       ? {
           intervals_create_workout: tool({
             description:
-              "Create a structured running workout on the intervals.icu calendar (auto-syncs to Garmin/Wahoo). Steps serialize into intervals.icu's native pace syntax; the server computes load against the athlete's threshold pace. Anchor pace targets on the critical-speed zones (kind:'zone' 1-6 or kind:'cs_fraction') — RPE-checked estimates, not lab-measured thresholds. If the athlete's critical speed is a manual/coach-entered override, prefer absolute kind:'pace' targets so the prescription matches the zone table you showed them. Prescribe strides as a duration-only step (or a relaxed-fast kind:'pace'), never a CS zone; do not invent a pace the resolved CS doesn't support. A distance step needs a pace target so its planned time can be derived. Put the RPE-check + provenance framing and coaching narrative in your chat reply — the calendar entry cannot carry it. Past dates are refused — workouts can only be created for today or later. For gym/strength sessions use intervals_create_strength_workout instead.",
+              "Create a structured running workout on the intervals.icu calendar (auto-syncs to " +
+              "Garmin/Wahoo). Supply the workout as structured steps — the tool serializes them into " +
+              "intervals.icu's native pace syntax so the pace chart renders and the server computes load " +
+              "against the athlete's own threshold pace. Anchor pace targets on the critical-speed zones " +
+              "(kind:'zone' 1-6, or kind:'cs_fraction') — these are RPE-checked estimates from a " +
+              "population-mean model, not lab-measured thresholds. If the athlete's critical speed is a " +
+              "manual/coach-entered override, prefer absolute kind:'pace' targets so the prescription " +
+              "matches the zone table you showed them. Strides are a neuromuscular drill — prescribe them " +
+              "as a duration-only step (or with a relaxed-fast kind:'pace'), never a CS zone. Do not invent " +
+              "a pace the resolved CS doesn't support. Durations may be time (seconds/minutes) or distance " +
+              "(meters/km/mi); a distance step needs a pace target so its planned time can be derived. For " +
+              "every pushed workout, put the RPE-check + provenance framing, plus athlete-facing coaching " +
+              "narrative (feel, RPE cues, target spm, hydration), in your chat reply — the calendar entry " +
+              "cannot carry it. Past dates are refused — workouts can only be created for today or " +
+              "later. For gym/strength sessions use intervals_create_strength_workout instead.",
             inputSchema: zodSchema(runningCreateWorkoutInputSchema),
-            execute: async (input: { date: string; workout: RunningWorkoutInput }) => {
+            execute: async (input: { date: string; workout: RunningWorkoutInput }, options: unknown) => {
               const dateError = validateWorkoutCreationDate(input.date, tz);
               if (dateError) return dateError;
               // The serializer stays pure: pass OUR resolved CS in so distance steps
               // with relative targets can derive their planned time.
               let serialized: ReturnType<typeof serializeRunningWorkout>;
               try {
-                serialized = serializeRunningWorkout(input.workout, resolvedCs?.()?.criticalSpeedMps);
+                serialized = serializeRunningWorkout(input.workout, resolvedCs?.(options)?.criticalSpeedMps);
               } catch (err) {
                 if (err instanceof InvalidWorkoutError) {
                   return { error: "invalid_workout", details: err.message };

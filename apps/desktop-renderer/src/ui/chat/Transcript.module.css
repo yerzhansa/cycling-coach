@@ -1,0 +1,82 @@
+.page {
+  display: contents;
+}
+
+.prose {
+  font: 16px/1.6 var(--f-prose);
+  letter-spacing: 0.002em;
+}
+
+.transcript {
+  display: grid;
+  gap: 18px;
+}
+
+.messages {
+  display: grid;
+  gap: 28px;
+}
+
+.row {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  max-width: 78%;
+}
+
+.row[data-delivery="interrupted"] {
+  color: var(--ink-2);
+}
+
+.athlete {
+  justify-self: end;
+  padding: 13px 17px;
+  border-radius: 16px 16px 6px 16px;
+  background: var(--brand-soft);
+}
+
+.coach {
+  justify-self: start;
+}
+
+.role {
+  margin: 0;
+  color: var(--ink-3);
+  font: 11px/1.2 var(--f-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.notice {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+}
+
+.failure {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.pill {
+  justify-self: start;
+  padding: 8px 13px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  color: var(--brand);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.pill:disabled {
+  cursor: default;
+  opacity: 0.5;
+}

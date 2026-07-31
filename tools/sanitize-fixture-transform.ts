@@ -25,7 +25,7 @@ import {
   WeeklyRollupSchema,
   WellnessDaySchema,
   ZoneTimesSchema,
-} from "../packages/core/src/reference/schemas/inputs.js";
+} from "@enduragent/kernel/reference/schemas";
 import { shiftIsoToSyntheticEpoch } from "./shift-to-synthetic-epoch.js";
 
 // Mechanically derived from the project's input schemas. Adding a field to

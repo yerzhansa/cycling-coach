@@ -15,6 +15,7 @@ import {
 import type { FetchedReference } from "./sync/run-sync.js";
 import type { ReferenceServices } from "./services.js";
 import type { Sport } from "../sport.js";
+import type { PhysicalRequestLedger } from "@enduragent/kernel/store";
 
 /** Shared between runtime + tests so the strings stay in sync. */
 export const INITIAL_SYNC_FAILED_LOG_PREFIX = "Reference: initial sync failed";
@@ -27,15 +28,22 @@ export const INITIAL_SYNC_FAILED_LOG_PREFIX = "Reference: initial sync failed";
 export interface ReferenceRuntime {
   readonly services: ReferenceServices;
   readonly scheduler: Scheduler;
+  runScheduledOnce(): Promise<import("./sync/run-sync.js").SyncResult>;
 }
 
 export interface BootstrapReferenceDeps {
   /** Binary's per-coach data root (e.g., `~/.cycling-coach/`). */
   readonly dataDir: string;
   readonly intervals: { readonly apiKey: string; readonly athleteId?: string };
+  readonly readIntervals?: () => { readonly apiKey: string; readonly athleteId?: string };
   readonly sport: Sport;
   /** Inject a fetcher for tests. Defaults to `makeProductionFetcher`. */
-  readonly fetchReferenceData?: (signal: AbortSignal) => Promise<FetchedReference>;
+  readonly fetchReferenceData?: (
+    signal: AbortSignal,
+    intervals: { readonly apiKey: string; readonly athleteId?: string },
+  ) => Promise<FetchedReference>;
+  readonly startScheduler?: boolean;
+  readonly attemptLedgerForRun?: () => PhysicalRequestLedger;
 }
 
 /**
@@ -66,14 +74,16 @@ export async function bootstrapReference(
   const referenceDataPath = join(deps.dataDir, "data");
   mkdirSync(referenceDataPath, { recursive: true, mode: 0o700 });
 
+  const readIntervals = deps.readIntervals ?? (() => deps.intervals);
   const fetchReferenceData =
     deps.fetchReferenceData ??
     makeProductionFetcher({
-      apiKey: deps.intervals.apiKey,
-      athleteId: deps.intervals.athleteId,
       adapters,
       sportTypes: deps.sport.intervalsActivityTypes,
+      attemptLedgerForRun: deps.attemptLedgerForRun,
     });
+  const fetchReferenceDataForRun = (signal: AbortSignal) =>
+    fetchReferenceData(signal, readIntervals());
 
   const mutex = new AsyncMutex();
   const cooldown = new Cooldown();
@@ -82,7 +92,7 @@ export async function bootstrapReference(
     mutex,
     cooldown,
     cooldownWindowMs: SYNC_COOLDOWN_MS,
-    fetchReferenceData,
+    fetchReferenceData: fetchReferenceDataForRun,
   });
   const scheduler = new Scheduler({
     dataDir: referenceDataPath,
@@ -93,20 +103,21 @@ export async function bootstrapReference(
   // First runSync — best-effort. Failure writes `error_state.json` and we
   // continue with whatever cache (if any) is on disk; the scheduler's next
   // tick will retry.
-  try {
-    const firstSync = await runSyncInternal({ caller: "scheduled" });
-    if (firstSync.kind === "failed") {
+  if (deps.startScheduler !== false) {
+    try {
+      const firstSync = await runSyncInternal({ caller: "scheduled" });
+      if (firstSync.kind === "failed") {
+        console.warn(
+          `${INITIAL_SYNC_FAILED_LOG_PREFIX} (${firstSync.reason}). Continuing with cached data if available; the next scheduled sync will retry.`,
+        );
+      }
+    } catch (err) {
       console.warn(
-        `${INITIAL_SYNC_FAILED_LOG_PREFIX} (${firstSync.reason}). Continuing with cached data if available; the next scheduled sync will retry.`,
+        `${INITIAL_SYNC_FAILED_LOG_PREFIX} (${err instanceof Error ? err.message : String(err)}). Continuing with empty cache; lazy fallback will retry.`,
       );
     }
-  } catch (err) {
-    console.warn(
-      `${INITIAL_SYNC_FAILED_LOG_PREFIX} (${err instanceof Error ? err.message : String(err)}). Continuing with empty cache; lazy fallback will retry.`,
-    );
+    scheduler.start();
   }
-
-  scheduler.start();
 
   const services: ReferenceServices = {
     runSync: (req) => runSyncInternal({ caller: "/sync", chatId: req.chatId }),
@@ -116,5 +127,9 @@ export async function bootstrapReference(
     maybeRefreshIfStale: () => Promise.resolve({ kind: "fresh" }),
   };
 
-  return { services, scheduler };
+  return {
+    services,
+    scheduler,
+    runScheduledOnce: () => runSyncInternal({ caller: "scheduled" }),
+  };
 }

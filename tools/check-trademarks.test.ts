@@ -1,11 +1,11 @@
 // trademark-lint:skip-file — this test file embeds the forbidden tokens in
 // synthetic fixtures and assertions; it would always flag itself otherwise.
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { findTrademarkHits, type TrademarkHit } from "./check-trademarks.js";
+import { findTrademarkHits, main, type TrademarkHit } from "./check-trademarks.js";
 import { collectFiles } from "./lint-fs.js";
 
 let tempDir: string;
@@ -111,7 +111,7 @@ describe("findTrademarkHits — Markdown files (regex)", () => {
     // language. The lint should not block PRs on those.
     const file = write(
       "code-block.md",
-      "# Title\n\n```ts\nconst IF = 1;\nconst note = \"CTL\"; // raw\n```\n\nNormal text without forbidden tokens.\n",
+      '# Title\n\n```ts\nconst IF = 1;\nconst note = "CTL"; // raw\n```\n\nNormal text without forbidden tokens.\n',
     );
     const hits = findTrademarkHits([file]);
     expect(hits).toHaveLength(0);
@@ -220,5 +220,56 @@ describe("findTrademarkHits — file selection", () => {
     const b = write("b.md", `Token: TSS\n`);
     const hits = findTrademarkHits([a, b]);
     expect(hits.map((h: TrademarkHit) => h.token).sort()).toEqual(["CTL", "TSS"]);
+  });
+});
+
+describe("main — wholesale package scope", () => {
+  it("covers the canonical kernel Reference path in the default scope", () => {
+    const path = "packages/kernel/src/reference/metrics/seed.ts";
+    write(path, `export const label = "Athlete CTL trend";\n`);
+    const originalCwd = process.cwd();
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (message?: unknown) => errors.push(String(message));
+    try {
+      process.chdir(tempDir);
+      expect(main([])).toBe(1);
+      expect(errors.join("\n")).toContain(path);
+      write(path, `export const label = "Athlete Load trend";\n`);
+      expect(main([])).toBe(0);
+    } finally {
+      process.chdir(originalCwd);
+      console.error = originalError;
+    }
+  });
+
+  it("catches a forbidden token under a packages/<x>/src/ path", () => {
+    write("packages/widget/src/label.ts", `export const label = "Athlete CTL trend";\n`);
+    const orig = console.error;
+    console.error = () => {};
+    try {
+      expect(main([join(tempDir, "packages")])).toBe(1);
+    } finally {
+      console.error = orig;
+    }
+  });
+
+  it("covers apps in the default scan", () => {
+    write("apps/desktop-renderer/src/label.ts", `export const label = "Athlete CTL trend";\n`);
+    const original = process.cwd();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      process.chdir(tempDir);
+      expect(main([])).toBe(1);
+    } finally {
+      process.chdir(original);
+    }
+    expect(error.mock.calls.flat().join(" ")).toContain("apps/desktop-renderer/src/label.ts");
+  });
+
+  it("excludes CHANGELOG.md from the default scope even alongside scanned files", () => {
+    write("packages/widget/src/ok.ts", `export const tip = "Fitness rising";\n`);
+    write("packages/widget/CHANGELOG.md", `# Changelog\n\n- historical CTL / TSS release entry.\n`);
+    expect(main([join(tempDir, "packages")])).toBe(0);
   });
 });

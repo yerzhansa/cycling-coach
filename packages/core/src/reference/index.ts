@@ -119,6 +119,12 @@ export {
   type RenamedActivityRow,
   type RenamedWellnessRow,
 } from "./sync/rename-tp-fields.js";
+export {
+  makeIntervalsHttpFactory,
+  type RunScopedHttpFactory,
+  type RunScopedHttpFactoryArgs,
+} from "./sync/intervals-client-factory.js";
+export { normalizeStreams } from "./sync/fetch-live-bundle.js";
 
 // ─── Validation: recommendation metadata + audit log ──────────────────
 export {

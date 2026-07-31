@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { APICallError } from "@ai-sdk/provider";
+import type { ModelTransportDecorator } from "@enduragent/engine";
 import type {
   BinaryConfig,
   CoreDeps,
@@ -12,7 +13,7 @@ import type {
   ToolRegistration,
 } from "../src/index.js";
 
-import { baseAgentConfig } from "./helpers/base-agent-config.js";
+import { baseAgentConfig } from "../../engine/tests/helpers/base-agent-config.js";
 
 // ---------------------------------------------------------------------------
 // Stub running-coach Sport — the load-bearing proof that Core is sport-agnostic.
@@ -85,22 +86,28 @@ describe("Core is sport-agnostic — CoachAgent constructs and chats with a non-
       stopReason: "stop" as const,
     }));
 
-    vi.doMock("../src/agent/codex/responses.js", () => ({
-      codexResponses: complete,
-    }));
-    vi.doMock("../src/agent/codex/oauth.js", () => ({
-      refreshCodexToken: vi.fn(),
-      loginCodex: vi.fn(),
-    }));
-    vi.doMock("../src/auth/profiles.js", () => ({
-      getFreshToken: vi.fn(async () => "token"),
-      loadProfile: vi.fn(),
-      saveProfile: vi.fn(),
-      RefreshTokenReusedError: class extends Error {},
-    }));
-
     const { CoachAgent } = await import("../src/agent/coach-agent.js");
-    const agent = new CoachAgent(stubRunningSport, baseAgentConfig(dataDir));
+    const decorator: ModelTransportDecorator = () => ({
+      generate: async () => {
+        const result = await complete();
+        return {
+          text: result.text,
+          toolCalls: [],
+          finishReason: "stop",
+          usage: {
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            inputTokenDetails: { noCacheTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+            outputTokenDetails: { textTokens: 0, reasoningTokens: 0 },
+          },
+          steps: 1,
+        };
+      },
+    });
+    const agent = new CoachAgent(stubRunningSport, baseAgentConfig(dataDir), {
+      modelTransportDecorator: decorator,
+    });
     const text = await agent.chat("running-test", "hi");
 
     expect(text).toBe("ack from running-coach");
@@ -150,7 +157,9 @@ describe("runBinary CLI routing", () => {
     const { runBinary } = await import("../src/run-binary.js");
     await expect(runBinary(stubRunningSport, stubRunningBinary)).rejects.toThrow("__exit_1");
 
-    expect(errSpy.mock.calls.some((c) => String(c[0]).includes("Unknown command: bogus"))).toBe(true);
+    expect(errSpy.mock.calls.some((c) => String(c[0]).includes("Unknown command: bogus"))).toBe(
+      true,
+    );
   });
 });
 
@@ -181,9 +190,25 @@ describe("formatCliReply", () => {
   it("on a provider-auth error returns the provider-neutral one-liner (no payload)", async () => {
     const { formatCliReply } = await import("../src/run-binary.js");
     const reply = formatCliReply(apiError(401));
-    expect(reply).toBe("The model provider rejected the API key — check your provider credentials.");
+    expect(reply).toBe(
+      "The model provider rejected the API key — check your provider credentials.",
+    );
     expect(reply).not.toContain("Anthropic");
     expect(reply).not.toContain("example.invalid");
+  });
+
+  it("on a refresh rejection returns the ChatGPT sign-in recovery path", async () => {
+    const { formatCliReply } = await import("../src/run-binary.js");
+    expect(formatCliReply({ refreshFailureReason: "reauth" })).toBe(
+      "Your ChatGPT sign-in is no longer valid. Sign in again to continue.",
+    );
+  });
+
+  it("on a structurally tagged refresh rate limit returns the wait copy", async () => {
+    const { formatCliReply } = await import("../src/run-binary.js");
+    expect(formatCliReply({ refreshFailureReason: "rate_limit", retryAfterMs: 2_000 })).toBe(
+      "Rate limited — please try again in ~2 seconds.",
+    );
   });
 
   it("on a provider-down error returns the one-line classified copy", async () => {

@@ -10,8 +10,9 @@ import {
   type ReferenceSportAdapter,
   type Sport,
   type ToolRegistration,
-} from "@enduragent/core";
+} from "@enduragent/engine/sport";
 import soul from "../SOUL.md";
+import { CYCLING_PRESCRIPTION_CAPABILITY } from "./prescription-posture.js";
 import { skills as skillEntries } from "./skills.generated.js";
 import { createCyclingTools } from "./tools.js";
 import { cyclingReferenceAdapter } from "./reference/index.js";
@@ -22,6 +23,8 @@ function loadSkills(): Record<string, string> {
     skillEntries.map(({ name, content }) => [`cycling-${name}`, content]),
   );
 }
+
+const cyclingSkills = loadSkills();
 
 export const CYCLING_VOCABULARY: readonly string[] = [
   "FTP",
@@ -59,10 +62,11 @@ const memorySections: readonly MemorySectionSpec[] = [
   },
 ];
 
-export const cyclingSport: Sport = {
+export const cyclingSport = {
   id: "cycling",
   soul,
-  skills: loadSkills(),
+  skills: cyclingSkills,
+  prescriptionCapability: CYCLING_PRESCRIPTION_CAPABILITY,
   sessionClusterGapMinutes: 30,
   memorySections,
   mustPreserveTokens: (memory: MemorySnapshot) => {
@@ -94,9 +98,9 @@ export const cyclingSport: Sport = {
       ...createMemoryTools(deps.memory, sections, {
         bindProvenance: deps.bindMemoryToolProvenance,
       }),
-      ...createPureCoreIntervalsTools(deps.intervals, deps.tz),
-      ...createCoreToolsWithSportConfig(deps.intervals, cyclingSport.intervalsActivityTypes),
-      ...createCyclingTools(deps.intervals, deps.tz),
+      ...createPureCoreIntervalsTools(deps.intervals, deps.tz, deps.athleteData, deps.calendarMutations),
+      ...createCoreToolsWithSportConfig(deps.intervals, cyclingSport.intervalsActivityTypes, deps.athleteData),
+      ...createCyclingTools(deps.memory, deps.intervals, deps.tz, deps.calendarMutations),
     };
     return Object.entries(toolset).map(([name, t]) => ({
       name,
@@ -110,4 +114,6 @@ export const cyclingSport: Sport = {
   // Fresh array per call so composing sports can spread it without sharing a
   // mutable reference.
   referenceAdapters: (): readonly ReferenceSportAdapter[] => [cyclingReferenceAdapter],
+} satisfies Sport & {
+  readonly prescriptionCapability: typeof CYCLING_PRESCRIPTION_CAPABILITY;
 };

@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { Tool } from "ai";
+import type { ToolConfirmationPort } from "@enduragent/engine";
 import type { IntervalsClient } from "../intervals.js";
 import {
   guardDeletableEvent,
   toTypedError,
   type IntervalsEventRuntime,
-} from "./intervals-tools.js";
+} from "./event-guards.js";
 
 export const GATED_TOOL_NAMES: ReadonlySet<string> = new Set([
   "intervals_create_strength_workout",
@@ -154,30 +154,21 @@ export function createProposalSummarizers(opts: {
   };
 }
 
-export function gateMutatingTool(
-  name: string,
-  tool: Tool,
-  gate: ConfirmationGate,
-  summarize: ProposalSummarizer | undefined,
-  chatId: () => string | undefined,
-  prepareRun?: (run: () => Promise<unknown>) => () => Promise<unknown>,
-): Tool {
-  if (!GATED_TOOL_NAMES.has(name)) return tool;
-  const inner = tool.execute;
-  if (typeof inner !== "function") return tool;
+export function createToolConfirmationPort(opts: {
+  gate: ConfirmationGate;
+  summarizers: Record<string, ProposalSummarizer>;
+  prepareRun?: (name: string, run: () => Promise<unknown>) => () => Promise<unknown>;
+}): ToolConfirmationPort {
   return {
-    ...tool,
-    execute: async (input: unknown) => {
-      const id = chatId();
-      if (id === undefined) return { error: "confirmation_unavailable" };
+    gatedToolNames: GATED_TOOL_NAMES,
+    propose: async ({ chatId, toolName, toolInput, run }) => {
+      const summarize = opts.summarizers[toolName];
       if (summarize === undefined) return { error: "confirmation_unavailable" };
-      const summarized = await summarize(input);
+      const summarized = await summarize(toolInput);
       if ("block" in summarized) return summarized.block;
       const { summary } = summarized;
-      const run = () =>
-        (inner as (input: unknown, options: never) => Promise<unknown>)(input, {} as never);
-      gate.propose(id, summary, prepareRun?.(run) ?? run);
+      opts.gate.propose(chatId, summary, opts.prepareRun?.(toolName, run) ?? run);
       return { pendingConfirmation: true, summary };
     },
-  } as Tool;
+  };
 }

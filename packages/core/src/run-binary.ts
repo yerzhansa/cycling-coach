@@ -2,9 +2,11 @@ import { parseArgs } from "node:util";
 import { createInterface as createReadlineInterface } from "node:readline";
 import { writeSync } from "node:fs";
 import type { Sport } from "./sport.js";
-import type { BinaryConfig } from "./binary.js";
+import { type BinaryConfig, binaryEnvVar } from "./binary.js";
 import type { Memory } from "./memory/store.js";
-import { CONFIG_DIR, envInt } from "./config.js";
+import { CONFIG_DIR, envInt, type Config } from "./config.js";
+import type { AthleteDataReader, PlatformCalendarMutations } from "./athlete-data.js";
+import type { ReferenceRuntime } from "./reference/runtime.js";
 import { appendUsageLine } from "./usage-ledger.js";
 import {
   addSender,
@@ -15,7 +17,7 @@ import {
 } from "./channels/allowed-senders.js";
 import { classifyAgentError } from "./agent/error-classify.js";
 import { warnOrphanSections } from "./memory/orphan-sections.js";
-import { getEffectiveSections } from "./memory/effective-sections.js";
+import { getEffectiveSections } from "./sport.js";
 import {
   formatConfirmOutcome,
   type ConfirmationGate,
@@ -28,7 +30,15 @@ export function formatCliReply(err: unknown): string {
   return classifyAgentError(err).athleteMessage;
 }
 
+export interface PreparedCoachComposition {
+  athleteData?: AthleteDataReader;
+  calendarMutations?: PlatformCalendarMutations;
+  reference?: ReferenceRuntime;
+  close?: () => Promise<void>;
+}
+
 export interface RunBinaryHooks {
+  prepare?: (input:{config:Config;sport:Sport})=>Promise<PreparedCoachComposition>;
   /** Called once per process at startup, after Memory exists, before any chat handler is reachable. */
   onStartup?: (memory: Memory) => void | Promise<void>;
 }
@@ -64,7 +74,7 @@ function parseCommand(binary: BinaryConfig): { command: string | null; positiona
 // Readline-based confirmation for startup capture: renders a multi-line prompt
 // to make the bot username visually prominent, parses with decline-on-ambiguous
 // semantics, declines cleanly on SIGINT, and times out after
-// CYCLING_COACH_CAPTURE_CONFIRM_TIMEOUT_MS (default 5 min).
+// <BINARY>_CAPTURE_CONFIRM_TIMEOUT_MS (default 5 min).
 
 interface MakeReadlineConfirmOpts {
   timeoutMs: number;
@@ -174,8 +184,9 @@ async function runStartupCapture(
       `(Press Ctrl+C to skip — you can run \`${binary.binaryName} add-sender <id>\` later.)\n`,
   );
   const { captureAndPersistOperator } = await import("./channels/operator-capture.js");
-  const captureTimeoutMs = envInt("CYCLING_COACH_SETUP_CAPTURE_TIMEOUT_MS") ?? 60_000;
-  const confirmTimeoutMs = envInt("CYCLING_COACH_CAPTURE_CONFIRM_TIMEOUT_MS") ?? 300_000;
+  const captureTimeoutMs = envInt(binaryEnvVar(binary.binaryName, "SETUP_CAPTURE_TIMEOUT_MS")) ?? 60_000;
+  const confirmTimeoutMs =
+    envInt(binaryEnvVar(binary.binaryName, "CAPTURE_CONFIRM_TIMEOUT_MS")) ?? 300_000;
   const result = await captureAndPersistOperator({
     botToken,
     binary,
@@ -260,6 +271,9 @@ interface BotShutdownDeps {
   exit: (code: number) => void;
   drainTimeoutMs?: number;
   log?: (line: string) => void;
+  stopTimer?: () => void | Promise<void>;
+  closeReference?: () => void | Promise<void>;
+  closePrepared?: () => Promise<void>;
 }
 
 // Builds the SIGTERM/SIGINT handler that brings the bot down cleanly: halt new
@@ -285,6 +299,9 @@ export function makeBotShutdown(deps: BotShutdownDeps): () => Promise<void> {
         deps.drainPending(),
         new Promise<void>((resolve) => setTimeout(resolve, drainTimeoutMs).unref?.()),
       ]);
+      await deps.stopTimer?.();
+      await deps.closeReference?.();
+      await deps.closePrepared?.();
       deps.markCleanShutdown({ dataDir: deps.dataDir });
     } catch (err) {
       console.error(
@@ -370,26 +387,37 @@ export async function runBinary(
   }
 
   const bootStart = Date.now();
-  const { CoachAgent } = await import("./agent/coach-agent.js");
-  const agent = new CoachAgent(sport, config);
+  const prepared = await hooks.prepare?.({ config, sport }) ?? {};
+  const { createCoachEngine } = await import("./agent/coach-engine.js");
+  const engine = createCoachEngine(sport, config, {
+    athleteData: prepared.athleteData,
+    calendarMutations: prepared.calendarMutations,
+  });
 
   // Init order: Memory (above) → startup hook → Reference bootstrap → Telegram.
   // Reference's internal init sequence is pinned inside `bootstrapReference`
   // per ADR-0011 (two-phase scheduler — no timer until first runSync resolves).
-  await runStartupHook(agent.getMemory(), hooks.onStartup);
+  await runStartupHook(engine.getMemory(), hooks.onStartup);
 
   // After the startup hook so the legacy-section migration has already renamed
   // profile/equipment/health → sport-prefixed names; scanning earlier would
   // warn on names the migration removes on the very next boot statement.
-  warnOrphanSections(agent.getMemory(), getEffectiveSections(sport));
+  warnOrphanSections(engine.getMemory(), getEffectiveSections(sport));
 
   const { bootstrapReference } = await import("./reference/runtime.js");
   console.log("syncing training data from intervals.icu…");
-  const reference = await bootstrapReference({
-    dataDir: config.dataDir,
-    intervals: config.intervals,
-    sport,
-  });
+  const reference = prepared.reference ?? await bootstrapReference({
+      dataDir: config.dataDir,
+      intervals: config.intervals,
+      sport,
+    });
+  let runtimeClosed = false;
+  const closeRuntime = async (): Promise<void> => {
+    if (runtimeClosed) return;
+    runtimeClosed = true;
+    reference.scheduler.stop();
+    await prepared.close?.();
+  };
 
   appendUsageLine(config.dataDir, {
     ts: Date.now(),
@@ -417,7 +445,7 @@ export async function runBinary(
     const { createTelegramBot, notifyUpdate } = await import("./channels/telegram.js");
     const { bot, drainPending } = createTelegramBot(
       config.telegram.botToken,
-      agent,
+      engine,
       binary,
       config.dataDir,
       reference.services,
@@ -450,6 +478,7 @@ export async function runBinary(
     const shutdownBot = makeBotShutdown({
       stop: () => bot.stop(),
       drainPending,
+      closePrepared: closeRuntime,
       dataDir: config.dataDir,
       markCleanShutdown,
       exit: (code) => process.exit(code),
@@ -461,7 +490,7 @@ export async function runBinary(
     process.once("SIGTERM", onSignal);
     process.once("SIGINT", onSignal);
 
-    if (!process.env.CYCLING_COACH_NO_UPDATE_CHECK) {
+    if (!process.env[binaryEnvVar(binary.binaryName, "NO_UPDATE_CHECK")]) {
       notifyUpdate(bot, config.dataDir, binary).catch(() => {});
       // A long-running deployment would otherwise never learn about a new
       // release until it restarts; notifyUpdate dedupes per version so the
@@ -480,8 +509,7 @@ export async function runBinary(
     });
 
     rl.on("close", () => {
-      reference.scheduler.stop();
-      process.exit(0);
+      void closeRuntime().finally(() => process.exit(0));
     });
 
     rl.prompt();
@@ -497,9 +525,9 @@ export async function runBinary(
       }
 
       try {
-        const response = await agent.chat("cli", input);
+        const response = await engine.chat("cli", input);
         console.log("\n" + response + "\n");
-        await _promptProposalConfirm(rl, agent);
+        await _promptProposalConfirm(rl, engine);
       } catch (err) {
         // Full detail (stack, provider payload) → stderr; a friendly classified
         // reply → stdout in the reply position. The raw err never lands as the

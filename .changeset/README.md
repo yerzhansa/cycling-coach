@@ -37,11 +37,13 @@ Rules:
 - One sentence per `User-facing:` line, written in plain English in the bot's voice.
 - Multiple user-visible changes in one changeset → multiple `User-facing:` lines, each becomes a bullet.
 - Pure-infra changes (CI, publishing, build tooling, internal refactors) omit the line — they stay in `CHANGELOG.md` for git history but don't reach athletes.
-- The line is parsed by a simple regex (`/User-facing:\s*(.+)$/i`); anything after the colon on the same line is the bullet text.
+- The token must start the line after optional indentation. Generated changelog lines may prefix it with a Markdown bullet and an optional commit hash of 7 or more hexadecimal characters followed by a colon (for example, `- abc1234: User-facing: ...`). Mid-line prose that merely mentions `User-facing:` is ignored.
 - The convention propagates from `.changeset/*.md` → `CHANGELOG.md` → GitHub Release body automatically; `/whatsnew` reads the GitHub Release body.
 
 ## Binary packages and CalVer
 
 Library packages (`@enduragent/*`) follow SemVer via standard changesets bumps.
 
-Binary packages (`cycling-coach`, `running-coach`, `duathlon-coach`) are CalVer (`YYYY.M.D[-N]`). Changesets doesn't natively understand CalVer, so the publish workflow runs `tools/bump-binaries-to-calver.ts` after `changeset version` to override the binary bumps with today's CalVer string. Your changeset should still be written normally (any bump type — the CalVer override ignores the choice for binaries).
+Binary packages (`cycling-coach`, `running-coach`, `duathlon-coach`) use stable, SemVer-compatible CalVer: `YYYY.MONTH.RELEASE-WITHIN-MONTH`. The first release after a UTC month or year rollover uses `.0`; each later release in that UTC month increments the third component from the highest version already occupied in npm or the committed repository. New releases never use a prerelease suffix. Historical `YYYY.M.P-N` versions remain valid history and count as occupying patch `P`, but are never generated again.
+
+Changesets doesn't natively understand this policy, so the publish workflow runs `tools/bump-binaries-to-calver.ts` after `changeset version`. Your changeset should still select a normal patch, minor, or major bump; that choice is overridden for binary packages. The script rewrites only the new top changelog header when necessary and never rewrites historical entries.

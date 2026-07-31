@@ -7,33 +7,45 @@
   "scripts": {
     "dev": "tsx --env-file=.env packages/cycling-coach/src/index.ts",
     "setup": "tsx --env-file=.env packages/cycling-coach/src/index.ts setup",
+    "dogfood:store": "pnpm --filter @enduragent/coach dogfood:store",
     "build": "pnpm -r build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
-    "lint": "oxlint packages/",
-    "fmt": "oxfmt packages/",
-    "fmt:check": "oxfmt --check packages/",
-    "check": "pnpm -r build && pnpm -r check && pnpm check:types && oxlint packages/ && pnpm check:trademarks && pnpm check:fixture-privacy && pnpm check:registry-isolation && pnpm check:changeset-userfacing",
+    "lint": "oxlint packages/ apps/",
+    "fmt": "oxfmt packages/ apps/",
+    "fmt:check": "oxfmt --check packages/ apps/",
+    "check": "pnpm -r build && pnpm -r check && pnpm check:types && oxlint packages/ apps/ && pnpm check:trademarks && pnpm check:fixture-privacy && pnpm check:registry-isolation && pnpm check:changeset-userfacing && pnpm check:contract-deps && pnpm check:package-deps && pnpm check:kernel-discipline",
     "check:types": "tsc -p tsconfig.check.json",
     "check:trademarks": "tsx tools/check-trademarks.ts",
     "check:fixture-privacy": "tsx tools/check-fixture-privacy.ts",
     "check:registry-isolation": "tsx tools/check-registry-isolation.ts",
     "check:published-package": "node --import tsx tools/check-published-package.ts",
     "check:changeset-userfacing": "tsx tools/check-changeset-user-facing.ts",
+    "check:contract-deps": "tsx tools/check-contract-deps.ts",
+    "check:package-deps": "tsx tools/check-package-deps.ts",
+    "check:kernel-discipline": "tsx tools/check-kernel-discipline.ts",
     "release-version": "changeset version && tsx tools/bump-binaries-to-calver.ts",
     "snapshot:section-11": "tsx tools/snapshot-section-11.ts",
     "check-parity": "tsx tools/check-metric-parity.ts",
     "fuzz-parity": "tsx tools/fuzz-parity.ts",
+    "s8a": "tsx tools/s8a/run.ts",
     "coverage:reference": "tsx tools/measure-reference-coverage.ts",
-    "usage:baseline": "tsx tools/usage-baseline.ts"
+    "usage:baseline": "tsx tools/usage-baseline.ts",
+    "usage:cache-band": "tsx tools/usage-cache-band.ts",
+    "gate:compaction": "tsx --env-file=.env tools/compaction-gate/run.ts"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.0",
     "@enduragent/core": "workspace:*",
+    "@enduragent/engine": "workspace:*",
+    "@enduragent/kernel": "workspace:*",
     "@enduragent/sport-cycling": "workspace:*",
+    "@sinonjs/fake-timers": "^15.4.0",
     "@types/node": "^25.6.0",
     "@vitest/coverage-v8": "^4.1.4",
+    "@xmldom/xmldom": "0.9.10",
+    "ai": "^6.0.158",
     "intervals-icu-api": "0.1.2",
     "msw": "^2.13.3",
     "oxfmt": "^0.45.0",
@@ -50,12 +62,20 @@
   },
   "packageManager": "pnpm@10.6.3+sha512.bb45e34d50a9a76e858a95837301bfb6bd6d35aea2c5d52094fa497a467c43f5c440103ce2511e9e0a2f89c3d6071baac3358fc68ac6fb75e2ceb3d2736065e6",
   "pnpm": {
+    "overrides": {
+      "@ai-sdk/provider-utils": "^4.0.30",
+      "@noble/hashes": "1.8.0"
+    },
     "onlyBuiltDependencies": [
       "@google/genai",
+      "electron",
       "esbuild",
       "msw",
       "protobufjs"
-    ]
+    ],
+    "patchedDependencies": {
+      "fit-file-parser@3.0.2": "patches/fit-file-parser@3.0.2.patch"
+    }
   },
   "license": "MIT",
   "repository": {

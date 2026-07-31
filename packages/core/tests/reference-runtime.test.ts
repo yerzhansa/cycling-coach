@@ -70,6 +70,64 @@ describe("bootstrapReference (behavioral)", () => {
     runtime.scheduler.stop();
   });
 
+  it("manual mode performs no initial refresh, registers no timer, and exposes one scheduled run", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(emptyFetched);
+    const startSpy = vi.spyOn(Scheduler.prototype, "start");
+    const runtime = await bootstrapReference({ dataDir, intervals: { apiKey: "test-key" },
+      sport: fakeSport(), fetchReferenceData: fetchSpy, startScheduler: false });
+    expect(fetchSpy).not.toHaveBeenCalled(); expect(startSpy).not.toHaveBeenCalled();
+    await expect(runtime.runScheduledOnce()).resolves.toMatchObject({ kind: "ran" });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    runtime.scheduler.stop();
+  });
+
+  it("resolves live intervals credentials for every run", async () => {
+    let intervals = { apiKey: "", athleteId: "fake-athlete-first" };
+    const observed: Array<{ readonly apiKey: string; readonly athleteId?: string }> = [];
+    const runtime = await bootstrapReference({
+      dataDir,
+      intervals,
+      readIntervals: () => intervals,
+      sport: fakeSport(),
+      fetchReferenceData: async (_signal, credentials) => {
+        observed.push(credentials);
+        return emptyFetched;
+      },
+      startScheduler: false,
+    });
+
+    await runtime.runScheduledOnce();
+    intervals = { apiKey: "placeholder", athleteId: "fake-athlete-second" };
+    await runtime.services.runSync({ chatId: "fake-chat" });
+
+    expect(observed).toEqual([
+      { apiKey: "", athleteId: "fake-athlete-first" },
+      { apiKey: "placeholder", athleteId: "fake-athlete-second" },
+    ]);
+    runtime.scheduler.stop();
+  });
+
+  it("resolves static intervals credentials when no live reader is provided", async () => {
+    const observed: Array<{ readonly apiKey: string; readonly athleteId?: string }> = [];
+    const runtime = await bootstrapReference({
+      dataDir,
+      intervals: { apiKey: "placeholder", athleteId: "fake-static-athlete" },
+      sport: fakeSport(),
+      fetchReferenceData: async (_signal, credentials) => {
+        observed.push(credentials);
+        return emptyFetched;
+      },
+      startScheduler: false,
+    });
+
+    await runtime.runScheduledOnce();
+
+    expect(observed).toEqual([
+      { apiKey: "placeholder", athleteId: "fake-static-athlete" },
+    ]);
+    runtime.scheduler.stop();
+  });
+
   it("writes the 5 cache files + .scheduler.json after the initial sync resolves", async () => {
     const fetchSpy = vi.fn().mockResolvedValue(emptyFetched);
 
@@ -314,4 +372,3 @@ describe("bootstrapReference (fail-fast on misconfigured adapters)", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
-

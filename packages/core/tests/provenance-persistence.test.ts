@@ -3,12 +3,12 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ChatStore } from "../src/agent/chat-store.js";
-import { makeSummaryMessage } from "../src/agent/history-limit.js";
-import { createMemoryQueryTool, createMemoryTools } from "../src/agent/tools.js";
+import { makeSummaryMessage } from "@enduragent/engine";
+import { createMemoryQueryTool, createMemoryTools } from "../src/sport.js";
 import {
   boundToolResultProvenance,
   unwrapBoundToolResult,
-} from "../src/agent/bound-tool-result.js";
+} from "@enduragent/engine";
 import { Memory } from "../src/memory/store.js";
 import { ProvenanceMetadata } from "../src/memory/provenance-metadata.js";
 import { contentDigest, getMessageProvenance, setMessageProvenance } from "../src/provenance.js";
@@ -37,6 +37,7 @@ describe("chat history provenance metadata", () => {
         assembledHash: "assembled",
         provider: "test",
         model: "test",
+        lineageVersion: "1",
         provenance: GARMIN,
       });
       const loaded = store.load("chat").messages;
@@ -64,6 +65,7 @@ describe("chat history provenance metadata", () => {
         assembledHash: "assembled",
         provider: "test",
         model: "test",
+        lineageVersion: "1",
       };
       store.appendMessage("chat", "assistant", "Same answer.", {
         ...lineage,
@@ -87,7 +89,7 @@ describe("chat history provenance metadata", () => {
     const dir = tempDir("cc-chat-legacy-");
     try {
       const sessions = join(dir, "sessions");
-      mkdirSync(sessions, { recursive: true });
+      mkdirSync(sessions, { recursive: true, mode: 0o700 });
       writeFileSync(
         join(sessions, "legacy.jsonl"),
         [
@@ -115,7 +117,7 @@ describe("chat history provenance metadata", () => {
     const dir = tempDir("cc-chat-malformed-provenance-");
     try {
       const sessions = join(dir, "sessions");
-      mkdirSync(sessions, { recursive: true });
+      mkdirSync(sessions, { recursive: true, mode: 0o700 });
       const line = JSON.stringify({
         role: "assistant",
         content: "Still usable",

@@ -1,10 +1,57 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import YAML from "yaml";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+
+interface WorkspaceManifest {
+  name?: string;
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+}
+
+function workspaceProjects(): Map<string, { dir: string; manifest: WorkspaceManifest }> {
+  const projects = new Map<string, { dir: string; manifest: WorkspaceManifest }>();
+  for (const group of ["packages", "apps"]) {
+    for (const entry of readdirSync(resolve(repoRoot, group))) {
+      const dir = `${group}/${entry}`;
+      const manifestPath = resolve(repoRoot, dir, "package.json");
+      if (!existsSync(manifestPath)) continue;
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as WorkspaceManifest;
+      if (manifest.name !== undefined) projects.set(manifest.name, { dir, manifest });
+    }
+  }
+  return projects;
+}
+
+function workspaceClosure(root: string): string[] {
+  const projects = workspaceProjects();
+  const seen = new Set<string>();
+  const dirs: string[] = [];
+  const walk = (name: string): void => {
+    if (seen.has(name)) return;
+    seen.add(name);
+    const project = projects.get(name);
+    if (project === undefined) return;
+    dirs.push(project.dir);
+    for (const field of [
+      "dependencies",
+      "devDependencies",
+      "peerDependencies",
+      "optionalDependencies",
+    ] as const) {
+      for (const [dependency, range] of Object.entries(project.manifest[field] ?? {})) {
+        if (range.startsWith("workspace:")) walk(dependency);
+      }
+    }
+  };
+  walk(root);
+  return dirs;
+}
 
 describe("Docker image supply-chain guards", () => {
   it("pins every Dockerfile base image by digest", () => {
@@ -29,6 +76,40 @@ describe("Docker image supply-chain guards", () => {
     expect(dockerfile.indexOf(builderCopy)).toBeGreaterThan(-1);
     expect(dockerfile.indexOf(builderCopy)).toBeLessThan(dockerfile.indexOf(build));
     expect(dockerfile.indexOf(runtimeCopy)).toBeGreaterThan(dockerfile.indexOf(build));
+  });
+
+  it("copies a manifest and a source tree for every workspace package cycling-coach needs", () => {
+    const dockerfile = readFileSync(resolve(repoRoot, "packages/cycling-coach/Dockerfile"), "utf8");
+    const install = dockerfile.indexOf("RUN pnpm install --filter cycling-coach...");
+    const build = dockerfile.indexOf("RUN pnpm --filter cycling-coach... build");
+    const closure = workspaceClosure("cycling-coach");
+
+    expect(closure).toContain("packages/engine");
+    expect(closure).toContain("packages/kernel");
+    expect(install).toBeGreaterThan(-1);
+    for (const dir of closure) {
+      const manifestCopy = dockerfile.indexOf(`COPY ${dir}/package.json ./${dir}/`);
+      const sourceCopy = dockerfile.indexOf(`COPY ${dir} ./${dir}`);
+      expect(manifestCopy, `${dir} manifest COPY`).toBeGreaterThan(-1);
+      expect(manifestCopy).toBeLessThan(install);
+      expect(sourceCopy, `${dir} source COPY`).toBeGreaterThan(install);
+      expect(sourceCopy).toBeLessThan(build);
+    }
+  });
+
+  it("keeps desktop-only pushes from republishing the bot image", () => {
+    const workflow = YAML.parse(
+      readFileSync(resolve(repoRoot, ".github/workflows/publish-image.yml"), "utf8"),
+    ) as {
+      on?: { push?: { "paths-ignore"?: string[] } };
+      true?: { push?: { "paths-ignore"?: string[] } };
+    };
+    const ignored = (workflow.on ?? workflow.true)?.push?.["paths-ignore"] ?? [];
+
+    expect(ignored).toContain("apps/desktop/**");
+    expect(ignored).toContain("apps/desktop-renderer/**");
+    expect(ignored).not.toContain("packages/core/**");
+    expect(ignored).not.toContain("packages/engine/**");
   });
 
   it("keeps Dependabot watching the cycling-coach Dockerfile", () => {

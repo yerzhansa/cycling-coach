@@ -28,6 +28,7 @@
 
 import * as ts from "typescript";
 import { readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { TS_EXTS, ext, collectFiles, makeSkipCheck, nonFlagArgs, runGateCli } from "./lint-fs.js";
 
 export interface TrademarkHit {
@@ -182,10 +183,7 @@ function findHitsInMdFile(file: string): TrademarkHit[] {
   if (isSkippedFile(source)) return [];
   // Strip fenced code blocks (```...```). Replace with same-length whitespace
   // so line/column offsets stay correct for the surviving prose.
-  const stripped = source.replace(
-    /```[\s\S]*?```/g,
-    (block) => block.replace(/[^\n]/g, " "),
-  );
+  const stripped = source.replace(/```[\s\S]*?```/g, (block) => block.replace(/[^\n]/g, " "));
 
   const skippedLines = computeMdSkippedLines(source);
 
@@ -241,33 +239,27 @@ function formatHit(hit: TrademarkHit): string {
 }
 
 /**
- * Default scan scope when no paths are supplied. The Reference submodule is
- * the directly-ported code; `core/concurrency/` and `core/io/` host the
- * primitives + I/O helpers that were promoted to shared locations in the
- * architectural followup sequence (PR C); `tools/` is in scope because this
- * very linter lives there. The per-sport `skills/` markdown and the two SOUL
- * files are athlete-facing prose surfaces, so the forbidden tokens must not
- * re-enter them either; a line-level `trademark-lint:skip-line` /
- * `skip-next-line` directive exempts a single legitimate token line (e.g. a
- * surviving substitution table) without exempting the whole file. Add new
- * layer directories here as future horizontal layers land.
+ * Default scan scope when no paths are supplied: every workspace package
+ * wholesale, plus the `tools/` tree (this very linter lives there). Scanning
+ * `packages/` as a unit means a new package is covered the moment it lands —
+ * no per-package memory burden. Legitimate token mentions opt out via the
+ * existing directives: a whole-file `trademark-lint:skip-file` marker, or, for
+ * `.md` prose, a line-level `trademark-lint:skip-line` / `skip-next-line`
+ * directive that exempts a single legitimate token line (e.g. a surviving
+ * substitution table). `CHANGELOG.md` files are excluded in-tool (see `main`).
  */
-const DEFAULT_SCAN_PATHS: readonly string[] = [
-  "packages/core/src/reference",
-  "packages/core/src/concurrency",
-  "packages/core/src/io",
-  "packages/sport-cycling/skills",
-  "packages/sport-running/skills",
-  "packages/sport-cycling/SOUL.md",
-  "packages/sport-running/SOUL.md",
-  "tools",
-];
+const DEFAULT_SCAN_PATHS: readonly string[] = ["packages", "apps", "tools"];
 
 export function main(argv: readonly string[]): number {
   const args = nonFlagArgs(argv);
   const inputPaths = args.length > 0 ? args : DEFAULT_SCAN_PATHS;
-  const files: string[] = [];
-  for (const p of inputPaths) collectFiles(p, files);
+  const collected: string[] = [];
+  for (const p of inputPaths) collectFiles(p, collected);
+  // Changesets prepend generated release history to CHANGELOG.md files, so an
+  // in-file marker cannot be kept in the 1 KB header window; historical release
+  // text is an immutable audit record and new entries are already governed by
+  // the changeset lint.
+  const files = collected.filter((f) => basename(f) !== "CHANGELOG.md");
 
   if (files.length === 0) {
     console.log("check-trademarks: no lintable files in scope.");

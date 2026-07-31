@@ -26,7 +26,7 @@ import { join } from "node:path";
 
 import { USAGE_LEDGER_FILE, type UsageLedgerLine } from "../packages/core/src/usage-ledger.js";
 import { getCoachHome, expandTilde } from "../packages/core/src/coach-home.js";
-import { MS_PER_DAY } from "../packages/core/src/io/date-keys.js";
+import { MS_PER_DAY } from "../packages/engine/src/sport/date-keys.js";
 
 const UNKNOWN_TEMPLATE = "unknown";
 const MIN_SPAN_DAYS = 3;

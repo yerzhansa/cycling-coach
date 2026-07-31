@@ -1,15 +1,20 @@
-import { intro, outro, select, text, password, confirm, isCancel, cancel, log } from "@clack/prompts";
+import {
+  intro,
+  outro,
+  select,
+  text,
+  password,
+  confirm,
+  isCancel,
+  cancel,
+  log,
+} from "@clack/prompts";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, chmodSync } from "node:fs";
 import { stringify as toYaml } from "yaml";
-import type { BinaryConfig } from "./binary.js";
-import {
-  CONFIG_DIR,
-  CONFIG_FILE,
-  PROVIDER_BASE_URLS,
-  envInt,
-  readConfigYaml,
-} from "./config.js";
+import { type BinaryConfig, binaryEnvVar } from "./binary.js";
+import { CONFIG_DIR, CONFIG_FILE, envInt, readConfigYaml } from "./config.js";
+import { LLM_MODEL_CATALOGUE } from "./runtime-config.js";
 import { captureAndPersistOperator } from "./channels/operator-capture.js";
 import { loadAllowedSenders } from "./channels/allowed-senders.js";
 import { runCodexLogin } from "./auth/openai-codex-login.js";
@@ -43,18 +48,11 @@ import {
 // TYPES
 // ============================================================================
 
-const PROVIDERS = [
-  { value: "anthropic", label: "Anthropic (Claude)" },
-  { value: "openai", label: "OpenAI (GPT)" },
-  { value: "google", label: "Google (Gemini)" },
-  { value: "openai-codex", label: "OpenAI Codex (ChatGPT subscription)", hint: "experimental" },
-  { value: "deepseek", label: "DeepSeek" },
-  { value: "qwen", label: "Qwen (Alibaba Model Studio)" },
-  { value: "minimax", label: "MiniMax" },
-  { value: "kimi", label: "Kimi (Moonshot AI)" },
-  { value: "zai", label: "Z.AI (GLM)" },
-  { value: "openrouter", label: "OpenRouter", hint: "one key, many models" },
-];
+const PROVIDERS = LLM_MODEL_CATALOGUE.map(({ provider, label, hint }) => ({
+  value: provider,
+  label,
+  ...(hint === undefined ? {} : { hint }),
+}));
 
 const API_KEY_LABELS: Record<string, string> = {
   anthropic: "Anthropic API key",
@@ -66,55 +64,6 @@ const API_KEY_LABELS: Record<string, string> = {
   kimi: "Moonshot API key",
   zai: "Z.AI API key",
   openrouter: "OpenRouter API key",
-};
-
-const MODELS: Record<string, { value: string; label: string; hint?: string }[]> = {
-  anthropic: [
-    { value: "claude-sonnet-5", label: "Claude Sonnet 5", hint: "recommended" },
-    { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5", hint: "fast & cheap" },
-    { value: "claude-opus-5", label: "Claude Opus 5", hint: "most capable" },
-  ],
-  openai: [
-    { value: "gpt-5.6-sol", label: "GPT-5.6 Sol", hint: "recommended" },
-    { value: "gpt-5.6-terra", label: "GPT-5.6 Terra", hint: "balanced" },
-    { value: "gpt-5.6-luna", label: "GPT-5.6 Luna", hint: "cheapest" },
-  ],
-  google: [
-    { value: "gemini-3.6-flash", label: "Gemini 3.6 Flash", hint: "recommended" },
-    { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro", hint: "most capable" },
-    { value: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash Lite", hint: "cheapest" },
-  ],
-  "openai-codex": [
-    { value: "gpt-5.6-sol", label: "GPT-5.6 Sol", hint: "recommended" },
-    { value: "gpt-5.6-luna", label: "GPT-5.6 Luna", hint: "faster" },
-  ],
-  deepseek: [
-    { value: "deepseek-v4-flash", label: "DeepSeek V4 Flash", hint: "recommended" },
-    { value: "deepseek-v4-pro", label: "DeepSeek V4 Pro", hint: "most capable" },
-  ],
-  qwen: [
-    { value: "qwen3.7-plus", label: "Qwen3.7 Plus", hint: "recommended" },
-    { value: "qwen3.7-max", label: "Qwen3.7 Max", hint: "most capable" },
-  ],
-  minimax: [
-    { value: "MiniMax-M3", label: "MiniMax M3", hint: "recommended" },
-    { value: "MiniMax-M2.7", label: "MiniMax M2.7" },
-  ],
-  kimi: [
-    { value: "kimi-k3", label: "Kimi K3", hint: "recommended" },
-    { value: "kimi-k2.6", label: "Kimi K2.6", hint: "cheaper" },
-  ],
-  zai: [
-    { value: "glm-4.7", label: "GLM-4.7", hint: "recommended" },
-    { value: "glm-5.2", label: "GLM-5.2", hint: "most capable" },
-    { value: "glm-4.7-flashx", label: "GLM-4.7 FlashX", hint: "cheapest" },
-  ],
-  openrouter: [
-    { value: "deepseek/deepseek-v4-flash", label: "DeepSeek V4 Flash (via OpenRouter)", hint: "cheap" },
-    { value: "z-ai/glm-5.2", label: "GLM-5.2 (via OpenRouter)", hint: "most capable" },
-    { value: "qwen/qwen3.7-plus", label: "Qwen3.7 Plus (via OpenRouter)" },
-    { value: "moonshotai/kimi-k3", label: "Kimi K3 (via OpenRouter)" },
-  ],
 };
 
 const CUSTOM_MODEL_SENTINEL = "__custom__";
@@ -139,19 +88,6 @@ export type CreatedEntry = {
 
 export type WizardCtx = {
   createdThisRun: CreatedEntry[];
-};
-
-const DEFAULT_MODELS: Record<string, string> = {
-  anthropic: "claude-sonnet-5",
-  openai: "gpt-5.6-sol",
-  google: "gemini-3.6-flash",
-  "openai-codex": "gpt-5.6-sol",
-  deepseek: "deepseek-v4-flash",
-  qwen: "qwen3.7-plus",
-  minimax: "MiniMax-M3",
-  kimi: "kimi-k3",
-  zai: "glm-4.7",
-  openrouter: "deepseek/deepseek-v4-flash",
 };
 
 const FIELD_KEYCHAIN_ACCOUNT: Record<SecretFieldPath, string> = {
@@ -259,10 +195,7 @@ function getString(obj: Record<string, unknown>, ...keys: string[]): string | un
   return typeof cur === "string" ? cur : undefined;
 }
 
-function readFieldValue(
-  obj: Record<string, unknown>,
-  ...keys: string[]
-): unknown {
+function readFieldValue(obj: Record<string, unknown>, ...keys: string[]): unknown {
   let cur: unknown = obj;
   for (const k of keys) {
     if (cur && typeof cur === "object" && k in (cur as Record<string, unknown>)) {
@@ -326,17 +259,21 @@ async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<voi
   });
   handleCancel(providerResp, ctx, binary);
   const provider = providerResp as string;
+  const catalogue = LLM_MODEL_CATALOGUE.find((entry) => entry.provider === provider);
 
   // Model
   const sameProvider = provider === prevProvider;
-  const knownModel = MODELS[provider]?.some((m) => m.value === prevModel);
-  const initialModel = sameProvider && prevModel
-    ? (knownModel ? prevModel : CUSTOM_MODEL_SENTINEL)
-    : DEFAULT_MODELS[provider];
+  const knownModel = catalogue?.models.some((candidate) => candidate.value === prevModel);
+  const initialModel =
+    sameProvider && prevModel
+      ? knownModel
+        ? prevModel
+        : CUSTOM_MODEL_SENTINEL
+      : catalogue?.defaultModel;
   const modelResp = await select({
     message: "Model",
     options: [
-      ...(MODELS[provider] ?? []),
+      ...(catalogue?.models ?? []),
       { value: CUSTOM_MODEL_SENTINEL, label: "Other (type model name)" },
     ],
     initialValue: initialModel,
@@ -356,10 +293,10 @@ async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<voi
   }
 
   // Base URL — only for OpenAI-compatible / direct providers that declare a
-  // default. The built-in providers (anthropic/openai/google/openai-codex) have
-  // no PROVIDER_BASE_URLS entry, so their prompt order is unchanged.
+  // default. The built-in providers have no default endpoint, so their prompt
+  // order is unchanged.
   let baseUrl: string | undefined;
-  const defaultBaseUrl = PROVIDER_BASE_URLS[provider];
+  const defaultBaseUrl = catalogue?.defaultBaseUrl;
   if (defaultBaseUrl) {
     const prevBaseUrl = getString(previous, "llm", "base_url");
     const baseUrlResp = await text({
@@ -419,16 +356,20 @@ async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<voi
   // llm.api_key (required unless Codex)
   if (provider !== "openai-codex") {
     const hasPrev = provider === prevProvider && isNonEmptySecret(prevLlmKey);
-    const result = await _collectAndWriteSecret(ctx, {
-      field: "llm.api_key",
-      label: `${API_KEY_LABELS[provider]}`,
-      required: !hasPrev,
-      prevValue: provider === prevProvider ? prevLlmKey : undefined,
-      backend,
-      chosenVaultRef: { current: chosenVault },
-      opAbsPathRef: { current: opAbsPath },
-      keychainPathRef: { current: keychainPath },
-    }, binary);
+    const result = await _collectAndWriteSecret(
+      ctx,
+      {
+        field: "llm.api_key",
+        label: `${API_KEY_LABELS[provider]}`,
+        required: !hasPrev,
+        prevValue: provider === prevProvider ? prevLlmKey : undefined,
+        backend,
+        chosenVaultRef: { current: chosenVault },
+        opAbsPathRef: { current: opAbsPath },
+        keychainPathRef: { current: keychainPath },
+      },
+      binary,
+    );
     chosenVault = result.chosenVault;
     opAbsPath = result.opAbsPath;
     keychainPath = result.keychainPath;
@@ -443,16 +384,20 @@ async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<voi
   let intervalsAthleteId = prevIntervalsId ?? "";
   {
     const hasPrev = isNonEmptySecret(prevIntervalsKey);
-    const result = await _collectAndWriteSecret(ctx, {
-      field: "intervals.api_key",
-      label: "intervals.icu API key",
-      required: false,
-      prevValue: prevIntervalsKey,
-      backend,
-      chosenVaultRef: { current: chosenVault },
-      opAbsPathRef: { current: opAbsPath },
-      keychainPathRef: { current: keychainPath },
-    }, binary);
+    const result = await _collectAndWriteSecret(
+      ctx,
+      {
+        field: "intervals.api_key",
+        label: "intervals.icu API key",
+        required: false,
+        prevValue: prevIntervalsKey,
+        backend,
+        chosenVaultRef: { current: chosenVault },
+        opAbsPathRef: { current: opAbsPath },
+        keychainPathRef: { current: keychainPath },
+      },
+      binary,
+    );
     chosenVault = result.chosenVault;
     opAbsPath = result.opAbsPath;
     keychainPath = result.keychainPath;
@@ -486,16 +431,20 @@ async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<voi
 
   // telegram.bot_token (optional)
   {
-    const result = await _collectAndWriteSecret(ctx, {
-      field: "telegram.bot_token",
-      label: "Telegram bot token",
-      required: false,
-      prevValue: prevTelegramToken,
-      backend,
-      chosenVaultRef: { current: chosenVault },
-      opAbsPathRef: { current: opAbsPath },
-      keychainPathRef: { current: keychainPath },
-    }, binary);
+    const result = await _collectAndWriteSecret(
+      ctx,
+      {
+        field: "telegram.bot_token",
+        label: "Telegram bot token",
+        required: false,
+        prevValue: prevTelegramToken,
+        backend,
+        chosenVaultRef: { current: chosenVault },
+        opAbsPathRef: { current: opAbsPath },
+        keychainPathRef: { current: keychainPath },
+      },
+      binary,
+    );
     chosenVault = result.chosenVault;
     opAbsPath = result.opAbsPath;
     keychainPath = result.keychainPath;
@@ -535,7 +484,11 @@ async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<voi
         writeFileSync(CONFIG_FILE, originalBytes, { mode: 0o600 });
         chmodSync(CONFIG_FILE, 0o600);
       } else {
-        try { unlinkSync(CONFIG_FILE); } catch { /* best-effort */ }
+        try {
+          unlinkSync(CONFIG_FILE);
+        } catch {
+          /* best-effort */
+        }
       }
       cancel(`Failed to save OAuth profile: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
@@ -577,7 +530,7 @@ async function runOperatorCaptureStep(
   log.info(
     `Setup will register your Telegram account as the primary operator. Send your bot the pairing code shown below from your Telegram app within 60 seconds.`,
   );
-  const timeoutMs = envInt("CYCLING_COACH_SETUP_CAPTURE_TIMEOUT_MS") ?? 60_000;
+  const timeoutMs = envInt(binaryEnvVar(binary.binaryName, "SETUP_CAPTURE_TIMEOUT_MS")) ?? 60_000;
   const result = await captureAndPersistOperator({
     botToken,
     binary,
@@ -585,8 +538,7 @@ async function runOperatorCaptureStep(
     timeoutMs,
     confirm: async (info) => {
       const ok = await confirm({
-        message:
-          `Captured operator id ${info.capturedId} (Telegram: @${info.senderUsername ?? "—"}, name: ${info.senderFirstName ?? "—"}) for bot @${info.botUsername}. Save?`,
+        message: `Captured operator id ${info.capturedId} (Telegram: @${info.senderUsername ?? "—"}, name: ${info.senderFirstName ?? "—"}) for bot @${info.botUsername}. Save?`,
         initialValue: false,
       });
       handleCancel(ok, ctx, binary);
@@ -823,10 +775,7 @@ async function _collectAndWriteSecret(
       validate: (v) => (!v ? `${label} is required when migrating.` : undefined),
     });
     handleCancel(second, ctx, binary);
-    const cleanedSecond = _processSecretInput(
-      typeof second === "string" ? second : "",
-      field,
-    );
+    const cleanedSecond = _processSecretInput(typeof second === "string" ? second : "", field);
     if (cleanedSecond.length === 0) {
       cancel(`${label} is required when migrating.`);
       process.exit(1);

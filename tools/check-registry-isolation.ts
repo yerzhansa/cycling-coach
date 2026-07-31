@@ -20,21 +20,18 @@
  * catches a sport package reaching for the registry by name at all — the form
  * the key-set pin cannot see because such code adds no registry key.
  *
- * Mechanism: walk the TypeScript AST of every file under each `packages/sport-*`
- * package and flag any *identifier* named `METRIC_REGISTRY`. Identifier-scoping
- * (not a text grep) is deliberate — a comment or string that merely discusses
- * the registry is fine; only an actual code reference (named import, aliased
- * import, member access, mutation) is a violation. Every realistic import/use
- * form surfaces the identifier by name, so this covers them all.
+ * Mechanism: discover every `packages/sport-*` directory, walk each TypeScript
+ * AST, and reject either an identifier named `METRIC_REGISTRY` or a module
+ * specifier that reaches the dedicated kernel registry subpath. The specifier
+ * check covers both `@enduragent/kernel/reference/registry` and relative paths
+ * that resolve to the canonical kernel registry source. Comments and unrelated
+ * string literals remain allowed.
  *
- * The one adversarial form this lint cannot see by construction — a dynamic
- * string-keyed access (`ns["METRIC_REGISTRY"]`) reached via a deep import of
- * core internals — is now closed structurally rather than by this lint. The
- * public `@enduragent/core` barrel does not export the registry (pinned in
- * `reference-adapter-delegation-surface`), AND `@enduragent/core`'s package
- * `exports` map exposes only the public entry, so any package-specifier deep
- * import into core internals fails to resolve (`ERR_PACKAGE_PATH_NOT_EXPORTED`).
- * The exotic path therefore cannot be reached from a sport package at all.
+ * The dedicated registry subpath is intentionally reachable by core
+ * compatibility shims and parity tools. Sport packages instead use public
+ * compute functions from the grouped metrics facade. The exact and resolved-
+ * relative specifier checks prevent namespace, string-key, and dynamic-import
+ * forms from bypassing the identifier walk.
  *
  * Files that legitimately name the identifier (this linter, its test) opt out
  * via a `registry-isolation-lint:skip-file` marker in the first 1 KB.
@@ -42,7 +39,7 @@
 
 import * as ts from "typescript";
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { TS_EXTS, ext, collectFiles, makeSkipCheck, nonFlagArgs, runGateCli } from "./lint-fs.js";
 
 export interface RegistryReferenceHit {
@@ -53,6 +50,45 @@ export interface RegistryReferenceHit {
 
 /** The registry export sport packages must never reference. */
 const TARGET_IDENTIFIER = "METRIC_REGISTRY";
+const TARGET_MODULE_SPECIFIER = "@enduragent/kernel/reference/registry";
+const CANONICAL_REGISTRY_SUFFIX =
+  "/packages/kernel/src/reference/metrics/registry";
+const MODULE_EXT_RE = /\.(?:[cm]?[jt]sx?)$/;
+
+function specifierForNode(node: ts.Node): ts.StringLiteralLike | null {
+  if (
+    (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+    node.moduleSpecifier !== undefined &&
+    ts.isStringLiteralLike(node.moduleSpecifier)
+  ) {
+    return node.moduleSpecifier;
+  }
+  if (
+    ts.isCallExpression(node) &&
+    node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+    node.arguments.length === 1 &&
+    ts.isStringLiteralLike(node.arguments[0]!)
+  ) {
+    return node.arguments[0]!;
+  }
+  return null;
+}
+
+function isCanonicalRelativeRegistry(file: string, specifier: string): boolean {
+  if (!specifier.startsWith(".")) return false;
+  const target = resolve(dirname(file), specifier)
+    .replace(MODULE_EXT_RE, "")
+    .split(sep)
+    .join("/");
+  return target.endsWith(CANONICAL_REGISTRY_SUFFIX);
+}
+
+function isGuardedSpecifier(file: string, specifier: string): boolean {
+  return (
+    specifier === TARGET_MODULE_SPECIFIER ||
+    isCanonicalRelativeRegistry(file, specifier)
+  );
+}
 
 const SKIP_DIRECTIVE = "registry-isolation-lint:skip-file";
 
@@ -62,18 +98,40 @@ function findHitsInTsFile(file: string): RegistryReferenceHit[] {
   const source = readFileSync(file, "utf-8");
   if (isSkippedFile(source)) return [];
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.ESNext, /*setParentNodes*/ true);
-  const hits: RegistryReferenceHit[] = [];
+  const hits = new Map<string, RegistryReferenceHit>();
+  const addHit = (node: ts.Node): void => {
+    const lc = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+    const hit = { file, line: lc.line + 1, column: lc.character + 1 };
+    hits.set(`${hit.file}:${hit.line}:${hit.column}`, hit);
+  };
+  const isInsideGuardedStatement = (node: ts.Node): boolean => {
+    let current: ts.Node | undefined = node;
+    while (current !== undefined && current !== sf) {
+      const specifier = specifierForNode(current);
+      if (specifier !== null && isGuardedSpecifier(file, specifier.text)) return true;
+      current = current.parent;
+    }
+    return false;
+  };
 
   function visit(node: ts.Node): void {
-    if (ts.isIdentifier(node) && node.text === TARGET_IDENTIFIER) {
-      const lc = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-      hits.push({ file, line: lc.line + 1, column: lc.character + 1 });
+    const specifier = specifierForNode(node);
+    if (specifier !== null && isGuardedSpecifier(file, specifier.text)) {
+      addHit(specifier);
+    } else if (
+      ts.isIdentifier(node) &&
+      node.text === TARGET_IDENTIFIER &&
+      !isInsideGuardedStatement(node)
+    ) {
+      addHit(node);
     }
     ts.forEachChild(node, visit);
   }
   visit(sf);
 
-  return hits;
+  return [...hits.values()].sort(
+    (a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.column - b.column,
+  );
 }
 
 /**
@@ -141,10 +199,9 @@ export function main(argv: readonly string[]): number {
   );
   for (const hit of hits) console.error("  " + formatHit(hit));
   console.error(
-    `\nSport packages must delegate to a registry compute's public function ` +
-      `(computeDfaA1Profile / computePowerCurveDelta, re-exported from @enduragent/core) ` +
-      `and project its output to the thin adapter shape, never reaching into ` +
-      `${TARGET_IDENTIFIER} — see ADR-0010.`,
+    `\nSport packages must delegate to a public compute function from ` +
+      `@enduragent/kernel/reference/metrics and project its output to the thin ` +
+      `adapter shape; they must never import or reference ${TARGET_IDENTIFIER}.`,
   );
   return 1;
 }

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Memory, SECTION_SOFT_WARN_CHARS } from "../src/memory/store.js";
-import { createMemorySnapshot } from "../src/memory/snapshot.js";
+import { createMemorySnapshot } from "../src/sport.js";
 import { JOURNAL_FILENAME } from "../src/memory/journal.js";
 
 const STAMP = "_updated: 2026-06-11";

@@ -9,7 +9,7 @@ import {
   FENCE_TOKEN_REPLACEMENT,
   ATHLETE_CONTEXT_TRUNCATION_NOTICE,
 } from "../src/agent/prompt-fence.js";
-import { capToolResult } from "../src/agent/tool-result-cap.js";
+import { capToolResult } from "@enduragent/engine";
 
 // Invisible characters referenced by escape so the source stays copy-safe.
 const NUL = "\x00"; // Cc

@@ -1,0 +1,86 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  createDesktopUpdateController,
+  type DesktopUpdateBridge,
+  type DesktopUpdateState,
+  type DesktopUpdateView,
+} from "../src/update/controller.js";
+
+function setupController(initial: DesktopUpdateState = { status: "idle" }) {
+  let listener: ((state: DesktopUpdateState) => void) | undefined;
+  let action: (() => void) | undefined;
+  const bridge: DesktopUpdateBridge = {
+    getUpdateState: vi.fn<DesktopUpdateBridge["getUpdateState"]>(async () => initial),
+    checkForUpdates: vi.fn<DesktopUpdateBridge["checkForUpdates"]>(async () => ({
+      status: "current",
+    })),
+    restartToUpdate: vi.fn<DesktopUpdateBridge["restartToUpdate"]>(async () => ({
+      status: "installing",
+      version: "2026.7.23",
+    })),
+    onUpdateState: vi.fn((next) => {
+      listener = next;
+      return vi.fn();
+    }),
+  };
+  const view: DesktopUpdateView = {
+    bind: vi.fn((next) => {
+      action = next;
+    }),
+    render: vi.fn(),
+    dispose: vi.fn(),
+  };
+  const controller = createDesktopUpdateController({ bridge, view });
+  return {
+    action: () => action?.(),
+    bridge,
+    controller,
+    publish: (state: DesktopUpdateState) => listener?.(state),
+    view,
+  };
+}
+
+describe("desktop update renderer controller", () => {
+  it("loads the initial state, checks on demand, and accepts pushed state", async () => {
+    const subject = setupController();
+    await subject.controller.start();
+    expect(subject.view.render).toHaveBeenLastCalledWith({ status: "idle" });
+    subject.action();
+    await vi.waitFor(() => expect(subject.bridge.checkForUpdates).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(subject.view.render).toHaveBeenLastCalledWith({ status: "current" }),
+    );
+    subject.publish({ status: "downloading", version: "2026.7.23" });
+    expect(subject.view.render).toHaveBeenLastCalledWith({
+      status: "downloading",
+      version: "2026.7.23",
+    });
+  });
+
+  it("restarts only from downloaded and ignores actions while busy", async () => {
+    const subject = setupController({ status: "checking" });
+    await subject.controller.start();
+    subject.action();
+    expect(subject.bridge.checkForUpdates).not.toHaveBeenCalled();
+    expect(subject.bridge.restartToUpdate).not.toHaveBeenCalled();
+
+    subject.publish({ status: "downloaded", version: "2026.7.23" });
+    subject.action();
+    await vi.waitFor(() => expect(subject.bridge.restartToUpdate).toHaveBeenCalledOnce());
+    expect(subject.bridge.checkForUpdates).not.toHaveBeenCalled();
+  });
+
+  it("contains rejected diagnostics and disposes its subscription and view", async () => {
+    const raw = "Authorization: secret https://private.invalid/feed";
+    const subject = setupController();
+    vi.mocked(subject.bridge.getUpdateState).mockRejectedValue(new Error(raw));
+    await subject.controller.start();
+    expect(subject.view.render).toHaveBeenLastCalledWith({ status: "failed", stage: "check" });
+    expect(JSON.stringify(vi.mocked(subject.view.render).mock.calls)).not.toContain(raw);
+    subject.controller.dispose();
+    subject.controller.dispose();
+    expect(subject.view.dispose).toHaveBeenCalledOnce();
+    subject.publish({ status: "current" });
+    expect(subject.view.render).toHaveBeenCalledOnce();
+  });
+});

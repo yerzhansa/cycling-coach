@@ -5,7 +5,7 @@ import {
   buildMemoryWriteInputSchema,
   createMemoryTools,
   PlanSaveInputSchema,
-} from "../src/agent/tools.js";
+} from "../src/sport.js";
 
 const sections = [{ name: "profile", description: "Athlete profile" }];
 

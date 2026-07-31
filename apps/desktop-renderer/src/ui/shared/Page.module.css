@@ -1,0 +1,44 @@
+.page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.bar {
+  display: flex;
+  flex: none;
+  gap: 10px;
+  align-items: center;
+  height: 52px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.title {
+  margin: 0;
+  font: 560 14px/1 var(--f-ui);
+}
+
+.subtitle {
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+.action {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+}
+
+.scroll {
+  flex: 1;
+  padding: 28px 0 40px;
+  overflow: auto;
+}
+
+.column {
+  width: min(680px, calc(100% - 64px));
+  margin: 0 auto;
+}

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
 
-import * as cacheBarrel from "../src/reference/schemas/cache-index.js";
+import { cacheSchemas as cacheBarrel } from "@enduragent/kernel/reference/schemas";
 import * as metricsBarrel from "../src/reference/metrics/index.js";
 
 /**
@@ -106,6 +106,8 @@ describe("Reference Zod schemas — every object schema declares .strict()", () 
 const METRICS_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "..",
+  "..",
+  "kernel",
   "src",
   "reference",
   "metrics",

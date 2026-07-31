@@ -1,0 +1,152 @@
+body {
+  background: transparent;
+}
+
+.hud {
+  width: 420px;
+  min-height: 246px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--line-2) 88%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  box-shadow: 0 18px 48px rgb(23 33 28 / 20%);
+  color: var(--ink);
+  backdrop-filter: blur(22px);
+}
+
+.window-bar {
+  display: grid;
+  grid-template-columns: 24px 1fr 24px;
+  align-items: center;
+  min-height: 48px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--line);
+  text-align: center;
+}
+
+.window-bar strong {
+  font-size: 14px;
+  letter-spacing: -0.01em;
+}
+
+.brand-mark {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--brand);
+  border-radius: 50%;
+}
+
+.brand-mark::before,
+.brand-mark::after {
+  position: absolute;
+  bottom: 1px;
+  width: 7px;
+  height: 1.5px;
+  background: var(--brand);
+  content: "";
+}
+
+.brand-mark::before {
+  left: 2px;
+  transform: rotate(42deg);
+}
+
+.brand-mark::after {
+  right: 2px;
+  transform: rotate(-42deg);
+}
+
+.status-dot {
+  justify-self: end;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--brand);
+  box-shadow: 0 0 0 4px var(--brand-soft);
+}
+
+.glance {
+  padding: 18px 20px 16px;
+}
+
+.eyebrow,
+.metric-label,
+.rail-tag {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--brand);
+}
+
+.glance h1 {
+  margin: 4px 0 13px;
+  font-size: 22px;
+  line-height: 1.2;
+  letter-spacing: -0.025em;
+}
+
+.readiness-rail {
+  display: grid;
+  gap: 7px;
+}
+
+.rail-card {
+  display: grid;
+  grid-template-columns: 76px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 42px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.rail-card strong {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.metric-label {
+  color: var(--ink-2);
+}
+
+.rail-tag {
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.rail-tag.amber {
+  background: color-mix(in srgb, var(--warn) 18%, var(--surface));
+  color: #7a3d2f;
+}
+
+.menu-hint {
+  margin: 11px 2px 0;
+  color: var(--ink-2);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+@media (prefers-color-scheme: dark) {
+  .rail-tag.amber {
+    color: var(--ink);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none;
+  }
+}

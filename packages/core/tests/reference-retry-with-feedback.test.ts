@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { validateAndRetry } from "../src/reference/validation/retry-with-feedback.js";
 import type { LatestJson } from "../src/reference/schemas/latest.js";
-import { createFakeLLM } from "./helpers/fake-llm.js";
+import { createFakeLLM } from "../../engine/tests/helpers/fake-llm.js";
 
 function makeSnapshot(currentStatus: unknown): LatestJson {
   return {
@@ -102,7 +102,6 @@ describe("validateAndRetry — enforce mode", () => {
     expect(llm.capturedPrompts.length).toBe(1);
   });
 });
-
 describe("validateAndRetry — observe mode", () => {
   it("flags would_have_retried on a mismatch without calling the LLM", async () => {
     const llm = createFakeLLM([]);

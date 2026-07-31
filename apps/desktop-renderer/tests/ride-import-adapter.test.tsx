@@ -1,0 +1,180 @@
+import type { ImportFilesRpcResult } from "@enduragent/coach-contract";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createRideImportController,
+  type RideImportOwner,
+  type RideImportState,
+  type RideImportTransport,
+} from "../src/ride-import.js";
+import { createRideImportAdapter } from "../src/state/adapters/ride-import.js";
+import { IDLE_RIDE_IMPORT } from "../src/state/ride-import-slice.js";
+import { useEnduragentStore } from "../src/state/store.js";
+import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice.js";
+import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice.js";
+import { TrainingView } from "../src/ui/training/TrainingView.js";
+
+const PATHS = ["/rides/tuesday.fit"] as const;
+
+function importResult(imported: number, quarantined = 0): ImportFilesRpcResult {
+  return {
+    schemaVersion: 2,
+    files: { total: imported + quarantined, imported, quarantined },
+    changes: {
+      rawFilesInserted: imported,
+      sourceRecordsInserted: imported,
+      sourceRecordsUpdated: 0,
+      relinkedSourceRecords: 0,
+    },
+    publication: { scope: "activities-and-streams", status: "available" },
+  };
+}
+
+function harness(options: { readonly importFiles?: RideImportTransport["importFiles"] } = {}) {
+  const chooseImportFiles = vi.fn<RideImportTransport["chooseImportFiles"]>(async () => [...PATHS]);
+  const importFiles = vi.fn<RideImportTransport["importFiles"]>(
+    options.importFiles ?? (async () => importResult(1)),
+  );
+  const controller = createRideImportController({ chooseImportFiles, importFiles });
+  const owners: (RideImportOwner | null)[] = [];
+  const published: RideImportState[] = [];
+  const adapter = createRideImportAdapter({
+    imports: controller,
+    publish: (next) => {
+      published.push(next);
+      owners.push(next.owner);
+      useEnduragentStore.getState().setRideImport(next);
+    },
+  });
+  useEnduragentStore.getState().bindRideImportActions(adapter.port);
+  return { adapter, chooseImportFiles, controller, importFiles, owners, published };
+}
+
+function status(): HTMLElement {
+  const element = document.querySelector(".ride-import-status");
+  if (!(element instanceof HTMLElement)) throw new TypeError("ride import status missing");
+  return element;
+}
+
+beforeEach(() => {
+  useEnduragentStore.setState({
+    activeView: "training",
+    training: EMPTY_TRAINING_SURFACE,
+    sync: IDLE_MANUAL_SYNC,
+    syncActions: null,
+    rideImport: IDLE_RIDE_IMPORT,
+    rideImportSuppressed: false,
+    rideImportActions: null,
+  });
+});
+
+afterEach(() => {
+  useEnduragentStore.setState({
+    activeView: "chat",
+    rideImport: IDLE_RIDE_IMPORT,
+    rideImportSuppressed: false,
+    rideImportActions: null,
+  });
+});
+
+describe("resident ride import glue", () => {
+  it("publishes the controller state into the store from the first subscription", () => {
+    const subject = harness();
+
+    expect(subject.published).toEqual([IDLE_RIDE_IMPORT]);
+    expect(useEnduragentStore.getState().rideImport).toEqual(IDLE_RIDE_IMPORT);
+  });
+
+  it("walks the picker, import and success stages onto the training page", async () => {
+    const subject = harness();
+    const user = userEvent.setup();
+    render(<TrainingView />);
+
+    await user.click(screen.getByRole("button", { name: "Import ride files" }));
+
+    expect(subject.chooseImportFiles).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(subject.importFiles).toHaveBeenCalledTimes(1);
+    });
+    expect(subject.importFiles.mock.calls[0]?.[0]).toEqual([...PATHS]);
+    await waitFor(() => {
+      expect(status()).toHaveAttribute("data-state", "succeeded");
+    });
+    expect(status()).toHaveTextContent(
+      "Local library import: 1 ride file imported. 0 ride files quarantined.",
+    );
+    expect(subject.owners).toEqual([null, "resident", "resident", "resident"]);
+    expect(subject.published.map((state) => state.status)).toEqual([
+      "idle",
+      "running",
+      "running",
+      "succeeded",
+    ]);
+  });
+
+  it("claims the import for the resident owner even while onboarding suppresses the status", async () => {
+    const subject = harness();
+    render(<TrainingView />);
+
+    await act(async () => {
+      await subject.controller.importPaths("onboarding", [...PATHS]);
+    });
+    expect(subject.published.at(-1)?.owner).toBe("onboarding");
+
+    await act(async () => {
+      subject.adapter.port.choose();
+      await vi.waitFor(() => expect(subject.importFiles).toHaveBeenCalledTimes(2));
+    });
+    expect(subject.published.at(-1)).toMatchObject({ status: "succeeded", owner: "resident" });
+  });
+
+  it("reports a failed import through the same publication path", async () => {
+    const subject = harness({ importFiles: async () => importResult(0, 1) });
+    const user = userEvent.setup();
+    render(<TrainingView />);
+
+    await user.click(screen.getByRole("button", { name: "Import ride files" }));
+
+    await waitFor(() => {
+      expect(status()).toHaveAttribute("data-state", "failed");
+    });
+    expect(subject.published.at(-1)?.owner).toBe("resident");
+    expect(status()).toHaveTextContent("Local library import failed.");
+  });
+
+  it("stops publishing and stops reaching the controller once the adapter is disposed", async () => {
+    const subject = harness();
+    render(<TrainingView />);
+
+    subject.adapter.dispose();
+    const published = subject.published.length;
+    subject.adapter.port.choose();
+    await act(async () => {
+      await subject.controller.importPaths("resident", [...PATHS]);
+    });
+
+    expect(subject.chooseImportFiles).not.toHaveBeenCalled();
+    expect(subject.published).toHaveLength(published);
+    expect(useEnduragentStore.getState().rideImport).toEqual(IDLE_RIDE_IMPORT);
+  });
+
+  it("keeps the import action inert until the actions are bound", async () => {
+    const user = userEvent.setup();
+    const subject = harness();
+    act(() => {
+      useEnduragentStore.getState().bindRideImportActions(null);
+    });
+    render(<TrainingView />);
+
+    const action = screen.getByRole("button", { name: "Import ride files" });
+    expect(action).toBeDisabled();
+    await user.click(action);
+    expect(subject.chooseImportFiles).not.toHaveBeenCalled();
+
+    act(() => {
+      useEnduragentStore.getState().bindRideImportActions(subject.adapter.port);
+    });
+    expect(screen.getByRole("button", { name: "Import ride files" })).toBeEnabled();
+  });
+});

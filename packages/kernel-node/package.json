@@ -1,0 +1,40 @@
+{
+  "name": "@enduragent/kernel-node",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Node host adapter for the pure kernel — node:sqlite / node:fs / WebCrypto drivers behind the kernel's ports (scaffold, no content yet).",
+  "type": "module",
+  "files": ["dist"],
+  "exports": {
+    "./sqlite": "./dist/sqlite.js",
+    "./archive": "./dist/archive/index.js",
+    "./lock": "./dist/lock/index.js",
+    "./store-export": "./dist/store-export/index.js",
+    "./home": "./dist/home/index.js",
+    "./filesystem": "./dist/filesystem/index.js",
+    "./ingest": "./dist/ingest/index.js",
+    "./capture-manifest": "./dist/capture-manifest/index.js",
+    "./service": "./dist/service/index.js",
+    "./coach-dev": "./dist/coach-dev.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsup",
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@enduragent/kernel": "workspace:*",
+    "fit-file-parser": "3.0.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "tsup": "^8.4.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,373 @@
+.heading {
+  margin: 26px 4px 8px;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.heading:first-child {
+  margin-top: 0;
+}
+
+.group {
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+
+.row {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.rowStacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.row:last-child {
+  border-bottom: 0;
+}
+
+.label {
+  flex: 1;
+  min-width: 0;
+}
+
+.rowTitle {
+  font-size: 14px;
+  font-weight: 560;
+}
+
+.rowDetail {
+  margin-top: 1px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.dangerTitle {
+  color: var(--danger);
+}
+
+.button {
+  flex: none;
+  padding: 6px 13px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--surface-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  border-color: var(--ink-3);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.primary {
+  border-color: var(--brand);
+  color: var(--brand-ink);
+  background: var(--brand);
+}
+
+.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: none;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 13px 16px;
+  border-top: 1px solid var(--line);
+}
+
+.control {
+  flex: none;
+  min-width: 0;
+  max-width: 260px;
+  padding: 6px 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--surface-2);
+  font: inherit;
+  font-size: 13px;
+}
+
+.control:disabled {
+  opacity: 0.55;
+}
+
+.controlWide {
+  max-width: none;
+  width: 100%;
+}
+
+.feedback {
+  margin: 0;
+  padding: 11px 16px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.error {
+  margin: 4px 0 0;
+  color: var(--danger);
+  font-size: 12.5px;
+}
+
+.help {
+  margin: 4px 0 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.note {
+  margin: 0;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.empty {
+  margin: 0;
+  padding: 13px 16px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.item:last-child {
+  border-bottom: 0;
+}
+
+.itemIdentity {
+  flex: 1;
+  min-width: 0;
+}
+
+.itemKind {
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.runtime {
+  flex: none;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--sunk);
+  color: var(--ink-2);
+  font-size: 11.5px;
+}
+
+.runtime[data-state="active"] {
+  color: var(--ok);
+}
+
+.runtime[data-state="failed"] {
+  color: var(--danger);
+}
+
+.confirmation {
+  flex: 1 0 100%;
+  padding: 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r);
+  background: var(--sunk);
+}
+
+.confirmationTitle {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 560;
+}
+
+.confirmationCopy {
+  margin: 4px 0 10px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.confirmationActions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.bareRow {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  width: 100%;
+}
+
+.meter {
+  appearance: none;
+  display: block;
+  overflow: hidden;
+  width: 100%;
+  height: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.meter::-webkit-progress-bar {
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.meter::-webkit-progress-value {
+  border-radius: 999px;
+  background: var(--ok);
+}
+
+.group[data-cap-status="reached"] .meter::-webkit-progress-value {
+  background: var(--danger);
+}
+
+.capError {
+  flex: 1 0 100%;
+}
+
+.amount {
+  flex: none;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.routes {
+  padding: 0 16px 4px;
+}
+
+.route {
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.route:last-child {
+  border-bottom: 0;
+}
+
+.routeHeading {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 560;
+}
+
+.routeDetail {
+  margin: 3px 0 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.capEditor {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 13px 16px;
+  border-top: 1px solid var(--line);
+}
+
+.capLabel {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 560;
+}
+
+.srOnly {
+  position: absolute;
+  overflow: hidden;
+  clip-path: inset(50%);
+  width: 1px;
+  height: 1px;
+  white-space: nowrap;
+}
+
+.dialog {
+  width: min(520px, calc(100vw - 48px));
+  max-height: min(70vh, 620px);
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.dialog::backdrop {
+  background: rgb(0 0 0 / 38%);
+}
+
+.dialogHeader {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.dialogHeader h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.dialogContent {
+  margin-top: 12px;
+  color: var(--ink-2);
+  font-size: 13.5px;
+}
+
+.dialogContent ol {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.dialogContent li {
+  margin-bottom: 6px;
+}
+
+.dialogActions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.dialogActions a {
+  color: var(--brand);
+  font-size: 13px;
+}

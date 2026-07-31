@@ -8,14 +8,29 @@ import {
   GATED_TOOL_NAMES,
   PROPOSAL_TTL_MS,
   createProposalSummarizers,
-  gateMutatingTool,
+  createToolConfirmationPort,
 } from "../src/agent/confirmation-gate.js";
-import { READ_ONLY_TOOL_NAMES } from "../src/agent/read-memoizer.js";
-import { createPureCoreIntervalsTools } from "../src/agent/intervals-tools.js";
+import type { ProposalSummarizer } from "../src/agent/confirmation-gate.js";
+import { READ_ONLY_TOOL_NAMES } from "../../engine/src/agent/read-memoizer.js";
+import { gateMutatingTool } from "../../engine/src/agent/coach-agent.js";
+import { createTurnContext } from "../../engine/src/agent/turn-context.js";
+import { createPureCoreIntervalsTools } from "../src/sport.js";
+import { createPlatformCalendarMutations } from "../src/athlete-data.js";
 import { COACH_EVENT_TAG } from "../src/agent/event-provenance.js";
 
 function fakeTool(execute: (input: unknown) => unknown): Tool {
   return tool({ inputSchema: zodSchema(z.object({}).passthrough()), execute });
+}
+
+function turnOptions(chatId: string): unknown {
+  return { experimental_context: createTurnContext(null, chatId) };
+}
+
+function port(
+  gate: ConfirmationGate,
+  summarizers: Record<string, ProposalSummarizer>,
+) {
+  return createToolConfirmationPort({ gate, summarizers });
 }
 
 function event(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -133,9 +148,12 @@ describe("ConfirmationGate", () => {
 describe("gateMutatingTool", () => {
   it("passes non-gated tools through by reference", () => {
     const inner = fakeTool(async () => true);
-    expect(
-      gateMutatingTool("memory_write", inner, new ConfirmationGate(), undefined, () => "chat"),
-    ).toBe(inner);
+    expect(gateMutatingTool("memory_write", inner, port(new ConfirmationGate(), {}))).toBe(inner);
+  });
+
+  it("passes every tool through when the host declares no confirmation port", () => {
+    const inner = fakeTool(async () => true);
+    expect(gateMutatingTool("plan_save", inner, undefined)).toBe(inner);
   });
 
   it("proposes without executing and returns only the model-safe shape", async () => {
@@ -144,11 +162,12 @@ describe("gateMutatingTool", () => {
     const wrapped = gateMutatingTool(
       "plan_save",
       fakeTool(execute),
-      gate,
-      async () => ({ summary: "Save plan" }),
-      () => "chat",
+      port(gate, { plan_save: async () => ({ summary: "Save plan" }) }),
     );
-    const result = (await wrapped.execute!({}, {} as never)) as Record<string, unknown>;
+    const result = (await wrapped.execute!({}, turnOptions("chat") as never)) as Record<
+      string,
+      unknown
+    >;
     expect(result).toEqual({ pendingConfirmation: true, summary: "Save plan" });
     expect(Object.keys(result)).toEqual(["pendingConfirmation", "summary"]);
     expect(execute).not.toHaveBeenCalled();
@@ -160,25 +179,19 @@ describe("gateMutatingTool", () => {
   it("fails closed without chat context and passes blocks through verbatim", async () => {
     const execute = vi.fn();
     const gate = new ConfirmationGate();
-    const unavailable = gateMutatingTool(
-      "plan_save",
-      fakeTool(execute),
-      gate,
-      async () => ({ summary: "Save" }),
-      () => undefined,
-    );
+    const summarizers: Record<string, ProposalSummarizer> = {
+      plan_save: async () => ({ summary: "Save" }),
+    };
+    const unavailable = gateMutatingTool("plan_save", fakeTool(execute), port(gate, summarizers));
     expect(await unavailable.execute!({}, {} as never)).toEqual({
       error: "confirmation_unavailable",
     });
+    expect(await unavailable.execute!({}, turnOptions("") as never)).toEqual({
+      error: "confirmation_unavailable",
+    });
 
-    const missingSummarizer = gateMutatingTool(
-      "plan_save",
-      fakeTool(execute),
-      gate,
-      undefined,
-      () => "chat",
-    );
-    expect(await missingSummarizer.execute!({}, {} as never)).toEqual({
+    const missingSummarizer = gateMutatingTool("plan_save", fakeTool(execute), port(gate, {}));
+    expect(await missingSummarizer.execute!({}, turnOptions("chat") as never)).toEqual({
       error: "confirmation_unavailable",
     });
 
@@ -186,11 +199,9 @@ describe("gateMutatingTool", () => {
     const blocked = gateMutatingTool(
       "intervals_delete_workout",
       fakeTool(execute),
-      gate,
-      async () => ({ block }),
-      () => "chat",
+      port(gate, { intervals_delete_workout: async () => ({ block }) }),
     );
-    expect(await blocked.execute!({}, {} as never)).toBe(block);
+    expect(await blocked.execute!({}, turnOptions("chat") as never)).toBe(block);
     expect(gate.peek("chat")).toBeUndefined();
     expect(execute).not.toHaveBeenCalled();
   });
@@ -217,9 +228,7 @@ describe("proposal summarizers and guard reuse", () => {
     ).resolves.toEqual({
       summary: 'Create strength workout "Lower body 45min" on 2030-04-06',
     });
-    await expect(
-      summarizers.intervals_create_strength_workout!({}),
-    ).resolves.toEqual({
+    await expect(summarizers.intervals_create_strength_workout!({})).resolves.toEqual({
       summary: "Create a strength workout",
     });
     await expect(summarizers.plan_save!({ plan: {} })).resolves.toEqual({
@@ -278,16 +287,19 @@ describe("proposal summarizers and guard reuse", () => {
 
   it("re-fetches and re-guards when a confirmed delete runs", async () => {
     const fake = fakeIntervals();
-    const raw = createPureCoreIntervalsTools(fake.client, "UTC").intervals_delete_workout!;
+    const raw = createPureCoreIntervalsTools(
+      fake.client,
+      "UTC",
+      undefined,
+      createPlatformCalendarMutations(fake.client),
+    ).intervals_delete_workout!;
     const gate = new ConfirmationGate();
     const wrapped = gateMutatingTool(
       "intervals_delete_workout",
       raw,
-      gate,
-      createProposalSummarizers({ intervals: fake.client, tz: "UTC" }).intervals_delete_workout,
-      () => "chat",
+      port(gate, createProposalSummarizers({ intervals: fake.client, tz: "UTC" })),
     );
-    await wrapped.execute!({ eventId: 42 }, {} as never);
+    await wrapped.execute!({ eventId: 42 }, turnOptions("chat") as never);
     const proposal = gate.peek("chat")!;
     fake.setEvent(event({ category: "NOTE" }));
     const outcome = await gate.confirm("chat", proposal.nonce);

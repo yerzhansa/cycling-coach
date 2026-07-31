@@ -1,98 +1,5 @@
-import type { FinishReason, LanguageModelUsage, ModelMessage } from "ai";
 import { APICallError } from "@ai-sdk/provider";
-
-export const CHARS_PER_TOKEN = 4;
-export const SAFETY_MARGIN = 1.2;
-export const RESERVE_TOKENS = 20_000;
-export const MIN_PROMPT_BUDGET_TOKENS = 8000;
-export const TIMEOUT_COMPACTION_THRESHOLD = 0.65;
-export const SUMMARIZATION_OVERHEAD_TOKENS = 4096;
-
-// The provider context window can be 1M+ tokens, which would let history budget
-// math build enormous prompts even when product cost/latency want earlier
-// compaction. Cap the ESTIMATOR window (never the provider truth) so budget math
-// uses min(providerWindow, 200k). Smaller provider windows apply unchanged.
-export const MAX_EFFECTIVE_WINDOW_ESTIMATOR_TOKENS = 200_000;
-
-export function effectiveEstimatorWindowTokens(contextWindowTokens: number): number {
-  return Math.min(contextWindowTokens, MAX_EFFECTIVE_WINDOW_ESTIMATOR_TOKENS);
-}
-
-export function messageText(m: ModelMessage): string {
-  const content = m.content;
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  // Non-string content used to estimate as zero, silently undercounting a
-  // part-array message (tool outputs, structured parts) toward the context
-  // budget. Take text parts verbatim and JSON-serialize other structured parts
-  // so their size is counted rather than dropped.
-  let out = "";
-  for (const part of content) {
-    if (typeof part === "string") {
-      out += part;
-    } else if (part !== null && typeof part === "object") {
-      const text = (part as { text?: unknown }).text;
-      out += typeof text === "string" ? text : JSON.stringify(part);
-    }
-  }
-  return out;
-}
-
-export function estimateTokens(text: string): number {
-  return Math.ceil((text.length / CHARS_PER_TOKEN) * SAFETY_MARGIN);
-}
-
-export function estimateMessagesTokens(messages: ModelMessage[]): number {
-  return messages.reduce((sum, m) => sum + estimateTokens(messageText(m)), 0);
-}
-
-// Budget-check token estimate. When a provider usage anchor is available, the
-// tokens the model already saw are anchored to the provider's real count (which
-// tokenizes non-Latin text far more accurately than chars/4) and only messages
-// appended since the anchor are char-estimated. The result is a safer,
-// never-lower floor than the pure char estimate; it never replaces the raw
-// provider context truth.
-export function estimatePromptTokens(params: {
-  messages: ModelMessage[];
-  systemPrompt: string;
-  // Final-step prompt token count from the provider — already includes the
-  // system prompt, so the anchored branch must not add it again.
-  lastUsageTokens?: number;
-  messagesSinceUsageAnchor?: ModelMessage[];
-}): number {
-  const charEstimate =
-    estimateMessagesTokens(params.messages) + estimateTokens(params.systemPrompt);
-  if (params.lastUsageTokens === undefined || params.messagesSinceUsageAnchor === undefined) {
-    return charEstimate;
-  }
-  const anchored =
-    params.lastUsageTokens + estimateMessagesTokens(params.messagesSinceUsageAnchor);
-  return Math.max(charEstimate, anchored);
-}
-
-export function computeHistoryTokenBudget(params: {
-  contextWindowTokens: number;
-  systemPrompt: string;
-  budgetRatio: number;
-}): number {
-  const raw =
-    Math.floor(effectiveEstimatorWindowTokens(params.contextWindowTokens) * params.budgetRatio) -
-    estimateTokens(params.systemPrompt) -
-    RESERVE_TOKENS;
-  return Math.max(raw, MIN_PROMPT_BUDGET_TOKENS);
-}
-
-export function shouldCompact(params: {
-  messages: ModelMessage[];
-  systemPrompt: string;
-  contextWindowTokens: number;
-  lastUsageTokens?: number;
-  messagesSinceUsageAnchor?: ModelMessage[];
-}): boolean {
-  const estimated = estimatePromptTokens(params);
-  const budget = effectiveEstimatorWindowTokens(params.contextWindowTokens) - RESERVE_TOKENS;
-  return estimated > budget;
-}
+import { readRefreshFailureReason } from "../auth/refresh-failure.js";
 
 const OVERFLOW_MESSAGE_PATTERNS = [
   "context_length",
@@ -139,24 +46,6 @@ export function isContextOverflowError(err: unknown): boolean {
   return matchesOverflowText(err.message);
 }
 
-// A successful generation whose finishReason is "length" is normally plain
-// output-length truncation. But when the prompt alone already filled (or
-// exceeded) the real provider window, that same "length" stop means the context
-// window was exhausted, not that the model wrote a long answer. Detect the
-// latter from usage so it can be routed to compaction rescue instead of being
-// persisted as a truncated reply. Uses the RAW provider window (truth), not the
-// estimator cap.
-export function isWindowExceededFinish(params: {
-  finishReason: FinishReason;
-  usage: LanguageModelUsage | undefined;
-  contextWindowTokens: number;
-}): boolean {
-  if (params.finishReason !== "length") return false;
-  const inputTokens = params.usage?.inputTokens;
-  if (typeof inputTokens !== "number" || !Number.isFinite(inputTokens)) return false;
-  return inputTokens >= params.contextWindowTokens;
-}
-
 export function isTimeoutError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const msg = err.message.toLowerCase();
@@ -186,6 +75,7 @@ export type FailureReason =
   | "server_error"
   | "network"
   | "auth"
+  | "reauth"
   | "invalid_request"
   | "unknown";
 
@@ -193,7 +83,8 @@ const NETWORK_ERROR_CODES = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", 
 
 export function isServerError(err: unknown): boolean {
   if (APICallError.isInstance(err)) {
-    return [500, 502, 503, 504, 529].includes(err.statusCode ?? -1);
+    const statusCode = err.statusCode ?? -1;
+    return statusCode >= 500 && statusCode <= 599;
   }
   // A codex 5xx is normalized into a plain Error with this name so both
   // providers route the server-error class identically.
@@ -206,6 +97,7 @@ interface Caused {
 }
 
 export function isNetworkError(err: unknown): boolean {
+  if (err instanceof Error && err.name === "NetworkError") return true;
   // undici hides the conn code on the wrapped inner error, so chase the chain.
   let n = err as Caused | null | undefined;
   const seen = new Set<unknown>();
@@ -225,6 +117,8 @@ export function isInvalidRequestError(err: unknown): boolean {
 }
 
 export function classifyFailure(err: unknown): FailureReason {
+  const refreshFailureReason = readRefreshFailureReason(err);
+  if (refreshFailureReason !== null) return refreshFailureReason;
   if (isContextOverflowError(err)) return "overflow";
   if (isTimeoutError(err)) return "timeout";
   if (isRateLimitError(err)) return "rate_limit";

@@ -1,5 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
@@ -11,6 +19,14 @@ let tempHome: string;
 let origHome: string | undefined;
 let origStdinTTY: boolean | undefined;
 let origStdoutTTY: boolean | undefined;
+
+function invalidUtf8ProfilesBytes(): Buffer {
+  return Buffer.concat([
+    Buffer.from('{"openai-codex":{"type":"oauth","access":"invalid-', "utf8"),
+    Buffer.from([0xc3, 0x28]),
+    Buffer.from('","refresh":"invalid-refresh","expires":4102444800000}}', "utf8"),
+  ]);
+}
 
 beforeEach(() => {
   tempHome = mkdtempSync(join(tmpdir(), "cc-setup-"));
@@ -77,5 +93,37 @@ describe("codex setup flow", () => {
     const saved = JSON.parse(readFileSync(profilesPath, "utf-8"));
     expect(saved["openai-codex"].access).toBe("fake-access");
     expect(saved["openai-codex"].refresh).toBe("fake-refresh");
+  });
+
+  it("re-login quarantines invalid UTF-8 profile bytes and persists new credentials", async () => {
+    const profilesPath = join(tempHome, ".cycling-coach", "auth-profiles.json");
+    const originalBytes = invalidUtf8ProfilesBytes();
+    writeFileSync(profilesPath, originalBytes, { mode: 0o600 });
+    vi.doMock("@clack/prompts", () =>
+      scriptedPrompts({
+        selects: ["openai-codex", "gpt-5.4", "plain"],
+        passwords: ["", ""],
+      }),
+    );
+    vi.doMock("../src/auth/openai-codex-login.js", () => ({
+      runCodexLogin: vi.fn(async () => ({
+        type: "oauth",
+        access: "replacement-access",
+        refresh: "replacement-refresh",
+        expires: 4_102_444_800_000,
+        accountId: "replacement-account",
+      })),
+    }));
+
+    const { runSetup } = await import("../src/setup.js");
+    await runSetup(cyclingBinary);
+
+    expect(readFileSync(`${profilesPath}.corrupt`)).toEqual(originalBytes);
+    expect(statSync(`${profilesPath}.corrupt`).mode & 0o777).toBe(0o600);
+    expect(statSync(profilesPath).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(profilesPath, "utf8"))["openai-codex"]).toMatchObject({
+      access: "replacement-access",
+      refresh: "replacement-refresh",
+    });
   });
 });

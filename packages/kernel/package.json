@@ -1,0 +1,47 @@
+{
+  "name": "@enduragent/kernel",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Portable compute, store, and Reference kernel; I/O flows through injected ports.",
+  "type": "module",
+  "files": ["dist"],
+  "exports": {
+    "./anchors": "./dist/anchors.js",
+    "./ports": "./dist/ports.js",
+    "./store/migrations": "./dist/store/migrations.js",
+    "./store": "./dist/store.js",
+    "./archive": "./dist/archive/index.js",
+    "./store/export": "./dist/store/export/index.js",
+    "./ingest": "./dist/ingest/index.js",
+    "./reference/metrics": "./dist/reference/metrics.js",
+    "./reference/registry": "./dist/reference/registry.js",
+    "./reference/schemas": "./dist/reference/schemas.js",
+    "./reference/validation": "./dist/reference/validation.js",
+    "./reference/cs-resolution": "./dist/reference/cs-resolution.js",
+    "./reference/freshness": "./dist/reference/freshness.js",
+    "./reference/preserve-tokens": "./dist/reference/preserve-tokens.js",
+    "./reference/errors": "./dist/reference/errors.js",
+    "./reference/trademark-policy": "./dist/reference/trademark-policy.js",
+    "./reference/capture": "./dist/reference/capture.js",
+    "./reference/capture-once": "./dist/reference/capture-once.js",
+    "./reference/local-bundle": "./dist/reference/local-bundle.js",
+    "./concurrency": "./dist/concurrency.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@xmldom/xmldom": "0.9.10",
+    "fflate": "0.8.3",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "fast-check": "^4.7.0",
+    "tsup": "^8.4.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
+  },
+  "license": "MIT"
+}

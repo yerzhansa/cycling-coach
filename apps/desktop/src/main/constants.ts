@@ -1,0 +1,46 @@
+export const DESKTOP_SCHEME = "enduragent" as const;
+export const DESKTOP_HOST = "app" as const;
+export const DESKTOP_RENDERER_ORIGIN = "enduragent://app" as const;
+export const DESKTOP_RENDERER_URL = "enduragent://app/index.html" as const;
+export const DESKTOP_CONNECTION_CHANNEL = "desktop:get-daemon-connection" as const;
+export const DESKTOP_TRANSCRIPT_PAGE_CHANNEL = "desktop:get-transcript-page" as const;
+export const DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL =
+  "desktop:list-archived-conversations" as const;
+export const DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL =
+  "desktop:get-archived-transcript-page" as const;
+export const DESKTOP_RELEASE_NOTES_CHANNEL = "desktop:get-release-notes" as const;
+export const DESKTOP_UPDATE_GET_CHANNEL = "desktop:update:get" as const;
+export const DESKTOP_UPDATE_CHECK_CHANNEL = "desktop:update:check" as const;
+export const DESKTOP_UPDATE_RESTART_CHANNEL = "desktop:update:restart" as const;
+export const DESKTOP_UPDATE_STATE_CHANNEL = "desktop:update:state" as const;
+export const DESKTOP_LIFECYCLE_CHANNEL = "desktop:daemon-lifecycle" as const;
+export const DESKTOP_OPEN_EXTERNAL_CHANNEL = "desktop:open-external" as const;
+export const DESKTOP_WINDOW_WIDTH = 1_180 as const;
+export const DESKTOP_WINDOW_HEIGHT = 820 as const;
+export const DESKTOP_WINDOW_MIN_WIDTH = 760 as const;
+export const DESKTOP_WINDOW_MIN_HEIGHT = 600 as const;
+export const UTILITY_EXIT_TIMEOUT_MS = 5_000 as const;
+export const UTILITY_FORCE_EXIT_TIMEOUT_MS = 2_000 as const;
+export const UTILITY_SPAWN_TIMEOUT_MS = 5_000 as const;
+export const UTILITY_TERMINAL_ACK_TIMEOUT_MS = 1_000 as const;
+
+export function createDesktopContentSecurityPolicy(port: number): string {
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new TypeError("invalid daemon port");
+  }
+  return `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src ws://127.0.0.1:${port}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'`;
+}
+
+export function createDesktopDevelopmentContentSecurityPolicy(
+  port: number,
+  developmentUrl: string,
+): string {
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new TypeError("invalid daemon port");
+  }
+  const parsed = new URL(developmentUrl);
+  if (parsed.protocol !== "http:") throw new TypeError("invalid development url");
+  const devPort = parsed.port === "" ? "80" : parsed.port;
+  const devSources = `ws://127.0.0.1:${devPort} ws://localhost:${devPort} http://127.0.0.1:${devPort} http://localhost:${devPort}`;
+  return `default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ws://127.0.0.1:${port} ${devSources}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'`;
+}

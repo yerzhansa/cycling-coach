@@ -238,7 +238,10 @@ describe("legal artifact generation", () => {
       resolve(repoRoot, "packages/cycling-coach/build/license-texts/Apache-2.0.txt"),
       "utf8",
     );
-    const packageRoot = resolve(repoRoot, "packages/core/node_modules/@openrouter/ai-sdk-provider");
+    const packageRoot = resolve(
+      repoRoot,
+      "packages/engine/node_modules/@openrouter/ai-sdk-provider",
+    );
     const aggregate = renderAggregate(
       [
         {

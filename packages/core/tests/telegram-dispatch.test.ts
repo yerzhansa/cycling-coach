@@ -211,7 +211,16 @@ describe("command registration", () => {
     const names = bot.command.mock.calls.map((c: unknown[]) => c[0]);
     expect(names).not.toContain("sync");
     expect(names).not.toContain("snapshot");
-    for (const c of ["start", "plan", "workout", "status", "review", "version", "whatsnew", "update"]) {
+    for (const c of [
+      "start",
+      "plan",
+      "workout",
+      "status",
+      "review",
+      "version",
+      "whatsnew",
+      "update",
+    ]) {
       expect(names).toContain(c);
     }
   });
@@ -450,15 +459,39 @@ describe("retry transformer / classified errors / delivery split", () => {
     expect(someReply(ctx, "Sorry, something went wrong generating your plan")).toBe(false);
   });
 
+  it("generation refresh rejection gives the ChatGPT sign-in recovery path", async () => {
+    const { bot, agent, drainPending } = await buildBot();
+    agent.chat.mockRejectedValue({ refreshFailureReason: "reauth" });
+    const ctx = makeCtx();
+    await getCommand(bot, "plan")(ctx);
+    await drainPending();
+    expect(
+      someReply(ctx, "Your ChatGPT sign-in is no longer valid. Sign in again to continue."),
+    ).toBe(true);
+    expect(someReply(ctx, "Sorry, something went wrong generating your plan")).toBe(false);
+  });
+
+  it("generation refresh rate limit retains the rate-limit copy", async () => {
+    const { bot, agent, drainPending } = await buildBot();
+    agent.chat.mockRejectedValue({
+      refreshFailureReason: "rate_limit",
+      retryAfterMs: 4_000,
+    });
+    const ctx = makeCtx();
+    await getCommand(bot, "plan")(ctx);
+    await drainPending();
+    expect(someReply(ctx, "Rate limited — please try again in ~4 seconds.")).toBe(true);
+  });
+
   it("generation unknown-kind error → caller genericReply (fallback only on unknown)", async () => {
     const { bot, agent, drainPending } = await buildBot();
     agent.chat.mockRejectedValue(new Error("???"));
     const ctx = makeCtx();
     await getCommand(bot, "plan")(ctx);
     await drainPending();
-    expect(someReply(ctx, "Sorry, something went wrong generating your plan. Please try again.")).toBe(
-      true,
-    );
+    expect(
+      someReply(ctx, "Sorry, something went wrong generating your plan. Please try again."),
+    ).toBe(true);
   });
 
   it("generation succeeds but delivery rejects (non-parse) → delivery copy AND the answer is resendable", async () => {
@@ -468,13 +501,17 @@ describe("retry transformer / classified errors / delivery split", () => {
     const ctx = makeCtx({ message: { text: "how's my form?" } });
     ctx.reply.mockImplementation(async (_text: string, options?: Record<string, unknown>) => {
       if (options?.parse_mode === "HTML") {
-        throw new Error("Call to 'sendMessage' failed! (403: Forbidden: bot was blocked by the user)");
+        throw new Error(
+          "Call to 'sendMessage' failed! (403: Forbidden: bot was blocked by the user)",
+        );
       }
       return undefined;
     });
     await getMessageText(bot)(ctx);
     await drainPending();
-    expect(someReply(ctx, "I generated the answer, but Telegram had trouble delivering it.")).toBe(true);
+    expect(someReply(ctx, "I generated the answer, but Telegram had trouble delivering it.")).toBe(
+      true,
+    );
 
     // The resend cache was written before delivery, so a follow-up resend re-emits it.
     const ctx2 = makeCtx({ message: { text: "resend" } });
@@ -683,7 +720,11 @@ describe("typing-indicator heartbeat", () => {
       vi.stubGlobal("setInterval", setIntervalSpy);
       vi.stubGlobal("clearInterval", clearIntervalSpy);
       try {
-        const stop = startTypingHeartbeat(async () => undefined, TYPING_HEARTBEAT_MS, () => {});
+        const stop = startTypingHeartbeat(
+          async () => undefined,
+          TYPING_HEARTBEAT_MS,
+          () => {},
+        );
         expect(setIntervalSpy).toHaveBeenCalledTimes(1);
         expect(unref).toHaveBeenCalledTimes(1);
         expect(clearIntervalSpy).not.toHaveBeenCalled();
@@ -1051,7 +1092,16 @@ describe("command menu (setMyCommands)", () => {
     const names = menuCommands(bot).map((c) => c.command);
     expect(names).not.toContain("sync");
     expect(names).not.toContain("snapshot");
-    for (const c of ["start", "plan", "workout", "status", "review", "version", "whatsnew", "update"]) {
+    for (const c of [
+      "start",
+      "plan",
+      "workout",
+      "status",
+      "review",
+      "version",
+      "whatsnew",
+      "update",
+    ]) {
       expect(names).toContain(c);
     }
   });

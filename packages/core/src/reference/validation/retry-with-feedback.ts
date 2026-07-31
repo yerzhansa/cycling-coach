@@ -8,17 +8,23 @@
  * module only returns flags. Ports from the Reference layer's
  * upstream protocol. See `NOTICE.md` for license attribution.
  */
-import type { LLM } from "../../llm.js";
+import { createHash } from "node:crypto";
+
+import type { LanguageModelPort } from "@enduragent/engine/sport";
 import type { LatestJson } from "../schemas/latest.js";
 import {
   validateRecommendation,
   parseMetaBlock,
   type Layer2Mode,
+  type ResponseHash,
 } from "./validate-response.js";
 import {
   RecommendationMetadataSchema,
   type RecommendationMetadata,
 } from "./recommendation-metadata.js";
+
+const hashResponse: ResponseHash = (response) =>
+  createHash("sha256").update(response).digest("hex").slice(0, 16);
 
 export interface RetryOpts {
   mode: Layer2Mode;
@@ -38,7 +44,7 @@ function parseMetadata(metadata: unknown): RecommendationMetadata | null {
 }
 
 export async function validateAndRetry(
-  llm: Pick<LLM, "generate">,
+  llm: LanguageModelPort,
   _originalUserPrompt: string,
   response: string,
   metadata: unknown,
@@ -74,7 +80,7 @@ Please regenerate your reply, citing only values that exist in the latest snapsh
   });
   const retryText = result.text;
 
-  const retryBlock = parseMetaBlock(retryText);
+  const retryBlock = parseMetaBlock(retryText, hashResponse);
   const retryMeta = retryBlock?.metadataJson;
   // Second validation is FINAL — the cap is one retry, no loop back here.
   const second = validateRecommendation(retryText, retryMeta, opts.snapshot);

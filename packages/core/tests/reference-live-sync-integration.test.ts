@@ -10,16 +10,26 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { fetchLiveBundle, type BundleFetchClient } from "../src/reference/sync/fetch-live-bundle.js";
+import {
+  fetchLiveBundle,
+  type BundleFetchClient,
+} from "../src/reference/sync/fetch-live-bundle.js";
 import { buildMetricInput } from "../src/reference/sync/fixture-bridge.js";
 import { computeDerivedMetrics } from "../src/reference/sync/compute-derived-metrics.js";
 import { runAdaptersForActivities } from "../src/reference/sport-adapter-dispatcher.js";
-import { composeProvenance, readAnalysisBasis } from "../src/reference/sync/fetch-reference-data.js";
+import {
+  composeProvenance,
+  readAnalysisBasis,
+} from "../src/reference/sync/fetch-reference-data.js";
 import type { ReferenceSportAdapter } from "../src/reference/sport-adapter.js";
 import type { IntervalsActivityType } from "../src/sport.js";
 import type { FetchedReference } from "../src/reference/sync/run-sync.js";
 import { gateLatestJson } from "../src/reference/validation/sync-gate.js";
-import { LatestJsonSchema, LATEST_SCHEMA_VERSION, type LatestJson } from "../src/reference/schemas/latest.js";
+import {
+  LatestJsonSchema,
+  LATEST_SCHEMA_VERSION,
+  type LatestJson,
+} from "../src/reference/schemas/latest.js";
 import { METRIC_REGISTRY } from "../src/reference/metrics/registry.js";
 import { safeReadJson } from "../src/io/safe-read-json.js";
 
@@ -67,22 +77,67 @@ function fakeClient(): BundleFetchClient {
     sportInfo: [{ type: "Ride", eftp: 250 }],
   }));
   return {
-    athlete: { get: async () => ({ ok: true, value: { sportSettings: [{ types: ["Ride"], ftp: 250, indoor_ftp: 240, lthr: 165 }] } }) },
+    athlete: {
+      get: async () => ({
+        ok: true,
+        value: { sportSettings: [{ types: ["Ride"], ftp: 250, indoor_ftp: 240, lthr: 165 }] },
+      }),
+    },
     activities: {
       list: async () => ({ ok: true, value: activities }),
-      getStreams: async () => ({ ok: true, value: { dfa_a1: [1, 0.8], heartrate: [140, 145], watts: [200, 210] } }),
+      getStreams: async () => ({
+        ok: true,
+        value: { dfa_a1: [1, 0.8], heartrate: [140, 145], watts: [200, 210] },
+      }),
     },
     wellness: { list: async () => ({ ok: true, value: wellness }) },
+    events: {
+      list: async () => ({
+        ok: true,
+        value: [
+          {
+            id: 1,
+            category: "WORKOUT",
+            startDateLocal: "2026-06-08T08:00:00",
+            name: "Past ride",
+            type: "Ride",
+          },
+          {
+            id: 2,
+            category: "WORKOUT",
+            startDateLocal: "2026-06-10T08:00:00",
+            name: "Future ride",
+            type: "VirtualRide",
+          },
+          {
+            id: 3,
+            category: "WORKOUT",
+            startDateLocal: "2026-06-10T09:00:00",
+            name: "Run",
+            type: "Run",
+          },
+          { id: 4, category: "WORKOUT", startDateLocal: "2026-06-11T09:00:00", name: "Untyped" },
+        ],
+      }),
+    },
   };
 }
 
 /** Compose exactly as the production `fetchOnce` does — through the shared
  *  `composeProvenance` helper, so the test exercises the production logic. */
 async function composeFetched(): Promise<FetchedReference> {
-  const live = await fetchLiveBundle({ client: fakeClient(), signal: new AbortController().signal, now: NOW, throttleMs: 0 });
+  const live = await fetchLiveBundle({
+    client: fakeClient(),
+    signal: new AbortController().signal,
+    now: NOW,
+    sportTypes: SPORT_TYPES,
+    throttleMs: 0,
+  });
   const runs = runAdaptersForActivities([CYCLING_ADAPTER], SPORT_TYPES, live.bundle.activities);
   const { omitPowerFamily, meta: baseMeta } = composeProvenance(runs);
-  const derived_metrics = computeDerivedMetrics(buildMetricInput(live.bundle, live.frozenNow), { omitPowerFamily });
+  const derived_metrics = computeDerivedMetrics(buildMetricInput(live.bundle, live.frozenNow), {
+    omitPowerFamily,
+  });
   const meta = baseMeta
     ? { ...baseMeta, analysisBasis: readAnalysisBasis(derived_metrics) }
     : undefined;
@@ -93,7 +148,7 @@ async function composeFetched(): Promise<FetchedReference> {
       derived_metrics,
       ...(meta ? { derived_metrics_meta: meta } : {}),
       recent_activities: live.recentActivities,
-      planned_workouts: [],
+      planned_workouts: live.plannedWorkouts,
       wellness_data: live.wellnessData,
     },
     history: { daily: [], weekly: [], monthly: [] },
@@ -114,7 +169,11 @@ describe("live-data bridge integration", () => {
   it("produces a latest envelope that parses against LatestJsonSchema", async () => {
     const fetched = await composeFetched();
     const onDisk = {
-      metadata: { schema_version: LATEST_SCHEMA_VERSION, last_updated: NOW.toISOString(), freshness: "fresh" as const },
+      metadata: {
+        schema_version: LATEST_SCHEMA_VERSION,
+        last_updated: NOW.toISOString(),
+        freshness: "fresh" as const,
+      },
       ...fetched.latest,
     };
     expect(() => LatestJsonSchema.parse(onDisk)).not.toThrow();
@@ -134,7 +193,11 @@ describe("live-data bridge integration", () => {
     expect(fetched.latest.derived_metrics_meta).toEqual(tag);
 
     const onDisk = {
-      metadata: { schema_version: LATEST_SCHEMA_VERSION, last_updated: NOW.toISOString(), freshness: "fresh" as const },
+      metadata: {
+        schema_version: LATEST_SCHEMA_VERSION,
+        last_updated: NOW.toISOString(),
+        freshness: "fresh" as const,
+      },
       ...fetched.latest,
     };
     const dir = mkdtempSync(join(tmpdir(), "reference-latest-"));
@@ -149,17 +212,34 @@ describe("live-data bridge integration", () => {
   it("writes a populated, full-registry derived_metrics block", async () => {
     const fetched = await composeFetched();
     const derived = fetched.latest.derived_metrics as Record<string, unknown>;
+    const planned = fetched.latest.planned_workouts as readonly { readonly id: number }[];
     expect(Object.keys(derived).sort()).toEqual(Object.keys(METRIC_REGISTRY).sort());
     expect(fetched.latest.recent_activities.length).toBeGreaterThan(0);
+    expect(planned.map((event) => event.id)).toEqual([2]);
+    expect(derived.consistency_index).toBe(1);
+    expect(derived.consistency_details).toMatchObject({
+      planned_days: 1,
+      matched_days: 1,
+    });
   });
 
   it("handles an empty bundle (zero activities/wellness): gate passes, full key-set, empty recent_activities", async () => {
     const emptyClient: BundleFetchClient = {
       athlete: { get: async () => ({ ok: true, value: {} }) },
-      activities: { list: async () => ({ ok: true, value: [] }), getStreams: async () => ({ ok: true, value: [] }) },
+      activities: {
+        list: async () => ({ ok: true, value: [] }),
+        getStreams: async () => ({ ok: true, value: [] }),
+      },
       wellness: { list: async () => ({ ok: true, value: [] }) },
+      events: { list: async () => ({ ok: true, value: [] }) },
     };
-    const live = await fetchLiveBundle({ client: emptyClient, signal: new AbortController().signal, now: NOW, throttleMs: 0 });
+    const live = await fetchLiveBundle({
+      client: emptyClient,
+      signal: new AbortController().signal,
+      now: NOW,
+      sportTypes: SPORT_TYPES,
+      throttleMs: 0,
+    });
     runAdaptersForActivities([CYCLING_ADAPTER], SPORT_TYPES, live.bundle.activities);
     const derived_metrics = computeDerivedMetrics(buildMetricInput(live.bundle, live.frozenNow));
     const fetched: FetchedReference = {

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2" xmlns:ns3="http://www.garmin.com/xmlschemas/ActivityExtension/v2">
+  <Activities>
+    <Activity Sport="Biking">
+      <Id>1998-07-04T12:00:00Z</Id>
+      <Lap StartTime="1998-07-04T12:00:00Z">
+        <TotalTimeSeconds>2</TotalTimeSeconds>
+        <DistanceMeters>20</DistanceMeters>
+        <Intensity>Active</Intensity>
+        <TriggerMethod>Manual</TriggerMethod>
+        <Track>
+          <Trackpoint>
+            <Time>1998-07-04T12:00:00Z</Time>
+            <Position><LatitudeDegrees>-46.000000</LatitudeDegrees><LongitudeDegrees>-127.000000</LongitudeDegrees></Position>
+            <AltitudeMeters>10</AltitudeMeters>
+            <DistanceMeters>0</DistanceMeters>
+            <HeartRateBpm><Value>120</Value></HeartRateBpm>
+            <Cadence>80</Cadence>
+            <Extensions><ns3:TPX><ns3:Speed>10</ns3:Speed><ns3:Watts>180</ns3:Watts></ns3:TPX></Extensions>
+          </Trackpoint>
+          <Trackpoint>
+            <Time>1998-07-04T12:00:01Z</Time>
+            <Position><LatitudeDegrees>-46.000000</LatitudeDegrees><LongitudeDegrees>-126.999871</LongitudeDegrees></Position>
+            <AltitudeMeters>11</AltitudeMeters>
+            <DistanceMeters>10</DistanceMeters>
+            <HeartRateBpm><Value>122</Value></HeartRateBpm>
+            <Cadence>81</Cadence>
+            <Extensions><ns3:TPX><ns3:Speed>10</ns3:Speed><ns3:Watts>190</ns3:Watts></ns3:TPX></Extensions>
+          </Trackpoint>
+          <Trackpoint>
+            <Time>1998-07-04T12:00:02Z</Time>
+            <Position><LatitudeDegrees>-46.000000</LatitudeDegrees><LongitudeDegrees>-126.999742</LongitudeDegrees></Position>
+            <AltitudeMeters>12</AltitudeMeters>
+            <DistanceMeters>20</DistanceMeters>
+            <HeartRateBpm><Value>124</Value></HeartRateBpm>
+            <Cadence>82</Cadence>
+            <Extensions><ns3:TPX><ns3:Speed>10</ns3:Speed><ns3:Watts>200</ns3:Watts></ns3:TPX></Extensions>
+          </Trackpoint>
+        </Track>
+      </Lap>
+    </Activity>
+  </Activities>
+</TrainingCenterDatabase>

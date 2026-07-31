@@ -24,6 +24,21 @@ import {
   FixtureSchema,
 } from "../src/reference/schemas/inputs.js";
 
+describe("PlannedEventSchema", () => {
+  it.each([{}, { type: null, name: null }, { type: "Ride", name: "Endurance" }])(
+    "accepts absent and nullish event provenance %#",
+    (extension) => {
+      const event = {
+        id: 1,
+        category: "WORKOUT",
+        start_date_local: "2026-07-20T08:00:00",
+        ...extension,
+      };
+      expect(PlannedEventSchema.parse(event)).toEqual(event);
+    },
+  );
+});
+
 describe("ActivitySchema (z.looseObject)", () => {
   it("round-trips a realistic intervals.icu activity preserving every field, including TP-trademark fields", () => {
     const realisticActivity = {
@@ -141,7 +156,10 @@ describe("ActivitySchema (z.looseObject)", () => {
         { id: "Z2", secs: 1800 },
         { id: "Z3", secs: 2400 },
       ],
-      hr_zone_times: [{ id: "Z1", secs: 500 }, { id: "Z2", secs: 1700 }],
+      hr_zone_times: [
+        { id: "Z1", secs: 500 },
+        { id: "Z2", secs: 1700 },
+      ],
     };
     expect(ActivitySchema.parse(objectFormActivity)).toEqual(objectFormActivity);
   });
@@ -416,9 +434,7 @@ describe("Curve / stream / athlete input schemas", () => {
 
   it("AthleteSchema round-trips the sportSettings array the upstream feeds _build_sport_thresholds", () => {
     const athlete = {
-      sportSettings: [
-        { types: ["Ride", "VirtualRide"], ftp: 200, indoor_ftp: 195, lthr: 168 },
-      ],
+      sportSettings: [{ types: ["Ride", "VirtualRide"], ftp: 200, indoor_ftp: 195, lthr: 168 }],
     };
     expect(AthleteSchema.parse(athlete)).toEqual(athlete);
   });

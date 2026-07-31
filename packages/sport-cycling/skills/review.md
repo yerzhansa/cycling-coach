@@ -5,71 +5,30 @@ Cycling-specific analysis content for workout reviews. The structural rules
 the trademark substitution table also lives there, and the session-cluster gap is a
 sport-persona field Core renders. This file teaches the analysis.
 
-## Decoupling — what the number means
+## Canonical activity evidence
 
-Decoupling is the percentage drift between heart rate and power across the session.
-Lower is better; positive = HR drift up at same power = aerobic fatigue.
+The activity list provides a bounded summary: `workoutId`, `sessionSequence`,
+`isMultisport`, `sport`, `subSport`, `isTransition`, start/local date, elapsed/timer/
+moving duration, and distance. Activity detail adds bounded `laps` with sequence,
+start, elapsed/timer duration, and distance.
 
-| Decoupling | Read as |
-|---|---|
-| < 2% | Excellent aerobic durability. Athlete is well-fueled and within their aerobic capacity. |
-| 2–5% | Normal for endurance work. Mild aerobic stress. |
-| 5–10% | Moderate fade. Worth flagging — fueling, sleep, intensity, or duration is at the edge. |
-| > 10% | Significant fade. Question 2 of the 3-questions framework gets attention here. |
+These fields do not contain planned targets, plan compliance, intensity, load, power,
+heart rate, cadence, or wellness. Do not infer those values from lap timing or distance.
+Tier C stream data may add recorded power, heart rate, cadence, time, altitude, and
+other requested public channels; use only channels that are actually present. The
+current stream shaper summarizes each channel independently and does not preserve
+trustworthy timestamp or cross-channel alignment. Use only minimum, maximum, and mean
+as descriptive recorded observations. Those independently summarized statistics alone
+cannot establish session quality, recovery, readiness, or justify changing the next
+session. Do not calculate pacing, duration-based best efforts,
+quartile trends, decoupling, HR recovery, fade patterns, or indoor/outdoor comparisons.
 
-These bands assume Z2/endurance work. Threshold and above will drift more by design,
-so 5–8% on a sweet-spot or threshold session is the expected physiological response,
-not fade — interpret accordingly.
+## Multisport evidence
 
-Per-quartile decoupling (Tier C only) reveals fade *pattern*: stable across quartiles =
-strong day; rising in Q3/Q4 = late fade (typically fueling or pacing); rising linearly
-from Q1 = was hot from the start.
-
-## Best-efforts duration ladder
-
-For Tier C reviews of races and structured Tier B reviews when the athlete
-crushed a peak effort, identify standard best-efforts durations:
-
-| Duration | What it tells you |
-|---|---|
-| 1 min | Anaerobic / VO2max ceiling. Top 1-min in 6 weeks = peaking. |
-| 5 min | VO2max-aligned. Tracks fitness build directly. |
-| 20 min | Threshold proxy. Best 20-min of the year usually within FTP test territory. |
-| 60 min | True endurance threshold. Longer races (~1 h time trial) live here. |
-
-Compare to memory's stored FTP if available. The 20-min FTP test convention already
-applies a 0.95 multiplier, so a best 20-min around 105% FTP is consistent with current
-FTP — not under-estimated. A best 20-min above ~108% FTP is the real signal that FTP
-may be under-estimated. A best 20-min of ~88% FTP on a hard ride suggests fatigue or
-that the day didn't elicit a max effort.
-
-## Cycling fade patterns
-
-Common signal patterns to recognize in races and long Tier B sessions:
-
-- **Even effort**: power and HR both stable across quartiles. The athlete paced well.
-  Praise it.
-- **Early-hot**: Q1 power 5–10% above Q4 average; HR rises proportionally. Athlete went
-  out too hard. Question 2: "next race, hold first 15 min at target".
-- **Late-fade**: Q1–Q3 power steady, Q4 drops 8–15% with HR holding or rising. Aerobic
-  exhaustion. Often fueling or duration. Question 3: "fuel earlier, finish stronger".
-- **Surge-recover**: power oscillates ±15% in long bursts (group rides, hilly terrain).
-  Not a fade — an intentional or terrain-driven pattern. Don't flag as a problem unless
-  it impacted the main set.
-- **HR-led decoupling**: power steady, HR rising 8–10 bpm across the ride. Heat,
-  dehydration, or under-recovery. Tier B note: "consider hydration / sleep before
-  next hard day".
-
-## Indoor vs outdoor signals
-
-Reviewing differs by venue:
-
-- **Indoor**: HR runs ~3–5 bpm higher at the same power even with a fan. Coasting is
-  near-zero (no terrain), so VI is naturally close to 1.0. Sweat rate is higher → flag
-  hydration if duration > 60 min.
-- **Outdoor**: VI > 1.05 is normal due to terrain and traffic. Don't penalize the
-  athlete for high VI on outdoor rides; only flag if a structured interval session
-  shows VI > 1.10 (suggesting they didn't hold steady on what should have been steady).
+A recorded workout can contain more than three ordered sport and transition activities.
+Summarize every same-`workoutId` activity in `sessionSequence` order. If detail is
+requested for only one leg, say which legs were not detailed and do not use that leg
+alone to judge the whole workout or change the next session.
 
 ## Show numbers — the cycling rows
 
@@ -77,19 +36,28 @@ Core's review-rules block owns the show-numbers trigger, the tier-escalation lad
 the `| Metric | Value |` skeleton, and the compact-table formatting rule. This
 section names the cycling rows that fill that skeleton.
 
-Headline table rows:
+Summary/detail table rows:
 
-| Metric | Value |
-|---|---|
-| Duration (moving) | mm:ss |
-| Distance | km |
-| Load | int |
-| Intensity | 0.NN |
-| Avg power / weighted avg power | W |
-| Avg HR / max HR | bpm |
-| Avg cadence | rpm |
-| Fitness / Fatigue / Form | n / n / n |
+| Metric                   | Value                                                                          |
+| ------------------------ | ------------------------------------------------------------------------------ |
+| Date / start             | local date; local time only with timezone offset, otherwise UTC or unavailable |
+| Sport                    | sport / sub-sport                                                              |
+| Elapsed / timer / moving | hh:mm:ss / hh:mm:ss / hh:mm:ss                                                 |
+| Distance                 | km                                                                             |
+| Recorded workout         | session sequence; multisport / transition when applicable                      |
 
-When `icu_intervals` is present, the per-rep table columns are:
+For Tier C, append only stream rows backed by requested channels:
 
-| Rep | Target W | Actual avg W | Avg HR | Time |
+| Metric             | Value |
+| ------------------ | ----- |
+| Mean / max power   | W     |
+| Mean / max HR      | bpm   |
+| Mean cadence       | rpm   |
+| Min / max altitude | m     |
+
+When bounded `laps` are present, the lap table columns are:
+
+| Lap | Start (with timezone basis) | Elapsed | Timer | Distance |
+| --- | --------------------------- | ------- | ----- | -------- |
+
+Render nullable values as unavailable rather than zero.

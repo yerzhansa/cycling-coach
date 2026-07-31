@@ -5,13 +5,22 @@ import {
   renameSync,
   copyFileSync,
   existsSync,
+  closeSync,
+  constants,
+  fchmodSync,
+  fsyncSync,
+  fstatSync,
+  linkSync,
+  lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   unlinkSync,
 } from "node:fs";
 import { join } from "node:path";
 import type { ModelMessage } from "ai";
-import { messageText } from "./token-utils.js";
+import type { ChatLineage } from "@enduragent/engine";
+import { messageText } from "@enduragent/engine/sport";
 import {
   UNKNOWN_PROVENANCE,
   getMessageProvenance,
@@ -28,10 +37,63 @@ const MS_PER_DAY = 86_400_000;
 export const TURN_FAILURE_MARKER =
   "[This turn did not complete — the message above was not answered.]";
 
+interface FileIdentity {
+  readonly dev: number | bigint;
+  readonly ino: number | bigint;
+}
+
+interface ChatStoreHooks {
+  readonly syncFile?: (descriptor: number) => void;
+  readonly syncDirectory?: (descriptor: number) => void;
+}
+
+interface DurableChatReset {
+  readonly resetId: string;
+  readonly boundaryAt: string;
+}
+
+const DURABLE_RESET_OPERATIONS = new WeakMap<
+  ChatStore,
+  (chatId: string, reset: DurableChatReset) => void
+>();
+const CHAT_STORE_HOOKS = new WeakMap<ChatStore, ChatStoreHooks>();
+
+function isMissing(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+}
+
+function isExists(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === "EEXIST";
+}
+
+function identity(stats: import("node:fs").Stats): FileIdentity {
+  return { dev: stats.dev, ino: stats.ino };
+}
+
+function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function isStrictPrivateDirectory(stats: import("node:fs").Stats): boolean {
+  return !stats.isSymbolicLink() && stats.isDirectory() && (stats.mode & 0o7777) === 0o700;
+}
+
+function isStrictPrivateFile(stats: import("node:fs").Stats, links: 1 | 2): boolean {
+  return (
+    !stats.isSymbolicLink() &&
+    stats.isFile() &&
+    (stats.mode & 0o7777) === 0o600 &&
+    stats.nlink === links
+  );
+}
+
 function parseArchiveTimestampMs(suffix: string): number | null {
   // archiveAndReset writes toISOString() with ":" replaced by "-"; reverse
-  // only the time-part dashes before parsing.
-  const ms = Date.parse(suffix.replace(/T(\d{2})-(\d{2})-(\d{2})/, "T$1:$2:$3"));
+  // only the time-part dashes before parsing. Transactional reset archives
+  // append a reset ID after the timestamp; it is identity, not time.
+  const encodedTimestamp = /^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z)/.exec(suffix)?.[1];
+  if (encodedTimestamp === undefined) return null;
+  const ms = Date.parse(encodedTimestamp.replace(/T(\d{2})-(\d{2})-(\d{2})/, "T$1:$2:$3"));
   return Number.isNaN(ms) ? null : ms;
 }
 
@@ -43,6 +105,7 @@ interface JsonlLine {
   assembledHash?: string;
   provider?: string;
   model?: string;
+  lineageVersion?: string;
   provenance?: SourceProvenance;
 }
 
@@ -59,7 +122,13 @@ function parseSessionLine(line: string): JsonlLine | null {
   const v = value as Record<string, unknown>;
   if (typeof v.role !== "string" || !VALID_ROLES.has(v.role)) return null;
   if (typeof v.content !== "string" || typeof v.ts !== "string") return null;
-  for (const k of ["templateHash", "assembledHash", "provider", "model"] as const) {
+  for (const k of [
+    "templateHash",
+    "assembledHash",
+    "provider",
+    "model",
+    "lineageVersion",
+  ] as const) {
     if (k in v && typeof v[k] !== "string") return null;
   }
   if ("provenance" in v && !isSourceProvenance(v.provenance)) {
@@ -77,13 +146,66 @@ function sameProvenance(left: SourceProvenance, right: SourceProvenance): boolea
 }
 
 export class ChatStore {
-  private sessionsDir: string;
-  private resetArchiveRetentionDays: number;
+  private readonly sessionsDir: string;
+  private readonly resetArchiveRetentionDays: number;
+  private readonly sessionsDirectoryIdentity: FileIdentity;
 
   constructor(dataDir: string, resetArchiveRetentionDays = 0) {
     this.sessionsDir = join(dataDir, "sessions");
     this.resetArchiveRetentionDays = resetArchiveRetentionDays;
-    mkdirSync(this.sessionsDir, { recursive: true, mode: 0o700 });
+    let created = false;
+    try {
+      mkdirSync(this.sessionsDir, { mode: 0o700 });
+      created = true;
+    } catch (error) {
+      if (!isExists(error)) throw error;
+    }
+
+    const beforeOpen = lstatSync(this.sessionsDir);
+    if (beforeOpen.isSymbolicLink() || !beforeOpen.isDirectory()) {
+      throw new Error("Sessions directory is unsafe.");
+    }
+    let descriptor: number;
+    try {
+      descriptor = openSync(
+        this.sessionsDir,
+        constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+      );
+    } catch {
+      throw new Error("Sessions directory is unsafe.");
+    }
+    try {
+      let hardened = true;
+      if (created || !isStrictPrivateDirectory(fstatSync(descriptor))) {
+        try {
+          fchmodSync(descriptor, 0o700);
+        } catch {
+          hardened = false;
+        }
+      }
+      const opened = fstatSync(descriptor);
+      const afterOpen = lstatSync(this.sessionsDir);
+      if (
+        !hardened ||
+        !isStrictPrivateDirectory(opened) ||
+        !isStrictPrivateDirectory(afterOpen) ||
+        !sameIdentity(identity(beforeOpen), identity(opened)) ||
+        !sameIdentity(identity(opened), identity(afterOpen))
+      ) {
+        throw new Error("Sessions directory is unsafe.");
+      }
+      this.sessionsDirectoryIdentity = identity(opened);
+    } finally {
+      closeSync(descriptor);
+    }
+
+    DURABLE_RESET_OPERATIONS.set(this, (chatId, reset) => {
+      const path = this.filePath(chatId);
+      const ts = reset.boundaryAt.replace(/:/g, "-");
+      const archivePath = `${path}.reset.${ts}.${reset.resetId}`;
+      this.completeDurableReset(path, archivePath);
+      this.pruneArchives(chatId, "reset");
+    });
   }
 
   private filePath(chatId: string): string {
@@ -147,13 +269,7 @@ export class ChatStore {
     chatId: string,
     role: "user" | "assistant",
     content: string,
-    lineage?: {
-      templateHash: string;
-      assembledHash: string;
-      provider: string;
-      model: string;
-      provenance?: SourceProvenance;
-    },
+    lineage?: ChatLineage & { provenance?: SourceProvenance },
   ): void {
     // An empty assistant reply pollutes the next turn's loaded history. Skip it
     // and warn — never throw, so a deliver-first turn can't crash on a guarded
@@ -163,7 +279,10 @@ export class ChatStore {
       return;
     }
     const path = this.filePath(chatId);
-    const line: JsonlLine = { role, content, ts: new Date().toISOString(), ...lineage };
+    const line: JsonlLine =
+      lineage === undefined
+        ? { role, content, ts: new Date().toISOString() }
+        : { role, content, ts: new Date().toISOString(), ...lineage };
     appendFileSync(path, JSON.stringify(line) + "\n", { encoding: "utf-8", mode: 0o600 });
   }
 
@@ -171,13 +290,7 @@ export class ChatStore {
     chatId: string,
     userContent: string,
     assistantContent: string,
-    lineage: {
-      templateHash: string;
-      assembledHash: string;
-      provider: string;
-      model: string;
-      provenance?: SourceProvenance;
-    },
+    lineage: ChatLineage & { provenance?: SourceProvenance },
   ): void {
     // Keep the atomic pair honest: an empty assistant reply must never persist,
     // and a lone user line with no reply is the same context pollution. Skip the
@@ -276,11 +389,17 @@ export class ChatStore {
 
   archiveAndReset(chatId: string): void {
     const path = this.filePath(chatId);
-    if (!existsSync(path)) return;
-
     const ts = new Date().toISOString().replace(/:/g, "-");
     const archivePath = `${path}.reset.${ts}`;
+    const sessionExists = existsSync(path);
+    const archiveExists = existsSync(archivePath);
+    if (sessionExists && archiveExists) {
+      throw new Error("Reset archive and active session both exist.");
+    }
+    if (!sessionExists) return;
+
     renameSync(path, archivePath);
+    this.syncSessionsDirectory();
     this.pruneArchives(chatId, "reset");
   }
 
@@ -327,4 +446,191 @@ export class ChatStore {
       }
     }
   }
+
+  private syncSessionsDirectory(): void {
+    this.withSessionsDirectory((descriptor) => {
+      this.syncDirectory(descriptor);
+      this.assertSessionsDirectoryStable(descriptor);
+    });
+  }
+
+  private completeDurableReset(path: string, archivePath: string): void {
+    this.withSessionsDirectory((directoryDescriptor) => {
+      const readStats = (candidate: string) => {
+        try {
+          return lstatSync(candidate);
+        } catch (error) {
+          if (isMissing(error)) return null;
+          throw error;
+        }
+      };
+      const active = readStats(path);
+      const archive = readStats(archivePath);
+      if (active === null) {
+        if (archive !== null) {
+          if (!isStrictPrivateFile(archive, 1)) {
+            throw new Error("Reset archive target is unsafe.");
+          }
+          this.assertSessionsDirectoryStable(directoryDescriptor);
+          this.syncDirectory(directoryDescriptor);
+          this.assertSessionsDirectoryStable(directoryDescriptor);
+        }
+        return;
+      }
+      if (archive !== null) {
+        this.assertLinkedResetTargets(active, archive);
+        this.syncStableSessionFile(directoryDescriptor, path, identity(active), 2);
+        this.assertLinkedResetPaths(directoryDescriptor, path, archivePath, identity(active));
+      } else {
+        if (!isStrictPrivateFile(active, 1)) {
+          throw new Error("Active reset session target is unsafe.");
+        }
+        this.syncStableSessionFile(directoryDescriptor, path, identity(active), 1);
+        linkSync(path, archivePath);
+        this.assertLinkedResetPaths(directoryDescriptor, path, archivePath, identity(active));
+        this.syncDirectory(directoryDescriptor);
+        this.assertLinkedResetPaths(directoryDescriptor, path, archivePath, identity(active));
+      }
+
+      this.assertLinkedResetPaths(directoryDescriptor, path, archivePath, identity(active));
+      unlinkSync(path);
+      this.assertSessionsDirectoryStable(directoryDescriptor);
+      this.syncDirectory(directoryDescriptor);
+      this.assertSessionsDirectoryStable(directoryDescriptor);
+      const completed = lstatSync(archivePath);
+      if (
+        !isStrictPrivateFile(completed, 1) ||
+        !sameIdentity(identity(completed), identity(active))
+      ) {
+        throw new Error("Reset archive did not complete safely.");
+      }
+    });
+  }
+
+  private syncStableSessionFile(
+    directoryDescriptor: number,
+    path: string,
+    expectedIdentity: FileIdentity,
+    expectedLinks: 1 | 2,
+  ): void {
+    const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const opened = fstatSync(descriptor);
+      const current = lstatSync(path);
+      if (
+        !isStrictPrivateFile(opened, expectedLinks) ||
+        !isStrictPrivateFile(current, expectedLinks) ||
+        !sameIdentity(identity(opened), expectedIdentity) ||
+        !sameIdentity(identity(current), expectedIdentity)
+      ) {
+        throw new Error("Active reset session was raced.");
+      }
+      this.assertSessionsDirectoryStable(directoryDescriptor);
+      (CHAT_STORE_HOOKS.get(this)?.syncFile ?? fsyncSync)(descriptor);
+      const synced = fstatSync(descriptor);
+      const afterSync = lstatSync(path);
+      if (
+        !isStrictPrivateFile(synced, expectedLinks) ||
+        !isStrictPrivateFile(afterSync, expectedLinks) ||
+        !sameIdentity(identity(synced), expectedIdentity) ||
+        !sameIdentity(identity(afterSync), expectedIdentity)
+      ) {
+        throw new Error("Active reset session was raced.");
+      }
+      this.assertSessionsDirectoryStable(directoryDescriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+  }
+
+  private assertLinkedResetTargets(
+    active: import("node:fs").Stats,
+    archive: import("node:fs").Stats,
+  ): void {
+    if (
+      !isStrictPrivateFile(active, 2) ||
+      !isStrictPrivateFile(archive, 2) ||
+      !sameIdentity(identity(active), identity(archive))
+    ) {
+      throw new Error("Reset archive and active session do not agree.");
+    }
+  }
+
+  private assertLinkedResetPaths(
+    directoryDescriptor: number,
+    path: string,
+    archivePath: string,
+    expectedIdentity: FileIdentity,
+  ): void {
+    const active = lstatSync(path);
+    const archive = lstatSync(archivePath);
+    this.assertLinkedResetTargets(active, archive);
+    if (!sameIdentity(identity(active), expectedIdentity)) {
+      throw new Error("Reset archive publication was raced.");
+    }
+    this.assertSessionsDirectoryStable(directoryDescriptor);
+  }
+
+  private withSessionsDirectory<T>(operation: (descriptor: number) => T): T {
+    const beforeOpen = lstatSync(this.sessionsDir);
+    if (
+      !isStrictPrivateDirectory(beforeOpen) ||
+      !sameIdentity(identity(beforeOpen), this.sessionsDirectoryIdentity)
+    ) {
+      throw new Error("Sessions directory is unsafe.");
+    }
+    const descriptor = openSync(
+      this.sessionsDir,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    );
+    try {
+      this.assertSessionsDirectoryStable(descriptor);
+      return operation(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+  }
+
+  private assertSessionsDirectoryStable(descriptor: number): void {
+    const current = lstatSync(this.sessionsDir);
+    const opened = fstatSync(descriptor);
+    if (
+      !isStrictPrivateDirectory(current) ||
+      !isStrictPrivateDirectory(opened) ||
+      !sameIdentity(identity(current), this.sessionsDirectoryIdentity) ||
+      !sameIdentity(identity(opened), this.sessionsDirectoryIdentity)
+    ) {
+      throw new Error("Sessions directory is unsafe.");
+    }
+  }
+
+  private syncDirectory(descriptor: number): void {
+    (CHAT_STORE_HOOKS.get(this)?.syncDirectory ?? fsyncSync)(descriptor);
+  }
+}
+
+export function createChatStoreWithHooks(
+  dataDir: string,
+  resetArchiveRetentionDays: number,
+  hooks: ChatStoreHooks,
+): ChatStore {
+  const store = new ChatStore(dataDir, resetArchiveRetentionDays);
+  CHAT_STORE_HOOKS.set(store, hooks);
+  return store;
+}
+
+export function archiveAndResetDurably(
+  store: ChatStore,
+  chatId: string,
+  reset: DurableChatReset,
+): void {
+  if (
+    !/^[a-f0-9]{64}$/.test(reset.resetId) ||
+    new Date(reset.boundaryAt).toISOString() !== reset.boundaryAt
+  ) {
+    throw new TypeError("Durable chat reset metadata is invalid.");
+  }
+  const operation = DURABLE_RESET_OPERATIONS.get(store);
+  if (operation === undefined) throw new TypeError("Durable chat reset store is invalid.");
+  operation(chatId, reset);
 }

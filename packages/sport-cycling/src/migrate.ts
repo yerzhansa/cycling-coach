@@ -1,4 +1,4 @@
-import type { MemoryStore } from "@enduragent/core";
+import type { MemoryStorePort as MemoryStore } from "@enduragent/engine/sport";
 
 const LEGACY_RENAMES = [
   ["profile", "cycling-profile"],

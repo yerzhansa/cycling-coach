@@ -13,6 +13,7 @@ import {
 import type { ReferenceSportAdapter } from "../sport-adapter.js";
 import type { IntervalsActivityType } from "../../sport.js";
 import type { DerivedMetricsMeta } from "../schemas/latest.js";
+import type { PhysicalRequestLedger } from "@enduragent/kernel/store";
 import { buildLatestSourceProvenance } from "../source-provenance.js";
 
 /**
@@ -41,8 +42,7 @@ export function composeProvenance(runs: readonly AdapterRun[]): {
   meta: Omit<DerivedMetricsMeta, "analysisBasis"> | undefined;
 } {
   if (runs.length === 0) return { omitPowerFamily: false, meta: undefined };
-  const covering =
-    runs.find((r) => r.adapter.zoneBasis === "power")?.adapter ?? runs[0].adapter;
+  const covering = runs.find((r) => r.adapter.zoneBasis === "power")?.adapter ?? runs[0].adapter;
   const omitPowerFamily = covering.zoneBasis !== "power";
   const firstType = covering.activityTypes[0];
   const sportFamily = firstType !== undefined ? familyOf(firstType, "other") : "other";
@@ -93,17 +93,20 @@ export function readAnalysisBasis(
  * empty stubs — they are populated by their own retention pipeline, not here.
  */
 export function makeProductionFetcher(deps: {
-  apiKey: string;
-  athleteId?: string;
   adapters: readonly ReferenceSportAdapter[];
   sportTypes: readonly IntervalsActivityType[];
-}): (signal: AbortSignal) => Promise<FetchedReference> {
-  return async (signal) => {
+  attemptLedgerForRun?: () => PhysicalRequestLedger;
+}): (
+  signal: AbortSignal,
+  intervals: { readonly apiKey: string; readonly athleteId?: string },
+) => Promise<FetchedReference> {
+  return async (signal, intervals) => {
     const client = makeAbortableClient({
-      apiKey: deps.apiKey,
-      athleteId: deps.athleteId,
+      apiKey: intervals.apiKey,
+      athleteId: intervals.athleteId,
       signal,
       perRequestMs: PER_REQUEST_TIMEOUT_MS,
+      attemptLedger: deps.attemptLedgerForRun?.(),
     });
     return await fetchOnce(client, signal, deps.adapters, deps.sportTypes);
   };
@@ -115,17 +118,16 @@ async function fetchOnce(
   adapters: readonly ReferenceSportAdapter[],
   sportTypes: readonly IntervalsActivityType[],
 ): Promise<FetchedReference> {
-  const live = await fetchLiveBundle({ client, signal, now: new Date() });
+  const live = await fetchLiveBundle({ client, signal, now: new Date(), sportTypes });
   const runs: readonly AdapterRun[] = runAdaptersForActivities(
     adapters,
     sportTypes,
     live.bundle.activities,
   );
   const { omitPowerFamily, meta: baseMeta } = composeProvenance(runs);
-  const derivedMetrics = computeDerivedMetrics(
-    buildMetricInput(live.bundle, live.frozenNow),
-    { omitPowerFamily },
-  );
+  const derivedMetrics = computeDerivedMetrics(buildMetricInput(live.bundle, live.frozenNow), {
+    omitPowerFamily,
+  });
   // analysisBasis is a compute OUTPUT (read off the registry's emitted
   // zone_distribution_7d), so it joins the runs-derivable meta only after
   // compute. baseMeta is undefined exactly for an empty-coverage bundle.
@@ -142,7 +144,7 @@ async function fetchOnce(
       // key-union deepCompare runs over the map only, so the tag must stay out.
       ...(meta ? { derived_metrics_meta: meta } : {}),
       recent_activities: live.recentActivities,
-      planned_workouts: [],
+      planned_workouts: live.plannedWorkouts,
       wellness_data: live.wellnessData,
       source_provenance: buildLatestSourceProvenance({
         bundle: live.bundle,
@@ -155,8 +157,6 @@ async function fetchOnce(
     intervals: { by_activity: {} },
     routes: { routes: [] },
     ftp_history: { entries: [] },
-    ...(live.fetchErrors && live.fetchErrors.length > 0
-      ? { fetch_errors: live.fetchErrors }
-      : {}),
+    ...(live.fetchErrors && live.fetchErrors.length > 0 ? { fetch_errors: live.fetchErrors } : {}),
   };
 }

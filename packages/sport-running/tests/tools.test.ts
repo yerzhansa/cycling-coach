@@ -1,7 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { asSchema } from "ai";
-import { todayInTZ, type ResolvedCs } from "@enduragent/core";
+import type { MemoryStore, ResolvedCs } from "@enduragent/core";
+import { todayInTZ } from "@enduragent/engine/sport";
 import { createRunningTools, runningCreateWorkoutInputSchema } from "../src/tools.js";
+
+function tomorrowISODate(): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
 
 // The Vercel AI SDK wraps execute; call it directly with a stub options arg
 // (the running tool ignores options). Schema validation is the SDK's job at
@@ -14,7 +21,7 @@ function execZones(input: Record<string, unknown>): Promise<{
   framing: string;
   clampApplied?: { requested: number; clamped: number };
 }> {
-  const tools = createRunningTools(null, "UTC");
+  const tools = createRunningTools({} as MemoryStore, null, "UTC");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (tools.calculate_zones as any).execute(input, {});
 }
@@ -66,7 +73,7 @@ function execZonesResolved(
   platformConfidence?: string;
   error?: string;
 }> {
-  const tools = createRunningTools(null, "UTC", () => resolved);
+  const tools = createRunningTools({} as MemoryStore, null, "UTC", () => resolved);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (tools.calculate_zones as any).execute(input, {});
 }
@@ -110,7 +117,7 @@ describe("calculate_zones CS auto-resolution", () => {
   });
 
   it("returns no_cs_anchor when no resolver is wired and no value supplied", async () => {
-    const tools = createRunningTools(null, "UTC");
+    const tools = createRunningTools({} as MemoryStore, null, "UTC");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const out = await (tools.calculate_zones as any).execute({}, {});
     expect(out.error).toBe("no_cs_anchor");
@@ -145,14 +152,11 @@ function fakeIntervals(
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function createWorkoutTool(
-  intervals: any,
-  resolved: ResolvedCs | null = null,
-  tz = "UTC",
-) {
+function createWorkoutTool(intervals: any, resolved: ResolvedCs | null = null) {
   const tools = createRunningTools(
+    {} as MemoryStore,
     intervals,
-    tz,
+    "UTC",
     resolved === null ? undefined : () => resolved,
   );
   return (tools as Record<string, unknown>).intervals_create_workout as
@@ -160,15 +164,9 @@ function createWorkoutTool(
     | undefined;
 }
 
-function tomorrowISODate(): string {
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() + 1);
-  return d.toISOString().slice(0, 10);
-}
-
 describe("intervals_create_workout tool", () => {
   it("is absent when no intervals client is configured", () => {
-    const tools = createRunningTools(null, "UTC");
+    const tools = createRunningTools({} as MemoryStore, null, "UTC");
     expect("intervals_create_workout" in tools).toBe(false);
   });
 
@@ -181,11 +179,10 @@ describe("intervals_create_workout tool", () => {
   it("posts type:'Run', WORKOUT, the serialized description, no icu_training_load", async () => {
     const { client, calls } = fakeIntervals({ ok: true, value: { id: 42 } });
     const tool = createWorkoutTool(client)!;
-    const date = tomorrowISODate();
 
     const out = await tool.execute(
       {
-        date,
+        date: tomorrowISODate(),
         workout: {
           name: "Easy 30",
           steps: [{ type: "steady", duration: { value: 30, unit: "minutes" }, pace: { kind: "cs_fraction", value: 0.75 } }],
@@ -203,7 +200,25 @@ describe("intervals_create_workout tool", () => {
     expect(typeof payload.description).toBe("string");
     expect(payload.description).toContain("75% Pace");
     expect("icu_training_load" in payload).toBe(false);
-    expect(payload.external_id).toBe(`cycling-coach:${date}:easy-30`);
+  });
+
+  it("payload carries external_id 'cycling-coach:<date>:<slug>' and tags ['cycling-coach']", async () => {
+    const { client, calls } = fakeIntervals({ ok: true, value: { id: 42 } });
+    const tool = createWorkoutTool(client)!;
+
+    await tool.execute(
+      {
+        date: tomorrowISODate(),
+        workout: {
+          name: "Easy 30",
+          steps: [{ type: "steady", duration: { value: 30, unit: "minutes" }, pace: { kind: "cs_fraction", value: 0.75 } }],
+        },
+      },
+      {},
+    );
+
+    const payload = calls[0];
+    expect(payload.external_id).toBe(`cycling-coach:${tomorrowISODate()}:easy-30`);
     expect(payload.tags).toEqual(["cycling-coach"]);
   });
 
@@ -323,7 +338,7 @@ describe("intervals_create_workout date guard", () => {
 describe("tool schema portability", () => {
   it("emits plain object schemas without root combinators", async () => {
     const { client } = fakeIntervals({ ok: true, value: { id: 1 } });
-    const tools = createRunningTools(client as never, "UTC");
+    const tools = createRunningTools({} as MemoryStore, client as never, "UTC");
     for (const registered of Object.values(tools)) {
       const schema = (await Promise.resolve(
         asSchema((registered as unknown as { inputSchema: never }).inputSchema).jsonSchema,

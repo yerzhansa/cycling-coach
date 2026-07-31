@@ -1,11 +1,15 @@
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
+import type {
+  MemoryStorePort as MemoryStore,
+  PlatformCalendarMutationsPort as PlatformCalendarMutations,
+} from "@enduragent/engine/sport";
 import {
   buildCoachEventProvenance,
   dateKeySchema,
   isRealDateKey,
   validateWorkoutCreationDate,
-} from "@enduragent/core";
+} from "@enduragent/engine/sport";
 import type { IntervalsClient } from "intervals-icu-api";
 import {
   calculateCyclingZones,
@@ -16,6 +20,7 @@ import {
   intervalsWorkoutInputSchema,
   InvalidWorkoutError,
 } from "./index.js";
+import { CYCLING_PRESCRIPTION_CAPABILITY } from "./prescription-posture.js";
 import type {
   AthleteProfile,
   ExperienceLevel,
@@ -49,7 +54,7 @@ export const buildPlanSkeletonInputSchema = z.object({
 export const cyclingCreateWorkoutInputSchema = z.object({
   date: dateKeySchema.describe("Workout date (YYYY-MM-DD)"),
   workout: intervalsWorkoutInputSchema.describe(
-    "Structured workout: name + ordered steps — simple steps or repeat sets. Use value for a single power target, or low+high for ranges; ramps require low+high. Durations are seconds or minutes only.",
+    "Structured workout: name + ordered steps. Top-level steps can be simple (warmup/steady/interval/ramp/recovery/rest/cooldown/freeride) or a set {type:'set', repeat, interval, recovery}. Durations use seconds or minutes only. Power targets: {kind:'percent_ftp'|'watts'|'zone', value} or {kind, low, high} for ranges. Ramps require low+high.",
   ),
 });
 
@@ -57,13 +62,17 @@ export const cyclingCreateWorkoutInputSchema = z.object({
  * Pure-Sport cycling tools per ADR-0004 — sport-specific math (FTP zones,
  * periodized plan-skeleton) + the cycling-flavored intervals.icu workout
  * creator (hardcoded `type: "Ride"`). Pure-Core and Core-with-sport-config
- * intervals tools live in `@enduragent/core`'s `createPureCoreIntervalsTools`
+ * intervals tools live in the engine's `createPureCoreIntervalsTools`
  * and `createCoreToolsWithSportConfig`.
  */
 export function createCyclingTools(
+  _memory: MemoryStore,
   intervals: IntervalsClient | null,
   tz: string = "UTC",
+  calendarMutations?: PlatformCalendarMutations,
 ) {
+  void intervals;
+  const selectedMutations = calendarMutations;
   return {
     calculate_zones: tool({
       description: "Calculate power-zone watt ranges from FTP watts (7-zone numbering)",
@@ -77,7 +86,8 @@ export function createCyclingTools(
 
     build_plan_skeleton: tool({
       description:
-        "Build a periodized training plan skeleton from athlete profile. Returns phases, volume targets, zone tables, and testing protocols. Does NOT save anything — present the skeleton to the athlete and call plan_save only after they approve.",
+        CYCLING_PRESCRIPTION_CAPABILITY.toolSelectionRule +
+        " Build a periodized training plan skeleton from athlete profile. Returns phases, volume targets, zone tables, and testing protocols. Does NOT save anything — present the skeleton to the athlete and call plan_save only after they approve.",
       inputSchema: zodSchema(buildPlanSkeletonInputSchema),
       execute: async (params: {
         experienceLevel: ExperienceLevel;
@@ -132,7 +142,9 @@ export function createCyclingTools(
     }),
 
     get_sample_week: tool({
-      description: "Get a sample training week for a given volume tier and schedule type",
+      description:
+        CYCLING_PRESCRIPTION_CAPABILITY.toolSelectionRule +
+        " Get a sample training week for a given volume tier and schedule type",
       inputSchema: zodSchema(
         z.object({
           volumeTier: z.enum(["low", "medium", "high"]),
@@ -158,11 +170,17 @@ export function createCyclingTools(
         ),
     }),
 
-    ...(intervals
+    ...(selectedMutations
       ? {
           intervals_create_workout: tool({
             description:
-              "Create a structured workout on the intervals.icu calendar (auto-syncs to Garmin/Wahoo). Supply structured steps — they serialize into intervals.icu's native syntax so the power chart renders. Put athlete-facing coaching narrative (feel, notes, hydration) in your chat reply, not in this tool. Past dates are refused — workouts can only be created for today or later. For gym/strength sessions use intervals_create_strength_workout instead.",
+              CYCLING_PRESCRIPTION_CAPABILITY.toolSelectionRule +
+              " Create a structured workout on the intervals.icu calendar. Auto-syncs to Garmin/Wahoo. " +
+              "Supply the workout as structured steps — the tool serializes them into the intervals.icu " +
+              "native description syntax so the power chart renders. Put athlete-facing coaching narrative " +
+              "(feel, notes, hydration) in your chat reply, not in this tool. " +
+              "Past dates are refused — workouts can only be created for today or later. " +
+              "For gym/strength sessions use intervals_create_strength_workout instead.",
             inputSchema: zodSchema(cyclingCreateWorkoutInputSchema),
             execute: async (input: { date: string; workout: IntervalsWorkoutInput }) => {
               const dateError = validateWorkoutCreationDate(input.date, tz);
@@ -176,16 +194,26 @@ export function createCyclingTools(
                 }
                 throw err;
               }
-              const result = await intervals.events.create({
-                start_date_local: `${input.date}T00:00:00`,
-                category: "WORKOUT",
-                name: input.workout.name,
-                type: "Ride",
-                ...buildCoachEventProvenance(input.date, input.workout.name),
-                description: serialized.description,
-              });
-              if (!result.ok) return { error: result.error.kind };
-              return { created: true, event: result.value };
+              try {
+                const event = await selectedMutations.createEvent({
+                  start_date_local: `${input.date}T00:00:00`,
+                  category: "WORKOUT",
+                  name: input.workout.name,
+                  type: "Ride",
+                  ...buildCoachEventProvenance(input.date, input.workout.name),
+                  description: serialized.description,
+                });
+                return { created: true, event };
+              } catch (error) {
+                if ((error as { name?: unknown })?.name === "PlatformCredentialsRequiredError") {
+                  return { error: "platform_credentials_required", message: "Calendar changes need platform credentials." };
+                }
+                const candidate = error as { name?: unknown; apiError?: { kind?: unknown } };
+                if (candidate?.name === "PlatformApiError" && typeof candidate.apiError?.kind === "string") {
+                  return { error: candidate.apiError.kind };
+                }
+                throw error;
+              }
             },
           }),
         }

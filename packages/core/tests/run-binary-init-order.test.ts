@@ -8,10 +8,11 @@ import { describe, expect, it } from "vitest";
  * verified behaviorally in `reference-runtime.test.ts`. This file guards
  * only the outer sequence the binary orchestrates around it:
  *
- *   1. Memory (CoachAgent constructor)
- *   2. Startup hook (binary-specific; cycling-coach's runs the legacy migrate)
- *   3. Reference bootstrap
- *   4. Telegram bot
+ *   1. Composition preparation (after config/security checks)
+ *   2. Memory (engine construction — the CoachAgent constructor runs inside createCoachEngine)
+ *   3. Startup hook (binary-specific; cycling-coach's runs the legacy migrate)
+ *   4. Reference bootstrap
+ *   5. Telegram bot
  *
  * Reordering any of these is a correctness regression (future migration units'
  * bootstrap will read MEMORY.md and depends on the migration step having
@@ -23,10 +24,11 @@ describe("run-binary outer init order", () => {
   const src = readFileSync(SOURCE_PATH, "utf-8");
 
   const STEPS: ReadonlyArray<readonly [string, string]> = [
-    ["1: Memory (CoachAgent constructor)", "new CoachAgent("],
-    ["2: Startup hook", "await runStartupHook("],
-    ["3: Reference bootstrap", "await bootstrapReference("],
-    ["4: Telegram bot constructed", "createTelegramBot("],
+    ["1: Composition preparation", "hooks.prepare?.({ config, sport })"],
+    ["2: Memory (engine construction)", "createCoachEngine("],
+    ["3: Startup hook", "await runStartupHook("],
+    ["4: Reference bootstrap", "await bootstrapReference("],
+    ["5: Telegram bot constructed", "createTelegramBot("],
   ];
 
   it("each anchor appears exactly once", () => {
@@ -49,6 +51,11 @@ describe("run-binary outer init order", () => {
         )
         .toBeGreaterThan(positions[i - 1].idx);
     }
+  });
+
+  it("prepares only after the data directory security check", () => {
+    expect(src.indexOf("hooks.prepare?.({ config, sport })"))
+      .toBeGreaterThan(src.indexOf("ensureDataDirSecure(config.dataDir)"));
   });
 });
 

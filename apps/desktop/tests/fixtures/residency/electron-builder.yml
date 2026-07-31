@@ -1,0 +1,16 @@
+appId: icu.enduragent.acceptance.residency
+productName: Enduragent Residency Acceptance
+asar: true
+directories:
+  app: ${env.RESIDENCY_FIXTURE_STAGE}
+  output: ${env.RESIDENCY_FIXTURE_OUTPUT}
+files:
+  - package.json
+  - main.cjs
+  - resources/trayTemplate.png
+  - resources/trayTemplate@2x.png
+mac:
+  target:
+    - target: dir
+      arch: [arm64]
+  identity: "-"

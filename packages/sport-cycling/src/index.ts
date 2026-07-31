@@ -32,6 +32,8 @@ export type { IntervalsWorkoutInput } from "./intervals-serializer.js";
 export * from "./schemas.js";
 
 export { cyclingSport, CYCLING_VOCABULARY } from "./sport.js";
+export { CYCLING_PRESCRIPTION_CAPABILITY } from "./prescription-posture.js";
+export type { PrescriptionCapability } from "./prescription-posture.js";
 export { migrateCyclingLegacySections } from "./migrate.js";
 
 export {

@@ -1,0 +1,33 @@
+{
+  "name": "@enduragent/desktop-renderer",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "check": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@enduragent/coach-client": "workspace:*",
+    "@enduragent/coach-contract": "workspace:*",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zustand": "5.0.14"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "7.0.0",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "5.2.0",
+    "jsdom": "30.0.0",
+    "typescript": "^6.0.2",
+    "vite": "7.3.6",
+    "vitest": "^4.1.4"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

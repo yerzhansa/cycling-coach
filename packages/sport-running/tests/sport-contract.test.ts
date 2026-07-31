@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { MemorySnapshot } from "@enduragent/core";
+import type { PreserveTokens, MemorySnapshot, MemoryStore } from "@enduragent/core";
 import { runningSport } from "../src/sport.js";
 import { runningReferenceAdapter } from "../src/reference/index.js";
 import { createRunningTools } from "../src/tools.js";
@@ -36,14 +36,14 @@ describe("runningSport contract", () => {
     } as unknown as MemorySnapshot;
     const preserve = runningSport.mustPreserveTokens;
     expect(typeof preserve).toBe("function");
-    const resolved = (preserve as Exclude<typeof preserve, readonly string[]>)(fakeMemory);
+    const resolved = (preserve as (m: MemorySnapshot) => PreserveTokens)(fakeMemory);
     const tokens = "tokens" in resolved ? resolved.tokens : resolved;
     expect(tokens).toContain("CS 4.0 m/s");
     expect(tokens).toContain("critical speed");
   });
 
   it("surfaces a calculate_zones tool", () => {
-    const tools = createRunningTools(null, "UTC");
+    const tools = createRunningTools({} as MemoryStore, null, "UTC");
     expect(Object.keys(tools)).toContain("calculate_zones");
   });
 });

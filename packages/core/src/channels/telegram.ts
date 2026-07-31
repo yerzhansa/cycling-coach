@@ -1,6 +1,6 @@
 import { Bot, InputFile } from "grammy";
 import { autoRetry } from "@grammyjs/auto-retry";
-import type { CoachAgent } from "../agent/coach-agent.js";
+import type { CoachEngineSeam } from "../agent/coach-engine.js";
 import type { BinaryConfig } from "../binary.js";
 import { classifyAgentError } from "../agent/error-classify.js";
 import {
@@ -19,7 +19,7 @@ import { TelegramUpdateOffsetStore } from "./telegram-update-offsets.js";
 import { loadAllowedSenders, loadAllowedSendersWithSource } from "./allowed-senders.js";
 import { escapeHtmlText } from "./html-escape.js";
 import type { ReferenceServices } from "../reference/services.js";
-import { resolveRunningCs } from "../reference/cs-resolution.js";
+import { resolveRunningCs, type ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
 import { formatSyncReply } from "../reference/sync/format-sync-reply.js";
 import { formatSnapshotRaw } from "../reference/sync/snapshot-debug.js";
 import { sendSnapshotOutput } from "../reference/sync/send-snapshot.js";
@@ -233,7 +233,7 @@ export interface TelegramBotHandle {
 
 export function createTelegramBot(
   token: string,
-  agent: CoachAgent,
+  agent: CoachEngineSeam,
   binary: BinaryConfig,
   dataDir: string,
   reference?: ReferenceServices,
@@ -622,7 +622,7 @@ export function createTelegramBot(
   });
 
   bot.command("update", async (ctx) => {
-    if (isManagedDeploy()) {
+    if (isManagedDeploy(binary.binaryName)) {
       await ctx.reply(MANAGED_DEPLOY_UPDATE_NOTICE);
       return;
     }
@@ -1172,7 +1172,7 @@ export async function notifyUpdate(bot: Bot, dataDir: string, binary: BinaryConf
     const knownChats = getKnownTelegramChatIds(dataDir);
     const chatIds =
       allowed.dmPolicy === "open" ? knownChats : knownChats.filter((id) => allowSet.has(id));
-    const updateInstruction = isManagedDeploy()
+    const updateInstruction = isManagedDeploy(binary.binaryName)
       ? `Send /whatsnew to see what changed. ${MANAGED_DEPLOY_UPDATE_NOTICE}`
       : "Send /whatsnew to see what changed, /update to install.";
     const message = `Update available: ${info.current} → ${info.latest}\n${updateInstruction}\n\nHelp shape what Cycling Coach builds next: please take 3 minutes to answer this short survey so the mobile app, 24/7 bot, Railway template, and setup/payment options are prioritized around what would actually help you: https://tally.so/r/b5Dv4g\n\nWant the bot running 24/7 without keeping your computer on? Deploy the Railway template: https://railway.com/deploy/cycling-coach`;

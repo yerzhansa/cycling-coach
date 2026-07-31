@@ -10,7 +10,7 @@ import {
   type ReferenceSportAdapter,
   type Sport,
   type ToolRegistration,
-} from "@enduragent/core";
+} from "@enduragent/engine/sport";
 import soul from "../SOUL.md";
 import { skills as skillEntries } from "./skills.generated.js";
 import { createRunningTools } from "./tools.js";
@@ -89,9 +89,9 @@ export const runningSport: Sport = {
       ...createMemoryTools(deps.memory, sections, {
         bindProvenance: deps.bindMemoryToolProvenance,
       }),
-      ...createPureCoreIntervalsTools(deps.intervals, deps.tz),
-      ...createCoreToolsWithSportConfig(deps.intervals, runningSport.intervalsActivityTypes),
-      ...createRunningTools(deps.intervals, deps.tz, deps.resolvedCs),
+      ...createPureCoreIntervalsTools(deps.intervals, deps.tz, deps.athleteData, deps.calendarMutations),
+      ...createCoreToolsWithSportConfig(deps.intervals, runningSport.intervalsActivityTypes, deps.athleteData),
+      ...createRunningTools(deps.memory, deps.intervals, deps.tz, deps.resolvedCs),
     };
     return Object.entries(toolset).map(([name, t]) => ({
       name,

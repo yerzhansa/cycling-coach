@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Memory } from "../src/memory/store.js";
-import { createMemoryTools } from "../src/agent/tools.js";
+import { createMemoryTools } from "../../engine/src/sport/memory-tools.js";
 import type { MemorySectionSpec } from "../src/sport.js";
 
 const SECTIONS: readonly MemorySectionSpec[] = [{ name: "notes", description: "misc" }];

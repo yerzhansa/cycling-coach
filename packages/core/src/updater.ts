@@ -3,6 +3,7 @@ import { execSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { join } from "node:path";
+import { binaryEnvVar } from "./binary.js";
 import { enumerateTelegramSessions } from "./channels/telegram-sessions.js";
 
 export interface UpdateInfo {
@@ -14,25 +15,41 @@ export interface UpdateInfo {
 export const MANAGED_DEPLOY_UPDATE_NOTICE =
   "This deployment updates through its container image. If Railway image auto-updates are enabled, Railway redeploys the latest GHCR image during the configured maintenance window; otherwise redeploy the service from the latest image in Railway.";
 
-export function isManagedDeploy(env: Record<string, string | undefined> = process.env): boolean {
-  const value = env.CYCLING_COACH_MANAGED_DEPLOY?.trim().toLowerCase();
+export function isManagedDeploy(
+  binaryName: string,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const value = env[binaryEnvVar(binaryName, "MANAGED_DEPLOY")]?.trim().toLowerCase();
   return value === "1" || value === "true";
 }
 
+const MAX_CALVER_LENGTH = 32;
+const STABLE_CALVER_PATTERN = /^([1-9]\d{3})\.([1-9]|1[0-2])\.(0|[1-9]\d*)$/;
+const COMPATIBLE_CALVER_PATTERN = /^([1-9]\d{3})\.([1-9]|1[0-2])\.(0|[1-9]\d*)(?:-(0|[1-9]\d*))?$/;
+
+export function isStableCalVer(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > MAX_CALVER_LENGTH) return false;
+  const match = STABLE_CALVER_PATTERN.exec(value);
+  if (match === null) return false;
+  const patch = Number(match[3]);
+  return Number.isSafeInteger(patch) && patch >= 0;
+}
+
 /**
- * Parse a CalVer string `YYYY.M.D` (with optional same-day re-release suffix
- * `-N`) into a comparable 4-tuple. Returns null for unparseable input —
- * "unknown" (the getCurrentVersion fallback) or a malformed npm response.
- *
- * Note: this is NOT semver. The project's binaries use CalVer where `-N`
- * means "newer same-day re-release", whereas semver treats `-N` as an older
- * pre-release. Using `semver.gt` here would silently miss every same-day
- * patch notification.
+ * Parse stable `YYYY.M.P` CalVer into a comparable tuple. The optional fourth
+ * element exists only for compatibility with installed historical `-N`
+ * releases, where a suffix was ordered after its unsuffixed base.
  */
 function calverParts(v: string): [number, number, number, number] | null {
-  const m = v.match(/^(\d+)\.(\d+)\.(\d+)(?:-(\d+))?$/);
-  if (!m) return null;
-  return [Number(m[1]), Number(m[2]), Number(m[3]), m[4] ? Number(m[4]) : 0];
+  if (v.length > MAX_CALVER_LENGTH) return null;
+  const match = COMPATIBLE_CALVER_PATTERN.exec(v);
+  if (match === null) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const patch = Number(match[3]);
+  const suffix = match[4] === undefined ? 0 : Number(match[4]);
+  if (![year, month, patch, suffix].every(Number.isSafeInteger)) return null;
+  return [year, month, patch, suffix];
 }
 
 /**
@@ -122,7 +139,7 @@ export function buildCheckUrl(binaryName: string, dataDir?: string): string {
   const params = new URLSearchParams({
     bin: binaryName,
     version: getCurrentVersion(binaryName),
-    channel: isManagedDeploy() ? "docker" : "npm",
+    channel: isManagedDeploy(binaryName) ? "docker" : "npm",
   });
   if (dataDir) params.set("instance", getInstanceId(dataDir));
   return `${PING_ENDPOINT}?${params}`;
