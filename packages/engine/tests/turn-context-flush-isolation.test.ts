@@ -201,7 +201,7 @@ describe("per-turn state does not bleed across a parked memory flush", () => {
     gate.releaseFlush();
     const resA = await aPromise;
 
-    expect(resA).toBe("done");
+    expect(resA).toContain("done");
     expect(resB).toBe("done");
     // Shared-field regression: B's 5.0 would have clobbered A's before A's tool ran.
     expect(readAnchors.A?.criticalSpeedMps).toBe(4.0);
@@ -237,7 +237,7 @@ describe("per-turn state does not bleed across a parked memory flush", () => {
     gate.releaseFlush();
     const resA = await aPromise;
 
-    expect(resA).toBe("done");
+    expect(resA).toContain("done");
     expect(resB).toBe("done");
     // One underlying execution per turn: the two identical calls WITHIN a turn
     // share one memoized execution, and the second turn is NOT served from the
@@ -290,7 +290,7 @@ describe("per-turn state does not bleed across a parked memory flush", () => {
     expect(resB).toBe(TAINTED_BY_WRITES_MESSAGE);
     // Load-bearing: with a shared/bled write record, A's first (timeout) error
     // would observe writesCommitted > 0 and refuse instead of retrying.
-    expect(resA).toBe("A ok");
+    expect(resA).toContain("A ok");
     expect(aMainCalls).toBe(2);
   });
 });

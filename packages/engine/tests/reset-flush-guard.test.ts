@@ -26,7 +26,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function setupAgent(complete: ReturnType<typeof vi.fn>) {
+async function setupAgent(complete: ReturnType<typeof vi.fn>, timezone?: string) {
   vi.doMock("../src/agent/codex/responses.js", () => ({
     codexResponses: complete,
   }));
@@ -42,7 +42,12 @@ async function setupAgent(complete: ReturnType<typeof vi.fn>) {
   }));
 
   const { CoachAgent } = await import("../src/agent/coach-agent.js");
-  return new CoachAgent(cyclingSport as unknown as Sport, baseAgentConfig(dataDir));
+  const base = baseAgentConfig(dataDir);
+  const ports =
+    timezone === undefined
+      ? base
+      : { ...base, config: { ...base.config, session: { ...base.config.session, timezone } } };
+  return new CoachAgent(cyclingSport as unknown as Sport, ports);
 }
 
 function mkAssistant(text: string, stopReason: "stop" | "length" = "stop") {
@@ -120,7 +125,9 @@ describe("reset-path flush guards", () => {
 
     const text = await agent.chat("stale-guard", "hello");
 
-    expect(text).toBe("fresh-start");
+    // A reset turn now prefixes the one-time post-reset notice before the reply.
+    expect(text.startsWith("Started a fresh session")).toBe(true);
+    expect(text).toContain("fresh-start");
     expect(complete).toHaveBeenCalledTimes(3);
     const archives = listArchives("stale-guard");
     expect(archives).toHaveLength(1);
@@ -133,6 +140,29 @@ describe("reset-path flush guards", () => {
     expect(
       warnSpy.mock.calls.some((c) => String(c[0]).includes("Pre-reset memory flush failed")),
     ).toBe(true);
+  });
+
+  it("defers a daily reset for one turn when the last exchange is still recent", async () => {
+    const complete = vi.fn(async () => mkAssistant("carry on"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("1998-06-15T04:10:00.000Z"));
+    try {
+      const agent = await setupAgent(complete, "UTC");
+      seedSession("defer-daily", [
+        { role: "user", content: "mid-conversation", ts: "1998-06-15T03:55:00.000Z" },
+        { role: "assistant", content: "still talking", ts: "1998-06-15T03:55:00.000Z" },
+      ]);
+
+      const text = await agent.chat("defer-daily", "one more thing");
+
+      expect(text).toBe("carry on");
+      expect(listArchives("defer-daily")).toHaveLength(0);
+      const session = readFileSync(join(dataDir, "sessions", "defer-daily.jsonl"), "utf-8");
+      expect(session).toContain("mid-conversation");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("resetSession flushes and archives without a failure warn when the LLM is healthy", async () => {

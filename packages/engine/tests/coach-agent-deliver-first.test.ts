@@ -4,6 +4,7 @@ import {
   rmSync,
   mkdirSync,
   readFileSync,
+  writeFileSync,
   existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -146,5 +147,58 @@ describe("coach-agent deliver-first persistence", () => {
       .filter((l) => l.length > 0);
     expect(lines.some((l) => l.includes('"role":"user"'))).toBe(true);
     expect(lines.some((l) => l.includes('"role":"assistant"'))).toBe(true);
+  });
+
+  it("prefixes the post-reset notice and shows the model a one-turn archive marker", async () => {
+    const POST_RESET_NOTICE =
+      "Started a fresh session - earlier conversation is archived, and I still have your key details in memory.";
+    const complete = happyComplete("here is the answer");
+    const { agent, __resetPersistenceNoticeState } = await setupAgent(complete);
+    resetNotice = __resetPersistenceNoticeState;
+    resetNotice();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // Seed a session last touched long before today's daily reset hour so the
+    // automatic daily reset fires (and is NOT deferred).
+    const oldTs = "1998-01-01T00:00:00.000Z";
+    mkdirSync(join(dataDir, "sessions"), { recursive: true });
+    writeFileSync(
+      sessionFile("reset-chat"),
+      JSON.stringify({ role: "user", content: "old q", ts: oldTs }) +
+        "\n" +
+        JSON.stringify({ role: "assistant", content: "old a", ts: oldTs }) +
+        "\n",
+      { encoding: "utf-8", mode: 0o600 },
+    );
+
+    const reply = await agent.chat("reset-chat", "how's my form?");
+
+    expect(reply).toBe(`${POST_RESET_NOTICE}\n\n${"here is the answer"}`);
+
+    const sawMarker = complete.mock.calls.some((call) => {
+      const params = call[0] as { messages?: Array<{ role: string; content: unknown }> };
+      return (
+        Array.isArray(params.messages) &&
+        params.messages.some(
+          (m) =>
+            m.role === "system" &&
+            typeof m.content === "string" &&
+            m.content.includes("Previous session archived at"),
+        )
+      );
+    });
+    expect(sawMarker).toBe(true);
+
+    // The prior transcript was archived (renamed away).
+    const currentSession = readFileSync(sessionFile("reset-chat"), "utf-8");
+    expect(currentSession).not.toContain("old q");
+    const currentLines = currentSession
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { role: string; content: string });
+    expect(
+      currentLines.filter((line) => line.role === "assistant").map((line) => line.content),
+    ).toEqual(["here is the answer"]);
+    expect(currentSession).not.toContain(POST_RESET_NOTICE);
   });
 });

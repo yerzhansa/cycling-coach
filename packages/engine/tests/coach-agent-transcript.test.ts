@@ -279,7 +279,10 @@ describe("CoachAgent transcript recording", () => {
       { mode: 0o600 },
     );
 
-    await expect(setup.agent.chat("stale-chat", "new athlete")).resolves.toBe("new response");
+    // An automatic archive prefixes the one-time post-reset notice on the reply.
+    const reply = await setup.agent.chat("stale-chat", "new athlete");
+    expect(reply.startsWith("Started a fresh session")).toBe(true);
+    expect(reply).toContain("new response");
     expect(setup.boundaries).toEqual([
       {
         chatId: "stale-chat",
