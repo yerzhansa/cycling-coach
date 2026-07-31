@@ -58,7 +58,7 @@ Want the bot running 24/7 without keeping your computer on? Use the Railway temp
 
 https://railway.com/deploy/cycling-coach
 
-Railway deploys your own private container from `ghcr.io/yerzhansa/cycling-coach:stable` with persistent `/data` storage and image auto-updates. The bot runs inside your Railway project and uses your Railway variables to call Telegram, intervals.icu, and your chosen LLM provider. We do not run a shared backend or store your secrets, athlete data, or Telegram messages. Your hosting and billing relationship is with Railway. Railway currently lists Hobby as the practical minimum for always-on apps: $5 minimum usage/month, including $5 monthly usage credits.
+Railway deploys your own private container from `ghcr.io/yerzhansa/enduragent:stable` with persistent `/data` storage and image auto-updates. The bot runs inside your Railway project and uses your Railway variables to call Telegram, intervals.icu, and your chosen LLM provider. We do not run a shared backend or store your secrets, athlete data, or Telegram messages. Your hosting and billing relationship is with Railway. Railway currently lists Hobby as the practical minimum for always-on apps: $5 minimum usage/month, including $5 monthly usage credits.
 
 Before you click **Deploy**, prepare three accounts: one LLM provider account, intervals.icu, and Telegram.
 
