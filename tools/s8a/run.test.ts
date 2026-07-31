@@ -5,12 +5,16 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   aggregateExitCode,
+  buildChildEnv,
   buildHeader,
   distPreflight,
+  parseRecordingLane,
   parseRunFlags,
+  resolveRecordLane,
   runDirName,
   usage,
 } from "./run.js";
+import { AUTH_PROFILES_SOURCE_ENV } from "./lib/codex-auth.js";
 import type { ScenarioVerdict } from "./lib/types.js";
 
 describe("flag parsing", () => {
@@ -66,6 +70,111 @@ describe("run dir naming and header", () => {
     });
     expect(Object.keys(header)).toEqual(["ts", "gitSha", "harnessVersion", "scenarios", "verdicts"]);
     expect(header.harnessVersion).toBe(1);
+  });
+});
+
+describe("recording-header lane", () => {
+  it("reads provider and model off the header", () => {
+    expect(parseRecordingLane('{"provider":"openai-codex","model":"gpt-5.6-sol"}')).toEqual({
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+    });
+    expect(parseRecordingLane('{"provider":"anthropic","model":"claude-sonnet-4-6"}')).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+  });
+
+  it("falls back to the legacy lane for an absent, unparseable, or unknown header", () => {
+    const legacy = { provider: "anthropic", model: "claude-sonnet-4-6" };
+    expect(parseRecordingLane(null)).toEqual(legacy);
+    expect(parseRecordingLane("{not json")).toEqual(legacy);
+    expect(parseRecordingLane('{"provider":"openai","model":"gpt-4o"}')).toEqual({
+      provider: "anthropic",
+      model: "gpt-4o",
+    });
+    expect(parseRecordingLane('{"provider":"openai-codex"}')).toEqual({
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+    });
+  });
+});
+
+describe("record-lane resolution", () => {
+  it("defaults to the codex lane and its default model", () => {
+    expect(resolveRecordLane({})).toEqual({
+      ok: true,
+      lane: { provider: "openai-codex", model: "gpt-5.6-sol" },
+    });
+  });
+
+  it("honors an explicit provider and model pin", () => {
+    expect(resolveRecordLane({ LLM_PROVIDER: "anthropic" })).toEqual({
+      ok: true,
+      lane: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    });
+    expect(resolveRecordLane({ LLM_PROVIDER: "openai-codex", LLM_MODEL: "gpt-5.6-luna" })).toEqual({
+      ok: true,
+      lane: { provider: "openai-codex", model: "gpt-5.6-luna" },
+    });
+  });
+
+  it("rejects a provider the harness cannot record", () => {
+    const resolved = resolveRecordLane({ LLM_PROVIDER: "openrouter" });
+    expect(resolved.ok).toBe(false);
+    if (!resolved.ok) expect(resolved.message).toContain("anthropic | openai-codex");
+  });
+});
+
+describe("child spawn env", () => {
+  const base = {
+    ANTHROPIC_API_KEY: "operator-real-key",
+    [AUTH_PROFILES_SOURCE_ENV]: "/operator/auth-profiles.json",
+    LLM_BASE_URL: "https://stray.example",
+    HISTORY_TOKEN_BUDGET_RATIO: "0.9",
+  };
+
+  it("carries zero credentials into a codex-lane replay child", () => {
+    const env = buildChildEnv({
+      base,
+      tempHome: "/tmp/s8a-home-x",
+      provider: "openai-codex",
+      llmModel: "gpt-5.6-sol",
+    });
+    expect(env.LLM_PROVIDER).toBe("openai-codex");
+    expect(env.LLM_MODEL).toBe("gpt-5.6-sol");
+    expect(env.CYCLING_COACH_HOME).toBe("/tmp/s8a-home-x");
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env[AUTH_PROFILES_SOURCE_ENV]).toBeUndefined();
+    expect(env.LLM_API_KEY).toBeUndefined();
+    expect(env.LLM_BASE_URL).toBeUndefined();
+    expect(env.HISTORY_TOKEN_BUDGET_RATIO).toBeUndefined();
+  });
+
+  it("scrubs the operator's real key on an anthropic-lane replay child", () => {
+    const env = buildChildEnv({
+      base,
+      tempHome: "/tmp/s8a-home-x",
+      provider: "anthropic",
+      llmModel: "claude-sonnet-4-6",
+      anthropicKey: "s8a-replay-dummy",
+    });
+    expect(env.ANTHROPIC_API_KEY).toBe("s8a-replay-dummy");
+    expect(env[AUTH_PROFILES_SOURCE_ENV]).toBeUndefined();
+  });
+
+  it("hands the codex record child its profiles source and no api key", () => {
+    const env = buildChildEnv({
+      base,
+      tempHome: "/tmp/s8a-home-x",
+      provider: "openai-codex",
+      llmModel: "gpt-5.6-sol",
+      authProfilesSource: "/operator/config/auth-profiles.json",
+      scenarioEnv: { HISTORY_TOKEN_BUDGET_RATIO: "0.05" },
+    });
+    expect(env[AUTH_PROFILES_SOURCE_ENV]).toBe("/operator/config/auth-profiles.json");
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.HISTORY_TOKEN_BUDGET_RATIO).toBe("0.05");
   });
 });
 

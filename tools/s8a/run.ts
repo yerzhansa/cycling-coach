@@ -10,15 +10,23 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { collectSessionLineage } from "./lib/asserts.js";
+import {
+  AUTH_PROFILES_SOURCE_ENV,
+  CODEX_PROFILE_NAME,
+  inspectCodexProfile,
+  resolveAuthProfilesSource,
+} from "./lib/codex-auth.js";
+import { isS8aProvider, PROVIDER_LANES, supportedProviderList } from "./lib/provider-lane.js";
 import { canRebaseline, rebaselineFixture } from "./lib/rebaseline.js";
 import { S8A_ATHLETE_ID } from "./scenarios/common.js";
 import { selectScenarios, type ManifestEntry } from "./lib/scenario-filter.js";
-import type { S8aScenario, ScenarioVerdict } from "./lib/types.js";
+import type { S8aProvider, S8aScenario, ScenarioVerdict } from "./lib/types.js";
 import { SCENARIO_MANIFEST } from "./scenarios/index.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..");
-const RECORD_MODEL_DEFAULT = "claude-sonnet-4-6";
+const RECORD_PROVIDER_DEFAULT: S8aProvider = "openai-codex";
+const LEGACY_HEADER_PROVIDER: S8aProvider = "anthropic";
 const REPLAY_DUMMY_KEY = "s8a-replay-dummy";
 
 // Stray operator knobs would silently change the child's model lane, budgets,
@@ -138,31 +146,22 @@ interface ChildOutcome {
   stderr: string;
 }
 
-function spawnScenarioChild(params: {
-  scenarioId: string;
-  mode: "replay" | "record";
-  runDir: string;
-  fixtureDir?: string;
-  noSupersessions?: boolean;
-  scenarioEnv?: Record<string, string>;
+export interface ChildEnvParams {
+  base: Record<string, string | undefined>;
+  tempHome: string;
+  provider: S8aProvider;
   llmModel: string;
-  anthropicKey: string;
-}): ChildOutcome {
-  const tempHome = mkdtempSync(join(tmpdir(), "s8a-home-"));
-  const childArgs = [
-    join(HERE, "run-scenario.ts"),
-    `--scenario=${params.scenarioId}`,
-    `--mode=${params.mode}`,
-    `--run-dir=${params.runDir}`,
-    ...(params.fixtureDir !== undefined ? [`--fixture-dir=${params.fixtureDir}`] : []),
-    ...(params.noSupersessions === true ? ["--no-supersessions"] : []),
-  ];
+  anthropicKey?: string;
+  authProfilesSource?: string;
+  scenarioEnv?: Record<string, string>;
+}
+
+export function buildChildEnv(params: ChildEnvParams): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = {
-    ...process.env,
-    CYCLING_COACH_HOME: tempHome,
-    LLM_PROVIDER: "anthropic",
+    ...params.base,
+    CYCLING_COACH_HOME: params.tempHome,
+    LLM_PROVIDER: params.provider,
     LLM_MODEL: params.llmModel,
-    ANTHROPIC_API_KEY: params.anthropicKey,
     INTERVALS_API_KEY: "test-mock-key",
     INTERVALS_ATHLETE_ID: S8A_ATHLETE_ID,
     COACH_TZ: "UTC",
@@ -175,6 +174,43 @@ function spawnScenarioChild(params: {
   if (params.scenarioEnv?.HISTORY_TOKEN_BUDGET_RATIO === undefined) {
     delete env.HISTORY_TOKEN_BUDGET_RATIO;
   }
+  if (params.anthropicKey === undefined) delete env.ANTHROPIC_API_KEY;
+  else env.ANTHROPIC_API_KEY = params.anthropicKey;
+  if (params.authProfilesSource === undefined) delete env[AUTH_PROFILES_SOURCE_ENV];
+  else env[AUTH_PROFILES_SOURCE_ENV] = params.authProfilesSource;
+  return env;
+}
+
+function spawnScenarioChild(params: {
+  scenarioId: string;
+  mode: "replay" | "record";
+  runDir: string;
+  fixtureDir?: string;
+  noSupersessions?: boolean;
+  scenarioEnv?: Record<string, string>;
+  provider: S8aProvider;
+  llmModel: string;
+  anthropicKey?: string;
+  authProfilesSource?: string;
+}): ChildOutcome {
+  const tempHome = mkdtempSync(join(tmpdir(), "s8a-home-"));
+  const childArgs = [
+    join(HERE, "run-scenario.ts"),
+    `--scenario=${params.scenarioId}`,
+    `--mode=${params.mode}`,
+    `--run-dir=${params.runDir}`,
+    ...(params.fixtureDir !== undefined ? [`--fixture-dir=${params.fixtureDir}`] : []),
+    ...(params.noSupersessions === true ? ["--no-supersessions"] : []),
+  ];
+  const env = buildChildEnv({
+    base: process.env,
+    tempHome,
+    provider: params.provider,
+    llmModel: params.llmModel,
+    anthropicKey: params.anthropicKey,
+    authProfilesSource: params.authProfilesSource,
+    scenarioEnv: params.scenarioEnv,
+  });
 
   const result = spawnSync(process.execPath, ["--import", "tsx", ...childArgs], {
     cwd: REPO_ROOT,
@@ -203,15 +239,48 @@ function gitSha(): string {
   return result.status === 0 ? result.stdout.trim() : "unknown";
 }
 
-function readRecordingModel(fixtureDir: string): string {
-  const path = join(fixtureDir, "recording.json");
-  if (!existsSync(path)) return RECORD_MODEL_DEFAULT;
+export interface RecordingLane {
+  provider: S8aProvider;
+  model: string;
+}
+
+export function parseRecordingLane(raw: string | null): RecordingLane {
+  const fallback: RecordingLane = {
+    provider: LEGACY_HEADER_PROVIDER,
+    model: PROVIDER_LANES[LEGACY_HEADER_PROVIDER].defaultRecordModel,
+  };
+  if (raw === null) return fallback;
+  let parsed: { provider?: unknown; model?: unknown };
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf-8")) as { model?: string };
-    return parsed.model ?? RECORD_MODEL_DEFAULT;
+    parsed = JSON.parse(raw) as { provider?: unknown; model?: unknown };
   } catch {
-    return RECORD_MODEL_DEFAULT;
+    return fallback;
   }
+  const provider = isS8aProvider(parsed.provider) ? parsed.provider : fallback.provider;
+  const model =
+    typeof parsed.model === "string" && parsed.model !== ""
+      ? parsed.model
+      : PROVIDER_LANES[provider].defaultRecordModel;
+  return { provider, model };
+}
+
+export function resolveRecordLane(
+  env: Record<string, string | undefined>,
+): { ok: true; lane: RecordingLane } | { ok: false; message: string } {
+  const requested = env.LLM_PROVIDER ?? RECORD_PROVIDER_DEFAULT;
+  if (!isS8aProvider(requested)) {
+    return {
+      ok: false,
+      message: `LLM_PROVIDER must be one of ${supportedProviderList()}, got ${requested}`,
+    };
+  }
+  const model = env.LLM_MODEL ?? PROVIDER_LANES[requested].defaultRecordModel;
+  return { ok: true, lane: { provider: requested, model } };
+}
+
+function readRecordingLane(fixtureDir: string): RecordingLane {
+  const path = join(fixtureDir, "recording.json");
+  return parseRecordingLane(existsSync(path) ? readFileSync(path, "utf-8") : null);
 }
 
 async function loadScenarioEnv(entry: ManifestEntry): Promise<Record<string, string> | undefined> {
@@ -242,14 +311,16 @@ async function replayScenarios(params: {
   let harnessError = false;
   for (const entry of params.entries) {
     const fixtureDir = join(HERE, "fixtures", entry.id);
+    const lane = readRecordingLane(fixtureDir);
     const outcome = spawnScenarioChild({
       scenarioId: entry.id,
       mode: "replay",
       runDir: join(params.runDir, entry.id),
       noSupersessions: params.noSupersessions,
       scenarioEnv: await loadScenarioEnv(entry),
-      llmModel: readRecordingModel(fixtureDir),
-      anthropicKey: REPLAY_DUMMY_KEY,
+      provider: lane.provider,
+      llmModel: lane.model,
+      anthropicKey: lane.provider === "anthropic" ? REPLAY_DUMMY_KEY : undefined,
     });
     if (outcome.verdict === null || outcome.exitCode === 2) {
       console.error(`harness error in scenario ${entry.id} (exit ${outcome.exitCode}):\n${outcome.stderr}`);
@@ -296,23 +367,50 @@ async function main(): Promise<void> {
       console.error("record refuses against a possibly-real intervals key (unset INTERVALS_API_KEY or set the test-mock-key sentinel)");
       process.exit(2);
     }
-    const realKey = process.env.ANTHROPIC_API_KEY;
-    if (realKey === undefined || realKey === "") {
-      console.error("record requires a real ANTHROPIC_API_KEY in env");
+    const resolved = resolveRecordLane(process.env);
+    if (!resolved.ok) {
+      console.error(resolved.message);
       process.exit(2);
+    }
+    const lane = resolved.lane;
+    let anthropicKey: string | undefined;
+    let authProfilesSource: string | undefined;
+    if (lane.provider === "anthropic") {
+      const realKey = process.env.ANTHROPIC_API_KEY;
+      if (realKey === undefined || realKey === "") {
+        console.error("record on the anthropic lane requires a real ANTHROPIC_API_KEY in env");
+        process.exit(2);
+      }
+      anthropicKey = realKey;
+    } else {
+      const sourcePath = resolveAuthProfilesSource(process.env);
+      const inspected = inspectCodexProfile(sourcePath, CODEX_PROFILE_NAME);
+      if (!inspected.ok) {
+        console.error(
+          `record on the openai-codex lane requires a usable OAuth profile: ${inspected.reason}`,
+        );
+        console.error(
+          `sign in through the product, or point ${AUTH_PROFILES_SOURCE_ENV} at the profiles file`,
+        );
+        process.exit(2);
+      }
+      authProfilesSource = sourcePath;
     }
     const entry = SCENARIO_MANIFEST.find((e) => e.id === flags.scenario);
     if (entry === undefined) {
       console.error(`unknown scenario: ${flags.scenario}`);
       process.exit(2);
     }
+    console.log(`recording lane: ${lane.provider} / ${lane.model}`);
     const outcome = spawnScenarioChild({
       scenarioId: entry.id,
       mode: "record",
       runDir: join(runDir, entry.id),
       scenarioEnv: await loadScenarioEnv(entry),
-      llmModel: process.env.LLM_MODEL ?? RECORD_MODEL_DEFAULT,
-      anthropicKey: realKey,
+      provider: lane.provider,
+      llmModel: lane.model,
+      anthropicKey,
+      authProfilesSource,
     });
     process.stderr.write(outcome.stderr);
     if (outcome.exitCode !== 0) {
@@ -327,14 +425,16 @@ async function main(): Promise<void> {
   if (flags.kind === "self-test") {
     // Probe (a): drift inversion. Every self-test child runs --no-supersessions
     // so no registry entry can ever downgrade a seeded failure to WARN.
+    const driftLane = readRecordingLane(join(HERE, "fixtures", "drift-must-fail"));
     const driftOutcome = spawnScenarioChild({
       scenarioId: "turn-basic-wellness",
       mode: "replay",
       runDir: join(runDir, "drift-must-fail"),
       fixtureDir: join(HERE, "fixtures", "drift-must-fail"),
       noSupersessions: true,
-      llmModel: readRecordingModel(join(HERE, "fixtures", "drift-must-fail")),
-      anthropicKey: REPLAY_DUMMY_KEY,
+      provider: driftLane.provider,
+      llmModel: driftLane.model,
+      anthropicKey: driftLane.provider === "anthropic" ? REPLAY_DUMMY_KEY : undefined,
     });
     if (driftOutcome.verdict === null || driftOutcome.exitCode === 2) {
       console.error(`drift probe harness error (exit ${driftOutcome.exitCode}):\n${driftOutcome.stderr}`);
@@ -351,14 +451,16 @@ async function main(): Promise<void> {
     // Probe (b): determinism — two fresh children, byte-compare the snapshotted
     // home trees. The byte-compare is the pass criterion, NOT the exit codes.
     const probeDirs = ["turn-basic-wellness-probe1", "turn-basic-wellness-probe2"].map((d) => join(runDir, d));
+    const probeLane = readRecordingLane(join(HERE, "fixtures", "turn-basic-wellness"));
     for (const dir of probeDirs) {
       spawnScenarioChild({
         scenarioId: "turn-basic-wellness",
         mode: "replay",
         runDir: dir,
         noSupersessions: true,
-        llmModel: readRecordingModel(join(HERE, "fixtures", "turn-basic-wellness")),
-        anthropicKey: REPLAY_DUMMY_KEY,
+        provider: probeLane.provider,
+        llmModel: probeLane.model,
+        anthropicKey: probeLane.provider === "anthropic" ? REPLAY_DUMMY_KEY : undefined,
       });
     }
     const diff = spawnSync("diff", ["-r", join(probeDirs[0], "home"), join(probeDirs[1], "home")], {

@@ -15,7 +15,7 @@ import {
   type GenerateOptsLike,
   type GenerateResultLike,
 } from "./patch-llm.js";
-import type { RecordedCall, S8aRecording } from "./types.js";
+import type { RecordedCall, S8aProvider, S8aRecording } from "./types.js";
 import { countCapturedWrites } from "./write-capture.js";
 
 // Minimal fake class with the same prototype-patching contract as the real
@@ -45,13 +45,17 @@ function makeFakeLlmClass(
       steps: 1,
     }),
   },
+  lane: { provider: S8aProvider; model: string } = {
+    provider: "anthropic",
+    model: "test-model",
+  },
 ) {
   const transport = decorator(next);
   class FakeLLM {
     async generate(opts: GenerateOptsLike): Promise<GenerateResultLike> {
       return transport.generate({
-        provider: "anthropic",
-        model: "test-model",
+        provider: lane.provider,
+        model: lane.model,
         options: opts as ModelTransportRequest["options"],
       }) as Promise<GenerateResultLike>;
     }
@@ -96,12 +100,12 @@ function recordedCall(overrides: Partial<RecordedCall> & { ordinal: number }): R
   };
 }
 
-function recording(calls: RecordedCall[]): S8aRecording {
+function recording(calls: RecordedCall[], provider: S8aProvider = "anthropic"): S8aRecording {
   return {
     s8aRecordingVersion: 1,
     scenario: "patch-llm-test",
     recordedAt: "1998-07-06T09:00:00.000Z",
-    provider: "anthropic",
+    provider,
     model: "test-model",
     lineage: { templateHash: "aaaaaaaaaaaaaaaa", lineageVersion: "unversioned" },
     calls,
@@ -279,6 +283,27 @@ describe("s8a replay engine", () => {
     expect(result.text).toBe("recorded-reply");
   });
 
+  it("never reaches the canonical transport, so replay needs no provider credentials", async () => {
+    const next = {
+      generate: vi.fn(() => {
+        throw new Error("the canonical transport must never run during replay");
+      }),
+    } satisfies ModelTransport;
+    for (const provider of ["anthropic", "openai-codex"] as const) {
+      const handle = patchForReplay(recording([recordedCall({ ordinal: 0 })], provider), "patch-llm-test");
+      const FakeLLM = makeFakeLlmClass(handle.modelTransportDecorator, next, {
+        provider,
+        model: "test-model",
+      });
+      const result = await new FakeLLM().generate(chatOpts);
+      handle.finalize();
+      handle.restore();
+      expect(result.text).toBe("recorded-reply");
+      expect(handle.state.failures).toEqual([]);
+      expect(next.generate).not.toHaveBeenCalled();
+    }
+  });
+
   it("replays recorded text deltas in order and accepts legacy null", async () => {
     const call = recordedCall({ ordinal: 0 });
     call.events = [
@@ -398,6 +423,84 @@ describe("s8a record engine", () => {
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("captures a codex-lane call with its single whole-text delta and cost", async () => {
+    const next: ModelTransport = {
+      generate: async (request) => {
+        const opts = request.options as GenerateOptsLike;
+        await opts.tools?.probe_tool.execute?.({ q: 1 }, { toolCallId: "t1", messages: [] });
+        const text = "the whole reply at once";
+        request.options.onTextDelta?.(text);
+        return {
+          text,
+          toolCalls: [],
+          finishReason: "stop",
+          usage: {
+            inputTokens: 11,
+            outputTokens: 3,
+            totalTokens: 14,
+            inputTokenDetails: { noCacheTokens: 11, cacheReadTokens: 0, cacheWriteTokens: 0 },
+            outputTokenDetails: { textTokens: 3, reasoningTokens: 0 },
+          },
+          totalUsage: {
+            inputTokens: 11,
+            outputTokens: 3,
+            totalTokens: 14,
+            inputTokenDetails: { noCacheTokens: 11, cacheReadTokens: 0, cacheWriteTokens: 0 },
+            outputTokenDetails: { textTokens: 3, reasoningTokens: 0 },
+          },
+          steps: 1,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        };
+      },
+    };
+    const handle = patchForRecord();
+    const FakeLLM = makeFakeLlmClass(handle.modelTransportDecorator, next, {
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+    });
+    handle.setCurrentTurn({ chatId: "c1", turnIndex: 0 });
+    await new FakeLLM().generate({
+      ...chatOpts,
+      tools: { probe_tool: { execute: async () => ({ answer: 42 }) } },
+    });
+    handle.restore();
+
+    expect(handle.calls).toHaveLength(1);
+    const call = handle.calls[0];
+    expect(call.caller).toBe("chat");
+    expect(call.request.shape).toBe("messages");
+    if (call.request.shape === "messages") {
+      expect(call.request.toolNames).toEqual(["probe_tool"]);
+      expect(call.request.systemSha256_16).toBe(sha256_16("the system prompt"));
+      expect(call.request.cacheKey).toBe("cccccccccccccccc");
+    }
+    expect(call.toolExecutions).toEqual([
+      { seq: 0, toolName: "probe_tool", input: { q: 1 }, resultCanonical: { answer: 42 } },
+    ]);
+    expect(call.events).toEqual([{ type: "text_delta", delta: "the whole reply at once" }]);
+    expect(call.result.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
+  });
+
+  it("replays a codex-lane recording's single delta back to the live handler", async () => {
+    const call = recordedCall({ ordinal: 0 });
+    call.events = [{ type: "text_delta", delta: "the whole reply at once" }];
+    const handle = patchForReplay(recording([call], "openai-codex"), "patch-llm-test");
+    const FakeLLM = makeFakeLlmClass(handle.modelTransportDecorator, undefined, {
+      provider: "openai-codex",
+      model: "test-model",
+    });
+    const deltas: string[] = [];
+    const result = await new FakeLLM().generate({
+      ...chatOpts,
+      onTextDelta: (delta) => deltas.push(delta),
+    });
+    handle.finalize();
+    handle.restore();
+    expect(result.text).toBe("recorded-reply");
+    expect(deltas).toEqual(["the whole reply at once"]);
+    expect(handle.state.failures).toEqual([]);
   });
 
   it.each(["sync-triage", "dream"] as const)(

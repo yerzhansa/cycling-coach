@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createCoachEngine, loadConfig } from "@enduragent/core";
+import { createCoachEngine, loadConfig, type StoredProfileSnapshot } from "@enduragent/core";
 import { cyclingSport } from "@enduragent/sport-cycling";
 
 import {
@@ -20,6 +20,11 @@ import {
 } from "./lib/asserts.js";
 import { canonicalJson } from "./lib/canonical.js";
 import { installFrozenClock } from "./lib/clock.js";
+import {
+  AUTH_PROFILES_SOURCE_ENV,
+  persistRotatedCodexProfile,
+  stageCodexProfile,
+} from "./lib/codex-auth.js";
 import { startIntervalsMock, type IntervalsMockHandle } from "./lib/msw.js";
 import {
   patchForRecord,
@@ -27,6 +32,7 @@ import {
   type RecordHandle,
   type ReplayHandle,
 } from "./lib/patch-llm.js";
+import { isS8aProvider, supportedProviderList } from "./lib/provider-lane.js";
 import { validateRecording } from "./lib/record-validate.js";
 import { loadSupersessions, type SupersessionEntry } from "./lib/supersessions.js";
 import { snapshotHome, stageHome } from "./lib/staging.js";
@@ -34,6 +40,7 @@ import { countCapturedWrites } from "./lib/write-capture.js";
 import type {
   AssertFailure,
   FailureWithDiff,
+  S8aProvider,
   S8aRecording,
   S8aScenario,
   ScenarioVerdict,
@@ -82,6 +89,11 @@ function harnessError(message: string): never {
   process.exit(2);
 }
 
+interface StagedCodexProfile {
+  sourcePath: string;
+  snapshot: StoredProfileSnapshot;
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
@@ -102,25 +114,56 @@ async function main(): Promise<void> {
 
   const clock = installFrozenClock(scenario.frozenNowIso);
   stageHome(home, scenario);
-  const msw: IntervalsMockHandle = startIntervalsMock(scenario, args.mode);
 
   const config = loadConfig();
   if (config.dataDir !== home) {
     harnessError(`config.dataDir (${config.dataDir}) !== CYCLING_COACH_HOME (${home})`);
   }
-  if (config.llm.provider !== "anthropic") {
-    harnessError(`config.llm.provider must be anthropic, got ${config.llm.provider}`);
+  if (!isS8aProvider(config.llm.provider)) {
+    harnessError(
+      `config.llm.provider must be one of ${supportedProviderList()}, got ${config.llm.provider}`,
+    );
   }
+  const provider: S8aProvider = config.llm.provider;
+
+  const msw: IntervalsMockHandle = startIntervalsMock(scenario, args.mode, provider);
 
   let recording: S8aRecording | null = null;
   if (args.mode === "replay") {
     const recordingPath = join(args.fixtureDir, "recording.json");
     if (!existsSync(recordingPath)) harnessError(`recording missing: ${recordingPath}`);
     recording = JSON.parse(readFileSync(recordingPath, "utf-8")) as S8aRecording;
+    if (!isS8aProvider(recording.provider)) {
+      harnessError(
+        `recording header provider (${String(recording.provider)}) is not one of ${supportedProviderList()}`,
+      );
+    }
+    if (recording.provider !== provider) {
+      harnessError(
+        `recording header provider (${recording.provider}) !== config.llm.provider (${provider}); pin LLM_PROVIDER in the spawn env`,
+      );
+    }
     if (recording.model !== config.llm.model) {
       harnessError(
         `recording header model (${recording.model}) !== config.llm.model (${config.llm.model}); pin LLM_MODEL in the spawn env`,
       );
+    }
+  }
+
+  const codexProfileName = config.llm.authProfile ?? "openai-codex";
+  let stagedCodexProfile: StagedCodexProfile | null = null;
+  if (args.mode === "record" && provider === "openai-codex") {
+    const sourcePath = process.env[AUTH_PROFILES_SOURCE_ENV];
+    if (sourcePath === undefined || sourcePath === "") {
+      harnessError(`${AUTH_PROFILES_SOURCE_ENV} is not set in the spawn env`);
+    }
+    try {
+      stagedCodexProfile = {
+        sourcePath,
+        snapshot: stageCodexProfile({ sourcePath, tempHome: home, profileName: codexProfileName }),
+      };
+    } catch (err) {
+      harnessError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -191,7 +234,7 @@ async function main(): Promise<void> {
       exitCode = finishRecord({
         scenario,
         recordHandle: recordHandle!,
-        config: { model: config.llm.model },
+        config: { provider, model: config.llm.model },
         home,
         fixtureDir: args.fixtureDir,
         msw,
@@ -203,6 +246,22 @@ async function main(): Promise<void> {
     recordHandle?.restore();
     replayHandle?.restore();
     clock.uninstall();
+    if (stagedCodexProfile !== null) {
+      try {
+        const outcome = await persistRotatedCodexProfile({
+          sourcePath: stagedCodexProfile.sourcePath,
+          tempHome: home,
+          profileName: codexProfileName,
+          staged: stagedCodexProfile.snapshot,
+        });
+        if (outcome === "superseded" || outcome === "missing" || outcome === "absent") {
+          console.error(`codex auth profile write-back skipped: ${outcome}`);
+        }
+      } catch (err) {
+        console.error(`codex auth profile write-back failed: ${String(err)}`);
+        exitCode = 2;
+      }
+    }
     try {
       snapshotHome(home, join(args.runDir, "home"));
     } catch (err) {
@@ -286,7 +345,7 @@ function finishReplay(params: {
 function finishRecord(params: {
   scenario: S8aScenario;
   recordHandle: RecordHandle;
-  config: { model: string };
+  config: { provider: S8aProvider; model: string };
   home: string;
   fixtureDir: string;
   msw: IntervalsMockHandle;
@@ -355,7 +414,7 @@ function finishRecord(params: {
     s8aRecordingVersion: 1,
     scenario: scenario.id,
     recordedAt: new Date().toISOString(),
-    provider: "anthropic",
+    provider: config.provider,
     model: config.model,
     lineage: { templateHash, lineageVersion: "unversioned" },
     calls,

@@ -1,5 +1,8 @@
 import type { MockIntervalsOptions } from "../../../packages/core/tests/helpers/mock-intervals.js";
 
+export const S8A_PROVIDERS = ["anthropic", "openai-codex"] as const;
+export type S8aProvider = (typeof S8A_PROVIDERS)[number];
+
 export interface S8aScenario {
   id: string; // kebab-case, unique; used in fixture paths
   tier: "replay" | "live"; // ONLY "replay" scenarios gate CI
@@ -100,7 +103,7 @@ export interface S8aRecording {
   s8aRecordingVersion: 1;
   scenario: string;
   recordedAt: string; // frozen-now ISO
-  provider: "anthropic";
+  provider: S8aProvider; // stamped from the recording run's config
   model: string; // stamped from the recording run's config
   lineage: { templateHash: string; lineageVersion: "unversioned" }; // header hash informational, NOT asserted
   calls: RecordedCall[];

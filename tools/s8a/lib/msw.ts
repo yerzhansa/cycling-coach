@@ -4,7 +4,8 @@ import {
   createMockIntervalsServer,
   type CreatedWorkout,
 } from "../../../packages/core/tests/helpers/mock-intervals.js";
-import type { S8aScenario } from "./types.js";
+import { providerLane } from "./provider-lane.js";
+import type { S8aProvider, S8aScenario } from "./types.js";
 
 export interface IntervalsMockHandle {
   server: ReturnType<typeof createMockIntervalsServer>["server"];
@@ -17,10 +18,14 @@ export interface IntervalsMockHandle {
 /** In record mode the real model call must pass through MSW's global fetch
  *  interception; everything else off the intervals mock is a leak. In replay
  *  mode there is no legitimate unhandled request at all. */
-export function classifyUnhandled(url: string, mode: "replay" | "record"): "bypass" | "leak" {
+export function classifyUnhandled(
+  url: string,
+  mode: "replay" | "record",
+  provider: S8aProvider,
+): "bypass" | "leak" {
   if (mode === "record") {
     try {
-      if (new URL(url).host === "api.anthropic.com") return "bypass";
+      if (providerLane(provider).recordBypassHosts.includes(new URL(url).host)) return "bypass";
     } catch {
       // Unparseable URL: treat as a leak.
     }
@@ -31,6 +36,7 @@ export function classifyUnhandled(url: string, mode: "replay" | "record"): "bypa
 export function startIntervalsMock(
   scenario: S8aScenario,
   mode: "replay" | "record",
+  provider: S8aProvider,
 ): IntervalsMockHandle {
   const { server, createdWorkouts, deletedEventIds } = createMockIntervalsServer(
     scenario.intervals,
@@ -67,7 +73,7 @@ export function startIntervalsMock(
   } else {
     server.listen({
       onUnhandledRequest: (request, print) => {
-        if (classifyUnhandled(request.url, "record") === "bypass") return;
+        if (classifyUnhandled(request.url, "record", provider) === "bypass") return;
         markLeak(request.url);
         print.error();
       },
