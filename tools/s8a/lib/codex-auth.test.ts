@@ -7,7 +7,9 @@ import {
   AUTH_PROFILES_BASENAME,
   AUTH_PROFILES_SOURCE_ENV,
   CODEX_PROFILE_NAME,
+  ensureFreshCodexProfile,
   inspectCodexProfile,
+  isProfileFreshEnough,
   isUsableOAuthProfile,
   persistRotatedCodexProfile,
   resolveAuthProfilesSource,
@@ -30,6 +32,8 @@ function fixture(profiles: Record<string, unknown>): { sourcePath: string; tempH
   writeFileSync(sourcePath, JSON.stringify(profiles), "utf-8");
   return { sourcePath, tempHome };
 }
+
+type StoredLike = Record<string, unknown>;
 
 const usable = {
   type: "oauth",
@@ -89,6 +93,117 @@ describe("profile inspection", () => {
     const inspected = inspectCodexProfile(sourcePath, CODEX_PROFILE_NAME);
     expect(inspected.ok).toBe(true);
     if (inspected.ok) expect(inspected.snapshot.profile.refresh).toBe("refresh-token");
+  });
+});
+
+describe("pre-spawn token freshness", () => {
+  const NOW = 3_000_000_000_000;
+  const expired = { ...usable, expires: NOW - 60_000 };
+  const rotated = {
+    access: "access-2",
+    refresh: "refresh-2",
+    expires: NOW + 3_600_000,
+    accountId: "acct-2",
+  };
+
+  it("reads a still-valid token as fresh and never calls the refresh endpoint", async () => {
+    const { sourcePath } = fixture({ [CODEX_PROFILE_NAME]: usable });
+    const before = readFileSync(sourcePath, "utf-8");
+    const outcome = await ensureFreshCodexProfile({
+      sourcePath,
+      profileName: CODEX_PROFILE_NAME,
+      nowMs: NOW,
+      refresh: () => Promise.reject(new Error("must not refresh")),
+    });
+    expect(outcome).toEqual({ ok: true, state: "already-fresh" });
+    expect(readFileSync(sourcePath, "utf-8")).toBe(before);
+  });
+
+  it("treats a token inside the margin, and one with no numeric expiry, as stale", () => {
+    expect(isProfileFreshEnough(usable, NOW)).toBe(true);
+    expect(isProfileFreshEnough({ ...usable, expires: NOW + 60_000 }, NOW)).toBe(false);
+    expect(isProfileFreshEnough({ ...usable, expires: null }, NOW)).toBe(false);
+    expect(isProfileFreshEnough({ ...usable, expires: "soon" }, NOW)).toBe(false);
+  });
+
+  it("refreshes an expired token and persists the rotated credential to the source", async () => {
+    const { sourcePath } = fixture({ [CODEX_PROFILE_NAME]: expired, other: usable });
+    const outcome = await ensureFreshCodexProfile({
+      sourcePath,
+      profileName: CODEX_PROFILE_NAME,
+      nowMs: NOW,
+      refresh: (token) => {
+        expect(token).toBe("refresh-token");
+        return Promise.resolve(rotated);
+      },
+    });
+    expect(outcome).toEqual({ ok: true, state: "refreshed" });
+    const source = JSON.parse(readFileSync(sourcePath, "utf-8")) as Record<string, StoredLike>;
+    expect(source[CODEX_PROFILE_NAME]).toEqual({ ...expired, ...rotated });
+    expect(source.other).toEqual(usable);
+  });
+
+  it("reports the refresh failure instead of spawning a doomed record child", async () => {
+    const { sourcePath } = fixture({ [CODEX_PROFILE_NAME]: expired });
+    const outcome = await ensureFreshCodexProfile({
+      sourcePath,
+      profileName: CODEX_PROFILE_NAME,
+      nowMs: NOW,
+      refresh: () => Promise.reject(new Error("reauth required")),
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.reason).toContain("reauth required");
+  });
+
+  it("accepts a fresher credential another writer landed mid-refresh", async () => {
+    const { sourcePath } = fixture({ [CODEX_PROFILE_NAME]: expired });
+    const outcome = await ensureFreshCodexProfile({
+      sourcePath,
+      profileName: CODEX_PROFILE_NAME,
+      nowMs: NOW,
+      refresh: () => {
+        writeFileSync(
+          sourcePath,
+          JSON.stringify({ [CODEX_PROFILE_NAME]: { ...usable, access: "from-the-desktop" } }),
+          "utf-8",
+        );
+        return Promise.resolve(rotated);
+      },
+    });
+    expect(outcome).toEqual({ ok: true, state: "superseded" });
+    const source = JSON.parse(readFileSync(sourcePath, "utf-8")) as Record<string, StoredLike>;
+    expect(source[CODEX_PROFILE_NAME]).toEqual({ ...usable, access: "from-the-desktop" });
+  });
+
+  it("fails when the concurrent replacement is itself unusable", async () => {
+    const { sourcePath } = fixture({ [CODEX_PROFILE_NAME]: expired });
+    const outcome = await ensureFreshCodexProfile({
+      sourcePath,
+      profileName: CODEX_PROFILE_NAME,
+      nowMs: NOW,
+      refresh: () => {
+        writeFileSync(
+          sourcePath,
+          JSON.stringify({ [CODEX_PROFILE_NAME]: { type: "api", key: "k" } }),
+          "utf-8",
+        );
+        return Promise.resolve(rotated);
+      },
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.reason).toContain("not usable for recording");
+  });
+
+  it("fails when the profile is absent from the source", async () => {
+    const { sourcePath } = fixture({ other: usable });
+    const outcome = await ensureFreshCodexProfile({
+      sourcePath,
+      profileName: CODEX_PROFILE_NAME,
+      nowMs: NOW,
+      refresh: () => Promise.reject(new Error("must not refresh")),
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.reason).toContain("carries no");
   });
 });
 

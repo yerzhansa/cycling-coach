@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { classifyUnhandled, startIntervalsMock, type IntervalsMockHandle } from "./msw.js";
+import {
+  classifyUnhandled,
+  requestUrlOf,
+  routeModelHostAroundMsw,
+  startIntervalsMock,
+  type IntervalsMockHandle,
+} from "./msw.js";
 import type { S8aScenario } from "./types.js";
 
 const scenario: S8aScenario = {
@@ -57,6 +63,58 @@ describe("unhandled-request classification", () => {
     expect(classifyUnhandled("https://example.com/x", "replay", "anthropic")).toBe("leak");
     expect(classifyUnhandled("not a url", "record", "anthropic")).toBe("leak");
     expect(classifyUnhandled("not a url", "record", "openai-codex")).toBe("leak");
+  });
+});
+
+describe("record-mode model-host routing", () => {
+  const responses = (label: string) =>
+    ((input: unknown) =>
+      Promise.resolve(new Response(`${label}:${requestUrlOf(input)}`))) as typeof globalThis.fetch;
+
+  const routed = (provider: "anthropic" | "openai-codex") =>
+    routeModelHostAroundMsw({
+      passthrough: responses("passthrough"),
+      intercepted: responses("intercepted"),
+      provider,
+    });
+
+  it("reads the URL off a string, a URL, and a Request", () => {
+    expect(requestUrlOf("https://chatgpt.com/x")).toBe("https://chatgpt.com/x");
+    expect(requestUrlOf(new URL("https://chatgpt.com/x"))).toBe("https://chatgpt.com/x");
+    expect(requestUrlOf(new Request("https://chatgpt.com/x"))).toBe("https://chatgpt.com/x");
+    expect(requestUrlOf(undefined)).toBe("");
+  });
+
+  it("sends the lane's model and token hosts to the pre-MSW fetch", async () => {
+    const fetchLike = routed("openai-codex");
+    for (const url of [
+      "https://chatgpt.com/backend-api/codex/responses",
+      "https://auth.openai.com/oauth/token",
+    ]) {
+      expect(await (await fetchLike(url)).text()).toBe(`passthrough:${url}`);
+    }
+  });
+
+  it("leaves every other host — and the other lane's host — on MSW", async () => {
+    const fetchLike = routed("openai-codex");
+    for (const url of [
+      "https://intervals.icu/api/v1/athlete/i9876543",
+      "https://api.anthropic.com/v1/messages",
+      "https://example.com/x",
+    ]) {
+      expect(await (await fetchLike(url)).text()).toBe(`intercepted:${url}`);
+    }
+  });
+
+  it("restores the fetch MSW installed when the mock closes", () => {
+    const beforeListen = globalThis.fetch;
+    handle = startIntervalsMock(scenario, "record", "openai-codex");
+    const duringRecord = globalThis.fetch;
+    expect(duringRecord).not.toBe(beforeListen);
+    handle.close();
+    handle = undefined;
+    expect(globalThis.fetch).not.toBe(duringRecord);
+    expect(globalThis.fetch).toBe(beforeListen);
   });
 });
 

@@ -13,7 +13,7 @@ import { collectSessionLineage } from "./lib/asserts.js";
 import {
   AUTH_PROFILES_SOURCE_ENV,
   CODEX_PROFILE_NAME,
-  inspectCodexProfile,
+  ensureFreshCodexProfile,
   resolveAuthProfilesSource,
 } from "./lib/codex-auth.js";
 import { isS8aProvider, PROVIDER_LANES, supportedProviderList } from "./lib/provider-lane.js";
@@ -384,16 +384,21 @@ async function main(): Promise<void> {
       anthropicKey = realKey;
     } else {
       const sourcePath = resolveAuthProfilesSource(process.env);
-      const inspected = inspectCodexProfile(sourcePath, CODEX_PROFILE_NAME);
-      if (!inspected.ok) {
+      const freshened = await ensureFreshCodexProfile({
+        sourcePath,
+        profileName: CODEX_PROFILE_NAME,
+        nowMs: runInstant.getTime(),
+      });
+      if (!freshened.ok) {
         console.error(
-          `record on the openai-codex lane requires a usable OAuth profile: ${inspected.reason}`,
+          `record on the openai-codex lane requires a usable OAuth profile: ${freshened.reason}`,
         );
         console.error(
           `sign in through the product, or point ${AUTH_PROFILES_SOURCE_ENV} at the profiles file`,
         );
         process.exit(2);
       }
+      console.log(`codex auth profile: ${freshened.state}`);
       authProfilesSource = sourcePath;
     }
     const entry = SCENARIO_MANIFEST.find((e) => e.id === flags.scenario);

@@ -15,7 +15,7 @@ export interface IntervalsMockHandle {
   close(): void;
 }
 
-/** In record mode the real model call must pass through MSW's global fetch
+/** In record mode the real model call is routed around MSW's global fetch
  *  interception; everything else off the intervals mock is a leak. In replay
  *  mode there is no legitimate unhandled request at all. */
 export function classifyUnhandled(
@@ -31,6 +31,27 @@ export function classifyUnhandled(
     }
   }
   return "leak";
+}
+
+export function requestUrlOf(input: unknown): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.href;
+  const url = (input as { url?: unknown } | null)?.url;
+  return typeof url === "string" ? url : "";
+}
+
+export function routeModelHostAroundMsw(params: {
+  passthrough: typeof globalThis.fetch;
+  intercepted: typeof globalThis.fetch;
+  provider: S8aProvider;
+}): typeof globalThis.fetch {
+  return ((input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+    const target =
+      classifyUnhandled(requestUrlOf(input), "record", params.provider) === "bypass"
+        ? params.passthrough
+        : params.intercepted;
+    return target(input, init);
+  }) as typeof globalThis.fetch;
 }
 
 export function startIntervalsMock(
@@ -65,6 +86,9 @@ export function startIntervalsMock(
     }
   };
 
+  const passthroughFetch = globalThis.fetch;
+  let restoreFetch: (() => void) | undefined;
+
   if (mode === "replay") {
     server.events.on("request:unhandled", ({ request }) => {
       markLeak(request.url);
@@ -78,6 +102,16 @@ export function startIntervalsMock(
         print.error();
       },
     });
+    const intercepted = globalThis.fetch;
+    const routed = routeModelHostAroundMsw({
+      passthrough: passthroughFetch,
+      intercepted,
+      provider,
+    });
+    globalThis.fetch = routed;
+    restoreFetch = () => {
+      if (globalThis.fetch === routed) globalThis.fetch = intercepted;
+    };
   }
 
   return {
@@ -85,6 +119,9 @@ export function startIntervalsMock(
     createdWorkouts,
     deletedEventIds,
     leak,
-    close: () => server.close(),
+    close: () => {
+      restoreFetch?.();
+      server.close();
+    },
   };
 }
