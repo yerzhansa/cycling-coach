@@ -162,18 +162,31 @@ export class ChatStore {
     }
 
     const beforeOpen = lstatSync(this.sessionsDir);
-    if (!isStrictPrivateDirectory(beforeOpen)) {
+    if (beforeOpen.isSymbolicLink() || !beforeOpen.isDirectory()) {
       throw new Error("Sessions directory is unsafe.");
     }
-    const descriptor = openSync(
-      this.sessionsDir,
-      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-    );
+    let descriptor: number;
     try {
-      if (created) fchmodSync(descriptor, 0o700);
+      descriptor = openSync(
+        this.sessionsDir,
+        constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+      );
+    } catch {
+      throw new Error("Sessions directory is unsafe.");
+    }
+    try {
+      let hardened = true;
+      if (created || !isStrictPrivateDirectory(fstatSync(descriptor))) {
+        try {
+          fchmodSync(descriptor, 0o700);
+        } catch {
+          hardened = false;
+        }
+      }
       const opened = fstatSync(descriptor);
       const afterOpen = lstatSync(this.sessionsDir);
       if (
+        !hardened ||
         !isStrictPrivateDirectory(opened) ||
         !isStrictPrivateDirectory(afterOpen) ||
         !sameIdentity(identity(beforeOpen), identity(opened)) ||

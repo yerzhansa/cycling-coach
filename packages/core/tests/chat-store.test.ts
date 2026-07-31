@@ -24,13 +24,15 @@ import { makeSummaryMessage } from "@enduragent/engine";
 // delegates to the real implementation (captured inside the factory so it is
 // not itself the mock) unless a test flips throwState.shouldThrow. vi.hoisted
 // makes the spy + flag available to the hoisted vi.mock factory.
-const { appendFileSyncSpy, throwState } = vi.hoisted(() => ({
+const { appendFileSyncSpy, throwState, fchmodThrowState } = vi.hoisted(() => ({
   appendFileSyncSpy: vi.fn(),
   throwState: { shouldThrow: null as (() => never) | null },
+  fchmodThrowState: { shouldThrow: null as (() => never) | null },
 }));
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   const realAppend = actual.appendFileSync;
+  const realFchmod = actual.fchmodSync;
   appendFileSyncSpy.mockImplementation((path: string, data: string, opts?: unknown) => {
     if (throwState.shouldThrow) throwState.shouldThrow();
     return realAppend(path, data, opts as Parameters<typeof realAppend>[2]);
@@ -38,6 +40,10 @@ vi.mock("node:fs", async () => {
   return {
     ...actual,
     appendFileSync: (...args: [string, string, unknown?]) => appendFileSyncSpy(...args),
+    fchmodSync: (descriptor: number, mode: number) => {
+      if (fchmodThrowState.shouldThrow) fchmodThrowState.shouldThrow();
+      return realFchmod(descriptor, mode);
+    },
   };
 });
 
@@ -52,6 +58,7 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true });
   throwState.shouldThrow = null;
+  fchmodThrowState.shouldThrow = null;
   appendFileSyncSpy.mockClear();
 });
 
@@ -116,12 +123,57 @@ describe("ChatStore — on-disk permissions", () => {
     expect(statSync(join(sessionsDir, "123.jsonl")).mode & 0o777).toBe(0o600);
   });
 
-  it("refuses a pre-existing permissive sessions directory without repairing it", () => {
+  it("migrates a pre-existing permissive sessions directory to 0o700", () => {
     mkdirSync(sessionsDir, { mode: 0o755 });
     chmodSync(sessionsDir, 0o755);
 
+    const store = new ChatStore(dataDir);
+    store.appendMessage("123", "user", "hello");
+
+    expect(lstatSync(sessionsDir).mode & 0o7777).toBe(0o700);
+    expect(readFileSync(join(sessionsDir, "123.jsonl"), "utf8")).toContain("hello");
+  });
+
+  it("migrates a group- and world-writable sessions directory, preserving its contents", () => {
+    mkdirSync(sessionsDir, { mode: 0o777 });
+    chmodSync(sessionsDir, 0o777);
+    writeFileSync(join(sessionsDir, "123.jsonl"), '{"role":"user","content":"a","ts":"t"}\n', {
+      mode: 0o600,
+    });
+
+    const store = new ChatStore(dataDir);
+
+    expect(lstatSync(sessionsDir).mode & 0o7777).toBe(0o700);
+    expect(store.hasSession("123")).toBe(true);
+  });
+
+  it("refuses when the migration cannot harden the directory", () => {
+    mkdirSync(sessionsDir, { mode: 0o755 });
+    chmodSync(sessionsDir, 0o755);
+    fchmodThrowState.shouldThrow = () => {
+      throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+    };
+
     expect(() => new ChatStore(dataDir)).toThrow("Sessions directory is unsafe.");
     expect(lstatSync(sessionsDir).mode & 0o7777).toBe(0o755);
+  });
+
+  it("refuses a symlinked sessions directory without following or repairing it", () => {
+    const outside = join(dataDir, "synthetic-outside-sessions");
+    mkdirSync(outside, { mode: 0o777 });
+    chmodSync(outside, 0o777);
+    symlinkSync(outside, sessionsDir);
+
+    expect(() => new ChatStore(dataDir)).toThrow("Sessions directory is unsafe.");
+    expect(lstatSync(sessionsDir).isSymbolicLink()).toBe(true);
+    expect(lstatSync(outside).mode & 0o7777).toBe(0o777);
+  });
+
+  it("refuses a sessions path that is not a directory", () => {
+    writeFileSync(sessionsDir, "synthetic not-a-directory\n", { mode: 0o600 });
+
+    expect(() => new ChatStore(dataDir)).toThrow("Sessions directory is unsafe.");
+    expect(lstatSync(sessionsDir).isFile()).toBe(true);
   });
 });
 
