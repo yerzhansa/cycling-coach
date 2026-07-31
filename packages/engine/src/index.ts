@@ -77,6 +77,12 @@ export { truncateUtf16Safe } from "./text-truncate.js";
 export { warnOrphanSections, _resetOrphanWarnCacheForTesting } from "./sport/orphan-sections.js";
 export { capToolResult, TOOL_RESULT_SHARE } from "./agent/tool-result-cap.js";
 export {
+  COMPACTION_SUMMARY_MARKER,
+  demoteSummaryHeadings,
+  formatCompactionNote,
+  persistCompactionSummary,
+} from "./agent/compaction-note.js";
+export {
   bindToolResult,
   boundToolResultProvenance,
   carryBoundToolResultProvenance,

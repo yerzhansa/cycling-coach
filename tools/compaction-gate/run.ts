@@ -116,7 +116,7 @@ async function runCompaction(
       contextWindowTokens,
       caller: "compact",
     });
-    return stripSummaryPrefix(String(result[0].content));
+    return stripSummaryPrefix(String(result.messages[0].content));
   }
   const { summary } = await summarizeDroppedMessages({
     dropped: t.messages,
@@ -263,7 +263,7 @@ async function main(): Promise<void> {
     caller: "compact",
     contextWindowTokens: compactWindow,
   });
-  const exSummary = stripSummaryPrefix(String(exResult[0].content));
+  const exSummary = stripSummaryPrefix(String(exResult.messages[0].content));
   const exLines = readLedger(tempDir)
     .slice(ledgerBefore)
     .filter((l) => l.kind === "generate" && l.caller === "compact");

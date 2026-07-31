@@ -136,6 +136,37 @@ describe("coach-agent empty-reply guards", () => {
     expect(assistants[0].content).toBe(reply);
   });
 
+  it("routes a successful window-exceeded finish through compaction/retry without persisting the truncated text", async () => {
+    let mainCalls = 0;
+    const complete = vi.fn(async (params: { system?: string; tools?: unknown }) => {
+      const sys = params.system ?? "";
+      if (sys.includes(FLUSH_MARKER)) return mkAssistant("facts noted");
+      if (sys.length === 0) return mkAssistant("summary");
+      mainCalls++;
+      if (mainCalls === 1) {
+        // A successful "length" finish whose input already filled the 272k window.
+        return {
+          ...mkAssistant("truncated partial answer", "toolUse"),
+          toolCalls: [] as Array<{ id: string; name: string; arguments: Record<string, unknown> }>,
+          usage: { input: 300_000, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 300_000 },
+          stopReason: "length" as const,
+        };
+      }
+      return mkAssistant("Full recovered answer after compaction.");
+    });
+    const { agent } = await setupAgent(complete);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const reply = await agent.chat("window-exceeded-chat", "deep review please");
+
+    expect(reply).toBe("Full recovered answer after compaction.");
+    expect(mainCalls).toBe(2); // window-exceeded finish forced a retry
+    const assistants = assistantLines("window-exceeded-chat");
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0].content).toBe("Full recovered answer after compaction.");
+    expect(assistants.some((l) => l.content.includes("truncated partial"))).toBe(false);
+  });
+
   it("leaves a normal non-exhausted turn unaffected", async () => {
     const complete = vi.fn(async (params: { system?: string }) => {
       const sys = params.system ?? "";

@@ -44,10 +44,13 @@ import { splitHistoryByBudget, makeSummaryMessage } from "./history-limit.js";
 import {
   shouldCompact,
   computeHistoryTokenBudget,
+  effectiveEstimatorWindowTokens,
   estimateMessagesTokens,
+  isWindowExceededFinish,
   TIMEOUT_COMPACTION_THRESHOLD,
 } from "./token-utils.js";
 import { summarizeInStages, summarizeDroppedMessages } from "./compaction.js";
+import { persistCompactionSummary } from "./compaction-note.js";
 import {
   runMemoryFlush,
   FLUSH_ZERO_WRITE_MIN_MESSAGES,
@@ -106,6 +109,19 @@ function isStepExhaustedEmpty(text: string, finishReason: FinishReason): boolean
 }
 
 const RECOVERY_PROMPT = "summarize what you did and what's left";
+
+const WINDOW_EXCEEDED_FINISH_MESSAGE =
+  "Provider reported the context window was exceeded on a successful finish";
+
+// The truncated text a window-exceeded finish streamed is unusable, so the
+// compaction rescue must run even though the attempt emitted deltas.
+function isWindowExceededFinishOverflow(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    err.name === "ContextOverflowError" &&
+    err.message === WINDOW_EXCEEDED_FINISH_MESSAGE
+  );
+}
 
 const DISK_FULL_NOTE =
   "\n\n(Heads up: my disk is full, so I couldn't save this to our history — but your message went through. Please free up some space when you can.)";
@@ -533,9 +549,19 @@ export class CoachAgent {
       caller: "compact" as const,
       mustPreserveTokens: this.sport.mustPreserveTokens,
       memory: createMemorySnapshot(this.memory),
-      contextWindowTokens: this.compactContextWindowTokens,
+      // Chunk sizing off the effective (capped) window so a 1M provider window
+      // does not scale summary chunks past the estimator ceiling.
+      contextWindowTokens: effectiveEstimatorWindowTokens(this.compactContextWindowTokens),
       budget,
     };
+  }
+
+  private persistSummaryToDailyNote(summary: string, provenance: SourceProvenance): void {
+    try {
+      persistCompactionSummary(this.memory, summary, provenance);
+    } catch (err) {
+      this.log.warn("Failed to persist compaction summary to daily note", err);
+    }
   }
 
   private emitTurnOutcome(outcome: TurnOutcome): void {
@@ -684,16 +710,17 @@ export class CoachAgent {
           }
         }
         try {
-          const { summary, unsummarized } = await summarizeDroppedMessages({
+          const { summary, unsummarized, provenance } = await summarizeDroppedMessages({
             dropped,
             previousSummary,
+            previousSummaryProvenance,
             ...this.compactionParams(turnBudget),
           });
           compactions++;
-          summaryMsg = makeSummaryMessage(
-            summary,
-            unionProvenance(previousSummaryProvenance, provenanceOfMessages(dropped)),
-          );
+          const summaryProvenance =
+            provenance ?? unionProvenance(previousSummaryProvenance, provenanceOfMessages(dropped));
+          this.persistSummaryToDailyNote(summary, summaryProvenance);
+          summaryMsg = makeSummaryMessage(summary, summaryProvenance);
           requeued = unsummarized;
           if (flushed) {
             this.chatStore.archivePreCompact(chatId);
@@ -762,6 +789,19 @@ export class CoachAgent {
       let serverErrorAttempts = 0;
       let classifiedTerminalFailure: ClassifiedTurnFailure | undefined;
 
+      const compactInTurn = async () => {
+        const compacted = await summarizeInStages({
+          messages,
+          ...this.compactionParams(turnBudget),
+        });
+        messages = compacted.messages;
+        if (compacted.summary && compacted.summaryProvenance) {
+          this.persistSummaryToDailyNote(compacted.summary, compacted.summaryProvenance);
+        }
+        compactions++;
+        this.memory.reload();
+      };
+
       // Loop-invariant: the prompt cache key derives only from the chat id.
       const cacheKey = sha256_16(chatId);
 
@@ -789,9 +829,7 @@ export class CoachAgent {
                 this.log.warn("In-turn memory flush failed; compacting without flush", err);
               }
             }
-            messages = await summarizeInStages({ messages, ...this.compactionParams(turnBudget) });
-            compactions++;
-            this.memory.reload();
+            await compactInTurn();
           }
 
           let attemptObservedText = false;
@@ -822,6 +860,25 @@ export class CoachAgent {
               onTextDelta: onAttemptTextDelta,
             });
             const { text, finishReason } = result;
+
+            // A successful "length" finish whose prompt already filled the real
+            // provider window is a context overflow, not a long answer. Route it
+            // through the existing reactive overflow rescue (compact + retry) and
+            // never persist the truncated text — throw a normalized overflow so
+            // the catch block below handles it exactly like a thrown overflow.
+            // Plain output-length truncation (input below the window) falls
+            // through to recoverStepExhaustedText's existing empty-reply handling.
+            if (
+              isWindowExceededFinish({
+                finishReason,
+                usage: result.usage,
+                contextWindowTokens: this.config.contextWindowTokens,
+              })
+            ) {
+              const overflow = new Error(WINDOW_EXCEEDED_FINISH_MESSAGE);
+              overflow.name = "ContextOverflowError";
+              throw overflow;
+            }
 
             // Recovery runs only on this success path (before the catch below).
             const recovered = await this.recoverStepExhaustedText(
@@ -964,7 +1021,7 @@ export class CoachAgent {
               emitEvent({ type: "final-text", turnId, text: TAINTED_BY_WRITES_MESSAGE });
               return TAINTED_BY_WRITES_MESSAGE;
             }
-            if (attemptObservedText) throw err;
+            if (attemptObservedText && !isWindowExceededFinishOverflow(err)) throw err;
             const failure = this.ports.classifyFailure(err);
             // Reactive: context overflow → flush + compact + retry
             if (failure === "overflow" && overflowAttempts < MAX_OVERFLOW_ATTEMPTS) {
@@ -981,12 +1038,7 @@ export class CoachAgent {
                     );
                   }
                 }
-                messages = await summarizeInStages({
-                  messages,
-                  ...this.compactionParams(turnBudget),
-                });
-                compactions++;
-                this.memory.reload();
+                await compactInTurn();
               } catch (rescueErr) {
                 this.log.warn(
                   "Compaction rescue failed; rethrowing the original turn error",
@@ -1006,12 +1058,7 @@ export class CoachAgent {
               if (ratio > TIMEOUT_COMPACTION_THRESHOLD) {
                 timeoutAttempts++;
                 try {
-                  messages = await summarizeInStages({
-                    messages,
-                    ...this.compactionParams(turnBudget),
-                  });
-                  compactions++;
-                  this.memory.reload();
+                  await compactInTurn();
                 } catch (rescueErr) {
                   this.log.warn(
                     "Compaction rescue failed; rethrowing the original turn error",

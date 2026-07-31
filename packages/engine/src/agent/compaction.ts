@@ -1,6 +1,14 @@
 import type { ModelMessage } from "ai";
 import type { MemorySnapshot } from "../host-ports.js";
-import type { SportMemoryShape } from "../sport.js";
+import type { DerivedPreserveTokens, SportMemoryShape } from "../sport.js";
+import {
+  EMPTY_PROVENANCE,
+  UNKNOWN_PROVENANCE,
+  getMessageProvenance,
+  provenanceOfMessages,
+  unionProvenance,
+  type SourceProvenance,
+} from "../provenance.js";
 import {
   estimateTokens,
   estimateMessagesTokens,
@@ -40,18 +48,27 @@ const REQUIRED_SUMMARY_SECTIONS = [
 // PROMPT BUILDERS
 // ============================================================================
 
+function resolveTokens(
+  spec: SportMemoryShape["mustPreserveTokens"],
+  memory: MemorySnapshot,
+): DerivedPreserveTokens {
+  if (typeof spec !== "function") return { tokens: spec, provenance: EMPTY_PROVENANCE };
+  try {
+    const resolved = spec(memory);
+    return Array.isArray(resolved)
+      ? { tokens: resolved, provenance: EMPTY_PROVENANCE }
+      : (resolved as DerivedPreserveTokens);
+  } catch (err) {
+    console.warn("Sport.mustPreserveTokens function threw; using empty list", err);
+    return { tokens: [], provenance: EMPTY_PROVENANCE };
+  }
+}
+
 export function resolveMustPreserveTokens(
   spec: SportMemoryShape["mustPreserveTokens"],
   memory: MemorySnapshot,
 ): readonly string[] {
-  if (typeof spec !== "function") return spec;
-  try {
-    const resolved = spec(memory);
-    return "tokens" in resolved ? resolved.tokens : resolved;
-  } catch (err) {
-    console.warn("Sport.mustPreserveTokens function threw; using empty list", err);
-    return [];
-  }
+  return resolveTokens(spec, memory).tokens;
 }
 
 function buildMustPreserveBlock(tokens: readonly string[]): string {
@@ -472,16 +489,21 @@ export async function summarizeDroppedMessages(params: {
   mustPreserveTokens: SportMemoryShape["mustPreserveTokens"];
   memory: MemorySnapshot;
   previousSummary?: string;
+  previousSummaryProvenance?: SourceProvenance;
   maxRetries?: number;
   contextWindowTokens?: number;
   caller?: GenerateOptions["caller"];
   budget?: ModelCallCharger;
-}): Promise<{ summary: string; unsummarized: ModelMessage[] }> {
-  const { dropped, llm, mustPreserveTokens, memory, previousSummary, maxRetries = 1, contextWindowTokens, caller, budget } = params;
+}): Promise<{
+  summary: string;
+  unsummarized: ModelMessage[];
+  provenance?: SourceProvenance;
+}> {
+  const { dropped, llm, mustPreserveTokens, memory, previousSummary, previousSummaryProvenance, maxRetries = 1, contextWindowTokens, caller, budget } = params;
 
   if (dropped.length === 0) return { summary: previousSummary ?? "", unsummarized: [] };
 
-  const tokens = resolveMustPreserveTokens(mustPreserveTokens, memory);
+  const { tokens, provenance: tokenProvenance } = resolveTokens(mustPreserveTokens, memory);
   const system = buildCompactionSystemPrompt(tokens);
 
   const chunks = computeAdaptiveChunks(dropped, contextWindowTokens);
@@ -489,6 +511,10 @@ export async function summarizeDroppedMessages(params: {
   if (chunks.length === 0) chunks.push(dropped);
 
   let summary: string | undefined;
+  let summaryProvenance = unionProvenance(
+    previousSummary === undefined ? undefined : (previousSummaryProvenance ?? UNKNOWN_PROVENANCE),
+    tokenProvenance,
+  );
   const unsummarized: ModelMessage[] = [];
   let lastError: unknown;
 
@@ -505,6 +531,7 @@ export async function summarizeDroppedMessages(params: {
         budget,
       });
       summary = text;
+      summaryProvenance = unionProvenance(summaryProvenance, provenanceOfMessages(chunk));
     } catch (err) {
       lastError = err;
       unsummarized.push(...chunk);
@@ -521,6 +548,7 @@ export async function summarizeDroppedMessages(params: {
   return {
     summary: await finalizeSummary({ summary, llm, system, maxRetries, caller, budget }),
     unsummarized,
+    provenance: summaryProvenance,
   };
 }
 
@@ -538,11 +566,12 @@ export async function summarizeInStages(params: {
   contextWindowTokens?: number;
   caller?: GenerateOptions["caller"];
   budget?: ModelCallCharger;
-}): Promise<ModelMessage[]> {
+}): Promise<{ messages: ModelMessage[]; summary?: string; summaryProvenance?: SourceProvenance }> {
   const { llm, mustPreserveTokens, memory, recentToKeep = 4, contextWindowTokens, caller, budget } = params;
 
   let messages = params.messages;
   let previousSummary = params.previousSummary;
+  let previousSummaryProvenance: SourceProvenance | undefined;
   const first = messages[0];
   if (
     previousSummary === undefined &&
@@ -552,18 +581,22 @@ export async function summarizeInStages(params: {
     first.content.startsWith(SUMMARY_PREFIX)
   ) {
     previousSummary = first.content.slice(SUMMARY_PREFIX.length + 1);
+    previousSummaryProvenance = getMessageProvenance(first);
     messages = messages.slice(1);
   }
 
   const keepCount = Math.min(recentToKeep, messages.length);
   const toSummarize = messages.slice(0, messages.length - keepCount);
   const recent = messages.slice(messages.length - keepCount);
+  let summaryProvenance =
+    previousSummary === undefined ? undefined : (previousSummaryProvenance ?? UNKNOWN_PROVENANCE);
 
   if (toSummarize.length === 0) {
-    return params.messages;
+    return { messages: params.messages };
   }
 
-  const tokens = resolveMustPreserveTokens(mustPreserveTokens, memory);
+  const { tokens, provenance: tokenProvenance } = resolveTokens(mustPreserveTokens, memory);
+  summaryProvenance = unionProvenance(summaryProvenance, tokenProvenance);
   const system = buildCompactionSystemPrompt(tokens);
 
   const chunks = computeAdaptiveChunks(toSummarize, contextWindowTokens);
@@ -582,6 +615,7 @@ export async function summarizeInStages(params: {
         budget,
       });
       summary = text;
+      summaryProvenance = unionProvenance(summaryProvenance, provenanceOfMessages(chunk));
     } catch (err) {
       console.warn("Staged summarization chunk failed; continuing with carried summary", err);
     }
@@ -589,7 +623,7 @@ export async function summarizeInStages(params: {
 
   if (summary === undefined) {
     console.warn("Staged summarization produced no summary; dropping oldest messages without one");
-    return [...recent];
+    return { messages: [...recent] };
   }
 
   const finalSummary = await finalizeSummary({
@@ -600,5 +634,10 @@ export async function summarizeInStages(params: {
     caller,
     budget,
   });
-  return [makeSummaryMessage(finalSummary), ...recent];
+  const durableProvenance = summaryProvenance ?? UNKNOWN_PROVENANCE;
+  return {
+    messages: [makeSummaryMessage(finalSummary, durableProvenance), ...recent],
+    summary: finalSummary,
+    summaryProvenance: durableProvenance,
+  };
 }

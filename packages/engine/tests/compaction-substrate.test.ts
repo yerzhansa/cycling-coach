@@ -169,9 +169,10 @@ describe("coach-stance round-trip (mechanical path)", () => {
 
     expect(llm.capturedOpts).toHaveLength(1);
     expect(String(llm.capturedMessages[0][0].content)).toContain(STANCE_FACT);
-    expect(result).toHaveLength(3);
-    expect(result[0].role).toBe("system");
-    expect(String(result[0].content)).toContain(STANCE_FACT);
+    expect(result.messages).toHaveLength(3);
+    expect(result.messages[0].role).toBe("system");
+    expect(String(result.messages[0].content)).toContain(STANCE_FACT);
+    expect(result.summary).toContain(STANCE_FACT);
   });
 });
 

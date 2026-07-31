@@ -11,6 +11,10 @@ import {
 } from "../src/agent/compaction.js";
 import { makeSummaryMessage, SUMMARY_PREFIX } from "../src/agent/history-limit.js";
 import { createFakeLLM } from "./helpers/fake-llm.js";
+import { getMessageProvenance, setMessageProvenance } from "../src/provenance.js";
+
+const GARMIN = { garmin: true, nonGarmin: false, unknown: false };
+const UNKNOWN = { garmin: false, nonGarmin: false, unknown: true };
 
 // ─── Test helpers ─────────────────────────────────────────────────────
 
@@ -291,6 +295,29 @@ describe("summarizeDroppedMessages failure containment", () => {
     expect(result.summary).toContain("## Coach Stance");
   });
 
+  it("excludes a failed chunk from the durable summary provenance", async () => {
+    const failedGarmin = setMessageProvenance(
+      { role: "user", content: "CHUNK-A " + "a".repeat(20_000) },
+      GARMIN,
+    );
+    const summarizedUnknown = setMessageProvenance(
+      { role: "user", content: "CHUNK-B " + "b".repeat(20_000) },
+      UNKNOWN,
+    );
+    const llm = createFakeLLM([{ error: new Error("boom") }, VALID_FIVE_SECTION_SUMMARY]);
+
+    const result = await summarizeDroppedMessages({
+      dropped: [failedGarmin, summarizedUnknown],
+      llm,
+      mustPreserveTokens: [],
+      memory: EMPTY_SNAPSHOT,
+      contextWindowTokens: 30_000,
+    });
+
+    expect(result.unsummarized).toEqual([failedGarmin]);
+    expect(result.provenance).toEqual(UNKNOWN);
+  });
+
   it("returns an empty requeue on success", async () => {
     const llm = createFakeLLM([VALID_FIVE_SECTION_SUMMARY]);
 
@@ -321,6 +348,60 @@ describe("summarizeDroppedMessages failure containment", () => {
   });
 });
 
+describe("staged summary provenance", () => {
+  it("carries memory-derived token provenance through dropped-message compaction", async () => {
+    const llm = createFakeLLM([VALID_FIVE_SECTION_SUMMARY]);
+
+    const result = await summarizeDroppedMessages({
+      dropped: REPRESENTATIVE_CONVERSATION,
+      llm,
+      mustPreserveTokens: () => ({ tokens: ["FTP 247W"], provenance: GARMIN }),
+      memory: EMPTY_SNAPSHOT,
+    });
+
+    expect(result.provenance?.garmin).toBe(true);
+  });
+
+  it("carries memory-derived token provenance through staged compaction", async () => {
+    const llm = createFakeLLM([VALID_FIVE_SECTION_SUMMARY]);
+
+    const result = await summarizeInStages({
+      messages: REPRESENTATIVE_CONVERSATION,
+      llm,
+      mustPreserveTokens: () => ({ tokens: ["FTP 247W"], provenance: GARMIN }),
+      memory: EMPTY_SNAPSHOT,
+      recentToKeep: 0,
+    });
+
+    expect(result.summaryProvenance?.garmin).toBe(true);
+    expect(getMessageProvenance(result.messages[0]).garmin).toBe(true);
+  });
+
+  it("excludes a failed chunk from the summary message provenance", async () => {
+    const failedGarmin = setMessageProvenance(
+      { role: "user", content: "CHUNK-A " + "a".repeat(20_000) },
+      GARMIN,
+    );
+    const summarizedUnknown = setMessageProvenance(
+      { role: "user", content: "CHUNK-B " + "b".repeat(20_000) },
+      UNKNOWN,
+    );
+    const llm = createFakeLLM([{ error: new Error("boom") }, VALID_FIVE_SECTION_SUMMARY]);
+
+    const result = await summarizeInStages({
+      messages: [failedGarmin, summarizedUnknown],
+      llm,
+      mustPreserveTokens: [],
+      memory: EMPTY_SNAPSHOT,
+      recentToKeep: 0,
+      contextWindowTokens: 30_000,
+    });
+
+    expect(result.summaryProvenance).toEqual(UNKNOWN);
+    expect(getMessageProvenance(result.messages[0])).toEqual(UNKNOWN);
+  });
+});
+
 describe("shared audit post-step (cap-before-audit)", () => {
   const PREVIOUS_SUMMARY = "## Athlete Profile\n- FTP 247W baseline established";
 
@@ -340,9 +421,10 @@ describe("shared audit post-step (cap-before-audit)", () => {
     for (const opts of spy.capturedOpts) {
       expect(opts.maxOutputTokens).toBe(1000);
     }
-    expect(result[0].content).toContain("## Coach Stance");
-    expect(result[0].content).toContain("## Pending Questions");
-    expect(result).toHaveLength(3);
+    expect(result.messages[0].content).toContain("## Coach Stance");
+    expect(result.messages[0].content).toContain("## Pending Questions");
+    expect(result.messages).toHaveLength(3);
+    expect(result.summary).toContain("## Coach Stance");
   });
 
   it("staged summarization that stays sectionless degrades to the capped text instead of throwing", async () => {
@@ -357,8 +439,9 @@ describe("shared audit post-step (cap-before-audit)", () => {
     });
 
     expect(spy.capturedOpts).toHaveLength(2);
-    expect(result[0].content).toContain("still no sections");
-    expect(result).toHaveLength(3);
+    expect(result.messages[0].content).toContain("still no sections");
+    expect(result.messages).toHaveLength(3);
+    expect(result.summary).toContain("still no sections");
   });
 
   it("audits the capped text, not the pre-cap text: tail-amputated sections trigger the retry", async () => {
