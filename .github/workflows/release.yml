@@ -204,7 +204,7 @@ jobs:
         # OIDC is negotiated automatically by npm 11+ when id-token: write
         # is granted (no NPM_TOKEN secret needed). The trusted publisher
         # must be configured per-package on npmjs.com (one-time operator
-        # action; matches repo `yerzhansa/cycling-coach` + workflow
+        # action; matches repo `yerzhansa/enduragent` + workflow
         # `release.yml`).
         run: |
           set -euo pipefail

@@ -23,7 +23,7 @@ const availableResult = {
   status: "available",
   version: "2026.7.23",
   notes: ["Added release notes to the desktop."],
-  releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23",
+  releaseUrl: "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23",
 } as const;
 
 function setup(loadReleaseNotes: LoadReleaseNotes = vi.fn(async () => availableResult)) {
@@ -67,7 +67,7 @@ describe("desktop release notes IPC", () => {
     expect(state.loadReleaseNotes).toHaveBeenCalledOnce();
     expect(state.loadReleaseNotes).toHaveBeenCalledWith("cycling-coach", {
       owner: "yerzhansa",
-      name: "cycling-coach",
+      name: "enduragent",
     });
   });
 
@@ -77,7 +77,7 @@ describe("desktop release notes IPC", () => {
       status: "available" as const,
       version: "2026.7.23",
       notes,
-      releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23",
+      releaseUrl: "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23",
       internalFeedUrl: "https://example.invalid/private-feed",
     }));
     const state = setup(loadReleaseNotes);
@@ -126,7 +126,7 @@ describe("desktop release notes IPC", () => {
     await expect(releaseNotes(state.trusted)).resolves.toEqual({
       status: "unavailable",
       version: null,
-      releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases",
+      releaseUrl: "https://github.com/yerzhansa/enduragent/releases",
     });
     await expect(releaseNotes(state.trusted)).resolves.toEqual(availableResult);
     expect(loadReleaseNotes).toHaveBeenCalledTimes(2);

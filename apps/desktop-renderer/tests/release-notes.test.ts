@@ -23,7 +23,7 @@ function available(overrides: Partial<Extract<ReleaseNotesResult, { status: "ava
     status: "available",
     version: "2026.7.23",
     notes: ["Improved Desktop reliability."],
-    releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23",
+    releaseUrl: "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23",
     ...overrides,
   } as const;
 }
@@ -93,7 +93,7 @@ describe("release notes controller", () => {
       .mockResolvedValueOnce({
         status: "unavailable",
         version: "2026.7.23",
-        releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases",
+        releaseUrl: "https://github.com/yerzhansa/enduragent/releases",
       })
       .mockRejectedValueOnce(rawError);
     const subject = fakeView();
@@ -104,7 +104,7 @@ describe("release notes controller", () => {
     await vi.waitFor(() =>
       expect(subject.view.renderUnavailable).toHaveBeenLastCalledWith({
         version: "2026.7.23",
-        releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases",
+        releaseUrl: "https://github.com/yerzhansa/enduragent/releases",
       }),
     );
     subject.retry();

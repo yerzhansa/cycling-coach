@@ -84,7 +84,7 @@ const CHATGPT_REASONS = new Set([
   "runtime-unavailable",
 ]);
 const IMPORT_EXTENSIONS = new Set([".fit", ".tcx", ".gpx"]);
-const RELEASES_URL = "https://github.com/yerzhansa/cycling-coach/releases";
+const RELEASES_URL = "https://github.com/yerzhansa/enduragent/releases";
 const RELEASE_NOTES_MAX_TOTAL_BYTES = 64 * 1024;
 const TRANSCRIPT_PAGE_MAX_TURNS = 50;
 const TRANSCRIPT_PAGE_MAX_RESPONSE_BYTES = 266_240;

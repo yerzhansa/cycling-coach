@@ -114,8 +114,8 @@ npx cycling-coach
 ## More
 
 - Follow [@yerzhansa](https://x.com/yerzhansa) on X.com for updates, or drop a question/feedback anytime.
-- **Secrets backends** (1Password, macOS Keychain, Vault, AWS/GCP Secret Manager, age, env), **architecture diagram**, and **development setup** — see the [GitHub repo](https://github.com/yerzhansa/cycling-coach#readme).
-- **Issues**: <https://github.com/yerzhansa/cycling-coach/issues>
+- **Secrets backends** (1Password, macOS Keychain, Vault, AWS/GCP Secret Manager, age, env), **architecture diagram**, and **development setup** — see the [GitHub repo](https://github.com/yerzhansa/enduragent#readme).
+- **Issues**: <https://github.com/yerzhansa/enduragent/issues>
 - **License**: MIT
 
 ## Notices

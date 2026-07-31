@@ -71,7 +71,7 @@ jobs:
             echo "labels<<EOF"
             echo "org.opencontainers.image.title=Cycling Coach"
             echo "org.opencontainers.image.description=Single-tenant AI cycling coach for Telegram and intervals.icu"
-            echo "org.opencontainers.image.source=https://github.com/yerzhansa/cycling-coach"
+            echo "org.opencontainers.image.source=https://github.com/yerzhansa/enduragent"
             echo "org.opencontainers.image.revision=${GITHUB_SHA}"
             if [[ -n "$version" ]]; then
               echo "org.opencontainers.image.version=${version}"
