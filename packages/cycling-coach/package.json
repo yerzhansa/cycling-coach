@@ -14,12 +14,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yerzhansa/cycling-coach.git",
+    "url": "git+https://github.com/yerzhansa/enduragent.git",
     "directory": "packages/cycling-coach"
   },
-  "homepage": "https://github.com/yerzhansa/cycling-coach#readme",
+  "homepage": "https://github.com/yerzhansa/enduragent#readme",
   "bugs": {
-    "url": "https://github.com/yerzhansa/cycling-coach/issues"
+    "url": "https://github.com/yerzhansa/enduragent/issues"
   },
   "scripts": {
     "build": "tsup",

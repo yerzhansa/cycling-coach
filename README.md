@@ -2,6 +2,8 @@
 
 AI cycling coaching agent. Bring your own LLM API key **or sign in with a ChatGPT Plus subscription**, connect [intervals.icu](https://intervals.icu) for real athlete data, chat via Telegram or CLI.
 
+This project was formerly known as cycling-coach.
+
 Training data and coaching insights may include data from Garmin devices.
 
 Want the bot running 24/7 without keeping your computer on? Deploy the Railway template: https://railway.com/deploy/cycling-coach
@@ -97,8 +99,8 @@ Anthropic's Claude Pro/Max subscription does **not** support OAuth for third-par
 ### From source (development)
 
 ```bash
-git clone git@github.com:yerzhansa/cycling-coach.git
-cd cycling-coach
+git clone git@github.com:yerzhansa/enduragent.git
+cd enduragent
 
 npm install
 npm run build

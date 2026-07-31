@@ -5,9 +5,9 @@ import { isTrustedConnectionRequest } from "./security.js";
 
 const RELEASE_NOTES_REPO = Object.freeze({
   owner: "yerzhansa",
-  name: "cycling-coach",
+  name: "enduragent",
 });
-const RELEASES_URL = "https://github.com/yerzhansa/cycling-coach/releases";
+const RELEASES_URL = "https://github.com/yerzhansa/enduragent/releases";
 
 function unavailableReleaseNotes(): ReleaseNotesResult {
   return {

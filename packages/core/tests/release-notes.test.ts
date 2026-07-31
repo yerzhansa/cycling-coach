@@ -7,8 +7,8 @@ import {
   type ReleaseNotesFetch,
 } from "../src/release-notes.js";
 
-const REPO = { owner: "yerzhansa", name: "cycling-coach" };
-const RELEASES_URL = "https://github.com/yerzhansa/cycling-coach/releases";
+const REPO = { owner: "yerzhansa", name: "enduragent" };
+const RELEASES_URL = "https://github.com/yerzhansa/enduragent/releases";
 
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
@@ -125,7 +125,7 @@ describe("fetchLatestReleaseNotes", () => {
     });
     expect(requests.map(({ url }) => url)).toEqual([
       "https://registry.npmjs.org/cycling-coach/latest",
-      "https://api.github.com/repos/yerzhansa/cycling-coach/releases/tags/cycling-coach@2026.7.23",
+      "https://api.github.com/repos/yerzhansa/enduragent/releases/tags/cycling-coach@2026.7.23",
     ]);
     expect(requests[1].init?.headers).toEqual({ Accept: "application/vnd.github+json" });
     expect(requests.every(({ init }) => init?.redirect === "error")).toBe(true);

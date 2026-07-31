@@ -451,12 +451,12 @@ describe("desktop preload ChatGPT auth", () => {
       status: "available",
       version: "2026.7.23",
       notes,
-      releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23",
+      releaseUrl: "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23",
     };
     mocks.invoke.mockResolvedValueOnce(available).mockResolvedValueOnce({
       status: "unavailable",
       version: null,
-      releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases",
+      releaseUrl: "https://github.com/yerzhansa/enduragent/releases",
     });
 
     const availableCopy = (await bridge.releaseNotes()) as typeof available;
@@ -466,7 +466,7 @@ describe("desktop preload ChatGPT auth", () => {
     await expect(bridge.releaseNotes()).resolves.toEqual({
       status: "unavailable",
       version: null,
-      releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases",
+      releaseUrl: "https://github.com/yerzhansa/enduragent/releases",
     });
     expect(mocks.invoke.mock.calls).toEqual([
       ["desktop:get-release-notes"],
@@ -478,19 +478,19 @@ describe("desktop preload ChatGPT auth", () => {
     mocks.invoke.mockResolvedValueOnce({
       status: "unavailable",
       version: "2026.7.23",
-      releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23",
+      releaseUrl: "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23",
     });
 
     await expect(bridge.releaseNotes()).resolves.toEqual({
       status: "unavailable",
       version: "2026.7.23",
-      releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23",
+      releaseUrl: "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23",
     });
   });
 
   it("rejects malformed release note unions, strings, counts, and totals", async () => {
     const tagUrl =
-      "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23";
+      "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23";
     const malformed = [
       null,
       {
@@ -504,7 +504,7 @@ describe("desktop preload ChatGPT auth", () => {
         status: "unavailable",
         version: null,
         notes: [],
-        releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases",
+        releaseUrl: "https://github.com/yerzhansa/enduragent/releases",
       },
       {
         status: "available",
@@ -563,18 +563,18 @@ describe("desktop preload ChatGPT auth", () => {
         version: "2026.7.23",
         notes: [],
         releaseUrl:
-          "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.22",
+          "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.22",
       },
       {
         status: "unavailable",
         version: "2026.7.23",
-        releaseUrl: "https://github.com/yerzhansa/cycling-coach/releases",
+        releaseUrl: "https://github.com/yerzhansa/enduragent/releases",
       },
       {
         status: "unavailable",
         version: null,
         releaseUrl:
-          "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23",
+          "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23",
       },
     ];
 
@@ -585,14 +585,15 @@ describe("desktop preload ChatGPT auth", () => {
   });
 
   it.each([
-    "http://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23",
-    "https://user:secret@github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23",
-    "https://github.com:444/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23",
-    "https://github.com/other/cycling-coach/releases/tag/cycling-coach@2026.7.23",
-    "https://github.com/yerzhansa/cycling-coach/releases/latest",
-    "https://github.com/yerzhansa/cycling-coach/releases/tag/",
-    "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23?token=secret",
-    "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23#notes",
+    "http://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23",
+    "https://user:secret@github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23",
+    "https://github.com:444/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23",
+    "https://github.com/other/enduragent/releases/tag/cycling-coach@2026.7.23",
+    "https://github.com/yerzhansa/cycling-coach/releases/tag/cycling-coach@2026.7.23",
+    "https://github.com/yerzhansa/enduragent/releases/latest",
+    "https://github.com/yerzhansa/enduragent/releases/tag/",
+    "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23?token=secret",
+    "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23#notes",
   ])("rejects a noncanonical or out-of-repository release URL: %s", async (releaseUrl) => {
     mocks.invoke.mockResolvedValueOnce({
       status: "available",

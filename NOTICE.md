@@ -50,7 +50,7 @@ modifications were applied during the port:
 - **Trademark substitution.** Section-11 was authored against TrainingPeaks
   vocabulary. This codebase uses intervals.icu's plain-English alternatives
   throughout — the substitution is enforced by `pnpm check:trademarks` and
-  documented in [`CONTRIBUTING.md`](https://github.com/yerzhansa/cycling-coach/blob/main/CONTRIBUTING.md#trademark-hygiene).
+  documented in [`CONTRIBUTING.md`](https://github.com/yerzhansa/enduragent/blob/main/CONTRIBUTING.md#trademark-hygiene).
 - **Multi-sport adapter pattern.** Per ADR-0010, the Reference layer gains a
   per-sport seam — sports plug in via an optional `referenceAdapters?()`
   method on the `Sport` interface, returning an array of layer-owned adapters
@@ -84,7 +84,7 @@ modifications were applied during the port:
 
 ### Canonical attribution surfaces
 
-This file (`NOTICE.md`) and the [`README.md` Credits section](https://github.com/yerzhansa/cycling-coach#credits)
+This file (`NOTICE.md`) and the [`README.md` Credits section](https://github.com/yerzhansa/enduragent#credits)
 are the canonical attribution surfaces. The full upstream repository is at
 https://github.com/CrankAddict/section-11.
 
