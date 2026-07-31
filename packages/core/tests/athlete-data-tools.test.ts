@@ -14,6 +14,7 @@ import {
   createCoreToolsWithSportConfig,
   createPureCoreIntervalsTools,
 } from "../../engine/src/sport/platform-tools.js";
+import { COACH_EVENT_TAG } from "../../engine/src/sport/event-provenance.js";
 
 function produced(frozenNow = "1998-07-18T12:00:00.000Z"): ProducedLocalBundle {
   return {
@@ -358,7 +359,12 @@ describe("store athlete reader", () => {
   it("keeps a fresh delete guard read and makes no delete for past or failed GET", async () => {
     const read = vi
       .fn<PlatformCalendarMutations["readEventForDelete"]>()
-      .mockResolvedValue({ id: 7, startDateLocal: "1998-07-01T00:00:00" });
+      .mockResolvedValue({
+        id: 7,
+        startDateLocal: "1998-07-01T00:00:00",
+        category: "WORKOUT",
+        tags: [COACH_EVENT_TAG],
+      });
     const remove = vi.fn<PlatformCalendarMutations["deleteEvent"]>().mockResolvedValue({});
     const mutations: PlatformCalendarMutations = {
       createEvent: vi.fn(),
@@ -384,7 +390,12 @@ describe("store athlete reader", () => {
       createEvent: vi.fn(),
       readEventForDelete: vi.fn(async () => {
         order.push("get");
-        return { id: 7, startDateLocal: "2998-07-01T00:00:00" };
+        return {
+          id: 7,
+          startDateLocal: "2998-07-01T00:00:00",
+          category: "WORKOUT",
+          tags: [COACH_EVENT_TAG],
+        };
       }),
       deleteEvent: vi.fn(async () => {
         order.push("delete");

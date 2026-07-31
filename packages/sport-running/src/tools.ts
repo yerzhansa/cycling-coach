@@ -1,6 +1,7 @@
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import type { MemoryStorePort as MemoryStore } from "@enduragent/engine/sport";
+import { buildCoachEventProvenance } from "@enduragent/engine/sport";
 import type { ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
 import type { IntervalsClient } from "intervals-icu-api";
 import {
@@ -194,6 +195,7 @@ export function createRunningTools(
                 category: "WORKOUT",
                 name: input.workout.name,
                 type: "Run",
+                ...buildCoachEventProvenance(input.date, input.workout.name),
                 moving_time: serialized.movingTime,
                 // No icu_training_load — the server derives running Pace Load from the
                 // parsed steps against the athlete's own threshold pace.

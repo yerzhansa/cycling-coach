@@ -301,11 +301,11 @@ describe("proposal summarizers and guard reuse", () => {
     );
     await wrapped.execute!({ eventId: 42 }, turnOptions("chat") as never);
     const proposal = gate.peek("chat")!;
-    fake.setEvent(event({ startDateLocal: "2000-01-01T00:00:00" }));
+    fake.setEvent(event({ category: "NOTE" }));
     const outcome = await gate.confirm("chat", proposal.nonce);
     expect(outcome).toMatchObject({
       status: "executed",
-      result: { error: "past_workout_protected" },
+      result: { error: "not_a_workout" },
     });
     expect(fake.gets).toHaveBeenCalledTimes(2);
     expect(fake.deletes).not.toHaveBeenCalled();

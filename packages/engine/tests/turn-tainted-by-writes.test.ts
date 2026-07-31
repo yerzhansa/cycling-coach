@@ -11,6 +11,7 @@ import { cyclingSport } from "@enduragent/sport-cycling";
 import type { Sport } from "../src/sport.js";
 import type { TranscriptCompletedTurnInput } from "../src/host-ports.js";
 import { TAINTED_BY_WRITES_MESSAGE } from "../src/agent/coach-agent-copy.js";
+import { COACH_EVENT_TAG } from "../src/sport/event-provenance.js";
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -387,6 +388,7 @@ describe("tainted-by-writes refusal", () => {
       name: "To delete",
       type: "Ride",
       moving_time: 3600,
+      tags: [COACH_EVENT_TAG],
     });
     server.listen({ onUnhandledRequest: "bypass" });
     try {

@@ -2,8 +2,9 @@ import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import type { ApiError, IntervalsClient } from "intervals-icu-api";
 import type { IntervalsActivityType } from "../sport.js";
-import { todayInTZ } from "./user-time.js";
 import { downsampleStreams } from "./stream-downsample.js";
+import { guardDeletableEvent, toTypedError, type IntervalsEventRuntime } from "./event-guards.js";
+import { isCoachOwnedEvent } from "./event-provenance.js";
 import type {
   AthleteDataReaderPort,
   AthleteReadResult,
@@ -13,14 +14,6 @@ import type {
 
 function formatStoreFreshness(freshness: StoredDataFreshness): string {
   return `Store data last synchronized ${freshness.label} ago (${freshness.capturedAt}).`;
-}
-
-function toTypedError(error: ApiError): { error: string; status?: number; message?: string } {
-  return {
-    error: error.kind,
-    ...("status" in error ? { status: error.status } : {}),
-    ...("message" in error ? { message: error.message } : {}),
-  };
 }
 
 function readResult<T>(
@@ -50,17 +43,6 @@ const ACTIVITY_ID_SCHEMA = z.union([
   z.number().int().positive().refine(Number.isSafeInteger),
   z.string().regex(/^[0-9a-f]{64}$/),
 ]);
-
-// intervals-icu-api's TypeScript types declare snake_case fields, but the runtime
-// runs `camelCaseKeys` over every parsed response. So the types lie: at runtime we
-// see `startDateLocal`, not `start_date_local`. This local type reflects reality.
-type IntervalsEventRuntime = {
-  id: number;
-  startDateLocal: string;
-  name?: string | null;
-  movingTime?: number | null;
-  icuTrainingLoad?: number | null;
-};
 
 /**
  * Pure-Core intervals tools per ADR-0004 — no sport-specific config needed.
@@ -218,8 +200,11 @@ export function createPureCoreIntervalsTools(
             description:
               "Delete a scheduled workout from the intervals.icu calendar by event ID. " +
               "ALWAYS call intervals_list_events first, show the athlete the list, and " +
-              "confirm which workout to delete before calling this. Past workouts (before " +
-              "today) are protected — the tool refuses without calling the server.",
+              "confirm which workout to delete before calling this. Only deletes workouts " +
+              "this coach created (provenance-marked). Races, notes, plans, athlete-added " +
+              "workouts, and pre-marker coach workouts are refused — tell the athlete to " +
+              "remove those directly on intervals.icu. Past workouts (before today) are " +
+              "protected — the tool refuses without calling the server.",
             inputSchema: zodSchema(
               z.object({
                 eventId: z.number().int().describe("Event ID from intervals_list_events"),
@@ -230,14 +215,8 @@ export function createPureCoreIntervalsTools(
                 const event = await selectedMutations.readEventForDelete({
                   eventId: input.eventId,
                 });
-                const today = todayInTZ(tz);
-                const eventDate = event.startDateLocal.slice(0, 10);
-                if (eventDate < today) {
-                  return {
-                    error: "past_workout_protected",
-                    details: `Cannot delete workout dated ${eventDate} — it's before today (${today}).`,
-                  };
-                }
+                const refusal = guardDeletableEvent(event, tz, input.eventId);
+                if (refusal) return refusal;
                 await selectedMutations.deleteEvent({ eventId: input.eventId });
                 return { deleted: true };
               } catch (error) {
@@ -301,26 +280,39 @@ export function createCoreToolsWithSportConfig(
       description:
         "List scheduled calendar workouts on intervals.icu for a date range. " +
         "Use this BEFORE deleting so you can show the athlete the list (id, date, name) " +
-        "and ask which one to delete. Filters to WORKOUT category only.",
+        "and ask which one to delete. Filters to WORKOUT category only. Each row carries " +
+        "a coachCreated flag; only coach-created workouts can be deleted with " +
+        "intervals_delete_workout. Pass coachCreatedOnly: true to return only " +
+        "coach-created events.",
       inputSchema: zodSchema(
         z.object({
           oldest: z.string().describe("Oldest date (YYYY-MM-DD)"),
           newest: z.string().optional().describe("Newest date (YYYY-MM-DD)"),
+          coachCreatedOnly: z
+            .boolean()
+            .optional()
+            .describe("Return only events created by this coach"),
         }),
       ),
-      execute: async (input: { oldest: string; newest?: string }) => {
+      execute: async (input: { oldest: string; newest?: string; coachCreatedOnly?: boolean }) => {
         try {
           const result = await selectedReader.listCalendar({
             start: input.oldest,
             ...(input.newest === undefined ? {} : { end: input.newest }),
           });
           if (!result.ok) return readResult(result);
-          const value = (result.value as IntervalsEventRuntime[]).map((e) => ({
+          const events = result.value as IntervalsEventRuntime[];
+          const source = input.coachCreatedOnly === true ? events.filter(isCoachOwnedEvent) : events;
+          const value = source.map((e) => ({
             id: e.id,
             startDateLocal: e.startDateLocal,
             name: e.name,
             movingTime: e.movingTime,
             icuTrainingLoad: e.icuTrainingLoad,
+            category: e.category,
+            externalId: e.externalId,
+            tags: e.tags,
+            coachCreated: input.coachCreatedOnly === true ? true : isCoachOwnedEvent(e),
           }));
           return result.freshness === undefined
             ? value

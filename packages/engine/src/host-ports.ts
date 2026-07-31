@@ -175,6 +175,10 @@ export interface AthleteDataReaderPort {
 export interface CalendarEventForDelete {
   readonly id: number;
   readonly startDateLocal: string;
+  readonly name?: string | null;
+  readonly category?: string | null;
+  readonly tags?: string[] | null;
+  readonly externalId?: string | null;
 }
 
 export interface PlatformCalendarMutationsPort {

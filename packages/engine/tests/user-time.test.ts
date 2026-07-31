@@ -14,6 +14,7 @@ import { Memory } from "../../core/src/memory/store.js";
 import { buildSystemPrompt } from "../src/agent/system-prompt.js";
 import { resolveDailyResetAtMs } from "../src/agent/session-freshness.js";
 import { createPureCoreIntervalsTools } from "../src/sport/platform-tools.js";
+import { COACH_EVENT_TAG } from "../src/sport/event-provenance.js";
 import type { PlatformCalendarMutationsPort } from "../src/host-ports.js";
 
 // ────────────────────────────────────────────────────────────────────────
@@ -176,6 +177,8 @@ function makeFakeMutations(eventDateLocal: string): PlatformCalendarMutationsPor
     readEventForDelete: async ({ eventId }) => ({
       id: eventId,
       startDateLocal: eventDateLocal,
+      category: "WORKOUT",
+      tags: [COACH_EVENT_TAG],
     }),
     deleteEvent: async ({ eventId }) => {
       deleteCalls.push(eventId);

@@ -4,6 +4,7 @@ import type {
   MemoryStorePort as MemoryStore,
   PlatformCalendarMutationsPort as PlatformCalendarMutations,
 } from "@enduragent/engine/sport";
+import { buildCoachEventProvenance } from "@enduragent/engine/sport";
 import type { IntervalsClient } from "intervals-icu-api";
 import {
   calculateCyclingZones,
@@ -185,6 +186,7 @@ export function createCyclingTools(
                   category: "WORKOUT",
                   name: input.workout.name,
                   type: "Ride",
+                  ...buildCoachEventProvenance(input.date, input.workout.name),
                   moving_time: serialized.movingTime,
                   description: serialized.description,
                 });

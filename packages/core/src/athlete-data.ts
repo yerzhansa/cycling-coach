@@ -93,7 +93,14 @@ export function createPlatformCalendarMutations(intervals: IntervalsClient): Pla
     )),
     async readEventForDelete(input: { eventId: number }) {
       const value = await platformValue(intervals.events.get(input.eventId)) as unknown as CalendarEventForDelete;
-      return { id: value.id, startDateLocal: value.startDateLocal };
+      return {
+        id: value.id,
+        startDateLocal: value.startDateLocal,
+        name: value.name,
+        category: value.category,
+        tags: value.tags,
+        externalId: value.externalId,
+      };
     },
     deleteEvent: (input: { eventId: number }) => platformValue(intervals.events.delete(input.eventId)),
   });

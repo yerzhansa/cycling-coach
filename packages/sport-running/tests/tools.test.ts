@@ -194,6 +194,26 @@ describe("intervals_create_workout tool", () => {
     expect("icu_training_load" in payload).toBe(false);
   });
 
+  it("payload carries external_id 'cycling-coach:<date>:<slug>' and tags ['cycling-coach']", async () => {
+    const { client, calls } = fakeIntervals({ ok: true, value: { id: 42 } });
+    const tool = createWorkoutTool(client)!;
+
+    await tool.execute(
+      {
+        date: "2026-06-21",
+        workout: {
+          name: "Easy 30",
+          steps: [{ type: "steady", duration: { value: 30, unit: "minutes" }, pace: { kind: "cs_fraction", value: 0.75 } }],
+        },
+      },
+      {},
+    );
+
+    const payload = calls[0];
+    expect(payload.external_id).toBe("cycling-coach:2026-06-21:easy-30");
+    expect(payload.tags).toEqual(["cycling-coach"]);
+  });
+
   it("passes a manual-source resolved CS through and still serializes (DOM-1)", async () => {
     const { client, calls } = fakeIntervals({ ok: true, value: { id: 7 } });
     const tool = createWorkoutTool(client, {
