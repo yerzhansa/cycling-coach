@@ -15,10 +15,20 @@ const emptyMemory = { getContext: () => "" } as unknown as Memory;
 // below this ceiling.
 const STATIC_PREFIX_TOKEN_CEILING = 13_000;
 
+const GATED_PREFIX_TOKEN_CEILING = 13_500;
+
 describe("static system-prompt prefix token ceiling", () => {
   it("keeps the real cycling static prefix under the ceiling", () => {
     const prompt = buildSystemPrompt(cyclingSport, emptyMemory, "UTC");
     expect(estimateTokens(prompt)).toBeLessThan(STATIC_PREFIX_TOKEN_CEILING);
+  });
+
+  it("keeps the confirmation-gated cycling prefix under its own ceiling", () => {
+    const prompt = buildSystemPrompt(cyclingSport, emptyMemory, "UTC", undefined, {
+      confirmationGate: true,
+    });
+    expect(estimateTokens(prompt)).toBeGreaterThan(STATIC_PREFIX_TOKEN_CEILING);
+    expect(estimateTokens(prompt)).toBeLessThan(GATED_PREFIX_TOKEN_CEILING);
   });
 
   it("measures a non-trivial prefix (reads the full corpus)", () => {

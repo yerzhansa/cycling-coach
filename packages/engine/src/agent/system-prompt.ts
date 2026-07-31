@@ -261,9 +261,14 @@ already committed on earlier steps are real and are not rolled back.`;
 // The single source of the static rule-block list. The builder pushes exactly
 // these blocks, and the prompt-lineage template hash reads the same set, so the
 // Layer-3 gate flip is reflected in both in lock-step.
-export function staticRuleBlocks(sessionClusterGapMinutes: number = 30): string[] {
+export function staticRuleBlocks(
+  sessionClusterGapMinutes: number = 30,
+  opts?: { confirmationGate?: boolean },
+): string[] {
   const blocks = [
-    UNTRUSTED_DATA_RULES,
+    opts?.confirmationGate === true
+      ? UNTRUSTED_DATA_RULES + "\n\n" + CONFIRMATION_GATE_RULES
+      : UNTRUSTED_DATA_RULES,
     MEMORY_RECALL_RULES,
     CROSS_SPORT_VOICE_RULES,
     workoutReviewRules(sessionClusterGapMinutes),
@@ -277,7 +282,7 @@ export function buildSystemPrompt(
   memory: MemoryStorePort,
   tz: string = "UTC",
   degradeBlock?: string,
-  opts?: { excludeSections?: readonly string[]; context?: string },
+  opts?: { excludeSections?: readonly string[]; context?: string; confirmationGate?: boolean },
 ): string {
   const skillsContent = Object.entries(persona.skills)
     .map(([name, content]) => `## Skill: ${name}\n\n${content}`)
@@ -293,7 +298,11 @@ export function buildSystemPrompt(
     prefixParts.push("# Domain Knowledge\n\n" + skillsContent);
   }
 
-  prefixParts.push(...staticRuleBlocks(persona.sessionClusterGapMinutes));
+  prefixParts.push(
+    ...staticRuleBlocks(persona.sessionClusterGapMinutes, {
+      confirmationGate: opts?.confirmationGate === true,
+    }),
+  );
 
   const volatileParts: string[] = [];
 

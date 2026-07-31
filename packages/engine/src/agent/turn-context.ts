@@ -17,6 +17,8 @@ export interface TurnWriteRecord {
 export interface TurnContext {
   /** Resolved primary anchor (running critical speed) for this turn; null when the channel supplies none. */
   readonly resolvedCs: ResolvedCs | null;
+  /** Chat this turn belongs to; the key a host confirmation surface resolves a proposal against. */
+  readonly chatId: string;
   /** Per-turn read-tool memoizer cache. */
   readonly readToolCache: Map<string, unknown>;
   /** Committed-write record; a committed write makes the turn non-replayable. */
@@ -29,10 +31,14 @@ interface BrandedTurnContext extends TurnContext {
   readonly [TURN_CONTEXT_BRAND]: true;
 }
 
-export function createTurnContext(resolvedCs: ResolvedCs | null): TurnContext {
+export function createTurnContext(
+  resolvedCs: ResolvedCs | null,
+  chatId: string = "",
+): TurnContext {
   const ctx: BrandedTurnContext = {
     [TURN_CONTEXT_BRAND]: true,
     resolvedCs,
+    chatId,
     readToolCache: new Map<string, unknown>(),
     turnWrites: { writesCommitted: 0 },
   };

@@ -183,6 +183,21 @@ export interface PlatformCalendarMutationsPort {
   deleteEvent(input: { eventId: number }): Promise<unknown>;
 }
 
+export interface ToolConfirmationPort {
+  /** Tools this host gates. The engine registers the confirmation prompt block iff this set is non-empty. */
+  readonly gatedToolNames: ReadonlySet<string>;
+  /**
+   * Record a proposal and return the value the model sees. MUST NOT invoke `run`;
+   * `run` executes only when the host's own confirm surface resolves the proposal.
+   */
+  propose(input: {
+    readonly chatId: string;
+    readonly toolName: string;
+    readonly toolInput: unknown;
+    readonly run: () => Promise<unknown>;
+  }): Promise<unknown>;
+}
+
 export interface PlatformClientPort {
   readonly legacyClient: IntervalsClient | null;
   readonly athleteData: AthleteDataReaderPort | undefined;
@@ -292,4 +307,5 @@ export interface EngineHostPorts {
   readonly chatStreamTimeouts?: ChatStreamTimeouts;
   readonly modelTransportDecorator?: ModelTransportDecorator;
   readonly onToolsAssembled?: (names: readonly string[]) => void;
+  readonly toolConfirmations?: ToolConfirmationPort;
 }

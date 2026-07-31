@@ -9,6 +9,7 @@ import type {
   PlatformCalendarMutationsPort,
   ReferenceStateSnapshot,
 } from "@enduragent/engine";
+import { resolveUserTimezone } from "@enduragent/engine/sport";
 import { ErrorStateSchema, LatestJsonSchema } from "@enduragent/kernel/reference/schemas";
 import type { Config } from "../config.js";
 import { contextWindowForModel } from "../runtime-config.js";
@@ -25,6 +26,11 @@ import { resolveSecretRef } from "../secrets/resolve.js";
 import { appendUsageLine } from "../usage-ledger.js";
 import { makeChatClient } from "../reference/sync/intervals-client-factory.js";
 import { createConversationStore, type ConversationStorePort } from "./conversation-store.js";
+import {
+  createProposalSummarizers,
+  createToolConfirmationPort,
+  type ConfirmationGate,
+} from "./confirmation-gate.js";
 import { classifyFailure, extractRetryAfterMs } from "./token-utils.js";
 
 export interface EngineHostAdapterOverrides {
@@ -32,6 +38,7 @@ export interface EngineHostAdapterOverrides {
   readonly calendarMutations?: PlatformCalendarMutationsPort;
   readonly modelTransportDecorator?: ModelTransportDecorator;
   readonly onToolsAssembled?: (names: readonly string[]) => void;
+  readonly confirmations?: ConfirmationGate;
 }
 
 export function engineConfigFromConfig(config: Config): EngineConfig {
@@ -82,6 +89,14 @@ export function createEngineHostAdapter(input: {
     (legacyClient === null
       ? createMissingPlatformCalendarMutations()
       : createPlatformCalendarMutations(legacyClient));
+  const tz = resolveUserTimezone(config.session.timezone);
+  const toolConfirmations =
+    overrides.confirmations === undefined
+      ? undefined
+      : createToolConfirmationPort({
+          gate: overrides.confirmations,
+          summarizers: createProposalSummarizers({ intervals: legacyClient, tz }),
+        });
   const referenceDir = join(config.dataDir, "data");
   const readReferenceState = (): ReferenceStateSnapshot => ({
     errorState: safeReadJson(join(referenceDir, "error_state.json"), ErrorStateSchema),
@@ -108,6 +123,7 @@ export function createEngineHostAdapter(input: {
       randomId: randomUUID,
       modelTransportDecorator: overrides.modelTransportDecorator,
       onToolsAssembled: overrides.onToolsAssembled,
+      toolConfirmations,
     },
   };
 }

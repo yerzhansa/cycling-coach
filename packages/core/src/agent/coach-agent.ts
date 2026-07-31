@@ -29,7 +29,7 @@ export class CoachAgent {
     const adapted = createEngineHostAdapter({
       config,
       stateReader: legacyStateReader,
-      overrides,
+      overrides: { ...overrides, confirmations: this.confirmations },
     });
     this.memory = adapted.memory;
     this.chatStore = adapted.ports.chatStore;

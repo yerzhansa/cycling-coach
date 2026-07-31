@@ -37,6 +37,7 @@ export type {
   SecretRef,
   SecretsPort,
   StoredDataFreshness,
+  ToolConfirmationPort,
   TranscriptCompletedTurnInput,
   TranscriptConversationBoundaryReason,
   TranscriptWriterPort,

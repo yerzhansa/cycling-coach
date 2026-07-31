@@ -9,6 +9,7 @@ import type {
   EngineHostPorts,
   LoggerPort,
   MemoryStorePort,
+  ToolConfirmationPort,
   TranscriptCompletedTurnInput,
 } from "../host-ports.js";
 import type { Sport, SportRuntimePorts } from "../sport.js";
@@ -194,6 +195,29 @@ function committedWriteSummary(name: string, result: unknown): string | undefine
   return undefined;
 }
 
+export function gateMutatingTool(
+  name: string,
+  tool: Tool,
+  confirmations: ToolConfirmationPort | undefined,
+): Tool {
+  if (confirmations === undefined || !confirmations.gatedToolNames.has(name)) return tool;
+  const inner = tool.execute;
+  if (typeof inner !== "function") return tool;
+  return {
+    ...tool,
+    execute: async (input: unknown, options: unknown) => {
+      const chatId = getTurnContext(options)?.chatId;
+      if (chatId === undefined || chatId === "") return { error: "confirmation_unavailable" };
+      return confirmations.propose({
+        chatId,
+        toolName: name,
+        toolInput: input,
+        run: () => (inner as (i: unknown, o: unknown) => Promise<unknown>)(input, {} as never),
+      });
+    },
+  } as Tool;
+}
+
 // ============================================================================
 // AGENT
 // ============================================================================
@@ -214,6 +238,7 @@ export class CoachAgent {
   private tz: string;
   private archiveDeferred = new Set<string>();
   private lastFlushMessageCount = new Map<string, number>();
+  private readonly confirmationGate: boolean;
   // The prompt-template hash is derived from constructor-stable inputs (soul,
   // skills, tool schemas, model, and the compile-time rule-block set), so it is
   // computed once on first use and reused for every turn of the process.
@@ -261,6 +286,8 @@ export class CoachAgent {
       tz: this.tz,
       resolvedCs: (options: unknown) => getTurnContext(options)?.resolvedCs ?? null,
     };
+    const confirmations = ports.toolConfirmations;
+    this.confirmationGate = confirmations !== undefined && confirmations.gatedToolNames.size > 0;
     const registrations = sport.tools(runtimePorts);
     const maxResultTokens = Math.floor(this.config.contextWindowTokens * TOOL_RESULT_SHARE);
     this.tools = Object.fromEntries(
@@ -268,7 +295,10 @@ export class CoachAgent {
         r.name,
         memoizeReadTool(
           r.name,
-          this.wrapWriteTool(r.name, capToolResult(r.tool, { maxResultTokens })),
+          this.wrapWriteTool(
+            r.name,
+            capToolResult(gateMutatingTool(r.name, r.tool, confirmations), { maxResultTokens }),
+          ),
           (options: unknown) => getTurnContext(options)?.readToolCache,
         ),
       ]),
@@ -447,7 +477,7 @@ export class CoachAgent {
     // wrappers and sport tools reach it through the tool-execution options, so
     // the tool set and cached template hash never rebuild. resolvedCs is null
     // when the channel supplies nothing (CLI path, no sync data).
-    const ctx = createTurnContext(turn?.resolvedCs ?? null);
+    const ctx = createTurnContext(turn?.resolvedCs ?? null, chatId);
     return withSessionLock(chatId, async () => {
       const turnStart = this.ports.now();
       const turnId = this.ports.randomId();
@@ -514,6 +544,7 @@ export class CoachAgent {
         this.memory,
         this.tz,
         this.buildDegradeBlock(),
+        { confirmationGate: this.confirmationGate },
       );
 
       const budget = computeHistoryTokenBudget({
@@ -677,7 +708,9 @@ export class CoachAgent {
             const templateHash = (this.templateHash ??= computeTemplateHash({
               soul: this.sport.soul,
               skills: this.sport.skills,
-              ruleBlocks: staticRuleBlocks(),
+              ruleBlocks: staticRuleBlocks(this.sport.sessionClusterGapMinutes, {
+                confirmationGate: this.confirmationGate,
+              }),
               toolSchemas: this.tools,
               model: this.config.llm.model,
             }));
