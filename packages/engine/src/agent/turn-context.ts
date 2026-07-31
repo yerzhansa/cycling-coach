@@ -1,8 +1,13 @@
 import type { ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
+import { EMPTY_PROVENANCE, type SourceProvenance } from "../provenance.js";
 
 export interface TurnWriteRecord {
   writesCommitted: number;
   lastWriteSummary?: string;
+}
+
+export interface TurnProvenanceRecord {
+  value: SourceProvenance;
 }
 
 // Explicit per-turn state, threaded to tool execution through the
@@ -23,6 +28,10 @@ export interface TurnContext {
   readonly readToolCache: Map<string, unknown>;
   /** Committed-write record; a committed write makes the turn non-replayable. */
   readonly turnWrites: TurnWriteRecord;
+  /** Running union of the source labels this turn's reply may rest on. */
+  readonly provenance: TurnProvenanceRecord;
+  /** Source labels of the reference snapshot the channel resolved this turn's anchor from. */
+  readonly referenceProvenance: SourceProvenance;
 }
 
 const TURN_CONTEXT_BRAND = Symbol("turn-context");
@@ -34,6 +43,7 @@ interface BrandedTurnContext extends TurnContext {
 export function createTurnContext(
   resolvedCs: ResolvedCs | null,
   chatId: string = "",
+  referenceProvenance: SourceProvenance = EMPTY_PROVENANCE,
 ): TurnContext {
   const ctx: BrandedTurnContext = {
     [TURN_CONTEXT_BRAND]: true,
@@ -41,6 +51,8 @@ export function createTurnContext(
     chatId,
     readToolCache: new Map<string, unknown>(),
     turnWrites: { writesCommitted: 0 },
+    provenance: { value: EMPTY_PROVENANCE },
+    referenceProvenance,
   };
   return ctx;
 }

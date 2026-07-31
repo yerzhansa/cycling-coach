@@ -148,7 +148,7 @@ describe("cycling prescription posture", () => {
     const { prefix, volatile } = blocks;
     expect(prefix.match(/## Skill: cycling-prescription-posture/g)).toHaveLength(1);
     expect(volatile.match(/## Skill: cycling-prescription-posture/g)).toBeNull();
-    expect(estimateTokens(prompt)).toBeLessThan(13_000);
+    expect(estimateTokens(prompt)).toBeLessThan(13_200);
   });
 
   it("retains requested prescription tools with selection-only capability references", () => {

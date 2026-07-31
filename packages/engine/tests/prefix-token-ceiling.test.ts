@@ -10,12 +10,12 @@ const emptyMemory = { getContext: () => "" } as unknown as Memory;
 // Budget guard with headroom — the cached prefix must stay well under the
 // model's context window. Raised from 12_500 as the cross-sport Voice & Register
 // block (plus the cycling zone reference's fully-populated
-// anaerobic/neuromuscular rows) joined the static rules. A deliberate, bounded
-// prefix growth, not unbounded drift; the real prefix sits a few hundred tokens
-// below this ceiling.
-const STATIC_PREFIX_TOKEN_CEILING = 13_000;
+// anaerobic/neuromuscular rows) joined the static rules, then from 13_000 as the
+// data-source attribution block joined them. A deliberate, bounded prefix
+// growth, not unbounded drift.
+const STATIC_PREFIX_TOKEN_CEILING = 13_200;
 
-const GATED_PREFIX_TOKEN_CEILING = 13_500;
+const GATED_PREFIX_TOKEN_CEILING = 13_600;
 
 describe("static system-prompt prefix token ceiling", () => {
   it("keeps the real cycling static prefix under the ceiling", () => {
@@ -27,7 +27,9 @@ describe("static system-prompt prefix token ceiling", () => {
     const prompt = buildSystemPrompt(cyclingSport, emptyMemory, "UTC", undefined, {
       confirmationGate: true,
     });
-    expect(estimateTokens(prompt)).toBeGreaterThan(STATIC_PREFIX_TOKEN_CEILING);
+    expect(estimateTokens(prompt)).toBeGreaterThan(
+      estimateTokens(buildSystemPrompt(cyclingSport, emptyMemory, "UTC")),
+    );
     expect(estimateTokens(prompt)).toBeLessThan(GATED_PREFIX_TOKEN_CEILING);
   });
 

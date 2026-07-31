@@ -4,6 +4,7 @@ import { extractAccountId } from "./agent/codex/jwt.js";
 import type { EngineHostPorts } from "./host-ports.js";
 import type { Sport } from "./sport.js";
 import type { ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
+import type { SourceProvenance } from "./provenance.js";
 
 export type { CoachEngine } from "@enduragent/coach-contract";
 export type { ChatStreamTimeouts } from "./host-ports.js";
@@ -58,7 +59,9 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
       text: await agent.chat(
         request.chatId,
         request.message,
-        request.turn as { resolvedCs?: ResolvedCs | null } | undefined,
+        request.turn as
+          | { resolvedCs?: ResolvedCs | null; referenceProvenance?: SourceProvenance }
+          | undefined,
         onEvent,
       ),
     }),
@@ -86,6 +89,7 @@ export {
   validateListRange,
   validateWorkoutCreationDate,
 } from "./sport/date-schema.js";
+export { GARMIN_DATA_ATTRIBUTION, renderGarminAttribution } from "./agent/garmin-attribution.js";
 export {
   ATHLETE_CONTEXT_FENCE_CLOSE,
   ATHLETE_CONTEXT_FENCE_OPEN,

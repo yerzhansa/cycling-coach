@@ -102,7 +102,9 @@ describe("running positional engine compatibility", () => {
         resolvedCs: { criticalSpeedMps: 4, source: "platform", confidence: "high" },
       }),
     ).resolves.toBe("injected reply");
-    const resolved = zoneResults[0] as {
+    const envelope = zoneResults[0] as { untrusted_data: string; data: unknown };
+    expect(typeof envelope.untrusted_data).toBe("string");
+    const resolved = envelope.data as {
       zones: unknown[];
       criticalSpeedMps: number;
       anchorOrigin: string;
@@ -137,7 +139,7 @@ describe("running positional engine compatibility", () => {
     await expect(engine.chat("missing-anchor", "calculate my zones")).resolves.toBe(
       "injected reply",
     );
-    expect(zoneResults[1]).toMatchObject({ error: "no_cs_anchor" });
+    expect(zoneResults[1]).toMatchObject({ data: { error: "no_cs_anchor" } });
     await expect(engine.resetSession("running-chat")).resolves.toEqual({ memoryFlushed: true });
   });
 });

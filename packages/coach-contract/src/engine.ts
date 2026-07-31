@@ -10,6 +10,8 @@ export const ChatRequestSchema = z
       .object({
         /** An opaque per-turn pace-anchor payload passed through to the engine. */
         resolvedCs: z.unknown().optional(),
+        /** Source labels of the reference snapshot the anchor was resolved from. */
+        referenceProvenance: z.unknown().optional(),
       })
       .strict()
       .optional(),

@@ -345,6 +345,16 @@ describe("ChatRequest", () => {
       ChatRequestSchema.safeParse({
         chatId: "telegram:12345",
         message: "hi",
+        turn: {
+          resolvedCs: null,
+          referenceProvenance: { garmin: true, nonGarmin: false, unknown: false },
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      ChatRequestSchema.safeParse({
+        chatId: "telegram:12345",
+        message: "hi",
         extra: 1,
       }).success,
     ).toBe(false);

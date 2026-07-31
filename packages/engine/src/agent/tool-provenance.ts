@@ -6,7 +6,7 @@ import {
   provenanceForSourceBearingData,
   type SourceProvenance,
 } from "../provenance.js";
-import { boundToolResultProvenance } from "./bound-tool-result.js";
+import { boundToolResultProvenance } from "../sport/bound-tool-result.js";
 
 function payloadOf(result: unknown): unknown {
   return isUntrustedEnvelope(result) ? result.data : result;

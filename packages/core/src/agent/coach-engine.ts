@@ -5,7 +5,7 @@ import type { ResolvedCs } from "../reference/cs-resolution.js";
 import { ConfirmationGate } from "./confirmation-gate.js";
 import { CoachAgent } from "./coach-agent.js";
 import type { AthleteDataReader, PlatformCalendarMutations } from "../athlete-data.js";
-import type { ModelTransportDecorator } from "@enduragent/engine";
+import type { ModelTransportDecorator, SourceProvenance } from "@enduragent/engine";
 
 /**
  * The subset of the agent's public surface the in-process channels consume.
@@ -17,7 +17,7 @@ export interface CoachEngineSeam {
   chat(
     chatId: string,
     userMessage: string,
-    turn?: { resolvedCs?: ResolvedCs | null },
+    turn?: { resolvedCs?: ResolvedCs | null; referenceProvenance?: SourceProvenance },
   ): Promise<string>;
   hasSession(chatId: string): boolean;
   resetSession(chatId: string): Promise<{ memoryFlushed: boolean }>;

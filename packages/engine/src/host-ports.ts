@@ -79,6 +79,13 @@ export interface MemoryStorePort {
   ): SourceProvenance;
   reload(): void;
   getContext(opts?: { excludeSections?: readonly string[] }): string;
+  /** The rendered Athlete Context together with the source labels its contents carry. */
+  getContextWithProvenance?(opts?: { excludeSections?: readonly string[]; maxChars?: number }): {
+    text: string;
+    provenance: SourceProvenance;
+  };
+  /** Run `fn` with every memory write it performs attributed to `provenance`. */
+  runWithWriteProvenance?<T>(provenance: SourceProvenance, fn: () => T): T;
 }
 
 export interface MemorySnapshot {
@@ -95,6 +102,7 @@ export interface ChatLineage {
   readonly provider: string;
   readonly model: string;
   readonly lineageVersion: string;
+  readonly provenance?: SourceProvenance;
 }
 
 export interface ChatStorePort {

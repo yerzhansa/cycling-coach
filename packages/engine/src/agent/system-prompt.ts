@@ -269,6 +269,7 @@ export function staticRuleBlocks(
     opts?.confirmationGate === true
       ? UNTRUSTED_DATA_RULES + "\n\n" + CONFIRMATION_GATE_RULES
       : UNTRUSTED_DATA_RULES,
+    GARMIN_ATTRIBUTION_RULES,
     MEMORY_RECALL_RULES,
     CROSS_SPORT_VOICE_RULES,
     workoutReviewRules(sessionClusterGapMinutes),

@@ -2,6 +2,7 @@ import {
   createCoachEngine as createCanonicalCoachEngine,
   type ChatStorePort,
   type ModelTransportDecorator,
+  type SourceProvenance,
 } from "@enduragent/engine";
 import type { ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
 import type { AthleteDataReader, PlatformCalendarMutations } from "../athlete-data.js";
@@ -39,7 +40,7 @@ export class CoachAgent {
   chat(
     chatId: string,
     userMessage: string,
-    turn?: { resolvedCs?: ResolvedCs | null },
+    turn?: { resolvedCs?: ResolvedCs | null; referenceProvenance?: SourceProvenance },
   ): Promise<string> {
     return this.engine.chat({
       chatId,
