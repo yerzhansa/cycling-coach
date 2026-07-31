@@ -27,7 +27,7 @@ import {
 } from "./prompt-lineage.js";
 import { withSessionLock } from "./session-lock.js";
 import { capToolResult, TOOL_RESULT_SHARE } from "./tool-result-cap.js";
-import { memoizeReadTool } from "./read-memoizer.js";
+import { memoizeReadTool, evictMemoryReadEntries } from "./read-memoizer.js";
 import { createTurnContext, getTurnContext, type TurnContext } from "./turn-context.js";
 import { markUntrustedResult, isUntrustedEnvelope } from "./prompt-fence.js";
 import { renderGarminAttribution } from "./garmin-attribution.js";
@@ -99,6 +99,19 @@ const REPLAY_UNSAFE_TOOL_NAMES = new Set([
   "memory_write",
   "plan_save",
 ]);
+
+// The subset of write tools that mutate the state behind the memoized memory
+// read tools (memory_read / memory_query / plan_load); their execution evicts
+// those cache entries so a same-turn re-read sees the write.
+const MEMORY_MUTATING_TOOL_NAMES = new Set(["memory_write", "plan_save"]);
+// Eviction runs inside wrapWriteTool, which early-returns for tools outside
+// REPLAY_UNSAFE_TOOL_NAMES — so a memory mutator outside that set would never
+// evict. Assert the subset relation at module load so the gap can't open silently.
+for (const name of MEMORY_MUTATING_TOOL_NAMES) {
+  if (!REPLAY_UNSAFE_TOOL_NAMES.has(name)) {
+    throw new Error(`memory-mutating tool "${name}" must be in REPLAY_UNSAFE_TOOL_NAMES`);
+  }
+}
 
 // A turn that spent its whole step budget on tool calls (or hit the output-token
 // cap) and never emitted final text. Kept a single named predicate so the future
@@ -447,6 +460,13 @@ export class CoachAgent {
         if (record !== undefined && summary !== undefined) {
           record.writesCommitted++;
           record.lastWriteSummary = summary;
+        }
+        // Evict unconditionally (not just on a recognized summary): the write
+        // may have committed even when its result shape wasn't recognized, and
+        // a spurious eviction only costs one re-read.
+        if (MEMORY_MUTATING_TOOL_NAMES.has(name)) {
+          const cache = ctx?.readToolCache;
+          if (cache !== undefined) evictMemoryReadEntries(cache);
         }
         return result;
       },
