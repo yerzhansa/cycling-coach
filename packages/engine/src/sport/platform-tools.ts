@@ -47,8 +47,14 @@ const CREDENTIALS_REQUIRED = Object.freeze({
 
 const ACTIVITY_ID_SCHEMA = z.union([
   z.number().int().positive().refine(Number.isSafeInteger),
+  z.string().regex(/^i?\d+$/),
   z.string().regex(/^[0-9a-f]{64}$/),
 ]);
+
+const ACTIVITY_ID_DESCRIPTION =
+  "Activity ID from intervals_fetch_activities — a positive integer or digit string, " +
+  "optionally i-prefixed for intervals-native activities, or a lowercase 64-hex " +
+  "canonical ID. Pass exactly as listed.";
 
 /**
  * Pure-Core intervals tools per ADR-0004 — no sport-specific config needed.
@@ -130,9 +136,7 @@ export function createPureCoreIntervalsTools(
               "summary-only Tier A, use `intervals_fetch_activities`.",
             inputSchema: zodSchema(
               z.object({
-                activityId: ACTIVITY_ID_SCHEMA.describe(
-                  "Positive integer legacy ID or lowercase 64-hex canonical ID from intervals_fetch_activities",
-                ),
+                activityId: ACTIVITY_ID_SCHEMA.describe(ACTIVITY_ID_DESCRIPTION),
               }),
             ),
             execute: async (input: { activityId: number | string }) => {
@@ -167,9 +171,7 @@ export function createPureCoreIntervalsTools(
               "cadence, time, altitude.",
             inputSchema: zodSchema(
               z.object({
-                activityId: ACTIVITY_ID_SCHEMA.describe(
-                  "Positive integer legacy ID or lowercase 64-hex canonical activity ID",
-                ),
+                activityId: ACTIVITY_ID_SCHEMA.describe(ACTIVITY_ID_DESCRIPTION),
                 types: z
                   .array(z.string())
                   .optional()

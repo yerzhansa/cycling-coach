@@ -79,11 +79,37 @@ describe("intervals_fetch_activity", () => {
     expect(capture.calledWith).toBe(activityId);
   });
 
+  it("passes an i-prefixed intervals-native activity ID to the reader verbatim", async () => {
+    const activityId = "i12345";
+    const capture: { calledWith?: string } = {};
+    const reader = makeFakeReader({ ok: true, value: { id: activityId } }, capture);
+    const tool = createPureCoreIntervalsTools(null, "UTC", reader).intervals_fetch_activity!;
+
+    expect(await inputAccepts(tool.inputSchema, { activityId })).toBe(true);
+    await tool.execute!({ activityId }, {} as never);
+
+    expect(capture.calledWith).toBe("i12345");
+  });
+
+  it("accepts a legacy activity ID passed as a digit string", async () => {
+    const capture: { calledWith?: string } = {};
+    const reader = makeFakeReader({ ok: true, value: {} }, capture);
+    const tool = createPureCoreIntervalsTools(null, "UTC", reader).intervals_fetch_activity!;
+
+    expect(await inputAccepts(tool.inputSchema, { activityId: "12345" })).toBe(true);
+    await tool.execute!({ activityId: "12345" }, {} as never);
+
+    expect(capture.calledWith).toBe("12345");
+  });
+
   it("rejects malformed, non-positive, fractional, and unsafe activity IDs", async () => {
     const reader = makeFakeReader({ ok: true, value: {} }, {});
     const tool = createPureCoreIntervalsTools(null, "UTC", reader).intervals_fetch_activity!;
     const invalidIds = [
-      "12345",
+      "i",
+      "abc",
+      "i12a45",
+      "12345 ",
       "A".repeat(64),
       "a".repeat(63),
       "not-an-id",
@@ -117,5 +143,13 @@ describe("intervals_fetch_activity", () => {
     expect(description).toMatch(/bounded source-neutral/i);
     expect(description).toMatch(/summary.*laps/i);
     expect(description).not.toMatch(/icu_intervals|paired_event_id|analyzed/);
+  });
+
+  it("documents the i-prefixed shape in the activityId parameter description", () => {
+    const reader = makeFakeReader({ ok: true, value: {} }, {});
+    const tool = createPureCoreIntervalsTools(null, "UTC", reader).intervals_fetch_activity!;
+    const jsonSchema = asSchema(tool.inputSchema as FlexibleSchema<unknown>).jsonSchema;
+
+    expect(JSON.stringify(jsonSchema)).toContain("i-prefixed");
   });
 });
