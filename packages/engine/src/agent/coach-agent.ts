@@ -75,13 +75,11 @@ const RATE_LIMIT_MAX_WAIT_MS = 120_000;
 const MAX_FLUSH_ATTEMPTS = 2;
 
 const REPLAY_UNSAFE_TOOL_NAMES = new Set([
+  "intervals_create_strength_workout",
   "intervals_create_workout",
   "intervals_delete_workout",
   "memory_write",
   "plan_save",
-  // Commits a plan via memory.savePlan — the same non-idempotent side effect as
-  // plan_save — so a retry must not replay it. Recognized in committedWriteSummary.
-  "build_plan_skeleton",
 ]);
 
 // A turn that spent its whole step budget on tool calls (or hit the output-token
@@ -184,14 +182,11 @@ function backoffWithSentinelError(
 
 function committedWriteSummary(name: string, result: unknown): string | undefined {
   if (result === null || typeof result !== "object") return undefined;
-  const out = result as { created?: unknown; deleted?: unknown; saved?: unknown; phases?: unknown };
+  const out = result as { created?: unknown; deleted?: unknown; saved?: unknown };
   if (out.created === true) return "created a workout on the calendar";
   if (out.deleted === true) return "deleted a scheduled workout";
   if (out.saved === true && name === "memory_write") return "saved athlete memory";
   if (out.saved === true && name === "plan_save") return "saved the training plan";
-  // build_plan_skeleton returns the saved plan itself (a phases-bearing object),
-  // not a {saved:true} ack, so recognize its success by the plan shape.
-  if (name === "build_plan_skeleton" && Array.isArray(out.phases)) return "built training plan";
   return undefined;
 }
 

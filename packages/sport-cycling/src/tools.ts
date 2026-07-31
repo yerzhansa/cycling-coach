@@ -4,7 +4,11 @@ import type {
   MemoryStorePort as MemoryStore,
   PlatformCalendarMutationsPort as PlatformCalendarMutations,
 } from "@enduragent/engine/sport";
-import { buildCoachEventProvenance } from "@enduragent/engine/sport";
+import {
+  buildCoachEventProvenance,
+  dateKeySchema,
+  isRealDateKey,
+} from "@enduragent/engine/sport";
 import type { IntervalsClient } from "intervals-icu-api";
 import {
   calculateCyclingZones,
@@ -27,6 +31,32 @@ import type {
 
 const daysEnum = z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
 
+export const buildPlanSkeletonInputSchema = z.object({
+  experienceLevel: z.enum(["beginner", "intermediate", "advanced", "elite"]),
+  ftpWatts: z.number().int().min(50).max(600),
+  weightKg: z.number().positive().optional(),
+  volumeTier: z.enum(["low", "medium", "high"]),
+  scheduleType: z.enum(["fixed", "flexible"]),
+  availableDays: z.array(daysEnum).optional(),
+  keySessionDay: daysEnum.optional(),
+  sessionsPerWeek: z.number().int().min(3).max(6).optional(),
+  goalType: z.enum(["race", "general"]),
+  raceType: z
+    .enum(["century", "gran_fondo", "criterium", "time_trial", "other"])
+    .optional(),
+  raceDate: dateKeySchema.optional().describe("Target race date, YYYY-MM-DD"),
+  targetTime: z.string().optional().describe("Goal finish time, e.g. 5:30:00"),
+  generalGoal: z.string().optional(),
+  generalGoalTarget: z.string().optional(),
+});
+
+export const cyclingCreateWorkoutInputSchema = z.object({
+  date: dateKeySchema.describe("Workout date (YYYY-MM-DD)"),
+  workout: intervalsWorkoutInputSchema.describe(
+    "Structured workout: name + ordered steps. Top-level steps can be simple (warmup/steady/interval/ramp/recovery/rest/cooldown/freeride) or a set {type:'set', repeat, interval, recovery}. Durations use seconds or minutes only. Power targets: {kind:'percent_ftp'|'watts'|'zone', value} or {kind, low, high} for ranges. Ramps require low+high.",
+  ),
+});
+
 /**
  * Pure-Sport cycling tools per ADR-0004 — sport-specific math (FTP zones,
  * periodized plan-skeleton) + the cycling-flavored intervals.icu workout
@@ -35,7 +65,7 @@ const daysEnum = z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
  * and `createCoreToolsWithSportConfig`.
  */
 export function createCyclingTools(
-  memory: MemoryStore,
+  _memory: MemoryStore,
   intervals: IntervalsClient | null,
   tz: string = "UTC",
   calendarMutations?: PlatformCalendarMutations,
@@ -56,27 +86,8 @@ export function createCyclingTools(
     build_plan_skeleton: tool({
       description:
         CYCLING_PRESCRIPTION_CAPABILITY.toolSelectionRule +
-        " Build a periodized training plan skeleton from athlete profile. Returns phases, volume targets, zone tables, and testing protocols.",
-      inputSchema: zodSchema(
-        z.object({
-          experienceLevel: z.enum(["beginner", "intermediate", "advanced", "elite"]),
-          ftpWatts: z.number().int().min(50).max(600),
-          weightKg: z.number().positive().optional(),
-          volumeTier: z.enum(["low", "medium", "high"]),
-          scheduleType: z.enum(["fixed", "flexible"]),
-          availableDays: z.array(daysEnum).optional(),
-          keySessionDay: daysEnum.optional(),
-          sessionsPerWeek: z.number().int().min(3).max(6).optional(),
-          goalType: z.enum(["race", "general"]),
-          raceType: z
-            .enum(["century", "gran_fondo", "criterium", "time_trial", "other"])
-            .optional(),
-          raceDate: z.string().optional(),
-          targetTime: z.string().optional(),
-          generalGoal: z.string().optional(),
-          generalGoalTarget: z.string().optional(),
-        }),
-      ),
+        " Build a periodized training plan skeleton from athlete profile. Returns phases, volume targets, zone tables, and testing protocols. Does NOT save anything — present the skeleton to the athlete and call plan_save only after they approve.",
+      inputSchema: zodSchema(buildPlanSkeletonInputSchema),
       execute: async (params: {
         experienceLevel: ExperienceLevel;
         ftpWatts: number;
@@ -93,9 +104,14 @@ export function createCyclingTools(
         generalGoal?: string;
         generalGoalTarget?: string;
       }) => {
+        if (params.raceDate !== undefined && !isRealDateKey(params.raceDate)) {
+          return {
+            error: "invalid_date",
+            details: `${params.raceDate} is not a real calendar date. Use YYYY-MM-DD.`,
+          };
+        }
         const profile: AthleteProfile = { ...params, needsExtraRecovery: false };
         const plan = buildPlanSkeleton(profile, tz);
-        memory.savePlan(plan, "sport-tool");
         return plan;
       },
     }),
@@ -161,15 +177,9 @@ export function createCyclingTools(
               " Create a structured workout on the intervals.icu calendar. Auto-syncs to Garmin/Wahoo. " +
               "Supply the workout as structured steps — the tool serializes them into the intervals.icu " +
               "native description syntax so the power chart renders. Put athlete-facing coaching narrative " +
-              "(feel, notes, hydration) in your chat reply, not in this tool.",
-            inputSchema: zodSchema(
-              z.object({
-                date: z.string().describe("Workout date (YYYY-MM-DD)"),
-                workout: intervalsWorkoutInputSchema.describe(
-                  "Structured workout: name + ordered steps. Top-level steps can be simple (warmup/steady/interval/ramp/recovery/rest/cooldown/freeride) or a set {type:'set', repeat, interval, recovery}. Durations use seconds or minutes only. Power targets: {kind:'percent_ftp'|'watts'|'zone', value} or {kind, low, high} for ranges. Ramps require low+high.",
-                ),
-              }),
-            ),
+              "(feel, notes, hydration) in your chat reply, not in this tool. " +
+              "For gym/strength sessions use intervals_create_strength_workout instead.",
+            inputSchema: zodSchema(cyclingCreateWorkoutInputSchema),
             execute: async (input: { date: string; workout: IntervalsWorkoutInput }) => {
               let serialized: ReturnType<typeof serializeIntervalsWorkout>;
               try {
@@ -187,7 +197,6 @@ export function createCyclingTools(
                   name: input.workout.name,
                   type: "Ride",
                   ...buildCoachEventProvenance(input.date, input.workout.name),
-                  moving_time: serialized.movingTime,
                   description: serialized.description,
                 });
                 return { created: true, event };

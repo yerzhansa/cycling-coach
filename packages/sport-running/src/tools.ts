@@ -163,7 +163,7 @@ export function createRunningTools(
               "(meters/km/mi); a distance step needs a pace target so its planned time can be derived. For " +
               "every pushed workout, put the RPE-check + provenance framing, plus athlete-facing coaching " +
               "narrative (feel, RPE cues, target spm, hydration), in your chat reply — the calendar entry " +
-              "cannot carry it.",
+              "cannot carry it. For gym/strength sessions use intervals_create_strength_workout instead.",
             inputSchema: zodSchema(
               z.object({
                 date: z.string().describe("Workout date (YYYY-MM-DD)"),

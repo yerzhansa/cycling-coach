@@ -9,6 +9,7 @@ import {
   createPureCoreIntervalsTools,
   createCoreToolsWithSportConfig,
 } from "../src/sport/platform-tools.js";
+import { todayInTZ } from "../src/sport/user-time.js";
 import type {
   AthleteDataReaderPort,
   PlatformCalendarMutationsPort,
@@ -87,6 +88,48 @@ async function runDelete(event: EventKnobs, tz = "UTC") {
   return { result, deleteCalls };
 }
 
+class FakePlatformApiError extends Error {
+  readonly apiError: unknown;
+  constructor(apiError: unknown) {
+    super("platform request failed");
+    this.name = "PlatformApiError";
+    this.apiError = apiError;
+  }
+}
+
+function makeStrengthCreateFake(outcome: { event: unknown } | { throws: unknown }): {
+  mutations: PlatformCalendarMutationsPort;
+  createCalls: Record<string, unknown>[];
+} {
+  const createCalls: Record<string, unknown>[] = [];
+  const mutations: PlatformCalendarMutationsPort = {
+    createEvent: async (payload) => {
+      createCalls.push(payload as Record<string, unknown>);
+      if ("throws" in outcome) throw outcome.throws;
+      return outcome.event;
+    },
+    readEventForDelete: async ({ eventId }) => ({ id: eventId, startDateLocal: "2999-01-01" }),
+    deleteEvent: async () => ({}),
+  };
+  return { mutations, createCalls };
+}
+
+async function runStrengthCreate(
+  mutations: PlatformCalendarMutationsPort,
+  date: string,
+  tz = "UTC",
+) {
+  const tools = createPureCoreIntervalsTools(null, tz, undefined, mutations);
+  return tools.intervals_create_strength_workout!.execute!(
+    {
+      date,
+      name: "Lower body 45min",
+      description: "Back squat 3x5 @ RPE 7",
+    },
+    {} as never,
+  );
+}
+
 describe("event provenance helpers", () => {
   it("buildCoachExternalId formats prefix:date:slug", () => {
     expect(buildCoachExternalId("2026-05-01", "Threshold 3x10")).toBe(
@@ -128,6 +171,95 @@ describe("event provenance helpers", () => {
   it("rejects near-miss forgeries: tag 'cycling-coach-pro', externalId 'evil-cycling-coach:...'", () => {
     expect(isCoachOwnedEvent({ tags: ["cycling-coach-pro"] })).toBe(false);
     expect(isCoachOwnedEvent({ externalId: "evil-cycling-coach:2026-05-01:x" })).toBe(false);
+  });
+});
+
+describe("intervals_create_strength_workout", () => {
+  it("posts a provenance-marked WeightTraining workout and returns the event", async () => {
+    const event = { id: 42 };
+    const { mutations, createCalls } = makeStrengthCreateFake({ event });
+    const date = todayInTZ("UTC");
+
+    await expect(runStrengthCreate(mutations, date)).resolves.toEqual({
+      created: true,
+      event,
+    });
+    expect(createCalls).toEqual([
+      {
+        start_date_local: `${date}T00:00:00`,
+        category: "WORKOUT",
+        name: "Lower body 45min",
+        type: "WeightTraining",
+        external_id: `cycling-coach:${date}:strength-lower-body-45min`,
+        tags: ["cycling-coach"],
+        description: "Back squat 3x5 @ RPE 7",
+      },
+    ]);
+  });
+
+  it("refuses a past date without calling createEvent", async () => {
+    const { mutations, createCalls } = makeStrengthCreateFake({ event: { id: 1 } });
+
+    await expect(runStrengthCreate(mutations, "2020-01-01")).resolves.toMatchObject({
+      error: "past_date_refused",
+    });
+    expect(createCalls).toEqual([]);
+  });
+
+  it("refuses an impossible date without calling createEvent", async () => {
+    const { mutations, createCalls } = makeStrengthCreateFake({ event: { id: 1 } });
+
+    await expect(runStrengthCreate(mutations, "2026-02-31")).resolves.toMatchObject({
+      error: "invalid_date",
+    });
+    expect(createCalls).toEqual([]);
+  });
+
+  it("surfaces a typed API error after one createEvent call", async () => {
+    const { mutations, createCalls } = makeStrengthCreateFake({
+      throws: new FakePlatformApiError({
+        kind: "rate_limited",
+        status: 429,
+        message: "Slow down",
+      }),
+    });
+
+    await expect(runStrengthCreate(mutations, todayInTZ("UTC"))).resolves.toEqual({
+      error: "rate_limited",
+      status: 429,
+      message: "Slow down",
+    });
+    expect(createCalls).toHaveLength(1);
+  });
+
+  it("returns platform_credentials_required when the host has no credentials", async () => {
+    const credentialsError = new Error("Calendar changes need platform credentials.");
+    credentialsError.name = "PlatformCredentialsRequiredError";
+    const { mutations } = makeStrengthCreateFake({ throws: credentialsError });
+
+    await expect(runStrengthCreate(mutations, todayInTZ("UTC"))).resolves.toMatchObject({
+      error: "platform_credentials_required",
+    });
+  });
+
+  it("uses the constructor timezone for the today boundary", async () => {
+    const date = todayInTZ("Pacific/Midway");
+    const midway = makeStrengthCreateFake({ event: { id: 1 } });
+    const kiritimati = makeStrengthCreateFake({ event: { id: 2 } });
+
+    await expect(
+      runStrengthCreate(midway.mutations, date, "Pacific/Midway"),
+    ).resolves.toMatchObject({ created: true });
+    await expect(
+      runStrengthCreate(kiritimati.mutations, date, "Pacific/Kiritimati"),
+    ).resolves.toMatchObject({ error: "past_date_refused" });
+    expect(midway.createCalls).toHaveLength(1);
+    expect(kiritimati.createCalls).toEqual([]);
+  });
+
+  it("is absent when no calendar mutations port is configured", () => {
+    const tools = createPureCoreIntervalsTools(null, "UTC", makeListReader([]));
+    expect("intervals_create_strength_workout" in tools).toBe(false);
   });
 });
 

@@ -10,6 +10,7 @@ import {
 
 const EXPECTED_NAMES = [
   "assess_feasibility",
+  "build_plan_skeleton",
   "calculate_zones",
   "get_sample_week",
   "intervals_fetch_activities",
@@ -34,7 +35,6 @@ describe("READ_ONLY_TOOL_NAMES allowlist", () => {
 
   it("excludes every writer tool", () => {
     for (const writer of [
-      "build_plan_skeleton",
       "intervals_create_strength_workout",
       "intervals_create_workout",
       "intervals_delete_workout",
