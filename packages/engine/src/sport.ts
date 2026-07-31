@@ -231,6 +231,8 @@ export {
   buildCoachExternalId,
   isCoachOwnedEvent,
 } from "./sport/event-provenance.js";
+export { guardDeletableEvent, toTypedError } from "./sport/event-guards.js";
+export type { IntervalsEventRuntime } from "./sport/event-guards.js";
 export type { SourceProvenance } from "./provenance.js";
 export {
   createCoreToolsWithSportConfig,
