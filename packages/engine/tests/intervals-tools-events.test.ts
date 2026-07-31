@@ -361,7 +361,7 @@ type ListRow = {
 async function runList(events: EventKnobs[], coachCreatedOnly?: boolean) {
   const tools = createCoreToolsWithSportConfig(null, ["Ride"], makeListReader(events));
   return (await tools.intervals_list_events!.execute!(
-    { oldest: "2026-01-01", coachCreatedOnly },
+    { oldest: "2026-01-01", newest: "2026-01-31", coachCreatedOnly },
     {} as never,
   )) as ListRow[];
 }

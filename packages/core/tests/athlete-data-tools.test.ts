@@ -266,7 +266,10 @@ describe("store athlete reader", () => {
       pure.intervals_fetch_streams!.execute!({ activityId, types: ["watts"] }, {} as never),
     ).resolves.toMatchObject({ channels: { watts: { min: 100, max: 200, mean: 150 } } });
     await expect(
-      configured.intervals_list_events!.execute!({ oldest: "1998-07-01" }, {} as never),
+      configured.intervals_list_events!.execute!(
+        { oldest: "1998-07-01", newest: "1998-07-02" },
+        {} as never,
+      ),
     ).resolves.toEqual({
       error: "store_read_unavailable",
       message: "Calendar reads are not available from the local training store.",
@@ -332,7 +335,7 @@ describe("store athlete reader", () => {
     expect(tools.intervals_fetch_activities!.description).not.toContain("Returns string IDs");
   });
 
-  it("applies strict dates only at store execution and rejects reversed ranges", async () => {
+  it("rejects reversed ranges at the tool boundary and again at store execution", async () => {
     const reader = createStoreAthleteDataReader({
       snapshot: () => produced(),
       clockNow: () => Date.parse("1998-07-18T12:00:00.000Z"),
@@ -343,7 +346,11 @@ describe("store athlete reader", () => {
         { oldest: "1998-07-02", newest: "1998-07-01" },
         {} as never,
       ),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({ error: "invalid_range" });
+    await expect(
+      reader.listActivities({ start: "1998-07-02", end: "1998-07-01" }),
+    ).resolves.toMatchObject({
+      ok: false,
       error: "invalid_input",
       message: "Dates must be real YYYY-MM-DD values with start on or before end.",
     });

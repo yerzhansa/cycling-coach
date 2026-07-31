@@ -5,7 +5,12 @@ import type { IntervalsActivityType } from "../sport.js";
 import { downsampleStreams } from "./stream-downsample.js";
 import { guardDeletableEvent, toTypedError, type IntervalsEventRuntime } from "./event-guards.js";
 import { buildCoachEventProvenance, isCoachOwnedEvent } from "./event-provenance.js";
-import { dateKeySchema, validateWorkoutCreationDate } from "./date-schema.js";
+import {
+  dateKeySchema,
+  validateListRange,
+  validateWorkoutCreationDate,
+  INTERVALS_LIST_MAX_RANGE_DAYS,
+} from "./date-schema.js";
 import type {
   AthleteDataReaderPort,
   AthleteReadResult,
@@ -88,11 +93,17 @@ export function createPureCoreIntervalsTools(
               "Fetch wellness data from intervals.icu (fitness, fatigue, weight, HRV, resting HR, sleep). Form = fitness - fatigue.",
             inputSchema: zodSchema(
               z.object({
-                oldest: z.string().describe("Start date (YYYY-MM-DD)"),
-                newest: z.string().optional().describe("End date (YYYY-MM-DD)"),
+                oldest: dateKeySchema.describe("Start date (YYYY-MM-DD)"),
+                newest: dateKeySchema.optional().describe("End date (YYYY-MM-DD)"),
               }),
             ),
             execute: async (input: { oldest: string; newest?: string }) => {
+              const rangeError = validateListRange(
+                input.oldest,
+                input.newest,
+                INTERVALS_LIST_MAX_RANGE_DAYS,
+              );
+              if (rangeError) return rangeError;
               try {
                 return readResult(
                   await selectedReader.listWellness({
@@ -301,11 +312,17 @@ export function createCoreToolsWithSportConfig(
         "store-backed activities match, narrow the date range.",
       inputSchema: zodSchema(
         z.object({
-          oldest: z.string().describe("Oldest date (YYYY-MM-DD)"),
-          newest: z.string().optional().describe("Newest date (YYYY-MM-DD)"),
+          oldest: dateKeySchema.describe("Oldest date (YYYY-MM-DD)"),
+          newest: dateKeySchema.optional().describe("Newest date (YYYY-MM-DD)"),
         }),
       ),
       execute: async (input: { oldest: string; newest?: string }) => {
+        const rangeError = validateListRange(
+          input.oldest,
+          input.newest,
+          INTERVALS_LIST_MAX_RANGE_DAYS,
+        );
+        if (rangeError) return rangeError;
         try {
           return readResult(
             await selectedReader.listActivities({
@@ -329,8 +346,8 @@ export function createCoreToolsWithSportConfig(
         "coach-created events.",
       inputSchema: zodSchema(
         z.object({
-          oldest: z.string().describe("Oldest date (YYYY-MM-DD)"),
-          newest: z.string().optional().describe("Newest date (YYYY-MM-DD)"),
+          oldest: dateKeySchema.describe("Oldest date (YYYY-MM-DD)"),
+          newest: dateKeySchema.optional().describe("Newest date (YYYY-MM-DD)"),
           coachCreatedOnly: z
             .boolean()
             .optional()
@@ -338,6 +355,12 @@ export function createCoreToolsWithSportConfig(
         }),
       ),
       execute: async (input: { oldest: string; newest?: string; coachCreatedOnly?: boolean }) => {
+        const rangeError = validateListRange(
+          input.oldest,
+          input.newest,
+          INTERVALS_LIST_MAX_RANGE_DAYS,
+        );
+        if (rangeError) return rangeError;
         try {
           const result = await selectedReader.listCalendar({
             start: input.oldest,
