@@ -1,5 +1,5 @@
-# Multi-stage Dockerfile for the cycling-coach binary. Builds Core + sport-cycling
-# + cycling-coach via pnpm workspace, then ships only the runtime bundle via
+# Multi-stage Dockerfile for the cycling-coach binary. Builds the cycling-coach
+# workspace closure via pnpm workspace, then ships only the runtime bundle via
 # `pnpm deploy --prod` (pnpm-canonical: rewrites workspace:* to real paths,
 # strips dev deps, produces a self-contained directory).
 
@@ -11,11 +11,19 @@ WORKDIR /app
 RUN corepack enable
 
 # Workspace manifests + lockfile for cache hits on dep installs. Only the
-# packages cycling-coach actually depends on (core + sport-cycling + itself);
-# the 4 stub packages aren't part of the binary and don't need to be visible.
+# packages cycling-coach actually depends on — the full workspace closure is
+# cycling-coach -> core -> {engine, kernel}, engine -> {coach-contract,
+# kernel}, sport-cycling -> {engine, kernel}. The remaining workspace packages
+# aren't part of the binary and don't need to be visible.
 # `pnpm install --filter cycling-coach...` resolves only the cycling-coach
-# subgraph and ignores the absent stub workspace dirs.
+# subgraph and ignores the absent workspace dirs.
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
+# Root `pnpm.patchedDependencies` entries are hashed on every install, even
+# when the patched package is outside the filtered subgraph.
+COPY patches ./patches
+COPY packages/kernel/package.json ./packages/kernel/
+COPY packages/coach-contract/package.json ./packages/coach-contract/
+COPY packages/engine/package.json ./packages/engine/
 COPY packages/core/package.json ./packages/core/
 COPY packages/sport-cycling/package.json ./packages/sport-cycling/
 COPY packages/cycling-coach/package.json ./packages/cycling-coach/
@@ -24,13 +32,16 @@ RUN pnpm install --filter cycling-coach... --frozen-lockfile
 
 # Source after deps for cache reuse.
 COPY tools ./tools
+COPY packages/kernel ./packages/kernel
+COPY packages/coach-contract ./packages/coach-contract
+COPY packages/engine ./packages/engine
 COPY packages/core ./packages/core
 COPY packages/sport-cycling ./packages/sport-cycling
 COPY packages/cycling-coach ./packages/cycling-coach
 COPY LICENSE NOTICE.md ./
 
 # Only build what cycling-coach needs (`...` = the package + all its deps in
-# topo order). Stubs aren't even copied into the image.
+# topo order). Packages outside the closure aren't even copied into the image.
 RUN pnpm --filter cycling-coach... build
 
 # pnpm deploy: produces a self-contained dir with prod-only deps,
@@ -41,6 +52,12 @@ RUN pnpm --filter cycling-coach... build
 # (cycling-coach bundles @enduragent/* via tsup; workspace deps live in
 # devDependencies and get stripped by --prod anyway), so the legacy flag
 # is the right opt-out.
+# The root `pnpm.patchedDependencies` entry targets a workspace package outside
+# this subgraph, so `deploy` aborts with ERR_PNPM_PATCH_NOT_APPLIED. pnpm reads
+# that setting only from the root manifest — no CLI or npmrc override exists —
+# so drop it from the image's copy once the lockfile-checked install is done.
+RUN node -e "const fs=require('node:fs');const m=JSON.parse(fs.readFileSync('package.json','utf8'));delete m.pnpm.patchedDependencies;fs.writeFileSync('package.json',JSON.stringify(m,null,2))"
+
 RUN pnpm --filter cycling-coach --prod --legacy deploy /app/runtime-bundle
 
 # ── runtime ────────────────────────────────────────────────────────────────
