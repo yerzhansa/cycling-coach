@@ -7,6 +7,12 @@ import {
 import { cyclingSport } from "../src/sport.js";
 import { createCyclingTools } from "../src/tools.js";
 
+function tomorrowISODate(): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
 const reader: AthleteDataReader = {
   getAthlete: async () => ({ ok: true, value: {} }),
   listWellness: async () => ({ ok: true, value: [] }),
@@ -42,7 +48,7 @@ describe("cycling data-source tools", () => {
     expect(registration.description).not.toContain("intervals.icu");
     expect(registration.description).not.toContain("load, intensity");
     await expect(
-      registration.tool.execute!({ oldest: "1998-01-01" }, {} as never),
+      registration.tool.execute!({ oldest: "1998-01-01", newest: "1998-07-18" }, {} as never),
     ).resolves.toEqual([{ marker: "store" }]);
   });
 
@@ -55,7 +61,7 @@ describe("cycling data-source tools", () => {
     );
     const result = await tools.intervals_create_workout!.execute!(
       {
-        date: "1998-07-18",
+        date: tomorrowISODate(),
         workout: {
           name: "Synthetic",
           steps: [

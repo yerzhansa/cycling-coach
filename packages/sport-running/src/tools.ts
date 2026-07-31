@@ -1,7 +1,11 @@
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import type { MemoryStorePort as MemoryStore } from "@enduragent/engine/sport";
-import { buildCoachEventProvenance } from "@enduragent/engine/sport";
+import {
+  buildCoachEventProvenance,
+  dateKeySchema,
+  validateWorkoutCreationDate,
+} from "@enduragent/engine/sport";
 import type { ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
 import type { IntervalsClient } from "intervals-icu-api";
 import {
@@ -35,6 +39,19 @@ const RPE_FRAMING =
   "The single table carries individual and sex-specific spread; CS is a monitoring " +
   "anchor, not a hold-forever pace.";
 
+export const runningCreateWorkoutInputSchema = z.object({
+  date: dateKeySchema.describe("Workout date (YYYY-MM-DD)"),
+  workout: runningWorkoutInputSchema.describe(
+    "Structured workout: name + ordered steps. Top-level steps can be simple " +
+      "(warmup/steady/tempo/threshold/interval/repetition/strides/ramp/recovery/rest/cooldown) " +
+      "or a set {type:'set', repeat, interval, recovery}. Durations use time (seconds/minutes) " +
+      "or distance (meters/distance_km/distance_mi); a distance step needs a pace target. Pace " +
+      "targets: {kind:'zone'|'cs_fraction'|'pace', value} or {kind, low, high} for ranges. " +
+      "cs_fraction is a fraction of critical speed (1.0 = threshold). Absolute 'pace' is M:SS " +
+      "strings, slower-first for ranges. Ramps require low+high.",
+  ),
+});
+
 function clampLowerFraction(requested: number): { value: number; clamped: boolean } {
   const value = Math.min(LOWER_FRACTION_CLAMP.max, Math.max(LOWER_FRACTION_CLAMP.min, requested));
   return { value, clamped: value !== requested };
@@ -43,7 +60,7 @@ function clampLowerFraction(requested: number): { value: number; clamped: boolea
 export function createRunningTools(
   _memory: MemoryStore,
   intervals: IntervalsClient | null,
-  _tz: string = "UTC",
+  tz: string = "UTC",
   resolvedCs?: (options: unknown) => ResolvedCs | null,
 ) {
   return {
@@ -163,22 +180,12 @@ export function createRunningTools(
               "(meters/km/mi); a distance step needs a pace target so its planned time can be derived. For " +
               "every pushed workout, put the RPE-check + provenance framing, plus athlete-facing coaching " +
               "narrative (feel, RPE cues, target spm, hydration), in your chat reply — the calendar entry " +
-              "cannot carry it. For gym/strength sessions use intervals_create_strength_workout instead.",
-            inputSchema: zodSchema(
-              z.object({
-                date: z.string().describe("Workout date (YYYY-MM-DD)"),
-                workout: runningWorkoutInputSchema.describe(
-                  "Structured workout: name + ordered steps. Top-level steps can be simple " +
-                    "(warmup/steady/tempo/threshold/interval/repetition/strides/ramp/recovery/rest/cooldown) " +
-                    "or a set {type:'set', repeat, interval, recovery}. Durations use time (seconds/minutes) " +
-                    "or distance (meters/distance_km/distance_mi); a distance step needs a pace target. Pace " +
-                    "targets: {kind:'zone'|'cs_fraction'|'pace', value} or {kind, low, high} for ranges. " +
-                    "cs_fraction is a fraction of critical speed (1.0 = threshold). Absolute 'pace' is M:SS " +
-                    "strings, slower-first for ranges. Ramps require low+high.",
-                ),
-              }),
-            ),
+              "cannot carry it. Past dates are refused — workouts can only be created for today or " +
+              "later. For gym/strength sessions use intervals_create_strength_workout instead.",
+            inputSchema: zodSchema(runningCreateWorkoutInputSchema),
             execute: async (input: { date: string; workout: RunningWorkoutInput }, options: unknown) => {
+              const dateError = validateWorkoutCreationDate(input.date, tz);
+              if (dateError) return dateError;
               // The serializer stays pure: pass OUR resolved CS in so distance steps
               // with relative targets can derive their planned time.
               let serialized: ReturnType<typeof serializeRunningWorkout>;

@@ -4,6 +4,7 @@ import type {
   MemoryStorePort as MemoryStore,
   PlatformCalendarMutationsPort,
 } from "@enduragent/engine/sport";
+import { todayInTZ } from "@enduragent/engine/sport";
 import {
   buildPlanSkeletonInputSchema,
   createCyclingTools,
@@ -109,6 +110,61 @@ describe("intervals_create_workout payload (calendar-payload group)", () => {
 
     expect(result).toMatchObject({ error: "invalid_workout" });
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("intervals_create_workout date guard", () => {
+  it("allows tomorrow and today", async () => {
+    const { mutations, calls } = fakeMutations();
+    const tool = createWorkoutTool(mutations)!;
+    expect(
+      await tool.execute({ date: tomorrowISODate(), workout: validWorkout }, {}),
+    ).toMatchObject({ created: true });
+    expect(
+      await tool.execute({ date: todayInTZ("UTC"), workout: validWorkout }, {}),
+    ).toMatchObject({ created: true });
+    expect(calls).toHaveLength(2);
+  });
+
+  it("refuses a past date without calling createEvent", async () => {
+    const { mutations, calls } = fakeMutations();
+    const result = await createWorkoutTool(mutations)!.execute(
+      { date: "2020-01-01", workout: validWorkout },
+      {},
+    );
+    expect(result).toMatchObject({ error: "past_date_refused" });
+    expect(result.details).toContain("2020-01-01");
+    expect(result.details).toContain(todayInTZ("UTC"));
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses an impossible date", async () => {
+    const { mutations, calls } = fakeMutations();
+    const result = await createWorkoutTool(mutations)!.execute(
+      { date: "2026-02-31", workout: validWorkout },
+      {},
+    );
+    expect(result).toMatchObject({ error: "invalid_date" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("uses the constructor timezone for the today boundary", async () => {
+    const date = todayInTZ("Pacific/Midway");
+    const midway = fakeMutations({ id: 1 });
+    const kiritimati = fakeMutations({ id: 2 });
+
+    expect(
+      await createWorkoutTool(midway.mutations, "Pacific/Midway")!.execute(
+        { date, workout: validWorkout },
+        {},
+      ),
+    ).toMatchObject({ created: true });
+    expect(
+      await createWorkoutTool(kiritimati.mutations, "Pacific/Kiritimati")!.execute(
+        { date, workout: validWorkout },
+        {},
+      ),
+    ).toMatchObject({ error: "past_date_refused" });
   });
 });
 

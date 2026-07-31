@@ -8,6 +8,7 @@ import {
   buildCoachEventProvenance,
   dateKeySchema,
   isRealDateKey,
+  validateWorkoutCreationDate,
 } from "@enduragent/engine/sport";
 import type { IntervalsClient } from "intervals-icu-api";
 import {
@@ -178,9 +179,12 @@ export function createCyclingTools(
               "Supply the workout as structured steps — the tool serializes them into the intervals.icu " +
               "native description syntax so the power chart renders. Put athlete-facing coaching narrative " +
               "(feel, notes, hydration) in your chat reply, not in this tool. " +
+              "Past dates are refused — workouts can only be created for today or later. " +
               "For gym/strength sessions use intervals_create_strength_workout instead.",
             inputSchema: zodSchema(cyclingCreateWorkoutInputSchema),
             execute: async (input: { date: string; workout: IntervalsWorkoutInput }) => {
+              const dateError = validateWorkoutCreationDate(input.date, tz);
+              if (dateError) return dateError;
               let serialized: ReturnType<typeof serializeIntervalsWorkout>;
               try {
                 serialized = serializeIntervalsWorkout(input.workout);

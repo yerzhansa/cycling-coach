@@ -1,7 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { asSchema } from "ai";
 import type { MemoryStore, ResolvedCs } from "@enduragent/core";
-import { createRunningTools } from "../src/tools.js";
+import { todayInTZ } from "@enduragent/engine/sport";
+import { createRunningTools, runningCreateWorkoutInputSchema } from "../src/tools.js";
+
+function tomorrowISODate(): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
 
 // The Vercel AI SDK wraps execute; call it directly with a stub options arg
 // (the running tool ignores options). Schema validation is the SDK's job at
@@ -175,7 +182,7 @@ describe("intervals_create_workout tool", () => {
 
     const out = await tool.execute(
       {
-        date: "2026-06-21",
+        date: tomorrowISODate(),
         workout: {
           name: "Easy 30",
           steps: [{ type: "steady", duration: { value: 30, unit: "minutes" }, pace: { kind: "cs_fraction", value: 0.75 } }],
@@ -201,7 +208,7 @@ describe("intervals_create_workout tool", () => {
 
     await tool.execute(
       {
-        date: "2026-06-21",
+        date: tomorrowISODate(),
         workout: {
           name: "Easy 30",
           steps: [{ type: "steady", duration: { value: 30, unit: "minutes" }, pace: { kind: "cs_fraction", value: 0.75 } }],
@@ -211,7 +218,7 @@ describe("intervals_create_workout tool", () => {
     );
 
     const payload = calls[0];
-    expect(payload.external_id).toBe("cycling-coach:2026-06-21:easy-30");
+    expect(payload.external_id).toBe(`cycling-coach:${tomorrowISODate()}:easy-30`);
     expect(payload.tags).toEqual(["cycling-coach"]);
   });
 
@@ -225,7 +232,7 @@ describe("intervals_create_workout tool", () => {
 
     const out = await tool.execute(
       {
-        date: "2026-06-21",
+        date: tomorrowISODate(),
         workout: {
           name: "Manual CS 400s",
           steps: [{ type: "interval", duration: { value: 400, unit: "meters" }, pace: { kind: "cs_fraction", value: 1.06 } }],
@@ -245,7 +252,7 @@ describe("intervals_create_workout tool", () => {
 
     const out = await tool.execute(
       {
-        date: "2026-06-21",
+        date: tomorrowISODate(),
         workout: {
           name: "Bad",
           steps: [{ type: "ramp", duration: { value: 10, unit: "minutes" }, pace: { kind: "cs_fraction", value: 0.7 } }],
@@ -265,7 +272,7 @@ describe("intervals_create_workout tool", () => {
 
     const out = await tool.execute(
       {
-        date: "2026-06-21",
+        date: tomorrowISODate(),
         workout: {
           name: "Easy 30",
           steps: [{ type: "steady", duration: { value: 30, unit: "minutes" }, pace: { kind: "cs_fraction", value: 0.75 } }],
@@ -275,6 +282,56 @@ describe("intervals_create_workout tool", () => {
     );
 
     expect(out.error).toBe("rate_limited");
+  });
+});
+
+describe("intervals_create_workout date guard", () => {
+  const workout = {
+    name: "Easy 30",
+    steps: [
+      {
+        type: "steady" as const,
+        duration: { value: 30, unit: "minutes" as const },
+        pace: { kind: "cs_fraction" as const, value: 0.75 },
+      },
+    ],
+  };
+
+  it("allows tomorrow and today", async () => {
+    const { client, calls } = fakeIntervals({ ok: true, value: { id: 42 } });
+    const tool = createWorkoutTool(client)!;
+    expect(await tool.execute({ date: tomorrowISODate(), workout }, {})).toMatchObject({
+      created: true,
+    });
+    expect(await tool.execute({ date: todayInTZ("UTC"), workout }, {})).toMatchObject({
+      created: true,
+    });
+    expect(calls).toHaveLength(2);
+  });
+
+  it("refuses a past date without calling events.create", async () => {
+    const { client, calls } = fakeIntervals({ ok: true, value: { id: 42 } });
+    const result = await createWorkoutTool(client)!.execute(
+      { date: "2020-01-01", workout },
+      {},
+    );
+    expect(result).toMatchObject({ error: "past_date_refused" });
+    expect(result.details).toContain("2020-01-01");
+    expect(result.details).toContain(todayInTZ("UTC"));
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses an impossible date and rejects non-YYYY-MM-DD schema input", async () => {
+    const { client, calls } = fakeIntervals({ ok: true, value: { id: 42 } });
+    const result = await createWorkoutTool(client)!.execute(
+      { date: "2026-02-31", workout },
+      {},
+    );
+    expect(result).toMatchObject({ error: "invalid_date" });
+    expect(calls).toHaveLength(0);
+    expect(
+      runningCreateWorkoutInputSchema.safeParse({ date: "June 15", workout }).success,
+    ).toBe(false);
   });
 });
 

@@ -213,7 +213,11 @@ export {
   isRealDateKey,
   parseDateKeyMs,
 } from "./sport/date-keys.js";
-export { DATE_KEY_RE, dateKeySchema } from "./sport/date-schema.js";
+export {
+  DATE_KEY_RE,
+  dateKeySchema,
+  validateWorkoutCreationDate,
+} from "./sport/date-schema.js";
 export { getEffectiveSections } from "./sport/effective-sections.js";
 export { createMemorySnapshot } from "./sport/memory-snapshot.js";
 export { messageText } from "./sport/model-message.js";
