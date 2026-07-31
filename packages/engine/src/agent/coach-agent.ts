@@ -261,6 +261,10 @@ export class CoachAgent {
   private tools: ToolSet;
   private systemPrompt: string;
   private tz: string;
+  // Derived once from getEffectiveSections(sport): the spec'd sections with
+  // inject === false, dropped from the Athlete Context. Orphan sections are
+  // never in this list, so they always inject.
+  private readonly excludedSectionNames: readonly string[];
   private archiveDeferred = new Set<string>();
   private lastFlushMessageCount = new Map<string, number>();
   private readonly confirmationGate: boolean;
@@ -314,6 +318,9 @@ export class CoachAgent {
     };
     const confirmations = ports.toolConfirmations;
     this.confirmationGate = confirmations !== undefined && confirmations.gatedToolNames.size > 0;
+    const sections = getEffectiveSections(sport);
+    this.excludedSectionNames = sections.filter((s) => s.inject === false).map((s) => s.name);
+
     const registrations = sport.tools(runtimePorts);
     const maxResultTokens = Math.floor(this.config.contextWindowTokens * TOOL_RESULT_SHARE);
     const prepareConfirmedRun = (
@@ -638,11 +645,16 @@ export class CoachAgent {
         this.memory,
         this.tz,
         this.buildDegradeBlock(),
-        { confirmationGate: this.confirmationGate },
+        {
+          excludeSections: this.excludedSectionNames,
+          confirmationGate: this.confirmationGate,
+        },
       );
       const contextProvenance =
-        this.memory.getContextWithProvenance?.({ maxChars: ATHLETE_CONTEXT_MAX_CHARS })
-          .provenance ?? EMPTY_PROVENANCE;
+        this.memory.getContextWithProvenance?.({
+          excludeSections: this.excludedSectionNames,
+          maxChars: ATHLETE_CONTEXT_MAX_CHARS,
+        }).provenance ?? EMPTY_PROVENANCE;
 
       const budget = computeHistoryTokenBudget({
         contextWindowTokens: this.config.contextWindowTokens,
