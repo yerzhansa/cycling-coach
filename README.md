@@ -425,7 +425,7 @@ Deploy: https://railway.com/deploy/cycling-coach
 
 Railway hosts the container and volume in your Railway account. The bot reads your Railway variables, talks to Telegram, intervals.icu, and your chosen LLM provider from inside your Railway project. We do not host a shared backend, store your secrets, store your athlete data, or receive your Telegram messages. Your hosting and billing relationship is with Railway. Railway currently lists Hobby as the practical minimum for always-on apps: $5 minimum usage/month, including $5 monthly usage credits.
 
-The template uses `ghcr.io/yerzhansa/cycling-coach:stable`, mounts persistent state at `/data`, and has image auto-updates enabled.
+The template uses `ghcr.io/yerzhansa/enduragent:stable`, mounts persistent state at `/data`, and has image auto-updates enabled.
 
 Before you click **Deploy**, prepare three accounts: one LLM provider account, intervals.icu, and Telegram.
 
