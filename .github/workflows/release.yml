@@ -236,3 +236,33 @@ jobs:
             gh release create "$TAG" --title "$TAG" --notes "$BODY"
             echo "::notice::Created GitHub Release $TAG"
           fi
+
+      - name: Publish enduragent alias to npm via OIDC
+        run: |
+          set -euo pipefail
+          PACKAGE="${{ needs.parse-tag.outputs.package }}"
+          if [ "$PACKAGE" != "cycling-coach" ]; then
+            echo "::notice::No enduragent alias for $PACKAGE — skipping"
+            exit 0
+          fi
+          VERSION="${{ needs.parse-tag.outputs.version }}"
+          PACK_DIR="/tmp/publish-pack-$PACKAGE"
+          TARBALL=$(find "$PACK_DIR" -maxdepth 1 -name '*.tgz' -print -quit)
+          ALIAS_DIR="/tmp/publish-pack-enduragent"
+          rm -rf "$ALIAS_DIR"
+          mkdir -p "$ALIAS_DIR/extract"
+          tar -xzf "$TARBALL" -C "$ALIAS_DIR/extract"
+          node -e 'const fs=require("fs");const p=process.argv[1];const pkg=JSON.parse(fs.readFileSync(p,"utf8"));pkg.name="enduragent";pkg.bin={enduragent:"dist/index.js"};fs.writeFileSync(p,JSON.stringify(pkg,null,2)+"\n");' "$ALIAS_DIR/extract/package/package.json"
+          ALIAS_TARBALL="$ALIAS_DIR/enduragent-$VERSION.tgz"
+          COPYFILE_DISABLE=1 tar -czf "$ALIAS_TARBALL" -C "$ALIAS_DIR/extract" package
+          pnpm check:published-package -- "$ALIAS_TARBALL"
+          EXPECTED_REPO=$(node -p "require('./packages/$PACKAGE/package.json').repository.url")
+          PUBLISHED_REPO=$(npm view "enduragent@$VERSION" repository.url 2>/dev/null || true)
+          if [ -z "$PUBLISHED_REPO" ]; then
+            npm publish "$ALIAS_TARBALL" --access public
+          elif [ "$PUBLISHED_REPO" = "$EXPECTED_REPO" ]; then
+            echo "::notice::enduragent@$VERSION already published from $EXPECTED_REPO — skipping publish"
+          else
+            echo "::error::enduragent@$VERSION exists on npm but was published from $PUBLISHED_REPO (expected $EXPECTED_REPO)"
+            exit 1
+          fi

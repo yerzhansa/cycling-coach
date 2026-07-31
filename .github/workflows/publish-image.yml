@@ -1,7 +1,9 @@
 name: Publish Docker image
 
-# First run creates the GHCR package. Before publishing the Railway marketplace
-# template, confirm the package visibility is Public in GitHub Packages.
+# First run creates each GHCR package, private by default. Before publishing the
+# Railway marketplace template, confirm the visibility of BOTH packages named in
+# the env block below is Public in GitHub Packages — a private package answers
+# `docker pull` with 401 for everyone.
 
 # The bot image and the desktop shell share one branch. Desktop-only surfaces
 # are excluded rather than bot-relevant ones allowlisted, so a new package in
@@ -24,6 +26,7 @@ permissions:
 
 env:
   IMAGE_NAME: ghcr.io/yerzhansa/cycling-coach
+  ALIAS_IMAGE_NAME: ghcr.io/yerzhansa/enduragent
 
 jobs:
   image:
@@ -63,6 +66,11 @@ jobs:
             echo "${IMAGE_NAME}:main-${short_sha}"
             if [[ -n "$version" ]]; then
               echo "${IMAGE_NAME}:${version}"
+            fi
+            echo "${ALIAS_IMAGE_NAME}:stable"
+            echo "${ALIAS_IMAGE_NAME}:main-${short_sha}"
+            if [[ -n "$version" ]]; then
+              echo "${ALIAS_IMAGE_NAME}:${version}"
             fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
