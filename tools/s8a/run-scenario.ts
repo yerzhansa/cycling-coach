@@ -30,6 +30,7 @@ import {
 import { validateRecording } from "./lib/record-validate.js";
 import { loadSupersessions, type SupersessionEntry } from "./lib/supersessions.js";
 import { snapshotHome, stageHome } from "./lib/staging.js";
+import { countCapturedWrites } from "./lib/write-capture.js";
 import type {
   AssertFailure,
   FailureWithDiff,
@@ -246,16 +247,17 @@ function finishReplay(params: {
   failures.push(...assertNeedles(scenario, replies));
 
   // Write-capture cross-checks.
-  const recordedCreates = recording.calls
-    .flatMap((c) => c.toolExecutions)
-    .filter((e) => e.toolName === "intervals_create_workout").length;
-  if (msw.createdWorkouts.length !== recordedCreates) {
+  const capturedCreates = countCapturedWrites(
+    replayHandle.state.toolOutcomes,
+    "intervals_create_workout",
+  );
+  if (msw.createdWorkouts.length !== capturedCreates) {
     failures.push({
       assertId: "A2",
       scenario: scenario.id,
-      detail: `createdWorkouts count ${msw.createdWorkouts.length} !== recorded intervals_create_workout executions ${recordedCreates}`,
+      detail: `createdWorkouts count ${msw.createdWorkouts.length} !== intervals_create_workout executions that performed a write ${capturedCreates}`,
       diffFile: "tool-calls.diff",
-      diffContent: `createdWorkouts count ${msw.createdWorkouts.length} !== recorded ${recordedCreates}`,
+      diffContent: `createdWorkouts count ${msw.createdWorkouts.length} !== write-performing executions ${capturedCreates}`,
     });
   }
   if (scenario.id === "inj-03" && msw.deletedEventIds.length > 0) {

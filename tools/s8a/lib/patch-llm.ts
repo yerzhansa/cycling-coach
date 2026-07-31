@@ -16,6 +16,7 @@ import type {
   RecordedToolExecution,
   S8aRecording,
 } from "./types.js";
+import type { ToolExecutionOutcome } from "./write-capture.js";
 
 export interface ToolLike {
   execute?: (input: unknown, options: unknown) => unknown;
@@ -195,6 +196,7 @@ export interface ReplayState {
   cursor: number;
   failures: FailureWithDiff[];
   pendings: PendingHashMismatch[];
+  toolOutcomes: ToolExecutionOutcome[];
 }
 
 export interface ReplayHandle {
@@ -210,7 +212,7 @@ export function patchForReplay(
   recording: S8aRecording,
   scenarioId: string,
 ): ReplayHandle {
-  const state: ReplayState = { cursor: 0, failures: [], pendings: [] };
+  const state: ReplayState = { cursor: 0, failures: [], pendings: [], toolOutcomes: [] };
   let currentTurn: TurnRef = null;
 
   const fail = (
@@ -242,7 +244,7 @@ export function patchForReplay(
     }
 
     assertRequest(entry, opts, ordinal, currentTurn, state, fail);
-    await executeRecordedTools(entry, opts, ordinal, fail);
+    await executeRecordedTools(entry, opts, ordinal, state, fail);
 
     assertRecordedTextDeltaEvents(entry.events);
     for (const event of entry.events ?? []) {
@@ -464,12 +466,19 @@ async function executeRecordedTools(
   entry: RecordedCall,
   opts: GenerateOptsLike,
   ordinal: number,
+  state: ReplayState,
   fail: (a: FailureWithDiff["assertId"], d: string, f?: string, c?: string) => void,
 ): Promise<void> {
   for (let k = 0; k < entry.toolExecutions.length; k++) {
     const exec = entry.toolExecutions[k];
     const tool = opts.tools?.[exec.toolName];
     if (tool === undefined || typeof tool.execute !== "function") {
+      state.toolOutcomes.push({
+        toolName: exec.toolName,
+        recordedResult: exec.resultCanonical,
+        liveResult: undefined,
+        liveExecuted: false,
+      });
       fail(
         "A2",
         `ordinal ${ordinal} seq ${exec.seq}: recorded tool ${exec.toolName} not present in live tool set`,
@@ -486,6 +495,12 @@ async function executeRecordedTools(
         experimental_context: opts.context,
       });
     } catch (err) {
+      state.toolOutcomes.push({
+        toolName: exec.toolName,
+        recordedResult: exec.resultCanonical,
+        liveResult: undefined,
+        liveExecuted: false,
+      });
       fail(
         "A2",
         `ordinal ${ordinal} seq ${exec.seq}: live execution of ${exec.toolName} threw: ${err instanceof Error ? err.message : String(err)}`,
@@ -494,6 +509,12 @@ async function executeRecordedTools(
       );
       continue;
     }
+    state.toolOutcomes.push({
+      toolName: exec.toolName,
+      recordedResult: exec.resultCanonical,
+      liveResult,
+      liveExecuted: true,
+    });
     const liveCanonical = canonicalJson(JSON.parse(JSON.stringify(liveResult ?? null)));
     const recCanonical = canonicalJson(exec.resultCanonical);
     if (liveCanonical !== recCanonical) {
