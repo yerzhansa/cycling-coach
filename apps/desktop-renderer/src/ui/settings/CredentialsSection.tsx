@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactElement } from "react";
 import type { DesktopCredentialId } from "../../onboarding/bridge.js";
+import { claudeCliPresentation } from "../../onboarding/credential-presentation.js";
 import type { CredentialSettingsState } from "../../settings/credential-controller.js";
 import { settingsMutationActive } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
@@ -38,6 +39,7 @@ export function CredentialsSection(): ReactElement {
   }, [state]);
 
   const entries = content(state)?.entries ?? [];
+  const providerStatuses = content(state)?.providerStatuses ?? [];
   const confirmation = content(state)?.confirmation ?? null;
   const deleting = state.status === "deleting";
   const loading = state.status === "closed" || state.status === "loading";
@@ -134,6 +136,29 @@ export function CredentialsSection(): ReactElement {
                 )}
               </li>
             ))}
+          </ul>
+        )}
+        {providerStatuses.length === 0 ? null : (
+          <ul className={styles.list} aria-label="Keyless providers">
+            {providerStatuses.map((entry) => {
+              const presentation = claudeCliPresentation(entry.state);
+              return (
+                <li key={entry.provider} className={styles.item} data-provider={entry.provider}>
+                  <div className={styles.itemIdentity}>
+                    <div className={styles.rowTitle}>{entry.label}</div>
+                    <div className={styles.itemKind}>{entry.kind}</div>
+                    {entry.identity === null ? null : (
+                      <div className={styles.itemKind} data-provider-identity="">
+                        {entry.identity}
+                      </div>
+                    )}
+                  </div>
+                  <span className={styles.runtime} data-state={presentation.runtimeState}>
+                    {presentation.badge}
+                  </span>
+                </li>
+              );
+            })}
           </ul>
         )}
         {announcement.length === 0 ? null : (

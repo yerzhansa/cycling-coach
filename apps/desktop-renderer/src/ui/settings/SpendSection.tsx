@@ -1,6 +1,6 @@
 import type { SpendRouteSummary, SpendSummary } from "@enduragent/coach-contract";
 import type { ReactElement } from "react";
-import { currency } from "../../state/adapters/spend.js";
+import { currency, notionalSpendCopy, routeSpendCopy } from "../../state/adapters/spend.js";
 import { useEnduragentStore } from "../../state/store.js";
 import styles from "./SettingsView.module.css";
 
@@ -35,6 +35,8 @@ function notices(summary: SpendSummary, stale: boolean): readonly string[] {
     messages.push("Some provider costs are unavailable, so today’s total is a known minimum.");
   }
   if (summary.malformedLineCount > 0) messages.push("Some usage records could not be read.");
+  const notional = notionalSpendCopy(summary);
+  if (notional !== null) messages.push(notional);
   messages.push(
     `${summary.cacheSavingsComplete ? "Saved" : "Saved at least"} ${currency(summary.knownCacheReadSavingsUsd, true)} with cache reads`,
   );
@@ -95,9 +97,7 @@ export function SpendSection(): ReactElement {
             {summary.routes.map((route) => (
               <article key={`${route.provider}/${route.model}`} className={styles.route}>
                 <p className={styles.routeHeading}>{`${route.provider} · ${route.model}`}</p>
-                <p className={styles.routeDetail}>
-                  {`${currency(route.knownSpendUsd, true)} · ${route.pricedGenerationCount}/${route.generationCount} generations priced`}
-                </p>
+                <p className={styles.routeDetail}>{routeSpendCopy(route)}</p>
                 <p className={styles.routeDetail}>{routeCache(route)}</p>
                 <p className={styles.routeDetail}>{routeCaching(route)}</p>
               </article>

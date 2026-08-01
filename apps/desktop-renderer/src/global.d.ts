@@ -28,6 +28,8 @@ interface EnduragentAuth {
   applyLlmSelection(input: OnboardingLlmSelection): Promise<OnboardingLlmSelectionResult>;
   chatgptStatus(): Promise<ChatGptStatus>;
   chatgptLogin(input: OnboardingLlmSelection): Promise<ChatGptLoginResult>;
+  claudeCliStatus(): Promise<ClaudeCliStatus>;
+  claudeCliRecheck(): Promise<ClaudeCliStatus>;
   chooseImportFiles(): Promise<readonly string[]>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
   releaseNotes(): Promise<ReleaseNotesResult>;
@@ -163,6 +165,21 @@ interface CredentialSlotStatus {
 interface ChatGptStatus {
   readonly state: "configured" | "absent";
   readonly runtimeReady: boolean;
+}
+
+type ClaudeCliState =
+  | "absent-binary"
+  | "not-logged-in"
+  | "api-key-token"
+  | "ready"
+  | "ready-api-key"
+  | "disabled";
+
+interface ClaudeCliStatus {
+  readonly state: ClaudeCliState;
+  readonly email?: string;
+  readonly plan?: string;
+  readonly version?: string;
 }
 
 type ChatGptLoginResult =

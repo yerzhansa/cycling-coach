@@ -182,6 +182,8 @@ export function bootRenderer(): Disposer {
     applyLlmSelection: (value) => window.enduragentAuth.applyLlmSelection(value),
     chatGptStatus: () => window.enduragentAuth.chatgptStatus(),
     chatGptLogin: (value) => window.enduragentAuth.chatgptLogin(value),
+    claudeCliStatus: () => window.enduragentAuth.claudeCliStatus(),
+    claudeCliRecheck: () => window.enduragentAuth.claudeCliRecheck(),
     chooseImportFiles: () => window.enduragentAuth.chooseImportFiles(),
     onDroppedImportFiles: (listener) => window.enduragentAuth.onDroppedImportFiles(listener),
     async importFiles(paths, onProgress) {
@@ -276,6 +278,7 @@ export function bootRenderer(): Disposer {
     clients,
     loadStatuses: () => window.enduragentAuth.credentialStatuses(),
     loadChatGptStatus: () => window.enduragentAuth.chatgptStatus(),
+    loadClaudeCliStatus: () => window.enduragentAuth.claudeCliStatus(),
     deleteCredential: (value) => window.enduragentAuth.deleteCredential(value),
     openSetup: openSetupFromSettings,
     beginMutation: () => store.getState().beginSettingsMutation("credential"),

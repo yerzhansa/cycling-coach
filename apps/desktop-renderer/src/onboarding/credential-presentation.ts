@@ -1,4 +1,63 @@
-import type { CredentialSlotStatus } from "./machine.js";
+import type { ClaudeCliState } from "./constants.js";
+import type { ClaudeCliStatus, CredentialSlotStatus } from "./machine.js";
+
+export const CLAUDE_CLI_API_KEY_IDENTITY =
+  "Using Anthropic API key billing - usage is charged to your API account.";
+
+export interface ClaudeCliPresentation {
+  readonly runtimeState: "active" | "stored-inactive" | "failed";
+  readonly badge: string;
+  readonly detail: string | null;
+}
+
+const CLAUDE_CLI_PRESENTATION: Readonly<Record<ClaudeCliState, ClaudeCliPresentation>> = {
+  ready: { runtimeState: "active", badge: "Signed in", detail: null },
+  "ready-api-key": { runtimeState: "active", badge: "API key billing", detail: null },
+  "absent-binary": {
+    runtimeState: "failed",
+    badge: "Not installed",
+    detail:
+      "Claude Code CLI was not found, or the installed version is too old. Install or update it, then choose Check again.",
+  },
+  "not-logged-in": {
+    runtimeState: "failed",
+    badge: "Not signed in",
+    detail:
+      "Claude Code CLI is not signed in. Open a terminal, run claude, and sign in with your Claude subscription. Enduragent never signs in for you.",
+  },
+  "api-key-token": {
+    runtimeState: "failed",
+    badge: "API key, not a subscription",
+    detail:
+      "Claude Code CLI is authenticated with an API key or token, not a subscription. Sign in with your subscription in claude, or opt in to API key billing in your configuration.",
+  },
+  disabled: {
+    runtimeState: "stored-inactive",
+    badge: "Turned off",
+    detail: "The Claude subscription lane is turned off on this Mac. Choose another provider.",
+  },
+};
+
+const CLAUDE_CLI_UNKNOWN_PRESENTATION: ClaudeCliPresentation = {
+  runtimeState: "stored-inactive",
+  badge: "Checking",
+  detail: "Checking the Claude Code CLI sign-in on this Mac…",
+};
+
+export function claudeCliPresentation(state: ClaudeCliState | null): ClaudeCliPresentation {
+  return state === null ? CLAUDE_CLI_UNKNOWN_PRESENTATION : CLAUDE_CLI_PRESENTATION[state];
+}
+
+export function claudeCliIdentityLine(status: ClaudeCliStatus): string | null {
+  if (status.state === "ready-api-key") return CLAUDE_CLI_API_KEY_IDENTITY;
+  if (status.state !== "ready") return null;
+  const email = status.email?.trim() ?? "";
+  const plan = status.plan?.trim() ?? "";
+  if (plan.length === 0) return email.length === 0 ? "Signed in" : `Signed in as ${email}`;
+  return email.length === 0
+    ? `Signed in - Claude ${plan} subscription`
+    : `Signed in as ${email} - Claude ${plan} subscription`;
+}
 
 export interface CredentialPresentation {
   readonly className: string;

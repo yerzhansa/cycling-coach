@@ -28,6 +28,11 @@ export const ERROR_COPY: Readonly<Record<OnboardingErrorCode, string>> = {
   "intake-save-failed": "Your answers could not be saved. Please try again.",
 };
 
+export const CLAUDE_CLI_LANE_COPY =
+  "Uses the Claude Code CLI already installed and signed in on this Mac. No API key needed.";
+
+export const CLAUDE_CLI_RECHECK_LABEL = "Check again";
+
 export const CHATGPT_REFUSAL_COPY: Readonly<Record<ChatGptLoginRefusalReason, string>> = {
   "already-in-progress": "A ChatGPT sign-in is already in progress.",
   "callback-unavailable":

@@ -9,7 +9,12 @@ import {
   type SaveIntakeRpcParams,
 } from "@enduragent/coach-contract";
 import { SUPPORTED_IMPORT_EXTENSIONS, type DesktopCredentialSlot } from "./constants.js";
-import type { ChatGptLoginResult, ChatGptStatus, CredentialSlotStatus } from "./machine.js";
+import type {
+  ChatGptLoginResult,
+  ChatGptStatus,
+  ClaudeCliStatus,
+  CredentialSlotStatus,
+} from "./machine.js";
 
 export type CredentialWriteResult =
   | {
@@ -102,6 +107,8 @@ export interface OnboardingBridge {
   applyLlmSelection(input: OnboardingLlmSelection): Promise<OnboardingLlmSelectionResult>;
   chatGptStatus(): Promise<ChatGptStatus>;
   chatGptLogin(input: OnboardingLlmSelection): Promise<ChatGptLoginResult>;
+  claudeCliStatus(): Promise<ClaudeCliStatus>;
+  claudeCliRecheck(): Promise<ClaudeCliStatus>;
   chooseImportFiles(): Promise<readonly string[]>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
   importFiles(
@@ -123,6 +130,8 @@ export interface DesktopOnboardingAuth {
   applyLlmSelection(input: OnboardingLlmSelection): Promise<OnboardingLlmSelectionResult>;
   chatgptStatus(): Promise<ChatGptStatus>;
   chatgptLogin(input: OnboardingLlmSelection): Promise<ChatGptLoginResult>;
+  claudeCliStatus(): Promise<ClaudeCliStatus>;
+  claudeCliRecheck(): Promise<ClaudeCliStatus>;
   chooseImportFiles(): Promise<readonly string[]>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
 }
@@ -194,6 +203,8 @@ export function createOnboardingBridge(
     applyLlmSelection: (input) => auth.applyLlmSelection(input),
     chatGptStatus: () => auth.chatgptStatus(),
     chatGptLogin: (input) => auth.chatgptLogin(input),
+    claudeCliStatus: () => auth.claudeCliStatus(),
+    claudeCliRecheck: () => auth.claudeCliRecheck(),
     chooseImportFiles: () => auth.chooseImportFiles(),
     onDroppedImportFiles: (listener) => auth.onDroppedImportFiles(listener),
     async importFiles(paths, onProgress) {

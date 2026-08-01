@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  claudeCliReady,
   createOnboardingState,
   nextStep,
   previousStep,
@@ -9,6 +10,7 @@ import {
   withChatGptLoginResult,
   withChatGptPending,
   withChatGptStatus,
+  withClaudeCliStatus,
   withIntake,
   withImportedRideFileCount,
 } from "../src/onboarding/machine.js";
@@ -21,6 +23,8 @@ describe("desktop onboarding machine", () => {
       "chatGptRefusal",
       "chatGptRuntimeReady",
       "chatGptState",
+      "claudeCliIdentity",
+      "claudeCliState",
       "credentialStatus",
       "fixedError",
       "importedRideFileCount",
@@ -71,6 +75,38 @@ describe("desktop onboarding machine", () => {
     expect(nextStep(state).step).toBe("training-data");
     state = withChatGptStatus(state, { state: "absent", runtimeReady: false });
     expect(state.chatGptState).toBe("absent");
+  });
+
+  it("treats only a probe-ready Claude subscription lane as a configured model", () => {
+    let state = createOnboardingState([], { state: "absent", runtimeReady: false }, null);
+    expect(state.claudeCliState).toBeNull();
+    expect(state.claudeCliIdentity).toBeNull();
+    expect(nextStep(state).fixedError).toBe("credential-required");
+
+    state = withClaudeCliStatus(state, { state: "not-logged-in" });
+    expect(claudeCliReady(state)).toBe(false);
+    expect(nextStep(state).fixedError).toBe("credential-required");
+
+    state = withClaudeCliStatus(state, {
+      state: "ready",
+      email: "athlete@example.test",
+      plan: "Max",
+    });
+    expect(claudeCliReady(state)).toBe(true);
+    expect(state.claudeCliIdentity).toBe(
+      "Signed in as athlete@example.test - Claude Max subscription",
+    );
+    expect(nextStep(state).step).toBe("training-data");
+
+    state = withClaudeCliStatus(state, { state: "ready-api-key" });
+    expect(claudeCliReady(state)).toBe(true);
+    expect(state.claudeCliIdentity).toBe(
+      "Using Anthropic API key billing - usage is charged to your API account.",
+    );
+
+    state = withClaudeCliStatus(state, null);
+    expect(state.claudeCliState).toBeNull();
+    expect(claudeCliReady(state)).toBe(false);
   });
 
   it("preserves configured metadata and successful imports while moving back", () => {

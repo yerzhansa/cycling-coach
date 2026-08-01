@@ -2,7 +2,12 @@ import { CoachClientDisconnectedError, type CoachClient } from "@enduragent/coac
 import type { RuntimeConfigSnapshot } from "@enduragent/coach-contract";
 import type { DesktopCoachClientProvider } from "../coach-client.js";
 import type { CredentialDeleteResult, DesktopCredentialId } from "../onboarding/bridge.js";
-import type { ChatGptStatus, CredentialSlotStatus } from "../onboarding/machine.js";
+import type { ClaudeCliState } from "../onboarding/constants.js";
+import {
+  claudeCliIdentityLine,
+  claudeCliPresentation,
+} from "../onboarding/credential-presentation.js";
+import type { ChatGptStatus, ClaudeCliStatus, CredentialSlotStatus } from "../onboarding/machine.js";
 
 export type CredentialKind = "Provider API key" | "ChatGPT profile" | "Training account key";
 
@@ -23,16 +28,19 @@ export interface ProviderStatusEntry {
   readonly provider: NonCredentialProviderId;
   readonly label: string;
   readonly kind: NonCredentialProviderKind;
+  readonly state: ClaudeCliState | null;
+  readonly identity: string | null;
 }
 
-const NON_CREDENTIAL_PROVIDER_ROWS: Readonly<Record<NonCredentialProviderId, ProviderStatusEntry>> =
-  {
-    "claude-cli": {
-      provider: "claude-cli",
-      label: "Claude subscription",
-      kind: "Claude Code CLI",
-    },
-  };
+const NON_CREDENTIAL_PROVIDER_ROWS: Readonly<
+  Record<NonCredentialProviderId, Pick<ProviderStatusEntry, "provider" | "label" | "kind">>
+> = {
+  "claude-cli": {
+    provider: "claude-cli",
+    label: "Claude subscription",
+    kind: "Claude Code CLI",
+  },
+};
 
 function isNonCredentialProvider(provider: string): provider is NonCredentialProviderId {
   return (NON_CREDENTIAL_PROVIDERS as readonly string[]).includes(provider);
@@ -184,9 +192,19 @@ function entriesFrom(
 
 export function providerStatusesFrom(
   runtime: RuntimeConfigSnapshot,
+  claudeCli: ClaudeCliStatus | null = null,
 ): readonly ProviderStatusEntry[] {
   const provider = runtime.llm.provider;
-  return isNonCredentialProvider(provider) ? [NON_CREDENTIAL_PROVIDER_ROWS[provider]] : [];
+  if (!isNonCredentialProvider(provider)) return [];
+  const state = claudeCli?.state ?? null;
+  const identity = claudeCli === null ? null : claudeCliIdentityLine(claudeCli);
+  return [
+    {
+      ...NON_CREDENTIAL_PROVIDER_ROWS[provider],
+      state,
+      identity: identity ?? claudeCliPresentation(state).detail,
+    },
+  ];
 }
 
 function refusalCopy(
@@ -211,6 +229,7 @@ export function createCredentialSettingsController(input: {
   readonly clients: DesktopCoachClientProvider;
   readonly loadStatuses: () => Promise<readonly CredentialSlotStatus[]>;
   readonly loadChatGptStatus: () => Promise<ChatGptStatus>;
+  readonly loadClaudeCliStatus?: () => Promise<ClaudeCliStatus>;
   readonly deleteCredential: (input: {
     readonly credential: DesktopCredentialId;
   }) => Promise<CredentialDeleteResult>;
@@ -253,9 +272,14 @@ export function createCredentialSettingsController(input: {
         input.loadChatGptStatus(),
         client.call("getRuntimeConfig", {}),
       ]);
+      const loadClaudeCli = input.loadClaudeCliStatus;
+      const claudeCli =
+        loadClaudeCli === undefined || !isNonCredentialProvider(runtime.llm.provider)
+          ? null
+          : await loadClaudeCli().catch(() => null);
       return {
         entries: entriesFrom(statuses, chatGpt, runtime),
-        providerStatuses: providerStatusesFrom(runtime),
+        providerStatuses: providerStatusesFrom(runtime, claudeCli),
       };
     } catch (error) {
       if (error instanceof CoachClientDisconnectedError) {

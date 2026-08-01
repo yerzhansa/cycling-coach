@@ -2,10 +2,12 @@ import { SaveIntakeRpcParamsSchema, type SaveIntakeRpcParams } from "@enduragent
 import {
   DESKTOP_CREDENTIAL_SLOTS,
   ONBOARDING_STEP_IDS,
+  type ClaudeCliState,
   type DesktopCredentialSlot,
   type ChatGptLoginRefusalReason,
   type OnboardingStepId,
 } from "./constants.js";
+import { claudeCliIdentityLine } from "./credential-presentation.js";
 
 export type CredentialState = "missing" | "configured" | "re-prompt";
 export type CredentialRuntimeState = "active" | "stored-inactive" | "failed";
@@ -19,6 +21,13 @@ export interface CredentialSlotStatus {
 export interface ChatGptStatus {
   readonly state: "configured" | "absent";
   readonly runtimeReady: boolean;
+}
+
+export interface ClaudeCliStatus {
+  readonly state: ClaudeCliState;
+  readonly email?: string;
+  readonly plan?: string;
+  readonly version?: string;
 }
 
 export type ChatGptLoginResult =
@@ -56,6 +65,8 @@ export interface OnboardingState {
   readonly chatGptState: "absent" | "pending" | "configured" | "refused";
   readonly chatGptRuntimeReady: boolean;
   readonly chatGptRefusal: ChatGptLoginRefusalReason | null;
+  readonly claudeCliState: ClaudeCliState | null;
+  readonly claudeCliIdentity: string | null;
   readonly importedRideFileCount: number;
   readonly intake: DesktopIntakeDraft;
   readonly busy: boolean;
@@ -79,6 +90,7 @@ function statusRecord<T>(initial: T): Record<DesktopCredentialSlot, T> {
 export function createOnboardingState(
   statuses: readonly CredentialSlotStatus[] = [],
   chatGptStatus: ChatGptStatus = { state: "absent", runtimeReady: false },
+  claudeCliStatus: ClaudeCliStatus | null = null,
 ): OnboardingState {
   const credentialStatus = statusRecord<CredentialState>("missing");
   for (const status of statuses) {
@@ -90,6 +102,8 @@ export function createOnboardingState(
     chatGptState: chatGptStatus.state,
     chatGptRuntimeReady: chatGptStatus.runtimeReady,
     chatGptRefusal: null,
+    claudeCliState: claudeCliStatus === null ? null : claudeCliStatus.state,
+    claudeCliIdentity: claudeCliStatus === null ? null : claudeCliIdentityLine(claudeCliStatus),
     importedRideFileCount: 0,
     intake: { priorBsi: null, injuryStatus: null, clinicianCleared: null },
     busy: false,
@@ -104,6 +118,21 @@ export function withChatGptStatus(state: OnboardingState, status: ChatGptStatus)
     chatGptRuntimeReady: status.runtimeReady,
     chatGptRefusal: null,
   };
+}
+
+export function withClaudeCliStatus(
+  state: OnboardingState,
+  status: ClaudeCliStatus | null,
+): OnboardingState {
+  return {
+    ...state,
+    claudeCliState: status === null ? null : status.state,
+    claudeCliIdentity: status === null ? null : claudeCliIdentityLine(status),
+  };
+}
+
+export function claudeCliReady(state: OnboardingState): boolean {
+  return state.claudeCliState === "ready" || state.claudeCliState === "ready-api-key";
 }
 
 export function withChatGptPending(state: OnboardingState): OnboardingState {
@@ -153,6 +182,7 @@ export function withCredentialStatuses(
 export function hasConfiguredModel(state: OnboardingState): boolean {
   return (
     state.chatGptState === "configured" ||
+    claudeCliReady(state) ||
     DESKTOP_CREDENTIAL_SLOTS.some(
       (slot) => slot !== "intervals-icu" && state.credentialStatus[slot] === "configured",
     )

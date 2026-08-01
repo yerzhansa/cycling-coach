@@ -173,6 +173,8 @@ export type TestBridge = OnboardingBridge & {
   readonly applyLlmSelection: ReturnType<typeof vi.fn<OnboardingBridge["applyLlmSelection"]>>;
   readonly chatGptStatus: ReturnType<typeof vi.fn<OnboardingBridge["chatGptStatus"]>>;
   readonly chatGptLogin: ReturnType<typeof vi.fn<OnboardingBridge["chatGptLogin"]>>;
+  readonly claudeCliStatus: ReturnType<typeof vi.fn<OnboardingBridge["claudeCliStatus"]>>;
+  readonly claudeCliRecheck: ReturnType<typeof vi.fn<OnboardingBridge["claudeCliRecheck"]>>;
   readonly writeCredential: ReturnType<typeof vi.fn<OnboardingBridge["writeCredential"]>>;
   readonly importFiles: ReturnType<typeof vi.fn<OnboardingBridge["importFiles"]>>;
   readonly chooseImportFiles: ReturnType<typeof vi.fn<OnboardingBridge["chooseImportFiles"]>>;
@@ -201,6 +203,12 @@ export function testBridge(login: () => Promise<ChatGptLoginResult>): TestBridge
       runtimeReady: true,
     })),
     chatGptLogin: vi.fn<OnboardingBridge["chatGptLogin"]>(login),
+    claudeCliStatus: vi.fn<OnboardingBridge["claudeCliStatus"]>(async () => ({
+      state: "not-logged-in",
+    })),
+    claudeCliRecheck: vi.fn<OnboardingBridge["claudeCliRecheck"]>(async () => ({
+      state: "not-logged-in",
+    })),
     chooseImportFiles: vi.fn<OnboardingBridge["chooseImportFiles"]>(async () => []),
     onDroppedImportFiles: vi.fn<OnboardingBridge["onDroppedImportFiles"]>(() => () => {}),
     importFiles: vi.fn<OnboardingBridge["importFiles"]>(async () => ({

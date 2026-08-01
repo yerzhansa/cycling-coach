@@ -10,7 +10,11 @@ import type {
   OnboardingLlmSelection,
   OnboardingLlmSelectionResult,
 } from "../src/onboarding/bridge.js";
-import type { ChatGptStatus, CredentialSlotStatus } from "../src/onboarding/machine.js";
+import type {
+  ChatGptStatus,
+  ClaudeCliStatus,
+  CredentialSlotStatus,
+} from "../src/onboarding/machine.js";
 import { createReleaseNotesController } from "../src/release-notes/controller.js";
 import { createAthleteSettingsController } from "../src/settings/athlete-controller.js";
 import { createCredentialSettingsController } from "../src/settings/credential-controller.js";
@@ -137,6 +141,7 @@ interface HarnessOptions {
   ) => Promise<OnboardingLlmSelectionResult>;
   readonly credentialStatuses?: readonly CredentialSlotStatus[];
   readonly chatGptStatus?: ChatGptStatus;
+  readonly claudeCliStatus?: () => Promise<ClaudeCliStatus>;
   readonly deleteCredential?: () => Promise<CredentialDeleteResult>;
   readonly releaseNotes?: () => Promise<ReleaseNotesResult>;
   readonly updateState?: DesktopUpdateState;
@@ -234,6 +239,9 @@ function createHarness(options: HarnessOptions = {}) {
       ],
     loadChatGptStatus: async () =>
       options.chatGptStatus ?? { state: "absent", runtimeReady: false },
+    ...(options.claudeCliStatus === undefined
+      ? {}
+      : { loadClaudeCliStatus: options.claudeCliStatus }),
     deleteCredential,
     openSetup,
     beginMutation: () => store.getState().beginSettingsMutation("credential"),
@@ -541,6 +549,56 @@ describe("credential deletion", () => {
     await waitFor(() => {
       expect(screen.getByText("Credential deleted locally.")).toBeInTheDocument();
     });
+  });
+});
+
+describe("keyless provider status", () => {
+  it("shows the signed-in identity with no credential value and no delete control", async () => {
+    await renderSettings({
+      runtime: () =>
+        snapshot({
+          llm: { provider: "claude-cli", model: "sonnet", credential_configured: false },
+        }),
+      credentialStatuses: [],
+      claudeCliStatus: async () => ({
+        state: "ready",
+        email: "athlete@example.test",
+        plan: "Max",
+        version: "2.1.0",
+      }),
+    });
+
+    const row = document.querySelector<HTMLElement>('[data-provider="claude-cli"]');
+    expect(row).not.toBeNull();
+    expect(row?.textContent).toContain("Claude subscription");
+    expect(row?.textContent).toContain("Claude Code CLI");
+    expect(row?.textContent).toContain(
+      "Signed in as athlete@example.test - Claude Max subscription",
+    );
+    expect(row?.textContent).not.toContain("2.1.0");
+    expect(within(row as HTMLElement).queryByRole("button")).toBeNull();
+  });
+
+  it("renders api-key billing honestly and never as a subscription", async () => {
+    await renderSettings({
+      runtime: () =>
+        snapshot({
+          llm: { provider: "claude-cli", model: "sonnet", credential_configured: false },
+        }),
+      credentialStatuses: [],
+      claudeCliStatus: async () => ({ state: "ready-api-key" }),
+    });
+
+    const row = document.querySelector<HTMLElement>('[data-provider="claude-cli"]');
+    expect(row?.querySelector("[data-provider-identity]")?.textContent).toBe(
+      "Using Anthropic API key billing - usage is charged to your API account.",
+    );
+  });
+
+  it("keeps credential-backed providers free of status rows", async () => {
+    await renderSettings();
+
+    expect(document.querySelector('[data-provider="claude-cli"]')).toBeNull();
   });
 });
 
