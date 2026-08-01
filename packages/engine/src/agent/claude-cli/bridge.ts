@@ -625,6 +625,7 @@ async function runGeneration(
       runtime.billing === "api-key" && validCost(result.total_cost_usd)
         ? result.total_cost_usd
         : undefined,
+    costBasis: runtime.billing === "api-key" ? "actual" : "notional",
   };
 }
 

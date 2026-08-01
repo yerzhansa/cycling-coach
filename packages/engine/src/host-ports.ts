@@ -243,6 +243,8 @@ export interface UsageCost {
   readonly total: number;
 }
 
+export type UsageCostBasis = "notional" | "actual";
+
 export interface UsageLedgerLine {
   readonly ts: number;
   readonly kind: "generate" | "turn" | "boot";
@@ -258,6 +260,7 @@ export interface UsageLedgerLine {
   readonly cacheReadTokens?: number;
   readonly cacheWriteTokens?: number;
   readonly providerReportedCostUsd?: number;
+  readonly costBasis?: UsageCostBasis;
   readonly cost?: UsageCost;
   readonly stopReason?: string;
 }

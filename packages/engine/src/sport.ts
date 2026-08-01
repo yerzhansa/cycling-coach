@@ -25,6 +25,7 @@ import type {
   SecretsPort,
   StoredDataFreshness,
   UsageCost,
+  UsageCostBasis,
 } from "./host-ports.js";
 
 export type {
@@ -127,6 +128,7 @@ export interface GenerateResult {
   totalUsage?: LanguageModelUsage;
   steps?: number;
   providerReportedCostUsd?: number;
+  costBasis?: UsageCostBasis;
   cost?: UsageCost;
 }
 

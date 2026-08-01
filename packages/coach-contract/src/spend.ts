@@ -17,6 +17,7 @@ export const SpendRouteSummarySchema = z
     unpricedGenerationCount: z.number().int().nonnegative(),
     providerReportedGenerationCount: z.number().int().nonnegative(),
     knownSpendUsd: z.number().finite().nonnegative(),
+    notionalSpendUsd: z.number().finite().nonnegative().optional(),
     cacheReadTokens: z.number().int().nonnegative(),
     cacheReadSavingsUsd: z.number().finite().nonnegative().nullable(),
     caching: SpendCachingSchema,
@@ -56,6 +57,7 @@ export const SpendSummarySchema = z
     timezone: z.string().min(1),
     dailyCapUsd: z.number().finite().positive(),
     knownSpendUsd: z.number().finite().nonnegative(),
+    notionalSpendUsd: z.number().finite().nonnegative().optional(),
     generationCount: z.number().int().nonnegative(),
     pricedGenerationCount: z.number().int().nonnegative(),
     unpricedGenerationCount: z.number().int().nonnegative(),
@@ -79,6 +81,10 @@ export const SpendSummarySchema = z
       0,
     );
     const knownSpendUsd = value.routes.reduce((sum, route) => sum + route.knownSpendUsd, 0);
+    const notionalSpendUsd = value.routes.reduce(
+      (sum, route) => sum + (route.notionalSpendUsd ?? 0),
+      0,
+    );
     const cacheReadTokens = value.routes.reduce((sum, route) => sum + route.cacheReadTokens, 0);
     const knownCacheReadSavingsUsd = value.routes.reduce(
       (sum, route) => sum + (route.cacheReadSavingsUsd ?? 0),
@@ -105,6 +111,10 @@ export const SpendSummarySchema = z
         "unpriced generation count must equal route totals",
       ],
       [value.knownSpendUsd === knownSpendUsd, "known spend must equal route totals"],
+      [
+        (value.notionalSpendUsd ?? 0) === notionalSpendUsd,
+        "notional spend must equal route totals",
+      ],
       [value.cacheReadTokens === cacheReadTokens, "cache-read tokens must equal route totals"],
       [
         value.knownCacheReadSavingsUsd === knownCacheReadSavingsUsd,

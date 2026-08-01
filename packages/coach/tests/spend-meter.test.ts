@@ -15,7 +15,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readUsageLedger } from "@enduragent/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { priceInclusiveUsage, type UsageLedgerLine } from "@enduragent/engine";
+import {
+  priceClaudeCliInclusiveUsage,
+  priceInclusiveUsage,
+  type UsageLedgerLine,
+} from "@enduragent/engine";
 import {
   DAILY_SPEND_CAP_FILE,
   DEFAULT_DAILY_SPEND_CAP_USD,
@@ -640,6 +644,127 @@ describe("spend meter service", () => {
       unpricedGenerationCount: 0,
       malformedLineCount: 0,
       knownSpendUsd: expected?.total,
+    });
+  });
+});
+
+describe("claude-cli notional usage", () => {
+  function claudeCliLine(overrides: Partial<UsageLedgerLine> = {}): UsageLedgerLine {
+    return line({
+      provider: "claude-cli",
+      model: "sonnet",
+      inputTokens: 1_000_000,
+      outputTokens: 100_000,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      costBasis: "notional",
+      ...overrides,
+    });
+  }
+
+  const notionalUsage = {
+    inputTokens: 1_000_000,
+    outputTokens: 100_000,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  };
+
+  async function summarize() {
+    return createSpendMeterService({
+      dataDir: root,
+      configDir,
+      timezone: "UTC",
+      now: () => Date.UTC(1998, 6, 6, 18),
+    }).getSpendSummary();
+  }
+
+  it("prices a subscription generation without accruing it against the cap", async () => {
+    await ledger("usage-ledger.jsonl", [claudeCliLine()]);
+    const expected = priceClaudeCliInclusiveUsage("sonnet", notionalUsage);
+
+    const summary = await summarize();
+
+    expect(expected?.total).toBeGreaterThan(DEFAULT_DAILY_SPEND_CAP_USD);
+    expect(summary).toMatchObject({
+      generationCount: 1,
+      pricedGenerationCount: 1,
+      unpricedGenerationCount: 0,
+      malformedLineCount: 0,
+      spendComplete: true,
+      knownSpendUsd: 0,
+      notionalSpendUsd: expected?.total,
+      capStatus: "below",
+    });
+    expect(summary.routes[0]).toMatchObject({
+      provider: "claude-cli",
+      model: "sonnet",
+      knownSpendUsd: 0,
+      notionalSpendUsd: expected?.total,
+      providerReportedGenerationCount: 0,
+    });
+  });
+
+  it("prices an uncatalogued model id at the family fallback instead of leaving the cap unknown", async () => {
+    await ledger("usage-ledger.jsonl", [claudeCliLine({ model: "claude-sonnet-9-20990101" })]);
+    const expected = priceClaudeCliInclusiveUsage("claude-sonnet-9-20990101", notionalUsage);
+
+    const summary = await summarize();
+
+    expect(summary).toMatchObject({
+      pricedGenerationCount: 1,
+      unpricedGenerationCount: 0,
+      spendComplete: true,
+      knownSpendUsd: 0,
+      notionalSpendUsd: expected?.total,
+      capStatus: "below",
+    });
+  });
+
+  it("keeps a subscription row out of accrual when an older line carries no cost basis", async () => {
+    await ledger("usage-ledger.jsonl", [claudeCliLine({ costBasis: undefined })]);
+
+    const summary = await summarize();
+
+    expect(summary).toMatchObject({
+      pricedGenerationCount: 1,
+      knownSpendUsd: 0,
+      capStatus: "below",
+    });
+    expect(summary.notionalSpendUsd).toBeGreaterThan(0);
+  });
+
+  it("accrues api-key billing normally and can reach the cap", async () => {
+    await ledger("usage-ledger.jsonl", [
+      claudeCliLine({ costBasis: "actual", providerReportedCostUsd: 0.75 }),
+    ]);
+
+    const summary = await summarize();
+
+    expect(summary).toMatchObject({
+      pricedGenerationCount: 1,
+      unpricedGenerationCount: 0,
+      knownSpendUsd: 0.75,
+      notionalSpendUsd: 0,
+      capStatus: "reached",
+    });
+    expect(summary.routes[0]).toMatchObject({ providerReportedGenerationCount: 1 });
+  });
+
+  it("keeps notional and real spend on separate totals when both are present", async () => {
+    await ledger("usage-ledger.jsonl", [
+      claudeCliLine(),
+      line({ providerReportedCostUsd: 0.2, cacheReadTokens: 0, cacheWriteTokens: 0 }),
+    ]);
+    const expected = priceClaudeCliInclusiveUsage("sonnet", notionalUsage);
+
+    const summary = await summarize();
+
+    expect(summary).toMatchObject({
+      generationCount: 2,
+      pricedGenerationCount: 2,
+      knownSpendUsd: 0.2,
+      notionalSpendUsd: expected?.total,
+      capStatus: "below",
     });
   });
 });

@@ -304,12 +304,14 @@ describe("usage mapping", () => {
     const subscription = ports(["happy-turn"]);
     const subscriptionResult = await claudeCliGenerateText(generateOpts(), subscription.ports);
     expect(subscriptionResult.providerReportedCostUsd).toBeUndefined();
+    expect(subscriptionResult.costBasis).toBe("notional");
 
     const apiKey = ports(["happy-turn"], {
       runtime: { binaryPath: BINARY, billing: "api-key" },
     });
     const apiKeyResult = await claudeCliGenerateText(generateOpts(), apiKey.ports);
     expect(apiKeyResult.providerReportedCostUsd).toBe(0.0021);
+    expect(apiKeyResult.costBasis).toBe("actual");
     expect((apiKey.state.options[0].env as Record<string, string>).ANTHROPIC_API_KEY).toBe(
       SENTINEL,
     );

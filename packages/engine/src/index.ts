@@ -43,6 +43,7 @@ export type {
   TranscriptConversationBoundaryReason,
   TranscriptWriterPort,
   UsageCost,
+  UsageCostBasis,
   UsageLedgerLine,
   UsagePort,
 } from "./host-ports.js";
@@ -128,3 +129,8 @@ export {
   priceInclusiveUsage,
   type UsageTokenCounts,
 } from "./usage-cost.js";
+export {
+  CLAUDE_CLI_PRICE_TABLE,
+  priceClaudeCliInclusiveUsage,
+  resolveClaudeCliPriceId,
+} from "./agent/claude-cli/cost.js";
