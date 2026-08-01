@@ -585,6 +585,18 @@ describe("coach request and event projection", () => {
       },
       { session: { timezone: "  Europe/London  " } },
       { llm, intervals },
+      { llm: { provider: "claude-cli", model: "sonnet" } },
+      {
+        llm: {
+          provider: "claude-cli",
+          claude_cli: {
+            enabled: false,
+            binary_path: "/opt/synthetic/bin/claude",
+            config_dir: "/synthetic/claude-config",
+            billing: "api-key",
+          },
+        },
+      },
     ]) {
       const parsed = ConfigureRuntimeRpcParamsSchema.parse(params);
       if (params.session?.timezone === "  Europe/London  ") {
@@ -610,6 +622,9 @@ describe("coach request and event projection", () => {
       { session: { timezone: "a".repeat(513) } },
       { llm: { ...llm, extra: true } },
       { llm: { provider: "openai-codex", api_key: "placeholder" } },
+      { llm: { provider: "claude-cli", api_key: "placeholder" } },
+      { llm: { provider: "claude-cli", claude_cli: { billing: "invoice" } } },
+      { llm: { provider: "claude-cli", claude_cli: { extra: true } } },
       { llm: { clear_credential: true } },
       { llm: { provider: "anthropic", clear_credential: true, model: "model-a" } },
       {
@@ -773,6 +788,7 @@ describe("coach request and event projection", () => {
       "openai",
       "google",
       "openai-codex",
+      "claude-cli",
       "deepseek",
       "qwen",
       "minimax",

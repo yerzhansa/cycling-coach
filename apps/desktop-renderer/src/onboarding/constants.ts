@@ -44,6 +44,7 @@ export const ONBOARDING_LLM_PROVIDER_LABELS = {
   openai: "OpenAI",
   google: "Google",
   "openai-codex": "ChatGPT subscription",
+  "claude-cli": "Claude subscription",
   deepseek: "DeepSeek",
   qwen: "Qwen",
   minimax: "MiniMax",

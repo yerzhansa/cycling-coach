@@ -401,6 +401,7 @@ describe("desktop onboarding IPC", () => {
       "openai",
       "google",
       "openai-codex",
+      "claude-cli",
       "deepseek",
       "qwen",
       "minimax",
@@ -431,7 +432,7 @@ describe("desktop onboarding IPC", () => {
       subject.trustedEvent,
     )) as { readonly providers: readonly unknown[]; readonly active: unknown };
 
-    expect(result.providers).toHaveLength(10);
+    expect(result.providers).toHaveLength(11);
     expect(result.active).toBeNull();
     expect(JSON.stringify(result)).not.toContain("private daemon path and token");
   });

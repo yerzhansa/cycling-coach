@@ -140,3 +140,24 @@ export {
   priceClaudeCliInclusiveUsage,
   resolveClaudeCliPriceId,
 } from "./agent/claude-cli/cost.js";
+export {
+  ClaudeCliConfigError,
+  type ClaudeCliConfigErrorKind,
+} from "./agent/claude-cli/errors.js";
+export {
+  API_KEY_BILLING_IDENTITY_LINE,
+  claudeIdentityLine,
+  ensureClaudeCliReady,
+  invalidateClaudeAccountProbeCache,
+  probeClaudeAccountCached,
+  recheckClaudeAccount,
+  type CachedProbeDeps,
+  type ClaudeAccountClass,
+  type ClaudeAccountProbeFailure,
+  type ClaudeAccountProbeResult,
+  type ClaudeCliReadiness,
+  type EnsureClaudeCliReadyDeps,
+  type EnsureClaudeCliReadyInput,
+  type ProbeClaudeAccountDeps,
+  type ProbeClaudeAccountInput,
+} from "./agent/claude-cli/probe.js";

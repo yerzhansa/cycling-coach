@@ -460,7 +460,9 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
       let slot: DesktopCredentialSlot;
       try {
         selection = parseOnboardingLlmSelection(input);
-        if (selection.provider === "openai-codex") throw new TypeError();
+        if (selection.provider === "openai-codex" || selection.provider === "claude-cli") {
+          throw new TypeError();
+        }
         slot = selection.provider;
       } catch {
         return { status: "refused", reason: "invalid-input" };

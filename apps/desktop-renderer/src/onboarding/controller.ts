@@ -190,6 +190,7 @@ export function createOnboardingController(
     if (provider === "openai-codex") {
       return state.chatGptState === "configured" && state.chatGptRuntimeReady;
     }
+    if (provider === "claude-cli") return false;
     return status(provider).state === "configured" && status(provider).runtimeState === "active";
   };
 

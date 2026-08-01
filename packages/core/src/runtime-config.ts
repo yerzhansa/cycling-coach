@@ -3,6 +3,7 @@ export const LLM_PROVIDERS = [
   "openai",
   "google",
   "openai-codex",
+  "claude-cli",
   "deepseek",
   "qwen",
   "minimax",
@@ -18,6 +19,7 @@ export const DEFAULT_MODELS = {
   openai: "gpt-5.6-sol",
   google: "gemini-3.6-flash",
   "openai-codex": "gpt-5.6-sol",
+  "claude-cli": "sonnet",
   deepseek: "deepseek-v4-flash",
   qwen: "qwen3.7-plus",
   minimax: "MiniMax-M3",
@@ -92,6 +94,17 @@ export const LLM_MODEL_CATALOGUE: readonly LlmModelCatalogueEntry[] = [
     ],
   },
   {
+    provider: "claude-cli",
+    label: "Claude subscription (Claude Code CLI)",
+    hint: "experimental",
+    defaultModel: DEFAULT_MODELS["claude-cli"],
+    models: [
+      { value: "sonnet", label: "Claude Sonnet", hint: "recommended" },
+      { value: "opus", label: "Claude Opus", hint: "most capable" },
+      { value: "haiku", label: "Claude Haiku", hint: "fast" },
+    ],
+  },
+  {
     provider: "deepseek",
     label: "DeepSeek",
     defaultModel: DEFAULT_MODELS.deepseek,
@@ -163,6 +176,7 @@ export const LLM_MODEL_CATALOGUE: readonly LlmModelCatalogueEntry[] = [
 
 export const COMPACT_MODEL_DEFAULTS = {
   anthropic: "claude-haiku-4-5-20251001",
+  "claude-cli": "haiku",
   openrouter: "deepseek/deepseek-v4-flash",
 } as const satisfies Partial<Record<LlmProvider, string>>;
 
@@ -172,6 +186,9 @@ const CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
   "claude-sonnet-4-6": 1_000_000,
   "claude-opus-4-8": 1_000_000,
   "claude-haiku-4-5-20251001": 200_000,
+  sonnet: 200_000,
+  opus: 200_000,
+  haiku: 200_000,
   "gpt-4o": 128_000,
   "gpt-5.6-sol": 1_050_000,
   "gpt-5.6-terra": 1_050_000,
@@ -205,6 +222,20 @@ const CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
   "moonshotai/kimi-k2.6": 262_000,
 };
 
+export const CLAUDE_CLI_BILLING_MODES = ["subscription", "api-key"] as const;
+
+export type ClaudeCliBilling = (typeof CLAUDE_CLI_BILLING_MODES)[number];
+
+export interface ClaudeCliRuntimeSettings {
+  enabled: boolean;
+  binaryPath?: string;
+  configDir?: string;
+  billing: ClaudeCliBilling;
+}
+
+export const CLAUDE_CLI_DISABLED_MESSAGE =
+  "The Claude CLI provider is disabled on this instance (ENDURAGENT_CLAUDE_CLI_DISABLED or llm.claude_cli.enabled: false). Choose another provider or re-enable it.";
+
 export interface EffectiveRuntimeConfig {
   llm: {
     provider: LlmProvider;
@@ -214,6 +245,7 @@ export interface EffectiveRuntimeConfig {
     flushModel?: string;
     compactModel?: string;
     baseUrl?: string;
+    claudeCli?: ClaudeCliRuntimeSettings;
   };
   intervals: {
     apiKey: string;
@@ -229,6 +261,13 @@ export interface EffectiveRuntimeConfig {
   contextWindowTokens: number;
 }
 
+export interface ClaudeCliRuntimeConfigPatch {
+  readonly enabled?: boolean;
+  readonly binaryPath?: string | null;
+  readonly configDir?: string | null;
+  readonly billing?: ClaudeCliBilling;
+}
+
 export interface RuntimeConfigPatch {
   readonly llm?: {
     readonly provider?: LlmProvider;
@@ -237,6 +276,7 @@ export interface RuntimeConfigPatch {
     readonly flushModel?: string | null;
     readonly compactModel?: string | null;
     readonly baseUrl?: string | null;
+    readonly claudeCli?: ClaudeCliRuntimeConfigPatch;
   };
   readonly intervals?: {
     readonly apiKey?: string;
@@ -258,7 +298,9 @@ const LLM_FIELDS = new Set([
   "flushModel",
   "compactModel",
   "baseUrl",
+  "claudeCli",
 ]);
+const CLAUDE_CLI_FIELDS = new Set(["enabled", "binaryPath", "configDir", "billing"]);
 const INTERVALS_FIELDS = new Set(["apiKey", "athleteId"]);
 const SESSION_FIELDS = new Set([
   "historyTokenBudgetRatio",
@@ -345,8 +387,25 @@ export function resolveLlmProvider(value: unknown): LlmProvider {
   throw new TypeError("Unsupported LLM provider.");
 }
 
-export function contextWindowForModel(model: string): number {
-  return CONTEXT_WINDOWS[model] ?? 200_000;
+const CLAUDE_MODEL_FAMILIES = ["sonnet", "opus", "haiku"] as const;
+
+function claudeModelFamily(model: string): string | undefined {
+  const normalized = model.toLowerCase();
+  return CLAUDE_MODEL_FAMILIES.find((family) => normalized.includes(family));
+}
+
+const FALLBACK_CONTEXT_WINDOW = 200_000;
+
+function familyContextWindow(model: string): number | undefined {
+  const family = claudeModelFamily(model);
+  return family === undefined ? undefined : CONTEXT_WINDOWS[family];
+}
+
+export function contextWindowForModel(model: string, provider?: LlmProvider): number {
+  if (provider === "claude-cli") {
+    return familyContextWindow(model) ?? CONTEXT_WINDOWS[model] ?? FALLBACK_CONTEXT_WINDOW;
+  }
+  return CONTEXT_WINDOWS[model] ?? familyContextWindow(model) ?? FALLBACK_CONTEXT_WINDOW;
 }
 
 function providerBaseUrl(provider: LlmProvider): string | undefined {
@@ -364,6 +423,47 @@ function optionalModel(
   if (!isSpecified(patch, field)) return undefined;
   const value = patch[field];
   return value === null ? null : requireString(value, `llm.${field}`);
+}
+
+function requireBoolean(value: unknown, name: string): boolean {
+  if (typeof value !== "boolean") throw new TypeError(`${name} must be a boolean.`);
+  return value;
+}
+
+function requireClaudeCliBilling(value: unknown): ClaudeCliBilling {
+  if (typeof value === "string" && (CLAUDE_CLI_BILLING_MODES as readonly string[]).includes(value)) {
+    return value as ClaudeCliBilling;
+  }
+  throw new TypeError('llm.claudeCli.billing must be "subscription" or "api-key".');
+}
+
+function optionalClaudeCliPath(
+  patch: ClaudeCliRuntimeConfigPatch,
+  field: "binaryPath" | "configDir",
+  current: string | undefined,
+): string | undefined {
+  if (!isSpecified(patch, field)) return current;
+  const value = patch[field];
+  return value === null ? undefined : requireString(value, `llm.claudeCli.${field}`);
+}
+
+function resolveClaudeCli(
+  patch: ClaudeCliRuntimeConfigPatch,
+  current: ClaudeCliRuntimeSettings | undefined,
+): ClaudeCliRuntimeSettings {
+  assertKnownFields(patch, CLAUDE_CLI_FIELDS, "llm.claudeCli");
+  const binaryPath = optionalClaudeCliPath(patch, "binaryPath", current?.binaryPath);
+  const configDir = optionalClaudeCliPath(patch, "configDir", current?.configDir);
+  return {
+    enabled: isSpecified(patch, "enabled")
+      ? requireBoolean(patch.enabled, "llm.claudeCli.enabled")
+      : (current?.enabled ?? true),
+    ...(binaryPath === undefined ? {} : { binaryPath }),
+    ...(configDir === undefined ? {} : { configDir }),
+    billing: isSpecified(patch, "billing")
+      ? requireClaudeCliBilling(patch.billing)
+      : (current?.billing ?? "subscription"),
+  };
 }
 
 export function resolveRuntimeConfig(
@@ -389,17 +489,27 @@ export function resolveRuntimeConfig(
       ? current.llm.model
       : DEFAULT_MODELS[provider];
   const selectionChanged = current === undefined || providerChanged || model !== current.llm.model;
-  const apiKey =
-    provider === "openai-codex"
-      ? ""
-      : isSpecified(llmPatch, "apiKey")
-        ? requireString(llmPatch.apiKey, "llm.apiKey", true)
-        : current !== undefined && !providerChanged
-          ? current.llm.apiKey
-          : "";
-  if (provider === "openai-codex" && isSpecified(llmPatch, "apiKey")) {
-    throw new TypeError("llm.apiKey must be absent for openai-codex.");
+  const keyless = provider === "openai-codex" || provider === "claude-cli";
+  const apiKey = keyless
+    ? ""
+    : isSpecified(llmPatch, "apiKey")
+      ? requireString(llmPatch.apiKey, "llm.apiKey", true)
+      : current !== undefined && !providerChanged
+        ? current.llm.apiKey
+        : "";
+  if (keyless && isSpecified(llmPatch, "apiKey")) {
+    throw new TypeError(`llm.apiKey must be absent for ${provider}.`);
   }
+  if (provider !== "claude-cli" && isSpecified(llmPatch, "claudeCli")) {
+    throw new TypeError("llm.claudeCli must be absent unless the provider is claude-cli.");
+  }
+  const claudeCli =
+    provider === "claude-cli"
+      ? resolveClaudeCli(
+          isSpecified(llmPatch, "claudeCli") ? (llmPatch.claudeCli ?? {}) : {},
+          providerChanged ? undefined : current?.llm.claudeCli,
+        )
+      : undefined;
 
   const requestedFlushModel = optionalModel(llmPatch, "flushModel");
   const flushModel =
@@ -422,6 +532,16 @@ export function resolveRuntimeConfig(
             : (compactModelDefault(provider) ?? model)));
 
   let baseUrl: string | undefined;
+  if (
+    provider === "claude-cli" &&
+    isSpecified(llmPatch, "baseUrl") &&
+    llmPatch.baseUrl !== null &&
+    llmPatch.baseUrl !== ""
+  ) {
+    throw new TypeError(
+      "llm.baseUrl must be absent for claude-cli — the Claude Code CLI owns its endpoint.",
+    );
+  }
   if (isSpecified(llmPatch, "baseUrl")) {
     baseUrl =
       llmPatch.baseUrl === null
@@ -473,7 +593,7 @@ export function resolveRuntimeConfig(
       ? requireInteger(options.contextWindowTokens, "contextWindowTokens")
       : current !== undefined && !selectionChanged
         ? current.contextWindowTokens
-        : contextWindowForModel(model);
+        : contextWindowForModel(model, provider);
   if (contextWindowTokens <= 0) throw new TypeError("contextWindowTokens must be positive.");
 
   const authProfile =
@@ -498,6 +618,7 @@ export function resolveRuntimeConfig(
       flushModel,
       compactModel,
       baseUrl,
+      ...(claudeCli === undefined ? {} : { claudeCli }),
     },
     intervals,
     session,

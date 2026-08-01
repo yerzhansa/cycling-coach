@@ -379,11 +379,20 @@ export async function runBinary(
   installCrashHandlers({ dataDir: config.dataDir });
   logBootLine({ dataDir: config.dataDir });
 
-  if (config.llm.provider !== "openai-codex" && !config.llm.apiKey) {
+  if (
+    config.llm.provider !== "openai-codex" &&
+    config.llm.provider !== "claude-cli" &&
+    !config.llm.apiKey
+  ) {
     console.error(
       `No LLM API key found. Run \`${binary.binaryName} setup\` to configure, or set LLM_API_KEY. Provider-specific env vars still work: ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY, DEEPSEEK_API_KEY, ALIBABA_API_KEY, MINIMAX_API_KEY, MOONSHOT_API_KEY, ZAI_API_KEY, or OPENROUTER_API_KEY.`,
     );
     process.exit(1);
+  }
+
+  if (config.llm.provider === "claude-cli") {
+    const { runClaudeCliStartupGate } = await import("./claude-cli-startup.js");
+    await runClaudeCliStartupGate({ settings: config.llm.claudeCli, model: config.llm.model });
   }
 
   const bootStart = Date.now();

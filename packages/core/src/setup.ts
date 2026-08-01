@@ -333,6 +333,59 @@ async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<voi
     }
   }
 
+  let claudeCliBlock: Record<string, unknown> | undefined;
+  if (provider === "claude-cli") {
+    const prevBlock = readFieldValue(previous, "llm", "claude_cli");
+    const prevClaudeCli = (
+      prevBlock !== null && typeof prevBlock === "object" ? prevBlock : {}
+    ) as Record<string, unknown>;
+    const prevBinaryPath =
+      provider === prevProvider && typeof prevClaudeCli.binary_path === "string"
+        ? prevClaudeCli.binary_path
+        : undefined;
+    const prevConfigDir =
+      provider === prevProvider && typeof prevClaudeCli.config_dir === "string"
+        ? prevClaudeCli.config_dir
+        : undefined;
+    const prevBilling =
+      provider === prevProvider && prevClaudeCli.billing === "api-key"
+        ? "api-key"
+        : "subscription";
+
+    const { runClaudeCliSetupStep, CLAUDE_CLI_API_KEY_OPT_IN_PROMPT } = await import(
+      "./claude-cli-setup.js"
+    );
+    const outcome = await runClaudeCliSetupStep(
+      {
+        ...(prevBinaryPath === undefined ? {} : { binaryPath: prevBinaryPath }),
+        ...(prevConfigDir === undefined ? {} : { configDir: prevConfigDir }),
+        billing: prevBilling,
+        model,
+      },
+      {
+        note: (line) => log.info(line),
+        confirmApiKeyOptIn: async () => {
+          const answer = await confirm({
+            message: CLAUDE_CLI_API_KEY_OPT_IN_PROMPT,
+            initialValue: false,
+          });
+          handleCancel(answer, ctx, binary);
+          return Boolean(answer);
+        },
+      },
+    );
+    if (outcome.status === "refused") {
+      cancel(outcome.message);
+      process.exit(1);
+    }
+    claudeCliBlock = {
+      enabled: true,
+      binary_path: outcome.binaryPath,
+      ...(prevConfigDir === undefined ? {} : { config_dir: prevConfigDir }),
+      billing: outcome.billing,
+    };
+  }
+
   // Detect backends + pick secret backend (D12 + D9)
   let backend = await _pickBackend(ctx, binary);
 
@@ -349,12 +402,14 @@ async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<voi
   if (provider === "openai-codex") {
     llmConfig.auth_profile = "openai-codex";
   }
+  if (claudeCliBlock !== undefined) {
+    llmConfig.claude_cli = claudeCliBlock;
+  }
   if (baseUrl !== undefined) {
     llmConfig.base_url = baseUrl;
   }
 
-  // llm.api_key (required unless Codex)
-  if (provider !== "openai-codex") {
+  if (provider !== "openai-codex" && provider !== "claude-cli") {
     const hasPrev = provider === prevProvider && isNonEmptySecret(prevLlmKey);
     const result = await _collectAndWriteSecret(
       ctx,

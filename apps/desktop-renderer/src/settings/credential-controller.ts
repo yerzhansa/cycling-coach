@@ -13,6 +13,31 @@ export interface CredentialSettingsEntry {
   readonly runtimeState: "active" | "stored-inactive" | "failed";
 }
 
+export const NON_CREDENTIAL_PROVIDERS = ["claude-cli"] as const;
+
+export type NonCredentialProviderId = (typeof NON_CREDENTIAL_PROVIDERS)[number];
+
+export type NonCredentialProviderKind = "Claude Code CLI";
+
+export interface ProviderStatusEntry {
+  readonly provider: NonCredentialProviderId;
+  readonly label: string;
+  readonly kind: NonCredentialProviderKind;
+}
+
+const NON_CREDENTIAL_PROVIDER_ROWS: Readonly<Record<NonCredentialProviderId, ProviderStatusEntry>> =
+  {
+    "claude-cli": {
+      provider: "claude-cli",
+      label: "Claude subscription",
+      kind: "Claude Code CLI",
+    },
+  };
+
+function isNonCredentialProvider(provider: string): provider is NonCredentialProviderId {
+  return (NON_CREDENTIAL_PROVIDERS as readonly string[]).includes(provider);
+}
+
 export type CredentialSettingsFocus =
   | { readonly target: "confirmation-cancel" | "confirmation-delete" | "setup" }
   | { readonly target: "delete"; readonly credential: DesktopCredentialId }
@@ -20,6 +45,7 @@ export type CredentialSettingsFocus =
 
 interface CredentialSettingsContent {
   readonly entries: readonly CredentialSettingsEntry[];
+  readonly providerStatuses: readonly ProviderStatusEntry[];
   readonly confirmation: DesktopCredentialId | null;
   readonly announcement: string;
   readonly recoveryAvailable: boolean;
@@ -129,8 +155,12 @@ function entriesFrom(
       runtimeState: chatGpt.runtimeReady ? "active" : "stored-inactive",
     });
   }
-  if (runtime.llm.credential_configured && !entries.has(runtime.llm.provider)) {
-    const credential = runtime.llm.provider satisfies DesktopCredentialId;
+  if (
+    runtime.llm.credential_configured &&
+    !isNonCredentialProvider(runtime.llm.provider) &&
+    !entries.has(runtime.llm.provider)
+  ) {
+    const credential: DesktopCredentialId = runtime.llm.provider;
     entries.set(credential, {
       credential,
       provider: PROVIDER_NAMES[credential],
@@ -150,6 +180,13 @@ function entriesFrom(
     const entry = entries.get(credential);
     return entry === undefined ? [] : [entry];
   });
+}
+
+export function providerStatusesFrom(
+  runtime: RuntimeConfigSnapshot,
+): readonly ProviderStatusEntry[] {
+  const provider = runtime.llm.provider;
+  return isNonCredentialProvider(provider) ? [NON_CREDENTIAL_PROVIDER_ROWS[provider]] : [];
 }
 
 function refusalCopy(
@@ -205,7 +242,10 @@ export function createCredentialSettingsController(input: {
     return client;
   };
 
-  const loadEntries = async (): Promise<readonly CredentialSettingsEntry[]> => {
+  const loadEntries = async (): Promise<{
+    readonly entries: readonly CredentialSettingsEntry[];
+    readonly providerStatuses: readonly ProviderStatusEntry[];
+  }> => {
     const client = await runtimeClient();
     try {
       const [statuses, chatGpt, runtime] = await Promise.all([
@@ -213,7 +253,10 @@ export function createCredentialSettingsController(input: {
         input.loadChatGptStatus(),
         client.call("getRuntimeConfig", {}),
       ]);
-      return entriesFrom(statuses, chatGpt, runtime);
+      return {
+        entries: entriesFrom(statuses, chatGpt, runtime),
+        providerStatuses: providerStatusesFrom(runtime),
+      };
     } catch (error) {
       if (error instanceof CoachClientDisconnectedError) {
         reconnectRequired = true;
@@ -229,11 +272,12 @@ export function createCredentialSettingsController(input: {
     render({ status: "loading" });
     const pending = loadEntries()
       .then(
-        (entries) => {
+        (loaded) => {
           if (disposed || generation !== operationGeneration) return;
           render({
             status: "ready",
-            entries,
+            entries: loaded.entries,
+            providerStatuses: loaded.providerStatuses,
             confirmation: null,
             announcement: "",
             recoveryAvailable: false,
@@ -280,6 +324,7 @@ export function createCredentialSettingsController(input: {
     render({
       status: "confirming",
       entries: content.entries,
+      providerStatuses: content.providerStatuses,
       confirmation: credential,
       announcement: `Confirm deletion of the ${PROVIDER_NAMES[credential]} credential.`,
       recoveryAvailable: content.recoveryAvailable,
@@ -295,6 +340,7 @@ export function createCredentialSettingsController(input: {
     render({
       status: "ready",
       entries: content.entries,
+      providerStatuses: content.providerStatuses,
       confirmation: null,
       announcement: "Credential deletion cancelled.",
       recoveryAvailable: content.recoveryAvailable,
@@ -315,6 +361,7 @@ export function createCredentialSettingsController(input: {
     render({
       status: "deleting",
       entries: content.entries,
+      providerStatuses: content.providerStatuses,
       confirmation: credential,
       announcement: `Deleting the ${target.provider} credential locally…`,
       recoveryAvailable: content.recoveryAvailable,
@@ -324,9 +371,12 @@ export function createCredentialSettingsController(input: {
       .deleteCredential({ credential })
       .then(async (result) => {
         let entries = content.entries;
+        let providerStatuses = content.providerStatuses;
         let refreshFailed = false;
         try {
-          entries = await loadEntries();
+          const loaded = await loadEntries();
+          entries = loaded.entries;
+          providerStatuses = loaded.providerStatuses;
         } catch {
           refreshFailed = true;
           if (result.status === "deleted") {
@@ -340,6 +390,7 @@ export function createCredentialSettingsController(input: {
             kind: "delete",
             reason: result.reason,
             entries,
+            providerStatuses,
             confirmation: null,
             announcement: refusalCopy(result.reason),
             recoveryAvailable:
@@ -353,6 +404,7 @@ export function createCredentialSettingsController(input: {
         render({
           status: "deleted",
           entries,
+          providerStatuses,
           confirmation: null,
           announcement: result.cleanupPending
             ? "Credential deleted locally. Secure storage cleanup will be retried."
@@ -374,6 +426,7 @@ export function createCredentialSettingsController(input: {
           kind: "delete",
           reason: "runtime-unavailable",
           entries: content.entries,
+          providerStatuses: content.providerStatuses,
           confirmation: null,
           announcement:
             "The credential state could not be confirmed. Reconnect and reload before trying again.",

@@ -41,6 +41,7 @@ const LLM_PROVIDER_ORDER = [
   "openai",
   "google",
   "openai-codex",
+  "claude-cli",
   "deepseek",
   "qwen",
   "minimax",

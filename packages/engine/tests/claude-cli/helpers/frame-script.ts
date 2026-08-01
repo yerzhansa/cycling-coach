@@ -53,6 +53,28 @@ export interface ScriptedQuery {
   state: ScriptedQueryState;
 }
 
+interface ScriptedAccountChannel {
+  account: Record<string, unknown> | null;
+  initialization: Record<string, unknown> | null;
+}
+
+function accountChannelFor(frames: readonly SDKMessage[]): ScriptedAccountChannel {
+  const init = frames.find(
+    (frame) =>
+      (frame as unknown as Record<string, unknown>).type === "system" &&
+      (frame as unknown as Record<string, unknown>).subtype === "init",
+  ) as Record<string, unknown> | undefined;
+  if (init === undefined) return { account: null, initialization: null };
+  const account = init.account;
+  return {
+    initialization: init,
+    account:
+      typeof account === "object" && account !== null
+        ? (account as Record<string, unknown>)
+        : null,
+  };
+}
+
 export function createScriptedQuery(scripts: readonly string[]): ScriptedQuery {
   const state: ScriptedQueryState = {
     calls: 0,
@@ -77,9 +99,21 @@ export function createScriptedQuery(scripts: readonly string[]): ScriptedQuery {
       if (script.terminal.kind === "hang") await new Promise(() => undefined);
     })();
 
+    const channel = accountChannelFor(script.frames);
+    const pending = new Promise<never>(() => undefined);
+
     const q = {
       [Symbol.asyncIterator]() {
         return q;
+      },
+      initializationResult: async () => {
+        if (channel.initialization === null) return await pending;
+        return { ...channel.initialization, account: channel.account ?? undefined };
+      },
+      accountInfo: async () => {
+        if (channel.initialization === null) return await pending;
+        if (channel.account === null) throw new Error("no account channel");
+        return channel.account;
       },
       next: () => inner.next(),
       return: async (value: unknown) => {

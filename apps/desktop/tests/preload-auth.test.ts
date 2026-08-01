@@ -85,6 +85,7 @@ const providerOrder = [
   "openai",
   "google",
   "openai-codex",
+  "claude-cli",
   "deepseek",
   "qwen",
   "minimax",
