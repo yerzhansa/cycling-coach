@@ -30,11 +30,16 @@ import { buildQueryOptions } from "./session.js";
 export const ACCOUNT_PROBE_TIMEOUT_MS = 25_000;
 export const ACCOUNT_PROBE_RETRY_DELAY_MS = 750;
 export const ACCOUNT_PROBE_MODEL = "haiku";
+export const ACCOUNT_PROBE_CACHE_TTL_MS = 5 * 60_000;
 
 export const API_KEY_BILLING_IDENTITY_LINE =
   "Using Anthropic API key billing - usage is charged to your API account.";
 
-export type ClaudeAccountClass = "subscription" | "api-key-token" | "unrecognized";
+export type ClaudeAccountClass =
+  | "subscription"
+  | "api-key-token"
+  | "not-signed-in"
+  | "unrecognized";
 
 export type ClaudeAccountProbeFailure = "timeout" | "no-account";
 
@@ -50,6 +55,8 @@ export interface ClaudeAccountProbeResult {
 const API_KEY_TOKEN_SOURCES = new Set(["apikey", "anthropicapikey", "anthropicauthtoken"]);
 
 const API_KEY_API_PROVIDERS = new Set(["bedrock", "vertex", "foundry"]);
+
+const SIGNED_OUT_TOKEN_SOURCE = "none";
 
 function normalizeAuthToken(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -92,6 +99,9 @@ export function classifyAccountInfo(account: AccountInfo | null | undefined): {
   }
   if (subscriptionType !== undefined && apiProvider === "firstParty") {
     return { accountClass: "subscription", email, plan: planLabel(subscriptionType) };
+  }
+  if (tokenSource !== undefined && normalizeAuthToken(tokenSource) === SIGNED_OUT_TOKEN_SOURCE) {
+    return { accountClass: "not-signed-in", rawAuthSource };
   }
   return { accountClass: "unrecognized", email, rawAuthSource };
 }
@@ -187,20 +197,20 @@ async function probeOnce(
 ): Promise<AccountInfo | null | typeof TIMED_OUT> {
   const run = deps.query ?? sdkQuery;
   const abortController = new AbortController();
-  const options = buildQueryOptions({
-    runtime: input.runtime,
-    baseEnv: input.baseEnv ?? process.env,
-    model: input.model ?? ACCOUNT_PROBE_MODEL,
-    allowedTools: [],
-    mcpServers: {},
-    persistSession: false,
-    abortController,
-    stderr: () => {},
-    ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
-  });
-
-  const active = run({ prompt: pendingPrompt(abortController.signal), options });
+  let active: Query | null = null;
   try {
+    const options = buildQueryOptions({
+      runtime: input.runtime,
+      baseEnv: input.baseEnv ?? process.env,
+      model: input.model ?? ACCOUNT_PROBE_MODEL,
+      allowedTools: [],
+      mcpServers: {},
+      persistSession: false,
+      abortController,
+      stderr: () => {},
+      ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+    });
+    active = run({ prompt: pendingPrompt(abortController.signal), options });
     return await withTimeout(
       accountFromQuery(active),
       input.timeoutMs ?? ACCOUNT_PROBE_TIMEOUT_MS,
@@ -210,10 +220,10 @@ async function probeOnce(
     return null;
   } finally {
     abortController.abort();
-    try {
-      await active.return(undefined);
-    } catch {
-      /* the CLI is already gone */
+    if (active !== null) {
+      try {
+        await active.return(undefined);
+      } catch {}
     }
   }
 }
@@ -234,6 +244,16 @@ export async function probeClaudeAccount(
   }
 
   const classified = classifyAccountInfo(account);
+  if (classified.accountClass === "not-signed-in") {
+    return {
+      verified: false,
+      accountClass: "not-signed-in",
+      reason: "no-account",
+      ...(classified.rawAuthSource === undefined
+        ? {}
+        : { rawAuthSource: classified.rawAuthSource }),
+    };
+  }
   if (classified.accountClass === "unrecognized") {
     const isAbsent = account === null || account === undefined;
     return {
@@ -256,6 +276,51 @@ export async function probeClaudeAccount(
     ...(classified.plan === undefined ? {} : { plan: classified.plan }),
     ...(classified.rawAuthSource === undefined ? {} : { rawAuthSource: classified.rawAuthSource }),
   };
+}
+
+export function claudeAccountProbeCacheKey(input: ProbeClaudeAccountInput): string {
+  const configDir = input.runtime.configDir ?? "";
+  const cwd = input.cwd ?? process.cwd();
+  return `${input.runtime.binaryPath}\0${configDir}\0${cwd}`;
+}
+
+interface ProbeCacheSlot {
+  key: string;
+  storedAt: number;
+  result: ClaudeAccountProbeResult;
+}
+
+let probeCacheSlot: ProbeCacheSlot | null = null;
+
+export function invalidateClaudeAccountProbeCache(): void {
+  probeCacheSlot = null;
+}
+
+export interface CachedProbeDeps extends ProbeClaudeAccountDeps {
+  now?: () => number;
+}
+
+export async function probeClaudeAccountCached(
+  input: ProbeClaudeAccountInput,
+  deps: CachedProbeDeps = {},
+): Promise<ClaudeAccountProbeResult> {
+  const now = deps.now ?? (() => Date.now());
+  const key = claudeAccountProbeCacheKey(input);
+  const slot = probeCacheSlot;
+  if (slot !== null && slot.key === key && now() - slot.storedAt < ACCOUNT_PROBE_CACHE_TTL_MS) {
+    return slot.result;
+  }
+  const result = await probeClaudeAccount(input, deps);
+  probeCacheSlot = { key, storedAt: now(), result };
+  return result;
+}
+
+export async function recheckClaudeAccount(
+  input: ProbeClaudeAccountInput,
+  deps: CachedProbeDeps = {},
+): Promise<ClaudeAccountProbeResult> {
+  invalidateClaudeAccountProbeCache();
+  return await probeClaudeAccountCached(input, deps);
 }
 
 export function claudeIdentityLine(result: ClaudeAccountProbeResult): string {
@@ -301,9 +366,10 @@ export interface EnsureClaudeCliReadyInput {
   model?: string;
   cwd?: string;
   timeoutMs?: number;
+  forceRecheck?: boolean;
 }
 
-export interface EnsureClaudeCliReadyDeps extends ProbeClaudeAccountDeps {
+export interface EnsureClaudeCliReadyDeps extends CachedProbeDeps {
   resolveBinary?: typeof resolveClaudeBinary;
   probeVersion?: typeof probeVersion;
   probeAccount?: typeof probeClaudeAccount;
@@ -317,7 +383,9 @@ export async function ensureClaudeCliReady(
   const baseEnv = input.baseEnv ?? process.env;
   const resolveBinary = deps.resolveBinary ?? resolveClaudeBinary;
   const readVersion = deps.probeVersion ?? probeVersion;
-  const probeAccount = deps.probeAccount ?? probeClaudeAccount;
+  const probeAccount =
+    deps.probeAccount ??
+    (input.forceRecheck === true ? recheckClaudeAccount : probeClaudeAccountCached);
 
   const resolved = await resolveBinary({
     ...(input.binaryPath === undefined ? {} : { explicitPath: input.binaryPath }),

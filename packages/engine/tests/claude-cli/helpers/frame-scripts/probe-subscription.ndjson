@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","session_id":"bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb","model":"haiku","cwd":"/tmp","tools":[],"mcp_servers":[],"apiKeySource":"none","permissionMode":"default","account":{"email":"rider@example.test","organization":"Personal","subscriptionType":"Claude Max","apiProvider":"firstParty"}}
+{"__control":"hang"}

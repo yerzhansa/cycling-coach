@@ -17,6 +17,7 @@ describe("engine public export surface", () => {
 
   it("exports only the canonical factory and the authorized JWT account helper at runtime", () => {
     expect(Object.keys(engine).sort()).toEqual([
+      "API_KEY_BILLING_IDENTITY_LINE",
       "ATHLETE_CONTEXT_FENCE_CLOSE",
       "ATHLETE_CONTEXT_FENCE_OPEN",
       "ATHLETE_CONTEXT_TRUNCATION_NOTICE",
@@ -42,6 +43,7 @@ describe("engine public export surface", () => {
       "classifySpendCaching",
       "classifyTrustedSource",
       "claudeCliCacheReadSavingsUsd",
+      "claudeIdentityLine",
       "contentDigest",
       "createCoachEngine",
       "dateKeySchema",
@@ -50,6 +52,7 @@ describe("engine public export surface", () => {
       "extractAccountId",
       "formatCompactionNote",
       "getMessageProvenance",
+      "invalidateClaudeAccountProbeCache",
       "isNonEmptyData",
       "isProviderAuthFailure",
       "isSourceProvenance",
@@ -60,8 +63,10 @@ describe("engine public export surface", () => {
       "persistCompactionSummary",
       "priceClaudeCliInclusiveUsage",
       "priceInclusiveUsage",
+      "probeClaudeAccountCached",
       "provenanceForSourceBearingData",
       "provenanceOfMessages",
+      "recheckClaudeAccount",
       "renderGarminAttribution",
       "resolveClaudeCliPriceId",
       "sanitizeUntrustedText",

@@ -33,6 +33,7 @@ describe("engine scaffold", () => {
 
   it("exports only the canonical factory and authorized account-id helper at runtime", async () => {
     expect(Object.keys(await import("@enduragent/engine")).sort()).toEqual([
+      "API_KEY_BILLING_IDENTITY_LINE",
       "ATHLETE_CONTEXT_FENCE_CLOSE",
       "ATHLETE_CONTEXT_FENCE_OPEN",
       "ATHLETE_CONTEXT_TRUNCATION_NOTICE",
@@ -58,6 +59,7 @@ describe("engine scaffold", () => {
       "classifySpendCaching",
       "classifyTrustedSource",
       "claudeCliCacheReadSavingsUsd",
+      "claudeIdentityLine",
       "contentDigest",
       "createCoachEngine",
       "dateKeySchema",
@@ -66,6 +68,7 @@ describe("engine scaffold", () => {
       "extractAccountId",
       "formatCompactionNote",
       "getMessageProvenance",
+      "invalidateClaudeAccountProbeCache",
       "isNonEmptyData",
       "isProviderAuthFailure",
       "isSourceProvenance",
@@ -76,8 +79,10 @@ describe("engine scaffold", () => {
       "persistCompactionSummary",
       "priceClaudeCliInclusiveUsage",
       "priceInclusiveUsage",
+      "probeClaudeAccountCached",
       "provenanceForSourceBearingData",
       "provenanceOfMessages",
+      "recheckClaudeAccount",
       "renderGarminAttribution",
       "resolveClaudeCliPriceId",
       "sanitizeUntrustedText",

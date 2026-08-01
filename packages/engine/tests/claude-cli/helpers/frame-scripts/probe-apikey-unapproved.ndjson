@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","session_id":"bbbbbbbb-2222-4222-8222-bbbbbbbbbbbf","model":"haiku","cwd":"/tmp","tools":[],"mcp_servers":[],"apiKeySource":"none","permissionMode":"default","account":{"subscriptionType":"Claude Pro","apiProvider":"firstParty"}}
+{"__control":"hang"}
