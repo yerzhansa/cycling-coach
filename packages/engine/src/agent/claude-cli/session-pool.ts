@@ -79,6 +79,7 @@ export interface ClaudeCliSessionPool {
 class FileBackedSessionPool implements ClaudeCliSessionPool {
   private readonly ports: ClaudeCliSessionPoolPorts;
   private readonly entries = new Map<SessionKey, SessionCursor>();
+  private readonly dirtyKeys = new Set<SessionKey>();
   private loaded = false;
   private pendingWrite = false;
 
@@ -155,6 +156,7 @@ class FileBackedSessionPool implements ClaudeCliSessionPool {
 
   markDirty(key: SessionKey): void {
     const entry = this.entries.get(key);
+    this.dirtyKeys.add(key);
     this.pendingWrite = true;
     if (entry === undefined) {
       this.entries.set(key, { sessionId: "", historyHash: "", dirty: true });
@@ -164,7 +166,8 @@ class FileBackedSessionPool implements ClaudeCliSessionPool {
   }
 
   async commit(key: SessionKey, cursor: PersistedCursor): Promise<void> {
-    const wasDirty = this.entries.get(key)?.dirty === true;
+    const markedDirty = this.dirtyKeys.delete(key);
+    const wasDirty = markedDirty || this.entries.get(key)?.dirty === true;
     this.load();
     if (wasDirty || cursor.sessionId === "") {
       this.entries.delete(key);

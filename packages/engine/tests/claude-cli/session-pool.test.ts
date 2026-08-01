@@ -164,6 +164,39 @@ describe("claude-cli session pool resume/rebuild matrix", () => {
     expect(await pool.acquire(KEY, "hash-b")).toEqual({ cursor: null, mode: "rebuild" });
   });
 
+  it("keeps the compact-boundary rebuild when a kill-switch dispose lands mid-turn", async () => {
+    const { pool, env, path } = harness();
+    await pool.acquire(KEY, "hash-a");
+    pool.observeSessionId(KEY, HAPPY_SESSION);
+    pool.markDirty(KEY);
+
+    env[CLAUDE_CLI_KILL_SWITCH_ENV] = "1";
+    await expect(pool.acquire(KEY, "hash-a")).rejects.toThrow(CLAUDE_CLI_DISABLED_MESSAGE);
+    delete env[CLAUDE_CLI_KILL_SWITCH_ENV];
+
+    await pool.commit(KEY, { sessionId: HAPPY_SESSION, historyHash: "hash-b" });
+
+    expect(readCursorStore(path).cursors).toEqual({});
+    expect(await pool.acquire(KEY, "hash-b")).toEqual({ cursor: null, mode: "rebuild" });
+  });
+
+  it("clears the dirty mark once the rebuilt turn commits", async () => {
+    const { pool, path } = harness();
+    const rebuilt = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb";
+    await pool.acquire(KEY, "hash-a");
+    pool.observeSessionId(KEY, HAPPY_SESSION);
+    pool.markDirty(KEY);
+    await pool.dispose();
+    await pool.commit(KEY, { sessionId: HAPPY_SESSION, historyHash: "hash-b" });
+
+    await pool.commit(KEY, { sessionId: rebuilt, historyHash: "hash-c" });
+
+    expect(readCursorStore(path).cursors[KEY]).toEqual({
+      sessionId: rebuilt,
+      historyHash: "hash-c",
+    });
+  });
+
   it("rebuilds after invalidate", async () => {
     const { pool } = harness();
     await pool.commit(KEY, { sessionId: HAPPY_SESSION, historyHash: "hash-a" });

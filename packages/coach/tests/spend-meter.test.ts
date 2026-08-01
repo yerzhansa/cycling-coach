@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { readUsageLedger } from "@enduragent/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  claudeCliCacheReadSavingsUsd,
   priceClaudeCliInclusiveUsage,
   priceInclusiveUsage,
   type UsageLedgerLine,
@@ -766,5 +767,56 @@ describe("claude-cli notional usage", () => {
       notionalSpendUsd: expected?.total,
       capStatus: "below",
     });
+  });
+
+  it("prices cache-read savings on the resume fast path instead of degrading the aggregate", async () => {
+    await ledger("usage-ledger.jsonl", [
+      claudeCliLine({ inputTokens: 1_000_000, cacheReadTokens: 800_000 }),
+    ]);
+    const expected = claudeCliCacheReadSavingsUsd("sonnet", 800_000);
+
+    const summary = await summarize();
+
+    expect(expected).toBeGreaterThan(0);
+    expect(summary).toMatchObject({
+      cacheReadTokens: 800_000,
+      knownCacheReadSavingsUsd: expected,
+      cacheSavingsComplete: true,
+    });
+    expect(summary.routes[0]).toMatchObject({
+      provider: "claude-cli",
+      cacheReadTokens: 800_000,
+      cacheReadSavingsUsd: expected,
+    });
+  });
+
+  it("prices cache-read savings for an uncatalogued model id at the family fallback", async () => {
+    await ledger("usage-ledger.jsonl", [
+      claudeCliLine({ model: "claude-opus-9-20990101", cacheReadTokens: 500_000 }),
+    ]);
+    const expected = claudeCliCacheReadSavingsUsd("claude-opus-9-20990101", 500_000);
+
+    const summary = await summarize();
+
+    expect(expected).toBe(claudeCliCacheReadSavingsUsd("opus", 500_000));
+    expect(summary).toMatchObject({
+      knownCacheReadSavingsUsd: expected,
+      cacheSavingsComplete: true,
+    });
+  });
+
+  it("keeps the aggregate complete when a claude-cli row sits beside a catalogued provider row", async () => {
+    await ledger("usage-ledger.jsonl", [
+      claudeCliLine({ cacheReadTokens: 100_000 }),
+      line({ cacheReadTokens: 400, cacheWriteTokens: 100 }),
+    ]);
+
+    const summary = await summarize();
+
+    expect(summary.cacheSavingsComplete).toBe(true);
+    expect(summary.knownCacheReadSavingsUsd).toBeGreaterThan(
+      claudeCliCacheReadSavingsUsd("sonnet", 100_000) ?? 0,
+    );
+    expect(summary.routes.every((route) => route.cacheReadSavingsUsd !== null)).toBe(true);
   });
 });

@@ -15,6 +15,7 @@ import {
   unrecognizedAuthSourceError,
   versionBelowFloorError,
 } from "../../src/agent/claude-cli/errors.js";
+import { isProviderAuthFailure } from "../../src/provider-auth-failure.js";
 
 describe("user-facing configuration messages", () => {
   it("names the binary, the install page and the config key when the CLI is missing", () => {
@@ -87,6 +88,23 @@ describe("normalizeClaudeCliError", () => {
       const normalized = normalizeClaudeCliError(new Error(message));
       expect(normalized).toBeInstanceOf(ClaudeCliConfigError);
       expect(normalized.message).toBe(NOT_SIGNED_IN_MESSAGE);
+      expect(isProviderAuthFailure(normalized)).toBe(true);
+    }
+  });
+
+  it("marks only the sign-in refusal as a provider auth failure", () => {
+    expect(isProviderAuthFailure(notSignedInError())).toBe(true);
+    for (const err of [
+      binaryMissingError("/bin/claude"),
+      versionBelowFloorError("2.0.1", "2.1.220"),
+      probeTimeoutError(),
+      apiKeyIdentityError(),
+      apiKeyUnapprovedError(),
+      unrecognizedAuthSourceError("quantumToken"),
+      normalizeClaudeCliError(new Error("usage limit reached")),
+      normalizeClaudeCliError(new Error("prompt is too long")),
+    ]) {
+      expect(isProviderAuthFailure(err), err.message).toBe(false);
     }
   });
 

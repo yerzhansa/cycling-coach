@@ -15,6 +15,7 @@ import {
 } from "@enduragent/core";
 import {
   cacheReadSavingsUsd,
+  claudeCliCacheReadSavingsUsd,
   classifySpendCaching,
   priceClaudeCliInclusiveUsage,
   priceInclusiveUsage,
@@ -169,6 +170,12 @@ function catalogCostFor(line: UsageLedgerLine, usage: UsageTokenCounts): UsageCo
     : priceInclusiveUsage(line.provider, line.model, usage);
 }
 
+function catalogCacheReadSavingsFor(line: UsageLedgerLine, cacheReadTokens: number): number | null {
+  return line.provider === CLAUDE_CLI_PROVIDER
+    ? claudeCliCacheReadSavingsUsd(line.model, cacheReadTokens)
+    : cacheReadSavingsUsd(line.provider, line.model, cacheReadTokens);
+}
+
 function accruesToCap(line: UsageLedgerLine): boolean {
   if (line.costBasis === "notional") return false;
   if (line.costBasis === "actual") return true;
@@ -290,7 +297,7 @@ function aggregateLedger(
     }
     route.cacheReadTokens = nextCacheReadTokens;
     if (cacheReadTokens > 0) {
-      const savings = cacheReadSavingsUsd(line.provider, line.model, cacheReadTokens);
+      const savings = catalogCacheReadSavingsFor(line, cacheReadTokens);
       if (savings === null || !Number.isFinite(route.cacheSavingsKnownUsd + savings)) {
         route.cacheSavingsAvailable = false;
       } else {

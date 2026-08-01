@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
+import { classifyFailure } from "../../core/src/agent/token-utils.js";
 import { createScriptedQuery, type ScriptedQueryState } from "./claude-cli/helpers/frame-script.js";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import type { EngineHostPorts } from "../src/host-ports.js";
@@ -102,6 +103,7 @@ describe("retry loop on the claude-cli path", () => {
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) {
       expect(outcome.error.message).toContain("Claude Code CLI is not signed in");
+      expect(classifyFailure(outcome.error)).toBe("auth");
     }
     expect(agent.state.calls).toBe(1);
   });

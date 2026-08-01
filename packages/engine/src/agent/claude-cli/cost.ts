@@ -47,6 +47,16 @@ function validTokenCount(value: number): boolean {
   return Number.isFinite(value) && Number.isInteger(value) && value >= 0;
 }
 
+export function claudeCliCacheReadSavingsUsd(
+  modelId: string,
+  cacheReadTokens: number,
+): number | null {
+  if (!validTokenCount(cacheReadTokens)) return null;
+  const rates = claudeCliRates(modelId);
+  const savings = (Math.max(0, rates.input - rates.cacheRead) * cacheReadTokens) / 1_000_000;
+  return Number.isFinite(savings) && savings >= 0 ? savings : null;
+}
+
 export function priceClaudeCliInclusiveUsage(
   modelId: string,
   usage: UsageTokenCounts,

@@ -1,4 +1,5 @@
 import { APICallError } from "@ai-sdk/provider";
+import { isProviderAuthFailure } from "@enduragent/engine";
 import { readRefreshFailureReason } from "../auth/refresh-failure.js";
 
 const OVERFLOW_MESSAGE_PATTERNS = [
@@ -109,6 +110,7 @@ export function isNetworkError(err: unknown): boolean {
 }
 
 export function isAuthError(err: unknown): boolean {
+  if (isProviderAuthFailure(err)) return true;
   return APICallError.isInstance(err) && (err.statusCode === 401 || err.statusCode === 403);
 }
 

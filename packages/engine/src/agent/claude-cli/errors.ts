@@ -1,3 +1,5 @@
+import { markProviderAuthFailure } from "../../provider-auth-failure.js";
+
 export type ClaudeCliConfigErrorKind =
   | "binary-missing"
   | "version-below-floor"
@@ -53,7 +55,9 @@ export function versionBelowFloorError(version: string, floor: string): ClaudeCl
 }
 
 export function notSignedInError(): ClaudeCliConfigError {
-  return new ClaudeCliConfigError("not-signed-in", NOT_SIGNED_IN_MESSAGE);
+  return markProviderAuthFailure(
+    new ClaudeCliConfigError("not-signed-in", NOT_SIGNED_IN_MESSAGE),
+  );
 }
 
 export function probeTimeoutError(): ClaudeCliConfigError {
