@@ -7,6 +7,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export const FAKE_CLAUDE_SCRIPTS_DIR = join(HERE, "frame-scripts");
 
 export const HANG_VERSION = "__hang__";
+export const FAIL_VERSION = "__fail__";
 
 export interface FakeClaudeOptions {
   version?: string;
@@ -52,6 +53,11 @@ if (argv.includes("--version")) {
   const version = readPointer("version", "0.0.0");
   if (version === ${JSON.stringify(HANG_VERSION)}) {
     hangForever();
+  } else if (version === ${JSON.stringify(FAIL_VERSION)}) {
+    process.stderr.write(
+      "claude: fatal: startup failed (env keys: " + Object.keys(process.env).sort().join(",") + ")\\n",
+    );
+    process.exit(3);
   } else {
     process.stdout.write(version + " (Claude Code)\\n");
     process.exit(0);
