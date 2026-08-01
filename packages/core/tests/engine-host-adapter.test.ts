@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { APICallError } from "@ai-sdk/provider";
-import { createCoachEngine } from "@enduragent/engine";
+import { createCoachEngine, markProviderAuthFailure } from "@enduragent/engine";
 import type { Sport } from "@enduragent/engine/sport";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -170,6 +170,23 @@ describe("engine host adapter", () => {
       "invalid_request",
       "unknown",
     ]);
+  });
+
+  it("classifies a marked provider auth failure as auth without touching other errors", () => {
+    const signedOut = markProviderAuthFailure(
+      Object.assign(new Error("Claude Code CLI is not signed in."), {
+        name: "ClaudeCliConfigError",
+      }),
+    );
+    expect(classifyFailure(signedOut)).toBe("auth");
+    expect(
+      classifyFailure(
+        Object.assign(new Error("Claude Code CLI is not signed in."), {
+          name: "ClaudeCliConfigError",
+        }),
+      ),
+    ).toBe("unknown");
+    expect(classifyFailure({ providerAuthFailure: false })).toBe("unknown");
   });
 
   it("classifies copied refresh failures only from the structural discriminant", () => {

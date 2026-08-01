@@ -1,0 +1,2 @@
+{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"dddddddd-4444-4444-8444-dddddddddddd","duration_ms":32,"duration_api_ms":0,"num_turns":0,"total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0},"result":"No conversation found with session ID: aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa","errors":["No conversation found with session ID: aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"],"terminal_reason":"session_not_found"}
+{"__control":"exit","code":1}

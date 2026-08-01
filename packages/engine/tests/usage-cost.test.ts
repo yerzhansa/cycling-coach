@@ -53,6 +53,8 @@ describe("usage cost", () => {
     ["kimi", "synthetic", "provider-dependent"],
     ["zai", "synthetic", "provider-dependent"],
     ["openai-codex", "synthetic", "provider-dependent"],
+    ["claude-cli", "sonnet", "provider-dependent"],
+    ["claude-cli", "claude-sonnet-5", "provider-dependent"],
     ["synthetic", "unknown", "provider-dependent"],
   ] as const)("classifies %s/%s as %s", (provider, model, expected) => {
     expect(classifySpendCaching(provider, model)).toBe(expected);

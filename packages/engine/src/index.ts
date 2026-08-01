@@ -43,6 +43,7 @@ export type {
   TranscriptConversationBoundaryReason,
   TranscriptWriterPort,
   UsageCost,
+  UsageCostBasis,
   UsageLedgerLine,
   UsagePort,
 } from "./host-ports.js";
@@ -123,8 +124,19 @@ export {
   type SourceProvenance,
 } from "./provenance.js";
 export {
+  isProviderAuthFailure,
+  markProviderAuthFailure,
+  type ProviderAuthFailure,
+} from "./provider-auth-failure.js";
+export {
   cacheReadSavingsUsd,
   classifySpendCaching,
   priceInclusiveUsage,
   type UsageTokenCounts,
 } from "./usage-cost.js";
+export {
+  CLAUDE_CLI_PRICE_TABLE,
+  claudeCliCacheReadSavingsUsd,
+  priceClaudeCliInclusiveUsage,
+  resolveClaudeCliPriceId,
+} from "./agent/claude-cli/cost.js";

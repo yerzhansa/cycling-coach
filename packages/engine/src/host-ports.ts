@@ -12,6 +12,7 @@ export type EngineLlmProvider =
   | "openai"
   | "google"
   | "openai-codex"
+  | "claude-cli"
   | "deepseek"
   | "qwen"
   | "minimax"
@@ -29,6 +30,13 @@ export interface EngineConfig {
     readonly flushModel?: string;
     readonly compactModel?: string;
     readonly baseUrl?: string;
+    readonly claudeCli?: {
+      readonly enabled: boolean;
+      readonly binaryPath?: string;
+      readonly configDir?: string;
+      readonly billing: "subscription" | "api-key";
+      readonly cursorStorePath: string;
+    };
   };
   readonly session: {
     readonly historyTokenBudgetRatio: number;
@@ -235,6 +243,8 @@ export interface UsageCost {
   readonly total: number;
 }
 
+export type UsageCostBasis = "notional" | "actual";
+
 export interface UsageLedgerLine {
   readonly ts: number;
   readonly kind: "generate" | "turn" | "boot";
@@ -250,6 +260,7 @@ export interface UsageLedgerLine {
   readonly cacheReadTokens?: number;
   readonly cacheWriteTokens?: number;
   readonly providerReportedCostUsd?: number;
+  readonly costBasis?: UsageCostBasis;
   readonly cost?: UsageCost;
   readonly stopReason?: string;
 }

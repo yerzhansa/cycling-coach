@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","session_id":"dddddddd-4444-4444-8444-dddddddddddd","model":"haiku","cwd":"/tmp","tools":[],"mcp_servers":[],"apiKeySource":"none","permissionMode":"default"}
+{"type":"stream_event","session_id":"dddddddd-4444-4444-8444-dddddddddddd","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Starting"}}}
+{"__control":"exit","code":1}

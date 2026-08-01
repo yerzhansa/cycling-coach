@@ -22,6 +22,7 @@ export function usageFieldsFromResult(
   | "cacheReadTokens"
   | "cacheWriteTokens"
   | "providerReportedCostUsd"
+  | "costBasis"
   | "cost"
 > {
   const usage = result.totalUsage;
@@ -33,6 +34,7 @@ export function usageFieldsFromResult(
     cacheReadTokens: details?.cacheReadTokens,
     cacheWriteTokens: details?.cacheWriteTokens,
     providerReportedCostUsd: result.providerReportedCostUsd,
+    costBasis: result.costBasis,
     cost: result.cost,
   };
 }

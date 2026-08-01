@@ -15,9 +15,13 @@ import {
 } from "@enduragent/core";
 import {
   cacheReadSavingsUsd,
+  claudeCliCacheReadSavingsUsd,
   classifySpendCaching,
+  priceClaudeCliInclusiveUsage,
   priceInclusiveUsage,
+  type UsageCost,
   type UsageLedgerLine,
+  type UsageTokenCounts,
 } from "@enduragent/engine";
 import { z } from "zod";
 
@@ -53,6 +57,7 @@ interface MutableRoute {
   unpricedGenerationCount: number;
   providerReportedGenerationCount: number;
   knownSpendUsd: number;
+  notionalSpendUsd: number;
   cacheReadTokens: number;
   cacheSavingsKnownUsd: number;
   cacheSavingsAvailable: boolean;
@@ -157,6 +162,26 @@ function catalogInputTokens(line: UsageLedgerLine): number | undefined {
   return safeTokenSum(inputTokens, cachedInputTokens) ?? inputTokens;
 }
 
+const CLAUDE_CLI_PROVIDER = "claude-cli";
+
+function catalogCostFor(line: UsageLedgerLine, usage: UsageTokenCounts): UsageCost | undefined {
+  return line.provider === CLAUDE_CLI_PROVIDER
+    ? priceClaudeCliInclusiveUsage(line.model, usage)
+    : priceInclusiveUsage(line.provider, line.model, usage);
+}
+
+function catalogCacheReadSavingsFor(line: UsageLedgerLine, cacheReadTokens: number): number | null {
+  return line.provider === CLAUDE_CLI_PROVIDER
+    ? claudeCliCacheReadSavingsUsd(line.model, cacheReadTokens)
+    : cacheReadSavingsUsd(line.provider, line.model, cacheReadTokens);
+}
+
+function accruesToCap(line: UsageLedgerLine): boolean {
+  if (line.costBasis === "notional") return false;
+  if (line.costBasis === "actual") return true;
+  return line.provider !== CLAUDE_CLI_PROVIDER || line.providerReportedCostUsd !== undefined;
+}
+
 function readDailyCap(path: string): number {
   try {
     return DailySpendCapSchema.parse(JSON.parse(readFileSync(path, "utf8")) as unknown).dailyCapUsd;
@@ -190,6 +215,7 @@ function routeSummary(route: MutableRoute): SpendRouteSummary {
     unpricedGenerationCount: route.unpricedGenerationCount,
     providerReportedGenerationCount: route.providerReportedGenerationCount,
     knownSpendUsd: route.knownSpendUsd,
+    notionalSpendUsd: route.notionalSpendUsd,
     cacheReadTokens: route.cacheReadTokens,
     cacheReadSavingsUsd: route.cacheSavingsAvailable ? route.cacheSavingsKnownUsd : null,
     caching,
@@ -199,6 +225,7 @@ function routeSummary(route: MutableRoute): SpendRouteSummary {
 
 interface LedgerAggregate {
   readonly knownSpendUsd: number;
+  readonly notionalSpendUsd: number;
   readonly generationCount: number;
   readonly pricedGenerationCount: number;
   readonly unpricedGenerationCount: number;
@@ -246,6 +273,7 @@ function aggregateLedger(
       unpricedGenerationCount: 0,
       providerReportedGenerationCount: 0,
       knownSpendUsd: 0,
+      notionalSpendUsd: 0,
       cacheReadTokens: 0,
       cacheSavingsKnownUsd: 0,
       cacheSavingsAvailable: true,
@@ -269,7 +297,7 @@ function aggregateLedger(
     }
     route.cacheReadTokens = nextCacheReadTokens;
     if (cacheReadTokens > 0) {
-      const savings = cacheReadSavingsUsd(line.provider, line.model, cacheReadTokens);
+      const savings = catalogCacheReadSavingsFor(line, cacheReadTokens);
       if (savings === null || !Number.isFinite(route.cacheSavingsKnownUsd + savings)) {
         route.cacheSavingsAvailable = false;
       } else {
@@ -282,7 +310,7 @@ function aggregateLedger(
       providerReported === undefined &&
       line.inputTokens !== undefined &&
       line.outputTokens !== undefined
-        ? priceInclusiveUsage(line.provider, line.model, {
+        ? catalogCostFor(line, {
             inputTokens: catalogInputTokens(line) ?? line.inputTokens,
             outputTokens: line.outputTokens,
             cacheReadTokens,
@@ -290,12 +318,17 @@ function aggregateLedger(
           })
         : undefined;
     const cost = providerReported ?? catalogCost?.total;
-    if (cost === undefined || !Number.isFinite(route.knownSpendUsd + cost)) {
+    const accrues = accruesToCap(line);
+    const running = accrues ? route.knownSpendUsd : route.notionalSpendUsd;
+    if (cost === undefined || !Number.isFinite(running + cost)) {
       route.unpricedGenerationCount += 1;
-    } else {
+    } else if (accrues) {
       route.knownSpendUsd += cost;
       route.pricedGenerationCount += 1;
       if (providerReported !== undefined) route.providerReportedGenerationCount += 1;
+    } else {
+      route.notionalSpendUsd += cost;
+      route.pricedGenerationCount += 1;
     }
   }
 
@@ -312,6 +345,7 @@ function aggregateLedger(
     0,
   );
   const knownSpendUsd = routes.reduce((sum, route) => sum + route.knownSpendUsd, 0);
+  const notionalSpendUsd = routes.reduce((sum, route) => sum + (route.notionalSpendUsd ?? 0), 0);
   const cacheReadTokens = routes.reduce((sum, route) => sum + route.cacheReadTokens, 0);
   const knownCacheReadSavingsUsd = routes.reduce(
     (sum, route) => sum + (route.cacheReadSavingsUsd ?? 0),
@@ -322,6 +356,7 @@ function aggregateLedger(
     malformedLineCount === 0 && routes.every((route) => route.cacheReadSavingsUsd !== null);
   return {
     knownSpendUsd,
+    notionalSpendUsd,
     generationCount,
     pricedGenerationCount,
     unpricedGenerationCount,
