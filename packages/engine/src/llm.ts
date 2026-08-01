@@ -18,6 +18,7 @@ import type {
   ChatStreamTimeouts,
 } from "./host-ports.js";
 import { codexGenerateText } from "./agent/codex-bridge.js";
+import { claudeCliGenerateText } from "./agent/claude-cli/bridge.js";
 import type { GenerateOpts, GenerateResult } from "./llm-types.js";
 import { cacheTokenDetails, usageFieldsFromResult } from "./llm-types.js";
 import type { ModelStreamActivity } from "./sport.js";
@@ -90,7 +91,10 @@ export class LLM {
   constructor(config: EngineConfig, ports: LLMHostPorts) {
     this.config = config;
     this.ports = ports;
-    this.aiSdkModel = config.llm.provider === "openai-codex" ? null : buildAiSdkModel(config);
+    this.aiSdkModel =
+      config.llm.provider === "openai-codex" || config.llm.provider === "claude-cli"
+        ? null
+        : buildAiSdkModel(config);
     this.priced = isPriced(config.llm.provider, config.llm.model);
     this.breakpointKey = cacheBreakpointKey(config.llm.provider, config.llm.model);
     this.chatStreamTimeouts = validateChatStreamTimeouts(
@@ -113,7 +117,9 @@ export class LLM {
     );
     const { signal: deadlineSignal, deadline } = withLLMDeadline(opts.signal, deadlineMs);
     const watchdog =
-      opts.caller === "chat" && this.config.llm.provider !== "openai-codex"
+      opts.caller === "chat" &&
+      this.config.llm.provider !== "openai-codex" &&
+      this.config.llm.provider !== "claude-cli"
         ? createChatStreamWatchdog(this.chatStreamTimeouts)
         : undefined;
     const signal =
@@ -178,6 +184,27 @@ export class LLM {
         notifyTextDelta(opts.onTextDelta, result.text);
       }
       return result;
+    }
+
+    if (this.config.llm.provider === "claude-cli") {
+      const claudeCli = this.config.llm.claudeCli;
+      if (claudeCli === undefined) {
+        throw new Error("claude-cli provider requires llm.claudeCli configuration");
+      }
+      return claudeCliGenerateText(
+        {
+          ...opts,
+          modelId: this.config.llm.model,
+          stepLimit: opts.maxSteps,
+        },
+        {
+          runtime: {
+            binaryPath: claudeCli.binaryPath,
+            configDir: claudeCli.configDir,
+            billing: claudeCli.billing,
+          },
+        },
+      );
     }
 
     if (!this.aiSdkModel) {
@@ -603,5 +630,7 @@ function buildAiSdkModel(config: EngineConfig): LanguageModel {
     }
     case "openai-codex":
       throw new Error("openai-codex is handled via the bridge, not AI SDK");
+    case "claude-cli":
+      throw new Error("claude-cli is handled via the bridge, not AI SDK");
   }
 }

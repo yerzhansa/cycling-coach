@@ -12,6 +12,7 @@ export type EngineLlmProvider =
   | "openai"
   | "google"
   | "openai-codex"
+  | "claude-cli"
   | "deepseek"
   | "qwen"
   | "minimax"
@@ -29,6 +30,13 @@ export interface EngineConfig {
     readonly flushModel?: string;
     readonly compactModel?: string;
     readonly baseUrl?: string;
+    readonly claudeCli?: {
+      readonly enabled: boolean;
+      readonly binaryPath?: string;
+      readonly configDir?: string;
+      readonly billing: "subscription" | "api-key";
+      readonly cursorStorePath: string;
+    };
   };
   readonly session: {
     readonly historyTokenBudgetRatio: number;

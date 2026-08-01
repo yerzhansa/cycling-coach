@@ -8,7 +8,7 @@ const config: EngineConfig = {
     provider: "openrouter",
     model: "synthetic/model",
     ["api" + "Key"]: "",
-  } as EngineConfig["llm"],
+  } as unknown as EngineConfig["llm"],
   session: {
     historyTokenBudgetRatio: 0.3,
     idleMinutes: 0,
