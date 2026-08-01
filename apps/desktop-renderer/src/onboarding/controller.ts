@@ -24,6 +24,7 @@ import {
   withChatGptLoginResult,
   withChatGptPending,
   withChatGptStatus,
+  withClaudeCliStatus,
   withCredentialStatuses,
   withError,
   withImportedRideFileCount,
@@ -62,6 +63,7 @@ export interface OnboardingActions {
   dismiss(): void;
   retrySavedKeys(): void;
   startChatGptLogin(): void;
+  recheckClaudeCli(): void;
   chooseImportFiles(): void;
   selectProvider(provider: string): void;
   selectModel(model: string): void;
@@ -190,7 +192,9 @@ export function createOnboardingController(
     if (provider === "openai-codex") {
       return state.chatGptState === "configured" && state.chatGptRuntimeReady;
     }
-    if (provider === "claude-cli") return false;
+    if (provider === "claude-cli") {
+      return state.claudeCliState === "ready" || state.claudeCliState === "ready-api-key";
+    }
     return status(provider).state === "configured" && status(provider).runtimeState === "active";
   };
 
@@ -201,6 +205,17 @@ export function createOnboardingController(
     setRideImportPresentation(false);
     publish();
     options.focusOpener();
+  };
+
+  const loadClaudeCliStatus = (expectedVisit: number): void => {
+    void options.bridge.claudeCliStatus().then(
+      (status) => {
+        if (disposed || visit !== expectedVisit || !presenting) return;
+        state = withClaudeCliStatus(state, status);
+        publish();
+      },
+      () => undefined,
+    );
   };
 
   const refreshStatuses = async (expectedVisit: number): Promise<boolean> => {
@@ -481,6 +496,7 @@ export function createOnboardingController(
       focusTitle();
       publish();
       opening = false;
+      loadClaudeCliStatus(openVisit);
     },
     close,
     dispose(): void {
@@ -590,6 +606,24 @@ export function createOnboardingController(
             reason: "exchange-failed",
           });
           focusTitle();
+          publish();
+        },
+      );
+    },
+    recheckClaudeCli(): void {
+      if (disposed || !presenting || state.busy) return;
+      const recheckVisit = visit;
+      state = withBusy(state, true);
+      publish();
+      void options.bridge.claudeCliRecheck().then(
+        (status) => {
+          if (disposed || visit !== recheckVisit || !presenting) return;
+          state = withBusy(withClaudeCliStatus(state, status), false);
+          publish();
+        },
+        () => {
+          if (disposed || visit !== recheckVisit || !presenting) return;
+          state = withBusy(state, false);
           publish();
         },
       );

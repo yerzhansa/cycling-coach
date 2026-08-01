@@ -172,6 +172,12 @@ async function pollCredentialStatuses(vault: CredentialVault): Promise<void> {
       activate: async () => ({ status: "refused", reason: "credential-required" }),
       deleteCredential: async () => ({ status: "refused", reason: "not-found" }),
     },
+    claudeCli: {
+      status: async () => ({ state: "absent-binary" }),
+      recheck: async () => ({ state: "absent-binary" }),
+      invalidateProbeCache: () => {},
+      activate: async () => ({ status: "refused", reason: "credential-required" }),
+    },
     getRuntimeConfig: async () => runtimeSnapshot("anthropic"),
     applyExistingLlmSelection: async () => false,
     isTrusted: () => true,

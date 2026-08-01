@@ -24,6 +24,8 @@ const exclusions = [
   "!**/vitest.workspace.{js,cjs,mjs,ts,cts,mts}",
   "!**/node_modules/vitest/**",
   "!**/node_modules/@vitest/**",
+  "!**/node_modules/@anthropic-ai/claude-agent-sdk-*",
+  "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**",
 ];
 
 afterEach(async () => {
@@ -458,6 +460,48 @@ describe("desktop package layout", () => {
     await expect(
       verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
     ).rejects.toThrow(/forbidden/u);
+  });
+
+  it.each([
+    "node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude",
+    "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude",
+    "node_modules/@enduragent/engine/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/x.js",
+    "node_modules/@anthropic-ai/claude-agent-sdk/vendor/claude-code/cli.js",
+    "node_modules/@anthropic-ai/claude-agent-sdk/cli.js",
+  ])("rejects the vendored agent CLI at ASAR path %s", async (path) => {
+    const fixture = await syntheticPackage();
+    await fixture.writeArchive(path);
+    await fixture.rebuild();
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+    ).rejects.toThrow("forbidden vendored agent CLI");
+  });
+
+  it("keeps the agent SDK itself packageable", async () => {
+    const fixture = await syntheticPackage();
+    await fixture.writeArchive("node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs");
+    await fixture.rebuild();
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects a vendored agent CLI staged as an external resource", async () => {
+    const fixture = await syntheticPackage();
+    await mkdir(
+      join(fixture.externalPackaged, "node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64"),
+      { recursive: true },
+    );
+    await writeFile(
+      join(
+        fixture.externalPackaged,
+        "node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude",
+      ),
+      "synthetic runtime\n",
+    );
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+    ).rejects.toThrow("forbidden vendored agent CLI");
   });
 
   it("rejects forbidden paths in external and unpacked resources", async () => {

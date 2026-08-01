@@ -193,6 +193,8 @@ export { createTelegramBot, notifyUpdate } from "./channels/telegram.js";
 export {
   CONFIG_DIR,
   CONFIG_FILE,
+  claudeCliDisabledByEnvironment,
+  claudeCliPatchFrom,
   loadConfig,
   loadConfigFromYaml,
   readConfigYaml,
@@ -213,6 +215,9 @@ export {
   resolveRuntimeConfig,
 } from "./runtime-config.js";
 export type {
+  ClaudeCliBilling,
+  ClaudeCliRuntimeConfigPatch,
+  ClaudeCliRuntimeSettings,
   EffectiveRuntimeConfig,
   LlmModelCatalogueEntry,
   LlmModelOption,
@@ -220,6 +225,21 @@ export type {
   RuntimeConfigPatch,
   RuntimeConfigResolverOptions,
 } from "./runtime-config.js";
+export { CLAUDE_CLI_DISABLED_MESSAGE } from "./runtime-config.js";
+export {
+  ClaudeCliConfigError,
+  ensureClaudeCliReady,
+  invalidateClaudeAccountProbeCache,
+} from "@enduragent/engine";
+export type {
+  ClaudeAccountClass,
+  ClaudeAccountProbeResult,
+  ClaudeCliConfigErrorKind,
+  ClaudeCliReadiness,
+  EnsureClaudeCliReadyDeps,
+  EnsureClaudeCliReadyInput,
+  ProbeClaudeAccountInput,
+} from "@enduragent/engine";
 export {
   createPlatformAthleteDataReader,
   createPlatformCalendarMutations,

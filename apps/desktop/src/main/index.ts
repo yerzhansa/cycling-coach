@@ -14,6 +14,7 @@ import {
   utilityProcess,
 } from "electron";
 import { createChatGptAuth, hasChatGptProfile } from "./chatgpt-auth.js";
+import { createClaudeCliStatus, readClaudeCliSettings } from "./claude-cli-status.js";
 import { installDesktopConnectionIpc } from "./connection-ipc.js";
 import { installDesktopExternalLinkIpc } from "./external-link-ipc.js";
 import { DESKTOP_LIFECYCLE_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
@@ -508,6 +509,30 @@ async function runDesktop(): Promise<void> {
       openExternal: (url) => shell.openExternal(url),
       signal: controller.signal,
     });
+    const claudeCli = createClaudeCliStatus({
+      settings: () => readClaudeCliSettings({ configPath: join(configDir, "config.yaml") }),
+      environment: () => process.env,
+      async applyRuntimeConfig(request) {
+        const binding = activeRuntimeBinding!;
+        const lifecycleState = daemonLifecycle?.snapshot();
+        if (lifecycleState?.status !== "ready") throw new TypeError();
+        await binding.credentials.applyExplicit(request);
+        const currentLifecycleState = daemonLifecycle?.snapshot();
+        if (
+          activeRuntimeBinding !== binding ||
+          currentLifecycleState?.status !== "ready" ||
+          currentLifecycleState.generation !== lifecycleState.generation
+        ) {
+          failModelCredentialRuntimeStates();
+          throw new TypeError();
+        }
+        markUnselectedModelCredentialsInactive(
+          credentialRuntimeState,
+          undefined,
+          markCredentialRuntimeChange,
+        );
+      },
+    });
     daemonLifecycle.start();
     await vault.reapplyConfigured();
     await installDesktopProtocol({
@@ -540,6 +565,7 @@ async function runDesktop(): Promise<void> {
             window: created,
             vault,
             chatGptAuth,
+            claudeCli,
             getRuntimeConfig: readActiveRuntimeConfig,
             applyExistingLlmSelection: async (selection: OnboardingLlmSelection) => {
               const binding = activeRuntimeBinding;

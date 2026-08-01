@@ -8,7 +8,8 @@ import {
   type OnboardingActions,
   type OnboardingSurfaceState,
 } from "../../onboarding/controller.js";
-import { CHATGPT_REFUSAL_COPY } from "./copy.js";
+import { claudeCliPresentation } from "../../onboarding/credential-presentation.js";
+import { CHATGPT_REFUSAL_COPY, CLAUDE_CLI_LANE_COPY, CLAUDE_CLI_RECHECK_LABEL } from "./copy.js";
 import { CredentialField } from "./CredentialField.js";
 import { LlmSelectionPanel } from "./LlmSelectionPanel.js";
 import styles from "./OnboardingWizard.module.css";
@@ -76,12 +77,60 @@ function ChatGptLane(props: {
   );
 }
 
+function ClaudeCliLane(props: {
+  readonly surface: OnboardingSurfaceState;
+  readonly actions: OnboardingActions | null;
+  readonly disabled: boolean;
+}): ReactElement {
+  const wizard = props.surface.wizard;
+  const presentation = claudeCliPresentation(wizard.claudeCliState);
+  const badgeState = presentation.runtimeState === "active" ? "configured" : "stored-inactive";
+
+  return (
+    <section className={styles.lane}>
+      <div className={`${styles.laneHeading} claude-cli-lane-heading`}>
+        <strong>Claude subscription</strong>
+        <span
+          className={`${styles.badge} claude-cli-state`}
+          data-state={presentation.runtimeState === "failed" ? "failed" : badgeState}
+        >
+          {presentation.badge}
+        </span>
+      </div>
+      <p className={styles.laneCopy}>{CLAUDE_CLI_LANE_COPY}</p>
+      {wizard.claudeCliIdentity === null ? null : (
+        <p className={styles.laneReady} data-claude-cli-identity="">
+          {wizard.claudeCliIdentity}
+        </p>
+      )}
+      {presentation.detail === null ? null : (
+        <p className={styles.laneRefused} aria-live="polite">
+          {presentation.detail}
+        </p>
+      )}
+      <button
+        type="button"
+        className={`${styles.primaryButton} ${styles.laneButton}`}
+        disabled={props.disabled}
+        onClick={() => {
+          props.actions?.recheckClaudeCli();
+        }}
+      >
+        {CLAUDE_CLI_RECHECK_LABEL}
+      </button>
+    </section>
+  );
+}
+
 export function CoachKeysStep(props: {
   readonly surface: OnboardingSurfaceState;
   readonly actions: OnboardingActions | null;
   readonly disabled: boolean;
 }): ReactElement {
   const surface = props.surface;
+  const claudeCliOffered =
+    surface.configuration?.providers.some((provider) => provider.provider === "claude-cli") ??
+    false;
 
   return (
     <>
@@ -95,6 +144,9 @@ export function CoachKeysStep(props: {
       </p>
       <LlmSelectionPanel surface={surface} actions={props.actions} />
       <ChatGptLane surface={surface} actions={props.actions} disabled={props.disabled} />
+      {claudeCliOffered ? (
+        <ClaudeCliLane surface={surface} actions={props.actions} disabled={props.disabled} />
+      ) : null}
       <div className={styles.divider}>or use an API key</div>
       <div className={styles.credentials}>
         {PRIMARY_MODEL_CREDENTIAL_SLOTS.map((provider) => (

@@ -1,4 +1,9 @@
-import { LLM_MODEL_CATALOGUE, LLM_PROVIDERS, type LlmProvider } from "@enduragent/core";
+import {
+  claudeCliDisabledByEnvironment,
+  LLM_MODEL_CATALOGUE,
+  LLM_PROVIDERS,
+  type LlmProvider,
+} from "@enduragent/core";
 import type { ConfigureRuntimeRpcParams } from "@enduragent/coach-contract";
 
 export interface OnboardingLlmModelOption {
@@ -149,6 +154,27 @@ export function parseChatGptLlmSelection(value: unknown): OnboardingLlmSelection
     readonly provider: "openai-codex";
     readonly endpoint: { readonly mode: "automatic" };
   };
+}
+
+export type ClaudeCliLlmSelection = OnboardingLlmSelection & {
+  readonly provider: "claude-cli";
+  readonly endpoint: { readonly mode: "automatic" };
+};
+
+export function parseClaudeCliLlmSelection(value: unknown): ClaudeCliLlmSelection {
+  const selection = parseOnboardingLlmSelection(value);
+  if (selection.provider !== "claude-cli" || selection.endpoint.mode !== "automatic") {
+    throw new TypeError();
+  }
+  return selection as ClaudeCliLlmSelection;
+}
+
+export function isClaudeCliLaneEligible(input: {
+  readonly environment: Readonly<Record<string, string | undefined>>;
+  readonly enabled?: boolean;
+}): boolean {
+  if (input.enabled === false) return false;
+  return !claudeCliDisabledByEnvironment(input.environment);
 }
 
 export function runtimeConfigurationForSelection(

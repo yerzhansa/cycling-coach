@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { RuntimeConfigSnapshot } from "@enduragent/coach-contract";
 import type { DesktopCoachClientProvider } from "../src/coach-client.js";
 import type { CredentialDeleteResult, DesktopCredentialId } from "../src/onboarding/bridge.js";
-import type { ChatGptStatus, CredentialSlotStatus } from "../src/onboarding/machine.js";
+import type {
+  ChatGptStatus,
+  ClaudeCliStatus,
+  CredentialSlotStatus,
+} from "../src/onboarding/machine.js";
 import {
   createCredentialSettingsController,
   type CredentialSettingsState,
@@ -74,6 +78,7 @@ function createSubject(input: {
   readonly chatGpt?: ChatGptStatus;
   readonly deletion?: CredentialDeleteResult;
   readonly openSetup?: () => void;
+  readonly claudeCli?: () => Promise<ClaudeCliStatus>;
 }) {
   let activeRuntime = input.runtime ?? runtime();
   let statuses =
@@ -114,6 +119,7 @@ function createSubject(input: {
     clients,
     loadStatuses: async () => statuses,
     loadChatGptStatus: async () => chatGpt,
+    ...(input.claudeCli === undefined ? {} : { loadClaudeCliStatus: input.claudeCli }),
     deleteCredential,
     openSetup: input.openSetup ?? vi.fn(),
     beginMutation: () => vi.fn(),
@@ -183,24 +189,78 @@ describe("credential settings controller", () => {
       }),
       statuses: [],
       chatGpt: { state: "absent", runtimeReady: false },
+      claudeCli: async () => ({ state: "ready", email: "athlete@example.test", plan: "Max" }),
     });
 
     await controller.activate();
 
     expect(content(controller.state()).providerStatuses).toEqual([
-      { provider: "claude-cli", label: "Claude subscription", kind: "Claude Code CLI" },
+      {
+        provider: "claude-cli",
+        label: "Claude subscription",
+        kind: "Claude Code CLI",
+        state: "ready",
+        identity: "Signed in as athlete@example.test - Claude Max subscription",
+      },
     ]);
-    expect(
-      content(controller.state()).entries.map((entry) => entry.credential),
-    ).not.toContain("claude-cli");
+    expect(content(controller.state()).entries.map((entry) => entry.credential)).not.toContain(
+      "claude-cli",
+    );
   });
 
-  it("emits no status rows for credential-backed providers", async () => {
-    const { controller } = createSubject({});
+  it("shows api-key billing on the status row instead of a subscription claim", async () => {
+    const { controller } = createSubject({
+      runtime: runtime({ provider: "claude-cli", model: "sonnet", credential_configured: false }),
+      statuses: [],
+      chatGpt: { state: "absent", runtimeReady: false },
+      claudeCli: async () => ({ state: "ready-api-key" }),
+    });
+
+    await controller.activate();
+
+    expect(content(controller.state()).providerStatuses[0]?.identity).toBe(
+      "Using Anthropic API key billing - usage is charged to your API account.",
+    );
+  });
+
+  it("explains a turned-off lane and a failed probe without inventing an identity", async () => {
+    const disabled = createSubject({
+      runtime: runtime({ provider: "claude-cli", model: "sonnet", credential_configured: false }),
+      statuses: [],
+      chatGpt: { state: "absent", runtimeReady: false },
+      claudeCli: async () => ({ state: "disabled" }),
+    });
+    await disabled.controller.activate();
+    expect(content(disabled.controller.state()).providerStatuses[0]).toEqual({
+      provider: "claude-cli",
+      label: "Claude subscription",
+      kind: "Claude Code CLI",
+      state: "disabled",
+      identity: "The Claude subscription lane is turned off on this Mac. Choose another provider.",
+    });
+
+    const unavailable = createSubject({
+      runtime: runtime({ provider: "claude-cli", model: "sonnet", credential_configured: false }),
+      statuses: [],
+      chatGpt: { state: "absent", runtimeReady: false },
+      claudeCli: async () => {
+        throw new Error("probe unavailable");
+      },
+    });
+    await unavailable.controller.activate();
+    const row = content(unavailable.controller.state()).providerStatuses[0];
+    expect(row?.state).toBeNull();
+    expect(row?.identity).toBe("Checking the Claude Code CLI sign-in on this Mac…");
+  });
+
+  it("emits no status rows and never probes for credential-backed providers", async () => {
+    const claudeCli = vi.fn(async () => ({ state: "ready" }) as ClaudeCliStatus);
+    const { controller } = createSubject({ claudeCli });
 
     await controller.activate();
 
     expect(content(controller.state()).providerStatuses).toEqual([]);
+    expect(claudeCli).not.toHaveBeenCalled();
   });
 
   it("confirmation-gates active deletion, announces the cutover, and exposes Setup recovery", async () => {

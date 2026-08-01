@@ -67,6 +67,17 @@ export const CHATGPT_LOGIN_REFUSAL_REASONS = [
 
 export type ChatGptLoginRefusalReason = (typeof CHATGPT_LOGIN_REFUSAL_REASONS)[number];
 
+export const CLAUDE_CLI_STATES = [
+  "absent-binary",
+  "not-logged-in",
+  "api-key-token",
+  "ready",
+  "ready-api-key",
+  "disabled",
+] as const;
+
+export type ClaudeCliState = (typeof CLAUDE_CLI_STATES)[number];
+
 export const SUPPORTED_IMPORT_EXTENSIONS = [".fit", ".tcx", ".gpx"] as const;
 
 export const INTERVALS_GUIDANCE =

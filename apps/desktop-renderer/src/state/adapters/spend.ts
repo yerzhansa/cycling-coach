@@ -1,4 +1,4 @@
-import type { SpendSummary } from "@enduragent/coach-contract";
+import type { SpendRouteSummary, SpendSummary } from "@enduragent/coach-contract";
 import type { SpendMeterView } from "../../spend-meter/controller.js";
 import type { SpendSettingsPort, SpendSurfaceState } from "../settings-slice.js";
 
@@ -13,6 +13,21 @@ export function currency(value: number, detail = false): string {
 function capWarningCopy(summary: SpendSummary): string | null {
   if (summary.capStatus !== "reached") return null;
   return `${SPEND_CAP_REACHED_PREFIX}${currency(summary.dailyCapUsd)} spend cap. You can keep chatting; this is a warning, not a block.`;
+}
+
+export function notionalSpendCopy(summary: SpendSummary): string | null {
+  const notional = summary.notionalSpendUsd ?? 0;
+  if (notional <= 0) return null;
+  return `Subscription usage would have cost ${currency(notional, true)} on the API. No money moved, and it does not count toward your cap.`;
+}
+
+export function routeSpendCopy(route: SpendRouteSummary): string {
+  const notional = route.notionalSpendUsd ?? 0;
+  const parts: string[] = [];
+  if (notional === 0 || route.knownSpendUsd > 0) parts.push(currency(route.knownSpendUsd, true));
+  if (notional > 0) parts.push(`would have cost ${currency(notional, true)} on the API`);
+  parts.push(`${route.pricedGenerationCount}/${route.generationCount} generations priced`);
+  return parts.join(" · ");
 }
 
 export interface SpendSettingsAdapter {
