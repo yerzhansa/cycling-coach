@@ -13,9 +13,16 @@ import { z } from "zod";
 import type { GenerateOpts, GenerateResult } from "../../llm-types.js";
 import type { ModelStreamActivity } from "../../sport.js";
 import type { ClaudeCliBilling, ClaudeCliRuntime } from "./env.js";
-import { binaryMissingError, normalizeClaudeCliError } from "./errors.js";
+import { ClaudeCliConfigError, binaryMissingError, normalizeClaudeCliError } from "./errors.js";
 import { resolveClaudeBinary } from "./executable.js";
 import { buildQueryOptions, startGeneration, type SanitizedQueryOptions } from "./session.js";
+import {
+  CLAUDE_CLI_CHAT_LANE,
+  claudeCliSessionKey,
+  hashHistory,
+  type ClaudeCliSessionPool,
+  type SessionKey,
+} from "./session-pool.js";
 
 export const CLAUDE_CLI_MCP_SERVER_NAME = "coach";
 export const CLAUDE_CLI_TOOL_PREFIX = `mcp__${CLAUDE_CLI_MCP_SERVER_NAME}__`;
@@ -48,6 +55,7 @@ export interface ClaudeCliBridgePorts {
   readonly query?: typeof sdkQuery;
   readonly resolveBinary?: (explicitPath?: string) => Promise<string | null>;
   readonly stallMs?: number;
+  readonly pool?: ClaudeCliSessionPool;
 }
 
 export type ClaudeCliGenerateOpts = GenerateOpts & {
@@ -177,10 +185,15 @@ function messageText(message: ModelMessage): string {
   return parts.join("\n");
 }
 
-export function renderPrompt(opts: Pick<GenerateOpts, "prompt" | "messages">): string {
-  if (opts.prompt !== undefined) return opts.prompt;
+export interface SplitPrompt {
+  history: ModelMessage[];
+  live: string;
+}
+
+export function splitPrompt(opts: Pick<GenerateOpts, "prompt" | "messages">): SplitPrompt {
+  if (opts.prompt !== undefined) return { history: [], live: opts.prompt };
   const messages = opts.messages ?? [];
-  if (messages.length === 0) return "";
+  if (messages.length === 0) return { history: [], live: "" };
   let liveIndex = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].role === "user") {
@@ -188,8 +201,12 @@ export function renderPrompt(opts: Pick<GenerateOpts, "prompt" | "messages">): s
       break;
     }
   }
-  const history = liveIndex < 0 ? messages : messages.slice(0, liveIndex);
-  const live = liveIndex < 0 ? "" : messageText(messages[liveIndex]);
+  if (liveIndex < 0) return { history: messages.slice(), live: "" };
+  return { history: messages.slice(0, liveIndex), live: messageText(messages[liveIndex]) };
+}
+
+export function renderPrompt(opts: Pick<GenerateOpts, "prompt" | "messages">): string {
+  const { history, live } = splitPrompt(opts);
   if (history.length === 0) return live;
   const transcript = history
     .map((message) => `${message.role}: ${messageText(message)}`)
@@ -312,6 +329,15 @@ interface FrameCollector {
   toolCalls: GenerateResult["toolCalls"];
   retryAfterMs?: number;
   streamed: boolean;
+  sessionId?: string;
+  compactBoundary: boolean;
+}
+
+interface FrameHooks {
+  onTextDelta?: (delta: string) => void;
+  onStreamActivity?: (activity: ModelStreamActivity) => void;
+  onSessionId?: (sessionId: string) => void;
+  onCompactBoundary?: () => void;
 }
 
 function retryAfterFromRateLimit(frame: SDKMessage): number | undefined {
@@ -324,12 +350,26 @@ function retryAfterFromRateLimit(frame: SDKMessage): number | undefined {
   return remainingMs > 0 ? remainingMs : undefined;
 }
 
-function collectFrame(
-  frame: SDKMessage,
-  collector: FrameCollector,
-  onTextDelta: ((delta: string) => void) | undefined,
-  onStreamActivity: ((activity: ModelStreamActivity) => void) | undefined,
-): void {
+function collectFrame(frame: SDKMessage, collector: FrameCollector, hooks: FrameHooks): void {
+  const onTextDelta = hooks.onTextDelta;
+  const onStreamActivity = hooks.onStreamActivity;
+
+  const sessionId = (frame as { session_id?: unknown }).session_id;
+  if (typeof sessionId === "string" && sessionId !== "" && collector.sessionId !== sessionId) {
+    collector.sessionId = sessionId;
+    try {
+      hooks.onSessionId?.(sessionId);
+    } catch {}
+  }
+
+  if (frame.type === "system" && (frame as { subtype?: unknown }).subtype === "compact_boundary") {
+    collector.compactBoundary = true;
+    try {
+      hooks.onCompactBoundary?.();
+    } catch {}
+    return;
+  }
+
   if (frame.type === "stream_event") {
     const event = (frame as unknown as { event?: Record<string, unknown> }).event;
     const delta = event?.delta as { type?: string; text?: string } | undefined;
@@ -458,12 +498,22 @@ async function resolveRuntime(ports: ClaudeCliBridgePorts): Promise<ClaudeCliRun
   };
 }
 
+export type GenerationMode = "resume" | "rebuild" | "stateless";
+
+export interface GenerationPlan {
+  mode: GenerationMode;
+  prompt: string;
+  resume?: string;
+  sessionId?: string;
+}
+
 export function buildGenerationOptions(
   opts: ClaudeCliGenerateOpts,
   runtime: ClaudeCliRuntime,
   baseEnv: NodeJS.ProcessEnv,
   surface: CoachToolSurface | null,
   abortController: AbortController,
+  plan: GenerationPlan,
 ): SanitizedQueryOptions {
   const toolNames = surface === null ? [] : surface.toolNames;
   return buildQueryOptions({
@@ -478,13 +528,23 @@ export function buildGenerationOptions(
     maxTurns: opts.stepLimit ?? DEFAULT_STEP_LIMIT,
     includePartialMessages: true,
     abortController,
+    resume: plan.resume,
+    sessionId: plan.sessionId,
+    persistSession: plan.mode === "stateless" ? false : undefined,
   });
+}
+
+interface GenerationHooks {
+  onSessionId?: (sessionId: string) => void;
+  onCompactBoundary?: () => void;
 }
 
 async function runGeneration(
   opts: ClaudeCliGenerateOpts,
   ports: ClaudeCliBridgePorts,
   runtime: ClaudeCliRuntime,
+  plan: GenerationPlan,
+  hooks: GenerationHooks = {},
 ): Promise<GenerateResult> {
   const baseEnv = ports.baseEnv ?? process.env;
   const stallMs = ports.stallMs ?? INTER_FRAME_STALL_MS;
@@ -492,7 +552,9 @@ async function runGeneration(
     ? [{ role: "user", content: opts.prompt }]
     : (opts.messages ?? []);
   const surface =
-    opts.tools === undefined || Object.keys(opts.tools).length === 0
+    plan.mode === "stateless" ||
+    opts.tools === undefined ||
+    Object.keys(opts.tools).length === 0
       ? null
       : buildCoachToolSurface(opts.tools, {
           messages: initialMessages,
@@ -501,19 +563,26 @@ async function runGeneration(
         });
 
   const { controller, release } = linkAbort(opts.signal);
-  const options = buildGenerationOptions(opts, runtime, baseEnv, surface, controller);
-  const generation = startGeneration(
-    { prompt: renderPrompt(opts), options },
-    { query: ports.query },
-  );
+  const options = buildGenerationOptions(opts, runtime, baseEnv, surface, controller, plan);
+  const generation = startGeneration({ prompt: plan.prompt, options }, { query: ports.query });
 
-  const collector: FrameCollector = { text: "", toolCalls: [], streamed: false };
+  const collector: FrameCollector = {
+    text: "",
+    toolCalls: [],
+    streamed: false,
+    compactBoundary: false,
+  };
   try {
     const iterator = generation.frames()[Symbol.asyncIterator]();
     for (;;) {
       const step = await nextFrame(iterator, stallMs);
       if (step.done === true) break;
-      collectFrame(step.value, collector, opts.onTextDelta, opts.onStreamActivity);
+      collectFrame(step.value, collector, {
+        onTextDelta: opts.onTextDelta,
+        onStreamActivity: opts.onStreamActivity,
+        onSessionId: hooks.onSessionId,
+        onCompactBoundary: hooks.onCompactBoundary,
+      });
     }
   } catch (err) {
     if (generation.lastResult() === null) {
@@ -563,15 +632,108 @@ function isSubprocessDeath(err: unknown): boolean {
   return err instanceof Error && err.name === "NetworkError";
 }
 
+const RESUME_FAILURE_PATTERN =
+  /no conversation found|session .{0,40}not found|unknown session|session is (busy|locked|in use)|cannot resume|could not resume|failed to resume|unable to resume|resume failed/i;
+
+function isResumeFailure(err: unknown): boolean {
+  if (isSubprocessDeath(err)) return true;
+  if (!(err instanceof Error)) return false;
+  if (err.name === "AbortError") return false;
+  return RESUME_FAILURE_PATTERN.test(err.message);
+}
+
+export function isStatelessCaller(caller: GenerateOpts["caller"]): boolean {
+  return caller === "flush" || caller === "compact";
+}
+
+function assistantReply(text: string): ModelMessage {
+  return { role: "assistant", content: text };
+}
+
+function postTurnHistory(split: SplitPrompt, text: string): ModelMessage[] {
+  const out: ModelMessage[] = [...split.history];
+  if (split.live !== "") out.push({ role: "user", content: split.live });
+  out.push(assistantReply(text));
+  return out;
+}
+
 export async function claudeCliGenerateText(
   opts: ClaudeCliGenerateOpts,
   ports: ClaudeCliBridgePorts,
 ): Promise<GenerateResult> {
   const runtime = await resolveRuntime(ports);
+  const split = splitPrompt(opts);
+  const pool = isStatelessCaller(opts.caller) ? undefined : ports.pool;
+
+  if (pool === undefined) {
+    const plan: GenerationPlan = isStatelessCaller(opts.caller)
+      ? { mode: "stateless", prompt: renderPrompt(opts) }
+      : { mode: "rebuild", prompt: renderPrompt(opts) };
+    try {
+      return await runGeneration(opts, ports, runtime, plan);
+    } catch (err) {
+      if (!isSubprocessDeath(err) || opts.signal?.aborted === true) throw err;
+      return await runGeneration(opts, ports, runtime, plan);
+    }
+  }
+
+  const key: SessionKey = claudeCliSessionKey(
+    opts.cacheKey ?? "",
+    CLAUDE_CLI_CHAT_LANE,
+    opts.modelId,
+  );
+  const historyHash = hashHistory(split.history);
+  const acquired = await pool.acquire(key, historyHash);
+
+  let observed: string | undefined;
+  const hooks: GenerationHooks = {
+    onSessionId: (sessionId) => {
+      observed = sessionId;
+      pool.observeSessionId(key, sessionId);
+    },
+    onCompactBoundary: () => pool.markDirty(key),
+  };
+
+  const settle = async (result: GenerateResult): Promise<GenerateResult> => {
+    const sessionId = observed ?? "";
+    await pool.commit(key, {
+      sessionId,
+      historyHash: hashHistory(postTurnHistory(split, result.text)),
+    });
+    return result;
+  };
+
+  let replayedAfterDeath = false;
+
+  if (acquired.mode === "resume" && acquired.cursor !== null) {
+    const plan: GenerationPlan = {
+      mode: "resume",
+      prompt: split.live,
+      resume: acquired.cursor.sessionId,
+    };
+    try {
+      return await settle(await runGeneration(opts, ports, runtime, plan, hooks));
+    } catch (err) {
+      const rebuildable = isResumeFailure(err) && opts.signal?.aborted !== true;
+      if (rebuildable || err instanceof ClaudeCliConfigError) pool.invalidate(key);
+      if (!rebuildable) throw err;
+      replayedAfterDeath = isSubprocessDeath(err);
+      observed = undefined;
+    }
+  }
+
+  const rebuild = (): GenerationPlan => ({
+    mode: "rebuild",
+    prompt: renderPrompt(opts),
+    sessionId: pool.mintSessionId(),
+  });
+
   try {
-    return await runGeneration(opts, ports, runtime);
+    return await settle(await runGeneration(opts, ports, runtime, rebuild(), hooks));
   } catch (err) {
-    if (!isSubprocessDeath(err) || opts.signal?.aborted === true) throw err;
-    return await runGeneration(opts, ports, runtime);
+    pool.invalidate(key);
+    if (replayedAfterDeath || !isSubprocessDeath(err) || opts.signal?.aborted === true) throw err;
+    observed = undefined;
+    return await settle(await runGeneration(opts, ports, runtime, rebuild(), hooks));
   }
 }

@@ -19,6 +19,10 @@ import type {
 } from "./host-ports.js";
 import { codexGenerateText } from "./agent/codex-bridge.js";
 import { claudeCliGenerateText } from "./agent/claude-cli/bridge.js";
+import {
+  createClaudeCliSessionPool,
+  type ClaudeCliSessionPool,
+} from "./agent/claude-cli/session-pool.js";
 import type { GenerateOpts, GenerateResult } from "./llm-types.js";
 import { cacheTokenDetails, usageFieldsFromResult } from "./llm-types.js";
 import type { ModelStreamActivity } from "./sport.js";
@@ -87,6 +91,7 @@ export class LLM {
   // only on provider + model, so resolve it once rather than per dispatch().
   private breakpointKey: "anthropic" | "openrouter" | undefined;
   private chatStreamTimeouts: ChatStreamTimeouts;
+  private claudeCliPool: ClaudeCliSessionPool | null = null;
 
   constructor(config: EngineConfig, ports: LLMHostPorts) {
     this.config = config;
@@ -191,6 +196,12 @@ export class LLM {
       if (claudeCli === undefined) {
         throw new Error("claude-cli provider requires llm.claudeCli configuration");
       }
+      this.claudeCliPool ??= createClaudeCliSessionPool({
+        config: {
+          enabled: claudeCli.enabled,
+          cursorStorePath: claudeCli.cursorStorePath,
+        },
+      });
       return claudeCliGenerateText(
         {
           ...opts,
@@ -203,6 +214,7 @@ export class LLM {
             configDir: claudeCli.configDir,
             billing: claudeCli.billing,
           },
+          pool: this.claudeCliPool,
         },
       );
     }
