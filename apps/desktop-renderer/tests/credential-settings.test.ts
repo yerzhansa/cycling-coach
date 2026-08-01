@@ -174,6 +174,35 @@ describe("credential settings controller", () => {
     expect(serialized).not.toContain("hash");
   });
 
+  it("lists a keyless provider as a non-credential status row and never as a credential", async () => {
+    const { controller } = createSubject({
+      runtime: runtime({
+        provider: "claude-cli",
+        model: "sonnet",
+        credential_configured: false,
+      }),
+      statuses: [],
+      chatGpt: { state: "absent", runtimeReady: false },
+    });
+
+    await controller.activate();
+
+    expect(content(controller.state()).providerStatuses).toEqual([
+      { provider: "claude-cli", label: "Claude subscription", kind: "Claude Code CLI" },
+    ]);
+    expect(
+      content(controller.state()).entries.map((entry) => entry.credential),
+    ).not.toContain("claude-cli");
+  });
+
+  it("emits no status rows for credential-backed providers", async () => {
+    const { controller } = createSubject({});
+
+    await controller.activate();
+
+    expect(content(controller.state()).providerStatuses).toEqual([]);
+  });
+
   it("confirmation-gates active deletion, announces the cutover, and exposes Setup recovery", async () => {
     const openSetup = vi.fn();
     const { controller, subject, deleteCredential } = createSubject({ openSetup });

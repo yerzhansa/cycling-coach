@@ -43,15 +43,26 @@ export interface EngineHostAdapterOverrides {
 
 export function engineConfigFromConfig(config: Config): EngineConfig {
   const compactModel = config.llm.compactModel ?? config.llm.model;
+  const { claudeCli, ...llm } = config.llm;
   return Object.freeze({
     dataSource: config.dataSource,
-    llm: Object.freeze({ ...config.llm }),
+    llm: Object.freeze(
+      claudeCli === undefined
+        ? llm
+        : {
+            ...llm,
+            claudeCli: Object.freeze({
+              ...claudeCli,
+              cursorStorePath: join(config.dataDir, "claude-cli-sessions.json"),
+            }),
+          },
+    ),
     session: Object.freeze({ ...config.session }),
     contextWindowTokens: config.contextWindowTokens,
     compactContextWindowTokens:
       compactModel === config.llm.model
         ? config.contextWindowTokens
-        : contextWindowForModel(compactModel),
+        : contextWindowForModel(compactModel, config.llm.provider),
   });
 }
 

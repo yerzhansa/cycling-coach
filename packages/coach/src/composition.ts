@@ -200,6 +200,7 @@ const LLM_CREDENTIAL_ENVIRONMENT_KEYS = {
   openai: "OPENAI_API_KEY",
   google: "GOOGLE_GENERATIVE_AI_API_KEY",
   "openai-codex": undefined,
+  "claude-cli": undefined,
   deepseek: "DEEPSEEK_API_KEY",
   qwen: "ALIBABA_API_KEY",
   minimax: "MINIMAX_API_KEY",
@@ -221,7 +222,9 @@ function llmCredentialManagedByEnvironment(
 ): boolean {
   return (
     nonemptyEnvironmentValue(environment, LLM_CREDENTIAL_ENVIRONMENT_KEYS[provider]) ||
-    (provider !== "openai-codex" && nonemptyEnvironmentValue(environment, "LLM_API_KEY"))
+    (provider !== "openai-codex" &&
+      provider !== "claude-cli" &&
+      nonemptyEnvironmentValue(environment, "LLM_API_KEY"))
   );
 }
 

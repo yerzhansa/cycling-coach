@@ -477,6 +477,7 @@ export const LlmProviderSchema = z.enum([
   "openai",
   "google",
   "openai-codex",
+  "claude-cli",
   "deepseek",
   "qwen",
   "minimax",
@@ -488,6 +489,15 @@ export type LlmProvider = z.infer<typeof LlmProviderSchema>;
 
 const RuntimeOptionalStringSchema = z.string().min(1).max(512).nullable();
 
+const RuntimeClaudeCliSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    binary_path: z.string().min(1).max(4_096).nullable().optional(),
+    config_dir: z.string().min(1).max(4_096).nullable().optional(),
+    billing: z.enum(["subscription", "api-key"]).optional(),
+  })
+  .strict();
+
 const RuntimeLlmSchema = z
   .object({
     provider: LlmProviderSchema.optional(),
@@ -497,10 +507,14 @@ const RuntimeLlmSchema = z
     base_url: z.string().min(1).max(4_096).nullable().optional(),
     flush_model: RuntimeOptionalStringSchema.optional(),
     compact_model: RuntimeOptionalStringSchema.optional(),
+    claude_cli: RuntimeClaudeCliSchema.optional(),
   })
   .strict()
   .superRefine((value, context) => {
-    if (value.provider === "openai-codex" && value.api_key !== undefined) {
+    if (
+      (value.provider === "openai-codex" || value.provider === "claude-cli") &&
+      value.api_key !== undefined
+    ) {
       context.addIssue({ code: "custom", path: ["api_key"], message: "api_key must be absent" });
     }
     if (value.clear_credential === true) {

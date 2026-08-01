@@ -106,7 +106,10 @@ type DesktopCredentialSlot =
 
 type DesktopCredentialId = DesktopCredentialSlot | "openai-codex";
 
-type LlmProvider = Exclude<DesktopCredentialSlot, "intervals-icu"> | "openai-codex";
+type LlmProvider =
+  | Exclude<DesktopCredentialSlot, "intervals-icu">
+  | "openai-codex"
+  | "claude-cli";
 
 interface OnboardingLlmModelOption {
   readonly value: string;

@@ -7,6 +7,8 @@ import { resolveSecretRef } from "./secrets/resolve.js";
 import {
   resolveLlmProvider,
   resolveRuntimeConfig,
+  type ClaudeCliBilling,
+  type ClaudeCliRuntimeConfigPatch,
   type EffectiveRuntimeConfig,
 } from "./runtime-config.js";
 
@@ -147,6 +149,35 @@ export function sessionConfigEnvironmentOwnership(
   return sessionEnvironmentOverrides(environment).ownership;
 }
 
+function isYamlRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function claudeCliDisabledByEnvironment(environment: RuntimeEnvironment): boolean {
+  const value = envFrom(environment, "ENDURAGENT_CLAUDE_CLI_DISABLED")?.trim().toLowerCase();
+  return value === "1" || value === "true";
+}
+
+export function claudeCliPatchFrom(
+  yaml: unknown,
+  environment: RuntimeEnvironment,
+): ClaudeCliRuntimeConfigPatch {
+  const block = isYamlRecord(yaml) ? yaml : {};
+  const enabled = claudeCliDisabledByEnvironment(environment)
+    ? false
+    : (block.enabled as boolean | undefined);
+  const binaryPath =
+    envFrom(environment, "CLAUDE_CLI_PATH") ?? (block.binary_path as string | undefined);
+  const configDir = block.config_dir as string | undefined;
+  const billing = block.billing as ClaudeCliBilling | undefined;
+  return {
+    ...(enabled === undefined ? {} : { enabled }),
+    ...(binaryPath === undefined ? {} : { binaryPath }),
+    ...(configDir === undefined ? {} : { configDir }),
+    ...(billing === undefined ? {} : { billing }),
+  };
+}
+
 // ============================================================================
 // SECRET REF HANDLING
 // ============================================================================
@@ -204,6 +235,7 @@ export function loadConfigFromYaml(
     openai: "OPENAI_API_KEY",
     google: "GOOGLE_GENERATIVE_AI_API_KEY",
     "openai-codex": undefined,
+    "claude-cli": undefined,
     deepseek: "DEEPSEEK_API_KEY",
     qwen: "ALIBABA_API_KEY",
     minimax: "MINIMAX_API_KEY",
@@ -237,16 +269,16 @@ export function loadConfigFromYaml(
     return "";
   };
 
-  const apiKey =
-    provider === "openai-codex"
-      ? ""
-      : resolveWithPrecedence(
-          [envKeyForProvider[provider], "LLM_API_KEY"].filter(
-            (key): key is string => key !== undefined,
-          ),
-          llmApiKeyRaw,
-          "llm.api_key",
-        );
+  const keyless = provider === "openai-codex" || provider === "claude-cli";
+  const apiKey = keyless
+    ? ""
+    : resolveWithPrecedence(
+        [envKeyForProvider[provider], "LLM_API_KEY"].filter(
+          (key): key is string => key !== undefined,
+        ),
+        llmApiKeyRaw,
+        "llm.api_key",
+      );
   const intervalsApiKey = resolveWithPrecedence(
     "INTERVALS_API_KEY",
     intervalsApiKeyRaw,
@@ -264,10 +296,13 @@ export function loadConfigFromYaml(
       llm: {
         provider,
         model: env("LLM_MODEL") ?? (llmYaml.model as string | undefined),
-        ...(provider === "openai-codex" ? {} : { apiKey }),
+        ...(keyless ? {} : { apiKey }),
         flushModel: env("LLM_FLUSH_MODEL") ?? (llmYaml.flush_model as string | undefined),
         compactModel: env("LLM_COMPACT_MODEL") ?? (llmYaml.compact_model as string | undefined),
         baseUrl: env("LLM_BASE_URL") ?? (llmYaml.base_url as string | undefined),
+        ...(provider === "claude-cli"
+          ? { claudeCli: claudeCliPatchFrom(llmYaml.claude_cli, process.env) }
+          : {}),
       },
       intervals: {
         apiKey: intervalsApiKey,

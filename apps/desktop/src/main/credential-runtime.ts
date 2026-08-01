@@ -70,6 +70,7 @@ export function readSelectedLlmProvider(
   if (provider === CHATGPT_PROFILE_NAME) {
     return evidence.chatGptProfilePresent ? provider : undefined;
   }
+  if (provider === "claude-cli") return provider;
   return evidence.storedCredentialSlots.includes(provider) ? provider : undefined;
 }
 
