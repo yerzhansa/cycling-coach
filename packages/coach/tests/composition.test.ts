@@ -2958,6 +2958,58 @@ describe("local coach composition", () => {
     await lifecycle.close();
   });
 
+  it("forwards a claude-cli runtime block into the resolved and persisted configuration", async () => {
+    const home = await freshHome();
+    const initial = config(home);
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      undefined,
+      initial,
+    );
+
+    await lifecycle.operations.configureRuntime({
+      llm: {
+        provider: "claude-cli",
+        model: "sonnet",
+        claude_cli: {
+          enabled: true,
+          binary_path: "/synthetic/bin/claude",
+          billing: "api-key",
+        },
+      },
+    });
+
+    const persisted = parseYaml(
+      await readFile(join(home.configDir, "config.yaml"), "utf8"),
+    ) as Record<string, Record<string, unknown>>;
+    expect(persisted.llm!.claude_cli).toEqual({
+      enabled: true,
+      binary_path: "/synthetic/bin/claude",
+      billing: "api-key",
+    });
+    expect(loadConfig(home.configDir).llm).toMatchObject({
+      provider: "claude-cli",
+      model: "sonnet",
+      claudeCli: {
+        enabled: true,
+        binaryPath: "/synthetic/bin/claude",
+        billing: "api-key",
+      },
+    });
+    await lifecycle.close();
+  });
+
   it("starts and snapshots the Desktop seeded blank athlete ID", async () => {
     const home = await freshHome();
     const initial = config(home, { apiKey: "", athleteId: "" });

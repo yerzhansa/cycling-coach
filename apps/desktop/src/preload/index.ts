@@ -21,6 +21,8 @@ const DESKTOP_LLM_CONFIGURATION_CHANNEL = "enduragent:onboarding:llm-configurati
 const DESKTOP_LLM_SELECTION_APPLY_CHANNEL = "enduragent:onboarding:llm-selection-apply";
 const DESKTOP_CHATGPT_STATUS_CHANNEL = "enduragent:onboarding:chatgpt-status";
 const DESKTOP_CHATGPT_LOGIN_CHANNEL = "enduragent:onboarding:chatgpt-login";
+const DESKTOP_CLAUDE_CLI_STATUS_CHANNEL = "enduragent:onboarding:claude-cli-status";
+const DESKTOP_CLAUDE_CLI_RECHECK_CHANNEL = "enduragent:onboarding:claude-cli-recheck";
 const DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL = "enduragent:onboarding:choose-import-files";
 
 const SLOTS = new Set([
@@ -83,6 +85,14 @@ const CHATGPT_REASONS = new Set([
   "exchange-failed",
   "storage-failed",
   "runtime-unavailable",
+]);
+const CLAUDE_CLI_STATES = new Set([
+  "ready",
+  "ready-api-key",
+  "absent-binary",
+  "not-logged-in",
+  "api-key-token",
+  "disabled",
 ]);
 const IMPORT_EXTENSIONS = new Set([".fit", ".tcx", ".gpx"]);
 const RELEASES_URL = "https://github.com/yerzhansa/enduragent/releases";
@@ -747,6 +757,28 @@ function parseChatGptLogin(value: unknown): unknown {
   throw new TypeError();
 }
 
+function parseClaudeCliStatus(value: unknown): unknown {
+  if (!record(value) || typeof value.state !== "string" || !CLAUDE_CLI_STATES.has(value.state)) {
+    throw new TypeError();
+  }
+  const keys = ["state"];
+  for (const field of ["email", "plan", "version"]) {
+    if (Object.hasOwn(value, field)) keys.push(field);
+  }
+  if (
+    !exactKeys(value, keys) ||
+    keys.some((field) => field !== "state" && !safeString(value[field], 512))
+  ) {
+    throw new TypeError();
+  }
+  return {
+    state: value.state,
+    ...(Object.hasOwn(value, "email") ? { email: value.email } : {}),
+    ...(Object.hasOwn(value, "plan") ? { plan: value.plan } : {}),
+    ...(Object.hasOwn(value, "version") ? { version: value.version } : {}),
+  };
+}
+
 function parsePaths(value: unknown): readonly string[] {
   if (!Array.isArray(value) || value.length > 256) {
     throw new TypeError();
@@ -878,6 +910,10 @@ contextBridge.exposeInMainWorld(
       const selection = parseChatGptSelection(input);
       return parseChatGptLogin(await ipcRenderer.invoke(DESKTOP_CHATGPT_LOGIN_CHANNEL, selection));
     },
+    claudeCliStatus: async () =>
+      parseClaudeCliStatus(await ipcRenderer.invoke(DESKTOP_CLAUDE_CLI_STATUS_CHANNEL)),
+    claudeCliRecheck: async () =>
+      parseClaudeCliStatus(await ipcRenderer.invoke(DESKTOP_CLAUDE_CLI_RECHECK_CHANNEL)),
     chooseImportFiles: async () =>
       parsePaths(await ipcRenderer.invoke(DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL)),
     releaseNotes: async () =>

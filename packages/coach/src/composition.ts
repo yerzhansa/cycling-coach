@@ -30,6 +30,7 @@ import {
   resolveRuntimeConfig,
   resolveSecretRef,
   sessionConfigEnvironmentOwnership,
+  type ClaudeCliRuntimeConfigPatch,
   type Config,
   type ConversationStorePort,
   type ReferenceRuntime,
@@ -162,6 +163,17 @@ function copyConfig(config: Config): Config {
   };
 }
 
+function claudeCliPatch(
+  block: NonNullable<NonNullable<ConfigureRuntimeRpcParams["llm"]>["claude_cli"]>,
+): ClaudeCliRuntimeConfigPatch {
+  return {
+    ...(block.enabled === undefined ? {} : { enabled: block.enabled }),
+    ...(block.binary_path === undefined ? {} : { binaryPath: block.binary_path }),
+    ...(block.config_dir === undefined ? {} : { configDir: block.config_dir }),
+    ...(block.billing === undefined ? {} : { billing: block.billing }),
+  };
+}
+
 function runtimePatch(request: ConfigureRuntimeRpcParams, config: Config): RuntimeConfigPatch {
   return {
     ...(request.llm === undefined
@@ -177,6 +189,9 @@ function runtimePatch(request: ConfigureRuntimeRpcParams, config: Config): Runti
             baseUrl: request.llm.base_url,
             flushModel: request.llm.flush_model,
             compactModel: request.llm.compact_model,
+            ...(request.llm.claude_cli === undefined
+              ? {}
+              : { claudeCli: claudeCliPatch(request.llm.claude_cli) }),
           },
         }),
     ...(request.intervals === undefined
@@ -305,6 +320,14 @@ function persistRuntimeConfig(
     assignOptionalField(llm, "base_url", candidate.llm.baseUrl);
     assignOptionalField(llm, "flush_model", candidate.llm.flushModel);
     assignOptionalField(llm, "compact_model", candidate.llm.compactModel);
+    if (request.llm.claude_cli !== undefined) {
+      const block: Record<string, unknown> = isRecord(llm.claude_cli) ? { ...llm.claude_cli } : {};
+      for (const [field, value] of Object.entries(request.llm.claude_cli)) {
+        if (value === null) delete block[field];
+        else block[field] = value;
+      }
+      llm.claude_cli = block;
+    }
     next.llm = llm;
   }
   if (request.intervals !== undefined) {

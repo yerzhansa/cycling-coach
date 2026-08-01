@@ -16,6 +16,8 @@ files:
   - "!**/vitest.workspace.{js,cjs,mjs,ts,cts,mts}"
   - "!**/node_modules/vitest/**"
   - "!**/node_modules/@vitest/**"
+  - "!**/node_modules/@anthropic-ai/claude-agent-sdk-*"
+  - "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**"
   - from: resources
     to: resources
     filter:

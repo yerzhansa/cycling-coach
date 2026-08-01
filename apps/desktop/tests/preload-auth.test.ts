@@ -52,6 +52,8 @@ interface AuthBridge {
   releaseNotes(): Promise<unknown>;
   chatgptStatus(): Promise<unknown>;
   chatgptLogin(input: unknown): Promise<unknown>;
+  claudeCliStatus(): Promise<unknown>;
+  claudeCliRecheck(): Promise<unknown>;
   getUpdateState(): Promise<unknown>;
   checkForUpdates(): Promise<unknown>;
   restartToUpdate(): Promise<unknown>;
@@ -185,6 +187,8 @@ describe("desktop preload ChatGPT auth", () => {
         "chatgptLogin",
         "chatgptStatus",
         "chooseImportFiles",
+        "claudeCliRecheck",
+        "claudeCliStatus",
         "credentialStatuses",
         "deleteCredential",
         "getUpdateState",
@@ -918,6 +922,42 @@ describe("desktop preload ChatGPT auth", () => {
       "enduragent:onboarding:chatgpt-status",
       "enduragent:onboarding:chatgpt-login",
     ]);
+  });
+
+  it("copies claude-cli status payloads with their exact optional keys", async () => {
+    mocks.invoke
+      .mockResolvedValueOnce({
+        state: "ready",
+        email: "athlete@synthetic.test",
+        plan: "Max",
+        version: "2.9.0",
+      })
+      .mockResolvedValueOnce({ state: "disabled" });
+    await expect(bridge.claudeCliStatus()).resolves.toEqual({
+      state: "ready",
+      email: "athlete@synthetic.test",
+      plan: "Max",
+      version: "2.9.0",
+    });
+    await expect(bridge.claudeCliRecheck()).resolves.toEqual({ state: "disabled" });
+    expect(mocks.invoke.mock.calls.map(([channel]) => channel)).toEqual([
+      "enduragent:onboarding:claude-cli-status",
+      "enduragent:onboarding:claude-cli-recheck",
+    ]);
+  });
+
+  it("rejects claude-cli status payloads outside the closed state set", async () => {
+    for (const value of [
+      { state: "signed-in" },
+      { state: "ready", identity: "athlete@synthetic.test" },
+      { state: "ready", email: "" },
+      { state: "ready-api-key", version: 2 },
+      { email: "athlete@synthetic.test" },
+      [],
+    ]) {
+      mocks.invoke.mockResolvedValueOnce(value);
+      await expect(bridge.claudeCliStatus()).rejects.toBeInstanceOf(TypeError);
+    }
   });
 
   it("accepts only closed refusal reasons and exact keys", async () => {

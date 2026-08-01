@@ -367,6 +367,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       "chatgptStatus",
       "checkForUpdates",
       "chooseImportFiles",
+      "claudeCliRecheck",
+      "claudeCliStatus",
       "credentialStatuses",
       "deleteCredential",
       "getArchivedTranscriptPage",

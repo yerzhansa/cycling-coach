@@ -4,6 +4,8 @@ import {
   DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL,
   DESKTOP_CHATGPT_LOGIN_CHANNEL,
   DESKTOP_CHATGPT_STATUS_CHANNEL,
+  DESKTOP_CLAUDE_CLI_RECHECK_CHANNEL,
+  DESKTOP_CLAUDE_CLI_STATUS_CHANNEL,
   DESKTOP_CREDENTIAL_RETRY_CHANNEL,
   DESKTOP_CREDENTIAL_DELETE_CHANNEL,
   DESKTOP_CREDENTIAL_STATUS_CHANNEL,
@@ -69,6 +71,17 @@ function harness(
       cleanupPending: false as const,
     })),
   };
+  const claudeCli = {
+    status: vi.fn(async () => ({
+      state: "ready" as const,
+      email: "athlete@synthetic.test",
+      plan: "Max",
+      version: "2.9.0",
+    })),
+    recheck: vi.fn(async () => ({ state: "not-logged-in" as const })),
+    invalidateProbeCache: vi.fn(),
+    activate: vi.fn(async () => ({ status: "configured" as const, runtimeReady: true as const })),
+  };
   const getRuntimeConfig = vi.fn(async () => ({
     schemaVersion: 3 as const,
     llm: {
@@ -104,6 +117,7 @@ function harness(
     window: {} as never,
     vault,
     chatGptAuth,
+    claudeCli,
     getRuntimeConfig,
     applyExistingLlmSelection,
     isTrusted: (event) => event === trustedEvent,
@@ -116,6 +130,7 @@ function harness(
     ipcMain,
     vault,
     chatGptAuth,
+    claudeCli,
     getRuntimeConfig,
     applyExistingLlmSelection,
     dialog,
@@ -274,6 +289,8 @@ describe("desktop onboarding IPC", () => {
         DESKTOP_LLM_SELECTION_APPLY_CHANNEL,
         DESKTOP_CHATGPT_STATUS_CHANNEL,
         DESKTOP_CHATGPT_LOGIN_CHANNEL,
+        DESKTOP_CLAUDE_CLI_STATUS_CHANNEL,
+        DESKTOP_CLAUDE_CLI_RECHECK_CHANNEL,
         DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL,
       ].sort(),
     );
@@ -612,6 +629,81 @@ describe("desktop onboarding IPC", () => {
     ).rejects.toBeInstanceOf(TypeError);
   });
 
+  it("gates strict claude-cli status and recheck invokes", async () => {
+    const subject = harness();
+    await expect(
+      subject.invoke(DESKTOP_CLAUDE_CLI_STATUS_CHANNEL, subject.trustedEvent),
+    ).resolves.toEqual({
+      state: "ready",
+      email: "athlete@synthetic.test",
+      plan: "Max",
+      version: "2.9.0",
+    });
+    await expect(
+      subject.invoke(DESKTOP_CLAUDE_CLI_RECHECK_CHANNEL, subject.trustedEvent),
+    ).resolves.toEqual({ state: "not-logged-in" });
+    await expect(
+      subject.invoke(DESKTOP_CLAUDE_CLI_STATUS_CHANNEL, {} as IpcMainInvokeEvent),
+    ).rejects.toBeInstanceOf(TypeError);
+    await expect(
+      subject.invoke(DESKTOP_CLAUDE_CLI_RECHECK_CHANNEL, {} as IpcMainInvokeEvent),
+    ).rejects.toBeInstanceOf(TypeError);
+    await expect(
+      subject.invoke(DESKTOP_CLAUDE_CLI_STATUS_CHANNEL, subject.trustedEvent, null),
+    ).rejects.toBeInstanceOf(TypeError);
+    await expect(
+      subject.invoke(DESKTOP_CLAUDE_CLI_RECHECK_CHANNEL, subject.trustedEvent, {}),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(subject.claudeCli.status).toHaveBeenCalledOnce();
+    expect(subject.claudeCli.recheck).toHaveBeenCalledOnce();
+  });
+
+  it("re-minimizes the claude-cli status payload to its exact keys", async () => {
+    const subject = harness();
+    subject.claudeCli.status.mockResolvedValueOnce({
+      state: "ready",
+      email: "athlete@synthetic.test",
+      plan: "Max",
+      version: "2.9.0",
+      probeSecret: "must-not-cross",
+    } as never);
+
+    const status = (await subject.invoke(
+      DESKTOP_CLAUDE_CLI_STATUS_CHANNEL,
+      subject.trustedEvent,
+    )) as Record<string, unknown>;
+
+    expect(Object.keys(status).sort()).toEqual(["email", "plan", "state", "version"]);
+    expect(JSON.stringify(status)).not.toContain("must-not-cross");
+  });
+
+  it("busts the claude-cli probe cache when the credentials surface opens", async () => {
+    const subject = harness();
+
+    await subject.invoke(DESKTOP_CREDENTIAL_STATUS_CHANNEL, subject.trustedEvent);
+
+    expect(subject.claudeCli.invalidateProbeCache).toHaveBeenCalledOnce();
+  });
+
+  it("routes a claude-cli selection through the claude-cli controller", async () => {
+    const subject = harness();
+    const selection = {
+      provider: "claude-cli",
+      model: "  sonnet  ",
+      endpoint: { mode: "automatic" },
+    };
+
+    await expect(
+      subject.invoke(DESKTOP_LLM_SELECTION_APPLY_CHANNEL, subject.trustedEvent, selection),
+    ).resolves.toEqual({ status: "configured", runtimeReady: true });
+    expect(subject.claudeCli.activate).toHaveBeenCalledWith({
+      provider: "claude-cli",
+      model: "sonnet",
+      endpoint: { mode: "automatic" },
+    });
+    expect(subject.vault.applyLlmSelection).not.toHaveBeenCalled();
+  });
+
   it("gates strict ChatGPT status and login invokes", async () => {
     const subject = harness();
     await expect(
@@ -705,10 +797,10 @@ describe("desktop onboarding IPC", () => {
     ).resolves.toEqual([]);
   });
 
-  it("disposes only its nine handlers", () => {
+  it("disposes only its eleven handlers", () => {
     const subject = harness();
     subject.dispose();
     expect(subject.handlers.size).toBe(0);
-    expect(subject.ipcMain.removeHandler).toHaveBeenCalledTimes(9);
+    expect(subject.ipcMain.removeHandler).toHaveBeenCalledTimes(11);
   });
 });

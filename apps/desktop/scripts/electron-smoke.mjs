@@ -278,6 +278,8 @@ async function security() {
             "chatgptStatus",
             "checkForUpdates",
             "chooseImportFiles",
+            "claudeCliRecheck",
+            "claudeCliStatus",
             "credentialStatuses",
             "deleteCredential",
             "getArchivedTranscriptPage",

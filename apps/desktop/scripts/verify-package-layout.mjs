@@ -35,6 +35,12 @@ const requiredFilePatterns = [
   "!**/vitest.workspace.{js,cjs,mjs,ts,cts,mts}",
   "!**/node_modules/vitest/**",
   "!**/node_modules/@vitest/**",
+  "!**/node_modules/@anthropic-ai/claude-agent-sdk-*",
+  "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**",
+];
+const vendoredAgentCliPatterns = [
+  /(?:^|\/)@anthropic-ai\/claude-agent-sdk-[a-z0-9-]+(?:\/|$)/u,
+  /(?:^|\/)@anthropic-ai\/claude-agent-sdk\/(?:.*\/)?(?:vendor\/|claude$|cli\.js$)/u,
 ];
 const reservedResourceNames = new Set([
   "app.asar",
@@ -178,6 +184,7 @@ function forbiddenPathReason(path) {
   const lower = path.toLowerCase();
   const segments = lower.split("/");
   const base = segments.at(-1) ?? "";
+  if (vendoredAgentCliPatterns.some((pattern) => pattern.test(lower))) return "vendored agent CLI";
   if (base.endsWith(".map")) return "source map";
   if (base.startsWith(".env")) return "environment file";
   if (segments.some((segment) => forbiddenDirectoryNames.has(segment))) {

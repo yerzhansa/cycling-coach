@@ -834,6 +834,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "chatgptStatus",
         "checkForUpdates",
         "chooseImportFiles",
+        "claudeCliRecheck",
+        "claudeCliStatus",
         "credentialStatuses",
         "deleteCredential",
         "getArchivedTranscriptPage",
