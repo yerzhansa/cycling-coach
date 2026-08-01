@@ -278,6 +278,7 @@ async function main() {
     "@enduragent/desktop",
     "package:dir",
     "--config.mac.identity=-",
+    "--config.mac.hardenedRuntime=false",
   ]);
   const { SelfTestCommandTerminalSchema } = await import("@enduragent/coach-contract");
   const base = await realpath("/tmp");
