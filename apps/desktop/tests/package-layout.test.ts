@@ -443,12 +443,18 @@ describe("desktop package layout", () => {
     "test/helper.js",
     "tests/helper.js",
     "__tests__/helper.js",
+    "__snapshots__/obsolete.md",
     "fixture/data.json",
     "fixtures/data.json",
     "dev-fixture/data.json",
     "dev-fixtures/data.json",
     "feature.test.js",
     "feature.spec.ts",
+    "out/main/feature.test.d.ts",
+    "out/main/feature.spec.d.mts",
+    "out/main/index.test.tsx",
+    "test.js",
+    "spec.mjs",
     "node_modules/@enduragent/sport-cycling/vitest.config.ts",
     "node_modules/@enduragent/sport-cycling/vitest.workspace.mts",
     "node_modules/vitest/index.js",
@@ -460,6 +466,45 @@ describe("desktop package layout", () => {
     await expect(
       verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
     ).rejects.toThrow(/forbidden/u);
+  });
+
+  it.each([
+    "out/main/feature.test.js.snap",
+    "out/main/feature.spec.ts.snap",
+    "out/main/renderer.snap",
+    "node_modules/@enduragent/sport-cycling/dist/plan.js.snap",
+  ])("rejects the snapshot artifact at ASAR path %s", async (path) => {
+    const fixture = await syntheticPackage();
+    await fixture.writeArchive(path);
+    await fixture.rebuild();
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+    ).rejects.toThrow("forbidden test snapshot artifact");
+  });
+
+  it("rejects a snapshot artifact staged as an external resource", async () => {
+    const fixture = await syntheticPackage();
+    await writeFile(join(fixture.externalPackaged, "matrix.test.js.snap"), "exports[`a`] = `b`;\n");
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+    ).rejects.toThrow("forbidden test snapshot artifact");
+  });
+
+  it.each([
+    "node_modules/@modelcontextprotocol/sdk/dist/cjs/spec.types.js",
+    "node_modules/@modelcontextprotocol/sdk/dist/esm/spec.types.js",
+    "out/main/test.types.js",
+    "out/main/test.helpers.js",
+    "out/main/spec.helpers.d.ts",
+    "out/main/snapshot.js",
+    "out/main/snapshots/index.js",
+  ])("keeps the published module %s packageable", async (path) => {
+    const fixture = await syntheticPackage();
+    await fixture.writeArchive(path);
+    await fixture.rebuild();
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+    ).resolves.toBeUndefined();
   });
 
   it.each([
