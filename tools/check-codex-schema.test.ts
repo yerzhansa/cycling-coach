@@ -10,6 +10,7 @@ import {
   CODEX_RESPONSE_CONTRACT,
   CODEX_WIRE_CONTRACT,
   collectFieldEnums,
+  collectStringConstants,
   failClosedFieldNames,
   findCallSiteHits,
   findResponsePayloadHits,
@@ -110,6 +111,56 @@ describe("vendored enum values", () => {
   it("pins turn/start sandboxPolicy.type to the camel SandboxPolicy tag", () => {
     const entry = CODEX_WIRE_CONTRACT.find((item) => item.method === "turn/start");
     expect(entry?.values?.["sandboxPolicy.type"]).toBe("readOnly");
+  });
+});
+
+const FULL_TURN_START_PINS = [
+  `input: [{ type: "text", text: "hi" }]`,
+  `approvalPolicy: "never"`,
+  `approvalsReviewer: "user"`,
+  `sandboxPolicy: { type: "readOnly" }`,
+].join(", ");
+
+function seedTurnStartSchema(): void {
+  seedSchema("v2/TurnStartParams.json", {
+    properties: {
+      threadId: { type: "string" },
+      effort: { type: "string" },
+      approvalPolicy: { type: "string" },
+      approvalsReviewer: { type: "string" },
+      sandboxPolicy: { properties: { type: { type: "string" } } },
+      input: {
+        items: { properties: { type: { type: "string" }, text: { type: "string" } } },
+        type: "array",
+      },
+    },
+  });
+}
+
+function turnStartCall(members: string): string {
+  return `export const go = (c: any) => c.request("turn/start", { threadId: "t", ${members} });\n`;
+}
+
+describe("lane constant resolution", () => {
+  it("drops a name the scanned set declares more than once", () => {
+    const one = writeLaneFile("bridge.ts", `const ONLY = "x";\nconst DUP = "y";\n`);
+    expect([...collectStringConstants([one])]).toEqual([
+      ["ONLY", "x"],
+      ["DUP", "y"],
+    ]);
+
+    const two = writeLaneFile("version.ts", `const DUP = "z";\n`);
+    const across = collectStringConstants([one, two]);
+    expect(across.get("ONLY")).toBe("x");
+    expect(across.has("DUP")).toBe(false);
+  });
+
+  it("drops a name a non-literal declaration redeclares", () => {
+    const file = writeLaneFile(
+      "bridge.ts",
+      `const DUP = "y";\nexport function build(): string {\n  const DUP = String(process.env.DUP);\n  return DUP;\n}\n`,
+    );
+    expect(collectStringConstants([file]).has("DUP")).toBe(false);
   });
 });
 
@@ -263,6 +314,107 @@ describe("call-site scan", () => {
     const hits = findCallSiteHits(tempDir, [file]);
     expect(hits).toHaveLength(1);
     expect(hits[0]?.detail).toContain("dangerFullAccess");
+  });
+
+  it("resolves a computed params key but refuses one it cannot resolve", () => {
+    seedSchema("v2/ThreadStartParams.json", { properties: { model: { type: "string" } } });
+    const good = writeLaneFile(
+      "bridge.ts",
+      `const KEY = "model";\nexport const go = (c: any) => c.request("thread/start", { [KEY]: "m" });\n`,
+    );
+    expect(findCallSiteHits(tempDir, [good])).toHaveLength(0);
+
+    const resolved = writeLaneFile(
+      "bridge.ts",
+      `const KEY = "collaborationMode";\nexport const go = (c: any) => c.request("thread/start", { [KEY]: {} });\n`,
+    );
+    expect(
+      findCallSiteHits(tempDir, [resolved])
+        .map((hit) => hit.detail)
+        .join("\n"),
+    ).toContain("params field 'collaborationMode' is absent from v2/ThreadStartParams.json");
+
+    const opaque = writeLaneFile(
+      "bridge.ts",
+      `export const go = (c: any, k: string) => c.request("thread/start", { [k]: "m" });\n`,
+    );
+    const details = findCallSiteHits(tempDir, [opaque])
+      .map((hit) => hit.detail)
+      .join("\n");
+    expect(details).toContain("params has a member the schema gate cannot read");
+    expect(details).toContain(`PropertyAssignment '[k]: "m"'`);
+  });
+
+  it("requires every pinned value the wire contract declares at the call site", () => {
+    seedTurnStartSchema();
+    const good = writeLaneFile("bridge.ts", turnStartCall(FULL_TURN_START_PINS));
+    expect(findCallSiteHits(tempDir, [good])).toHaveLength(0);
+
+    const dropped = writeLaneFile(
+      "bridge.ts",
+      turnStartCall(`input: [{ type: "text", text: "hi" }], approvalsReviewer: "user"`),
+    );
+    const details = findCallSiteHits(tempDir, [dropped])
+      .map((hit) => hit.detail)
+      .join("\n");
+    expect(details).toContain(
+      "'turn/start' params omit 'approvalPolicy' = 'never' required by the wire contract",
+    );
+    expect(details).toContain(
+      "'turn/start' params omit 'sandboxPolicy.type' = 'readOnly' required by the wire contract",
+    );
+  });
+
+  it("leaves a contract field the wire contract pins no value for optional", () => {
+    seedTurnStartSchema();
+    const withEffort = writeLaneFile(
+      "bridge.ts",
+      turnStartCall(`effort: "high", ${FULL_TURN_START_PINS}`),
+    );
+    expect(findCallSiteHits(tempDir, [withEffort])).toHaveLength(0);
+
+    const conditional = writeLaneFile(
+      "bridge.ts",
+      `const effort: string | undefined = undefined;\n${turnStartCall(
+        `...(effort === undefined ? {} : { effort }), ${FULL_TURN_START_PINS}`,
+      )}`,
+    );
+    expect(findCallSiteHits(tempDir, [conditional])).toHaveLength(0);
+  });
+
+  it("refuses a pinned value whose constant a later declaration shadows", () => {
+    seedSchema("v2/ThreadStartParams.json", { properties: { sandbox: { type: "string" } } });
+    const good = writeLaneFile(
+      "bridge.ts",
+      `const S = "read-only";\nexport const go = (c: any) => c.request("thread/start", { sandbox: S });\n`,
+    );
+    expect(findCallSiteHits(tempDir, [good])).toHaveLength(0);
+
+    const shadowed = writeLaneFile(
+      "bridge.ts",
+      `const S = "read-only";\nexport const go = (c: any) => c.request("thread/start", { sandbox: S });\nexport function label(): string {\n  const S = "workspace-write";\n  return S;\n}\n`,
+    );
+    const details = findCallSiteHits(tempDir, [shadowed])
+      .map((hit) => hit.detail)
+      .join("\n");
+    expect(details).toContain("'thread/start' params set 'sandbox' to a value the gate cannot read");
+    expect(details).toContain("the wire contract declares 'read-only'");
+  });
+
+  it("refuses a pinned value whose constant a second lane file redeclares", () => {
+    seedSchema("v2/ThreadStartParams.json", { properties: { sandbox: { type: "string" } } });
+    const caller = writeLaneFile(
+      "bridge.ts",
+      `const S = "read-only";\nexport const go = (c: any) => c.request("thread/start", { sandbox: S });\n`,
+    );
+    expect(findCallSiteHits(tempDir, [caller])).toHaveLength(0);
+
+    const other = writeLaneFile("version.ts", `const S = "workspace-write";\nexport const l = S;\n`);
+    const details = findCallSiteHits(tempDir, [caller, other])
+      .map((hit) => hit.detail)
+      .join("\n");
+    expect(details).toContain("'thread/start' params set 'sandbox' to a value the gate cannot read");
+    expect(details).toContain("the wire contract declares 'read-only'");
   });
 
   it("descends into nested params objects", () => {
@@ -543,6 +695,91 @@ describe("auto-reply payload scan", () => {
     expect(details).toContain(
       `object literal '{ decision: "accept" }' sets the fail-closed reply field(s) ` +
         `'decision' outside the auto-reply payload map`,
+    );
+  });
+
+  it("flags a fail-closed reply field hidden behind a computed key", () => {
+    const clean = writeLaneFile(
+      "protocol.ts",
+      `const FIELD = "message";\nexport const outcome = (m: string) => ({ error: { [FIELD]: m } });\n`,
+    );
+    expect(findResponsePayloadHits(tempDir, [clean, writeReplyMap()])).toHaveLength(0);
+
+    const bypass = writeLaneFile(
+      "protocol.ts",
+      `const FIELD = "decision";\nexport const outcome = () => ({ result: { [FIELD]: "accept" } });\n`,
+    );
+    const details = findResponsePayloadHits(tempDir, [bypass, writeReplyMap()])
+      .map((hit) => `${hit.where}  ${hit.detail}`)
+      .join("\n");
+    expect(details).toContain("protocol.ts");
+    expect(details).toContain(
+      `object literal '{ [FIELD]: "accept" }' sets the fail-closed reply field(s) ` +
+        `'decision' outside the auto-reply payload map`,
+    );
+  });
+
+  it("flags a reply-shaped computed key it cannot resolve", () => {
+    const clean = writeLaneFile(
+      "protocol.ts",
+      `export const outcome = (m: string) => ({ error: { code: -32601, message: m } });\n`,
+    );
+    expect(findResponsePayloadHits(tempDir, [clean, writeReplyMap()])).toHaveLength(0);
+
+    const bypass = writeLaneFile(
+      "protocol.ts",
+      `export const outcome = (field: string) => ({ result: { [field]: "accept" } });\n`,
+    );
+    const details = findResponsePayloadHits(tempDir, [bypass, writeReplyMap()])
+      .map((hit) => `${hit.where}  ${hit.detail}`)
+      .join("\n");
+    expect(details).toContain("protocol.ts");
+    expect(details).toContain(
+      `object literal '{ [field]: "accept" }' has a computed key the schema gate cannot read: ` +
+        `PropertyAssignment '[field]: "accept"'; it may set a fail-closed reply field outside ` +
+        `the auto-reply payload map`,
+    );
+  });
+
+  it("reads a second reply table whose method key is a computed constant", () => {
+    const clean = writeLaneFile(
+      "protocol.ts",
+      `const M = "item/fileChange/requestApproval";\nexport const table = { [M]: () => ({ decision: "decline" }) };\n`,
+    );
+    expect(findResponsePayloadHits(tempDir, [clean, writeReplyMap()])).toHaveLength(0);
+
+    const bypass = writeLaneFile(
+      "protocol.ts",
+      `const M = "item/fileChange/requestApproval";\nexport const table = { [M]: () => ({ decision: "accept" }) };\n`,
+    );
+    const details = findResponsePayloadHits(tempDir, [bypass, writeReplyMap()])
+      .map((hit) => `${hit.where}  ${hit.detail}`)
+      .join("\n");
+    expect(details).toContain("protocol.ts");
+    expect(details).toContain(
+      `'item/fileChange/requestApproval' replies 'decision' = 'accept' but the wire contract ` +
+        `declares 'decline'`,
+    );
+  });
+
+  it("refuses a reply constant that a second lane file redeclares", () => {
+    const map = writeLaneFile(
+      "session.ts",
+      `const DECISION = "decline";\nconst AUTO_DENY_PAYLOADS = {\n  "item/commandExecution/requestApproval": () => ({ decision: DECISION }),\n};\nexport const methods = Object.keys(AUTO_DENY_PAYLOADS);\n`,
+    );
+    expect(
+      findResponsePayloadHits(tempDir, [map])
+        .map((hit) => hit.detail)
+        .join("\n"),
+    ).not.toContain("'item/commandExecution/requestApproval' reply");
+
+    const other = writeLaneFile("version.ts", `const DECISION = "accept";\nexport const l = DECISION;\n`);
+    const details = findResponsePayloadHits(tempDir, [map, other])
+      .map((hit) => hit.detail)
+      .join("\n");
+    expect(details).toContain(
+      `'item/commandExecution/requestApproval' reply sets 'decision' to a value the gate ` +
+        `cannot read; the wire contract declares 'decline'`,
     );
   });
 

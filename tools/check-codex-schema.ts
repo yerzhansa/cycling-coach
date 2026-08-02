@@ -480,9 +480,7 @@ function collectObjectPaths(
     }
     let name: string | null = null;
     if (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) {
-      const propertyName = property.name;
-      if (ts.isIdentifier(propertyName)) name = propertyName.text;
-      else if (ts.isStringLiteralLike(propertyName)) name = propertyName.text;
+      name = propertyNameText(property.name, constants);
     }
     if (name === null) {
       out.unreadable.push(memberLabel(property, prefix));
@@ -521,23 +519,38 @@ function literalValue(node: ts.Node, constants: ReadonlyMap<string, string>): st
   return null;
 }
 
+function propertyNameText(
+  name: ts.PropertyName,
+  constants: ReadonlyMap<string, string>,
+): string | null {
+  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) return name.text;
+  if (ts.isComputedPropertyName(name)) return literalValue(name.expression, constants);
+  return null;
+}
+
 export function collectStringConstants(
   files: readonly string[],
   read: (file: string) => string = (file) => readFileSync(file, "utf-8"),
 ): Map<string, string> {
   const constants = new Map<string, string>();
+  const declared = new Set<string>();
+  const redeclared = new Set<string>();
   for (const file of files) {
     const sf = ts.createSourceFile(file, read(file), ts.ScriptTarget.ESNext, true);
     const visit = (node: ts.Node): void => {
       if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+        const name = node.name.text;
+        if (declared.has(name)) redeclared.add(name);
+        declared.add(name);
         const initializer = node.initializer;
         const text = initializer === undefined ? null : literalText(initializer);
-        if (text !== null) constants.set(node.name.text, text);
+        if (text !== null) constants.set(name, text);
       }
       ts.forEachChild(node, visit);
     };
     visit(sf);
   }
+  for (const name of redeclared) constants.delete(name);
   return constants;
 }
 
@@ -588,6 +601,29 @@ export function findCallSiteHits(rootDir: string, files: readonly string[]): Cod
                     });
                   }
                   const declared = entry.values ?? {};
+                  const sent = new Map<string, CollectedPath>();
+                  for (const record of collected.paths) sent.set(record.path, record);
+                  for (const [path, expected] of Object.entries(declared)) {
+                    if (!resolveFieldPath(schema, path)) continue;
+                    const record = sent.get(path);
+                    if (record === undefined) {
+                      hits.push({
+                        where,
+                        detail:
+                          `'${method}' params omit '${path}' = '${expected}' required by the ` +
+                          `wire contract`,
+                      });
+                      continue;
+                    }
+                    if (record.value === null) {
+                      hits.push({
+                        where,
+                        detail:
+                          `'${method}' params set '${path}' to a value the gate cannot read; ` +
+                          `the wire contract declares '${expected}'`,
+                      });
+                    }
+                  }
                   for (const { path, value } of collected.paths) {
                     if (!resolveFieldPath(schema, path)) {
                       hits.push({
@@ -757,17 +793,21 @@ function checkResponsePayload(
   return hits;
 }
 
-function replyMapKeyOf(property: ts.ObjectLiteralElementLike): string | null {
+function replyMapKeyOf(
+  property: ts.ObjectLiteralElementLike,
+  constants: ReadonlyMap<string, string>,
+): string | null {
   if (!ts.isPropertyAssignment(property)) return null;
-  return ts.isStringLiteralLike(property.name) ? property.name.text : null;
+  return propertyNameText(property.name, constants);
 }
 
 function isReplyMap(
   node: ts.ObjectLiteralExpression,
   byMethod: ReadonlyMap<string, CodexWireContract>,
+  constants: ReadonlyMap<string, string>,
 ): boolean {
   for (const property of node.properties) {
-    const key = replyMapKeyOf(property);
+    const key = replyMapKeyOf(property, constants);
     if (key !== null && byMethod.has(key)) return true;
   }
   return false;
@@ -786,18 +826,29 @@ export function failClosedFieldNames(): ReadonlySet<string> {
   return names;
 }
 
+interface FailClosedKeys {
+  readonly keys: string[];
+  readonly unreadable: string[];
+}
+
 function failClosedKeysOf(
   node: ts.ObjectLiteralExpression,
   guarded: ReadonlySet<string>,
-): string[] {
-  const found: string[] = [];
+  constants: ReadonlyMap<string, string>,
+): FailClosedKeys {
+  const keys: string[] = [];
+  const unreadable: string[] = [];
   for (const property of node.properties) {
     if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) continue;
     const name = property.name;
-    const text = ts.isIdentifier(name) || ts.isStringLiteralLike(name) ? name.text : null;
-    if (text !== null && guarded.has(text)) found.push(text);
+    const text = propertyNameText(name, constants);
+    if (text === null) {
+      if (ts.isComputedPropertyName(name)) unreadable.push(memberLabel(property, ""));
+      continue;
+    }
+    if (guarded.has(text)) keys.push(text);
   }
-  return found;
+  return { keys, unreadable };
 }
 
 function withinAny(node: ts.Node, roots: ReadonlySet<ts.Node>): boolean {
@@ -829,10 +880,10 @@ export function findResponsePayloadHits(
     const payloads = new Set<ts.Node>();
 
     const visitMaps = (node: ts.Node): void => {
-      if (ts.isObjectLiteralExpression(node) && isReplyMap(node, byMethod)) {
+      if (ts.isObjectLiteralExpression(node) && isReplyMap(node, byMethod, constants)) {
         for (const property of node.properties) {
           const where = at(property);
-          const key = replyMapKeyOf(property);
+          const key = replyMapKeyOf(property, constants);
           if (key === null) {
             hits.push({
               where,
@@ -864,13 +915,22 @@ export function findResponsePayloadHits(
 
     const visitShapes = (node: ts.Node): void => {
       if (ts.isObjectLiteralExpression(node) && !withinAny(node, payloads)) {
-        const keys = failClosedKeysOf(node, guarded);
+        const { keys, unreadable } = failClosedKeysOf(node, guarded, constants);
         if (keys.length > 0) {
           hits.push({
             where: at(node),
             detail:
               `object literal '${sourceSnippet(node)}' sets the fail-closed reply field(s) ` +
               `'${keys.join("', '")}' outside the auto-reply payload map`,
+          });
+        }
+        for (const label of unreadable) {
+          hits.push({
+            where: at(node),
+            detail:
+              `object literal '${sourceSnippet(node)}' has a computed key the schema gate ` +
+              `cannot read: ${label}; it may set a fail-closed reply field outside the ` +
+              `auto-reply payload map`,
           });
         }
       }
