@@ -214,8 +214,41 @@ if (argv.includes("--version")) {
   let serverRequestId = 1000;
   let ignoreStdinEnd = false;
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const overrides = new Map();
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] !== "-c") continue;
+    const raw = argv[i + 1] || "";
+    const eq = raw.indexOf("=");
+    if (eq > 0) overrides.set(raw.slice(0, eq), raw.slice(eq + 1));
+  }
+  const unquote = (value) =>
+    typeof value === "string" && value.length > 1 && value.startsWith('"') && value.endsWith('"')
+      ? value.slice(1, -1)
+      : value;
+  const substitute = (text) => {
+    let out = text;
+    const tools = overrides.get("mcp_servers.enduragent.enabled_tools");
+    if (out.includes('"__MCP_TOOLS__"')) {
+      out = out.split('"__MCP_TOOLS__"').join(tools === undefined ? "[]" : tools);
+    }
+    if (out.includes('"__MCP_APPROVAL__"')) {
+      const approval = overrides.get("mcp_servers.enduragent.default_tools_approval_mode");
+      out = out.split('"__MCP_APPROVAL__"').join(approval === undefined ? "null" : approval);
+    }
+    if (out.includes("__MCP_URL__")) {
+      out = out.split("__MCP_URL__").join(overrides.get("mcp_servers.enduragent.url") || "");
+    }
+    if (out.includes("__MCP_BEARER_ENV__")) {
+      out = out
+        .split("__MCP_BEARER_ENV__")
+        .join(unquote(overrides.get("mcp_servers.enduragent.bearer_token_env_var")) || "");
+    }
+    return out;
+  };
+
   const emitLine = (text) => {
-    process.stdout.write(text + "\\n");
+    process.stdout.write(substitute(text) + "\\n");
   };
 
   const valuesAtPath = (params, segments) => {
