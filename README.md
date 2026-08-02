@@ -91,6 +91,8 @@ Cycling Coach (CLI mode). Type your message:
 - **OpenAI Codex (ChatGPT subscription) — experimental** — browser OAuth sign-in with your ChatGPT Plus / Pro / Business / Edu / Enterprise account. No API key needed; the bot uses your subscription quota. Minimum tier: ChatGPT Plus ($20/mo). Select it in `cycling-coach setup` to start the OAuth flow. Models offered in the wizard: `gpt-5.4` (balanced, recommended) and `gpt-5.4-mini` (faster, smaller context). Cost is covered by the subscription regardless of which model you pick — the choice is speed vs capability, not price. On hard rate-limit failures the bot retries up to 4× with backoff (~35s total) before reporting the error to the chat.
 - **Claude subscription (Claude Code CLI) — experimental** — drives the [Claude Code CLI](https://claude.com/claude-code) installed on your own machine, so your Claude subscription covers the usage and no API key is involved. Sign in once yourself: run `claude` in your terminal and complete the sign-in there. The app never signs you in, never reads or stores your tokens. Select it in `cycling-coach setup`; the wizard checks the CLI and prints `Signed in as <email> - Claude <plan> subscription`. Models offered in the wizard: `sonnet` (default), `opus`, and `haiku`. **macOS and Linux only this wave — Windows is not supported for this lane.** Because it needs a locally installed, signed-in CLI, it does not work in containers or on Railway (see below).
 
+- **Codex agent (ChatGPT subscription, config-file only) — experimental, off by default** — delegates the whole coaching turn to the [Codex CLI](https://developers.openai.com/codex/cli) installed on your own machine, so your ChatGPT subscription covers the usage. Unlike every other option this one is **not offered in the setup wizard** and cannot be selected from the desktop app; you enable it by editing `config.yaml` (see below). Install `codex` (≥ 0.46.0) and sign in once yourself with `codex login` — the app never signs you in, never reads or stores your tokens. **macOS and Linux only; Windows is refused.** Because it needs a locally installed, signed-in CLI, it does not work in containers or on Railway.
+
 Anthropic's Claude Pro/Max subscription does **not** support OAuth for third-party tools (per Anthropic ToS), and Cycling Coach never brokers a Claude login. The two supported Anthropic paths are the console API key and the Claude Code CLI lane above, which delegates to the CLI you signed in yourself.
 
 **Where to get other keys:**
@@ -248,6 +250,26 @@ llm:
 
 **Kill switch:** set `ENDURAGENT_CLAUDE_CLI_DISABLED=1` (or `true`, case-insensitive) to disable this provider on an instance; `llm.claude_cli.enabled: false` does the same from YAML. A running daemon does not need a restart — it re-checks the switch every turn, so a flip takes effect on the **next turn**, which is then refused with an explanation. `CLAUDE_CLI_PATH` overrides `llm.claude_cli.binary_path`.
 
+#### Codex agent (experimental, off by default)
+
+This lane is config-file only — the setup wizard does not offer it, and it stays disabled until you write `enabled: true` yourself:
+
+```yaml
+llm:
+  provider: codex-agent
+  model: gpt-5.6-sol
+  codex_agent:
+    enabled: true                          # required — the lane refuses without it
+    binary_path: /opt/homebrew/bin/codex   # optional; resolved automatically when omitted
+    reasoning_effort: medium               # optional; low / medium / high / ultra
+```
+
+There is no `api_key` and no `base_url` — both are rejected, because the CLI owns the endpoint and your subscription covers the usage. `CODEX_CLI_PATH` overrides `binary_path`.
+
+**This lane works differently from every other provider, and the difference is worth understanding before you enable it.** The others send a prompt and get a reply back; here your turn is handed to Codex's own agent loop. Cycling Coach injects its coaching tools into that loop over a local MCP endpoint — 18 of them for cycling with intervals.icu connected, fewer without — and supplies the coach persona as *developer instructions* — steering the agent rather than replacing its system prompt. Practically: the retry loop, the tool wrapper stack, the ledger and your stored history all still work, but Cycling Coach gives up in-context prompt control and per-model-call accounting. One coaching turn is billed as one call against your subscription no matter how many model calls Codex makes internally, so ledger rows for this lane are marked notional and excluded from the spending cap. That trade is why it ships off by default.
+
+For the duration of a coaching turn, your own `~/.codex/config.toml` is neutralized: every MCP server you have configured is disabled, along with shell execution, multi-agent, plugins, apps, hooks, browser and computer use, and web search. The model provider and endpoint are pinned, sandboxing is read-only, and no approval can be requested or interactively granted — the coach's own tools carry standing pre-approval so they can run unattended, and a turn is refused if that pre-approval has been widened to anything else. If any of that cannot be verified on the spawned process, the turn is refused rather than run in a degraded configuration.
+
 Env vars take precedence over YAML.
 
 ### Cheaper model for memory tidy-up
@@ -385,7 +407,7 @@ Cycling Coach is a single Node process holding a long-polling connection to Tele
 - A persistent volume mounted at `/data` (or wherever you point `CYCLING_COACH_HOME`).
 - Secrets injected as env vars, referenced from `config.yaml` via `source: env` (see [Storing secrets outside config.yaml](#storing-secrets-outside-configyaml)).
 - One instance only — sessions are sharded by Telegram chat ID on local disk; do not enable autoscaling.
-- A BYOK API-key provider (`anthropic` / `openai` / `google` / `deepseek` / `qwen` / `minimax` / `kimi` / `zai` / `openrouter`). `LLM_PROVIDER=openai-codex` is **not supported in containers** — it depends on an interactive OAuth flow that writes to the data dir, which can't run headless. `LLM_PROVIDER=claude-cli` is **not supported in containers** either — it requires a locally installed Claude Code CLI that you have signed into, which a headless image does not have.
+- A BYOK API-key provider (`anthropic` / `openai` / `google` / `deepseek` / `qwen` / `minimax` / `kimi` / `zai` / `openrouter`). `LLM_PROVIDER=openai-codex` is **not supported in containers** — it depends on an interactive OAuth flow that writes to the data dir, which can't run headless. `LLM_PROVIDER=claude-cli` is **not supported in containers** either — it requires a locally installed Claude Code CLI that you have signed into, which a headless image does not have. `LLM_PROVIDER=codex-agent` is **not supported in containers** for the same reason, and cannot be enabled by environment variable at all — it needs `llm.codex_agent.enabled: true` in `config.yaml`.
 
 ### Docker
 
@@ -451,7 +473,7 @@ Fill these Railway variables:
 
 | Variable | What to enter | Where to get it |
 | --- | --- | --- |
-| `LLM_PROVIDER` | One lower-case provider id: `anthropic`, `openai`, `google`, `deepseek`, `qwen`, `minimax`, `kimi`, `zai`, or `openrouter`. Start with `anthropic` if unsure. | Pick the provider that issued your `LLM_API_KEY`. ChatGPT Plus login is not supported in Railway because it needs an interactive browser login. `LLM_PROVIDER=claude-cli` is not supported on Railway either — it needs a locally signed-in Claude Code CLI. |
+| `LLM_PROVIDER` | One lower-case provider id: `anthropic`, `openai`, `google`, `deepseek`, `qwen`, `minimax`, `kimi`, `zai`, or `openrouter`. Start with `anthropic` if unsure. | Pick the provider that issued your `LLM_API_KEY`. ChatGPT Plus login is not supported in Railway because it needs an interactive browser login. `LLM_PROVIDER=claude-cli` is not supported on Railway either — it needs a locally signed-in Claude Code CLI, and neither is `codex-agent`, which additionally cannot be enabled by environment variable. |
 | `LLM_API_KEY` | API key for the provider in `LLM_PROVIDER`. | [Anthropic Console](https://console.anthropic.com/), [OpenAI Platform](https://platform.openai.com/), [Google AI Studio](https://aistudio.google.com/), [DeepSeek Platform](https://platform.deepseek.com/), Alibaba Cloud DashScope, [MiniMax Platform](https://platform.minimaxi.com/), [Moonshot AI](https://platform.moonshot.ai/), [Z.AI](https://z.ai/), or [OpenRouter](https://openrouter.ai/). |
 | `INTERVALS_API_KEY` | Your intervals.icu API key. | [intervals.icu/settings](https://intervals.icu/settings) > Developer Settings. |
 | `INTERVALS_ATHLETE_ID` | Your intervals.icu athlete id, usually like `i12345`. Include the leading `i` when intervals.icu shows one. | Open your intervals.icu profile/settings URL and copy the athlete id from the URL or profile details. |
