@@ -487,6 +487,14 @@ export const LlmProviderSchema = z.enum([
 ]);
 export type LlmProvider = z.infer<typeof LlmProviderSchema>;
 
+export const KEYLESS_LLM_PROVIDERS = ["openai-codex", "claude-cli"] as const;
+
+export type KeylessLlmProvider = (typeof KEYLESS_LLM_PROVIDERS)[number];
+
+export function isKeylessProvider(provider: string): provider is KeylessLlmProvider {
+  return (KEYLESS_LLM_PROVIDERS as readonly string[]).includes(provider);
+}
+
 const RuntimeOptionalStringSchema = z.string().min(1).max(512).nullable();
 
 const RuntimeClaudeCliSchema = z
@@ -511,10 +519,7 @@ const RuntimeLlmSchema = z
   })
   .strict()
   .superRefine((value, context) => {
-    if (
-      (value.provider === "openai-codex" || value.provider === "claude-cli") &&
-      value.api_key !== undefined
-    ) {
+    if (value.provider !== undefined && isKeylessProvider(value.provider) && value.api_key !== undefined) {
       context.addIssue({ code: "custom", path: ["api_key"], message: "api_key must be absent" });
     }
     if (value.clear_credential === true) {

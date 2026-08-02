@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@ai-sdk/provider": "^3.0.9",
+    "@enduragent/coach-contract": "workspace:*",
     "@enduragent/engine": "workspace:*",
     "@enduragent/kernel": "workspace:*",
     "@clack/prompts": "^1.2.0",

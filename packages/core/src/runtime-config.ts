@@ -1,3 +1,12 @@
+import {
+  KEYLESS_LLM_PROVIDERS,
+  isKeylessProvider,
+  type KeylessLlmProvider,
+} from "@enduragent/coach-contract";
+
+export { KEYLESS_LLM_PROVIDERS, isKeylessProvider };
+export type { KeylessLlmProvider };
+
 export const LLM_PROVIDERS = [
   "anthropic",
   "openai",
@@ -489,7 +498,7 @@ export function resolveRuntimeConfig(
       ? current.llm.model
       : DEFAULT_MODELS[provider];
   const selectionChanged = current === undefined || providerChanged || model !== current.llm.model;
-  const keyless = provider === "openai-codex" || provider === "claude-cli";
+  const keyless = isKeylessProvider(provider);
   const apiKey = keyless
     ? ""
     : isSpecified(llmPatch, "apiKey")

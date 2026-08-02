@@ -207,10 +207,12 @@ export type { DataSource } from "./config.js";
 export {
   COMPACT_MODEL_DEFAULTS,
   DEFAULT_MODELS,
+  KEYLESS_LLM_PROVIDERS,
   LLM_MODEL_CATALOGUE,
   LLM_PROVIDERS,
   PROVIDER_BASE_URLS,
   contextWindowForModel,
+  isKeylessProvider,
   resolveLlmProvider,
   resolveRuntimeConfig,
 } from "./runtime-config.js";
@@ -219,6 +221,7 @@ export type {
   ClaudeCliRuntimeConfigPatch,
   ClaudeCliRuntimeSettings,
   EffectiveRuntimeConfig,
+  KeylessLlmProvider,
   LlmModelCatalogueEntry,
   LlmModelOption,
   LlmProvider,

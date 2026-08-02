@@ -7,6 +7,7 @@ import { createAlibaba } from "@ai-sdk/alibaba";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModel, ModelMessage } from "ai";
+import { isKeylessProvider } from "@enduragent/coach-contract";
 
 import { splitSystemPromptAtBoundary } from "./agent/system-prompt.js";
 import { isPriced, priceUsage } from "./agent/codex/cost.js";
@@ -96,10 +97,7 @@ export class LLM {
   constructor(config: EngineConfig, ports: LLMHostPorts) {
     this.config = config;
     this.ports = ports;
-    this.aiSdkModel =
-      config.llm.provider === "openai-codex" || config.llm.provider === "claude-cli"
-        ? null
-        : buildAiSdkModel(config);
+    this.aiSdkModel = isKeylessProvider(config.llm.provider) ? null : buildAiSdkModel(config);
     this.priced = isPriced(config.llm.provider, config.llm.model);
     this.breakpointKey = cacheBreakpointKey(config.llm.provider, config.llm.model);
     this.chatStreamTimeouts = validateChatStreamTimeouts(
@@ -122,9 +120,7 @@ export class LLM {
     );
     const { signal: deadlineSignal, deadline } = withLLMDeadline(opts.signal, deadlineMs);
     const watchdog =
-      opts.caller === "chat" &&
-      this.config.llm.provider !== "openai-codex" &&
-      this.config.llm.provider !== "claude-cli"
+      opts.caller === "chat" && !isKeylessProvider(this.config.llm.provider)
         ? createChatStreamWatchdog(this.chatStreamTimeouts)
         : undefined;
     const signal =

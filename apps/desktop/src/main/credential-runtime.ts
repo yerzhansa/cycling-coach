@@ -1,5 +1,6 @@
 import { connectCoachClient, type CoachClient } from "@enduragent/coach-client";
 import {
+  isKeylessProvider,
   type ConfigureRuntimeRpcParams,
   type LlmProvider,
   type RuntimeConfigSnapshot,
@@ -70,7 +71,7 @@ export function readSelectedLlmProvider(
   if (provider === CHATGPT_PROFILE_NAME) {
     return evidence.chatGptProfilePresent ? provider : undefined;
   }
-  if (provider === "claude-cli") return provider;
+  if (isKeylessProvider(provider)) return provider;
   return evidence.storedCredentialSlots.includes(provider) ? provider : undefined;
 }
 
