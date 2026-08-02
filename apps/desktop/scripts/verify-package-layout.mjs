@@ -53,6 +53,7 @@ const forbiddenDirectoryNames = new Set([
   "test",
   "tests",
   "__tests__",
+  "__snapshots__",
   "fixture",
   "fixtures",
   "dev-fixture",
@@ -190,7 +191,8 @@ function forbiddenPathReason(path) {
   if (segments.some((segment) => forbiddenDirectoryNames.has(segment))) {
     return "test or fixture directory";
   }
-  if (/(?:^|\.)(?:test|spec)\./u.test(base)) return "test or spec source";
+  if (base.endsWith(".snap")) return "test snapshot artifact";
+  if (/(?:^|\.)(?:test|spec)\.(?:d\.)?[a-z0-9]+$/u.test(base)) return "test or spec source";
   if (/^vitest\.(?:config|workspace)\./u.test(base)) return "Vitest configuration";
   return undefined;
 }

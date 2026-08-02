@@ -1,0 +1,1 @@
+{"__on":"initialize","emit":[{"__result":true,"__idAs":"string","result":{"userAgent":"codex_cli_rs/0.146.0 (Mac OS 15.0.0; arm64) fake","codexHome":"/tmp/fake-codex-home","platformFamily":"unix","platformOs":"macos"}}]}

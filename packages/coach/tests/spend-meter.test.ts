@@ -17,7 +17,9 @@ import { readUsageLedger } from "@enduragent/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   claudeCliCacheReadSavingsUsd,
+  codexAgentCacheReadSavingsUsd,
   priceClaudeCliInclusiveUsage,
+  priceCodexAgentInclusiveUsage,
   priceInclusiveUsage,
   type UsageLedgerLine,
 } from "@enduragent/engine";
@@ -818,5 +820,146 @@ describe("claude-cli notional usage", () => {
       claudeCliCacheReadSavingsUsd("sonnet", 100_000) ?? 0,
     );
     expect(summary.routes.every((route) => route.cacheReadSavingsUsd !== null)).toBe(true);
+  });
+});
+
+
+describe("codex-agent notional usage", () => {
+  function codexAgentLine(overrides: Partial<UsageLedgerLine> = {}): UsageLedgerLine {
+    return line({
+      provider: "codex-agent",
+      model: "gpt-5.6-sol",
+      inputTokens: 1_000_000,
+      outputTokens: 100_000,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      costBasis: "notional",
+      ...overrides,
+    });
+  }
+
+  const notionalUsage = {
+    inputTokens: 1_000_000,
+    outputTokens: 100_000,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  };
+
+  async function summarize() {
+    return createSpendMeterService({
+      dataDir: root,
+      configDir,
+      timezone: "UTC",
+      now: () => Date.UTC(1998, 6, 6, 18),
+    }).getSpendSummary();
+  }
+
+  it("prices a delegated generation without accruing it against the cap", async () => {
+    await ledger("usage-ledger.jsonl", [codexAgentLine()]);
+    const expected = priceCodexAgentInclusiveUsage("gpt-5.6-sol", notionalUsage);
+
+    const summary = await summarize();
+
+    expect(expected?.total).toBeGreaterThan(DEFAULT_DAILY_SPEND_CAP_USD);
+    expect(summary).toMatchObject({
+      generationCount: 1,
+      pricedGenerationCount: 1,
+      unpricedGenerationCount: 0,
+      malformedLineCount: 0,
+      spendComplete: true,
+      knownSpendUsd: 0,
+      notionalSpendUsd: expected?.total,
+      capStatus: "below",
+    });
+    expect(summary.routes[0]).toMatchObject({
+      provider: "codex-agent",
+      model: "gpt-5.6-sol",
+      knownSpendUsd: 0,
+      notionalSpendUsd: expected?.total,
+      providerReportedGenerationCount: 0,
+    });
+  });
+
+  it("prices an uncatalogued model id at the family fallback instead of leaving the cap unknown", async () => {
+    await ledger("usage-ledger.jsonl", [codexAgentLine({ model: "gpt-5.9-terra-preview" })]);
+    const expected = priceCodexAgentInclusiveUsage("gpt-5.9-terra-preview", notionalUsage);
+
+    const summary = await summarize();
+
+    expect(expected?.total).toBeGreaterThan(0);
+    expect(summary).toMatchObject({
+      pricedGenerationCount: 1,
+      unpricedGenerationCount: 0,
+      spendComplete: true,
+      knownSpendUsd: 0,
+      notionalSpendUsd: expected?.total,
+      capStatus: "below",
+    });
+  });
+
+  it("prices cache-read savings from the lane table", async () => {
+    await ledger("usage-ledger.jsonl", [
+      codexAgentLine({ inputTokens: 1_000_000, cacheReadTokens: 800_000 }),
+    ]);
+    const expected = codexAgentCacheReadSavingsUsd("gpt-5.6-sol", 800_000);
+
+    const summary = await summarize();
+
+    expect(expected).toBeGreaterThan(0);
+    expect(summary).toMatchObject({
+      cacheReadTokens: 800_000,
+      knownCacheReadSavingsUsd: expected,
+      cacheSavingsComplete: true,
+    });
+    expect(summary.routes[0]).toMatchObject({
+      provider: "codex-agent",
+      cacheReadTokens: 800_000,
+      cacheReadSavingsUsd: expected,
+    });
+  });
+
+  it("keeps the delegated row out of accrual beside a catalogued provider row", async () => {
+    await ledger("usage-ledger.jsonl", [
+      codexAgentLine(),
+      line({ providerReportedCostUsd: 0.2, cacheReadTokens: 0, cacheWriteTokens: 0 }),
+    ]);
+    const expected = priceCodexAgentInclusiveUsage("gpt-5.6-sol", notionalUsage);
+
+    const summary = await summarize();
+
+    expect(summary).toMatchObject({
+      generationCount: 2,
+      pricedGenerationCount: 2,
+      knownSpendUsd: 0.2,
+      notionalSpendUsd: expected?.total,
+      capStatus: "below",
+    });
+    expect(summary.cacheSavingsComplete).toBe(true);
+  });
+
+  it("leaves the legacy openai-codex input-token reinterpretation untouched", async () => {
+    await ledger("usage-ledger.jsonl", [
+      codexAgentLine({
+        inputTokens: 1_000,
+        outputTokens: 100,
+        cacheReadTokens: 400,
+        cacheWriteTokens: 100,
+        totalTokens: 1_600,
+      }),
+    ]);
+    const expected = priceCodexAgentInclusiveUsage("gpt-5.6-sol", {
+      inputTokens: 1_000,
+      outputTokens: 100,
+      cacheReadTokens: 400,
+      cacheWriteTokens: 100,
+    });
+
+    const summary = await summarize();
+
+    expect(summary).toMatchObject({
+      pricedGenerationCount: 1,
+      knownSpendUsd: 0,
+      notionalSpendUsd: expected?.total,
+    });
   });
 });

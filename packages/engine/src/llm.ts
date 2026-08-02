@@ -20,6 +20,7 @@ import type {
 } from "./host-ports.js";
 import { codexGenerateText } from "./agent/codex-bridge.js";
 import { claudeCliGenerateText } from "./agent/claude-cli/bridge.js";
+import { codexAgentGenerateText } from "./agent/codex-agent/bridge.js";
 import {
   createClaudeCliSessionPool,
   type ClaudeCliSessionPool,
@@ -60,6 +61,10 @@ type LLMHostPorts = Pick<
 // LLM DISPATCH
 // ============================================================================
 
+export function usesKeylessTransport(provider: string): boolean {
+  return isKeylessProvider(provider) || provider === "codex-agent";
+}
+
 // Most providers cache the stable system prefix automatically server-side and
 // get the plain system string, so they are absent here: direct openai/google,
 // the OpenAI-compatible direct providers, and OpenRouter's OpenAI/DeepSeek/
@@ -97,7 +102,7 @@ export class LLM {
   constructor(config: EngineConfig, ports: LLMHostPorts) {
     this.config = config;
     this.ports = ports;
-    this.aiSdkModel = isKeylessProvider(config.llm.provider) ? null : buildAiSdkModel(config);
+    this.aiSdkModel = usesKeylessTransport(config.llm.provider) ? null : buildAiSdkModel(config);
     this.priced = isPriced(config.llm.provider, config.llm.model);
     this.breakpointKey = cacheBreakpointKey(config.llm.provider, config.llm.model);
     this.chatStreamTimeouts = validateChatStreamTimeouts(
@@ -120,7 +125,7 @@ export class LLM {
     );
     const { signal: deadlineSignal, deadline } = withLLMDeadline(opts.signal, deadlineMs);
     const watchdog =
-      opts.caller === "chat" && !isKeylessProvider(this.config.llm.provider)
+      opts.caller === "chat" && !usesKeylessTransport(this.config.llm.provider)
         ? createChatStreamWatchdog(this.chatStreamTimeouts)
         : undefined;
     const signal =
@@ -211,6 +216,23 @@ export class LLM {
             billing: claudeCli.billing,
           },
           pool: this.claudeCliPool,
+        },
+      );
+    }
+
+    if (this.config.llm.provider === "codex-agent") {
+      const codexAgent = this.config.llm.codexAgent;
+      if (codexAgent === undefined) {
+        throw new Error("codex-agent provider requires llm.codexAgent configuration");
+      }
+      return codexAgentGenerateText(
+        { ...opts, modelId: this.config.llm.model },
+        {
+          runtime: {
+            enabled: codexAgent.enabled,
+            binaryPath: codexAgent.binaryPath,
+            reasoningEffort: codexAgent.reasoningEffort,
+          },
         },
       );
     }
@@ -640,5 +662,7 @@ function buildAiSdkModel(config: EngineConfig): LanguageModel {
       throw new Error("openai-codex is handled via the bridge, not AI SDK");
     case "claude-cli":
       throw new Error("claude-cli is handled via the bridge, not AI SDK");
+    case "codex-agent":
+      throw new Error("codex-agent is handled via the bridge, not AI SDK");
   }
 }

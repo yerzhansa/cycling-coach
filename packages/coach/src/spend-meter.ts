@@ -17,7 +17,9 @@ import {
   cacheReadSavingsUsd,
   claudeCliCacheReadSavingsUsd,
   classifySpendCaching,
+  codexAgentCacheReadSavingsUsd,
   priceClaudeCliInclusiveUsage,
+  priceCodexAgentInclusiveUsage,
   priceInclusiveUsage,
   type UsageCost,
   type UsageLedgerLine,
@@ -163,17 +165,24 @@ function catalogInputTokens(line: UsageLedgerLine): number | undefined {
 }
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";
+const CODEX_AGENT_PROVIDER = "codex-agent";
 
 function catalogCostFor(line: UsageLedgerLine, usage: UsageTokenCounts): UsageCost | undefined {
-  return line.provider === CLAUDE_CLI_PROVIDER
-    ? priceClaudeCliInclusiveUsage(line.model, usage)
-    : priceInclusiveUsage(line.provider, line.model, usage);
+  if (line.provider === CLAUDE_CLI_PROVIDER) return priceClaudeCliInclusiveUsage(line.model, usage);
+  if (line.provider === CODEX_AGENT_PROVIDER) {
+    return priceCodexAgentInclusiveUsage(line.model, usage);
+  }
+  return priceInclusiveUsage(line.provider, line.model, usage);
 }
 
 function catalogCacheReadSavingsFor(line: UsageLedgerLine, cacheReadTokens: number): number | null {
-  return line.provider === CLAUDE_CLI_PROVIDER
-    ? claudeCliCacheReadSavingsUsd(line.model, cacheReadTokens)
-    : cacheReadSavingsUsd(line.provider, line.model, cacheReadTokens);
+  if (line.provider === CLAUDE_CLI_PROVIDER) {
+    return claudeCliCacheReadSavingsUsd(line.model, cacheReadTokens);
+  }
+  if (line.provider === CODEX_AGENT_PROVIDER) {
+    return codexAgentCacheReadSavingsUsd(line.model, cacheReadTokens);
+  }
+  return cacheReadSavingsUsd(line.provider, line.model, cacheReadTokens);
 }
 
 function accruesToCap(line: UsageLedgerLine): boolean {

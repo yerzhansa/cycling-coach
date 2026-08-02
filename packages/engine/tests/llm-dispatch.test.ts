@@ -514,3 +514,70 @@ describe("LLM dispatch — chat stream watchdog", () => {
     vi.useRealTimers();
   });
 });
+
+function codexAgentConfig(): EngineConfig {
+  return {
+    dataSource: "platform",
+    llm: {
+      provider: "codex-agent",
+      model: "gpt-5.6-sol",
+      apiKey: "",
+      codexAgent: { enabled: true, binaryPath: "/never/spawned/codex", reasoningEffort: "medium" },
+    },
+    session: { historyTokenBudgetRatio: 0.3, idleMinutes: 0, dailyResetHour: 4, resetArchiveRetentionDays: 0, timezone: "" },
+    contextWindowTokens: 1_050_000,
+    compactContextWindowTokens: 1_050_000,
+  };
+}
+
+describe("LLM dispatch — codex-agent provider gating (AC-3)", () => {
+  it("builds no AI SDK model and dispatches to the codex-agent bridge", async () => {
+    const captured: { modelId?: string; runtime?: unknown; called: number } = { called: 0 };
+    vi.doMock("../src/agent/codex-agent/bridge.js", () => ({
+      codexAgentGenerateText: vi.fn(async (o: { modelId: string }, p: { runtime: unknown }) => {
+        captured.modelId = o.modelId;
+        captured.runtime = p.runtime;
+        captured.called++;
+        return MINIMAL_RESULT;
+      }),
+    }));
+
+    const { LLM, usesKeylessTransport } = await import("../src/llm.js");
+    expect(usesKeylessTransport("codex-agent")).toBe(true);
+
+    const llm = new LLM(codexAgentConfig(), llmTestPorts());
+    await llm.generate({ messages: [{ role: "user", content: "hi" }], caller: "chat" });
+
+    expect(captured.called).toBe(1);
+    expect(captured.modelId).toBe("gpt-5.6-sol");
+    expect(captured.runtime).toEqual({
+      enabled: true,
+      binaryPath: "/never/spawned/codex",
+      reasoningEffort: "medium",
+    });
+  });
+
+  it("is excluded from the chat-stream watchdog so a silent thinking turn survives", async () => {
+    vi.useFakeTimers();
+    vi.doMock("../src/agent/codex-agent/bridge.js", () => ({
+      codexAgentGenerateText: vi.fn(
+        (o: { signal?: AbortSignal }) =>
+          new Promise((resolve, reject) => {
+            o.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+            setTimeout(() => resolve(MINIMAL_RESULT), 60_000);
+          }),
+      ),
+    }));
+
+    const { LLM } = await import("../src/llm.js");
+    const llm = new LLM(codexAgentConfig(), {
+      ...llmTestPorts(),
+      chatStreamTimeouts: { ttftMs: 10, interChunkMs: 20 },
+    });
+    const pending = llm.generate({ messages: [], caller: "chat" });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await expect(pending).resolves.toMatchObject({ text: "ok" });
+    vi.useRealTimers();
+  });
+});

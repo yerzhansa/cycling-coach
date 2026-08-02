@@ -145,6 +145,26 @@ export {
   type ClaudeCliConfigErrorKind,
 } from "./agent/claude-cli/errors.js";
 export {
+  CODEX_AGENT_PRICE_TABLE,
+  codexAgentCacheReadSavingsUsd,
+  priceCodexAgentInclusiveUsage,
+  resolveCodexAgentPriceId,
+} from "./agent/codex-agent/cost.js";
+export {
+  CodexAgentConfigError,
+  type CodexAgentConfigErrorKind,
+} from "./agent/codex-agent/errors.js";
+export {
+  codexIdentityLine,
+  ensureCodexAgentReady,
+  invalidateCodexAgentProbeCache,
+  type CodexAgentReadinessRefusal,
+  type CodexAgentReadinessReport,
+  type CodexAgentReadinessResult,
+  type EnsureCodexAgentReadyDeps,
+  type EnsureCodexAgentReadyInput,
+} from "./agent/codex-agent/probe.js";
+export {
   API_KEY_BILLING_IDENTITY_LINE,
   claudeIdentityLine,
   ensureClaudeCliReady,
