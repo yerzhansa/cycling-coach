@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { tool } from "ai";
 import { z } from "zod";
 import type { ToolSet } from "ai";
-import { CODEX_AGENT_DISABLED_MESSAGE } from "@enduragent/coach-contract";
+import {
+  CODEX_AGENT_DISABLED_MESSAGE,
+  CODEX_AGENT_WINDOWS_MESSAGE,
+} from "@enduragent/coach-contract";
 
 import { classifyFailure } from "../../../core/src/agent/token-utils.js";
 import {
@@ -149,6 +152,63 @@ describe("codexAgentGenerateText flag-off gate", () => {
       ).rejects.toMatchObject({ kind: "disabled", message: CODEX_AGENT_DISABLED_MESSAGE });
 
       expect(await staged.spawnCount()).toBe(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe("codexAgentGenerateText platform gate", () => {
+  it(
+    "refuses without spawning a child when the turn runs on win32",
+    async () => {
+      const staged = await stage("turn-happy");
+
+      await expect(
+        codexAgentGenerateText(chatOpts(), ports(staged.binaryPath, { platform: "win32" })),
+      ).rejects.toMatchObject({
+        name: "CodexAgentConfigError",
+        kind: "unsupported-platform",
+        message: CODEX_AGENT_WINDOWS_MESSAGE,
+      });
+
+      expect(await staged.spawnCount()).toBe(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "names the platform before the flag when an enabled-less runtime runs on win32",
+    async () => {
+      const staged = await stage("turn-happy");
+
+      await expect(
+        codexAgentGenerateText(chatOpts(), {
+          runtime: { enabled: false, binaryPath: staged.binaryPath },
+          platform: "win32",
+          baseEnv: baseEnv(),
+          startEndpoint: async (options) => stubEndpoint(Object.keys(options.tools)),
+        }),
+      ).rejects.toMatchObject({
+        kind: "unsupported-platform",
+        message: CODEX_AGENT_WINDOWS_MESSAGE,
+      });
+
+      expect(await staged.spawnCount()).toBe(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "runs the turn on a supported platform",
+    async () => {
+      const staged = await stage("turn-happy");
+      const result = await codexAgentGenerateText(
+        chatOpts(),
+        ports(staged.binaryPath, { platform: "darwin" }),
+      );
+
+      expect(result.finishReason).toBe("stop");
+      expect(await staged.spawnCount()).toBe(1);
     },
     TEST_TIMEOUT_MS,
   );

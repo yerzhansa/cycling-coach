@@ -8,7 +8,12 @@ import {
   CODEX_MCP_SERVER_NAME,
   type CodexMcpEndpointOverride,
 } from "./config-overrides.js";
-import { disabledLaneError, mcpIsolationError, normalizeCodexAgentError } from "./errors.js";
+import {
+  disabledLaneError,
+  mcpIsolationError,
+  normalizeCodexAgentError,
+  unsupportedPlatformError,
+} from "./errors.js";
 import { startCoachMcpEndpoint, type CoachMcpEndpoint } from "./mcp-endpoint.js";
 import { ensureCodexAgentReady, invalidateCodexAgentProbeCache } from "./probe.js";
 import {
@@ -81,6 +86,7 @@ export type EnsureCodexAgentReady = (
 
 export interface CodexAgentBridgePorts {
   readonly runtime: CodexAgentRuntime;
+  readonly platform?: NodeJS.Platform;
   readonly baseEnv?: NodeJS.ProcessEnv;
   readonly ensureReady?: EnsureCodexAgentReady;
   readonly invalidateProbeCache?: () => void;
@@ -687,6 +693,7 @@ export async function codexAgentGenerateText(
   opts: CodexAgentGenerateOpts,
   ports: CodexAgentBridgePorts,
 ): Promise<GenerateResult> {
+  if ((ports.platform ?? process.platform) === "win32") throw unsupportedPlatformError();
   if (ports.runtime.enabled !== true) throw disabledLaneError();
 
   const baseEnv = ports.baseEnv ?? process.env;
