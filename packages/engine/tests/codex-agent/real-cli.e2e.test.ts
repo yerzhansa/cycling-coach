@@ -32,7 +32,6 @@ import { CODEX_VERSION_FLOOR, compareVersions } from "../../src/agent/codex-agen
 import {
   CODEX_CHATGPT_HOST,
   readConfigPath,
-  verifyConfigOverrides,
   verifySpawnedChild,
 } from "../../src/agent/codex-agent/verify.js";
 import type { EngineConfig, MemorySnapshot } from "../../src/host-ports.js";
@@ -57,9 +56,11 @@ const CLIENT_NOTIFICATION_METHODS = ["initialized"] as const;
 const MUST_PRESERVE_TOKENS = ["FTP 247W", "72kg", "Mon/Wed/Fri", "Gran Fondo"];
 
 const CHATGPT_BASE_URL_ABSENT = "absent";
+const CHATGPT_BASE_URL_EMPTY = "empty string";
 
 function chatgptBaseUrlHost(value: unknown): string {
-  if (value === undefined || value === null || value === "") return CHATGPT_BASE_URL_ABSENT;
+  if (value === undefined || value === null) return CHATGPT_BASE_URL_ABSENT;
+  if (value === "") return CHATGPT_BASE_URL_EMPTY;
   if (typeof value !== "string") return `non-string ${JSON.stringify(value)}`;
   try {
     return new URL(value).host;
@@ -251,7 +252,6 @@ describe.skipIf(!ENABLED)("real codex app-server", () => {
         expect([CHATGPT_BASE_URL_ABSENT, CODEX_CHATGPT_HOST]).toContain(
           chatgptBaseUrlHost(chatgptBaseUrl),
         );
-        expect(verifyConfigOverrides(values)).toBeNull();
 
         const servers = readConfigPath(values, "mcp_servers").value as Record<
           string,

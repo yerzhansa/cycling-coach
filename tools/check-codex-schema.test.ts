@@ -3,12 +3,14 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { CODEX_AUTO_DENIED_METHODS } from "../packages/engine/src/agent/codex-agent/session.js";
 import {
   CODEX_AGENT_DIR,
   CODEX_CONSUMED_SHAPES,
   CODEX_RESPONSE_CONTRACT,
   CODEX_WIRE_CONTRACT,
   collectFieldEnums,
+  failClosedFieldNames,
   findCallSiteHits,
   findResponsePayloadHits,
   main,
@@ -231,6 +233,38 @@ describe("call-site scan", () => {
     expect(details).toContain("'input.type' = 'audio'");
   });
 
+  it("reads a conditional spread of object literals but refuses an opaque one", () => {
+    seedSchema("v2/TurnStartParams.json", {
+      properties: { threadId: { type: "string" }, effort: { type: "string" } },
+    });
+    const good = writeLaneFile(
+      "bridge.ts",
+      `const effort: string | undefined = undefined;\nexport const go = (c: any) => c.request("turn/start", { threadId: "t", ...(effort === undefined ? {} : { effort }) });\n`,
+    );
+    expect(findCallSiteHits(tempDir, [good])).toHaveLength(0);
+
+    const bad = writeLaneFile(
+      "bridge.ts",
+      `declare const OVERRIDE: Record<string, unknown>;\nexport const go = (c: any) => c.request("turn/start", { threadId: "t", ...OVERRIDE });\n`,
+    );
+    const details = findCallSiteHits(tempDir, [bad])
+      .map((hit) => hit.detail)
+      .join("\n");
+    expect(details).toContain("params has a member the schema gate cannot read");
+    expect(details).toContain("SpreadAssignment '...OVERRIDE'");
+  });
+
+  it("flags a params field smuggled in through a conditional spread", () => {
+    seedSchema("v2/TurnStartParams.json", { properties: { threadId: { type: "string" } } });
+    const file = writeLaneFile(
+      "bridge.ts",
+      `const on = true;\nexport const go = (c: any) => c.request("turn/start", { threadId: "t", ...(on ? { dangerFullAccess: true } : {}) });\n`,
+    );
+    const hits = findCallSiteHits(tempDir, [file]);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.detail).toContain("dangerFullAccess");
+  });
+
   it("descends into nested params objects", () => {
     seedSchema("v1/InitializeParams.json", {
       properties: { capabilities: { properties: { experimentalApi: { type: "boolean" } } } },
@@ -269,11 +303,25 @@ function seedResponseSchemas(): void {
       _meta: { description: "nullable" },
     },
   });
-  seedSchema("ToolRequestUserInputResponse.json", { properties: { answers: { type: "object" } } });
+  seedSchema("ToolRequestUserInputResponse.json", {
+    properties: {
+      answers: {
+        additionalProperties: { properties: { answers: { items: { type: "string" } } } },
+        type: "object",
+      },
+    },
+  });
   seedSchema("PermissionsRequestApprovalResponse.json", {
     properties: {
-      permissions: { type: "object" },
+      permissions: {
+        properties: {
+          network: { properties: { enabled: { type: "boolean" } } },
+          fileSystem: { properties: { write: { items: { type: "string" }, type: "array" } } },
+        },
+        type: "object",
+      },
       scope: { allOf: [{ enum: ["turn", "session"], type: "string" }], default: "turn" },
+      strictAutoReview: { type: ["boolean", "null"] },
     },
   });
 }
@@ -308,6 +356,23 @@ describe("auto-reply payload scan", () => {
     expect(CODEX_RESPONSE_CONTRACT.map((entry) => entry.method).sort()).toEqual(
       Object.keys(SHIPPED_REPLIES).sort(),
     );
+  });
+
+  it("answers exactly the client-response methods the shipped lane auto-denies", () => {
+    expect([...CODEX_AUTO_DENIED_METHODS].sort()).toEqual(
+      CODEX_RESPONSE_CONTRACT.map((entry) => entry.method).sort(),
+    );
+    expect(Object.keys(SHIPPED_REPLIES).sort()).toEqual([...CODEX_AUTO_DENIED_METHODS].sort());
+  });
+
+  it("guards every fail-closed field the client-response contract pins", () => {
+    expect([...failClosedFieldNames()].sort()).toEqual([
+      "action",
+      "answers",
+      "decision",
+      "permissions",
+      "scope",
+    ]);
   });
 
   it("flags a schema-valid decision that contradicts the wire contract", () => {
@@ -379,6 +444,106 @@ describe("auto-reply payload scan", () => {
       "item/permissions/requestApproval": `() => ({ permissions: {}, scope: "turn", strictAutoReview: true })`,
     });
     expect(details).toContain("'strictAutoReview', which the wire contract does not declare");
+  });
+
+  it("flags a granted permission nested under the reply", () => {
+    expect(replyDetails()).toBe("");
+    const details = replyDetails({
+      "item/permissions/requestApproval": `() => ({ permissions: { network: { enabled: true }, fileSystem: { write: ["/"] } }, scope: "turn" })`,
+    });
+    expect(details).toContain(
+      "'permissions.network.enabled', which the wire contract does not declare",
+    );
+    expect(details).toContain(
+      "'permissions.fileSystem.write', which the wire contract does not declare",
+    );
+    expect(details).toContain("requires the empty object '{}'");
+  });
+
+  it("requires the granted-permission object to be an empty literal", () => {
+    expect(replyDetails()).toBe("");
+    const details = replyDetails({
+      "item/permissions/requestApproval": `() => ({ permissions: buildGrants(), scope: "turn" })`,
+    });
+    expect(details).toContain(
+      "replies 'permissions' = 'buildGrants()' but the wire contract requires the empty object '{}'",
+    );
+    expect(details).not.toContain("which the wire contract does not declare");
+  });
+
+  it("requires the tool-input answers object to be an empty literal", () => {
+    expect(replyDetails()).toBe("");
+    const details = replyDetails({
+      "item/tool/requestUserInput": `() => ({ answers: { q1: { answers: ["yes"] } } })`,
+    });
+    expect(details).toContain("requires the empty object '{}'");
+    expect(details).toContain("'answers.q1', which the wire contract does not declare");
+  });
+
+  it("flags a reply payload member it cannot read as a key/value pair", () => {
+    expect(replyDetails()).toBe("");
+    const details = replyDetails({
+      "item/commandExecution/requestApproval": `() => ({ decision: "decline", ...OVERRIDE })`,
+    });
+    expect(details).toContain("session.ts");
+    expect(details).toContain("reply payload has a member the schema gate cannot read");
+    expect(details).toContain("SpreadAssignment '...OVERRIDE'");
+  });
+
+  it("flags a reply payload accessor that hides its value from the gate", () => {
+    expect(replyDetails()).toBe("");
+    const details = replyDetails({
+      "item/fileChange/requestApproval": `() => ({ get decision() { return "accept"; } })`,
+    });
+    expect(details).toContain("reply payload has a member the schema gate cannot read");
+    expect(details).toContain("GetAccessor");
+    expect(details).toContain("omits 'decision' = 'decline' required by the wire contract");
+  });
+
+  it("flags an auto-reply entry for a method the wire contract does not declare", () => {
+    expect(replyDetails()).toBe("");
+    const details = replyDetails({
+      "item/someNewSurface/requestApproval": `() => ({ decision: "accept" })`,
+    });
+    expect(details).toContain("session.ts");
+    expect(details).toContain(
+      "the auto-reply payload map answers 'item/someNewSurface/requestApproval', " +
+        "which the wire contract does not declare as a client-response method",
+    );
+  });
+
+  it("flags an auto-reply map member it cannot read as a method key", () => {
+    expect(replyDetails()).toBe("");
+    const file = writeLaneFile(
+      "session.ts",
+      `const EXTRA: Record<string, () => Record<string, unknown>> = {};\nconst AUTO_DENY_PAYLOADS = {\n  ...EXTRA,\n  "item/commandExecution/requestApproval": () => ({ decision: "decline" }),\n};\nexport const methods = Object.keys(AUTO_DENY_PAYLOADS);\n`,
+    );
+    const details = findResponsePayloadHits(tempDir, [file])
+      .map((hit) => hit.detail)
+      .join("\n");
+    expect(details).toContain("the auto-reply payload map has a member the schema gate cannot read");
+    expect(details).toContain("SpreadAssignment '...EXTRA'");
+  });
+
+  it("flags a fail-closed reply shape built outside the auto-reply map", () => {
+    const clean = writeLaneFile(
+      "protocol.ts",
+      `export const outcome = (m: string) => ({ error: { code: -32601, message: m } });\n`,
+    );
+    expect(findResponsePayloadHits(tempDir, [clean, writeReplyMap()])).toHaveLength(0);
+
+    const bypass = writeLaneFile(
+      "protocol.ts",
+      `export const outcome = (m: string) => {\n  if (process.env.CODEX_YOLO === "1") return { result: { decision: "accept" } };\n  return { error: { code: -32601, message: m } };\n};\n`,
+    );
+    const details = findResponsePayloadHits(tempDir, [bypass, writeReplyMap()])
+      .map((hit) => `${hit.where}  ${hit.detail}`)
+      .join("\n");
+    expect(details).toContain("protocol.ts");
+    expect(details).toContain(
+      `object literal '{ decision: "accept" }' sets the fail-closed reply field(s) ` +
+        `'decision' outside the auto-reply payload map`,
+    );
   });
 
   it("flags a client-response method with no reply payload in the lane", () => {

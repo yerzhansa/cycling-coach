@@ -12,6 +12,7 @@ export interface CodexWireContract {
   readonly schema: string | null;
   readonly fields: readonly string[];
   readonly values?: Readonly<Record<string, string>>;
+  readonly emptyObjects?: readonly string[];
 }
 
 export const CODEX_WIRE_CONTRACT: readonly CodexWireContract[] = [
@@ -123,6 +124,7 @@ export const CODEX_WIRE_CONTRACT: readonly CodexWireContract[] = [
     direction: "client-response",
     schema: "ToolRequestUserInputResponse.json",
     fields: ["answers"],
+    emptyObjects: ["answers"],
   },
   {
     method: "item/permissions/requestApproval",
@@ -130,6 +132,7 @@ export const CODEX_WIRE_CONTRACT: readonly CodexWireContract[] = [
     schema: "PermissionsRequestApprovalResponse.json",
     fields: ["permissions", "scope"],
     values: { scope: "turn" },
+    emptyObjects: ["permissions"],
   },
 ];
 
@@ -406,6 +409,15 @@ function checkManifest(rootDir: string): CodexSchemaHit[] {
       if (violation !== null) hits.push({ where: entry.label, detail: violation });
     }
   }
+  for (const entry of CODEX_WIRE_CONTRACT) {
+    for (const path of entry.emptyObjects ?? []) {
+      if (entry.fields.includes(path)) continue;
+      hits.push({
+        where: `${entry.direction} ${entry.method}`,
+        detail: `requires '${path}' to be an empty object but does not declare it as a field`,
+      });
+    }
+  }
   return hits;
 }
 
@@ -416,29 +428,78 @@ function literalText(node: ts.Node): string | null {
 interface CollectedPath {
   readonly path: string;
   readonly value: string | null;
+  readonly text: string;
+  readonly emptyObject: boolean;
+}
+
+interface CollectedMembers {
+  readonly paths: CollectedPath[];
+  readonly unreadable: string[];
+}
+
+function sourceSnippet(node: ts.Node): string {
+  const text = node.getText().replace(/\s+/g, " ").trim();
+  return text.length > 60 ? `${text.slice(0, 60)}...` : text;
+}
+
+function memberLabel(property: ts.ObjectLiteralElementLike, prefix: string): string {
+  const label = `${ts.SyntaxKind[property.kind]} '${sourceSnippet(property)}'`;
+  return prefix === "" ? label : `${label} under '${prefix}'`;
+}
+
+function spreadObjects(node: ts.Expression): ts.ObjectLiteralExpression[] | null {
+  if (ts.isParenthesizedExpression(node)) return spreadObjects(node.expression);
+  if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
+    return spreadObjects(node.expression);
+  }
+  if (ts.isObjectLiteralExpression(node)) return [node];
+  if (ts.isConditionalExpression(node)) {
+    const whenTrue = spreadObjects(node.whenTrue);
+    const whenFalse = spreadObjects(node.whenFalse);
+    if (whenTrue === null || whenFalse === null) return null;
+    return [...whenTrue, ...whenFalse];
+  }
+  return null;
 }
 
 function collectObjectPaths(
   node: ts.ObjectLiteralExpression,
   prefix: string,
-  out: CollectedPath[],
+  out: CollectedMembers,
   constants: ReadonlyMap<string, string>,
 ): void {
   for (const property of node.properties) {
+    if (ts.isSpreadAssignment(property)) {
+      const merged = spreadObjects(property.expression);
+      if (merged === null) {
+        out.unreadable.push(memberLabel(property, prefix));
+        continue;
+      }
+      for (const object of merged) collectObjectPaths(object, prefix, out, constants);
+      continue;
+    }
     let name: string | null = null;
     if (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) {
       const propertyName = property.name;
       if (ts.isIdentifier(propertyName)) name = propertyName.text;
       else if (ts.isStringLiteralLike(propertyName)) name = propertyName.text;
     }
-    if (name === null) continue;
+    if (name === null) {
+      out.unreadable.push(memberLabel(property, prefix));
+      continue;
+    }
     const path = prefix === "" ? name : `${prefix}.${name}`;
     if (!ts.isPropertyAssignment(property)) {
-      out.push({ path, value: null });
+      out.paths.push({ path, value: null, text: sourceSnippet(property), emptyObject: false });
       continue;
     }
     const initializer = property.initializer;
-    out.push({ path, value: literalValue(initializer, constants) });
+    out.paths.push({
+      path,
+      value: literalValue(initializer, constants),
+      text: sourceSnippet(initializer),
+      emptyObject: ts.isObjectLiteralExpression(initializer) && initializer.properties.length === 0,
+    });
     if (ts.isObjectLiteralExpression(initializer)) {
       collectObjectPaths(initializer, path, out, constants);
       continue;
@@ -518,10 +579,16 @@ export function findCallSiteHits(rootDir: string, files: readonly string[]): Cod
                 if (typeof schema === "string") {
                   hits.push({ where, detail: schema });
                 } else {
-                  const paths: CollectedPath[] = [];
-                  collectObjectPaths(params, "", paths, constants);
+                  const collected: CollectedMembers = { paths: [], unreadable: [] };
+                  collectObjectPaths(params, "", collected, constants);
+                  for (const label of collected.unreadable) {
+                    hits.push({
+                      where,
+                      detail: `'${method}' params has a member the schema gate cannot read: ${label}`,
+                    });
+                  }
                   const declared = entry.values ?? {};
-                  for (const { path, value } of paths) {
+                  for (const { path, value } of collected.paths) {
                     if (!resolveFieldPath(schema, path)) {
                       hits.push({
                         where,
@@ -590,11 +657,10 @@ function checkResponsePayload(
   schemaCache: Map<string, JsonNode | string>,
   constants: ReadonlyMap<string, string>,
   entry: CodexWireContract,
-  initializer: ts.Node,
+  payload: ts.ObjectLiteralExpression | null,
   where: string,
 ): CodexSchemaHit[] {
   const method = entry.method;
-  const payload = payloadObjectOf(initializer);
   if (payload === null) {
     return [
       {
@@ -615,14 +681,20 @@ function checkResponsePayload(
   if (typeof schema === "string") return [{ where, detail: schema }];
 
   const hits: CodexSchemaHit[] = [];
-  const paths: CollectedPath[] = [];
-  collectObjectPaths(payload, "", paths, constants);
+  const collected: CollectedMembers = { paths: [], unreadable: [] };
+  collectObjectPaths(payload, "", collected, constants);
+  for (const label of collected.unreadable) {
+    hits.push({
+      where,
+      detail: `'${method}' reply payload has a member the schema gate cannot read: ${label}`,
+    });
+  }
   const declared = entry.values ?? {};
-  const sent = new Map<string, string | null>();
-  for (const { path, value } of paths) sent.set(path, value);
+  const sent = new Map<string, CollectedPath>();
+  for (const record of collected.paths) sent.set(record.path, record);
 
-  for (const { path, value } of paths) {
-    if (!path.includes(".") && !entry.fields.includes(path)) {
+  for (const { path, value } of collected.paths) {
+    if (!entry.fields.includes(path)) {
       hits.push({
         where,
         detail: `'${method}' replies with '${path}', which the wire contract does not declare`,
@@ -649,9 +721,21 @@ function checkResponsePayload(
     }
   }
 
+  for (const path of entry.emptyObjects ?? []) {
+    const record = sent.get(path);
+    if (record === undefined || record.emptyObject) continue;
+    hits.push({
+      where,
+      detail:
+        `'${method}' replies '${path}' = '${record.text}' but the wire contract ` +
+        `requires the empty object '{}'`,
+    });
+  }
+
   for (const path of new Set([...entry.fields, ...Object.keys(declared)])) {
     const expected = declared[path];
-    if (!sent.has(path)) {
+    const record = sent.get(path);
+    if (record === undefined) {
       hits.push({
         where,
         detail:
@@ -661,7 +745,7 @@ function checkResponsePayload(
       });
       continue;
     }
-    if (expected !== undefined && sent.get(path) === null) {
+    if (expected !== undefined && record.value === null) {
       hits.push({
         where,
         detail:
@@ -673,6 +757,58 @@ function checkResponsePayload(
   return hits;
 }
 
+function replyMapKeyOf(property: ts.ObjectLiteralElementLike): string | null {
+  if (!ts.isPropertyAssignment(property)) return null;
+  return ts.isStringLiteralLike(property.name) ? property.name.text : null;
+}
+
+function isReplyMap(
+  node: ts.ObjectLiteralExpression,
+  byMethod: ReadonlyMap<string, CodexWireContract>,
+): boolean {
+  for (const property of node.properties) {
+    const key = replyMapKeyOf(property);
+    if (key !== null && byMethod.has(key)) return true;
+  }
+  return false;
+}
+
+export function failClosedFieldNames(): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const entry of CODEX_RESPONSE_CONTRACT) {
+    for (const path of Object.keys(entry.values ?? {})) {
+      if (!path.includes(".")) names.add(path);
+    }
+    for (const path of entry.emptyObjects ?? []) {
+      if (!path.includes(".")) names.add(path);
+    }
+  }
+  return names;
+}
+
+function failClosedKeysOf(
+  node: ts.ObjectLiteralExpression,
+  guarded: ReadonlySet<string>,
+): string[] {
+  const found: string[] = [];
+  for (const property of node.properties) {
+    if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) continue;
+    const name = property.name;
+    const text = ts.isIdentifier(name) || ts.isStringLiteralLike(name) ? name.text : null;
+    if (text !== null && guarded.has(text)) found.push(text);
+  }
+  return found;
+}
+
+function withinAny(node: ts.Node, roots: ReadonlySet<ts.Node>): boolean {
+  let cursor: ts.Node | undefined = node;
+  while (cursor !== undefined) {
+    if (roots.has(cursor)) return true;
+    cursor = cursor.parent;
+  }
+  return false;
+}
+
 export function findResponsePayloadHits(
   rootDir: string,
   files: readonly string[],
@@ -681,33 +817,66 @@ export function findResponsePayloadHits(
   const byMethod = new Map(CODEX_RESPONSE_CONTRACT.map((entry) => [entry.method, entry]));
   const schemaCache = new Map<string, JsonNode | string>();
   const constants = collectStringConstants(files);
+  const guarded = failClosedFieldNames();
   const seen = new Set<string>();
 
   for (const file of files) {
     const sf = ts.createSourceFile(file, readFileSync(file, "utf-8"), ts.ScriptTarget.ESNext, true);
+    const at = (node: ts.Node): string => {
+      const lc = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+      return `${file}:${lc.line + 1}:${lc.character + 1}`;
+    };
+    const payloads = new Set<ts.Node>();
 
-    const visit = (node: ts.Node): void => {
-      if (ts.isPropertyAssignment(node) && ts.isStringLiteralLike(node.name)) {
-        const entry = byMethod.get(node.name.text);
-        if (entry !== undefined) {
-          const lc = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+    const visitMaps = (node: ts.Node): void => {
+      if (ts.isObjectLiteralExpression(node) && isReplyMap(node, byMethod)) {
+        for (const property of node.properties) {
+          const where = at(property);
+          const key = replyMapKeyOf(property);
+          if (key === null) {
+            hits.push({
+              where,
+              detail:
+                `the auto-reply payload map has a member the schema gate cannot read: ` +
+                `${memberLabel(property, "")}`,
+            });
+            continue;
+          }
+          const entry = byMethod.get(key);
+          if (entry === undefined) {
+            hits.push({
+              where,
+              detail:
+                `the auto-reply payload map answers '${key}', which the wire contract does ` +
+                `not declare as a client-response method`,
+            });
+            continue;
+          }
           seen.add(entry.method);
-          hits.push(
-            ...checkResponsePayload(
-              rootDir,
-              schemaCache,
-              constants,
-              entry,
-              node.initializer,
-              `${file}:${lc.line + 1}:${lc.character + 1}`,
-            ),
-          );
+          const payload = payloadObjectOf((property as ts.PropertyAssignment).initializer);
+          if (payload !== null) payloads.add(payload);
+          hits.push(...checkResponsePayload(rootDir, schemaCache, constants, entry, payload, where));
         }
       }
-      ts.forEachChild(node, visit);
+      ts.forEachChild(node, visitMaps);
     };
+    visitMaps(sf);
 
-    visit(sf);
+    const visitShapes = (node: ts.Node): void => {
+      if (ts.isObjectLiteralExpression(node) && !withinAny(node, payloads)) {
+        const keys = failClosedKeysOf(node, guarded);
+        if (keys.length > 0) {
+          hits.push({
+            where: at(node),
+            detail:
+              `object literal '${sourceSnippet(node)}' sets the fail-closed reply field(s) ` +
+              `'${keys.join("', '")}' outside the auto-reply payload map`,
+          });
+        }
+      }
+      ts.forEachChild(node, visitShapes);
+    };
+    visitShapes(sf);
   }
 
   for (const entry of CODEX_RESPONSE_CONTRACT) {
