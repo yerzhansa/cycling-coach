@@ -5,6 +5,7 @@ import type { Sport } from "./sport.js";
 import { type BinaryConfig, binaryEnvVar } from "./binary.js";
 import type { Memory } from "./memory/store.js";
 import { CONFIG_DIR, envInt, type Config } from "./config.js";
+import { isKeylessProvider } from "./runtime-config.js";
 import type { AthleteDataReader, PlatformCalendarMutations } from "./athlete-data.js";
 import type { ReferenceRuntime } from "./reference/runtime.js";
 import { appendUsageLine } from "./usage-ledger.js";
@@ -379,11 +380,7 @@ export async function runBinary(
   installCrashHandlers({ dataDir: config.dataDir });
   logBootLine({ dataDir: config.dataDir });
 
-  if (
-    config.llm.provider !== "openai-codex" &&
-    config.llm.provider !== "claude-cli" &&
-    !config.llm.apiKey
-  ) {
+  if (!isKeylessProvider(config.llm.provider) && !config.llm.apiKey) {
     console.error(
       `No LLM API key found. Run \`${binary.binaryName} setup\` to configure, or set LLM_API_KEY. Provider-specific env vars still work: ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY, DEEPSEEK_API_KEY, ALIBABA_API_KEY, MINIMAX_API_KEY, MOONSHOT_API_KEY, ZAI_API_KEY, or OPENROUTER_API_KEY.`,
     );

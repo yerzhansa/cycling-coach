@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, chmodSy
 import { stringify as toYaml } from "yaml";
 import { type BinaryConfig, binaryEnvVar } from "./binary.js";
 import { CONFIG_DIR, CONFIG_FILE, envInt, readConfigYaml } from "./config.js";
-import { LLM_MODEL_CATALOGUE } from "./runtime-config.js";
+import { LLM_MODEL_CATALOGUE, isKeylessProvider } from "./runtime-config.js";
 import { captureAndPersistOperator } from "./channels/operator-capture.js";
 import { loadAllowedSenders } from "./channels/allowed-senders.js";
 import { runCodexLogin } from "./auth/openai-codex-login.js";
@@ -409,7 +409,7 @@ async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<voi
     llmConfig.base_url = baseUrl;
   }
 
-  if (provider !== "openai-codex" && provider !== "claude-cli") {
+  if (!isKeylessProvider(provider)) {
     const hasPrev = provider === prevProvider && isNonEmptySecret(prevLlmKey);
     const result = await _collectAndWriteSecret(
       ctx,

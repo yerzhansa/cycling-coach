@@ -104,7 +104,7 @@ export const RULES: readonly PackageDepRule[] = [
     ruleId: "R3",
     dir: "packages/core",
     srcOnly: true,
-    allowedWorkspace: [],
+    allowedWorkspace: ["@enduragent/coach-contract"],
     transitionalWorkspace: ["@enduragent/engine", "@enduragent/kernel"],
     forbidNode: false,
   },

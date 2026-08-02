@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { lstat, mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { isKeylessProvider } from "@enduragent/coach-contract";
 import {
   parseOnboardingLlmSelection,
   type OnboardingLlmSelection,
@@ -460,7 +461,7 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
       let slot: DesktopCredentialSlot;
       try {
         selection = parseOnboardingLlmSelection(input);
-        if (selection.provider === "openai-codex" || selection.provider === "claude-cli") {
+        if (isKeylessProvider(selection.provider)) {
           throw new TypeError();
         }
         slot = selection.provider;

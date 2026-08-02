@@ -5,6 +5,7 @@ import { getCoachHome } from "./coach-home.js";
 import { SecretRef, isSecretRef, SecretResolutionError } from "./secrets/types.js";
 import { resolveSecretRef } from "./secrets/resolve.js";
 import {
+  isKeylessProvider,
   resolveLlmProvider,
   resolveRuntimeConfig,
   type ClaudeCliBilling,
@@ -269,7 +270,7 @@ export function loadConfigFromYaml(
     return "";
   };
 
-  const keyless = provider === "openai-codex" || provider === "claude-cli";
+  const keyless = isKeylessProvider(provider);
   const apiKey = keyless
     ? ""
     : resolveWithPrecedence(

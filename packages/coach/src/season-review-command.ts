@@ -18,6 +18,7 @@ import { isAbsolute, dirname, join, normalize } from "node:path";
 import {
   bootstrapReference,
   createCoachEngine,
+  isKeylessProvider,
   isSecretRef,
   loadConfig,
   readConfigYaml,
@@ -288,6 +289,19 @@ async function selectedCaptureManifest(root: string): Promise<ReferenceCaptureMa
   return byId.get(selected)!.manifest;
 }
 
+export async function resolveSeasonReviewLlmApiKey(loaded: Config): Promise<string> {
+  if (isKeylessProvider(loaded.llm.provider)) return loaded.llm.apiKey;
+  let llmApiKey = loaded.llm.apiKey;
+  if (llmApiKey.length === 0) {
+    const llmYaml = readConfigYaml().llm;
+    const configured = llmYaml !== null && typeof llmYaml === "object" && !Array.isArray(llmYaml)
+      ? (llmYaml as Record<string, unknown>).api_key : undefined;
+    if (isSecretRef(configured)) llmApiKey = await resolveSecretRef(configured);
+  }
+  if (llmApiKey.length === 0) throw new TypeError("Configured model credentials are unavailable.");
+  return llmApiKey;
+}
+
 async function productComposition(input: SeasonReviewCompositionInput): Promise<SeasonReviewComposition> {
   const localBotModule = new URL("./local-bot.js", import.meta.url).href;
   const storeRuntimeModule = new URL("./store-runtime.js", import.meta.url).href;
@@ -296,16 +310,7 @@ async function productComposition(input: SeasonReviewCompositionInput): Promise<
     import(storeRuntimeModule) as Promise<typeof import("./store-runtime.js")>,
   ]);
   const loaded = loadConfig();
-  let llmApiKey = loaded.llm.apiKey;
-  if (loaded.llm.provider !== "openai-codex" && llmApiKey.length === 0) {
-    const llmYaml = readConfigYaml().llm;
-    const configured = llmYaml !== null && typeof llmYaml === "object" && !Array.isArray(llmYaml)
-      ? (llmYaml as Record<string, unknown>).api_key : undefined;
-    if (isSecretRef(configured)) llmApiKey = await resolveSecretRef(configured);
-  }
-  if (loaded.llm.provider !== "openai-codex" && llmApiKey.length === 0) {
-    throw new TypeError("Configured model credentials are unavailable.");
-  }
+  const llmApiKey = await resolveSeasonReviewLlmApiKey(loaded);
   if (loaded.dataSource !== "store") throw new TypeError("Season review requires the configured store data source.");
   const config: Config = { ...loaded, dataDir: input.agentData,
     intervals: { ...loaded.intervals, apiKey: "" }, telegram: { botToken: "" },

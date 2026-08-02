@@ -317,6 +317,9 @@ importers:
       '@clack/prompts':
         specifier: ^1.2.0
         version: 1.3.0
+      '@enduragent/coach-contract':
+        specifier: workspace:*
+        version: link:../coach-contract
       '@enduragent/engine':
         specifier: workspace:*
         version: link:../engine

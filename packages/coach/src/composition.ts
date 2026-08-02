@@ -24,6 +24,7 @@ import {
   deleteStoredProfile,
   engineConfigFromConfig,
   extractRetryAfterMs,
+  isKeylessProvider,
   loadStoredProfileSnapshot,
   makeChatClient,
   refreshCodexToken,
@@ -237,9 +238,7 @@ function llmCredentialManagedByEnvironment(
 ): boolean {
   return (
     nonemptyEnvironmentValue(environment, LLM_CREDENTIAL_ENVIRONMENT_KEYS[provider]) ||
-    (provider !== "openai-codex" &&
-      provider !== "claude-cli" &&
-      nonemptyEnvironmentValue(environment, "LLM_API_KEY"))
+    (!isKeylessProvider(provider) && nonemptyEnvironmentValue(environment, "LLM_API_KEY"))
   );
 }
 
