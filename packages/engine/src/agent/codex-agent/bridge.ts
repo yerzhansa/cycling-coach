@@ -1,15 +1,16 @@
 import type { FinishReason, LanguageModelUsage, ModelMessage } from "ai";
 
 import type { GenerateOpts, GenerateResult } from "../../llm-types.js";
+import { isProviderAuthFailure } from "../../provider-auth-failure.js";
 import type { ModelStreamActivity } from "../../sport.js";
 import {
   buildConfigOverrideArgs,
   CODEX_MCP_SERVER_NAME,
   type CodexMcpEndpointOverride,
 } from "./config-overrides.js";
-import { binaryMissingError, mcpIsolationError, normalizeCodexAgentError } from "./errors.js";
-import { resolveCodexBinary } from "./executable.js";
+import { mcpIsolationError, normalizeCodexAgentError } from "./errors.js";
 import { startCoachMcpEndpoint, type CoachMcpEndpoint } from "./mcp-endpoint.js";
+import { ensureCodexAgentReady, invalidateCodexAgentProbeCache } from "./probe.js";
 import {
   CodexProcessExitError,
   type CodexNotification,
@@ -82,6 +83,7 @@ export interface CodexAgentBridgePorts {
   readonly runtime: CodexAgentRuntime;
   readonly baseEnv?: NodeJS.ProcessEnv;
   readonly ensureReady?: EnsureCodexAgentReady;
+  readonly invalidateProbeCache?: () => void;
   readonly startSession?: typeof startAppServer;
   readonly startEndpoint?: typeof startCoachMcpEndpoint;
   readonly stallMs?: number;
@@ -544,12 +546,14 @@ async function collectTurn(args: {
 }
 
 async function defaultEnsureReady(input: CodexAgentReadinessInput): Promise<CodexAgentReadiness> {
-  const binaryPath = await resolveCodexBinary({
-    explicitPath: input.binaryPath,
-    env: input.baseEnv,
+  const result = await ensureCodexAgentReady({
+    ...(input.binaryPath === undefined ? {} : { binaryPath: input.binaryPath }),
+    model: input.model,
+    baseEnv: input.baseEnv,
+    ...(input.forceRefresh === undefined ? {} : { forceRefresh: input.forceRefresh }),
   });
-  if (binaryPath === null || binaryPath === "") throw binaryMissingError("codex");
-  return { binaryPath, foreignServers: [] };
+  if (result.status === "refused") throw result.error;
+  return { binaryPath: result.binaryPath, foreignServers: result.foreignServers };
 }
 
 interface AttemptInput {
@@ -561,6 +565,7 @@ interface AttemptInput {
   readonly endpoint: CoachMcpEndpoint | null;
   readonly stateless: boolean;
   readonly bounds: CollectorBounds;
+  readonly invalidateProbeCache: () => void;
 }
 
 type AttemptOutcome =
@@ -670,7 +675,9 @@ async function attemptGeneration(input: AttemptInput): Promise<AttemptOutcome> {
       },
     };
   } catch (err) {
-    throw normalizeOnce(err);
+    const normalized = normalizeOnce(err);
+    if (isProviderAuthFailure(normalized)) input.invalidateProbeCache();
+    throw normalized;
   } finally {
     await session.close();
   }
@@ -683,6 +690,7 @@ export async function codexAgentGenerateText(
   const baseEnv = ports.baseEnv ?? process.env;
   const stateless = isStatelessCaller(opts.caller);
   const ensureReady = ports.ensureReady ?? defaultEnsureReady;
+  const invalidateProbeCache = ports.invalidateProbeCache ?? invalidateCodexAgentProbeCache;
   const bounds: CollectorBounds = {
     stallMs: ports.stallMs ?? INTER_NOTIFICATION_STALL_MS,
     abortGraceMs: ports.abortGraceMs ?? CODEX_ABORT_COMPLETION_GRACE_MS,
@@ -723,6 +731,7 @@ export async function codexAgentGenerateText(
         endpoint,
         stateless,
         bounds,
+        invalidateProbeCache,
       });
       if (outcome.kind === "result") return outcome.result;
       if (attempt > 0) {
@@ -730,6 +739,7 @@ export async function codexAgentGenerateText(
           `the MCP server '${outcome.servers.join("', '")}' is still enabled after a fresh census`,
         );
       }
+      invalidateProbeCache();
       const refreshed = await ensureReady({
         binaryPath: ports.runtime.binaryPath,
         model: opts.modelId,

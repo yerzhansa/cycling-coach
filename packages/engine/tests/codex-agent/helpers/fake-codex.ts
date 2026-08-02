@@ -244,6 +244,11 @@ if (argv.includes("--version")) {
         .split("__MCP_BEARER_ENV__")
         .join(unquote(overrides.get("mcp_servers.enduragent.bearer_token_env_var")) || "");
     }
+    if (out.includes('"__MCP_ENABLED__"')) {
+      out = out
+        .split('"__MCP_ENABLED__"')
+        .join(overrides.has("mcp_servers.enduragent.url") ? "true" : "false");
+    }
     return out;
   };
 

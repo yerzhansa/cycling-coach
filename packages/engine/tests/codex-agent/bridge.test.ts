@@ -21,6 +21,7 @@ import {
 } from "../../src/agent/codex-agent/bridge.js";
 import { CODEX_MCP_BEARER_ENV_NAME } from "../../src/agent/codex-agent/config-overrides.js";
 import type { CoachMcpEndpoint } from "../../src/agent/codex-agent/mcp-endpoint.js";
+import { invalidateCodexAgentProbeCache } from "../../src/agent/codex-agent/probe.js";
 import { CodexRequestError } from "../../src/agent/codex-agent/protocol.js";
 import { startAppServer } from "../../src/agent/codex-agent/session.js";
 import type { ModelStreamActivity } from "../../src/sport.js";
@@ -37,6 +38,7 @@ afterEach(async () => {
   while (endpoints.length > 0) await endpoints.pop()?.close();
   await fake?.cleanup();
   fake = null;
+  invalidateCodexAgentProbeCache();
 });
 
 function baseEnv(): NodeJS.ProcessEnv {
@@ -616,15 +618,81 @@ describe("codexAgentGenerateText census self-healing (D-19)", () => {
     "refuses without starting a thread when the generation child flipped to an api key (AC-18)",
     async () => {
       const staged = await stage("gen-child-auth-flip");
-      const failure = await codexAgentGenerateText(chatOpts(), ports(staged.binaryPath)).then(
+      let invalidations = 0;
+      const failure = await codexAgentGenerateText(
+        chatOpts(),
+        ports(staged.binaryPath, {
+          invalidateProbeCache: () => {
+            invalidations += 1;
+          },
+        }),
+      ).then(
         () => null,
         (error: unknown) => error as Error,
       );
 
       expect(failure?.message).toContain("not a ChatGPT subscription");
+      expect(invalidations).toBe(1);
       const frames = await staged.readFramesIn();
       expect(frames.some((frame) => frame.method === "thread/start")).toBe(false);
       expect(frames.some((frame) => frame.method === "turn/start")).toBe(false);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "invalidates the readiness cache on a mid-turn auth failure (AC-12)",
+    async () => {
+      const staged = await stage("auth-401-mid-turn");
+      let invalidations = 0;
+      const failure = await codexAgentGenerateText(
+        chatOpts(),
+        ports(staged.binaryPath, {
+          invalidateProbeCache: () => {
+            invalidations += 1;
+          },
+        }),
+      ).then(
+        () => null,
+        (error: unknown) => error as Error,
+      );
+
+      expect(failure?.message).toContain("codex login");
+      expect(invalidations).toBe(1);
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe("codexAgentGenerateText readiness wiring (D-11)", () => {
+  it(
+    "censuses once and disables every foreign server on the first generation spawn",
+    async () => {
+      const staged = await createFakeCodex({
+        scriptSequence: ["probe-ready", "probe-ready", "turn-happy"],
+      });
+      fake = staged;
+
+      const readinessPorts: CodexAgentBridgePorts = {
+        runtime: { enabled: true, binaryPath: staged.binaryPath },
+        baseEnv: baseEnv(),
+        startEndpoint: async (options) => stubEndpoint(Object.keys(options.tools)),
+      };
+
+      const first = await codexAgentGenerateText(chatOpts(), readinessPorts);
+      expect(first.finishReason).toBe("stop");
+      expect(await staged.spawnCount()).toBe(3);
+
+      const generationArgv = await staged.readArgv(2);
+      expect(generationArgv).toContain("mcp_servers.alpha.enabled=false");
+      expect(generationArgv).toContain("mcp_servers.beta.enabled=false");
+      const generationFrames = await staged.readFramesIn(2);
+      expect(generationFrames.some((frame) => frame.method === "thread/start")).toBe(true);
+
+      const second = await codexAgentGenerateText(chatOpts(), readinessPorts);
+      expect(second.finishReason).toBe("stop");
+      expect(await staged.spawnCount()).toBe(4);
+      expect(await staged.readArgv(3)).toContain("mcp_servers.beta.enabled=false");
     },
     TEST_TIMEOUT_MS,
   );

@@ -13,6 +13,8 @@ import { baseAgentConfig } from "./helpers/base-agent-config.js";
 import { createFakeCodex, type FakeCodex } from "./codex-agent/helpers/fake-codex.js";
 
 const TEST_TIMEOUT_MS = 45_000;
+const READINESS_SCRIPTS = ["probe-ready", "probe-ready"] as const;
+const READINESS_SPAWNS = READINESS_SCRIPTS.length;
 
 let tempHome: string;
 let origHome: string | undefined;
@@ -40,7 +42,7 @@ async function setupAgent(scripts: readonly string[]): Promise<{
   chat: (chatId: string, text: string) => Promise<string>;
   codex: FakeCodex;
 }> {
-  const codex = await createFakeCodex({ scriptSequence: scripts });
+  const codex = await createFakeCodex({ scriptSequence: [...READINESS_SCRIPTS, ...scripts] });
   fake = codex;
   const base = baseAgentConfig(dataDir);
   const ports: EngineHostPorts = {
@@ -81,7 +83,9 @@ describe("retry loop on the codex-agent path", () => {
     "completes a turn and keeps the ledger row on notional cost basis",
     async () => {
       const rows: Array<Record<string, unknown>> = [];
-      const codex = await createFakeCodex({ script: "turn-happy" });
+      const codex = await createFakeCodex({
+        scriptSequence: [...READINESS_SCRIPTS, "turn-happy"],
+      });
       fake = codex;
       const base = baseAgentConfig(dataDir);
       const agent = new CoachAgent(
@@ -136,7 +140,7 @@ describe("retry loop on the codex-agent path", () => {
       const text = await agent.chat("codex-agent-reasoning-retry", "hello");
 
       expect(text).toContain("zone 2");
-      expect(await agent.codex.spawnCount()).toBe(2);
+      expect(await agent.codex.spawnCount()).toBe(READINESS_SPAWNS + 2);
     },
     TEST_TIMEOUT_MS,
   );
@@ -149,7 +153,7 @@ describe("retry loop on the codex-agent path", () => {
       const text = await agent.chat("codex-agent-rate-limit", "hello");
 
       expect(text).toContain("zone 2");
-      expect(await agent.codex.spawnCount()).toBe(2);
+      expect(await agent.codex.spawnCount()).toBe(READINESS_SPAWNS + 2);
     },
     TEST_TIMEOUT_MS,
   );
@@ -162,7 +166,7 @@ describe("retry loop on the codex-agent path", () => {
       const text = await agent.chat("codex-agent-will-retry", "hello");
 
       expect(text).toContain("zone 2");
-      expect(await agent.codex.spawnCount()).toBe(1);
+      expect(await agent.codex.spawnCount()).toBe(READINESS_SPAWNS + 1);
     },
     TEST_TIMEOUT_MS,
   );
@@ -222,7 +226,7 @@ describe("retry loop on the codex-agent path", () => {
       if (outcome.ok) return;
       expect(classifyFailure(outcome.error)).toBe("auth");
       expect(outcome.error.message).toContain("codex login");
-      expect(await agent.codex.spawnCount()).toBe(1);
+      expect(await agent.codex.spawnCount()).toBe(READINESS_SPAWNS + 1);
     },
     TEST_TIMEOUT_MS,
   );
@@ -237,7 +241,7 @@ describe("retry loop on the codex-agent path", () => {
       expect(outcome.ok).toBe(false);
       if (outcome.ok) return;
       expect(classifyFailure(outcome.error)).toBe("network");
-      expect(await agent.codex.spawnCount()).toBe(1);
+      expect(await agent.codex.spawnCount()).toBe(READINESS_SPAWNS + 1);
     },
     TEST_TIMEOUT_MS,
   );
@@ -270,7 +274,7 @@ describe("retry loop on the codex-agent path", () => {
         });
 
         for (let attempt = 0; attempt < 4 && !finished; attempt++) {
-          if (!(await waitForTurnStart(agent.codex, attempt, () => finished))) break;
+          if (!(await waitForTurnStart(agent.codex, READINESS_SPAWNS + attempt, () => finished))) break;
           await vi.advanceTimersByTimeAsync(121_000);
         }
 
@@ -279,7 +283,7 @@ describe("retry loop on the codex-agent path", () => {
         if (outcome.ok) return;
         expect(classifyFailure(outcome.error)).toBe("timeout");
 
-        const frames = await agent.codex.readFramesIn(0);
+        const frames = await agent.codex.readFramesIn(READINESS_SPAWNS);
         expect(frames.some((frame) => frame.method === "turn/interrupt")).toBe(true);
       } finally {
         vi.useRealTimers();

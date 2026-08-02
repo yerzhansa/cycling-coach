@@ -113,9 +113,9 @@ function refuse(error: CodexAgentConfigError): CodexVerifyOutcome {
   return { status: "refuse", error };
 }
 
-function verifyOverrides(
+export function verifyConfigOverrides(
   config: Record<string, unknown>,
-  expected: readonly CodexConfigOverride[],
+  expected: readonly CodexConfigOverride[] = CODEX_FIXED_CONFIG_OVERRIDES,
 ): CodexAgentConfigError | null {
   for (const override of expected) {
     const lookup = readConfigPath(config, override.key);
@@ -206,7 +206,7 @@ export async function verifySpawnedChild(
   }
 
   const config = isRecord(configResponse.config) ? configResponse.config : {};
-  const overrideFailure = verifyOverrides(
+  const overrideFailure = verifyConfigOverrides(
     config,
     options.expectedOverrides ?? CODEX_FIXED_CONFIG_OVERRIDES,
   );
