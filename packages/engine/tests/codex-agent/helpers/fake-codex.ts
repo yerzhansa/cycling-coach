@@ -212,6 +212,7 @@ if (argv.includes("--version")) {
   }
 
   let serverRequestId = 1000;
+  let ignoreStdinEnd = false;
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const emitLine = (text) => {
     process.stdout.write(text + "\\n");
@@ -273,6 +274,10 @@ if (argv.includes("--version")) {
       if (spec.__control === "sleep") await sleep(spec.ms || 0);
       else if (spec.__control === "exit") process.exit(spec.code || 0);
       else if (spec.__control === "hang") hangForever();
+      else if (spec.__control === "ignoreStdinEnd") {
+        ignoreStdinEnd = true;
+        hangForever();
+      }
       return;
     }
     if (spec.__request && typeof spec.__request === "object") {
@@ -335,6 +340,7 @@ if (argv.includes("--version")) {
     }
   });
   process.stdin.on("end", () => {
+    if (ignoreStdinEnd) return;
     chain.then(() => process.exit(0)).catch(() => process.exit(0));
   });
 }

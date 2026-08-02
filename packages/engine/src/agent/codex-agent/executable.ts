@@ -4,13 +4,13 @@ import { access, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join, resolve as resolvePath } from "node:path";
 
-import { buildChildEnv } from "./env.js";
 import {
   CodexAgentConfigError,
   binaryMissingError,
   redactSecretShapes,
   versionBelowFloorError,
 } from "./errors.js";
+import { buildSpawnOptions } from "./session.js";
 import { CODEX_VERSION_FLOOR, compareVersions } from "./version.js";
 
 const VERSION_PROBE_TIMEOUT_MS = 15_000;
@@ -118,14 +118,19 @@ export async function probeVersion(
 ): Promise<string> {
   const timeoutMs = options.timeoutMs ?? VERSION_PROBE_TIMEOUT_MS;
   const maxBytes = options.maxBytes ?? VERSION_PROBE_MAX_BYTES;
-  const env = buildChildEnv(options.baseEnv ?? process.env);
+  const spawnOptions = buildSpawnOptions({
+    binaryPath,
+    baseEnv: options.baseEnv ?? process.env,
+    args: ["--version"],
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 
   const raw = await new Promise<string>((resolve, reject) => {
-    const child = spawn(binaryPath, ["--version"], {
-      shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-      env,
+    const child = spawn(spawnOptions.command, [...spawnOptions.args], {
+      shell: spawnOptions.shell,
+      stdio: [...spawnOptions.stdio],
+      windowsHide: spawnOptions.windowsHide,
+      env: spawnOptions.env,
     });
 
     let settled = false;
