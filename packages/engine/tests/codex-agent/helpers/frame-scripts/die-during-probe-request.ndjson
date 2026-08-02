@@ -1,0 +1,2 @@
+{"__on":"initialize","emit":[{"__result":true,"result":{"userAgent":"codex_cli_rs/0.146.0 (Mac OS 15.0.0; arm64) fake","codexHome":"/tmp/fake-codex-home","platformFamily":"unix","platformOs":"macos"}}]}
+{"__on":"account/read","emit":[{"__stderr":"ERROR codex::auth refresh failed for Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmYWtlIn0.c2lnbmF0dXJl"},{"__control":"exit","code":9}]}

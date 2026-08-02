@@ -1,0 +1,3 @@
+{"method":"remoteControl/status/changed","params":{"status":"disconnected"}}
+{"__on":"initialize","emit":[{"method":"remoteControl/status/changed","params":{"status":"connected"}},{"__result":true,"result":{"userAgent":"codex_cli_rs/0.146.0 (Mac OS 15.0.0; arm64) fake","codexHome":"/tmp/fake-codex-home","platformFamily":"unix","platformOs":"macos"}},{"method":"configWarning","params":{"message":"stale key"}}]}
+{"__on":"account/read","emit":[{"__result":true,"result":{"account":{"type":"chatgpt","email":"athlete@example.test","planType":"pro"},"requiresOpenaiAuth":false}}]}

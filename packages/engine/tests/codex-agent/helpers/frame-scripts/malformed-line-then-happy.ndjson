@@ -1,0 +1,4 @@
+{"__raw":"this is not json at all {{{"}
+{"__raw":"[1,2,3]"}
+{"__raw":"{\"nothing\":\"routable\"}"}
+{"__on":"initialize","emit":[{"__raw":"still not json ]]]"},{"__result":true,"result":{"userAgent":"codex_cli_rs/0.146.0 (Mac OS 15.0.0; arm64) fake","codexHome":"/tmp/fake-codex-home","platformFamily":"unix","platformOs":"macos"}}]}
