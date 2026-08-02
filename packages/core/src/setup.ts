@@ -240,17 +240,21 @@ export async function runSetup(binary: BinaryConfig): Promise<void> {
   }
 }
 
-async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<void> {
-  intro(`${binary.displayName} — Setup`);
+interface LlmPromptOutcome {
+  readonly provider: string;
+  readonly model: string;
+  readonly baseUrl: string | undefined;
+  readonly claudeCliBlock: Record<string, unknown> | undefined;
+  readonly freshCodexCreds: OAuthCredential | null;
+}
 
-  const previous = readConfigYaml();
-  const prevProvider = getString(previous, "llm", "provider");
-  const prevModel = getString(previous, "llm", "model");
-  const prevLlmKey = readFieldValue(previous, "llm", "api_key");
-  const prevIntervalsKey = readFieldValue(previous, "intervals", "api_key");
-  const prevIntervalsId = getString(previous, "intervals", "athlete_id");
-  const prevTelegramToken = readFieldValue(previous, "telegram", "bot_token");
-
+async function _runLlmPrompts(
+  ctx: WizardCtx,
+  binary: BinaryConfig,
+  previous: Record<string, unknown>,
+  prevProvider: string | undefined,
+  prevModel: string | undefined,
+): Promise<LlmPromptOutcome> {
   // Provider
   const providerResp = await select({
     message: "LLM provider",
@@ -386,6 +390,44 @@ async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<voi
     };
   }
 
+  return { provider, model, baseUrl, claudeCliBlock, freshCodexCreds };
+}
+
+async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<void> {
+  intro(`${binary.displayName} — Setup`);
+
+  const previous = readConfigYaml();
+  const prevProvider = getString(previous, "llm", "provider");
+  const prevModel = getString(previous, "llm", "model");
+  const prevLlmKey = readFieldValue(previous, "llm", "api_key");
+  const prevIntervalsKey = readFieldValue(previous, "intervals", "api_key");
+  const prevIntervalsId = getString(previous, "intervals", "athlete_id");
+  const prevTelegramToken = readFieldValue(previous, "telegram", "bot_token");
+
+  let keepLlmBlock = false;
+  if (
+    prevProvider !== undefined &&
+    !LLM_MODEL_CATALOGUE.some((entry) => entry.provider === prevProvider)
+  ) {
+    log.warn(
+      `Your current provider \`${prevProvider}\` is not offered by the wizard; re-running setup will replace it.`,
+    );
+    const replaceProvider = await confirm({
+      message: `Replace \`${prevProvider}\` with a provider from this list?`,
+      initialValue: false,
+    });
+    handleCancel(replaceProvider, ctx, binary);
+    keepLlmBlock = !replaceProvider;
+    if (keepLlmBlock) {
+      log.info(`Keeping \`${prevProvider}\`; the rest of setup continues.`);
+    }
+  }
+
+  const llm = keepLlmBlock
+    ? null
+    : await _runLlmPrompts(ctx, binary, previous, prevProvider, prevModel);
+  const freshCodexCreds = llm?.freshCodexCreds ?? null;
+
   // Detect backends + pick secret backend (D12 + D9)
   let backend = await _pickBackend(ctx, binary);
 
@@ -398,42 +440,44 @@ async function _runWizardCore(ctx: WizardCtx, binary: BinaryConfig): Promise<voi
   // vs previous backend, potentially apply D13 migration prompt, and write to
   // the chosen backend. The merged config is mutated in place.
   const merged: Record<string, unknown> = { ...previous };
-  const llmConfig: Record<string, unknown> = { provider, model };
-  if (provider === "openai-codex") {
-    llmConfig.auth_profile = "openai-codex";
-  }
-  if (claudeCliBlock !== undefined) {
-    llmConfig.claude_cli = claudeCliBlock;
-  }
-  if (baseUrl !== undefined) {
-    llmConfig.base_url = baseUrl;
-  }
-
-  if (!isKeylessProvider(provider)) {
-    const hasPrev = provider === prevProvider && isNonEmptySecret(prevLlmKey);
-    const result = await _collectAndWriteSecret(
-      ctx,
-      {
-        field: "llm.api_key",
-        label: `${API_KEY_LABELS[provider]}`,
-        required: !hasPrev,
-        prevValue: provider === prevProvider ? prevLlmKey : undefined,
-        backend,
-        chosenVaultRef: { current: chosenVault },
-        opAbsPathRef: { current: opAbsPath },
-        keychainPathRef: { current: keychainPath },
-      },
-      binary,
-    );
-    chosenVault = result.chosenVault;
-    opAbsPath = result.opAbsPath;
-    keychainPath = result.keychainPath;
-    backend = result.backend;
-    if (result.yamlValue !== undefined) {
-      llmConfig.api_key = result.yamlValue;
+  if (llm !== null) {
+    const llmConfig: Record<string, unknown> = { provider: llm.provider, model: llm.model };
+    if (llm.provider === "openai-codex") {
+      llmConfig.auth_profile = "openai-codex";
     }
+    if (llm.claudeCliBlock !== undefined) {
+      llmConfig.claude_cli = llm.claudeCliBlock;
+    }
+    if (llm.baseUrl !== undefined) {
+      llmConfig.base_url = llm.baseUrl;
+    }
+
+    if (!isKeylessProvider(llm.provider)) {
+      const hasPrev = llm.provider === prevProvider && isNonEmptySecret(prevLlmKey);
+      const result = await _collectAndWriteSecret(
+        ctx,
+        {
+          field: "llm.api_key",
+          label: `${API_KEY_LABELS[llm.provider]}`,
+          required: !hasPrev,
+          prevValue: llm.provider === prevProvider ? prevLlmKey : undefined,
+          backend,
+          chosenVaultRef: { current: chosenVault },
+          opAbsPathRef: { current: opAbsPath },
+          keychainPathRef: { current: keychainPath },
+        },
+        binary,
+      );
+      chosenVault = result.chosenVault;
+      opAbsPath = result.opAbsPath;
+      keychainPath = result.keychainPath;
+      backend = result.backend;
+      if (result.yamlValue !== undefined) {
+        llmConfig.api_key = result.yamlValue;
+      }
+    }
+    merged.llm = llmConfig;
   }
-  merged.llm = llmConfig;
 
   // intervals.api_key (optional)
   let intervalsAthleteId = prevIntervalsId ?? "";

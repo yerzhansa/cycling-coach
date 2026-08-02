@@ -9,7 +9,9 @@ import {
 
 describe("LLM model catalogue", () => {
   it("covers providers in setup order with every default among its advisory options", () => {
-    expect(LLM_MODEL_CATALOGUE.map((entry) => entry.provider)).toEqual(LLM_PROVIDERS);
+    expect(LLM_MODEL_CATALOGUE.map((entry) => entry.provider)).toEqual(
+      LLM_PROVIDERS.filter((provider) => provider !== "codex-agent"),
+    );
     for (const entry of LLM_MODEL_CATALOGUE) {
       expect(entry.defaultModel).toBe(DEFAULT_MODELS[entry.provider]);
       expect(entry.models.map((model) => model.value)).toContain(entry.defaultModel);

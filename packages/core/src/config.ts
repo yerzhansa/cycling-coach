@@ -10,6 +10,8 @@ import {
   resolveRuntimeConfig,
   type ClaudeCliBilling,
   type ClaudeCliRuntimeConfigPatch,
+  type CodexAgentReasoningEffort,
+  type CodexAgentRuntimeConfigPatch,
   type EffectiveRuntimeConfig,
 } from "./runtime-config.js";
 
@@ -179,6 +181,22 @@ export function claudeCliPatchFrom(
   };
 }
 
+export function codexAgentPatchFrom(
+  yaml: unknown,
+  environment: RuntimeEnvironment,
+): CodexAgentRuntimeConfigPatch {
+  const block = isYamlRecord(yaml) ? yaml : {};
+  const enabled = block.enabled as boolean | undefined;
+  const binaryPath =
+    envFrom(environment, "CODEX_CLI_PATH") ?? (block.binary_path as string | undefined);
+  const reasoningEffort = block.reasoning_effort as CodexAgentReasoningEffort | undefined;
+  return {
+    ...(enabled === undefined ? {} : { enabled }),
+    ...(binaryPath === undefined ? {} : { binaryPath }),
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+  };
+}
+
 // ============================================================================
 // SECRET REF HANDLING
 // ============================================================================
@@ -237,6 +255,7 @@ export function loadConfigFromYaml(
     google: "GOOGLE_GENERATIVE_AI_API_KEY",
     "openai-codex": undefined,
     "claude-cli": undefined,
+    "codex-agent": undefined,
     deepseek: "DEEPSEEK_API_KEY",
     qwen: "ALIBABA_API_KEY",
     minimax: "MINIMAX_API_KEY",
@@ -303,6 +322,9 @@ export function loadConfigFromYaml(
         baseUrl: env("LLM_BASE_URL") ?? (llmYaml.base_url as string | undefined),
         ...(provider === "claude-cli"
           ? { claudeCli: claudeCliPatchFrom(llmYaml.claude_cli, process.env) }
+          : {}),
+        ...(provider === "codex-agent"
+          ? { codexAgent: codexAgentPatchFrom(llmYaml.codex_agent, process.env) }
           : {}),
       },
       intervals: {

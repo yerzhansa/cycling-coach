@@ -32,6 +32,7 @@ import {
   resolveSecretRef,
   sessionConfigEnvironmentOwnership,
   type ClaudeCliRuntimeConfigPatch,
+  type CodexAgentRuntimeConfigPatch,
   type Config,
   type ConversationStorePort,
   type ReferenceRuntime,
@@ -175,6 +176,16 @@ function claudeCliPatch(
   };
 }
 
+function codexAgentPatch(
+  block: NonNullable<NonNullable<ConfigureRuntimeRpcParams["llm"]>["codex_agent"]>,
+): CodexAgentRuntimeConfigPatch {
+  return {
+    ...(block.enabled === undefined ? {} : { enabled: block.enabled }),
+    ...(block.binary_path === undefined ? {} : { binaryPath: block.binary_path }),
+    ...(block.reasoning_effort === undefined ? {} : { reasoningEffort: block.reasoning_effort }),
+  };
+}
+
 function runtimePatch(request: ConfigureRuntimeRpcParams, config: Config): RuntimeConfigPatch {
   return {
     ...(request.llm === undefined
@@ -193,6 +204,9 @@ function runtimePatch(request: ConfigureRuntimeRpcParams, config: Config): Runti
             ...(request.llm.claude_cli === undefined
               ? {}
               : { claudeCli: claudeCliPatch(request.llm.claude_cli) }),
+            ...(request.llm.codex_agent === undefined
+              ? {}
+              : { codexAgent: codexAgentPatch(request.llm.codex_agent) }),
           },
         }),
     ...(request.intervals === undefined
@@ -217,6 +231,7 @@ const LLM_CREDENTIAL_ENVIRONMENT_KEYS = {
   google: "GOOGLE_GENERATIVE_AI_API_KEY",
   "openai-codex": undefined,
   "claude-cli": undefined,
+  "codex-agent": undefined,
   deepseek: "DEEPSEEK_API_KEY",
   qwen: "ALIBABA_API_KEY",
   minimax: "MINIMAX_API_KEY",
@@ -326,6 +341,14 @@ function persistRuntimeConfig(
         else block[field] = value;
       }
       llm.claude_cli = block;
+    }
+    if (request.llm.codex_agent !== undefined) {
+      const block: Record<string, unknown> = isRecord(llm.codex_agent) ? { ...llm.codex_agent } : {};
+      for (const [field, value] of Object.entries(request.llm.codex_agent)) {
+        if (value === null) delete block[field];
+        else block[field] = value;
+      }
+      llm.codex_agent = block;
     }
     next.llm = llm;
   }

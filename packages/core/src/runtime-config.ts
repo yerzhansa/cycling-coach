@@ -1,4 +1,6 @@
 import {
+  CODEX_AGENT_DISABLED_MESSAGE,
+  CODEX_AGENT_WINDOWS_MESSAGE,
   KEYLESS_LLM_PROVIDERS,
   isKeylessProvider,
   type KeylessLlmProvider,
@@ -13,6 +15,7 @@ export const LLM_PROVIDERS = [
   "google",
   "openai-codex",
   "claude-cli",
+  "codex-agent",
   "deepseek",
   "qwen",
   "minimax",
@@ -29,6 +32,7 @@ export const DEFAULT_MODELS = {
   google: "gemini-3.6-flash",
   "openai-codex": "gpt-5.6-sol",
   "claude-cli": "sonnet",
+  "codex-agent": "gpt-5.6-sol",
   deepseek: "deepseek-v4-flash",
   qwen: "qwen3.7-plus",
   minimax: "MiniMax-M3",
@@ -245,6 +249,18 @@ export interface ClaudeCliRuntimeSettings {
 export const CLAUDE_CLI_DISABLED_MESSAGE =
   "The Claude CLI provider is disabled on this instance (ENDURAGENT_CLAUDE_CLI_DISABLED or llm.claude_cli.enabled: false). Choose another provider or re-enable it.";
 
+export const CODEX_AGENT_REASONING_EFFORTS = ["low", "medium", "high", "ultra"] as const;
+
+export type CodexAgentReasoningEffort = (typeof CODEX_AGENT_REASONING_EFFORTS)[number];
+
+export interface CodexAgentRuntimeSettings {
+  enabled: boolean;
+  binaryPath?: string;
+  reasoningEffort?: CodexAgentReasoningEffort;
+}
+
+export { CODEX_AGENT_DISABLED_MESSAGE, CODEX_AGENT_WINDOWS_MESSAGE };
+
 export interface EffectiveRuntimeConfig {
   llm: {
     provider: LlmProvider;
@@ -255,6 +271,7 @@ export interface EffectiveRuntimeConfig {
     compactModel?: string;
     baseUrl?: string;
     claudeCli?: ClaudeCliRuntimeSettings;
+    codexAgent?: CodexAgentRuntimeSettings;
   };
   intervals: {
     apiKey: string;
@@ -277,6 +294,12 @@ export interface ClaudeCliRuntimeConfigPatch {
   readonly billing?: ClaudeCliBilling;
 }
 
+export interface CodexAgentRuntimeConfigPatch {
+  readonly enabled?: boolean;
+  readonly binaryPath?: string | null;
+  readonly reasoningEffort?: CodexAgentReasoningEffort | null;
+}
+
 export interface RuntimeConfigPatch {
   readonly llm?: {
     readonly provider?: LlmProvider;
@@ -286,6 +309,7 @@ export interface RuntimeConfigPatch {
     readonly compactModel?: string | null;
     readonly baseUrl?: string | null;
     readonly claudeCli?: ClaudeCliRuntimeConfigPatch;
+    readonly codexAgent?: CodexAgentRuntimeConfigPatch;
   };
   readonly intervals?: {
     readonly apiKey?: string;
@@ -308,8 +332,10 @@ const LLM_FIELDS = new Set([
   "compactModel",
   "baseUrl",
   "claudeCli",
+  "codexAgent",
 ]);
 const CLAUDE_CLI_FIELDS = new Set(["enabled", "binaryPath", "configDir", "billing"]);
+const CODEX_AGENT_FIELDS = new Set(["enabled", "binaryPath", "reasoningEffort"]);
 const INTERVALS_FIELDS = new Set(["apiKey", "athleteId"]);
 const SESSION_FIELDS = new Set([
   "historyTokenBudgetRatio",
@@ -475,6 +501,42 @@ function resolveClaudeCli(
   };
 }
 
+function requireCodexAgentReasoningEffort(value: unknown): CodexAgentReasoningEffort {
+  if (
+    typeof value === "string" &&
+    (CODEX_AGENT_REASONING_EFFORTS as readonly string[]).includes(value)
+  ) {
+    return value as CodexAgentReasoningEffort;
+  }
+  throw new TypeError(
+    'llm.codexAgent.reasoningEffort must be "low", "medium", "high", or "ultra".',
+  );
+}
+
+function resolveCodexAgent(
+  patch: CodexAgentRuntimeConfigPatch,
+  current: CodexAgentRuntimeSettings | undefined,
+): CodexAgentRuntimeSettings {
+  assertKnownFields(patch, CODEX_AGENT_FIELDS, "llm.codexAgent");
+  const binaryPath = !isSpecified(patch, "binaryPath")
+    ? current?.binaryPath
+    : patch.binaryPath === null
+      ? undefined
+      : requireString(patch.binaryPath, "llm.codexAgent.binaryPath");
+  const reasoningEffort = !isSpecified(patch, "reasoningEffort")
+    ? current?.reasoningEffort
+    : patch.reasoningEffort === null
+      ? undefined
+      : requireCodexAgentReasoningEffort(patch.reasoningEffort);
+  return {
+    enabled: isSpecified(patch, "enabled")
+      ? requireBoolean(patch.enabled, "llm.codexAgent.enabled")
+      : (current?.enabled ?? false),
+    ...(binaryPath === undefined ? {} : { binaryPath }),
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+  };
+}
+
 export function resolveRuntimeConfig(
   patch: RuntimeConfigPatch = {},
   current?: EffectiveRuntimeConfig,
@@ -519,6 +581,16 @@ export function resolveRuntimeConfig(
           providerChanged ? undefined : current?.llm.claudeCli,
         )
       : undefined;
+  if (provider !== "codex-agent" && isSpecified(llmPatch, "codexAgent")) {
+    throw new TypeError("llm.codexAgent must be absent unless the provider is codex-agent.");
+  }
+  const codexAgent =
+    provider === "codex-agent"
+      ? resolveCodexAgent(
+          isSpecified(llmPatch, "codexAgent") ? (llmPatch.codexAgent ?? {}) : {},
+          providerChanged ? undefined : current?.llm.codexAgent,
+        )
+      : undefined;
 
   const requestedFlushModel = optionalModel(llmPatch, "flushModel");
   const flushModel =
@@ -549,6 +621,16 @@ export function resolveRuntimeConfig(
   ) {
     throw new TypeError(
       "llm.baseUrl must be absent for claude-cli — the Claude Code CLI owns its endpoint.",
+    );
+  }
+  if (
+    provider === "codex-agent" &&
+    isSpecified(llmPatch, "baseUrl") &&
+    llmPatch.baseUrl !== null &&
+    llmPatch.baseUrl !== ""
+  ) {
+    throw new TypeError(
+      "llm.baseUrl must be absent for codex-agent — the Codex CLI owns its endpoint.",
     );
   }
   if (isSpecified(llmPatch, "baseUrl")) {
@@ -628,6 +710,7 @@ export function resolveRuntimeConfig(
       compactModel,
       baseUrl,
       ...(claudeCli === undefined ? {} : { claudeCli }),
+      ...(codexAgent === undefined ? {} : { codexAgent }),
     },
     intervals,
     session,

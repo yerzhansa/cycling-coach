@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { LLM_MODEL_CATALOGUE } from "../../../packages/core/src/runtime-config.js";
+
 const mocks = vi.hoisted(() => {
   const exposed: Record<string, unknown> = {};
   class FakeAnchor {
@@ -88,6 +90,7 @@ const providerOrder = [
   "google",
   "openai-codex",
   "claude-cli",
+  "codex-agent",
   "deepseek",
   "qwen",
   "minimax",
@@ -95,6 +98,8 @@ const providerOrder = [
   "zai",
   "openrouter",
 ] as const;
+
+const catalogueProviderOrder = providerOrder.filter((provider) => provider !== "codex-agent");
 
 const defaultEndpointProviders = new Set([
   "deepseek",
@@ -105,10 +110,28 @@ const defaultEndpointProviders = new Set([
   "openrouter",
 ]);
 
+function pinnedPreloadProviderOrder(): string[] {
+  const source = readFileSync(new URL("../src/preload/index.ts", import.meta.url), "utf8");
+  const open = source.indexOf("const LLM_PROVIDER_ORDER = [");
+  if (open === -1) throw new Error("preload provider order missing");
+  const close = source.indexOf("] as const;", open);
+  if (close === -1) throw new Error("preload provider order unterminated");
+  return [...source.slice(open, close).matchAll(/"([^"]+)"/g)].map((match) => match[1]!);
+}
+
+function pinnedPreloadOffCatalogueProviders(): string[] {
+  const source = readFileSync(new URL("../src/preload/index.ts", import.meta.url), "utf8");
+  const open = source.indexOf("const OFF_CATALOGUE_LLM_PROVIDERS = new Set<string>([");
+  if (open === -1) throw new Error("preload off-catalogue set missing");
+  const close = source.indexOf("]);", open);
+  if (close === -1) throw new Error("preload off-catalogue set unterminated");
+  return [...source.slice(open, close).matchAll(/"([^"]+)"/g)].map((match) => match[1]!);
+}
+
 function llmConfiguration() {
   return {
     schemaVersion: 1,
-    providers: providerOrder.map((provider) => {
+    providers: catalogueProviderOrder.map((provider) => {
       const defaultModel = `${provider}-default`;
       return {
         provider,
@@ -727,6 +750,30 @@ describe("desktop preload ChatGPT auth", () => {
     });
     await expect(bridge.deleteCredential({ credential: "anthropic" })).rejects.toBeInstanceOf(
       TypeError,
+    );
+  });
+
+  it("pins the provider union order and keeps the off-catalogue lane out of the catalogue payload", () => {
+    expect(pinnedPreloadProviderOrder()).toEqual([...providerOrder]);
+    expect(providerOrder.indexOf("codex-agent")).toBe(providerOrder.indexOf("claude-cli") + 1);
+    expect(catalogueProviderOrder).not.toContain("codex-agent");
+    expect(llmConfiguration().providers).toHaveLength(catalogueProviderOrder.length);
+  });
+
+  it("keeps the preload's off-catalogue set in step with the catalogue the payload is built from", () => {
+    const cataloguedProviders = LLM_MODEL_CATALOGUE.map((entry) => entry.provider);
+    const offCatalogue = pinnedPreloadOffCatalogueProviders();
+
+    expect(offCatalogue.length).toBeGreaterThan(0);
+    for (const provider of offCatalogue) {
+      expect(providerOrder).toContain(provider);
+      expect(cataloguedProviders).not.toContain(provider);
+    }
+    expect([...providerOrder].filter((provider) => !cataloguedProviders.includes(provider))).toEqual(
+      offCatalogue,
+    );
+    expect(cataloguedProviders).toEqual(
+      [...providerOrder].filter((provider) => !offCatalogue.includes(provider)),
     );
   });
 

@@ -1,9 +1,15 @@
+import {
+  CODEX_AGENT_DISABLED_MESSAGE,
+  CODEX_AGENT_WINDOWS_MESSAGE,
+} from "@enduragent/coach-contract";
+
 import { markProviderAuthFailure } from "../../provider-auth-failure.js";
 import { CodexProcessExitError, CodexRequestError } from "./protocol.js";
 
 export const CODEX_OVERLOADED_CODE = -32001;
 
 export type CodexAgentConfigErrorKind =
+  | "disabled"
   | "binary-missing"
   | "unsupported-platform"
   | "version-below-floor"
@@ -26,9 +32,6 @@ export class CodexAgentConfigError extends Error {
 
 const LAUNCHD_PATH_HINT =
   "(Mac launchd users: set an absolute path like '/opt/homebrew/bin/codex'.)";
-
-export const WINDOWS_UNSUPPORTED_MESSAGE =
-  "The Codex agent provider is not supported on Windows yet (macOS and Linux only). Track the Windows lane in the project backlog.";
 
 export const NOT_SIGNED_IN_MESSAGE =
   "Codex CLI is not signed in. Open a terminal, run codex login, and sign in with your ChatGPT plan. Enduragent never signs in for you.";
@@ -64,8 +67,12 @@ export function binaryMissingError(binaryPath: string): CodexAgentConfigError {
   return new CodexAgentConfigError("binary-missing", binaryMissingMessage(binaryPath));
 }
 
+export function disabledLaneError(): CodexAgentConfigError {
+  return new CodexAgentConfigError("disabled", CODEX_AGENT_DISABLED_MESSAGE);
+}
+
 export function unsupportedPlatformError(): CodexAgentConfigError {
-  return new CodexAgentConfigError("unsupported-platform", WINDOWS_UNSUPPORTED_MESSAGE);
+  return new CodexAgentConfigError("unsupported-platform", CODEX_AGENT_WINDOWS_MESSAGE);
 }
 
 export function versionBelowFloorError(version: string, floor: string): CodexAgentConfigError {

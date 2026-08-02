@@ -111,7 +111,8 @@ type DesktopCredentialId = DesktopCredentialSlot | "openai-codex";
 type LlmProvider =
   | Exclude<DesktopCredentialSlot, "intervals-icu">
   | "openai-codex"
-  | "claude-cli";
+  | "claude-cli"
+  | "codex-agent";
 
 interface OnboardingLlmModelOption {
   readonly value: string;

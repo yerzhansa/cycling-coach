@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { CODEX_AGENT_DISABLED_MESSAGE } from "@enduragent/coach-contract";
 
 import type { EngineConfig } from "../src/host-ports.js";
 import { llmTestPorts } from "./helpers/base-agent-config.js";
+import { createFakeCodex } from "./codex-agent/helpers/fake-codex.js";
 
 const MINIMAL_RESULT = { text: "ok", toolCalls: [], finishReason: "stop", usage: {}, totalUsage: {}, steps: [] };
 
@@ -555,6 +557,36 @@ describe("LLM dispatch — codex-agent provider gating (AC-3)", () => {
       binaryPath: "/never/spawned/codex",
       reasoningEffort: "medium",
     });
+  });
+
+  it("refuses the turn and spawns no child when the lane is not enabled", async () => {
+    vi.doUnmock("../src/agent/codex-agent/bridge.js");
+    vi.resetModules();
+    const staged = await createFakeCodex({ script: "turn-happy" });
+    try {
+      const base = codexAgentConfig();
+      const disabled: EngineConfig = {
+        ...base,
+        llm: {
+          ...base.llm,
+          codexAgent: { enabled: false, binaryPath: staged.binaryPath },
+        },
+      };
+
+      const { LLM } = await import("../src/llm.js");
+      const llm = new LLM(disabled, llmTestPorts());
+
+      await expect(
+        llm.generate({ messages: [{ role: "user", content: "hi" }], caller: "chat" }),
+      ).rejects.toMatchObject({
+        name: "CodexAgentConfigError",
+        kind: "disabled",
+        message: CODEX_AGENT_DISABLED_MESSAGE,
+      });
+      expect(await staged.spawnCount()).toBe(0);
+    } finally {
+      await staged.cleanup();
+    }
   });
 
   it("is excluded from the chat-stream watchdog so a silent thinking turn survives", async () => {

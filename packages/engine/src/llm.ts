@@ -62,7 +62,7 @@ type LLMHostPorts = Pick<
 // ============================================================================
 
 export function usesKeylessTransport(provider: string): boolean {
-  return isKeylessProvider(provider) || provider === "codex-agent";
+  return isKeylessProvider(provider);
 }
 
 // Most providers cache the stable system prefix automatically server-side and
