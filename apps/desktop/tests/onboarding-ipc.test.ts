@@ -426,6 +426,7 @@ describe("desktop onboarding IPC", () => {
       "zai",
       "openrouter",
     ]);
+    expect(result.providers.map((provider) => provider.provider)).not.toContain("codex-agent");
     expect(result.active).toEqual({
       provider: "anthropic",
       model: "athlete-selected-model",

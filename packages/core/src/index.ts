@@ -195,6 +195,7 @@ export {
   CONFIG_FILE,
   claudeCliDisabledByEnvironment,
   claudeCliPatchFrom,
+  codexAgentPatchFrom,
   loadConfig,
   loadConfigFromYaml,
   readConfigYaml,
@@ -220,6 +221,9 @@ export type {
   ClaudeCliBilling,
   ClaudeCliRuntimeConfigPatch,
   ClaudeCliRuntimeSettings,
+  CodexAgentReasoningEffort,
+  CodexAgentRuntimeConfigPatch,
+  CodexAgentRuntimeSettings,
   EffectiveRuntimeConfig,
   KeylessLlmProvider,
   LlmModelCatalogueEntry,
@@ -228,7 +232,12 @@ export type {
   RuntimeConfigPatch,
   RuntimeConfigResolverOptions,
 } from "./runtime-config.js";
-export { CLAUDE_CLI_DISABLED_MESSAGE } from "./runtime-config.js";
+export {
+  CLAUDE_CLI_DISABLED_MESSAGE,
+  CODEX_AGENT_DISABLED_MESSAGE,
+  CODEX_AGENT_REASONING_EFFORTS,
+  CODEX_AGENT_WINDOWS_MESSAGE,
+} from "./runtime-config.js";
 export {
   ClaudeCliConfigError,
   ensureClaudeCliReady,

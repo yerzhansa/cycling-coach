@@ -18,11 +18,11 @@ export interface CredentialSettingsEntry {
   readonly runtimeState: "active" | "stored-inactive" | "failed";
 }
 
-export const NON_CREDENTIAL_PROVIDERS = ["claude-cli"] as const;
+export const NON_CREDENTIAL_PROVIDERS = ["claude-cli", "codex-agent"] as const;
 
 export type NonCredentialProviderId = (typeof NON_CREDENTIAL_PROVIDERS)[number];
 
-export type NonCredentialProviderKind = "Claude Code CLI";
+export type NonCredentialProviderKind = "Claude Code CLI" | "Codex CLI";
 
 export interface ProviderStatusEntry {
   readonly provider: NonCredentialProviderId;
@@ -39,6 +39,11 @@ const NON_CREDENTIAL_PROVIDER_ROWS: Readonly<
     provider: "claude-cli",
     label: "Claude subscription",
     kind: "Claude Code CLI",
+  },
+  "codex-agent": {
+    provider: "codex-agent",
+    label: "Codex agent",
+    kind: "Codex CLI",
   },
 };
 
@@ -196,6 +201,9 @@ export function providerStatusesFrom(
 ): readonly ProviderStatusEntry[] {
   const provider = runtime.llm.provider;
   if (!isNonCredentialProvider(provider)) return [];
+  if (provider === "codex-agent") {
+    return [{ ...NON_CREDENTIAL_PROVIDER_ROWS[provider], state: null, identity: null }];
+  }
   const state = claudeCli?.state ?? null;
   const identity = claudeCli === null ? null : claudeCliIdentityLine(claudeCli);
   return [

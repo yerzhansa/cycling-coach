@@ -55,7 +55,9 @@ function load(llm: Record<string, unknown>): Config {
 describe("claude-cli provider registry", () => {
   it("registers the provider immediately after openai-codex", () => {
     expect(LLM_PROVIDERS.indexOf("claude-cli")).toBe(LLM_PROVIDERS.indexOf("openai-codex") + 1);
-    expect(LLM_MODEL_CATALOGUE.map((entry) => entry.provider)).toEqual(LLM_PROVIDERS);
+    expect(LLM_MODEL_CATALOGUE.map((entry) => entry.provider)).toEqual(
+      LLM_PROVIDERS.filter((provider) => provider !== "codex-agent"),
+    );
   });
 
   it("publishes the subscription catalogue entry", () => {

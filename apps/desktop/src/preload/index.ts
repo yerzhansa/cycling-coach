@@ -44,6 +44,7 @@ const LLM_PROVIDER_ORDER = [
   "google",
   "openai-codex",
   "claude-cli",
+  "codex-agent",
   "deepseek",
   "qwen",
   "minimax",
@@ -52,6 +53,10 @@ const LLM_PROVIDER_ORDER = [
   "openrouter",
 ] as const;
 const LLM_PROVIDERS = new Set<string>(LLM_PROVIDER_ORDER);
+const OFF_CATALOGUE_LLM_PROVIDERS = new Set<string>(["codex-agent"]);
+const LLM_CATALOGUE_PROVIDER_ORDER = LLM_PROVIDER_ORDER.filter(
+  (provider) => !OFF_CATALOGUE_LLM_PROVIDERS.has(provider),
+);
 const DEFAULT_ENDPOINT_PROVIDERS = new Set([
   "deepseek",
   "qwen",
@@ -627,14 +632,14 @@ function parseLlmConfiguration(value: unknown): unknown {
     !exactKeys(value, ["schemaVersion", "providers", "active"]) ||
     value.schemaVersion !== 1 ||
     !Array.isArray(value.providers) ||
-    value.providers.length !== LLM_PROVIDER_ORDER.length
+    value.providers.length !== LLM_CATALOGUE_PROVIDER_ORDER.length
   ) {
     throw new TypeError();
   }
   const providers = value.providers.map((entry, index) => {
     if (
       !record(entry) ||
-      entry.provider !== LLM_PROVIDER_ORDER[index] ||
+      entry.provider !== LLM_CATALOGUE_PROVIDER_ORDER[index] ||
       typeof entry.provider !== "string"
     ) {
       throw new TypeError();

@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, stringify as toYaml } from "yaml";
 
 import { scriptedPrompts } from "./helpers/scripted-prompts.js";
 import { cyclingBinary } from "./helpers/cycling-binary-fixture.js";
@@ -102,5 +102,72 @@ describe("setup — new providers", () => {
     expect(cfg.llm.provider).toBe("openrouter");
     expect(cfg.llm.model).toBe("deepseek/deepseek-chat");
     expect(cfg.llm.base_url).toBe("https://openrouter.ai/api/v1");
+  });
+});
+
+describe("setup — off-catalogue provider guard", () => {
+  function seedOffCatalogue(): void {
+    writeFileSync(
+      CONFIG(),
+      toYaml({
+        llm: { provider: "codex-agent", model: "gpt-5.6-sol", codex_agent: { enabled: true } },
+        intervals: { athlete_id: "i1" },
+      }),
+    );
+  }
+
+  it("warns, keeps the provider and still runs the rest of the wizard when the operator declines", async () => {
+    seedOffCatalogue();
+    const prompts = scriptedPrompts({
+      selects: ["plain"],
+      texts: [""],
+      passwords: ["sk-intervals-test", ""],
+      confirms: [false, true],
+    });
+    vi.doMock("@clack/prompts", () => prompts);
+
+    const { runSetup } = await import("../src/setup.js");
+    await runSetup(cyclingBinary);
+
+    expect(prompts.log.warn).toHaveBeenCalledWith(
+      "Your current provider `codex-agent` is not offered by the wizard; re-running setup will replace it.",
+    );
+
+    const promptMessages = (calls: unknown[][]): string[] =>
+      calls.map(([options]) => (options as { message: string }).message);
+
+    const selectMessages = promptMessages(prompts.select.mock.calls);
+    expect(selectMessages).not.toContain("LLM provider");
+    expect(selectMessages).not.toContain("Model");
+    expect(selectMessages).toContain("Where to store secrets?");
+
+    const passwordMessages = promptMessages(prompts.password.mock.calls);
+    expect(passwordMessages.some((message) => message.includes("intervals.icu API key"))).toBe(true);
+    expect(passwordMessages.some((message) => message.includes("Telegram bot token"))).toBe(true);
+
+    const cfg = parseYaml(readFileSync(CONFIG(), "utf-8")) as Record<string, any>;
+    expect(cfg.llm.provider).toBe("codex-agent");
+    expect(cfg.llm.model).toBe("gpt-5.6-sol");
+    expect(cfg.llm.codex_agent).toEqual({ enabled: true });
+    expect(cfg.intervals.api_key).toBe("sk-intervals-test");
+  });
+
+  it("replaces the provider once the operator confirms", async () => {
+    seedOffCatalogue();
+    vi.doMock("@clack/prompts", () =>
+      scriptedPrompts({
+        selects: ["zai", "glm-4.6", "plain"],
+        texts: [""],
+        passwords: ["sk-zai-test", "", ""],
+        confirms: [true, true],
+      }),
+    );
+
+    const { runSetup } = await import("../src/setup.js");
+    await runSetup(cyclingBinary);
+
+    const cfg = parseYaml(readFileSync(CONFIG(), "utf-8")) as Record<string, any>;
+    expect(cfg.llm.provider).toBe("zai");
+    expect(cfg.llm.codex_agent).toBeUndefined();
   });
 });

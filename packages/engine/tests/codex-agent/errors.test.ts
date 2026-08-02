@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CODEX_AGENT_DISABLED_MESSAGE,
+  CODEX_AGENT_WINDOWS_MESSAGE,
+} from "@enduragent/coach-contract";
+
+import {
   CODEX_OVERLOADED_CODE,
   CodexAgentConfigError,
   NOT_SIGNED_IN_MESSAGE,
   PROBE_TIMEOUT_MESSAGE,
-  WINDOWS_UNSUPPORTED_MESSAGE,
   accountNotChatgptError,
   binaryMissingError,
+  disabledLaneError,
   endpointNotPinnedError,
   mcpIsolationError,
   normalizeCodexAgentError,
@@ -53,8 +58,15 @@ describe("user-facing configuration messages", () => {
   it("names the Windows deferral before anything is spawned", () => {
     const err = unsupportedPlatformError();
     expect(err.kind).toBe("unsupported-platform");
-    expect(err.message).toBe(WINDOWS_UNSUPPORTED_MESSAGE);
+    expect(err.message).toBe(CODEX_AGENT_WINDOWS_MESSAGE);
     expect(err.message).toContain("macOS and Linux only");
+  });
+
+  it("refuses the disabled lane with the message the startup gate prints", () => {
+    const err = disabledLaneError();
+    expect(err.kind).toBe("disabled");
+    expect(err.message).toBe(CODEX_AGENT_DISABLED_MESSAGE);
+    expect(err.message).toContain("llm.codex_agent.enabled: true");
   });
 
   it("advises the upgrade below the floor", () => {

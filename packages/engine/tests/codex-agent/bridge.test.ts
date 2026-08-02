@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { tool } from "ai";
 import { z } from "zod";
 import type { ToolSet } from "ai";
+import { CODEX_AGENT_DISABLED_MESSAGE } from "@enduragent/coach-contract";
 
 import { classifyFailure } from "../../../core/src/agent/token-utils.js";
 import {
@@ -109,6 +110,49 @@ function frameParams(
   const frame = frames.find((entry) => entry.method === method);
   return frame === undefined ? undefined : (frame.params as Record<string, unknown>);
 }
+
+describe("codexAgentGenerateText flag-off gate", () => {
+  it(
+    "refuses without spawning a child when the runtime is not enabled",
+    async () => {
+      const staged = await stage("turn-happy");
+
+      await expect(
+        codexAgentGenerateText(chatOpts(), {
+          runtime: { enabled: false, binaryPath: staged.binaryPath },
+          baseEnv: baseEnv(),
+          startEndpoint: async (options) => stubEndpoint(Object.keys(options.tools)),
+        }),
+      ).rejects.toMatchObject({
+        name: "CodexAgentConfigError",
+        kind: "disabled",
+        message: CODEX_AGENT_DISABLED_MESSAGE,
+      });
+
+      expect(await staged.spawnCount()).toBe(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "refuses without spawning a child when the runtime omits the flag entirely",
+    async () => {
+      const staged = await stage("turn-happy");
+      const runtime = { binaryPath: staged.binaryPath } as CodexAgentBridgePorts["runtime"];
+
+      await expect(
+        codexAgentGenerateText(chatOpts(), {
+          runtime,
+          baseEnv: baseEnv(),
+          startEndpoint: async (options) => stubEndpoint(Object.keys(options.tools)),
+        }),
+      ).rejects.toMatchObject({ kind: "disabled", message: CODEX_AGENT_DISABLED_MESSAGE });
+
+      expect(await staged.spawnCount()).toBe(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
 
 describe("codexAgentGenerateText params construction", () => {
   it(

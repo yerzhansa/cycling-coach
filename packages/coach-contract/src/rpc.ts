@@ -478,6 +478,7 @@ export const LlmProviderSchema = z.enum([
   "google",
   "openai-codex",
   "claude-cli",
+  "codex-agent",
   "deepseek",
   "qwen",
   "minimax",
@@ -487,13 +488,19 @@ export const LlmProviderSchema = z.enum([
 ]);
 export type LlmProvider = z.infer<typeof LlmProviderSchema>;
 
-export const KEYLESS_LLM_PROVIDERS = ["openai-codex", "claude-cli"] as const;
+export const KEYLESS_LLM_PROVIDERS = ["openai-codex", "claude-cli", "codex-agent"] as const;
 
 export type KeylessLlmProvider = (typeof KEYLESS_LLM_PROVIDERS)[number];
 
 export function isKeylessProvider(provider: string): provider is KeylessLlmProvider {
   return (KEYLESS_LLM_PROVIDERS as readonly string[]).includes(provider);
 }
+
+export const CODEX_AGENT_DISABLED_MESSAGE =
+  "The Codex agent provider is not enabled on this instance (set llm.codex_agent.enabled: true in config.yaml). It is experimental and off by default.";
+
+export const CODEX_AGENT_WINDOWS_MESSAGE =
+  "The Codex agent provider is not supported on Windows yet (macOS and Linux only). Track the Windows lane in the project backlog.";
 
 const RuntimeOptionalStringSchema = z.string().min(1).max(512).nullable();
 
@@ -503,6 +510,14 @@ const RuntimeClaudeCliSchema = z
     binary_path: z.string().min(1).max(4_096).nullable().optional(),
     config_dir: z.string().min(1).max(4_096).nullable().optional(),
     billing: z.enum(["subscription", "api-key"]).optional(),
+  })
+  .strict();
+
+const RuntimeCodexAgentSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    binary_path: z.string().min(1).max(4_096).nullable().optional(),
+    reasoning_effort: z.enum(["low", "medium", "high", "ultra"]).optional(),
   })
   .strict();
 
@@ -516,6 +531,7 @@ const RuntimeLlmSchema = z
     flush_model: RuntimeOptionalStringSchema.optional(),
     compact_model: RuntimeOptionalStringSchema.optional(),
     claude_cli: RuntimeClaudeCliSchema.optional(),
+    codex_agent: RuntimeCodexAgentSchema.optional(),
   })
   .strict()
   .superRefine((value, context) => {

@@ -195,6 +195,7 @@ export function createOnboardingController(
     if (provider === "claude-cli") {
       return state.claudeCliState === "ready" || state.claudeCliState === "ready-api-key";
     }
+    if (provider === "codex-agent") return false;
     return status(provider).state === "configured" && status(provider).runtimeState === "active";
   };
 

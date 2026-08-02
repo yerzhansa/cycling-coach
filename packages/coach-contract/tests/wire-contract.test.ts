@@ -789,6 +789,7 @@ describe("coach request and event projection", () => {
       "google",
       "openai-codex",
       "claude-cli",
+      "codex-agent",
       "deepseek",
       "qwen",
       "minimax",

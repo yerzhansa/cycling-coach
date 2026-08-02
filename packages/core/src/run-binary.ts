@@ -392,6 +392,11 @@ export async function runBinary(
     await runClaudeCliStartupGate({ settings: config.llm.claudeCli, model: config.llm.model });
   }
 
+  if (config.llm.provider === "codex-agent") {
+    const { runCodexAgentStartupGate } = await import("./codex-agent-startup.js");
+    await runCodexAgentStartupGate({ settings: config.llm.codexAgent, model: config.llm.model });
+  }
+
   const bootStart = Date.now();
   const prepared = await hooks.prepare?.({ config, sport }) ?? {};
   const { createCoachEngine } = await import("./agent/coach-engine.js");

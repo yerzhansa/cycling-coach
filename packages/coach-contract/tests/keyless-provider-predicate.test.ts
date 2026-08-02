@@ -16,6 +16,7 @@ const DEFINITION_SITE = join("packages", "coach-contract", "src", "rpc.ts");
 
 const CODEX = "openai" + "-codex";
 const CLAUDE_CLI = "claude" + "-cli";
+const CODEX_AGENT = "codex" + "-agent";
 const WINDOW = 96;
 const comparison = (literal: string): string => `(?:===|!==)\\s*"${literal}"`;
 const ordered = (first: string, second: string): string =>
@@ -56,7 +57,7 @@ function sourceFiles(): readonly string[] {
 
 describe("keyless provider predicate", () => {
   it("names exactly the providers that carry no api key", () => {
-    expect([...KEYLESS_LLM_PROVIDERS]).toEqual([CODEX, CLAUDE_CLI]);
+    expect([...KEYLESS_LLM_PROVIDERS]).toEqual([CODEX, CLAUDE_CLI, CODEX_AGENT]);
     for (const provider of KEYLESS_LLM_PROVIDERS) {
       expect(LlmProviderSchema.safeParse(provider).success).toBe(true);
       expect(isKeylessProvider(provider)).toBe(true);
