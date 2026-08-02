@@ -562,6 +562,164 @@ export function findCallSiteHits(rootDir: string, files: readonly string[]): Cod
   return hits;
 }
 
+export const CODEX_RESPONSE_CONTRACT: readonly CodexWireContract[] = CODEX_WIRE_CONTRACT.filter(
+  (entry) => entry.direction === "client-response",
+);
+
+function payloadObjectOf(node: ts.Node): ts.ObjectLiteralExpression | null {
+  if (ts.isParenthesizedExpression(node)) return payloadObjectOf(node.expression);
+  if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
+    return payloadObjectOf(node.expression);
+  }
+  if (ts.isObjectLiteralExpression(node)) return node;
+  if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
+    const body = node.body;
+    if (!ts.isBlock(body)) return payloadObjectOf(body);
+    for (const statement of body.statements) {
+      if (ts.isReturnStatement(statement) && statement.expression !== undefined) {
+        return payloadObjectOf(statement.expression);
+      }
+    }
+    return null;
+  }
+  return null;
+}
+
+function checkResponsePayload(
+  rootDir: string,
+  schemaCache: Map<string, JsonNode | string>,
+  constants: ReadonlyMap<string, string>,
+  entry: CodexWireContract,
+  initializer: ts.Node,
+  where: string,
+): CodexSchemaHit[] {
+  const method = entry.method;
+  const payload = payloadObjectOf(initializer);
+  if (payload === null) {
+    return [
+      {
+        where,
+        detail: `'${method}' reply payload is not a literal object the schema gate can read`,
+      },
+    ];
+  }
+  const schemaName = entry.schema;
+  if (schemaName === null) {
+    return [{ where, detail: `'${method}' sends a reply payload but declares no schema file` }];
+  }
+  let schema = schemaCache.get(schemaName);
+  if (schema === undefined) {
+    schema = loadSchema(rootDir, schemaName);
+    schemaCache.set(schemaName, schema);
+  }
+  if (typeof schema === "string") return [{ where, detail: schema }];
+
+  const hits: CodexSchemaHit[] = [];
+  const paths: CollectedPath[] = [];
+  collectObjectPaths(payload, "", paths, constants);
+  const declared = entry.values ?? {};
+  const sent = new Map<string, string | null>();
+  for (const { path, value } of paths) sent.set(path, value);
+
+  for (const { path, value } of paths) {
+    if (!path.includes(".") && !entry.fields.includes(path)) {
+      hits.push({
+        where,
+        detail: `'${method}' replies with '${path}', which the wire contract does not declare`,
+      });
+    }
+    if (!resolveFieldPath(schema, path)) {
+      hits.push({
+        where,
+        detail: `'${method}' reply field '${path}' is absent from ${schemaName}`,
+      });
+      continue;
+    }
+    if (value === null) continue;
+    const violation = enumViolation(schema, schemaName, method, path, value);
+    if (violation !== null) hits.push({ where, detail: violation });
+    const expected = declared[path];
+    if (expected !== undefined && expected !== value) {
+      hits.push({
+        where,
+        detail:
+          `'${method}' replies '${path}' = '${value}' but the wire contract ` +
+          `declares '${expected}'`,
+      });
+    }
+  }
+
+  for (const path of new Set([...entry.fields, ...Object.keys(declared)])) {
+    const expected = declared[path];
+    if (!sent.has(path)) {
+      hits.push({
+        where,
+        detail:
+          expected === undefined
+            ? `'${method}' reply omits contract field '${path}'`
+            : `'${method}' reply omits '${path}' = '${expected}' required by the wire contract`,
+      });
+      continue;
+    }
+    if (expected !== undefined && sent.get(path) === null) {
+      hits.push({
+        where,
+        detail:
+          `'${method}' reply sets '${path}' to a value the gate cannot read; ` +
+          `the wire contract declares '${expected}'`,
+      });
+    }
+  }
+  return hits;
+}
+
+export function findResponsePayloadHits(
+  rootDir: string,
+  files: readonly string[],
+): CodexSchemaHit[] {
+  const hits: CodexSchemaHit[] = [];
+  const byMethod = new Map(CODEX_RESPONSE_CONTRACT.map((entry) => [entry.method, entry]));
+  const schemaCache = new Map<string, JsonNode | string>();
+  const constants = collectStringConstants(files);
+  const seen = new Set<string>();
+
+  for (const file of files) {
+    const sf = ts.createSourceFile(file, readFileSync(file, "utf-8"), ts.ScriptTarget.ESNext, true);
+
+    const visit = (node: ts.Node): void => {
+      if (ts.isPropertyAssignment(node) && ts.isStringLiteralLike(node.name)) {
+        const entry = byMethod.get(node.name.text);
+        if (entry !== undefined) {
+          const lc = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+          seen.add(entry.method);
+          hits.push(
+            ...checkResponsePayload(
+              rootDir,
+              schemaCache,
+              constants,
+              entry,
+              node.initializer,
+              `${file}:${lc.line + 1}:${lc.character + 1}`,
+            ),
+          );
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+
+    visit(sf);
+  }
+
+  for (const entry of CODEX_RESPONSE_CONTRACT) {
+    if (seen.has(entry.method)) continue;
+    hits.push({
+      where: `client-response ${entry.method}`,
+      detail: `no reply payload literal for '${entry.method}' was found under ${CODEX_AGENT_DIR}`,
+    });
+  }
+  return hits;
+}
+
 export function main(argv: readonly string[]): number {
   const args = nonFlagArgs(argv);
   const rootDir = args[0] ?? ".";
@@ -576,11 +734,16 @@ export function main(argv: readonly string[]): number {
   collectFiles(laneDir, files);
   const sources = files.filter((file) => TS_EXTS.has(ext(file)));
 
-  const hits = [...checkManifest(rootDir), ...findCallSiteHits(rootDir, sources)];
+  const hits = [
+    ...checkManifest(rootDir),
+    ...findCallSiteHits(rootDir, sources),
+    ...findResponsePayloadHits(rootDir, sources),
+  ];
   if (hits.length === 0) {
     console.log(
-      `check-codex-schema: ${CODEX_WIRE_CONTRACT.length} wire method(s) and ` +
-        `${CODEX_CONSUMED_SHAPES.length} consumed shape(s) match the vendored schema ` +
+      `check-codex-schema: ${CODEX_WIRE_CONTRACT.length} wire method(s), ` +
+        `${CODEX_CONSUMED_SHAPES.length} consumed shape(s) and ` +
+        `${CODEX_RESPONSE_CONTRACT.length} reply payload(s) match the vendored schema ` +
         `across ${sources.length} lane file(s).`,
     );
     return 0;
@@ -588,7 +751,8 @@ export function main(argv: readonly string[]): number {
   console.error(`check-codex-schema: ${hits.length} schema contract violation(s) found:`);
   for (const hit of hits) console.error(`  ${hit.where}  ${hit.detail}`);
   console.error(
-    `\nRegenerate the vendored schema per ${CODEX_SCHEMA_DIR}/README.md, or stop sending the field.`,
+    `\nRegenerate the vendored schema per ${CODEX_SCHEMA_DIR}/README.md, stop sending the field, ` +
+      `or bring the lane source and CODEX_WIRE_CONTRACT back into agreement.`,
   );
   return 1;
 }

@@ -32,6 +32,7 @@ import { CODEX_VERSION_FLOOR, compareVersions } from "../../src/agent/codex-agen
 import {
   CODEX_CHATGPT_HOST,
   readConfigPath,
+  verifyConfigOverrides,
   verifySpawnedChild,
 } from "../../src/agent/codex-agent/verify.js";
 import type { EngineConfig, MemorySnapshot } from "../../src/host-ports.js";
@@ -54,6 +55,18 @@ const CLIENT_REQUEST_METHODS = [
 const CLIENT_NOTIFICATION_METHODS = ["initialized"] as const;
 
 const MUST_PRESERVE_TOKENS = ["FTP 247W", "72kg", "Mon/Wed/Fri", "Gran Fondo"];
+
+const CHATGPT_BASE_URL_ABSENT = "absent";
+
+function chatgptBaseUrlHost(value: unknown): string {
+  if (value === undefined || value === null || value === "") return CHATGPT_BASE_URL_ABSENT;
+  if (typeof value !== "string") return `non-string ${JSON.stringify(value)}`;
+  try {
+    return new URL(value).host;
+  } catch {
+    return `unparseable ${value}`;
+  }
+}
 
 const EMPTY_SNAPSHOT: MemorySnapshot = {
   read: () => null,
@@ -235,12 +248,10 @@ describe.skipIf(!ENABLED)("real codex app-server", () => {
           expect(lookup.value, override.key).toEqual(override.value);
         }
         const chatgptBaseUrl = readConfigPath(values, "chatgpt_base_url").value;
-        expect(["string", "undefined", "object"]).toContain(typeof chatgptBaseUrl);
-        if (typeof chatgptBaseUrl === "string" && chatgptBaseUrl !== "") {
-          expect(new URL(chatgptBaseUrl).host).toBe(CODEX_CHATGPT_HOST);
-        } else {
-          expect(chatgptBaseUrl ?? null).toBeNull();
-        }
+        expect([CHATGPT_BASE_URL_ABSENT, CODEX_CHATGPT_HOST]).toContain(
+          chatgptBaseUrlHost(chatgptBaseUrl),
+        );
+        expect(verifyConfigOverrides(values)).toBeNull();
 
         const servers = readConfigPath(values, "mcp_servers").value as Record<
           string,
