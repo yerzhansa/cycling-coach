@@ -18,6 +18,7 @@ import { Duplex } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import {
+  COACH_RPC_METHOD_REGISTRY,
   PROTOCOL_VERSION,
   ServerHandshakeFrameSchema,
   createClientHandshakeFrame,
@@ -153,12 +154,18 @@ const spend = {
   setDailySpendCap: async () => spendSummary,
 };
 
+const TEST_ATHLETE_HOME = "/tmp/enduragent-test-athlete";
+const TEST_RENDERER_CAPABILITY_BYTES = Buffer.alloc(32, 9);
+
 function createCoachRpcServer(
   input: Omit<CoachRpcServerInput, "operations" | "spend" | "selfTestOperations"> &
     Partial<Pick<CoachRpcServerInput, "operations" | "spend" | "selfTestOperations">>,
 ) {
   return createCoachRpcServerProduction({
     ...input,
+    athleteHome: input.athleteHome ?? TEST_ATHLETE_HOME,
+    rendererCapabilityRandomBytes:
+      input.rendererCapabilityRandomBytes ?? (() => TEST_RENDERER_CAPABILITY_BYTES),
     operations: input.operations ?? operations,
     spend: input.spend ?? spend,
     selfTestOperations: input.selfTestOperations ?? {
@@ -436,6 +443,8 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       clientProtocolVersion: PROTOCOL_VERSION,
       serverProtocolVersion: PROTOCOL_VERSION,
       owner: "unmanaged-foreground",
+      athleteHome: TEST_ATHLETE_HOME,
+      rendererCapability: TEST_RENDERER_CAPABILITY_BYTES.toString("base64url"),
     });
 
     client.ws.send(
@@ -1122,6 +1131,394 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       expect(chat).not.toHaveBeenCalled();
       expect(selfTest).not.toHaveBeenCalled();
       await client.close();
+    }
+  });
+});
+
+describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
+  it("binds renderer capabilities to the exact Desktop session namespace", async () => {
+    const token = "x".repeat(43);
+    const chat = vi.fn(async () => ({ text: "ok" }));
+    const resetSession = vi.fn(async () => ({ memoryFlushed: true }));
+    const hasSession = vi.fn(async () => ({ hasSession: true }));
+    const rpc = createCoachRpcServer({
+      engine: engine({ chat, resetSession, hasSession }),
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    const rendererCapability = TEST_RENDERER_CAPABILITY_BYTES.toString("base64url");
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(rendererCapability)));
+    expect(ServerHandshakeFrameSchema.parse(JSON.parse(await client.frames.next()))).toMatchObject({
+      status: "accepted",
+      athleteHome: TEST_ATHLETE_HOME,
+      rendererCapability,
+    });
+
+    const foreignChatIds = [
+      "cli:default",
+      "other",
+      "telegram:1",
+      "",
+      " ",
+      "desktop\0",
+      "../desktop",
+    ];
+    let id = 0;
+    for (const method of ["chat", "resetSession", "hasSession"] as const) {
+      for (const chatId of foreignChatIds) {
+        id += 1;
+        client.ws.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            method,
+            params: method === "chat" ? { chatId, message: "hello" } : { chatId },
+          }),
+        );
+        expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+          id,
+          error: { code: -32602, message: "Invalid params" },
+        });
+      }
+    }
+    expect(chat).not.toHaveBeenCalled();
+    expect(resetSession).not.toHaveBeenCalled();
+    expect(hasSession).not.toHaveBeenCalled();
+
+    for (const method of ["chat", "resetSession", "hasSession"] as const) {
+      id += 1;
+      client.ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method,
+          params:
+            method === "chat" ? { chatId: "desktop", message: "hello" } : { chatId: "desktop" },
+        }),
+      );
+      expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({ id, result: {} });
+    }
+    expect(chat).toHaveBeenCalledOnce();
+    expect(resetSession).toHaveBeenCalledOnce();
+    expect(hasSession).toHaveBeenCalledOnce();
+    await client.close();
+  });
+
+  it("denies Telegram sessions to every network authority", async () => {
+    const token = "x".repeat(43);
+    const chat = vi.fn(async () => ({ text: "ok" }));
+    const resetSession = vi.fn(async () => ({ memoryFlushed: true }));
+    const hasSession = vi.fn(async () => ({ hasSession: true }));
+    const rpc = createCoachRpcServer({
+      engine: engine({ chat, resetSession, hasSession }),
+      token,
+      owner: "unmanaged-foreground",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+
+    for (const [index, method] of ["chat", "resetSession", "hasSession"].entries()) {
+      client.ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: index,
+          method,
+          params:
+            method === "chat"
+              ? { chatId: "telegram:777", message: "hello" }
+              : { chatId: "telegram:777" },
+        }),
+      );
+      expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+        id: index,
+        error: { code: -32602, message: "Invalid params" },
+      });
+    }
+    expect(chat).not.toHaveBeenCalled();
+    expect(resetSession).not.toHaveBeenCalled();
+    expect(hasSession).not.toHaveBeenCalled();
+
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "cli",
+        method: "chat",
+        params: { chatId: "cli:default", message: "hello" },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "cli",
+      result: { text: "ok" },
+    });
+    expect(chat).toHaveBeenCalledOnce();
+    await client.close();
+  });
+
+  it("limits renderer configuration to athlete and session settings", async () => {
+    const token = "x".repeat(43);
+    const configureRuntime = vi.fn(async ({ llm, intervals, session }) => ({
+      schemaVersion: 3 as const,
+      status: "applied" as const,
+      applied: {
+        llm: llm !== undefined,
+        intervals: intervals !== undefined,
+        session: session !== undefined,
+      },
+    }));
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      operations: { ...operations, configureRuntime },
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(
+      JSON.stringify(
+        createClientHandshakeFrame(TEST_RENDERER_CAPABILITY_BYTES.toString("base64url")),
+      ),
+    );
+    await client.frames.next();
+
+    const restrictedPatches = [
+      { llm: { api_key: "secret" } },
+      { llm: { clear_credential: true } },
+      { llm: { provider: "anthropic" } },
+      { llm: { base_url: "https://attacker.invalid" } },
+      { llm: { claude_cli: { binary_path: "/tmp/attacker" } } },
+      { llm: { codex_agent: { binary_path: "/tmp/attacker" } } },
+      { intervals: { api_key: "secret" } },
+      { intervals: { clear_credential: true } },
+    ];
+    for (const [index, params] of restrictedPatches.entries()) {
+      client.ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: `secret-${index}`,
+          method: "configureRuntime",
+          params,
+        }),
+      );
+      expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+        id: `secret-${index}`,
+        error: { code: -32602, message: "Invalid params" },
+      });
+    }
+    expect(configureRuntime).not.toHaveBeenCalled();
+
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "ordinary-config",
+        method: "configureRuntime",
+        params: { session: { idleMinutes: 30 } },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "ordinary-config",
+      result: { status: "applied" },
+    });
+    expect(configureRuntime).toHaveBeenCalledOnce();
+
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "athlete-config",
+        method: "configureRuntime",
+        params: { intervals: { athlete_id: "i1" } },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "athlete-config",
+      result: { status: "applied" },
+    });
+    expect(configureRuntime).toHaveBeenCalledTimes(2);
+
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "upgrade",
+        method: "daemon.reserveUpgrade",
+        params: {
+          targetProtocolVersion: PROTOCOL_VERSION + 1,
+          handoffCapability: Buffer.alloc(32, 1).toString("base64url"),
+        },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "upgrade",
+      error: { code: -32601, message: "Method not found" },
+    });
+    await client.close();
+  });
+
+  it("regenerates a renderer capability that collides with the privileged token", async () => {
+    const colliding = Buffer.alloc(32, 1);
+    const replacement = Buffer.alloc(32, 2);
+    const random = vi
+      .fn<(size: number) => Buffer>()
+      .mockReturnValueOnce(colliding)
+      .mockReturnValueOnce(replacement);
+    const token = colliding.toString("base64url");
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      token,
+      owner: "app-supervised",
+      rendererCapabilityRandomBytes: random,
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    expect(ServerHandshakeFrameSchema.parse(JSON.parse(await client.frames.next()))).toMatchObject({
+      rendererCapability: replacement.toString("base64url"),
+    });
+    expect(random).toHaveBeenCalledTimes(2);
+    await client.close();
+  });
+
+  it("keeps one renderer capability stable for every connection in a daemon process", async () => {
+    const token = "x".repeat(43);
+    const capabilityBytes = Buffer.alloc(32, 3);
+    const random = vi.fn(() => capabilityBytes);
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      token,
+      owner: "app-supervised",
+      rendererCapabilityRandomBytes: random,
+    });
+    const privileged = await openSocket(rpc);
+    const renderer = await openSocket(rpc);
+
+    privileged.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    const privilegedFrame = ServerHandshakeFrameSchema.parse(
+      JSON.parse(await privileged.frames.next()),
+    );
+    expect(privilegedFrame.status).toBe("accepted");
+    if (privilegedFrame.status !== "accepted") throw new Error("expected accepted handshake");
+
+    renderer.ws.send(
+      JSON.stringify(createClientHandshakeFrame(privilegedFrame.rendererCapability)),
+    );
+    const rendererFrame = ServerHandshakeFrameSchema.parse(
+      JSON.parse(await renderer.frames.next()),
+    );
+    expect(rendererFrame).toMatchObject({
+      status: "accepted",
+      rendererCapability: privilegedFrame.rendererCapability,
+    });
+    expect(random).toHaveBeenCalledExactlyOnceWith(32);
+
+    await privileged.close();
+    await renderer.close();
+  });
+
+  it("rotates renderer capabilities between daemon processes and rejects the prior process capability", async () => {
+    const token = "x".repeat(43);
+    const firstCapability = Buffer.alloc(32, 4).toString("base64url");
+    const secondCapability = Buffer.alloc(32, 5).toString("base64url");
+    const firstRpc = createCoachRpcServer({
+      engine: engine(),
+      token,
+      owner: "app-supervised",
+      rendererCapabilityRandomBytes: () => Buffer.alloc(32, 4),
+    });
+    const firstClient = await openSocket(firstRpc);
+    firstClient.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    expect(
+      ServerHandshakeFrameSchema.parse(JSON.parse(await firstClient.frames.next())),
+    ).toMatchObject({
+      rendererCapability: firstCapability,
+    });
+    await firstClient.close();
+
+    const secondRpc = createCoachRpcServer({
+      engine: engine(),
+      token,
+      owner: "app-supervised",
+      rendererCapabilityRandomBytes: () => Buffer.alloc(32, 5),
+    });
+    const currentClient = await openSocket(secondRpc);
+    currentClient.ws.send(JSON.stringify(createClientHandshakeFrame(secondCapability)));
+    expect(
+      ServerHandshakeFrameSchema.parse(JSON.parse(await currentClient.frames.next())),
+    ).toMatchObject({
+      status: "accepted",
+      rendererCapability: secondCapability,
+    });
+
+    const staleClient = await openSocket(secondRpc);
+    const staleClosed = new Promise<number>((resolve) => {
+      staleClient.ws.once("close", (code) => resolve(code));
+    });
+    staleClient.ws.send(JSON.stringify(createClientHandshakeFrame(firstCapability)));
+    await expect(staleClosed).resolves.toBe(1008);
+
+    currentClient.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "current",
+        method: "getAthleteState",
+        params: {},
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await currentClient.frames.next())).toMatchObject({
+      id: "current",
+      result: { schemaVersion: "3" },
+    });
+
+    await staleClient.close();
+    await currentClient.close();
+  });
+
+  it("fails closed after four unusable renderer capability candidates", () => {
+    const colliding = Buffer.alloc(32, 6);
+    const random = vi.fn(() => colliding);
+
+    expect(() =>
+      createCoachRpcServer({
+        engine: engine(),
+        token: colliding.toString("base64url"),
+        owner: "app-supervised",
+        rendererCapabilityRandomBytes: random,
+      }),
+    ).toThrow("renderer capability generation failed");
+    expect(random).toHaveBeenCalledTimes(4);
+    expect(random).toHaveBeenCalledWith(32);
+  });
+
+  it("denies a newly registered method until the renderer allowlist admits it", async () => {
+    const futureMethod = "futureRendererMethod";
+    const mutableRegistry = COACH_RPC_METHOD_REGISTRY as unknown as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(mutableRegistry, futureMethod)).toBe(false);
+    mutableRegistry[futureMethod] = COACH_RPC_METHOD_REGISTRY.getAthleteState;
+
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      token: "x".repeat(43),
+      owner: "app-supervised",
+    });
+    let client: Awaited<ReturnType<typeof openSocket>> | undefined;
+    try {
+      client = await openSocket(rpc);
+      client.ws.send(
+        JSON.stringify(
+          createClientHandshakeFrame(TEST_RENDERER_CAPABILITY_BYTES.toString("base64url")),
+        ),
+      );
+      await client.frames.next();
+      client.ws.send(
+        JSON.stringify({ jsonrpc: "2.0", id: "future", method: futureMethod, params: {} }),
+      );
+      expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+        jsonrpc: "2.0",
+        id: "future",
+        error: { code: -32601, message: "Method not found" },
+      });
+    } finally {
+      delete mutableRegistry[futureMethod];
+      if (client === undefined) await rpc.close();
+      else await client.close();
     }
   });
 });

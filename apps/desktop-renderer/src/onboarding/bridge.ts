@@ -8,6 +8,7 @@ import {
   type LlmProvider,
   type SaveIntakeRpcParams,
 } from "@enduragent/coach-contract";
+import { validateRendererDaemonConnection } from "../daemon-connection.js";
 import { SUPPORTED_IMPORT_EXTENSIONS, type DesktopCredentialSlot } from "./constants.js";
 import type {
   ChatGptLoginResult,
@@ -121,7 +122,8 @@ export interface OnboardingBridge {
 export interface DesktopOnboardingAuth {
   getDaemonConnection(): Promise<{
     readonly url: `ws://127.0.0.1:${number}/rpc`;
-    readonly token: string;
+    readonly rendererCapability: string;
+    readonly generation: number;
   }>;
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
   retryFailedCredentials(): Promise<readonly CredentialSlotStatus[]>;
@@ -169,23 +171,9 @@ export function createOnboardingBridge(
     if (clientPromise !== undefined) return clientPromise;
     const pending = auth
       .getDaemonConnection()
+      .then(validateRendererDaemonConnection)
       .then((connection) => {
-        const url = new URL(connection.url);
-        if (
-          url.protocol !== "ws:" ||
-          url.hostname !== "127.0.0.1" ||
-          url.port === "" ||
-          !/^\d+$/u.test(url.port) ||
-          url.pathname !== "/rpc" ||
-          url.username !== "" ||
-          url.password !== "" ||
-          url.search !== "" ||
-          url.hash !== "" ||
-          !/^[A-Za-z0-9_-]{43}$/u.test(connection.token)
-        ) {
-          throw new TypeError();
-        }
-        return connect(connection);
+        return connect({ url: connection.url, token: connection.rendererCapability });
       })
       .catch((error: unknown) => {
         if (clientPromise === pending) clientPromise = undefined;

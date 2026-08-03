@@ -225,6 +225,7 @@ async function startRpc(coachEngine: CoachEngine): Promise<RunningRpc> {
     },
     token: AUTH_TOKEN,
     owner: "unmanaged-foreground",
+    athleteHome: "/tmp/enduragent-redaction-rpc-test",
   });
   const server = createServer();
   server.on("upgrade", rpc.handleUpgrade);

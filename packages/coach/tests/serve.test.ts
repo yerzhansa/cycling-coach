@@ -173,6 +173,7 @@ function harness(
     },
   };
   const lifecycle: LocalCoachLifecycle = {
+    home,
     engine,
     operations,
     spendMeter: {
@@ -211,7 +212,7 @@ function harness(
     createHealthState: () => ({ healthy: true, setHealthy: vi.fn() }),
   } as unknown as CoachServeDependencies;
   return {
-    input: { lifecycle, home, appVersion: "0.1.0", signal: new AbortController().signal },
+    input: { lifecycle, appVersion: "0.1.0", signal: new AbortController().signal },
     lifecycle,
     dependencies,
     binding,
@@ -253,9 +254,11 @@ describe("runCoachServe", () => {
     );
     expect(test.createRpcServer).toHaveBeenCalledWith(
       expect.objectContaining({
+        athleteHome: home.root,
         selfTestOperations: { selfTest: expect.any(Function) },
       }),
     );
+    expect(test.ensureToken).toHaveBeenCalledWith(test.lifecycle.home.configDir);
     controller.abort();
     await expect(result).resolves.toBe(EXIT_SUCCESS);
     expect(test.trace).toEqual([

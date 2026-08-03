@@ -1,5 +1,5 @@
 import type { CoachEngine, CoachOperations } from "@enduragent/coach-contract";
-import type { AthleteHome } from "@enduragent/kernel-node/home";
+import { prepareAthleteHome, type AthleteHome } from "@enduragent/kernel-node/home";
 import type { WriterProtocolListener } from "@enduragent/kernel-node/lock";
 import { createLocalCoachComposition, type LocalCoachComposition } from "./composition.js";
 import type { SpendMeterService } from "./spend-meter.js";
@@ -12,6 +12,7 @@ import { checkHomeReadiness, type ReadinessFailure } from "./readiness.js";
 import { withCoachStoreWriter } from "./runtime.js";
 
 export interface LocalCoachLifecycle {
+  readonly home: AthleteHome;
   readonly engine: CoachEngine;
   readonly operations: CoachOperations;
   readonly spendMeter: SpendMeterService;
@@ -88,18 +89,19 @@ export async function withLocalCoach<T>(
   if (typeof input.operation !== "function") {
     throw new TypeError("invalid local coach operation");
   }
-  const writerEnv = { ...input.env, ENDURAGENT_HOME: input.home.root };
+  const selectedHome = await prepareAthleteHome(input.home);
+  const writerEnv = { ...input.env, ENDURAGENT_HOME: selectedHome.root };
   let operationOutcome: Extract<WriterValue<T>, { kind: "rejected" }> | undefined;
   let writerValue: WriterValue<T>;
   try {
     writerValue = await withCoachStoreWriter(writerEnv, {
       beforeStoreOpen: async (resolvedHome) => {
-        if (!sameHome(resolvedHome, input.home)) {
+        if (!sameHome(resolvedHome, selectedHome)) {
           throw new TypeError("Writer home does not match the selected athlete home.");
         }
         const result = await migrateLegacyHomeUnderLock({
           sourceRoot: input.sourceRoot,
-          targetRoot: input.home.root,
+          targetRoot: selectedHome.root,
           action: input.action,
         });
         if (result.status === "refused" || result.status === "discarded") {
@@ -114,6 +116,10 @@ export async function withLocalCoach<T>(
             result: readiness,
           };
         }
+        const compositionConfig =
+          readiness.config.dataDir === selectedHome.root
+            ? readiness.config
+            : { ...readiness.config, dataDir: selectedHome.root };
         let lifecycle: LocalCoachComposition | undefined;
         let lifecycleCloseOutcome: { kind: "succeeded" } | { kind: "failed"; error: unknown } = {
           kind: "succeeded",
@@ -122,9 +128,9 @@ export async function withLocalCoach<T>(
         try {
           lifecycle = await createLocalCoachComposition({
             env: writerEnv,
-            home: input.home,
+            home: selectedHome,
             context,
-            config: readiness.config,
+            config: compositionConfig,
             engineConfig: readiness.engineConfig,
           });
           const publishedLifecycle = lifecycle;
@@ -132,6 +138,7 @@ export async function withLocalCoach<T>(
             outcome = {
               kind: "fulfilled",
               value: await input.operation({
+                home: selectedHome,
                 engine: publishedLifecycle.engine,
                 operations: publishedLifecycle.operations,
                 spendMeter: publishedLifecycle.spendMeter,

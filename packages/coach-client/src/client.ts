@@ -1,4 +1,5 @@
 import {
+  AthleteHomeIdentitySchema,
   COACH_RPC_METHOD_REGISTRY,
   parseCoachRpcEnvelope,
   serializeCoachRpcEnvelope,
@@ -32,6 +33,7 @@ import { resolveCoachWebSocketFactory, type CoachWebSocketFactory } from "./tran
 export interface ConnectCoachClientOptions {
   readonly url: string;
   readonly token: string;
+  readonly expectedAthleteHome?: string;
   readonly signal?: AbortSignal;
   readonly connectTimeoutMs?: number;
   readonly handshakeTimeoutMs?: number;
@@ -78,6 +80,7 @@ export type CoachClientTerminalObserver = (
 interface ValidatedOptions {
   readonly url: string;
   readonly token: string;
+  readonly expectedAthleteHome: string | undefined;
   readonly signal: AbortSignal | undefined;
   readonly connectTimeoutMs: number;
   readonly handshakeTimeoutMs: number;
@@ -146,6 +149,8 @@ function validateOptions(options: ConnectCoachClientOptions): ValidatedOptions {
     typeof options.url !== "string" ||
     typeof options.token !== "string" ||
     options.token.length === 0 ||
+    (options.expectedAthleteHome !== undefined &&
+      !AthleteHomeIdentitySchema.safeParse(options.expectedAthleteHome).success) ||
     !positiveSafeInteger(connectTimeoutMs) ||
     !positiveSafeInteger(handshakeTimeoutMs) ||
     !positiveSafeInteger(closeTimeoutMs) ||
@@ -178,6 +183,7 @@ function validateOptions(options: ConnectCoachClientOptions): ValidatedOptions {
   return {
     url: options.url,
     token: options.token,
+    expectedAthleteHome: options.expectedAthleteHome,
     signal: options.signal,
     connectTimeoutMs,
     handshakeTimeoutMs,
@@ -654,6 +660,7 @@ export async function connectCoachClient(options: ConnectCoachClientOptions): Pr
     binding = await performCoachClientHandshake({
       socket,
       token: validated.token,
+      expectedAthleteHome: validated.expectedAthleteHome,
       timeoutMs: validated.handshakeTimeoutMs,
       onReadyFrame: runtime.handleRawFrame,
     });

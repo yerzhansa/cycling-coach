@@ -358,11 +358,13 @@ describe("desktop first-run configuration", () => {
     expect(parsed.session.timezone).toBe("UTC");
   });
 
-  it("integrates the seed before constructing the daemon supervisor", async () => {
+  it("prepares the home before seeding and constructing the daemon supervisor", async () => {
     const source = await readFile(resolve(import.meta.dirname, "../src/main/index.ts"), "utf8");
+    const prepareCall = source.indexOf("await prepareDesktopAthleteHome(environment)");
     const seedCall = source.indexOf("await seedFirstRunConfig({ env: environment });");
     const supervisorConstruction = source.indexOf("new DesktopDaemonSupervisor(");
-    expect(seedCall).toBeGreaterThan(-1);
+    expect(prepareCall).toBeGreaterThan(-1);
+    expect(seedCall).toBeGreaterThan(prepareCall);
     expect(supervisorConstruction).toBeGreaterThan(seedCall);
     expect(source).toContain('process.stderr.write("desktop-first-run-config-failure seed\\n");');
   });

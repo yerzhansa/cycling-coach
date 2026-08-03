@@ -31,6 +31,11 @@ import {
 } from "../src/index.js";
 
 const token = "synthetic-test-token";
+const athleteHome = "/synthetic/athlete";
+const acceptedHandshakeBinding = {
+  athleteHome,
+  rendererCapability: "A".repeat(43),
+} as const;
 
 const rpcDeadlineCases = [
   ["chat", { chatId: "chat-1", message: "deadline" }, 660_000],
@@ -38,11 +43,7 @@ const rpcDeadlineCases = [
   ["hasSession", { chatId: "chat-1" }, 30_000],
   ["getTranscriptPage", { cursor: null, limit: 25 }, 30_000],
   ["listArchivedConversations", {}, 30_000],
-  [
-    "getArchivedTranscriptPage",
-    { boundaryRef: "a".repeat(64), cursor: null, limit: 25 },
-    30_000,
-  ],
+  ["getArchivedTranscriptPage", { boundaryRef: "a".repeat(64), cursor: null, limit: 25 }, 30_000],
   ["getAthleteState", {}, 30_000],
   ["importFiles", { paths: ["/synthetic/ride.fit"] }, 3_600_000],
   ["sync", {}, 86_400_000],
@@ -131,7 +132,9 @@ function acceptedSocket(
     const frame = JSON.parse(text) as { type?: string };
     if (frame.type === "handshake") {
       socket.emitMessage(
-        JSON.stringify(createAcceptedServerHandshakeFrame(owner, PROTOCOL_VERSION)),
+        JSON.stringify(
+          createAcceptedServerHandshakeFrame(owner, PROTOCOL_VERSION, acceptedHandshakeBinding),
+        ),
       );
     }
   };
@@ -188,7 +191,13 @@ describe("connection and transport", () => {
           const frame = JSON.parse(data.toString()) as Record<string, unknown>;
           firstFrame.resolve(frame);
           socket.send(
-            JSON.stringify(createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION)),
+            JSON.stringify(
+              createAcceptedServerHandshakeFrame(
+                "service-managed",
+                PROTOCOL_VERSION,
+                acceptedHandshakeBinding,
+              ),
+            ),
           );
         });
       });
@@ -197,7 +206,7 @@ describe("connection and transport", () => {
       process.stderr.write("SKIP_MARKER loopback-listen EPERM coach-client\n");
       return;
     }
-    const client = await connectCoachClient({ url, token });
+    const client = await connectCoachClient({ url, token, expectedAthleteHome: athleteHome });
     expect(await firstFrame.promise).toEqual({
       type: "handshake",
       token,
@@ -205,6 +214,8 @@ describe("connection and transport", () => {
     });
     expect(urls).toEqual(["/"]);
     expect(client.handshake.owner).toBe("service-managed");
+    expect(client.handshake.athleteHome).toBe(athleteHome);
+    expect(client.handshake.rendererCapability).toBe(acceptedHandshakeBinding.rendererCapability);
     await client.close();
 
     const socket = new ControllableSocket();
@@ -213,7 +224,11 @@ describe("connection and transport", () => {
     socket.sendHook = () =>
       socket.emitMessage(
         JSON.stringify(
-          createAcceptedServerHandshakeFrame("unmanaged-foreground", PROTOCOL_VERSION),
+          createAcceptedServerHandshakeFrame(
+            "unmanaged-foreground",
+            PROTOCOL_VERSION,
+            acceptedHandshakeBinding,
+          ),
         ),
       );
     const browserConnection = connectCoachClient({
@@ -281,6 +296,7 @@ describe("connection and transport", () => {
 
   it.each([
     { token: "" },
+    { expectedAthleteHome: "relative/athlete" },
     { connectTimeoutMs: NaN },
     { connectTimeoutMs: Infinity },
     { handshakeTimeoutMs: -1 },
@@ -363,12 +379,43 @@ describe("connection and transport", () => {
 });
 
 describe("handshake failures", () => {
+  it("refuses an accepted daemon whose authenticated home differs from the expected home", async () => {
+    const socket = new ControllableSocket();
+    socket.sendHook = () => {
+      socket.emitMessage(
+        JSON.stringify(
+          createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION, {
+            ...acceptedHandshakeBinding,
+            athleteHome: "/synthetic/other-athlete",
+          }),
+        ),
+      );
+    };
+    const outcome = connectCoachClient({
+      url: "ws://127.0.0.1:49152",
+      token,
+      expectedAthleteHome: athleteHome,
+      webSocketFactory: () => socket as unknown as WebSocket,
+    }).catch((error: unknown) => error);
+    socket.emitOpen();
+
+    const error = await outcome;
+    expect(error).toBeInstanceOf(CoachClientProtocolError);
+    expect(socket.closeCalls).toEqual([{ code: 1002, reason: undefined }]);
+  });
+
   it("terminalizes a socket error delivered after handshake acceptance but before resolution", async () => {
     const socket = new ControllableSocket();
     const observer = vi.fn();
     socket.sendHook = () => {
       socket.emitMessage(
-        JSON.stringify(createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION)),
+        JSON.stringify(
+          createAcceptedServerHandshakeFrame(
+            "service-managed",
+            PROTOCOL_VERSION,
+            acceptedHandshakeBinding,
+          ),
+        ),
       );
       socket.emitError();
     };
@@ -1596,7 +1643,13 @@ describe("disconnect, close, and send bounds", () => {
       const frame = JSON.parse(text) as { type?: string; id?: number };
       if (frame.type === "handshake")
         socket.emitMessage(
-          JSON.stringify(createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION)),
+          JSON.stringify(
+            createAcceptedServerHandshakeFrame(
+              "service-managed",
+              PROTOCOL_VERSION,
+              acceptedHandshakeBinding,
+            ),
+          ),
         );
       else if (frame.id !== undefined)
         socket.emitMessage(

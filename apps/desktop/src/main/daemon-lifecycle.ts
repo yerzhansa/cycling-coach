@@ -1,4 +1,5 @@
 import type { DesktopDaemonResolution } from "@enduragent/coach/enduragent";
+import { requireDesktopDaemonHome } from "./daemon-home-binding.js";
 
 export type ConnectedDesktopDaemon = Extract<
   DesktopDaemonResolution,
@@ -19,6 +20,9 @@ export type DesktopDaemonLifecycleState =
 export interface DesktopDaemonConnection {
   readonly url: `ws://127.0.0.1:${number}/rpc`;
   readonly token: string;
+  readonly athleteHome: string;
+  readonly rendererCapability: string;
+  readonly owner: ConnectedDesktopDaemon["owner"];
   readonly generation: number;
 }
 
@@ -56,7 +60,14 @@ function daemonConnection(
   resolution: ConnectedDesktopDaemon,
   generation: number,
 ): DesktopDaemonConnection {
-  return { url: resolution.url, token: resolution.token, generation };
+  return {
+    url: resolution.url,
+    token: resolution.token,
+    athleteHome: resolution.athleteHome,
+    rendererCapability: resolution.rendererCapability,
+    owner: resolution.owner,
+    generation,
+  };
 }
 
 function defaultDelay(ms: number, signal: AbortSignal): Promise<void> {
@@ -252,7 +263,10 @@ export class DesktopDaemonLifecycle {
       if (
         observed.status === "connected" &&
         observed.url === previousResolution.url &&
-        observed.token === previousResolution.token
+        observed.token === previousResolution.token &&
+        observed.athleteHome === previousResolution.athleteHome &&
+        observed.rendererCapability === previousResolution.rendererCapability &&
+        observed.owner === previousResolution.owner
       ) {
         this.transition({ status: "ready", generation: failedGeneration });
         return this.connection();
@@ -318,6 +332,13 @@ export class DesktopDaemonLifecycle {
     successor: ConnectedDesktopDaemon,
     failedGeneration: number,
   ): Promise<DesktopDaemonConnection> {
+    try {
+      requireDesktopDaemonHome(previousResolution.athleteHome, successor.athleteHome);
+    } catch (error) {
+      void successor.close().catch(() => {});
+      this.enterTerminal("unavailable");
+      throw error;
+    }
     const nextGeneration = failedGeneration + 1;
     const next = daemonConnection(successor, nextGeneration);
     const readiness = Promise.resolve(

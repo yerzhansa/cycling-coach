@@ -13,6 +13,7 @@ import {
 export interface PerformCoachClientHandshakeInput {
   readonly socket: WebSocket;
   readonly token: string;
+  readonly expectedAthleteHome?: string;
   readonly timeoutMs: number;
   readonly onReadyFrame: (data: unknown) => void;
 }
@@ -97,6 +98,13 @@ export function performCoachClientHandshake(
         return;
       }
       if (frame.serverProtocolVersion !== PROTOCOL_VERSION) {
+        fail(new CoachClientProtocolError());
+        return;
+      }
+      if (
+        input.expectedAthleteHome !== undefined &&
+        frame.athleteHome !== input.expectedAthleteHome
+      ) {
         fail(new CoachClientProtocolError());
         return;
       }

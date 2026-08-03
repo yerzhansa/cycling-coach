@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -296,6 +296,44 @@ describe("local coach runner", () => {
     const compositionInput = mocks.composition.mock.calls[0]![0];
     expect(compositionInput.config).toBe(readyConfig);
     expect(compositionInput.engineConfig).toBe(engineConfig);
+  });
+
+  it("uses one physical athlete-home identity throughout a root-alias lifecycle", async () => {
+    const physicalHome = selectedHome;
+    const aliasRoot = join(physicalHome.root, "athlete-home-alias");
+    await symlink(physicalHome.root, aliasRoot, "dir");
+    selectedHome = {
+      root: aliasRoot,
+      storeDir: join(aliasRoot, "store"),
+      archiveDir: join(aliasRoot, "archive"),
+      configDir: join(aliasRoot, "config"),
+    };
+    context = { ...context, home: physicalHome };
+    readyConfig = { ...readyConfig, dataDir: aliasRoot };
+    mocks.withWriter.mockImplementation(
+      async (env: Record<string, string | undefined>, plan: CoachStoreWriterPlan<unknown>) => {
+        expect(env).toEqual({ SYNTHETIC: "1", ENDURAGENT_HOME: physicalHome.root });
+        await plan.beforeStoreOpen(physicalHome);
+        return plan.operation(context);
+      },
+    );
+
+    await expect(withLocalCoach(input(async () => "done"))).resolves.toEqual({
+      status: "completed",
+      value: "done",
+    });
+
+    expect(mocks.migrate).toHaveBeenCalledWith(
+      expect.objectContaining({ targetRoot: physicalHome.root }),
+    );
+    expect(mocks.readiness).toHaveBeenCalledExactlyOnceWith(physicalHome);
+    expect(mocks.composition).toHaveBeenCalledWith(
+      expect.objectContaining({ home: physicalHome, context }),
+    );
+    expect(mocks.composition.mock.calls[0]![0].config).toEqual({
+      ...readyConfig,
+      dataDir: physicalHome.root,
+    });
   });
 
   it("releases the writer after migration throws without opening later stages", async () => {

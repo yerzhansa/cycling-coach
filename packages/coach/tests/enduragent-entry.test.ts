@@ -339,6 +339,8 @@ describe("enduragent executable composition", () => {
   });
 
   it("runs self-test through the remote client before local composition", async () => {
+    const preparedHome = Object.freeze({ ...home });
+    const prepareAthleteHome = vi.fn(async () => preparedHome);
     const digest = "a".repeat(64);
     const selfTestResult = {
       schemaVersion: 1,
@@ -388,6 +390,7 @@ describe("enduragent executable composition", () => {
         },
         {
           resolveAthleteHome: () => home,
+          prepareAthleteHome,
           withLocalCoach: withLocalCoachDependency,
           readPackageVersion: async () => "unused",
           connectSelfTestClient,
@@ -399,6 +402,8 @@ describe("enduragent executable composition", () => {
     expect(SelfTestCommandTerminalSchema.parse(JSON.parse(lines[0]!))).toEqual(selfTestResult);
     expect(io.stderr.read()).toBe("");
     expect(connectSelfTestClient).toHaveBeenCalledOnce();
+    expect(connectSelfTestClient).toHaveBeenCalledWith(preparedHome, undefined);
+    expect(prepareAthleteHome).toHaveBeenCalledWith(home);
     expect(call).toHaveBeenCalledWith("selfTest", {}, expect.any(Object));
     expect(close).toHaveBeenCalledOnce();
     expect(withLocalCoachDependency).not.toHaveBeenCalled();
@@ -534,7 +539,7 @@ describe("enduragent executable composition", () => {
       expect(io.stdout.read()).toBe("");
       expect(io.stderr.read()).toBe(row.stderr);
       expect(operationCalls).toBe(0);
-      expect(captured?.home).toBe(home);
+      expect(captured?.home).toEqual(home);
       expect(captured?.sourceRoot).toBe(env.CYCLING_COACH_HOME);
       expect(captured?.action).toEqual({ kind: "resume", isTTY: true });
     }
@@ -548,6 +553,16 @@ describe("enduragent executable composition", () => {
     "returns a safe typed app-supervised %s outcome while keeping the ordinary exit code",
     async (status, exitCode) => {
       const io = terminal();
+      const preparedHome = Object.freeze({ ...home });
+      const prepareAthleteHome = vi.fn(async () => preparedHome);
+      const withLocalCoachDependency = vi.fn(
+        async <T>(input: WithLocalCoachInput<T>): Promise<LocalCoachRunResult<T>> => {
+          expect(input.home).toBe(preparedHome);
+          return status === "not-configured"
+            ? { status, configPath: privateConfigPath }
+            : { status };
+        },
+      );
       const privateConfigPath = join(home.configDir, "synthetic-private-profile-token");
       const result = await runAppSupervisedEnduragent(
         {
@@ -557,8 +572,8 @@ describe("enduragent executable composition", () => {
         },
         {
           resolveAthleteHome: () => home,
-          withLocalCoach: async <T>(): Promise<LocalCoachRunResult<T>> =>
-            status === "not-configured" ? { status, configPath: privateConfigPath } : { status },
+          prepareAthleteHome,
+          withLocalCoach: withLocalCoachDependency,
           readPackageVersion: async () => "0.1.0-synthetic",
         },
       );
@@ -566,6 +581,8 @@ describe("enduragent executable composition", () => {
       expect(result).toEqual({ exitCode, readinessFailure: status });
       expect(JSON.stringify(result)).not.toContain("synthetic-private-profile-token");
       expect(Object.keys(result).sort()).toEqual(["exitCode", "readinessFailure"]);
+      expect(prepareAthleteHome).toHaveBeenCalledWith(home);
+      expect(withLocalCoachDependency).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -642,6 +659,8 @@ describe("enduragent executable composition", () => {
     const mocked = mockEngine();
     let captured: WithLocalCoachInput<unknown> | undefined;
     let packageReads = 0;
+    const preparedHome = Object.freeze({ ...home });
+    const prepareAthleteHome = vi.fn(async () => preparedHome);
     const io = terminal(new PassThrough(), true);
     await expect(
       runEnduragent(
@@ -653,6 +672,7 @@ describe("enduragent executable composition", () => {
         },
         {
           resolveAthleteHome: () => home,
+          prepareAthleteHome,
           readPackageVersion: async () => {
             packageReads += 1;
             return "0.1.0-synthetic";
@@ -674,12 +694,13 @@ describe("enduragent executable composition", () => {
     expect(packageReads).toBe(1);
     expect(captured).toMatchObject({
       env,
-      home,
+      home: preparedHome,
       sourceRoot: env.CYCLING_COACH_HOME,
       action: { kind: "resume", isTTY: true },
     });
     expect(io.stdout.read()).toBe("");
     expect(io.stderr.read()).toBe("");
+    expect(prepareAthleteHome).toHaveBeenCalledWith(home);
   });
 
   it.each([{ argv: [] as readonly string[] }, { argv: ["serve"] as readonly string[] }])(
@@ -948,6 +969,8 @@ describe("enduragent executable composition", () => {
   });
 
   it("runs a remote-default verb without registration or spawn work on a warm daemon", async () => {
+    const preparedHome = Object.freeze({ ...home });
+    const prepareAthleteHome = vi.fn(async () => preparedHome);
     const received: CoachVerbRequest[] = [];
     const connectRemoteTransport = vi.fn(async () =>
       remoteTransport({ text: "remote" }, { received }),
@@ -965,6 +988,7 @@ describe("enduragent executable composition", () => {
         },
         {
           resolveAthleteHome: () => home,
+          prepareAthleteHome,
           withLocalCoach: async () => {
             throw new Error("local runner must not be used");
           },
@@ -976,6 +1000,8 @@ describe("enduragent executable composition", () => {
       ),
     ).resolves.toBe(EXIT_SUCCESS);
     expect(received).toHaveLength(1);
+    expect(connectRemoteTransport).toHaveBeenCalledWith(preparedHome);
+    expect(prepareAthleteHome).toHaveBeenCalledWith(home);
     expect(received[0]).toMatchObject({
       method: "chat",
       params: { chatId: "cli:RaceA", message: "hello" },

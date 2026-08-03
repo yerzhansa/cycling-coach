@@ -327,6 +327,7 @@ async function runChild(
 
 type InjectedStage =
   | "resolve"
+  | "prepare"
   | "acquire"
   | "mkdir"
   | "chmod"
@@ -339,6 +340,12 @@ type InjectedStage =
 interface InjectedOptions {
   readonly fail?: Partial<Record<InjectedStage, unknown>>;
   readonly home?: {
+    readonly root: string;
+    readonly storeDir: string;
+    readonly archiveDir: string;
+    readonly configDir: string;
+  };
+  readonly preparedHome?: {
     readonly root: string;
     readonly storeDir: string;
     readonly archiveDir: string;
@@ -357,6 +364,7 @@ function injected(options: InjectedOptions = {}) {
       archiveDir: "/synthetic/home/archive",
       configDir: "/synthetic/home/config",
     } as const);
+  const preparedHome = options.preparedHome ?? home;
   const fail = (stage: InjectedStage): void => {
     if (Object.hasOwn(options.fail ?? {}, stage)) {
       throw options.fail?.[stage];
@@ -412,6 +420,12 @@ function injected(options: InjectedOptions = {}) {
       fail("resolve");
       return home;
     },
+    async prepareAthleteHome(value: typeof home) {
+      calls.push("prepare");
+      expect(value).toBe(home);
+      fail("prepare");
+      return preparedHome;
+    },
     async acquireWriteLock(value: unknown) {
       calls.push("acquire");
       observed.lock = value;
@@ -452,7 +466,7 @@ function injected(options: InjectedOptions = {}) {
       return options.report ?? fullReportFixture;
     },
   } as Dependencies;
-  return { calls, deps, home, observed, store };
+  return { calls, deps, home, preparedHome, observed, store };
 }
 
 function expectUnexpected(result: Awaited<ReturnType<RunCoachDev>>, stage: string): void {
@@ -502,6 +516,47 @@ describe("coach-dev import --report", () => {
       });
       expect(scenario.calls).toEqual([]);
     }
+  });
+
+  it("prepares the physical athlete home before acquiring its writer lock", async () => {
+    const lexicalRoot = "/synthetic/alias-home";
+    const physicalRoot = "/synthetic/physical-home";
+    const scenario = injected({
+      home: {
+        root: lexicalRoot,
+        storeDir: join(lexicalRoot, "store"),
+        archiveDir: join(lexicalRoot, "archive"),
+        configDir: join(lexicalRoot, "config"),
+      },
+      preparedHome: {
+        root: physicalRoot,
+        storeDir: join(physicalRoot, "store"),
+        archiveDir: join(physicalRoot, "archive"),
+        configDir: join(physicalRoot, "config"),
+      },
+    });
+    let operationHome: unknown;
+
+    const result = await runCoachDevWriter(
+      {
+        env: { ENDURAGENT_HOME: lexicalRoot },
+        writerVersion: "physical-home/1",
+        operation: async ({ home }) => {
+          operationHome = home;
+          return "done";
+        },
+      },
+      scenario.deps,
+    );
+
+    expect(result).toEqual({ status: "completed", value: "done" });
+    expect(scenario.calls.slice(0, 3)).toEqual(["resolve", "prepare", "acquire"]);
+    expect(scenario.observed.lock).toEqual({
+      configDir: join(physicalRoot, "config"),
+      athleteHome: physicalRoot,
+      version: "physical-home/1",
+    });
+    expect(operationHome).toBe(scenario.preparedHome);
   });
 
   it.runIf(hasLoopback)("First real child import is non-vacuous", async () => {
@@ -615,7 +670,7 @@ describe("coach-dev import --report", () => {
         stdout: WRITER_LOCK_STDOUT,
         stderr: WRITER_LOCK_STDERR,
       });
-      expect(await exists(home.storeDir)).toBe(false);
+      expect(await exists(home.storeDir)).toBe(true);
       expect(await exists(join(home.storeDir, "store.db"))).toBe(false);
     } finally {
       await new Promise<void>((resolveClose, reject) => {
@@ -674,7 +729,7 @@ describe("coach-dev import --report", () => {
       });
       expect(await readFile(lockPath, "utf8")).toBe(lockBytes);
       expect(await readFile(portPath, "utf8")).toBe(portBytes);
-      expect(await exists(home.storeDir)).toBe(false);
+      expect(await exists(home.storeDir)).toBe(true);
       expect(await exists(join(home.storeDir, "store.db"))).toBe(false);
     } finally {
       await new Promise<void>((resolveClose, reject) => {
@@ -698,6 +753,7 @@ describe("coach-dev import --report", () => {
     });
     expect(scenario.calls).toEqual([
       "resolve",
+      "prepare",
       "acquire",
       "mkdir",
       "chmod",
@@ -755,6 +811,7 @@ describe("coach-dev import --report", () => {
     });
     expect(successful.calls).toEqual([
       "resolve",
+      "prepare",
       "acquire",
       "mkdir",
       "chmod",
@@ -787,6 +844,7 @@ describe("coach-dev import --report", () => {
     expect(failure.status === "failed" && failure.cause instanceof Error && failure.cause.message).toBe(privateValues[0]);
     expect(failed.calls).toEqual([
       "resolve",
+      "prepare",
       "acquire",
       "mkdir",
       "chmod",
@@ -818,6 +876,7 @@ describe("coach-dev import --report", () => {
     }, successful.deps)).resolves.toEqual({ status: "completed", value: "done" });
     expect(successful.calls).toEqual([
       "resolve",
+      "prepare",
       "acquire",
       "pre-open",
       "mkdir",
@@ -845,7 +904,7 @@ describe("coach-dev import --report", () => {
     }, failed.deps);
     expect(result).toEqual({ status: "failed", stage: "run pre-open operation" });
     expect(result.status === "failed" && result.cause).toBe(failure);
-    expect(failed.calls).toEqual(["resolve", "acquire", "pre-open", "release"]);
+    expect(failed.calls).toEqual(["resolve", "prepare", "acquire", "pre-open", "release"]);
   });
 
   it("requires typed diagnostics from a foreign-copy contention error", async () => {
@@ -865,7 +924,7 @@ describe("coach-dev import --report", () => {
     );
     expect(result).toEqual({ status: "failed", stage: "acquire lock" });
     expect(result.status === "failed" && result.cause).toBe(foreign);
-    expect(scenario.calls).toEqual(["resolve", "acquire"]);
+    expect(scenario.calls).toEqual(["resolve", "prepare", "acquire"]);
 
     const typedForeign = new Error("foreign process") as Error & {
       contention: { kind: "foreign"; port: number; portFile: string };
@@ -932,24 +991,29 @@ describe("coach-dev import --report", () => {
     }[] = [
       { stage: "resolve", diagnostic: "resolve home", calls: ["resolve"] },
       {
+        stage: "prepare",
+        diagnostic: "resolve home",
+        calls: ["resolve", "prepare"],
+      },
+      {
         stage: "acquire",
         diagnostic: "acquire lock",
-        calls: ["resolve", "acquire"],
+        calls: ["resolve", "prepare", "acquire"],
       },
       {
         stage: "mkdir",
         diagnostic: "create store directory",
-        calls: ["resolve", "acquire", "mkdir", "release"],
+        calls: ["resolve", "prepare", "acquire", "mkdir", "release"],
       },
       {
         stage: "chmod",
         diagnostic: "secure store directory",
-        calls: ["resolve", "acquire", "mkdir", "chmod", "release"],
+        calls: ["resolve", "prepare", "acquire", "mkdir", "chmod", "release"],
       },
       {
         stage: "open",
         diagnostic: "open store",
-        calls: ["resolve", "acquire", "mkdir", "chmod", "open", "release"],
+        calls: ["resolve", "prepare", "acquire", "mkdir", "chmod", "open", "release"],
       },
     ];
     for (const entry of cases) {
@@ -977,7 +1041,7 @@ describe("coach-dev import --report", () => {
         stage: "migrate",
         error: new Error("private migration failure"),
         diagnostic: "run migrations",
-        calls: ["resolve", "acquire", "mkdir", "chmod", "open", "migrate", "close", "release"],
+        calls: ["resolve", "prepare", "acquire", "mkdir", "chmod", "open", "migrate", "close", "release"],
       },
       {
         stage: "import",
@@ -985,6 +1049,7 @@ describe("coach-dev import --report", () => {
         diagnostic: "import files",
         calls: [
           "resolve",
+          "prepare",
           "acquire",
           "mkdir",
           "chmod",
@@ -1020,6 +1085,7 @@ describe("coach-dev import --report", () => {
     expectUnexpected(result, "close store");
     expect(scenario.calls).toEqual([
       "resolve",
+      "prepare",
       "acquire",
       "mkdir",
       "chmod",
@@ -1043,6 +1109,7 @@ describe("coach-dev import --report", () => {
     expectUnexpected(result, "release lock");
     expect(scenario.calls).toEqual([
       "resolve",
+      "prepare",
       "acquire",
       "mkdir",
       "chmod",
@@ -1085,6 +1152,7 @@ describe("coach-dev import --report", () => {
     });
     expect(scenario.calls).toEqual([
       "resolve",
+      "prepare",
       "acquire",
       "mkdir",
       "chmod",

@@ -1,7 +1,7 @@
 interface EnduragentAuth {
   getDaemonConnection(failedGeneration?: number): Promise<{
     readonly url: `ws://127.0.0.1:${number}/rpc`;
-    readonly token: string;
+    readonly rendererCapability: string;
     readonly generation: number;
   }>;
   getTranscriptPage(input: {

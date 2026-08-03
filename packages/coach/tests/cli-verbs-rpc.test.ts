@@ -178,6 +178,7 @@ async function startRpc(engine: CoachEngine): Promise<RunningRpc> {
     },
     token,
     owner: "unmanaged-foreground",
+    athleteHome: "/tmp/enduragent-cli-rpc-test",
   });
   const server = createServer();
   const disconnectWaiters: Array<() => void> = [];

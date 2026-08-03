@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -116,6 +116,22 @@ describe("home readiness", () => {
         projectConfig: engineConfigFromConfig,
       }),
     ).resolves.toEqual({ status: "malformed" });
+  });
+
+  it("accepts a data directory alias that resolves to the selected physical home", async () => {
+    const home = await freshHome();
+    const alias = join(home.root, "selected-home-alias");
+    await symlink(home.root, alias, "dir");
+    const source = `data_source: store\ndata_dir: ${JSON.stringify(alias)}\n`;
+
+    const result = await checkHomeReadiness(home, {
+      readConfigFile: vi.fn().mockResolvedValue(source),
+      loadConfig: loadConfigFromYaml,
+      projectConfig: engineConfigFromConfig,
+    });
+
+    expect(result).toMatchObject({ status: "ready" });
+    if (result.status === "ready") expect(result.config.dataDir).toBe(alias);
   });
 
   it("returns the exact loaded Core config and projected engine snapshots", async () => {

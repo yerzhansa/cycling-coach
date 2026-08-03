@@ -1,11 +1,29 @@
 import type { BrowserWindow, IpcMain, IpcMainInvokeEvent } from "electron";
 import { DESKTOP_CONNECTION_CHANNEL } from "./constants.js";
 import type { DesktopDaemonLifecycle } from "./daemon-lifecycle.js";
+import { requireDesktopDaemonHome } from "./daemon-home-binding.js";
 import { isTrustedConnectionRequest } from "./security.js";
+
+function rendererConnection(
+  connection: ReturnType<DesktopDaemonLifecycle["connection"]>,
+  expectedAthleteHome: string,
+): {
+  readonly url: `ws://127.0.0.1:${number}/rpc`;
+  readonly rendererCapability: string;
+  readonly generation: number;
+} {
+  requireDesktopDaemonHome(expectedAthleteHome, connection.athleteHome);
+  return {
+    url: connection.url,
+    rendererCapability: connection.rendererCapability,
+    generation: connection.generation,
+  };
+}
 
 export function installDesktopConnectionIpc(input: {
   readonly ipcMain: Pick<IpcMain, "handle" | "removeHandler">;
   readonly currentWindow: () => BrowserWindow | undefined;
+  readonly expectedAthleteHome: string;
   readonly runtime: Pick<DesktopDaemonLifecycle, "connection" | "recover">;
 }): () => void {
   const requireTrusted = (event: IpcMainInvokeEvent): void => {
@@ -26,9 +44,12 @@ export function installDesktopConnectionIpc(input: {
       ) {
         throw new TypeError("invalid desktop connection request");
       }
-      return input.runtime.recover((request as { readonly generation: number }).generation);
+      return rendererConnection(
+        await input.runtime.recover((request as { readonly generation: number }).generation),
+        input.expectedAthleteHome,
+      );
     }
-    return input.runtime.connection();
+    return rendererConnection(input.runtime.connection(), input.expectedAthleteHome);
   });
   return () => {
     input.ipcMain.removeHandler(DESKTOP_CONNECTION_CHANNEL);

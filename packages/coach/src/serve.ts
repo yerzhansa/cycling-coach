@@ -1,5 +1,4 @@
 import { EXIT_SUCCESS, type DaemonOwner, type ExitCode } from "@enduragent/coach-contract";
-import type { AthleteHome } from "@enduragent/kernel-node/home";
 import { createDaemonHealthState, createHealthzRequestHandler } from "./daemon/healthz-server.js";
 import { createCoachRpcServer, ensureDaemonToken } from "./daemon/rpc-server.js";
 import type { LocalCoachLifecycle } from "./local-runner.js";
@@ -7,7 +6,6 @@ import { createPackagedSelfTestOperation } from "./packaged-self-test.js";
 
 export interface RunCoachServeInput {
   readonly lifecycle: LocalCoachLifecycle;
-  readonly home: AthleteHome;
   readonly appVersion: string;
   readonly signal: AbortSignal;
   readonly owner?: DaemonOwner;
@@ -46,7 +44,7 @@ export async function runCoachServe(
   if (input.signal.aborted) latchAbort();
   try {
     if (aborted) return EXIT_SUCCESS;
-    const token = await dependencies.ensureToken(input.home.configDir);
+    const token = await dependencies.ensureToken(input.lifecycle.home.configDir);
     if (aborted) return EXIT_SUCCESS;
     const spendMeter = input.lifecycle.spendMeter;
     const healthState = dependencies.createHealthState();
@@ -60,6 +58,7 @@ export async function runCoachServe(
       selfTestOperations: { selfTest: createPackagedSelfTestOperation() },
       token: token.value,
       owner: input.owner ?? "unmanaged-foreground",
+      athleteHome: input.lifecycle.home.root,
       healthState,
     });
     if (aborted) {

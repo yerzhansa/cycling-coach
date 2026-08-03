@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   ClientHandshakeFrameSchema,
   COACH_RPC_METHOD_REGISTRY,
+  AthleteHomeIdentitySchema,
   CoachOperationProgressNotificationEnvelopeSchema,
   CoachRpcRequestEnvelopeSchema,
   CoachTurnEventNotificationEnvelopeSchema,
@@ -14,6 +15,7 @@ import {
   JsonRpcRequestEnvelopeSchema,
   JsonRpcSuccessResponseEnvelopeSchema,
   PROTOCOL_VERSION,
+  RendererCapabilitySchema,
   compareProtocolVersions,
   createAcceptedServerHandshakeFrame,
   createVersionMismatchServerHandshakeFrame,
@@ -145,6 +147,8 @@ export interface CoachRpcServerInput {
   readonly selfTestOperations: CoachSelfTestOperations;
   readonly token: string;
   readonly owner: DaemonOwner;
+  readonly athleteHome: string;
+  readonly rendererCapabilityRandomBytes?: (size: number) => Buffer;
   readonly healthState?: DaemonHealthState;
   readonly timer?: MonotonicTimer;
 }
@@ -174,6 +178,7 @@ interface ClientState {
   sendTail: Promise<void>;
   authTimer: ReturnType<typeof setTimeout> | undefined;
   authenticated: boolean;
+  authority: "privileged" | "renderer" | undefined;
   detached: boolean;
   closed: boolean;
 }
@@ -201,6 +206,7 @@ function createClientState(ws: WebSocket, connectionId: string): ClientState {
     sendTail: Promise.resolve(),
     authTimer: undefined,
     authenticated: false,
+    authority: undefined,
     detached: false,
     closed: false,
   };
@@ -329,6 +335,76 @@ function sameToken(received: string, expected: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
+const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
+  "chat",
+  "resetSession",
+  "hasSession",
+  "getTranscriptPage",
+  "listArchivedConversations",
+  "getArchivedTranscriptPage",
+  "getAthleteState",
+  "importFiles",
+  "sync",
+  "saveIntake",
+  "configureRuntime",
+  "getRuntimeConfig",
+  "getUnitsPreference",
+  "setUnitsPreference",
+  "getSpendSummary",
+  "setDailySpendCap",
+  "selfTest",
+]);
+
+function generateRendererCapability(
+  privilegedToken: string,
+  generateBytes: (size: number) => Buffer,
+): string {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const capability = generateBytes(32).toString("base64url");
+    if (
+      RendererCapabilitySchema.safeParse(capability).success &&
+      !sameToken(capability, privilegedToken)
+    ) {
+      return capability;
+    }
+  }
+  throw new Error("renderer capability generation failed");
+}
+
+function rendererRuntimePatchAllowed(value: unknown): boolean {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const params = value as Record<string, unknown>;
+  if (Object.keys(params).some((key) => key !== "intervals" && key !== "session")) return false;
+  if (params.intervals !== undefined) {
+    if (
+      params.intervals === null ||
+      typeof params.intervals !== "object" ||
+      Array.isArray(params.intervals) ||
+      Object.keys(params.intervals).some((key) => key !== "athlete_id")
+    ) {
+      return false;
+    }
+  }
+  if (params.session !== undefined) {
+    if (
+      params.session === null ||
+      typeof params.session !== "object" ||
+      Array.isArray(params.session)
+    ) {
+      return false;
+    }
+    const allowedSessionFields = new Set([
+      "historyTokenBudgetRatio",
+      "idleMinutes",
+      "dailyResetHour",
+      "resetArchiveRetentionDays",
+      "timezone",
+    ]);
+    if (Object.keys(params.session).some((key) => !allowedSessionFields.has(key))) return false;
+  }
+  return true;
+}
+
 function productionTimer(): MonotonicTimer {
   return {
     nowMs: () => performance.now(),
@@ -383,6 +459,11 @@ function refuseUpgrade(
 }
 
 export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer {
+  const athleteHome = AthleteHomeIdentitySchema.parse(input.athleteHome);
+  const rendererCapability = generateRendererCapability(
+    input.token,
+    input.rendererCapabilityRandomBytes ?? randomBytes,
+  );
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES });
   const clients = new Set<ClientState>();
   const sessionQueue = createSessionRequestQueue();
@@ -467,6 +548,10 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
       generic.data.method === "daemon.reserveUpgrade" ||
       generic.data.method === "daemon.shutdownForUpgrade"
     ) {
+      if (state.authority !== "privileged") {
+        void enqueueSerialized(state, ordinaryError(generic.data.id, -32601, "Method not found"));
+        return;
+      }
       const params = controlParams(generic.data.params);
       if (params === undefined) {
         void enqueueSerialized(state, ordinaryError(generic.data.id, -32602, "Invalid params"));
@@ -554,10 +639,36 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
       void enqueueSerialized(state, ordinaryError(generic.data.id, -32601, "Method not found"));
       return;
     }
+    if (state.authority === "renderer" && !RENDERER_RPC_METHODS.has(generic.data.method)) {
+      void enqueueSerialized(state, ordinaryError(generic.data.id, -32601, "Method not found"));
+      return;
+    }
     const registry = COACH_RPC_METHOD_REGISTRY[generic.data.method];
     const specialized = CoachRpcRequestEnvelopeSchema.safeParse(generic.data);
     const params = registry.requestSchema.safeParse(generic.data.params);
     if (!specialized.success || !params.success) {
+      void enqueueSerialized(state, ordinaryError(generic.data.id, -32602, "Invalid params"));
+      return;
+    }
+    if (
+      generic.data.method === "chat" ||
+      generic.data.method === "resetSession" ||
+      generic.data.method === "hasSession"
+    ) {
+      const chatId = (params.data as { readonly chatId: string }).chatId;
+      if (
+        chatId.startsWith("telegram:") ||
+        (state.authority === "renderer" && chatId !== "desktop")
+      ) {
+        void enqueueSerialized(state, ordinaryError(generic.data.id, -32602, "Invalid params"));
+        return;
+      }
+    }
+    if (
+      state.authority === "renderer" &&
+      generic.data.method === "configureRuntime" &&
+      !rendererRuntimePatchAllowed(params.data)
+    ) {
       void enqueueSerialized(state, ordinaryError(generic.data.id, -32602, "Invalid params"));
       return;
     }
@@ -904,7 +1015,14 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
         return;
       }
       const handshake = ClientHandshakeFrameSchema.safeParse(value);
-      if (!handshake.success || !sameToken(handshake.data.token, input.token)) {
+      const authority = !handshake.success
+        ? undefined
+        : sameToken(handshake.data.token, input.token)
+          ? "privileged"
+          : sameToken(handshake.data.token, rendererCapability)
+            ? "renderer"
+            : undefined;
+      if (!handshake.success || authority === undefined) {
         detach(state, 1008, AUTH_FAILURE_REASON);
         return;
       }
@@ -924,9 +1042,11 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
         return;
       }
       state.authenticated = true;
+      state.authority = authority;
       const frame = createAcceptedServerHandshakeFrame(
         input.owner,
         handshake.data.clientProtocolVersion,
+        { athleteHome, rendererCapability },
       );
       void enqueueSerialized(state, JSON.stringify(frame));
       ws.on("message", (requestData, requestIsBinary) => {

@@ -33,11 +33,19 @@ export interface DesktopTranscriptReader {
 }
 
 export function createConnectionTranscriptReader(
-  connection: Readonly<{ url: `ws://127.0.0.1:${number}/rpc`; token: string }>,
+  connection: Readonly<{
+    url: `ws://127.0.0.1:${number}/rpc`;
+    token: string;
+    athleteHome: string;
+  }>,
   connect: typeof connectCoachClient = connectCoachClient,
 ): DesktopTranscriptReader {
   const call = async <T>(operation: (client: CoachClient) => Promise<T>): Promise<T> => {
-    const client = await connect({ url: connection.url, token: connection.token });
+    const client = await connect({
+      url: connection.url,
+      token: connection.token,
+      expectedAthleteHome: connection.athleteHome,
+    });
     try {
       return await operation(client);
     } finally {

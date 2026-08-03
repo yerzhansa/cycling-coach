@@ -370,6 +370,7 @@ export async function launchDesktopFixture(input: {
       }),
     },
     token: input.token,
+    athleteHome,
     owner: "unmanaged-foreground",
   });
   const binding = await lock.listener.bind({

@@ -31,6 +31,10 @@ function deferred<T>() {
   return { promise, reject, resolve };
 }
 
+function capability(fill: string, suffix = "A"): string {
+  return `${fill.repeat(42)}${suffix}`;
+}
+
 function connected(
   port: number,
   exit: ReturnType<typeof deferred<{ readonly exitCode: number | null }>>,
@@ -44,6 +48,8 @@ function connected(
     status: "connected" as const,
     url: `ws://127.0.0.1:${port}/rpc` as const,
     token: "s".repeat(43),
+    athleteHome: "/synthetic/athlete",
+    rendererCapability: capability("r"),
     owner: "app-supervised" as const,
     supervision: "app-supervised" as const,
     exited: exit.promise,
@@ -61,6 +67,8 @@ describe("desktop main supervisor", () => {
       status: "connected",
       url: "ws://127.0.0.1:45001/rpc",
       token: "s".repeat(43),
+      athleteHome: "/synthetic/athlete",
+      rendererCapability: capability("r"),
       owner: "app-supervised",
       supervision: "app-supervised",
       exited: new Promise(() => {}),
@@ -96,6 +104,8 @@ describe("desktop main supervisor", () => {
       status: "connected",
       url: "ws://127.0.0.1:45001/rpc",
       token: "s".repeat(43),
+      athleteHome: "/synthetic/athlete",
+      rendererCapability: capability("r"),
       owner: "app-supervised",
       supervision: "app-supervised",
       exited: new Promise(() => {}),
@@ -125,6 +135,8 @@ describe("desktop main supervisor", () => {
       status: "connected",
       url: "ws://127.0.0.1:45001/rpc",
       token: "s".repeat(43),
+      athleteHome: "/synthetic/athlete",
+      rendererCapability: capability("r"),
       owner: "app-supervised",
       supervision: "app-supervised",
       exited: new Promise(() => {}),
@@ -626,6 +638,8 @@ describe("desktop main supervisor", () => {
       status: "connected" as const,
       url: "ws://127.0.0.1:45001/rpc" as const,
       token: "s".repeat(43),
+      athleteHome: "/synthetic/athlete",
+      rendererCapability: capability("r"),
       owner: "service-managed" as const,
       supervision: "attached" as const,
       close: vi.fn(async () => {}),
@@ -656,6 +670,8 @@ describe("desktop main supervisor", () => {
       status: "connected" as const,
       url: "ws://127.0.0.1:45001/rpc" as const,
       token: "s".repeat(43),
+      athleteHome: "/synthetic/athlete",
+      rendererCapability: capability("r"),
       owner: "service-managed" as const,
       supervision: "attached" as const,
       close: vi.fn(async () => {}),
@@ -676,6 +692,72 @@ describe("desktop main supervisor", () => {
     expect(attached.close).not.toHaveBeenCalled();
   });
 
+  it("treats a changed renderer capability as a new attached generation", async () => {
+    const attached = {
+      status: "connected" as const,
+      url: "ws://127.0.0.1:45001/rpc" as const,
+      token: "s".repeat(43),
+      athleteHome: "/synthetic/athlete",
+      rendererCapability: capability("r"),
+      owner: "service-managed" as const,
+      supervision: "attached" as const,
+      close: vi.fn(async () => {}),
+    };
+    const successor = {
+      ...attached,
+      rendererCapability: capability("q"),
+      close: vi.fn(async () => {}),
+    };
+    const supervisor = {
+      resolveForRecovery: vi.fn(),
+      reobserveAttached: vi.fn(async () => successor),
+      close: vi.fn(async () => {}),
+    };
+    const runtime = new DesktopDaemonLifecycle(supervisor, attached);
+    runtime.start();
+
+    await expect(runtime.recover(1)).resolves.toMatchObject({
+      url: attached.url,
+      rendererCapability: capability("q"),
+      generation: 2,
+    });
+    expect(attached.close).not.toHaveBeenCalled();
+  });
+
+  it("never publishes an attached successor for a different athlete home", async () => {
+    const attached = {
+      status: "connected" as const,
+      url: "ws://127.0.0.1:45001/rpc" as const,
+      token: "s".repeat(43),
+      athleteHome: "/synthetic/athlete",
+      rendererCapability: capability("r"),
+      owner: "service-managed" as const,
+      supervision: "attached" as const,
+      close: vi.fn(async () => {}),
+    };
+    const successor = {
+      ...attached,
+      athleteHome: "/synthetic/other-athlete",
+      rendererCapability: capability("q"),
+      close: vi.fn(async () => {}),
+    };
+    const supervisor = {
+      resolveForRecovery: vi.fn(),
+      reobserveAttached: vi.fn(async () => successor),
+      close: vi.fn(async () => {}),
+    };
+    const runtime = new DesktopDaemonLifecycle(supervisor, attached);
+    runtime.start();
+
+    await expect(runtime.recover(1)).rejects.toThrow("desktop daemon home mismatch");
+    expect(successor.close).toHaveBeenCalledOnce();
+    expect(runtime.snapshot()).toEqual({
+      status: "terminal",
+      generation: 1,
+      cause: "unavailable",
+    });
+  });
+
   it("shares one three-attempt budget after attached re-observation", async () => {
     let now = 0;
     const delays: number[] = [];
@@ -691,6 +773,8 @@ describe("desktop main supervisor", () => {
       status: "connected" as const,
       url: "ws://127.0.0.1:45001/rpc" as const,
       token: "s".repeat(43),
+      athleteHome: "/synthetic/athlete",
+      rendererCapability: capability("r"),
       owner: "service-managed" as const,
       supervision: "attached" as const,
       close: vi.fn(async () => {}),

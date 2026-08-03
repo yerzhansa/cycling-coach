@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AgentErrorKindSchema,
+  AthleteHomeIdentitySchema,
   AthleteStateSchema,
   COACH_RPC_METHOD_NAMES,
   COACH_RPC_METHOD_REGISTRY,
@@ -30,6 +31,7 @@ import {
   ImportFilesRpcParamsSchema,
   ImportFilesRpcResultSchema,
   OperationProgressEventSchema,
+  Protocol11AcceptedServerHandshakeFrameSchema,
   SaveIntakeRpcParamsSchema,
   SaveIntakeRpcResultSchema,
   SyncRpcParamsSchema,
@@ -45,6 +47,7 @@ import {
   PROTOCOL_VERSION,
   ResetSessionRequestSchema,
   ResetSessionResponseSchema,
+  RendererCapabilitySchema,
   SetUnitsPreferenceRpcParamsSchema,
   SetUnitsPreferenceRpcResultSchema,
   GetSpendSummaryRpcParamsSchema,
@@ -70,6 +73,11 @@ const turnEvent = {
   type: "turn-start",
   turnId: "turn-1",
   chatId: "chat-1",
+} as const;
+
+const acceptedHandshakeBinding = {
+  athleteHome: "/synthetic/athlete",
+  rendererCapability: "A".repeat(43),
 } as const;
 
 const notification = {
@@ -1126,10 +1134,78 @@ describe("coach request and event projection", () => {
 });
 
 describe("handshake", () => {
+  it("round trips a protocol-12 accepted frame with its authenticated home and renderer capability", () => {
+    const accepted = createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION, {
+      ...acceptedHandshakeBinding,
+    });
+
+    expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual({
+      type: "handshake",
+      status: "accepted",
+      clientProtocolVersion: 12,
+      serverProtocolVersion: 12,
+      owner: "service-managed",
+      athleteHome: "/synthetic/athlete",
+      rendererCapability: "A".repeat(43),
+    });
+  });
+
+  it("keeps protocol-11 acceptance available only through the upgrade-control schema", () => {
+    const protocol11Accepted = {
+      type: "handshake",
+      status: "accepted",
+      clientProtocolVersion: 11,
+      serverProtocolVersion: 11,
+      owner: "service-managed",
+    } as const;
+
+    expect(Protocol11AcceptedServerHandshakeFrameSchema.parse(protocol11Accepted)).toEqual(
+      protocol11Accepted,
+    );
+    expect(ServerHandshakeFrameSchema.safeParse(protocol11Accepted).success).toBe(false);
+  });
+
+  it("accepts only canonical-looking absolute homes and canonical 32-byte capabilities", () => {
+    const capabilityEndingInK = Buffer.alloc(32, 9).toString("base64url");
+    expect(capabilityEndingInK).toHaveLength(43);
+    expect(capabilityEndingInK.endsWith("k")).toBe(true);
+    expect(RendererCapabilitySchema.parse(capabilityEndingInK)).toBe(capabilityEndingInK);
+    for (const validHome of [
+      "/",
+      "/synthetic/athlete",
+      "C:\\synthetic\\athlete",
+      "\\\\synthetic-host\\athletes\\one",
+    ]) {
+      expect(AthleteHomeIdentitySchema.parse(validHome)).toBe(validHome);
+    }
+
+    for (const invalidHome of [
+      "relative/athlete",
+      "/synthetic/../athlete",
+      "/synthetic/./athlete",
+      "/synthetic//athlete",
+      "/synthetic/athlete/",
+    ]) {
+      expect(AthleteHomeIdentitySchema.safeParse(invalidHome).success).toBe(false);
+    }
+    for (const invalidCapability of [
+      "A".repeat(42),
+      `${"A".repeat(42)}=`,
+      `${"A".repeat(42)}!`,
+      `${"A".repeat(42)}B`,
+    ]) {
+      expect(RendererCapabilitySchema.safeParse(invalidCapability).success).toBe(false);
+    }
+  });
+
   it("round trips client, accepted, and both mismatch directions", () => {
     const client = createClientHandshakeFrame("synthetic-test-token");
     expect(ClientHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(client)))).toEqual(client);
-    const accepted = createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION);
+    const accepted = createAcceptedServerHandshakeFrame(
+      "service-managed",
+      PROTOCOL_VERSION,
+      acceptedHandshakeBinding,
+    );
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual(
       accepted,
     );
@@ -1152,6 +1228,24 @@ describe("handshake", () => {
       { type: "handshake", clientProtocolVersion: 1 },
       { type: "handshake", token: "", clientProtocolVersion: 1 },
       { type: "handshake", token: "x", clientProtocolVersion: 1, extra: true },
+      {
+        type: "handshake",
+        token: "x",
+        clientProtocolVersion: PROTOCOL_VERSION,
+        authority: "renderer",
+      },
+      {
+        type: "handshake",
+        token: "x",
+        clientProtocolVersion: PROTOCOL_VERSION,
+        athleteHome: "/synthetic/athlete",
+      },
+      {
+        type: "handshake",
+        token: "x",
+        clientProtocolVersion: PROTOCOL_VERSION,
+        rendererCapability: "A".repeat(43),
+      },
     ];
     for (const frame of invalid)
       expect(ClientHandshakeFrameSchema.safeParse(frame).success).toBe(false);
@@ -1209,7 +1303,9 @@ describe("handshake", () => {
     expect(compareProtocolVersions(1, 2)).toBe("client-older");
     expect(compareProtocolVersions(2, 2)).toBe("equal");
     expect(compareProtocolVersions(3, 2)).toBe("client-newer");
-    expect(() => createAcceptedServerHandshakeFrame("service-managed", 1, 2)).toThrow();
+    expect(() =>
+      createAcceptedServerHandshakeFrame("service-managed", 1, acceptedHandshakeBinding, 2),
+    ).toThrow();
     expect(() => createVersionMismatchServerHandshakeFrame("service-managed", 2, 2)).toThrow();
   });
 });
@@ -1229,7 +1325,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version eleven", () => {
-    expect(PROTOCOL_VERSION).toBe(11);
+  it("uses protocol version twelve", () => {
+    expect(PROTOCOL_VERSION).toBe(12);
   });
 });

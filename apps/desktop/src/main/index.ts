@@ -1,8 +1,9 @@
-import { writeFile } from "node:fs/promises";
+import { realpath, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connectCoachClient } from "@enduragent/coach-client";
 import { checkIntervalsStoreOwnerAtPath } from "@enduragent/coach/backfill";
+import { prepareDesktopAthleteHome } from "@enduragent/coach/enduragent";
 import {
   app,
   BrowserWindow,
@@ -41,6 +42,7 @@ import {
   type DesktopDaemonConnection,
   type DesktopDaemonLifecycleState,
 } from "./daemon-lifecycle.js";
+import { requireDesktopDaemonHome } from "./daemon-home-binding.js";
 import { resolveDesktopAthleteHome, seedFirstRunConfig } from "./first-run-config.js";
 import {
   lifecycleErrorCopy,
@@ -129,6 +131,8 @@ async function runDesktop(): Promise<void> {
     environment.ELECTRON_RENDERER_URL,
   );
   try {
+    const preparedHome = await prepareDesktopAthleteHome(environment);
+    environment.ENDURAGENT_HOME = preparedHome.root;
     await seedFirstRunConfig({ env: environment });
   } catch {
     process.stderr.write("desktop-first-run-config-failure seed\n");
@@ -212,6 +216,8 @@ async function runDesktop(): Promise<void> {
       if (!quitRequested) app.exit(resolution.exitCode);
       return;
     }
+    const selectedAthleteHome = await realpath(resolveDesktopAthleteHome(environment));
+    requireDesktopDaemonHome(selectedAthleteHome, resolution.athleteHome);
     let window: BrowserWindow | null = null;
     let windowCreation: Promise<BrowserWindow> | undefined;
     const currentWindow = (): BrowserWindow | null =>
@@ -312,14 +318,16 @@ async function runDesktop(): Promise<void> {
         visibleWindow.webContents.reload();
       },
     });
-    const configDir = join(resolveDesktopAthleteHome(environment), "config");
+    const configDir = join(selectedAthleteHome, "config");
     const createRuntimeBinding = (
-      connection: Pick<DesktopDaemonConnection, "url" | "token">,
+      connection: Pick<DesktopDaemonConnection, "url" | "token" | "athleteHome">,
     ): RuntimeBinding => {
-      const authority = createConnectionRuntimeAuthority(connection, connectCoachClient);
+      requireDesktopDaemonHome(selectedAthleteHome, connection.athleteHome);
+      const boundConnection = { ...connection, athleteHome: selectedAthleteHome };
+      const authority = createConnectionRuntimeAuthority(boundConnection, connectCoachClient);
       return {
         authority,
-        transcript: createConnectionTranscriptReader(connection),
+        transcript: createConnectionTranscriptReader(boundConnection),
         credentials: createCredentialRuntimeApplication({
           configureRuntime: authority.configureRuntime,
           clearRuntimeCredential: authority.clearCredential,
@@ -334,6 +342,7 @@ async function runDesktop(): Promise<void> {
     activeRuntimeBinding = createRuntimeBinding({
       url: resolution.url,
       token: resolution.token,
+      athleteHome: resolution.athleteHome,
     });
     const readActiveRuntimeConfig = async () => {
       const binding = activeRuntimeBinding;
@@ -600,7 +609,7 @@ async function runDesktop(): Promise<void> {
             checkIntervalsCredentialOwner: async (value) => {
               const snapshot = await activeRuntimeBinding!.authority.getRuntimeConfig();
               return checkIntervalsStoreOwnerAtPath(
-                join(resolveDesktopAthleteHome(environment), "store", "store.db"),
+                join(selectedAthleteHome, "store", "store.db"),
                 {
                   apiKey: value,
                   athleteId: intervalsAthleteIdForOwnership(snapshot),
@@ -634,13 +643,13 @@ async function runDesktop(): Promise<void> {
     disposeConnectionIpc = installDesktopConnectionIpc({
       ipcMain,
       currentWindow: () => mainWindow.current() ?? undefined,
+      expectedAthleteHome: selectedAthleteHome,
       runtime: daemonLifecycle,
     });
     disposeTranscriptIpc = installDesktopTranscriptIpc({
       ipcMain,
       currentWindow: () => mainWindow.current() ?? undefined,
-      readPage: (request) =>
-        readActiveTranscript((reader) => reader.getTranscriptPage(request)),
+      readPage: (request) => readActiveTranscript((reader) => reader.getTranscriptPage(request)),
       readArchivedConversations: (request) =>
         readActiveTranscript((reader) => reader.listArchivedConversations(request)),
       readArchivedPage: (request) =>
