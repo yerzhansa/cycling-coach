@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { extname, isAbsolute } from "node:path";
 import type {
   ConfigureRuntimeRpcParams,
@@ -363,6 +364,7 @@ export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): ()
     let result: Awaited<ReturnType<OnboardingDialogPort["showOpenDialog"]>>;
     try {
       result = await options.dialog.showOpenDialog(options.window, {
+        defaultPath: homedir(),
         properties: ["openFile", "multiSelections"],
         filters: [{ name: "Ride files", extensions: ["fit", "tcx", "gpx"] }],
       });

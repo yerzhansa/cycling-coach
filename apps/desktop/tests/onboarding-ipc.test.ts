@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import type { IpcMainInvokeEvent } from "electron";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -788,7 +789,10 @@ describe("desktop onboarding IPC", () => {
     await expect(
       subject.invoke(DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL, subject.trustedEvent),
     ).resolves.toEqual(["/synthetic/ride.fit"]);
+    const chooserDefaultPath = homedir();
+    expect(chooserDefaultPath).not.toMatch(/\/(Desktop|Documents|Downloads)(\/|$)/);
     expect(subject.dialog.showOpenDialog).toHaveBeenCalledWith(expect.anything(), {
+      defaultPath: chooserDefaultPath,
       properties: ["openFile", "multiSelections"],
       filters: [{ name: "Ride files", extensions: ["fit", "tcx", "gpx"] }],
     });
