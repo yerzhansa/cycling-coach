@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CredentialEncryptionPort } from "../src/main/credential-vault.js";
 import {
+  TELEGRAM_BOT_METADATA_FILE_NAME,
   TELEGRAM_CREDENTIAL_DIRECTORY_MODE,
   TELEGRAM_CREDENTIAL_FILE_MODE,
   TELEGRAM_CREDENTIAL_FILE_NAME,
@@ -187,6 +188,149 @@ describe("Telegram credential vault", () => {
     await expect(vault.desiredState()).resolves.toEqual({ state: "missing", enabled: false });
   });
 
+  it("stores strict home-bound bot metadata separately as owner-only plaintext", async () => {
+    const value = await fixture();
+    const token = "synthetic-telegram-token";
+    const username = "synthetic_bot";
+    const baseEncryption = encryption();
+    let encryptedPlaintext = "";
+    const encryptString = vi.fn((input: string) => {
+      encryptedPlaintext = input;
+      return baseEncryption.encryptString(input);
+    });
+    const vault = createTelegramCredentialVault({
+      ...value,
+      encryption: { ...baseEncryption, encryptString },
+    });
+
+    await vault.writeCredential({
+      token,
+      authenticatedAthleteHome: value.athleteHome,
+    });
+    await expect(
+      vault.writeBotMetadata({
+        username,
+        authenticatedAthleteHome: value.athleteHome,
+      }),
+    ).resolves.toEqual({ status: "stored", username });
+
+    await expect(vault.botMetadata()).resolves.toEqual({ state: "configured", username });
+    const metadataPath = join(value.root, TELEGRAM_BOT_METADATA_FILE_NAME);
+    expect((await lstat(metadataPath)).mode & 0o777).toBe(TELEGRAM_CREDENTIAL_FILE_MODE);
+    expect(JSON.parse(await readFile(metadataPath, "utf8"))).toEqual({
+      schemaVersion: 1,
+      athleteHome: value.athleteHome,
+      username,
+    });
+    expect(JSON.parse(encryptedPlaintext)).toEqual({
+      schemaVersion: 1,
+      athleteHome: value.athleteHome,
+      token,
+    });
+    expect(encryptedPlaintext).not.toContain(username);
+    expect(encryptString).toHaveBeenCalledTimes(1);
+  });
+
+  it("validates bot metadata input before I/O and fails closed on foreign or malformed records", async () => {
+    const value = await fixture();
+    const otherHome = await anotherHome(value.root);
+    const vault = createTelegramCredentialVault({ ...value, encryption: encryption() });
+
+    await expect(
+      vault.writeBotMetadata({
+        username: "bad" as never,
+        authenticatedAthleteHome: value.athleteHome,
+      }),
+    ).resolves.toEqual({ status: "refused", reason: "invalid-input" });
+    await expect(
+      vault.writeBotMetadata({
+        username: "synthetic_bot",
+        authenticatedAthleteHome: otherHome,
+      }),
+    ).resolves.toEqual({ status: "refused", reason: "wrong-home" });
+    await expect(lstat(value.root)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await mkdir(value.root, { mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
+    await vault.writeCredential({
+      token: "synthetic-telegram-token",
+      authenticatedAthleteHome: value.athleteHome,
+    });
+    const metadataPath = join(value.root, TELEGRAM_BOT_METADATA_FILE_NAME);
+    await writeFile(
+      metadataPath,
+      `${JSON.stringify({ schemaVersion: 1, athleteHome: otherHome, username: "foreign_bot" })}\n`,
+      { mode: TELEGRAM_CREDENTIAL_FILE_MODE },
+    );
+    await expect(vault.botMetadata()).resolves.toEqual({ state: "wrong-home" });
+    await expect(
+      vault.writeBotMetadata({
+        username: "synthetic_bot",
+        authenticatedAthleteHome: value.athleteHome,
+      }),
+    ).resolves.toEqual({ status: "refused", reason: "wrong-home" });
+    await expect(vault.deleteBotMetadata()).resolves.toEqual({
+      status: "refused",
+      reason: "wrong-home",
+    });
+    await expect(vault.deleteCredential()).resolves.toEqual({
+      status: "refused",
+      reason: "wrong-home",
+    });
+    await expect(vault.credentialStatus()).resolves.toEqual({ state: "configured" });
+
+    const malformedRecords = [
+      {
+        schemaVersion: 1,
+        athleteHome: value.athleteHome,
+        username: "synthetic_bot",
+        extra: true,
+      },
+      { schemaVersion: 1, athleteHome: value.athleteHome, username: "bad" },
+      { schemaVersion: 2, athleteHome: value.athleteHome, username: "synthetic_bot" },
+    ];
+    for (const record of malformedRecords) {
+      await writeFile(metadataPath, `${JSON.stringify(record)}\n`, {
+        mode: TELEGRAM_CREDENTIAL_FILE_MODE,
+      });
+      await expect(vault.botMetadata()).resolves.toEqual({ state: "re-prompt" });
+    }
+    await expect(
+      vault.writeBotMetadata({
+        username: "synthetic_bot",
+        authenticatedAthleteHome: value.athleteHome,
+      }),
+    ).resolves.toEqual({ status: "refused", reason: "storage-failed" });
+    await expect(vault.deleteBotMetadata()).resolves.toEqual({
+      status: "refused",
+      reason: "storage-failed",
+    });
+    await expect(vault.deleteCredential()).resolves.toEqual({
+      status: "refused",
+      reason: "storage-failed",
+    });
+    await expect(vault.credentialStatus()).resolves.toEqual({ state: "configured" });
+  });
+
+  it("deletes bot metadata independently without touching the encrypted credential", async () => {
+    const value = await fixture();
+    const vault = createTelegramCredentialVault({ ...value, encryption: encryption() });
+    await vault.writeCredential({
+      token: "synthetic-telegram-token",
+      authenticatedAthleteHome: value.athleteHome,
+    });
+    await vault.writeBotMetadata({
+      username: "synthetic_bot",
+      authenticatedAthleteHome: value.athleteHome,
+    });
+
+    await expect(vault.deleteBotMetadata()).resolves.toEqual({
+      status: "deleted",
+      cleanupPending: false,
+    });
+    await expect(vault.botMetadata()).resolves.toEqual({ state: "missing" });
+    await expect(vault.credentialStatus()).resolves.toEqual({ state: "configured" });
+  });
+
   it("checks selected, encrypted-record, and authenticated homes before one-way application", async () => {
     const value = await fixture();
     const token = "synthetic-telegram-token";
@@ -347,6 +491,23 @@ describe("Telegram credential vault", () => {
     expect(await readFile(outside, "utf8")).toBe("outside");
 
     await rm(join(second.root, TELEGRAM_CREDENTIAL_FILE_NAME));
+    const outsideMetadata = join(second.root, "..", "outside-metadata");
+    await writeFile(outsideMetadata, "outside", { mode: TELEGRAM_CREDENTIAL_FILE_MODE });
+    await symlink(outsideMetadata, join(second.root, TELEGRAM_BOT_METADATA_FILE_NAME));
+    await expect(symlinkedFileVault.botMetadata()).resolves.toEqual({ state: "re-prompt" });
+    await expect(
+      symlinkedFileVault.writeBotMetadata({
+        username: "synthetic_bot",
+        authenticatedAthleteHome: second.athleteHome,
+      }),
+    ).resolves.toEqual({ status: "refused", reason: "storage-failed" });
+    await expect(symlinkedFileVault.deleteBotMetadata()).resolves.toEqual({
+      status: "refused",
+      reason: "storage-failed",
+    });
+    expect(await readFile(outsideMetadata, "utf8")).toBe("outside");
+
+    await rm(join(second.root, TELEGRAM_BOT_METADATA_FILE_NAME));
     await chmod(second.root, 0o755);
     await expect(symlinkedFileVault.credentialStatus()).resolves.toEqual({ state: "re-prompt" });
     await expect(symlinkedFileVault.setDesiredState(true)).resolves.toEqual({
@@ -415,6 +576,85 @@ describe("Telegram credential vault", () => {
     ]);
     await expect(vault.credentialStatus()).resolves.toEqual({ state: "missing" });
     expect(await readdir(value.root)).toEqual([]);
+  });
+
+  it("removes bot metadata with the credential and retains tombstones when cleanup is deferred", async () => {
+    const value = await fixture();
+    const encryptionPort = encryption();
+    const writer = createTelegramCredentialVault({ ...value, encryption: encryptionPort });
+    await writer.writeCredential({
+      token: "synthetic-telegram-token",
+      authenticatedAthleteHome: value.athleteHome,
+    });
+    await writer.writeBotMetadata({
+      username: "synthetic_bot",
+      authenticatedAthleteHome: value.athleteHome,
+    });
+    let refuseCleanup = true;
+    const vault = createTelegramCredentialVault({
+      ...value,
+      encryption: encryptionPort,
+      createId: () => "coordinated-delete",
+      async removeFile(path, options) {
+        if (String(path).endsWith(".deleted") && refuseCleanup) {
+          refuseCleanup = false;
+          throw new Error("synthetic cleanup failure");
+        }
+        await rm(path, options);
+      },
+    });
+
+    await expect(vault.deleteCredential()).resolves.toEqual({
+      status: "deleted",
+      cleanupPending: true,
+    });
+    const retained = (await readdir(value.root)).sort();
+    expect(retained).toEqual(
+      [
+        `.${TELEGRAM_BOT_METADATA_FILE_NAME}.coordinated-delete.deleted`,
+        `.${TELEGRAM_CREDENTIAL_FILE_NAME}.coordinated-delete.deleted`,
+      ].sort(),
+    );
+    await expect(vault.botMetadata()).resolves.toEqual({ state: "missing" });
+    await expect(vault.credentialStatus()).resolves.toEqual({ state: "missing" });
+    expect(await readdir(value.root)).toEqual([]);
+  });
+
+  it("rolls bot metadata back when coordinated credential deletion cannot be made durable", async () => {
+    const value = await fixture();
+    const encryptionPort = encryption();
+    const writer = createTelegramCredentialVault({ ...value, encryption: encryptionPort });
+    await writer.writeCredential({
+      token: "synthetic-telegram-token",
+      authenticatedAthleteHome: value.athleteHome,
+    });
+    await writer.writeBotMetadata({
+      username: "synthetic_bot",
+      authenticatedAthleteHome: value.athleteHome,
+    });
+    let renameCalls = 0;
+    const vault = createTelegramCredentialVault({
+      ...value,
+      encryption: encryptionPort,
+      async renameFile(from, to) {
+        renameCalls += 1;
+        if (renameCalls === 2) throw new Error("synthetic coordinated rename failure");
+        await rename(from, to);
+      },
+    });
+
+    await expect(vault.deleteCredential()).resolves.toEqual({
+      status: "refused",
+      reason: "storage-failed",
+    });
+    await expect(vault.botMetadata()).resolves.toEqual({
+      state: "configured",
+      username: "synthetic_bot",
+    });
+    await expect(vault.credentialStatus()).resolves.toEqual({ state: "configured" });
+    expect((await readdir(value.root)).sort()).toEqual(
+      [TELEGRAM_BOT_METADATA_FILE_NAME, TELEGRAM_CREDENTIAL_FILE_NAME].sort(),
+    );
   });
 
   it("rolls a deletion back when tombstone durability cannot be established", async () => {
