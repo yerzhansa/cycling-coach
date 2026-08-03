@@ -23,11 +23,21 @@ import {
 } from "./self-test.js";
 import {
   ConfigureTelegramRpcParamsSchema,
+  DeleteTelegramWebhookRpcParamsSchema,
+  InspectTelegramCredentialRpcParamsSchema,
   ReplaceTelegramRpcParamsSchema,
-  TelegramChannelStatusSchema,
+  TelegramAllowedSenderRpcParamsSchema,
+  TelegramAllowedSendersResultSchema,
+  TelegramControlSnapshotSchema,
+  TelegramCredentialInspectionSchema,
   type ConfigureTelegramRpcParams,
+  type DeleteTelegramWebhookRpcParams,
+  type InspectTelegramCredentialRpcParams,
   type ReplaceTelegramRpcParams,
-  type TelegramChannelStatus,
+  type TelegramAllowedSenderRpcParams,
+  type TelegramAllowedSendersResult,
+  type TelegramControlSnapshot,
+  type TelegramCredentialInspection,
 } from "./telegram-control.js";
 
 export const JsonValueSchema = z.json();
@@ -141,6 +151,14 @@ export const COACH_RPC_METHOD_NAMES = [
   "replaceTelegram",
   "getTelegramStatus",
   "reconcileTelegram",
+  "inspectTelegramCredential",
+  "deleteTelegramWebhook",
+  "forgetTelegramCredential",
+  "beginTelegramPairing",
+  "cancelTelegramPairing",
+  "listTelegramAllowedSenders",
+  "addTelegramAllowedSender",
+  "removeTelegramAllowedSender",
   "getSpendSummary",
   "setDailySpendCap",
   "selfTest",
@@ -811,12 +829,28 @@ export interface CoachSelfTestOperations {
 }
 
 export interface TelegramControlOperations {
-  configureTelegram(request: ConfigureTelegramRpcParams): Promise<TelegramChannelStatus>;
-  enableTelegram(request: EmptyRpcParams): Promise<TelegramChannelStatus>;
-  disableTelegram(request: EmptyRpcParams): Promise<TelegramChannelStatus>;
-  replaceTelegram(request: ReplaceTelegramRpcParams): Promise<TelegramChannelStatus>;
-  getTelegramStatus(request: EmptyRpcParams): Promise<TelegramChannelStatus>;
-  reconcileTelegram(request: EmptyRpcParams): Promise<TelegramChannelStatus>;
+  configureTelegram(request: ConfigureTelegramRpcParams): Promise<TelegramControlSnapshot>;
+  enableTelegram(request: EmptyRpcParams): Promise<TelegramControlSnapshot>;
+  disableTelegram(request: EmptyRpcParams): Promise<TelegramControlSnapshot>;
+  replaceTelegram(request: ReplaceTelegramRpcParams): Promise<TelegramControlSnapshot>;
+  getTelegramStatus(request: EmptyRpcParams): Promise<TelegramControlSnapshot>;
+  reconcileTelegram(request: EmptyRpcParams): Promise<TelegramControlSnapshot>;
+  inspectTelegramCredential(
+    request: InspectTelegramCredentialRpcParams,
+  ): Promise<TelegramCredentialInspection>;
+  deleteTelegramWebhook(
+    request: DeleteTelegramWebhookRpcParams,
+  ): Promise<TelegramCredentialInspection>;
+  forgetTelegramCredential(request: EmptyRpcParams): Promise<TelegramControlSnapshot>;
+  beginTelegramPairing(request: EmptyRpcParams): Promise<TelegramControlSnapshot>;
+  cancelTelegramPairing(request: EmptyRpcParams): Promise<TelegramControlSnapshot>;
+  listTelegramAllowedSenders(request: EmptyRpcParams): Promise<TelegramAllowedSendersResult>;
+  addTelegramAllowedSender(
+    request: TelegramAllowedSenderRpcParams,
+  ): Promise<TelegramAllowedSendersResult>;
+  removeTelegramAllowedSender(
+    request: TelegramAllowedSenderRpcParams,
+  ): Promise<TelegramAllowedSendersResult>;
 }
 
 export type CoachRpcService = CoachEngine &
@@ -984,6 +1018,70 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("reconcileTelegram"),
       params: EmptyRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("inspectTelegramCredential"),
+      params: InspectTelegramCredentialRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("deleteTelegramWebhook"),
+      params: DeleteTelegramWebhookRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("forgetTelegramCredential"),
+      params: EmptyRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("beginTelegramPairing"),
+      params: EmptyRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("cancelTelegramPairing"),
+      params: EmptyRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("listTelegramAllowedSenders"),
+      params: EmptyRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("addTelegramAllowedSender"),
+      params: TelegramAllowedSenderRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("removeTelegramAllowedSender"),
+      params: TelegramAllowedSenderRpcParamsSchema,
     })
     .strict(),
   z
@@ -1182,37 +1280,85 @@ export const COACH_RPC_METHOD_REGISTRY = {
   configureTelegram: {
     wireName: "configureTelegram",
     requestSchema: ConfigureTelegramRpcParamsSchema,
-    responseSchema: TelegramChannelStatusSchema,
+    responseSchema: TelegramControlSnapshotSchema,
     eventSchema: NoRpcEventSchema,
   },
   enableTelegram: {
     wireName: "enableTelegram",
     requestSchema: EmptyRpcParamsSchema,
-    responseSchema: TelegramChannelStatusSchema,
+    responseSchema: TelegramControlSnapshotSchema,
     eventSchema: NoRpcEventSchema,
   },
   disableTelegram: {
     wireName: "disableTelegram",
     requestSchema: EmptyRpcParamsSchema,
-    responseSchema: TelegramChannelStatusSchema,
+    responseSchema: TelegramControlSnapshotSchema,
     eventSchema: NoRpcEventSchema,
   },
   replaceTelegram: {
     wireName: "replaceTelegram",
     requestSchema: ReplaceTelegramRpcParamsSchema,
-    responseSchema: TelegramChannelStatusSchema,
+    responseSchema: TelegramControlSnapshotSchema,
     eventSchema: NoRpcEventSchema,
   },
   getTelegramStatus: {
     wireName: "getTelegramStatus",
     requestSchema: EmptyRpcParamsSchema,
-    responseSchema: TelegramChannelStatusSchema,
+    responseSchema: TelegramControlSnapshotSchema,
     eventSchema: NoRpcEventSchema,
   },
   reconcileTelegram: {
     wireName: "reconcileTelegram",
     requestSchema: EmptyRpcParamsSchema,
-    responseSchema: TelegramChannelStatusSchema,
+    responseSchema: TelegramControlSnapshotSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  inspectTelegramCredential: {
+    wireName: "inspectTelegramCredential",
+    requestSchema: InspectTelegramCredentialRpcParamsSchema,
+    responseSchema: TelegramCredentialInspectionSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  deleteTelegramWebhook: {
+    wireName: "deleteTelegramWebhook",
+    requestSchema: DeleteTelegramWebhookRpcParamsSchema,
+    responseSchema: TelegramCredentialInspectionSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  forgetTelegramCredential: {
+    wireName: "forgetTelegramCredential",
+    requestSchema: EmptyRpcParamsSchema,
+    responseSchema: TelegramControlSnapshotSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  beginTelegramPairing: {
+    wireName: "beginTelegramPairing",
+    requestSchema: EmptyRpcParamsSchema,
+    responseSchema: TelegramControlSnapshotSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  cancelTelegramPairing: {
+    wireName: "cancelTelegramPairing",
+    requestSchema: EmptyRpcParamsSchema,
+    responseSchema: TelegramControlSnapshotSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  listTelegramAllowedSenders: {
+    wireName: "listTelegramAllowedSenders",
+    requestSchema: EmptyRpcParamsSchema,
+    responseSchema: TelegramAllowedSendersResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  addTelegramAllowedSender: {
+    wireName: "addTelegramAllowedSender",
+    requestSchema: TelegramAllowedSenderRpcParamsSchema,
+    responseSchema: TelegramAllowedSendersResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  removeTelegramAllowedSender: {
+    wireName: "removeTelegramAllowedSender",
+    requestSchema: TelegramAllowedSenderRpcParamsSchema,
+    responseSchema: TelegramAllowedSendersResultSchema,
     eventSchema: NoRpcEventSchema,
   },
   getSpendSummary: {

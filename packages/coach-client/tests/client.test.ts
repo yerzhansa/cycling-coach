@@ -36,6 +36,11 @@ const acceptedHandshakeBinding = {
   athleteHome,
   rendererCapability: "A".repeat(43),
 } as const;
+const telegramControlSnapshot = {
+  channel: { desiredState: "disabled", state: "disabled" },
+  bot: { state: "unconfigured" },
+  pairing: { state: "unpaired" },
+} as const;
 
 const rpcDeadlineCases = [
   ["chat", { chatId: "chat-1", message: "deadline" }, 660_000],
@@ -69,6 +74,14 @@ const rpcDeadlineCases = [
   ["replaceTelegram", { token: "new-token" }, 30_000],
   ["getTelegramStatus", {}, 30_000],
   ["reconcileTelegram", {}, 30_000],
+  ["inspectTelegramCredential", { token: "bot-token" }, 30_000],
+  ["deleteTelegramWebhook", { token: "bot-token" }, 30_000],
+  ["forgetTelegramCredential", {}, 30_000],
+  ["beginTelegramPairing", {}, 30_000],
+  ["cancelTelegramPairing", {}, 30_000],
+  ["listTelegramAllowedSenders", {}, 30_000],
+  ["addTelegramAllowedSender", { senderId: 123_456 }, 30_000],
+  ["removeTelegramAllowedSender", { senderId: 123_456 }, 30_000],
   ["getSpendSummary", {}, 30_000],
   ["setDailySpendCap", { dailyCapUsd: 25 }, 30_000],
   ["selfTest", {}, 120_000],
@@ -736,12 +749,20 @@ describe("RPC receive and observers", () => {
         },
         getUnitsPreference: { value: "metric", source: "default" },
         setUnitsPreference: { value: "imperial", source: "cycling" },
-        configureTelegram: { desiredState: "disabled", state: "disabled" },
-        enableTelegram: { desiredState: "enabled", state: "starting" },
-        disableTelegram: { desiredState: "disabled", state: "disabled" },
-        replaceTelegram: { desiredState: "enabled", state: "starting" },
-        getTelegramStatus: { desiredState: "enabled", state: "online" },
-        reconcileTelegram: { desiredState: "enabled", state: "online" },
+        configureTelegram: telegramControlSnapshot,
+        enableTelegram: telegramControlSnapshot,
+        disableTelegram: telegramControlSnapshot,
+        replaceTelegram: telegramControlSnapshot,
+        getTelegramStatus: telegramControlSnapshot,
+        reconcileTelegram: telegramControlSnapshot,
+        inspectTelegramCredential: { status: "ready", bot: { username: "sample_bot" } },
+        deleteTelegramWebhook: { status: "ready", bot: { username: "sample_bot" } },
+        forgetTelegramCredential: telegramControlSnapshot,
+        beginTelegramPairing: telegramControlSnapshot,
+        cancelTelegramPairing: telegramControlSnapshot,
+        listTelegramAllowedSenders: { senders: [] },
+        addTelegramAllowedSender: { senders: [] },
+        removeTelegramAllowedSender: { senders: [] },
         getSpendSummary: {
           localDate: "1998-07-06",
           timezone: "UTC",
@@ -878,37 +899,52 @@ describe("RPC receive and observers", () => {
       "getUnitsPreference",
       "setUnitsPreference",
     ]);
-    await expect(client.call("configureTelegram", { token: "bot-token" })).resolves.toEqual({
-      desiredState: "disabled",
-      state: "disabled",
+    await expect(client.call("configureTelegram", { token: "bot-token" })).resolves.toEqual(
+      telegramControlSnapshot,
+    );
+    await expect(client.call("enableTelegram", {})).resolves.toEqual(telegramControlSnapshot);
+    await expect(client.call("disableTelegram", {})).resolves.toEqual(telegramControlSnapshot);
+    await expect(client.call("replaceTelegram", { token: "new-token" })).resolves.toEqual(
+      telegramControlSnapshot,
+    );
+    await expect(client.call("getTelegramStatus", {})).resolves.toEqual(telegramControlSnapshot);
+    await expect(client.call("reconcileTelegram", {})).resolves.toEqual(telegramControlSnapshot);
+    await expect(client.call("inspectTelegramCredential", { token: "bot-token" })).resolves.toEqual(
+      { status: "ready", bot: { username: "sample_bot" } },
+    );
+    await expect(client.call("deleteTelegramWebhook", { token: "bot-token" })).resolves.toEqual({
+      status: "ready",
+      bot: { username: "sample_bot" },
     });
-    await expect(client.call("enableTelegram", {})).resolves.toEqual({
-      desiredState: "enabled",
-      state: "starting",
+    await expect(client.call("forgetTelegramCredential", {})).resolves.toEqual(
+      telegramControlSnapshot,
+    );
+    await expect(client.call("beginTelegramPairing", {})).resolves.toEqual(telegramControlSnapshot);
+    await expect(client.call("cancelTelegramPairing", {})).resolves.toEqual(
+      telegramControlSnapshot,
+    );
+    await expect(client.call("listTelegramAllowedSenders", {})).resolves.toEqual({ senders: [] });
+    await expect(client.call("addTelegramAllowedSender", { senderId: 123_456 })).resolves.toEqual({
+      senders: [],
     });
-    await expect(client.call("disableTelegram", {})).resolves.toEqual({
-      desiredState: "disabled",
-      state: "disabled",
-    });
-    await expect(client.call("replaceTelegram", { token: "new-token" })).resolves.toEqual({
-      desiredState: "enabled",
-      state: "starting",
-    });
-    await expect(client.call("getTelegramStatus", {})).resolves.toEqual({
-      desiredState: "enabled",
-      state: "online",
-    });
-    await expect(client.call("reconcileTelegram", {})).resolves.toEqual({
-      desiredState: "enabled",
-      state: "online",
-    });
-    expect(received.slice(-6).map((value) => (value as { method: string }).method)).toEqual([
+    await expect(
+      client.call("removeTelegramAllowedSender", { senderId: 123_456 }),
+    ).resolves.toEqual({ senders: [] });
+    expect(received.slice(-14).map((value) => (value as { method: string }).method)).toEqual([
       "configureTelegram",
       "enableTelegram",
       "disableTelegram",
       "replaceTelegram",
       "getTelegramStatus",
       "reconcileTelegram",
+      "inspectTelegramCredential",
+      "deleteTelegramWebhook",
+      "forgetTelegramCredential",
+      "beginTelegramPairing",
+      "cancelTelegramPairing",
+      "listTelegramAllowedSenders",
+      "addTelegramAllowedSender",
+      "removeTelegramAllowedSender",
     ]);
     await expect(client.call("getSpendSummary", {})).resolves.toMatchObject({
       dailyCapUsd: 0.5,
@@ -916,7 +952,7 @@ describe("RPC receive and observers", () => {
     await expect(client.call("setDailySpendCap", { dailyCapUsd: 0.75 })).resolves.toMatchObject({
       dailyCapUsd: 0.75,
     });
-    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([21, 22]);
+    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([29, 30]);
     expect(received.slice(-2).map((value) => (value as { method: string }).method)).toEqual([
       "getSpendSummary",
       "setDailySpendCap",

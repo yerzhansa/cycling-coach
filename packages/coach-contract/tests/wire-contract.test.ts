@@ -19,6 +19,7 @@ import {
   ConfigureRuntimeRpcParamsSchema,
   ConfigureRuntimeRpcResultSchema,
   ConfigureTelegramRpcParamsSchema,
+  DeleteTelegramWebhookRpcParamsSchema,
   GetRuntimeConfigRpcParamsSchema,
   GetRuntimeConfigRpcResultSchema,
   GetArchivedTranscriptPageRpcParamsSchema,
@@ -31,6 +32,7 @@ import {
   GetUnitsPreferenceRpcResultSchema,
   ImportFilesRpcParamsSchema,
   ImportFilesRpcResultSchema,
+  InspectTelegramCredentialRpcParamsSchema,
   OperationProgressEventSchema,
   Protocol11AcceptedServerHandshakeFrameSchema,
   SaveIntakeRpcParamsSchema,
@@ -58,7 +60,10 @@ import {
   SelfTestRpcParamsSchema,
   SelfTestRpcResultSchema,
   SpendSummarySchema,
-  TelegramChannelStatusSchema,
+  TelegramAllowedSenderRpcParamsSchema,
+  TelegramAllowedSendersResultSchema,
+  TelegramControlSnapshotSchema,
+  TelegramCredentialInspectionSchema,
   ServerHandshakeFrameSchema,
   TurnEventSchema,
   UNKNOWN_CYCLING_TRAINING_CONTEXT,
@@ -217,6 +222,12 @@ const spendSummary = SpendSummarySchema.parse({
   routes: [],
 });
 
+const telegramSnapshot = {
+  channel: { desiredState: "disabled", state: "disabled" },
+  bot: { state: "unconfigured" },
+  pairing: { state: "unpaired" },
+} as const;
+
 describe("coach request and event projection", () => {
   it("admits exactly the twenty-three strict method requests", () => {
     const requests = [
@@ -280,6 +291,34 @@ describe("coach request and event projection", () => {
       { jsonrpc: "2.0", id: 21, method: "replaceTelegram", params: { token: "new-token" } },
       { jsonrpc: "2.0", id: 22, method: "getTelegramStatus", params: {} },
       { jsonrpc: "2.0", id: 23, method: "reconcileTelegram", params: {} },
+      {
+        jsonrpc: "2.0",
+        id: 24,
+        method: "inspectTelegramCredential",
+        params: { token: "bot-token" },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 25,
+        method: "deleteTelegramWebhook",
+        params: { token: "bot-token" },
+      },
+      { jsonrpc: "2.0", id: 26, method: "forgetTelegramCredential", params: {} },
+      { jsonrpc: "2.0", id: 27, method: "beginTelegramPairing", params: {} },
+      { jsonrpc: "2.0", id: 28, method: "cancelTelegramPairing", params: {} },
+      { jsonrpc: "2.0", id: 29, method: "listTelegramAllowedSenders", params: {} },
+      {
+        jsonrpc: "2.0",
+        id: 30,
+        method: "addTelegramAllowedSender",
+        params: { senderId: 123_456 },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 31,
+        method: "removeTelegramAllowedSender",
+        params: { senderId: 123_456 },
+      },
     ];
     for (const request of requests) {
       expect(CoachRpcRequestEnvelopeSchema.parse(request)).toEqual(request);
@@ -904,15 +943,26 @@ describe("coach request and event projection", () => {
       }),
       getUnitsPreference: async () => ({ value: "metric", source: "default" }),
       setUnitsPreference: async ({ value }) => ({ value, source: "cycling" }),
-      configureTelegram: async () => ({ desiredState: "disabled", state: "disabled" }),
-      enableTelegram: async () => ({
-        desiredState: "enabled",
-        state: "waiting-for-credential",
+      configureTelegram: async () => telegramSnapshot,
+      enableTelegram: async () => telegramSnapshot,
+      disableTelegram: async () => telegramSnapshot,
+      replaceTelegram: async () => telegramSnapshot,
+      getTelegramStatus: async () => telegramSnapshot,
+      reconcileTelegram: async () => telegramSnapshot,
+      inspectTelegramCredential: async () => ({
+        status: "ready",
+        bot: { username: "sample_bot" },
       }),
-      disableTelegram: async () => ({ desiredState: "disabled", state: "disabled" }),
-      replaceTelegram: async () => ({ desiredState: "enabled", state: "starting" }),
-      getTelegramStatus: async () => ({ desiredState: "enabled", state: "online" }),
-      reconcileTelegram: async () => ({ desiredState: "enabled", state: "online" }),
+      deleteTelegramWebhook: async () => ({
+        status: "ready",
+        bot: { username: "sample_bot" },
+      }),
+      forgetTelegramCredential: async () => telegramSnapshot,
+      beginTelegramPairing: async () => telegramSnapshot,
+      cancelTelegramPairing: async () => telegramSnapshot,
+      listTelegramAllowedSenders: async () => ({ senders: [] }),
+      addTelegramAllowedSender: async () => ({ senders: [] }),
+      removeTelegramAllowedSender: async () => ({ senders: [] }),
       getSpendSummary: async () => spendSummary,
       setDailySpendCap: async () => spendSummary,
       selfTest: async () => ({
@@ -1011,37 +1061,85 @@ describe("coach request and event projection", () => {
     expect(COACH_RPC_METHOD_REGISTRY.configureTelegram).toEqual({
       wireName: "configureTelegram",
       requestSchema: ConfigureTelegramRpcParamsSchema,
-      responseSchema: TelegramChannelStatusSchema,
+      responseSchema: TelegramControlSnapshotSchema,
       eventSchema: NoRpcEventSchema,
     });
     expect(COACH_RPC_METHOD_REGISTRY.enableTelegram).toEqual({
       wireName: "enableTelegram",
       requestSchema: EmptyRpcParamsSchema,
-      responseSchema: TelegramChannelStatusSchema,
+      responseSchema: TelegramControlSnapshotSchema,
       eventSchema: NoRpcEventSchema,
     });
     expect(COACH_RPC_METHOD_REGISTRY.disableTelegram).toEqual({
       wireName: "disableTelegram",
       requestSchema: EmptyRpcParamsSchema,
-      responseSchema: TelegramChannelStatusSchema,
+      responseSchema: TelegramControlSnapshotSchema,
       eventSchema: NoRpcEventSchema,
     });
     expect(COACH_RPC_METHOD_REGISTRY.replaceTelegram).toEqual({
       wireName: "replaceTelegram",
       requestSchema: ReplaceTelegramRpcParamsSchema,
-      responseSchema: TelegramChannelStatusSchema,
+      responseSchema: TelegramControlSnapshotSchema,
       eventSchema: NoRpcEventSchema,
     });
     expect(COACH_RPC_METHOD_REGISTRY.getTelegramStatus).toEqual({
       wireName: "getTelegramStatus",
       requestSchema: EmptyRpcParamsSchema,
-      responseSchema: TelegramChannelStatusSchema,
+      responseSchema: TelegramControlSnapshotSchema,
       eventSchema: NoRpcEventSchema,
     });
     expect(COACH_RPC_METHOD_REGISTRY.reconcileTelegram).toEqual({
       wireName: "reconcileTelegram",
       requestSchema: EmptyRpcParamsSchema,
-      responseSchema: TelegramChannelStatusSchema,
+      responseSchema: TelegramControlSnapshotSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.inspectTelegramCredential).toEqual({
+      wireName: "inspectTelegramCredential",
+      requestSchema: InspectTelegramCredentialRpcParamsSchema,
+      responseSchema: TelegramCredentialInspectionSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.deleteTelegramWebhook).toEqual({
+      wireName: "deleteTelegramWebhook",
+      requestSchema: DeleteTelegramWebhookRpcParamsSchema,
+      responseSchema: TelegramCredentialInspectionSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.forgetTelegramCredential).toEqual({
+      wireName: "forgetTelegramCredential",
+      requestSchema: EmptyRpcParamsSchema,
+      responseSchema: TelegramControlSnapshotSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.beginTelegramPairing).toEqual({
+      wireName: "beginTelegramPairing",
+      requestSchema: EmptyRpcParamsSchema,
+      responseSchema: TelegramControlSnapshotSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.cancelTelegramPairing).toEqual({
+      wireName: "cancelTelegramPairing",
+      requestSchema: EmptyRpcParamsSchema,
+      responseSchema: TelegramControlSnapshotSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.listTelegramAllowedSenders).toEqual({
+      wireName: "listTelegramAllowedSenders",
+      requestSchema: EmptyRpcParamsSchema,
+      responseSchema: TelegramAllowedSendersResultSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.addTelegramAllowedSender).toEqual({
+      wireName: "addTelegramAllowedSender",
+      requestSchema: TelegramAllowedSenderRpcParamsSchema,
+      responseSchema: TelegramAllowedSendersResultSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.removeTelegramAllowedSender).toEqual({
+      wireName: "removeTelegramAllowedSender",
+      requestSchema: TelegramAllowedSenderRpcParamsSchema,
+      responseSchema: TelegramAllowedSendersResultSchema,
       eventSchema: NoRpcEventSchema,
     });
     expect(COACH_RPC_METHOD_REGISTRY.getSpendSummary).toEqual({
@@ -1080,6 +1178,14 @@ describe("coach request and event projection", () => {
       "replaceTelegram",
       "getTelegramStatus",
       "reconcileTelegram",
+      "inspectTelegramCredential",
+      "deleteTelegramWebhook",
+      "forgetTelegramCredential",
+      "beginTelegramPairing",
+      "cancelTelegramPairing",
+      "listTelegramAllowedSenders",
+      "addTelegramAllowedSender",
+      "removeTelegramAllowedSender",
       "getSpendSummary",
       "setDailySpendCap",
     ] as const) {
@@ -1091,6 +1197,26 @@ describe("coach request and event projection", () => {
     await expect(fake.chat({ chatId: "chat-1", message: "hello" })).resolves.toEqual({
       text: "ok",
     });
+  });
+
+  it("keeps Desktop Telegram snapshots and sender projections closed", () => {
+    expect(TelegramControlSnapshotSchema.parse(telegramSnapshot)).toEqual(telegramSnapshot);
+    expect(
+      TelegramControlSnapshotSchema.safeParse({ ...telegramSnapshot, token: "private" }).success,
+    ).toBe(false);
+    expect(
+      TelegramAllowedSendersResultSchema.safeParse({
+        senders: [
+          { senderId: 123_456, role: "primary" },
+          { senderId: 123_456, role: "additional" },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      TelegramAllowedSendersResultSchema.safeParse({
+        senders: [{ senderId: 123_456, role: "additional" }],
+      }).success,
+    ).toBe(false);
   });
 
   it("validates strict self-test terminals and rejects contradictory resource results", () => {
