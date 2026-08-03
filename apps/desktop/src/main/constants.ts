@@ -20,6 +20,20 @@ export const DESKTOP_TELEGRAM_ENABLE_CHANNEL = "desktop:telegram:enable" as cons
 export const DESKTOP_TELEGRAM_DISABLE_CHANNEL = "desktop:telegram:disable" as const;
 export const DESKTOP_TELEGRAM_REMOVE_CHANNEL = "desktop:telegram:remove" as const;
 export const DESKTOP_TELEGRAM_RECONCILE_CHANNEL = "desktop:telegram:reconcile" as const;
+export const DESKTOP_TELEGRAM_REMOVE_WEBHOOK_CHANNEL =
+  "desktop:telegram:remove-webhook" as const;
+export const DESKTOP_TELEGRAM_BEGIN_PAIRING_CHANNEL =
+  "desktop:telegram:pairing:begin" as const;
+export const DESKTOP_TELEGRAM_CANCEL_PAIRING_CHANNEL =
+  "desktop:telegram:pairing:cancel" as const;
+export const DESKTOP_TELEGRAM_LIST_ALLOWED_SENDERS_CHANNEL =
+  "desktop:telegram:allowed-senders:list" as const;
+export const DESKTOP_TELEGRAM_ADD_ALLOWED_SENDER_CHANNEL =
+  "desktop:telegram:allowed-senders:add" as const;
+export const DESKTOP_TELEGRAM_REMOVE_ALLOWED_SENDER_CHANNEL =
+  "desktop:telegram:allowed-senders:remove" as const;
+export const DESKTOP_TELEGRAM_ACKNOWLEDGE_GAP_WARNING_CHANNEL =
+  "desktop:telegram:gap-warning:acknowledge" as const;
 export const DESKTOP_LIFECYCLE_CHANNEL = "desktop:daemon-lifecycle" as const;
 export const DESKTOP_OPEN_EXTERNAL_CHANNEL = "desktop:open-external" as const;
 export const DESKTOP_WINDOW_WIDTH = 1_180 as const;

@@ -62,6 +62,13 @@ interface AuthBridge {
   disableTelegram(): Promise<unknown>;
   removeTelegram(): Promise<unknown>;
   reconcileTelegram(): Promise<unknown>;
+  removeTelegramWebhook(): Promise<unknown>;
+  beginTelegramPairing(): Promise<unknown>;
+  cancelTelegramPairing(): Promise<unknown>;
+  listTelegramAllowedSenders(): Promise<unknown>;
+  addTelegramAllowedSender(input: unknown): Promise<unknown>;
+  removeTelegramAllowedSender(input: unknown): Promise<unknown>;
+  acknowledgeTelegramGapWarning(): Promise<unknown>;
   getUpdateState(): Promise<unknown>;
   checkForUpdates(): Promise<unknown>;
   restartToUpdate(): Promise<unknown>;
@@ -213,6 +220,10 @@ describe("desktop preload ChatGPT auth", () => {
     expect(Object.keys(bridge).sort()).toEqual(
       [
         "applyLlmSelection",
+        "acknowledgeTelegramGapWarning",
+        "addTelegramAllowedSender",
+        "beginTelegramPairing",
+        "cancelTelegramPairing",
         "chatgptLogin",
         "chatgptStatus",
         "chooseImportFiles",
@@ -226,6 +237,7 @@ describe("desktop preload ChatGPT auth", () => {
         "getDaemonConnection",
         "getTranscriptPage",
         "listArchivedConversations",
+        "listTelegramAllowedSenders",
         "getArchivedTranscriptPage",
         "llmConfiguration",
         "checkForUpdates",
@@ -235,6 +247,8 @@ describe("desktop preload ChatGPT auth", () => {
         "reconcileTelegram",
         "releaseNotes",
         "removeTelegram",
+        "removeTelegramAllowedSender",
+        "removeTelegramWebhook",
         "restartToUpdate",
         "retryFailedCredentials",
         "telegramStatus",
@@ -248,13 +262,13 @@ describe("desktop preload ChatGPT auth", () => {
     expect(pinnedSmokeBridgeKeys()).toEqual(Object.keys(bridge).sort());
   });
 
-  it("exposes only semantic zero-argument Telegram controls and validates redacted status", async () => {
+  it("exposes semantic Telegram controls and validates redacted snapshots", async () => {
     const status = {
-      desiredState: "enabled",
-      state: "online",
+      channel: { desiredState: "enabled", state: "online" },
+      bot: { state: "ready", username: "synthetic_bot" },
+      pairing: { state: "paired" },
       credentialConfigured: true,
-      botUsername: "synthetic_bot",
-      retryCount: 0,
+      gapWarning: { state: "clear" },
     };
     mocks.invoke.mockResolvedValue(status);
 
@@ -264,6 +278,10 @@ describe("desktop preload ChatGPT auth", () => {
     await expect(bridge.disableTelegram()).resolves.toEqual(status);
     await expect(bridge.removeTelegram()).resolves.toEqual(status);
     await expect(bridge.reconcileTelegram()).resolves.toEqual(status);
+    await expect(bridge.removeTelegramWebhook()).resolves.toEqual(status);
+    await expect(bridge.beginTelegramPairing()).resolves.toEqual(status);
+    await expect(bridge.cancelTelegramPairing()).resolves.toEqual(status);
+    await expect(bridge.acknowledgeTelegramGapWarning()).resolves.toEqual(status);
     expect(mocks.invoke.mock.calls).toEqual([
       ["desktop:telegram:status"],
       ["desktop:telegram:paste-credential"],
@@ -271,6 +289,10 @@ describe("desktop preload ChatGPT auth", () => {
       ["desktop:telegram:disable"],
       ["desktop:telegram:remove"],
       ["desktop:telegram:reconcile"],
+      ["desktop:telegram:remove-webhook"],
+      ["desktop:telegram:pairing:begin"],
+      ["desktop:telegram:pairing:cancel"],
+      ["desktop:telegram:gap-warning:acknowledge"],
     ]);
 
     mocks.invoke.mockClear();
@@ -281,6 +303,37 @@ describe("desktop preload ChatGPT auth", () => {
 
     mocks.invoke.mockResolvedValue({ ...status, token: "must-not-cross" });
     await expect(bridge.telegramStatus()).rejects.toBeInstanceOf(TypeError);
+  });
+
+  it("validates Telegram sender management at the preload boundary", async () => {
+    const senders = {
+      senders: [
+        {
+          senderId: 42,
+          role: "primary",
+          addedAt: "1998-07-06T00:00:00.000Z",
+        },
+      ],
+    };
+    mocks.invoke.mockResolvedValue(senders);
+
+    await expect(bridge.listTelegramAllowedSenders()).resolves.toEqual(senders);
+    await expect(bridge.addTelegramAllowedSender({ senderId: 84 })).resolves.toEqual(senders);
+    await expect(bridge.removeTelegramAllowedSender({ senderId: 84 })).resolves.toEqual(senders);
+    expect(mocks.invoke.mock.calls).toEqual([
+      ["desktop:telegram:allowed-senders:list"],
+      ["desktop:telegram:allowed-senders:add", { senderId: 84 }],
+      ["desktop:telegram:allowed-senders:remove", { senderId: 84 }],
+    ]);
+
+    mocks.invoke.mockClear();
+    for (const value of [{ senderId: 9 }, { senderId: 42, extra: true }, { senderId: "42" }]) {
+      await expect(bridge.addTelegramAllowedSender(value)).rejects.toBeInstanceOf(TypeError);
+    }
+    expect(mocks.invoke).not.toHaveBeenCalled();
+
+    mocks.invoke.mockResolvedValue({ senders: [{ senderId: 42, role: "additional" }] });
+    await expect(bridge.listTelegramAllowedSenders()).rejects.toBeInstanceOf(TypeError);
   });
 
   it("validates and copies strict bounded transcript pages", async () => {

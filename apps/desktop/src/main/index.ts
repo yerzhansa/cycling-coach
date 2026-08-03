@@ -11,6 +11,7 @@ import {
   clipboard,
   dialog,
   ipcMain,
+  powerMonitor,
   safeStorage,
   session,
   shell,
@@ -59,6 +60,11 @@ import { registerOnboardingIpc, runtimeConfigurationForCredential } from "./onbo
 import { installDesktopReleaseNotesIpc } from "./release-notes-ipc.js";
 import { createDesktopResidency, type DesktopResidency } from "./residency.js";
 import {
+  BACKGROUND_AT_LOGIN_PREFERENCE_DIRECTORY_NAME,
+  createBackgroundAtLoginPreferenceStore,
+  shouldStartInBackgroundAtLogin,
+} from "./login-item.js";
+import {
   createDesktopRendererConsoleCapture,
   desktopWindowOptions,
   hardenDesktopWindow,
@@ -84,6 +90,10 @@ import {
 import { createTelegramDaemonBinding } from "./telegram-daemon-binding.js";
 import { installDesktopTelegramIpc } from "./telegram-ipc.js";
 import {
+  createDesktopTelegramPowerLifecycle,
+  type DesktopTelegramPowerLifecycle,
+} from "./telegram-power.js";
+import {
   createConnectionTranscriptReader,
   installDesktopTranscriptIpc,
   type DesktopTranscriptReader,
@@ -102,6 +112,7 @@ function disableChromiumMediaSessionIntegration(): void {
 }
 
 let desktopIsClosing = false;
+let desktopStartedInBackground = false;
 
 const mainDirectory = dirname(fileURLToPath(import.meta.url));
 const utilityEntry = resolve(mainDirectory, "daemon-utility.js");
@@ -136,6 +147,12 @@ async function runDesktop(): Promise<void> {
   });
   app.on("window-all-closed", () => {});
   await app.whenReady();
+  const backgroundAtLoginPreference = createBackgroundAtLoginPreferenceStore({
+    root: join(app.getPath("userData"), BACKGROUND_AT_LOGIN_PREFERENCE_DIRECTORY_NAME),
+  });
+  desktopStartedInBackground =
+    !securitySmokeMode &&
+    (await shouldStartInBackgroundAtLogin(app, backgroundAtLoginPreference));
   const controller = new AbortController();
   const environment = { ...process.env };
   const rendererSource = resolveDesktopRendererSource(
@@ -167,6 +184,7 @@ async function runDesktop(): Promise<void> {
   let disposeUpdateIpc: (() => void) | undefined;
   let disposeTelegramIpc: (() => void) | undefined;
   let disposeOnboarding: (() => void) | undefined;
+  let telegramPower: DesktopTelegramPowerLifecycle | undefined;
   let daemonLifecycle: DesktopDaemonLifecycle | undefined;
   let shutdownPromise: Promise<void> | undefined;
   const updateController = createDesktopUpdateController({
@@ -199,6 +217,8 @@ async function runDesktop(): Promise<void> {
       disposeUpdateIpc = undefined;
       disposeTelegramIpc?.();
       disposeTelegramIpc = undefined;
+      telegramPower?.close();
+      telegramPower = undefined;
       updateController.close();
       disposeOnboarding?.();
       disposeOnboarding = undefined;
@@ -225,7 +245,11 @@ async function runDesktop(): Promise<void> {
     if (resolution.status === "refused") {
       if (!controller.signal.aborted && resolution.cause !== "cancelled") {
         const copy = startupRefusalCopy(resolution.cause);
-        dialog.showErrorBox(copy.title, copy.content);
+        if (desktopStartedInBackground) {
+          process.stderr.write(`desktop-startup-refusal ${resolution.cause}\n`);
+        } else {
+          dialog.showErrorBox(copy.title, copy.content);
+        }
       }
       await shutdown();
       if (!quitRequested) app.exit(resolution.exitCode);
@@ -252,6 +276,15 @@ async function runDesktop(): Promise<void> {
             ? activeTelegramBinding
             : undefined;
         },
+      },
+    });
+    telegramPower = createDesktopTelegramPowerLifecycle({
+      root: join(app.getPath("userData"), TELEGRAM_CREDENTIAL_DIRECTORY_NAME),
+      athleteHome: selectedAthleteHome,
+      powerMonitor,
+      controller: telegramCoordinator,
+      reportFailure: (failure) => {
+        process.stderr.write(`desktop-telegram-power-failure ${failure}\n`);
       },
     });
     let window: BrowserWindow | null = null;
@@ -332,7 +365,13 @@ async function runDesktop(): Promise<void> {
       }
       const copy =
         controller.signal.aborted || desktopIsClosing ? undefined : lifecycleErrorCopy(state);
-      if (copy !== undefined) dialog.showErrorBox(copy.title, copy.content);
+      if (copy !== undefined) {
+        if (desktopStartedInBackground && currentWindow() === null) {
+          process.stderr.write(`desktop-daemon-background-failure ${state.status}\n`);
+        } else {
+          dialog.showErrorBox(copy.title, copy.content);
+        }
+      }
     };
     daemonLifecycle = new DesktopDaemonLifecycle(supervisor, resolution, {
       prepareReady: ({ connection, signal }) => reapplyCredentials(connection, signal),
@@ -603,6 +642,7 @@ async function runDesktop(): Promise<void> {
     if (initialTelegramConnection.supervision === "app-supervised") {
       void telegramCoordinator.reconcile();
     }
+    await telegramPower.start();
     await installDesktopProtocol({
       session: session.defaultSession,
       currentDaemonPort: () => daemonLifecycle!.currentPort(),
@@ -724,6 +764,7 @@ async function runDesktop(): Promise<void> {
       clipboard,
       coordinator: telegramCoordinator,
       vault: telegramVault,
+      power: telegramPower,
       isTrusted: (event) => isTrustedConnectionRequest(event, mainWindow.current() ?? undefined),
     });
     residency = createDesktopResidency({
@@ -734,12 +775,18 @@ async function runDesktop(): Promise<void> {
       reportFailure(operation) {
         process.stderr.write(`desktop-residency-failure ${operation}\n`);
       },
+      observe(event) {
+        if (event.type === "login-item-set") {
+          void backgroundAtLoginPreference.set(event.state.openAtLogin);
+        }
+      },
     });
-    const initialWindow = await mainWindow.show();
     await residency.start();
+    const initialWindow = desktopStartedInBackground ? undefined : await mainWindow.show();
     void updateController.start();
 
     if (securitySmokeMode) {
+      if (initialWindow === undefined) throw new TypeError("security smoke requires a window");
       const daemonPort = daemonLifecycle.currentPort();
       const rendererResult = await initialWindow.webContents.executeJavaScript(`(async () => {
       const blockedPort = ${daemonPort === 65_535 ? daemonPort - 1 : daemonPort + 1};
@@ -831,7 +878,7 @@ if (!primaryInstance) {
     : runDesktop;
   void runPrimaryDesktop().catch((error: unknown) => {
     console.error("desktop startup failed", error);
-    if (!desktopIsClosing) {
+    if (!desktopIsClosing && !desktopStartedInBackground) {
       dialog.showErrorBox(unexpectedStartupCopy.title, unexpectedStartupCopy.content);
     }
     app.exit(1);

@@ -1,94 +1,138 @@
-import type { Clipboard, IpcMain, IpcMainInvokeEvent } from "electron";
-import { TelegramCredentialSchema } from "@enduragent/coach-contract";
 import {
+  TelegramAllowedSenderRpcParamsSchema,
+  TelegramAllowedSendersResultSchema,
+  TelegramBotStateSchema,
+  TelegramChannelStatusSchema,
+  TelegramCredentialSchema,
+  TelegramPairingStateSchema,
+  type TelegramAllowedSendersResult,
+} from "@enduragent/coach-contract";
+import type { Clipboard, IpcMain, IpcMainInvokeEvent } from "electron";
+import {
+  DESKTOP_TELEGRAM_ADD_ALLOWED_SENDER_CHANNEL,
+  DESKTOP_TELEGRAM_ACKNOWLEDGE_GAP_WARNING_CHANNEL,
+  DESKTOP_TELEGRAM_BEGIN_PAIRING_CHANNEL,
+  DESKTOP_TELEGRAM_CANCEL_PAIRING_CHANNEL,
   DESKTOP_TELEGRAM_DISABLE_CHANNEL,
   DESKTOP_TELEGRAM_ENABLE_CHANNEL,
+  DESKTOP_TELEGRAM_LIST_ALLOWED_SENDERS_CHANNEL,
   DESKTOP_TELEGRAM_PASTE_CREDENTIAL_CHANNEL,
   DESKTOP_TELEGRAM_RECONCILE_CHANNEL,
+  DESKTOP_TELEGRAM_REMOVE_ALLOWED_SENDER_CHANNEL,
   DESKTOP_TELEGRAM_REMOVE_CHANNEL,
+  DESKTOP_TELEGRAM_REMOVE_WEBHOOK_CHANNEL,
   DESKTOP_TELEGRAM_STATUS_CHANNEL,
 } from "./constants.js";
-import type { TelegramCredentialVault } from "./telegram-credential-vault.js";
 import {
-  TELEGRAM_CONTROL_ERROR_CODES,
-  TELEGRAM_CONTROL_STATES,
+  DESKTOP_TELEGRAM_CONTROL_ERROR_CODES,
+  type DesktopTelegramChannelStatus,
+  type DesktopTelegramControlErrorCode,
+  type DesktopTelegramSnapshot,
   type TelegramControlCoordinator,
-  type TelegramControlErrorCode,
-  type TelegramControlState,
-  type TelegramControlStatus,
-  type TelegramDesiredControlState,
 } from "./telegram-control.js";
+import type { TelegramCredentialVault } from "./telegram-credential-vault.js";
+import type {
+  DesktopTelegramPowerLifecycle,
+  TelegramGapWarning,
+} from "./telegram-power.js";
 
-export interface DesktopTelegramStatus extends TelegramControlStatus {
-  readonly credentialConfigured: boolean;
+const DESKTOP_ERRORS = new Set<string>(DESKTOP_TELEGRAM_CONTROL_ERROR_CODES);
+const emptySenders = (): TelegramAllowedSendersResult => ({ senders: [] });
+
+export interface DesktopTelegramStatus extends DesktopTelegramSnapshot {
+  readonly gapWarning: TelegramGapWarning;
 }
-
-const STATES = new Set<string>(TELEGRAM_CONTROL_STATES);
-const ERROR_CODES = new Set<string>(TELEGRAM_CONTROL_ERROR_CODES);
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function canonicalTimestamp(value: unknown): value is string {
-  if (typeof value !== "string" || value.length > 40) return false;
-  try {
-    return new Date(value).toISOString() === value;
-  } catch {
-    return false;
-  }
+function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
-function failure(desiredState: TelegramDesiredControlState = "disabled"): TelegramControlStatus {
+function copyChannel(value: unknown): DesktopTelegramChannelStatus | undefined {
+  const daemon = TelegramChannelStatusSchema.safeParse(value);
+  if (daemon.success) return daemon.data;
+  if (!record(value)) return undefined;
+  if (
+    exactKeys(value, ["desiredState", "state"]) &&
+    value.desiredState === "enabled" &&
+    value.state === "transfer-required"
+  ) {
+    return { desiredState: "enabled", state: "transfer-required" };
+  }
+  if (
+    exactKeys(value, ["desiredState", "errorCode", "state"]) &&
+    (value.desiredState === "disabled" || value.desiredState === "enabled") &&
+    value.state === "failed" &&
+    typeof value.errorCode === "string" &&
+    DESKTOP_ERRORS.has(value.errorCode)
+  ) {
+    return {
+      desiredState: value.desiredState,
+      state: "failed",
+      errorCode: value.errorCode as DesktopTelegramControlErrorCode,
+    };
+  }
+  return undefined;
+}
+
+function copySnapshot(value: unknown): DesktopTelegramSnapshot {
+  if (record(value) && exactKeys(value, ["bot", "channel", "credentialConfigured", "pairing"])) {
+    const channel = copyChannel(value.channel);
+    const bot = TelegramBotStateSchema.safeParse(value.bot);
+    const pairing = TelegramPairingStateSchema.safeParse(value.pairing);
+    if (
+      channel !== undefined &&
+      bot.success &&
+      pairing.success &&
+      typeof value.credentialConfigured === "boolean"
+    ) {
+      return {
+        channel,
+        bot: bot.data,
+        pairing: pairing.data,
+        credentialConfigured: value.credentialConfigured,
+      };
+    }
+  }
   return {
-    desiredState,
-    state: "failed",
-    errorCode: "telegram-control-failed",
+    channel: {
+      desiredState: "disabled",
+      state: "failed",
+      errorCode: "telegram-control-failed",
+    },
+    bot: { state: "unconfigured" },
+    pairing: { state: "unpaired" },
+    credentialConfigured: false,
   };
 }
 
-function copyStatus(value: unknown): TelegramControlStatus {
-  if (
-    !record(value) ||
-    (value.desiredState !== "disabled" && value.desiredState !== "enabled") ||
-    typeof value.state !== "string" ||
-    !STATES.has(value.state)
-  ) {
-    return failure();
-  }
-  const status: {
-    desiredState: TelegramDesiredControlState;
-    state: TelegramControlState;
-    botUsername?: string;
-    since?: string;
-    lastSuccessfulPollAt?: string;
-    retryCount?: number;
-    errorCode?: TelegramControlErrorCode;
-  } = {
-    desiredState: value.desiredState,
-    state: value.state as TelegramControlState,
-  };
-  if (
-    typeof value.botUsername === "string" &&
-    /^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(value.botUsername)
-  ) {
-    status.botUsername = value.botUsername;
-  }
-  if (canonicalTimestamp(value.since)) status.since = value.since;
-  if (canonicalTimestamp(value.lastSuccessfulPollAt)) {
-    status.lastSuccessfulPollAt = value.lastSuccessfulPollAt;
+function copySenders(value: unknown): TelegramAllowedSendersResult {
+  const parsed = TelegramAllowedSendersResultSchema.safeParse(value);
+  return parsed.success ? parsed.data : emptySenders();
+}
+
+function copyGapWarning(value: unknown): TelegramGapWarning {
+  if (record(value) && exactKeys(value, ["state"]) && value.state === "clear") {
+    return { state: "clear" };
   }
   if (
-    Number.isSafeInteger(value.retryCount) &&
-    (value.retryCount as number) >= 0 &&
-    (value.retryCount as number) <= 1_000_000
+    record(value) &&
+    exactKeys(value, ["detectedAt", "state"]) &&
+    value.state === "possible-message-loss" &&
+    typeof value.detectedAt === "string"
   ) {
-    status.retryCount = value.retryCount as number;
+    try {
+      if (new Date(value.detectedAt).toISOString() === value.detectedAt) {
+        return { state: "possible-message-loss", detectedAt: value.detectedAt };
+      }
+    } catch {}
   }
-  if (typeof value.errorCode === "string" && ERROR_CODES.has(value.errorCode)) {
-    status.errorCode = value.errorCode as TelegramControlErrorCode;
-  }
-  return status;
+  return { state: "clear" };
 }
 
 function captureClipboard(
@@ -116,6 +160,7 @@ export function installDesktopTelegramIpc(input: {
   readonly isTrusted: (event: Pick<IpcMainInvokeEvent, "sender" | "senderFrame">) => boolean;
   readonly coordinator: TelegramControlCoordinator;
   readonly vault: Pick<TelegramCredentialVault, "credentialStatus">;
+  readonly power: Pick<DesktopTelegramPowerLifecycle, "warning" | "acknowledgeWarning">;
 }): () => void {
   let operationQueue = Promise.resolve();
   const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
@@ -133,19 +178,29 @@ export function installDesktopTelegramIpc(input: {
     if (!input.isTrusted(event)) throw new Error("untrusted desktop Telegram request");
     if (args.length !== 0) throw new TypeError("invalid desktop Telegram request");
   };
-  const project = async (status: unknown): Promise<DesktopTelegramStatus> => {
-    let credentialConfigured = false;
-    try {
-      credentialConfigured = (await input.vault.credentialStatus()).state === "configured";
-    } catch {}
-    return { ...copyStatus(status), credentialConfigured };
+  const trustedSenderArgument = (
+    event: Pick<IpcMainInvokeEvent, "sender" | "senderFrame">,
+    args: readonly unknown[],
+  ) => {
+    if (!input.isTrusted(event)) throw new Error("untrusted desktop Telegram request");
+    if (args.length !== 1) throw new TypeError("invalid desktop Telegram request");
+    return TelegramAllowedSenderRpcParamsSchema.parse(args[0]);
   };
-  const run = (operation: () => Promise<unknown>): Promise<DesktopTelegramStatus> =>
+  const runSnapshot = (operation: () => Promise<unknown>): Promise<DesktopTelegramStatus> =>
     serialize(async () => {
       try {
-        return await project(await operation());
+        const snapshot = copySnapshot(await operation());
+        return { ...snapshot, gapWarning: copyGapWarning(await input.power.warning()) };
       } catch {
-        return project(failure());
+        return { ...copySnapshot(undefined), gapWarning: { state: "clear" } };
+      }
+    });
+  const runSenders = (operation: () => Promise<unknown>): Promise<TelegramAllowedSendersResult> =>
+    serialize(async () => {
+      try {
+        return copySenders(await operation());
+      } catch {
+        return emptySenders();
       }
     });
   const handlers = [
@@ -153,7 +208,7 @@ export function installDesktopTelegramIpc(input: {
       DESKTOP_TELEGRAM_STATUS_CHANNEL,
       (event: IpcMainInvokeEvent, ...args: unknown[]) => {
         trustedZeroArgument(event, args);
-        return run(() => input.coordinator.status());
+        return runSnapshot(() => input.coordinator.status());
       },
     ],
     [
@@ -161,8 +216,8 @@ export function installDesktopTelegramIpc(input: {
       (event: IpcMainInvokeEvent, ...args: unknown[]) => {
         trustedZeroArgument(event, args);
         const captured = captureClipboard(input.clipboard);
-        return run(async () => {
-          if (captured.status === "failed") return failure();
+        return runSnapshot(async () => {
+          if (captured.status === "failed") return input.coordinator.status();
           const credential = await input.vault.credentialStatus();
           return credential.state === "configured"
             ? input.coordinator.replace(captured.token)
@@ -174,28 +229,80 @@ export function installDesktopTelegramIpc(input: {
       DESKTOP_TELEGRAM_ENABLE_CHANNEL,
       (event: IpcMainInvokeEvent, ...args: unknown[]) => {
         trustedZeroArgument(event, args);
-        return run(() => input.coordinator.enable());
+        return runSnapshot(() => input.coordinator.enable());
       },
     ],
     [
       DESKTOP_TELEGRAM_DISABLE_CHANNEL,
       (event: IpcMainInvokeEvent, ...args: unknown[]) => {
         trustedZeroArgument(event, args);
-        return run(() => input.coordinator.disable());
+        return runSnapshot(() => input.coordinator.disable());
       },
     ],
     [
       DESKTOP_TELEGRAM_REMOVE_CHANNEL,
       (event: IpcMainInvokeEvent, ...args: unknown[]) => {
         trustedZeroArgument(event, args);
-        return run(() => input.coordinator.remove());
+        return runSnapshot(() => input.coordinator.remove());
       },
     ],
     [
       DESKTOP_TELEGRAM_RECONCILE_CHANNEL,
       (event: IpcMainInvokeEvent, ...args: unknown[]) => {
         trustedZeroArgument(event, args);
-        return run(() => input.coordinator.reconcile());
+        return runSnapshot(() => input.coordinator.reconcile());
+      },
+    ],
+    [
+      DESKTOP_TELEGRAM_REMOVE_WEBHOOK_CHANNEL,
+      (event: IpcMainInvokeEvent, ...args: unknown[]) => {
+        trustedZeroArgument(event, args);
+        return runSnapshot(() => input.coordinator.removeWebhook());
+      },
+    ],
+    [
+      DESKTOP_TELEGRAM_BEGIN_PAIRING_CHANNEL,
+      (event: IpcMainInvokeEvent, ...args: unknown[]) => {
+        trustedZeroArgument(event, args);
+        return runSnapshot(() => input.coordinator.beginPairing());
+      },
+    ],
+    [
+      DESKTOP_TELEGRAM_CANCEL_PAIRING_CHANNEL,
+      (event: IpcMainInvokeEvent, ...args: unknown[]) => {
+        trustedZeroArgument(event, args);
+        return runSnapshot(() => input.coordinator.cancelPairing());
+      },
+    ],
+    [
+      DESKTOP_TELEGRAM_LIST_ALLOWED_SENDERS_CHANNEL,
+      (event: IpcMainInvokeEvent, ...args: unknown[]) => {
+        trustedZeroArgument(event, args);
+        return runSenders(() => input.coordinator.listAllowedSenders());
+      },
+    ],
+    [
+      DESKTOP_TELEGRAM_ADD_ALLOWED_SENDER_CHANNEL,
+      (event: IpcMainInvokeEvent, ...args: unknown[]) => {
+        const sender = trustedSenderArgument(event, args);
+        return runSenders(() => input.coordinator.addAllowedSender(sender));
+      },
+    ],
+    [
+      DESKTOP_TELEGRAM_REMOVE_ALLOWED_SENDER_CHANNEL,
+      (event: IpcMainInvokeEvent, ...args: unknown[]) => {
+        const sender = trustedSenderArgument(event, args);
+        return runSenders(() => input.coordinator.removeAllowedSender(sender));
+      },
+    ],
+    [
+      DESKTOP_TELEGRAM_ACKNOWLEDGE_GAP_WARNING_CHANNEL,
+      (event: IpcMainInvokeEvent, ...args: unknown[]) => {
+        trustedZeroArgument(event, args);
+        return runSnapshot(async () => {
+          await input.power.acknowledgeWarning();
+          return input.coordinator.status();
+        });
       },
     ],
   ] as const;

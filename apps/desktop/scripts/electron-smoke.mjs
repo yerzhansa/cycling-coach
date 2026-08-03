@@ -273,7 +273,11 @@ async function security() {
         preloadBridge:
           JSON.stringify(ready.bridgeKeys) ===
           JSON.stringify([
+            "acknowledgeTelegramGapWarning",
+            "addTelegramAllowedSender",
             "applyLlmSelection",
+            "beginTelegramPairing",
+            "cancelTelegramPairing",
             "chatgptLogin",
             "chatgptStatus",
             "checkForUpdates",
@@ -289,6 +293,7 @@ async function security() {
             "getTranscriptPage",
             "getUpdateState",
             "listArchivedConversations",
+            "listTelegramAllowedSenders",
             "llmConfiguration",
             "onDroppedImportFiles",
             "onUpdateState",
@@ -296,6 +301,8 @@ async function security() {
             "reconcileTelegram",
             "releaseNotes",
             "removeTelegram",
+            "removeTelegramAllowedSender",
+            "removeTelegramWebhook",
             "restartToUpdate",
             "retryFailedCredentials",
             "telegramStatus",
