@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cyclingBinary } from "./helpers/cycling-binary-fixture.js";
 import { CHAT_COALESCE_MS } from "../src/channels/telegram.js";
+import type { TelegramOperationsCapabilities } from "../src/channels/telegram-host.js";
 
 let dataDir: string;
 
@@ -17,6 +17,7 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true });
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.doUnmock("grammy");
 });
 
@@ -33,19 +34,23 @@ interface FakeBot {
   catch: ReturnType<typeof vi.fn>;
 }
 
-interface StubAgent {
+interface StubEngine {
   chat: ReturnType<typeof vi.fn>;
   hasSession: ReturnType<typeof vi.fn>;
   resetSession: ReturnType<typeof vi.fn>;
+  getAthleteState: ReturnType<typeof vi.fn>;
 }
 
 interface BuildBotResult {
   bot: FakeBot;
-  agent: StubAgent;
+  engine: StubEngine;
   drainPending: () => Promise<void>;
 }
 
-async function buildBot(): Promise<BuildBotResult> {
+async function buildBot(
+  overrides: Partial<StubEngine> = {},
+  operations?: TelegramOperationsCapabilities,
+): Promise<BuildBotResult> {
   const bot: FakeBot = {
     api: {
       sendMessage: vi.fn(async () => undefined),
@@ -65,22 +70,41 @@ async function buildBot(): Promise<BuildBotResult> {
     InputFile: class {},
   }));
 
-  const agent: StubAgent = {
-    chat: vi.fn(async () => "ok"),
-    hasSession: vi.fn(() => true),
-    resetSession: vi.fn(),
+  const engine: StubEngine = {
+    chat: vi.fn(async () => ({ text: "ok" })),
+    hasSession: vi.fn(async () => ({ hasSession: true })),
+    resetSession: vi.fn(async () => ({ memoryFlushed: true })),
+    getAthleteState: vi.fn(),
+    ...overrides,
+  };
+  const host = {
+    access: { middleware: async (_ctx: unknown, next: () => Promise<void>) => next() },
+    confirmations: {
+      peek: vi.fn(async () => undefined),
+      confirm: vi.fn(),
+      cancel: vi.fn(),
+    },
+    authorization: { isPrimaryOperator: vi.fn(async () => false) },
+    ...(operations === undefined ? {} : { operations }),
+    release: {
+      updatePolicy: "desktop-owned" as const,
+      updateDescription: "Check for updates",
+      whatsNewUnavailableText: "Couldn't fetch release notes. Try again later.",
+      version: vi.fn(async () => "Cycling Coach v0.0.0"),
+      whatsNew: vi.fn(async () => ({ kind: "unavailable" as const })),
+      updateNotice: vi.fn(async () => "Update from Desktop."),
+    },
   };
 
   const { createTelegramBot } = await import("../src/channels/telegram.js");
-  const { drainPending } = createTelegramBot(
-    "FAKE_TOKEN",
-    agent as unknown as Parameters<typeof createTelegramBot>[1],
-    cyclingBinary,
+  const { drainPending } = createTelegramBot({
+    token: "FAKE_TOKEN",
+    engine: engine as unknown as Parameters<typeof createTelegramBot>[0]["engine"],
+    host,
     dataDir,
-    undefined,
-  );
+  });
 
-  return { bot, agent, drainPending };
+  return { bot, engine, drainPending };
 }
 
 function getMessageText(bot: FakeBot) {
@@ -89,11 +113,27 @@ function getMessageText(bot: FakeBot) {
   return call[1] as (ctx: unknown) => Promise<void>;
 }
 
-// The flush middleware is the SECOND bot.use registration (auth is first, in
-// createSecuredBot).
+function getCommand(bot: FakeBot, name: string) {
+  const call = bot.command.mock.calls.find((c: unknown[]) => c[0] === name);
+  if (!call) throw new Error(`${name} command handler not registered`);
+  return call[1] as (ctx: unknown) => Promise<void>;
+}
+
 function getFlushMiddleware(bot: FakeBot) {
-  const call = bot.use.mock.calls[1];
+  const call = bot.use.mock.calls[2];
   if (!call) throw new Error("flush middleware not registered");
+  return call[0] as (ctx: unknown, next: () => Promise<void>) => Promise<void>;
+}
+
+function getAuthMiddleware(bot: FakeBot) {
+  const call = bot.use.mock.calls[0];
+  if (!call) throw new Error("auth middleware not registered");
+  return call[0] as (ctx: unknown, next: () => Promise<void>) => Promise<void>;
+}
+
+function getHandlerTrackingMiddleware(bot: FakeBot) {
+  const call = bot.use.mock.calls[1];
+  if (!call) throw new Error("handler-tracking middleware not registered");
   return call[0] as (ctx: unknown, next: () => Promise<void>) => Promise<void>;
 }
 
@@ -126,8 +166,8 @@ describe("inbound coalescing (fake timers)", () => {
     vi.useRealTimers();
   });
 
-  it("three fragments within the window produce ONE agent.chat call with newline-joined text, threaded to the last fragment", async () => {
-    const { bot, agent, drainPending } = await buildBot();
+  it("three fragments within the window produce ONE engine.chat call with newline-joined text, threaded to the last fragment", async () => {
+    const { bot, engine, drainPending } = await buildBot();
     const handler = getMessageText(bot);
     const ctxA = makeCtx({ message: { text: "one", message_id: 11 } });
     const ctxB = makeCtx({ message: { text: "two", message_id: 12 } });
@@ -136,13 +176,16 @@ describe("inbound coalescing (fake timers)", () => {
     await handler(ctxA);
     await handler(ctxB);
     await handler(ctxC);
-    expect(agent.chat).not.toHaveBeenCalled();
+    expect(engine.chat).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(CHAT_COALESCE_MS);
     await drainPending();
 
-    expect(agent.chat).toHaveBeenCalledTimes(1);
-    expect(agent.chat).toHaveBeenCalledWith("telegram:777", "one\ntwo\nthree", undefined);
+    expect(engine.chat).toHaveBeenCalledTimes(1);
+    expect(engine.chat).toHaveBeenCalledWith({
+      chatId: "telegram:777",
+      message: "one\ntwo\nthree",
+    });
 
     // The flushed answer threads to the LAST fragment's message id, on the
     // last fragment's reply context.
@@ -150,13 +193,13 @@ describe("inbound coalescing (fake timers)", () => {
       (c: unknown[]) => (c[1] as { parse_mode?: string } | undefined)?.parse_mode === "HTML",
     );
     expect(htmlCall).toBeDefined();
-    expect((htmlCall![1] as { reply_parameters?: { message_id?: number } }).reply_parameters).toEqual(
-      { message_id: 13, allow_sending_without_reply: true },
-    );
+    expect(
+      (htmlCall![1] as { reply_parameters?: { message_id?: number } }).reply_parameters,
+    ).toEqual({ message_id: 13, allow_sending_without_reply: true });
   });
 
   it("each fragment resets the timer: nothing fires until the window elapses after the LAST fragment", async () => {
-    const { bot, agent, drainPending } = await buildBot();
+    const { bot, engine, drainPending } = await buildBot();
     const handler = getMessageText(bot);
 
     await handler(makeCtx({ message: { text: "a" } }));
@@ -167,16 +210,16 @@ describe("inbound coalescing (fake timers)", () => {
 
     // 100ms short of the window after the last fragment: still buffered.
     await vi.advanceTimersByTimeAsync(CHAT_COALESCE_MS - 100);
-    expect(agent.chat).not.toHaveBeenCalled();
+    expect(engine.chat).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(100);
     await drainPending();
-    expect(agent.chat).toHaveBeenCalledTimes(1);
-    expect(agent.chat).toHaveBeenCalledWith("telegram:777", "a\nb\nc", undefined);
+    expect(engine.chat).toHaveBeenCalledTimes(1);
+    expect(engine.chat).toHaveBeenCalledWith({ chatId: "telegram:777", message: "a\nb\nc" });
   });
 
   it("different chats are isolated: concurrent fragments never cross-join", async () => {
-    const { bot, agent, drainPending } = await buildBot();
+    const { bot, engine, drainPending } = await buildBot();
     const handler = getMessageText(bot);
 
     await handler(makeCtx({ chat: { id: 1 }, message: { text: "left" } }));
@@ -184,44 +227,148 @@ describe("inbound coalescing (fake timers)", () => {
     await vi.advanceTimersByTimeAsync(CHAT_COALESCE_MS);
     await drainPending();
 
-    expect(agent.chat).toHaveBeenCalledTimes(2);
-    expect(agent.chat).toHaveBeenCalledWith("telegram:1", "left", undefined);
-    expect(agent.chat).toHaveBeenCalledWith("telegram:2", "right", undefined);
+    expect(engine.chat).toHaveBeenCalledTimes(2);
+    expect(engine.chat).toHaveBeenCalledWith({ chatId: "telegram:1", message: "left" });
+    expect(engine.chat).toHaveBeenCalledWith({ chatId: "telegram:2", message: "right" });
+  });
+
+  it("preserves first-message order while asynchronous session lookup is pending", async () => {
+    let resolveSession!: (value: { hasSession: boolean }) => void;
+    const session = new Promise<{ hasSession: boolean }>((resolve) => {
+      resolveSession = resolve;
+    });
+    const hasSession = vi.fn(() => session);
+    const { bot, engine, drainPending } = await buildBot({ hasSession });
+    const handler = getMessageText(bot);
+
+    const first = handler(makeCtx({ message: { text: "first", message_id: 41 } }));
+    const second = handler(makeCtx({ message: { text: "second", message_id: 42 } }));
+
+    expect(hasSession).toHaveBeenCalledOnce();
+    expect(hasSession).toHaveBeenCalledWith({ chatId: "telegram:777" });
+    resolveSession({ hasSession: true });
+    await Promise.all([first, second]);
+    await vi.advanceTimersByTimeAsync(CHAT_COALESCE_MS);
+    await drainPending();
+
+    expect(engine.chat).toHaveBeenCalledOnce();
+    expect(engine.chat).toHaveBeenCalledWith({
+      chatId: "telegram:777",
+      message: "first\nsecond",
+    });
   });
 
   it("a slash update mid-buffer flushes the pending text BEFORE the command handler runs", async () => {
-    const { bot, agent, drainPending } = await buildBot();
+    const { bot, engine, drainPending } = await buildBot();
     const handler = getMessageText(bot);
 
     await handler(makeCtx({ message: { text: "pending thought" } }));
-    expect(agent.chat).not.toHaveBeenCalled();
+    expect(engine.chat).not.toHaveBeenCalled();
 
     const next = vi.fn(async () => undefined);
     await getFlushMiddleware(bot)(makeCtx({ message: { text: "/status" } }), next);
 
     expect(next).toHaveBeenCalledTimes(1);
-    // The buffered turn is dispatched (reaches agent.chat) before the command
-    // handler chain continues — it enqueues on the FIFO session lock first.
-    expect(agent.chat).toHaveBeenCalledTimes(1);
-    expect(agent.chat.mock.invocationCallOrder[0]).toBeLessThan(next.mock.invocationCallOrder[0]);
+    expect(engine.chat).toHaveBeenCalledTimes(1);
+    expect(engine.chat.mock.invocationCallOrder[0]).toBeLessThan(next.mock.invocationCallOrder[0]);
 
     await drainPending();
-    expect(agent.chat).toHaveBeenCalledWith("telegram:777", "pending thought", undefined);
+    expect(engine.chat).toHaveBeenCalledWith({
+      chatId: "telegram:777",
+      message: "pending thought",
+    });
 
     // The flush cleared the debounce timer: the window elapsing later must not
     // double-dispatch the same buffered text.
     await vi.advanceTimersByTimeAsync(CHAT_COALESCE_MS * 2);
-    expect(agent.chat).toHaveBeenCalledTimes(1);
+    expect(engine.chat).toHaveBeenCalledTimes(1);
   });
 
-  it("registration order: auth use → flush middleware use → update guard → every command", async () => {
+  it("preserves buffered-before-command order when turn contexts resolve out of order", async () => {
+    let resolveBufferedContext!: (value: undefined) => void;
+    const bufferedContext = new Promise<undefined>((resolve) => {
+      resolveBufferedContext = resolve;
+    });
+    const resolveTurnContext = vi
+      .fn<TelegramOperationsCapabilities["resolveTurnContext"]>()
+      .mockReturnValueOnce(bufferedContext)
+      .mockResolvedValueOnce(undefined);
+    const { bot, engine, drainPending } = await buildBot(
+      {},
+      {
+        resolveTurnContext,
+        sync: vi.fn(async () => ({ text: "synced" })),
+      },
+    );
+    const bufferedCtx = makeCtx({ message: { text: "pending thought", message_id: 21 } });
+    const commandCtx = makeCtx({ message: { text: "/status", message_id: 22 } });
+
+    await getMessageText(bot)(bufferedCtx);
+    await getFlushMiddleware(bot)(commandCtx, () => getCommand(bot, "status")(commandCtx));
+    await Promise.resolve();
+
+    expect(resolveTurnContext).toHaveBeenCalledTimes(1);
+    resolveBufferedContext(undefined);
+    await drainPending();
+
+    expect(resolveTurnContext).toHaveBeenCalledTimes(2);
+    expect(engine.chat.mock.calls).toEqual([
+      [{ chatId: "telegram:777", message: "pending thought" }],
+      [{ chatId: "telegram:777", message: "/status" }],
+    ]);
+  });
+
+  it("starts a buffered chat before a following /start reset when turn context is delayed", async () => {
+    let resolveBufferedContext!: (value: undefined) => void;
+    const bufferedContext = new Promise<undefined>((resolve) => {
+      resolveBufferedContext = resolve;
+    });
+    const resolveTurnContext = vi
+      .fn<TelegramOperationsCapabilities["resolveTurnContext"]>()
+      .mockReturnValueOnce(bufferedContext);
+    const { bot, engine, drainPending } = await buildBot(
+      {},
+      {
+        resolveTurnContext,
+        sync: vi.fn(async () => ({ text: "synced" })),
+      },
+    );
+    const bufferedCtx = makeCtx({ message: { text: "pending thought", message_id: 31 } });
+    const startCtx = makeCtx({ message: { text: "/start", message_id: 32 } });
+
+    await getMessageText(bot)(bufferedCtx);
+    const handlingStart = getFlushMiddleware(bot)(startCtx, () =>
+      getCommand(bot, "start")(startCtx),
+    );
+    await Promise.resolve();
+
+    expect(resolveTurnContext).toHaveBeenCalledOnce();
+    expect(engine.chat).not.toHaveBeenCalled();
+    expect(engine.resetSession).not.toHaveBeenCalled();
+
+    resolveBufferedContext(undefined);
+    await handlingStart;
+    await drainPending();
+
+    expect(engine.chat).toHaveBeenCalledWith({
+      chatId: "telegram:777",
+      message: "pending thought",
+    });
+    expect(engine.resetSession).toHaveBeenCalledWith({ chatId: "telegram:777" });
+    expect(engine.chat.mock.invocationCallOrder[0]).toBeLessThan(
+      engine.resetSession.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("registration order: auth → handler tracking → flush → update guard → commands", async () => {
     const { bot } = await buildBot();
-    // auth (createSecuredBot) → flush middleware → update-offset dedupe guard.
-    expect(bot.use).toHaveBeenCalledTimes(3);
+    expect(bot.use).toHaveBeenCalledTimes(4);
     const authOrder = bot.use.mock.invocationCallOrder[0];
-    const flushOrder = bot.use.mock.invocationCallOrder[1];
-    const guardOrder = bot.use.mock.invocationCallOrder[2];
-    expect(authOrder).toBeLessThan(flushOrder);
+    const trackingOrder = bot.use.mock.invocationCallOrder[1];
+    const flushOrder = bot.use.mock.invocationCallOrder[2];
+    const guardOrder = bot.use.mock.invocationCallOrder[3];
+    expect(authOrder).toBeLessThan(trackingOrder);
+    expect(trackingOrder).toBeLessThan(flushOrder);
     expect(flushOrder).toBeLessThan(guardOrder);
     expect(bot.command.mock.invocationCallOrder.length).toBeGreaterThan(0);
     for (const commandOrder of bot.command.mock.invocationCallOrder) {
@@ -230,18 +377,21 @@ describe("inbound coalescing (fake timers)", () => {
   });
 
   it("drainPending flushes buffered text immediately — no debounce-timer wait", async () => {
-    const { bot, agent, drainPending } = await buildBot();
+    const { bot, engine, drainPending } = await buildBot();
     await getMessageText(bot)(makeCtx({ message: { text: "about to shut down" } }));
-    expect(agent.chat).not.toHaveBeenCalled();
+    expect(engine.chat).not.toHaveBeenCalled();
 
     // No timer advance: the drain itself must flush, then await the turn.
     await drainPending();
-    expect(agent.chat).toHaveBeenCalledTimes(1);
-    expect(agent.chat).toHaveBeenCalledWith("telegram:777", "about to shut down", undefined);
+    expect(engine.chat).toHaveBeenCalledTimes(1);
+    expect(engine.chat).toHaveBeenCalledWith({
+      chatId: "telegram:777",
+      message: "about to shut down",
+    });
   });
 
   it("each fragment fires one best-effort typing action during the window; the flushed turn still heartbeats", async () => {
-    const { bot, agent, drainPending } = await buildBot();
+    const { bot, engine, drainPending } = await buildBot();
     const handler = getMessageText(bot);
     const ctxA = makeCtx({ message: { text: "one" } });
     const ctxB = makeCtx({ message: { text: "two" } });
@@ -260,24 +410,24 @@ describe("inbound coalescing (fake timers)", () => {
 
     await vi.advanceTimersByTimeAsync(CHAT_COALESCE_MS);
     await drainPending();
-    expect(agent.chat).toHaveBeenCalledTimes(1);
+    expect(engine.chat).toHaveBeenCalledTimes(1);
     // The heartbeat runs on the LAST fragment's rebound context.
     expect(ctxC.replyWithChatAction.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it("a typing-action failure never breaks the handler or the buffered turn", async () => {
-    const { bot, agent, drainPending } = await buildBot();
+    const { bot, engine, drainPending } = await buildBot();
     const ctx = makeCtx({ message: { text: "hello" } });
     ctx.replyWithChatAction.mockRejectedValue(new Error("chat action down"));
 
     await expect(getMessageText(bot)(ctx)).resolves.toBeUndefined();
     await vi.advanceTimersByTimeAsync(CHAT_COALESCE_MS);
     await drainPending();
-    expect(agent.chat).toHaveBeenCalledWith("telegram:777", "hello", undefined);
+    expect(engine.chat).toHaveBeenCalledWith({ chatId: "telegram:777", message: "hello" });
   });
 
   it("leading-slash message:text (unregistered command fallthrough) is never buffered", async () => {
-    const { bot, agent, drainPending } = await buildBot();
+    const { bot, engine, drainPending } = await buildBot();
     const handler = getMessageText(bot);
 
     await handler(makeCtx({ message: { text: "a buffered thought" } }));
@@ -285,13 +435,19 @@ describe("inbound coalescing (fake timers)", () => {
 
     // The slash turn dispatched immediately — no window wait, no coalescing
     // with the pending free-form fragment.
-    expect(agent.chat).toHaveBeenCalledTimes(1);
-    expect(agent.chat).toHaveBeenCalledWith("telegram:777", "/unknowncmd", undefined);
+    expect(engine.chat).toHaveBeenCalledTimes(1);
+    expect(engine.chat).toHaveBeenCalledWith({
+      chatId: "telegram:777",
+      message: "/unknowncmd",
+    });
 
     await vi.advanceTimersByTimeAsync(CHAT_COALESCE_MS);
     await drainPending();
-    expect(agent.chat).toHaveBeenCalledTimes(2);
-    expect(agent.chat).toHaveBeenCalledWith("telegram:777", "a buffered thought", undefined);
+    expect(engine.chat).toHaveBeenCalledTimes(2);
+    expect(engine.chat).toHaveBeenCalledWith({
+      chatId: "telegram:777",
+      message: "a buffered thought",
+    });
   });
 });
 
@@ -320,5 +476,133 @@ describe("inbound coalescing (timer plumbing)", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("in-handler drain tracking", () => {
+  it("drainPending waits for an authorized in-handler asynchronous task", async () => {
+    vi.stubEnv("CYCLING_COACH_OPERATOR_ID", "777");
+    const { bot, drainPending } = await buildBot();
+    const auth = getAuthMiddleware(bot);
+    const trackHandler = getHandlerTrackingMiddleware(bot);
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let finish!: () => void;
+    const unfinished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const task = vi.fn(async () => {
+      markStarted();
+      await unfinished;
+    });
+    const ctx = {
+      chat: { id: 777, type: "private" },
+      from: { id: 777, first_name: "Athlete" },
+      reply: vi.fn(async () => undefined),
+    };
+
+    const handling = auth(ctx, () => trackHandler(ctx, task));
+    await started;
+    let drained = false;
+    const draining = drainPending().then(() => {
+      drained = true;
+    });
+    await Promise.resolve();
+
+    expect(task).toHaveBeenCalledOnce();
+    expect(drained).toBe(false);
+
+    finish();
+    await Promise.all([handling, draining]);
+    expect(drained).toBe(true);
+  });
+
+  it("drainPending flushes text buffered by an active authorized handler after draining starts", async () => {
+    vi.stubEnv("CYCLING_COACH_OPERATOR_ID", "777");
+    const { bot, engine, drainPending } = await buildBot();
+    const auth = getAuthMiddleware(bot);
+    const trackHandler = getHandlerTrackingMiddleware(bot);
+    const messageHandler = getMessageText(bot);
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let allowBuffering!: () => void;
+    const mayBuffer = new Promise<void>((resolve) => {
+      allowBuffering = resolve;
+    });
+    const ctx = {
+      ...makeCtx({ message: { text: "arrived during drain", message_id: 31 } }),
+      chat: { id: 777, type: "private" },
+      from: { id: 777, first_name: "Athlete" },
+    };
+    const task = vi.fn(async () => {
+      markStarted();
+      await mayBuffer;
+      await messageHandler(ctx);
+    });
+
+    const handling = auth(ctx, () => trackHandler(ctx, task));
+    await started;
+    const draining = drainPending();
+    allowBuffering();
+    await Promise.all([handling, draining]);
+
+    try {
+      expect(engine.chat).toHaveBeenCalledOnce();
+      expect(engine.chat).toHaveBeenCalledWith({
+        chatId: "telegram:777",
+        message: "arrived during drain",
+      });
+    } finally {
+      await drainPending();
+    }
+  });
+
+  it("drainPending ignores a tracked rejection and waits for other tracked work", async () => {
+    const { bot, drainPending } = await buildBot();
+    const trackHandler = getHandlerTrackingMiddleware(bot);
+    let rejectHandler!: (reason: Error) => void;
+    const rejection = new Promise<void>((_resolve, reject) => {
+      rejectHandler = reject;
+    });
+    let markOtherStarted!: () => void;
+    const otherStarted = new Promise<void>((resolve) => {
+      markOtherStarted = resolve;
+    });
+    let finishOther!: () => void;
+    const otherMayFinish = new Promise<void>((resolve) => {
+      finishOther = resolve;
+    });
+    const failingHandling = trackHandler({}, () => rejection);
+    const observedFailure = failingHandling.catch(() => undefined);
+    const otherHandling = trackHandler({}, async () => {
+      markOtherStarted();
+      await otherMayFinish;
+    });
+    await otherStarted;
+    let drainState: "pending" | "resolved" | "rejected" = "pending";
+    const draining = drainPending().then(
+      () => {
+        drainState = "resolved";
+      },
+      () => {
+        drainState = "rejected";
+      },
+    );
+
+    rejectHandler(new Error("tracked handler failed"));
+    await observedFailure;
+    await Promise.resolve();
+
+    try {
+      expect(drainState).toBe("pending");
+    } finally {
+      finishOther();
+      await Promise.allSettled([otherHandling, draining]);
+    }
+    expect(drainState).toBe("resolved");
   });
 });

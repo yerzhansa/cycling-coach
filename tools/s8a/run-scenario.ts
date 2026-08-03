@@ -205,7 +205,7 @@ async function main(): Promise<void> {
       recordHandle?.setCurrentTurn({ chatId: turn.chatId, turnIndex });
       replayHandle?.setCurrentTurn({ chatId: turn.chatId, turnIndex });
       try {
-        replies.push(await agent.chat(turn.chatId, turn.userMessage));
+        replies.push((await agent.chat({ chatId: turn.chatId, message: turn.userMessage })).text);
       } catch (err) {
         // Drift (or any turn-level throw) fails the turn; the assert report
         // explains why. The remaining turns still run for a fuller report.

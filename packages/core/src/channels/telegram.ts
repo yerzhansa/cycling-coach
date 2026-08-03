@@ -1,32 +1,14 @@
 import { Bot, InputFile } from "grammy";
 import { autoRetry } from "@grammyjs/auto-retry";
-import type { CoachEngineSeam } from "../agent/coach-engine.js";
-import type { BinaryConfig } from "../binary.js";
+import type { CoachEngine } from "@enduragent/coach-contract";
 import { classifyAgentError } from "../agent/error-classify.js";
-import {
-  checkForUpdate,
-  selfUpdate,
-  getKnownTelegramChatIds,
-  getCurrentVersion,
-  getLastNotifiedVersion,
-  isManagedDeploy,
-  MANAGED_DEPLOY_UPDATE_NOTICE,
-  setLastNotifiedVersion,
-} from "../updater.js";
-import { buildWhatsNewMessage } from "../release-notes.js";
-import { createAuthMiddleware } from "./telegram-access.js";
 import { TelegramUpdateOffsetStore } from "./telegram-update-offsets.js";
-import { loadAllowedSenders, loadAllowedSendersWithSource } from "./allowed-senders.js";
 import { escapeHtmlText } from "./html-escape.js";
-import type { ReferenceServices } from "../reference/services.js";
-import { resolveRunningCs, type ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
-import { formatSyncReply } from "../reference/sync/format-sync-reply.js";
-import { formatSnapshotRaw } from "../reference/sync/snapshot-debug.js";
 import { sendSnapshotOutput } from "../reference/sync/send-snapshot.js";
-import { provenanceForLatestSection } from "../reference/source-provenance.js";
 import { createSubsystemLogger } from "../logging/index.js";
 import { truncateUtf16Safe } from "../text-truncate.js";
 import { formatConfirmOutcome } from "../agent/confirmation-gate.js";
+import type { TelegramHostCapabilities } from "./telegram-host.js";
 
 // Upper bound on how long /update waits for in-flight turns to finish before
 // self-updating. A hung turn must never wedge the update, so the drain races a
@@ -111,7 +93,7 @@ export function startTypingHeartbeat(
 // TELEGRAM BOT
 // ============================================================================
 
-const WELCOME_MESSAGE =
+const buildWelcomeMessage = (updateDescription: string): string =>
   "Welcome to Cycling Coach!\n\n" +
   "I'm your AI cycling coach. I can build training plans, suggest workouts, " +
   "and track your fitness using intervals.icu data.\n\n" +
@@ -123,7 +105,7 @@ const WELCOME_MESSAGE =
   "/sync — Force-refresh training data from intervals.icu\n" +
   "/version — Show current version\n" +
   "/whatsnew — See what changed in the latest version\n" +
-  "/update — Check for and install updates\n\n" +
+  `/update — ${updateDescription}\n\n` +
   "Or just chat with me about your training!";
 
 const RESET_CAVEAT_NOTE =
@@ -136,11 +118,14 @@ const SNAPSHOT_HELP =
   "intervals, routes, history, FTP, and validation cuts. For now, only\n" +
   "/snapshot raw is wired.";
 
-// Descriptions mirror the command one-liners in WELCOME_MESSAGE so the native
+// Descriptions mirror the command one-liners in the welcome message so the native
 // "/" menu and the welcome card never drift. /sync is conditional on the same
 // reference predicate the command registration uses; /snapshot is excluded by
 // construction (operator-only debug). /start is included as an athlete command.
-function buildCommandMenu(reference?: ReferenceServices): { command: string; description: string }[] {
+function buildCommandMenu(
+  syncEnabled: boolean,
+  updateDescription: string,
+): { command: string; description: string }[] {
   const menu = [
     { command: "start", description: "Start a fresh session" },
     { command: "plan", description: "Generate a training plan" },
@@ -148,13 +133,13 @@ function buildCommandMenu(reference?: ReferenceServices): { command: string; des
     { command: "status", description: "Check current fitness, fatigue, and form" },
     { command: "review", description: "Review your last session" },
   ];
-  if (reference !== undefined) {
+  if (syncEnabled) {
     menu.push({ command: "sync", description: "Force-refresh training data from intervals.icu" });
   }
   menu.push(
     { command: "version", description: "Show current version" },
     { command: "whatsnew", description: "See what changed in the latest version" },
-    { command: "update", description: "Check for and install updates" },
+    { command: "update", description: updateDescription },
   );
   return menu;
 }
@@ -165,8 +150,7 @@ function buildCommandMenu(reference?: ReferenceServices): { command: string; des
 // changes here because this file holds the security model.
 function createSecuredBot(opts: {
   token: string;
-  binary: BinaryConfig;
-  dataDir: string;
+  access: TelegramHostCapabilities["access"];
 }): Bot {
   const bot = new Bot(opts.token);
 
@@ -191,63 +175,42 @@ function createSecuredBot(opts: {
     }),
   );
 
-  // Per-sender pairing-challenge rate-limit map (process-lifetime; LRU-bounded).
-  const challengeRateLimit = new Map<string, number>();
-  bot.use(
-    createAuthMiddleware({
-      dataDir: opts.dataDir,
-      binaryName: opts.binary.binaryName,
-      challengeRateLimit,
-      challengeMinIntervalMs: 60_000,
-    }),
-  );
+  bot.use(opts.access.middleware);
 
   return bot;
 }
 
-function logSecurityStartup(dataDir: string, binaryName: string): void {
-  const { state, source } = loadAllowedSendersWithSource(dataDir);
-  const primary = state.primaryOperator ?? "none";
-  if (state.dmPolicy === "open") {
-    console.error(
-      "[security] WARNING: DM policy is OPEN — this bot will answer ANY Telegram user who finds it.\n" +
-        "[security] WARNING: Unset CYCLING_COACH_DM_POLICY to restore allowlist/pairing.\n" +
-        `[security] Allowlist on record: ${state.allowFrom.length} senders (primary: ${primary}). Source: ${source}.`,
-    );
-    return;
-  }
-  console.error(
-    `[security] Telegram allowlist: ${state.dmPolicy} mode (${state.allowFrom.length} allowed senders, primary: ${primary}). Source: ${source}.`,
-  );
-  if (state.dmPolicy === "pairing" && state.allowFrom.length === 0) {
-    console.error(
-      `[security] No allowed senders configured. DM the bot to receive your user-ID, then run \`${binaryName} add-sender <id>\` to authorize yourself.`,
-    );
-  }
+export interface TelegramChannelRuntime {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  drainPending(): Promise<void>;
+  sendMessage(chatId: string | number, text: string): Promise<unknown>;
 }
 
-export interface TelegramBotHandle {
-  bot: Bot;
-  drainPending: () => Promise<void>;
+export interface CreateTelegramChannelInput {
+  readonly token: string;
+  readonly engine: CoachEngine;
+  readonly host: TelegramHostCapabilities;
+  readonly dataDir: string;
 }
 
-export function createTelegramBot(
-  token: string,
-  agent: CoachEngineSeam,
-  binary: BinaryConfig,
-  dataDir: string,
-  reference?: ReferenceServices,
-): TelegramBotHandle {
-  logSecurityStartup(dataDir, binary.binaryName);
-  const bot = createSecuredBot({ token, binary, dataDir });
+export function createTelegramBot(input: CreateTelegramChannelInput): TelegramChannelRuntime {
+  const bot = createSecuredBot({
+    token: input.token,
+    access: input.host.access,
+  });
+  const { engine, host } = input;
+  const { dataDir } = input;
+  const welcomeMessage = buildWelcomeMessage(host.release.updateDescription);
   const log = createSubsystemLogger("telegram", dataDir);
   const greeted = new Set<number>();
+  const greetingChecks = new Map<number, Promise<void>>();
 
   // Durable update-offset store. Normal polling processes pending updates (so a
   // message sent while the bot was down still arrives); the guard below dedupes
   // anything a previous run already dispatched or acknowledged before a crash /
   // self-update restart.
-  const offsets = new TelegramUpdateOffsetStore(dataDir, token);
+  const offsets = new TelegramUpdateOffsetStore(dataDir, input.token);
 
   // Process-local per-chat cache of the last generated answer, so an athlete can
   // ask for it again after a Telegram delivery failure without re-running the LLM
@@ -280,9 +243,37 @@ export function createTelegramBot(
   // tracked task and return immediately so grammY's sequential update loop is
   // never blocked by a long turn. The task owns its user-facing error reply; the
   // outer catch here is the last-resort net so a throw inside the reply path can
-  // never escape as an unhandled rejection. Per-chat ordering is preserved by the
-  // existing per-chat session lock inside agent.chat, not by any lock here.
+  // never escape as an unhandled rejection. Async host preflight must finish in
+  // arrival order before each operation enters the engine's per-session lock;
+  // this sequencer advances after invocation, not after the turn completes.
   const pending = new Set<Promise<void>>();
+  const activeHandlers = new Set<Promise<void>>();
+  const engineStartTails = new Map<string, Promise<void>>();
+  const enqueueEngineStart = <T>(
+    chatId: string,
+    begin: () => { readonly result: Promise<T> } | Promise<{ readonly result: Promise<T> }>,
+  ): Promise<T> => {
+    const predecessor = engineStartTails.get(chatId);
+    let started: Promise<{ readonly result: Promise<T> }>;
+    if (predecessor === undefined) {
+      try {
+        started = Promise.resolve(begin());
+      } catch (error) {
+        started = Promise.reject(error);
+      }
+    } else {
+      started = predecessor.then(begin);
+    }
+    const tail = started.then(
+      () => undefined,
+      () => undefined,
+    );
+    engineStartTails.set(chatId, tail);
+    void tail.then(() => {
+      if (engineStartTails.get(chatId) === tail) engineStartTails.delete(chatId);
+    });
+    return started.then(({ result }) => result);
+  };
   const dispatch = (work: () => Promise<void>): void => {
     const task = (async () => {
       try {
@@ -310,29 +301,20 @@ export function createTelegramBot(
   // `pending`, so the Promise.all snapshot below includes the flushed turns),
   // so shutdown and /update drains never drop buffered text and never wait on
   // the debounce timer.
-  const drainPending = (): Promise<void> => {
-    for (const chatId of Array.from(chatBuffers.keys())) flushBufferedChat(chatId);
-    return Promise.all(pending).then(() => undefined);
+  const drainPending = async (): Promise<void> => {
+    while (chatBuffers.size > 0 || pending.size > 0 || activeHandlers.size > 0) {
+      for (const chatId of Array.from(chatBuffers.keys())) flushBufferedChat(chatId);
+      await Promise.all([...pending, ...activeHandlers]);
+    }
   };
 
-  void bot.api.setMyCommands(buildCommandMenu(reference)).catch((err) => {
-    log.error("set_commands_failed", err, {});
-  });
-
-  // Resolve the running CS anchor once per turn from the latest synced profile so
-  // calculate_zones reads the athlete's real critical speed instead of an LLM
-  // guess. Returns undefined — leaving the tool on its LLM-supplied param — when no
-  // reference sync is wired; resolveRunningCs itself returns null for cycling,
-  // pre-sync, or a profile with no run-family row.
-  const turnDeps = () => {
-    if (reference === undefined) return undefined;
-    const latest = reference.loadLatest();
-    return {
-      resolvedCs: resolveRunningCs(latest),
-      referenceProvenance:
-        latest === null ? undefined : provenanceForLatestSection(latest, "athlete_profile"),
-    };
-  };
+  void bot.api
+    .setMyCommands(
+      buildCommandMenu(host.operations !== undefined, host.release.updateDescription),
+    )
+    .catch((err) => {
+      log.error("set_commands_failed", err, {});
+    });
 
   // Shared turn skeleton: every chat-bearing handler captures its deps/message
   // synchronously, then hands the LLM turn here to run on the fire-and-forget
@@ -348,7 +330,6 @@ export function createTelegramBot(
     command: string;
     chatId: string;
     message: string;
-    deps: ReturnType<typeof turnDeps>;
     genericReply: string;
     replyToMessageId?: number;
   }): void {
@@ -360,7 +341,23 @@ export function createTelegramBot(
       );
       let response: string;
       try {
-        response = await agent.chat(opts.chatId, opts.message, opts.deps);
+        const request = { chatId: opts.chatId, message: opts.message };
+        const operations = host.operations;
+        const chatResponse = await enqueueEngineStart(
+          opts.chatId,
+          operations === undefined
+            ? () => ({ result: engine.chat(request) })
+            : async () => {
+                const turn = await operations.resolveTurnContext();
+                return {
+                  result: engine.chat({
+                    ...request,
+                    ...(turn === undefined ? {} : { turn }),
+                  }),
+                };
+              },
+        );
+        response = chatResponse.text;
       } catch (err) {
         log.error("command_failed", err, { command: opts.command, chatId: opts.chatId });
         const { kind, athleteMessage } = classifyAgentError(err);
@@ -372,7 +369,7 @@ export function createTelegramBot(
       writeResend(opts.chatId, response);
       try {
         await sendLongMessage(opts.ctx, response, opts.replyToMessageId);
-        const proposal = agent.confirmations.peek(opts.chatId);
+        const proposal = await host.confirmations.peek({ chatId: opts.chatId });
         if (proposal !== undefined) {
           await opts.ctx.reply(proposal.summary, {
             reply_markup: {
@@ -406,7 +403,6 @@ export function createTelegramBot(
       command: "chat",
       chatId: `telegram:${chatId}`,
       message: buf.fragments.join("\n"),
-      deps: turnDeps(),
       genericReply: "Sorry, something went wrong. Please try again.",
       replyToMessageId: buf.replyToMessageId,
     });
@@ -428,7 +424,6 @@ export function createTelegramBot(
         command: "chat",
         chatId: `telegram:${chatId}`,
         message: text,
-        deps: turnDeps(),
         genericReply: "Sorry, something went wrong. Please try again.",
         replyToMessageId: ctx.message.message_id,
       });
@@ -448,6 +443,20 @@ export function createTelegramBot(
       timer,
     });
   }
+
+  bot.use(async (_ctx, next) => {
+    const task = Promise.resolve().then(next);
+    const settled = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    activeHandlers.add(settled);
+    try {
+      await task;
+    } finally {
+      activeHandlers.delete(settled);
+    }
+  });
 
   // Flush middleware: any slash update flushes this chat's buffered text ahead
   // of the command handler, so the buffered turn enqueues on the FIFO session
@@ -474,31 +483,32 @@ export function createTelegramBot(
   bot.command("start", async (ctx) => {
     greeted.add(ctx.chat.id);
     let memoryFlushed = true;
+    const chatId = `telegram:${ctx.chat.id}`;
     try {
-      ({ memoryFlushed } = await agent.resetSession(`telegram:${ctx.chat.id}`));
-      resendCache.delete(`telegram:${ctx.chat.id}`);
+      ({ memoryFlushed } = await enqueueEngineStart(chatId, () => ({
+        result: engine.resetSession({ chatId }),
+      })));
+      resendCache.delete(chatId);
     } catch (err) {
-      log.error("command_failed", err, { command: "start", chatId: `telegram:${ctx.chat.id}` });
+      log.error("command_failed", err, { command: "start", chatId });
       await ctx.reply(
         "Something went wrong resetting your session — your history is untouched. Please try /start again.",
       );
       return;
     }
     await ctx.reply(
-      memoryFlushed ? WELCOME_MESSAGE : `${WELCOME_MESSAGE}\n\n${RESET_CAVEAT_NOTE}`,
+      memoryFlushed ? welcomeMessage : `${welcomeMessage}\n\n${RESET_CAVEAT_NOTE}`,
     );
   });
 
   bot.command("plan", async (ctx) => {
     await ctx.reply("Analyzing your data and building a plan...");
     const chatId = `telegram:${ctx.chat.id}`;
-    const deps = turnDeps();
     runTurn({
       ctx,
       command: "plan",
       chatId,
       message: "/plan",
-      deps,
       genericReply: "Sorry, something went wrong generating your plan. Please try again.",
       replyToMessageId: ctx.message?.message_id,
     });
@@ -507,13 +517,11 @@ export function createTelegramBot(
   bot.command("workout", async (ctx) => {
     await ctx.reply("Checking your form and plan...");
     const chatId = `telegram:${ctx.chat.id}`;
-    const deps = turnDeps();
     runTurn({
       ctx,
       command: "workout",
       chatId,
       message: "/workout",
-      deps,
       genericReply: "Sorry, something went wrong. Please try again.",
       replyToMessageId: ctx.message?.message_id,
     });
@@ -522,32 +530,32 @@ export function createTelegramBot(
   bot.command("status", async (ctx) => {
     await ctx.reply("Fetching your fitness data...");
     const chatId = `telegram:${ctx.chat.id}`;
-    const deps = turnDeps();
     runTurn({
       ctx,
       command: "status",
       chatId,
       message: "/status",
-      deps,
       genericReply: "Sorry, something went wrong. Please try again.",
       replyToMessageId: ctx.message?.message_id,
     });
   });
 
-  if (reference !== undefined) {
+  if (host.operations !== undefined) {
     bot.command("sync", async (ctx) => {
       await ctx.reply("Syncing training data from intervals.icu...");
       try {
-        const result = await reference.runSync({
+        const result = await host.operations!.sync({
           chatId: `telegram:${ctx.chat.id}`,
         });
-        await ctx.reply(formatSyncReply(result));
+        await ctx.reply(result.text);
       } catch (err) {
         log.error("command_failed", err, { command: "sync", chatId: `telegram:${ctx.chat.id}` });
         await ctx.reply("Sorry, something went wrong syncing. Please try again.");
       }
     });
+  }
 
+  if (host.diagnostics !== undefined) {
     bot.command("snapshot", async (ctx) => {
       const args = (ctx.match ?? "").trim().split(/\s+/).filter(Boolean);
       const sub = args[0]?.toLowerCase() ?? "help";
@@ -559,14 +567,17 @@ export function createTelegramBot(
 
       if (sub === "raw") {
         const senderId = ctx.from?.id;
-        const primaryOperator = loadAllowedSenders(dataDir).primaryOperator;
-        if (typeof senderId !== "number" || primaryOperator !== String(senderId)) {
+        if (
+          typeof senderId !== "number" ||
+          !(await host.authorization.isPrimaryOperator({ senderId: String(senderId) }))
+        ) {
           await ctx.reply("Raw snapshots are available only to the primary operator.");
           return;
         }
         const section = args[1];
-        const latest = reference.loadLatest();
-        const output = formatSnapshotRaw(latest, section);
+        const output = await host.diagnostics!.rawSnapshot(
+          section === undefined ? {} : { section },
+        );
         try {
           await sendSnapshotOutput(output, {
             reply: (text) => sendLongMessage(ctx, text) as Promise<unknown>,
@@ -578,7 +589,10 @@ export function createTelegramBot(
               ) as Promise<unknown>,
           });
         } catch (err) {
-          log.error("command_failed", err, { command: "snapshot", chatId: `telegram:${ctx.chat.id}` });
+          log.error("command_failed", err, {
+            command: "snapshot",
+            chatId: `telegram:${ctx.chat.id}`,
+          });
           await ctx.reply("Sorry, something went wrong rendering the snapshot.");
         }
         return;
@@ -594,33 +608,30 @@ export function createTelegramBot(
       args ? `Reviewing your last session (${args})...` : "Reviewing your last session...",
     );
     const chatId = `telegram:${ctx.chat.id}`;
-    const deps = turnDeps();
     const message = args ? `/review ${args}` : "/review";
     runTurn({
       ctx,
       command: "review",
       chatId,
       message,
-      deps,
       genericReply: "Sorry, something went wrong reviewing your session. Please try again.",
       replyToMessageId: ctx.message?.message_id,
     });
   });
 
   bot.command("version", async (ctx) => {
-    await ctx.reply(`${binary.displayName} v${getCurrentVersion(binary.binaryName)}`);
+    await ctx.reply(await host.release.version());
   });
 
   bot.command("whatsnew", async (ctx) => {
     await ctx.reply("Fetching release notes...");
     try {
-      const info = await checkForUpdate(binary.binaryName, dataDir);
-      if (!info) {
-        await ctx.reply("Couldn't reach npm to check the latest version. Try again later.");
+      const result = await host.release.whatsNew();
+      if (result.kind === "unavailable") {
+        await ctx.reply(host.release.whatsNewUnavailableText);
         return;
       }
-      const message = await buildWhatsNewMessage(binary.binaryName, info);
-      await sendLongMessage(ctx, message);
+      await sendLongMessage(ctx, result.text);
     } catch (err) {
       log.error("command_failed", err, { command: "whatsnew", chatId: `telegram:${ctx.chat.id}` });
       await ctx.reply("Sorry, couldn't fetch release notes. Please try again.");
@@ -628,15 +639,16 @@ export function createTelegramBot(
   });
 
   bot.command("update", async (ctx) => {
-    if (isManagedDeploy(binary.binaryName)) {
-      await ctx.reply(MANAGED_DEPLOY_UPDATE_NOTICE);
+    const release = host.release;
+    if (release.updatePolicy !== "npm-self-update") {
+      await ctx.reply(await release.updateNotice());
       return;
     }
 
     await ctx.reply("Checking for updates...");
     let latest: string | undefined;
     try {
-      const info = await checkForUpdate(binary.binaryName, dataDir);
+      const info = await release.check();
       if (!info) {
         await ctx.reply("Could not check for updates. Try again later.");
         return;
@@ -664,7 +676,9 @@ export function createTelegramBot(
         await ctx.reply(SELF_UPDATE_MARKER_FAILURE);
         return;
       }
-      await ctx.reply(`Updating ${info.current} → ${info.latest}...\nThe bot will stop after installation. Run \`${binary.binaryName}\` to start it again.`);
+      await ctx.reply(
+        `Updating ${info.current} → ${info.latest}...\nThe bot will stop after installation. Run \`${release.binaryName}\` to start it again.`,
+      );
       // Stop polling first so Telegram commits the /update offset — otherwise
       // Telegram re-sends /update on next startup and we loop forever — then let
       // in-flight turns finish (bounded) so a self-update never drops a reply the
@@ -672,11 +686,11 @@ export function createTelegramBot(
       void bot
         .stop()
         .then(() => drainBounded(drainPending, UPDATE_DRAIN_TIMEOUT_MS))
-        .then(() => selfUpdate(binary.binaryName, info.latest));
+        .then(() => release.install(info.latest));
     } catch (err) {
       log.error("command_failed", err, { command: "update", chatId: `telegram:${ctx.chat.id}` });
       await ctx.reply(
-        `Update failed. Please run \`npm install -g ${binary.binaryName}@${latest ?? "latest"} --ignore-scripts\` manually.`,
+        `Update failed. Please run \`npm install -g ${release.binaryName}@${latest ?? "latest"} --ignore-scripts\` manually.`,
       );
     }
   });
@@ -695,7 +709,7 @@ export function createTelegramBot(
     const chatId = `telegram:${ctx.chat.id}`;
     dispatch(async () => {
       if (choice === "n") {
-        const outcome = agent.confirmations.cancel(chatId, nonce);
+        const outcome = await host.confirmations.cancel({ chatId, nonce });
         await ctx.reply(
           outcome === "canceled"
             ? "Canceled — nothing was changed."
@@ -703,7 +717,7 @@ export function createTelegramBot(
         );
         return;
       }
-      const outcome = await agent.confirmations.confirm(chatId, nonce);
+      const outcome = await host.confirmations.confirm({ chatId, nonce });
       await ctx.reply(formatConfirmOutcome(outcome));
     });
   });
@@ -739,10 +753,20 @@ export function createTelegramBot(
     // so after a process restart we consult the on-disk session to tell
     // returning users from true newcomers.
     if (!greeted.has(ctx.chat.id)) {
-      greeted.add(ctx.chat.id);
-      if (!agent.hasSession(chatId)) {
-        await ctx.reply(WELCOME_MESSAGE);
+      let check = greetingChecks.get(ctx.chat.id);
+      if (check === undefined) {
+        check = (async () => {
+          const { hasSession } = await engine.hasSession({ chatId });
+          if (!hasSession) await ctx.reply(welcomeMessage);
+          greeted.add(ctx.chat.id);
+        })();
+        greetingChecks.set(ctx.chat.id, check);
+        const cleanup = () => {
+          if (greetingChecks.get(ctx.chat.id) === check) greetingChecks.delete(ctx.chat.id);
+        };
+        void check.then(cleanup, cleanup);
       }
+      await check;
     }
 
     // One best-effort typing action per fragment so the athlete sees activity
@@ -769,7 +793,12 @@ export function createTelegramBot(
     }
   });
 
-  return { bot, drainPending };
+  return {
+    start: () => bot.start(),
+    stop: () => bot.stop(),
+    drainPending,
+    sendMessage: (chatId, text) => bot.api.sendMessage(chatId, text),
+  };
 }
 
 // ============================================================================
@@ -910,7 +939,9 @@ function renderTableAsPre(header: string[], rows: string[][]): string {
     widths.push(w);
   }
   const fmt = (r: string[]) =>
-    Array.from({ length: cols }, (_, c) => (r[c] ?? "").padEnd(widths[c])).join("  ").trimEnd();
+    Array.from({ length: cols }, (_, c) => (r[c] ?? "").padEnd(widths[c]))
+      .join("  ")
+      .trimEnd();
   const text = [fmt(header), ...rows.map(fmt)].map(escapeHtmlText).join("\n");
   return `<pre>${text}</pre>`;
 }
@@ -1157,42 +1188,4 @@ function htmlChunkToPlainText(chunk: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&amp;/g, "&");
-}
-
-// ============================================================================
-// STARTUP UPDATE NOTIFICATION
-// ============================================================================
-
-export async function notifyUpdate(bot: Bot, dataDir: string, binary: BinaryConfig): Promise<void> {
-  try {
-    const info = await checkForUpdate(binary.binaryName, dataDir);
-    if (!info?.updateAvailable) return;
-
-    if (getLastNotifiedVersion(dataDir) === info.latest) return;
-
-    // Filter the broadcast list against the current allowlist. Pre-update
-    // strangers' chat-ids may still be in getKnownTelegramChatIds (their session
-    // files persist on disk) but must NOT receive update notifications.
-    const allowed = loadAllowedSenders(dataDir);
-    const allowSet = new Set(allowed.allowFrom);
-    const knownChats = getKnownTelegramChatIds(dataDir);
-    const chatIds =
-      allowed.dmPolicy === "open" ? knownChats : knownChats.filter((id) => allowSet.has(id));
-    const updateInstruction = isManagedDeploy(binary.binaryName)
-      ? `Send /whatsnew to see what changed. ${MANAGED_DEPLOY_UPDATE_NOTICE}`
-      : "Send /whatsnew to see what changed, /update to install.";
-    const message = `Update available: ${info.current} → ${info.latest}\n${updateInstruction}\n\nHelp shape what Cycling Coach builds next: please take 3 minutes to answer this short survey so the mobile app, 24/7 bot, Railway template, and setup/payment options are prioritized around what would actually help you: https://tally.so/r/b5Dv4g\n\nWant the bot running 24/7 without keeping your computer on? Deploy the Railway template: https://railway.com/deploy/cycling-coach`;
-
-    for (const chatId of chatIds) {
-      try {
-        await bot.api.sendMessage(chatId, message);
-      } catch {
-        // Chat may no longer exist or bot was removed
-      }
-    }
-
-    setLastNotifiedVersion(dataDir, info.latest);
-  } catch {
-    // Non-critical — don't crash the bot
-  }
 }

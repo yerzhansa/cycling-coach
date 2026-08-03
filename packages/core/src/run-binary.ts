@@ -19,10 +19,7 @@ import {
 import { classifyAgentError } from "./agent/error-classify.js";
 import { warnOrphanSections } from "./memory/orphan-sections.js";
 import { getEffectiveSections } from "./sport.js";
-import {
-  formatConfirmOutcome,
-  type ConfirmationGate,
-} from "./agent/confirmation-gate.js";
+import { formatConfirmOutcome, type ConfirmationGate } from "./agent/confirmation-gate.js";
 
 // Shared error classifier output as the CLI's athlete-facing reply, so the CLI
 // and the Telegram channel speak the same error vocabulary and never dump a raw
@@ -39,7 +36,7 @@ export interface PreparedCoachComposition {
 }
 
 export interface RunBinaryHooks {
-  prepare?: (input:{config:Config;sport:Sport})=>Promise<PreparedCoachComposition>;
+  prepare?: (input: { config: Config; sport: Sport }) => Promise<PreparedCoachComposition>;
   /** Called once per process at startup, after Memory exists, before any chat handler is reachable. */
   onStartup?: (memory: Memory) => void | Promise<void>;
 }
@@ -80,10 +77,7 @@ function parseCommand(binary: BinaryConfig): { command: string | null; positiona
 interface MakeReadlineConfirmOpts {
   timeoutMs: number;
   /** Inject for tests. Defaults to node:readline createInterface. */
-  createInterface?: (opts: {
-    input: NodeJS.ReadableStream;
-    output: NodeJS.WritableStream;
-  }) => {
+  createInterface?: (opts: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream }) => {
     question(prompt: string, cb: (answer: string) => void): void;
     on(event: "SIGINT", cb: () => void): unknown;
     close(): void;
@@ -185,7 +179,8 @@ async function runStartupCapture(
       `(Press Ctrl+C to skip — you can run \`${binary.binaryName} add-sender <id>\` later.)\n`,
   );
   const { captureAndPersistOperator } = await import("./channels/operator-capture.js");
-  const captureTimeoutMs = envInt(binaryEnvVar(binary.binaryName, "SETUP_CAPTURE_TIMEOUT_MS")) ?? 60_000;
+  const captureTimeoutMs =
+    envInt(binaryEnvVar(binary.binaryName, "SETUP_CAPTURE_TIMEOUT_MS")) ?? 60_000;
   const confirmTimeoutMs =
     envInt(binaryEnvVar(binary.binaryName, "CAPTURE_CONFIRM_TIMEOUT_MS")) ?? 300_000;
   const result = await captureAndPersistOperator({
@@ -398,7 +393,7 @@ export async function runBinary(
   }
 
   const bootStart = Date.now();
-  const prepared = await hooks.prepare?.({ config, sport }) ?? {};
+  const prepared = (await hooks.prepare?.({ config, sport })) ?? {};
   const { createCoachEngine } = await import("./agent/coach-engine.js");
   const engine = createCoachEngine(sport, config, {
     athleteData: prepared.athleteData,
@@ -417,11 +412,13 @@ export async function runBinary(
 
   const { bootstrapReference } = await import("./reference/runtime.js");
   console.log("syncing training data from intervals.icu…");
-  const reference = prepared.reference ?? await bootstrapReference({
+  const reference =
+    prepared.reference ??
+    (await bootstrapReference({
       dataDir: config.dataDir,
       intervals: config.intervals,
       sport,
-    });
+    }));
   let runtimeClosed = false;
   const closeRuntime = async (): Promise<void> => {
     if (runtimeClosed) return;
@@ -453,14 +450,21 @@ export async function runBinary(
       await runStartupCapture(config.telegram.botToken, binary, config.dataDir);
     }
 
-    const { createTelegramBot, notifyUpdate } = await import("./channels/telegram.js");
-    const { bot, drainPending } = createTelegramBot(
-      config.telegram.botToken,
+    const { createTelegramBot } = await import("./channels/telegram.js");
+    const { createNpmTelegramHost, notifyNpmTelegramUpdate } =
+      await import("./channels/npm-telegram-host.js");
+    const { startNpmTelegramPolling } = await import("./channels/npm-telegram-polling.js");
+    const telegram = createTelegramBot({
+      token: config.telegram.botToken,
       engine,
-      binary,
-      config.dataDir,
-      reference.services,
-    );
+      host: createNpmTelegramHost({
+        binary,
+        confirmations: engine.confirmations,
+        dataDir: config.dataDir,
+        reference: reference.services,
+      }),
+      dataDir: config.dataDir,
+    });
     console.log(
       `${binary.displayName} (Telegram mode) is running. Open Telegram and message your bot — Ctrl+C to stop.`,
     );
@@ -476,10 +480,13 @@ export async function runBinary(
     // was down must still be delivered on restart. The durable update-offset
     // guard inside createTelegramBot dedupes anything the previous run already
     // handled. (Operator-capture startup keeps drop_pending_updates on purpose.)
-    bot.start().catch(async (err) => {
-      if (shuttingDown) return;
-      const { reportFatal } = await import("./process-guard.js");
-      reportFatal(err, { dataDir: config.dataDir });
+    startNpmTelegramPolling({
+      start: () => telegram.start(),
+      isShutdownLatched: () => shuttingDown,
+      reportFatal: async (error) => {
+        const { reportFatal } = await import("./process-guard.js");
+        reportFatal(error, { dataDir: config.dataDir });
+      },
     });
 
     // Register graceful-shutdown signal handlers only on the bot-run path —
@@ -487,8 +494,8 @@ export async function runBinary(
     // above, which owns its own SIGINT on a different emitter.
     const { markCleanShutdown } = await import("./process-guard.js");
     const shutdownBot = makeBotShutdown({
-      stop: () => bot.stop(),
-      drainPending,
+      stop: () => telegram.stop(),
+      drainPending: () => telegram.drainPending(),
       closePrepared: closeRuntime,
       dataDir: config.dataDir,
       markCleanShutdown,
@@ -502,13 +509,16 @@ export async function runBinary(
     process.once("SIGINT", onSignal);
 
     if (!process.env[binaryEnvVar(binary.binaryName, "NO_UPDATE_CHECK")]) {
-      notifyUpdate(bot, config.dataDir, binary).catch(() => {});
+      notifyNpmTelegramUpdate(telegram, config.dataDir, binary).catch(() => {});
       // A long-running deployment would otherwise never learn about a new
       // release until it restarts; notifyUpdate dedupes per version so the
       // re-check broadcasts at most once per release. unref() so the timer
       // never holds the process open.
       const DAY_MS = 24 * 60 * 60 * 1000;
-      setInterval(() => void notifyUpdate(bot, config.dataDir, binary), DAY_MS).unref?.();
+      setInterval(
+        () => void notifyNpmTelegramUpdate(telegram, config.dataDir, binary),
+        DAY_MS,
+      ).unref?.();
     }
   } else {
     console.log(`${binary.displayName} (CLI mode). Type your message:`);
@@ -536,8 +546,8 @@ export async function runBinary(
       }
 
       try {
-        const response = await engine.chat("cli", input);
-        console.log("\n" + response + "\n");
+        const response = await engine.chat({ chatId: "cli", message: input });
+        console.log("\n" + response.text + "\n");
         await _promptProposalConfirm(rl, engine);
       } catch (err) {
         // Full detail (stack, provider payload) → stderr; a friendly classified

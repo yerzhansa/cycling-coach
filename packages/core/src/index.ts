@@ -111,16 +111,8 @@ export type { IntervalsClient } from "./intervals.js";
 // ─── Agent ────────────────────────────────────────────────────────────
 export { CoachAgent } from "./agent/coach-agent.js";
 export { createCoachEngine } from "./agent/coach-engine.js";
-export type {
-  CoachEngineSeam,
-  LegacyEngineOverrides,
-  LocalCoachEngine,
-} from "./agent/coach-engine.js";
-export {
-  ConfirmationGate,
-  GATED_TOOL_NAMES,
-  PROPOSAL_TTL_MS,
-} from "./agent/confirmation-gate.js";
+export type { LegacyEngineOverrides, LocalCoachEngine } from "./agent/coach-engine.js";
+export { ConfirmationGate, GATED_TOOL_NAMES, PROPOSAL_TTL_MS } from "./agent/confirmation-gate.js";
 export type { ConfirmOutcome } from "./agent/confirmation-gate.js";
 export { ChatStore } from "./agent/chat-store.js";
 export {
@@ -187,7 +179,23 @@ export { loginCodex, refreshCodexToken } from "./agent/codex/oauth.js";
 export type { CodexCredentials, CodexLoginOptions } from "./agent/codex/oauth.js";
 
 // ─── Channels ─────────────────────────────────────────────────────────
-export { createTelegramBot, notifyUpdate } from "./channels/telegram.js";
+export { createTelegramBot } from "./channels/telegram.js";
+export type { CreateTelegramChannelInput, TelegramChannelRuntime } from "./channels/telegram.js";
+export { createNpmTelegramHost, notifyNpmTelegramUpdate } from "./channels/npm-telegram-host.js";
+export type {
+  CreateNpmTelegramHostInput,
+  TelegramUpdateMessageSender,
+} from "./channels/npm-telegram-host.js";
+export type {
+  TelegramAccessCapabilities,
+  TelegramAuthorizationCapabilities,
+  TelegramConfirmationCapabilities,
+  TelegramDiagnosticsCapabilities,
+  TelegramHostCapabilities,
+  TelegramOperationsCapabilities,
+  TelegramReleaseBase,
+  TelegramReleaseCapabilities,
+} from "./channels/telegram-host.js";
 
 // ─── Config ───────────────────────────────────────────────────────────
 export {

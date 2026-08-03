@@ -1,10 +1,18 @@
 import {
   createCoachEngine as createCanonicalCoachEngine,
-  type ChatStorePort,
   type ModelTransportDecorator,
-  type SourceProvenance,
 } from "@enduragent/engine";
-import type { ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
+import type {
+  AthleteState,
+  ChatRequest,
+  ChatResponse,
+  CoachEngine,
+  HasSessionRequest,
+  HasSessionResponse,
+  ResetSessionRequest,
+  ResetSessionResponse,
+  TurnEvent,
+} from "@enduragent/coach-contract";
 import type { AthleteDataReader, PlatformCalendarMutations } from "../athlete-data.js";
 import type { Config } from "../config.js";
 import type { Memory } from "../memory/store.js";
@@ -20,10 +28,9 @@ export interface LegacyAgentOverrides {
   readonly onToolsAssembled?: (names: readonly string[]) => void;
 }
 
-export class CoachAgent {
-  private readonly engine;
+export class CoachAgent implements CoachEngine {
+  private readonly engine: CoachEngine;
   private readonly memory: Memory;
-  private readonly chatStore: ChatStorePort;
   readonly confirmations = new ConfirmationGate();
 
   constructor(sport: Sport, config: Config, overrides: LegacyAgentOverrides = {}) {
@@ -33,28 +40,23 @@ export class CoachAgent {
       overrides: { ...overrides, confirmations: this.confirmations },
     });
     this.memory = adapted.memory;
-    this.chatStore = adapted.ports.chatStore;
     this.engine = createCanonicalCoachEngine({ sport, ports: adapted.ports });
   }
 
-  chat(
-    chatId: string,
-    userMessage: string,
-    turn?: { resolvedCs?: ResolvedCs | null; referenceProvenance?: SourceProvenance },
-  ): Promise<string> {
-    return this.engine.chat({
-      chatId,
-      message: userMessage,
-      ...(turn === undefined ? {} : { turn }),
-    }).then((response) => response.text);
+  chat(request: ChatRequest, onEvent?: (event: TurnEvent) => void): Promise<ChatResponse> {
+    return this.engine.chat(request, onEvent);
   }
 
-  hasSession(chatId: string): boolean {
-    return this.chatStore.hasSession(chatId);
+  hasSession(request: HasSessionRequest): Promise<HasSessionResponse> {
+    return this.engine.hasSession(request);
   }
 
-  resetSession(chatId: string): Promise<{ memoryFlushed: boolean }> {
-    return this.engine.resetSession({ chatId });
+  resetSession(request: ResetSessionRequest): Promise<ResetSessionResponse> {
+    return this.engine.resetSession(request);
+  }
+
+  getAthleteState(): Promise<AthleteState> {
+    return this.engine.getAthleteState();
   }
 
   getMemory(): Memory {

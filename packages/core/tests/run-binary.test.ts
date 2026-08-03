@@ -108,9 +108,9 @@ describe("Core is sport-agnostic — CoachAgent constructs and chats with a non-
     const agent = new CoachAgent(stubRunningSport, baseAgentConfig(dataDir), {
       modelTransportDecorator: decorator,
     });
-    const text = await agent.chat("running-test", "hi");
+    const response = await agent.chat({ chatId: "running-test", message: "hi" });
 
-    expect(text).toBe("ack from running-coach");
+    expect(response).toEqual({ text: "ack from running-coach" });
     expect(complete).toHaveBeenCalledTimes(1);
   });
 });

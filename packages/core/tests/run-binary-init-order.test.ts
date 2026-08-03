@@ -45,17 +45,15 @@ describe("run-binary outer init order", () => {
     }));
     for (let i = 1; i < positions.length; i++) {
       expect
-        .soft(
-          positions[i].idx,
-          `${positions[i].label} must come AFTER ${positions[i - 1].label}`,
-        )
+        .soft(positions[i].idx, `${positions[i].label} must come AFTER ${positions[i - 1].label}`)
         .toBeGreaterThan(positions[i - 1].idx);
     }
   });
 
   it("prepares only after the data directory security check", () => {
-    expect(src.indexOf("hooks.prepare?.({ config, sport })"))
-      .toBeGreaterThan(src.indexOf("ensureDataDirSecure(config.dataDir)"));
+    expect(src.indexOf("hooks.prepare?.({ config, sport })")).toBeGreaterThan(
+      src.indexOf("ensureDataDirSecure(config.dataDir)"),
+    );
   });
 });
 
@@ -67,31 +65,23 @@ describe("run-binary outer init order", () => {
  * reach reportFatal (markUnclean + exit(1)) — otherwise it races and beats the
  * shutdown handler's clean exit(0), making shutdown success timing-dependent.
  *
- * This is a structural guard: the unit-level latch lives in a closure private
- * to runBinary's bot-run path (untestable without driving the whole bot), so we
- * pin the two halves of the invariant against silent regression. The behavioral
- * proof is the live race harness (5/5 deterministic clean exits post-fix).
+ * The polling supervisor has focused behavioral tests; this source guard pins
+ * runBinary's wiring to that seam and keeps signal ownership in the npm host.
  */
 describe("run-binary shutdown-window latch", () => {
   const SOURCE_PATH = join(__dirname, "..", "src", "run-binary.ts");
   const src = readFileSync(SOURCE_PATH, "utf-8");
 
-  it("the latch is set in the signal handler BEFORE the start-promise catch checks it", () => {
+  it("passes the live shutdown latch to the npm polling supervisor", () => {
     const setIdx = src.indexOf("shuttingDown = true");
-    const guardIdx = src.indexOf("if (shuttingDown) return;");
+    const guardIdx = src.indexOf("isShutdownLatched: () => shuttingDown");
     expect(setIdx, "signal handler must set shuttingDown = true").toBeGreaterThan(-1);
-    expect(guardIdx, "start-promise catch must early-return when shuttingDown").toBeGreaterThan(-1);
+    expect(guardIdx, "polling supervisor must read the shutdown latch").toBeGreaterThan(-1);
   });
 
-  it("a genuine start rejection (latch unset) still reaches reportFatal", () => {
-    // The guard is an early-return on shuttingDown; reportFatal stays the
-    // fall-through, so a pre-signal failure (bad token, crash) still fatals.
-    const guardIdx = src.indexOf("if (shuttingDown) return;");
-    const fatalIdx = src.indexOf("reportFatal(err, { dataDir: config.dataDir })");
-    expect(fatalIdx, "reportFatal must remain reachable").toBeGreaterThan(-1);
-    expect(fatalIdx, "reportFatal must follow the suppress-guard, not precede it").toBeGreaterThan(
-      guardIdx,
-    );
+  it("routes an unsuppressed terminal rejection to reportFatal", () => {
+    expect(src).toContain("startNpmTelegramPolling({");
+    expect(src).toContain("reportFatal(error, { dataDir: config.dataDir })");
   });
 });
 
