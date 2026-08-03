@@ -42,6 +42,14 @@ export function createTelegramDaemonBinding(
     replaceTelegram: (request) => call("replaceTelegram", request),
     getTelegramStatus: (request) => call("getTelegramStatus", request),
     reconcileTelegram: (request) => call("reconcileTelegram", request),
+    inspectTelegramCredential: (request) => call("inspectTelegramCredential", request),
+    deleteTelegramWebhook: (request) => call("deleteTelegramWebhook", request),
+    forgetTelegramCredential: (request) => call("forgetTelegramCredential", request),
+    beginTelegramPairing: (request) => call("beginTelegramPairing", request),
+    cancelTelegramPairing: (request) => call("cancelTelegramPairing", request),
+    listTelegramAllowedSenders: (request) => call("listTelegramAllowedSenders", request),
+    addTelegramAllowedSender: (request) => call("addTelegramAllowedSender", request),
+    removeTelegramAllowedSender: (request) => call("removeTelegramAllowedSender", request),
   };
   return Object.freeze(binding);
 }

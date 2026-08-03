@@ -1,30 +1,27 @@
-import type { AthleteHomeIdentity } from "@enduragent/coach-contract";
+import {
+  TelegramAllowedSendersResultSchema,
+  TelegramControlSnapshotSchema,
+  TelegramCredentialInspectionSchema,
+  type AthleteHomeIdentity,
+  type TelegramAllowedSenderRpcParams,
+  type TelegramAllowedSendersResult,
+  type TelegramBotState,
+  type TelegramChannelStatus,
+  type TelegramControlSnapshot,
+  type TelegramCredentialInspection,
+  type TelegramPairingState,
+} from "@enduragent/coach-contract";
 import type {
+  TelegramBotMetadata,
   TelegramCredentialApplyResult,
   TelegramCredentialStatus,
   TelegramCredentialVault,
   TelegramDesiredState,
 } from "./telegram-credential-vault.js";
 
-export const TELEGRAM_CONTROL_STATES = [
-  "disabled",
-  "waiting-for-credential",
-  "starting",
-  "online",
-  "offline-retrying",
-  "conflict",
-  "invalid-token",
-  "transfer-required",
-  "failed",
-] as const;
+type EmptyRpcParams = Readonly<Record<string, never>>;
 
-export type TelegramControlState = (typeof TELEGRAM_CONTROL_STATES)[number];
-export type TelegramDesiredControlState = "disabled" | "enabled";
-
-export const TELEGRAM_CONTROL_ERROR_CODES = [
-  "telegram-invalid-token",
-  "telegram-polling-conflict",
-  "telegram-start-failed",
+export const DESKTOP_TELEGRAM_CONTROL_ERROR_CODES = [
   "telegram-credential-storage-failed",
   "telegram-credential-unavailable",
   "telegram-daemon-unavailable",
@@ -34,19 +31,24 @@ export const TELEGRAM_CONTROL_ERROR_CODES = [
   "telegram-drain-required",
 ] as const;
 
-export type TelegramControlErrorCode = (typeof TELEGRAM_CONTROL_ERROR_CODES)[number];
+export type DesktopTelegramControlErrorCode =
+  (typeof DESKTOP_TELEGRAM_CONTROL_ERROR_CODES)[number];
 
-export interface TelegramControlStatus {
-  readonly desiredState: TelegramDesiredControlState;
-  readonly state: TelegramControlState;
-  readonly botUsername?: string;
-  readonly since?: string;
-  readonly lastSuccessfulPollAt?: string;
-  readonly retryCount?: number;
-  readonly errorCode?: TelegramControlErrorCode;
+export type DesktopTelegramChannelStatus =
+  | TelegramChannelStatus
+  | Readonly<{ desiredState: "enabled"; state: "transfer-required" }>
+  | Readonly<{
+      desiredState: "disabled" | "enabled";
+      state: "failed";
+      errorCode: DesktopTelegramControlErrorCode;
+    }>;
+
+export interface DesktopTelegramSnapshot {
+  readonly channel: DesktopTelegramChannelStatus;
+  readonly bot: TelegramBotState;
+  readonly pairing: TelegramPairingState;
+  readonly credentialConfigured: boolean;
 }
-
-type EmptyRpcParams = Readonly<Record<string, never>>;
 
 export interface TelegramDaemonBinding {
   readonly generation: number;
@@ -58,6 +60,14 @@ export interface TelegramDaemonBinding {
   replaceTelegram(input: { readonly token: string }): Promise<unknown>;
   getTelegramStatus(input: EmptyRpcParams): Promise<unknown>;
   reconcileTelegram(input: EmptyRpcParams): Promise<unknown>;
+  inspectTelegramCredential(input: { readonly token: string }): Promise<unknown>;
+  deleteTelegramWebhook(input: { readonly token: string }): Promise<unknown>;
+  forgetTelegramCredential(input: EmptyRpcParams): Promise<unknown>;
+  beginTelegramPairing(input: EmptyRpcParams): Promise<unknown>;
+  cancelTelegramPairing(input: EmptyRpcParams): Promise<unknown>;
+  listTelegramAllowedSenders(input: EmptyRpcParams): Promise<unknown>;
+  addTelegramAllowedSender(input: TelegramAllowedSenderRpcParams): Promise<unknown>;
+  removeTelegramAllowedSender(input: TelegramAllowedSenderRpcParams): Promise<unknown>;
 }
 
 export interface TelegramDaemonAuthorityPort {
@@ -65,13 +75,20 @@ export interface TelegramDaemonAuthorityPort {
 }
 
 export interface TelegramControlCoordinator {
-  configure(token: string): Promise<TelegramControlStatus>;
-  enable(): Promise<TelegramControlStatus>;
-  disable(): Promise<TelegramControlStatus>;
-  replace(token: string): Promise<TelegramControlStatus>;
-  remove(): Promise<TelegramControlStatus>;
-  status(): Promise<TelegramControlStatus>;
-  reconcile(): Promise<TelegramControlStatus>;
+  configure(token: string): Promise<DesktopTelegramSnapshot>;
+  replace(token: string): Promise<DesktopTelegramSnapshot>;
+  enable(): Promise<DesktopTelegramSnapshot>;
+  disable(): Promise<DesktopTelegramSnapshot>;
+  stopPolling(): Promise<DesktopTelegramSnapshot>;
+  remove(): Promise<DesktopTelegramSnapshot>;
+  removeWebhook(): Promise<DesktopTelegramSnapshot>;
+  status(): Promise<DesktopTelegramSnapshot>;
+  reconcile(): Promise<DesktopTelegramSnapshot>;
+  beginPairing(): Promise<DesktopTelegramSnapshot>;
+  cancelPairing(): Promise<DesktopTelegramSnapshot>;
+  listAllowedSenders(): Promise<TelegramAllowedSendersResult>;
+  addAllowedSender(input: TelegramAllowedSenderRpcParams): Promise<TelegramAllowedSendersResult>;
+  removeAllowedSender(input: TelegramAllowedSenderRpcParams): Promise<TelegramAllowedSendersResult>;
 }
 
 export interface CreateTelegramControlCoordinatorInput {
@@ -82,92 +99,54 @@ export interface CreateTelegramControlCoordinatorInput {
     | "writeCredential"
     | "applyStoredCredential"
     | "deleteCredential"
+    | "botMetadata"
+    | "writeBotMetadata"
+    | "deleteBotMetadata"
     | "desiredState"
     | "setDesiredState"
   >;
   readonly daemon: TelegramDaemonAuthorityPort;
 }
 
-const ERROR_CODES = new Set<string>(TELEGRAM_CONTROL_ERROR_CODES);
-const STATES = new Set<string>(TELEGRAM_CONTROL_STATES);
+const DISABLED_CHANNEL = Object.freeze({ desiredState: "disabled", state: "disabled" } as const);
+const UNCONFIGURED_BOT = Object.freeze({ state: "unconfigured" } as const);
+const UNPAIRED = Object.freeze({ state: "unpaired" } as const);
+const emptySenders = (): TelegramAllowedSendersResult => ({ senders: [] });
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function safeBotUsername(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const normalized = value.startsWith("@") ? value.slice(1) : value;
-  return /^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(normalized) ? normalized : undefined;
-}
-
-function safeTimestamp(value: unknown): string | undefined {
-  if (typeof value !== "string" || value.length > 40) return undefined;
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
-}
-
-function safeRetryCount(value: unknown): number | undefined {
-  return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 1_000_000
-    ? (value as number)
-    : undefined;
-}
-
-function failure(
-  desiredState: TelegramDesiredControlState,
-  errorCode: TelegramControlErrorCode,
-): TelegramControlStatus {
-  return { desiredState, state: "failed", errorCode };
-}
-
-function sanitizeDaemonStatus(
-  value: unknown,
-  desiredState: TelegramDesiredControlState,
-): TelegramControlStatus {
-  if (!isRecord(value) || typeof value.state !== "string" || !STATES.has(value.state)) {
-    return failure(desiredState, "telegram-control-failed");
-  }
-  const status: {
-    desiredState: TelegramDesiredControlState;
-    state: TelegramControlState;
-    botUsername?: string;
-    since?: string;
-    lastSuccessfulPollAt?: string;
-    retryCount?: number;
-    errorCode?: TelegramControlErrorCode;
-  } = {
-    desiredState:
-      value.desiredState === "enabled" || value.desiredState === "disabled"
-        ? value.desiredState
-        : desiredState,
-    state: value.state as TelegramControlState,
-  };
-  const botUsername = safeBotUsername(value.botUsername);
-  const since = safeTimestamp(value.since);
-  const lastSuccessfulPollAt = safeTimestamp(value.lastSuccessfulPollAt);
-  const retryCount = safeRetryCount(value.retryCount);
-  if (botUsername !== undefined) status.botUsername = botUsername;
-  if (since !== undefined) status.since = since;
-  if (lastSuccessfulPollAt !== undefined) status.lastSuccessfulPollAt = lastSuccessfulPollAt;
-  if (retryCount !== undefined) status.retryCount = retryCount;
-  if (typeof value.errorCode === "string" && ERROR_CODES.has(value.errorCode)) {
-    status.errorCode = value.errorCode as TelegramControlErrorCode;
-  }
-  return status;
-}
-
-function desiredFromRecord(value: TelegramDesiredState): TelegramDesiredControlState {
+function desiredFromRecord(value: TelegramDesiredState): "disabled" | "enabled" {
   return value.state === "configured" && value.enabled ? "enabled" : "disabled";
 }
 
-function credentialFailure(
-  desiredState: TelegramDesiredControlState,
+function failure(
+  desiredState: "disabled" | "enabled",
+  errorCode: DesktopTelegramControlErrorCode,
+  credentialConfigured = false,
+  bot: TelegramBotState = UNCONFIGURED_BOT,
+  pairing: TelegramPairingState = UNPAIRED,
+): DesktopTelegramSnapshot {
+  return {
+    channel: { desiredState, state: "failed", errorCode },
+    bot,
+    pairing,
+    credentialConfigured,
+  };
+}
+
+function parseSnapshot(value: unknown): TelegramControlSnapshot | undefined {
+  const parsed = TelegramControlSnapshotSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function parseInspection(value: unknown): TelegramCredentialInspection | undefined {
+  const parsed = TelegramCredentialInspectionSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function credentialError(
+  desiredState: "disabled" | "enabled",
   result: TelegramCredentialApplyResult,
-): TelegramControlStatus {
+): DesktopTelegramSnapshot {
   if (result.status === "applied") throw new TypeError("credential was applied");
-  if (result.reason === "missing" && desiredState === "enabled") {
-    return { desiredState, state: "waiting-for-credential" };
-  }
   return failure(
     desiredState,
     result.reason === "wrong-home"
@@ -182,18 +161,16 @@ export function createTelegramControlCoordinator(
   input: CreateTelegramControlCoordinatorInput,
 ): TelegramControlCoordinator {
   let pending: Promise<void> = Promise.resolve();
+  let cachedBot: TelegramBotState | undefined;
 
   const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
-    const result = pending.then(operation);
+    const result = pending.then(operation, operation);
     pending = result.then(
       () => undefined,
       () => undefined,
     );
     return result;
   };
-
-  const desired = async (): Promise<TelegramDesiredControlState> =>
-    desiredFromRecord(await input.vault.desiredState());
 
   const binding = (): TelegramDaemonBinding | undefined => {
     const selectedHome = input.selectedAthleteHome();
@@ -210,37 +187,105 @@ export function createTelegramControlCoordinator(
     );
   };
 
-  const applyStored = async (
-    active: TelegramDaemonBinding,
-    desiredState: TelegramDesiredControlState,
-    operation: (token: string) => Promise<unknown>,
-  ): Promise<TelegramControlStatus> => {
-    let result: TelegramControlStatus | undefined;
-    let guardFailure: TelegramControlErrorCode | undefined;
-    const applied = await input.vault.applyStoredCredential(active.athleteHome, async (token) => {
-      if (!isCurrent(active)) {
-        guardFailure = "telegram-stale-operation";
-        throw new TypeError();
-      }
-      const response = await operation(token);
-      if (!isCurrent(active)) {
-        guardFailure = "telegram-stale-operation";
-        throw new TypeError();
-      }
-      result = sanitizeDaemonStatus(response, desiredState);
-    });
-    if (guardFailure !== undefined) return failure(desiredState, guardFailure);
-    return applied.status === "applied"
-      ? (result ?? failure(desiredState, "telegram-control-failed"))
-      : credentialFailure(desiredState, applied);
+  const desired = async (): Promise<"disabled" | "enabled"> =>
+    desiredFromRecord(await input.vault.desiredState());
+
+  const vaultIdentity = async (): Promise<{
+    readonly desiredState: "disabled" | "enabled";
+    readonly credential: TelegramCredentialStatus;
+    readonly metadata: TelegramBotMetadata;
+  }> => ({
+    desiredState: await desired(),
+    credential: await input.vault.credentialStatus(),
+    metadata: await input.vault.botMetadata(),
+  });
+
+  const project = async (
+    daemonSnapshot?: TelegramControlSnapshot,
+  ): Promise<DesktopTelegramSnapshot> => {
+    const identity = await vaultIdentity();
+    if (identity.credential.state === "wrong-home" || identity.metadata.state === "wrong-home") {
+      return failure(identity.desiredState, "telegram-home-mismatch");
+    }
+    if (identity.credential.state === "re-prompt" || identity.metadata.state === "re-prompt") {
+      return failure(identity.desiredState, "telegram-credential-unavailable");
+    }
+    const credentialConfigured = identity.credential.state === "configured";
+    const metadataBot: TelegramBotState =
+      identity.metadata.state === "configured"
+        ? (cachedBot ?? { state: "ready", username: identity.metadata.username })
+        : UNCONFIGURED_BOT;
+    const bot =
+      daemonSnapshot?.bot.state === "unconfigured" || daemonSnapshot === undefined
+        ? metadataBot
+        : daemonSnapshot.bot;
+    const pairing = daemonSnapshot?.pairing ?? UNPAIRED;
+    if (!credentialConfigured) {
+      return {
+        channel:
+          identity.desiredState === "enabled"
+            ? { desiredState: "enabled", state: "waiting-for-credential" }
+            : DISABLED_CHANNEL,
+        bot: UNCONFIGURED_BOT,
+        pairing: UNPAIRED,
+        credentialConfigured: false,
+      };
+    }
+    const active = binding();
+    if (active === undefined) {
+      return failure(
+        identity.desiredState,
+        "telegram-daemon-unavailable",
+        true,
+        bot,
+        pairing,
+      );
+    }
+    if (identity.desiredState === "enabled" && active.supervision === "attached") {
+      return {
+        channel: { desiredState: "enabled", state: "transfer-required" },
+        bot,
+        pairing,
+        credentialConfigured: true,
+      };
+    }
+    return {
+      channel:
+        identity.desiredState === "disabled"
+          ? DISABLED_CHANNEL
+          : (daemonSnapshot?.channel ?? {
+              desiredState: "enabled",
+              state: "failed",
+              errorCode: "telegram-control-failed",
+            }),
+      bot,
+      pairing,
+      credentialConfigured: true,
+    };
   };
 
-  const run = (operation: () => Promise<TelegramControlStatus>): Promise<TelegramControlStatus> =>
+  const currentSnapshot = async (): Promise<DesktopTelegramSnapshot> => {
+    const desiredState = await desired();
+    const active = binding();
+    if (active === undefined) return project();
+    if (desiredState === "enabled" && active.supervision === "attached") return project();
+    if (!isCurrent(active)) return failure(desiredState, "telegram-stale-operation");
+    const response = await active.getTelegramStatus({});
+    if (!isCurrent(active)) return failure(desiredState, "telegram-stale-operation");
+    const parsed = parseSnapshot(response);
+    return parsed === undefined
+      ? failure(desiredState, "telegram-control-failed")
+      : project(parsed);
+  };
+
+  const runSnapshot = (
+    operation: () => Promise<DesktopTelegramSnapshot>,
+  ): Promise<DesktopTelegramSnapshot> =>
     serialize(async () => {
       try {
         return await operation();
       } catch {
-        let desiredState: TelegramDesiredControlState = "disabled";
+        let desiredState: "disabled" | "enabled" = "disabled";
         try {
           desiredState = await desired();
         } catch {}
@@ -249,193 +294,433 @@ export function createTelegramControlCoordinator(
     });
 
   const checkedBinding = async (): Promise<
-    | { readonly active: TelegramDaemonBinding; readonly desiredState: TelegramDesiredControlState }
-    | { readonly status: TelegramControlStatus }
+    | { readonly active: TelegramDaemonBinding; readonly desiredState: "disabled" | "enabled" }
+    | { readonly snapshot: DesktopTelegramSnapshot }
   > => {
     const desiredState = await desired();
     const active = binding();
     return active === undefined
-      ? { status: failure(desiredState, "telegram-daemon-unavailable") }
+      ? { snapshot: failure(desiredState, "telegram-daemon-unavailable") }
       : { active, desiredState };
   };
 
-  return {
-    configure(token) {
-      return run(async () => {
-        const checked = await checkedBinding();
-        if ("status" in checked) return checked.status;
-        const written = await input.vault.writeCredential({
-          token,
-          authenticatedAthleteHome: checked.active.athleteHome,
-        });
-        if (written.status !== "configured") {
-          return failure(
-            checked.desiredState,
-            written.reason === "wrong-home"
-              ? "telegram-home-mismatch"
-              : "telegram-credential-storage-failed",
-          );
-        }
-        return applyStored(checked.active, checked.desiredState, (storedToken) =>
-          checked.active.configureTelegram({ token: storedToken }),
-        );
+  const guardedSnapshotCall = async (
+    active: TelegramDaemonBinding,
+    invoke: () => Promise<unknown>,
+  ): Promise<TelegramControlSnapshot | undefined> => {
+    if (!isCurrent(active)) return undefined;
+    const response = await invoke();
+    if (!isCurrent(active)) return undefined;
+    return parseSnapshot(response);
+  };
+
+  const inspect = async (
+    active: TelegramDaemonBinding,
+    token: string,
+  ): Promise<TelegramCredentialInspection | undefined> => {
+    if (!isCurrent(active)) return undefined;
+    const response = await active.inspectTelegramCredential({ token });
+    if (!isCurrent(active)) return undefined;
+    return parseInspection(response);
+  };
+
+  const captureStoredToken = async (
+    active: TelegramDaemonBinding,
+  ): Promise<{ readonly token?: string; readonly result: TelegramCredentialApplyResult }> => {
+    let token: string | undefined;
+    const result = await input.vault.applyStoredCredential(active.athleteHome, async (value) => {
+      token = value;
+    });
+    return { token, result };
+  };
+
+  const restoreMetadata = async (
+    active: TelegramDaemonBinding,
+    metadata: TelegramBotMetadata,
+  ): Promise<void> => {
+    if (metadata.state === "configured") {
+      await input.vault.writeBotMetadata({
+        username: metadata.username,
+        authenticatedAthleteHome: active.athleteHome,
       });
-    },
+      return;
+    }
+    await input.vault.deleteBotMetadata();
+  };
+
+  const persistCandidate = async (
+    active: TelegramDaemonBinding,
+    token: string,
+    username: string,
+  ): Promise<
+    | {
+        readonly status: "stored";
+        readonly previousMetadata: TelegramBotMetadata;
+        readonly previousToken?: string;
+      }
+    | { readonly status: "refused" }
+  > => {
+    const previousMetadata = await input.vault.botMetadata();
+    if (previousMetadata.state === "wrong-home" || previousMetadata.state === "re-prompt") {
+      return { status: "refused" };
+    }
+    const captured = await captureStoredToken(active);
+    const previousToken = captured.result.status === "applied" ? captured.token : undefined;
+    if (
+      captured.result.status === "refused" &&
+      captured.result.reason !== "missing"
+    ) {
+      return { status: "refused" };
+    }
+    const metadata = await input.vault.writeBotMetadata({
+      username,
+      authenticatedAthleteHome: active.athleteHome,
+    });
+    if (metadata.status !== "stored") return { status: "refused" };
+    const credential = await input.vault.writeCredential({
+      token,
+      authenticatedAthleteHome: active.athleteHome,
+    });
+    if (credential.status !== "configured") {
+      await restoreMetadata(active, previousMetadata);
+      return { status: "refused" };
+    }
+    return {
+      status: "stored",
+      previousMetadata,
+      ...(previousToken === undefined ? {} : { previousToken }),
+    };
+  };
+
+  const rollbackCandidate = async (
+    active: TelegramDaemonBinding,
+    previous: Extract<Awaited<ReturnType<typeof persistCandidate>>, { status: "stored" }>,
+  ): Promise<void> => {
+    if (previous.previousToken === undefined) {
+      await input.vault.deleteCredential();
+      return;
+    }
+    await restoreMetadata(active, previous.previousMetadata);
+    await input.vault.writeCredential({
+      token: previous.previousToken,
+      authenticatedAthleteHome: active.athleteHome,
+    });
+  };
+
+  const configureCandidate = (
+    token: string,
+    replacement: boolean,
+  ): Promise<DesktopTelegramSnapshot> =>
+    runSnapshot(async () => {
+      const checked = await checkedBinding();
+      if ("snapshot" in checked) return checked.snapshot;
+      const inspection = await inspect(checked.active, token);
+      if (inspection === undefined) {
+        return failure(checked.desiredState, "telegram-stale-operation");
+      }
+      if (inspection.status === "invalid-token" || inspection.status === "unavailable") {
+        return currentSnapshot();
+      }
+      if (replacement && inspection.status === "webhook-removal-required") {
+        return currentSnapshot();
+      }
+      const stored = await persistCandidate(
+        checked.active,
+        token,
+        inspection.bot.username,
+      );
+      if (stored.status !== "stored") {
+        return failure(checked.desiredState, "telegram-credential-storage-failed");
+      }
+      cachedBot = { state: inspection.status, username: inspection.bot.username };
+      if (!replacement) {
+        const desiredWrite = await input.vault.setDesiredState(false);
+        if (desiredWrite.status !== "stored") {
+          await rollbackCandidate(checked.active, stored);
+          return failure("disabled", "telegram-credential-storage-failed");
+        }
+      }
+      if (inspection.status === "webhook-removal-required") return project();
+      if (checked.active.supervision === "attached") return project();
+      const daemonSnapshot = await guardedSnapshotCall(checked.active, () =>
+        replacement
+          ? checked.active.replaceTelegram({ token })
+          : checked.active.configureTelegram({ token }),
+      );
+      if (daemonSnapshot === undefined || daemonSnapshot.bot.state !== "ready") {
+        await rollbackCandidate(checked.active, stored);
+        return failure(checked.desiredState, "telegram-control-failed");
+      }
+      cachedBot = daemonSnapshot.bot;
+      return project(daemonSnapshot);
+    });
+
+  const applyStored = async (
+    active: TelegramDaemonBinding,
+    operation: (token: string) => Promise<unknown>,
+  ): Promise<TelegramControlSnapshot | DesktopTelegramSnapshot> => {
+    let snapshot: TelegramControlSnapshot | undefined;
+    let stale = false;
+    const applied = await input.vault.applyStoredCredential(active.athleteHome, async (token) => {
+      if (!isCurrent(active)) {
+        stale = true;
+        throw new TypeError();
+      }
+      const response = await operation(token);
+      if (!isCurrent(active)) {
+        stale = true;
+        throw new TypeError();
+      }
+      snapshot = parseSnapshot(response);
+      if (snapshot === undefined) throw new TypeError();
+    });
+    if (stale) return failure(await desired(), "telegram-stale-operation");
+    return applied.status === "applied"
+      ? (snapshot ?? failure(await desired(), "telegram-control-failed"))
+      : credentialError(await desired(), applied);
+  };
+
+  return {
+    configure: (token) => configureCandidate(token, false),
+    replace: (token) => configureCandidate(token, true),
 
     enable() {
-      return run(async () => {
+      return runSnapshot(async () => {
         const stored = await input.vault.setDesiredState(true);
         if (stored.status !== "stored") {
           return failure("enabled", "telegram-credential-storage-failed");
         }
         const active = binding();
         if (active === undefined) return failure("enabled", "telegram-daemon-unavailable");
-        if (active.supervision !== "app-supervised") {
-          return { desiredState: "enabled", state: "transfer-required" };
-        }
-        const configured = await applyStored(active, "enabled", (token) =>
+        if (active.supervision === "attached") return project();
+        const configured = await applyStored(active, (token) =>
           active.configureTelegram({ token }),
         );
-        if (!(["disabled", "starting", "online"] as const).includes(configured.state as never)) {
-          return configured;
-        }
-        if (!isCurrent(active)) return failure("enabled", "telegram-stale-operation");
-        const enabled = await active.enableTelegram({});
-        if (!isCurrent(active)) return failure("enabled", "telegram-stale-operation");
-        return sanitizeDaemonStatus(enabled, "enabled");
+        if ("credentialConfigured" in configured) return configured;
+        if (configured.bot.state !== "ready") return project(configured);
+        const enabled = await guardedSnapshotCall(active, () => active.enableTelegram({}));
+        return enabled === undefined
+          ? failure("enabled", "telegram-stale-operation")
+          : project(enabled);
       });
     },
 
     disable() {
-      return run(async () => {
+      return runSnapshot(async () => {
         const stored = await input.vault.setDesiredState(false);
         if (stored.status !== "stored") {
           return failure("disabled", "telegram-credential-storage-failed");
         }
         const active = binding();
         if (active === undefined) return failure("disabled", "telegram-daemon-unavailable");
-        if (!isCurrent(active)) return failure("disabled", "telegram-stale-operation");
-        const disabled = await active.disableTelegram({});
-        if (!isCurrent(active)) return failure("disabled", "telegram-stale-operation");
-        return sanitizeDaemonStatus(disabled, "disabled");
+        const disabled = await guardedSnapshotCall(active, () => active.disableTelegram({}));
+        return disabled === undefined
+          ? failure("disabled", "telegram-stale-operation")
+          : project(disabled);
       });
     },
 
-    replace(token) {
-      return run(async () => {
-        const checked = await checkedBinding();
-        if ("status" in checked) return checked.status;
-        const written = await input.vault.writeCredential({
-          token,
-          authenticatedAthleteHome: checked.active.athleteHome,
-        });
-        if (written.status !== "configured") {
-          return failure(
-            checked.desiredState,
-            written.reason === "wrong-home"
-              ? "telegram-home-mismatch"
-              : "telegram-credential-storage-failed",
-          );
-        }
-        return applyStored(checked.active, checked.desiredState, (storedToken) =>
-          checked.active.replaceTelegram({ token: storedToken }),
-        );
+    stopPolling() {
+      return runSnapshot(async () => {
+        const desiredState = await desired();
+        const active = binding();
+        if (active === undefined) return failure(desiredState, "telegram-daemon-unavailable");
+        const stopped = await guardedSnapshotCall(active, () => active.disableTelegram({}));
+        return stopped === undefined
+          ? failure(desiredState, "telegram-stale-operation")
+          : project(stopped);
       });
     },
 
     remove() {
-      return run(async () => {
-        const desiredState = await desired();
-        const state = await input.vault.credentialStatus();
-        if (state.state === "missing") {
-          return desiredState === "enabled"
-            ? { desiredState, state: "waiting-for-credential" }
-            : { desiredState, state: "disabled" };
+      return runSnapshot(async () => {
+        const checked = await checkedBinding();
+        if ("snapshot" in checked) return checked.snapshot;
+        const disabled = await guardedSnapshotCall(checked.active, () =>
+          checked.active.disableTelegram({}),
+        );
+        if (disabled === undefined || disabled.channel.state !== "disabled") {
+          return failure(checked.desiredState, "telegram-drain-required", true);
         }
-        if (state.state === "wrong-home") {
-          return failure(desiredState, "telegram-home-mismatch");
+        const forgotten = await guardedSnapshotCall(checked.active, () =>
+          checked.active.forgetTelegramCredential({}),
+        );
+        if (
+          forgotten === undefined ||
+          forgotten.channel.state !== "disabled" ||
+          forgotten.bot.state !== "unconfigured"
+        ) {
+          return failure(checked.desiredState, "telegram-drain-required", true);
         }
-        if (state.state !== "configured") {
-          return failure(desiredState, "telegram-credential-unavailable");
-        }
-        const active = binding();
-        if (active === undefined) {
-          return failure(desiredState, "telegram-daemon-unavailable");
-        }
-        if (!isCurrent(active)) return failure(desiredState, "telegram-stale-operation");
-        const disabled = sanitizeDaemonStatus(await active.disableTelegram({}), "disabled");
-        if (!isCurrent(active)) return failure(desiredState, "telegram-stale-operation");
-        if (disabled.state !== "disabled") {
-          return failure(desiredState, "telegram-drain-required");
+        const desiredWrite = await input.vault.setDesiredState(false);
+        if (desiredWrite.status !== "stored") {
+          return failure("disabled", "telegram-credential-storage-failed", true);
         }
         const deleted = await input.vault.deleteCredential();
         if (deleted.status !== "deleted") {
           return failure(
-            desiredState,
+            "disabled",
             deleted.reason === "wrong-home"
               ? "telegram-home-mismatch"
               : "telegram-credential-storage-failed",
+            true,
           );
         }
-        return desiredState === "enabled"
-          ? { desiredState, state: "waiting-for-credential" }
-          : { desiredState, state: "disabled" };
+        cachedBot = undefined;
+        return project(forgotten);
       });
     },
 
-    status() {
-      return run(async () => {
-        const desiredState = await desired();
-        const credential: TelegramCredentialStatus = await input.vault.credentialStatus();
-        if (desiredState === "enabled" && credential.state === "missing") {
-          return { desiredState, state: "waiting-for-credential" };
+    removeWebhook() {
+      return runSnapshot(async () => {
+        const checked = await checkedBinding();
+        if ("snapshot" in checked) return checked.snapshot;
+        let inspection: TelegramCredentialInspection | undefined;
+        let storedToken: string | undefined;
+        const applied = await input.vault.applyStoredCredential(
+          checked.active.athleteHome,
+          async (token) => {
+            if (!isCurrent(checked.active)) throw new TypeError();
+            const deleted = parseInspection(
+              await checked.active.deleteTelegramWebhook({ token }),
+            );
+            if (deleted?.status !== "ready" || !isCurrent(checked.active)) throw new TypeError();
+            inspection = parseInspection(
+              await checked.active.inspectTelegramCredential({ token }),
+            );
+            if (inspection?.status !== "ready" || !isCurrent(checked.active)) {
+              throw new TypeError();
+            }
+            storedToken = token;
+          },
+        );
+        if (applied.status !== "applied") return credentialError(checked.desiredState, applied);
+        if (inspection?.status !== "ready" || storedToken === undefined) {
+          return failure(checked.desiredState, "telegram-control-failed", true);
         }
-        if (credential.state === "wrong-home") {
-          return failure(desiredState, "telegram-home-mismatch");
+        const metadata = await input.vault.writeBotMetadata({
+          username: inspection.bot.username,
+          authenticatedAthleteHome: checked.active.athleteHome,
+        });
+        if (metadata.status !== "stored") {
+          return failure(checked.desiredState, "telegram-credential-storage-failed", true);
         }
-        if (credential.state === "re-prompt") {
-          return failure(desiredState, "telegram-credential-unavailable");
+        cachedBot = { state: "ready", username: inspection.bot.username };
+        if (checked.active.supervision === "app-supervised") {
+          const configured = await guardedSnapshotCall(checked.active, () =>
+            checked.active.configureTelegram({ token: storedToken! }),
+          );
+          if (configured?.bot.state !== "ready") {
+            return failure(checked.desiredState, "telegram-control-failed", true, cachedBot);
+          }
         }
-        const active = binding();
-        if (active === undefined) {
-          return failure(desiredState, "telegram-daemon-unavailable");
-        }
-        if (!isCurrent(active)) return failure(desiredState, "telegram-stale-operation");
-        if (desiredState === "enabled" && active.supervision === "attached") {
-          return { desiredState, state: "transfer-required" };
-        }
-        const current = await active.getTelegramStatus({});
-        if (!isCurrent(active)) return failure(desiredState, "telegram-stale-operation");
-        return sanitizeDaemonStatus(current, desiredState);
+        return currentSnapshot();
       });
     },
+
+    status: () => runSnapshot(currentSnapshot),
 
     reconcile() {
-      return run(async () => {
+      return runSnapshot(async () => {
         const desiredState = await desired();
         const active = binding();
-        if (active === undefined) {
-          return failure(desiredState, "telegram-daemon-unavailable");
-        }
+        if (active === undefined) return failure(desiredState, "telegram-daemon-unavailable");
         if (desiredState === "disabled") {
-          if (!isCurrent(active)) return failure(desiredState, "telegram-stale-operation");
-          const disabled = await active.disableTelegram({});
-          if (!isCurrent(active)) return failure(desiredState, "telegram-stale-operation");
-          return sanitizeDaemonStatus(disabled, desiredState);
+          const disabled = await guardedSnapshotCall(active, () => active.disableTelegram({}));
+          return disabled === undefined
+            ? failure(desiredState, "telegram-stale-operation")
+            : project(disabled);
         }
-        if (active.supervision !== "app-supervised") {
-          return { desiredState, state: "transfer-required" };
-        }
-        const configured = await applyStored(active, desiredState, (token) =>
+        if (active.supervision === "attached") return project();
+        const configured = await applyStored(active, (token) =>
           active.configureTelegram({ token }),
         );
-        if (!(["disabled", "starting", "online"] as const).includes(configured.state as never)) {
-          return configured;
+        if ("credentialConfigured" in configured) return configured;
+        const reconciled = await guardedSnapshotCall(active, () => active.enableTelegram({}));
+        return reconciled === undefined
+          ? failure(desiredState, "telegram-stale-operation")
+          : project(reconciled);
+      });
+    },
+
+    beginPairing() {
+      return runSnapshot(async () => {
+        const checked = await checkedBinding();
+        if ("snapshot" in checked) return checked.snapshot;
+        if (checked.active.supervision === "attached") {
+          const desiredWrite = await input.vault.setDesiredState(true);
+          return desiredWrite.status === "stored"
+            ? project()
+            : failure("enabled", "telegram-credential-storage-failed", true);
         }
-        if (!isCurrent(active)) return failure(desiredState, "telegram-stale-operation");
-        const reconciled = await active.reconcileTelegram({});
-        if (!isCurrent(active)) return failure(desiredState, "telegram-stale-operation");
-        return sanitizeDaemonStatus(reconciled, desiredState);
+        const configured = await applyStored(checked.active, (token) =>
+          checked.active.configureTelegram({ token }),
+        );
+        if ("credentialConfigured" in configured) return configured;
+        if (configured.bot.state !== "ready") return project(configured);
+        const pairing = await guardedSnapshotCall(checked.active, () =>
+          checked.active.beginTelegramPairing({}),
+        );
+        if (pairing === undefined) return failure("enabled", "telegram-stale-operation", true);
+        if (pairing.pairing.state === "awaiting-code" || pairing.pairing.state === "paired") {
+          const desiredWrite = await input.vault.setDesiredState(true);
+          if (desiredWrite.status !== "stored") {
+            await checked.active.cancelTelegramPairing({});
+            return failure("enabled", "telegram-credential-storage-failed", true);
+          }
+        }
+        return project(pairing);
+      });
+    },
+
+    cancelPairing() {
+      return runSnapshot(async () => {
+        const checked = await checkedBinding();
+        if ("snapshot" in checked) return checked.snapshot;
+        const cancelled = await guardedSnapshotCall(checked.active, () =>
+          checked.active.cancelTelegramPairing({}),
+        );
+        if (cancelled === undefined) {
+          return failure(checked.desiredState, "telegram-stale-operation", true);
+        }
+        if (cancelled.pairing.state !== "paired") {
+          const stored = await input.vault.setDesiredState(false);
+          if (stored.status !== "stored") {
+            return failure("disabled", "telegram-credential-storage-failed", true);
+          }
+        }
+        return project(cancelled);
+      });
+    },
+
+    listAllowedSenders() {
+      return serialize(async () => {
+        const active = binding();
+        if (active === undefined || !isCurrent(active)) return emptySenders();
+        const response = await active.listTelegramAllowedSenders({});
+        if (!isCurrent(active)) return emptySenders();
+        const parsed = TelegramAllowedSendersResultSchema.safeParse(response);
+        return parsed.success ? parsed.data : emptySenders();
+      });
+    },
+
+    addAllowedSender(sender) {
+      return serialize(async () => {
+        const active = binding();
+        if (active === undefined || !isCurrent(active)) return emptySenders();
+        const response = await active.addTelegramAllowedSender(sender);
+        if (!isCurrent(active)) return emptySenders();
+        return TelegramAllowedSendersResultSchema.parse(response);
+      });
+    },
+
+    removeAllowedSender(sender) {
+      return serialize(async () => {
+        const active = binding();
+        if (active === undefined || !isCurrent(active)) return emptySenders();
+        const response = await active.removeTelegramAllowedSender(sender);
+        if (!isCurrent(active)) return emptySenders();
+        return TelegramAllowedSendersResultSchema.parse(response);
       });
     },
   };
