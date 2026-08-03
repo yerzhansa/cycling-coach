@@ -197,7 +197,7 @@ describe("desktop residency", () => {
     expect(first.map((item) => item.label ?? item.type)).toEqual([
       "Open Enduragent",
       "separator",
-      "Open at Login",
+      "Start in background at login",
       "separator",
       "Quit Enduragent",
     ]);
@@ -279,8 +279,11 @@ describe("desktop residency", () => {
     const show = source.indexOf("created.show();", load);
     const focus = source.indexOf("created.focus();", load);
     const creationEnd = source.indexOf("})().finally(() => {", focus);
-    const initialShow = source.indexOf("const initialWindow = await mainWindow.show();");
-    const residencyStart = source.indexOf("await residency.start();", initialShow);
+    const residencyStart = source.indexOf("await residency.start();", creationEnd);
+    const initialShow = source.indexOf(
+      "const initialWindow = desktopStartedInBackground ? undefined : await mainWindow.show();",
+      residencyStart,
+    );
 
     expect(source).not.toContain('created.once("ready-to-show"');
     expect(creationStart).toBeGreaterThanOrEqual(0);
@@ -290,8 +293,8 @@ describe("desktop residency", () => {
     expect(focus).toBeGreaterThan(show);
     expect(creationEnd).toBeGreaterThan(focus);
     expect(source.slice(load, creationEnd)).not.toMatch(/\bcatch\b/);
-    expect(initialShow).toBeGreaterThan(creationEnd);
-    expect(residencyStart).toBeGreaterThan(initialShow);
+    expect(residencyStart).toBeGreaterThan(creationEnd);
+    expect(initialShow).toBeGreaterThan(residencyStart);
   });
 
   it("reports tray-start and keeps running when the tray icon cannot load", async () => {

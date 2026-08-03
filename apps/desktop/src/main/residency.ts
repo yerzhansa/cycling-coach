@@ -108,7 +108,7 @@ export function createDesktopResidency(input: DesktopResidencyInput): DesktopRes
       },
       { type: "separator" },
       {
-        label: "Open at Login",
+        label: "Start in background at login",
         type: "checkbox",
         checked: state?.openAtLogin ?? false,
         enabled: state !== undefined,
