@@ -34,6 +34,7 @@ import {
   type CoachRpcServerInput,
 } from "../src/daemon/rpc-server.js";
 import { createDaemonHealthState } from "../src/daemon/healthz-server.js";
+import { createInvocationCoordinator } from "../src/daemon/invocation-coordinator.js";
 import type { MonotonicTimer, ScheduledMonotonicTimer } from "../src/daemon/upgrade-fence.js";
 
 const roots: string[] = [];
@@ -479,6 +480,47 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       expect(response).toMatchObject({ jsonrpc: "2.0", id: value.id });
     }
     expect(calls).toEqual(["chat:chat", "resetSession:chat", "hasSession:chat", "getAthleteState"]);
+    await client.close();
+  });
+
+  it("does not let a same-session reset overtake a running chat", async () => {
+    const token = "x".repeat(43);
+    const chatResult = deferred<{ text: string }>();
+    const chat = vi.fn(() => chatResult.promise);
+    const resetSession = vi.fn(async () => ({ memoryFlushed: true }));
+    const rpc = createCoachRpcServer({
+      token,
+      owner: "unmanaged-foreground",
+      engine: engine({ chat, resetSession }),
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "chat",
+        method: "chat",
+        params: { chatId: "desktop", message: "hold" },
+      }),
+    );
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "reset",
+        method: "resetSession",
+        params: { chatId: "desktop" },
+      }),
+    );
+    await vi.waitFor(() => expect(chat).toHaveBeenCalledOnce());
+    expect(resetSession).not.toHaveBeenCalled();
+
+    chatResult.resolve({ text: "done" });
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({ id: "chat" });
+    await vi.waitFor(() => expect(resetSession).toHaveBeenCalledOnce());
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({ id: "reset" });
+
     await client.close();
   });
 
@@ -1592,16 +1634,25 @@ describe.skipIf(!hasLoopback)("authenticated upgrade control", () => {
     await client.close();
   });
 
-  it("drains a running and queued same-key pair before flushing shutdown acceptance", async () => {
+  it("drains queued RPC work and a pre-admitted Telegram reservation before shutdown acceptance", async () => {
     const token = "x".repeat(43);
     const first = deferred<{ text: string }>();
     const second = deferred<{ text: string }>();
+    const telegramWork = deferred<void>();
     let call = 0;
     const healthState = createDaemonHealthState();
+    const invocations = createInvocationCoordinator();
+    const telegramReservation = invocations.reserve({ key: "telegram:73" });
+    let telegramFlush: Promise<void> | undefined;
+    const beforeInvocationDrain = vi.fn(async () => {
+      telegramFlush ??= telegramReservation.run(() => telegramWork.promise);
+    });
     const rpc = createCoachRpcServer({
       token,
       owner: "ephemeral-client-started",
       healthState,
+      invocations,
+      beforeInvocationDrain,
       engine: engine({
         chat: () => {
           call += 1;
@@ -1645,6 +1696,7 @@ describe.skipIf(!hasLoopback)("authenticated upgrade control", () => {
       }),
     );
     await vi.waitFor(() => expect(healthState.healthy).toBe(false));
+    expect(beforeInvocationDrain).toHaveBeenCalledOnce();
     client.ws.send(
       JSON.stringify({
         jsonrpc: "2.0",
@@ -1661,16 +1713,20 @@ describe.skipIf(!hasLoopback)("authenticated upgrade control", () => {
     expect(JSON.parse(await client.frames.next())).toMatchObject({ id: "chat-1" });
     await vi.waitFor(() => expect(call).toBe(2));
     second.resolve({ text: "second" });
-    const terminal = [
-      JSON.parse(await client.frames.next()),
-      JSON.parse(await client.frames.next()),
-    ];
-    expect(terminal).toContainEqual({
+    expect(JSON.parse(await client.frames.next())).toEqual({
       jsonrpc: "2.0",
       id: "chat-2",
       result: { text: "second" },
     });
-    expect(terminal).toContainEqual({
+    let shutdownResolved = false;
+    void rpc.shutdownRequested.then(() => {
+      shutdownResolved = true;
+    });
+    await Promise.resolve();
+    expect(shutdownResolved).toBe(false);
+
+    telegramWork.resolve();
+    expect(JSON.parse(await client.frames.next())).toEqual({
       jsonrpc: "2.0",
       id: "shutdown",
       result: { status: "accepted" },
@@ -1684,12 +1740,17 @@ describe.skipIf(!hasLoopback)("authenticated upgrade control", () => {
     const timer = new FakeTimer();
     const healthState = createDaemonHealthState();
     const chat = vi.fn(() => work.promise);
+    const telegramDrain = deferred<void>();
+    const beforeInvocationDrain = vi.fn(() => telegramDrain.promise);
+    const afterInvocationDrainRefusal = vi.fn(async () => undefined);
     const rpc = createCoachRpcServer({
       token,
       owner: "service-managed",
       healthState,
       timer,
       engine: engine({ chat }),
+      beforeInvocationDrain,
+      afterInvocationDrainRefusal,
     });
     const client = await openSocket(rpc);
     client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
@@ -1722,12 +1783,14 @@ describe.skipIf(!hasLoopback)("authenticated upgrade control", () => {
       }),
     );
     await vi.waitFor(() => expect(healthState.healthy).toBe(false));
+    expect(beforeInvocationDrain).toHaveBeenCalledOnce();
     timer.advance(30_000);
     expect(JSON.parse(await client.frames.next())).toMatchObject({
       id: "shutdown",
       error: { code: -32_004, message: "upgrade-drain-timeout" },
     });
     expect(healthState.healthy).toBe(true);
+    expect(afterInvocationDrainRefusal).toHaveBeenCalledOnce();
     client.ws.send(
       JSON.stringify({
         jsonrpc: "2.0",
@@ -1738,6 +1801,7 @@ describe.skipIf(!hasLoopback)("authenticated upgrade control", () => {
     );
     expect(JSON.parse(await client.frames.next())).toMatchObject({ id: "read-after-timeout" });
     work.resolve({ text: "done" });
+    telegramDrain.resolve();
     expect(JSON.parse(await client.frames.next())).toMatchObject({ id: "running" });
     await client.close();
   });

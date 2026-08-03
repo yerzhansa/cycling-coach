@@ -200,6 +200,10 @@ export function loadAllowedSenders(dataDir: string): AllowedSenders {
   return loadAllowedSendersWithSource(dataDir).state;
 }
 
+export function loadAllowedSendersFromFile(dataDir: string): AllowedSenders {
+  return loadFromFileCached(dataDir) ?? defaultPairingState();
+}
+
 // ─── PID lockfile ────────────────────────────────────────────────────────────
 // Serialize cross-process writes to allowed-senders.json. Lockfile lives at
 // <dataDir>/.allowed-senders.lock; content is "<pid>\n<isoTimestamp>". Stale

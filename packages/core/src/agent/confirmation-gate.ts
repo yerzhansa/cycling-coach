@@ -158,9 +158,11 @@ export function createToolConfirmationPort(opts: {
   gate: ConfirmationGate;
   summarizers: Record<string, ProposalSummarizer>;
   prepareRun?: (name: string, run: () => Promise<unknown>) => () => Promise<unknown>;
+  requiresConfirmation?: (input: { readonly chatId: string; readonly toolName: string }) => boolean;
 }): ToolConfirmationPort {
   return {
     gatedToolNames: GATED_TOOL_NAMES,
+    requiresConfirmation: opts.requiresConfirmation ?? (() => true),
     propose: async ({ chatId, toolName, toolInput, run }) => {
       const summarize = opts.summarizers[toolName];
       if (summarize === undefined) return { error: "confirmation_unavailable" };

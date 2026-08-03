@@ -19,6 +19,15 @@ export interface TelegramOperationsCapabilities {
   sync(request: { readonly chatId: string }): Promise<{ readonly text: string }>;
 }
 
+export interface TelegramInvocationReservation {
+  run<T>(operation: () => Promise<T>): Promise<T>;
+  cancel(): void;
+}
+
+export interface TelegramInvocationCapabilities {
+  reserve(chatId: string): TelegramInvocationReservation;
+}
+
 export interface TelegramDiagnosticsCapabilities {
   rawSnapshot(request: { readonly section?: string }): Promise<SnapshotOutput>;
 }
@@ -59,6 +68,7 @@ export type TelegramReleaseCapabilities =
 export interface TelegramHostCapabilities {
   readonly access: TelegramAccessCapabilities;
   readonly confirmations: TelegramConfirmationCapabilities;
+  readonly invocations?: TelegramInvocationCapabilities;
   readonly operations?: TelegramOperationsCapabilities;
   readonly diagnostics?: TelegramDiagnosticsCapabilities;
   readonly authorization: TelegramAuthorizationCapabilities;

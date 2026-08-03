@@ -201,6 +201,35 @@ describe("createAuthMiddleware — gating", () => {
     expect(options).toEqual({ parse_mode: "HTML" });
   });
 
+  it("supports a host-owned pairing prompt and authorization source", async () => {
+    const loadAllowedSenders = vi.fn(() => defaultPairingState());
+    const pairingChallenge = vi.fn(
+      ({ senderId }: { senderId: string }) =>
+        `<b>Approve <code>${senderId}</code> in Desktop Settings.</b>`,
+    );
+    const mw = createAuthMiddleware({
+      dataDir,
+      binaryName: "unused",
+      challengeRateLimit: new Map(),
+      challengeMinIntervalMs: 60_000,
+      loadAllowedSenders,
+      pairingChallenge,
+    });
+    const ctx = makeMwCtx({ chatType: "private", fromId: 99999 });
+
+    await mw(ctx, vi.fn());
+
+    expect(loadAllowedSenders).toHaveBeenCalledWith(dataDir);
+    expect(pairingChallenge).toHaveBeenCalledWith({
+      senderId: "99999",
+      senderName: undefined,
+    });
+    expect(ctx.reply).toHaveBeenCalledWith(
+      "<b>Approve <code>99999</code> in Desktop Settings.</b>",
+      { parse_mode: "HTML" },
+    );
+  });
+
   it("does NOT call next() for stranger in allowlist mode (silent drop, no reply)", async () => {
     saveAllowedSenders(dataDir, () => ({
       ...defaultPairingState(),

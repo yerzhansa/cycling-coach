@@ -112,8 +112,14 @@ export type { IntervalsClient } from "./intervals.js";
 export { CoachAgent } from "./agent/coach-agent.js";
 export { createCoachEngine } from "./agent/coach-engine.js";
 export type { LegacyEngineOverrides, LocalCoachEngine } from "./agent/coach-engine.js";
-export { ConfirmationGate, GATED_TOOL_NAMES, PROPOSAL_TTL_MS } from "./agent/confirmation-gate.js";
-export type { ConfirmOutcome } from "./agent/confirmation-gate.js";
+export {
+  ConfirmationGate,
+  GATED_TOOL_NAMES,
+  PROPOSAL_TTL_MS,
+  createProposalSummarizers,
+  createToolConfirmationPort,
+} from "./agent/confirmation-gate.js";
+export type { ConfirmOutcome, ProposalSummarizer, Summarized } from "./agent/confirmation-gate.js";
 export { ChatStore } from "./agent/chat-store.js";
 export {
   ConversationRecoveryError,
@@ -192,6 +198,8 @@ export type {
   TelegramConfirmationCapabilities,
   TelegramDiagnosticsCapabilities,
   TelegramHostCapabilities,
+  TelegramInvocationCapabilities,
+  TelegramInvocationReservation,
   TelegramOperationsCapabilities,
   TelegramReleaseBase,
   TelegramReleaseCapabilities,
@@ -277,7 +285,12 @@ export type {
   PlatformCalendarMutations,
   StoredDataFreshness,
 } from "./athlete-data.js";
-export { loadAllowedSendersWithSource, SENDER_ID_RE } from "./channels/allowed-senders.js";
+export {
+  loadAllowedSendersFromFile,
+  loadAllowedSendersWithSource,
+  SENDER_ID_RE,
+} from "./channels/allowed-senders.js";
+export { createAuthMiddleware } from "./channels/telegram-access.js";
 
 // ─── Updater ──────────────────────────────────────────────────────────
 export {

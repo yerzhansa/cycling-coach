@@ -13,6 +13,7 @@ import { join } from "node:path";
 
 import {
   loadAllowedSenders,
+  loadAllowedSendersFromFile,
   saveAllowedSenders,
   defaultPairingState,
   addSender,
@@ -23,7 +24,7 @@ import {
 } from "../src/channels/allowed-senders.js";
 
 let dataDir: string;
-const ENV_KEYS = ["CYCLING_COACH_OPERATOR_ID"];
+const ENV_KEYS = ["CYCLING_COACH_OPERATOR_ID", "CYCLING_COACH_DM_POLICY"];
 let savedEnv: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -53,6 +54,14 @@ describe("loadAllowedSenders — defaults", () => {
     expect(result.version).toBe(1);
     expect(result.capturedAt).toBeNull();
     expect(result.addedAt).toEqual({});
+  });
+
+  it("keeps the Desktop file-only view in pairing mode when npm environment overrides are set", () => {
+    process.env.CYCLING_COACH_OPERATOR_ID = "12345";
+    process.env.CYCLING_COACH_DM_POLICY = "open";
+
+    expect(loadAllowedSenders(dataDir).dmPolicy).toBe("open");
+    expect(loadAllowedSendersFromFile(dataDir)).toEqual(defaultPairingState());
   });
 });
 

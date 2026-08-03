@@ -33,7 +33,12 @@ import {
 import type { WriterProtocolHandlers } from "@enduragent/kernel-node/lock";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import type { DaemonHealthState } from "./healthz-server.js";
-import { DetachedSessionRequestError, createSessionRequestQueue } from "./session-queue.js";
+import { DetachedSessionRequestError } from "./session-queue.js";
+import {
+  DaemonAdmissionClosedError,
+  createInvocationCoordinator,
+  type InvocationCoordinator,
+} from "./invocation-coordinator.js";
 import { HANDOFF_CAPABILITY_BYTES, type MonotonicTimer } from "./upgrade-fence.js";
 import { serializeBoundaryError } from "./error-boundary.js";
 
@@ -151,6 +156,9 @@ export interface CoachRpcServerInput {
   readonly rendererCapabilityRandomBytes?: (size: number) => Buffer;
   readonly healthState?: DaemonHealthState;
   readonly timer?: MonotonicTimer;
+  readonly invocations?: InvocationCoordinator;
+  readonly beforeInvocationDrain?: () => Promise<void>;
+  readonly afterInvocationDrainRefusal?: () => Promise<void>;
 }
 
 export interface SpendRpcHandlers {
@@ -466,11 +474,9 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
   );
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES });
   const clients = new Set<ClientState>();
-  const sessionQueue = createSessionRequestQueue();
-  const coachingTasks = new Set<Promise<void>>();
+  const invocations = input.invocations ?? createInvocationCoordinator();
   const timer = input.timer ?? productionTimer();
   let closing = false;
-  let acceptingCoaching = true;
   let closePromise: Promise<void> | undefined;
   let reservation: UpgradeReservation | undefined;
   let connectionSequence = 0;
@@ -485,15 +491,10 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
   };
 
   const awaitDrain = (
+    drainTask: Promise<void>,
     deadlineMs: number,
     state: ClientState,
   ): Promise<UpgradeDrainOutcome | { readonly status: "connection-closed" }> => {
-    const tasks = [...coachingTasks];
-    if (tasks.length === 0) {
-      return Promise.resolve(
-        state.detached ? { status: "connection-closed" } : { status: "accepted" },
-      );
-    }
     return new Promise((resolve) => {
       let settled = false;
       const deadline = timer.schedule(Math.max(0, deadlineMs - timer.nowMs()), () => {
@@ -502,12 +503,20 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
         deadline.cancel();
         resolve({ status: "timeout" });
       });
-      void Promise.all(tasks).then(() => {
-        if (settled) return;
-        settled = true;
-        deadline.cancel();
-        resolve({ status: "accepted" });
-      });
+      void drainTask.then(
+        () => {
+          if (settled) return;
+          settled = true;
+          deadline.cancel();
+          resolve({ status: "accepted" });
+        },
+        () => {
+          if (settled) return;
+          settled = true;
+          deadline.cancel();
+          resolve({ status: "timeout" });
+        },
+      );
       void state.detachedPromise.then(() => {
         if (settled) return;
         settled = true;
@@ -601,12 +610,21 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
       }
       capability.fill(0);
       reservation = { ...activeReservation, state: "shutdown-consumed" };
-      acceptingCoaching = false;
+      const fence = invocations.closeAdmission();
       input.healthState?.setHealthy(false);
       const task = (async () => {
-        const outcome = await awaitDrain(timer.nowMs() + UPGRADE_DRAIN_TIMEOUT_MS, state);
+        const drainTask = Promise.resolve().then(async () => {
+          await input.beforeInvocationDrain?.();
+          await fence.drain();
+        });
+        const outcome = await awaitDrain(
+          drainTask,
+          timer.nowMs() + UPGRADE_DRAIN_TIMEOUT_MS,
+          state,
+        );
         if (outcome.status !== "accepted") {
-          acceptingCoaching = true;
+          fence.reopen();
+          await input.afterInvocationDrainRefusal?.().catch(() => {});
           input.healthState?.setHealthy(true);
           clearReservation();
           if (outcome.status === "timeout") {
@@ -619,20 +637,18 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
         }
         await enqueueSerialized(state, ordinarySuccess(generic.data.id, { status: "accepted" }));
         if (state.detached) {
-          acceptingCoaching = true;
+          fence.reopen();
+          await input.afterInvocationDrainRefusal?.().catch(() => {});
           input.healthState?.setHealthy(true);
           clearReservation();
           return;
         }
+        fence.seal();
         clearReservation();
         resolveShutdownRequested();
       })();
       state.requestTasks.add(task);
       void task.finally(() => state.requestTasks.delete(task)).catch(() => {});
-      return;
-    }
-    if (!acceptingCoaching) {
-      void enqueueSerialized(state, ordinaryError(generic.data.id, -32_005, "daemon-upgrading"));
       return;
     }
     if (!methodExists(generic.data.method)) {
@@ -672,13 +688,13 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
       void enqueueSerialized(state, ordinaryError(generic.data.id, -32602, "Invalid params"));
       return;
     }
-    const key = idKey(generic.data.id);
-    if (state.activeIds.has(key)) {
+    const requestIdKey = idKey(generic.data.id);
+    if (state.activeIds.has(requestIdKey)) {
       detach(state, 1008);
       return;
     }
-    state.activeIds.add(key);
-    const task = (async () => {
+    state.activeIds.add(requestIdKey);
+    const runRequest = async (): Promise<void> => {
       let invocationFailure: { readonly error: unknown } | undefined;
       let eventFailure: { readonly error: unknown } | undefined;
       let deliveryDetached = false;
@@ -690,29 +706,24 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
               const request = COACH_RPC_METHOD_REGISTRY.chat.requestSchema.parse(
                 generic.data.params,
               );
-              result = await sessionQueue.run({
-                key: request.chatId,
-                signal: state.detachController.signal,
-                run: () =>
-                  input.engine.chat(request, (event) => {
-                    if (eventFailure !== undefined) return;
-                    try {
-                      const parsedEvent = COACH_RPC_METHOD_REGISTRY.chat.eventSchema.parse(event);
-                      const notification = CoachTurnEventNotificationEnvelopeSchema.parse({
-                        jsonrpc: "2.0",
-                        method: "coach.turnEvent",
-                        params: {
-                          requestId: generic.data.id,
-                          requestMethod: "chat",
-                          turnId: parsedEvent.turnId,
-                          event: parsedEvent,
-                        },
-                      });
-                      void enqueueSerialized(state, serializeCoachRpcEnvelope(notification));
-                    } catch (error) {
-                      eventFailure = { error };
-                    }
-                  }),
+              result = await input.engine.chat(request, (event) => {
+                if (eventFailure !== undefined) return;
+                try {
+                  const parsedEvent = COACH_RPC_METHOD_REGISTRY.chat.eventSchema.parse(event);
+                  const notification = CoachTurnEventNotificationEnvelopeSchema.parse({
+                    jsonrpc: "2.0",
+                    method: "coach.turnEvent",
+                    params: {
+                      requestId: generic.data.id,
+                      requestMethod: "chat",
+                      turnId: parsedEvent.turnId,
+                      event: parsedEvent,
+                    },
+                  });
+                  void enqueueSerialized(state, serializeCoachRpcEnvelope(notification));
+                } catch (error) {
+                  eventFailure = { error };
+                }
               });
             } catch (error) {
               if (error instanceof DetachedSessionRequestError) deliveryDetached = true;
@@ -936,7 +947,7 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
             }
             break;
         }
-        if (deliveryDetached) return;
+        if (deliveryDetached || state.detached) return;
         let terminal: string;
         const failure = invocationFailure ?? eventFailure;
         if (failure !== undefined) {
@@ -961,15 +972,35 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
         }
         await enqueueSerialized(state, terminal);
       } finally {
-        state.activeIds.delete(key);
+        state.activeIds.delete(requestIdKey);
       }
-    })();
+    };
+    const invocationKey =
+      registry.wireName === "chat" ||
+      registry.wireName === "resetSession" ||
+      registry.wireName === "hasSession"
+        ? (params.data as { readonly chatId: string }).chatId
+        : undefined;
+    let task: Promise<void>;
+    try {
+      task = invocations.invoke(
+        { key: invocationKey, signal: state.detachController.signal },
+        runRequest,
+      );
+    } catch (error) {
+      state.activeIds.delete(requestIdKey);
+      void enqueueSerialized(
+        state,
+        error instanceof DaemonAdmissionClosedError
+          ? ordinaryError(generic.data.id, -32_005, "daemon-upgrading")
+          : internalError(generic.data.id, error),
+      );
+      return;
+    }
     state.requestTasks.add(task);
-    coachingTasks.add(task);
     void task
       .finally(() => {
         state.requestTasks.delete(task);
-        coachingTasks.delete(task);
       })
       .catch(() => {});
   };
@@ -1095,8 +1126,11 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
     close() {
       closePromise ??= (async () => {
         closing = true;
-        acceptingCoaching = false;
+        const fence = invocations.closeAdmission();
+        fence.seal();
         input.healthState?.setHealthy(false);
+        await input.beforeInvocationDrain?.();
+        await fence.drain();
         for (const state of clients) {
           clearAuthTimer(state);
           if (!state.authenticated) {

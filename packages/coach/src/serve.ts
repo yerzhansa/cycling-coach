@@ -1,6 +1,9 @@
 import { EXIT_SUCCESS, type DaemonOwner, type ExitCode } from "@enduragent/coach-contract";
 import { createDaemonHealthState, createHealthzRequestHandler } from "./daemon/healthz-server.js";
 import { createCoachRpcServer, ensureDaemonToken } from "./daemon/rpc-server.js";
+import { createInvocationCoordinator } from "./daemon/invocation-coordinator.js";
+import { createDesktopTelegramController } from "./desktop-telegram-controller.js";
+import { createDesktopTelegramRuntimeFactory } from "./desktop-telegram-runtime.js";
 import type { LocalCoachLifecycle } from "./local-runner.js";
 import { createPackagedSelfTestOperation } from "./packaged-self-test.js";
 
@@ -16,6 +19,9 @@ export interface CoachServeDependencies {
   readonly createRpcServer: typeof createCoachRpcServer;
   readonly createHealthzHandler: typeof createHealthzRequestHandler;
   readonly createHealthState: typeof createDaemonHealthState;
+  readonly createInvocations: typeof createInvocationCoordinator;
+  readonly createTelegramController: typeof createDesktopTelegramController;
+  readonly createTelegramRuntimeFactory: typeof createDesktopTelegramRuntimeFactory;
 }
 
 const defaultDependencies: CoachServeDependencies = {
@@ -23,6 +29,9 @@ const defaultDependencies: CoachServeDependencies = {
   createRpcServer: createCoachRpcServer,
   createHealthzHandler: createHealthzRequestHandler,
   createHealthState: createDaemonHealthState,
+  createInvocations: createInvocationCoordinator,
+  createTelegramController: createDesktopTelegramController,
+  createTelegramRuntimeFactory: createDesktopTelegramRuntimeFactory,
 };
 
 export async function runCoachServe(
@@ -48,6 +57,14 @@ export async function runCoachServe(
     if (aborted) return EXIT_SUCCESS;
     const spendMeter = input.lifecycle.spendMeter;
     const healthState = dependencies.createHealthState();
+    const invocations = dependencies.createInvocations();
+    const telegram = dependencies.createTelegramController({
+      createRuntime: dependencies.createTelegramRuntimeFactory({
+        lifecycle: input.lifecycle,
+        invocations,
+        appVersion: input.appVersion,
+      }),
+    });
     const rpc = dependencies.createRpcServer({
       engine: input.lifecycle.engine,
       operations: input.lifecycle.operations,
@@ -60,9 +77,25 @@ export async function runCoachServe(
       owner: input.owner ?? "unmanaged-foreground",
       athleteHome: input.lifecycle.home.root,
       healthState,
+      invocations,
+      beforeInvocationDrain: async () => {
+        await telegram.stopPolling();
+        await telegram.drainPending();
+      },
+      afterInvocationDrainRefusal: () => telegram.resumePolling(),
     });
+    const quiesce = async (): Promise<void> => {
+      const fence = invocations.closeAdmission();
+      fence.seal();
+      healthState.setHealthy(false);
+      await telegram.stopPolling();
+      await telegram.drainPending();
+      await fence.drain();
+    };
     if (aborted) {
+      await quiesce();
       await rpc.close();
+      await telegram.close();
       return EXIT_SUCCESS;
     }
     let binding: Awaited<ReturnType<LocalCoachLifecycle["listener"]["bind"]>>;
@@ -75,15 +108,19 @@ export async function runCoachServe(
         upgrade: rpc.handleUpgrade,
       });
     } catch (error) {
+      await quiesce().catch(() => {});
       await rpc.close().catch(() => {});
+      await telegram.close().catch(() => {});
       throw error;
     }
     if (!aborted) await Promise.race([abortPromise, rpc.shutdownRequested]);
+    await quiesce();
     let bindingClose: Promise<void>;
     try {
       bindingClose = binding.close();
     } catch (error) {
       await rpc.close().catch(() => {});
+      await telegram.close().catch(() => {});
       throw error;
     }
     let cleanupError: unknown;
@@ -94,6 +131,11 @@ export async function runCoachServe(
     }
     try {
       await bindingClose;
+    } catch (error) {
+      cleanupError ??= error;
+    }
+    try {
+      await telegram.close();
     } catch (error) {
       cleanupError ??= error;
     }

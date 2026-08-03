@@ -176,6 +176,22 @@ describe("gateMutatingTool", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
+  it("executes directly when trusted ingress policy does not require confirmation", async () => {
+    const result = { saved: true };
+    const execute = vi.fn(async () => result);
+    const gate = new ConfirmationGate();
+    const confirmations = createToolConfirmationPort({
+      gate,
+      summarizers: { plan_save: async () => ({ summary: "Save plan" }) },
+      requiresConfirmation: ({ chatId }) => chatId.startsWith("telegram:"),
+    });
+    const wrapped = gateMutatingTool("plan_save", fakeTool(execute), confirmations);
+
+    await expect(wrapped.execute!({}, turnOptions("desktop") as never)).resolves.toBe(result);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(gate.peek("desktop")).toBeUndefined();
+  });
+
   it("fails closed without chat context and passes blocks through verbatim", async () => {
     const execute = vi.fn();
     const gate = new ConfirmationGate();

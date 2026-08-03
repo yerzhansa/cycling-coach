@@ -1,4 +1,5 @@
 import type { CoachEngine, CoachOperations } from "@enduragent/coach-contract";
+import type { ConfirmationGate } from "@enduragent/core";
 import { prepareAthleteHome, type AthleteHome } from "@enduragent/kernel-node/home";
 import type { WriterProtocolListener } from "@enduragent/kernel-node/lock";
 import { createLocalCoachComposition, type LocalCoachComposition } from "./composition.js";
@@ -16,6 +17,7 @@ export interface LocalCoachLifecycle {
   readonly engine: CoachEngine;
   readonly operations: CoachOperations;
   readonly spendMeter: SpendMeterService;
+  readonly confirmations: Pick<ConfirmationGate, "peek" | "confirm" | "cancel">;
   readonly listener: WriterProtocolListener;
   close(): Promise<void>;
 }
@@ -142,6 +144,7 @@ export async function withLocalCoach<T>(
                 engine: publishedLifecycle.engine,
                 operations: publishedLifecycle.operations,
                 spendMeter: publishedLifecycle.spendMeter,
+                confirmations: publishedLifecycle.confirmations,
                 listener: context.listener,
                 close: () => publishedLifecycle.close(),
               }),

@@ -3,7 +3,10 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CHAT_COALESCE_MS } from "../src/channels/telegram.js";
-import type { TelegramOperationsCapabilities } from "../src/channels/telegram-host.js";
+import type {
+  TelegramInvocationCapabilities,
+  TelegramOperationsCapabilities,
+} from "../src/channels/telegram-host.js";
 
 let dataDir: string;
 
@@ -50,6 +53,7 @@ interface BuildBotResult {
 async function buildBot(
   overrides: Partial<StubEngine> = {},
   operations?: TelegramOperationsCapabilities,
+  invocations?: TelegramInvocationCapabilities,
 ): Promise<BuildBotResult> {
   const bot: FakeBot = {
     api: {
@@ -86,6 +90,7 @@ async function buildBot(
     },
     authorization: { isPrimaryOperator: vi.fn(async () => false) },
     ...(operations === undefined ? {} : { operations }),
+    ...(invocations === undefined ? {} : { invocations }),
     release: {
       updatePolicy: "desktop-owned" as const,
       updateDescription: "Check for updates",
@@ -388,6 +393,64 @@ describe("inbound coalescing (fake timers)", () => {
       chatId: "telegram:777",
       message: "about to shut down",
     });
+  });
+
+  it("keeps the first fragment's admission reservation through a shutdown drain", async () => {
+    let admissionOpen = true;
+    const run = vi.fn(<T>(operation: () => Promise<T>) => operation());
+    const cancel = vi.fn();
+    const reserve = vi.fn((_chatId: string) => {
+      if (!admissionOpen) throw new Error("admission closed");
+      return { run, cancel };
+    });
+    const { bot, engine, drainPending } = await buildBot({}, undefined, { reserve });
+    const handler = getMessageText(bot);
+
+    await handler(makeCtx({ message: { text: "accepted before shutdown" } }));
+    await handler(makeCtx({ message: { text: "and still accepted" } }));
+    expect(reserve).toHaveBeenCalledOnce();
+    expect(reserve).toHaveBeenCalledWith("telegram:777");
+    expect(run).not.toHaveBeenCalled();
+
+    admissionOpen = false;
+    await drainPending();
+
+    expect(run).toHaveBeenCalledOnce();
+    expect(engine.chat).toHaveBeenCalledWith({
+      chatId: "telegram:777",
+      message: "accepted before shutdown\nand still accepted",
+    });
+    expect(cancel).not.toHaveBeenCalled();
+
+    await expect(
+      handler(makeCtx({ chat: { id: 778 }, message: { text: "too late" } })),
+    ).rejects.toThrow("admission closed");
+    expect(engine.chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs first-message session lookup inside the admission reservation", async () => {
+    const run = vi.fn(<T>(operation: () => Promise<T>) => operation());
+    const cancel = vi.fn();
+    const reserve = vi.fn(() => ({ run, cancel }));
+    const hasSession = vi.fn(async () => {
+      throw new Error("session lookup failed");
+    });
+    const { bot, engine, drainPending } = await buildBot({ hasSession }, undefined, { reserve });
+    const ctx = makeCtx();
+
+    await getMessageText(bot)(ctx);
+    expect(hasSession).not.toHaveBeenCalled();
+    await drainPending();
+
+    expect(reserve).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledOnce();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(hasSession).toHaveBeenCalledOnce();
+    expect(engine.chat).not.toHaveBeenCalled();
+    expect(ctx.reply).toHaveBeenCalledWith(
+      "Sorry, something went wrong. Please try again.",
+      undefined,
+    );
   });
 
   it("each fragment fires one best-effort typing action during the window; the flushed turn still heartbeats", async () => {

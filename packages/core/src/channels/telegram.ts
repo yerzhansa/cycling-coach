@@ -8,7 +8,7 @@ import { sendSnapshotOutput } from "../reference/sync/send-snapshot.js";
 import { createSubsystemLogger } from "../logging/index.js";
 import { truncateUtf16Safe } from "../text-truncate.js";
 import { formatConfirmOutcome } from "../agent/confirmation-gate.js";
-import type { TelegramHostCapabilities } from "./telegram-host.js";
+import type { TelegramHostCapabilities, TelegramInvocationReservation } from "./telegram-host.js";
 
 // Upper bound on how long /update waits for in-flight turns to finish before
 // self-updating. A hung turn must never wedge the update, so the drain races a
@@ -192,6 +192,7 @@ export interface CreateTelegramChannelInput {
   readonly engine: CoachEngine;
   readonly host: TelegramHostCapabilities;
   readonly dataDir: string;
+  readonly onStart?: () => void;
 }
 
 export function createTelegramBot(input: CreateTelegramChannelInput): TelegramChannelRuntime {
@@ -205,6 +206,22 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
   const log = createSubsystemLogger("telegram", dataDir);
   const greeted = new Set<number>();
   const greetingChecks = new Map<number, Promise<void>>();
+  const reserveInvocation = (chatId: string): TelegramInvocationReservation =>
+    host.invocations?.reserve(chatId) ?? {
+      run: (operation) => operation(),
+      cancel: () => undefined,
+    };
+  const acknowledgeBeforeInvocation = async (
+    reservation: TelegramInvocationReservation,
+    acknowledge: () => Promise<unknown>,
+  ): Promise<void> => {
+    try {
+      await acknowledge();
+    } catch (error) {
+      reservation.cancel();
+      throw error;
+    }
+  };
 
   // Durable update-offset store. Normal polling processes pending updates (so a
   // message sent while the bot was down still arrives); the guard below dedupes
@@ -290,12 +307,19 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
   // answers on a live ctx, and threads to the last fragment's message id.
   interface ChatBuffer {
     fragments: string[];
+    reservation: TelegramInvocationReservation;
     reply: (text: string, options?: Record<string, unknown>) => Promise<unknown>;
     replyWithChatAction: (action: "typing") => Promise<unknown>;
     replyToMessageId?: number;
     timer: ReturnType<typeof setTimeout>;
   }
   const chatBuffers = new Map<number, ChatBuffer>();
+
+  const reserveMessageInvocation = (chatId: number): TelegramInvocationReservation => {
+    const buffered = chatBuffers.get(chatId)?.reservation;
+    if (buffered !== undefined) return buffered;
+    return reserveInvocation(`telegram:${chatId}`);
+  };
 
   // Flush buffered fragments FIRST (synchronously — flushing dispatches onto
   // `pending`, so the Promise.all snapshot below includes the flushed turns),
@@ -331,6 +355,8 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
     chatId: string;
     message: string;
     genericReply: string;
+    reservation: TelegramInvocationReservation;
+    greetingChatId?: number;
     replyToMessageId?: number;
   }): void {
     dispatch(async () => {
@@ -341,23 +367,28 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
       );
       let response: string;
       try {
-        const request = { chatId: opts.chatId, message: opts.message };
-        const operations = host.operations;
-        const chatResponse = await enqueueEngineStart(
-          opts.chatId,
-          operations === undefined
-            ? () => ({ result: engine.chat(request) })
-            : async () => {
-                const turn = await operations.resolveTurnContext();
-                return {
-                  result: engine.chat({
-                    ...request,
-                    ...(turn === undefined ? {} : { turn }),
-                  }),
-                };
-              },
-        );
-        response = chatResponse.text;
+        response = await opts.reservation.run(async () => {
+          if (opts.greetingChatId !== undefined) {
+            await ensureGreeting({ chat: { id: opts.greetingChatId }, reply: opts.ctx.reply });
+          }
+          const request = { chatId: opts.chatId, message: opts.message };
+          const operations = host.operations;
+          const chatResponse = await enqueueEngineStart(
+            opts.chatId,
+            operations === undefined
+              ? () => ({ result: engine.chat(request) })
+              : async () => {
+                  const turn = await operations.resolveTurnContext();
+                  return {
+                    result: engine.chat({
+                      ...request,
+                      ...(turn === undefined ? {} : { turn }),
+                    }),
+                  };
+                },
+          );
+          return chatResponse.text;
+        });
       } catch (err) {
         log.error("command_failed", err, { command: opts.command, chatId: opts.chatId });
         const { kind, athleteMessage } = classifyAgentError(err);
@@ -404,27 +435,57 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
       chatId: `telegram:${chatId}`,
       message: buf.fragments.join("\n"),
       genericReply: "Sorry, something went wrong. Please try again.",
+      reservation: buf.reservation,
+      greetingChatId: host.invocations === undefined ? undefined : chatId,
       replyToMessageId: buf.replyToMessageId,
     });
   }
 
-  function bufferChatMessage(ctx: {
+  async function ensureGreeting(ctx: {
     chat: { id: number };
-    message: { text: string; message_id?: number };
     reply: (text: string, options?: Record<string, unknown>) => Promise<unknown>;
-    replyWithChatAction: (action: "typing") => Promise<unknown>;
-  }): void {
+  }): Promise<void> {
+    if (greeted.has(ctx.chat.id)) return;
+    let check = greetingChecks.get(ctx.chat.id);
+    if (check === undefined) {
+      const chatId = `telegram:${ctx.chat.id}`;
+      check = (async () => {
+        const { hasSession } = await engine.hasSession({ chatId });
+        if (!hasSession) await ctx.reply(welcomeMessage);
+        greeted.add(ctx.chat.id);
+      })();
+      greetingChecks.set(ctx.chat.id, check);
+      const cleanup = () => {
+        if (greetingChecks.get(ctx.chat.id) === check) greetingChecks.delete(ctx.chat.id);
+      };
+      void check.then(cleanup, cleanup);
+    }
+    await check;
+  }
+
+  function bufferChatMessage(
+    ctx: {
+      chat: { id: number };
+      message: { text: string; message_id?: number };
+      reply: (text: string, options?: Record<string, unknown>) => Promise<unknown>;
+      replyWithChatAction: (action: "typing") => Promise<unknown>;
+    },
+    reservation: TelegramInvocationReservation,
+  ): void {
     const text = ctx.message.text;
     const chatId = ctx.chat.id;
+    const invocationChatId = `telegram:${chatId}`;
     if (text.startsWith("/")) {
       // Unregistered-command fallthrough: never buffered. The turn runs
       // immediately so a command can never be coalesced into free-form text.
       runTurn({
         ctx,
         command: "chat",
-        chatId: `telegram:${chatId}`,
+        chatId: invocationChatId,
         message: text,
         genericReply: "Sorry, something went wrong. Please try again.",
+        reservation,
+        greetingChatId: host.invocations === undefined ? undefined : chatId,
         replyToMessageId: ctx.message.message_id,
       });
       return;
@@ -437,6 +498,7 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
     timer.unref?.();
     chatBuffers.set(chatId, {
       fragments,
+      reservation: existing?.reservation ?? reservation,
       reply: (t, o) => ctx.reply(t, o),
       replyWithChatAction: (a) => ctx.replyWithChatAction(a),
       replyToMessageId: ctx.message.message_id,
@@ -484,10 +546,13 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
     greeted.add(ctx.chat.id);
     let memoryFlushed = true;
     const chatId = `telegram:${ctx.chat.id}`;
+    const reservation = reserveInvocation(chatId);
     try {
-      ({ memoryFlushed } = await enqueueEngineStart(chatId, () => ({
-        result: engine.resetSession({ chatId }),
-      })));
+      ({ memoryFlushed } = await reservation.run(() =>
+        enqueueEngineStart(chatId, () => ({
+          result: engine.resetSession({ chatId }),
+        })),
+      ));
       resendCache.delete(chatId);
     } catch (err) {
       log.error("command_failed", err, { command: "start", chatId });
@@ -502,54 +567,68 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
   });
 
   bot.command("plan", async (ctx) => {
-    await ctx.reply("Analyzing your data and building a plan...");
     const chatId = `telegram:${ctx.chat.id}`;
+    const reservation = reserveInvocation(chatId);
+    await acknowledgeBeforeInvocation(reservation, () =>
+      ctx.reply("Analyzing your data and building a plan..."),
+    );
     runTurn({
       ctx,
       command: "plan",
       chatId,
       message: "/plan",
       genericReply: "Sorry, something went wrong generating your plan. Please try again.",
+      reservation,
       replyToMessageId: ctx.message?.message_id,
     });
   });
 
   bot.command("workout", async (ctx) => {
-    await ctx.reply("Checking your form and plan...");
     const chatId = `telegram:${ctx.chat.id}`;
+    const reservation = reserveInvocation(chatId);
+    await acknowledgeBeforeInvocation(reservation, () =>
+      ctx.reply("Checking your form and plan..."),
+    );
     runTurn({
       ctx,
       command: "workout",
       chatId,
       message: "/workout",
       genericReply: "Sorry, something went wrong. Please try again.",
+      reservation,
       replyToMessageId: ctx.message?.message_id,
     });
   });
 
   bot.command("status", async (ctx) => {
-    await ctx.reply("Fetching your fitness data...");
     const chatId = `telegram:${ctx.chat.id}`;
+    const reservation = reserveInvocation(chatId);
+    await acknowledgeBeforeInvocation(reservation, () =>
+      ctx.reply("Fetching your fitness data..."),
+    );
     runTurn({
       ctx,
       command: "status",
       chatId,
       message: "/status",
       genericReply: "Sorry, something went wrong. Please try again.",
+      reservation,
       replyToMessageId: ctx.message?.message_id,
     });
   });
 
   if (host.operations !== undefined) {
     bot.command("sync", async (ctx) => {
-      await ctx.reply("Syncing training data from intervals.icu...");
+      const chatId = `telegram:${ctx.chat.id}`;
+      const reservation = reserveInvocation(chatId);
+      await acknowledgeBeforeInvocation(reservation, () =>
+        ctx.reply("Syncing training data from intervals.icu..."),
+      );
       try {
-        const result = await host.operations!.sync({
-          chatId: `telegram:${ctx.chat.id}`,
-        });
+        const result = await reservation.run(() => host.operations!.sync({ chatId }));
         await ctx.reply(result.text);
       } catch (err) {
-        log.error("command_failed", err, { command: "sync", chatId: `telegram:${ctx.chat.id}` });
+        log.error("command_failed", err, { command: "sync", chatId });
         await ctx.reply("Sorry, something went wrong syncing. Please try again.");
       }
     });
@@ -604,10 +683,13 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
 
   bot.command("review", async (ctx) => {
     const args = (ctx.match ?? "").trim();
-    await ctx.reply(
-      args ? `Reviewing your last session (${args})...` : "Reviewing your last session...",
-    );
     const chatId = `telegram:${ctx.chat.id}`;
+    const reservation = reserveInvocation(chatId);
+    await acknowledgeBeforeInvocation(reservation, () =>
+      ctx.reply(
+        args ? `Reviewing your last session (${args})...` : "Reviewing your last session...",
+      ),
+    );
     const message = args ? `/review ${args}` : "/review";
     runTurn({
       ctx,
@@ -615,6 +697,7 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
       chatId,
       message,
       genericReply: "Sorry, something went wrong reviewing your session. Please try again.",
+      reservation,
       replyToMessageId: ctx.message?.message_id,
     });
   });
@@ -697,8 +780,13 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
 
   bot.on("callback_query:data", async (ctx) => {
     const match = /^cg:(y|n):(.+)$/.exec(ctx.callbackQuery.data);
-    await ctx.answerCallbackQuery();
-    if (match === null || ctx.chat === undefined) return;
+    if (match === null || ctx.chat === undefined) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    const chatId = `telegram:${ctx.chat.id}`;
+    const reservation = reserveInvocation(chatId);
+    await acknowledgeBeforeInvocation(reservation, () => ctx.answerCallbackQuery());
     try {
       await ctx.editMessageReplyMarkup();
     } catch {
@@ -706,19 +794,18 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
     }
     const choice = match[1];
     const nonce = match[2] ?? "";
-    const chatId = `telegram:${ctx.chat.id}`;
     dispatch(async () => {
-      if (choice === "n") {
-        const outcome = await host.confirmations.cancel({ chatId, nonce });
-        await ctx.reply(
-          outcome === "canceled"
+      const reply = await reservation.run(async () => {
+        if (choice === "n") {
+          const outcome = await host.confirmations.cancel({ chatId, nonce });
+          return outcome === "canceled"
             ? "Canceled — nothing was changed."
-            : "That proposal expired — ask me again and I'll re-propose.",
-        );
-        return;
-      }
-      const outcome = await host.confirmations.confirm({ chatId, nonce });
-      await ctx.reply(formatConfirmOutcome(outcome));
+            : "That proposal expired — ask me again and I'll re-propose.";
+        }
+        const outcome = await host.confirmations.confirm({ chatId, nonce });
+        return formatConfirmOutcome(outcome);
+      });
+      await ctx.reply(reply);
     });
   });
 
@@ -749,26 +836,8 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
       return;
     }
 
-    // Welcome newcomers on their very first message. `greeted` is in-memory,
-    // so after a process restart we consult the on-disk session to tell
-    // returning users from true newcomers.
-    if (!greeted.has(ctx.chat.id)) {
-      let check = greetingChecks.get(ctx.chat.id);
-      if (check === undefined) {
-        check = (async () => {
-          const { hasSession } = await engine.hasSession({ chatId });
-          if (!hasSession) await ctx.reply(welcomeMessage);
-          greeted.add(ctx.chat.id);
-        })();
-        greetingChecks.set(ctx.chat.id, check);
-        const cleanup = () => {
-          if (greetingChecks.get(ctx.chat.id) === check) greetingChecks.delete(ctx.chat.id);
-        };
-        void check.then(cleanup, cleanup);
-      }
-      await check;
-    }
-
+    const reservation = reserveMessageInvocation(ctx.chat.id);
+    if (host.invocations === undefined) await ensureGreeting(ctx);
     // One best-effort typing action per fragment so the athlete sees activity
     // during the debounce window; only the LLM turn is debounced, never the
     // signal. Fire-and-forget: a failure can never reach the handler's failure
@@ -776,7 +845,7 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
     void Promise.resolve()
       .then(() => ctx.replyWithChatAction("typing"))
       .catch(() => log.debug("typing_action_failed", { command: "chat", chatId }));
-    bufferChatMessage(ctx);
+    bufferChatMessage(ctx, reservation);
   });
 
   bot.catch(async (botError) => {
@@ -794,7 +863,8 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
   });
 
   return {
-    start: () => bot.start(),
+    start: () =>
+      input.onStart === undefined ? bot.start() : bot.start({ onStart: input.onStart }),
     stop: () => bot.stop(),
     drainPending,
     sendMessage: (chatId, text) => bot.api.sendMessage(chatId, text),

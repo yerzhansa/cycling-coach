@@ -275,6 +275,9 @@ export function gateMutatingTool(
       if (chatId === undefined || chatId === "") return { error: "confirmation_unavailable" };
       const run = () =>
         (inner as (i: unknown, o: unknown) => Promise<unknown>)(input, {} as never);
+      if (!confirmations.requiresConfirmation({ chatId, toolName: name })) {
+        return (prepareRun === undefined ? run : prepareRun(name, ctx, run))();
+      }
       return confirmations.propose({
         chatId,
         toolName: name,
