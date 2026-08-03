@@ -56,6 +56,12 @@ interface AuthBridge {
   chatgptLogin(input: unknown): Promise<unknown>;
   claudeCliStatus(): Promise<unknown>;
   claudeCliRecheck(): Promise<unknown>;
+  telegramStatus(): Promise<unknown>;
+  pasteTelegramTokenFromClipboard(): Promise<unknown>;
+  enableTelegram(): Promise<unknown>;
+  disableTelegram(): Promise<unknown>;
+  removeTelegram(): Promise<unknown>;
+  reconcileTelegram(): Promise<unknown>;
   getUpdateState(): Promise<unknown>;
   checkForUpdates(): Promise<unknown>;
   restartToUpdate(): Promise<unknown>;
@@ -214,6 +220,8 @@ describe("desktop preload ChatGPT auth", () => {
         "claudeCliStatus",
         "credentialStatuses",
         "deleteCredential",
+        "disableTelegram",
+        "enableTelegram",
         "getUpdateState",
         "getDaemonConnection",
         "getTranscriptPage",
@@ -223,9 +231,13 @@ describe("desktop preload ChatGPT auth", () => {
         "checkForUpdates",
         "onDroppedImportFiles",
         "onUpdateState",
+        "pasteTelegramTokenFromClipboard",
+        "reconcileTelegram",
         "releaseNotes",
+        "removeTelegram",
         "restartToUpdate",
         "retryFailedCredentials",
+        "telegramStatus",
         "writeCredential",
       ].sort(),
     );
@@ -234,6 +246,41 @@ describe("desktop preload ChatGPT auth", () => {
 
   it("keeps the release-gate smoke bridge list byte-equal to the sorted public bridge", () => {
     expect(pinnedSmokeBridgeKeys()).toEqual(Object.keys(bridge).sort());
+  });
+
+  it("exposes only semantic zero-argument Telegram controls and validates redacted status", async () => {
+    const status = {
+      desiredState: "enabled",
+      state: "online",
+      credentialConfigured: true,
+      botUsername: "synthetic_bot",
+      retryCount: 0,
+    };
+    mocks.invoke.mockResolvedValue(status);
+
+    await expect(bridge.telegramStatus()).resolves.toEqual(status);
+    await expect(bridge.pasteTelegramTokenFromClipboard()).resolves.toEqual(status);
+    await expect(bridge.enableTelegram()).resolves.toEqual(status);
+    await expect(bridge.disableTelegram()).resolves.toEqual(status);
+    await expect(bridge.removeTelegram()).resolves.toEqual(status);
+    await expect(bridge.reconcileTelegram()).resolves.toEqual(status);
+    expect(mocks.invoke.mock.calls).toEqual([
+      ["desktop:telegram:status"],
+      ["desktop:telegram:paste-credential"],
+      ["desktop:telegram:enable"],
+      ["desktop:telegram:disable"],
+      ["desktop:telegram:remove"],
+      ["desktop:telegram:reconcile"],
+    ]);
+
+    mocks.invoke.mockClear();
+    await expect(
+      (bridge.telegramStatus as unknown as (...args: unknown[]) => Promise<unknown>)("token"),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(mocks.invoke).not.toHaveBeenCalled();
+
+    mocks.invoke.mockResolvedValue({ ...status, token: "must-not-cross" });
+    await expect(bridge.telegramStatus()).rejects.toBeInstanceOf(TypeError);
   });
 
   it("validates and copies strict bounded transcript pages", async () => {
@@ -517,8 +564,7 @@ describe("desktop preload ChatGPT auth", () => {
   });
 
   it("rejects malformed release note unions, strings, counts, and totals", async () => {
-    const tagUrl =
-      "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23";
+    const tagUrl = "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23";
     const malformed = [
       null,
       {
@@ -590,8 +636,7 @@ describe("desktop preload ChatGPT auth", () => {
         status: "available",
         version: "2026.7.23",
         notes: [],
-        releaseUrl:
-          "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.22",
+        releaseUrl: "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.22",
       },
       {
         status: "unavailable",
@@ -601,8 +646,7 @@ describe("desktop preload ChatGPT auth", () => {
       {
         status: "unavailable",
         version: null,
-        releaseUrl:
-          "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23",
+        releaseUrl: "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23",
       },
     ];
 
@@ -769,9 +813,9 @@ describe("desktop preload ChatGPT auth", () => {
       expect(providerOrder).toContain(provider);
       expect(cataloguedProviders).not.toContain(provider);
     }
-    expect([...providerOrder].filter((provider) => !cataloguedProviders.includes(provider))).toEqual(
-      offCatalogue,
-    );
+    expect(
+      [...providerOrder].filter((provider) => !cataloguedProviders.includes(provider)),
+    ).toEqual(offCatalogue);
     expect(cataloguedProviders).toEqual(
       [...providerOrder].filter((provider) => !offCatalogue.includes(provider)),
     );

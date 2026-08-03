@@ -4,9 +4,11 @@ import { fileURLToPath } from "node:url";
 import { connectCoachClient } from "@enduragent/coach-client";
 import { checkIntervalsStoreOwnerAtPath } from "@enduragent/coach/backfill";
 import { prepareDesktopAthleteHome } from "@enduragent/coach/enduragent";
+import { AthleteHomeIdentitySchema } from "@enduragent/coach-contract";
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   safeStorage,
@@ -71,6 +73,16 @@ import { createDesktopQuitCoordinator } from "./quit-coordinator.js";
 import { createDesktopUpdateController } from "./update-controller.js";
 import { isDesktopUpdateReleaseEligible } from "./update-eligibility.js";
 import { installDesktopUpdateIpc } from "./update-ipc.js";
+import {
+  createTelegramControlCoordinator,
+  type TelegramDaemonBinding,
+} from "./telegram-control.js";
+import {
+  createTelegramCredentialVault,
+  TELEGRAM_CREDENTIAL_DIRECTORY_NAME,
+} from "./telegram-credential-vault.js";
+import { createTelegramDaemonBinding } from "./telegram-daemon-binding.js";
+import { installDesktopTelegramIpc } from "./telegram-ipc.js";
 import {
   createConnectionTranscriptReader,
   installDesktopTranscriptIpc,
@@ -153,6 +165,7 @@ async function runDesktop(): Promise<void> {
   let disposeExternalLinkIpc: (() => void) | undefined;
   let disposeReleaseNotesIpc: (() => void) | undefined;
   let disposeUpdateIpc: (() => void) | undefined;
+  let disposeTelegramIpc: (() => void) | undefined;
   let disposeOnboarding: (() => void) | undefined;
   let daemonLifecycle: DesktopDaemonLifecycle | undefined;
   let shutdownPromise: Promise<void> | undefined;
@@ -184,6 +197,8 @@ async function runDesktop(): Promise<void> {
       disposeReleaseNotesIpc = undefined;
       disposeUpdateIpc?.();
       disposeUpdateIpc = undefined;
+      disposeTelegramIpc?.();
+      disposeTelegramIpc = undefined;
       updateController.close();
       disposeOnboarding?.();
       disposeOnboarding = undefined;
@@ -216,8 +231,29 @@ async function runDesktop(): Promise<void> {
       if (!quitRequested) app.exit(resolution.exitCode);
       return;
     }
-    const selectedAthleteHome = await realpath(resolveDesktopAthleteHome(environment));
+    const selectedAthleteHome = AthleteHomeIdentitySchema.parse(
+      await realpath(resolveDesktopAthleteHome(environment)),
+    );
     requireDesktopDaemonHome(selectedAthleteHome, resolution.athleteHome);
+    const telegramVault = createTelegramCredentialVault({
+      root: join(app.getPath("userData"), TELEGRAM_CREDENTIAL_DIRECTORY_NAME),
+      athleteHome: selectedAthleteHome,
+      encryption: safeStorage,
+    });
+    let activeTelegramBinding: TelegramDaemonBinding | undefined;
+    const telegramCoordinator = createTelegramControlCoordinator({
+      selectedAthleteHome: () => selectedAthleteHome,
+      vault: telegramVault,
+      daemon: {
+        current() {
+          const lifecycleState = daemonLifecycle?.snapshot();
+          return lifecycleState?.status === "ready" &&
+            activeTelegramBinding?.generation === lifecycleState.generation
+            ? activeTelegramBinding
+            : undefined;
+        },
+      },
+    });
     let window: BrowserWindow | null = null;
     let windowCreation: Promise<BrowserWindow> | undefined;
     const currentWindow = (): BrowserWindow | null =>
@@ -280,6 +316,7 @@ async function runDesktop(): Promise<void> {
         recoveringCredentialRuntime = undefined;
       }
       if (state.status === "closing" || state.status === "terminal") {
+        activeTelegramBinding = undefined;
         for (const slot of credentialRuntimeState.keys()) {
           credentialRuntimeState.set(slot, "failed");
         }
@@ -301,6 +338,10 @@ async function runDesktop(): Promise<void> {
       prepareReady: ({ connection, signal }) => reapplyCredentials(connection, signal),
       onTransition: publishLifecycle,
       onReady({ previous, current }) {
+        activeTelegramBinding = createTelegramDaemonBinding(current, selectedAthleteHome);
+        if (current.supervision === "app-supervised") {
+          void telegramCoordinator.reconcile();
+        }
         const prepared = preparedRuntimeBindings.get(current.generation);
         if (prepared !== undefined) {
           activeRuntimeBinding = prepared.binding;
@@ -554,6 +595,14 @@ async function runDesktop(): Promise<void> {
     });
     daemonLifecycle.start();
     await vault.reapplyConfigured();
+    const initialTelegramConnection = daemonLifecycle.connection();
+    activeTelegramBinding = createTelegramDaemonBinding(
+      initialTelegramConnection,
+      selectedAthleteHome,
+    );
+    if (initialTelegramConnection.supervision === "app-supervised") {
+      void telegramCoordinator.reconcile();
+    }
     await installDesktopProtocol({
       session: session.defaultSession,
       currentDaemonPort: () => daemonLifecycle!.currentPort(),
@@ -669,6 +718,13 @@ async function runDesktop(): Promise<void> {
       currentWindow: () => mainWindow.current() ?? undefined,
       isTrusted: (event) => isTrustedConnectionRequest(event, mainWindow.current() ?? undefined),
       controller: updateController,
+    });
+    disposeTelegramIpc = installDesktopTelegramIpc({
+      ipcMain,
+      clipboard,
+      coordinator: telegramCoordinator,
+      vault: telegramVault,
+      isTrusted: (event) => isTrustedConnectionRequest(event, mainWindow.current() ?? undefined),
     });
     residency = createDesktopResidency({
       app,

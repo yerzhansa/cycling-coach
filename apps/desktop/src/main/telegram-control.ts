@@ -401,6 +401,9 @@ export function createTelegramControlCoordinator(
           return failure(desiredState, "telegram-daemon-unavailable");
         }
         if (!isCurrent(active)) return failure(desiredState, "telegram-stale-operation");
+        if (desiredState === "enabled" && active.supervision === "attached") {
+          return { desiredState, state: "transfer-required" };
+        }
         const current = await active.getTelegramStatus({});
         if (!isCurrent(active)) return failure(desiredState, "telegram-stale-operation");
         return sanitizeDaemonStatus(current, desiredState);

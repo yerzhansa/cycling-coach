@@ -7,6 +7,12 @@ import {
   DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL,
   DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL,
   DESKTOP_TRANSCRIPT_PAGE_CHANNEL,
+  DESKTOP_TELEGRAM_DISABLE_CHANNEL,
+  DESKTOP_TELEGRAM_ENABLE_CHANNEL,
+  DESKTOP_TELEGRAM_PASTE_CREDENTIAL_CHANNEL,
+  DESKTOP_TELEGRAM_RECONCILE_CHANNEL,
+  DESKTOP_TELEGRAM_REMOVE_CHANNEL,
+  DESKTOP_TELEGRAM_STATUS_CHANNEL,
   DESKTOP_UPDATE_CHECK_CHANNEL,
   DESKTOP_UPDATE_GET_CHANNEL,
   DESKTOP_UPDATE_RESTART_CHANNEL,
@@ -100,6 +106,29 @@ const CLAUDE_CLI_STATES = new Set([
   "disabled",
 ]);
 const IMPORT_EXTENSIONS = new Set([".fit", ".tcx", ".gpx"]);
+const TELEGRAM_CONTROL_STATES = new Set([
+  "disabled",
+  "waiting-for-credential",
+  "starting",
+  "online",
+  "offline-retrying",
+  "conflict",
+  "invalid-token",
+  "transfer-required",
+  "failed",
+]);
+const TELEGRAM_CONTROL_ERROR_CODES = new Set([
+  "telegram-invalid-token",
+  "telegram-polling-conflict",
+  "telegram-start-failed",
+  "telegram-credential-storage-failed",
+  "telegram-credential-unavailable",
+  "telegram-daemon-unavailable",
+  "telegram-home-mismatch",
+  "telegram-stale-operation",
+  "telegram-control-failed",
+  "telegram-drain-required",
+]);
 const RELEASES_URL = "https://github.com/yerzhansa/enduragent/releases";
 const RELEASE_NOTES_MAX_TOTAL_BYTES = 64 * 1024;
 const TRANSCRIPT_PAGE_MAX_TURNS = 50;
@@ -809,6 +838,64 @@ function parsePaths(value: unknown): readonly string[] {
   return paths;
 }
 
+function parseTelegramStatus(value: unknown): unknown {
+  if (
+    !record(value) ||
+    (value.desiredState !== "disabled" && value.desiredState !== "enabled") ||
+    typeof value.state !== "string" ||
+    !TELEGRAM_CONTROL_STATES.has(value.state) ||
+    typeof value.credentialConfigured !== "boolean"
+  ) {
+    throw new TypeError();
+  }
+  const keys = ["credentialConfigured", "desiredState", "state"];
+  const status: Record<string, unknown> = {
+    desiredState: value.desiredState,
+    state: value.state,
+    credentialConfigured: value.credentialConfigured,
+  };
+  if (Object.hasOwn(value, "botUsername")) {
+    if (
+      typeof value.botUsername !== "string" ||
+      !/^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(value.botUsername)
+    ) {
+      throw new TypeError();
+    }
+    keys.push("botUsername");
+    status.botUsername = value.botUsername;
+  }
+  for (const field of ["since", "lastSuccessfulPollAt"] as const) {
+    if (!Object.hasOwn(value, field)) continue;
+    if (!canonicalIsoTimestamp(value[field]) || value[field].length > 40) throw new TypeError();
+    keys.push(field);
+    status[field] = value[field];
+  }
+  if (Object.hasOwn(value, "retryCount")) {
+    if (
+      !Number.isSafeInteger(value.retryCount) ||
+      (value.retryCount as number) < 0 ||
+      (value.retryCount as number) > 1_000_000
+    ) {
+      throw new TypeError();
+    }
+    keys.push("retryCount");
+    status.retryCount = value.retryCount;
+  }
+  if (Object.hasOwn(value, "errorCode")) {
+    if (typeof value.errorCode !== "string" || !TELEGRAM_CONTROL_ERROR_CODES.has(value.errorCode)) {
+      throw new TypeError();
+    }
+    keys.push("errorCode");
+    status.errorCode = value.errorCode;
+  }
+  if (!exactKeys(value, keys)) throw new TypeError();
+  return status;
+}
+
+function requireZeroArguments(args: readonly unknown[]): void {
+  if (args.length !== 0) throw new TypeError();
+}
+
 let dropDisposer: (() => void) | undefined;
 const updateListeners = new Set<(state: PreloadUpdateState) => void>();
 
@@ -879,9 +966,7 @@ contextBridge.exposeInMainWorld(
       );
     },
     listArchivedConversations: async () =>
-      parseArchivedConversations(
-        await ipcRenderer.invoke(DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL),
-      ),
+      parseArchivedConversations(await ipcRenderer.invoke(DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL)),
     getArchivedTranscriptPage: async (input: unknown) => {
       const request = parseArchivedPageRequest(input);
       return parseTranscriptPage(
@@ -919,6 +1004,32 @@ contextBridge.exposeInMainWorld(
       parseClaudeCliStatus(await ipcRenderer.invoke(DESKTOP_CLAUDE_CLI_STATUS_CHANNEL)),
     claudeCliRecheck: async () =>
       parseClaudeCliStatus(await ipcRenderer.invoke(DESKTOP_CLAUDE_CLI_RECHECK_CHANNEL)),
+    telegramStatus: async (...args: unknown[]) => {
+      requireZeroArguments(args);
+      return parseTelegramStatus(await ipcRenderer.invoke(DESKTOP_TELEGRAM_STATUS_CHANNEL));
+    },
+    pasteTelegramTokenFromClipboard: async (...args: unknown[]) => {
+      requireZeroArguments(args);
+      return parseTelegramStatus(
+        await ipcRenderer.invoke(DESKTOP_TELEGRAM_PASTE_CREDENTIAL_CHANNEL),
+      );
+    },
+    enableTelegram: async (...args: unknown[]) => {
+      requireZeroArguments(args);
+      return parseTelegramStatus(await ipcRenderer.invoke(DESKTOP_TELEGRAM_ENABLE_CHANNEL));
+    },
+    disableTelegram: async (...args: unknown[]) => {
+      requireZeroArguments(args);
+      return parseTelegramStatus(await ipcRenderer.invoke(DESKTOP_TELEGRAM_DISABLE_CHANNEL));
+    },
+    removeTelegram: async (...args: unknown[]) => {
+      requireZeroArguments(args);
+      return parseTelegramStatus(await ipcRenderer.invoke(DESKTOP_TELEGRAM_REMOVE_CHANNEL));
+    },
+    reconcileTelegram: async (...args: unknown[]) => {
+      requireZeroArguments(args);
+      return parseTelegramStatus(await ipcRenderer.invoke(DESKTOP_TELEGRAM_RECONCILE_CHANNEL));
+    },
     chooseImportFiles: async () =>
       parsePaths(await ipcRenderer.invoke(DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL)),
     releaseNotes: async () =>

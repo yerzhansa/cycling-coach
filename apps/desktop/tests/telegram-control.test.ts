@@ -215,6 +215,17 @@ describe("Telegram main-process control coordinator", () => {
     });
   });
 
+  it("keeps transfer-required durable while an enabled credential is attached elsewhere", async () => {
+    const runtime = subject({ supervision: "attached", enabled: true });
+
+    await expect(runtime.coordinator.status()).resolves.toEqual({
+      desiredState: "enabled",
+      state: "transfer-required",
+    });
+    expect(runtime.binding.getTelegramStatus).not.toHaveBeenCalled();
+    expect(runtime.vault.applyStoredCredential).not.toHaveBeenCalled();
+  });
+
   it("returns only allowlisted status metadata", async () => {
     const runtime = subject({ enabled: true });
     vi.mocked(runtime.binding.getTelegramStatus).mockResolvedValueOnce({

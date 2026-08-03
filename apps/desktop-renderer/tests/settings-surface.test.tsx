@@ -20,6 +20,10 @@ import { createAthleteSettingsController } from "../src/settings/athlete-control
 import { createCredentialSettingsController } from "../src/settings/credential-controller.js";
 import { createProviderModelSettingsController } from "../src/settings/provider-model-controller.js";
 import { createSessionSettingsController } from "../src/settings/session-controller.js";
+import {
+  createTelegramSettingsController,
+  type TelegramControlStatus,
+} from "../src/settings/telegram-controller.js";
 import { createSpendMeterController } from "../src/spend-meter/controller.js";
 import { createReleaseNotesSettingsAdapter } from "../src/state/adapters/release-notes.js";
 import {
@@ -29,6 +33,7 @@ import {
   createCredentialSettingsAdapter,
 } from "../src/state/adapters/settings.js";
 import { createSpendSettingsAdapter } from "../src/state/adapters/spend.js";
+import { createTelegramSettingsAdapter } from "../src/state/adapters/telegram.js";
 import { createUpdateSettingsAdapter } from "../src/state/adapters/update.js";
 import { CLOSED_PANE, EMPTY_SETTINGS_SURFACE } from "../src/state/settings-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
@@ -133,6 +138,15 @@ function spendSummary(overrides: Partial<SpendSummary> = {}): SpendSummary {
   } as SpendSummary;
 }
 
+function telegramStatus(overrides: Partial<TelegramControlStatus> = {}): TelegramControlStatus {
+  return {
+    desiredState: "disabled",
+    state: "disabled",
+    credentialConfigured: false,
+    ...overrides,
+  };
+}
+
 interface HarnessOptions {
   readonly runtime?: () => RuntimeConfigSnapshot;
   readonly configureRuntime?: (params: unknown) => Promise<unknown>;
@@ -215,6 +229,9 @@ function createHarness(options: HarnessOptions = {}) {
   const conversationAdapter = createConversationSettingsAdapter({
     publish: (state) => store.getState().patchSettings({ conversation: state }),
   });
+  const telegramAdapter = createTelegramSettingsAdapter({
+    publish: (state) => store.getState().patchSettings({ telegram: state }),
+  });
   const spendAdapter = createSpendSettingsAdapter({
     read: () => store.getState().settings.spend,
     publish: (next) => store.getState().patchSettings({ spend: next }),
@@ -261,6 +278,21 @@ function createHarness(options: HarnessOptions = {}) {
     beginMutation: () => store.getState().beginSettingsMutation("provider-model"),
     view: coachAdapter.view,
   });
+  const pasteTelegramToken = vi.fn(async () => telegramStatus({ credentialConfigured: true }));
+  const telegramController = createTelegramSettingsController({
+    bridge: {
+      status: async () => telegramStatus(),
+      pasteTokenFromClipboard: pasteTelegramToken,
+      enable: async () => telegramStatus({ desiredState: "enabled", state: "starting" }),
+      disable: async () => telegramStatus(),
+      remove: async () => telegramStatus(),
+      reconcile: async () => telegramStatus(),
+    },
+    beginMutation: () => store.getState().beginSettingsMutation("telegram"),
+    view: telegramAdapter.view,
+    setInterval: (() => 0) as unknown as typeof globalThis.setInterval,
+    clearInterval: (() => {}) as unknown as typeof globalThis.clearInterval,
+  });
   const spendController = createSpendMeterController({
     clients,
     view: spendAdapter.view,
@@ -295,18 +327,21 @@ function createHarness(options: HarnessOptions = {}) {
         void credentialController.activate();
         void athleteController.activate();
         void conversationController.activate();
+        void telegramController.activate();
       },
       close() {
         coachController.close();
         credentialController.close();
         athleteController.close();
         conversationController.close();
+        telegramController.close();
       },
     },
     coach: coachAdapter.port,
     credentials: credentialAdapter.port,
     athlete: athleteAdapter.port,
     conversation: conversationAdapter.port,
+    telegram: telegramAdapter.port,
     spend: spendAdapter.port,
     update: updateAdapter.port,
     releaseNotes: releaseNotesAdapter.port,
@@ -321,6 +356,7 @@ function createHarness(options: HarnessOptions = {}) {
     restartToUpdate,
     checkForUpdates,
     openSetup,
+    pasteTelegramToken,
     spendController,
     startUpdate: () => updateController.start(),
     dispose() {
@@ -328,6 +364,7 @@ function createHarness(options: HarnessOptions = {}) {
       credentialController.dispose();
       athleteController.dispose();
       conversationController.dispose();
+      telegramController.dispose();
       spendController.dispose();
       updateController.dispose();
       releaseNotesController.dispose();

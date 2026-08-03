@@ -30,6 +30,12 @@ interface EnduragentAuth {
   chatgptLogin(input: OnboardingLlmSelection): Promise<ChatGptLoginResult>;
   claudeCliStatus(): Promise<ClaudeCliStatus>;
   claudeCliRecheck(): Promise<ClaudeCliStatus>;
+  telegramStatus(): Promise<DesktopTelegramStatus>;
+  pasteTelegramTokenFromClipboard(): Promise<DesktopTelegramStatus>;
+  enableTelegram(): Promise<DesktopTelegramStatus>;
+  disableTelegram(): Promise<DesktopTelegramStatus>;
+  removeTelegram(): Promise<DesktopTelegramStatus>;
+  reconcileTelegram(): Promise<DesktopTelegramStatus>;
   chooseImportFiles(): Promise<readonly string[]>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
   releaseNotes(): Promise<ReleaseNotesResult>;
@@ -80,6 +86,40 @@ type DesktopUpdateState =
       readonly version: string;
     }
   | { readonly status: "failed"; readonly stage: "check" | "download" };
+
+type DesktopTelegramControlState =
+  | "disabled"
+  | "waiting-for-credential"
+  | "starting"
+  | "online"
+  | "offline-retrying"
+  | "conflict"
+  | "invalid-token"
+  | "transfer-required"
+  | "failed";
+
+type DesktopTelegramControlErrorCode =
+  | "telegram-invalid-token"
+  | "telegram-polling-conflict"
+  | "telegram-start-failed"
+  | "telegram-credential-storage-failed"
+  | "telegram-credential-unavailable"
+  | "telegram-daemon-unavailable"
+  | "telegram-home-mismatch"
+  | "telegram-stale-operation"
+  | "telegram-control-failed"
+  | "telegram-drain-required";
+
+interface DesktopTelegramStatus {
+  readonly desiredState: "disabled" | "enabled";
+  readonly state: DesktopTelegramControlState;
+  readonly credentialConfigured: boolean;
+  readonly botUsername?: string;
+  readonly since?: string;
+  readonly lastSuccessfulPollAt?: string;
+  readonly retryCount?: number;
+  readonly errorCode?: DesktopTelegramControlErrorCode;
+}
 
 type ReleaseNotesResult =
   | {
