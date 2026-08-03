@@ -83,7 +83,7 @@ export function createDesktopTelegramRuntimeFactory(
   input: CreateDesktopTelegramRuntimeFactoryInput,
   dependencies: DesktopTelegramRuntimeDependencies = {},
 ): (runtime: DesktopTelegramRuntimeFactoryInput) => DesktopTelegramRuntime {
-  return ({ token, onStarted, consumePairing }) => {
+  return ({ token, onStarted, onPollingSuccess, onPollingFailure, consumePairing }) => {
     const host = createDesktopTelegramHost(input, dependencies, consumePairing);
     return (dependencies.createBot ?? createTelegramBot)({
       webhookPolicy: "preserve",
@@ -92,6 +92,8 @@ export function createDesktopTelegramRuntimeFactory(
       host,
       dataDir: input.lifecycle.home.root,
       onStart: onStarted,
+      onPollingSuccess,
+      onPollingFailure,
     });
   };
 }

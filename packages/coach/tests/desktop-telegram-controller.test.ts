@@ -164,6 +164,7 @@ describe("Desktop Telegram controller", () => {
     await controller.configure("old-secret-token");
     await controller.enable();
     inputs[0]!.onStarted();
+    inputs[0]!.onPollingSuccess();
 
     expect(controller.getStatus().channel).toEqual({
       desiredState: "enabled",
@@ -240,6 +241,7 @@ describe("Desktop Telegram controller", () => {
     await h.controller.configure("old-secret-token");
     await h.controller.enable();
     h.inputs[0]!.onStarted();
+    h.inputs[0]!.onPollingSuccess();
     h.inspectTelegramCredential.mockResolvedValueOnce({ status: "invalid-token" });
 
     await h.controller.replace("new-invalid-secret-token");
@@ -311,6 +313,7 @@ describe("Desktop Telegram controller", () => {
     expect(h.createRuntime).toHaveBeenCalledOnce();
 
     h.inputs[0]!.onStarted();
+    h.inputs[0]!.onPollingSuccess();
     expect(h.controller.getStatus().channel.state).toBe("starting");
     await expect(
       h.inputs[0]!.consumePairing({
@@ -342,6 +345,26 @@ describe("Desktop Telegram controller", () => {
     expect(h.claimPrimaryOperator).toHaveBeenCalledOnce();
 
     await h.controller.beginTelegramPairing();
+    expect(h.createRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("reports polling outages without starting a second retry loop", async () => {
+    const h = harness({ primary: true });
+    await h.controller.configure("old-secret-token");
+    await h.controller.enable();
+    h.inputs[0]!.onStarted();
+
+    h.inputs[0]!.onPollingFailure();
+    expect(h.controller.getStatus().channel).toEqual({
+      desiredState: "enabled",
+      state: "offline-retrying",
+    });
+
+    h.inputs[0]!.onPollingSuccess();
+    expect(h.controller.getStatus().channel).toEqual({
+      desiredState: "enabled",
+      state: "online",
+    });
     expect(h.createRuntime).toHaveBeenCalledOnce();
   });
 

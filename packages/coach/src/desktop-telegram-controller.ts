@@ -29,6 +29,8 @@ export interface DesktopTelegramRuntime {
 export interface DesktopTelegramRuntimeFactoryInput {
   readonly token: string;
   readonly onStarted: () => void;
+  readonly onPollingSuccess: () => void;
+  readonly onPollingFailure: () => void;
   readonly consumePairing: (input: {
     readonly senderId: string;
     readonly senderName: string | undefined;
@@ -124,6 +126,10 @@ const STARTING_STATUS = Object.freeze({
 const ONLINE_STATUS = Object.freeze({
   desiredState: "enabled",
   state: "online",
+} as const);
+const OFFLINE_RETRYING_STATUS = Object.freeze({
+  desiredState: "enabled",
+  state: "offline-retrying",
 } as const);
 const INVALID_TOKEN_STATUS = Object.freeze({
   desiredState: "enabled",
@@ -565,7 +571,9 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
     try {
       runtime = this.input.createRuntime({
         token,
-        onStarted: () => this.reportTransportOnline(generation),
+        onStarted: () => this.reportTransportStarted(generation),
+        onPollingSuccess: () => this.reportPollingSuccess(generation),
+        onPollingFailure: () => this.reportPollingFailure(generation),
         consumePairing: (pairingInput) => this.consumePairing(generation, pairingInput),
       });
     } catch {
@@ -634,7 +642,20 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
     return this.desiredEnabled && this.generation === generation;
   }
 
-  private reportTransportOnline(generation: number): void {
+  private reportTransportStarted(generation: number): void {
+    const active = this.active;
+    if (
+      this.isCurrent(generation) &&
+      active?.generation === generation &&
+      active.pollingState === "running" &&
+      !active.restartBlocked &&
+      !this.pollingSuspended
+    ) {
+      this.channel = STARTING_STATUS;
+    }
+  }
+
+  private reportPollingSuccess(generation: number): void {
     const active = this.active;
     if (
       this.isCurrent(generation) &&
@@ -645,6 +666,20 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
     ) {
       active.transportOnline = true;
       this.channel = this.primaryPresent ? ONLINE_STATUS : STARTING_STATUS;
+    }
+  }
+
+  private reportPollingFailure(generation: number): void {
+    const active = this.active;
+    if (
+      this.isCurrent(generation) &&
+      active?.generation === generation &&
+      active.pollingState === "running" &&
+      !active.restartBlocked &&
+      !this.pollingSuspended
+    ) {
+      active.transportOnline = false;
+      this.channel = OFFLINE_RETRYING_STATUS;
     }
   }
 

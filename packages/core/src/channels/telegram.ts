@@ -152,6 +152,8 @@ function createSecuredBot(opts: {
   token: string;
   access: TelegramHostCapabilities["access"];
   webhookPolicy: TelegramWebhookPolicy;
+  onPollingSuccess?: () => void;
+  onPollingFailure?: () => void;
 }): { readonly bot: Bot; readonly prepareStart: () => void } {
   const bot = new Bot(opts.token);
   let suppressImplicitWebhookDeletion = false;
@@ -190,6 +192,20 @@ function createSecuredBot(opts: {
     });
   }
 
+  if (opts.onPollingSuccess !== undefined || opts.onPollingFailure !== undefined) {
+    bot.api.config.use(async (previous, method, payload, signal) => {
+      if (method !== "getUpdates") return previous(method, payload, signal);
+      try {
+        const result = await previous(method, payload, signal);
+        opts.onPollingSuccess?.();
+        return result;
+      } catch (error) {
+        opts.onPollingFailure?.();
+        throw error;
+      }
+    });
+  }
+
   bot.use(opts.access.middleware);
 
   return {
@@ -216,6 +232,8 @@ export interface CreateTelegramChannelInput {
   readonly host: TelegramHostCapabilities;
   readonly dataDir: string;
   readonly onStart?: () => void;
+  readonly onPollingSuccess?: () => void;
+  readonly onPollingFailure?: () => void;
 }
 
 export function createTelegramBot(input: CreateTelegramChannelInput): TelegramChannelRuntime {
@@ -223,6 +241,8 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
     token: input.token,
     access: input.host.access,
     webhookPolicy: input.webhookPolicy,
+    onPollingSuccess: input.onPollingSuccess,
+    onPollingFailure: input.onPollingFailure,
   });
   const { engine, host } = input;
   const { dataDir } = input;

@@ -88,6 +88,10 @@ async function createTestTelegramBot(
   },
   reference?: object,
   webhookPolicy: "delete-before-polling" | "preserve" = "delete-before-polling",
+  polling?: {
+    readonly onPollingSuccess: () => void;
+    readonly onPollingFailure: () => void;
+  },
 ) {
   const [{ createTelegramBot }, { createNpmTelegramHost }] = await Promise.all([
     import("../src/channels/telegram.js"),
@@ -109,6 +113,7 @@ async function createTestTelegramBot(
       ...(reference === undefined ? {} : { reference: reference as never }),
     }),
     dataDir,
+    ...(polling ?? {}),
   });
 }
 
@@ -170,6 +175,61 @@ describe("createTelegramBot — webhook ownership", () => {
 
     await runtime.start();
     expect(transport).toHaveBeenCalledOnce();
+  });
+
+  it("observes getUpdates health without owning retries", async () => {
+    type Transformer = (
+      previous: (method: string) => Promise<unknown>,
+      method: string,
+      payload: unknown,
+      signal?: AbortSignal,
+    ) => Promise<unknown>;
+    const transformers: Transformer[] = [];
+    const bot = {
+      api: {
+        sendMessage: vi.fn(async () => undefined),
+        setMyCommands: vi.fn(async () => true),
+        config: { use: vi.fn((transformer: Transformer) => transformers.push(transformer)) },
+      },
+      use: vi.fn(),
+      command: vi.fn(),
+      on: vi.fn(),
+      catch: vi.fn(),
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    };
+    vi.doMock("grammy", () => ({
+      Bot: function FakeBot() {
+        return bot;
+      },
+      InputFile: class {},
+    }));
+    const onPollingSuccess = vi.fn();
+    const onPollingFailure = vi.fn();
+    await createTestTelegramBot(
+      {
+        chat: vi.fn(),
+        resetSession: vi.fn(),
+        hasSession: vi.fn(),
+        getAthleteState: vi.fn(),
+      },
+      undefined,
+      "delete-before-polling",
+      { onPollingSuccess, onPollingFailure },
+    );
+    const observer = transformers.at(-1)!;
+    const transport = vi.fn(async () => ({ ok: true }));
+
+    await observer(transport, "getUpdates", {});
+    await observer(transport, "sendMessage", {});
+    expect(onPollingSuccess).toHaveBeenCalledOnce();
+    expect(onPollingFailure).not.toHaveBeenCalled();
+
+    const failure = new Error("offline");
+    await expect(
+      observer(async () => Promise.reject(failure), "getUpdates", {}),
+    ).rejects.toBe(failure);
+    expect(onPollingFailure).toHaveBeenCalledOnce();
   });
 });
 

@@ -59,8 +59,18 @@ describe("Desktop Telegram runtime projection", () => {
 
     expect(createBot).not.toHaveBeenCalled();
     const onStarted = vi.fn();
+    const onPollingSuccess = vi.fn();
+    const onPollingFailure = vi.fn();
     const consumePairing = vi.fn(async () => true);
-    expect(runtimeFactory({ token: "secret", onStarted, consumePairing })).toBe(channel);
+    expect(
+      runtimeFactory({
+        token: "secret",
+        onStarted,
+        onPollingSuccess,
+        onPollingFailure,
+        consumePairing,
+      }),
+    ).toBe(channel);
     expect(createBot).toHaveBeenCalledOnce();
     const projected = createBot.mock.calls[0]![0];
     expect(projected.token).toBe("secret");
@@ -89,6 +99,10 @@ describe("Desktop Telegram runtime projection", () => {
     await expect(projected.host.release.version()).resolves.toBe("Cycling Coach Desktop v1.2.3");
 
     projected.onStart?.();
+    projected.onPollingSuccess?.();
+    projected.onPollingFailure?.();
     expect(onStarted).toHaveBeenCalledOnce();
+    expect(onPollingSuccess).toHaveBeenCalledOnce();
+    expect(onPollingFailure).toHaveBeenCalledOnce();
   });
 });

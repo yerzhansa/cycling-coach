@@ -36,6 +36,9 @@ export const TelegramChannelStatusSchema = z.discriminatedUnion("state", [
   z.object({ desiredState: z.literal("enabled"), state: z.literal("starting") }).strict(),
   z.object({ desiredState: z.literal("enabled"), state: z.literal("online") }).strict(),
   z
+    .object({ desiredState: z.literal("enabled"), state: z.literal("offline-retrying") })
+    .strict(),
+  z
     .object({
       desiredState: z.literal("enabled"),
       errorCode: z.literal("telegram-invalid-token"),
