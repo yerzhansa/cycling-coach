@@ -136,6 +136,12 @@ const spendMeter: SpendMeterService = {
   },
 };
 
+const confirmations: LocalCoachLifecycle["confirmations"] = {
+  peek: () => undefined,
+  confirm: async () => ({ status: "none" }),
+  cancel: () => "none",
+};
+
 interface Deferred<T> {
   readonly promise: Promise<T>;
   resolve(value: T): void;
@@ -488,14 +494,14 @@ describe("enduragent executable composition", () => {
       const io = terminal();
       const preparedHome = Object.freeze({ ...home });
       const prepareAthleteHome = vi.fn(async () => preparedHome);
-      const withLocalCoachDependency = vi.fn(
-        async <T>(input: WithLocalCoachInput<T>): Promise<LocalCoachRunResult<T>> => {
-          expect(input.home).toBe(preparedHome);
-          return status === "not-configured"
-            ? { status, configPath: privateConfigPath }
-            : { status };
-        },
-      );
+      let withLocalCoachCalls = 0;
+      const withLocalCoachDependency: EnduragentDependencies["withLocalCoach"] = async <T>(
+        input: WithLocalCoachInput<T>,
+      ): Promise<LocalCoachRunResult<T>> => {
+        withLocalCoachCalls += 1;
+        expect(input.home).toBe(preparedHome);
+        return status === "not-configured" ? { status, configPath: privateConfigPath } : { status };
+      };
       const privateConfigPath = join(home.configDir, "synthetic-private-profile-token");
       const result = await runAppSupervisedEnduragent(
         {
@@ -515,7 +521,7 @@ describe("enduragent executable composition", () => {
       expect(JSON.stringify(result)).not.toContain("synthetic-private-profile-token");
       expect(Object.keys(result).sort()).toEqual(["exitCode", "readinessFailure"]);
       expect(prepareAthleteHome).toHaveBeenCalledWith(home);
-      expect(withLocalCoachDependency).toHaveBeenCalledTimes(1);
+      expect(withLocalCoachCalls).toBe(1);
     },
   );
 
@@ -530,9 +536,11 @@ describe("enduragent executable composition", () => {
       return response;
     });
     const lifecycle = {
+      home,
       engine: mocked.engine,
       operations,
       spendMeter,
+      confirmations,
       listener: inertWriterProtocolListener,
       close: async () => {
         trace.push("lifecycle-close");
@@ -613,9 +621,11 @@ describe("enduragent executable composition", () => {
           withLocalCoach: async <T>(input: WithLocalCoachInput<T>) => {
             captured = input as unknown as WithLocalCoachInput<unknown>;
             const value = await input.operation({
+              home,
               engine: mocked.engine,
               operations,
               spendMeter,
+              confirmations,
               listener: inertWriterProtocolListener,
               async close() {},
             });
@@ -853,9 +863,11 @@ describe("enduragent executable composition", () => {
       input: WithLocalCoachInput<T>,
     ): Promise<LocalCoachRunResult<T>> => {
       const lifecycle = {
+        home,
         engine: mocked.engine,
         operations,
         spendMeter,
+        confirmations,
         listener: inertWriterProtocolListener,
         close: async () => {
           trace.push("lifecycle-close");
@@ -963,9 +975,11 @@ describe("enduragent executable composition", () => {
             return {
               status: "completed",
               value: await input.operation({
+                home,
                 engine: mocked.engine,
                 operations,
                 spendMeter,
+                confirmations,
                 listener: inertWriterProtocolListener,
                 async close() {},
               }),

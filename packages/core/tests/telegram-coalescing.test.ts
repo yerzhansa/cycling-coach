@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { CHAT_COALESCE_MS } from "../src/channels/telegram.js";
 import type {
   TelegramInvocationCapabilities,
+  TelegramInvocationReservation,
   TelegramOperationsCapabilities,
 } from "../src/channels/telegram-host.js";
 
@@ -399,9 +400,15 @@ describe("inbound coalescing (fake timers)", () => {
     let admissionOpen = true;
     const run = vi.fn(<T>(operation: () => Promise<T>) => operation());
     const cancel = vi.fn();
+    const reservation: TelegramInvocationReservation = {
+      run<T>(operation: () => Promise<T>): Promise<T> {
+        return run(operation) as Promise<T>;
+      },
+      cancel,
+    };
     const reserve = vi.fn((_chatId: string) => {
       if (!admissionOpen) throw new Error("admission closed");
-      return { run, cancel };
+      return reservation;
     });
     const { bot, engine, drainPending } = await buildBot({}, undefined, { reserve });
     const handler = getMessageText(bot);
@@ -431,7 +438,13 @@ describe("inbound coalescing (fake timers)", () => {
   it("runs first-message session lookup inside the admission reservation", async () => {
     const run = vi.fn(<T>(operation: () => Promise<T>) => operation());
     const cancel = vi.fn();
-    const reserve = vi.fn(() => ({ run, cancel }));
+    const reservation: TelegramInvocationReservation = {
+      run<T>(operation: () => Promise<T>): Promise<T> {
+        return run(operation) as Promise<T>;
+      },
+      cancel,
+    };
+    const reserve = vi.fn(() => reservation);
     const hasSession = vi.fn(async () => {
       throw new Error("session lookup failed");
     });

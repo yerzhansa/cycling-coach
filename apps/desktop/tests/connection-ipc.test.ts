@@ -30,6 +30,7 @@ function setup(athleteHome = "/synthetic/athlete") {
     athleteHome: string;
     rendererCapability: string;
     owner: "app-supervised";
+    supervision: "app-supervised";
     generation: number;
   } = {
     url: "ws://127.0.0.1:45001/rpc" as const,
@@ -37,6 +38,7 @@ function setup(athleteHome = "/synthetic/athlete") {
     athleteHome,
     rendererCapability: capability("r"),
     owner: "app-supervised",
+    supervision: "app-supervised",
     generation: 1,
   };
   const runtime = {
@@ -49,6 +51,7 @@ function setup(athleteHome = "/synthetic/athlete") {
         athleteHome,
         rendererCapability: capability("q"),
         owner: "app-supervised",
+        supervision: "app-supervised",
         generation: 2,
       };
       return connection;

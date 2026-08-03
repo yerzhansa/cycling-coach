@@ -25,8 +25,21 @@ import {
   type TurnEvent,
 } from "@enduragent/coach-contract";
 import { createCoachRpcServer, type CoachRpcServer } from "../src/daemon/rpc-server.js";
+import type { DesktopTelegramController } from "../src/desktop-telegram-controller.js";
 
 const token = "s".repeat(43);
+const disabledTelegram: DesktopTelegramController = {
+  getStatus: () => ({ desiredState: "disabled", state: "disabled" }),
+  configure: async () => undefined,
+  enable: async () => undefined,
+  disable: async () => undefined,
+  replace: async () => undefined,
+  reconcile: async () => undefined,
+  stopPolling: async () => undefined,
+  resumePolling: async () => undefined,
+  drainPending: async () => undefined,
+  close: async () => undefined,
+};
 const operations: CoachOperations = {
   importFiles: async ({ paths }) => ({
     schemaVersion: 2,
@@ -176,6 +189,7 @@ async function startRpc(engine: CoachEngine): Promise<RunningRpc> {
         error: { code: "RUNNER_ERROR", message: "packaged self-test failed" },
       }),
     },
+    telegram: disabledTelegram,
     token,
     owner: "unmanaged-foreground",
     athleteHome: "/tmp/enduragent-cli-rpc-test",

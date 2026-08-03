@@ -63,6 +63,12 @@ const rpcDeadlineCases = [
   ["getRuntimeConfig", {}, 30_000],
   ["getUnitsPreference", {}, 30_000],
   ["setUnitsPreference", { value: "metric" }, 30_000],
+  ["configureTelegram", { token: "bot-token" }, 30_000],
+  ["enableTelegram", {}, 30_000],
+  ["disableTelegram", {}, 30_000],
+  ["replaceTelegram", { token: "new-token" }, 30_000],
+  ["getTelegramStatus", {}, 30_000],
+  ["reconcileTelegram", {}, 30_000],
   ["getSpendSummary", {}, 30_000],
   ["setDailySpendCap", { dailyCapUsd: 25 }, 30_000],
   ["selfTest", {}, 120_000],
@@ -730,6 +736,12 @@ describe("RPC receive and observers", () => {
         },
         getUnitsPreference: { value: "metric", source: "default" },
         setUnitsPreference: { value: "imperial", source: "cycling" },
+        configureTelegram: { desiredState: "disabled", state: "disabled" },
+        enableTelegram: { desiredState: "enabled", state: "starting" },
+        disableTelegram: { desiredState: "disabled", state: "disabled" },
+        replaceTelegram: { desiredState: "enabled", state: "starting" },
+        getTelegramStatus: { desiredState: "enabled", state: "online" },
+        reconcileTelegram: { desiredState: "enabled", state: "online" },
         getSpendSummary: {
           localDate: "1998-07-06",
           timezone: "UTC",
@@ -866,13 +878,45 @@ describe("RPC receive and observers", () => {
       "getUnitsPreference",
       "setUnitsPreference",
     ]);
+    await expect(client.call("configureTelegram", { token: "bot-token" })).resolves.toEqual({
+      desiredState: "disabled",
+      state: "disabled",
+    });
+    await expect(client.call("enableTelegram", {})).resolves.toEqual({
+      desiredState: "enabled",
+      state: "starting",
+    });
+    await expect(client.call("disableTelegram", {})).resolves.toEqual({
+      desiredState: "disabled",
+      state: "disabled",
+    });
+    await expect(client.call("replaceTelegram", { token: "new-token" })).resolves.toEqual({
+      desiredState: "enabled",
+      state: "starting",
+    });
+    await expect(client.call("getTelegramStatus", {})).resolves.toEqual({
+      desiredState: "enabled",
+      state: "online",
+    });
+    await expect(client.call("reconcileTelegram", {})).resolves.toEqual({
+      desiredState: "enabled",
+      state: "online",
+    });
+    expect(received.slice(-6).map((value) => (value as { method: string }).method)).toEqual([
+      "configureTelegram",
+      "enableTelegram",
+      "disableTelegram",
+      "replaceTelegram",
+      "getTelegramStatus",
+      "reconcileTelegram",
+    ]);
     await expect(client.call("getSpendSummary", {})).resolves.toMatchObject({
       dailyCapUsd: 0.5,
     });
     await expect(client.call("setDailySpendCap", { dailyCapUsd: 0.75 })).resolves.toMatchObject({
       dailyCapUsd: 0.75,
     });
-    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([15, 16]);
+    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([21, 22]);
     expect(received.slice(-2).map((value) => (value as { method: string }).method)).toEqual([
       "getSpendSummary",
       "setDailySpendCap",

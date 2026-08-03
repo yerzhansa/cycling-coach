@@ -1,3 +1,5 @@
+import type { TelegramChannelStatus } from "@enduragent/coach-contract";
+
 export interface DesktopTelegramRuntime {
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -9,29 +11,15 @@ export interface DesktopTelegramRuntimeFactoryInput {
   readonly onStarted: () => void;
 }
 
-export type DesktopTelegramControllerStatus =
-  | Readonly<{ desiredState: "disabled"; state: "disabled" }>
-  | Readonly<{ desiredState: "enabled"; state: "starting" | "online" }>
-  | Readonly<{
-      desiredState: "enabled";
-      errorCode: "telegram-invalid-token";
-      state: "invalid-token";
-    }>
-  | Readonly<{
-      desiredState: "enabled";
-      errorCode: "telegram-polling-conflict";
-      state: "conflict";
-    }>
-  | Readonly<{
-      desiredState: "enabled";
-      errorCode: "telegram-start-failed";
-      state: "failed";
-    }>;
+export type DesktopTelegramControllerStatus = TelegramChannelStatus;
 
 export interface DesktopTelegramController {
   getStatus(): DesktopTelegramControllerStatus;
-  enable(token: string): Promise<void>;
+  configure(token: string): Promise<void>;
+  enable(): Promise<void>;
   disable(): Promise<void>;
+  replace(token: string): Promise<void>;
+  reconcile(): Promise<void>;
   stopPolling(): Promise<void>;
   resumePolling(): Promise<void>;
   drainPending(): Promise<void>;
@@ -46,8 +34,8 @@ interface ActiveRuntime {
   readonly generation: number;
   readonly runtime: DesktopTelegramRuntime;
   attempt: number;
-  pollingState: "running" | "stopping" | "paused";
-  resumeRequested: boolean;
+  pollingState: "running" | "paused";
+  restartBlocked: boolean;
   stopTask?: Promise<void>;
   drainTask?: Promise<void>;
 }
@@ -55,6 +43,11 @@ interface ActiveRuntime {
 const DISABLED_STATUS = Object.freeze({
   desiredState: "disabled",
   state: "disabled",
+} as const);
+
+const WAITING_FOR_CREDENTIAL_STATUS = Object.freeze({
+  desiredState: "enabled",
+  state: "waiting-for-credential",
 } as const);
 
 const STARTING_STATUS = Object.freeze({
@@ -95,9 +88,12 @@ function telegramErrorCode(error: unknown): number | undefined {
 
 class DefaultDesktopTelegramController implements DesktopTelegramController {
   private status: DesktopTelegramControllerStatus = DISABLED_STATUS;
+  private configuredToken: string | undefined;
   private desiredEnabled = false;
+  private pollingSuspended = false;
   private generation = 0;
   private active: ActiveRuntime | undefined;
+  private mutationTail: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly createRuntime: CreateDesktopTelegramControllerInput["createRuntime"],
@@ -107,22 +103,130 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
     return this.status;
   }
 
-  async enable(token: string): Promise<void> {
-    if (this.desiredEnabled) return;
+  configure(token: string): Promise<void> {
+    return this.serialize(async () => {
+      if (this.configuredToken !== undefined) return;
+      this.configuredToken = token;
+      await this.reconcileUnlocked();
+    });
+  }
 
-    this.desiredEnabled = true;
+  enable(): Promise<void> {
+    return this.serialize(async () => {
+      this.desiredEnabled = true;
+      await this.reconcileUnlocked();
+    });
+  }
+
+  disable(): Promise<void> {
+    return this.serialize(() => this.disableUnlocked());
+  }
+
+  replace(token: string): Promise<void> {
+    return this.serialize(async () => {
+      const previous = this.invalidateActive();
+      this.status = this.desiredEnabled ? STARTING_STATUS : DISABLED_STATUS;
+      if (previous !== undefined) {
+        await this.stopRuntime(previous);
+        await this.drainRuntime(previous);
+        if (this.active === previous) this.active = undefined;
+      }
+      this.configuredToken = token;
+      if (this.desiredEnabled) await this.startConfiguredRuntime();
+    });
+  }
+
+  reconcile(): Promise<void> {
+    return this.serialize(() => this.reconcileUnlocked());
+  }
+
+  stopPolling(): Promise<void> {
+    this.pollingSuspended = true;
+    return this.serialize(async () => {
+      const active = this.active;
+      if (active === undefined) {
+        if (this.desiredEnabled && this.configuredToken !== undefined) {
+          this.status = STARTING_STATUS;
+        }
+        return;
+      }
+      if (active.pollingState === "paused") return;
+      this.status = STARTING_STATUS;
+      await this.pauseRuntime(active);
+    });
+  }
+
+  resumePolling(): Promise<void> {
+    return this.serialize(async () => {
+      this.pollingSuspended = false;
+      await this.reconcileUnlocked();
+    });
+  }
+
+  drainPending(): Promise<void> {
+    return this.serialize(async () => {
+      const active = this.active;
+      if (active !== undefined) await this.drainRuntime(active);
+    });
+  }
+
+  close(): Promise<void> {
+    return this.disable();
+  }
+
+  private serialize(operation: () => Promise<void>): Promise<void> {
+    const task = this.mutationTail.then(operation, operation);
+    this.mutationTail = task.catch(() => undefined);
+    return task;
+  }
+
+  private async disableUnlocked(): Promise<void> {
+    this.desiredEnabled = false;
+    this.status = DISABLED_STATUS;
+    const active = this.invalidateActive();
+    if (active === undefined) return;
+    await this.stopRuntime(active);
+    await this.drainRuntime(active);
+    if (this.active === active) this.active = undefined;
+  }
+
+  private async reconcileUnlocked(): Promise<void> {
+    if (!this.desiredEnabled) {
+      this.status = DISABLED_STATUS;
+      return;
+    }
+    if (this.configuredToken === undefined) {
+      this.status = WAITING_FOR_CREDENTIAL_STATUS;
+      return;
+    }
+    const active = this.active;
+    if (this.pollingSuspended) {
+      if (active !== undefined && active.pollingState === "running") {
+        this.status = STARTING_STATUS;
+        await this.pauseRuntime(active);
+      } else if (active === undefined) {
+        this.status = STARTING_STATUS;
+      }
+      return;
+    }
+    if (active === undefined) {
+      await this.startConfiguredRuntime();
+      return;
+    }
+    if (active.pollingState === "paused" && !active.restartBlocked) {
+      this.resumeRuntime(active);
+    }
+  }
+
+  private async startConfiguredRuntime(): Promise<void> {
+    const token = this.configuredToken;
+    if (!this.desiredEnabled || token === undefined) return;
+    if (this.pollingSuspended) {
+      this.status = STARTING_STATUS;
+      return;
+    }
     const generation = ++this.generation;
     this.status = STARTING_STATUS;
-
-    const previous = this.active;
-    if (previous) {
-      await this.stopRuntime(previous);
-      await this.drainRuntime(previous);
-      if (this.active === previous) this.active = undefined;
-    }
-
-    if (!this.isCurrent(generation)) return;
-
     let runtime: DesktopTelegramRuntime;
     try {
       runtime = this.createRuntime({
@@ -133,88 +237,40 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
       if (this.isCurrent(generation)) this.status = FAILED_STATUS;
       return;
     }
-
     const active: ActiveRuntime = {
       generation,
       runtime,
       attempt: 0,
       pollingState: "running",
-      resumeRequested: false,
+      restartBlocked: false,
     };
     this.active = active;
     this.startRuntime(active);
   }
 
-  async disable(): Promise<void> {
-    await this.close();
-  }
-
-  async stopPolling(): Promise<void> {
+  private invalidateActive(): ActiveRuntime | undefined {
+    this.generation += 1;
     const active = this.active;
-    if (!active || active.pollingState === "paused") return;
-    if (active.pollingState === "stopping") {
-      await active.stopTask;
-      return;
-    }
-    active.pollingState = "stopping";
-    active.attempt += 1;
-    if (this.isActive(active)) this.status = STARTING_STATUS;
-    await this.stopRuntime(active);
-    if (this.isActive(active) && active.pollingState === "stopping") {
+    if (active !== undefined) {
+      active.attempt += 1;
       active.pollingState = "paused";
-      if (active.resumeRequested) this.resumeRuntime(active);
     }
+    return active;
   }
 
-  async resumePolling(): Promise<void> {
-    const active = this.active;
-    if (
-      !this.desiredEnabled ||
-      active === undefined ||
-      active.pollingState === "running"
-    ) {
-      return;
-    }
-    if (active.pollingState === "stopping") {
-      active.resumeRequested = true;
-      return;
-    }
-    this.resumeRuntime(active);
+  private async pauseRuntime(active: ActiveRuntime): Promise<void> {
+    active.attempt += 1;
+    active.pollingState = "paused";
+    await this.stopRuntime(active);
   }
 
   private resumeRuntime(active: ActiveRuntime): void {
-    active.resumeRequested = false;
-    active.pollingState = "running";
     active.stopTask = undefined;
     active.drainTask = undefined;
+    active.pollingState = "running";
+    active.restartBlocked = false;
     this.status = STARTING_STATUS;
     this.startRuntime(active);
-  }
-
-  async drainPending(): Promise<void> {
-    const active = this.active;
-    if (active) await this.drainRuntime(active);
-  }
-
-  async close(): Promise<void> {
-    const active = this.beginStop();
-    if (!active) return;
-
-    await this.stopRuntime(active);
-    await this.drainRuntime(active);
-    if (this.active === active) this.active = undefined;
-  }
-
-  private beginStop(): ActiveRuntime | undefined {
-    this.desiredEnabled = false;
-    this.generation += 1;
-    this.status = DISABLED_STATUS;
-    if (this.active !== undefined) {
-      this.active.attempt += 1;
-      this.active.pollingState = "stopping";
-      this.active.resumeRequested = false;
-    }
-    return this.active;
   }
 
   private isCurrent(generation: number): boolean {
@@ -222,8 +278,13 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
   }
 
   private reportOnline(generation: number): void {
+    const active = this.active;
     if (
       this.isCurrent(generation) &&
+      active?.generation === generation &&
+      active.pollingState === "running" &&
+      !active.restartBlocked &&
+      !this.pollingSuspended &&
       (this.status.state === "starting" || this.status.state === "online")
     ) {
       this.status = ONLINE_STATUS;
@@ -246,12 +307,16 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
   }
 
   private handleStartCompletion(active: ActiveRuntime, attempt: number): void {
-    if (this.isAttemptActive(active, attempt)) this.status = FAILED_STATUS;
+    if (!this.isAttemptActive(active, attempt)) return;
+    active.pollingState = "paused";
+    active.restartBlocked = true;
+    this.status = FAILED_STATUS;
   }
 
   private handleStartRejection(active: ActiveRuntime, attempt: number, error: unknown): void {
     if (!this.isAttemptActive(active, attempt)) return;
-
+    active.pollingState = "paused";
+    active.restartBlocked = true;
     const errorCode = telegramErrorCode(error);
     if (errorCode === 401) {
       this.status = INVALID_TOKEN_STATUS;
@@ -262,12 +327,13 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
     }
   }
 
-  private isActive(active: ActiveRuntime): boolean {
-    return this.active === active && this.isCurrent(active.generation);
-  }
-
   private isAttemptActive(active: ActiveRuntime, attempt: number): boolean {
-    return this.isActive(active) && active.attempt === attempt;
+    return (
+      this.active === active &&
+      this.isCurrent(active.generation) &&
+      active.pollingState === "running" &&
+      active.attempt === attempt
+    );
   }
 
   private stopRuntime(active: ActiveRuntime): Promise<void> {

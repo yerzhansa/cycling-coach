@@ -23,6 +23,7 @@ export interface DesktopDaemonConnection {
   readonly athleteHome: string;
   readonly rendererCapability: string;
   readonly owner: ConnectedDesktopDaemon["owner"];
+  readonly supervision: ConnectedDesktopDaemon["supervision"];
   readonly generation: number;
 }
 
@@ -66,6 +67,7 @@ function daemonConnection(
     athleteHome: resolution.athleteHome,
     rendererCapability: resolution.rendererCapability,
     owner: resolution.owner,
+    supervision: resolution.supervision,
     generation,
   };
 }

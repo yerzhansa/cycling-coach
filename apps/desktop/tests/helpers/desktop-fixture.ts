@@ -16,6 +16,7 @@ import type {
 import { acquireWriteLock } from "../../../../packages/kernel-node/src/lock/index.js";
 import { createHealthzRequestHandler } from "../../../../packages/coach/src/daemon/healthz-server.js";
 import { createCoachRpcServer } from "../../../../packages/coach/src/daemon/rpc-server.js";
+import type { DesktopTelegramController } from "../../../../packages/coach/src/desktop-telegram-controller.js";
 
 export interface DesktopFixtureScript {
   readonly onRequest: (request: unknown) => readonly string[] | Promise<readonly string[]>;
@@ -48,6 +49,18 @@ interface ScriptRequest {
 
 const require = createRequire(import.meta.url);
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const disabledTelegram: DesktopTelegramController = {
+  getStatus: () => ({ desiredState: "disabled", state: "disabled" }),
+  configure: async () => {},
+  enable: async () => {},
+  disable: async () => {},
+  replace: async () => {},
+  reconcile: async () => {},
+  stopPolling: async () => {},
+  resumePolling: async () => {},
+  drainPending: async () => {},
+  close: async () => {},
+};
 
 function reservePort(): Promise<number> {
   return new Promise((resolvePort, reject) => {
@@ -369,6 +382,7 @@ export async function launchDesktopFixture(input: {
         error: { code: "RUNNER_ERROR", message: "packaged self-test failed" },
       }),
     },
+    telegram: disabledTelegram,
     token: input.token,
     athleteHome,
     owner: "unmanaged-foreground",

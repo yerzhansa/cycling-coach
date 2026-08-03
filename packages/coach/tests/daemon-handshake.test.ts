@@ -26,8 +26,21 @@ import {
 } from "../src/daemon/handshake.js";
 import { createCoachRpcServer } from "../src/daemon/rpc-server.js";
 import type { UpgradeFenceHandle } from "../src/daemon/upgrade-fence.js";
+import type { DesktopTelegramController } from "../src/desktop-telegram-controller.js";
 
 const roots: string[] = [];
+const disabledTelegram: DesktopTelegramController = {
+  getStatus: () => ({ desiredState: "disabled", state: "disabled" }),
+  configure: async () => undefined,
+  enable: async () => undefined,
+  disable: async () => undefined,
+  replace: async () => undefined,
+  reconcile: async () => undefined,
+  stopPolling: async () => undefined,
+  resumePolling: async () => undefined,
+  drainPending: async () => undefined,
+  close: async () => undefined,
+};
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -229,6 +242,7 @@ describe.skipIf(!hasLoopback)("production peer observations", () => {
       token,
       owner: "service-managed",
       athleteHome: selectedHome.root,
+      telegram: disabledTelegram,
       selfTestOperations: {
         selfTest: async () => ({
           schemaVersion: 1,

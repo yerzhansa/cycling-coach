@@ -14,7 +14,12 @@ describe("Desktop Telegram runtime projection", () => {
     };
     const createBot = vi.fn((_input: CreateTelegramChannelInput) => channel);
     const middleware = vi.fn();
-    const createAccessMiddleware = vi.fn(() => middleware);
+    type CreateAccessMiddleware = NonNullable<
+      NonNullable<
+        Parameters<typeof createDesktopTelegramRuntimeFactory>[1]
+      >["createAccessMiddleware"]
+    >;
+    const createAccessMiddleware = vi.fn<CreateAccessMiddleware>((_input) => middleware);
     const loadAllowedSenders = vi.fn(() => ({ primaryOperator: "73" }));
     const reservation = { run: vi.fn(), cancel: vi.fn(), key: "telegram:73" };
     const reserve = vi.fn(() => reservation);
@@ -45,9 +50,7 @@ describe("Desktop Telegram runtime projection", () => {
       { lifecycle, invocations, appVersion: "1.2.3" },
       {
         createBot,
-        createAccessMiddleware: createAccessMiddleware as unknown as NonNullable<
-          Parameters<typeof createDesktopTelegramRuntimeFactory>[1]
-        >["createAccessMiddleware"],
+        createAccessMiddleware,
         loadAllowedSenders: loadAllowedSenders as unknown as NonNullable<
           Parameters<typeof createDesktopTelegramRuntimeFactory>[1]
         >["loadAllowedSenders"],
@@ -65,7 +68,7 @@ describe("Desktop Telegram runtime projection", () => {
 
     const accessInput = createAccessMiddleware.mock.calls[0]![0];
     expect(accessInput.loadAllowedSenders).toBe(loadAllowedSenders);
-    expect(accessInput.pairingChallenge({ senderId: "73", senderName: "Athlete" })).toContain(
+    expect(accessInput.pairingChallenge!({ senderId: "73", senderName: "Athlete" })).toContain(
       "Desktop → Settings → Telegram",
     );
     expect(await projected.host.authorization.isPrimaryOperator({ senderId: "73" })).toBe(true);

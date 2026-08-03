@@ -27,6 +27,7 @@ import {
   type CoachEngine,
   type CoachOperations,
   type SpendSummary,
+  type TelegramChannelStatus,
 } from "@enduragent/coach-contract";
 import {
   createCoachRpcServer as createCoachRpcServerProduction,
@@ -36,6 +37,7 @@ import {
 import { createDaemonHealthState } from "../src/daemon/healthz-server.js";
 import { createInvocationCoordinator } from "../src/daemon/invocation-coordinator.js";
 import type { MonotonicTimer, ScheduledMonotonicTimer } from "../src/daemon/upgrade-fence.js";
+import type { DesktopTelegramController } from "../src/desktop-telegram-controller.js";
 
 const roots: string[] = [];
 
@@ -158,9 +160,35 @@ const spend = {
 const TEST_ATHLETE_HOME = "/tmp/enduragent-test-athlete";
 const TEST_RENDERER_CAPABILITY_BYTES = Buffer.alloc(32, 9);
 
+function telegramController(
+  overrides: Partial<DesktopTelegramController> = {},
+): DesktopTelegramController {
+  return {
+    getStatus: () => ({ desiredState: "disabled", state: "disabled" }),
+    configure: async () => undefined,
+    enable: async () => undefined,
+    disable: async () => undefined,
+    replace: async () => undefined,
+    reconcile: async () => undefined,
+    stopPolling: async () => undefined,
+    resumePolling: async () => undefined,
+    drainPending: async () => undefined,
+    close: async () => undefined,
+    ...overrides,
+  };
+}
+
 function createCoachRpcServer(
-  input: Omit<CoachRpcServerInput, "operations" | "spend" | "selfTestOperations"> &
-    Partial<Pick<CoachRpcServerInput, "operations" | "spend" | "selfTestOperations">>,
+  input: Omit<
+    CoachRpcServerInput,
+    "operations" | "spend" | "selfTestOperations" | "telegram" | "athleteHome"
+  > &
+    Partial<
+      Pick<
+        CoachRpcServerInput,
+        "operations" | "spend" | "selfTestOperations" | "telegram" | "athleteHome"
+      >
+    >,
 ) {
   return createCoachRpcServerProduction({
     ...input,
@@ -169,6 +197,7 @@ function createCoachRpcServer(
       input.rendererCapabilityRandomBytes ?? (() => TEST_RENDERER_CAPABILITY_BYTES),
     operations: input.operations ?? operations,
     spend: input.spend ?? spend,
+    telegram: input.telegram ?? telegramController(),
     selfTestOperations: input.selfTestOperations ?? {
       selfTest: async () => ({
         schemaVersion: 1,
@@ -1296,6 +1325,120 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
       result: { text: "ok" },
     });
     expect(chat).toHaveBeenCalledOnce();
+    await client.close();
+  });
+
+  it("projects closed Telegram control only to the privileged bearer", async () => {
+    const token = "x".repeat(43);
+    let telegramStatus: TelegramChannelStatus = {
+      desiredState: "disabled",
+      state: "disabled",
+    };
+    const configure = vi.fn(async (_token: string) => undefined);
+    const enable = vi.fn(async () => {
+      telegramStatus = { desiredState: "enabled", state: "starting" };
+    });
+    const disable = vi.fn(async () => {
+      telegramStatus = { desiredState: "disabled", state: "disabled" };
+    });
+    const replace = vi.fn(async (_token: string) => undefined);
+    const reconcile = vi.fn(async () => {
+      telegramStatus = { desiredState: "enabled", state: "online" };
+    });
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      telegram: telegramController({
+        getStatus: () => telegramStatus,
+        configure,
+        enable,
+        disable,
+        replace,
+        reconcile,
+      }),
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+
+    const requests = [
+      { method: "configureTelegram", params: { token: "first-private-token" } },
+      { method: "enableTelegram", params: {} },
+      { method: "replaceTelegram", params: { token: "second-private-token" } },
+      { method: "getTelegramStatus", params: {} },
+      { method: "reconcileTelegram", params: {} },
+      { method: "disableTelegram", params: {} },
+    ] as const;
+    for (const [id, request] of requests.entries()) {
+      client.ws.send(JSON.stringify({ jsonrpc: "2.0", id, ...request }));
+      const response = parseCoachRpcEnvelope(await client.frames.next());
+      expect(response).toMatchObject({ id, result: { desiredState: expect.any(String) } });
+      expect(JSON.stringify(response)).not.toContain("private-token");
+      expect(JSON.stringify(response)).not.toContain("api.telegram.org");
+    }
+    expect(configure).toHaveBeenCalledWith("first-private-token");
+    expect(replace).toHaveBeenCalledWith("second-private-token");
+    expect(enable).toHaveBeenCalledOnce();
+    expect(reconcile).toHaveBeenCalledOnce();
+    expect(disable).toHaveBeenCalledOnce();
+    await client.close();
+  });
+
+  it("keeps every Telegram control method absent from renderer authority", async () => {
+    const token = "x".repeat(43);
+    const telegram = telegramController({
+      getStatus: vi.fn(() => ({ desiredState: "disabled" as const, state: "disabled" as const })),
+      configure: vi.fn(async () => undefined),
+      enable: vi.fn(async () => undefined),
+      disable: vi.fn(async () => undefined),
+      replace: vi.fn(async () => undefined),
+      reconcile: vi.fn(async () => undefined),
+    });
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      telegram,
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(
+      JSON.stringify(
+        createClientHandshakeFrame(TEST_RENDERER_CAPABILITY_BYTES.toString("base64url")),
+      ),
+    );
+    await client.frames.next();
+
+    for (const [id, method] of [
+      "configureTelegram",
+      "enableTelegram",
+      "disableTelegram",
+      "replaceTelegram",
+      "getTelegramStatus",
+      "reconcileTelegram",
+    ].entries()) {
+      client.ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method,
+          params:
+            method === "configureTelegram" || method === "replaceTelegram"
+              ? { token: "renderer-private-token" }
+              : {},
+        }),
+      );
+      expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+        id,
+        error: { code: -32601, message: "Method not found" },
+      });
+    }
+    expect(telegram.getStatus).not.toHaveBeenCalled();
+    expect(telegram.configure).not.toHaveBeenCalled();
+    expect(telegram.enable).not.toHaveBeenCalled();
+    expect(telegram.disable).not.toHaveBeenCalled();
+    expect(telegram.replace).not.toHaveBeenCalled();
+    expect(telegram.reconcile).not.toHaveBeenCalled();
     await client.close();
   });
 

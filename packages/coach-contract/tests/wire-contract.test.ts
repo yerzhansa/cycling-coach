@@ -18,6 +18,7 @@ import {
   EmptyRpcParamsSchema,
   ConfigureRuntimeRpcParamsSchema,
   ConfigureRuntimeRpcResultSchema,
+  ConfigureTelegramRpcParamsSchema,
   GetRuntimeConfigRpcParamsSchema,
   GetRuntimeConfigRpcResultSchema,
   GetArchivedTranscriptPageRpcParamsSchema,
@@ -48,6 +49,7 @@ import {
   ResetSessionRequestSchema,
   ResetSessionResponseSchema,
   RendererCapabilitySchema,
+  ReplaceTelegramRpcParamsSchema,
   SetUnitsPreferenceRpcParamsSchema,
   SetUnitsPreferenceRpcResultSchema,
   GetSpendSummaryRpcParamsSchema,
@@ -56,6 +58,7 @@ import {
   SelfTestRpcParamsSchema,
   SelfTestRpcResultSchema,
   SpendSummarySchema,
+  TelegramChannelStatusSchema,
   ServerHandshakeFrameSchema,
   TurnEventSchema,
   UNKNOWN_CYCLING_TRAINING_CONTEXT,
@@ -215,7 +218,7 @@ const spendSummary = SpendSummarySchema.parse({
 });
 
 describe("coach request and event projection", () => {
-  it("admits exactly the seventeen strict method requests", () => {
+  it("admits exactly the twenty-three strict method requests", () => {
     const requests = [
       { jsonrpc: "2.0", id: 1, method: "chat", params: { chatId: "chat-1", message: "hello" } },
       { jsonrpc: "2.0", id: 2, method: "resetSession", params: { chatId: "chat-1" } },
@@ -271,6 +274,12 @@ describe("coach request and event projection", () => {
         method: "getArchivedTranscriptPage",
         params: { boundaryRef: BOUNDARY_REF, cursor: null, limit: 25 },
       },
+      { jsonrpc: "2.0", id: 18, method: "configureTelegram", params: { token: "bot-token" } },
+      { jsonrpc: "2.0", id: 19, method: "enableTelegram", params: {} },
+      { jsonrpc: "2.0", id: 20, method: "disableTelegram", params: {} },
+      { jsonrpc: "2.0", id: 21, method: "replaceTelegram", params: { token: "new-token" } },
+      { jsonrpc: "2.0", id: 22, method: "getTelegramStatus", params: {} },
+      { jsonrpc: "2.0", id: 23, method: "reconcileTelegram", params: {} },
     ];
     for (const request of requests) {
       expect(CoachRpcRequestEnvelopeSchema.parse(request)).toEqual(request);
@@ -895,6 +904,15 @@ describe("coach request and event projection", () => {
       }),
       getUnitsPreference: async () => ({ value: "metric", source: "default" }),
       setUnitsPreference: async ({ value }) => ({ value, source: "cycling" }),
+      configureTelegram: async () => ({ desiredState: "disabled", state: "disabled" }),
+      enableTelegram: async () => ({
+        desiredState: "enabled",
+        state: "waiting-for-credential",
+      }),
+      disableTelegram: async () => ({ desiredState: "disabled", state: "disabled" }),
+      replaceTelegram: async () => ({ desiredState: "enabled", state: "starting" }),
+      getTelegramStatus: async () => ({ desiredState: "enabled", state: "online" }),
+      reconcileTelegram: async () => ({ desiredState: "enabled", state: "online" }),
       getSpendSummary: async () => spendSummary,
       setDailySpendCap: async () => spendSummary,
       selfTest: async () => ({
@@ -990,6 +1008,42 @@ describe("coach request and event projection", () => {
       responseSchema: SetUnitsPreferenceRpcResultSchema,
       eventSchema: NoRpcEventSchema,
     });
+    expect(COACH_RPC_METHOD_REGISTRY.configureTelegram).toEqual({
+      wireName: "configureTelegram",
+      requestSchema: ConfigureTelegramRpcParamsSchema,
+      responseSchema: TelegramChannelStatusSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.enableTelegram).toEqual({
+      wireName: "enableTelegram",
+      requestSchema: EmptyRpcParamsSchema,
+      responseSchema: TelegramChannelStatusSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.disableTelegram).toEqual({
+      wireName: "disableTelegram",
+      requestSchema: EmptyRpcParamsSchema,
+      responseSchema: TelegramChannelStatusSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.replaceTelegram).toEqual({
+      wireName: "replaceTelegram",
+      requestSchema: ReplaceTelegramRpcParamsSchema,
+      responseSchema: TelegramChannelStatusSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.getTelegramStatus).toEqual({
+      wireName: "getTelegramStatus",
+      requestSchema: EmptyRpcParamsSchema,
+      responseSchema: TelegramChannelStatusSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.reconcileTelegram).toEqual({
+      wireName: "reconcileTelegram",
+      requestSchema: EmptyRpcParamsSchema,
+      responseSchema: TelegramChannelStatusSchema,
+      eventSchema: NoRpcEventSchema,
+    });
     expect(COACH_RPC_METHOD_REGISTRY.getSpendSummary).toEqual({
       wireName: "getSpendSummary",
       requestSchema: GetSpendSummaryRpcParamsSchema,
@@ -1020,6 +1074,12 @@ describe("coach request and event projection", () => {
       "getRuntimeConfig",
       "getUnitsPreference",
       "setUnitsPreference",
+      "configureTelegram",
+      "enableTelegram",
+      "disableTelegram",
+      "replaceTelegram",
+      "getTelegramStatus",
+      "reconcileTelegram",
       "getSpendSummary",
       "setDailySpendCap",
     ] as const) {

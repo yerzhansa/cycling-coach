@@ -73,6 +73,7 @@ export async function runCoachServe(
         setDailySpendCap: ({ dailyCapUsd }) => spendMeter.setDailySpendCap(dailyCapUsd),
       },
       selfTestOperations: { selfTest: createPackagedSelfTestOperation() },
+      telegram,
       token: token.value,
       owner: input.owner ?? "unmanaged-foreground",
       athleteHome: input.lifecycle.home.root,

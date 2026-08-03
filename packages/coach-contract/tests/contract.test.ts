@@ -23,6 +23,9 @@ import {
   SetDailySpendCapRpcParamsSchema,
   SpendRouteSummarySchema,
   SpendSummarySchema,
+  ConfigureTelegramRpcParamsSchema,
+  ReplaceTelegramRpcParamsSchema,
+  TelegramChannelStatusSchema,
 } from "../src/index.js";
 
 const TURN_ID = "b8b6c1a2-0000-4000-8000-000000000001";
@@ -86,6 +89,33 @@ describe("exit codes", () => {
 describe("protocol version", () => {
   it("is 12", () => {
     expect(PROTOCOL_VERSION).toBe(12);
+  });
+});
+
+describe("Telegram control contract", () => {
+  it("keeps credentials request-only and status metadata closed", () => {
+    expect(ConfigureTelegramRpcParamsSchema.parse({ token: "bot-token" })).toEqual({
+      token: "bot-token",
+    });
+    expect(ReplaceTelegramRpcParamsSchema.parse({ token: "replacement-token" })).toEqual({
+      token: "replacement-token",
+    });
+    expect(
+      TelegramChannelStatusSchema.parse({
+        desiredState: "enabled",
+        state: "waiting-for-credential",
+      }),
+    ).toEqual({ desiredState: "enabled", state: "waiting-for-credential" });
+    expect(
+      TelegramChannelStatusSchema.safeParse({
+        desiredState: "enabled",
+        state: "online",
+        token: "must-not-cross-response-boundary",
+      }).success,
+    ).toBe(false);
+    expect(
+      ConfigureTelegramRpcParamsSchema.safeParse({ token: " token-with-space " }).success,
+    ).toBe(false);
   });
 });
 

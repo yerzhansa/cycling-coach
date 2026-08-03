@@ -21,6 +21,14 @@ import {
   SelfTestRpcResultSchema,
   type SelfTestRpcResult,
 } from "./self-test.js";
+import {
+  ConfigureTelegramRpcParamsSchema,
+  ReplaceTelegramRpcParamsSchema,
+  TelegramChannelStatusSchema,
+  type ConfigureTelegramRpcParams,
+  type ReplaceTelegramRpcParams,
+  type TelegramChannelStatus,
+} from "./telegram-control.js";
 
 export const JsonValueSchema = z.json();
 export type JsonValue = z.infer<typeof JsonValueSchema>;
@@ -127,6 +135,12 @@ export const COACH_RPC_METHOD_NAMES = [
   "getRuntimeConfig",
   "getUnitsPreference",
   "setUnitsPreference",
+  "configureTelegram",
+  "enableTelegram",
+  "disableTelegram",
+  "replaceTelegram",
+  "getTelegramStatus",
+  "reconcileTelegram",
   "getSpendSummary",
   "setDailySpendCap",
   "selfTest",
@@ -221,9 +235,7 @@ export const ArchivedConversationBoundaryRefSchema = z
   .string()
   .length(64)
   .regex(BOUNDARY_REF_PATTERN);
-export type ArchivedConversationBoundaryRef = z.infer<
-  typeof ArchivedConversationBoundaryRefSchema
->;
+export type ArchivedConversationBoundaryRef = z.infer<typeof ArchivedConversationBoundaryRefSchema>;
 
 export const GetTranscriptPageRpcParamsSchema = z
   .object({
@@ -535,7 +547,11 @@ const RuntimeLlmSchema = z
   })
   .strict()
   .superRefine((value, context) => {
-    if (value.provider !== undefined && isKeylessProvider(value.provider) && value.api_key !== undefined) {
+    if (
+      value.provider !== undefined &&
+      isKeylessProvider(value.provider) &&
+      value.api_key !== undefined
+    ) {
       context.addIssue({ code: "custom", path: ["api_key"], message: "api_key must be absent" });
     }
     if (value.clear_credential === true) {
@@ -794,10 +810,20 @@ export interface CoachSelfTestOperations {
   selfTest(onEvent?: (event: OperationProgressEvent) => void): Promise<SelfTestRpcResult>;
 }
 
+export interface TelegramControlOperations {
+  configureTelegram(request: ConfigureTelegramRpcParams): Promise<TelegramChannelStatus>;
+  enableTelegram(request: EmptyRpcParams): Promise<TelegramChannelStatus>;
+  disableTelegram(request: EmptyRpcParams): Promise<TelegramChannelStatus>;
+  replaceTelegram(request: ReplaceTelegramRpcParams): Promise<TelegramChannelStatus>;
+  getTelegramStatus(request: EmptyRpcParams): Promise<TelegramChannelStatus>;
+  reconcileTelegram(request: EmptyRpcParams): Promise<TelegramChannelStatus>;
+}
+
 export type CoachRpcService = CoachEngine &
   CoachOperations &
   SpendOperations &
-  CoachSelfTestOperations;
+  CoachSelfTestOperations &
+  TelegramControlOperations;
 
 export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
   z
@@ -910,6 +936,54 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("setUnitsPreference"),
       params: SetUnitsPreferenceRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("configureTelegram"),
+      params: ConfigureTelegramRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("enableTelegram"),
+      params: EmptyRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("disableTelegram"),
+      params: EmptyRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("replaceTelegram"),
+      params: ReplaceTelegramRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("getTelegramStatus"),
+      params: EmptyRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("reconcileTelegram"),
+      params: EmptyRpcParamsSchema,
     })
     .strict(),
   z
@@ -1103,6 +1177,42 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "setUnitsPreference",
     requestSchema: SetUnitsPreferenceRpcParamsSchema,
     responseSchema: SetUnitsPreferenceRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  configureTelegram: {
+    wireName: "configureTelegram",
+    requestSchema: ConfigureTelegramRpcParamsSchema,
+    responseSchema: TelegramChannelStatusSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  enableTelegram: {
+    wireName: "enableTelegram",
+    requestSchema: EmptyRpcParamsSchema,
+    responseSchema: TelegramChannelStatusSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  disableTelegram: {
+    wireName: "disableTelegram",
+    requestSchema: EmptyRpcParamsSchema,
+    responseSchema: TelegramChannelStatusSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  replaceTelegram: {
+    wireName: "replaceTelegram",
+    requestSchema: ReplaceTelegramRpcParamsSchema,
+    responseSchema: TelegramChannelStatusSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  getTelegramStatus: {
+    wireName: "getTelegramStatus",
+    requestSchema: EmptyRpcParamsSchema,
+    responseSchema: TelegramChannelStatusSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  reconcileTelegram: {
+    wireName: "reconcileTelegram",
+    requestSchema: EmptyRpcParamsSchema,
+    responseSchema: TelegramChannelStatusSchema,
     eventSchema: NoRpcEventSchema,
   },
   getSpendSummary: {

@@ -31,6 +31,7 @@ import {
   ensureDaemonToken,
   type CoachRpcServer,
 } from "../../src/daemon/rpc-server.js";
+import type { DesktopTelegramController } from "../../src/desktop-telegram-controller.js";
 
 const AUTH_TOKEN = "F8_AUTH_TOKEN_MUST_NOT_BE_LOGGED12345678901";
 const API_KEY_SECRET = "F8_API_KEY_MUST_NOT_ESCAPE";
@@ -43,6 +44,18 @@ const NON_ERROR_SECRET = "F8_NON_ERROR_TEXT_MUST_NOT_ESCAPE";
 const NESTED_SECRET = "F8_NESTED_AUTH_MUST_NOT_ESCAPE";
 const HOSTILE_SECRET = "F8_HOSTILE_PROXY_MUST_NOT_ESCAPE";
 const roots: string[] = [];
+const disabledTelegram: DesktopTelegramController = {
+  getStatus: () => ({ desiredState: "disabled", state: "disabled" }),
+  configure: async () => undefined,
+  enable: async () => undefined,
+  disable: async () => undefined,
+  replace: async () => undefined,
+  reconcile: async () => undefined,
+  stopPolling: async () => undefined,
+  resumePolling: async () => undefined,
+  drainPending: async () => undefined,
+  close: async () => undefined,
+};
 
 const state: AthleteState = {
   schemaVersion: "3",
@@ -138,6 +151,7 @@ interface RunningRpc {
 async function startRpc(coachEngine: CoachEngine): Promise<RunningRpc> {
   const rpc = createCoachRpcServer({
     engine: coachEngine,
+    telegram: disabledTelegram,
     selfTestOperations: {
       selfTest: async () => ({
         schemaVersion: 1,

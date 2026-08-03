@@ -232,8 +232,11 @@ function harness(
   });
   const telegram = {
     getStatus: vi.fn(() => ({ desiredState: "disabled" as const, state: "disabled" as const })),
+    configure: vi.fn(async () => undefined),
     enable: vi.fn(async () => undefined),
     disable: vi.fn(async () => undefined),
+    replace: vi.fn(async () => undefined),
+    reconcile: vi.fn(async () => undefined),
     stopPolling: vi.fn(async () => {
       trace.push("telegram-stop");
     }),
@@ -309,6 +312,7 @@ describe("runCoachServe", () => {
       expect.objectContaining({
         athleteHome: home.root,
         selfTestOperations: { selfTest: expect.any(Function) },
+        telegram: test.telegram,
       }),
     );
     expect(test.ensureToken).toHaveBeenCalledWith(test.lifecycle.home.configDir);

@@ -404,6 +404,7 @@ describe("desktop main supervisor", () => {
     expect(runtime.connection().url).toBe("ws://127.0.0.1:45002/rpc");
     expect(runtime.currentPort()).toBe(45_002);
     expect(runtime.connection().generation).toBe(2);
+    expect(runtime.connection().supervision).toBe("app-supervised");
     await expect(runtime.recover(1)).resolves.toMatchObject({ generation: 2 });
     expect(supervisor.resolveForRecovery).toHaveBeenCalledTimes(1);
   });
@@ -660,6 +661,7 @@ describe("desktop main supervisor", () => {
     await expect(runtime.recover(1)).resolves.toMatchObject({
       url: "ws://127.0.0.1:45002/rpc",
       generation: 2,
+      supervision: "attached",
     });
     expect(attached.close).not.toHaveBeenCalled();
     expect(supervisor.resolveForRecovery).not.toHaveBeenCalled();

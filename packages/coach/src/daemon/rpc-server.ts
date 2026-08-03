@@ -41,6 +41,7 @@ import {
 } from "./invocation-coordinator.js";
 import { HANDOFF_CAPABILITY_BYTES, type MonotonicTimer } from "./upgrade-fence.js";
 import { serializeBoundaryError } from "./error-boundary.js";
+import type { DesktopTelegramController } from "../desktop-telegram-controller.js";
 
 const AUTH_TIMEOUT_MS = 1_000;
 const MAX_PAYLOAD_BYTES = 1_048_576;
@@ -150,6 +151,7 @@ export interface CoachRpcServerInput {
   readonly operations: CoachOperations;
   readonly spend: SpendRpcHandlers;
   readonly selfTestOperations: CoachSelfTestOperations;
+  readonly telegram: DesktopTelegramController;
   readonly token: string;
   readonly owner: DaemonOwner;
   readonly athleteHome: string;
@@ -897,6 +899,63 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                 throw new TypeError("Units preference operation is unavailable.");
               }
               result = await input.operations.setUnitsPreference(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "configureTelegram":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.configureTelegram.requestSchema.parse(
+                generic.data.params,
+              );
+              await input.telegram.configure(request.token);
+              result = input.telegram.getStatus();
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "enableTelegram":
+            try {
+              COACH_RPC_METHOD_REGISTRY.enableTelegram.requestSchema.parse(generic.data.params);
+              await input.telegram.enable();
+              result = input.telegram.getStatus();
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "disableTelegram":
+            try {
+              COACH_RPC_METHOD_REGISTRY.disableTelegram.requestSchema.parse(generic.data.params);
+              await input.telegram.disable();
+              result = input.telegram.getStatus();
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "replaceTelegram":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.replaceTelegram.requestSchema.parse(
+                generic.data.params,
+              );
+              await input.telegram.replace(request.token);
+              result = input.telegram.getStatus();
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "getTelegramStatus":
+            try {
+              COACH_RPC_METHOD_REGISTRY.getTelegramStatus.requestSchema.parse(generic.data.params);
+              result = input.telegram.getStatus();
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "reconcileTelegram":
+            try {
+              COACH_RPC_METHOD_REGISTRY.reconcileTelegram.requestSchema.parse(generic.data.params);
+              await input.telegram.reconcile();
+              result = input.telegram.getStatus();
             } catch (error) {
               invocationFailure = { error };
             }
