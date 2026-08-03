@@ -87,6 +87,7 @@ async function createTestTelegramBot(
     readonly confirmations?: { peek: unknown; confirm: unknown; cancel: unknown };
   },
   reference?: object,
+  webhookPolicy: "delete-before-polling" | "preserve" = "delete-before-polling",
 ) {
   const [{ createTelegramBot }, { createNpmTelegramHost }] = await Promise.all([
     import("../src/channels/telegram.js"),
@@ -99,6 +100,7 @@ async function createTestTelegramBot(
   };
   return createTelegramBot({
     token: "FAKE_TOKEN",
+    webhookPolicy,
     engine: agent as never,
     host: createNpmTelegramHost({
       binary: cyclingBinary,
@@ -109,6 +111,67 @@ async function createTestTelegramBot(
     dataDir,
   });
 }
+
+describe("createTelegramBot — webhook ownership", () => {
+  it("preserves an existing webhook only for grammY's implicit polling-start deletion", async () => {
+    type Transformer = (
+      previous: (
+        method: string,
+        payload: unknown,
+        signal?: AbortSignal,
+      ) => Promise<{ ok: true; result: true }>,
+      method: string,
+      payload: unknown,
+      signal?: AbortSignal,
+    ) => Promise<unknown>;
+    const transformers: Transformer[] = [];
+    const transport = vi.fn(async () => ({ ok: true as const, result: true as const }));
+    const bot = {
+      api: {
+        sendMessage: vi.fn(async () => undefined),
+        setMyCommands: vi.fn(async () => true),
+        config: {
+          use: vi.fn((transformer: Transformer) => {
+            transformers.push(transformer);
+          }),
+        },
+      },
+      use: vi.fn(),
+      command: vi.fn(),
+      on: vi.fn(),
+      catch: vi.fn(),
+      start: vi.fn(async () => {
+        await transformers.at(-1)!(transport, "deleteWebhook", {
+          drop_pending_updates: undefined,
+        });
+      }),
+      stop: vi.fn(async () => undefined),
+    };
+    vi.doMock("grammy", () => ({
+      Bot: function FakeBot() {
+        return bot;
+      },
+      InputFile: class {},
+    }));
+    const agent = {
+      chat: vi.fn(),
+      resetSession: vi.fn(),
+      hasSession: vi.fn(),
+      getAthleteState: vi.fn(),
+    };
+    const runtime = await createTestTelegramBot(agent, undefined, "preserve");
+
+    await runtime.start();
+    expect(transport).not.toHaveBeenCalled();
+
+    const preserveTransformer = transformers.at(-1)!;
+    await preserveTransformer(transport, "deleteWebhook", { drop_pending_updates: false });
+    expect(transport).toHaveBeenCalledOnce();
+
+    await runtime.start();
+    expect(transport).toHaveBeenCalledOnce();
+  });
+});
 
 describe("createTelegramBot — Garmin attribution carriage", () => {
   it("delivers /status attribution and resends the identical attributed answer", async () => {

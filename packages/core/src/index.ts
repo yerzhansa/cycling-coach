@@ -187,6 +187,12 @@ export type { CodexCredentials, CodexLoginOptions } from "./agent/codex/oauth.js
 // ─── Channels ─────────────────────────────────────────────────────────
 export { createTelegramBot } from "./channels/telegram.js";
 export type { CreateTelegramChannelInput, TelegramChannelRuntime } from "./channels/telegram.js";
+export { deleteTelegramWebhook, inspectTelegramCredential } from "./channels/telegram-setup.js";
+export type {
+  TelegramCredentialInspectionResult,
+  TelegramSetupApi,
+  TelegramSetupDependencies,
+} from "./channels/telegram-setup.js";
 export { createNpmTelegramHost, notifyNpmTelegramUpdate } from "./channels/npm-telegram-host.js";
 export type {
   CreateNpmTelegramHostInput,
@@ -286,11 +292,22 @@ export type {
   StoredDataFreshness,
 } from "./athlete-data.js";
 export {
+  addSecondarySender,
+  claimPrimaryOperator,
+  listDesktopAllowedSenders,
   loadAllowedSendersFromFile,
   loadAllowedSendersWithSource,
+  removeSecondarySender,
   SENDER_ID_RE,
 } from "./channels/allowed-senders.js";
+export type {
+  AddSecondarySenderResult,
+  ClaimPrimaryOperatorResult,
+  DesktopAllowedSender,
+  RemoveSecondarySenderResult,
+} from "./channels/allowed-senders.js";
 export { createAuthMiddleware } from "./channels/telegram-access.js";
+export type { CreateAuthMiddlewareOpts } from "./channels/telegram-access.js";
 
 // ─── Updater ──────────────────────────────────────────────────────────
 export {

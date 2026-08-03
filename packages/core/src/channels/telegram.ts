@@ -151,8 +151,10 @@ function buildCommandMenu(
 function createSecuredBot(opts: {
   token: string;
   access: TelegramHostCapabilities["access"];
-}): Bot {
+  webhookPolicy: TelegramWebhookPolicy;
+}): { readonly bot: Bot; readonly prepareStart: () => void } {
   const bot = new Bot(opts.token);
+  let suppressImplicitWebhookDeletion = false;
 
   // Bounded API-level retry restricted to a Telegram 429 carrying a `retry_after`
   // (the one failure class where the original send provably did NOT land).
@@ -175,10 +177,30 @@ function createSecuredBot(opts: {
     }),
   );
 
+  if (opts.webhookPolicy === "preserve") {
+    // Long-poll startup normally removes a configured webhook. Skipping only
+    // that startup call leaves ownership intact so getUpdates can surface the
+    // conflict instead of silently taking the bot away from its current host.
+    bot.api.config.use((previous, method, payload, signal) => {
+      if (suppressImplicitWebhookDeletion && method === "deleteWebhook") {
+        suppressImplicitWebhookDeletion = false;
+        return Promise.resolve({ ok: true, result: true }) as ReturnType<typeof previous>;
+      }
+      return previous(method, payload, signal);
+    });
+  }
+
   bot.use(opts.access.middleware);
 
-  return bot;
+  return {
+    bot,
+    prepareStart: () => {
+      suppressImplicitWebhookDeletion = opts.webhookPolicy === "preserve";
+    },
+  };
 }
+
+export type TelegramWebhookPolicy = "delete-before-polling" | "preserve";
 
 export interface TelegramChannelRuntime {
   start(): Promise<void>;
@@ -189,6 +211,7 @@ export interface TelegramChannelRuntime {
 
 export interface CreateTelegramChannelInput {
   readonly token: string;
+  readonly webhookPolicy: TelegramWebhookPolicy;
   readonly engine: CoachEngine;
   readonly host: TelegramHostCapabilities;
   readonly dataDir: string;
@@ -196,9 +219,10 @@ export interface CreateTelegramChannelInput {
 }
 
 export function createTelegramBot(input: CreateTelegramChannelInput): TelegramChannelRuntime {
-  const bot = createSecuredBot({
+  const { bot, prepareStart } = createSecuredBot({
     token: input.token,
     access: input.host.access,
+    webhookPolicy: input.webhookPolicy,
   });
   const { engine, host } = input;
   const { dataDir } = input;
@@ -863,8 +887,10 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
   });
 
   return {
-    start: () =>
-      input.onStart === undefined ? bot.start() : bot.start({ onStart: input.onStart }),
+    start: () => {
+      prepareStart();
+      return input.onStart === undefined ? bot.start() : bot.start({ onStart: input.onStart });
+    },
     stop: () => bot.stop(),
     drainPending,
     sendMessage: (chatId, text) => bot.api.sendMessage(chatId, text),

@@ -104,6 +104,7 @@ async function buildBot(
 
   const { createTelegramBot } = await import("../src/channels/telegram.js");
   const { drainPending } = createTelegramBot({
+    webhookPolicy: "delete-before-polling",
     token: "FAKE_TOKEN",
     engine: engine as unknown as Parameters<typeof createTelegramBot>[0]["engine"],
     host,

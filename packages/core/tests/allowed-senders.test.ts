@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -17,7 +18,11 @@ import {
   saveAllowedSenders,
   defaultPairingState,
   addSender,
+  addSecondarySender,
+  claimPrimaryOperator,
+  listDesktopAllowedSenders,
   removeSender,
+  removeSecondarySender,
   listSenders,
   readKnownSessions,
   type AllowedSenders,
@@ -318,7 +323,7 @@ describe("saveAllowedSenders — transformer pattern, round-trip", () => {
       seen.push(current);
       return {
         ...(current as AllowedSenders),
-        allowFrom: [...((current as AllowedSenders).allowFrom), "67890"],
+        allowFrom: [...(current as AllowedSenders).allowFrom, "67890"],
       };
     });
     expect(seen).toHaveLength(1);
@@ -330,16 +335,20 @@ describe("saveAllowedSenders — transformer pattern, round-trip", () => {
   });
 
   it("forward-compat: round-trip through saveAllowedSenders preserves unknown top-level fields", () => {
-    saveAllowedSenders(dataDir, () => ({
-      ...defaultPairingState(),
-      dmPolicy: "allowlist",
-      allowFrom: ["12345"],
-      primaryOperator: "12345",
-      lastUsedAt: { "12345": "2026-05-09T10:00:00.000Z" },
-    }) as AllowedSenders);
+    saveAllowedSenders(
+      dataDir,
+      () =>
+        ({
+          ...defaultPairingState(),
+          dmPolicy: "allowlist",
+          allowFrom: ["12345"],
+          primaryOperator: "12345",
+          lastUsedAt: { "12345": "2026-05-09T10:00:00.000Z" },
+        }) as AllowedSenders,
+    );
     saveAllowedSenders(dataDir, (current) => ({
       ...(current as AllowedSenders),
-      allowFrom: [...((current as AllowedSenders).allowFrom), "67890"],
+      allowFrom: [...(current as AllowedSenders).allowFrom, "67890"],
     }));
     const reloaded = loadAllowedSenders(dataDir);
     expect(reloaded.lastUsedAt).toEqual({ "12345": "2026-05-09T10:00:00.000Z" });
@@ -409,6 +418,211 @@ describe("addSender / removeSender — validation and lifecycle", () => {
   });
 });
 
+describe("Desktop sender authority operations", () => {
+  const allowedSendersPath = () => join(dataDir, "allowed-senders.json");
+
+  it("claims the first primary atomically and returns the persisted Desktop entry", () => {
+    const result = claimPrimaryOperator(dataDir, "12345");
+
+    expect(result.status).toBe("claimed");
+    if (result.status !== "claimed") throw new Error("expected a successful claim");
+    expect(result.sender).toEqual({
+      senderId: "12345",
+      role: "primary",
+      addedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+    });
+    const persisted = loadAllowedSendersFromFile(dataDir);
+    expect(persisted).toMatchObject({
+      dmPolicy: "allowlist",
+      allowFrom: ["12345"],
+      primaryOperator: "12345",
+      capturedAt: result.sender.addedAt,
+      addedAt: { "12345": result.sender.addedAt },
+    });
+  });
+
+  it("treats a repeat claim by the same sender as an idempotent no-write", () => {
+    const first = claimPrimaryOperator(dataDir, "12345");
+    expect(first.status).toBe("claimed");
+    const bytesBefore = readFileSync(allowedSendersPath(), "utf8");
+
+    const second = claimPrimaryOperator(dataDir, "12345");
+
+    expect(second).toEqual({
+      status: "already-primary",
+      sender: first.status === "claimed" ? first.sender : undefined,
+    });
+    expect(readFileSync(allowedSendersPath(), "utf8")).toBe(bytesBefore);
+  });
+
+  it("refuses a different primary without changing the existing file", () => {
+    claimPrimaryOperator(dataDir, "12345");
+    const bytesBefore = readFileSync(allowedSendersPath(), "utf8");
+
+    expect(claimPrimaryOperator(dataDir, "67890")).toEqual({
+      status: "refused",
+      reason: "primary-exists",
+    });
+    expect(readFileSync(allowedSendersPath(), "utf8")).toBe(bytesBefore);
+  });
+
+  it("allows only one winner when two different senders try to claim", async () => {
+    const results = await Promise.all([
+      Promise.resolve().then(() => claimPrimaryOperator(dataDir, "11111")),
+      Promise.resolve().then(() => claimPrimaryOperator(dataDir, "22222")),
+    ]);
+
+    expect(results.map((result) => result.status).sort()).toEqual(["claimed", "refused"]);
+    const state = loadAllowedSendersFromFile(dataDir);
+    expect(state.allowFrom).toEqual([state.primaryOperator]);
+  });
+
+  it("refuses logically inconsistent and unreadable existing files without overwriting them", () => {
+    saveAllowedSenders(dataDir, () => ({
+      ...defaultPairingState(),
+      allowFrom: ["12345"],
+    }));
+    const inconsistentBytes = readFileSync(allowedSendersPath(), "utf8");
+    expect(claimPrimaryOperator(dataDir, "67890")).toEqual({
+      status: "refused",
+      reason: "inconsistent-state",
+    });
+    expect(readFileSync(allowedSendersPath(), "utf8")).toBe(inconsistentBytes);
+
+    writeFileSync(allowedSendersPath(), "{not-json");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(claimPrimaryOperator(dataDir, "67890")).toEqual({
+      status: "refused",
+      reason: "inconsistent-state",
+    });
+    expect(readFileSync(allowedSendersPath(), "utf8")).toBe("{not-json");
+    errSpy.mockRestore();
+  });
+
+  it("requires a primary before adding a secondary and does not create a state file", () => {
+    expect(addSecondarySender(dataDir, "67890")).toEqual({
+      status: "refused",
+      reason: "primary-required",
+    });
+    expect(existsSync(allowedSendersPath())).toBe(false);
+  });
+
+  it("adds a secondary without changing the primary and is idempotent", () => {
+    claimPrimaryOperator(dataDir, "12345");
+
+    const added = addSecondarySender(dataDir, "67890");
+    expect(added.status).toBe("added");
+    if (added.status !== "added") throw new Error("expected a successful add");
+    expect(added.sender).toEqual({
+      senderId: "67890",
+      role: "additional",
+      addedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+    });
+    expect(loadAllowedSendersFromFile(dataDir)).toMatchObject({
+      allowFrom: ["12345", "67890"],
+      primaryOperator: "12345",
+    });
+    const bytesBefore = readFileSync(allowedSendersPath(), "utf8");
+
+    expect(addSecondarySender(dataDir, "67890")).toEqual({
+      status: "already-allowed",
+      sender: added.sender,
+    });
+    expect(readFileSync(allowedSendersPath(), "utf8")).toBe(bytesBefore);
+  });
+
+  it("never promotes through addSecondarySender, including when passed the primary id", () => {
+    const claimed = claimPrimaryOperator(dataDir, "12345");
+    expect(claimed.status).toBe("claimed");
+
+    expect(addSecondarySender(dataDir, "12345")).toEqual({
+      status: "already-allowed",
+      sender: claimed.status === "claimed" ? claimed.sender : undefined,
+    });
+    expect(loadAllowedSendersFromFile(dataDir).primaryOperator).toBe("12345");
+  });
+
+  it("refuses secondary mutations when the stored primary is inconsistent", () => {
+    saveAllowedSenders(dataDir, () => ({
+      ...defaultPairingState(),
+      dmPolicy: "allowlist",
+      allowFrom: ["67890"],
+      primaryOperator: "12345",
+    }));
+    const bytesBefore = readFileSync(allowedSendersPath(), "utf8");
+
+    expect(addSecondarySender(dataDir, "22222")).toEqual({
+      status: "refused",
+      reason: "inconsistent-state",
+    });
+    expect(removeSecondarySender(dataDir, "67890")).toEqual({
+      status: "refused",
+      reason: "inconsistent-state",
+    });
+    expect(readFileSync(allowedSendersPath(), "utf8")).toBe(bytesBefore);
+  });
+
+  it("refuses primary removal but removes an additional sender", () => {
+    claimPrimaryOperator(dataDir, "12345");
+    addSecondarySender(dataDir, "67890");
+    const bytesBefore = readFileSync(allowedSendersPath(), "utf8");
+
+    expect(removeSecondarySender(dataDir, "12345")).toEqual({
+      status: "refused",
+      reason: "primary-removal",
+    });
+    expect(readFileSync(allowedSendersPath(), "utf8")).toBe(bytesBefore);
+    expect(removeSecondarySender(dataDir, "67890")).toEqual({ status: "removed" });
+    expect(loadAllowedSendersFromFile(dataDir)).toMatchObject({
+      dmPolicy: "allowlist",
+      allowFrom: ["12345"],
+      primaryOperator: "12345",
+    });
+  });
+
+  it("returns not-found without creating or rewriting state", () => {
+    expect(removeSecondarySender(dataDir, "67890")).toEqual({ status: "not-found" });
+    expect(existsSync(allowedSendersPath())).toBe(false);
+
+    claimPrimaryOperator(dataDir, "12345");
+    const bytesBefore = readFileSync(allowedSendersPath(), "utf8");
+    expect(removeSecondarySender(dataDir, "67890")).toEqual({ status: "not-found" });
+    expect(readFileSync(allowedSendersPath(), "utf8")).toBe(bytesBefore);
+  });
+
+  it("validates sender syntax for every Desktop mutation", () => {
+    expect(() => claimPrimaryOperator(dataDir, "bad")).toThrow(/positive integer/);
+    expect(() => addSecondarySender(dataDir, "01")).toThrow(/positive integer/);
+    expect(() => removeSecondarySender(dataDir, "1")).toThrow(/positive integer/);
+  });
+
+  it("lists only file-backed senders with roles and optional legacy timestamps", () => {
+    process.env.CYCLING_COACH_OPERATOR_ID = "99999";
+    saveAllowedSenders(dataDir, () => ({
+      ...defaultPairingState(),
+      dmPolicy: "allowlist",
+      allowFrom: ["12345", "67890"],
+      primaryOperator: "12345",
+      capturedAt: "2026-05-09T10:00:00.000Z",
+      addedAt: { "12345": "2026-05-09T10:00:00.000Z" },
+    }));
+
+    expect(listDesktopAllowedSenders(dataDir)).toEqual([
+      {
+        senderId: "12345",
+        role: "primary",
+        addedAt: "2026-05-09T10:00:00.000Z",
+      },
+      { senderId: "67890", role: "additional" },
+    ]);
+  });
+
+  it("does not expose an environment-only sender when no Desktop file exists", () => {
+    process.env.CYCLING_COACH_OPERATOR_ID = "99999";
+    expect(listDesktopAllowedSenders(dataDir)).toEqual([]);
+  });
+});
+
 describe("saveAllowedSenders — PID lockfile", () => {
   const lockPath = () => join(dataDir, ".allowed-senders.lock");
 
@@ -421,9 +635,7 @@ describe("saveAllowedSenders — PID lockfile", () => {
   });
 
   it("contention with live PID + fresh timestamp → LockfileContentionError", async () => {
-    const { LockfileContentionError } = await import(
-      "../src/channels/allowed-senders.js"
-    );
+    const { LockfileContentionError } = await import("../src/channels/allowed-senders.js");
     // Plant a lockfile claiming THIS process owns it (this process IS alive).
     writeFileSync(lockPath(), `${process.pid}\n${new Date().toISOString()}`);
     expect(() => addSender(dataDir, "12345")).toThrow(LockfileContentionError);
@@ -473,7 +685,9 @@ describe("listSenders / readKnownSessions", () => {
     mkdirSync(sessionsDir, { recursive: true });
     const file = join(sessionsDir, `telegram:${chatId}.jsonl`);
     const content = Array.from({ length: lines })
-      .map((_, i) => JSON.stringify({ role: i % 2 === 0 ? "user" : "assistant", content: "x", ts: Date.now() }))
+      .map((_, i) =>
+        JSON.stringify({ role: i % 2 === 0 ? "user" : "assistant", content: "x", ts: Date.now() }),
+      )
       .join("\n");
     writeFileSync(file, content);
   }
@@ -544,9 +758,7 @@ describe("saveAllowedSenders — data-dir perms (S3)", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     addSender(dataDir, "12345");
     expect(statSync(dataDir).mode & 0o777).toBe(0o700);
-    expect(errSpy).toHaveBeenCalledWith(
-      expect.stringMatching(/\[security\].*permissions.*0o700/),
-    );
+    expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/\[security\].*permissions.*0o700/));
     errSpy.mockRestore();
   });
 });

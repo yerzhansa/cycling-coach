@@ -90,9 +90,10 @@ function validateSchema(parsed: unknown, path: string): AllowedSenders | null {
         for (const item of arr) {
           const r = senderIdSchema.safeParse(item);
           if (r.success) out.push(r.data);
-          else console.error(
-            `[security] ${path}: dropped invalid allowFrom entry ${JSON.stringify(item)}.`,
-          );
+          else
+            console.error(
+              `[security] ${path}: dropped invalid allowFrom entry ${JSON.stringify(item)}.`,
+            );
         }
         return out;
       }),
@@ -106,9 +107,7 @@ function validateSchema(parsed: unknown, path: string): AllowedSenders | null {
   if (!result.success) {
     const issue = result.error.issues[0];
     const field = issue.path.join(".") || "root";
-    console.error(
-      `[security] ${path}: invalid ${field}; falling back to default-pairing.`,
-    );
+    console.error(`[security] ${path}: invalid ${field}; falling back to default-pairing.`);
     return null;
   }
   if (result.data.allowFrom.length === 0 && result.data.dmPolicy === "allowlist") {
@@ -204,6 +203,39 @@ export function loadAllowedSendersFromFile(dataDir: string): AllowedSenders {
   return loadFromFileCached(dataDir) ?? defaultPairingState();
 }
 
+export interface DesktopAllowedSender {
+  senderId: string;
+  role: "primary" | "additional";
+  addedAt?: string;
+}
+
+export type ClaimPrimaryOperatorResult =
+  | {
+      status: "claimed" | "already-primary";
+      sender: DesktopAllowedSender;
+    }
+  | {
+      status: "refused";
+      reason: "primary-exists" | "inconsistent-state";
+    };
+
+export type AddSecondarySenderResult =
+  | {
+      status: "added" | "already-allowed";
+      sender: DesktopAllowedSender;
+    }
+  | {
+      status: "refused";
+      reason: "primary-required" | "inconsistent-state";
+    };
+
+export type RemoveSecondarySenderResult =
+  | { status: "removed" | "not-found" }
+  | {
+      status: "refused";
+      reason: "primary-removal" | "inconsistent-state";
+    };
+
 // ─── PID lockfile ────────────────────────────────────────────────────────────
 // Serialize cross-process writes to allowed-senders.json. Lockfile lives at
 // <dataDir>/.allowed-senders.lock; content is "<pid>\n<isoTimestamp>". Stale
@@ -252,7 +284,11 @@ function acquireLockfile(dataDir: string): string {
   const content = `${process.pid}\n${new Date().toISOString()}`;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const fd = openSync(lockPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
+      const fd = openSync(
+        lockPath,
+        fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY,
+        0o600,
+      );
       try {
         writeSync(fd, content);
       } finally {
@@ -262,7 +298,11 @@ function acquireLockfile(dataDir: string): string {
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
       if (lockfileIsStale(lockPath)) {
-        try { unlinkSync(lockPath); } catch { /* race: another process cleaned it */ }
+        try {
+          unlinkSync(lockPath);
+        } catch {
+          /* race: another process cleaned it */
+        }
         continue;
       }
       throw new LockfileContentionError(
@@ -336,6 +376,195 @@ function assertSenderId(id: string): void {
       `Invalid sender id ${JSON.stringify(id)}: must be a positive integer (≥ 2 digits, no leading zero).`,
     );
   }
+}
+
+function desktopSender(state: AllowedSenders, senderId: string): DesktopAllowedSender {
+  const addedAt =
+    state.addedAt?.[senderId] ??
+    (state.primaryOperator === senderId ? (state.capturedAt ?? undefined) : undefined);
+  return {
+    senderId,
+    role: state.primaryOperator === senderId ? "primary" : "additional",
+    ...(addedAt === undefined ? {} : { addedAt }),
+  };
+}
+
+function hasUniqueSenderIds(state: AllowedSenders): boolean {
+  return new Set(state.allowFrom).size === state.allowFrom.length;
+}
+
+function hasValidPrimary(state: AllowedSenders): boolean {
+  return (
+    state.dmPolicy === "allowlist" &&
+    typeof state.primaryOperator === "string" &&
+    SENDER_ID_RE.test(state.primaryOperator) &&
+    hasUniqueSenderIds(state) &&
+    state.allowFrom.includes(state.primaryOperator)
+  );
+}
+
+function hasConsistentUnownedState(state: AllowedSenders): boolean {
+  return (
+    state.dmPolicy === "pairing" &&
+    (state.primaryOperator === null || state.primaryOperator === undefined) &&
+    state.allowFrom.length === 0
+  );
+}
+
+class DesktopSenderMutationExit<T> extends Error {
+  constructor(readonly result: T) {
+    super("Desktop sender mutation exited without a write.");
+  }
+}
+
+function exitDesktopMutation<T>(result: T): never {
+  throw new DesktopSenderMutationExit(result);
+}
+
+function allowedSendersFileExists(dataDir: string): boolean {
+  return existsSync(join(dataDir, ALLOWED_SENDERS_FILE));
+}
+
+export function claimPrimaryOperator(
+  dataDir: string,
+  senderId: string,
+): ClaimPrimaryOperatorResult {
+  assertSenderId(senderId);
+  const nowIso = new Date().toISOString();
+  let result: ClaimPrimaryOperatorResult | undefined;
+
+  try {
+    saveAllowedSenders(dataDir, (current) => {
+      if (!current && allowedSendersFileExists(dataDir)) {
+        return exitDesktopMutation({ status: "refused", reason: "inconsistent-state" });
+      }
+
+      const base = current ?? defaultPairingState();
+      if (hasValidPrimary(base)) {
+        if (base.primaryOperator !== senderId) {
+          return exitDesktopMutation({ status: "refused", reason: "primary-exists" });
+        }
+        return exitDesktopMutation({
+          status: "already-primary",
+          sender: desktopSender(base, senderId),
+        });
+      }
+      if (!hasConsistentUnownedState(base)) {
+        return exitDesktopMutation({ status: "refused", reason: "inconsistent-state" });
+      }
+
+      const next: AllowedSenders = {
+        ...base,
+        dmPolicy: "allowlist",
+        allowFrom: [senderId],
+        primaryOperator: senderId,
+        capturedAt: nowIso,
+        addedAt: { ...base.addedAt, [senderId]: nowIso },
+      };
+      result = { status: "claimed", sender: desktopSender(next, senderId) };
+      return next;
+    });
+  } catch (err) {
+    if (err instanceof DesktopSenderMutationExit) {
+      return err.result as ClaimPrimaryOperatorResult;
+    }
+    throw err;
+  }
+
+  return result as ClaimPrimaryOperatorResult;
+}
+
+export function addSecondarySender(dataDir: string, senderId: string): AddSecondarySenderResult {
+  assertSenderId(senderId);
+  const nowIso = new Date().toISOString();
+  let result: AddSecondarySenderResult | undefined;
+
+  try {
+    saveAllowedSenders(dataDir, (current) => {
+      if (!current && allowedSendersFileExists(dataDir)) {
+        return exitDesktopMutation({ status: "refused", reason: "inconsistent-state" });
+      }
+
+      const base = current ?? defaultPairingState();
+      if (hasConsistentUnownedState(base)) {
+        return exitDesktopMutation({ status: "refused", reason: "primary-required" });
+      }
+      if (!hasValidPrimary(base)) {
+        return exitDesktopMutation({ status: "refused", reason: "inconsistent-state" });
+      }
+      if (base.allowFrom.includes(senderId)) {
+        return exitDesktopMutation({
+          status: "already-allowed",
+          sender: desktopSender(base, senderId),
+        });
+      }
+
+      const next: AllowedSenders = {
+        ...base,
+        allowFrom: [...base.allowFrom, senderId],
+        addedAt: { ...base.addedAt, [senderId]: nowIso },
+      };
+      result = { status: "added", sender: desktopSender(next, senderId) };
+      return next;
+    });
+  } catch (err) {
+    if (err instanceof DesktopSenderMutationExit) {
+      return err.result as AddSecondarySenderResult;
+    }
+    throw err;
+  }
+
+  return result as AddSecondarySenderResult;
+}
+
+export function removeSecondarySender(
+  dataDir: string,
+  senderId: string,
+): RemoveSecondarySenderResult {
+  assertSenderId(senderId);
+  let result: RemoveSecondarySenderResult | undefined;
+
+  try {
+    saveAllowedSenders(dataDir, (current) => {
+      if (!current && allowedSendersFileExists(dataDir)) {
+        return exitDesktopMutation({ status: "refused", reason: "inconsistent-state" });
+      }
+
+      const base = current ?? defaultPairingState();
+      if (hasConsistentUnownedState(base)) {
+        return exitDesktopMutation({ status: "not-found" });
+      }
+      if (!hasValidPrimary(base)) {
+        return exitDesktopMutation({ status: "refused", reason: "inconsistent-state" });
+      }
+      if (base.primaryOperator === senderId) {
+        return exitDesktopMutation({ status: "refused", reason: "primary-removal" });
+      }
+      if (!base.allowFrom.includes(senderId)) {
+        return exitDesktopMutation({ status: "not-found" });
+      }
+
+      const { [senderId]: _removed, ...addedAt } = base.addedAt ?? {};
+      result = { status: "removed" };
+      return {
+        ...base,
+        allowFrom: base.allowFrom.filter((id) => id !== senderId),
+        addedAt,
+      };
+    });
+  } catch (err) {
+    if (err instanceof DesktopSenderMutationExit) {
+      return err.result as RemoveSecondarySenderResult;
+    }
+    throw err;
+  }
+
+  return result as RemoveSecondarySenderResult;
+}
+
+export function listDesktopAllowedSenders(dataDir: string): DesktopAllowedSender[] {
+  const state = loadAllowedSendersFromFile(dataDir);
+  return state.allowFrom.map((senderId) => desktopSender(state, senderId));
 }
 
 export function addSender(dataDir: string, senderId: string): void {
@@ -418,8 +647,7 @@ export function removeSender(dataDir: string, senderId: string): void {
       allowFrom: filtered,
       addedAt: remainingAddedAt,
       dmPolicy: filtered.length === 0 ? "pairing" : current.dmPolicy,
-      primaryOperator:
-        current.primaryOperator === senderId ? null : current.primaryOperator,
+      primaryOperator: current.primaryOperator === senderId ? null : current.primaryOperator,
     };
   });
 }

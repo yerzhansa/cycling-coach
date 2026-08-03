@@ -35,25 +35,37 @@ function makeCtx(opts: {
 describe("evaluateAccess — chat-type and from-id guards", () => {
   it("rejects non-private chats (group)", () => {
     const ctx = makeCtx({ chatType: "group", fromId: 12345 });
-    const result = evaluateAccess(ctx, makeAllowed({ dmPolicy: "allowlist", allowFrom: ["12345"] }));
+    const result = evaluateAccess(
+      ctx,
+      makeAllowed({ dmPolicy: "allowlist", allowFrom: ["12345"] }),
+    );
     expect(result.allow).toBe(false);
   });
 
   it("rejects non-private chats (channel)", () => {
     const ctx = makeCtx({ chatType: "channel", fromId: 12345 });
-    const result = evaluateAccess(ctx, makeAllowed({ dmPolicy: "allowlist", allowFrom: ["12345"] }));
+    const result = evaluateAccess(
+      ctx,
+      makeAllowed({ dmPolicy: "allowlist", allowFrom: ["12345"] }),
+    );
     expect(result.allow).toBe(false);
   });
 
   it("rejects when ctx.from is undefined (service messages)", () => {
     const ctx = makeCtx({ chatType: "private", fromId: undefined });
-    const result = evaluateAccess(ctx, makeAllowed({ dmPolicy: "allowlist", allowFrom: ["12345"] }));
+    const result = evaluateAccess(
+      ctx,
+      makeAllowed({ dmPolicy: "allowlist", allowFrom: ["12345"] }),
+    );
     expect(result.allow).toBe(false);
   });
 
   it("rejects when typeof ctx.from.id !== 'number' (grammy version-drift guard)", () => {
     const ctx = makeCtx({ chatType: "private", fromId: "12345" as unknown as number });
-    const result = evaluateAccess(ctx, makeAllowed({ dmPolicy: "allowlist", allowFrom: ["12345"] }));
+    const result = evaluateAccess(
+      ctx,
+      makeAllowed({ dmPolicy: "allowlist", allowFrom: ["12345"] }),
+    );
     expect(result.allow).toBe(false);
   });
 });
@@ -149,6 +161,7 @@ describe("createAuthMiddleware — gating", () => {
     chatType?: "private" | "group";
     fromId?: number;
     fromFirstName?: string;
+    messageText?: string;
   }): Context & { reply: ReturnType<typeof vi.fn> } {
     const ctx: Record<string, unknown> = {
       reply: vi.fn(async () => undefined),
@@ -158,6 +171,9 @@ describe("createAuthMiddleware — gating", () => {
     }
     if (opts.fromId !== undefined) {
       ctx.from = { id: opts.fromId, first_name: opts.fromFirstName };
+    }
+    if (opts.messageText !== undefined) {
+      ctx.message = { text: opts.messageText };
     }
     return ctx as unknown as Context & { reply: ReturnType<typeof vi.fn> };
   }
@@ -228,6 +244,151 @@ describe("createAuthMiddleware — gating", () => {
       "<b>Approve <code>99999</code> in Desktop Settings.</b>",
       { parse_mode: "HTML" },
     );
+  });
+
+  it("offers exact private text to consumePairing before loading the allowlist", async () => {
+    const events: string[] = [];
+    const consumePairing = vi.fn(async (input) => {
+      events.push("consume");
+      expect(input).toEqual({
+        senderId: "99999",
+        senderName: "Athlete",
+        messageText: "  AbC123  ",
+      });
+      return true;
+    });
+    const loadAllowedSenders = vi.fn(() => {
+      events.push("load");
+      return defaultPairingState();
+    });
+    const mw = createAuthMiddleware({
+      dataDir,
+      binaryName: "cycling-coach",
+      challengeRateLimit: new Map(),
+      challengeMinIntervalMs: 60_000,
+      consumePairing,
+      loadAllowedSenders,
+    });
+    const ctx = makeMwCtx({
+      chatType: "private",
+      fromId: 99999,
+      fromFirstName: "Athlete",
+      messageText: "  AbC123  ",
+    });
+    const next = vi.fn(async () => undefined);
+
+    await mw(ctx, next);
+
+    expect(events).toEqual(["consume"]);
+    expect(loadAllowedSenders).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+    expect(ctx.reply).not.toHaveBeenCalled();
+  });
+
+  it("does not let a consumed pairing code from an allowlisted sender reach next", async () => {
+    const consumePairing = vi.fn(async () => true);
+    const loadAllowedSenders = vi.fn(() =>
+      makeAllowed({
+        dmPolicy: "allowlist",
+        allowFrom: ["12345"],
+        primaryOperator: "12345",
+      }),
+    );
+    const mw = createAuthMiddleware({
+      dataDir,
+      binaryName: "cycling-coach",
+      challengeRateLimit: new Map(),
+      challengeMinIntervalMs: 60_000,
+      consumePairing,
+      loadAllowedSenders,
+    });
+    const ctx = makeMwCtx({ chatType: "private", fromId: 12345, messageText: "a1b2c3" });
+    const next = vi.fn(async () => undefined);
+
+    await mw(ctx, next);
+
+    expect(consumePairing).toHaveBeenCalledTimes(1);
+    expect(loadAllowedSenders).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("continues through normal allowlist authorization when pairing does not consume", async () => {
+    const consumePairing = vi.fn(async () => false);
+    const loadAllowedSenders = vi.fn(() =>
+      makeAllowed({
+        dmPolicy: "allowlist",
+        allowFrom: ["12345"],
+        primaryOperator: "12345",
+      }),
+    );
+    const mw = createAuthMiddleware({
+      dataDir,
+      binaryName: "cycling-coach",
+      challengeRateLimit: new Map(),
+      challengeMinIntervalMs: 60_000,
+      consumePairing,
+      loadAllowedSenders,
+    });
+    const next = vi.fn(async () => undefined);
+
+    await mw(
+      makeMwCtx({ chatType: "private", fromId: 12345, messageText: "ordinary message" }),
+      next,
+    );
+
+    expect(consumePairing).toHaveBeenCalledTimes(1);
+    expect(loadAllowedSenders).toHaveBeenCalledWith(dataDir);
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it("never invokes consumePairing without a valid private numeric sender and text message", async () => {
+    const consumePairing = vi.fn(async () => true);
+    const mw = createAuthMiddleware({
+      dataDir,
+      binaryName: "cycling-coach",
+      challengeRateLimit: new Map(),
+      challengeMinIntervalMs: 60_000,
+      consumePairing,
+    });
+
+    await mw(makeMwCtx({ chatType: "group", fromId: 12345, messageText: "a1b2c3" }), vi.fn());
+    await mw(makeMwCtx({ chatType: "private", fromId: 12345 }), vi.fn());
+    await mw(makeMwCtx({ chatType: "private", fromId: 1, messageText: "a1b2c3" }), vi.fn());
+    const nonNumeric = makeMwCtx({ chatType: "private", messageText: "a1b2c3" });
+    (nonNumeric as unknown as { from: { id: string } }).from = { id: "12345" };
+    await mw(nonNumeric, vi.fn());
+
+    expect(consumePairing).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when consumePairing rejects", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const consumePairing = vi.fn(async () => {
+      throw new Error("pairing store unavailable");
+    });
+    const loadAllowedSenders = vi.fn(() =>
+      makeAllowed({
+        dmPolicy: "allowlist",
+        allowFrom: ["12345"],
+        primaryOperator: "12345",
+      }),
+    );
+    const mw = createAuthMiddleware({
+      dataDir,
+      binaryName: "cycling-coach",
+      challengeRateLimit: new Map(),
+      challengeMinIntervalMs: 60_000,
+      consumePairing,
+      loadAllowedSenders,
+    });
+    const next = vi.fn(async () => undefined);
+
+    await mw(makeMwCtx({ chatType: "private", fromId: 12345, messageText: "a1b2c3" }), next);
+
+    expect(loadAllowedSenders).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("[security] middleware error"));
+    errSpy.mockRestore();
   });
 
   it("does NOT call next() for stranger in allowlist mode (silent drop, no reply)", async () => {
@@ -397,7 +558,9 @@ describe("createAuthMiddleware — gating", () => {
     const throwingMap = new Proxy(new Map<string, number>(), {
       get(_target, prop) {
         if (prop === "get") {
-          return () => { throw new Error("synthetic boom"); };
+          return () => {
+            throw new Error("synthetic boom");
+          };
         }
         return Reflect.get(_target, prop);
       },

@@ -64,6 +64,7 @@ async function buildStartHandler(resetSession: ReturnType<typeof vi.fn>) {
 
   const { createTelegramBot } = await import("../src/channels/telegram.js");
   createTelegramBot({
+    webhookPolicy: "delete-before-polling",
     token: "FAKE_TOKEN",
     engine: engine as unknown as Parameters<typeof createTelegramBot>[0]["engine"],
     host,

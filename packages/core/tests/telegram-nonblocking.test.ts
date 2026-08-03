@@ -93,6 +93,7 @@ async function buildBot(opts?: { reference?: StubReference }): Promise<BuildBotR
     ...(opts?.reference === undefined ? {} : { reference: opts.reference as never }),
   });
   const { drainPending } = createTelegramBot({
+    webhookPolicy: "delete-before-polling",
     token: "FAKE_TOKEN",
     engine: agent as never,
     host,

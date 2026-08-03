@@ -456,6 +456,7 @@ export async function runBinary(
     const { startNpmTelegramPolling } = await import("./channels/npm-telegram-polling.js");
     const telegram = createTelegramBot({
       token: config.telegram.botToken,
+      webhookPolicy: "delete-before-polling",
       engine,
       host: createNpmTelegramHost({
         binary,
