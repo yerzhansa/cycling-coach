@@ -56,6 +56,7 @@ const mocks = vi.hoisted(() => {
     getVersion: vi.fn(() => "0.0.1"),
     getPath: vi.fn(() => "/synthetic/user-data"),
     getAppPath: vi.fn(() => "/synthetic/app"),
+    commandLine: { getSwitchValue: vi.fn(() => ""), appendSwitch: vi.fn() },
   });
   return {
     order,
@@ -322,6 +323,7 @@ describe("desktop residency", () => {
     await import("../src/main/index.js");
     expect(mocks.app.exit).toHaveBeenCalledWith(0);
     expect(mocks.app.whenReady).not.toHaveBeenCalled();
+    expect(mocks.app.commandLine.appendSwitch).not.toHaveBeenCalled();
     expect(mocks.BrowserWindow).not.toHaveBeenCalled();
     expect(mocks.FakeTray.instances).toHaveLength(0);
     expect(mocks.app.getLoginItemSettings).not.toHaveBeenCalled();

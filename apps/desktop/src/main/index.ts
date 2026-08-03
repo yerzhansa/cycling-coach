@@ -77,6 +77,16 @@ import {
 
 registerDesktopScheme();
 
+function disableChromiumMediaSessionIntegration(): void {
+  const alreadyDisabled = app.commandLine.getSwitchValue("disable-features");
+  app.commandLine.appendSwitch(
+    "disable-features",
+    [alreadyDisabled, "MediaSessionService", "HardwareMediaKeyHandling"]
+      .filter((feature) => feature.length > 0)
+      .join(","),
+  );
+}
+
 let desktopIsClosing = false;
 
 const mainDirectory = dirname(fileURLToPath(import.meta.url));
@@ -750,6 +760,7 @@ const primaryInstance = app.requestSingleInstanceLock();
 if (!primaryInstance) {
   app.exit(0);
 } else {
+  disableChromiumMediaSessionIntegration();
   const runPrimaryDesktop = process.argv.includes("--desktop-runtime-smoke")
     ? runRuntimeSmoke
     : runDesktop;
