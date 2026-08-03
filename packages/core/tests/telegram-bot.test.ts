@@ -150,6 +150,12 @@ describe("createTelegramBot — Garmin attribution carriage", () => {
       })),
     };
     vi.spyOn(console, "error").mockImplementation(() => {});
+    saveAllowedSenders(dataDir, () => ({
+      ...defaultPairingState(),
+      dmPolicy: "allowlist",
+      allowFrom: ["73"],
+      primaryOperator: "73",
+    }));
 
     const { createTelegramBot } = await import("../src/channels/telegram.js");
     createTelegramBot(
@@ -165,6 +171,7 @@ describe("createTelegramBot — Garmin attribution carriage", () => {
     const ctx = {
       match: "raw",
       chat: { id: 73 },
+      from: { id: 73 },
       reply: vi.fn(async () => undefined),
       replyWithDocument,
     };

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { APICallError } from "@ai-sdk/provider";
@@ -135,11 +135,29 @@ function getBotCatch(bot: FakeBot) {
 
 interface FakeCtx {
   chat: { id: number };
+  from?: { id: number };
   match: string;
   message: { text: string; message_id?: number };
   reply: ReturnType<typeof vi.fn>;
   replyWithDocument: ReturnType<typeof vi.fn>;
   replyWithChatAction: ReturnType<typeof vi.fn>;
+}
+
+function configureAllowedSenders(primaryOperator: number, allowFrom: number[]): void {
+  writeFileSync(
+    join(dataDir, "allowed-senders.json"),
+    JSON.stringify({
+      version: 1,
+      dmPolicy: "allowlist",
+      allowFrom: allowFrom.map(String),
+      primaryOperator: String(primaryOperator),
+      capturedAt: "1998-06-01T00:00:00.000Z",
+      addedAt: Object.fromEntries(
+        allowFrom.map((senderId) => [String(senderId), "1998-06-01T00:00:00.000Z"]),
+      ),
+    }),
+    { mode: 0o600 },
+  );
 }
 
 function makeCtx(overrides?: Partial<FakeCtx>): FakeCtx {
@@ -828,11 +846,25 @@ describe("/snapshot — arg fallback", () => {
   });
 
   it("'raw' with no synced data → 'hasn't synced yet' guidance", async () => {
+    configureAllowedSenders(777, [777]);
     const reference: StubReference = { runSync: vi.fn(), loadLatest: vi.fn(() => null) };
     const { bot } = await buildBot({ reference });
-    const ctx = makeCtx({ match: "raw" });
+    const ctx = makeCtx({ from: { id: 777 }, match: "raw" });
     await getCommand(bot, "snapshot")(ctx);
     expect(someReply(ctx, "hasn't synced yet")).toBe(true);
+  });
+
+  it("denies raw data to an allowed sender who is not the primary operator", async () => {
+    configureAllowedSenders(777, [777, 888]);
+    const reference: StubReference = { runSync: vi.fn(), loadLatest: vi.fn(() => null) };
+    const { bot } = await buildBot({ reference });
+    const ctx = makeCtx({ chat: { id: 888 }, from: { id: 888 }, match: "raw wellness" });
+
+    await getCommand(bot, "snapshot")(ctx);
+
+    expect(reference.loadLatest).not.toHaveBeenCalled();
+    expect(someReply(ctx, "primary operator")).toBe(true);
+    expect(ctx.replyWithDocument).not.toHaveBeenCalled();
   });
 });
 

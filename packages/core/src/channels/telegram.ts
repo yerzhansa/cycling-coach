@@ -558,6 +558,12 @@ export function createTelegramBot(
       }
 
       if (sub === "raw") {
+        const senderId = ctx.from?.id;
+        const primaryOperator = loadAllowedSenders(dataDir).primaryOperator;
+        if (typeof senderId !== "number" || primaryOperator !== String(senderId)) {
+          await ctx.reply("Raw snapshots are available only to the primary operator.");
+          return;
+        }
         const section = args[1];
         const latest = reference.loadLatest();
         const output = formatSnapshotRaw(latest, section);
