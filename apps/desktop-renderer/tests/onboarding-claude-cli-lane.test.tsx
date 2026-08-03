@@ -29,6 +29,11 @@ const CLAUDE_CLI_CONFIGURATION: OnboardingLlmConfiguration = {
   active: null,
 };
 
+const ACTIVE_CLAUDE_CLI_CONFIGURATION: OnboardingLlmConfiguration = {
+  ...CLAUDE_CLI_CONFIGURATION,
+  active: { provider: "claude-cli", model: "sonnet" },
+};
+
 function claudeBridge(status: ClaudeCliStatus, overrides: Partial<OnboardingBridge> = {}) {
   const bridge: TestBridge = testBridge(async () => ({
     status: "refused",
@@ -209,6 +214,26 @@ describe("claude-cli onboarding lane", () => {
     });
     expect(identityLine()).toBe("Signed in as athlete@example.test - Claude Max subscription");
     expect(document.body.textContent).not.toContain("probe unavailable");
+    wizard.controller.dispose();
+  });
+
+  it("preselects the lane when the daemon reports it as the active provider", async () => {
+    const bridge = claudeBridge({ state: "ready", email: "athlete@example.test", plan: "Max" });
+    bridge.llmConfiguration.mockResolvedValue(ACTIVE_CLAUDE_CLI_CONFIGURATION);
+    const wizard = await openLane(bridge);
+
+    expect(control<HTMLSelectElement>("onboarding-llm-provider").value).toBe("claude-cli");
+    expect(control<HTMLSelectElement>("onboarding-llm-model").value).toBe("sonnet");
+    wizard.controller.dispose();
+  });
+
+  it("falls back to the first provider when the daemon reports no active provider", async () => {
+    const wizard = await openLane(
+      claudeBridge({ state: "ready", email: "athlete@example.test", plan: "Max" }),
+    );
+
+    expect(control<HTMLSelectElement>("onboarding-llm-provider").value).toBe("anthropic");
+    expect(control<HTMLSelectElement>("onboarding-llm-model").value).toBe("claude-sonnet-4-6");
     wizard.controller.dispose();
   });
 

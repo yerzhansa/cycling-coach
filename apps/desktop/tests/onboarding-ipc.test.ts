@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import type { IpcMainInvokeEvent } from "electron";
 import { describe, expect, it, vi } from "vitest";
+import type { RuntimeConfigSnapshot } from "@enduragent/coach-contract";
 import {
   DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL,
   DESKTOP_CHATGPT_LOGIN_CHANNEL,
@@ -83,7 +84,7 @@ function harness(
     invalidateProbeCache: vi.fn(),
     activate: vi.fn(async () => ({ status: "configured" as const, runtimeReady: true as const })),
   };
-  const getRuntimeConfig = vi.fn(async () => ({
+  const getRuntimeConfig = vi.fn(async (): Promise<RuntimeConfigSnapshot> => ({
     schemaVersion: 3 as const,
     llm: {
       provider: "anthropic" as const,
@@ -440,6 +441,49 @@ describe("desktop onboarding IPC", () => {
     await expect(
       subject.invoke(DESKTOP_LLM_CONFIGURATION_CHANNEL, subject.trustedEvent, null),
     ).rejects.toBeInstanceOf(TypeError);
+  });
+
+  it("keeps a keyless subscription lane as the minimized active selection", async () => {
+    const subject = harness();
+    subject.getRuntimeConfig.mockResolvedValueOnce({
+      schemaVersion: 3,
+      llm: {
+        provider: "claude-cli",
+        model: "athlete-selected-model",
+        credential_configured: true,
+      },
+      intervals: {
+        athlete_id: "synthetic-athlete",
+        credential_configured: true,
+        managedByEnvironment: { athleteId: false },
+      },
+      session: {
+        historyTokenBudgetRatio: 0.3,
+        idleMinutes: 0,
+        dailyResetHour: 4,
+        resetArchiveRetentionDays: 0,
+        timezone: "UTC",
+        managedByEnvironment: {
+          historyTokenBudgetRatio: false,
+          idleMinutes: false,
+          dailyResetHour: false,
+          resetArchiveRetentionDays: false,
+          timezone: false,
+        },
+      },
+    });
+
+    const result = (await subject.invoke(
+      DESKTOP_LLM_CONFIGURATION_CHANNEL,
+      subject.trustedEvent,
+    )) as { readonly active: Record<string, unknown> };
+
+    expect(result.active).toEqual({
+      provider: "claude-cli",
+      model: "athlete-selected-model",
+    });
+    expect(Object.keys(result.active).sort()).toEqual(["model", "provider"]);
+    expect(JSON.stringify(result)).not.toMatch(/credential|api[_-]?key|path|error/i);
   });
 
   it("keeps the catalogue available with a null active selection when snapshotting fails", async () => {
