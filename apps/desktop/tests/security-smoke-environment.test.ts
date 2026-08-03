@@ -113,7 +113,6 @@ describe("desktop security smoke environment", () => {
         ...inheritedEnvironment,
         HOME: environment.operatorHome,
         ENDURAGENT_HOME: environment.athleteHome,
-        CYCLING_COACH_HOME: environment.legacyHome,
         FORCE_COLOR: undefined,
         CLICOLOR_FORCE: undefined,
       });
@@ -131,7 +130,6 @@ describe("desktop security smoke environment", () => {
       environment.athleteHome,
       environment.configDirectory,
       environment.operatorHome,
-      environment.legacyHome,
       environment.electronUserData,
       environment.screenshotDirectory,
       environment.screenshotPath,
@@ -171,7 +169,6 @@ describe("desktop security smoke environment", () => {
     expect(environment.launchEnvironment).toEqual({
       HOME: environment.operatorHome,
       ENDURAGENT_HOME: environment.athleteHome,
-      CYCLING_COACH_HOME: environment.legacyHome,
       FORCE_COLOR: undefined,
       CLICOLOR_FORCE: undefined,
     });

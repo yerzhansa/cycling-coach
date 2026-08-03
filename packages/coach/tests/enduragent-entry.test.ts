@@ -254,7 +254,6 @@ beforeEach(async () => {
   env = {
     HOME: join(scratch, "home"),
     ENDURAGENT_HOME: home.root,
-    CYCLING_COACH_HOME: join(scratch, "legacy-home"),
     XDG_CONFIG_HOME: join(scratch, "xdg-config"),
     XDG_CACHE_HOME: join(scratch, "xdg-cache"),
     TMPDIR: join(scratch, "tmp"),
@@ -409,77 +408,13 @@ describe("enduragent executable composition", () => {
     expect(withLocalCoachDependency).not.toHaveBeenCalled();
   });
 
-  it("renders migration and readiness outcomes with unchanged exit codes", async () => {
-    const digestA = "a".repeat(64);
-    const digestB = "b".repeat(64);
-    const digestC = "c".repeat(64);
-    const journalPath = join(home.root, "config", "migration.json");
-    const archivePath = join(home.root, "archive", "discarded.json");
+  it("renders readiness outcomes with unchanged exit codes", async () => {
     const configPath = join(home.configDir, "config.yaml");
     const rows: ReadonlyArray<{
       readonly result: LocalCoachRunResult<never>;
-      readonly exitCode: 0 | 1 | 2 | 3 | 4;
+      readonly exitCode: 1 | 4;
       readonly stderr: string;
     }> = [
-      {
-        result: {
-          status: "migration-refused",
-          result: {
-            status: "refused",
-            exitCode: 2,
-            journalPath,
-            manifestDigest: null,
-            reason: "confirmation-required",
-            conflictIds: [],
-          },
-        },
-        exitCode: 2,
-        stderr: `Enduragent cannot start: legacy migration was refused (confirmation-required). Review ${journalPath} and resolve the reported condition before retrying.\n`,
-      },
-      {
-        result: {
-          status: "migration-refused",
-          result: {
-            status: "refused",
-            exitCode: 3,
-            journalPath,
-            manifestDigest: digestA,
-            reason: "source-drift",
-            conflictIds: ["synthetic-conflict"],
-          },
-        },
-        exitCode: 3,
-        stderr: `Enduragent cannot start: legacy migration was refused (source-drift). Review ${journalPath} for manifest ${digestA} and resolve the reported condition before retrying.\n`,
-      },
-      {
-        result: {
-          status: "migration-refused",
-          result: {
-            status: "refused",
-            exitCode: 4,
-            journalPath,
-            manifestDigest: digestB,
-            reason: "invalid-source-config",
-            conflictIds: [],
-          },
-        },
-        exitCode: 4,
-        stderr: `Enduragent cannot start: legacy migration was refused (invalid-source-config). Review ${journalPath} for manifest ${digestB} and resolve the reported condition before retrying.\n`,
-      },
-      {
-        result: {
-          status: "migration-discarded",
-          result: {
-            status: "discarded",
-            exitCode: 0,
-            journalPath,
-            manifestDigest: digestC,
-            archivePath,
-          },
-        },
-        exitCode: 0,
-        stderr: `Enduragent migration plan ${digestC} was discarded to ${archivePath}. Run enduragent again to replan.\n`,
-      },
       {
         result: { status: "not-configured", configPath },
         exitCode: 4,
@@ -540,8 +475,6 @@ describe("enduragent executable composition", () => {
       expect(io.stderr.read()).toBe(row.stderr);
       expect(operationCalls).toBe(0);
       expect(captured?.home).toEqual(home);
-      expect(captured?.sourceRoot).toBe(env.CYCLING_COACH_HOME);
-      expect(captured?.action).toEqual({ kind: "resume", isTTY: true });
     }
   });
 
@@ -653,7 +586,7 @@ describe("enduragent executable composition", () => {
     }
   });
 
-  it("routes serve through one local runner with the shared migration inputs", async () => {
+  it("routes serve through one local runner", async () => {
     const controller = new AbortController();
     controller.abort();
     const mocked = mockEngine();
@@ -695,8 +628,6 @@ describe("enduragent executable composition", () => {
     expect(captured).toMatchObject({
       env,
       home: preparedHome,
-      sourceRoot: env.CYCLING_COACH_HOME,
-      action: { kind: "resume", isTTY: true },
     });
     expect(io.stdout.read()).toBe("");
     expect(io.stderr.read()).toBe("");

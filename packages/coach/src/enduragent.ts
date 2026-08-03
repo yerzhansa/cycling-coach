@@ -2,7 +2,6 @@
 import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
@@ -48,7 +47,6 @@ import {
   type ServiceRegistrationState,
 } from "@enduragent/coach-cli";
 import {
-  expandTilde,
   prepareAthleteHome,
   resolveAthleteHome,
   type AthleteHome,
@@ -562,14 +560,6 @@ async function startEphemeralSuccessorProcess(input: DesignatedSuccessorInput): 
   child.detachAfterHealthy();
 }
 
-function resolveLegacySourceRoot(env: Record<string, string | undefined>): string {
-  const override = env.CYCLING_COACH_HOME;
-  if (override !== undefined && override.length > 0) {
-    return expandTilde(override);
-  }
-  return join(homedir(), ".cycling-coach");
-}
-
 function storeNewerThanApp(error: unknown): StoreNewerThanAppError | null {
   if (!(error instanceof CoachStoreWriterError)) return null;
   if (error.code !== "writer-failed" || error.stage !== "run migrations") return null;
@@ -756,24 +746,10 @@ function renderLocalResult(
     );
     return EXIT_AGENT_ERROR;
   }
-  if (result.status === "malformed") {
-    terminal.stderr.write(
-      "Enduragent cannot use the existing configuration. Correct or replace config.yaml, then retry.\n",
-    );
-    return EXIT_AGENT_ERROR;
-  }
-  if (result.status === "migration-discarded") {
-    terminal.stderr.write(
-      `Enduragent migration plan ${result.result.manifestDigest} was discarded to ${result.result.archivePath}. Run enduragent again to replan.\n`,
-    );
-    return result.result.exitCode;
-  }
-  const manifest =
-    result.result.manifestDigest === null ? "" : ` for manifest ${result.result.manifestDigest}`;
   terminal.stderr.write(
-    `Enduragent cannot start: legacy migration was refused (${result.result.reason}). Review ${result.result.journalPath}${manifest} and resolve the reported condition before retrying.\n`,
+    "Enduragent cannot use the existing configuration. Correct or replace config.yaml, then retry.\n",
   );
-  return result.result.exitCode;
+  return EXIT_AGENT_ERROR;
 }
 
 async function runWithOwnedTransport(
@@ -1895,13 +1871,10 @@ async function runPreparedVerb(
     return runWithOwnedTransport(transport, request, invocation, input.terminal);
   }
 
-  const sourceRoot = resolveLegacySourceRoot(input.env);
   try {
     const result = await dependencies.withLocalCoach({
       env: input.env,
       home,
-      sourceRoot,
-      action: { kind: "resume", isTTY: input.terminal.isTTY },
       operation: async (lifecycle) =>
         runWithOwnedTransport(
           createLocalCoachVerbTransport(lifecycle.engine, serializeBoundaryError),
@@ -2021,7 +1994,6 @@ async function runServeInvocation(input: {
   readonly starterCapability?: string;
   readonly runInput: RunEnduragentInput;
   readonly home: AthleteHome;
-  readonly sourceRoot: string;
   readonly appVersion: string;
   readonly dependencies: EnduragentDependencies;
   readonly reportReadinessFailure?: (status: ReadinessFailureStatus) => void;
@@ -2048,8 +2020,6 @@ async function runServeInvocation(input: {
       const result = await input.dependencies.withLocalCoach({
         env: input.runInput.env,
         home: input.home,
-        sourceRoot: input.sourceRoot,
-        action: { kind: "resume", isTTY: input.runInput.terminal.isTTY },
         operation: async (lifecycle) =>
           successor === undefined
             ? runCoachServe({
@@ -2215,7 +2185,6 @@ export async function runAppSupervisedEnduragent(
         signal: input.signal,
       },
       home,
-      sourceRoot: resolveLegacySourceRoot(input.env),
       appVersion: await resolvedDependencies.readPackageVersion(),
       dependencies: resolvedDependencies,
       reportReadinessFailure: (status) => {
@@ -2333,7 +2302,6 @@ export async function runEnduragent(
     const appVersion =
       invocation.kind === "serve" ? await resolvedDependencies.readPackageVersion() : undefined;
     const home = await resolvePreparedAthleteHome(input.env, resolvedDependencies);
-    const sourceRoot = resolveLegacySourceRoot(input.env);
     if (invocation.kind === "serve") {
       const starter = await serveStarterContext(input.env);
       return await runServeInvocation({
@@ -2343,7 +2311,6 @@ export async function runEnduragent(
           : { starterCapability: starter.handoffCapability }),
         runInput: input,
         home,
-        sourceRoot,
         appVersion: appVersion!,
         dependencies: resolvedDependencies,
       });
@@ -2351,8 +2318,6 @@ export async function runEnduragent(
     const result = await resolvedDependencies.withLocalCoach({
       env: input.env,
       home,
-      sourceRoot,
-      action: { kind: "resume", isTTY: input.terminal.isTTY },
       operation: async (lifecycle) =>
         runCoachRepl({
           engine: lifecycle.engine,
