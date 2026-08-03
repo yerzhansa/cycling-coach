@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   TelegramUpdateOffsetStore,
   tokenFingerprint,
   MAX_DISPATCHED_IDS,
+  UPDATE_ID_EPOCH_INACTIVITY_MS,
 } from "../src/channels/telegram-update-offsets.js";
 
 const TOKEN = "123456:ABC-DEF-super-secret-bot-token";
@@ -31,6 +32,123 @@ describe("tokenFingerprint", () => {
 });
 
 describe("TelegramUpdateOffsetStore — dispatch dedupe", () => {
+  it("accepts a lower update id in a new inactivity epoch after restart", () => {
+    let now = Date.UTC(1998, 5, 1);
+    const clock = { now: () => now };
+    const initial = new TelegramUpdateOffsetStore(dataDir, TOKEN, clock);
+    expect(initial.shouldDispatch(900)).toBe(true);
+
+    now += UPDATE_ID_EPOCH_INACTIVITY_MS;
+    const restarted = new TelegramUpdateOffsetStore(dataDir, TOKEN, clock);
+    expect(restarted.shouldDispatch(100)).toBe(true);
+    expect(restarted.shouldDispatch(100)).toBe(false);
+  });
+
+  it("uses a version-1 file timestamp to upgrade an inactive store", () => {
+    const path = join(dataDir, `telegram-offsets.${tokenFingerprint(TOKEN)}.json`);
+    writeFileSync(
+      path,
+      JSON.stringify({ version: 1, lastUpdateId: 900, dispatchedUpdateIds: [900] }),
+      { mode: 0o600 },
+    );
+    const lastAccepted = Date.UTC(1998, 5, 1);
+    utimesSync(path, new Date(lastAccepted), new Date(lastAccepted));
+
+    const beforeBoundary = new TelegramUpdateOffsetStore(dataDir, TOKEN, {
+      now: () => lastAccepted + UPDATE_ID_EPOCH_INACTIVITY_MS - 1,
+    });
+    expect(beforeBoundary.shouldDispatch(100)).toBe(false);
+
+    const restarted = new TelegramUpdateOffsetStore(dataDir, TOKEN, {
+      now: () => lastAccepted + UPDATE_ID_EPOCH_INACTIVITY_MS,
+    });
+    expect(restarted.shouldDispatch(100)).toBe(true);
+    expect(restarted.shouldDispatch(100)).toBe(false);
+  });
+
+  it("upgrades an active version-1 store when a higher update arrives", () => {
+    const path = join(dataDir, `telegram-offsets.${tokenFingerprint(TOKEN)}.json`);
+    writeFileSync(
+      path,
+      JSON.stringify({ version: 1, lastUpdateId: 900, dispatchedUpdateIds: [900] }),
+      { mode: 0o600 },
+    );
+    const lastAccepted = Date.UTC(1998, 5, 1);
+    utimesSync(path, new Date(lastAccepted), new Date(lastAccepted));
+    const now = Date.UTC(1998, 5, 2);
+
+    const store = new TelegramUpdateOffsetStore(dataDir, TOKEN, { now: () => now });
+
+    expect(store.shouldDispatch(901)).toBe(true);
+    expect(store.load()).toMatchObject({
+      version: 2,
+      lastUpdateId: 901,
+      lastAcceptedAtMs: now,
+      dispatchedUpdateIds: [900, 901],
+    });
+  });
+
+  it("fails open when a version-2 store has no valid epoch timestamp", () => {
+    const path = join(dataDir, `telegram-offsets.${tokenFingerprint(TOKEN)}.json`);
+    writeFileSync(
+      path,
+      JSON.stringify({ version: 2, lastUpdateId: 900, dispatchedUpdateIds: [900] }),
+      { mode: 0o600 },
+    );
+    const now = Date.UTC(1998, 5, 8);
+
+    const restarted = new TelegramUpdateOffsetStore(dataDir, TOKEN, { now: () => now });
+
+    expect(restarted.shouldDispatch(100)).toBe(true);
+    expect(restarted.load().lastAcceptedAtMs).toBe(now);
+  });
+
+  it("fails open when the persisted store version is unsupported", () => {
+    const path = join(dataDir, `telegram-offsets.${tokenFingerprint(TOKEN)}.json`);
+    writeFileSync(
+      path,
+      JSON.stringify({ version: 99, lastUpdateId: 900, dispatchedUpdateIds: [900] }),
+      { mode: 0o600 },
+    );
+
+    const restarted = new TelegramUpdateOffsetStore(dataDir, TOKEN);
+
+    expect(restarted.shouldDispatch(100)).toBe(true);
+  });
+
+  it("fails open when persisted update ids violate the writer invariant", () => {
+    const path = join(dataDir, `telegram-offsets.${tokenFingerprint(TOKEN)}.json`);
+    const now = Date.UTC(1998, 5, 8);
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 2,
+        lastUpdateId: 0,
+        lastAcceptedAtMs: now,
+        dispatchedUpdateIds: [100],
+      }),
+      { mode: 0o600 },
+    );
+
+    const restarted = new TelegramUpdateOffsetStore(dataDir, TOKEN, { now: () => now });
+
+    expect(restarted.shouldDispatch(100)).toBe(true);
+  });
+
+  it("does not move the epoch timestamp backward when the system clock rolls back", () => {
+    const latestWallTime = Date.UTC(1998, 5, 8);
+    let now = latestWallTime;
+    const store = new TelegramUpdateOffsetStore(dataDir, TOKEN, { now: () => now });
+    expect(store.shouldDispatch(900)).toBe(true);
+
+    now = Date.UTC(1998, 5, 1);
+    expect(store.shouldDispatch(901)).toBe(true);
+
+    now = latestWallTime;
+    expect(store.shouldDispatch(100)).toBe(false);
+    expect(store.load().lastAcceptedAtMs).toBe(latestWallTime);
+  });
+
   it("dispatches a new update once and skips an exact replay", () => {
     const store = new TelegramUpdateOffsetStore(dataDir, TOKEN);
     expect(store.shouldDispatch(10)).toBe(true);
@@ -76,6 +194,7 @@ describe("TelegramUpdateOffsetStore — dispatch dedupe", () => {
 
   it("fails open — dispatches when the store cannot be persisted", () => {
     const store = new TelegramUpdateOffsetStore(join(dataDir, "does", "not", "exist"), TOKEN);
+    expect(store.shouldDispatch(5)).toBe(true);
     expect(store.shouldDispatch(5)).toBe(true);
   });
 });
