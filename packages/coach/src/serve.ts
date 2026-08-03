@@ -59,6 +59,7 @@ export async function runCoachServe(
     const healthState = dependencies.createHealthState();
     const invocations = dependencies.createInvocations();
     const telegram = dependencies.createTelegramController({
+      dataDir: input.lifecycle.home.root,
       createRuntime: dependencies.createTelegramRuntimeFactory({
         lifecycle: input.lifecycle,
         invocations,
@@ -83,7 +84,9 @@ export async function runCoachServe(
         await telegram.stopPolling();
         await telegram.drainPending();
       },
-      afterInvocationDrainRefusal: () => telegram.resumePolling(),
+      afterInvocationDrainRefusal: async () => {
+        await telegram.resumePolling();
+      },
     });
     const quiesce = async (): Promise<void> => {
       const fence = invocations.closeAdmission();

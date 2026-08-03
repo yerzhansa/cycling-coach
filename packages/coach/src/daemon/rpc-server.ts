@@ -908,8 +908,7 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
               const request = COACH_RPC_METHOD_REGISTRY.configureTelegram.requestSchema.parse(
                 generic.data.params,
               );
-              await input.telegram.configure(request.token);
-              result = input.telegram.getStatus();
+              result = await input.telegram.configure(request.token);
             } catch (error) {
               invocationFailure = { error };
             }
@@ -917,8 +916,7 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
           case "enableTelegram":
             try {
               COACH_RPC_METHOD_REGISTRY.enableTelegram.requestSchema.parse(generic.data.params);
-              await input.telegram.enable();
-              result = input.telegram.getStatus();
+              result = await input.telegram.enable();
             } catch (error) {
               invocationFailure = { error };
             }
@@ -926,8 +924,7 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
           case "disableTelegram":
             try {
               COACH_RPC_METHOD_REGISTRY.disableTelegram.requestSchema.parse(generic.data.params);
-              await input.telegram.disable();
-              result = input.telegram.getStatus();
+              result = await input.telegram.disable();
             } catch (error) {
               invocationFailure = { error };
             }
@@ -937,8 +934,7 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
               const request = COACH_RPC_METHOD_REGISTRY.replaceTelegram.requestSchema.parse(
                 generic.data.params,
               );
-              await input.telegram.replace(request.token);
-              result = input.telegram.getStatus();
+              result = await input.telegram.replace(request.token);
             } catch (error) {
               invocationFailure = { error };
             }
@@ -954,8 +950,90 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
           case "reconcileTelegram":
             try {
               COACH_RPC_METHOD_REGISTRY.reconcileTelegram.requestSchema.parse(generic.data.params);
-              await input.telegram.reconcile();
-              result = input.telegram.getStatus();
+              result = await input.telegram.reconcile();
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "inspectTelegramCredential":
+            try {
+              const request =
+                COACH_RPC_METHOD_REGISTRY.inspectTelegramCredential.requestSchema.parse(
+                  generic.data.params,
+                );
+              result = await input.telegram.inspectTelegramCredential(request.token);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "deleteTelegramWebhook":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.deleteTelegramWebhook.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.telegram.deleteTelegramWebhook(request.token);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "forgetTelegramCredential":
+            try {
+              COACH_RPC_METHOD_REGISTRY.forgetTelegramCredential.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.telegram.forgetTelegramCredential();
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "beginTelegramPairing":
+            try {
+              COACH_RPC_METHOD_REGISTRY.beginTelegramPairing.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.telegram.beginTelegramPairing();
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "cancelTelegramPairing":
+            try {
+              COACH_RPC_METHOD_REGISTRY.cancelTelegramPairing.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.telegram.cancelTelegramPairing();
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "listTelegramAllowedSenders":
+            try {
+              COACH_RPC_METHOD_REGISTRY.listTelegramAllowedSenders.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.telegram.listTelegramAllowedSenders();
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "addTelegramAllowedSender":
+            try {
+              const request =
+                COACH_RPC_METHOD_REGISTRY.addTelegramAllowedSender.requestSchema.parse(
+                  generic.data.params,
+                );
+              result = await input.telegram.addTelegramAllowedSender(request.senderId);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "removeTelegramAllowedSender":
+            try {
+              const request =
+                COACH_RPC_METHOD_REGISTRY.removeTelegramAllowedSender.requestSchema.parse(
+                  generic.data.params,
+                );
+              result = await input.telegram.removeTelegramAllowedSender(request.senderId);
             } catch (error) {
               invocationFailure = { error };
             }

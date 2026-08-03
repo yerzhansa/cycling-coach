@@ -27,7 +27,7 @@ import {
   type CoachEngine,
   type CoachOperations,
   type SpendSummary,
-  type TelegramChannelStatus,
+  type TelegramControlSnapshot,
 } from "@enduragent/coach-contract";
 import {
   createCoachRpcServer as createCoachRpcServerProduction,
@@ -163,17 +163,30 @@ const TEST_RENDERER_CAPABILITY_BYTES = Buffer.alloc(32, 9);
 function telegramController(
   overrides: Partial<DesktopTelegramController> = {},
 ): DesktopTelegramController {
+  const snapshot: TelegramControlSnapshot = {
+    channel: { desiredState: "disabled", state: "disabled" },
+    bot: { state: "unconfigured" },
+    pairing: { state: "unpaired" },
+  };
   return {
-    getStatus: () => ({ desiredState: "disabled", state: "disabled" }),
-    configure: async () => undefined,
-    enable: async () => undefined,
-    disable: async () => undefined,
-    replace: async () => undefined,
-    reconcile: async () => undefined,
-    stopPolling: async () => undefined,
-    resumePolling: async () => undefined,
-    drainPending: async () => undefined,
-    close: async () => undefined,
+    getStatus: () => snapshot,
+    configure: async () => snapshot,
+    enable: async () => snapshot,
+    disable: async () => snapshot,
+    replace: async () => snapshot,
+    reconcile: async () => snapshot,
+    inspectTelegramCredential: async () => ({ status: "invalid-token" }),
+    deleteTelegramWebhook: async () => ({ status: "invalid-token" }),
+    forgetTelegramCredential: async () => snapshot,
+    beginTelegramPairing: async () => snapshot,
+    cancelTelegramPairing: async () => snapshot,
+    listTelegramAllowedSenders: async () => ({ senders: [] }),
+    addTelegramAllowedSender: async () => ({ senders: [] }),
+    removeTelegramAllowedSender: async () => ({ senders: [] }),
+    stopPolling: async () => snapshot,
+    resumePolling: async () => snapshot,
+    drainPending: async () => snapshot,
+    close: async () => snapshot,
     ...overrides,
   };
 }
@@ -1330,30 +1343,53 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
 
   it("projects closed Telegram control only to the privileged bearer", async () => {
     const token = "x".repeat(43);
-    let telegramStatus: TelegramChannelStatus = {
-      desiredState: "disabled",
-      state: "disabled",
+    const disabledSnapshot: TelegramControlSnapshot = {
+      channel: { desiredState: "disabled", state: "disabled" },
+      bot: { state: "unconfigured" },
+      pairing: { state: "unpaired" },
     };
-    const configure = vi.fn(async (_token: string) => undefined);
-    const enable = vi.fn(async () => {
-      telegramStatus = { desiredState: "enabled", state: "starting" };
-    });
-    const disable = vi.fn(async () => {
-      telegramStatus = { desiredState: "disabled", state: "disabled" };
-    });
-    const replace = vi.fn(async (_token: string) => undefined);
-    const reconcile = vi.fn(async () => {
-      telegramStatus = { desiredState: "enabled", state: "online" };
-    });
+    const onlineSnapshot: TelegramControlSnapshot = {
+      channel: { desiredState: "enabled", state: "online" },
+      bot: { state: "ready", username: "CoachBot" },
+      pairing: { state: "paired" },
+    };
+    const credentialInspection = {
+      status: "ready" as const,
+      bot: { username: "CoachBot" },
+    };
+    const senderList = {
+      senders: [{ senderId: 12345, role: "primary" as const }],
+    };
+    const configure = vi.fn(async (_token: string) => onlineSnapshot);
+    const enable = vi.fn(async () => onlineSnapshot);
+    const disable = vi.fn(async () => disabledSnapshot);
+    const replace = vi.fn(async (_token: string) => onlineSnapshot);
+    const reconcile = vi.fn(async () => onlineSnapshot);
+    const inspectTelegramCredential = vi.fn(async (_token: string) => credentialInspection);
+    const deleteTelegramWebhook = vi.fn(async (_token: string) => credentialInspection);
+    const forgetTelegramCredential = vi.fn(async () => disabledSnapshot);
+    const beginTelegramPairing = vi.fn(async () => onlineSnapshot);
+    const cancelTelegramPairing = vi.fn(async () => onlineSnapshot);
+    const listTelegramAllowedSenders = vi.fn(async () => senderList);
+    const addTelegramAllowedSender = vi.fn(async (_senderId: number) => senderList);
+    const removeTelegramAllowedSender = vi.fn(async (_senderId: number) => senderList);
     const rpc = createCoachRpcServer({
       engine: engine(),
       telegram: telegramController({
-        getStatus: () => telegramStatus,
+        getStatus: () => disabledSnapshot,
         configure,
         enable,
         disable,
         replace,
         reconcile,
+        inspectTelegramCredential,
+        deleteTelegramWebhook,
+        forgetTelegramCredential,
+        beginTelegramPairing,
+        cancelTelegramPairing,
+        listTelegramAllowedSenders,
+        addTelegramAllowedSender,
+        removeTelegramAllowedSender,
       }),
       token,
       owner: "app-supervised",
@@ -1369,11 +1405,22 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
       { method: "getTelegramStatus", params: {} },
       { method: "reconcileTelegram", params: {} },
       { method: "disableTelegram", params: {} },
+      { method: "inspectTelegramCredential", params: { token: "inspection-private-token" } },
+      { method: "deleteTelegramWebhook", params: { token: "webhook-private-token" } },
+      { method: "forgetTelegramCredential", params: {} },
+      { method: "beginTelegramPairing", params: {} },
+      { method: "cancelTelegramPairing", params: {} },
+      { method: "listTelegramAllowedSenders", params: {} },
+      {
+        method: "addTelegramAllowedSender",
+        params: { senderId: Number.MAX_SAFE_INTEGER },
+      },
+      { method: "removeTelegramAllowedSender", params: { senderId: 67890 } },
     ] as const;
     for (const [id, request] of requests.entries()) {
       client.ws.send(JSON.stringify({ jsonrpc: "2.0", id, ...request }));
       const response = parseCoachRpcEnvelope(await client.frames.next());
-      expect(response).toMatchObject({ id, result: { desiredState: expect.any(String) } });
+      expect(response).toMatchObject({ id, result: expect.any(Object) });
       expect(JSON.stringify(response)).not.toContain("private-token");
       expect(JSON.stringify(response)).not.toContain("api.telegram.org");
     }
@@ -1382,18 +1429,53 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
     expect(enable).toHaveBeenCalledOnce();
     expect(reconcile).toHaveBeenCalledOnce();
     expect(disable).toHaveBeenCalledOnce();
+    expect(inspectTelegramCredential).toHaveBeenCalledWith("inspection-private-token");
+    expect(deleteTelegramWebhook).toHaveBeenCalledWith("webhook-private-token");
+    expect(forgetTelegramCredential).toHaveBeenCalledOnce();
+    expect(beginTelegramPairing).toHaveBeenCalledOnce();
+    expect(cancelTelegramPairing).toHaveBeenCalledOnce();
+    expect(listTelegramAllowedSenders).toHaveBeenCalledOnce();
+    expect(addTelegramAllowedSender).toHaveBeenCalledWith(Number.MAX_SAFE_INTEGER);
+    expect(removeTelegramAllowedSender).toHaveBeenCalledWith(67890);
+
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "unsafe-sender",
+        method: "addTelegramAllowedSender",
+        params: { senderId: Number.MAX_SAFE_INTEGER + 1 },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "unsafe-sender",
+      error: { code: -32602, message: "Invalid params" },
+    });
+    expect(addTelegramAllowedSender).toHaveBeenCalledOnce();
     await client.close();
   });
 
   it("keeps every Telegram control method absent from renderer authority", async () => {
     const token = "x".repeat(43);
+    const snapshot: TelegramControlSnapshot = {
+      channel: { desiredState: "disabled", state: "disabled" },
+      bot: { state: "unconfigured" },
+      pairing: { state: "unpaired" },
+    };
     const telegram = telegramController({
-      getStatus: vi.fn(() => ({ desiredState: "disabled" as const, state: "disabled" as const })),
-      configure: vi.fn(async () => undefined),
-      enable: vi.fn(async () => undefined),
-      disable: vi.fn(async () => undefined),
-      replace: vi.fn(async () => undefined),
-      reconcile: vi.fn(async () => undefined),
+      getStatus: vi.fn(() => snapshot),
+      configure: vi.fn(async () => snapshot),
+      enable: vi.fn(async () => snapshot),
+      disable: vi.fn(async () => snapshot),
+      replace: vi.fn(async () => snapshot),
+      reconcile: vi.fn(async () => snapshot),
+      inspectTelegramCredential: vi.fn(async () => ({ status: "invalid-token" as const })),
+      deleteTelegramWebhook: vi.fn(async () => ({ status: "invalid-token" as const })),
+      forgetTelegramCredential: vi.fn(async () => snapshot),
+      beginTelegramPairing: vi.fn(async () => snapshot),
+      cancelTelegramPairing: vi.fn(async () => snapshot),
+      listTelegramAllowedSenders: vi.fn(async () => ({ senders: [] })),
+      addTelegramAllowedSender: vi.fn(async () => ({ senders: [] })),
+      removeTelegramAllowedSender: vi.fn(async () => ({ senders: [] })),
     });
     const rpc = createCoachRpcServer({
       engine: engine(),
@@ -1409,23 +1491,31 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
     );
     await client.frames.next();
 
-    for (const [id, method] of [
-      "configureTelegram",
-      "enableTelegram",
-      "disableTelegram",
-      "replaceTelegram",
-      "getTelegramStatus",
-      "reconcileTelegram",
-    ].entries()) {
+    const telegramRequests = [
+      { method: "configureTelegram", params: { token: "renderer-private-token" } },
+      { method: "enableTelegram", params: {} },
+      { method: "disableTelegram", params: {} },
+      { method: "replaceTelegram", params: { token: "renderer-private-token" } },
+      { method: "getTelegramStatus", params: {} },
+      { method: "reconcileTelegram", params: {} },
+      {
+        method: "inspectTelegramCredential",
+        params: { token: "renderer-private-token" },
+      },
+      { method: "deleteTelegramWebhook", params: { token: "renderer-private-token" } },
+      { method: "forgetTelegramCredential", params: {} },
+      { method: "beginTelegramPairing", params: {} },
+      { method: "cancelTelegramPairing", params: {} },
+      { method: "listTelegramAllowedSenders", params: {} },
+      { method: "addTelegramAllowedSender", params: { senderId: 12345 } },
+      { method: "removeTelegramAllowedSender", params: { senderId: 12345 } },
+    ] as const;
+    for (const [id, request] of telegramRequests.entries()) {
       client.ws.send(
         JSON.stringify({
           jsonrpc: "2.0",
           id,
-          method,
-          params:
-            method === "configureTelegram" || method === "replaceTelegram"
-              ? { token: "renderer-private-token" }
-              : {},
+          ...request,
         }),
       );
       expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
@@ -1439,6 +1529,14 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
     expect(telegram.disable).not.toHaveBeenCalled();
     expect(telegram.replace).not.toHaveBeenCalled();
     expect(telegram.reconcile).not.toHaveBeenCalled();
+    expect(telegram.inspectTelegramCredential).not.toHaveBeenCalled();
+    expect(telegram.deleteTelegramWebhook).not.toHaveBeenCalled();
+    expect(telegram.forgetTelegramCredential).not.toHaveBeenCalled();
+    expect(telegram.beginTelegramPairing).not.toHaveBeenCalled();
+    expect(telegram.cancelTelegramPairing).not.toHaveBeenCalled();
+    expect(telegram.listTelegramAllowedSenders).not.toHaveBeenCalled();
+    expect(telegram.addTelegramAllowedSender).not.toHaveBeenCalled();
+    expect(telegram.removeTelegramAllowedSender).not.toHaveBeenCalled();
     await client.close();
   });
 

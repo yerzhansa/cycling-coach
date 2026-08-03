@@ -230,24 +230,41 @@ function harness(
       },
     };
   });
+  const telegramSnapshot = {
+    channel: { desiredState: "disabled" as const, state: "disabled" as const },
+    bot: { state: "unconfigured" as const },
+    pairing: { state: "unpaired" as const },
+  };
   const telegram = {
-    getStatus: vi.fn(() => ({ desiredState: "disabled" as const, state: "disabled" as const })),
-    configure: vi.fn(async () => undefined),
-    enable: vi.fn(async () => undefined),
-    disable: vi.fn(async () => undefined),
-    replace: vi.fn(async () => undefined),
-    reconcile: vi.fn(async () => undefined),
+    getStatus: vi.fn(() => telegramSnapshot),
+    configure: vi.fn(async () => telegramSnapshot),
+    enable: vi.fn(async () => telegramSnapshot),
+    disable: vi.fn(async () => telegramSnapshot),
+    replace: vi.fn(async () => telegramSnapshot),
+    reconcile: vi.fn(async () => telegramSnapshot),
+    inspectTelegramCredential: vi.fn(async () => ({ status: "invalid-token" as const })),
+    deleteTelegramWebhook: vi.fn(async () => ({ status: "invalid-token" as const })),
+    forgetTelegramCredential: vi.fn(async () => telegramSnapshot),
+    beginTelegramPairing: vi.fn(async () => telegramSnapshot),
+    cancelTelegramPairing: vi.fn(async () => telegramSnapshot),
+    listTelegramAllowedSenders: vi.fn(async () => ({ senders: [] })),
+    addTelegramAllowedSender: vi.fn(async () => ({ senders: [] })),
+    removeTelegramAllowedSender: vi.fn(async () => ({ senders: [] })),
     stopPolling: vi.fn(async () => {
       trace.push("telegram-stop");
+      return telegramSnapshot;
     }),
     resumePolling: vi.fn(async () => {
       trace.push("telegram-resume");
+      return telegramSnapshot;
     }),
     drainPending: vi.fn(async () => {
       trace.push("telegram-drain");
+      return telegramSnapshot;
     }),
     close: vi.fn(async () => {
       trace.push("telegram-close");
+      return telegramSnapshot;
     }),
   };
   const createTelegramController = vi.fn(() => telegram);
@@ -315,6 +332,10 @@ describe("runCoachServe", () => {
         telegram: test.telegram,
       }),
     );
+    expect(test.createTelegramController).toHaveBeenCalledWith({
+      dataDir: home.root,
+      createRuntime: test.createTelegramRuntimeFactory.mock.results[0]?.value,
+    });
     expect(test.ensureToken).toHaveBeenCalledWith(test.lifecycle.home.configDir);
     controller.abort();
     await expect(result).resolves.toBe(EXIT_SUCCESS);

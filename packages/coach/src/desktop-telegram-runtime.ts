@@ -35,6 +35,7 @@ function syncReply(result: Awaited<ReturnType<LocalCoachLifecycle["operations"][
 function createDesktopTelegramHost(
   input: CreateDesktopTelegramRuntimeFactoryInput,
   dependencies: DesktopTelegramRuntimeDependencies,
+  consumePairing: DesktopTelegramRuntimeFactoryInput["consumePairing"],
 ): TelegramHostCapabilities {
   const dataDir = input.lifecycle.home.root;
   const loadAllowedSenders = dependencies.loadAllowedSenders ?? loadAllowedSendersFromFile;
@@ -48,6 +49,7 @@ function createDesktopTelegramHost(
         loadAllowedSenders,
         pairingChallenge: ({ senderId }) =>
           `<b>This bot is private.</b>\n\nYour Telegram user ID is <code>${senderId}</code>. Open Cycling Coach Desktop → Settings → Telegram to approve it.`,
+        consumePairing,
       }),
     },
     confirmations: {
@@ -81,13 +83,15 @@ export function createDesktopTelegramRuntimeFactory(
   input: CreateDesktopTelegramRuntimeFactoryInput,
   dependencies: DesktopTelegramRuntimeDependencies = {},
 ): (runtime: DesktopTelegramRuntimeFactoryInput) => DesktopTelegramRuntime {
-  const host = createDesktopTelegramHost(input, dependencies);
-  return ({ token, onStarted }) =>
-    (dependencies.createBot ?? createTelegramBot)({
+  return ({ token, onStarted, consumePairing }) => {
+    const host = createDesktopTelegramHost(input, dependencies, consumePairing);
+    return (dependencies.createBot ?? createTelegramBot)({
+      webhookPolicy: "preserve",
       token,
       engine: input.lifecycle.engine,
       host,
       dataDir: input.lifecycle.home.root,
       onStart: onStarted,
     });
+  };
 }

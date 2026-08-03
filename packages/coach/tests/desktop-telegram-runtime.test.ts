@@ -59,15 +59,19 @@ describe("Desktop Telegram runtime projection", () => {
 
     expect(createBot).not.toHaveBeenCalled();
     const onStarted = vi.fn();
-    expect(runtimeFactory({ token: "secret", onStarted })).toBe(channel);
+    const consumePairing = vi.fn(async () => true);
+    expect(runtimeFactory({ token: "secret", onStarted, consumePairing })).toBe(channel);
+    expect(createBot).toHaveBeenCalledOnce();
     const projected = createBot.mock.calls[0]![0];
     expect(projected.token).toBe("secret");
+    expect(projected.webhookPolicy).toBe("preserve");
     expect(projected.engine).toBe(lifecycle.engine);
     expect(projected.host.diagnostics).toBeUndefined();
     expect(projected.host.access.middleware).toBe(middleware);
 
     const accessInput = createAccessMiddleware.mock.calls[0]![0];
     expect(accessInput.loadAllowedSenders).toBe(loadAllowedSenders);
+    expect(accessInput.consumePairing).toBe(consumePairing);
     expect(accessInput.pairingChallenge!({ senderId: "73", senderName: "Athlete" })).toContain(
       "Desktop → Settings → Telegram",
     );
