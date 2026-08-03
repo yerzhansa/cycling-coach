@@ -20,6 +20,7 @@ import { enumerateTelegramSessions } from "./telegram-sessions.js";
 export type DmPolicy = "pairing" | "allowlist" | "open";
 
 export const ALLOWED_SENDERS_FILE = "allowed-senders.json";
+const ACCESS_RESET_MARKER = ".telegram-access-reset";
 
 export interface AllowedSenders {
   version: 1;
@@ -28,6 +29,7 @@ export interface AllowedSenders {
   primaryOperator: string | null;
   capturedAt: string | null;
   addedAt: Record<string, string>;
+  desktopBotId?: string;
   [unknownKey: string]: unknown;
 }
 
@@ -100,6 +102,7 @@ function validateSchema(parsed: unknown, path: string): AllowedSenders | null {
       primaryOperator: z.union([z.string().regex(SENDER_ID_RE), z.null()]).optional(),
       capturedAt: z.string().nullable().optional(),
       addedAt: z.record(z.string(), z.string()).optional(),
+      desktopBotId: z.string().regex(SENDER_ID_RE).optional(),
     })
     .passthrough();
 
@@ -175,6 +178,9 @@ export interface AllowedSendersLoad {
 }
 
 export function loadAllowedSendersWithSource(dataDir: string): AllowedSendersLoad {
+  if (existsSync(join(dataDir, ACCESS_RESET_MARKER))) {
+    return { state: defaultPairingState(), source: "default-pairing" };
+  }
   const fromFile = loadFromFileCached(dataDir);
   const baseAndSource: AllowedSendersLoad = fromFile
     ? { state: fromFile, source: "file" }
@@ -200,6 +206,7 @@ export function loadAllowedSenders(dataDir: string): AllowedSenders {
 }
 
 export function loadAllowedSendersFromFile(dataDir: string): AllowedSenders {
+  if (existsSync(join(dataDir, ACCESS_RESET_MARKER))) return defaultPairingState();
   return loadFromFileCached(dataDir) ?? defaultPairingState();
 }
 
@@ -370,6 +377,49 @@ export function saveAllowedSenders(
   }
 }
 
+export function resetDesktopAllowedSenders(dataDir: string): void {
+  ensureDataDirSecure(dataDir);
+  const markerPath = join(dataDir, ACCESS_RESET_MARKER);
+  let markerHandle: number | undefined;
+  try {
+    markerHandle = openSync(
+      markerPath,
+      fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW,
+      0o600,
+    );
+    writeSync(markerHandle, "reset\n");
+  } finally {
+    if (markerHandle !== undefined) closeSync(markerHandle);
+  }
+  fileCache.delete(dataDir);
+  saveAllowedSenders(dataDir, (current) => ({
+    ...defaultPairingState(),
+    ...(current?.desktopBotId === undefined ? {} : { desktopBotId: current.desktopBotId }),
+  }));
+  try {
+    unlinkSync(markerPath);
+  } catch {}
+}
+
+export function bindDesktopTelegramAccess(
+  dataDir: string,
+  desktopBotId: string,
+): "preserved" | "reset" {
+  if (!SENDER_ID_RE.test(desktopBotId)) {
+    throw new TypeError("invalid Desktop Telegram bot id");
+  }
+  const markerPath = join(dataDir, ACCESS_RESET_MARKER);
+  const pendingReset = existsSync(markerPath);
+  let status: "preserved" | "reset" = "preserved";
+  saveAllowedSenders(dataDir, (current) => {
+    if (!pendingReset && current?.desktopBotId === desktopBotId) return current;
+    status = "reset";
+    return { ...defaultPairingState(), desktopBotId };
+  });
+  if (pendingReset) unlinkSync(markerPath);
+  return status;
+}
+
 function assertSenderId(id: string): void {
   if (!SENDER_ID_RE.test(id)) {
     throw new Error(
@@ -430,6 +480,8 @@ export function claimPrimaryOperator(
   senderId: string,
 ): ClaimPrimaryOperatorResult {
   assertSenderId(senderId);
+  const markerPath = join(dataDir, ACCESS_RESET_MARKER);
+  if (existsSync(markerPath)) return { status: "refused", reason: "inconsistent-state" };
   const nowIso = new Date().toISOString();
   let result: ClaimPrimaryOperatorResult | undefined;
 

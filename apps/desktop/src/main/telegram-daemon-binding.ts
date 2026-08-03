@@ -45,6 +45,7 @@ export function createTelegramDaemonBinding(
     inspectTelegramCredential: (request) => call("inspectTelegramCredential", request),
     deleteTelegramWebhook: (request) => call("deleteTelegramWebhook", request),
     forgetTelegramCredential: (request) => call("forgetTelegramCredential", request),
+    resetTelegramAccess: (request) => call("resetTelegramAccess", request),
     beginTelegramPairing: (request) => call("beginTelegramPairing", request),
     cancelTelegramPairing: (request) => call("cancelTelegramPairing", request),
     listTelegramAllowedSenders: (request) => call("listTelegramAllowedSenders", request),

@@ -36,6 +36,17 @@ interface EnduragentAuth {
   disableTelegram(): Promise<DesktopTelegramStatus>;
   removeTelegram(): Promise<DesktopTelegramStatus>;
   reconcileTelegram(): Promise<DesktopTelegramStatus>;
+  removeTelegramWebhook(): Promise<DesktopTelegramStatus>;
+  beginTelegramPairing(): Promise<DesktopTelegramStatus>;
+  cancelTelegramPairing(): Promise<DesktopTelegramStatus>;
+  listTelegramAllowedSenders(): Promise<DesktopTelegramAllowedSenders>;
+  addTelegramAllowedSender(input: {
+    readonly senderId: number;
+  }): Promise<DesktopTelegramAllowedSenders>;
+  removeTelegramAllowedSender(input: {
+    readonly senderId: number;
+  }): Promise<DesktopTelegramAllowedSenders>;
+  acknowledgeTelegramGapWarning(): Promise<DesktopTelegramStatus>;
   chooseImportFiles(): Promise<readonly string[]>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
   releaseNotes(): Promise<ReleaseNotesResult>;
@@ -43,6 +54,24 @@ interface EnduragentAuth {
   checkForUpdates(): Promise<DesktopUpdateState>;
   restartToUpdate(): Promise<DesktopUpdateState>;
   onUpdateState(listener: (state: DesktopUpdateState) => void): () => void;
+}
+
+interface EnduragentTrayStatus {
+  readonly channelState:
+    | "disabled"
+    | "waiting-for-credential"
+    | "starting"
+    | "online"
+    | "offline-retrying"
+    | "conflict"
+    | "invalid-token"
+    | "transfer-required"
+    | "failed";
+  readonly gapWarning: boolean;
+}
+
+interface EnduragentTray {
+  onTelegramStatus(listener: (status: EnduragentTrayStatus) => void): () => void;
 }
 
 interface DesktopTranscriptTurn {
@@ -87,20 +116,7 @@ type DesktopUpdateState =
     }
   | { readonly status: "failed"; readonly stage: "check" | "download" };
 
-type DesktopTelegramControlState =
-  | "disabled"
-  | "waiting-for-credential"
-  | "starting"
-  | "online"
-  | "offline-retrying"
-  | "conflict"
-  | "invalid-token"
-  | "transfer-required"
-  | "failed";
-
 type DesktopTelegramControlErrorCode =
-  | "telegram-invalid-token"
-  | "telegram-polling-conflict"
   | "telegram-start-failed"
   | "telegram-credential-storage-failed"
   | "telegram-credential-unavailable"
@@ -110,15 +126,69 @@ type DesktopTelegramControlErrorCode =
   | "telegram-control-failed"
   | "telegram-drain-required";
 
+type DesktopTelegramChannel =
+  | { readonly desiredState: "disabled"; readonly state: "disabled" }
+  | {
+      readonly desiredState: "enabled";
+      readonly state:
+        | "waiting-for-credential"
+        | "starting"
+        | "online"
+        | "offline-retrying"
+        | "transfer-required";
+    }
+  | {
+      readonly desiredState: "enabled";
+      readonly state: "invalid-token";
+      readonly errorCode: "telegram-invalid-token";
+    }
+  | {
+      readonly desiredState: "enabled";
+      readonly state: "conflict";
+      readonly errorCode: "telegram-polling-conflict";
+    }
+  | {
+      readonly desiredState: "disabled" | "enabled";
+      readonly state: "failed";
+      readonly errorCode: DesktopTelegramControlErrorCode;
+    };
+
+type DesktopTelegramBot =
+  | { readonly state: "unconfigured" }
+  | {
+      readonly state: "ready" | "webhook-removal-required";
+      readonly username: string;
+    };
+
+type DesktopTelegramPairing =
+  | { readonly state: "unpaired" | "paired" | "expired" }
+  | { readonly state: "awaiting-code"; readonly code: string; readonly expiresAt: string }
+  | {
+      readonly state: "failed";
+      readonly errorCode:
+        | "telegram-pairing-unavailable"
+        | "telegram-pairing-refused"
+        | "telegram-pairing-storage-failed";
+    };
+
 interface DesktopTelegramStatus {
-  readonly desiredState: "disabled" | "enabled";
-  readonly state: DesktopTelegramControlState;
+  readonly channel: DesktopTelegramChannel;
+  readonly bot: DesktopTelegramBot;
+  readonly pairing: DesktopTelegramPairing;
   readonly credentialConfigured: boolean;
-  readonly botUsername?: string;
-  readonly since?: string;
-  readonly lastSuccessfulPollAt?: string;
-  readonly retryCount?: number;
-  readonly errorCode?: DesktopTelegramControlErrorCode;
+  readonly gapWarning:
+    | { readonly state: "clear" }
+    | { readonly state: "possible-message-loss"; readonly detectedAt: string };
+}
+
+interface DesktopTelegramAllowedSender {
+  readonly senderId: number;
+  readonly role: "primary" | "additional";
+  readonly addedAt?: string;
+}
+
+interface DesktopTelegramAllowedSenders {
+  readonly senders: readonly DesktopTelegramAllowedSender[];
 }
 
 type ReleaseNotesResult =
@@ -274,6 +344,7 @@ type CredentialDeleteResult =
 
 interface Window {
   readonly enduragentAuth: EnduragentAuth;
+  readonly enduragentTray: EnduragentTray;
 }
 
 interface WindowEventMap {

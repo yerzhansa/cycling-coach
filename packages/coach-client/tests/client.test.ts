@@ -77,6 +77,7 @@ const rpcDeadlineCases = [
   ["inspectTelegramCredential", { token: "bot-token" }, 30_000],
   ["deleteTelegramWebhook", { token: "bot-token" }, 30_000],
   ["forgetTelegramCredential", {}, 30_000],
+  ["resetTelegramAccess", {}, 30_000],
   ["beginTelegramPairing", {}, 30_000],
   ["cancelTelegramPairing", {}, 30_000],
   ["listTelegramAllowedSenders", {}, 30_000],
@@ -755,9 +756,16 @@ describe("RPC receive and observers", () => {
         replaceTelegram: telegramControlSnapshot,
         getTelegramStatus: telegramControlSnapshot,
         reconcileTelegram: telegramControlSnapshot,
-        inspectTelegramCredential: { status: "ready", bot: { username: "sample_bot" } },
-        deleteTelegramWebhook: { status: "ready", bot: { username: "sample_bot" } },
+        inspectTelegramCredential: {
+          status: "ready",
+          bot: { id: 10001, username: "sample_bot" },
+        },
+        deleteTelegramWebhook: {
+          status: "ready",
+          bot: { id: 10001, username: "sample_bot" },
+        },
         forgetTelegramCredential: telegramControlSnapshot,
+        resetTelegramAccess: telegramControlSnapshot,
         beginTelegramPairing: telegramControlSnapshot,
         cancelTelegramPairing: telegramControlSnapshot,
         listTelegramAllowedSenders: { senders: [] },
@@ -910,15 +918,16 @@ describe("RPC receive and observers", () => {
     await expect(client.call("getTelegramStatus", {})).resolves.toEqual(telegramControlSnapshot);
     await expect(client.call("reconcileTelegram", {})).resolves.toEqual(telegramControlSnapshot);
     await expect(client.call("inspectTelegramCredential", { token: "bot-token" })).resolves.toEqual(
-      { status: "ready", bot: { username: "sample_bot" } },
+      { status: "ready", bot: { id: 10001, username: "sample_bot" } },
     );
     await expect(client.call("deleteTelegramWebhook", { token: "bot-token" })).resolves.toEqual({
       status: "ready",
-      bot: { username: "sample_bot" },
+      bot: { id: 10001, username: "sample_bot" },
     });
     await expect(client.call("forgetTelegramCredential", {})).resolves.toEqual(
       telegramControlSnapshot,
     );
+    await expect(client.call("resetTelegramAccess", {})).resolves.toEqual(telegramControlSnapshot);
     await expect(client.call("beginTelegramPairing", {})).resolves.toEqual(telegramControlSnapshot);
     await expect(client.call("cancelTelegramPairing", {})).resolves.toEqual(
       telegramControlSnapshot,
@@ -930,7 +939,7 @@ describe("RPC receive and observers", () => {
     await expect(
       client.call("removeTelegramAllowedSender", { senderId: 123_456 }),
     ).resolves.toEqual({ senders: [] });
-    expect(received.slice(-14).map((value) => (value as { method: string }).method)).toEqual([
+    expect(received.slice(-15).map((value) => (value as { method: string }).method)).toEqual([
       "configureTelegram",
       "enableTelegram",
       "disableTelegram",
@@ -940,6 +949,7 @@ describe("RPC receive and observers", () => {
       "inspectTelegramCredential",
       "deleteTelegramWebhook",
       "forgetTelegramCredential",
+      "resetTelegramAccess",
       "beginTelegramPairing",
       "cancelTelegramPairing",
       "listTelegramAllowedSenders",
@@ -952,7 +962,7 @@ describe("RPC receive and observers", () => {
     await expect(client.call("setDailySpendCap", { dailyCapUsd: 0.75 })).resolves.toMatchObject({
       dailyCapUsd: 0.75,
     });
-    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([29, 30]);
+    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([30, 31]);
     expect(received.slice(-2).map((value) => (value as { method: string }).method)).toEqual([
       "getSpendSummary",
       "setDailySpendCap",

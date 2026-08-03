@@ -151,8 +151,7 @@ async function runDesktop(): Promise<void> {
     root: join(app.getPath("userData"), BACKGROUND_AT_LOGIN_PREFERENCE_DIRECTORY_NAME),
   });
   desktopStartedInBackground =
-    !securitySmokeMode &&
-    (await shouldStartInBackgroundAtLogin(app, backgroundAtLoginPreference));
+    !securitySmokeMode && (await shouldStartInBackgroundAtLogin(app, backgroundAtLoginPreference));
   const controller = new AbortController();
   const environment = { ...process.env };
   const rendererSource = resolveDesktopRendererSource(
@@ -265,6 +264,7 @@ async function runDesktop(): Promise<void> {
       encryption: safeStorage,
     });
     let activeTelegramBinding: TelegramDaemonBinding | undefined;
+    const preparedTelegramBindings = new Map<number, TelegramDaemonBinding>();
     const telegramCoordinator = createTelegramControlCoordinator({
       selectedAthleteHome: () => selectedAthleteHome,
       vault: telegramVault,
@@ -355,6 +355,7 @@ async function runDesktop(): Promise<void> {
         }
         recoveringCredentialRuntime = undefined;
         preparedRuntimeBindings.clear();
+        preparedTelegramBindings.clear();
       }
       const visibleWindow = currentWindow();
       if (visibleWindow !== null && state.status !== "starting") {
@@ -377,10 +378,8 @@ async function runDesktop(): Promise<void> {
       prepareReady: ({ connection, signal }) => reapplyCredentials(connection, signal),
       onTransition: publishLifecycle,
       onReady({ previous, current }) {
-        activeTelegramBinding = createTelegramDaemonBinding(current, selectedAthleteHome);
-        if (current.supervision === "app-supervised") {
-          void telegramCoordinator.reconcile();
-        }
+        activeTelegramBinding = preparedTelegramBindings.get(current.generation);
+        preparedTelegramBindings.delete(current.generation);
         const prepared = preparedRuntimeBindings.get(current.generation);
         if (prepared !== undefined) {
           activeRuntimeBinding = prepared.binding;
@@ -532,7 +531,7 @@ async function runDesktop(): Promise<void> {
       },
     });
     reapplyCredentials = async (connection, signal) => {
-      if (signal.aborted) return;
+      if (signal.aborted) throw signal.reason;
       const revisions = new Map(credentialRuntimeRevisions);
       const successor = createRuntimeBinding(connection);
       const successorVault = createCredentialVault({
@@ -545,19 +544,40 @@ async function runDesktop(): Promise<void> {
       });
       await successorVault.reapplyConfigured();
       const successorStatuses = await successorVault.credentialStatuses();
+      const successorTelegram = createTelegramDaemonBinding(connection, selectedAthleteHome);
+      if (connection.supervision === "app-supervised") {
+        const successorTelegramCoordinator = createTelegramControlCoordinator({
+          selectedAthleteHome: () => selectedAthleteHome,
+          vault: telegramVault,
+          daemon: { current: () => successorTelegram },
+        });
+        const desiredState = await telegramVault.desiredState();
+        const snapshot = await successorTelegramCoordinator.reconcile();
+        const expectedEnabled = desiredState.state === "configured" && desiredState.enabled;
+        const prepared = expectedEnabled
+          ? snapshot.credentialConfigured &&
+            snapshot.channel.desiredState === "enabled" &&
+            (snapshot.channel.state === "starting" ||
+              snapshot.channel.state === "online" ||
+              snapshot.channel.state === "offline-retrying" ||
+              snapshot.channel.state === "conflict")
+          : snapshot.channel.state === "disabled";
+        if (!prepared) throw new TypeError("Telegram successor preparation failed");
+      }
       const lifecycleState = daemonLifecycle?.snapshot();
       if (
         signal.aborted ||
         lifecycleState?.status !== "recovering" ||
         lifecycleState.generation + 1 !== connection.generation
       ) {
-        return;
+        throw new TypeError("desktop daemon successor preparation expired");
       }
       preparedRuntimeBindings.set(connection.generation, {
         binding: successor,
         statuses: successorStatuses,
         revisions,
       });
+      preparedTelegramBindings.set(connection.generation, successorTelegram);
     };
     const chatGptAuth = createChatGptAuth({
       configDir,
@@ -640,7 +660,7 @@ async function runDesktop(): Promise<void> {
       selectedAthleteHome,
     );
     if (initialTelegramConnection.supervision === "app-supervised") {
-      void telegramCoordinator.reconcile();
+      await telegramCoordinator.reconcile();
     }
     await telegramPower.start();
     await installDesktopProtocol({
@@ -772,6 +792,15 @@ async function runDesktop(): Promise<void> {
       mainWindow,
       trayIconPath: resolve(mainDirectory, "../../resources/trayTemplate.png"),
       trayPopoverUrl: rendererSource.trayPopoverUrl,
+      trayPreloadPath: resolve(mainDirectory, "../preload/tray.cjs"),
+      telegramStatus: async () => {
+        const snapshot = await telegramCoordinator.status();
+        const warning = await telegramPower!.warning();
+        return {
+          channelState: snapshot.channel.state,
+          gapWarning: warning.state === "possible-message-loss",
+        };
+      },
       reportFailure(operation) {
         process.stderr.write(`desktop-residency-failure ${operation}\n`);
       },

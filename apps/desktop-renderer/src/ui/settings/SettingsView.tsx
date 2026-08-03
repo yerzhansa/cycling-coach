@@ -8,6 +8,7 @@ import { ConversationSection } from "./ConversationSection.js";
 import { CredentialsSection } from "./CredentialsSection.js";
 import { PreferencesSection } from "./PreferencesSection.js";
 import { SpendSection } from "./SpendSection.js";
+import { TelegramSection } from "./TelegramSection.js";
 import { TrainingAccountSection } from "./TrainingAccountSection.js";
 
 export function SettingsView(): ReactElement {
@@ -29,6 +30,7 @@ export function SettingsView(): ReactElement {
       <CredentialsSection />
       <TrainingAccountSection />
       <ConversationSection />
+      <TelegramSection />
       <SpendSection />
       <PreferencesSection />
       <ApplicationSection />

@@ -57,6 +57,12 @@ export interface TelegramSettingsPort {
   disable(): void;
   remove(): void;
   reconcile(): void;
+  removeWebhook(): void;
+  beginPairing(): void;
+  cancelPairing(): void;
+  acknowledgeGapWarning(): void;
+  addSender(senderId: number): void;
+  removeSender(senderId: number): void;
 }
 
 export interface UpdateSettingsPort {

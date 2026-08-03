@@ -31,10 +31,7 @@ import {
   type TelegramControlCoordinator,
 } from "./telegram-control.js";
 import type { TelegramCredentialVault } from "./telegram-credential-vault.js";
-import type {
-  DesktopTelegramPowerLifecycle,
-  TelegramGapWarning,
-} from "./telegram-power.js";
+import type { DesktopTelegramPowerLifecycle, TelegramGapWarning } from "./telegram-power.js";
 
 const DESKTOP_ERRORS = new Set<string>(DESKTOP_TELEGRAM_CONTROL_ERROR_CODES);
 const emptySenders = (): TelegramAllowedSendersResult => ({ senders: [] });
@@ -195,7 +192,7 @@ export function installDesktopTelegramIpc(input: {
         return { ...copySnapshot(undefined), gapWarning: { state: "clear" } };
       }
     });
-  const runSenders = (operation: () => Promise<unknown>): Promise<TelegramAllowedSendersResult> =>
+  const readSenders = (operation: () => Promise<unknown>): Promise<TelegramAllowedSendersResult> =>
     serialize(async () => {
       try {
         return copySenders(await operation());
@@ -203,6 +200,10 @@ export function installDesktopTelegramIpc(input: {
         return emptySenders();
       }
     });
+  const mutateSenders = (
+    operation: () => Promise<unknown>,
+  ): Promise<TelegramAllowedSendersResult> =>
+    serialize(async () => TelegramAllowedSendersResultSchema.parse(await operation()));
   const handlers = [
     [
       DESKTOP_TELEGRAM_STATUS_CHANNEL,
@@ -278,21 +279,21 @@ export function installDesktopTelegramIpc(input: {
       DESKTOP_TELEGRAM_LIST_ALLOWED_SENDERS_CHANNEL,
       (event: IpcMainInvokeEvent, ...args: unknown[]) => {
         trustedZeroArgument(event, args);
-        return runSenders(() => input.coordinator.listAllowedSenders());
+        return readSenders(() => input.coordinator.listAllowedSenders());
       },
     ],
     [
       DESKTOP_TELEGRAM_ADD_ALLOWED_SENDER_CHANNEL,
       (event: IpcMainInvokeEvent, ...args: unknown[]) => {
         const sender = trustedSenderArgument(event, args);
-        return runSenders(() => input.coordinator.addAllowedSender(sender));
+        return mutateSenders(() => input.coordinator.addAllowedSender(sender));
       },
     ],
     [
       DESKTOP_TELEGRAM_REMOVE_ALLOWED_SENDER_CHANNEL,
       (event: IpcMainInvokeEvent, ...args: unknown[]) => {
         const sender = trustedSenderArgument(event, args);
-        return runSenders(() => input.coordinator.removeAllowedSender(sender));
+        return mutateSenders(() => input.coordinator.removeAllowedSender(sender));
       },
     ],
     [

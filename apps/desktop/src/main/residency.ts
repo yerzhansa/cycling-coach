@@ -38,10 +38,28 @@ export interface DesktopResidencyInput {
   readonly mainWindow: MainWindowResidencyPort;
   readonly trayIconPath: string;
   readonly trayPopoverUrl: string;
+  readonly trayPreloadPath: string;
+  readonly telegramStatus: () => Promise<TrayTelegramStatus>;
   readonly reportFailure: (
     operation: "read-login-item" | "set-login-item" | "show-window" | "tray-start",
   ) => void;
   readonly observe?: (event: DesktopResidencyEvent) => void;
+}
+
+export type TrayTelegramChannelState =
+  | "disabled"
+  | "waiting-for-credential"
+  | "starting"
+  | "online"
+  | "offline-retrying"
+  | "conflict"
+  | "invalid-token"
+  | "transfer-required"
+  | "failed";
+
+export interface TrayTelegramStatus {
+  readonly channelState: TrayTelegramChannelState;
+  readonly gapWarning: boolean;
 }
 
 export interface DesktopResidency {
@@ -73,9 +91,18 @@ export function createDesktopResidency(input: DesktopResidencyInput): DesktopRes
     if (tray === undefined) throw new TypeError();
     popover = createTrayPopover({
       url: input.trayPopoverUrl,
+      preload: input.trayPreloadPath,
       getTrayBounds: () => tray?.getBounds() ?? { x: 0, y: 0, width: 0, height: 0 },
     });
-    popover.window.on("show", () => input.observe?.({ type: "popover-shown" }));
+    popover.window.on("show", () => {
+      input.observe?.({ type: "popover-shown" });
+      const target = popover;
+      if (target === undefined) return;
+      void input.telegramStatus().then(
+        (status) => target.publishTelegramStatus(status),
+        () => target.publishTelegramStatus({ channelState: "failed", gapWarning: false }),
+      );
+    });
     popover.window.on("hide", () => input.observe?.({ type: "popover-hidden" }));
     return popover;
   };

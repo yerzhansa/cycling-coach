@@ -68,6 +68,7 @@ function subject(
     readonly enabled?: boolean;
     readonly inspection?: TelegramCredentialInspection;
     readonly metadata?: TelegramBotMetadata;
+    readonly loseReplacementAcknowledgement?: "malformed" | "rejected";
   } = {},
 ) {
   let selectedHome = options.home ?? HOME;
@@ -78,16 +79,21 @@ function subject(
     (token === undefined ? { state: "missing" } : { state: "configured", username: USERNAME });
   let inspection: TelegramCredentialInspection = options.inspection ?? {
     status: "ready",
-    bot: { username: REPLACEMENT_USERNAME },
+    bot: { id: 20002, username: REPLACEMENT_USERNAME },
   };
+  let daemonToken = token;
+  let loseReplacementAcknowledgement = options.loseReplacementAcknowledgement;
   let senders: TelegramAllowedSendersResult = {
     senders: [{ senderId: 12345, role: "primary", addedAt: "2026-08-03T12:00:00.000Z" }],
   };
   const trace: string[] = [];
   const vault: TelegramCredentialVault = {
-    credentialStatus: vi.fn(async () => ({
-      state: token === undefined ? "missing" : "configured",
-    })),
+    credentialStatus: vi.fn(
+      async () =>
+        ({
+          state: token === undefined ? "missing" : "configured",
+        }) as const,
+    ),
     writeCredential: vi.fn(async (input) => {
       trace.push(`vault:token:${input.token}`);
       if (input.authenticatedAthleteHome !== HOME) {
@@ -169,6 +175,13 @@ function subject(
     }),
     replaceTelegram: vi.fn(async ({ token: value }) => {
       trace.push(`daemon:replace:${value}`);
+      daemonToken = value;
+      if (loseReplacementAcknowledgement !== undefined) {
+        const lost = loseReplacementAcknowledgement;
+        loseReplacementAcknowledgement = undefined;
+        if (lost === "rejected") throw new Error("replacement acknowledgement lost");
+        return { malformed: true };
+      }
       return daemonSnapshot(
         enabled
           ? { desiredState: "enabled", state: "online" }
@@ -193,13 +206,18 @@ function subject(
         },
       );
     }),
+    resetTelegramAccess: vi.fn(async () => {
+      trace.push("daemon:reset-access");
+      senders = { senders: [] };
+      return daemonSnapshot({ desiredState: "disabled", state: "disabled" });
+    }),
     inspectTelegramCredential: vi.fn(async ({ token: value }) => {
       trace.push(`daemon:inspect:${value}`);
       return inspection;
     }),
     deleteTelegramWebhook: vi.fn(async ({ token: value }) => {
       trace.push(`daemon:delete-webhook:${value}`);
-      inspection = { status: "ready", bot: { username: USERNAME } };
+      inspection = { status: "ready", bot: { id: 10001, username: USERNAME } };
       return inspection;
     }),
     forgetTelegramCredential: vi.fn(async () => {
@@ -256,6 +274,7 @@ function subject(
     vault,
     currentMetadata: () => metadata,
     currentToken: () => token,
+    currentDaemonToken: () => daemonToken,
     setCurrent(value: TelegramDaemonBinding | undefined) {
       current = value;
     },
@@ -304,10 +323,71 @@ describe("Telegram main-process control coordinator", () => {
     );
 
     expect(runtime.currentToken()).toBe(TOKEN);
+    expect(runtime.currentDaemonToken()).toBe(TOKEN);
     expect(runtime.currentMetadata()).toEqual({ state: "configured", username: USERNAME });
     expect(runtime.vault.writeBotMetadata).not.toHaveBeenCalled();
     expect(runtime.vault.writeCredential).not.toHaveBeenCalled();
     expect(runtime.binding.replaceTelegram).not.toHaveBeenCalled();
+  });
+
+  it.each(["malformed", "rejected"] as const)(
+    "converges the daemon and vault when replacement acknowledgement is %s",
+    async (lostAcknowledgement) => {
+      const runtime = subject({
+        configured: true,
+        enabled: true,
+        loseReplacementAcknowledgement: lostAcknowledgement,
+      });
+
+      await expect(runtime.coordinator.replace(REPLACEMENT_TOKEN)).resolves.toEqual(
+        desktopSnapshot(
+          { desiredState: "enabled", state: "online" },
+          { username: REPLACEMENT_USERNAME },
+        ),
+      );
+
+      expect(runtime.currentToken()).toBe(REPLACEMENT_TOKEN);
+      expect(runtime.currentDaemonToken()).toBe(REPLACEMENT_TOKEN);
+      expect(runtime.binding.replaceTelegram).toHaveBeenNthCalledWith(1, {
+        token: REPLACEMENT_TOKEN,
+      });
+      expect(runtime.binding.replaceTelegram).toHaveBeenNthCalledWith(2, {
+        token: REPLACEMENT_TOKEN,
+      });
+    },
+  );
+
+  it("reconciles the vault credential forward after two replacement acknowledgements are lost", async () => {
+    const runtime = subject({ configured: true, enabled: true });
+    vi.mocked(runtime.binding.replaceTelegram)
+      .mockRejectedValueOnce(new Error("replacement acknowledgement lost"))
+      .mockResolvedValueOnce({ malformed: true });
+
+    await expect(runtime.coordinator.replace(REPLACEMENT_TOKEN)).resolves.toEqual({
+      channel: {
+        desiredState: "enabled",
+        state: "failed",
+        errorCode: "telegram-control-failed",
+      },
+      bot: readyBot(REPLACEMENT_USERNAME),
+      pairing: { state: "unpaired" },
+      credentialConfigured: true,
+    });
+    expect(runtime.currentToken()).toBe(REPLACEMENT_TOKEN);
+    expect(runtime.currentDaemonToken()).toBe(TOKEN);
+
+    await expect(runtime.coordinator.reconcile()).resolves.toEqual(
+      desktopSnapshot(
+        { desiredState: "enabled", state: "online" },
+        { username: REPLACEMENT_USERNAME },
+      ),
+    );
+
+    expect(runtime.currentToken()).toBe(REPLACEMENT_TOKEN);
+    expect(runtime.currentDaemonToken()).toBe(REPLACEMENT_TOKEN);
+    expect(runtime.binding.replaceTelegram).toHaveBeenNthCalledWith(3, {
+      token: REPLACEMENT_TOKEN,
+    });
   });
 
   it("stores an initial webhook credential disabled without configuring or polling", async () => {
@@ -315,7 +395,7 @@ describe("Telegram main-process control coordinator", () => {
       configured: false,
       inspection: {
         status: "webhook-removal-required",
-        bot: { username: REPLACEMENT_USERNAME },
+        bot: { id: 20002, username: REPLACEMENT_USERNAME },
       },
     });
 
@@ -338,7 +418,7 @@ describe("Telegram main-process control coordinator", () => {
       enabled: true,
       inspection: {
         status: "webhook-removal-required",
-        bot: { username: REPLACEMENT_USERNAME },
+        bot: { id: 20002, username: REPLACEMENT_USERNAME },
       },
     });
 
@@ -391,7 +471,7 @@ describe("Telegram main-process control coordinator", () => {
     const stale = subject({ configured: false });
     vi.mocked(stale.binding.inspectTelegramCredential).mockImplementationOnce(async () => {
       stale.setCurrent({ ...stale.binding, generation: 2 });
-      return { status: "ready", bot: { username: REPLACEMENT_USERNAME } };
+      return { status: "ready", bot: { id: 20002, username: REPLACEMENT_USERNAME } };
     });
     await expect(stale.coordinator.configure(REPLACEMENT_TOKEN)).resolves.toMatchObject({
       channel: { state: "failed", errorCode: "telegram-stale-operation" },
@@ -419,7 +499,10 @@ describe("Telegram main-process control coordinator", () => {
   it("removes a webhook explicitly and only configures after reinspection is ready", async () => {
     const runtime = subject({
       configured: true,
-      inspection: { status: "webhook-removal-required", bot: { username: USERNAME } },
+      inspection: {
+        status: "webhook-removal-required",
+        bot: { id: 10001, username: USERNAME },
+      },
     });
 
     await expect(runtime.coordinator.removeWebhook()).resolves.toEqual(desktopSnapshot());
@@ -483,6 +566,18 @@ describe("Telegram main-process control coordinator", () => {
     await expect(runtime.coordinator.listAllowedSenders()).resolves.toEqual({ senders: [] });
   });
 
+  it("rejects allowed-sender mutations when daemon authority is unavailable", async () => {
+    const runtime = subject();
+    runtime.setCurrent(undefined);
+
+    await expect(runtime.coordinator.removeAllowedSender({ senderId: 67890 })).rejects.toThrow(
+      "Telegram sender authority is unavailable",
+    );
+    await expect(runtime.coordinator.addAllowedSender({ senderId: 67890 })).rejects.toThrow(
+      "Telegram sender authority is unavailable",
+    );
+  });
+
   it("disables and forgets the daemon before deleting the vault", async () => {
     const runtime = subject({ configured: true, enabled: true });
 
@@ -495,6 +590,7 @@ describe("Telegram main-process control coordinator", () => {
 
     expect(runtime.trace).toEqual([
       "daemon:disable",
+      "daemon:reset-access",
       "daemon:forget",
       "vault:desired:false",
       "vault:delete",
@@ -526,5 +622,26 @@ describe("Telegram main-process control coordinator", () => {
       credentialConfigured: true,
     });
     expect(forgetRefused.vault.deleteCredential).not.toHaveBeenCalled();
+  });
+
+  it("retains the credential until access reset proves the daemon is disabled and unpaired", async () => {
+    const runtime = subject({ configured: true, enabled: true });
+    vi.mocked(runtime.binding.resetTelegramAccess).mockResolvedValueOnce(
+      daemonSnapshot(
+        { desiredState: "disabled", state: "disabled" },
+        {
+          pairing: { state: "awaiting-code", code: "ABCDEF", expiresAt: EXPIRES_AT },
+        },
+      ),
+    );
+
+    await expect(runtime.coordinator.remove()).resolves.toMatchObject({
+      channel: { state: "failed", errorCode: "telegram-drain-required" },
+      credentialConfigured: true,
+    });
+
+    expect(runtime.binding.forgetTelegramCredential).not.toHaveBeenCalled();
+    expect(runtime.vault.deleteCredential).not.toHaveBeenCalled();
+    expect(runtime.currentToken()).toBe(TOKEN);
   });
 });

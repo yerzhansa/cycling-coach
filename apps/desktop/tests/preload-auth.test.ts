@@ -264,7 +264,11 @@ describe("desktop preload ChatGPT auth", () => {
 
   it("exposes semantic Telegram controls and validates redacted snapshots", async () => {
     const status = {
-      channel: { desiredState: "enabled", state: "online" },
+      channel: {
+        desiredState: "enabled",
+        state: "online",
+        lastSuccessfulPollAt: "1998-06-01T00:00:00.000Z",
+      },
       bot: { state: "ready", username: "synthetic_bot" },
       pairing: { state: "paired" },
       credentialConfigured: true,
@@ -302,6 +306,12 @@ describe("desktop preload ChatGPT auth", () => {
     expect(mocks.invoke).not.toHaveBeenCalled();
 
     mocks.invoke.mockResolvedValue({ ...status, token: "must-not-cross" });
+    await expect(bridge.telegramStatus()).rejects.toBeInstanceOf(TypeError);
+
+    mocks.invoke.mockResolvedValue({
+      ...status,
+      channel: { ...status.channel, lastSuccessfulPollAt: "not-canonical" },
+    });
     await expect(bridge.telegramStatus()).rejects.toBeInstanceOf(TypeError);
   });
 

@@ -9,6 +9,7 @@ import {
   createAcceptedServerHandshakeFrame,
   createVersionMismatchServerHandshakeFrame,
   type DaemonOwner,
+  type TelegramControlSnapshot,
 } from "@enduragent/coach-contract";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import { acquireWriteLock } from "@enduragent/kernel-node/lock";
@@ -29,17 +30,31 @@ import type { UpgradeFenceHandle } from "../src/daemon/upgrade-fence.js";
 import type { DesktopTelegramController } from "../src/desktop-telegram-controller.js";
 
 const roots: string[] = [];
+const disabledTelegramSnapshot: TelegramControlSnapshot = {
+  channel: { desiredState: "disabled", state: "disabled" },
+  bot: { state: "unconfigured" },
+  pairing: { state: "unpaired" },
+};
 const disabledTelegram: DesktopTelegramController = {
-  getStatus: () => ({ desiredState: "disabled", state: "disabled" }),
-  configure: async () => undefined,
-  enable: async () => undefined,
-  disable: async () => undefined,
-  replace: async () => undefined,
-  reconcile: async () => undefined,
-  stopPolling: async () => undefined,
-  resumePolling: async () => undefined,
-  drainPending: async () => undefined,
-  close: async () => undefined,
+  getStatus: () => disabledTelegramSnapshot,
+  configure: async () => disabledTelegramSnapshot,
+  enable: async () => disabledTelegramSnapshot,
+  disable: async () => disabledTelegramSnapshot,
+  replace: async () => disabledTelegramSnapshot,
+  reconcile: async () => disabledTelegramSnapshot,
+  inspectTelegramCredential: async () => ({ status: "invalid-token" }),
+  deleteTelegramWebhook: async () => ({ status: "invalid-token" }),
+  forgetTelegramCredential: async () => disabledTelegramSnapshot,
+  resetTelegramAccess: async () => disabledTelegramSnapshot,
+  beginTelegramPairing: async () => disabledTelegramSnapshot,
+  cancelTelegramPairing: async () => disabledTelegramSnapshot,
+  listTelegramAllowedSenders: async () => ({ senders: [] }),
+  addTelegramAllowedSender: async () => ({ senders: [] }),
+  removeTelegramAllowedSender: async () => ({ senders: [] }),
+  stopPolling: async () => disabledTelegramSnapshot,
+  resumePolling: async () => disabledTelegramSnapshot,
+  drainPending: async () => disabledTelegramSnapshot,
+  close: async () => disabledTelegramSnapshot,
 };
 
 afterEach(async () => {

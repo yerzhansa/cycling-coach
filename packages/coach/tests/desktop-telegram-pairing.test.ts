@@ -5,7 +5,7 @@ describe("Desktop Telegram pairing", () => {
   it("creates one six-character uppercase hex code for exactly sixty seconds", () => {
     let now = Date.parse("1998-06-01T12:00:00.000Z");
     const pairing = createDesktopTelegramPairing({
-      claimPrimaryOperator: vi.fn(() => ({ status: "claimed" })),
+      claimPrimaryOperator: vi.fn(() => ({ status: "claimed" as const })),
       hasPrimaryOperator: () => false,
       randomBytes: (size) => {
         expect(size).toBe(3);
@@ -135,5 +135,20 @@ describe("Desktop Telegram pairing", () => {
     pairing.consumePrivateMessage({ senderId: "11111", messageText: "DEADBE" });
     expect(pairing.cancel()).toEqual({ state: "paired" });
     expect(pairing.consumePrivateMessage({ senderId: "22222", messageText: "DEADBE" })).toBe(true);
+  });
+
+  it("resets ownership and consumed-code tombstones", () => {
+    const pairing = createDesktopTelegramPairing({
+      claimPrimaryOperator: () => ({ status: "claimed" }),
+      hasPrimaryOperator: () => false,
+      randomBytes: () => Uint8Array.from([0xde, 0xad, 0xbe]),
+      now: () => 1_000,
+    });
+
+    pairing.begin();
+    expect(pairing.consumePrivateMessage({ senderId: "11111", messageText: "DEADBE" })).toBe(true);
+    expect(pairing.reset()).toEqual({ state: "unpaired" });
+    expect(pairing.consumePrivateMessage({ senderId: "11111", messageText: "DEADBE" })).toBe(false);
+    expect(pairing.begin()).toMatchObject({ state: "awaiting-code", code: "DEADBE" });
   });
 });

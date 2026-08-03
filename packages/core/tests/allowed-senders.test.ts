@@ -19,10 +19,12 @@ import {
   defaultPairingState,
   addSender,
   addSecondarySender,
+  bindDesktopTelegramAccess,
   claimPrimaryOperator,
   listDesktopAllowedSenders,
   removeSender,
   removeSecondarySender,
+  resetDesktopAllowedSenders,
   listSenders,
   readKnownSessions,
   type AllowedSenders,
@@ -621,6 +623,96 @@ describe("Desktop sender authority operations", () => {
     process.env.CYCLING_COACH_OPERATOR_ID = "99999";
     expect(listDesktopAllowedSenders(dataDir)).toEqual([]);
   });
+
+  it("binds Desktop authorization to one stable Telegram bot id", () => {
+    const firstBinding = "10001";
+    const replacementBinding = "20002";
+    claimPrimaryOperator(dataDir, "12345");
+
+    expect(bindDesktopTelegramAccess(dataDir, firstBinding)).toBe("reset");
+    expect(listDesktopAllowedSenders(dataDir)).toEqual([]);
+    expect(loadAllowedSendersFromFile(dataDir).desktopBotId).toBe(firstBinding);
+
+    claimPrimaryOperator(dataDir, "12345");
+    addSecondarySender(dataDir, "67890");
+    expect(bindDesktopTelegramAccess(dataDir, firstBinding)).toBe("preserved");
+    expect(listDesktopAllowedSenders(dataDir).map((sender) => sender.senderId)).toEqual([
+      "12345",
+      "67890",
+    ]);
+
+    expect(bindDesktopTelegramAccess(dataDir, replacementBinding)).toBe("reset");
+    expect(listDesktopAllowedSenders(dataDir)).toEqual([]);
+    expect(loadAllowedSendersFromFile(dataDir).desktopBotId).toBe(replacementBinding);
+    expect(JSON.stringify(loadAllowedSendersFromFile(dataDir))).not.toContain("secret-token");
+  });
+
+  it("rejects malformed Desktop bot bindings before writing", () => {
+    expect(() => bindDesktopTelegramAccess(dataDir, "not-a-binding")).toThrow(TypeError);
+    expect(existsSync(join(dataDir, "allowed-senders.json"))).toBe(false);
+  });
+
+  it("finishes an interrupted access reset before preserving a same-token binding", () => {
+    const binding = "10001";
+    bindDesktopTelegramAccess(dataDir, binding);
+    claimPrimaryOperator(dataDir, "12345");
+    writeFileSync(join(dataDir, ".telegram-access-reset"), "reset\n", { mode: 0o600 });
+
+    expect(bindDesktopTelegramAccess(dataDir, binding)).toBe("reset");
+    expect(listDesktopAllowedSenders(dataDir)).toEqual([]);
+    expect(loadAllowedSendersFromFile(dataDir)).toEqual({
+      ...defaultPairingState(),
+      desktopBotId: binding,
+    });
+    expect(existsSync(join(dataDir, ".telegram-access-reset"))).toBe(false);
+  });
+
+  it("idempotently replaces every file-backed authorization with pairing state", () => {
+    claimPrimaryOperator(dataDir, "12345");
+    addSecondarySender(dataDir, "67890");
+
+    resetDesktopAllowedSenders(dataDir);
+    resetDesktopAllowedSenders(dataDir);
+
+    expect(loadAllowedSendersFromFile(dataDir)).toEqual(defaultPairingState());
+    expect(listDesktopAllowedSenders(dataDir)).toEqual([]);
+  });
+
+  it("preserves the bot binding across reset, re-pairing, and same-bot restart", () => {
+    const binding = "10001";
+    bindDesktopTelegramAccess(dataDir, binding);
+    claimPrimaryOperator(dataDir, "12345");
+
+    resetDesktopAllowedSenders(dataDir);
+    expect(loadAllowedSendersFromFile(dataDir)).toEqual({
+      ...defaultPairingState(),
+      desktopBotId: binding,
+    });
+    expect(claimPrimaryOperator(dataDir, "67890").status).toBe("claimed");
+
+    expect(bindDesktopTelegramAccess(dataDir, binding)).toBe("preserved");
+    expect(listDesktopAllowedSenders(dataDir).map((sender) => sender.senderId)).toEqual(["67890"]);
+  });
+
+  it("does not let a pairing claim clear an interrupted access reset", async () => {
+    const { LockfileContentionError } = await import("../src/channels/allowed-senders.js");
+    const binding = "10001";
+    bindDesktopTelegramAccess(dataDir, binding);
+    const lockPath = join(dataDir, ".allowed-senders.lock");
+    writeFileSync(lockPath, `${process.pid}\n${new Date().toISOString()}`);
+
+    expect(() => resetDesktopAllowedSenders(dataDir)).toThrow(LockfileContentionError);
+    rmSync(lockPath, { force: true });
+    expect(claimPrimaryOperator(dataDir, "12345")).toEqual({
+      status: "refused",
+      reason: "inconsistent-state",
+    });
+    expect(existsSync(join(dataDir, ".telegram-access-reset"))).toBe(true);
+
+    expect(bindDesktopTelegramAccess(dataDir, binding)).toBe("reset");
+    expect(existsSync(join(dataDir, ".telegram-access-reset"))).toBe(false);
+    expect(claimPrimaryOperator(dataDir, "12345").status).toBe("claimed");
+  });
 });
 
 describe("saveAllowedSenders — PID lockfile", () => {
@@ -641,6 +733,21 @@ describe("saveAllowedSenders — PID lockfile", () => {
     expect(() => addSender(dataDir, "12345")).toThrow(LockfileContentionError);
     // Cleanup so afterEach doesn't fail
     rmSync(lockPath(), { force: true });
+  });
+
+  it("keeps authorization fail-closed when reset persistence is contended", async () => {
+    const { LockfileContentionError } = await import("../src/channels/allowed-senders.js");
+    claimPrimaryOperator(dataDir, "12345");
+    process.env.CYCLING_COACH_OPERATOR_ID = "67890";
+    writeFileSync(lockPath(), `${process.pid}\n${new Date().toISOString()}`);
+
+    expect(() => resetDesktopAllowedSenders(dataDir)).toThrow(LockfileContentionError);
+    expect(loadAllowedSenders(dataDir)).toEqual(defaultPairingState());
+    expect(listDesktopAllowedSenders(dataDir)).toEqual([]);
+
+    rmSync(lockPath(), { force: true });
+    resetDesktopAllowedSenders(dataDir);
+    expect(loadAllowedSendersFromFile(dataDir)).toEqual(defaultPairingState());
   });
 
   it("stale lockfile (dead PID, old timestamp) is reclaimed", () => {

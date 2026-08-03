@@ -11,6 +11,7 @@ import type {
   CoachOperations,
   SpendOperations,
   OperationProgressEvent,
+  TelegramControlSnapshot,
   TurnEvent,
 } from "@enduragent/coach-contract";
 import { acquireWriteLock } from "../../../../packages/kernel-node/src/lock/index.js";
@@ -49,17 +50,37 @@ interface ScriptRequest {
 
 const require = createRequire(import.meta.url);
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const disabledTelegramSnapshot: TelegramControlSnapshot = {
+  channel: { desiredState: "disabled", state: "disabled" },
+  bot: { state: "unconfigured" },
+  pairing: { state: "unpaired" },
+};
 const disabledTelegram: DesktopTelegramController = {
-  getStatus: () => ({ desiredState: "disabled", state: "disabled" }),
-  configure: async () => {},
-  enable: async () => {},
-  disable: async () => {},
-  replace: async () => {},
-  reconcile: async () => {},
-  stopPolling: async () => {},
-  resumePolling: async () => {},
-  drainPending: async () => {},
-  close: async () => {},
+  getStatus: () => disabledTelegramSnapshot,
+  configure: async () => disabledTelegramSnapshot,
+  enable: async () => disabledTelegramSnapshot,
+  disable: async () => disabledTelegramSnapshot,
+  replace: async () => disabledTelegramSnapshot,
+  reconcile: async () => disabledTelegramSnapshot,
+  inspectTelegramCredential: async () => ({
+    status: "unavailable",
+    errorCode: "telegram-validation-failed",
+  }),
+  deleteTelegramWebhook: async () => ({
+    status: "unavailable",
+    errorCode: "telegram-validation-failed",
+  }),
+  forgetTelegramCredential: async () => disabledTelegramSnapshot,
+  resetTelegramAccess: async () => disabledTelegramSnapshot,
+  beginTelegramPairing: async () => disabledTelegramSnapshot,
+  cancelTelegramPairing: async () => disabledTelegramSnapshot,
+  listTelegramAllowedSenders: async () => ({ senders: [] }),
+  addTelegramAllowedSender: async () => ({ senders: [] }),
+  removeTelegramAllowedSender: async () => ({ senders: [] }),
+  stopPolling: async () => disabledTelegramSnapshot,
+  resumePolling: async () => disabledTelegramSnapshot,
+  drainPending: async () => disabledTelegramSnapshot,
+  close: async () => disabledTelegramSnapshot,
 };
 
 function reservePort(): Promise<number> {

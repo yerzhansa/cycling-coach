@@ -362,7 +362,11 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       };
     `);
     expect(state.bridgeKeys).toEqual([
+      "acknowledgeTelegramGapWarning",
+      "addTelegramAllowedSender",
       "applyLlmSelection",
+      "beginTelegramPairing",
+      "cancelTelegramPairing",
       "chatgptLogin",
       "chatgptStatus",
       "checkForUpdates",
@@ -371,17 +375,26 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       "claudeCliStatus",
       "credentialStatuses",
       "deleteCredential",
+      "disableTelegram",
+      "enableTelegram",
       "getArchivedTranscriptPage",
       "getDaemonConnection",
       "getTranscriptPage",
       "getUpdateState",
       "listArchivedConversations",
+      "listTelegramAllowedSenders",
       "llmConfiguration",
       "onDroppedImportFiles",
       "onUpdateState",
+      "pasteTelegramTokenFromClipboard",
+      "reconcileTelegram",
       "releaseNotes",
+      "removeTelegram",
+      "removeTelegramAllowedSender",
+      "removeTelegramWebhook",
       "restartToUpdate",
       "retryFailedCredentials",
+      "telegramStatus",
       "writeCredential",
     ]);
     expect(state.syncChip).toBe(true);

@@ -20,12 +20,14 @@ export type TelegramPowerFailure =
   | "clock"
   | "read-state"
   | "write-state"
+  | "read-polling-status"
   | "stop-polling"
   | "reconcile-polling";
 
 export interface TelegramPowerControllerPort {
   stopPolling(): Promise<unknown>;
   reconcile(): Promise<unknown>;
+  status(): Promise<unknown>;
 }
 
 export type TelegramPowerMonitorPort = Pick<PowerMonitor, "on" | "off">;
@@ -49,10 +51,18 @@ export interface CreateDesktopTelegramPowerLifecycleInput {
 }
 
 interface TelegramPowerStateRecord {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly athleteHome: AthleteHomeIdentity;
+  readonly gapStartedAt: string | null;
+  readonly lastSuccessfulPollAt: string | null;
   readonly suspendedAt: string | null;
   readonly warningDetectedAt: string | null;
+}
+
+interface TelegramPollingHealthObservation {
+  readonly desiredState: "disabled" | "enabled";
+  readonly state: string;
+  readonly lastSuccessfulPollAt: string | null;
 }
 
 class TelegramPowerStateScopeMismatch extends Error {}
@@ -80,6 +90,30 @@ function canonicalTimestamp(value: unknown): string | undefined {
   return canonical === value ? canonical : undefined;
 }
 
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function pollingHealth(value: unknown): TelegramPollingHealthObservation | undefined {
+  if (!record(value) || !record(value.channel)) return undefined;
+  const channel = value.channel;
+  if (
+    (channel.desiredState !== "disabled" && channel.desiredState !== "enabled") ||
+    typeof channel.state !== "string"
+  ) {
+    return undefined;
+  }
+  const lastSuccessfulPollAt =
+    channel.lastSuccessfulPollAt === undefined
+      ? null
+      : (canonicalTimestamp(channel.lastSuccessfulPollAt) ?? null);
+  return {
+    desiredState: channel.desiredState,
+    state: channel.state,
+    lastSuccessfulPollAt,
+  };
+}
+
 function parseState(
   contents: string,
   athleteHome: AthleteHomeIdentity,
@@ -92,9 +126,6 @@ function parseState(
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
   const record = parsed as Record<string, unknown>;
-  if (!exactKeys(record, ["athleteHome", "schemaVersion", "suspendedAt", "warningDetectedAt"])) {
-    return undefined;
-  }
   const parsedHome = AthleteHomeIdentitySchema.safeParse(record.athleteHome);
   const suspendedAt =
     record.suspendedAt === null ? null : (canonicalTimestamp(record.suspendedAt) ?? undefined);
@@ -105,17 +136,47 @@ function parseState(
   if (parsedHome.success && parsedHome.data !== athleteHome) {
     throw new TelegramPowerStateScopeMismatch();
   }
+  if (!parsedHome.success || suspendedAt === undefined || warningDetectedAt === undefined) {
+    return undefined;
+  }
   if (
-    record.schemaVersion !== 1 ||
-    !parsedHome.success ||
-    suspendedAt === undefined ||
-    warningDetectedAt === undefined
+    record.schemaVersion === 1 &&
+    exactKeys(record, ["athleteHome", "schemaVersion", "suspendedAt", "warningDetectedAt"])
+  ) {
+    return {
+      schemaVersion: 2,
+      athleteHome,
+      gapStartedAt: suspendedAt,
+      lastSuccessfulPollAt: null,
+      suspendedAt,
+      warningDetectedAt,
+    };
+  }
+  if (
+    record.schemaVersion !== 2 ||
+    !exactKeys(record, [
+      "athleteHome",
+      "gapStartedAt",
+      "lastSuccessfulPollAt",
+      "schemaVersion",
+      "suspendedAt",
+      "warningDetectedAt",
+    ])
   ) {
     return undefined;
   }
+  const gapStartedAt =
+    record.gapStartedAt === null ? null : (canonicalTimestamp(record.gapStartedAt) ?? undefined);
+  const lastSuccessfulPollAt =
+    record.lastSuccessfulPollAt === null
+      ? null
+      : (canonicalTimestamp(record.lastSuccessfulPollAt) ?? undefined);
+  if (gapStartedAt === undefined || lastSuccessfulPollAt === undefined) return undefined;
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     athleteHome,
+    gapStartedAt,
+    lastSuccessfulPollAt,
     suspendedAt,
     warningDetectedAt,
   };
@@ -140,8 +201,10 @@ async function assertDirectory(root: string, create: boolean): Promise<void> {
 
 function emptyState(athleteHome: AthleteHomeIdentity): TelegramPowerStateRecord {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     athleteHome,
+    gapStartedAt: null,
+    lastSuccessfulPollAt: null,
     suspendedAt: null,
     warningDetectedAt: null,
   };
@@ -322,6 +385,35 @@ export function createDesktopTelegramPowerLifecycle(
   const retainedWarning = (state: TelegramPowerStateRecord): string | null =>
     state.warningDetectedAt ??
     (cached.state === "possible-message-loss" ? cached.detectedAt : null);
+  const warnForGap = (
+    state: TelegramPowerStateRecord,
+    startedAt: string | null,
+    endedAt: string,
+    detectedAt: string,
+  ): string | null => {
+    const retained = retainedWarning(state);
+    if (retained !== null || startedAt === null) return retained;
+    const gap = Date.parse(endedAt) - Date.parse(startedAt);
+    return gap < 0 || gap >= TELEGRAM_POSSIBLE_MESSAGE_LOSS_AFTER_MS ? detectedAt : null;
+  };
+  const publishState = async (state: TelegramPowerStateRecord): Promise<TelegramGapWarning> => {
+    if (!(await writeState(state))) return cached;
+    return publish(warningFor(state));
+  };
+  const laterTimestamp = (left: string | null, right: string | null): string | null => {
+    if (left === null) return right;
+    if (right === null) return left;
+    return Date.parse(left) >= Date.parse(right) ? left : right;
+  };
+  const observedAt = (): string | undefined => {
+    try {
+      return timestamp(now);
+    } catch {
+      report("clock");
+      uncertain();
+      return undefined;
+    }
+  };
   const stopPolling = async (): Promise<void> => {
     try {
       await input.controller.stopPolling();
@@ -329,64 +421,127 @@ export function createDesktopTelegramPowerLifecycle(
       report("stop-polling");
     }
   };
-  const reconcilePolling = async (): Promise<void> => {
+  const reconcilePolling = async (): Promise<unknown> => {
     try {
-      await input.controller.reconcile();
+      return await input.controller.reconcile();
     } catch {
       report("reconcile-polling");
+      return undefined;
     }
   };
-  const finishGap = async (endedAt: string): Promise<TelegramGapWarning> => {
+  const applyPollingHealth = async (
+    value: unknown,
+    observationTime: string,
+  ): Promise<TelegramGapWarning | undefined> => {
+    const health = pollingHealth(value);
+    if (health === undefined) return undefined;
+    const state = await readState();
+    if (state === undefined) return cached;
+    const reportedSuccessfulAt =
+      health.lastSuccessfulPollAt !== null &&
+      Date.parse(health.lastSuccessfulPollAt) <= Date.parse(observationTime)
+        ? health.lastSuccessfulPollAt
+        : null;
+    const lastSuccessfulPollAt = laterTimestamp(state.lastSuccessfulPollAt, reportedSuccessfulAt);
+    if (health.desiredState === "disabled") {
+      return publishState({
+        ...state,
+        gapStartedAt: null,
+        lastSuccessfulPollAt: null,
+        warningDetectedAt: retainedWarning(state),
+      });
+    }
+    if (health.state === "online") {
+      const successfulAt = laterTimestamp(
+        state.lastSuccessfulPollAt,
+        reportedSuccessfulAt ?? observationTime,
+      )!;
+      return publishState({
+        ...state,
+        gapStartedAt: null,
+        lastSuccessfulPollAt: successfulAt,
+        warningDetectedAt: warnForGap(
+          state,
+          state.gapStartedAt ?? state.suspendedAt,
+          successfulAt,
+          observationTime,
+        ),
+      });
+    }
+    const gapStartedAt = state.gapStartedAt ?? lastSuccessfulPollAt ?? observationTime;
+    return publishState({
+      ...state,
+      gapStartedAt,
+      lastSuccessfulPollAt,
+      warningDetectedAt: warnForGap(state, gapStartedAt, observationTime, observationTime),
+    });
+  };
+  const refreshOpenGap = async (observationTime: string): Promise<TelegramGapWarning> => {
+    const state = await readState();
+    if (state === undefined) return cached;
+    const warningDetectedAt = warnForGap(
+      state,
+      state.gapStartedAt,
+      observationTime,
+      observationTime,
+    );
+    if (warningDetectedAt === state.warningDetectedAt) {
+      return publish(warningFor({ ...state, warningDetectedAt }));
+    }
+    return publishState({ ...state, warningDetectedAt });
+  };
+  const samplePollingHealth = async (): Promise<TelegramGapWarning> => {
+    const observationTime = observedAt();
+    if (observationTime === undefined) return cached;
+    let value: unknown;
+    try {
+      value = await input.controller.status();
+    } catch {
+      report("read-polling-status");
+      return refreshOpenGap(observationTime);
+    }
+    return (await applyPollingHealth(value, observationTime)) ?? refreshOpenGap(observationTime);
+  };
+  const finishGap = async (
+    endedAt: string,
+    detectNewWarning = true,
+  ): Promise<TelegramGapWarning> => {
     const state = await readState();
     if (state === undefined) return cached;
     if (state.suspendedAt === null) {
       const warningDetectedAt = retainedWarning(state);
       return publish(warningFor({ ...state, warningDetectedAt }));
     }
-    const gap = Date.parse(endedAt) - Date.parse(state.suspendedAt);
-    const warningDetectedAt =
-      retainedWarning(state) ??
-      (gap < 0 || gap >= TELEGRAM_POSSIBLE_MESSAGE_LOSS_AFTER_MS ? endedAt : null);
-    const next = { ...state, suspendedAt: null, warningDetectedAt };
-    if (!(await writeState(next))) return cached;
-    return publish(warningFor(next));
+    const warningDetectedAt = detectNewWarning
+      ? warnForGap(state, state.suspendedAt, endedAt, endedAt)
+      : retainedWarning(state);
+    return publishState({
+      ...state,
+      gapStartedAt: state.gapStartedAt ?? state.suspendedAt,
+      suspendedAt: null,
+      warningDetectedAt,
+    });
   };
   const recover = async (): Promise<TelegramGapWarning> => {
     const state = await readState();
     if (state === undefined) return cached;
-    if (state.suspendedAt === null) {
-      const warningDetectedAt = retainedWarning(state);
-      return publish(warningFor({ ...state, warningDetectedAt }));
-    }
-    let recoveredAt: string;
-    try {
-      recoveredAt = timestamp(now);
-    } catch {
-      report("clock");
-      uncertain();
-      recoveredAt =
-        cached.state === "possible-message-loss" ? cached.detectedAt : "1970-01-01T00:00:00.000Z";
-    }
-    const warning = await finishGap(recoveredAt);
+    if (state.suspendedAt === null) return samplePollingHealth();
+    const recoveredAt = observedAt();
+    if (recoveredAt === undefined) return cached;
+    await finishGap(recoveredAt, false);
     await stopPolling();
-    await reconcilePolling();
-    return warning;
+    const reconciled = await reconcilePolling();
+    return (await applyPollingHealth(reconciled, recoveredAt)) ?? refreshOpenGap(recoveredAt);
   };
   const onSuspend = (): void => {
-    let suspendedAt: string;
-    try {
-      suspendedAt = timestamp(now);
-    } catch {
-      report("clock");
-      uncertain();
-      suspendedAt =
-        cached.state === "possible-message-loss" ? cached.detectedAt : "1970-01-01T00:00:00.000Z";
-    }
+    const suspendedAt = observedAt();
+    if (suspendedAt === undefined) return;
     void serialize(async () => {
       const state = await readState();
       if (state !== undefined) {
         const next = {
           ...state,
+          gapStartedAt: state.gapStartedAt ?? suspendedAt,
           suspendedAt: state.suspendedAt ?? suspendedAt,
           warningDetectedAt: retainedWarning(state),
         };
@@ -396,19 +551,15 @@ export function createDesktopTelegramPowerLifecycle(
     });
   };
   const onResume = (): void => {
-    let resumedAt: string;
-    try {
-      resumedAt = timestamp(now);
-    } catch {
-      report("clock");
-      uncertain();
-      resumedAt =
-        cached.state === "possible-message-loss" ? cached.detectedAt : "1970-01-01T00:00:00.000Z";
-    }
+    const resumedAt = observedAt();
+    if (resumedAt === undefined) return;
     void serialize(async () => {
-      await finishGap(resumedAt);
+      await finishGap(resumedAt, false);
       await stopPolling();
-      await reconcilePolling();
+      const reconciled = await reconcilePolling();
+      if ((await applyPollingHealth(reconciled, resumedAt)) === undefined) {
+        await refreshOpenGap(resumedAt);
+      }
     });
   };
 
@@ -423,19 +574,19 @@ export function createDesktopTelegramPowerLifecycle(
       return serialize(recover);
     },
     warning() {
-      return serialize(async () => {
-        const state = await readState();
-        if (state === undefined) return cached;
-        const warningDetectedAt = retainedWarning(state);
-        return publish(warningFor({ ...state, warningDetectedAt }));
-      });
+      return serialize(samplePollingHealth);
     },
     acknowledgeWarning() {
       return serialize(async () => {
         const state = await readState();
         if (state === undefined && scopeMismatch) return cached;
+        const acknowledgedAt = observedAt();
+        if (acknowledgedAt === undefined) return cached;
+        const current = state ?? emptyState(athleteHome);
         const cleared = {
-          ...(state ?? emptyState(athleteHome)),
+          ...current,
+          gapStartedAt: current.gapStartedAt === null ? null : acknowledgedAt,
+          suspendedAt: current.suspendedAt === null ? null : acknowledgedAt,
           warningDetectedAt: null,
         };
         if (!(await writeState(cleared))) return cached;

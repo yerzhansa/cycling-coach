@@ -23,6 +23,7 @@ import {
   type AthleteState,
   type CoachEngine,
   type JsonRpcErrorResponseEnvelope,
+  type TelegramControlSnapshot,
 } from "@enduragent/coach-contract";
 import { resolveAthleteHome } from "@enduragent/kernel-node/home";
 import { runEnduragent } from "../../src/enduragent.js";
@@ -44,17 +45,31 @@ const NON_ERROR_SECRET = "F8_NON_ERROR_TEXT_MUST_NOT_ESCAPE";
 const NESTED_SECRET = "F8_NESTED_AUTH_MUST_NOT_ESCAPE";
 const HOSTILE_SECRET = "F8_HOSTILE_PROXY_MUST_NOT_ESCAPE";
 const roots: string[] = [];
+const disabledTelegramSnapshot: TelegramControlSnapshot = {
+  channel: { desiredState: "disabled", state: "disabled" },
+  bot: { state: "unconfigured" },
+  pairing: { state: "unpaired" },
+};
 const disabledTelegram: DesktopTelegramController = {
-  getStatus: () => ({ desiredState: "disabled", state: "disabled" }),
-  configure: async () => undefined,
-  enable: async () => undefined,
-  disable: async () => undefined,
-  replace: async () => undefined,
-  reconcile: async () => undefined,
-  stopPolling: async () => undefined,
-  resumePolling: async () => undefined,
-  drainPending: async () => undefined,
-  close: async () => undefined,
+  getStatus: () => disabledTelegramSnapshot,
+  configure: async () => disabledTelegramSnapshot,
+  enable: async () => disabledTelegramSnapshot,
+  disable: async () => disabledTelegramSnapshot,
+  replace: async () => disabledTelegramSnapshot,
+  reconcile: async () => disabledTelegramSnapshot,
+  inspectTelegramCredential: async () => ({ status: "invalid-token" }),
+  deleteTelegramWebhook: async () => ({ status: "invalid-token" }),
+  forgetTelegramCredential: async () => disabledTelegramSnapshot,
+  resetTelegramAccess: async () => disabledTelegramSnapshot,
+  beginTelegramPairing: async () => disabledTelegramSnapshot,
+  cancelTelegramPairing: async () => disabledTelegramSnapshot,
+  listTelegramAllowedSenders: async () => ({ senders: [] }),
+  addTelegramAllowedSender: async () => ({ senders: [] }),
+  removeTelegramAllowedSender: async () => ({ senders: [] }),
+  stopPolling: async () => disabledTelegramSnapshot,
+  resumePolling: async () => disabledTelegramSnapshot,
+  drainPending: async () => disabledTelegramSnapshot,
+  close: async () => disabledTelegramSnapshot,
 };
 
 const state: AthleteState = {

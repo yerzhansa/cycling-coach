@@ -423,6 +423,8 @@ describe("desktop main supervisor", () => {
       close: vi.fn(async () => {}),
     };
     let runtime!: DesktopDaemonLifecycle;
+    let activeGeneration = 1;
+    let preparedGeneration: number | undefined;
     const prepareReady = vi.fn(async ({ connection }: { readonly connection: unknown }) => {
       order.push("prepare");
       expect(connection).toMatchObject({
@@ -431,17 +433,59 @@ describe("desktop main supervisor", () => {
         generation: 2,
       });
       expect(() => runtime.connection()).toThrow("desktop daemon connection unavailable");
+      expect(activeGeneration).toBe(1);
+      preparedGeneration = 2;
     });
     runtime = new DesktopDaemonLifecycle(supervisor, first, {
       delay: async () => {},
       prepareReady,
-      onReady: () => order.push("ready"),
+      onReady: ({ current }) => {
+        order.push("ready");
+        expect(preparedGeneration).toBe(current.generation);
+        activeGeneration = current.generation;
+      },
     });
     runtime.start();
     firstExit.resolve({ exitCode: 1 });
     await vi.waitFor(() => expect(runtime.connection().generation).toBe(2));
     expect(prepareReady).toHaveBeenCalledTimes(1);
+    expect(activeGeneration).toBe(2);
     expect(order).toEqual(["prepare", "ready"]);
+  });
+
+  it("does not publish a successor when prepared credential replay fails", async () => {
+    const firstExit = deferred<{ readonly exitCode: number | null }>();
+    const first = connected(45_001, firstExit);
+    const successor = connected(45_002, deferred<{ readonly exitCode: number | null }>());
+    const supervisor = {
+      resolveForRecovery: vi.fn(async (budget: { remainingAttempts: number }) => {
+        budget.remainingAttempts -= 1;
+        return successor;
+      }),
+      reobserveAttached: vi.fn(),
+      close: vi.fn(async () => {}),
+    };
+    const onReady = vi.fn();
+    const runtime = new DesktopDaemonLifecycle(supervisor, first, {
+      delay: async () => {},
+      prepareReady: async () => {
+        throw new Error("synthetic Telegram replay failure");
+      },
+      onReady,
+    });
+    runtime.start();
+    firstExit.resolve({ exitCode: 1 });
+
+    await vi.waitFor(() =>
+      expect(runtime.snapshot()).toEqual({
+        status: "terminal",
+        generation: 1,
+        cause: "unavailable",
+      }),
+    );
+    expect(successor.close).toHaveBeenCalledOnce();
+    expect(onReady).not.toHaveBeenCalled();
+    expect(() => runtime.connection()).toThrow("desktop daemon connection unavailable");
   });
 
   it("does not restart when shutdown requested the child exit", async () => {
@@ -656,7 +700,18 @@ describe("desktop main supervisor", () => {
       reobserveAttached: vi.fn(async () => successor),
       close: vi.fn(async () => {}),
     };
-    const runtime = new DesktopDaemonLifecycle(supervisor, attached);
+    const replayTelegramCredential = vi.fn(async () => {});
+    let activeGeneration = 1;
+    const runtime = new DesktopDaemonLifecycle(supervisor, attached, {
+      prepareReady: async ({ connection }) => {
+        if (connection.supervision === "app-supervised") {
+          await replayTelegramCredential();
+        }
+      },
+      onReady: ({ current }) => {
+        activeGeneration = current.generation;
+      },
+    });
     runtime.start();
     await expect(runtime.recover(1)).resolves.toMatchObject({
       url: "ws://127.0.0.1:45002/rpc",
@@ -665,6 +720,8 @@ describe("desktop main supervisor", () => {
     });
     expect(attached.close).not.toHaveBeenCalled();
     expect(supervisor.resolveForRecovery).not.toHaveBeenCalled();
+    expect(replayTelegramCredential).not.toHaveBeenCalled();
+    expect(activeGeneration).toBe(2);
   });
 
   it("treats a changed token at the same attached URL as a new generation", async () => {

@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => {
   const popoverWindow = new Emitter();
   const popover = {
     window: popoverWindow,
+    publishTelegramStatus: vi.fn(),
     toggle: vi.fn(),
     hide: vi.fn(),
     close: vi.fn(() => order.push("popover-destroy")),
@@ -132,16 +133,22 @@ function setup() {
     current: vi.fn(() => null),
     show: vi.fn(async () => ({ id: 1 })),
   };
+  const telegramStatus = vi.fn(async () => ({
+    channelState: "online" as const,
+    gapWarning: false,
+  }));
   mocks.app.getLoginItemSettings.mockReturnValue(loginState() as never);
   const residency = createDesktopResidency({
     app: mocks.app as never,
     mainWindow: mainWindow as never,
     trayIconPath: "/synthetic/trayTemplate.png",
     trayPopoverUrl: "enduragent://app/tray.html",
+    trayPreloadPath: "/synthetic/tray.cjs",
+    telegramStatus,
     reportFailure,
     observe: (event) => events.push(event),
   });
-  return { residency, events, reportFailure, mainWindow };
+  return { residency, events, reportFailure, mainWindow, telegramStatus };
 }
 
 beforeEach(() => {
@@ -153,6 +160,7 @@ beforeEach(() => {
   mocks.popover.toggle.mockClear();
   mocks.popover.hide.mockClear();
   mocks.popover.close.mockClear();
+  mocks.popover.publishTelegramStatus.mockClear();
   mocks.createTrayPopover.mockClear();
   mocks.buildFromTemplate.mockClear();
   mocks.app.quit.mockClear();
@@ -180,6 +188,18 @@ describe("desktop residency", () => {
     expect(mocks.popover.toggle).toHaveBeenCalledTimes(2);
     expect(mocks.app.getLoginItemSettings).not.toHaveBeenCalled();
     expect(events).toContainEqual({ type: "tray-created" });
+  });
+
+  it("refreshes a redacted Telegram projection whenever the popover is shown", async () => {
+    const { residency, telegramStatus } = setup();
+    await residency.start();
+    mocks.FakeTray.instances[0]!.emit("click");
+    mocks.popoverWindow.emit("show");
+    await vi.waitFor(() => expect(telegramStatus).toHaveBeenCalledOnce());
+    expect(mocks.popover.publishTelegramStatus).toHaveBeenCalledWith({
+      channelState: "online",
+      gapWarning: false,
+    });
   });
 
   it("builds a fresh exact native menu and uses current checkbox truth", async () => {

@@ -245,6 +245,7 @@ function harness(
     inspectTelegramCredential: vi.fn(async () => ({ status: "invalid-token" as const })),
     deleteTelegramWebhook: vi.fn(async () => ({ status: "invalid-token" as const })),
     forgetTelegramCredential: vi.fn(async () => telegramSnapshot),
+    resetTelegramAccess: vi.fn(async () => telegramSnapshot),
     beginTelegramPairing: vi.fn(async () => telegramSnapshot),
     cancelTelegramPairing: vi.fn(async () => telegramSnapshot),
     listTelegramAllowedSenders: vi.fn(async () => ({ senders: [] })),

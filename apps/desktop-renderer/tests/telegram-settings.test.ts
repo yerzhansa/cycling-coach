@@ -1,16 +1,32 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createTelegramSettingsController,
+  type TelegramAllowedSenders,
   type TelegramControlStatus,
+  type TelegramSettingsBridge,
   type TelegramSettingsState,
   type TelegramSettingsView,
 } from "../src/settings/telegram-controller.js";
 
 const DISABLED = Object.freeze({
-  desiredState: "disabled",
-  state: "disabled",
+  channel: { desiredState: "disabled", state: "disabled" },
+  bot: { state: "unconfigured" },
+  pairing: { state: "unpaired" },
   credentialConfigured: false,
+  gapWarning: { state: "clear" },
 } as const satisfies TelegramControlStatus);
+
+const PAIRED = Object.freeze({
+  channel: { desiredState: "enabled", state: "online" },
+  bot: { state: "ready", username: "synthetic_bot" },
+  pairing: { state: "paired" },
+  credentialConfigured: true,
+  gapWarning: { state: "clear" },
+} as const satisfies TelegramControlStatus);
+
+const SENDERS = Object.freeze({
+  senders: Object.freeze([{ senderId: 101, role: "primary" as const }]),
+}) satisfies TelegramAllowedSenders;
 
 function setup() {
   const states: TelegramSettingsState[] = [];
@@ -22,20 +38,53 @@ function setup() {
     pasteTokenFromClipboard: vi.fn(
       async (): Promise<TelegramControlStatus> => ({
         ...DISABLED,
+        bot: { state: "ready", username: "synthetic_bot" },
         credentialConfigured: true,
       }),
     ),
-    enable: vi.fn(
+    enable: vi.fn(async (): Promise<TelegramControlStatus> => PAIRED),
+    disable: vi.fn(
       async (): Promise<TelegramControlStatus> => ({
-        ...DISABLED,
-        desiredState: "enabled",
-        state: "starting",
+        ...PAIRED,
+        channel: { desiredState: "disabled", state: "disabled" },
       }),
     ),
-    disable: vi.fn(async (): Promise<TelegramControlStatus> => DISABLED),
     remove: vi.fn(async (): Promise<TelegramControlStatus> => DISABLED),
     reconcile: vi.fn(async (): Promise<TelegramControlStatus> => DISABLED),
-  };
+    removeWebhook: vi.fn(
+      async (): Promise<TelegramControlStatus> => ({
+        ...PAIRED,
+        pairing: { state: "unpaired" },
+        channel: { desiredState: "disabled", state: "disabled" },
+      }),
+    ),
+    beginPairing: vi.fn(
+      async (): Promise<TelegramControlStatus> => ({
+        ...PAIRED,
+        channel: { desiredState: "enabled", state: "starting" },
+        pairing: {
+          state: "awaiting-code",
+          code: "A1B2C3",
+          expiresAt: "1998-07-06T12:01:00.000Z",
+        },
+      }),
+    ),
+    cancelPairing: vi.fn(
+      async (): Promise<TelegramControlStatus> => ({
+        ...PAIRED,
+        pairing: { state: "unpaired" },
+        channel: { desiredState: "disabled", state: "disabled" },
+      }),
+    ),
+    acknowledgeGapWarning: vi.fn(async (): Promise<TelegramControlStatus> => PAIRED),
+    listAllowedSenders: vi.fn(async (): Promise<TelegramAllowedSenders> => SENDERS),
+    addAllowedSender: vi.fn(
+      async (): Promise<TelegramAllowedSenders> => ({
+        senders: [...SENDERS.senders, { senderId: 202, role: "additional" }],
+      }),
+    ),
+    removeAllowedSender: vi.fn(async (): Promise<TelegramAllowedSenders> => SENDERS),
+  } satisfies TelegramSettingsBridge;
   const view: TelegramSettingsView = {
     bind: (next) => {
       handlers = next;
@@ -76,19 +125,15 @@ describe("Telegram settings controller", () => {
   it("loads redacted status and polls only while active", async () => {
     const runtime = setup();
     await runtime.controller.activate();
-    expect(runtime.controller.state()).toMatchObject({ status: "ready", channel: DISABLED });
+    expect(runtime.controller.state()).toMatchObject({ status: "ready", telegram: DISABLED });
 
-    runtime.bridge.status.mockResolvedValueOnce({
-      desiredState: "enabled",
-      state: "online",
-      credentialConfigured: true,
-      botUsername: "synthetic_bot",
-    });
+    runtime.bridge.status.mockResolvedValueOnce(PAIRED);
     runtime.poll?.();
     await vi.waitFor(() =>
       expect(runtime.controller.state()).toMatchObject({
         status: "ready",
-        channel: { state: "online", botUsername: "synthetic_bot" },
+        telegram: { channel: { state: "online" } },
+        allowedSenders: SENDERS,
       }),
     );
 
@@ -107,7 +152,48 @@ describe("Telegram settings controller", () => {
     await vi.waitFor(() => expect(runtime.release).toHaveBeenCalledOnce());
     expect(runtime.controller.state()).toMatchObject({
       status: "ready",
-      channel: { credentialConfigured: true },
+      telegram: { credentialConfigured: true, bot: { username: "synthetic_bot" } },
+    });
+  });
+
+  it("publishes the short-lived pairing code and manages additional senders", async () => {
+    const runtime = setup();
+    runtime.bridge.status.mockResolvedValueOnce(PAIRED);
+    await runtime.controller.activate();
+
+    runtime.handlers.onBeginPairing();
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        status: "ready",
+        telegram: { pairing: { state: "awaiting-code", code: "A1B2C3" } },
+      }),
+    );
+
+    runtime.handlers.onAddSender(202);
+    await vi.waitFor(() => expect(runtime.bridge.addAllowedSender).toHaveBeenCalledWith(202));
+    expect(runtime.controller.state()).toMatchObject({
+      status: "ready",
+      allowedSenders: { senders: [{ senderId: 101 }, { senderId: 202 }] },
+    });
+  });
+
+  it("acknowledges the durable delivery-gap warning", async () => {
+    const runtime = setup();
+    runtime.bridge.status.mockResolvedValueOnce({
+      ...PAIRED,
+      gapWarning: {
+        state: "possible-message-loss",
+        detectedAt: "1998-07-06T12:00:00.000Z",
+      },
+    });
+    await runtime.controller.activate();
+
+    runtime.handlers.onAcknowledgeGapWarning();
+
+    await vi.waitFor(() => expect(runtime.bridge.acknowledgeGapWarning).toHaveBeenCalledWith());
+    expect(runtime.controller.state()).toMatchObject({
+      status: "ready",
+      telegram: { gapWarning: { state: "clear" } },
     });
   });
 
@@ -122,7 +208,7 @@ describe("Telegram settings controller", () => {
     );
     runtime.poll?.();
     runtime.controller.close();
-    resolve({ ...DISABLED, state: "failed" });
+    resolve(PAIRED);
     await Promise.resolve();
     await Promise.resolve();
     expect(runtime.controller.state()).toEqual({ status: "closed" });
@@ -137,19 +223,19 @@ describe("Telegram settings controller", () => {
           resolveFirst = resolveStatus;
         }),
       )
-      .mockResolvedValueOnce({ ...DISABLED, credentialConfigured: true });
+      .mockResolvedValueOnce(PAIRED);
 
     const firstOpen = runtime.controller.activate();
     runtime.controller.close();
     const secondOpen = runtime.controller.activate();
-    resolveFirst({ ...DISABLED, state: "failed" });
+    resolveFirst(DISABLED);
 
     await firstOpen;
     await secondOpen;
     expect(runtime.bridge.status).toHaveBeenCalledTimes(2);
     expect(runtime.controller.state()).toMatchObject({
       status: "ready",
-      channel: { credentialConfigured: true },
+      telegram: { credentialConfigured: true },
     });
   });
 });

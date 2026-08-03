@@ -134,6 +134,8 @@ async function run(): Promise<void> {
     mainWindow: windowPort(),
     trayIconPath,
     trayPopoverUrl: "data:text/html,<main>Enduragent</main>",
+    trayPreloadPath: join(app.getAppPath(), "tray-preload.cjs"),
+    telegramStatus: async () => ({ channelState: "disabled", gapWarning: false }),
     reportFailure(operation) {
       output({ event: "failure", operation });
     },

@@ -20,6 +20,7 @@ import type {
   TelegramControlCoordinator,
 } from "../src/main/telegram-control.js";
 import { installDesktopTelegramIpc } from "../src/main/telegram-ipc.js";
+import type { TelegramGapWarning } from "../src/main/telegram-power.js";
 
 const TOKEN = "123456:synthetic-token";
 const USERNAME = "desktop_bot";
@@ -73,14 +74,16 @@ function setup(options: { readonly trusted?: boolean; readonly configured?: bool
     }),
     reconcile: vi.fn(async () => snapshot(configured)),
     removeWebhook: vi.fn(async () => snapshot(configured)),
-    beginPairing: vi.fn(async () => ({
-      ...snapshot(true, { desiredState: "enabled", state: "starting" }),
-      pairing: {
-        state: "awaiting-code",
-        code: "ABCDEF",
-        expiresAt: "2026-08-03T12:01:00.000Z",
-      },
-    })),
+    beginPairing: vi.fn(
+      async (): Promise<DesktopTelegramSnapshot> => ({
+        ...snapshot(true, { desiredState: "enabled", state: "starting" }),
+        pairing: {
+          state: "awaiting-code",
+          code: "ABCDEF",
+          expiresAt: "2026-08-03T12:01:00.000Z",
+        },
+      }),
+    ),
     cancelPairing: vi.fn(async () => snapshot(configured)),
     listAllowedSenders: vi.fn(async () => senderList),
     addAllowedSender: vi.fn(async ({ senderId }) => ({
@@ -103,8 +106,8 @@ function setup(options: { readonly trusted?: boolean; readonly configured?: bool
     }),
   };
   const power = {
-    warning: vi.fn(async () => ({ state: "clear" }) as const),
-    acknowledgeWarning: vi.fn(async () => ({ state: "clear" }) as const),
+    warning: vi.fn(async (): Promise<TelegramGapWarning> => ({ state: "clear" })),
+    acknowledgeWarning: vi.fn(async (): Promise<TelegramGapWarning> => ({ state: "clear" })),
   };
   const dispose = installDesktopTelegramIpc({
     ipcMain: {
@@ -332,6 +335,17 @@ describe("Desktop Telegram IPC", () => {
     await expect(runtime.invoke(DESKTOP_TELEGRAM_LIST_ALLOWED_SENDERS_CHANNEL)).resolves.toEqual({
       senders: [],
     });
+  });
+
+  it("rejects a failed allowed-sender removal instead of reporting an empty success", async () => {
+    const runtime = setup();
+    vi.mocked(runtime.coordinator.removeAllowedSender).mockRejectedValueOnce(
+      new Error("daemon unavailable"),
+    );
+
+    await expect(
+      runtime.invoke(DESKTOP_TELEGRAM_REMOVE_ALLOWED_SENDER_CHANNEL, { senderId: 67890 }),
+    ).rejects.toThrow("daemon unavailable");
   });
 
   it("rejects untrusted and malformed calls before clipboard or coordinator access", () => {

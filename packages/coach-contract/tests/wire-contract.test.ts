@@ -229,7 +229,7 @@ const telegramSnapshot = {
 } as const;
 
 describe("coach request and event projection", () => {
-  it("admits exactly the twenty-three strict method requests", () => {
+  it("admits every strict method request", () => {
     const requests = [
       { jsonrpc: "2.0", id: 1, method: "chat", params: { chatId: "chat-1", message: "hello" } },
       { jsonrpc: "2.0", id: 2, method: "resetSession", params: { chatId: "chat-1" } },
@@ -304,6 +304,7 @@ describe("coach request and event projection", () => {
         params: { token: "bot-token" },
       },
       { jsonrpc: "2.0", id: 26, method: "forgetTelegramCredential", params: {} },
+      { jsonrpc: "2.0", id: 32, method: "resetTelegramAccess", params: {} },
       { jsonrpc: "2.0", id: 27, method: "beginTelegramPairing", params: {} },
       { jsonrpc: "2.0", id: 28, method: "cancelTelegramPairing", params: {} },
       { jsonrpc: "2.0", id: 29, method: "listTelegramAllowedSenders", params: {} },
@@ -951,13 +952,14 @@ describe("coach request and event projection", () => {
       reconcileTelegram: async () => telegramSnapshot,
       inspectTelegramCredential: async () => ({
         status: "ready",
-        bot: { username: "sample_bot" },
+        bot: { id: 10001, username: "sample_bot" },
       }),
       deleteTelegramWebhook: async () => ({
         status: "ready",
-        bot: { username: "sample_bot" },
+        bot: { id: 10001, username: "sample_bot" },
       }),
       forgetTelegramCredential: async () => telegramSnapshot,
+      resetTelegramAccess: async () => telegramSnapshot,
       beginTelegramPairing: async () => telegramSnapshot,
       cancelTelegramPairing: async () => telegramSnapshot,
       listTelegramAllowedSenders: async () => ({ senders: [] }),
@@ -1181,6 +1183,7 @@ describe("coach request and event projection", () => {
       "inspectTelegramCredential",
       "deleteTelegramWebhook",
       "forgetTelegramCredential",
+      "resetTelegramAccess",
       "beginTelegramPairing",
       "cancelTelegramPairing",
       "listTelegramAllowedSenders",
@@ -1215,6 +1218,26 @@ describe("coach request and event projection", () => {
     expect(
       TelegramAllowedSendersResultSchema.safeParse({
         senders: [{ senderId: 123_456, role: "additional" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      TelegramControlSnapshotSchema.safeParse({
+        ...telegramSnapshot,
+        channel: {
+          desiredState: "enabled",
+          state: "online",
+          lastSuccessfulPollAt: "1998-06-01T12:00:00.000Z",
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      TelegramControlSnapshotSchema.safeParse({
+        ...telegramSnapshot,
+        channel: {
+          desiredState: "enabled",
+          state: "offline-retrying",
+          lastSuccessfulPollAt: "not-a-timestamp",
+        },
       }).success,
     ).toBe(false);
   });

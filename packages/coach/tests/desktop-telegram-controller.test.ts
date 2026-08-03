@@ -23,7 +23,7 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-function harness(options: { readonly primary?: boolean } = {}) {
+function harness(options: { readonly primary?: boolean; readonly legacyPrimary?: boolean } = {}) {
   const trace: string[] = [];
   const inputs: DesktopTelegramRuntimeFactoryInput[] = [];
   const starts: Deferred<void>[] = [];
@@ -36,9 +36,10 @@ function harness(options: { readonly primary?: boolean } = {}) {
     canceled: boolean;
   }[] = [];
   let senders: { senderId: string; role: "primary" | "additional"; addedAt?: string }[] =
-    options.primary
+    options.primary || options.legacyPrimary
       ? [{ senderId: "12345", role: "primary", addedAt: "1998-06-01T00:00:00.000Z" }]
       : [];
+  let accessBinding = options.primary ? "10001" : undefined;
   const createRuntime = vi.fn((input: DesktopTelegramRuntimeFactoryInput) => {
     inputs.push(input);
     const start = deferred<void>();
@@ -58,9 +59,14 @@ function harness(options: { readonly primary?: boolean } = {}) {
     runtimes.push(runtime);
     return runtime;
   });
-  const inspectTelegramCredential = vi.fn(async (token: string) => ({
+  const inspectTelegramCredential = vi.fn<
+    NonNullable<DesktopTelegramControllerDependencies["inspectTelegramCredential"]>
+  >(async (token: string) => ({
     status: "ready" as const,
-    bot: { username: token.startsWith("new") ? "new_test_bot" : "cycling_test_bot" },
+    bot: {
+      id: token.startsWith("new") ? 20002 : 10001,
+      username: token.startsWith("new") ? "new_test_bot" : "cycling_test_bot",
+    },
   }));
   const claimPrimaryOperator = vi.fn((_dataDir: string, senderId: string) => {
     if (senders.some((sender) => sender.role === "primary")) {
@@ -80,16 +86,28 @@ function harness(options: { readonly primary?: boolean } = {}) {
     senders = senders.filter((sender) => sender.senderId !== senderId);
     return { status: "removed" as const };
   });
+  const resetDesktopAllowedSenders = vi.fn(() => {
+    senders = [];
+    accessBinding = undefined;
+  });
+  const bindDesktopTelegramAccess = vi.fn((_dataDir: string, binding: string) => {
+    if (binding === accessBinding) return "preserved" as const;
+    accessBinding = binding;
+    senders = [];
+    return "reset" as const;
+  });
   const dependencies: DesktopTelegramControllerDependencies = {
     inspectTelegramCredential,
     deleteTelegramWebhook: vi.fn(async () => ({
       status: "ready" as const,
-      bot: { username: "cycling_test_bot" },
+      bot: { id: 10001, username: "cycling_test_bot" },
     })),
     claimPrimaryOperator,
     listDesktopAllowedSenders,
     addSecondarySender,
     removeSecondarySender,
+    resetDesktopAllowedSenders,
+    bindDesktopTelegramAccess,
     pairingRandomBytes: () => Uint8Array.from([0xab, 0xcd, 0xef]),
     now: () => now,
     schedule: (callback, delayMs) => {
@@ -127,6 +145,8 @@ function harness(options: { readonly primary?: boolean } = {}) {
     inspectTelegramCredential,
     listDesktopAllowedSenders,
     removeSecondarySender,
+    resetDesktopAllowedSenders,
+    bindDesktopTelegramAccess,
     runtimes,
     senders: () => senders,
     setSenders: (value: typeof senders) => {
@@ -169,6 +189,21 @@ describe("Desktop Telegram controller", () => {
     expect(controller.getStatus().channel).toEqual({
       desiredState: "enabled",
       state: "online",
+      lastSuccessfulPollAt: "1998-06-01T12:00:00.000Z",
+    });
+    expect(controller.getStatus().pairing).toEqual({ state: "paired" });
+  });
+
+  it("clears an unbound npm-era sender list before accepting the first Desktop bot", async () => {
+    const h = harness({ legacyPrimary: true });
+
+    const configured = await h.controller.configure("old-secret-token");
+
+    expect(h.bindDesktopTelegramAccess).toHaveReturnedWith("reset");
+    expect(h.senders()).toEqual([]);
+    expect(configured).toMatchObject({
+      channel: { desiredState: "disabled", state: "disabled" },
+      pairing: { state: "unpaired" },
     });
   });
 
@@ -207,10 +242,10 @@ describe("Desktop Telegram controller", () => {
     const h = harness({ primary: true });
     h.inspectTelegramCredential.mockResolvedValueOnce({
       status: "webhook-removal-required",
-      bot: { username: "cycling_test_bot" },
+      bot: { id: 10001, username: "cycling_test_bot" },
     });
 
-    await h.controller.configure("webhook-secret-token");
+    await h.controller.configure("old-secret-token");
     await h.controller.enable();
     await h.controller.reconcile();
 
@@ -262,7 +297,7 @@ describe("Desktop Telegram controller", () => {
     { status: "invalid-token" as const },
     {
       status: "webhook-removal-required" as const,
-      bot: { username: "new_test_bot" },
+      bot: { id: 20002, username: "new_test_bot" },
     },
   ])("keeps an active valid pairing for a rejected replacement: $status", async (inspection) => {
     const h = harness();
@@ -278,24 +313,89 @@ describe("Desktop Telegram controller", () => {
     expect(result.bot).toEqual({ state: "ready", username: "cycling_test_bot" });
   });
 
-  it("drains the old runtime before retaining and starting a valid replacement", async () => {
+  it("drains the old runtime and requires fresh pairing for a valid replacement", async () => {
     const h = harness({ primary: true });
+    h.setSenders([
+      { senderId: "12345", role: "primary" },
+      { senderId: "67890", role: "additional" },
+    ]);
     await h.controller.configure("old-secret-token");
     await h.controller.enable();
     h.trace.length = 0;
 
-    await h.controller.replace("new-secret-token");
+    const replaced = await h.controller.replace("new-secret-token");
 
-    expect(h.trace).toEqual([
-      "stop:old-secret-token",
-      "drain:old-secret-token",
-      "start:new-secret-token",
-    ]);
-    expect(h.controller.getStatus().bot).toEqual({
+    expect(h.trace).toEqual(["stop:old-secret-token", "drain:old-secret-token"]);
+    expect(h.bindDesktopTelegramAccess).toHaveReturnedWith("reset");
+    expect(h.senders()).toEqual([]);
+    expect(replaced).toMatchObject({
+      channel: { desiredState: "disabled", state: "disabled" },
+      pairing: { state: "unpaired" },
+    });
+    expect(replaced.bot).toEqual({
       state: "ready",
       username: "new_test_bot",
     });
+    expect(h.createRuntime).toHaveBeenCalledOnce();
+
+    const pairing = await h.controller.beginTelegramPairing();
+    expect(pairing.pairing).toMatchObject({ state: "awaiting-code" });
+    expect(h.inputs[1]!.token).toBe("new-secret-token");
   });
+
+  it("converges an exact-token replacement without releasing or restarting its runtime", async () => {
+    const h = harness({ primary: true });
+    await h.controller.configure("old-secret-token");
+    await h.controller.enable();
+    h.inputs[0]!.onPollingSuccess();
+
+    const replayed = await h.controller.replace("old-secret-token");
+
+    expect(replayed.channel).toMatchObject({ state: "online" });
+    expect(h.inspectTelegramCredential).toHaveBeenCalledOnce();
+    expect(h.runtimes[0]!.stop).not.toHaveBeenCalled();
+    expect(h.runtimes[0]!.drainPending).not.toHaveBeenCalled();
+    expect(h.createRuntime).toHaveBeenCalledOnce();
+  });
+
+  it.each(["stop", "drain"] as const)(
+    "refuses replacement when old-runtime %s proof fails",
+    async (stage) => {
+      const h = harness({ primary: true });
+      await h.controller.configure("old-secret-token");
+      await h.controller.enable();
+      h.inputs[0]!.onStarted();
+      h.inputs[0]!.onPollingSuccess();
+      const runtime = h.runtimes[0]!;
+      const refusal = new Error(`${stage} refused`);
+      if (stage === "stop") vi.mocked(runtime.stop).mockRejectedValueOnce(refusal);
+      else vi.mocked(runtime.drainPending).mockRejectedValueOnce(refusal);
+
+      const replacement = h.controller.replace("new-secret-token");
+
+      await expect(replacement).rejects.toMatchObject({
+        name: "DesktopTelegramReleaseError",
+        stage,
+      });
+      expect(h.createRuntime).toHaveBeenCalledOnce();
+      expect(runtime.stop).toHaveBeenCalledOnce();
+      expect(runtime.drainPending).toHaveBeenCalledTimes(stage === "drain" ? 1 : 0);
+      expect(runtime.start).toHaveBeenCalledTimes(stage === "drain" ? 2 : 1);
+      if (stage === "drain") {
+        expect(h.controller.getStatus().channel).toMatchObject({ state: "starting" });
+        h.inputs[0]!.onPollingSuccess();
+      }
+      expect(h.controller.getStatus()).toMatchObject({
+        channel: { desiredState: "enabled", state: "online" },
+        bot: { state: "ready", username: "cycling_test_bot" },
+        pairing: { state: "paired" },
+      });
+
+      await h.controller.disable();
+      await h.controller.enable();
+      expect(h.inputs[1]!.token).toBe("old-secret-token");
+    },
+  );
 
   it("begins pairing on the canonical runtime and becomes online only after a primary claim", async () => {
     const h = harness();
@@ -364,6 +464,7 @@ describe("Desktop Telegram controller", () => {
     expect(h.controller.getStatus().channel).toEqual({
       desiredState: "enabled",
       state: "online",
+      lastSuccessfulPollAt: "1998-06-01T12:00:00.000Z",
     });
     expect(h.createRuntime).toHaveBeenCalledOnce();
   });
@@ -444,18 +545,105 @@ describe("Desktop Telegram controller", () => {
     expect(h.createRuntime).toHaveBeenCalledOnce();
   });
 
+  it("resets all sender authorization before a newly configured bot can pair", async () => {
+    const h = harness({ primary: true });
+    h.setSenders([
+      { senderId: "12345", role: "primary" },
+      { senderId: "67890", role: "additional" },
+    ]);
+    await h.controller.configure("old-secret-token");
+    await h.controller.enable();
+    await h.controller.disable();
+
+    const reset = await h.controller.resetTelegramAccess();
+
+    expect(h.resetDesktopAllowedSenders).toHaveBeenCalledWith("/synthetic/athlete");
+    expect(reset).toMatchObject({
+      channel: { desiredState: "disabled", state: "disabled" },
+      bot: { state: "ready", username: "cycling_test_bot" },
+      pairing: { state: "unpaired" },
+    });
+    await expect(h.controller.listTelegramAllowedSenders()).resolves.toEqual({ senders: [] });
+
+    await h.controller.forgetTelegramCredential();
+    await h.controller.configure("new-secret-token");
+    await expect(h.controller.enable()).resolves.toMatchObject({
+      channel: { desiredState: "disabled", state: "disabled" },
+      pairing: { state: "unpaired" },
+    });
+    const pairing = await h.controller.beginTelegramPairing();
+    expect(pairing.pairing).toMatchObject({ state: "awaiting-code" });
+    await expect(
+      h.inputs[1]!.consumePairing({
+        senderId: "12345",
+        senderName: undefined,
+        messageText: "ordinary message",
+      }),
+    ).resolves.toBe(false);
+    expect(h.claimPrimaryOperator).not.toHaveBeenCalled();
+  });
+
+  it("keeps bot, token, and sender state when access reset persistence fails", async () => {
+    const h = harness({ primary: true });
+    await h.controller.configure("old-secret-token");
+    await h.controller.enable();
+    h.inputs[0]!.onPollingSuccess();
+    h.resetDesktopAllowedSenders.mockImplementationOnce(() => {
+      throw new Error("storage refused");
+    });
+
+    await expect(h.controller.resetTelegramAccess()).rejects.toThrow("storage refused");
+
+    expect(h.runtimes[0]!.stop).toHaveBeenCalledOnce();
+    expect(h.runtimes[0]!.drainPending).toHaveBeenCalledOnce();
+    expect(h.runtimes[0]!.start).toHaveBeenCalledTimes(2);
+    expect(h.controller.getStatus().channel).toMatchObject({ state: "starting" });
+    h.inputs[0]!.onPollingSuccess();
+    expect(h.controller.getStatus()).toMatchObject({
+      channel: { desiredState: "enabled", state: "online" },
+      bot: { state: "ready", username: "cycling_test_bot" },
+      pairing: { state: "paired" },
+    });
+    expect(h.senders()).toHaveLength(1);
+    expect(h.inputs[0]!.token).toBe("old-secret-token");
+    expect(h.createRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("carries the latest canonical polling success into online and retrying status", async () => {
+    const h = harness({ primary: true });
+    await h.controller.configure("old-secret-token");
+    await h.controller.enable();
+
+    h.inputs[0]!.onPollingSuccess();
+    expect(h.controller.getStatus().channel).toMatchObject({
+      state: "online",
+      lastSuccessfulPollAt: "1998-06-01T12:00:00.000Z",
+    });
+    await h.advancePairingClock(5_000);
+    h.inputs[0]!.onPollingFailure();
+    expect(h.controller.getStatus().channel).toMatchObject({
+      state: "offline-retrying",
+      lastSuccessfulPollAt: "1998-06-01T12:00:00.000Z",
+    });
+    h.inputs[0]!.onPollingSuccess();
+    expect(h.controller.getStatus().channel).toMatchObject({
+      state: "online",
+      lastSuccessfulPollAt: "1998-06-01T12:00:05.000Z",
+    });
+  });
+
   it("updates a retained webhook credential after explicit deletion and reinspection", async () => {
     const h = harness({ primary: true });
     h.inspectTelegramCredential.mockResolvedValueOnce({
       status: "webhook-removal-required",
-      bot: { username: "cycling_test_bot" },
+      bot: { id: 10001, username: "cycling_test_bot" },
     });
-    await h.controller.configure("webhook-secret-token");
+    await h.controller.configure("old-secret-token");
     await h.controller.enable();
 
-    await expect(h.controller.deleteTelegramWebhook("webhook-secret-token")).resolves.toEqual({
+    await expect(h.controller.deleteTelegramWebhook("old-secret-token")).resolves.toEqual({
       status: "ready",
-      bot: { username: "cycling_test_bot" },
+      bot: { id: 10001, username: "cycling_test_bot" },
     });
 
     expect(h.controller.getStatus().bot).toEqual({

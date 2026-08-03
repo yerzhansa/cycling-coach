@@ -287,6 +287,7 @@ async function executeScenario() {
     await mkdir(resources, { recursive: true });
     await Promise.all([
       copyFile(join(fixtureRoot, "package.json"), join(stage, "package.json")),
+      copyFile(join(fixtureRoot, "tray-preload.cjs"), join(stage, "tray-preload.cjs")),
       copyFile(
         join(desktopRoot, "resources", "trayTemplate.png"),
         join(resources, "trayTemplate.png"),
@@ -310,9 +311,7 @@ async function executeScenario() {
       { cwd: desktopRoot, env: environment },
     );
     const builderTemplate = await readFile(join(fixtureRoot, "electron-builder.yml"), "utf8");
-    const desktopManifest = JSON.parse(
-      await readFile(join(desktopRoot, "package.json"), "utf8"),
-    );
+    const desktopManifest = JSON.parse(await readFile(join(desktopRoot, "package.json"), "utf8"));
     const electronVersion = requireValue(desktopManifest.devDependencies?.electron);
     const builderConfigPath = join(temporaryRoot, "electron-builder.resolved.yml");
     await writeFile(

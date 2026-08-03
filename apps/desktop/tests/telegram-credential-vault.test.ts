@@ -100,6 +100,24 @@ afterEach(async () => {
 });
 
 describe("Telegram credential vault", () => {
+  it("reports a missing credential without consulting the encryption backend", async () => {
+    const value = await fixture();
+    const isEncryptionAvailable = vi.fn(() => {
+      throw new TypeError("encryption backend must stay idle");
+    });
+    const vault = createTelegramCredentialVault({
+      ...value,
+      encryption: {
+        isEncryptionAvailable,
+        encryptString: vi.fn(),
+        decryptString: vi.fn(),
+      },
+    });
+
+    await expect(vault.credentialStatus()).resolves.toEqual({ state: "missing" });
+    expect(isEncryptionAvailable).not.toHaveBeenCalled();
+  });
+
   it("refuses invalid input, a wrong authenticated home, and unsafe encryption before filesystem work", async () => {
     const value = await fixture();
     const otherHome = await anotherHome(value.root);

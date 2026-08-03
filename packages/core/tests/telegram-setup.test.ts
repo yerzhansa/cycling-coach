@@ -7,7 +7,7 @@ import {
 
 function api(overrides: Partial<TelegramSetupApi> = {}): TelegramSetupApi {
   return {
-    getMe: vi.fn(async () => ({ is_bot: true, username: "cycling_test_bot" })),
+    getMe: vi.fn(async () => ({ id: 10001, is_bot: true, username: "cycling_test_bot" })),
     getWebhookInfo: vi.fn(async () => ({ url: "" })),
     deleteWebhook: vi.fn(async () => true),
     ...overrides,
@@ -35,7 +35,7 @@ describe("Telegram credential setup", () => {
 
     await expect(inspectTelegramCredential("12345:secret-token", deps)).resolves.toEqual({
       status: "ready",
-      bot: { username: "cycling_test_bot" },
+      bot: { id: 12345, username: "cycling_test_bot" },
     });
     expect(calls).toEqual(["getMe", "getWebhookInfo"]);
     expect(deps.createApi).toHaveBeenCalledWith("12345:secret-token");
@@ -52,7 +52,7 @@ describe("Telegram credential setup", () => {
 
     expect(result).toEqual({
       status: "webhook-removal-required",
-      bot: { username: "cycling_test_bot" },
+      bot: { id: 10001, username: "cycling_test_bot" },
     });
     expect(JSON.stringify(result)).not.toContain("secret-token");
     expect(JSON.stringify(result)).not.toContain("example.invalid");
@@ -158,7 +158,7 @@ describe("Telegram credential setup", () => {
       }),
       getMe: vi.fn(async () => {
         calls.push("getMe");
-        return { is_bot: true, username: "cycling_test_bot" };
+        return { id: 10001, is_bot: true, username: "cycling_test_bot" };
       }),
       getWebhookInfo: vi.fn(async () => {
         calls.push("getWebhookInfo");
@@ -169,7 +169,7 @@ describe("Telegram credential setup", () => {
 
     await expect(deleteTelegramWebhook("12345:secret-token", deps)).resolves.toEqual({
       status: "ready",
-      bot: { username: "cycling_test_bot" },
+      bot: { id: 10001, username: "cycling_test_bot" },
     });
     expect(calls).toEqual(["delete:false", "getMe", "getWebhookInfo"]);
     expect(client.deleteWebhook).toHaveBeenCalledWith({ drop_pending_updates: false });
@@ -183,7 +183,7 @@ describe("Telegram credential setup", () => {
       deleteTelegramWebhook("12345:secret-token", dependencies(client)),
     ).resolves.toEqual({
       status: "webhook-removal-required",
-      bot: { username: "cycling_test_bot" },
+      bot: { id: 10001, username: "cycling_test_bot" },
     });
   });
 

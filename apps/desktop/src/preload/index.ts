@@ -844,11 +844,29 @@ function parseTelegramChannel(value: unknown): unknown {
   if (!record(value) || typeof value.state !== "string") throw new TypeError();
   const simple =
     (value.state === "disabled" && value.desiredState === "disabled") ||
-    (["waiting-for-credential", "starting", "online", "offline-retrying"].includes(value.state) &&
+    (["waiting-for-credential", "starting"].includes(value.state) &&
       value.desiredState === "enabled") ||
     (value.state === "transfer-required" && value.desiredState === "enabled");
   if (simple && exactKeys(value, ["desiredState", "state"])) {
     return { desiredState: value.desiredState, state: value.state };
+  }
+  if (
+    (value.state === "online" || value.state === "offline-retrying") &&
+    value.desiredState === "enabled"
+  ) {
+    const keys = ["desiredState", "state"];
+    if (Object.hasOwn(value, "lastSuccessfulPollAt")) {
+      if (!canonicalIsoTimestamp(value.lastSuccessfulPollAt)) throw new TypeError();
+      keys.push("lastSuccessfulPollAt");
+    }
+    if (!exactKeys(value, keys)) throw new TypeError();
+    return {
+      desiredState: "enabled",
+      state: value.state,
+      ...(Object.hasOwn(value, "lastSuccessfulPollAt")
+        ? { lastSuccessfulPollAt: value.lastSuccessfulPollAt }
+        : {}),
+    };
   }
   const daemonError =
     (value.state === "invalid-token" && value.errorCode === "telegram-invalid-token") ||
@@ -1134,21 +1152,15 @@ contextBridge.exposeInMainWorld(
     },
     removeTelegramWebhook: async (...args: unknown[]) => {
       requireZeroArguments(args);
-      return parseTelegramStatus(
-        await ipcRenderer.invoke(DESKTOP_TELEGRAM_REMOVE_WEBHOOK_CHANNEL),
-      );
+      return parseTelegramStatus(await ipcRenderer.invoke(DESKTOP_TELEGRAM_REMOVE_WEBHOOK_CHANNEL));
     },
     beginTelegramPairing: async (...args: unknown[]) => {
       requireZeroArguments(args);
-      return parseTelegramStatus(
-        await ipcRenderer.invoke(DESKTOP_TELEGRAM_BEGIN_PAIRING_CHANNEL),
-      );
+      return parseTelegramStatus(await ipcRenderer.invoke(DESKTOP_TELEGRAM_BEGIN_PAIRING_CHANNEL));
     },
     cancelTelegramPairing: async (...args: unknown[]) => {
       requireZeroArguments(args);
-      return parseTelegramStatus(
-        await ipcRenderer.invoke(DESKTOP_TELEGRAM_CANCEL_PAIRING_CHANNEL),
-      );
+      return parseTelegramStatus(await ipcRenderer.invoke(DESKTOP_TELEGRAM_CANCEL_PAIRING_CHANNEL));
     },
     listTelegramAllowedSenders: async (...args: unknown[]) => {
       requireZeroArguments(args);

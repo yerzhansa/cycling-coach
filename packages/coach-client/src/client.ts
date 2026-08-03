@@ -133,6 +133,7 @@ const COACH_RPC_CALL_TIMEOUT_MS: Record<CoachRpcMethodName, number> = {
   inspectTelegramCredential: 30_000,
   deleteTelegramWebhook: 30_000,
   forgetTelegramCredential: 30_000,
+  resetTelegramAccess: 30_000,
   beginTelegramPairing: 30_000,
   cancelTelegramPairing: 30_000,
   listTelegramAllowedSenders: 30_000,

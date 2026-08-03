@@ -178,6 +178,7 @@ function telegramController(
     inspectTelegramCredential: async () => ({ status: "invalid-token" }),
     deleteTelegramWebhook: async () => ({ status: "invalid-token" }),
     forgetTelegramCredential: async () => snapshot,
+    resetTelegramAccess: async () => snapshot,
     beginTelegramPairing: async () => snapshot,
     cancelTelegramPairing: async () => snapshot,
     listTelegramAllowedSenders: async () => ({ senders: [] }),
@@ -1355,7 +1356,7 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
     };
     const credentialInspection = {
       status: "ready" as const,
-      bot: { username: "CoachBot" },
+      bot: { id: 10001, username: "CoachBot" },
     };
     const senderList = {
       senders: [{ senderId: 12345, role: "primary" as const }],
@@ -1368,6 +1369,7 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
     const inspectTelegramCredential = vi.fn(async (_token: string) => credentialInspection);
     const deleteTelegramWebhook = vi.fn(async (_token: string) => credentialInspection);
     const forgetTelegramCredential = vi.fn(async () => disabledSnapshot);
+    const resetTelegramAccess = vi.fn(async () => disabledSnapshot);
     const beginTelegramPairing = vi.fn(async () => onlineSnapshot);
     const cancelTelegramPairing = vi.fn(async () => onlineSnapshot);
     const listTelegramAllowedSenders = vi.fn(async () => senderList);
@@ -1385,6 +1387,7 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
         inspectTelegramCredential,
         deleteTelegramWebhook,
         forgetTelegramCredential,
+        resetTelegramAccess,
         beginTelegramPairing,
         cancelTelegramPairing,
         listTelegramAllowedSenders,
@@ -1408,6 +1411,7 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
       { method: "inspectTelegramCredential", params: { token: "inspection-private-token" } },
       { method: "deleteTelegramWebhook", params: { token: "webhook-private-token" } },
       { method: "forgetTelegramCredential", params: {} },
+      { method: "resetTelegramAccess", params: {} },
       { method: "beginTelegramPairing", params: {} },
       { method: "cancelTelegramPairing", params: {} },
       { method: "listTelegramAllowedSenders", params: {} },
@@ -1432,6 +1436,7 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
     expect(inspectTelegramCredential).toHaveBeenCalledWith("inspection-private-token");
     expect(deleteTelegramWebhook).toHaveBeenCalledWith("webhook-private-token");
     expect(forgetTelegramCredential).toHaveBeenCalledOnce();
+    expect(resetTelegramAccess).toHaveBeenCalledOnce();
     expect(beginTelegramPairing).toHaveBeenCalledOnce();
     expect(cancelTelegramPairing).toHaveBeenCalledOnce();
     expect(listTelegramAllowedSenders).toHaveBeenCalledOnce();
@@ -1471,6 +1476,7 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
       inspectTelegramCredential: vi.fn(async () => ({ status: "invalid-token" as const })),
       deleteTelegramWebhook: vi.fn(async () => ({ status: "invalid-token" as const })),
       forgetTelegramCredential: vi.fn(async () => snapshot),
+      resetTelegramAccess: vi.fn(async () => snapshot),
       beginTelegramPairing: vi.fn(async () => snapshot),
       cancelTelegramPairing: vi.fn(async () => snapshot),
       listTelegramAllowedSenders: vi.fn(async () => ({ senders: [] })),
@@ -1504,6 +1510,7 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
       },
       { method: "deleteTelegramWebhook", params: { token: "renderer-private-token" } },
       { method: "forgetTelegramCredential", params: {} },
+      { method: "resetTelegramAccess", params: {} },
       { method: "beginTelegramPairing", params: {} },
       { method: "cancelTelegramPairing", params: {} },
       { method: "listTelegramAllowedSenders", params: {} },
@@ -1532,6 +1539,7 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
     expect(telegram.inspectTelegramCredential).not.toHaveBeenCalled();
     expect(telegram.deleteTelegramWebhook).not.toHaveBeenCalled();
     expect(telegram.forgetTelegramCredential).not.toHaveBeenCalled();
+    expect(telegram.resetTelegramAccess).not.toHaveBeenCalled();
     expect(telegram.beginTelegramPairing).not.toHaveBeenCalled();
     expect(telegram.cancelTelegramPairing).not.toHaveBeenCalled();
     expect(telegram.listTelegramAllowedSenders).not.toHaveBeenCalled();

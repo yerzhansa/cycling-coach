@@ -154,6 +154,7 @@ export const COACH_RPC_METHOD_NAMES = [
   "inspectTelegramCredential",
   "deleteTelegramWebhook",
   "forgetTelegramCredential",
+  "resetTelegramAccess",
   "beginTelegramPairing",
   "cancelTelegramPairing",
   "listTelegramAllowedSenders",
@@ -842,6 +843,7 @@ export interface TelegramControlOperations {
     request: DeleteTelegramWebhookRpcParams,
   ): Promise<TelegramCredentialInspection>;
   forgetTelegramCredential(request: EmptyRpcParams): Promise<TelegramControlSnapshot>;
+  resetTelegramAccess(request: EmptyRpcParams): Promise<TelegramControlSnapshot>;
   beginTelegramPairing(request: EmptyRpcParams): Promise<TelegramControlSnapshot>;
   cancelTelegramPairing(request: EmptyRpcParams): Promise<TelegramControlSnapshot>;
   listTelegramAllowedSenders(request: EmptyRpcParams): Promise<TelegramAllowedSendersResult>;
@@ -1041,6 +1043,14 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       jsonrpc: z.literal("2.0"),
       id: JsonRpcIdSchema,
       method: z.literal("forgetTelegramCredential"),
+      params: EmptyRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("resetTelegramAccess"),
       params: EmptyRpcParamsSchema,
     })
     .strict(),
@@ -1327,6 +1337,12 @@ export const COACH_RPC_METHOD_REGISTRY = {
   },
   forgetTelegramCredential: {
     wireName: "forgetTelegramCredential",
+    requestSchema: EmptyRpcParamsSchema,
+    responseSchema: TelegramControlSnapshotSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  resetTelegramAccess: {
+    wireName: "resetTelegramAccess",
     requestSchema: EmptyRpcParamsSchema,
     responseSchema: TelegramControlSnapshotSchema,
     eventSchema: NoRpcEventSchema,

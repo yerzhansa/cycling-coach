@@ -140,9 +140,11 @@ function spendSummary(overrides: Partial<SpendSummary> = {}): SpendSummary {
 
 function telegramStatus(overrides: Partial<TelegramControlStatus> = {}): TelegramControlStatus {
   return {
-    desiredState: "disabled",
-    state: "disabled",
+    channel: { desiredState: "disabled", state: "disabled" },
+    bot: { state: "unconfigured" },
+    pairing: { state: "unpaired" },
     credentialConfigured: false,
+    gapWarning: { state: "clear" },
     ...overrides,
   };
 }
@@ -278,15 +280,33 @@ function createHarness(options: HarnessOptions = {}) {
     beginMutation: () => store.getState().beginSettingsMutation("provider-model"),
     view: coachAdapter.view,
   });
-  const pasteTelegramToken = vi.fn(async () => telegramStatus({ credentialConfigured: true }));
+  const pasteTelegramToken = vi.fn(async () =>
+    telegramStatus({
+      bot: { state: "ready", username: "synthetic_bot" },
+      credentialConfigured: true,
+    }),
+  );
   const telegramController = createTelegramSettingsController({
     bridge: {
       status: async () => telegramStatus(),
       pasteTokenFromClipboard: pasteTelegramToken,
-      enable: async () => telegramStatus({ desiredState: "enabled", state: "starting" }),
+      enable: async () =>
+        telegramStatus({
+          channel: { desiredState: "enabled", state: "starting" },
+          bot: { state: "ready", username: "synthetic_bot" },
+          pairing: { state: "paired" },
+          credentialConfigured: true,
+        }),
       disable: async () => telegramStatus(),
       remove: async () => telegramStatus(),
       reconcile: async () => telegramStatus(),
+      removeWebhook: async () => telegramStatus(),
+      beginPairing: async () => telegramStatus(),
+      cancelPairing: async () => telegramStatus(),
+      acknowledgeGapWarning: async () => telegramStatus(),
+      listAllowedSenders: async () => ({ senders: [] }),
+      addAllowedSender: async () => ({ senders: [] }),
+      removeAllowedSender: async () => ({ senders: [] }),
     },
     beginMutation: () => store.getState().beginSettingsMutation("telegram"),
     view: telegramAdapter.view,

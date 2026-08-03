@@ -101,10 +101,8 @@ async function buildBot(opts?: {
     },
   };
 
-  const [{ createTelegramBot }, { createNpmTelegramHost }] = await Promise.all([
-    import("../src/channels/telegram.js"),
-    import("../src/channels/npm-telegram-host.js"),
-  ]);
+  const { createTelegramBot } = await import("../src/channels/telegram.js");
+  const { createNpmTelegramHost } = await import("../src/channels/npm-telegram-host.js");
   const host = createNpmTelegramHost({
     binary: cyclingBinary,
     confirmations: agent.confirmations as never,

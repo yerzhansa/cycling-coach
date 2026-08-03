@@ -39,6 +39,12 @@ export function createTelegramSettingsAdapter(input: {
       disable: () => handlers?.onDisable(),
       remove: () => handlers?.onRemove(),
       reconcile: () => handlers?.onReconcile(),
+      removeWebhook: () => handlers?.onRemoveWebhook(),
+      beginPairing: () => handlers?.onBeginPairing(),
+      cancelPairing: () => handlers?.onCancelPairing(),
+      acknowledgeGapWarning: () => handlers?.onAcknowledgeGapWarning(),
+      addSender: (senderId) => handlers?.onAddSender(senderId),
+      removeSender: (senderId) => handlers?.onRemoveSender(senderId),
     },
   };
 }

@@ -25,6 +25,17 @@ export const ReplaceTelegramRpcParamsSchema = z
   .strict();
 export type ReplaceTelegramRpcParams = z.infer<typeof ReplaceTelegramRpcParamsSchema>;
 
+export const TelegramCanonicalTimestampSchema = z
+  .string()
+  .max(40)
+  .refine((value) => {
+    try {
+      return new Date(value).toISOString() === value;
+    } catch {
+      return false;
+    }
+  }, "invalid canonical timestamp");
+
 export const TelegramChannelStatusSchema = z.discriminatedUnion("state", [
   z.object({ desiredState: z.literal("disabled"), state: z.literal("disabled") }).strict(),
   z
@@ -34,9 +45,19 @@ export const TelegramChannelStatusSchema = z.discriminatedUnion("state", [
     })
     .strict(),
   z.object({ desiredState: z.literal("enabled"), state: z.literal("starting") }).strict(),
-  z.object({ desiredState: z.literal("enabled"), state: z.literal("online") }).strict(),
   z
-    .object({ desiredState: z.literal("enabled"), state: z.literal("offline-retrying") })
+    .object({
+      desiredState: z.literal("enabled"),
+      state: z.literal("online"),
+      lastSuccessfulPollAt: TelegramCanonicalTimestampSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      desiredState: z.literal("enabled"),
+      state: z.literal("offline-retrying"),
+      lastSuccessfulPollAt: TelegramCanonicalTimestampSchema.optional(),
+    })
     .strict(),
   z
     .object({
@@ -65,28 +86,20 @@ export type TelegramChannelStatus = z.infer<typeof TelegramChannelStatusSchema>;
 export const TelegramBotUsernameSchema = z.string().regex(/^[A-Za-z][A-Za-z0-9_]{4,31}$/);
 export type TelegramBotUsername = z.infer<typeof TelegramBotUsernameSchema>;
 
-export const TelegramCanonicalTimestampSchema = z
-  .string()
-  .max(40)
-  .refine((value) => {
-    try {
-      return new Date(value).toISOString() === value;
-    } catch {
-      return false;
-    }
-  }, "invalid canonical timestamp");
+export const TelegramBotIdSchema = z.number().int().min(10).max(Number.MAX_SAFE_INTEGER);
+export type TelegramBotId = z.infer<typeof TelegramBotIdSchema>;
 
 export const TelegramCredentialInspectionSchema = z.discriminatedUnion("status", [
   z
     .object({
       status: z.literal("ready"),
-      bot: z.object({ username: TelegramBotUsernameSchema }).strict(),
+      bot: z.object({ id: TelegramBotIdSchema, username: TelegramBotUsernameSchema }).strict(),
     })
     .strict(),
   z
     .object({
       status: z.literal("webhook-removal-required"),
-      bot: z.object({ username: TelegramBotUsernameSchema }).strict(),
+      bot: z.object({ id: TelegramBotIdSchema, username: TelegramBotUsernameSchema }).strict(),
     })
     .strict(),
   z.object({ status: z.literal("invalid-token") }).strict(),

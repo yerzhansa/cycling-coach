@@ -39,6 +39,7 @@ describe("Telegram daemon binding", () => {
     await binding.inspectTelegramCredential({ token: TOKEN });
     await binding.deleteTelegramWebhook({ token: TOKEN });
     await binding.forgetTelegramCredential({});
+    await binding.resetTelegramAccess({});
     await binding.beginTelegramPairing({});
     await binding.cancelTelegramPairing({});
     await binding.listTelegramAllowedSenders({});
@@ -60,6 +61,7 @@ describe("Telegram daemon binding", () => {
       ["inspectTelegramCredential", { token: TOKEN }],
       ["deleteTelegramWebhook", { token: TOKEN }],
       ["forgetTelegramCredential", {}],
+      ["resetTelegramAccess", {}],
       ["beginTelegramPairing", {}],
       ["cancelTelegramPairing", {}],
       ["listTelegramAllowedSenders", {}],

@@ -298,6 +298,8 @@ export {
   loadAllowedSendersFromFile,
   loadAllowedSendersWithSource,
   removeSecondarySender,
+  resetDesktopAllowedSenders,
+  bindDesktopTelegramAccess,
   SENDER_ID_RE,
 } from "./channels/allowed-senders.js";
 export type {

@@ -1,10 +1,10 @@
 import { Api } from "grammy";
 
 export type TelegramCredentialInspectionResult =
-  | { readonly status: "ready"; readonly bot: { readonly username: string } }
+  | { readonly status: "ready"; readonly bot: { readonly id: number; readonly username: string } }
   | {
       readonly status: "webhook-removal-required";
-      readonly bot: { readonly username: string };
+      readonly bot: { readonly id: number; readonly username: string };
     }
   | { readonly status: "invalid-token" }
   | { readonly status: "unavailable"; readonly errorCode: "telegram-validation-failed" };
@@ -48,6 +48,8 @@ async function inspectWithApi(api: TelegramSetupApi): Promise<TelegramCredential
   if (
     !isRecord(me) ||
     me.is_bot !== true ||
+    !Number.isSafeInteger(me.id) ||
+    (me.id as number) < 10 ||
     typeof me.username !== "string" ||
     !BOT_USERNAME.test(me.username)
   ) {
@@ -62,7 +64,7 @@ async function inspectWithApi(api: TelegramSetupApi): Promise<TelegramCredential
   }
   if (!isRecord(webhook) || typeof webhook.url !== "string") return UNAVAILABLE;
 
-  const bot = { username: me.username };
+  const bot = { id: me.id as number, username: me.username };
   return webhook.url === ""
     ? { status: "ready", bot }
     : { status: "webhook-removal-required", bot };

@@ -359,10 +359,6 @@ export function createTelegramCredentialVault(
   };
 
   const readCredential = async (): Promise<ReadCredential> => {
-    const encryptionFailure = encryptionRefusal(options.encryption);
-    if (encryptionFailure !== undefined) {
-      return { state: "re-prompt", reason: encryptionFailure };
-    }
     const directory = await secureDirectoryState(options.root);
     if (directory === "missing") return { state: "missing" };
     if (directory === "unsafe") return { state: "re-prompt", reason: "storage-failed" };
@@ -370,6 +366,10 @@ export function createTelegramCredentialVault(
     const file = await targetState(path);
     if (file === "missing") return { state: "missing" };
     if (file === "unsafe") return { state: "re-prompt", reason: "storage-failed" };
+    const encryptionFailure = encryptionRefusal(options.encryption);
+    if (encryptionFailure !== undefined) {
+      return { state: "re-prompt", reason: encryptionFailure };
+    }
     let encrypted: Buffer | undefined;
     try {
       encrypted = await readFile(path);

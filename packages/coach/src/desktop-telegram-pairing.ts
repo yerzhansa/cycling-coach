@@ -9,6 +9,7 @@ export interface DesktopTelegramPairingCoordinator {
   getState(): TelegramPairingState;
   begin(): TelegramPairingState;
   cancel(): TelegramPairingState;
+  reset(): TelegramPairingState;
   consumePrivateMessage(input: {
     readonly senderId: string;
     readonly messageText: string;
@@ -79,6 +80,13 @@ export function createDesktopTelegramPairing(
     cancel() {
       active = undefined;
       if (state.state !== "paired") state = UNPAIRED;
+      return state;
+    },
+
+    reset() {
+      active = undefined;
+      consumed = undefined;
+      state = UNPAIRED;
       return state;
     },
 

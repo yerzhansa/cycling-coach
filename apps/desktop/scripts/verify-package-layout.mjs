@@ -18,12 +18,14 @@ const requiredAsarFiles = [
   "out/main/index.js",
   "out/main/daemon-utility.js",
   "out/preload/index.cjs",
+  "out/preload/tray.cjs",
   "out/renderer/index.html",
   "out/renderer/tray.html",
   "package.json",
   "resources/self-test/matrix.json",
   "resources/self-test/matrix.sha256",
 ];
+const telegramRuntimeRoots = ["grammy", "@grammyjs/auto-retry"];
 const requiredFilePatterns = [
   "out/**",
   "package.json",
@@ -492,6 +494,91 @@ function parseManifest(bytes, label) {
   return manifest;
 }
 
+function asarRuntimeFile(asar, path) {
+  const entry = asar.get(path);
+  return entry !== undefined && entry.type === "file" && entry.unpacked !== true
+    ? entry
+    : undefined;
+}
+
+function resolveRuntimePackageRoot(asar, importerRoot, packageName) {
+  let directory = importerRoot;
+  while (true) {
+    const candidate =
+      directory.length === 0
+        ? `node_modules/${packageName}`
+        : `${directory}/node_modules/${packageName}`;
+    if (asarRuntimeFile(asar, `${candidate}/package.json`) !== undefined) return candidate;
+    const separator = directory.lastIndexOf("/");
+    if (separator < 0) {
+      if (directory.length === 0) break;
+      directory = "";
+    } else {
+      directory = directory.slice(0, separator);
+    }
+  }
+  fail("Telegram runtime dependency is missing from ASAR", packageName);
+}
+
+function runtimePackageEntry(manifest, packageName) {
+  const candidate = typeof manifest.main === "string" ? manifest.main : undefined;
+  if (candidate === undefined || candidate.length === 0) {
+    fail("Telegram runtime dependency has no main entry", packageName);
+  }
+  const normalized = candidate.replace(/^\.\//u, "");
+  if (
+    normalized.length === 0 ||
+    normalized.startsWith("/") ||
+    normalized.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
+  ) {
+    fail("Telegram runtime dependency has an invalid main entry", packageName);
+  }
+  return normalized;
+}
+
+function validateTelegramRuntimeClosure(asar) {
+  const coreRoot = "node_modules/@enduragent/core";
+  if (asarRuntimeFile(asar, `${coreRoot}/package.json`) === undefined) {
+    fail("Telegram runtime host is missing from ASAR", "@enduragent/core");
+  }
+  const visited = new Set();
+  const visit = (importerRoot, packageName) => {
+    const packageRoot = resolveRuntimePackageRoot(asar, importerRoot, packageName);
+    if (visited.has(packageRoot)) return;
+    visited.add(packageRoot);
+    const manifestEntry = asarRuntimeFile(asar, `${packageRoot}/package.json`);
+    let manifest;
+    try {
+      manifest = JSON.parse(manifestEntry.bytes.toString("utf8"));
+    } catch {
+      fail("Telegram runtime dependency manifest is invalid", packageName);
+    }
+    if (!exactObject(manifest) || manifest.name !== packageName) {
+      fail("Telegram runtime dependency manifest is invalid", packageName);
+    }
+    const entry = runtimePackageEntry(manifest, packageName);
+    const candidates = [entry, `${entry}.js`, `${entry}/index.js`];
+    if (!candidates.some((path) => asarRuntimeFile(asar, `${packageRoot}/${path}`) !== undefined)) {
+      fail("Telegram runtime dependency entry is missing from ASAR", packageName);
+    }
+    if (manifest.dependencies === undefined) return;
+    if (!exactObject(manifest.dependencies)) {
+      fail("Telegram runtime dependency manifest is invalid", packageName);
+    }
+    for (const dependency of Object.keys(manifest.dependencies)) visit(packageRoot, dependency);
+  };
+  for (const packageName of telegramRuntimeRoots) visit(coreRoot, packageName);
+}
+
+function validateSandboxedPreloads(asar) {
+  for (const path of ["out/preload/index.cjs", "out/preload/tray.cjs"]) {
+    const source = asarRuntimeFile(asar, path).bytes.toString("utf8");
+    if (/\b(?:require|import)\s*\(\s*["']\.\.?\//u.test(source)) {
+      fail("sandboxed preload has a relative runtime dependency", `app.asar/${path}`);
+    }
+  }
+}
+
 function validateManifest(asar, sourceBytes, release) {
   const packagedBytes = asar.get("package.json").bytes;
   const source = parseManifest(sourceBytes, "package.json");
@@ -542,6 +629,8 @@ function validateRequiredAsarFiles(asar, sourceManifest, release) {
   }
 
   validateManifest(asar, sourceManifest, release);
+  validateTelegramRuntimeClosure(asar);
+  validateSandboxedPreloads(asar);
 
   const matrix = asar.get("resources/self-test/matrix.json").bytes;
   const checksum = asar.get("resources/self-test/matrix.sha256").bytes;

@@ -986,6 +986,16 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
               invocationFailure = { error };
             }
             break;
+          case "resetTelegramAccess":
+            try {
+              COACH_RPC_METHOD_REGISTRY.resetTelegramAccess.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.telegram.resetTelegramAccess();
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
           case "beginTelegramPairing":
             try {
               COACH_RPC_METHOD_REGISTRY.beginTelegramPairing.requestSchema.parse(
