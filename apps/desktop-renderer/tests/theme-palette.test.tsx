@@ -61,6 +61,19 @@ function contrastRatio(first: string, second: string): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+function readTokenSheet(): Promise<string> {
+  return readFile(resolve(import.meta.dirname, "..", "src", "theme", "tokens.css"), "utf8");
+}
+
+function blockDeclarations(source: string, selector: string): Map<string, string> {
+  const start = source.indexOf(`${selector} {`);
+  const body = source.slice(start, source.indexOf("}", start));
+  const declarations = new Map<string, string>();
+  for (const match of body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/gu))
+    declarations.set(match[1], match[2].trim());
+  return declarations;
+}
+
 function expectedProperties(paletteId: string, theme: ResolvedTheme): Map<string, string> {
   const palette = paletteById(paletteId);
   const ramp = theme === "dark" ? palette.d : palette.l;
@@ -187,11 +200,23 @@ describe("palette engine", () => {
     expect(stale).toEqual([]);
   });
 
+  it("bakes the default palette into the static token sheet", async () => {
+    const sheet = await readTokenSheet();
+    const fallback = paletteById(DEFAULT_PALETTE_ID);
+    for (const [selector, theme] of [
+      [":root", "light"],
+      [':root[data-theme="dark"]', "dark"],
+    ] as const) {
+      const declared = blockDeclarations(sheet, selector);
+      for (const [property, value] of paletteCustomProperties(fallback, theme))
+        expect(
+          `${selector} ${property}: ${declared.get(property)?.toLowerCase() ?? "absent"}`,
+        ).toBe(`${selector} ${property}: ${value.toLowerCase()}`);
+    }
+  });
+
   it("covers the whole colour vocabulary declared in the token sheet", async () => {
-    const tokens = await readFile(
-      resolve(import.meta.dirname, "..", "src", "theme", "tokens.css"),
-      "utf8",
-    );
+    const tokens = await readTokenSheet();
     const declared = [...tokens.slice(0, tokens.indexOf("}")).matchAll(/(--[\w-]+)\s*:/gu)]
       .map((match) => match[1])
       .filter((property) => !property.startsWith("--f-") && !NON_PALETTE_TOKENS.has(property));

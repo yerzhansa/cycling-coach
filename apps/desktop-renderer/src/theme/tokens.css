@@ -1,19 +1,19 @@
 :root {
   color-scheme: light dark;
-  --bg: #fcfcfc;
-  --rail: #fafafa;
+  --bg: #f2f5f8;
+  --rail: #e8edf2;
   --surface: #ffffff;
-  --surface-2: color-mix(in srgb, #ffffff 55%, #fcfcfc);
-  --sunk: color-mix(in srgb, #fafafa 55%, #fcfcfc);
-  --ink: #27272a;
-  --ink-2: #71717a;
-  --ink-3: color-mix(in srgb, #71717a 62%, #fcfcfc);
-  --line: #e4e4e7;
-  --line-2: color-mix(in srgb, #e4e4e7 85%, #71717a);
-  --brand: #1b4ed8;
+  --surface-2: color-mix(in srgb, #ffffff 55%, #f2f5f8);
+  --sunk: color-mix(in srgb, #e8edf2 55%, #f2f5f8);
+  --ink: #16202b;
+  --ink-2: #57636e;
+  --ink-3: color-mix(in srgb, #57636e 62%, #f2f5f8);
+  --line: #dfe5eb;
+  --line-2: color-mix(in srgb, #dfe5eb 85%, #57636e);
+  --brand: #38658e;
   --brand-ink: #ffffff;
-  --brand-soft: #f4f4f5;
-  --ok: #047857;
+  --brand-soft: #e0eaf3;
+  --ok: #3d7a4f;
   --fitness: #2e6fa8;
   --fatigue: #d97742;
   --warn: #b4761e;
@@ -52,25 +52,25 @@
   --f-mono: "SF Mono", "SFMono-Regular", "JetBrains Mono", Consolas, Menlo, monospace;
 
   --grain: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2357636e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0a0a0a;
-    --rail: #000000;
-    --surface: #111111;
-    --surface-2: color-mix(in srgb, #111111 55%, #0a0a0a);
-    --sunk: color-mix(in srgb, #000000 55%, #0a0a0a);
-    --ink: #f5f5f5;
-    --ink-2: #a3a3a3;
-    --ink-3: color-mix(in srgb, #a3a3a3 62%, #0a0a0a);
-    --line: #1a1a1a;
-    --line-2: color-mix(in srgb, #1a1a1a 93%, #a3a3a3);
-    --brand: #366ffb;
-    --brand-ink: #0a0a0a;
-    --brand-soft: #141414;
-    --ok: #34d399;
+    --bg: #0f1520;
+    --rail: #0b101a;
+    --surface: #161e2b;
+    --surface-2: color-mix(in srgb, #161e2b 55%, #0f1520);
+    --sunk: color-mix(in srgb, #0b101a 55%, #0f1520);
+    --ink: #e6ebf2;
+    --ink-2: #93a0af;
+    --ink-3: color-mix(in srgb, #93a0af 62%, #0f1520);
+    --line: #24303f;
+    --line-2: color-mix(in srgb, #24303f 93%, #93a0af);
+    --brand: #82aed6;
+    --brand-ink: #0a1826;
+    --brand-soft: #1c2c3f;
+    --ok: #6fb383;
     --fitness: #4189cc;
     --fatigue: #cf7a44;
     --warn: #d9a441;
@@ -86,7 +86,7 @@
     --tint: 16%;
     --scrollbar-thumb: rgb(255 255 255 / 8%);
     --scrollbar-thumb-hover: rgb(255 255 255 / 14%);
-    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a3a3a3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2393a0af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   }
 }
 
@@ -96,20 +96,20 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0a0a0a;
-  --rail: #000000;
-  --surface: #111111;
-  --surface-2: color-mix(in srgb, #111111 55%, #0a0a0a);
-  --sunk: color-mix(in srgb, #000000 55%, #0a0a0a);
-  --ink: #f5f5f5;
-  --ink-2: #a3a3a3;
-  --ink-3: color-mix(in srgb, #a3a3a3 62%, #0a0a0a);
-  --line: #1a1a1a;
-  --line-2: color-mix(in srgb, #1a1a1a 93%, #a3a3a3);
-  --brand: #366ffb;
-  --brand-ink: #0a0a0a;
-  --brand-soft: #141414;
-  --ok: #34d399;
+  --bg: #0f1520;
+  --rail: #0b101a;
+  --surface: #161e2b;
+  --surface-2: color-mix(in srgb, #161e2b 55%, #0f1520);
+  --sunk: color-mix(in srgb, #0b101a 55%, #0f1520);
+  --ink: #e6ebf2;
+  --ink-2: #93a0af;
+  --ink-3: color-mix(in srgb, #93a0af 62%, #0f1520);
+  --line: #24303f;
+  --line-2: color-mix(in srgb, #24303f 93%, #93a0af);
+  --brand: #82aed6;
+  --brand-ink: #0a1826;
+  --brand-soft: #1c2c3f;
+  --ok: #6fb383;
   --fitness: #4189cc;
   --fatigue: #cf7a44;
   --warn: #d9a441;
@@ -125,7 +125,7 @@
   --tint: 16%;
   --scrollbar-thumb: rgb(255 255 255 / 8%);
   --scrollbar-thumb-hover: rgb(255 255 255 / 14%);
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a3a3a3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2393a0af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 
 @layer base {
