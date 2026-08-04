@@ -1,4 +1,5 @@
 import { Tooltip } from "@base-ui/react/tooltip";
+import { Info } from "lucide-react";
 import type { ReactElement } from "react";
 
 export function InfoTip(props: {
@@ -11,9 +12,9 @@ export function InfoTip(props: {
       <Tooltip.Trigger
         data-info-tip=""
         aria-label={props.label}
-        className="grid size-[15px] shrink-0 place-items-center rounded-full border border-line-2 text-[9.5px] font-semibold text-ink-3 transition-colors hover:text-ink focus-visible:text-ink motion-reduce:transition-none"
+        className="grid size-[15px] shrink-0 appearance-none place-items-center bg-transparent p-0 text-ink-3 transition-colors hover:text-ink focus-visible:text-ink motion-reduce:transition-none"
       >
-        i
+        <Info size={14} strokeWidth={2.25} aria-hidden="true" />
       </Tooltip.Trigger>
       <Tooltip.Portal>
         <Tooltip.Positioner side="top" sideOffset={8}>
