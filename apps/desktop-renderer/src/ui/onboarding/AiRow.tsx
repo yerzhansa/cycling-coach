@@ -1,4 +1,5 @@
 import { Menu } from "@base-ui/react/menu";
+import { isKeylessProvider } from "@enduragent/coach-contract";
 import { Check } from "lucide-react";
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import {
@@ -75,11 +76,7 @@ export function AiRow(props: {
   const [restoreDraft, setRestoreDraft] = useState<LlmSelectionDraft | null>(null);
   const [panelLane, setPanelLane] = useState<SetupLane | null>(null);
   const [operation, setOperation] = useState<
-    | "provider-requested"
-    | "provider-running"
-    | "chatgpt-requested"
-    | "chatgpt-running"
-    | null
+    "provider-requested" | "provider-running" | "chatgpt-requested" | "chatgpt-running" | null
   >(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
@@ -120,13 +117,14 @@ export function AiRow(props: {
   ]);
 
   const activeProviderStored =
-    provider === "claude-cli" ||
-    (provider === "openai-codex" && wizard.chatGptState === "configured") ||
+    (provider !== null &&
+      isKeylessProvider(provider) &&
+      provider !== "codex-agent" &&
+      (provider !== "openai-codex" || wizard.chatGptState === "configured")) ||
     DESKTOP_CREDENTIAL_SLOTS.some(
       (slot) => slot === provider && wizard.credentialStatus[slot] === "configured",
     );
-  const hasActiveSelection =
-    configuration?.active?.provider === provider && activeProviderStored;
+  const hasActiveSelection = configuration?.active?.provider === provider && activeProviderStored;
   const lane = picked ?? (ready || hasActiveSelection ? activeLane : null);
   const panel =
     panelLane === "openai-codex" ? "chatgpt" : panelLane === "api-key" ? "api-key" : null;
@@ -157,20 +155,16 @@ export function AiRow(props: {
     const target = providerForLane(next);
     const switchesLane = next !== lane;
     if (switchesLane) setPicked(next);
+    const canActivateKeylessLane =
+      isKeylessProvider(next) && (next !== "openai-codex" || wizard.chatGptState === "configured");
     const reactivatesCurrentKeylessProvider =
-      target === provider &&
-      !ready &&
-      (next === "claude-cli" ||
-        (next === "openai-codex" && wizard.chatGptState === "configured"));
+      target === provider && !ready && canActivateKeylessLane;
     if (
       target !== null &&
       ((switchesLane && target !== provider) || reactivatesCurrentKeylessProvider) &&
       actions !== null
     ) {
-      if (
-        next === "claude-cli" ||
-        (next === "openai-codex" && wizard.chatGptState === "configured")
-      ) {
+      if (canActivateKeylessLane) {
         setOperation("provider-requested");
       }
       actions.selectProvider(target);
