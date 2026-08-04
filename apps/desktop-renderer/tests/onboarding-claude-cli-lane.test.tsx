@@ -8,7 +8,9 @@ import type { ClaudeCliStatus } from "../src/onboarding/machine.js";
 import {
   chooseLane,
   claudeCliNoteText,
+  control,
   mountWizard,
+  openApiKeyPanel,
   openLaneMenu,
   resetOnboardingStore,
   rowState,
@@ -232,15 +234,19 @@ describe("claude-cli onboarding lane", () => {
     bridge.llmConfiguration.mockResolvedValue(ACTIVE_CLAUDE_CLI_CONFIGURATION);
     const wizard = await openLane(bridge);
 
-    expect(control<HTMLSelectElement>("onboarding-llm-provider").value).toBe("claude-cli");
-    expect(control<HTMLSelectElement>("onboarding-llm-model").value).toBe("sonnet");
+    await waitFor(() => {
+      expect(rowState("ai")).toBe("ready");
+    });
+    expect(setupRow("ai").textContent).toContain("Claude Code");
     wizard.controller.dispose();
   });
 
   it("falls back to the first provider when the daemon reports no active provider", async () => {
+    const user = userEvent.setup();
     const wizard = await openLane(
       claudeBridge({ state: "ready", email: "athlete@example.test", plan: "Max" }),
     );
+    await openApiKeyPanel(user);
 
     expect(control<HTMLSelectElement>("onboarding-llm-provider").value).toBe("anthropic");
     expect(control<HTMLSelectElement>("onboarding-llm-model").value).toBe("claude-sonnet-4-6");
