@@ -191,3 +191,103 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+## T3 Code
+
+The desktop app's visual design system — the token set, control geometry, and
+surface treatment in `apps/desktop-renderer/src/theme/` (`tokens.css`,
+`surface.module.css`) and the styling that consumes them — is adapted from
+[T3 Code](https://github.com/t3-tools) by T3 Tools Inc., distributed under the
+MIT License. The "T3 Code" appearance palette is named for it.
+
+### Original license (verbatim)
+
+```
+MIT License
+
+Copyright (c) 2026 T3 Tools Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+### Modifications introduced in this port
+
+- **Stack translation.** T3 Code expresses its design system as Tailwind
+  utility classes and `cva` variant maps. This codebase re-expresses it as CSS
+  custom properties plus a CSS Modules primitive sheet (`surface.module.css`)
+  consumed through `composes`. Tailwind v4 runs alongside that sheet and is
+  progressively replacing it, module by module; Tailwind's preflight reset is
+  deliberately not imported while both systems coexist.
+- **Monochrome accent.** T3 Code uses a cobalt `--primary` for filled controls
+  and focus rings. This port keeps those surfaces neutral — filled controls
+  invert to `--ink`, and the focus ring is `--ink` — so the accent is carried
+  by status colors only.
+- **Hairline as inset shadow.** T3 Code draws its signature 1px surface edge
+  with an `::before` pseudo-element. This port emits the same edge as an inset
+  `box-shadow` token (`--edge`) so it also applies to `<input>`, which cannot
+  carry pseudo-elements.
+- **Palette engine.** The T3 Code color ramp is one of fifteen swappable
+  palettes rather than the app's only theme; geometry, typography and
+  elevation tokens are shared by all of them.
+
+---
+
+## Desktop UI dependencies
+
+The desktop renderer bundles the following third-party packages. Each is used as published,
+without modification.
+
+### lucide-react (ISC)
+
+Icon set used for the desktop navigation and controls.
+
+```
+ISC License
+
+Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of Feather
+(MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022.
+
+Permission to use, copy, modify, and/or distribute this software for any purpose with or
+without fee is hereby granted, provided that the above copyright notice and this permission
+notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS
+SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL
+THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY
+DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF
+CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE
+OR PERFORMANCE OF THIS SOFTWARE.
+```
+
+### Tailwind CSS (MIT)
+
+Utility styling layer for the desktop renderer. Copyright (c) Tailwind Labs, Inc.
+
+### Base UI (MIT)
+
+Headless React primitives for accessible dialogs, menus and form controls.
+Copyright (c) Base UI contributors / MUI.
+
+### DM Sans (SIL Open Font License 1.1)
+
+Typeface, vendored via `@fontsource-variable/dm-sans`. Copyright (c) Colophon Foundry,
+Jonny Pinhorn and Indian Type Foundry. The full OFL text ships inside the package at
+`node_modules/@fontsource-variable/dm-sans/LICENSE`.

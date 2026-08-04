@@ -8,7 +8,9 @@ import type { OnboardingLlmConfiguration, OnboardingLlmProviderConfiguration } f
 import { claudeCliPresentation } from "./credential-presentation.js";
 import { claudeCliReady, type OnboardingErrorCode, type OnboardingState } from "./machine.js";
 
-export type SetupLane = "claude-cli" | "openai-codex" | "api-key";
+export const KEYLESS_SETUP_LANES = ["claude-cli", "openai-codex"] as const;
+
+export type SetupLane = (typeof KEYLESS_SETUP_LANES)[number] | "api-key";
 
 export type SetupErrorSection = "provider" | "training" | "intake" | "footer";
 
@@ -21,9 +23,7 @@ export interface AiRowCopy {
 
 export function laneForProvider(provider: string | null | undefined): SetupLane | null {
   if (provider === null || provider === undefined) return null;
-  if (provider === "claude-cli") return "claude-cli";
-  if (provider === "openai-codex") return "openai-codex";
-  return "api-key";
+  return KEYLESS_SETUP_LANES.find((lane) => lane === provider) ?? "api-key";
 }
 
 export function apiKeyProviders(

@@ -93,8 +93,7 @@ export function AiRow(props: {
   const describedBy = ownsError ? "onboarding-error" : undefined;
 
   const providerForLane = (next: SetupLane): string | null => {
-    if (next === "claude-cli") return "claude-cli";
-    if (next === "openai-codex") return "openai-codex";
+    if (next !== "api-key") return next;
     const anthropic = keyProviders.find((entry) => entry.provider === "anthropic");
     return (anthropic ?? keyProviders[0])?.provider ?? null;
   };
