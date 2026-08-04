@@ -139,6 +139,7 @@ interface HarnessOptions {
   readonly applyLlmSelection?: (
     selection: OnboardingLlmSelection,
   ) => Promise<OnboardingLlmSelectionResult>;
+  readonly llm?: () => OnboardingLlmConfiguration;
   readonly credentialStatuses?: readonly CredentialSlotStatus[];
   readonly chatGptStatus?: ChatGptStatus;
   readonly claudeCliStatus?: () => Promise<ClaudeCliStatus>;
@@ -254,7 +255,7 @@ function createHarness(options: HarnessOptions = {}) {
     view: athleteAdapter.view,
   });
   const coachController = createProviderModelSettingsController({
-    load: async () => llmConfiguration(),
+    load: async () => (options.llm ?? llmConfiguration)(),
     apply: applyLlmSelection,
     openSetup,
     beginMutation: () => store.getState().beginSettingsMutation("provider-model"),
@@ -557,7 +558,7 @@ describe("keyless provider status", () => {
     await renderSettings({
       runtime: () =>
         snapshot({
-          llm: { provider: "claude-cli", model: "sonnet", credential_configured: false },
+          llm: { provider: "claude-cli", model: "sonnet", credential_configured: true },
         }),
       credentialStatuses: [],
       claudeCliStatus: async () => ({
@@ -583,7 +584,7 @@ describe("keyless provider status", () => {
     await renderSettings({
       runtime: () =>
         snapshot({
-          llm: { provider: "claude-cli", model: "sonnet", credential_configured: false },
+          llm: { provider: "claude-cli", model: "sonnet", credential_configured: true },
         }),
       credentialStatuses: [],
       claudeCliStatus: async () => ({ state: "ready-api-key" }),
@@ -640,6 +641,34 @@ describe("coach route", () => {
     );
     await user.click(openSetup);
     expect(subject.openSetup).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the route active when the active provider is outside the catalogue", async () => {
+    await renderSettings({
+      llm: () => ({
+        ...llmConfiguration(),
+        active: { provider: "codex-agent", model: "synthetic-codex" },
+      }),
+    });
+
+    const coach = within(screen.getByRole("region", { name: "Coach" }));
+    expect(coach.getByText("Codex agent (experimental) → synthetic-codex")).toBeInTheDocument();
+    expect(coach.getByText("Active")).toHaveAttribute("data-state", "active");
+    expect(
+      coach.getByText("Currently active: Codex agent (experimental) · synthetic-codex"),
+    ).toBeInTheDocument();
+    expect(coach.queryByText("Not configured")).toBeNull();
+  });
+
+  it("marks the route not configured when no provider is active", async () => {
+    await renderSettings({ llm: () => ({ ...llmConfiguration(), active: null }) });
+
+    const coach = within(screen.getByRole("region", { name: "Coach" }));
+    expect(coach.getByText("Not configured")).toBeInTheDocument();
+    expect(coach.getByText("Not active")).toHaveAttribute("data-state", "failed");
+    expect(
+      coach.getByText("Active coach settings are unavailable or not configured."),
+    ).toBeInTheDocument();
   });
 });
 

@@ -185,7 +185,7 @@ describe("credential settings controller", () => {
       runtime: runtime({
         provider: "claude-cli",
         model: "sonnet",
-        credential_configured: false,
+        credential_configured: true,
       }),
       statuses: [],
       chatGpt: { state: "absent", runtimeReady: false },
@@ -210,7 +210,7 @@ describe("credential settings controller", () => {
 
   it("shows api-key billing on the status row instead of a subscription claim", async () => {
     const { controller } = createSubject({
-      runtime: runtime({ provider: "claude-cli", model: "sonnet", credential_configured: false }),
+      runtime: runtime({ provider: "claude-cli", model: "sonnet", credential_configured: true }),
       statuses: [],
       chatGpt: { state: "absent", runtimeReady: false },
       claudeCli: async () => ({ state: "ready-api-key" }),
@@ -225,7 +225,7 @@ describe("credential settings controller", () => {
 
   it("explains a turned-off lane and a failed probe without inventing an identity", async () => {
     const disabled = createSubject({
-      runtime: runtime({ provider: "claude-cli", model: "sonnet", credential_configured: false }),
+      runtime: runtime({ provider: "claude-cli", model: "sonnet", credential_configured: true }),
       statuses: [],
       chatGpt: { state: "absent", runtimeReady: false },
       claudeCli: async () => ({ state: "disabled" }),
@@ -240,7 +240,7 @@ describe("credential settings controller", () => {
     });
 
     const unavailable = createSubject({
-      runtime: runtime({ provider: "claude-cli", model: "sonnet", credential_configured: false }),
+      runtime: runtime({ provider: "claude-cli", model: "sonnet", credential_configured: true }),
       statuses: [],
       chatGpt: { state: "absent", runtimeReady: false },
       claudeCli: async () => {

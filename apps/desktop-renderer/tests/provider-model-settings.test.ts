@@ -189,6 +189,57 @@ describe("provider and model settings controller", () => {
     });
   });
 
+  it("keeps the panel usable when the active provider is absent from the catalogue", async () => {
+    const { controller, subject, apply } = createSubject({
+      load: vi.fn(async () => configuration({ provider: "codex-agent", model: "gpt-codex" })),
+    });
+
+    await controller.activate();
+    expect(formState(controller)).toMatchObject({
+      status: "ready",
+      active: { provider: "codex-agent", model: "gpt-codex" },
+      draft: null,
+      dirty: false,
+      validationError: null,
+    });
+    expect(formState(controller).providers).toEqual(PROVIDERS);
+
+    subject.provider("openai");
+    expect(formState(controller)).toMatchObject({
+      draft: {
+        provider: { provider: "openai" },
+        modelChoice: "gpt-standard",
+      },
+      dirty: true,
+    });
+
+    subject.save();
+    await vi.waitFor(() => expect(controller.state().status).toBe("saved"));
+    expect(apply).toHaveBeenCalledWith({
+      provider: "openai",
+      model: "gpt-standard",
+      endpoint: { mode: "automatic" },
+    });
+    expect(formState(controller)).toMatchObject({
+      active: { provider: "openai", model: "gpt-standard" },
+      dirty: false,
+    });
+  });
+
+  it("treats an empty provider catalogue as an unavailable configuration", async () => {
+    const { controller } = createSubject({
+      load: vi.fn(async () => ({ schemaVersion: 1 as const, providers: [], active: null })),
+    });
+
+    await controller.activate();
+
+    expect(controller.state()).toEqual({
+      status: "error",
+      kind: "load",
+      reason: "configuration-unavailable",
+    });
+  });
+
   it("uses each provider default first and retains a previously edited provider draft", async () => {
     const { controller, subject } = createSubject({});
     await controller.activate();

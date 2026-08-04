@@ -174,10 +174,7 @@ export function createProviderModelSettingsController(input: {
               : configuration.providers.find(
                   (provider) => provider.provider === configuration.active?.provider,
                 );
-          if (
-            configuration.providers.length === 0 ||
-            (configuration.active !== null && !activeProvider)
-          ) {
+          if (configuration.providers.length === 0) {
             render({
               status: "error",
               kind: "load",
@@ -187,9 +184,9 @@ export function createProviderModelSettingsController(input: {
           }
           providerDrafts = new Map();
           const draft =
-            configuration.active === null
+            configuration.active === null || activeProvider === undefined
               ? null
-              : draftFor(activeProvider!, configuration.active.model);
+              : draftFor(activeProvider, configuration.active.model);
           if (draft !== null) providerDrafts.set(draft.provider.provider, draft);
           render({
             status: "ready",

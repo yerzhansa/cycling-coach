@@ -379,18 +379,21 @@ function persistRuntimeConfig(
 }
 
 function runtimeCredentialConfigured(configDir: string, config: Config): boolean {
-  if (config.llm.provider !== "openai-codex") return config.llm.apiKey.length > 0;
-  try {
-    const snapshot = loadStoredProfileSnapshot(
-      join(configDir, "auth-profiles.json"),
-      config.llm.authProfile ?? "openai-codex",
-    );
-    if (snapshot === null) return false;
-    credential(snapshot.profile);
-    return true;
-  } catch {
-    return false;
+  if (config.llm.provider === "openai-codex") {
+    try {
+      const snapshot = loadStoredProfileSnapshot(
+        join(configDir, "auth-profiles.json"),
+        config.llm.authProfile ?? "openai-codex",
+      );
+      if (snapshot === null) return false;
+      credential(snapshot.profile);
+      return true;
+    } catch {
+      return false;
+    }
   }
+  if (isKeylessProvider(config.llm.provider)) return true;
+  return config.llm.apiKey.length > 0;
 }
 
 function runtimeConfigSnapshot(

@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { unlinkSync } from "node:fs";
+import { existsSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1469,6 +1469,110 @@ describe("local coach composition", () => {
     ).toBeNull();
     await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
       llm: { provider: "openai-codex", credential_configured: false },
+    });
+    await lifecycle.close();
+  });
+
+  it.each(["claude-cli", "codex-agent"] as const)(
+    "reports %s as credential configured without an API key",
+    async (provider) => {
+      const home = await freshHome();
+      const initial: Config = {
+        ...config(home),
+        llm: { ...config(home).llm, provider, model: "sonnet", apiKey: "" },
+      };
+      const lifecycle = await compose(
+        home,
+        {
+          bootstrap: async () => reference(),
+          createRuntime: () => runtime(),
+          createBackend: () => backend(),
+          createRepository: () => ({
+            insertIfAbsent: async () => false,
+            readCurrent: async () => undefined,
+          }),
+          createResolver: () => missingResolver(),
+        },
+        fakeContext(home),
+        undefined,
+        initial,
+      );
+
+      await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+        llm: { provider, model: "sonnet", credential_configured: true },
+      });
+      await lifecycle.close();
+    },
+  );
+
+  it("keeps the ChatGPT profile check ahead of the keyless short circuit", async () => {
+    const home = await freshHome();
+    const initial: Config = {
+      ...config(home),
+      llm: {
+        ...config(home).llm,
+        provider: "openai-codex",
+        apiKey: "",
+        authProfile: "openai-codex",
+      },
+    };
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      undefined,
+      initial,
+    );
+
+    expect(existsSync(join(home.configDir, "auth-profiles.json"))).toBe(false);
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      llm: { provider: "openai-codex", credential_configured: false },
+    });
+    await lifecycle.close();
+  });
+
+  it("still reports a keyed provider from its stored API key alone", async () => {
+    const home = await freshHome();
+    const initial: Config = {
+      ...config(home),
+      llm: { ...config(home).llm, provider: "anthropic", apiKey: "" },
+    };
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      undefined,
+      initial,
+    );
+
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      llm: { provider: "anthropic", credential_configured: false },
+    });
+
+    await lifecycle.operations.configureRuntime({
+      llm: { provider: "anthropic", api_key: "obviously-fake-anthropic-key" },
+    });
+
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      llm: { provider: "anthropic", credential_configured: true },
     });
     await lifecycle.close();
   });

@@ -36,6 +36,14 @@ function modelLabel(form: ProviderModelFormState): string {
   );
 }
 
+function routeLabel(form: ProviderModelFormState): string | null {
+  if (form.draft !== null) {
+    return `${ONBOARDING_LLM_PROVIDER_LABELS[form.draft.provider.provider]} → ${modelLabel(form)}`;
+  }
+  if (form.active === null) return null;
+  return `${ONBOARDING_LLM_PROVIDER_LABELS[form.active.provider]} → ${form.active.model}`;
+}
+
 function feedbackCopy(state: ProviderModelSettingsState): string | null {
   if (state.status === "closed" || state.status === "loading") return "Loading coach settings…";
   if (state.status === "error" && state.kind === "load") {
@@ -71,12 +79,10 @@ export function CoachSection(): ReactElement {
   const canSave =
     editable !== null && draft !== null && editable.dirty && editable.validationError === null;
   const feedback = feedbackCopy(state);
-  const route =
-    editable === null || draft === null
-      ? "Not configured"
-      : `${ONBOARDING_LLM_PROVIDER_LABELS[draft.provider.provider]} → ${modelLabel(editable)}`;
+  const routeSummary = editable === null ? null : routeLabel(editable);
+  const route = routeSummary ?? "Not configured";
   const routeState =
-    draft === null ? "Not active" : editable?.dirty === true ? "Unsaved" : "Active";
+    routeSummary === null ? "Not active" : editable?.dirty === true ? "Unsaved" : "Active";
   const validation =
     editable?.validationError == null ? "" : COACH_VALIDATION_COPY[editable.validationError];
 
@@ -89,7 +95,7 @@ export function CoachSection(): ReactElement {
             <div className={styles.rowTitle}>Coach route</div>
             <div className={styles.rowDetail}>{route}</div>
           </div>
-          <span className={styles.runtime} data-state={draft === null ? "failed" : "active"}>
+          <span className={styles.runtime} data-state={routeSummary === null ? "failed" : "active"}>
             {routeState}
           </span>
         </div>
