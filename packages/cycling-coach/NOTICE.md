@@ -200,7 +200,7 @@ The desktop app's visual design system — the token set, control geometry, and
 surface treatment in `apps/desktop-renderer/src/theme/` (`tokens.css`,
 `surface.module.css`) and the styling that consumes them — is adapted from
 [T3 Code](https://github.com/t3-tools) by T3 Tools Inc., distributed under the
-MIT License. The "T3 Code" appearance palette is named for it.
+MIT License. Its color ramp ships as the "Cobalt" appearance palette.
 
 ### Original license (verbatim)
 
@@ -244,7 +244,7 @@ SOFTWARE.
   with an `::before` pseudo-element. This port emits the same edge as an inset
   `box-shadow` token (`--edge`) so it also applies to `<input>`, which cannot
   carry pseudo-elements.
-- **Palette engine.** The T3 Code color ramp is one of fifteen swappable
+- **Palette engine.** The T3 Code color ramp is one of thirteen swappable
   palettes rather than the app's only theme; geometry, typography and
   elevation tokens are shared by all of them.
 

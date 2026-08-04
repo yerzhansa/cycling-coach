@@ -88,17 +88,21 @@ function expectedProperties(paletteId: string, theme: ResolvedTheme): Map<string
 }
 
 describe("palette engine", () => {
-  it("ships fifteen palettes with Patrol first", () => {
-    expect(PALETTES).toHaveLength(15);
+  it("ships thirteen palettes with Patrol first and none named for a vendor", () => {
+    expect(PALETTES).toHaveLength(13);
     expect(PALETTES[0].id).toBe("patrol");
     expect(DEFAULT_PALETTE_ID).toBe("patrol");
-    expect(new Set(PALETTES.map((palette) => palette.id)).size).toBe(15);
+    expect(new Set(PALETTES.map((palette) => palette.id)).size).toBe(13);
+    for (const palette of PALETTES) {
+      expect(palette.id).not.toMatch(/claude|chatgpt|openai|anthropic|t3/iu);
+      expect(palette.name).not.toMatch(/claude|chatgpt|openai|anthropic|t3/iu);
+    }
   });
 
-  it("defines the T3 Code palette in light and dark appearances", () => {
-    expect(paletteById("t3code")).toEqual({
-      id: "t3code",
-      name: "T3 Code",
+  it("defines the Cobalt palette in light and dark appearances", () => {
+    expect(paletteById("cobalt")).toEqual({
+      id: "cobalt",
+      name: "Cobalt",
       l: {
         bg: "#fcfcfc",
         rail: "#fafafa",
@@ -126,8 +130,8 @@ describe("palette engine", () => {
     });
   });
 
-  it("keeps T3 Code text and status colours readable in both appearances", () => {
-    const palette = paletteById("t3code");
+  it("keeps Cobalt text and status colours readable in both appearances", () => {
+    const palette = paletteById("cobalt");
     for (const ramp of [palette.l, palette.d]) {
       expect(contrastRatio(ramp.ink, ramp.bg)).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(ramp.ink2, ramp.bg)).toBeGreaterThanOrEqual(4.5);
