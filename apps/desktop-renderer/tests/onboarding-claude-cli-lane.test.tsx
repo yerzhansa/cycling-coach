@@ -286,6 +286,8 @@ describe("claude-cli onboarding lane", () => {
     expect(rowSubtitle("ai")).toBe("Powers your coach · sign in from a terminal to finish");
     await openLaneMenu(user);
     expect(laneItem()).not.toBeNull();
+    expect(claudeCliNoteText()).not.toBeNull();
+    expect(screen.getByText("Check again")).toBeInTheDocument();
     wizard.controller.dispose();
   });
 

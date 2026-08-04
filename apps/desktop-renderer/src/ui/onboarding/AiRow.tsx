@@ -16,6 +16,7 @@ import {
   offeredLanes,
   type SetupLane,
 } from "../../onboarding/lanes.js";
+import type { LlmSelectionDraft } from "../../onboarding/selection.js";
 import {
   AI_CANCEL_LABEL,
   AI_PANEL_ANNOUNCEMENTS,
@@ -71,21 +72,66 @@ export function AiRow(props: {
   const provider = draft?.provider.provider ?? null;
   const activeLane = laneForProvider(provider);
   const [picked, setPicked] = useState<SetupLane | null>(null);
-  const [restoreProvider, setRestoreProvider] = useState<string | null>(null);
+  const [restoreDraft, setRestoreDraft] = useState<LlmSelectionDraft | null>(null);
   const [panelLane, setPanelLane] = useState<SetupLane | null>(null);
-  const wasBusy = useRef(busy);
+  const [operation, setOperation] = useState<
+    | "provider-requested"
+    | "provider-running"
+    | "chatgpt-requested"
+    | "chatgpt-running"
+    | null
+  >(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    if (wasBusy.current && !busy && ready && wizard.fixedError === null) setPanelLane(null);
-    wasBusy.current = busy;
-  }, [busy, ready, wizard.fixedError]);
+    if (operation === "provider-requested" || operation === "chatgpt-requested") {
+      const ownsStart =
+        operation === "provider-requested"
+          ? surface.lastCommit === "provider"
+          : wizard.chatGptState === "pending";
+      if (busy && ownsStart) {
+        setOperation(operation === "provider-requested" ? "provider-running" : "chatgpt-running");
+      } else if (!busy) {
+        setOperation(null);
+      }
+      return;
+    }
+    if (operation !== null && !busy) {
+      const succeeded =
+        wizard.fixedError === null &&
+        (operation === "provider-running"
+          ? ready
+          : wizard.chatGptState === "configured" && wizard.chatGptRuntimeReady);
+      if (succeeded) {
+        setPanelLane(null);
+        setPicked(null);
+        setRestoreDraft(null);
+      }
+      setOperation(null);
+    }
+  }, [
+    busy,
+    operation,
+    ready,
+    surface.lastCommit,
+    wizard.chatGptRuntimeReady,
+    wizard.chatGptState,
+    wizard.fixedError,
+  ]);
 
-  const lane = picked ?? (ready ? activeLane : null);
+  const activeProviderStored =
+    provider === "claude-cli" ||
+    (provider === "openai-codex" && wizard.chatGptState === "configured") ||
+    DESKTOP_CREDENTIAL_SLOTS.some(
+      (slot) => slot === provider && wizard.credentialStatus[slot] === "configured",
+    );
+  const hasActiveSelection =
+    configuration?.active?.provider === provider && activeProviderStored;
+  const lane = picked ?? (ready || hasActiveSelection ? activeLane : null);
   const panel =
     panelLane === "openai-codex" ? "chatgpt" : panelLane === "api-key" ? "api-key" : null;
   const lanes = offeredLanes(configuration, wizard, lane);
-  const note = claudeCliNote(configuration, wizard, lane);
+  const note = claudeCliNote(configuration, wizard);
   const copy = aiRowCopy(lane, wizard, ready);
   const keyProviders = apiKeyProviders(configuration);
   const keySlot = DESKTOP_CREDENTIAL_SLOTS.find((slot) => slot === draft?.provider.provider);
@@ -99,27 +145,67 @@ export function AiRow(props: {
   };
 
   const choose = (next: SetupLane): void => {
-    if (next !== lane) {
-      const target = providerForLane(next);
-      setRestoreProvider(provider);
-      setPicked(next);
-      if (target !== null && target !== provider) actions?.selectProvider(target);
+    const opensPanel =
+      next === "api-key" ||
+      (next === "openai-codex" &&
+        !(wizard.chatGptState === "configured" && wizard.chatGptRuntimeReady));
+    if (opensPanel && panelLane === null) {
+      setRestoreDraft(draft === null ? null : { ...draft });
+    } else if (!opensPanel) {
+      setRestoreDraft(null);
     }
-    setPanelLane(next === "claude-cli" ? null : next);
+    const target = providerForLane(next);
+    const switchesLane = next !== lane;
+    if (switchesLane) setPicked(next);
+    const reactivatesCurrentKeylessProvider =
+      target === provider &&
+      !ready &&
+      (next === "claude-cli" ||
+        (next === "openai-codex" && wizard.chatGptState === "configured"));
+    if (
+      target !== null &&
+      ((switchesLane && target !== provider) || reactivatesCurrentKeylessProvider) &&
+      actions !== null
+    ) {
+      if (
+        next === "claude-cli" ||
+        (next === "openai-codex" && wizard.chatGptState === "configured")
+      ) {
+        setOperation("provider-requested");
+      }
+      actions.selectProvider(target);
+    }
+    setPanelLane(opensPanel ? next : null);
   };
 
   const revert = (): void => {
-    if (restoreProvider !== null && restoreProvider !== provider) {
-      actions?.selectProvider(restoreProvider);
+    if (restoreDraft !== null) {
+      actions?.selectProvider(restoreDraft.provider.provider);
+      actions?.selectModel(restoreDraft.modelChoice);
+      actions?.setCustomModel(restoreDraft.customModel);
+      actions?.setEndpointMode(restoreDraft.endpointMode);
+      actions?.setCustomEndpoint(restoreDraft.customEndpoint);
     }
     setPicked(null);
-    setRestoreProvider(null);
+    setRestoreDraft(null);
     setPanelLane(null);
     triggerRef.current?.focus();
   };
 
-  const revertLane = laneForProvider(restoreProvider);
+  const revertLane = laneForProvider(restoreDraft?.provider.provider ?? null);
   const revertLabel = revertLane === null ? "Cancel" : `Keep ${SETUP_LANE_LABELS[revertLane]}`;
+
+  const save = (): void => {
+    if (actions === null || busy) return;
+    setOperation("provider-requested");
+    actions.saveModelKey();
+  };
+
+  const login = (): void => {
+    if (actions === null || busy || wizard.chatGptState === "pending") return;
+    setOperation("chatgpt-requested");
+    actions.startChatGptLogin();
+  };
 
   return (
     <>
@@ -154,7 +240,7 @@ export function AiRow(props: {
                   className="w-[262px] rounded-md border border-line-2 bg-surface p-[5px] shadow-elev-3"
                 >
                   <Menu.RadioGroup value={lane}>
-                    <Menu.GroupLabel className="px-[9px] pt-1.5 pb-1 text-[11px] font-semibold tracking-wider text-ink-3 uppercase">
+                    <Menu.GroupLabel className="px-[9px] pt-1.5 pb-1 text-[11px] font-semibold tracking-wider text-ink-2 uppercase">
                       {SETUP_MENU_LABEL}
                     </Menu.GroupLabel>
                     {lanes.map((entry) => (
@@ -177,7 +263,7 @@ export function AiRow(props: {
                           <b className="block text-[13.5px] font-medium">
                             {SETUP_LANE_LABELS[entry]}
                           </b>
-                          <i className="mt-px block text-xs text-ink-3 not-italic">
+                          <i className="mt-px block text-xs text-ink-2 not-italic">
                             {SETUP_LANE_MENU_HINTS[entry]}
                           </i>
                         </span>
@@ -188,7 +274,7 @@ export function AiRow(props: {
                     <div className="mt-1 border-t border-line px-[9px] pt-2 pb-1">
                       <p
                         data-setup-note="claude-cli"
-                        className="text-[11.5px] leading-normal text-ink-3"
+                        className="text-[11.5px] leading-normal text-ink-2"
                       >
                         {note}
                       </p>
@@ -215,9 +301,7 @@ export function AiRow(props: {
               type="button"
               className={BUTTON_SOLID_SM}
               disabled={busy || wizard.chatGptState === "pending"}
-              onClick={() => {
-                actions?.startChatGptLogin();
-              }}
+              onClick={login}
             >
               {wizard.chatGptState === "pending" ? CHATGPT_PENDING_LABEL : CHATGPT_SIGN_IN_LABEL}
             </button>
@@ -271,9 +355,7 @@ export function AiRow(props: {
                     label={`${ONBOARDING_LLM_PROVIDER_LABELS[draft.provider.provider]} API key`}
                     disabled={busy}
                     {...(describedBy === undefined ? {} : { describedBy })}
-                    onEnter={() => {
-                      actions?.saveModelKey();
-                    }}
+                    onEnter={save}
                   />
                 </div>
               )}
@@ -283,9 +365,7 @@ export function AiRow(props: {
                   className={BUTTON_SOLID_SM}
                   disabled={busy}
                   aria-label={AI_SAVE_LABEL}
-                  onClick={() => {
-                    actions?.saveModelKey();
-                  }}
+                  onClick={save}
                 >
                   Save
                 </button>

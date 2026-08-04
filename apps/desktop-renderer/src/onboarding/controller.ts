@@ -22,7 +22,7 @@ import {
   createOnboardingState,
   hasTrainingData,
   intakeComplete,
-  nextStep,
+  selectedProviderReady,
   toDesktopIntakeFlags,
   toOnboardingCompletion,
   withBusy,
@@ -169,6 +169,19 @@ export function createOnboardingController(
   let llmDrafts: Record<string, LlmSelectionDraft> = {};
   let lastCommit: SetupCommit = null;
 
+  const selectedProviderIsReady = (): boolean => {
+    const parsed = llmSelectionFromDraft(llmDraft);
+    return parsed.error === null
+      ? selectedProviderReady(state, parsed.selection, llmConfiguration?.active ?? null)
+      : false;
+  };
+
+  const currentReadiness = (): OnboardingReadiness => ({
+    provider: selectedProviderIsReady(),
+    trainingData: hasTrainingData(state),
+    intake: intakeComplete(state.intake),
+  });
+
   const publish = (): void => {
     options.view.render({
       open: presenting,
@@ -178,11 +191,7 @@ export function createOnboardingController(
       draft: llmDraft ?? null,
       rideImport: rideImportState,
       focusSeq,
-      readiness: {
-        provider: selectedProviderIsReady(),
-        trainingData: hasTrainingData(state),
-        intake: intakeComplete(state.intake),
-      },
+      readiness: currentReadiness(),
       lastCommit,
     });
   };
@@ -202,26 +211,17 @@ export function createOnboardingController(
     options.onRideImportPresentationChange?.(next);
   };
 
-  const status = (slot: DesktopCredentialSlot): CredentialSlotStatus =>
-    credentialSlotStatus({ statuses: credentialStatuses, wizard: state }, slot);
-
   const setFixedError = (fixedError: OnboardingErrorCode | null): void => {
     state = { ...state, fixedError };
     publish();
   };
 
-  const selectedProviderIsReady = (): boolean => {
-    const provider = llmDraft?.provider.provider;
-    if (provider === undefined) return false;
-    if (llmConfiguration?.active?.provider === provider) return true;
-    if (provider === "openai-codex") {
-      return state.chatGptState === "configured" && state.chatGptRuntimeReady;
-    }
-    if (provider === "claude-cli") {
-      return state.claudeCliState === "ready" || state.claudeCliState === "ready-api-key";
-    }
-    if (provider === "codex-agent") return false;
-    return status(provider).state === "configured" && status(provider).runtimeState === "active";
+  const recordActiveSelection = (selection: OnboardingLlmSelection): void => {
+    if (llmConfiguration === undefined) return;
+    llmConfiguration = {
+      ...llmConfiguration,
+      active: { provider: selection.provider, model: selection.model },
+    };
   };
 
   const close = (): void => {
@@ -267,6 +267,18 @@ export function createOnboardingController(
     return statuses.status === "fulfilled";
   };
 
+  const invalidateCredentialRuntimeStatuses = (
+    slots: ReadonlySet<DesktopCredentialSlot>,
+  ): void => {
+    if (slots.size === 0) return;
+    const credentialRuntimeStatus = { ...state.credentialRuntimeStatus };
+    for (const slot of slots) credentialRuntimeStatus[slot] = null;
+    state = { ...state, credentialRuntimeStatus };
+    credentialStatuses = credentialStatuses.map((status) =>
+      slots.has(status.slot) ? { ...status, runtimeState: null } : status,
+    );
+  };
+
   const savePasswordControls = async (
     expectedVisit: number,
     slots: readonly DesktopCredentialSlot[],
@@ -289,12 +301,16 @@ export function createOnboardingController(
       nonRuntimeFailure: OnboardingErrorCode | null;
     } = { failure: null, nonRuntimeFailure: null };
     const runtimeUnavailableSlots = new Set<DesktopCredentialSlot>();
+    const attemptedSlots = new Set<DesktopCredentialSlot>();
     let statusRefreshFailed = false;
     for (const input of controls) {
       if (visit !== expectedVisit || !presenting) return null;
       try {
         if (input.value.trim().length === 0) continue;
+        const attemptedSlot = credentialSlotFor(input.dataset.slot);
+        if (attemptedSlot === undefined) continue;
         attempted = true;
+        attemptedSlots.add(attemptedSlot);
         let configured = false;
         const appliesSelection = input.dataset.slot === selectedSlot;
         await handoffCredential(
@@ -332,10 +348,12 @@ export function createOnboardingController(
       if (disposed || visit !== expectedVisit || !presenting) return null;
     }
     if (attempted) {
-      if (!(await refreshStatuses(expectedVisit))) {
-        statusRefreshFailed = true;
-      }
+      const refreshed = await refreshStatuses(expectedVisit);
       if (disposed || visit !== expectedVisit || !presenting) return null;
+      if (!refreshed) {
+        statusRefreshFailed = true;
+        invalidateCredentialRuntimeStatuses(attemptedSlots);
+      }
     }
     if (statusRefreshFailed) {
       return {
@@ -393,7 +411,9 @@ export function createOnboardingController(
     if (saved === null) return;
     let saveError = saved.error;
     if (saveError === "runtime-unavailable") saveError = "model-runtime-unavailable";
-    if (saveError === null && !saved.selectedApplied) {
+    if (saveError === null && saved.selectedApplied) {
+      recordActiveSelection(parsedSelection.selection);
+    } else if (saveError === null) {
       try {
         const applied = await options.bridge.applyLlmSelection(parsedSelection.selection);
         if (visit !== submitVisit || !presenting) return;
@@ -405,17 +425,10 @@ export function createOnboardingController(
                 ? "model-runtime-unavailable"
                 : "invalid-input";
         } else {
-          if (llmConfiguration !== undefined) {
-            llmConfiguration = {
-              ...llmConfiguration,
-              active: {
-                provider: parsedSelection.selection.provider,
-                model: parsedSelection.selection.model,
-              },
-            };
-          }
           if (!(await refreshStatuses(submitVisit))) {
             saveError = "credential-status-unavailable";
+          } else {
+            recordActiveSelection(parsedSelection.selection);
           }
         }
       } catch {
@@ -450,16 +463,11 @@ export function createOnboardingController(
   };
 
   const walkGates = (): OnboardingErrorCode | null => {
-    let previous = state;
-    let current = nextStep(previous, selectedProviderIsReady());
-    if (current.step === previous.step) return current.fixedError ?? "credential-required";
-    previous = current;
-    current = nextStep(previous);
-    if (current.step === previous.step) return current.fixedError ?? "training-data-required";
-    previous = current;
-    current = nextStep(previous);
-    if (current.step === previous.step) return current.fixedError ?? "intake-incomplete";
-    return current.step === "ready" ? null : "intake-incomplete";
+    const readiness = currentReadiness();
+    if (!readiness.provider) return "credential-required";
+    if (!readiness.trainingData) return "training-data-required";
+    if (!readiness.intake) return "intake-incomplete";
+    return null;
   };
 
   const finishSetup = async (): Promise<void> => {
@@ -584,6 +592,7 @@ export function createOnboardingController(
     retrySavedKeys(): void {
       if (disposed || !presenting || state.busy) return;
       const retryVisit = visit;
+      lastCommit = "training";
       state = withBusy(state, true);
       focusTitle();
       publish();
@@ -637,6 +646,7 @@ export function createOnboardingController(
           }
           state = withChatGptLoginResult(state, result);
           if (result.status === "configured") {
+            recordActiveSelection(parsedSelection.selection);
             await refreshStatuses(loginVisit).catch(() => undefined);
           }
           if (disposed || visit !== loginVisit || !presenting) return;
@@ -683,6 +693,11 @@ export function createOnboardingController(
       if (next === undefined) return;
       setLlmDraft(llmDrafts[next.provider] ?? draftForProvider(next));
       setFixedError(null);
+      const canActivateWithoutInput =
+        (provider === "claude-cli" &&
+          (state.claudeCliState === "ready" || state.claudeCliState === "ready-api-key")) ||
+        (provider === "openai-codex" && state.chatGptState === "configured");
+      if (canActivateWithoutInput && !selectedProviderIsReady()) void saveModelKey();
     },
     selectModel(model): void {
       if (llmDraft === undefined) return;

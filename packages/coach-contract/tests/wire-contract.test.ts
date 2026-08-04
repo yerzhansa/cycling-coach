@@ -223,6 +223,7 @@ describe("coach request and event projection", () => {
           swim_skill_floor: null,
           continuous_distance_capable: null,
           open_water_comfort: null,
+          prior_bsi: false,
           clinician_cleared: null,
           injury_status: "none",
         },
@@ -530,6 +531,7 @@ describe("coach request and event projection", () => {
       swim_skill_floor: null,
       continuous_distance_capable: null,
       open_water_comfort: null,
+      prior_bsi: false,
       clinician_cleared: null,
       injury_status: "none",
     } as const;
@@ -540,10 +542,18 @@ describe("coach request and event projection", () => {
     } as const;
     expect(SaveIntakeRpcParamsSchema.parse(safeIntake)).toEqual(safeIntake);
     expect(SaveIntakeRpcParamsSchema.parse(clearedIntake)).toEqual(clearedIntake);
+    const historicalIntake = {
+      ...safeIntake,
+      prior_bsi: true,
+      clinician_cleared: true,
+    } as const;
+    expect(SaveIntakeRpcParamsSchema.parse(historicalIntake)).toEqual(historicalIntake);
+    const { prior_bsi: _priorBsi, ...withoutPriorBsi } = safeIntake;
     for (const invalid of [
+      withoutPriorBsi,
       { ...safeIntake, swim_skill_floor: "novice" },
       { ...safeIntake, extra: true },
-      { ...safeIntake, prior_bsi: false },
+      { ...safeIntake, prior_bsi: true },
       { ...safeIntake, clinician_cleared: true },
       { ...clearedIntake, clinician_cleared: null },
     ]) {
@@ -1124,25 +1134,30 @@ describe("coach request and event projection", () => {
 });
 
 describe("handshake", () => {
-  it("round trips client, accepted, and both mismatch directions", () => {
+  it("accepts aligned protocol 11 peers and classifies mismatches in both directions", () => {
     const client = createClientHandshakeFrame("synthetic-test-token");
+    expect(client.clientProtocolVersion).toBe(11);
     expect(ClientHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(client)))).toEqual(client);
-    const accepted = createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION);
+    const accepted = createAcceptedServerHandshakeFrame("service-managed", 11);
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual(
       accepted,
     );
-    const older = createVersionMismatchServerHandshakeFrame(
+    const oldClient = createVersionMismatchServerHandshakeFrame(
       "ephemeral-client-started",
-      PROTOCOL_VERSION - 1,
-      PROTOCOL_VERSION,
+      10,
+      11,
     );
-    const newer = createVersionMismatchServerHandshakeFrame(
+    const oldServer = createVersionMismatchServerHandshakeFrame(
       "unmanaged-foreground",
-      PROTOCOL_VERSION + 1,
-      PROTOCOL_VERSION,
+      12,
+      11,
     );
-    expect(ServerHandshakeFrameSchema.parse(older)).toEqual(older);
-    expect(ServerHandshakeFrameSchema.parse(newer)).toEqual(newer);
+    expect(ServerHandshakeFrameSchema.parse(oldClient)).toEqual(oldClient);
+    expect(oldClient.direction).toBe("client-older");
+    expect(ServerHandshakeFrameSchema.parse(oldServer)).toEqual(oldServer);
+    expect(oldServer.direction).toBe("client-newer");
+    expect(() => createAcceptedServerHandshakeFrame("service-managed", 10, 11)).toThrow();
+    expect(() => createAcceptedServerHandshakeFrame("service-managed", 12, 11)).toThrow();
   });
 
   it("rejects invalid token and fail-open handshake shapes", () => {
@@ -1227,7 +1242,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version eleven", () => {
+  it("keeps protocol version eleven", () => {
     expect(PROTOCOL_VERSION).toBe(11);
   });
 });

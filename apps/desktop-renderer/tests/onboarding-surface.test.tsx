@@ -96,7 +96,7 @@ const CREDENTIAL_REFUSAL_CASES = [
   {
     reason: "runtime-unavailable",
     fixedError: "model-runtime-unavailable",
-    copy: "Your provider choice is saved, but it is not active yet. Choose Save to try it again.",
+    copy: "Your provider choice is saved, but it is not active yet. Try activating it again.",
   },
 ] as const satisfies ReadonlyArray<{
   readonly reason: CredentialWriteRefusalReason;
@@ -250,7 +250,7 @@ describe("mounted onboarding", () => {
       expect(wizard.controller.state().fixedError).toBe("model-runtime-unavailable");
     });
     expect(errorText()).toBe(
-      "Your provider choice is saved, but it is not active yet. Choose Save to try it again.",
+      "Your provider choice is saved, but it is not active yet. Try activating it again.",
     );
     expect(retryButtons()).toHaveLength(0);
     expect(secret.value).toBe("");
@@ -303,7 +303,7 @@ describe("mounted onboarding", () => {
     });
     expect(wizard.controller.state().fixedError).toBe("model-runtime-unavailable");
     expect(errorText()).toBe(
-      "Your provider choice is saved, but it is not active yet. Choose Save to try it again.",
+      "Your provider choice is saved, but it is not active yet. Try activating it again.",
     );
     expect(retryButtons()).toHaveLength(0);
     expect(bridge.retryFailedCredentials).not.toHaveBeenCalled();
@@ -890,7 +890,10 @@ describe("mounted onboarding", () => {
     const exceptionDetail = "status exception detail must stay private";
     const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
     bridge.credentialStatuses
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { slot: "anthropic", state: "configured", runtimeState: "active" },
+        { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+      ])
       .mockRejectedValueOnce(new Error(exceptionDetail));
     bridge.writeCredential.mockImplementation(async ({ slot }) => ({
       slot,
@@ -899,6 +902,8 @@ describe("mounted onboarding", () => {
     }));
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await answerIntake(user);
+    expect(primaryButton()).toBeEnabled();
     await openApiKeyPanel(user);
     const secret = seedSecret("anthropic", randomUUID());
 
@@ -912,8 +917,41 @@ describe("mounted onboarding", () => {
     );
     expect(document.body.textContent).not.toContain(exceptionDetail);
     expect(rowState("ai")).toBe("pending");
+    expect(primaryButton()).toBeDisabled();
     expect(secret.value).toBe("");
     expect(bridge.credentialStatuses).toHaveBeenCalledTimes(2);
+    wizard.controller.dispose();
+  });
+
+  it("fails training readiness closed when a replacement key status cannot be refreshed", async () => {
+    const user = userEvent.setup();
+    const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
+    bridge.credentialStatuses
+      .mockResolvedValueOnce([
+        { slot: "anthropic", state: "configured", runtimeState: "active" },
+        { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+      ])
+      .mockRejectedValueOnce(new Error("private status failure"));
+    bridge.writeCredential.mockImplementation(async ({ slot }) => ({
+      slot,
+      status: "refused",
+      reason: "runtime-unavailable",
+    }));
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+    await answerIntake(user);
+    expect(primaryButton()).toBeEnabled();
+    await openTrainingPanel(user);
+    seedSecret("intervals-icu", randomUUID());
+
+    await saveTrainingKey(user);
+
+    await waitFor(() => {
+      expect(wizard.controller.state().fixedError).toBe("credential-status-unavailable");
+    });
+    expect(rowState("training")).toBe("pending");
+    expect(primaryButton()).toBeDisabled();
+    expect(document.body.textContent).not.toContain("private status failure");
     wizard.controller.dispose();
   });
 
@@ -1171,6 +1209,7 @@ describe("mounted onboarding", () => {
         swim_skill_floor: null,
         continuous_distance_capable: null,
         open_water_comfort: null,
+        prior_bsi: false,
         clinician_cleared: null,
         injury_status: "none",
       });
@@ -1211,6 +1250,7 @@ describe("mounted onboarding", () => {
       swim_skill_floor: null,
       continuous_distance_capable: null,
       open_water_comfort: null,
+      prior_bsi: false,
       clinician_cleared: true,
       injury_status: "returning",
     });

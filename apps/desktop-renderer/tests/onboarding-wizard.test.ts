@@ -134,6 +134,7 @@ describe("desktop onboarding wizard", () => {
       swim_skill_floor: null,
       continuous_distance_capable: null,
       open_water_comfort: null,
+      prior_bsi: false,
       clinician_cleared: null,
       injury_status: "none",
     });
@@ -145,6 +146,7 @@ describe("desktop onboarding wizard", () => {
           swim_skill_floor: null,
           continuous_distance_capable: null,
           open_water_comfort: null,
+          prior_bsi: false,
           clinician_cleared: null,
           injury_status: "none",
         },
@@ -298,7 +300,8 @@ describe("desktop onboarding wizard", () => {
     expect(errors).not.toMatch(/\bContinue\b/u);
     expect(errors).not.toMatch(/\bBack\b/u);
     expect(errors).not.toMatch(/\bFinish setup\b/u);
-    expect(errors).toContain("Choose Save to try it again.");
+    expect(errors).not.toContain("Choose Save to try it again.");
+    expect(errors).toContain("Try activating it again.");
     expect(copy).toContain('export const RETRY_SAVED_KEYS_LABEL = "Retry saved keys"');
   });
 

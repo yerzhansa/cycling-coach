@@ -73,7 +73,7 @@ export function IntakeRows(props: {
         id="injury-status"
         status="none"
         title="Injury status right now"
-        subtitle="Changes how hard the coach pushes."
+        subtitle="Records your current injury or return context."
         titleFor="onboarding-injury-status"
         trailing={
           <IntakeSelect
@@ -96,7 +96,7 @@ export function IntakeRows(props: {
           id="clinician-cleared"
           status="none"
           title="Cleared by a clinician"
-          subtitle="Needed before we plan around an injury."
+          subtitle="An answer is required before continuing."
           titleFor="onboarding-clinician-cleared"
           trailing={
             <IntakeSelect

@@ -75,10 +75,9 @@ export function aiRowCopy(
 export function claudeCliNote(
   configuration: OnboardingLlmConfiguration | null,
   wizard: OnboardingState,
-  currentLane: SetupLane | null = null,
 ): string | null {
   if (!offersProvider(configuration, "claude-cli")) return null;
-  if (offeredLanes(configuration, wizard, currentLane).includes("claude-cli")) return null;
+  if (offeredLanes(configuration, wizard).includes("claude-cli")) return null;
   return claudeCliPresentation(wizard.claudeCliState).detail;
 }
 

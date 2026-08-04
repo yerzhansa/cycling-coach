@@ -22,7 +22,7 @@ export const ERROR_COPY: Readonly<Record<OnboardingErrorCode, string>> = {
   "model-selection-required": "Choose a model or enter a custom model name.",
   "endpoint-invalid": "Enter a valid HTTPS endpoint, or a loopback HTTP endpoint.",
   "model-runtime-unavailable":
-    "Your provider choice is saved, but it is not active yet. Choose Save to try it again.",
+    "Your provider choice is saved, but it is not active yet. Try activating it again.",
   "training-account-mismatch":
     "That intervals.icu key belongs to a different athlete than the training history already stored. Switching accounts is not supported yet.",
   "training-data-required": "Connect intervals.icu or import at least one ride file.",

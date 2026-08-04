@@ -6,7 +6,6 @@ import syncState005 from "./005_sync_state.sql";
 import incremental006 from "./006_incremental_ingest.sql";
 import syncFailure007 from "./007_sync_failure.sql";
 import storeOwner008 from "./008_store_owner.sql";
-import dropPriorBsi009 from "./009_drop_prior_bsi.sql";
 
 export interface Migration {
   /** Ascending schema version this migration advances the store to. */
@@ -30,5 +29,4 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 6, name: "006_incremental_ingest", sql: incremental006 },
   { version: 7, name: "007_sync_failure", sql: syncFailure007 },
   { version: 8, name: "008_store_owner", sql: storeOwner008 },
-  { version: 9, name: "009_drop_prior_bsi", sql: dropPriorBsi009 },
 ];

@@ -60,7 +60,7 @@ export function SetupRow(props: {
       <StatusDisc status={props.status} />
       <div className="min-w-0 flex-1">
         {title}
-        <span className="mt-px block text-xs text-ink-3">{props.subtitle}</span>
+        <span className="mt-px block text-xs text-ink-2">{props.subtitle}</span>
         <span
           className="sr-only"
           role="status"

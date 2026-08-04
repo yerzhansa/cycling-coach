@@ -103,10 +103,10 @@ export function OnboardingWizard(): ReactElement | null {
         {importCopy}
       </p>
       <footer className="mt-3.5 flex items-center justify-between gap-3 border-t border-line pt-3.5">
-        <span className="text-xs text-ink-3">{FOOTER_NOTE}</span>
+        <span className="text-xs text-ink-2">{FOOTER_NOTE}</span>
         <SetupError surface={surface} section="footer" />
         {outstanding === null ? null : (
-          <span data-setup-outstanding={outstanding} className="text-xs text-ink-3">
+          <span data-setup-outstanding={outstanding} className="text-xs text-ink-2">
             {OUTSTANDING_NOTE[outstanding]}
           </span>
         )}

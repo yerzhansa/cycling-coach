@@ -894,7 +894,7 @@ describe("incremental backfill pages", () => {
     expect(baseFetch).toHaveBeenCalledOnce();
     const upgraded = openSqliteStorage(storePath);
     try {
-      expect(await upgraded.get("PRAGMA user_version")).toEqual({ user_version: 9 });
+      expect(await upgraded.get("PRAGMA user_version")).toEqual({ user_version: 8 });
       expect(await upgraded.get("SELECT count(*) AS count FROM store_owner")).toEqual({ count: 1 });
       expect(await dumpStore(upgraded)).toBe(before);
     } finally {

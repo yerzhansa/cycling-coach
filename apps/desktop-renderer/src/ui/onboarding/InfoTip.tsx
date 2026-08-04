@@ -12,7 +12,7 @@ export function InfoTip(props: {
       <Tooltip.Trigger
         data-info-tip=""
         aria-label={props.label}
-        className="grid size-[15px] shrink-0 appearance-none place-items-center bg-transparent p-0 text-ink-3 transition-colors hover:text-ink focus-visible:text-ink motion-reduce:transition-none"
+        className="grid size-[15px] shrink-0 appearance-none place-items-center bg-transparent p-0 text-ink-2 transition-colors hover:text-ink focus-visible:text-ink motion-reduce:transition-none"
       >
         <Info size={14} strokeWidth={2.25} aria-hidden="true" />
       </Tooltip.Trigger>

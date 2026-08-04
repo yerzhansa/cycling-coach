@@ -3,6 +3,7 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OnboardingLlmConfiguration } from "../src/onboarding/bridge.js";
+import { API_KEY_PANEL_HINT, FOOTER_NOTE, SETUP_MENU_LABEL } from "../src/ui/onboarding/copy.js";
 import {
   chooseLane,
   claudeCliNoteText,
@@ -193,6 +194,131 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
+  it("selects an already configured ChatGPT lane without asking the athlete to sign in again", async () => {
+    const user = userEvent.setup();
+    const bridge = claudeReadyBridge();
+    bridge.chatGptStatus.mockResolvedValue({ state: "configured", runtimeReady: true });
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+    await waitFor(() => {
+      expect(rowState("ai")).toBe("ready");
+    });
+
+    await chooseLane(user, "openai-codex");
+
+    await waitFor(() => {
+      expect(rowState("ai")).toBe("ready");
+    });
+    expect(panel("chatgpt")).toBeNull();
+    expect(bridge.chatGptLogin).not.toHaveBeenCalled();
+    wizard.controller.dispose();
+  });
+
+  it("closes ChatGPT setup after a stored profile is activated", async () => {
+    const user = userEvent.setup();
+    const bridge = claudeReadyBridge();
+    bridge.chatGptStatus
+      .mockResolvedValueOnce({ state: "configured", runtimeReady: false })
+      .mockResolvedValueOnce({ state: "configured", runtimeReady: true });
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+    await waitFor(() => {
+      expect(rowState("ai")).toBe("ready");
+    });
+
+    await chooseLane(user, "openai-codex");
+
+    await waitFor(() => {
+      expect(bridge.applyLlmSelection).toHaveBeenCalledOnce();
+      expect(rowState("ai")).toBe("ready");
+      expect(panel("chatgpt")).toBeNull();
+    });
+    expect(bridge.chatGptLogin).not.toHaveBeenCalled();
+    wizard.controller.dispose();
+  });
+
+  it("reactivates the selected stored ChatGPT profile", async () => {
+    const user = userEvent.setup();
+    const bridge = claudeReadyBridge();
+    bridge.llmConfiguration.mockResolvedValue({
+      ...CLAUDE_CONFIGURATION,
+      active: { provider: "openai-codex", model: "gpt-5.5" },
+    });
+    bridge.chatGptStatus
+      .mockResolvedValueOnce({ state: "configured", runtimeReady: false })
+      .mockResolvedValueOnce({ state: "configured", runtimeReady: true });
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+    expect(rowState("ai")).toBe("pending");
+
+    await chooseLane(user, "openai-codex");
+
+    await waitFor(() => {
+      expect(bridge.applyLlmSelection).toHaveBeenCalledOnce();
+      expect(rowState("ai")).toBe("ready");
+      expect(panel("chatgpt")).toBeNull();
+    });
+    expect(bridge.chatGptLogin).not.toHaveBeenCalled();
+    wizard.controller.dispose();
+  });
+
+  it("keeps ChatGPT recovery visible when stored-profile activation fails", async () => {
+    const user = userEvent.setup();
+    const bridge = claudeReadyBridge();
+    bridge.chatGptStatus.mockResolvedValue({ state: "configured", runtimeReady: false });
+    bridge.applyLlmSelection.mockResolvedValue({
+      status: "refused",
+      reason: "runtime-unavailable",
+    });
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+    await waitFor(() => {
+      expect(rowState("ai")).toBe("ready");
+    });
+
+    await chooseLane(user, "openai-codex");
+
+    await waitFor(() => {
+      expect(wizard.controller.state().fixedError).toBe("model-runtime-unavailable");
+    });
+    expect(panel("chatgpt")).not.toBeNull();
+    expect(panel("chatgpt")?.textContent).toContain(
+      "Your provider choice is saved, but it is not active yet.",
+    );
+    wizard.controller.dispose();
+  });
+
+  it("retries a ready stored ChatGPT profile when it is chosen again", async () => {
+    const user = userEvent.setup();
+    const bridge = claudeReadyBridge();
+    bridge.chatGptStatus.mockResolvedValue({ state: "configured", runtimeReady: true });
+    bridge.applyLlmSelection
+      .mockResolvedValueOnce({ status: "refused", reason: "runtime-unavailable" })
+      .mockResolvedValueOnce({ status: "configured", runtimeReady: true });
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+    await waitFor(() => {
+      expect(rowState("ai")).toBe("ready");
+    });
+
+    await chooseLane(user, "openai-codex");
+
+    await waitFor(() => {
+      expect(wizard.controller.state().fixedError).toBe("model-runtime-unavailable");
+    });
+    expect(panel("chatgpt")).toBeNull();
+    expect(panel("ai-error")?.textContent).toContain("it is not active yet");
+
+    await chooseLane(user, "openai-codex");
+
+    await waitFor(() => {
+      expect(bridge.applyLlmSelection).toHaveBeenCalledTimes(2);
+      expect(rowState("ai")).toBe("ready");
+    });
+    expect(wizard.controller.state().fixedError).toBeNull();
+    wizard.controller.dispose();
+  });
+
   it("offers one sign-in button and a way back from the ChatGPT panel", async () => {
     const user = userEvent.setup();
     const bridge = claudeReadyBridge();
@@ -262,6 +388,29 @@ describe("setup card", () => {
     expect(screen.getByLabelText("Intervals.icu API key")).toBe(passwordInput("intervals-icu"));
     expect(panel("training")?.textContent).toContain("Developer Settings");
     expect(panel("training")?.textContent).toContain("revoke");
+    wizard.controller.dispose();
+  });
+
+  it("closes intervals.icu setup after retry activates the saved key", async () => {
+    const user = userEvent.setup();
+    const bridge = claudeReadyBridge();
+    bridge.credentialStatuses.mockResolvedValue([
+      { slot: "intervals-icu", state: "configured", runtimeState: "failed" },
+    ]);
+    bridge.retryFailedCredentials.mockResolvedValue([
+      { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+    ]);
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+    await openTrainingPanel(user);
+
+    await user.click(screen.getByRole("button", { name: "Retry saved keys" }));
+
+    await waitFor(() => {
+      expect(rowState("training")).toBe("ready");
+      expect(panel("training")).toBeNull();
+    });
+    expect(bridge.retryFailedCredentials).toHaveBeenCalledOnce();
     wizard.controller.dispose();
   });
 
@@ -381,6 +530,17 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
+  it("describes the intake questions without promising unsupported coaching behavior", async () => {
+    const user = userEvent.setup();
+    const wizard = mountWizard({ bridge: coldBridge() });
+    await wizard.open();
+
+    expect(rowSubtitle("injury-status")).toBe("Records your current injury or return context.");
+    await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "managing");
+    expect(rowSubtitle("clinician-cleared")).toBe("An answer is required before continuing.");
+    wizard.controller.dispose();
+  });
+
   it("marks a detected keyless lane ready and offers to change it without asking for a key", async () => {
     const wizard = mountWizard({ bridge: claudeReadyBridge() });
     await wizard.open();
@@ -472,6 +632,120 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
+  it("restores the complete provider draft when API-key editing is cancelled", async () => {
+    const user = userEvent.setup();
+    const bridge = coldBridge();
+    bridge.llmConfiguration.mockResolvedValue({
+      ...TEST_LLM_CONFIGURATION,
+      active: { provider: "openrouter", model: "saved/custom-model" },
+    });
+    bridge.credentialStatuses.mockResolvedValue([
+      { slot: "openrouter", state: "configured", runtimeState: "active" },
+    ]);
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+    await waitFor(() => {
+      expect(rowState("ai")).toBe("ready");
+    });
+    await openApiKeyPanel(user);
+
+    expect(control<HTMLSelectElement>("onboarding-llm-provider").value).toBe("openrouter");
+    expect(control<HTMLSelectElement>("onboarding-llm-model").value).toBe("__custom__");
+    expect(control<HTMLInputElement>("onboarding-custom-model").value).toBe("saved/custom-model");
+    expect(control<HTMLSelectElement>("onboarding-endpoint-mode").value).toBe("automatic");
+
+    await user.selectOptions(
+      control<HTMLSelectElement>("onboarding-llm-model"),
+      "deepseek/deepseek-v4-flash",
+    );
+    await user.selectOptions(control<HTMLSelectElement>("onboarding-endpoint-mode"), "custom");
+    await user.type(
+      control<HTMLInputElement>("onboarding-custom-endpoint"),
+      "https://changed.example.test/v1",
+    );
+    await user.selectOptions(control<HTMLSelectElement>("onboarding-llm-provider"), "anthropic");
+
+    await user.click(
+      within(panel("api-key") as HTMLElement).getByRole("button", { name: "Cancel API key setup" }),
+    );
+    await waitFor(() => {
+      expect(panel("api-key")).toBeNull();
+    });
+    await openApiKeyPanel(user);
+
+    expect(control<HTMLSelectElement>("onboarding-llm-provider").value).toBe("openrouter");
+    expect(control<HTMLSelectElement>("onboarding-llm-model").value).toBe("__custom__");
+    expect(control<HTMLInputElement>("onboarding-custom-model").value).toBe("saved/custom-model");
+    expect(control<HTMLSelectElement>("onboarding-endpoint-mode").value).toBe("automatic");
+    expect(document.querySelector("#onboarding-custom-endpoint")).toBeNull();
+    wizard.controller.dispose();
+  });
+
+  it("uses a successful API-key save as the next cancellation baseline", async () => {
+    const user = userEvent.setup();
+    const bridge = readyEverythingBridge();
+    bridge.credentialStatuses.mockResolvedValue([
+      { slot: "anthropic", state: "configured", runtimeState: "active" },
+      { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+    ]);
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+    await waitFor(() => {
+      expect(rowState("ai")).toBe("ready");
+    });
+    await openApiKeyPanel(user);
+    seedSecret("anthropic", randomUUID());
+    await user.click(
+      within(panel("api-key") as HTMLElement).getByRole("button", { name: "Save API key" }),
+    );
+    await waitFor(() => {
+      expect(panel("api-key")).toBeNull();
+    });
+
+    await openApiKeyPanel(user);
+    await user.click(
+      within(panel("api-key") as HTMLElement).getByRole("button", { name: "Cancel API key setup" }),
+    );
+    await waitFor(() => {
+      expect(panel("api-key")).toBeNull();
+    });
+    await openApiKeyPanel(user);
+
+    expect(control<HTMLSelectElement>("onboarding-llm-provider").value).toBe("anthropic");
+    wizard.controller.dispose();
+  });
+
+  it("uses a successful ChatGPT login as the next cancellation baseline", async () => {
+    const user = userEvent.setup();
+    const bridge = claudeReadyBridge();
+    bridge.chatGptStatus
+      .mockResolvedValueOnce({ state: "absent", runtimeReady: false })
+      .mockResolvedValue({ state: "configured", runtimeReady: true });
+    bridge.chatGptLogin.mockResolvedValue({ status: "configured", runtimeReady: true });
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+    await waitFor(() => {
+      expect(rowState("ai")).toBe("ready");
+    });
+    await chooseLane(user, "openai-codex");
+    await user.click(screen.getByRole("button", { name: "Sign in with ChatGPT" }));
+    await waitFor(() => {
+      expect(panel("chatgpt")).toBeNull();
+    });
+
+    await openApiKeyPanel(user);
+    await user.click(
+      within(panel("api-key") as HTMLElement).getByRole("button", { name: "Cancel API key setup" }),
+    );
+    await waitFor(() => {
+      expect(panel("api-key")).toBeNull();
+    });
+
+    expect(rowState("ai")).toBe("ready");
+    expect(rowSubtitle("ai")).toBe("Powers your coach");
+    wizard.controller.dispose();
+  });
+
   it("closes the intervals.icu editor without writing when it is backed out of", async () => {
     const user = userEvent.setup();
     const bridge = coldBridge();
@@ -517,6 +791,72 @@ describe("setup card", () => {
       expect(panel("training")).toBeNull();
     });
     expect(trigger("training").textContent).toBe("Change");
+    wizard.controller.dispose();
+  });
+
+  it("keeps an open intervals.icu draft when the AI row finishes saving", async () => {
+    const user = userEvent.setup();
+    const bridge = readyEverythingBridge();
+    bridge.credentialStatuses.mockResolvedValue([
+      { slot: "anthropic", state: "configured", runtimeState: "active" },
+      { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+    ]);
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+    await waitFor(() => {
+      expect(rowState("ai")).toBe("ready");
+    });
+    await openApiKeyPanel(user);
+    await openTrainingPanel(user);
+    seedSecret("anthropic", randomUUID());
+    const trainingSecret = randomUUID();
+    seedSecret("intervals-icu", trainingSecret);
+
+    await user.click(
+      within(panel("api-key") as HTMLElement).getByRole("button", { name: "Save API key" }),
+    );
+
+    await waitFor(() => {
+      expect(panel("api-key")).toBeNull();
+    });
+    expect(panel("training")).not.toBeNull();
+    expect(passwordInput("intervals-icu").value).toBe(trainingSecret);
+    wizard.controller.dispose();
+  });
+
+  it("keeps an open AI draft when the intervals.icu row finishes saving", async () => {
+    const user = userEvent.setup();
+    const bridge = coldBridge();
+    bridge.llmConfiguration.mockResolvedValue({
+      ...TEST_LLM_CONFIGURATION,
+      active: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    });
+    bridge.credentialStatuses.mockResolvedValue([
+      { slot: "anthropic", state: "configured", runtimeState: "active" },
+      { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+    ]);
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+    await waitFor(() => {
+      expect(rowState("ai")).toBe("ready");
+    });
+    await openApiKeyPanel(user);
+    await openTrainingPanel(user);
+    const aiSecret = randomUUID();
+    seedSecret("anthropic", aiSecret);
+    seedSecret("intervals-icu", randomUUID());
+
+    await user.click(
+      within(panel("training") as HTMLElement).getByRole("button", {
+        name: "Save Intervals.icu API key",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(panel("training")).toBeNull();
+    });
+    expect(panel("api-key")).not.toBeNull();
+    expect(passwordInput("anthropic").value).toBe(aiSecret);
     wizard.controller.dispose();
   });
 
@@ -790,6 +1130,46 @@ describe("setup card accessibility", () => {
     ]) {
       expect(screen.getAllByRole("button", { name })).toHaveLength(1);
     }
+    wizard.controller.dispose();
+  });
+
+  it("uses stronger tokens for compact Setup copy and essential control edges", async () => {
+    const user = userEvent.setup();
+    const wizard = mountWizard({ bridge: coldBridge() });
+    await wizard.open();
+
+    const compactCopy = [
+      setupRow("ai").querySelector("[data-setup-row-title]")?.nextElementSibling,
+      screen.getByText(FOOTER_NOTE),
+      document.querySelector("[data-setup-outstanding]"),
+      document.querySelector("[data-info-tip]"),
+    ];
+    for (const element of compactCopy) {
+      expect(element?.className).toContain("text-ink-2");
+      expect(element?.className).not.toContain("text-ink-3");
+    }
+    for (const element of [
+      trigger("ai"),
+      trigger("training"),
+      control("onboarding-injury-status"),
+    ]) {
+      expect(element.className).toContain("border-ink-2");
+      expect(element.className).not.toContain("border-line-2");
+    }
+
+    await openLaneMenu(user);
+    expect(within(laneMenu() as HTMLElement).getByText(SETUP_MENU_LABEL).className).toContain(
+      "text-ink-2",
+    );
+    for (const hint of document.querySelectorAll<HTMLElement>("[data-lane] i")) {
+      expect(hint.className).toContain("text-ink-2");
+    }
+    await user.click(document.querySelector<HTMLElement>('[data-lane="api-key"]') as HTMLElement);
+    await waitFor(() => {
+      expect(panel("api-key")).not.toBeNull();
+    });
+    expect(screen.getByText(API_KEY_PANEL_HINT).className).toContain("text-ink-2");
+    expect(control("onboarding-llm-provider").className).toContain("border-ink-2");
     wizard.controller.dispose();
   });
 });

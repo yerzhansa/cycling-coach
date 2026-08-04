@@ -61,6 +61,15 @@ function contrastRatio(first: string, second: string): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+function mixHex(first: string, firstWeight: number, second: string): string {
+  const channels = [1, 3, 5].map((start) => {
+    const firstChannel = Number.parseInt(first.slice(start, start + 2), 16);
+    const secondChannel = Number.parseInt(second.slice(start, start + 2), 16);
+    return Math.round(firstChannel * firstWeight + secondChannel * (1 - firstWeight));
+  });
+  return `#${channels.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+}
+
 function readTokenSheet(): Promise<string> {
   return readFile(resolve(import.meta.dirname, "..", "src", "theme", "tokens.css"), "utf8");
 }
@@ -151,6 +160,17 @@ describe("palette engine", () => {
       expect(contrastRatio(ramp.br, ramp.bg)).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(ramp.bri, ramp.br)).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(ramp.ok, ramp.bg)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("keeps compact Setup copy and control edges readable in every appearance", () => {
+    for (const palette of PALETTES) {
+      for (const ramp of [palette.l, palette.d]) {
+        const setupBackgrounds = [ramp.bg, ramp.sf, mixHex(ramp.rail, 0.55, ramp.bg)];
+        for (const background of setupBackgrounds) {
+          expect(contrastRatio(ramp.ink2, background)).toBeGreaterThanOrEqual(4.5);
+        }
+      }
     }
   });
 

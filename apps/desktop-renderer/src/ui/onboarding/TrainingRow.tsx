@@ -40,16 +40,22 @@ export function TrainingRow(props: {
   );
   const ownsError = errorSection(wizard.fixedError, surface.lastCommit) === "training";
   const [open, setOpen] = useState(false);
+  const [savePhase, setSavePhase] = useState<"idle" | "requested" | "running">("idle");
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const wasBusy = useRef(busy);
   const panelId = "onboarding-training-panel";
 
   useEffect(() => {
-    if (wasBusy.current && !busy && ready && !retryable && wizard.fixedError === null) {
+    if (savePhase === "requested") {
+      if (busy && surface.lastCommit === "training") setSavePhase("running");
+      else if (!busy) setSavePhase("idle");
+      return;
+    }
+    if (savePhase !== "running" || busy) return;
+    if (ready && !retryable && wizard.fixedError === null) {
       setOpen(false);
     }
-    wasBusy.current = busy;
-  }, [busy, ready, retryable, wizard.fixedError]);
+    setSavePhase("idle");
+  }, [busy, ready, retryable, savePhase, surface.lastCommit, wizard.fixedError]);
 
   const subtitle = connected
     ? TRAINING_ROW_SUBTITLES.connected
@@ -58,7 +64,9 @@ export function TrainingRow(props: {
       : TRAINING_ROW_SUBTITLES.missing;
 
   const save = (): void => {
-    actions?.saveTrainingKey();
+    if (actions === null || busy || importing) return;
+    setSavePhase("requested");
+    actions.saveTrainingKey();
   };
 
   return (
@@ -108,7 +116,7 @@ export function TrainingRow(props: {
             <button
               type="button"
               className={BUTTON_SOLID_SM}
-              disabled={busy}
+              disabled={busy || importing}
               aria-label={TRAINING_SAVE_LABEL}
               onClick={save}
             >
@@ -134,7 +142,9 @@ export function TrainingRow(props: {
               className={SETUP_LINK_BUTTON}
               disabled={busy || importing}
               onClick={() => {
-                actions?.retrySavedKeys();
+                if (actions === null) return;
+                setSavePhase("requested");
+                actions.retrySavedKeys();
               }}
             >
               {RETRY_SAVED_KEYS_LABEL}

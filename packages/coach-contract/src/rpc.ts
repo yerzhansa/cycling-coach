@@ -445,12 +445,13 @@ export const SaveIntakeRpcParamsSchema = z
     swim_skill_floor: z.null(),
     continuous_distance_capable: z.null(),
     open_water_comfort: z.null(),
+    prior_bsi: z.boolean(),
     clinician_cleared: z.boolean().nullable(),
     injury_status: InjuryStatusSchema,
   })
   .strict()
   .superRefine((value, context) => {
-    const needsClearance = value.injury_status !== "none";
+    const needsClearance = value.prior_bsi || value.injury_status !== "none";
     if (needsClearance === (value.clinician_cleared === null)) {
       context.addIssue({
         code: "custom",

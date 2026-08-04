@@ -199,7 +199,7 @@ SOFTWARE.
 The desktop app's visual design system — the token set, control geometry, and
 surface treatment in `apps/desktop-renderer/src/theme/` (`tokens.css`,
 `surface.module.css`) and the styling that consumes them — is adapted from
-[T3 Code](https://github.com/t3-tools) by T3 Tools Inc., distributed under the
+[T3 Code](https://github.com/pingdotgg/t3code) by T3 Tools Inc., distributed under the
 MIT License. Its color ramp ships as the "Cobalt" appearance palette.
 
 ### Original license (verbatim)

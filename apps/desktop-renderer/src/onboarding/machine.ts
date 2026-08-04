@@ -61,6 +61,9 @@ export type OnboardingErrorCode =
 export interface OnboardingState {
   readonly step: OnboardingStepId;
   readonly credentialStatus: Readonly<Record<DesktopCredentialSlot, CredentialState>>;
+  readonly credentialRuntimeStatus: Readonly<
+    Record<DesktopCredentialSlot, CredentialRuntimeState | null>
+  >;
   readonly chatGptState: "absent" | "pending" | "configured" | "refused";
   readonly chatGptRuntimeReady: boolean;
   readonly chatGptRefusal: ChatGptLoginRefusalReason | null;
@@ -92,12 +95,15 @@ export function createOnboardingState(
   claudeCliStatus: ClaudeCliStatus | null = null,
 ): OnboardingState {
   const credentialStatus = statusRecord<CredentialState>("missing");
+  const credentialRuntimeStatus = statusRecord<CredentialRuntimeState | null>(null);
   for (const status of statuses) {
     credentialStatus[status.slot] = status.state;
+    credentialRuntimeStatus[status.slot] = status.runtimeState;
   }
   return {
     step: "coach-keys",
     credentialStatus,
+    credentialRuntimeStatus,
     chatGptState: chatGptStatus.state,
     chatGptRuntimeReady: chatGptStatus.runtimeReady,
     chatGptRefusal: null,
@@ -172,25 +178,58 @@ export function withCredentialStatuses(
   statuses: readonly CredentialSlotStatus[],
 ): OnboardingState {
   const credentialStatus = { ...state.credentialStatus };
+  const credentialRuntimeStatus = { ...state.credentialRuntimeStatus };
   for (const status of statuses) {
     credentialStatus[status.slot] = status.state;
+    credentialRuntimeStatus[status.slot] = status.runtimeState;
   }
-  return { ...state, credentialStatus };
+  return { ...state, credentialStatus, credentialRuntimeStatus };
 }
 
 export function hasConfiguredModel(state: OnboardingState): boolean {
   return (
-    state.chatGptState === "configured" ||
+    (state.chatGptState === "configured" && state.chatGptRuntimeReady) ||
     claudeCliReady(state) ||
     DESKTOP_CREDENTIAL_SLOTS.some(
-      (slot) => slot !== "intervals-icu" && state.credentialStatus[slot] === "configured",
+      (slot) =>
+        slot !== "intervals-icu" &&
+        state.credentialStatus[slot] === "configured" &&
+        state.credentialRuntimeStatus[slot] === "active",
     )
+  );
+}
+
+export function selectedProviderReady(
+  state: OnboardingState,
+  selected: { readonly provider: string; readonly model: string } | null,
+  active: { readonly provider: string; readonly model: string } | null,
+): boolean {
+  if (
+    selected === null ||
+    active === null ||
+    selected.provider !== active.provider ||
+    selected.model !== active.model
+  ) {
+    return false;
+  }
+  if (selected.provider === "openai-codex") {
+    return state.chatGptState === "configured" && state.chatGptRuntimeReady;
+  }
+  if (selected.provider === "claude-cli") return claudeCliReady(state);
+  if (selected.provider === "codex-agent" || selected.provider === "intervals-icu") return false;
+  const slot = DESKTOP_CREDENTIAL_SLOTS.find((candidate) => candidate === selected.provider);
+  if (slot === undefined) return false;
+  return (
+    state.credentialStatus[slot] === "configured" &&
+    state.credentialRuntimeStatus[slot] === "active"
   );
 }
 
 export function hasTrainingData(state: OnboardingState): boolean {
   return (
-    state.credentialStatus["intervals-icu"] === "configured" || state.importedRideFileCount > 0
+    (state.credentialStatus["intervals-icu"] === "configured" &&
+      state.credentialRuntimeStatus["intervals-icu"] === "active") ||
+    state.importedRideFileCount > 0
   );
 }
 
@@ -202,6 +241,7 @@ export function toDesktopIntakeFlags(draft: DesktopIntakeDraft): SaveIntakeRpcPa
     swim_skill_floor: null,
     continuous_distance_capable: null,
     open_water_comfort: null,
+    prior_bsi: false,
     clinician_cleared: needsClearance ? draft.clinicianCleared : null,
     injury_status: draft.injuryStatus,
   });
@@ -286,6 +326,8 @@ export function toOnboardingCompletion(state: OnboardingState): OnboardingComple
     providerConfigured: true,
     trainingDataConfigured: true,
     intakeSaved: true,
-    requiresProviderSync: state.credentialStatus["intervals-icu"] === "configured",
+    requiresProviderSync:
+      state.credentialStatus["intervals-icu"] === "configured" &&
+      state.credentialRuntimeStatus["intervals-icu"] === "active",
   };
 }

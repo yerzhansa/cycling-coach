@@ -44,7 +44,7 @@ function twoProviderBridge(overrides: Partial<OnboardingBridge>): TestBridge {
         models: [{ value: "gpt-5.5", label: "GPT-5.5" }],
       },
     ],
-    active: null,
+    active: { provider: "anthropic", model: "claude-sonnet-4-6" },
   });
   return Object.assign(bridge, overrides);
 }

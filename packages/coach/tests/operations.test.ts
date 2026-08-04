@@ -263,6 +263,7 @@ describe("coach operations", () => {
           swim_skill_floor: null,
           continuous_distance_capable: null,
           open_water_comfort: null,
+          prior_bsi: false,
           clinician_cleared: null,
           injury_status: "none",
         }),
@@ -272,6 +273,18 @@ describe("coach operations", () => {
         swim_skill_floor: null,
         continuous_distance_capable: null,
         open_water_comfort: null,
+        prior_bsi: true,
+        clinician_cleared: true,
+        injury_status: "none",
+      });
+      const historical = await store.get("SELECT * FROM intake_flags");
+      expect(historical).toMatchObject({ clinician_cleared: null, injury_status: "none" });
+      expect(historical).not.toHaveProperty("prior_bsi");
+      await operations.saveIntake({
+        swim_skill_floor: null,
+        continuous_distance_capable: null,
+        open_water_comfort: null,
+        prior_bsi: false,
         clinician_cleared: false,
         injury_status: "managing",
       });
@@ -289,6 +302,7 @@ describe("coach operations", () => {
           swim_skill_floor: null,
           continuous_distance_capable: null,
           open_water_comfort: null,
+          prior_bsi: false,
           clinician_cleared: null,
           injury_status: "none",
           extra: true,
@@ -299,6 +313,7 @@ describe("coach operations", () => {
           swim_skill_floor: null,
           continuous_distance_capable: null,
           open_water_comfort: null,
+          prior_bsi: false,
           clinician_cleared: null,
           injury_status: "returning",
         }),

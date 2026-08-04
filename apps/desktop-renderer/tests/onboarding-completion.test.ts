@@ -1,8 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
+import type {
+  OnboardingBridge,
+  OnboardingLlmConfiguration,
+  OnboardingLlmSelectionResult,
+} from "../src/onboarding/bridge.js";
 import {
   createOnboardingCompletionController,
   type OnboardingCompletionStorage,
 } from "../src/onboarding/completion.js";
+import {
+  createOnboardingController,
+  type OnboardingSurfaceState,
+} from "../src/onboarding/controller.js";
+import type { CredentialDraftPort } from "../src/onboarding/credentials.js";
+import type { OnboardingCompletion } from "../src/onboarding/machine.js";
 
 const completion = {
   providerConfigured: true,
@@ -22,6 +33,120 @@ function memoryStorage(
     getItem: (key) => stored.get(key) ?? null,
     setItem: (key, value) => {
       stored.set(key, value);
+    },
+  };
+}
+
+const KEYLESS_CONFIGURATION: OnboardingLlmConfiguration = {
+  schemaVersion: 1,
+  providers: [
+    {
+      provider: "anthropic",
+      defaultModel: "claude-sonnet-4-6",
+      models: [{ value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" }],
+    },
+    {
+      provider: "claude-cli",
+      defaultModel: "sonnet",
+      models: [{ value: "sonnet", label: "Claude Sonnet" }],
+    },
+    {
+      provider: "openai-codex",
+      defaultModel: "gpt-5.5",
+      models: [{ value: "gpt-5.5", label: "GPT-5.5" }],
+    },
+  ],
+  active: { provider: "anthropic", model: "claude-sonnet-4-6" },
+};
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
+function activationBridge(
+  apply: OnboardingBridge["applyLlmSelection"],
+  chatGptStatus: OnboardingBridge["chatGptStatus"] = async () => ({
+    state: "absent",
+    runtimeReady: false,
+  }),
+) {
+  const statuses = [
+    { slot: "anthropic", state: "configured", runtimeState: "active" },
+    { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+  ] as const;
+  return {
+    credentialStatuses: vi.fn<OnboardingBridge["credentialStatuses"]>(async () => statuses),
+    retryFailedCredentials: vi.fn<OnboardingBridge["retryFailedCredentials"]>(async () => statuses),
+    writeCredential: vi.fn<OnboardingBridge["writeCredential"]>(async ({ slot }) => ({
+      slot,
+      status: "configured",
+      runtimeReady: true,
+    })),
+    llmConfiguration: vi.fn<OnboardingBridge["llmConfiguration"]>(
+      async () => KEYLESS_CONFIGURATION,
+    ),
+    applyLlmSelection: vi.fn<OnboardingBridge["applyLlmSelection"]>(apply),
+    chatGptStatus: vi.fn<OnboardingBridge["chatGptStatus"]>(chatGptStatus),
+    chatGptLogin: vi.fn<OnboardingBridge["chatGptLogin"]>(async () => ({
+      status: "refused",
+      reason: "cancelled",
+    })),
+    claudeCliStatus: vi.fn<OnboardingBridge["claudeCliStatus"]>(async () => ({
+      state: "ready",
+      email: "athlete@example.test",
+      plan: "Max",
+    })),
+    claudeCliRecheck: vi.fn<OnboardingBridge["claudeCliRecheck"]>(async () => ({
+      state: "ready",
+    })),
+    chooseImportFiles: vi.fn<OnboardingBridge["chooseImportFiles"]>(async () => []),
+    onDroppedImportFiles: vi.fn<OnboardingBridge["onDroppedImportFiles"]>(() => () => {}),
+    importFiles: vi.fn<OnboardingBridge["importFiles"]>(async () => ({
+      schemaVersion: 2,
+      files: { total: 0, imported: 0, quarantined: 0 },
+      changes: {
+        rawFilesInserted: 0,
+        sourceRecordsInserted: 0,
+        sourceRecordsUpdated: 0,
+        relinkedSourceRecords: 0,
+      },
+      publication: { scope: "activities-and-streams", status: "available" },
+    })),
+    saveIntake: vi.fn<OnboardingBridge["saveIntake"]>(async () => {}),
+  };
+}
+
+function onboardingHarness(bridge: OnboardingBridge) {
+  let surface: OnboardingSurfaceState | undefined;
+  const onComplete = vi.fn<(value: OnboardingCompletion) => void>();
+  const credentials: CredentialDraftPort = {
+    harvest: () => [],
+    clear: vi.fn(),
+  };
+  const controller = createOnboardingController({
+    bridge,
+    credentials,
+    view: {
+      render(next) {
+        surface = next;
+      },
+    },
+    focusOpener: vi.fn(),
+    onComplete,
+  });
+  return {
+    controller,
+    onComplete,
+    surface: () => {
+      if (surface === undefined) throw new Error("Onboarding surface was not rendered");
+      return surface;
     },
   };
 }
@@ -137,5 +262,105 @@ describe("onboarding completion", () => {
 
     expect(firstSync).toHaveBeenCalledWith(completion);
     expect(openSetup).toHaveBeenCalledOnce();
+  });
+});
+
+describe("onboarding runtime completion gate", () => {
+  it("activates a selected ready Claude lane and ignores Finish while activation is pending", async () => {
+    const pending = deferred<OnboardingLlmSelectionResult>();
+    const bridge = activationBridge(() => pending.promise);
+    const harness = onboardingHarness(bridge);
+    await harness.controller.open();
+    await vi.waitFor(() => {
+      expect(harness.controller.state().claudeCliState).toBe("ready");
+    });
+    harness.controller.setIntake("injuryStatus", "none");
+
+    harness.controller.selectProvider("claude-cli");
+
+    await vi.waitFor(() => {
+      expect(bridge.applyLlmSelection).toHaveBeenCalledWith({
+        provider: "claude-cli",
+        model: "sonnet",
+        endpoint: { mode: "automatic" },
+      });
+    });
+    expect(harness.controller.state().busy).toBe(true);
+    harness.controller.finish();
+    expect(bridge.saveIntake).not.toHaveBeenCalled();
+    expect(harness.onComplete).not.toHaveBeenCalled();
+
+    pending.resolve({ status: "configured", runtimeReady: true });
+    await vi.waitFor(() => {
+      expect(harness.controller.state().busy).toBe(false);
+      expect(harness.surface().readiness.provider).toBe(true);
+    });
+    expect(harness.surface().configuration?.active).toEqual({
+      provider: "claude-cli",
+      model: "sonnet",
+    });
+
+    harness.controller.finish();
+
+    await vi.waitFor(() => {
+      expect(harness.onComplete).toHaveBeenCalledOnce();
+    });
+    expect(bridge.applyLlmSelection.mock.invocationCallOrder[0]).toBeLessThan(
+      bridge.saveIntake.mock.invocationCallOrder[0]!,
+    );
+    harness.controller.dispose();
+  });
+
+  it("fails closed when automatic Claude activation is refused", async () => {
+    const bridge = activationBridge(async () => ({
+      status: "refused",
+      reason: "runtime-unavailable",
+    }));
+    const harness = onboardingHarness(bridge);
+    await harness.controller.open();
+    await vi.waitFor(() => {
+      expect(harness.controller.state().claudeCliState).toBe("ready");
+    });
+    harness.controller.setIntake("injuryStatus", "none");
+
+    harness.controller.selectProvider("claude-cli");
+
+    await vi.waitFor(() => {
+      expect(harness.controller.state()).toMatchObject({
+        busy: false,
+        fixedError: "model-runtime-unavailable",
+      });
+    });
+    expect(harness.surface().readiness.provider).toBe(false);
+    harness.controller.finish();
+    expect(bridge.saveIntake).not.toHaveBeenCalled();
+    expect(harness.onComplete).not.toHaveBeenCalled();
+    harness.controller.dispose();
+  });
+
+  it("reactivates a stored ChatGPT profile without forcing another login", async () => {
+    let activated = false;
+    const bridge = activationBridge(
+      async () => {
+        activated = true;
+        return { status: "configured", runtimeReady: true };
+      },
+      async () => ({ state: "configured", runtimeReady: activated }),
+    );
+    const harness = onboardingHarness(bridge);
+    await harness.controller.open();
+
+    harness.controller.selectProvider("openai-codex");
+
+    await vi.waitFor(() => {
+      expect(harness.surface().readiness.provider).toBe(true);
+    });
+    expect(bridge.applyLlmSelection).toHaveBeenCalledWith({
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      endpoint: { mode: "automatic" },
+    });
+    expect(bridge.chatGptLogin).not.toHaveBeenCalled();
+    harness.controller.dispose();
   });
 });

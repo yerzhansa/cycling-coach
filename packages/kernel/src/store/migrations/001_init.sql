@@ -226,13 +226,12 @@ CREATE TABLE race_goal (
   hlc_counter      INTEGER NOT NULL
 );
 
--- INV-1 class: authored. Single row. PK = ULID. The six named intake flags.
+-- INV-1 class: authored. Single row. PK = ULID. The five named intake flags.
 CREATE TABLE intake_flags (
   id                          TEXT PRIMARY KEY,   -- ULID
   swim_skill_floor            TEXT,     -- swim skill-floor self-report answers
   continuous_distance_capable INTEGER,  -- continuous-distance capability
   open_water_comfort          TEXT,     -- open-water comfort
-  prior_bsi                   INTEGER,  -- prior bone-stress-injury flag
   clinician_cleared           INTEGER,  -- clinician-cleared flag
   injury_status               TEXT,     -- current injury status
   device_id                   TEXT NOT NULL,
