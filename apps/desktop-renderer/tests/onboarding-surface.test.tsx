@@ -5,17 +5,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CredentialWriteResult, OnboardingBridge } from "../src/onboarding/bridge.js";
 import { createRideImportController } from "../src/ride-import.js";
 import {
+  chooseLane,
   control,
-  credentialBadge,
   errorText,
   importResult,
   mountWizard,
+  openApiKeyPanel,
+  openTrainingPanel,
+  panel,
   passwordInput,
+  primaryButton,
   resetOnboardingStore,
   retryButtons,
+  rowState,
   seedSecret,
   testBridge,
   TEST_LLM_CONFIGURATION,
+  type UserEvent,
 } from "./onboarding-harness.js";
 
 function deferred<T>(): {
@@ -33,14 +39,33 @@ function button(name: string): HTMLButtonElement {
   return screen.getByRole("button", { name });
 }
 
-async function chooseOption(user: ReturnType<typeof userEvent.setup>, id: string, value: string) {
+async function chooseOption(user: UserEvent, id: string, value: string) {
   await user.selectOptions(control<HTMLSelectElement>(id), value);
 }
 
-async function typeInto(user: ReturnType<typeof userEvent.setup>, id: string, value: string) {
+async function typeInto(user: UserEvent, id: string, value: string) {
   const element = control<HTMLInputElement>(id);
   await user.clear(element);
   await user.type(element, value);
+}
+
+function panelButton(name: string, label: string): HTMLButtonElement {
+  const host = panel(name);
+  if (host === null) throw new Error(`panel not open: ${name}`);
+  return within(host).getByRole("button", { name: label });
+}
+
+async function saveModelKey(user: UserEvent): Promise<void> {
+  await user.click(panelButton("api-key", "Save API key"));
+}
+
+async function saveTrainingKey(user: UserEvent): Promise<void> {
+  await user.click(panelButton("training", "Save Intervals.icu API key"));
+}
+
+async function answerIntake(user: UserEvent): Promise<void> {
+  await chooseOption(user, "onboarding-injury-status", "none");
+  await chooseOption(user, "onboarding-prior-bsi", "no");
 }
 
 type CredentialWriteRefusalReason = Extract<
@@ -72,7 +97,7 @@ const CREDENTIAL_REFUSAL_CASES = [
   {
     reason: "runtime-unavailable",
     fixedError: "model-runtime-unavailable",
-    copy: "Your provider choice is saved, but it is not active yet. Choose Continue to retry it.",
+    copy: "Your provider choice is saved, but it is not active yet. Choose Save to try it again.",
   },
 ] as const satisfies ReadonlyArray<{
   readonly reason: CredentialWriteRefusalReason;
@@ -85,7 +110,7 @@ describe("mounted onboarding", () => {
     resetOnboardingStore();
   });
 
-  it("presents the setup page, its progress hooks, and dismisses through the controller", async () => {
+  it("presents the setup page and dismisses through the controller", async () => {
     const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     const wizard = mountWizard({ bridge });
@@ -96,7 +121,6 @@ describe("mounted onboarding", () => {
     expect(control("onboarding-title")).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.querySelector(".onboarding-scrim")).toBeNull();
-    expect(screen.getByLabelText("Step 1 of 4")).toBeInTheDocument();
     expect(document.activeElement).toBe(control("onboarding-title"));
 
     await user.click(button("Dismiss"));
@@ -125,17 +149,17 @@ describe("mounted onboarding", () => {
     await wizard.open();
 
     const page = screen.getByRole("region", { name: "Setup" });
-    const submit = button("Continue");
-    expect(passwordInput("openai").closest("details")?.hasAttribute("open")).toBe(false);
+    const dismiss = button("Dismiss");
+    expect(primaryButton()).toBeDisabled();
 
-    submit.focus();
+    dismiss.focus();
     expect(fireEvent.keyDown(page, { key: "Tab" })).toBe(true);
-    expect(document.activeElement).toBe(submit);
+    expect(document.activeElement).toBe(dismiss);
     wizard.controller.dispose();
   });
 
   it.each(CREDENTIAL_REFUSAL_CASES)(
-    "keeps the athlete on coach keys and explains $reason refusals",
+    "keeps the athlete on the AI row and explains $reason refusals",
     async ({ reason, fixedError, copy }) => {
       const user = userEvent.setup();
       const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
@@ -154,15 +178,17 @@ describe("mounted onboarding", () => {
       const onComplete = vi.fn();
       const wizard = mountWizard({ bridge, onComplete });
       await wizard.open();
+      await openApiKeyPanel(user);
       const secret = seedSecret("anthropic", randomUUID());
 
-      await user.click(button("Continue"));
+      await saveModelKey(user);
 
       await waitFor(() => {
         expect(wizard.controller.state().fixedError).toBe(fixedError);
       });
       expect(errorText()).toBe(copy);
-      expect(wizard.controller.state().step).toBe("coach-keys");
+      expect(panel("api-key")?.contains(document.querySelector("#onboarding-error"))).toBe(true);
+      expect(rowState("ai")).toBe("pending");
       expect(secret.value).toBe("");
       expect(credentialWriteCount).toBe(1);
       expect(bridge.credentialStatuses).toHaveBeenCalledTimes(2);
@@ -171,7 +197,7 @@ describe("mounted onboarding", () => {
     },
   );
 
-  it("explains a training-account mismatch on the reachable intervals.icu path", async () => {
+  it("explains a training-account mismatch under the intervals.icu row", async () => {
     const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
     bridge.credentialStatuses.mockResolvedValue([
@@ -184,14 +210,10 @@ describe("mounted onboarding", () => {
     }));
     const wizard = mountWizard({ bridge });
     await wizard.open();
-
-    await user.click(button("Continue"));
-    await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
-    });
+    await openTrainingPanel(user);
     seedSecret("intervals-icu", randomUUID());
 
-    await user.click(button("Continue"));
+    await saveTrainingKey(user);
 
     await waitFor(() => {
       expect(wizard.controller.state().fixedError).toBe("training-account-mismatch");
@@ -199,12 +221,12 @@ describe("mounted onboarding", () => {
     expect(errorText()).toBe(
       "That intervals.icu key belongs to a different athlete than the training history already stored. Switching accounts is not supported yet.",
     );
-    expect(wizard.controller.state().step).toBe("training-data");
+    expect(panel("training")?.contains(document.querySelector("#onboarding-error"))).toBe(true);
     expect(passwordInput("intervals-icu").value).toBe("");
     wizard.controller.dispose();
   });
 
-  it("retries a saved provider choice with Continue without rewriting the key", async () => {
+  it("retries a saved provider choice with Save without rewriting the key", async () => {
     const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
     bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
@@ -220,24 +242,25 @@ describe("mounted onboarding", () => {
     const onComplete = vi.fn();
     const wizard = mountWizard({ bridge, onComplete });
     await wizard.open();
+    await openApiKeyPanel(user);
     const secret = seedSecret("anthropic", randomUUID());
 
-    await user.click(button("Continue"));
+    await saveModelKey(user);
 
     await waitFor(() => {
       expect(wizard.controller.state().fixedError).toBe("model-runtime-unavailable");
     });
     expect(errorText()).toBe(
-      "Your provider choice is saved, but it is not active yet. Choose Continue to retry it.",
+      "Your provider choice is saved, but it is not active yet. Choose Save to try it again.",
     );
     expect(retryButtons()).toHaveLength(0);
     expect(secret.value).toBe("");
     expect(bridge.credentialStatuses).toHaveBeenCalledTimes(2);
 
-    await user.click(button("Continue"));
+    await saveModelKey(user);
 
     await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
+      expect(rowState("ai")).toBe("ready");
     });
     expect(bridge.applyLlmSelection).toHaveBeenCalledWith({
       provider: "anthropic",
@@ -251,7 +274,7 @@ describe("mounted onboarding", () => {
     wizard.controller.dispose();
   });
 
-  it("keeps Continue activation recovery available when applying the provider fails", async () => {
+  it("keeps Save activation recovery available when applying the provider fails", async () => {
     const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
     bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
@@ -266,21 +289,22 @@ describe("mounted onboarding", () => {
     }));
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
     seedSecret("anthropic", randomUUID());
 
-    await user.click(button("Continue"));
+    await saveModelKey(user);
     await waitFor(() => {
       expect(wizard.controller.state().fixedError).toBe("model-runtime-unavailable");
     });
 
-    await user.click(button("Continue"));
+    await saveModelKey(user);
 
     await waitFor(() => {
       expect(wizard.controller.state().busy).toBe(false);
     });
     expect(wizard.controller.state().fixedError).toBe("model-runtime-unavailable");
     expect(errorText()).toBe(
-      "Your provider choice is saved, but it is not active yet. Choose Continue to retry it.",
+      "Your provider choice is saved, but it is not active yet. Choose Save to try it again.",
     );
     expect(retryButtons()).toHaveLength(0);
     expect(bridge.retryFailedCredentials).not.toHaveBeenCalled();
@@ -288,7 +312,7 @@ describe("mounted onboarding", () => {
     wizard.controller.dispose();
   });
 
-  it("offers intervals.icu recovery on training data without leaving or rewriting", async () => {
+  it("offers intervals.icu recovery in place without rewriting the key", async () => {
     const user = userEvent.setup();
     const failedStatuses = [
       { slot: "intervals-icu", state: "configured", runtimeState: "failed" },
@@ -303,34 +327,19 @@ describe("mounted onboarding", () => {
     });
     const wizard = mountWizard({ bridge });
     await wizard.open();
-
-    await user.click(button("Continue"));
-    await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
-    });
+    await openTrainingPanel(user);
     const intervals = seedSecret("intervals-icu", randomUUID());
 
-    await user.click(button("Continue"));
+    await saveTrainingKey(user);
 
     await waitFor(() => {
       expect(wizard.controller.state().fixedError).toBe("runtime-unavailable");
     });
-    expect(wizard.controller.state().step).toBe("training-data");
     expect(errorText()).toBe(
       "That key was saved, but it is not active yet. Choose Retry saved keys to activate it.",
     );
     expect(retryButtons()).toHaveLength(1);
     expect(intervals.value).toBe("");
-
-    await user.click(button("Back"));
-    expect(wizard.controller.state().step).toBe("coach-keys");
-    expect(retryButtons()).toHaveLength(0);
-
-    await user.click(button("Continue"));
-    await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
-    });
-    expect(retryButtons()).toHaveLength(1);
 
     await user.click(button("Retry saved keys"));
 
@@ -340,10 +349,8 @@ describe("mounted onboarding", () => {
     await waitFor(() => {
       expect(wizard.controller.state().busy).toBe(false);
     });
-    expect(wizard.controller.state().step).toBe("training-data");
     expect(retryButtons()).toHaveLength(1);
     expect(credentialWriteCount).toBe(1);
-    expect(bridge.retryFailedCredentials).toHaveBeenCalledOnce();
     wizard.controller.dispose();
   });
 
@@ -358,9 +365,10 @@ describe("mounted onboarding", () => {
     });
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
     seedSecret("anthropic", randomUUID());
 
-    await user.click(button("Continue"));
+    await saveModelKey(user);
     await waitFor(() => {
       expect(credentialWriteCount).toBe(1);
     });
@@ -382,54 +390,43 @@ describe("mounted onboarding", () => {
     wizard.controller.dispose();
   });
 
-  it("snapshots and clears every password before the first write settles", async () => {
+  it("snapshots and clears the password before the write settles", async () => {
     const user = userEvent.setup();
-    const firstValue = randomUUID();
-    const secondValue = randomUUID();
-    const firstWrite = deferred<void>();
-    let firstValueMatched = false;
-    let secondValueMatched = false;
+    const value = randomUUID();
+    const write = deferred<void>();
+    let valueMatched = false;
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
-    bridge.writeCredential.mockImplementation(async ({ slot, value }) => {
-      if (slot === "anthropic") {
-        firstValueMatched = value === firstValue;
-        await firstWrite.promise;
-      }
-      if (slot === "openrouter") secondValueMatched = value === secondValue;
+    bridge.writeCredential.mockImplementation(async ({ slot, value: written }) => {
+      valueMatched = written === value;
+      await write.promise;
       return { slot, status: "configured", runtimeReady: true };
     });
     bridge.credentialStatuses
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ slot: "openrouter", state: "configured", runtimeState: "active" }]);
+      .mockResolvedValueOnce([{ slot: "anthropic", state: "configured", runtimeState: "active" }]);
     const wizard = mountWizard({ bridge });
     await wizard.open();
-    const firstInput = seedSecret("anthropic", firstValue);
-    const secondInput = seedSecret("openrouter", secondValue);
+    await openApiKeyPanel(user);
+    const input = seedSecret("anthropic", value);
 
-    await user.click(button("Continue"));
+    await saveModelKey(user);
 
     await waitFor(() => {
-      expect(firstValueMatched).toBe(true);
+      expect(valueMatched).toBe(true);
     });
-    expect(firstInput).toBeDisabled();
-    expect(secondInput).toBeDisabled();
-    expect(firstInput.value).toBe("");
-    expect(secondInput.value).toBe("");
+    expect(input).toBeDisabled();
+    expect(input.value).toBe("");
     expect(document.querySelector(".onboarding-action-status")?.textContent).toBe("Working…");
-    secondInput.value = randomUUID();
-    firstWrite.resolve();
+    write.resolve();
 
     await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
+      expect(rowState("ai")).toBe("ready");
     });
-    expect(secondValueMatched).toBe(true);
-    expect(secondInput.value).toBe("");
     wizard.controller.dispose();
   });
 
-  it("writes the explicitly selected provider last and attaches its model choice", async () => {
+  it("writes only the selected provider and attaches its model choice", async () => {
     const user = userEvent.setup();
-    const anthropicKey = randomUUID();
     const openRouterKey = randomUUID();
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
@@ -443,20 +440,17 @@ describe("mounted onboarding", () => {
     }));
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
     await chooseOption(user, "onboarding-llm-provider", "openrouter");
-    seedSecret("anthropic", anthropicKey);
     seedSecret("openrouter", openRouterKey);
 
-    await user.click(button("Continue"));
+    await saveModelKey(user);
 
     await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
+      expect(rowState("ai")).toBe("ready");
     });
+    expect(bridge.writeCredential).toHaveBeenCalledTimes(1);
     expect(bridge.writeCredential).toHaveBeenNthCalledWith(1, {
-      slot: "anthropic",
-      value: anthropicKey,
-    });
-    expect(bridge.writeCredential).toHaveBeenNthCalledWith(2, {
       slot: "openrouter",
       value: openRouterKey,
       selection: {
@@ -480,13 +474,14 @@ describe("mounted onboarding", () => {
     bridge.credentialStatuses.mockResolvedValue([]);
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
     await chooseOption(user, "onboarding-llm-model", "__custom__");
     await typeInto(user, "onboarding-custom-model", "athlete-selected-model");
 
-    await user.click(button("Continue"));
+    await saveModelKey(user);
 
     await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
+      expect(bridge.applyLlmSelection).toHaveBeenCalledOnce();
     });
     expect(bridge.writeCredential).not.toHaveBeenCalled();
     expect(bridge.applyLlmSelection).toHaveBeenCalledWith({
@@ -497,8 +492,7 @@ describe("mounted onboarding", () => {
     wizard.controller.dispose();
   });
 
-  it("continues with an active ChatGPT profile without signing in again", async () => {
-    const user = userEvent.setup();
+  it("treats an active ChatGPT profile as ready without signing in again", async () => {
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     bridge.llmConfiguration.mockResolvedValue({
       ...TEST_LLM_CONFIGURATION,
@@ -508,21 +502,13 @@ describe("mounted onboarding", () => {
     const wizard = mountWizard({ bridge });
     await wizard.open();
 
-    await user.click(button("Continue"));
-
-    await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
-    });
+    expect(rowState("ai")).toBe("ready");
     expect(bridge.chatGptLogin).not.toHaveBeenCalled();
-    expect(bridge.applyLlmSelection).toHaveBeenCalledWith({
-      provider: "openai-codex",
-      model: "custom-chat-model",
-      endpoint: { mode: "automatic" },
-    });
+    expect(panel("chatgpt")).toBeNull();
     wizard.controller.dispose();
   });
 
-  it("applies an endpoint change for an already-active provider without requiring the key again", async () => {
+  it("applies an endpoint change for an already-active provider without the key again", async () => {
     const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
@@ -535,13 +521,14 @@ describe("mounted onboarding", () => {
     ]);
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
     await chooseOption(user, "onboarding-endpoint-mode", "custom");
     await typeInto(user, "onboarding-custom-endpoint", "https://models.example.test/v1");
 
-    await user.click(button("Continue"));
+    await saveModelKey(user);
 
     await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
+      expect(bridge.applyLlmSelection).toHaveBeenCalledOnce();
     });
     expect(bridge.writeCredential).not.toHaveBeenCalled();
     expect(bridge.applyLlmSelection).toHaveBeenCalledWith({
@@ -568,9 +555,10 @@ describe("mounted onboarding", () => {
     bridge.applyLlmSelection.mockImplementation(() => pending.promise);
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
     await chooseOption(user, "onboarding-llm-provider", "openrouter");
 
-    await user.click(button("Continue"));
+    await saveModelKey(user);
 
     await waitFor(() => {
       expect(bridge.applyLlmSelection).toHaveBeenCalledOnce();
@@ -582,7 +570,7 @@ describe("mounted onboarding", () => {
     active = true;
     pending.resolve({ status: "configured", runtimeReady: true });
     await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
+      expect(rowState("ai")).toBe("ready");
     });
     expect(bridge.applyLlmSelection).toHaveBeenCalledWith({
       provider: "openrouter",
@@ -592,10 +580,12 @@ describe("mounted onboarding", () => {
     wizard.controller.dispose();
   });
 
-  it("does not submit the wizard when Enter is handled by a selection control", async () => {
+  it("does not save when Enter is handled by a selection control", async () => {
+    const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
     const provider = control<HTMLSelectElement>("onboarding-llm-provider");
 
     expect(fireEvent.keyDown(provider, { key: "Enter" })).toBe(true);
@@ -605,7 +595,8 @@ describe("mounted onboarding", () => {
     wizard.controller.dispose();
   });
 
-  it("submits the wizard when Enter is pressed inside a credential field", async () => {
+  it("saves the model key when Enter is pressed inside its credential field", async () => {
+    const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
     bridge.credentialStatuses.mockResolvedValue([
@@ -613,12 +604,31 @@ describe("mounted onboarding", () => {
     ]);
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
 
     expect(fireEvent.keyDown(passwordInput("anthropic"), { key: "Enter" })).toBe(false);
 
     await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
+      expect(bridge.applyLlmSelection).toHaveBeenCalledOnce();
     });
+    wizard.controller.dispose();
+  });
+
+  it("saves the training key when Enter is pressed inside its credential field", async () => {
+    const user = userEvent.setup();
+    const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
+    bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+    await openTrainingPanel(user);
+    seedSecret("intervals-icu", randomUUID());
+
+    expect(fireEvent.keyDown(passwordInput("intervals-icu"), { key: "Enter" })).toBe(false);
+
+    await waitFor(() => {
+      expect(bridge.writeCredential).toHaveBeenCalledOnce();
+    });
+    expect(bridge.writeCredential.mock.calls[0]?.[0]?.slot).toBe("intervals-icu");
     wizard.controller.dispose();
   });
 
@@ -643,6 +653,7 @@ describe("mounted onboarding", () => {
     }));
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
     await chooseOption(user, "onboarding-llm-provider", "openrouter");
     await chooseOption(user, "onboarding-llm-model", "__custom__");
     await typeInto(user, "onboarding-custom-model", selection.model);
@@ -660,7 +671,7 @@ describe("mounted onboarding", () => {
     );
     seedSecret("openrouter", secret);
 
-    await user.click(button("Continue"));
+    await saveModelKey(user);
 
     await waitFor(() => {
       expect(wizard.controller.state().fixedError).toBe("model-runtime-unavailable");
@@ -676,10 +687,10 @@ describe("mounted onboarding", () => {
       selection.endpoint.value,
     );
 
-    await user.click(button("Continue"));
+    await saveModelKey(user);
 
     await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
+      expect(rowState("ai")).toBe("ready");
     });
     expect(bridge.applyLlmSelection).toHaveBeenCalledWith(selection);
     expect(bridge.writeCredential).toHaveBeenCalledTimes(1);
@@ -691,38 +702,39 @@ describe("mounted onboarding", () => {
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
     await chooseOption(user, "onboarding-llm-provider", "openrouter");
     await chooseOption(user, "onboarding-endpoint-mode", "custom");
     await typeInto(user, "onboarding-custom-endpoint", "http://models.example.test/v1");
     seedSecret("openrouter", randomUUID());
 
-    await user.click(button("Continue"));
+    await saveModelKey(user);
 
     await waitFor(() => {
       expect(wizard.controller.state().fixedError).toBe("endpoint-invalid");
     });
+    expect(errorText()).toBe("Enter a valid HTTPS endpoint, or a loopback HTTP endpoint.");
     expect(bridge.writeCredential).not.toHaveBeenCalled();
     expect(bridge.applyLlmSelection).not.toHaveBeenCalled();
     wizard.controller.dispose();
   });
 
-  it("passes the selected model to ChatGPT sign-in", async () => {
+  it("passes the ChatGPT lane's default model to sign-in", async () => {
     const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
+    bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
     const wizard = mountWizard({ bridge });
     await wizard.open();
-    await chooseOption(user, "onboarding-llm-provider", "openai-codex");
-    await chooseOption(user, "onboarding-llm-model", "__custom__");
-    await typeInto(user, "onboarding-custom-model", "gpt-5.5-codex-max");
+    await chooseLane(user, "openai-codex");
 
-    await user.click(button("Sign in again"));
+    await user.click(button("Sign in with ChatGPT"));
 
     await waitFor(() => {
       expect(bridge.chatGptLogin).toHaveBeenCalledOnce();
     });
     expect(bridge.chatGptLogin).toHaveBeenCalledWith({
       provider: "openai-codex",
-      model: "gpt-5.5-codex-max",
+      model: "gpt-5.5",
       endpoint: { mode: "automatic" },
     });
     wizard.controller.dispose();
@@ -749,22 +761,18 @@ describe("mounted onboarding", () => {
       });
       const wizard = mountWizard({ bridge });
       await wizard.open();
+      await openApiKeyPanel(user);
       seedSecret("anthropic", randomUUID());
 
-      await user.click(button("Continue"));
+      await saveModelKey(user);
 
       await waitFor(() => {
-        expect(wizard.controller.state().step).toBe("training-data");
+        expect(rowState("ai")).toBe("ready");
       });
       expect(wizard.controller.state().fixedError).toBeNull();
       expect(document.body.textContent).not.toContain(
         "That key was saved, but it is not active yet.",
       );
-      expect(retryButtons()).toHaveLength(0);
-
-      await user.click(button("Back"));
-
-      expect(credentialBadge("anthropic").textContent).toBe("Configured");
       expect(retryButtons()).toHaveLength(0);
       expect(bridge.applyLlmSelection).toHaveBeenCalledOnce();
       expect(credentialWriteCount).toBe(1);
@@ -772,7 +780,7 @@ describe("mounted onboarding", () => {
     },
   );
 
-  it("uses Continue instead of credential retry when an unrelated saved key failed", async () => {
+  it("never writes an unrelated saved key when saving the selected provider", async () => {
     const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
     bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
@@ -780,30 +788,23 @@ describe("mounted onboarding", () => {
       { slot: "anthropic", state: "configured", runtimeState: "active" },
       { slot: "openrouter", state: "configured", runtimeState: "failed" },
     ]);
-    let credentialWriteCount = 0;
+    const writes: string[] = [];
     bridge.writeCredential.mockImplementation(async ({ slot }) => {
-      credentialWriteCount += 1;
-      return { slot, status: "refused", reason: "runtime-unavailable" };
+      writes.push(slot);
+      return { slot, status: "configured", runtimeReady: true };
     });
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
     seedSecret("anthropic", randomUUID());
-    seedSecret("openrouter", randomUUID());
 
-    await user.click(button("Continue"));
+    await saveModelKey(user);
 
     await waitFor(() => {
-      expect(wizard.controller.state().fixedError).toBe("model-runtime-unavailable");
+      expect(rowState("ai")).toBe("ready");
     });
-    expect(wizard.controller.state().step).toBe("coach-keys");
+    expect(writes).toEqual(["anthropic"]);
     expect(retryButtons()).toHaveLength(0);
-
-    await user.click(button("Continue"));
-
-    await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
-    });
-    expect(credentialWriteCount).toBe(2);
     wizard.controller.dispose();
   });
 
@@ -829,9 +830,10 @@ describe("mounted onboarding", () => {
     }));
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
     seedSecret("anthropic", randomUUID());
 
-    await user.click(button("Continue"));
+    await saveModelKey(user);
 
     await waitFor(() => {
       expect(wizard.controller.state()).toMatchObject({
@@ -868,16 +870,17 @@ describe("mounted onboarding", () => {
     bridge.writeCredential.mockRejectedValue(new Error(exceptionDetail));
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
     const secret = seedSecret("anthropic", randomUUID());
 
-    await user.click(button("Continue"));
+    await saveModelKey(user);
 
     await waitFor(() => {
       expect(wizard.controller.state().fixedError).toBe("credential-save-failed");
     });
     expect(errorText()).toBe("That key could not be saved. Try entering it again.");
     expect(document.body.textContent).not.toContain(exceptionDetail);
-    expect(wizard.controller.state().step).toBe("coach-keys");
+    expect(rowState("ai")).toBe("pending");
     expect(secret.value).toBe("");
     expect(bridge.credentialStatuses).toHaveBeenCalledTimes(2);
     wizard.controller.dispose();
@@ -897,9 +900,10 @@ describe("mounted onboarding", () => {
     }));
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
     const secret = seedSecret("anthropic", randomUUID());
 
-    await user.click(button("Continue"));
+    await saveModelKey(user);
 
     await waitFor(() => {
       expect(wizard.controller.state().fixedError).toBe("credential-status-unavailable");
@@ -908,7 +912,7 @@ describe("mounted onboarding", () => {
       "That key was saved, but its status could not be refreshed. Close and reopen Setup to check again.",
     );
     expect(document.body.textContent).not.toContain(exceptionDetail);
-    expect(wizard.controller.state().step).toBe("coach-keys");
+    expect(rowState("ai")).toBe("pending");
     expect(secret.value).toBe("");
     expect(bridge.credentialStatuses).toHaveBeenCalledTimes(2);
     wizard.controller.dispose();
@@ -931,13 +935,14 @@ describe("mounted onboarding", () => {
       .mockRejectedValueOnce(new Error(exceptionDetail));
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
     await chooseOption(user, "onboarding-llm-provider", "anthropic");
     seedSecret("anthropic", randomUUID());
 
-    await user.click(button("Continue"));
+    await saveModelKey(user);
 
     await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
+      expect(rowState("ai")).toBe("ready");
     });
     expect(wizard.controller.state().fixedError).toBeNull();
     expect(wizard.controller.state().chatGptRuntimeReady).toBe(false);
@@ -945,7 +950,7 @@ describe("mounted onboarding", () => {
     wizard.controller.dispose();
   });
 
-  it("advances after a configured key write and refreshed active status", async () => {
+  it("marks the AI row ready after a configured key write and refreshed active status", async () => {
     const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
     bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
@@ -960,12 +965,13 @@ describe("mounted onboarding", () => {
     const onComplete = vi.fn();
     const wizard = mountWizard({ bridge, onComplete });
     await wizard.open();
+    await openApiKeyPanel(user);
     const secret = seedSecret("anthropic", randomUUID());
 
-    await user.click(button("Continue"));
+    await saveModelKey(user);
 
     await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
+      expect(rowState("ai")).toBe("ready");
     });
     expect(secret.value).toBe("");
     expect(credentialWriteCount).toBe(1);
@@ -974,37 +980,43 @@ describe("mounted onboarding", () => {
     wizard.controller.dispose();
   });
 
-  it("discloses distinct credential storage without starting sign-in, writing, or advancing", async () => {
+  it("discloses where each secret is typed without starting sign-in, writing, or completing", async () => {
+    const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
+    bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
     const wizard = mountWizard({ bridge });
     await wizard.open();
     const stateBeforeReading = wizard.controller.state();
 
-    const disclosure = document.querySelector(".onboarding-copy");
-    expect(disclosure?.textContent).toContain("ChatGPT sign-in is saved in a local profile file.");
-    expect(disclosure?.textContent).toContain("API keys are encrypted by macOS.");
-    expect(disclosure?.textContent).toContain(
-      "The local coaching service uses your choice to contact the provider.",
+    await chooseLane(user, "openai-codex");
+    expect(panel("chatgpt")?.textContent).toContain(
+      "Opens OpenAI's sign-in page in your browser — you type your password there, not here.",
+    );
+    expect(panel("chatgpt")?.textContent).toContain("Needs a paid plan.");
+    await chooseLane(user, "api-key");
+    expect(panel("api-key")?.textContent).toContain(
+      "Created in the provider's console, billed per use — usually cents per conversation.",
     );
 
     expect(bridge.chatGptLogin).not.toHaveBeenCalled();
     expect(bridge.writeCredential).not.toHaveBeenCalled();
     expect(wizard.controller.state()).toEqual(stateBeforeReading);
-    expect(wizard.controller.state().step).toBe("coach-keys");
     wizard.controller.dispose();
   });
 
-  it("runs configured ChatGPT sign-in again through pending to configured", async () => {
+  it("runs ChatGPT sign-in through pending to a ready row", async () => {
     const user = userEvent.setup();
     const login = deferred<{ readonly status: "configured"; readonly runtimeReady: true }>();
     const bridge = testBridge(() => login.promise);
+    bridge.chatGptStatus.mockResolvedValueOnce({ state: "absent", runtimeReady: false });
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await chooseLane(user, "openai-codex");
 
-    const signInAgain = button("Sign in again");
-    expect(signInAgain.type).toBe("button");
-    expect(signInAgain).toBeEnabled();
-    await user.click(signInAgain);
+    const signIn = button("Sign in with ChatGPT");
+    expect(signIn.type).toBe("button");
+    expect(signIn).toBeEnabled();
+    await user.click(signIn);
 
     expect(bridge.chatGptLogin).toHaveBeenCalledTimes(1);
     expect(button("Finish signing in in your browser…")).toBeDisabled();
@@ -1015,47 +1027,41 @@ describe("mounted onboarding", () => {
 
     login.resolve({ status: "configured", runtimeReady: true });
     await waitFor(() => {
-      expect(bridge.credentialStatuses).toHaveBeenCalledTimes(2);
-      expect(bridge.chatGptStatus).toHaveBeenCalledTimes(2);
-      expect(document.body.textContent).toContain("ChatGPT is ready.");
+      expect(rowState("ai")).toBe("ready");
     });
-    expect(button("Sign in again")).toBeEnabled();
+    expect(panel("chatgpt")).toBeNull();
     expect(bridge.writeCredential).not.toHaveBeenCalled();
     wizard.controller.dispose();
   });
 
-  it("renders the existing refusal state after configured sign-in is refused", async () => {
+  it("renders the refusal state inside the ChatGPT panel", async () => {
     const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "refused", reason: "timed-out" }));
+    bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await chooseLane(user, "openai-codex");
 
-    await user.click(button("Sign in again"));
+    await user.click(button("Sign in with ChatGPT"));
 
     await waitFor(() => {
-      expect(document.body.textContent).toContain(
+      expect(panel("chatgpt")?.textContent).toContain(
         "ChatGPT sign-in timed out. Retry when you are ready.",
       );
     });
-    expect(button("Retry ChatGPT sign-in")).toBeEnabled();
+    expect(button("Sign in with ChatGPT")).toBeEnabled();
     wizard.controller.dispose();
   });
 
-  it("owns drops only on the training-data step and gates on returned imported counts", async () => {
-    const user = userEvent.setup();
+  it("owns drops whenever Setup is open and gates on returned imported counts", async () => {
     const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
     bridge.importFiles
       .mockResolvedValueOnce(importResult({ total: 2, imported: 1, quarantined: 1 }))
       .mockResolvedValueOnce(importResult({ total: 2, imported: 0, quarantined: 2 }));
     const wizard = mountWizard({ bridge });
     await wizard.open();
-    expect(wizard.controller.ownsDroppedImportFiles()).toBe(false);
-    expect(bridge.onDroppedImportFiles).not.toHaveBeenCalled();
+    expect(wizard.controller.ownsDroppedImportFiles()).toBe(true);
 
-    await user.click(button("Continue"));
-    await waitFor(() => {
-      expect(wizard.controller.ownsDroppedImportFiles()).toBe(true);
-    });
     act(() => {
       wizard.controller.importDroppedFiles(["/synthetic/batch.fit"]);
     });
@@ -1068,6 +1074,7 @@ describe("mounted onboarding", () => {
     expect(document.body.textContent).toContain(
       "Local library import: 1 ride file imported. 1 ride file quarantined. Coaching access to activities and streams is available.",
     );
+    expect(rowState("training")).toBe("ready");
 
     act(() => {
       wizard.controller.importDroppedFiles(["/synthetic/quarantined.fit"]);
@@ -1083,15 +1090,6 @@ describe("mounted onboarding", () => {
     expect(wizard.controller.state().importedRideFileCount).toBe(1);
     expect(document.body.textContent).not.toContain("Import completed");
 
-    await user.click(button("Continue"));
-    await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("safety-intake");
-    });
-    expect(wizard.controller.ownsDroppedImportFiles()).toBe(false);
-    act(() => {
-      wizard.controller.importDroppedFiles(["/synthetic/not-owned.fit"]);
-    });
-    expect(bridge.importFiles).toHaveBeenCalledTimes(2);
     act(() => {
       wizard.controller.close();
     });
@@ -1106,12 +1104,9 @@ describe("mounted onboarding", () => {
     bridge.importFiles.mockResolvedValue(importResult({ total: 1, imported: 1, quarantined: 0 }));
     const wizard = mountWizard({ bridge });
     await wizard.open();
-    await user.click(button("Continue"));
-    await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
-    });
+    await openTrainingPanel(user);
 
-    await user.click(screen.getByRole("button", { name: /Choose FIT, TCX, or GPX files/u }));
+    await user.click(button("or import ride files instead"));
 
     await waitFor(() => {
       expect(bridge.chooseImportFiles).toHaveBeenCalledOnce();
@@ -1131,25 +1126,22 @@ describe("mounted onboarding", () => {
       statuses: [],
       importRide: true,
       requiresProviderSync: false,
-      readyCopy: "Ride files saved to your local library",
     },
     {
       source: "platform-only",
       statuses: [{ slot: "intervals-icu", state: "configured", runtimeState: "active" }] as const,
       importRide: false,
       requiresProviderSync: true,
-      readyCopy: "Training data connected",
     },
     {
       source: "mixed",
       statuses: [{ slot: "intervals-icu", state: "configured", runtimeState: "active" }] as const,
       importRide: true,
       requiresProviderSync: true,
-      readyCopy: "Training data connected",
     },
   ] as const)(
     "hands off the transient sync requirement for $source setup",
-    async ({ statuses, importRide, requiresProviderSync, readyCopy }) => {
+    async ({ statuses, importRide, requiresProviderSync }) => {
       const user = userEvent.setup();
       const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
       bridge.credentialStatuses.mockResolvedValue(statuses);
@@ -1158,10 +1150,6 @@ describe("mounted onboarding", () => {
       const wizard = mountWizard({ bridge, onComplete });
 
       await wizard.open();
-      await user.click(button("Continue"));
-      await waitFor(() => {
-        expect(wizard.controller.state().step).toBe("training-data");
-      });
       if (importRide) {
         act(() => {
           wizard.controller.importDroppedFiles(["/synthetic/setup.fit"]);
@@ -1170,32 +1158,23 @@ describe("mounted onboarding", () => {
           expect(wizard.controller.state().importedRideFileCount).toBe(1);
         });
       }
-      await user.click(button("Continue"));
+      await answerIntake(user);
       await waitFor(() => {
-        expect(wizard.controller.state().step).toBe("safety-intake");
+        expect(primaryButton()).toBeEnabled();
       });
-      await user.click(
-        within(screen.getByRole("group", { name: "Have you had a bone stress injury?" })).getByRole(
-          "radio",
-          { name: "No" },
-        ),
-      );
-      await user.click(screen.getByRole("radio", { name: "No current injury" }));
-      await user.click(button("Continue"));
-      await waitFor(() => {
-        expect(wizard.controller.state().step).toBe("ready");
-      });
-      expect(
-        Array.from(
-          document.querySelector(".ready-preview")?.children ?? [],
-          (child) => child.textContent,
-        ),
-      ).toEqual(["Keys secured", readyCopy, "Safety context saved"]);
 
-      await user.click(button("Finish setup"));
+      await user.click(primaryButton());
 
       await waitFor(() => {
         expect(onComplete).toHaveBeenCalledOnce();
+      });
+      expect(bridge.saveIntake).toHaveBeenCalledWith({
+        swim_skill_floor: null,
+        continuous_distance_capable: null,
+        open_water_comfort: null,
+        prior_bsi: false,
+        clinician_cleared: null,
+        injury_status: "none",
       });
       expect(onComplete).toHaveBeenCalledWith({
         providerConfigured: true,
@@ -1215,38 +1194,21 @@ describe("mounted onboarding", () => {
     ]);
     const wizard = mountWizard({ bridge });
     await wizard.open();
-    await user.click(button("Continue"));
-    await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
-    });
-    await user.click(button("Continue"));
-    await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("safety-intake");
-    });
 
-    await user.click(
-      within(screen.getByRole("group", { name: "Have you had a bone stress injury?" })).getByRole(
-        "radio",
-        { name: "Yes" },
-      ),
-    );
-    await user.click(screen.getByRole("radio", { name: "No current injury" }));
+    await chooseOption(user, "onboarding-prior-bsi", "yes");
+    await chooseOption(user, "onboarding-injury-status", "none");
 
-    const clearance = screen.getByRole("group", {
-      name: "Has a clinician cleared your current return to training?",
-    });
-    await user.click(button("Continue"));
+    expect(control("onboarding-clinician-cleared")).toBeInTheDocument();
+    expect(primaryButton()).toBeDisabled();
+
+    await chooseOption(user, "onboarding-clinician-cleared", "yes");
     await waitFor(() => {
-      expect(wizard.controller.state().fixedError).toBe("intake-incomplete");
+      expect(primaryButton()).toBeEnabled();
     });
-    expect(errorText()).toBe("Answer the required safety questions to continue.");
-    expect(bridge.saveIntake).not.toHaveBeenCalled();
-
-    await user.click(within(clearance).getByRole("radio", { name: "Yes" }));
-    await user.click(button("Continue"));
+    await user.click(primaryButton());
 
     await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("ready");
+      expect(bridge.saveIntake).toHaveBeenCalledOnce();
     });
     expect(bridge.saveIntake).toHaveBeenCalledWith({
       swim_skill_floor: null,
@@ -1259,43 +1221,106 @@ describe("mounted onboarding", () => {
     wizard.controller.dispose();
   });
 
-  it("keeps the athlete on the safety step when the intake write fails", async () => {
+  it("keeps the athlete on the screen when the intake write fails", async () => {
     const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
     bridge.credentialStatuses.mockResolvedValue([
       { slot: "intervals-icu", state: "configured", runtimeState: "active" },
     ]);
     bridge.saveIntake.mockRejectedValue(new Error("intake detail must stay private"));
-    const wizard = mountWizard({ bridge });
+    const onComplete = vi.fn();
+    const wizard = mountWizard({ bridge, onComplete });
     await wizard.open();
-    await user.click(button("Continue"));
+    await answerIntake(user);
     await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
+      expect(primaryButton()).toBeEnabled();
     });
-    await user.click(button("Continue"));
-    await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("safety-intake");
-    });
-    await user.click(
-      within(screen.getByRole("group", { name: "Have you had a bone stress injury?" })).getByRole(
-        "radio",
-        { name: "No" },
-      ),
-    );
-    await user.click(screen.getByRole("radio", { name: "No current injury" }));
 
-    await user.click(button("Continue"));
+    await user.click(primaryButton());
 
     await waitFor(() => {
       expect(wizard.controller.state().fixedError).toBe("intake-save-failed");
     });
     expect(errorText()).toBe("Your answers could not be saved. Please try again.");
-    expect(wizard.controller.state().step).toBe("safety-intake");
+    expect(onComplete).not.toHaveBeenCalled();
     expect(document.body.textContent).not.toContain("intake detail must stay private");
     wizard.controller.dispose();
   });
 
-  it("does not start a dropped import while the training-data step is submitting", async () => {
+  it("refuses to finish while the provider gate is unmet", async () => {
+    const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
+    bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+    bridge.credentialStatuses.mockResolvedValue([
+      { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+    ]);
+    const onComplete = vi.fn();
+    const wizard = mountWizard({ bridge, onComplete });
+    await wizard.open();
+    act(() => {
+      wizard.controller.setIntake("priorBsi", false);
+      wizard.controller.setIntake("injuryStatus", "none");
+    });
+
+    act(() => {
+      wizard.controller.finish();
+    });
+
+    await waitFor(() => {
+      expect(wizard.controller.state().fixedError).toBe("credential-required");
+    });
+    expect(errorText()).toBe("Sign in with ChatGPT or add at least one model key to continue.");
+    expect(bridge.saveIntake).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    wizard.controller.dispose();
+  });
+
+  it("refuses to finish while the training gate is unmet", async () => {
+    const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
+    bridge.credentialStatuses.mockResolvedValue([]);
+    const onComplete = vi.fn();
+    const wizard = mountWizard({ bridge, onComplete });
+    await wizard.open();
+    act(() => {
+      wizard.controller.setIntake("priorBsi", false);
+      wizard.controller.setIntake("injuryStatus", "none");
+    });
+
+    act(() => {
+      wizard.controller.finish();
+    });
+
+    await waitFor(() => {
+      expect(wizard.controller.state().fixedError).toBe("training-data-required");
+    });
+    expect(errorText()).toBe("Connect intervals.icu or import at least one ride file.");
+    expect(bridge.saveIntake).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    wizard.controller.dispose();
+  });
+
+  it("refuses to finish while the intake gate is unmet", async () => {
+    const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
+    bridge.credentialStatuses.mockResolvedValue([
+      { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+    ]);
+    const onComplete = vi.fn();
+    const wizard = mountWizard({ bridge, onComplete });
+    await wizard.open();
+
+    act(() => {
+      wizard.controller.finish();
+    });
+
+    await waitFor(() => {
+      expect(wizard.controller.state().fixedError).toBe("intake-incomplete");
+    });
+    expect(errorText()).toBe("Answer the required safety questions to continue.");
+    expect(bridge.saveIntake).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    wizard.controller.dispose();
+  });
+
+  it("does not start a dropped import while a credential save is in flight", async () => {
     const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
     const pendingWrite = deferred<CredentialWriteResult>();
@@ -1306,14 +1331,10 @@ describe("mounted onboarding", () => {
     });
     const wizard = mountWizard({ bridge });
     await wizard.open();
-
-    await user.click(button("Continue"));
-    await waitFor(() => {
-      expect(wizard.controller.ownsDroppedImportFiles()).toBe(true);
-    });
+    await openTrainingPanel(user);
     seedSecret("intervals-icu", randomUUID());
 
-    await user.click(button("Continue"));
+    await saveTrainingKey(user);
     await waitFor(() => {
       expect(credentialWriteCount).toBe(1);
     });
@@ -1329,7 +1350,7 @@ describe("mounted onboarding", () => {
     wizard.controller.dispose();
   });
 
-  it("presents resident-routed import outcomes while another onboarding step is open", async () => {
+  it("presents resident-routed import outcomes while Setup is open", async () => {
     const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
     bridge.importFiles.mockResolvedValue(importResult({ total: 2, imported: 1, quarantined: 1 }));
     const presentationChanges = vi.fn();
@@ -1341,7 +1362,6 @@ describe("mounted onboarding", () => {
     });
 
     await wizard.open();
-    expect(wizard.controller.state().step).toBe("coach-keys");
     expect(presentationChanges).toHaveBeenLastCalledWith(true);
     await act(async () => {
       await imports.importPaths("resident", ["/synthetic/outside-training.fit"]);

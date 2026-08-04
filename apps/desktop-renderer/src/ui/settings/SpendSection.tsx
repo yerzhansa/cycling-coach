@@ -121,7 +121,7 @@ export function SpendSection(): ReactElement {
           />
           <button
             type="button"
-            className={`${styles.button} ${styles.primary}`}
+            className={styles.primary}
             disabled={spend.saving}
             onClick={() => {
               port?.save();

@@ -178,7 +178,7 @@ export function ApplicationSection(): ReactElement {
           </div>
           <button
             type="button"
-            className={`${styles.button} ${styles.danger}`}
+            className={styles.danger}
             disabled={chatActions === null || mutating}
             onClick={() => {
               setActiveView("chat");

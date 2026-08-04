@@ -418,6 +418,34 @@ export const PALETTES: readonly Palette[] = Object.freeze([
       ok: "#10a37f",
     },
   },
+  {
+    id: "t3code",
+    name: "T3 Code",
+    l: {
+      bg: "#fcfcfc",
+      rail: "#fafafa",
+      sf: "#ffffff",
+      ink: "#27272a",
+      ink2: "#71717a",
+      line: "#e4e4e7",
+      br: "#1b4ed8",
+      bri: "#ffffff",
+      soft: "#f4f4f5",
+      ok: "#047857",
+    },
+    d: {
+      bg: "#0a0a0a",
+      rail: "#000000",
+      sf: "#111111",
+      ink: "#f5f5f5",
+      ink2: "#a3a3a3",
+      line: "#1a1a1a",
+      br: "#366ffb",
+      bri: "#0a0a0a",
+      soft: "#141414",
+      ok: "#34d399",
+    },
+  },
 ]);
 
 export const FIXED: { readonly l: FixedRamp; readonly d: FixedRamp } = Object.freeze({

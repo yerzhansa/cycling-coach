@@ -1,25 +1,30 @@
 import { randomUUID } from "node:crypto";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OnboardingBridge } from "../src/onboarding/bridge.js";
 import {
+  chooseLane,
   control,
-  credentialBadges,
   mountWizard,
+  openApiKeyPanel,
+  panel,
   resetOnboardingStore,
+  rowState,
+  rowSubtitle,
   seedSecret,
+  setupCard,
   testBridge,
   type TestBridge,
 } from "./onboarding-harness.js";
 
-function activeBadges(): readonly HTMLElement[] {
-  return credentialBadges().filter((badge) => badge.dataset.state === "configured");
-}
-
-function expectOneActiveProvider(): void {
-  expect(credentialBadges()).toHaveLength(10);
-  expect(activeBadges()).toHaveLength(1);
+function expectOnePoweringRow(subtitle: string): void {
+  expect(rowState("ai")).toBe("ready");
+  expect(rowSubtitle("ai")).toBe(subtitle);
+  const claiming = Array.from(setupCard().querySelectorAll("[data-setup-row]")).filter((row) =>
+    (row.textContent ?? "").includes("Powers your coach"),
+  );
+  expect(claiming).toHaveLength(1);
 }
 
 function twoProviderBridge(overrides: Partial<OnboardingBridge>): TestBridge {
@@ -49,7 +54,7 @@ describe("onboarding provider status", () => {
     resetOnboardingStore();
   });
 
-  it("shows only ChatGPT as active after sign-in supersedes an API-key provider", async () => {
+  it("shows only ChatGPT as powering the coach after sign-in supersedes an API key", async () => {
     const user = userEvent.setup();
     let selectedProvider: "anthropic" | "chatgpt" = "anthropic";
     const credentialStatuses = vi.fn(async () => [
@@ -71,21 +76,26 @@ describe("onboarding provider status", () => {
     const bridge = twoProviderBridge({ credentialStatuses, chatGptStatus, chatGptLogin });
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    expectOnePoweringRow("Powers your coach");
 
+    await chooseLane(user, "openai-codex");
+    expect(rowState("ai")).toBe("pending");
     await user.click(screen.getByRole("button", { name: "Sign in with ChatGPT" }));
 
     await waitFor(() => {
       expect(credentialStatuses).toHaveBeenCalledTimes(2);
-      expectOneActiveProvider();
     });
-    expect(activeBadges()[0]?.textContent).toBe("Configured");
-    expect(screen.getByText("Saved · Not in use").dataset.state).toBe("stored-inactive");
+    await waitFor(() => {
+      expect(rowState("ai")).toBe("ready");
+    });
+    expectOnePoweringRow("Powers your coach");
+    expect(panel("chatgpt")).toBeNull();
     expect(document.body.textContent).not.toContain("Retry saved keys");
     expect(chatGptStatus).toHaveBeenCalledTimes(2);
     wizard.controller.dispose();
   });
 
-  it("shows only the API-key provider as active after a key save", async () => {
+  it("shows the API-key provider as powering the coach after a key save", async () => {
     const user = userEvent.setup();
     let selectedProvider: "anthropic" | "chatgpt" = "chatgpt";
     const credentialStatuses = vi.fn(async () =>
@@ -114,22 +124,25 @@ describe("onboarding provider status", () => {
     const bridge = twoProviderBridge({ credentialStatuses, chatGptStatus, writeCredential });
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
     await user.selectOptions(control<HTMLSelectElement>("onboarding-llm-provider"), "anthropic");
     seedSecret("anthropic", randomUUID());
 
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    const host = panel("api-key");
+    await user.click(within(host as HTMLElement).getByRole("button", { name: "Save API key" }));
 
     await waitFor(() => {
       expect(credentialStatuses).toHaveBeenCalledTimes(2);
     });
-    await user.click(screen.getByRole("button", { name: "Back" }));
-    expectOneActiveProvider();
-    expect(activeBadges()[0]?.textContent).toBe("Configured");
-    expect(screen.getByText("Saved · Not in use").dataset.state).toBe("stored-inactive");
+    await waitFor(() => {
+      expect(rowState("ai")).toBe("ready");
+    });
+    expectOnePoweringRow("Powers your coach");
+    expect(writeCredential).toHaveBeenCalledOnce();
     wizard.controller.dispose();
   });
 
-  it("shows only the selected API-key provider as active after Continue succeeds", async () => {
+  it("shows the selected API-key provider as powering the coach after Save succeeds", async () => {
     const user = userEvent.setup();
     let selectedProvider: "anthropic" | "chatgpt" = "chatgpt";
     const credentialStatuses = vi.fn(async () => [
@@ -150,23 +163,20 @@ describe("onboarding provider status", () => {
     const bridge = twoProviderBridge({ credentialStatuses, chatGptStatus, applyLlmSelection });
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
     await user.selectOptions(control<HTMLSelectElement>("onboarding-llm-provider"), "anthropic");
 
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    const host = panel("api-key");
+    await user.click(within(host as HTMLElement).getByRole("button", { name: "Save API key" }));
 
     await waitFor(() => {
       expect(applyLlmSelection).toHaveBeenCalledOnce();
       expect(chatGptStatus).toHaveBeenCalledTimes(2);
     });
-    await user.click(screen.getByRole("button", { name: "Back" }));
     await waitFor(() => {
-      expectOneActiveProvider();
+      expect(rowState("ai")).toBe("ready");
     });
-    expect(activeBadges()[0]?.textContent).toBe("Configured");
-    expect(document.body.textContent).toContain(
-      "Your ChatGPT sign-in is saved. Sign in again to activate it.",
-    );
-    expect(document.body.textContent).not.toContain("ChatGPT is ready.");
+    expectOnePoweringRow("Powers your coach");
     wizard.controller.dispose();
   });
 
@@ -191,22 +201,20 @@ describe("onboarding provider status", () => {
     const bridge = twoProviderBridge({ credentialStatuses, chatGptStatus, applyLlmSelection });
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
     await user.selectOptions(control<HTMLSelectElement>("onboarding-llm-provider"), "anthropic");
 
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    const host = panel("api-key");
+    await user.click(within(host as HTMLElement).getByRole("button", { name: "Save API key" }));
 
     await waitFor(() => {
       expect(applyLlmSelection).toHaveBeenCalledOnce();
       expect(chatGptStatus).toHaveBeenCalledTimes(2);
     });
-    await user.click(screen.getByRole("button", { name: "Back" }));
     await waitFor(() => {
-      expectOneActiveProvider();
+      expect(rowState("ai")).toBe("ready");
     });
-    expect(activeBadges()[0]?.textContent).toBe("Configured");
-    expect(document.body.textContent).toContain(
-      "Your ChatGPT sign-in is saved. Sign in again to activate it.",
-    );
+    expect(wizard.controller.state().chatGptRuntimeReady).toBe(false);
     expect(document.body.textContent).not.toContain("private status failure");
     wizard.controller.dispose();
   });
@@ -228,13 +236,16 @@ describe("onboarding provider status", () => {
     const bridge = twoProviderBridge({ credentialStatuses, chatGptLogin, chatGptStatus });
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await chooseLane(user, "openai-codex");
 
     await user.click(screen.getByRole("button", { name: "Sign in with ChatGPT" }));
 
     await waitFor(() => {
       expect(credentialStatuses).toHaveBeenCalledTimes(2);
     });
-    expect(document.body.textContent).toContain("ChatGPT is ready.");
+    await waitFor(() => {
+      expect(rowState("ai")).toBe("ready");
+    });
     expect(document.body.textContent).not.toContain(
       "ChatGPT sign-in could not be completed. Please retry.",
     );

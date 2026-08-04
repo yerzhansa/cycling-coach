@@ -209,6 +209,15 @@ export function toDesktopIntakeFlags(draft: DesktopIntakeDraft): SaveIntakeRpcPa
   });
 }
 
+export function intakeComplete(draft: DesktopIntakeDraft): boolean {
+  try {
+    toDesktopIntakeFlags(draft);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function nextStep(
   state: OnboardingState,
   runtimeModelConfigured = hasConfiguredModel(state),

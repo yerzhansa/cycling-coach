@@ -554,7 +554,11 @@ tests/               # 112 tests
 
 ## Credits
 
-Cycling Coach's data substrate (the "Reference" submodule that grounds coaching in verified athlete numerics) is a port of [section-11](https://github.com/CrankAddict/section-11) (CrankAddict, MIT-licensed). See [`NOTICE.md`](./NOTICE.md) for the full attribution and the list of modifications introduced during the port.
+Cycling Coach's data substrate (the "Reference" submodule that grounds coaching in verified athlete numerics) is a port of [section-11](https://github.com/CrankAddict/section-11) (CrankAddict, MIT-licensed).
+
+The desktop app's visual design system is adapted from [T3 Code](https://github.com/t3-tools) (T3 Tools Inc., MIT-licensed).
+
+See [`NOTICE.md`](./NOTICE.md) for the full attributions and the lists of modifications introduced during each port.
 
 ## License
 

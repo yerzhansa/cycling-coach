@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 import { appVersionDefine } from "../desktop-renderer/app-version.mjs";
@@ -28,8 +29,9 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(desktopRoot, "../desktop-renderer"),
-    plugins: [react()],
+    plugins: [react(), tailwindcss()],
     define: appVersionDefine(),
+    optimizeDeps: { include: ["lucide-react"] },
     server: {
       host: "127.0.0.1",
       port: 5173,

@@ -702,9 +702,8 @@ describe("chat surface", () => {
         readFile(resolve(sourceRoot, "theme/tokens.css"), "utf8"),
       ]);
       expect(stylesheet).toMatch(/\.prose\s*\{[^}]*font:\s*16px\/1\.6\s+var\(--f-prose\);/u);
-      expect(tokens).toMatch(
-        /--f-prose:\s*"SF Pro Text", -apple-system, system-ui, "Segoe UI", Helvetica, Arial, sans-serif;/u,
-      );
+      expect(tokens).toMatch(/--f-prose:\s*var\(--f-ui\);/u);
+      expect(tokens).toMatch(/--f-ui:\s*\n?\s*"DM Sans Variable", "DM Sans",/u);
     });
   });
 });

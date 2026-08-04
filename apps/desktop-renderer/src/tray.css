@@ -6,10 +6,13 @@ body {
   width: 420px;
   min-height: 246px;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--line-2) 88%, transparent);
-  border-radius: 18px;
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
-  box-shadow: 0 18px 48px rgb(23 33 28 / 20%);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-xl);
+  background-color: color-mix(in srgb, var(--surface) 88%, transparent);
+  background-image: var(--grain);
+  background-repeat: repeat;
+  background-size: 256px 256px;
+  box-shadow: var(--edge), var(--elev-3);
   color: var(--ink);
   backdrop-filter: blur(22px);
 }
@@ -26,6 +29,7 @@ body {
 
 .window-bar strong {
   font-size: 14px;
+  font-weight: 500;
   letter-spacing: -0.01em;
 }
 
@@ -33,7 +37,7 @@ body {
   position: relative;
   width: 18px;
   height: 18px;
-  border: 1.5px solid var(--brand);
+  border: 1.5px solid var(--ink);
   border-radius: 50%;
 }
 
@@ -43,7 +47,7 @@ body {
   bottom: 1px;
   width: 7px;
   height: 1.5px;
-  background: var(--brand);
+  background: var(--ink);
   content: "";
 }
 
@@ -61,9 +65,9 @@ body {
   justify-self: end;
   width: 8px;
   height: 8px;
-  border-radius: 50%;
-  background: var(--brand);
-  box-shadow: 0 0 0 4px var(--brand-soft);
+  border-radius: 999px;
+  background: var(--ok);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) var(--tint), transparent);
 }
 
 .glance {
@@ -71,9 +75,8 @@ body {
 }
 
 .eyebrow,
-.metric-label,
-.rail-tag {
-  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+.metric-label {
+  font-family: var(--f-mono);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.09em;
@@ -82,12 +85,13 @@ body {
 
 .eyebrow {
   margin: 0;
-  color: var(--brand);
+  color: var(--ink-3);
 }
 
 .glance h1 {
   margin: 4px 0 13px;
   font-size: 22px;
+  font-weight: 500;
   line-height: 1.2;
   letter-spacing: -0.025em;
 }
@@ -105,13 +109,13 @@ body {
   min-height: 42px;
   padding: 8px 11px;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface-2);
+  border-radius: var(--r);
+  background-color: var(--sunk);
 }
 
 .rail-card strong {
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .metric-label {
@@ -119,15 +123,25 @@ body {
 }
 
 .rail-tag {
-  padding: 3px 6px;
-  border-radius: 999px;
-  background: var(--brand-soft);
-  color: var(--brand);
+  display: inline-flex;
+  flex: none;
+  gap: 4px;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  color: var(--ink);
+  background-color: var(--surface);
+  font: 500 12px/1 var(--f-ui);
+  white-space: nowrap;
 }
 
 .rail-tag.amber {
-  background: color-mix(in srgb, var(--warn) 18%, var(--surface));
-  color: #7a3d2f;
+  border-color: transparent;
+  color: var(--warn);
+  background-color: color-mix(in srgb, var(--warn) var(--tint), transparent);
 }
 
 .menu-hint {
@@ -138,8 +152,8 @@ body {
 }
 
 @media (prefers-color-scheme: dark) {
-  .rail-tag.amber {
-    color: var(--ink);
+  .hud {
+    background-color: color-mix(in srgb, var(--surface) 94%, transparent);
   }
 }
 

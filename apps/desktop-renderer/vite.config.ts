@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { configDefaults } from "vitest/config";
@@ -7,7 +8,7 @@ import { appVersionDefine } from "./app-version.mjs";
 const rendererRoot = import.meta.dirname;
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), ...(process.env.VITEST ? [] : [tailwindcss()])],
   define: appVersionDefine(),
   build: {
     outDir: "dist",

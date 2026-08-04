@@ -12,22 +12,41 @@
 
 .list {
   display: grid;
-  gap: 8px;
+  gap: var(--inset);
 }
 
 .entry {
+  composes: raised from "../../theme/surface.module.css";
   display: grid;
   gap: 4px;
   padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
   text-align: start;
   cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.entry:hover:not(:disabled) {
+  border-color: var(--line-2);
+  background-color: var(--surface-2);
+}
+
+.entry:active:not(:disabled) {
+  box-shadow: var(--press);
+}
+
+.entry:disabled {
+  opacity: 0.64;
+  pointer-events: none;
+  cursor: default;
 }
 
 .entryWhen {
-  font: 12px/1.3 var(--f-mono);
+  font: 500 12px/1.3 var(--f-mono);
   letter-spacing: -0.01em;
 }
 
@@ -38,24 +57,22 @@
 
 .bar {
   display: flex;
-  gap: 12px;
+  gap: var(--inset);
   align-items: center;
   margin-bottom: 16px;
 }
 
-.pill {
-  justify-self: start;
-  padding: 8px 13px;
-  border: 1px solid var(--line-2);
-  border-radius: 999px;
-  color: var(--brand);
-  background: var(--surface);
-  cursor: pointer;
+.bar:not(:has(> *:not([hidden]))) {
+  display: none;
 }
 
-.pill:disabled {
-  cursor: default;
-  opacity: 0.5;
+.pill {
+  composes: control sm outline from "../../theme/surface.module.css";
+  justify-self: start;
+}
+
+.pill[hidden] {
+  display: none;
 }
 
 .thread {
@@ -71,10 +88,10 @@
 }
 
 .athlete {
+  composes: raised from "../../theme/surface.module.css";
   justify-self: end;
-  padding: 13px 17px;
-  border-radius: 16px 16px 6px 16px;
-  background: var(--brand-soft);
+  padding: 12px 16px;
+  border-bottom-right-radius: var(--r-ctl);
 }
 
 .coach {

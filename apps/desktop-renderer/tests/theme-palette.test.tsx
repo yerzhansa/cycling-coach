@@ -18,7 +18,48 @@ import {
 } from "../src/theme/preferences.js";
 import { setPrefersDark } from "./matchmedia.js";
 
-const RADIUS_TOKENS = new Set(["--r", "--r-lg"]);
+const NON_PALETTE_TOKENS = new Set([
+  "--r",
+  "--r-ctl",
+  "--r-lg",
+  "--r-xl",
+  "--ctl-h",
+  "--ctl-h-sm",
+  "--ctl-h-lg",
+  "--ctl-px",
+  "--ctl-px-sm",
+  "--inset",
+  "--row-inset",
+  "--scrollbar-w",
+  "--scrollbar-thumb",
+  "--scrollbar-thumb-hover",
+  "--edge",
+  "--sheen",
+  "--press",
+  "--elev-1",
+  "--elev-2",
+  "--elev-3",
+  "--elev-4",
+  "--scrim",
+  "--tint",
+  "--grain",
+  "--chevron",
+]);
+
+function relativeLuminance(hex: string): number {
+  const channels = [1, 3, 5].map((start) => Number.parseInt(hex.slice(start, start + 2), 16) / 255);
+  const linear = channels.map((channel) =>
+    channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4,
+  );
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+}
+
+function contrastRatio(first: string, second: string): number {
+  const [lighter, darker] = [relativeLuminance(first), relativeLuminance(second)].sort(
+    (left, right) => right - left,
+  );
+  return (lighter + 0.05) / (darker + 0.05);
+}
 
 function expectedProperties(paletteId: string, theme: ResolvedTheme): Map<string, string> {
   const palette = paletteById(paletteId);
@@ -34,7 +75,7 @@ function expectedProperties(paletteId: string, theme: ResolvedTheme): Map<string
     ["--ink-2", ramp.ink2],
     ["--ink-3", `color-mix(in srgb, ${ramp.ink2} 62%, ${ramp.bg})`],
     ["--line", ramp.line],
-    ["--line-2", `color-mix(in srgb, ${ramp.line} 55%, ${ramp.ink2})`],
+    ["--line-2", `color-mix(in srgb, ${ramp.line} ${theme === "dark" ? "93%" : "85%"}, ${ramp.ink2})`],
     ["--brand", ramp.br],
     ["--brand-ink", ramp.bri],
     ["--brand-soft", ramp.soft],
@@ -47,11 +88,53 @@ function expectedProperties(paletteId: string, theme: ResolvedTheme): Map<string
 }
 
 describe("palette engine", () => {
-  it("ships fourteen palettes with Patrol first", () => {
-    expect(PALETTES).toHaveLength(14);
+  it("ships fifteen palettes with Patrol first", () => {
+    expect(PALETTES).toHaveLength(15);
     expect(PALETTES[0].id).toBe("patrol");
     expect(DEFAULT_PALETTE_ID).toBe("patrol");
-    expect(new Set(PALETTES.map((palette) => palette.id)).size).toBe(14);
+    expect(new Set(PALETTES.map((palette) => palette.id)).size).toBe(15);
+  });
+
+  it("defines the T3 Code palette in light and dark appearances", () => {
+    expect(paletteById("t3code")).toEqual({
+      id: "t3code",
+      name: "T3 Code",
+      l: {
+        bg: "#fcfcfc",
+        rail: "#fafafa",
+        sf: "#ffffff",
+        ink: "#27272a",
+        ink2: "#71717a",
+        line: "#e4e4e7",
+        br: "#1b4ed8",
+        bri: "#ffffff",
+        soft: "#f4f4f5",
+        ok: "#047857",
+      },
+      d: {
+        bg: "#0a0a0a",
+        rail: "#000000",
+        sf: "#111111",
+        ink: "#f5f5f5",
+        ink2: "#a3a3a3",
+        line: "#1a1a1a",
+        br: "#366ffb",
+        bri: "#0a0a0a",
+        soft: "#141414",
+        ok: "#34d399",
+      },
+    });
+  });
+
+  it("keeps T3 Code text and status colours readable in both appearances", () => {
+    const palette = paletteById("t3code");
+    for (const ramp of [palette.l, palette.d]) {
+      expect(contrastRatio(ramp.ink, ramp.bg)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(ramp.ink2, ramp.bg)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(ramp.br, ramp.bg)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(ramp.bri, ramp.br)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(ramp.ok, ramp.bg)).toBeGreaterThanOrEqual(4.5);
+    }
   });
 
   it("stamps every palette in both themes", () => {
@@ -107,7 +190,7 @@ describe("palette engine", () => {
     );
     const declared = [...tokens.slice(0, tokens.indexOf("}")).matchAll(/(--[\w-]+)\s*:/gu)]
       .map((match) => match[1])
-      .filter((property) => !property.startsWith("--f-") && !RADIUS_TOKENS.has(property));
+      .filter((property) => !property.startsWith("--f-") && !NON_PALETTE_TOKENS.has(property));
     const stamped = new Set(paletteCustomProperties(PALETTES[0], "light").keys());
 
     expect(declared.length).toBeGreaterThan(0);

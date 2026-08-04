@@ -1,14 +1,13 @@
-import { useEffect, useRef, type KeyboardEvent, type ReactElement } from "react";
-import { ONBOARDING_STEP_IDS } from "../../onboarding/constants.js";
+import { useEffect, useRef, type ReactElement } from "react";
 import { rideImportStatusCopy } from "../../ride-import.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { Page } from "../shared/Page.js";
-import { CoachKeysStep } from "./CoachKeysStep.js";
-import { ERROR_COPY } from "./copy.js";
-import styles from "./OnboardingWizard.module.css";
-import { ReadyStep } from "./ReadyStep.js";
-import { SafetyIntakeStep } from "./SafetyIntakeStep.js";
-import { TrainingDataStep } from "./TrainingDataStep.js";
+import { AiRow } from "./AiRow.js";
+import { ERROR_COPY, FOOTER_NOTE, PRIMARY_LABEL, SETUP_HEADING } from "./copy.js";
+import { IntakeRows } from "./IntakeRows.js";
+import { BUTTON_PRIMARY, BUTTON_QUIET_SM, SetupCard } from "./SetupCard.js";
+import { SetupError } from "./SetupRow.js";
+import { TrainingRow } from "./TrainingRow.js";
 
 export function OnboardingWizard(): ReactElement | null {
   const surface = useEnduragentStore((state) => state.onboarding);
@@ -40,34 +39,24 @@ export function OnboardingWizard(): ReactElement | null {
   if (!open) return null;
 
   const wizard = surface.wizard;
-  const activeIndex = ONBOARDING_STEP_IDS.indexOf(wizard.step);
-  const importBusy = wizard.step === "training-data" && surface.rideImport.status === "running";
-  const disabled = wizard.busy || importBusy;
+  const readiness = surface.readiness;
   const importCopy = rideImportStatusCopy(surface.rideImport);
-
-  const onKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
-    const targetTagName = (event.target as HTMLElement | null)?.tagName;
-    if (
-      event.key === "Enter" &&
-      targetTagName !== "BUTTON" &&
-      targetTagName !== "SUMMARY" &&
-      targetTagName !== "SELECT"
-    ) {
-      event.preventDefault();
-      actions?.submit();
-    }
-  };
+  const blocked =
+    wizard.busy ||
+    surface.rideImport.status === "running" ||
+    !readiness.provider ||
+    !readiness.trainingData ||
+    !readiness.intake;
 
   return (
     <Page
       ref={page}
       title="Setup"
       className="onboarding"
-      onKeyDown={onKeyDown}
       action={
         <button
           type="button"
-          className={`${styles.dismiss} onboarding-dismiss`}
+          className={`${BUTTON_QUIET_SM} onboarding-dismiss`}
           onClick={() => {
             actions?.dismiss();
           }}
@@ -76,77 +65,53 @@ export function OnboardingWizard(): ReactElement | null {
         </button>
       }
     >
-      <div
-        className={`${styles.progress} onboarding-progress`}
-        aria-label={`Step ${activeIndex + 1} of ${ONBOARDING_STEP_IDS.length}`}
+      <h2
+        id="onboarding-title"
+        tabIndex={-1}
+        className="mb-4 text-[21px] font-medium tracking-tight focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-ink"
       >
-        {ONBOARDING_STEP_IDS.map((step, index) => (
-          <span
-            key={step}
-            className={index <= activeIndex ? styles.progressOn : undefined}
-            aria-current={step === wizard.step ? "step" : undefined}
-          />
-        ))}
-      </div>
-      <div className={styles.body}>
-        {wizard.step === "coach-keys" ? (
-          <CoachKeysStep surface={surface} actions={actions} disabled={disabled} />
-        ) : null}
-        {wizard.step === "training-data" ? (
-          <TrainingDataStep surface={surface} actions={actions} disabled={disabled} />
-        ) : null}
-        {wizard.step === "safety-intake" ? (
-          <SafetyIntakeStep surface={surface} actions={actions} />
-        ) : null}
-        {wizard.step === "ready" ? <ReadyStep surface={surface} /> : null}
-        <p
-          className={`${styles.importStatus} import-status`}
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          hidden={importCopy.length === 0}
-          data-state={surface.rideImport.status}
-        >
-          {importCopy}
-        </p>
-        <p id="onboarding-error" className={styles.error} aria-live="polite">
-          {wizard.fixedError === null ? "" : ERROR_COPY[wizard.fixedError]}
-        </p>
-        <p
-          className={`${styles.actionStatus} onboarding-action-status`}
-          role="status"
-          aria-live="polite"
-          hidden={!wizard.busy}
-        >
-          {wizard.busy ? "Working…" : ""}
-        </p>
-      </div>
-      <footer className={styles.footer}>
-        {activeIndex > 0 ? (
-          <button
-            type="button"
-            className={styles.secondaryButton}
-            disabled={disabled}
-            onClick={() => {
-              actions?.back();
-            }}
-          >
-            Back
-          </button>
-        ) : (
-          <span />
-        )}
+        {SETUP_HEADING}
+      </h2>
+      <SetupCard>
+        <AiRow surface={surface} actions={actions} />
+        <TrainingRow surface={surface} actions={actions} />
+        <IntakeRows surface={surface} actions={actions} />
+      </SetupCard>
+      <p
+        className="import-status mt-2 min-h-[18px] text-xs text-ink-2"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        hidden={importCopy.length === 0}
+        data-state={surface.rideImport.status}
+      >
+        {importCopy}
+      </p>
+      <footer className="mt-3.5 flex items-center justify-between gap-3 border-t border-line pt-3.5">
+        <span className="text-xs text-ink-3">{FOOTER_NOTE}</span>
+        <SetupError surface={surface} section="footer" />
         <button
           type="button"
-          className={styles.primaryButton}
-          disabled={disabled}
+          className={BUTTON_PRIMARY}
+          disabled={blocked}
           onClick={() => {
-            actions?.submit();
+            actions?.finish();
           }}
         >
-          {wizard.step === "ready" ? "Finish setup" : "Continue"}
+          {PRIMARY_LABEL}
         </button>
       </footer>
+      <p
+        className="onboarding-action-status mt-1.5 text-xs text-ink-2"
+        role="status"
+        aria-live="polite"
+        hidden={!wizard.busy}
+      >
+        {wizard.busy ? "Working…" : ""}
+      </p>
+      <p className="onboarding-error-announcer sr-only" role="status" aria-live="polite">
+        {wizard.fixedError === null ? "" : ERROR_COPY[wizard.fixedError]}
+      </p>
     </Page>
   );
 }

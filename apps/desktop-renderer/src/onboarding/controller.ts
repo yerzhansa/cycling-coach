@@ -10,14 +10,19 @@ import type {
   OnboardingLlmEndpointSelection,
   OnboardingLlmSelection,
 } from "./bridge.js";
-import { CUSTOM_MODEL_SELECTION, type DesktopCredentialSlot } from "./constants.js";
+import {
+  CUSTOM_MODEL_SELECTION,
+  DESKTOP_CREDENTIAL_SLOTS,
+  type DesktopCredentialSlot,
+} from "./constants.js";
 import { credentialPresentation } from "./credential-presentation.js";
 import { handoffCredential, type CredentialDraftPort } from "./credentials.js";
+import type { SetupCommit } from "./lanes.js";
 import {
   createOnboardingState,
   hasTrainingData,
+  intakeComplete,
   nextStep,
-  previousStep,
   toDesktopIntakeFlags,
   toOnboardingCompletion,
   withBusy,
@@ -43,6 +48,12 @@ import {
   type LlmSelectionDraft,
 } from "./selection.js";
 
+export interface OnboardingReadiness {
+  readonly provider: boolean;
+  readonly trainingData: boolean;
+  readonly intake: boolean;
+}
+
 export interface OnboardingSurfaceState {
   readonly open: boolean;
   readonly wizard: OnboardingState;
@@ -51,6 +62,8 @@ export interface OnboardingSurfaceState {
   readonly draft: LlmSelectionDraft | null;
   readonly rideImport: RideImportState;
   readonly focusSeq: number;
+  readonly readiness: OnboardingReadiness;
+  readonly lastCommit: SetupCommit;
 }
 
 export interface OnboardingView {
@@ -58,8 +71,9 @@ export interface OnboardingView {
 }
 
 export interface OnboardingActions {
-  submit(): void;
-  back(): void;
+  saveModelKey(): void;
+  saveTrainingKey(): void;
+  finish(): void;
   dismiss(): void;
   retrySavedKeys(): void;
   startChatGptLogin(): void;
@@ -80,6 +94,10 @@ export interface OnboardingController extends OnboardingActions {
   state(): OnboardingState;
   ownsDroppedImportFiles(): boolean;
   importDroppedFiles(paths: readonly string[]): void;
+}
+
+function credentialSlotFor(provider: string | undefined): DesktopCredentialSlot | undefined {
+  return DESKTOP_CREDENTIAL_SLOTS.find((slot) => slot === provider);
 }
 
 export interface OnboardingControllerOptions {
@@ -149,6 +167,7 @@ export function createOnboardingController(
   let llmConfiguration: OnboardingLlmConfiguration | undefined;
   let llmDraft: LlmSelectionDraft | undefined;
   let llmDrafts: Record<string, LlmSelectionDraft> = {};
+  let lastCommit: SetupCommit = null;
 
   const publish = (): void => {
     options.view.render({
@@ -159,6 +178,12 @@ export function createOnboardingController(
       draft: llmDraft ?? null,
       rideImport: rideImportState,
       focusSeq,
+      readiness: {
+        provider: selectedProviderIsReady(),
+        trainingData: hasTrainingData(state),
+        intake: intakeComplete(state.intake),
+      },
+      lastCommit,
     });
   };
 
@@ -244,12 +269,13 @@ export function createOnboardingController(
 
   const savePasswordControls = async (
     expectedVisit: number,
+    slots: readonly DesktopCredentialSlot[],
     selection?: OnboardingLlmSelection,
   ): Promise<{
     readonly error: OnboardingErrorCode | null;
     readonly selectedApplied: boolean;
   } | null> => {
-    const controls = [...options.credentials.harvest()];
+    const controls = [...options.credentials.harvest(slots)];
     const selectedSlot = selection?.provider === "openai-codex" ? undefined : selection?.provider;
     controls.sort((left, right) => {
       const leftSelected = left.dataset.slot === selectedSlot ? 1 : 0;
@@ -339,117 +365,145 @@ export function createOnboardingController(
     return { error: null, selectedApplied };
   };
 
-  const currentStepOwnsCredentialSlot = (slot: DesktopCredentialSlot): boolean => {
-    if (state.step === "coach-keys") return false;
-    return state.step === "training-data" && slot === "intervals-icu";
-  };
-
-  const currentStepHasRetryableCredential = (): boolean =>
+  const hasRetryableCredential = (slot: DesktopCredentialSlot): boolean =>
     credentialStatuses.some(
-      (entry) =>
-        currentStepOwnsCredentialSlot(entry.slot) && credentialPresentation(entry).retryable,
+      (entry) => entry.slot === slot && credentialPresentation(entry).retryable,
     );
 
-  const submitCurrentStep = async (): Promise<void> => {
-    if (state.busy || (state.step === "training-data" && rideImports.isBusy())) return;
+  const saveModelKey = async (): Promise<void> => {
+    if (disposed || !presenting || state.busy) return;
     const submitVisit = visit;
+    lastCommit = "provider";
     state = withBusy(state, true);
     publish();
-    if (state.step === "coach-keys") {
-      const parsedSelection = llmSelectionFromDraft(llmDraft);
-      if (parsedSelection.error !== null) {
-        state = withError(state, parsedSelection.error);
-        focusTitle();
-        publish();
-        return;
-      }
-      const saved = await savePasswordControls(submitVisit, parsedSelection.selection);
-      if (visit !== submitVisit || !presenting) return;
-      if (saved === null) return;
-      let saveError = saved.error;
-      if (saveError === "runtime-unavailable") saveError = "model-runtime-unavailable";
-      if (saveError === null && !saved.selectedApplied) {
-        try {
-          const applied = await options.bridge.applyLlmSelection(parsedSelection.selection);
-          if (visit !== submitVisit || !presenting) return;
-          if (applied.status === "refused") {
-            saveError =
-              applied.reason === "credential-required"
-                ? "credential-required"
-                : applied.reason === "runtime-unavailable"
-                  ? "model-runtime-unavailable"
-                  : "invalid-input";
-          } else {
-            if (llmConfiguration !== undefined) {
-              llmConfiguration = {
-                ...llmConfiguration,
-                active: {
-                  provider: parsedSelection.selection.provider,
-                  model: parsedSelection.selection.model,
-                },
-              };
-            }
-            if (!(await refreshStatuses(submitVisit))) {
-              saveError = "credential-status-unavailable";
-            }
+    const parsedSelection = llmSelectionFromDraft(llmDraft);
+    if (parsedSelection.error !== null) {
+      state = withError(state, parsedSelection.error);
+      focusTitle();
+      publish();
+      return;
+    }
+    const slot = credentialSlotFor(parsedSelection.selection.provider);
+    const saved = await savePasswordControls(
+      submitVisit,
+      slot === undefined ? [] : [slot],
+      parsedSelection.selection,
+    );
+    if (visit !== submitVisit || !presenting) return;
+    if (saved === null) return;
+    let saveError = saved.error;
+    if (saveError === "runtime-unavailable") saveError = "model-runtime-unavailable";
+    if (saveError === null && !saved.selectedApplied) {
+      try {
+        const applied = await options.bridge.applyLlmSelection(parsedSelection.selection);
+        if (visit !== submitVisit || !presenting) return;
+        if (applied.status === "refused") {
+          saveError =
+            applied.reason === "credential-required"
+              ? "credential-required"
+              : applied.reason === "runtime-unavailable"
+                ? "model-runtime-unavailable"
+                : "invalid-input";
+        } else {
+          if (llmConfiguration !== undefined) {
+            llmConfiguration = {
+              ...llmConfiguration,
+              active: {
+                provider: parsedSelection.selection.provider,
+                model: parsedSelection.selection.model,
+              },
+            };
           }
-        } catch {
-          if (visit !== submitVisit || !presenting) return;
-          saveError = "model-runtime-unavailable";
+          if (!(await refreshStatuses(submitVisit))) {
+            saveError = "credential-status-unavailable";
+          }
         }
-      }
-      state = withBusy(state, false);
-      if (saveError !== null) state = withError(state, saveError);
-      else if (!selectedProviderIsReady()) state = withError(state, "model-runtime-unavailable");
-      else state = nextStep(state, true);
-      focusTitle();
-      publish();
-      return;
-    }
-    if (state.step === "training-data") {
-      const saved = await savePasswordControls(submitVisit);
-      if (visit !== submitVisit || !presenting) return;
-      if (saved === null) return;
-      const saveError = saved.error;
-      state = withBusy(state, false);
-      if (saveError !== null) state = withError(state, saveError);
-      else if (currentStepHasRetryableCredential()) state = withError(state, "runtime-unavailable");
-      else if (!hasTrainingData(state)) state = withError(state, "training-data-required");
-      else state = nextStep(state);
-      focusTitle();
-      publish();
-      return;
-    }
-    if (state.step === "safety-intake") {
-      let intake: ReturnType<typeof toDesktopIntakeFlags>;
-      try {
-        intake = toDesktopIntakeFlags(state.intake);
-      } catch {
-        state = withError(state, "intake-incomplete");
-        focusTitle();
-        publish();
-        return;
-      }
-      try {
-        await options.bridge.saveIntake(intake);
-        if (visit !== submitVisit || !presenting) return;
-        state = nextStep(withBusy(state, false));
       } catch {
         if (visit !== submitVisit || !presenting) return;
-        state = withError(state, "intake-save-failed");
+        saveError = "model-runtime-unavailable";
       }
+    }
+    state = withBusy(state, false);
+    if (saveError !== null) state = withError(state, saveError);
+    else if (!selectedProviderIsReady()) state = withError(state, "model-runtime-unavailable");
+    focusTitle();
+    publish();
+  };
+
+  const saveTrainingKey = async (): Promise<void> => {
+    if (disposed || !presenting || state.busy || rideImports.isBusy()) return;
+    const submitVisit = visit;
+    lastCommit = "training";
+    state = withBusy(state, true);
+    publish();
+    const saved = await savePasswordControls(submitVisit, ["intervals-icu"]);
+    if (visit !== submitVisit || !presenting) return;
+    if (saved === null) return;
+    const saveError = saved.error;
+    state = withBusy(state, false);
+    if (saveError !== null) state = withError(state, saveError);
+    else if (hasRetryableCredential("intervals-icu")) {
+      state = withError(state, "runtime-unavailable");
+    } else if (!hasTrainingData(state)) state = withError(state, "training-data-required");
+    focusTitle();
+    publish();
+  };
+
+  const walkGates = (): OnboardingErrorCode | null => {
+    let previous = state;
+    let current = nextStep(previous, selectedProviderIsReady());
+    if (current.step === previous.step) return current.fixedError ?? "credential-required";
+    previous = current;
+    current = nextStep(previous);
+    if (current.step === previous.step) return current.fixedError ?? "training-data-required";
+    previous = current;
+    current = nextStep(previous);
+    if (current.step === previous.step) return current.fixedError ?? "intake-incomplete";
+    return current.step === "ready" ? null : "intake-incomplete";
+  };
+
+  const finishSetup = async (): Promise<void> => {
+    if (disposed || !presenting || state.busy || rideImports.isBusy()) return;
+    const gateError = walkGates();
+    if (gateError !== null) {
+      state = withError(state, gateError);
       focusTitle();
       publish();
       return;
     }
-    if (!completed) {
-      completed = true;
-      visit += 1;
-      presenting = false;
-      setRideImportPresentation(false);
+    const finishVisit = visit;
+    state = withBusy(state, true);
+    publish();
+    let intake: ReturnType<typeof toDesktopIntakeFlags>;
+    try {
+      intake = toDesktopIntakeFlags(state.intake);
+    } catch {
+      state = withError(state, "intake-incomplete");
+      focusTitle();
       publish();
-      options.onComplete(toOnboardingCompletion(state));
+      return;
     }
+    try {
+      await options.bridge.saveIntake(intake);
+      if (visit !== finishVisit || !presenting) return;
+    } catch {
+      if (visit !== finishVisit || !presenting) return;
+      state = withError(state, "intake-save-failed");
+      focusTitle();
+      publish();
+      return;
+    }
+    state = withBusy(state, false);
+    if (completed) {
+      publish();
+      return;
+    }
+    completed = true;
+    visit += 1;
+    presenting = false;
+    setRideImportPresentation(false);
+    publish();
+    options.onComplete(toOnboardingCompletion(state));
   };
 
   const disposeImportState = rideImports.subscribe((next) => {
@@ -468,6 +522,7 @@ export function createOnboardingController(
       opening = true;
       const openVisit = ++visit;
       completed = false;
+      lastCommit = null;
       let statuses: readonly CredentialSlotStatus[] = [];
       let restoredChatGptStatus: ChatGptStatus = { state: "absent", runtimeReady: false };
       const restored = await Promise.allSettled([
@@ -510,33 +565,25 @@ export function createOnboardingController(
       disposeImportState();
     },
     state: () => state,
-    ownsDroppedImportFiles: () => !disposed && presenting && state.step === "training-data",
+    ownsDroppedImportFiles: () => !disposed && presenting,
     importDroppedFiles(paths) {
-      if (
-        !disposed &&
-        presenting &&
-        state.step === "training-data" &&
-        !state.busy &&
-        !rideImports.isBusy()
-      ) {
+      if (!disposed && presenting && !state.busy && !rideImports.isBusy()) {
         void rideImports.importPaths("onboarding", paths);
       }
     },
-    submit(): void {
-      void submitCurrentStep();
+    saveModelKey(): void {
+      void saveModelKey();
     },
-    back(): void {
-      if (disposed || !presenting || state.busy) return;
-      if (state.step === "training-data" && rideImports.isBusy()) return;
-      state = previousStep(state);
-      focusTitle();
-      publish();
+    saveTrainingKey(): void {
+      void saveTrainingKey();
+    },
+    finish(): void {
+      void finishSetup();
     },
     dismiss: close,
     retrySavedKeys(): void {
       if (disposed || !presenting || state.busy) return;
       const retryVisit = visit;
-      const retryStep = state.step;
       state = withBusy(state, true);
       focusTitle();
       publish();
@@ -545,12 +592,10 @@ export function createOnboardingController(
           const statuses = await options.bridge.retryFailedCredentials();
           if (visit !== retryVisit || !presenting) return;
           let nextState = withCredentialStatuses(state, statuses);
-          if (retryStep === "coach-keys") {
-            try {
-              nextState = withChatGptStatus(nextState, await options.bridge.chatGptStatus());
-            } catch {
-              nextState = { ...nextState, chatGptRuntimeReady: false };
-            }
+          try {
+            nextState = withChatGptStatus(nextState, await options.bridge.chatGptStatus());
+          } catch {
+            nextState = { ...nextState, chatGptRuntimeReady: false };
           }
           if (visit !== retryVisit || !presenting) return;
           credentialStatuses = statuses;

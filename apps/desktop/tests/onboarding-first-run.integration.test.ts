@@ -151,32 +151,51 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
         Array.from(document.querySelectorAll(".onboarding button")).find(
           (entry) => entry.textContent?.trim() === label,
         );
-      const waitForTitle = async (expected) => {
+      const panelButton = (name, label) =>
+        Array.from(
+          document.querySelectorAll('[data-setup-panel="' + name + '"] button'),
+        ).find((entry) => entry.textContent?.trim() === label);
+      const waitFor = async (selector) => {
         const stepDeadline = Date.now() + 10000;
-        while (
-          document.querySelector("#onboarding-title")?.textContent !== expected &&
-          Date.now() < stepDeadline
-        ) {
+        while (document.querySelector(selector) === null && Date.now() < stepDeadline) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        return document.querySelector(selector);
+      };
+      const waitGone = async (selector) => {
+        const stepDeadline = Date.now() + 10000;
+        while (document.querySelector(selector) !== null && Date.now() < stepDeadline) {
           await new Promise((resolve) => setTimeout(resolve, 20));
         }
       };
+      const pick = (id, value) => {
+        const select = document.querySelector("#" + id);
+        if (!select) return;
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLSelectElement.prototype,
+          "value",
+        )?.set;
+        setter?.call(select, value);
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      document.querySelector('[data-setup-trigger="ai"]')?.click();
+      await waitFor('[data-lane="api-key"]');
+      document.querySelector('[data-lane="api-key"]')?.click();
+      await waitFor('[data-setup-panel="api-key"]');
       const anthropic = document.querySelector('input[data-slot="anthropic"]');
       if (anthropic) anthropic.value = "synthetic-model-key";
-      button("Continue")?.click();
-      await waitForTitle("Bring your riding history");
+      panelButton("api-key", "Save")?.click();
+      await waitGone('[data-setup-panel="api-key"]');
+      document.querySelector('[data-setup-trigger="training"]')?.click();
+      await waitFor('[data-setup-panel="training"]');
       const intervals = document.querySelector('input[data-slot="intervals-icu"]');
       if (intervals) intervals.value = "synthetic-training-key";
-      button("Continue")?.click();
-      await waitForTitle("A few safety checks");
-      const labels = Array.from(document.querySelectorAll(".onboarding label"));
-      labels.find((entry) => entry.textContent?.trim() === "No")?.querySelector("input")?.click();
-      labels
-        .find((entry) => entry.textContent?.trim() === "No current injury")
-        ?.querySelector("input")
-        ?.click();
-      button("Continue")?.click();
-      await waitForTitle("Your coach is ready");
-      button("Finish setup")?.click();
+      panelButton("training", "Save")?.click();
+      await waitFor('[data-setup-row="training"][data-state="ready"]');
+      pick("onboarding-injury-status", "none");
+      pick("onboarding-prior-bsi", "no");
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      button("Start coaching")?.click();
       const chatDeadline = Date.now() + 10000;
       while (
         document.querySelector(
@@ -205,7 +224,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
       setupView: true,
       scrimAbsent: true,
       modalAbsent: true,
-      title: "Choose how your coach thinks",
+      title: "Get your coach running",
       escapeStayed: true,
       finished: true,
       chatWorking: true,

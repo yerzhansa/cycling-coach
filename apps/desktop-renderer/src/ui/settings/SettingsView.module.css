@@ -12,9 +12,7 @@
 }
 
 .group {
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  background: var(--surface);
+  composes: raised from "../../theme/surface.module.css";
 }
 
 .row {
@@ -56,36 +54,15 @@
 }
 
 .button {
-  flex: none;
-  padding: 6px 13px;
-  border: 1px solid var(--line-2);
-  border-radius: 8px;
-  color: var(--ink);
-  background: var(--surface-2);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.button:hover:not(:disabled) {
-  border-color: var(--ink-3);
-}
-
-.button:disabled {
-  opacity: 0.5;
-  cursor: default;
+  composes: control sm outline from "../../theme/surface.module.css";
 }
 
 .primary {
-  border-color: var(--brand);
-  color: var(--brand-ink);
-  background: var(--brand);
+  composes: control sm solid from "../../theme/surface.module.css";
 }
 
 .danger {
-  border-color: var(--danger);
-  color: var(--danger);
-  background: none;
+  composes: control sm dangerous from "../../theme/surface.module.css";
 }
 
 .actions {
@@ -98,25 +75,13 @@
 }
 
 .control {
+  composes: field from "../../theme/surface.module.css";
   flex: none;
-  min-width: 0;
   max-width: 260px;
-  padding: 6px 10px;
-  border: 1px solid var(--line-2);
-  border-radius: 8px;
-  color: var(--ink);
-  background: var(--surface-2);
-  font: inherit;
-  font-size: 13px;
-}
-
-.control:disabled {
-  opacity: 0.55;
 }
 
 .controlWide {
   max-width: none;
-  width: 100%;
 }
 
 .feedback {
@@ -184,28 +149,24 @@
 }
 
 .runtime {
-  flex: none;
-  padding: 3px 9px;
-  border-radius: 999px;
-  background: var(--sunk);
-  color: var(--ink-2);
-  font-size: 11.5px;
+  composes: chip from "../../theme/surface.module.css";
 }
 
 .runtime[data-state="active"] {
   color: var(--ok);
+  background-color: color-mix(in srgb, var(--ok) var(--tint), transparent);
 }
 
 .runtime[data-state="failed"] {
   color: var(--danger);
+  background-color: color-mix(in srgb, var(--danger) var(--tint), transparent);
 }
 
 .confirmation {
+  composes: sunken from "../../theme/surface.module.css";
   flex: 1 0 100%;
   padding: 12px;
-  border: 1px solid var(--line-2);
-  border-radius: var(--r);
-  background: var(--sunk);
+  border: 1px solid var(--line);
 }
 
 .confirmationTitle {
@@ -319,17 +280,16 @@
 }
 
 .dialog {
+  composes: overlay from "../../theme/surface.module.css";
   width: min(520px, calc(100vw - 48px));
   max-height: min(70vh, 620px);
   padding: 20px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
   color: var(--ink);
-  background: var(--surface);
+  box-shadow: var(--edge), var(--elev-4);
 }
 
 .dialog::backdrop {
-  background: rgb(0 0 0 / 38%);
+  background: var(--scrim);
 }
 
 .dialogHeader {
@@ -368,6 +328,8 @@
 }
 
 .dialogActions a {
-  color: var(--brand);
+  color: var(--ink);
   font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 4px;
 }
