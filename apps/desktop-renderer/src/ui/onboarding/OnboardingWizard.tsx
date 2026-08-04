@@ -3,7 +3,13 @@ import { rideImportStatusCopy } from "../../ride-import.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { Page } from "../shared/Page.js";
 import { AiRow } from "./AiRow.js";
-import { ERROR_COPY, FOOTER_NOTE, PRIMARY_LABEL, SETUP_HEADING } from "./copy.js";
+import {
+  ERROR_COPY,
+  FOOTER_NOTE,
+  OUTSTANDING_NOTE,
+  PRIMARY_LABEL,
+  SETUP_HEADING,
+} from "./copy.js";
 import { IntakeRows } from "./IntakeRows.js";
 import { BUTTON_PRIMARY, BUTTON_QUIET_SM, SetupCard } from "./SetupCard.js";
 import { SetupError } from "./SetupRow.js";
@@ -47,6 +53,13 @@ export function OnboardingWizard(): ReactElement | null {
     !readiness.provider ||
     !readiness.trainingData ||
     !readiness.intake;
+  const outstanding = !readiness.provider
+    ? "coach"
+    : !readiness.trainingData
+      ? "training"
+      : !readiness.intake
+        ? "intake"
+        : null;
 
   return (
     <Page
@@ -90,6 +103,11 @@ export function OnboardingWizard(): ReactElement | null {
       <footer className="mt-3.5 flex items-center justify-between gap-3 border-t border-line pt-3.5">
         <span className="text-xs text-ink-3">{FOOTER_NOTE}</span>
         <SetupError surface={surface} section="footer" />
+        {outstanding === null ? null : (
+          <span data-setup-outstanding={outstanding} className="text-xs text-ink-3">
+            {OUTSTANDING_NOTE[outstanding]}
+          </span>
+        )}
         <button
           type="button"
           className={BUTTON_PRIMARY}

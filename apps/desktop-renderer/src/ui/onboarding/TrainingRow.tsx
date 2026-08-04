@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import type { OnboardingActions, OnboardingSurfaceState } from "../../onboarding/controller.js";
 import { credentialPresentation } from "../../onboarding/credential-presentation.js";
 import { errorSection } from "../../onboarding/lanes.js";
@@ -41,7 +41,15 @@ export function TrainingRow(props: {
   const ownsError = errorSection(wizard.fixedError, surface.lastCommit) === "training";
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const wasBusy = useRef(busy);
   const panelId = "onboarding-training-panel";
+
+  useEffect(() => {
+    if (wasBusy.current && !busy && ready && !retryable && wizard.fixedError === null) {
+      setOpen(false);
+    }
+    wasBusy.current = busy;
+  }, [busy, ready, retryable, wizard.fixedError]);
 
   const subtitle = connected
     ? TRAINING_ROW_SUBTITLES.connected

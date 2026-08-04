@@ -497,6 +497,48 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
+  it("closes the intervals.icu panel once the saved key comes back connected", async () => {
+    const user = userEvent.setup();
+    const bridge = coldBridge();
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+    await openTrainingPanel(user);
+    seedSecret("intervals-icu", randomUUID());
+    bridge.credentialStatuses.mockResolvedValue([
+      { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+    ]);
+
+    await user.click(
+      within(panel("training") as HTMLElement).getByRole("button", {
+        name: "Save Intervals.icu API key",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(rowState("training")).toBe("ready");
+    });
+    await waitFor(() => {
+      expect(panel("training")).toBeNull();
+    });
+    expect(trigger("training").textContent).toBe("Change");
+    wizard.controller.dispose();
+  });
+
+  it("names what is still outstanding beside a blocked Start coaching", async () => {
+    const wizard = mountWizard({ bridge: readyEverythingBridge() });
+    await wizard.open();
+    await waitFor(() => {
+      expect(rowState("training")).toBe("ready");
+    });
+
+    expect(primaryButton()).toBeDisabled();
+    expect(document.querySelector("[data-setup-outstanding]")?.getAttribute("data-setup-outstanding")).toBe("intake");
+    expect(document.querySelector("[data-setup-outstanding]")?.textContent).toBe(
+      "Answer both questions above to finish.",
+    );
+    wizard.controller.dispose();
+  });
+
   it("names the intervals.icu row by where the rides come from", async () => {
     const missing = mountWizard({ bridge: coldBridge() });
     await missing.open();
