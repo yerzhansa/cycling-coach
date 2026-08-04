@@ -46,6 +46,8 @@ const EXPECTED_FULL_TABLES = [
   "sync_failure",
   "store_owner",
 ];
+const PRIOR_BSI_DROP_DIGEST =
+  "e998e225821320be80701ec5834fcbad5371790476e3d51e5925e4cbe37cade0";
 const MIGRATION_002 = `ALTER TABLE swim_length ADD COLUMN distance_m REAL;
 
 CREATE TABLE ingest_metadata (
@@ -142,13 +144,7 @@ function openMigrated(): DatabaseSync {
 
 function openFull(): DatabaseSync {
   const next = openMigrated();
-  next.exec(MIGRATIONS[1]!.sql);
-  next.exec(MIGRATIONS[2]!.sql);
-  next.exec(MIGRATIONS[3]!.sql);
-  next.exec(MIGRATIONS[4]!.sql);
-  next.exec(MIGRATIONS[5]!.sql);
-  next.exec(MIGRATIONS[6]!.sql);
-  next.exec(MIGRATIONS[7]!.sql);
+  for (const migration of MIGRATIONS.slice(1)) next.exec(migration.sql);
   return next;
 }
 
@@ -168,6 +164,7 @@ describe("001_init migration", () => {
       { version: 6, name: "006_incremental_ingest" },
       { version: 7, name: "007_sync_failure" },
       { version: 8, name: "008_store_owner" },
+      { version: 9, name: "009_drop_prior_bsi" },
     ]);
     expect(typeof MIGRATIONS[0].sql).toBe("string");
     expect(MIGRATIONS[0].sql).toContain("CREATE TABLE athlete");
@@ -259,7 +256,7 @@ describe("001_init migration", () => {
     expect(MIGRATIONS[2]!.sql).toBe(MIGRATION_003);
   });
 
-  it("applies 001 through 008 with exactly thirty-six tables and no foreign-key violations", () => {
+  it("applies 001 through 009 with exactly thirty-six tables and no foreign-key violations", () => {
     db = openFull();
     const names = (
       db
@@ -823,5 +820,28 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     expect(() => db!.prepare("INSERT INTO store_owner VALUES(2,?)").run("b".repeat(64))).toThrow();
     expect(() => db!.prepare("UPDATE store_owner SET account_fingerprint=?").run("b".repeat(64))).toThrow();
     expect(() => db!.prepare("DELETE FROM store_owner").run()).toThrow();
+  });
+
+  it("drops the prior bone-stress column that 001 created", () => {
+    db = openFull();
+    expect(createHash("sha256").update(MIGRATIONS[8]!.sql).digest("hex")).toBe(
+      PRIOR_BSI_DROP_DIGEST,
+    );
+    expect(MIGRATIONS[0].sql).toContain("prior_bsi");
+    const columns = (
+      db.prepare("PRAGMA table_info(intake_flags)").all() as Array<{ name: string }>
+    ).map((row) => row.name);
+    expect(columns).not.toContain("prior_bsi");
+    expect(columns).toEqual([
+      "id",
+      "swim_skill_floor",
+      "continuous_distance_capable",
+      "open_water_comfort",
+      "clinician_cleared",
+      "injury_status",
+      "device_id",
+      "hlc_physical_ms",
+      "hlc_counter",
+    ]);
   });
 });

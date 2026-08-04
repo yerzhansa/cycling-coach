@@ -35,7 +35,6 @@ export type ChatGptLoginResult =
   | { readonly status: "refused"; readonly reason: ChatGptLoginRefusalReason };
 
 export interface DesktopIntakeDraft {
-  readonly priorBsi: boolean | null;
   readonly injuryStatus: "none" | "managing" | "returning" | null;
   readonly clinicianCleared: boolean | null;
 }
@@ -105,7 +104,7 @@ export function createOnboardingState(
     claudeCliState: claudeCliStatus === null ? null : claudeCliStatus.state,
     claudeCliIdentity: claudeCliStatus === null ? null : claudeCliIdentityLine(claudeCliStatus),
     importedRideFileCount: 0,
-    intake: { priorBsi: null, injuryStatus: null, clinicianCleared: null },
+    intake: { injuryStatus: null, clinicianCleared: null },
     busy: false,
     fixedError: null,
   };
@@ -196,14 +195,13 @@ export function hasTrainingData(state: OnboardingState): boolean {
 }
 
 export function toDesktopIntakeFlags(draft: DesktopIntakeDraft): SaveIntakeRpcParams {
-  if (draft.priorBsi === null || draft.injuryStatus === null) throw new TypeError();
-  const needsClearance = draft.priorBsi || draft.injuryStatus !== "none";
+  if (draft.injuryStatus === null) throw new TypeError();
+  const needsClearance = draft.injuryStatus !== "none";
   if (needsClearance && draft.clinicianCleared === null) throw new TypeError();
   return SaveIntakeRpcParamsSchema.parse({
     swim_skill_floor: null,
     continuous_distance_capable: null,
     open_water_comfort: null,
-    prior_bsi: draft.priorBsi,
     clinician_cleared: needsClearance ? draft.clinicianCleared : null,
     injury_status: draft.injuryStatus,
   });
@@ -251,8 +249,7 @@ export function withIntake(
   update: Partial<DesktopIntakeDraft>,
 ): OnboardingState {
   const intake = { ...state.intake, ...update };
-  const needsClearance =
-    intake.priorBsi === true || (intake.injuryStatus !== null && intake.injuryStatus !== "none");
+  const needsClearance = intake.injuryStatus !== null && intake.injuryStatus !== "none";
   return {
     ...state,
     intake: needsClearance ? intake : { ...intake, clinicianCleared: null },

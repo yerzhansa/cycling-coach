@@ -526,7 +526,6 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       swim_skill_floor: null,
       continuous_distance_capable: null,
       open_water_comfort: null,
-      prior_bsi: false,
       clinician_cleared: null,
       injury_status: "none",
     } as const;
@@ -1038,7 +1037,6 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
             swim_skill_floor: null,
             continuous_distance_capable: null,
             open_water_comfort: null,
-            prior_bsi: false,
             clinician_cleared: null,
             injury_status: "none",
             extra: true,

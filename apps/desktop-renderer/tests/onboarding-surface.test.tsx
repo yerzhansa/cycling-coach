@@ -65,7 +65,6 @@ async function saveTrainingKey(user: UserEvent): Promise<void> {
 
 async function answerIntake(user: UserEvent): Promise<void> {
   await chooseOption(user, "onboarding-injury-status", "none");
-  await chooseOption(user, "onboarding-prior-bsi", "no");
 }
 
 type CredentialWriteRefusalReason = Extract<
@@ -1172,7 +1171,6 @@ describe("mounted onboarding", () => {
         swim_skill_floor: null,
         continuous_distance_capable: null,
         open_water_comfort: null,
-        prior_bsi: false,
         clinician_cleared: null,
         injury_status: "none",
       });
@@ -1195,8 +1193,7 @@ describe("mounted onboarding", () => {
     const wizard = mountWizard({ bridge });
     await wizard.open();
 
-    await chooseOption(user, "onboarding-prior-bsi", "yes");
-    await chooseOption(user, "onboarding-injury-status", "none");
+    await chooseOption(user, "onboarding-injury-status", "returning");
 
     expect(control("onboarding-clinician-cleared")).toBeInTheDocument();
     expect(primaryButton()).toBeDisabled();
@@ -1214,9 +1211,8 @@ describe("mounted onboarding", () => {
       swim_skill_floor: null,
       continuous_distance_capable: null,
       open_water_comfort: null,
-      prior_bsi: true,
       clinician_cleared: true,
-      injury_status: "none",
+      injury_status: "returning",
     });
     wizard.controller.dispose();
   });
@@ -1257,7 +1253,6 @@ describe("mounted onboarding", () => {
     const wizard = mountWizard({ bridge, onComplete });
     await wizard.open();
     act(() => {
-      wizard.controller.setIntake("priorBsi", false);
       wizard.controller.setIntake("injuryStatus", "none");
     });
 
@@ -1281,7 +1276,6 @@ describe("mounted onboarding", () => {
     const wizard = mountWizard({ bridge, onComplete });
     await wizard.open();
     act(() => {
-      wizard.controller.setIntake("priorBsi", false);
       wizard.controller.setIntake("injuryStatus", "none");
     });
 

@@ -92,7 +92,6 @@ function buttonNames(host: HTMLElement | null): readonly string[] {
 
 async function completeIntake(user: ReturnType<typeof userEvent.setup>): Promise<void> {
   await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "none");
-  await user.selectOptions(control<HTMLSelectElement>("onboarding-prior-bsi"), "no");
 }
 
 describe("setup card", () => {
@@ -113,7 +112,6 @@ describe("setup card", () => {
     expect(setupRow("ai").parentElement).toBe(card);
     expect(setupRow("training").parentElement).toBe(card);
     expect(setupRow("injury-status").parentElement).toBe(card);
-    expect(setupRow("prior-bsi").parentElement).toBe(card);
     wizard.controller.dispose();
   });
 
@@ -273,7 +271,7 @@ describe("setup card", () => {
     await wizard.open();
     await openApiKeyPanel(user);
     await openTrainingPanel(user);
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-prior-bsi"), "yes");
+    await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "returning");
     await user.selectOptions(control<HTMLSelectElement>("onboarding-llm-model"), "__custom__");
 
     const controls = Array.from(
@@ -322,8 +320,6 @@ describe("setup card", () => {
     expect(primaryButton()).toBeDisabled();
 
     await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "none");
-    expect(primaryButton()).toBeDisabled();
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-prior-bsi"), "no");
 
     await waitFor(() => {
       expect(primaryButton()).toBeEnabled();
@@ -360,7 +356,7 @@ describe("setup card", () => {
     expect(primaryButton().className).toContain("bg-ink text-bg");
     const tick = setupRow("ai").querySelector<HTMLElement>('[data-setup-disc="ready"]');
     expect(tick?.className).toContain("text-ok");
-    const pending = setupRow("prior-bsi").querySelector('[data-setup-disc="pending"]');
+    const pending = setupRow("injury-status").querySelector('[data-setup-disc="pending"]');
     expect(pending).toBeNull();
     expect(document.querySelector(".onboarding")?.outerHTML).not.toMatch(/brand/u);
     wizard.controller.dispose();
@@ -371,17 +367,17 @@ describe("setup card", () => {
     const wizard = mountWizard({ bridge: coldBridge() });
     await wizard.open();
 
-    expect(rowIds()).toEqual(["ai", "training", "injury-status", "prior-bsi"]);
+    expect(rowIds()).toEqual(["ai", "training", "injury-status"]);
 
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-prior-bsi"), "yes");
+    await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "returning");
 
-    expect(rowIds()).toEqual(["ai", "training", "injury-status", "prior-bsi", "clinician-cleared"]);
+    expect(rowIds()).toEqual(["ai", "training", "injury-status", "clinician-cleared"]);
     expect(setupRow("clinician-cleared").parentElement).toBe(setupCard());
-    expect(setupRow("prior-bsi").nextElementSibling).toBe(setupRow("clinician-cleared"));
+    expect(setupRow("injury-status").nextElementSibling).toBe(setupRow("clinician-cleared"));
 
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-prior-bsi"), "no");
+    await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "none");
 
-    expect(rowIds()).toEqual(["ai", "training", "injury-status", "prior-bsi"]);
+    expect(rowIds()).toEqual(["ai", "training", "injury-status"]);
     wizard.controller.dispose();
   });
 
@@ -525,17 +521,32 @@ describe("setup card", () => {
   });
 
   it("names what is still outstanding beside a blocked Start coaching", async () => {
+    const user = userEvent.setup();
     const wizard = mountWizard({ bridge: readyEverythingBridge() });
     await wizard.open();
     await waitFor(() => {
       expect(rowState("training")).toBe("ready");
     });
 
+    const outstanding = (): HTMLElement | null =>
+      document.querySelector<HTMLElement>("[data-setup-outstanding]");
+
     expect(primaryButton()).toBeDisabled();
-    expect(document.querySelector("[data-setup-outstanding]")?.getAttribute("data-setup-outstanding")).toBe("intake");
-    expect(document.querySelector("[data-setup-outstanding]")?.textContent).toBe(
-      "Answer both questions above to finish.",
-    );
+    expect(outstanding()?.getAttribute("data-setup-outstanding")).toBe("intake");
+    expect(outstanding()?.textContent).toBe("Answer the injury question above to finish.");
+
+    await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "returning");
+
+    expect(primaryButton()).toBeDisabled();
+    expect(outstanding()?.getAttribute("data-setup-outstanding")).toBe("clearance");
+    expect(outstanding()?.textContent).toBe("Confirm clinician clearance above to finish.");
+
+    await user.selectOptions(control<HTMLSelectElement>("onboarding-clinician-cleared"), "yes");
+
+    await waitFor(() => {
+      expect(primaryButton()).toBeEnabled();
+    });
+    expect(outstanding()).toBeNull();
     wizard.controller.dispose();
   });
 
@@ -684,7 +695,6 @@ describe("setup card accessibility", () => {
     });
     expect(passwordInput("anthropic").getAttribute("aria-describedby")).toBe("onboarding-error");
     expect(control("onboarding-injury-status").hasAttribute("aria-describedby")).toBe(false);
-    expect(control("onboarding-prior-bsi").hasAttribute("aria-describedby")).toBe(false);
     wizard.controller.dispose();
   });
 

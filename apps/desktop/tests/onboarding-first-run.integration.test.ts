@@ -193,7 +193,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
       panelButton("training", "Save")?.click();
       await waitFor('[data-setup-row="training"][data-state="ready"]');
       pick("onboarding-injury-status", "none");
-      pick("onboarding-prior-bsi", "no");
       await new Promise((resolve) => setTimeout(resolve, 60));
       button("Start coaching")?.click();
       const chatDeadline = Date.now() + 10000;

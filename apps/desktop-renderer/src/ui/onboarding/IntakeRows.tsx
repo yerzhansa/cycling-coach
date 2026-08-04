@@ -63,8 +63,7 @@ export function IntakeRows(props: {
   const wizard = surface.wizard;
   const intake = wizard.intake;
   const busy = wizard.busy;
-  const needsClearance =
-    intake.priorBsi === true || (intake.injuryStatus !== null && intake.injuryStatus !== "none");
+  const needsClearance = intake.injuryStatus !== null && intake.injuryStatus !== "none";
   const ownsError = errorSection(wizard.fixedError, surface.lastCommit) === "intake";
   const describedBy = ownsError ? { describedBy: "onboarding-error" } : {};
 
@@ -88,25 +87,6 @@ export function IntakeRows(props: {
                 "injuryStatus",
                 value === UNSET ? null : (value as "none" | "managing" | "returning"),
               );
-            }}
-          />
-        }
-      />
-      <SetupRow
-        id="prior-bsi"
-        status="none"
-        title="Bone stress injury in the past"
-        subtitle="Affects how quickly we build volume."
-        titleFor="onboarding-prior-bsi"
-        trailing={
-          <IntakeSelect
-            id="onboarding-prior-bsi"
-            value={boolValue(intake.priorBsi)}
-            options={YES_NO_OPTIONS}
-            disabled={busy}
-            {...describedBy}
-            onSelect={(value) => {
-              actions?.setIntake("priorBsi", parseBool(value));
             }}
           />
         }

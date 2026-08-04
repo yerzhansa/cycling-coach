@@ -13,7 +13,6 @@ function validate(row: IntakeFlagsRow): void {
   ) {
     throw new TypeError("intake multisport flags are invalid");
   }
-  if (typeof row.prior_bsi !== "boolean") throw new TypeError("intake prior BSI is invalid");
   if (
     row.injury_status !== "none" &&
     row.injury_status !== "managing" &&
@@ -21,7 +20,7 @@ function validate(row: IntakeFlagsRow): void {
   ) {
     throw new TypeError("intake injury status is invalid");
   }
-  const needsClearance = row.prior_bsi || row.injury_status !== "none";
+  const needsClearance = row.injury_status !== "none";
   if (
     (needsClearance && typeof row.clinician_cleared !== "boolean") ||
     (!needsClearance && row.clinician_cleared !== null)
@@ -39,10 +38,8 @@ function validate(row: IntakeFlagsRow): void {
   }
 }
 
-function booleanValue(value: unknown, nullable: false): boolean;
-function booleanValue(value: unknown, nullable: true): boolean | null;
-function booleanValue(value: unknown, nullable: boolean): boolean | null {
-  if (nullable && value === null) return null;
+function booleanValue(value: unknown): boolean | null {
+  if (value === null) return null;
   if (value === 0) return false;
   if (value === 1) return true;
   throw new TypeError("intake boolean is invalid");
@@ -54,8 +51,7 @@ function mapped(row: Row): IntakeFlagsRow {
     swim_skill_floor: row.swim_skill_floor as null,
     continuous_distance_capable: row.continuous_distance_capable as null,
     open_water_comfort: row.open_water_comfort as null,
-    prior_bsi: booleanValue(row.prior_bsi, false),
-    clinician_cleared: booleanValue(row.clinician_cleared, true),
+    clinician_cleared: booleanValue(row.clinician_cleared),
     injury_status: row.injury_status as IntakeFlagsRow["injury_status"],
     device_id: String(row.device_id),
     hlc_physical_ms: Number(row.hlc_physical_ms),
@@ -74,13 +70,12 @@ export function createIntakeRepository(
       await store.transaction(async () => {
         await store.run("DELETE FROM intake_flags");
         await store.run(
-          "INSERT INTO intake_flags (id,swim_skill_floor,continuous_distance_capable,open_water_comfort,prior_bsi,clinician_cleared,injury_status,device_id,hlc_physical_ms,hlc_counter) VALUES (?,?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO intake_flags (id,swim_skill_floor,continuous_distance_capable,open_water_comfort,clinician_cleared,injury_status,device_id,hlc_physical_ms,hlc_counter) VALUES (?,?,?,?,?,?,?,?,?)",
           [
             row.id,
             null,
             null,
             null,
-            row.prior_bsi ? 1 : 0,
             row.clinician_cleared === null ? null : row.clinician_cleared ? 1 : 0,
             row.injury_status,
             row.device_id,
@@ -92,7 +87,7 @@ export function createIntakeRepository(
     },
     async read() {
       const rows = await store.all(
-        "SELECT id, swim_skill_floor, continuous_distance_capable, open_water_comfort, prior_bsi, clinician_cleared, injury_status, device_id, hlc_physical_ms, hlc_counter FROM intake_flags",
+        "SELECT id, swim_skill_floor, continuous_distance_capable, open_water_comfort, clinician_cleared, injury_status, device_id, hlc_physical_ms, hlc_counter FROM intake_flags",
       );
       if (rows.length > 1) throw new Error("intake single-row invariant mismatch");
       return rows[0] === undefined ? undefined : mapped(rows[0]);

@@ -223,7 +223,6 @@ describe("coach request and event projection", () => {
           swim_skill_floor: null,
           continuous_distance_capable: null,
           open_water_comfort: null,
-          prior_bsi: false,
           clinician_cleared: null,
           injury_status: "none",
         },
@@ -531,13 +530,11 @@ describe("coach request and event projection", () => {
       swim_skill_floor: null,
       continuous_distance_capable: null,
       open_water_comfort: null,
-      prior_bsi: false,
       clinician_cleared: null,
       injury_status: "none",
     } as const;
     const clearedIntake = {
       ...safeIntake,
-      prior_bsi: true,
       clinician_cleared: true,
       injury_status: "returning",
     } as const;
@@ -546,6 +543,7 @@ describe("coach request and event projection", () => {
     for (const invalid of [
       { ...safeIntake, swim_skill_floor: "novice" },
       { ...safeIntake, extra: true },
+      { ...safeIntake, prior_bsi: false },
       { ...safeIntake, clinician_cleared: true },
       { ...clearedIntake, clinician_cleared: null },
     ]) {

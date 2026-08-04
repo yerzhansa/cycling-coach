@@ -58,7 +58,9 @@ export function OnboardingWizard(): ReactElement | null {
     : !readiness.trainingData
       ? "training"
       : !readiness.intake
-        ? "intake"
+        ? wizard.intake.injuryStatus === null
+          ? "intake"
+          : "clearance"
         : null;
 
   return (

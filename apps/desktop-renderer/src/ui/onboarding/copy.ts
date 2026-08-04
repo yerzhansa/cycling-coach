@@ -144,7 +144,8 @@ export const FOOTER_NOTE = "Everything stays on this Mac.";
 export const OUTSTANDING_NOTE = {
   coach: "Choose what powers your coach to finish.",
   training: "Connect intervals.icu to finish.",
-  intake: "Answer both questions above to finish.",
+  intake: "Answer the injury question above to finish.",
+  clearance: "Confirm clinician clearance above to finish.",
 } as const;
 
 export const PRIMARY_LABEL = "Start coaching";

@@ -51,7 +51,7 @@ describe("desktop onboarding machine", () => {
       step: "safety-intake",
       fixedError: "intake-incomplete",
     });
-    state = withIntake(state, { priorBsi: false, injuryStatus: "none" });
+    state = withIntake(state, { injuryStatus: "none" });
     state = nextStep(state);
     expect(state.step).toBe("ready");
   });
@@ -151,29 +151,26 @@ describe("desktop onboarding machine", () => {
   });
 
   it("maps every cycling intake branch to the landed strict DTO", () => {
-    expect(
-      toDesktopIntakeFlags({ priorBsi: false, injuryStatus: "none", clinicianCleared: null }),
-    ).toEqual({
+    expect(toDesktopIntakeFlags({ injuryStatus: "none", clinicianCleared: null })).toEqual({
       swim_skill_floor: null,
       continuous_distance_capable: null,
       open_water_comfort: null,
-      prior_bsi: false,
       clinician_cleared: null,
       injury_status: "none",
     });
-    for (const priorBsi of [false, true]) {
-      for (const injuryStatus of ["managing", "returning"] as const) {
-        for (const clinicianCleared of [false, true]) {
-          expect(toDesktopIntakeFlags({ priorBsi, injuryStatus, clinicianCleared })).toMatchObject({
-            prior_bsi: priorBsi,
-            injury_status: injuryStatus,
-            clinician_cleared: clinicianCleared,
-          });
-        }
+    for (const injuryStatus of ["managing", "returning"] as const) {
+      for (const clinicianCleared of [false, true]) {
+        expect(toDesktopIntakeFlags({ injuryStatus, clinicianCleared })).toMatchObject({
+          injury_status: injuryStatus,
+          clinician_cleared: clinicianCleared,
+        });
       }
     }
-    expect(() =>
-      toDesktopIntakeFlags({ priorBsi: true, injuryStatus: "none", clinicianCleared: null }),
-    ).toThrow(TypeError);
+    expect(() => toDesktopIntakeFlags({ injuryStatus: null, clinicianCleared: null })).toThrow(
+      TypeError,
+    );
+    expect(() => toDesktopIntakeFlags({ injuryStatus: "managing", clinicianCleared: null })).toThrow(
+      TypeError,
+    );
   });
 });
