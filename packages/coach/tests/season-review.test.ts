@@ -192,14 +192,14 @@ function createHashForTest(bytes: Uint8Array, label: string): string {
 
 describe("season review run command", () => {
   it("calls normal chat exactly once with the fixed request, writes evidence, and closes", async () => {
-    const input = await fixture(), close = vi.fn(async () => {}), chat = vi.fn(async () => "synthetic report");
+    const input = await fixture(), close = vi.fn(async () => {}), chat = vi.fn(async () => ({ text: "synthetic report" }));
     const result = await executeSeasonReviewCommand(input.args, dependencies(() => ({ engine: { chat },
       provider: "synthetic-provider", model: "synthetic-model", close }), input));
     expect(result).toEqual({ exitCode: 0, stdout: JSON.stringify({ status: "generated", provider: "synthetic-provider",
       model: "synthetic-model", sample: "model-calibration-01",
       report_sha256: sha256Bytes("synthetic report"), generate_calls: 1, priced: false }) });
     expect(chat).toHaveBeenCalledOnce();
-    expect(chat).toHaveBeenCalledWith("season-review-prototype-synthetic-run", SEASON_REVIEW_REQUEST);
+    expect(chat).toHaveBeenCalledWith({ chatId: "season-review-prototype-synthetic-run", message: SEASON_REVIEW_REQUEST });
     expect(close).toHaveBeenCalledOnce();
     expect(await readFile(input.report, "utf8")).toBe("synthetic report");
     const record = validateSeasonReviewRunRecord(JSON.parse(await readFile(input.runRecord, "utf8")), {
@@ -243,7 +243,7 @@ describe("season review run command", () => {
   it("retains the marker and fails if the store inventory changes", async () => {
     const input = await fixture(); let calls = 0;
     const result = await executeSeasonReviewCommand(input.args, dependencies(() => ({
-      engine: { chat: async () => "synthetic report" }, provider: "synthetic-provider", model: "synthetic-model",
+      engine: { chat: async () => ({ text: "synthetic report" }) }, provider: "synthetic-provider", model: "synthetic-model",
       close: async () => {},
     }), input, { storeInventory: () => (++calls === 1 ? HASH : "d".repeat(64)) }));
     expect(result.exitCode).toBe(1);
@@ -273,7 +273,7 @@ describe("season review run command", () => {
     const input = await fixture(), rows = [usage({ cost: { input: 0.1, output: 0.2, cacheRead: 0.01, cacheWrite: 0.02, total: 0.33 } }),
       usage({ kind: "turn", cost: undefined })];
     const result = await executeSeasonReviewCommand(input.args, dependencies(() => ({
-      engine: { chat: async () => "synthetic report" }, provider: "synthetic-provider", model: "synthetic-model", close: async () => {},
+      engine: { chat: async () => ({ text: "synthetic report" }) }, provider: "synthetic-provider", model: "synthetic-model", close: async () => {},
     }), input, { readUsage: () => rows }));
     expect(JSON.parse(result.stdout)).toMatchObject({ generate_calls: 1, priced: true });
     expect(validateSeasonReviewRunRecord(JSON.parse(await readFile(input.runRecord, "utf8"))).cost.usd_total).toBe(0.33);

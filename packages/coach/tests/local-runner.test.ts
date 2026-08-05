@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,7 +11,6 @@ import type { CoachStoreWriterContext, CoachStoreWriterPlan } from "../src/runti
 
 const mocks = vi.hoisted(() => ({
   withWriter: vi.fn(),
-  migrate: vi.fn(),
   readiness: vi.fn(),
   composition: vi.fn(),
 }));
@@ -19,10 +18,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../src/runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/runtime.js")>()),
   withCoachStoreWriter: mocks.withWriter,
-}));
-vi.mock("../src/legacy-migration.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/legacy-migration.js")>()),
-  migrateLegacyHomeUnderLock: mocks.migrate,
 }));
 vi.mock("../src/readiness.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/readiness.js")>()),
@@ -131,6 +126,12 @@ const spendMeter = {
   setDailySpendCap: vi.fn(),
 };
 
+const confirmations = {
+  peek: vi.fn(),
+  confirm: vi.fn(),
+  cancel: vi.fn(),
+};
+
 const config = {
   dataSource: "store",
   llm: { provider: "anthropic", model: "synthetic", apiKey: "" },
@@ -194,21 +195,10 @@ function store(): CoachStoreWriterContext["store"] {
   };
 }
 
-function notNeeded() {
-  return {
-    status: "not-needed" as const,
-    exitCode: 0 as const,
-    journalPath: join(selectedHome.root, "migration.json"),
-    manifestDigest: null,
-  };
-}
-
 function input(operation: (lifecycle: LocalCoachLifecycle) => Promise<unknown>) {
   return {
     env: { SYNTHETIC: "1" },
     home: selectedHome,
-    sourceRoot: join(selectedHome.root, "legacy-source"),
-    action: { kind: "resume" as const, isTTY: false },
     operation,
   };
 }
@@ -225,13 +215,8 @@ beforeEach(async () => {
     trace.push("lifecycle-close");
   };
   mocks.withWriter.mockReset();
-  mocks.migrate.mockReset();
   mocks.readiness.mockReset();
   mocks.composition.mockReset();
-  mocks.migrate.mockImplementation(async () => {
-    trace.push("legacy-migration");
-    return notNeeded();
-  });
   readyConfig = { ...config, dataDir: selectedHome.root };
   mocks.readiness.mockImplementation(async () => {
     trace.push("readiness");
@@ -239,7 +224,7 @@ beforeEach(async () => {
   });
   mocks.composition.mockImplementation(async () => {
     trace.push("engine-open");
-    return { engine, operations, spendMeter, close: () => closeImplementation() };
+    return { engine, operations, spendMeter, confirmations, close: () => closeImplementation() };
   });
   mocks.withWriter.mockImplementation(
     async (env: Record<string, string | undefined>, plan: CoachStoreWriterPlan<unknown>) => {
@@ -261,7 +246,7 @@ afterEach(async () => {
 });
 
 describe("local coach runner", () => {
-  it("runs the exact successful lock, migration, store, engine, operation, and cleanup order", async () => {
+  it("runs the exact successful lock, store, engine, operation, and cleanup order", async () => {
     trace.push("resolve-supplied-home");
     await expect(
       withLocalCoach(
@@ -269,6 +254,7 @@ describe("local coach runner", () => {
           expect(lifecycle.listener).toBe(inertWriterProtocolListener);
           expect(lifecycle.operations).toBe(operations);
           expect(lifecycle.spendMeter).toBe(spendMeter);
+          expect(lifecycle.confirmations).toBe(confirmations);
           trace.push("operation");
           return "done";
         }),
@@ -277,7 +263,6 @@ describe("local coach runner", () => {
     expect(trace).toEqual([
       "resolve-supplied-home",
       "writer-acquired",
-      "legacy-migration",
       "store-open",
       "schema-migrations",
       "readiness",
@@ -298,63 +283,39 @@ describe("local coach runner", () => {
     expect(compositionInput.engineConfig).toBe(engineConfig);
   });
 
-  it("releases the writer after migration throws without opening later stages", async () => {
-    const failure = { kind: "migration-failure" };
-    mocks.migrate.mockRejectedValue(failure);
-    await expect(withLocalCoach(input(async () => "unused"))).rejects.toBe(failure);
-    expect(trace).toEqual(["writer-acquired", "store-close", "writer-release"]);
-    expect(mocks.readiness).not.toHaveBeenCalled();
-    expect(mocks.composition).not.toHaveBeenCalled();
-  });
-
-  it("carries refused and discarded results exactly while only not-needed and done open the store", async () => {
-    const refused = {
-      status: "refused" as const,
-      exitCode: 3 as const,
-      journalPath: "synthetic-journal",
-      manifestDigest: "a".repeat(64),
-      reason: "source-drift" as const,
-      conflictIds: ["synthetic-conflict"],
+  it("uses one physical athlete-home identity throughout a root-alias lifecycle", async () => {
+    const physicalHome = selectedHome;
+    const aliasRoot = join(physicalHome.root, "athlete-home-alias");
+    await symlink(physicalHome.root, aliasRoot, "dir");
+    selectedHome = {
+      root: aliasRoot,
+      storeDir: join(aliasRoot, "store"),
+      archiveDir: join(aliasRoot, "archive"),
+      configDir: join(aliasRoot, "config"),
     };
-    const discarded = {
-      status: "discarded" as const,
-      exitCode: 0 as const,
-      journalPath: "synthetic-journal",
-      manifestDigest: "b".repeat(64),
-      archivePath: "synthetic-archive",
-    };
-    for (const terminal of [refused, discarded]) {
-      trace.length = 0;
-      mocks.migrate.mockResolvedValueOnce(terminal);
-      const result = await withLocalCoach(input(async () => "unused"));
-      expect(result).toEqual({
-        status: terminal.status === "refused" ? "migration-refused" : "migration-discarded",
-        result: terminal,
-      });
-      expect(trace).toEqual(["writer-acquired", "store-close", "writer-release"]);
-    }
-    for (const opening of [
-      notNeeded(),
-      {
-        status: "done" as const,
-        exitCode: 0 as const,
-        journalPath: "synthetic-journal",
-        manifestDigest: "c".repeat(64),
-        completion: "complete" as const,
-        copiedIds: [],
-        skipVerifiedIds: [],
-        skippedConflictIds: [],
-        freezePoint: "synthetic-freeze",
+    context = { ...context, home: physicalHome };
+    readyConfig = { ...readyConfig, dataDir: aliasRoot };
+    mocks.withWriter.mockImplementation(
+      async (env: Record<string, string | undefined>, plan: CoachStoreWriterPlan<unknown>) => {
+        expect(env).toEqual({ SYNTHETIC: "1", ENDURAGENT_HOME: physicalHome.root });
+        await plan.beforeStoreOpen(physicalHome);
+        return plan.operation(context);
       },
-    ]) {
-      trace.length = 0;
-      mocks.migrate.mockResolvedValueOnce(opening);
-      await expect(withLocalCoach(input(async () => "done"))).resolves.toEqual({
-        status: "completed",
-        value: "done",
-      });
-      expect(trace).toContain("store-open");
-    }
+    );
+
+    await expect(withLocalCoach(input(async () => "done"))).resolves.toEqual({
+      status: "completed",
+      value: "done",
+    });
+
+    expect(mocks.readiness).toHaveBeenCalledExactlyOnceWith(physicalHome);
+    expect(mocks.composition).toHaveBeenCalledWith(
+      expect.objectContaining({ home: physicalHome, context }),
+    );
+    expect(mocks.composition.mock.calls[0]![0].config).toEqual({
+      ...readyConfig,
+      dataDir: physicalHome.root,
+    });
   });
 
   it("returns not-configured with the exact path without engine construction or operation", async () => {
@@ -469,7 +430,7 @@ describe("local coach runner", () => {
       closerCalls += 1;
       trace.push("lifecycle-close");
     };
-    mocks.composition.mockResolvedValue({ engine, operations, spendMeter, close });
+    mocks.composition.mockResolvedValue({ engine, operations, spendMeter, confirmations, close });
     await expect(
       withLocalCoach(
         input(async (lifecycle) => {
@@ -483,17 +444,16 @@ describe("local coach runner", () => {
     expect(trace.at(-1)).toBe("writer-release");
   });
 
-  it("preserves actionable healthy-holder contention without migration or engine work", async () => {
+  it("preserves actionable healthy-holder contention without engine work", async () => {
     const contention = { kind: "holder" as const, pid: 4321, port: 8765 };
     const failure = new CoachStoreWriterError("writer-lock-held", null, undefined, contention);
     mocks.withWriter.mockRejectedValue(failure);
     await expect(withLocalCoach(input(async () => "unused"))).rejects.toBe(failure);
     expect(failure).toMatchObject({ code: "writer-lock-held", stage: null, contention });
-    expect(mocks.migrate).not.toHaveBeenCalled();
     expect(mocks.composition).not.toHaveBeenCalled();
   });
 
-  it("preserves actionable foreign-port contention without migration or engine work", async () => {
+  it("preserves actionable foreign-port contention without engine work", async () => {
     const contention = {
       kind: "foreign" as const,
       port: 8765,
@@ -503,7 +463,6 @@ describe("local coach runner", () => {
     mocks.withWriter.mockRejectedValue(failure);
     await expect(withLocalCoach(input(async () => "unused"))).rejects.toBe(failure);
     expect(failure.contention).toEqual(contention);
-    expect(mocks.migrate).not.toHaveBeenCalled();
     expect(mocks.composition).not.toHaveBeenCalled();
   });
 });

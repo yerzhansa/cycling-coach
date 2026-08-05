@@ -27,6 +27,7 @@ import {
   type Config,
   type ReferenceRuntime,
 } from "@enduragent/core";
+import type { CoachEngine } from "@enduragent/coach-contract";
 import { canonicalJson } from "@enduragent/kernel/archive";
 import type { ReferenceCaptureManifest } from "@enduragent/kernel/reference/capture";
 import { loadReferenceCaptureSidecars } from "@enduragent/kernel-node/capture-manifest";
@@ -63,9 +64,7 @@ const HASH = /^[0-9a-f]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const HELP = "usage: season-review-command (run|validate-score|validate-stage|seal|validate-conclusion)";
 
-export interface SeasonReviewEngine {
-  chat(chatId: string, request: string): Promise<string>;
-}
+export type SeasonReviewEngine = Pick<CoachEngine, "chat">;
 
 export interface SeasonReviewComposition {
   readonly engine: SeasonReviewEngine;
@@ -381,7 +380,11 @@ async function executeRun(options: RunOptions, dependencies: SeasonReviewCommand
       const chatId = (dependencies.chatId ?? ((sample) => `season-review-prototype-${sample}-${randomUUID()}`))(options.sample);
       if (!/^season-review-prototype-[a-z0-9-]+$/.test(chatId)) throw new TypeError("Season review chat ID is invalid.");
       writeFileSync(options.marker, `${options.head}\n`, { flag: "wx", mode: 0o600 });
-      report = await composition.engine.chat(chatId, SEASON_REVIEW_REQUEST);
+      const response = await composition.engine.chat({
+        chatId,
+        message: SEASON_REVIEW_REQUEST,
+      });
+      report = response.text;
     } catch (error) { chatFailure = error; }
     finally { try { await composition.close(); } catch (error) { closeFailure = error; } }
     const after = inventory(storePath);

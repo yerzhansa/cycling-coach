@@ -17,7 +17,9 @@ import { join } from "node:path";
 import { Duplex } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
+import type { CreateTelegramChannelInput, TelegramChannelRuntime } from "@enduragent/core";
 import {
+  COACH_RPC_METHOD_REGISTRY,
   PROTOCOL_VERSION,
   ServerHandshakeFrameSchema,
   createClientHandshakeFrame,
@@ -26,14 +28,20 @@ import {
   type CoachEngine,
   type CoachOperations,
   type SpendSummary,
+  type TelegramControlSnapshot,
 } from "@enduragent/coach-contract";
 import {
   createCoachRpcServer as createCoachRpcServerProduction,
   ensureDaemonToken,
+  UPGRADE_DRAIN_TIMEOUT_MS,
   type CoachRpcServerInput,
 } from "../src/daemon/rpc-server.js";
 import { createDaemonHealthState } from "../src/daemon/healthz-server.js";
+import { createInvocationCoordinator } from "../src/daemon/invocation-coordinator.js";
 import type { MonotonicTimer, ScheduledMonotonicTimer } from "../src/daemon/upgrade-fence.js";
+import type { DesktopTelegramController } from "../src/desktop-telegram-controller.js";
+import { createDesktopTelegramRuntimeFactory } from "../src/desktop-telegram-runtime.js";
+import type { LocalCoachLifecycle } from "../src/local-runner.js";
 
 const roots: string[] = [];
 
@@ -153,14 +161,67 @@ const spend = {
   setDailySpendCap: async () => spendSummary,
 };
 
+const TEST_ATHLETE_HOME = "/tmp/enduragent-test-athlete";
+const TEST_RENDERER_CAPABILITY_BYTES = Buffer.alloc(32, 9);
+
+function telegramController(
+  overrides: Partial<DesktopTelegramController> = {},
+): DesktopTelegramController {
+  const snapshot: TelegramControlSnapshot = {
+    channel: { desiredState: "disabled", state: "disabled" },
+    bot: { state: "unconfigured" },
+    pairing: { state: "unpaired" },
+  };
+  return {
+    getStatus: () => snapshot,
+    configure: async () => ({ outcome: "applied", current: snapshot }),
+    enable: async () => snapshot,
+    disable: async () => snapshot,
+    replace: async () => ({ outcome: "applied", current: snapshot }),
+    reconcile: async () => snapshot,
+    inspectTelegramCredential: async () => ({ status: "invalid-token" }),
+    deleteTelegramWebhook: async () => ({ status: "invalid-token" }),
+    forgetTelegramCredential: async () => snapshot,
+    resetTelegramAccess: async () => snapshot,
+    beginTelegramPairing: async () => snapshot,
+    cancelTelegramPairing: async () => snapshot,
+    listTelegramAllowedSenders: async () => ({ senders: [] }),
+    addTelegramAllowedSender: async () => ({
+      outcome: "applied" as const,
+      current: { senders: [] },
+    }),
+    removeTelegramAllowedSender: async () => ({
+      outcome: "applied" as const,
+      current: { senders: [] },
+    }),
+    stopPolling: async () => snapshot,
+    resumePolling: async () => snapshot,
+    drainPending: async () => snapshot,
+    close: async () => snapshot,
+    ...overrides,
+  };
+}
+
 function createCoachRpcServer(
-  input: Omit<CoachRpcServerInput, "operations" | "spend" | "selfTestOperations"> &
-    Partial<Pick<CoachRpcServerInput, "operations" | "spend" | "selfTestOperations">>,
+  input: Omit<
+    CoachRpcServerInput,
+    "operations" | "spend" | "selfTestOperations" | "telegram" | "athleteHome"
+  > &
+    Partial<
+      Pick<
+        CoachRpcServerInput,
+        "operations" | "spend" | "selfTestOperations" | "telegram" | "athleteHome"
+      >
+    >,
 ) {
   return createCoachRpcServerProduction({
     ...input,
+    athleteHome: input.athleteHome ?? TEST_ATHLETE_HOME,
+    rendererCapabilityRandomBytes:
+      input.rendererCapabilityRandomBytes ?? (() => TEST_RENDERER_CAPABILITY_BYTES),
     operations: input.operations ?? operations,
     spend: input.spend ?? spend,
+    telegram: input.telegram ?? telegramController(),
     selfTestOperations: input.selfTestOperations ?? {
       selfTest: async () => ({
         schemaVersion: 1,
@@ -436,6 +497,8 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       clientProtocolVersion: PROTOCOL_VERSION,
       serverProtocolVersion: PROTOCOL_VERSION,
       owner: "unmanaged-foreground",
+      athleteHome: TEST_ATHLETE_HOME,
+      rendererCapability: TEST_RENDERER_CAPABILITY_BYTES.toString("base64url"),
     });
 
     client.ws.send(
@@ -470,6 +533,47 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       expect(response).toMatchObject({ jsonrpc: "2.0", id: value.id });
     }
     expect(calls).toEqual(["chat:chat", "resetSession:chat", "hasSession:chat", "getAthleteState"]);
+    await client.close();
+  });
+
+  it("does not let a same-session reset overtake a running chat", async () => {
+    const token = "x".repeat(43);
+    const chatResult = deferred<{ text: string }>();
+    const chat = vi.fn(() => chatResult.promise);
+    const resetSession = vi.fn(async () => ({ memoryFlushed: true }));
+    const rpc = createCoachRpcServer({
+      token,
+      owner: "unmanaged-foreground",
+      engine: engine({ chat, resetSession }),
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "chat",
+        method: "chat",
+        params: { chatId: "desktop", message: "hold" },
+      }),
+    );
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "reset",
+        method: "resetSession",
+        params: { chatId: "desktop" },
+      }),
+    );
+    await vi.waitFor(() => expect(chat).toHaveBeenCalledOnce());
+    expect(resetSession).not.toHaveBeenCalled();
+
+    chatResult.resolve({ text: "done" });
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({ id: "chat" });
+    await vi.waitFor(() => expect(resetSession).toHaveBeenCalledOnce());
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({ id: "reset" });
+
     await client.close();
   });
 
@@ -1126,6 +1230,741 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
   });
 });
 
+describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
+  it("binds renderer capabilities to the exact Desktop session namespace", async () => {
+    const token = "x".repeat(43);
+    const chat = vi.fn(async () => ({ text: "ok" }));
+    const resetSession = vi.fn(async () => ({ memoryFlushed: true }));
+    const hasSession = vi.fn(async () => ({ hasSession: true }));
+    const rpc = createCoachRpcServer({
+      engine: engine({ chat, resetSession, hasSession }),
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    const rendererCapability = TEST_RENDERER_CAPABILITY_BYTES.toString("base64url");
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(rendererCapability)));
+    expect(ServerHandshakeFrameSchema.parse(JSON.parse(await client.frames.next()))).toMatchObject({
+      status: "accepted",
+      athleteHome: TEST_ATHLETE_HOME,
+      rendererCapability,
+    });
+
+    const foreignChatIds = [
+      "cli:default",
+      "other",
+      "telegram:1",
+      "",
+      " ",
+      "desktop\0",
+      "../desktop",
+    ];
+    let id = 0;
+    for (const method of ["chat", "resetSession", "hasSession"] as const) {
+      for (const chatId of foreignChatIds) {
+        id += 1;
+        client.ws.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            method,
+            params: method === "chat" ? { chatId, message: "hello" } : { chatId },
+          }),
+        );
+        expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+          id,
+          error: { code: -32602, message: "Invalid params" },
+        });
+      }
+    }
+    expect(chat).not.toHaveBeenCalled();
+    expect(resetSession).not.toHaveBeenCalled();
+    expect(hasSession).not.toHaveBeenCalled();
+
+    for (const method of ["chat", "resetSession", "hasSession"] as const) {
+      id += 1;
+      client.ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method,
+          params:
+            method === "chat" ? { chatId: "desktop", message: "hello" } : { chatId: "desktop" },
+        }),
+      );
+      expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({ id, result: {} });
+    }
+    expect(chat).toHaveBeenCalledOnce();
+    expect(resetSession).toHaveBeenCalledOnce();
+    expect(hasSession).toHaveBeenCalledOnce();
+    await client.close();
+  });
+
+  it("denies Telegram sessions to every network authority", async () => {
+    const token = "x".repeat(43);
+    const chat = vi.fn(async () => ({ text: "ok" }));
+    const resetSession = vi.fn(async () => ({ memoryFlushed: true }));
+    const hasSession = vi.fn(async () => ({ hasSession: true }));
+    const rpc = createCoachRpcServer({
+      engine: engine({ chat, resetSession, hasSession }),
+      token,
+      owner: "unmanaged-foreground",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+
+    for (const [index, method] of ["chat", "resetSession", "hasSession"].entries()) {
+      client.ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: index,
+          method,
+          params:
+            method === "chat"
+              ? { chatId: "telegram:777", message: "hello" }
+              : { chatId: "telegram:777" },
+        }),
+      );
+      expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+        id: index,
+        error: { code: -32602, message: "Invalid params" },
+      });
+    }
+    expect(chat).not.toHaveBeenCalled();
+    expect(resetSession).not.toHaveBeenCalled();
+    expect(hasSession).not.toHaveBeenCalled();
+
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "cli",
+        method: "chat",
+        params: { chatId: "cli:default", message: "hello" },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "cli",
+      result: { text: "ok" },
+    });
+    expect(chat).toHaveBeenCalledOnce();
+    await client.close();
+  });
+
+  it("projects closed Telegram control only to the privileged bearer", async () => {
+    const token = "x".repeat(43);
+    const disabledSnapshot: TelegramControlSnapshot = {
+      channel: { desiredState: "disabled", state: "disabled" },
+      bot: { state: "unconfigured" },
+      pairing: { state: "unpaired" },
+    };
+    const onlineSnapshot: TelegramControlSnapshot = {
+      channel: { desiredState: "enabled", state: "online" },
+      bot: { state: "ready", username: "CoachBot" },
+      pairing: { state: "paired" },
+    };
+    const credentialInspection = {
+      status: "ready" as const,
+      bot: { id: 10001, username: "CoachBot" },
+    };
+    const senderList = {
+      senders: [{ senderId: 12345, role: "primary" as const }],
+    };
+    const configure = vi.fn(async (_token: string) => ({
+      outcome: "applied" as const,
+      current: onlineSnapshot,
+    }));
+    const enable = vi.fn(async () => onlineSnapshot);
+    const disable = vi.fn(async () => disabledSnapshot);
+    const stopPolling = vi.fn(async () => ({
+      ...onlineSnapshot,
+      channel: { desiredState: "enabled" as const, state: "suspended" as const },
+    }));
+    const resumePolling = vi.fn(async () => onlineSnapshot);
+    const drainPending = vi.fn(async () => onlineSnapshot);
+    const replace = vi.fn(async (_token: string) => ({
+      outcome: "applied" as const,
+      current: onlineSnapshot,
+    }));
+    const reconcile = vi.fn(async () => onlineSnapshot);
+    const inspectTelegramCredential = vi.fn(async (_token: string) => credentialInspection);
+    const deleteTelegramWebhook = vi.fn(async (_token: string) => credentialInspection);
+    const forgetTelegramCredential = vi.fn(async () => disabledSnapshot);
+    const resetTelegramAccess = vi.fn(async () => disabledSnapshot);
+    const beginTelegramPairing = vi.fn(async () => onlineSnapshot);
+    const cancelTelegramPairing = vi.fn(async () => onlineSnapshot);
+    const listTelegramAllowedSenders = vi.fn(async () => senderList);
+    const addTelegramAllowedSender = vi.fn(async (_senderId: number) => ({
+      outcome: "applied" as const,
+      current: senderList,
+    }));
+    const removeTelegramAllowedSender = vi.fn(async (_senderId: number) => ({
+      outcome: "uncertain" as const,
+      reason: "storage-uncertain" as const,
+    }));
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      telegram: telegramController({
+        getStatus: () => disabledSnapshot,
+        configure,
+        enable,
+        disable,
+        stopPolling,
+        resumePolling,
+        drainPending,
+        replace,
+        reconcile,
+        inspectTelegramCredential,
+        deleteTelegramWebhook,
+        forgetTelegramCredential,
+        resetTelegramAccess,
+        beginTelegramPairing,
+        cancelTelegramPairing,
+        listTelegramAllowedSenders,
+        addTelegramAllowedSender,
+        removeTelegramAllowedSender,
+      }),
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+
+    const requests = [
+      { method: "configureTelegram", params: { token: "first-private-token" } },
+      { method: "enableTelegram", params: {} },
+      { method: "replaceTelegram", params: { token: "second-private-token" } },
+      { method: "getTelegramStatus", params: {} },
+      { method: "reconcileTelegram", params: {} },
+      { method: "disableTelegram", params: {} },
+      { method: "suspendTelegramPolling", params: {} },
+      { method: "resumeTelegramPolling", params: {} },
+      { method: "drainTelegram", params: {} },
+      { method: "inspectTelegramCredential", params: { token: "inspection-private-token" } },
+      { method: "deleteTelegramWebhook", params: { token: "webhook-private-token" } },
+      { method: "forgetTelegramCredential", params: {} },
+      { method: "resetTelegramAccess", params: {} },
+      { method: "beginTelegramPairing", params: {} },
+      { method: "cancelTelegramPairing", params: {} },
+      { method: "listTelegramAllowedSenders", params: {} },
+      {
+        method: "addTelegramAllowedSender",
+        params: { senderId: Number.MAX_SAFE_INTEGER },
+      },
+      { method: "removeTelegramAllowedSender", params: { senderId: 67890 } },
+    ] as const;
+    for (const [id, request] of requests.entries()) {
+      client.ws.send(JSON.stringify({ jsonrpc: "2.0", id, ...request }));
+      const response = parseCoachRpcEnvelope(await client.frames.next());
+      expect(response).toMatchObject({ id, result: expect.any(Object) });
+      if (request.method === "configureTelegram") {
+        expect(response).toMatchObject({
+          result: { outcome: "applied", current: onlineSnapshot },
+        });
+      }
+      if (request.method === "replaceTelegram") {
+        expect(response).toMatchObject({
+          result: { outcome: "applied", current: onlineSnapshot },
+        });
+      }
+      if (request.method === "addTelegramAllowedSender") {
+        expect(response).toMatchObject({
+          result: { outcome: "applied", current: senderList },
+        });
+      }
+      if (request.method === "removeTelegramAllowedSender") {
+        expect(response).toMatchObject({
+          result: { outcome: "uncertain", reason: "storage-uncertain" },
+        });
+      }
+      expect(JSON.stringify(response)).not.toContain("private-token");
+      expect(JSON.stringify(response)).not.toContain("api.telegram.org");
+    }
+    expect(configure).toHaveBeenCalledWith("first-private-token");
+    expect(replace).toHaveBeenCalledWith("second-private-token");
+    expect(enable).toHaveBeenCalledOnce();
+    expect(reconcile).toHaveBeenCalledOnce();
+    expect(disable).toHaveBeenCalledOnce();
+    expect(stopPolling).toHaveBeenCalledOnce();
+    expect(resumePolling).toHaveBeenCalledOnce();
+    expect(drainPending).toHaveBeenCalledOnce();
+    expect(inspectTelegramCredential).toHaveBeenCalledWith("inspection-private-token");
+    expect(deleteTelegramWebhook).toHaveBeenCalledWith("webhook-private-token");
+    expect(forgetTelegramCredential).toHaveBeenCalledOnce();
+    expect(resetTelegramAccess).toHaveBeenCalledOnce();
+    expect(beginTelegramPairing).toHaveBeenCalledOnce();
+    expect(cancelTelegramPairing).toHaveBeenCalledOnce();
+    expect(listTelegramAllowedSenders).toHaveBeenCalledOnce();
+    expect(addTelegramAllowedSender).toHaveBeenCalledWith(Number.MAX_SAFE_INTEGER);
+    expect(removeTelegramAllowedSender).toHaveBeenCalledWith(67890);
+
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "unsafe-sender",
+        method: "addTelegramAllowedSender",
+        params: { senderId: Number.MAX_SAFE_INTEGER + 1 },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "unsafe-sender",
+      error: { code: -32602, message: "Invalid params" },
+    });
+    expect(addTelegramAllowedSender).toHaveBeenCalledOnce();
+
+    addTelegramAllowedSender.mockResolvedValueOnce({
+      outcome: "uncertain",
+      reason: "storage-uncertain",
+      current: { senders: [] },
+      privateDetail: "private daemon mutation detail",
+    } as never);
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "malformed-mutation",
+        method: "addTelegramAllowedSender",
+        params: { senderId: 67890 },
+      }),
+    );
+    const malformedMutation = parseCoachRpcEnvelope(await client.frames.next());
+    expect(malformedMutation).toMatchObject({
+      id: "malformed-mutation",
+      error: { code: -32603, message: "Internal error" },
+    });
+    expect(JSON.stringify(malformedMutation)).not.toContain("private daemon mutation detail");
+    await client.close();
+  });
+
+  it("holds privileged drainTelegram until drain settlement without other Telegram mutations", async () => {
+    const token = "x".repeat(43);
+    const snapshot: TelegramControlSnapshot = {
+      channel: { desiredState: "enabled", state: "suspended" },
+      bot: { state: "ready", username: "CoachBot" },
+      pairing: { state: "paired" },
+    };
+    const drain = deferred<TelegramControlSnapshot>();
+    const configure = vi.fn(async () => ({ outcome: "applied" as const, current: snapshot }));
+    const enable = vi.fn(async () => snapshot);
+    const disable = vi.fn(async () => snapshot);
+    const stopPolling = vi.fn(async () => snapshot);
+    const resumePolling = vi.fn(async () => snapshot);
+    const replace = vi.fn(async () => ({ outcome: "applied" as const, current: snapshot }));
+    const beginTelegramPairing = vi.fn(async () => snapshot);
+    const resetTelegramAccess = vi.fn(async () => snapshot);
+    const drainPending = vi.fn(() => drain.promise);
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      telegram: telegramController({
+        configure,
+        enable,
+        disable,
+        stopPolling,
+        resumePolling,
+        drainPending,
+        replace,
+        beginTelegramPairing,
+        resetTelegramAccess,
+      }),
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+
+    client.ws.send(
+      JSON.stringify({ jsonrpc: "2.0", id: "drain", method: "drainTelegram", params: {} }),
+    );
+    await vi.waitFor(() => expect(drainPending).toHaveBeenCalledOnce());
+    let delivered = false;
+    const response = client.frames.next().then((frame) => {
+      delivered = true;
+      return parseCoachRpcEnvelope(frame);
+    });
+    await Promise.resolve();
+    expect(delivered).toBe(false);
+    expect(configure).not.toHaveBeenCalled();
+    expect(enable).not.toHaveBeenCalled();
+    expect(disable).not.toHaveBeenCalled();
+    expect(stopPolling).not.toHaveBeenCalled();
+    expect(resumePolling).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
+    expect(beginTelegramPairing).not.toHaveBeenCalled();
+    expect(resetTelegramAccess).not.toHaveBeenCalled();
+
+    drain.resolve(snapshot);
+    await expect(response).resolves.toMatchObject({ id: "drain", result: snapshot });
+    await client.close();
+  });
+
+  it("keeps every Telegram control method absent from renderer authority", async () => {
+    const token = "x".repeat(43);
+    const snapshot: TelegramControlSnapshot = {
+      channel: { desiredState: "disabled", state: "disabled" },
+      bot: { state: "unconfigured" },
+      pairing: { state: "unpaired" },
+    };
+    const telegram = telegramController({
+      getStatus: vi.fn(() => snapshot),
+      configure: vi.fn(async () => ({ outcome: "applied" as const, current: snapshot })),
+      enable: vi.fn(async () => snapshot),
+      disable: vi.fn(async () => snapshot),
+      drainPending: vi.fn(async () => snapshot),
+      replace: vi.fn(async () => ({ outcome: "applied" as const, current: snapshot })),
+      reconcile: vi.fn(async () => snapshot),
+      inspectTelegramCredential: vi.fn(async () => ({ status: "invalid-token" as const })),
+      deleteTelegramWebhook: vi.fn(async () => ({ status: "invalid-token" as const })),
+      forgetTelegramCredential: vi.fn(async () => snapshot),
+      resetTelegramAccess: vi.fn(async () => snapshot),
+      beginTelegramPairing: vi.fn(async () => snapshot),
+      cancelTelegramPairing: vi.fn(async () => snapshot),
+      listTelegramAllowedSenders: vi.fn(async () => ({ senders: [] })),
+      addTelegramAllowedSender: vi.fn(async () => ({
+        outcome: "applied" as const,
+        current: { senders: [] },
+      })),
+      removeTelegramAllowedSender: vi.fn(async () => ({
+        outcome: "applied" as const,
+        current: { senders: [] },
+      })),
+    });
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      telegram,
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(
+      JSON.stringify(
+        createClientHandshakeFrame(TEST_RENDERER_CAPABILITY_BYTES.toString("base64url")),
+      ),
+    );
+    await client.frames.next();
+
+    const telegramRequests = [
+      { method: "configureTelegram", params: { token: "renderer-private-token" } },
+      { method: "enableTelegram", params: {} },
+      { method: "disableTelegram", params: {} },
+      { method: "suspendTelegramPolling", params: {} },
+      { method: "resumeTelegramPolling", params: {} },
+      { method: "drainTelegram", params: {} },
+      { method: "replaceTelegram", params: { token: "renderer-private-token" } },
+      { method: "getTelegramStatus", params: {} },
+      { method: "reconcileTelegram", params: {} },
+      {
+        method: "inspectTelegramCredential",
+        params: { token: "renderer-private-token" },
+      },
+      { method: "deleteTelegramWebhook", params: { token: "renderer-private-token" } },
+      { method: "forgetTelegramCredential", params: {} },
+      { method: "resetTelegramAccess", params: {} },
+      { method: "beginTelegramPairing", params: {} },
+      { method: "cancelTelegramPairing", params: {} },
+      { method: "listTelegramAllowedSenders", params: {} },
+      { method: "addTelegramAllowedSender", params: { senderId: 12345 } },
+      { method: "removeTelegramAllowedSender", params: { senderId: 12345 } },
+    ] as const;
+    for (const [id, request] of telegramRequests.entries()) {
+      client.ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          ...request,
+        }),
+      );
+      expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+        id,
+        error: { code: -32601, message: "Method not found" },
+      });
+    }
+    expect(telegram.getStatus).not.toHaveBeenCalled();
+    expect(telegram.configure).not.toHaveBeenCalled();
+    expect(telegram.enable).not.toHaveBeenCalled();
+    expect(telegram.disable).not.toHaveBeenCalled();
+    expect(telegram.drainPending).not.toHaveBeenCalled();
+    expect(telegram.replace).not.toHaveBeenCalled();
+    expect(telegram.reconcile).not.toHaveBeenCalled();
+    expect(telegram.inspectTelegramCredential).not.toHaveBeenCalled();
+    expect(telegram.deleteTelegramWebhook).not.toHaveBeenCalled();
+    expect(telegram.forgetTelegramCredential).not.toHaveBeenCalled();
+    expect(telegram.resetTelegramAccess).not.toHaveBeenCalled();
+    expect(telegram.beginTelegramPairing).not.toHaveBeenCalled();
+    expect(telegram.cancelTelegramPairing).not.toHaveBeenCalled();
+    expect(telegram.listTelegramAllowedSenders).not.toHaveBeenCalled();
+    expect(telegram.addTelegramAllowedSender).not.toHaveBeenCalled();
+    expect(telegram.removeTelegramAllowedSender).not.toHaveBeenCalled();
+    await client.close();
+  });
+
+  it("limits renderer configuration to athlete and session settings", async () => {
+    const token = "x".repeat(43);
+    const configureRuntime = vi.fn(async ({ llm, intervals, session }) => ({
+      schemaVersion: 3 as const,
+      status: "applied" as const,
+      applied: {
+        llm: llm !== undefined,
+        intervals: intervals !== undefined,
+        session: session !== undefined,
+      },
+    }));
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      operations: { ...operations, configureRuntime },
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(
+      JSON.stringify(
+        createClientHandshakeFrame(TEST_RENDERER_CAPABILITY_BYTES.toString("base64url")),
+      ),
+    );
+    await client.frames.next();
+
+    const restrictedPatches = [
+      { llm: { api_key: "secret" } },
+      { llm: { clear_credential: true } },
+      { llm: { provider: "anthropic" } },
+      { llm: { base_url: "https://attacker.invalid" } },
+      { llm: { claude_cli: { binary_path: "/tmp/attacker" } } },
+      { llm: { codex_agent: { binary_path: "/tmp/attacker" } } },
+      { intervals: { api_key: "secret" } },
+      { intervals: { clear_credential: true } },
+    ];
+    for (const [index, params] of restrictedPatches.entries()) {
+      client.ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: `secret-${index}`,
+          method: "configureRuntime",
+          params,
+        }),
+      );
+      expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+        id: `secret-${index}`,
+        error: { code: -32602, message: "Invalid params" },
+      });
+    }
+    expect(configureRuntime).not.toHaveBeenCalled();
+
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "ordinary-config",
+        method: "configureRuntime",
+        params: { session: { idleMinutes: 30 } },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "ordinary-config",
+      result: { status: "applied" },
+    });
+    expect(configureRuntime).toHaveBeenCalledOnce();
+
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "athlete-config",
+        method: "configureRuntime",
+        params: { intervals: { athlete_id: "i1" } },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "athlete-config",
+      result: { status: "applied" },
+    });
+    expect(configureRuntime).toHaveBeenCalledTimes(2);
+
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "upgrade",
+        method: "daemon.reserveUpgrade",
+        params: {
+          targetProtocolVersion: PROTOCOL_VERSION + 1,
+          handoffCapability: Buffer.alloc(32, 1).toString("base64url"),
+        },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "upgrade",
+      error: { code: -32601, message: "Method not found" },
+    });
+    await client.close();
+  });
+
+  it("regenerates a renderer capability that collides with the privileged token", async () => {
+    const colliding = Buffer.alloc(32, 1);
+    const replacement = Buffer.alloc(32, 2);
+    const random = vi
+      .fn<(size: number) => Buffer>()
+      .mockReturnValueOnce(colliding)
+      .mockReturnValueOnce(replacement);
+    const token = colliding.toString("base64url");
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      token,
+      owner: "app-supervised",
+      rendererCapabilityRandomBytes: random,
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    expect(ServerHandshakeFrameSchema.parse(JSON.parse(await client.frames.next()))).toMatchObject({
+      rendererCapability: replacement.toString("base64url"),
+    });
+    expect(random).toHaveBeenCalledTimes(2);
+    await client.close();
+  });
+
+  it("keeps one renderer capability stable for every connection in a daemon process", async () => {
+    const token = "x".repeat(43);
+    const capabilityBytes = Buffer.alloc(32, 3);
+    const random = vi.fn(() => capabilityBytes);
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      token,
+      owner: "app-supervised",
+      rendererCapabilityRandomBytes: random,
+    });
+    const privileged = await openSocket(rpc);
+    const renderer = await openSocket(rpc);
+
+    privileged.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    const privilegedFrame = ServerHandshakeFrameSchema.parse(
+      JSON.parse(await privileged.frames.next()),
+    );
+    expect(privilegedFrame.status).toBe("accepted");
+    if (privilegedFrame.status !== "accepted") throw new Error("expected accepted handshake");
+
+    renderer.ws.send(
+      JSON.stringify(createClientHandshakeFrame(privilegedFrame.rendererCapability)),
+    );
+    const rendererFrame = ServerHandshakeFrameSchema.parse(
+      JSON.parse(await renderer.frames.next()),
+    );
+    expect(rendererFrame).toMatchObject({
+      status: "accepted",
+      rendererCapability: privilegedFrame.rendererCapability,
+    });
+    expect(random).toHaveBeenCalledExactlyOnceWith(32);
+
+    await privileged.close();
+    await renderer.close();
+  });
+
+  it("rotates renderer capabilities between daemon processes and rejects the prior process capability", async () => {
+    const token = "x".repeat(43);
+    const firstCapability = Buffer.alloc(32, 4).toString("base64url");
+    const secondCapability = Buffer.alloc(32, 5).toString("base64url");
+    const firstRpc = createCoachRpcServer({
+      engine: engine(),
+      token,
+      owner: "app-supervised",
+      rendererCapabilityRandomBytes: () => Buffer.alloc(32, 4),
+    });
+    const firstClient = await openSocket(firstRpc);
+    firstClient.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    expect(
+      ServerHandshakeFrameSchema.parse(JSON.parse(await firstClient.frames.next())),
+    ).toMatchObject({
+      rendererCapability: firstCapability,
+    });
+    await firstClient.close();
+
+    const secondRpc = createCoachRpcServer({
+      engine: engine(),
+      token,
+      owner: "app-supervised",
+      rendererCapabilityRandomBytes: () => Buffer.alloc(32, 5),
+    });
+    const currentClient = await openSocket(secondRpc);
+    currentClient.ws.send(JSON.stringify(createClientHandshakeFrame(secondCapability)));
+    expect(
+      ServerHandshakeFrameSchema.parse(JSON.parse(await currentClient.frames.next())),
+    ).toMatchObject({
+      status: "accepted",
+      rendererCapability: secondCapability,
+    });
+
+    const staleClient = await openSocket(secondRpc);
+    const staleClosed = new Promise<number>((resolve) => {
+      staleClient.ws.once("close", (code) => resolve(code));
+    });
+    staleClient.ws.send(JSON.stringify(createClientHandshakeFrame(firstCapability)));
+    await expect(staleClosed).resolves.toBe(1008);
+
+    currentClient.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "current",
+        method: "getAthleteState",
+        params: {},
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await currentClient.frames.next())).toMatchObject({
+      id: "current",
+      result: { schemaVersion: "3" },
+    });
+
+    await staleClient.close();
+    await currentClient.close();
+  });
+
+  it("fails closed after four unusable renderer capability candidates", () => {
+    const colliding = Buffer.alloc(32, 6);
+    const random = vi.fn(() => colliding);
+
+    expect(() =>
+      createCoachRpcServer({
+        engine: engine(),
+        token: colliding.toString("base64url"),
+        owner: "app-supervised",
+        rendererCapabilityRandomBytes: random,
+      }),
+    ).toThrow("renderer capability generation failed");
+    expect(random).toHaveBeenCalledTimes(4);
+    expect(random).toHaveBeenCalledWith(32);
+  });
+
+  it("denies a newly registered method until the renderer allowlist admits it", async () => {
+    const futureMethod = "futureRendererMethod";
+    const mutableRegistry = COACH_RPC_METHOD_REGISTRY as unknown as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(mutableRegistry, futureMethod)).toBe(false);
+    mutableRegistry[futureMethod] = COACH_RPC_METHOD_REGISTRY.getAthleteState;
+
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      token: "x".repeat(43),
+      owner: "app-supervised",
+    });
+    let client: Awaited<ReturnType<typeof openSocket>> | undefined;
+    try {
+      client = await openSocket(rpc);
+      client.ws.send(
+        JSON.stringify(
+          createClientHandshakeFrame(TEST_RENDERER_CAPABILITY_BYTES.toString("base64url")),
+        ),
+      );
+      await client.frames.next();
+      client.ws.send(
+        JSON.stringify({ jsonrpc: "2.0", id: "future", method: futureMethod, params: {} }),
+      );
+      expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+        jsonrpc: "2.0",
+        id: "future",
+        error: { code: -32601, message: "Method not found" },
+      });
+    } finally {
+      delete mutableRegistry[futureMethod];
+      if (client === undefined) await rpc.close();
+      else await client.close();
+    }
+  });
+});
+
 describe.skipIf(!hasLoopback)("authenticated upgrade control", () => {
   it("binds one reservation to the authenticated connection and consumes it once", async () => {
     const token = "x".repeat(43);
@@ -1195,16 +2034,79 @@ describe.skipIf(!hasLoopback)("authenticated upgrade control", () => {
     await client.close();
   });
 
-  it("drains a running and queued same-key pair before flushing shutdown acceptance", async () => {
+  it("drains queued RPC work and a pre-admitted Telegram reservation before shutdown acceptance", async () => {
     const token = "x".repeat(43);
     const first = deferred<{ text: string }>();
     const second = deferred<{ text: string }>();
+    const telegramWork = deferred<void>();
     let call = 0;
     const healthState = createDaemonHealthState();
+    const invocations = createInvocationCoordinator();
+    const accessEntered = deferred<void>();
+    const releaseAccess = deferred<void>();
+    const recordOffset = vi.fn();
+    const reserveLateUpdate = vi.fn(() => invocations.reserve({ key: "telegram:73" }));
+    let projectedTelegram: CreateTelegramChannelInput | undefined;
+    const telegramRuntime: TelegramChannelRuntime = {
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+      captureDrain: vi.fn(() => ({ wait: vi.fn(async () => undefined) })),
+      drainPending: vi.fn(async () => undefined),
+      sendMessage: vi.fn(async () => undefined),
+    };
+    const runtimeFactory = createDesktopTelegramRuntimeFactory(
+      {
+        lifecycle: {
+          home: { root: "/synthetic/home" },
+          engine: engine(),
+          operations,
+          confirmations: {},
+        } as unknown as Pick<
+          LocalCoachLifecycle,
+          "home" | "engine" | "operations" | "confirmations"
+        >,
+        invocations,
+        appVersion: "1.2.3",
+      },
+      {
+        createBot: (input) => {
+          projectedTelegram = input;
+          return telegramRuntime;
+        },
+        createAccessMiddleware: () => async (_context, next) => {
+          accessEntered.resolve();
+          await releaseAccess.promise;
+          await next();
+        },
+        loadAllowedSenders: () => ({
+          version: 1,
+          dmPolicy: "allowlist",
+          allowFrom: ["73"],
+          primaryOperator: "73",
+          capturedAt: null,
+          addedAt: {},
+        }),
+      },
+    );
+    runtimeFactory({
+      token: "synthetic-token",
+      admitted: () => true,
+      onStarted: vi.fn(),
+      onPollingSuccess: vi.fn(),
+      onPollingFailure: vi.fn(),
+      consumePairing: vi.fn(async () => false),
+    });
+    const telegramReservation = invocations.reserve({ key: "telegram:73" });
+    let telegramFlush: Promise<void> | undefined;
+    const beforeInvocationDrain = vi.fn(async () => {
+      telegramFlush ??= telegramReservation.run(() => telegramWork.promise);
+    });
     const rpc = createCoachRpcServer({
       token,
       owner: "ephemeral-client-started",
       healthState,
+      invocations,
+      beforeInvocationDrain,
       engine: engine({
         chat: () => {
           call += 1;
@@ -1239,6 +2141,11 @@ describe.skipIf(!hasLoopback)("authenticated upgrade control", () => {
       id: "reserve",
       result: { status: "reserved" },
     });
+    const lateUpdate = projectedTelegram!.host.access.middleware({} as never, async () => {
+      recordOffset();
+      reserveLateUpdate();
+    });
+    await accessEntered.promise;
     client.ws.send(
       JSON.stringify({
         jsonrpc: "2.0",
@@ -1248,6 +2155,12 @@ describe.skipIf(!hasLoopback)("authenticated upgrade control", () => {
       }),
     );
     await vi.waitFor(() => expect(healthState.healthy).toBe(false));
+    expect(beforeInvocationDrain).toHaveBeenCalledOnce();
+    expect(invocations.canAdmit()).toBe(false);
+    releaseAccess.resolve();
+    await expect(lateUpdate).resolves.toBeUndefined();
+    expect(recordOffset).not.toHaveBeenCalled();
+    expect(reserveLateUpdate).not.toHaveBeenCalled();
     client.ws.send(
       JSON.stringify({
         jsonrpc: "2.0",
@@ -1264,16 +2177,20 @@ describe.skipIf(!hasLoopback)("authenticated upgrade control", () => {
     expect(JSON.parse(await client.frames.next())).toMatchObject({ id: "chat-1" });
     await vi.waitFor(() => expect(call).toBe(2));
     second.resolve({ text: "second" });
-    const terminal = [
-      JSON.parse(await client.frames.next()),
-      JSON.parse(await client.frames.next()),
-    ];
-    expect(terminal).toContainEqual({
+    expect(JSON.parse(await client.frames.next())).toEqual({
       jsonrpc: "2.0",
       id: "chat-2",
       result: { text: "second" },
     });
-    expect(terminal).toContainEqual({
+    let shutdownResolved = false;
+    void rpc.shutdownRequested.then(() => {
+      shutdownResolved = true;
+    });
+    await Promise.resolve();
+    expect(shutdownResolved).toBe(false);
+
+    telegramWork.resolve();
+    expect(JSON.parse(await client.frames.next())).toEqual({
       jsonrpc: "2.0",
       id: "shutdown",
       result: { status: "accepted" },
@@ -1287,12 +2204,18 @@ describe.skipIf(!hasLoopback)("authenticated upgrade control", () => {
     const timer = new FakeTimer();
     const healthState = createDaemonHealthState();
     const chat = vi.fn(() => work.promise);
+    const telegramDrain = deferred<void>();
+    const beforeInvocationDrain = vi.fn(() => telegramDrain.promise);
+    const recovery = deferred<void>();
+    const afterInvocationDrainRefusal = vi.fn(() => recovery.promise);
     const rpc = createCoachRpcServer({
       token,
       owner: "service-managed",
       healthState,
       timer,
       engine: engine({ chat }),
+      beforeInvocationDrain,
+      afterInvocationDrainRefusal,
     });
     const client = await openSocket(rpc);
     client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
@@ -1325,12 +2248,14 @@ describe.skipIf(!hasLoopback)("authenticated upgrade control", () => {
       }),
     );
     await vi.waitFor(() => expect(healthState.healthy).toBe(false));
+    expect(beforeInvocationDrain).toHaveBeenCalledOnce();
     timer.advance(30_000);
     expect(JSON.parse(await client.frames.next())).toMatchObject({
       id: "shutdown",
       error: { code: -32_004, message: "upgrade-drain-timeout" },
     });
     expect(healthState.healthy).toBe(true);
+    expect(afterInvocationDrainRefusal).toHaveBeenCalledOnce();
     client.ws.send(
       JSON.stringify({
         jsonrpc: "2.0",
@@ -1341,7 +2266,231 @@ describe.skipIf(!hasLoopback)("authenticated upgrade control", () => {
     );
     expect(JSON.parse(await client.frames.next())).toMatchObject({ id: "read-after-timeout" });
     work.resolve({ text: "done" });
+    telegramDrain.resolve();
+    recovery.resolve();
     expect(JSON.parse(await client.frames.next())).toMatchObject({ id: "running" });
+    await client.close();
+  });
+
+  it("does not retain a timed-out upgrade waiter and still awaits final retained generations", async () => {
+    const token = "x".repeat(43);
+    const timer = new FakeTimer();
+    const abandonedUpgradeDrain = deferred<void>().promise;
+    const retainedGenerationDrain = deferred<void>();
+    let drainCalls = 0;
+    const beforeInvocationDrain = vi.fn(() => {
+      drainCalls += 1;
+      return drainCalls === 1 ? abandonedUpgradeDrain : retainedGenerationDrain.promise;
+    });
+    const rpc = createCoachRpcServer({
+      token,
+      owner: "service-managed",
+      timer,
+      engine: engine(),
+      beforeInvocationDrain,
+      afterInvocationDrainRefusal: vi.fn(async () => undefined),
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+    const handoffCapability = Buffer.alloc(32, 8).toString("base64url");
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "reserve",
+        method: "daemon.reserveUpgrade",
+        params: { targetProtocolVersion: PROTOCOL_VERSION + 1, handoffCapability },
+      }),
+    );
+    await client.frames.next();
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "shutdown",
+        method: "daemon.shutdownForUpgrade",
+        params: { targetProtocolVersion: PROTOCOL_VERSION + 1, handoffCapability },
+      }),
+    );
+    await vi.waitFor(() => expect(beforeInvocationDrain).toHaveBeenCalledOnce());
+
+    timer.advance(UPGRADE_DRAIN_TIMEOUT_MS);
+    expect(JSON.parse(await client.frames.next())).toMatchObject({
+      id: "shutdown",
+      error: { code: -32_004, message: "upgrade-drain-timeout" },
+    });
+
+    const closing = rpc.close();
+    await vi.waitFor(() => expect(beforeInvocationDrain).toHaveBeenCalledTimes(2));
+    let closeSettled = false;
+    void closing.then(() => {
+      closeSettled = true;
+    });
+    await Promise.resolve();
+    expect(closeSettled).toBe(false);
+
+    retainedGenerationDrain.resolve(undefined);
+    await closing;
+    expect(closeSettled).toBe(true);
+    await client.close();
+  });
+
+  it("keeps a later process close final when refusal recovery is already in flight", async () => {
+    const token = "x".repeat(43);
+    const timer = new FakeTimer();
+    const healthState = createDaemonHealthState();
+    const oldGenerationDrain = deferred<void>();
+    const resumeEntered = deferred<void>();
+    const resumeReleased = deferred<void>();
+    const resumeFinished = deferred<void>();
+    const events: string[] = [];
+    let telegramState: "running" | "stopped" = "stopped";
+    let drainCalls = 0;
+    const beforeInvocationDrain = vi.fn(async () => {
+      drainCalls += 1;
+      if (drainCalls === 1) {
+        events.push("upgrade-stop");
+        await oldGenerationDrain.promise;
+        return;
+      }
+      events.push("process-stop-start");
+      await resumeFinished.promise;
+      telegramState = "stopped";
+      events.push("process-stop-finished");
+    });
+    const afterInvocationDrainRefusal = vi.fn(async () => {
+      events.push("resume-start");
+      resumeEntered.resolve(undefined);
+      await resumeReleased.promise;
+      telegramState = "running";
+      events.push("resume-finished");
+      resumeFinished.resolve(undefined);
+    });
+    const rpc = createCoachRpcServer({
+      token,
+      owner: "service-managed",
+      healthState,
+      timer,
+      engine: engine(),
+      beforeInvocationDrain,
+      afterInvocationDrainRefusal,
+    });
+    const client = await openSocket(rpc);
+    let closing: Promise<void> | undefined;
+    try {
+      client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+      await client.frames.next();
+      const handoffCapability = Buffer.alloc(32, 7).toString("base64url");
+      client.ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "reserve",
+          method: "daemon.reserveUpgrade",
+          params: { targetProtocolVersion: PROTOCOL_VERSION + 1, handoffCapability },
+        }),
+      );
+      await client.frames.next();
+      client.ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "shutdown",
+          method: "daemon.shutdownForUpgrade",
+          params: { targetProtocolVersion: PROTOCOL_VERSION + 1, handoffCapability },
+        }),
+      );
+      await vi.waitFor(() => expect(beforeInvocationDrain).toHaveBeenCalledOnce());
+
+      timer.advance(UPGRADE_DRAIN_TIMEOUT_MS);
+      expect(JSON.parse(await client.frames.next())).toMatchObject({
+        id: "shutdown",
+        error: { code: -32_004, message: "upgrade-drain-timeout" },
+      });
+      await resumeEntered.promise;
+      expect(healthState.healthy).toBe(true);
+      expect(afterInvocationDrainRefusal).toHaveBeenCalledOnce();
+      expect(telegramState).toBe("stopped");
+
+      closing = rpc.close();
+      await vi.waitFor(() => expect(beforeInvocationDrain).toHaveBeenCalledTimes(2));
+      expect(healthState.healthy).toBe(false);
+      expect(events).toEqual(["upgrade-stop", "resume-start", "process-stop-start"]);
+
+      let closeSettled = false;
+      void closing.then(() => {
+        closeSettled = true;
+      });
+      await Promise.resolve();
+      expect(closeSettled).toBe(false);
+
+      resumeReleased.resolve(undefined);
+      await closing;
+      expect(events).toEqual([
+        "upgrade-stop",
+        "resume-start",
+        "process-stop-start",
+        "resume-finished",
+        "process-stop-finished",
+      ]);
+      expect(telegramState).toBe("stopped");
+      expect(healthState.healthy).toBe(false);
+    } finally {
+      resumeReleased.resolve(undefined);
+      resumeFinished.resolve(undefined);
+      oldGenerationDrain.resolve(undefined);
+      await closing?.catch(() => undefined);
+      await client.close();
+    }
+  });
+
+  it("does not restore health or Telegram after a later quiesce seals the timeout fence", async () => {
+    const token = "x".repeat(43);
+    const timer = new FakeTimer();
+    const healthState = createDaemonHealthState();
+    const invocations = createInvocationCoordinator();
+    const telegramDrain = deferred<void>();
+    const afterInvocationDrainRefusal = vi.fn(async () => undefined);
+    const rpc = createCoachRpcServer({
+      token,
+      owner: "service-managed",
+      healthState,
+      invocations,
+      timer,
+      engine: engine(),
+      beforeInvocationDrain: () => telegramDrain.promise,
+      afterInvocationDrainRefusal,
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+    const handoffCapability = Buffer.alloc(32, 6).toString("base64url");
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "reserve",
+        method: "daemon.reserveUpgrade",
+        params: { targetProtocolVersion: PROTOCOL_VERSION + 1, handoffCapability },
+      }),
+    );
+    await client.frames.next();
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "shutdown",
+        method: "daemon.shutdownForUpgrade",
+        params: { targetProtocolVersion: PROTOCOL_VERSION + 1, handoffCapability },
+      }),
+    );
+    await vi.waitFor(() => expect(healthState.healthy).toBe(false));
+
+    invocations.closeAdmission().seal();
+    timer.advance(UPGRADE_DRAIN_TIMEOUT_MS);
+    expect(JSON.parse(await client.frames.next())).toMatchObject({
+      id: "shutdown",
+      error: { code: -32_004, message: "upgrade-drain-timeout" },
+    });
+    expect(healthState.healthy).toBe(false);
+    expect(afterInvocationDrainRefusal).not.toHaveBeenCalled();
+
+    telegramDrain.resolve();
     await client.close();
   });
 });

@@ -130,7 +130,6 @@ describe.skipIf(!hasSockets)("first-run serve process", () => {
         XDG_CACHE_HOME: join(scratch, "cache"),
         TMPDIR: join(scratch, "tmp"),
         ENDURAGENT_HOME: home,
-        CYCLING_COACH_HOME: join(scratch, "legacy-home"),
         NODE_OPTIONS: `--disable-warning=ExperimentalWarning --import=${fetchStub}`,
         LLM_PROVIDER: undefined,
         LLM_MODEL: undefined,

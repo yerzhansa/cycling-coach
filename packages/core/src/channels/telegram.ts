@@ -1,37 +1,19 @@
 import { Bot, InputFile } from "grammy";
 import { autoRetry } from "@grammyjs/auto-retry";
-import type { CoachEngineSeam } from "../agent/coach-engine.js";
-import type { BinaryConfig } from "../binary.js";
+import type { CoachEngine } from "@enduragent/coach-contract";
 import { classifyAgentError } from "../agent/error-classify.js";
-import {
-  checkForUpdate,
-  selfUpdate,
-  getKnownTelegramChatIds,
-  getCurrentVersion,
-  getLastNotifiedVersion,
-  isManagedDeploy,
-  MANAGED_DEPLOY_UPDATE_NOTICE,
-  setLastNotifiedVersion,
-} from "../updater.js";
-import { buildWhatsNewMessage } from "../release-notes.js";
-import { createAuthMiddleware } from "./telegram-access.js";
 import { TelegramUpdateOffsetStore } from "./telegram-update-offsets.js";
-import { loadAllowedSenders, loadAllowedSendersWithSource } from "./allowed-senders.js";
 import { escapeHtmlText } from "./html-escape.js";
-import type { ReferenceServices } from "../reference/services.js";
-import { resolveRunningCs, type ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
-import { formatSyncReply } from "../reference/sync/format-sync-reply.js";
-import { formatSnapshotRaw } from "../reference/sync/snapshot-debug.js";
 import { sendSnapshotOutput } from "../reference/sync/send-snapshot.js";
-import { provenanceForLatestSection } from "../reference/source-provenance.js";
 import { createSubsystemLogger } from "../logging/index.js";
 import { truncateUtf16Safe } from "../text-truncate.js";
 import { formatConfirmOutcome } from "../agent/confirmation-gate.js";
-
-// Upper bound on how long /update waits for in-flight turns to finish before
-// self-updating. A hung turn must never wedge the update, so the drain races a
-// timeout.
-const UPDATE_DRAIN_TIMEOUT_MS = 10_000;
+import {
+  TelegramWorkLedger,
+  type TelegramWorkLedgerSnapshot,
+  type TelegramWorkScope,
+} from "./telegram-work-ledger.js";
+import type { TelegramHostCapabilities, TelegramInvocationReservation } from "./telegram-host.js";
 
 // Debounce window for coalescing rapid free-form message fragments from one
 // chat into a single turn. Each new fragment resets the window; the buffered
@@ -67,51 +49,52 @@ const SELF_UPDATE_MARKER_FAILURE =
 // refresh faster than that to keep it continuous without flicker.
 export const TYPING_HEARTBEAT_MS = 4_000;
 
-function drainBounded(drain: () => Promise<void>, timeoutMs: number): Promise<void> {
-  return Promise.race([
-    drain(),
-    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs).unref?.()),
-  ]);
-}
-
 // Pulse Telegram's native "typing" indicator on an interval so a long turn never
 // leaves the athlete staring at silence (a turn can now run up to ~10 min). Fires
 // once immediately, then every intervalMs. Each pulse is best-effort: a rejected
 // (or throwing) pulse is routed to onError and can never affect the turn or its
 // reply. The interval is unref'd so a pending pulse cannot hold the process open
-// during shutdown / an /update drain. Returns a stop() that clears the interval.
+// during shutdown / an /update drain. The stop result settles with the final pulse.
 export function startTypingHeartbeat(
   pulse: () => Promise<unknown>,
   intervalMs: number,
   onError: (err: unknown) => void,
-): () => void {
+): () => Promise<void> {
   // Skip a beat while the previous pulse is still unsettled: under a Telegram
   // flood a pulse can be parked inside the API retry layer, and firing a fresh
   // one every interval regardless would pile parked pulses up and roughly double
   // request volume against an already-throttled API. The flag is cleared in a
   // finally so a rejected pulse cannot wedge the guard permanently.
-  let inFlight = false;
+  let inFlight: Promise<void> | undefined;
   const beat = () => {
-    if (inFlight) return;
-    inFlight = true;
-    void Promise.resolve()
+    if (inFlight !== undefined) return;
+    const task = Promise.resolve()
       .then(pulse)
-      .catch(onError)
+      .catch((error) => {
+        try {
+          onError(error);
+        } catch {}
+      })
+      .then(() => undefined)
       .finally(() => {
-        inFlight = false;
+        if (inFlight === task) inFlight = undefined;
       });
+    inFlight = task;
   };
   beat();
   const timer = setInterval(beat, intervalMs);
   timer.unref?.();
-  return () => clearInterval(timer);
+  return () => {
+    clearInterval(timer);
+    return inFlight ?? Promise.resolve();
+  };
 }
 
 // ============================================================================
 // TELEGRAM BOT
 // ============================================================================
 
-const WELCOME_MESSAGE =
+const buildWelcomeMessage = (updateDescription: string): string =>
   "Welcome to Cycling Coach!\n\n" +
   "I'm your AI cycling coach. I can build training plans, suggest workouts, " +
   "and track your fitness using intervals.icu data.\n\n" +
@@ -123,7 +106,7 @@ const WELCOME_MESSAGE =
   "/sync — Force-refresh training data from intervals.icu\n" +
   "/version — Show current version\n" +
   "/whatsnew — See what changed in the latest version\n" +
-  "/update — Check for and install updates\n\n" +
+  `/update — ${updateDescription}\n\n` +
   "Or just chat with me about your training!";
 
 const RESET_CAVEAT_NOTE =
@@ -136,11 +119,14 @@ const SNAPSHOT_HELP =
   "intervals, routes, history, FTP, and validation cuts. For now, only\n" +
   "/snapshot raw is wired.";
 
-// Descriptions mirror the command one-liners in WELCOME_MESSAGE so the native
+// Descriptions mirror the command one-liners in the welcome message so the native
 // "/" menu and the welcome card never drift. /sync is conditional on the same
 // reference predicate the command registration uses; /snapshot is excluded by
 // construction (operator-only debug). /start is included as an athlete command.
-function buildCommandMenu(reference?: ReferenceServices): { command: string; description: string }[] {
+function buildCommandMenu(
+  syncEnabled: boolean,
+  updateDescription: string,
+): { command: string; description: string }[] {
   const menu = [
     { command: "start", description: "Start a fresh session" },
     { command: "plan", description: "Generate a training plan" },
@@ -148,27 +134,31 @@ function buildCommandMenu(reference?: ReferenceServices): { command: string; des
     { command: "status", description: "Check current fitness, fatigue, and form" },
     { command: "review", description: "Review your last session" },
   ];
-  if (reference !== undefined) {
+  if (syncEnabled) {
     menu.push({ command: "sync", description: "Force-refresh training data from intervals.icu" });
   }
   menu.push(
     { command: "version", description: "Show current version" },
     { command: "whatsnew", description: "See what changed in the latest version" },
-    { command: "update", description: "Check for and install updates" },
+    { command: "update", description: updateDescription },
   );
   return menu;
 }
 
-// Module-private factory: every Bot in this module is constructed here, with
-// the auth middleware registered FIRST. Future maintainers cannot add a handler
-// ahead of auth without modifying this function — and reviewers scrutinize
-// changes here because this file holds the security model.
+// Module-private factory: every Bot in this module is constructed here, with the
+// root ledger wrapper first and authentication as the first functional gate.
+// Future maintainers cannot add a functional handler ahead of authentication
+// without modifying this function, where the security model is enforced.
 function createSecuredBot(opts: {
   token: string;
-  binary: BinaryConfig;
-  dataDir: string;
-}): Bot {
+  access: TelegramHostCapabilities["access"];
+  webhookPolicy: TelegramWebhookPolicy;
+  ledger: TelegramWorkLedger;
+  onPollingSuccess?: () => void;
+  onPollingFailure?: () => void;
+}): { readonly bot: Bot; readonly prepareStart: () => void } {
   const bot = new Bot(opts.token);
+  let suppressImplicitWebhookDeletion = false;
 
   // Bounded API-level retry restricted to a Telegram 429 carrying a `retry_after`
   // (the one failure class where the original send provably did NOT land).
@@ -191,63 +181,111 @@ function createSecuredBot(opts: {
     }),
   );
 
-  // Per-sender pairing-challenge rate-limit map (process-lifetime; LRU-bounded).
-  const challengeRateLimit = new Map<string, number>();
-  bot.use(
-    createAuthMiddleware({
-      dataDir: opts.dataDir,
-      binaryName: opts.binary.binaryName,
-      challengeRateLimit,
-      challengeMinIntervalMs: 60_000,
-    }),
+  if (opts.webhookPolicy === "preserve") {
+    // Long-poll startup normally removes a configured webhook. Skipping only
+    // that startup call leaves ownership intact so getUpdates can surface the
+    // conflict instead of silently taking the bot away from its current host.
+    bot.api.config.use((previous, method, payload, signal) => {
+      if (suppressImplicitWebhookDeletion && method === "deleteWebhook") {
+        suppressImplicitWebhookDeletion = false;
+        return Promise.resolve({ ok: true, result: true }) as ReturnType<typeof previous>;
+      }
+      return previous(method, payload, signal);
+    });
+  }
+
+  if (opts.onPollingSuccess !== undefined || opts.onPollingFailure !== undefined) {
+    bot.api.config.use(async (previous, method, payload, signal) => {
+      if (method !== "getUpdates") return previous(method, payload, signal);
+      try {
+        const result = await previous(method, payload, signal);
+        opts.onPollingSuccess?.();
+        return result;
+      } catch (error) {
+        opts.onPollingFailure?.();
+        throw error;
+      }
+    });
+  }
+
+  bot.api.config.use((previous, method, payload, signal) =>
+    opts.ledger.track(() => previous(method, payload, signal)),
   );
 
-  return bot;
+  bot.use((_ctx, next) => opts.ledger.trackUpdate(() => Promise.resolve().then(next)));
+  bot.use(opts.access.middleware);
+
+  return {
+    bot,
+    prepareStart: () => {
+      suppressImplicitWebhookDeletion = opts.webhookPolicy === "preserve";
+    },
+  };
 }
 
-function logSecurityStartup(dataDir: string, binaryName: string): void {
-  const { state, source } = loadAllowedSendersWithSource(dataDir);
-  const primary = state.primaryOperator ?? "none";
-  if (state.dmPolicy === "open") {
-    console.error(
-      "[security] WARNING: DM policy is OPEN — this bot will answer ANY Telegram user who finds it.\n" +
-        "[security] WARNING: Unset CYCLING_COACH_DM_POLICY to restore allowlist/pairing.\n" +
-        `[security] Allowlist on record: ${state.allowFrom.length} senders (primary: ${primary}). Source: ${source}.`,
-    );
-    return;
-  }
-  console.error(
-    `[security] Telegram allowlist: ${state.dmPolicy} mode (${state.allowFrom.length} allowed senders, primary: ${primary}). Source: ${source}.`,
-  );
-  if (state.dmPolicy === "pairing" && state.allowFrom.length === 0) {
-    console.error(
-      `[security] No allowed senders configured. DM the bot to receive your user-ID, then run \`${binaryName} add-sender <id>\` to authorize yourself.`,
-    );
-  }
+export type TelegramWebhookPolicy = "delete-before-polling" | "preserve";
+
+export interface TelegramDrainSnapshot {
+  wait(): Promise<void>;
 }
 
-export interface TelegramBotHandle {
-  bot: Bot;
-  drainPending: () => Promise<void>;
+export interface TelegramChannelRuntime {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  captureDrain(): TelegramDrainSnapshot;
+  drainPending(): Promise<void>;
+  sendMessage(chatId: string | number, text: string): Promise<unknown>;
 }
 
-export function createTelegramBot(
-  token: string,
-  agent: CoachEngineSeam,
-  binary: BinaryConfig,
-  dataDir: string,
-  reference?: ReferenceServices,
-): TelegramBotHandle {
-  logSecurityStartup(dataDir, binary.binaryName);
-  const bot = createSecuredBot({ token, binary, dataDir });
+export interface CreateTelegramChannelInput {
+  readonly token: string;
+  readonly webhookPolicy: TelegramWebhookPolicy;
+  readonly engine: CoachEngine;
+  readonly host: TelegramHostCapabilities;
+  readonly dataDir: string;
+  readonly onStart?: () => void;
+  readonly onPollingSuccess?: () => void;
+  readonly onPollingFailure?: () => void;
+}
+
+export function createTelegramBot(input: CreateTelegramChannelInput): TelegramChannelRuntime {
+  const ledger = new TelegramWorkLedger();
+  const { bot, prepareStart } = createSecuredBot({
+    token: input.token,
+    access: input.host.access,
+    webhookPolicy: input.webhookPolicy,
+    ledger,
+    onPollingSuccess: input.onPollingSuccess,
+    onPollingFailure: input.onPollingFailure,
+  });
+  const { engine, host } = input;
+  const { dataDir } = input;
+  const welcomeMessage = buildWelcomeMessage(host.release.updateDescription);
   const log = createSubsystemLogger("telegram", dataDir);
   const greeted = new Set<number>();
+  const greetingChecks = new Map<number, Promise<void>>();
+  const reserveInvocation = (chatId: string): TelegramInvocationReservation =>
+    host.invocations?.reserve(chatId) ?? {
+      run: (operation) => operation(),
+      cancel: () => undefined,
+    };
+  const acknowledgeBeforeInvocation = async (
+    reservation: TelegramInvocationReservation,
+    acknowledge: () => Promise<unknown>,
+  ): Promise<void> => {
+    try {
+      await acknowledge();
+    } catch (error) {
+      reservation.cancel();
+      throw error;
+    }
+  };
 
   // Durable update-offset store. Normal polling processes pending updates (so a
   // message sent while the bot was down still arrives); the guard below dedupes
   // anything a previous run already dispatched or acknowledged before a crash /
   // self-update restart.
-  const offsets = new TelegramUpdateOffsetStore(dataDir, token);
+  const offsets = new TelegramUpdateOffsetStore(dataDir, input.token);
 
   // Process-local per-chat cache of the last generated answer, so an athlete can
   // ask for it again after a Telegram delivery failure without re-running the LLM
@@ -280,25 +318,51 @@ export function createTelegramBot(
   // tracked task and return immediately so grammY's sequential update loop is
   // never blocked by a long turn. The task owns its user-facing error reply; the
   // outer catch here is the last-resort net so a throw inside the reply path can
-  // never escape as an unhandled rejection. Per-chat ordering is preserved by the
-  // existing per-chat session lock inside agent.chat, not by any lock here.
-  const pending = new Set<Promise<void>>();
+  // never escape as an unhandled rejection. Async host preflight must finish in
+  // arrival order before each operation enters the engine's per-session lock;
+  // this sequencer advances after invocation, not after the turn completes.
+  const engineStartTails = new Map<string, Promise<void>>();
+  const enqueueEngineStart = <T>(
+    chatId: string,
+    begin: () => { readonly result: Promise<T> } | Promise<{ readonly result: Promise<T> }>,
+  ): Promise<T> => {
+    const predecessor = engineStartTails.get(chatId);
+    let started: Promise<{ readonly result: Promise<T> }>;
+    if (predecessor === undefined) {
+      try {
+        started = Promise.resolve(begin());
+      } catch (error) {
+        started = Promise.reject(error);
+      }
+    } else {
+      started = predecessor.then(begin);
+    }
+    const tail = started.then(
+      () => undefined,
+      () => undefined,
+    );
+    engineStartTails.set(chatId, tail);
+    void tail.then(() => {
+      if (engineStartTails.get(chatId) === tail) engineStartTails.delete(chatId);
+    });
+    return started.then(({ result }) => result);
+  };
   const dispatch = (work: () => Promise<void>): void => {
-    const task = (async () => {
+    void ledger.track(async () => {
       try {
         await work();
       } catch (err) {
         log.error("dispatch_failed", err, {});
       }
-    })();
-    pending.add(task);
-    void task.finally(() => pending.delete(task));
+    });
   };
   // Per-chat buffer of free-form fragments awaiting the coalesce window. Each
   // entry rebinds the latest fragment's reply context so the flushed turn
   // answers on a live ctx, and threads to the last fragment's message id.
   interface ChatBuffer {
     fragments: string[];
+    scope: TelegramWorkScope;
+    reservation: TelegramInvocationReservation;
     reply: (text: string, options?: Record<string, unknown>) => Promise<unknown>;
     replyWithChatAction: (action: "typing") => Promise<unknown>;
     replyToMessageId?: number;
@@ -306,33 +370,56 @@ export function createTelegramBot(
   }
   const chatBuffers = new Map<number, ChatBuffer>();
 
-  // Flush buffered fragments FIRST (synchronously — flushing dispatches onto
-  // `pending`, so the Promise.all snapshot below includes the flushed turns),
-  // so shutdown and /update drains never drop buffered text and never wait on
-  // the debounce timer.
-  const drainPending = (): Promise<void> => {
-    for (const chatId of Array.from(chatBuffers.keys())) flushBufferedChat(chatId);
-    return Promise.all(pending).then(() => undefined);
+  const reserveMessageInvocation = (chatId: number): TelegramInvocationReservation => {
+    const buffered = chatBuffers.get(chatId)?.reservation;
+    if (buffered !== undefined) return buffered;
+    return reserveInvocation(`telegram:${chatId}`);
   };
 
-  void bot.api.setMyCommands(buildCommandMenu(reference)).catch((err) => {
-    log.error("set_commands_failed", err, {});
-  });
-
-  // Resolve the running CS anchor once per turn from the latest synced profile so
-  // calculate_zones reads the athlete's real critical speed instead of an LLM
-  // guess. Returns undefined — leaving the tool on its LLM-supplied param — when no
-  // reference sync is wired; resolveRunningCs itself returns null for cycling,
-  // pre-sync, or a profile with no run-family row.
-  const turnDeps = () => {
-    if (reference === undefined) return undefined;
-    const latest = reference.loadLatest();
-    return {
-      resolvedCs: resolveRunningCs(latest),
-      referenceProvenance:
-        latest === null ? undefined : provenanceForLatestSection(latest, "athlete_profile"),
-    };
+  // Flush buffered fragments synchronously so the captured generation owns the
+  // dispatched turn instead of waiting on the debounce timer.
+  const flushSnapshotBuffers = (snapshot: TelegramWorkLedgerSnapshot): void => {
+    for (const [chatId, buffer] of chatBuffers) {
+      if (snapshot.includes(buffer.scope)) flushBufferedChat(chatId);
+    }
   };
+
+  const waitForSnapshot = async (snapshot: TelegramWorkLedgerSnapshot): Promise<void> => {
+    while (true) {
+      flushSnapshotBuffers(snapshot);
+      await snapshot.wait();
+      const hasCapturedBuffer = [...chatBuffers.values()].some((buffer) =>
+        snapshot.includes(buffer.scope),
+      );
+      if (!hasCapturedBuffer) {
+        snapshot.release();
+        return;
+      }
+    }
+  };
+
+  const captureDrain = (): TelegramDrainSnapshot => {
+    const snapshot = ledger.captureSealedGenerations();
+    flushSnapshotBuffers(snapshot);
+    return { wait: () => waitForSnapshot(snapshot) };
+  };
+
+  const stopPolling = (): Promise<void> => ledger.stopCurrentGeneration(() => bot.stop());
+
+  const drainPending = async (): Promise<void> => {
+    while (true) {
+      const snapshot = ledger.captureAllGenerations();
+      flushSnapshotBuffers(snapshot);
+      await waitForSnapshot(snapshot);
+      if (chatBuffers.size === 0) return;
+    }
+  };
+
+  void bot.api
+    .setMyCommands(buildCommandMenu(host.operations !== undefined, host.release.updateDescription))
+    .catch((err) => {
+      log.error("set_commands_failed", err, {});
+    });
 
   // Shared turn skeleton: every chat-bearing handler captures its deps/message
   // synchronously, then hands the LLM turn here to run on the fire-and-forget
@@ -348,8 +435,9 @@ export function createTelegramBot(
     command: string;
     chatId: string;
     message: string;
-    deps: ReturnType<typeof turnDeps>;
     genericReply: string;
+    reservation: TelegramInvocationReservation;
+    greetingChatId?: number;
     replyToMessageId?: number;
   }): void {
     dispatch(async () => {
@@ -360,19 +448,40 @@ export function createTelegramBot(
       );
       let response: string;
       try {
-        response = await agent.chat(opts.chatId, opts.message, opts.deps);
+        response = await opts.reservation.run(async () => {
+          if (opts.greetingChatId !== undefined) {
+            await ensureGreeting({ chat: { id: opts.greetingChatId }, reply: opts.ctx.reply });
+          }
+          const request = { chatId: opts.chatId, message: opts.message };
+          const operations = host.operations;
+          const chatResponse = await enqueueEngineStart(
+            opts.chatId,
+            operations === undefined
+              ? () => ({ result: engine.chat(request) })
+              : async () => {
+                  const turn = await operations.resolveTurnContext();
+                  return {
+                    result: engine.chat({
+                      ...request,
+                      ...(turn === undefined ? {} : { turn }),
+                    }),
+                  };
+                },
+          );
+          return chatResponse.text;
+        });
       } catch (err) {
         log.error("command_failed", err, { command: opts.command, chatId: opts.chatId });
         const { kind, athleteMessage } = classifyAgentError(err);
         await opts.ctx.reply(kind === "unknown" ? opts.genericReply : athleteMessage);
         return;
       } finally {
-        stopHeartbeat();
+        await stopHeartbeat();
       }
       writeResend(opts.chatId, response);
       try {
         await sendLongMessage(opts.ctx, response, opts.replyToMessageId);
-        const proposal = agent.confirmations.peek(opts.chatId);
+        const proposal = await host.confirmations.peek({ chatId: opts.chatId });
         if (proposal !== undefined) {
           await opts.ctx.reply(proposal.summary, {
             reply_markup: {
@@ -406,30 +515,58 @@ export function createTelegramBot(
       command: "chat",
       chatId: `telegram:${chatId}`,
       message: buf.fragments.join("\n"),
-      deps: turnDeps(),
       genericReply: "Sorry, something went wrong. Please try again.",
+      reservation: buf.reservation,
+      greetingChatId: host.invocations === undefined ? undefined : chatId,
       replyToMessageId: buf.replyToMessageId,
     });
   }
 
-  function bufferChatMessage(ctx: {
+  async function ensureGreeting(ctx: {
     chat: { id: number };
-    message: { text: string; message_id?: number };
     reply: (text: string, options?: Record<string, unknown>) => Promise<unknown>;
-    replyWithChatAction: (action: "typing") => Promise<unknown>;
-  }): void {
+  }): Promise<void> {
+    if (greeted.has(ctx.chat.id)) return;
+    let check = greetingChecks.get(ctx.chat.id);
+    if (check === undefined) {
+      const chatId = `telegram:${ctx.chat.id}`;
+      check = (async () => {
+        const { hasSession } = await engine.hasSession({ chatId });
+        if (!hasSession) await ctx.reply(welcomeMessage);
+        greeted.add(ctx.chat.id);
+      })();
+      greetingChecks.set(ctx.chat.id, check);
+      const cleanup = () => {
+        if (greetingChecks.get(ctx.chat.id) === check) greetingChecks.delete(ctx.chat.id);
+      };
+      void check.then(cleanup, cleanup);
+    }
+    await check;
+  }
+
+  function bufferChatMessage(
+    ctx: {
+      chat: { id: number };
+      message: { text: string; message_id?: number };
+      reply: (text: string, options?: Record<string, unknown>) => Promise<unknown>;
+      replyWithChatAction: (action: "typing") => Promise<unknown>;
+    },
+    reservation: TelegramInvocationReservation,
+  ): void {
     const text = ctx.message.text;
     const chatId = ctx.chat.id;
+    const invocationChatId = `telegram:${chatId}`;
     if (text.startsWith("/")) {
       // Unregistered-command fallthrough: never buffered. The turn runs
       // immediately so a command can never be coalesced into free-form text.
       runTurn({
         ctx,
         command: "chat",
-        chatId: `telegram:${chatId}`,
+        chatId: invocationChatId,
         message: text,
-        deps: turnDeps(),
         genericReply: "Sorry, something went wrong. Please try again.",
+        reservation,
+        greetingChatId: host.invocations === undefined ? undefined : chatId,
         replyToMessageId: ctx.message.message_id,
       });
       return;
@@ -442,6 +579,8 @@ export function createTelegramBot(
     timer.unref?.();
     chatBuffers.set(chatId, {
       fragments,
+      scope: existing?.scope ?? ledger.currentScope(),
+      reservation: existing?.reservation ?? reservation,
       reply: (t, o) => ctx.reply(t, o),
       replyWithChatAction: (a) => ctx.replyWithChatAction(a),
       replyToMessageId: ctx.message.message_id,
@@ -474,80 +613,94 @@ export function createTelegramBot(
   bot.command("start", async (ctx) => {
     greeted.add(ctx.chat.id);
     let memoryFlushed = true;
+    const chatId = `telegram:${ctx.chat.id}`;
+    const reservation = reserveInvocation(chatId);
     try {
-      ({ memoryFlushed } = await agent.resetSession(`telegram:${ctx.chat.id}`));
-      resendCache.delete(`telegram:${ctx.chat.id}`);
+      ({ memoryFlushed } = await reservation.run(() =>
+        enqueueEngineStart(chatId, () => ({
+          result: engine.resetSession({ chatId }),
+        })),
+      ));
+      resendCache.delete(chatId);
     } catch (err) {
-      log.error("command_failed", err, { command: "start", chatId: `telegram:${ctx.chat.id}` });
+      log.error("command_failed", err, { command: "start", chatId });
       await ctx.reply(
         "Something went wrong resetting your session — your history is untouched. Please try /start again.",
       );
       return;
     }
-    await ctx.reply(
-      memoryFlushed ? WELCOME_MESSAGE : `${WELCOME_MESSAGE}\n\n${RESET_CAVEAT_NOTE}`,
-    );
+    await ctx.reply(memoryFlushed ? welcomeMessage : `${welcomeMessage}\n\n${RESET_CAVEAT_NOTE}`);
   });
 
   bot.command("plan", async (ctx) => {
-    await ctx.reply("Analyzing your data and building a plan...");
     const chatId = `telegram:${ctx.chat.id}`;
-    const deps = turnDeps();
+    const reservation = reserveInvocation(chatId);
+    await acknowledgeBeforeInvocation(reservation, () =>
+      ctx.reply("Analyzing your data and building a plan..."),
+    );
     runTurn({
       ctx,
       command: "plan",
       chatId,
       message: "/plan",
-      deps,
       genericReply: "Sorry, something went wrong generating your plan. Please try again.",
+      reservation,
       replyToMessageId: ctx.message?.message_id,
     });
   });
 
   bot.command("workout", async (ctx) => {
-    await ctx.reply("Checking your form and plan...");
     const chatId = `telegram:${ctx.chat.id}`;
-    const deps = turnDeps();
+    const reservation = reserveInvocation(chatId);
+    await acknowledgeBeforeInvocation(reservation, () =>
+      ctx.reply("Checking your form and plan..."),
+    );
     runTurn({
       ctx,
       command: "workout",
       chatId,
       message: "/workout",
-      deps,
       genericReply: "Sorry, something went wrong. Please try again.",
+      reservation,
       replyToMessageId: ctx.message?.message_id,
     });
   });
 
   bot.command("status", async (ctx) => {
-    await ctx.reply("Fetching your fitness data...");
     const chatId = `telegram:${ctx.chat.id}`;
-    const deps = turnDeps();
+    const reservation = reserveInvocation(chatId);
+    await acknowledgeBeforeInvocation(reservation, () =>
+      ctx.reply("Fetching your fitness data..."),
+    );
     runTurn({
       ctx,
       command: "status",
       chatId,
       message: "/status",
-      deps,
       genericReply: "Sorry, something went wrong. Please try again.",
+      reservation,
       replyToMessageId: ctx.message?.message_id,
     });
   });
 
-  if (reference !== undefined) {
+  if (host.operations !== undefined) {
     bot.command("sync", async (ctx) => {
-      await ctx.reply("Syncing training data from intervals.icu...");
+      const chatId = `telegram:${ctx.chat.id}`;
+      const reservation = reserveInvocation(chatId);
+      await acknowledgeBeforeInvocation(reservation, () =>
+        ctx.reply("Syncing training data from intervals.icu..."),
+      );
       try {
-        const result = await reference.runSync({
-          chatId: `telegram:${ctx.chat.id}`,
-        });
-        await ctx.reply(formatSyncReply(result));
+        const result = await reservation.run(() => host.operations!.sync({ chatId }));
+        await ctx.reply(result.text);
       } catch (err) {
-        log.error("command_failed", err, { command: "sync", chatId: `telegram:${ctx.chat.id}` });
+        log.error("command_failed", err, { command: "sync", chatId });
         await ctx.reply("Sorry, something went wrong syncing. Please try again.");
       }
     });
+  }
 
+  if (host.diagnostics !== undefined) {
     bot.command("snapshot", async (ctx) => {
       const args = (ctx.match ?? "").trim().split(/\s+/).filter(Boolean);
       const sub = args[0]?.toLowerCase() ?? "help";
@@ -558,9 +711,18 @@ export function createTelegramBot(
       }
 
       if (sub === "raw") {
+        const senderId = ctx.from?.id;
+        if (
+          typeof senderId !== "number" ||
+          !(await host.authorization.isPrimaryOperator({ senderId: String(senderId) }))
+        ) {
+          await ctx.reply("Raw snapshots are available only to the primary operator.");
+          return;
+        }
         const section = args[1];
-        const latest = reference.loadLatest();
-        const output = formatSnapshotRaw(latest, section);
+        const output = await host.diagnostics!.rawSnapshot(
+          section === undefined ? {} : { section },
+        );
         try {
           await sendSnapshotOutput(output, {
             reply: (text) => sendLongMessage(ctx, text) as Promise<unknown>,
@@ -572,7 +734,10 @@ export function createTelegramBot(
               ) as Promise<unknown>,
           });
         } catch (err) {
-          log.error("command_failed", err, { command: "snapshot", chatId: `telegram:${ctx.chat.id}` });
+          log.error("command_failed", err, {
+            command: "snapshot",
+            chatId: `telegram:${ctx.chat.id}`,
+          });
           await ctx.reply("Sorry, something went wrong rendering the snapshot.");
         }
         return;
@@ -584,37 +749,38 @@ export function createTelegramBot(
 
   bot.command("review", async (ctx) => {
     const args = (ctx.match ?? "").trim();
-    await ctx.reply(
-      args ? `Reviewing your last session (${args})...` : "Reviewing your last session...",
-    );
     const chatId = `telegram:${ctx.chat.id}`;
-    const deps = turnDeps();
+    const reservation = reserveInvocation(chatId);
+    await acknowledgeBeforeInvocation(reservation, () =>
+      ctx.reply(
+        args ? `Reviewing your last session (${args})...` : "Reviewing your last session...",
+      ),
+    );
     const message = args ? `/review ${args}` : "/review";
     runTurn({
       ctx,
       command: "review",
       chatId,
       message,
-      deps,
       genericReply: "Sorry, something went wrong reviewing your session. Please try again.",
+      reservation,
       replyToMessageId: ctx.message?.message_id,
     });
   });
 
   bot.command("version", async (ctx) => {
-    await ctx.reply(`${binary.displayName} v${getCurrentVersion(binary.binaryName)}`);
+    await ctx.reply(await host.release.version());
   });
 
   bot.command("whatsnew", async (ctx) => {
     await ctx.reply("Fetching release notes...");
     try {
-      const info = await checkForUpdate(binary.binaryName, dataDir);
-      if (!info) {
-        await ctx.reply("Couldn't reach npm to check the latest version. Try again later.");
+      const result = await host.release.whatsNew();
+      if (result.kind === "unavailable") {
+        await ctx.reply(host.release.whatsNewUnavailableText);
         return;
       }
-      const message = await buildWhatsNewMessage(binary.binaryName, info);
-      await sendLongMessage(ctx, message);
+      await sendLongMessage(ctx, result.text);
     } catch (err) {
       log.error("command_failed", err, { command: "whatsnew", chatId: `telegram:${ctx.chat.id}` });
       await ctx.reply("Sorry, couldn't fetch release notes. Please try again.");
@@ -622,15 +788,16 @@ export function createTelegramBot(
   });
 
   bot.command("update", async (ctx) => {
-    if (isManagedDeploy(binary.binaryName)) {
-      await ctx.reply(MANAGED_DEPLOY_UPDATE_NOTICE);
+    const release = host.release;
+    if (release.updatePolicy !== "npm-self-update") {
+      await ctx.reply(await release.updateNotice());
       return;
     }
 
     await ctx.reply("Checking for updates...");
     let latest: string | undefined;
     try {
-      const info = await checkForUpdate(binary.binaryName, dataDir);
+      const info = await release.check();
       if (!info) {
         await ctx.reply("Could not check for updates. Try again later.");
         return;
@@ -651,34 +818,45 @@ export function createTelegramBot(
           ts: new Date().toISOString(),
           targetVersion: info.latest,
         });
-      } catch (markerErr) {
-        log.error("self_update_marker_failed", markerErr, {
+      } catch {
+        log.error("self_update_marker_failed", undefined, {
           chatId: `telegram:${ctx.chat.id}`,
         });
         await ctx.reply(SELF_UPDATE_MARKER_FAILURE);
         return;
       }
-      await ctx.reply(`Updating ${info.current} → ${info.latest}...\nThe bot will stop after installation. Run \`${binary.binaryName}\` to start it again.`);
+      await ctx.reply(
+        `Updating ${info.current} → ${info.latest}...\nThe bot will stop after installation. Run \`${release.binaryName}\` to start it again.`,
+      );
       // Stop polling first so Telegram commits the /update offset — otherwise
       // Telegram re-sends /update on next startup and we loop forever — then let
-      // in-flight turns finish (bounded) so a self-update never drops a reply the
-      // athlete is already waiting on.
-      void bot
-        .stop()
-        .then(() => drainBounded(drainPending, UPDATE_DRAIN_TIMEOUT_MS))
-        .then(() => selfUpdate(binary.binaryName, info.latest));
+      // every generation-owned task finish so installer handoff cannot overlap
+      // the runtime it replaces.
+      void stopPolling()
+        .then(() => captureDrain().wait())
+        .then(() => release.install(info.latest))
+        .catch(() => {
+          log.error("self_update_failed", undefined, {
+            chatId: `telegram:${ctx.chat.id}`,
+          });
+        });
     } catch (err) {
       log.error("command_failed", err, { command: "update", chatId: `telegram:${ctx.chat.id}` });
       await ctx.reply(
-        `Update failed. Please run \`npm install -g ${binary.binaryName}@${latest ?? "latest"} --ignore-scripts\` manually.`,
+        `Update failed. Please run \`npm install -g ${release.binaryName}@${latest ?? "latest"} --ignore-scripts\` manually.`,
       );
     }
   });
 
   bot.on("callback_query:data", async (ctx) => {
     const match = /^cg:(y|n):(.+)$/.exec(ctx.callbackQuery.data);
-    await ctx.answerCallbackQuery();
-    if (match === null || ctx.chat === undefined) return;
+    if (match === null || ctx.chat === undefined) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    const chatId = `telegram:${ctx.chat.id}`;
+    const reservation = reserveInvocation(chatId);
+    await acknowledgeBeforeInvocation(reservation, () => ctx.answerCallbackQuery());
     try {
       await ctx.editMessageReplyMarkup();
     } catch {
@@ -686,19 +864,18 @@ export function createTelegramBot(
     }
     const choice = match[1];
     const nonce = match[2] ?? "";
-    const chatId = `telegram:${ctx.chat.id}`;
     dispatch(async () => {
-      if (choice === "n") {
-        const outcome = agent.confirmations.cancel(chatId, nonce);
-        await ctx.reply(
-          outcome === "canceled"
+      const reply = await reservation.run(async () => {
+        if (choice === "n") {
+          const outcome = await host.confirmations.cancel({ chatId, nonce });
+          return outcome === "canceled"
             ? "Canceled — nothing was changed."
-            : "That proposal expired — ask me again and I'll re-propose.",
-        );
-        return;
-      }
-      const outcome = await agent.confirmations.confirm(chatId, nonce);
-      await ctx.reply(formatConfirmOutcome(outcome));
+            : "That proposal expired — ask me again and I'll re-propose.";
+        }
+        const outcome = await host.confirmations.confirm({ chatId, nonce });
+        return formatConfirmOutcome(outcome);
+      });
+      await ctx.reply(reply);
     });
   });
 
@@ -729,16 +906,8 @@ export function createTelegramBot(
       return;
     }
 
-    // Welcome newcomers on their very first message. `greeted` is in-memory,
-    // so after a process restart we consult the on-disk session to tell
-    // returning users from true newcomers.
-    if (!greeted.has(ctx.chat.id)) {
-      greeted.add(ctx.chat.id);
-      if (!agent.hasSession(chatId)) {
-        await ctx.reply(WELCOME_MESSAGE);
-      }
-    }
-
+    const reservation = reserveMessageInvocation(ctx.chat.id);
+    if (host.invocations === undefined) await ensureGreeting(ctx);
     // One best-effort typing action per fragment so the athlete sees activity
     // during the debounce window; only the LLM turn is debounced, never the
     // signal. Fire-and-forget: a failure can never reach the handler's failure
@@ -746,7 +915,7 @@ export function createTelegramBot(
     void Promise.resolve()
       .then(() => ctx.replyWithChatAction("typing"))
       .catch(() => log.debug("typing_action_failed", { command: "chat", chatId }));
-    bufferChatMessage(ctx);
+    bufferChatMessage(ctx, reservation);
   });
 
   bot.catch(async (botError) => {
@@ -763,7 +932,18 @@ export function createTelegramBot(
     }
   });
 
-  return { bot, drainPending };
+  return {
+    start: () => {
+      prepareStart();
+      return ledger.startGeneration(() =>
+        input.onStart === undefined ? bot.start() : bot.start({ onStart: input.onStart }),
+      );
+    },
+    stop: stopPolling,
+    captureDrain,
+    drainPending,
+    sendMessage: (chatId, text) => ledger.trackDirectSend(() => bot.api.sendMessage(chatId, text)),
+  };
 }
 
 // ============================================================================
@@ -904,7 +1084,9 @@ function renderTableAsPre(header: string[], rows: string[][]): string {
     widths.push(w);
   }
   const fmt = (r: string[]) =>
-    Array.from({ length: cols }, (_, c) => (r[c] ?? "").padEnd(widths[c])).join("  ").trimEnd();
+    Array.from({ length: cols }, (_, c) => (r[c] ?? "").padEnd(widths[c]))
+      .join("  ")
+      .trimEnd();
   const text = [fmt(header), ...rows.map(fmt)].map(escapeHtmlText).join("\n");
   return `<pre>${text}</pre>`;
 }
@@ -1151,42 +1333,4 @@ function htmlChunkToPlainText(chunk: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&amp;/g, "&");
-}
-
-// ============================================================================
-// STARTUP UPDATE NOTIFICATION
-// ============================================================================
-
-export async function notifyUpdate(bot: Bot, dataDir: string, binary: BinaryConfig): Promise<void> {
-  try {
-    const info = await checkForUpdate(binary.binaryName, dataDir);
-    if (!info?.updateAvailable) return;
-
-    if (getLastNotifiedVersion(dataDir) === info.latest) return;
-
-    // Filter the broadcast list against the current allowlist. Pre-update
-    // strangers' chat-ids may still be in getKnownTelegramChatIds (their session
-    // files persist on disk) but must NOT receive update notifications.
-    const allowed = loadAllowedSenders(dataDir);
-    const allowSet = new Set(allowed.allowFrom);
-    const knownChats = getKnownTelegramChatIds(dataDir);
-    const chatIds =
-      allowed.dmPolicy === "open" ? knownChats : knownChats.filter((id) => allowSet.has(id));
-    const updateInstruction = isManagedDeploy(binary.binaryName)
-      ? `Send /whatsnew to see what changed. ${MANAGED_DEPLOY_UPDATE_NOTICE}`
-      : "Send /whatsnew to see what changed, /update to install.";
-    const message = `Update available: ${info.current} → ${info.latest}\n${updateInstruction}\n\nHelp shape what Cycling Coach builds next: please take 3 minutes to answer this short survey so the mobile app, 24/7 bot, Railway template, and setup/payment options are prioritized around what would actually help you: https://tally.so/r/b5Dv4g\n\nWant the bot running 24/7 without keeping your computer on? Deploy the Railway template: https://railway.com/deploy/cycling-coach`;
-
-    for (const chatId of chatIds) {
-      try {
-        await bot.api.sendMessage(chatId, message);
-      } catch {
-        // Chat may no longer exist or bot was removed
-      }
-    }
-
-    setLastNotifiedVersion(dataDir, info.latest);
-  } catch {
-    // Non-critical — don't crash the bot
-  }
 }

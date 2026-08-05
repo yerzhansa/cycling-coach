@@ -111,17 +111,15 @@ export type { IntervalsClient } from "./intervals.js";
 // ─── Agent ────────────────────────────────────────────────────────────
 export { CoachAgent } from "./agent/coach-agent.js";
 export { createCoachEngine } from "./agent/coach-engine.js";
-export type {
-  CoachEngineSeam,
-  LegacyEngineOverrides,
-  LocalCoachEngine,
-} from "./agent/coach-engine.js";
+export type { LegacyEngineOverrides, LocalCoachEngine } from "./agent/coach-engine.js";
 export {
   ConfirmationGate,
   GATED_TOOL_NAMES,
   PROPOSAL_TTL_MS,
+  createProposalSummarizers,
+  createToolConfirmationPort,
 } from "./agent/confirmation-gate.js";
-export type { ConfirmOutcome } from "./agent/confirmation-gate.js";
+export type { ConfirmOutcome, ProposalSummarizer, Summarized } from "./agent/confirmation-gate.js";
 export { ChatStore } from "./agent/chat-store.js";
 export {
   ConversationRecoveryError,
@@ -187,7 +185,35 @@ export { loginCodex, refreshCodexToken } from "./agent/codex/oauth.js";
 export type { CodexCredentials, CodexLoginOptions } from "./agent/codex/oauth.js";
 
 // ─── Channels ─────────────────────────────────────────────────────────
-export { createTelegramBot, notifyUpdate } from "./channels/telegram.js";
+export { createTelegramBot } from "./channels/telegram.js";
+export type {
+  CreateTelegramChannelInput,
+  TelegramChannelRuntime,
+  TelegramDrainSnapshot,
+} from "./channels/telegram.js";
+export { deleteTelegramWebhook, inspectTelegramCredential } from "./channels/telegram-setup.js";
+export type {
+  TelegramCredentialInspectionResult,
+  TelegramSetupApi,
+  TelegramSetupDependencies,
+} from "./channels/telegram-setup.js";
+export { createNpmTelegramHost, notifyNpmTelegramUpdate } from "./channels/npm-telegram-host.js";
+export type {
+  CreateNpmTelegramHostInput,
+  TelegramUpdateMessageSender,
+} from "./channels/npm-telegram-host.js";
+export type {
+  TelegramAccessCapabilities,
+  TelegramAuthorizationCapabilities,
+  TelegramConfirmationCapabilities,
+  TelegramDiagnosticsCapabilities,
+  TelegramHostCapabilities,
+  TelegramInvocationCapabilities,
+  TelegramInvocationReservation,
+  TelegramOperationsCapabilities,
+  TelegramReleaseBase,
+  TelegramReleaseCapabilities,
+} from "./channels/telegram-host.js";
 
 // ─── Config ───────────────────────────────────────────────────────────
 export {
@@ -269,7 +295,26 @@ export type {
   PlatformCalendarMutations,
   StoredDataFreshness,
 } from "./athlete-data.js";
-export { loadAllowedSendersWithSource, SENDER_ID_RE } from "./channels/allowed-senders.js";
+export {
+  addSecondarySender,
+  AllowedSendersCommitUncertainError,
+  claimPrimaryOperator,
+  listDesktopAllowedSenders,
+  loadAllowedSendersFromFile,
+  loadAllowedSendersWithSource,
+  removeSecondarySender,
+  resetDesktopAllowedSenders,
+  bindDesktopTelegramAccess,
+  SENDER_ID_RE,
+} from "./channels/allowed-senders.js";
+export type {
+  AddSecondarySenderResult,
+  ClaimPrimaryOperatorResult,
+  DesktopAllowedSender,
+  RemoveSecondarySenderResult,
+} from "./channels/allowed-senders.js";
+export { createAuthMiddleware } from "./channels/telegram-access.js";
+export type { CreateAuthMiddlewareOpts } from "./channels/telegram-access.js";
 
 // ─── Updater ──────────────────────────────────────────────────────────
 export {

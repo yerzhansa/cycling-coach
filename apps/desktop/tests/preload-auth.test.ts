@@ -56,6 +56,19 @@ interface AuthBridge {
   chatgptLogin(input: unknown): Promise<unknown>;
   claudeCliStatus(): Promise<unknown>;
   claudeCliRecheck(): Promise<unknown>;
+  telegramStatus(): Promise<unknown>;
+  pasteTelegramTokenFromClipboard(): Promise<unknown>;
+  enableTelegram(): Promise<unknown>;
+  disableTelegram(): Promise<unknown>;
+  removeTelegram(): Promise<unknown>;
+  reconcileTelegram(): Promise<unknown>;
+  removeTelegramWebhook(): Promise<unknown>;
+  beginTelegramPairing(): Promise<unknown>;
+  cancelTelegramPairing(): Promise<unknown>;
+  listTelegramAllowedSenders(): Promise<unknown>;
+  addTelegramAllowedSender(input: unknown): Promise<unknown>;
+  removeTelegramAllowedSender(input: unknown): Promise<unknown>;
+  acknowledgeTelegramGapWarning(): Promise<unknown>;
   getUpdateState(): Promise<unknown>;
   checkForUpdates(): Promise<unknown>;
   restartToUpdate(): Promise<unknown>;
@@ -207,6 +220,10 @@ describe("desktop preload ChatGPT auth", () => {
     expect(Object.keys(bridge).sort()).toEqual(
       [
         "applyLlmSelection",
+        "acknowledgeTelegramGapWarning",
+        "addTelegramAllowedSender",
+        "beginTelegramPairing",
+        "cancelTelegramPairing",
         "chatgptLogin",
         "chatgptStatus",
         "chooseImportFiles",
@@ -214,18 +231,27 @@ describe("desktop preload ChatGPT auth", () => {
         "claudeCliStatus",
         "credentialStatuses",
         "deleteCredential",
+        "disableTelegram",
+        "enableTelegram",
         "getUpdateState",
         "getDaemonConnection",
         "getTranscriptPage",
         "listArchivedConversations",
+        "listTelegramAllowedSenders",
         "getArchivedTranscriptPage",
         "llmConfiguration",
         "checkForUpdates",
         "onDroppedImportFiles",
         "onUpdateState",
+        "pasteTelegramTokenFromClipboard",
+        "reconcileTelegram",
         "releaseNotes",
+        "removeTelegram",
+        "removeTelegramAllowedSender",
+        "removeTelegramWebhook",
         "restartToUpdate",
         "retryFailedCredentials",
+        "telegramStatus",
         "writeCredential",
       ].sort(),
     );
@@ -234,6 +260,304 @@ describe("desktop preload ChatGPT auth", () => {
 
   it("keeps the release-gate smoke bridge list byte-equal to the sorted public bridge", () => {
     expect(pinnedSmokeBridgeKeys()).toEqual(Object.keys(bridge).sort());
+  });
+
+  it("exposes semantic Telegram controls and validates redacted snapshots", async () => {
+    const status = {
+      channel: {
+        desiredState: "enabled",
+        state: "online",
+        lastSuccessfulPollAt: "1998-06-01T00:00:00.000Z",
+      },
+      bot: { state: "ready", username: "synthetic_bot" },
+      pairing: { state: "paired" },
+      credentialConfigured: true,
+      gapWarning: { state: "clear" },
+    };
+    const applied = { outcome: "applied", current: status };
+    mocks.invoke.mockResolvedValue(applied);
+    mocks.invoke.mockResolvedValueOnce(status);
+
+    await expect(bridge.telegramStatus()).resolves.toEqual(status);
+    await expect(bridge.pasteTelegramTokenFromClipboard()).resolves.toEqual(applied);
+    await expect(bridge.enableTelegram()).resolves.toEqual(applied);
+    await expect(bridge.disableTelegram()).resolves.toEqual(applied);
+    await expect(bridge.removeTelegram()).resolves.toEqual(applied);
+    await expect(bridge.reconcileTelegram()).resolves.toEqual(applied);
+    await expect(bridge.removeTelegramWebhook()).resolves.toEqual(applied);
+    await expect(bridge.beginTelegramPairing()).resolves.toEqual(applied);
+    await expect(bridge.cancelTelegramPairing()).resolves.toEqual(applied);
+    await expect(bridge.acknowledgeTelegramGapWarning()).resolves.toEqual(applied);
+    expect(mocks.invoke.mock.calls).toEqual([
+      ["desktop:telegram:status"],
+      ["desktop:telegram:paste-credential"],
+      ["desktop:telegram:enable"],
+      ["desktop:telegram:disable"],
+      ["desktop:telegram:remove"],
+      ["desktop:telegram:reconcile"],
+      ["desktop:telegram:remove-webhook"],
+      ["desktop:telegram:pairing:begin"],
+      ["desktop:telegram:pairing:cancel"],
+      ["desktop:telegram:gap-warning:acknowledge"],
+    ]);
+
+    mocks.invoke.mockClear();
+    await expect(
+      (bridge.telegramStatus as unknown as (...args: unknown[]) => Promise<unknown>)("token"),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(mocks.invoke).not.toHaveBeenCalled();
+
+    mocks.invoke.mockResolvedValue({ ...status, token: "must-not-cross" });
+    await expect(bridge.telegramStatus()).rejects.toBeInstanceOf(TypeError);
+
+    mocks.invoke.mockResolvedValue({
+      ...status,
+      channel: { ...status.channel, lastSuccessfulPollAt: "not-canonical" },
+    });
+    await expect(bridge.telegramStatus()).rejects.toBeInstanceOf(TypeError);
+
+    for (const state of ["invalid-token", "conflict"] as const) {
+      mocks.invoke.mockResolvedValue({
+        ...status,
+        channel: {
+          desiredState: "disabled",
+          state,
+          errorCode:
+            state === "invalid-token" ? "telegram-invalid-token" : "telegram-polling-conflict",
+        },
+      });
+      await expect(bridge.telegramStatus()).rejects.toBeInstanceOf(TypeError);
+    }
+  });
+
+  it("accepts only closed secret-safe Telegram mutation envelopes", async () => {
+    const current = {
+      channel: { desiredState: "enabled", state: "online" },
+      bot: { state: "ready", username: "synthetic_bot" },
+      pairing: { state: "paired" },
+      credentialConfigured: true,
+      gapWarning: { state: "clear" },
+    };
+    const refusal = { outcome: "refused", reason: "invalid-token", current };
+    mocks.invoke.mockResolvedValueOnce(refusal);
+
+    await expect(bridge.pasteTelegramTokenFromClipboard()).resolves.toEqual(refusal);
+
+    const controlUncertainty = {
+      outcome: "uncertain",
+      reason: "control-uncertain",
+      current,
+    };
+    mocks.invoke.mockResolvedValueOnce(controlUncertainty);
+    await expect(bridge.pasteTelegramTokenFromClipboard()).resolves.toEqual(controlUncertainty);
+
+    for (const malformed of [
+      { ...refusal, token: "must-not-cross" },
+      { ...refusal, exception: "private detail" },
+      { ...refusal, reason: "arbitrary-private-reason" },
+      { outcome: "uncertain", reason: "storage-failed", current },
+    ]) {
+      mocks.invoke.mockResolvedValueOnce(malformed);
+      await expect(bridge.pasteTelegramTokenFromClipboard()).rejects.toBeInstanceOf(TypeError);
+    }
+  });
+
+  it("redacts every Telegram IPC rejection", async () => {
+    const privateDetail =
+      "https://bot.example.invalid/123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi at /Users/private/id_rsa PRIVATE_KEY";
+    const operations = [
+      () => bridge.telegramStatus(),
+      () => bridge.pasteTelegramTokenFromClipboard(),
+      () => bridge.enableTelegram(),
+      () => bridge.disableTelegram(),
+      () => bridge.removeTelegram(),
+      () => bridge.reconcileTelegram(),
+      () => bridge.removeTelegramWebhook(),
+      () => bridge.beginTelegramPairing(),
+      () => bridge.cancelTelegramPairing(),
+      () => bridge.acknowledgeTelegramGapWarning(),
+      () => bridge.listTelegramAllowedSenders(),
+    ];
+
+    for (const operation of operations) {
+      mocks.invoke.mockRejectedValueOnce(new Error(privateDetail));
+      const failure = await operation().catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(TypeError);
+      expect((failure as TypeError).message).toBe("");
+      expect(String(failure)).not.toContain(privateDetail);
+      expect(String(failure)).not.toContain("/Users/private/id_rsa");
+      expect(String(failure)).not.toContain("PRIVATE_KEY");
+    }
+
+    for (const operation of [
+      () => bridge.addTelegramAllowedSender({ senderId: 84 }),
+      () => bridge.removeTelegramAllowedSender({ senderId: 84 }),
+    ]) {
+      mocks.invoke.mockRejectedValueOnce(new Error(privateDetail));
+      await expect(operation()).resolves.toEqual({
+        outcome: "uncertain",
+        reason: "control-uncertain",
+      });
+    }
+  });
+
+  it("redacts Telegram status and sender-list parse failures independently", async () => {
+    const privateDetail =
+      "https://bot.example.invalid/123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi at /Users/private/id_ed25519 PRIVATE_KEY";
+    const malformedResponses = [
+      () => {
+        mocks.invoke.mockResolvedValueOnce({
+          channel: { desiredState: "enabled", state: "online" },
+          bot: { state: "ready", username: "synthetic_bot" },
+          pairing: { state: "paired" },
+          credentialConfigured: true,
+          gapWarning: { state: "clear" },
+          privateKeyPath: privateDetail,
+        });
+        return bridge.telegramStatus();
+      },
+      () => {
+        mocks.invoke.mockResolvedValueOnce({
+          senders: [{ senderId: 42, role: "primary", privateKeyName: privateDetail }],
+        });
+        return bridge.listTelegramAllowedSenders();
+      },
+    ];
+
+    for (const operation of malformedResponses) {
+      const failure = await operation().catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(TypeError);
+      expect((failure as TypeError).message).toBe("");
+      expect(String(failure)).not.toContain(privateDetail);
+      expect(String(failure)).not.toContain("PRIVATE_KEY");
+    }
+  });
+
+  it("accepts an honest suspended Telegram channel status", async () => {
+    const status = {
+      channel: { desiredState: "enabled", state: "suspended" },
+      bot: { state: "ready", username: "synthetic_bot" },
+      pairing: { state: "paired" },
+      credentialConfigured: true,
+      gapWarning: { state: "clear" },
+    };
+    mocks.invoke.mockResolvedValueOnce(status);
+
+    await expect(bridge.telegramStatus()).resolves.toEqual(status);
+  });
+
+  it("accepts only the redacted Telegram settings storage uncertainty code", async () => {
+    const status = {
+      channel: {
+        desiredState: "enabled",
+        state: "failed",
+        errorCode: "telegram-settings-storage-uncertain",
+      },
+      bot: { state: "ready", username: "synthetic_bot" },
+      pairing: { state: "unpaired" },
+      credentialConfigured: true,
+      gapWarning: { state: "clear" },
+    };
+    mocks.invoke.mockResolvedValueOnce(status);
+
+    await expect(bridge.telegramStatus()).resolves.toEqual(status);
+
+    mocks.invoke.mockResolvedValueOnce({
+      ...status,
+      channel: { ...status.channel, privateDetail: "private disk path" },
+    });
+    await expect(bridge.telegramStatus()).rejects.toBeInstanceOf(TypeError);
+  });
+
+  it("accepts only the redacted pairing storage uncertainty code", async () => {
+    const status = {
+      channel: { desiredState: "disabled", state: "disabled" },
+      bot: { state: "ready", username: "synthetic_bot" },
+      pairing: { state: "failed", errorCode: "telegram-pairing-storage-uncertain" },
+      credentialConfigured: true,
+      gapWarning: { state: "clear" },
+    };
+    mocks.invoke.mockResolvedValueOnce(status);
+
+    await expect(bridge.telegramStatus()).resolves.toEqual(status);
+
+    mocks.invoke.mockResolvedValueOnce({
+      ...status,
+      pairing: {
+        state: "failed",
+        errorCode: "telegram-pairing-storage-uncertain",
+        privateDetail: "private disk path",
+      },
+    });
+    await expect(bridge.telegramStatus()).rejects.toBeInstanceOf(TypeError);
+  });
+
+  it("validates Telegram sender management at the preload boundary", async () => {
+    const senders = {
+      senders: [
+        {
+          senderId: 42,
+          role: "primary",
+          addedAt: "1998-07-06T00:00:00.000Z",
+        },
+      ],
+    };
+    mocks.invoke
+      .mockResolvedValueOnce(senders)
+      .mockResolvedValueOnce({ outcome: "applied", current: senders })
+      .mockResolvedValueOnce({ outcome: "uncertain", reason: "storage-uncertain" })
+      .mockResolvedValueOnce({ outcome: "uncertain", reason: "control-uncertain" })
+      .mockResolvedValueOnce({ outcome: "refused", reason: "invalid-state" });
+
+    await expect(bridge.listTelegramAllowedSenders()).resolves.toEqual(senders);
+    await expect(bridge.addTelegramAllowedSender({ senderId: 84 })).resolves.toEqual({
+      outcome: "applied",
+      current: senders,
+    });
+    await expect(bridge.removeTelegramAllowedSender({ senderId: 84 })).resolves.toEqual({
+      outcome: "uncertain",
+      reason: "storage-uncertain",
+    });
+    await expect(bridge.addTelegramAllowedSender({ senderId: 84 })).resolves.toEqual({
+      outcome: "uncertain",
+      reason: "control-uncertain",
+    });
+    await expect(bridge.removeTelegramAllowedSender({ senderId: 84 })).resolves.toEqual({
+      outcome: "refused",
+      reason: "invalid-state",
+    });
+    expect(mocks.invoke.mock.calls).toEqual([
+      ["desktop:telegram:allowed-senders:list"],
+      ["desktop:telegram:allowed-senders:add", { senderId: 84 }],
+      ["desktop:telegram:allowed-senders:remove", { senderId: 84 }],
+      ["desktop:telegram:allowed-senders:add", { senderId: 84 }],
+      ["desktop:telegram:allowed-senders:remove", { senderId: 84 }],
+    ]);
+
+    mocks.invoke.mockClear();
+    for (const value of [{ senderId: 9 }, { senderId: 42, extra: true }, { senderId: "42" }]) {
+      await expect(bridge.addTelegramAllowedSender(value)).rejects.toBeInstanceOf(TypeError);
+    }
+    expect(mocks.invoke).not.toHaveBeenCalled();
+
+    mocks.invoke.mockResolvedValue({ senders: [{ senderId: 42, role: "additional" }] });
+    await expect(bridge.listTelegramAllowedSenders()).rejects.toBeInstanceOf(TypeError);
+
+    mocks.invoke.mockResolvedValueOnce({
+      outcome: "uncertain",
+      reason: "storage-uncertain",
+      current: senders,
+    });
+    await expect(bridge.addTelegramAllowedSender({ senderId: 84 })).resolves.toEqual({
+      outcome: "uncertain",
+      reason: "control-uncertain",
+    });
+
+    mocks.invoke.mockRejectedValueOnce(new Error("private token and /private/path"));
+    await expect(bridge.removeTelegramAllowedSender({ senderId: 84 })).resolves.toEqual({
+      outcome: "uncertain",
+      reason: "control-uncertain",
+    });
   });
 
   it("validates and copies strict bounded transcript pages", async () => {
@@ -517,8 +841,7 @@ describe("desktop preload ChatGPT auth", () => {
   });
 
   it("rejects malformed release note unions, strings, counts, and totals", async () => {
-    const tagUrl =
-      "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23";
+    const tagUrl = "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23";
     const malformed = [
       null,
       {
@@ -590,8 +913,7 @@ describe("desktop preload ChatGPT auth", () => {
         status: "available",
         version: "2026.7.23",
         notes: [],
-        releaseUrl:
-          "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.22",
+        releaseUrl: "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.22",
       },
       {
         status: "unavailable",
@@ -601,8 +923,7 @@ describe("desktop preload ChatGPT auth", () => {
       {
         status: "unavailable",
         version: null,
-        releaseUrl:
-          "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23",
+        releaseUrl: "https://github.com/yerzhansa/enduragent/releases/tag/cycling-coach@2026.7.23",
       },
     ];
 
@@ -753,6 +1074,32 @@ describe("desktop preload ChatGPT auth", () => {
     );
   });
 
+  it("accepts only the exact credential deletion uncertainty envelope", async () => {
+    const result = {
+      slot: "anthropic",
+      status: "uncertain",
+      reason: "storage-uncertain",
+    };
+    mocks.invoke.mockResolvedValueOnce(result);
+
+    const copied = await bridge.deleteCredential({ credential: "anthropic" });
+
+    expect(copied).toEqual(result);
+    expect(copied).not.toBe(result);
+
+    for (const malformed of [
+      { ...result, extra: true },
+      { ...result, slot: "unknown" },
+      { ...result, reason: "storage-failed" },
+      { credential: "anthropic", status: "uncertain", reason: "storage-uncertain" },
+    ]) {
+      mocks.invoke.mockResolvedValueOnce(malformed);
+      await expect(bridge.deleteCredential({ credential: "anthropic" })).rejects.toBeInstanceOf(
+        TypeError,
+      );
+    }
+  });
+
   it("pins the provider union order and keeps the off-catalogue lane out of the catalogue payload", () => {
     expect(pinnedPreloadProviderOrder()).toEqual([...providerOrder]);
     expect(providerOrder.indexOf("codex-agent")).toBe(providerOrder.indexOf("claude-cli") + 1);
@@ -769,9 +1116,9 @@ describe("desktop preload ChatGPT auth", () => {
       expect(providerOrder).toContain(provider);
       expect(cataloguedProviders).not.toContain(provider);
     }
-    expect([...providerOrder].filter((provider) => !cataloguedProviders.includes(provider))).toEqual(
-      offCatalogue,
-    );
+    expect(
+      [...providerOrder].filter((provider) => !cataloguedProviders.includes(provider)),
+    ).toEqual(offCatalogue);
     expect(cataloguedProviders).toEqual(
       [...providerOrder].filter((provider) => !offCatalogue.includes(provider)),
     );
@@ -846,6 +1193,38 @@ describe("desktop preload ChatGPT auth", () => {
       status: "configured",
       runtimeReady: false,
     });
+  });
+
+  it("accepts only the closed credential storage uncertainty envelope", async () => {
+    mocks.invoke.mockResolvedValueOnce({
+      slot: "anthropic",
+      status: "uncertain",
+      reason: "storage-uncertain",
+    });
+
+    await expect(
+      bridge.writeCredential({
+        slot: "anthropic",
+        value: "obviously-fake-key",
+      }),
+    ).resolves.toEqual({
+      slot: "anthropic",
+      status: "uncertain",
+      reason: "storage-uncertain",
+    });
+
+    mocks.invoke.mockResolvedValueOnce({
+      slot: "anthropic",
+      status: "uncertain",
+      reason: "storage-uncertain",
+      path: "/private/detail",
+    });
+    await expect(
+      bridge.writeCredential({
+        slot: "anthropic",
+        value: "obviously-fake-key",
+      }),
+    ).rejects.toBeInstanceOf(TypeError);
   });
 
   it("rejects malformed model and endpoint inputs before IPC", async () => {

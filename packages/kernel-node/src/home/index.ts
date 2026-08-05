@@ -1,5 +1,6 @@
 export { ATHLETE_HOME_ENV, expandTilde, resolveAthleteHome } from "./resolve-athlete-home.js";
 export type { AthleteHome } from "./resolve-athlete-home.js";
+export { prepareAthleteHome } from "./prepare-athlete-home.js";
 
 export {
   FTP_HISTORY_SCHEMA_VERSION,

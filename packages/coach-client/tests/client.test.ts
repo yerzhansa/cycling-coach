@@ -31,6 +31,16 @@ import {
 } from "../src/index.js";
 
 const token = "synthetic-test-token";
+const athleteHome = "/synthetic/athlete";
+const acceptedHandshakeBinding = {
+  athleteHome,
+  rendererCapability: "A".repeat(43),
+} as const;
+const telegramControlSnapshot = {
+  channel: { desiredState: "disabled", state: "disabled" },
+  bot: { state: "unconfigured" },
+  pairing: { state: "unpaired" },
+} as const;
 
 const rpcDeadlineCases = [
   ["chat", { chatId: "chat-1", message: "deadline" }, 660_000],
@@ -38,11 +48,7 @@ const rpcDeadlineCases = [
   ["hasSession", { chatId: "chat-1" }, 30_000],
   ["getTranscriptPage", { cursor: null, limit: 25 }, 30_000],
   ["listArchivedConversations", {}, 30_000],
-  [
-    "getArchivedTranscriptPage",
-    { boundaryRef: "a".repeat(64), cursor: null, limit: 25 },
-    30_000,
-  ],
+  ["getArchivedTranscriptPage", { boundaryRef: "a".repeat(64), cursor: null, limit: 25 }, 30_000],
   ["getAthleteState", {}, 30_000],
   ["importFiles", { paths: ["/synthetic/ride.fit"] }, 3_600_000],
   ["sync", {}, 86_400_000],
@@ -62,6 +68,24 @@ const rpcDeadlineCases = [
   ["getRuntimeConfig", {}, 30_000],
   ["getUnitsPreference", {}, 30_000],
   ["setUnitsPreference", { value: "metric" }, 30_000],
+  ["configureTelegram", { token: "bot-token" }, 30_000],
+  ["enableTelegram", {}, 30_000],
+  ["disableTelegram", {}, 30_000],
+  ["suspendTelegramPolling", {}, 30_000],
+  ["resumeTelegramPolling", {}, 30_000],
+  ["drainTelegram", {}, 30_000],
+  ["replaceTelegram", { token: "new-token" }, 30_000],
+  ["getTelegramStatus", {}, 30_000],
+  ["reconcileTelegram", {}, 30_000],
+  ["inspectTelegramCredential", { token: "bot-token" }, 30_000],
+  ["deleteTelegramWebhook", { token: "bot-token" }, 30_000],
+  ["forgetTelegramCredential", {}, 30_000],
+  ["resetTelegramAccess", {}, 30_000],
+  ["beginTelegramPairing", {}, 30_000],
+  ["cancelTelegramPairing", {}, 30_000],
+  ["listTelegramAllowedSenders", {}, 30_000],
+  ["addTelegramAllowedSender", { senderId: 123_456 }, 30_000],
+  ["removeTelegramAllowedSender", { senderId: 123_456 }, 30_000],
   ["getSpendSummary", {}, 30_000],
   ["setDailySpendCap", { dailyCapUsd: 25 }, 30_000],
   ["selfTest", {}, 120_000],
@@ -131,7 +155,9 @@ function acceptedSocket(
     const frame = JSON.parse(text) as { type?: string };
     if (frame.type === "handshake") {
       socket.emitMessage(
-        JSON.stringify(createAcceptedServerHandshakeFrame(owner, PROTOCOL_VERSION)),
+        JSON.stringify(
+          createAcceptedServerHandshakeFrame(owner, PROTOCOL_VERSION, acceptedHandshakeBinding),
+        ),
       );
     }
   };
@@ -188,7 +214,13 @@ describe("connection and transport", () => {
           const frame = JSON.parse(data.toString()) as Record<string, unknown>;
           firstFrame.resolve(frame);
           socket.send(
-            JSON.stringify(createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION)),
+            JSON.stringify(
+              createAcceptedServerHandshakeFrame(
+                "service-managed",
+                PROTOCOL_VERSION,
+                acceptedHandshakeBinding,
+              ),
+            ),
           );
         });
       });
@@ -197,7 +229,7 @@ describe("connection and transport", () => {
       process.stderr.write("SKIP_MARKER loopback-listen EPERM coach-client\n");
       return;
     }
-    const client = await connectCoachClient({ url, token });
+    const client = await connectCoachClient({ url, token, expectedAthleteHome: athleteHome });
     expect(await firstFrame.promise).toEqual({
       type: "handshake",
       token,
@@ -205,6 +237,8 @@ describe("connection and transport", () => {
     });
     expect(urls).toEqual(["/"]);
     expect(client.handshake.owner).toBe("service-managed");
+    expect(client.handshake.athleteHome).toBe(athleteHome);
+    expect(client.handshake.rendererCapability).toBe(acceptedHandshakeBinding.rendererCapability);
     await client.close();
 
     const socket = new ControllableSocket();
@@ -213,7 +247,11 @@ describe("connection and transport", () => {
     socket.sendHook = () =>
       socket.emitMessage(
         JSON.stringify(
-          createAcceptedServerHandshakeFrame("unmanaged-foreground", PROTOCOL_VERSION),
+          createAcceptedServerHandshakeFrame(
+            "unmanaged-foreground",
+            PROTOCOL_VERSION,
+            acceptedHandshakeBinding,
+          ),
         ),
       );
     const browserConnection = connectCoachClient({
@@ -281,6 +319,7 @@ describe("connection and transport", () => {
 
   it.each([
     { token: "" },
+    { expectedAthleteHome: "relative/athlete" },
     { connectTimeoutMs: NaN },
     { connectTimeoutMs: Infinity },
     { handshakeTimeoutMs: -1 },
@@ -363,12 +402,43 @@ describe("connection and transport", () => {
 });
 
 describe("handshake failures", () => {
+  it("refuses an accepted daemon whose authenticated home differs from the expected home", async () => {
+    const socket = new ControllableSocket();
+    socket.sendHook = () => {
+      socket.emitMessage(
+        JSON.stringify(
+          createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION, {
+            ...acceptedHandshakeBinding,
+            athleteHome: "/synthetic/other-athlete",
+          }),
+        ),
+      );
+    };
+    const outcome = connectCoachClient({
+      url: "ws://127.0.0.1:49152",
+      token,
+      expectedAthleteHome: athleteHome,
+      webSocketFactory: () => socket as unknown as WebSocket,
+    }).catch((error: unknown) => error);
+    socket.emitOpen();
+
+    const error = await outcome;
+    expect(error).toBeInstanceOf(CoachClientProtocolError);
+    expect(socket.closeCalls).toEqual([{ code: 1002, reason: undefined }]);
+  });
+
   it("terminalizes a socket error delivered after handshake acceptance but before resolution", async () => {
     const socket = new ControllableSocket();
     const observer = vi.fn();
     socket.sendHook = () => {
       socket.emitMessage(
-        JSON.stringify(createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION)),
+        JSON.stringify(
+          createAcceptedServerHandshakeFrame(
+            "service-managed",
+            PROTOCOL_VERSION,
+            acceptedHandshakeBinding,
+          ),
+        ),
       );
       socket.emitError();
     };
@@ -513,6 +583,30 @@ describe("handshake failures", () => {
 });
 
 describe("RPC receive and observers", () => {
+  it("rejects a malformed allowed-sender mutation envelope before typed delivery", async () => {
+    const { socket, connecting } = acceptedSocket();
+    const client = await connecting;
+    socket.closeSynchronously = true;
+    socket.sendHook = (text) => {
+      const request = JSON.parse(text) as { readonly id: number };
+      socket.emitMessage(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: request.id,
+          result: {
+            outcome: "uncertain",
+            reason: "storage-uncertain",
+            current: { senders: [] },
+          },
+        }),
+      );
+    };
+
+    await expect(
+      client.call("addTelegramAllowedSender", { senderId: 123_456 }),
+    ).rejects.toBeInstanceOf(CoachClientProtocolError);
+  });
+
   it("rejects a runtime snapshot without the strict credential evidence boolean", async () => {
     const { socket, connecting } = acceptedSocket();
     const client = await connecting;
@@ -683,6 +777,37 @@ describe("RPC receive and observers", () => {
         },
         getUnitsPreference: { value: "metric", source: "default" },
         setUnitsPreference: { value: "imperial", source: "cycling" },
+        configureTelegram: { outcome: "applied", current: telegramControlSnapshot },
+        enableTelegram: telegramControlSnapshot,
+        disableTelegram: telegramControlSnapshot,
+        suspendTelegramPolling: telegramControlSnapshot,
+        resumeTelegramPolling: telegramControlSnapshot,
+        drainTelegram: telegramControlSnapshot,
+        replaceTelegram: {
+          outcome: "refused",
+          reason: "invalid-token",
+          current: telegramControlSnapshot,
+        },
+        getTelegramStatus: telegramControlSnapshot,
+        reconcileTelegram: telegramControlSnapshot,
+        inspectTelegramCredential: {
+          status: "ready",
+          bot: { id: 10001, username: "sample_bot" },
+        },
+        deleteTelegramWebhook: {
+          status: "ready",
+          bot: { id: 10001, username: "sample_bot" },
+        },
+        forgetTelegramCredential: telegramControlSnapshot,
+        resetTelegramAccess: telegramControlSnapshot,
+        beginTelegramPairing: telegramControlSnapshot,
+        cancelTelegramPairing: telegramControlSnapshot,
+        listTelegramAllowedSenders: { senders: [] },
+        addTelegramAllowedSender: { outcome: "applied", current: { senders: [] } },
+        removeTelegramAllowedSender: {
+          outcome: "uncertain",
+          reason: "storage-uncertain",
+        },
         getSpendSummary: {
           localDate: "1998-07-06",
           timezone: "UTC",
@@ -819,13 +944,76 @@ describe("RPC receive and observers", () => {
       "getUnitsPreference",
       "setUnitsPreference",
     ]);
+    await expect(client.call("configureTelegram", { token: "bot-token" })).resolves.toEqual({
+      outcome: "applied",
+      current: telegramControlSnapshot,
+    });
+    await expect(client.call("enableTelegram", {})).resolves.toEqual(telegramControlSnapshot);
+    await expect(client.call("disableTelegram", {})).resolves.toEqual(telegramControlSnapshot);
+    await expect(client.call("suspendTelegramPolling", {})).resolves.toEqual(
+      telegramControlSnapshot,
+    );
+    await expect(client.call("resumeTelegramPolling", {})).resolves.toEqual(
+      telegramControlSnapshot,
+    );
+    await expect(client.call("drainTelegram", {})).resolves.toEqual(telegramControlSnapshot);
+    await expect(client.call("replaceTelegram", { token: "new-token" })).resolves.toEqual({
+      outcome: "refused",
+      reason: "invalid-token",
+      current: telegramControlSnapshot,
+    });
+    await expect(client.call("getTelegramStatus", {})).resolves.toEqual(telegramControlSnapshot);
+    await expect(client.call("reconcileTelegram", {})).resolves.toEqual(telegramControlSnapshot);
+    await expect(client.call("inspectTelegramCredential", { token: "bot-token" })).resolves.toEqual(
+      { status: "ready", bot: { id: 10001, username: "sample_bot" } },
+    );
+    await expect(client.call("deleteTelegramWebhook", { token: "bot-token" })).resolves.toEqual({
+      status: "ready",
+      bot: { id: 10001, username: "sample_bot" },
+    });
+    await expect(client.call("forgetTelegramCredential", {})).resolves.toEqual(
+      telegramControlSnapshot,
+    );
+    await expect(client.call("resetTelegramAccess", {})).resolves.toEqual(telegramControlSnapshot);
+    await expect(client.call("beginTelegramPairing", {})).resolves.toEqual(telegramControlSnapshot);
+    await expect(client.call("cancelTelegramPairing", {})).resolves.toEqual(
+      telegramControlSnapshot,
+    );
+    await expect(client.call("listTelegramAllowedSenders", {})).resolves.toEqual({ senders: [] });
+    await expect(client.call("addTelegramAllowedSender", { senderId: 123_456 })).resolves.toEqual({
+      outcome: "applied",
+      current: { senders: [] },
+    });
+    await expect(
+      client.call("removeTelegramAllowedSender", { senderId: 123_456 }),
+    ).resolves.toEqual({ outcome: "uncertain", reason: "storage-uncertain" });
+    expect(received.slice(-18).map((value) => (value as { method: string }).method)).toEqual([
+      "configureTelegram",
+      "enableTelegram",
+      "disableTelegram",
+      "suspendTelegramPolling",
+      "resumeTelegramPolling",
+      "drainTelegram",
+      "replaceTelegram",
+      "getTelegramStatus",
+      "reconcileTelegram",
+      "inspectTelegramCredential",
+      "deleteTelegramWebhook",
+      "forgetTelegramCredential",
+      "resetTelegramAccess",
+      "beginTelegramPairing",
+      "cancelTelegramPairing",
+      "listTelegramAllowedSenders",
+      "addTelegramAllowedSender",
+      "removeTelegramAllowedSender",
+    ]);
     await expect(client.call("getSpendSummary", {})).resolves.toMatchObject({
       dailyCapUsd: 0.5,
     });
     await expect(client.call("setDailySpendCap", { dailyCapUsd: 0.75 })).resolves.toMatchObject({
       dailyCapUsd: 0.75,
     });
-    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([15, 16]);
+    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([33, 34]);
     expect(received.slice(-2).map((value) => (value as { method: string }).method)).toEqual([
       "getSpendSummary",
       "setDailySpendCap",
@@ -1596,7 +1784,13 @@ describe("disconnect, close, and send bounds", () => {
       const frame = JSON.parse(text) as { type?: string; id?: number };
       if (frame.type === "handshake")
         socket.emitMessage(
-          JSON.stringify(createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION)),
+          JSON.stringify(
+            createAcceptedServerHandshakeFrame(
+              "service-managed",
+              PROTOCOL_VERSION,
+              acceptedHandshakeBinding,
+            ),
+          ),
         );
       else if (frame.id !== undefined)
         socket.emitMessage(

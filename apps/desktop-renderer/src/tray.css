@@ -130,6 +130,16 @@ body {
   color: #7a3d2f;
 }
 
+.rail-tag[data-tone="warning"] {
+  background: color-mix(in srgb, var(--warn) 18%, var(--surface));
+  color: #7a3d2f;
+}
+
+.rail-tag[data-tone="failed"] {
+  background: color-mix(in srgb, var(--danger) 14%, var(--surface));
+  color: var(--danger);
+}
+
 .menu-hint {
   margin: 11px 2px 0;
   color: var(--ink-2);
@@ -138,7 +148,8 @@ body {
 }
 
 @media (prefers-color-scheme: dark) {
-  .rail-tag.amber {
+  .rail-tag.amber,
+  .rail-tag[data-tone="warning"] {
     color: var(--ink);
   }
 }

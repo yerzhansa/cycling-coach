@@ -107,8 +107,8 @@ async function main(): Promise<void> {
     const msg = MESSAGES[i];
     process.stdout.write(`  [${i + 1}/${MESSAGES.length}] `);
     try {
-      const reply = await agent.chat(chatId, msg);
-      console.log(`ok (${reply.length} chars)`);
+      const reply = await agent.chat({ chatId, message: msg });
+      console.log(`ok (${reply.text.length} chars)`);
     } catch (err) {
       console.log(`FAILED: ${err instanceof Error ? err.message : String(err)}`);
     }

@@ -19,8 +19,8 @@ describe("tray popover markup", () => {
       "Ready when you are",
       "Residency",
       "Running in the menu bar",
-      "Window",
-      "Close it without quitting",
+      "Telegram",
+      "Checking connection",
     ])
       expect(html).toContain(copy);
     expect(html).not.toMatch(/<(?:button|a|form|input|canvas|svg)\b/iu);
@@ -38,7 +38,8 @@ describe("tray popover markup", () => {
     expect(css).toContain("prefers-color-scheme: dark");
     expect(css).toContain("prefers-reduced-motion: reduce");
     expect(css).toContain("transition: none");
-    expect(script).not.toMatch(/^\s*import\b/mu);
+    expect(script).toContain('from "./tray-status.js"');
+    expect(script).toContain("window.enduragentTray.onTelegramStatus");
     expect(script).toContain('event.key === "Escape"');
     expect(source).not.toMatch(
       /fetch\s*\(|WebSocket|ipcRenderer|contextBridge|localStorage|sessionStorage|console\.|@enduragent\/|https?:|[?#]token/iu,

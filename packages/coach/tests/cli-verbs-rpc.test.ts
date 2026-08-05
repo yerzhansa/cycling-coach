@@ -22,11 +22,45 @@ import {
   type AthleteState,
   type CoachEngine,
   type CoachOperations,
+  type TelegramControlSnapshot,
   type TurnEvent,
 } from "@enduragent/coach-contract";
 import { createCoachRpcServer, type CoachRpcServer } from "../src/daemon/rpc-server.js";
+import type { DesktopTelegramController } from "../src/desktop-telegram-controller.js";
 
 const token = "s".repeat(43);
+const disabledTelegramSnapshot: TelegramControlSnapshot = {
+  channel: { desiredState: "disabled", state: "disabled" },
+  bot: { state: "unconfigured" },
+  pairing: { state: "unpaired" },
+};
+const disabledTelegram: DesktopTelegramController = {
+  getStatus: () => disabledTelegramSnapshot,
+  configure: async () => ({ outcome: "applied", current: disabledTelegramSnapshot }),
+  enable: async () => disabledTelegramSnapshot,
+  disable: async () => disabledTelegramSnapshot,
+  replace: async () => ({ outcome: "applied", current: disabledTelegramSnapshot }),
+  reconcile: async () => disabledTelegramSnapshot,
+  inspectTelegramCredential: async () => ({ status: "invalid-token" }),
+  deleteTelegramWebhook: async () => ({ status: "invalid-token" }),
+  forgetTelegramCredential: async () => disabledTelegramSnapshot,
+  resetTelegramAccess: async () => disabledTelegramSnapshot,
+  beginTelegramPairing: async () => disabledTelegramSnapshot,
+  cancelTelegramPairing: async () => disabledTelegramSnapshot,
+  listTelegramAllowedSenders: async () => ({ senders: [] }),
+  addTelegramAllowedSender: async () => ({
+    outcome: "applied" as const,
+    current: { senders: [] },
+  }),
+  removeTelegramAllowedSender: async () => ({
+    outcome: "applied" as const,
+    current: { senders: [] },
+  }),
+  stopPolling: async () => disabledTelegramSnapshot,
+  resumePolling: async () => disabledTelegramSnapshot,
+  drainPending: async () => disabledTelegramSnapshot,
+  close: async () => disabledTelegramSnapshot,
+};
 const operations: CoachOperations = {
   importFiles: async ({ paths }) => ({
     schemaVersion: 2,
@@ -176,8 +210,10 @@ async function startRpc(engine: CoachEngine): Promise<RunningRpc> {
         error: { code: "RUNNER_ERROR", message: "packaged self-test failed" },
       }),
     },
+    telegram: disabledTelegram,
     token,
     owner: "unmanaged-foreground",
+    athleteHome: "/tmp/enduragent-cli-rpc-test",
   });
   const server = createServer();
   const disconnectWaiters: Array<() => void> = [];

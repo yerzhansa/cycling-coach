@@ -51,6 +51,7 @@ const home: AthleteHome = {
   archiveDir: "/tmp/synthetic-athlete/archive",
   configDir: "/tmp/synthetic-athlete/config",
 };
+const rendererCapability = Buffer.alloc(32, 2).toString("base64url");
 
 const paths = {
   launchAgentsDir: "/tmp/LaunchAgents",
@@ -104,9 +105,11 @@ describe("service-aware arbitration", () => {
     const handshake = vi.fn(async () => ({
       type: "handshake" as const,
       status: "accepted" as const,
-      clientProtocolVersion: PROTOCOL_VERSION,
-      serverProtocolVersion: PROTOCOL_VERSION,
+      clientProtocolVersion: 12 as const,
+      serverProtocolVersion: 12 as const,
       owner: "service-managed" as const,
+      athleteHome: home.root,
+      rendererCapability,
     }));
     await expect(
       observeDaemonState(
@@ -130,6 +133,8 @@ describe("service-aware arbitration", () => {
           clientProtocolVersion: PROTOCOL_VERSION,
           serverProtocolVersion: PROTOCOL_VERSION,
           owner: "service-managed",
+          athleteHome: home.root,
+          rendererCapability,
         },
       },
     });
@@ -174,6 +179,23 @@ describe("service-aware arbitration", () => {
           observePeerHandshake: async () => {
             throw new Error("private auth cause");
           },
+        },
+      ),
+    ).resolves.toEqual({ kind: "auth-invalid" });
+    await expect(
+      observeDaemonState(
+        { home },
+        {
+          ...common,
+          observePeerHandshake: async () => ({
+            type: "handshake",
+            status: "accepted",
+            clientProtocolVersion: PROTOCOL_VERSION,
+            serverProtocolVersion: PROTOCOL_VERSION,
+            owner: "service-managed",
+            athleteHome: "/tmp/different-athlete",
+            rendererCapability,
+          }),
         },
       ),
     ).resolves.toEqual({ kind: "auth-invalid" });
@@ -280,7 +302,7 @@ describe("launchd composition", () => {
     expect(io.stderr.read()).toBe("Enduragent service management is available only on macOS.\n");
   });
 
-  it("canonicalizes one Darwin home and invokes one daemon controller action", async () => {
+  it("prepares one physical Darwin home before invoking a daemon controller action", async () => {
     const io = terminal();
     const relativeHome: AthleteHome = {
       root: "synthetic-relative",
@@ -288,6 +310,21 @@ describe("launchd composition", () => {
       archiveDir: "synthetic-relative/archive",
       configDir: "synthetic-relative/config",
     };
+    const physicalHome: AthleteHome = {
+      root: "/tmp/physical-synthetic-athlete",
+      storeDir: "/tmp/physical-synthetic-athlete/store",
+      archiveDir: "/tmp/physical-synthetic-athlete/archive",
+      configDir: "/tmp/physical-synthetic-athlete/config",
+    };
+    const prepareHome = vi.fn(async (selectedHome: AthleteHome) => {
+      expect(selectedHome).toEqual({
+        root: resolve("synthetic-relative"),
+        storeDir: resolve("synthetic-relative/store"),
+        archiveDir: resolve("synthetic-relative/archive"),
+        configDir: resolve("synthetic-relative/config"),
+      });
+      return physicalHome;
+    });
     const install = vi.fn(async () => ({
       kind: "registered" as const,
       label: "ai.enduragent.coach.synthetic",
@@ -313,6 +350,7 @@ describe("launchd composition", () => {
         },
         {
           resolveAthleteHome: () => relativeHome,
+          prepareAthleteHome: prepareHome,
           withLocalCoach: vi.fn(),
           readPackageVersion: async () => "unused",
           platform: "darwin",
@@ -325,14 +363,10 @@ describe("launchd composition", () => {
       ),
     ).resolves.toBe(EXIT_SUCCESS);
     expect(received).toEqual({
-      home: {
-        root: resolve("synthetic-relative"),
-        storeDir: resolve("synthetic-relative/store"),
-        archiveDir: resolve("synthetic-relative/archive"),
-        configDir: resolve("synthetic-relative/config"),
-      },
+      home: physicalHome,
       executablePath: "/tmp/real-enduragent",
     });
+    expect(prepareHome).toHaveBeenCalledTimes(1);
     expect(install).toHaveBeenCalledTimes(1);
   });
 

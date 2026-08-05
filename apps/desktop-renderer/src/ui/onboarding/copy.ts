@@ -10,6 +10,8 @@ export const ERROR_COPY: Readonly<Record<OnboardingErrorCode, string>> = {
   "unsafe-backend": "The app cannot safely store that key with the current storage backend.",
   "storage-failed":
     "The app could not confirm that key was saved securely. Check that secure storage is available and try again.",
+  "storage-uncertain":
+    "The app could not prove which saved key will survive a restart. Re-enter the key before continuing.",
   "runtime-unavailable":
     "That key was saved, but it is not active yet. Choose Retry saved keys to activate it.",
   "credential-status-unavailable":

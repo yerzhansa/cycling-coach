@@ -2,7 +2,6 @@
 import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
@@ -16,8 +15,11 @@ import {
   EXIT_VERSION_MISMATCH,
   PROTOCOL_VERSION,
   ServerHandshakeFrameSchema,
+  type AcceptedServerHandshakeFrame,
+  type AthleteHomeIdentity,
   type DaemonOwner,
   type ExitCode,
+  type RendererCapability,
   type ServerHandshakeFrame,
 } from "@enduragent/coach-contract";
 import {
@@ -44,7 +46,11 @@ import {
   type DaemonServiceSnapshot,
   type ServiceRegistrationState,
 } from "@enduragent/coach-cli";
-import { expandTilde, resolveAthleteHome, type AthleteHome } from "@enduragent/kernel-node/home";
+import {
+  prepareAthleteHome,
+  resolveAthleteHome,
+  type AthleteHome,
+} from "@enduragent/kernel-node/home";
 import { PORT_FILE_NAME, type PeerHealthyOutcome } from "@enduragent/kernel-node/lock";
 import {
   canonicalizeAthleteHome,
@@ -98,6 +104,7 @@ export interface RunEnduragentInput {
 
 export interface EnduragentDependencies {
   readonly resolveAthleteHome: (env: Record<string, string | undefined>) => AthleteHome;
+  readonly prepareAthleteHome?: typeof prepareAthleteHome;
   readonly withLocalCoach: <T>(input: WithLocalCoachInput<T>) => Promise<LocalCoachRunResult<T>>;
   readonly readPackageVersion: () => Promise<string>;
   readonly connectRemoteTransport?: (
@@ -191,7 +198,9 @@ export type DaemonStateObservation =
         readonly peerVersion: string;
       };
       readonly serverProtocolVersion: number;
-      readonly authenticated: AuthenticatedDaemonObservation;
+      readonly authenticated: AuthenticatedDaemonObservation & {
+        readonly handshake: AcceptedServerHandshakeFrame;
+      };
     }
   | { readonly kind: "absent" }
   | { readonly kind: "bound-unresponsive" }
@@ -298,7 +307,8 @@ export async function observeDaemonState(
     if (
       frame.status === "accepted" &&
       frame.clientProtocolVersion === PROTOCOL_VERSION &&
-      frame.serverProtocolVersion === PROTOCOL_VERSION
+      frame.serverProtocolVersion === PROTOCOL_VERSION &&
+      frame.athleteHome === input.home.root
     ) {
       return {
         kind: "compatible-healthy",
@@ -398,6 +408,7 @@ async function defaultResumeService(input: {
 
 const defaultDependencies: EnduragentDependencies = Object.freeze({
   resolveAthleteHome,
+  prepareAthleteHome,
   withLocalCoach,
   readPackageVersion,
   connectRemoteTransport: async (home: AthleteHome, expectedPort?: number) => {
@@ -409,6 +420,7 @@ const defaultDependencies: EnduragentDependencies = Object.freeze({
       return await connectCoachVerbTransport({
         url: `ws://127.0.0.1:${port}/rpc`,
         token,
+        expectedAthleteHome: home.root,
       });
     } catch (error) {
       if (error instanceof CoachRemoteError) throw error;
@@ -424,6 +436,7 @@ const defaultDependencies: EnduragentDependencies = Object.freeze({
       return await connectCoachSelfTestClient({
         url: `ws://127.0.0.1:${port}/rpc`,
         token,
+        expectedAthleteHome: home.root,
       });
     } catch (error) {
       if (error instanceof CoachRemoteError) throw error;
@@ -545,14 +558,6 @@ async function startEphemeralSuccessorProcess(input: DesignatedSuccessorInput): 
     successor: input,
   });
   child.detachAfterHealthy();
-}
-
-function resolveLegacySourceRoot(env: Record<string, string | undefined>): string {
-  const override = env.CYCLING_COACH_HOME;
-  if (override !== undefined && override.length > 0) {
-    return expandTilde(override);
-  }
-  return join(homedir(), ".cycling-coach");
 }
 
 function storeNewerThanApp(error: unknown): StoreNewerThanAppError | null {
@@ -741,24 +746,10 @@ function renderLocalResult(
     );
     return EXIT_AGENT_ERROR;
   }
-  if (result.status === "malformed") {
-    terminal.stderr.write(
-      "Enduragent cannot use the existing configuration. Correct or replace config.yaml, then retry.\n",
-    );
-    return EXIT_AGENT_ERROR;
-  }
-  if (result.status === "migration-discarded") {
-    terminal.stderr.write(
-      `Enduragent migration plan ${result.result.manifestDigest} was discarded to ${result.result.archivePath}. Run enduragent again to replan.\n`,
-    );
-    return result.result.exitCode;
-  }
-  const manifest =
-    result.result.manifestDigest === null ? "" : ` for manifest ${result.result.manifestDigest}`;
   terminal.stderr.write(
-    `Enduragent cannot start: legacy migration was refused (${result.result.reason}). Review ${result.result.journalPath}${manifest} and resolve the reported condition before retrying.\n`,
+    "Enduragent cannot use the existing configuration. Correct or replace config.yaml, then retry.\n",
   );
-  return result.result.exitCode;
+  return EXIT_AGENT_ERROR;
 }
 
 async function runWithOwnedTransport(
@@ -826,6 +817,13 @@ function sameAthleteHome(left: AthleteHome, right: AthleteHome): boolean {
 function canonicalHome(home: AthleteHome): AthleteHome {
   const canonical = canonicalizeAthleteHome(home);
   return sameAthleteHome(home, canonical) ? home : canonical;
+}
+
+async function resolvePreparedAthleteHome(
+  env: Record<string, string | undefined>,
+  dependencies: EnduragentDependencies,
+): Promise<AthleteHome> {
+  return dependencies.prepareAthleteHome!(canonicalHome(dependencies.resolveAthleteHome(env)));
 }
 
 function validateSuccessorInput(home: AthleteHome, input: DesignatedSuccessorInput): void {
@@ -976,7 +974,8 @@ async function waitForCompatiblePeer(input: {
           }
           if (
             handshake.clientProtocolVersion !== input.protocolVersion ||
-            handshake.serverProtocolVersion !== input.protocolVersion
+            handshake.serverProtocolVersion !== input.protocolVersion ||
+            handshake.athleteHome !== input.home.root
           ) {
             throw new CompatiblePeerObservationError({ status: "observation-invalid" });
           }
@@ -1062,6 +1061,7 @@ export type DesktopDaemonDependencies = Required<
   Pick<
     EnduragentDependencies,
     | "resolveAthleteHome"
+    | "prepareAthleteHome"
     | "readServiceStatus"
     | "resumeService"
     | "observeDaemonState"
@@ -1077,6 +1077,8 @@ export type DesktopDaemonResolution =
       readonly url: `ws://127.0.0.1:${number}/rpc`;
       readonly token: string;
       readonly owner: DaemonOwner;
+      readonly athleteHome: AthleteHomeIdentity;
+      readonly rendererCapability: RendererCapability;
       readonly supervision: "attached";
       close(): Promise<void>;
     }
@@ -1085,6 +1087,8 @@ export type DesktopDaemonResolution =
       readonly url: `ws://127.0.0.1:${number}/rpc`;
       readonly token: string;
       readonly owner: DaemonOwner;
+      readonly athleteHome: AthleteHomeIdentity;
+      readonly rendererCapability: RendererCapability;
       readonly supervision: "app-supervised";
       readonly exited: AppSupervisedChildHandle["exited"];
       isAlive(): boolean;
@@ -1116,6 +1120,7 @@ const DESKTOP_EPHEMERAL_START_DEADLINE_MS = 90_000;
 
 const desktopDaemonDependencies: DesktopDaemonDependencies = {
   resolveAthleteHome: defaultDependencies.resolveAthleteHome,
+  prepareAthleteHome: defaultDependencies.prepareAthleteHome!,
   readServiceStatus: defaultDependencies.readServiceStatus!,
   resumeService: defaultDependencies.resumeService!,
   observeDaemonState: defaultDependencies.observeDaemonState!,
@@ -1123,6 +1128,16 @@ const desktopDaemonDependencies: DesktopDaemonDependencies = {
   delay: defaultDependencies.delay!,
   monotonicNow: defaultDependencies.monotonicNow!,
 };
+
+export async function prepareDesktopAthleteHome(
+  env: Record<string, string | undefined>,
+  dependencies: Pick<
+    DesktopDaemonDependencies,
+    "resolveAthleteHome" | "prepareAthleteHome"
+  > = desktopDaemonDependencies,
+): Promise<AthleteHome> {
+  return dependencies.prepareAthleteHome(canonicalHome(dependencies.resolveAthleteHome(env)));
+}
 
 function refusedDesktop(
   exitCode: 1 | 3 | 4 | 5,
@@ -1193,7 +1208,7 @@ function refusedDesktopReadiness(status: ReadinessFailureStatus): DesktopDaemonR
 function connectedDesktop(
   port: number,
   token: string,
-  owner: DaemonOwner,
+  handshake: AcceptedServerHandshakeFrame,
   child?: AppSupervisedChildHandle,
 ): DesktopDaemonResolution {
   let closePromise: Promise<void> | undefined;
@@ -1208,7 +1223,9 @@ function connectedDesktop(
         status: "connected",
         url: `ws://127.0.0.1:${port}/rpc`,
         token,
-        owner,
+        owner: handshake.owner,
+        athleteHome: handshake.athleteHome,
+        rendererCapability: handshake.rendererCapability,
         supervision: "attached",
         close,
       }
@@ -1216,7 +1233,9 @@ function connectedDesktop(
         status: "connected",
         url: `ws://127.0.0.1:${port}/rpc`,
         token,
-        owner,
+        owner: handshake.owner,
+        athleteHome: handshake.athleteHome,
+        rendererCapability: handshake.rendererCapability,
         supervision: "app-supervised",
         exited: child.exited,
         isAlive: child.isAlive,
@@ -1380,7 +1399,15 @@ export async function resolveDesktopDaemon(
   if (!isAbsolute(input.executablePath) || input.appVersion.length === 0) {
     throw new TypeError("invalid desktop daemon input");
   }
-  const home = canonicalHome(dependencies.resolveAthleteHome(input.env));
+  let home: AthleteHome;
+  try {
+    home = await prepareDesktopAthleteHome(input.env, dependencies);
+  } catch {
+    return refusedDesktop(
+      EXIT_DAEMON_UNAVAILABLE,
+      input.signal.aborted ? "cancelled" : "unavailable",
+    );
+  }
   let serviceStatus: LaunchdServiceStatus;
   let registration: ServiceRegistrationClass;
   try {
@@ -1409,7 +1436,7 @@ export async function resolveDesktopDaemon(
       return connectedDesktop(
         observation.authenticated.coordinates.port,
         observation.authenticated.coordinates.token,
-        observation.authenticated.handshake.owner,
+        observation.authenticated.handshake,
       );
     }
     if (observation.kind === "version-mismatch") {
@@ -1433,7 +1460,7 @@ export async function resolveDesktopDaemon(
       return connectedDesktop(
         observation.authenticated.coordinates.port,
         observation.authenticated.coordinates.token,
-        observation.authenticated.handshake.owner,
+        observation.authenticated.handshake,
         ownedChild,
       );
     }
@@ -1503,7 +1530,7 @@ export async function resolveDesktopDaemon(
         return connectedDesktop(
           starter.port,
           observation.authenticated.coordinates.token,
-          starter.handshake.owner,
+          starter.handshake,
           ownedChild,
         );
       }
@@ -1825,7 +1852,7 @@ async function runPreparedVerb(
   request: CoachVerbRequest,
   dependencies: EnduragentDependencies,
 ): Promise<ExitCode> {
-  const home = canonicalHome(dependencies.resolveAthleteHome(input.env));
+  const home = await resolvePreparedAthleteHome(input.env, dependencies);
   const connect = (): Promise<CoachVerbTransport> => dependencies.connectRemoteTransport!(home);
   if (!invocation.local) {
     let transport: CoachVerbTransport;
@@ -1844,13 +1871,10 @@ async function runPreparedVerb(
     return runWithOwnedTransport(transport, request, invocation, input.terminal);
   }
 
-  const sourceRoot = resolveLegacySourceRoot(input.env);
   try {
     const result = await dependencies.withLocalCoach({
       env: input.env,
       home,
-      sourceRoot,
-      action: { kind: "resume", isTTY: input.terminal.isTTY },
       operation: async (lifecycle) =>
         runWithOwnedTransport(
           createLocalCoachVerbTransport(lifecycle.engine, serializeBoundaryError),
@@ -1888,7 +1912,7 @@ async function runSelfTestInvocation(
   input: RunEnduragentInput,
   dependencies: EnduragentDependencies,
 ): Promise<ExitCode> {
-  const home = canonicalHome(dependencies.resolveAthleteHome(input.env));
+  const home = await resolvePreparedAthleteHome(input.env, dependencies);
   try {
     const transport = await connectServiceAwareRemote({
       home,
@@ -1939,7 +1963,6 @@ async function runServeAsSuccessor(input: {
   const controller = new AbortController();
   const servePromise = runCoachServe({
     lifecycle: input.lifecycle,
-    home: input.home,
     appVersion: input.appVersion,
     signal: AbortSignal.any([input.signal, controller.signal]),
     owner: input.owner,
@@ -1971,7 +1994,6 @@ async function runServeInvocation(input: {
   readonly starterCapability?: string;
   readonly runInput: RunEnduragentInput;
   readonly home: AthleteHome;
-  readonly sourceRoot: string;
   readonly appVersion: string;
   readonly dependencies: EnduragentDependencies;
   readonly reportReadinessFailure?: (status: ReadinessFailureStatus) => void;
@@ -1998,13 +2020,10 @@ async function runServeInvocation(input: {
       const result = await input.dependencies.withLocalCoach({
         env: input.runInput.env,
         home: input.home,
-        sourceRoot: input.sourceRoot,
-        action: { kind: "resume", isTTY: input.runInput.terminal.isTTY },
         operation: async (lifecycle) =>
           successor === undefined
             ? runCoachServe({
                 lifecycle,
-                home: input.home,
                 appVersion: input.appVersion,
                 signal: input.runInput.signal,
                 owner: input.invocationOwner,
@@ -2152,7 +2171,7 @@ export async function runAppSupervisedEnduragent(
     ...dependencies,
   };
   try {
-    const home = canonicalHome(resolvedDependencies.resolveAthleteHome(input.env));
+    const home = await resolvePreparedAthleteHome(input.env, resolvedDependencies);
     let readinessFailure: ReadinessFailureStatus | undefined;
     const exitCode = await runServeInvocation({
       invocationOwner: "app-supervised",
@@ -2166,7 +2185,6 @@ export async function runAppSupervisedEnduragent(
         signal: input.signal,
       },
       home,
-      sourceRoot: resolveLegacySourceRoot(input.env),
       appVersion: await resolvedDependencies.readPackageVersion(),
       dependencies: resolvedDependencies,
       reportReadinessFailure: (status) => {
@@ -2208,7 +2226,7 @@ async function runDaemonInvocation(input: {
   }
   let controller: CoachDaemonController;
   try {
-    const home = canonicalHome(input.dependencies.resolveAthleteHome(input.runInput.env));
+    const home = await resolvePreparedAthleteHome(input.runInput.env, input.dependencies);
     const executablePath = await resolveConfiguredExecutable(input.dependencies);
     controller = input.dependencies.createDaemonController!({ home, executablePath });
   } catch {
@@ -2283,8 +2301,7 @@ export async function runEnduragent(
 
     const appVersion =
       invocation.kind === "serve" ? await resolvedDependencies.readPackageVersion() : undefined;
-    const home = canonicalHome(resolvedDependencies.resolveAthleteHome(input.env));
-    const sourceRoot = resolveLegacySourceRoot(input.env);
+    const home = await resolvePreparedAthleteHome(input.env, resolvedDependencies);
     if (invocation.kind === "serve") {
       const starter = await serveStarterContext(input.env);
       return await runServeInvocation({
@@ -2294,7 +2311,6 @@ export async function runEnduragent(
           : { starterCapability: starter.handoffCapability }),
         runInput: input,
         home,
-        sourceRoot,
         appVersion: appVersion!,
         dependencies: resolvedDependencies,
       });
@@ -2302,8 +2318,6 @@ export async function runEnduragent(
     const result = await resolvedDependencies.withLocalCoach({
       env: input.env,
       home,
-      sourceRoot,
-      action: { kind: "resume", isTTY: input.terminal.isTTY },
       operation: async (lifecycle) =>
         runCoachRepl({
           engine: lifecycle.engine,

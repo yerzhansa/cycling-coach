@@ -29,7 +29,7 @@ function config(dataDir: string): Config {
   };
 }
 
-describe("running positional engine compatibility", () => {
+describe("running canonical engine compatibility", () => {
   let dataDir: string;
   afterEach(async () => rm(dataDir, { recursive: true, force: true }));
 
@@ -59,9 +59,12 @@ describe("running positional engine compatibility", () => {
           { execute?: (input: unknown, options: unknown) => unknown }
         >;
         zoneResults.push(
-          await tools.calculate_zones.execute?.({}, {
-            experimental_context: request.options.context,
-          }),
+          await tools.calculate_zones.execute?.(
+            {},
+            {
+              experimental_context: request.options.context,
+            },
+          ),
         );
         return {
           text: "injected reply",
@@ -95,13 +98,19 @@ describe("running positional engine compatibility", () => {
       "calculate_zones",
     ]);
     expect(Object.isFrozen(toolNames)).toBe(true);
-    expect(engine.hasSession("running-chat")).toBe(false);
+    await expect(engine.hasSession({ chatId: "running-chat" })).resolves.toEqual({
+      hasSession: false,
+    });
 
     await expect(
-      engine.chat("running-chat", "calculate my zones", {
-        resolvedCs: { criticalSpeedMps: 4, source: "platform", confidence: "high" },
+      engine.chat({
+        chatId: "running-chat",
+        message: "calculate my zones",
+        turn: {
+          resolvedCs: { criticalSpeedMps: 4, source: "platform", confidence: "high" },
+        },
       }),
-    ).resolves.toBe("injected reply");
+    ).resolves.toEqual({ text: "injected reply" });
     const envelope = zoneResults[0] as { untrusted_data: string; data: unknown };
     expect(typeof envelope.untrusted_data).toBe("string");
     const resolved = envelope.data as {
@@ -116,12 +125,11 @@ describe("running positional engine compatibility", () => {
       anchorOrigin: "auto-resolved",
       csSource: "platform",
     });
-    expect(engine.hasSession("running-chat")).toBe(true);
+    await expect(engine.hasSession({ chatId: "running-chat" })).resolves.toEqual({
+      hasSession: true,
+    });
 
-    const sessionLines = (await readFile(
-      join(dataDir, "sessions", "running-chat.jsonl"),
-      "utf-8",
-    ))
+    const sessionLines = (await readFile(join(dataDir, "sessions", "running-chat.jsonl"), "utf-8"))
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -136,10 +144,12 @@ describe("running positional engine compatibility", () => {
     expect(sessionLines[1].templateHash).toEqual(expect.any(String));
     expect(sessionLines[1].assembledHash).toEqual(expect.any(String));
 
-    await expect(engine.chat("missing-anchor", "calculate my zones")).resolves.toBe(
-      "injected reply",
-    );
+    await expect(
+      engine.chat({ chatId: "missing-anchor", message: "calculate my zones" }),
+    ).resolves.toEqual({ text: "injected reply" });
     expect(zoneResults[1]).toMatchObject({ data: { error: "no_cs_anchor" } });
-    await expect(engine.resetSession("running-chat")).resolves.toEqual({ memoryFlushed: true });
+    await expect(engine.resetSession({ chatId: "running-chat" })).resolves.toEqual({
+      memoryFlushed: true,
+    });
   });
 });

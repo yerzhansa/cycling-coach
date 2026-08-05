@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import type { ImportReport } from "@enduragent/kernel/ingest";
 import { runMigrations } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
-import { resolveAthleteHome } from "../home/index.js";
+import { prepareAthleteHome, resolveAthleteHome } from "../home/index.js";
 import type { AthleteHome } from "../home/index.js";
 import { importFilesWithReport } from "../ingest/index.js";
 import {
@@ -24,6 +24,7 @@ type CliResult = {
 
 const defaultWriterDeps = {
   resolveAthleteHome,
+  prepareAthleteHome,
   acquireWriteLock,
   mkdir,
   chmod,
@@ -138,7 +139,7 @@ export async function runCoachDevWriter<T>(
 ): Promise<CoachDevWriterResult<T>> {
   let home: AthleteHome;
   try {
-    home = deps.resolveAthleteHome(options.env);
+    home = await deps.prepareAthleteHome(deps.resolveAthleteHome(options.env));
   } catch (error) {
     return failedWriterResult("resolve home", error);
   }

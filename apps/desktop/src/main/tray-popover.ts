@@ -1,4 +1,6 @@
+import { isAbsolute } from "node:path";
 import { BrowserWindow, screen, type Point, type Rectangle } from "electron";
+import { DESKTOP_TRAY_TELEGRAM_STATUS_CHANNEL } from "./constants.js";
 import {
   TRAY_POPOVER_EDGE_INSET,
   TRAY_POPOVER_GAP,
@@ -31,6 +33,7 @@ export function calculateTrayPopoverPosition(input: TrayPopoverPositionInput): P
 
 export interface TrayPopover {
   readonly window: BrowserWindow;
+  publishTelegramStatus(status: unknown): void;
   toggle(): void;
   hide(): void;
   close(): void;
@@ -38,8 +41,10 @@ export interface TrayPopover {
 
 export function createTrayPopover(input: {
   readonly url: string;
+  readonly preload: string;
   readonly getTrayBounds: () => Rectangle;
 }): TrayPopover {
+  if (!isAbsolute(input.preload)) throw new TypeError("tray preload path must be absolute");
   const window = new BrowserWindow({
     width: TRAY_POPOVER_WIDTH,
     height: TRAY_POPOVER_HEIGHT,
@@ -53,6 +58,7 @@ export function createTrayPopover(input: {
     skipTaskbar: true,
     hasShadow: true,
     webPreferences: {
+      preload: input.preload,
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
@@ -60,6 +66,12 @@ export function createTrayPopover(input: {
     },
   });
   let closing = false;
+  let loaded = false;
+  let pendingTelegramStatus: unknown;
+  const sendTelegramStatus = (): void => {
+    if (!loaded || pendingTelegramStatus === undefined || window.isDestroyed()) return;
+    window.webContents.send(DESKTOP_TRAY_TELEGRAM_STATUS_CHANNEL, pendingTelegramStatus);
+  };
   const hide = (): void => {
     if (!window.isDestroyed() && window.isVisible()) window.hide();
   };
@@ -69,12 +81,20 @@ export function createTrayPopover(input: {
     hide();
   };
   window.webContents.on("will-navigate", (event) => event.preventDefault());
+  window.webContents.on("did-finish-load", () => {
+    loaded = true;
+    sendTelegramStatus();
+  });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.on("blur", hide);
   window.on("close", preventClose);
   void window.loadURL(input.url);
   return {
     window,
+    publishTelegramStatus(status) {
+      pendingTelegramStatus = status;
+      sendTelegramStatus();
+    },
     toggle() {
       if (window.isDestroyed()) return;
       if (window.isVisible()) {

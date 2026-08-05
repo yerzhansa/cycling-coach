@@ -357,6 +357,26 @@ describe("desktop onboarding IPC", () => {
     expect(subject.chatGptAuth.deleteCredential).toHaveBeenCalledOnce();
   });
 
+  it("projects credential deletion uncertainty as its exact slot envelope", async () => {
+    const subject = harness();
+    vi.mocked(subject.vault.deleteCredential).mockResolvedValueOnce({
+      slot: "anthropic",
+      status: "uncertain",
+      reason: "storage-uncertain",
+    });
+
+    const result = await subject.invoke(DESKTOP_CREDENTIAL_DELETE_CHANNEL, subject.trustedEvent, {
+      credential: "anthropic",
+    });
+
+    expect(result).toEqual({
+      slot: "anthropic",
+      status: "uncertain",
+      reason: "storage-uncertain",
+    });
+    expect(Object.keys(result as object)).toEqual(["slot", "status", "reason"]);
+  });
+
   it("rejects untrusted, widened, and unknown credential deletion inputs", async () => {
     const subject = harness();
     for (const [event, input] of [
@@ -824,6 +844,27 @@ describe("desktop onboarding IPC", () => {
       slot: "anthropic",
       status: "refused",
       reason: "runtime-unavailable",
+    });
+    expect(Object.keys(result as object)).toEqual(["slot", "status", "reason"]);
+  });
+
+  it("projects credential durability uncertainty without downgrading it to refusal", async () => {
+    const subject = harness();
+    vi.mocked(subject.vault.writeCredential).mockResolvedValueOnce({
+      slot: "anthropic",
+      status: "uncertain",
+      reason: "storage-uncertain",
+    });
+
+    const result = await subject.invoke(DESKTOP_CREDENTIAL_WRITE_CHANNEL, subject.trustedEvent, {
+      slot: "anthropic",
+      value: "synthetic",
+    });
+
+    expect(result).toEqual({
+      slot: "anthropic",
+      status: "uncertain",
+      reason: "storage-uncertain",
     });
     expect(Object.keys(result as object)).toEqual(["slot", "status", "reason"]);
   });

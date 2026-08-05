@@ -7,6 +7,10 @@ import {
 } from "@enduragent/coach-client";
 import { createDesktopCoachClientProvider } from "../src/coach-client.js";
 
+function capability(fill: string, suffix = "A"): string {
+  return `${fill.repeat(42)}${suffix}`;
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("desktop coach client lifecycle", () => {
@@ -17,7 +21,7 @@ describe("desktop coach client lifecycle", () => {
         order.push(failedGeneration === undefined ? "coordinates" : `recover-${failedGeneration}`);
         return {
           url: "ws://127.0.0.1:45001/rpc",
-          token: "s".repeat(43),
+          rendererCapability: capability("s"),
           generation: 7,
         };
       }),
@@ -32,6 +36,62 @@ describe("desktop coach client lifecycle", () => {
     expect(auth.getDaemonConnection).toHaveBeenNthCalledWith(2, 7);
   });
 
+  it("authenticates with the renderer capability without accepting privileged coordinates", async () => {
+    const client = { close: vi.fn(async () => {}) } as unknown as CoachClient;
+    const auth = {
+      getDaemonConnection: vi.fn(async () => ({
+        url: "ws://127.0.0.1:45001/rpc",
+        rendererCapability: capability("r"),
+        generation: 1,
+      })),
+    };
+    const connect = vi.fn(async () => client);
+    vi.stubGlobal("window", { enduragentAuth: auth });
+    const clients = createDesktopCoachClientProvider(connect);
+
+    await expect(clients.getClient()).resolves.toBe(client);
+    expect(connect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:45001/rpc",
+        token: capability("r"),
+      }),
+    );
+  });
+
+  it("rejects renderer coordinates containing privileged connection fields", async () => {
+    const auth = {
+      getDaemonConnection: vi.fn(async () => ({
+        url: "ws://127.0.0.1:45001/rpc",
+        rendererCapability: capability("r"),
+        generation: 1,
+        token: "s".repeat(43),
+      })),
+    };
+    const connect = vi.fn();
+    vi.stubGlobal("window", { enduragentAuth: auth });
+    const clients = createDesktopCoachClientProvider(connect);
+
+    await expect(clients.getClient()).rejects.toBeInstanceOf(Error);
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-canonical renderer capabilities", async () => {
+    const client = { close: vi.fn(async () => {}) } as unknown as CoachClient;
+    const auth = {
+      getDaemonConnection: vi.fn(async () => ({
+        url: "ws://127.0.0.1:45001/rpc",
+        rendererCapability: "r".repeat(43),
+        generation: 1,
+      })),
+    };
+    const connect = vi.fn(async () => client);
+    vi.stubGlobal("window", { enduragentAuth: auth });
+    const clients = createDesktopCoachClientProvider(connect);
+
+    await expect(clients.getClient()).rejects.toBeInstanceOf(Error);
+    expect(connect).not.toHaveBeenCalled();
+  });
+
   it("closes the old client and deduplicates successful generation-qualified reconnects", async () => {
     const first = { close: vi.fn(async () => {}) };
     const second = { close: vi.fn(async () => {}) };
@@ -40,12 +100,12 @@ describe("desktop coach client lifecycle", () => {
         .fn()
         .mockResolvedValueOnce({
           url: "ws://127.0.0.1:45001/rpc",
-          token: "s".repeat(43),
+          rendererCapability: capability("s"),
           generation: 1,
         })
         .mockResolvedValueOnce({
           url: "ws://127.0.0.1:45002/rpc",
-          token: "t".repeat(43),
+          rendererCapability: capability("t"),
           generation: 2,
         }),
     };
@@ -69,12 +129,12 @@ describe("desktop coach client lifecycle", () => {
         .fn()
         .mockResolvedValueOnce({
           url: "ws://127.0.0.1:45001/rpc",
-          token: "s".repeat(43),
+          rendererCapability: capability("s"),
           generation: 4,
         })
         .mockResolvedValueOnce({
           url: "ws://127.0.0.1:45002/rpc",
-          token: "t".repeat(43),
+          rendererCapability: capability("t"),
           generation: 5,
         }),
     };
@@ -106,17 +166,17 @@ describe("desktop coach client lifecycle", () => {
         .fn()
         .mockResolvedValueOnce({
           url: "ws://127.0.0.1:45001/rpc",
-          token: "s".repeat(43),
+          rendererCapability: capability("s"),
           generation: 4,
         })
         .mockResolvedValueOnce({
           url: "ws://127.0.0.1:45002/rpc",
-          token: "t".repeat(43),
+          rendererCapability: capability("t"),
           generation: 5,
         })
         .mockResolvedValueOnce({
           url: "ws://127.0.0.1:45003/rpc",
-          token: "u".repeat(43),
+          rendererCapability: capability("u"),
           generation: 6,
         }),
     };
@@ -157,12 +217,12 @@ describe("desktop coach client lifecycle", () => {
         .fn()
         .mockResolvedValueOnce({
           url: "ws://127.0.0.1:45001/rpc",
-          token: "s".repeat(43),
+          rendererCapability: capability("s"),
           generation: 8,
         })
         .mockResolvedValueOnce({
           url: "ws://127.0.0.1:45002/rpc",
-          token: "t".repeat(43),
+          rendererCapability: capability("t"),
           generation: 9,
         }),
     };
@@ -190,12 +250,12 @@ describe("desktop coach client lifecycle", () => {
         .fn()
         .mockResolvedValueOnce({
           url: "ws://127.0.0.1:45001/rpc",
-          token: "s".repeat(43),
+          rendererCapability: capability("s"),
           generation: 1,
         })
         .mockResolvedValueOnce({
           url: "ws://127.0.0.1:45002/rpc",
-          token: "t".repeat(43),
+          rendererCapability: capability("t"),
           generation: 2,
         }),
     };
@@ -229,7 +289,7 @@ describe("desktop coach client lifecycle", () => {
     const auth = {
       getDaemonConnection: vi.fn(async () => ({
         url: "ws://127.0.0.1:45001/rpc",
-        token: "s".repeat(43),
+        rendererCapability: capability("s"),
         generation: 12,
       })),
     };

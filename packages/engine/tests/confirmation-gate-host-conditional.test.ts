@@ -19,11 +19,13 @@ const emptyMemory = { getContext: () => "" } as unknown as MemoryStorePort;
 
 const gatePort: ToolConfirmationPort = {
   gatedToolNames: new Set(["plan_save"]),
+  requiresConfirmation: () => true,
   propose: async () => ({ pendingConfirmation: true, summary: "unused" }),
 };
 
 const emptyGatePort: ToolConfirmationPort = {
   gatedToolNames: new Set<string>(),
+  requiresConfirmation: () => false,
   propose: async () => ({}),
 };
 

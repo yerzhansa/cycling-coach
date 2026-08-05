@@ -1,10 +1,10 @@
 import type { CoachClient } from "@enduragent/coach-client";
 import {
   CoachClientDisconnectedError,
-  CoachClientProtocolError,
   connectCoachClient,
   type CoachClientTerminalCause,
 } from "@enduragent/coach-client";
+import { validateRendererDaemonConnection } from "./daemon-connection.js";
 
 export interface DesktopCoachClientProvider {
   getClient(): Promise<CoachClient>;
@@ -14,51 +14,6 @@ export interface DesktopCoachClientProvider {
 
 interface DesktopConnectionBridge {
   getDaemonConnection(failedGeneration?: number): Promise<unknown>;
-}
-
-function validateConnection(value: unknown): {
-  readonly url: string;
-  readonly token: string;
-  readonly generation: number;
-} {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new CoachClientProtocolError();
-  }
-  const record = value as Record<string, unknown>;
-  if (Object.keys(record).sort().join(",") !== "generation,token,url") {
-    throw new CoachClientProtocolError();
-  }
-  if (
-    typeof record.url !== "string" ||
-    typeof record.token !== "string" ||
-    !Number.isSafeInteger(record.generation) ||
-    (record.generation as number) < 1
-  ) {
-    throw new CoachClientProtocolError();
-  }
-  let url: URL;
-  try {
-    url = new URL(record.url);
-  } catch {
-    throw new CoachClientProtocolError();
-  }
-  if (
-    url.protocol !== "ws:" ||
-    url.hostname !== "127.0.0.1" ||
-    url.port === "" ||
-    !/^\d+$/u.test(url.port) ||
-    Number(url.port) < 1 ||
-    Number(url.port) > 65_535 ||
-    url.pathname !== "/rpc" ||
-    url.username !== "" ||
-    url.password !== "" ||
-    url.search !== "" ||
-    url.hash !== "" ||
-    !/^[A-Za-z0-9_-]{43}$/u.test(record.token)
-  ) {
-    throw new CoachClientProtocolError();
-  }
-  return record as { readonly url: string; readonly token: string; readonly generation: number };
 }
 
 export function createDesktopCoachClientProvider(
@@ -100,12 +55,12 @@ export function createDesktopCoachClientProvider(
     };
     const pending = auth()
       .getDaemonConnection(recoveryGeneration)
-      .then(validateConnection)
+      .then(validateRendererDaemonConnection)
       .then((options) => {
         if (shutdownCause !== undefined) throw shutdownCause;
         connectionGeneration = options.generation;
         generation = options.generation;
-        return connect({ url: options.url, token: options.token, onTerminal });
+        return connect({ url: options.url, token: options.rendererCapability, onTerminal });
       })
       .then(async (connected) => {
         connectingClient = connected;

@@ -85,7 +85,8 @@ describe("desktop onboarding wizard", () => {
     const auth = {
       getDaemonConnection: vi.fn(async () => ({
         url: "ws://127.0.0.1:45001/rpc" as const,
-        token: "s".repeat(43),
+        rendererCapability: "s".repeat(43),
+        generation: 1,
       })),
       credentialStatuses: vi.fn(async () => []),
       retryFailedCredentials: vi.fn(async () => [
@@ -99,10 +100,8 @@ describe("desktop onboarding wizard", () => {
       chooseImportFiles: vi.fn(async () => []),
       onDroppedImportFiles: vi.fn(() => vi.fn()),
     } as unknown as DesktopOnboardingAuth;
-    const bridge = createOnboardingBridge(
-      auth,
-      vi.fn(async () => client as never),
-    );
+    const connect = vi.fn(async () => client as never);
+    const bridge = createOnboardingBridge(auth, connect);
     const progress = vi.fn();
     await bridge.importFiles(["/synthetic/ride.fit"], progress);
     await bridge.saveIntake({
@@ -128,6 +127,10 @@ describe("desktop onboarding wizard", () => {
       },
     ]);
     expect(progress).toHaveBeenCalledTimes(1);
+    expect(connect).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:45001/rpc",
+      token: "s".repeat(43),
+    });
   });
 
   it("passes ChatGPT status and login through without connecting the daemon", async () => {
@@ -175,7 +178,8 @@ describe("desktop onboarding wizard", () => {
   it("retries connection resolution after a transient connection failure", async () => {
     const connection = {
       url: "ws://127.0.0.1:45001/rpc" as const,
-      token: "s".repeat(43),
+      rendererCapability: "s".repeat(43),
+      generation: 1,
     };
     const getDaemonConnection = vi
       .fn<DesktopOnboardingAuth["getDaemonConnection"]>()
@@ -219,7 +223,10 @@ describe("desktop onboarding wizard", () => {
     const [wizard, coachKeys, styles] = await Promise.all([
       readFile(new URL("../src/ui/onboarding/OnboardingWizard.tsx", import.meta.url), "utf8"),
       readFile(new URL("../src/ui/onboarding/CoachKeysStep.tsx", import.meta.url), "utf8"),
-      readFile(new URL("../src/ui/onboarding/OnboardingWizard.module.css", import.meta.url), "utf8"),
+      readFile(
+        new URL("../src/ui/onboarding/OnboardingWizard.module.css", import.meta.url),
+        "utf8",
+      ),
     ]);
     expect(wizard).toContain("<Page");
     expect(wizard).toContain('title="Setup"');

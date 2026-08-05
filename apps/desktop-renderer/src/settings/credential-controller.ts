@@ -7,7 +7,11 @@ import {
   claudeCliIdentityLine,
   claudeCliPresentation,
 } from "../onboarding/credential-presentation.js";
-import type { ChatGptStatus, ClaudeCliStatus, CredentialSlotStatus } from "../onboarding/machine.js";
+import type {
+  ChatGptStatus,
+  ClaudeCliStatus,
+  CredentialSlotStatus,
+} from "../onboarding/machine.js";
 
 export type CredentialKind = "Provider API key" | "ChatGPT profile" | "Training account key";
 
@@ -74,7 +78,7 @@ export type CredentialSettingsState =
   | ({
       readonly status: "error";
       readonly kind: "delete";
-      readonly reason: Extract<CredentialDeleteResult, { readonly status: "refused" }>["reason"];
+      readonly reason: Exclude<CredentialDeleteResult, { readonly status: "deleted" }>["reason"];
     } & CredentialSettingsContent)
   | {
       readonly status: "error";
@@ -402,6 +406,22 @@ export function createCredentialSettingsController(input: {
     const pending = input
       .deleteCredential({ credential })
       .then(async (result) => {
+        if (result.status === "uncertain") {
+          if (disposed || generation !== operationGeneration) return;
+          render({
+            status: "error",
+            kind: "delete",
+            reason: "storage-uncertain",
+            entries: content.entries,
+            providerStatuses: content.providerStatuses,
+            confirmation: null,
+            announcement:
+              "Credential deletion could not be confirmed because secure storage could not be verified. Restart Enduragent and reload before trying again.",
+            recoveryAvailable: content.recoveryAvailable,
+            focus: null,
+          });
+          return;
+        }
         let entries = content.entries;
         let providerStatuses = content.providerStatuses;
         let refreshFailed = false;

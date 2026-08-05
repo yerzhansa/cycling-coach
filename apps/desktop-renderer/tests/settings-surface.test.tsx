@@ -20,6 +20,10 @@ import { createAthleteSettingsController } from "../src/settings/athlete-control
 import { createCredentialSettingsController } from "../src/settings/credential-controller.js";
 import { createProviderModelSettingsController } from "../src/settings/provider-model-controller.js";
 import { createSessionSettingsController } from "../src/settings/session-controller.js";
+import {
+  createTelegramSettingsController,
+  type TelegramControlStatus,
+} from "../src/settings/telegram-controller.js";
 import { createSpendMeterController } from "../src/spend-meter/controller.js";
 import { createReleaseNotesSettingsAdapter } from "../src/state/adapters/release-notes.js";
 import {
@@ -29,6 +33,7 @@ import {
   createCredentialSettingsAdapter,
 } from "../src/state/adapters/settings.js";
 import { createSpendSettingsAdapter } from "../src/state/adapters/spend.js";
+import { createTelegramSettingsAdapter } from "../src/state/adapters/telegram.js";
 import { createUpdateSettingsAdapter } from "../src/state/adapters/update.js";
 import { CLOSED_PANE, EMPTY_SETTINGS_SURFACE } from "../src/state/settings-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
@@ -133,6 +138,17 @@ function spendSummary(overrides: Partial<SpendSummary> = {}): SpendSummary {
   } as SpendSummary;
 }
 
+function telegramStatus(overrides: Partial<TelegramControlStatus> = {}): TelegramControlStatus {
+  return {
+    channel: { desiredState: "disabled", state: "disabled" },
+    bot: { state: "unconfigured" },
+    pairing: { state: "unpaired" },
+    credentialConfigured: false,
+    gapWarning: { state: "clear" },
+    ...overrides,
+  };
+}
+
 interface HarnessOptions {
   readonly runtime?: () => RuntimeConfigSnapshot;
   readonly configureRuntime?: (params: unknown) => Promise<unknown>;
@@ -147,6 +163,7 @@ interface HarnessOptions {
   readonly releaseNotes?: () => Promise<ReleaseNotesResult>;
   readonly updateState?: DesktopUpdateState;
   readonly spend?: () => Promise<SpendSummary>;
+  readonly telegram?: TelegramControlStatus;
 }
 
 function createHarness(options: HarnessOptions = {}) {
@@ -215,6 +232,9 @@ function createHarness(options: HarnessOptions = {}) {
   const conversationAdapter = createConversationSettingsAdapter({
     publish: (state) => store.getState().patchSettings({ conversation: state }),
   });
+  const telegramAdapter = createTelegramSettingsAdapter({
+    publish: (state) => store.getState().patchSettings({ telegram: state }),
+  });
   const spendAdapter = createSpendSettingsAdapter({
     read: () => store.getState().settings.spend,
     publish: (next) => store.getState().patchSettings({ spend: next }),
@@ -261,6 +281,45 @@ function createHarness(options: HarnessOptions = {}) {
     beginMutation: () => store.getState().beginSettingsMutation("provider-model"),
     view: coachAdapter.view,
   });
+  const appliedTelegram = (current: TelegramControlStatus) =>
+    ({ outcome: "applied", current }) as const;
+  const pasteTelegramToken = vi.fn(async () =>
+    appliedTelegram(
+      telegramStatus({
+        bot: { state: "ready", username: "synthetic_bot" },
+        credentialConfigured: true,
+      }),
+    ),
+  );
+  const telegramController = createTelegramSettingsController({
+    bridge: {
+      status: async () => options.telegram ?? telegramStatus(),
+      pasteTokenFromClipboard: pasteTelegramToken,
+      enable: async () =>
+        appliedTelegram(
+          telegramStatus({
+            channel: { desiredState: "enabled", state: "starting" },
+            bot: { state: "ready", username: "synthetic_bot" },
+            pairing: { state: "paired" },
+            credentialConfigured: true,
+          }),
+        ),
+      disable: async () => appliedTelegram(telegramStatus()),
+      remove: async () => appliedTelegram(telegramStatus()),
+      reconcile: async () => appliedTelegram(telegramStatus()),
+      removeWebhook: async () => appliedTelegram(telegramStatus()),
+      beginPairing: async () => appliedTelegram(telegramStatus()),
+      cancelPairing: async () => appliedTelegram(telegramStatus()),
+      acknowledgeGapWarning: async () => appliedTelegram(telegramStatus()),
+      listAllowedSenders: async () => ({ senders: [] }),
+      addAllowedSender: async () => ({ outcome: "applied", current: { senders: [] } }),
+      removeAllowedSender: async () => ({ outcome: "applied", current: { senders: [] } }),
+    },
+    beginMutation: () => store.getState().beginSettingsMutation("telegram"),
+    view: telegramAdapter.view,
+    setInterval: (() => 0) as unknown as typeof globalThis.setInterval,
+    clearInterval: (() => {}) as unknown as typeof globalThis.clearInterval,
+  });
   const spendController = createSpendMeterController({
     clients,
     view: spendAdapter.view,
@@ -295,18 +354,21 @@ function createHarness(options: HarnessOptions = {}) {
         void credentialController.activate();
         void athleteController.activate();
         void conversationController.activate();
+        void telegramController.activate();
       },
       close() {
         coachController.close();
         credentialController.close();
         athleteController.close();
         conversationController.close();
+        telegramController.close();
       },
     },
     coach: coachAdapter.port,
     credentials: credentialAdapter.port,
     athlete: athleteAdapter.port,
     conversation: conversationAdapter.port,
+    telegram: telegramAdapter.port,
     spend: spendAdapter.port,
     update: updateAdapter.port,
     releaseNotes: releaseNotesAdapter.port,
@@ -321,6 +383,7 @@ function createHarness(options: HarnessOptions = {}) {
     restartToUpdate,
     checkForUpdates,
     openSetup,
+    pasteTelegramToken,
     spendController,
     startUpdate: () => updateController.start(),
     dispose() {
@@ -328,6 +391,7 @@ function createHarness(options: HarnessOptions = {}) {
       credentialController.dispose();
       athleteController.dispose();
       conversationController.dispose();
+      telegramController.dispose();
       spendController.dispose();
       updateController.dispose();
       releaseNotesController.dispose();
@@ -368,6 +432,24 @@ async function renderSettings(options: HarnessOptions = {}) {
   });
   return harness;
 }
+
+describe("Telegram settings surface", () => {
+  it("warns that an uncertain primary claim may become visible after restart", async () => {
+    await renderSettings({
+      telegram: telegramStatus({
+        bot: { state: "ready", username: "synthetic_bot" },
+        pairing: { state: "failed", errorCode: "telegram-pairing-storage-uncertain" },
+        credentialConfigured: true,
+      }),
+    });
+
+    expect(
+      await screen.findByText(
+        "The primary Telegram user may have been saved, but Enduragent could not verify storage. Restart Enduragent and check Telegram before pairing again.",
+      ),
+    ).toBeInTheDocument();
+  });
+});
 
 describe("settings mutation lock", () => {
   it("disables other panes and blocks leaving Settings while one pane saves", async () => {
@@ -550,6 +632,30 @@ describe("credential deletion", () => {
     await waitFor(() => {
       expect(screen.getByText("Credential deleted locally.")).toBeInTheDocument();
     });
+  });
+
+  it("announces uncertain deletion neutrally without claiming either storage outcome", async () => {
+    const user = userEvent.setup();
+    await renderSettings({
+      deleteCredential: async () => ({
+        slot: "openrouter",
+        status: "uncertain",
+        reason: "storage-uncertain",
+      }),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Delete the OpenRouter credential" }));
+    await user.click(
+      screen.getByRole("button", { name: "Confirm deletion of the OpenRouter credential" }),
+    );
+
+    const feedback = await screen.findByText(
+      "Credential deletion could not be confirmed because secure storage could not be verified. Restart Enduragent and reload before trying again.",
+    );
+    expect(feedback).toHaveAttribute("role", "status");
+    expect(feedback.textContent?.toLowerCase()).not.toContain("credential deleted");
+    expect(feedback.textContent?.toLowerCase()).not.toContain("remains stored");
+    expect(feedback.textContent?.toLowerCase()).not.toContain("was not deleted");
   });
 });
 

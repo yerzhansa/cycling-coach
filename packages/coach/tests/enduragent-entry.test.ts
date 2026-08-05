@@ -136,6 +136,12 @@ const spendMeter: SpendMeterService = {
   },
 };
 
+const confirmations: LocalCoachLifecycle["confirmations"] = {
+  peek: () => undefined,
+  confirm: async () => ({ status: "none" }),
+  cancel: () => "none",
+};
+
 interface Deferred<T> {
   readonly promise: Promise<T>;
   resolve(value: T): void;
@@ -254,7 +260,6 @@ beforeEach(async () => {
   env = {
     HOME: join(scratch, "home"),
     ENDURAGENT_HOME: home.root,
-    CYCLING_COACH_HOME: join(scratch, "legacy-home"),
     XDG_CONFIG_HOME: join(scratch, "xdg-config"),
     XDG_CACHE_HOME: join(scratch, "xdg-cache"),
     TMPDIR: join(scratch, "tmp"),
@@ -339,6 +344,8 @@ describe("enduragent executable composition", () => {
   });
 
   it("runs self-test through the remote client before local composition", async () => {
+    const preparedHome = Object.freeze({ ...home });
+    const prepareAthleteHome = vi.fn(async () => preparedHome);
     const digest = "a".repeat(64);
     const selfTestResult = {
       schemaVersion: 1,
@@ -388,6 +395,7 @@ describe("enduragent executable composition", () => {
         },
         {
           resolveAthleteHome: () => home,
+          prepareAthleteHome,
           withLocalCoach: withLocalCoachDependency,
           readPackageVersion: async () => "unused",
           connectSelfTestClient,
@@ -399,82 +407,20 @@ describe("enduragent executable composition", () => {
     expect(SelfTestCommandTerminalSchema.parse(JSON.parse(lines[0]!))).toEqual(selfTestResult);
     expect(io.stderr.read()).toBe("");
     expect(connectSelfTestClient).toHaveBeenCalledOnce();
+    expect(connectSelfTestClient).toHaveBeenCalledWith(preparedHome, undefined);
+    expect(prepareAthleteHome).toHaveBeenCalledWith(home);
     expect(call).toHaveBeenCalledWith("selfTest", {}, expect.any(Object));
     expect(close).toHaveBeenCalledOnce();
     expect(withLocalCoachDependency).not.toHaveBeenCalled();
   });
 
-  it("renders migration and readiness outcomes with unchanged exit codes", async () => {
-    const digestA = "a".repeat(64);
-    const digestB = "b".repeat(64);
-    const digestC = "c".repeat(64);
-    const journalPath = join(home.root, "config", "migration.json");
-    const archivePath = join(home.root, "archive", "discarded.json");
+  it("renders readiness outcomes with unchanged exit codes", async () => {
     const configPath = join(home.configDir, "config.yaml");
     const rows: ReadonlyArray<{
       readonly result: LocalCoachRunResult<never>;
-      readonly exitCode: 0 | 1 | 2 | 3 | 4;
+      readonly exitCode: 1 | 4;
       readonly stderr: string;
     }> = [
-      {
-        result: {
-          status: "migration-refused",
-          result: {
-            status: "refused",
-            exitCode: 2,
-            journalPath,
-            manifestDigest: null,
-            reason: "confirmation-required",
-            conflictIds: [],
-          },
-        },
-        exitCode: 2,
-        stderr: `Enduragent cannot start: legacy migration was refused (confirmation-required). Review ${journalPath} and resolve the reported condition before retrying.\n`,
-      },
-      {
-        result: {
-          status: "migration-refused",
-          result: {
-            status: "refused",
-            exitCode: 3,
-            journalPath,
-            manifestDigest: digestA,
-            reason: "source-drift",
-            conflictIds: ["synthetic-conflict"],
-          },
-        },
-        exitCode: 3,
-        stderr: `Enduragent cannot start: legacy migration was refused (source-drift). Review ${journalPath} for manifest ${digestA} and resolve the reported condition before retrying.\n`,
-      },
-      {
-        result: {
-          status: "migration-refused",
-          result: {
-            status: "refused",
-            exitCode: 4,
-            journalPath,
-            manifestDigest: digestB,
-            reason: "invalid-source-config",
-            conflictIds: [],
-          },
-        },
-        exitCode: 4,
-        stderr: `Enduragent cannot start: legacy migration was refused (invalid-source-config). Review ${journalPath} for manifest ${digestB} and resolve the reported condition before retrying.\n`,
-      },
-      {
-        result: {
-          status: "migration-discarded",
-          result: {
-            status: "discarded",
-            exitCode: 0,
-            journalPath,
-            manifestDigest: digestC,
-            archivePath,
-          },
-        },
-        exitCode: 0,
-        stderr: `Enduragent migration plan ${digestC} was discarded to ${archivePath}. Run enduragent again to replan.\n`,
-      },
       {
         result: { status: "not-configured", configPath },
         exitCode: 4,
@@ -534,9 +480,7 @@ describe("enduragent executable composition", () => {
       expect(io.stdout.read()).toBe("");
       expect(io.stderr.read()).toBe(row.stderr);
       expect(operationCalls).toBe(0);
-      expect(captured?.home).toBe(home);
-      expect(captured?.sourceRoot).toBe(env.CYCLING_COACH_HOME);
-      expect(captured?.action).toEqual({ kind: "resume", isTTY: true });
+      expect(captured?.home).toEqual(home);
     }
   });
 
@@ -548,6 +492,16 @@ describe("enduragent executable composition", () => {
     "returns a safe typed app-supervised %s outcome while keeping the ordinary exit code",
     async (status, exitCode) => {
       const io = terminal();
+      const preparedHome = Object.freeze({ ...home });
+      const prepareAthleteHome = vi.fn(async () => preparedHome);
+      let withLocalCoachCalls = 0;
+      const withLocalCoachDependency: EnduragentDependencies["withLocalCoach"] = async <T>(
+        input: WithLocalCoachInput<T>,
+      ): Promise<LocalCoachRunResult<T>> => {
+        withLocalCoachCalls += 1;
+        expect(input.home).toBe(preparedHome);
+        return status === "not-configured" ? { status, configPath: privateConfigPath } : { status };
+      };
       const privateConfigPath = join(home.configDir, "synthetic-private-profile-token");
       const result = await runAppSupervisedEnduragent(
         {
@@ -557,8 +511,8 @@ describe("enduragent executable composition", () => {
         },
         {
           resolveAthleteHome: () => home,
-          withLocalCoach: async <T>(): Promise<LocalCoachRunResult<T>> =>
-            status === "not-configured" ? { status, configPath: privateConfigPath } : { status },
+          prepareAthleteHome,
+          withLocalCoach: withLocalCoachDependency,
           readPackageVersion: async () => "0.1.0-synthetic",
         },
       );
@@ -566,6 +520,8 @@ describe("enduragent executable composition", () => {
       expect(result).toEqual({ exitCode, readinessFailure: status });
       expect(JSON.stringify(result)).not.toContain("synthetic-private-profile-token");
       expect(Object.keys(result).sort()).toEqual(["exitCode", "readinessFailure"]);
+      expect(prepareAthleteHome).toHaveBeenCalledWith(home);
+      expect(withLocalCoachCalls).toBe(1);
     },
   );
 
@@ -580,9 +536,11 @@ describe("enduragent executable composition", () => {
       return response;
     });
     const lifecycle = {
+      home,
       engine: mocked.engine,
       operations,
       spendMeter,
+      confirmations,
       listener: inertWriterProtocolListener,
       close: async () => {
         trace.push("lifecycle-close");
@@ -636,12 +594,14 @@ describe("enduragent executable composition", () => {
     }
   });
 
-  it("routes serve through one local runner with the shared migration inputs", async () => {
+  it("routes serve through one local runner", async () => {
     const controller = new AbortController();
     controller.abort();
     const mocked = mockEngine();
     let captured: WithLocalCoachInput<unknown> | undefined;
     let packageReads = 0;
+    const preparedHome = Object.freeze({ ...home });
+    const prepareAthleteHome = vi.fn(async () => preparedHome);
     const io = terminal(new PassThrough(), true);
     await expect(
       runEnduragent(
@@ -653,6 +613,7 @@ describe("enduragent executable composition", () => {
         },
         {
           resolveAthleteHome: () => home,
+          prepareAthleteHome,
           readPackageVersion: async () => {
             packageReads += 1;
             return "0.1.0-synthetic";
@@ -660,9 +621,11 @@ describe("enduragent executable composition", () => {
           withLocalCoach: async <T>(input: WithLocalCoachInput<T>) => {
             captured = input as unknown as WithLocalCoachInput<unknown>;
             const value = await input.operation({
+              home,
               engine: mocked.engine,
               operations,
               spendMeter,
+              confirmations,
               listener: inertWriterProtocolListener,
               async close() {},
             });
@@ -674,12 +637,11 @@ describe("enduragent executable composition", () => {
     expect(packageReads).toBe(1);
     expect(captured).toMatchObject({
       env,
-      home,
-      sourceRoot: env.CYCLING_COACH_HOME,
-      action: { kind: "resume", isTTY: true },
+      home: preparedHome,
     });
     expect(io.stdout.read()).toBe("");
     expect(io.stderr.read()).toBe("");
+    expect(prepareAthleteHome).toHaveBeenCalledWith(home);
   });
 
   it.each([{ argv: [] as readonly string[] }, { argv: ["serve"] as readonly string[] }])(
@@ -901,9 +863,11 @@ describe("enduragent executable composition", () => {
       input: WithLocalCoachInput<T>,
     ): Promise<LocalCoachRunResult<T>> => {
       const lifecycle = {
+        home,
         engine: mocked.engine,
         operations,
         spendMeter,
+        confirmations,
         listener: inertWriterProtocolListener,
         close: async () => {
           trace.push("lifecycle-close");
@@ -948,6 +912,8 @@ describe("enduragent executable composition", () => {
   });
 
   it("runs a remote-default verb without registration or spawn work on a warm daemon", async () => {
+    const preparedHome = Object.freeze({ ...home });
+    const prepareAthleteHome = vi.fn(async () => preparedHome);
     const received: CoachVerbRequest[] = [];
     const connectRemoteTransport = vi.fn(async () =>
       remoteTransport({ text: "remote" }, { received }),
@@ -965,6 +931,7 @@ describe("enduragent executable composition", () => {
         },
         {
           resolveAthleteHome: () => home,
+          prepareAthleteHome,
           withLocalCoach: async () => {
             throw new Error("local runner must not be used");
           },
@@ -976,6 +943,8 @@ describe("enduragent executable composition", () => {
       ),
     ).resolves.toBe(EXIT_SUCCESS);
     expect(received).toHaveLength(1);
+    expect(connectRemoteTransport).toHaveBeenCalledWith(preparedHome);
+    expect(prepareAthleteHome).toHaveBeenCalledWith(home);
     expect(received[0]).toMatchObject({
       method: "chat",
       params: { chatId: "cli:RaceA", message: "hello" },
@@ -1006,9 +975,11 @@ describe("enduragent executable composition", () => {
             return {
               status: "completed",
               value: await input.operation({
+                home,
                 engine: mocked.engine,
                 operations,
                 spendMeter,
+                confirmations,
                 listener: inertWriterProtocolListener,
                 async close() {},
               }),

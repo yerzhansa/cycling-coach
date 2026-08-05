@@ -61,9 +61,9 @@ The host handles any required data-source attribution from trusted provenance. D
 
 export const CONFIRMATION_GATE_RULES = `# Mutation Confirmations
 
-The intervals_create_workout, intervals_create_strength_workout, intervals_delete_workout, and plan_save tools only propose changes. They return {pendingConfirmation: true} and execute only after the athlete confirms through a button or prompt outside this conversation.
+The host may require confirmation for intervals_create_workout, intervals_create_strength_workout, intervals_delete_workout, and plan_save. When one of these tools returns {pendingConfirmation: true}, it only proposed the change and will execute after the athlete confirms through a button or prompt outside this conversation.
 
-After proposing, state what you proposed and that confirmation is pending. Never claim the write happened. Never call the tool again to retry a pending proposal. Propose at most one mutation per turn because a new proposal replaces the outstanding one.`;
+After a pending-confirmation result, state what you proposed and that confirmation is pending. Never claim the write happened. Never call the tool again to retry a pending proposal. Propose at most one mutation per turn because a new proposal replaces the outstanding one.`;
 
 const CROSS_SPORT_VOICE_RULES = `# Voice & Register
 

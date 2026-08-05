@@ -22,6 +22,7 @@ const electron = vi.hoisted(() => {
     readonly options: unknown;
     readonly webContents = Object.assign(new Emitter(), {
       setWindowOpenHandler: vi.fn(),
+      send: vi.fn(),
     });
     readonly loadURL = vi.fn(async () => {});
     readonly setPosition = vi.fn();
@@ -113,10 +114,11 @@ describe("tray popover", () => {
     ).toBe(508);
   });
 
-  it("creates one hardened zero-preload window on the matching display", () => {
+  it("creates one hardened narrow-preload window on the matching display", () => {
     const bounds = { x: 500, y: 0, width: 16, height: 22 };
     const popover = createTrayPopover({
       url: "enduragent://app/tray.html",
+      preload: "/synthetic/tray.cjs",
       getTrayBounds: () => bounds,
     });
     expect(electron.FakeBrowserWindow.instances).toHaveLength(1);
@@ -134,13 +136,13 @@ describe("tray popover", () => {
       skipTaskbar: true,
       hasShadow: true,
       webPreferences: {
+        preload: "/synthetic/tray.cjs",
         contextIsolation: true,
         sandbox: true,
         nodeIntegration: false,
         webSecurity: true,
       },
     });
-    expect("preload" in (window.options as { webPreferences: object }).webPreferences).toBe(false);
     expect(window.loadURL).toHaveBeenCalledWith("enduragent://app/tray.html");
     const openHandler = window.webContents.setWindowOpenHandler.mock.calls[0]![0] as () => unknown;
     expect(openHandler()).toEqual({ action: "deny" });
@@ -155,9 +157,24 @@ describe("tray popover", () => {
     expect(window.hide).toHaveBeenCalledOnce();
   });
 
+  it("publishes only after the isolated tray renderer finishes loading", () => {
+    const popover = createTrayPopover({
+      url: "enduragent://app/tray.html",
+      preload: "/synthetic/tray.cjs",
+      getTrayBounds: () => ({ x: 10, y: 10, width: 16, height: 16 }),
+    });
+    const window = electron.FakeBrowserWindow.instances[0]!;
+    const status = { channelState: "online", gapWarning: false };
+    popover.publishTelegramStatus(status);
+    expect(window.webContents.send).not.toHaveBeenCalled();
+    window.webContents.emit("did-finish-load");
+    expect(window.webContents.send).toHaveBeenCalledWith("desktop:tray:telegram-status", status);
+  });
+
   it("hides on blur and close before quit, then destroys once", () => {
     const popover = createTrayPopover({
       url: "enduragent://app/tray.html",
+      preload: "/synthetic/tray.cjs",
       getTrayBounds: () => ({ x: 10, y: 10, width: 16, height: 16 }),
     });
     const window = electron.FakeBrowserWindow.instances[0]!;

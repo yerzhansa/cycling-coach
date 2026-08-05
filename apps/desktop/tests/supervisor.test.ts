@@ -31,6 +31,10 @@ function deferred<T>() {
   return { promise, reject, resolve };
 }
 
+function capability(fill: string, suffix = "A"): string {
+  return `${fill.repeat(42)}${suffix}`;
+}
+
 function connected(
   port: number,
   exit: ReturnType<typeof deferred<{ readonly exitCode: number | null }>>,
@@ -44,6 +48,8 @@ function connected(
     status: "connected" as const,
     url: `ws://127.0.0.1:${port}/rpc` as const,
     token: "s".repeat(43),
+    athleteHome: "/synthetic/athlete",
+    rendererCapability: capability("r"),
     owner: "app-supervised" as const,
     supervision: "app-supervised" as const,
     exited: exit.promise,
@@ -61,6 +67,8 @@ describe("desktop main supervisor", () => {
       status: "connected",
       url: "ws://127.0.0.1:45001/rpc",
       token: "s".repeat(43),
+      athleteHome: "/synthetic/athlete",
+      rendererCapability: capability("r"),
       owner: "app-supervised",
       supervision: "app-supervised",
       exited: new Promise(() => {}),
@@ -96,6 +104,8 @@ describe("desktop main supervisor", () => {
       status: "connected",
       url: "ws://127.0.0.1:45001/rpc",
       token: "s".repeat(43),
+      athleteHome: "/synthetic/athlete",
+      rendererCapability: capability("r"),
       owner: "app-supervised",
       supervision: "app-supervised",
       exited: new Promise(() => {}),
@@ -125,6 +135,8 @@ describe("desktop main supervisor", () => {
       status: "connected",
       url: "ws://127.0.0.1:45001/rpc",
       token: "s".repeat(43),
+      athleteHome: "/synthetic/athlete",
+      rendererCapability: capability("r"),
       owner: "app-supervised",
       supervision: "app-supervised",
       exited: new Promise(() => {}),
@@ -392,6 +404,7 @@ describe("desktop main supervisor", () => {
     expect(runtime.connection().url).toBe("ws://127.0.0.1:45002/rpc");
     expect(runtime.currentPort()).toBe(45_002);
     expect(runtime.connection().generation).toBe(2);
+    expect(runtime.connection().supervision).toBe("app-supervised");
     await expect(runtime.recover(1)).resolves.toMatchObject({ generation: 2 });
     expect(supervisor.resolveForRecovery).toHaveBeenCalledTimes(1);
   });
@@ -410,6 +423,8 @@ describe("desktop main supervisor", () => {
       close: vi.fn(async () => {}),
     };
     let runtime!: DesktopDaemonLifecycle;
+    let activeGeneration = 1;
+    let preparedGeneration: number | undefined;
     const prepareReady = vi.fn(async ({ connection }: { readonly connection: unknown }) => {
       order.push("prepare");
       expect(connection).toMatchObject({
@@ -418,17 +433,59 @@ describe("desktop main supervisor", () => {
         generation: 2,
       });
       expect(() => runtime.connection()).toThrow("desktop daemon connection unavailable");
+      expect(activeGeneration).toBe(1);
+      preparedGeneration = 2;
     });
     runtime = new DesktopDaemonLifecycle(supervisor, first, {
       delay: async () => {},
       prepareReady,
-      onReady: () => order.push("ready"),
+      onReady: ({ current }) => {
+        order.push("ready");
+        expect(preparedGeneration).toBe(current.generation);
+        activeGeneration = current.generation;
+      },
     });
     runtime.start();
     firstExit.resolve({ exitCode: 1 });
     await vi.waitFor(() => expect(runtime.connection().generation).toBe(2));
     expect(prepareReady).toHaveBeenCalledTimes(1);
+    expect(activeGeneration).toBe(2);
     expect(order).toEqual(["prepare", "ready"]);
+  });
+
+  it("does not publish a successor when prepared credential replay fails", async () => {
+    const firstExit = deferred<{ readonly exitCode: number | null }>();
+    const first = connected(45_001, firstExit);
+    const successor = connected(45_002, deferred<{ readonly exitCode: number | null }>());
+    const supervisor = {
+      resolveForRecovery: vi.fn(async (budget: { remainingAttempts: number }) => {
+        budget.remainingAttempts -= 1;
+        return successor;
+      }),
+      reobserveAttached: vi.fn(),
+      close: vi.fn(async () => {}),
+    };
+    const onReady = vi.fn();
+    const runtime = new DesktopDaemonLifecycle(supervisor, first, {
+      delay: async () => {},
+      prepareReady: async () => {
+        throw new Error("synthetic Telegram replay failure");
+      },
+      onReady,
+    });
+    runtime.start();
+    firstExit.resolve({ exitCode: 1 });
+
+    await vi.waitFor(() =>
+      expect(runtime.snapshot()).toEqual({
+        status: "terminal",
+        generation: 1,
+        cause: "unavailable",
+      }),
+    );
+    expect(successor.close).toHaveBeenCalledOnce();
+    expect(onReady).not.toHaveBeenCalled();
+    expect(() => runtime.connection()).toThrow("desktop daemon connection unavailable");
   });
 
   it("does not restart when shutdown requested the child exit", async () => {
@@ -626,6 +683,8 @@ describe("desktop main supervisor", () => {
       status: "connected" as const,
       url: "ws://127.0.0.1:45001/rpc" as const,
       token: "s".repeat(43),
+      athleteHome: "/synthetic/athlete",
+      rendererCapability: capability("r"),
       owner: "service-managed" as const,
       supervision: "attached" as const,
       close: vi.fn(async () => {}),
@@ -641,14 +700,28 @@ describe("desktop main supervisor", () => {
       reobserveAttached: vi.fn(async () => successor),
       close: vi.fn(async () => {}),
     };
-    const runtime = new DesktopDaemonLifecycle(supervisor, attached);
+    const replayTelegramCredential = vi.fn(async () => {});
+    let activeGeneration = 1;
+    const runtime = new DesktopDaemonLifecycle(supervisor, attached, {
+      prepareReady: async ({ connection }) => {
+        if (connection.supervision === "app-supervised") {
+          await replayTelegramCredential();
+        }
+      },
+      onReady: ({ current }) => {
+        activeGeneration = current.generation;
+      },
+    });
     runtime.start();
     await expect(runtime.recover(1)).resolves.toMatchObject({
       url: "ws://127.0.0.1:45002/rpc",
       generation: 2,
+      supervision: "attached",
     });
     expect(attached.close).not.toHaveBeenCalled();
     expect(supervisor.resolveForRecovery).not.toHaveBeenCalled();
+    expect(replayTelegramCredential).not.toHaveBeenCalled();
+    expect(activeGeneration).toBe(2);
   });
 
   it("treats a changed token at the same attached URL as a new generation", async () => {
@@ -656,6 +729,8 @@ describe("desktop main supervisor", () => {
       status: "connected" as const,
       url: "ws://127.0.0.1:45001/rpc" as const,
       token: "s".repeat(43),
+      athleteHome: "/synthetic/athlete",
+      rendererCapability: capability("r"),
       owner: "service-managed" as const,
       supervision: "attached" as const,
       close: vi.fn(async () => {}),
@@ -676,6 +751,72 @@ describe("desktop main supervisor", () => {
     expect(attached.close).not.toHaveBeenCalled();
   });
 
+  it("treats a changed renderer capability as a new attached generation", async () => {
+    const attached = {
+      status: "connected" as const,
+      url: "ws://127.0.0.1:45001/rpc" as const,
+      token: "s".repeat(43),
+      athleteHome: "/synthetic/athlete",
+      rendererCapability: capability("r"),
+      owner: "service-managed" as const,
+      supervision: "attached" as const,
+      close: vi.fn(async () => {}),
+    };
+    const successor = {
+      ...attached,
+      rendererCapability: capability("q"),
+      close: vi.fn(async () => {}),
+    };
+    const supervisor = {
+      resolveForRecovery: vi.fn(),
+      reobserveAttached: vi.fn(async () => successor),
+      close: vi.fn(async () => {}),
+    };
+    const runtime = new DesktopDaemonLifecycle(supervisor, attached);
+    runtime.start();
+
+    await expect(runtime.recover(1)).resolves.toMatchObject({
+      url: attached.url,
+      rendererCapability: capability("q"),
+      generation: 2,
+    });
+    expect(attached.close).not.toHaveBeenCalled();
+  });
+
+  it("never publishes an attached successor for a different athlete home", async () => {
+    const attached = {
+      status: "connected" as const,
+      url: "ws://127.0.0.1:45001/rpc" as const,
+      token: "s".repeat(43),
+      athleteHome: "/synthetic/athlete",
+      rendererCapability: capability("r"),
+      owner: "service-managed" as const,
+      supervision: "attached" as const,
+      close: vi.fn(async () => {}),
+    };
+    const successor = {
+      ...attached,
+      athleteHome: "/synthetic/other-athlete",
+      rendererCapability: capability("q"),
+      close: vi.fn(async () => {}),
+    };
+    const supervisor = {
+      resolveForRecovery: vi.fn(),
+      reobserveAttached: vi.fn(async () => successor),
+      close: vi.fn(async () => {}),
+    };
+    const runtime = new DesktopDaemonLifecycle(supervisor, attached);
+    runtime.start();
+
+    await expect(runtime.recover(1)).rejects.toThrow("desktop daemon home mismatch");
+    expect(successor.close).toHaveBeenCalledOnce();
+    expect(runtime.snapshot()).toEqual({
+      status: "terminal",
+      generation: 1,
+      cause: "unavailable",
+    });
+  });
+
   it("shares one three-attempt budget after attached re-observation", async () => {
     let now = 0;
     const delays: number[] = [];
@@ -691,6 +832,8 @@ describe("desktop main supervisor", () => {
       status: "connected" as const,
       url: "ws://127.0.0.1:45001/rpc" as const,
       token: "s".repeat(43),
+      athleteHome: "/synthetic/athlete",
+      rendererCapability: capability("r"),
       owner: "service-managed" as const,
       supervision: "attached" as const,
       close: vi.fn(async () => {}),

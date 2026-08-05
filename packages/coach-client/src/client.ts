@@ -1,4 +1,5 @@
 import {
+  AthleteHomeIdentitySchema,
   COACH_RPC_METHOD_REGISTRY,
   parseCoachRpcEnvelope,
   serializeCoachRpcEnvelope,
@@ -32,6 +33,7 @@ import { resolveCoachWebSocketFactory, type CoachWebSocketFactory } from "./tran
 export interface ConnectCoachClientOptions {
   readonly url: string;
   readonly token: string;
+  readonly expectedAthleteHome?: string;
   readonly signal?: AbortSignal;
   readonly connectTimeoutMs?: number;
   readonly handshakeTimeoutMs?: number;
@@ -78,6 +80,7 @@ export type CoachClientTerminalObserver = (
 interface ValidatedOptions {
   readonly url: string;
   readonly token: string;
+  readonly expectedAthleteHome: string | undefined;
   readonly signal: AbortSignal | undefined;
   readonly connectTimeoutMs: number;
   readonly handshakeTimeoutMs: number;
@@ -121,6 +124,24 @@ const COACH_RPC_CALL_TIMEOUT_MS: Record<CoachRpcMethodName, number> = {
   getRuntimeConfig: 30_000,
   getUnitsPreference: 30_000,
   setUnitsPreference: 30_000,
+  configureTelegram: 30_000,
+  enableTelegram: 30_000,
+  disableTelegram: 30_000,
+  suspendTelegramPolling: 30_000,
+  resumeTelegramPolling: 30_000,
+  drainTelegram: 30_000,
+  replaceTelegram: 30_000,
+  getTelegramStatus: 30_000,
+  reconcileTelegram: 30_000,
+  inspectTelegramCredential: 30_000,
+  deleteTelegramWebhook: 30_000,
+  forgetTelegramCredential: 30_000,
+  resetTelegramAccess: 30_000,
+  beginTelegramPairing: 30_000,
+  cancelTelegramPairing: 30_000,
+  listTelegramAllowedSenders: 30_000,
+  addTelegramAllowedSender: 30_000,
+  removeTelegramAllowedSender: 30_000,
   getSpendSummary: 30_000,
   setDailySpendCap: 30_000,
   selfTest: 2 * 60_000,
@@ -146,6 +167,8 @@ function validateOptions(options: ConnectCoachClientOptions): ValidatedOptions {
     typeof options.url !== "string" ||
     typeof options.token !== "string" ||
     options.token.length === 0 ||
+    (options.expectedAthleteHome !== undefined &&
+      !AthleteHomeIdentitySchema.safeParse(options.expectedAthleteHome).success) ||
     !positiveSafeInteger(connectTimeoutMs) ||
     !positiveSafeInteger(handshakeTimeoutMs) ||
     !positiveSafeInteger(closeTimeoutMs) ||
@@ -178,6 +201,7 @@ function validateOptions(options: ConnectCoachClientOptions): ValidatedOptions {
   return {
     url: options.url,
     token: options.token,
+    expectedAthleteHome: options.expectedAthleteHome,
     signal: options.signal,
     connectTimeoutMs,
     handshakeTimeoutMs,
@@ -654,6 +678,7 @@ export async function connectCoachClient(options: ConnectCoachClientOptions): Pr
     binding = await performCoachClientHandshake({
       socket,
       token: validated.token,
+      expectedAthleteHome: validated.expectedAthleteHome,
       timeoutMs: validated.handshakeTimeoutMs,
       onReadyFrame: runtime.handleRawFrame,
     });

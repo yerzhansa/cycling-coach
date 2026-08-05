@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { cp, mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { createPackage, createPackageWithOptions } from "@electron/asar";
 import { afterEach, describe, expect, it } from "vitest";
@@ -27,6 +28,88 @@ const exclusions = [
   "!**/node_modules/@anthropic-ai/claude-agent-sdk-*",
   "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**",
 ];
+const telegramRuntimePackages = [
+  {
+    name: "@enduragent/core",
+    root: "node_modules/@enduragent/core",
+    main: "dist/index.js",
+    dependencies: { grammy: "1.42.0", "@grammyjs/auto-retry": "2.0.2" },
+  },
+  {
+    name: "grammy",
+    root: "node_modules/grammy",
+    main: "out/mod.js",
+    dependencies: {
+      "@grammyjs/types": "3.26.0",
+      "abort-controller": "3.0.0",
+      debug: "4.4.3",
+      "node-fetch": "2.7.0",
+    },
+  },
+  {
+    name: "@grammyjs/auto-retry",
+    root: "node_modules/@grammyjs/auto-retry",
+    main: "out/mod.js",
+    dependencies: { debug: "4.4.3" },
+  },
+  {
+    name: "@grammyjs/types",
+    root: "node_modules/@grammyjs/types",
+    main: "mod.js",
+    dependencies: {},
+  },
+  {
+    name: "abort-controller",
+    root: "node_modules/abort-controller",
+    main: "dist/abort-controller",
+    entry: "dist/abort-controller.js",
+    dependencies: { "event-target-shim": "5.0.1" },
+  },
+  {
+    name: "event-target-shim",
+    root: "node_modules/event-target-shim",
+    main: "dist/event-target-shim",
+    entry: "dist/event-target-shim.js",
+    dependencies: {},
+  },
+  {
+    name: "debug",
+    root: "node_modules/debug",
+    main: "src/index.js",
+    dependencies: { ms: "2.1.3" },
+  },
+  {
+    name: "ms",
+    root: "node_modules/ms",
+    main: "./index",
+    entry: "index.js",
+    dependencies: {},
+  },
+  {
+    name: "node-fetch",
+    root: "node_modules/node-fetch",
+    main: "lib/index.js",
+    dependencies: { "whatwg-url": "5.0.0" },
+  },
+  {
+    name: "whatwg-url",
+    root: "node_modules/whatwg-url",
+    main: "lib/public-api.js",
+    dependencies: { tr46: "0.0.3", "webidl-conversions": "3.0.1" },
+  },
+  {
+    name: "tr46",
+    root: "node_modules/tr46",
+    main: "index.js",
+    dependencies: {},
+  },
+  {
+    name: "webidl-conversions",
+    root: "node_modules/webidl-conversions",
+    main: "lib/index.js",
+    dependencies: {},
+  },
+] as const;
 
 afterEach(async () => {
   await Promise.all(
@@ -126,16 +209,32 @@ async function syntheticPackage(): Promise<SyntheticPackage> {
     writeArchive("out/main/index.js"),
     writeArchive("out/main/daemon-utility.js"),
     writeArchive("out/preload/index.cjs"),
+    writeArchive("out/preload/tray.cjs"),
     writeArchive("out/renderer/index.html", "<!doctype html>\n"),
     writeArchive("out/renderer/tray.html", "<!doctype html>\n"),
     writeArchive("package.json", sourceManifestBytes),
     writeArchive("resources/self-test/matrix.json", matrix),
     writeArchive("resources/self-test/matrix.sha256", matrixChecksum),
+    ...telegramRuntimePackages.flatMap((runtimePackage) => [
+      writeArchive(
+        `${runtimePackage.root}/package.json`,
+        `${JSON.stringify({
+          name: runtimePackage.name,
+          version: "1.0.0",
+          main: runtimePackage.main,
+          dependencies: runtimePackage.dependencies,
+        })}\n`,
+      ),
+      writeArchive(
+        `${runtimePackage.root}/${"entry" in runtimePackage ? runtimePackage.entry : runtimePackage.main}`,
+      ),
+    ]),
   ]);
 
   const rebuild = async (): Promise<void> => {
     await rm(join(resources, "app.asar"), { force: true });
-    await createPackage(archiveSource, join(resources, "app.asar"));
+    const archive = await createPackage(archiveSource, join(resources, "app.asar"));
+    await finished(archive);
   };
   await rebuild();
   await cp(join(externalSource, "self-test"), externalPackaged, { recursive: true });
@@ -158,6 +257,32 @@ describe("desktop package layout", () => {
       verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
     ).resolves.toBeUndefined();
   });
+
+  it.each(["index.cjs", "tray.cjs"])(
+    "rejects a sandboxed %s preload with a relative runtime dependency",
+    async (preload) => {
+      const fixture = await syntheticPackage();
+      await fixture.writeArchive(`out/preload/${preload}`, 'require("./chunks/shared.cjs");\n');
+      await fixture.rebuild();
+
+      await expect(
+        verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+      ).rejects.toThrow("sandboxed preload has a relative runtime dependency");
+    },
+  );
+
+  it.each(telegramRuntimePackages.slice(1))(
+    "rejects a missing Telegram runtime dependency entry for $name",
+    async (runtimePackage) => {
+      const fixture = await syntheticPackage();
+      const entry = "entry" in runtimePackage ? runtimePackage.entry : runtimePackage.main;
+      await rm(join(fixture.archiveSource, runtimePackage.root, entry));
+      await fixture.rebuild();
+      await expect(
+        verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+      ).rejects.toThrow("Telegram runtime dependency entry is missing from ASAR");
+    },
+  );
 
   it("keeps ordinary packages byte-exact and updater-inert", async () => {
     const canonical = await syntheticPackage();
@@ -620,9 +745,12 @@ describe("desktop package layout", () => {
     const declared = await syntheticPackage();
     await declared.writeArchive("native/addon.node", "synthetic native bytes\n");
     await rm(join(declared.resources, "app.asar"));
-    await createPackageWithOptions(declared.archiveSource, join(declared.resources, "app.asar"), {
-      unpack: "**/*.node",
-    });
+    const archive = await createPackageWithOptions(
+      declared.archiveSource,
+      join(declared.resources, "app.asar"),
+      { unpack: "**/*.node" },
+    );
+    await finished(archive);
     await expect(
       verifyPackageLayout(declared.app, { desktopRoot: declared.desktop }),
     ).resolves.toBeUndefined();

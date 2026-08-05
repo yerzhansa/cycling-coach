@@ -1,50 +1,30 @@
 import type { CoachEngine, CoachOperations } from "@enduragent/coach-contract";
-import type { AthleteHome } from "@enduragent/kernel-node/home";
+import type { ConfirmationGate } from "@enduragent/core";
+import { prepareAthleteHome, type AthleteHome } from "@enduragent/kernel-node/home";
 import type { WriterProtocolListener } from "@enduragent/kernel-node/lock";
 import { createLocalCoachComposition, type LocalCoachComposition } from "./composition.js";
 import type { SpendMeterService } from "./spend-meter.js";
-import {
-  migrateLegacyHomeUnderLock,
-  type LegacyMigrationAction,
-  type LegacyMigrationResult,
-} from "./legacy-migration.js";
 import { checkHomeReadiness, type ReadinessFailure } from "./readiness.js";
 import { withCoachStoreWriter } from "./runtime.js";
 
 export interface LocalCoachLifecycle {
+  readonly home: AthleteHome;
   readonly engine: CoachEngine;
   readonly operations: CoachOperations;
   readonly spendMeter: SpendMeterService;
+  readonly confirmations: Pick<ConfirmationGate, "peek" | "confirm" | "cancel">;
   readonly listener: WriterProtocolListener;
   close(): Promise<void>;
 }
 
 export type LocalCoachRunResult<T> =
   | { readonly status: "completed"; readonly value: T }
-  | ReadinessFailure
-  | {
-      readonly status: "migration-refused";
-      readonly result: Extract<LegacyMigrationResult, { status: "refused" }>;
-    }
-  | {
-      readonly status: "migration-discarded";
-      readonly result: Extract<LegacyMigrationResult, { status: "discarded" }>;
-    };
+  | ReadinessFailure;
 
 export interface WithLocalCoachInput<T> {
   readonly env: Record<string, string | undefined>;
   readonly home: AthleteHome;
-  readonly sourceRoot: string;
-  readonly action: LegacyMigrationAction;
   readonly operation: (lifecycle: LocalCoachLifecycle) => Promise<T>;
-}
-
-type MigrationTerminalResult = Extract<LegacyMigrationResult, { status: "refused" | "discarded" }>;
-
-class MigrationTerminal extends Error {
-  constructor(readonly result: MigrationTerminalResult) {
-    super("Legacy migration terminated before store open.");
-  }
 }
 
 type WriterValue<T> =
@@ -61,49 +41,21 @@ function sameHome(left: AthleteHome, right: AthleteHome): boolean {
   );
 }
 
-function migrationTerminal(error: unknown): MigrationTerminal | undefined {
-  const visited = new Set<unknown>();
-  let candidate = error;
-  while (
-    candidate !== null &&
-    (typeof candidate === "object" || typeof candidate === "function") &&
-    !visited.has(candidate)
-  ) {
-    if (candidate instanceof MigrationTerminal) return candidate;
-    visited.add(candidate);
-    candidate = (candidate as { readonly cause?: unknown }).cause;
-  }
-  return undefined;
-}
-
-function migrationResult<T>(terminal: MigrationTerminal): LocalCoachRunResult<T> {
-  return terminal.result.status === "refused"
-    ? { status: "migration-refused", result: terminal.result }
-    : { status: "migration-discarded", result: terminal.result };
-}
-
 export async function withLocalCoach<T>(
   input: WithLocalCoachInput<T>,
 ): Promise<LocalCoachRunResult<T>> {
   if (typeof input.operation !== "function") {
     throw new TypeError("invalid local coach operation");
   }
-  const writerEnv = { ...input.env, ENDURAGENT_HOME: input.home.root };
+  const selectedHome = await prepareAthleteHome(input.home);
+  const writerEnv = { ...input.env, ENDURAGENT_HOME: selectedHome.root };
   let operationOutcome: Extract<WriterValue<T>, { kind: "rejected" }> | undefined;
   let writerValue: WriterValue<T>;
   try {
     writerValue = await withCoachStoreWriter(writerEnv, {
       beforeStoreOpen: async (resolvedHome) => {
-        if (!sameHome(resolvedHome, input.home)) {
+        if (!sameHome(resolvedHome, selectedHome)) {
           throw new TypeError("Writer home does not match the selected athlete home.");
-        }
-        const result = await migrateLegacyHomeUnderLock({
-          sourceRoot: input.sourceRoot,
-          targetRoot: input.home.root,
-          action: input.action,
-        });
-        if (result.status === "refused" || result.status === "discarded") {
-          throw new MigrationTerminal(result);
         }
       },
       operation: async (context): Promise<WriterValue<T>> => {
@@ -114,6 +66,10 @@ export async function withLocalCoach<T>(
             result: readiness,
           };
         }
+        const compositionConfig =
+          readiness.config.dataDir === selectedHome.root
+            ? readiness.config
+            : { ...readiness.config, dataDir: selectedHome.root };
         let lifecycle: LocalCoachComposition | undefined;
         let lifecycleCloseOutcome: { kind: "succeeded" } | { kind: "failed"; error: unknown } = {
           kind: "succeeded",
@@ -122,9 +78,9 @@ export async function withLocalCoach<T>(
         try {
           lifecycle = await createLocalCoachComposition({
             env: writerEnv,
-            home: input.home,
+            home: selectedHome,
             context,
-            config: readiness.config,
+            config: compositionConfig,
             engineConfig: readiness.engineConfig,
           });
           const publishedLifecycle = lifecycle;
@@ -132,9 +88,11 @@ export async function withLocalCoach<T>(
             outcome = {
               kind: "fulfilled",
               value: await input.operation({
+                home: selectedHome,
                 engine: publishedLifecycle.engine,
                 operations: publishedLifecycle.operations,
                 spendMeter: publishedLifecycle.spendMeter,
+                confirmations: publishedLifecycle.confirmations,
                 listener: context.listener,
                 close: () => publishedLifecycle.close(),
               }),
@@ -159,8 +117,6 @@ export async function withLocalCoach<T>(
       },
     });
   } catch (error) {
-    const terminal = migrationTerminal(error);
-    if (terminal !== undefined) return migrationResult(terminal);
     if (operationOutcome !== undefined) throw operationOutcome.error;
     throw error;
   }

@@ -20,7 +20,6 @@ export function createSecuritySmokeEnvironment(scratchRoot, outputDirectory) {
   const athleteHome = join(normalizedScratchRoot, "athlete-home");
   const configDirectory = join(athleteHome, "config");
   const operatorHome = join(normalizedScratchRoot, "operator-home");
-  const legacyHome = join(normalizedScratchRoot, "legacy-home");
   const electronUserData = join(normalizedScratchRoot, "electron-user-data");
   const screenshotDirectory = outputDirectory ?? normalizedScratchRoot;
   const screenshotPath = join(screenshotDirectory, "desktop-security.png");
@@ -29,7 +28,6 @@ export function createSecuritySmokeEnvironment(scratchRoot, outputDirectory) {
     athleteHome,
     configDirectory,
     operatorHome,
-    legacyHome,
     electronUserData,
     outputDirectory,
     screenshotDirectory,
@@ -37,7 +35,6 @@ export function createSecuritySmokeEnvironment(scratchRoot, outputDirectory) {
     launchEnvironment: {
       HOME: operatorHome,
       ENDURAGENT_HOME: athleteHome,
-      CYCLING_COACH_HOME: legacyHome,
       FORCE_COLOR: undefined,
       CLICOLOR_FORCE: undefined,
     },

@@ -323,4 +323,33 @@ describe("credential settings controller", () => {
       focus: { target: "delete", credential: "anthropic" },
     });
   });
+
+  it("reports deletion uncertainty neutrally and requires repair before another action", async () => {
+    const { controller, subject } = createSubject({
+      deletion: {
+        slot: "anthropic",
+        status: "uncertain",
+        reason: "storage-uncertain",
+      },
+    });
+    await controller.activate();
+
+    subject.requestDelete("anthropic");
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(controller.state().status).toBe("error"));
+
+    expect(controller.state()).toMatchObject({
+      status: "error",
+      kind: "delete",
+      reason: "storage-uncertain",
+      confirmation: null,
+      announcement:
+        "Credential deletion could not be confirmed because secure storage could not be verified. Restart Enduragent and reload before trying again.",
+      focus: null,
+    });
+    const announcement = content(controller.state()).announcement.toLowerCase();
+    expect(announcement).not.toContain("credential deleted");
+    expect(announcement).not.toContain("remains stored");
+    expect(announcement).not.toContain("was not deleted");
+  });
 });

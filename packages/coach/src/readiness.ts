@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import {
   engineConfigFromConfig,
@@ -27,6 +27,7 @@ export type ReadinessResult =
 
 export interface ReadinessDependencies {
   readonly readConfigFile: (path: string, encoding: "utf8") => Promise<string>;
+  readonly resolvePhysicalPath?: (path: string) => Promise<string>;
   readonly loadConfig: (
     yaml: Record<string, unknown>,
     configDir: string,
@@ -37,6 +38,7 @@ export interface ReadinessDependencies {
 
 const readinessDependencies: ReadinessDependencies = {
   readConfigFile: readFile,
+  resolvePhysicalPath: realpath,
   loadConfig: loadConfigFromYaml,
   projectConfig: engineConfigFromConfig,
 };
@@ -87,7 +89,12 @@ export async function checkHomeReadiness(
     const config = dependencies.loadConfig(yaml, home.configDir, {
       defaultDataDir: home.root,
     });
-    if (config.dataDir !== home.root) return { status: "malformed" };
+    const resolvePhysicalPath = dependencies.resolvePhysicalPath ?? realpath;
+    const [configuredDataDir, selectedHome] = await Promise.all([
+      resolvePhysicalPath(config.dataDir),
+      resolvePhysicalPath(home.root),
+    ]);
+    if (configuredDataDir !== selectedHome) return { status: "malformed" };
     const engineConfig = dependencies.projectConfig(config);
     return { status: "ready", config, engineConfig };
   } catch {

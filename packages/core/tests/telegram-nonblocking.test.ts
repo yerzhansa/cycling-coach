@@ -37,6 +37,7 @@ interface StubAgent {
   chat: ReturnType<typeof vi.fn>;
   hasSession: ReturnType<typeof vi.fn>;
   resetSession: ReturnType<typeof vi.fn>;
+  getAthleteState: ReturnType<typeof vi.fn>;
 }
 
 interface StubReference {
@@ -74,18 +75,30 @@ async function buildBot(opts?: { reference?: StubReference }): Promise<BuildBotR
     chat: vi.fn(),
     hasSession: vi.fn(),
     resetSession: vi.fn(),
+    getAthleteState: vi.fn(),
   };
 
-  const { createTelegramBot } = await import("../src/channels/telegram.js");
-  const { drainPending } = createTelegramBot(
-    "FAKE_TOKEN",
-    agent as unknown as Parameters<typeof createTelegramBot>[1],
-    cyclingBinary,
+  const [{ createTelegramBot }, { createNpmTelegramHost }] = await Promise.all([
+    import("../src/channels/telegram.js"),
+    import("../src/channels/npm-telegram-host.js"),
+  ]);
+  const host = createNpmTelegramHost({
+    binary: cyclingBinary,
+    confirmations: {
+      peek: vi.fn(),
+      confirm: vi.fn(),
+      cancel: vi.fn(),
+    },
     dataDir,
-    opts?.reference === undefined
-      ? undefined
-      : (opts.reference as unknown as Parameters<typeof createTelegramBot>[4]),
-  );
+    ...(opts?.reference === undefined ? {} : { reference: opts.reference as never }),
+  });
+  const { drainPending } = createTelegramBot({
+    webhookPolicy: "delete-before-polling",
+    token: "FAKE_TOKEN",
+    engine: agent as never,
+    host,
+    dataDir,
+  });
 
   return { bot, agent, drainPending };
 }
@@ -151,7 +164,7 @@ describe("non-blocking dispatch", () => {
     const g = gate();
     agent.chat.mockImplementation(async () => {
       await g.promise;
-      return "the plan";
+      return { text: "the plan" };
     });
     const ctx = makeCtx();
 
@@ -171,11 +184,11 @@ describe("non-blocking dispatch", () => {
     const g = gate();
     agent.chat.mockImplementation(async () => {
       await g.promise;
-      return "done";
+      return { text: "done" };
     });
 
     const longCtx = makeCtx({ chat: { id: 100 }, message: { text: "build me a plan" } });
-    agent.hasSession.mockReturnValue(true);
+    agent.hasSession.mockResolvedValue({ hasSession: true });
     await getMessageText(bot)(longCtx);
 
     const versionCtx = makeCtx({ chat: { id: 200 } });
@@ -212,13 +225,13 @@ describe("non-blocking dispatch", () => {
   it("same-chat dispatches reach agent.chat in send order; ordering is the agent's lock, not a channel lock", async () => {
     const { bot, agent, drainPending } = await buildBot();
     const chatOrder: string[] = [];
-    agent.chat.mockImplementation(async (_chatId: string, message: string) => {
+    agent.chat.mockImplementation(async ({ message }: { message: string }) => {
       chatOrder.push(message);
-      return "ok";
+      return { text: "ok" };
     });
     const ctxA = makeCtx({ chat: { id: 333 }, message: { text: "first" } });
     const ctxB = makeCtx({ chat: { id: 333 }, message: { text: "second" } });
-    agent.hasSession.mockReturnValue(true);
+    agent.hasSession.mockResolvedValue({ hasSession: true });
 
     // Advance past the coalesce window between sends so each message is its
     // own turn (fragments inside the window are a single coalesced turn —
@@ -234,8 +247,8 @@ describe("non-blocking dispatch", () => {
       vi.useRealTimers();
     }
 
-    expect(agent.chat).toHaveBeenCalledWith("telegram:333", "first", undefined);
-    expect(agent.chat).toHaveBeenCalledWith("telegram:333", "second", undefined);
+    expect(agent.chat).toHaveBeenCalledWith({ chatId: "telegram:333", message: "first" });
+    expect(agent.chat).toHaveBeenCalledWith({ chatId: "telegram:333", message: "second" });
     // The synchronous handler prologue captures each message before dispatching,
     // so the two turns must reach agent.chat in send order. A future change that
     // awaited anything before capturing the text (reordering the prologue) would
@@ -283,7 +296,16 @@ describe("setMyCommands menu list", () => {
     const names = menu.map((c) => c.command);
     expect(names).not.toContain("sync");
     expect(names).not.toContain("snapshot");
-    for (const c of ["start", "plan", "workout", "status", "review", "version", "whatsnew", "update"]) {
+    for (const c of [
+      "start",
+      "plan",
+      "workout",
+      "status",
+      "review",
+      "version",
+      "whatsnew",
+      "update",
+    ]) {
       expect(names).toContain(c);
     }
   });

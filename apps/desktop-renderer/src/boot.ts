@@ -22,6 +22,7 @@ import {
   createCredentialSettingsAdapter,
 } from "./state/adapters/settings.js";
 import { createSpendSettingsAdapter } from "./state/adapters/spend.js";
+import { createTelegramSettingsAdapter } from "./state/adapters/telegram.js";
 import { createManualSyncViewAdapter } from "./state/adapters/sync.js";
 import { createTrainingViewAdapter } from "./state/adapters/training.js";
 import { createUpdateSettingsAdapter } from "./state/adapters/update.js";
@@ -41,6 +42,7 @@ import { createDesktopUpdateController } from "./update/controller.js";
 import { createProviderModelSettingsController } from "./settings/provider-model-controller.js";
 import { createAthleteSettingsController } from "./settings/athlete-controller.js";
 import { createSessionSettingsController } from "./settings/session-controller.js";
+import { createTelegramSettingsController } from "./settings/telegram-controller.js";
 import { createCredentialSettingsController } from "./settings/credential-controller.js";
 import { createRideImportController, subscribeToDroppedRideImports } from "./ride-import.js";
 
@@ -251,6 +253,7 @@ export function bootRenderer(): Disposer {
     credentialSettingsController.close();
     athleteSettingsController.close();
     sessionSettingsController.close();
+    telegramSettingsController.close();
   };
   const openSetupFromSettings = (): void => {
     closePanes();
@@ -268,6 +271,9 @@ export function bootRenderer(): Disposer {
   });
   const conversationAdapter = createConversationSettingsAdapter({
     publish: (state) => store.getState().patchSettings({ conversation: state }),
+  });
+  const telegramAdapter = createTelegramSettingsAdapter({
+    publish: (state) => store.getState().patchSettings({ telegram: state }),
   });
   const sessionSettingsController = createSessionSettingsController({
     clients,
@@ -297,6 +303,26 @@ export function bootRenderer(): Disposer {
     beginMutation: () => store.getState().beginSettingsMutation("provider-model"),
     view: coachAdapter.view,
   });
+  const telegramSettingsController = createTelegramSettingsController({
+    bridge: {
+      status: () => window.enduragentAuth.telegramStatus(),
+      pasteTokenFromClipboard: () => window.enduragentAuth.pasteTelegramTokenFromClipboard(),
+      enable: () => window.enduragentAuth.enableTelegram(),
+      disable: () => window.enduragentAuth.disableTelegram(),
+      remove: () => window.enduragentAuth.removeTelegram(),
+      reconcile: () => window.enduragentAuth.reconcileTelegram(),
+      removeWebhook: () => window.enduragentAuth.removeTelegramWebhook(),
+      beginPairing: () => window.enduragentAuth.beginTelegramPairing(),
+      cancelPairing: () => window.enduragentAuth.cancelTelegramPairing(),
+      acknowledgeGapWarning: () => window.enduragentAuth.acknowledgeTelegramGapWarning(),
+      listAllowedSenders: () => window.enduragentAuth.listTelegramAllowedSenders(),
+      addAllowedSender: (senderId) => window.enduragentAuth.addTelegramAllowedSender({ senderId }),
+      removeAllowedSender: (senderId) =>
+        window.enduragentAuth.removeTelegramAllowedSender({ senderId }),
+    },
+    beginMutation: () => store.getState().beginSettingsMutation("telegram"),
+    view: telegramAdapter.view,
+  });
   store.getState().bindSettingsPorts({
     panes: {
       activate() {
@@ -304,6 +330,7 @@ export function bootRenderer(): Disposer {
         void credentialSettingsController.activate();
         void athleteSettingsController.activate();
         void sessionSettingsController.activate();
+        void telegramSettingsController.activate();
       },
       close: closePanes,
     },
@@ -311,6 +338,7 @@ export function bootRenderer(): Disposer {
     credentials: credentialAdapter.port,
     athlete: athleteAdapter.port,
     conversation: conversationAdapter.port,
+    telegram: telegramAdapter.port,
     spend: spendAdapter.port,
     update: updateAdapter.port,
     releaseNotes: releaseNotesAdapter.port,
@@ -360,6 +388,7 @@ export function bootRenderer(): Disposer {
     credentialSettingsController.dispose();
     athleteSettingsController.dispose();
     sessionSettingsController.dispose();
+    telegramSettingsController.dispose();
     disposeDroppedRideImports();
     onboarding.dispose();
     onboardingAdapter.dispose();

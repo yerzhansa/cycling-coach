@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { APICallError } from "@ai-sdk/provider";
@@ -20,6 +20,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.doUnmock("grammy");
+  vi.doUnmock("@grammyjs/auto-retry");
   vi.doUnmock("../src/updater.js");
   vi.doUnmock("../src/channels/telegram-update-offsets.js");
 });
@@ -41,6 +42,7 @@ interface StubAgent {
   chat: ReturnType<typeof vi.fn>;
   hasSession: ReturnType<typeof vi.fn>;
   resetSession: ReturnType<typeof vi.fn>;
+  getAthleteState: ReturnType<typeof vi.fn>;
   confirmations: {
     peek: ReturnType<typeof vi.fn>;
     confirm: ReturnType<typeof vi.fn>;
@@ -58,6 +60,7 @@ interface BuildBotResult {
   agent: StubAgent;
   reference: StubReference | undefined;
   drainPending: () => Promise<void>;
+  autoRetry: ReturnType<typeof vi.fn>;
 }
 
 async function buildBot(opts?: {
@@ -83,11 +86,14 @@ async function buildBot(opts?: {
     },
     InputFile: class {},
   }));
+  const autoRetry = vi.fn((options: unknown) => ({ options }));
+  vi.doMock("@grammyjs/auto-retry", () => ({ autoRetry }));
 
   const agent: StubAgent = {
     chat: vi.fn(),
     hasSession: vi.fn(),
     resetSession: vi.fn(),
+    getAthleteState: vi.fn(),
     confirmations: {
       peek: vi.fn(() => undefined),
       confirm: vi.fn(),
@@ -96,17 +102,22 @@ async function buildBot(opts?: {
   };
 
   const { createTelegramBot } = await import("../src/channels/telegram.js");
-  const { drainPending } = createTelegramBot(
-    "FAKE_TOKEN",
-    agent as unknown as Parameters<typeof createTelegramBot>[1],
-    cyclingBinary,
+  const { createNpmTelegramHost } = await import("../src/channels/npm-telegram-host.js");
+  const host = createNpmTelegramHost({
+    binary: cyclingBinary,
+    confirmations: agent.confirmations as never,
     dataDir,
-    opts?.reference === undefined
-      ? undefined
-      : (opts.reference as unknown as Parameters<typeof createTelegramBot>[4]),
-  );
+    ...(opts?.reference === undefined ? {} : { reference: opts.reference as never }),
+  });
+  const { drainPending } = createTelegramBot({
+    webhookPolicy: "delete-before-polling",
+    token: "FAKE_TOKEN",
+    engine: agent as never,
+    host,
+    dataDir,
+  });
 
-  return { bot, agent, reference: opts?.reference, drainPending };
+  return { bot, agent, reference: opts?.reference, drainPending, autoRetry };
 }
 
 function getCommand(bot: FakeBot, name: string) {
@@ -135,11 +146,29 @@ function getBotCatch(bot: FakeBot) {
 
 interface FakeCtx {
   chat: { id: number };
+  from?: { id: number };
   match: string;
   message: { text: string; message_id?: number };
   reply: ReturnType<typeof vi.fn>;
   replyWithDocument: ReturnType<typeof vi.fn>;
   replyWithChatAction: ReturnType<typeof vi.fn>;
+}
+
+function configureAllowedSenders(primaryOperator: number, allowFrom: number[]): void {
+  writeFileSync(
+    join(dataDir, "allowed-senders.json"),
+    JSON.stringify({
+      version: 1,
+      dmPolicy: "allowlist",
+      allowFrom: allowFrom.map(String),
+      primaryOperator: String(primaryOperator),
+      capturedAt: "1998-06-01T00:00:00.000Z",
+      addedAt: Object.fromEntries(
+        allowFrom.map((senderId) => [String(senderId), "1998-06-01T00:00:00.000Z"]),
+      ),
+    }),
+    { mode: 0o600 },
+  );
 }
 
 function makeCtx(overrides?: Partial<FakeCtx>): FakeCtx {
@@ -185,6 +214,25 @@ function someReply(ctx: FakeCtx, needle: string): boolean {
 }
 
 describe("command registration", () => {
+  it("keeps outbound retry to one bounded unambiguous 429 attempt", async () => {
+    const { bot, autoRetry } = await buildBot();
+
+    expect(autoRetry).toHaveBeenCalledWith({
+      maxRetryAttempts: 1,
+      maxDelaySeconds: 5,
+      rethrowInternalServerErrors: true,
+      rethrowHttpErrors: true,
+    });
+    expect(bot.api.config.use).toHaveBeenCalledWith({
+      options: {
+        maxRetryAttempts: 1,
+        maxDelaySeconds: 5,
+        rethrowInternalServerErrors: true,
+        rethrowHttpErrors: true,
+      },
+    });
+  });
+
   it("registers all 10 commands when reference is provided", async () => {
     const reference: StubReference = { runSync: vi.fn(), loadLatest: vi.fn() };
     const { bot } = await buildBot({ reference });
@@ -238,12 +286,15 @@ describe("agent-backed commands", () => {
     "%s: agent.chat success → response routed through sendLongMessage",
     async (name) => {
       const { bot, agent, drainPending } = await buildBot();
-      agent.chat.mockResolvedValue("ok");
+      agent.chat.mockResolvedValue({ text: "ok" });
       const ctx = makeCtx();
       await getCommand(bot, name)(ctx);
       await drainPending();
       // No reference wired in this buildBot() → no per-turn anchor passed.
-      expect(agent.chat).toHaveBeenCalledWith("telegram:777", messageFor[name], undefined);
+      expect(agent.chat).toHaveBeenCalledWith({
+        chatId: "telegram:777",
+        message: messageFor[name],
+      });
       const htmlReply = ctx.reply.mock.calls.find(
         (c: unknown[]) =>
           String(c[0]).includes("ok") &&
@@ -280,11 +331,14 @@ describe("agent-backed commands", () => {
 
   it("review with args forwards the args in the chat message", async () => {
     const { bot, agent, drainPending } = await buildBot();
-    agent.chat.mockResolvedValue("ok");
+    agent.chat.mockResolvedValue({ text: "ok" });
     const ctx = makeCtx({ match: "2026-05-01" });
     await getCommand(bot, "review")(ctx);
     await drainPending();
-    expect(agent.chat).toHaveBeenCalledWith("telegram:777", "/review 2026-05-01", undefined);
+    expect(agent.chat).toHaveBeenCalledWith({
+      chatId: "telegram:777",
+      message: "/review 2026-05-01",
+    });
     expect(someReply(ctx, "Reviewing your last session (2026-05-01)...")).toBe(true);
   });
 
@@ -298,13 +352,17 @@ describe("agent-backed commands", () => {
       })),
     };
     const { bot, agent, drainPending } = await buildBot({ reference });
-    agent.chat.mockResolvedValue("ok");
+    agent.chat.mockResolvedValue({ text: "ok" });
     const ctx = makeCtx();
     await getCommand(bot, "plan")(ctx);
     await drainPending();
-    expect(agent.chat).toHaveBeenCalledWith("telegram:777", "/plan", {
-      resolvedCs: { criticalSpeedMps: 4.0, source: "platform", confidence: "high" },
-      referenceProvenance: { garmin: false, nonGarmin: false, unknown: true },
+    expect(agent.chat).toHaveBeenCalledWith({
+      chatId: "telegram:777",
+      message: "/plan",
+      turn: {
+        resolvedCs: { criticalSpeedMps: 4.0, source: "platform", confidence: "high" },
+        referenceProvenance: { garmin: false, nonGarmin: false, unknown: true },
+      },
     });
   });
 });
@@ -322,7 +380,7 @@ describe("confirmation callbacks", () => {
 
   it("renders a proposal keyboard after the turn reply", async () => {
     const { bot, agent, drainPending } = await buildBot();
-    agent.chat.mockResolvedValue("I proposed it.");
+    agent.chat.mockResolvedValue({ text: "I proposed it." });
     agent.confirmations.peek.mockReturnValue({ nonce: "server-nonce", summary: "Save plan" });
     const ctx = makeCtx();
     await getCommand(bot, "plan")(ctx);
@@ -409,7 +467,7 @@ describe("confirmation callbacks", () => {
 describe("message:text — apology vs rate-limit fork", () => {
   it("agent.chat throw → apology (NOT silence)", async () => {
     const { bot, agent, drainPending } = await buildBot();
-    agent.hasSession.mockReturnValue(true);
+    agent.hasSession.mockResolvedValue({ hasSession: true });
     agent.chat.mockRejectedValue(new Error("boom"));
     const ctx = makeCtx({ message: { text: "how's my form?" } });
     await getMessageText(bot)(ctx);
@@ -420,7 +478,7 @@ describe("message:text — apology vs rate-limit fork", () => {
 
   it("rate-limit with retry-after header → classified wait copy, no stale 'not processed' line", async () => {
     const { bot, agent, drainPending } = await buildBot();
-    agent.hasSession.mockReturnValue(true);
+    agent.hasSession.mockResolvedValue({ hasSession: true });
     agent.chat.mockRejectedValue(rateLimitError(45));
     const ctx = makeCtx({ message: { text: "plan my week" } });
     await getMessageText(bot)(ctx);
@@ -431,7 +489,7 @@ describe("message:text — apology vs rate-limit fork", () => {
 
   it("rate-limit without header → default 'about a minute' wait", async () => {
     const { bot, agent, drainPending } = await buildBot();
-    agent.hasSession.mockReturnValue(true);
+    agent.hasSession.mockResolvedValue({ hasSession: true });
     agent.chat.mockRejectedValue(new Error("rate limit"));
     const ctx = makeCtx({ message: { text: "ride plan" } });
     await getMessageText(bot)(ctx);
@@ -442,8 +500,9 @@ describe("message:text — apology vs rate-limit fork", () => {
 
 describe("retry transformer / classified errors / delivery split", () => {
   it("createSecuredBot installs the auto-retry transformer exactly once", async () => {
-    const { bot } = await buildBot();
-    expect(bot.api.config.use).toHaveBeenCalledTimes(1);
+    const { bot, autoRetry } = await buildBot();
+    expect(autoRetry).toHaveBeenCalledTimes(1);
+    expect(bot.api.config.use).toHaveBeenCalledTimes(2);
   });
 
   it("generation provider-auth error → provider-auth copy (NOT delivery copy, NOT genericReply)", async () => {
@@ -496,8 +555,8 @@ describe("retry transformer / classified errors / delivery split", () => {
 
   it("generation succeeds but delivery rejects (non-parse) → delivery copy AND the answer is resendable", async () => {
     const { bot, agent, drainPending } = await buildBot();
-    agent.hasSession.mockReturnValue(true);
-    agent.chat.mockResolvedValue("the generated answer");
+    agent.hasSession.mockResolvedValue({ hasSession: true });
+    agent.chat.mockResolvedValue({ text: "the generated answer" });
     const ctx = makeCtx({ message: { text: "how's my form?" } });
     ctx.reply.mockImplementation(async (_text: string, options?: Record<string, unknown>) => {
       if (options?.parse_mode === "HTML") {
@@ -522,8 +581,8 @@ describe("retry transformer / classified errors / delivery split", () => {
 
   it("after a successful turn, 'resend' (and '  RESEND  ') re-emit the same answer without re-running agent.chat", async () => {
     const { bot, agent, drainPending } = await buildBot();
-    agent.hasSession.mockReturnValue(true);
-    agent.chat.mockResolvedValue("cached answer body");
+    agent.hasSession.mockResolvedValue({ hasSession: true });
+    agent.chat.mockResolvedValue({ text: "cached answer body" });
     const handler = getMessageText(bot);
 
     await handler(makeCtx({ message: { text: "how's my form?" } }));
@@ -544,7 +603,7 @@ describe("retry transformer / classified errors / delivery split", () => {
 
   it("'resend' with no cached answer → guidance reply and NO agent.chat", async () => {
     const { bot, agent } = await buildBot();
-    agent.hasSession.mockReturnValue(true);
+    agent.hasSession.mockResolvedValue({ hasSession: true });
     const ctx = makeCtx({ message: { text: "resend" } });
     await getMessageText(bot)(ctx);
     expect(someReply(ctx, "I don't have a recent answer to resend.")).toBe(true);
@@ -553,8 +612,8 @@ describe("retry transformer / classified errors / delivery split", () => {
 
   it("threads the first delivered chunk to ctx.message.message_id; later chunks are unthreaded", async () => {
     const { bot, agent, drainPending } = await buildBot();
-    agent.hasSession.mockReturnValue(true);
-    agent.chat.mockResolvedValue("x".repeat(9000));
+    agent.hasSession.mockResolvedValue({ hasSession: true });
+    agent.chat.mockResolvedValue({ text: "x".repeat(9000) });
     const ctx = makeCtx({ message: { text: "long please", message_id: 4242 } });
     await getMessageText(bot)(ctx);
     await drainPending();
@@ -573,7 +632,7 @@ describe("retry transformer / classified errors / delivery split", () => {
 
   it("the stale 'was not processed (rate limited)… resend:' copy never appears", async () => {
     const { bot, agent, drainPending } = await buildBot();
-    agent.hasSession.mockReturnValue(true);
+    agent.hasSession.mockResolvedValue({ hasSession: true });
     agent.chat.mockRejectedValue(rateLimitError(30));
     const ctx = makeCtx({ message: { text: "plan my week" } });
     await getMessageText(bot)(ctx);
@@ -612,10 +671,10 @@ describe("typing-indicator heartbeat", () => {
 
     it("pulses 'typing' immediately and again each interval while agent.chat is in flight", async () => {
       const { bot, agent, drainPending } = await buildBot();
-      agent.hasSession.mockReturnValue(true);
-      let resolveChat!: (v: string) => void;
+      agent.hasSession.mockResolvedValue({ hasSession: true });
+      let resolveChat!: (v: { text: string }) => void;
       agent.chat.mockReturnValue(
-        new Promise<string>((r) => {
+        new Promise<{ text: string }>((r) => {
           resolveChat = r;
         }),
       );
@@ -636,16 +695,16 @@ describe("typing-indicator heartbeat", () => {
       expect(TYPING_HEARTBEAT_MS).toBeLessThanOrEqual(5_000);
 
       // Let the turn finish so no fake interval leaks past the test.
-      resolveChat("done");
+      resolveChat({ text: "done" });
       await drainPending();
     });
 
     it("stops the interval on normal completion — no further pulses", async () => {
       const { bot, agent, drainPending } = await buildBot();
-      agent.hasSession.mockReturnValue(true);
-      let resolveChat!: (v: string) => void;
+      agent.hasSession.mockResolvedValue({ hasSession: true });
+      let resolveChat!: (v: { text: string }) => void;
       agent.chat.mockReturnValue(
-        new Promise<string>((r) => {
+        new Promise<{ text: string }>((r) => {
           resolveChat = r;
         }),
       );
@@ -654,7 +713,7 @@ describe("typing-indicator heartbeat", () => {
       await getMessageText(bot)(ctx);
       await vi.advanceTimersByTimeAsync(TYPING_HEARTBEAT_MS);
 
-      resolveChat("the answer body");
+      resolveChat({ text: "the answer body" });
       await drainPending();
       expect(someReply(ctx, "the answer body")).toBe(true);
 
@@ -665,7 +724,7 @@ describe("typing-indicator heartbeat", () => {
 
     it("stops the interval on a generation error, and still fires the classified reply", async () => {
       const { bot, agent, drainPending } = await buildBot();
-      agent.hasSession.mockReturnValue(true);
+      agent.hasSession.mockResolvedValue({ hasSession: true });
       agent.chat.mockRejectedValue(rateLimitError(30));
       const ctx = makeCtx({ message: { text: "plan my week" } });
 
@@ -680,8 +739,8 @@ describe("typing-indicator heartbeat", () => {
 
     it("a pulse that rejects on every call never affects the turn's reply path", async () => {
       const { bot, agent, drainPending } = await buildBot();
-      agent.hasSession.mockReturnValue(true);
-      agent.chat.mockResolvedValue("the delivered answer");
+      agent.hasSession.mockResolvedValue({ hasSession: true });
+      agent.chat.mockResolvedValue({ text: "the delivered answer" });
       const ctx = makeCtx({ message: { text: "how's my form?" } });
       ctx.replyWithChatAction.mockRejectedValue(new Error("chat action failed"));
 
@@ -769,14 +828,38 @@ describe("typing-indicator heartbeat", () => {
         vi.useRealTimers();
       }
     });
+
+    it("stop returns the in-flight pulse settlement for generation drain", async () => {
+      let settle!: () => void;
+      const pulse = new Promise<void>((resolve) => {
+        settle = resolve;
+      });
+      const stop = startTypingHeartbeat(
+        () => pulse,
+        10_000,
+        () => {},
+      );
+      await Promise.resolve();
+
+      let stopped = false;
+      const stopping = stop().then(() => {
+        stopped = true;
+      });
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+
+      settle();
+      await stopping;
+      expect(stopped).toBe(true);
+    });
   });
 });
 
 describe("message:text — greet / re-greet logic", () => {
   it("first message from a newcomer (no session) → WELCOME then chat", async () => {
     const { bot, agent, drainPending } = await buildBot();
-    agent.hasSession.mockReturnValue(false);
-    agent.chat.mockResolvedValue("reply text");
+    agent.hasSession.mockResolvedValue({ hasSession: false });
+    agent.chat.mockResolvedValue({ text: "reply text" });
     const ctx = makeCtx();
     await getMessageText(bot)(ctx);
     await drainPending();
@@ -786,8 +869,8 @@ describe("message:text — greet / re-greet logic", () => {
 
   it("returning user after restart (hasSession true) is NOT re-greeted", async () => {
     const { bot, agent, drainPending } = await buildBot();
-    agent.hasSession.mockReturnValue(true);
-    agent.chat.mockResolvedValue("reply text");
+    agent.hasSession.mockResolvedValue({ hasSession: true });
+    agent.chat.mockResolvedValue({ text: "reply text" });
     const ctx = makeCtx();
     await getMessageText(bot)(ctx);
     await drainPending();
@@ -796,8 +879,8 @@ describe("message:text — greet / re-greet logic", () => {
 
   it("second message in the same process is NOT re-greeted", async () => {
     const { bot, agent, drainPending } = await buildBot();
-    agent.hasSession.mockReturnValue(false);
-    agent.chat.mockResolvedValue("reply text");
+    agent.hasSession.mockResolvedValue({ hasSession: false });
+    agent.chat.mockResolvedValue({ text: "reply text" });
     const handler = getMessageText(bot);
     const ctx = makeCtx({ chat: { id: 775 } });
     await handler(ctx);
@@ -828,11 +911,25 @@ describe("/snapshot — arg fallback", () => {
   });
 
   it("'raw' with no synced data → 'hasn't synced yet' guidance", async () => {
+    configureAllowedSenders(777, [777]);
     const reference: StubReference = { runSync: vi.fn(), loadLatest: vi.fn(() => null) };
     const { bot } = await buildBot({ reference });
-    const ctx = makeCtx({ match: "raw" });
+    const ctx = makeCtx({ from: { id: 777 }, match: "raw" });
     await getCommand(bot, "snapshot")(ctx);
     expect(someReply(ctx, "hasn't synced yet")).toBe(true);
+  });
+
+  it("denies raw data to an allowed sender who is not the primary operator", async () => {
+    configureAllowedSenders(777, [777, 888]);
+    const reference: StubReference = { runSync: vi.fn(), loadLatest: vi.fn(() => null) };
+    const { bot } = await buildBot({ reference });
+    const ctx = makeCtx({ chat: { id: 888 }, from: { id: 888 }, match: "raw wellness" });
+
+    await getCommand(bot, "snapshot")(ctx);
+
+    expect(reference.loadLatest).not.toHaveBeenCalled();
+    expect(someReply(ctx, "primary operator")).toBe(true);
+    expect(ctx.replyWithDocument).not.toHaveBeenCalled();
   });
 });
 
@@ -893,8 +990,8 @@ describe("/update — ordering invariant", () => {
     expect(selfUpdate).not.toHaveBeenCalled();
 
     releaseStop();
-    // /update chains stop → bounded drain → selfUpdate; drain the microtask
-    // queue past the intermediate Promise.race so selfUpdate is reached.
+    // /update chains stop → generation drain → selfUpdate; drain the
+    // microtask queue until selfUpdate is reached.
     for (let i = 0; i < 10; i++) await Promise.resolve();
 
     expect(selfUpdate).toHaveBeenCalledWith("cycling-coach", "2026.5.10");
@@ -1042,7 +1139,7 @@ describe("version / whatsnew / sync", () => {
 describe("long replies chunk via sendLongMessage", () => {
   it("a >4096-char agent reply arrives as multiple HTML chunks", async () => {
     const { bot, agent, drainPending } = await buildBot();
-    agent.chat.mockResolvedValue("x".repeat(9000));
+    agent.chat.mockResolvedValue({ text: "x".repeat(9000) });
     const ctx = makeCtx();
     await getCommand(bot, "status")(ctx);
     await drainPending();

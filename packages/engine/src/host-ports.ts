@@ -212,6 +212,7 @@ export interface PlatformCalendarMutationsPort {
 export interface ToolConfirmationPort {
   /** Tools this host gates. The engine registers the confirmation prompt block iff this set is non-empty. */
   readonly gatedToolNames: ReadonlySet<string>;
+  requiresConfirmation(input: { readonly chatId: string; readonly toolName: string }): boolean;
   /**
    * Record a proposal and return the value the model sees. MUST NOT invoke `run`;
    * `run` executes only when the host's own confirm surface resolves the proposal.

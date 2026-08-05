@@ -8,10 +8,12 @@ import {
   EXIT_SUCCESS,
   EXIT_VERSION_MISMATCH,
   JsonRpcResponseEnvelopeSchema,
+  Protocol11AcceptedServerHandshakeFrameSchema,
   ServerHandshakeFrameSchema,
   compareProtocolVersions,
   type AcceptedServerHandshakeFrame,
   type DaemonOwner,
+  type Protocol11AcceptedServerHandshakeFrame,
   type ServerHandshakeFrame,
   type VersionMismatchServerHandshakeFrame,
 } from "@enduragent/coach-contract";
@@ -124,7 +126,7 @@ export type CompatiblePeerWaitOutcome =
 
 export interface AuthenticatedDaemonControl {
   readonly port: number;
-  readonly accepted: AcceptedServerHandshakeFrame;
+  readonly accepted: AcceptedServerHandshakeFrame | Protocol11AcceptedServerHandshakeFrame;
   reserveUpgrade(input: {
     readonly targetProtocolVersion: number;
     readonly handoffCapability: string;
@@ -312,17 +314,30 @@ export async function classifyPeerReadOnly(home: AthleteHome): Promise<ReadOnlyP
   return { status: "writer-clear" };
 }
 
-interface OpenHandshakeResult {
+interface OpenHandshakeResult<
+  TFrame extends ServerHandshakeFrame | Protocol11AcceptedServerHandshakeFrame,
+> {
   readonly socket: WebSocket;
-  readonly frame: ServerHandshakeFrame;
+  readonly frame: TFrame;
 }
 
-function openHandshake(input: {
+interface OpenHandshakeInput {
   readonly port: number;
   readonly token: string;
   readonly clientProtocolVersion: number;
   readonly timeoutMs: number;
-}): Promise<OpenHandshakeResult> {
+  readonly acceptProtocol11Frame?: boolean;
+}
+
+function openHandshake(
+  input: OpenHandshakeInput & { readonly acceptProtocol11Frame: true },
+): Promise<OpenHandshakeResult<ServerHandshakeFrame | Protocol11AcceptedServerHandshakeFrame>>;
+function openHandshake(
+  input: OpenHandshakeInput & { readonly acceptProtocol11Frame?: false },
+): Promise<OpenHandshakeResult<ServerHandshakeFrame>>;
+function openHandshake(
+  input: OpenHandshakeInput,
+): Promise<OpenHandshakeResult<ServerHandshakeFrame | Protocol11AcceptedServerHandshakeFrame>> {
   if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65_535) {
     return Promise.reject(new Error("daemon handshake failed"));
   }
@@ -348,7 +363,10 @@ function openHandshake(input: {
       socket.removeEventListener("error", onError);
       socket.removeEventListener("close", onClose);
     };
-    const finish = (error?: Error, frame?: ServerHandshakeFrame): void => {
+    const finish = (
+      error?: Error,
+      frame?: ServerHandshakeFrame | Protocol11AcceptedServerHandshakeFrame,
+    ): void => {
       if (settled) return;
       settled = true;
       cleanup();
@@ -375,7 +393,17 @@ function openHandshake(input: {
         return;
       }
       try {
-        const frame = ServerHandshakeFrameSchema.parse(JSON.parse(data));
+        const value: unknown = JSON.parse(data);
+        const current = ServerHandshakeFrameSchema.safeParse(value);
+        const legacy = input.acceptProtocol11Frame
+          ? Protocol11AcceptedServerHandshakeFrameSchema.safeParse(value)
+          : undefined;
+        const frame = current.success
+          ? current.data
+          : legacy?.success === true
+            ? legacy.data
+            : undefined;
+        if (frame === undefined) throw new Error("invalid frame");
         if (frame.clientProtocolVersion !== input.clientProtocolVersion) {
           throw new Error("invalid echo");
         }
@@ -419,12 +447,16 @@ export async function openAuthenticatedDaemonControl(
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
     throw new TypeError("invalid daemon control timeout");
   }
-  const opened = await openHandshake({
+  const handshakeInput = {
     port: input.port,
     token: input.token,
     clientProtocolVersion: input.incumbentProtocolVersion,
     timeoutMs,
-  });
+  };
+  const opened =
+    input.incumbentProtocolVersion === 11
+      ? await openHandshake({ ...handshakeInput, acceptProtocol11Frame: true })
+      : await openHandshake(handshakeInput);
   if (
     opened.frame.status !== "accepted" ||
     opened.frame.clientProtocolVersion !== input.incumbentProtocolVersion ||
@@ -564,8 +596,11 @@ function sameHandshake(left: ServerHandshakeFrame, right: ServerHandshakeFrame):
     left.clientProtocolVersion === right.clientProtocolVersion &&
     left.serverProtocolVersion === right.serverProtocolVersion &&
     left.owner === right.owner &&
-    (left.status !== "version-mismatch" ||
-      (right.status === "version-mismatch" && left.direction === right.direction))
+    (left.status === "accepted"
+      ? right.status === "accepted" &&
+        left.athleteHome === right.athleteHome &&
+        left.rendererCapability === right.rendererCapability
+      : right.status === "version-mismatch" && left.direction === right.direction)
   );
 }
 
@@ -637,7 +672,7 @@ export async function resolveSecondStarter(
       );
     }
     if (comparison === "equal") {
-      if (observed.status !== "accepted") {
+      if (observed.status !== "accepted" || observed.athleteHome !== input.home.root) {
         return refusal(EXIT_DAEMON_UNAVAILABLE, UNTRUSTED_PEER_MESSAGE);
       }
       return compatibleResolution(input.caller, peer, observed);
@@ -814,7 +849,8 @@ export async function resolveSecondStarter(
       publishedHandshake?.success !== true ||
       publishedHandshake.data.status !== "accepted" ||
       publishedHandshake.data.clientProtocolVersion !== input.clientProtocolVersion ||
-      publishedHandshake.data.serverProtocolVersion !== input.clientProtocolVersion
+      publishedHandshake.data.serverProtocolVersion !== input.clientProtocolVersion ||
+      publishedHandshake.data.athleteHome !== input.home.root
     ) {
       await fence.release();
       return refusal(EXIT_DAEMON_UNAVAILABLE, UPGRADE_SUCCESSOR_FAILED_MESSAGE);

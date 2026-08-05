@@ -11,11 +11,13 @@ import type {
   CoachOperations,
   SpendOperations,
   OperationProgressEvent,
+  TelegramControlSnapshot,
   TurnEvent,
 } from "@enduragent/coach-contract";
 import { acquireWriteLock } from "../../../../packages/kernel-node/src/lock/index.js";
 import { createHealthzRequestHandler } from "../../../../packages/coach/src/daemon/healthz-server.js";
 import { createCoachRpcServer } from "../../../../packages/coach/src/daemon/rpc-server.js";
+import type { DesktopTelegramController } from "../../../../packages/coach/src/desktop-telegram-controller.js";
 
 export interface DesktopFixtureScript {
   readonly onRequest: (request: unknown) => readonly string[] | Promise<readonly string[]>;
@@ -48,6 +50,44 @@ interface ScriptRequest {
 
 const require = createRequire(import.meta.url);
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const disabledTelegramSnapshot: TelegramControlSnapshot = {
+  channel: { desiredState: "disabled", state: "disabled" },
+  bot: { state: "unconfigured" },
+  pairing: { state: "unpaired" },
+};
+const disabledTelegram: DesktopTelegramController = {
+  getStatus: () => disabledTelegramSnapshot,
+  configure: async () => ({ outcome: "applied", current: disabledTelegramSnapshot }),
+  enable: async () => disabledTelegramSnapshot,
+  disable: async () => disabledTelegramSnapshot,
+  replace: async () => ({ outcome: "applied", current: disabledTelegramSnapshot }),
+  reconcile: async () => disabledTelegramSnapshot,
+  inspectTelegramCredential: async () => ({
+    status: "unavailable",
+    errorCode: "telegram-validation-failed",
+  }),
+  deleteTelegramWebhook: async () => ({
+    status: "unavailable",
+    errorCode: "telegram-validation-failed",
+  }),
+  forgetTelegramCredential: async () => disabledTelegramSnapshot,
+  resetTelegramAccess: async () => disabledTelegramSnapshot,
+  beginTelegramPairing: async () => disabledTelegramSnapshot,
+  cancelTelegramPairing: async () => disabledTelegramSnapshot,
+  listTelegramAllowedSenders: async () => ({ senders: [] }),
+  addTelegramAllowedSender: async () => ({
+    outcome: "applied" as const,
+    current: { senders: [] },
+  }),
+  removeTelegramAllowedSender: async () => ({
+    outcome: "applied" as const,
+    current: { senders: [] },
+  }),
+  stopPolling: async () => disabledTelegramSnapshot,
+  resumePolling: async () => disabledTelegramSnapshot,
+  drainPending: async () => disabledTelegramSnapshot,
+  close: async () => disabledTelegramSnapshot,
+};
 
 function reservePort(): Promise<number> {
   return new Promise((resolvePort, reject) => {
@@ -369,7 +409,9 @@ export async function launchDesktopFixture(input: {
         error: { code: "RUNNER_ERROR", message: "packaged self-test failed" },
       }),
     },
+    telegram: disabledTelegram,
     token: input.token,
+    athleteHome,
     owner: "unmanaged-foreground",
   });
   const binding = await lock.listener.bind({

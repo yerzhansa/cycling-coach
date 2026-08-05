@@ -138,6 +138,7 @@ describe.skipIf(!hasLoopback)("local CLI redaction boundary", () => {
     ) => {
       const value = await withCoachStoreWriter(env, async (context) =>
         input.operation({
+          home: context.home,
           engine: coachEngine,
           operations: {
             importFiles: async ({ paths }) => ({
@@ -213,6 +214,11 @@ describe.skipIf(!hasLoopback)("local CLI redaction boundary", () => {
             }),
           },
           spendMeter,
+          confirmations: {
+            peek: () => undefined,
+            confirm: async () => ({ status: "none" }),
+            cancel: () => "none",
+          },
           listener: context.listener,
           close: async () => {},
         }),

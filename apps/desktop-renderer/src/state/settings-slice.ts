@@ -5,6 +5,7 @@ import type { AthleteSettingsState } from "../settings/athlete-controller.js";
 import type { CredentialSettingsState } from "../settings/credential-controller.js";
 import type { ProviderModelSettingsState } from "../settings/provider-model-controller.js";
 import type { SessionSettingField, SessionSettingsState } from "../settings/session-controller.js";
+import type { TelegramSettingsState } from "../settings/telegram-controller.js";
 import type { UnitsPreferenceViewState } from "../training-context/controller.js";
 import type { DesktopUpdateState } from "../update/controller.js";
 import type { EnduragentState } from "./store.js";
@@ -49,6 +50,21 @@ export interface SpendSettingsPort {
   save(): void;
 }
 
+export interface TelegramSettingsPort {
+  retry(): void;
+  pasteToken(): void;
+  enable(): void;
+  disable(): void;
+  remove(): void;
+  reconcile(): void;
+  removeWebhook(): void;
+  beginPairing(): void;
+  cancelPairing(): void;
+  acknowledgeGapWarning(): void;
+  addSender(senderId: number): void;
+  removeSender(senderId: number): void;
+}
+
 export interface UpdateSettingsPort {
   activate(): void;
 }
@@ -69,6 +85,7 @@ interface SettingsPorts {
   readonly credentials: CredentialSettingsPort;
   readonly athlete: AthleteSettingsPort;
   readonly conversation: ConversationSettingsPort;
+  readonly telegram: TelegramSettingsPort;
   readonly spend: SpendSettingsPort;
   readonly update: UpdateSettingsPort;
   readonly releaseNotes: ReleaseNotesSettingsPort;
@@ -112,6 +129,7 @@ interface SettingsSurfaceState {
   readonly credentials: CredentialSettingsState;
   readonly athlete: AthleteSettingsState;
   readonly conversation: SessionSettingsState;
+  readonly telegram: TelegramSettingsState;
   readonly spend: SpendSurfaceState;
   readonly update: UpdateSurfaceState;
   readonly releaseNotes: ReleaseNotesSurfaceState;
@@ -143,6 +161,7 @@ export const EMPTY_SETTINGS_SURFACE: SettingsSurfaceState = Object.freeze({
   credentials: CLOSED_PANE,
   athlete: CLOSED_PANE,
   conversation: CLOSED_PANE,
+  telegram: CLOSED_PANE,
   spend: EMPTY_SPEND_SURFACE,
   update: EMPTY_UPDATE_SURFACE,
   releaseNotes: Object.freeze({ status: "idle" as const }),
@@ -205,6 +224,7 @@ export const createSettingsSlice: StateCreator<EnduragentState, [], [], Settings
         credentials: CLOSED_PANE,
         athlete: CLOSED_PANE,
         conversation: CLOSED_PANE,
+        telegram: CLOSED_PANE,
       },
     });
   },

@@ -23,6 +23,7 @@ import {
   type AthleteState,
   type CoachEngine,
   type JsonRpcErrorResponseEnvelope,
+  type TelegramControlSnapshot,
 } from "@enduragent/coach-contract";
 import { resolveAthleteHome } from "@enduragent/kernel-node/home";
 import { runEnduragent } from "../../src/enduragent.js";
@@ -31,6 +32,7 @@ import {
   ensureDaemonToken,
   type CoachRpcServer,
 } from "../../src/daemon/rpc-server.js";
+import type { DesktopTelegramController } from "../../src/desktop-telegram-controller.js";
 
 const AUTH_TOKEN = "F8_AUTH_TOKEN_MUST_NOT_BE_LOGGED12345678901";
 const API_KEY_SECRET = "F8_API_KEY_MUST_NOT_ESCAPE";
@@ -43,6 +45,38 @@ const NON_ERROR_SECRET = "F8_NON_ERROR_TEXT_MUST_NOT_ESCAPE";
 const NESTED_SECRET = "F8_NESTED_AUTH_MUST_NOT_ESCAPE";
 const HOSTILE_SECRET = "F8_HOSTILE_PROXY_MUST_NOT_ESCAPE";
 const roots: string[] = [];
+const disabledTelegramSnapshot: TelegramControlSnapshot = {
+  channel: { desiredState: "disabled", state: "disabled" },
+  bot: { state: "unconfigured" },
+  pairing: { state: "unpaired" },
+};
+const disabledTelegram: DesktopTelegramController = {
+  getStatus: () => disabledTelegramSnapshot,
+  configure: async () => ({ outcome: "applied", current: disabledTelegramSnapshot }),
+  enable: async () => disabledTelegramSnapshot,
+  disable: async () => disabledTelegramSnapshot,
+  replace: async () => ({ outcome: "applied", current: disabledTelegramSnapshot }),
+  reconcile: async () => disabledTelegramSnapshot,
+  inspectTelegramCredential: async () => ({ status: "invalid-token" }),
+  deleteTelegramWebhook: async () => ({ status: "invalid-token" }),
+  forgetTelegramCredential: async () => disabledTelegramSnapshot,
+  resetTelegramAccess: async () => disabledTelegramSnapshot,
+  beginTelegramPairing: async () => disabledTelegramSnapshot,
+  cancelTelegramPairing: async () => disabledTelegramSnapshot,
+  listTelegramAllowedSenders: async () => ({ senders: [] }),
+  addTelegramAllowedSender: async () => ({
+    outcome: "applied" as const,
+    current: { senders: [] },
+  }),
+  removeTelegramAllowedSender: async () => ({
+    outcome: "applied" as const,
+    current: { senders: [] },
+  }),
+  stopPolling: async () => disabledTelegramSnapshot,
+  resumePolling: async () => disabledTelegramSnapshot,
+  drainPending: async () => disabledTelegramSnapshot,
+  close: async () => disabledTelegramSnapshot,
+};
 
 const state: AthleteState = {
   schemaVersion: "3",
@@ -138,6 +172,7 @@ interface RunningRpc {
 async function startRpc(coachEngine: CoachEngine): Promise<RunningRpc> {
   const rpc = createCoachRpcServer({
     engine: coachEngine,
+    telegram: disabledTelegram,
     selfTestOperations: {
       selfTest: async () => ({
         schemaVersion: 1,
@@ -225,6 +260,7 @@ async function startRpc(coachEngine: CoachEngine): Promise<RunningRpc> {
     },
     token: AUTH_TOKEN,
     owner: "unmanaged-foreground",
+    athleteHome: "/tmp/enduragent-redaction-rpc-test",
   });
   const server = createServer();
   server.on("upgrade", rpc.handleUpgrade);

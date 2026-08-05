@@ -19,6 +19,53 @@ export const ProtocolVersionNumberSchema = z
   .max(Number.MAX_SAFE_INTEGER);
 export type ProtocolVersionNumber = z.infer<typeof ProtocolVersionNumberSchema>;
 
+function isCanonicalAbsoluteAthleteHome(value: string): boolean {
+  if (value.includes("\0")) return false;
+  if (value === "/") return true;
+  if (value.startsWith("/")) {
+    if (value.endsWith("/") || value.includes("//")) return false;
+    return value
+      .slice(1)
+      .split("/")
+      .every((segment) => segment !== "" && segment !== "." && segment !== "..");
+  }
+  if (/^[A-Za-z]:\\$/.test(value)) return true;
+  if (/^[A-Za-z]:\\/.test(value)) {
+    if (value.endsWith("\\") || value.includes("/")) return false;
+    return value
+      .slice(3)
+      .split("\\")
+      .every((segment) => segment !== "" && segment !== "." && segment !== "..");
+  }
+  if (value.startsWith("\\\\")) {
+    if (value.endsWith("\\") || value.includes("/")) return false;
+    const segments = value.slice(2).split("\\");
+    return (
+      segments.length >= 2 &&
+      segments.every((segment) => segment !== "" && segment !== "." && segment !== "..")
+    );
+  }
+  return false;
+}
+
+export const AthleteHomeIdentitySchema = z
+  .string()
+  .min(1)
+  .max(32_767)
+  .refine(isCanonicalAbsoluteAthleteHome, "athlete home must be a canonical absolute path");
+export type AthleteHomeIdentity = z.infer<typeof AthleteHomeIdentitySchema>;
+
+export const RendererCapabilitySchema = z.string().regex(/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/);
+export type RendererCapability = z.infer<typeof RendererCapabilitySchema>;
+
+export const AcceptedServerHandshakeBindingSchema = z
+  .object({
+    athleteHome: AthleteHomeIdentitySchema,
+    rendererCapability: RendererCapabilitySchema,
+  })
+  .strict();
+export type AcceptedServerHandshakeBinding = z.infer<typeof AcceptedServerHandshakeBindingSchema>;
+
 export const ClientHandshakeFrameSchema = z
   .object({
     type: z.literal("handshake"),
@@ -28,27 +75,46 @@ export const ClientHandshakeFrameSchema = z
   .strict();
 export type ClientHandshakeFrame = z.infer<typeof ClientHandshakeFrameSchema>;
 
+export const Protocol11AcceptedServerHandshakeFrameSchema = z
+  .object({
+    type: z.literal("handshake"),
+    status: z.literal("accepted"),
+    clientProtocolVersion: z.literal(11),
+    serverProtocolVersion: z.literal(11),
+    owner: DaemonOwnerSchema,
+  })
+  .strict();
+export type Protocol11AcceptedServerHandshakeFrame = z.infer<
+  typeof Protocol11AcceptedServerHandshakeFrameSchema
+>;
+
+export const AcceptedServerHandshakeFrameSchema = z
+  .object({
+    type: z.literal("handshake"),
+    status: z.literal("accepted"),
+    clientProtocolVersion: z.literal(PROTOCOL_VERSION),
+    serverProtocolVersion: z.literal(PROTOCOL_VERSION),
+    owner: DaemonOwnerSchema,
+    athleteHome: AthleteHomeIdentitySchema,
+    rendererCapability: RendererCapabilitySchema,
+  })
+  .strict();
+
+export const VersionMismatchServerHandshakeFrameSchema = z
+  .object({
+    type: z.literal("handshake"),
+    status: z.literal("version-mismatch"),
+    clientProtocolVersion: ProtocolVersionNumberSchema,
+    serverProtocolVersion: ProtocolVersionNumberSchema,
+    direction: ProtocolVersionDirectionSchema,
+    owner: DaemonOwnerSchema,
+  })
+  .strict();
+
 export const ServerHandshakeFrameSchema = z
   .discriminatedUnion("status", [
-    z
-      .object({
-        type: z.literal("handshake"),
-        status: z.literal("accepted"),
-        clientProtocolVersion: ProtocolVersionNumberSchema,
-        serverProtocolVersion: ProtocolVersionNumberSchema,
-        owner: DaemonOwnerSchema,
-      })
-      .strict(),
-    z
-      .object({
-        type: z.literal("handshake"),
-        status: z.literal("version-mismatch"),
-        clientProtocolVersion: ProtocolVersionNumberSchema,
-        serverProtocolVersion: ProtocolVersionNumberSchema,
-        direction: ProtocolVersionDirectionSchema,
-        owner: DaemonOwnerSchema,
-      })
-      .strict(),
+    AcceptedServerHandshakeFrameSchema,
+    VersionMismatchServerHandshakeFrameSchema,
   ])
   .superRefine((value, context) => {
     const comparison = compareProtocolVersions(
@@ -98,6 +164,7 @@ export function createClientHandshakeFrame(token: string): ClientHandshakeFrame 
 export function createAcceptedServerHandshakeFrame(
   owner: DaemonOwner,
   clientProtocolVersion: number,
+  binding: AcceptedServerHandshakeBinding,
   serverProtocolVersion: number = PROTOCOL_VERSION,
 ): AcceptedServerHandshakeFrame {
   if (compareProtocolVersions(clientProtocolVersion, serverProtocolVersion) !== "equal") {
@@ -109,6 +176,7 @@ export function createAcceptedServerHandshakeFrame(
     clientProtocolVersion,
     serverProtocolVersion,
     owner,
+    ...binding,
   }) as AcceptedServerHandshakeFrame;
 }
 

@@ -220,16 +220,18 @@ describe("desktop credential runtime precedence", () => {
       },
     ];
     const call = vi.fn(async () => results.shift());
+    const connect = vi.fn(async () => ({
+      handshake: {} as never,
+      call,
+      close: vi.fn(async () => {}),
+    }));
     const authority = createConnectionRuntimeAuthority(
       {
         url: "ws://127.0.0.1:45005/rpc",
         token: "x".repeat(43),
+        athleteHome: "/synthetic/athlete",
       },
-      vi.fn(async () => ({
-        handshake: {} as never,
-        call,
-        close: vi.fn(async () => {}),
-      })) as never,
+      connect as never,
     );
 
     await expect(authority.clearCredential("anthropic")).resolves.toBe("not-active");
@@ -237,6 +239,11 @@ describe("desktop credential runtime precedence", () => {
     await expect(authority.clearCredential("anthropic")).resolves.toBe("cleared");
     expect(call).toHaveBeenNthCalledWith(1, "configureRuntime", {
       llm: { provider: "anthropic", clear_credential: true },
+    });
+    expect(connect).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:45005/rpc",
+      token: "x".repeat(43),
+      expectedAthleteHome: "/synthetic/athlete",
     });
   });
 
@@ -311,7 +318,11 @@ describe("desktop credential runtime precedence", () => {
 
     await expect(
       vault.writeCredential({ slot: "openrouter", value: randomUUID() }),
-    ).resolves.toMatchObject({ status: "refused", reason: "runtime-unavailable" });
+    ).resolves.toEqual({
+      slot: "openrouter",
+      status: "configured",
+      runtimeReady: false,
+    });
     await expect(vault.credentialStatuses()).resolves.toContainEqual({
       slot: "openrouter",
       state: "configured",
@@ -706,6 +717,7 @@ describe("desktop credential runtime precedence", () => {
       {
         url: "ws://127.0.0.1:45002/rpc",
         token: "obviously-fake-successor-token",
+        athleteHome: "/synthetic/athlete",
       },
       connect as never,
     );
@@ -719,10 +731,12 @@ describe("desktop credential runtime precedence", () => {
     expect(connect).toHaveBeenNthCalledWith(1, {
       url: "ws://127.0.0.1:45002/rpc",
       token: "obviously-fake-successor-token",
+      expectedAthleteHome: "/synthetic/athlete",
     });
     expect(connect).toHaveBeenNthCalledWith(2, {
       url: "ws://127.0.0.1:45002/rpc",
       token: "obviously-fake-successor-token",
+      expectedAthleteHome: "/synthetic/athlete",
     });
     expect(calls).toEqual(["getRuntimeConfig", "configureRuntime"]);
   });
@@ -772,6 +786,7 @@ describe("desktop credential runtime precedence", () => {
         {
           url: "ws://127.0.0.1:45004/rpc",
           token: "obviously-fake-successor-token",
+          athleteHome: "/synthetic/athlete",
         },
         connect as never,
       );
@@ -804,6 +819,7 @@ describe("desktop credential runtime precedence", () => {
         {
           url: "ws://127.0.0.1:45003/rpc",
           token: "obviously-fake-successor-token",
+          athleteHome: "/synthetic/athlete",
         },
         connect as never,
       );
@@ -827,6 +843,7 @@ describe("desktop credential runtime precedence", () => {
       expect(connect).toHaveBeenCalledWith({
         url: "ws://127.0.0.1:45003/rpc",
         token: "obviously-fake-successor-token",
+        expectedAthleteHome: "/synthetic/athlete",
       });
     },
   );

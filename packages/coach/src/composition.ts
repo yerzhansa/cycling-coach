@@ -12,12 +12,15 @@ import { performance } from "node:perf_hooks";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 import {
   Memory,
+  ConfirmationGate,
   RefreshTokenReusedError,
   appendUsageLine,
   bootstrapReference,
   classifyFailure,
   compareAndSaveStoredProfile,
   createConversationStore,
+  createProposalSummarizers,
+  createToolConfirmationPort,
   createMissingPlatformCalendarMutations,
   createPlatformCalendarMutations,
   createSubsystemLogger,
@@ -101,6 +104,7 @@ export interface LocalCoachComposition {
   readonly engine: CoachEngine;
   readonly operations: CoachOperations;
   readonly spendMeter: SpendMeterService;
+  readonly confirmations: Pick<ConfirmationGate, "peek" | "confirm" | "cancel">;
   close(): Promise<void>;
 }
 
@@ -430,11 +434,13 @@ interface RuntimeBundle {
   readonly chatStore: ConversationStorePort;
   readonly spendMeter: SpendMeterService;
   readonly timezone: string;
+  readonly confirmations: ConfirmationGate;
 }
 
 function createReconfigurableRuntimeBundle(initial: RuntimeBundle): {
   readonly engine: CoachEngine;
   readonly spendMeter: SpendMeterService;
+  readonly confirmations: Pick<ConfirmationGate, "peek" | "confirm" | "cancel">;
   readonly getTranscriptPage: (
     request: GetTranscriptPageRpcParams,
   ) => Promise<GetTranscriptPageRpcResult>;
@@ -449,6 +455,7 @@ function createReconfigurableRuntimeBundle(initial: RuntimeBundle): {
   let active = initial;
   let admission = Promise.resolve();
   let activeCalls = 0;
+  let pendingReplacements = 0;
   const drainWaiters = new Set<() => void>();
 
   const run = async <T>(operation: (bundle: RuntimeBundle) => Promise<T>): Promise<T> => {
@@ -478,6 +485,13 @@ function createReconfigurableRuntimeBundle(initial: RuntimeBundle): {
       setDailySpendCap: (dailyCapUsd) =>
         run((bundle) => bundle.spendMeter.setDailySpendCap(dailyCapUsd)),
     },
+    confirmations: {
+      peek: (chatId) =>
+        pendingReplacements === 0 ? active.confirmations.peek(chatId) : undefined,
+      confirm: (chatId, nonce) => run((bundle) => bundle.confirmations.confirm(chatId, nonce)),
+      cancel: (chatId, nonce) =>
+        pendingReplacements === 0 ? active.confirmations.cancel(chatId, nonce) : "none",
+    },
     getTranscriptPage: (request) =>
       run(async (bundle) => bundle.chatStore.readCurrentConversationPage("desktop", request)),
     listArchivedConversations: () =>
@@ -487,6 +501,7 @@ function createReconfigurableRuntimeBundle(initial: RuntimeBundle): {
         bundle.chatStore.readArchivedConversationPage("desktop", boundaryRef, request),
       ),
     async replace(create) {
+      pendingReplacements += 1;
       const previousAdmission = admission;
       let release!: () => void;
       const barrier = new Promise<void>((resolve) => {
@@ -500,6 +515,7 @@ function createReconfigurableRuntimeBundle(initial: RuntimeBundle): {
         }
         active = await create();
       } finally {
+        pendingReplacements -= 1;
         release();
       }
     },
@@ -779,6 +795,7 @@ export async function createLocalCoachComposition(
               apiKey: config.intervals.apiKey,
               athleteId: config.intervals.athleteId,
             });
+      const confirmations = new ConfirmationGate(now);
       const ports: EngineHostPorts = {
         config: projectedConfig,
         memory,
@@ -804,6 +821,12 @@ export async function createLocalCoachComposition(
         randomId: dependencies.randomId ?? randomUUID,
         modelTransportDecorator: dependencies.modelTransportDecorator,
         onToolsAssembled: dependencies.onToolsAssembled,
+        toolConfirmations: createToolConfirmationPort({
+          gate: confirmations,
+          summarizers: createProposalSummarizers({ intervals: legacyClient, tz: timezone }),
+          requiresConfirmation: ({ chatId }) =>
+            chatId !== "desktop" && chatId !== "cli" && !chatId.startsWith("cli:"),
+        }),
       };
       const engineInput = { sport: cyclingSport, ports } satisfies CreateCoachEngineInput;
       const backend = (dependencies.createBackend ?? createCoachEngine)(engineInput);
@@ -817,6 +840,7 @@ export async function createLocalCoachComposition(
           timezone,
           now,
         }),
+        confirmations,
         engine: createCoachEngineAdapter({
           backend,
           getAthleteState: () => stateReader.getAthleteState(),
@@ -982,6 +1006,7 @@ export async function createLocalCoachComposition(
       engine: reconfigurable.engine,
       operations,
       spendMeter: reconfigurable.spendMeter,
+      confirmations: reconfigurable.confirmations,
       close() {
         closePromise ??= (async () => {
           let failure: { readonly error: unknown } | undefined;

@@ -159,7 +159,7 @@ describe("startup-capture predicate (T3)", () => {
     botToken: string;
     allowFromInFile?: string[];
     operatorIdEnv?: string;
-  }): { captureFn: ReturnType<typeof vi.fn>; notifyUpdateFn: ReturnType<typeof vi.fn> } {
+  }): { captureFn: ReturnType<typeof vi.fn>; notifyNpmUpdateFn: ReturnType<typeof vi.fn> } {
     Object.defineProperty(process.stdin, "isTTY", { value: opts.isTTY, configurable: true });
 
     if (opts.allowFromInFile && opts.allowFromInFile.length > 0) {
@@ -202,24 +202,48 @@ describe("startup-capture predicate (T3)", () => {
     // Skip CoachAgent construction (relies on pi-ai) — replace with a stub.
     vi.doMock("../src/agent/coach-agent.js", () => ({
       CoachAgent: class {
+        confirmations = {
+          peek: vi.fn(() => undefined),
+          confirm: vi.fn(),
+          cancel: vi.fn(),
+        };
         constructor() {}
-        getMemory() { return { readMemory: () => "" } as never; }
-        chat() { return Promise.resolve("ok"); }
-        hasSession() { return false; }
-        resetSession() { return Promise.resolve(); }
+        getMemory() {
+          return { readMemory: () => "" } as never;
+        }
+        chat() {
+          return Promise.resolve({ text: "ok" });
+        }
+        hasSession() {
+          return Promise.resolve({ hasSession: false });
+        }
+        resetSession() {
+          return Promise.resolve({ memoryFlushed: true });
+        }
+        getAthleteState() {
+          return Promise.resolve({});
+        }
       },
     }));
     // Stub the telegram bot construction so we don't actually try to start polling.
-    const notifyUpdateFn = vi.fn(async () => undefined);
+    const notifyNpmUpdateFn = vi.fn(async () => undefined);
     vi.doMock("../src/channels/telegram.js", () => ({
       createTelegramBot: vi.fn(() => ({
-        bot: { start: vi.fn(async () => undefined), api: { sendMessage: vi.fn() } },
+        start: vi.fn(async () => undefined),
+        stop: vi.fn(async () => undefined),
         drainPending: vi.fn(async () => undefined),
+        sendMessage: vi.fn(async () => undefined),
       })),
-      notifyUpdate: notifyUpdateFn,
+    }));
+    vi.doMock("../src/channels/npm-telegram-host.js", () => ({
+      createNpmTelegramHost: vi.fn(() => ({})),
+      notifyNpmTelegramUpdate: notifyNpmUpdateFn,
+    }));
+    vi.doMock("../src/channels/npm-telegram-polling.js", () => ({
+      startNpmTelegramPolling: vi.fn(async ({ start }: { start: () => Promise<void> }) => start()),
     }));
 
-    return { captureFn, notifyUpdateFn };
+    return { captureFn, notifyNpmUpdateFn };
   }
 
   afterEach(() => {
@@ -229,6 +253,8 @@ describe("startup-capture predicate (T3)", () => {
     vi.doUnmock("../src/config.js");
     vi.doUnmock("../src/agent/coach-agent.js");
     vi.doUnmock("../src/channels/telegram.js");
+    vi.doUnmock("../src/channels/npm-telegram-host.js");
+    vi.doUnmock("../src/channels/npm-telegram-polling.js");
   });
 
   it("TTY + no file + token + no env → capture invoked", async () => {
@@ -283,28 +309,28 @@ describe("startup-capture predicate (T3)", () => {
     expect(captureFn).toHaveBeenCalledTimes(1);
   });
 
-  it("CYCLING_COACH_NO_UPDATE_CHECK set → notifyUpdate NOT invoked", async () => {
+  it("CYCLING_COACH_NO_UPDATE_CHECK set → npm update notification NOT invoked", async () => {
     process.argv = ["node", "cycling-coach"];
     process.env.CYCLING_COACH_NO_UPDATE_CHECK = "1";
-    const { notifyUpdateFn } = setupBaseMocks({ isTTY: false, botToken: "TOKEN" });
+    const { notifyNpmUpdateFn } = setupBaseMocks({ isTTY: false, botToken: "TOKEN" });
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     const { runBinary } = await import("../src/run-binary.js");
     await runBinary(stubSport as never, cyclingBinary);
-    expect(notifyUpdateFn).not.toHaveBeenCalled();
+    expect(notifyNpmUpdateFn).not.toHaveBeenCalled();
   });
 
-  it("CYCLING_COACH_NO_UPDATE_CHECK unset → notifyUpdate invoked once", async () => {
+  it("CYCLING_COACH_NO_UPDATE_CHECK unset → npm update notification invoked once", async () => {
     process.argv = ["node", "cycling-coach"];
     delete process.env.CYCLING_COACH_NO_UPDATE_CHECK;
-    const { notifyUpdateFn } = setupBaseMocks({ isTTY: false, botToken: "TOKEN" });
+    const { notifyNpmUpdateFn } = setupBaseMocks({ isTTY: false, botToken: "TOKEN" });
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     const { runBinary } = await import("../src/run-binary.js");
     await runBinary(stubSport as never, cyclingBinary);
-    expect(notifyUpdateFn).toHaveBeenCalledTimes(1);
+    expect(notifyNpmUpdateFn).toHaveBeenCalledTimes(1);
   });
 
   it("startup tightens the data dir to 0o700", async () => {
@@ -361,17 +387,44 @@ describe("startup-capture predicate (T3)", () => {
     });
     vi.doMock("../src/agent/coach-agent.js", () => ({
       CoachAgent: class {
+        confirmations = {
+          peek: vi.fn(() => undefined),
+          confirm: vi.fn(),
+          cancel: vi.fn(),
+        };
         constructor() {}
-        getMemory() { return { readMemory: () => "" } as never; }
+        getMemory() {
+          return { readMemory: () => "" } as never;
+        }
+        chat() {
+          return Promise.resolve({ text: "ok" });
+        }
+        hasSession() {
+          return Promise.resolve({ hasSession: false });
+        }
+        resetSession() {
+          return Promise.resolve({ memoryFlushed: true });
+        }
+        getAthleteState() {
+          return Promise.resolve({});
+        }
       },
     }));
     const startSpy = vi.fn(async () => undefined);
     vi.doMock("../src/channels/telegram.js", () => ({
       createTelegramBot: vi.fn(() => ({
-        bot: { start: startSpy, api: { sendMessage: vi.fn() } },
+        start: startSpy,
+        stop: vi.fn(async () => undefined),
         drainPending: vi.fn(async () => undefined),
+        sendMessage: vi.fn(async () => undefined),
       })),
-      notifyUpdate: vi.fn(async () => undefined),
+    }));
+    vi.doMock("../src/channels/npm-telegram-host.js", () => ({
+      createNpmTelegramHost: vi.fn(() => ({})),
+      notifyNpmTelegramUpdate: vi.fn(async () => undefined),
+    }));
+    vi.doMock("../src/channels/npm-telegram-polling.js", () => ({
+      startNpmTelegramPolling: vi.fn(async ({ start }: { start: () => Promise<void> }) => start()),
     }));
 
     vi.spyOn(console, "log").mockImplementation(() => {});

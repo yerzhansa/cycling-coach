@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 delete process.env.FORCE_COLOR;
 delete process.env.CLICOLOR_FORCE;
-const { transformWithEsbuild } = await import("vite");
+const { build } = await import("esbuild");
 
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const base = await realpath(process.platform === "darwin" ? "/tmp" : tmpdir());
@@ -127,7 +127,7 @@ async function execute() {
   app.exit(0);
 }
 
-app.whenReady().then(execute, () => app.exit(1));
+app.whenReady().then(execute).catch(() => app.exit(1));
 `;
 
 try {
@@ -166,13 +166,43 @@ try {
       "",
     ].join("\n"),
   );
-  const vaultSource = await readFile(join(desktopRoot, "src/main/credential-vault.ts"), "utf8");
-  const compiled = await transformWithEsbuild(
-    vaultSource,
-    join(desktopRoot, "src/main/credential-vault.ts"),
-    { loader: "ts", format: "cjs", target: "es2022" },
-  );
-  await writeFile(join(staging, "credential-vault.cjs"), compiled.code);
+  const vaultSource = join(desktopRoot, "src/main/credential-vault.ts");
+  await build({
+    stdin: {
+      contents: `export { CREDENTIAL_DIRECTORY_NAME, createCredentialVault } from ${JSON.stringify(vaultSource)};`,
+      loader: "js",
+      resolveDir: desktopRoot,
+    },
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    target: "node22",
+    treeShaking: true,
+    logLevel: "silent",
+    plugins: [
+      {
+        name: "credential-vault-fixture-boundary",
+        setup(buildContext) {
+          buildContext.onResolve({ filter: /^@enduragent\/coach-contract$/ }, () => ({
+            path: "coach-contract",
+            namespace: "fixture-boundary",
+          }));
+          buildContext.onResolve({ filter: /^\.\/llm-selection\.js$/ }, () => ({
+            path: "llm-selection",
+            namespace: "fixture-boundary",
+          }));
+          buildContext.onLoad({ filter: /.*/, namespace: "fixture-boundary" }, (args) => ({
+            contents:
+              args.path === "coach-contract"
+                ? "export const isKeylessProvider = () => false;"
+                : "export const parseOnboardingLlmSelection = () => { throw new TypeError(); };",
+            loader: "js",
+          }));
+        },
+      },
+    ],
+    outfile: join(staging, "credential-vault.cjs"),
+  });
   const packaged = await run(
     resolve(desktopRoot, "node_modules/.bin/electron-builder"),
     ["--dir", `--projectDir=${staging}`],

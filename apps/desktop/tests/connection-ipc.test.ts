@@ -11,7 +11,11 @@ import { DESKTOP_CONNECTION_CHANNEL, DESKTOP_RENDERER_URL } from "../src/main/co
 
 type Handler = (event: unknown, request?: unknown) => unknown;
 
-function setup() {
+function capability(fill: string, suffix = "A"): string {
+  return `${fill.repeat(42)}${suffix}`;
+}
+
+function setup(athleteHome = "/synthetic/athlete") {
   const handlers = new Map<string, Handler>();
   const ipcMain = {
     handle: vi.fn((channel: string, handler: Handler) => handlers.set(channel, handler)),
@@ -23,10 +27,18 @@ function setup() {
   let connection: {
     url: `ws://127.0.0.1:${number}/rpc`;
     token: string;
+    athleteHome: string;
+    rendererCapability: string;
+    owner: "app-supervised";
+    supervision: "app-supervised";
     generation: number;
   } = {
     url: "ws://127.0.0.1:45001/rpc" as const,
     token: "s".repeat(43),
+    athleteHome,
+    rendererCapability: capability("r"),
+    owner: "app-supervised",
+    supervision: "app-supervised",
     generation: 1,
   };
   const runtime = {
@@ -36,6 +48,10 @@ function setup() {
       connection = {
         url: "ws://127.0.0.1:45002/rpc" as const,
         token: "t".repeat(43),
+        athleteHome,
+        rendererCapability: capability("q"),
+        owner: "app-supervised",
+        supervision: "app-supervised",
         generation: 2,
       };
       return connection;
@@ -44,6 +60,7 @@ function setup() {
   const dispose = installDesktopConnectionIpc({
     ipcMain: ipcMain as never,
     currentWindow: () => window as never,
+    expectedAthleteHome: "/synthetic/athlete",
     runtime,
   });
   const trusted = { sender: webContents, senderFrame: mainFrame };
@@ -65,6 +82,34 @@ describe("desktop connection IPC", () => {
     expect(runtime.connection).toHaveBeenCalledTimes(1);
     expect(runtime.recover).toHaveBeenCalledWith(1);
     await expect(connection(trusted, { generation: 1 })).resolves.toMatchObject({ generation: 2 });
+  });
+
+  it("projects only renderer-safe coordinates on initial and recovered connections", async () => {
+    const { handlers, trusted } = setup();
+    const connection = handlers.get(DESKTOP_CONNECTION_CHANNEL)!;
+
+    await expect(connection(trusted)).resolves.toEqual({
+      url: "ws://127.0.0.1:45001/rpc",
+      rendererCapability: capability("r"),
+      generation: 1,
+    });
+    await expect(connection(trusted, { generation: 1 })).resolves.toEqual({
+      url: "ws://127.0.0.1:45002/rpc",
+      rendererCapability: capability("q"),
+      generation: 2,
+    });
+  });
+
+  it("refuses to publish coordinates for a different athlete home", async () => {
+    const { handlers, runtime, trusted } = setup("/synthetic/other-athlete");
+    const connection = handlers.get(DESKTOP_CONNECTION_CHANNEL)!;
+
+    await expect(connection(trusted)).rejects.toThrow("desktop daemon home mismatch");
+    await expect(connection(trusted, { generation: 1 })).rejects.toThrow(
+      "desktop daemon home mismatch",
+    );
+    expect(runtime.connection).toHaveBeenCalledTimes(1);
+    expect(runtime.recover).toHaveBeenCalledWith(1);
   });
 
   it("refuses untrusted connection and recovery requests", async () => {

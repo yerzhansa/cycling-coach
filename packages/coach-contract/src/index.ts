@@ -7,3 +7,4 @@ export * from "./rpc.js";
 export * from "./spend.js";
 export * from "./self-test.js";
 export * from "./handshake.js";
+export * from "./telegram-control.js";

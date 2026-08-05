@@ -9,6 +9,7 @@ import {
   createAcceptedServerHandshakeFrame,
   createVersionMismatchServerHandshakeFrame,
   type DaemonOwner,
+  type TelegramControlSnapshot,
 } from "@enduragent/coach-contract";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import { acquireWriteLock } from "@enduragent/kernel-node/lock";
@@ -26,8 +27,41 @@ import {
 } from "../src/daemon/handshake.js";
 import { createCoachRpcServer } from "../src/daemon/rpc-server.js";
 import type { UpgradeFenceHandle } from "../src/daemon/upgrade-fence.js";
+import type { DesktopTelegramController } from "../src/desktop-telegram-controller.js";
 
 const roots: string[] = [];
+const disabledTelegramSnapshot: TelegramControlSnapshot = {
+  channel: { desiredState: "disabled", state: "disabled" },
+  bot: { state: "unconfigured" },
+  pairing: { state: "unpaired" },
+};
+const disabledTelegram: DesktopTelegramController = {
+  getStatus: () => disabledTelegramSnapshot,
+  configure: async () => ({ outcome: "applied", current: disabledTelegramSnapshot }),
+  enable: async () => disabledTelegramSnapshot,
+  disable: async () => disabledTelegramSnapshot,
+  replace: async () => ({ outcome: "applied", current: disabledTelegramSnapshot }),
+  reconcile: async () => disabledTelegramSnapshot,
+  inspectTelegramCredential: async () => ({ status: "invalid-token" }),
+  deleteTelegramWebhook: async () => ({ status: "invalid-token" }),
+  forgetTelegramCredential: async () => disabledTelegramSnapshot,
+  resetTelegramAccess: async () => disabledTelegramSnapshot,
+  beginTelegramPairing: async () => disabledTelegramSnapshot,
+  cancelTelegramPairing: async () => disabledTelegramSnapshot,
+  listTelegramAllowedSenders: async () => ({ senders: [] }),
+  addTelegramAllowedSender: async () => ({
+    outcome: "applied" as const,
+    current: { senders: [] },
+  }),
+  removeTelegramAllowedSender: async () => ({
+    outcome: "applied" as const,
+    current: { senders: [] },
+  }),
+  stopPolling: async () => disabledTelegramSnapshot,
+  resumePolling: async () => disabledTelegramSnapshot,
+  drainPending: async () => disabledTelegramSnapshot,
+  close: async () => disabledTelegramSnapshot,
+};
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -58,6 +92,94 @@ async function loopbackAvailable(): Promise<boolean> {
 }
 
 const hasLoopback = await loopbackAvailable();
+
+it("opens upgrade control against an exact protocol-11 accepted frame", async () => {
+  const controlRequests: Array<{
+    readonly method: string;
+    readonly params: unknown;
+  }> = [];
+
+  class LegacyDaemonSocket extends EventTarget {
+    static readonly OPEN = 1;
+    readonly readyState = LegacyDaemonSocket.OPEN;
+
+    constructor(_url: string) {
+      super();
+      queueMicrotask(() => this.dispatchEvent(new Event("open")));
+    }
+
+    send(data: string): void {
+      const request = JSON.parse(data) as Record<string, unknown>;
+      if (request.clientProtocolVersion === 11) {
+        queueMicrotask(() =>
+          this.dispatchEvent(
+            new MessageEvent("message", {
+              data: JSON.stringify({
+                type: "handshake",
+                status: "accepted",
+                clientProtocolVersion: 11,
+                serverProtocolVersion: 11,
+                owner: "service-managed",
+              }),
+            }),
+          ),
+        );
+        return;
+      }
+
+      const method = request.method;
+      expect(method).toMatch(/^daemon\.(reserveUpgrade|shutdownForUpgrade)$/);
+      controlRequests.push({ method: String(method), params: request.params });
+      const status = method === "daemon.reserveUpgrade" ? "reserved" : "accepted";
+      queueMicrotask(() =>
+        this.dispatchEvent(
+          new MessageEvent("message", {
+            data: JSON.stringify({
+              jsonrpc: "2.0",
+              id: request.id,
+              result: { status },
+            }),
+          }),
+        ),
+      );
+    }
+
+    close(): void {}
+  }
+
+  vi.stubGlobal("WebSocket", LegacyDaemonSocket);
+  try {
+    const control = await openAuthenticatedDaemonControl({
+      port: 45_010,
+      token: "token",
+      incumbentProtocolVersion: 11,
+      expectedOwner: "service-managed",
+    });
+    expect(control.accepted).toEqual({
+      type: "handshake",
+      status: "accepted",
+      clientProtocolVersion: 11,
+      serverProtocolVersion: 11,
+      owner: "service-managed",
+    });
+    const handoff = {
+      targetProtocolVersion: PROTOCOL_VERSION,
+      handoffCapability: Buffer.alloc(32, 6).toString("base64url"),
+    };
+    await expect(control.reserveUpgrade(handoff)).resolves.toEqual({ status: "reserved" });
+    await expect(control.shutdownForUpgrade(handoff)).resolves.toEqual({ status: "accepted" });
+    expect(controlRequests).toEqual([
+      { method: "daemon.reserveUpgrade", params: handoff },
+      { method: "daemon.shutdownForUpgrade", params: handoff },
+    ]);
+    await control.close();
+    await expect(
+      observePeerHandshake({ port: 45_010, token: "token", clientProtocolVersion: 11 }),
+    ).rejects.toThrow("daemon handshake failed");
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
 
 describe.skipIf(!hasLoopback)("production peer observations", () => {
   it("classifies writer-clear, healthy, bound-unresponsive, and foreign cases", async () => {
@@ -140,6 +262,8 @@ describe.skipIf(!hasLoopback)("production peer observations", () => {
     const rpc = createCoachRpcServer({
       token,
       owner: "service-managed",
+      athleteHome: selectedHome.root,
+      telegram: disabledTelegram,
       selfTestOperations: {
         selfTest: async () => ({
           schemaVersion: 1,
@@ -302,13 +426,19 @@ function resolverHarness(owner: DaemonOwner, clientVersion: number, serverVersio
     port: 41_002,
     peerVersion: "new",
   } as const;
+  const rendererCapability = Buffer.alloc(32, 2).toString("base64url");
+  const acceptedBinding = {
+    athleteHome: selectedHome.root,
+    rendererCapability,
+  } as const;
   const handshake =
     clientVersion === serverVersion
-      ? createAcceptedServerHandshakeFrame(owner, clientVersion, serverVersion)
+      ? createAcceptedServerHandshakeFrame(owner, clientVersion, acceptedBinding, serverVersion)
       : createVersionMismatchServerHandshakeFrame(owner, clientVersion, serverVersion);
   const publishedHandshake = createAcceptedServerHandshakeFrame(
     owner,
     clientVersion,
+    acceptedBinding,
     clientVersion,
   );
   const fence: UpgradeFenceHandle = {
@@ -324,7 +454,21 @@ function resolverHarness(owner: DaemonOwner, clientVersion: number, serverVersio
   };
   const control = {
     port: peer.port,
-    accepted: createAcceptedServerHandshakeFrame(owner, serverVersion, serverVersion),
+    accepted:
+      serverVersion === 11
+        ? {
+            type: "handshake" as const,
+            status: "accepted" as const,
+            clientProtocolVersion: 11 as const,
+            serverProtocolVersion: 11 as const,
+            owner,
+          }
+        : createAcceptedServerHandshakeFrame(
+            owner,
+            PROTOCOL_VERSION,
+            acceptedBinding,
+            PROTOCOL_VERSION,
+          ),
     reserveUpgrade: vi.fn(async () => ({ status: "reserved" as const })),
     shutdownForUpgrade: vi.fn(async () => ({ status: "accepted" as const })),
     close: vi.fn(async () => {}),
@@ -388,6 +532,28 @@ describe("second starter resolution", () => {
     }
   });
 
+  it("refuses a compatible daemon bound to a different athlete home", async () => {
+    const test = resolverHarness("service-managed", PROTOCOL_VERSION, PROTOCOL_VERSION);
+    test.dependencies.observePeerHandshake.mockResolvedValue(
+      createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION, {
+        athleteHome: "/different-athlete",
+        rendererCapability: Buffer.alloc(32, 5).toString("base64url"),
+      }),
+    );
+    const result = await resolveSecondStarter(
+      {
+        caller: "desktop",
+        home: test.selectedHome,
+        clientProtocolVersion: PROTOCOL_VERSION,
+        clientAppVersion: "new",
+        bearerToken: "token",
+        peer: test.peer,
+      },
+      test.dependencies,
+    );
+    expect(result).toMatchObject({ status: "refuse" });
+  });
+
   it("returns exit 5 for a lower client and never restarts downward", async () => {
     const test = resolverHarness("service-managed", PROTOCOL_VERSION, PROTOCOL_VERSION + 1);
     const result = await resolveSecondStarter(
@@ -412,12 +578,12 @@ describe("second starter resolution", () => {
   });
 
   it("refuses an authenticated unmanaged owner with exit 3 and zero takeover", async () => {
-    const test = resolverHarness("unmanaged-foreground", PROTOCOL_VERSION + 1, PROTOCOL_VERSION);
+    const test = resolverHarness("unmanaged-foreground", PROTOCOL_VERSION, PROTOCOL_VERSION - 1);
     const result = await resolveSecondStarter(
       {
         caller: "local",
         home: test.selectedHome,
-        clientProtocolVersion: PROTOCOL_VERSION + 1,
+        clientProtocolVersion: PROTOCOL_VERSION,
         clientAppVersion: "new",
         bearerToken: "token",
         peer: test.peer,
@@ -434,12 +600,12 @@ describe("second starter resolution", () => {
   });
 
   it("performs one fenced upward restart and attaches to the new port", async () => {
-    const test = resolverHarness("service-managed", PROTOCOL_VERSION + 1, PROTOCOL_VERSION);
+    const test = resolverHarness("service-managed", PROTOCOL_VERSION, PROTOCOL_VERSION - 1);
     const result = await resolveSecondStarter(
       {
         caller: "cli-auto-start",
         home: test.selectedHome,
-        clientProtocolVersion: PROTOCOL_VERSION + 1,
+        clientProtocolVersion: PROTOCOL_VERSION,
         clientAppVersion: "new",
         bearerToken: "token",
         peer: test.peer,
@@ -453,18 +619,85 @@ describe("second starter resolution", () => {
     expect(test.fence.release).toHaveBeenCalledTimes(1);
   });
 
+  it("abandons handoff when the authenticated incumbent keeps changing", async () => {
+    const test = resolverHarness("service-managed", PROTOCOL_VERSION, PROTOCOL_VERSION - 1);
+    test.dependencies.observePeerHandshake
+      .mockReset()
+      .mockResolvedValueOnce(test.handshake)
+      .mockResolvedValueOnce(
+        createVersionMismatchServerHandshakeFrame(
+          "app-supervised",
+          PROTOCOL_VERSION,
+          PROTOCOL_VERSION - 1,
+        ),
+      )
+      .mockResolvedValueOnce(
+        createVersionMismatchServerHandshakeFrame(
+          "ephemeral-client-started",
+          PROTOCOL_VERSION,
+          PROTOCOL_VERSION - 1,
+        ),
+      )
+      .mockResolvedValue(
+        createVersionMismatchServerHandshakeFrame(
+          "app-supervised",
+          PROTOCOL_VERSION,
+          PROTOCOL_VERSION - 1,
+        ),
+      );
+    const result = await resolveSecondStarter(
+      {
+        caller: "desktop",
+        home: test.selectedHome,
+        clientProtocolVersion: PROTOCOL_VERSION,
+        clientAppVersion: "new",
+        bearerToken: "token",
+        peer: test.peer,
+      },
+      test.dependencies,
+    );
+    expect(result).toMatchObject({ status: "refuse" });
+    expect(test.dependencies.openUpgradeControl).not.toHaveBeenCalled();
+    expect(test.fence.release).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses a successor published for a different athlete home", async () => {
+    const test = resolverHarness("service-managed", PROTOCOL_VERSION, PROTOCOL_VERSION - 1);
+    test.dependencies.waitForCompatiblePeer.mockResolvedValue({
+      status: "published",
+      peer: test.publishedPeer,
+      handshake: createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION, {
+        athleteHome: "/different-athlete",
+        rendererCapability: Buffer.alloc(32, 4).toString("base64url"),
+      }),
+    });
+    const result = await resolveSecondStarter(
+      {
+        caller: "cli-auto-start",
+        home: test.selectedHome,
+        clientProtocolVersion: PROTOCOL_VERSION,
+        clientAppVersion: "new",
+        bearerToken: "token",
+        peer: test.peer,
+      },
+      test.dependencies,
+    );
+    expect(result).toMatchObject({ status: "refuse", stderr: UPGRADE_SUCCESSOR_FAILED_MESSAGE });
+    expect(test.fence.release).toHaveBeenCalledTimes(1);
+  });
+
   it("returns the fence to a designated ephemeral daemon starter", async () => {
     const test = resolverHarness(
       "ephemeral-client-started",
-      PROTOCOL_VERSION + 1,
       PROTOCOL_VERSION,
+      PROTOCOL_VERSION - 1,
     );
     test.serviceUpgrade.isInstalled.mockResolvedValue(false);
     const result = await resolveSecondStarter(
       {
         caller: "serve",
         home: test.selectedHome,
-        clientProtocolVersion: PROTOCOL_VERSION + 1,
+        clientProtocolVersion: PROTOCOL_VERSION,
         clientAppVersion: "new",
         bearerToken: "token",
         peer: test.peer,
@@ -479,7 +712,7 @@ describe("second starter resolution", () => {
   });
 
   it("maps a live fence and successor failure to their exact terminal diagnostics", async () => {
-    const reserved = resolverHarness("service-managed", PROTOCOL_VERSION + 1, PROTOCOL_VERSION);
+    const reserved = resolverHarness("service-managed", PROTOCOL_VERSION, PROTOCOL_VERSION - 1);
     reserved.dependencies.acquireUpgradeFence.mockResolvedValue({
       status: "reserved",
       exitCode: 3,
@@ -489,7 +722,7 @@ describe("second starter resolution", () => {
       {
         caller: "serve",
         home: reserved.selectedHome,
-        clientProtocolVersion: PROTOCOL_VERSION + 1,
+        clientProtocolVersion: PROTOCOL_VERSION,
         clientAppVersion: "new",
         bearerToken: "token",
         peer: reserved.peer,
@@ -498,13 +731,13 @@ describe("second starter resolution", () => {
     );
     expect(reservedResult).toMatchObject({ stderr: HANDOFF_RESERVED_MESSAGE });
 
-    const failed = resolverHarness("service-managed", PROTOCOL_VERSION + 1, PROTOCOL_VERSION);
+    const failed = resolverHarness("service-managed", PROTOCOL_VERSION, PROTOCOL_VERSION - 1);
     failed.serviceUpgrade.restartInstalledService.mockRejectedValue(new Error("secret"));
     const failedResult = await resolveSecondStarter(
       {
         caller: "service",
         home: failed.selectedHome,
-        clientProtocolVersion: PROTOCOL_VERSION + 1,
+        clientProtocolVersion: PROTOCOL_VERSION,
         clientAppVersion: "new",
         bearerToken: "token",
         peer: failed.peer,

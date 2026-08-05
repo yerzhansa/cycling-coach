@@ -30,7 +30,7 @@ describe("computePromptLineage", () => {
       ...base,
       ruleBlocks: staticRuleBlocks(30, { confirmationGate: true }),
     });
-    expect(gated.templateHash).toBe("37af2e31dca7f6d6");
+    expect(gated.templateHash).toBe("58c7240d1189face");
     expect(gated.templateHash).not.toBe(
       computePromptLineage({ ...base, ruleBlocks: staticRuleBlocks() }).templateHash,
     );

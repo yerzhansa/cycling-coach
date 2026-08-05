@@ -151,6 +151,7 @@ describe("desktop transcript IPC", () => {
       {
         url: "ws://127.0.0.1:45001/rpc",
         token: "s".repeat(43),
+        athleteHome: "/synthetic/athlete",
       },
       connect as never,
     );
@@ -161,6 +162,11 @@ describe("desktop transcript IPC", () => {
       limit: 25,
     });
     expect(client.close).toHaveBeenCalledOnce();
+    expect(connect).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:45001/rpc",
+      token: "s".repeat(43),
+      expectedAthleteHome: "/synthetic/athlete",
+    });
   });
 
   it("forwards archived list and archived page reads from the trusted main frame", async () => {
@@ -234,12 +240,18 @@ describe("desktop transcript IPC", () => {
 
   it("uses one deadline-aware client per archived read and closes it", async () => {
     const client = {
-      call: vi.fn(async (method: string) => (method === "listArchivedConversations" ? conversations : page)),
+      call: vi.fn(async (method: string) =>
+        method === "listArchivedConversations" ? conversations : page,
+      ),
       close: vi.fn(async () => {}),
     };
     const connect = vi.fn(async () => client);
     const reader = createConnectionTranscriptReader(
-      { url: "ws://127.0.0.1:45001/rpc", token: "s".repeat(43) },
+      {
+        url: "ws://127.0.0.1:45001/rpc",
+        token: "s".repeat(43),
+        athleteHome: "/synthetic/athlete",
+      },
       connect as never,
     );
 

@@ -1,7 +1,7 @@
 interface EnduragentAuth {
   getDaemonConnection(failedGeneration?: number): Promise<{
     readonly url: `ws://127.0.0.1:${number}/rpc`;
-    readonly token: string;
+    readonly rendererCapability: string;
     readonly generation: number;
   }>;
   getTranscriptPage(input: {
@@ -30,6 +30,23 @@ interface EnduragentAuth {
   chatgptLogin(input: OnboardingLlmSelection): Promise<ChatGptLoginResult>;
   claudeCliStatus(): Promise<ClaudeCliStatus>;
   claudeCliRecheck(): Promise<ClaudeCliStatus>;
+  telegramStatus(): Promise<DesktopTelegramStatus>;
+  pasteTelegramTokenFromClipboard(): Promise<DesktopTelegramMutationResult>;
+  enableTelegram(): Promise<DesktopTelegramMutationResult>;
+  disableTelegram(): Promise<DesktopTelegramMutationResult>;
+  removeTelegram(): Promise<DesktopTelegramMutationResult>;
+  reconcileTelegram(): Promise<DesktopTelegramMutationResult>;
+  removeTelegramWebhook(): Promise<DesktopTelegramMutationResult>;
+  beginTelegramPairing(): Promise<DesktopTelegramMutationResult>;
+  cancelTelegramPairing(): Promise<DesktopTelegramMutationResult>;
+  listTelegramAllowedSenders(): Promise<DesktopTelegramAllowedSenders>;
+  addTelegramAllowedSender(input: {
+    readonly senderId: number;
+  }): Promise<DesktopTelegramAllowedSendersMutationResult>;
+  removeTelegramAllowedSender(input: {
+    readonly senderId: number;
+  }): Promise<DesktopTelegramAllowedSendersMutationResult>;
+  acknowledgeTelegramGapWarning(): Promise<DesktopTelegramMutationResult>;
   chooseImportFiles(): Promise<readonly string[]>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
   releaseNotes(): Promise<ReleaseNotesResult>;
@@ -37,6 +54,25 @@ interface EnduragentAuth {
   checkForUpdates(): Promise<DesktopUpdateState>;
   restartToUpdate(): Promise<DesktopUpdateState>;
   onUpdateState(listener: (state: DesktopUpdateState) => void): () => void;
+}
+
+interface EnduragentTrayStatus {
+  readonly channelState:
+    | "disabled"
+    | "waiting-for-credential"
+    | "starting"
+    | "suspended"
+    | "online"
+    | "offline-retrying"
+    | "conflict"
+    | "invalid-token"
+    | "transfer-required"
+    | "failed";
+  readonly gapWarning: boolean;
+}
+
+interface EnduragentTray {
+  onTelegramStatus(listener: (status: EnduragentTrayStatus) => void): () => void;
 }
 
 interface DesktopTranscriptTurn {
@@ -80,6 +116,119 @@ type DesktopUpdateState =
       readonly version: string;
     }
   | { readonly status: "failed"; readonly stage: "check" | "download" };
+
+type DesktopTelegramControlErrorCode =
+  | "telegram-start-failed"
+  | "telegram-credential-storage-failed"
+  | "telegram-credential-unavailable"
+  | "telegram-settings-storage-uncertain"
+  | "telegram-daemon-unavailable"
+  | "telegram-home-mismatch"
+  | "telegram-stale-operation"
+  | "telegram-control-failed"
+  | "telegram-drain-required";
+
+type DesktopTelegramChannel =
+  | { readonly desiredState: "disabled"; readonly state: "disabled" }
+  | {
+      readonly desiredState: "enabled";
+      readonly state:
+        | "waiting-for-credential"
+        | "starting"
+        | "suspended"
+        | "online"
+        | "offline-retrying"
+        | "transfer-required";
+    }
+  | {
+      readonly desiredState: "enabled";
+      readonly state: "invalid-token";
+      readonly errorCode: "telegram-invalid-token";
+    }
+  | {
+      readonly desiredState: "enabled";
+      readonly state: "conflict";
+      readonly errorCode: "telegram-polling-conflict";
+    }
+  | {
+      readonly desiredState: "disabled" | "enabled";
+      readonly state: "failed";
+      readonly errorCode: DesktopTelegramControlErrorCode;
+    };
+
+type DesktopTelegramBot =
+  | { readonly state: "unconfigured" }
+  | {
+      readonly state: "ready" | "webhook-removal-required";
+      readonly username: string;
+    };
+
+type DesktopTelegramPairing =
+  | { readonly state: "unpaired" | "paired" | "expired" }
+  | { readonly state: "awaiting-code"; readonly code: string; readonly expiresAt: string }
+  | {
+      readonly state: "failed";
+      readonly errorCode:
+        | "telegram-pairing-unavailable"
+        | "telegram-pairing-refused"
+        | "telegram-pairing-storage-failed"
+        | "telegram-pairing-storage-uncertain";
+    };
+
+interface DesktopTelegramStatus {
+  readonly channel: DesktopTelegramChannel;
+  readonly bot: DesktopTelegramBot;
+  readonly pairing: DesktopTelegramPairing;
+  readonly credentialConfigured: boolean;
+  readonly gapWarning:
+    | { readonly state: "clear" }
+    | { readonly state: "possible-message-loss"; readonly detectedAt: string };
+}
+
+type DesktopTelegramMutationRefusalReason =
+  | "clipboard-unavailable"
+  | "clipboard-clear-failed"
+  | "invalid-token-format"
+  | "invalid-token"
+  | "validation-unavailable"
+  | "webhook-removal-required"
+  | "storage-failed"
+  | "stale-operation"
+  | "transfer-required"
+  | "polling-conflict"
+  | "control-unavailable"
+  | "invalid-state";
+
+type DesktopTelegramMutationResult =
+  | { readonly outcome: "applied"; readonly current: DesktopTelegramStatus }
+  | {
+      readonly outcome: "refused";
+      readonly reason: DesktopTelegramMutationRefusalReason;
+      readonly current: DesktopTelegramStatus;
+    }
+  | {
+      readonly outcome: "uncertain";
+      readonly reason: "storage-uncertain" | "control-uncertain";
+      readonly current: DesktopTelegramStatus;
+    };
+
+interface DesktopTelegramAllowedSender {
+  readonly senderId: number;
+  readonly role: "primary" | "additional";
+  readonly addedAt?: string;
+}
+
+interface DesktopTelegramAllowedSenders {
+  readonly senders: readonly DesktopTelegramAllowedSender[];
+}
+
+type DesktopTelegramAllowedSendersMutationResult =
+  | { readonly outcome: "applied"; readonly current: DesktopTelegramAllowedSenders }
+  | { readonly outcome: "refused"; readonly reason: "invalid-state" | "control-unavailable" }
+  | {
+      readonly outcome: "uncertain";
+      readonly reason: "storage-uncertain" | "control-uncertain";
+    };
 
 type ReleaseNotesResult =
   | {
@@ -213,6 +362,11 @@ type CredentialWriteResult =
         | "storage-failed"
         | "runtime-unavailable"
         | "training-account-mismatch";
+    }
+  | {
+      readonly slot: DesktopCredentialSlot;
+      readonly status: "uncertain";
+      readonly reason: "storage-uncertain";
     };
 
 type CredentialDeleteResult =
@@ -230,10 +384,16 @@ type CredentialDeleteResult =
         | "storage-failed"
         | "runtime-unavailable"
         | "runtime-state-diverged";
+    }
+  | {
+      readonly slot: DesktopCredentialSlot;
+      readonly status: "uncertain";
+      readonly reason: "storage-uncertain";
     };
 
 interface Window {
   readonly enduragentAuth: EnduragentAuth;
+  readonly enduragentTray: EnduragentTray;
 }
 
 interface WindowEventMap {

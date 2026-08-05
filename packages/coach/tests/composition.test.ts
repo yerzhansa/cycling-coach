@@ -372,6 +372,59 @@ afterEach(async () => {
 });
 
 describe("local coach composition", () => {
+  it("uses trusted channel identity to require Telegram confirmation without changing Desktop execution", async () => {
+    const home = await freshHome();
+    const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
+    const policy = engineInput.ports.toolConfirmations;
+
+    expect(policy).toBeDefined();
+    expect(policy!.requiresConfirmation({ chatId: "telegram:73", toolName: "plan_save" })).toBe(
+      true,
+    );
+    expect(policy!.requiresConfirmation({ chatId: "desktop", toolName: "plan_save" })).toBe(false);
+    expect(policy!.requiresConfirmation({ chatId: "cli", toolName: "plan_save" })).toBe(false);
+    expect(policy!.requiresConfirmation({ chatId: "cli:default", toolName: "plan_save" })).toBe(
+      false,
+    );
+    expect(policy!.requiresConfirmation({ chatId: "cli:fresh:synthetic", toolName: "plan_save" })).toBe(
+      false,
+    );
+    expect(policy!.requiresConfirmation({ chatId: "unknown", toolName: "plan_save" })).toBe(true);
+    expect(lifecycle.confirmations.peek("telegram:73")).toBeUndefined();
+
+    await lifecycle.close();
+  });
+
+  it("invalidates executable confirmation closures when the runtime bundle is replaced", async () => {
+    const home = await freshHome();
+    const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
+    const run = vi.fn(async () => ({ saved: true }));
+
+    await engineInput.ports.toolConfirmations!.propose({
+      chatId: "telegram:73",
+      toolName: "plan_save",
+      toolInput: { plan: { name: "Build" } },
+      run,
+    });
+    const pending = lifecycle.confirmations.peek("telegram:73");
+    expect(pending).toBeDefined();
+
+    const replacement = lifecycle.operations.configureRuntime({
+      llm: { model: "replacement-model", api_key: "obviously-fake-replacement-key" },
+    });
+    await vi.waitFor(() =>
+      expect(lifecycle.confirmations.peek("telegram:73")).toBeUndefined(),
+    );
+    expect(lifecycle.confirmations.cancel("telegram:73", pending!.nonce)).toBe("none");
+    await replacement;
+
+    await expect(lifecycle.confirmations.confirm("telegram:73", pending!.nonce)).resolves.toEqual({
+      status: "none",
+    });
+    expect(run).not.toHaveBeenCalled();
+    await lifecycle.close();
+  });
+
   it("rejects configured data directories outside the selected athlete home", async () => {
     const home = await freshHome();
     const otherHome = await freshHome();
@@ -472,6 +525,7 @@ describe("local coach composition", () => {
       "readReferenceState",
       "secrets",
       "stateReader",
+      "toolConfirmations",
       "transcriptWriter",
       "usage",
     ]);

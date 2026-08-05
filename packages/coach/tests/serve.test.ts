@@ -14,6 +14,8 @@ import type {
   WriterProtocolListener,
 } from "@enduragent/kernel-node/lock";
 import { runCoachServe, type CoachServeDependencies } from "../src/serve.js";
+import { createInvocationCoordinator } from "../src/daemon/invocation-coordinator.js";
+import type { CoachRpcServerInput } from "../src/daemon/rpc-server.js";
 import type { LocalCoachLifecycle } from "../src/local-runner.js";
 
 interface Deferred<T> {
@@ -173,11 +175,17 @@ function harness(
     },
   };
   const lifecycle: LocalCoachLifecycle = {
+    home,
     engine,
     operations,
     spendMeter: {
       getSpendSummary: vi.fn(async () => spendSummary),
       setDailySpendCap: vi.fn(async () => spendSummary),
+    },
+    confirmations: {
+      peek: vi.fn(),
+      confirm: vi.fn(),
+      cancel: vi.fn(),
     },
     listener,
     async close() {
@@ -191,7 +199,9 @@ function harness(
   const rpcClose = vi.fn(async () => {
     trace.push("rpc-drained");
   });
-  const createRpcServer = vi.fn(() => {
+  let rpcInput: CoachRpcServerInput | undefined;
+  const createRpcServer = vi.fn((input: CoachRpcServerInput) => {
+    rpcInput = input;
     trace.push("rpc-created");
     options.onCreateRpc?.();
     return {
@@ -204,23 +214,98 @@ function harness(
     trace.push("health-handler-created");
     return vi.fn() as unknown as (request: IncomingMessage, response: ServerResponse) => void;
   });
+  const createInvocations = vi.fn(() => {
+    const coordinator = createInvocationCoordinator();
+    return {
+      reserve: coordinator.reserve,
+      invoke: coordinator.invoke,
+      closeAdmission() {
+        trace.push("admission-close");
+        const fence = coordinator.closeAdmission();
+        return {
+          seal: () => fence.seal(),
+          reopen: () => fence.reopen(),
+          async drain() {
+            trace.push("shared-drain");
+            await fence.drain();
+          },
+        };
+      },
+    };
+  });
+  const telegramSnapshot = {
+    channel: { desiredState: "disabled" as const, state: "disabled" as const },
+    bot: { state: "unconfigured" as const },
+    pairing: { state: "unpaired" as const },
+  };
+  const telegram = {
+    getStatus: vi.fn(() => telegramSnapshot),
+    configure: vi.fn(async () => telegramSnapshot),
+    enable: vi.fn(async () => telegramSnapshot),
+    disable: vi.fn(async () => telegramSnapshot),
+    replace: vi.fn(async () => telegramSnapshot),
+    reconcile: vi.fn(async () => telegramSnapshot),
+    inspectTelegramCredential: vi.fn(async () => ({ status: "invalid-token" as const })),
+    deleteTelegramWebhook: vi.fn(async () => ({ status: "invalid-token" as const })),
+    forgetTelegramCredential: vi.fn(async () => telegramSnapshot),
+    resetTelegramAccess: vi.fn(async () => telegramSnapshot),
+    beginTelegramPairing: vi.fn(async () => telegramSnapshot),
+    cancelTelegramPairing: vi.fn(async () => telegramSnapshot),
+    listTelegramAllowedSenders: vi.fn(async () => ({ senders: [] })),
+    addTelegramAllowedSender: vi.fn(async () => ({
+      outcome: "applied" as const,
+      current: { senders: [] },
+    })),
+    removeTelegramAllowedSender: vi.fn(async () => ({
+      outcome: "applied" as const,
+      current: { senders: [] },
+    })),
+    stopPolling: vi.fn(async () => {
+      trace.push("telegram-stop");
+      return telegramSnapshot;
+    }),
+    resumePolling: vi.fn(async () => {
+      trace.push("telegram-resume");
+      return telegramSnapshot;
+    }),
+    drainPending: vi.fn(async () => {
+      trace.push("telegram-drain");
+      return telegramSnapshot;
+    }),
+    close: vi.fn(async () => {
+      trace.push("telegram-close");
+      return telegramSnapshot;
+    }),
+  };
+  const createTelegramController = vi.fn(() => telegram);
+  const createTelegramRuntimeFactory = vi.fn(() => () => {
+    throw new Error("unused Telegram runtime");
+  });
   const dependencies = {
     ensureToken,
     createRpcServer,
     createHealthzHandler,
     createHealthState: () => ({ healthy: true, setHealthy: vi.fn() }),
+    createInvocations,
+    createTelegramController,
+    createTelegramRuntimeFactory,
   } as unknown as CoachServeDependencies;
   return {
-    input: { lifecycle, home, appVersion: "0.1.0", signal: new AbortController().signal },
+    input: { lifecycle, appVersion: "0.1.0", signal: new AbortController().signal },
     lifecycle,
     dependencies,
     binding,
     trace,
     handlers: () => handlers,
+    rpcInput: () => rpcInput,
     ensureToken,
     createRpcServer,
     createHealthzHandler,
     rpcClose,
+    createInvocations,
+    createTelegramController,
+    createTelegramRuntimeFactory,
+    telegram,
   };
 }
 
@@ -237,7 +322,7 @@ describe("runCoachServe", () => {
     expect(test.trace).toEqual([]);
   });
 
-  it("publishes the handler pair only at bind and drains protocol before RPC completion", async () => {
+  it("publishes the handler pair only at bind and quiesces both ingresses before transport close", async () => {
     const controller = new AbortController();
     const test = harness();
     const result = runCoachServe({ ...test.input, signal: controller.signal }, test.dependencies);
@@ -253,9 +338,16 @@ describe("runCoachServe", () => {
     );
     expect(test.createRpcServer).toHaveBeenCalledWith(
       expect.objectContaining({
+        athleteHome: home.root,
         selfTestOperations: { selfTest: expect.any(Function) },
+        telegram: test.telegram,
       }),
     );
+    expect(test.createTelegramController).toHaveBeenCalledWith({
+      dataDir: home.root,
+      createRuntime: test.createTelegramRuntimeFactory.mock.results[0]?.value,
+    });
+    expect(test.ensureToken).toHaveBeenCalledWith(test.lifecycle.home.configDir);
     controller.abort();
     await expect(result).resolves.toBe(EXIT_SUCCESS);
     expect(test.trace).toEqual([
@@ -263,10 +355,52 @@ describe("runCoachServe", () => {
       "rpc-created",
       "health-handler-created",
       "protocol-bind",
+      "admission-close",
+      "telegram-stop",
+      "telegram-drain",
+      "shared-drain",
       "protocol-stop",
       "rpc-drained",
       "protocol-closed",
+      "telegram-close",
     ]);
+  });
+
+  it("wires the invocation-drain callbacks to stop, drain, and resume Telegram", async () => {
+    const controller = new AbortController();
+    const test = harness();
+    const result = runCoachServe({ ...test.input, signal: controller.signal }, test.dependencies);
+    await vi.waitFor(() => expect(test.rpcInput()).toBeDefined());
+    const rpcInput = test.rpcInput();
+    expect(rpcInput?.beforeInvocationDrain).toEqual(expect.any(Function));
+    expect(rpcInput?.afterInvocationDrainRefusal).toEqual(expect.any(Function));
+
+    test.trace.length = 0;
+    const stopSettled = deferred<void>();
+    test.telegram.stopPolling.mockImplementationOnce(async () => {
+      test.trace.push("telegram-stop");
+      await stopSettled.promise;
+      test.trace.push("telegram-stopped");
+      return test.telegram.getStatus();
+    });
+    const draining = rpcInput?.beforeInvocationDrain?.();
+    await vi.waitFor(() => expect(test.trace).toEqual(["telegram-stop"]));
+    expect(test.telegram.drainPending).not.toHaveBeenCalled();
+
+    stopSettled.resolve();
+    await draining;
+    expect(test.trace).toEqual(["telegram-stop", "telegram-stopped", "telegram-drain"]);
+
+    await rpcInput?.afterInvocationDrainRefusal?.();
+    expect(test.trace).toEqual([
+      "telegram-stop",
+      "telegram-stopped",
+      "telegram-drain",
+      "telegram-resume",
+    ]);
+
+    controller.abort();
+    await expect(result).resolves.toBe(EXIT_SUCCESS);
   });
 
   it("stops before RPC construction when abort arrives during token setup", async () => {
@@ -290,7 +424,16 @@ describe("runCoachServe", () => {
     ).resolves.toBe(EXIT_SUCCESS);
     expect(test.rpcClose).toHaveBeenCalledTimes(1);
     expect(test.createHealthzHandler).not.toHaveBeenCalled();
-    expect(test.trace).toEqual(["token-ready", "rpc-created", "rpc-drained"]);
+    expect(test.trace).toEqual([
+      "token-ready",
+      "rpc-created",
+      "admission-close",
+      "telegram-stop",
+      "telegram-drain",
+      "shared-drain",
+      "rpc-drained",
+      "telegram-close",
+    ]);
   });
 
   it("awaits an asynchronous bind raced by abort before complete shutdown", async () => {
@@ -313,7 +456,16 @@ describe("runCoachServe", () => {
     await vi.waitFor(() => expect(test.handlers()).toBeDefined());
     shutdown.resolve();
     await expect(result).resolves.toBe(EXIT_SUCCESS);
-    expect(test.trace.slice(-3)).toEqual(["protocol-stop", "rpc-drained", "protocol-closed"]);
+    expect(test.trace.slice(-8)).toEqual([
+      "admission-close",
+      "telegram-stop",
+      "telegram-drain",
+      "shared-drain",
+      "protocol-stop",
+      "rpc-drained",
+      "protocol-closed",
+      "telegram-close",
+    ]);
   });
 
   it("rethrows bind failure only after closing the constructed RPC server", async () => {
@@ -327,7 +479,12 @@ describe("runCoachServe", () => {
       "rpc-created",
       "health-handler-created",
       "protocol-bind",
+      "admission-close",
+      "telegram-stop",
+      "telegram-drain",
+      "shared-drain",
       "rpc-drained",
+      "telegram-close",
     ]);
   });
 });

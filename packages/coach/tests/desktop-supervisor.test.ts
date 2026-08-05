@@ -29,6 +29,11 @@ const paths = {
   handoffPath: "/tmp/synthetic-athlete/config/service/service.handoff",
 };
 const token = "s".repeat(43);
+const rendererCapability = Buffer.alloc(32, 3).toString("base64url");
+
+function acceptedBinding(athleteHome = home.root) {
+  return { athleteHome, rendererCapability };
+}
 
 function status(kind: "absent" | "registered"): LaunchdServiceStatus {
   return kind === "absent"
@@ -60,7 +65,7 @@ function healthy(
   owner: "service-managed" | "unmanaged-foreground" | "app-supervised",
 ): DaemonStateObservation {
   const peer = { status: "peer-healthy", pid: 12, port: 45_001, peerVersion: "0.1.0" } as const;
-  const handshake = createAcceptedServerHandshakeFrame(owner, PROTOCOL_VERSION);
+  const handshake = createAcceptedServerHandshakeFrame(owner, PROTOCOL_VERSION, acceptedBinding());
   return {
     kind: "compatible-healthy",
     peer,
@@ -93,6 +98,7 @@ function dependencies(input: {
   let now = 0;
   return {
     resolveAthleteHome: () => home,
+    prepareAthleteHome: async (selectedHome) => selectedHome,
     readServiceStatus: async () => status(input.registration),
     resumeService: async () => "resumed",
     observeDaemonState: async () => queue.shift() ?? input.observations.at(-1)!,
@@ -119,6 +125,44 @@ function child(): AppSupervisedChildHandle & { readonly stop: ReturnType<typeof 
 }
 
 describe("desktop daemon arbitration", () => {
+  it("prepares one physical home before service identity and observation", async () => {
+    const lexicalHome: AthleteHome = {
+      root: "/tmp/synthetic-athlete-alias",
+      storeDir: "/tmp/synthetic-athlete-alias/store",
+      archiveDir: "/tmp/synthetic-athlete-alias/archive",
+      configDir: "/tmp/synthetic-athlete-alias/config",
+    };
+    const prepareAthleteHome = vi.fn(async () => home);
+    const readServiceStatus = vi.fn(async (input: { readonly home: AthleteHome }) => {
+      expect(prepareAthleteHome).toHaveBeenCalledTimes(1);
+      expect(input.home).toBe(home);
+      return status("registered");
+    });
+    const observeDaemonState = vi.fn(async (input: { readonly home: AthleteHome }) => {
+      expect(input.home).toBe(home);
+      return healthy("service-managed");
+    });
+    const result = await resolveDesktopDaemon(
+      {
+        env: {},
+        executablePath: "/Applications/Enduragent",
+        appVersion: "0.1.0",
+        signal: new AbortController().signal,
+        startAppSupervisedDaemon: vi.fn(),
+      },
+      {
+        ...dependencies({ registration: "registered", observations: [healthy("service-managed")] }),
+        resolveAthleteHome: () => lexicalHome,
+        prepareAthleteHome,
+        readServiceStatus,
+        observeDaemonState,
+      },
+    );
+    expect(result).toMatchObject({ status: "connected", athleteHome: home.root });
+    expect(prepareAthleteHome).toHaveBeenCalledWith(lexicalHome);
+    expect(observeDaemonState).toHaveBeenCalledTimes(1);
+  });
+
   it("attaches to a healthy owner without spawning", async () => {
     const start = vi.fn();
     const result = await resolveDesktopDaemon(
@@ -134,6 +178,8 @@ describe("desktop daemon arbitration", () => {
     expect(result).toMatchObject({
       status: "connected",
       owner: "service-managed",
+      athleteHome: home.root,
+      rendererCapability,
       supervision: "attached",
     });
     expect(start).not.toHaveBeenCalled();
@@ -496,7 +542,11 @@ describe("desktop daemon arbitration", () => {
         return {
           status: "attach" as const,
           port: 45_002,
-          handshake: createAcceptedServerHandshakeFrame("app-supervised", PROTOCOL_VERSION),
+          handshake: createAcceptedServerHandshakeFrame(
+            "app-supervised",
+            PROTOCOL_VERSION,
+            acceptedBinding(),
+          ),
         };
       }),
     };
@@ -672,7 +722,11 @@ describe("desktop daemon arbitration", () => {
         return {
           status: "attach" as const,
           port: 45_002,
-          handshake: createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION),
+          handshake: createAcceptedServerHandshakeFrame(
+            "service-managed",
+            PROTOCOL_VERSION,
+            acceptedBinding(),
+          ),
         };
       }),
     };

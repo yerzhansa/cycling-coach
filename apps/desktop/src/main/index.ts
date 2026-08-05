@@ -1,13 +1,17 @@
-import { writeFile } from "node:fs/promises";
+import { realpath, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connectCoachClient } from "@enduragent/coach-client";
 import { checkIntervalsStoreOwnerAtPath } from "@enduragent/coach/backfill";
+import { prepareDesktopAthleteHome } from "@enduragent/coach/enduragent";
+import { AthleteHomeIdentitySchema } from "@enduragent/coach-contract";
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
+  powerMonitor,
   safeStorage,
   session,
   shell,
@@ -41,6 +45,7 @@ import {
   type DesktopDaemonConnection,
   type DesktopDaemonLifecycleState,
 } from "./daemon-lifecycle.js";
+import { requireDesktopDaemonHome } from "./daemon-home-binding.js";
 import { resolveDesktopAthleteHome, seedFirstRunConfig } from "./first-run-config.js";
 import {
   lifecycleErrorCopy,
@@ -54,6 +59,11 @@ import {
 import { registerOnboardingIpc, runtimeConfigurationForCredential } from "./onboarding-ipc.js";
 import { installDesktopReleaseNotesIpc } from "./release-notes-ipc.js";
 import { createDesktopResidency, type DesktopResidency } from "./residency.js";
+import {
+  BACKGROUND_AT_LOGIN_PREFERENCE_DIRECTORY_NAME,
+  createBackgroundAtLoginPreferenceStore,
+  shouldStartInBackgroundAtLogin,
+} from "./login-item.js";
 import {
   createDesktopRendererConsoleCapture,
   desktopWindowOptions,
@@ -69,6 +79,20 @@ import { createDesktopQuitCoordinator } from "./quit-coordinator.js";
 import { createDesktopUpdateController } from "./update-controller.js";
 import { isDesktopUpdateReleaseEligible } from "./update-eligibility.js";
 import { installDesktopUpdateIpc } from "./update-ipc.js";
+import {
+  createTelegramControlCoordinator,
+  type TelegramDaemonBinding,
+} from "./telegram-control.js";
+import {
+  createTelegramCredentialVault,
+  TELEGRAM_CREDENTIAL_DIRECTORY_NAME,
+} from "./telegram-credential-vault.js";
+import { createTelegramDaemonBinding } from "./telegram-daemon-binding.js";
+import { installDesktopTelegramIpc } from "./telegram-ipc.js";
+import {
+  createDesktopTelegramPowerLifecycle,
+  type DesktopTelegramPowerLifecycle,
+} from "./telegram-power.js";
 import {
   createConnectionTranscriptReader,
   installDesktopTranscriptIpc,
@@ -88,6 +112,7 @@ function disableChromiumMediaSessionIntegration(): void {
 }
 
 let desktopIsClosing = false;
+let desktopStartedInBackground = false;
 
 const mainDirectory = dirname(fileURLToPath(import.meta.url));
 const utilityEntry = resolve(mainDirectory, "daemon-utility.js");
@@ -122,6 +147,11 @@ async function runDesktop(): Promise<void> {
   });
   app.on("window-all-closed", () => {});
   await app.whenReady();
+  const backgroundAtLoginPreference = createBackgroundAtLoginPreferenceStore({
+    root: join(app.getPath("userData"), BACKGROUND_AT_LOGIN_PREFERENCE_DIRECTORY_NAME),
+  });
+  desktopStartedInBackground =
+    !securitySmokeMode && (await shouldStartInBackgroundAtLogin(app, backgroundAtLoginPreference));
   const controller = new AbortController();
   const environment = { ...process.env };
   const rendererSource = resolveDesktopRendererSource(
@@ -129,6 +159,8 @@ async function runDesktop(): Promise<void> {
     environment.ELECTRON_RENDERER_URL,
   );
   try {
+    const preparedHome = await prepareDesktopAthleteHome(environment);
+    environment.ENDURAGENT_HOME = preparedHome.root;
     await seedFirstRunConfig({ env: environment });
   } catch {
     process.stderr.write("desktop-first-run-config-failure seed\n");
@@ -149,7 +181,10 @@ async function runDesktop(): Promise<void> {
   let disposeExternalLinkIpc: (() => void) | undefined;
   let disposeReleaseNotesIpc: (() => void) | undefined;
   let disposeUpdateIpc: (() => void) | undefined;
+  let disposeTelegramIpc: (() => Promise<void>) | undefined;
   let disposeOnboarding: (() => void) | undefined;
+  let telegramPower: DesktopTelegramPowerLifecycle | undefined;
+  let closeTelegramCoordinator: (() => Promise<void>) | undefined;
   let daemonLifecycle: DesktopDaemonLifecycle | undefined;
   let shutdownPromise: Promise<void> | undefined;
   const updateController = createDesktopUpdateController({
@@ -169,6 +204,12 @@ async function runDesktop(): Promise<void> {
   });
   const shutdown = (): Promise<void> => {
     shutdownPromise ??= (async () => {
+      const residencyClose = residency?.close();
+      residency = undefined;
+      const telegramIpcClose = disposeTelegramIpc?.();
+      disposeTelegramIpc = undefined;
+      await residencyClose;
+      await telegramIpcClose;
       controller.abort();
       disposeConnectionIpc?.();
       disposeConnectionIpc = undefined;
@@ -180,6 +221,10 @@ async function runDesktop(): Promise<void> {
       disposeReleaseNotesIpc = undefined;
       disposeUpdateIpc?.();
       disposeUpdateIpc = undefined;
+      await telegramPower?.close();
+      telegramPower = undefined;
+      await closeTelegramCoordinator?.();
+      closeTelegramCoordinator = undefined;
       updateController.close();
       disposeOnboarding?.();
       disposeOnboarding = undefined;
@@ -198,7 +243,7 @@ async function runDesktop(): Promise<void> {
   });
   app.on("before-quit", (event) => {
     desktopIsClosing = true;
-    residency?.close();
+    void residency?.close();
     if (quitCoordinator.beforeQuit(event) === "draining") quitRequested = true;
   });
   try {
@@ -206,12 +251,50 @@ async function runDesktop(): Promise<void> {
     if (resolution.status === "refused") {
       if (!controller.signal.aborted && resolution.cause !== "cancelled") {
         const copy = startupRefusalCopy(resolution.cause);
-        dialog.showErrorBox(copy.title, copy.content);
+        if (desktopStartedInBackground) {
+          process.stderr.write(`desktop-startup-refusal ${resolution.cause}\n`);
+        } else {
+          dialog.showErrorBox(copy.title, copy.content);
+        }
       }
       await shutdown();
       if (!quitRequested) app.exit(resolution.exitCode);
       return;
     }
+    const selectedAthleteHome = AthleteHomeIdentitySchema.parse(
+      await realpath(resolveDesktopAthleteHome(environment)),
+    );
+    requireDesktopDaemonHome(selectedAthleteHome, resolution.athleteHome);
+    const telegramVault = createTelegramCredentialVault({
+      root: join(app.getPath("userData"), TELEGRAM_CREDENTIAL_DIRECTORY_NAME),
+      athleteHome: selectedAthleteHome,
+      encryption: safeStorage,
+    });
+    let activeTelegramBinding: TelegramDaemonBinding | undefined;
+    const preparedTelegramBindings = new Map<number, TelegramDaemonBinding>();
+    const telegramCoordinator = createTelegramControlCoordinator({
+      selectedAthleteHome: () => selectedAthleteHome,
+      vault: telegramVault,
+      daemon: {
+        current() {
+          const lifecycleState = daemonLifecycle?.snapshot();
+          return lifecycleState?.status === "ready" &&
+            activeTelegramBinding?.generation === lifecycleState.generation
+            ? activeTelegramBinding
+            : undefined;
+        },
+      },
+    });
+    closeTelegramCoordinator = () => telegramCoordinator.close();
+    telegramPower = createDesktopTelegramPowerLifecycle({
+      root: join(app.getPath("userData"), TELEGRAM_CREDENTIAL_DIRECTORY_NAME),
+      athleteHome: selectedAthleteHome,
+      powerMonitor,
+      controller: telegramCoordinator,
+      reportFailure: (failure) => {
+        process.stderr.write(`desktop-telegram-power-failure ${failure}\n`);
+      },
+    });
     let window: BrowserWindow | null = null;
     let windowCreation: Promise<BrowserWindow> | undefined;
     const currentWindow = (): BrowserWindow | null =>
@@ -274,11 +357,13 @@ async function runDesktop(): Promise<void> {
         recoveringCredentialRuntime = undefined;
       }
       if (state.status === "closing" || state.status === "terminal") {
+        activeTelegramBinding = undefined;
         for (const slot of credentialRuntimeState.keys()) {
           credentialRuntimeState.set(slot, "failed");
         }
         recoveringCredentialRuntime = undefined;
         preparedRuntimeBindings.clear();
+        preparedTelegramBindings.clear();
       }
       const visibleWindow = currentWindow();
       if (visibleWindow !== null && state.status !== "starting") {
@@ -289,12 +374,20 @@ async function runDesktop(): Promise<void> {
       }
       const copy =
         controller.signal.aborted || desktopIsClosing ? undefined : lifecycleErrorCopy(state);
-      if (copy !== undefined) dialog.showErrorBox(copy.title, copy.content);
+      if (copy !== undefined) {
+        if (desktopStartedInBackground && currentWindow() === null) {
+          process.stderr.write(`desktop-daemon-background-failure ${state.status}\n`);
+        } else {
+          dialog.showErrorBox(copy.title, copy.content);
+        }
+      }
     };
     daemonLifecycle = new DesktopDaemonLifecycle(supervisor, resolution, {
       prepareReady: ({ connection, signal }) => reapplyCredentials(connection, signal),
       onTransition: publishLifecycle,
       onReady({ previous, current }) {
+        activeTelegramBinding = preparedTelegramBindings.get(current.generation);
+        preparedTelegramBindings.delete(current.generation);
         const prepared = preparedRuntimeBindings.get(current.generation);
         if (prepared !== undefined) {
           activeRuntimeBinding = prepared.binding;
@@ -312,14 +405,16 @@ async function runDesktop(): Promise<void> {
         visibleWindow.webContents.reload();
       },
     });
-    const configDir = join(resolveDesktopAthleteHome(environment), "config");
+    const configDir = join(selectedAthleteHome, "config");
     const createRuntimeBinding = (
-      connection: Pick<DesktopDaemonConnection, "url" | "token">,
+      connection: Pick<DesktopDaemonConnection, "url" | "token" | "athleteHome">,
     ): RuntimeBinding => {
-      const authority = createConnectionRuntimeAuthority(connection, connectCoachClient);
+      requireDesktopDaemonHome(selectedAthleteHome, connection.athleteHome);
+      const boundConnection = { ...connection, athleteHome: selectedAthleteHome };
+      const authority = createConnectionRuntimeAuthority(boundConnection, connectCoachClient);
       return {
         authority,
-        transcript: createConnectionTranscriptReader(connection),
+        transcript: createConnectionTranscriptReader(boundConnection),
         credentials: createCredentialRuntimeApplication({
           configureRuntime: authority.configureRuntime,
           clearRuntimeCredential: authority.clearCredential,
@@ -334,6 +429,7 @@ async function runDesktop(): Promise<void> {
     activeRuntimeBinding = createRuntimeBinding({
       url: resolution.url,
       token: resolution.token,
+      athleteHome: resolution.athleteHome,
     });
     const readActiveRuntimeConfig = async () => {
       const binding = activeRuntimeBinding;
@@ -443,7 +539,7 @@ async function runDesktop(): Promise<void> {
       },
     });
     reapplyCredentials = async (connection, signal) => {
-      if (signal.aborted) return;
+      if (signal.aborted) throw signal.reason;
       const revisions = new Map(credentialRuntimeRevisions);
       const successor = createRuntimeBinding(connection);
       const successorVault = createCredentialVault({
@@ -456,19 +552,41 @@ async function runDesktop(): Promise<void> {
       });
       await successorVault.reapplyConfigured();
       const successorStatuses = await successorVault.credentialStatuses();
+      const successorTelegram = createTelegramDaemonBinding(connection, selectedAthleteHome);
+      if (connection.supervision === "app-supervised") {
+        const successorTelegramCoordinator = createTelegramControlCoordinator({
+          selectedAthleteHome: () => selectedAthleteHome,
+          vault: telegramVault,
+          daemon: { current: () => successorTelegram },
+        });
+        const reconciliation = await successorTelegramCoordinator.reconcile();
+        const desiredState = await telegramVault.desiredState();
+        const expectedEnabled = desiredState.state === "configured" && desiredState.enabled;
+        const prepared =
+          reconciliation.outcome === "applied" &&
+          (expectedEnabled
+            ? reconciliation.current.credentialConfigured &&
+              reconciliation.current.channel.desiredState === "enabled" &&
+              (reconciliation.current.channel.state === "starting" ||
+                reconciliation.current.channel.state === "online" ||
+                reconciliation.current.channel.state === "offline-retrying")
+            : reconciliation.current.channel.state === "disabled");
+        if (!prepared) throw new TypeError("Telegram successor preparation failed");
+      }
       const lifecycleState = daemonLifecycle?.snapshot();
       if (
         signal.aborted ||
         lifecycleState?.status !== "recovering" ||
         lifecycleState.generation + 1 !== connection.generation
       ) {
-        return;
+        throw new TypeError("desktop daemon successor preparation expired");
       }
       preparedRuntimeBindings.set(connection.generation, {
         binding: successor,
         statuses: successorStatuses,
         revisions,
       });
+      preparedTelegramBindings.set(connection.generation, successorTelegram);
     };
     const chatGptAuth = createChatGptAuth({
       configDir,
@@ -545,6 +663,27 @@ async function runDesktop(): Promise<void> {
     });
     daemonLifecycle.start();
     await vault.reapplyConfigured();
+    const initialTelegramConnection = daemonLifecycle.connection();
+    activeTelegramBinding = createTelegramDaemonBinding(
+      initialTelegramConnection,
+      selectedAthleteHome,
+    );
+    if (initialTelegramConnection.supervision === "app-supervised") {
+      const reconciliation = await telegramCoordinator.reconcile();
+      const desiredState = await telegramVault.desiredState();
+      const expectedEnabled = desiredState.state === "configured" && desiredState.enabled;
+      const prepared =
+        reconciliation.outcome === "applied" &&
+        (expectedEnabled
+          ? reconciliation.current.credentialConfigured &&
+            reconciliation.current.channel.desiredState === "enabled" &&
+            (reconciliation.current.channel.state === "starting" ||
+              reconciliation.current.channel.state === "online" ||
+              reconciliation.current.channel.state === "offline-retrying")
+          : reconciliation.current.channel.state === "disabled");
+      if (!prepared) throw new TypeError("Telegram startup reconciliation failed");
+    }
+    await telegramPower.start();
     await installDesktopProtocol({
       session: session.defaultSession,
       currentDaemonPort: () => daemonLifecycle!.currentPort(),
@@ -600,7 +739,7 @@ async function runDesktop(): Promise<void> {
             checkIntervalsCredentialOwner: async (value) => {
               const snapshot = await activeRuntimeBinding!.authority.getRuntimeConfig();
               return checkIntervalsStoreOwnerAtPath(
-                join(resolveDesktopAthleteHome(environment), "store", "store.db"),
+                join(selectedAthleteHome, "store", "store.db"),
                 {
                   apiKey: value,
                   athleteId: intervalsAthleteIdForOwnership(snapshot),
@@ -634,13 +773,13 @@ async function runDesktop(): Promise<void> {
     disposeConnectionIpc = installDesktopConnectionIpc({
       ipcMain,
       currentWindow: () => mainWindow.current() ?? undefined,
+      expectedAthleteHome: selectedAthleteHome,
       runtime: daemonLifecycle,
     });
     disposeTranscriptIpc = installDesktopTranscriptIpc({
       ipcMain,
       currentWindow: () => mainWindow.current() ?? undefined,
-      readPage: (request) =>
-        readActiveTranscript((reader) => reader.getTranscriptPage(request)),
+      readPage: (request) => readActiveTranscript((reader) => reader.getTranscriptPage(request)),
       readArchivedConversations: (request) =>
         readActiveTranscript((reader) => reader.listArchivedConversations(request)),
       readArchivedPage: (request) =>
@@ -661,20 +800,39 @@ async function runDesktop(): Promise<void> {
       isTrusted: (event) => isTrustedConnectionRequest(event, mainWindow.current() ?? undefined),
       controller: updateController,
     });
+    disposeTelegramIpc = installDesktopTelegramIpc({
+      ipcMain,
+      clipboard,
+      coordinator: telegramCoordinator,
+      vault: telegramVault,
+      power: telegramPower,
+      isTrusted: (event) => isTrustedConnectionRequest(event, mainWindow.current() ?? undefined),
+    });
     residency = createDesktopResidency({
       app,
       mainWindow,
       trayIconPath: resolve(mainDirectory, "../../resources/trayTemplate.png"),
       trayPopoverUrl: rendererSource.trayPopoverUrl,
+      trayPreloadPath: resolve(mainDirectory, "../preload/tray.cjs"),
+      persistLoginPreference: (enabled) => backgroundAtLoginPreference.set(enabled),
+      telegramStatus: async () => {
+        const snapshot = await telegramCoordinator.status();
+        const warning = await telegramPower!.warning();
+        return {
+          channelState: snapshot.channel.state,
+          gapWarning: warning.state === "possible-message-loss",
+        };
+      },
       reportFailure(operation) {
         process.stderr.write(`desktop-residency-failure ${operation}\n`);
       },
     });
-    const initialWindow = await mainWindow.show();
     await residency.start();
+    const initialWindow = desktopStartedInBackground ? undefined : await mainWindow.show();
     void updateController.start();
 
     if (securitySmokeMode) {
+      if (initialWindow === undefined) throw new TypeError("security smoke requires a window");
       const daemonPort = daemonLifecycle.currentPort();
       const rendererResult = await initialWindow.webContents.executeJavaScript(`(async () => {
       const blockedPort = ${daemonPort === 65_535 ? daemonPort - 1 : daemonPort + 1};
@@ -766,7 +924,7 @@ if (!primaryInstance) {
     : runDesktop;
   void runPrimaryDesktop().catch((error: unknown) => {
     console.error("desktop startup failed", error);
-    if (!desktopIsClosing) {
+    if (!desktopIsClosing && !desktopStartedInBackground) {
       dialog.showErrorBox(unexpectedStartupCopy.title, unexpectedStartupCopy.content);
     }
     app.exit(1);

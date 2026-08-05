@@ -537,8 +537,8 @@ describe("turn line — winning generation usage and cost", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const agent = await setupAgent(complete);
 
-    const text = await agent.chat("turn-winner", "hello");
-    expect(text).toBe("recovered");
+    const response = await agent.chat({ chatId: "turn-winner", message: "hello" });
+    expect(response).toEqual({ text: "recovered" });
 
     const turnLine = readLines(agentDataDir)
       .map((l) => JSON.parse(l) as UsageLedgerLine)

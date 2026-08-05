@@ -1,5 +1,5 @@
 import type { Context, MiddlewareFn } from "grammy";
-import { loadAllowedSenders, type AllowedSenders } from "./allowed-senders.js";
+import { loadAllowedSenders, SENDER_ID_RE, type AllowedSenders } from "./allowed-senders.js";
 import { escapeHtmlAttr } from "./html-escape.js";
 
 export type { DmPolicy } from "./allowed-senders.js";
@@ -58,6 +58,16 @@ export interface CreateAuthMiddlewareOpts {
   binaryName: string;
   challengeRateLimit: Map<string, number>;
   challengeMinIntervalMs: number;
+  loadAllowedSenders?: (dataDir: string) => AllowedSenders;
+  pairingChallenge?: (input: {
+    readonly senderId: string;
+    readonly senderName: string | undefined;
+  }) => string;
+  consumePairing?: (input: {
+    readonly senderId: string;
+    readonly senderName: string | undefined;
+    readonly messageText: string;
+  }) => Promise<boolean>;
 }
 
 const RATE_LIMIT_MAX_ENTRIES = 1000;
@@ -94,7 +104,24 @@ export function createAuthMiddleware(opts: CreateAuthMiddlewareOpts): Middleware
     // being mislabeled a security error and silently dropped.
     let granted = false;
     try {
-      const allowed = loadAllowedSenders(opts.dataDir);
+      const fromId = ctx.from?.id;
+      const messageText = ctx.message?.text;
+      if (
+        opts.consumePairing &&
+        ctx.chat?.type === "private" &&
+        typeof fromId === "number" &&
+        SENDER_ID_RE.test(String(fromId)) &&
+        typeof messageText === "string"
+      ) {
+        const consumed = await opts.consumePairing({
+          senderId: String(fromId),
+          senderName: ctx.from?.first_name,
+          messageText,
+        });
+        if (consumed) return;
+      }
+
+      const allowed = (opts.loadAllowedSenders ?? loadAllowedSenders)(opts.dataDir);
       const decision = evaluateAccess(ctx, allowed);
       if (decision.allow) {
         if (decision.viaOpenPolicy) warnOpenPolicyServe(openPolicyWarned, ctx.from?.id);
@@ -106,11 +133,9 @@ export function createAuthMiddleware(opts: CreateAuthMiddlewareOpts): Middleware
         const last = opts.challengeRateLimit.get(senderId) ?? 0;
         if (now - last < opts.challengeMinIntervalMs) return;
         recordChallenge(opts.challengeRateLimit, senderId, now);
-        const html = buildPairingChallenge(
-          senderId,
-          ctx.from?.first_name,
-          opts.binaryName,
-        );
+        const html =
+          opts.pairingChallenge?.({ senderId, senderName: ctx.from?.first_name }) ??
+          buildPairingChallenge(senderId, ctx.from?.first_name, opts.binaryName);
         await ctx.reply(html, { parse_mode: "HTML" });
       }
     } catch (err) {

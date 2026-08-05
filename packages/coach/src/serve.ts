@@ -1,13 +1,14 @@
 import { EXIT_SUCCESS, type DaemonOwner, type ExitCode } from "@enduragent/coach-contract";
-import type { AthleteHome } from "@enduragent/kernel-node/home";
 import { createDaemonHealthState, createHealthzRequestHandler } from "./daemon/healthz-server.js";
 import { createCoachRpcServer, ensureDaemonToken } from "./daemon/rpc-server.js";
+import { createInvocationCoordinator } from "./daemon/invocation-coordinator.js";
+import { createDesktopTelegramController } from "./desktop-telegram-controller.js";
+import { createDesktopTelegramRuntimeFactory } from "./desktop-telegram-runtime.js";
 import type { LocalCoachLifecycle } from "./local-runner.js";
 import { createPackagedSelfTestOperation } from "./packaged-self-test.js";
 
 export interface RunCoachServeInput {
   readonly lifecycle: LocalCoachLifecycle;
-  readonly home: AthleteHome;
   readonly appVersion: string;
   readonly signal: AbortSignal;
   readonly owner?: DaemonOwner;
@@ -18,6 +19,9 @@ export interface CoachServeDependencies {
   readonly createRpcServer: typeof createCoachRpcServer;
   readonly createHealthzHandler: typeof createHealthzRequestHandler;
   readonly createHealthState: typeof createDaemonHealthState;
+  readonly createInvocations: typeof createInvocationCoordinator;
+  readonly createTelegramController: typeof createDesktopTelegramController;
+  readonly createTelegramRuntimeFactory: typeof createDesktopTelegramRuntimeFactory;
 }
 
 const defaultDependencies: CoachServeDependencies = {
@@ -25,6 +29,9 @@ const defaultDependencies: CoachServeDependencies = {
   createRpcServer: createCoachRpcServer,
   createHealthzHandler: createHealthzRequestHandler,
   createHealthState: createDaemonHealthState,
+  createInvocations: createInvocationCoordinator,
+  createTelegramController: createDesktopTelegramController,
+  createTelegramRuntimeFactory: createDesktopTelegramRuntimeFactory,
 };
 
 export async function runCoachServe(
@@ -46,10 +53,19 @@ export async function runCoachServe(
   if (input.signal.aborted) latchAbort();
   try {
     if (aborted) return EXIT_SUCCESS;
-    const token = await dependencies.ensureToken(input.home.configDir);
+    const token = await dependencies.ensureToken(input.lifecycle.home.configDir);
     if (aborted) return EXIT_SUCCESS;
     const spendMeter = input.lifecycle.spendMeter;
     const healthState = dependencies.createHealthState();
+    const invocations = dependencies.createInvocations();
+    const telegram = dependencies.createTelegramController({
+      dataDir: input.lifecycle.home.root,
+      createRuntime: dependencies.createTelegramRuntimeFactory({
+        lifecycle: input.lifecycle,
+        invocations,
+        appVersion: input.appVersion,
+      }),
+    });
     const rpc = dependencies.createRpcServer({
       engine: input.lifecycle.engine,
       operations: input.lifecycle.operations,
@@ -58,12 +74,77 @@ export async function runCoachServe(
         setDailySpendCap: ({ dailyCapUsd }) => spendMeter.setDailySpendCap(dailyCapUsd),
       },
       selfTestOperations: { selfTest: createPackagedSelfTestOperation() },
+      telegram,
       token: token.value,
       owner: input.owner ?? "unmanaged-foreground",
+      athleteHome: input.lifecycle.home.root,
       healthState,
+      invocations,
+      beforeInvocationDrain: async () => {
+        await telegram.stopPolling();
+        await telegram.drainPending();
+      },
+      afterInvocationDrainRefusal: async () => {
+        await telegram.resumePolling();
+      },
     });
+    let quiescePromise: Promise<void> | undefined;
+    const quiesce = (): Promise<void> => {
+      quiescePromise ??= (async () => {
+        const errors: unknown[] = [];
+        let fence: ReturnType<typeof invocations.closeAdmission> | undefined;
+        try {
+          fence = invocations.closeAdmission();
+        } catch (error) {
+          errors.push(error);
+        }
+        try {
+          fence?.seal();
+        } catch (error) {
+          errors.push(error);
+        }
+        try {
+          healthState.setHealthy(false);
+        } catch (error) {
+          errors.push(error);
+        }
+        try {
+          await telegram.stopPolling();
+        } catch (error) {
+          errors.push(error);
+        }
+        try {
+          await telegram.drainPending();
+        } catch (error) {
+          errors.push(error);
+        }
+        try {
+          await fence?.drain();
+        } catch (error) {
+          errors.push(error);
+        }
+        if (errors.length > 0) throw errors[0];
+      })();
+      return quiescePromise;
+    };
     if (aborted) {
-      await rpc.close();
+      const cleanupErrors: unknown[] = [];
+      try {
+        await quiesce();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      try {
+        await rpc.close();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      try {
+        await telegram.close();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      if (cleanupErrors.length > 0) throw cleanupErrors[0];
       return EXIT_SUCCESS;
     }
     let binding: Awaited<ReturnType<LocalCoachLifecycle["listener"]["bind"]>>;
@@ -76,29 +157,42 @@ export async function runCoachServe(
         upgrade: rpc.handleUpgrade,
       });
     } catch (error) {
+      await quiesce().catch(() => {});
       await rpc.close().catch(() => {});
+      await telegram.close().catch(() => {});
       throw error;
     }
     if (!aborted) await Promise.race([abortPromise, rpc.shutdownRequested]);
-    let bindingClose: Promise<void>;
+    const cleanupErrors: unknown[] = [];
+    try {
+      await quiesce();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    let bindingClose: Promise<void> | undefined;
     try {
       bindingClose = binding.close();
     } catch (error) {
-      await rpc.close().catch(() => {});
-      throw error;
+      cleanupErrors.push(error);
     }
-    let cleanupError: unknown;
     try {
       await rpc.close();
     } catch (error) {
-      cleanupError = error;
+      cleanupErrors.push(error);
+    }
+    if (bindingClose !== undefined) {
+      try {
+        await bindingClose;
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
     }
     try {
-      await bindingClose;
+      await telegram.close();
     } catch (error) {
-      cleanupError ??= error;
+      cleanupErrors.push(error);
     }
-    if (cleanupError !== undefined) throw cleanupError;
+    if (cleanupErrors.length > 0) throw cleanupErrors[0];
     return EXIT_SUCCESS;
   } finally {
     input.signal.removeEventListener("abort", latchAbort);
