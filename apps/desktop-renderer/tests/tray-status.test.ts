@@ -23,4 +23,12 @@ describe("tray Telegram status", () => {
       tone: "warning",
     });
   });
+
+  it("presents transient sleep suspension without calling Telegram off", () => {
+    expect(presentTrayTelegramStatus({ channelState: "suspended", gapWarning: false })).toEqual({
+      copy: "Telegram is paused while this Mac sleeps",
+      tag: "paused",
+      tone: "idle",
+    });
+  });
 });

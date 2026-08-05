@@ -24,13 +24,15 @@ function status(overrides: Partial<TelegramControlStatus> = {}): TelegramControl
 function readyState(
   telegram: TelegramControlStatus,
   allowedSenders: TelegramAllowedSenders = { senders: [] },
-): TelegramSettingsState {
+): Extract<TelegramSettingsState, { readonly status: "ready" }> {
   return {
     status: "ready",
     telegram,
     allowedSenders,
     senderLoadFailed: false,
     announcement: "",
+    healthAnnouncement: "",
+    feedback: null,
   };
 }
 
@@ -130,7 +132,11 @@ describe("Telegram settings surface", () => {
     });
 
     expect(screen.getByLabelText("Telegram pairing code")).toHaveTextContent("A1B2C3");
-    expect(screen.getByText(/first account to send it becomes the primary user/u)).toBeVisible();
+    expect(
+      screen.getByText(
+        /first account to send it becomes the primary user, and the bot stays online/u,
+      ),
+    ).toBeVisible();
   });
 
   it("manages paired users without offering removal for the primary user", async () => {
@@ -180,6 +186,47 @@ describe("Telegram settings surface", () => {
     expect(port.addSender).toHaveBeenCalledWith(303);
   });
 
+  it("truthfully explains automatic recovery when paired-user loading fails", async () => {
+    const user = userEvent.setup();
+    setup({
+      ...readyState(
+        status({
+          channel: { desiredState: "enabled", state: "online" },
+          bot: { state: "ready", username: "desktop_coach_bot" },
+          pairing: { state: "paired" },
+          credentialConfigured: true,
+        }),
+      ),
+      senderLoadFailed: true,
+      allowedSenders: null,
+    });
+
+    await user.click(screen.getByText("Advanced · allowed users"));
+
+    expect(screen.getByText(/will try again automatically/u)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+  });
+
+  it("labels ambiguous Telegram settings as repair-required storage uncertainty", () => {
+    setup(
+      readyState(
+        status({
+          channel: {
+            desiredState: "enabled",
+            state: "failed",
+            errorCode: "telegram-settings-storage-uncertain",
+          },
+          bot: { state: "ready", username: "desktop_coach_bot" },
+          pairing: { state: "unpaired" },
+          credentialConfigured: true,
+        }),
+      ),
+    );
+
+    expect(screen.getByText(/Telegram settings may not have been saved completely/u)).toBeVisible();
+    expect(screen.queryByText(/encrypted bot credential could not be saved/u)).toBeNull();
+  });
+
   it("requires confirmation before removing the encrypted bot credential", async () => {
     const user = userEvent.setup();
     const port = setup(
@@ -199,5 +246,126 @@ describe("Telegram settings surface", () => {
 
     await user.click(screen.getByRole("button", { name: "Remove Telegram bot" }));
     expect(port.remove).toHaveBeenCalledWith();
+  });
+
+  it("supports keyboard replacement confirmation and exposes the reset warning", async () => {
+    const user = userEvent.setup();
+    const port = setup(
+      readyState(
+        status({
+          channel: { desiredState: "enabled", state: "online" },
+          bot: { state: "ready", username: "desktop_coach_bot" },
+          pairing: { state: "paired" },
+          credentialConfigured: true,
+        }),
+      ),
+    );
+
+    const replaceTrigger = screen.getByRole("button", { name: "Replace token from clipboard" });
+    replaceTrigger.focus();
+    await user.keyboard("{Enter}");
+
+    const confirmation = screen.getByRole("group", { name: "Replace @desktop_coach_bot?" });
+    expect(confirmation).toHaveAccessibleDescription(
+      /different bot resets allowed users, turns Telegram off, and must be paired again/iu,
+    );
+    const cancel = within(confirmation).getByRole("button", { name: "Cancel replacement" });
+    expect(cancel).toHaveFocus();
+    expect(port.pasteToken).not.toHaveBeenCalled();
+
+    await user.keyboard(" ");
+    expect(replaceTrigger).toHaveFocus();
+    expect(screen.queryByRole("group", { name: "Replace @desktop_coach_bot?" })).toBeNull();
+
+    await user.keyboard(" ");
+    const reopened = screen.getByRole("group", { name: "Replace @desktop_coach_bot?" });
+    await user.tab();
+    expect(
+      within(reopened).getByRole("button", { name: "Read and verify clipboard token" }),
+    ).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(port.pasteToken).toHaveBeenCalledWith();
+  });
+
+  it("announces a refused replacement as an alert while keeping online health visible", () => {
+    const telegram = status({
+      channel: { desiredState: "enabled", state: "online" },
+      bot: { state: "ready", username: "desktop_coach_bot" },
+      pairing: { state: "paired" },
+      credentialConfigured: true,
+    });
+    setup({
+      ...readyState(telegram),
+      announcement: "The copied token was not applied. The current Telegram bot is unchanged.",
+      feedback: {
+        tone: "error",
+        message: "The copied token was not applied. The current Telegram bot is unchanged.",
+      },
+    });
+
+    expect(screen.getByText("Online")).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The copied token was not applied. The current Telegram bot is unchanged.",
+    );
+  });
+
+  it("announces a health transition separately from action feedback", () => {
+    const telegram = status({
+      channel: { desiredState: "enabled", state: "online" },
+      bot: { state: "ready", username: "desktop_coach_bot" },
+      pairing: { state: "paired" },
+      credentialConfigured: true,
+    });
+    setup({
+      ...readyState(telegram),
+      announcement: "Telegram is online.",
+      healthAnnouncement: "Telegram is online.",
+      feedback: null,
+    });
+
+    expect(screen.getByText("Online")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("Telegram is online.");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("exposes uncertain replacement feedback as a polite live warning", () => {
+    const message =
+      "The token change could not be confirmed. Telegram needs repair before trying again.";
+    setup({
+      ...readyState(
+        status({
+          channel: { desiredState: "enabled", state: "online" },
+          bot: { state: "ready", username: "desktop_coach_bot" },
+          pairing: { state: "paired" },
+          credentialConfigured: true,
+        }),
+      ),
+      announcement: message,
+      feedback: { tone: "warning", message },
+    });
+
+    const warning = screen.getByText(message);
+    expect(warning).toHaveAttribute("role", "status");
+    expect(warning).toHaveAttribute("aria-live", "polite");
+    expect(warning).toHaveAttribute("aria-atomic", "true");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("renders transient sleep suspension without calling it disabled or connecting", () => {
+    setup(
+      readyState(
+        status({
+          channel: { desiredState: "enabled", state: "suspended" },
+          bot: { state: "ready", username: "desktop_coach_bot" },
+          pairing: { state: "paired" },
+          credentialConfigured: true,
+        }),
+      ),
+    );
+
+    expect(screen.getByText("Paused while asleep")).toBeVisible();
+    expect(screen.getByText(/polling resumes when this Mac wakes/iu)).toBeVisible();
+    expect(screen.queryByText("Off")).toBeNull();
+    expect(screen.queryByText("Connecting")).toBeNull();
   });
 });

@@ -116,6 +116,7 @@ const IMPORT_EXTENSIONS = new Set([".fit", ".tcx", ".gpx"]);
 const TELEGRAM_DESKTOP_ERROR_CODES = new Set([
   "telegram-credential-storage-failed",
   "telegram-credential-unavailable",
+  "telegram-settings-storage-uncertain",
   "telegram-daemon-unavailable",
   "telegram-home-mismatch",
   "telegram-stale-operation",
@@ -126,6 +127,21 @@ const TELEGRAM_PAIRING_ERROR_CODES = new Set([
   "telegram-pairing-unavailable",
   "telegram-pairing-refused",
   "telegram-pairing-storage-failed",
+  "telegram-pairing-storage-uncertain",
+]);
+const TELEGRAM_MUTATION_REFUSAL_REASONS = new Set([
+  "clipboard-unavailable",
+  "clipboard-clear-failed",
+  "invalid-token-format",
+  "invalid-token",
+  "validation-unavailable",
+  "webhook-removal-required",
+  "storage-failed",
+  "stale-operation",
+  "transfer-required",
+  "polling-conflict",
+  "control-unavailable",
+  "invalid-state",
 ]);
 const RELEASES_URL = "https://github.com/yerzhansa/enduragent/releases";
 const RELEASE_NOTES_MAX_TOTAL_BYTES = 64 * 1024;
@@ -621,10 +637,26 @@ function parseWriteResult(value: unknown): unknown {
   ) {
     return { slot: value.slot, status: "refused", reason: value.reason };
   }
+  if (
+    value.status === "uncertain" &&
+    exactKeys(value, ["slot", "status", "reason"]) &&
+    value.reason === "storage-uncertain"
+  ) {
+    return { slot: value.slot, status: "uncertain", reason: "storage-uncertain" };
+  }
   throw new TypeError();
 }
 
 function parseDeleteResult(value: unknown): unknown {
+  if (
+    record(value) &&
+    value.status === "uncertain" &&
+    exactKeys(value, ["slot", "status", "reason"]) &&
+    SLOTS.has(value.slot as string) &&
+    value.reason === "storage-uncertain"
+  ) {
+    return { slot: value.slot, status: "uncertain", reason: "storage-uncertain" };
+  }
   if (
     !record(value) ||
     typeof value.credential !== "string" ||
@@ -844,7 +876,7 @@ function parseTelegramChannel(value: unknown): unknown {
   if (!record(value) || typeof value.state !== "string") throw new TypeError();
   const simple =
     (value.state === "disabled" && value.desiredState === "disabled") ||
-    (["waiting-for-credential", "starting"].includes(value.state) &&
+    (["waiting-for-credential", "starting", "suspended"].includes(value.state) &&
       value.desiredState === "enabled") ||
     (value.state === "transfer-required" && value.desiredState === "enabled");
   if (simple && exactKeys(value, ["desiredState", "state"])) {
@@ -869,8 +901,12 @@ function parseTelegramChannel(value: unknown): unknown {
     };
   }
   const daemonError =
-    (value.state === "invalid-token" && value.errorCode === "telegram-invalid-token") ||
-    (value.state === "conflict" && value.errorCode === "telegram-polling-conflict") ||
+    (value.desiredState === "enabled" &&
+      value.state === "invalid-token" &&
+      value.errorCode === "telegram-invalid-token") ||
+    (value.desiredState === "enabled" &&
+      value.state === "conflict" &&
+      value.errorCode === "telegram-polling-conflict") ||
     (value.state === "failed" &&
       value.desiredState === "enabled" &&
       value.errorCode === "telegram-start-failed");
@@ -966,6 +1002,37 @@ function parseTelegramStatus(value: unknown): unknown {
   };
 }
 
+function parseTelegramMutationResult(value: unknown): unknown {
+  if (!record(value) || typeof value.outcome !== "string") throw new TypeError();
+  if (value.outcome === "applied" && exactKeys(value, ["current", "outcome"])) {
+    return { outcome: "applied", current: parseTelegramStatus(value.current) };
+  }
+  if (
+    value.outcome === "refused" &&
+    typeof value.reason === "string" &&
+    TELEGRAM_MUTATION_REFUSAL_REASONS.has(value.reason) &&
+    exactKeys(value, ["current", "outcome", "reason"])
+  ) {
+    return {
+      outcome: "refused",
+      reason: value.reason,
+      current: parseTelegramStatus(value.current),
+    };
+  }
+  if (
+    value.outcome === "uncertain" &&
+    (value.reason === "storage-uncertain" || value.reason === "control-uncertain") &&
+    exactKeys(value, ["current", "outcome", "reason"])
+  ) {
+    return {
+      outcome: "uncertain",
+      reason: value.reason,
+      current: parseTelegramStatus(value.current),
+    };
+  }
+  throw new TypeError();
+}
+
 function parseTelegramSenderInput(value: unknown): { readonly senderId: number } {
   if (
     !record(value) ||
@@ -1012,8 +1079,56 @@ function parseTelegramSenders(value: unknown): unknown {
   return { senders };
 }
 
+function parseTelegramSenderMutation(value: unknown): unknown {
+  if (!record(value) || typeof value.outcome !== "string") throw new TypeError();
+  if (value.outcome === "applied" && exactKeys(value, ["current", "outcome"])) {
+    return { outcome: "applied", current: parseTelegramSenders(value.current) };
+  }
+  if (
+    value.outcome === "refused" &&
+    (value.reason === "invalid-state" || value.reason === "control-unavailable") &&
+    exactKeys(value, ["outcome", "reason"])
+  ) {
+    return { outcome: "refused", reason: value.reason };
+  }
+  if (
+    value.outcome === "uncertain" &&
+    (value.reason === "storage-uncertain" || value.reason === "control-uncertain") &&
+    exactKeys(value, ["outcome", "reason"])
+  ) {
+    return { outcome: "uncertain", reason: value.reason };
+  }
+  throw new TypeError();
+}
+
 function requireZeroArguments(args: readonly unknown[]): void {
   if (args.length !== 0) throw new TypeError();
+}
+
+async function invokeTelegramMutation(channel: string): Promise<unknown> {
+  try {
+    return parseTelegramMutationResult(await ipcRenderer.invoke(channel));
+  } catch {
+    throw new TypeError();
+  }
+}
+
+async function invokeTelegramStatus(): Promise<unknown> {
+  try {
+    return parseTelegramStatus(await ipcRenderer.invoke(DESKTOP_TELEGRAM_STATUS_CHANNEL));
+  } catch {
+    throw new TypeError();
+  }
+}
+
+async function invokeTelegramSenders(): Promise<unknown> {
+  try {
+    return parseTelegramSenders(
+      await ipcRenderer.invoke(DESKTOP_TELEGRAM_LIST_ALLOWED_SENDERS_CHANNEL),
+    );
+  } catch {
+    throw new TypeError();
+  }
 }
 
 let dropDisposer: (() => void) | undefined;
@@ -1126,67 +1241,69 @@ contextBridge.exposeInMainWorld(
       parseClaudeCliStatus(await ipcRenderer.invoke(DESKTOP_CLAUDE_CLI_RECHECK_CHANNEL)),
     telegramStatus: async (...args: unknown[]) => {
       requireZeroArguments(args);
-      return parseTelegramStatus(await ipcRenderer.invoke(DESKTOP_TELEGRAM_STATUS_CHANNEL));
+      return invokeTelegramStatus();
     },
     pasteTelegramTokenFromClipboard: async (...args: unknown[]) => {
       requireZeroArguments(args);
-      return parseTelegramStatus(
-        await ipcRenderer.invoke(DESKTOP_TELEGRAM_PASTE_CREDENTIAL_CHANNEL),
-      );
+      return invokeTelegramMutation(DESKTOP_TELEGRAM_PASTE_CREDENTIAL_CHANNEL);
     },
     enableTelegram: async (...args: unknown[]) => {
       requireZeroArguments(args);
-      return parseTelegramStatus(await ipcRenderer.invoke(DESKTOP_TELEGRAM_ENABLE_CHANNEL));
+      return invokeTelegramMutation(DESKTOP_TELEGRAM_ENABLE_CHANNEL);
     },
     disableTelegram: async (...args: unknown[]) => {
       requireZeroArguments(args);
-      return parseTelegramStatus(await ipcRenderer.invoke(DESKTOP_TELEGRAM_DISABLE_CHANNEL));
+      return invokeTelegramMutation(DESKTOP_TELEGRAM_DISABLE_CHANNEL);
     },
     removeTelegram: async (...args: unknown[]) => {
       requireZeroArguments(args);
-      return parseTelegramStatus(await ipcRenderer.invoke(DESKTOP_TELEGRAM_REMOVE_CHANNEL));
+      return invokeTelegramMutation(DESKTOP_TELEGRAM_REMOVE_CHANNEL);
     },
     reconcileTelegram: async (...args: unknown[]) => {
       requireZeroArguments(args);
-      return parseTelegramStatus(await ipcRenderer.invoke(DESKTOP_TELEGRAM_RECONCILE_CHANNEL));
+      return invokeTelegramMutation(DESKTOP_TELEGRAM_RECONCILE_CHANNEL);
     },
     removeTelegramWebhook: async (...args: unknown[]) => {
       requireZeroArguments(args);
-      return parseTelegramStatus(await ipcRenderer.invoke(DESKTOP_TELEGRAM_REMOVE_WEBHOOK_CHANNEL));
+      return invokeTelegramMutation(DESKTOP_TELEGRAM_REMOVE_WEBHOOK_CHANNEL);
     },
     beginTelegramPairing: async (...args: unknown[]) => {
       requireZeroArguments(args);
-      return parseTelegramStatus(await ipcRenderer.invoke(DESKTOP_TELEGRAM_BEGIN_PAIRING_CHANNEL));
+      return invokeTelegramMutation(DESKTOP_TELEGRAM_BEGIN_PAIRING_CHANNEL);
     },
     cancelTelegramPairing: async (...args: unknown[]) => {
       requireZeroArguments(args);
-      return parseTelegramStatus(await ipcRenderer.invoke(DESKTOP_TELEGRAM_CANCEL_PAIRING_CHANNEL));
+      return invokeTelegramMutation(DESKTOP_TELEGRAM_CANCEL_PAIRING_CHANNEL);
     },
     listTelegramAllowedSenders: async (...args: unknown[]) => {
       requireZeroArguments(args);
-      return parseTelegramSenders(
-        await ipcRenderer.invoke(DESKTOP_TELEGRAM_LIST_ALLOWED_SENDERS_CHANNEL),
-      );
+      return invokeTelegramSenders();
     },
     addTelegramAllowedSender: async (input: unknown, ...args: unknown[]) => {
       requireZeroArguments(args);
       const sender = parseTelegramSenderInput(input);
-      return parseTelegramSenders(
-        await ipcRenderer.invoke(DESKTOP_TELEGRAM_ADD_ALLOWED_SENDER_CHANNEL, sender),
-      );
+      try {
+        return parseTelegramSenderMutation(
+          await ipcRenderer.invoke(DESKTOP_TELEGRAM_ADD_ALLOWED_SENDER_CHANNEL, sender),
+        );
+      } catch {
+        return { outcome: "uncertain", reason: "control-uncertain" };
+      }
     },
     removeTelegramAllowedSender: async (input: unknown, ...args: unknown[]) => {
       requireZeroArguments(args);
       const sender = parseTelegramSenderInput(input);
-      return parseTelegramSenders(
-        await ipcRenderer.invoke(DESKTOP_TELEGRAM_REMOVE_ALLOWED_SENDER_CHANNEL, sender),
-      );
+      try {
+        return parseTelegramSenderMutation(
+          await ipcRenderer.invoke(DESKTOP_TELEGRAM_REMOVE_ALLOWED_SENDER_CHANNEL, sender),
+        );
+      } catch {
+        return { outcome: "uncertain", reason: "control-uncertain" };
+      }
     },
     acknowledgeTelegramGapWarning: async (...args: unknown[]) => {
       requireZeroArguments(args);
-      return parseTelegramStatus(
-        await ipcRenderer.invoke(DESKTOP_TELEGRAM_ACKNOWLEDGE_GAP_WARNING_CHANNEL),
-      );
+      return invokeTelegramMutation(DESKTOP_TELEGRAM_ACKNOWLEDGE_GAP_WARNING_CHANNEL);
     },
     chooseImportFiles: async () =>
       parsePaths(await ipcRenderer.invoke(DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL)),

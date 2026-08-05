@@ -107,6 +107,20 @@ describe("Desktop Telegram pairing", () => {
       errorCode: "telegram-pairing-storage-failed",
     });
 
+    const uncertain = createDesktopTelegramPairing({
+      claimPrimaryOperator: () => ({ status: "uncertain" }),
+      hasPrimaryOperator: () => false,
+      randomBytes: () => Uint8Array.from([1, 2, 3]),
+    });
+    uncertain.begin();
+    expect(uncertain.consumePrivateMessage({ senderId: "11111", messageText: "010203" })).toBe(
+      true,
+    );
+    expect(uncertain.getState()).toEqual({
+      state: "failed",
+      errorCode: "telegram-pairing-storage-uncertain",
+    });
+
     const unavailable = createDesktopTelegramPairing({
       claimPrimaryOperator: () => ({ status: "claimed" }),
       hasPrimaryOperator: () => false,

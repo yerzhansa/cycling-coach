@@ -161,13 +161,13 @@ export class TelegramUpdateOffsetStore {
 
   // Record an update id as dispatched, advancing the offset and the bounded ring.
   private record(state: UpdateOffsetState, updateId: number, acceptedAtMs: number): void {
-    if (!state.dispatchedUpdateIds.includes(updateId)) {
+    if (updateId > state.lastUpdateId) {
       state.dispatchedUpdateIds.push(updateId);
+      if (state.dispatchedUpdateIds.length > MAX_DISPATCHED_IDS) {
+        state.dispatchedUpdateIds = state.dispatchedUpdateIds.slice(-MAX_DISPATCHED_IDS);
+      }
+      state.lastUpdateId = updateId;
     }
-    if (state.dispatchedUpdateIds.length > MAX_DISPATCHED_IDS) {
-      state.dispatchedUpdateIds = state.dispatchedUpdateIds.slice(-MAX_DISPATCHED_IDS);
-    }
-    if (updateId > state.lastUpdateId) state.lastUpdateId = updateId;
     state.lastAcceptedAtMs = Math.max(state.lastAcceptedAtMs ?? acceptedAtMs, acceptedAtMs);
   }
 

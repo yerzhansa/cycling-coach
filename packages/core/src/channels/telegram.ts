@@ -8,12 +8,12 @@ import { sendSnapshotOutput } from "../reference/sync/send-snapshot.js";
 import { createSubsystemLogger } from "../logging/index.js";
 import { truncateUtf16Safe } from "../text-truncate.js";
 import { formatConfirmOutcome } from "../agent/confirmation-gate.js";
+import {
+  TelegramWorkLedger,
+  type TelegramWorkLedgerSnapshot,
+  type TelegramWorkScope,
+} from "./telegram-work-ledger.js";
 import type { TelegramHostCapabilities, TelegramInvocationReservation } from "./telegram-host.js";
-
-// Upper bound on how long /update waits for in-flight turns to finish before
-// self-updating. A hung turn must never wedge the update, so the drain races a
-// timeout.
-const UPDATE_DRAIN_TIMEOUT_MS = 10_000;
 
 // Debounce window for coalescing rapid free-form message fragments from one
 // chat into a single turn. Each new fragment resets the window; the buffered
@@ -49,44 +49,45 @@ const SELF_UPDATE_MARKER_FAILURE =
 // refresh faster than that to keep it continuous without flicker.
 export const TYPING_HEARTBEAT_MS = 4_000;
 
-function drainBounded(drain: () => Promise<void>, timeoutMs: number): Promise<void> {
-  return Promise.race([
-    drain(),
-    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs).unref?.()),
-  ]);
-}
-
 // Pulse Telegram's native "typing" indicator on an interval so a long turn never
 // leaves the athlete staring at silence (a turn can now run up to ~10 min). Fires
 // once immediately, then every intervalMs. Each pulse is best-effort: a rejected
 // (or throwing) pulse is routed to onError and can never affect the turn or its
 // reply. The interval is unref'd so a pending pulse cannot hold the process open
-// during shutdown / an /update drain. Returns a stop() that clears the interval.
+// during shutdown / an /update drain. The stop result settles with the final pulse.
 export function startTypingHeartbeat(
   pulse: () => Promise<unknown>,
   intervalMs: number,
   onError: (err: unknown) => void,
-): () => void {
+): () => Promise<void> {
   // Skip a beat while the previous pulse is still unsettled: under a Telegram
   // flood a pulse can be parked inside the API retry layer, and firing a fresh
   // one every interval regardless would pile parked pulses up and roughly double
   // request volume against an already-throttled API. The flag is cleared in a
   // finally so a rejected pulse cannot wedge the guard permanently.
-  let inFlight = false;
+  let inFlight: Promise<void> | undefined;
   const beat = () => {
-    if (inFlight) return;
-    inFlight = true;
-    void Promise.resolve()
+    if (inFlight !== undefined) return;
+    const task = Promise.resolve()
       .then(pulse)
-      .catch(onError)
+      .catch((error) => {
+        try {
+          onError(error);
+        } catch {}
+      })
+      .then(() => undefined)
       .finally(() => {
-        inFlight = false;
+        if (inFlight === task) inFlight = undefined;
       });
+    inFlight = task;
   };
   beat();
   const timer = setInterval(beat, intervalMs);
   timer.unref?.();
-  return () => clearInterval(timer);
+  return () => {
+    clearInterval(timer);
+    return inFlight ?? Promise.resolve();
+  };
 }
 
 // ============================================================================
@@ -144,14 +145,15 @@ function buildCommandMenu(
   return menu;
 }
 
-// Module-private factory: every Bot in this module is constructed here, with
-// the auth middleware registered FIRST. Future maintainers cannot add a handler
-// ahead of auth without modifying this function — and reviewers scrutinize
-// changes here because this file holds the security model.
+// Module-private factory: every Bot in this module is constructed here, with the
+// root ledger wrapper first and authentication as the first functional gate.
+// Future maintainers cannot add a functional handler ahead of authentication
+// without modifying this function, where the security model is enforced.
 function createSecuredBot(opts: {
   token: string;
   access: TelegramHostCapabilities["access"];
   webhookPolicy: TelegramWebhookPolicy;
+  ledger: TelegramWorkLedger;
   onPollingSuccess?: () => void;
   onPollingFailure?: () => void;
 }): { readonly bot: Bot; readonly prepareStart: () => void } {
@@ -206,6 +208,11 @@ function createSecuredBot(opts: {
     });
   }
 
+  bot.api.config.use((previous, method, payload, signal) =>
+    opts.ledger.track(() => previous(method, payload, signal)),
+  );
+
+  bot.use((_ctx, next) => opts.ledger.trackUpdate(() => Promise.resolve().then(next)));
   bot.use(opts.access.middleware);
 
   return {
@@ -218,9 +225,14 @@ function createSecuredBot(opts: {
 
 export type TelegramWebhookPolicy = "delete-before-polling" | "preserve";
 
+export interface TelegramDrainSnapshot {
+  wait(): Promise<void>;
+}
+
 export interface TelegramChannelRuntime {
   start(): Promise<void>;
   stop(): Promise<void>;
+  captureDrain(): TelegramDrainSnapshot;
   drainPending(): Promise<void>;
   sendMessage(chatId: string | number, text: string): Promise<unknown>;
 }
@@ -237,10 +249,12 @@ export interface CreateTelegramChannelInput {
 }
 
 export function createTelegramBot(input: CreateTelegramChannelInput): TelegramChannelRuntime {
+  const ledger = new TelegramWorkLedger();
   const { bot, prepareStart } = createSecuredBot({
     token: input.token,
     access: input.host.access,
     webhookPolicy: input.webhookPolicy,
+    ledger,
     onPollingSuccess: input.onPollingSuccess,
     onPollingFailure: input.onPollingFailure,
   });
@@ -307,8 +321,6 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
   // never escape as an unhandled rejection. Async host preflight must finish in
   // arrival order before each operation enters the engine's per-session lock;
   // this sequencer advances after invocation, not after the turn completes.
-  const pending = new Set<Promise<void>>();
-  const activeHandlers = new Set<Promise<void>>();
   const engineStartTails = new Map<string, Promise<void>>();
   const enqueueEngineStart = <T>(
     chatId: string,
@@ -336,21 +348,20 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
     return started.then(({ result }) => result);
   };
   const dispatch = (work: () => Promise<void>): void => {
-    const task = (async () => {
+    void ledger.track(async () => {
       try {
         await work();
       } catch (err) {
         log.error("dispatch_failed", err, {});
       }
-    })();
-    pending.add(task);
-    void task.finally(() => pending.delete(task));
+    });
   };
   // Per-chat buffer of free-form fragments awaiting the coalesce window. Each
   // entry rebinds the latest fragment's reply context so the flushed turn
   // answers on a live ctx, and threads to the last fragment's message id.
   interface ChatBuffer {
     fragments: string[];
+    scope: TelegramWorkScope;
     reservation: TelegramInvocationReservation;
     reply: (text: string, options?: Record<string, unknown>) => Promise<unknown>;
     replyWithChatAction: (action: "typing") => Promise<unknown>;
@@ -365,21 +376,47 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
     return reserveInvocation(`telegram:${chatId}`);
   };
 
-  // Flush buffered fragments FIRST (synchronously — flushing dispatches onto
-  // `pending`, so the Promise.all snapshot below includes the flushed turns),
-  // so shutdown and /update drains never drop buffered text and never wait on
-  // the debounce timer.
+  // Flush buffered fragments synchronously so the captured generation owns the
+  // dispatched turn instead of waiting on the debounce timer.
+  const flushSnapshotBuffers = (snapshot: TelegramWorkLedgerSnapshot): void => {
+    for (const [chatId, buffer] of chatBuffers) {
+      if (snapshot.includes(buffer.scope)) flushBufferedChat(chatId);
+    }
+  };
+
+  const waitForSnapshot = async (snapshot: TelegramWorkLedgerSnapshot): Promise<void> => {
+    while (true) {
+      flushSnapshotBuffers(snapshot);
+      await snapshot.wait();
+      const hasCapturedBuffer = [...chatBuffers.values()].some((buffer) =>
+        snapshot.includes(buffer.scope),
+      );
+      if (!hasCapturedBuffer) {
+        snapshot.release();
+        return;
+      }
+    }
+  };
+
+  const captureDrain = (): TelegramDrainSnapshot => {
+    const snapshot = ledger.captureSealedGenerations();
+    flushSnapshotBuffers(snapshot);
+    return { wait: () => waitForSnapshot(snapshot) };
+  };
+
+  const stopPolling = (): Promise<void> => ledger.stopCurrentGeneration(() => bot.stop());
+
   const drainPending = async (): Promise<void> => {
-    while (chatBuffers.size > 0 || pending.size > 0 || activeHandlers.size > 0) {
-      for (const chatId of Array.from(chatBuffers.keys())) flushBufferedChat(chatId);
-      await Promise.all([...pending, ...activeHandlers]);
+    while (true) {
+      const snapshot = ledger.captureAllGenerations();
+      flushSnapshotBuffers(snapshot);
+      await waitForSnapshot(snapshot);
+      if (chatBuffers.size === 0) return;
     }
   };
 
   void bot.api
-    .setMyCommands(
-      buildCommandMenu(host.operations !== undefined, host.release.updateDescription),
-    )
+    .setMyCommands(buildCommandMenu(host.operations !== undefined, host.release.updateDescription))
     .catch((err) => {
       log.error("set_commands_failed", err, {});
     });
@@ -439,7 +476,7 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
         await opts.ctx.reply(kind === "unknown" ? opts.genericReply : athleteMessage);
         return;
       } finally {
-        stopHeartbeat();
+        await stopHeartbeat();
       }
       writeResend(opts.chatId, response);
       try {
@@ -542,6 +579,7 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
     timer.unref?.();
     chatBuffers.set(chatId, {
       fragments,
+      scope: existing?.scope ?? ledger.currentScope(),
       reservation: existing?.reservation ?? reservation,
       reply: (t, o) => ctx.reply(t, o),
       replyWithChatAction: (a) => ctx.replyWithChatAction(a),
@@ -549,20 +587,6 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
       timer,
     });
   }
-
-  bot.use(async (_ctx, next) => {
-    const task = Promise.resolve().then(next);
-    const settled = task.then(
-      () => undefined,
-      () => undefined,
-    );
-    activeHandlers.add(settled);
-    try {
-      await task;
-    } finally {
-      activeHandlers.delete(settled);
-    }
-  });
 
   // Flush middleware: any slash update flushes this chat's buffered text ahead
   // of the command handler, so the buffered turn enqueues on the FIFO session
@@ -605,9 +629,7 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
       );
       return;
     }
-    await ctx.reply(
-      memoryFlushed ? welcomeMessage : `${welcomeMessage}\n\n${RESET_CAVEAT_NOTE}`,
-    );
+    await ctx.reply(memoryFlushed ? welcomeMessage : `${welcomeMessage}\n\n${RESET_CAVEAT_NOTE}`);
   });
 
   bot.command("plan", async (ctx) => {
@@ -796,8 +818,8 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
           ts: new Date().toISOString(),
           targetVersion: info.latest,
         });
-      } catch (markerErr) {
-        log.error("self_update_marker_failed", markerErr, {
+      } catch {
+        log.error("self_update_marker_failed", undefined, {
           chatId: `telegram:${ctx.chat.id}`,
         });
         await ctx.reply(SELF_UPDATE_MARKER_FAILURE);
@@ -808,12 +830,16 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
       );
       // Stop polling first so Telegram commits the /update offset — otherwise
       // Telegram re-sends /update on next startup and we loop forever — then let
-      // in-flight turns finish (bounded) so a self-update never drops a reply the
-      // athlete is already waiting on.
-      void bot
-        .stop()
-        .then(() => drainBounded(drainPending, UPDATE_DRAIN_TIMEOUT_MS))
-        .then(() => release.install(info.latest));
+      // every generation-owned task finish so installer handoff cannot overlap
+      // the runtime it replaces.
+      void stopPolling()
+        .then(() => captureDrain().wait())
+        .then(() => release.install(info.latest))
+        .catch(() => {
+          log.error("self_update_failed", undefined, {
+            chatId: `telegram:${ctx.chat.id}`,
+          });
+        });
     } catch (err) {
       log.error("command_failed", err, { command: "update", chatId: `telegram:${ctx.chat.id}` });
       await ctx.reply(
@@ -909,11 +935,14 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
   return {
     start: () => {
       prepareStart();
-      return input.onStart === undefined ? bot.start() : bot.start({ onStart: input.onStart });
+      return ledger.startGeneration(() =>
+        input.onStart === undefined ? bot.start() : bot.start({ onStart: input.onStart }),
+      );
     },
-    stop: () => bot.stop(),
+    stop: stopPolling,
+    captureDrain,
     drainPending,
-    sendMessage: (chatId, text) => bot.api.sendMessage(chatId, text),
+    sendMessage: (chatId, text) => ledger.trackDirectSend(() => bot.api.sendMessage(chatId, text)),
   };
 }
 

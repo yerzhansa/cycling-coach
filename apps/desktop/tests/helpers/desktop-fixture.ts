@@ -57,10 +57,10 @@ const disabledTelegramSnapshot: TelegramControlSnapshot = {
 };
 const disabledTelegram: DesktopTelegramController = {
   getStatus: () => disabledTelegramSnapshot,
-  configure: async () => disabledTelegramSnapshot,
+  configure: async () => ({ outcome: "applied", current: disabledTelegramSnapshot }),
   enable: async () => disabledTelegramSnapshot,
   disable: async () => disabledTelegramSnapshot,
-  replace: async () => disabledTelegramSnapshot,
+  replace: async () => ({ outcome: "applied", current: disabledTelegramSnapshot }),
   reconcile: async () => disabledTelegramSnapshot,
   inspectTelegramCredential: async () => ({
     status: "unavailable",
@@ -75,8 +75,14 @@ const disabledTelegram: DesktopTelegramController = {
   beginTelegramPairing: async () => disabledTelegramSnapshot,
   cancelTelegramPairing: async () => disabledTelegramSnapshot,
   listTelegramAllowedSenders: async () => ({ senders: [] }),
-  addTelegramAllowedSender: async () => ({ senders: [] }),
-  removeTelegramAllowedSender: async () => ({ senders: [] }),
+  addTelegramAllowedSender: async () => ({
+    outcome: "applied" as const,
+    current: { senders: [] },
+  }),
+  removeTelegramAllowedSender: async () => ({
+    outcome: "applied" as const,
+    current: { senders: [] },
+  }),
   stopPolling: async () => disabledTelegramSnapshot,
   resumePolling: async () => disabledTelegramSnapshot,
   drainPending: async () => disabledTelegramSnapshot,

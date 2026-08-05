@@ -35,22 +35,32 @@ function syncReply(result: Awaited<ReturnType<LocalCoachLifecycle["operations"][
 function createDesktopTelegramHost(
   input: CreateDesktopTelegramRuntimeFactoryInput,
   dependencies: DesktopTelegramRuntimeDependencies,
+  admitted: DesktopTelegramRuntimeFactoryInput["admitted"],
   consumePairing: DesktopTelegramRuntimeFactoryInput["consumePairing"],
 ): TelegramHostCapabilities {
   const dataDir = input.lifecycle.home.root;
+  const canAdmit = (): boolean => admitted() && input.invocations.canAdmit();
   const loadAllowedSenders = dependencies.loadAllowedSenders ?? loadAllowedSendersFromFile;
+  const accessMiddleware = (dependencies.createAccessMiddleware ?? createAuthMiddleware)({
+    dataDir,
+    binaryName: "cycling-coach-desktop",
+    challengeRateLimit: new Map(),
+    challengeMinIntervalMs: 60_000,
+    loadAllowedSenders,
+    pairingChallenge: ({ senderId }) =>
+      `<b>This bot is private.</b>\n\nYour Telegram user ID is <code>${senderId}</code>. Open Cycling Coach Desktop → Settings → Telegram to approve it.`,
+    consumePairing,
+  });
   return {
     access: {
-      middleware: (dependencies.createAccessMiddleware ?? createAuthMiddleware)({
-        dataDir,
-        binaryName: "cycling-coach-desktop",
-        challengeRateLimit: new Map(),
-        challengeMinIntervalMs: 60_000,
-        loadAllowedSenders,
-        pairingChallenge: ({ senderId }) =>
-          `<b>This bot is private.</b>\n\nYour Telegram user ID is <code>${senderId}</code>. Open Cycling Coach Desktop → Settings → Telegram to approve it.`,
-        consumePairing,
-      }),
+      middleware: async (context, next) => {
+        if (canAdmit()) {
+          await accessMiddleware(context, async () => {
+            // `next()` reaches offset dedupe and reservation without yielding, so this check fences both.
+            if (canAdmit()) await next();
+          });
+        }
+      },
     },
     confirmations: {
       peek: async ({ chatId }) => input.lifecycle.confirmations.peek(chatId),
@@ -83,8 +93,8 @@ export function createDesktopTelegramRuntimeFactory(
   input: CreateDesktopTelegramRuntimeFactoryInput,
   dependencies: DesktopTelegramRuntimeDependencies = {},
 ): (runtime: DesktopTelegramRuntimeFactoryInput) => DesktopTelegramRuntime {
-  return ({ token, onStarted, onPollingSuccess, onPollingFailure, consumePairing }) => {
-    const host = createDesktopTelegramHost(input, dependencies, consumePairing);
+  return ({ token, admitted, onStarted, onPollingSuccess, onPollingFailure, consumePairing }) => {
+    const host = createDesktopTelegramHost(input, dependencies, admitted, consumePairing);
     return (dependencies.createBot ?? createTelegramBot)({
       webhookPolicy: "preserve",
       token,

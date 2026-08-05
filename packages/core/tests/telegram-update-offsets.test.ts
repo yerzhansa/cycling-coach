@@ -232,6 +232,37 @@ describe("TelegramUpdateOffsetStore — self-update marker", () => {
     expect(store.load().selfUpdate?.updateId).toBeNull();
   });
 
+  it("keeps the offset store valid when a delayed self-update id is below the high-water mark", () => {
+    const now = Date.UTC(1998, 5, 1);
+    const clock = { now: () => now };
+    const store = new TelegramUpdateOffsetStore(dataDir, TOKEN, clock);
+    const highestUpdateId = MAX_DISPATCHED_IDS + 2;
+    for (let updateId = 2; updateId <= highestUpdateId; updateId++) {
+      expect(store.shouldDispatch(updateId)).toBe(true);
+    }
+
+    store.recordSelfUpdate({
+      updateId: 1,
+      chatId: 777,
+      ts: "1998-06-01T00:00:00.000Z",
+      targetVersion: "2026.6.1",
+    });
+
+    const restarted = new TelegramUpdateOffsetStore(dataDir, TOKEN, clock);
+    expect(restarted.load()).toMatchObject({
+      lastUpdateId: highestUpdateId,
+      dispatchedUpdateIds: expect.arrayContaining([3, highestUpdateId]),
+      selfUpdate: {
+        updateId: 1,
+        chatId: 777,
+        ts: "1998-06-01T00:00:00.000Z",
+        targetVersion: "2026.6.1",
+      },
+    });
+    expect(restarted.load().dispatchedUpdateIds).toHaveLength(MAX_DISPATCHED_IDS);
+    expect(restarted.shouldDispatch(1)).toBe(false);
+  });
+
   it("throws when the marker cannot be written (so /update can decline to stop)", () => {
     const store = new TelegramUpdateOffsetStore(join(dataDir, "missing"), TOKEN);
     expect(() =>

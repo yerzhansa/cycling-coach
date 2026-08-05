@@ -88,18 +88,63 @@ export async function runCoachServe(
         await telegram.resumePolling();
       },
     });
-    const quiesce = async (): Promise<void> => {
-      const fence = invocations.closeAdmission();
-      fence.seal();
-      healthState.setHealthy(false);
-      await telegram.stopPolling();
-      await telegram.drainPending();
-      await fence.drain();
+    let quiescePromise: Promise<void> | undefined;
+    const quiesce = (): Promise<void> => {
+      quiescePromise ??= (async () => {
+        const errors: unknown[] = [];
+        let fence: ReturnType<typeof invocations.closeAdmission> | undefined;
+        try {
+          fence = invocations.closeAdmission();
+        } catch (error) {
+          errors.push(error);
+        }
+        try {
+          fence?.seal();
+        } catch (error) {
+          errors.push(error);
+        }
+        try {
+          healthState.setHealthy(false);
+        } catch (error) {
+          errors.push(error);
+        }
+        try {
+          await telegram.stopPolling();
+        } catch (error) {
+          errors.push(error);
+        }
+        try {
+          await telegram.drainPending();
+        } catch (error) {
+          errors.push(error);
+        }
+        try {
+          await fence?.drain();
+        } catch (error) {
+          errors.push(error);
+        }
+        if (errors.length > 0) throw errors[0];
+      })();
+      return quiescePromise;
     };
     if (aborted) {
-      await quiesce();
-      await rpc.close();
-      await telegram.close();
+      const cleanupErrors: unknown[] = [];
+      try {
+        await quiesce();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      try {
+        await rpc.close();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      try {
+        await telegram.close();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      if (cleanupErrors.length > 0) throw cleanupErrors[0];
       return EXIT_SUCCESS;
     }
     let binding: Awaited<ReturnType<LocalCoachLifecycle["listener"]["bind"]>>;
@@ -118,32 +163,36 @@ export async function runCoachServe(
       throw error;
     }
     if (!aborted) await Promise.race([abortPromise, rpc.shutdownRequested]);
-    await quiesce();
-    let bindingClose: Promise<void>;
+    const cleanupErrors: unknown[] = [];
+    try {
+      await quiesce();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    let bindingClose: Promise<void> | undefined;
     try {
       bindingClose = binding.close();
     } catch (error) {
-      await rpc.close().catch(() => {});
-      await telegram.close().catch(() => {});
-      throw error;
+      cleanupErrors.push(error);
     }
-    let cleanupError: unknown;
     try {
       await rpc.close();
     } catch (error) {
-      cleanupError = error;
+      cleanupErrors.push(error);
     }
-    try {
-      await bindingClose;
-    } catch (error) {
-      cleanupError ??= error;
+    if (bindingClose !== undefined) {
+      try {
+        await bindingClose;
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
     }
     try {
       await telegram.close();
     } catch (error) {
-      cleanupError ??= error;
+      cleanupErrors.push(error);
     }
-    if (cleanupError !== undefined) throw cleanupError;
+    if (cleanupErrors.length > 0) throw cleanupErrors[0];
     return EXIT_SUCCESS;
   } finally {
     input.signal.removeEventListener("abort", latchAbort);

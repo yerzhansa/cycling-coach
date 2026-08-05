@@ -6,6 +6,14 @@ import { cyclingBinary } from "./helpers/cycling-binary-fixture.js";
 import { defaultPairingState, saveAllowedSenders } from "../src/channels/allowed-senders.js";
 import { GARMIN_DATA_ATTRIBUTION } from "../src/agent/garmin-attribution.js";
 
+type TestApiCall = (method: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>;
+type TestApiTransformer = (
+  previous: TestApiCall,
+  method: string,
+  payload: unknown,
+  signal?: AbortSignal,
+) => Promise<unknown>;
+
 let dataDir: string;
 const ENV_KEYS = [
   "CYCLING_COACH_OPERATOR_ID",
@@ -113,30 +121,20 @@ async function createTestTelegramBot(
       ...(reference === undefined ? {} : { reference: reference as never }),
     }),
     dataDir,
-    ...(polling ?? {}),
+    ...polling,
   });
 }
 
 describe("createTelegramBot — webhook ownership", () => {
   it("preserves an existing webhook only for grammY's implicit polling-start deletion", async () => {
-    type Transformer = (
-      previous: (
-        method: string,
-        payload: unknown,
-        signal?: AbortSignal,
-      ) => Promise<{ ok: true; result: true }>,
-      method: string,
-      payload: unknown,
-      signal?: AbortSignal,
-    ) => Promise<unknown>;
-    const transformers: Transformer[] = [];
+    const transformers: TestApiTransformer[] = [];
     const transport = vi.fn(async () => ({ ok: true as const, result: true as const }));
     const bot = {
       api: {
         sendMessage: vi.fn(async () => undefined),
         setMyCommands: vi.fn(async () => true),
         config: {
-          use: vi.fn((transformer: Transformer) => {
+          use: vi.fn((transformer: TestApiTransformer) => {
             transformers.push(transformer);
           }),
         },
@@ -146,7 +144,12 @@ describe("createTelegramBot — webhook ownership", () => {
       on: vi.fn(),
       catch: vi.fn(),
       start: vi.fn(async () => {
-        await transformers.at(-1)!(transport, "deleteWebhook", {
+        const invoke = transformers.reduce<TestApiCall>(
+          (previous, transformer) => (method, payload, signal) =>
+            transformer(previous, method, payload, signal),
+          transport,
+        );
+        await invoke("deleteWebhook", {
           drop_pending_updates: undefined,
         });
       }),
@@ -169,8 +172,12 @@ describe("createTelegramBot — webhook ownership", () => {
     await runtime.start();
     expect(transport).not.toHaveBeenCalled();
 
-    const preserveTransformer = transformers.at(-1)!;
-    await preserveTransformer(transport, "deleteWebhook", { drop_pending_updates: false });
+    const invoke = transformers.reduce<TestApiCall>(
+      (previous, transformer) => (method, payload, signal) =>
+        transformer(previous, method, payload, signal),
+      transport,
+    );
+    await invoke("deleteWebhook", { drop_pending_updates: false });
     expect(transport).toHaveBeenCalledOnce();
 
     await runtime.start();
@@ -178,18 +185,14 @@ describe("createTelegramBot — webhook ownership", () => {
   });
 
   it("observes getUpdates health without owning retries", async () => {
-    type Transformer = (
-      previous: (method: string) => Promise<unknown>,
-      method: string,
-      payload: unknown,
-      signal?: AbortSignal,
-    ) => Promise<unknown>;
-    const transformers: Transformer[] = [];
+    const transformers: TestApiTransformer[] = [];
     const bot = {
       api: {
         sendMessage: vi.fn(async () => undefined),
         setMyCommands: vi.fn(async () => true),
-        config: { use: vi.fn((transformer: Transformer) => transformers.push(transformer)) },
+        config: {
+          use: vi.fn((transformer: TestApiTransformer) => transformers.push(transformer)),
+        },
       },
       use: vi.fn(),
       command: vi.fn(),
@@ -217,17 +220,25 @@ describe("createTelegramBot — webhook ownership", () => {
       "delete-before-polling",
       { onPollingSuccess, onPollingFailure },
     );
-    const observer = transformers.at(-1)!;
     const transport = vi.fn(async () => ({ ok: true }));
+    const invoke = transformers.reduce<TestApiCall>(
+      (previous, transformer) => (method, payload, signal) =>
+        transformer(previous, method, payload, signal),
+      transport,
+    );
 
-    await observer(transport, "getUpdates", {});
-    await observer(transport, "sendMessage", {});
+    await invoke("getUpdates", {});
+    await invoke("sendMessage", {});
     expect(onPollingSuccess).toHaveBeenCalledOnce();
     expect(onPollingFailure).not.toHaveBeenCalled();
 
     const failure = new Error("offline");
     await expect(
-      observer(async () => Promise.reject(failure), "getUpdates", {}),
+      transformers.reduce<TestApiCall>(
+        (previous, transformer) => (method, payload, signal) =>
+          transformer(previous, method, payload, signal),
+        async () => Promise.reject(failure),
+      )("getUpdates", {}),
     ).rejects.toBe(failure);
     expect(onPollingFailure).toHaveBeenCalledOnce();
   });
@@ -325,6 +336,50 @@ describe("createTelegramBot — Garmin attribution carriage", () => {
 });
 
 describe("notifyUpdate — broadcast filtering (L3)", () => {
+  it("records the release only after at least one configured destination succeeds", async () => {
+    saveAllowedSenders(dataDir, () => ({
+      ...defaultPairingState(),
+      dmPolicy: "allowlist",
+      allowFrom: ["11111", "22222"],
+      primaryOperator: "11111",
+    }));
+    const setLastNotifiedVersion = vi.fn();
+    vi.doMock("../src/updater.js", async () => {
+      const real = await vi.importActual<typeof import("../src/updater.js")>("../src/updater.js");
+      return {
+        ...real,
+        checkForUpdate: vi.fn(async () => ({
+          current: "2026.5.5",
+          latest: "2026.5.10",
+          updateAvailable: true,
+        })),
+        getKnownTelegramChatIds: vi.fn(() => ["11111", "22222"]),
+        getLastNotifiedVersion: vi.fn(() => null),
+        setLastNotifiedVersion,
+      };
+    });
+    const { notifyNpmTelegramUpdate } = await import("../src/channels/npm-telegram-host.js");
+
+    await notifyNpmTelegramUpdate(
+      { sendMessage: vi.fn(async () => Promise.reject(new Error("sealed"))) },
+      dataDir,
+      cyclingBinary,
+    );
+    expect(setLastNotifiedVersion).not.toHaveBeenCalled();
+
+    await notifyNpmTelegramUpdate(
+      {
+        sendMessage: vi.fn(async (chatId: string) => {
+          if (chatId === "11111") throw new Error("unavailable");
+        }),
+      },
+      dataDir,
+      cyclingBinary,
+    );
+    expect(setLastNotifiedVersion).toHaveBeenCalledOnce();
+    expect(setLastNotifiedVersion).toHaveBeenCalledWith(dataDir, "2026.5.10");
+  });
+
   it("filters chat-ids to allowFrom subset (allowlist mode)", async () => {
     seedSession("11111"); // allowed
     seedSession("22222"); // allowed
@@ -508,7 +563,10 @@ describe("createTelegramBot — startup diagnostic + no security broadcast", () 
   it("REGRESSION (CRITICAL): startup with no allowed-senders.json does NOT call bot.api.sendMessage", async () => {
     // Mock grammy.Bot so we can spy on sendMessage and avoid network calls.
     const sendMessage = vi.fn(async () => undefined);
-    const use = vi.fn();
+    const middleware: unknown[] = [];
+    const use = vi.fn((handler: unknown) => {
+      middleware.push(handler);
+    });
     const command = vi.fn();
     const on = vi.fn();
     const bot = {
@@ -534,13 +592,29 @@ describe("createTelegramBot — startup diagnostic + no security broadcast", () 
       confirmations: { peek: vi.fn(), confirm: vi.fn(), cancel: vi.fn() },
     };
 
-    await createTestTelegramBot(agent);
+    const [{ createTelegramBot }, { createNpmTelegramHost }] = await Promise.all([
+      import("../src/channels/telegram.js"),
+      import("../src/channels/npm-telegram-host.js"),
+    ]);
+    const host = createNpmTelegramHost({
+      binary: cyclingBinary,
+      confirmations: agent.confirmations,
+      dataDir,
+    });
+    createTelegramBot({
+      token: "FAKE_TOKEN",
+      webhookPolicy: "delete-before-polling",
+      engine: agent as never,
+      host,
+      dataDir,
+    });
 
     // No bot.api.sendMessage anywhere in createTelegramBot — security info goes
     // to stderr only (the operator-constraint).
     expect(sendMessage).not.toHaveBeenCalled();
-    // Auth middleware is registered first.
-    expect(use).toHaveBeenCalled();
+    // The root ledger wrapper is first; authentication is the first functional gate.
+    expect(middleware[0]).not.toBe(host.access.middleware);
+    expect(middleware[1]).toBe(host.access.middleware);
     expect(on).toHaveBeenCalledWith("callback_query:data", expect.any(Function));
     // Diagnostic stderr logging fired.
     expect(errSpy).toHaveBeenCalledWith(

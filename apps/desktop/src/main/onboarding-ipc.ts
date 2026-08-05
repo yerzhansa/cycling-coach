@@ -135,6 +135,9 @@ function minimizeWrite(value: CredentialWriteResult): CredentialWriteResult {
   if (value.status === "configured") {
     return { slot: value.slot, status: "configured", runtimeReady: value.runtimeReady };
   }
+  if (value.status === "uncertain") {
+    return { slot: value.slot, status: "uncertain", reason: "storage-uncertain" };
+  }
   return { slot: value.slot, status: "refused", reason: value.reason };
 }
 
@@ -155,6 +158,11 @@ export type DesktopCredentialDeleteResult =
         | "storage-failed"
         | "runtime-unavailable"
         | "runtime-state-diverged";
+    }
+  | {
+      readonly slot: DesktopCredentialSlot;
+      readonly status: "uncertain";
+      readonly reason: "storage-uncertain";
     };
 
 function parseDeleteInput(value: unknown): DesktopCredentialId {
@@ -178,6 +186,9 @@ function minimizeDelete(
 ): DesktopCredentialDeleteResult {
   if (value.status === "deleted") {
     return { credential, status: "deleted", cleanupPending: value.cleanupPending };
+  }
+  if (value.status === "uncertain") {
+    return { slot: value.slot, status: "uncertain", reason: "storage-uncertain" };
   }
   return { credential, status: "refused", reason: value.reason };
 }

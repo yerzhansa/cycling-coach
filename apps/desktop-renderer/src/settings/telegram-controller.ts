@@ -4,6 +4,7 @@ export type TelegramControlErrorCode =
   | "telegram-start-failed"
   | "telegram-credential-storage-failed"
   | "telegram-credential-unavailable"
+  | "telegram-settings-storage-uncertain"
   | "telegram-daemon-unavailable"
   | "telegram-home-mismatch"
   | "telegram-stale-operation"
@@ -16,6 +17,7 @@ export interface TelegramChannelStatus {
     | "disabled"
     | "waiting-for-credential"
     | "starting"
+    | "suspended"
     | "online"
     | "offline-retrying"
     | "conflict"
@@ -43,7 +45,8 @@ export type TelegramPairingStatus =
       readonly errorCode:
         | "telegram-pairing-unavailable"
         | "telegram-pairing-refused"
-        | "telegram-pairing-storage-failed";
+        | "telegram-pairing-storage-failed"
+        | "telegram-pairing-storage-uncertain";
     };
 
 export type TelegramGapWarning =
@@ -58,6 +61,40 @@ export interface TelegramControlStatus {
   readonly gapWarning: TelegramGapWarning;
 }
 
+export type TelegramMutationReason =
+  | "clipboard-unavailable"
+  | "clipboard-clear-failed"
+  | "invalid-token-format"
+  | "invalid-token"
+  | "validation-unavailable"
+  | "webhook-removal-required"
+  | "storage-failed"
+  | "storage-uncertain"
+  | "control-uncertain"
+  | "stale-operation"
+  | "transfer-required"
+  | "polling-conflict"
+  | "control-unavailable"
+  | "invalid-state";
+
+export type TelegramMutationResult =
+  | { readonly outcome: "applied"; readonly current: TelegramControlStatus }
+  | {
+      readonly outcome: "refused";
+      readonly reason: Exclude<TelegramMutationReason, "storage-uncertain" | "control-uncertain">;
+      readonly current: TelegramControlStatus;
+    }
+  | {
+      readonly outcome: "uncertain";
+      readonly reason: "storage-uncertain" | "control-uncertain";
+      readonly current: TelegramControlStatus;
+    };
+
+export interface TelegramSettingsFeedback {
+  readonly tone: "status" | "success" | "error" | "warning";
+  readonly message: string;
+}
+
 export interface TelegramAllowedSender {
   readonly senderId: number;
   readonly role: "primary" | "additional";
@@ -68,20 +105,28 @@ export interface TelegramAllowedSenders {
   readonly senders: readonly TelegramAllowedSender[];
 }
 
+export type TelegramAllowedSendersMutationResult =
+  | { readonly outcome: "applied"; readonly current: TelegramAllowedSenders }
+  | { readonly outcome: "refused"; readonly reason: "invalid-state" | "control-unavailable" }
+  | {
+      readonly outcome: "uncertain";
+      readonly reason: "storage-uncertain" | "control-uncertain";
+    };
+
 export interface TelegramSettingsBridge {
   status(): Promise<TelegramControlStatus>;
-  pasteTokenFromClipboard(): Promise<TelegramControlStatus>;
-  enable(): Promise<TelegramControlStatus>;
-  disable(): Promise<TelegramControlStatus>;
-  remove(): Promise<TelegramControlStatus>;
-  reconcile(): Promise<TelegramControlStatus>;
-  removeWebhook(): Promise<TelegramControlStatus>;
-  beginPairing(): Promise<TelegramControlStatus>;
-  cancelPairing(): Promise<TelegramControlStatus>;
-  acknowledgeGapWarning(): Promise<TelegramControlStatus>;
+  pasteTokenFromClipboard(): Promise<TelegramMutationResult>;
+  enable(): Promise<TelegramMutationResult>;
+  disable(): Promise<TelegramMutationResult>;
+  remove(): Promise<TelegramMutationResult>;
+  reconcile(): Promise<TelegramMutationResult>;
+  removeWebhook(): Promise<TelegramMutationResult>;
+  beginPairing(): Promise<TelegramMutationResult>;
+  cancelPairing(): Promise<TelegramMutationResult>;
+  acknowledgeGapWarning(): Promise<TelegramMutationResult>;
   listAllowedSenders(): Promise<TelegramAllowedSenders>;
-  addAllowedSender(senderId: number): Promise<TelegramAllowedSenders>;
-  removeAllowedSender(senderId: number): Promise<TelegramAllowedSenders>;
+  addAllowedSender(senderId: number): Promise<TelegramAllowedSendersMutationResult>;
+  removeAllowedSender(senderId: number): Promise<TelegramAllowedSendersMutationResult>;
 }
 
 export type TelegramSettingsAction =
@@ -102,6 +147,8 @@ interface TelegramSettingsContent {
   readonly allowedSenders: TelegramAllowedSenders | null;
   readonly senderLoadFailed: boolean;
   readonly announcement: string;
+  readonly healthAnnouncement: string;
+  readonly feedback: TelegramSettingsFeedback | null;
 }
 
 export type TelegramSettingsState =
@@ -177,6 +224,50 @@ function failureCopy(action: TelegramSettingsAction): string {
   return "Telegram settings could not be changed. Try again.";
 }
 
+function mutationFailureCopy(
+  action: TelegramSettingsAction,
+  result: Exclude<TelegramMutationResult, { readonly outcome: "applied" }>,
+): string {
+  if (
+    action === "begin-pairing" &&
+    result.current.pairing.state === "failed" &&
+    result.current.pairing.errorCode === "telegram-pairing-storage-uncertain"
+  ) {
+    return "The primary Telegram user may have been saved, but Enduragent could not verify storage. Restart Enduragent and check Telegram before pairing again.";
+  }
+  if (result.outcome === "uncertain") {
+    if (result.reason === "control-uncertain") {
+      return action === "paste-token"
+        ? "The Telegram bot change may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check the current bot before trying again."
+        : "The Telegram change may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check this setting before trying again.";
+    }
+    return action === "paste-token"
+      ? "The copied token was not applied to the running bot because storage could not be verified. Restart Enduragent and check Telegram before trying again."
+      : "The change was not applied because storage could not be verified. Restart Enduragent and check this setting before trying again.";
+  }
+  if (action === "paste-token") {
+    switch (result.reason) {
+      case "clipboard-unavailable":
+        return "The clipboard could not be read. No Telegram token was used.";
+      case "clipboard-clear-failed":
+        return "The clipboard could not be cleared, so the copied token was not used. The current Telegram bot is unchanged.";
+      case "invalid-token-format":
+        return "The clipboard does not contain a valid Telegram bot token. The current Telegram bot is unchanged.";
+      case "invalid-token":
+        return "Telegram rejected the copied token. The current Telegram bot is unchanged.";
+      case "validation-unavailable":
+        return "Telegram could not verify the copied token right now. The current Telegram bot is unchanged.";
+      case "webhook-removal-required":
+        return "The copied bot still uses a webhook. Remove that webhook before replacing the current Telegram bot.";
+      case "storage-failed":
+        return "The copied token could not be stored. The current Telegram bot is unchanged.";
+      default:
+        return "The copied token was not applied. The current Telegram bot is unchanged.";
+    }
+  }
+  return failureCopy(action);
+}
+
 function resultCopy(action: TelegramSettingsAction, status: TelegramControlStatus): string {
   if (status.gapWarning.state === "possible-message-loss") {
     return "Telegram reconnected after a long gap. Some messages may not have arrived.";
@@ -192,6 +283,9 @@ function resultCopy(action: TelegramSettingsAction, status: TelegramControlStatu
   }
   if (status.channel.state === "online") return "Telegram is online.";
   if (status.channel.state === "starting") return "Telegram is connecting.";
+  if (status.channel.state === "suspended") {
+    return "Telegram polling is paused while this Mac sleeps.";
+  }
   if (status.channel.state === "disabled") {
     return action === "remove" ? "Telegram was removed from this Mac." : "Telegram is off.";
   }
@@ -258,6 +352,8 @@ export function createTelegramSettingsController(input: {
         allowedSenders: null,
         senderLoadFailed: false,
         announcement: "",
+        healthAnnouncement: "",
+        feedback: null,
       };
     }
     return {
@@ -265,6 +361,8 @@ export function createTelegramSettingsController(input: {
       allowedSenders: currentState.allowedSenders,
       senderLoadFailed: currentState.senderLoadFailed,
       announcement: currentState.announcement,
+      healthAnnouncement: currentState.healthAnnouncement,
+      feedback: currentState.feedback,
     };
   };
 
@@ -293,10 +391,18 @@ export function createTelegramSettingsController(input: {
             currentState.status !== "closed" &&
             currentState.status !== "working"
           ) {
+            const previous = readCurrentContent();
+            const healthAnnouncement =
+              previous.telegram !== null &&
+              previous.telegram.channel.state !== content.telegram.channel.state
+                ? resultCopy("reconcile", content.telegram)
+                : "";
             render({
               status: "ready",
               ...content,
-              announcement: resultCopy("reconcile", content.telegram),
+              announcement: previous.announcement,
+              healthAnnouncement,
+              feedback: previous.feedback,
             });
           }
         },
@@ -323,6 +429,8 @@ export function createTelegramSettingsController(input: {
               status: "ready",
               ...content,
               announcement: resultCopy("reconcile", content.telegram),
+              healthAnnouncement: "",
+              feedback: null,
             });
           }
         },
@@ -335,6 +443,11 @@ export function createTelegramSettingsController(input: {
               allowedSenders: null,
               senderLoadFailed: false,
               announcement: "Telegram settings aren’t available. Keep the app open and try again.",
+              healthAnnouncement: "",
+              feedback: {
+                tone: "error",
+                message: "Telegram settings aren’t available. Keep the app open and try again.",
+              },
             });
           }
         },
@@ -348,7 +461,7 @@ export function createTelegramSettingsController(input: {
 
   const runStatus = (
     action: TelegramSettingsAction,
-    invoke: () => Promise<TelegramControlStatus>,
+    invoke: () => Promise<TelegramMutationResult>,
   ): void => {
     if (disposed || operation !== undefined) return;
     const release = input.beginMutation();
@@ -360,17 +473,34 @@ export function createTelegramSettingsController(input: {
       operation: action,
       ...previous,
       announcement: workingCopy(action),
+      feedback: { tone: "status", message: workingCopy(action) },
     });
     const pending = Promise.resolve()
       .then(invoke)
-      .then((telegram) => contentFor(telegram))
+      .then((result) => {
+        return contentFor(result.current).then((content) => ({ content, result }));
+      })
       .then(
-        (content) => {
+        ({ content, result }) => {
           if (!disposed && generation === operationGeneration) {
+            const message =
+              result.outcome === "applied"
+                ? resultCopy(action, content.telegram)
+                : mutationFailureCopy(action, result);
             render({
               status: "ready",
               ...content,
-              announcement: resultCopy(action, content.telegram),
+              announcement: message,
+              healthAnnouncement: previous.healthAnnouncement,
+              feedback: {
+                tone:
+                  result.outcome === "applied"
+                    ? "success"
+                    : result.outcome === "uncertain"
+                      ? "warning"
+                      : "error",
+                message,
+              },
             });
           }
         },
@@ -381,6 +511,7 @@ export function createTelegramSettingsController(input: {
               kind: "action",
               ...previous,
               announcement: failureCopy(action),
+              feedback: { tone: "error", message: failureCopy(action) },
             });
           }
         },
@@ -394,7 +525,7 @@ export function createTelegramSettingsController(input: {
 
   const runSenders = (
     action: "add-sender" | "remove-sender",
-    invoke: () => Promise<TelegramAllowedSenders>,
+    invoke: () => Promise<TelegramAllowedSendersMutationResult>,
   ): void => {
     if (disposed || operation !== undefined) return;
     const release = input.beginMutation();
@@ -406,19 +537,48 @@ export function createTelegramSettingsController(input: {
       operation: action,
       ...previous,
       announcement: workingCopy(action),
+      feedback: { tone: "status", message: workingCopy(action) },
     });
     const pending = Promise.resolve()
       .then(invoke)
       .then(
-        (allowedSenders) => {
+        (result) => {
           if (!disposed && generation === operationGeneration) {
+            if (result.outcome === "uncertain") {
+              const message =
+                result.reason === "storage-uncertain"
+                  ? "The allowed-user list may have changed, but Enduragent could not verify storage. Restart Enduragent and check the list before trying again."
+                  : "The allowed-user list may have changed, but Enduragent lost confirmation from the local coaching service. Restart Enduragent and check the list before trying again.";
+              render({
+                status: "ready",
+                ...previous,
+                announcement: message,
+                feedback: { tone: "warning", message },
+              });
+              return;
+            }
+            if (result.outcome === "refused") {
+              const message = failureCopy(action);
+              render({
+                status: "ready",
+                ...previous,
+                announcement: message,
+                feedback: { tone: "error", message },
+              });
+              return;
+            }
             render({
               status: "ready",
               ...previous,
-              allowedSenders,
+              allowedSenders: result.current,
               senderLoadFailed: false,
               announcement:
                 action === "add-sender" ? "Telegram user added." : "Telegram user removed.",
+              feedback: {
+                tone: "success",
+                message:
+                  action === "add-sender" ? "Telegram user added." : "Telegram user removed.",
+              },
             });
           }
         },
@@ -429,6 +589,7 @@ export function createTelegramSettingsController(input: {
               kind: "action",
               ...previous,
               announcement: failureCopy(action),
+              feedback: { tone: "error", message: failureCopy(action) },
             });
           }
         },

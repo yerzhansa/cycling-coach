@@ -147,11 +147,13 @@ export async function notifyNpmTelegramUpdate(
       : "Send /whatsnew to see what changed, /update to install.";
     const message = `Update available: ${info.current} → ${info.latest}\n${updateInstruction}\n\nHelp shape what Cycling Coach builds next: please take 3 minutes to answer this short survey so the mobile app, 24/7 bot, Railway template, and setup/payment options are prioritized around what would actually help you: https://tally.so/r/b5Dv4g\n\nWant the bot running 24/7 without keeping your computer on? Deploy the Railway template: https://railway.com/deploy/cycling-coach`;
 
+    let delivered = false;
     for (const chatId of chatIds) {
       try {
         await sender.sendMessage(chatId, message);
+        delivered = true;
       } catch {}
     }
-    setLastNotifiedVersion(dataDir, info.latest);
+    if (delivered) setLastNotifiedVersion(dataDir, info.latest);
   } catch {}
 }

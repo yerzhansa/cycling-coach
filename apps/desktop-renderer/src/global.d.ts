@@ -31,22 +31,22 @@ interface EnduragentAuth {
   claudeCliStatus(): Promise<ClaudeCliStatus>;
   claudeCliRecheck(): Promise<ClaudeCliStatus>;
   telegramStatus(): Promise<DesktopTelegramStatus>;
-  pasteTelegramTokenFromClipboard(): Promise<DesktopTelegramStatus>;
-  enableTelegram(): Promise<DesktopTelegramStatus>;
-  disableTelegram(): Promise<DesktopTelegramStatus>;
-  removeTelegram(): Promise<DesktopTelegramStatus>;
-  reconcileTelegram(): Promise<DesktopTelegramStatus>;
-  removeTelegramWebhook(): Promise<DesktopTelegramStatus>;
-  beginTelegramPairing(): Promise<DesktopTelegramStatus>;
-  cancelTelegramPairing(): Promise<DesktopTelegramStatus>;
+  pasteTelegramTokenFromClipboard(): Promise<DesktopTelegramMutationResult>;
+  enableTelegram(): Promise<DesktopTelegramMutationResult>;
+  disableTelegram(): Promise<DesktopTelegramMutationResult>;
+  removeTelegram(): Promise<DesktopTelegramMutationResult>;
+  reconcileTelegram(): Promise<DesktopTelegramMutationResult>;
+  removeTelegramWebhook(): Promise<DesktopTelegramMutationResult>;
+  beginTelegramPairing(): Promise<DesktopTelegramMutationResult>;
+  cancelTelegramPairing(): Promise<DesktopTelegramMutationResult>;
   listTelegramAllowedSenders(): Promise<DesktopTelegramAllowedSenders>;
   addTelegramAllowedSender(input: {
     readonly senderId: number;
-  }): Promise<DesktopTelegramAllowedSenders>;
+  }): Promise<DesktopTelegramAllowedSendersMutationResult>;
   removeTelegramAllowedSender(input: {
     readonly senderId: number;
-  }): Promise<DesktopTelegramAllowedSenders>;
-  acknowledgeTelegramGapWarning(): Promise<DesktopTelegramStatus>;
+  }): Promise<DesktopTelegramAllowedSendersMutationResult>;
+  acknowledgeTelegramGapWarning(): Promise<DesktopTelegramMutationResult>;
   chooseImportFiles(): Promise<readonly string[]>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
   releaseNotes(): Promise<ReleaseNotesResult>;
@@ -61,6 +61,7 @@ interface EnduragentTrayStatus {
     | "disabled"
     | "waiting-for-credential"
     | "starting"
+    | "suspended"
     | "online"
     | "offline-retrying"
     | "conflict"
@@ -120,6 +121,7 @@ type DesktopTelegramControlErrorCode =
   | "telegram-start-failed"
   | "telegram-credential-storage-failed"
   | "telegram-credential-unavailable"
+  | "telegram-settings-storage-uncertain"
   | "telegram-daemon-unavailable"
   | "telegram-home-mismatch"
   | "telegram-stale-operation"
@@ -133,6 +135,7 @@ type DesktopTelegramChannel =
       readonly state:
         | "waiting-for-credential"
         | "starting"
+        | "suspended"
         | "online"
         | "offline-retrying"
         | "transfer-required";
@@ -168,7 +171,8 @@ type DesktopTelegramPairing =
       readonly errorCode:
         | "telegram-pairing-unavailable"
         | "telegram-pairing-refused"
-        | "telegram-pairing-storage-failed";
+        | "telegram-pairing-storage-failed"
+        | "telegram-pairing-storage-uncertain";
     };
 
 interface DesktopTelegramStatus {
@@ -181,6 +185,33 @@ interface DesktopTelegramStatus {
     | { readonly state: "possible-message-loss"; readonly detectedAt: string };
 }
 
+type DesktopTelegramMutationRefusalReason =
+  | "clipboard-unavailable"
+  | "clipboard-clear-failed"
+  | "invalid-token-format"
+  | "invalid-token"
+  | "validation-unavailable"
+  | "webhook-removal-required"
+  | "storage-failed"
+  | "stale-operation"
+  | "transfer-required"
+  | "polling-conflict"
+  | "control-unavailable"
+  | "invalid-state";
+
+type DesktopTelegramMutationResult =
+  | { readonly outcome: "applied"; readonly current: DesktopTelegramStatus }
+  | {
+      readonly outcome: "refused";
+      readonly reason: DesktopTelegramMutationRefusalReason;
+      readonly current: DesktopTelegramStatus;
+    }
+  | {
+      readonly outcome: "uncertain";
+      readonly reason: "storage-uncertain" | "control-uncertain";
+      readonly current: DesktopTelegramStatus;
+    };
+
 interface DesktopTelegramAllowedSender {
   readonly senderId: number;
   readonly role: "primary" | "additional";
@@ -190,6 +221,14 @@ interface DesktopTelegramAllowedSender {
 interface DesktopTelegramAllowedSenders {
   readonly senders: readonly DesktopTelegramAllowedSender[];
 }
+
+type DesktopTelegramAllowedSendersMutationResult =
+  | { readonly outcome: "applied"; readonly current: DesktopTelegramAllowedSenders }
+  | { readonly outcome: "refused"; readonly reason: "invalid-state" | "control-unavailable" }
+  | {
+      readonly outcome: "uncertain";
+      readonly reason: "storage-uncertain" | "control-uncertain";
+    };
 
 type ReleaseNotesResult =
   | {
@@ -323,6 +362,11 @@ type CredentialWriteResult =
         | "storage-failed"
         | "runtime-unavailable"
         | "training-account-mismatch";
+    }
+  | {
+      readonly slot: DesktopCredentialSlot;
+      readonly status: "uncertain";
+      readonly reason: "storage-uncertain";
     };
 
 type CredentialDeleteResult =
@@ -340,6 +384,11 @@ type CredentialDeleteResult =
         | "storage-failed"
         | "runtime-unavailable"
         | "runtime-state-diverged";
+    }
+  | {
+      readonly slot: DesktopCredentialSlot;
+      readonly status: "uncertain";
+      readonly reason: "storage-uncertain";
     };
 
 interface Window {

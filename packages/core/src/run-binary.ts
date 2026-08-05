@@ -261,7 +261,8 @@ const SHUTDOWN_DRAIN_TIMEOUT_MS = 10_000;
 
 interface BotShutdownDeps {
   stop: () => Promise<void>;
-  drainPending: () => Promise<void>;
+  drainPending?: () => Promise<void>;
+  captureDrain?: () => { wait(): Promise<void> };
   dataDir: string;
   markCleanShutdown: (opts: { dataDir: string }) => void;
   exit: (code: number) => void;
@@ -291,8 +292,11 @@ export function makeBotShutdown(deps: BotShutdownDeps): () => Promise<void> {
     log("\nShutting down — finishing in-flight messages...");
     try {
       await deps.stop();
+      const snapshot = deps.captureDrain?.();
+      const drain = snapshot === undefined ? deps.drainPending : () => snapshot.wait();
+      if (drain === undefined) throw new TypeError("Telegram shutdown drain is unavailable");
       await Promise.race([
-        deps.drainPending(),
+        drain(),
         new Promise<void>((resolve) => setTimeout(resolve, drainTimeoutMs).unref?.()),
       ]);
       await deps.stopTimer?.();
@@ -496,7 +500,7 @@ export async function runBinary(
     const { markCleanShutdown } = await import("./process-guard.js");
     const shutdownBot = makeBotShutdown({
       stop: () => telegram.stop(),
-      drainPending: () => telegram.drainPending(),
+      captureDrain: () => telegram.captureDrain(),
       closePrepared: closeRuntime,
       dataDir: config.dataDir,
       markCleanShutdown,

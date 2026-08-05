@@ -1,6 +1,7 @@
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   class Emitter {
@@ -118,6 +119,29 @@ vi.mock("../src/main/onboarding-ipc.js", () => ({
 vi.mock("@enduragent/coach-client", () => ({ connectCoachClient: vi.fn() }));
 
 import { createDesktopResidency } from "../src/main/residency.js";
+import {
+  BACKGROUND_AT_LOGIN_PREFERENCE_FILE_NAME,
+  createBackgroundAtLoginPreferenceStore,
+  LOGIN_ITEM_PREFERENCE_FILE_MODE,
+  shouldStartInBackgroundAtLogin,
+  type BackgroundAtLoginPreferenceWriteResult,
+} from "../src/main/login-item.js";
+
+const scratchDirectories: string[] = [];
+
+async function scratch(): Promise<string> {
+  const path = await mkdtemp(join(tmpdir(), "enduragent-residency-"));
+  scratchDirectories.push(path);
+  return path;
+}
+
+function deferred<T>() {
+  let resolvePromise!: (value: T) => void;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return { promise, resolve: resolvePromise };
+}
 
 function loginState(
   status: "not-found" | "not-registered" | "enabled" | "requires-approval" = "not-found",
@@ -137,6 +161,9 @@ function setup() {
     channelState: "online" as const,
     gapWarning: false,
   }));
+  const persistLoginPreference = vi.fn<
+    (enabled: boolean) => Promise<BackgroundAtLoginPreferenceWriteResult>
+  >(async (enabled) => ({ status: "stored", enabled }));
   mocks.app.getLoginItemSettings.mockReturnValue(loginState() as never);
   const residency = createDesktopResidency({
     app: mocks.app as never,
@@ -145,10 +172,18 @@ function setup() {
     trayPopoverUrl: "enduragent://app/tray.html",
     trayPreloadPath: "/synthetic/tray.cjs",
     telegramStatus,
+    persistLoginPreference,
     reportFailure,
     observe: (event) => events.push(event),
   });
-  return { residency, events, reportFailure, mainWindow, telegramStatus };
+  return {
+    residency,
+    events,
+    reportFailure,
+    mainWindow,
+    telegramStatus,
+    persistLoginPreference,
+  };
 }
 
 beforeEach(() => {
@@ -166,6 +201,12 @@ beforeEach(() => {
   mocks.app.quit.mockClear();
   mocks.app.getLoginItemSettings.mockReset();
   mocks.app.setLoginItemSettings.mockReset();
+});
+
+afterEach(async () => {
+  await Promise.all(
+    scratchDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
+  );
 });
 
 describe("desktop residency", () => {
@@ -225,7 +266,9 @@ describe("desktop residency", () => {
     (first[0]!.click as () => void)();
     await vi.waitFor(() => expect(mainWindow.show).toHaveBeenCalledOnce());
     (first[2]!.click as (item: { checked: boolean }) => void)({ checked: false });
-    expect(mocks.app.setLoginItemSettings).toHaveBeenCalledWith({ openAtLogin: false });
+    await vi.waitFor(() =>
+      expect(mocks.app.setLoginItemSettings).toHaveBeenCalledWith({ openAtLogin: false }),
+    );
     expect(events).toContainEqual({ type: "main-window-shown" });
   });
 
@@ -251,7 +294,7 @@ describe("desktop residency", () => {
   });
 
   it("re-reads after setter failure and reports no caught value", async () => {
-    const { residency, reportFailure, events } = setup();
+    const { residency, reportFailure, events, persistLoginPreference } = setup();
     await residency.start();
     mocks.app.getLoginItemSettings
       .mockReturnValueOnce(loginState() as never)
@@ -262,10 +305,29 @@ describe("desktop residency", () => {
     mocks.FakeTray.instances[0]!.emit("right-click");
     const menu = mocks.buildFromTemplate.mock.calls[0]![0] as Array<Record<string, unknown>>;
     (menu[2]!.click as (item: { checked: boolean }) => void)({ checked: true });
-    expect(reportFailure).toHaveBeenCalledWith("set-login-item");
-    expect(mocks.app.getLoginItemSettings).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(reportFailure).toHaveBeenCalledWith("set-login-item"));
+    expect(persistLoginPreference.mock.calls).toEqual([[true], [false]]);
+    expect(mocks.app.getLoginItemSettings).toHaveBeenCalled();
     expect(events).toContainEqual({ type: "login-item-read", state: loginState("not-registered") });
   });
+
+  it.each(["refused", "uncertain"] as const)(
+    "leaves the OS login item unchanged when durable preference storage is %s",
+    async (status) => {
+      const { residency, reportFailure, persistLoginPreference } = setup();
+      persistLoginPreference.mockResolvedValueOnce({ status } as never);
+      await residency.start();
+      mocks.app.getLoginItemSettings.mockReturnValue(loginState("not-registered", false) as never);
+      mocks.FakeTray.instances[0]!.emit("right-click");
+      const menu = mocks.buildFromTemplate.mock.calls[0]![0] as Array<Record<string, unknown>>;
+
+      (menu[2]!.click as (item: { checked: boolean }) => void)({ checked: true });
+
+      await vi.waitFor(() => expect(persistLoginPreference).toHaveBeenCalledWith(true));
+      expect(mocks.app.setLoginItemSettings).not.toHaveBeenCalled();
+      expect(reportFailure).toHaveBeenCalledWith("set-login-item");
+    },
+  );
 
   it("deduplicates quit and destroys popover before tray exactly once", async () => {
     const { residency } = setup();
@@ -274,12 +336,204 @@ describe("desktop residency", () => {
     residency.quit();
     residency.quit();
     expect(mocks.app.quit).toHaveBeenCalledOnce();
-    residency.close();
-    residency.close();
+    const firstClose = residency.close();
+    expect(residency.close()).toBe(firstClose);
+    await firstClose;
     expect(mocks.popover.close).toHaveBeenCalledOnce();
     expect(mocks.FakeTray.instances[0]!.destroy).toHaveBeenCalledOnce();
     expect(mocks.order.slice(-2)).toEqual(["popover-destroy", "tray-destroy"]);
     expect(mocks.app.setLoginItemSettings).not.toHaveBeenCalled();
+  });
+
+  it("fences captured tray callbacks and waits for a pending durable login-item update", async () => {
+    const persistence = deferred<{ readonly status: "stored"; readonly enabled: true }>();
+    const { residency, mainWindow, persistLoginPreference } = setup();
+    persistLoginPreference.mockReturnValueOnce(persistence.promise);
+    await residency.start();
+    const tray = mocks.FakeTray.instances[0]!;
+    let openAtLogin = false;
+    mocks.app.getLoginItemSettings.mockImplementation(
+      () => loginState(openAtLogin ? "enabled" : "not-registered", openAtLogin) as never,
+    );
+    mocks.app.setLoginItemSettings.mockImplementation((settings) => {
+      openAtLogin = settings.openAtLogin;
+    });
+    tray.emit("click");
+    tray.emit("right-click");
+    const menu = mocks.buildFromTemplate.mock.calls[0]![0] as Array<Record<string, unknown>>;
+
+    (menu[2]!.click as (item: { checked: boolean }) => void)({ checked: true });
+    await vi.waitFor(() => expect(persistLoginPreference).toHaveBeenCalledWith(true));
+
+    const close = residency.close();
+    let settled = false;
+    void close.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    expect(mocks.popover.close).toHaveBeenCalledOnce();
+    expect(tray.destroy).toHaveBeenCalledOnce();
+    (menu[0]!.click as () => void)();
+    (menu[2]!.click as (item: { checked: boolean }) => void)({ checked: false });
+    (menu[4]!.click as () => void)();
+    expect(mainWindow.show).not.toHaveBeenCalled();
+    expect(persistLoginPreference).toHaveBeenCalledTimes(1);
+    expect(mocks.app.quit).not.toHaveBeenCalled();
+
+    persistence.resolve({ status: "stored", enabled: true });
+    await close;
+
+    expect(mocks.app.setLoginItemSettings).toHaveBeenCalledWith({ openAtLogin: true });
+    expect(settled).toBe(true);
+  });
+
+  it("waits for durable compensation and OS restoration after a login-item setter failure", async () => {
+    const compensation = deferred<{ readonly status: "stored"; readonly enabled: false }>();
+    const { residency, reportFailure, persistLoginPreference } = setup();
+    persistLoginPreference
+      .mockResolvedValueOnce({ status: "stored", enabled: true })
+      .mockReturnValueOnce(compensation.promise);
+    mocks.app.getLoginItemSettings.mockReturnValue(loginState("not-registered", false) as never);
+    mocks.app.setLoginItemSettings
+      .mockImplementationOnce(() => {
+        throw new TypeError();
+      })
+      .mockImplementationOnce(() => undefined);
+    await residency.start();
+    mocks.FakeTray.instances[0]!.emit("right-click");
+    const menu = mocks.buildFromTemplate.mock.calls[0]![0] as Array<Record<string, unknown>>;
+
+    (menu[2]!.click as (item: { checked: boolean }) => void)({ checked: true });
+    await vi.waitFor(() => expect(persistLoginPreference).toHaveBeenNthCalledWith(2, false));
+
+    const close = residency.close();
+    let settled = false;
+    void close.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(mocks.app.setLoginItemSettings).toHaveBeenCalledTimes(1);
+
+    compensation.resolve({ status: "stored", enabled: false });
+    await close;
+
+    expect(mocks.app.setLoginItemSettings.mock.calls).toEqual([
+      [{ openAtLogin: true }],
+      [{ openAtLogin: false }],
+    ]);
+    expect(reportFailure).toHaveBeenCalledWith("set-login-item");
+    expect(settled).toBe(true);
+  });
+
+  it("converges the OS to the durable new preference when compensation is refused", async () => {
+    const { residency, persistLoginPreference, reportFailure } = setup();
+    persistLoginPreference
+      .mockResolvedValueOnce({ status: "stored", enabled: true })
+      .mockResolvedValueOnce({ status: "refused" });
+    let openAtLogin = false;
+    mocks.app.getLoginItemSettings.mockImplementation(
+      () => loginState(openAtLogin ? "enabled" : "not-registered", openAtLogin) as never,
+    );
+    mocks.app.setLoginItemSettings
+      .mockImplementationOnce(() => {
+        throw new TypeError();
+      })
+      .mockImplementationOnce(({ openAtLogin: requested }) => {
+        openAtLogin = requested;
+      });
+    await residency.start();
+    mocks.FakeTray.instances[0]!.emit("right-click");
+    const menu = mocks.buildFromTemplate.mock.calls[0]![0] as Array<Record<string, unknown>>;
+
+    (menu[2]!.click as (item: { checked: boolean }) => void)({ checked: true });
+    await vi.waitFor(() => expect(reportFailure).toHaveBeenCalledWith("set-login-item"));
+    await residency.close();
+
+    expect(persistLoginPreference.mock.calls).toEqual([[true], [false]]);
+    expect(mocks.app.setLoginItemSettings.mock.calls).toEqual([
+      [{ openAtLogin: true }],
+      [{ openAtLogin: true }],
+    ]);
+    expect(openAtLogin).toBe(true);
+  });
+
+  it("keeps a partial OS enablement restart-safe when durable compensation is uncertain", async () => {
+    const root = join(await scratch(), "preferences");
+    const seed = createBackgroundAtLoginPreferenceStore({ root, createId: () => "seed" });
+    await expect(seed.set(true)).resolves.toEqual({ status: "stored", enabled: true });
+    await writeFile(
+      join(root, BACKGROUND_AT_LOGIN_PREFERENCE_FILE_NAME),
+      `${JSON.stringify({ schemaVersion: 1, enabled: false })}\n`,
+      { mode: LOGIN_ITEM_PREFERENCE_FILE_MODE },
+    );
+    let syncCount = 0;
+    const syncDirectory = async (path: string): Promise<void> => {
+      syncCount += 1;
+      if (syncCount >= 3) throw new TypeError();
+      const directory = await open(path, "r");
+      try {
+        await directory.sync();
+      } finally {
+        await directory.close();
+      }
+    };
+    let renameCount = 0;
+    const renameFile: typeof rename = async (from, to) => {
+      renameCount += 1;
+      if (renameCount === 3) throw new TypeError();
+      await rename(from, to);
+    };
+    const faulted = createBackgroundAtLoginPreferenceStore({
+      root,
+      createId: () => "faulted",
+      renameFile,
+      syncDirectory,
+    });
+    const { residency, persistLoginPreference, reportFailure } = setup();
+    const persistenceResults: unknown[] = [];
+    persistLoginPreference.mockImplementation(async (enabled) => {
+      const result = await faulted.set(enabled);
+      persistenceResults.push(result);
+      return result;
+    });
+    let openAtLogin = false;
+    mocks.app.getLoginItemSettings.mockImplementation(
+      () => loginState(openAtLogin ? "enabled" : "not-registered", openAtLogin) as never,
+    );
+    mocks.app.setLoginItemSettings.mockImplementation(({ openAtLogin: requested }) => {
+      openAtLogin = requested;
+      throw new TypeError();
+    });
+    await residency.start();
+    mocks.FakeTray.instances[0]!.emit("right-click");
+    const menu = mocks.buildFromTemplate.mock.calls[0]![0] as Array<Record<string, unknown>>;
+
+    (menu[2]!.click as (item: { checked: boolean }) => void)({ checked: true });
+    await vi.waitFor(() => expect(reportFailure).toHaveBeenCalledWith("set-login-item"));
+    await residency.close();
+
+    expect(mocks.app.setLoginItemSettings).toHaveBeenCalledOnce();
+    expect(openAtLogin).toBe(true);
+    expect(persistLoginPreference.mock.calls).toEqual([[true], [false]]);
+    expect(persistenceResults).toEqual([
+      { status: "stored", enabled: true },
+      { status: "uncertain" },
+    ]);
+    const reopened = createBackgroundAtLoginPreferenceStore({ root });
+    await expect(reopened.read()).resolves.toEqual({
+      state: "configured",
+      enabled: false,
+      loginLaunchBehavior: "background",
+    });
+    await expect(
+      shouldStartInBackgroundAtLogin(
+        { getLoginItemSettings: () => ({ wasOpenedAtLogin: openAtLogin }) } as never,
+        reopened,
+      ),
+    ).resolves.toBe(true);
   });
 
   it("reports show failures by operation and keeps observer data closed", async () => {
@@ -317,6 +571,27 @@ describe("desktop residency", () => {
     expect(initialShow).toBeGreaterThan(residencyStart);
   });
 
+  it("reads repaired Telegram intent after startup and successor reconciliation", async () => {
+    const source = await readFile(resolve(import.meta.dirname, "../src/main/index.ts"), "utf8");
+    const blocks = [
+      source.slice(
+        source.indexOf("const successorTelegramCoordinator"),
+        source.indexOf('throw new TypeError("Telegram successor preparation failed")'),
+      ),
+      source.slice(
+        source.indexOf('if (initialTelegramConnection.supervision === "app-supervised")'),
+        source.indexOf('throw new TypeError("Telegram startup reconciliation failed")'),
+      ),
+    ];
+
+    for (const block of blocks) {
+      const reconcile = block.indexOf(".reconcile();");
+      const desiredRead = block.indexOf("telegramVault.desiredState();");
+      expect(reconcile).toBeGreaterThanOrEqual(0);
+      expect(desiredRead).toBeGreaterThan(reconcile);
+    }
+  });
+
   it("reports tray-start and keeps running when the tray icon cannot load", async () => {
     const { residency, reportFailure, events } = setup();
     mocks.image.isEmpty.mockReturnValue(true);
@@ -324,7 +599,7 @@ describe("desktop residency", () => {
     expect(mocks.FakeTray.instances).toHaveLength(0);
     expect(reportFailure).toHaveBeenCalledWith("tray-start");
     expect(events).toEqual([]);
-    residency.close();
+    await residency.close();
     residency.quit();
     expect(mocks.app.quit).toHaveBeenCalledOnce();
   });

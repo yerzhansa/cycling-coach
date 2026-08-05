@@ -7,12 +7,17 @@ import {
   listDesktopAllowedSenders,
   removeSecondarySender,
   resetDesktopAllowedSenders,
+  type AddSecondarySenderResult,
+  type RemoveSecondarySenderResult,
 } from "@enduragent/core";
 import type {
+  TelegramAllowedSendersMutationResult,
   TelegramAllowedSendersResult,
   TelegramBotState,
   TelegramChannelStatus,
   TelegramControlSnapshot,
+  TelegramControlMutationResult,
+  TelegramControlMutationRefusalReason,
   TelegramCredentialInspection,
   TelegramPairingState,
 } from "@enduragent/coach-contract";
@@ -25,11 +30,16 @@ import {
 export interface DesktopTelegramRuntime {
   start(): Promise<void>;
   stop(): Promise<void>;
-  drainPending(): Promise<void>;
+  captureDrain(): DesktopTelegramDrainSnapshot;
+}
+
+export interface DesktopTelegramDrainSnapshot {
+  wait(): Promise<void>;
 }
 
 export interface DesktopTelegramRuntimeFactoryInput {
   readonly token: string;
+  readonly admitted: () => boolean;
   readonly onStarted: () => void;
   readonly onPollingSuccess: () => void;
   readonly onPollingFailure: () => void;
@@ -44,10 +54,10 @@ export type DesktopTelegramControllerStatus = TelegramControlSnapshot;
 
 export interface DesktopTelegramController {
   getStatus(): TelegramControlSnapshot;
-  configure(token: string): Promise<TelegramControlSnapshot>;
+  configure(token: string): Promise<TelegramControlMutationResult>;
   enable(): Promise<TelegramControlSnapshot>;
   disable(): Promise<TelegramControlSnapshot>;
-  replace(token: string): Promise<TelegramControlSnapshot>;
+  replace(token: string): Promise<TelegramControlMutationResult>;
   reconcile(): Promise<TelegramControlSnapshot>;
   inspectTelegramCredential(token: string): Promise<TelegramCredentialInspection>;
   deleteTelegramWebhook(token: string): Promise<TelegramCredentialInspection>;
@@ -56,8 +66,8 @@ export interface DesktopTelegramController {
   beginTelegramPairing(): Promise<TelegramControlSnapshot>;
   cancelTelegramPairing(): Promise<TelegramControlSnapshot>;
   listTelegramAllowedSenders(): Promise<TelegramAllowedSendersResult>;
-  addTelegramAllowedSender(senderId: number): Promise<TelegramAllowedSendersResult>;
-  removeTelegramAllowedSender(senderId: number): Promise<TelegramAllowedSendersResult>;
+  addTelegramAllowedSender(senderId: number): Promise<TelegramAllowedSendersMutationResult>;
+  removeTelegramAllowedSender(senderId: number): Promise<TelegramAllowedSendersMutationResult>;
   stopPolling(): Promise<TelegramControlSnapshot>;
   resumePolling(): Promise<TelegramControlSnapshot>;
   drainPending(): Promise<TelegramControlSnapshot>;
@@ -75,11 +85,6 @@ interface DesktopSenderRecord {
   readonly addedAt?: string;
 }
 
-interface SecondarySenderMutationResult {
-  readonly status: "added" | "already-allowed" | "removed" | "not-found" | "refused";
-  readonly reason?: string;
-}
-
 type DesktopTelegramTimer = ReturnType<typeof setTimeout> | number;
 
 export interface DesktopTelegramControllerDependencies {
@@ -90,14 +95,11 @@ export interface DesktopTelegramControllerDependencies {
     senderId: string,
   ) => DesktopPrimaryOperatorClaimResult;
   readonly listDesktopAllowedSenders?: (dataDir: string) => readonly DesktopSenderRecord[];
-  readonly addSecondarySender?: (
-    dataDir: string,
-    senderId: string,
-  ) => SecondarySenderMutationResult;
+  readonly addSecondarySender?: (dataDir: string, senderId: string) => AddSecondarySenderResult;
   readonly removeSecondarySender?: (
     dataDir: string,
     senderId: string,
-  ) => SecondarySenderMutationResult;
+  ) => RemoveSecondarySenderResult;
   readonly resetDesktopAllowedSenders?: (dataDir: string) => void;
   readonly bindDesktopTelegramAccess?: (
     dataDir: string,
@@ -113,12 +115,17 @@ export interface DesktopTelegramControllerDependencies {
 interface ActiveRuntime {
   readonly generation: number;
   readonly runtime: DesktopTelegramRuntime;
+  readonly retirementListeners: Set<() => void>;
   attempt: number;
   pollingState: "running" | "paused";
   transportOnline: boolean;
   restartBlocked: boolean;
   stopTask?: Promise<void>;
-  drainTask?: Promise<void>;
+}
+
+interface RetainedDrain {
+  readonly snapshot: DesktopTelegramDrainSnapshot;
+  waitTask?: Promise<void>;
 }
 
 const DISABLED_STATUS = Object.freeze({
@@ -132,6 +139,10 @@ const WAITING_FOR_CREDENTIAL_STATUS = Object.freeze({
 const STARTING_STATUS = Object.freeze({
   desiredState: "enabled",
   state: "starting",
+} as const);
+const SUSPENDED_STATUS = Object.freeze({
+  desiredState: "enabled",
+  state: "suspended",
 } as const);
 const ONLINE_STATUS = Object.freeze({
   desiredState: "enabled",
@@ -210,9 +221,11 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
   private pollingSuspended = false;
   private generation = 0;
   private active: ActiveRuntime | undefined;
+  private readonly retainedDrains = new Set<RetainedDrain>();
   private mutationTail: Promise<void> = Promise.resolve();
   private primaryPresent = false;
   private pairingPolling = false;
+  private pairingReleasePending = false;
   private pairingFailure: TelegramPairingState | undefined;
   private pairingExpiryTimer: DesktopTelegramTimer | undefined;
   private lastSuccessfulPollAt: string | undefined;
@@ -250,27 +263,27 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
     return this.snapshot();
   }
 
-  configure(token: string): Promise<TelegramControlSnapshot> {
+  configure(token: string): Promise<TelegramControlMutationResult> {
     return this.serialize(async () => {
-      if (this.configuredToken !== undefined) return this.snapshot();
+      if (this.configuredToken !== undefined) return this.refusedMutation("invalid-state");
       const inspection = await this.inspect(token);
-      if (inspection.status === "ready" || inspection.status === "webhook-removal-required") {
-        const accessScope = this.dependencies.bindDesktopTelegramAccess(
-          this.input.dataDir,
-          String(inspection.bot.id),
-        );
-        this.applyAccessScope(accessScope);
-        this.configuredToken = token;
-        this.lastSuccessfulPollAt = undefined;
-        this.bot = {
-          state: inspection.status,
-          username: inspection.bot.username,
-        };
-        await this.reconcileUnlocked();
-      } else if (this.desiredEnabled) {
-        this.channel = inspection.status === "invalid-token" ? INVALID_TOKEN_STATUS : FAILED_STATUS;
+      if (inspection.status === "invalid-token") return this.refusedMutation("invalid-token");
+      if (inspection.status === "unavailable") {
+        return this.refusedMutation("validation-unavailable");
       }
-      return this.snapshot();
+      if (inspection.status === "webhook-removal-required") {
+        return this.refusedMutation("webhook-removal-required");
+      }
+      const accessScope = this.dependencies.bindDesktopTelegramAccess(
+        this.input.dataDir,
+        String(inspection.bot.id),
+      );
+      this.applyAccessScope(accessScope);
+      this.configuredToken = token;
+      this.lastSuccessfulPollAt = undefined;
+      this.bot = { state: "ready", username: inspection.bot.username };
+      await this.reconcileUnlocked();
+      return this.appliedMutation();
     });
   }
 
@@ -278,6 +291,14 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
     return this.serialize(async () => {
       this.refreshPrimary();
       if (!this.primaryPresent && !this.pairingPolling) return this.snapshot();
+      if (this.pairingReleasePending) {
+        try {
+          await this.releaseActiveRuntime();
+        } catch {
+          this.channel = DISABLED_STATUS;
+          return this.snapshot();
+        }
+      }
       this.desiredEnabled = true;
       await this.reconcileUnlocked();
       return this.snapshot();
@@ -288,28 +309,42 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
     return this.serialize(() => this.disableUnlocked());
   }
 
-  replace(token: string): Promise<TelegramControlSnapshot> {
+  replace(token: string): Promise<TelegramControlMutationResult> {
     return this.serialize(async () => {
       if (this.configuredToken === token) {
         await this.reconcileUnlocked();
-        return this.snapshot();
+        return this.appliedMutation();
       }
+      if (this.configuredToken === undefined) return this.refusedMutation("invalid-state");
       const inspection = await this.inspect(token);
-      if (inspection.status !== "ready") return this.snapshot();
+      if (inspection.status === "invalid-token") return this.refusedMutation("invalid-token");
+      if (inspection.status === "unavailable") {
+        return this.refusedMutation("validation-unavailable");
+      }
+      if (inspection.status === "webhook-removal-required") {
+        return this.refusedMutation("webhook-removal-required");
+      }
 
       let accessScope: "preserved" | "reset" | undefined;
-      await this.releaseActiveRuntime(() => {
-        accessScope = this.dependencies.bindDesktopTelegramAccess(
-          this.input.dataDir,
-          String(inspection.bot.id),
-        );
-      });
+      try {
+        await this.releaseActiveRuntime(() => {
+          accessScope = this.dependencies.bindDesktopTelegramAccess(
+            this.input.dataDir,
+            String(inspection.bot.id),
+          );
+        });
+      } catch (error) {
+        if (error instanceof DesktopTelegramReleaseError) {
+          return this.refusedMutation("release-refused");
+        }
+        throw error;
+      }
       this.applyAccessScope(accessScope ?? "reset");
       this.configuredToken = token;
       this.lastSuccessfulPollAt = undefined;
       this.bot = { state: inspection.status, username: inspection.bot.username };
       await this.reconcileUnlocked();
-      return this.snapshot();
+      return this.appliedMutation();
     });
   }
 
@@ -377,6 +412,14 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
   beginTelegramPairing(): Promise<TelegramControlSnapshot> {
     return this.serialize(async () => {
       this.refreshPrimary();
+      if (this.pairingReleasePending) {
+        try {
+          await this.releaseActiveRuntime();
+        } catch {
+          this.channel = DISABLED_STATUS;
+          return this.snapshot();
+        }
+      }
       this.desiredEnabled = true;
       if (this.primaryPresent) {
         await this.reconcileUnlocked();
@@ -412,33 +455,43 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
     return this.senderList();
   }
 
-  addTelegramAllowedSender(senderId: number): Promise<TelegramAllowedSendersResult> {
+  addTelegramAllowedSender(senderId: number): Promise<TelegramAllowedSendersMutationResult> {
     return this.serialize(async () => {
       const result = this.dependencies.addSecondarySender(this.input.dataDir, String(senderId));
-      if (result.status === "refused") throw new TypeError("Telegram sender addition was refused");
+      if (result.status === "uncertain") {
+        return { outcome: "uncertain", reason: "storage-uncertain" };
+      }
+      if (result.status === "refused") {
+        return { outcome: "refused", reason: "invalid-state" };
+      }
       this.refreshPrimary();
-      return this.senderList();
+      return { outcome: "applied", current: this.senderList() };
     });
   }
 
-  removeTelegramAllowedSender(senderId: number): Promise<TelegramAllowedSendersResult> {
+  removeTelegramAllowedSender(senderId: number): Promise<TelegramAllowedSendersMutationResult> {
     return this.serialize(async () => {
       const result = this.dependencies.removeSecondarySender(this.input.dataDir, String(senderId));
-      if (result.status === "refused") throw new TypeError("Telegram sender removal was refused");
+      if (result.status === "uncertain") {
+        return { outcome: "uncertain", reason: "storage-uncertain" };
+      }
+      if (result.status === "refused") {
+        return { outcome: "refused", reason: "invalid-state" };
+      }
       this.refreshPrimary();
-      return this.senderList();
+      return { outcome: "applied", current: this.senderList() };
     });
   }
 
   stopPolling(): Promise<TelegramControlSnapshot> {
-    this.pollingSuspended = true;
     return this.serialize(async () => {
+      this.pollingSuspended = true;
       const active = this.active;
-      if (active !== undefined && active.pollingState === "running") {
-        this.channel = this.desiredEnabled ? STARTING_STATUS : DISABLED_STATUS;
-        await this.pauseRuntime(active);
+      if (active !== undefined) {
+        this.channel = this.desiredEnabled ? SUSPENDED_STATUS : DISABLED_STATUS;
+        await this.retireActiveRuntime(active);
       } else if (this.desiredEnabled && this.configuredToken !== undefined) {
-        this.channel = STARTING_STATUS;
+        this.channel = SUSPENDED_STATUS;
       }
       return this.snapshot();
     });
@@ -454,8 +507,12 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
 
   drainPending(): Promise<TelegramControlSnapshot> {
     return this.serialize(async () => {
-      const active = this.active;
-      if (active !== undefined) await this.drainRuntime(active);
+      if (this.active !== undefined) {
+        throw new DesktopTelegramReleaseError("drain");
+      }
+      return [...this.retainedDrains];
+    }).then(async (drains) => {
+      await this.waitForRetainedDrains(drains);
       return this.snapshot();
     });
   }
@@ -471,6 +528,16 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
       bot: this.bot,
       pairing,
     };
+  }
+
+  private appliedMutation(): TelegramControlMutationResult {
+    return { outcome: "applied", current: this.snapshot() };
+  }
+
+  private refusedMutation(
+    reason: TelegramControlMutationRefusalReason,
+  ): TelegramControlMutationResult {
+    return { outcome: "refused", reason, current: this.snapshot() };
   }
 
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
@@ -533,7 +600,10 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
     const timer = schedule(() => {
       if (this.pairingExpiryTimer !== timer) return;
       this.pairingExpiryTimer = undefined;
-      void this.serialize(() => this.expirePairingUnlocked());
+      void this.serialize(() => this.expirePairingUnlocked()).catch(() => {
+        this.desiredEnabled = false;
+        this.channel = DISABLED_STATUS;
+      });
     }, delayMs);
     if (typeof timer !== "number") timer.unref?.();
     this.pairingExpiryTimer = timer;
@@ -547,25 +617,25 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
     ) {
       return this.snapshot();
     }
+    this.closePairingRuntimeIntent();
     await this.releaseActiveRuntime();
-    this.pairingPolling = false;
-    this.desiredEnabled = false;
-    this.channel = DISABLED_STATUS;
     return this.snapshot();
   }
 
   private async cancelPairingUnlocked(): Promise<TelegramControlSnapshot> {
     const shouldStopPreOwnershipPoller = this.pairingPolling && !this.primaryPresent;
-    if (shouldStopPreOwnershipPoller) await this.releaseActiveRuntime();
     this.cancelPairingWindow();
     if (!shouldStopPreOwnershipPoller) return this.snapshot();
-    this.desiredEnabled = false;
-    this.channel = DISABLED_STATUS;
+    this.closePairingRuntimeIntent();
+    await this.releaseActiveRuntime();
     return this.snapshot();
   }
 
   private async reconcileUnlocked(): Promise<void> {
     if (!this.desiredEnabled) {
+      if (this.active !== undefined || this.pairingReleasePending) {
+        await this.releaseActiveRuntime();
+      }
       this.channel = DISABLED_STATUS;
       return;
     }
@@ -588,9 +658,8 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
     }
     const active = this.active;
     if (this.pollingSuspended) {
-      if (active !== undefined && active.pollingState === "running")
-        await this.pauseRuntime(active);
-      this.channel = STARTING_STATUS;
+      if (active !== undefined) await this.retireActiveRuntime(active);
+      this.channel = SUSPENDED_STATUS;
       return;
     }
     if (active === undefined) {
@@ -598,7 +667,8 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
       return;
     }
     if (active.pollingState === "paused" && !active.restartBlocked) {
-      this.resumeRuntime(active);
+      await this.retireActiveRuntime(active);
+      if (this.active === undefined) await this.startConfiguredRuntime();
       return;
     }
     if (active.transportOnline) {
@@ -619,7 +689,7 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
       return;
     }
     if (this.pollingSuspended) {
-      this.channel = STARTING_STATUS;
+      this.channel = SUSPENDED_STATUS;
       return;
     }
     const generation = ++this.generation;
@@ -628,6 +698,7 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
     try {
       runtime = this.input.createRuntime({
         token,
+        admitted: () => this.isCurrent(generation),
         onStarted: () => this.reportTransportStarted(generation),
         onPollingSuccess: () => this.reportPollingSuccess(generation),
         onPollingFailure: () => this.reportPollingFailure(generation),
@@ -640,6 +711,7 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
     const active: ActiveRuntime = {
       generation,
       runtime,
+      retirementListeners: new Set(),
       attempt: 0,
       pollingState: "running",
       transportOnline: false,
@@ -649,7 +721,36 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
     this.startRuntime(active);
   }
 
-  private async consumePairing(
+  private consumePairing(
+    generation: number,
+    input: { readonly senderId: string; readonly messageText: string },
+  ): Promise<boolean> {
+    const active = this.active;
+    if (active === undefined || active.generation !== generation || !this.isCurrent(generation)) {
+      return Promise.resolve(false);
+    }
+    const consumed = this.serialize(() => this.consumePairingUnlocked(generation, input));
+    return new Promise<boolean>((resolve, reject) => {
+      let settled = false;
+      const finish = (result: boolean): void => {
+        if (settled) return;
+        settled = true;
+        active.retirementListeners.delete(retired);
+        resolve(result);
+      };
+      const failed = (error: unknown): void => {
+        if (settled) return;
+        settled = true;
+        active.retirementListeners.delete(retired);
+        reject(error);
+      };
+      const retired = (): void => finish(false);
+      active.retirementListeners.add(retired);
+      void consumed.then(finish, failed);
+    });
+  }
+
+  private async consumePairingUnlocked(
     generation: number,
     input: { readonly senderId: string; readonly messageText: string },
   ): Promise<boolean> {
@@ -657,7 +758,8 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
     const consumed = this.pairing.consumePrivateMessage(input);
     if (!consumed) return false;
     this.refreshPrimary();
-    if (this.pairing.getState().state === "paired" || this.primaryPresent) {
+    const pairing = this.pairing.getState();
+    if (pairing.state === "paired" || this.primaryPresent) {
       this.primaryPresent = true;
       this.pairingPolling = false;
       this.clearPairingExpiry();
@@ -665,93 +767,88 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
       if (active?.generation === generation && active.transportOnline) {
         this.channel = onlineStatus(this.lastSuccessfulPollAt);
       }
+    } else if (pairing.state === "failed") {
+      this.clearPairingExpiry();
+      this.closePairingRuntimeIntent();
+      void this.serialize(() => this.cleanupFailedPairingUnlocked(generation)).catch(() => {
+        this.channel = DISABLED_STATUS;
+      });
     }
     return true;
   }
 
-  private invalidateActive(): ActiveRuntime | undefined {
-    this.generation += 1;
+  private async cleanupFailedPairingUnlocked(generation: number): Promise<void> {
     const active = this.active;
-    if (active !== undefined) {
-      active.attempt += 1;
-      active.pollingState = "paused";
-      active.transportOnline = false;
+    if (
+      this.primaryPresent ||
+      !this.pairingReleasePending ||
+      this.pairingPolling ||
+      active === undefined ||
+      active.generation !== generation
+    ) {
+      return;
     }
-    return active;
+    await this.releaseActiveRuntime();
+  }
+
+  private closePairingRuntimeIntent(): void {
+    this.pairingPolling = false;
+    this.desiredEnabled = false;
+    this.channel = DISABLED_STATUS;
+    this.pairingReleasePending = true;
   }
 
   private async releaseActiveRuntime(
     afterRelease: () => void | Promise<void> = () => undefined,
   ): Promise<void> {
     const active = this.active;
-    if (active === undefined) {
-      await afterRelease();
-      return;
-    }
-    const previous = {
-      generation: this.generation,
-      channel: this.channel,
-      attempt: active.attempt,
-      pollingState: active.pollingState,
-      transportOnline: active.transportOnline,
-      restartBlocked: active.restartBlocked,
-      stopTask: active.stopTask,
-      drainTask: active.drainTask,
-    };
-    this.invalidateActive();
-    let stopped = false;
+    let retired = false;
     try {
-      await this.stopRuntime(active);
-      stopped = true;
-      await this.drainRuntime(active);
+      if (active !== undefined) {
+        await this.retireActiveRuntime(active);
+        retired = this.active !== active;
+      }
+      await this.waitForRetainedDrains([...this.retainedDrains]);
       await afterRelease();
+      this.pairingReleasePending = false;
     } catch (error) {
-      this.generation = previous.generation;
-      active.attempt = previous.attempt;
-      active.pollingState = previous.pollingState;
-      active.transportOnline = previous.transportOnline;
-      active.restartBlocked = previous.restartBlocked;
-      active.stopTask = previous.stopTask;
-      active.drainTask = previous.drainTask;
-      this.active = active;
-      this.channel = previous.channel;
-      if (stopped && previous.pollingState === "running") this.resumeRuntime(active);
+      if (retired && !this.pollingSuspended) await this.startConfiguredRuntime();
       throw error;
     }
-    if (this.active === active) this.active = undefined;
   }
 
-  private async pauseRuntime(active: ActiveRuntime): Promise<void> {
-    const previous = {
-      attempt: active.attempt,
-      pollingState: active.pollingState,
-      transportOnline: active.transportOnline,
-    };
+  private async retireActiveRuntime(active: ActiveRuntime): Promise<void> {
+    if (this.active !== active) return;
+    const previousGeneration = this.generation;
+    const previousChannel = this.channel;
+    const previousAttempt = active.attempt;
+    const previousPollingState = active.pollingState;
+    const previousTransportOnline = active.transportOnline;
+    this.generation += 1;
     active.attempt += 1;
     active.pollingState = "paused";
     active.transportOnline = false;
     try {
       await this.stopRuntime(active);
     } catch (error) {
-      active.attempt = previous.attempt;
-      active.pollingState = previous.pollingState;
-      active.transportOnline = previous.transportOnline;
+      if (this.active === active) {
+        this.generation = previousGeneration;
+        this.channel = previousChannel;
+        active.attempt = previousAttempt;
+        active.pollingState = previousPollingState;
+        active.transportOnline = previousTransportOnline;
+      }
       throw error;
     }
-  }
-
-  private resumeRuntime(active: ActiveRuntime): void {
-    active.stopTask = undefined;
-    active.drainTask = undefined;
-    active.pollingState = "running";
-    active.transportOnline = false;
-    active.restartBlocked = false;
-    this.channel = STARTING_STATUS;
-    this.startRuntime(active);
+    for (const listener of active.retirementListeners) listener();
+    active.retirementListeners.clear();
+    const retained = { snapshot: this.captureRuntimeDrain(active) };
+    this.retainedDrains.add(retained);
+    if (this.active === active) this.active = undefined;
   }
 
   private isCurrent(generation: number): boolean {
-    return this.desiredEnabled && this.generation === generation;
+    return this.desiredEnabled && !this.pollingSuspended && this.generation === generation;
   }
 
   private reportTransportStarted(generation: number): void {
@@ -862,12 +959,36 @@ class DefaultDesktopTelegramController implements DesktopTelegramController {
     }
   }
 
-  private async drainRuntime(active: ActiveRuntime): Promise<void> {
-    const task = (active.drainTask ??= Promise.resolve().then(() => active.runtime.drainPending()));
+  private captureRuntimeDrain(active: ActiveRuntime): DesktopTelegramDrainSnapshot {
     try {
-      await task;
+      return active.runtime.captureDrain();
     } catch (cause) {
-      if (active.drainTask === task) active.drainTask = undefined;
+      throw new DesktopTelegramReleaseError("drain", { cause });
+    }
+  }
+
+  private waitForRetainedDrain(retained: RetainedDrain): Promise<void> {
+    if (retained.waitTask !== undefined) return retained.waitTask;
+    const task = Promise.resolve()
+      .then(() => retained.snapshot.wait())
+      .then(
+        () => {
+          if (retained.waitTask === task) retained.waitTask = undefined;
+          this.retainedDrains.delete(retained);
+        },
+        (error: unknown) => {
+          if (retained.waitTask === task) retained.waitTask = undefined;
+          throw error;
+        },
+      );
+    retained.waitTask = task;
+    return task;
+  }
+
+  private async waitForRetainedDrains(drains: readonly RetainedDrain[]): Promise<void> {
+    try {
+      await Promise.all(drains.map((drain) => this.waitForRetainedDrain(drain)));
+    } catch (cause) {
       throw new DesktopTelegramReleaseError("drain", { cause });
     }
   }

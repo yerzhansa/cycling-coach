@@ -15,6 +15,7 @@ import type {
 } from "@enduragent/kernel-node/lock";
 import { runCoachServe, type CoachServeDependencies } from "../src/serve.js";
 import { createInvocationCoordinator } from "../src/daemon/invocation-coordinator.js";
+import type { CoachRpcServerInput } from "../src/daemon/rpc-server.js";
 import type { LocalCoachLifecycle } from "../src/local-runner.js";
 
 interface Deferred<T> {
@@ -198,7 +199,9 @@ function harness(
   const rpcClose = vi.fn(async () => {
     trace.push("rpc-drained");
   });
-  const createRpcServer = vi.fn(() => {
+  let rpcInput: CoachRpcServerInput | undefined;
+  const createRpcServer = vi.fn((input: CoachRpcServerInput) => {
+    rpcInput = input;
     trace.push("rpc-created");
     options.onCreateRpc?.();
     return {
@@ -249,8 +252,14 @@ function harness(
     beginTelegramPairing: vi.fn(async () => telegramSnapshot),
     cancelTelegramPairing: vi.fn(async () => telegramSnapshot),
     listTelegramAllowedSenders: vi.fn(async () => ({ senders: [] })),
-    addTelegramAllowedSender: vi.fn(async () => ({ senders: [] })),
-    removeTelegramAllowedSender: vi.fn(async () => ({ senders: [] })),
+    addTelegramAllowedSender: vi.fn(async () => ({
+      outcome: "applied" as const,
+      current: { senders: [] },
+    })),
+    removeTelegramAllowedSender: vi.fn(async () => ({
+      outcome: "applied" as const,
+      current: { senders: [] },
+    })),
     stopPolling: vi.fn(async () => {
       trace.push("telegram-stop");
       return telegramSnapshot;
@@ -288,6 +297,7 @@ function harness(
     binding,
     trace,
     handlers: () => handlers,
+    rpcInput: () => rpcInput,
     ensureToken,
     createRpcServer,
     createHealthzHandler,
@@ -354,6 +364,43 @@ describe("runCoachServe", () => {
       "protocol-closed",
       "telegram-close",
     ]);
+  });
+
+  it("wires the invocation-drain callbacks to stop, drain, and resume Telegram", async () => {
+    const controller = new AbortController();
+    const test = harness();
+    const result = runCoachServe({ ...test.input, signal: controller.signal }, test.dependencies);
+    await vi.waitFor(() => expect(test.rpcInput()).toBeDefined());
+    const rpcInput = test.rpcInput();
+    expect(rpcInput?.beforeInvocationDrain).toEqual(expect.any(Function));
+    expect(rpcInput?.afterInvocationDrainRefusal).toEqual(expect.any(Function));
+
+    test.trace.length = 0;
+    const stopSettled = deferred<void>();
+    test.telegram.stopPolling.mockImplementationOnce(async () => {
+      test.trace.push("telegram-stop");
+      await stopSettled.promise;
+      test.trace.push("telegram-stopped");
+      return test.telegram.getStatus();
+    });
+    const draining = rpcInput?.beforeInvocationDrain?.();
+    await vi.waitFor(() => expect(test.trace).toEqual(["telegram-stop"]));
+    expect(test.telegram.drainPending).not.toHaveBeenCalled();
+
+    stopSettled.resolve();
+    await draining;
+    expect(test.trace).toEqual(["telegram-stop", "telegram-stopped", "telegram-drain"]);
+
+    await rpcInput?.afterInvocationDrainRefusal?.();
+    expect(test.trace).toEqual([
+      "telegram-stop",
+      "telegram-stopped",
+      "telegram-drain",
+      "telegram-resume",
+    ]);
+
+    controller.abort();
+    await expect(result).resolves.toBe(EXIT_SUCCESS);
   });
 
   it("stops before RPC construction when abort arrives during token setup", async () => {

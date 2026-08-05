@@ -3,6 +3,7 @@ export interface TrayTelegramStatus {
     | "disabled"
     | "waiting-for-credential"
     | "starting"
+    | "suspended"
     | "online"
     | "offline-retrying"
     | "conflict"
@@ -27,6 +28,13 @@ export function presentTrayTelegramStatus(status: TrayTelegramStatus): TrayTeleg
   }
   if (status.channelState === "starting") {
     return { copy: "Connecting to Telegram", tag: "starting", tone: "idle" };
+  }
+  if (status.channelState === "suspended") {
+    return {
+      copy: "Telegram is paused while this Mac sleeps",
+      tag: "paused",
+      tone: "idle",
+    };
   }
   if (status.channelState === "offline-retrying") {
     return { copy: "Telegram is reconnecting", tag: "retrying", tone: "warning" };

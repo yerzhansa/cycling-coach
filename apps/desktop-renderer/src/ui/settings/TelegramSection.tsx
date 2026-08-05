@@ -17,6 +17,7 @@ function content(state: TelegramSettingsState) {
 function channelLabel(status: TelegramControlStatus): string {
   if (status.channel.state === "online") return "Online";
   if (status.channel.state === "starting") return "Connecting";
+  if (status.channel.state === "suspended") return "Paused while asleep";
   if (status.channel.state === "offline-retrying") return "Reconnecting";
   if (status.channel.state === "conflict") return "Polling conflict";
   if (status.channel.state === "invalid-token") return "Token rejected";
@@ -56,6 +57,9 @@ function attentionCopy(status: TelegramControlStatus): string | null {
     if (status.channel.errorCode === "telegram-credential-storage-failed") {
       return "The encrypted bot credential could not be saved. Check local disk access and try again.";
     }
+    if (status.channel.errorCode === "telegram-settings-storage-uncertain") {
+      return "Telegram settings may not have been saved completely. Keep Telegram unchanged and choose Check again before trying another action.";
+    }
     if (status.channel.errorCode === "telegram-daemon-unavailable") {
       return "The local coaching service is unavailable. Keep Enduragent open, then choose Check again.";
     }
@@ -78,6 +82,9 @@ function pairingFailureCopy(status: TelegramControlStatus): string | null {
     return "The pairing code expired before it was used. Create a new code when you are ready.";
   }
   if (status.pairing.state !== "failed") return null;
+  if (status.pairing.errorCode === "telegram-pairing-storage-uncertain") {
+    return "The primary Telegram user may have been saved, but Enduragent could not verify storage. Restart Enduragent and check Telegram before pairing again.";
+  }
   if (status.pairing.errorCode === "telegram-pairing-storage-failed") {
     return "The primary Telegram user could not be saved. Check local disk access and try pairing again.";
   }
@@ -100,11 +107,16 @@ export function TelegramSection(): ReactElement {
   const port = useEnduragentStore((store) => store.settingsPorts?.telegram ?? null);
   const [senderDraft, setSenderDraft] = useState("");
   const [senderError, setSenderError] = useState<string | null>(null);
+  const [confirmReplace, setConfirmReplace] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const replaceTrigger = useRef<HTMLButtonElement>(null);
+  const replaceCancel = useRef<HTMLButtonElement>(null);
   const removeCancel = useRef<HTMLButtonElement>(null);
   const current = content(state);
   const telegram = current?.telegram ?? null;
   const allowedSenders = current?.allowedSenders ?? null;
+  const feedback = current?.feedback ?? null;
+  const healthAnnouncement = current?.healthAnnouncement ?? "";
   const loading = state.status === "closed" || state.status === "loading";
   const working = state.status === "working";
   const busy = mutating || loading || working;
@@ -120,11 +132,18 @@ export function TelegramSection(): ReactElement {
     telegram?.channel.state === "offline-retrying";
 
   useEffect(() => {
+    if (confirmReplace) replaceCancel.current?.focus();
+  }, [confirmReplace]);
+
+  useEffect(() => {
     if (confirmRemove) removeCancel.current?.focus();
   }, [confirmRemove]);
 
   useEffect(() => {
-    if (telegram?.credentialConfigured !== true) setConfirmRemove(false);
+    if (telegram?.credentialConfigured !== true) {
+      setConfirmReplace(false);
+      setConfirmRemove(false);
+    }
   }, [telegram?.credentialConfigured]);
 
   const submitSender = (event: FormEvent<HTMLFormElement>): void => {
@@ -162,6 +181,12 @@ export function TelegramSection(): ReactElement {
           Telegram works only while Enduragent and its local coaching service are running, and this
           Mac is awake and online.
         </p>
+        <span className={styles.srOnly} role="status" aria-live="polite" aria-atomic="true">
+          {healthAnnouncement}
+        </span>
+        {telegram?.channel.state === "suspended" ? (
+          <p className={styles.note}>Telegram polling resumes when this Mac wakes.</p>
+        ) : null}
 
         {telegram?.gapWarning.state === "possible-message-loss" ? (
           <div className={styles.telegramWarning} role="alert">
@@ -189,18 +214,6 @@ export function TelegramSection(): ReactElement {
           <div className={styles.telegramAttention} role="alert">
             <p>{attention}</p>
             <div className={styles.inlineActions}>
-              {telegram?.channel.state === "invalid-token" ? (
-                <button
-                  type="button"
-                  className={styles.button}
-                  disabled={busy}
-                  onClick={() => {
-                    port?.pasteToken();
-                  }}
-                >
-                  Replace from clipboard
-                </button>
-              ) : null}
               {needsCheck ? (
                 <button
                   type="button"
@@ -224,34 +237,47 @@ export function TelegramSection(): ReactElement {
               <div className={styles.rowDetail}>
                 {paired
                   ? "Paired with a primary Telegram user"
-                  : "Bot verified; pair a primary user before turning it on"}
+                  : "Bot verified; starting pairing turns Telegram on"}
               </div>
             </div>
-            {paired ? (
-              telegram.channel.desiredState === "enabled" ? (
-                <button
-                  type="button"
-                  className={styles.button}
-                  disabled={busy}
-                  onClick={() => {
-                    port?.disable();
-                  }}
-                >
-                  Turn off
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className={[styles.button, styles.primary].join(" ")}
-                  disabled={busy}
-                  onClick={() => {
-                    port?.enable();
-                  }}
-                >
-                  Turn on
-                </button>
-              )
-            ) : null}
+            <div className={styles.inlineActions}>
+              <button
+                type="button"
+                ref={replaceTrigger}
+                className={styles.button}
+                disabled={busy}
+                onClick={() => {
+                  setConfirmReplace(true);
+                }}
+              >
+                Replace token from clipboard
+              </button>
+              {paired ? (
+                telegram.channel.desiredState === "enabled" ? (
+                  <button
+                    type="button"
+                    className={styles.button}
+                    disabled={busy}
+                    onClick={() => {
+                      port?.disable();
+                    }}
+                  >
+                    Turn off
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className={[styles.button, styles.primary].join(" ")}
+                    disabled={busy}
+                    onClick={() => {
+                      port?.enable();
+                    }}
+                  >
+                    Turn on
+                  </button>
+                )
+              ) : null}
+            </div>
           </div>
         ) : (
           <div className={[styles.row, styles.rowStacked].join(" ")}>
@@ -298,6 +324,51 @@ export function TelegramSection(): ReactElement {
           </div>
         )}
 
+        {telegram?.credentialConfigured === true && confirmReplace ? (
+          <div
+            className={styles.telegramRemoveConfirmation}
+            role="group"
+            aria-labelledby="telegram-replace-title"
+            aria-describedby="telegram-replace-warning"
+          >
+            <div>
+              <p className={styles.confirmationTitle} id="telegram-replace-title">
+                Replace @{botUsername}?
+              </p>
+              <p className={styles.confirmationCopy} id="telegram-replace-warning">
+                The same bot keeps its pairing and on/off choice. A different bot resets allowed
+                users, turns Telegram off, and must be paired again. An invalid token leaves the
+                current bot unchanged.
+              </p>
+            </div>
+            <div className={styles.confirmationActions}>
+              <button
+                type="button"
+                ref={replaceCancel}
+                className={styles.button}
+                disabled={busy}
+                onClick={() => {
+                  setConfirmReplace(false);
+                  queueMicrotask(() => replaceTrigger.current?.focus());
+                }}
+              >
+                Cancel replacement
+              </button>
+              <button
+                type="button"
+                className={[styles.button, styles.primary].join(" ")}
+                disabled={busy}
+                onClick={() => {
+                  setConfirmReplace(false);
+                  port?.pasteToken();
+                }}
+              >
+                Read and verify clipboard token
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         {telegram?.bot.state === "webhook-removal-required" ? (
           <div className={styles.telegramAttention} role="alert">
             <div>
@@ -325,7 +396,7 @@ export function TelegramSection(): ReactElement {
             <p className={styles.confirmationTitle}>Pair your Telegram account</p>
             <p className={styles.confirmationCopy}>
               Send this code as a private message to @{telegram.bot.username}. The first account to
-              send it becomes the primary user.
+              send it becomes the primary user, and the bot stays online.
             </p>
             <output className={styles.pairingCode} aria-label="Telegram pairing code">
               {telegram.pairing.code}
@@ -369,7 +440,9 @@ export function TelegramSection(): ReactElement {
                 port?.beginPairing();
               }}
             >
-              {telegram.pairing.state === "expired" ? "Create new code" : "Start pairing"}
+              {telegram.pairing.state === "expired"
+                ? "Create new code and turn on"
+                : "Start pairing and turn on"}
             </button>
           </div>
         ) : null}
@@ -379,7 +452,7 @@ export function TelegramSection(): ReactElement {
             <summary className={styles.telegramSummary}>Advanced · allowed users</summary>
             {current?.senderLoadFailed === true ? (
               <p className={styles.error}>
-                Allowed users could not be loaded. Choose Check again above.
+                Allowed users could not be loaded. Enduragent will try again automatically.
               </p>
             ) : allowedSenders === null ? (
               <p className={styles.help}>Loading allowed users…</p>
@@ -447,9 +520,14 @@ export function TelegramSection(): ReactElement {
           </details>
         ) : null}
 
-        {current?.announcement === undefined || current.announcement.length === 0 ? null : (
-          <p className={styles.feedback} role="status" aria-live="polite" aria-atomic="true">
-            {current.announcement}
+        {feedback === null ? null : (
+          <p
+            className={styles.feedback}
+            role={feedback.tone === "error" ? "alert" : "status"}
+            aria-live={feedback.tone === "error" ? undefined : "polite"}
+            aria-atomic="true"
+          >
+            {feedback.message}
           </p>
         )}
 

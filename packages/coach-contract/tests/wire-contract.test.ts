@@ -61,8 +61,12 @@ import {
   SelfTestRpcResultSchema,
   SpendSummarySchema,
   TelegramAllowedSenderRpcParamsSchema,
+  TelegramAllowedSendersMutationResultSchema,
   TelegramAllowedSendersResultSchema,
+  TelegramControlMutationResultSchema,
   TelegramControlSnapshotSchema,
+  TelegramClipboardCredentialSchema,
+  TelegramCredentialSchema,
   TelegramCredentialInspectionSchema,
   ServerHandshakeFrameSchema,
   TurnEventSchema,
@@ -116,6 +120,35 @@ function transcriptCursor(): string {
 }
 
 const BOUNDARY_REF = "a".repeat(64);
+
+describe("Telegram clipboard credentials", () => {
+  it("accepts representative bot-token syntax without claiming provenance or narrowing the wire credential", () => {
+    const token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi";
+    expect(TelegramClipboardCredentialSchema.parse(token)).toBe(token);
+    expect(TelegramClipboardCredentialSchema.parse(`12345:${"A".repeat(35)}`)).toBe(
+      `12345:${"A".repeat(35)}`,
+    );
+    expect(TelegramClipboardCredentialSchema.parse(`${"9".repeat(16)}:${"_".repeat(35)}`)).toBe(
+      `${"9".repeat(16)}:${"_".repeat(35)}`,
+    );
+    expect(TelegramCredentialSchema.parse("sk-unrelated-secret")).toBe("sk-unrelated-secret");
+
+    for (const value of [
+      "sk-unrelated-secret",
+      "password",
+      "bot-id:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+      "123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+      "123456789:",
+      "1234:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+      `123456789:${"A".repeat(34)}`,
+      `123456789:${"A".repeat(36)}`,
+      `${"9".repeat(17)}:${"A".repeat(35)}`,
+      "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg+i",
+    ]) {
+      expect(TelegramClipboardCredentialSchema.safeParse(value).success).toBe(false);
+    }
+  });
+});
 
 function archivedTranscriptCursor(): string {
   const bytes = Buffer.alloc(114);
@@ -288,6 +321,9 @@ describe("coach request and event projection", () => {
       { jsonrpc: "2.0", id: 18, method: "configureTelegram", params: { token: "bot-token" } },
       { jsonrpc: "2.0", id: 19, method: "enableTelegram", params: {} },
       { jsonrpc: "2.0", id: 20, method: "disableTelegram", params: {} },
+      { jsonrpc: "2.0", id: 34, method: "suspendTelegramPolling", params: {} },
+      { jsonrpc: "2.0", id: 35, method: "resumeTelegramPolling", params: {} },
+      { jsonrpc: "2.0", id: 36, method: "drainTelegram", params: {} },
       { jsonrpc: "2.0", id: 21, method: "replaceTelegram", params: { token: "new-token" } },
       { jsonrpc: "2.0", id: 22, method: "getTelegramStatus", params: {} },
       { jsonrpc: "2.0", id: 23, method: "reconcileTelegram", params: {} },
@@ -343,6 +379,14 @@ describe("coach request and event projection", () => {
         id: 5,
         method: "analyze",
         params: {},
+      }).success,
+    ).toBe(false);
+    expect(
+      CoachRpcRequestEnvelopeSchema.safeParse({
+        jsonrpc: "2.0",
+        id: 36,
+        method: "drainTelegram",
+        params: { stop: true },
       }).success,
     ).toBe(false);
   });
@@ -944,10 +988,13 @@ describe("coach request and event projection", () => {
       }),
       getUnitsPreference: async () => ({ value: "metric", source: "default" }),
       setUnitsPreference: async ({ value }) => ({ value, source: "cycling" }),
-      configureTelegram: async () => telegramSnapshot,
+      configureTelegram: async () => ({ outcome: "applied", current: telegramSnapshot }),
       enableTelegram: async () => telegramSnapshot,
       disableTelegram: async () => telegramSnapshot,
-      replaceTelegram: async () => telegramSnapshot,
+      suspendTelegramPolling: async () => telegramSnapshot,
+      resumeTelegramPolling: async () => telegramSnapshot,
+      drainTelegram: async () => telegramSnapshot,
+      replaceTelegram: async () => ({ outcome: "applied", current: telegramSnapshot }),
       getTelegramStatus: async () => telegramSnapshot,
       reconcileTelegram: async () => telegramSnapshot,
       inspectTelegramCredential: async () => ({
@@ -963,8 +1010,11 @@ describe("coach request and event projection", () => {
       beginTelegramPairing: async () => telegramSnapshot,
       cancelTelegramPairing: async () => telegramSnapshot,
       listTelegramAllowedSenders: async () => ({ senders: [] }),
-      addTelegramAllowedSender: async () => ({ senders: [] }),
-      removeTelegramAllowedSender: async () => ({ senders: [] }),
+      addTelegramAllowedSender: async () => ({ outcome: "applied", current: { senders: [] } }),
+      removeTelegramAllowedSender: async () => ({
+        outcome: "uncertain",
+        reason: "storage-uncertain",
+      }),
       getSpendSummary: async () => spendSummary,
       setDailySpendCap: async () => spendSummary,
       selfTest: async () => ({
@@ -1063,7 +1113,7 @@ describe("coach request and event projection", () => {
     expect(COACH_RPC_METHOD_REGISTRY.configureTelegram).toEqual({
       wireName: "configureTelegram",
       requestSchema: ConfigureTelegramRpcParamsSchema,
-      responseSchema: TelegramControlSnapshotSchema,
+      responseSchema: TelegramControlMutationResultSchema,
       eventSchema: NoRpcEventSchema,
     });
     expect(COACH_RPC_METHOD_REGISTRY.enableTelegram).toEqual({
@@ -1078,10 +1128,28 @@ describe("coach request and event projection", () => {
       responseSchema: TelegramControlSnapshotSchema,
       eventSchema: NoRpcEventSchema,
     });
+    expect(COACH_RPC_METHOD_REGISTRY.suspendTelegramPolling).toEqual({
+      wireName: "suspendTelegramPolling",
+      requestSchema: EmptyRpcParamsSchema,
+      responseSchema: TelegramControlSnapshotSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.resumeTelegramPolling).toEqual({
+      wireName: "resumeTelegramPolling",
+      requestSchema: EmptyRpcParamsSchema,
+      responseSchema: TelegramControlSnapshotSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.drainTelegram).toEqual({
+      wireName: "drainTelegram",
+      requestSchema: EmptyRpcParamsSchema,
+      responseSchema: TelegramControlSnapshotSchema,
+      eventSchema: NoRpcEventSchema,
+    });
     expect(COACH_RPC_METHOD_REGISTRY.replaceTelegram).toEqual({
       wireName: "replaceTelegram",
       requestSchema: ReplaceTelegramRpcParamsSchema,
-      responseSchema: TelegramControlSnapshotSchema,
+      responseSchema: TelegramControlMutationResultSchema,
       eventSchema: NoRpcEventSchema,
     });
     expect(COACH_RPC_METHOD_REGISTRY.getTelegramStatus).toEqual({
@@ -1135,13 +1203,13 @@ describe("coach request and event projection", () => {
     expect(COACH_RPC_METHOD_REGISTRY.addTelegramAllowedSender).toEqual({
       wireName: "addTelegramAllowedSender",
       requestSchema: TelegramAllowedSenderRpcParamsSchema,
-      responseSchema: TelegramAllowedSendersResultSchema,
+      responseSchema: TelegramAllowedSendersMutationResultSchema,
       eventSchema: NoRpcEventSchema,
     });
     expect(COACH_RPC_METHOD_REGISTRY.removeTelegramAllowedSender).toEqual({
       wireName: "removeTelegramAllowedSender",
       requestSchema: TelegramAllowedSenderRpcParamsSchema,
-      responseSchema: TelegramAllowedSendersResultSchema,
+      responseSchema: TelegramAllowedSendersMutationResultSchema,
       eventSchema: NoRpcEventSchema,
     });
     expect(COACH_RPC_METHOD_REGISTRY.getSpendSummary).toEqual({
@@ -1177,6 +1245,9 @@ describe("coach request and event projection", () => {
       "configureTelegram",
       "enableTelegram",
       "disableTelegram",
+      "suspendTelegramPolling",
+      "resumeTelegramPolling",
+      "drainTelegram",
       "replaceTelegram",
       "getTelegramStatus",
       "reconcileTelegram",
@@ -1216,6 +1287,46 @@ describe("coach request and event projection", () => {
       }).success,
     ).toBe(false);
     expect(
+      TelegramAllowedSendersMutationResultSchema.safeParse({
+        outcome: "applied",
+        current: { senders: [] },
+      }).success,
+    ).toBe(true);
+    expect(
+      TelegramAllowedSendersMutationResultSchema.safeParse({
+        outcome: "uncertain",
+        reason: "storage-uncertain",
+      }).success,
+    ).toBe(true);
+    expect(
+      TelegramAllowedSendersMutationResultSchema.safeParse({
+        outcome: "uncertain",
+        reason: "control-uncertain",
+      }).success,
+    ).toBe(true);
+    expect(
+      TelegramAllowedSendersMutationResultSchema.safeParse({
+        outcome: "refused",
+        reason: "invalid-state",
+      }).success,
+    ).toBe(true);
+    expect(
+      TelegramControlSnapshotSchema.safeParse({
+        ...telegramSnapshot,
+        pairing: { state: "failed", errorCode: "telegram-pairing-storage-uncertain" },
+      }).success,
+    ).toBe(true);
+    for (const malformed of [
+      { outcome: "applied", senders: [] },
+      { outcome: "uncertain", reason: "storage-uncertain", current: { senders: [] } },
+      { outcome: "uncertain", reason: "storage-failed" },
+      { outcome: "refused", reason: "primary-removal" },
+      { outcome: "refused", reason: "invalid-state", current: { senders: [] } },
+      { outcome: "applied", current: { senders: [] }, privateDetail: "private" },
+    ]) {
+      expect(TelegramAllowedSendersMutationResultSchema.safeParse(malformed).success).toBe(false);
+    }
+    expect(
       TelegramAllowedSendersResultSchema.safeParse({
         senders: [{ senderId: 123_456, role: "additional" }],
       }).success,
@@ -1238,6 +1349,46 @@ describe("coach request and event projection", () => {
           state: "offline-retrying",
           lastSuccessfulPollAt: "not-a-timestamp",
         },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("keeps Telegram configure and replacement outcomes closed and secret-safe", () => {
+    expect(
+      TelegramControlMutationResultSchema.parse({
+        outcome: "applied",
+        current: telegramSnapshot,
+      }),
+    ).toEqual({ outcome: "applied", current: telegramSnapshot });
+    for (const reason of [
+      "invalid-token",
+      "validation-unavailable",
+      "webhook-removal-required",
+      "invalid-state",
+      "release-refused",
+    ] as const) {
+      expect(
+        TelegramControlMutationResultSchema.parse({
+          outcome: "refused",
+          reason,
+          current: telegramSnapshot,
+        }),
+      ).toEqual({ outcome: "refused", reason, current: telegramSnapshot });
+    }
+    expect(TelegramControlMutationResultSchema.safeParse(telegramSnapshot).success).toBe(false);
+    expect(
+      TelegramControlMutationResultSchema.safeParse({
+        outcome: "refused",
+        reason: "private-token-leaked",
+        current: telegramSnapshot,
+      }).success,
+    ).toBe(false);
+    expect(
+      TelegramControlMutationResultSchema.safeParse({
+        outcome: "refused",
+        reason: "invalid-token",
+        current: telegramSnapshot,
+        token: "private",
       }).success,
     ).toBe(false);
   });

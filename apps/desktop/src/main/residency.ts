@@ -9,6 +9,7 @@ import {
 import {
   readLoginItemResidency,
   setLoginItemResidency,
+  type BackgroundAtLoginPreferenceWriteResult,
   type LoginItemResidencyState,
 } from "./login-item.js";
 import { createTrayPopover, type TrayPopover } from "./tray-popover.js";
@@ -40,6 +41,9 @@ export interface DesktopResidencyInput {
   readonly trayPopoverUrl: string;
   readonly trayPreloadPath: string;
   readonly telegramStatus: () => Promise<TrayTelegramStatus>;
+  readonly persistLoginPreference: (
+    enabled: boolean,
+  ) => Promise<BackgroundAtLoginPreferenceWriteResult>;
   readonly reportFailure: (
     operation: "read-login-item" | "set-login-item" | "show-window" | "tray-start",
   ) => void;
@@ -50,6 +54,7 @@ export type TrayTelegramChannelState =
   | "disabled"
   | "waiting-for-credential"
   | "starting"
+  | "suspended"
   | "online"
   | "offline-retrying"
   | "conflict"
@@ -66,7 +71,7 @@ export interface DesktopResidency {
   start(): Promise<void>;
   showMainWindow(): Promise<void>;
   quit(): void;
-  close(): void;
+  close(): Promise<void>;
 }
 
 export function createDesktopResidency(input: DesktopResidencyInput): DesktopResidency {
@@ -75,15 +80,18 @@ export function createDesktopResidency(input: DesktopResidencyInput): DesktopRes
   let startPromise: Promise<void> | undefined;
   let quitRequested = false;
   let closed = false;
+  let closePromise: Promise<void> | undefined;
+  let loginItemMutation: Promise<void> = Promise.resolve();
 
   const hidePopover = (): void => popover?.hide();
   const showMainWindow = async (): Promise<void> => {
+    if (closed) return;
     hidePopover();
     try {
       await input.mainWindow.show();
-      input.observe?.({ type: "main-window-shown" });
+      if (!closed) input.observe?.({ type: "main-window-shown" });
     } catch {
-      input.reportFailure("show-window");
+      if (!closed) input.reportFailure("show-window");
     }
   };
   const ensurePopover = (): TrayPopover => {
@@ -95,15 +103,24 @@ export function createDesktopResidency(input: DesktopResidencyInput): DesktopRes
       getTrayBounds: () => tray?.getBounds() ?? { x: 0, y: 0, width: 0, height: 0 },
     });
     popover.window.on("show", () => {
+      if (closed) return;
       input.observe?.({ type: "popover-shown" });
       const target = popover;
       if (target === undefined) return;
       void input.telegramStatus().then(
-        (status) => target.publishTelegramStatus(status),
-        () => target.publishTelegramStatus({ channelState: "failed", gapWarning: false }),
+        (status) => {
+          if (!closed && popover === target) target.publishTelegramStatus(status);
+        },
+        () => {
+          if (!closed && popover === target) {
+            target.publishTelegramStatus({ channelState: "failed", gapWarning: false });
+          }
+        },
       );
     });
-    popover.window.on("hide", () => input.observe?.({ type: "popover-hidden" }));
+    popover.window.on("hide", () => {
+      if (!closed) input.observe?.({ type: "popover-hidden" });
+    });
     return popover;
   };
   const readLoginState = (): LoginItemResidencyState | undefined => {
@@ -117,16 +134,63 @@ export function createDesktopResidency(input: DesktopResidencyInput): DesktopRes
     }
   };
   const setLoginState = (openAtLogin: boolean): void => {
-    try {
-      const state = setLoginItemResidency(input.app, openAtLogin);
-      input.observe?.({ type: "login-item-set", state });
-    } catch {
+    if (closed) return;
+    const mutation = loginItemMutation.then(async () => {
+      const previous = readLoginState();
+      if (previous === undefined) return;
+      let stored: BackgroundAtLoginPreferenceWriteResult;
+      try {
+        stored = await input.persistLoginPreference(openAtLogin);
+      } catch {
+        input.reportFailure("set-login-item");
+        return;
+      }
+      if (stored.status !== "stored" || stored.enabled !== openAtLogin) {
+        input.reportFailure("set-login-item");
+        return;
+      }
+      let applied: LoginItemResidencyState | undefined;
+      try {
+        const state = setLoginItemResidency(input.app, openAtLogin);
+        if (state.openAtLogin !== openAtLogin) throw new TypeError();
+        applied = state;
+      } catch {}
+      if (applied !== undefined) {
+        input.observe?.({ type: "login-item-set", state: applied });
+        return;
+      }
+      let compensation: BackgroundAtLoginPreferenceWriteResult = { status: "uncertain" };
+      try {
+        compensation = await input.persistLoginPreference(previous.openAtLogin);
+      } catch {}
+      let convergenceTarget: boolean | undefined;
+      if (compensation.status === "stored") {
+        convergenceTarget = compensation.enabled;
+      } else if (compensation.status === "refused") {
+        // The reversible write proved that its prior, the new preference, remains durable.
+        convergenceTarget = openAtLogin;
+      }
+      if (convergenceTarget !== undefined) {
+        let converged = false;
+        try {
+          const state = setLoginItemResidency(input.app, convergenceTarget);
+          if (state.openAtLogin !== convergenceTarget) throw new TypeError();
+          input.observe?.({ type: "login-item-set", state });
+          converged = true;
+        } catch {}
+        if (!converged) readLoginState();
+      } else {
+        readLoginState();
+      }
       input.reportFailure("set-login-item");
-      readLoginState();
-    }
+    });
+    loginItemMutation = mutation.then(
+      () => undefined,
+      () => undefined,
+    );
   };
   const showContextMenu = (): void => {
-    if (tray === undefined) return;
+    if (closed || tray === undefined) return;
     const state = readLoginState();
     const template: MenuItemConstructorOptions[] = [
       {
@@ -144,7 +208,9 @@ export function createDesktopResidency(input: DesktopResidencyInput): DesktopRes
       { type: "separator" },
       {
         label: "Quit Enduragent",
-        click: () => residency.quit(),
+        click: () => {
+          if (!closed) residency.quit();
+        },
       },
     ];
     tray.popUpContextMenu(Menu.buildFromTemplate(template));
@@ -175,8 +241,9 @@ export function createDesktopResidency(input: DesktopResidencyInput): DesktopRes
       input.app.quit();
     },
     close() {
-      if (closed) return;
+      if (closePromise !== undefined) return closePromise;
       closed = true;
+      closePromise = loginItemMutation;
       popover?.close();
       popover = undefined;
       if (tray !== undefined) {
@@ -185,6 +252,7 @@ export function createDesktopResidency(input: DesktopResidencyInput): DesktopRes
         tray = undefined;
         input.observe?.({ type: "tray-destroyed" });
       }
+      return closePromise;
     },
   };
   return residency;

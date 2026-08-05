@@ -37,6 +37,7 @@ import { DetachedSessionRequestError } from "./session-queue.js";
 import {
   DaemonAdmissionClosedError,
   createInvocationCoordinator,
+  type AdmissionFence,
   type InvocationCoordinator,
 } from "./invocation-coordinator.js";
 import { HANDOFF_CAPABILITY_BYTES, type MonotonicTimer } from "./upgrade-fence.js";
@@ -492,6 +493,15 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
     reservation = undefined;
   };
 
+  const restoreAfterDrainRefusal = (fence: AdmissionFence): boolean => {
+    if (!fence.reopen()) return false;
+    input.healthState?.setHealthy(true);
+    void Promise.resolve()
+      .then(() => input.afterInvocationDrainRefusal?.())
+      .catch(() => {});
+    return true;
+  };
+
   const awaitDrain = (
     drainTask: Promise<void>,
     deadlineMs: number,
@@ -625,9 +635,7 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
           state,
         );
         if (outcome.status !== "accepted") {
-          fence.reopen();
-          await input.afterInvocationDrainRefusal?.().catch(() => {});
-          input.healthState?.setHealthy(true);
+          restoreAfterDrainRefusal(fence);
           clearReservation();
           if (outcome.status === "timeout") {
             await enqueueSerialized(
@@ -639,9 +647,7 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
         }
         await enqueueSerialized(state, ordinarySuccess(generic.data.id, { status: "accepted" }));
         if (state.detached) {
-          fence.reopen();
-          await input.afterInvocationDrainRefusal?.().catch(() => {});
-          input.healthState?.setHealthy(true);
+          restoreAfterDrainRefusal(fence);
           clearReservation();
           return;
         }
@@ -925,6 +931,34 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
             try {
               COACH_RPC_METHOD_REGISTRY.disableTelegram.requestSchema.parse(generic.data.params);
               result = await input.telegram.disable();
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "suspendTelegramPolling":
+            try {
+              COACH_RPC_METHOD_REGISTRY.suspendTelegramPolling.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.telegram.stopPolling();
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "resumeTelegramPolling":
+            try {
+              COACH_RPC_METHOD_REGISTRY.resumeTelegramPolling.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.telegram.resumePolling();
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "drainTelegram":
+            try {
+              COACH_RPC_METHOD_REGISTRY.drainTelegram.requestSchema.parse(generic.data.params);
+              result = await input.telegram.drainPending();
             } catch (error) {
               invocationFailure = { error };
             }

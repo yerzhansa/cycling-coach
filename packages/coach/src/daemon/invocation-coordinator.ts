@@ -13,11 +13,12 @@ export interface InvocationReservation {
 
 export interface AdmissionFence {
   drain(): Promise<void>;
-  reopen(): void;
+  reopen(): boolean;
   seal(): void;
 }
 
 export interface InvocationCoordinator {
+  canAdmit(): boolean;
   reserve(input?: InvocationInput): InvocationReservation;
   invoke<T>(input: InvocationInput, operation: () => Promise<T>): Promise<T>;
   closeAdmission(): AdmissionFence;
@@ -271,6 +272,9 @@ export function createInvocationCoordinator(): InvocationCoordinator {
   };
 
   return {
+    canAdmit() {
+      return admissionOpen;
+    },
     reserve,
     invoke<T>(input: InvocationInput, operation: () => Promise<T>): Promise<T> {
       assertAdmissionOpen();
@@ -302,16 +306,17 @@ export function createInvocationCoordinator(): InvocationCoordinator {
           if (fence.pending.size === 0) return Promise.resolve();
           return new Promise<void>((resolve) => fence.waiters.add(resolve));
         },
-        reopen(): void {
+        reopen(): boolean {
           if (
             fence.sealed ||
             currentFence?.generation !== fence.generation ||
             currentFence !== fence
           ) {
-            return;
+            return false;
           }
           admissionOpen = true;
           currentFence = undefined;
+          return true;
         },
         seal(): void {
           fence.sealed = true;

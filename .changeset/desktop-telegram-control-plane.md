@@ -5,4 +5,4 @@
 "@enduragent/desktop": patch
 ---
 
-Add the privileged Desktop Telegram control plane, serialized daemon channel lifecycle, and a home-bound encrypted credential vault without exposing token material to the renderer.
+Add the privileged Desktop Telegram control plane with serialized suspend, resume, and generation-drain authority; truthful mutation outcomes; and one home-bound encrypted token-and-bot profile without exposing token material to the renderer.

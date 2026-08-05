@@ -6,4 +6,4 @@
 
 User-facing: Added an optional Desktop-hosted Telegram bot with private pairing, local-only availability, and separate Telegram chat history.
 
-Added the main-only clipboard capture, redacted IPC/preload contract, stable daemon binding, visible Settings controls, background startup, and sleep/resume handling required for Desktop Telegram setup.
+Added main-only clipboard capture, a strict redacted mutation contract, a coherent encrypted bot profile, visible replacement controls, background startup, transient sleep/resume handling, and generation-drained token replacement for Desktop Telegram setup.

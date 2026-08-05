@@ -181,9 +181,10 @@ async function runDesktop(): Promise<void> {
   let disposeExternalLinkIpc: (() => void) | undefined;
   let disposeReleaseNotesIpc: (() => void) | undefined;
   let disposeUpdateIpc: (() => void) | undefined;
-  let disposeTelegramIpc: (() => void) | undefined;
+  let disposeTelegramIpc: (() => Promise<void>) | undefined;
   let disposeOnboarding: (() => void) | undefined;
   let telegramPower: DesktopTelegramPowerLifecycle | undefined;
+  let closeTelegramCoordinator: (() => Promise<void>) | undefined;
   let daemonLifecycle: DesktopDaemonLifecycle | undefined;
   let shutdownPromise: Promise<void> | undefined;
   const updateController = createDesktopUpdateController({
@@ -203,6 +204,12 @@ async function runDesktop(): Promise<void> {
   });
   const shutdown = (): Promise<void> => {
     shutdownPromise ??= (async () => {
+      const residencyClose = residency?.close();
+      residency = undefined;
+      const telegramIpcClose = disposeTelegramIpc?.();
+      disposeTelegramIpc = undefined;
+      await residencyClose;
+      await telegramIpcClose;
       controller.abort();
       disposeConnectionIpc?.();
       disposeConnectionIpc = undefined;
@@ -214,10 +221,10 @@ async function runDesktop(): Promise<void> {
       disposeReleaseNotesIpc = undefined;
       disposeUpdateIpc?.();
       disposeUpdateIpc = undefined;
-      disposeTelegramIpc?.();
-      disposeTelegramIpc = undefined;
-      telegramPower?.close();
+      await telegramPower?.close();
       telegramPower = undefined;
+      await closeTelegramCoordinator?.();
+      closeTelegramCoordinator = undefined;
       updateController.close();
       disposeOnboarding?.();
       disposeOnboarding = undefined;
@@ -236,7 +243,7 @@ async function runDesktop(): Promise<void> {
   });
   app.on("before-quit", (event) => {
     desktopIsClosing = true;
-    residency?.close();
+    void residency?.close();
     if (quitCoordinator.beforeQuit(event) === "draining") quitRequested = true;
   });
   try {
@@ -278,6 +285,7 @@ async function runDesktop(): Promise<void> {
         },
       },
     });
+    closeTelegramCoordinator = () => telegramCoordinator.close();
     telegramPower = createDesktopTelegramPowerLifecycle({
       root: join(app.getPath("userData"), TELEGRAM_CREDENTIAL_DIRECTORY_NAME),
       athleteHome: selectedAthleteHome,
@@ -551,17 +559,18 @@ async function runDesktop(): Promise<void> {
           vault: telegramVault,
           daemon: { current: () => successorTelegram },
         });
+        const reconciliation = await successorTelegramCoordinator.reconcile();
         const desiredState = await telegramVault.desiredState();
-        const snapshot = await successorTelegramCoordinator.reconcile();
         const expectedEnabled = desiredState.state === "configured" && desiredState.enabled;
-        const prepared = expectedEnabled
-          ? snapshot.credentialConfigured &&
-            snapshot.channel.desiredState === "enabled" &&
-            (snapshot.channel.state === "starting" ||
-              snapshot.channel.state === "online" ||
-              snapshot.channel.state === "offline-retrying" ||
-              snapshot.channel.state === "conflict")
-          : snapshot.channel.state === "disabled";
+        const prepared =
+          reconciliation.outcome === "applied" &&
+          (expectedEnabled
+            ? reconciliation.current.credentialConfigured &&
+              reconciliation.current.channel.desiredState === "enabled" &&
+              (reconciliation.current.channel.state === "starting" ||
+                reconciliation.current.channel.state === "online" ||
+                reconciliation.current.channel.state === "offline-retrying")
+            : reconciliation.current.channel.state === "disabled");
         if (!prepared) throw new TypeError("Telegram successor preparation failed");
       }
       const lifecycleState = daemonLifecycle?.snapshot();
@@ -660,7 +669,19 @@ async function runDesktop(): Promise<void> {
       selectedAthleteHome,
     );
     if (initialTelegramConnection.supervision === "app-supervised") {
-      await telegramCoordinator.reconcile();
+      const reconciliation = await telegramCoordinator.reconcile();
+      const desiredState = await telegramVault.desiredState();
+      const expectedEnabled = desiredState.state === "configured" && desiredState.enabled;
+      const prepared =
+        reconciliation.outcome === "applied" &&
+        (expectedEnabled
+          ? reconciliation.current.credentialConfigured &&
+            reconciliation.current.channel.desiredState === "enabled" &&
+            (reconciliation.current.channel.state === "starting" ||
+              reconciliation.current.channel.state === "online" ||
+              reconciliation.current.channel.state === "offline-retrying")
+          : reconciliation.current.channel.state === "disabled");
+      if (!prepared) throw new TypeError("Telegram startup reconciliation failed");
     }
     await telegramPower.start();
     await installDesktopProtocol({
@@ -793,6 +814,7 @@ async function runDesktop(): Promise<void> {
       trayIconPath: resolve(mainDirectory, "../../resources/trayTemplate.png"),
       trayPopoverUrl: rendererSource.trayPopoverUrl,
       trayPreloadPath: resolve(mainDirectory, "../preload/tray.cjs"),
+      persistLoginPreference: (enabled) => backgroundAtLoginPreference.set(enabled),
       telegramStatus: async () => {
         const snapshot = await telegramCoordinator.status();
         const warning = await telegramPower!.warning();
@@ -803,11 +825,6 @@ async function runDesktop(): Promise<void> {
       },
       reportFailure(operation) {
         process.stderr.write(`desktop-residency-failure ${operation}\n`);
-      },
-      observe(event) {
-        if (event.type === "login-item-set") {
-          void backgroundAtLoginPreference.set(event.state.openAtLogin);
-        }
       },
     });
     await residency.start();

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { cp, mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { createPackage, createPackageWithOptions } from "@electron/asar";
 import { afterEach, describe, expect, it } from "vitest";
@@ -232,7 +233,8 @@ async function syntheticPackage(): Promise<SyntheticPackage> {
 
   const rebuild = async (): Promise<void> => {
     await rm(join(resources, "app.asar"), { force: true });
-    await createPackage(archiveSource, join(resources, "app.asar"));
+    const archive = await createPackage(archiveSource, join(resources, "app.asar"));
+    await finished(archive);
   };
   await rebuild();
   await cp(join(externalSource, "self-test"), externalPackaged, { recursive: true });
@@ -743,9 +745,12 @@ describe("desktop package layout", () => {
     const declared = await syntheticPackage();
     await declared.writeArchive("native/addon.node", "synthetic native bytes\n");
     await rm(join(declared.resources, "app.asar"));
-    await createPackageWithOptions(declared.archiveSource, join(declared.resources, "app.asar"), {
-      unpack: "**/*.node",
-    });
+    const archive = await createPackageWithOptions(
+      declared.archiveSource,
+      join(declared.resources, "app.asar"),
+      { unpack: "**/*.node" },
+    );
+    await finished(archive);
     await expect(
       verifyPackageLayout(declared.app, { desktopRoot: declared.desktop }),
     ).resolves.toBeUndefined();

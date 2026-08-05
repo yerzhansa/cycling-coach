@@ -171,6 +171,36 @@ describe("mounted onboarding", () => {
     },
   );
 
+  it("keeps the athlete on coach keys when credential durability remains uncertain", async () => {
+    const user = userEvent.setup();
+    const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
+    bridge.writeCredential.mockImplementation(async ({ slot }) => ({
+      slot,
+      status: "uncertain",
+      reason: "storage-uncertain",
+    }));
+    bridge.credentialStatuses
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ slot: "anthropic", state: "re-prompt", runtimeState: null }]);
+    const onComplete = vi.fn();
+    const wizard = mountWizard({ bridge, onComplete });
+    await wizard.open();
+    const secret = seedSecret("anthropic", randomUUID());
+
+    await user.click(button("Continue"));
+
+    await waitFor(() => {
+      expect(wizard.controller.state().fixedError).toBe("storage-uncertain");
+    });
+    expect(errorText()).toBe(
+      "The app could not prove which saved key will survive a restart. Re-enter the key before continuing.",
+    );
+    expect(wizard.controller.state().step).toBe("coach-keys");
+    expect(secret.value).toBe("");
+    expect(onComplete).not.toHaveBeenCalled();
+    wizard.controller.dispose();
+  });
+
   it("explains a training-account mismatch on the reachable intervals.icu path", async () => {
     const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));

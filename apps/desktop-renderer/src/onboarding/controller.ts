@@ -92,9 +92,9 @@ export interface OnboardingControllerOptions {
   readonly onComplete: (completion: OnboardingCompletion) => void;
 }
 
-type CredentialWriteRefusalReason = Extract<
+type CredentialWriteFailureReason = Extract<
   CredentialWriteResult,
-  { readonly status: "refused" }
+  { readonly status: "refused" | "uncertain" }
 >["reason"];
 
 const CREDENTIAL_WRITE_REFUSAL_ERRORS = {
@@ -104,7 +104,8 @@ const CREDENTIAL_WRITE_REFUSAL_ERRORS = {
   "storage-failed": "storage-failed",
   "runtime-unavailable": "runtime-unavailable",
   "training-account-mismatch": "training-account-mismatch",
-} as const satisfies Readonly<Record<CredentialWriteRefusalReason, OnboardingErrorCode>>;
+  "storage-uncertain": "storage-uncertain",
+} as const satisfies Readonly<Record<CredentialWriteFailureReason, OnboardingErrorCode>>;
 
 const ENDPOINT_MODES: readonly OnboardingLlmEndpointSelection["mode"][] = [
   "automatic",
@@ -114,7 +115,7 @@ const ENDPOINT_MODES: readonly OnboardingLlmEndpointSelection["mode"][] = [
 
 function credentialWriteRefusalError(reason: unknown): OnboardingErrorCode {
   if (typeof reason === "string" && Object.hasOwn(CREDENTIAL_WRITE_REFUSAL_ERRORS, reason)) {
-    return CREDENTIAL_WRITE_REFUSAL_ERRORS[reason as CredentialWriteRefusalReason];
+    return CREDENTIAL_WRITE_REFUSAL_ERRORS[reason as CredentialWriteFailureReason];
   }
   return "credential-save-failed";
 }

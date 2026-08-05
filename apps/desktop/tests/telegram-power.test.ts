@@ -1,7 +1,17 @@
 import { EventEmitter } from "node:events";
-import { chmod, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { AthleteHomeIdentitySchema } from "@enduragent/coach-contract";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -30,6 +40,32 @@ async function fixture() {
   };
 }
 
+async function publishUnsyncedPowerState(
+  files: Awaited<ReturnType<typeof fixture>>,
+  warningDetectedAt: string,
+): Promise<void> {
+  await mkdir(files.root, { recursive: true, mode: TELEGRAM_POWER_STATE_DIRECTORY_MODE });
+  const temporary = join(files.root, `.${TELEGRAM_POWER_STATE_FILE_NAME}.crash.tmp`);
+  const target = join(files.root, TELEGRAM_POWER_STATE_FILE_NAME);
+  const handle = await open(temporary, "wx", TELEGRAM_POWER_STATE_FILE_MODE);
+  try {
+    await handle.writeFile(
+      `${JSON.stringify({
+        schemaVersion: 2,
+        athleteHome: files.athleteHome,
+        gapStartedAt: null,
+        lastSuccessfulPollAt: null,
+        suspendedAt: null,
+        warningDetectedAt,
+      })}\n`,
+    );
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await rename(temporary, target);
+}
+
 function monitor(): EventEmitter & TelegramPowerMonitorPort {
   return new EventEmitter() as EventEmitter & TelegramPowerMonitorPort;
 }
@@ -37,9 +73,17 @@ function monitor(): EventEmitter & TelegramPowerMonitorPort {
 function controller() {
   return {
     stopPolling: vi.fn<() => Promise<unknown>>(async () => undefined),
-    reconcile: vi.fn<() => Promise<unknown>>(async () => undefined),
+    resumePolling: vi.fn<() => Promise<unknown>>(async () => undefined),
     status: vi.fn<() => Promise<unknown>>(async () => undefined),
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 function pollingStatus(state: "online" | "offline-retrying", lastSuccessfulPollAt?: string) {
@@ -57,6 +101,165 @@ function disabledPollingStatus() {
 }
 
 describe("Desktop Telegram power lifecycle", () => {
+  it("keeps the forward gap anchor and warns when its rename is visible but durability is uncertain", async () => {
+    const files = await fixture();
+    const powerMonitor = monitor();
+    const telegram = controller();
+    const suspendedAt = Date.parse("2026-08-01T00:00:00.000Z");
+    let syncCount = 0;
+    let id = 0;
+    const lifecycle = createDesktopTelegramPowerLifecycle({
+      ...files,
+      powerMonitor,
+      controller: telegram,
+      now: () => suspendedAt,
+      createId: () => `state-${++id}`,
+      syncDirectory: async () => {
+        syncCount += 1;
+        if (syncCount === 1) throw new TypeError("synthetic first directory sync failure");
+        const directory = await open(files.root, "r");
+        try {
+          await directory.sync();
+        } finally {
+          await directory.close();
+        }
+      },
+    });
+    await lifecycle.start();
+
+    powerMonitor.emit("suspend");
+    await vi.waitFor(() => expect(telegram.stopPolling).toHaveBeenCalledOnce());
+
+    await expect(lifecycle.warning()).resolves.toEqual({
+      state: "possible-message-loss",
+      detectedAt: "2026-08-01T00:00:00.000Z",
+    });
+    const stored = JSON.parse(
+      await readFile(join(files.root, TELEGRAM_POWER_STATE_FILE_NAME), "utf8"),
+    );
+    expect(stored).toMatchObject({
+      gapStartedAt: "2026-08-01T00:00:00.000Z",
+      suspendedAt: "2026-08-01T00:00:00.000Z",
+    });
+  });
+
+  it("does not stop polling when the suspend anchor fails before it becomes visible", async () => {
+    const files = await fixture();
+    const powerMonitor = monitor();
+    const telegram = controller();
+    const suspendedAt = Date.parse("2026-08-01T00:00:00.000Z");
+    const lifecycle = createDesktopTelegramPowerLifecycle({
+      ...files,
+      powerMonitor,
+      controller: telegram,
+      now: () => suspendedAt,
+      createId: () => "pre-rename-failure",
+      renameFile: async () => {
+        throw new TypeError("synthetic pre-rename failure");
+      },
+    });
+    await lifecycle.start();
+
+    powerMonitor.emit("suspend");
+    await expect(lifecycle.warning()).resolves.toEqual({
+      state: "possible-message-loss",
+      detectedAt: "2026-08-01T00:00:00.000Z",
+    });
+
+    expect(telegram.stopPolling).not.toHaveBeenCalled();
+    await expect(lstat(join(files.root, TELEGRAM_POWER_STATE_FILE_NAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("does not stop polling before the power-state namespace is durably anchored", async () => {
+    const files = await fixture();
+    const powerMonitor = monitor();
+    const telegram = controller();
+    const syncParentDirectory = vi.fn(async (path: string) => {
+      expect(path).toBe(dirname(files.root));
+      throw new TypeError("synthetic parent sync failure");
+    });
+    const lifecycle = createDesktopTelegramPowerLifecycle({
+      ...files,
+      powerMonitor,
+      controller: telegram,
+      now: () => Date.parse("2026-08-01T00:00:00.000Z"),
+      createId: () => "unanchored-namespace",
+      syncParentDirectory,
+    });
+    await lifecycle.start();
+
+    powerMonitor.emit("suspend");
+    await expect(lifecycle.warning()).resolves.toEqual({
+      state: "possible-message-loss",
+      detectedAt: "2026-08-01T00:00:00.000Z",
+    });
+
+    expect(syncParentDirectory).toHaveBeenCalled();
+    expect(syncParentDirectory.mock.calls.every(([path]) => path === dirname(files.root))).toBe(
+      true,
+    );
+    expect(telegram.stopPolling).not.toHaveBeenCalled();
+    await expect(lstat(join(files.root, TELEGRAM_POWER_STATE_FILE_NAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("fsyncs and accepts the visible power record after reconstructing the lifecycle", async () => {
+    const files = await fixture();
+    await publishUnsyncedPowerState(files, "2026-08-01T00:00:00.000Z");
+    const syncDirectory = vi.fn(async () => {
+      const directory = await open(files.root, "r");
+      try {
+        await directory.sync();
+      } finally {
+        await directory.close();
+      }
+    });
+    const lifecycle = createDesktopTelegramPowerLifecycle({
+      ...files,
+      powerMonitor: monitor(),
+      controller: controller(),
+      now: () => Date.parse("2026-08-02T00:00:00.000Z"),
+      syncDirectory,
+    });
+
+    await expect(lifecycle.start()).resolves.toEqual({
+      state: "possible-message-loss",
+      detectedAt: "2026-08-01T00:00:00.000Z",
+    });
+    expect(syncDirectory).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed without power mutations when reopen convergence cannot be proven", async () => {
+    const files = await fixture();
+    await publishUnsyncedPowerState(files, "2026-08-01T00:00:00.000Z");
+    const telegram = controller();
+    const syncDirectory = vi.fn(async () => {
+      throw new TypeError("synthetic reopen sync failure");
+    });
+    const lifecycle = createDesktopTelegramPowerLifecycle({
+      ...files,
+      powerMonitor: monitor(),
+      controller: telegram,
+      now: () => Date.parse("2026-08-02T00:00:00.000Z"),
+      syncDirectory,
+    });
+
+    await expect(lifecycle.start()).resolves.toEqual({
+      state: "possible-message-loss",
+      detectedAt: "2026-08-02T00:00:00.000Z",
+    });
+    await expect(lifecycle.warning()).resolves.toEqual({
+      state: "possible-message-loss",
+      detectedAt: "2026-08-02T00:00:00.000Z",
+    });
+    expect(syncDirectory).toHaveBeenCalledOnce();
+    expect(telegram.stopPolling).not.toHaveBeenCalled();
+    expect(telegram.resumePolling).not.toHaveBeenCalled();
+  });
+
   it("warns after an exact-24-hour awake polling-health gap", async () => {
     const files = await fixture();
     const startedAt = Date.parse("2026-08-01T00:00:00.000Z");
@@ -133,7 +336,7 @@ describe("Desktop Telegram power lifecycle", () => {
     await first.start();
     now += 60_000;
     await first.warning();
-    first.close();
+    await first.close();
 
     now = startedAt + 12 * 60 * 60 * 1_000;
     const restartedController = controller();
@@ -148,7 +351,7 @@ describe("Desktop Telegram power lifecycle", () => {
       createId: () => `state-${++ids}`,
     });
     await expect(restarted.start()).resolves.toEqual({ state: "clear" });
-    restarted.close();
+    await restarted.close();
 
     now = startedAt + TELEGRAM_POSSIBLE_MESSAGE_LOSS_AFTER_MS;
     const recoveredController = controller();
@@ -210,7 +413,7 @@ describe("Desktop Telegram power lifecycle", () => {
     expect(powerMonitor.emit("suspend")).toBe(true);
     await expect(lifecycle.warning()).resolves.toEqual({ state: "clear" });
     expect(telegram.stopPolling).toHaveBeenCalledOnce();
-    expect(telegram.reconcile).not.toHaveBeenCalled();
+    expect(telegram.resumePolling).not.toHaveBeenCalled();
 
     const target = join(files.root, TELEGRAM_POWER_STATE_FILE_NAME);
     expect((await lstat(files.root)).mode & 0o777).toBe(TELEGRAM_POWER_STATE_DIRECTORY_MODE);
@@ -237,7 +440,7 @@ describe("Desktop Telegram power lifecycle", () => {
     expect(powerMonitor.emit("resume")).toBe(true);
     await expect(lifecycle.warning()).resolves.toEqual({ state: "clear" });
     expect(telegram.stopPolling).toHaveBeenCalledTimes(2);
-    expect(telegram.reconcile).toHaveBeenCalledOnce();
+    expect(telegram.resumePolling).toHaveBeenCalledOnce();
     expect(JSON.parse(await readFile(target, "utf8"))).toMatchObject({
       suspendedAt: null,
       warningDetectedAt: null,
@@ -249,7 +452,7 @@ describe("Desktop Telegram power lifecycle", () => {
     const powerMonitor = monitor();
     const telegram = controller();
     telegram.status.mockResolvedValue(disabledPollingStatus());
-    telegram.reconcile.mockResolvedValue(disabledPollingStatus());
+    telegram.resumePolling.mockResolvedValue(disabledPollingStatus());
     let now = Date.parse("2026-08-01T00:00:00.000Z");
     const lifecycle = createDesktopTelegramPowerLifecycle({
       ...files,
@@ -350,7 +553,7 @@ describe("Desktop Telegram power lifecycle", () => {
     await first.start();
     firstMonitor.emit("suspend");
     await first.warning();
-    first.close();
+    await first.close();
 
     now += TELEGRAM_POSSIBLE_MESSAGE_LOSS_AFTER_MS;
     const recoveredController = controller();
@@ -367,8 +570,8 @@ describe("Desktop Telegram power lifecycle", () => {
     } as const;
     await expect(recovered.start()).resolves.toEqual(expectedWarning);
     expect(recoveredController.stopPolling).toHaveBeenCalledOnce();
-    expect(recoveredController.reconcile).toHaveBeenCalledOnce();
-    recovered.close();
+    expect(recoveredController.resumePolling).toHaveBeenCalledOnce();
+    await recovered.close();
 
     const restarted = createDesktopTelegramPowerLifecycle({
       ...files,
@@ -379,7 +582,7 @@ describe("Desktop Telegram power lifecycle", () => {
     });
     await expect(restarted.start()).resolves.toEqual(expectedWarning);
     await expect(restarted.acknowledgeWarning()).resolves.toEqual({ state: "clear" });
-    restarted.close();
+    await restarted.close();
 
     const afterAcknowledgement = createDesktopTelegramPowerLifecycle({
       ...files,
@@ -433,7 +636,7 @@ describe("Desktop Telegram power lifecycle", () => {
     await seed.start();
     powerMonitor.emit("suspend");
     await seed.warning();
-    seed.close();
+    await seed.close();
     const target = join(files.root, TELEGRAM_POWER_STATE_FILE_NAME);
 
     await writeFile(target, "{}\n", { mode: TELEGRAM_POWER_STATE_FILE_MODE });
@@ -447,7 +650,7 @@ describe("Desktop Telegram power lifecycle", () => {
     });
     await expect(malformed.start()).resolves.toMatchObject({ state: "possible-message-loss" });
     await expect(malformed.acknowledgeWarning()).resolves.toEqual({ state: "clear" });
-    malformed.close();
+    await malformed.close();
 
     const wrongHomeRecord = {
       schemaVersion: 1,
@@ -467,7 +670,7 @@ describe("Desktop Telegram power lifecycle", () => {
       state: "possible-message-loss",
     });
     expect(JSON.parse(await readFile(target, "utf8"))).toEqual(wrongHomeRecord);
-    wrongHome.close();
+    await wrongHome.close();
 
     await chmod(target, 0o644);
     const permissive = createDesktopTelegramPowerLifecycle({
@@ -496,7 +699,7 @@ describe("Desktop Telegram power lifecycle", () => {
         .fn<() => Promise<unknown>>()
         .mockImplementationOnce(() => blockedStop)
         .mockRejectedValueOnce(new Error("private transport detail")),
-      reconcile: vi.fn<() => Promise<unknown>>(async () => undefined),
+      resumePolling: vi.fn<() => Promise<unknown>>(async () => undefined),
       status: vi.fn<() => Promise<unknown>>(async () => undefined),
     };
     const failures: string[] = [];
@@ -517,12 +720,12 @@ describe("Desktop Telegram power lifecycle", () => {
     await vi.waitFor(() => expect(telegram.stopPolling).toHaveBeenCalledOnce());
     now += 1_000;
     expect(powerMonitor.emit("resume")).toBe(true);
-    expect(telegram.reconcile).not.toHaveBeenCalled();
+    expect(telegram.resumePolling).not.toHaveBeenCalled();
     releaseStop();
     await lifecycle.warning();
 
     expect(telegram.stopPolling).toHaveBeenCalledTimes(2);
-    expect(telegram.reconcile).toHaveBeenCalledOnce();
+    expect(telegram.resumePolling).toHaveBeenCalledOnce();
     expect(failures).toContain("stop-polling");
   });
 
@@ -539,10 +742,89 @@ describe("Desktop Telegram power lifecycle", () => {
     await lifecycle.start();
     expect(powerMonitor.listenerCount("suspend")).toBe(1);
     expect(powerMonitor.listenerCount("resume")).toBe(1);
-    lifecycle.close();
+    await lifecycle.close();
     expect(powerMonitor.listenerCount("suspend")).toBe(0);
     expect(powerMonitor.listenerCount("resume")).toBe(0);
     powerMonitor.emit("suspend");
     expect(telegram.stopPolling).not.toHaveBeenCalled();
+  });
+
+  it("fences suspend and resume callbacks queued behind work that was blocked before close", async () => {
+    const files = await fixture();
+    const powerMonitor = monitor();
+    const telegram = controller();
+    const blockedStatus = deferred<unknown>();
+    telegram.status
+      .mockResolvedValueOnce(pollingStatus("online", "2026-08-01T00:00:00.000Z"))
+      .mockImplementationOnce(() => blockedStatus.promise)
+      .mockResolvedValue(pollingStatus("online", "2026-08-01T00:00:00.000Z"));
+    const lifecycle = createDesktopTelegramPowerLifecycle({
+      ...files,
+      powerMonitor,
+      controller: telegram,
+      now: () => Date.parse("2026-08-01T00:00:00.000Z"),
+      createId: (() => {
+        let id = 0;
+        return () => `state-${++id}`;
+      })(),
+    });
+    await lifecycle.start();
+
+    const blockingOperation = lifecycle.warning();
+    await vi.waitFor(() => expect(telegram.status).toHaveBeenCalledTimes(2));
+    powerMonitor.emit("suspend");
+    powerMonitor.emit("resume");
+    const queueBarrier = lifecycle.warning();
+    const closing = lifecycle.close();
+
+    blockedStatus.resolve(pollingStatus("online", "2026-08-01T00:00:00.000Z"));
+    await Promise.all([blockingOperation, queueBarrier, closing]);
+
+    expect(telegram.stopPolling).not.toHaveBeenCalled();
+    expect(telegram.resumePolling).not.toHaveBeenCalled();
+  });
+
+  it("balances an in-flight transient stop before close settles", async () => {
+    const files = await fixture();
+    const powerMonitor = monitor();
+    const telegram = controller();
+    const stopEntered = deferred<void>();
+    const stopRelease = deferred<void>();
+    const order: string[] = [];
+    telegram.stopPolling.mockImplementationOnce(async () => {
+      order.push("stop-started");
+      stopEntered.resolve();
+      await stopRelease.promise;
+      order.push("stop-finished");
+    });
+    telegram.resumePolling.mockImplementationOnce(async () => {
+      order.push("resumed");
+    });
+    const lifecycle = createDesktopTelegramPowerLifecycle({
+      ...files,
+      powerMonitor,
+      controller: telegram,
+      now: () => Date.parse("2026-08-01T00:00:00.000Z"),
+      createId: (() => {
+        let id = 0;
+        return () => `state-${++id}`;
+      })(),
+    });
+    await lifecycle.start();
+
+    powerMonitor.emit("suspend");
+    await stopEntered.promise;
+    const closing = Promise.resolve(lifecycle.close()).then(() => {
+      order.push("closed");
+    });
+    await Promise.resolve();
+    expect(order).toEqual(["stop-started"]);
+
+    stopRelease.resolve();
+    await closing;
+
+    expect(telegram.stopPolling).toHaveBeenCalledOnce();
+    expect(telegram.resumePolling).toHaveBeenCalledOnce();
+    expect(order).toEqual(["stop-started", "stop-finished", "resumed", "closed"]);
   });
 });

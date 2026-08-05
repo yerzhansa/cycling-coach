@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { constants, type Stats } from "node:fs";
-import { lstat, mkdir, open, rename, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { AthleteHomeIdentitySchema, type AthleteHomeIdentity } from "@enduragent/coach-contract";
 import type { PowerMonitor } from "electron";
+import { durableAtomicReplace, type DurableReplaceOutcome } from "./durable-atomic-replace.js";
 
 export const TELEGRAM_POWER_STATE_FILE_NAME = "power-state.json" as const;
 export const TELEGRAM_POWER_STATE_DIRECTORY_MODE = 0o700;
@@ -22,11 +23,11 @@ export type TelegramPowerFailure =
   | "write-state"
   | "read-polling-status"
   | "stop-polling"
-  | "reconcile-polling";
+  | "resume-polling";
 
 export interface TelegramPowerControllerPort {
   stopPolling(): Promise<unknown>;
-  reconcile(): Promise<unknown>;
+  resumePolling(): Promise<unknown>;
   status(): Promise<unknown>;
 }
 
@@ -36,7 +37,7 @@ export interface DesktopTelegramPowerLifecycle {
   start(): Promise<TelegramGapWarning>;
   warning(): Promise<TelegramGapWarning>;
   acknowledgeWarning(): Promise<TelegramGapWarning>;
-  close(): void;
+  close(): Promise<void>;
 }
 
 export interface CreateDesktopTelegramPowerLifecycleInput {
@@ -46,6 +47,10 @@ export interface CreateDesktopTelegramPowerLifecycleInput {
   readonly controller: TelegramPowerControllerPort;
   readonly now?: () => number;
   readonly createId?: () => string;
+  readonly renameFile?: typeof rename;
+  readonly removeFile?: typeof rm;
+  readonly syncDirectory?: (root: string) => Promise<void>;
+  readonly syncParentDirectory?: (root: string) => Promise<void>;
   readonly reportFailure?: (failure: TelegramPowerFailure) => void;
   readonly observeWarning?: (warning: TelegramGapWarning) => void;
 }
@@ -214,10 +219,57 @@ function createStateStore(input: {
   readonly root: string;
   readonly athleteHome: AthleteHomeIdentity;
   readonly createId: () => string;
+  readonly renameFile?: typeof rename;
+  readonly removeFile?: typeof rm;
+  readonly syncDirectory?: (root: string) => Promise<void>;
+  readonly syncParentDirectory?: (root: string) => Promise<void>;
 }) {
   const target = join(input.root, TELEGRAM_POWER_STATE_FILE_NAME);
+  let namespaceState: "pending" | "verified" | "uncertain" = "pending";
+  let parentDirectoryVerified = false;
+  const defaultSynchronizeDirectory = async (root: string): Promise<void> => {
+    const directory = await open(root, "r");
+    try {
+      await directory.sync();
+    } catch (error) {
+      await directory.close().catch(() => undefined);
+      throw error;
+    }
+    await directory.close().catch(() => undefined);
+  };
+  const synchronizeDirectory = input.syncDirectory ?? defaultSynchronizeDirectory;
+  const synchronizeParentDirectory = input.syncParentDirectory ?? defaultSynchronizeDirectory;
+  const reconcileNamespace = async (): Promise<void> => {
+    if (namespaceState === "verified") return;
+    if (namespaceState === "uncertain") throw new TypeError("Telegram power state is uncertain");
+    try {
+      try {
+        await assertDirectory(input.root, false);
+      } catch (error) {
+        if (isMissing(error)) {
+          namespaceState = "verified";
+          return;
+        }
+        throw error;
+      }
+      const prefix = `.${TELEGRAM_POWER_STATE_FILE_NAME}.`;
+      for (const entry of await readdir(input.root)) {
+        if (!entry.startsWith(prefix) || !entry.endsWith(".tmp")) continue;
+        const id = entry.slice(prefix.length, -".tmp".length);
+        if (/^[A-Za-z0-9-]{1,128}$/.test(id)) {
+          await (input.removeFile ?? rm)(join(input.root, entry), { force: true });
+        }
+      }
+      await synchronizeDirectory(input.root);
+      namespaceState = "verified";
+    } catch (error) {
+      namespaceState = "uncertain";
+      throw error;
+    }
+  };
 
   const read = async (): Promise<TelegramPowerStateRecord> => {
+    await reconcileNamespace();
     let rootMetadata;
     try {
       rootMetadata = await lstat(input.root);
@@ -261,8 +313,13 @@ function createStateStore(input: {
     }
   };
 
-  const write = async (state: TelegramPowerStateRecord): Promise<void> => {
+  const write = async (state: TelegramPowerStateRecord): Promise<DurableReplaceOutcome> => {
+    await reconcileNamespace();
     await assertDirectory(input.root, true);
+    if (!parentDirectoryVerified) {
+      await synchronizeParentDirectory(dirname(input.root));
+      parentDirectoryVerified = true;
+    }
     try {
       const existing = await lstat(target);
       if (!existing.isFile()) throw new TypeError("invalid Telegram power state target");
@@ -272,30 +329,22 @@ function createStateStore(input: {
     }
     const id = input.createId();
     if (!/^[A-Za-z0-9-]{1,128}$/.test(id)) throw new TypeError("invalid temporary file id");
-    const temporary = join(input.root, `.${TELEGRAM_POWER_STATE_FILE_NAME}.${id}.tmp`);
-    let handle;
+    const candidate = Buffer.from(`${JSON.stringify(state)}\n`, "utf8");
     try {
-      handle = await open(
-        temporary,
-        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
-        TELEGRAM_POWER_STATE_FILE_MODE,
-      );
-      await handle.chmod(TELEGRAM_POWER_STATE_FILE_MODE);
-      await handle.writeFile(`${JSON.stringify(state)}\n`, "utf8");
-      await handle.sync();
-      await handle.close();
-      handle = undefined;
-      await rename(temporary, target);
-      const directory = await open(input.root, constants.O_RDONLY);
-      try {
-        await directory.sync();
-      } finally {
-        await directory.close();
-      }
-    } catch (error) {
-      await handle?.close().catch(() => undefined);
-      await rm(temporary, { force: true }).catch(() => undefined);
-      throw error;
+      const outcome = await durableAtomicReplace({
+        root: input.root,
+        fileName: TELEGRAM_POWER_STATE_FILE_NAME,
+        contents: candidate,
+        mode: TELEGRAM_POWER_STATE_FILE_MODE,
+        createId: () => id,
+        renameFile: input.renameFile,
+        removeFile: input.removeFile,
+        syncDirectory: input.syncDirectory,
+      });
+      namespaceState = outcome.state === "commit-uncertain" ? "uncertain" : "verified";
+      return outcome;
+    } finally {
+      candidate.fill(0);
     }
   };
 
@@ -325,12 +374,18 @@ export function createDesktopTelegramPowerLifecycle(
     root: input.root,
     athleteHome,
     createId: input.createId ?? randomUUID,
+    renameFile: input.renameFile,
+    removeFile: input.removeFile,
+    syncDirectory: input.syncDirectory,
+    syncParentDirectory: input.syncParentDirectory,
   });
   let cached: TelegramGapWarning = CLEAR_WARNING;
   let pending: Promise<void> = Promise.resolve();
   let started = false;
   let closed = false;
+  let closePromise: Promise<void> | undefined;
   let scopeMismatch = false;
+  let transientStopOutstanding = false;
 
   const report = (failure: TelegramPowerFailure): void => {
     try {
@@ -372,14 +427,19 @@ export function createDesktopTelegramPowerLifecycle(
       return undefined;
     }
   };
-  const writeState = async (state: TelegramPowerStateRecord): Promise<boolean> => {
+  const writeState = async (
+    state: TelegramPowerStateRecord,
+  ): Promise<DurableReplaceOutcome["state"]> => {
     try {
-      await store.write(state);
-      return true;
+      const result = await store.write(state);
+      if (result.state === "durably-committed") return result.state;
+      report("write-state");
+      uncertain();
+      return result.state;
     } catch {
       report("write-state");
       uncertain();
-      return false;
+      return "not-committed";
     }
   };
   const retainedWarning = (state: TelegramPowerStateRecord): string | null =>
@@ -397,7 +457,8 @@ export function createDesktopTelegramPowerLifecycle(
     return gap < 0 || gap >= TELEGRAM_POSSIBLE_MESSAGE_LOSS_AFTER_MS ? detectedAt : null;
   };
   const publishState = async (state: TelegramPowerStateRecord): Promise<TelegramGapWarning> => {
-    if (!(await writeState(state))) return cached;
+    const result = await writeState(state);
+    if (closed || result !== "durably-committed") return cached;
     return publish(warningFor(state));
   };
   const laterTimestamp = (left: string | null, right: string | null): string | null => {
@@ -415,17 +476,27 @@ export function createDesktopTelegramPowerLifecycle(
     }
   };
   const stopPolling = async (): Promise<void> => {
+    if (closed) return;
+    transientStopOutstanding = true;
     try {
-      await input.controller.stopPolling();
+      const result = await input.controller.stopPolling();
+      if (pollingHealth(result)?.state === "failed") report("stop-polling");
     } catch {
       report("stop-polling");
     }
   };
-  const reconcilePolling = async (): Promise<unknown> => {
+  const resumePolling = async (duringClose = false): Promise<unknown> => {
+    if (closed && !duringClose) return undefined;
     try {
-      return await input.controller.reconcile();
+      const result = await input.controller.resumePolling();
+      if (pollingHealth(result)?.state === "failed") {
+        report("resume-polling");
+        return result;
+      }
+      transientStopOutstanding = false;
+      return result;
     } catch {
-      report("reconcile-polling");
+      report("resume-polling");
       return undefined;
     }
   };
@@ -433,10 +504,11 @@ export function createDesktopTelegramPowerLifecycle(
     value: unknown,
     observationTime: string,
   ): Promise<TelegramGapWarning | undefined> => {
+    if (closed) return undefined;
     const health = pollingHealth(value);
     if (health === undefined) return undefined;
     const state = await readState();
-    if (state === undefined) return cached;
+    if (closed || state === undefined) return cached;
     const reportedSuccessfulAt =
       health.lastSuccessfulPollAt !== null &&
       Date.parse(health.lastSuccessfulPollAt) <= Date.parse(observationTime)
@@ -477,8 +549,9 @@ export function createDesktopTelegramPowerLifecycle(
     });
   };
   const refreshOpenGap = async (observationTime: string): Promise<TelegramGapWarning> => {
+    if (closed) return cached;
     const state = await readState();
-    if (state === undefined) return cached;
+    if (closed || state === undefined) return cached;
     const warningDetectedAt = warnForGap(
       state,
       state.gapStartedAt,
@@ -491,6 +564,7 @@ export function createDesktopTelegramPowerLifecycle(
     return publishState({ ...state, warningDetectedAt });
   };
   const samplePollingHealth = async (): Promise<TelegramGapWarning> => {
+    if (closed) return cached;
     const observationTime = observedAt();
     if (observationTime === undefined) return cached;
     let value: unknown;
@@ -500,14 +574,16 @@ export function createDesktopTelegramPowerLifecycle(
       report("read-polling-status");
       return refreshOpenGap(observationTime);
     }
+    if (closed) return cached;
     return (await applyPollingHealth(value, observationTime)) ?? refreshOpenGap(observationTime);
   };
   const finishGap = async (
     endedAt: string,
     detectNewWarning = true,
   ): Promise<TelegramGapWarning> => {
+    if (closed) return cached;
     const state = await readState();
-    if (state === undefined) return cached;
+    if (closed || state === undefined) return cached;
     if (state.suspendedAt === null) {
       const warningDetectedAt = retainedWarning(state);
       return publish(warningFor({ ...state, warningDetectedAt }));
@@ -523,21 +599,28 @@ export function createDesktopTelegramPowerLifecycle(
     });
   };
   const recover = async (): Promise<TelegramGapWarning> => {
+    if (closed) return cached;
     const state = await readState();
-    if (state === undefined) return cached;
+    if (closed || state === undefined) return cached;
     if (state.suspendedAt === null) return samplePollingHealth();
     const recoveredAt = observedAt();
     if (recoveredAt === undefined) return cached;
     await finishGap(recoveredAt, false);
+    if (closed) return cached;
     await stopPolling();
-    const reconciled = await reconcilePolling();
+    if (closed) return cached;
+    const reconciled = await resumePolling();
+    if (closed) return cached;
     return (await applyPollingHealth(reconciled, recoveredAt)) ?? refreshOpenGap(recoveredAt);
   };
   const onSuspend = (): void => {
     const suspendedAt = observedAt();
     if (suspendedAt === undefined) return;
     void serialize(async () => {
+      if (closed) return;
       const state = await readState();
+      if (closed) return;
+      let stopIsAnchored = false;
       if (state !== undefined) {
         const next = {
           ...state,
@@ -545,19 +628,27 @@ export function createDesktopTelegramPowerLifecycle(
           suspendedAt: state.suspendedAt ?? suspendedAt,
           warningDetectedAt: retainedWarning(state),
         };
-        if (await writeState(next)) publish(warningFor(next));
+        const stored = await writeState(next);
+        if (closed) return;
+        stopIsAnchored = stored !== "not-committed";
+        if (stored === "durably-committed") publish(warningFor(next));
       }
-      await stopPolling();
+      if (stopIsAnchored) await stopPolling();
     });
   };
   const onResume = (): void => {
     const resumedAt = observedAt();
     if (resumedAt === undefined) return;
     void serialize(async () => {
+      if (closed) return;
       await finishGap(resumedAt, false);
+      if (closed) return;
       await stopPolling();
-      const reconciled = await reconcilePolling();
+      if (closed) return;
+      const reconciled = await resumePolling();
+      if (closed) return;
       if ((await applyPollingHealth(reconciled, resumedAt)) === undefined) {
+        if (closed) return;
         await refreshOpenGap(resumedAt);
       }
     });
@@ -574,11 +665,15 @@ export function createDesktopTelegramPowerLifecycle(
       return serialize(recover);
     },
     warning() {
+      if (closed) return Promise.resolve(cached);
       return serialize(samplePollingHealth);
     },
     acknowledgeWarning() {
+      if (closed) return Promise.resolve(cached);
       return serialize(async () => {
+        if (closed) return cached;
         const state = await readState();
+        if (closed) return cached;
         if (state === undefined && scopeMismatch) return cached;
         const acknowledgedAt = observedAt();
         if (acknowledgedAt === undefined) return cached;
@@ -589,17 +684,24 @@ export function createDesktopTelegramPowerLifecycle(
           suspendedAt: current.suspendedAt === null ? null : acknowledgedAt,
           warningDetectedAt: null,
         };
-        if (!(await writeState(cleared))) return cached;
+        const result = await writeState(cleared);
+        if (closed || result !== "durably-committed") return cached;
         return publish(CLEAR_WARNING);
       });
     },
     close() {
-      if (closed) return;
+      if (closePromise !== undefined) return closePromise;
       closed = true;
       if (started) {
         input.powerMonitor.off("suspend", onSuspend);
         input.powerMonitor.off("resume", onResume);
       }
+      const queued = pending;
+      closePromise = (async () => {
+        await queued;
+        if (transientStopOutstanding) await resumePolling(true);
+      })();
+      return closePromise;
     },
   };
 }

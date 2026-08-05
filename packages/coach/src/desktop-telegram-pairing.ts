@@ -3,7 +3,8 @@ import type { TelegramPairingState } from "@enduragent/coach-contract";
 
 export type DesktopPrimaryOperatorClaimResult =
   | { readonly status: "claimed" | "already-primary" }
-  | { readonly status: "refused"; readonly reason: string };
+  | { readonly status: "refused"; readonly reason: string }
+  | { readonly status: "uncertain" };
 
 export interface DesktopTelegramPairingCoordinator {
   getState(): TelegramPairingState;
@@ -105,7 +106,9 @@ export function createDesktopTelegramPairing(
         state =
           claim.status === "claimed" || claim.status === "already-primary"
             ? PAIRED
-            : { state: "failed", errorCode: "telegram-pairing-refused" };
+            : claim.status === "uncertain"
+              ? { state: "failed", errorCode: "telegram-pairing-storage-uncertain" }
+              : { state: "failed", errorCode: "telegram-pairing-refused" };
       } catch {
         state = { state: "failed", errorCode: "telegram-pairing-storage-failed" };
       }

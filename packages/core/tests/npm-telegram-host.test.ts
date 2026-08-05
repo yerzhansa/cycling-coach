@@ -8,11 +8,19 @@ import { cyclingBinary } from "./helpers/cycling-binary-fixture.js";
 let dataDir: string;
 let managed = false;
 const install = vi.fn();
+const getKnownTelegramChatIds = vi.fn((): string[] => []);
+const getLastNotifiedVersion = vi.fn((): string | null => null);
+const setLastNotifiedVersion = vi.fn();
 
 beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), "npm-telegram-host-"));
   managed = false;
   install.mockReset();
+  getKnownTelegramChatIds.mockReset();
+  getKnownTelegramChatIds.mockReturnValue([]);
+  getLastNotifiedVersion.mockReset();
+  getLastNotifiedVersion.mockReturnValue(null);
+  setLastNotifiedVersion.mockReset();
   vi.resetModules();
   vi.doMock("../src/updater.js", async () => {
     const actual = await vi.importActual<typeof import("../src/updater.js")>("../src/updater.js");
@@ -24,8 +32,11 @@ beforeEach(() => {
         updateAvailable: true,
       })),
       getCurrentVersion: vi.fn(() => "2026.8.1"),
+      getKnownTelegramChatIds,
+      getLastNotifiedVersion,
       isManagedDeploy: vi.fn(() => managed),
       selfUpdate: install,
+      setLastNotifiedVersion,
     };
   });
   vi.doMock("../src/release-notes.js", () => ({
@@ -150,5 +161,44 @@ describe("createNpmTelegramHost", () => {
     expect("install" in host.release).toBe(false);
     if (host.release.updatePolicy === "npm-self-update") throw new Error("unexpected npm policy");
     await expect(host.release.updateNotice()).resolves.toContain("container image");
+  });
+
+  it("records a notified version exactly once when one configured destination succeeds", async () => {
+    saveAllowedSenders(dataDir, () => ({
+      ...defaultPairingState(),
+      dmPolicy: "allowlist",
+      allowFrom: ["73", "74"],
+      primaryOperator: "73",
+    }));
+    getKnownTelegramChatIds.mockReturnValue(["73", "74"]);
+    const sendMessage = vi.fn(async (chatId: string) => {
+      if (chatId === "73") throw new Error("destination unavailable");
+    });
+    const { notifyNpmTelegramUpdate } = await import("../src/channels/npm-telegram-host.js");
+
+    await notifyNpmTelegramUpdate({ sendMessage }, dataDir, cyclingBinary);
+
+    expect(sendMessage.mock.calls.map(([chatId]) => chatId)).toEqual(["73", "74"]);
+    expect(setLastNotifiedVersion).toHaveBeenCalledOnce();
+    expect(setLastNotifiedVersion).toHaveBeenCalledWith(dataDir, "2026.8.2");
+  });
+
+  it("does not record a notified version when every configured destination fails", async () => {
+    saveAllowedSenders(dataDir, () => ({
+      ...defaultPairingState(),
+      dmPolicy: "allowlist",
+      allowFrom: ["73", "74"],
+      primaryOperator: "73",
+    }));
+    getKnownTelegramChatIds.mockReturnValue(["73", "74"]);
+    const sendMessage = vi.fn(async () => {
+      throw new Error("destination unavailable");
+    });
+    const { notifyNpmTelegramUpdate } = await import("../src/channels/npm-telegram-host.js");
+
+    await notifyNpmTelegramUpdate({ sendMessage }, dataDir, cyclingBinary);
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(setLastNotifiedVersion).not.toHaveBeenCalled();
   });
 });

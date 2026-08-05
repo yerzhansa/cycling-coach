@@ -47,6 +47,7 @@ export type OnboardingErrorCode =
   | "encryption-unavailable"
   | "unsafe-backend"
   | "storage-failed"
+  | "storage-uncertain"
   | "runtime-unavailable"
   | "credential-status-unavailable"
   | "credential-reenter-required"

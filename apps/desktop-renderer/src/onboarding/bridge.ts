@@ -33,6 +33,11 @@ export type CredentialWriteResult =
         | "storage-failed"
         | "runtime-unavailable"
         | "training-account-mismatch";
+    }
+  | {
+      readonly slot: DesktopCredentialSlot;
+      readonly status: "uncertain";
+      readonly reason: "storage-uncertain";
     };
 
 export type DesktopCredentialId = DesktopCredentialSlot | "openai-codex";
@@ -52,6 +57,11 @@ export type CredentialDeleteResult =
         | "storage-failed"
         | "runtime-unavailable"
         | "runtime-state-diverged";
+    }
+  | {
+      readonly slot: DesktopCredentialSlot;
+      readonly status: "uncertain";
+      readonly reason: "storage-uncertain";
     };
 
 export interface OnboardingLlmModelOption {

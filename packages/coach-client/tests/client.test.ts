@@ -71,6 +71,9 @@ const rpcDeadlineCases = [
   ["configureTelegram", { token: "bot-token" }, 30_000],
   ["enableTelegram", {}, 30_000],
   ["disableTelegram", {}, 30_000],
+  ["suspendTelegramPolling", {}, 30_000],
+  ["resumeTelegramPolling", {}, 30_000],
+  ["drainTelegram", {}, 30_000],
   ["replaceTelegram", { token: "new-token" }, 30_000],
   ["getTelegramStatus", {}, 30_000],
   ["reconcileTelegram", {}, 30_000],
@@ -580,6 +583,30 @@ describe("handshake failures", () => {
 });
 
 describe("RPC receive and observers", () => {
+  it("rejects a malformed allowed-sender mutation envelope before typed delivery", async () => {
+    const { socket, connecting } = acceptedSocket();
+    const client = await connecting;
+    socket.closeSynchronously = true;
+    socket.sendHook = (text) => {
+      const request = JSON.parse(text) as { readonly id: number };
+      socket.emitMessage(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: request.id,
+          result: {
+            outcome: "uncertain",
+            reason: "storage-uncertain",
+            current: { senders: [] },
+          },
+        }),
+      );
+    };
+
+    await expect(
+      client.call("addTelegramAllowedSender", { senderId: 123_456 }),
+    ).rejects.toBeInstanceOf(CoachClientProtocolError);
+  });
+
   it("rejects a runtime snapshot without the strict credential evidence boolean", async () => {
     const { socket, connecting } = acceptedSocket();
     const client = await connecting;
@@ -750,10 +777,17 @@ describe("RPC receive and observers", () => {
         },
         getUnitsPreference: { value: "metric", source: "default" },
         setUnitsPreference: { value: "imperial", source: "cycling" },
-        configureTelegram: telegramControlSnapshot,
+        configureTelegram: { outcome: "applied", current: telegramControlSnapshot },
         enableTelegram: telegramControlSnapshot,
         disableTelegram: telegramControlSnapshot,
-        replaceTelegram: telegramControlSnapshot,
+        suspendTelegramPolling: telegramControlSnapshot,
+        resumeTelegramPolling: telegramControlSnapshot,
+        drainTelegram: telegramControlSnapshot,
+        replaceTelegram: {
+          outcome: "refused",
+          reason: "invalid-token",
+          current: telegramControlSnapshot,
+        },
         getTelegramStatus: telegramControlSnapshot,
         reconcileTelegram: telegramControlSnapshot,
         inspectTelegramCredential: {
@@ -769,8 +803,11 @@ describe("RPC receive and observers", () => {
         beginTelegramPairing: telegramControlSnapshot,
         cancelTelegramPairing: telegramControlSnapshot,
         listTelegramAllowedSenders: { senders: [] },
-        addTelegramAllowedSender: { senders: [] },
-        removeTelegramAllowedSender: { senders: [] },
+        addTelegramAllowedSender: { outcome: "applied", current: { senders: [] } },
+        removeTelegramAllowedSender: {
+          outcome: "uncertain",
+          reason: "storage-uncertain",
+        },
         getSpendSummary: {
           localDate: "1998-07-06",
           timezone: "UTC",
@@ -907,14 +944,24 @@ describe("RPC receive and observers", () => {
       "getUnitsPreference",
       "setUnitsPreference",
     ]);
-    await expect(client.call("configureTelegram", { token: "bot-token" })).resolves.toEqual(
-      telegramControlSnapshot,
-    );
+    await expect(client.call("configureTelegram", { token: "bot-token" })).resolves.toEqual({
+      outcome: "applied",
+      current: telegramControlSnapshot,
+    });
     await expect(client.call("enableTelegram", {})).resolves.toEqual(telegramControlSnapshot);
     await expect(client.call("disableTelegram", {})).resolves.toEqual(telegramControlSnapshot);
-    await expect(client.call("replaceTelegram", { token: "new-token" })).resolves.toEqual(
+    await expect(client.call("suspendTelegramPolling", {})).resolves.toEqual(
       telegramControlSnapshot,
     );
+    await expect(client.call("resumeTelegramPolling", {})).resolves.toEqual(
+      telegramControlSnapshot,
+    );
+    await expect(client.call("drainTelegram", {})).resolves.toEqual(telegramControlSnapshot);
+    await expect(client.call("replaceTelegram", { token: "new-token" })).resolves.toEqual({
+      outcome: "refused",
+      reason: "invalid-token",
+      current: telegramControlSnapshot,
+    });
     await expect(client.call("getTelegramStatus", {})).resolves.toEqual(telegramControlSnapshot);
     await expect(client.call("reconcileTelegram", {})).resolves.toEqual(telegramControlSnapshot);
     await expect(client.call("inspectTelegramCredential", { token: "bot-token" })).resolves.toEqual(
@@ -934,15 +981,19 @@ describe("RPC receive and observers", () => {
     );
     await expect(client.call("listTelegramAllowedSenders", {})).resolves.toEqual({ senders: [] });
     await expect(client.call("addTelegramAllowedSender", { senderId: 123_456 })).resolves.toEqual({
-      senders: [],
+      outcome: "applied",
+      current: { senders: [] },
     });
     await expect(
       client.call("removeTelegramAllowedSender", { senderId: 123_456 }),
-    ).resolves.toEqual({ senders: [] });
-    expect(received.slice(-15).map((value) => (value as { method: string }).method)).toEqual([
+    ).resolves.toEqual({ outcome: "uncertain", reason: "storage-uncertain" });
+    expect(received.slice(-18).map((value) => (value as { method: string }).method)).toEqual([
       "configureTelegram",
       "enableTelegram",
       "disableTelegram",
+      "suspendTelegramPolling",
+      "resumeTelegramPolling",
+      "drainTelegram",
       "replaceTelegram",
       "getTelegramStatus",
       "reconcileTelegram",
@@ -962,7 +1013,7 @@ describe("RPC receive and observers", () => {
     await expect(client.call("setDailySpendCap", { dailyCapUsd: 0.75 })).resolves.toMatchObject({
       dailyCapUsd: 0.75,
     });
-    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([30, 31]);
+    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([33, 34]);
     expect(received.slice(-2).map((value) => (value as { method: string }).method)).toEqual([
       "getSpendSummary",
       "setDailySpendCap",

@@ -33,6 +33,9 @@ describe("Telegram daemon binding", () => {
     await binding.configureTelegram({ token: TOKEN });
     await binding.enableTelegram({});
     await binding.disableTelegram({});
+    await binding.suspendTelegramPolling({});
+    await binding.resumeTelegramPolling({});
+    await binding.drainTelegram({});
     await binding.replaceTelegram({ token: TOKEN });
     await binding.getTelegramStatus({});
     await binding.reconcileTelegram({});
@@ -55,6 +58,9 @@ describe("Telegram daemon binding", () => {
       ["configureTelegram", { token: TOKEN }],
       ["enableTelegram", {}],
       ["disableTelegram", {}],
+      ["suspendTelegramPolling", {}],
+      ["resumeTelegramPolling", {}],
+      ["drainTelegram", {}],
       ["replaceTelegram", { token: TOKEN }],
       ["getTelegramStatus", {}],
       ["reconcileTelegram", {}],

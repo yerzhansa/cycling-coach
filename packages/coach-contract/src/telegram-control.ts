@@ -15,6 +15,12 @@ export const TelegramCredentialSchema = z
   );
 export type TelegramCredential = z.infer<typeof TelegramCredentialSchema>;
 
+export const TelegramClipboardCredentialSchema = TelegramCredentialSchema.regex(
+  /^\d{5,16}:[A-Za-z0-9_-]{35}$/,
+  "invalid Telegram clipboard credential",
+);
+export type TelegramClipboardCredential = z.infer<typeof TelegramClipboardCredentialSchema>;
+
 export const ConfigureTelegramRpcParamsSchema = z
   .object({ token: TelegramCredentialSchema })
   .strict();
@@ -45,6 +51,7 @@ export const TelegramChannelStatusSchema = z.discriminatedUnion("state", [
     })
     .strict(),
   z.object({ desiredState: z.literal("enabled"), state: z.literal("starting") }).strict(),
+  z.object({ desiredState: z.literal("enabled"), state: z.literal("suspended") }).strict(),
   z
     .object({
       desiredState: z.literal("enabled"),
@@ -142,6 +149,7 @@ export const TelegramPairingStateSchema = z.discriminatedUnion("state", [
         "telegram-pairing-unavailable",
         "telegram-pairing-refused",
         "telegram-pairing-storage-failed",
+        "telegram-pairing-storage-uncertain",
       ]),
     })
     .strict(),
@@ -156,6 +164,34 @@ export const TelegramControlSnapshotSchema = z
   })
   .strict();
 export type TelegramControlSnapshot = z.infer<typeof TelegramControlSnapshotSchema>;
+
+export const TelegramControlMutationRefusalReasonSchema = z.enum([
+  "invalid-token",
+  "validation-unavailable",
+  "webhook-removal-required",
+  "invalid-state",
+  "release-refused",
+]);
+export type TelegramControlMutationRefusalReason = z.infer<
+  typeof TelegramControlMutationRefusalReasonSchema
+>;
+
+export const TelegramControlMutationResultSchema = z.discriminatedUnion("outcome", [
+  z
+    .object({
+      outcome: z.literal("applied"),
+      current: TelegramControlSnapshotSchema,
+    })
+    .strict(),
+  z
+    .object({
+      outcome: z.literal("refused"),
+      reason: TelegramControlMutationRefusalReasonSchema,
+      current: TelegramControlSnapshotSchema,
+    })
+    .strict(),
+]);
+export type TelegramControlMutationResult = z.infer<typeof TelegramControlMutationResultSchema>;
 
 export const InspectTelegramCredentialRpcParamsSchema = ConfigureTelegramRpcParamsSchema;
 export type InspectTelegramCredentialRpcParams = ConfigureTelegramRpcParams;
@@ -189,6 +225,46 @@ export const TelegramAllowedSendersResultSchema = z
     }
   });
 export type TelegramAllowedSendersResult = z.infer<typeof TelegramAllowedSendersResultSchema>;
+
+export const TelegramAllowedSendersMutationRefusalReasonSchema = z.enum([
+  "invalid-state",
+  "control-unavailable",
+]);
+export type TelegramAllowedSendersMutationRefusalReason = z.infer<
+  typeof TelegramAllowedSendersMutationRefusalReasonSchema
+>;
+
+export const TelegramAllowedSendersMutationUncertaintyReasonSchema = z.enum([
+  "storage-uncertain",
+  "control-uncertain",
+]);
+export type TelegramAllowedSendersMutationUncertaintyReason = z.infer<
+  typeof TelegramAllowedSendersMutationUncertaintyReasonSchema
+>;
+
+export const TelegramAllowedSendersMutationResultSchema = z.discriminatedUnion("outcome", [
+  z
+    .object({
+      outcome: z.literal("applied"),
+      current: TelegramAllowedSendersResultSchema,
+    })
+    .strict(),
+  z
+    .object({
+      outcome: z.literal("refused"),
+      reason: TelegramAllowedSendersMutationRefusalReasonSchema,
+    })
+    .strict(),
+  z
+    .object({
+      outcome: z.literal("uncertain"),
+      reason: TelegramAllowedSendersMutationUncertaintyReasonSchema,
+    })
+    .strict(),
+]);
+export type TelegramAllowedSendersMutationResult = z.infer<
+  typeof TelegramAllowedSendersMutationResultSchema
+>;
 
 export const TelegramAllowedSenderRpcParamsSchema = z
   .object({ senderId: TelegramSenderIdSchema })

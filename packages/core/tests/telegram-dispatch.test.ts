@@ -500,8 +500,9 @@ describe("message:text — apology vs rate-limit fork", () => {
 
 describe("retry transformer / classified errors / delivery split", () => {
   it("createSecuredBot installs the auto-retry transformer exactly once", async () => {
-    const { bot } = await buildBot();
-    expect(bot.api.config.use).toHaveBeenCalledTimes(1);
+    const { bot, autoRetry } = await buildBot();
+    expect(autoRetry).toHaveBeenCalledTimes(1);
+    expect(bot.api.config.use).toHaveBeenCalledTimes(2);
   });
 
   it("generation provider-auth error → provider-auth copy (NOT delivery copy, NOT genericReply)", async () => {
@@ -827,6 +828,30 @@ describe("typing-indicator heartbeat", () => {
         vi.useRealTimers();
       }
     });
+
+    it("stop returns the in-flight pulse settlement for generation drain", async () => {
+      let settle!: () => void;
+      const pulse = new Promise<void>((resolve) => {
+        settle = resolve;
+      });
+      const stop = startTypingHeartbeat(
+        () => pulse,
+        10_000,
+        () => {},
+      );
+      await Promise.resolve();
+
+      let stopped = false;
+      const stopping = stop().then(() => {
+        stopped = true;
+      });
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+
+      settle();
+      await stopping;
+      expect(stopped).toBe(true);
+    });
   });
 });
 
@@ -965,8 +990,8 @@ describe("/update — ordering invariant", () => {
     expect(selfUpdate).not.toHaveBeenCalled();
 
     releaseStop();
-    // /update chains stop → bounded drain → selfUpdate; drain the microtask
-    // queue past the intermediate Promise.race so selfUpdate is reached.
+    // /update chains stop → generation drain → selfUpdate; drain the
+    // microtask queue until selfUpdate is reached.
     for (let i = 0; i < 10; i++) await Promise.resolve();
 
     expect(selfUpdate).toHaveBeenCalledWith("cycling-coach", "2026.5.10");

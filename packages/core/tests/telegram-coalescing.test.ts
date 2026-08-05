@@ -133,13 +133,13 @@ function getFlushMiddleware(bot: FakeBot) {
 }
 
 function getAuthMiddleware(bot: FakeBot) {
-  const call = bot.use.mock.calls[0];
+  const call = bot.use.mock.calls[1];
   if (!call) throw new Error("auth middleware not registered");
   return call[0] as (ctx: unknown, next: () => Promise<void>) => Promise<void>;
 }
 
 function getHandlerTrackingMiddleware(bot: FakeBot) {
-  const call = bot.use.mock.calls[1];
+  const call = bot.use.mock.calls[0];
   if (!call) throw new Error("handler-tracking middleware not registered");
   return call[0] as (ctx: unknown, next: () => Promise<void>) => Promise<void>;
 }
@@ -580,7 +580,7 @@ describe("in-handler drain tracking", () => {
       reply: vi.fn(async () => undefined),
     };
 
-    const handling = auth(ctx, () => trackHandler(ctx, task));
+    const handling = trackHandler(ctx, () => auth(ctx, task));
     await started;
     let drained = false;
     const draining = drainPending().then(() => {
@@ -621,7 +621,7 @@ describe("in-handler drain tracking", () => {
       await messageHandler(ctx);
     });
 
-    const handling = auth(ctx, () => trackHandler(ctx, task));
+    const handling = trackHandler(ctx, () => auth(ctx, task));
     await started;
     const draining = drainPending();
     allowBuffering();

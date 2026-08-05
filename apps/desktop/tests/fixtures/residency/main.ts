@@ -135,6 +135,7 @@ async function run(): Promise<void> {
     trayIconPath,
     trayPopoverUrl: "data:text/html,<main>Enduragent</main>",
     trayPreloadPath: join(app.getAppPath(), "tray-preload.cjs"),
+    persistLoginPreference: async (enabled) => ({ status: "stored", enabled }),
     telegramStatus: async () => ({ channelState: "disabled", gapWarning: false }),
     reportFailure(operation) {
       output({ event: "failure", operation });

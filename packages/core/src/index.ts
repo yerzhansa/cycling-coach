@@ -186,7 +186,11 @@ export type { CodexCredentials, CodexLoginOptions } from "./agent/codex/oauth.js
 
 // ─── Channels ─────────────────────────────────────────────────────────
 export { createTelegramBot } from "./channels/telegram.js";
-export type { CreateTelegramChannelInput, TelegramChannelRuntime } from "./channels/telegram.js";
+export type {
+  CreateTelegramChannelInput,
+  TelegramChannelRuntime,
+  TelegramDrainSnapshot,
+} from "./channels/telegram.js";
 export { deleteTelegramWebhook, inspectTelegramCredential } from "./channels/telegram-setup.js";
 export type {
   TelegramCredentialInspectionResult,
@@ -293,6 +297,7 @@ export type {
 } from "./athlete-data.js";
 export {
   addSecondarySender,
+  AllowedSendersCommitUncertainError,
   claimPrimaryOperator,
   listDesktopAllowedSenders,
   loadAllowedSendersFromFile,

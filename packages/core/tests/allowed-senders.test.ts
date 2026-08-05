@@ -5,14 +5,126 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  renameSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+const durabilityFs = vi.hoisted(() => ({
+  enabled: false,
+  events: [] as string[],
+  counts: {} as Record<string, number>,
+  failAt: null as string | null,
+  failOnOccurrence: 1,
+  failures: [] as Array<{ event: string; occurrence: number }>,
+  beforeEvent: null as ((event: string) => void) | null,
+  linkSource: null as string | null,
+}));
+
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const descriptorPaths = new Map<number, string>();
+  const fileName = (path: unknown): string =>
+    String(path).replaceAll("\\", "/").split("/").at(-1) ?? "";
+  const run = <T>(event: string, operation: () => T): T => {
+    if (!durabilityFs.enabled) return operation();
+    durabilityFs.events.push(event);
+    const occurrence = (durabilityFs.counts[event] ?? 0) + 1;
+    durabilityFs.counts[event] = occurrence;
+    durabilityFs.beforeEvent?.(event);
+    if (
+      (durabilityFs.failAt === event && durabilityFs.failOnOccurrence === occurrence) ||
+      durabilityFs.failures.some(
+        (failure) => failure.event === event && failure.occurrence === occurrence,
+      )
+    ) {
+      throw Object.assign(new Error(`synthetic durability failure at ${event}`), { code: "EIO" });
+    }
+    return operation();
+  };
+  const runFaultable = <T>(event: string, operation: () => T): T => {
+    if (!durabilityFs.enabled) return operation();
+    const occurrence = (durabilityFs.counts[event] ?? 0) + 1;
+    durabilityFs.counts[event] = occurrence;
+    durabilityFs.beforeEvent?.(event);
+    if (
+      (durabilityFs.failAt === event && durabilityFs.failOnOccurrence === occurrence) ||
+      durabilityFs.failures.some(
+        (failure) => failure.event === event && failure.occurrence === occurrence,
+      )
+    ) {
+      throw Object.assign(new Error(`synthetic durability failure at ${event}`), { code: "EIO" });
+    }
+    return operation();
+  };
+
+  return {
+    ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      const descriptor = Reflect.apply(actual.openSync, actual, args) as number;
+      descriptorPaths.set(descriptor, String(args[0]));
+      return descriptor;
+    },
+    closeSync: (descriptor: number) => {
+      try {
+        return actual.closeSync(descriptor);
+      } finally {
+        descriptorPaths.delete(descriptor);
+      }
+    },
+    lstatSync: (...args: Parameters<typeof actual.lstatSync>) => {
+      const name = fileName(args[0]);
+      const event =
+        name === ".telegram-access-reset"
+          ? "lstat:reset-marker"
+          : name === "allowed-senders.json"
+            ? "lstat:allowlist"
+            : "lstat:file";
+      return runFaultable(event, () => Reflect.apply(actual.lstatSync, actual, args));
+    },
+    linkSync: (...args: Parameters<typeof actual.linkSync>) => {
+      const event = fileName(args[1]) === ".allowed-senders.lock" ? "link:lock" : "link:file";
+      durabilityFs.linkSource = String(args[0]);
+      return runFaultable(event, () => Reflect.apply(actual.linkSync, actual, args));
+    },
+    fsyncSync: (descriptor: number) => {
+      const path = descriptorPaths.get(descriptor) ?? "unknown";
+      if (fileName(path).startsWith(".allowed-senders.lock.tmp.")) {
+        return runFaultable("fsync:lock-temp", () => actual.fsyncSync(descriptor));
+      }
+      const event = actual.fstatSync(descriptor).isDirectory()
+        ? "fsync:directory"
+        : fileName(path) === ".telegram-access-reset"
+          ? "fsync:reset-marker"
+          : fileName(path) === "allowed-senders.json.tmp"
+            ? "fsync:allowlist-temp"
+            : "fsync:file";
+      return run(event, () => actual.fsyncSync(descriptor));
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      const event =
+        fileName(args[1]) === "allowed-senders.json" ? "rename:allowlist" : "rename:file";
+      return run(event, () => Reflect.apply(actual.renameSync, actual, args));
+    },
+    unlinkSync: (...args: Parameters<typeof actual.unlinkSync>) => {
+      const event =
+        fileName(args[0]) === ".telegram-access-reset" ? "unlink:reset-marker" : "unlink:file";
+      return event === "unlink:reset-marker"
+        ? run(event, () => Reflect.apply(actual.unlinkSync, actual, args))
+        : Reflect.apply(actual.unlinkSync, actual, args);
+    },
+  };
+});
+
 import {
+  AllowedSendersCommitUncertainError,
+  AllowedSendersRecoveryRequiredError,
+  LockfileContentionError,
   loadAllowedSenders,
   loadAllowedSendersFromFile,
   saveAllowedSenders,
@@ -34,6 +146,22 @@ let dataDir: string;
 const ENV_KEYS = ["CYCLING_COACH_OPERATOR_ID", "CYCLING_COACH_DM_POLICY"];
 let savedEnv: Record<string, string | undefined>;
 
+function traceDurability(failAt: string | null = null, failOnOccurrence = 1): void {
+  durabilityFs.enabled = true;
+  durabilityFs.events = [];
+  durabilityFs.counts = {};
+  durabilityFs.failAt = failAt;
+  durabilityFs.failOnOccurrence = failOnOccurrence;
+  durabilityFs.failures = [];
+  durabilityFs.beforeEvent = null;
+  durabilityFs.linkSource = null;
+}
+
+function traceDurabilityFailures(failures: Array<{ event: string; occurrence: number }>): void {
+  traceDurability();
+  durabilityFs.failures = failures;
+}
+
 beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), "cc-allowlist-"));
   savedEnv = {};
@@ -41,6 +169,14 @@ beforeEach(() => {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
+  durabilityFs.enabled = false;
+  durabilityFs.events = [];
+  durabilityFs.counts = {};
+  durabilityFs.failAt = null;
+  durabilityFs.failOnOccurrence = 1;
+  durabilityFs.failures = [];
+  durabilityFs.beforeEvent = null;
+  durabilityFs.linkSource = null;
 });
 
 afterEach(() => {
@@ -48,6 +184,7 @@ afterEach(() => {
     if (savedEnv[k] === undefined) delete process.env[k];
     else process.env[k] = savedEnv[k];
   }
+  durabilityFs.enabled = false;
   rmSync(dataDir, { recursive: true, force: true });
 });
 
@@ -509,6 +646,16 @@ describe("Desktop sender authority operations", () => {
     expect(existsSync(allowedSendersPath())).toBe(false);
   });
 
+  it("refuses the pairing claim when the allowlist path cannot be inspected", () => {
+    traceDurability("lstat:allowlist");
+
+    expect(claimPrimaryOperator(dataDir, "12345")).toEqual({
+      status: "refused",
+      reason: "inconsistent-state",
+    });
+    expect(existsSync(allowedSendersPath())).toBe(false);
+  });
+
   it("adds a secondary without changing the primary and is idempotent", () => {
     claimPrimaryOperator(dataDir, "12345");
 
@@ -678,6 +825,255 @@ describe("Desktop sender authority operations", () => {
     expect(listDesktopAllowedSenders(dataDir)).toEqual([]);
   });
 
+  it("treats an unreadable access-fence marker as active on every read path", () => {
+    claimPrimaryOperator(dataDir, "12345");
+    traceDurability("lstat:reset-marker");
+
+    expect(loadAllowedSenders(dataDir)).toEqual(defaultPairingState());
+    traceDurability("lstat:reset-marker");
+    expect(loadAllowedSendersFromFile(dataDir)).toEqual(defaultPairingState());
+    traceDurability("lstat:reset-marker");
+    expect(listDesktopAllowedSenders(dataDir)).toEqual([]);
+  });
+
+  it("refuses authorization-expanding writes when the access fence cannot be inspected", () => {
+    traceDurability("lstat:reset-marker");
+    expect(claimPrimaryOperator(dataDir, "12345")).toEqual({
+      status: "refused",
+      reason: "inconsistent-state",
+    });
+
+    traceDurability("lstat:reset-marker");
+    expect(addSecondarySender(dataDir, "67890")).toEqual({
+      status: "refused",
+      reason: "inconsistent-state",
+    });
+
+    traceDurability("lstat:reset-marker");
+    expect(() =>
+      saveAllowedSenders(dataDir, () => ({
+        ...defaultPairingState(),
+        dmPolicy: "allowlist",
+        allowFrom: ["12345"],
+        primaryOperator: "12345",
+      })),
+    ).toThrow(AllowedSendersRecoveryRequiredError);
+    expect(existsSync(allowedSendersPath())).toBe(false);
+  });
+
+  it("acknowledges an access reset only after every security transition is durable", () => {
+    claimPrimaryOperator(dataDir, "12345");
+    traceDurability();
+
+    resetDesktopAllowedSenders(dataDir);
+
+    expect(durabilityFs.events).toEqual([
+      "fsync:reset-marker",
+      "fsync:directory",
+      "fsync:allowlist-temp",
+      "rename:allowlist",
+      "fsync:directory",
+      "unlink:reset-marker",
+      "fsync:directory",
+    ]);
+    expect(JSON.parse(readFileSync(allowedSendersPath(), "utf8"))).toEqual(defaultPairingState());
+    expect(existsSync(join(dataDir, ".telegram-access-reset"))).toBe(false);
+  });
+
+  it.each([
+    ["fsync:reset-marker", 1, false],
+    ["fsync:directory", 1, false],
+  ])(
+    "does not mutate or acknowledge a reset before durable marker publication at %s occurrence %i",
+    (failureEvent, failureOccurrence) => {
+      claimPrimaryOperator(dataDir, "12345");
+      const authorizedBytes = readFileSync(allowedSendersPath(), "utf8");
+      traceDurability(failureEvent, failureOccurrence);
+
+      expect(() => resetDesktopAllowedSenders(dataDir)).toThrow(
+        `synthetic durability failure at ${failureEvent}`,
+      );
+      expect(readFileSync(allowedSendersPath(), "utf8")).toBe(authorizedBytes);
+    },
+  );
+
+  it.each([
+    ["fsync:allowlist-temp", 1, false, false],
+    ["rename:allowlist", 1, false, false],
+    ["fsync:directory", 2, true, true],
+    ["unlink:reset-marker", 1, false, true],
+    ["fsync:directory", 3, false, true],
+  ])(
+    "keeps a durably-started reset fail-closed when %s occurrence %i fails",
+    (failureEvent, failureOccurrence, emulateLostRename, commitUncertain) => {
+      claimPrimaryOperator(dataDir, "12345");
+      const authorizedBytes = readFileSync(allowedSendersPath(), "utf8");
+      traceDurability(failureEvent, failureOccurrence);
+
+      expect(() => resetDesktopAllowedSenders(dataDir)).toThrow(
+        commitUncertain
+          ? AllowedSendersCommitUncertainError
+          : `synthetic durability failure at ${failureEvent}`,
+      );
+
+      durabilityFs.enabled = false;
+      if (emulateLostRename) writeFileSync(allowedSendersPath(), authorizedBytes);
+      expect(loadAllowedSenders(dataDir)).toEqual(defaultPairingState());
+      expect(listDesktopAllowedSenders(dataDir)).toEqual([]);
+    },
+  );
+
+  it("durably commits a bot-binding reset before reporting it", () => {
+    claimPrimaryOperator(dataDir, "12345");
+    traceDurability();
+
+    expect(bindDesktopTelegramAccess(dataDir, "10001")).toBe("reset");
+
+    expect(durabilityFs.events).toEqual([
+      "fsync:reset-marker",
+      "fsync:directory",
+      "fsync:allowlist-temp",
+      "rename:allowlist",
+      "fsync:directory",
+      "unlink:reset-marker",
+      "fsync:directory",
+    ]);
+    expect(JSON.parse(readFileSync(allowedSendersPath(), "utf8"))).toEqual({
+      ...defaultPairingState(),
+      desktopBotId: "10001",
+    });
+  });
+
+  it("keeps a bot-binding reset fenced when an unsynced rename is lost in a crash", () => {
+    claimPrimaryOperator(dataDir, "12345");
+    const authorizedBytes = readFileSync(allowedSendersPath(), "utf8");
+    traceDurability("fsync:directory", 2);
+
+    expect(() => bindDesktopTelegramAccess(dataDir, "10001")).toThrow(
+      AllowedSendersCommitUncertainError,
+    );
+    expect(durabilityFs.events).toEqual([
+      "fsync:reset-marker",
+      "fsync:directory",
+      "fsync:allowlist-temp",
+      "rename:allowlist",
+      "fsync:directory",
+    ]);
+    expect(existsSync(join(dataDir, ".telegram-access-reset"))).toBe(true);
+
+    durabilityFs.enabled = false;
+    writeFileSync(allowedSendersPath(), authorizedBytes);
+    expect(loadAllowedSenders(dataDir)).toEqual(defaultPairingState());
+    expect(bindDesktopTelegramAccess(dataDir, "10001")).toBe("reset");
+    expect(loadAllowedSendersFromFile(dataDir)).toEqual({
+      ...defaultPairingState(),
+      desktopBotId: "10001",
+    });
+  });
+
+  it("recovers a lost secondary-removal rename before an idempotent retry can succeed", () => {
+    claimPrimaryOperator(dataDir, "12345");
+    addSecondarySender(dataDir, "67890");
+    const authorizedBytes = readFileSync(allowedSendersPath(), "utf8");
+    traceDurability("fsync:directory", 2);
+
+    expect(removeSecondarySender(dataDir, "67890")).toEqual({ status: "uncertain" });
+    expect(existsSync(join(dataDir, ".telegram-access-reset"))).toBe(true);
+
+    durabilityFs.enabled = false;
+    writeFileSync(allowedSendersPath(), authorizedBytes);
+    expect(loadAllowedSenders(dataDir)).toEqual(defaultPairingState());
+    expect(removeSecondarySender(dataDir, "67890")).toEqual({ status: "not-found" });
+    expect(loadAllowedSendersFromFile(dataDir)).toEqual(defaultPairingState());
+    expect(existsSync(join(dataDir, ".telegram-access-reset"))).toBe(false);
+  });
+
+  it("recovers a lost legacy-removal rename before returning from a retry", () => {
+    addSender(dataDir, "12345");
+    addSender(dataDir, "67890");
+    const authorizedBytes = readFileSync(allowedSendersPath(), "utf8");
+    traceDurability("fsync:directory", 2);
+
+    expect(() => removeSender(dataDir, "67890")).toThrow(AllowedSendersCommitUncertainError);
+    expect(existsSync(join(dataDir, ".telegram-access-reset"))).toBe(true);
+
+    durabilityFs.enabled = false;
+    writeFileSync(allowedSendersPath(), authorizedBytes);
+    removeSender(dataDir, "67890");
+    expect(loadAllowedSendersFromFile(dataDir)).toEqual(defaultPairingState());
+    expect(existsSync(join(dataDir, ".telegram-access-reset"))).toBe(false);
+  });
+
+  it("refuses a grant retry while the first grant has an unresolved durable fence", () => {
+    claimPrimaryOperator(dataDir, "12345");
+    const authorizedBytes = readFileSync(allowedSendersPath(), "utf8");
+    traceDurability("fsync:directory", 2);
+
+    expect(addSecondarySender(dataDir, "67890")).toEqual({ status: "uncertain" });
+
+    durabilityFs.enabled = false;
+    writeFileSync(allowedSendersPath(), authorizedBytes);
+    expect(addSecondarySender(dataDir, "67890")).toEqual({
+      status: "refused",
+      reason: "inconsistent-state",
+    });
+    expect(() =>
+      saveAllowedSenders(dataDir, (current) => current ?? defaultPairingState()),
+    ).toThrow(AllowedSendersRecoveryRequiredError);
+  });
+
+  it("returns uncertain when grant cleanup and fence restoration both fail", () => {
+    claimPrimaryOperator(dataDir, "12345");
+    traceDurabilityFailures([
+      { event: "fsync:directory", occurrence: 3 },
+      { event: "fsync:reset-marker", occurrence: 2 },
+    ]);
+
+    expect(addSecondarySender(dataDir, "67890")).toEqual({ status: "uncertain" });
+
+    durabilityFs.enabled = false;
+    expect(JSON.parse(readFileSync(allowedSendersPath(), "utf8"))).toMatchObject({
+      allowFrom: ["12345", "67890"],
+    });
+    expect(loadAllowedSenders(dataDir)).toEqual(defaultPairingState());
+  });
+
+  it("returns uncertain when a primary claim cleanup cannot restore its durable fence", () => {
+    traceDurabilityFailures([
+      { event: "fsync:directory", occurrence: 3 },
+      { event: "fsync:reset-marker", occurrence: 2 },
+    ]);
+
+    expect(claimPrimaryOperator(dataDir, "12345")).toEqual({ status: "uncertain" });
+
+    durabilityFs.enabled = false;
+    const committedBytes = readFileSync(allowedSendersPath(), "utf8");
+    expect(JSON.parse(committedBytes)).toMatchObject({
+      dmPolicy: "allowlist",
+      allowFrom: ["12345"],
+      primaryOperator: "12345",
+    });
+    expect(loadAllowedSenders(dataDir)).toEqual(defaultPairingState());
+
+    const reconstructedDir = join(dataDir, "reconstructed-process-state");
+    mkdirSync(reconstructedDir, { mode: 0o700 });
+    writeFileSync(join(reconstructedDir, "allowed-senders.json"), committedBytes, { mode: 0o600 });
+    expect(loadAllowedSendersFromFile(reconstructedDir)).toMatchObject({
+      dmPolicy: "allowlist",
+      allowFrom: ["12345"],
+      primaryOperator: "12345",
+    });
+  });
+
+  it("still throws a definite failure before an authorization grant is committed", () => {
+    claimPrimaryOperator(dataDir, "12345");
+    traceDurability("fsync:allowlist-temp");
+
+    expect(() => addSecondarySender(dataDir, "67890")).toThrow(
+      "synthetic durability failure at fsync:allowlist-temp",
+    );
+  });
+
   it("preserves the bot binding across reset, re-pairing, and same-bot restart", () => {
     const binding = "10001";
     bindDesktopTelegramAccess(dataDir, binding);
@@ -694,24 +1090,25 @@ describe("Desktop sender authority operations", () => {
     expect(listDesktopAllowedSenders(dataDir).map((sender) => sender.senderId)).toEqual(["67890"]);
   });
 
-  it("does not let a pairing claim clear an interrupted access reset", async () => {
-    const { LockfileContentionError } = await import("../src/channels/allowed-senders.js");
-    const binding = "10001";
-    bindDesktopTelegramAccess(dataDir, binding);
-    const lockPath = join(dataDir, ".allowed-senders.lock");
-    writeFileSync(lockPath, `${process.pid}\n${new Date().toISOString()}`);
+  it("holds the writer lock until reset state and fence removal are both durable", () => {
+    claimPrimaryOperator(dataDir, "12345");
+    let secondWriterError: unknown;
+    traceDurability();
+    durabilityFs.beforeEvent = (event) => {
+      if (event !== "unlink:reset-marker") return;
+      durabilityFs.beforeEvent = null;
+      try {
+        addSender(dataDir, "67890");
+      } catch (error) {
+        secondWriterError = error;
+      }
+    };
 
-    expect(() => resetDesktopAllowedSenders(dataDir)).toThrow(LockfileContentionError);
-    rmSync(lockPath, { force: true });
-    expect(claimPrimaryOperator(dataDir, "12345")).toEqual({
-      status: "refused",
-      reason: "inconsistent-state",
-    });
-    expect(existsSync(join(dataDir, ".telegram-access-reset"))).toBe(true);
+    resetDesktopAllowedSenders(dataDir);
 
-    expect(bindDesktopTelegramAccess(dataDir, binding)).toBe("reset");
+    expect(secondWriterError).toBeInstanceOf(LockfileContentionError);
+    expect(loadAllowedSendersFromFile(dataDir)).toEqual(defaultPairingState());
     expect(existsSync(join(dataDir, ".telegram-access-reset"))).toBe(false);
-    expect(claimPrimaryOperator(dataDir, "12345").status).toBe("claimed");
   });
 });
 
@@ -735,15 +1132,70 @@ describe("saveAllowedSenders — PID lockfile", () => {
     rmSync(lockPath(), { force: true });
   });
 
-  it("keeps authorization fail-closed when reset persistence is contended", async () => {
-    const { LockfileContentionError } = await import("../src/channels/allowed-senders.js");
+  it("contention with a live PID does not expire when its timestamp is old", () => {
+    const oldTimestamp = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    writeFileSync(lockPath(), `${process.pid}\n${oldTimestamp}\nlive-owner`);
+
+    expect(() => addSender(dataDir, "12345")).toThrow(LockfileContentionError);
+    expect(readFileSync(lockPath(), "utf8")).toBe(`${process.pid}\n${oldTimestamp}\nlive-owner`);
+  });
+
+  it("does not unlink a successor that replaces this acquisition before release", () => {
+    const successor = `${process.pid}\n${new Date().toISOString()}\nsuccessor-owner`;
+    traceDurability();
+    durabilityFs.beforeEvent = (event) => {
+      if (event !== "fsync:reset-marker") return;
+      durabilityFs.beforeEvent = null;
+      rmSync(lockPath(), { force: true });
+      writeFileSync(lockPath(), successor, { mode: 0o600 });
+    };
+
+    addSender(dataDir, "12345");
+
+    expect(readFileSync(lockPath(), "utf8")).toBe(successor);
+  });
+
+  it("publishes a complete lock claim atomically and removes its owned temp", () => {
+    let observedClaim: string | undefined;
+    traceDurability();
+    durabilityFs.beforeEvent = (event) => {
+      if (event !== "link:lock") return;
+      expect(existsSync(lockPath())).toBe(false);
+      expect(durabilityFs.linkSource).not.toBeNull();
+      observedClaim = readFileSync(durabilityFs.linkSource as string, "utf8");
+    };
+
+    addSender(dataDir, "12345");
+
+    const [pid, timestamp, token] = observedClaim?.split("\n") ?? [];
+    expect(pid).toBe(String(process.pid));
+    expect(Date.parse(timestamp ?? "")).not.toBeNaN();
+    expect(token).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(
+      readdirSync(dataDir).filter((entry) => entry.startsWith(".allowed-senders.lock.tmp.")),
+    ).toEqual([]);
+  });
+
+  it("removes its private lock temp when claim preparation fails", () => {
+    traceDurability("fsync:lock-temp");
+
+    expect(() => addSender(dataDir, "12345")).toThrow(
+      "synthetic durability failure at fsync:lock-temp",
+    );
+    expect(existsSync(lockPath())).toBe(false);
+    expect(
+      readdirSync(dataDir).filter((entry) => entry.startsWith(".allowed-senders.lock.tmp.")),
+    ).toEqual([]);
+  });
+
+  it("leaves authorization unchanged when reset cannot acquire its transaction lock", () => {
     claimPrimaryOperator(dataDir, "12345");
-    process.env.CYCLING_COACH_OPERATOR_ID = "67890";
     writeFileSync(lockPath(), `${process.pid}\n${new Date().toISOString()}`);
 
     expect(() => resetDesktopAllowedSenders(dataDir)).toThrow(LockfileContentionError);
-    expect(loadAllowedSenders(dataDir)).toEqual(defaultPairingState());
-    expect(listDesktopAllowedSenders(dataDir)).toEqual([]);
+    expect(loadAllowedSenders(dataDir).allowFrom).toEqual(["12345"]);
+    expect(listDesktopAllowedSenders(dataDir).map((sender) => sender.senderId)).toEqual(["12345"]);
+    expect(existsSync(join(dataDir, ".telegram-access-reset"))).toBe(false);
 
     rmSync(lockPath(), { force: true });
     resetDesktopAllowedSenders(dataDir);
@@ -759,10 +1211,15 @@ describe("saveAllowedSenders — PID lockfile", () => {
     expect(loadAllowedSenders(dataDir).allowFrom).toEqual(["12345"]);
   });
 
-  it("malformed lockfile is treated as stale and reclaimed", () => {
-    writeFileSync(lockPath(), "this is not a valid lockfile");
-    addSender(dataDir, "12345");
-    expect(existsSync(lockPath())).toBe(false);
+  it("malformed lockfile is treated as contention and preserved", () => {
+    const malformed = "this is not a valid lockfile";
+    writeFileSync(lockPath(), malformed);
+
+    expect(() => addSender(dataDir, "12345")).toThrow(LockfileContentionError);
+    expect(readFileSync(lockPath(), "utf8")).toBe(malformed);
+    expect(
+      readdirSync(dataDir).filter((entry) => entry.startsWith(".allowed-senders.lock.tmp.")),
+    ).toEqual([]);
   });
 
   it("T1 (CRITICAL): concurrent addSender preserves both writes (transformer pattern)", async () => {
@@ -855,6 +1312,30 @@ describe("loadAllowedSenders — mtime cache", () => {
     const result = loadAllowedSenders(dataDir);
     expect(result.dmPolicy).toBe("pairing");
     expect(result.allowFrom).toEqual([]);
+  });
+
+  it("invalidates cached authorization when a peer replaces the file at the same mtime", () => {
+    addSender(dataDir, "12345");
+    const path = join(dataDir, "allowed-senders.json");
+    const fixedMtimeSeconds = 915_148_800;
+    utimesSync(path, fixedMtimeSeconds, fixedMtimeSeconds);
+    expect(loadAllowedSenders(dataDir).allowFrom).toEqual(["12345"]);
+    const before = statSync(path);
+    const replacement = `${path}.peer`;
+    const revokedJson = JSON.stringify(defaultPairingState());
+    const paddingLength = Number(before.size) - Buffer.byteLength(revokedJson);
+    expect(paddingLength).toBeGreaterThanOrEqual(0);
+    writeFileSync(replacement, revokedJson + " ".repeat(paddingLength), { mode: 0o600 });
+    utimesSync(replacement, fixedMtimeSeconds, fixedMtimeSeconds);
+    const replacementInode = statSync(replacement).ino;
+    renameSync(replacement, path);
+    const after = statSync(path);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+    expect(after.size).toBe(before.size);
+    expect(after.ino).toBe(replacementInode);
+    expect(after.ino).not.toBe(before.ino);
+
+    expect(loadAllowedSenders(dataDir)).toEqual(defaultPairingState());
   });
 });
 

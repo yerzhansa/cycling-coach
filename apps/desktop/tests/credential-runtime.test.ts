@@ -318,7 +318,11 @@ describe("desktop credential runtime precedence", () => {
 
     await expect(
       vault.writeCredential({ slot: "openrouter", value: randomUUID() }),
-    ).resolves.toMatchObject({ status: "refused", reason: "runtime-unavailable" });
+    ).resolves.toEqual({
+      slot: "openrouter",
+      status: "configured",
+      runtimeReady: false,
+    });
     await expect(vault.credentialStatuses()).resolves.toContainEqual({
       slot: "openrouter",
       state: "configured",

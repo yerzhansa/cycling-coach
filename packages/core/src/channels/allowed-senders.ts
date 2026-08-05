@@ -1,8 +1,12 @@
+import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   closeSync,
   createReadStream,
   existsSync,
+  fsyncSync,
+  linkSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -10,7 +14,6 @@ import {
   statSync,
   unlinkSync,
   writeFileSync,
-  writeSync,
 } from "node:fs";
 import { constants as fsConstants } from "node:fs";
 import { join } from "node:path";
@@ -142,30 +145,75 @@ function loadFromFile(dataDir: string): AllowedSenders | null {
   return validateSchema(parsed, path);
 }
 
-// Cache parsed AllowedSenders by file mtime. The auth middleware calls
+// Cache parsed AllowedSenders by file identity. The auth middleware calls
 // loadAllowedSenders on every inbound message; caching avoids re-running JSON
 // parse + zod validation when the file hasn't changed. saveAllowedSenders
 // invalidates this cache after committing a write. Note: cache is keyed by
 // dataDir so a single process serving multiple homes still works.
-//
-// HFS+ has 1-second mtime granularity — two writes within the same second
-// won't invalidate. macOS APFS, Linux ext4, and NTFS are sub-millisecond.
-// Telegram caps inbound to 30 msg/sec/bot so this is a non-issue in practice.
-const fileCache = new Map<string, { mtimeMs: number; value: AllowedSenders }>();
+interface AllowedSendersFileIdentity {
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+}
+
+const fileCache = new Map<
+  string,
+  { identity: AllowedSendersFileIdentity; value: AllowedSenders }
+>();
+const uncertainAccessFences = new Set<string>();
+
+function allowedSendersFileIdentity(path: string): AllowedSendersFileIdentity {
+  const metadata = statSync(path, { bigint: true });
+  return {
+    dev: metadata.dev,
+    ino: metadata.ino,
+    size: metadata.size,
+    mtimeNs: metadata.mtimeNs,
+  };
+}
+
+function sameAllowedSendersFileIdentity(
+  left: AllowedSendersFileIdentity,
+  right: AllowedSendersFileIdentity,
+): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs
+  );
+}
+
+function pathExistsOrIsUninspectable(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+  }
+}
+
+function accessFenceActive(dataDir: string): boolean {
+  return (
+    uncertainAccessFences.has(dataDir) ||
+    pathExistsOrIsUninspectable(join(dataDir, ACCESS_RESET_MARKER))
+  );
+}
 
 function loadFromFileCached(dataDir: string): AllowedSenders | null {
   const path = join(dataDir, ALLOWED_SENDERS_FILE);
-  let mtimeMs: number;
+  let identity: AllowedSendersFileIdentity;
   try {
-    mtimeMs = statSync(path).mtimeMs;
+    identity = allowedSendersFileIdentity(path);
   } catch {
     fileCache.delete(dataDir);
     return null;
   }
   const cached = fileCache.get(dataDir);
-  if (cached && cached.mtimeMs === mtimeMs) return cached.value;
+  if (cached && sameAllowedSendersFileIdentity(cached.identity, identity)) return cached.value;
   const fresh = loadFromFile(dataDir);
-  if (fresh) fileCache.set(dataDir, { mtimeMs, value: fresh });
+  if (fresh) fileCache.set(dataDir, { identity, value: fresh });
   else fileCache.delete(dataDir);
   return fresh;
 }
@@ -178,7 +226,7 @@ export interface AllowedSendersLoad {
 }
 
 export function loadAllowedSendersWithSource(dataDir: string): AllowedSendersLoad {
-  if (existsSync(join(dataDir, ACCESS_RESET_MARKER))) {
+  if (accessFenceActive(dataDir)) {
     return { state: defaultPairingState(), source: "default-pairing" };
   }
   const fromFile = loadFromFileCached(dataDir);
@@ -206,7 +254,7 @@ export function loadAllowedSenders(dataDir: string): AllowedSenders {
 }
 
 export function loadAllowedSendersFromFile(dataDir: string): AllowedSenders {
-  if (existsSync(join(dataDir, ACCESS_RESET_MARKER))) return defaultPairingState();
+  if (accessFenceActive(dataDir)) return defaultPairingState();
   return loadFromFileCached(dataDir) ?? defaultPairingState();
 }
 
@@ -224,13 +272,15 @@ export type ClaimPrimaryOperatorResult =
   | {
       status: "refused";
       reason: "primary-exists" | "inconsistent-state";
-    };
+    }
+  | { status: "uncertain" };
 
 export type AddSecondarySenderResult =
   | {
       status: "added" | "already-allowed";
       sender: DesktopAllowedSender;
     }
+  | { status: "uncertain" }
   | {
       status: "refused";
       reason: "primary-required" | "inconsistent-state";
@@ -238,6 +288,7 @@ export type AddSecondarySenderResult =
 
 export type RemoveSecondarySenderResult =
   | { status: "removed" | "not-found" }
+  | { status: "uncertain" }
   | {
       status: "refused";
       reason: "primary-removal" | "inconsistent-state";
@@ -245,11 +296,9 @@ export type RemoveSecondarySenderResult =
 
 // ─── PID lockfile ────────────────────────────────────────────────────────────
 // Serialize cross-process writes to allowed-senders.json. Lockfile lives at
-// <dataDir>/.allowed-senders.lock; content is "<pid>\n<isoTimestamp>". Stale
-// locks (dead PID OR timestamp older than 60s) are reclaimed automatically.
+// <dataDir>/.allowed-senders.lock. Locks owned by a dead PID are reclaimed.
 
 const LOCK_FILE = ".allowed-senders.lock";
-const LOCK_FRESH_WINDOW_MS = 60_000;
 
 export class LockfileContentionError extends Error {
   constructor(message: string) {
@@ -258,14 +307,28 @@ export class LockfileContentionError extends Error {
   }
 }
 
+export class AllowedSendersRecoveryRequiredError extends Error {
+  constructor(dataDir: string) {
+    super(`Telegram sender authorization recovery is required for ${dataDir}.`);
+    this.name = "AllowedSendersRecoveryRequiredError";
+  }
+}
+
+export class AllowedSendersCommitUncertainError extends Error {
+  constructor(dataDir: string, cause: unknown) {
+    super(`Telegram sender authorization commit is uncertain for ${dataDir}.`, { cause });
+    this.name = "AllowedSendersCommitUncertainError";
+  }
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
   } catch (err) {
-    // ESRCH = no such process; EPERM = exists but we lack signal perms (still alive).
-    if ((err as NodeJS.ErrnoException).code === "EPERM") return true;
-    return false;
+    // Only ESRCH proves the process is gone. Permission and I/O failures must
+    // preserve the lock because they do not prove its owner is dead.
+    return (err as NodeJS.ErrnoException).code !== "ESRCH";
   }
 }
 
@@ -273,56 +336,84 @@ function lockfileIsStale(lockPath: string): boolean {
   let raw: string;
   try {
     raw = readFileSync(lockPath, "utf-8");
-  } catch {
-    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
   }
-  const [pidStr, ts] = raw.split("\n");
+  const [pidStr] = raw.split("\n");
   const pid = Number(pidStr);
-  if (!Number.isFinite(pid) || pid <= 0) return true;
-  const tsMs = ts ? Date.parse(ts) : NaN;
-  if (!Number.isFinite(tsMs)) return true;
-  if (Date.now() - tsMs > LOCK_FRESH_WINDOW_MS) return true;
-  if (!isProcessAlive(pid)) return true;
-  return false;
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  return !isProcessAlive(pid);
 }
 
-function acquireLockfile(dataDir: string): string {
-  const lockPath = join(dataDir, LOCK_FILE);
-  const content = `${process.pid}\n${new Date().toISOString()}`;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const fd = openSync(
-        lockPath,
-        fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY,
-        0o600,
-      );
-      try {
-        writeSync(fd, content);
-      } finally {
-        closeSync(fd);
-      }
-      return lockPath;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      if (lockfileIsStale(lockPath)) {
-        try {
-          unlinkSync(lockPath);
-        } catch {
-          /* race: another process cleaned it */
-        }
-        continue;
-      }
-      throw new LockfileContentionError(
-        `Another ${process.argv[1] ?? "cycling-coach"} process holds ${lockPath}; try again in a moment.`,
-      );
-    }
-  }
-  throw new LockfileContentionError(`Failed to acquire ${lockPath} after stale-reclaim retry.`);
+interface LockfileOwnership {
+  path: string;
+  content: string;
 }
 
-function releaseLockfile(lockPath: string): void {
+function prepareLockfileClaim(lockPath: string, content: string, token: string): string {
+  const tempPath = `${lockPath}.tmp.${token}`;
+  let descriptor: number | undefined;
   try {
-    unlinkSync(lockPath);
+    descriptor = openSync(
+      tempPath,
+      fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW,
+      0o600,
+    );
+    writeFileSync(descriptor, content, "utf8");
+    fsyncSync(descriptor);
+    closeSync(descriptor);
+    descriptor = undefined;
+    return tempPath;
+  } catch (error) {
+    if (descriptor !== undefined) {
+      try {
+        closeSync(descriptor);
+      } catch {}
+    }
+    try {
+      unlinkSync(tempPath);
+    } catch {}
+    throw error;
+  }
+}
+
+function acquireLockfile(dataDir: string): LockfileOwnership {
+  const lockPath = join(dataDir, LOCK_FILE);
+  const token = randomUUID();
+  const content = `${process.pid}\n${new Date().toISOString()}\n${token}`;
+  const tempPath = prepareLockfileClaim(lockPath, content, token);
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        linkSync(tempPath, lockPath);
+        return { path: lockPath, content };
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+        if (lockfileIsStale(lockPath)) {
+          try {
+            unlinkSync(lockPath);
+          } catch {
+            /* race: another process cleaned it */
+          }
+          continue;
+        }
+        throw new LockfileContentionError(
+          `Another ${process.argv[1] ?? "cycling-coach"} process holds ${lockPath}; try again in a moment.`,
+        );
+      }
+    }
+    throw new LockfileContentionError(`Failed to acquire ${lockPath} after stale-reclaim retry.`);
+  } finally {
+    try {
+      unlinkSync(tempPath);
+    } catch {}
+  }
+}
+
+function releaseLockfile(ownership: LockfileOwnership): void {
+  try {
+    if (readFileSync(ownership.path, "utf8") !== ownership.content) return;
+    unlinkSync(ownership.path);
   } catch {
     // Already gone or never created — nothing to do.
   }
@@ -344,61 +435,149 @@ export function ensureDataDirSecure(dataDir: string): void {
   }
 }
 
+function syncDirectory(dataDir: string): void {
+  const descriptor = openSync(
+    dataDir,
+    fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
+  );
+  try {
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function writeFileDurably(path: string, contents: string): void {
+  const descriptor = openSync(
+    path,
+    fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    writeFileSync(descriptor, contents, "utf8");
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function withAllowedSendersLock<T>(dataDir: string, operation: () => T): T {
+  ensureDataDirSecure(dataDir);
+  const ownership = acquireLockfile(dataDir);
+  try {
+    return operation();
+  } finally {
+    releaseLockfile(ownership);
+  }
+}
+
+function publishAccessFenceLocked(dataDir: string): void {
+  uncertainAccessFences.add(dataDir);
+  fileCache.delete(dataDir);
+  writeFileDurably(join(dataDir, ACCESS_RESET_MARKER), "reset\n");
+  syncDirectory(dataDir);
+}
+
+function removeAccessFenceLocked(dataDir: string): void {
+  const markerPath = join(dataDir, ACCESS_RESET_MARKER);
+  let unlinked = false;
+  try {
+    unlinkSync(markerPath);
+    unlinked = true;
+    syncDirectory(dataDir);
+    uncertainAccessFences.delete(dataDir);
+  } catch (error) {
+    uncertainAccessFences.add(dataDir);
+    if (unlinked) {
+      try {
+        writeFileDurably(markerPath, "reset\n");
+        syncDirectory(dataDir);
+      } catch {}
+    }
+    throw error;
+  }
+}
+
+function refreshAllowedSendersCache(dataDir: string, next: AllowedSenders): void {
+  const path = join(dataDir, ALLOWED_SENDERS_FILE);
+  try {
+    fileCache.set(dataDir, { identity: allowedSendersFileIdentity(path), value: next });
+  } catch {
+    fileCache.delete(dataDir);
+  }
+}
+
+function replaceAllowedSendersLocked(dataDir: string, next: AllowedSenders): void {
+  const path = join(dataDir, ALLOWED_SENDERS_FILE);
+  const tmp = `${path}.tmp`;
+  let renamed = false;
+  try {
+    writeFileDurably(tmp, JSON.stringify(next, null, 2));
+    renameSync(tmp, path);
+    renamed = true;
+    syncDirectory(dataDir);
+  } catch (error) {
+    try {
+      unlinkSync(tmp);
+    } catch {}
+    if (renamed) throw new AllowedSendersCommitUncertainError(dataDir, error);
+    throw error;
+  }
+}
+
+function commitAllowedSendersLocked(dataDir: string, next: AllowedSenders): AllowedSenders {
+  publishAccessFenceLocked(dataDir);
+  try {
+    replaceAllowedSendersLocked(dataDir, next);
+    try {
+      removeAccessFenceLocked(dataDir);
+    } catch (error) {
+      throw new AllowedSendersCommitUncertainError(dataDir, error);
+    }
+  } catch (error) {
+    uncertainAccessFences.add(dataDir);
+    fileCache.delete(dataDir);
+    throw error;
+  }
+  refreshAllowedSendersCache(dataDir, next);
+  return next;
+}
+
+function recoveryState(current: AllowedSenders | null): AllowedSenders {
+  return {
+    ...defaultPairingState(),
+    ...(current?.desktopBotId === undefined ? {} : { desktopBotId: current.desktopBotId }),
+  };
+}
+
+function mutateAllowedSenders(
+  dataDir: string,
+  transform: (current: AllowedSenders | null) => AllowedSenders,
+  recoverPendingFence: boolean,
+): AllowedSenders {
+  return withAllowedSendersLock(dataDir, () => {
+    let current = loadFromFile(dataDir);
+    if (accessFenceActive(dataDir)) {
+      if (!recoverPendingFence) throw new AllowedSendersRecoveryRequiredError(dataDir);
+      current = commitAllowedSendersLocked(dataDir, recoveryState(current));
+    }
+    const next = transform(current);
+    if (next === current) return next;
+    return commitAllowedSendersLocked(dataDir, next);
+  });
+}
+
 export function saveAllowedSenders(
   dataDir: string,
   transform: (current: AllowedSenders | null) => AllowedSenders,
 ): AllowedSenders {
-  ensureDataDirSecure(dataDir);
-
-  const lockPath = acquireLockfile(dataDir);
-  try {
-    // Read inside the lock so the transformer sees the latest disk state —
-    // closes a TOCTOU class where a load-then-save outside the lock could
-    // clobber a concurrent writer's commit. Bypass the mtime cache here: the
-    // cache reflects the LAST committed write from this process, but a peer
-    // process may have written since then and we must see that.
-    const current = loadFromFile(dataDir);
-    const next = transform(current);
-
-    const path = join(dataDir, ALLOWED_SENDERS_FILE);
-    const tmp = `${path}.tmp`;
-    writeFileSync(tmp, JSON.stringify(next, null, 2), { mode: 0o600 });
-    renameSync(tmp, path);
-    // Refresh the cache with the fresh state + post-rename mtime so the next
-    // read in this process is a cache hit.
-    try {
-      fileCache.set(dataDir, { mtimeMs: statSync(path).mtimeMs, value: next });
-    } catch {
-      fileCache.delete(dataDir);
-    }
-    return next;
-  } finally {
-    releaseLockfile(lockPath);
-  }
+  return mutateAllowedSenders(dataDir, transform, false);
 }
 
 export function resetDesktopAllowedSenders(dataDir: string): void {
-  ensureDataDirSecure(dataDir);
-  const markerPath = join(dataDir, ACCESS_RESET_MARKER);
-  let markerHandle: number | undefined;
-  try {
-    markerHandle = openSync(
-      markerPath,
-      fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW,
-      0o600,
-    );
-    writeSync(markerHandle, "reset\n");
-  } finally {
-    if (markerHandle !== undefined) closeSync(markerHandle);
-  }
-  fileCache.delete(dataDir);
-  saveAllowedSenders(dataDir, (current) => ({
-    ...defaultPairingState(),
-    ...(current?.desktopBotId === undefined ? {} : { desktopBotId: current.desktopBotId }),
-  }));
-  try {
-    unlinkSync(markerPath);
-  } catch {}
+  withAllowedSendersLock(dataDir, () => {
+    commitAllowedSendersLocked(dataDir, recoveryState(loadFromFile(dataDir)));
+  });
 }
 
 export function bindDesktopTelegramAccess(
@@ -408,16 +587,13 @@ export function bindDesktopTelegramAccess(
   if (!SENDER_ID_RE.test(desktopBotId)) {
     throw new TypeError("invalid Desktop Telegram bot id");
   }
-  const markerPath = join(dataDir, ACCESS_RESET_MARKER);
-  const pendingReset = existsSync(markerPath);
-  let status: "preserved" | "reset" = "preserved";
-  saveAllowedSenders(dataDir, (current) => {
-    if (!pendingReset && current?.desktopBotId === desktopBotId) return current;
-    status = "reset";
-    return { ...defaultPairingState(), desktopBotId };
+  return withAllowedSendersLock(dataDir, () => {
+    const pendingReset = accessFenceActive(dataDir);
+    const current = loadFromFile(dataDir);
+    if (!pendingReset && current?.desktopBotId === desktopBotId) return "preserved";
+    commitAllowedSendersLocked(dataDir, { ...defaultPairingState(), desktopBotId });
+    return "reset";
   });
-  if (pendingReset) unlinkSync(markerPath);
-  return status;
 }
 
 function assertSenderId(id: string): void {
@@ -472,7 +648,7 @@ function exitDesktopMutation<T>(result: T): never {
 }
 
 function allowedSendersFileExists(dataDir: string): boolean {
-  return existsSync(join(dataDir, ALLOWED_SENDERS_FILE));
+  return pathExistsOrIsUninspectable(join(dataDir, ALLOWED_SENDERS_FILE));
 }
 
 export function claimPrimaryOperator(
@@ -480,8 +656,6 @@ export function claimPrimaryOperator(
   senderId: string,
 ): ClaimPrimaryOperatorResult {
   assertSenderId(senderId);
-  const markerPath = join(dataDir, ACCESS_RESET_MARKER);
-  if (existsSync(markerPath)) return { status: "refused", reason: "inconsistent-state" };
   const nowIso = new Date().toISOString();
   let result: ClaimPrimaryOperatorResult | undefined;
 
@@ -519,6 +693,12 @@ export function claimPrimaryOperator(
   } catch (err) {
     if (err instanceof DesktopSenderMutationExit) {
       return err.result as ClaimPrimaryOperatorResult;
+    }
+    if (err instanceof AllowedSendersRecoveryRequiredError) {
+      return { status: "refused", reason: "inconsistent-state" };
+    }
+    if (err instanceof AllowedSendersCommitUncertainError) {
+      return { status: "uncertain" };
     }
     throw err;
   }
@@ -563,6 +743,12 @@ export function addSecondarySender(dataDir: string, senderId: string): AddSecond
     if (err instanceof DesktopSenderMutationExit) {
       return err.result as AddSecondarySenderResult;
     }
+    if (err instanceof AllowedSendersRecoveryRequiredError) {
+      return { status: "refused", reason: "inconsistent-state" };
+    }
+    if (err instanceof AllowedSendersCommitUncertainError) {
+      return { status: "uncertain" };
+    }
     throw err;
   }
 
@@ -577,36 +763,43 @@ export function removeSecondarySender(
   let result: RemoveSecondarySenderResult | undefined;
 
   try {
-    saveAllowedSenders(dataDir, (current) => {
-      if (!current && allowedSendersFileExists(dataDir)) {
-        return exitDesktopMutation({ status: "refused", reason: "inconsistent-state" });
-      }
+    mutateAllowedSenders(
+      dataDir,
+      (current) => {
+        if (!current && allowedSendersFileExists(dataDir)) {
+          return exitDesktopMutation({ status: "refused", reason: "inconsistent-state" });
+        }
 
-      const base = current ?? defaultPairingState();
-      if (hasConsistentUnownedState(base)) {
-        return exitDesktopMutation({ status: "not-found" });
-      }
-      if (!hasValidPrimary(base)) {
-        return exitDesktopMutation({ status: "refused", reason: "inconsistent-state" });
-      }
-      if (base.primaryOperator === senderId) {
-        return exitDesktopMutation({ status: "refused", reason: "primary-removal" });
-      }
-      if (!base.allowFrom.includes(senderId)) {
-        return exitDesktopMutation({ status: "not-found" });
-      }
+        const base = current ?? defaultPairingState();
+        if (hasConsistentUnownedState(base)) {
+          return exitDesktopMutation({ status: "not-found" });
+        }
+        if (!hasValidPrimary(base)) {
+          return exitDesktopMutation({ status: "refused", reason: "inconsistent-state" });
+        }
+        if (base.primaryOperator === senderId) {
+          return exitDesktopMutation({ status: "refused", reason: "primary-removal" });
+        }
+        if (!base.allowFrom.includes(senderId)) {
+          return exitDesktopMutation({ status: "not-found" });
+        }
 
-      const { [senderId]: _removed, ...addedAt } = base.addedAt ?? {};
-      result = { status: "removed" };
-      return {
-        ...base,
-        allowFrom: base.allowFrom.filter((id) => id !== senderId),
-        addedAt,
-      };
-    });
+        const { [senderId]: _removed, ...addedAt } = base.addedAt ?? {};
+        result = { status: "removed" };
+        return {
+          ...base,
+          allowFrom: base.allowFrom.filter((id) => id !== senderId),
+          addedAt,
+        };
+      },
+      true,
+    );
   } catch (err) {
     if (err instanceof DesktopSenderMutationExit) {
       return err.result as RemoveSecondarySenderResult;
+    }
+    if (err instanceof AllowedSendersCommitUncertainError) {
+      return { status: "uncertain" };
     }
     throw err;
   }
@@ -689,17 +882,21 @@ export async function listSenders(dataDir: string): Promise<{
 }
 
 export function removeSender(dataDir: string, senderId: string): void {
-  saveAllowedSenders(dataDir, (current) => {
-    if (!current) return defaultPairingState();
-    if (!current.allowFrom.includes(senderId)) return current;
-    const filtered = current.allowFrom.filter((id) => id !== senderId);
-    const { [senderId]: _dropped, ...remainingAddedAt } = current.addedAt;
-    return {
-      ...current,
-      allowFrom: filtered,
-      addedAt: remainingAddedAt,
-      dmPolicy: filtered.length === 0 ? "pairing" : current.dmPolicy,
-      primaryOperator: current.primaryOperator === senderId ? null : current.primaryOperator,
-    };
-  });
+  mutateAllowedSenders(
+    dataDir,
+    (current) => {
+      if (!current) return defaultPairingState();
+      if (!current.allowFrom.includes(senderId)) return current;
+      const filtered = current.allowFrom.filter((id) => id !== senderId);
+      const { [senderId]: _dropped, ...remainingAddedAt } = current.addedAt;
+      return {
+        ...current,
+        allowFrom: filtered,
+        addedAt: remainingAddedAt,
+        dmPolicy: filtered.length === 0 ? "pairing" : current.dmPolicy,
+        primaryOperator: current.primaryOperator === senderId ? null : current.primaryOperator,
+      };
+    },
+    true,
+  );
 }

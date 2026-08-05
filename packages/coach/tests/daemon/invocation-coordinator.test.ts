@@ -25,10 +25,12 @@ function deferred<T>(): Deferred<T> {
 describe("daemon invocation coordinator", () => {
   it("admits work synchronously and rejects new admission after close", async () => {
     const coordinator = createInvocationCoordinator();
+    expect(coordinator.canAdmit()).toBe(true);
     const admitted = coordinator.invoke({ key: "desktop" }, async () => "accepted");
 
     coordinator.closeAdmission();
 
+    expect(coordinator.canAdmit()).toBe(false);
     expect(() => coordinator.invoke({ key: "desktop" }, async () => "late")).toThrow(
       DaemonAdmissionClosedError,
     );
@@ -120,8 +122,9 @@ describe("daemon invocation coordinator", () => {
     expect(coordinator.closeAdmission()).toBe(fence);
     const draining = fence.drain();
 
-    fence.reopen();
-    fence.reopen();
+    expect(fence.reopen()).toBe(true);
+    expect(coordinator.canAdmit()).toBe(true);
+    expect(fence.reopen()).toBe(false);
     await expect(coordinator.invoke({ key: "telegram:1" }, async () => "resumed")).resolves.toBe(
       "resumed",
     );
@@ -141,15 +144,16 @@ describe("daemon invocation coordinator", () => {
   it("does not let a stale or sealed fence reopen a later admission generation", async () => {
     const coordinator = createInvocationCoordinator();
     const firstFence = coordinator.closeAdmission();
-    firstFence.reopen();
+    expect(firstFence.reopen()).toBe(true);
     const secondFence = coordinator.closeAdmission();
 
-    firstFence.reopen();
+    expect(firstFence.reopen()).toBe(false);
     expect(() => coordinator.invoke({}, async () => "stale")).toThrow(DaemonAdmissionClosedError);
 
     secondFence.seal();
     secondFence.seal();
-    secondFence.reopen();
+    expect(secondFence.reopen()).toBe(false);
+    expect(coordinator.canAdmit()).toBe(false);
     expect(() => coordinator.reserve()).toThrow(DaemonAdmissionClosedError);
     await secondFence.drain();
   });

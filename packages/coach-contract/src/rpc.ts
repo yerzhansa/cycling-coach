@@ -27,7 +27,9 @@ import {
   InspectTelegramCredentialRpcParamsSchema,
   ReplaceTelegramRpcParamsSchema,
   TelegramAllowedSenderRpcParamsSchema,
+  TelegramAllowedSendersMutationResultSchema,
   TelegramAllowedSendersResultSchema,
+  TelegramControlMutationResultSchema,
   TelegramControlSnapshotSchema,
   TelegramCredentialInspectionSchema,
   type ConfigureTelegramRpcParams,
@@ -35,7 +37,9 @@ import {
   type InspectTelegramCredentialRpcParams,
   type ReplaceTelegramRpcParams,
   type TelegramAllowedSenderRpcParams,
+  type TelegramAllowedSendersMutationResult,
   type TelegramAllowedSendersResult,
+  type TelegramControlMutationResult,
   type TelegramControlSnapshot,
   type TelegramCredentialInspection,
 } from "./telegram-control.js";
@@ -148,6 +152,9 @@ export const COACH_RPC_METHOD_NAMES = [
   "configureTelegram",
   "enableTelegram",
   "disableTelegram",
+  "suspendTelegramPolling",
+  "resumeTelegramPolling",
+  "drainTelegram",
   "replaceTelegram",
   "getTelegramStatus",
   "reconcileTelegram",
@@ -830,10 +837,13 @@ export interface CoachSelfTestOperations {
 }
 
 export interface TelegramControlOperations {
-  configureTelegram(request: ConfigureTelegramRpcParams): Promise<TelegramControlSnapshot>;
+  configureTelegram(request: ConfigureTelegramRpcParams): Promise<TelegramControlMutationResult>;
   enableTelegram(request: EmptyRpcParams): Promise<TelegramControlSnapshot>;
   disableTelegram(request: EmptyRpcParams): Promise<TelegramControlSnapshot>;
-  replaceTelegram(request: ReplaceTelegramRpcParams): Promise<TelegramControlSnapshot>;
+  suspendTelegramPolling(request: EmptyRpcParams): Promise<TelegramControlSnapshot>;
+  resumeTelegramPolling(request: EmptyRpcParams): Promise<TelegramControlSnapshot>;
+  drainTelegram(request: EmptyRpcParams): Promise<TelegramControlSnapshot>;
+  replaceTelegram(request: ReplaceTelegramRpcParams): Promise<TelegramControlMutationResult>;
   getTelegramStatus(request: EmptyRpcParams): Promise<TelegramControlSnapshot>;
   reconcileTelegram(request: EmptyRpcParams): Promise<TelegramControlSnapshot>;
   inspectTelegramCredential(
@@ -849,10 +859,10 @@ export interface TelegramControlOperations {
   listTelegramAllowedSenders(request: EmptyRpcParams): Promise<TelegramAllowedSendersResult>;
   addTelegramAllowedSender(
     request: TelegramAllowedSenderRpcParams,
-  ): Promise<TelegramAllowedSendersResult>;
+  ): Promise<TelegramAllowedSendersMutationResult>;
   removeTelegramAllowedSender(
     request: TelegramAllowedSenderRpcParams,
-  ): Promise<TelegramAllowedSendersResult>;
+  ): Promise<TelegramAllowedSendersMutationResult>;
 }
 
 export type CoachRpcService = CoachEngine &
@@ -995,6 +1005,30 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       jsonrpc: z.literal("2.0"),
       id: JsonRpcIdSchema,
       method: z.literal("disableTelegram"),
+      params: EmptyRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("suspendTelegramPolling"),
+      params: EmptyRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("resumeTelegramPolling"),
+      params: EmptyRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("drainTelegram"),
       params: EmptyRpcParamsSchema,
     })
     .strict(),
@@ -1290,7 +1324,7 @@ export const COACH_RPC_METHOD_REGISTRY = {
   configureTelegram: {
     wireName: "configureTelegram",
     requestSchema: ConfigureTelegramRpcParamsSchema,
-    responseSchema: TelegramControlSnapshotSchema,
+    responseSchema: TelegramControlMutationResultSchema,
     eventSchema: NoRpcEventSchema,
   },
   enableTelegram: {
@@ -1305,10 +1339,28 @@ export const COACH_RPC_METHOD_REGISTRY = {
     responseSchema: TelegramControlSnapshotSchema,
     eventSchema: NoRpcEventSchema,
   },
+  suspendTelegramPolling: {
+    wireName: "suspendTelegramPolling",
+    requestSchema: EmptyRpcParamsSchema,
+    responseSchema: TelegramControlSnapshotSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  resumeTelegramPolling: {
+    wireName: "resumeTelegramPolling",
+    requestSchema: EmptyRpcParamsSchema,
+    responseSchema: TelegramControlSnapshotSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  drainTelegram: {
+    wireName: "drainTelegram",
+    requestSchema: EmptyRpcParamsSchema,
+    responseSchema: TelegramControlSnapshotSchema,
+    eventSchema: NoRpcEventSchema,
+  },
   replaceTelegram: {
     wireName: "replaceTelegram",
     requestSchema: ReplaceTelegramRpcParamsSchema,
-    responseSchema: TelegramControlSnapshotSchema,
+    responseSchema: TelegramControlMutationResultSchema,
     eventSchema: NoRpcEventSchema,
   },
   getTelegramStatus: {
@@ -1368,13 +1420,13 @@ export const COACH_RPC_METHOD_REGISTRY = {
   addTelegramAllowedSender: {
     wireName: "addTelegramAllowedSender",
     requestSchema: TelegramAllowedSenderRpcParamsSchema,
-    responseSchema: TelegramAllowedSendersResultSchema,
+    responseSchema: TelegramAllowedSendersMutationResultSchema,
     eventSchema: NoRpcEventSchema,
   },
   removeTelegramAllowedSender: {
     wireName: "removeTelegramAllowedSender",
     requestSchema: TelegramAllowedSenderRpcParamsSchema,
-    responseSchema: TelegramAllowedSendersResultSchema,
+    responseSchema: TelegramAllowedSendersMutationResultSchema,
     eventSchema: NoRpcEventSchema,
   },
   getSpendSummary: {
