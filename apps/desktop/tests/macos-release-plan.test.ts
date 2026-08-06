@@ -1,5 +1,15 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -13,6 +23,7 @@ import {
   notarizeMacosDmg,
   promoteMacosReleaseEnvelope,
   requireDeveloperIdIdentity,
+  requireMacosBaselineApplication,
   requireNotarizationCredentials,
   runMacosRelease,
   sealMacosReleaseMetadata,
@@ -26,11 +37,21 @@ const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(desktopRoot, "../..");
 const feedUrl = "https://updates.example.test/stable/";
 const identity = "Enduragent Test (ABCDE12345)";
+const baselineApplication = "/synthetic/prior/Enduragent.app";
 const notarizationEnvironment = {
   APPLE_API_KEY: "/synthetic/AuthKey.p8",
   APPLE_API_KEY_ID: "SYNTHETICKEY",
   APPLE_API_ISSUER: "00000000-0000-0000-0000-000000000000",
 };
+const verifiedLooseIdentity = Object.freeze({
+  baselineVersion: "2026.7.1",
+  candidateVersion: "2026.7.2",
+  teamIdentifier: "FA494ACVTF",
+  candidateCodeIdentity: Object.freeze({
+    codeDirectory: "v=20500 size=100 flags=0x10000(runtime) hashes=1+7 location=embedded",
+    cdHash: "b".repeat(40),
+  }),
+});
 const temporaryRoots: string[] = [];
 
 afterEach(async () => {
@@ -55,6 +76,7 @@ async function metadataSealFixture() {
       desktopRoot: fixtureDesktopRoot,
       feedUrl,
       identity,
+      baselineApplication,
     },
     { readFile: versionReader() },
   );
@@ -102,6 +124,7 @@ describe("macOS release plan", () => {
         desktopRoot: "/synthetic/repository/apps/desktop",
         feedUrl,
         identity,
+        baselineApplication,
       },
       { readFile: readVersion },
     );
@@ -111,6 +134,7 @@ describe("macOS release plan", () => {
       "utf8",
     );
     expect(plan.version).toBe("2026.7.2");
+    expect(plan.baselineApplication).toBe(baselineApplication);
     expect(plan.artifactNames).toEqual({
       dmg: "Enduragent-2026.7.2-arm64.dmg",
       zip: "Enduragent-2026.7.2-arm64.zip",
@@ -174,6 +198,55 @@ describe("macOS release plan", () => {
     }
   });
 
+  it("requires an absolute signed baseline distinct from the build candidate", async () => {
+    expect(requireMacosBaselineApplication(baselineApplication)).toBe(baselineApplication);
+    for (const invalid of [
+      undefined,
+      "",
+      "Enduragent.app",
+      " /Applications/Enduragent.app",
+      "/bad\napp",
+    ]) {
+      expect(() => requireMacosBaselineApplication(invalid)).toThrow(
+        "signed baseline application path is invalid",
+      );
+    }
+    await expect(
+      createMacosReleasePlan(
+        {
+          repositoryRoot: "/synthetic/repository",
+          desktopRoot: "/synthetic/repository/apps/desktop",
+          feedUrl,
+          identity,
+          baselineApplication:
+            "/synthetic/repository/apps/desktop/dist/mac-arm64/../mac-arm64/Enduragent.app",
+        },
+        { readFile: versionReader() },
+      ),
+    ).rejects.toThrow("signed baseline application must differ from candidate");
+  });
+
+  it("fails baseline preflight before loading or invoking electron-builder", async () => {
+    const build = vi.fn(async (_options: MacosReleaseBuilderOptions) => []);
+    await expect(
+      runMacosRelease(
+        {
+          repositoryRoot: "/synthetic/repository",
+          desktopRoot: "/synthetic/repository/apps/desktop",
+          feedUrl,
+          identity,
+          baselineApplication: undefined,
+        },
+        {
+          readFile: versionReader(),
+          environment: notarizationEnvironment,
+          build,
+        },
+      ),
+    ).rejects.toThrow("signed baseline application path is invalid");
+    expect(build).not.toHaveBeenCalled();
+  });
+
   it("matches the pinned builder identity qualifier contract without reading a keychain", async () => {
     const localRequire = createRequire(import.meta.url);
     const builderRequire = createRequire(localRequire.resolve("electron-builder"));
@@ -218,6 +291,8 @@ describe("macOS release plan", () => {
     const verifyPackageLayout = vi.fn(async () => {});
     const executeFile = vi.fn(async () => {});
     const notarize = vi.fn(async () => {});
+    const verifyIdentityContinuity = vi.fn(async () => verifiedLooseIdentity);
+    const verifyReleaseApplicationContents = vi.fn(async () => {});
     const envelopePath =
       "/synthetic/repository/apps/desktop/dist/release-envelope-2026.7.2-mac-arm64";
     const temporaryEnvelopePath =
@@ -240,6 +315,7 @@ describe("macOS release plan", () => {
         desktopRoot: "/synthetic/repository/apps/desktop",
         feedUrl,
         identity,
+        baselineApplication,
       },
       {
         readFile: versionReader(),
@@ -249,6 +325,8 @@ describe("macOS release plan", () => {
         notarize,
         sealReleaseMetadata,
         verifyPackageLayout,
+        verifyIdentityContinuity,
+        verifyReleaseApplicationContents,
         promoteReleaseEnvelope,
         verifyReleaseArtifacts,
       },
@@ -279,10 +357,10 @@ describe("macOS release plan", () => {
       appleApiKeyId: notarizationEnvironment.APPLE_API_KEY_ID,
       appleApiIssuer: notarizationEnvironment.APPLE_API_ISSUER,
     });
+    expect(verifyIdentityContinuity).toHaveBeenCalledWith(baselineApplication, application, {
+      candidateVersion: "2026.7.2",
+    });
     expect(executeFile.mock.calls).toEqual([
-      ["/usr/bin/codesign", ["--verify", "--deep", "--strict", "--verbose=2", application]],
-      ["/usr/bin/xcrun", ["stapler", "validate", "-v", application]],
-      ["/usr/sbin/spctl", ["--assess", "--type", "execute", "--verbose=4", application]],
       ["/usr/bin/codesign", ["--verify", "--verbose=2", dmg]],
       ["/usr/bin/xcrun", ["stapler", "validate", "-v", dmg]],
       [
@@ -308,18 +386,27 @@ describe("macOS release plan", () => {
       },
       { executeFile },
     );
+    expect(verifyReleaseApplicationContents).toHaveBeenCalledWith(
+      temporaryEnvelopePath,
+      baselineApplication,
+      {
+        candidateVersion: "2026.7.2",
+        looseCandidateCodeIdentity: verifiedLooseIdentity.candidateCodeIdentity,
+      },
+      { executeFile },
+    );
     expect(result.envelopePath).toBe(envelopePath);
     expect(build.mock.invocationCallOrder[0]).toBeLessThan(
       verifyPackageLayout.mock.invocationCallOrder[0]!,
     );
     expect(verifyPackageLayout.mock.invocationCallOrder[0]).toBeLessThan(
-      executeFile.mock.invocationCallOrder[0]!,
+      verifyIdentityContinuity.mock.invocationCallOrder[0]!,
     );
-    expect(executeFile.mock.invocationCallOrder[2]).toBeLessThan(
+    expect(verifyIdentityContinuity.mock.invocationCallOrder[0]).toBeLessThan(
       notarize.mock.invocationCallOrder[0]!,
     );
     expect(notarize.mock.invocationCallOrder[0]).toBeLessThan(
-      executeFile.mock.invocationCallOrder[3]!,
+      executeFile.mock.invocationCallOrder[0]!,
     );
     expect(
       executeFile.mock.invocationCallOrder[executeFile.mock.invocationCallOrder.length - 1]!,
@@ -328,6 +415,9 @@ describe("macOS release plan", () => {
       promoteReleaseEnvelope.mock.invocationCallOrder[0]!,
     );
     expect(verifyReleaseArtifacts.mock.invocationCallOrder[0]).toBeLessThan(
+      verifyReleaseApplicationContents.mock.invocationCallOrder[0]!,
+    );
+    expect(verifyReleaseApplicationContents.mock.invocationCallOrder[0]).toBeLessThan(
       promotionCommitted.mock.invocationCallOrder[0]!,
     );
   });
@@ -346,6 +436,7 @@ describe("macOS release plan", () => {
           desktopRoot: "/synthetic/repository/apps/desktop",
           feedUrl,
           identity,
+          baselineApplication,
         },
         {
           readFile: versionReader(),
@@ -370,6 +461,7 @@ describe("macOS release plan", () => {
     const verifyPackageLayout = vi.fn(async () => {});
     const executeFile = vi.fn(async () => {});
     const notarize = vi.fn(async () => {});
+    const verifyIdentityContinuity = vi.fn(async () => verifiedLooseIdentity);
     const promoteReleaseEnvelope = vi.fn(async () => "/synthetic/envelope");
     await expect(
       runMacosRelease(
@@ -378,6 +470,7 @@ describe("macOS release plan", () => {
           desktopRoot: "/synthetic/repository/apps/desktop",
           feedUrl,
           identity,
+          baselineApplication,
         },
         {
           readFile: versionReader(),
@@ -387,6 +480,7 @@ describe("macOS release plan", () => {
           notarize,
           sealReleaseMetadata,
           verifyPackageLayout,
+          verifyIdentityContinuity,
           promoteReleaseEnvelope,
         },
       ),
@@ -394,7 +488,8 @@ describe("macOS release plan", () => {
     expect(build).toHaveBeenCalledOnce();
     expect(verifyPackageLayout).toHaveBeenCalledOnce();
     expect(notarize).toHaveBeenCalledOnce();
-    expect(executeFile).toHaveBeenCalledTimes(6);
+    expect(verifyIdentityContinuity).toHaveBeenCalledOnce();
+    expect(executeFile).toHaveBeenCalledTimes(3);
     expect(sealReleaseMetadata).toHaveBeenCalledOnce();
     expect(promoteReleaseEnvelope).not.toHaveBeenCalled();
   });
@@ -550,6 +645,7 @@ describe("macOS release plan", () => {
           desktopRoot: "/synthetic/repository/apps/desktop",
           feedUrl,
           identity,
+          baselineApplication,
         },
         {
           readFile: versionReader(),
@@ -563,13 +659,15 @@ describe("macOS release plan", () => {
     expect(sealReleaseMetadata).not.toHaveBeenCalled();
   });
 
-  it("stops before envelope promotion when mandatory native verification fails", async () => {
+  it("stops before notarization and promotion when signed identity continuity fails", async () => {
     const build = vi.fn(async (_options: MacosReleaseBuilderOptions) => []);
     const sealReleaseMetadata = vi.fn(async () => {});
     const verifyPackageLayout = vi.fn(async () => {});
-    const executeFile = vi.fn(async () => {
-      throw new Error("synthetic codesign failure");
+    const failure = new Error("synthetic identity continuity failure");
+    const verifyIdentityContinuity = vi.fn(async () => {
+      throw failure;
     });
+    const notarize = vi.fn(async () => {});
     const promoteReleaseEnvelope = vi.fn(async () => "/synthetic/envelope");
     const verifyReleaseArtifacts = vi.fn(async () => {});
 
@@ -580,6 +678,7 @@ describe("macOS release plan", () => {
           desktopRoot: "/synthetic/repository/apps/desktop",
           feedUrl,
           identity,
+          baselineApplication,
         },
         {
           readFile: versionReader(),
@@ -587,13 +686,15 @@ describe("macOS release plan", () => {
           build,
           sealReleaseMetadata,
           verifyPackageLayout,
-          executeFile,
+          verifyIdentityContinuity,
+          notarize,
           promoteReleaseEnvelope,
           verifyReleaseArtifacts,
         },
       ),
-    ).rejects.toThrow("macOS application signature verification failed");
-    expect(executeFile).toHaveBeenCalledOnce();
+    ).rejects.toBe(failure);
+    expect(verifyIdentityContinuity).toHaveBeenCalledOnce();
+    expect(notarize).not.toHaveBeenCalled();
     expect(promoteReleaseEnvelope).not.toHaveBeenCalled();
     expect(verifyReleaseArtifacts).not.toHaveBeenCalled();
   });
@@ -603,6 +704,7 @@ describe("macOS release plan", () => {
     const sealReleaseMetadata = vi.fn(async () => {});
     const verifyPackageLayout = vi.fn(async () => {});
     const executeFile = vi.fn(async () => {});
+    const verifyIdentityContinuity = vi.fn(async () => verifiedLooseIdentity);
     const notarize = vi.fn(async () => {
       throw new Error(`submission failed for ${notarizationEnvironment.APPLE_API_KEY_ID}`);
     });
@@ -616,12 +718,14 @@ describe("macOS release plan", () => {
           desktopRoot: "/synthetic/repository/apps/desktop",
           feedUrl,
           identity,
+          baselineApplication,
         },
         {
           readFile: versionReader(),
           environment: notarizationEnvironment,
           build,
           verifyPackageLayout,
+          verifyIdentityContinuity,
           executeFile,
           notarize,
           sealReleaseMetadata,
@@ -635,7 +739,8 @@ describe("macOS release plan", () => {
     expect(failure).toBeInstanceOf(TypeError);
     expect((failure as Error).message).toBe("macOS DMG notarization failed");
     expect((failure as Error).message).not.toContain(notarizationEnvironment.APPLE_API_KEY_ID);
-    expect(executeFile).toHaveBeenCalledTimes(3);
+    expect(verifyIdentityContinuity).toHaveBeenCalledOnce();
+    expect(executeFile).not.toHaveBeenCalled();
     expect(sealReleaseMetadata).not.toHaveBeenCalled();
     expect(promoteReleaseEnvelope).not.toHaveBeenCalled();
   });
@@ -674,7 +779,8 @@ describe("macOS release plan", () => {
     const notarize = vi.fn(async (options: { appPath: string }) => {
       await writeFile(options.appPath, stapledDmg);
     });
-    const verifyApplication = vi.fn(async () => {});
+    const verifyIdentityContinuity = vi.fn(async () => verifiedLooseIdentity);
+    const verifyReleaseApplicationContents = vi.fn(async () => {});
     const verifyDmg = vi.fn(async (path: string) => {
       expect(await readFile(path)).toEqual(stapledDmg);
     });
@@ -686,13 +792,15 @@ describe("macOS release plan", () => {
         desktopRoot: fixture.plan.builderOptions.projectDir,
         feedUrl,
         identity,
+        baselineApplication,
       },
       {
         readFile: versionReader(),
         environment: notarizationEnvironment,
         build: vi.fn(async () => []),
         verifyPackageLayout: vi.fn(async () => {}),
-        verifyApplication,
+        verifyIdentityContinuity,
+        verifyReleaseApplicationContents,
         notarize,
         verifyDmg,
         promoteReleaseEnvelope: vi.fn(
@@ -722,6 +830,52 @@ describe("macOS release plan", () => {
       size: stapledDmg.length,
     });
     expect(metadata.files[1]?.sha512).not.toBe(fixture.dmgSha512);
+  });
+
+  it("keeps exact packaged-application inspection inside the envelope TOCTOU guard", async () => {
+    const fixture = await metadataSealFixture();
+    const verifyReleaseArtifacts = vi.fn(async () => {});
+    const verifyReleaseApplicationContents = vi.fn(async (temporaryEnvelope: string) => {
+      await writeFile(
+        join(temporaryEnvelope, fixture.plan.artifactNames.zip),
+        "mutated during packaged application inspection\n",
+      );
+    });
+
+    await expect(
+      runMacosRelease(
+        {
+          repositoryRoot: join(fixture.artifactDirectory, "repository"),
+          desktopRoot: fixture.plan.builderOptions.projectDir,
+          feedUrl,
+          identity,
+          baselineApplication,
+        },
+        {
+          readFile: versionReader(),
+          environment: notarizationEnvironment,
+          build: vi.fn(async () => []),
+          verifyPackageLayout: vi.fn(async () => {}),
+          verifyIdentityContinuity: vi.fn(async () => verifiedLooseIdentity),
+          notarize: vi.fn(async () => {}),
+          verifyDmg: vi.fn(async () => {}),
+          verifyReleaseArtifacts,
+          verifyReleaseApplicationContents,
+        },
+      ),
+    ).rejects.toThrow("release envelope changed during verification");
+
+    expect(verifyReleaseArtifacts).toHaveBeenCalledOnce();
+    expect(verifyReleaseApplicationContents).toHaveBeenCalledOnce();
+    expect(verifyReleaseArtifacts.mock.invocationCallOrder[0]).toBeLessThan(
+      verifyReleaseApplicationContents.mock.invocationCallOrder[0]!,
+    );
+    await expect(lstat(macosReleaseEnvelopePath(fixture.plan))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await readFile(join(fixture.artifactDirectory, fixture.plan.artifactNames.zip))).toEqual(
+      fixture.zip,
+    );
   });
 
   it("leaves builder metadata untouched when zip-only authority validation fails", async () => {
@@ -759,12 +913,10 @@ describe("macOS release plan", () => {
       ),
     );
 
-    const verifyEnvelope = vi.fn(async (temporaryPath: string) => {
-      expect(temporaryPath).not.toBe(macosReleaseEnvelopePath(fixture.plan));
-      await expect(lstat(macosReleaseEnvelopePath(fixture.plan))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      expect((await readdir(temporaryPath)).sort()).toEqual(
+    const verifyEnvelope = vi.fn(async (candidatePath: string) => {
+      expect(candidatePath).toBe(macosReleaseEnvelopePath(fixture.plan));
+      expect((await lstat(candidatePath)).isDirectory()).toBe(true);
+      expect((await readdir(candidatePath)).sort()).toEqual(
         Object.values(fixture.plan.artifactNames).sort(),
       );
     });
@@ -817,11 +969,11 @@ describe("macOS release plan", () => {
     );
     const envelopePath = macosReleaseEnvelopePath(fixture.plan);
     const failure = new Error("semantic envelope rejection");
-    const rejectEnvelope = vi.fn(async (temporaryPath: string) => {
-      expect((await readdir(temporaryPath)).sort()).toEqual(
+    const rejectEnvelope = vi.fn(async (candidatePath: string) => {
+      expect(candidatePath).toBe(envelopePath);
+      expect((await readdir(candidatePath)).sort()).toEqual(
         Object.values(fixture.plan.artifactNames).sort(),
       );
-      await expect(lstat(envelopePath)).rejects.toMatchObject({ code: "ENOENT" });
       throw failure;
     });
 
@@ -844,7 +996,7 @@ describe("macOS release plan", () => {
     expect(acceptEnvelope).toHaveBeenCalledOnce();
   });
 
-  it("rejects a temp artifact changed by semantic verification before rename", async () => {
+  it("rejects a canonical artifact changed by semantic verification", async () => {
     const fixture = await metadataSealFixture();
     await sealMacosReleaseMetadata(fixture.plan);
     const mutateEnvelope = vi.fn(async (temporaryPath: string) => {
@@ -865,6 +1017,48 @@ describe("macOS release plan", () => {
         name.startsWith(`.release-envelope-${fixture.plan.version}-mac-arm64-`),
       ),
     ).toEqual([]);
+  });
+
+  it("rejects an entry swap at the final rename seam and removes only the bound envelope", async () => {
+    const fixture = await metadataSealFixture();
+    await sealMacosReleaseMetadata(fixture.plan);
+    const envelopePath = macosReleaseEnvelopePath(fixture.plan);
+    const renameAtCommit = vi.fn(async (source: string, destination: string) => {
+      await writeFile(
+        join(source, fixture.plan.artifactNames.zip),
+        "swapped at the final rename seam\n",
+      );
+      await rename(source, destination);
+    });
+
+    await expect(
+      promoteMacosReleaseEnvelope(fixture.plan, async () => {}, { rename: renameAtCommit }),
+    ).rejects.toThrow("release envelope changed during verification");
+
+    expect(renameAtCommit).toHaveBeenCalledOnce();
+    await expect(lstat(envelopePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects a whole-directory swap at the final rename seam without deleting the substitute", async () => {
+    const fixture = await metadataSealFixture();
+    await sealMacosReleaseMetadata(fixture.plan);
+    const envelopePath = macosReleaseEnvelopePath(fixture.plan);
+    const displacedOriginal = join(fixture.artifactDirectory, ".displaced-original-envelope");
+    const sentinelPath = join(envelopePath, "substitute-sentinel");
+    const renameAtCommit = vi.fn(async (source: string, destination: string) => {
+      await rename(source, displacedOriginal);
+      await mkdir(source, { mode: 0o700 });
+      await writeFile(join(source, "substitute-sentinel"), "preserve substitute\n");
+      await rename(source, destination);
+    });
+
+    await expect(
+      promoteMacosReleaseEnvelope(fixture.plan, async () => {}, { rename: renameAtCommit }),
+    ).rejects.toThrow("release envelope cleanup target changed");
+
+    expect(renameAtCommit).toHaveBeenCalledOnce();
+    expect(await readFile(sentinelPath, "utf8")).toBe("preserve substitute\n");
+    expect((await lstat(displacedOriginal)).isDirectory()).toBe(true);
   });
 
   it("rechecks builder source identity after semantic verification", async () => {
@@ -928,6 +1122,7 @@ describe("macOS release plan", () => {
             repositoryRoot: "/synthetic/repository",
             feedUrl,
             identity,
+            baselineApplication,
           },
           { readFile: versionReader(version) },
         ),
@@ -950,6 +1145,7 @@ describe("macOS release plan", () => {
           repositoryRoot: "/synthetic/repository",
           feedUrl: invalidFeedUrl,
           identity,
+          baselineApplication,
         },
         { readFile: versionReader() },
       ),
@@ -997,6 +1193,7 @@ describe("macOS release plan", () => {
       desktopRoot,
       feedUrl,
       identity,
+      baselineApplication,
     });
     const manifest = JSON.parse(
       await readFile(join(repositoryRoot, "packages/cycling-coach/package.json"), "utf8"),
