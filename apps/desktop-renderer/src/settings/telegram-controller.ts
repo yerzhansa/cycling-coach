@@ -3,6 +3,8 @@ export type TelegramControlErrorCode =
   | "telegram-polling-conflict"
   | "telegram-start-failed"
   | "telegram-credential-storage-failed"
+  | "telegram-credential-encryption-unavailable"
+  | "telegram-credential-unsafe-backend"
   | "telegram-credential-unavailable"
   | "telegram-settings-storage-uncertain"
   | "telegram-daemon-unavailable"
@@ -68,6 +70,8 @@ export type TelegramMutationReason =
   | "invalid-token"
   | "validation-unavailable"
   | "webhook-removal-required"
+  | "encryption-unavailable"
+  | "unsafe-backend"
   | "storage-failed"
   | "storage-uncertain"
   | "control-uncertain"
@@ -249,6 +253,22 @@ function mutationFailureCopy(
     return action === "paste-token"
       ? "The copied token was not applied to the running bot because storage could not be verified. Restart Enduragent and check Telegram before trying again."
       : "The change was not applied because storage could not be verified. Restart Enduragent and check this setting before trying again.";
+  }
+  if (result.reason === "encryption-unavailable") {
+    if (action !== "paste-token") {
+      return "Secure token storage is unavailable. Quit and reopen Enduragent, unlock or approve Keychain access, then choose Check again.";
+    }
+    return result.current.credentialConfigured
+      ? "The current Telegram bot is unchanged because secure token storage is unavailable. Quit and reopen Enduragent, unlock or approve Keychain access, copy the bot token again, then retry."
+      : "Secure token storage is unavailable. Quit and reopen Enduragent, unlock or approve Keychain access, copy the bot token again, then retry.";
+  }
+  if (result.reason === "unsafe-backend") {
+    if (action !== "paste-token") {
+      return "No secure credential backend is available, so Enduragent refused to read or change the saved bot token without encryption. Quit and reopen Enduragent, then choose Check again.";
+    }
+    return result.current.credentialConfigured
+      ? "The current Telegram bot is unchanged because no secure credential backend is available. Enduragent refused to save the copied token without encryption. Quit and reopen Enduragent, copy the bot token again, then retry."
+      : "No secure credential backend is available, so Enduragent refused to save the bot token without encryption. Quit and reopen Enduragent, copy the bot token again, then retry.";
   }
   if (action === "paste-token") {
     switch (result.reason) {

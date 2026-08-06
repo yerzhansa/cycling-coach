@@ -343,6 +343,22 @@ describe("desktop preload ChatGPT auth", () => {
 
     await expect(bridge.pasteTelegramTokenFromClipboard()).resolves.toEqual(refusal);
 
+    const secureStorageRefusal = {
+      outcome: "refused",
+      reason: "encryption-unavailable",
+      current,
+    };
+    mocks.invoke.mockResolvedValueOnce(secureStorageRefusal);
+    await expect(bridge.pasteTelegramTokenFromClipboard()).resolves.toEqual(secureStorageRefusal);
+
+    const unsafeBackendRefusal = {
+      outcome: "refused",
+      reason: "unsafe-backend",
+      current,
+    };
+    mocks.invoke.mockResolvedValueOnce(unsafeBackendRefusal);
+    await expect(bridge.pasteTelegramTokenFromClipboard()).resolves.toEqual(unsafeBackendRefusal);
+
     const controlUncertainty = {
       outcome: "uncertain",
       reason: "control-uncertain",
@@ -467,6 +483,22 @@ describe("desktop preload ChatGPT auth", () => {
       channel: { ...status.channel, privateDetail: "private disk path" },
     });
     await expect(bridge.telegramStatus()).rejects.toBeInstanceOf(TypeError);
+  });
+
+  it.each([
+    "telegram-credential-encryption-unavailable",
+    "telegram-credential-unsafe-backend",
+  ] as const)("accepts the closed redacted %s status code", async (errorCode) => {
+    const status = {
+      channel: { desiredState: "enabled", state: "failed", errorCode },
+      bot: { state: "unconfigured" },
+      pairing: { state: "unpaired" },
+      credentialConfigured: false,
+      gapWarning: { state: "clear" },
+    };
+    mocks.invoke.mockResolvedValueOnce(status);
+
+    await expect(bridge.telegramStatus()).resolves.toEqual(status);
   });
 
   it("accepts only the redacted pairing storage uncertainty code", async () => {

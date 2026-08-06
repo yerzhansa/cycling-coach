@@ -120,6 +120,8 @@ type DesktopUpdateState =
 type DesktopTelegramControlErrorCode =
   | "telegram-start-failed"
   | "telegram-credential-storage-failed"
+  | "telegram-credential-encryption-unavailable"
+  | "telegram-credential-unsafe-backend"
   | "telegram-credential-unavailable"
   | "telegram-settings-storage-uncertain"
   | "telegram-daemon-unavailable"
@@ -192,6 +194,8 @@ type DesktopTelegramMutationRefusalReason =
   | "invalid-token"
   | "validation-unavailable"
   | "webhook-removal-required"
+  | "encryption-unavailable"
+  | "unsafe-backend"
   | "storage-failed"
   | "stale-operation"
   | "transfer-required"

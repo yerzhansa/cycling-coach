@@ -16,6 +16,11 @@ import {
   durablyReplaceReversible,
   type ReversibleDurableReplaceOutcome,
 } from "./durable-atomic-replace.js";
+import {
+  emitTelegramSecureStorageFailure,
+  type TelegramSecureStorageObserver,
+  type TelegramSecureStorageStage,
+} from "./telegram-secure-storage-diagnostics.js";
 
 export const TELEGRAM_CREDENTIAL_DIRECTORY_NAME = "telegram-channel-v1" as const;
 export const TELEGRAM_PROFILE_FILE_NAME = "profile.bin" as const;
@@ -33,13 +38,19 @@ export interface TelegramProfileRecord {
   readonly bot: Readonly<{ id: TelegramBotId; username: TelegramBotUsername }>;
 }
 
+export type TelegramProfileRePromptReason =
+  | "encryption-unavailable"
+  | "unsafe-backend"
+  | "storage-failed";
+
 export type TelegramProfileStatus =
   | Readonly<{
       state: "configured";
       profileId: string;
       bot: TelegramProfileRecord["bot"];
     }>
-  | Readonly<{ state: "missing" | "re-prompt" | "wrong-home" | "uncertain" }>;
+  | Readonly<{ state: "re-prompt"; reason: TelegramProfileRePromptReason }>
+  | Readonly<{ state: "missing" | "wrong-home" | "uncertain" }>;
 
 export type TelegramProfileReplaceResult =
   | Readonly<{
@@ -124,6 +135,7 @@ export interface TelegramCredentialVaultOptions {
   readonly removeFile?: typeof rm;
   readonly syncDirectory?: (root: string) => Promise<void>;
   readonly syncParentDirectory?: (root: string) => Promise<void>;
+  readonly observeSecureStorageFailure?: TelegramSecureStorageObserver;
 }
 
 interface TelegramDesiredStateRecord {
@@ -330,6 +342,19 @@ export function createTelegramCredentialVault(
   let desiredStateUncertain = false;
   let parentDirectoryVerified = false;
 
+  const observeFailure = (
+    stage: TelegramSecureStorageStage,
+    reason: EncryptionRefusal | "storage-failed" | "storage-uncertain",
+  ): void => {
+    emitTelegramSecureStorageFailure(options.observeSecureStorageFailure, { stage, reason });
+  };
+
+  const observedEncryptionRefusal = (): EncryptionRefusal | undefined => {
+    const reason = encryptionRefusal(options.encryption);
+    if (reason !== undefined) observeFailure("encryption-availability", reason);
+    return reason;
+  };
+
   const exclusive = <T>(operation: () => Promise<T>): Promise<T> => {
     const result = operationQueue.then(operation, operation);
     operationQueue = result.then(
@@ -372,12 +397,14 @@ export function createTelegramCredentialVault(
     if (namespaceVerification === "pending") {
       if (!(await reconcileOwnedTransients(true))) {
         namespaceVerification = "uncertain";
+        observeFailure("namespace", "storage-uncertain");
         return false;
       }
       namespaceVerification = "verified";
     }
     if (transientArtifactsMayExist && !(await reconcileOwnedTransients(false))) {
       namespaceVerification = "uncertain";
+      observeFailure("namespace", "storage-uncertain");
       return false;
     }
     return true;
@@ -386,23 +413,38 @@ export function createTelegramCredentialVault(
   const readProfile = async (): Promise<ReadProfile> => {
     const directory = await secureDirectoryState(options.root);
     if (directory === "missing") return { state: "missing" };
-    if (directory === "unsafe") return { state: "re-prompt", reason: "storage-failed" };
+    if (directory === "unsafe") {
+      observeFailure("namespace", "storage-failed");
+      return { state: "re-prompt", reason: "storage-failed" };
+    }
     const path = join(options.root, TELEGRAM_PROFILE_FILE_NAME);
     const file = await targetState(path);
     if (file === "missing") return { state: "missing" };
-    if (file === "unsafe") return { state: "re-prompt", reason: "storage-failed" };
-    const encryptionFailure = encryptionRefusal(options.encryption);
+    if (file === "unsafe") {
+      observeFailure("profile-atomic-write", "storage-failed");
+      return { state: "re-prompt", reason: "storage-failed" };
+    }
+    const encryptionFailure = observedEncryptionRefusal();
     if (encryptionFailure !== undefined) {
       return { state: "re-prompt", reason: encryptionFailure };
     }
     let encrypted: Buffer | undefined;
     try {
       encrypted = await readFile(path);
+    } catch {
+      observeFailure("profile-atomic-write", "storage-failed");
+      return { state: "re-prompt", reason: "storage-failed" };
+    }
+    try {
       const profile = parseProfileRecord(options.encryption.decryptString(encrypted));
-      if (profile === undefined) return { state: "re-prompt", reason: "decrypt-failed" };
+      if (profile === undefined) {
+        observeFailure("encryption-availability", "storage-failed");
+        return { state: "re-prompt", reason: "decrypt-failed" };
+      }
       if (profile.athleteHome !== athleteHome) return { state: "wrong-home" };
       return { state: "configured", profile };
     } catch {
+      observeFailure("encryption-availability", "storage-failed");
       return { state: "re-prompt", reason: "decrypt-failed" };
     } finally {
       encrypted?.fill(0);
@@ -412,17 +454,27 @@ export function createTelegramCredentialVault(
   const readDesiredState = async (): Promise<TelegramDesiredState> => {
     const directory = await secureDirectoryState(options.root);
     if (directory === "missing") return { state: "missing", enabled: false };
-    if (directory === "unsafe") return { state: "re-prompt", enabled: false };
+    if (directory === "unsafe") {
+      observeFailure("namespace", "storage-failed");
+      return { state: "re-prompt", enabled: false };
+    }
     const path = join(options.root, TELEGRAM_DESIRED_STATE_FILE_NAME);
     const file = await targetState(path);
     if (file === "missing") return { state: "missing", enabled: false };
-    if (file === "unsafe") return { state: "re-prompt", enabled: false };
+    if (file === "unsafe") {
+      observeFailure("desired-state-write", "storage-failed");
+      return { state: "re-prompt", enabled: false };
+    }
     try {
       const record = parseDesiredStateRecord(await readFile(path, "utf8"));
-      if (record === undefined) return { state: "re-prompt", enabled: false };
+      if (record === undefined) {
+        observeFailure("desired-state-write", "storage-failed");
+        return { state: "re-prompt", enabled: false };
+      }
       if (record.athleteHome !== athleteHome) return { state: "wrong-home", enabled: false };
       return { state: "configured", enabled: record.enabled };
     } catch {
+      observeFailure("desired-state-write", "storage-failed");
       return { state: "re-prompt", enabled: false };
     }
   };
@@ -430,24 +482,32 @@ export function createTelegramCredentialVault(
   const writeReversible = async (
     fileName: string,
     candidate: Buffer,
+    stage: Extract<TelegramSecureStorageStage, "profile-atomic-write" | "desired-state-write">,
   ): Promise<ReversibleDurableReplaceOutcome> => {
-    if (!(await ensureSecureDirectory(options.root))) return { state: "refused" };
+    if (!(await ensureSecureDirectory(options.root))) {
+      observeFailure("namespace", "storage-failed");
+      return { state: "refused" };
+    }
     if (!parentDirectoryVerified) {
       try {
         await syncParent(dirname(options.root));
         parentDirectoryVerified = true;
       } catch {
+        observeFailure("namespace", "storage-failed");
         return { state: "refused" };
       }
     }
     const target = join(options.root, fileName);
     const state = await targetState(target);
-    if (state === "unsafe") return { state: "refused" };
+    if (state === "unsafe") {
+      observeFailure(stage, "storage-failed");
+      return { state: "refused" };
+    }
     let previous: Buffer | undefined;
     try {
       if (state === "valid") previous = await readFile(target);
       transientArtifactsMayExist = true;
-      return await durablyReplaceReversible({
+      const stored = await durablyReplaceReversible({
         root: options.root,
         fileName,
         contents: candidate,
@@ -458,7 +518,15 @@ export function createTelegramCredentialVault(
         removeFile,
         syncDirectory: sync,
       });
+      if (stored.state !== "applied") {
+        observeFailure(
+          stage,
+          stored.state === "uncertain" ? "storage-uncertain" : "storage-failed",
+        );
+      }
+      return stored;
     } catch {
+      observeFailure(stage, "storage-failed");
       return { state: "refused" };
     } finally {
       previous?.fill(0);
@@ -511,13 +579,23 @@ export function createTelegramCredentialVault(
         if (!(await prepareNamespace())) return { state: "uncertain" };
         if (profileUncertain) return { state: "uncertain" };
         const profile = await readProfile();
-        return profile.state === "configured"
-          ? {
-              state: "configured",
-              profileId: profile.profile.profileId,
-              bot: profile.profile.bot,
-            }
-          : { state: profile.state };
+        if (profile.state === "configured") {
+          return {
+            state: "configured",
+            profileId: profile.profile.profileId,
+            bot: profile.profile.bot,
+          };
+        }
+        if (profile.state === "re-prompt") {
+          return {
+            state: "re-prompt",
+            reason:
+              profile.reason === "encryption-unavailable" || profile.reason === "unsafe-backend"
+                ? profile.reason
+                : "storage-failed",
+          };
+        }
+        return { state: profile.state };
       });
     },
 
@@ -533,7 +611,7 @@ export function createTelegramCredentialVault(
         if (token === undefined || id === undefined || username === undefined) {
           return { outcome: "refused", reason: "invalid-input" };
         }
-        const encryptionFailure = encryptionRefusal(options.encryption);
+        const encryptionFailure = observedEncryptionRefusal();
         if (encryptionFailure !== undefined) {
           return { outcome: "refused", reason: encryptionFailure };
         }
@@ -560,7 +638,16 @@ export function createTelegramCredentialVault(
         try {
           encrypted = options.encryption.encryptString(JSON.stringify(profile));
           if (!Buffer.isBuffer(encrypted) || encrypted.length === 0) throw new TypeError();
-          const stored = await writeReversible(TELEGRAM_PROFILE_FILE_NAME, encrypted);
+        } catch {
+          observeFailure("encryption-availability", "storage-failed");
+          return { outcome: "refused", reason: "storage-failed" };
+        }
+        try {
+          const stored = await writeReversible(
+            TELEGRAM_PROFILE_FILE_NAME,
+            encrypted,
+            "profile-atomic-write",
+          );
           profileUncertain = stored.state === "uncertain";
           if (stored.state === "applied") {
             return { outcome: "applied", profileId, bot };
@@ -569,6 +656,7 @@ export function createTelegramCredentialVault(
             ? { outcome: "refused", reason: "storage-failed" }
             : { outcome: "uncertain", reason: "storage-uncertain" };
         } catch {
+          observeFailure("profile-atomic-write", "storage-failed");
           return { outcome: "refused", reason: "storage-failed" };
         } finally {
           encrypted?.fill(0);
@@ -641,6 +729,10 @@ export function createTelegramCredentialVault(
           return { outcome: "applied", cleanupPending: removed === "cleanup-pending" };
         }
         if (removed === "uncertain") profileUncertain = true;
+        observeFailure(
+          "profile-atomic-write",
+          removed === "uncertain" ? "storage-uncertain" : "storage-failed",
+        );
         return removed === "uncertain"
           ? { outcome: "uncertain", reason: "storage-uncertain" }
           : { outcome: "refused", reason: "storage-failed" };
@@ -670,13 +762,18 @@ export function createTelegramCredentialVault(
           "utf8",
         );
         try {
-          const stored = await writeReversible(TELEGRAM_DESIRED_STATE_FILE_NAME, candidate);
+          const stored = await writeReversible(
+            TELEGRAM_DESIRED_STATE_FILE_NAME,
+            candidate,
+            "desired-state-write",
+          );
           desiredStateUncertain = stored.state === "uncertain";
           if (stored.state === "applied") return { status: "stored", enabled };
           return stored.state === "refused"
             ? { status: "refused", reason: "storage-failed" }
             : { status: "uncertain", reason: "storage-uncertain" };
         } catch {
+          observeFailure("desired-state-write", "storage-failed");
           return { status: "refused", reason: "storage-failed" };
         } finally {
           candidate.fill(0);

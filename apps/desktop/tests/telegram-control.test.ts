@@ -1,4 +1,5 @@
 import {
+  AthleteHomeIdentitySchema,
   TelegramBotIdSchema,
   TelegramBotUsernameSchema,
   TelegramCredentialSchema,
@@ -8,7 +9,11 @@ import {
   type TelegramControlSnapshot,
   type TelegramCredentialInspection,
 } from "@enduragent/coach-contract";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { CredentialEncryptionPort } from "../src/main/credential-vault.js";
 import {
   createTelegramControlCoordinator,
   type CreateTelegramControlCoordinatorInput,
@@ -18,6 +23,7 @@ import type {
   TelegramCredentialVault,
   TelegramProfileRecord,
 } from "../src/main/telegram-credential-vault.js";
+import { createTelegramCredentialVault } from "../src/main/telegram-credential-vault.js";
 
 const HOME = "/synthetic/athlete" as AthleteHomeIdentity;
 const OTHER_HOME = "/synthetic/other" as AthleteHomeIdentity;
@@ -29,6 +35,25 @@ const USERNAME = TelegramBotUsernameSchema.parse("desktop_bot");
 const OTHER_USERNAME = TelegramBotUsernameSchema.parse("replacement_bot");
 const PROFILE_ID = "00000000-0000-4000-8000-000000000001";
 const REPLACEMENT_PROFILE_ID = "00000000-0000-4000-8000-000000000002";
+
+function realVaultEncryption(): CredentialEncryptionPort {
+  return {
+    isEncryptionAvailable: () => true,
+    encryptString: (value) => Buffer.from(value, "utf8").reverse(),
+    decryptString: (value) => Buffer.from(value).reverse().toString("utf8"),
+  };
+}
+
+async function realVaultFixture() {
+  const base = await mkdtemp(join(await realpath(tmpdir()), "telegram-control-secure-storage-"));
+  const homePath = join(base, "athlete-home");
+  await mkdir(homePath, { mode: 0o700 });
+  return {
+    base,
+    root: join(base, "telegram-channel-v1"),
+    athleteHome: AthleteHomeIdentitySchema.parse(await realpath(homePath)),
+  };
+}
 
 interface Deferred<T> {
   readonly promise: Promise<T>;
@@ -474,6 +499,324 @@ describe("Telegram main-process control coordinator", () => {
     expect(runtime.binding.replaceTelegram).not.toHaveBeenCalled();
     expect(runtime.binding.suspendTelegramPolling).toHaveBeenCalledOnce();
     expect(runtime.binding.resumeTelegramPolling).toHaveBeenCalledOnce();
+  });
+
+  it("preserves an encryption-unavailable refusal without applying the replacement token", async () => {
+    const runtime = harness();
+    const before = runtime.profile();
+    vi.mocked(runtime.vault.replaceProfile).mockResolvedValueOnce({
+      outcome: "refused",
+      reason: "encryption-unavailable",
+    });
+
+    await expect(runtime.coordinator.replace(REPLACEMENT_TOKEN)).resolves.toMatchObject({
+      outcome: "refused",
+      reason: "encryption-unavailable",
+      current: {
+        channel: { desiredState: "enabled", state: "online" },
+        bot: { state: "ready", username: USERNAME },
+        pairing: { state: "paired" },
+        credentialConfigured: true,
+      },
+    });
+    expect(runtime.profile()).toEqual(before);
+    expect(runtime.desired()).toBe(true);
+    expect(runtime.binding.replaceTelegram).not.toHaveBeenCalled();
+    expect(runtime.binding.resumeTelegramPolling).toHaveBeenCalledOnce();
+  });
+
+  it("keeps initial setup unchanged when secure encryption is unavailable", async () => {
+    const runtime = harness({
+      configured: false,
+      enabled: false,
+      daemonSnapshot: {
+        channel: { desiredState: "disabled", state: "disabled" },
+        bot: { state: "unconfigured" },
+        pairing: { state: "unpaired" },
+      },
+    });
+    vi.mocked(runtime.vault.replaceProfile).mockResolvedValueOnce({
+      outcome: "refused",
+      reason: "encryption-unavailable",
+    });
+
+    await expect(runtime.coordinator.configure(REPLACEMENT_TOKEN)).resolves.toEqual({
+      outcome: "refused",
+      reason: "encryption-unavailable",
+      current: {
+        channel: { desiredState: "disabled", state: "disabled" },
+        bot: { state: "unconfigured" },
+        pairing: { state: "unpaired" },
+        credentialConfigured: false,
+      },
+    });
+    expect(runtime.profile()).toBeUndefined();
+    expect(runtime.desired()).toBe(false);
+    expect(runtime.binding.configureTelegram).not.toHaveBeenCalled();
+    expect(runtime.binding.suspendTelegramPolling).not.toHaveBeenCalled();
+    expect(runtime.vault.setDesiredState).not.toHaveBeenCalled();
+  });
+
+  it("preserves an unsafe-backend refusal when the current profile cannot be read for replacement", async () => {
+    const runtime = harness();
+    const before = runtime.profile();
+    vi.mocked(runtime.vault.applyStoredProfile).mockResolvedValueOnce({
+      outcome: "refused",
+      reason: "unsafe-backend",
+    });
+
+    await expect(runtime.coordinator.replace(REPLACEMENT_TOKEN)).resolves.toMatchObject({
+      outcome: "refused",
+      reason: "unsafe-backend",
+      current: {
+        channel: { desiredState: "enabled", state: "online" },
+        bot: { state: "ready", username: USERNAME },
+        pairing: { state: "paired" },
+        credentialConfigured: true,
+      },
+    });
+    expect(runtime.profile()).toEqual(before);
+    expect(runtime.desired()).toBe(true);
+    expect(runtime.binding.inspectTelegramCredential).not.toHaveBeenCalled();
+    expect(runtime.binding.suspendTelegramPolling).not.toHaveBeenCalled();
+    expect(runtime.binding.replaceTelegram).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "encryption-unavailable" as const,
+      false,
+      undefined,
+      "telegram-credential-encryption-unavailable" as const,
+    ],
+    ["unsafe-backend" as const, true, "basic_text", "telegram-credential-unsafe-backend" as const],
+  ])(
+    "preserves a reopened real-vault %s refusal across profile-dependent actions",
+    async (reason, available, selectedBackend, errorCode) => {
+      const value = await realVaultFixture();
+      try {
+        const seed = createTelegramCredentialVault({
+          ...value,
+          encryption: realVaultEncryption(),
+          createProfileId: () => PROFILE_ID,
+        });
+        await expect(
+          seed.replaceProfile({
+            token: TOKEN,
+            bot: { id: BOT_ID, username: USERNAME },
+            authenticatedAthleteHome: value.athleteHome,
+          }),
+        ).resolves.toMatchObject({ outcome: "applied" });
+        await expect(seed.setDesiredState(true)).resolves.toEqual({
+          status: "stored",
+          enabled: true,
+        });
+        const observeSecureStorageFailure = vi.fn();
+        const reopened = createTelegramCredentialVault({
+          ...value,
+          encryption: {
+            ...realVaultEncryption(),
+            isEncryptionAvailable: () => available,
+            ...(selectedBackend === undefined
+              ? {}
+              : { getSelectedStorageBackend: () => selectedBackend }),
+          },
+          observeSecureStorageFailure,
+        });
+        const runtime = harness();
+        const realBinding = { ...runtime.binding, athleteHome: value.athleteHome };
+        const coordinator = createTelegramControlCoordinator({
+          selectedAthleteHome: () => value.athleteHome,
+          vault: reopened,
+          daemon: { current: () => realBinding },
+          observeSecureStorageFailure,
+        });
+
+        const expectedCurrent = {
+          channel: { desiredState: "enabled" as const, state: "failed" as const, errorCode },
+          bot: { state: "ready" as const, username: USERNAME },
+          pairing: { state: "paired" as const },
+          credentialConfigured: true,
+        };
+        await expect(coordinator.status()).resolves.toEqual(expectedCurrent);
+
+        for (const operation of [
+          () => coordinator.replace(REPLACEMENT_TOKEN),
+          () => coordinator.enable(),
+          () => coordinator.reconcile(),
+          () => coordinator.remove(),
+          () => coordinator.removeWebhook(),
+          () => coordinator.beginPairing(),
+        ]) {
+          await expect(operation()).resolves.toEqual({
+            outcome: "refused",
+            reason,
+            current: expectedCurrent,
+          });
+        }
+
+        expect(observeSecureStorageFailure).toHaveBeenCalledWith({
+          stage: "encryption-availability",
+          reason,
+        });
+        expect(observeSecureStorageFailure.mock.calls.flat(2)).not.toContain(TOKEN);
+        expect(runtime.binding.inspectTelegramCredential).not.toHaveBeenCalled();
+        expect(runtime.binding.replaceTelegram).not.toHaveBeenCalled();
+        expect(runtime.binding.enableTelegram).not.toHaveBeenCalled();
+        expect(runtime.binding.disableTelegram).not.toHaveBeenCalled();
+        expect(runtime.binding.deleteTelegramWebhook).not.toHaveBeenCalled();
+        expect(runtime.binding.beginTelegramPairing).not.toHaveBeenCalled();
+
+        const verified = createTelegramCredentialVault({
+          ...value,
+          encryption: realVaultEncryption(),
+        });
+        const appliedProfile = vi.fn();
+        await expect(
+          verified.applyStoredProfile(value.athleteHome, appliedProfile),
+        ).resolves.toMatchObject({ outcome: "applied" });
+        expect(appliedProfile).toHaveBeenCalledWith(
+          expect.objectContaining({ token: TOKEN, bot: { id: BOT_ID, username: USERNAME } }),
+        );
+        await expect(verified.desiredState()).resolves.toEqual({
+          state: "configured",
+          enabled: true,
+        });
+      } finally {
+        await rm(value.base, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("returns the preserved pre-mutation snapshot when a real vault backend flips during replacement", async () => {
+    const value = await realVaultFixture();
+    try {
+      const encryption = realVaultEncryption();
+      const seed = createTelegramCredentialVault({
+        ...value,
+        encryption,
+        createProfileId: () => PROFILE_ID,
+      });
+      await seed.replaceProfile({
+        token: TOKEN,
+        bot: { id: BOT_ID, username: USERNAME },
+        authenticatedAthleteHome: value.athleteHome,
+      });
+      await seed.setDesiredState(true);
+      let available = true;
+      let decryptions = 0;
+      const observeSecureStorageFailure = vi.fn();
+      const dynamic = createTelegramCredentialVault({
+        ...value,
+        encryption: {
+          ...encryption,
+          isEncryptionAvailable: () => available,
+          decryptString(value) {
+            const plaintext = encryption.decryptString(value);
+            decryptions += 1;
+            if (decryptions === 2) available = false;
+            return plaintext;
+          },
+        },
+        observeSecureStorageFailure,
+      });
+      const runtime = harness();
+      const realBinding = { ...runtime.binding, athleteHome: value.athleteHome };
+      const coordinator = createTelegramControlCoordinator({
+        selectedAthleteHome: () => value.athleteHome,
+        vault: dynamic,
+        daemon: { current: () => realBinding },
+        observeSecureStorageFailure,
+      });
+
+      await expect(coordinator.replace(REPLACEMENT_TOKEN)).resolves.toEqual({
+        outcome: "refused",
+        reason: "encryption-unavailable",
+        current: {
+          channel: { desiredState: "enabled", state: "online" },
+          bot: { state: "ready", username: USERNAME },
+          pairing: { state: "paired" },
+          credentialConfigured: true,
+        },
+      });
+      expect(runtime.binding.resumeTelegramPolling).toHaveBeenCalledOnce();
+      expect(runtime.binding.replaceTelegram).not.toHaveBeenCalled();
+      expect(observeSecureStorageFailure).toHaveBeenCalledWith({
+        stage: "encryption-availability",
+        reason: "encryption-unavailable",
+      });
+
+      const verified = createTelegramCredentialVault({ ...value, encryption });
+      const appliedProfile = vi.fn();
+      await verified.applyStoredProfile(value.athleteHome, appliedProfile);
+      expect(appliedProfile).toHaveBeenCalledWith(
+        expect.objectContaining({ token: TOKEN, bot: { id: BOT_ID, username: USERNAME } }),
+      );
+      await expect(verified.desiredState()).resolves.toEqual({
+        state: "configured",
+        enabled: true,
+      });
+    } finally {
+      await rm(value.base, { recursive: true, force: true });
+    }
+  });
+
+  it("projects a generic unreadable profile with a closed status code", async () => {
+    const runtime = harness();
+    vi.mocked(runtime.vault.profileStatus).mockResolvedValue({
+      state: "re-prompt",
+      reason: "storage-failed",
+    });
+    const coordinator = createTelegramControlCoordinator({
+      selectedAthleteHome: () => HOME,
+      vault: runtime.vault,
+      daemon: { current: () => runtime.binding },
+    });
+
+    await expect(coordinator.status()).resolves.toMatchObject({
+      channel: {
+        desiredState: "enabled",
+        state: "failed",
+        errorCode: "telegram-credential-unavailable",
+      },
+    });
+  });
+
+  it("emits daemon-apply at the failing daemon boundary and isolates async rejection", async () => {
+    const runtime = harness({
+      daemonSnapshot: {
+        channel: { desiredState: "enabled", state: "waiting-for-credential" },
+        bot: { state: "unconfigured" },
+        pairing: { state: "unpaired" },
+      },
+    });
+    vi.mocked(runtime.binding.configureTelegram).mockRejectedValueOnce(
+      new TypeError("private daemon failure"),
+    );
+    const observeSecureStorageFailure = vi.fn(async () => {
+      throw new TypeError("private observer failure");
+    });
+    const coordinator = createTelegramControlCoordinator({
+      selectedAthleteHome: () => HOME,
+      vault: runtime.vault,
+      daemon: { current: () => runtime.binding },
+      observeSecureStorageFailure,
+    });
+
+    await expect(coordinator.reconcile()).resolves.toMatchObject({
+      outcome: "uncertain",
+      reason: "control-uncertain",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(observeSecureStorageFailure).toHaveBeenCalledWith({
+      stage: "daemon-apply",
+      reason: "control-uncertain",
+    });
+    expect(JSON.stringify(observeSecureStorageFailure.mock.calls)).not.toMatch(
+      /private daemon|private observer|synthetic-token/u,
+    );
   });
 
   it("converges to A when daemon replacement throws after B storage", async () => {
@@ -1906,6 +2249,30 @@ describe("Telegram main-process control coordinator", () => {
     expect(runtime.vault.setDesiredState).toHaveBeenCalledWith(true);
   });
 
+  it("preserves an encryption-unavailable refusal while reconciling a stored profile", async () => {
+    const runtime = harness();
+    vi.mocked(runtime.vault.applyStoredProfile).mockResolvedValueOnce({
+      outcome: "refused",
+      reason: "encryption-unavailable",
+    });
+
+    await expect(runtime.coordinator.reconcile()).resolves.toMatchObject({
+      outcome: "refused",
+      reason: "encryption-unavailable",
+      current: {
+        channel: { desiredState: "enabled", state: "online" },
+        bot: { state: "ready", username: USERNAME },
+        pairing: { state: "paired" },
+        credentialConfigured: true,
+      },
+    });
+    expect(runtime.desired()).toBe(true);
+    expect(runtime.binding.configureTelegram).not.toHaveBeenCalled();
+    expect(runtime.binding.replaceTelegram).not.toHaveBeenCalled();
+    expect(runtime.binding.enableTelegram).not.toHaveBeenCalled();
+    expect(runtime.binding.disableTelegram).not.toHaveBeenCalled();
+  });
+
   it("reconciles stale enabled intent to disabled when no pairing or primary exists", async () => {
     const runtime = harness({
       enabled: true,
@@ -2174,6 +2541,29 @@ describe("Telegram main-process control coordinator", () => {
     expect(runtime.desired()).toBe(false);
     expect(runtime.binding.configureTelegram).not.toHaveBeenCalled();
     expect(runtime.binding.replaceTelegram).not.toHaveBeenCalled();
+  });
+
+  it("preserves an unsafe-backend refusal before attempting webhook removal", async () => {
+    const runtime = harness();
+    const applyStoredProfile = vi.mocked(runtime.vault.applyStoredProfile);
+    const readProfile = applyStoredProfile.getMockImplementation()!;
+    applyStoredProfile
+      .mockImplementationOnce(readProfile)
+      .mockResolvedValueOnce({ outcome: "refused", reason: "unsafe-backend" });
+
+    await expect(runtime.coordinator.removeWebhook()).resolves.toMatchObject({
+      outcome: "refused",
+      reason: "unsafe-backend",
+      current: {
+        channel: { desiredState: "enabled", state: "online" },
+        bot: { state: "ready", username: USERNAME },
+        pairing: { state: "paired" },
+        credentialConfigured: true,
+      },
+    });
+    expect(runtime.binding.deleteTelegramWebhook).not.toHaveBeenCalled();
+    expect(runtime.profile()).toMatchObject({ token: TOKEN, bot: { id: BOT_ID } });
+    expect(runtime.desired()).toBe(true);
   });
 
   it.each([

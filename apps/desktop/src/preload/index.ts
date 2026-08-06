@@ -115,6 +115,8 @@ const CLAUDE_CLI_STATES = new Set([
 const IMPORT_EXTENSIONS = new Set([".fit", ".tcx", ".gpx"]);
 const TELEGRAM_DESKTOP_ERROR_CODES = new Set([
   "telegram-credential-storage-failed",
+  "telegram-credential-encryption-unavailable",
+  "telegram-credential-unsafe-backend",
   "telegram-credential-unavailable",
   "telegram-settings-storage-uncertain",
   "telegram-daemon-unavailable",
@@ -136,6 +138,8 @@ const TELEGRAM_MUTATION_REFUSAL_REASONS = new Set([
   "invalid-token",
   "validation-unavailable",
   "webhook-removal-required",
+  "encryption-unavailable",
+  "unsafe-backend",
   "storage-failed",
   "stale-operation",
   "transfer-required",

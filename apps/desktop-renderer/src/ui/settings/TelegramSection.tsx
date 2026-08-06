@@ -52,8 +52,14 @@ function attentionCopy(status: TelegramControlStatus): string | null {
     return "Telegram rejected the saved token. Ask BotFather for a fresh token, copy it, then replace it from the clipboard.";
   }
   if (status.channel.state === "failed") {
+    if (status.channel.errorCode === "telegram-credential-encryption-unavailable") {
+      return "Secure token storage is unavailable. Quit and reopen Enduragent, unlock or approve Keychain access, then choose Check again.";
+    }
+    if (status.channel.errorCode === "telegram-credential-unsafe-backend") {
+      return "No secure credential backend is available, so Enduragent refused to read or change the saved bot token without encryption. Quit and reopen Enduragent, then choose Check again.";
+    }
     if (status.channel.errorCode === "telegram-credential-unavailable") {
-      return "macOS could not unlock the saved bot token. Unlock the Mac, then choose Check again.";
+      return "The saved bot token could not be read from secure storage. Quit and reopen Enduragent, then choose Check again. If it still cannot be read, replace the bot token.";
     }
     if (status.channel.errorCode === "telegram-credential-storage-failed") {
       return "The encrypted bot credential could not be saved. Check local disk access and try again.";
