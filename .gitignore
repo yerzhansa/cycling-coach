@@ -8,7 +8,7 @@ workers/
 .DS_Store
 .idea/
 .obsidian/
-scripts/
+/scripts/
 .claude
 .codex/
 CLAUDE.local.md
