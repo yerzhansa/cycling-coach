@@ -133,7 +133,12 @@ export function Composer(props: {
             setDismissed(true);
           }}
         />
-        <button type="submit" aria-label="Send message" disabled={sendDisabled}>
+        <button
+          type="submit"
+          className={styles.send}
+          aria-label="Send message"
+          disabled={sendDisabled}
+        >
           ↑
         </button>
       </div>

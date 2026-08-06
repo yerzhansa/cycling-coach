@@ -31,12 +31,12 @@ describe("settings preferences", () => {
     const user = userEvent.setup();
     render(<SettingsView />);
 
-    await user.click(screen.getByRole("button", { name: "Use the Velodrome palette" }));
+    await user.click(screen.getByRole("button", { name: "Use the Cobalt palette" }));
 
-    expect(useEnduragentStore.getState().paletteId).toBe("velodrome");
-    expect(localStorage.getItem(PALETTE_STORAGE_KEY)).toBe("velodrome");
-    expect(document.documentElement.style.getPropertyValue("--brand")).toBe("#bc3a2b");
-    expect(screen.getByRole("button", { name: "Use the Velodrome palette" })).toHaveAttribute(
+    expect(useEnduragentStore.getState().paletteId).toBe("cobalt");
+    expect(localStorage.getItem(PALETTE_STORAGE_KEY)).toBe("cobalt");
+    expect(document.documentElement.style.getPropertyValue("--brand")).toBe("#1b4ed8");
+    expect(screen.getByRole("button", { name: "Use the Cobalt palette" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );

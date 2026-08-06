@@ -240,7 +240,12 @@ export function createCoachOperations(
         const stamp = identity.hlcStamp();
         await intake.replace({
           id: identity.newUlid(),
-          ...parsedRequest,
+          swim_skill_floor: parsedRequest.swim_skill_floor,
+          continuous_distance_capable: parsedRequest.continuous_distance_capable,
+          open_water_comfort: parsedRequest.open_water_comfort,
+          clinician_cleared:
+            parsedRequest.injury_status === "none" ? null : parsedRequest.clinician_cleared,
+          injury_status: parsedRequest.injury_status,
           device_id: deviceId,
           hlc_physical_ms: stamp.physicalMs,
           hlc_counter: stamp.counter,

@@ -61,6 +61,7 @@ export function NewConversationDialog(props: {
         <button
           type="button"
           ref={cancel}
+          className={`${styles.cancel} new-conversation-dialog__cancel`}
           disabled={pending}
           onClick={() => {
             actions?.cancelNewConversation();

@@ -1,3 +1,4 @@
+import { Plus } from "lucide-react";
 import { useEffect, useRef, type ReactElement } from "react";
 import { VIEWS } from "../../app/views.js";
 import { registerNewConversationOpener } from "../../state/new-conversation-opener.js";
@@ -45,9 +46,7 @@ export function Sidebar(): ReactElement {
             actions?.openNewConversation();
           }}
         >
-          <span className={styles.plus} aria-hidden="true">
-            ＋
-          </span>
+          <Plus className={styles.plus} size={16} aria-hidden="true" />
           New chat
         </button>
       </div>
@@ -74,9 +73,7 @@ export function Sidebar(): ReactElement {
                 }
               }}
             >
-              <span className={styles.glyph} aria-hidden="true">
-                {view.glyph}
-              </span>
+              <view.icon className={styles.glyph} size={16} aria-hidden="true" />
               {view.label}
             </button>
           );

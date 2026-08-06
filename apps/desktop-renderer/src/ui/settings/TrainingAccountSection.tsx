@@ -149,7 +149,7 @@ export function TrainingAccountSection(): ReactElement {
           ) : null}
           <button
             type="button"
-            className={`${styles.button} ${styles.primary}`}
+            className={styles.primary}
             disabled={
               busy ||
               editable === null ||

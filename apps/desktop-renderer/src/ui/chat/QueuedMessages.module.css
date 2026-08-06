@@ -7,7 +7,7 @@
   margin: 0 0 6px 14px;
   color: var(--ink-2);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .list {
@@ -20,14 +20,13 @@
 }
 
 .item {
+  composes: sunken from "../../theme/surface.module.css";
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 5px 6px 5px 14px;
-  border: 1px solid var(--line-2);
-  border-radius: 12px;
-  background: var(--surface-2);
+  padding: 5px 5px 5px 14px;
+  border: 1px solid var(--line);
 }
 
 .text {
@@ -47,23 +46,12 @@
 }
 
 .remove {
-  flex: none;
-  width: 26px;
-  height: 26px;
+  composes: control quiet sm from "../../theme/surface.module.css";
+  width: var(--ctl-h-sm);
   padding: 0;
-  border: 0;
-  border-radius: 50%;
   color: var(--ink-2);
-  background: transparent;
-  cursor: pointer;
 }
 
 .remove:hover:enabled {
   color: var(--ink);
-  background: var(--sunk);
-}
-
-.remove:disabled {
-  cursor: default;
-  opacity: 0.45;
 }

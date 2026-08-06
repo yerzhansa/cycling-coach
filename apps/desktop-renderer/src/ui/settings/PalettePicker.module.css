@@ -11,7 +11,7 @@
   gap: 6px;
   padding: 0;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--r);
   background: none;
   font: inherit;
   cursor: pointer;
@@ -22,7 +22,8 @@
   height: 40px;
   overflow: hidden;
   border: 1px solid var(--line-2);
-  border-radius: 9px;
+  border-radius: var(--r-ctl);
+  box-shadow: var(--edge), var(--elev-1);
 }
 
 .half {
@@ -45,7 +46,7 @@
 }
 
 .palette.on .swatch {
-  outline: 2px solid var(--brand);
+  outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
 

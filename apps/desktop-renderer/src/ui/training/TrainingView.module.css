@@ -5,11 +5,9 @@
 }
 
 .panel {
+  composes: raised from "../../theme/surface.module.css";
   margin-bottom: 14px;
   padding: 16px 18px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  background: var(--surface);
 }
 
 .panel:last-child {
@@ -20,7 +18,7 @@
   margin: 0;
   color: var(--ink-3);
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 560;
   letter-spacing: 0.07em;
   text-transform: uppercase;
 }
@@ -67,15 +65,8 @@
 }
 
 .badge {
-  display: inline-flex;
-  align-items: center;
-  width: max-content;
+  composes: chip from "../../theme/surface.module.css";
   margin: 4px 0 8px;
-  padding: 4px 8px;
-  border-radius: 999px;
-  color: var(--brand);
-  background: var(--brand-soft);
-  font: 600 10px/1 var(--f-mono);
   text-transform: capitalize;
 }
 
@@ -83,7 +74,7 @@
 .badge[data-band="stale"],
 .badge[data-band="very-stale"] {
   color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  background-color: color-mix(in srgb, var(--warn) var(--tint), transparent);
 }
 
 .metadata {
@@ -111,25 +102,11 @@
 }
 
 .action {
-  flex: none;
-  min-height: 32px;
-  padding: 6px 13px;
-  border: 1px solid var(--line-2);
-  border-radius: 8px;
-  color: var(--ink);
-  background: var(--surface-2);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
+  composes: control outline from "../../theme/surface.module.css";
 }
 
-.action:hover:not(:disabled) {
-  border-color: var(--ink-3);
-}
-
-.action:disabled {
-  opacity: 0.5;
-  cursor: default;
+.support + .action {
+  margin-top: 12px;
 }
 
 .syncMessage {
@@ -193,12 +170,11 @@
 }
 
 .planItem {
+  composes: sunken from "../../theme/surface.module.css";
   display: grid;
   gap: 3px;
   min-width: 0;
   padding: 10px 12px;
-  border-radius: var(--r);
-  background: var(--sunk);
 }
 
 .planItem strong {
@@ -244,7 +220,7 @@
 
 .sparkline polyline {
   fill: none;
-  stroke: var(--brand);
+  stroke: var(--ink);
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 2;

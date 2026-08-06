@@ -1419,7 +1419,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       documentOverflow: false,
       settingsResident: true,
       settingsReachable: true,
-      settingsAccessibleLabel: "⚙Settings",
+      settingsAccessibleLabel: "Settings",
       chipReachable: true,
       trainingOpen: true,
       buttonResident: true,

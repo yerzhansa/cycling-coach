@@ -1,32 +1,19 @@
-import { useEffect, useRef, type ReactElement, type ReactNode } from "react";
+import { useEffect, useRef, type ReactElement } from "react";
 import type { DesktopCredentialSlot } from "../../onboarding/constants.js";
-import { credentialPresentation } from "../../onboarding/credential-presentation.js";
-import type { CredentialSlotStatus } from "../../onboarding/machine.js";
 import { registerCredentialDraft, releaseCredentialDraft } from "../../state/credential-drafts.js";
-import styles from "./OnboardingWizard.module.css";
-
-function CredentialBadge(props: { readonly status: CredentialSlotStatus }): ReactElement {
-  const presentation = credentialPresentation(props.status);
-  return (
-    <span
-      className={`${styles.badge} credential-state`}
-      data-state={presentation.className === "" ? "missing" : presentation.className}
-    >
-      {presentation.copy}
-    </span>
-  );
-}
+import { SETUP_FIELD_CLASS, SETUP_LABEL_CLASS } from "./SetupCard.js";
 
 export function CredentialField(props: {
   readonly slot: DesktopCredentialSlot;
   readonly label: string;
-  readonly status: CredentialSlotStatus;
   readonly disabled: boolean;
-  readonly hint?: ReactNode;
+  readonly describedBy?: string;
+  readonly onEnter?: () => void;
 }): ReactElement {
   const input = useRef<HTMLInputElement>(null);
   const slot = props.slot;
   const id = `credential-${slot}`;
+  const onEnter = props.onEnter;
 
   useEffect(() => {
     const element = input.current;
@@ -37,21 +24,28 @@ export function CredentialField(props: {
   }, [slot]);
 
   return (
-    <div className={styles.field}>
-      <label className={styles.fieldLabel} htmlFor={id}>
+    <div>
+      <label className={SETUP_LABEL_CLASS} htmlFor={id}>
         {props.label}
-        <CredentialBadge status={props.status} />
-        {props.hint === undefined ? null : <span className={styles.hint}>{props.hint}</span>}
       </label>
       <input
         ref={input}
         id={id}
-        className={styles.input}
+        className={SETUP_FIELD_CLASS}
         type="password"
         autoComplete="off"
         disabled={props.disabled}
         data-slot={slot}
-        aria-describedby="onboarding-error"
+        aria-describedby={props.describedBy}
+        onKeyDown={
+          onEnter === undefined
+            ? undefined
+            : (event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                onEnter();
+              }
+        }
       />
     </div>
   );

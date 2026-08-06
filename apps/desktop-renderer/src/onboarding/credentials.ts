@@ -7,7 +7,7 @@ export interface TransientPasswordInput {
 }
 
 export interface CredentialDraftPort {
-  harvest(): readonly TransientPasswordInput[];
+  harvest(slots?: readonly string[]): readonly TransientPasswordInput[];
   clear(): void;
 }
 
