@@ -321,6 +321,36 @@ function olderStableCalVer(left, right) {
   return false;
 }
 
+export async function verifyMacosBaselineApplication(baselineApplication, options, overrides = {}) {
+  let candidateVersion;
+  try {
+    candidateVersion = requireStableCalVer(options?.candidateVersion);
+  } catch {
+    fail("candidate release version is invalid");
+  }
+  if (typeof baselineApplication !== "string" || !isAbsolute(baselineApplication)) {
+    fail("baseline application path must be absolute");
+  }
+  const dependencies = {
+    executeFile: overrides.executeFile ?? executeSystemFile,
+    extractAsarFile: overrides.extractAsarFile ?? extractFile,
+    lstat: overrides.lstat ?? lstat,
+    mkdtemp: overrides.mkdtemp ?? mkdtemp,
+    realpath: overrides.realpath ?? realpath,
+    rm: overrides.rm ?? rm,
+    tmpdir: overrides.tmpdir ?? tmpdir,
+  };
+  const bundle = await requireApplicationBundle(baselineApplication, "baseline", dependencies);
+  const baseline = await inspectMacosApplicationIdentity(baselineApplication, bundle, dependencies);
+  if (!olderStableCalVer(baseline.version, candidateVersion)) {
+    fail("baseline application is not older than candidate");
+  }
+  return Object.freeze({
+    baselineVersion: baseline.version,
+    teamIdentifier: baseline.teamIdentifier,
+  });
+}
+
 export async function verifyMacosIdentityContinuity(
   baselineApplication,
   candidateApplication,
@@ -1410,13 +1440,53 @@ export async function verifyMacosReleaseArtifacts(artifactDirectory, options = {
   return artifacts;
 }
 
+export async function verifyMacosReleaseEnvelope(
+  artifactDirectory,
+  baselineApplication,
+  looseCandidateApplication,
+  options = {},
+  overrides = {},
+) {
+  const verifyReleaseArtifacts = overrides.verifyReleaseArtifacts ?? verifyMacosReleaseArtifacts;
+  const artifacts = await verifyReleaseArtifacts(artifactDirectory, options, overrides);
+  let candidateVersion;
+  try {
+    candidateVersion = requireStableCalVer(artifacts?.version);
+  } catch {
+    fail("verified release version is invalid");
+  }
+  const verifyIdentityContinuity =
+    overrides.verifyIdentityContinuity ?? verifyMacosIdentityContinuity;
+  const identityContinuity = await verifyIdentityContinuity(
+    baselineApplication,
+    looseCandidateApplication,
+    { candidateVersion },
+    overrides,
+  );
+  if (identityContinuity?.candidateVersion !== candidateVersion) {
+    fail("loose candidate release identity is invalid");
+  }
+  const looseCandidateCodeIdentity = requireCandidateCodeIdentity(
+    identityContinuity.candidateCodeIdentity,
+  );
+  const verifyReleaseApplicationContents =
+    overrides.verifyReleaseApplicationContents ?? verifyMacosReleaseApplicationContents;
+  await verifyReleaseApplicationContents(
+    artifactDirectory,
+    baselineApplication,
+    { candidateVersion, looseCandidateCodeIdentity },
+    overrides,
+  );
+  return Object.freeze({ artifacts, identityContinuity });
+}
+
 async function main() {
   const args = process.argv.slice(2);
-  if (args.length !== 1 || !isAbsolute(args[0])) {
-    fail("expected one absolute release artifact directory");
+  if (args.length !== 3 || args.some((argument) => !isAbsolute(argument))) {
+    fail("expected absolute artifact, baseline, and loose candidate paths");
   }
-  await verifyMacosReleaseArtifacts(args[0]);
-  process.stdout.write("macOS release artifacts verified\n");
+  await verifyMacosReleaseEnvelope(args[0], args[1], args[2]);
+  process.stdout.write("macOS release envelope verified\n");
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

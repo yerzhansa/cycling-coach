@@ -1,6 +1,8 @@
 import type { NotarizeOptions } from "@electron/notarize";
 import type {
+  VerifiedMacosBaselineApplication,
   VerifiedMacosIdentityContinuity,
+  VerifiedMacosReleaseArtifacts,
   VerifyMacosReleaseApplicationContentsOptions,
 } from "./verify-macos-release.mjs";
 
@@ -106,6 +108,10 @@ export interface MacosReleaseDependencies {
       };
     },
   ) => Promise<void>;
+  readonly verifyBaselineApplication?: (
+    baselineApplication: string,
+    options: { readonly candidateVersion: string },
+  ) => Promise<VerifiedMacosBaselineApplication>;
   readonly verifyIdentityContinuity?: (
     baselineApplication: string,
     candidateApplication: string,
@@ -128,7 +134,7 @@ export interface MacosReleaseDependencies {
         arguments_: readonly string[],
       ) => Promise<unknown>;
     },
-  ) => Promise<unknown>;
+  ) => Promise<VerifiedMacosReleaseArtifacts>;
   readonly verifyReleaseApplicationContents?: (
     artifactDirectory: string,
     baselineApplication: string,

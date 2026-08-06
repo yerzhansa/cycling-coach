@@ -68,6 +68,11 @@ export interface VerifiedMacosIdentityContinuity {
   readonly candidateCodeIdentity: MacosCodeIdentity;
 }
 
+export interface VerifiedMacosBaselineApplication {
+  readonly baselineVersion: string;
+  readonly teamIdentifier: string;
+}
+
 export interface MacosCodeIdentity {
   readonly codeDirectory: string;
   readonly cdHash: string;
@@ -92,6 +97,17 @@ export interface VerifyMacosReleaseApplicationContentsDependencies extends Verif
   readonly verifyIdentityContinuity?: typeof verifyMacosIdentityContinuity;
 }
 
+export interface VerifyMacosReleaseEnvelopeDependencies
+  extends VerifyMacosReleaseDependencies, VerifyMacosReleaseApplicationContentsDependencies {
+  readonly verifyReleaseArtifacts?: typeof verifyMacosReleaseArtifacts;
+  readonly verifyReleaseApplicationContents?: typeof verifyMacosReleaseApplicationContents;
+}
+
+export interface VerifiedMacosReleaseEnvelope {
+  readonly artifacts: VerifiedMacosReleaseArtifacts;
+  readonly identityContinuity: VerifiedMacosIdentityContinuity;
+}
+
 export function verifyMacosApplication(
   application: string,
   dependencies?: Pick<VerifyMacosReleaseDependencies, "executeFile">,
@@ -106,6 +122,11 @@ export function verifyMacosIdentityContinuity(
   options: VerifyMacosIdentityContinuityOptions,
   dependencies?: VerifyMacosIdentityContinuityDependencies,
 ): Promise<VerifiedMacosIdentityContinuity>;
+export function verifyMacosBaselineApplication(
+  baselineApplication: string,
+  options: VerifyMacosIdentityContinuityOptions,
+  dependencies?: VerifyMacosIdentityContinuityDependencies,
+): Promise<VerifiedMacosBaselineApplication>;
 export function verifyMacosReleaseApplicationContents(
   artifactDirectory: string,
   baselineApplication: string,
@@ -117,3 +138,10 @@ export function verifyMacosReleaseArtifacts(
   options?: VerifyMacosReleaseOptions,
   dependencies?: VerifyMacosReleaseDependencies,
 ): Promise<VerifiedMacosReleaseArtifacts>;
+export function verifyMacosReleaseEnvelope(
+  artifactDirectory: string,
+  baselineApplication: string,
+  looseCandidateApplication: string,
+  options?: VerifyMacosReleaseOptions,
+  dependencies?: VerifyMacosReleaseEnvelopeDependencies,
+): Promise<VerifiedMacosReleaseEnvelope>;

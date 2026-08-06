@@ -647,6 +647,16 @@ export async function runMacosRelease(input, dependencies = {}) {
   const notarizationCredentials = requireNotarizationCredentials(
     dependencies.environment ?? process.env,
   );
+  const verification = await import("./verify-macos-release.mjs");
+  const verifyBaselineApplication =
+    dependencies.verifyBaselineApplication ??
+    ((baseline, options) =>
+      verification.verifyMacosBaselineApplication(baseline, options, {
+        executeFile: dependencies.executeFile,
+      }));
+  await verifyBaselineApplication(plan.baselineApplication, {
+    candidateVersion: plan.version,
+  });
   const build = dependencies.build ?? (await import("electron-builder")).build;
   const artifacts = await build(plan.builderOptions);
   const application = join(plan.builderOptions.projectDir, "dist/mac-arm64/Enduragent.app");
@@ -660,7 +670,6 @@ export async function runMacosRelease(input, dependencies = {}) {
       feedUrl: plan.feedUrl,
     },
   });
-  const verification = await import("./verify-macos-release.mjs");
   const verifyIdentityContinuity =
     dependencies.verifyIdentityContinuity ??
     ((baseline, candidate, options) =>
@@ -673,13 +682,9 @@ export async function runMacosRelease(input, dependencies = {}) {
       verification.verifyMacosDmg(path, {
         executeFile: dependencies.executeFile,
       }));
-  const looseIdentityContinuity = await verifyIdentityContinuity(
-    plan.baselineApplication,
-    application,
-    {
-      candidateVersion: plan.version,
-    },
-  );
+  await verifyIdentityContinuity(plan.baselineApplication, application, {
+    candidateVersion: plan.version,
+  });
   const dmgPath = join(plan.builderOptions.projectDir, "dist", plan.artifactNames.dmg);
   await notarizeMacosDmg(dmgPath, notarizationCredentials, {
     notarize: dependencies.notarize,
@@ -687,34 +692,22 @@ export async function runMacosRelease(input, dependencies = {}) {
   await verifyDmg(dmgPath);
   const sealReleaseMetadata = dependencies.sealReleaseMetadata ?? sealMacosReleaseMetadata;
   await sealReleaseMetadata(plan);
-  const verifyReleaseArtifacts =
-    dependencies.verifyReleaseArtifacts ?? verification.verifyMacosReleaseArtifacts;
-  const verifyReleaseApplicationContents =
-    dependencies.verifyReleaseApplicationContents ??
-    verification.verifyMacosReleaseApplicationContents;
-  const verifyEnvelope = async (artifactDirectory) => {
-    await verifyReleaseArtifacts(
+  const verifyEnvelope = (artifactDirectory) =>
+    verification.verifyMacosReleaseEnvelope(
       artifactDirectory,
+      plan.baselineApplication,
+      application,
       {
         repositoryRoot: input.repositoryRoot ?? canonicalRepositoryRoot,
         readVersionFile: dependencies.readFile,
       },
       {
         executeFile: dependencies.executeFile,
+        verifyIdentityContinuity,
+        verifyReleaseApplicationContents: dependencies.verifyReleaseApplicationContents,
+        verifyReleaseArtifacts: dependencies.verifyReleaseArtifacts,
       },
     );
-    await verifyReleaseApplicationContents(
-      artifactDirectory,
-      plan.baselineApplication,
-      {
-        candidateVersion: plan.version,
-        looseCandidateCodeIdentity: looseIdentityContinuity?.candidateCodeIdentity,
-      },
-      {
-        executeFile: dependencies.executeFile,
-      },
-    );
-  };
   const promoteReleaseEnvelope = dependencies.promoteReleaseEnvelope ?? promoteMacosReleaseEnvelope;
   const envelopePath = await promoteReleaseEnvelope(plan, verifyEnvelope);
   return { plan, artifacts, envelopePath };

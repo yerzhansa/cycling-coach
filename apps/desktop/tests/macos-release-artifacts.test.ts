@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   lstat,
@@ -13,14 +14,17 @@ import {
 } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse, stringify } from "yaml";
 import {
   verifyMacosApplication,
+  verifyMacosBaselineApplication,
   verifyMacosIdentityContinuity,
   verifyMacosReleaseApplicationContents,
   verifyMacosReleaseArtifacts,
+  verifyMacosReleaseEnvelope,
 } from "../scripts/verify-macos-release.mjs";
 
 const localRequire = createRequire(import.meta.url);
@@ -31,6 +35,7 @@ const { buildBlockMap: installedBuildBlockMap } = builderRequire(
   buildBlockMap(inputPath: string, compression: "gzip", outputPath: string): Promise<unknown>;
 };
 const roots: string[] = [];
+const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const version = "2026.7.2";
 const names = {
   dmg: `Enduragent-${version}-arm64.dmg`,
@@ -258,6 +263,36 @@ async function signedIdentityFixture() {
 }
 
 describe("macOS signed identity continuity", () => {
+  it("preflights the complete signed baseline before a candidate exists", async () => {
+    const fixture = await signedIdentityFixture();
+
+    await expect(
+      verifyMacosBaselineApplication(
+        fixture.baseline,
+        { candidateVersion: version },
+        {
+          executeFile: fixture.executeFile,
+          extractAsarFile: fixture.extractAsarFile,
+        },
+      ),
+    ).resolves.toEqual({
+      baselineVersion: "2026.7.1",
+      teamIdentifier: "FA494ACVTF",
+    });
+    expect(fixture.executeFile).toHaveBeenCalledWith("/usr/bin/codesign", [
+      "--verify",
+      "--deep",
+      "--strict",
+      "--verbose=2",
+      fixture.baseline,
+    ]);
+    expect(fixture.extractAsarFile).toHaveBeenCalledOnce();
+    expect(fixture.extractAsarFile).toHaveBeenCalledWith(
+      join(fixture.baseline, "Contents/Resources/app.asar"),
+      "package.json",
+    );
+  });
+
   it("accepts only an older baseline with the same canonical signed identity", async () => {
     const fixture = await signedIdentityFixture();
 
@@ -1361,6 +1396,134 @@ describe("macOS packaged application identity binding", () => {
 });
 
 describe("macOS release artifact envelope", () => {
+  it("verifies artifacts, the loose candidate, and packaged applications as one envelope", async () => {
+    const fixture = await releaseFixture();
+    const baselineApplication = "/synthetic/baseline/Enduragent.app";
+    const looseCandidateApplication = "/synthetic/candidate/Enduragent.app";
+    const artifacts = Object.freeze({
+      version,
+      names: Object.freeze({ ...names, metadata: "latest-mac.yml" as const }),
+      paths: Object.freeze({
+        dmg: join(fixture.artifactDirectory, names.dmg),
+        zip: join(fixture.artifactDirectory, names.zip),
+        blockmap: join(fixture.artifactDirectory, names.blockmap),
+        metadata: join(fixture.artifactDirectory, names.metadata),
+      }),
+      sizes: Object.freeze({
+        dmg: fixture.dmg.length,
+        zip: fixture.zip.length,
+        blockmap: fixture.blockmap.length,
+      }),
+      dmgSha512: fixture.dmgSha512,
+      zipSha512: fixture.zipSha512,
+    });
+    const identityContinuity = Object.freeze({
+      baselineVersion: "2026.7.1",
+      candidateVersion: version,
+      teamIdentifier: "FA494ACVTF",
+      candidateCodeIdentity: Object.freeze({
+        codeDirectory: "v=20500 size=100 flags=0x10000(runtime) hashes=1+7 location=embedded",
+        cdHash: "b".repeat(40),
+      }),
+    });
+    const verifyReleaseArtifacts = vi.fn(async () => artifacts);
+    const verifyIdentityContinuity = vi.fn(async () => identityContinuity);
+    const verifyReleaseApplicationContents = vi.fn(async () => {});
+
+    const verified = await verifyMacosReleaseEnvelope(
+      fixture.artifactDirectory,
+      baselineApplication,
+      looseCandidateApplication,
+      { repositoryRoot: fixture.repositoryRoot },
+      {
+        verifyReleaseArtifacts,
+        verifyIdentityContinuity,
+        verifyReleaseApplicationContents,
+      },
+    );
+
+    expect(verified).toEqual({ artifacts, identityContinuity });
+    expect(Object.isFrozen(verified)).toBe(true);
+    expect(verifyReleaseArtifacts).toHaveBeenCalledWith(
+      fixture.artifactDirectory,
+      { repositoryRoot: fixture.repositoryRoot },
+      expect.any(Object),
+    );
+    expect(verifyIdentityContinuity).toHaveBeenCalledWith(
+      baselineApplication,
+      looseCandidateApplication,
+      { candidateVersion: version },
+      expect.any(Object),
+    );
+    expect(verifyReleaseApplicationContents).toHaveBeenCalledWith(
+      fixture.artifactDirectory,
+      baselineApplication,
+      {
+        candidateVersion: version,
+        looseCandidateCodeIdentity: identityContinuity.candidateCodeIdentity,
+      },
+      expect.any(Object),
+    );
+    expect(verifyReleaseArtifacts.mock.invocationCallOrder[0]).toBeLessThan(
+      verifyIdentityContinuity.mock.invocationCallOrder[0]!,
+    );
+    expect(verifyIdentityContinuity.mock.invocationCallOrder[0]).toBeLessThan(
+      verifyReleaseApplicationContents.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("stops packaged-application verification when loose identity continuity fails", async () => {
+    const fixture = await releaseFixture();
+    const failure = new Error("synthetic loose identity failure");
+    const verifyReleaseApplicationContents = vi.fn(async () => {});
+
+    await expect(
+      verifyMacosReleaseEnvelope(
+        fixture.artifactDirectory,
+        "/synthetic/baseline/Enduragent.app",
+        "/synthetic/candidate/Enduragent.app",
+        { repositoryRoot: fixture.repositoryRoot },
+        {
+          verifyReleaseArtifacts: vi.fn(async () => ({
+            version,
+            names: { ...names, metadata: "latest-mac.yml" as const },
+            paths: {
+              dmg: join(fixture.artifactDirectory, names.dmg),
+              zip: join(fixture.artifactDirectory, names.zip),
+              blockmap: join(fixture.artifactDirectory, names.blockmap),
+              metadata: join(fixture.artifactDirectory, names.metadata),
+            },
+            sizes: {
+              dmg: fixture.dmg.length,
+              zip: fixture.zip.length,
+              blockmap: fixture.blockmap.length,
+            },
+            dmgSha512: fixture.dmgSha512,
+            zipSha512: fixture.zipSha512,
+          })),
+          verifyIdentityContinuity: vi.fn(async () => {
+            throw failure;
+          }),
+          verifyReleaseApplicationContents,
+        },
+      ),
+    ).rejects.toBe(failure);
+    expect(verifyReleaseApplicationContents).not.toHaveBeenCalled();
+  });
+
+  it("requires three absolute paths at the standalone verifier boundary", () => {
+    const script = join(desktopRoot, "scripts/verify-macos-release.mjs");
+    const result = spawnSync(
+      process.execPath,
+      [script, "/synthetic/artifacts", "relative-baseline.app", "/synthetic/candidate.app"],
+      { cwd: desktopRoot, encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("expected absolute artifact, baseline, and loose candidate paths\n");
+  });
+
   it("validates both artifacts and exact regenerated blockmap bytes through the seam", async () => {
     const fixture = await releaseFixture();
     const temporary = deterministicTemporaryDirectory(fixture.root);
