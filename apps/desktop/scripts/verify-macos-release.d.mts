@@ -44,6 +44,54 @@ export interface VerifyMacosReleaseDependencies {
   readonly verifyNotarization?: (artifacts: VerifiedMacosReleaseArtifacts) => Promise<void>;
 }
 
+export interface VerifyMacosIdentityContinuityOptions {
+  readonly candidateVersion: string;
+}
+
+export interface VerifyMacosIdentityContinuityDependencies {
+  readonly executeFile?: (executable: string, arguments_: readonly string[]) => Promise<unknown>;
+  readonly extractAsarFile?: (archivePath: string, filename: string) => Buffer | Promise<Buffer>;
+  readonly lstat?: (path: string) => Promise<Stats>;
+  readonly mkdtemp?: (prefix: string) => Promise<string>;
+  readonly realpath?: (path: string) => Promise<string>;
+  readonly rm?: (
+    path: string,
+    options: { readonly recursive: true; readonly force: true },
+  ) => Promise<void>;
+  readonly tmpdir?: () => string;
+}
+
+export interface VerifiedMacosIdentityContinuity {
+  readonly baselineVersion: string;
+  readonly candidateVersion: string;
+  readonly teamIdentifier: string;
+  readonly candidateCodeIdentity: MacosCodeIdentity;
+}
+
+export interface MacosCodeIdentity {
+  readonly codeDirectory: string;
+  readonly cdHash: string;
+}
+
+export interface VerifyMacosReleaseApplicationContentsOptions {
+  readonly candidateVersion: string;
+  readonly looseCandidateCodeIdentity: MacosCodeIdentity;
+}
+
+export interface VerifyMacosReleaseApplicationContentsDependencies extends VerifyMacosIdentityContinuityDependencies {
+  readonly mkdir?: (path: string, options: { readonly mode: 0o700 }) => Promise<unknown>;
+  readonly readFile?: (path: string) => Promise<Buffer>;
+  readonly readlink?: (path: string) => Promise<string>;
+  readonly readdir?: (path: string) => Promise<string[]>;
+  readonly rmdir?: (path: string) => Promise<void>;
+  readonly writeFile?: (
+    path: string,
+    data: string,
+    options: { readonly flag: "wx"; readonly mode: 0o600 },
+  ) => Promise<unknown>;
+  readonly verifyIdentityContinuity?: typeof verifyMacosIdentityContinuity;
+}
+
 export function verifyMacosApplication(
   application: string,
   dependencies?: Pick<VerifyMacosReleaseDependencies, "executeFile">,
@@ -51,6 +99,18 @@ export function verifyMacosApplication(
 export function verifyMacosDmg(
   dmgPath: string,
   dependencies?: Pick<VerifyMacosReleaseDependencies, "executeFile">,
+): Promise<void>;
+export function verifyMacosIdentityContinuity(
+  baselineApplication: string,
+  candidateApplication: string,
+  options: VerifyMacosIdentityContinuityOptions,
+  dependencies?: VerifyMacosIdentityContinuityDependencies,
+): Promise<VerifiedMacosIdentityContinuity>;
+export function verifyMacosReleaseApplicationContents(
+  artifactDirectory: string,
+  baselineApplication: string,
+  options: VerifyMacosReleaseApplicationContentsOptions,
+  dependencies?: VerifyMacosReleaseApplicationContentsDependencies,
 ): Promise<void>;
 export function verifyMacosReleaseArtifacts(
   artifactDirectory: string,
